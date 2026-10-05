@@ -1,0 +1,6 @@
+pub fn main() {
+    let x: ?i32 = 5
+    if x {
+        @println(1)
+    }
+}

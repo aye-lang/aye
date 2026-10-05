@@ -61,18 +61,22 @@ fn main() -> ExitCode {
         if args.json {
             let diags = match &res {
                 Ok(_) => String::new(),
-                Err(d) => d.to_json(),
+                Err(ds) => ds.iter().map(|d| d.to_json()).collect::<Vec<_>>().join(","),
             };
             println!(r#"{{"file":{},"diagnostics":[{diags}]}}"#, diag::json_str(&args.file));
-        } else if let Err(d) = &res {
-            eprintln!("{d}");
+        } else if let Err(ds) = &res {
+            for d in ds {
+                eprintln!("{d}");
+            }
         }
         return if res.is_ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE };
     }
     let c = match driver::compile_to_c(&args.file, &src, args.mode) {
         Ok(c) => c,
-        Err(d) => {
-            eprintln!("{d}");
+        Err(ds) => {
+            for d in ds {
+                eprintln!("{d}");
+            }
             return ExitCode::FAILURE;
         }
     };

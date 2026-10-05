@@ -1,0 +1,12 @@
+struct P { x: i32 }
+
+fn f(a: i32) i64 {
+    return a
+}
+
+pub fn main() {
+    let p = P { x: 1 }
+    @println(p.y)
+    let q = p
+    @println(missing + q.x)
+}

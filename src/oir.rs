@@ -8,11 +8,12 @@
 //! - expands `defer`: deferred statements are copied to every scope exit
 //!   (end of block, `return`, `break`, `continue`) in LIFO order;
 //! - makes runtime checks explicit: checked arithmetic carries its source
-//!   span, and indexing carries the length to check against.
+//!   span, and indexing carries the length to check against;
+//! - lowers `match` to an `if` chain on the enum tag.
 
 use crate::ast::{BinOp, UnOp};
 use crate::diag::Span;
-use crate::sema::{self, FloatTy, IntTy, TExpr, TExprKind, TStmt, TStmtKind, Type};
+use crate::sema::{self, FloatTy, IntTy, TArmBody, TExpr, TExprKind, TStmt, TStmtKind, Type};
 use std::collections::HashMap;
 
 pub type LocalId = usize;
@@ -20,6 +21,7 @@ pub type LocalId = usize;
 #[derive(Debug, Clone)]
 pub struct Program {
     pub structs: Vec<sema::StructDef>,
+    pub enums: Vec<sema::EnumDef>,
     pub externs: Vec<sema::ExternFn>,
     pub funcs: Vec<Func>,
 }
@@ -86,6 +88,14 @@ pub enum Proj {
     Field(String),
     /// Bounds-checked element access.
     Index { index: Operand, len: Len, span: Span },
+    /// Dereference of a `*T`.
+    Deref,
+}
+
+/// Is `t` a `?*T`? It is represented as a C pointer that may be null;
+/// every other `?T` is a `{ has, val }` struct.
+pub fn is_ptr_optional(t: &Type) -> bool {
+    matches!(t, Type::Optional(inner) if matches!(**inner, Type::Ptr(..)))
 }
 
 /// Length of the indexed/sliced sequence.
@@ -110,6 +120,14 @@ pub enum Rvalue {
     Print { arg: Option<(Operand, Type)>, newline: bool },
     /// Fields in declaration order.
     StructLit { name: String, fields: Vec<Operand> },
+    /// Enum value; payload fields in declaration order.
+    Variant { enum_name: String, tag: usize, variant: String, fields: Vec<Operand> },
+    AddrOf(Place),
+    /// Wrap a value into the optional type `ty`.
+    Some { val: Operand, ty: Type },
+    Null(Type),
+    /// Is the optional at `place` (of type `ty`) non-null?
+    IsSome { place: Place, ty: Type },
     ArrayLit { ty: Type, elems: Vec<Operand> },
     /// `base[lo..hi]`, producing a slice. `hi = None` means the full length.
     Slice { base: Place, len: Len, elem: Type, lo: Operand, hi: Option<Operand>, span: Span },
@@ -117,8 +135,9 @@ pub enum Rvalue {
 
 pub fn lower(p: &sema::Program) -> Program {
     let structs: HashMap<&str, &sema::StructDef> = p.structs.iter().map(|s| (s.name.as_str(), s)).collect();
-    let funcs = p.fns.iter().map(|f| Lower::func(f, &structs)).collect();
-    Program { structs: p.structs.clone(), externs: p.externs.clone(), funcs }
+    let enums: HashMap<&str, &sema::EnumDef> = p.enums.iter().map(|e| (e.name.as_str(), e)).collect();
+    let funcs = p.fns.iter().map(|f| Lower::func(f, &structs, &enums)).collect();
+    Program { structs: p.structs.clone(), enums: p.enums.clone(), externs: p.externs.clone(), funcs }
 }
 
 struct Scope<'a> {
@@ -129,6 +148,7 @@ struct Scope<'a> {
 
 struct Lower<'a> {
     structs: &'a HashMap<&'a str, &'a sema::StructDef>,
+    enums: &'a HashMap<&'a str, &'a sema::EnumDef>,
     locals: Vec<Local>,
     scopes: Vec<Scope<'a>>,
     span: Span,
@@ -140,28 +160,41 @@ fn is_terminator(s: Option<&Stmt>) -> bool {
 
 fn has_call(e: &TExpr) -> bool {
     match &e.kind {
-        TExprKind::Call { .. } | TExprKind::Print { .. } => true,
-        TExprKind::Int(_) | TExprKind::Float(_) | TExprKind::Bool(_) | TExprKind::Str(_) | TExprKind::Var(_) => false,
+        TExprKind::Call { .. } | TExprKind::Print { .. } | TExprKind::Match { .. } => true,
+        TExprKind::Int(_)
+        | TExprKind::Float(_)
+        | TExprKind::Bool(_)
+        | TExprKind::Str(_)
+        | TExprKind::Var(_)
+        | TExprKind::Null => false,
         TExprKind::Binary { lhs, rhs, .. } | TExprKind::Index { base: lhs, index: rhs } => has_call(lhs) || has_call(rhs),
         TExprKind::Unary { expr, .. }
         | TExprKind::Cast(expr)
         | TExprKind::Field { base: expr, .. }
         | TExprKind::SliceLen(expr)
         | TExprKind::SlicePtr(expr)
-        | TExprKind::ArrayLen(expr) => has_call(expr),
+        | TExprKind::ArrayLen(expr)
+        | TExprKind::Some(expr)
+        | TExprKind::IsSome(expr)
+        | TExprKind::AddrOf(expr)
+        | TExprKind::Deref(expr) => has_call(expr),
         TExprKind::Slice { base, lo, hi } => {
             has_call(base) || lo.as_deref().is_some_and(has_call) || hi.as_deref().is_some_and(has_call)
         }
-        TExprKind::StructLit(fs) => fs.iter().any(|(_, e)| has_call(e)),
+        TExprKind::StructLit(fs) | TExprKind::Variant { fields: fs, .. } => fs.iter().any(|(_, e)| has_call(e)),
         TExprKind::ArrayLit(es) => es.iter().any(has_call),
     }
 }
 
 impl<'a> Lower<'a> {
-    fn func(f: &'a sema::FnDef, structs: &'a HashMap<&'a str, &'a sema::StructDef>) -> Func {
+    fn func(
+        f: &'a sema::FnDef,
+        structs: &'a HashMap<&'a str, &'a sema::StructDef>,
+        enums: &'a HashMap<&'a str, &'a sema::EnumDef>,
+    ) -> Func {
         // Sema variables keep their ids as OIR locals; temporaries follow.
         let locals = f.vars.iter().map(|v| Local { name: Some(v.name.clone()), ty: v.ty.clone() }).collect();
-        let mut l = Lower { structs, locals, scopes: Vec::new(), span: Span::default() };
+        let mut l = Lower { structs, enums, locals, scopes: Vec::new(), span: Span::default() };
         let mut body = Vec::new();
         l.block(&f.body, false, &mut body);
         Func {
@@ -240,9 +273,20 @@ impl<'a> Lower<'a> {
                 let rv = Rvalue::Binary { op: *op, lhs: cur, rhs: v, ty: target.ty.clone(), span: s.span };
                 self.push(out, StmtKind::Assign(place, rv));
             }
-            TStmtKind::If { cond, then, els } => {
-                let c = self.operand(cond, out);
+            TStmtKind::If { cond, capture, then, els } => {
                 let mut t = Vec::new();
+                let c = match capture {
+                    None => self.operand(cond, out),
+                    Some(v) => {
+                        let p = self.place(cond, out);
+                        let has = self.temp(Type::Bool);
+                        let rv = Rvalue::IsSome { place: p.clone(), ty: cond.ty.clone() };
+                        self.push(out, StmtKind::Assign(Place { local: has, proj: vec![] }, rv));
+                        let val = Rvalue::Load(Self::unwrap_place(p, &cond.ty));
+                        self.push(&mut t, StmtKind::Assign(Place { local: *v, proj: vec![] }, val));
+                        Operand::Local(has)
+                    }
+                };
                 self.block(then, false, &mut t);
                 let mut e = Vec::new();
                 self.block(els, false, &mut e);
@@ -318,11 +362,86 @@ impl<'a> Lower<'a> {
                 self.scopes.last_mut().unwrap().defers.push(body);
             }
             TStmtKind::Block(b) => self.block(b, false, out),
-            TStmtKind::Expr(e) => {
-                let rv = self.rvalue(e, out);
-                self.push(out, StmtKind::Eval(rv));
-            }
+            TStmtKind::Expr(e) => self.eval(e, out),
         }
+    }
+
+    /// An expression evaluated for its side effects.
+    fn eval(&mut self, e: &'a TExpr, out: &mut Block) {
+        if let TExprKind::Match { .. } = e.kind {
+            self.lower_match(e, None, out);
+        } else {
+            let rv = self.rvalue(e, out);
+            self.push(out, StmtKind::Eval(rv));
+        }
+    }
+
+    /// The value inside the optional at `p`.
+    fn unwrap_place(mut p: Place, opt: &Type) -> Place {
+        if !is_ptr_optional(opt) {
+            p.proj.push(Proj::Field("val".to_string()));
+        }
+        p
+    }
+
+    /// `match`: bind the pattern variables and run the arm whose variant
+    /// equals the tag. The last arm needs no test (the match is exhaustive).
+    /// The value of an expression arm goes to `result`.
+    fn lower_match(&mut self, e: &'a TExpr, result: Option<LocalId>, out: &mut Block) {
+        let TExprKind::Match { scrutinee, arms } = &e.kind else { unreachable!() };
+        let Type::Enum(ename) = &scrutinee.ty else { unreachable!() };
+        let def = self.enums[ename.as_str()];
+        let span = self.span;
+        let place = self.place(scrutinee, out);
+        let tag = self.temp(Type::Int(IntTy::U32));
+        let mut tag_place = place.clone();
+        tag_place.proj.push(Proj::Field("tag".to_string()));
+        self.push(out, StmtKind::Assign(Place { local: tag, proj: vec![] }, Rvalue::Load(tag_place)));
+        let mut bodies = Vec::new();
+        for arm in arms {
+            let mut b = Vec::new();
+            if let Some(vi) = arm.variant {
+                let v = &def.variants[vi];
+                for &(var, fi) in &arm.bindings {
+                    let mut p = place.clone();
+                    for name in ["u", &v.name, &v.fields[fi].0] {
+                        p.proj.push(Proj::Field(name.to_string()));
+                    }
+                    self.push(&mut b, StmtKind::Assign(Place { local: var, proj: vec![] }, Rvalue::Load(p)));
+                }
+            }
+            match (&arm.body, result) {
+                (TArmBody::Expr(x), Some(r)) => {
+                    let rv = self.rvalue(x, &mut b);
+                    self.push(&mut b, StmtKind::Assign(Place { local: r, proj: vec![] }, rv));
+                }
+                (TArmBody::Expr(x), None) => self.eval(x, &mut b),
+                (TArmBody::Block(stmts), _) => self.block(stmts, false, &mut b),
+            }
+            self.span = span;
+            bodies.push(b);
+        }
+        let mut chain: Option<Block> = None;
+        for (arm, body) in arms.iter().zip(bodies).rev() {
+            chain = Some(match (chain, arm.variant) {
+                (Some(rest), Some(vi)) => {
+                    let c = self.temp(Type::Bool);
+                    let cmp = Rvalue::Binary {
+                        op: BinOp::Eq,
+                        lhs: Operand::Local(tag),
+                        rhs: Operand::Int(vi as i128, IntTy::U32),
+                        ty: Type::Int(IntTy::U32),
+                        span,
+                    };
+                    vec![
+                        Stmt { kind: StmtKind::Assign(Place { local: c, proj: vec![] }, cmp), span },
+                        Stmt { kind: StmtKind::If { cond: Operand::Local(c), then: body, els: rest }, span },
+                    ]
+                }
+                _ => body,
+            });
+        }
+        out.extend(chain.unwrap_or_default());
     }
 
     fn operand(&mut self, e: &'a TExpr, out: &mut Block) -> Operand {
@@ -339,6 +458,11 @@ impl<'a> Lower<'a> {
     fn place(&mut self, e: &'a TExpr, out: &mut Block) -> Place {
         match &e.kind {
             TExprKind::Var(id) => Place { local: *id, proj: vec![] },
+            TExprKind::Deref(ptr) => {
+                let mut p = self.place(ptr, out);
+                p.proj.push(Proj::Deref);
+                p
+            }
             TExprKind::Field { base, index } => {
                 let Type::Struct(sname) = &base.ty else { unreachable!() };
                 let name = self.structs[sname.as_str()].fields[*index].0.clone();
@@ -389,6 +513,15 @@ impl<'a> Lower<'a> {
             },
             TExprKind::Bool(b) => Rvalue::Use(Operand::Bool(*b)),
             TExprKind::Str(s) => Rvalue::Use(Operand::Str(s.clone())),
+            TExprKind::Null => Rvalue::Null(e.ty.clone()),
+            TExprKind::Some(x) => Rvalue::Some { val: self.operand(x, out), ty: e.ty.clone() },
+            TExprKind::IsSome(x) => Rvalue::IsSome { place: self.place(x, out), ty: x.ty.clone() },
+            TExprKind::AddrOf(x) => Rvalue::AddrOf(self.place(x, out)),
+            TExprKind::Match { .. } => {
+                let t = self.temp(e.ty.clone());
+                self.lower_match(e, Some(t), out);
+                Rvalue::Use(Operand::Local(t))
+            }
             TExprKind::Var(id) => Rvalue::Use(Operand::Local(*id)),
             TExprKind::Call { name, is_extern, args } => {
                 let args = args.iter().map(|a| self.operand(a, out)).collect();
@@ -424,7 +557,11 @@ impl<'a> Lower<'a> {
                 let val = self.operand(inner, out);
                 Rvalue::Cast { val, from: inner.ty.clone(), to: e.ty.clone(), span: e.span }
             }
-            TExprKind::Field { .. } | TExprKind::SliceLen(_) | TExprKind::SlicePtr(_) | TExprKind::Index { .. } => {
+            TExprKind::Field { .. }
+            | TExprKind::SliceLen(_)
+            | TExprKind::SlicePtr(_)
+            | TExprKind::Index { .. }
+            | TExprKind::Deref(_) => {
                 Rvalue::Load(self.place(e, out))
             }
             TExprKind::ArrayLen(base) => {
@@ -454,6 +591,17 @@ impl<'a> Lower<'a> {
                 let mut ops: Vec<(usize, Operand)> = inits.iter().map(|(i, x)| (*i, self.operand(x, out))).collect();
                 ops.sort_by_key(|(i, _)| *i);
                 Rvalue::StructLit { name: name.clone(), fields: ops.into_iter().map(|(_, o)| o).collect() }
+            }
+            TExprKind::Variant { index, fields } => {
+                let Type::Enum(name) = &e.ty else { unreachable!() };
+                let mut ops: Vec<(usize, Operand)> = fields.iter().map(|(i, x)| (*i, self.operand(x, out))).collect();
+                ops.sort_by_key(|(i, _)| *i);
+                Rvalue::Variant {
+                    enum_name: name.clone(),
+                    tag: *index,
+                    variant: self.enums[name.as_str()].variants[*index].name.clone(),
+                    fields: ops.into_iter().map(|(_, o)| o).collect(),
+                }
             }
             TExprKind::ArrayLit(elems) => {
                 let elems = elems.iter().map(|x| self.operand(x, out)).collect();

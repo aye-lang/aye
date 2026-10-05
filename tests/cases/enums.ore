@@ -1,0 +1,74 @@
+enum Color { Red, Green, Blue }
+
+enum Token {
+    Num { value: i64 }
+    Op { sym: u8 }
+    End
+}
+
+// An enum as a struct field.
+struct Pixel { pos: i32, color: Color }
+
+// `match` as an expression.
+fn name(c: Color) []u8 {
+    return match c {
+        .Red => "red"
+        .Green => "green"
+        .Blue => "blue"
+    }
+}
+
+// `_` matches every remaining variant.
+fn is_red(c: Color) bool {
+    return match c {
+        .Red => true
+        _ => false
+    }
+}
+
+// `match` as a statement; arms are separated by newlines or commas.
+fn show(t: Token) {
+    match t {
+        .Num { value } => @println(value),
+        .Op { sym: s } => {
+            @print("op ")
+            @println(s)
+        }
+        .End => @println("end")
+    }
+}
+
+// Every arm returns, so the function returns on every path.
+fn weight(t: Token) i64 {
+    match t {
+        .Num { value } => {
+            return value
+        }
+        .Op { .. } => {
+            return 1
+        }
+        .End => {
+            return 0
+        }
+    }
+}
+
+pub fn main() {
+    var p = Pixel { pos: 3, color: Color.Green }
+    @println(name(p.color))
+    p.color = Color.Blue
+    @println(name(p.color))
+    @println(is_red(Color.Red))
+    @println(is_red(p.color))
+    let toks = [3]Token{Token.Num { value: 42 }, Token.Op { sym: '+' }, Token.End}
+    var total: i64 = 0
+    for i in 0..toks.len {
+        show(toks[i])
+        total += match toks[i] {
+            .Num { value } => value
+            _ => 0
+        }
+        total += weight(toks[i])
+    }
+    @println(total)
+}

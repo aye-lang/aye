@@ -3,9 +3,11 @@
 //! - `tests/cases/X.ore`: compiled in debug, safe and fast mode, run, and
 //!   stdout compared with `X.out`. If `X.panic` exists the program must abort
 //!   with exactly that on stderr (checked in debug and safe mode only).
-//! - `tests/errors/X.ore`: must fail to compile with the message in `X.err`.
+//! - `tests/errors/X.ore`: must fail to compile with exactly the diagnostics
+//!   in `X.err`, one per line, in order.
 //! - `ore run` and `ore check` are also run through the built binary.
 
+use ore::diag::Diag;
 use ore::driver::{self, Mode};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -25,6 +27,11 @@ fn cases(dir: &str) -> Vec<PathBuf> {
     v
 }
 
+/// Diagnostics as `ore check` prints them, one per line.
+fn join(diags: &[Diag]) -> String {
+    diags.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("\n")
+}
+
 fn name(p: &Path) -> String {
     p.file_name().unwrap().to_string_lossy().into_owned()
 }
@@ -39,7 +46,7 @@ fn run_case(path: &Path, work: &Path) -> Result<(), String> {
         &[Mode::Debug, Mode::Safe, Mode::Fast]
     };
     for &mode in modes {
-        let c = driver::compile_to_c(&name(path), &src, mode).map_err(|d| d.to_string())?;
+        let c = driver::compile_to_c(&name(path), &src, mode).map_err(|d| join(&d))?;
         let exe = work.join(format!("{}-{mode:?}", path.file_stem().unwrap().to_string_lossy()));
         driver::cc(&c, &exe, mode)?;
         let out = Command::new(&exe).output().map_err(|e| e.to_string())?;
@@ -72,8 +79,8 @@ fn error_case(path: &Path) -> Result<(), String> {
     let expected = read(&path.with_extension("err")).ok_or("missing .err file")?;
     match driver::compile_to_c(&name(path), &src, Mode::Debug) {
         Ok(_) => Err("compiled successfully, expected an error".into()),
-        Err(d) if d.to_string() == expected.trim_end() => Ok(()),
-        Err(d) => Err(format!("error mismatch\n--- expected\n{}\n--- got\n{d}", expected.trim_end())),
+        Err(d) if join(&d) == expected.trim_end() => Ok(()),
+        Err(d) => Err(format!("error mismatch\n--- expected\n{}\n--- got\n{}", expected.trim_end(), join(&d))),
     }
 }
 
@@ -93,6 +100,10 @@ fn cli_run(work: &Path) -> Result<(), String> {
 fn cli_check() -> Result<(), String> {
     let ok = "tests/cases/hello.ore";
     let bad = "tests/errors/unknown_escape.ore";
+    let three = "tests/errors/three_errors.ore";
+    let diag = |line: u32, col: u32, msg: &str| {
+        format!(r#"{{"severity":"error","line":{line},"col":{col},"message":"{msg}"}}"#)
+    };
     let checks: &[(&[&str], bool, String, String)] = &[
         (&[ok], true, String::new(), String::new()),
         (&[bad], false, String::new(), format!("{bad}:2:16: error: unknown escape sequence `\\q`\n")),
@@ -103,6 +114,17 @@ fn cli_check() -> Result<(), String> {
             format!(
                 "{{\"file\":\"{bad}\",\"diagnostics\":[{{\"severity\":\"error\",\"line\":2,\"col\":16,\
                  \"message\":\"unknown escape sequence `\\\\q`\"}}]}}\n"
+            ),
+            String::new(),
+        ),
+        (
+            &[three, "--json"],
+            false,
+            format!(
+                "{{\"file\":\"{three}\",\"diagnostics\":[{},{},{}]}}\n",
+                diag(4, 12, "mismatched types: expected `i64`, found `i32`"),
+                diag(9, 16, "struct `P` has no field `y`"),
+                diag(11, 14, "undefined variable `missing`"),
             ),
             String::new(),
         ),

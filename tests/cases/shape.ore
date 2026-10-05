@@ -1,0 +1,21 @@
+// Example 2 of docs/design.md, verbatim apart from `std.math.pi`.
+struct Point { x: f32, y: f32 }
+
+enum Shape {
+    Circle { center: Point, r: f32 }
+    Rect { min: Point, max: Point }
+}
+
+fn area(s: Shape) f32 {
+    return match s {
+        .Circle { r, .. } => 3.14159 * r * r
+        .Rect { min, max } => (max.x - min.x) * (max.y - min.y)
+    }
+}
+
+pub fn main() {
+    let c = Shape.Circle { center: Point { x: 0.0, y: 0.0 }, r: 2.0 }
+    let b = Shape.Rect { min: Point { x: 1.0, y: 1.0 }, max: Point { x: 4.0, y: 3.0 } }
+    @println(area(c))
+    @println(area(b))
+}

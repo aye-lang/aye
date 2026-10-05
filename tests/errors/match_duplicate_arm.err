@@ -1,0 +1,1 @@
+match_duplicate_arm.ore:7:9: error: variant `Color.Red` is already matched by an earlier arm

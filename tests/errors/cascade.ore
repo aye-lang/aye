@@ -1,0 +1,10 @@
+fn f() i32 {
+    let a = undefined_thing
+    let b = a + 1
+    return b
+}
+
+pub fn main() {
+    let s: Unknown = 1
+    @println(s)
+}

@@ -1,0 +1,12 @@
+enum Color { Red, Green }
+
+fn f(c: Color) i32 {
+    return match c {
+        .Red => 1
+        .Green => 2
+        .Red => 3
+    }
+}
+
+pub fn main() {
+}

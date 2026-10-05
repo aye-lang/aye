@@ -1,0 +1,43 @@
+struct Counter { n: i32, hits: u32 }
+
+// Field access auto-dereferences a pointer.
+fn bump(c: *mut Counter, by: i32) {
+    c.n += by
+    c.hits += 1
+}
+
+fn total(c: *Counter) i32 {
+    return c.n
+}
+
+// `p.*` dereferences explicitly.
+fn set(p: *mut i64, v: i64) {
+    p.* = v
+}
+
+pub fn main() {
+    var c = Counter { n: 1, hits: 0 }
+    bump(&mut c, 5)
+    bump(&mut c, 10)
+    @println(total(&c))
+    @println(c.hits)
+    var x: i64 = 3
+    set(&mut x, 42)
+    @println(x)
+    let p = &x
+    @println(p.* + 1)
+    // A `let` pointer can still write through `*mut`.
+    let pc = &mut c
+    pc.n = 7
+    let snapshot = pc.*
+    @println(snapshot.n)
+    // `*mut T` is accepted where `*T` is expected.
+    @println(total(pc))
+    var arr = [3]i32{1, 2, 3}
+    let e = &mut arr[1]
+    e.* *= 10
+    @println(arr[1])
+    var cs = [2]Counter{Counter { n: 0, hits: 0 }, Counter { n: 0, hits: 0 }}
+    bump(&mut cs[1], 9)
+    @println(cs[1].n)
+}

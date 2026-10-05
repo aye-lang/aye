@@ -1,0 +1,2 @@
+cascade.ore:2:13: error: undefined variable `undefined_thing`
+cascade.ore:8:12: error: unknown type `Unknown`

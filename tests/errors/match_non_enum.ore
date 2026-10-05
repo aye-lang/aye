@@ -1,0 +1,6 @@
+pub fn main() {
+    let x = 5
+    match x {
+        _ => @println(x)
+    }
+}

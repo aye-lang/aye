@@ -20,8 +20,23 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
 - **`true` and `false`** are predeclared identifiers, not keywords. The parser reads them as literals.
 - **Initializers:** `let` and `var` must always have one (`var x: T = v`). There is no zero-initialization yet.
 - **Array literals** need an explicit length: `[3]i32{1, 2, 3}`. There is no `[_]T` form yet.
-- **`pub`** is accepted on `fn` and `struct` but has no effect until modules exist.
+- **`pub`** is accepted on `fn`, `struct` and `enum` but has no effect until modules exist.
 - **`main`:** the entry point must be `pub fn main()`, with no parameters and no return type. The generated C `main` returns 0.
+- **Pointers:** `*T` is read-only, `*mut T` is writable. They are made with `&x` and `&mut x`.
+  - `&mut x` needs a writable place: a `var`, or data behind a `*mut`. `&` of a temporary (`&f()`) is an error.
+  - Dereference is `p.*`, as in Zig (`*` already starts the type).
+  - Field access dereferences one pointer level, as in Go and Zig: `p.x`, and `p.x = 1` when `p: *mut T`.
+  - There is no pointer arithmetic or pointer comparison.
+- **Optionals:** `?T`, with the literal `null`. `null` is a predeclared identifier like `true`, so the keyword count stays at 28.
+  - `if x |v| { } else { }` unwraps, as in Zig. `v` is immutable and visible only in the first block. `while x |v|` is not supported yet.
+  - `x == null` and `x != null` work, as in Zig (and Go's `nil`).
+- **Enums:** `enum Name { A, B { field: T, ... } }`. Variants are separated by `,` or newlines; payload fields are written like struct fields. A variant without payload has no `{}`.
+  - A value always names the enum: `Shape.Circle { r: 1.0 }`, `Color.Red`. The shorthand `.Circle { }` is not supported, so there is one way to write it.
+- **`match`:** `match x { pattern => body }`. Arms are separated by newlines or `,`. The scrutinee follows the header rule of `if` (no bare struct literal).
+  - Patterns: `.V`, `.V { a, b: name, .. }` and `_`. A field binds a variable of the same name, or `field: name`. Without `..`, every field must be listed.
+  - Matching a variant twice, and any arm after `_`, is an error.
+  - As a statement, an arm body is a block or a call. As an expression, it is an expression (not a block), and all arms must have the same type. With no expected type, the first arm that is not an untyped literal or `null` decides the type.
+- **New tokens:** `&`, `|`, `=>` and `.*`. `.*` ends a statement for semicolon insertion, like `)`.
 
 ## Types and checking
 
@@ -41,12 +56,19 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
   - `+% -% *%` wrap.
   - `%` is integer-only.
   - There are no bitwise or shift operators yet.
-- **Equality:** `==` and `!=` work on integers, floats and bools. Struct, array and slice equality are not supported.
+- **Equality:** `==` and `!=` work on integers, floats and bools, and between an optional and `null`. Struct, array, slice, pointer and enum equality are not supported.
 - **Unused call results:** an expression statement must be a call, and a non-void result may be dropped silently. Other expression statements are errors.
+- **Implicit wrapping:** a `T` value is accepted where `?T` is expected (a typed `let`, an assignment, an argument, a `return`, a field). This wraps the value; it is not a conversion between types, so it does not break the "no implicit conversion" rule. `*mut T` is also accepted where `*T` is expected, as in Rust and Zig. There are no other implicit coercions.
+- **`match` is exhaustive:** without `_`, every variant must have an arm. The error names the missing variants (`missing variant `Shape.Rect``). `match` works only on enums.
+- **Pattern bindings and `|v|` captures** are immutable copies, and they follow the shadowing rule below.
 - **Shadowing** is not allowed in any scope. A `let`/`var` binding, a parameter or a `for` variable is an error when its name is already visible: a local in the same or an enclosing block, a parameter of the function, or a top-level `fn`, `extern fn` or `struct`. Sibling blocks and different functions can reuse a name.
 - **`isize` and `usize`** are 64-bit. Stage0 assumes an LP64 target.
 - **`extern fn` signatures** can use only integer, float, `bool` and `[*]T` types, and the function cannot be variadic. Calls go straight to the C symbol of the same name.
-- **Errors:** the compiler reports the first error and stops.
+- **Error recovery:** every stage reports all of its errors, sorted by position and deduplicated, at most 50.
+  - The lexer skips the rest of a bad line.
+  - The parser skips a bad statement up to the end of its line (using brace depth and indentation), and a bad declaration up to the next line that starts with a declaration keyword.
+  - If the lexer or parser reported errors, sema does not run, as in Go. A syntax error never causes type errors.
+  - Sema drops a statement with an error and goes on. A variable whose type is unknown (bad initializer, unknown type, rejected declaration) gets an error type, and its uses are not reported again.
 
 ## Semantics and codegen
 
@@ -61,6 +83,9 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
   - For an arithmetic panic, the position is the operator. For an index or slice panic, it is the `[`.
 - **No libc headers:** the generated C includes only `stdint.h`, `stddef.h` and `stdbool.h`, so user `extern fn` declarations cannot conflict with libc headers. The runtime calls libc through asm-labelled aliases such as `ore_rt_printf`.
 - **Value types:** arrays are emitted as C structs (`struct { T a[N]; }`), so they are copied by value like structs.
+- **Optional layout:** `?*T` is a C pointer that may be null, the same size as `*T`. Every other `?T` is `struct { bool has; T val; }`.
+- **Enum layout:** a `uint32_t` tag (the variant's index in the declaration) and a union with one struct per payload variant. `match` is lowered to an `if` chain on the tag; the last arm needs no test.
+- **Recursive types:** a struct or enum that contains itself by value (also through an array or `?T`) is an error. Through a pointer it is fine.
 - **`#line` directives** come before every generated statement so that debug info points to the `.ore` source.
 
 ## Differences from the design doc (to resolve later)

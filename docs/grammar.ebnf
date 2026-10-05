@@ -8,7 +8,7 @@
    the lexer inserts it (Go rule) at a line break or at end of file when the
    last token on the line is one of
        identifier, integer/float/string/char literal,
-       ")"  "]"  "}"  "return"  "break"  "continue".
+       ")"  "]"  "}"  ".*"  "return"  "break"  "continue".
    An explicit ";" is a lexical error. *)
 
 (* ------------------------------------------------------------ lexical *)
@@ -32,32 +32,39 @@ keyword     = "fn" | "let" | "var" | "pub" | "import" | "struct" | "enum"
             | "while" | "break" | "continue" | "return" | "defer" | "errdefer"
             | "try" | "catch" | "comptime" | "where" | "as" | "test"
             | "mut" | "extern" ;
-(* import enum error interface dyn match errdefer try catch comptime where
-   test mut are reserved; stage0 reports "... is not yet supported".
-   `true`, `false`, `in` and the primitive type names are predeclared
-   identifiers, not keywords. *)
+(* import error interface dyn errdefer try catch comptime where test are
+   reserved; stage0 reports "... is not yet supported".
+   `true`, `false`, `null`, `in` and the primitive type names are
+   predeclared identifiers, not keywords. *)
 
 (* --------------------------------------------------------- top level *)
 
 file        = { NEWLINE } , { item , ( NEWLINE | EOF ) , { NEWLINE } } ;
-item        = fn_decl | extern_fn | struct_decl ;
+item        = fn_decl | extern_fn | struct_decl | enum_decl ;
 
 fn_decl     = [ "pub" ] "fn" ident "(" [ params ] ")" [ type ] block ;
 extern_fn   = [ "pub" ] "extern" "fn" ident "(" [ params ] ")" [ type ] ;
 params      = param { "," param } [ "," ] ;
 param       = ident ":" type ;
 
-struct_decl = [ "pub" ] "struct" ident "{" { NEWLINE }
+struct_decl = [ "pub" ] "struct" ident field_list ;
+field_list  = "{" { NEWLINE }
               [ field { ( "," | NEWLINE ) { NEWLINE } field } [ "," ] { NEWLINE } ] "}" ;
 field       = ident ":" type ;
+
+enum_decl   = [ "pub" ] "enum" ident "{" { NEWLINE }
+              variant { ( "," | NEWLINE ) { NEWLINE } variant } [ "," ] { NEWLINE } "}" ;
+variant     = ident [ field_list ] ;           (* field_list not empty *)
 
 (* ------------------------------------------------------------- types *)
 
 type        = ident                    (* i8 i16 i32 i64 isize u8 u16 u32 u64
-                                          usize f32 f64 bool, or a struct *)
+                                          usize f32 f64 bool, a struct or an enum *)
             | "[" int_lit "]" type     (* fixed array      [N]T *)
             | "[" "]" type             (* slice            []T  *)
-            | "[" "*" "]" type ;       (* C pointer (FFI)  [*]T *)
+            | "[" "*" "]" type         (* C pointer (FFI)  [*]T *)
+            | "*" [ "mut" ] type       (* pointer          *T, *mut T *)
+            | "?" type ;               (* optional         ?T   *)
 
 (* -------------------------------------------------------- statements *)
 
@@ -70,16 +77,17 @@ stmt        = let_stmt | if_stmt | while_stmt | for_stmt
             | simple_stmt ;
 
 let_stmt    = ( "let" | "var" ) ident [ ":" type ] "=" expr ;
-if_stmt     = "if" header_expr block [ "else" ( if_stmt | block ) ] ;
+if_stmt     = "if" header_expr [ "|" ident "|" ] block [ "else" ( if_stmt | block ) ] ;
+               (* with "|v|" the header is a ?T and v is its value *)
                (* "else" must follow "}" on the same line *)
 while_stmt  = "while" header_expr block ;
 for_stmt    = "for" ident "in" header_expr ".." header_expr block ;
                (* half-open range lo..hi; "in" is a contextual identifier *)
-simple_stmt = expr [ assign_op expr ] ;   (* a bare expr must be a call *)
+simple_stmt = expr [ assign_op expr ] ;   (* a bare expr must be a call or match *)
 assign_op   = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "+%=" | "-%=" | "*%=" ;
 
-(* header_expr is expr, except that `Name {` is not parsed as a struct
-   literal at its top level (write `(Name { ... })` there). *)
+(* header_expr is expr, except that `Name {` and `Enum.Variant {` are not
+   parsed as literals at its top level (write `(Name { ... })` there). *)
 header_expr = expr ;
 
 (* ------------------------------------------------------- expressions *)
@@ -92,8 +100,8 @@ header_expr = expr ;
      4  + - +% -%
      5  * / % *%
      6  as            (postfix cast, binds looser than unary: -x as f32 == (-x) as f32)
-     7  - !           (unary prefix)
-     8  call, index, slice, field  *)
+     7  - ! & &mut    (unary prefix)
+     8  call, index, slice, field, .*  *)
 
 expr        = or_expr ;
 or_expr     = and_expr { "||" and_expr } ;
@@ -103,13 +111,17 @@ cmp_op      = "==" | "!=" | "<" | "<=" | ">" | ">=" ;
 add_expr    = mul_expr { ( "+" | "-" | "+%" | "-%" ) mul_expr } ;
 mul_expr    = cast_expr { ( "*" | "/" | "%" | "*%" ) cast_expr } ;
 cast_expr   = unary { "as" type } ;
-unary       = ( "-" | "!" ) unary | postfix ;
+unary       = ( "-" | "!" | "&" [ "mut" ] ) unary | postfix ;
 postfix     = primary { "." ident
+                      | ".*"                                   (* dereference *)
                       | "[" expr "]"
                       | "[" [ expr ] ".." [ expr ] "]" } ;
 primary     = int_lit | float_lit | string_lit | char_lit
-            | "true" | "false"
+            | "true" | "false" | "null"
             | ident
+            | ident "." ident                              (* variant without payload *)
+            | ident "." ident "{" [ field_init { "," field_init } [ "," ] ] "}"   (* variant literal *)
+            | match_expr
             | ident "(" [ args ] ")"                       (* call *)
             | builtin "(" [ args ] ")"                     (* @print, @println *)
             | ident "{" [ field_init { "," field_init } [ "," ] ] "}"   (* struct literal *)
@@ -117,3 +129,10 @@ primary     = int_lit | float_lit | string_lit | char_lit
             | "(" expr ")" ;
 args        = expr { "," expr } [ "," ] ;
 field_init  = ident ":" expr ;
+
+match_expr  = "match" header_expr "{" { NEWLINE }
+              { arm ( "," | NEWLINE ) { NEWLINE } } "}" ;   (* the last separator is optional *)
+arm         = pattern "=>" ( block | expr ) ;   (* block only in a match statement *)
+pattern     = "_"
+            | "." ident [ "{" [ field_pat { "," field_pat } [ "," ".." ] | ".." ] "}" ] ;
+field_pat   = ident [ ":" ident ] ;

@@ -1,0 +1,52 @@
+struct Node { value: i32, dirty: bool }
+
+struct Slot { next: ?u32, gen: u32 }
+
+fn find(xs: []i32, want: i32) ?usize {
+    for i in 0..xs.len {
+        if xs[i] == want {
+            return i
+        }
+    }
+    return null
+}
+
+fn pick(n: *mut Node, ok: bool) ?*mut Node {
+    if ok {
+        return n
+    }
+    return null
+}
+
+pub fn main() {
+    let xs = [4]i32{5, 6, 7, 8}
+    if find(xs[..], 7) |i| {
+        @println(i)
+    }
+    if find(xs[..], 9) |i| {
+        @println(i)
+    } else {
+        @println("not found")
+    }
+    var maybe: ?i32 = null
+    @println(maybe == null)
+    maybe = 3
+    @println(maybe != null)
+    if maybe |v| {
+        @println(v)
+    }
+    var node = Node { value: 1, dirty: false }
+    if pick(&mut node, true) |n| {
+        n.dirty = true
+        n.value += 1
+    }
+    @println(node.dirty)
+    @println(node.value)
+    let none = pick(&mut node, false)
+    @println(none == null)
+    var s = Slot { next: null, gen: 0 }
+    s.next = 4
+    if s.next |nx| {
+        @println(nx)
+    }
+}

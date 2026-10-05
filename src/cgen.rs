@@ -210,7 +210,12 @@ fn mangle(t: &Type) -> String {
         Type::Array(e, n) => format!("A{n}_{}", mangle(e)),
         Type::Slice(e) => format!("S_{}", mangle(e)),
         Type::CPtr(e) => format!("P_{}", mangle(e)),
+        Type::Ptr(e, false) => format!("R_{}", mangle(e)),
+        Type::Ptr(e, true) => format!("RM_{}", mangle(e)),
+        Type::Optional(e) => format!("O_{}", mangle(e)),
         Type::Struct(n) => format!("s_{n}"),
+        Type::Enum(n) => format!("e_{n}"),
+        Type::Error => unreachable!(),
     }
 }
 
@@ -221,13 +226,22 @@ fn c_type(t: &Type) -> String {
         Type::Float(FloatTy::F64) => "double".into(),
         Type::Bool => "bool".into(),
         Type::Void => "void".into(),
-        Type::CPtr(e) => format!("{}*", c_type(e)),
-        Type::Array(..) | Type::Slice(_) | Type::Struct(_) => format!("ore_{}", mangle(t)),
+        Type::CPtr(e) | Type::Ptr(e, _) => format!("{}*", c_type(e)),
+        Type::Optional(e) if is_ptr_optional(t) => c_type(e),
+        Type::Array(..) | Type::Slice(_) | Type::Struct(_) | Type::Enum(_) | Type::Optional(_) => {
+            format!("ore_{}", mangle(t))
+        }
+        Type::Error => unreachable!(),
     }
 }
 
+/// Types emitted as a C struct.
 fn is_composite(t: &Type) -> bool {
-    matches!(t, Type::Array(..) | Type::Slice(_) | Type::Struct(_))
+    match t {
+        Type::Array(..) | Type::Slice(_) | Type::Struct(_) | Type::Enum(_) => true,
+        Type::Optional(_) => !is_ptr_optional(t),
+        _ => false,
+    }
 }
 
 fn line_col(span: Span) -> String {
@@ -278,6 +292,12 @@ impl Gen {
                 add(t, &mut all);
             }
         }
+        for e in &p.enums {
+            add(&Type::Enum(e.name.clone()), &mut all);
+            for (_, t) in e.variants.iter().flat_map(|v| &v.fields) {
+                add(t, &mut all);
+            }
+        }
         for e in &p.externs {
             for t in e.params.iter().chain(std::iter::once(&e.ret)) {
                 add(t, &mut all);
@@ -323,6 +343,31 @@ impl Gen {
                 let mut s = format!("struct {name} {{");
                 for (fname, ft) in &def.fields {
                     let _ = write!(s, " {} {};", c_type(ft), c_field(fname));
+                }
+                s.push_str(" };");
+                self.line(0, &s);
+            }
+            Type::Optional(e) => {
+                self.define(e, p, done);
+                let _ = writeln!(self.out, "struct {name} {{ bool has; {} val; }};", c_type(e));
+            }
+            // Tag, then a union with one struct per variant that has a payload.
+            Type::Enum(ename) => {
+                let def = p.enums.iter().find(|e| e.name == *ename).unwrap();
+                for (_, ft) in def.variants.iter().flat_map(|v| &v.fields) {
+                    self.define(ft, p, done);
+                }
+                let mut s = format!("struct {name} {{ uint32_t tag;");
+                if def.variants.iter().any(|v| !v.fields.is_empty()) {
+                    s.push_str(" union {");
+                    for v in def.variants.iter().filter(|v| !v.fields.is_empty()) {
+                        s.push_str(" struct {");
+                        for (fname, ft) in &v.fields {
+                            let _ = write!(s, " {} {};", c_type(ft), c_field(fname));
+                        }
+                        let _ = write!(s, " }} {};", c_field(&v.name));
+                    }
+                    s.push_str(" } u;");
                 }
                 s.push_str(" };");
                 self.line(0, &s);
@@ -455,6 +500,7 @@ impl Gen {
                 Proj::Index { index, len: Len::Slice, span } => {
                     s = format!("{s}.ptr[ore_idx({}, {s}.len, {})]", self.operand(f, index), line_col(*span));
                 }
+                Proj::Deref => s = format!("(*{s})"),
             }
         }
         s
@@ -515,6 +561,29 @@ impl Gen {
                 let fs: Vec<String> = fields.iter().map(|o| self.operand(f, o)).collect();
                 format!("((ore_s_{name}){{{}}})", fs.join(", "))
             }
+            Rvalue::Variant { enum_name, tag, variant, fields } => {
+                if fields.is_empty() {
+                    return format!("((ore_e_{enum_name}){{.tag = {tag}}})");
+                }
+                let fs: Vec<String> = fields.iter().map(|o| self.operand(f, o)).collect();
+                format!("((ore_e_{enum_name}){{.tag = {tag}, .u.{} = {{{}}}}})", c_field(variant), fs.join(", "))
+            }
+            Rvalue::AddrOf(p) => format!("(&{})", self.place(f, p)),
+            Rvalue::Some { val, ty } => {
+                let v = self.operand(f, val);
+                if is_ptr_optional(ty) { v } else { format!("(({}){{true, {v}}})", c_type(ty)) }
+            }
+            Rvalue::Null(ty) => {
+                if is_ptr_optional(ty) {
+                    format!("(({})0)", c_type(ty))
+                } else {
+                    format!("(({}){{0}})", c_type(ty))
+                }
+            }
+            Rvalue::IsSome { place, ty } => {
+                let p = self.place(f, place);
+                if is_ptr_optional(ty) { format!("({p} != 0)") } else { format!("{p}.has") }
+            }
             Rvalue::ArrayLit { ty, elems } => {
                 let es: Vec<String> = elems.iter().map(|o| self.operand(f, o)).collect();
                 format!("(({}){{{{{}}}}})", c_type(ty), es.join(", "))
@@ -566,7 +635,9 @@ fn collect_type(t: &Type, seen: &mut HashSet<Type>, all: &mut Vec<Type>) {
         return;
     }
     match t {
-        Type::Array(e, _) | Type::Slice(e) | Type::CPtr(e) => collect_type(e, seen, all),
+        Type::Array(e, _) | Type::Slice(e) | Type::CPtr(e) | Type::Ptr(e, _) | Type::Optional(e) => {
+            collect_type(e, seen, all)
+        }
         _ => {}
     }
     all.push(t.clone());

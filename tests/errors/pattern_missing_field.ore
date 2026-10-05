@@ -1,0 +1,12 @@
+enum Shape {
+    Rect { w: f32, h: f32 }
+}
+
+fn width(s: Shape) f32 {
+    return match s {
+        .Rect { w } => w
+    }
+}
+
+pub fn main() {
+}

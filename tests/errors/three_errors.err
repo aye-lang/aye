@@ -1,0 +1,3 @@
+three_errors.ore:4:12: error: mismatched types: expected `i64`, found `i32`
+three_errors.ore:9:16: error: struct `P` has no field `y`
+three_errors.ore:11:14: error: undefined variable `missing`

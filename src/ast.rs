@@ -11,6 +11,7 @@ pub struct File {
 pub enum Item {
     Fn(FnDecl),
     Struct(StructDecl),
+    Enum(EnumDecl),
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +42,22 @@ pub struct StructDecl {
 }
 
 #[derive(Debug, Clone)]
+pub struct EnumDecl {
+    pub name: String,
+    pub span: Span,
+    pub is_pub: bool,
+    pub variants: Vec<VariantDecl>,
+}
+
+#[derive(Debug, Clone)]
+pub struct VariantDecl {
+    pub name: String,
+    pub span: Span,
+    /// Payload fields; empty for a variant without payload.
+    pub fields: Vec<FieldDecl>,
+}
+
+#[derive(Debug, Clone)]
 pub struct FieldDecl {
     pub name: String,
     pub span: Span,
@@ -62,6 +79,10 @@ pub enum TypeExprKind {
     Slice(Box<TypeExpr>),
     /// `[*]T`
     CPtr(Box<TypeExpr>),
+    /// `*T` (mutable = false) or `*mut T` (mutable = true).
+    Ptr(Box<TypeExpr>, bool),
+    /// `?T`
+    Optional(Box<TypeExpr>),
 }
 
 #[derive(Debug, Clone)]
@@ -81,7 +102,8 @@ pub enum StmtKind {
     /// `let` (mutable = false) or `var` (mutable = true).
     Let { name: String, mutable: bool, ty: Option<TypeExpr>, init: Expr },
     Assign { target: Expr, op: AssignOp, value: Expr },
-    If { cond: Expr, then: Block, els: Option<Box<Stmt>> },
+    /// `capture` is the `v` of `if x |v| { }`.
+    If { cond: Expr, capture: Option<(String, Span)>, then: Block, els: Option<Box<Stmt>> },
     While { cond: Expr, body: Block },
     /// `for var in lo..hi { body }`
     For { var: String, var_span: Span, lo: Expr, hi: Expr, body: Block },
@@ -178,6 +200,7 @@ pub enum ExprKind {
     Int(u64),
     Float(f64),
     Bool(bool),
+    Null,
     Str(Vec<u8>),
     Char(u32),
     Ident(String),
@@ -185,11 +208,19 @@ pub enum ExprKind {
     Builtin { name: String, args: Vec<Expr> },
     Binary { op: BinOp, lhs: Box<Expr>, rhs: Box<Expr> },
     Unary { op: UnOp, expr: Box<Expr> },
+    /// `&x` (mutable = false) or `&mut x` (mutable = true).
+    AddrOf { mutable: bool, expr: Box<Expr> },
+    /// `p.*`
+    Deref(Box<Expr>),
     Cast { expr: Box<Expr>, ty: TypeExpr },
     Field { base: Box<Expr>, name: String },
     Index { base: Box<Expr>, index: Box<Expr> },
     Slice { base: Box<Expr>, lo: Option<Box<Expr>>, hi: Option<Box<Expr>> },
     StructLit { name: String, fields: Vec<FieldInit> },
+    /// `Enum.Variant { field: value, ... }`. A variant without payload is
+    /// written `Enum.Variant` and parsed as `Field`.
+    VariantLit { enum_name: String, variant: String, fields: Vec<FieldInit> },
+    Match { scrutinee: Box<Expr>, arms: Vec<MatchArm> },
     /// `[N]T{a, b, c}`; `ty` is the array type.
     ArrayLit { ty: TypeExpr, elems: Vec<Expr> },
     Paren(Box<Expr>),
@@ -200,4 +231,31 @@ pub struct FieldInit {
     pub name: String,
     pub span: Span,
     pub value: Expr,
+}
+
+#[derive(Debug, Clone)]
+pub struct MatchArm {
+    /// `None` for the `_` pattern.
+    pub variant: Option<String>,
+    /// `.V { a, b: c, .. }`: the field patterns; `None` for `.V` and `_`.
+    pub fields: Option<Vec<FieldPat>>,
+    /// The pattern ends with `..`.
+    pub rest: bool,
+    pub body: ArmBody,
+    pub span: Span,
+}
+
+/// `field` or `field: binding` in a variant pattern.
+#[derive(Debug, Clone)]
+pub struct FieldPat {
+    pub field: String,
+    pub span: Span,
+    pub binding: String,
+    pub binding_span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum ArmBody {
+    Expr(Expr),
+    Block(Block),
 }

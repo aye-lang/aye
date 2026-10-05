@@ -1,0 +1,6 @@
+syntax_recovery.ore:1:13: error: expected `)`, found `{`
+syntax_recovery.ore:5:14: error: expected `:`, found identifier `i32`
+syntax_recovery.ore:8:21: error: expected `,` or `)`, found newline
+syntax_recovery.ore:9:24: error: expected `,` or `}` (multi-line literals need a trailing comma), found newline
+syntax_recovery.ore:11:17: error: expected `,`, newline or `}` after match arm, found integer literal
+syntax_recovery.ore:18:18: error: expected expression, found `)`

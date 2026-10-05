@@ -1,38 +1,41 @@
 //! Recursive-descent parser producing the AST in `ast.rs`.
 //! The grammar it accepts is documented in `docs/grammar.ebnf`.
+//!
+//! Error recovery: a statement that fails to parse is reported and skipped up
+//! to the end of its line (or the `}` closing its block); a declaration that
+//! fails is skipped up to the next line starting with a declaration keyword.
 
 use crate::ast::*;
 use crate::diag::{Error, Result, Span};
 use crate::lexer::{Kw, Tok, Token};
 
-pub fn parse(tokens: Vec<Token>) -> Result<File> {
-    let mut p = Parser { toks: tokens, pos: 0, no_struct_lit: false };
-    p.file()
+pub fn parse(tokens: Vec<Token>) -> std::result::Result<File, Vec<Error>> {
+    let mut p = Parser { toks: tokens, pos: 0, no_struct_lit: false, errors: Vec::new() };
+    let f = p.file();
+    if p.errors.is_empty() { Ok(f) } else { Err(p.errors) }
 }
 
 struct Parser {
     toks: Vec<Token>,
     pos: usize,
-    /// Set while parsing `if`/`while`/`for` headers, where `Name {` starts the
-    /// body rather than a struct literal (same rule as Go).
+    /// Set while parsing `if`/`while`/`for`/`match` headers, where `Name {`
+    /// starts the body rather than a struct literal (same rule as Go).
     no_struct_lit: bool,
+    errors: Vec<Error>,
 }
 
 fn not_supported(kw: Kw, span: Span) -> Error {
     let what = match kw {
         Kw::Import => "`import` (modules)",
-        Kw::Enum => "`enum`",
         Kw::Error => "`error` sets",
         Kw::Interface => "`interface`",
         Kw::Dyn => "`dyn`",
-        Kw::Match => "`match`",
         Kw::Errdefer => "`errdefer`",
         Kw::Try => "`try`",
         Kw::Catch => "`catch`",
         Kw::Comptime => "`comptime`",
         Kw::Where => "`where`",
         Kw::Test => "`test` blocks",
-        Kw::Mut => "`mut`",
         _ => return Error::new(span, format!("unexpected `{}`", kw.as_str())),
     };
     Error::new(span, format!("{what} is not yet supported"))
@@ -42,18 +45,15 @@ fn is_unsupported_kw(kw: Kw) -> bool {
     matches!(
         kw,
         Kw::Import
-            | Kw::Enum
             | Kw::Error
             | Kw::Interface
             | Kw::Dyn
-            | Kw::Match
             | Kw::Errdefer
             | Kw::Try
             | Kw::Catch
             | Kw::Comptime
             | Kw::Where
             | Kw::Test
-            | Kw::Mut
     )
 }
 
@@ -125,17 +125,85 @@ impl Parser {
         }
     }
 
+    // ------------------------------------------------------------ recovery
+
+    /// Skip the rest of a failed statement that started at token `start`.
+    /// Stops after a newline that is outside the braces the statement
+    /// opened, or that is followed by a line starting left of the
+    /// statement's column, or at its column with anything but `}` (so an
+    /// unclosed `{` on the bad line does not swallow the rest of the block).
+    /// Stops before a `}` that closes the block.
+    fn sync_stmt(&mut self, start: usize) {
+        let col = self.toks[start].span.col;
+        let mut depth: i32 = 0;
+        for t in &self.toks[start..self.pos] {
+            match t.tok {
+                Tok::LBrace => depth += 1,
+                Tok::RBrace => depth -= 1,
+                _ => {}
+            }
+        }
+        let mut depth = depth.max(0);
+        loop {
+            match self.peek() {
+                Tok::Eof => return,
+                Tok::LBrace => depth += 1,
+                Tok::RBrace if depth == 0 || self.span().col < col => return,
+                Tok::RBrace => depth -= 1,
+                Tok::Semi => {
+                    self.bump();
+                    let next = self.span().col;
+                    if depth == 0 || next < col || (next == col && !self.at(&Tok::RBrace)) {
+                        return;
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            self.bump();
+        }
+    }
+
+    /// Skip a failed declaration: up to the next line that starts with a
+    /// declaration keyword, or end of file.
+    fn sync_item(&mut self) {
+        loop {
+            match self.peek() {
+                Tok::Eof => return,
+                Tok::Semi => {
+                    self.bump();
+                    if matches!(
+                        self.peek(),
+                        Tok::Kw(Kw::Fn | Kw::Pub | Kw::Extern | Kw::Struct | Kw::Enum)
+                    ) {
+                        return;
+                    }
+                }
+                _ => {
+                    self.bump();
+                }
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- items
 
-    fn file(&mut self) -> Result<File> {
+    fn file(&mut self) -> File {
         let mut items = Vec::new();
         loop {
             self.skip_semis();
             if self.at(&Tok::Eof) {
-                return Ok(File { items });
+                return File { items };
             }
-            items.push(self.item()?);
-            self.end_of_stmt()?;
+            let r = self.item().and_then(|item| {
+                items.push(item);
+                self.end_of_stmt()
+            });
+            if let Err(e) = r {
+                self.errors.push(e);
+                self.no_struct_lit = false;
+                self.sync_item();
+            }
         }
     }
 
@@ -154,11 +222,12 @@ impl Parser {
                 }
             }
             Tok::Kw(Kw::Struct) => Ok(Item::Struct(self.struct_decl(is_pub)?)),
+            Tok::Kw(Kw::Enum) => Ok(Item::Enum(self.enum_decl(is_pub)?)),
             Tok::Kw(Kw::Let) | Tok::Kw(Kw::Var) => {
                 Err(Error::new(self.span(), "global variables are not yet supported"))
             }
             Tok::Kw(k) if is_unsupported_kw(k) => Err(not_supported(k, self.span())),
-            _ => Err(self.unexpected("declaration (`fn`, `extern fn` or `struct`)")),
+            _ => Err(self.unexpected("declaration (`fn`, `extern fn`, `struct` or `enum`)")),
         }
     }
 
@@ -198,6 +267,44 @@ impl Parser {
     fn struct_decl(&mut self, is_pub: bool) -> Result<StructDecl> {
         self.expect(&Tok::Kw(Kw::Struct))?;
         let (name, span) = self.ident()?;
+        let fields = self.field_list()?;
+        Ok(StructDecl { name, span, is_pub, fields })
+    }
+
+    fn enum_decl(&mut self, is_pub: bool) -> Result<EnumDecl> {
+        self.expect(&Tok::Kw(Kw::Enum))?;
+        let (name, span) = self.ident()?;
+        self.expect(&Tok::LBrace)?;
+        let mut variants = Vec::new();
+        loop {
+            self.skip_semis();
+            if self.eat(&Tok::RBrace) {
+                break;
+            }
+            let (vname, vspan) = self.ident()?;
+            let fields = if self.at(&Tok::LBrace) {
+                let fields = self.field_list()?;
+                if fields.is_empty() {
+                    return Err(Error::new(vspan, format!("a variant without fields is written `{vname}`, without `{{}}`")));
+                }
+                fields
+            } else {
+                Vec::new()
+            };
+            variants.push(VariantDecl { name: vname, span: vspan, fields });
+            match self.peek() {
+                Tok::Comma | Tok::Semi => {
+                    self.bump();
+                }
+                Tok::RBrace => {}
+                _ => return Err(self.unexpected("`,`, newline or `}` after enum variant")),
+            }
+        }
+        Ok(EnumDecl { name, span, is_pub, variants })
+    }
+
+    /// `{ name: T, ... }` with fields separated by `,` or newlines.
+    fn field_list(&mut self) -> Result<Vec<FieldDecl>> {
         self.expect(&Tok::LBrace)?;
         let mut fields = Vec::new();
         loop {
@@ -217,7 +324,7 @@ impl Parser {
                 _ => return Err(self.unexpected("`,`, newline or `}` after struct field")),
             }
         }
-        Ok(StructDecl { name, span, is_pub, fields })
+        Ok(fields)
     }
 
     // ---------------------------------------------------------------- types
@@ -249,8 +356,15 @@ impl Parser {
                     _ => return Err(self.unexpected("array length (integer literal), `]` or `*`")),
                 }
             }
-            Tok::Star => return Err(Error::new(span, "pointer types are not yet supported")),
-            Tok::Question => return Err(Error::new(span, "optional types are not yet supported")),
+            Tok::Star => {
+                self.bump();
+                let mutable = self.eat(&Tok::Kw(Kw::Mut));
+                TypeExprKind::Ptr(Box::new(self.type_expr()?), mutable)
+            }
+            Tok::Question => {
+                self.bump();
+                TypeExprKind::Optional(Box::new(self.type_expr()?))
+            }
             Tok::Bang => return Err(Error::new(span, "error union types are not yet supported")),
             Tok::Kw(k) if is_unsupported_kw(k) => return Err(not_supported(k, span)),
             Tok::Kw(Kw::Struct) => {
@@ -275,8 +389,16 @@ impl Parser {
             if self.at(&Tok::Eof) {
                 return Err(self.unexpected("`}`"));
             }
-            stmts.push(self.stmt()?);
-            self.end_of_stmt()?;
+            let start = self.pos;
+            let r = self.stmt().and_then(|s| {
+                stmts.push(s);
+                self.end_of_stmt()
+            });
+            if let Err(e) = r {
+                self.errors.push(e);
+                self.no_struct_lit = false;
+                self.sync_stmt(start);
+            }
         }
         self.no_struct_lit = saved;
         Ok(Block { stmts, span })
@@ -355,7 +477,7 @@ impl Parser {
             }
             Tok::LBrace => StmtKind::Block(self.block()?),
             Tok::Kw(k) if is_unsupported_kw(k) => return Err(not_supported(k, span)),
-            Tok::Kw(Kw::Fn) | Tok::Kw(Kw::Struct) | Tok::Kw(Kw::Pub) | Tok::Kw(Kw::Extern) => {
+            Tok::Kw(Kw::Fn | Kw::Struct | Kw::Enum | Kw::Pub | Kw::Extern) => {
                 return Err(Error::new(span, "declarations are only allowed at the top level"));
             }
             _ => return self.simple_stmt(),
@@ -366,6 +488,13 @@ impl Parser {
     fn if_stmt(&mut self) -> Result<Stmt> {
         let span = self.expect(&Tok::Kw(Kw::If))?;
         let cond = self.header_expr()?;
+        let capture = if self.eat(&Tok::Pipe) {
+            let c = self.ident()?;
+            self.expect(&Tok::Pipe)?;
+            Some(c)
+        } else {
+            None
+        };
         let then = self.block()?;
         let els = if self.eat(&Tok::Kw(Kw::Else)) {
             let else_span = self.span();
@@ -379,7 +508,7 @@ impl Parser {
         } else {
             None
         };
-        Ok(Stmt { kind: StmtKind::If { cond, then, els }, span })
+        Ok(Stmt { kind: StmtKind::If { cond, capture, then, els }, span })
     }
 
     /// Expression statement or assignment.
@@ -468,6 +597,12 @@ impl Parser {
     }
 
     fn unary(&mut self) -> Result<Expr> {
+        if self.at(&Tok::Amp) {
+            let span = self.bump().span;
+            let mutable = self.eat(&Tok::Kw(Kw::Mut));
+            let expr = Box::new(self.unary()?);
+            return Ok(Expr { kind: ExprKind::AddrOf { mutable, expr }, span });
+        }
         let op = match self.peek() {
             Tok::Minus => UnOp::Neg,
             Tok::Bang => UnOp::Not,
@@ -485,7 +620,19 @@ impl Parser {
                 Tok::Dot => {
                     self.bump();
                     let (name, span) = self.ident()?;
-                    e = Expr { kind: ExprKind::Field { base: Box::new(e), name }, span };
+                    if let ExprKind::Ident(enum_name) = &e.kind
+                        && self.at(&Tok::LBrace)
+                        && !self.no_struct_lit
+                    {
+                        let kind = ExprKind::VariantLit { enum_name: enum_name.clone(), variant: name, fields: self.field_inits()? };
+                        e = Expr { kind, span: e.span };
+                    } else {
+                        e = Expr { kind: ExprKind::Field { base: Box::new(e), name }, span };
+                    }
+                }
+                Tok::DotStar => {
+                    let span = self.bump().span;
+                    e = Expr { kind: ExprKind::Deref(Box::new(e)), span };
                 }
                 Tok::LBracket => {
                     let span = self.bump().span;
@@ -550,6 +697,7 @@ impl Parser {
                 match self.peek() {
                     _ if name == "true" => ExprKind::Bool(true),
                     _ if name == "false" => ExprKind::Bool(false),
+                    _ if name == "null" => ExprKind::Null,
                     Tok::LParen => ExprKind::Call { name, args: self.args()? },
                     Tok::LBrace if !self.no_struct_lit => self.struct_lit(name)?,
                     _ => ExprKind::Ident(name),
@@ -588,13 +736,79 @@ impl Parser {
                 self.no_struct_lit = saved;
                 ExprKind::ArrayLit { ty, elems }
             }
+            Tok::Kw(Kw::Match) => {
+                self.bump();
+                let scrutinee = Box::new(self.header_expr()?);
+                self.expect(&Tok::LBrace)?;
+                let saved = std::mem::replace(&mut self.no_struct_lit, false);
+                let mut arms = Vec::new();
+                loop {
+                    self.skip_semis();
+                    if self.eat(&Tok::RBrace) {
+                        break;
+                    }
+                    arms.push(self.match_arm()?);
+                    match self.peek() {
+                        Tok::Comma | Tok::Semi => {
+                            self.bump();
+                        }
+                        Tok::RBrace => {}
+                        _ => return Err(self.unexpected("`,`, newline or `}` after match arm")),
+                    }
+                }
+                self.no_struct_lit = saved;
+                ExprKind::Match { scrutinee, arms }
+            }
             Tok::Kw(k) if is_unsupported_kw(k) => return Err(not_supported(k, span)),
             _ => return Err(self.unexpected("expression")),
         };
         Ok(Expr { kind, span })
     }
 
+    /// `pattern => body`, where the pattern is `_`, `.V` or `.V { a, b: c, .. }`
+    /// and the body is a block or an expression.
+    fn match_arm(&mut self) -> Result<MatchArm> {
+        let span = self.span();
+        let (mut variant, mut fields, mut rest) = (None, None, false);
+        match self.peek() {
+            Tok::Ident(n) if n == "_" => {
+                self.bump();
+            }
+            Tok::Dot => {
+                self.bump();
+                variant = Some(self.ident()?.0);
+                if self.eat(&Tok::LBrace) {
+                    let mut pats = Vec::new();
+                    while !self.at(&Tok::RBrace) {
+                        if self.eat(&Tok::DotDot) {
+                            rest = true;
+                            break;
+                        }
+                        let (field, fspan) = self.ident()?;
+                        let (binding, binding_span) =
+                            if self.eat(&Tok::Colon) { self.ident()? } else { (field.clone(), fspan) };
+                        pats.push(FieldPat { field, span: fspan, binding, binding_span });
+                        if !self.eat(&Tok::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect(&Tok::RBrace)?;
+                    fields = Some(pats);
+                }
+            }
+            _ => return Err(self.unexpected("pattern (`.Variant` or `_`)")),
+        }
+        self.expect(&Tok::FatArrow)?;
+        let body = if self.at(&Tok::LBrace) { ArmBody::Block(self.block()?) } else { ArmBody::Expr(self.expr()?) };
+        Ok(MatchArm { variant, fields, rest, body, span })
+    }
+
     fn struct_lit(&mut self, name: String) -> Result<ExprKind> {
+        Ok(ExprKind::StructLit { name, fields: self.field_inits()? })
+    }
+
+    /// `{ name: value, ... }` of a struct or variant literal.
+    fn field_inits(&mut self) -> Result<Vec<FieldInit>> {
         self.expect(&Tok::LBrace)?;
         let mut fields = Vec::new();
         while !self.at(&Tok::RBrace) {
@@ -610,7 +824,7 @@ impl Parser {
             return Err(self.unexpected("`,` or `}` (multi-line literals need a trailing comma)"));
         }
         self.bump();
-        Ok(ExprKind::StructLit { name, fields })
+        Ok(fields)
     }
 }
 
@@ -619,8 +833,8 @@ mod tests {
     use super::*;
     use crate::lexer::lex;
 
-    fn parse_src(src: &str) -> Result<File> {
-        parse(lex(src).unwrap())
+    fn parse_src(src: &str) -> std::result::Result<File, Error> {
+        parse(lex(src).unwrap()).map_err(|mut e| e.remove(0))
     }
 
     #[test]
@@ -654,10 +868,10 @@ mod tests {
 
     #[test]
     fn unsupported_keywords() {
-        let e = parse_src("enum E { A }").unwrap_err();
-        assert_eq!(e.msg, "`enum` is not yet supported");
-        let e = parse_src("fn f() {\n match x {}\n}").unwrap_err();
-        assert_eq!(e.msg, "`match` is not yet supported");
+        let e = parse_src("interface W {}").unwrap_err();
+        assert_eq!(e.msg, "`interface` is not yet supported");
+        let e = parse_src("fn f() {\n try x\n}").unwrap_err();
+        assert_eq!(e.msg, "`try` is not yet supported");
     }
 
     #[test]

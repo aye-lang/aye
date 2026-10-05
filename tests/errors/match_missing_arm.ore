@@ -1,0 +1,13 @@
+enum Shape {
+    Circle { r: f32 }
+    Square { side: f32 }
+}
+
+fn area(s: Shape) f32 {
+    return match s {
+        .Circle { r } => r * r
+    }
+}
+
+pub fn main() {
+}

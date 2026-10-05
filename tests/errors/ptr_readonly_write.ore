@@ -1,0 +1,8 @@
+struct Counter { n: i32 }
+
+fn reset(c: *Counter) {
+    c.n = 0
+}
+
+pub fn main() {
+}

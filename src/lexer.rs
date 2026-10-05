@@ -2,8 +2,11 @@
 //!
 //! A newline (or end of file) becomes a `Tok::Semi` terminator when the
 //! previous token is an identifier, a literal, `)`, `]`, `}`, or one of the
-//! keywords `return`, `break`, `continue`. Ore source never contains an
-//! explicit `;`.
+//! keywords `return`, `break`, `continue`, or `.*`. Ore source never contains
+//! an explicit `;`.
+//!
+//! After a lexical error the rest of the line is skipped and lexing goes on,
+//! so every bad line is reported.
 
 use crate::diag::{Error, Result, Span};
 use std::fmt;
@@ -97,6 +100,14 @@ pub enum Tok {
     Colon,
     Dot,
     DotDot,
+    /// `.*`, pointer dereference.
+    DotStar,
+    /// `=>` in a `match` arm.
+    FatArrow,
+    /// `&`, address-of.
+    Amp,
+    /// `|`, around an `if x |v|` capture.
+    Pipe,
     Question,
     Bang,
     Assign,
@@ -151,6 +162,10 @@ impl fmt::Display for Tok {
             Tok::Colon => "`:`",
             Tok::Dot => "`.`",
             Tok::DotDot => "`..`",
+            Tok::DotStar => "`.*`",
+            Tok::FatArrow => "`=>`",
+            Tok::Amp => "`&`",
+            Tok::Pipe => "`|`",
             Tok::Question => "`?`",
             Tok::Bang => "`!`",
             Tok::Assign => "`=`",
@@ -201,6 +216,7 @@ fn ends_statement(t: &Tok) -> bool {
             | Tok::RParen
             | Tok::RBracket
             | Tok::RBrace
+            | Tok::DotStar
             | Tok::Kw(Kw::Return)
             | Tok::Kw(Kw::Break)
             | Tok::Kw(Kw::Continue)
@@ -213,12 +229,14 @@ struct Lexer {
     line: u32,
     col: u32,
     toks: Vec<Token>,
+    errors: Vec<Error>,
 }
 
-pub fn lex(src: &str) -> Result<Vec<Token>> {
-    let mut lx = Lexer { chars: src.chars().collect(), pos: 0, line: 1, col: 1, toks: Vec::new() };
-    lx.run()?;
-    Ok(lx.toks)
+pub fn lex(src: &str) -> std::result::Result<Vec<Token>, Vec<Error>> {
+    let mut lx =
+        Lexer { chars: src.chars().collect(), pos: 0, line: 1, col: 1, toks: Vec::new(), errors: Vec::new() };
+    lx.run();
+    if lx.errors.is_empty() { Ok(lx.toks) } else { Err(lx.errors) }
 }
 
 impl Lexer {
@@ -256,8 +274,23 @@ impl Lexer {
         }
     }
 
-    fn run(&mut self) -> Result<()> {
-        while let Some(c) = self.peek() {
+    fn run(&mut self) {
+        while self.peek().is_some() {
+            if let Err(e) = self.token() {
+                self.errors.push(e);
+                while self.peek().is_some_and(|c| c != '\n') {
+                    self.bump();
+                }
+            }
+        }
+        let span = self.here();
+        self.terminate(span);
+        self.push(Tok::Eof, span);
+    }
+
+    /// Lex one token (or skip whitespace, a newline or a comment).
+    fn token(&mut self) -> Result<()> {
+        if let Some(c) = self.peek() {
             let span = self.here();
             match c {
                 '\n' => {
@@ -306,9 +339,6 @@ impl Lexer {
                 }
             }
         }
-        let span = self.here();
-        self.terminate(span);
-        self.push(Tok::Eof, span);
         Ok(())
     }
 
@@ -490,8 +520,10 @@ impl Lexer {
             (':', _) => Tok::Colon,
             ('?', _) => Tok::Question,
             ('.', Some('.')) => take(self, Tok::DotDot),
+            ('.', Some('*')) => take(self, Tok::DotStar),
             ('.', _) => Tok::Dot,
             ('=', Some('=')) => take(self, Tok::EqEq),
+            ('=', Some('>')) => take(self, Tok::FatArrow),
             ('=', _) => Tok::Assign,
             ('!', Some('=')) => take(self, Tok::NotEq),
             ('!', _) => Tok::Bang,
@@ -500,7 +532,9 @@ impl Lexer {
             ('>', Some('=')) => take(self, Tok::Ge),
             ('>', _) => Tok::Gt,
             ('&', Some('&')) => take(self, Tok::AndAnd),
+            ('&', _) => Tok::Amp,
             ('|', Some('|')) => take(self, Tok::OrOr),
+            ('|', _) => Tok::Pipe,
             ('+' | '-' | '*', Some('%')) => {
                 self.bump();
                 let eq = self.peek() == Some('=');
@@ -625,6 +659,13 @@ mod tests {
     #[test]
     fn rejects_semicolon() {
         let e = lex("let x = 1;").unwrap_err();
-        assert_eq!(e.span, Span::new(1, 10));
+        assert_eq!(e[0].span, Span::new(1, 10));
+    }
+
+    #[test]
+    fn reports_one_error_per_bad_line() {
+        let e = lex("let a = \"\\q\\q\"\nlet b = 1;\nlet c = 2\n").unwrap_err();
+        let spans: Vec<Span> = e.iter().map(|e| e.span).collect();
+        assert_eq!(spans, vec![Span::new(1, 10), Span::new(2, 10)]);
     }
 }

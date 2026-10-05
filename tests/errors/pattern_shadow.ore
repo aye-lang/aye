@@ -1,0 +1,13 @@
+enum Token {
+    Num { value: i64 }
+}
+
+fn get(t: Token) i64 {
+    let value = 1
+    return match t {
+        .Num { value } => value
+    }
+}
+
+pub fn main() {
+}
