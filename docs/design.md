@@ -236,7 +236,7 @@ if nodes.get(target) |node| {
 | Sonnet | 2 次實際編譯（另有 1 次是未改檔的重跑） | 1 個 E0023 | 14/14 |
 | Opus | 1 | 無 | 14/14 |
 
-- **最難的錯誤是 E0023**：`for k in 0..4` 的 `k` 是 `i64`，`j + 2 + k`（`j: usize`）因此型別不符。錯誤訊息與位置都正確，修正也很簡單，問題在於光看 spec 預測不到這個錯誤。AI 會從兩個方向猜：Rust 會依後續用法推導型別，Zig 的 `0..4` 是 `usize`。spec 已補上這條規則與 pitfall。
+- **最難的錯誤是 E0023**：`for k in 0..4` 的 `k` 是 `i64`，`j + 2 + k`（`j: usize`）因此型別不符。錯誤訊息與位置都正確，修正也很簡單，問題在於光看 spec 預測不到這個錯誤。AI 會從兩個方向猜：Rust 會依後續用法推導型別，Zig 的 `0..4` 是 `usize`。後來決定把只有字面值的 range 改成 `usize`（見待決問題）。
 - **錯誤沒有 payload，回報位置要自己繞路**：兩個 session 都另外傳一個 `*mut usize` out-parameter 記住錯誤位置，在 `catch` 裡再算出行與列。等 std 的 `*mut Diagnostics` 出來後，要提供這種情境的慣用寫法。
 - **「以非 0 狀態結束又不洩漏」要拼湊三條規則**：`main` 回傳錯誤會輸出 `error: Name`；`std.os.exit` 不跑 defer；`deinit` 才會檢查洩漏。兩個 session 最後都寫成 `run() i32`，再手動呼叫 `deinit` 與 `exit`。spec 已補上這個範例。可考慮讓 `main` 能回傳狀態碼。
 - **spec 原本沒寫、session 只好保守迴避的地方**（已驗證編譯器行為並補進 spec）：多行 error set 加尾逗號；capture 的 scope（同一函式裡兩個 `catch |e|` 可以都用 `e`）；`catch` 區塊裡的 `return` 會從外層函式返回；`std.os.exit` 會 flush `@print` 的輸出；空檔案 `readAll` 回傳空 slice；char literal 的跳脫字元。
@@ -313,9 +313,9 @@ P3 是關鍵：只有在真實引擎程式碼上驗證過記憶體模型與 JS �
 **待決問題（P0 閘門前要決議）**
 
 - [ ] 正式名稱：Ore 是暫定名。
-- [ ] 分號：採用 Go 式自動插入，還是明確寫分號？（AI 角度：傾向 Go 式。AI 熟悉 Go 的規則，`else` 換行、多行呼叫少了尾逗號這類陷阱，由 `ore fmt` 與明確的錯誤訊息擋下。）
-- [ ] DOM 字串編碼：UTF-8，還是跟 JS 一致的 UTF-16？影響每次跨邊界的轉換成本。
-- [ ] 數學型別（矩陣、色彩）是否開放有限度的 operator overloading？目前只有 `simd`。（AI 角度：傾向不開放，`a * b` 的意思應該只看型別類別就能確定。）
-- [ ] `where` 約束要不要在泛型定義時就檢查（類似 Rust），還是只在實例化時檢查？（AI 角度：傾向定義時檢查，錯誤才會落在 AI 正在寫的那一行。）
-- [ ] 只有字面值的 range（`0..4`）要維持 `i64`，還是改成像 Zig 一樣是 `usize`，或依迴圈變數的用法推導？（AI 角度：M5 閘門唯一的編譯錯誤就出在這裡。迴圈變數最常拿來當索引，傾向改成 `usize`；至少 E0023 要附上改寫成 `0..(4 as usize)` 的 fix-it。）
-- [ ] `async` / coroutine 是否列入 v2？等 P3 的 event loop 實戰經驗再決定。
+- [x] 分號：**採用 Go 式自動插入**。AI 熟悉 Go 的規則，`else` 換行、多行呼叫少了尾逗號這類陷阱，由 `ore fmt` 與明確的錯誤訊息擋下。stage0 已照此實作；M5 閘門的兩個 session 都沒有在這上面出錯。
+- [x] DOM 字串編碼：**UTF-8**。Ore 的字串本來就是 `[]u8` UTF-8，引擎內部（parser、layout、text shaping）不必維護兩套字串。JS 字串可能含有孤立的 surrogate，跨邊界時改用 WTF-8 表示，往返不失真；純 ASCII 字串走免轉換的快速路徑。P3 實測跨邊界的轉換成本後，再檢討這個決定。
+- [x] 數學型別（矩陣、色彩）是否開放有限度的 operator overloading：**不開放**，只有 `simd` 有運算子。`a * b` 的意思只看型別類別就能確定；矩陣與色彩運算寫成具名函式（`m.mul(n)`）。
+- [x] `where` 約束：**在泛型定義時就檢查**（類似 Rust），錯誤才會落在 AI 正在寫的那一行。M4 已照此實作。
+- [x] 只有字面值的 range（`0..4`）：**改成 `usize`**，跟 Zig 一樣。M5 閘門唯一的編譯錯誤就出在這裡，而迴圈變數最常拿來當索引。要有號的計數器時寫 `(0 as i64)..4`。不採用依迴圈變數用法推導，因為那要往回推導型別，違反「局部可推理」。
+- [ ] `async` / coroutine 是否列入 v2？刻意延後：等 P3 的 event loop 實戰經驗再決定，不擋 P0 閘門。
