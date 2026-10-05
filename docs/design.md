@@ -227,6 +227,21 @@ if nodes.get(target) |node| {
 
 **跟 stage0 現況的差距**（P0 閘門前補上）：stage0 已禁止遮蔽，有 `ore check --json`、錯誤恢復（一次回報所有錯誤）、錯誤代碼（`ore explain`）與 fix-it（`--json` 的 `fixes`、`ore fix`）。
 
+**M5 閘門測試紀錄（2026-10-05）**
+
+題目是 JSON tokenizer：從檔案或 stdin 讀入，每行輸出一個 token；遇到第一個錯誤時，以 `error: line:col: message` 回報並以狀態 1 結束；不得有記憶體洩漏。題目不用 `wc`，因為 `ore spec` 的完整 CLI 範例幾乎就是 `wc`。兩個彼此獨立的全新 session 各寫一次，都只拿到 `ore spec` 的輸出，唯一能跑的指令是 `ore check`（每次呼叫都會記錄），不能執行程式。check 通過後，再用 14 個行為案例驗證：12 個 JSON 輸入（含 9 種錯誤路徑）、stdin、檔案不存在，以 debug 模式建置，會檢查洩漏。
+
+| Session | check 輪數 | 錯誤 | 行為案例 |
+| --- | --- | --- | --- |
+| Sonnet | 2 次實際編譯（另有 1 次是未改檔的重跑） | 1 個 E0023 | 14/14 |
+| Opus | 1 | 無 | 14/14 |
+
+- **最難的錯誤是 E0023**：`for k in 0..4` 的 `k` 是 `i64`，`j + 2 + k`（`j: usize`）因此型別不符。錯誤訊息與位置都正確，修正也很簡單，問題在於光看 spec 預測不到這個錯誤。AI 會從兩個方向猜：Rust 會依後續用法推導型別，Zig 的 `0..4` 是 `usize`。spec 已補上這條規則與 pitfall。
+- **錯誤沒有 payload，回報位置要自己繞路**：兩個 session 都另外傳一個 `*mut usize` out-parameter 記住錯誤位置，在 `catch` 裡再算出行與列。等 std 的 `*mut Diagnostics` 出來後，要提供這種情境的慣用寫法。
+- **「以非 0 狀態結束又不洩漏」要拼湊三條規則**：`main` 回傳錯誤會輸出 `error: Name`；`std.os.exit` 不跑 defer；`deinit` 才會檢查洩漏。兩個 session 最後都寫成 `run() i32`，再手動呼叫 `deinit` 與 `exit`。spec 已補上這個範例。可考慮讓 `main` 能回傳狀態碼。
+- **spec 原本沒寫、session 只好保守迴避的地方**（已驗證編譯器行為並補進 spec）：多行 error set 加尾逗號；capture 的 scope（同一函式裡兩個 `catch |e|` 可以都用 `e`）；`catch` 區塊裡的 `return` 會從外層函式返回；`std.os.exit` 會 flush `@print` 的輸出；空檔案 `readAll` 回傳空 slice；char literal 的跳脫字元。
+- **結論**：閘門通過。語法與型別規則照 spec 寫幾乎都能一次寫對。成本主要來自 spec 沒寫清楚的邊角，以及跟 Go/Rust/Zig 不同、又沒有明說的預設值。
+
 ## 並行模型
 
 第一版不在語言層做並行：OS thread、channel、atomic、event loop 都是 std 函式庫，沒有 goroutine，也沒有 `async`。
@@ -302,4 +317,5 @@ P3 是關鍵：只有在真實引擎程式碼上驗證過記憶體模型與 JS �
 - [ ] DOM 字串編碼：UTF-8，還是跟 JS 一致的 UTF-16？影響每次跨邊界的轉換成本。
 - [ ] 數學型別（矩陣、色彩）是否開放有限度的 operator overloading？目前只有 `simd`。（AI 角度：傾向不開放，`a * b` 的意思應該只看型別類別就能確定。）
 - [ ] `where` 約束要不要在泛型定義時就檢查（類似 Rust），還是只在實例化時檢查？（AI 角度：傾向定義時檢查，錯誤才會落在 AI 正在寫的那一行。）
+- [ ] 只有字面值的 range（`0..4`）要維持 `i64`，還是改成像 Zig 一樣是 `usize`，或依迴圈變數的用法推導？（AI 角度：M5 閘門唯一的編譯錯誤就出在這裡。迴圈變數最常拿來當索引，傾向改成 `usize`；至少 E0023 要附上改寫成 `0..(4 as usize)` 的 fix-it。）
 - [ ] `async` / coroutine 是否列入 v2？等 P3 的 event loop 實戰經驗再決定。

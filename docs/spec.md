@@ -86,7 +86,8 @@ panic.
   u64 usize f32 f64 bool`. `in` is special only in `for i in a..b`.
 - Integer literals: `42`, `1_000`, `0xff`, `0o17`, `0b1010`. Float literals:
   `1.5`, `2.0e-3`, `1e9` (a float needs digits on both sides of `.`).
-- Char literals `'a'`, `'\n'` are integers (the Unicode code point).
+- Char literals `'a'`, `'\n'`, `'"'` are integers (the Unicode code point)
+  and take the same escapes as strings.
 - String literals `"text"` are single-line, have type `[]u8` (UTF-8 bytes,
   read-only), and are followed in memory by a NUL byte that `.len` does not
   count. Escapes: `\n \t \r \0 \\ \" \' \xHH`.
@@ -363,7 +364,9 @@ pub fn main() {
 - `for i in lo..hi { }` is the only `for`: `i` goes from `lo` up to `hi - 1`
   (half-open), both bounds have the same integer type (`0..4` is `i64`,
   `0..s.len` is `usize`), `hi` is evaluated once, and `i` is immutable. To
-  iterate a slice: `for i in 0..s.len { }`.
+  iterate a slice: `for i in 0..s.len { }`. A range of two literals is
+  always `i64`, even when `i` is later added to a `usize`; write
+  `0..(4 as usize)` to get a `usize` counter.
 - `break` and `continue` apply to the innermost loop.
 - `return`, `return value`.
 - `defer stmt` runs `stmt` when the enclosing block is left: at its end,
@@ -378,7 +381,8 @@ pub fn main() {
 **No shadowing anywhere**: a new name (local, parameter, `for` variable,
 capture, pattern binding) cannot reuse any name visible at that point,
 including names of enclosing scopes, top-level declarations of the module
-and imports. Sibling blocks may reuse a name.
+and imports. Sibling blocks may reuse a name. A capture is scoped to its
+block or expression, so two `catch |e|` in one function may both use `e`.
 
 ```ore-error
 fn f(x: i64) i64 {
@@ -588,7 +592,8 @@ pub fn main() !void {
 }
 ```
 
-- `error Name { A, B }` declares an error set; `error All = A || B` merges
+- `error Name { A, B }` declares an error set (it may span lines, one error
+  per line with a trailing `,`); `error All = A || B` merges
   sets. An error value is written `Set.Name`. Errors are identified by name:
   `NotFound` in two sets is the same error.
 - `E!T` is "an error of set `E`, or a `T`". `!T` lets the compiler infer the
@@ -606,7 +611,7 @@ pub fn main() !void {
 - `f() catch value` gives `value` on error; `f() catch |e| expr` can use
   the error. `f() catch |e| { ... }` runs the block on error; when the
   payload is not `void` the block must end with `return`, `break` or
-  `continue`. `catch` binds looser than `+` and tighter than `==`.
+  `continue`. A `return` there returns from the enclosing function. `catch` binds looser than `+` and tighter than `==`.
 - `match e { .A => ..., .B => ... }` on an error value must cover every
   error of its set (or use `_`).
 - `errdefer stmt` runs when the scope is left by returning an error (a
@@ -918,7 +923,7 @@ std.fs.open(path: []u8) OpenError!File      open a file for reading
 std.fs.stdin() File
 std.fs.stdout() File
 std.fs.stderr() File
-File.readAll(self: Self, alloc: Allocator) ReadError![]mut u8   read to the end; free with alloc.free
+File.readAll(self: Self, alloc: Allocator) ReadError![]mut u8   read to the end (empty file: empty slice); free with alloc.free
 File.write(self: Self, bytes: []u8) WriteError!void              write everything (flushes @print output first)
 File.close(self: Self)
 ```
@@ -940,7 +945,36 @@ output is flushed first.
 
 ```
 std.os.args(alloc: Allocator) AllocError![][]u8   the arguments; [0] is the program; free the slice with alloc.free
-std.os.exit(code: i32)                            exit now with this status (deferred statements do not run)
+std.os.exit(code: i32)                            exit now with this status (flushes @print output; deferred statements do not run)
+```
+
+To exit with a status and still free everything, do the work in a function
+that returns the status, and call `deinit` yourself before `exit`:
+
+```ore
+import std
+import std.mem.Allocator
+
+fn run(alloc: Allocator) i32 {
+    let args = std.os.args(alloc) catch |e| {
+        std.log.err("out of memory")
+        return 1
+    }
+    defer alloc.free(args)
+    if args.len < 2 {
+        std.log.err("usage: tool <file>")
+        return 2
+    }
+    return 0
+}
+
+pub fn main() {
+    var gpa = std.heap.General.init()
+    let alloc = gpa.allocator()
+    let status = run(alloc)
+    gpa.deinit()
+    std.os.exit(status)
+}
 ```
 
 ### A complete CLI
@@ -1040,6 +1074,8 @@ end. The edits of one diagnostic are applied together.
 - Every `var` needs an initializer: `var n: usize = 0`. No zero values.
 - No implicit integer widening: `a + b` needs equal types; convert with
   `as`. Indices must be unsigned (`usize`); `.len` is `usize`.
+- `for i in 0..4` gives an `i64` (Zig's is `usize`); write
+  `0..(4 as usize)` when `i` is used with `.len` or as an index.
 - `for` only ranges over integers: `for i in 0..xs.len`. No `for x in xs`,
   no `for (xs) |x|`, no C-style `for`.
 - String literals are `[]u8` and read-only; there is no `+` on strings, no
