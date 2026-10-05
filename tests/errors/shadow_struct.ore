@@ -1,0 +1,6 @@
+struct Point { x: i32, y: i32 }
+
+pub fn main() {
+    let Point = 1
+    @println(Point)
+}

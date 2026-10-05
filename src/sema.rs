@@ -237,9 +237,11 @@ struct FnSig {
 struct Checker {
     structs: HashMap<String, StructDef>,
     fns: HashMap<String, FnSig>,
+    /// Top-level names (structs, fns, extern fns) and where they are declared.
+    top_spans: HashMap<String, Span>,
     // Per-function state.
     vars: Vec<VarInfo>,
-    scopes: Vec<HashMap<String, VarId>>,
+    scopes: Vec<HashMap<String, (VarId, Span)>>,
     ret: Type,
     loop_depth: u32,
     in_defer: bool,
@@ -249,6 +251,7 @@ pub fn check(file: &ast::File) -> Result<Program> {
     let mut c = Checker {
         structs: HashMap::new(),
         fns: HashMap::new(),
+        top_spans: HashMap::new(),
         vars: Vec::new(),
         scopes: Vec::new(),
         ret: Type::Void,
@@ -294,7 +297,6 @@ impl Checker {
     fn program(&mut self, file: &ast::File) -> Result<Program> {
         // 1. Struct names.
         let mut struct_order = Vec::new();
-        let mut top_spans: HashMap<String, Span> = HashMap::new();
         for item in &file.items {
             let (name, span) = match item {
                 ast::Item::Struct(s) => (&s.name, s.span),
@@ -303,7 +305,7 @@ impl Checker {
             if Type::from_name(name).is_some() || name == "true" || name == "false" {
                 return err(span, format!("`{name}` is a builtin name and cannot be redefined"));
             }
-            if top_spans.insert(name.clone(), span).is_some() {
+            if self.top_spans.insert(name.clone(), span).is_some() {
                 return err(span, format!("`{name}` is defined more than once"));
             }
             if let ast::Item::Struct(s) = item {
@@ -410,19 +412,24 @@ impl Checker {
 
     // ------------------------------------------------------------ functions
 
+    /// No shadowing: the name must not be visible here at all, whether as a
+    /// local in any enclosing scope, a parameter or a top-level name.
     fn declare(&mut self, name: &str, ty: Type, mutable: bool, span: Span) -> Result<VarId> {
-        let scope = self.scopes.last_mut().unwrap();
-        if scope.contains_key(name) {
-            return err(span, format!("`{name}` is already declared in this scope"));
+        let prev = self.scopes.iter().find_map(|s| s.get(name).map(|&(_, sp)| sp));
+        if let Some(prev) = prev.or_else(|| self.top_spans.get(name).copied()) {
+            return err(span, format!(
+                "`{name}` is already declared at {}:{} (shadowing is not allowed)",
+                prev.line, prev.col
+            ));
         }
         let id = self.vars.len();
-        scope.insert(name.to_string(), id);
+        self.scopes.last_mut().unwrap().insert(name.to_string(), (id, span));
         self.vars.push(VarInfo { name: name.to_string(), ty, mutable });
         Ok(id)
     }
 
     fn lookup(&self, name: &str) -> Option<VarId> {
-        self.scopes.iter().rev().find_map(|s| s.get(name).copied())
+        self.scopes.iter().rev().find_map(|s| s.get(name).map(|&(id, _)| id))
     }
 
     fn fn_body(&mut self, f: &ast::FnDecl) -> Result<FnDef> {

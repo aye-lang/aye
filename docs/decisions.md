@@ -43,7 +43,7 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
   - There are no bitwise or shift operators yet.
 - **Equality:** `==` and `!=` work on integers, floats and bools. Struct, array and slice equality are not supported.
 - **Unused call results:** an expression statement must be a call, and a non-void result may be dropped silently. Other expression statements are errors.
-- **Shadowing:** a binding can shadow a binding from an outer scope, but redeclaring a name in the same scope is an error.
+- **Shadowing** is not allowed in any scope. A `let`/`var` binding, a parameter or a `for` variable is an error when its name is already visible: a local in the same or an enclosing block, a parameter of the function, or a top-level `fn`, `extern fn` or `struct`. Sibling blocks and different functions can reuse a name.
 - **`isize` and `usize`** are 64-bit. Stage0 assumes an LP64 target.
 - **`extern fn` signatures** can use only integer, float, `bool` and `[*]T` types, and the function cannot be variadic. Calls go straight to the C symbol of the same name.
 - **Errors:** the compiler reports the first error and stops.

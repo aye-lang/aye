@@ -1,0 +1,1 @@
+shadow_for_var.ore:3:9: error: `i` is already declared at 2:5 (shadowing is not allowed)

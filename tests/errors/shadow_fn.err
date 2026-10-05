@@ -1,0 +1,1 @@
+shadow_fn.ore:6:5: error: `helper` is already declared at 1:4 (shadowing is not allowed)

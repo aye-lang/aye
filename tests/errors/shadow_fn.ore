@@ -1,0 +1,8 @@
+fn helper() i32 {
+    return 1
+}
+
+pub fn main() {
+    let helper = 2
+    @println(helper)
+}

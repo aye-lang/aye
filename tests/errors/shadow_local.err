@@ -1,0 +1,1 @@
+shadow_local.ore:4:9: error: `x` is already declared at 2:5 (shadowing is not allowed)
