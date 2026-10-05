@@ -1,0 +1,6 @@
+/target
+# build outputs from `ore build`
+*.o
+*.out.bin
+/out/
+/tmp/
