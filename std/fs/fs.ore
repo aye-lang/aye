@@ -1,0 +1,98 @@
+// std.fs: files, and the standard input, output and error streams.
+
+import std.mem.Allocator
+
+pub error OpenError { NotFound, AccessDenied, OpenFailed }
+pub error ReadError { ReadFailed, OutOfMemory }
+pub error WriteError { WriteFailed }
+
+/// An open file: a file descriptor.
+pub struct File {
+    fd: i32
+
+    /// Read the rest of the file into new memory from `alloc` (free it with
+    /// `alloc.free`). An empty file gives the empty slice.
+    pub fn readAll(self: Self, alloc: Allocator) ReadError![]mut u8 {
+        var cap: usize = 4096
+        var buf = try alloc.alloc(0 as u8, cap)
+        var len: usize = 0
+        while true {
+            if len == cap {
+                let bigger = alloc.alloc(0 as u8, cap * 2) catch |e| {
+                    alloc.free(buf)
+                    return e
+                }
+                memcpy(bigger.ptr, buf.ptr, len)
+                alloc.free(buf)
+                buf = bigger
+                cap = cap * 2
+            }
+            let n = read(self.fd, buf[len..].ptr, cap - len)
+            if n < 0 {
+                alloc.free(buf)
+                return ReadError.ReadFailed
+            }
+            if n == 0 {
+                break
+            }
+            len += n as usize
+        }
+        if len == 0 {
+            alloc.free(buf)
+            return []mut u8{}
+        }
+        return buf[..len]
+    }
+
+    /// Write all of `bytes`. Output of `@print` is flushed first, so the
+    /// two stay in order.
+    pub fn write(self: Self, bytes: []u8) WriteError!void {
+        fflush([]u8{}.ptr)
+        var done: usize = 0
+        while done < bytes.len {
+            let n = write(self.fd, bytes[done..].ptr, bytes.len - done)
+            if n <= 0 {
+                return WriteError.WriteFailed
+            }
+            done += n as usize
+        }
+    }
+
+    pub fn close(self: Self) {
+        let r = close(self.fd)
+    }
+}
+
+/// Open the file at `path` for reading.
+pub fn open(path: []u8) OpenError!File {
+    let fd = ore_std_open(path.ptr, path.len)
+    if fd == -2 {
+        return OpenError.NotFound
+    }
+    if fd == -13 {
+        return OpenError.AccessDenied
+    }
+    if fd < 0 {
+        return OpenError.OpenFailed
+    }
+    return File { fd: fd }
+}
+
+pub fn stdin() File {
+    return File { fd: 0 }
+}
+
+pub fn stdout() File {
+    return File { fd: 1 }
+}
+
+pub fn stderr() File {
+    return File { fd: 2 }
+}
+
+extern fn ore_std_open(path: [*]u8, len: usize) i32
+extern fn read(fd: i32, buf: [*]u8, n: usize) isize
+extern fn write(fd: i32, buf: [*]u8, n: usize) isize
+extern fn close(fd: i32) i32
+extern fn memcpy(dst: [*]u8, src: [*]u8, n: usize) [*]u8
+extern fn fflush(stream: [*]u8) i32

@@ -1,0 +1,11 @@
+// Names of modules and imports: a module is not a value, and a local
+// cannot shadow an import.
+
+import std
+import std.fs
+
+pub fn main() {
+    let a = std
+    let b = std.fs.nope(1)
+    let fs = 2
+}

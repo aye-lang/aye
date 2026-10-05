@@ -1,0 +1,6 @@
+fn make(alloc: Allocator) AllocError!*mut i64 {
+    return alloc.create(1 as i64)
+}
+
+pub fn main() {
+}

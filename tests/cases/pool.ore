@@ -8,6 +8,10 @@
 // elements are read-only unless the slice type says `mut`; and the struct
 // has the fields and methods that the doc leaves out.
 
+import std.heap.General
+import std.mem.AllocError
+import std.mem.Allocator
+
 pub fn Handle(comptime T: type) type {
     return struct {
         index: u32

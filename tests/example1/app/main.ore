@@ -1,0 +1,30 @@
+// Example 1 of the design doc (`readConfig` and `main`), verbatim. `Config`
+// is in config.ore, in the same directory module.
+
+import std
+import std.mem.Allocator
+
+fn readConfig(alloc: Allocator, path: []u8) !Config {
+    let file = try std.fs.open(path)
+    defer file.close()
+
+    let bytes = try file.readAll(alloc)
+    defer alloc.free(bytes)
+
+    var cfg = try Config.parse(alloc, bytes)
+    errdefer cfg.deinit(alloc)      // validate 失敗才會釋放
+
+    try cfg.validate()
+    return cfg
+}
+
+pub fn main() !void {
+    var gpa = std.heap.General.init()
+    defer gpa.deinit()              // debug 模式下回報 leak
+
+    let cfg = readConfig(gpa.allocator(), "app.toml") catch |e| {
+        std.log.err("config: {}", e)
+        return e
+    }
+    defer cfg.deinit(gpa.allocator())
+}

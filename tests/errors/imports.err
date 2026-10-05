@@ -1,0 +1,4 @@
+imports.ore:4:12: error[E0081]: module `std` has no `nosuch`
+imports.ore:5:16: error[E0081]: module `std.mem` has no `Nope`
+imports.ore:7:12: error[E0015]: `fs` is imported more than once (first at 6:12)
+imports.ore:8:16: error[E0015]: the import of `Allocator` clashes with the declaration of `Allocator` at 10:8 (rename the declaration)

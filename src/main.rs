@@ -1,16 +1,20 @@
 use ore::{codes, diag};
-use ore::driver::{self, Mode};
+use ore::driver::{self, Mode, Root};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-const USAGE: &str = "usage:
-  ore build <file.ore> [-o out] [--mode debug|safe|fast]
-  ore run <file.ore> [--mode debug|safe|fast]
-  ore emit-c <file.ore> [--mode debug|safe|fast]
-  ore check <file.ore> [--json]
-  ore fix <file.ore>
-  ore test <file.ore> [--filter <text>] [--json] [--mode debug|safe|fast]
-  ore explain <code>";
+const USAGE: &str = "usage (<path> is a .ore file, or a directory: a module of all its .ore files):
+  ore build <path> [-o out] [--mode debug|safe|fast]
+  ore run <path> [--mode debug|safe|fast] [-- args...]
+  ore emit-c <path> [--mode debug|safe|fast]
+  ore check <path> [--json]
+  ore fix <path>
+  ore test <path> [--filter <text>] [--json] [--mode debug|safe|fast]
+  ore explain <code>
+  ore spec";
+
+/// The language reference that `ore spec` prints.
+const SPEC: &str = include_str!("../docs/spec.md");
 
 struct Args {
     cmd: String,
@@ -19,14 +23,18 @@ struct Args {
     mode: Mode,
     json: bool,
     filter: String,
+    /// `ore run ... -- args`: the program's arguments.
+    prog_args: Vec<String>,
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut it = std::env::args().skip(1);
     let cmd = it.next().ok_or("missing command")?;
     let (mut file, mut out, mut mode, mut json, mut filter) = (None, None, Mode::Debug, false, String::new());
+    let mut prog_args = Vec::new();
     while let Some(a) = it.next() {
         match a.as_str() {
+            "--" if cmd == "run" => prog_args.extend(it.by_ref()),
             "-o" if cmd == "build" => out = Some(it.next().ok_or("`-o` needs a path")?),
             "--json" if cmd == "check" || cmd == "test" => json = true,
             "--filter" if cmd == "test" => filter = it.next().ok_or("`--filter` needs a text")?,
@@ -38,11 +46,19 @@ fn parse_args() -> Result<Args, String> {
             _ => return Err(format!("unexpected argument `{a}`")),
         }
     }
-    let file = file.ok_or("missing input file")?;
-    Ok(Args { cmd, file, out, mode, json, filter })
+    let file = file.ok_or("missing input file or directory")?;
+    Ok(Args { cmd, file, out, mode, json, filter, prog_args })
 }
 
 fn main() -> ExitCode {
+    if std::env::args().nth(1).as_deref() == Some("spec") {
+        if std::env::args().count() != 2 {
+            eprintln!("ore: `spec` takes no arguments\n{USAGE}");
+            return ExitCode::from(2);
+        }
+        print!("{SPEC}");
+        return ExitCode::SUCCESS;
+    }
     if std::env::args().nth(1).as_deref() == Some("explain") {
         let rest: Vec<String> = std::env::args().skip(2).collect();
         let [code] = &rest[..] else {
@@ -71,15 +87,15 @@ fn main() -> ExitCode {
         eprintln!("ore: unknown command `{}`\n{USAGE}", args.cmd);
         return ExitCode::from(2);
     }
-    let src = match std::fs::read_to_string(&args.file) {
-        Ok(s) => s,
+    let root = match Root::load(&args.file) {
+        Ok(r) => r,
         Err(e) => {
-            eprintln!("ore: cannot read {}: {e}", args.file);
+            eprintln!("ore: {e}");
             return ExitCode::FAILURE;
         }
     };
     if args.cmd == "check" {
-        let res = driver::check(&args.file, &src);
+        let res = driver::front_end(root, None).result;
         if args.json {
             let diags = match &res {
                 Ok(_) => String::new(),
@@ -94,12 +110,12 @@ fn main() -> ExitCode {
         return if res.is_ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE };
     }
     if args.cmd == "fix" {
-        return fix(&args.file, src);
+        return fix(&args.file);
     }
     if args.cmd == "test" {
-        return test(&args, &src);
+        return test(&args, root);
     }
-    let c = match driver::compile_to_c(&args.file, &src, args.mode) {
+    let c = match driver::compile_root(root, args.mode) {
         Ok(c) => c,
         Err(ds) => {
             for d in ds {
@@ -114,7 +130,7 @@ fn main() -> ExitCode {
     }
     let exe = match (&args.cmd[..], &args.out) {
         ("build", Some(o)) => PathBuf::from(o),
-        ("build", None) => PathBuf::from(Path::new(&args.file).file_stem().unwrap()),
+        ("build", None) => PathBuf::from(Path::new(&args.file).file_stem().unwrap_or("main".as_ref())),
         _ => std::env::temp_dir().join(format!("ore-run-{}", std::process::id())),
     };
     if let Err(e) = driver::cc(&c, &exe, args.mode) {
@@ -124,7 +140,7 @@ fn main() -> ExitCode {
     if args.cmd == "build" {
         return ExitCode::SUCCESS;
     }
-    let status = Command::new(&exe).status();
+    let status = Command::new(&exe).args(&args.prog_args).status();
     let _ = std::fs::remove_file(&exe);
     match status {
         Ok(s) => match s.code() {
@@ -145,26 +161,48 @@ fn main() -> ExitCode {
 /// check again, until no fix applies (at most 10 rounds). Each applied fix
 /// is printed as `file:line:col: fixed: <help>`; then the errors that
 /// remain are printed as `ore check` prints them. The exit status is 0 when
-/// no error remains.
-fn fix(file: &str, mut src: String) -> ExitCode {
+/// no error remains. Files of std are never written.
+fn fix(path: &str) -> ExitCode {
+    let check = || match Root::load(path) {
+        Ok(root) => Ok(driver::front_end(root, None)),
+        Err(e) => Err(e),
+    };
     for _ in 0..10 {
-        let Err(ds) = driver::check(file, &src) else { break };
-        let (fixed, applied) = driver::apply_fixes(&src, &ds);
-        if applied.is_empty() {
+        let checked = match check() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("ore: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let Err(ds) = &checked.result else { break };
+        let mut any = false;
+        for f in checked.files.iter().filter(|f| !f.std) {
+            let mine: Vec<diag::Diag> = ds.iter().filter(|d| d.file == f.name).cloned().collect();
+            let (fixed, applied) = driver::apply_fixes(&f.text, &mine);
+            if applied.is_empty() {
+                continue;
+            }
+            if let Err(e) = std::fs::write(&f.name, &fixed) {
+                eprintln!("ore: cannot write {}: {e}", f.name);
+                return ExitCode::FAILURE;
+            }
+            for (at, help) in applied {
+                println!("{}:{}:{}: fixed: {help}", f.name, at.line, at.col);
+            }
+            any = true;
+        }
+        if !any {
             break;
         }
-        if let Err(e) = std::fs::write(file, &fixed) {
-            eprintln!("ore: cannot write {file}: {e}");
-            return ExitCode::FAILURE;
-        }
-        for (at, help) in applied {
-            println!("{file}:{}:{}: fixed: {help}", at.line, at.col);
-        }
-        src = fixed;
     }
-    match driver::check(file, &src) {
-        Ok(_) => ExitCode::SUCCESS,
-        Err(ds) => {
+    match check().map(|c| c.result) {
+        Err(e) => {
+            eprintln!("ore: {e}");
+            ExitCode::FAILURE
+        }
+        Ok(Ok(_)) => ExitCode::SUCCESS,
+        Ok(Err(ds)) => {
             for d in ds {
                 eprintln!("{}", d.render());
             }
@@ -176,8 +214,8 @@ fn fix(file: &str, mut src: String) -> ExitCode {
 /// `ore test`: one line per test, and for a failed test its output (stdout,
 /// then stderr) indented; or with `--json` one JSON document. The exit
 /// status is 1 if a test failed or the file does not compile.
-fn test(args: &Args, src: &str) -> ExitCode {
-    let results = match driver::run_tests(&args.file, src, args.mode, &args.filter) {
+fn test(args: &Args, root: Root) -> ExitCode {
+    let results = match driver::run_tests(root, args.mode, &args.filter) {
         Ok(r) => r,
         Err(driver::TestError::Compile(ds)) => {
             if args.json {

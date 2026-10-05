@@ -123,6 +123,9 @@ pub enum Len {
     Array(u64),
     /// Slice `[]T`, length read at runtime.
     Slice,
+    /// C pointer `[*]T`: no length to check against (slicing only, with
+    /// both bounds).
+    Unchecked,
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +153,9 @@ pub enum Rvalue {
     /// An allocator method or test builtin, with the operand types.
     Intrinsic { op: Intrinsic, args: Vec<(Operand, Type)>, span: Span },
     Print { arg: Option<(Operand, Type)>, newline: bool },
+    /// `std.log.err`/`std.log.info`: the format's pieces around the
+    /// arguments, written to stderr.
+    Log { error: bool, pieces: Vec<Vec<u8>>, args: Vec<(Operand, Type)> },
     /// Fields in declaration order.
     StructLit { name: String, fields: Vec<Operand> },
     /// Enum value; payload fields in declaration order.
@@ -226,6 +232,7 @@ fn has_call(e: &TExpr) -> bool {
     match &e.kind {
         TExprKind::Call { .. }
         | TExprKind::Print { .. }
+        | TExprKind::Log { .. }
         | TExprKind::Match { .. }
         | TExprKind::Try(_)
         | TExprKind::Catch { .. }
@@ -800,6 +807,10 @@ impl<'a> Lower<'a> {
                 let arg = arg.as_ref().map(|a| (self.operand(a, out), a.ty.clone()));
                 Rvalue::Print { arg, newline: *newline }
             }
+            TExprKind::Log { error, pieces, args } => {
+                let args = args.iter().map(|a| (self.operand(a, out), a.ty.clone())).collect();
+                Rvalue::Log { error: *error, pieces: pieces.clone(), args }
+            }
             TExprKind::Binary { op: op @ (BinOp::And | BinOp::Or), lhs, rhs } => {
                 let t = self.temp(Type::Bool);
                 let tp = Place { local: t, proj: vec![] };
@@ -844,6 +855,7 @@ impl<'a> Lower<'a> {
                 let (len, elem) = match &base.ty {
                     Type::Array(el, n) => (Len::Array(*n), (**el).clone()),
                     Type::Slice(el, _) => (Len::Slice, (**el).clone()),
+                    Type::CPtr(el) => (Len::Unchecked, (**el).clone()),
                     _ => unreachable!(),
                 };
                 let base = self.place(base, out);

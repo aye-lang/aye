@@ -22,17 +22,24 @@ cargo build --release
 ./target/release/ore run tests/cases/hello.ore
 ```
 
-Commands:
+Commands (`<path>` is a `.ore` file, or a directory: a module of all its
+`.ore` files; see [Modules](#modules-and-std)):
 
 ```
-ore build <file.ore> [-o out] [--mode debug|safe|fast]   # executable (default name: file stem)
-ore run <file.ore> [--mode debug|safe|fast]               # build to a temp file and run
-ore emit-c <file.ore> [--mode debug|safe|fast]            # print the generated C
-ore check <file.ore> [--json]                             # front end only: report errors, no C, no clang
-ore fix <file.ore>                                        # apply the fix-its of `ore check` in place
-ore test <file.ore> [--filter <text>] [--json] [--mode debug|safe|fast]   # run the file's `test` blocks
-ore explain <code>                                        # explain an error code, with a wrong and a fixed example
+ore build <path> [-o out] [--mode debug|safe|fast]    # executable (default name: file stem or directory name)
+ore run <path> [--mode debug|safe|fast] [-- args...]  # build to a temp file and run it with args
+ore emit-c <path> [--mode debug|safe|fast]            # print the generated C
+ore check <path> [--json]                             # front end only: report errors, no C, no clang
+ore fix <path>                                        # apply the fix-its of `ore check` in place
+ore test <path> [--filter <text>] [--json] [--mode debug|safe|fast]   # run the root module's `test` blocks
+ore explain <code>                                    # explain an error code, with a wrong and a fixed example
+ore spec                                              # print the language reference (docs/spec.md)
 ```
+
+`ore spec` prints [`docs/spec.md`](docs/spec.md), a self-contained
+language reference (about 9k tokens) meant to be given to an AI agent
+before it writes Ore. Every ` ```ore ` program in it is checked by
+`tests/spec.rs`.
 
 | Mode    | clang flags | Runtime checks (overflow, bounds, casts, div by zero) |
 |---------|-------------|--------------------------------------------------------|
@@ -70,8 +77,9 @@ f.ore:2:5: help: declare `sum` with `var`
 | E0008: `else` on the line after the `}` of an `if` | join the lines: `} else {` (only when nothing but the line break is between them) |
 | E0006: a multi-line call, struct literal or array literal without a trailing `,` | add the `,` (only when the closing `)` or `}` is on the next line) |
 | E0017, E0018, E0019, E0038: unknown type, variable, function or field | rename it to the one name in scope that is one edit away (a character inserted, deleted or replaced, or two adjacent characters swapped); not for names shorter than 3 characters |
+| E0084: `Allocator`, `AllocError`, `General` or `Arena` used without an import | add `import std.mem.Allocator` (or `std.mem.AllocError`, `std.heap.General`, `std.heap.Arena`) after the file's last import, or at its top |
 
-`ore fix file.ore` applies every fix-it to the file in place, checks again,
+`ore fix <path>` applies every fix-it to the files in place (never to std), checks again,
 and repeats while there is something to fix (at most 10 rounds), because a
 syntax fix can reveal type errors. A fix whose edits overlap an edit applied
 before it in the same round waits for the next round. Each applied fix is
@@ -84,12 +92,14 @@ file compiles afterwards and 1 otherwise.
 `ore check --json` prints one line to stdout (wrapped here):
 
 ```
-{"file":"f.ore","diagnostics":[{"severity":"error","code":"E0032","line":4,"col":9,
+{"file":"f.ore","diagnostics":[{"severity":"error","code":"E0032","file":"f.ore","line":4,"col":9,
   "message":"cannot assign to `sum`: it is immutable (declare it with `var`)",
   "fixes":[{"line":2,"col":5,"end_line":2,"end_col":8,"replacement":"var"}]}]}
 ```
 
-- `diagnostics` is `[]` when the file compiles.
+- `diagnostics` is `[]` when the program compiles.
+- Each diagnostic's `file` is the file of the error (the top-level `file`
+  is the path given to `ore check`); its fix-it edits only that file.
 - `line` and `col` are 1-based; a column counts characters (Unicode scalar
   values) from the start of the line, and a tab counts as one.
 - `fixes` lists the edits of the error's fix-it, applied together (`[]` when
@@ -193,6 +203,44 @@ error at the instantiation. The generated C has one copy per instance.
 [`tests/cases/pool.ore`](tests/cases/pool.ore) is the design doc's
 `Pool(T)` and `Handle(T)`.
 
+## Modules and std
+
+A module is a directory: all `.ore` files in it share one namespace, and
+only `pub` items (and `pub fn` methods) are visible to other modules.
+`ore <cmd> dir` compiles the directory module `dir`; `ore <cmd> file.ore`
+compiles that file alone as a module (its sibling files are not part of
+it). `import a.b` loads the module in the directory `a/b` under the root
+module's directory, and binds `b` in the importing file; `import a.b.Name`
+imports one item. `std` is embedded in the compiler (sources in
+[`std/`](std)): `std.fs` (`open`, `stdin`/`stdout`/`stderr`,
+`File.readAll`/`write`/`close`), `std.mem` (`Allocator`, `AllocError`,
+`eql`, `copy`), `std.heap` (`General`, `Arena`), `std.log` (`err`, `info`)
+and `std.os` (`args`, `exit`). Cyclic imports are an error.
+
+```ore
+import std
+import std.mem.Allocator
+
+fn readConfig(alloc: Allocator, path: []u8) ![]mut u8 {
+    let file = try std.fs.open(path)
+    defer file.close()
+    return file.readAll(alloc)
+}
+
+pub fn main() !void {
+    var gpa = std.heap.General.init()
+    defer gpa.deinit()
+    let bytes = readConfig(gpa.allocator(), "app.toml") catch |e| {
+        std.log.err("config: {}", e)
+        return e
+    }
+    defer gpa.allocator().free(bytes)
+}
+```
+
+[`tests/example1/app`](tests/example1/app) is the design doc's Example 1
+(`readConfig`) as a directory module.
+
 ## Example
 
 ```ore
@@ -222,7 +270,10 @@ pub fn main() {
 
 - Top level: `fn`, `pub fn`, `extern fn` (C functions), `struct Name { ... }`,
   `enum Name { A, B { field: T } }` (tagged union), `error Name { A, B }` and
-  `error All = A || B` (error sets), `interface Name { ... }`, `test "name" { }`.
+  `error All = A || B` (error sets), `interface Name { ... }`, `test "name" { }`,
+  `import a.b` and `import a.b.Name`.
+- Modules: directory modules, `pub` visibility across modules, paths
+  `mod.Name` in expressions and types, the embedded `std` (above).
 - Generics: `comptime T: type` parameters, type functions
   (`fn Pool(comptime T: type) type { return struct { ... } }`), and
   `where T: Interface, ...` after the return type. A call passes types for
@@ -235,7 +286,8 @@ pub fn main() {
 - Expressions: integer/float/bool/string/char literals, `+ - * / %` (checked),
   `+% -% *%` (wrapping), comparisons, `&& || !`, unary `-`, calls, struct
   literals, field access, `as` numeric casts, arrays `[3]i32{1, 2, 3}`,
-  bounds-checked indexing, slicing `a[lo..hi]`, `.len`, `.ptr`, `&x`, `&mut x`,
+  bounds-checked indexing, slicing `a[lo..hi]` (also `p[lo..hi]` of a `[*]T`,
+  unchecked), `.len`, `.ptr`, `&x`, `&mut x`,
   `p.*` (field access through a pointer dereferences it), `null`,
   `x == null`, enum values `Shape.Circle { r: 1.0 }` / `Color.Red`,
   exhaustive `match` with patterns `.V`, `.V { a, b: c, .. }` and `_`,
@@ -248,36 +300,43 @@ pub fn main() {
 - Interfaces: `interface Name { fn m(self: *Self, ...) T }`, implemented by
   any struct that has the methods; `dyn Name` values made from `&x` or
   `&mut x`, called through a vtable.
-- Memory: `var gpa = General.init()` (libc; leak and double-free reports in
-  debug mode), `Arena.init(backing)`, `x.allocator()`, `x.deinit()`; on an
-  `Allocator`: `try alloc.create(value)` (`AllocError!*mut T`),
+- Memory: `var gpa = std.heap.General.init()` (libc; leak and double-free
+  reports in debug mode), `std.heap.Arena.init(backing)`, `x.allocator()`,
+  `x.deinit()`; on a `std.mem.Allocator`: `try alloc.create(value)` (`AllocError!*mut T`),
   `alloc.destroy(p)`, `try alloc.alloc(value, n)` (`AllocError![]mut T`,
   every element set to `value`) and `alloc.free(slice)`.
 - Tests: `test "name" { }`, `@expect(cond)`, `@expectEqual(expected, actual)`,
   `@testAllocator()`.
 - Types: `i8..i64 u8..u64 isize usize f32 f64 bool`, structs, enums, error
   sets, `[N]T`, `[]T`, `[]mut T` (writable elements), `*T`, `*mut T`, `?T`,
-  `[*]T` (FFI pointer), `dyn I`, `Allocator`, `General`, `Arena`, instances
+  `[*]T` (FFI pointer), `dyn I`, `std.mem.Allocator`, `std.heap.General`,
+  `std.heap.Arena`, instances
   of type functions (`Pool(Node)`), and, as a
   function's return type only, error unions `E!T` and `!T` (inferred set; not
   on a `pub fn`).
 - Output: `@print(x)` / `@println(x)` / `@println()` for integers, floats,
-  bools and `[]u8` strings; or call libc through `extern fn`.
+  bools and `[]u8` strings; `std.fs.stdout().write(bytes)`; `std.log.err` and
+  `std.log.info` (to stderr, with `{}` placeholders); or call libc through
+  `extern fn`.
 
 Not yet supported (reported as errors): `comptime` values other than types
 and compile-time execution beyond type functions, type aliases
 (`let P = Pool(Node)`), error payloads, error unions outside return types,
 `match` on anything but enums and errors, `while x |v|`, pointer arithmetic
-and comparison, methods on enums, `import`/std (so `Pool` and `Handle` are
-written in the program, as in `tests/cases/pool.ore`), `extern struct`,
-global variables.
+and comparison, methods on enums, `extern struct`, global variables,
+bitwise operators, `build.ore` and package dependencies, renaming imports,
+`ore fmt` and `ore doc`. std is minimal: no `Pool`/`Handle` (written in the
+program, as in `tests/cases/pool.ore`), no growable list, no string
+formatting into memory.
 
 See [`docs/grammar.ebnf`](docs/grammar.ebnf) for the grammar and
 [`docs/decisions.md`](docs/decisions.md) for choices not fixed by the design doc.
 
 ## Compiler pipeline
 
-`src/lexer.rs` → `src/parser.rs` (`src/ast.rs`) → `src/sema.rs` (typed AST) →
+`src/lexer.rs` → `src/parser.rs` (`src/ast.rs`) → `src/module.rs` (loads
+modules, resolves names across them, checks `pub` and cycles; one AST) →
+`src/sema.rs` (typed AST) →
 `src/oir.rs` (OIR: flattened typed IR; `defer` expanded, checks explicit) →
 `src/cgen.rs` (C) → clang, driven by `src/driver.rs`. Diagnostic codes and
 their explanations are in `src/codes.rs`.
@@ -300,4 +359,12 @@ if it exists), with exit status 1 when a test failed. For every
 `tests/fix/*.ore`, `ore fix` on a copy must leave exactly `*.fixed` and print
 exactly `*.out`; when `*.stderr` exists, errors remain and stderr must equal
 it, otherwise `ore check` must accept the fixed file. `ore check --json` on
-the original must print exactly `*.json`, if it exists.
+the original must print exactly `*.json`, if it exists. Each directory
+`tests/modules/X/` is a directory module run with `ore run X` (or the
+arguments in `X.args`, with `X.stdin`): stdout must equal `X.out`, stderr
+`X.stderr` and the exit status `X.status`; or, when `X.err` exists, `ore
+check X` must fail with exactly that. `tests/example1` runs the design
+doc's Example 1 with an `app.toml` that is valid, missing and invalid.
+`tests/spec.rs` checks `docs/spec.md`: its ` ```ore ` programs compile, its
+` ```ore-error ` programs do not, it names every pub function of std, and it
+stays within 20k tokens.

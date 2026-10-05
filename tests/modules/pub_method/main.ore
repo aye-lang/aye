@@ -1,0 +1,8 @@
+import lib
+
+pub fn main() {
+    let o = lib.Open { x: 1 }
+    @println(o.shown())
+    @println(o.hidden())
+    @println(lib.Open.make().x)
+}

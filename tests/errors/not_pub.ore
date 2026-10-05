@@ -1,0 +1,7 @@
+// Items of another module that are not `pub` cannot be used.
+
+import std
+
+pub fn main() {
+    let n = std.fs.read(0, "".ptr, 0)
+}

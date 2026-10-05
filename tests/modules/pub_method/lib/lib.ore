@@ -1,0 +1,15 @@
+pub struct Open {
+    x: i64
+
+    pub fn shown(self: Self) i64 {
+        return self.hidden()
+    }
+
+    fn hidden(self: Self) i64 {
+        return self.x
+    }
+
+    fn make() Open {
+        return Open { x: 2 }
+    }
+}

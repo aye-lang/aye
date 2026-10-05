@@ -1,0 +1,8 @@
+import a
+
+pub fn g() {
+}
+
+pub fn h() {
+    a.f()
+}

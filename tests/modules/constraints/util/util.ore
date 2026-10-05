@@ -1,0 +1,11 @@
+pub interface Show {
+    fn show(self: *Self)
+}
+
+pub fn showIt(comptime T: type, x: *mut T) where T: Show {
+    x.show()
+}
+
+pub fn showDyn(x: dyn Show) {
+    x.show()
+}

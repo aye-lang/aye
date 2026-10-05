@@ -1,0 +1,27 @@
+pub struct Counter {
+    n: i64
+
+    pub fn init() Counter {
+        return Counter { n: 0 }
+    }
+
+    pub fn bump(self: *mut Self) {
+        self.n = inc(self.n)
+    }
+
+    pub fn get(self: Self) i64 {
+        return self.n
+    }
+}
+
+// Not `pub`: used by shapes.ore and counter.ore, which share the module.
+fn abs(x: i64) i64 {
+    if x < 0 {
+        return -x
+    }
+    return x
+}
+
+fn inc(x: i64) i64 {
+    return x + 1
+}

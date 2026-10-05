@@ -29,7 +29,6 @@ struct Parser {
 
 fn not_supported(kw: Kw, span: Span) -> Error {
     let what = match kw {
-        Kw::Import => "`import` (modules) is not yet supported",
         Kw::Comptime => "`comptime` is only supported on a parameter (`comptime T: type`)",
         Kw::Where => "`where` is only supported after a function's return type (`fn f(comptime T: type) T where T: I`)",
         _ => return Error::new(E0006, span, format!("unexpected `{}`", kw.as_str())),
@@ -41,7 +40,17 @@ fn not_supported(kw: Kw, span: Span) -> Error {
 const CATCH_PREC: u8 = 4;
 
 fn is_unsupported_kw(kw: Kw) -> bool {
-    matches!(kw, Kw::Import | Kw::Comptime | Kw::Where)
+    matches!(kw, Kw::Comptime | Kw::Where)
+}
+
+/// `a.b.c` written as identifiers and field accesses: the path, joined
+/// with `.`.
+fn ident_path(e: &Expr) -> Option<String> {
+    match &e.kind {
+        ExprKind::Ident(n) => Some(n.clone()),
+        ExprKind::Field { base, name } => Some(format!("{}.{name}", ident_path(base)?)),
+        _ => None,
+    }
 }
 
 impl Parser {
@@ -183,6 +192,7 @@ impl Parser {
                                 | Kw::Error
                                 | Kw::Interface
                                 | Kw::Test
+                                | Kw::Import
                         )
                     ) {
                         return;
@@ -198,16 +208,18 @@ impl Parser {
     // ---------------------------------------------------------------- items
 
     fn file(&mut self) -> File {
-        let mut items = Vec::new();
+        let (mut imports, mut items) = (Vec::new(), Vec::new());
         loop {
             self.skip_semis();
             if self.at(&Tok::Eof) {
-                return File { items };
+                return File { imports, items };
             }
-            let r = self.item().and_then(|item| {
-                items.push(item);
-                self.end_of_stmt()
-            });
+            let r = if self.at(&Tok::Kw(Kw::Import)) {
+                self.import().map(|i| imports.push(i))
+            } else {
+                self.item().map(|item| items.push(item))
+            };
+            let r = r.and_then(|_| self.end_of_stmt());
             if let Err(e) = r {
                 self.errors.push(e);
                 self.no_struct_lit = false;
@@ -241,6 +253,26 @@ impl Parser {
             Tok::Kw(k) if is_unsupported_kw(k) => Err(not_supported(k, self.span())),
             _ => Err(self.unexpected("declaration (`fn`, `extern fn`, `struct`, `enum`, `error`, `interface` or `test`)")),
         }
+    }
+
+    /// `import a.b.c`
+    fn import(&mut self) -> Result<Import> {
+        let span = self.expect(&Tok::Kw(Kw::Import))?;
+        let mut path = vec![self.ident()?];
+        while self.eat(&Tok::Dot) {
+            path.push(self.ident()?);
+        }
+        Ok(Import { path, span })
+    }
+
+    /// A name that can be a path: `File`, `fs.File`, `std.fs.File`.
+    fn path(&mut self) -> Result<(String, Span)> {
+        let (mut name, span) = self.ident()?;
+        while self.at(&Tok::Dot) && matches!(self.toks.get(self.pos + 1).map(|t| &t.tok), Some(Tok::Ident(_))) {
+            self.bump();
+            name = format!("{name}.{}", self.ident()?.0);
+        }
+        Ok((name, span))
     }
 
     fn fn_decl(&mut self, is_pub: bool, is_extern: bool) -> Result<FnDecl> {
@@ -284,7 +316,7 @@ impl Parser {
             loop {
                 let (param, span) = self.ident()?;
                 self.expect(&Tok::Colon)?;
-                let (iface, iface_span) = self.ident()?;
+                let (iface, iface_span) = self.path()?;
                 bounds.push(Bound { param, span, iface, iface_span });
                 if !self.eat(&Tok::Comma) {
                     break;
@@ -420,9 +452,9 @@ impl Parser {
         self.expect(&Tok::Kw(Kw::Error))?;
         let (name, span) = self.ident()?;
         if self.eat(&Tok::Assign) {
-            let mut sets = vec![self.ident()?];
+            let mut sets = vec![self.path()?];
             while self.eat(&Tok::OrOr) {
-                sets.push(self.ident()?);
+                sets.push(self.path()?);
             }
             return Ok(ErrorSetDecl { name, span, is_pub, kind: ErrorSetKind::Merge(sets) });
         }
@@ -474,8 +506,8 @@ impl Parser {
     fn type_expr(&mut self) -> Result<TypeExpr> {
         let span = self.span();
         let kind = match self.peek().clone() {
-            Tok::Ident(name) => {
-                self.bump();
+            Tok::Ident(_) => {
+                let (name, _) = self.path()?;
                 if self.eat(&Tok::Bang) {
                     TypeExprKind::ErrorUnion(Some((name, span)), Box::new(self.type_expr()?))
                 } else if self.eat(&Tok::LParen) {
@@ -528,7 +560,7 @@ impl Parser {
             }
             Tok::Kw(Kw::Dyn) => {
                 self.bump();
-                TypeExprKind::Dyn(self.ident()?.0)
+                TypeExprKind::Dyn(self.path()?.0)
             }
             Tok::Kw(k) if is_unsupported_kw(k) => return Err(not_supported(k, span)),
             Tok::Kw(Kw::Struct) => {
@@ -663,6 +695,9 @@ impl Parser {
             Tok::Kw(k) if is_unsupported_kw(k) => return Err(not_supported(k, span)),
             Tok::Kw(Kw::Fn | Kw::Struct | Kw::Enum | Kw::Error | Kw::Pub | Kw::Extern | Kw::Interface | Kw::Test) => {
                 return Err(Error::new(E0010, span, "declarations are only allowed at the top level"));
+            }
+            Tok::Kw(Kw::Import) => {
+                return Err(Error::new(E0010, span, "`import` is only allowed at the top level of a file"));
             }
             _ => return self.simple_stmt(),
         };
@@ -837,11 +872,11 @@ impl Parser {
                     if self.at(&Tok::LParen) {
                         let kind = ExprKind::MethodCall { base: Box::new(e), name, args: self.args()? };
                         e = Expr { kind, span };
-                    } else if let ExprKind::Ident(enum_name) = &e.kind
+                    } else if let Some(enum_name) = ident_path(&e)
                         && self.at(&Tok::LBrace)
                         && !self.no_struct_lit
                     {
-                        let kind = ExprKind::VariantLit { enum_name: enum_name.clone(), variant: name, fields: self.field_inits()? };
+                        let kind = ExprKind::VariantLit { enum_name, variant: name, fields: self.field_inits()? };
                         e = Expr { kind, span: e.span };
                     } else {
                         e = Expr { kind: ExprKind::Field { base: Box::new(e), name }, span };
@@ -851,8 +886,13 @@ impl Parser {
                     let span = self.bump().span;
                     e = Expr { kind: ExprKind::Deref(Box::new(e)), span };
                 }
-                // `F(T) { ... }`: a literal of the struct that `F(T)` returns.
-                Tok::LBrace if !self.no_struct_lit && matches!(e.kind, ExprKind::Call { .. }) => {
+                // `F(T) { ... }`: a literal of the struct that `F(T)` returns
+                // (also `mod.F(T) { ... }`).
+                Tok::LBrace
+                    if !self.no_struct_lit
+                        && (matches!(e.kind, ExprKind::Call { .. })
+                            || matches!(&e.kind, ExprKind::MethodCall { base, .. } if ident_path(base).is_some())) =>
+                {
                     let ty = expr_to_type(&e)?;
                     e = Expr { kind: ExprKind::StructLit { ty, fields: self.field_inits()? }, span: e.span };
                 }
@@ -1070,9 +1110,12 @@ impl Parser {
 /// literal `F(A, B) { ... }`.
 fn expr_to_type(e: &Expr) -> Result<TypeExpr> {
     let kind = match &e.kind {
-        ExprKind::Ident(n) => TypeExprKind::Named(n.clone()),
+        ExprKind::Ident(_) | ExprKind::Field { .. } if let Some(path) = ident_path(e) => TypeExprKind::Named(path),
         ExprKind::Call { name, args } => {
             TypeExprKind::Generic(name.clone(), args.iter().map(expr_to_type).collect::<Result<_>>()?)
+        }
+        ExprKind::MethodCall { base, name, args } if let Some(path) = ident_path(base) => {
+            TypeExprKind::Generic(format!("{path}.{name}"), args.iter().map(expr_to_type).collect::<Result<_>>()?)
         }
         ExprKind::Type(t) => return Ok(t.clone()),
         _ => return Err(Error::new(E0006, e.span, "expected a type")),
@@ -1119,9 +1162,16 @@ mod tests {
     }
 
     #[test]
+    fn imports() {
+        let f = parse_src("import std\nimport std.mem.Allocator\n").unwrap();
+        assert_eq!(f.imports.len(), 2);
+        assert_eq!(f.imports[1].path.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["std", "mem", "Allocator"]);
+        let e = parse_src("fn f() {\n import std\n}").unwrap_err();
+        assert_eq!(e.msg, "`import` is only allowed at the top level of a file");
+    }
+
+    #[test]
     fn unsupported_keywords() {
-        let e = parse_src("import std").unwrap_err();
-        assert_eq!(e.msg, "`import` (modules) is not yet supported");
         let e = parse_src("fn f() {\n comptime x\n}").unwrap_err();
         assert_eq!(e.msg, "`comptime` is only supported on a parameter (`comptime T: type`)");
     }

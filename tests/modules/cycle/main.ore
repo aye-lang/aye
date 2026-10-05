@@ -1,0 +1,5 @@
+import a
+
+pub fn main() {
+    a.f()
+}

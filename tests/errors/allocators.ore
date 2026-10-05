@@ -1,3 +1,7 @@
+import std.heap.General
+import std.mem.AllocError
+import std.mem.Allocator
+
 struct Node {
     value: i64
 }

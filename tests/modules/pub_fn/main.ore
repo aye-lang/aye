@@ -1,0 +1,7 @@
+import lib
+
+pub fn main() {
+    lib.hidden()
+    let s: lib.Secret = lib.make()
+    lib.shown()
+}

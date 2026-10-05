@@ -17,6 +17,14 @@
 //!   stderr must be empty, the exit status 0, and `ore check` must accept
 //!   the fixed file. If `X.json` exists, `ore check --json` on the original
 //!   must print exactly that.
+//! - `tests/modules/X/`: a directory module. In `tests/modules`, the binary
+//!   runs `ore run X` (or the arguments in `X.args`, with `X.stdin` as
+//!   stdin): stdout must equal `X.out`, stderr `X.stderr` (default empty)
+//!   and the exit status `X.status` (default 0). If `X.err` exists, `ore
+//!   check X` must fail with exactly that on stderr instead.
+//! - `tests/example1/`: Example 1 of the design doc, the directory module
+//!   `app`, run in `ok`, `missing` and `invalid` (each with its own
+//!   `app.toml`, or none); `ore test app` runs its tests.
 //! - `ore run`, `ore check` and `ore test --filter` are also run through the
 //!   built binary.
 
@@ -193,6 +201,83 @@ fn fix_case(path: &Path, work: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Run the `ore` binary in `dir` with `stdin`, and return (stdout, stderr,
+/// exit status).
+fn ore_stdin(dir: &Path, args: &[&str], stdin: &str) -> Result<(String, String, Option<i32>), String> {
+    use std::io::Write;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ore"))
+        .current_dir(dir)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    child.stdin.take().unwrap().write_all(stdin.as_bytes()).map_err(|e| e.to_string())?;
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    Ok((
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.code(),
+    ))
+}
+
+/// The directory modules of `tests/modules`.
+fn module_dirs() -> Vec<PathBuf> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/modules");
+    let mut v: Vec<PathBuf> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.is_dir()).collect();
+    v.sort();
+    v
+}
+
+fn module_case(path: &Path) -> Result<(), String> {
+    let dir = path.parent().unwrap();
+    let x = name(path);
+    let with = |ext: &str| read(&dir.join(format!("{x}.{ext}")));
+    if let Some(want) = with("err") {
+        let (_, err, code) = ore(dir, &["check", &x])?;
+        if err != want || code != Some(1) {
+            return Err(format!("`ore check {x}`: {code:?}\n--- expected\n{want}--- got\n{err}"));
+        }
+        return Ok(());
+    }
+    let args = with("args").unwrap_or_else(|| format!("run {x}"));
+    let args: Vec<&str> = args.split_whitespace().collect();
+    let (out, err, code) = ore_stdin(dir, &args, &with("stdin").unwrap_or_default())?;
+    let want_out = with("out").ok_or("missing .out file")?;
+    let want_err = with("stderr").unwrap_or_default();
+    let want_code: i32 = with("status").map_or(0, |s| s.trim().parse().unwrap());
+    if out != want_out || err != want_err || code != Some(want_code) {
+        return Err(format!(
+            "`ore {}`: {code:?} (expected {want_code})\n--- expected stdout\n{want_out}--- got\n{out}--- expected stderr\n{want_err}--- got\n{err}",
+            args.join(" ")
+        ));
+    }
+    Ok(())
+}
+
+/// Example 1 of the design doc: `readConfig` reads `app.toml` from the
+/// working directory. Each of `ok`, `missing` and `invalid` is a working
+/// directory with its expected stderr in `X.stderr` (default empty); stdout
+/// is always empty. `ore test app` runs the tests in `app/config.ore`.
+fn example1() -> Result<(), String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/example1");
+    for case in ["ok", "missing", "invalid"] {
+        let want_err = read(&root.join(format!("{case}.stderr"))).unwrap_or_default();
+        let want_code = if want_err.is_empty() { 0 } else { 1 };
+        let (out, err, code) = ore(&root.join(case), &["run", "../app"])?;
+        if !out.is_empty() || err != want_err || code != Some(want_code) {
+            return Err(format!("[{case}] `ore run ../app`: {code:?}\n--- stdout\n{out}--- expected stderr\n{want_err}--- got\n{err}"));
+        }
+    }
+    let want = read(&root.join("app.test.out")).ok_or("missing app.test.out")?;
+    let (out, err, code) = ore(&root, &["test", "app"])?;
+    if out != want || !err.is_empty() || code != Some(0) {
+        return Err(format!("`ore test app`: {code:?}\n--- expected\n{want}--- got\n{out}{err}"));
+    }
+    Ok(())
+}
+
 /// `ore test --filter`: only the tests whose name contains the text run.
 fn cli_test_filter() -> Result<(), String> {
     let f = "tests/tests/outcomes.ore";
@@ -230,7 +315,7 @@ fn cli_check() -> Result<(), String> {
     let three = "tests/errors/three_errors.ore";
     let fixable = "tests/fix/let_var.ore";
     let diag = |code: &str, line: u32, col: u32, msg: &str| {
-        format!(r#"{{"severity":"error","code":"{code}","line":{line},"col":{col},"message":"{msg}","fixes":[]}}"#)
+        format!(r#"{{"severity":"error","code":"{code}","file":"{three}","line":{line},"col":{col},"message":"{msg}","fixes":[]}}"#)
     };
     let checks: &[(&[&str], bool, String, String)] = &[
         (&[ok], true, String::new(), String::new()),
@@ -240,7 +325,7 @@ fn cli_check() -> Result<(), String> {
             &[bad, "--json"],
             false,
             format!(
-                "{{\"file\":\"{bad}\",\"diagnostics\":[{{\"severity\":\"error\",\"code\":\"E0005\",\"line\":2,\"col\":16,\
+                "{{\"file\":\"{bad}\",\"diagnostics\":[{{\"severity\":\"error\",\"code\":\"E0005\",\"file\":\"{bad}\",\"line\":2,\"col\":16,\
                  \"message\":\"unknown escape sequence `\\\\q`\",\"fixes\":[]}}]}}\n"
             ),
             String::new(),
@@ -311,6 +396,7 @@ fn main() {
     let err_cases = cases("errors");
     let test_cases = cases("tests");
     let fix_cases = cases("fix");
+    let mod_cases = module_dirs();
     let results: Vec<(String, Result<(), String>)> = std::thread::scope(|s| {
         let mut handles = Vec::new();
         for p in &run_cases {
@@ -327,6 +413,10 @@ fn main() {
             let w = &work;
             handles.push((format!("fix/{}", name(p)), s.spawn(move || fix_case(p, w))));
         }
+        for p in &mod_cases {
+            handles.push((format!("modules/{}", name(p)), s.spawn(move || module_case(p))));
+        }
+        handles.push(("example1".to_string(), s.spawn(example1)));
         let w = &work;
         handles.push(("cli/ore run".to_string(), s.spawn(move || cli_run(w))));
         handles.push(("cli/ore check".to_string(), s.spawn(cli_check)));

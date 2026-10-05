@@ -1,0 +1,13 @@
+// Import errors: an unknown std module, an unknown item, a name imported
+// twice, and an import that clashes with a declaration.
+
+import std.nosuch
+import std.mem.Nope
+import std.fs
+import std.fs
+import std.mem.Allocator
+
+struct Allocator { x: i64 }
+
+pub fn main() {
+}

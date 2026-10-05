@@ -1,0 +1,18 @@
+// Methods used through an interface of another module (a `where`
+// constraint or `dyn`) need not be `pub`: conformance is structural.
+
+import util
+
+struct Dog {
+    n: i64
+
+    fn show(self: *Self) {
+        @println(self.n)
+    }
+}
+
+pub fn main() {
+    var d = Dog { n: 5 }
+    util.showIt(Dog, &mut d)
+    util.showDyn(&d)
+}

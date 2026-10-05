@@ -4,7 +4,16 @@ use crate::diag::Span;
 
 #[derive(Debug, Clone)]
 pub struct File {
+    pub imports: Vec<Import>,
     pub items: Vec<Item>,
+}
+
+/// `import a.b.c`: the path's names with their positions. It binds its
+/// last name in the file.
+#[derive(Debug, Clone)]
+pub struct Import {
+    pub path: Vec<(String, Span)>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -123,6 +132,8 @@ pub struct TypeExpr {
     pub span: Span,
 }
 
+/// A name in a type, a `where` constraint or an error set merge can be a
+/// path, `std.fs.File`: its parts are joined with `.`.
 #[derive(Debug, Clone)]
 pub enum TypeExprKind {
     Named(String),
@@ -281,7 +292,9 @@ pub enum ExprKind {
     /// `Name { ... }` or `F(T) { ... }`; `ty` is `Named` or `Generic`.
     StructLit { ty: TypeExpr, fields: Vec<FieldInit> },
     /// `Enum.Variant { field: value, ... }`. A variant without payload is
-    /// written `Enum.Variant` and parsed as `Field`.
+    /// written `Enum.Variant` and parsed as `Field`. `enum_name` can be a
+    /// path (`shapes.Shape`); `mod.Struct { ... }` is parsed as a
+    /// `VariantLit` too, and module resolution makes it a `StructLit`.
     VariantLit { enum_name: String, variant: String, fields: Vec<FieldInit> },
     Match { scrutinee: Box<Expr>, arms: Vec<MatchArm> },
     /// `try x`

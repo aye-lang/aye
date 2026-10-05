@@ -10,6 +10,9 @@
 //! `General`.
 //!
 //! In test mode the C `main` runs the test whose index is its argument.
+//!
+//! A source position reaches the runtime as two `int`s: the line, with the
+//! file's index in its upper bits (`ORE_FILE`, `ORE_LINE`), and the column.
 
 use crate::ast::BinOp;
 use crate::diag::Span;
@@ -34,22 +37,25 @@ extern void ore_rt_exit(int) __asm__(ORE_SYM("exit")) __attribute__((noreturn));
 extern void *ore_rt_malloc(size_t) __asm__(ORE_SYM("malloc"));
 extern void ore_rt_free(void *) __asm__(ORE_SYM("free"));
 extern int ore_rt_memcmp(const void *, const void *, size_t) __asm__(ORE_SYM("memcmp"));
+extern int ore_rt_open(const char *, int, ...) __asm__(ORE_SYM("open"));
+#define ORE_FILE(l) ore_files[(l) >> 20]
+#define ORE_LINE(l) ((l) & 0xfffff)
 
 ORE_RT __attribute__((noreturn, cold)) void ore_panic(int line, int col, const char *msg) {
     ore_rt_fflush(0);
-    ore_rt_dprintf(2, "%s:%d:%d: panic: %s\n", ore_file, line, col, msg);
+    ore_rt_dprintf(2, "%s:%d:%d: panic: %s\n", ORE_FILE(line), ORE_LINE(line), col, msg);
     ore_rt_abort();
 }
 ORE_RT __attribute__((noreturn, cold)) void ore_panic_index(int line, int col, size_t i, size_t len) {
     ore_rt_fflush(0);
-    ore_rt_dprintf(2, "%s:%d:%d: panic: index out of bounds: index %llu, len %llu\n", ore_file, line, col,
+    ore_rt_dprintf(2, "%s:%d:%d: panic: index out of bounds: index %llu, len %llu\n", ORE_FILE(line), ORE_LINE(line), col,
                    (unsigned long long)i, (unsigned long long)len);
     ore_rt_abort();
 }
 ORE_RT __attribute__((noreturn, cold)) void ore_panic_slice(int line, int col, size_t lo, size_t hi, size_t len) {
     ore_rt_fflush(0);
-    ore_rt_dprintf(2, "%s:%d:%d: panic: slice bounds out of range: [%llu..%llu] with len %llu\n", ore_file, line,
-                   col, (unsigned long long)lo, (unsigned long long)hi, (unsigned long long)len);
+    ore_rt_dprintf(2, "%s:%d:%d: panic: slice bounds out of range: [%llu..%llu] with len %llu\n", ORE_FILE(line),
+                   ORE_LINE(line), col, (unsigned long long)lo, (unsigned long long)hi, (unsigned long long)len);
     ore_rt_abort();
 }
 ORE_RT inline size_t ore_idx(size_t i, size_t len, int line, int col) {
@@ -138,7 +144,7 @@ ORE_RT int ore_main_error(uint16_t e) {
     if (ORE_TRACE) {
         ore_rt_dprintf(2, "error return trace:\n");
         for (uint32_t i = 0; i < ore_trace_len && i < ORE_TRACE_MAX; i++) {
-            ore_rt_dprintf(2, "%s:%d:%d\n", ore_file, ore_trace[i].line, ore_trace[i].col);
+            ore_rt_dprintf(2, "%s:%d:%d\n", ORE_FILE(ore_trace[i].line), ORE_LINE(ore_trace[i].line), ore_trace[i].col);
         }
         if (ore_trace_len > ORE_TRACE_MAX) ore_rt_dprintf(2, "(%u more)\n", ore_trace_len - ORE_TRACE_MAX);
     }
@@ -204,7 +210,8 @@ ORE_RT void ore_general_free(void *self, void *p, int line, int col) {
         if (r->free_line) {
             ore_rt_fflush(0);
             ore_rt_dprintf(2, "%s:%d:%d: panic: double free of memory allocated at %s:%d:%d and already freed at %s:%d:%d\n",
-                           ore_file, line, col, ore_file, r->line, r->col, ore_file, r->free_line, r->free_col);
+                           ORE_FILE(line), ORE_LINE(line), col, ORE_FILE(r->line), ORE_LINE(r->line), r->col,
+                           ORE_FILE(r->free_line), ORE_LINE(r->free_line), r->free_col);
             ore_rt_abort();
         }
         r->free_line = line;
@@ -224,8 +231,8 @@ ORE_RT size_t ore_general_deinit(ore_General *g) {
         next = r->next;
         if (!r->free_line) {
             if (!leaks) ore_rt_fflush(0);
-            ore_rt_dprintf(2, "%s:%d:%d: leak: %llu bytes allocated here were never freed\n", ore_file, r->line, r->col,
-                           (unsigned long long)r->size);
+            ore_rt_dprintf(2, "%s:%d:%d: leak: %llu bytes allocated here were never freed\n", ORE_FILE(r->line),
+                           ORE_LINE(r->line), r->col, (unsigned long long)r->size);
             leaks++;
         }
         ore_rt_free(r->p);
@@ -279,7 +286,7 @@ ORE_RT ore_Allocator ore_test_allocator(void) { return ore_general_allocator(&or
 #define ORE_ASSERT_FAILED(line, col, fmt, ...)                                                                  \
     do {                                                                                                         \
         ore_rt_fflush(0);                                                                                        \
-        ore_rt_dprintf(2, "%s:%d:%d: assertion failed: " fmt "\n", ore_file, line, col, __VA_ARGS__);           \
+        ore_rt_dprintf(2, "%s:%d:%d: assertion failed: " fmt "\n", ORE_FILE(line), ORE_LINE(line), col, __VA_ARGS__); \
         ore_rt_exit(1);                                                                                          \
     } while (0)
 ORE_RT void ore_expect(bool c, int line, int col) {
@@ -317,14 +324,45 @@ ORE_RT void ore_print_b(bool v, bool nl) { ore_rt_printf(nl ? "%s\n" : "%s", v ?
 ORE_RT void ore_print_s(const uint8_t *p, size_t n, bool nl) {
     ore_rt_printf(nl ? "%.*s\n" : "%.*s", (int)n, (const char *)p);
 }
+
+/* std.log: each piece of the format and argument is written to stderr. */
+ORE_RT void ore_log_s(const uint8_t *p, size_t n) { ore_rt_dprintf(2, "%.*s", (int)n, (const char *)p); }
+ORE_RT void ore_log_i(int64_t v) { ore_rt_dprintf(2, "%lld", (long long)v); }
+ORE_RT void ore_log_u(uint64_t v) { ore_rt_dprintf(2, "%llu", (unsigned long long)v); }
+ORE_RT void ore_log_f(double v) { ore_rt_dprintf(2, "%g", v); }
+ORE_RT void ore_log_b(bool v) { ore_rt_dprintf(2, "%s", v ? "true" : "false"); }
+ORE_RT void ore_log_e(uint16_t e) { ore_rt_dprintf(2, "%s", ore_error_names[e]); }
+
+/* Hooks that std calls through `extern fn`: the program's arguments, and
+   `open` with a path that is not NUL-terminated (the fd, or -errno). */
+static int ore_argc;
+static char **ore_argv;
+ORE_RT int32_t ore_std_argc(void) { return ore_argc; }
+ORE_RT uint8_t *ore_std_argv(int32_t i) { return (uint8_t *)ore_argv[i]; }
+#ifdef __APPLE__
+extern int *ore_rt_errno_loc(void) __asm__(ORE_SYM("__error"));
+#else
+extern int *ore_rt_errno_loc(void) __asm__(ORE_SYM("__errno_location"));
+#endif
+ORE_RT int32_t ore_std_open(uint8_t *path, size_t len) {
+    char *p = ore_rt_malloc(len + 1);
+    if (!p) return -12;
+    for (size_t i = 0; i < len; i++) p[i] = (char)path[i];
+    p[len] = 0;
+    int fd = ore_rt_open(p, 0);
+    int err = fd < 0 ? *ore_rt_errno_loc() : 0;
+    ore_rt_free(p);
+    return fd < 0 ? -err : fd;
+}
 "#;
 
-/// Emit the C translation unit for `p`. `file` is the Ore source name used
-/// in `#line` directives and panic messages; `checks` enables runtime checks
-/// and `trace` the error return trace (debug mode). With `tests`, `main`
-/// runs one test instead of `ore_f_main`.
-pub fn emit(p: &Program, file: &str, checks: bool, trace: bool, tests: bool) -> String {
-    let mut g = Gen { out: String::new(), file: c_str(file.as_bytes()), trace, loops: Vec::new(), next_label: 0 };
+/// Emit the C translation unit for `p`. `files` are the Ore source names
+/// (indexed by `Span::file`) used in `#line` directives and panic messages;
+/// `checks` enables runtime checks and `trace` the error return trace (debug
+/// mode). With `tests`, `main` runs one test instead of `ore_f_main`.
+pub fn emit(p: &Program, files: &[String], checks: bool, trace: bool, tests: bool) -> String {
+    let files = files.iter().map(|f| c_str(f.as_bytes())).collect();
+    let mut g = Gen { out: String::new(), files, trace, loops: Vec::new(), next_label: 0 };
     g.program(p, checks, tests);
     g.out
 }
@@ -349,6 +387,11 @@ fn c_name(name: &str) -> String {
     s
 }
 
+/// The C symbol of an `extern fn`: its name without the module.
+fn extern_symbol(name: &str) -> &str {
+    name.rsplit("::").next().unwrap()
+}
+
 /// C name of the Ore function `name`: `f`, `Struct.method` or `test#N`.
 fn fn_name(name: &str) -> String {
     if let Some(n) = name.strip_prefix("test#") {
@@ -366,18 +409,19 @@ fn fn_name(name: &str) -> String {
 /// C names of the vtable of struct `s` for interface `i`, and of the thunk
 /// for its method `m`.
 fn vtable_name(i: &str, s: &str) -> String {
+    let i = c_name(i);
     format!("ore_vt_{}{i}_{}", i.len(), c_name(s))
 }
 
 fn thunk_name(i: &str, s: &str, m: &str) -> String {
-    let s = c_name(s);
+    let (i, s) = (c_name(i), c_name(s));
     format!("ore_th_{}{i}_{}{s}_{m}", i.len(), s.len())
 }
 
 struct Gen {
     out: String,
-    /// `file` as a C string literal.
-    file: String,
+    /// The source file names as C string literals.
+    files: Vec<String>,
     trace: bool,
     /// For each enclosing loop: the label `continue` jumps to, if any.
     loops: Vec<Option<String>>,
@@ -461,12 +505,12 @@ fn mangle(t: &Type) -> String {
         Type::Ptr(e, true) => format!("RM_{}", mangle(e)),
         Type::Optional(e) => format!("O_{}", mangle(e)),
         Type::Struct(n) => format!("s_{}", c_name(n)),
-        Type::Enum(n) => format!("e_{n}"),
+        Type::Enum(n) => format!("e_{}", c_name(n)),
         // Every error set is a `uint16_t`, so the set is not part of the name.
         Type::ErrorSet(_) => "err".into(),
         Type::ErrorUnion(_, t) => format!("U_{}", mangle(t)),
-        Type::Dyn(i) => format!("D_{i}"),
-        Type::Builtin(b) => b.name().into(),
+        Type::Dyn(i) => format!("D_{}", c_name(i)),
+        Type::Builtin(b) => b.c_name().into(),
         Type::Param(..) | Type::Error => unreachable!(),
     }
 }
@@ -502,8 +546,10 @@ fn is_composite(t: &Type) -> bool {
     }
 }
 
+/// A position for the runtime: the line with the file index in its upper
+/// bits, and the column.
 fn line_col(span: Span) -> String {
-    format!("{}, {}", span.line, span.col)
+    format!("{}, {}", (span.file as u32) << 20 | span.line, span.col)
 }
 
 impl Gen {
@@ -519,7 +565,7 @@ impl Gen {
         self.out.push_str("/* Generated by the Ore stage0 compiler. Do not edit. */\n");
         let _ = writeln!(self.out, "#define ORE_CHECKS {}", checks as u8);
         let _ = writeln!(self.out, "#define ORE_TRACE {}", self.trace as u8);
-        let _ = writeln!(self.out, "static const char ore_file[] = {};", self.file);
+        let _ = writeln!(self.out, "static const char *const ore_files[] = {{{}}};", self.files.join(", "));
         let names: Vec<String> =
             std::iter::once("\"\"".to_string()).chain(p.errors.iter().map(|n| c_str(n.as_bytes()))).collect();
         let _ = writeln!(self.out, "static const char *const ore_error_names[] = {{{}}};", names.join(", "));
@@ -527,7 +573,7 @@ impl Gen {
         self.types(p);
         // The vtable type of each interface: one function pointer per method.
         for i in &p.ifaces {
-            let mut s = format!("struct ore_VT_{} {{", i.name);
+            let mut s = format!("struct ore_VT_{} {{", c_name(&i.name));
             for m in &i.methods {
                 let params: String = m.params.iter().map(|t| format!(", {}", c_type(t))).collect();
                 let _ = write!(s, " {} (*{})(void *{params});", c_type(&m.ret), c_field(&m.name));
@@ -537,10 +583,15 @@ impl Gen {
         }
 
         self.out.push('\n');
+        // Modules that declare the same C function share one declaration.
+        let mut declared = HashSet::new();
         for e in &p.externs {
             let params: Vec<String> = e.params.iter().map(c_type).collect();
             let params = if params.is_empty() { "void".to_string() } else { params.join(", ") };
-            let _ = writeln!(self.out, "extern {} {}({params});", c_type(&e.ret), e.name);
+            let decl = format!("extern {} {}({params});", c_type(&e.ret), extern_symbol(&e.name));
+            if declared.insert(decl.clone()) {
+                self.line(0, &decl);
+            }
         }
         for f in &p.funcs {
             let sig = self.signature(f);
@@ -553,7 +604,7 @@ impl Gen {
             self.func(f);
         }
         if tests {
-            self.out.push_str("\nint main(int argc, char **argv) {\n    int n = 0;\n    if (argc != 2) return 2;\n");
+            self.out.push_str("\nint main(int argc, char **argv) {\n    int n = 0;\n    ore_argc = argc;\n    ore_argv = argv;\n    if (argc != 2) return 2;\n");
             self.out.push_str("    for (const char *s = argv[1]; *s; s++) n = n * 10 + (*s - '0');\n    switch (n) {\n");
             for i in 0..p.tests.len() {
                 let _ = writeln!(self.out, "    case {i}: return ore_test_end(ore_t_{i}().err);");
@@ -565,11 +616,11 @@ impl Gen {
         if let Type::ErrorUnion(..) = main.ret {
             let _ = write!(
                 self.out,
-                "\nint main(void) {{\n    {} r = ore_f_main();\n    return r.err ? ore_main_error(r.err) : 0;\n}}\n",
+                "\nint main(int argc, char **argv) {{\n    ore_argc = argc;\n    ore_argv = argv;\n    {} r = ore_f_main();\n    return r.err ? ore_main_error(r.err) : 0;\n}}\n",
                 c_type(&main.ret)
             );
         } else {
-            self.out.push_str("\nint main(void) {\n    ore_f_main();\n    return 0;\n}\n");
+            self.out.push_str("\nint main(int argc, char **argv) {\n    ore_argc = argc;\n    ore_argv = argv;\n    ore_f_main();\n    return 0;\n}\n");
         }
     }
 
@@ -597,7 +648,7 @@ impl Gen {
             );
             thunks.push(th);
         }
-        let _ = writeln!(self.out, "static const struct ore_VT_{i} {} = {{{}}};", vtable_name(i, s), thunks.join(", "));
+        let _ = writeln!(self.out, "static const struct ore_VT_{} {} = {{{}}};", c_name(i), vtable_name(i, s), thunks.join(", "));
     }
 
     /// Typedefs for every array, slice and struct type, in dependency order.
@@ -663,7 +714,7 @@ impl Gen {
                 let _ = writeln!(self.out, "struct {name} {{ {}* ptr; size_t len; }};", c_type(e));
             }
             Type::Dyn(i) => {
-                let _ = writeln!(self.out, "struct {name} {{ void *ptr; const struct ore_VT_{i} *vt; }};");
+                let _ = writeln!(self.out, "struct {name} {{ void *ptr; const struct ore_VT_{} *vt; }};", c_name(i));
             }
             Type::Struct(sname) => {
                 let def = p.structs.iter().find(|s| s.name == *sname).unwrap();
@@ -748,7 +799,7 @@ impl Gen {
     }
 
     fn stmt(&mut self, f: &Func, s: &Stmt, ind: usize) {
-        let _ = writeln!(self.out, "#line {} {}", s.span.line, self.file);
+        let _ = writeln!(self.out, "#line {} {}", s.span.line, self.files[s.span.file as usize]);
         match &s.kind {
             StmtKind::Assign(place, rv) => {
                 let line = format!("{} = {};", self.place(f, place), self.rvalue(f, rv));
@@ -842,7 +893,7 @@ impl Gen {
                 Proj::Index { index, len: Len::Array(n), span } => {
                     s = format!("{s}.a[ore_idx({}, {n}, {})]", self.operand(f, index), line_col(*span));
                 }
-                Proj::Index { index, len: Len::Slice, span } => {
+                Proj::Index { index, len: Len::Slice | Len::Unchecked, span } => {
                     s = format!("{s}.ptr[ore_idx({}, {s}.len, {})]", self.operand(f, index), line_col(*span));
                 }
                 Proj::Deref => s = format!("(*{s})"),
@@ -885,7 +936,7 @@ impl Gen {
             Rvalue::Cast { val, from, to, span } => self.cast(&self.operand(f, val), from, to, *span),
             Rvalue::Call { name, is_extern, args } => {
                 let args: Vec<String> = args.iter().map(|a| self.operand(f, a)).collect();
-                let name = if *is_extern { name.clone() } else { fn_name(name) };
+                let name = if *is_extern { extern_symbol(name).to_string() } else { fn_name(name) };
                 format!("{name}({})", args.join(", "))
             }
             Rvalue::DynCall { recv, method, args } => {
@@ -894,7 +945,7 @@ impl Gen {
                 format!("{r}.vt->{}({r}.ptr{args})", c_field(method))
             }
             Rvalue::ToDyn { ptr, iface, strukt } => {
-                format!("((ore_D_{iface}){{(void *){}, &{}}})", self.operand(f, ptr), vtable_name(iface, strukt))
+                format!("((ore_D_{}){{(void *){}, &{}}})", c_name(iface), self.operand(f, ptr), vtable_name(iface, strukt))
             }
             Rvalue::Alloc { alloc, ty, span } => {
                 let t = c_type(ty);
@@ -928,16 +979,39 @@ impl Gen {
                     _ => format!("ore_print_s(({v}).ptr, ({v}).len, {newline})"),
                 }
             }
+            // A statement expression: flush stdout, then write the prefix,
+            // each piece and argument, and a newline to stderr.
+            Rvalue::Log { error, pieces, args } => {
+                let mut s = format!("({{ ore_rt_fflush(0); ore_rt_dprintf(2, \"{}: \");", if *error { "error" } else { "info" });
+                for (i, piece) in pieces.iter().enumerate() {
+                    if !piece.is_empty() {
+                        let _ = write!(s, " ore_log_s((const uint8_t*){}, {});", c_str(piece), piece.len());
+                    }
+                    let Some((op, ty)) = args.get(i) else { continue };
+                    let v = self.operand(f, op);
+                    let _ = match ty {
+                        Type::Int(it) if it.signed() => write!(s, " ore_log_i({v});"),
+                        Type::Int(_) => write!(s, " ore_log_u({v});"),
+                        Type::Float(_) => write!(s, " ore_log_f({v});"),
+                        Type::Bool => write!(s, " ore_log_b({v});"),
+                        Type::ErrorSet(_) => write!(s, " ore_log_e({v});"),
+                        _ => write!(s, " ore_log_s(({v}).ptr, ({v}).len);"),
+                    };
+                }
+                s.push_str(" ore_rt_dprintf(2, \"\\n\"); })");
+                s
+            }
             Rvalue::StructLit { name, fields } => {
                 let fs: Vec<String> = fields.iter().map(|o| self.operand(f, o)).collect();
                 format!("(({}){{{}}})", c_type(&Type::Struct(name.clone())), fs.join(", "))
             }
             Rvalue::Variant { enum_name, tag, variant, fields } => {
+                let t = c_type(&Type::Enum(enum_name.clone()));
                 if fields.is_empty() {
-                    return format!("((ore_e_{enum_name}){{.tag = {tag}}})");
+                    return format!("(({t}){{.tag = {tag}}})");
                 }
                 let fs: Vec<String> = fields.iter().map(|o| self.operand(f, o)).collect();
-                format!("((ore_e_{enum_name}){{.tag = {tag}, .u.{} = {{{}}}}})", c_field(variant), fs.join(", "))
+                format!("(({t}){{.tag = {tag}, .u.{} = {{{}}}}})", c_field(variant), fs.join(", "))
             }
             Rvalue::AddrOf(p) => format!("(&{})", self.place(f, p)),
             Rvalue::Some { val, ty } => {
@@ -969,6 +1043,8 @@ impl Gen {
                 let (ptr, n) = match len {
                     Len::Array(n) => (format!("{b}.a"), n.to_string()),
                     Len::Slice => (format!("{b}.ptr"), format!("{b}.len")),
+                    // No length: only `lo <= hi` is checked.
+                    Len::Unchecked => (b.clone(), self.operand(f, hi.as_ref().unwrap())),
                 };
                 let lo = self.operand(f, lo);
                 let hi = hi.as_ref().map(|h| self.operand(f, h)).unwrap_or_else(|| n.clone());

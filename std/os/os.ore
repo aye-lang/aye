@@ -1,0 +1,25 @@
+// std.os: the process.
+
+import std.mem.Allocator
+import std.mem.AllocError
+
+/// The program's arguments; the first is the program itself. The slice is
+/// new memory from `alloc` (free it with `alloc.free`); the arguments are
+/// not copied.
+pub fn args(alloc: Allocator) AllocError![][]u8 {
+    let n = ore_std_argc() as usize
+    let out = try alloc.alloc([]u8{}, n)
+    for i in 0..n {
+        let p = ore_std_argv(i as i32)
+        out[i] = p[0..strlen(p)]
+    }
+    return out
+}
+
+/// End the program with the exit status `code`, after flushing `@print`
+/// output. Deferred statements do not run.
+pub extern fn exit(code: i32)
+
+extern fn ore_std_argc() i32
+extern fn ore_std_argv(i: i32) [*]u8
+extern fn strlen(s: [*]u8) usize

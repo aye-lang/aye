@@ -3,16 +3,23 @@
 use crate::codes::Code;
 use std::fmt;
 
-/// A 1-based line/column position in the source file.
+/// A 1-based line/column position in a source file. `file` indexes the
+/// files of the program (0 is the first file of the root module).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Span {
     pub line: u32,
     pub col: u32,
+    pub file: u16,
 }
 
 impl Span {
     pub fn new(line: u32, col: u32) -> Span {
-        Span { line, col }
+        Span { line, col, file: 0 }
+    }
+
+    /// The position `n` columns to the right, in the same file.
+    pub fn right(self, n: u32) -> Span {
+        Span { col: self.col + n, ..self }
     }
 }
 
@@ -50,7 +57,8 @@ impl fmt::Display for Diag {
 }
 
 impl Diag {
-    /// One entry of the `diagnostics` array in `ore check --json`.
+    /// One entry of the `diagnostics` array in `ore check --json`. `file`
+    /// is the file of the error; a fix-it edits only that file.
     pub fn to_json(&self) -> String {
         let edits: Vec<String> = self
             .fix
@@ -68,8 +76,9 @@ impl Diag {
             })
             .collect();
         format!(
-            r#"{{"severity":"error","code":"{}","line":{},"col":{},"message":{},"fixes":[{}]}}"#,
+            r#"{{"severity":"error","code":"{}","file":{},"line":{},"col":{},"message":{},"fixes":[{}]}}"#,
             self.code,
+            json_str(&self.file),
             self.span.line,
             self.span.col,
             json_str(&self.msg),
@@ -128,8 +137,11 @@ impl Error {
         self
     }
 
-    pub fn with_file(self, file: &str) -> Diag {
-        Diag { file: file.to_string(), span: self.span, code: self.code, msg: self.msg, fix: self.fix }
+    /// The diagnostic, with the name of its file from `files` (indexed by
+    /// `Span::file`).
+    pub fn with_file(self, files: &[String]) -> Diag {
+        let file = files.get(self.span.file as usize).cloned().unwrap_or_default();
+        Diag { file, span: self.span, code: self.code, msg: self.msg, fix: self.fix }
     }
 }
 

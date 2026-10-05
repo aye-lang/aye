@@ -1,0 +1,6 @@
+import nosuch
+import std.nothere
+
+pub fn main() {
+    nosuch.f()
+}

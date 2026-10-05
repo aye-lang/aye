@@ -1,0 +1,4 @@
+test "parse reads the name and the port" ... ok
+test "a port of 0 is invalid" ... ok
+
+2 passed; 0 failed

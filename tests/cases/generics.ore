@@ -1,6 +1,8 @@
 // Generic functions with `comptime T: type`, `where` constraints, methods
 // called through a constraint, `[]mut T`, and slices from an allocator.
 
+import std.heap.General
+
 interface Shape {
     fn area(self: *Self) f64
     fn scale(self: *mut Self, by: f64)

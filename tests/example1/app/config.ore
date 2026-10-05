@@ -1,0 +1,111 @@
+// `Config` for Example 1: lines `key = value`, with the keys `name` and
+// `port`. `parse` copies the name into memory from `alloc`.
+
+import std
+import std.mem.Allocator
+
+error ConfigError { MissingName, BadLine, InvalidPort }
+
+struct Config {
+    name: []mut u8
+    port: i64
+
+    fn parse(alloc: Allocator, bytes: []u8) !Config {
+        var name: ?[]u8 = null
+        var port: i64 = 0
+        var start: usize = 0
+        for i in 0..bytes.len + 1 {
+            if i == bytes.len || bytes[i] == '\n' {
+                let line = trim(bytes[start..i])
+                start = i + 1
+                if line.len == 0 {
+                    continue
+                }
+                let eq = try indexOf(line, '=')
+                let key = trim(line[..eq])
+                let value = trim(line[eq + 1..])
+                if std.mem.eql(key, "name") {
+                    name = value
+                } else if std.mem.eql(key, "port") {
+                    port = try parseInt(value)
+                } else {
+                    return ConfigError.BadLine
+                }
+            }
+        }
+        if name |n| {
+            let copy = try alloc.alloc(0 as u8, n.len)
+            std.mem.copy(copy, n)
+            return Config { name: copy, port: port }
+        }
+        return ConfigError.MissingName
+    }
+
+    fn validate(self: Self) ConfigError!void {
+        if self.port <= 0 || self.port > 65535 {
+            return ConfigError.InvalidPort
+        }
+    }
+
+    fn deinit(self: Self, alloc: Allocator) {
+        alloc.free(self.name)
+    }
+}
+
+fn indexOf(s: []u8, c: u8) ConfigError!usize {
+    for i in 0..s.len {
+        if s[i] == c {
+            return i
+        }
+    }
+    return ConfigError.BadLine
+}
+
+fn trim(s: []u8) []u8 {
+    var lo: usize = 0
+    var hi = s.len
+    while lo < hi && s[lo] == ' ' {
+        lo += 1
+    }
+    while hi > lo && s[hi - 1] == ' ' {
+        hi -= 1
+    }
+    return s[lo..hi]
+}
+
+fn parseInt(s: []u8) ConfigError!i64 {
+    if s.len == 0 {
+        return ConfigError.BadLine
+    }
+    var n: i64 = 0
+    for i in 0..s.len {
+        if s[i] < '0' || s[i] > '9' {
+            return ConfigError.BadLine
+        }
+        n = n * 10 + (s[i] - '0') as i64
+    }
+    return n
+}
+
+test "parse reads the name and the port" {
+    let alloc = @testAllocator()
+    let cfg = try Config.parse(alloc, "name = demo\nport = 8080\n")
+    defer cfg.deinit(alloc)
+    @expectEqual("demo", cfg.name)
+    @expectEqual(8080, cfg.port)
+    try cfg.validate()
+}
+
+test "a port of 0 is invalid" {
+    let alloc = @testAllocator()
+    let cfg = try Config.parse(alloc, "port = 0\nname = x")
+    defer cfg.deinit(alloc)
+    @expect(!isValid(cfg))
+}
+
+fn isValid(cfg: Config) bool {
+    cfg.validate() catch {
+        return false
+    }
+    return true
+}

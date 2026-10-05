@@ -74,7 +74,8 @@ impl IntTy {
     }
 }
 
-/// The predeclared allocator types. Their methods are compiler intrinsics.
+/// The allocator types of std (`std.mem.Allocator`, `std.heap.General`,
+/// `std.heap.Arena`). Their methods are compiler intrinsics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BuiltinTy {
     /// A data pointer and a vtable of byte-level `alloc` and `free`
@@ -88,7 +89,17 @@ pub enum BuiltinTy {
 }
 
 impl BuiltinTy {
+    /// The name in messages.
     pub fn name(self) -> &'static str {
+        match self {
+            BuiltinTy::Allocator => "std.mem.Allocator",
+            BuiltinTy::General => "std.heap.General",
+            BuiltinTy::Arena => "std.heap.Arena",
+        }
+    }
+
+    /// The name in generated C.
+    pub fn c_name(self) -> &'static str {
         match self {
             BuiltinTy::Allocator => "Allocator",
             BuiltinTy::General => "General",
@@ -97,9 +108,13 @@ impl BuiltinTy {
     }
 }
 
-/// The error set of `Allocator.create`, predeclared. Its only error,
-/// `OutOfMemory`, has the error value 1.
-pub const ALLOC_ERROR: &str = "AllocError";
+/// The error set of `Allocator.create`, `std.mem.AllocError`. Its only
+/// error, `OutOfMemory`, has the error value 1.
+pub const ALLOC_ERROR: &str = "std::mem::AllocError";
+
+/// `std.log.err` and `std.log.info`.
+const LOG_ERR: &str = "std::log::err";
+const LOG_INFO: &str = "std::log::info";
 pub const OUT_OF_MEMORY: u16 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -184,9 +199,9 @@ impl Type {
             "f32" => Type::Float(FloatTy::F32),
             "f64" => Type::Float(FloatTy::F64),
             "bool" => Type::Bool,
-            "Allocator" => Type::Builtin(BuiltinTy::Allocator),
-            "General" => Type::Builtin(BuiltinTy::General),
-            "Arena" => Type::Builtin(BuiltinTy::Arena),
+            "std::mem::Allocator" => Type::Builtin(BuiltinTy::Allocator),
+            "std::heap::General" => Type::Builtin(BuiltinTy::General),
+            "std::heap::Arena" => Type::Builtin(BuiltinTy::Arena),
             _ => return None,
         })
     }
@@ -391,6 +406,10 @@ pub enum TExprKind {
     AllocSlice { alloc: Box<TExpr>, value: Box<TExpr>, len: Box<TExpr> },
     /// `[]T{}`: the empty slice.
     EmptySlice,
+    /// `std.log.err(format, args...)` (`error` is true) or `std.log.info`:
+    /// the literal pieces of the format around its `{}`s (one more than the
+    /// arguments) and the arguments.
+    Log { error: bool, pieces: Vec<Vec<u8>>, args: Vec<TExpr> },
     Intrinsic { op: Intrinsic, args: Vec<TExpr> },
     /// A `T` returned from an `E!T` function.
     OkWrap(Box<TExpr>),
@@ -464,6 +483,13 @@ struct FnCtx<'a> {
     generic: Option<String>,
 }
 
+impl FnCtx<'_> {
+    /// The module of the function `key` with this context.
+    fn module(&self, key: &str) -> String {
+        module_of(self.generic.as_deref().or(self.owner.as_deref()).unwrap_or(key)).to_string()
+    }
+}
+
 struct Checker<'a> {
     structs: HashMap<String, StructDef>,
     enums: HashMap<String, EnumDef>,
@@ -524,6 +550,8 @@ struct Checker<'a> {
     /// The `comptime` parameters in scope: name, the type it stands for (a
     /// `Type::Param` while the generic itself is checked), declaration.
     env: Vec<(String, Type, Span)>,
+    /// The module of the function being checked (`""`: the root module).
+    module: String,
 }
 
 /// Check a file. Without `require_main` (`ore test`, or `ore check` of a
@@ -563,6 +591,7 @@ pub fn check(file: &ast::File, require_main: bool) -> std::result::Result<Progra
         self_ty: None,
         in_test: false,
         env: Vec::new(),
+        module: String::new(),
     };
     let p = c.program(file, require_main);
     if c.errors.is_empty() { Ok(p) } else { Err(c.errors) }
@@ -642,10 +671,13 @@ fn expr_type(e: &ast::Expr) -> Option<ast::TypeExpr> {
 }
 
 /// Primitive and predeclared type names, for spelling suggestions.
-const TYPE_NAMES: &[&str] = &[
-    "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize", "f32", "f64", "bool", "Allocator", "General",
-    "Arena",
-];
+const TYPE_NAMES: &[&str] = &["i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize", "f32", "f64", "bool"];
+
+/// The module of the canonical name `name` (`util` for `util::f`; `""`
+/// for the root module).
+fn module_of(name: &str) -> &str {
+    name.rsplit_once("::").map_or("", |(m, _)| m)
+}
 
 /// Are `a` and `b` one edit apart: one character inserted, deleted or
 /// replaced, or two adjacent characters swapped?
@@ -680,7 +712,7 @@ fn suggest<'n>(e: Error, name: &str, span: Span, candidates: impl IntoIterator<I
     close.dedup();
     match close[..] {
         [c] => {
-            let end = Span::new(span.line, span.col + name.chars().count() as u32);
+            let end = span.right(name.chars().count() as u32);
             e.fix(format!("change `{name}` to `{c}`"), span, end, c)
         }
         _ => e,
@@ -737,6 +769,8 @@ impl<'a> Checker<'a> {
                 let digits = e.msg[i + 2..].chars().take_while(char::is_ascii_digit).count();
                 e.msg.replace_range(i + 1..i + 2 + digits, "");
             }
+            // Canonical names of other modules are shown as paths.
+            e.msg = e.msg.replace("::", ".");
             self.errors.push(e);
         }
     }
@@ -762,7 +796,8 @@ impl<'a> Checker<'a> {
                     continue;
                 }
             };
-            if Type::from_name(name).is_some() || matches!(name.as_str(), "true" | "false" | "null" | "Self" | "type" | ALLOC_ERROR) {
+            let bare = name.rsplit("::").next().unwrap();
+            if Type::from_name(bare).is_some() || matches!(bare, "true" | "false" | "null" | "Self" | "type") {
                 self.report(Error::new(E0014, span, format!("`{name}` is a builtin name and cannot be redefined")));
                 continue;
             }
@@ -1017,7 +1052,9 @@ impl<'a> Checker<'a> {
                     "a `comptime` parameter must have type `type` (other compile-time values are not supported)",
                 ));
             }
-            let prev = seen.iter().find(|(n, _)| *n == p.name).map(|x| x.1).or_else(|| self.top_spans.get(&p.name).copied());
+            // Other modules' top-level names are checked by module resolution.
+            let top = if module_of(g).is_empty() { self.top_spans.get(&p.name).copied() } else { None };
+            let prev = seen.iter().find(|(n, _)| *n == p.name).map(|x| x.1).or(top);
             if let Some(prev) = prev {
                 self.report(Error::new(E0016, p.span, format!(
                     "`{}` is already declared at {}:{} (shadowing is not allowed)",
@@ -1552,7 +1589,9 @@ impl<'a> Checker<'a> {
     fn declare(&mut self, name: &str, ty: Type, mutable: bool, span: Span) -> Result<VarId> {
         let prev = self.scopes.iter().find_map(|s| s.get(name).map(|&(_, sp)| sp));
         let prev = prev.or_else(|| self.env.iter().find(|(n, ..)| n == name).map(|&(_, _, sp)| sp));
-        if let Some(prev) = prev.or_else(|| self.top_spans.get(name).copied()) {
+        // Top-level names of other modules are checked by module resolution.
+        let top = if self.module.is_empty() { self.top_spans.get(name).copied() } else { None };
+        if let Some(prev) = prev.or(top) {
             return err(E0016, span, format!(
                 "`{name}` is already declared at {}:{} (shadowing is not allowed)",
                 prev.line, prev.col
@@ -1612,6 +1651,7 @@ impl<'a> Checker<'a> {
             self.self_ty.take(),
             self.in_test,
             std::mem::take(&mut self.env),
+            std::mem::take(&mut self.module),
         );
         let def = self.fn_body(name);
         // A generic's own instance with errors: the generic has errors.
@@ -1621,15 +1661,27 @@ impl<'a> Checker<'a> {
         {
             self.failed.insert(g);
         }
-        (self.vars, self.scopes, self.ret, self.loop_depth, self.in_defer, self.failures, self.self_ty, self.in_test, self.env) =
-            saved;
+        (
+            self.vars,
+            self.scopes,
+            self.ret,
+            self.loop_depth,
+            self.in_defer,
+            self.failures,
+            self.self_ty,
+            self.in_test,
+            self.env,
+            self.module,
+        ) = saved;
         self.quiet = saved_quiet;
         self.bodies.insert(name.to_string(), Some(def));
         Ok(())
     }
 
     fn fn_body(&mut self, name: &str) -> FnDef {
-        let FnCtx { decl: f, owner, env, .. } = self.fn_decls[name].clone();
+        let ctx = self.fn_decls[name].clone();
+        self.module = ctx.module(name);
+        let FnCtx { decl: f, owner, env, .. } = ctx;
         let sig = self.fns[name].clone();
         self.self_ty = owner;
         self.env = env;
@@ -1953,7 +2005,7 @@ impl<'a> Checker<'a> {
                 if !v.mutable {
                     let e = Error::new(E0032, t.span, format!("cannot {what} `{}`: it is immutable (declare it with `var`)", v.name));
                     return Err(match v.let_span {
-                        Some(s) => e.fix(format!("declare `{}` with `var`", v.name), s, Span::new(s.line, s.col + 3), "var"),
+                        Some(s) => e.fix(format!("declare `{}` with `var`", v.name), s, s.right(3), "var"),
                         None => e,
                     });
                 }
@@ -2210,6 +2262,7 @@ impl<'a> Checker<'a> {
                     return Err(suggest(e, name, span, self.scopes.iter().flat_map(|s| s.keys().map(String::as_str))));
                 }
             },
+            ExprKind::Call { name, args } if name == LOG_ERR || name == LOG_INFO => return self.log(name == LOG_ERR, args, span),
             ExprKind::Call { name, args } => {
                 if let Some(&f) = self.generics.get(name) {
                     if is_type_fn(f) {
@@ -2521,6 +2574,13 @@ impl<'a> Checker<'a> {
                         ((**el).clone(), self.check_mutable(&b, true).is_ok())
                     }
                     Type::Slice(el, m) => ((**el).clone(), *m),
+                    // An unchecked C pointer gets a length: `p[0..n]`.
+                    Type::CPtr(el) => {
+                        if lo.is_none() || hi.is_none() {
+                            return err(E0043, span, format!("slicing a `{}` needs both bounds (`p[lo..hi]`): it has no length", b.ty));
+                        }
+                        ((**el).clone(), false)
+                    }
                     t => return err(E0043, span, format!("cannot slice a value of type `{t}`")),
                 };
                 let mut bound = |x: &Option<Box<ast::Expr>>| -> Result<Option<Box<TExpr>>> {
@@ -2590,6 +2650,54 @@ impl<'a> Checker<'a> {
         Ok(TExpr { kind, ty, span })
     }
 
+    /// `std.log.err(format, args...)` or `std.log.info(...)`: `format` is a
+    /// string literal, and each `{}` in it takes the next argument, an
+    /// integer, float, `bool`, `[]u8` or error value.
+    fn log(&mut self, error: bool, args: &[ast::Expr], span: Span) -> Result<TExpr> {
+        let f = if error { "std.log.err" } else { "std.log.info" };
+        let Some(first) = args.first() else {
+            return err(E0086, span, format!("`{f}` needs a format string: `{f}(\"text {{}}\", value)`"));
+        };
+        let ExprKind::Str(format) = &strip_parens(first).kind else {
+            return err(E0086, first.span, format!("the format of `{f}` must be a string literal (print a value with `{f}(\"{{}}\", value)`)"));
+        };
+        let mut pieces = vec![Vec::new()];
+        let mut i = 0;
+        while i < format.len() {
+            if format[i..].starts_with(b"{}") {
+                pieces.push(Vec::new());
+                i += 2;
+            } else {
+                pieces.last_mut().unwrap().push(format[i]);
+                i += 1;
+            }
+        }
+        if pieces.len() != args.len() {
+            let n = pieces.len() - 1;
+            return err(E0086, span, format!(
+                "the format of `{f}` has {n} `{{}}` but {} argument(s) follow it",
+                args.len() - 1
+            ));
+        }
+        let mut targs = Vec::new();
+        for a in &args[1..] {
+            let t = self.value(a, None)?;
+            let ok = match &t.ty {
+                Type::Int(_) | Type::Float(_) | Type::Bool | Type::ErrorSet(_) => true,
+                Type::Slice(el, _) => **el == Type::Int(IntTy::U8),
+                _ => false,
+            };
+            if !ok {
+                return err(E0086, t.span, format!(
+                    "`{f}` cannot format a value of type `{}` (integers, floats, `bool`, `[]u8` and errors can be formatted)",
+                    t.ty
+                ));
+            }
+            targs.push(t);
+        }
+        Ok(TExpr { kind: TExprKind::Log { error, pieces, args: targs }, ty: Type::Void, span })
+    }
+
     /// Does `name` name a type (not a value)?
     fn is_type_name(&self, name: &str) -> bool {
         Type::from_name(name).is_some()
@@ -2605,6 +2713,19 @@ impl<'a> Checker<'a> {
     /// receiver of a method call, passed as the first argument.
     fn call(&mut self, key: &str, recv: Option<TExpr>, args: &[ast::Expr], span: Span) -> Result<TExpr> {
         let sig = self.fns[key].clone();
+        // An instance of a generic for concrete types calls the methods of
+        // its type arguments through their `where` constraints, which are
+        // structural, like `dyn`: they need no `pub`. Its other calls were
+        // checked with the generic itself.
+        let instance = !self.env.is_empty() && !self.env.iter().any(|(_, t, _)| self.has_param(t));
+        if let Some(ctx) = self.fn_decls.get(key)
+            && !ctx.decl.is_pub
+            && !instance
+            && ctx.module(key) != self.module
+        {
+            let (module, what) = (ctx.module(key), if ctx.owner.is_some() { "method " } else { "" });
+            return err(E0082, span, format!("{what}`{key}` is not `pub` in module `{module}`"));
+        }
         if let Type::ErrorUnion(set, _) = &sig.ret
             && set.starts_with(INFERRED)
             && !sig.is_extern

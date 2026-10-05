@@ -1,0 +1,33 @@
+pub enum Shape {
+    Circle { r: f64 }
+    Square { side: f64 }
+}
+
+pub struct Point { x: i64, y: i64 }
+
+pub fn manhattan(p: Point) i64 {
+    return abs(p.x) + abs(p.y)
+}
+
+pub error ShapeError { Negative }
+
+pub fn check(x: i64) ShapeError!i64 {
+    if x < 0 {
+        return ShapeError.Negative
+    }
+    return x
+}
+
+pub interface Named {
+    fn name(self: *Self) []u8
+}
+
+pub fn Box(comptime T: type) type {
+    return struct {
+        value: T
+
+        pub fn get(self: Self) T {
+            return self.value
+        }
+    }
+}

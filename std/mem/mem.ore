@@ -1,0 +1,28 @@
+// std.mem: memory. `Allocator` and the error set `AllocError` are built
+// into the compiler:
+//
+//     Allocator.create(value) AllocError!*mut T
+//     Allocator.destroy(p: *T)
+//     Allocator.alloc(value, n) AllocError![]mut T
+//     Allocator.free(s: []T)
+//     error AllocError { OutOfMemory }
+
+/// Do `a` and `b` have the same bytes?
+pub fn eql(a: []u8, b: []u8) bool {
+    if a.len != b.len {
+        return false
+    }
+    for i in 0..a.len {
+        if a[i] != b[i] {
+            return false
+        }
+    }
+    return true
+}
+
+/// Copy `src` to the start of `dst`; panics if `dst` is shorter.
+pub fn copy(dst: []mut u8, src: []u8) {
+    for i in 0..src.len {
+        dst[i] = src[i]
+    }
+}

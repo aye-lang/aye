@@ -1,6 +1,8 @@
 // Acceptance (M3): a test that leaks memory fails, and the report names the
 // allocation site.
 
+import std.heap.Arena
+
 struct Node {
     value: i64
     next: ?*mut Node

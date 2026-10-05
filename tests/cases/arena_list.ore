@@ -2,6 +2,11 @@
 // `deinit`. The arena gets its memory from a `General`, which reports leaks
 // in debug mode; this program has none, so stderr stays empty.
 
+import std.heap.Arena
+import std.heap.General
+import std.mem.AllocError
+import std.mem.Allocator
+
 struct Node {
     value: i64
     next: ?*mut Node

@@ -1,9 +1,10 @@
 //! Compiler driver: runs the pipeline and invokes clang.
 
 use crate::diag::{Diag, Error, Fix, Span, json_str, offset};
-use crate::{ast, cgen, lexer, oir, parser, sema};
+use crate::module::{self, SourceFile};
+use crate::{ast, cgen, oir, sema};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,31 +39,83 @@ impl Mode {
 /// At most this many diagnostics are reported.
 const MAX_DIAGS: usize = 50;
 
-/// Run the front end (lexer, parser, sema). Every compile error comes from
-/// here; OIR lowering and C generation cannot fail. Used by `ore check`,
-/// which requires `pub fn main()` unless the file has `test` blocks.
-pub fn check(file_name: &str, src: &str) -> Result<sema::Program, Vec<Diag>> {
-    front_end(file_name, src, None)
+/// The root module of a program: its files, and the directory that
+/// `import` paths start from.
+pub struct Root {
+    pub files: Vec<SourceFile>,
+    pub base: PathBuf,
 }
 
-/// The front end. `need_main` says whether the file must have
+impl Root {
+    /// The root module at `path`: a directory (every `.ore` file in it), or
+    /// a single file, which is a module of its own (the other files in its
+    /// directory are not part of it). Imports are found in the directory.
+    pub fn load(path: &str) -> Result<Root, String> {
+        let p = Path::new(path);
+        if !p.is_dir() {
+            let text = std::fs::read_to_string(p).map_err(|e| format!("cannot read {path}: {e}"))?;
+            return Ok(Root::single(path, &text));
+        }
+        let mut names: Vec<PathBuf> = std::fs::read_dir(p)
+            .map_err(|e| format!("cannot read {path}: {e}"))?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|f| f.is_file() && f.extension().is_some_and(|e| e == "ore"))
+            .collect();
+        names.sort();
+        if names.is_empty() {
+            return Err(format!("{path} has no .ore files"));
+        }
+        let mut files = Vec::new();
+        for f in names {
+            let name = f.to_string_lossy().into_owned();
+            let text = std::fs::read_to_string(&f).map_err(|e| format!("cannot read {name}: {e}"))?;
+            files.push(SourceFile { name, text, std: false });
+        }
+        Ok(Root { files, base: p.to_path_buf() })
+    }
+
+    /// A root module of one file, `name`, with the text `src`.
+    pub fn single(name: &str, src: &str) -> Root {
+        let base = Path::new(name).parent().unwrap_or(Path::new("")).to_path_buf();
+        Root { files: vec![SourceFile { name: name.to_string(), text: src.to_string(), std: false }], base }
+    }
+}
+
+/// The result of the front end: every file of the program (indexed by
+/// `Span::file`) and the checked program or the errors.
+pub struct Checked {
+    pub files: Vec<SourceFile>,
+    pub result: Result<sema::Program, Vec<Diag>>,
+}
+
+/// Run the front end (lexer, parser, module resolution, sema) on a single
+/// file. Used by `ore check` and the tests; requires `pub fn main()` unless
+/// the file has `test` blocks.
+pub fn check(file_name: &str, src: &str) -> Result<sema::Program, Vec<Diag>> {
+    front_end(Root::single(file_name, src), None).result
+}
+
+/// The front end. `need_main` says whether the root module must have
 /// `pub fn main()`; `None` means "unless it has `test` blocks".
 ///
 /// Each stage recovers from errors and reports all of them, sorted by
-/// position. A stage runs only if the previous one had no errors, so a
-/// syntax error never causes follow-up type errors.
-fn front_end(file_name: &str, src: &str, need_main: Option<bool>) -> Result<sema::Program, Vec<Diag>> {
+/// file and position. A stage runs only if the previous one had no errors,
+/// so a syntax error never causes follow-up type errors.
+pub fn front_end(root: Root, need_main: Option<bool>) -> Checked {
+    let (files, ast) = module::load(root.files, &root.base);
+    let names: Vec<String> = files.iter().map(|f| f.name.clone()).collect();
     let diags = |errs: Vec<Error>| {
-        let mut d: Vec<Diag> = errs.into_iter().map(|e| e.with_file(file_name)).collect();
-        d.sort_by_key(|d| (d.span.line, d.span.col));
+        let mut d: Vec<Diag> = errs.into_iter().map(|e| e.with_file(&names)).collect();
+        d.sort_by_key(|d| (d.span.file, d.span.line, d.span.col));
         d.dedup();
         d.truncate(MAX_DIAGS);
         d
     };
-    let toks = lexer::lex(src).map_err(diags)?;
-    let ast = parser::parse(toks).map_err(diags)?;
-    let need_main = need_main.unwrap_or_else(|| !ast.items.iter().any(|i| matches!(i, ast::Item::Test(_))));
-    sema::check(&ast, need_main).map_err(diags)
+    let result = ast.map_err(diags).and_then(|ast| {
+        let need_main = need_main.unwrap_or_else(|| !ast.items.iter().any(|i| matches!(i, ast::Item::Test(_))));
+        sema::check(&ast, need_main).map_err(diags)
+    });
+    Checked { files, result }
 }
 
 /// Apply the fix-its of `diags` to `src`, in order of position: a fix is
@@ -95,23 +148,36 @@ pub fn apply_fixes(src: &str, diags: &[Diag]) -> (String, Vec<(Span, String)>) {
     (out, applied.iter().map(|f| (f.edits[0].start, f.help.clone())).collect())
 }
 
-/// Run the front end, OIR lowering and C generation for an executable;
-/// `test` blocks are left out.
-/// `file_name` is used in diagnostics, `#line` directives and panic messages.
+/// Run the front end, OIR lowering and C generation for an executable of a
+/// single file; see `compile_root`.
 pub fn compile_to_c(file_name: &str, src: &str, mode: Mode) -> Result<String, Vec<Diag>> {
-    let mut typed = front_end(file_name, src, Some(true))?;
+    compile_root(Root::single(file_name, src), mode)
+}
+
+/// Run the front end, OIR lowering and C generation for an executable;
+/// `test` blocks are left out. File names are used in diagnostics, `#line`
+/// directives and panic messages.
+pub fn compile_root(root: Root, mode: Mode) -> Result<String, Vec<Diag>> {
+    let checked = front_end(root, Some(true));
+    let mut typed = checked.result?;
     typed.fns.retain(|f| !sema::is_test(&f.name));
     typed.tests.clear();
     let ir = oir::lower(&typed);
-    Ok(cgen::emit(&ir, file_name, mode != Mode::Fast, mode == Mode::Debug, false))
+    Ok(cgen::emit(&ir, &file_names(&checked.files), mode != Mode::Fast, mode == Mode::Debug, false))
 }
 
-/// Like `compile_to_c`, for a test executable: its argument is the index
-/// of the test to run. Also returns the test names.
-pub fn compile_tests_to_c(file_name: &str, src: &str, mode: Mode) -> Result<(String, Vec<String>), Vec<Diag>> {
-    let typed = front_end(file_name, src, Some(false))?;
+fn file_names(files: &[SourceFile]) -> Vec<String> {
+    files.iter().map(|f| f.name.clone()).collect()
+}
+
+/// Like `compile_root`, for a test executable: its argument is the index
+/// of the test to run. Also returns the test names and the file names.
+pub fn compile_tests_to_c(root: Root, mode: Mode) -> Result<(String, Vec<String>, Vec<String>), Vec<Diag>> {
+    let checked = front_end(root, Some(false));
+    let typed = checked.result?;
     let ir = oir::lower(&typed);
-    Ok((cgen::emit(&ir, file_name, mode != Mode::Fast, mode == Mode::Debug, true), typed.tests))
+    let files = file_names(&checked.files);
+    Ok((cgen::emit(&ir, &files, mode != Mode::Fast, mode == Mode::Debug, true), typed.tests, files))
 }
 
 /// The outcome of one test.
@@ -139,11 +205,11 @@ pub enum TestError {
     Run(String),
 }
 
-/// `ore test`: compile the tests of a file and run each one whose name
-/// contains `filter` in its own process, so that a panic ends only that
-/// test.
-pub fn run_tests(file_name: &str, src: &str, mode: Mode, filter: &str) -> Result<Vec<TestResult>, TestError> {
-    let (c, names) = compile_tests_to_c(file_name, src, mode).map_err(TestError::Compile)?;
+/// `ore test`: compile the tests of the root module and run each one whose
+/// name contains `filter` in its own process, so that a panic ends only
+/// that test.
+pub fn run_tests(root: Root, mode: Mode, filter: &str) -> Result<Vec<TestResult>, TestError> {
+    let (c, names, files) = compile_tests_to_c(root, mode).map_err(TestError::Compile)?;
     let exe = std::env::temp_dir().join(format!("ore-test-{}", std::process::id()));
     cc(&c, &exe, mode).map_err(TestError::Run)?;
     let mut results = Vec::new();
@@ -160,7 +226,7 @@ pub fn run_tests(file_name: &str, src: &str, mode: Mode, filter: &str) -> Result
         };
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
         let passed = out.status.success();
-        let mut failures = parse_failures(file_name, &stderr);
+        let mut failures = parse_failures(&files, &stderr);
         if !passed && failures.is_empty() {
             use std::os::unix::process::ExitStatusExt;
             failures.push(Failure::Crash(match (out.status.code(), out.status.signal()) {
@@ -178,11 +244,11 @@ pub fn run_tests(file_name: &str, src: &str, mode: Mode, filter: &str) -> Result
 /// The failures that a test process reported on stderr: lines
 /// `file:L:C: panic: ...`, `file:L:C: assertion failed: ...`,
 /// `file:L:C: leak: ...`, and `error: Name` followed by the error return
-/// trace.
-fn parse_failures(file_name: &str, stderr: &str) -> Vec<Failure> {
+/// trace. `files` are the program's files.
+fn parse_failures(files: &[String], stderr: &str) -> Vec<Failure> {
     // `L:C` and the rest of a line that starts with `file:`.
     let pos = |l: &str| -> Option<(u32, u32, String)> {
-        let rest = l.strip_prefix(file_name)?.strip_prefix(':')?;
+        let rest = files.iter().find_map(|f| l.strip_prefix(f.as_str())?.strip_prefix(':'))?;
         let mut parts = rest.splitn(3, ':');
         let line = parts.next()?.parse().ok()?;
         let col = parts.next()?.parse().ok()?;

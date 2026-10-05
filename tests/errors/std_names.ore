@@ -1,0 +1,11 @@
+// `Allocator`, `AllocError`, `General` and `Arena` are in std: they must be
+// imported (`import std.mem.Allocator`) or written `std.heap.General`.
+
+fn make(alloc: Allocator) AllocError!*mut i64 {
+    return alloc.create(1 as i64)
+}
+
+pub fn main() {
+    var gpa = General.init()
+    defer gpa.deinit()
+}

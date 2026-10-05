@@ -1,0 +1,2 @@
+unknown/main.ore:1:8: error[E0081]: cannot find module `nosuch` (no directory `unknown/nosuch`)
+unknown/main.ore:2:12: error[E0081]: module `std` has no `nothere`

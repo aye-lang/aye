@@ -129,8 +129,10 @@ E0006 = 6 {
 }
 E0007 = 7 {
     "not yet supported",
-    "The feature is part of Ore but not of the stage0 compiler yet (for example `import`, `extern struct` or global variables), or the keyword is used where stage0 does not support it (`comptime` only marks a type parameter, `comptime T: type`). Write the program without it.",
-    r#"import std
+    "The feature is part of Ore but not of the stage0 compiler yet (for example `extern struct` or global variables), or the keyword is used where stage0 does not support it (`comptime` only marks a type parameter, `comptime T: type`). Write the program without it.",
+    r#"extern struct Point {
+    x: i32
+}
 
 pub fn main() {
 }
@@ -1436,7 +1438,9 @@ pub fn main() {
 E0075 = 75 {
     "test builtin outside a `test` block",
     "`@testAllocator()` is the leak-checked allocator of a `test` block, so it can only be used in one. Other functions take an `Allocator` parameter; pass it the test allocator.",
-    r#"fn make(n: i64) AllocError!*mut i64 {
+    r#"import std.mem.AllocError
+
+fn make(n: i64) AllocError!*mut i64 {
     return @testAllocator().create(n)
 }
 
@@ -1444,7 +1448,10 @@ test "make" {
     let p = try make(1)
 }
 "#,
-    r#"fn make(alloc: Allocator, n: i64) AllocError!*mut i64 {
+    r#"import std.mem.AllocError
+import std.mem.Allocator
+
+fn make(alloc: Allocator, n: i64) AllocError!*mut i64 {
     return alloc.create(n)
 }
 
@@ -1600,6 +1607,153 @@ pub fn main() {
 }
 "#,
 }
+E0081 = 81 {
+    "unknown module",
+    "`import a.b` finds the module `a.b` in the directory `a/b` next to the root module (std is built in), and a path `m.name` needs an item or submodule `name` of the module `m`. A module that is used must be imported in the file: `import std` makes `std.fs.open` available, `import std.fs` makes `fs.open` available.",
+    r#"import std
+
+pub fn main() {
+    let out = std.files.stdout()
+}
+"#,
+    r#"import std
+
+pub fn main() {
+    let out = std.fs.stdout()
+}
+"#,
+}
+E0082 = 82 {
+    "item is not `pub`",
+    "Only `pub` items of a module (functions, structs, enums, error sets, interfaces, and methods) can be used from another module. Fields and variants are visible wherever their type is. Declare the item `pub` in its module.",
+    r#"// file: main.ore
+import util
+
+pub fn main() {
+    @println(util.twice(2))
+}
+
+// file: util/util.ore
+fn twice(x: i64) i64 {
+    return 2 * x
+}
+"#,
+    r#"// file: main.ore
+import util
+
+pub fn main() {
+    @println(util.twice(2))
+}
+
+// file: util/util.ore
+pub fn twice(x: i64) i64 {
+    return 2 * x
+}
+"#,
+}
+E0083 = 83 {
+    "import cycle",
+    "Modules cannot import each other, directly or through other modules. Move what both modules need into a third module that both import.",
+    r#"// file: main.ore
+import a
+
+pub fn main() {
+    a.f()
+}
+
+// file: a/a.ore
+import b
+
+pub fn f() {
+    b.g()
+}
+
+pub fn h() {
+}
+
+// file: b/b.ore
+import a
+
+pub fn g() {
+    a.h()
+}
+"#,
+    r#"// file: main.ore
+import a
+
+pub fn main() {
+    a.f()
+}
+
+// file: a/a.ore
+import b
+
+pub fn f() {
+    b.g()
+}
+
+// file: b/b.ore
+pub fn g() {
+    h()
+}
+
+pub fn h() {
+}
+"#,
+}
+E0084 = 84 {
+    "std name used without an import",
+    "`Allocator` and `AllocError` are in `std.mem`, and `General` and `Arena` in `std.heap`. Import the name (`import std.mem.Allocator`) or write its path after `import std` (`std.heap.General.init()`). The fix-it adds the import.",
+    r#"fn make(alloc: Allocator) AllocError!*mut i64 {
+    return alloc.create(1 as i64)
+}
+
+pub fn main() {
+}
+"#,
+    r#"import std.mem.AllocError
+import std.mem.Allocator
+
+fn make(alloc: Allocator) AllocError!*mut i64 {
+    return alloc.create(1 as i64)
+}
+
+pub fn main() {
+}
+"#,
+}
+E0085 = 85 {
+    "module used as a value or type",
+    "A module name is not a value, a type or a function: use one of its items, `std.fs.stdout()`. A path goes through modules only: in `a.b.C`, `a` and `a.b` are modules.",
+    r#"import std
+
+pub fn main() {
+    let fs = std.fs
+}
+"#,
+    r#"import std
+
+pub fn main() {
+    let out = std.fs.stdout()
+}
+"#,
+}
+E0086 = 86 {
+    "invalid `std.log` format",
+    "`std.log.err(format, args...)` and `std.log.info(...)` take a string literal and one argument for each `{}` in it. An argument is an integer, a float, a `bool`, a `[]u8` or an error value (printed as its name).",
+    r#"import std
+
+pub fn main() {
+    std.log.info("{} of {}", 3)
+}
+"#,
+    r#"import std
+
+pub fn main() {
+    std.log.info("{} of {}", 3, 4)
+}
+"#,
+}
 }
 
 #[cfg(test)]
@@ -1615,11 +1769,31 @@ mod tests {
         }
     }
 
+    /// Check an example. One with `// file: path` lines is several files:
+    /// they are written to a new directory, and `main.ore` is checked.
+    fn check(name: &str, text: &str) -> Result<(), Vec<crate::diag::Diag>> {
+        if !text.starts_with("// file: ") {
+            return driver::check(&format!("{name}.ore"), text).map(|_| ());
+        }
+        let dir = std::env::temp_dir().join(format!("ore-codes-{}-{name}-{}", std::process::id(), text.len()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for part in text.split("// file: ").skip(1) {
+            let (path, body) = part.split_once('\n').unwrap();
+            let p = dir.join(path);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, body).unwrap();
+        }
+        let main = dir.join("main.ore");
+        let r = driver::front_end(driver::Root::load(main.to_str().unwrap()).unwrap(), None).result.map(|_| ());
+        let _ = std::fs::remove_dir_all(&dir);
+        r
+    }
+
     /// Each wrong example reports its code, and each fix compiles.
     #[test]
     fn examples_are_accurate() {
         for info in ALL {
-            match driver::check("wrong.ore", info.wrong) {
+            match check("wrong", info.wrong) {
                 Ok(_) => panic!("{}: the wrong example compiles", info.code),
                 Err(ds) => assert!(
                     ds.iter().any(|d| d.code == info.code),
@@ -1628,7 +1802,7 @@ mod tests {
                     ds.iter().map(|d| d.to_string()).collect::<Vec<_>>()
                 ),
             }
-            if let Err(ds) = driver::check("fix.ore", info.fix) {
+            if let Err(ds) = check("fix", info.fix) {
                 panic!("{}: the fix does not compile: {:?}", info.code, ds.iter().map(|d| d.to_string()).collect::<Vec<_>>());
             }
         }

@@ -32,28 +32,35 @@ keyword     = "fn" | "let" | "var" | "pub" | "import" | "struct" | "enum"
             | "while" | "break" | "continue" | "return" | "defer" | "errdefer"
             | "try" | "catch" | "comptime" | "where" | "as" | "test"
             | "mut" | "extern" ;
-(* `import` is reserved; stage0 reports "... is not yet supported".
-   `comptime` appears only before a parameter and `where` only after a
+(* `comptime` appears only before a parameter and `where` only after a
    return type; elsewhere they are errors.
-   `true`, `false`, `null`, `in`, `Self`, `type`, the primitive type names,
-   and `Allocator`, `General`, `Arena` and `AllocError` are predeclared
-   identifiers, not keywords. *)
+   `true`, `false`, `null`, `in`, `Self`, `type` and the primitive type
+   names are predeclared identifiers, not keywords. `Allocator`,
+   `AllocError`, `General` and `Arena` are items of std (`std.mem`,
+   `std.heap`) and must be imported. *)
 
 (* --------------------------------------------------------- top level *)
 
-file        = { NEWLINE } , { item , ( NEWLINE | EOF ) , { NEWLINE } } ;
+file        = { NEWLINE } , { ( import | item ) , ( NEWLINE | EOF ) , { NEWLINE } } ;
 item        = fn_decl | extern_fn | struct_decl | enum_decl | error_decl
             | interface_decl | test_decl ;
+
+import      = "import" ident { "." ident } ;
+               (* binds its last name in the file: a module (directory
+                  a/b under the root module's directory, or a std module),
+                  or a single pub item of a module (import std.mem.Allocator) *)
+path        = ident { "." ident } ;
+               (* a name, or an item of a module: std.fs.File *)
 
 fn_decl     = [ "pub" ] "fn" ident "(" [ params ] ")" [ ret_type ] [ where ] block ;
 extern_fn   = [ "pub" ] "extern" "fn" ident "(" [ params ] ")" [ type ] ;
 ret_type    = type
-            | [ ident ] "!" ( type | "void" ) ;   (* error union E!T; !T infers the set
+            | [ path ] "!" ( type | "void" ) ;   (* error union E!T; !T infers the set
                                                      (not allowed on a `pub fn` other than main,
                                                      nor on a generic) *)
 params      = param { "," param } [ "," ] ;
 param       = [ "comptime" ] ident ":" type ;    (* comptime T: type; only on top-level fns *)
-where       = "where" ident ":" ident { "," ident ":" ident } ;
+where       = "where" ident ":" path { "," ident ":" path } ;
                (* T: I -- the comptime parameter T implements interface I;
                   write T: A, T: B for two interfaces *)
 (* A fn with comptime parameters is generic. A fn whose return type is
@@ -86,20 +93,20 @@ test_decl   = "test" string_lit block ;   (* the body is like a `!void` function
 
 error_decl  = [ "pub" ] "error" ident
               ( "{" { NEWLINE } ident { ( "," | NEWLINE ) { NEWLINE } ident } [ "," ] { NEWLINE } "}"
-              | "=" ident { "||" ident } ) ;  (* merged set: every error of each part *)
+              | "=" path { "||" path } ) ;  (* merged set: every error of each part *)
 
 (* ------------------------------------------------------------- types *)
 
-type        = ident                    (* i8 i16 i32 i64 isize u8 u16 u32 u64
+type        = path                     (* i8 i16 i32 i64 isize u8 u16 u32 u64
                                           usize f32 f64 bool, a struct or an enum,
-                                          a comptime parameter *)
-            | ident "(" [ type { "," type } [ "," ] ] ")"   (* instance of a type function  Pool(Node) *)
+                                          a comptime parameter, mod.Name *)
+            | path "(" [ type { "," type } [ "," ] ] ")"    (* instance of a type function  Pool(Node) *)
             | "[" int_lit "]" type     (* fixed array      [N]T *)
             | "[" "]" [ "mut" ] type   (* slice            []T, []mut T (writable elements) *)
             | "[" "*" "]" type         (* C pointer (FFI)  [*]T *)
             | "*" [ "mut" ] type       (* pointer          *T, *mut T *)
             | "?" type                 (* optional         ?T   *)
-            | "dyn" ident ;            (* interface value  dyn I *)
+            | "dyn" path ;             (* interface value  dyn I *)
 (* an ident can also name an error set; its values are written Set.Name *)
 
 (* -------------------------------------------------------- statements *)
@@ -128,7 +135,12 @@ header_expr = expr ;
 
 (* ------------------------------------------------------- expressions *)
 
-(* Precedence, lowest to highest; binary operators are left-associative
+(* A postfix chain that starts with a module name is resolved as a path:
+   std.fs.open(p) calls the function open of module std.fs, and
+   std.heap.General.init() calls init of the type std.heap.General.
+   Slicing a C pointer [*]T needs both bounds: p[0..n].
+
+   Precedence, lowest to highest; binary operators are left-associative
    except comparisons, which do not chain (`a < b < c` is an error).
      1  ||
      2  &&
@@ -159,15 +171,17 @@ postfix     = primary { "." ident
 primary     = int_lit | float_lit | string_lit | char_lit
             | "true" | "false" | "null"
             | ident
-            | ident "." ident                              (* variant without payload, or error *)
-            | ident "." ident "{" [ field_init { "," field_init } [ "," ] ] "}"   (* variant literal *)
+            | path "." ident                               (* variant without payload, or error *)
+            | path "." ident "{" [ field_init { "," field_init } [ "," ] ] "}"
+                                                           (* variant literal, or a struct literal
+                                                              mod.Name { ... } of another module *)
             | match_expr
             | ident "(" [ args ] ")"                       (* call; also F(T) naming a type,
                                                               as in F(T).init() *)
             | builtin "(" [ args ] ")"                     (* @print @println @expect
                                                               @expectEqual @testAllocator *)
             | ident "{" [ field_init { "," field_init } [ "," ] ] "}"   (* struct literal *)
-            | ident "(" [ args ] ")" "{" [ field_init { "," field_init } [ "," ] ] "}"
+            | path "(" [ args ] ")" "{" [ field_init { "," field_init } [ "," ] ] "}"
                                                            (* literal of a type function's struct:
                                                               Pair(i64) { ... }; the args are types *)
             | "[" int_lit "]" type "{" [ args ] "}"        (* array literal *)
