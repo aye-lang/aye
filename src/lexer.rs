@@ -389,6 +389,9 @@ impl Lexer {
         }
         if is_float {
             let v: f64 = digits.parse().map_err(|_| Error::new(span, "invalid float literal"))?;
+            if !v.is_finite() {
+                return Err(Error::new(span, "float literal is out of range for f64"));
+            }
             Ok(Tok::Float(v))
         } else {
             let v = u64::from_str_radix(&digits, radix)
