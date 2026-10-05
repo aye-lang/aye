@@ -1049,6 +1049,10 @@ end. The edits of one diagnostic are applied together.
   `@print` of a `u8` writes its number (print a one-byte slice instead).
 - `match` is only for enums and errors; no `switch`, no matching on
   integers, characters or strings.
+- `if` is a statement, not an expression: `let x = if c { 1 } else { 2 }`
+  is an error. Declare `var x = 2` and assign in the `if`.
+- A function with a return type needs a `return` at the end of every path;
+  a `while true { }` loop does not count, so add a final `return` after it.
 - Enum values are always qualified: `Color.Red`, never `.Red` (patterns use
   `.Red`). Enums and structs have no `==`.
 - An error union cannot be stored: `let r = f()` for `f() E!T` is an error;
