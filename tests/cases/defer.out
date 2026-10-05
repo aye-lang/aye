@@ -1,0 +1,14 @@
+early: inner defer
+early: outer defer
+1
+early: inner defer
+early: after block
+early: outer defer
+2
+body
+end of iteration 0
+end of iteration 1
+end of iteration 2
+main: body done
+main: first
+main: last

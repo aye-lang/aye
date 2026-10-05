@@ -1,0 +1,5 @@
+pub fn main() {
+    let big: i32 = 300
+    @println(big as i64)
+    @println(big as u8)
+}

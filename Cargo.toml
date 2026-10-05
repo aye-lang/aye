@@ -5,3 +5,7 @@ edition = "2024"
 description = "Stage0 compiler for the Ore systems language (emits C)"
 
 [dependencies]
+
+[[test]]
+name = "golden"
+harness = false

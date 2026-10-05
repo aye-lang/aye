@@ -1,0 +1,48 @@
+fn side(tag: i32, v: bool) bool {
+    @print("side ")
+    @println(tag)
+    return v
+}
+
+fn square(x: i64) i64 {
+    return x * x
+}
+
+pub fn main() {
+    // Untyped literals take the type of the other operand.
+    let a: i32 = 7
+    let b = a * 6 - 2
+    @println(b)
+    @println(b / 3)
+    @println(b % 3)
+    @println(-b)
+    // Default literal type is i64.
+    let big = 3000000000
+    @println(square(big))
+    // Wrapping operators never trap.
+    let x: u8 = 250
+    @println(x +% 10)
+    @println(x *% 2)
+    let y: i8 = -128
+    @println(y -% 1)
+    var w: u32 = 0
+    w -%= 1
+    @println(w)
+    // Casts are explicit.
+    @println(a as f64 / 2.0)
+    @println(2.75 as i32)
+    @println(x as i32 + 1000)
+    let f: f32 = 1.5
+    @println(f * 2.0)
+    // Comparisons and logic.
+    @println(a == 7 && b != 0)
+    @println(!(a < 3) || false)
+    @println(1 <= 1)
+    // && and || short-circuit, left to right.
+    @println(side(1, false) && side(2, true))
+    @println(side(3, true) || side(4, true))
+    @println(side(5, true) && side(6, false))
+    // Character literals are untyped integers.
+    let ch: u8 = 'A'
+    @println(ch + 2)
+}

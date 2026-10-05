@@ -1,0 +1,40 @@
+fn early(flag: bool) i32 {
+    defer @println("early: outer defer")
+    var x: i32 = 1
+    {
+        defer @println("early: inner defer")
+        if flag {
+            // `x` is read before the deferred code runs.
+            defer x = 99
+            return x
+        }
+        x = 2
+    }
+    @println("early: after block")
+    return x
+}
+
+fn loop_defers() {
+    for i in 0..4 {
+        defer {
+            @print("end of iteration ")
+            @println(i)
+        }
+        if i == 1 {
+            continue
+        }
+        if i == 2 {
+            break
+        }
+        @println("body")
+    }
+}
+
+pub fn main() {
+    defer @println("main: last")
+    defer @println("main: first")
+    @println(early(true))
+    @println(early(false))
+    loop_defers()
+    @println("main: body done")
+}

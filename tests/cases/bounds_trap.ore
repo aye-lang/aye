@@ -1,0 +1,9 @@
+fn get(xs: [3]i32, i: usize) i32 {
+    return xs[i]
+}
+
+pub fn main() {
+    let a = [3]i32{1, 2, 3}
+    @println(get(a, 2))
+    @println(get(a, 3))
+}

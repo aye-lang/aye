@@ -1,0 +1,7 @@
+fn f(x: i32) i32 {
+    return x
+}
+
+pub fn main() {
+    let b = f(true)
+}

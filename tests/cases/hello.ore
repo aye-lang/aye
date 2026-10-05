@@ -1,0 +1,7 @@
+// Hello world through libc's `puts`, plus the `@println` builtin.
+extern fn puts(s: [*]u8) i32
+
+pub fn main() {
+    puts("hello, world".ptr)
+    @println("hello from @println")
+}

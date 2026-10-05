@@ -1,0 +1,19 @@
+struct Pair { a: i32, b: i32 }
+
+fn note(v: i32) i32 {
+    @print("eval ")
+    @println(v)
+    return v
+}
+
+fn three(x: i32, y: i32, z: i32) i32 {
+    return x + y + z
+}
+
+pub fn main() {
+    // Arguments, operands and literal fields evaluate left to right.
+    @println(three(note(1), note(2), note(3)))
+    @println(note(4) * note(5))
+    let p = Pair { b: note(6), a: note(7) }
+    @println(p.a - p.b)
+}

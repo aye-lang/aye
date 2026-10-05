@@ -1,0 +1,51 @@
+pub fn main() {
+    var i = 0
+    var sum = 0
+    while i < 10 {
+        i += 1
+        if i % 2 == 0 {
+            continue
+        }
+        if i > 7 {
+            break
+        }
+        sum += i
+    }
+    @println(sum)
+
+    // `for` iterates a half-open range; the bound is evaluated once.
+    var n: u32 = 3
+    for k in 0..n {
+        n += 1
+        @print(k)
+        @print(" ")
+    }
+    @println()
+
+    for a in 1..4 {
+        for b in 1..4 {
+            if b == a {
+                continue
+            }
+            if b > 2 {
+                break
+            }
+            @print(a * 10 + b)
+            @print(" ")
+        }
+    }
+    @println()
+
+    var empty = 0
+    for z in 5..2 {
+        empty += 1
+    }
+    @println(empty)
+
+    let words = [3]i32{1, 2, 3}
+    var total: i32 = 0
+    for j in 0..words.len {
+        total += words[j]
+    }
+    @println(total)
+}

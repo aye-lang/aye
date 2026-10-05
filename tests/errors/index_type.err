@@ -1,0 +1,1 @@
+index_type.ore:4:16: error: index must be an unsigned integer, found `i32`

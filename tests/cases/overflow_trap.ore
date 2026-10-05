@@ -1,0 +1,6 @@
+pub fn main() {
+    var x: i32 = 2147483600
+    @println("before")
+    x = x + 100
+    @println("not reached")
+}

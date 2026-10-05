@@ -1,0 +1,37 @@
+struct Point { x: i32, y: i32 }
+
+// Fields may also be separated by newlines.
+struct Rect {
+    min: Point
+    max: Point
+    tags: [2]u8
+}
+
+fn area(r: Rect) i32 {
+    return (r.max.x - r.min.x) * (r.max.y - r.min.y)
+}
+
+fn moved(p: Point, dx: i32) Point {
+    return Point { y: p.y, x: p.x + dx }
+}
+
+pub fn main() {
+    var r = Rect {
+        min: Point { x: 1, y: 2 },
+        max: Point { x: 4, y: 6 },
+        tags: [2]u8{'a', 'b'},
+    }
+    @println(area(r))
+    r.max.x = 11
+    r.min.y += 1
+    @println(area(r))
+    let p = moved(r.min, 5)
+    @println(p.x)
+    @println(p.y)
+    // Structs are values: copying does not alias.
+    var q = p
+    q.x = 100
+    @println(p.x)
+    @println(q.x)
+    @println(r.tags[1])
+}

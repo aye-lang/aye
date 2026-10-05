@@ -1,0 +1,1 @@
+arg_type.ore:6:15: error: mismatched types: expected `i32`, found `bool`

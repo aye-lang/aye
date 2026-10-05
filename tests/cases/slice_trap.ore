@@ -1,0 +1,6 @@
+pub fn main() {
+    let a = [4]u8{1, 2, 3, 4}
+    let n: usize = 5
+    let s = a[1..n]
+    @println(s.len)
+}

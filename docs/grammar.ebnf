@@ -1,0 +1,119 @@
+(* Ore stage0 grammar: the subset implemented by the stage0 compiler.
+   This is the starting point of the P0 formal grammar.
+
+   Notation: ISO-style EBNF.  { x } = zero or more, [ x ] = optional,
+   "..." = literal token.  Whitespace and `//` line comments separate tokens.
+
+   NEWLINE is the statement terminator.  It is not written in the source:
+   the lexer inserts it (Go rule) at a line break or at end of file when the
+   last token on the line is one of
+       identifier, integer/float/string/char literal,
+       ")"  "]"  "}"  "return"  "break"  "continue".
+   An explicit ";" is a lexical error. *)
+
+(* ------------------------------------------------------------ lexical *)
+
+ident       = letter , { letter | digit } ;          (* not a keyword *)
+letter      = "A".."Z" | "a".."z" | "_" ;
+digit       = "0".."9" ;
+int_lit     = dec_lit | "0x" hex_digit { hex_digit | "_" }
+                      | "0o" oct_digit { oct_digit | "_" }
+                      | "0b" bin_digit { bin_digit | "_" } ;
+dec_lit     = digit , { digit | "_" } ;
+float_lit   = dec_lit "." dec_lit [ exponent ] | dec_lit exponent ;
+exponent    = ( "e" | "E" ) [ "+" | "-" ] dec_lit ;
+string_lit  = '"' , { char | escape } , '"' ;          (* single line, UTF-8 *)
+char_lit    = "'" , ( char | escape ) , "'" ;           (* one code point *)
+escape      = "\n" | "\t" | "\r" | "\0" | "\\" | '\"' | "\'" | "\x" hex_digit hex_digit ;
+builtin     = "@" ident ;
+
+keyword     = "fn" | "let" | "var" | "pub" | "import" | "struct" | "enum"
+            | "error" | "interface" | "dyn" | "match" | "if" | "else" | "for"
+            | "while" | "break" | "continue" | "return" | "defer" | "errdefer"
+            | "try" | "catch" | "comptime" | "where" | "as" | "test"
+            | "mut" | "extern" ;
+(* import enum error interface dyn match errdefer try catch comptime where
+   test mut are reserved; stage0 reports "... is not yet supported".
+   `true`, `false`, `in` and the primitive type names are predeclared
+   identifiers, not keywords. *)
+
+(* --------------------------------------------------------- top level *)
+
+file        = { NEWLINE } , { item , ( NEWLINE | EOF ) , { NEWLINE } } ;
+item        = fn_decl | extern_fn | struct_decl ;
+
+fn_decl     = [ "pub" ] "fn" ident "(" [ params ] ")" [ type ] block ;
+extern_fn   = [ "pub" ] "extern" "fn" ident "(" [ params ] ")" [ type ] ;
+params      = param { "," param } [ "," ] ;
+param       = ident ":" type ;
+
+struct_decl = [ "pub" ] "struct" ident "{" { NEWLINE }
+              [ field { ( "," | NEWLINE ) { NEWLINE } field } [ "," ] { NEWLINE } ] "}" ;
+field       = ident ":" type ;
+
+(* ------------------------------------------------------------- types *)
+
+type        = ident                    (* i8 i16 i32 i64 isize u8 u16 u32 u64
+                                          usize f32 f64 bool, or a struct *)
+            | "[" int_lit "]" type     (* fixed array      [N]T *)
+            | "[" "]" type             (* slice            []T  *)
+            | "[" "*" "]" type ;       (* C pointer (FFI)  [*]T *)
+
+(* -------------------------------------------------------- statements *)
+
+block       = "{" { NEWLINE } [ stmt { NEWLINE { NEWLINE } stmt } { NEWLINE } ] "}" ;
+
+stmt        = let_stmt | if_stmt | while_stmt | for_stmt
+            | "break" | "continue" | "return" [ expr ]
+            | "defer" ( block | simple_stmt )
+            | block
+            | simple_stmt ;
+
+let_stmt    = ( "let" | "var" ) ident [ ":" type ] "=" expr ;
+if_stmt     = "if" header_expr block [ "else" ( if_stmt | block ) ] ;
+               (* "else" must follow "}" on the same line *)
+while_stmt  = "while" header_expr block ;
+for_stmt    = "for" ident "in" header_expr ".." header_expr block ;
+               (* half-open range lo..hi; "in" is a contextual identifier *)
+simple_stmt = expr [ assign_op expr ] ;   (* a bare expr must be a call *)
+assign_op   = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "+%=" | "-%=" | "*%=" ;
+
+(* header_expr is expr, except that `Name {` is not parsed as a struct
+   literal at its top level (write `(Name { ... })` there). *)
+header_expr = expr ;
+
+(* ------------------------------------------------------- expressions *)
+
+(* Precedence, lowest to highest; binary operators are left-associative
+   except comparisons, which do not chain (`a < b < c` is an error).
+     1  ||
+     2  &&
+     3  == != < <= > >=
+     4  + - +% -%
+     5  * / % *%
+     6  as            (postfix cast, binds looser than unary: -x as f32 == (-x) as f32)
+     7  - !           (unary prefix)
+     8  call, index, slice, field  *)
+
+expr        = or_expr ;
+or_expr     = and_expr { "||" and_expr } ;
+and_expr    = cmp_expr { "&&" cmp_expr } ;
+cmp_expr    = add_expr [ cmp_op add_expr ] ;
+cmp_op      = "==" | "!=" | "<" | "<=" | ">" | ">=" ;
+add_expr    = mul_expr { ( "+" | "-" | "+%" | "-%" ) mul_expr } ;
+mul_expr    = cast_expr { ( "*" | "/" | "%" | "*%" ) cast_expr } ;
+cast_expr   = unary { "as" type } ;
+unary       = ( "-" | "!" ) unary | postfix ;
+postfix     = primary { "." ident
+                      | "[" expr "]"
+                      | "[" [ expr ] ".." [ expr ] "]" } ;
+primary     = int_lit | float_lit | string_lit | char_lit
+            | "true" | "false"
+            | ident
+            | ident "(" [ args ] ")"                       (* call *)
+            | builtin "(" [ args ] ")"                     (* @print, @println *)
+            | ident "{" [ field_init { "," field_init } [ "," ] ] "}"   (* struct literal *)
+            | "[" int_lit "]" type "{" [ args ] "}"        (* array literal *)
+            | "(" expr ")" ;
+args        = expr { "," expr } [ "," ] ;
+field_init  = ident ":" expr ;
