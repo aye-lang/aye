@@ -64,6 +64,7 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
 ## Types and checking
 
 - **Untyped literals:** an integer or char literal takes the type that the context expects. An integer literal can also become a float type. With no context, an integer literal is `i64` and a float literal is `f64`. In a binary operation, a literal operand takes the type of the other operand. A literal that does not fit its type is a compile error.
+- **A `for` range of two untyped literals is `usize`** (`0..4`), as in Zig; if one bound has a type, the literal bound takes it. Loop counters are mostly indices, and the M5 gate test's only compile error was `for k in 0..4` used with a `usize`. `-1..3` is then an error; a signed counter is written `(0 as i64)..4`. Elsewhere an untyped literal with no context stays `i64`.
 - **Char literals** (`'a'`) are untyped integer constants whose value is the Unicode code point.
 - **String literals** have type `[]u8`. They are UTF-8, and the bytes are followed by a NUL that `len` does not count, so `"text".ptr` can be passed to C as `[*]u8`.
 - **Index and slice bounds** must have an unsigned integer type (`u8` to `u64`, `usize`). Untyped literals become `usize`. Signed indices need `as`, so a negative index is never possible. The design doc's examples index with a `u32`.

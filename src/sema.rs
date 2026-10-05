@@ -1807,7 +1807,16 @@ impl<'a> Checker<'a> {
                 TStmtKind::While { cond: cond?, body }
             }
             StmtKind::For { var, var_span, lo, hi, body } => {
-                let range = self.operand_pair(lo, hi, None).and_then(|(lo, hi)| {
+                // A range of two integer literals is `usize`: loop counters are mostly indices.
+                let int_lit = |e: &ast::Expr| is_untyped(e) && !matches!(strip_parens(e).kind, ExprKind::Float(_));
+                let hint = (int_lit(lo) && int_lit(hi)).then_some(&USIZE);
+                let pair = self.operand_pair(lo, hi, hint).map_err(|mut e| {
+                    if hint.is_some() && e.code == E0024 {
+                        e.msg += " (a range of two literals is `usize`; for a signed counter write `(0 as i64)..n`)";
+                    }
+                    e
+                });
+                let range = pair.and_then(|(lo, hi)| {
                     if lo.ty != hi.ty {
                         return err(E0023, hi.span, format!("range bounds have different types: `{}` and `{}`", lo.ty, hi.ty));
                     }

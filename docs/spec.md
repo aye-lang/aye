@@ -318,7 +318,8 @@ a `*S` or `*mut S` where `dyn I` is expected (if struct `S` implements `I`).
 
 An integer or char literal takes the type the context expects (a typed
 `let`, a parameter, the other operand of a binary operator, an index). With
-no context it is `i64`; a float literal is `f64`. An integer literal can
+no context it is `i64`, except that a range of two literals is `usize`
+(§6); a float literal is `f64`. An integer literal can
 become a float type. A literal that does not fit its type is a compile
 error. So `let n = 5` is `i64`, `let m: u8 = 5` is `u8`, and `x + 1` has
 the type of `x`.
@@ -362,11 +363,10 @@ pub fn main() {
   (no truthiness). Braces are required.
 - `while cond { }`. There is no `do`/`loop`; use `while true { }`.
 - `for i in lo..hi { }` is the only `for`: `i` goes from `lo` up to `hi - 1`
-  (half-open), both bounds have the same integer type (`0..4` is `i64`,
-  `0..s.len` is `usize`), `hi` is evaluated once, and `i` is immutable. To
-  iterate a slice: `for i in 0..s.len { }`. A range of two literals is
-  always `i64`, even when `i` is later added to a `usize`; write
-  `0..(4 as usize)` to get a `usize` counter.
+  (half-open), both bounds have the same integer type (`0..s.len` is
+  `usize`), `hi` is evaluated once, and `i` is immutable. To iterate a
+  slice: `for i in 0..s.len { }`. A range of two literals is `usize`, so
+  `-1..3` is an error; for a signed counter write `(0 as i64)..4`.
 - `break` and `continue` apply to the innermost loop.
 - `return`, `return value`.
 - `defer stmt` runs `stmt` when the enclosing block is left: at its end,
@@ -649,7 +649,7 @@ pub fn main() !void {
     let a = arena.allocator()
 
     var head: ?*mut Node = null
-    for i in 0..3 {
+    for i in (0 as i64)..3 {
         head = try push(a, head, i)
     }
     var cur = head
@@ -1074,8 +1074,8 @@ end. The edits of one diagnostic are applied together.
 - Every `var` needs an initializer: `var n: usize = 0`. No zero values.
 - No implicit integer widening: `a + b` needs equal types; convert with
   `as`. Indices must be unsigned (`usize`); `.len` is `usize`.
-- `for i in 0..4` gives an `i64` (Zig's is `usize`); write
-  `0..(4 as usize)` when `i` is used with `.len` or as an index.
+- `for i in 0..4` gives a `usize` (as in Zig; Go's `range 4` gives
+  `int`); write `(0 as i64)..4` for a signed counter.
 - `for` only ranges over integers: `for i in 0..xs.len`. No `for x in xs`,
   no `for (xs) |x|`, no C-style `for`.
 - String literals are `[]u8` and read-only; there is no `+` on strings, no
