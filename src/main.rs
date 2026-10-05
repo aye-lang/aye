@@ -1,3 +1,4 @@
+use ore::diag;
 use ore::driver::{self, Mode};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -5,22 +6,25 @@ use std::process::{Command, ExitCode};
 const USAGE: &str = "usage:
   ore build <file.ore> [-o out] [--mode debug|safe|fast]
   ore run <file.ore> [--mode debug|safe|fast]
-  ore emit-c <file.ore> [--mode debug|safe|fast]";
+  ore emit-c <file.ore> [--mode debug|safe|fast]
+  ore check <file.ore> [--json]";
 
 struct Args {
     cmd: String,
     file: String,
     out: Option<String>,
     mode: Mode,
+    json: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut it = std::env::args().skip(1);
     let cmd = it.next().ok_or("missing command")?;
-    let (mut file, mut out, mut mode) = (None, None, Mode::Debug);
+    let (mut file, mut out, mut mode, mut json) = (None, None, Mode::Debug, false);
     while let Some(a) = it.next() {
         match a.as_str() {
             "-o" if cmd == "build" => out = Some(it.next().ok_or("`-o` needs a path")?),
+            "--json" if cmd == "check" => json = true,
             "--mode" => {
                 let m = it.next().ok_or("`--mode` needs a value")?;
                 mode = Mode::parse(&m).ok_or(format!("unknown mode `{m}`"))?;
@@ -30,7 +34,7 @@ fn parse_args() -> Result<Args, String> {
         }
     }
     let file = file.ok_or("missing input file")?;
-    Ok(Args { cmd, file, out, mode })
+    Ok(Args { cmd, file, out, mode, json })
 }
 
 fn main() -> ExitCode {
@@ -41,7 +45,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    if !matches!(args.cmd.as_str(), "build" | "run" | "emit-c") {
+    if !matches!(args.cmd.as_str(), "build" | "run" | "emit-c" | "check") {
         eprintln!("ore: unknown command `{}`\n{USAGE}", args.cmd);
         return ExitCode::from(2);
     }
@@ -52,6 +56,19 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if args.cmd == "check" {
+        let res = driver::check(&args.file, &src);
+        if args.json {
+            let diags = match &res {
+                Ok(_) => String::new(),
+                Err(d) => d.to_json(),
+            };
+            println!(r#"{{"file":{},"diagnostics":[{diags}]}}"#, diag::json_str(&args.file));
+        } else if let Err(d) = &res {
+            eprintln!("{d}");
+        }
+        return if res.is_ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE };
+    }
     let c = match driver::compile_to_c(&args.file, &src, args.mode) {
         Ok(c) => c,
         Err(d) => {

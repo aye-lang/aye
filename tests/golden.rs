@@ -4,6 +4,7 @@
 //!   stdout compared with `X.out`. If `X.panic` exists the program must abort
 //!   with exactly that on stderr (checked in debug and safe mode only).
 //! - `tests/errors/X.ore`: must fail to compile with the message in `X.err`.
+//! - `ore run` and `ore check` are also run through the built binary.
 
 use ore::driver::{self, Mode};
 use std::path::{Path, PathBuf};
@@ -88,6 +89,43 @@ fn cli_run(work: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The `ore check` CLI: exit code, stdout and stderr, text and `--json`.
+fn cli_check() -> Result<(), String> {
+    let ok = "tests/cases/hello.ore";
+    let bad = "tests/errors/unknown_escape.ore";
+    let checks: &[(&[&str], bool, String, String)] = &[
+        (&[ok], true, String::new(), String::new()),
+        (&[bad], false, String::new(), format!("{bad}:2:16: error: unknown escape sequence `\\q`\n")),
+        (&[ok, "--json"], true, format!("{{\"file\":\"{ok}\",\"diagnostics\":[]}}\n"), String::new()),
+        (
+            &[bad, "--json"],
+            false,
+            format!(
+                "{{\"file\":\"{bad}\",\"diagnostics\":[{{\"severity\":\"error\",\"line\":2,\"col\":16,\
+                 \"message\":\"unknown escape sequence `\\\\q`\"}}]}}\n"
+            ),
+            String::new(),
+        ),
+    ];
+    for (args, success, stdout, stderr) in checks {
+        let out = Command::new(env!("CARGO_BIN_EXE_ore"))
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .arg("check")
+            .args(*args)
+            .output()
+            .map_err(|e| e.to_string())?;
+        let (got_out, got_err) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        if out.status.success() != *success || got_out != *stdout || got_err != *stderr {
+            return Err(format!(
+                "`ore check {}`: {}\n--- stdout\n{got_out}--- stderr\n{got_err}",
+                args.join(" "),
+                out.status
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn main() {
     let work = std::env::temp_dir().join(format!("ore-golden-{}", std::process::id()));
     std::fs::create_dir_all(&work).unwrap();
@@ -105,6 +143,7 @@ fn main() {
         }
         let w = &work;
         handles.push(("cli/ore run".to_string(), s.spawn(move || cli_run(w))));
+        handles.push(("cli/ore check".to_string(), s.spawn(cli_check)));
         handles.into_iter().map(|(n, h)| (n, h.join().unwrap())).collect()
     });
     let _ = std::fs::remove_dir_all(&work);

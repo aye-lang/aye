@@ -35,12 +35,18 @@ impl Mode {
     }
 }
 
-/// Run lexer, parser, sema, OIR lowering and C generation.
-/// `file_name` is used in diagnostics, `#line` directives and panic messages.
-pub fn compile_to_c(file_name: &str, src: &str, mode: Mode) -> Result<String, Diag> {
+/// Run the front end (lexer, parser, sema). Every compile error comes from
+/// here; OIR lowering and C generation cannot fail. Used by `ore check`.
+pub fn check(file_name: &str, src: &str) -> Result<sema::Program, Diag> {
     let toks = lexer::lex(src).map_err(|e| e.with_file(file_name))?;
     let ast = parser::parse(toks).map_err(|e| e.with_file(file_name))?;
-    let typed = sema::check(&ast).map_err(|e| e.with_file(file_name))?;
+    sema::check(&ast).map_err(|e| e.with_file(file_name))
+}
+
+/// Run the front end, OIR lowering and C generation.
+/// `file_name` is used in diagnostics, `#line` directives and panic messages.
+pub fn compile_to_c(file_name: &str, src: &str, mode: Mode) -> Result<String, Diag> {
+    let typed = check(file_name, src)?;
     let ir = oir::lower(&typed);
     Ok(cgen::emit(&ir, file_name, mode != Mode::Fast))
 }

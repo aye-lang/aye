@@ -29,6 +29,36 @@ impl fmt::Display for Diag {
     }
 }
 
+impl Diag {
+    /// One entry of the `diagnostics` array in `ore check --json`.
+    pub fn to_json(&self) -> String {
+        format!(
+            r#"{{"severity":"error","line":{},"col":{},"message":{}}}"#,
+            self.span.line,
+            self.span.col,
+            json_str(&self.msg)
+        )
+    }
+}
+
+/// `s` as a quoted JSON string.
+pub fn json_str(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Stage-internal error before the file name is attached.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
@@ -47,3 +77,13 @@ impl Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_str_escapes() {
+        assert_eq!(json_str("a\"b\\c\nd\te\rf\u{1}g"), r#""a\"b\\c\nd\te\rf\u0001g""#);
+    }
+}
