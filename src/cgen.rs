@@ -43,64 +43,64 @@ ORE_RT __attribute__((noreturn, cold)) void ore_panic_slice(int line, int col, s
                    col, (unsigned long long)lo, (unsigned long long)hi, (unsigned long long)len);
     ore_rt_abort();
 }
-static inline size_t ore_idx(size_t i, size_t len, int line, int col) {
+ORE_RT inline size_t ore_idx(size_t i, size_t len, int line, int col) {
     if (ORE_CHECKS && i >= len) ore_panic_index(line, col, i, len);
     return i;
 }
-static inline size_t ore_slice(size_t lo, size_t hi, size_t len, int line, int col) {
+ORE_RT inline size_t ore_slice(size_t lo, size_t hi, size_t len, int line, int col) {
     if (ORE_CHECKS && (lo > hi || hi > len)) ore_panic_slice(line, col, lo, hi, len);
     return lo;
 }
-static inline int64_t ore_cast_ss(int64_t v, int64_t lo, int64_t hi, int line, int col) {
+ORE_RT inline int64_t ore_cast_ss(int64_t v, int64_t lo, int64_t hi, int line, int col) {
     if (ORE_CHECKS && (v < lo || v > hi)) ore_panic(line, col, "integer cast out of range");
     return v;
 }
-static inline int64_t ore_cast_su(int64_t v, uint64_t hi, int line, int col) {
+ORE_RT inline int64_t ore_cast_su(int64_t v, uint64_t hi, int line, int col) {
     if (ORE_CHECKS && (v < 0 || (uint64_t)v > hi)) ore_panic(line, col, "integer cast out of range");
     return v;
 }
-static inline uint64_t ore_cast_u(uint64_t v, uint64_t hi, int line, int col) {
+ORE_RT inline uint64_t ore_cast_u(uint64_t v, uint64_t hi, int line, int col) {
     if (ORE_CHECKS && v > hi) ore_panic(line, col, "integer cast out of range");
     return v;
 }
-static inline double ore_cast_fi(double v, double lo, double hi, int line, int col) {
+ORE_RT inline double ore_cast_fi(double v, double lo, double hi, int line, int col) {
     if (ORE_CHECKS && !(v > lo && v < hi)) ore_panic(line, col, "float to integer cast out of range");
     return v;
 }
 
 #define ORE_INT_OPS(N, T, SIGNED, MIN)                                                         \
-    static inline T ore_add_##N(T a, T b, int l, int c) {                                      \
+    ORE_RT inline T ore_add_##N(T a, T b, int l, int c) {                                      \
         T r;                                                                                   \
         if (__builtin_add_overflow(a, b, &r) && ORE_CHECKS) ore_panic(l, c, "integer overflow"); \
         return r;                                                                              \
     }                                                                                          \
-    static inline T ore_sub_##N(T a, T b, int l, int c) {                                      \
+    ORE_RT inline T ore_sub_##N(T a, T b, int l, int c) {                                      \
         T r;                                                                                   \
         if (__builtin_sub_overflow(a, b, &r) && ORE_CHECKS) ore_panic(l, c, "integer overflow"); \
         return r;                                                                              \
     }                                                                                          \
-    static inline T ore_mul_##N(T a, T b, int l, int c) {                                      \
+    ORE_RT inline T ore_mul_##N(T a, T b, int l, int c) {                                      \
         T r;                                                                                   \
         if (__builtin_mul_overflow(a, b, &r) && ORE_CHECKS) ore_panic(l, c, "integer overflow"); \
         return r;                                                                              \
     }                                                                                          \
-    static inline T ore_div_##N(T a, T b, int l, int c) {                                      \
+    ORE_RT inline T ore_div_##N(T a, T b, int l, int c) {                                      \
         if (ORE_CHECKS && b == 0) ore_panic(l, c, "division by zero");                         \
         if (ORE_CHECKS && SIGNED && a == MIN && b == (T)-1) ore_panic(l, c, "integer overflow"); \
         return (T)(a / b);                                                                     \
     }                                                                                          \
-    static inline T ore_rem_##N(T a, T b, int l, int c) {                                      \
+    ORE_RT inline T ore_rem_##N(T a, T b, int l, int c) {                                      \
         if (ORE_CHECKS && b == 0) ore_panic(l, c, "division by zero");                         \
         if (ORE_CHECKS && SIGNED && a == MIN && b == (T)-1) ore_panic(l, c, "integer overflow"); \
         return (T)(a % b);                                                                     \
     }                                                                                          \
-    static inline T ore_neg_##N(T a, int l, int c) {                                           \
+    ORE_RT inline T ore_neg_##N(T a, int l, int c) {                                           \
         if (ORE_CHECKS && SIGNED && a == MIN) ore_panic(l, c, "integer overflow");             \
         return (T)-a;                                                                          \
     }                                                                                          \
-    static inline T ore_wadd_##N(T a, T b) { T r; __builtin_add_overflow(a, b, &r); return r; } \
-    static inline T ore_wsub_##N(T a, T b) { T r; __builtin_sub_overflow(a, b, &r); return r; } \
-    static inline T ore_wmul_##N(T a, T b) { T r; __builtin_mul_overflow(a, b, &r); return r; }
+    ORE_RT inline T ore_wadd_##N(T a, T b) { T r; __builtin_add_overflow(a, b, &r); return r; } \
+    ORE_RT inline T ore_wsub_##N(T a, T b) { T r; __builtin_sub_overflow(a, b, &r); return r; } \
+    ORE_RT inline T ore_wmul_##N(T a, T b) { T r; __builtin_mul_overflow(a, b, &r); return r; }
 ORE_INT_OPS(i8, int8_t, 1, INT8_MIN)
 ORE_INT_OPS(i16, int16_t, 1, INT16_MIN)
 ORE_INT_OPS(i32, int32_t, 1, INT32_MIN)
@@ -528,7 +528,7 @@ impl Gen {
                 let lo = self.operand(f, lo);
                 let hi = hi.as_ref().map(|h| self.operand(f, h)).unwrap_or_else(|| n.clone());
                 format!(
-                    "(({}){{{ptr} + ore_slice({lo}, {hi}, {n}, {}), {hi} - {lo}}})",
+                    "(({}){{{ptr} + ore_slice({lo}, {hi}, {n}, {}), (size_t){hi} - (size_t){lo}}})",
                     c_type(&Type::Slice(Box::new(elem.clone()))),
                     line_col(*span)
                 )

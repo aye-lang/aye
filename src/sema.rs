@@ -277,6 +277,10 @@ fn is_untyped(e: &ast::Expr) -> bool {
     }
 }
 
+fn is_unsigned(t: &Type) -> bool {
+    matches!(t, Type::Int(i) if !i.signed())
+}
+
 fn block_returns(stmts: &[TStmt]) -> bool {
     stmts.iter().any(|s| match &s.kind {
         TStmtKind::Return(_) => true,
@@ -825,8 +829,8 @@ impl Checker {
                     t => return err(span, format!("cannot index into a value of type `{t}`")),
                 };
                 let i = self.value(index, Some(&USIZE))?;
-                if i.ty != USIZE {
-                    return err(i.span, format!("index must be `usize`, found `{}`", i.ty));
+                if !is_unsigned(&i.ty) {
+                    return err(i.span, format!("index must be an unsigned integer, found `{}`", i.ty));
                 }
                 (TExprKind::Index { base: Box::new(b), index: Box::new(i) }, elem)
             }
@@ -847,8 +851,8 @@ impl Checker {
                         None => Ok(None),
                         Some(x) => {
                             let t = self.value(x, Some(&USIZE))?;
-                            if t.ty != USIZE {
-                                return err(t.span, format!("slice bound must be `usize`, found `{}`", t.ty));
+                            if !is_unsigned(&t.ty) {
+                                return err(t.span, format!("slice bound must be an unsigned integer, found `{}`", t.ty));
                             }
                             Ok(Some(Box::new(t)))
                         }
