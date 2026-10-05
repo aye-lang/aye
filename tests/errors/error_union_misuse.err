@@ -1,0 +1,5 @@
+error_union_misuse.ore:2:16: error[E0070]: `Shape` is not an error set
+error_union_misuse.ore:6:9: error[E0066]: error union types can only be used as a function's return type
+error_union_misuse.ore:9:8: error[E0070]: `Shape` is not an error set
+error_union_misuse.ore:14:11: error[E0048]: `try` is not allowed inside `defer`
+error_union_misuse.ore:17:8: error[E0017]: unknown error set `Missing`

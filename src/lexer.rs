@@ -8,6 +8,7 @@
 //! After a lexical error the rest of the line is skipped and lexing goes on,
 //! so every bad line is reported.
 
+use crate::codes::*;
 use crate::diag::{Error, Result, Span};
 use std::fmt;
 
@@ -316,7 +317,7 @@ impl Lexer {
                 '@' => {
                     self.bump();
                     if !self.peek().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') {
-                        return Err(Error::new(span, "expected builtin name after `@`"));
+                        return Err(Error::new(E0001, span, "expected builtin name after `@`"));
                     }
                     let word = self.ident();
                     self.push(Tok::Builtin(word), span);
@@ -412,20 +413,20 @@ impl Lexer {
             }
         }
         if self.peek().is_some_and(|c| c.is_ascii_alphanumeric()) {
-            return Err(Error::new(self.here(), "invalid character in number literal"));
+            return Err(Error::new(E0003, self.here(), "invalid character in number literal"));
         }
         if digits.is_empty() {
-            return Err(Error::new(span, "number literal has no digits"));
+            return Err(Error::new(E0003, span, "number literal has no digits"));
         }
         if is_float {
-            let v: f64 = digits.parse().map_err(|_| Error::new(span, "invalid float literal"))?;
+            let v: f64 = digits.parse().map_err(|_| Error::new(E0003, span, "invalid float literal"))?;
             if !v.is_finite() {
-                return Err(Error::new(span, "float literal is out of range for f64"));
+                return Err(Error::new(E0003, span, "float literal is out of range for f64"));
             }
             Ok(Tok::Float(v))
         } else {
             let v = u64::from_str_radix(&digits, radix)
-                .map_err(|_| Error::new(span, "integer literal is too large (max 2^64-1)"))?;
+                .map_err(|_| Error::new(E0003, span, "integer literal is too large (max 2^64-1)"))?;
             Ok(Tok::Int(v))
         }
     }
@@ -434,9 +435,9 @@ impl Lexer {
     fn escaped(&mut self, start: Span) -> Result<u32> {
         let esc_span = self.here();
         match self.bump() {
-            None | Some('\n') => Err(Error::new(start, "unterminated literal")),
+            None | Some('\n') => Err(Error::new(E0004, start, "unterminated literal")),
             Some('\\') => {
-                let c = self.bump().ok_or_else(|| Error::new(start, "unterminated literal"))?;
+                let c = self.bump().ok_or_else(|| Error::new(E0004, start, "unterminated literal"))?;
                 Ok(match c {
                     'n' => 10,
                     't' => 9,
@@ -451,13 +452,13 @@ impl Lexer {
                             let d = self
                                 .peek()
                                 .and_then(|c| c.to_digit(16))
-                                .ok_or_else(|| Error::new(esc_span, "`\\x` escape needs two hex digits"))?;
+                                .ok_or_else(|| Error::new(E0005, esc_span, "`\\x` escape needs two hex digits"))?;
                             self.bump();
                             v = v * 16 + d;
                         }
                         v
                     }
-                    _ => return Err(Error::new(esc_span, format!("unknown escape sequence `\\{c}`"))),
+                    _ => return Err(Error::new(E0005, esc_span, format!("unknown escape sequence `\\{c}`"))),
                 })
             }
             Some(c) => Ok(c as u32),
@@ -473,7 +474,7 @@ impl Lexer {
                     self.bump();
                     return Ok(out);
                 }
-                None | Some('\n') => return Err(Error::new(span, "unterminated string literal")),
+                None | Some('\n') => return Err(Error::new(E0004, span, "unterminated string literal")),
                 Some('\\') if self.peek_at(1) == Some('x') => {
                     // `\xHH` is a raw byte, not a code point.
                     let b = self.escaped(span)?;
@@ -492,11 +493,11 @@ impl Lexer {
     fn char_lit(&mut self, span: Span) -> Result<u32> {
         self.bump(); // opening quote
         if self.peek() == Some('\'') {
-            return Err(Error::new(span, "empty character literal"));
+            return Err(Error::new(E0004, span, "empty character literal"));
         }
         let c = self.escaped(span)?;
         if self.peek() != Some('\'') {
-            return Err(Error::new(span, "character literal must contain exactly one character"));
+            return Err(Error::new(E0004, span, "character literal must contain exactly one character"));
         }
         self.bump();
         Ok(c)
@@ -561,9 +562,9 @@ impl Lexer {
             ('/', _) => Tok::Slash,
             ('%', _) => Tok::Percent,
             (';', _) => {
-                return Err(Error::new(span, "unexpected `;` (Ore ends statements at newlines)"));
+                return Err(Error::new(E0002, span, "unexpected `;` (Ore ends statements at newlines)"));
             }
-            _ => return Err(Error::new(span, format!("unexpected character `{c}`"))),
+            _ => return Err(Error::new(E0001, span, format!("unexpected character `{c}`"))),
         };
         Ok(tok)
     }

@@ -1,0 +1,51 @@
+error ReadError { NotFound, Denied }
+error ParseError { Empty, Bad }
+// Merged set: every error of both. An error is identified by its name.
+error LoadError = ReadError || ParseError
+
+fn read(name: []u8) ReadError![]u8 {
+    if name.len == 0 {
+        return ReadError.NotFound
+    }
+    return name
+}
+
+// `!u32`: the error set is inferred. Here it is `NotFound`, `Denied`
+// (through `try read`) and `Bad`.
+fn load(name: []u8) !u32 {
+    let text = try read(name)
+    if text.len > 3 {
+        return ParseError.Bad
+    }
+    return text.len as u32
+}
+
+// An error union can be returned as is when its errors fit.
+fn loadAll(name: []u8) LoadError!u32 {
+    return load(name)
+}
+
+fn describe(e: LoadError) []u8 {
+    return match e {
+        .NotFound => "not found"
+        .Denied => "denied"
+        .Empty => "empty"
+        .Bad => "bad"
+    }
+}
+
+pub fn main() !void {
+    @println(try loadAll("abc"))
+    @println(loadAll("") catch 100)
+    let code = load("toolong") catch |e| match e {
+        .NotFound => 1
+        .Denied => 2
+        .Bad => 3
+    }
+    @println(code)
+    let n = load("") catch |e| {
+        @println(describe(e))
+        return
+    }
+    @println(n)
+}

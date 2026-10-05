@@ -1,3 +1,3 @@
-syntax_errors.ore:2:15: error: expected newline after statement, found `let`
-syntax_errors.ore:5:8: error: expected `:`, found identifier `i32`
-syntax_errors.ore:11:5: error: `else` must be on the same line as the `}` that closes the `if` block
+syntax_errors.ore:2:15: error[E0006]: expected newline after statement, found `let`
+syntax_errors.ore:5:8: error[E0006]: expected `:`, found identifier `i32`
+syntax_errors.ore:11:5: error[E0008]: `else` must be on the same line as the `}` that closes the `if` block

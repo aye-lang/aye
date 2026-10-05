@@ -62,7 +62,7 @@ pub fn check(file_name: &str, src: &str) -> Result<sema::Program, Vec<Diag>> {
 pub fn compile_to_c(file_name: &str, src: &str, mode: Mode) -> Result<String, Vec<Diag>> {
     let typed = check(file_name, src)?;
     let ir = oir::lower(&typed);
-    Ok(cgen::emit(&ir, file_name, mode != Mode::Fast))
+    Ok(cgen::emit(&ir, file_name, mode != Mode::Fast, mode == Mode::Debug))
 }
 
 /// Compile generated C to an executable with clang.

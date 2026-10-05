@@ -1,1 +1,1 @@
-index_type.ore:4:16: error: index must be an unsigned integer, found `i32`
+index_type.ore:4:16: error[E0044]: index must be an unsigned integer, found `i32`

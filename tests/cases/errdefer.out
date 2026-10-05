@@ -1,0 +1,21 @@
+acquire
+defer: inner
+defer: always
+7
+acquire
+errdefer: undo acquire
+defer: always
+caught busy
+acquire
+defer: inner
+errdefer: undo inner
+errdefer: undo acquire
+defer: always
+caught busy
+acquire
+defer: inner
+errdefer: undo acquire
+defer: always
+caught denied
+errdefer: relay
+relay failed

@@ -1,1 +1,1 @@
-optional_condition.ore:3:8: error: `if` condition must be `bool`, found `?i32` (unwrap it with `if x |v| { }` or compare it with `null`)
+optional_condition.ore:3:8: error[E0026]: `if` condition must be `bool`, found `?i32` (unwrap it with `if x |v| { }` or compare it with `null`)

@@ -6,7 +6,10 @@
 //!   fixes left-to-right evaluation order (C leaves argument order unspecified);
 //! - lowers `&&`/`||` to `if`, `while`/`for` to `Loop`, and `x op= v` to `x = x op v`;
 //! - expands `defer`: deferred statements are copied to every scope exit
-//!   (end of block, `return`, `break`, `continue`) in LIFO order;
+//!   (end of block, `return`, `break`, `continue`) in LIFO order; `errdefer`
+//!   statements only to exits that return an error;
+//! - lowers `try` and `catch` to a test of the error union's `err` field, and
+//!   records error return trace entries (`TracePush`, `TraceRestore`);
 //! - makes runtime checks explicit: checked arithmetic carries its source
 //!   span, and indexing carries the length to check against;
 //! - lowers `match` to an `if` chain on the enum tag.
@@ -24,6 +27,8 @@ pub struct Program {
     pub enums: Vec<sema::EnumDef>,
     pub externs: Vec<sema::ExternFn>,
     pub funcs: Vec<Func>,
+    /// Error names; an error's value is its index plus one.
+    pub errors: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +68,12 @@ pub enum StmtKind {
     Break,
     Continue,
     Return(Option<Operand>),
+    /// Add the position of a `return` or `try` that passes an error on to
+    /// the error return trace.
+    TracePush(Span),
+    /// Drop the trace entries added after the trace length in the local was
+    /// saved (`Rvalue::TraceLen`): the error was handled by `catch`.
+    TraceRestore(LocalId),
 }
 
 #[derive(Debug, Clone)]
@@ -131,19 +142,37 @@ pub enum Rvalue {
     ArrayLit { ty: Type, elems: Vec<Operand> },
     /// `base[lo..hi]`, producing a slice. `hi = None` means the full length.
     Slice { base: Place, len: Len, elem: Type, lo: Operand, hi: Option<Operand>, span: Span },
+    /// Does the error union at `place` hold an error?
+    IsErr(Place),
+    /// The error union `ty` holding the value `val` (`None` for `!void`).
+    Ok { val: Option<Operand>, ty: Type },
+    /// The error union `ty` holding the error value `err`.
+    Err { err: Operand, ty: Type },
+    /// The current length of the error return trace (a `u32`).
+    TraceLen,
 }
 
 pub fn lower(p: &sema::Program) -> Program {
     let structs: HashMap<&str, &sema::StructDef> = p.structs.iter().map(|s| (s.name.as_str(), s)).collect();
     let enums: HashMap<&str, &sema::EnumDef> = p.enums.iter().map(|e| (e.name.as_str(), e)).collect();
     let funcs = p.fns.iter().map(|f| Lower::func(f, &structs, &enums)).collect();
-    Program { structs: p.structs.clone(), enums: p.enums.clone(), externs: p.externs.clone(), funcs }
+    Program {
+        structs: p.structs.clone(),
+        enums: p.enums.clone(),
+        externs: p.externs.clone(),
+        funcs,
+        errors: p.errors.clone(),
+    }
 }
 
 struct Scope<'a> {
-    defers: Vec<&'a [TStmt]>,
+    /// Deferred statements; `true` for `errdefer`.
+    defers: Vec<(&'a [TStmt], bool)>,
     /// The body scope of a loop: `break`/`continue` exit up to here.
     is_loop: bool,
+    /// The body of a `catch` block: the saved trace length to restore when
+    /// the block is left without an error.
+    restore: Option<LocalId>,
 }
 
 struct Lower<'a> {
@@ -152,6 +181,17 @@ struct Lower<'a> {
     locals: Vec<Local>,
     scopes: Vec<Scope<'a>>,
     span: Span,
+    /// The function's return type.
+    ret: Type,
+}
+
+fn local(id: LocalId) -> Place {
+    Place { local: id, proj: vec![] }
+}
+
+fn field(mut p: Place, name: &str) -> Place {
+    p.proj.push(Proj::Field(name.to_string()));
+    p
 }
 
 fn is_terminator(s: Option<&Stmt>) -> bool {
@@ -160,13 +200,18 @@ fn is_terminator(s: Option<&Stmt>) -> bool {
 
 fn has_call(e: &TExpr) -> bool {
     match &e.kind {
-        TExprKind::Call { .. } | TExprKind::Print { .. } | TExprKind::Match { .. } => true,
+        TExprKind::Call { .. }
+        | TExprKind::Print { .. }
+        | TExprKind::Match { .. }
+        | TExprKind::Try(_)
+        | TExprKind::Catch { .. } => true,
         TExprKind::Int(_)
         | TExprKind::Float(_)
         | TExprKind::Bool(_)
         | TExprKind::Str(_)
         | TExprKind::Var(_)
-        | TExprKind::Null => false,
+        | TExprKind::Null
+        | TExprKind::ErrorValue(_) => false,
         TExprKind::Binary { lhs, rhs, .. } | TExprKind::Index { base: lhs, index: rhs } => has_call(lhs) || has_call(rhs),
         TExprKind::Unary { expr, .. }
         | TExprKind::Cast(expr)
@@ -177,7 +222,9 @@ fn has_call(e: &TExpr) -> bool {
         | TExprKind::Some(expr)
         | TExprKind::IsSome(expr)
         | TExprKind::AddrOf(expr)
-        | TExprKind::Deref(expr) => has_call(expr),
+        | TExprKind::Deref(expr)
+        | TExprKind::OkWrap(expr)
+        | TExprKind::ErrWrap(expr) => has_call(expr),
         TExprKind::Slice { base, lo, hi } => {
             has_call(base) || lo.as_deref().is_some_and(has_call) || hi.as_deref().is_some_and(has_call)
         }
@@ -194,9 +241,14 @@ impl<'a> Lower<'a> {
     ) -> Func {
         // Sema variables keep their ids as OIR locals; temporaries follow.
         let locals = f.vars.iter().map(|v| Local { name: Some(v.name.clone()), ty: v.ty.clone() }).collect();
-        let mut l = Lower { structs, enums, locals, scopes: Vec::new(), span: Span::default() };
+        let mut l = Lower { structs, enums, locals, scopes: Vec::new(), span: Span::default(), ret: f.ret.clone() };
         let mut body = Vec::new();
         l.block(&f.body, false, &mut body);
+        // Falling off the end of a `!void` function returns "no error".
+        if matches!(&f.ret, Type::ErrorUnion(_, p) if **p == Type::Void) && !is_terminator(body.last()) {
+            let ok = l.ok_void(&mut body);
+            l.push(&mut body, StmtKind::Return(Some(ok)));
+        }
         Func {
             name: f.name.clone(),
             params: f.params.clone(),
@@ -217,31 +269,58 @@ impl<'a> Lower<'a> {
     }
 
     fn block(&mut self, stmts: &'a [TStmt], is_loop: bool, out: &mut Block) {
-        self.scopes.push(Scope { defers: Vec::new(), is_loop });
+        self.scoped(stmts, Scope { defers: Vec::new(), is_loop, restore: None }, out);
+    }
+
+    fn scoped(&mut self, stmts: &'a [TStmt], scope: Scope<'a>, out: &mut Block) {
+        self.scopes.push(scope);
         for s in stmts {
             self.stmt(s, out);
         }
         let scope = self.scopes.pop().unwrap();
         if !is_terminator(out.last()) {
-            for d in scope.defers.iter().rev() {
-                self.block(d, false, out);
+            for &(d, on_err) in scope.defers.iter().rev() {
+                if !on_err {
+                    self.block(d, false, out);
+                }
+            }
+            if let Some(t) = scope.restore {
+                self.push(out, StmtKind::TraceRestore(t));
             }
         }
     }
 
-    /// Emit the deferred statements of the innermost scopes, innermost first,
-    /// stopping after the loop body scope when `to_loop` is set.
-    fn run_defers(&mut self, to_loop: bool, out: &mut Block) {
-        let mut pending: Vec<&'a [TStmt]> = Vec::new();
+    /// Emit the exit code of the innermost scopes, innermost first, stopping
+    /// after the loop body scope when `to_loop` is set: deferred statements
+    /// (`errdefer` too when `on_err`), and, unless an error leaves, the trace
+    /// restore of `catch` blocks.
+    fn run_defers(&mut self, to_loop: bool, on_err: bool, out: &mut Block) {
+        let mut pending: Vec<Result<&'a [TStmt], LocalId>> = Vec::new();
         for scope in self.scopes.iter().rev() {
-            pending.extend(scope.defers.iter().rev());
+            pending.extend(scope.defers.iter().rev().filter(|(_, e)| on_err || !e).map(|(d, _)| Ok(*d)));
+            if let (Some(t), false) = (scope.restore, on_err) {
+                pending.push(Err(t));
+            }
             if to_loop && scope.is_loop {
                 break;
             }
         }
-        for d in pending {
-            self.block(d, false, out);
+        let span = self.span;
+        for p in pending {
+            match p {
+                Ok(d) => self.block(d, false, out),
+                Err(t) => out.push(Stmt { kind: StmtKind::TraceRestore(t), span }),
+            }
         }
+        self.span = span;
+    }
+
+    /// A local set to "no error" of the function's `E!void` return type.
+    fn ok_void(&mut self, out: &mut Block) -> Operand {
+        let t = self.temp(self.ret.clone());
+        let rv = Rvalue::Ok { val: None, ty: self.ret.clone() };
+        self.push(out, StmtKind::Assign(local(t), rv));
+        Operand::Local(t)
     }
 
     fn has_defers(&self) -> bool {
@@ -335,31 +414,54 @@ impl<'a> Lower<'a> {
                 self.push(out, StmtKind::Loop { body: b, cont });
             }
             TStmtKind::Break => {
-                self.run_defers(true, out);
-                self.span = s.span;
+                self.run_defers(true, false, out);
                 self.push(out, StmtKind::Break);
             }
             TStmtKind::Continue => {
-                self.run_defers(true, out);
-                self.span = s.span;
+                self.run_defers(true, false, out);
                 self.push(out, StmtKind::Continue);
             }
             TStmtKind::Return(value) => {
-                let mut v = value.as_ref().map(|e| self.operand(e, out));
-                if self.has_defers() {
-                    // The return value is computed before deferred code runs.
-                    if let (Some(Operand::Local(id)), Some(e)) = (&v, value) {
-                        let t = self.temp(e.ty.clone());
-                        self.push(out, StmtKind::Assign(Place { local: t, proj: vec![] }, Rvalue::Use(Operand::Local(*id))));
-                        v = Some(Operand::Local(t));
-                    }
-                    self.run_defers(false, out);
+                let mut v = match value {
+                    Some(e) => Some(self.operand(e, out)),
+                    None if matches!(self.ret, Type::ErrorUnion(..)) => Some(self.ok_void(out)),
+                    None => None,
+                };
+                // The return value is computed before deferred code runs.
+                if self.has_defers()
+                    && let (Some(Operand::Local(id)), Some(e)) = (&v, value)
+                {
+                    let t = self.temp(e.ty.clone());
+                    self.push(out, StmtKind::Assign(local(t), Rvalue::Use(Operand::Local(*id))));
+                    v = Some(Operand::Local(t));
                 }
-                self.span = s.span;
+                match value.as_ref().map(|e| &e.kind) {
+                    // An error: the trace gets this `return`, and `errdefer`s run.
+                    Some(TExprKind::ErrWrap(_)) => {
+                        self.push(out, StmtKind::TracePush(s.span));
+                        self.run_defers(false, true, out);
+                    }
+                    // An error union from a call: test it.
+                    Some(TExprKind::Call { .. }) if matches!(self.ret, Type::ErrorUnion(..)) => {
+                        let Some(Operand::Local(u)) = v else { unreachable!() };
+                        let c = self.temp(Type::Bool);
+                        self.push(out, StmtKind::Assign(local(c), Rvalue::IsErr(local(u))));
+                        let mut then = Vec::new();
+                        self.push(&mut then, StmtKind::TracePush(s.span));
+                        self.run_defers(false, true, &mut then);
+                        self.push(&mut then, StmtKind::Return(v.clone()));
+                        self.push(out, StmtKind::If { cond: Operand::Local(c), then, els: vec![] });
+                        self.run_defers(false, false, out);
+                    }
+                    _ => self.run_defers(false, false, out),
+                }
                 self.push(out, StmtKind::Return(v));
             }
             TStmtKind::Defer(body) => {
-                self.scopes.last_mut().unwrap().defers.push(body);
+                self.scopes.last_mut().unwrap().defers.push((body, false));
+            }
+            TStmtKind::ErrDefer(body) => {
+                self.scopes.last_mut().unwrap().defers.push((body, true));
             }
             TStmtKind::Block(b) => self.block(b, false, out),
             TStmtKind::Expr(e) => self.eval(e, out),
@@ -368,12 +470,77 @@ impl<'a> Lower<'a> {
 
     /// An expression evaluated for its side effects.
     fn eval(&mut self, e: &'a TExpr, out: &mut Block) {
-        if let TExprKind::Match { .. } = e.kind {
-            self.lower_match(e, None, out);
-        } else {
-            let rv = self.rvalue(e, out);
-            self.push(out, StmtKind::Eval(rv));
+        match e.kind {
+            TExprKind::Match { .. } => self.lower_match(e, None, out),
+            TExprKind::Catch { .. } => self.lower_catch(e, None, out),
+            TExprKind::Try(_) => {
+                self.lower_try(e, out);
+            }
+            _ => {
+                let rv = self.rvalue(e, out);
+                self.push(out, StmtKind::Eval(rv));
+            }
         }
+    }
+
+    /// `try x`: if the error union `x` holds an error, add this `try` to the
+    /// trace, run the exit code with `errdefer`s and return the error.
+    /// Returns the place of the payload (`None` for `void`).
+    fn lower_try(&mut self, e: &'a TExpr, out: &mut Block) -> Option<Place> {
+        let TExprKind::Try(inner) = &e.kind else { unreachable!() };
+        let span = self.span;
+        let u = self.place(inner, out);
+        let c = self.temp(Type::Bool);
+        self.push(out, StmtKind::Assign(local(c), Rvalue::IsErr(u.clone())));
+        let mut then = Vec::new();
+        let err = self.temp(Type::Int(IntTy::U16));
+        self.push(&mut then, StmtKind::Assign(local(err), Rvalue::Load(field(u.clone(), "err"))));
+        self.push(&mut then, StmtKind::TracePush(e.span));
+        self.run_defers(false, true, &mut then);
+        let r = self.temp(self.ret.clone());
+        let rv = Rvalue::Err { err: Operand::Local(err), ty: self.ret.clone() };
+        self.push(&mut then, StmtKind::Assign(local(r), rv));
+        self.push(&mut then, StmtKind::Return(Some(Operand::Local(r))));
+        self.span = span;
+        self.push(out, StmtKind::If { cond: Operand::Local(c), then, els: vec![] });
+        (e.ty != Type::Void).then(|| field(u, "val"))
+    }
+
+    /// `x catch |e| body`: on an error, bind `e` and run the body (its value
+    /// goes to `result`); otherwise `result` gets the payload. The trace
+    /// length is saved first and restored when the body ends normally.
+    fn lower_catch(&mut self, e: &'a TExpr, result: Option<LocalId>, out: &mut Block) {
+        let TExprKind::Catch { expr, capture, body } = &e.kind else { unreachable!() };
+        let span = self.span;
+        let saved = self.temp(Type::Int(IntTy::U32));
+        self.push(out, StmtKind::Assign(local(saved), Rvalue::TraceLen));
+        let u = self.place(expr, out);
+        let c = self.temp(Type::Bool);
+        self.push(out, StmtKind::Assign(local(c), Rvalue::IsErr(u.clone())));
+        let mut then = Vec::new();
+        if let Some(v) = capture {
+            self.push(&mut then, StmtKind::Assign(local(*v), Rvalue::Load(field(u.clone(), "err"))));
+        }
+        match (&**body, result) {
+            (TArmBody::Expr(x), Some(r)) => {
+                let rv = self.rvalue(x, &mut then);
+                self.push(&mut then, StmtKind::Assign(local(r), rv));
+                self.push(&mut then, StmtKind::TraceRestore(saved));
+            }
+            (TArmBody::Expr(x), None) => {
+                self.eval(x, &mut then);
+                self.push(&mut then, StmtKind::TraceRestore(saved));
+            }
+            (TArmBody::Block(stmts), _) => {
+                self.scoped(stmts, Scope { defers: Vec::new(), is_loop: false, restore: Some(saved) }, &mut then);
+            }
+        }
+        self.span = span;
+        let els = match result {
+            Some(r) => vec![Stmt { kind: StmtKind::Assign(local(r), Rvalue::Load(field(u, "val"))), span }],
+            None => vec![],
+        };
+        self.push(out, StmtKind::If { cond: Operand::Local(c), then, els });
     }
 
     /// The value inside the optional at `p`.
@@ -387,20 +554,23 @@ impl<'a> Lower<'a> {
     /// `match`: bind the pattern variables and run the arm whose variant
     /// equals the tag. The last arm needs no test (the match is exhaustive).
     /// The value of an expression arm goes to `result`.
+    /// A `match` on errors tests the error value instead of the tag.
     fn lower_match(&mut self, e: &'a TExpr, result: Option<LocalId>, out: &mut Block) {
         let TExprKind::Match { scrutinee, arms } = &e.kind else { unreachable!() };
-        let Type::Enum(ename) = &scrutinee.ty else { unreachable!() };
-        let def = self.enums[ename.as_str()];
+        let def = match &scrutinee.ty {
+            Type::Enum(ename) => Some(self.enums[ename.as_str()]),
+            _ => None,
+        };
         let span = self.span;
         let place = self.place(scrutinee, out);
-        let tag = self.temp(Type::Int(IntTy::U32));
-        let mut tag_place = place.clone();
-        tag_place.proj.push(Proj::Field("tag".to_string()));
-        self.push(out, StmtKind::Assign(Place { local: tag, proj: vec![] }, Rvalue::Load(tag_place)));
+        let tag_ty = if def.is_some() { IntTy::U32 } else { IntTy::U16 };
+        let tag = self.temp(Type::Int(tag_ty));
+        let tag_place = if def.is_some() { field(place.clone(), "tag") } else { place.clone() };
+        self.push(out, StmtKind::Assign(local(tag), Rvalue::Load(tag_place)));
         let mut bodies = Vec::new();
         for arm in arms {
             let mut b = Vec::new();
-            if let Some(vi) = arm.variant {
+            if let (Some(vi), Some(def)) = (arm.variant, def) {
                 let v = &def.variants[vi];
                 for &(var, fi) in &arm.bindings {
                     let mut p = place.clone();
@@ -429,8 +599,8 @@ impl<'a> Lower<'a> {
                     let cmp = Rvalue::Binary {
                         op: BinOp::Eq,
                         lhs: Operand::Local(tag),
-                        rhs: Operand::Int(vi as i128, IntTy::U32),
-                        ty: Type::Int(IntTy::U32),
+                        rhs: Operand::Int(vi as i128, tag_ty),
+                        ty: Type::Int(tag_ty),
                         span,
                     };
                     vec![
@@ -523,6 +693,15 @@ impl<'a> Lower<'a> {
                 Rvalue::Use(Operand::Local(t))
             }
             TExprKind::Var(id) => Rvalue::Use(Operand::Local(*id)),
+            TExprKind::ErrorValue(v) => Rvalue::Use(Operand::Int(*v as i128, IntTy::U16)),
+            TExprKind::OkWrap(x) => Rvalue::Ok { val: Some(self.operand(x, out)), ty: e.ty.clone() },
+            TExprKind::ErrWrap(x) => Rvalue::Err { err: self.operand(x, out), ty: e.ty.clone() },
+            TExprKind::Try(_) => Rvalue::Load(self.lower_try(e, out).unwrap()),
+            TExprKind::Catch { .. } => {
+                let t = self.temp(e.ty.clone());
+                self.lower_catch(e, Some(t), out);
+                Rvalue::Use(Operand::Local(t))
+            }
             TExprKind::Call { name, is_extern, args } => {
                 let args = args.iter().map(|a| self.operand(a, out)).collect();
                 Rvalue::Call { name: name.clone(), is_extern: *is_extern, args }

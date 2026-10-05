@@ -1,1 +1,1 @@
-shadow_struct.ore:4:5: error: `Point` is already declared at 1:8 (shadowing is not allowed)
+shadow_struct.ore:4:5: error[E0016]: `Point` is already declared at 1:8 (shadowing is not allowed)

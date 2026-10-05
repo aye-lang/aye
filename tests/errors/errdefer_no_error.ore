@@ -1,0 +1,8 @@
+fn f() u32 {
+    errdefer @println("never")
+    return 1
+}
+
+pub fn main() {
+    @println(f())
+}

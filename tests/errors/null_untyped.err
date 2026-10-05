@@ -1,1 +1,1 @@
-null_untyped.ore:2:13: error: cannot infer the type of `null` (add a type annotation, e.g. `let x: ?i32 = null`)
+null_untyped.ore:2:13: error[E0028]: cannot infer the type of `null` (add a type annotation, e.g. `let x: ?i32 = null`)

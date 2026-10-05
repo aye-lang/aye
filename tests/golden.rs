@@ -2,7 +2,10 @@
 //!
 //! - `tests/cases/X.ore`: compiled in debug, safe and fast mode, run, and
 //!   stdout compared with `X.out`. If `X.panic` exists the program must abort
-//!   with exactly that on stderr (checked in debug and safe mode only).
+//!   with exactly that on stderr (checked in debug and safe mode only). If
+//!   `X.stderr` exists, `main` must return an error: exit status 1, and
+//!   stderr equal to `X.stderr` in debug mode; safe and fast mode print no
+//!   error return trace, so there stderr must be the first line only.
 //! - `tests/errors/X.ore`: must fail to compile with exactly the diagnostics
 //!   in `X.err`, one per line, in order.
 //! - `ore run` and `ore check` are also run through the built binary.
@@ -40,6 +43,7 @@ fn run_case(path: &Path, work: &Path) -> Result<(), String> {
     let src = read(path).unwrap();
     let expected_out = read(&path.with_extension("out")).ok_or("missing .out file")?;
     let expected_panic = read(&path.with_extension("panic"));
+    let expected_error = read(&path.with_extension("stderr"));
     let modes: &[Mode] = if expected_panic.is_some() {
         &[Mode::Debug, Mode::Safe]
     } else {
@@ -54,6 +58,16 @@ fn run_case(path: &Path, work: &Path) -> Result<(), String> {
         let stderr = String::from_utf8_lossy(&out.stderr);
         if stdout != expected_out {
             return Err(format!("[{mode:?}] stdout mismatch\n--- expected\n{expected_out}--- got\n{stdout}"));
+        }
+        if let Some(full) = &expected_error {
+            let want = if mode == Mode::Debug { full.clone() } else { format!("{}\n", full.lines().next().unwrap_or("")) };
+            if out.status.code() != Some(1) {
+                return Err(format!("[{mode:?}] expected exit status 1, got {}", out.status));
+            }
+            if stderr != want {
+                return Err(format!("[{mode:?}] stderr mismatch\n--- expected\n{want}--- got\n{stderr}"));
+            }
+            continue;
         }
         match &expected_panic {
             Some(p) => {
@@ -101,18 +115,18 @@ fn cli_check() -> Result<(), String> {
     let ok = "tests/cases/hello.ore";
     let bad = "tests/errors/unknown_escape.ore";
     let three = "tests/errors/three_errors.ore";
-    let diag = |line: u32, col: u32, msg: &str| {
-        format!(r#"{{"severity":"error","line":{line},"col":{col},"message":"{msg}"}}"#)
+    let diag = |code: &str, line: u32, col: u32, msg: &str| {
+        format!(r#"{{"severity":"error","code":"{code}","line":{line},"col":{col},"message":"{msg}"}}"#)
     };
     let checks: &[(&[&str], bool, String, String)] = &[
         (&[ok], true, String::new(), String::new()),
-        (&[bad], false, String::new(), format!("{bad}:2:16: error: unknown escape sequence `\\q`\n")),
+        (&[bad], false, String::new(), format!("{bad}:2:16: error[E0005]: unknown escape sequence `\\q`\n")),
         (&[ok, "--json"], true, format!("{{\"file\":\"{ok}\",\"diagnostics\":[]}}\n"), String::new()),
         (
             &[bad, "--json"],
             false,
             format!(
-                "{{\"file\":\"{bad}\",\"diagnostics\":[{{\"severity\":\"error\",\"line\":2,\"col\":16,\
+                "{{\"file\":\"{bad}\",\"diagnostics\":[{{\"severity\":\"error\",\"code\":\"E0005\",\"line\":2,\"col\":16,\
                  \"message\":\"unknown escape sequence `\\\\q`\"}}]}}\n"
             ),
             String::new(),
@@ -122,9 +136,9 @@ fn cli_check() -> Result<(), String> {
             false,
             format!(
                 "{{\"file\":\"{three}\",\"diagnostics\":[{},{},{}]}}\n",
-                diag(4, 12, "mismatched types: expected `i64`, found `i32`"),
-                diag(9, 16, "struct `P` has no field `y`"),
-                diag(11, 14, "undefined variable `missing`"),
+                diag("E0023", 4, 12, "mismatched types: expected `i64`, found `i32`"),
+                diag("E0038", 9, 16, "struct `P` has no field `y`"),
+                diag("E0018", 11, 14, "undefined variable `missing`"),
             ),
             String::new(),
         ),
@@ -148,6 +162,22 @@ fn cli_check() -> Result<(), String> {
     Ok(())
 }
 
+/// `ore explain <code>`: known code (exit 0), unknown code (exit 2).
+fn cli_explain() -> Result<(), String> {
+    let run = |code: &str| Command::new(env!("CARGO_BIN_EXE_ore")).args(["explain", code]).output();
+    let out = run("E0056").map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    if !out.status.success() || !text.starts_with("E0056: ") || !text.contains("Wrong:") || !text.contains("Fix:") {
+        return Err(format!("`ore explain E0056`: {}\n{text}", out.status));
+    }
+    let out = run("E9999").map_err(|e| e.to_string())?;
+    let err = String::from_utf8_lossy(&out.stderr);
+    if out.status.code() != Some(2) || !out.stdout.is_empty() || err != "ore: unknown error code `E9999`\n" {
+        return Err(format!("`ore explain E9999`: {}\n{err}", out.status));
+    }
+    Ok(())
+}
+
 fn main() {
     let work = std::env::temp_dir().join(format!("ore-golden-{}", std::process::id()));
     std::fs::create_dir_all(&work).unwrap();
@@ -166,6 +196,7 @@ fn main() {
         let w = &work;
         handles.push(("cli/ore run".to_string(), s.spawn(move || cli_run(w))));
         handles.push(("cli/ore check".to_string(), s.spawn(cli_check)));
+        handles.push(("cli/ore explain".to_string(), s.spawn(cli_explain)));
         handles.into_iter().map(|(n, h)| (n, h.join().unwrap())).collect()
     });
     let _ = std::fs::remove_dir_all(&work);

@@ -1,0 +1,22 @@
+error E { A }
+error F = E || Shape
+
+enum Shape { Circle }
+
+fn f(x: E!u32) {
+}
+
+fn g() Shape!u32 {
+    return 1
+}
+
+fn h() E!void {
+    defer try h()
+}
+
+fn k() Missing!u32 {
+    return 1
+}
+
+pub fn main() {
+}

@@ -1,0 +1,1 @@
+pub_inferred.ore:3:12: error[E0065]: a `pub` function must spell out its error set: write `ErrorSet!u32`, not `!u32`

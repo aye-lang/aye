@@ -1,0 +1,11 @@
+error E { A }
+
+fn count(n: u32) !u32 {
+    if n == 0 {
+        return E.A
+    }
+    return count(n - 1)
+}
+
+pub fn main() {
+}

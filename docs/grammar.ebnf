@@ -32,18 +32,21 @@ keyword     = "fn" | "let" | "var" | "pub" | "import" | "struct" | "enum"
             | "while" | "break" | "continue" | "return" | "defer" | "errdefer"
             | "try" | "catch" | "comptime" | "where" | "as" | "test"
             | "mut" | "extern" ;
-(* import error interface dyn errdefer try catch comptime where test are
-   reserved; stage0 reports "... is not yet supported".
+(* import interface dyn comptime where test are reserved; stage0 reports
+   "... is not yet supported".
    `true`, `false`, `null`, `in` and the primitive type names are
    predeclared identifiers, not keywords. *)
 
 (* --------------------------------------------------------- top level *)
 
 file        = { NEWLINE } , { item , ( NEWLINE | EOF ) , { NEWLINE } } ;
-item        = fn_decl | extern_fn | struct_decl | enum_decl ;
+item        = fn_decl | extern_fn | struct_decl | enum_decl | error_decl ;
 
-fn_decl     = [ "pub" ] "fn" ident "(" [ params ] ")" [ type ] block ;
+fn_decl     = [ "pub" ] "fn" ident "(" [ params ] ")" [ ret_type ] block ;
 extern_fn   = [ "pub" ] "extern" "fn" ident "(" [ params ] ")" [ type ] ;
+ret_type    = type
+            | [ ident ] "!" ( type | "void" ) ;   (* error union E!T; !T infers the set
+                                                     (not allowed on a `pub fn` other than main) *)
 params      = param { "," param } [ "," ] ;
 param       = ident ":" type ;
 
@@ -56,6 +59,10 @@ enum_decl   = [ "pub" ] "enum" ident "{" { NEWLINE }
               variant { ( "," | NEWLINE ) { NEWLINE } variant } [ "," ] { NEWLINE } "}" ;
 variant     = ident [ field_list ] ;           (* field_list not empty *)
 
+error_decl  = [ "pub" ] "error" ident
+              ( "{" { NEWLINE } ident { ( "," | NEWLINE ) { NEWLINE } ident } [ "," ] { NEWLINE } "}"
+              | "=" ident { "||" ident } ) ;  (* merged set: every error of each part *)
+
 (* ------------------------------------------------------------- types *)
 
 type        = ident                    (* i8 i16 i32 i64 isize u8 u16 u32 u64
@@ -65,6 +72,7 @@ type        = ident                    (* i8 i16 i32 i64 isize u8 u16 u32 u64
             | "[" "*" "]" type         (* C pointer (FFI)  [*]T *)
             | "*" [ "mut" ] type       (* pointer          *T, *mut T *)
             | "?" type ;               (* optional         ?T   *)
+(* an ident can also name an error set; its values are written Set.Name *)
 
 (* -------------------------------------------------------- statements *)
 
@@ -72,7 +80,7 @@ block       = "{" { NEWLINE } [ stmt { NEWLINE { NEWLINE } stmt } { NEWLINE } ] 
 
 stmt        = let_stmt | if_stmt | while_stmt | for_stmt
             | "break" | "continue" | "return" [ expr ]
-            | "defer" ( block | simple_stmt )
+            | ( "defer" | "errdefer" ) ( block | simple_stmt )
             | block
             | simple_stmt ;
 
@@ -83,7 +91,7 @@ if_stmt     = "if" header_expr [ "|" ident "|" ] block [ "else" ( if_stmt | bloc
 while_stmt  = "while" header_expr block ;
 for_stmt    = "for" ident "in" header_expr ".." header_expr block ;
                (* half-open range lo..hi; "in" is a contextual identifier *)
-simple_stmt = expr [ assign_op expr ] ;   (* a bare expr must be a call or match *)
+simple_stmt = expr [ assign_op expr ] ;   (* a bare expr must be a call, try, catch or match *)
 assign_op   = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "+%=" | "-%=" | "*%=" ;
 
 (* header_expr is expr, except that `Name {` and `Enum.Variant {` are not
@@ -97,21 +105,24 @@ header_expr = expr ;
      1  ||
      2  &&
      3  == != < <= > >=
-     4  + - +% -%
-     5  * / % *%
-     6  as            (postfix cast, binds looser than unary: -x as f32 == (-x) as f32)
-     7  - ! & &mut    (unary prefix)
-     8  call, index, slice, field, .*  *)
+     4  catch
+     5  + - +% -%
+     6  * / % *%
+     7  as            (postfix cast, binds looser than unary: -x as f32 == (-x) as f32)
+     8  - ! & &mut try   (unary prefix)
+     9  call, index, slice, field, .*  *)
 
 expr        = or_expr ;
 or_expr     = and_expr { "||" and_expr } ;
 and_expr    = cmp_expr { "&&" cmp_expr } ;
-cmp_expr    = add_expr [ cmp_op add_expr ] ;
+cmp_expr    = catch_expr [ cmp_op catch_expr ] ;
 cmp_op      = "==" | "!=" | "<" | "<=" | ">" | ">=" ;
+catch_expr  = add_expr { "catch" [ "|" ident "|" ] ( block | add_expr ) } ;
+               (* x catch |e| { ... } runs the block on an error; x catch v gives v *)
 add_expr    = mul_expr { ( "+" | "-" | "+%" | "-%" ) mul_expr } ;
 mul_expr    = cast_expr { ( "*" | "/" | "%" | "*%" ) cast_expr } ;
 cast_expr   = unary { "as" type } ;
-unary       = ( "-" | "!" | "&" [ "mut" ] ) unary | postfix ;
+unary       = ( "-" | "!" | "&" [ "mut" ] | "try" ) unary | postfix ;
 postfix     = primary { "." ident
                       | ".*"                                   (* dereference *)
                       | "[" expr "]"
@@ -119,7 +130,7 @@ postfix     = primary { "." ident
 primary     = int_lit | float_lit | string_lit | char_lit
             | "true" | "false" | "null"
             | ident
-            | ident "." ident                              (* variant without payload *)
+            | ident "." ident                              (* variant without payload, or error *)
             | ident "." ident "{" [ field_init { "," field_init } [ "," ] ] "}"   (* variant literal *)
             | match_expr
             | ident "(" [ args ] ")"                       (* call *)
@@ -135,4 +146,5 @@ match_expr  = "match" header_expr "{" { NEWLINE }
 arm         = pattern "=>" ( block | expr ) ;   (* block only in a match statement *)
 pattern     = "_"
             | "." ident [ "{" [ field_pat { "," field_pat } [ "," ".." ] | ".." ] "}" ] ;
+               (* in a match on errors: "." ident, the error's name *)
 field_pat   = ident [ ":" ident ] ;

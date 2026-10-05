@@ -8,6 +8,7 @@
 //! one mistake is reported once.
 
 use crate::ast::{self, ArmBody, AssignOp, BinOp, ExprKind, StmtKind, TypeExprKind, UnOp};
+use crate::codes::*;
 use crate::diag::{Error, Result, Span};
 use std::collections::HashMap;
 use std::fmt;
@@ -90,9 +91,19 @@ pub enum Type {
     Optional(Box<Type>),
     Struct(String),
     Enum(String),
+    /// The type of an error value. The name is the error set's name, or
+    /// `INFERRED` plus a function name for the inferred set of a `!T`
+    /// function.
+    ErrorSet(String),
+    /// `E!T`: an error of set `E` (the name, as in `ErrorSet`) or a `T`.
+    /// Only a function's return type.
+    ErrorUnion(String, Box<Type>),
     /// The type of something that already has a reported error.
     Error,
 }
+
+/// Name prefix of the inferred error set of a `!T` function.
+const INFERRED: &str = "error set of ";
 
 /// How `Type::Error` prints. Messages that mention it are follow-up errors
 /// and are not reported.
@@ -144,7 +155,9 @@ impl fmt::Display for Type {
             Type::Ptr(t, false) => write!(f, "*{t}"),
             Type::Ptr(t, true) => write!(f, "*mut {t}"),
             Type::Optional(t) => write!(f, "?{t}"),
-            Type::Struct(n) | Type::Enum(n) => f.write_str(n),
+            Type::Struct(n) | Type::Enum(n) | Type::ErrorSet(n) => f.write_str(n),
+            Type::ErrorUnion(set, t) if set.starts_with(INFERRED) => write!(f, "!{t}"),
+            Type::ErrorUnion(set, t) => write!(f, "{set}!{t}"),
             Type::Error => f.write_str(ERROR_TY),
         }
     }
@@ -160,6 +173,9 @@ pub struct Program {
     pub enums: Vec<EnumDef>,
     pub externs: Vec<ExternFn>,
     pub fns: Vec<FnDef>,
+    /// Every error name; an error's value is its index plus one (0 means
+    /// "no error"). The same name in two sets is the same error.
+    pub errors: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -224,6 +240,7 @@ pub enum TStmtKind {
     Continue,
     Return(Option<TExpr>),
     Defer(Vec<TStmt>),
+    ErrDefer(Vec<TStmt>),
     Block(Vec<TStmt>),
     Expr(TExpr),
 }
@@ -272,11 +289,21 @@ pub enum TExprKind {
     /// Arms in source order. The type is `void` for a `match` statement.
     Match { scrutinee: Box<TExpr>, arms: Vec<TArm> },
     ArrayLit(Vec<TExpr>),
+    /// An error value (see `Program::errors`).
+    ErrorValue(u16),
+    /// `try x`; the type is the payload of `x`'s error union.
+    Try(Box<TExpr>),
+    /// `x catch |e| body`; the type is the payload of `x`'s error union.
+    Catch { expr: Box<TExpr>, capture: Option<VarId>, body: Box<TArmBody> },
+    /// A `T` returned from an `E!T` function.
+    OkWrap(Box<TExpr>),
+    /// An error value returned from an `E!T` function.
+    ErrWrap(Box<TExpr>),
 }
 
 #[derive(Debug, Clone)]
 pub struct TArm {
-    /// Variant index; `None` for `_`.
+    /// Variant index, or the error value in a `match` on errors; `None` for `_`.
     pub variant: Option<usize>,
     /// Pattern variables and the payload field each one is bound to.
     pub bindings: Vec<(VarId, usize)>,
@@ -298,10 +325,17 @@ struct FnSig {
     is_extern: bool,
 }
 
-struct Checker {
+struct Checker<'a> {
     structs: HashMap<String, StructDef>,
     enums: HashMap<String, EnumDef>,
+    /// Error sets (named and inferred) and the names of their errors.
+    sets: HashMap<String, Vec<String>>,
+    /// `Program::errors`.
+    error_names: Vec<String>,
     fns: HashMap<String, FnSig>,
+    fn_decls: HashMap<String, &'a ast::FnDecl>,
+    /// Checked bodies; `None` while a body is being checked.
+    bodies: HashMap<String, Option<FnDef>>,
     /// Top-level names (structs, enums, fns, extern fns) and where they are declared.
     top_spans: HashMap<String, Span>,
     errors: Vec<Error>,
@@ -319,7 +353,11 @@ pub fn check(file: &ast::File) -> std::result::Result<Program, Vec<Error>> {
     let mut c = Checker {
         structs: HashMap::new(),
         enums: HashMap::new(),
+        sets: HashMap::new(),
+        error_names: Vec::new(),
         fns: HashMap::new(),
+        fn_decls: HashMap::new(),
+        bodies: HashMap::new(),
         top_spans: HashMap::new(),
         errors: Vec::new(),
         failures: 0,
@@ -333,17 +371,17 @@ pub fn check(file: &ast::File) -> std::result::Result<Program, Vec<Error>> {
     if c.errors.is_empty() { Ok(p) } else { Err(c.errors) }
 }
 
-fn err<T>(span: Span, msg: impl Into<String>) -> Result<T> {
-    Err(Error::new(span, msg))
+fn err<T>(code: Code, span: Span, msg: impl Into<String>) -> Result<T> {
+    Err(Error::new(code, span, msg))
 }
 
 /// A failure caused by an error that was already reported.
 fn silent() -> Error {
-    Error::new(Span::default(), "")
+    Error::new(Code(0), Span::default(), "")
 }
 
 fn mismatch(span: Span, expected: &Type, found: &Type) -> Error {
-    Error::new(span, format!("mismatched types: expected `{expected}`, found `{found}`"))
+    Error::new(E0023, span, format!("mismatched types: expected `{expected}`, found `{found}`"))
 }
 
 /// Is this expression an untyped numeric literal (whose type comes from context)?
@@ -376,19 +414,45 @@ fn is_unsigned(t: &Type) -> bool {
     matches!(t, Type::Int(i) if !i.signed())
 }
 
-fn block_returns(stmts: &[TStmt]) -> bool {
+/// Does every path through `stmts` end in `return` (or, with `or_jumps`,
+/// in `break` or `continue`)?
+fn block_returns(stmts: &[TStmt], or_jumps: bool) -> bool {
     stmts.iter().any(|s| match &s.kind {
         TStmtKind::Return(_) => true,
-        TStmtKind::Block(b) => block_returns(b),
-        TStmtKind::If { then, els, .. } => block_returns(then) && block_returns(els),
+        TStmtKind::Break | TStmtKind::Continue => or_jumps,
+        TStmtKind::Block(b) => block_returns(b, or_jumps),
+        TStmtKind::If { then, els, .. } => block_returns(then, or_jumps) && block_returns(els, or_jumps),
         TStmtKind::Expr(TExpr { kind: TExprKind::Match { arms, .. }, .. }) => {
-            arms.iter().all(|a| matches!(&a.body, TArmBody::Block(b) if block_returns(b)))
+            arms.iter().all(|a| matches!(&a.body, TArmBody::Block(b) if block_returns(b, or_jumps)))
         }
         _ => false,
     })
 }
 
-impl Checker {
+/// Does a function returning `t` need a `return` with a value on every path?
+fn needs_value(t: &Type) -> bool {
+    match t {
+        Type::Void => false,
+        Type::ErrorUnion(_, p) => **p != Type::Void,
+        _ => true,
+    }
+}
+
+/// An error of set `set` in a message: `` `Set.Name` ``, or `` `Name` `` for
+/// an inferred set.
+fn qualify(set: &str, name: &str) -> String {
+    if set.starts_with(INFERRED) { format!("`{name}`") } else { format!("`{set}.{name}`") }
+}
+
+/// An error set in a message.
+fn describe_set(set: &str) -> String {
+    match set.strip_prefix(INFERRED) {
+        Some(f) => format!("the inferred error set of `{f}`"),
+        None => format!("error set `{set}`"),
+    }
+}
+
+impl<'a> Checker<'a> {
     /// Record an error and go on. Follow-up errors are dropped: the silent
     /// error, and any message that mentions `Type::Error`.
     fn report(&mut self, e: Error) {
@@ -398,21 +462,22 @@ impl Checker {
         }
     }
 
-    fn program(&mut self, file: &ast::File) -> Program {
+    fn program(&mut self, file: &'a ast::File) -> Program {
         // 1. Top-level names. An item whose name is rejected is skipped.
         let mut items = Vec::new();
         for item in &file.items {
             let (name, span) = match item {
                 ast::Item::Struct(s) => (&s.name, s.span),
                 ast::Item::Enum(e) => (&e.name, e.span),
+                ast::Item::ErrorSet(e) => (&e.name, e.span),
                 ast::Item::Fn(f) => (&f.name, f.span),
             };
             if Type::from_name(name).is_some() || matches!(name.as_str(), "true" | "false" | "null") {
-                self.report(Error::new(span, format!("`{name}` is a builtin name and cannot be redefined")));
+                self.report(Error::new(E0014, span, format!("`{name}` is a builtin name and cannot be redefined")));
                 continue;
             }
             if self.top_spans.contains_key(name) {
-                self.report(Error::new(span, format!("`{name}` is defined more than once")));
+                self.report(Error::new(E0015, span, format!("`{name}` is defined more than once")));
                 continue;
             }
             self.top_spans.insert(name.clone(), span);
@@ -423,10 +488,14 @@ impl Checker {
                 ast::Item::Enum(e) => {
                     self.enums.insert(e.name.clone(), EnumDef { name: e.name.clone(), variants: vec![] });
                 }
+                ast::Item::ErrorSet(e) => {
+                    self.sets.insert(e.name.clone(), vec![]);
+                }
                 ast::Item::Fn(_) => {}
             }
             items.push(item);
         }
+        self.error_sets(&items);
         // 2. Struct fields and enum variants.
         for item in &items {
             match item {
@@ -436,12 +505,12 @@ impl Checker {
                 }
                 ast::Item::Enum(e) => {
                     if e.variants.is_empty() {
-                        self.report(Error::new(e.span, format!("enum `{}` has no variants", e.name)));
+                        self.report(Error::new(E0054, e.span, format!("enum `{}` has no variants", e.name)));
                     }
                     let mut variants: Vec<VariantDef> = Vec::new();
                     for v in &e.variants {
                         if variants.iter().any(|x| x.name == v.name) {
-                            self.report(Error::new(v.span, format!("duplicate variant `{}` in enum `{}`", v.name, e.name)));
+                            self.report(Error::new(E0015, v.span, format!("duplicate variant `{}` in enum `{}`", v.name, e.name)));
                             continue;
                         }
                         let fields = self.fields(&v.fields, &format!("variant `{}.{}`", e.name, v.name));
@@ -449,14 +518,14 @@ impl Checker {
                     }
                     self.enums.get_mut(&e.name).unwrap().variants = variants;
                 }
-                ast::Item::Fn(_) => {}
+                ast::Item::ErrorSet(_) | ast::Item::Fn(_) => {}
             }
         }
         for item in &items {
             let (name, span) = match item {
                 ast::Item::Struct(s) => (&s.name, s.span),
                 ast::Item::Enum(e) => (&e.name, e.span),
-                ast::Item::Fn(_) => continue,
+                ast::Item::ErrorSet(_) | ast::Item::Fn(_) => continue,
             };
             if let Err(e) = self.check_recursive(name, name, span, &mut Vec::new()) {
                 self.report(e);
@@ -472,41 +541,57 @@ impl Checker {
             for p in &f.params {
                 let ty = self.resolve_or_report(&p.ty);
                 if f.is_extern && !ffi_ok(&ty) {
-                    self.report(Error::new(p.ty.span, format!("type `{ty}` cannot be used in an `extern fn` signature")));
+                    self.report(Error::new(E0052, p.ty.span, format!("type `{ty}` cannot be used in an `extern fn` signature")));
                 }
                 params.push(ty);
             }
             let ret = match &f.ret {
-                Some(t) => self.resolve_or_report(t),
+                Some(t) => self.resolve_ret(f, t),
                 None => Type::Void,
             };
             if f.is_extern {
                 if ret != Type::Void && !ffi_ok(&ret) {
                     let span = f.ret.as_ref().unwrap().span;
-                    self.report(Error::new(span, format!("type `{ret}` cannot be used in an `extern fn` signature")));
+                    self.report(Error::new(E0052, span, format!("type `{ret}` cannot be used in an `extern fn` signature")));
                 }
                 externs.push(ExternFn { name: f.name.clone(), params: params.clone(), ret: ret.clone() });
             }
             if f.name == "main" && !f.is_extern {
                 main_found = true;
+                let ret_ok = matches!(&ret, Type::Void | Type::Error)
+                    || matches!(&ret, Type::ErrorUnion(_, p) if **p == Type::Void);
                 if !f.is_pub {
-                    self.report(Error::new(f.span, "`main` must be declared `pub fn main()`"));
-                } else if !params.is_empty() || ret != Type::Void {
-                    self.report(Error::new(f.span, "`main` must take no parameters and have no return type"));
+                    self.report(Error::new(E0051, f.span, "`main` must be declared `pub fn main()`"));
+                } else if !params.is_empty() || !ret_ok {
+                    self.report(Error::new(E0051, f.span, "`main` must take no parameters and return nothing or `!void`"));
                 }
             }
             self.fns.insert(f.name.clone(), FnSig { params, ret, is_extern: f.is_extern });
         }
         if !main_found {
-            self.report(Error::new(Span::new(1, 1), "no `pub fn main()` found"));
+            self.report(Error::new(E0051, Span::new(1, 1), "no `pub fn main()` found"));
         }
         // 4. Bodies.
+        for item in &items {
+            if let ast::Item::Fn(f) = item
+                && !f.is_extern
+            {
+                self.fn_decls.insert(f.name.clone(), f);
+            }
+        }
+        for item in &items {
+            if let ast::Item::Fn(f) = item
+                && !f.is_extern
+            {
+                let _ = self.ensure_body(&f.name, f.span);
+            }
+        }
         let mut fns = Vec::new();
         for item in &items {
             if let ast::Item::Fn(f) = item
                 && !f.is_extern
             {
-                fns.push(self.fn_body(f));
+                fns.push(self.bodies.get_mut(&f.name).unwrap().take().unwrap());
             }
         }
         let mut structs = Vec::new();
@@ -515,10 +600,133 @@ impl Checker {
             match item {
                 ast::Item::Struct(s) => structs.push(self.structs[&s.name].clone()),
                 ast::Item::Enum(e) => enums.push(self.enums[&e.name].clone()),
-                ast::Item::Fn(_) => {}
+                ast::Item::ErrorSet(_) | ast::Item::Fn(_) => {}
             }
         }
-        Program { structs, enums, externs, fns }
+        Program { structs, enums, externs, fns, errors: std::mem::take(&mut self.error_names) }
+    }
+
+    /// The errors of every error set. Each new error name gets the next
+    /// error value; a merged set (`A || B`) has every error of its parts.
+    fn error_sets(&mut self, items: &[&'a ast::Item]) {
+        let mut merges = HashMap::new();
+        for item in items {
+            let ast::Item::ErrorSet(e) = item else { continue };
+            let ast::ErrorSetKind::List(names) = &e.kind else {
+                merges.insert(e.name.as_str(), e);
+                continue;
+            };
+            if names.is_empty() {
+                self.report(Error::new(E0054, e.span, format!("error set `{}` has no errors", e.name)));
+            }
+            let mut errors: Vec<String> = Vec::new();
+            for (n, span) in names {
+                if errors.contains(n) {
+                    self.report(Error::new(E0015, *span, format!("duplicate error `{n}` in error set `{}`", e.name)));
+                    continue;
+                }
+                if !self.error_names.contains(n) {
+                    self.error_names.push(n.clone());
+                }
+                errors.push(n.clone());
+            }
+            self.sets.insert(e.name.clone(), errors);
+        }
+        let mut done = Vec::new();
+        for item in items {
+            if let ast::Item::ErrorSet(e) = item
+                && merges.contains_key(e.name.as_str())
+            {
+                self.merge_set(&e.name, &merges, &mut done, &mut Vec::new());
+            }
+        }
+    }
+
+    fn merge_set(
+        &mut self,
+        name: &str,
+        merges: &HashMap<&str, &ast::ErrorSetDecl>,
+        done: &mut Vec<String>,
+        active: &mut Vec<String>,
+    ) {
+        if done.iter().any(|d| d == name) {
+            return;
+        }
+        let decl = merges[name];
+        if active.iter().any(|a| a == name) {
+            self.report(Error::new(E0070, decl.span, format!("error set `{name}` is defined in terms of itself")));
+            return;
+        }
+        active.push(name.to_string());
+        let ast::ErrorSetKind::Merge(parts) = &decl.kind else { unreachable!() };
+        let mut errors: Vec<String> = Vec::new();
+        for (part, span) in parts {
+            if merges.contains_key(part.as_str()) {
+                self.merge_set(part, merges, done, active);
+            }
+            match self.set_name(part, *span) {
+                Ok(set) => {
+                    for n in &self.sets[&set] {
+                        if !errors.contains(n) {
+                            errors.push(n.clone());
+                        }
+                    }
+                }
+                Err(e) => self.report(e),
+            }
+        }
+        active.pop();
+        done.push(name.to_string());
+        self.sets.insert(name.to_string(), errors);
+    }
+
+    /// `name` used as an error set.
+    fn set_name(&self, name: &str, span: Span) -> Result<String> {
+        if self.sets.contains_key(name) {
+            Ok(name.to_string())
+        } else if self.top_spans.contains_key(name) || Type::from_name(name).is_some() {
+            err(E0070, span, format!("`{name}` is not an error set"))
+        } else {
+            err(E0017, span, format!("unknown error set `{name}`"))
+        }
+    }
+
+    /// The return type of `f`. Only here can a type be an error union, and
+    /// only there can its payload be `void`. `!T` gets a new, empty inferred
+    /// set that its body fills in.
+    fn resolve_ret(&mut self, f: &ast::FnDecl, t: &ast::TypeExpr) -> Type {
+        let TypeExprKind::ErrorUnion(set, payload) = &t.kind else {
+            return self.resolve_or_report(t);
+        };
+        let payload = match &payload.kind {
+            TypeExprKind::Named(n) if n == "void" => Type::Void,
+            _ => self.resolve_or_report(payload),
+        };
+        let set = match set {
+            Some((name, span)) => match self.set_name(name, *span) {
+                Ok(set) => set,
+                Err(e) => {
+                    self.report(e);
+                    return Type::Error;
+                }
+            },
+            None => {
+                if f.is_pub && f.name != "main" {
+                    self.report(Error::new(
+                        E0065,
+                        t.span,
+                        format!("a `pub` function must spell out its error set: write `ErrorSet!{payload}`, not `!{payload}`"),
+                    ));
+                }
+                let set = format!("{INFERRED}{}", f.name);
+                self.sets.insert(set.clone(), vec![]);
+                set
+            }
+        };
+        if payload == Type::Error {
+            return Type::Error;
+        }
+        Type::ErrorUnion(set, Box::new(payload))
     }
 
     /// Fields of a struct or enum variant; `owner` names it in messages.
@@ -526,7 +734,7 @@ impl Checker {
         let mut fields: Vec<(String, Type)> = Vec::new();
         for f in decls {
             if fields.iter().any(|(n, _)| *n == f.name) {
-                self.report(Error::new(f.span, format!("duplicate field `{}` in {owner}", f.name)));
+                self.report(Error::new(E0015, f.span, format!("duplicate field `{}` in {owner}", f.name)));
                 continue;
             }
             let ty = self.resolve_or_report(&f.ty);
@@ -556,7 +764,7 @@ impl Checker {
             if let Type::Struct(n) | Type::Enum(n) = t {
                 if n == root {
                     let kind = if self.structs.contains_key(root) { "struct" } else { "enum" };
-                    return err(span, format!("{kind} `{root}` contains itself by value (infinite size)"));
+                    return err(E0053, span, format!("{kind} `{root}` contains itself by value (infinite size)"));
                 }
                 self.check_recursive(root, n, span, path)?;
             }
@@ -570,13 +778,17 @@ impl Checker {
                 Some(ty) => ty,
                 None if self.structs.contains_key(n) => Type::Struct(n.clone()),
                 None if self.enums.contains_key(n) => Type::Enum(n.clone()),
-                None => return err(t.span, format!("unknown type `{n}`")),
+                None if self.sets.contains_key(n) => Type::ErrorSet(n.clone()),
+                None => return err(E0017, t.span, format!("unknown type `{n}`")),
             },
             TypeExprKind::Array(n, elem) => Type::Array(Box::new(self.resolve_type(elem)?), *n),
             TypeExprKind::Slice(elem) => Type::Slice(Box::new(self.resolve_type(elem)?)),
             TypeExprKind::CPtr(elem) => Type::CPtr(Box::new(self.resolve_type(elem)?)),
             TypeExprKind::Ptr(elem, mutable) => Type::Ptr(Box::new(self.resolve_type(elem)?), *mutable),
             TypeExprKind::Optional(elem) => Type::Optional(Box::new(self.resolve_type(elem)?)),
+            TypeExprKind::ErrorUnion(..) => {
+                return err(E0066, t.span, "error union types can only be used as a function's return type");
+            }
         })
     }
 
@@ -594,7 +806,7 @@ impl Checker {
     fn declare(&mut self, name: &str, ty: Type, mutable: bool, span: Span) -> Result<VarId> {
         let prev = self.scopes.iter().find_map(|s| s.get(name).map(|&(_, sp)| sp));
         if let Some(prev) = prev.or_else(|| self.top_spans.get(name).copied()) {
-            return err(span, format!(
+            return err(E0016, span, format!(
                 "`{name}` is already declared at {}:{} (shadowing is not allowed)",
                 prev.line, prev.col
             ));
@@ -625,6 +837,34 @@ impl Checker {
         self.scopes.iter().rev().find_map(|s| s.get(name).map(|&(id, _)| id))
     }
 
+    /// Check the body of `name` if that is not done yet. A function with an
+    /// inferred error set is checked before its callers, which need its set;
+    /// `span` is the call that needs it.
+    fn ensure_body(&mut self, name: &str, span: Span) -> Result<()> {
+        match self.bodies.get(name) {
+            Some(Some(_)) => return Ok(()),
+            Some(None) => {
+                return err(E0069, span, format!(
+                    "cannot infer the error set of `{name}`: it calls itself, directly or through other functions (write the error set, `E!T`)"
+                ));
+            }
+            None => {}
+        }
+        self.bodies.insert(name.to_string(), None);
+        let saved = (
+            std::mem::take(&mut self.vars),
+            std::mem::take(&mut self.scopes),
+            self.ret.clone(),
+            self.loop_depth,
+            self.in_defer,
+            self.failures,
+        );
+        let def = self.fn_body(self.fn_decls[name]);
+        (self.vars, self.scopes, self.ret, self.loop_depth, self.in_defer, self.failures) = saved;
+        self.bodies.insert(name.to_string(), Some(def));
+        Ok(())
+    }
+
     fn fn_body(&mut self, f: &ast::FnDecl) -> FnDef {
         let sig = self.fns[&f.name].clone();
         self.vars.clear();
@@ -639,8 +879,8 @@ impl Checker {
         }
         let body = self.block(f.body.as_ref().unwrap());
         // A statement with an error may have been the `return`.
-        if self.failures == failures && sig.ret != Type::Void && !block_returns(&body) {
-            self.report(Error::new(
+        if self.failures == failures && needs_value(&sig.ret) && !block_returns(&body, false) {
+            self.report(Error::new(E0050, 
                 f.span,
                 format!("function `{}` must return a value of type `{}` on every path", f.name, sig.ret),
             ));
@@ -710,7 +950,7 @@ impl Checker {
                     Some((name, name_span)) => {
                         let c = self.value(cond, None).and_then(|c| match &c.ty {
                             Type::Optional(_) => Ok(c),
-                            t => err(c.span, format!("`if` with `|{name}|` needs an optional (`?T`) value, found `{t}`")),
+                            t => err(E0027, c.span, format!("`if` with `|{name}|` needs an optional (`?T`) value, found `{t}`")),
                         });
                         let inner = match &c {
                             Ok(TExpr { ty: Type::Optional(t), .. }) => (**t).clone(),
@@ -747,10 +987,10 @@ impl Checker {
             StmtKind::For { var, var_span, lo, hi, body } => {
                 let range = self.operand_pair(lo, hi, None).and_then(|(lo, hi)| {
                     if lo.ty != hi.ty {
-                        return err(hi.span, format!("range bounds have different types: `{}` and `{}`", lo.ty, hi.ty));
+                        return err(E0023, hi.span, format!("range bounds have different types: `{}` and `{}`", lo.ty, hi.ty));
                     }
                     if !lo.ty.is_int() {
-                        return err(lo.span, format!("range bounds must be integers, found `{}`", lo.ty));
+                        return err(E0046, lo.span, format!("range bounds must be integers, found `{}`", lo.ty));
                     }
                     Ok((lo, hi))
                 });
@@ -768,27 +1008,34 @@ impl Checker {
                 let word = if matches!(s.kind, StmtKind::Break) { "break" } else { "continue" };
                 if self.loop_depth == 0 {
                     if self.in_defer {
-                        return err(s.span, format!("`{word}` cannot leave a `defer` block"));
+                        return err(E0047, s.span, format!("`{word}` cannot leave a `defer` block"));
                     }
-                    return err(s.span, format!("`{word}` outside of a loop"));
+                    return err(E0047, s.span, format!("`{word}` outside of a loop"));
                 }
                 if word == "break" { TStmtKind::Break } else { TStmtKind::Continue }
             }
             StmtKind::Return(value) => {
                 if self.in_defer {
-                    return err(s.span, "`return` is not allowed inside `defer`");
+                    return err(E0048, s.span, "`return` is not allowed inside `defer`");
                 }
                 let ret = self.ret.clone();
                 match (value, &ret) {
-                    (None, Type::Void) => TStmtKind::Return(None),
-                    (None, t) => return err(s.span, format!("missing return value of type `{t}`")),
+                    (None, t) if !needs_value(t) => TStmtKind::Return(None),
+                    (None, t) => return err(E0049, s.span, format!("missing return value of type `{t}`")),
                     (Some(e), Type::Void) => {
-                        return err(e.span, "function has no return type but a value was returned");
+                        return err(E0049, e.span, "function has no return type but a value was returned");
+                    }
+                    (Some(e), Type::ErrorUnion(set, payload)) => {
+                        TStmtKind::Return(Some(self.return_union(e, set, payload)?))
                     }
                     (Some(e), t) => TStmtKind::Return(Some(self.expect(e, t)?)),
                 }
             }
-            StmtKind::Defer(inner) => {
+            StmtKind::Defer(inner) | StmtKind::ErrDefer(inner) => {
+                let on_err = matches!(s.kind, StmtKind::ErrDefer(_));
+                if on_err && !matches!(self.ret, Type::ErrorUnion(..) | Type::Error) {
+                    return err(E0068, s.span, "`errdefer` never runs here: the function does not return an error union");
+                }
                 let saved = (self.loop_depth, self.in_defer);
                 self.loop_depth = 0;
                 self.in_defer = true;
@@ -797,7 +1044,7 @@ impl Checker {
                     _ => self.stmt(inner).map(|s| vec![s]),
                 };
                 (self.loop_depth, self.in_defer) = saved;
-                TStmtKind::Defer(body?)
+                if on_err { TStmtKind::ErrDefer(body?) } else { TStmtKind::Defer(body?) }
             }
             StmtKind::Block(b) => TStmtKind::Block(self.block(b)),
             StmtKind::Expr(e) => TStmtKind::Expr(self.expr_stmt(e)?),
@@ -805,12 +1052,105 @@ impl Checker {
         Ok(TStmt { kind, span: s.span })
     }
 
-    /// An expression used as a statement: a call or a `match`.
+    /// An expression used as a statement: a call, `try`, `catch` or `match`.
+    /// An error union result must not be dropped.
     fn expr_stmt(&mut self, e: &ast::Expr) -> Result<TExpr> {
         match &e.kind {
             ExprKind::Match { .. } => self.match_expr(e, None, true),
-            ExprKind::Call { .. } | ExprKind::Builtin { .. } => self.expr(e, None),
-            _ => err(e.span, "expression value is not used (only calls can be statements)"),
+            ExprKind::Call { .. } | ExprKind::Builtin { .. } | ExprKind::Try(_) | ExprKind::Catch { .. } => {
+                let t = self.expr(e, None)?;
+                self.handled(t)
+            }
+            _ => err(E0031, e.span, "expression value is not used (only calls can be statements)"),
+        }
+    }
+
+    /// Reject an error union that is not handled with `try` or `catch`.
+    fn handled(&self, t: TExpr) -> Result<TExpr> {
+        if matches!(t.ty, Type::ErrorUnion(..)) {
+            let what = match &t.kind {
+                TExprKind::Call { name, .. } => format!("`{name}` returns"),
+                _ => "this expression has type".to_string(),
+            };
+            return err(E0061, t.span, format!("unhandled error: {what} `{}` (handle the error with `try` or `catch`)", t.ty));
+        }
+        Ok(t)
+    }
+
+    /// `return e` in a function returning `set!payload`: an error, an error
+    /// union passed on as is, or a payload value.
+    fn return_union(&mut self, e: &ast::Expr, set: &str, payload: &Type) -> Result<TExpr> {
+        let t = self.expr(e, (*payload != Type::Void).then(|| Self::hint(e, payload)))?;
+        let span = t.span;
+        match &t.ty {
+            Type::Error => Err(silent()),
+            Type::Void => err(E0030, span, "this expression does not produce a value"),
+            Type::ErrorSet(_) => {
+                self.propagate(self.errors_of(&t), span)?;
+                let ty = Type::ErrorUnion(set.to_string(), Box::new(payload.clone()));
+                Ok(TExpr { kind: TExprKind::ErrWrap(Box::new(t)), ty, span })
+            }
+            Type::ErrorUnion(src, p) => {
+                if **p != *payload {
+                    let want = Type::ErrorUnion(set.to_string(), Box::new(payload.clone()));
+                    return Err(mismatch(span, &want, &t.ty));
+                }
+                let errors = self.sets[src].iter().map(|n| (src.clone(), n.clone())).collect();
+                self.propagate(errors, span)?;
+                Ok(TExpr { ty: Type::ErrorUnion(set.to_string(), p.clone()), ..t })
+            }
+            _ if *payload == Type::Void => {
+                err(E0049, span, format!("this function returns `{}`: return no value, or an error", self.ret))
+            }
+            _ => {
+                let t = self.coerce(t, payload)?;
+                let ty = Type::ErrorUnion(set.to_string(), Box::new(payload.clone()));
+                Ok(TExpr { kind: TExprKind::OkWrap(Box::new(t)), ty, span })
+            }
+        }
+    }
+
+    /// The errors (set, name) that the error value `t` can hold.
+    fn errors_of(&self, t: &TExpr) -> Vec<(String, String)> {
+        let Type::ErrorSet(set) = &t.ty else { unreachable!() };
+        match t.kind {
+            TExprKind::ErrorValue(v) => vec![(set.clone(), self.error_names[v as usize - 1].clone())],
+            _ => self.sets[set].iter().map(|n| (set.clone(), n.clone())).collect(),
+        }
+    }
+
+    /// `errors` leave the current function (through `return` or `try`):
+    /// add them to its inferred set, or check that its set has them.
+    fn propagate(&mut self, errors: Vec<(String, String)>, span: Span) -> Result<()> {
+        let Type::ErrorUnion(target, _) = &self.ret else { unreachable!() };
+        let target = target.clone();
+        if target.starts_with(INFERRED) {
+            let set = self.sets.get_mut(&target).unwrap();
+            for (_, n) in errors {
+                if !set.contains(&n) {
+                    set.push(n);
+                }
+            }
+            return Ok(());
+        }
+        let missing: Vec<String> =
+            errors.iter().filter(|(_, n)| !self.sets[&target].contains(n)).map(|(s, n)| qualify(s, n)).collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        let (s, are) = if missing.len() == 1 { ("", "is") } else { ("s", "are") };
+        err(E0064, span, format!("error{s} {} {are} not in this function's error set `{target}`", missing.join(", ")))
+    }
+
+    /// The parts of the error union `t`, for `try` and `catch` (`what`).
+    fn union_parts(t: &TExpr, what: &str) -> Result<(String, Type)> {
+        match &t.ty {
+            Type::ErrorUnion(set, payload) => Ok((set.clone(), (**payload).clone())),
+            Type::Error => Err(silent()),
+            ty => {
+                let hint = if matches!(ty, Type::Optional(_)) { " (unwrap an optional with `if x |v| { }`)" } else { "" };
+                err(E0063, t.span, format!("`{what}` needs an error union value (`E!T`), found `{ty}`{hint}"))
+            }
         }
     }
 
@@ -822,7 +1162,7 @@ impl Checker {
             } else {
                 ""
             };
-            return err(c.span, format!("`{what}` condition must be `bool`, found `{}`{hint}", c.ty));
+            return err(E0026, c.span, format!("`{what}` condition must be `bool`, found `{}`{hint}", c.ty));
         }
         Ok(c)
     }
@@ -835,14 +1175,14 @@ impl Checker {
             TExprKind::Var(id) => {
                 let v = &self.vars[*id];
                 if !v.mutable {
-                    return err(t.span, format!("cannot {what} `{}`: it is immutable (declare it with `var`)", v.name));
+                    return err(E0032, t.span, format!("cannot {what} `{}`: it is immutable (declare it with `var`)", v.name));
                 }
                 Ok(())
             }
             TExprKind::Field { base, .. } => self.check_mutable(base, addr_of),
             TExprKind::Index { base, .. } => {
                 if matches!(base.ty, Type::Slice(_)) {
-                    return err(t.span, if addr_of {
+                    return err(E0033, t.span, if addr_of {
                         "cannot take `&mut` of a slice element: slice elements are read-only"
                     } else {
                         "cannot assign through a slice: slice elements are read-only"
@@ -851,16 +1191,16 @@ impl Checker {
                 self.check_mutable(base, addr_of)
             }
             TExprKind::Deref(p) => match &p.ty {
-                Type::Ptr(inner, false) => err(t.span, format!(
+                Type::Ptr(inner, false) => err(E0033, t.span, format!(
                     "cannot {what} data behind a read-only pointer `{}` (use `*mut {inner}`)",
                     p.ty
                 )),
                 _ => Ok(()),
             },
             TExprKind::SliceLen(_) | TExprKind::ArrayLen(_) | TExprKind::SlicePtr(_) => {
-                err(t.span, "cannot assign to a slice or array's `.len`/`.ptr`")
+                err(E0034, t.span, "cannot assign to a slice or array's `.len`/`.ptr`")
             }
-            _ => err(t.span, "invalid assignment target"),
+            _ => err(E0034, t.span, "invalid assignment target"),
         }
     }
 
@@ -876,25 +1216,35 @@ impl Checker {
 
     // ---------------------------------------------------------- expressions
 
-    /// Check `e` and require its type to be `ty`. Two implicit coercions
-    /// apply: a `T` is wrapped where `?T` is expected, and a `*mut T` is
-    /// accepted where `*T` is expected.
+    /// Check `e` and require its type to be `ty` (see `coerce`).
     fn expect(&mut self, e: &ast::Expr, ty: &Type) -> Result<TExpr> {
         if *ty == Type::Error {
             return self.value(e, None);
         }
-        // `null` and `match` arms need the optional type itself.
-        let inner = match ty {
-            Type::Optional(inner) if !matches!(strip_parens(e).kind, ExprKind::Null | ExprKind::Match { .. }) => {
-                Some(&**inner)
-            }
-            _ => None,
-        };
-        let t = self.value(e, Some(inner.unwrap_or(ty)))?;
+        let t = self.value(e, Some(Self::hint(e, ty)))?;
+        self.coerce(t, ty)
+    }
+
+    /// The type to check `e` with when `ty` is expected: `T` for `?T`, so
+    /// that the value is wrapped; `null` and `match` need `?T` itself.
+    fn hint<'t>(e: &ast::Expr, ty: &'t Type) -> &'t Type {
+        match ty {
+            Type::Optional(inner) if !matches!(strip_parens(e).kind, ExprKind::Null | ExprKind::Match { .. }) => inner,
+            _ => ty,
+        }
+    }
+
+    /// Require `t` to have type `ty`. Three implicit coercions apply: a `T`
+    /// is wrapped where `?T` is expected, a `*mut T` is accepted where `*T`
+    /// is expected, and an error value is accepted by an error set that has
+    /// all of its errors.
+    fn coerce(&self, t: TExpr, ty: &Type) -> Result<TExpr> {
         if t.ty == *ty {
             return Ok(t);
         }
-        if inner == Some(&t.ty) {
+        if let Type::Optional(inner) = ty
+            && **inner == t.ty
+        {
             let span = t.span;
             return Ok(TExpr { kind: TExprKind::Some(Box::new(t)), ty: ty.clone(), span });
         }
@@ -903,19 +1253,25 @@ impl Checker {
         {
             return Ok(TExpr { ty: ty.clone(), ..t });
         }
+        if let (Type::ErrorSet(want), Type::ErrorSet(_)) = (ty, &t.ty)
+            && self.errors_of(&t).iter().all(|(_, n)| self.sets[want].contains(n))
+        {
+            return Ok(TExpr { ty: ty.clone(), ..t });
+        }
         Err(mismatch(t.span, ty, &t.ty))
     }
 
-    /// Check an expression that must produce a value (not a void call).
+    /// Check an expression that must produce a value (not a void call, and
+    /// not an unhandled error union).
     fn value(&mut self, e: &ast::Expr, expected: Option<&Type>) -> Result<TExpr> {
         let t = self.expr(e, expected)?;
         if t.ty == Type::Error {
             return Err(silent());
         }
         if t.ty == Type::Void {
-            return err(t.span, "this expression does not produce a value");
+            return err(E0030, t.span, "this expression does not produce a value");
         }
-        Ok(t)
+        self.handled(t)
     }
 
     /// Check two operands that must share a type; an untyped literal on either
@@ -938,12 +1294,12 @@ impl Checker {
                 return Ok(TExpr { kind: TExprKind::Float(v as f64), ty: expected.unwrap().clone(), span });
             }
             Some(t @ Type::Int(_)) => t.clone(),
-            Some(t) => return err(span, format!("mismatched types: expected `{t}`, found integer literal")),
+            Some(t) => return err(E0023, span, format!("mismatched types: expected `{t}`, found integer literal")),
             None => I64,
         };
         let Type::Int(it) = ty else { unreachable!() };
         if v < it.min() || v > it.max() {
-            return err(span, format!("integer literal `{v}` does not fit in `{ty}`"));
+            return err(E0024, span, format!("integer literal `{v}` does not fit in `{ty}`"));
         }
         Ok(TExpr { kind: TExprKind::Int(v), ty, span })
     }
@@ -951,7 +1307,7 @@ impl Checker {
     fn float_lit(&self, v: f64, span: Span, expected: Option<&Type>) -> Result<TExpr> {
         let ty = match expected {
             Some(t @ Type::Float(_)) => t.clone(),
-            Some(t) => return err(span, format!("mismatched types: expected `{t}`, found float literal")),
+            Some(t) => return err(E0023, span, format!("mismatched types: expected `{t}`, found float literal")),
             None => Type::Float(FloatTy::F64),
         };
         Ok(TExpr { kind: TExprKind::Float(v), ty, span })
@@ -964,7 +1320,7 @@ impl Checker {
             _ => unreachable!(),
         };
         if !ok {
-            return err(span, format!("operator `{}` cannot be applied to `{ty}`", op.as_str()));
+            return err(E0025, span, format!("operator `{}` cannot be applied to `{ty}`", op.as_str()));
         }
         Ok(())
     }
@@ -979,12 +1335,12 @@ impl Checker {
             ExprKind::Null => match expected {
                 Some(t @ Type::Optional(_)) => (TExprKind::Null, t.clone()),
                 Some(t) => {
-                    return err(span, format!(
+                    return err(E0028, span, format!(
                         "mismatched types: expected `{t}`, found `null` (only optional types `?T` can be `null`)"
                     ));
                 }
                 None => {
-                    return err(span, "cannot infer the type of `null` (add a type annotation, e.g. `let x: ?i32 = null`)");
+                    return err(E0028, span, "cannot infer the type of `null` (add a type annotation, e.g. `let x: ?i32 = null`)");
                 }
             },
             ExprKind::Match { .. } => return self.match_expr(e, expected, false),
@@ -993,16 +1349,22 @@ impl Checker {
             ExprKind::Ident(name) => match self.lookup(name) {
                 Some(id) => (TExprKind::Var(id), self.vars[id].ty.clone()),
                 None if self.fns.contains_key(name) => {
-                    return err(span, format!("function `{name}` is not a value (call it with `{name}(...)`)"));
+                    return err(E0020, span, format!("function `{name}` is not a value (call it with `{name}(...)`)"));
                 }
-                None => return err(span, format!("undefined variable `{name}`")),
+                None => return err(E0018, span, format!("undefined variable `{name}`")),
             },
             ExprKind::Call { name, args } => {
                 let Some(sig) = self.fns.get(name).cloned() else {
-                    return err(span, format!("undefined function `{name}`"));
+                    return err(E0019, span, format!("undefined function `{name}`"));
                 };
+                if let Type::ErrorUnion(set, _) = &sig.ret
+                    && set.starts_with(INFERRED)
+                    && !sig.is_extern
+                {
+                    self.ensure_body(name, span)?;
+                }
                 if args.len() != sig.params.len() {
-                    return err(span, format!(
+                    return err(E0029, span, format!(
                         "function `{name}` takes {} argument(s) but {} were given",
                         sig.params.len(),
                         args.len()
@@ -1015,10 +1377,10 @@ impl Checker {
                 let newline = match name.as_str() {
                     "print" => false,
                     "println" => true,
-                    _ => return err(span, format!("unknown builtin `@{name}`")),
+                    _ => return err(E0021, span, format!("unknown builtin `@{name}`")),
                 };
                 if args.len() > 1 || (!newline && args.is_empty()) {
-                    return err(span, format!("`@{name}` takes {} argument", if newline { "at most one" } else { "one" }));
+                    return err(E0022, span, format!("`@{name}` takes {} argument", if newline { "at most one" } else { "one" }));
                 }
                 let arg = match args.first() {
                     Some(a) => {
@@ -1029,7 +1391,7 @@ impl Checker {
                             _ => false,
                         };
                         if !printable {
-                            return err(t.span, format!("`@{name}` cannot print a value of type `{}`", t.ty));
+                            return err(E0022, t.span, format!("`@{name}` cannot print a value of type `{}`", t.ty));
                         }
                         Some(Box::new(t))
                     }
@@ -1041,7 +1403,7 @@ impl Checker {
                 let other = if is_null(lhs) { rhs } else { lhs };
                 let t = self.value(other, None)?;
                 if !matches!(t.ty, Type::Optional(_)) {
-                    return err(span, format!("only optional values (`?T`) can be compared with `null`, found `{}`", t.ty));
+                    return err(E0028, span, format!("only optional values (`?T`) can be compared with `null`, found `{}`", t.ty));
                 }
                 let is_some = TExpr { kind: TExprKind::IsSome(Box::new(t)), ty: Type::Bool, span };
                 match op {
@@ -1059,7 +1421,7 @@ impl Checker {
                     let hint = if op.is_arith() { expected.filter(|t| t.is_numeric()) } else { None };
                     let (l, r) = self.operand_pair(lhs, rhs, hint)?;
                     if l.ty != r.ty {
-                        return err(span, format!(
+                        return err(E0023, span, format!(
                             "mismatched types in `{}`: `{}` and `{}` (use `as` to convert)",
                             op.as_str(),
                             l.ty,
@@ -1077,7 +1439,7 @@ impl Checker {
                             _ => l.ty.is_numeric(),
                         };
                         if !ok {
-                            return err(span, format!("operator `{}` cannot be applied to `{}`", op.as_str(), l.ty));
+                            return err(E0025, span, format!("operator `{}` cannot be applied to `{}`", op.as_str(), l.ty));
                         }
                         Type::Bool
                     };
@@ -1095,7 +1457,7 @@ impl Checker {
                         _ => false,
                     };
                     if !ok {
-                        return err(span, format!("cannot negate a value of type `{}`", t.ty));
+                        return err(E0025, span, format!("cannot negate a value of type `{}`", t.ty));
                     }
                     let ty = t.ty.clone();
                     (TExprKind::Unary { op: UnOp::Neg, expr: Box::new(t) }, ty)
@@ -1104,14 +1466,14 @@ impl Checker {
             ExprKind::Unary { op: UnOp::Not, expr } => {
                 let t = self.value(expr, Some(&Type::Bool))?;
                 if t.ty != Type::Bool {
-                    return err(span, format!("operator `!` requires `bool`, found `{}`", t.ty));
+                    return err(E0025, span, format!("operator `!` requires `bool`, found `{}`", t.ty));
                 }
                 (TExprKind::Unary { op: UnOp::Not, expr: Box::new(t) }, Type::Bool)
             }
             ExprKind::AddrOf { mutable, expr } => {
                 let t = self.value(expr, None)?;
                 if !Self::is_lvalue(&t) {
-                    return err(span, "cannot take the address of a temporary value (store it in a variable first)");
+                    return err(E0035, span, "cannot take the address of a temporary value (store it in a variable first)");
                 }
                 if *mutable {
                     self.check_mutable(&t, true)?;
@@ -1122,7 +1484,7 @@ impl Checker {
             ExprKind::Deref(inner) => {
                 let t = self.value(inner, None)?;
                 let Type::Ptr(pointee, _) = &t.ty else {
-                    return err(span, format!("cannot dereference a value of type `{}` (`.*` needs a pointer)", t.ty));
+                    return err(E0036, span, format!("cannot dereference a value of type `{}` (`.*` needs a pointer)", t.ty));
                 };
                 let ty = (**pointee).clone();
                 (TExprKind::Deref(Box::new(t)), ty)
@@ -1131,19 +1493,72 @@ impl Checker {
                 let to = self.resolve_type(ty)?;
                 let t = self.value(expr, None)?;
                 if !t.ty.is_numeric() || !to.is_numeric() {
-                    return err(span, format!("cannot cast `{}` to `{to}` (only numeric casts are supported)", t.ty));
+                    return err(E0037, span, format!("cannot cast `{}` to `{to}` (only numeric casts are supported)", t.ty));
                 }
                 (TExprKind::Cast(Box::new(t)), to)
+            }
+            ExprKind::Try(inner) => {
+                if self.in_defer {
+                    return err(E0048, span, "`try` is not allowed inside `defer`");
+                }
+                match &self.ret {
+                    Type::ErrorUnion(..) => {}
+                    Type::Error => return Err(silent()),
+                    _ => {
+                        return err(E0062, span, "`try` can only be used in a function that returns an error union (`E!T` or `!T`)");
+                    }
+                }
+                let t = self.expr(inner, None)?;
+                let (set, payload) = Self::union_parts(&t, "try")?;
+                let errors = self.sets[&set].iter().map(|n| (set.clone(), n.clone())).collect();
+                self.propagate(errors, span)?;
+                (TExprKind::Try(Box::new(t)), payload)
+            }
+            ExprKind::Catch { expr, capture, body } => {
+                let t = self.expr(expr, None)?;
+                let (set, payload) = Self::union_parts(&t, "catch")?;
+                self.scopes.push(HashMap::new());
+                let capture = capture.as_ref().map(|(n, sp)| self.declare_or_report(n, Type::ErrorSet(set.clone()), false, *sp));
+                let failures = self.failures;
+                let body = match &**body {
+                    ArmBody::Block(b) => {
+                        let stmts = self.block(b);
+                        if payload != Type::Void && self.failures == failures && !block_returns(&stmts, true) {
+                            Err(Error::new(E0067, span, format!(
+                                "this `catch` block must end with `return`, `break` or `continue`; to give a `{payload}` instead, write `catch <expression>`"
+                            )))
+                        } else {
+                            Ok(TArmBody::Block(stmts))
+                        }
+                    }
+                    ArmBody::Expr(x) if payload == Type::Void => self.expr_stmt(x).map(TArmBody::Expr),
+                    ArmBody::Expr(x) => self.expect(x, &payload).map(TArmBody::Expr),
+                };
+                self.scopes.pop();
+                let capture = match capture {
+                    Some(v) => Some(v.ok_or_else(silent)?),
+                    None => None,
+                };
+                (TExprKind::Catch { expr: Box::new(t), capture, body: Box::new(body?) }, payload)
+            }
+            // `Set.Name`: an error value.
+            ExprKind::Field { base, name } if matches!(&base.kind, ExprKind::Ident(n) if self.sets.contains_key(n)) => {
+                let ExprKind::Ident(set) = &base.kind else { unreachable!() };
+                if !self.sets[set].contains(name) {
+                    return err(E0060, span, format!("error set `{set}` has no error `{name}`"));
+                }
+                let v = self.error_names.iter().position(|n| n == name).unwrap() + 1;
+                (TExprKind::ErrorValue(v as u16), Type::ErrorSet(set.clone()))
             }
             // `Enum.Variant` without payload.
             ExprKind::Field { base, name } if matches!(&base.kind, ExprKind::Ident(n) if self.enums.contains_key(n)) => {
                 let ExprKind::Ident(ename) = &base.kind else { unreachable!() };
                 let def = &self.enums[ename];
                 let Some(index) = def.variants.iter().position(|v| v.name == *name) else {
-                    return err(span, format!("enum `{ename}` has no variant `{name}`"));
+                    return err(E0041, span, format!("enum `{ename}` has no variant `{name}`"));
                 };
                 if !def.variants[index].fields.is_empty() {
-                    return err(span, format!("variant `{ename}.{name}` has fields; write `{ename}.{name} {{ ... }}`"));
+                    return err(E0042, span, format!("variant `{ename}.{name}` has fields; write `{ename}.{name} {{ ... }}`"));
                 }
                 (TExprKind::Variant { index, fields: vec![] }, Type::Enum(ename.clone()))
             }
@@ -1158,7 +1573,7 @@ impl Checker {
                     Type::Struct(sname) => {
                         let def = &self.structs[sname];
                         let Some(index) = def.fields.iter().position(|(n, _)| n == name) else {
-                            return err(span, format!("struct `{sname}` has no field `{name}`"));
+                            return err(E0038, span, format!("struct `{sname}` has no field `{name}`"));
                         };
                         let ty = def.fields[index].1.clone();
                         (TExprKind::Field { base: Box::new(b), index }, ty)
@@ -1172,18 +1587,18 @@ impl Checker {
                         (TExprKind::SlicePtr(Box::new(b)), ty)
                     }
                     Type::Array(..) if name == "len" => (TExprKind::ArrayLen(Box::new(b)), USIZE),
-                    t => return err(span, format!("type `{t}` has no field `{name}`")),
+                    t => return err(E0038, span, format!("type `{t}` has no field `{name}`")),
                 }
             }
             ExprKind::Index { base, index } => {
                 let b = self.value(base, None)?;
                 let elem = match &b.ty {
                     Type::Array(el, _) | Type::Slice(el) => (**el).clone(),
-                    t => return err(span, format!("cannot index into a value of type `{t}`")),
+                    t => return err(E0043, span, format!("cannot index into a value of type `{t}`")),
                 };
                 let i = self.value(index, Some(&USIZE))?;
                 if !is_unsigned(&i.ty) {
-                    return err(i.span, format!("index must be an unsigned integer, found `{}`", i.ty));
+                    return err(E0044, i.span, format!("index must be an unsigned integer, found `{}`", i.ty));
                 }
                 (TExprKind::Index { base: Box::new(b), index: Box::new(i) }, elem)
             }
@@ -1192,12 +1607,12 @@ impl Checker {
                 let elem = match &b.ty {
                     Type::Array(el, _) => {
                         if !Self::is_lvalue(&b) {
-                            return err(span, "can only slice an array stored in a variable");
+                            return err(E0035, span, "can only slice an array stored in a variable");
                         }
                         (**el).clone()
                     }
                     Type::Slice(el) => (**el).clone(),
-                    t => return err(span, format!("cannot slice a value of type `{t}`")),
+                    t => return err(E0043, span, format!("cannot slice a value of type `{t}`")),
                 };
                 let mut bound = |x: &Option<Box<ast::Expr>>| -> Result<Option<Box<TExpr>>> {
                     match x {
@@ -1205,7 +1620,7 @@ impl Checker {
                         Some(x) => {
                             let t = self.value(x, Some(&USIZE))?;
                             if !is_unsigned(&t.ty) {
-                                return err(t.span, format!("slice bound must be an unsigned integer, found `{}`", t.ty));
+                                return err(E0044, t.span, format!("slice bound must be an unsigned integer, found `{}`", t.ty));
                             }
                             Ok(Some(Box::new(t)))
                         }
@@ -1217,22 +1632,22 @@ impl Checker {
             }
             ExprKind::StructLit { name, fields } => {
                 let Some(def) = self.structs.get(name).cloned() else {
-                    return err(span, format!("unknown struct `{name}`"));
+                    return err(E0017, span, format!("unknown struct `{name}`"));
                 };
                 let inits = self.field_inits(&def.fields, fields, &format!("struct `{name}`"), name, span)?;
                 (TExprKind::StructLit(inits), Type::Struct(name.clone()))
             }
             ExprKind::VariantLit { enum_name, variant, fields } => {
                 let Some(def) = self.enums.get(enum_name).cloned() else {
-                    return err(span, format!("unknown enum `{enum_name}`"));
+                    return err(E0017, span, format!("unknown enum `{enum_name}`"));
                 };
                 let Some(index) = def.variants.iter().position(|v| v.name == *variant) else {
-                    return err(span, format!("enum `{enum_name}` has no variant `{variant}`"));
+                    return err(E0041, span, format!("enum `{enum_name}` has no variant `{variant}`"));
                 };
                 let v = &def.variants[index];
                 let lit = format!("{enum_name}.{variant}");
                 if v.fields.is_empty() {
-                    return err(span, format!("variant `{lit}` has no fields; write `{lit}`"));
+                    return err(E0042, span, format!("variant `{lit}` has no fields; write `{lit}`"));
                 }
                 let inits = self.field_inits(&v.fields, fields, &format!("variant `{lit}`"), &lit, span)?;
                 (TExprKind::Variant { index, fields: inits }, Type::Enum(enum_name.clone()))
@@ -1241,7 +1656,7 @@ impl Checker {
                 let aty = self.resolve_type(ty)?;
                 let Type::Array(el, n) = &aty else { unreachable!() };
                 if elems.len() as u64 != *n {
-                    return err(span, format!("array literal has {} element(s) but type `{aty}` needs {n}", elems.len()));
+                    return err(E0045, span, format!("array literal has {} element(s) but type `{aty}` needs {n}", elems.len()));
                 }
                 let elems = elems.iter().map(|x| self.expect(x, el)).collect::<Result<_>>()?;
                 (TExprKind::ArrayLit(elems), aty)
@@ -1263,10 +1678,10 @@ impl Checker {
         let mut inits: Vec<(usize, TExpr)> = Vec::new();
         for f in fields {
             let Some(index) = def.iter().position(|(n, _)| *n == f.name) else {
-                return err(f.span, format!("{owner} has no field `{}`", f.name));
+                return err(E0038, f.span, format!("{owner} has no field `{}`", f.name));
             };
             if inits.iter().any(|(i, _)| *i == index) {
-                return err(f.span, format!("field `{}` is initialized twice", f.name));
+                return err(E0040, f.span, format!("field `{}` is initialized twice", f.name));
             }
             let v = self.expect(&f.value, &def[index].1)?;
             inits.push((index, v));
@@ -1274,27 +1689,38 @@ impl Checker {
         if let Some((missing, _)) =
             def.iter().enumerate().find(|(i, _)| !inits.iter().any(|(j, _)| j == i)).map(|(_, f)| f)
         {
-            return err(span, format!("missing field `{missing}` in `{lit}` literal"));
+            return err(E0039, span, format!("missing field `{missing}` in `{lit}` literal"));
         }
         Ok(inits)
     }
 
-    /// `match` on an enum. As a statement (`is_stmt`) the arms produce no
-    /// value; otherwise all arms must have the same type.
+    /// `match` on an enum or an error value. As a statement (`is_stmt`) the
+    /// arms produce no value; otherwise all arms must have the same type.
     fn match_expr(&mut self, e: &ast::Expr, expected: Option<&Type>, is_stmt: bool) -> Result<TExpr> {
         let ExprKind::Match { scrutinee, arms } = &e.kind else { unreachable!() };
         let s = self.value(scrutinee, None)?;
-        let Type::Enum(ename) = &s.ty else {
-            return err(s.span, format!("`match` needs an enum value, found `{}`", s.ty));
+        // The cases to cover: the variants of the enum, or the errors of the set.
+        let (def, set, cases) = match &s.ty {
+            Type::Enum(ename) => {
+                let def = self.enums[ename].clone();
+                let cases: Vec<String> = def.variants.iter().map(|v| v.name.clone()).collect();
+                (Some(def), None, cases)
+            }
+            Type::ErrorSet(set) => (None, Some(set.clone()), self.sets[set].clone()),
+            t => return err(E0055, s.span, format!("`match` needs an enum or error value, found `{t}`")),
         };
-        let def = self.enums[ename].clone();
+        let kind = if def.is_some() { "variant" } else { "error" };
+        let show = |n: &str| match (&def, &set) {
+            (Some(d), _) => format!("`{}.{n}`", d.name),
+            (_, set) => qualify(set.as_ref().unwrap(), n),
+        };
         // Patterns, in source order.
         let mut variants = Vec::new();
-        let mut covered = vec![false; def.variants.len()];
+        let mut covered = vec![false; cases.len()];
         let mut wildcard = false;
         for arm in arms {
             if wildcard {
-                return err(arm.span, "unreachable arm: the `_` arm above already matches everything");
+                return err(E0057, arm.span, "unreachable arm: the `_` arm above already matches everything");
             }
             match &arm.variant {
                 None => {
@@ -1302,11 +1728,14 @@ impl Checker {
                     variants.push(None);
                 }
                 Some(name) => {
-                    let Some(i) = def.variants.iter().position(|v| v.name == *name) else {
-                        return err(arm.span, format!("enum `{ename}` has no variant `{name}`"));
+                    let Some(i) = cases.iter().position(|v| v == name) else {
+                        return match (&def, &set) {
+                            (Some(d), _) => err(E0041, arm.span, format!("enum `{}` has no variant `{name}`", d.name)),
+                            (_, set) => err(E0060, arm.span, format!("{} has no error `{name}`", describe_set(set.as_ref().unwrap()))),
+                        };
                     };
                     if covered[i] {
-                        return err(arm.span, format!("variant `{ename}.{name}` is already matched by an earlier arm"));
+                        return err(E0057, arm.span, format!("{kind} {} is already matched by an earlier arm", show(name)));
                     }
                     covered[i] = true;
                     variants.push(Some(i));
@@ -1314,16 +1743,10 @@ impl Checker {
             }
         }
         if !wildcard {
-            let missing: Vec<String> = def
-                .variants
-                .iter()
-                .zip(&covered)
-                .filter(|(_, c)| !**c)
-                .map(|(v, _)| format!("`{ename}.{}`", v.name))
-                .collect();
+            let missing: Vec<String> = cases.iter().zip(&covered).filter(|(_, c)| !**c).map(|(n, _)| show(n)).collect();
             if !missing.is_empty() {
                 let s = if missing.len() == 1 { "" } else { "s" };
-                return err(e.span, format!("`match` is not exhaustive: missing variant{s} {}", missing.join(", ")));
+                return err(E0056, e.span, format!("`match` is not exhaustive: missing {kind}{s} {}", missing.join(", ")));
             }
         }
         // Without an expected type, the first arm that is not an untyped
@@ -1340,9 +1763,13 @@ impl Checker {
         let mut checked: Vec<Option<TArm>> = vec![None; arms.len()];
         for i in order {
             self.scopes.push(HashMap::new());
-            let arm = self.match_arm(&def, &arms[i], variants[i], want.as_ref(), is_stmt);
+            let arm = self.match_arm(def.as_ref(), &arms[i], variants[i], want.as_ref(), is_stmt);
             self.scopes.pop();
-            let arm = arm?;
+            let mut arm = arm?;
+            if set.is_some() {
+                // A `match` on errors tests the error value.
+                arm.variant = variants[i].map(|c| self.error_names.iter().position(|n| *n == cases[c]).unwrap() + 1);
+            }
             if let (false, None, TArmBody::Expr(x)) = (is_stmt, &want, &arm.body) {
                 want = Some(x.ty.clone());
             }
@@ -1354,31 +1781,38 @@ impl Checker {
     }
 
     /// One arm: declare the pattern variables, then check the body.
+    /// `def` is `None` in a `match` on errors, where `variant` is the index
+    /// of the error in the set.
     fn match_arm(
         &mut self,
-        def: &EnumDef,
+        def: Option<&EnumDef>,
         arm: &ast::MatchArm,
         variant: Option<usize>,
         want: Option<&Type>,
         is_stmt: bool,
     ) -> Result<TArm> {
         let mut bindings: Vec<(VarId, usize)> = Vec::new();
-        if let Some(vi) = variant {
+        if def.is_none()
+            && let (Some(_), Some(name)) = (&arm.fields, &arm.variant)
+        {
+            return err(E0042, arm.span, format!("an error has no fields; write `.{name}`"));
+        }
+        if let (Some(vi), Some(def)) = (variant, def) {
             let v = &def.variants[vi];
             let what = format!("{}.{}", def.name, v.name);
             match (&arm.fields, v.fields.is_empty()) {
                 (None, true) => {}
                 (None, false) => {
-                    return err(arm.span, format!("variant `{what}` has fields; match them with `.{} {{ .. }}`", v.name));
+                    return err(E0042, arm.span, format!("variant `{what}` has fields; match them with `.{} {{ .. }}`", v.name));
                 }
-                (Some(_), true) => return err(arm.span, format!("variant `{what}` has no fields; write `.{}`", v.name)),
+                (Some(_), true) => return err(E0042, arm.span, format!("variant `{what}` has no fields; write `.{}`", v.name)),
                 (Some(pats), false) => {
                     for p in pats {
                         let Some(fi) = v.fields.iter().position(|(n, _)| *n == p.field) else {
-                            return err(p.span, format!("variant `{what}` has no field `{}`", p.field));
+                            return err(E0038, p.span, format!("variant `{what}` has no field `{}`", p.field));
                         };
                         if bindings.iter().any(|&(_, f)| f == fi) {
-                            return err(p.span, format!("field `{}` is matched twice", p.field));
+                            return err(E0040, p.span, format!("field `{}` is matched twice", p.field));
                         }
                         let id = self.declare(&p.binding, v.fields[fi].1.clone(), false, p.binding_span)?;
                         bindings.push((id, fi));
@@ -1387,7 +1821,7 @@ impl Checker {
                         && let Some((name, _)) =
                             v.fields.iter().enumerate().find(|(i, _)| !bindings.iter().any(|&(_, f)| f == *i)).map(|(_, f)| f)
                     {
-                        return err(arm.span, format!(
+                        return err(E0058, arm.span, format!(
                             "pattern for `{what}` does not mention field `{name}` (add `..` to ignore the rest)"
                         ));
                     }
@@ -1397,7 +1831,7 @@ impl Checker {
         let body = match &arm.body {
             ArmBody::Block(b) if is_stmt => TArmBody::Block(self.block(b)),
             ArmBody::Block(b) => {
-                return err(b.span, "a `match` that produces a value needs an expression after `=>`, not a block");
+                return err(E0059, b.span, "a `match` that produces a value needs an expression after `=>`, not a block");
             }
             ArmBody::Expr(x) if is_stmt => TArmBody::Expr(self.expr_stmt(x)?),
             ArmBody::Expr(x) => TArmBody::Expr(match want {

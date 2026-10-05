@@ -1,1 +1,1 @@
-unused_value.ore:3:7: error: expression value is not used (only calls can be statements)
+unused_value.ore:3:7: error[E0031]: expression value is not used (only calls can be statements)

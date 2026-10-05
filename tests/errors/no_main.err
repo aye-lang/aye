@@ -1,1 +1,1 @@
-no_main.ore:1:1: error: no `pub fn main()` found
+no_main.ore:1:1: error[E0051]: no `pub fn main()` found

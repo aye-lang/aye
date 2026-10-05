@@ -1,0 +1,15 @@
+error E { A }
+
+fn f() E!u32 {
+    return 1
+}
+
+fn g() E!void {
+}
+
+pub fn main() {
+    f()
+    g()
+    let x = f()
+    @println(f() + 1)
+}

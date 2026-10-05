@@ -2,6 +2,7 @@
 
 pub mod ast;
 pub mod cgen;
+pub mod codes;
 pub mod diag;
 pub mod driver;
 pub mod lexer;

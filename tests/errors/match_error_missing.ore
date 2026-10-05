@@ -1,0 +1,19 @@
+error ParseError { Empty, InvalidDigit, Overflow }
+
+fn parse(s: []u8) ParseError!u32 {
+    if s.len == 0 {
+        return ParseError.Empty
+    }
+    return 1
+}
+
+pub fn main() {
+    let n = parse("") catch |e| {
+        match e {
+            .Empty => @println("empty")
+            .InvalidDigit => @println("bad digit")
+        }
+        return
+    }
+    @println(n)
+}

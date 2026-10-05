@@ -1,0 +1,13 @@
+error E { A }
+
+fn find() ?u32 {
+    return null
+}
+
+fn f() E!u32 {
+    let x = try find()
+    return x
+}
+
+pub fn main() {
+}

@@ -20,8 +20,8 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
 - **`true` and `false`** are predeclared identifiers, not keywords. The parser reads them as literals.
 - **Initializers:** `let` and `var` must always have one (`var x: T = v`). There is no zero-initialization yet.
 - **Array literals** need an explicit length: `[3]i32{1, 2, 3}`. There is no `[_]T` form yet.
-- **`pub`** is accepted on `fn`, `struct` and `enum` but has no effect until modules exist.
-- **`main`:** the entry point must be `pub fn main()`, with no parameters and no return type. The generated C `main` returns 0.
+- **`pub`** is accepted on `fn`, `struct`, `enum` and `error` but has no effect until modules exist (apart from the error set rule below).
+- **`main`:** the entry point must be `pub fn main()`, with no parameters, and with no return type or an error union with `void` (`!void`, `E!void`). The generated C `main` returns 0, or 1 after reporting an error that `main` returned.
 - **Pointers:** `*T` is read-only, `*mut T` is writable. They are made with `&x` and `&mut x`.
   - `&mut x` needs a writable place: a `var`, or data behind a `*mut`. `&` of a temporary (`&f()`) is an error.
   - Dereference is `p.*`, as in Zig (`*` already starts the type).
@@ -37,6 +37,14 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
   - Matching a variant twice, and any arm after `_`, is an error.
   - As a statement, an arm body is a block or a call. As an expression, it is an expression (not a block), and all arms must have the same type. With no expected type, the first arm that is not an untyped literal or `null` decides the type.
 - **New tokens:** `&`, `|`, `=>` and `.*`. `.*` ends a statement for semicolon insertion, like `)`.
+- **Error sets:** `error Name { A, B }` at top level, with names separated by `,` or newlines. A merged set is a declaration too, `error All = A || B`, as in Zig's `const All = A || B`; `||` is not a type operator, so every set has a name that `rg "error All"` finds.
+- **Error values** are written `Set.Name`, like enum values (`return ParseError.Empty`). In `match e`, an arm is `.Name`, like an enum pattern.
+- **Error unions:** `E!T`, and `!T` with an inferred set. They are allowed only as a function's return type, not for parameters, fields or variables. `void` is a type name only as their payload (`!void`).
+- **`try x`** is a prefix operator with the precedence of unary operators, as in Zig. It works only on error unions; `?T` is unwrapped with `if x |v|`.
+- **`catch`:** `x catch |e| { block }` or `x catch |e| expr`; the capture `|e|` is optional. `catch` binds looser than `+` and tighter than comparisons, as in Zig: `f() catch 0 + 1 == 2` is `(f() catch (0 + 1)) == 2`.
+  - With a block, the block runs on an error. If the payload `T` is not `void`, the block must end with `return`, `break` or `continue` on every path.
+  - With an expression, the expression replaces the error: it must have type `T` (`f() catch 0`, `f() catch |e| match e { ... }`). If `T` is `void`, it must be a call.
+- **`errdefer`** takes a block or a simple statement, like `defer`. It is an error in a function that does not return an error union, because it would never run.
 
 ## Types and checking
 
@@ -57,9 +65,14 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
   - `%` is integer-only.
   - There are no bitwise or shift operators yet.
 - **Equality:** `==` and `!=` work on integers, floats and bools, and between an optional and `null`. Struct, array, slice, pointer and enum equality are not supported.
-- **Unused call results:** an expression statement must be a call, and a non-void result may be dropped silently. Other expression statements are errors.
+- **Unused call results:** an expression statement must be a call (or `try`, `catch` or `match`), and a non-void result may be dropped silently. Other expression statements are errors.
+- **Error unions must be handled:** a call that returns `E!T` must be the operand of `try` or `catch`, or be returned as is (`return f()`) from a function whose error set has all its errors. It cannot be stored, passed, used in an expression, or dropped as a statement.
 - **Implicit wrapping:** a `T` value is accepted where `?T` is expected (a typed `let`, an assignment, an argument, a `return`, a field). This wraps the value; it is not a conversion between types, so it does not break the "no implicit conversion" rule. `*mut T` is also accepted where `*T` is expected, as in Rust and Zig. There are no other implicit coercions.
-- **`match` is exhaustive:** without `_`, every variant must have an arm. The error names the missing variants (`missing variant `Shape.Rect``). `match` works only on enums.
+- **`match` is exhaustive:** without `_`, every variant must have an arm. The error names the missing variants (`missing variant `Shape.Rect``). `match` works on enums and on error values; on errors, every error of the set needs an arm (`missing error `ParseError.Overflow``).
+- **An error is identified by its name**, as in Zig: the same name in two sets is the same error. Every error name gets a program-wide value (a `u16`; 0 means no error) in order of first declaration. A merged set `A || B` has the errors of both, and an error value converts to any set that has all of its errors (`ParseError` to `LoadError`). A literal `Set.Name` counts as only that error.
+- **Error set checking:** in an `E!T` function, every error that a `return` or a `try` can pass on must be in `E`. The inferred set of a `!T` function is the union of those errors; `return ParseError.Empty` adds only `Empty`. A `!T` function is checked before its callers, which need its set, so a `!T` function that calls itself, directly or through other `!T` functions, is an error.
+- **`pub` functions spell out their error set** (`E!T`). `!T` is only for functions that are not `pub`, and for `pub fn main() !void`.
+- **Diagnostic codes:** every diagnostic has a code (`E0001`, ...) from the table in `src/codes.rs`: a title, an explanation, a program with the error and the fixed program. A unit test checks that each wrong program reports its code and each fix compiles. Codes are never renumbered or reused; a new kind of error gets the next number. `ore explain <code>` prints an entry.
 - **Pattern bindings and `|v|` captures** are immutable copies, and they follow the shadowing rule below.
 - **Shadowing** is not allowed in any scope. A `let`/`var` binding, a parameter or a `for` variable is an error when its name is already visible: a local in the same or an enclosing block, a parameter of the function, or a top-level `fn`, `extern fn` or `struct`. Sibling blocks and different functions can reuse a name.
 - **`isize` and `usize`** are 64-bit. Stage0 assumes an LP64 target.
@@ -85,12 +98,16 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
 - **Value types:** arrays are emitted as C structs (`struct { T a[N]; }`), so they are copied by value like structs.
 - **Optional layout:** `?*T` is a C pointer that may be null, the same size as `*T`. Every other `?T` is `struct { bool has; T val; }`.
 - **Enum layout:** a `uint32_t` tag (the variant's index in the declaration) and a union with one struct per payload variant. `match` is lowered to an `if` chain on the tag; the last arm needs no test.
+- **Error union layout:** `struct { uint16_t err; T val; }`, where `err` is 0 for no error; `!void` has only `err`. Unions with the same payload share one C type. An error set value is a `uint16_t`.
+- **`errdefer` timing:** an `errdefer` runs, in LIFO order with the `defer`s, when its scope is left by a `return` of an error, by a `return f()` whose union holds an error, or by a `try` that passes an error on. It does not run at the normal end of a block, on `break` or `continue`, or on a `return` without an error.
+- **Error return trace (debug mode only):** every `return` of an error and every `try` that passes one on adds its position. When `catch` handles an error, that is, its body ends normally or leaves with `break`, `continue` or a `return` without an error, the entries added since the `catch` started are dropped. Up to 64 entries are kept.
+- **An error returned from `main`** flushes stdout, writes `error: <Name>` to stderr, and in debug mode then `error return trace:` and one `file:line:col` line per entry, where the error started first. The exit status is 1. Safe and fast mode record no trace, so they print only the first line.
 - **Recursive types:** a struct or enum that contains itself by value (also through an array or `?T`) is an error. Through a pointer it is fine.
 - **`#line` directives** come before every generated statement so that debug info points to the `.ore` source.
 
 ## Differences from the design doc (to resolve later)
 
-- The doc's examples use `pub fn main() !void`. Error unions are out of scope for stage0, so `main` is `pub fn main()`.
+- The doc's examples use `pub fn main() !void`. Stage0 also accepts `pub fn main()` with no return type.
 - The doc shows structs only as anonymous type expressions (`struct { ... }`, returned from type functions) with newline-separated fields. Stage0 uses a named declaration, `struct Name { ... }`. If type functions arrive, this might become `let Name = struct { ... }`.
 - The doc shows `defer` only with a call (`defer f.close()`). Stage0 also accepts an assignment or a block.
 - The doc has no `@` builtins. Its logging goes through `std.log`, and `std` does not exist yet. `@print` and `@println` are a stage0-only convenience until `std` lands.

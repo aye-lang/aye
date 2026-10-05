@@ -6,6 +6,7 @@
 //! fails is skipped up to the next line starting with a declaration keyword.
 
 use crate::ast::*;
+use crate::codes::*;
 use crate::diag::{Error, Result, Span};
 use crate::lexer::{Kw, Tok, Token};
 
@@ -27,33 +28,23 @@ struct Parser {
 fn not_supported(kw: Kw, span: Span) -> Error {
     let what = match kw {
         Kw::Import => "`import` (modules)",
-        Kw::Error => "`error` sets",
         Kw::Interface => "`interface`",
         Kw::Dyn => "`dyn`",
-        Kw::Errdefer => "`errdefer`",
-        Kw::Try => "`try`",
-        Kw::Catch => "`catch`",
         Kw::Comptime => "`comptime`",
         Kw::Where => "`where`",
         Kw::Test => "`test` blocks",
-        _ => return Error::new(span, format!("unexpected `{}`", kw.as_str())),
+        _ => return Error::new(E0006, span, format!("unexpected `{}`", kw.as_str())),
     };
-    Error::new(span, format!("{what} is not yet supported"))
+    Error::new(E0007, span, format!("{what} is not yet supported"))
 }
+
+/// Binding strength of `catch`: looser than `+`, tighter than comparisons.
+const CATCH_PREC: u8 = 4;
 
 fn is_unsupported_kw(kw: Kw) -> bool {
     matches!(
         kw,
-        Kw::Import
-            | Kw::Error
-            | Kw::Interface
-            | Kw::Dyn
-            | Kw::Errdefer
-            | Kw::Try
-            | Kw::Catch
-            | Kw::Comptime
-            | Kw::Where
-            | Kw::Test
+        Kw::Import | Kw::Interface | Kw::Dyn | Kw::Comptime | Kw::Where | Kw::Test
     )
 }
 
@@ -88,7 +79,7 @@ impl Parser {
     }
 
     fn unexpected(&self, expected: &str) -> Error {
-        Error::new(self.span(), format!("expected {expected}, found {}", self.peek()))
+        Error::new(E0006, self.span(), format!("expected {expected}, found {}", self.peek()))
     }
 
     fn expect(&mut self, t: &Tok) -> Result<Span> {
@@ -174,7 +165,7 @@ impl Parser {
                     self.bump();
                     if matches!(
                         self.peek(),
-                        Tok::Kw(Kw::Fn | Kw::Pub | Kw::Extern | Kw::Struct | Kw::Enum)
+                        Tok::Kw(Kw::Fn | Kw::Pub | Kw::Extern | Kw::Struct | Kw::Enum | Kw::Error)
                     ) {
                         return;
                     }
@@ -216,18 +207,19 @@ impl Parser {
                 match self.peek() {
                     Tok::Kw(Kw::Fn) => Ok(Item::Fn(self.fn_decl(is_pub, true)?)),
                     Tok::Kw(Kw::Struct) => {
-                        Err(Error::new(self.span(), "`extern struct` is not yet supported"))
+                        Err(Error::new(E0007, self.span(), "`extern struct` is not yet supported"))
                     }
                     _ => Err(self.unexpected("`fn` after `extern`")),
                 }
             }
             Tok::Kw(Kw::Struct) => Ok(Item::Struct(self.struct_decl(is_pub)?)),
             Tok::Kw(Kw::Enum) => Ok(Item::Enum(self.enum_decl(is_pub)?)),
+            Tok::Kw(Kw::Error) => Ok(Item::ErrorSet(self.error_decl(is_pub)?)),
             Tok::Kw(Kw::Let) | Tok::Kw(Kw::Var) => {
-                Err(Error::new(self.span(), "global variables are not yet supported"))
+                Err(Error::new(E0007, self.span(), "global variables are not yet supported"))
             }
             Tok::Kw(k) if is_unsupported_kw(k) => Err(not_supported(k, self.span())),
-            _ => Err(self.unexpected("declaration (`fn`, `extern fn`, `struct` or `enum`)")),
+            _ => Err(self.unexpected("declaration (`fn`, `extern fn`, `struct`, `enum` or `error`)")),
         }
     }
 
@@ -252,7 +244,7 @@ impl Parser {
         };
         let body = if is_extern {
             if self.at(&Tok::LBrace) {
-                return Err(Error::new(self.span(), "`extern fn` cannot have a body"));
+                return Err(Error::new(E0011, self.span(), "`extern fn` cannot have a body"));
             }
             None
         } else {
@@ -285,7 +277,7 @@ impl Parser {
             let fields = if self.at(&Tok::LBrace) {
                 let fields = self.field_list()?;
                 if fields.is_empty() {
-                    return Err(Error::new(vspan, format!("a variant without fields is written `{vname}`, without `{{}}`")));
+                    return Err(Error::new(E0012, vspan, format!("a variant without fields is written `{vname}`, without `{{}}`")));
                 }
                 fields
             } else {
@@ -301,6 +293,37 @@ impl Parser {
             }
         }
         Ok(EnumDecl { name, span, is_pub, variants })
+    }
+
+    /// `error Name { A, B }` (names separated by `,` or newlines) or
+    /// `error Name = A || B`.
+    fn error_decl(&mut self, is_pub: bool) -> Result<ErrorSetDecl> {
+        self.expect(&Tok::Kw(Kw::Error))?;
+        let (name, span) = self.ident()?;
+        if self.eat(&Tok::Assign) {
+            let mut sets = vec![self.ident()?];
+            while self.eat(&Tok::OrOr) {
+                sets.push(self.ident()?);
+            }
+            return Ok(ErrorSetDecl { name, span, is_pub, kind: ErrorSetKind::Merge(sets) });
+        }
+        self.expect(&Tok::LBrace)?;
+        let mut errors = Vec::new();
+        loop {
+            self.skip_semis();
+            if self.eat(&Tok::RBrace) {
+                break;
+            }
+            errors.push(self.ident()?);
+            match self.peek() {
+                Tok::Comma | Tok::Semi => {
+                    self.bump();
+                }
+                Tok::RBrace => {}
+                _ => return Err(self.unexpected("`,`, newline or `}` after error name")),
+            }
+        }
+        Ok(ErrorSetDecl { name, span, is_pub, kind: ErrorSetKind::List(errors) })
     }
 
     /// `{ name: T, ... }` with fields separated by `,` or newlines.
@@ -334,7 +357,11 @@ impl Parser {
         let kind = match self.peek().clone() {
             Tok::Ident(name) => {
                 self.bump();
-                TypeExprKind::Named(name)
+                if self.eat(&Tok::Bang) {
+                    TypeExprKind::ErrorUnion(Some((name, span)), Box::new(self.type_expr()?))
+                } else {
+                    TypeExprKind::Named(name)
+                }
             }
             Tok::LBracket => {
                 self.bump();
@@ -365,10 +392,13 @@ impl Parser {
                 self.bump();
                 TypeExprKind::Optional(Box::new(self.type_expr()?))
             }
-            Tok::Bang => return Err(Error::new(span, "error union types are not yet supported")),
+            Tok::Bang => {
+                self.bump();
+                TypeExprKind::ErrorUnion(None, Box::new(self.type_expr()?))
+            }
             Tok::Kw(k) if is_unsupported_kw(k) => return Err(not_supported(k, span)),
             Tok::Kw(Kw::Struct) => {
-                return Err(Error::new(span, "anonymous struct types are not yet supported"));
+                return Err(Error::new(E0007, span, "anonymous struct types are not yet supported"));
             }
             _ => return Err(self.unexpected("type")),
         };
@@ -413,6 +443,7 @@ impl Parser {
                 let ty = if self.eat(&Tok::Colon) { Some(self.type_expr()?) } else { None };
                 if !self.at(&Tok::Assign) {
                     return Err(Error::new(
+                        E0013,
                         self.span(),
                         format!("`{} {name}` needs an initializer (`= value`)", kw.as_str()),
                     ));
@@ -424,6 +455,7 @@ impl Parser {
             Tok::Kw(Kw::If) => return self.if_stmt(),
             Tok::Kw(Kw::Else) => {
                 return Err(Error::new(
+                    E0008,
                     span,
                     "`else` must be on the same line as the `}` that closes the `if` block",
                 ));
@@ -465,7 +497,7 @@ impl Parser {
                     StmtKind::Return(Some(self.expr()?))
                 }
             }
-            Tok::Kw(Kw::Defer) => {
+            Tok::Kw(kw @ (Kw::Defer | Kw::Errdefer)) => {
                 self.bump();
                 let inner_span = self.span();
                 let inner = if self.at(&Tok::LBrace) {
@@ -473,12 +505,12 @@ impl Parser {
                 } else {
                     self.simple_stmt()?
                 };
-                StmtKind::Defer(Box::new(inner))
+                if kw == Kw::Defer { StmtKind::Defer(Box::new(inner)) } else { StmtKind::ErrDefer(Box::new(inner)) }
             }
             Tok::LBrace => StmtKind::Block(self.block()?),
             Tok::Kw(k) if is_unsupported_kw(k) => return Err(not_supported(k, span)),
-            Tok::Kw(Kw::Fn | Kw::Struct | Kw::Enum | Kw::Pub | Kw::Extern) => {
-                return Err(Error::new(span, "declarations are only allowed at the top level"));
+            Tok::Kw(Kw::Fn | Kw::Struct | Kw::Enum | Kw::Error | Kw::Pub | Kw::Extern) => {
+                return Err(Error::new(E0010, span, "declarations are only allowed at the top level"));
             }
             _ => return self.simple_stmt(),
         };
@@ -556,23 +588,29 @@ impl Parser {
             Tok::Le => (BinOp::Le, 3),
             Tok::Gt => (BinOp::Gt, 3),
             Tok::Ge => (BinOp::Ge, 3),
-            Tok::Plus => (BinOp::Add, 4),
-            Tok::Minus => (BinOp::Sub, 4),
-            Tok::PlusPct => (BinOp::AddWrap, 4),
-            Tok::MinusPct => (BinOp::SubWrap, 4),
-            Tok::Star => (BinOp::Mul, 5),
-            Tok::Slash => (BinOp::Div, 5),
-            Tok::Percent => (BinOp::Rem, 5),
-            Tok::StarPct => (BinOp::MulWrap, 5),
+            Tok::Plus => (BinOp::Add, 5),
+            Tok::Minus => (BinOp::Sub, 5),
+            Tok::PlusPct => (BinOp::AddWrap, 5),
+            Tok::MinusPct => (BinOp::SubWrap, 5),
+            Tok::Star => (BinOp::Mul, 6),
+            Tok::Slash => (BinOp::Div, 6),
+            Tok::Percent => (BinOp::Rem, 6),
+            Tok::StarPct => (BinOp::MulWrap, 6),
             _ => return None,
         })
     }
 
     /// Precedence climbing; all binary operators are left-associative except
-    /// comparisons, which do not chain.
+    /// comparisons, which do not chain. `catch` sits between the comparisons
+    /// and `+`, as in Zig.
     fn binary(&mut self, min_prec: u8) -> Result<Expr> {
         let mut lhs = self.cast()?;
-        while let Some((op, prec)) = self.binop() {
+        loop {
+            if self.at(&Tok::Kw(Kw::Catch)) && CATCH_PREC >= min_prec {
+                lhs = self.catch(lhs)?;
+                continue;
+            }
+            let Some((op, prec)) = self.binop() else { break };
             if prec < min_prec {
                 break;
             }
@@ -580,10 +618,29 @@ impl Parser {
             let rhs = self.binary(prec + 1)?;
             lhs = Expr { kind: ExprKind::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) }, span };
             if op.is_comparison() && self.binop().is_some_and(|(o, _)| o.is_comparison()) {
-                return Err(Error::new(self.span(), "comparison operators cannot be chained"));
+                return Err(Error::new(E0009, self.span(), "comparison operators cannot be chained"));
             }
         }
         Ok(lhs)
+    }
+
+    /// `lhs catch [|e|] body`, where the body is a block or an expression
+    /// that binds tighter than `catch`.
+    fn catch(&mut self, lhs: Expr) -> Result<Expr> {
+        let span = self.bump().span;
+        let capture = if self.eat(&Tok::Pipe) {
+            let c = self.ident()?;
+            self.expect(&Tok::Pipe)?;
+            Some(c)
+        } else {
+            None
+        };
+        let body = if self.at(&Tok::LBrace) {
+            ArmBody::Block(self.block()?)
+        } else {
+            ArmBody::Expr(self.binary(CATCH_PREC + 1)?)
+        };
+        Ok(Expr { kind: ExprKind::Catch { expr: Box::new(lhs), capture, body: Box::new(body) }, span })
     }
 
     fn cast(&mut self) -> Result<Expr> {
@@ -597,6 +654,11 @@ impl Parser {
     }
 
     fn unary(&mut self) -> Result<Expr> {
+        if self.at(&Tok::Kw(Kw::Try)) {
+            let span = self.bump().span;
+            let expr = Box::new(self.unary()?);
+            return Ok(Expr { kind: ExprKind::Try(expr), span });
+        }
         if self.at(&Tok::Amp) {
             let span = self.bump().span;
             let mutable = self.eat(&Tok::Kw(Kw::Mut));
@@ -718,7 +780,7 @@ impl Parser {
             Tok::LBracket => {
                 let ty = self.type_expr()?;
                 if !matches!(ty.kind, TypeExprKind::Array(..)) {
-                    return Err(Error::new(span, "only fixed-size array literals (`[N]T{...}`) are supported"));
+                    return Err(Error::new(E0007, span, "only fixed-size array literals (`[N]T{...}`) are supported"));
                 }
                 self.expect(&Tok::LBrace)?;
                 let saved = std::mem::replace(&mut self.no_struct_lit, false);
@@ -870,8 +932,19 @@ mod tests {
     fn unsupported_keywords() {
         let e = parse_src("interface W {}").unwrap_err();
         assert_eq!(e.msg, "`interface` is not yet supported");
-        let e = parse_src("fn f() {\n try x\n}").unwrap_err();
-        assert_eq!(e.msg, "`try` is not yet supported");
+        let e = parse_src("fn f() {\n comptime x\n}").unwrap_err();
+        assert_eq!(e.msg, "`comptime` is not yet supported");
+    }
+
+    /// `catch` binds looser than `+` and tighter than `==`.
+    #[test]
+    fn catch_precedence() {
+        let f = parse_src("fn f() {\n let b = g() catch 0 + 1 == 2\n}").unwrap();
+        let Item::Fn(f) = &f.items[0] else { panic!() };
+        let StmtKind::Let { init, .. } = &f.body.as_ref().unwrap().stmts[0].kind else { panic!() };
+        let ExprKind::Binary { op: BinOp::Eq, lhs, .. } = &init.kind else { panic!("{init:?}") };
+        let ExprKind::Catch { body, .. } = &lhs.kind else { panic!("{lhs:?}") };
+        assert!(matches!(&**body, ArmBody::Expr(Expr { kind: ExprKind::Binary { op: BinOp::Add, .. }, .. })));
     }
 
     #[test]

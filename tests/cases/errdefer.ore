@@ -1,0 +1,50 @@
+error OpenError { Busy, Denied }
+
+fn step(fail: bool) OpenError!void {
+    if fail {
+        return OpenError.Busy
+    }
+}
+
+// `defer` runs on every exit; `errdefer` only when the scope is left
+// with an error (a `return` of an error or a failing `try`).
+fn acquire(fail_at: u32) OpenError!u32 {
+    @println("acquire")
+    defer @println("defer: always")
+    errdefer @println("errdefer: undo acquire")
+    try step(fail_at == 1)
+    {
+        errdefer @println("errdefer: undo inner")
+        defer @println("defer: inner")
+        try step(fail_at == 2)
+    }
+    if fail_at == 3 {
+        return OpenError.Denied
+    }
+    return 7
+}
+
+// `return` of an error union: `errdefer` runs only if it holds an error.
+fn relay(fail: bool) OpenError!void {
+    errdefer @println("errdefer: relay")
+    return step(fail)
+}
+
+pub fn main() {
+    for i in 0..4 {
+        let v = acquire(i as u32) catch |e| {
+            match e {
+                .Busy => @println("caught busy")
+                .Denied => @println("caught denied")
+            }
+            continue
+        }
+        @println(v)
+    }
+    relay(false) catch |e| {
+        @println("relay failed")
+    }
+    relay(true) catch |e| {
+        @println("relay failed")
+    }
+}

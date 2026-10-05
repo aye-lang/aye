@@ -1,1 +1,1 @@
-literal_range.ore:2:17: error: integer literal `256` does not fit in `u8`
+literal_range.ore:2:17: error[E0024]: integer literal `256` does not fit in `u8`

@@ -1,0 +1,17 @@
+error ReadError { NotFound }
+error ParseError { Empty }
+
+fn read() ReadError!u32 {
+    return ReadError.NotFound
+}
+
+fn parse() ParseError!u32 {
+    let n = try read()
+    if n == 0 {
+        return ReadError.NotFound
+    }
+    return read()
+}
+
+pub fn main() {
+}

@@ -1,0 +1,14 @@
+error E { A }
+
+fn f() E!u32 {
+    return 1
+}
+
+pub fn main() {
+    let a = f() catch |e| {
+        @println("failed")
+    }
+    let b = f() catch true
+    let c = f() catch |e| e
+    let d = 5 catch 0
+}

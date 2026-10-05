@@ -1,0 +1,31 @@
+error ParseError { Empty, InvalidDigit, Overflow }
+
+fn parseU32(s: []u8) ParseError!u32 {
+    if s.len == 0 {
+        return ParseError.Empty
+    }
+    var n: u64 = 0
+    for i in 0..s.len {
+        let c = s[i]
+        if c < '0' || c > '9' {
+            return ParseError.InvalidDigit
+        }
+        n = n * 10 + (c - '0') as u64
+        if n > 4294967295 {
+            return ParseError.Overflow
+        }
+    }
+    return n as u32
+}
+
+// `try` passes any `ParseError` on to the caller.
+fn sum(a: []u8, b: []u8) ParseError!u64 {
+    let x = try parseU32(a)
+    let y = try parseU32(b)
+    return x as u64 + y as u64
+}
+
+pub fn main() !void {
+    @println(try sum("1", "2"))
+    @println(try sum("3", ""))
+}

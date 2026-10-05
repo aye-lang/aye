@@ -1,4 +1,4 @@
-use ore::diag;
+use ore::{codes, diag};
 use ore::driver::{self, Mode};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -7,7 +7,8 @@ const USAGE: &str = "usage:
   ore build <file.ore> [-o out] [--mode debug|safe|fast]
   ore run <file.ore> [--mode debug|safe|fast]
   ore emit-c <file.ore> [--mode debug|safe|fast]
-  ore check <file.ore> [--json]";
+  ore check <file.ore> [--json]
+  ore explain <code>";
 
 struct Args {
     cmd: String,
@@ -38,6 +39,23 @@ fn parse_args() -> Result<Args, String> {
 }
 
 fn main() -> ExitCode {
+    if std::env::args().nth(1).as_deref() == Some("explain") {
+        let rest: Vec<String> = std::env::args().skip(2).collect();
+        let [code] = &rest[..] else {
+            eprintln!("ore: `explain` needs one error code\n{USAGE}");
+            return ExitCode::from(2);
+        };
+        return match codes::explain(code) {
+            Some(text) => {
+                print!("{text}");
+                ExitCode::SUCCESS
+            }
+            None => {
+                eprintln!("ore: unknown error code `{code}`");
+                ExitCode::from(2)
+            }
+        };
+    }
     let args = match parse_args() {
         Ok(a) => a,
         Err(e) => {

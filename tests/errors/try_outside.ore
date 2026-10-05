@@ -1,0 +1,13 @@
+error E { A }
+
+fn f() E!u32 {
+    return 1
+}
+
+fn g() u32 {
+    return try f()
+}
+
+pub fn main() {
+    @println(g())
+}

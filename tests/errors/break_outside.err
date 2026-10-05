@@ -1,1 +1,1 @@
-break_outside.ore:2:5: error: `break` outside of a loop
+break_outside.ore:2:5: error[E0047]: `break` outside of a loop

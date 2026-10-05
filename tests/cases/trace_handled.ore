@@ -1,0 +1,28 @@
+error E { A, B }
+
+fn fail() E!void {
+    return E.A
+}
+
+fn inner() E!void {
+    try fail()
+}
+
+// A handled error leaves nothing in the trace.
+fn handled() {
+    inner() catch |e| {
+        @println("handled")
+    }
+}
+
+// `return e` passes the caught error on; its trace continues.
+fn rethrow() E!void {
+    inner() catch |e| {
+        return e
+    }
+}
+
+pub fn main() !void {
+    handled()
+    try rethrow()
+}

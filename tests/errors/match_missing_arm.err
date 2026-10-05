@@ -1,1 +1,1 @@
-match_missing_arm.ore:7:12: error: `match` is not exhaustive: missing variant `Shape.Square`
+match_missing_arm.ore:7:12: error[E0056]: `match` is not exhaustive: missing variant `Shape.Square`

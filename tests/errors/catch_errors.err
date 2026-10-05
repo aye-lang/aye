@@ -1,0 +1,4 @@
+catch_errors.ore:8:17: error[E0067]: this `catch` block must end with `return`, `break` or `continue`; to give a `u32` instead, write `catch <expression>`
+catch_errors.ore:11:23: error[E0023]: mismatched types: expected `u32`, found `bool`
+catch_errors.ore:12:27: error[E0023]: mismatched types: expected `u32`, found `E`
+catch_errors.ore:13:13: error[E0063]: `catch` needs an error union value (`E!T`), found `i64`

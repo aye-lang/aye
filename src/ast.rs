@@ -12,6 +12,7 @@ pub enum Item {
     Fn(FnDecl),
     Struct(StructDecl),
     Enum(EnumDecl),
+    ErrorSet(ErrorSetDecl),
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +50,23 @@ pub struct EnumDecl {
     pub variants: Vec<VariantDecl>,
 }
 
+/// `error Name { A, B }` or `error Name = X || Y`.
+#[derive(Debug, Clone)]
+pub struct ErrorSetDecl {
+    pub name: String,
+    pub span: Span,
+    pub is_pub: bool,
+    pub kind: ErrorSetKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum ErrorSetKind {
+    /// The error names, with their positions.
+    List(Vec<(String, Span)>),
+    /// The merged sets, with their positions.
+    Merge(Vec<(String, Span)>),
+}
+
 #[derive(Debug, Clone)]
 pub struct VariantDecl {
     pub name: String,
@@ -83,6 +101,8 @@ pub enum TypeExprKind {
     Ptr(Box<TypeExpr>, bool),
     /// `?T`
     Optional(Box<TypeExpr>),
+    /// `E!T` (with the set name and its position), or `!T` (inferred set).
+    ErrorUnion(Option<(String, Span)>, Box<TypeExpr>),
 }
 
 #[derive(Debug, Clone)]
@@ -111,6 +131,7 @@ pub enum StmtKind {
     Continue,
     Return(Option<Expr>),
     Defer(Box<Stmt>),
+    ErrDefer(Box<Stmt>),
     Block(Block),
     Expr(Expr),
 }
@@ -221,6 +242,10 @@ pub enum ExprKind {
     /// written `Enum.Variant` and parsed as `Field`.
     VariantLit { enum_name: String, variant: String, fields: Vec<FieldInit> },
     Match { scrutinee: Box<Expr>, arms: Vec<MatchArm> },
+    /// `try x`
+    Try(Box<Expr>),
+    /// `x catch |e| body`; the body is a block or an expression.
+    Catch { expr: Box<Expr>, capture: Option<(String, Span)>, body: Box<ArmBody> },
     /// `[N]T{a, b, c}`; `ty` is the array type.
     ArrayLit { ty: TypeExpr, elems: Vec<Expr> },
     Paren(Box<Expr>),

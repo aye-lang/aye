@@ -1,0 +1,12 @@
+error ParseError { Empty }
+
+fn f() ParseError!u32 {
+    return ParseError.Missing
+}
+
+pub fn main() {
+    let x = f() catch |e| match e {
+        .Empty => 0
+        .Gone => 1
+    }
+}

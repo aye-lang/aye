@@ -1,1 +1,1 @@
-unknown_field.ore:5:16: error: struct `P` has no field `y`
+unknown_field.ore:5:16: error[E0038]: struct `P` has no field `y`

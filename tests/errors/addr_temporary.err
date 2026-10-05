@@ -1,1 +1,1 @@
-addr_temporary.ore:6:13: error: cannot take the address of a temporary value (store it in a variable first)
+addr_temporary.ore:6:13: error[E0035]: cannot take the address of a temporary value (store it in a variable first)

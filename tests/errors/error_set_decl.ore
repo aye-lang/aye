@@ -1,0 +1,7 @@
+error A { X, Y, X }
+error B {}
+error C = D
+error D = C
+
+pub fn main() {
+}

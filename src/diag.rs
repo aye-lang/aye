@@ -1,5 +1,6 @@
 //! Source spans and diagnostics shared by every compiler stage.
 
+use crate::codes::Code;
 use std::fmt;
 
 /// A 1-based line/column position in the source file.
@@ -15,17 +16,18 @@ impl Span {
     }
 }
 
-/// A compile error: `file:line:col: error: message`.
+/// A compile error: `file:line:col: error[E0001]: message`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diag {
     pub file: String,
     pub span: Span,
+    pub code: Code,
     pub msg: String,
 }
 
 impl fmt::Display for Diag {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}:{}: error: {}", self.file, self.span.line, self.span.col, self.msg)
+        write!(f, "{}:{}:{}: error[{}]: {}", self.file, self.span.line, self.span.col, self.code, self.msg)
     }
 }
 
@@ -33,7 +35,8 @@ impl Diag {
     /// One entry of the `diagnostics` array in `ore check --json`.
     pub fn to_json(&self) -> String {
         format!(
-            r#"{{"severity":"error","line":{},"col":{},"message":{}}}"#,
+            r#"{{"severity":"error","code":"{}","line":{},"col":{},"message":{}}}"#,
+            self.code,
             self.span.line,
             self.span.col,
             json_str(&self.msg)
@@ -63,16 +66,17 @@ pub fn json_str(s: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
     pub span: Span,
+    pub code: Code,
     pub msg: String,
 }
 
 impl Error {
-    pub fn new(span: Span, msg: impl Into<String>) -> Error {
-        Error { span, msg: msg.into() }
+    pub fn new(code: Code, span: Span, msg: impl Into<String>) -> Error {
+        Error { span, code, msg: msg.into() }
     }
 
     pub fn with_file(self, file: &str) -> Diag {
-        Diag { file: file.to_string(), span: self.span, msg: self.msg }
+        Diag { file: file.to_string(), span: self.span, code: self.code, msg: self.msg }
     }
 }
 

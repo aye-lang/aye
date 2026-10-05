@@ -1,0 +1,2 @@
+unknown_error.ore:4:23: error[E0060]: error set `ParseError` has no error `Missing`
+unknown_error.ore:10:9: error[E0060]: error set `ParseError` has no error `Gone`
