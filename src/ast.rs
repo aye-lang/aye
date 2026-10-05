@@ -25,6 +25,8 @@ pub struct FnDecl {
     pub is_extern: bool,
     pub params: Vec<Param>,
     pub ret: Option<TypeExpr>,
+    /// `where T: I, ...`: the constraints on the `comptime` parameters.
+    pub bounds: Vec<Bound>,
     /// `None` for `extern fn`.
     pub body: Option<Block>,
 }
@@ -34,6 +36,18 @@ pub struct Param {
     pub name: String,
     pub span: Span,
     pub ty: TypeExpr,
+    /// `comptime T: type`
+    pub comptime: bool,
+}
+
+/// `T: I` in a `where` clause: the type parameter `T` must implement the
+/// interface `I`.
+#[derive(Debug, Clone)]
+pub struct Bound {
+    pub param: String,
+    pub span: Span,
+    pub iface: String,
+    pub iface_span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -114,8 +128,8 @@ pub enum TypeExprKind {
     Named(String),
     /// `[N]T`
     Array(u64, Box<TypeExpr>),
-    /// `[]T`
-    Slice(Box<TypeExpr>),
+    /// `[]T` (mutable = false) or `[]mut T` (mutable = true).
+    Slice(Box<TypeExpr>, bool),
     /// `[*]T`
     CPtr(Box<TypeExpr>),
     /// `*T` (mutable = false) or `*mut T` (mutable = true).
@@ -126,6 +140,8 @@ pub enum TypeExprKind {
     ErrorUnion(Option<(String, Span)>, Box<TypeExpr>),
     /// `dyn I`
     Dyn(String),
+    /// `F(A, B)`: the type that the type function `F` returns.
+    Generic(String, Vec<TypeExpr>),
 }
 
 #[derive(Debug, Clone)]
@@ -262,7 +278,8 @@ pub enum ExprKind {
     Field { base: Box<Expr>, name: String },
     Index { base: Box<Expr>, index: Box<Expr> },
     Slice { base: Box<Expr>, lo: Option<Box<Expr>>, hi: Option<Box<Expr>> },
-    StructLit { name: String, fields: Vec<FieldInit> },
+    /// `Name { ... }` or `F(T) { ... }`; `ty` is `Named` or `Generic`.
+    StructLit { ty: TypeExpr, fields: Vec<FieldInit> },
     /// `Enum.Variant { field: value, ... }`. A variant without payload is
     /// written `Enum.Variant` and parsed as `Field`.
     VariantLit { enum_name: String, variant: String, fields: Vec<FieldInit> },
@@ -271,9 +288,15 @@ pub enum ExprKind {
     Try(Box<Expr>),
     /// `x catch |e| body`; the body is a block or an expression.
     Catch { expr: Box<Expr>, capture: Option<(String, Span)>, body: Box<ArmBody> },
-    /// `[N]T{a, b, c}`; `ty` is the array type.
+    /// `[N]T{a, b, c}`; `ty` is the array type. Also the empty slice
+    /// `[]T{}`, where `ty` is a slice type.
     ArrayLit { ty: TypeExpr, elems: Vec<Expr> },
     Paren(Box<Expr>),
+    /// `struct { ... }`: the value of a type function. The name is empty.
+    StructType(StructDecl),
+    /// A type that cannot be read as an expression (`*T`, `?T`, `[]T`,
+    /// `[N]T`, `dyn I`), as a call argument for a `comptime` parameter.
+    Type(TypeExpr),
 }
 
 #[derive(Debug, Clone)]

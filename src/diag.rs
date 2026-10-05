@@ -16,6 +16,23 @@ impl Span {
     }
 }
 
+/// One edit of a fix-it: replace the text from `start` up to (not
+/// including) `end` with `replacement`. An insertion has `start == end`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Edit {
+    pub start: Span,
+    pub end: Span,
+    pub replacement: String,
+}
+
+/// A machine-applicable fix: its edits, applied together, and a short
+/// description for people (`help: ...`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fix {
+    pub help: String,
+    pub edits: Vec<Edit>,
+}
+
 /// A compile error: `file:line:col: error[E0001]: message`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diag {
@@ -23,6 +40,7 @@ pub struct Diag {
     pub span: Span,
     pub code: Code,
     pub msg: String,
+    pub fix: Option<Fix>,
 }
 
 impl fmt::Display for Diag {
@@ -34,13 +52,41 @@ impl fmt::Display for Diag {
 impl Diag {
     /// One entry of the `diagnostics` array in `ore check --json`.
     pub fn to_json(&self) -> String {
+        let edits: Vec<String> = self
+            .fix
+            .iter()
+            .flat_map(|f| &f.edits)
+            .map(|e| {
+                format!(
+                    r#"{{"line":{},"col":{},"end_line":{},"end_col":{},"replacement":{}}}"#,
+                    e.start.line,
+                    e.start.col,
+                    e.end.line,
+                    e.end.col,
+                    json_str(&e.replacement)
+                )
+            })
+            .collect();
         format!(
-            r#"{{"severity":"error","code":"{}","line":{},"col":{},"message":{}}}"#,
+            r#"{{"severity":"error","code":"{}","line":{},"col":{},"message":{},"fixes":[{}]}}"#,
             self.code,
             self.span.line,
             self.span.col,
-            json_str(&self.msg)
+            json_str(&self.msg),
+            edits.join(",")
         )
+    }
+
+    /// The diagnostic as the command line prints it: the error line and, for
+    /// a fix-it, `file:line:col: help: ...` at its first edit.
+    pub fn render(&self) -> String {
+        match &self.fix {
+            Some(f) => {
+                let at = f.edits[0].start;
+                format!("{self}\n{}:{}:{}: help: {}", self.file, at.line, at.col, f.help)
+            }
+            None => self.to_string(),
+        }
     }
 }
 
@@ -68,16 +114,42 @@ pub struct Error {
     pub span: Span,
     pub code: Code,
     pub msg: String,
+    pub fix: Option<Fix>,
 }
 
 impl Error {
     pub fn new(code: Code, span: Span, msg: impl Into<String>) -> Error {
-        Error { span, code, msg: msg.into() }
+        Error { span, code, msg: msg.into(), fix: None }
+    }
+
+    /// Attach a fix-it of one edit.
+    pub fn fix(mut self, help: impl Into<String>, start: Span, end: Span, replacement: impl Into<String>) -> Error {
+        self.fix = Some(Fix { help: help.into(), edits: vec![Edit { start, end, replacement: replacement.into() }] });
+        self
     }
 
     pub fn with_file(self, file: &str) -> Diag {
-        Diag { file: file.to_string(), span: self.span, code: self.code, msg: self.msg }
+        Diag { file: file.to_string(), span: self.span, code: self.code, msg: self.msg, fix: self.fix }
     }
+}
+
+/// Byte offset of the 1-based line/column `at` in `src`, where a column
+/// counts characters. Past the end of a line or file it is clamped there.
+pub fn offset(src: &str, at: Span) -> usize {
+    let mut line = 1;
+    let mut col = 1;
+    for (i, c) in src.char_indices() {
+        if line == at.line && (col == at.col || c == '\n') {
+            return i;
+        }
+        if c == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    src.len()
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

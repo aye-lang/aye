@@ -1,0 +1,26 @@
+// Slice elements are writable only through `[]mut T`.
+
+fn set(xs: []i32) {
+    xs[0] = 1
+}
+
+struct Buf {
+    data: []mut i32
+
+    // `*Self` makes `self.data` read-only, not the elements it points to.
+    fn clear(self: *Self) {
+        self.data[0] = 0
+        self.data = []mut i32{}
+    }
+}
+
+pub fn main() {
+    let xs = [2]i32{1, 2}
+    let s = xs[..]
+    s[0] = 3
+    let t = []i32{1}
+    var ys = [2]i32{1, 2}
+    let m: []mut i32 = ys[..]
+    let r: []i32 = m
+    let w: []mut i32 = r
+}

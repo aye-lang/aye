@@ -11,6 +11,12 @@
 //! - `tests/tests/X.ore`: `ore test X.ore` (debug mode) must print exactly
 //!   `X.out`, and `ore test --json X.ore` exactly `X.json` if it exists. The
 //!   exit status must be 0 when no test failed, and 1 otherwise.
+//! - `tests/fix/X.ore`: `ore fix X.ore` on a copy must leave exactly
+//!   `X.fixed` and print exactly `X.out`. If `X.stderr` exists, errors
+//!   remain: stderr must equal it and the exit status must be 1; otherwise
+//!   stderr must be empty, the exit status 0, and `ore check` must accept
+//!   the fixed file. If `X.json` exists, `ore check --json` on the original
+//!   must print exactly that.
 //! - `ore run`, `ore check` and `ore test --filter` are also run through the
 //!   built binary.
 
@@ -138,6 +144,55 @@ fn test_case(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Run the `ore` binary in `dir` and return (stdout, stderr, exit status).
+fn ore(dir: &Path, args: &[&str]) -> Result<(String, String, Option<i32>), String> {
+    let out = Command::new(env!("CARGO_BIN_EXE_ore")).current_dir(dir).args(args).output().map_err(|e| e.to_string())?;
+    Ok((
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.code(),
+    ))
+}
+
+fn fix_case(path: &Path, work: &Path) -> Result<(), String> {
+    let file = name(path);
+    let dir = work.join(format!("fix-{}", path.file_stem().unwrap().to_string_lossy()));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::copy(path, dir.join(&file)).map_err(|e| e.to_string())?;
+    let want_file = read(&path.with_extension("fixed")).ok_or("missing .fixed file")?;
+    let want_out = read(&path.with_extension("out")).ok_or("missing .out file")?;
+    let want_err = read(&path.with_extension("stderr"));
+    let (out, err, code) = ore(&dir, &["fix", &file])?;
+    let got_file = read(&dir.join(&file)).unwrap();
+    if got_file != want_file {
+        return Err(format!("fixed file mismatch\n--- expected\n{want_file}--- got\n{got_file}"));
+    }
+    if out != want_out {
+        return Err(format!("`ore fix` stdout mismatch\n--- expected\n{want_out}--- got\n{out}"));
+    }
+    if err != want_err.clone().unwrap_or_default() {
+        return Err(format!("`ore fix` stderr mismatch\n--- got\n{err}"));
+    }
+    let want_code = if want_err.is_some() { 1 } else { 0 };
+    if code != Some(want_code) {
+        return Err(format!("`ore fix`: expected exit status {want_code}, got {code:?}"));
+    }
+    if want_err.is_none() {
+        let (_, err, code) = ore(&dir, &["check", &file])?;
+        if code != Some(0) {
+            return Err(format!("`ore check` rejects the fixed file:\n{err}"));
+        }
+    }
+    if let Some(want) = read(&path.with_extension("json")) {
+        let rel = format!("tests/fix/{file}");
+        let (out, _, _) = ore(Path::new(env!("CARGO_MANIFEST_DIR")), &["check", "--json", &rel])?;
+        if out != want {
+            return Err(format!("`ore check --json` mismatch\n--- expected\n{want}--- got\n{out}"));
+        }
+    }
+    Ok(())
+}
+
 /// `ore test --filter`: only the tests whose name contains the text run.
 fn cli_test_filter() -> Result<(), String> {
     let f = "tests/tests/outcomes.ore";
@@ -173,8 +228,9 @@ fn cli_check() -> Result<(), String> {
     let ok = "tests/cases/hello.ore";
     let bad = "tests/errors/unknown_escape.ore";
     let three = "tests/errors/three_errors.ore";
+    let fixable = "tests/fix/let_var.ore";
     let diag = |code: &str, line: u32, col: u32, msg: &str| {
-        format!(r#"{{"severity":"error","code":"{code}","line":{line},"col":{col},"message":"{msg}"}}"#)
+        format!(r#"{{"severity":"error","code":"{code}","line":{line},"col":{col},"message":"{msg}","fixes":[]}}"#)
     };
     let checks: &[(&[&str], bool, String, String)] = &[
         (&[ok], true, String::new(), String::new()),
@@ -185,7 +241,7 @@ fn cli_check() -> Result<(), String> {
             false,
             format!(
                 "{{\"file\":\"{bad}\",\"diagnostics\":[{{\"severity\":\"error\",\"code\":\"E0005\",\"line\":2,\"col\":16,\
-                 \"message\":\"unknown escape sequence `\\\\q`\"}}]}}\n"
+                 \"message\":\"unknown escape sequence `\\\\q`\",\"fixes\":[]}}]}}\n"
             ),
             String::new(),
         ),
@@ -199,6 +255,17 @@ fn cli_check() -> Result<(), String> {
                 diag("E0018", 11, 14, "undefined variable `missing`"),
             ),
             String::new(),
+        ),
+        (
+            &[fixable],
+            false,
+            String::new(),
+            format!(
+                "{fixable}:4:9: error[E0032]: cannot assign to `sum`: it is immutable (declare it with `var`)\n\
+                 {fixable}:2:5: help: declare `sum` with `var`\n\
+                 {fixable}:11:14: error[E0019]: undefined function `totl`\n\
+                 {fixable}:11:14: help: change `totl` to `total`\n"
+            ),
         ),
     ];
     for (args, success, stdout, stderr) in checks {
@@ -243,6 +310,7 @@ fn main() {
     let run_cases = cases("cases");
     let err_cases = cases("errors");
     let test_cases = cases("tests");
+    let fix_cases = cases("fix");
     let results: Vec<(String, Result<(), String>)> = std::thread::scope(|s| {
         let mut handles = Vec::new();
         for p in &run_cases {
@@ -254,6 +322,10 @@ fn main() {
         }
         for p in &test_cases {
             handles.push((format!("tests/{}", name(p)), s.spawn(move || test_case(p))));
+        }
+        for p in &fix_cases {
+            let w = &work;
+            handles.push((format!("fix/{}", name(p)), s.spawn(move || fix_case(p, w))));
         }
         let w = &work;
         handles.push(("cli/ore run".to_string(), s.spawn(move || cli_run(w))));

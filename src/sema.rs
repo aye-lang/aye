@@ -6,11 +6,17 @@
 //! checking goes on with the next one. A name whose type could not be
 //! determined gets `Type::Error`; any use of it fails without a message, so
 //! one mistake is reported once.
+//!
+//! Generics are checked once where they are defined, with each `comptime`
+//! type an abstract `Type::Param` that has only the methods of its `where`
+//! constraints. Each instance (`Pool(Node)`, `max(i64)`) is memoized, has
+//! its constraints checked at the instantiation, and is checked again with
+//! concrete types to produce the monomorphized code.
 
 use crate::ast::{self, ArmBody, AssignOp, BinOp, ExprKind, StmtKind, TypeExprKind, UnOp};
 use crate::codes::*;
 use crate::diag::{Error, Result, Span};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 // ------------------------------------------------------------------ types
@@ -110,7 +116,9 @@ pub enum Type {
     /// Result type of functions without a return type. Not nameable.
     Void,
     Array(Box<Type>, u64),
-    Slice(Box<Type>),
+    /// `[]T` (mutable = false) or `[]mut T` (mutable = true): a pointer and
+    /// a length. Only `[]mut T` elements can be assigned.
+    Slice(Box<Type>, bool),
     /// `[*]T`: unchecked C pointer, for FFI.
     CPtr(Box<Type>),
     /// `*T` (mutable = false) or `*mut T` (mutable = true). Never null.
@@ -131,9 +139,16 @@ pub enum Type {
     Dyn(String),
     /// A predeclared allocator type.
     Builtin(BuiltinTy),
+    /// A `comptime` type parameter while its generic is checked: the
+    /// generic's name and the parameter's name. Never reaches codegen:
+    /// generated code is monomorphized.
+    Param(String, String),
     /// The type of something that already has a reported error.
     Error,
 }
+
+/// The most instances of one generic.
+const MAX_INSTANCES: usize = 64;
 
 /// Name prefix of the inferred error set of a `!T` function.
 const INFERRED: &str = "error set of ";
@@ -186,7 +201,8 @@ impl fmt::Display for Type {
             Type::Bool => f.write_str("bool"),
             Type::Void => f.write_str("void"),
             Type::Array(t, n) => write!(f, "[{n}]{t}"),
-            Type::Slice(t) => write!(f, "[]{t}"),
+            Type::Slice(t, false) => write!(f, "[]{t}"),
+            Type::Slice(t, true) => write!(f, "[]mut {t}"),
             Type::CPtr(t) => write!(f, "[*]{t}"),
             Type::Ptr(t, false) => write!(f, "*{t}"),
             Type::Ptr(t, true) => write!(f, "*mut {t}"),
@@ -196,6 +212,7 @@ impl fmt::Display for Type {
             Type::ErrorUnion(set, t) => write!(f, "{set}!{t}"),
             Type::Dyn(i) => write!(f, "dyn {i}"),
             Type::Builtin(b) => f.write_str(b.name()),
+            Type::Param(_, n) => f.write_str(n),
             Type::Error => f.write_str(ERROR_TY),
         }
     }
@@ -285,6 +302,8 @@ pub struct VarInfo {
     pub name: String,
     pub ty: Type,
     pub mutable: bool,
+    /// The `let` keyword that declared it, for the fix-it to `var`.
+    pub let_span: Option<Span>,
 }
 
 #[derive(Debug, Clone)]
@@ -367,6 +386,11 @@ pub enum TExprKind {
     ToDyn { ptr: Box<TExpr>, strukt: String },
     /// `alloc.create(value)`: type `AllocError!*mut T`.
     Create { alloc: Box<TExpr>, value: Box<TExpr> },
+    /// `alloc.alloc(value, len)`: type `AllocError![]mut T`, every element
+    /// set to `value`.
+    AllocSlice { alloc: Box<TExpr>, value: Box<TExpr>, len: Box<TExpr> },
+    /// `[]T{}`: the empty slice.
+    EmptySlice,
     Intrinsic { op: Intrinsic, args: Vec<TExpr> },
     /// A `T` returned from an `E!T` function.
     OkWrap(Box<TExpr>),
@@ -385,6 +409,8 @@ pub enum Intrinsic {
     ArenaDeinit,
     /// `alloc.destroy(p)`: args are the allocator and the pointer.
     Destroy,
+    /// `alloc.free(s)`: args are the allocator and the slice.
+    Free,
     TestAllocator,
     Expect,
     /// `@expectEqual(expected, actual)`
@@ -426,6 +452,18 @@ enum Recv {
     Ptr(bool),
 }
 
+/// A function to check: its declaration, its struct (for a method), and
+/// the `comptime` parameters in scope with the types they stand for.
+#[derive(Clone)]
+struct FnCtx<'a> {
+    decl: &'a ast::FnDecl,
+    owner: Option<String>,
+    env: Vec<(String, Type, Span)>,
+    /// The generic that this function is an instance of, or a method of an
+    /// instance of.
+    generic: Option<String>,
+}
+
 struct Checker<'a> {
     structs: HashMap<String, StructDef>,
     enums: HashMap<String, EnumDef>,
@@ -435,8 +473,8 @@ struct Checker<'a> {
     error_names: Vec<String>,
     /// Functions by name: `f`, `Struct.method` and `test#N`.
     fns: HashMap<String, FnSig>,
-    /// Each function's declaration and, for a method, its struct.
-    fn_decls: HashMap<String, (&'a ast::FnDecl, Option<String>)>,
+    /// Each function's declaration and context.
+    fn_decls: HashMap<String, FnCtx<'a>>,
     /// The receiver of each method (`Struct.method`).
     recvs: HashMap<String, Recv>,
     ifaces: HashMap<String, IfaceDef>,
@@ -448,6 +486,32 @@ struct Checker<'a> {
     errors: Vec<Error>,
     /// Number of failed checks, including silent follow-up ones.
     failures: usize,
+    /// Errors are counted but not reported (in the instances of a generic
+    /// whose definition has errors).
+    quiet: bool,
+    /// Generic functions (with `comptime` parameters) and type functions
+    /// (returning `type`), by name.
+    generics: HashMap<String, &'a ast::FnDecl>,
+    /// Instances, memoized: (generic, type arguments) to the struct name of
+    /// a type function's instance, or the key of a generic function's.
+    instances: HashMap<(String, Vec<Type>), String>,
+    /// Instance structs in order of creation.
+    instance_structs: Vec<String>,
+    /// Instance structs whose type arguments mention a type parameter.
+    abstract_structs: HashSet<String>,
+    /// The `where` constraints of each type parameter: interface names.
+    bounds: HashMap<(String, String), Vec<String>>,
+    /// Generics whose definition is checked or being checked, and those of
+    /// them that have errors.
+    defined: HashSet<String>,
+    failed: HashSet<String>,
+    /// Constraint checks and recursive-type checks of instances made before
+    /// every method signature is known; done after that.
+    sigs_done: bool,
+    pending_bounds: Vec<(String, Vec<Type>, Span)>,
+    pending_recursive: Vec<(String, Span)>,
+    /// Function bodies to check, in order. Instances add their functions.
+    queue: Vec<String>,
     // Per-function state.
     vars: Vec<VarInfo>,
     scopes: Vec<HashMap<String, (VarId, Span)>>,
@@ -457,6 +521,9 @@ struct Checker<'a> {
     /// The struct whose method is checked (what `Self` means).
     self_ty: Option<String>,
     in_test: bool,
+    /// The `comptime` parameters in scope: name, the type it stands for (a
+    /// `Type::Param` while the generic itself is checked), declaration.
+    env: Vec<(String, Type, Span)>,
 }
 
 /// Check a file. Without `require_main` (`ore test`, or `ore check` of a
@@ -476,6 +543,18 @@ pub fn check(file: &ast::File, require_main: bool) -> std::result::Result<Progra
         top_spans: HashMap::new(),
         errors: Vec::new(),
         failures: 0,
+        quiet: false,
+        generics: HashMap::new(),
+        instances: HashMap::new(),
+        instance_structs: Vec::new(),
+        abstract_structs: HashSet::new(),
+        bounds: HashMap::new(),
+        defined: HashSet::new(),
+        failed: HashSet::new(),
+        sigs_done: false,
+        pending_bounds: Vec::new(),
+        pending_recursive: Vec::new(),
+        queue: Vec::new(),
         vars: Vec::new(),
         scopes: Vec::new(),
         ret: Type::Void,
@@ -483,6 +562,7 @@ pub fn check(file: &ast::File, require_main: bool) -> std::result::Result<Progra
         in_defer: false,
         self_ty: None,
         in_test: false,
+        env: Vec::new(),
     };
     let p = c.program(file, require_main);
     if c.errors.is_empty() { Ok(p) } else { Err(c.errors) }
@@ -531,6 +611,82 @@ fn is_unsigned(t: &Type) -> bool {
     matches!(t, Type::Int(i) if !i.signed())
 }
 
+/// Does `f` return `type` (a type function)?
+fn is_type_fn(f: &ast::FnDecl) -> bool {
+    matches!(&f.ret, Some(ast::TypeExpr { kind: TypeExprKind::Named(n), .. }) if n == "type")
+}
+
+/// Is `f` generic: a type function, or a function with `comptime` parameters?
+fn is_generic(f: &ast::FnDecl) -> bool {
+    is_type_fn(f) || f.params.iter().any(|p| p.comptime)
+}
+
+/// The struct that a type function returns: its body is `return struct { ... }`.
+fn type_fn_struct(f: &ast::FnDecl) -> Option<&ast::StructDecl> {
+    match &f.body.as_ref()?.stmts[..] {
+        [ast::Stmt { kind: StmtKind::Return(Some(ast::Expr { kind: ExprKind::StructType(d), .. })), .. }] => Some(d),
+        _ => None,
+    }
+}
+
+/// The type that an expression names, if it has the shape of one: `T`,
+/// `F(A, B)` or a type that does not read as an expression (`*T`, ...).
+fn expr_type(e: &ast::Expr) -> Option<ast::TypeExpr> {
+    let kind = match &e.kind {
+        ExprKind::Ident(n) => TypeExprKind::Named(n.clone()),
+        ExprKind::Call { name, args } => TypeExprKind::Generic(name.clone(), args.iter().map(expr_type).collect::<Option<_>>()?),
+        ExprKind::Type(t) => return Some(t.clone()),
+        _ => return None,
+    };
+    Some(ast::TypeExpr { kind, span: e.span })
+}
+
+/// Primitive and predeclared type names, for spelling suggestions.
+const TYPE_NAMES: &[&str] = &[
+    "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize", "f32", "f64", "bool", "Allocator", "General",
+    "Arena",
+];
+
+/// Are `a` and `b` one edit apart: one character inserted, deleted or
+/// replaced, or two adjacent characters swapped?
+fn one_edit(a: &str, b: &str) -> bool {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let (long, short) = if a.len() >= b.len() { (&a, &b) } else { (&b, &a) };
+    match long.len() - short.len() {
+        0 => {
+            let diff: Vec<usize> = (0..a.len()).filter(|&i| a[i] != b[i]).collect();
+            match diff[..] {
+                [_] => true,
+                [i, j] => j == i + 1 && a[i] == b[j] && a[j] == b[i],
+                _ => false,
+            }
+        }
+        1 => {
+            let i = (0..short.len()).find(|&i| long[i] != short[i]).unwrap_or(short.len());
+            long[i + 1..] == short[i..]
+        }
+        _ => false,
+    }
+}
+
+/// Add a fix-it that renames `name` (at `span`) to the only candidate one
+/// edit away, if there is exactly one and `name` has at least 3 characters.
+fn suggest<'n>(e: Error, name: &str, span: Span, candidates: impl IntoIterator<Item = &'n str>) -> Error {
+    if name.chars().count() < 3 {
+        return e;
+    }
+    let mut close: Vec<&str> = candidates.into_iter().filter(|c| one_edit(name, c)).collect();
+    close.sort();
+    close.dedup();
+    match close[..] {
+        [c] => {
+            let end = Span::new(span.line, span.col + name.chars().count() as u32);
+            e.fix(format!("change `{name}` to `{c}`"), span, end, c)
+        }
+        _ => e,
+    }
+}
+
 /// Does every path through `stmts` end in `return` (or, with `or_jumps`,
 /// in `break` or `continue`)?
 fn block_returns(stmts: &[TStmt], or_jumps: bool) -> bool {
@@ -572,9 +728,15 @@ fn describe_set(set: &str) -> String {
 impl<'a> Checker<'a> {
     /// Record an error and go on. Follow-up errors are dropped: the silent
     /// error, and any message that mentions `Type::Error`.
-    fn report(&mut self, e: Error) {
+    fn report(&mut self, mut e: Error) {
         self.failures += 1;
-        if !e.msg.is_empty() && !e.msg.contains(ERROR_TY) {
+        if !self.quiet && !e.msg.is_empty() && !e.msg.contains(ERROR_TY) {
+            // Instance names are shown without the suffix that tells apart
+            // instances that print alike (`instance_name`).
+            while let Some(i) = e.msg.find(")#") {
+                let digits = e.msg[i + 2..].chars().take_while(char::is_ascii_digit).count();
+                e.msg.replace_range(i + 1..i + 2 + digits, "");
+            }
             self.errors.push(e);
         }
     }
@@ -600,7 +762,7 @@ impl<'a> Checker<'a> {
                     continue;
                 }
             };
-            if Type::from_name(name).is_some() || matches!(name.as_str(), "true" | "false" | "null" | "Self" | ALLOC_ERROR) {
+            if Type::from_name(name).is_some() || matches!(name.as_str(), "true" | "false" | "null" | "Self" | "type" | ALLOC_ERROR) {
                 self.report(Error::new(E0014, span, format!("`{name}` is a builtin name and cannot be redefined")));
                 continue;
             }
@@ -622,11 +784,27 @@ impl<'a> Checker<'a> {
                 ast::Item::Interface(i) => {
                     self.ifaces.insert(i.name.clone(), IfaceDef { name: i.name.clone(), methods: vec![] });
                 }
+                ast::Item::Fn(f) if is_generic(f) => {
+                    self.generics.insert(f.name.clone(), f);
+                }
                 ast::Item::Fn(_) | ast::Item::Test(_) => {}
             }
             items.push(item);
         }
         self.error_sets(&items);
+        // Generics: each one's declaration, and its instance for its own
+        // parameters, through which its definition is checked with the
+        // parameters abstract. Their bodies are checked first (phase 4).
+        let generics: Vec<&'a ast::FnDecl> = items
+            .iter()
+            .filter_map(|i| match i {
+                ast::Item::Fn(f) if is_generic(f) => Some(f),
+                _ => None,
+            })
+            .collect();
+        for f in generics {
+            self.define_generic(&f.name);
+        }
         // 2. Struct fields, enum variants and interface methods.
         for item in &items {
             match item {
@@ -672,7 +850,7 @@ impl<'a> Checker<'a> {
         let mut decls: Vec<(String, &'a ast::FnDecl, Option<String>)> = Vec::new();
         for item in &items {
             match item {
-                ast::Item::Fn(f) => decls.push((f.name.clone(), f, None)),
+                ast::Item::Fn(f) if !is_generic(f) => decls.push((f.name.clone(), f, None)),
                 ast::Item::Struct(s) => {
                     for m in &s.methods {
                         if s.fields.iter().any(|f| f.name == m.name) {
@@ -692,60 +870,72 @@ impl<'a> Checker<'a> {
             }
         }
         for (key, f, owner) in &decls {
-            self.self_ty = owner.clone();
+            if let Some(p) = f.params.iter().find(|p| p.comptime) {
+                self.report(Error::new(E0076, p.span, "only a top-level function can have `comptime` parameters"));
+            }
+            let sig = self.register(key, f, owner.clone(), None);
             let ffi_ok = |t: &Type| matches!(t, Type::Int(_) | Type::Float(_) | Type::Bool | Type::CPtr(_) | Type::Error);
-            let mut params = Vec::new();
-            for p in &f.params {
-                let ty = self.resolve_or_report(&p.ty);
-                if f.is_extern && !ffi_ok(&ty) {
-                    self.report(Error::new(E0052, p.ty.span, format!("type `{ty}` cannot be used in an `extern fn` signature")));
-                }
-                params.push(ty);
-            }
-            let ret = match &f.ret {
-                Some(t) => self.resolve_ret(key, f.is_pub, t),
-                None => Type::Void,
-            };
-            self.self_ty = None;
-            if let Some(s) = owner {
-                let recv = match params.first() {
-                    Some(Type::Struct(n)) if n == s => Recv::Value,
-                    Some(Type::Ptr(t, m)) if matches!(&**t, Type::Struct(n) if n == s) => Recv::Ptr(*m),
-                    _ => Recv::Static,
-                };
-                self.recvs.insert(key.clone(), recv);
-            }
             if f.is_extern {
-                if ret != Type::Void && !ffi_ok(&ret) {
-                    let span = f.ret.as_ref().unwrap().span;
-                    self.report(Error::new(E0052, span, format!("type `{ret}` cannot be used in an `extern fn` signature")));
+                for (p, ty) in f.params.iter().zip(&sig.params) {
+                    if !ffi_ok(ty) {
+                        self.report(Error::new(E0052, p.ty.span, format!("type `{ty}` cannot be used in an `extern fn` signature")));
+                    }
                 }
-                externs.push(ExternFn { name: f.name.clone(), params: params.clone(), ret: ret.clone() });
+                if sig.ret != Type::Void && !ffi_ok(&sig.ret) {
+                    let span = f.ret.as_ref().unwrap().span;
+                    self.report(Error::new(E0052, span, format!("type `{}` cannot be used in an `extern fn` signature", sig.ret)));
+                }
+                externs.push(ExternFn { name: f.name.clone(), params: sig.params.clone(), ret: sig.ret.clone() });
             }
             if key == "main" && !f.is_extern {
                 main_found = true;
-                let ret_ok = matches!(&ret, Type::Void | Type::Error)
-                    || matches!(&ret, Type::ErrorUnion(_, p) if **p == Type::Void);
+                let ret_ok = matches!(&sig.ret, Type::Void | Type::Error)
+                    || matches!(&sig.ret, Type::ErrorUnion(_, p) if **p == Type::Void);
                 if !f.is_pub {
                     self.report(Error::new(E0051, f.span, "`main` must be declared `pub fn main()`"));
-                } else if !params.is_empty() || !ret_ok {
+                } else if !sig.params.is_empty() || !ret_ok {
                     self.report(Error::new(E0051, f.span, "`main` must take no parameters and return nothing or `!void`"));
                 }
-            }
-            self.fns.insert(key.clone(), FnSig { params, ret, is_extern: f.is_extern });
-            if !f.is_extern {
-                self.fn_decls.insert(key.clone(), (*f, owner.clone()));
             }
         }
         if require_main && !main_found {
             self.report(Error::new(E0051, Span::new(1, 1), "no `pub fn main()` found"));
         }
-        // 4. Bodies.
-        let keys: Vec<&String> = decls.iter().filter(|(_, f, _)| !f.is_extern).map(|(k, ..)| k).collect();
-        for key in &keys {
-            let _ = self.ensure_body(key, Span::default());
+        // Every method signature is known now: check the instances made so far.
+        self.sigs_done = true;
+        for (g, args, span) in std::mem::take(&mut self.pending_bounds) {
+            if let Err(e) = self.check_bounds(&g, &args, span) {
+                self.report(e);
+            }
         }
-        let fns = keys.iter().map(|k| self.bodies.get_mut(*k).unwrap().take().unwrap()).collect();
+        for (name, span) in std::mem::take(&mut self.pending_recursive) {
+            if let Err(e) = self.check_recursive(&name, &name, span, &mut Vec::new()) {
+                self.report(e);
+            }
+        }
+        // 4. Bodies: the generics' own instances first, so that a generic
+        // with errors is known before its other instances are checked (they
+        // are checked quietly); then the functions, then each instance as it
+        // is made.
+        self.queue.extend(decls.iter().filter(|(_, f, _)| !f.is_extern).map(|(k, ..)| k.clone()));
+        let own: Vec<String> = self.queue.iter().filter(|k| self.is_abstract_fn(k)).cloned().collect();
+        for key in own {
+            let _ = self.ensure_body(&key, Span::default());
+        }
+        let mut i = 0;
+        while i < self.queue.len() {
+            let key = self.queue[i].clone();
+            i += 1;
+            let _ = self.ensure_body(&key, Span::default());
+        }
+        // Code is generated for the concrete functions and structs only.
+        let mut fns = Vec::new();
+        for key in std::mem::take(&mut self.queue) {
+            let def = self.bodies.get_mut(&key).unwrap().take().unwrap();
+            if !self.is_abstract_fn(&key) {
+                fns.push(def);
+            }
+        }
         let mut structs = Vec::new();
         let mut enums = Vec::new();
         let mut ifaces = Vec::new();
@@ -757,6 +947,12 @@ impl<'a> Checker<'a> {
                 ast::Item::ErrorSet(_) | ast::Item::Fn(_) | ast::Item::Test(_) => {}
             }
         }
+        for n in &self.instance_structs {
+            if !self.abstract_structs.contains(n) {
+                structs.push(self.structs[n].clone());
+            }
+        }
+        let vtables = std::mem::take(&mut self.vtables).into_iter().filter(|(_, s)| !self.abstract_structs.contains(s)).collect();
         Program {
             structs,
             enums,
@@ -764,9 +960,316 @@ impl<'a> Checker<'a> {
             fns,
             errors: std::mem::take(&mut self.error_names),
             ifaces,
-            vtables: std::mem::take(&mut self.vtables),
+            vtables,
             tests: tests.iter().map(|t| t.name.clone()).collect(),
         }
+    }
+
+    /// Check the generic `g` (once): its declaration, and its instance for
+    /// its own parameters, through which its definition is checked with the
+    /// parameters abstract (the bodies in phase 4). Done before any other
+    /// instance of `g` is made, so that a generic with errors is known.
+    fn define_generic(&mut self, g: &str) {
+        if !self.defined.insert(g.to_string()) {
+            return;
+        }
+        let f = self.generics[g];
+        let failures = self.failures;
+        self.generic_decl(f);
+        if !f.is_extern {
+            let own = self.own_params(f);
+            if is_type_fn(f) {
+                let _ = self.instantiate_type(g, own, f.span);
+            } else {
+                let _ = self.instantiate_fn(g, own, f.span);
+            }
+        }
+        if self.failures > failures {
+            self.failed.insert(g.to_string());
+        }
+    }
+
+    /// Is the function `key` an instance for abstract type parameters?
+    fn is_abstract_fn(&self, key: &str) -> bool {
+        self.fn_decls[key].env.iter().any(|(_, t, _)| self.has_param(t))
+    }
+
+    /// Check the declaration of the generic `f`: its `comptime` parameters,
+    /// its `where` constraints (which are recorded) and, for a type
+    /// function, the form of its body.
+    fn generic_decl(&mut self, f: &'a ast::FnDecl) {
+        let g = &f.name;
+        if f.is_extern {
+            self.report(Error::new(E0076, f.span, "an `extern fn` cannot have `comptime` parameters"));
+        }
+        let mut seen: Vec<(&str, Span)> = Vec::new();
+        for p in &f.params {
+            if !p.comptime {
+                if is_type_fn(f) {
+                    self.report(Error::new(E0076, p.span, "a function that returns `type` can only have `comptime` parameters"));
+                }
+                continue;
+            }
+            if !matches!(&p.ty.kind, TypeExprKind::Named(n) if n == "type") {
+                self.report(Error::new(
+                    E0076,
+                    p.ty.span,
+                    "a `comptime` parameter must have type `type` (other compile-time values are not supported)",
+                ));
+            }
+            let prev = seen.iter().find(|(n, _)| *n == p.name).map(|x| x.1).or_else(|| self.top_spans.get(&p.name).copied());
+            if let Some(prev) = prev {
+                self.report(Error::new(E0016, p.span, format!(
+                    "`{}` is already declared at {}:{} (shadowing is not allowed)",
+                    p.name, prev.line, prev.col
+                )));
+            }
+            seen.push((&p.name, p.span));
+        }
+        for b in &f.bounds {
+            if !f.params.iter().any(|p| p.comptime && p.name == b.param) {
+                self.report(Error::new(E0076, b.span, format!("`{}` is not a `comptime` parameter of `{g}`", b.param)));
+            } else if !self.ifaces.contains_key(&b.iface) {
+                self.report(Error::new(E0076, b.iface_span, format!(
+                    "`{}` is not an interface (a `where` constraint names an interface)",
+                    b.iface
+                )));
+            } else {
+                self.bounds.entry((g.clone(), b.param.clone())).or_default().push(b.iface.clone());
+            }
+        }
+        if is_type_fn(f) && !f.is_extern && type_fn_struct(f).is_none() {
+            let stmts = &f.body.as_ref().unwrap().stmts;
+            let returns_struct = |s: &ast::Stmt| {
+                matches!(&s.kind, StmtKind::Return(Some(ast::Expr { kind: ExprKind::StructType(_), .. })))
+            };
+            let span = stmts.iter().find(|s| !returns_struct(s)).or(stmts.get(1)).map_or(f.span, |s| s.span);
+            self.report(Error::new(
+                E0077,
+                span,
+                "the body of a function that returns `type` must be a single `return struct { ... }`",
+            ));
+        }
+    }
+
+    /// The generic `f`'s own `comptime` parameters, as abstract types.
+    fn own_params(&self, f: &ast::FnDecl) -> Vec<Type> {
+        f.params.iter().filter(|p| p.comptime).map(|p| Type::Param(f.name.clone(), p.name.clone())).collect()
+    }
+
+    /// The `comptime` parameters of `f` bound to `args`.
+    fn comptime_env(f: &ast::FnDecl, args: &[Type]) -> Vec<(String, Type, Span)> {
+        f.params.iter().filter(|p| p.comptime).zip(args).map(|(p, t)| (p.name.clone(), t.clone(), p.span)).collect()
+    }
+
+    /// Does `t` mention a type parameter?
+    fn has_param(&self, t: &Type) -> bool {
+        match t {
+            Type::Param(..) => true,
+            Type::Struct(n) => self.abstract_structs.contains(n),
+            Type::Array(e, _)
+            | Type::Slice(e, _)
+            | Type::CPtr(e)
+            | Type::Ptr(e, _)
+            | Type::Optional(e)
+            | Type::ErrorUnion(_, e) => self.has_param(e),
+            _ => false,
+        }
+    }
+
+    /// Stop a generic that instantiates itself with larger and larger type
+    /// arguments (`Nest(?T)` in `Nest(T)`), which would never end.
+    fn check_instance_count(&self, g: &str, span: Span) -> Result<()> {
+        if self.instances.keys().filter(|(n, _)| n == g).count() >= MAX_INSTANCES {
+            if self.failed.contains(g) {
+                return Err(silent());
+            }
+            return err(E0080, span, format!(
+                "more than {MAX_INSTANCES} instances of `{g}`: it instantiates itself with larger and larger type arguments"
+            ));
+        }
+        Ok(())
+    }
+
+    /// The name of a new instance: `Pool(Node)`. Instances for type
+    /// parameters of different generics can print alike (`Pool(T)`); a
+    /// later one gets a suffix.
+    fn instance_name(&self, g: &str, args: &[Type]) -> String {
+        let base = format!("{g}({})", args.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", "));
+        let mut name = base.clone();
+        let mut n = 1;
+        while self.instances.values().any(|v| *v == name) {
+            n += 1;
+            name = format!("{base}#{n}");
+        }
+        name
+    }
+
+    /// Check the `where` constraints of the generic `g` for the type
+    /// arguments `args`, at the instantiation `span`. Before every method
+    /// signature is known, the check waits.
+    fn check_bounds(&mut self, g: &str, args: &[Type], span: Span) -> Result<()> {
+        if !self.sigs_done {
+            self.pending_bounds.push((g.to_string(), args.to_vec(), span));
+            return Ok(());
+        }
+        let decl = self.generics[g];
+        let params: Vec<&ast::Param> = decl.params.iter().filter(|p| p.comptime).collect();
+        for b in &decl.bounds {
+            let Some(i) = params.iter().position(|p| p.name == b.param) else { continue };
+            if i >= args.len() || !self.ifaces.contains_key(&b.iface) {
+                continue;
+            }
+            let (p, iface) = (&b.param, &b.iface);
+            let need = format!("`where {p}: {iface}` of `{g}` at {}:{}", b.span.line, b.span.col);
+            match &args[i] {
+                Type::Param(pg, pn) => {
+                    if !self.bounds.get(&(pg.clone(), pn.clone())).is_some_and(|v| v.contains(iface)) {
+                        return err(E0079, span, format!("`{pn}` does not satisfy {need} (add `where {pn}: {iface}`)"));
+                    }
+                }
+                Type::Struct(s) => {
+                    if let Some(why) = self.why_not(s, iface) {
+                        return err(E0079, span, format!("`{s}` does not satisfy {need}: {why}"));
+                    }
+                }
+                t => return err(E0079, span, format!("`{t}` does not satisfy {need}: it has no methods")),
+            }
+        }
+        Ok(())
+    }
+
+    /// The struct that the type function `g` returns for `args` (memoized:
+    /// the same arguments give the same struct). The first time, its fields
+    /// and method signatures are resolved with the `comptime` parameters
+    /// bound to `args`, and its methods are queued for checking unless
+    /// `args` are abstract (then only `g`'s own parameters are checked).
+    fn instantiate_type(&mut self, g: &str, args: Vec<Type>, span: Span) -> Result<Type> {
+        self.define_generic(g);
+        let decl = self.generics[g];
+        let want = decl.params.iter().filter(|p| p.comptime).count();
+        if args.len() != want {
+            return err(E0080, span, format!("type function `{g}` takes {want} argument(s) but {} were given", args.len()));
+        }
+        // The definition is reported as wrong.
+        let Some(sdecl) = type_fn_struct(decl) else { return Err(silent()) };
+        self.check_bounds(g, &args, span)?;
+        let key = (g.to_string(), args);
+        if let Some(n) = self.instances.get(&key) {
+            return Ok(Type::Struct(n.clone()));
+        }
+        self.check_instance_count(g, span)?;
+        let name = self.instance_name(g, &key.1);
+        self.instances.insert(key.clone(), name.clone());
+        self.instance_structs.push(name.clone());
+        self.structs.insert(name.clone(), StructDef { name: name.clone(), fields: vec![] });
+        let identity = key.1 == self.own_params(decl);
+        let is_abstract = key.1.iter().any(|t| self.has_param(t));
+        if is_abstract {
+            self.abstract_structs.insert(name.clone());
+        }
+        let env = Self::comptime_env(decl, &key.1);
+        let saved = (std::mem::replace(&mut self.env, env), self.self_ty.replace(name.clone()), self.quiet);
+        if !identity && self.failed.contains(g) {
+            self.quiet = true;
+        }
+        let fields = self.fields(&sdecl.fields, &format!("struct `{name}`"));
+        self.structs.get_mut(&name).unwrap().fields = fields;
+        let mut keys: Vec<String> = Vec::new();
+        for m in &sdecl.methods {
+            if sdecl.fields.iter().any(|f| f.name == m.name) {
+                self.report(Error::new(E0015, m.span, format!("`{}` is both a field and a method of struct `{name}`", m.name)));
+                continue;
+            }
+            let key = format!("{name}.{}", m.name);
+            if keys.contains(&key) {
+                self.report(Error::new(E0015, m.span, format!("duplicate method `{}` in struct `{name}`", m.name)));
+                continue;
+            }
+            if let Some(p) = m.params.iter().find(|p| p.comptime) {
+                self.report(Error::new(E0076, p.span, "only a top-level function can have `comptime` parameters"));
+            }
+            self.register(&key, m, Some(name.clone()), Some(g.to_string()));
+            keys.push(key);
+        }
+        (self.env, self.self_ty, self.quiet) = saved;
+        if identity || !is_abstract {
+            self.queue.extend(keys);
+        }
+        if self.sigs_done {
+            if let Err(e) = self.check_recursive(&name, &name, sdecl.span, &mut Vec::new()) {
+                self.report(e);
+            }
+        } else {
+            self.pending_recursive.push((name.clone(), sdecl.span));
+        }
+        Ok(Type::Struct(name))
+    }
+
+    /// The function key of the generic function `g` for the type arguments
+    /// `args` (memoized), registered and queued like `instantiate_type`.
+    fn instantiate_fn(&mut self, g: &str, args: Vec<Type>, span: Span) -> Result<String> {
+        self.define_generic(g);
+        self.check_bounds(g, &args, span)?;
+        let key = (g.to_string(), args);
+        if let Some(k) = self.instances.get(&key) {
+            return Ok(k.clone());
+        }
+        let decl = self.generics[g];
+        self.check_instance_count(g, span)?;
+        let name = self.instance_name(g, &key.1);
+        self.instances.insert(key.clone(), name.clone());
+        let identity = key.1 == self.own_params(decl);
+        let is_abstract = key.1.iter().any(|t| self.has_param(t));
+        let env = Self::comptime_env(decl, &key.1);
+        let saved = (std::mem::replace(&mut self.env, env), self.quiet);
+        if !identity && self.failed.contains(g) {
+            self.quiet = true;
+        }
+        self.register(&name, decl, None, Some(g.to_string()));
+        (self.env, self.quiet) = saved;
+        if identity || !is_abstract {
+            self.queue.push(name.clone());
+        }
+        Ok(name)
+    }
+
+    /// Resolve the signature of `f` and register it as the function `key`
+    /// (`comptime` parameters are left out), with its context for checking
+    /// the body. `owner` is the struct of a method; `generic` the generic
+    /// it belongs to, which must spell out its error set.
+    fn register(&mut self, key: &str, f: &'a ast::FnDecl, owner: Option<String>, generic: Option<String>) -> FnSig {
+        let saved = std::mem::replace(&mut self.self_ty, owner.clone());
+        let params: Vec<Type> = f.params.iter().filter(|p| !p.comptime).map(|p| self.resolve_or_report(&p.ty)).collect();
+        let ret = match &f.ret {
+            Some(t @ ast::TypeExpr { kind: TypeExprKind::ErrorUnion(None, payload), .. }) if generic.is_some() => {
+                let payload = match &payload.kind {
+                    TypeExprKind::Named(n) if n == "void" => Type::Void,
+                    _ => self.resolve_or_report(payload),
+                };
+                self.report(Error::new(E0076, t.span, format!(
+                    "a generic function must spell out its error set: write `ErrorSet!{payload}`, not `!{payload}`"
+                )));
+                Type::Error
+            }
+            Some(t) => self.resolve_ret(key, f.is_pub, t),
+            None => Type::Void,
+        };
+        self.self_ty = saved;
+        if let Some(s) = &owner {
+            let recv = match params.first() {
+                Some(Type::Struct(n)) if n == s => Recv::Value,
+                Some(Type::Ptr(t, m)) if matches!(&**t, Type::Struct(n) if n == s) => Recv::Ptr(*m),
+                _ => Recv::Static,
+            };
+            self.recvs.insert(key.to_string(), recv);
+        }
+        let sig = FnSig { params, ret, is_extern: f.is_extern };
+        self.fns.insert(key.to_string(), sig.clone());
+        if !f.is_extern {
+            self.fn_decls.insert(key.to_string(), FnCtx { decl: f, owner, env: self.env.clone(), generic });
+        }
+        sig
     }
 
     /// The method signatures of an interface. The first parameter of each
@@ -788,6 +1291,10 @@ impl<'a> Checker<'a> {
                     continue;
                 }
             };
+            if let Some(p) = m.params.iter().find(|p| p.comptime) {
+                self.report(Error::new(E0076, p.span, "only a top-level function can have `comptime` parameters"));
+                continue;
+            }
             let params = m.params[1..].iter().map(|p| self.resolve_or_report(&p.ty)).collect();
             let ret = match &m.ret {
                 None => Type::Void,
@@ -971,10 +1478,11 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    fn resolve_type(&self, t: &ast::TypeExpr) -> Result<Type> {
+    fn resolve_type(&mut self, t: &ast::TypeExpr) -> Result<Type> {
         Ok(match &t.kind {
             TypeExprKind::Named(n) => match Type::from_name(n) {
                 Some(ty) => ty,
+                None if let Some((_, ty, _)) = self.env.iter().find(|(p, ..)| p == n) => ty.clone(),
                 None if self.structs.contains_key(n) => Type::Struct(n.clone()),
                 None if self.enums.contains_key(n) => Type::Enum(n.clone()),
                 None if self.sets.contains_key(n) => Type::ErrorSet(n.clone()),
@@ -985,7 +1493,16 @@ impl<'a> Checker<'a> {
                 None if self.ifaces.contains_key(n) => {
                     return err(E0017, t.span, format!("`{n}` is an interface, not a type: write `dyn {n}`"));
                 }
-                None => return err(E0017, t.span, format!("unknown type `{n}`")),
+                None if self.generics.get(n).is_some_and(|f| is_type_fn(f)) => {
+                    return err(E0080, t.span, format!("`{n}` is a type function: write `{n}(T)`"));
+                }
+                None if n == "type" => {
+                    return err(E0076, t.span, "`type` is only the type of a `comptime` parameter, or the return type of a type function");
+                }
+                None => {
+                    let e = Error::new(E0017, t.span, format!("unknown type `{n}`"));
+                    return Err(suggest(e, n, t.span, self.type_names()));
+                }
             },
             TypeExprKind::Dyn(n) => {
                 if !self.ifaces.contains_key(n) {
@@ -994,8 +1511,18 @@ impl<'a> Checker<'a> {
                 }
                 Type::Dyn(n.clone())
             }
+            TypeExprKind::Generic(g, args) => {
+                if !self.generics.get(g).is_some_and(|f| is_type_fn(f)) {
+                    if self.generics.contains_key(g) || self.top_spans.contains_key(g) || Type::from_name(g).is_some() {
+                        return err(E0080, t.span, format!("`{g}` is not a type function (a function that returns `type`)"));
+                    }
+                    return err(E0017, t.span, format!("unknown type `{g}`"));
+                }
+                let args = args.iter().map(|a| self.resolve_type(a)).collect::<Result<Vec<_>>>()?;
+                self.instantiate_type(g, args, t.span)?
+            }
             TypeExprKind::Array(n, elem) => Type::Array(Box::new(self.resolve_type(elem)?), *n),
-            TypeExprKind::Slice(elem) => Type::Slice(Box::new(self.resolve_type(elem)?)),
+            TypeExprKind::Slice(elem, mutable) => Type::Slice(Box::new(self.resolve_type(elem)?), *mutable),
             TypeExprKind::CPtr(elem) => Type::CPtr(Box::new(self.resolve_type(elem)?)),
             TypeExprKind::Ptr(elem, mutable) => Type::Ptr(Box::new(self.resolve_type(elem)?), *mutable),
             TypeExprKind::Optional(elem) => Type::Optional(Box::new(self.resolve_type(elem)?)),
@@ -1003,6 +1530,12 @@ impl<'a> Checker<'a> {
                 return err(E0066, t.span, "error union types can only be used as a function's return type");
             }
         })
+    }
+
+    /// Names that can be written as a type here, for spelling suggestions.
+    fn type_names(&self) -> Vec<&str> {
+        let named = self.structs.keys().chain(self.enums.keys()).chain(self.sets.keys()).filter(|n| !n.contains(['(', ' ']));
+        TYPE_NAMES.iter().copied().chain(named.map(String::as_str)).chain(self.env.iter().map(|(n, ..)| n.as_str())).collect()
     }
 
     fn resolve_or_report(&mut self, t: &ast::TypeExpr) -> Type {
@@ -1018,6 +1551,7 @@ impl<'a> Checker<'a> {
     /// local in any enclosing scope, a parameter or a top-level name.
     fn declare(&mut self, name: &str, ty: Type, mutable: bool, span: Span) -> Result<VarId> {
         let prev = self.scopes.iter().find_map(|s| s.get(name).map(|&(_, sp)| sp));
+        let prev = prev.or_else(|| self.env.iter().find(|(n, ..)| n == name).map(|&(_, _, sp)| sp));
         if let Some(prev) = prev.or_else(|| self.top_spans.get(name).copied()) {
             return err(E0016, span, format!(
                 "`{name}` is already declared at {}:{} (shadowing is not allowed)",
@@ -1026,7 +1560,7 @@ impl<'a> Checker<'a> {
         }
         let id = self.vars.len();
         self.scopes.last_mut().unwrap().insert(name.to_string(), (id, span));
-        self.vars.push(VarInfo { name: name.to_string(), ty, mutable });
+        self.vars.push(VarInfo { name: name.to_string(), ty, mutable, let_span: None });
         Ok(id)
     }
 
@@ -1040,7 +1574,7 @@ impl<'a> Checker<'a> {
                 self.report(e);
                 let id = self.vars.len();
                 self.scopes.last_mut().unwrap().insert(name.to_string(), (id, span));
-                self.vars.push(VarInfo { name: name.to_string(), ty: Type::Error, mutable });
+                self.vars.push(VarInfo { name: name.to_string(), ty: Type::Error, mutable, let_span: None });
                 None
             }
         }
@@ -1064,6 +1598,10 @@ impl<'a> Checker<'a> {
             None => {}
         }
         self.bodies.insert(name.to_string(), None);
+        // The instances of a generic with errors are checked quietly.
+        let quiet = !self.is_abstract_fn(name)
+            && self.fn_decls[name].generic.as_ref().is_some_and(|g| self.failed.contains(g));
+        let saved_quiet = std::mem::replace(&mut self.quiet, quiet);
         let saved = (
             std::mem::take(&mut self.vars),
             std::mem::take(&mut self.scopes),
@@ -1073,17 +1611,28 @@ impl<'a> Checker<'a> {
             self.failures,
             self.self_ty.take(),
             self.in_test,
+            std::mem::take(&mut self.env),
         );
         let def = self.fn_body(name);
-        (self.vars, self.scopes, self.ret, self.loop_depth, self.in_defer, self.failures, self.self_ty, self.in_test) = saved;
+        // A generic's own instance with errors: the generic has errors.
+        if self.failures > saved.5
+            && self.is_abstract_fn(name)
+            && let Some(g) = self.fn_decls[name].generic.clone()
+        {
+            self.failed.insert(g);
+        }
+        (self.vars, self.scopes, self.ret, self.loop_depth, self.in_defer, self.failures, self.self_ty, self.in_test, self.env) =
+            saved;
+        self.quiet = saved_quiet;
         self.bodies.insert(name.to_string(), Some(def));
         Ok(())
     }
 
     fn fn_body(&mut self, name: &str) -> FnDef {
-        let (f, owner) = self.fn_decls[name].clone();
+        let FnCtx { decl: f, owner, env, .. } = self.fn_decls[name].clone();
         let sig = self.fns[name].clone();
         self.self_ty = owner;
+        self.env = env;
         self.in_test = is_test(name);
         self.vars.clear();
         self.scopes = vec![HashMap::new()];
@@ -1092,7 +1641,7 @@ impl<'a> Checker<'a> {
         self.in_defer = false;
         let failures = self.failures;
         let mut params = Vec::new();
-        for (p, ty) in f.params.iter().zip(&sig.params) {
+        for (p, ty) in f.params.iter().filter(|p| !p.comptime).zip(&sig.params) {
             params.extend(self.declare_or_report(&p.name, ty.clone(), false, p.span));
         }
         let body = self.block(f.body.as_ref().unwrap());
@@ -1146,6 +1695,9 @@ impl<'a> Checker<'a> {
                 // Declared even when the initializer has an error, so that
                 // later uses are not reported as undefined.
                 let id = self.declare_or_report(name, ty, *mutable, s.span);
+                if let (Some(id), false) = (id, *mutable) {
+                    self.vars[id].let_span = Some(s.span);
+                }
                 let init = init?;
                 TStmtKind::Let(id.ok_or_else(silent)?, init)
             }
@@ -1293,6 +1845,7 @@ impl<'a> Checker<'a> {
             let what = match &t.kind {
                 TExprKind::Call { name, .. } | TExprKind::DynCall { method: name, .. } => format!("`{name}` returns"),
                 TExprKind::Create { .. } => "`create` returns".to_string(),
+                TExprKind::AllocSlice { .. } => "`alloc` returns".to_string(),
                 _ => "this expression has type".to_string(),
             };
             return err(E0061, t.span, format!("unhandled error: {what} `{}` (handle the error with `try` or `catch`)", t.ty));
@@ -1398,21 +1951,24 @@ impl<'a> Checker<'a> {
             TExprKind::Var(id) => {
                 let v = &self.vars[*id];
                 if !v.mutable {
-                    return err(E0032, t.span, format!("cannot {what} `{}`: it is immutable (declare it with `var`)", v.name));
+                    let e = Error::new(E0032, t.span, format!("cannot {what} `{}`: it is immutable (declare it with `var`)", v.name));
+                    return Err(match v.let_span {
+                        Some(s) => e.fix(format!("declare `{}` with `var`", v.name), s, Span::new(s.line, s.col + 3), "var"),
+                        None => e,
+                    });
                 }
                 Ok(())
             }
             TExprKind::Field { base, .. } => self.check_mutable(base, addr_of),
-            TExprKind::Index { base, .. } => {
-                if matches!(base.ty, Type::Slice(_)) {
-                    return err(E0033, t.span, if addr_of {
-                        "cannot take `&mut` of a slice element: slice elements are read-only"
-                    } else {
-                        "cannot assign through a slice: slice elements are read-only"
-                    });
+            // The slice type decides, not where the slice is stored.
+            TExprKind::Index { base, .. } => match &base.ty {
+                Type::Slice(_, true) => Ok(()),
+                Type::Slice(el, false) => {
+                    let what = if addr_of { "take `&mut` of an element of" } else { "assign through" };
+                    err(E0033, t.span, format!("cannot {what} a slice `{}`: its elements are read-only (use `[]mut {el}`)", base.ty))
                 }
-                self.check_mutable(base, addr_of)
-            }
+                _ => self.check_mutable(base, addr_of),
+            },
             TExprKind::Deref(p) => match &p.ty {
                 Type::Ptr(inner, false) => err(E0033, t.span, format!(
                     "cannot {what} data behind a read-only pointer `{}` (use `*mut {inner}`)",
@@ -1432,7 +1988,7 @@ impl<'a> Checker<'a> {
         match &t.kind {
             TExprKind::Var(_) | TExprKind::Deref(_) => true,
             TExprKind::Field { base, .. } => Self::is_lvalue(base),
-            TExprKind::Index { base, .. } => matches!(base.ty, Type::Slice(_)) || Self::is_lvalue(base),
+            TExprKind::Index { base, .. } => matches!(base.ty, Type::Slice(..)) || Self::is_lvalue(base),
             _ => false,
         }
     }
@@ -1458,8 +2014,8 @@ impl<'a> Checker<'a> {
     }
 
     /// Require `t` to have type `ty`. Four implicit coercions apply: a `T`
-    /// is wrapped where `?T` is expected, a `*mut T` is accepted where `*T`
-    /// is expected, an error value is accepted by an error set that has
+    /// is wrapped where `?T` is expected, a `*mut T` (`[]mut T`) is accepted
+    /// where `*T` (`[]T`) is expected, an error value is accepted by an error set that has
     /// all of its errors, and a pointer to a struct that implements `I` is
     /// accepted where `dyn I` is expected.
     fn coerce(&mut self, t: TExpr, ty: &Type) -> Result<TExpr> {
@@ -1472,7 +2028,7 @@ impl<'a> Checker<'a> {
             let span = t.span;
             return Ok(TExpr { kind: TExprKind::Some(Box::new(t)), ty: ty.clone(), span });
         }
-        if let (Type::Ptr(want, false), Type::Ptr(got, true)) = (ty, &t.ty)
+        if let (Type::Ptr(want, false), Type::Ptr(got, true)) | (Type::Slice(want, false), Type::Slice(got, true)) = (ty, &t.ty)
             && want == got
         {
             return Ok(TExpr { ty: ty.clone(), ..t });
@@ -1509,6 +2065,23 @@ impl<'a> Checker<'a> {
     /// `*mut s` (`mutable`) or `*s`? It must have every method of the
     /// interface, with the same parameter and return types.
     fn implements(&self, s: &str, iface: &str, mutable: bool, span: Span) -> Result<()> {
+        if let Some(why) = self.why_not(s, iface) {
+            return err(E0072, span, format!("`{s}` does not implement `{iface}`: {why}"));
+        }
+        for m in &self.ifaces[iface].methods {
+            if !mutable && self.recvs.get(&format!("{s}.{}", m.name)) == Some(&Recv::Ptr(true)) {
+                return err(E0072, span, format!(
+                    "a `dyn {iface}` made from a read-only pointer cannot call `{s}.{}`, which takes `self: *mut Self` (use `&mut`)",
+                    m.name
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Why struct `s` does not implement interface `iface`, or `None` if it
+    /// does (through a `*mut s`).
+    fn why_not(&self, s: &str, iface: &str) -> Option<String> {
         let show_recv = |r: Recv| match r {
             Recv::Value => "Self",
             Recv::Ptr(false) => "*Self",
@@ -1518,11 +2091,10 @@ impl<'a> Checker<'a> {
             let ps: Vec<String> = recv.map(str::to_string).into_iter().chain(params.iter().map(|p| p.to_string())).collect();
             if *ret == Type::Void { format!("fn({})", ps.join(", ")) } else { format!("fn({}) {ret}", ps.join(", ")) }
         };
-        let no = |why: String| err(E0072, span, format!("`{s}` does not implement `{iface}`: {why}"));
         for m in &self.ifaces[iface].methods {
             let key = format!("{s}.{}", m.name);
             let (Some(sig), Some(&recv)) = (self.fns.get(&key), self.recvs.get(&key)) else {
-                return no(format!("it has no method `{}`", m.name));
+                return Some(format!("it has no method `{}`", m.name));
             };
             let want = show(Some(if m.mutable { "*mut Self" } else { "*Self" }), &m.params, &m.ret);
             if recv == Recv::Static || sig.params[1..] != m.params[..] || sig.ret != m.ret {
@@ -1530,19 +2102,13 @@ impl<'a> Checker<'a> {
                     Recv::Static => show(None, &sig.params, &sig.ret),
                     r => show(Some(show_recv(r)), &sig.params[1..], &sig.ret),
                 };
-                return no(format!("method `{}` is `{have}`, but `{iface}` needs `{want}`", m.name));
+                return Some(format!("method `{}` is `{have}`, but `{iface}` needs `{want}`", m.name));
             }
             if recv == Recv::Ptr(true) && !m.mutable {
-                return no(format!("method `{}` takes `self: *mut Self`, but `{iface}` declares `self: *Self`", m.name));
-            }
-            if recv == Recv::Ptr(true) && !mutable {
-                return err(E0072, span, format!(
-                    "a `dyn {iface}` made from a read-only pointer cannot call `{s}.{}`, which takes `self: *mut Self` (use `&mut`)",
-                    m.name
-                ));
+                return Some(format!("method `{}` takes `self: *mut Self`, but `{iface}` declares `self: *Self`", m.name));
             }
         }
-        Ok(())
+        None
     }
 
     /// Check an expression that must produce a value (not a void call, and
@@ -1628,21 +2194,43 @@ impl<'a> Checker<'a> {
                 }
             },
             ExprKind::Match { .. } => return self.match_expr(e, expected, false),
-            ExprKind::Str(s) => (TExprKind::Str(s.clone()), Type::Slice(Box::new(Type::Int(IntTy::U8)))),
+            ExprKind::Str(s) => (TExprKind::Str(s.clone()), Type::Slice(Box::new(Type::Int(IntTy::U8)), false)),
             ExprKind::Paren(inner) => return self.expr(inner, expected),
             ExprKind::Ident(name) => match self.lookup(name) {
                 Some(id) => (TExprKind::Var(id), self.vars[id].ty.clone()),
-                None if self.fns.contains_key(name) => {
+                None if self.generics.get(name).is_some_and(|f| is_type_fn(f)) => {
+                    return err(E0080, span, format!("`{name}` is a type function: write `{name}(T)`"));
+                }
+                None if self.fns.contains_key(name) || self.generics.contains_key(name) => {
                     return err(E0020, span, format!("function `{name}` is not a value (call it with `{name}(...)`)"));
                 }
                 None if self.is_type_name(name) => return err(E0074, span, format!("`{name}` is a type, not a value")),
-                None => return err(E0018, span, format!("undefined variable `{name}`")),
+                None => {
+                    let e = Error::new(E0018, span, format!("undefined variable `{name}`"));
+                    return Err(suggest(e, name, span, self.scopes.iter().flat_map(|s| s.keys().map(String::as_str))));
+                }
             },
             ExprKind::Call { name, args } => {
+                if let Some(&f) = self.generics.get(name) {
+                    if is_type_fn(f) {
+                        let t = self.type_arg(e, None)?;
+                        return err(E0074, span, format!("`{t}` is a type, not a value"));
+                    }
+                    return self.generic_call(f, args, span);
+                }
                 if !self.fns.contains_key(name) {
-                    return err(E0019, span, format!("undefined function `{name}`"));
+                    let e = Error::new(E0019, span, format!("undefined function `{name}`"));
+                    let fns = self.fns.keys().filter(|k| !k.contains(['.', '#', '('])).chain(self.generics.keys());
+                    return Err(suggest(e, name, span, fns.map(String::as_str)));
                 }
                 return self.call(name, None, args, span);
+            }
+            ExprKind::Type(t) => {
+                let t = self.resolve_type(t)?;
+                return err(E0074, span, format!("`{t}` is a type, not a value"));
+            }
+            ExprKind::StructType(_) => {
+                return err(E0077, span, "`struct { ... }` can only be the value that a type function (returning `type`) returns");
             }
             ExprKind::MethodCall { base, name, args } => return self.method_call(base, name, args, span),
             ExprKind::Builtin { name, args } if matches!(name.as_str(), "expect" | "expectEqual" | "testAllocator") => {
@@ -1662,7 +2250,7 @@ impl<'a> Checker<'a> {
                     }
                     "expectEqual" => {
                         let (want, got) = self.operand_pair(&args[0], &args[1], None)?;
-                        if want.ty != got.ty {
+                        if want.ty != got.ty && !matches!((&want.ty, &got.ty), (Type::Slice(a, _), Type::Slice(b, _)) if a == b) {
                             return err(E0023, span, format!(
                                 "mismatched types in `@expectEqual`: `{}` and `{}` (use `as` to convert)",
                                 want.ty, got.ty
@@ -1670,7 +2258,7 @@ impl<'a> Checker<'a> {
                         }
                         let ok = match &want.ty {
                             Type::Int(_) | Type::Float(_) | Type::Bool => true,
-                            Type::Slice(el) => **el == Type::Int(IntTy::U8),
+                            Type::Slice(el, _) => **el == Type::Int(IntTy::U8),
                             _ => false,
                         };
                         if !ok {
@@ -1700,7 +2288,7 @@ impl<'a> Checker<'a> {
                         let t = self.value(a, None)?;
                         let printable = match &t.ty {
                             Type::Int(_) | Type::Float(_) | Type::Bool => true,
-                            Type::Slice(el) => **el == Type::Int(IntTy::U8),
+                            Type::Slice(el, _) => **el == Type::Int(IntTy::U8),
                             _ => false,
                         };
                         if !printable {
@@ -1889,16 +2477,19 @@ impl<'a> Checker<'a> {
                             if self.recvs.contains_key(&format!("{sname}.{name}")) {
                                 return err(E0038, span, format!("`{name}` is a method of struct `{sname}`, not a field: call it with `.{name}(...)`"));
                             }
-                            return err(E0038, span, format!("struct `{sname}` has no field `{name}`"));
+                            let e = Error::new(E0038, span, format!("struct `{sname}` has no field `{name}`"));
+                            return Err(suggest(e, name, span, def.fields.iter().map(|(n, _)| n.as_str())));
                         };
                         let ty = def.fields[index].1.clone();
                         (TExprKind::Field { base: Box::new(b), index }, ty)
                     }
-                    Type::Slice(el) if name == "len" => {
-                        let _ = el;
-                        (TExprKind::SliceLen(Box::new(b)), USIZE)
+                    Type::Param(_, p) => {
+                        return err(E0078, span, format!(
+                            "`{p}` is a `comptime` type: its fields are not known (use the methods of a `where` constraint)"
+                        ));
                     }
-                    Type::Slice(el) if name == "ptr" => {
+                    Type::Slice(..) if name == "len" => (TExprKind::SliceLen(Box::new(b)), USIZE),
+                    Type::Slice(el, _) if name == "ptr" => {
                         let ty = Type::CPtr(el.clone());
                         (TExprKind::SlicePtr(Box::new(b)), ty)
                     }
@@ -1909,7 +2500,7 @@ impl<'a> Checker<'a> {
             ExprKind::Index { base, index } => {
                 let b = self.value(base, None)?;
                 let elem = match &b.ty {
-                    Type::Array(el, _) | Type::Slice(el) => (**el).clone(),
+                    Type::Array(el, _) | Type::Slice(el, _) => (**el).clone(),
                     t => return err(E0043, span, format!("cannot index into a value of type `{t}`")),
                 };
                 let i = self.value(index, Some(&USIZE))?;
@@ -1920,14 +2511,16 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Slice { base, lo, hi } => {
                 let b = self.value(base, None)?;
-                let elem = match &b.ty {
+                // Slicing an array that could be borrowed with `&mut` gives a
+                // `[]mut T`; a slice keeps its type.
+                let (elem, mutable) = match &b.ty {
                     Type::Array(el, _) => {
                         if !Self::is_lvalue(&b) {
                             return err(E0035, span, "can only slice an array stored in a variable");
                         }
-                        (**el).clone()
+                        ((**el).clone(), self.check_mutable(&b, true).is_ok())
                     }
-                    Type::Slice(el) => (**el).clone(),
+                    Type::Slice(el, m) => ((**el).clone(), *m),
                     t => return err(E0043, span, format!("cannot slice a value of type `{t}`")),
                 };
                 let mut bound = |x: &Option<Box<ast::Expr>>| -> Result<Option<Box<TExpr>>> {
@@ -1944,15 +2537,21 @@ impl<'a> Checker<'a> {
                 };
                 let lo = bound(lo)?;
                 let hi = bound(hi)?;
-                (TExprKind::Slice { base: Box::new(b), lo, hi }, Type::Slice(Box::new(elem)))
+                (TExprKind::Slice { base: Box::new(b), lo, hi }, Type::Slice(Box::new(elem), mutable))
             }
-            ExprKind::StructLit { name, fields } => {
-                let name = &match (name.as_str(), &self.self_ty) {
-                    ("Self", Some(s)) => s.clone(),
-                    _ => name.clone(),
+            ExprKind::StructLit { ty, fields } => {
+                let name = &match (&ty.kind, &self.self_ty) {
+                    (TypeExprKind::Named(n), Some(s)) if n == "Self" => s.clone(),
+                    (TypeExprKind::Named(n), _) => n.clone(),
+                    _ => match self.resolve_type(ty)? {
+                        Type::Struct(n) => n,
+                        t => return err(E0017, span, format!("`{t}` is not a struct")),
+                    },
                 };
                 let Some(def) = self.structs.get(name).cloned() else {
-                    return err(E0017, span, format!("unknown struct `{name}`"));
+                    let e = Error::new(E0017, span, format!("unknown struct `{name}`"));
+                    let structs = self.structs.keys().filter(|n| !n.contains(['(', ' '])).map(String::as_str);
+                    return Err(suggest(e, name, span, structs));
                 };
                 let inits = self.field_inits(&def.fields, fields, &format!("struct `{name}`"), name, span)?;
                 (TExprKind::StructLit(inits), Type::Struct(name.clone()))
@@ -1974,6 +2573,12 @@ impl<'a> Checker<'a> {
             }
             ExprKind::ArrayLit { ty, elems } => {
                 let aty = self.resolve_type(ty)?;
+                if let Type::Slice(..) = aty {
+                    if !elems.is_empty() {
+                        return err(E0045, span, "a slice literal must be empty (`[]T{}`): put the elements in an array (`[N]T{...}`) and slice it");
+                    }
+                    return Ok(TExpr { kind: TExprKind::EmptySlice, ty: aty, span });
+                }
                 let Type::Array(el, n) = &aty else { unreachable!() };
                 if elems.len() as u64 != *n {
                     return err(E0045, span, format!("array literal has {} element(s) but type `{aty}` needs {n}", elems.len()));
@@ -1989,6 +2594,7 @@ impl<'a> Checker<'a> {
     fn is_type_name(&self, name: &str) -> bool {
         Type::from_name(name).is_some()
             || name == "Self"
+            || self.env.iter().any(|(n, ..)| n == name)
             || self.structs.contains_key(name)
             || self.enums.contains_key(name)
             || self.sets.contains_key(name)
@@ -2026,17 +2632,30 @@ impl<'a> Checker<'a> {
     /// `base.name(args)`: a static call `Type.name(args)`, a method call on a
     /// struct, a call through a `dyn`, or an allocator method.
     fn method_call(&mut self, base: &ast::Expr, name: &str, args: &[ast::Expr], span: Span) -> Result<TExpr> {
-        if let ExprKind::Ident(tn) = &base.kind
-            && self.lookup(tn).is_none()
-            && self.is_type_name(tn)
-        {
-            let tn = match (tn.as_str(), &self.self_ty) {
-                ("Self", Some(s)) => s.clone(),
-                _ => tn.clone(),
-            };
-            if let Some(Type::Builtin(b)) = Type::from_name(&tn) {
-                return self.builtin_static(b, name, args, span);
+        // A type: a type name, a `comptime` parameter, or `F(T)`.
+        let static_ty = match &base.kind {
+            ExprKind::Ident(tn) if self.lookup(tn).is_none() && self.is_type_name(tn) => {
+                if let Some(Type::Builtin(b)) = Type::from_name(tn) {
+                    return self.builtin_static(b, name, args, span);
+                }
+                match (self.env.iter().find(|(n, ..)| n == tn), tn.as_str(), &self.self_ty) {
+                    (Some((_, t, _)), ..) => Some(t.clone()),
+                    (None, "Self", Some(s)) => Some(Type::Struct(s.clone())),
+                    _ => Some(Type::Struct(tn.clone())),
+                }
             }
+            ExprKind::Call { name: g, .. } if self.generics.get(g).is_some_and(|f| is_type_fn(f)) => {
+                Some(self.type_arg(base, None)?)
+            }
+            _ => None,
+        };
+        if let Some(t) = static_ty {
+            if let Type::Param(..) = t {
+                return err(E0078, span, format!(
+                    "`{t}` is a `comptime` type: it has only the methods of its `where` constraints, called on a value (`x.{name}()`)"
+                ));
+            }
+            let tn = t.to_string();
             let key = format!("{tn}.{name}");
             if !self.structs.contains_key(&tn) || !self.fns.contains_key(&key) {
                 let what = if self.structs.contains_key(&tn) { "struct" } else { "type" };
@@ -2089,8 +2708,75 @@ impl<'a> Checker<'a> {
                 Ok(TExpr { kind, ty: m.ret, span })
             }
             Type::Builtin(b) => self.builtin_method(b, recv, name, args, span),
+            // While a generic is checked: a method of a `where` constraint.
+            Type::Param(g, p) => {
+                let ifaces = self.bounds.get(&(g, p.clone())).cloned().unwrap_or_default();
+                let found = ifaces.iter().find_map(|i| self.ifaces[i].methods.iter().find(|m| m.name == name)).cloned();
+                let Some(m) = found else {
+                    if ifaces.is_empty() {
+                        return err(E0078, span, format!(
+                            "`{p}` has no method `{name}`: a `comptime` type has only the methods of its `where` constraints (add `where {p}: SomeInterface`)"
+                        ));
+                    }
+                    return err(E0078, span, format!(
+                        "`{p}` has no method `{name}`: its constraints (`{}`) do not declare it",
+                        ifaces.join("`, `")
+                    ));
+                };
+                let recv = self.receiver_ptr(recv, m.mutable, name)?;
+                if args.len() != m.params.len() {
+                    return err(E0029, span, format!(
+                        "method `{p}.{name}` takes {} argument(s) but {} were given",
+                        m.params.len(),
+                        args.len()
+                    ));
+                }
+                let mut targs = vec![recv];
+                for (a, t) in args.iter().zip(&m.params) {
+                    targs.push(self.expect(a, t)?);
+                }
+                Ok(TExpr { kind: TExprKind::Call { name: format!("{p}.{name}"), is_extern: false, args: targs }, ty: m.ret, span })
+            }
             t => err(E0071, span, format!("type `{t}` has no method `{name}`")),
         }
+    }
+
+    /// The type that `e` names, as the argument of the `comptime` parameter
+    /// `param`, or as a type function call `F(...)` (`param` is `None`).
+    fn type_arg(&mut self, e: &ast::Expr, param: Option<&str>) -> Result<Type> {
+        let local = matches!(&e.kind, ExprKind::Ident(n) if self.lookup(n).is_some());
+        match expr_type(e) {
+            Some(t) if !local => self.resolve_type(&t),
+            _ => match param {
+                Some(p) => err(E0080, e.span, format!("expected a type for `comptime {p}`, found an expression")),
+                None => err(E0080, e.span, "expected a type, found an expression"),
+            },
+        }
+    }
+
+    /// A call of the generic function `f`. The arguments of its `comptime`
+    /// parameters are types; they select the instance that is called with
+    /// the other arguments.
+    fn generic_call(&mut self, f: &'a ast::FnDecl, args: &[ast::Expr], span: Span) -> Result<TExpr> {
+        if args.len() != f.params.len() {
+            return err(E0029, span, format!(
+                "function `{}` takes {} argument(s) but {} were given",
+                f.name,
+                f.params.len(),
+                args.len()
+            ));
+        }
+        let mut types = Vec::new();
+        let mut values = Vec::new();
+        for (p, a) in f.params.iter().zip(args) {
+            if p.comptime {
+                types.push(self.type_arg(a, Some(&p.name))?);
+            } else {
+                values.push(a.clone());
+            }
+        }
+        let key = self.instantiate_fn(&f.name, types, span)?;
+        self.call(&key, None, &values, span)
     }
 
     /// The receiver `recv` of a method that takes `self: *Self` or (with
@@ -2142,11 +2828,15 @@ impl<'a> Checker<'a> {
     }
 
     /// The methods of `General` and `Arena` (`allocator`, `deinit`) and of
-    /// `Allocator` (`create`, `destroy`).
+    /// `Allocator` (`create`, `destroy`, `alloc`, `free`).
     fn builtin_method(&mut self, b: BuiltinTy, recv: TExpr, name: &str, args: &[ast::Expr], span: Span) -> Result<TExpr> {
-        let n = if b == BuiltinTy::Allocator { 1 } else { 0 };
+        let n = match (b, name) {
+            (BuiltinTy::Allocator, "alloc") => 2,
+            (BuiltinTy::Allocator, _) => 1,
+            _ => 0,
+        };
         let known = match b {
-            BuiltinTy::Allocator => matches!(name, "create" | "destroy"),
+            BuiltinTy::Allocator => matches!(name, "create" | "destroy" | "alloc" | "free"),
             _ => matches!(name, "allocator" | "deinit" | "init"),
         };
         if !known {
@@ -2189,6 +2879,31 @@ impl<'a> Checker<'a> {
             let ty = Type::ErrorUnion(ALLOC_ERROR.to_string(), Box::new(Type::Ptr(Box::new(value.ty.clone()), true)));
             return Ok(TExpr { kind: TExprKind::Create { alloc: Box::new(alloc), value: Box::new(value) }, ty, span });
         }
+        if name == "alloc" {
+            if let ExprKind::Ident(n) = &strip_parens(&args[0]).kind
+                && self.lookup(n).is_none()
+                && self.is_type_name(n)
+            {
+                return err(E0074, args[0].span, format!(
+                    "`{n}` is a type, not a value: `alloc` takes the value of every element, e.g. `alloc.alloc({n} {{ ... }}, len)`"
+                ));
+            }
+            let value = self.value(&args[0], None)?;
+            let len = self.value(&args[1], Some(&USIZE))?;
+            if !is_unsigned(&len.ty) {
+                return err(E0044, len.span, format!("the length must be an unsigned integer, found `{}`", len.ty));
+            }
+            let ty = Type::ErrorUnion(ALLOC_ERROR.to_string(), Box::new(Type::Slice(Box::new(value.ty.clone()), true)));
+            let kind = TExprKind::AllocSlice { alloc: Box::new(alloc), value: Box::new(value), len: Box::new(len) };
+            return Ok(TExpr { kind, ty, span });
+        }
+        if name == "free" {
+            let s = self.value(&args[0], None)?;
+            if !matches!(s.ty, Type::Slice(..)) {
+                return err(E0023, s.span, format!("mismatched types: `free` needs a slice from `alloc`, found `{}`", s.ty));
+            }
+            return Ok(TExpr { kind: TExprKind::Intrinsic { op: Intrinsic::Free, args: vec![alloc, s] }, ty: Type::Void, span });
+        }
         let p = self.value(&args[0], None)?;
         if !matches!(p.ty, Type::Ptr(..)) {
             return err(E0023, p.span, format!("mismatched types: `destroy` needs a pointer from `create`, found `{}`", p.ty));
@@ -2209,7 +2924,8 @@ impl<'a> Checker<'a> {
         let mut inits: Vec<(usize, TExpr)> = Vec::new();
         for f in fields {
             let Some(index) = def.iter().position(|(n, _)| *n == f.name) else {
-                return err(E0038, f.span, format!("{owner} has no field `{}`", f.name));
+                let e = Error::new(E0038, f.span, format!("{owner} has no field `{}`", f.name));
+                return Err(suggest(e, &f.name, f.span, def.iter().map(|(n, _)| n.as_str())));
             };
             if inits.iter().any(|(i, _)| *i == index) {
                 return err(E0040, f.span, format!("field `{}` is initialized twice", f.name));

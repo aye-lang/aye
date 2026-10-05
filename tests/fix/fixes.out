@@ -1,0 +1,7 @@
+fixes.ore:15:18: fixed: add a trailing `,`
+fixes.ore:20:6: fixed: put `else` on the line of the `}`
+fixes.ore:6:12: fixed: change `Szie` to `Size`
+fixes.ore:11:5: fixed: declare `count` with `var`
+fixes.ore:17:14: fixed: change `aera` to `area`
+fixes.ore:19:18: fixed: change `cont` to `count`
+fixes.ore:7:24: fixed: change `heigth` to `height`

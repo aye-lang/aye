@@ -1,0 +1,35 @@
+// `where` is checked where the generic is defined: none of these generics
+// is instantiated, and their bodies are checked anyway.
+
+interface Show {
+    fn show(self: *Self) i64
+}
+
+fn twice(comptime T: type, x: T) i64 {
+    return x.show() * 2
+}
+
+fn Labeled(comptime T: type) type {
+    return struct {
+        value: T
+
+        fn label(self: *Self) i64 {
+            return self.value.show()
+        }
+    }
+}
+
+fn size(comptime T: type, x: T) i64 where T: Show {
+    return x.size()
+}
+
+fn add(comptime T: type, a: T, b: T) T {
+    return a + b
+}
+
+fn id(comptime T: type, x: T) i64 {
+    return x.id
+}
+
+pub fn main() {
+}

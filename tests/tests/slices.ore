@@ -1,0 +1,17 @@
+// Slices from `alloc.alloc` are leak-checked like `create`.
+
+test "alloc and free a slice" {
+    let alloc = @testAllocator()
+    let xs = try alloc.alloc(7 as i32, 4)
+    defer alloc.free(xs)
+    @expectEqual(4, xs.len)
+    xs[2] = 1
+    @expectEqual(7, xs[0])
+    @expectEqual(1, xs[2])
+}
+
+test "a slice that is never freed" {
+    let alloc = @testAllocator()
+    let xs = try alloc.alloc(0 as u8, 16)
+    @expectEqual(16, xs.len)
+}

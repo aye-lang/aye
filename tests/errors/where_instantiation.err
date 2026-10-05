@@ -1,0 +1,4 @@
+where_instantiation.ore:45:16: error[E0079]: `U` does not satisfy `where T: Show` of `Labeled` at 28:41 (add `where U: Show`)
+where_instantiation.ore:51:13: error[E0079]: `Point` does not satisfy `where T: Show` of `Labeled` at 28:41: it has no method `show`
+where_instantiation.ore:52:13: error[E0079]: `i32` does not satisfy `where T: Show` of `twice` at 38:44: it has no methods
+where_instantiation.ore:53:13: error[E0079]: `Text` does not satisfy `where T: Show` of `twice` at 38:44: method `show` is `fn(*Self) bool`, but `Show` needs `fn(*Self) i64`

@@ -8,6 +8,7 @@ const USAGE: &str = "usage:
   ore run <file.ore> [--mode debug|safe|fast]
   ore emit-c <file.ore> [--mode debug|safe|fast]
   ore check <file.ore> [--json]
+  ore fix <file.ore>
   ore test <file.ore> [--filter <text>] [--json] [--mode debug|safe|fast]
   ore explain <code>";
 
@@ -66,7 +67,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    if !matches!(args.cmd.as_str(), "build" | "run" | "emit-c" | "check" | "test") {
+    if !matches!(args.cmd.as_str(), "build" | "run" | "emit-c" | "check" | "test" | "fix") {
         eprintln!("ore: unknown command `{}`\n{USAGE}", args.cmd);
         return ExitCode::from(2);
     }
@@ -87,10 +88,13 @@ fn main() -> ExitCode {
             println!(r#"{{"file":{},"diagnostics":[{diags}]}}"#, diag::json_str(&args.file));
         } else if let Err(ds) = &res {
             for d in ds {
-                eprintln!("{d}");
+                eprintln!("{}", d.render());
             }
         }
         return if res.is_ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE };
+    }
+    if args.cmd == "fix" {
+        return fix(&args.file, src);
     }
     if args.cmd == "test" {
         return test(&args, &src);
@@ -99,7 +103,7 @@ fn main() -> ExitCode {
         Ok(c) => c,
         Err(ds) => {
             for d in ds {
-                eprintln!("{d}");
+                eprintln!("{}", d.render());
             }
             return ExitCode::FAILURE;
         }
@@ -137,6 +141,38 @@ fn main() -> ExitCode {
     }
 }
 
+/// `ore fix`: apply the fix-its that `ore check` reports, in place, and
+/// check again, until no fix applies (at most 10 rounds). Each applied fix
+/// is printed as `file:line:col: fixed: <help>`; then the errors that
+/// remain are printed as `ore check` prints them. The exit status is 0 when
+/// no error remains.
+fn fix(file: &str, mut src: String) -> ExitCode {
+    for _ in 0..10 {
+        let Err(ds) = driver::check(file, &src) else { break };
+        let (fixed, applied) = driver::apply_fixes(&src, &ds);
+        if applied.is_empty() {
+            break;
+        }
+        if let Err(e) = std::fs::write(file, &fixed) {
+            eprintln!("ore: cannot write {file}: {e}");
+            return ExitCode::FAILURE;
+        }
+        for (at, help) in applied {
+            println!("{file}:{}:{}: fixed: {help}", at.line, at.col);
+        }
+        src = fixed;
+    }
+    match driver::check(file, &src) {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(ds) => {
+            for d in ds {
+                eprintln!("{}", d.render());
+            }
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// `ore test`: one line per test, and for a failed test its output (stdout,
 /// then stderr) indented; or with `--json` one JSON document. The exit
 /// status is 1 if a test failed or the file does not compile.
@@ -153,7 +189,7 @@ fn test(args: &Args, src: &str) -> ExitCode {
                 );
             } else {
                 for d in ds {
-                    eprintln!("{d}");
+                    eprintln!("{}", d.render());
                 }
             }
             return ExitCode::FAILURE;

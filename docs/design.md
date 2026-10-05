@@ -225,7 +225,7 @@ if nodes.get(target) |node| {
 
 **代價**：錯誤恢復、fix-it、JSON 診斷都是編譯器前端額外的工程；禁止遮蔽、`pub` 函式必須寫錯誤集，會讓手寫的程式碼稍微囉嗦。換來的是 AI 寫錯時，錯誤在編譯期就以「照著改就好」的形式出現，不會拖到執行期才浮現。
 
-**跟 stage0 現況的差距**（P0 閘門前補上）：stage0 已禁止遮蔽，有 `ore check --json`、錯誤恢復（一次回報所有錯誤）與錯誤代碼（`ore explain`）；還缺 fix-it。
+**跟 stage0 現況的差距**（P0 閘門前補上）：stage0 已禁止遮蔽，有 `ore check --json`、錯誤恢復（一次回報所有錯誤）、錯誤代碼（`ore explain`）與 fix-it（`--json` 的 `fixes`、`ore fix`）。
 
 ## 並行模型
 

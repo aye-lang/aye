@@ -157,6 +157,15 @@ ORE_RT void *ore_alloc(ore_Allocator a, size_t size, size_t align, int line, int
     return a.vt->alloc(a.ptr, size, align, line, col);
 }
 ORE_RT void ore_free(ore_Allocator a, void *p, int line, int col) { a.vt->free(a.ptr, p, line, col); }
+/* `n` elements of `size` bytes; null when the size overflows. */
+ORE_RT void *ore_alloc_n(ore_Allocator a, size_t n, size_t size, size_t align, int line, int col) {
+    if (size && n > SIZE_MAX / size) return 0;
+    return ore_alloc(a, n * size, align, line, col);
+}
+/* Free a slice; an empty one was not allocated. */
+ORE_RT void ore_free_n(ore_Allocator a, void *p, size_t n, int line, int col) {
+    if (n) ore_free(a, p, line, col);
+}
 
 /* General: libc malloc/free. With `track` (debug mode, and the test
    allocator) every allocation gets a record with its site. Freed memory is
@@ -320,24 +329,48 @@ pub fn emit(p: &Program, file: &str, checks: bool, trace: bool, tests: bool) -> 
     g.out
 }
 
+/// A struct or function name as a C identifier. An instance of a generic
+/// (`Pool(Node)`) starts with `0`, which no Ore name does, and has `_`
+/// doubled and other characters as `_` and two hex digits.
+fn c_name(name: &str) -> String {
+    if name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return name.to_string();
+    }
+    let mut s = String::from("0");
+    for c in name.chars() {
+        match c {
+            '_' => s.push_str("__"),
+            c if c.is_ascii_alphanumeric() => s.push(c),
+            c => {
+                let _ = write!(s, "_{:02x}", c as u32);
+            }
+        }
+    }
+    s
+}
+
 /// C name of the Ore function `name`: `f`, `Struct.method` or `test#N`.
 fn fn_name(name: &str) -> String {
     if let Some(n) = name.strip_prefix("test#") {
         return format!("ore_t_{n}");
     }
-    match name.split_once('.') {
-        Some((s, m)) => format!("ore_m_{}{s}_{m}", s.len()),
-        None => format!("ore_f_{name}"),
+    match name.rsplit_once('.') {
+        Some((s, m)) => {
+            let s = c_name(s);
+            format!("ore_m_{}{s}_{m}", s.len())
+        }
+        None => format!("ore_f_{}", c_name(name)),
     }
 }
 
 /// C names of the vtable of struct `s` for interface `i`, and of the thunk
 /// for its method `m`.
 fn vtable_name(i: &str, s: &str) -> String {
-    format!("ore_vt_{}{i}_{s}", i.len())
+    format!("ore_vt_{}{i}_{}", i.len(), c_name(s))
 }
 
 fn thunk_name(i: &str, s: &str, m: &str) -> String {
+    let s = c_name(s);
     format!("ore_th_{}{i}_{}{s}_{m}", i.len(), s.len())
 }
 
@@ -421,19 +454,20 @@ fn mangle(t: &Type) -> String {
         Type::Bool => "bool".into(),
         Type::Void => "void".into(),
         Type::Array(e, n) => format!("A{n}_{}", mangle(e)),
-        Type::Slice(e) => format!("S_{}", mangle(e)),
+        // `[]T` and `[]mut T` share one C type.
+        Type::Slice(e, _) => format!("S_{}", mangle(e)),
         Type::CPtr(e) => format!("P_{}", mangle(e)),
         Type::Ptr(e, false) => format!("R_{}", mangle(e)),
         Type::Ptr(e, true) => format!("RM_{}", mangle(e)),
         Type::Optional(e) => format!("O_{}", mangle(e)),
-        Type::Struct(n) => format!("s_{n}"),
+        Type::Struct(n) => format!("s_{}", c_name(n)),
         Type::Enum(n) => format!("e_{n}"),
         // Every error set is a `uint16_t`, so the set is not part of the name.
         Type::ErrorSet(_) => "err".into(),
         Type::ErrorUnion(_, t) => format!("U_{}", mangle(t)),
         Type::Dyn(i) => format!("D_{i}"),
         Type::Builtin(b) => b.name().into(),
-        Type::Error => unreachable!(),
+        Type::Param(..) | Type::Error => unreachable!(),
     }
 }
 
@@ -448,21 +482,21 @@ fn c_type(t: &Type) -> String {
         Type::CPtr(e) | Type::Ptr(e, _) => format!("{}*", c_type(e)),
         Type::Optional(e) if is_ptr_optional(t) => c_type(e),
         Type::Array(..)
-        | Type::Slice(_)
+        | Type::Slice(..)
         | Type::Struct(_)
         | Type::Enum(_)
         | Type::Optional(_)
         | Type::ErrorUnion(..)
         | Type::Dyn(_)
         | Type::Builtin(_) => format!("ore_{}", mangle(t)),
-        Type::Error => unreachable!(),
+        Type::Param(..) | Type::Error => unreachable!(),
     }
 }
 
 /// Types emitted as a C struct.
 fn is_composite(t: &Type) -> bool {
     match t {
-        Type::Array(..) | Type::Slice(_) | Type::Struct(_) | Type::Enum(_) | Type::ErrorUnion(..) | Type::Dyn(_) => true,
+        Type::Array(..) | Type::Slice(..) | Type::Struct(_) | Type::Enum(_) | Type::ErrorUnion(..) | Type::Dyn(_) => true,
         Type::Optional(_) => !is_ptr_optional(t),
         _ => false,
     }
@@ -546,9 +580,10 @@ impl Gen {
         let mut thunks = Vec::new();
         for m in &iface.methods {
             let f = p.funcs.iter().find(|f| f.name == format!("{s}.{}", m.name)).unwrap();
+            let st = c_type(&Type::Struct(s.to_string()));
             let recv = match f.locals[f.params[0]].ty {
-                Type::Ptr(..) => format!("(ore_s_{s} *)self"),
-                _ => format!("*(ore_s_{s} *)self"),
+                Type::Ptr(..) => format!("({st} *)self"),
+                _ => format!("*({st} *)self"),
             };
             let params: String = m.params.iter().enumerate().map(|(k, t)| format!(", {} a{k}", c_type(t))).collect();
             let args: String = (0..m.params.len()).map(|k| format!(", a{k}")).collect();
@@ -570,7 +605,7 @@ impl Gen {
         let mut all: Vec<Type> = Vec::new();
         let mut seen = HashSet::new();
         let mut add = |t: &Type, all: &mut Vec<Type>| collect_type(t, &mut seen, all);
-        add(&Type::Slice(Box::new(Type::Int(IntTy::U8))), &mut all);
+        add(&Type::Slice(Box::new(Type::Int(IntTy::U8)), false), &mut all);
         for s in &p.structs {
             add(&Type::Struct(s.name.clone()), &mut all);
             for (_, t) in &s.fields {
@@ -624,7 +659,7 @@ impl Gen {
                 self.define(e, p, done);
                 let _ = writeln!(self.out, "struct {name} {{ {} a[{n}]; }};", c_type(e));
             }
-            Type::Slice(e) => {
+            Type::Slice(e, _) => {
                 let _ = writeln!(self.out, "struct {name} {{ {}* ptr; size_t len; }};", c_type(e));
             }
             Type::Dyn(i) => {
@@ -865,6 +900,19 @@ impl Gen {
                 let t = c_type(ty);
                 format!("(({t} *)ore_alloc({}, sizeof({t}), _Alignof({t}), {}))", self.operand(f, alloc), line_col(*span))
             }
+            // A statement expression: allocate, then fill every element.
+            Rvalue::AllocSlice { alloc, value, elem, len, span } => {
+                let (t, v) = (c_type(elem), self.operand(f, value));
+                let opt = c_type(&Type::Optional(Box::new(Type::Slice(Box::new(elem.clone()), true))));
+                format!(
+                    "({{ {opt} r_ = {{0}}; size_t n_ = (size_t){}; {t} *p_ = n_ ? ({t} *)ore_alloc_n({}, n_, sizeof({t}), _Alignof({t}), {}) : 0; \
+                     if (p_ || !n_) {{ for (size_t i_ = 0; i_ < n_; i_++) p_[i_] = {v}; r_.has = 1; r_.val.ptr = p_; r_.val.len = n_; }} r_; }})",
+                    self.operand(f, len),
+                    self.operand(f, alloc),
+                    line_col(*span)
+                )
+            }
+            Rvalue::EmptySlice(ty) => format!("(({}){{0, 0}})", c_type(ty)),
             Rvalue::Intrinsic { op, args, span } => self.intrinsic(f, *op, args, *span),
             Rvalue::Print { arg: None, .. } => "ore_rt_printf(\"\\n\")".to_string(),
             Rvalue::Print { arg: Some((Operand::Str(s), _)), newline } => {
@@ -882,7 +930,7 @@ impl Gen {
             }
             Rvalue::StructLit { name, fields } => {
                 let fs: Vec<String> = fields.iter().map(|o| self.operand(f, o)).collect();
-                format!("((ore_s_{name}){{{}}})", fs.join(", "))
+                format!("(({}){{{}}})", c_type(&Type::Struct(name.clone())), fs.join(", "))
             }
             Rvalue::Variant { enum_name, tag, variant, fields } => {
                 if fields.is_empty() {
@@ -926,7 +974,7 @@ impl Gen {
                 let hi = hi.as_ref().map(|h| self.operand(f, h)).unwrap_or_else(|| n.clone());
                 format!(
                     "(({}){{{ptr} + ore_slice({lo}, {hi}, {n}, {}), (size_t){hi} - (size_t){lo}}})",
-                    c_type(&Type::Slice(Box::new(elem.clone()))),
+                    c_type(&Type::Slice(Box::new(elem.clone()), false)),
                     line_col(*span)
                 )
             }
@@ -944,6 +992,7 @@ impl Gen {
             Intrinsic::ArenaAllocator => format!("ore_arena_allocator({})", a[0]),
             Intrinsic::ArenaDeinit => format!("ore_arena_deinit({}, {lc})", a[0]),
             Intrinsic::Destroy => format!("ore_free({}, (void *){}, {lc})", a[0], a[1]),
+            Intrinsic::Free => format!("ore_free_n({0}, (void *)({1}).ptr, ({1}).len, {lc})", a[0], a[1]),
             Intrinsic::TestAllocator => "ore_test_allocator()".into(),
             Intrinsic::Expect => format!("ore_expect({}, {lc})", a[0]),
             Intrinsic::ExpectEqual => match &args[0].1 {
@@ -987,7 +1036,7 @@ fn collect_type(t: &Type, seen: &mut HashSet<Type>, all: &mut Vec<Type>) {
     }
     match t {
         Type::Array(e, _)
-        | Type::Slice(e)
+        | Type::Slice(e, _)
         | Type::CPtr(e)
         | Type::Ptr(e, _)
         | Type::Optional(e)

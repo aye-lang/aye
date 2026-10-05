@@ -29,6 +29,7 @@ ore build <file.ore> [-o out] [--mode debug|safe|fast]   # executable (default n
 ore run <file.ore> [--mode debug|safe|fast]               # build to a temp file and run
 ore emit-c <file.ore> [--mode debug|safe|fast]            # print the generated C
 ore check <file.ore> [--json]                             # front end only: report errors, no C, no clang
+ore fix <file.ore>                                        # apply the fix-its of `ore check` in place
 ore test <file.ore> [--filter <text>] [--json] [--mode debug|safe|fast]   # run the file's `test` blocks
 ore explain <code>                                        # explain an error code, with a wrong and a fixed example
 ```
@@ -48,11 +49,54 @@ debug mode an error return trace follows, one `file:line:col` per `return` and
 
 Compile errors are reported as `file:line:col: error[E0023]: <message>`. Every
 error has a stable code; `ore explain E0023` prints what it means, a program
-with the error and the fixed program (the table is `src/codes.rs`).
-`ore check --json` instead prints one line to stdout:
-`{"file":"...","diagnostics":[{"severity":"error","code":"E0023","line":L,"col":C,"message":"..."}]}`
-(`diagnostics` is `[]` when the file compiles). The compiler recovers from
-errors and reports all of them (up to 50), sorted by position.
+with the error and the fixed program (the table is `src/codes.rs`). The
+compiler recovers from errors and reports all of them (up to 50), sorted by
+position.
+
+### Fix-its
+
+Some errors come with a fix-it: an edit that is certain to fix them. The
+error line is then followed by `file:line:col: help: <what the fix does>`,
+at the position of the edit:
+
+```
+f.ore:4:9: error[E0032]: cannot assign to `sum`: it is immutable (declare it with `var`)
+f.ore:2:5: help: declare `sum` with `var`
+```
+
+| Error | Fix-it |
+|-------|--------|
+| E0032: assignment to (or `&mut` of) a `let` binding | `let` becomes `var` |
+| E0008: `else` on the line after the `}` of an `if` | join the lines: `} else {` (only when nothing but the line break is between them) |
+| E0006: a multi-line call, struct literal or array literal without a trailing `,` | add the `,` (only when the closing `)` or `}` is on the next line) |
+| E0017, E0018, E0019, E0038: unknown type, variable, function or field | rename it to the one name in scope that is one edit away (a character inserted, deleted or replaced, or two adjacent characters swapped); not for names shorter than 3 characters |
+
+`ore fix file.ore` applies every fix-it to the file in place, checks again,
+and repeats while there is something to fix (at most 10 rounds), because a
+syntax fix can reveal type errors. A fix whose edits overlap an edit applied
+before it in the same round waits for the next round. Each applied fix is
+printed to stdout as `file:line:col: fixed: <what it did>`; the errors that
+remain go to stderr as `ore check` prints them. The exit status is 0 when the
+file compiles afterwards and 1 otherwise.
+
+### `ore check --json`
+
+`ore check --json` prints one line to stdout (wrapped here):
+
+```
+{"file":"f.ore","diagnostics":[{"severity":"error","code":"E0032","line":4,"col":9,
+  "message":"cannot assign to `sum`: it is immutable (declare it with `var`)",
+  "fixes":[{"line":2,"col":5,"end_line":2,"end_col":8,"replacement":"var"}]}]}
+```
+
+- `diagnostics` is `[]` when the file compiles.
+- `line` and `col` are 1-based; a column counts characters (Unicode scalar
+  values) from the start of the line, and a tab counts as one.
+- `fixes` lists the edits of the error's fix-it, applied together (`[]` when
+  it has none). Each edit replaces the text from `line:col` up to, not
+  including, `end_line:end_col` with `replacement` (positions in the file as
+  it is now). An insertion has the same start and end; a deletion has an
+  empty `replacement`. The edits of one error never overlap.
 
 ## Test blocks (`ore test`)
 
@@ -107,6 +151,48 @@ status is 1 if a test failed or the file does not compile, and 0 otherwise.
     in another way.
 - `stdout`, `stderr`: the test's output.
 
+## Generics
+
+A function with `comptime T: type` parameters is generic; a function that
+returns `type` is a type function, whose body is `return struct { ... }`:
+
+```ore
+interface Shape {
+    fn area(self: *Self) f64
+}
+
+fn totalArea(comptime T: type, items: []T) f64 where T: Shape {
+    var sum = 0.0
+    for i in 0..items.len {
+        sum += items[i].area()
+    }
+    return sum
+}
+
+pub fn Pair(comptime T: type) type {
+    return struct {
+        first: T
+        second: T
+
+        fn swap(self: *mut Self) {
+            let t = self.first
+            self.first = self.second
+            self.second = t
+        }
+    }
+}
+```
+
+`totalArea(Square, squares)` passes the type like any argument, and
+`Pair(i64)` is a type: `Pair(i64) { first: 1, second: 2 }`,
+`Pool(Node).init(alloc, 16)`. The same arguments give the same type. A
+generic is checked once, where it is defined: a value of type `T` can be
+moved, copied and pointed to, and its methods are those of its `where`
+constraints. A type argument that does not implement a constraint is an
+error at the instantiation. The generated C has one copy per instance.
+[`tests/cases/pool.ore`](tests/cases/pool.ore) is the design doc's
+`Pool(T)` and `Handle(T)`.
+
 ## Example
 
 ```ore
@@ -137,6 +223,10 @@ pub fn main() {
 - Top level: `fn`, `pub fn`, `extern fn` (C functions), `struct Name { ... }`,
   `enum Name { A, B { field: T } }` (tagged union), `error Name { A, B }` and
   `error All = A || B` (error sets), `interface Name { ... }`, `test "name" { }`.
+- Generics: `comptime T: type` parameters, type functions
+  (`fn Pool(comptime T: type) type { return struct { ... } }`), and
+  `where T: Interface, ...` after the return type. A call passes types for
+  the `comptime` parameters: `max(i64, a, b)`; `Pool(Node)` is a type.
   The entry point is `pub fn main()` or `pub fn main() !void`.
 - Statements: `let`, `var`, `=` and compound assignment (`+= -= *= /= %= +%= -%= *%=`),
   `if`/`else`, `while`, `for i in lo..hi`, `break`, `continue`, `return`,
@@ -151,7 +241,8 @@ pub fn main() {
   exhaustive `match` with patterns `.V`, `.V { a, b: c, .. }` and `_`,
   error values `ParseError.Empty`, `try f()`, `f() catch |e| { ... }` and
   `f() catch value`, and exhaustive `match e` on errors, method calls
-  `x.m(...)` and `Type.f(...)`.
+  `x.m(...)` and `Type.f(...)`, struct literals of a type function's
+  struct `Pair(i64) { ... }`, the empty slice `[]T{}`.
 - Methods: `fn` or `pub fn` in a struct body, with `Self` and a receiver
   `self: Self`, `self: *Self` or `self: *mut Self`.
 - Interfaces: `interface Name { fn m(self: *Self, ...) T }`, implemented by
@@ -159,23 +250,27 @@ pub fn main() {
   `&mut x`, called through a vtable.
 - Memory: `var gpa = General.init()` (libc; leak and double-free reports in
   debug mode), `Arena.init(backing)`, `x.allocator()`, `x.deinit()`; on an
-  `Allocator`: `try alloc.create(value)` (`AllocError!*mut T`) and
-  `alloc.destroy(p)`.
+  `Allocator`: `try alloc.create(value)` (`AllocError!*mut T`),
+  `alloc.destroy(p)`, `try alloc.alloc(value, n)` (`AllocError![]mut T`,
+  every element set to `value`) and `alloc.free(slice)`.
 - Tests: `test "name" { }`, `@expect(cond)`, `@expectEqual(expected, actual)`,
   `@testAllocator()`.
 - Types: `i8..i64 u8..u64 isize usize f32 f64 bool`, structs, enums, error
-  sets, `[N]T`, `[]T`, `*T`, `*mut T`, `?T`, `[*]T` (FFI pointer), `dyn I`,
-  `Allocator`, `General`, `Arena`, and, as a
+  sets, `[N]T`, `[]T`, `[]mut T` (writable elements), `*T`, `*mut T`, `?T`,
+  `[*]T` (FFI pointer), `dyn I`, `Allocator`, `General`, `Arena`, instances
+  of type functions (`Pool(Node)`), and, as a
   function's return type only, error unions `E!T` and `!T` (inferred set; not
   on a `pub fn`).
 - Output: `@print(x)` / `@println(x)` / `@println()` for integers, floats,
   bools and `[]u8` strings; or call libc through `extern fn`.
 
-Not yet supported (reported as errors): generics/`comptime`, `where`, error
-payloads, error unions outside return types, `match` on anything but enums
-and errors, `while x |v|`, pointer arithmetic and comparison, methods on
-enums, `import`/std, slices from an allocator (`alloc.alloc`, `alloc.free`,
-`[]mut T`), `Pool`/`Handle`, `extern struct`, global variables.
+Not yet supported (reported as errors): `comptime` values other than types
+and compile-time execution beyond type functions, type aliases
+(`let P = Pool(Node)`), error payloads, error unions outside return types,
+`match` on anything but enums and errors, `while x |v|`, pointer arithmetic
+and comparison, methods on enums, `import`/std (so `Pool` and `Handle` are
+written in the program, as in `tests/cases/pool.ore`), `extern struct`,
+global variables.
 
 See [`docs/grammar.ebnf`](docs/grammar.ebnf) for the grammar and
 [`docs/decisions.md`](docs/decisions.md) for choices not fixed by the design doc.
@@ -201,4 +296,8 @@ equal to the file in debug mode, or to its first line (no trace) in safe and
 fast mode. Every `tests/errors/*.ore` must fail to compile with exactly the
 diagnostics in `*.err`, one per line. For every `tests/tests/*.ore`,
 `ore test` must print exactly `*.out` (and `ore test --json` exactly `*.json`,
-if it exists), with exit status 1 when a test failed.
+if it exists), with exit status 1 when a test failed. For every
+`tests/fix/*.ore`, `ore fix` on a copy must leave exactly `*.fixed` and print
+exactly `*.out`; when `*.stderr` exists, errors remain and stderr must equal
+it, otherwise `ore check` must accept the fixed file. `ore check --json` on
+the original must print exactly `*.json`, if it exists.

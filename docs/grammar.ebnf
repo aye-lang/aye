@@ -32,10 +32,11 @@ keyword     = "fn" | "let" | "var" | "pub" | "import" | "struct" | "enum"
             | "while" | "break" | "continue" | "return" | "defer" | "errdefer"
             | "try" | "catch" | "comptime" | "where" | "as" | "test"
             | "mut" | "extern" ;
-(* import comptime where are reserved; stage0 reports
-   "... is not yet supported".
-   `true`, `false`, `null`, `in`, `Self`, the primitive type names, and
-   `Allocator`, `General`, `Arena` and `AllocError` are predeclared
+(* `import` is reserved; stage0 reports "... is not yet supported".
+   `comptime` appears only before a parameter and `where` only after a
+   return type; elsewhere they are errors.
+   `true`, `false`, `null`, `in`, `Self`, `type`, the primitive type names,
+   and `Allocator`, `General`, `Arena` and `AllocError` are predeclared
    identifiers, not keywords. *)
 
 (* --------------------------------------------------------- top level *)
@@ -44,13 +45,20 @@ file        = { NEWLINE } , { item , ( NEWLINE | EOF ) , { NEWLINE } } ;
 item        = fn_decl | extern_fn | struct_decl | enum_decl | error_decl
             | interface_decl | test_decl ;
 
-fn_decl     = [ "pub" ] "fn" ident "(" [ params ] ")" [ ret_type ] block ;
+fn_decl     = [ "pub" ] "fn" ident "(" [ params ] ")" [ ret_type ] [ where ] block ;
 extern_fn   = [ "pub" ] "extern" "fn" ident "(" [ params ] ")" [ type ] ;
 ret_type    = type
             | [ ident ] "!" ( type | "void" ) ;   (* error union E!T; !T infers the set
-                                                     (not allowed on a `pub fn` other than main) *)
+                                                     (not allowed on a `pub fn` other than main,
+                                                     nor on a generic) *)
 params      = param { "," param } [ "," ] ;
-param       = ident ":" type ;
+param       = [ "comptime" ] ident ":" type ;    (* comptime T: type; only on top-level fns *)
+where       = "where" ident ":" ident { "," ident ":" ident } ;
+               (* T: I -- the comptime parameter T implements interface I;
+                  write T: A, T: B for two interfaces *)
+(* A fn with comptime parameters is generic. A fn whose return type is
+   `type` is a type function: it has only comptime parameters, and its body
+   is exactly  "{" "return" struct_type "}"  (with newlines). *)
 
 struct_decl = [ "pub" ] "struct" ident "{" { NEWLINE }
               [ member { ( "," | NEWLINE ) { NEWLINE } member } [ "," ] { NEWLINE } ] "}" ;
@@ -58,6 +66,9 @@ member      = field | fn_decl ;          (* a method, followed by a newline; fie
                                             methods come in any order *)
                (* in a method, `Self` is the struct; a first parameter of type
                   Self, *Self or *mut Self makes it callable as x.method() *)
+struct_type = "struct" "{" { NEWLINE }
+              [ member { ( "," | NEWLINE ) { NEWLINE } member } [ "," ] { NEWLINE } ] "}" ;
+               (* anonymous struct: only as the value a type function returns *)
 field_list  = "{" { NEWLINE }
               [ field { ( "," | NEWLINE ) { NEWLINE } field } [ "," ] { NEWLINE } ] "}" ;
 field       = ident ":" type ;
@@ -80,9 +91,11 @@ error_decl  = [ "pub" ] "error" ident
 (* ------------------------------------------------------------- types *)
 
 type        = ident                    (* i8 i16 i32 i64 isize u8 u16 u32 u64
-                                          usize f32 f64 bool, a struct or an enum *)
+                                          usize f32 f64 bool, a struct or an enum,
+                                          a comptime parameter *)
+            | ident "(" [ type { "," type } [ "," ] ] ")"   (* instance of a type function  Pool(Node) *)
             | "[" int_lit "]" type     (* fixed array      [N]T *)
-            | "[" "]" type             (* slice            []T  *)
+            | "[" "]" [ "mut" ] type   (* slice            []T, []mut T (writable elements) *)
             | "[" "*" "]" type         (* C pointer (FFI)  [*]T *)
             | "*" [ "mut" ] type       (* pointer          *T, *mut T *)
             | "?" type                 (* optional         ?T   *)
@@ -149,13 +162,22 @@ primary     = int_lit | float_lit | string_lit | char_lit
             | ident "." ident                              (* variant without payload, or error *)
             | ident "." ident "{" [ field_init { "," field_init } [ "," ] ] "}"   (* variant literal *)
             | match_expr
-            | ident "(" [ args ] ")"                       (* call *)
+            | ident "(" [ args ] ")"                       (* call; also F(T) naming a type,
+                                                              as in F(T).init() *)
             | builtin "(" [ args ] ")"                     (* @print @println @expect
                                                               @expectEqual @testAllocator *)
             | ident "{" [ field_init { "," field_init } [ "," ] ] "}"   (* struct literal *)
+            | ident "(" [ args ] ")" "{" [ field_init { "," field_init } [ "," ] ] "}"
+                                                           (* literal of a type function's struct:
+                                                              Pair(i64) { ... }; the args are types *)
             | "[" int_lit "]" type "{" [ args ] "}"        (* array literal *)
+            | "[" "]" [ "mut" ] type "{" "}"               (* the empty slice []T{} *)
+            | struct_type                                  (* only after `return` in a type function *)
             | "(" expr ")" ;
-args        = expr { "," expr } [ "," ] ;
+args        = arg { "," arg } [ "," ] ;
+arg         = expr
+            | ( "*" | "?" | "dyn" ) type ;   (* a type for a comptime parameter;
+                                                 [N]T and []T also parse as primary *)
 field_init  = ident ":" expr ;
 
 match_expr  = "match" header_expr "{" { NEWLINE }

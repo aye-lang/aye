@@ -13,7 +13,8 @@
 //! - makes runtime checks explicit: checked arithmetic carries its source
 //!   span, and indexing carries the length to check against;
 //! - lowers `match` to an `if` chain on the enum tag;
-//! - lowers `alloc.create(v)` to an allocation, a null test and a store.
+//! - lowers `alloc.create(v)` and `alloc.alloc(v, n)` to an allocation, a
+//!   null test and the error union.
 
 use crate::ast::{BinOp, UnOp};
 use crate::diag::Span;
@@ -141,6 +142,11 @@ pub enum Rvalue {
     /// Allocate a `ty` with the allocator `alloc`: a `?*mut ty`, null when
     /// out of memory.
     Alloc { alloc: Operand, ty: Type, span: Span },
+    /// Allocate `len` elements of type `elem`, each set to `value`: a
+    /// `?[]mut elem`, null when out of memory. No elements allocate nothing.
+    AllocSlice { alloc: Operand, value: Operand, elem: Type, len: Operand, span: Span },
+    /// The empty slice of type `ty`.
+    EmptySlice(Type),
     /// An allocator method or test builtin, with the operand types.
     Intrinsic { op: Intrinsic, args: Vec<(Operand, Type)>, span: Span },
     Print { arg: Option<(Operand, Type)>, newline: bool },
@@ -225,6 +231,7 @@ fn has_call(e: &TExpr) -> bool {
         | TExprKind::Catch { .. }
         | TExprKind::DynCall { .. }
         | TExprKind::Create { .. }
+        | TExprKind::AllocSlice { .. }
         | TExprKind::Intrinsic { .. } => true,
         TExprKind::Int(_)
         | TExprKind::Float(_)
@@ -232,6 +239,7 @@ fn has_call(e: &TExpr) -> bool {
         | TExprKind::Str(_)
         | TExprKind::Var(_)
         | TExprKind::Null
+        | TExprKind::EmptySlice
         | TExprKind::ErrorValue(_) => false,
         TExprKind::Binary { lhs, rhs, .. } | TExprKind::Index { base: lhs, index: rhs } => has_call(lhs) || has_call(rhs),
         TExprKind::Unary { expr, .. }
@@ -464,7 +472,11 @@ impl<'a> Lower<'a> {
                         self.run_defers(false, true, out);
                     }
                     // An error union from a call: test it.
-                    Some(TExpr { kind: TExprKind::Call { .. } | TExprKind::DynCall { .. } | TExprKind::Create { .. }, ty: Type::ErrorUnion(..), .. }) => {
+                    Some(TExpr {
+                        kind: TExprKind::Call { .. } | TExprKind::DynCall { .. } | TExprKind::Create { .. } | TExprKind::AllocSlice { .. },
+                        ty: Type::ErrorUnion(..),
+                        ..
+                    }) => {
                         let Some(Operand::Local(u)) = v else { unreachable!() };
                         let c = self.temp(Type::Bool);
                         self.push(out, StmtKind::Assign(local(c), Rvalue::IsErr(local(u))));
@@ -760,6 +772,30 @@ impl<'a> Lower<'a> {
                 self.push(out, StmtKind::If { cond: Operand::Local(has), then, els });
                 Rvalue::Use(Operand::Local(u))
             }
+            // `r = alloc(n elements)`: if `r` is not null, the result is
+            // its slice, else the error `OutOfMemory`.
+            TExprKind::AllocSlice { alloc, value, len } => {
+                let a = self.operand(alloc, out);
+                let v = self.operand(value, out);
+                let n = self.operand(len, out);
+                let Type::ErrorUnion(_, slice) = &e.ty else { unreachable!() };
+                let opt = Type::Optional(slice.clone());
+                let r = self.temp(opt.clone());
+                let rv = Rvalue::AllocSlice { alloc: a, value: v, elem: value.ty.clone(), len: n, span: e.span };
+                self.push(out, StmtKind::Assign(local(r), rv));
+                let has = self.temp(Type::Bool);
+                self.push(out, StmtKind::Assign(local(has), Rvalue::IsSome { place: local(r), ty: opt }));
+                let u = self.temp(e.ty.clone());
+                let s = self.temp((**slice).clone());
+                let mut then = Vec::new();
+                self.push(&mut then, StmtKind::Assign(local(s), Rvalue::Load(field(local(r), "val"))));
+                self.push(&mut then, StmtKind::Assign(local(u), Rvalue::Ok { val: Some(Operand::Local(s)), ty: e.ty.clone() }));
+                let oom = Operand::Int(sema::OUT_OF_MEMORY as i128, IntTy::U16);
+                let els = vec![Stmt { kind: StmtKind::Assign(local(u), Rvalue::Err { err: oom, ty: e.ty.clone() }), span: self.span }];
+                self.push(out, StmtKind::If { cond: Operand::Local(has), then, els });
+                Rvalue::Use(Operand::Local(u))
+            }
+            TExprKind::EmptySlice => Rvalue::EmptySlice(e.ty.clone()),
             TExprKind::Print { arg, newline } => {
                 let arg = arg.as_ref().map(|a| (self.operand(a, out), a.ty.clone()));
                 Rvalue::Print { arg, newline: *newline }
@@ -807,7 +843,7 @@ impl<'a> Lower<'a> {
             TExprKind::Slice { base, lo, hi } => {
                 let (len, elem) = match &base.ty {
                     Type::Array(el, n) => (Len::Array(*n), (**el).clone()),
-                    Type::Slice(el) => (Len::Slice, (**el).clone()),
+                    Type::Slice(el, _) => (Len::Slice, (**el).clone()),
                     _ => unreachable!(),
                 };
                 let base = self.place(base, out);

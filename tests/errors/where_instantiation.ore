@@ -1,0 +1,54 @@
+// An instantiation that does not satisfy a `where` constraint is an error at
+// the instantiation, never inside the generic.
+
+interface Show {
+    fn show(self: *Self) i64
+}
+
+struct Num {
+    n: i64
+
+    fn show(self: *Self) i64 {
+        return self.n
+    }
+}
+
+struct Point {
+    x: i64
+}
+
+struct Text {
+    len: i64
+
+    fn show(self: *Self) bool {
+        return self.len > 0
+    }
+}
+
+fn Labeled(comptime T: type) type where T: Show {
+    return struct {
+        value: T
+
+        fn label(self: *Self) i64 {
+            return self.value.show()
+        }
+    }
+}
+
+fn twice(comptime T: type, x: T) i64 where T: Show {
+    return x.show() * 2
+}
+
+// A generic that instantiates another one needs its constraints too.
+fn Outer(comptime U: type) type {
+    return struct {
+        inner: Labeled(U)
+    }
+}
+
+pub fn main() {
+    let a = Labeled(Num) { value: Num { n: 1 } }
+    let b = Labeled(Point) { value: Point { x: 1 } }
+    let c = twice(i32, 3)
+    let d = twice(Text, Text { len: 2 })
+}

@@ -1,0 +1,102 @@
+// Generic functions with `comptime T: type`, `where` constraints, methods
+// called through a constraint, `[]mut T`, and slices from an allocator.
+
+interface Shape {
+    fn area(self: *Self) f64
+    fn scale(self: *mut Self, by: f64)
+}
+
+struct Square {
+    side: f64
+
+    fn area(self: *Self) f64 {
+        return self.side * self.side
+    }
+
+    fn scale(self: *mut Self, by: f64) {
+        self.side *= by
+    }
+}
+
+struct Circle {
+    r: f64
+
+    // By value: fine for the interface's `self: *Self`.
+    fn area(self: Self) f64 {
+        return 3.0 * self.r * self.r
+    }
+
+    fn scale(self: *mut Self, by: f64) {
+        self.r *= by
+    }
+}
+
+// `T` is known only through `Shape`.
+fn totalArea(comptime T: type, items: []T) f64 where T: Shape {
+    var sum = 0.0
+    for i in 0..items.len {
+        sum += items[i].area()
+    }
+    return sum
+}
+
+// `scale` takes `self: *mut Self`, so the elements must be writable.
+fn scaleAll(comptime T: type, items: []mut T, by: f64) where T: Shape {
+    for i in 0..items.len {
+        items[i].scale(by)
+    }
+}
+
+// No constraint: a `T` can only be moved and copied.
+fn swap(comptime T: type, a: *mut T, b: *mut T) {
+    let t = a.*
+    a.* = b.*
+    b.* = t
+}
+
+// A type function with a constraint. `Pair(Square)` written twice is one type.
+fn Pair(comptime T: type) type where T: Shape {
+    return struct {
+        first: T
+        second: T
+
+        fn area(self: *Self) f64 {
+            return self.first.area() + self.second.area()
+        }
+    }
+}
+
+fn pairArea(p: *Pair(Square)) f64 {
+    return p.area()
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+
+    let squares = try alloc.alloc(Square { side: 1.0 }, 3)
+    defer alloc.free(squares)
+    squares[1].side = 2.0
+    scaleAll(Square, squares, 2.0)
+    @println(totalArea(Square, squares))
+
+    var circles = [2]Circle{Circle { r: 1.0 }, Circle { r: 2.0 }}
+    @println(totalArea(Circle, circles[..]))
+
+    var x: i64 = 1
+    var y: i64 = 2
+    swap(i64, &mut x, &mut y)
+    @println(x)
+    @println(y)
+
+    let p = Pair(Square) { first: Square { side: 1.0 }, second: Square { side: 3.0 } }
+    @println(pairArea(&p))
+
+    // The empty slice, and an allocation of no elements.
+    let none = []u8{}
+    @println(none.len)
+    let empty = try alloc.alloc(0 as u8, 0)
+    alloc.free(empty)
+    @println(empty.len)
+}

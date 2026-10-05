@@ -29,12 +29,12 @@ struct Parser {
 
 fn not_supported(kw: Kw, span: Span) -> Error {
     let what = match kw {
-        Kw::Import => "`import` (modules)",
-        Kw::Comptime => "`comptime`",
-        Kw::Where => "`where`",
+        Kw::Import => "`import` (modules) is not yet supported",
+        Kw::Comptime => "`comptime` is only supported on a parameter (`comptime T: type`)",
+        Kw::Where => "`where` is only supported after a function's return type (`fn f(comptime T: type) T where T: I`)",
         _ => return Error::new(E0006, span, format!("unexpected `{}`", kw.as_str())),
     };
-    Error::new(E0007, span, format!("{what} is not yet supported"))
+    Error::new(E0007, span, what)
 }
 
 /// Binding strength of `catch`: looser than `+`, tighter than comparisons.
@@ -76,6 +76,19 @@ impl Parser {
 
     fn unexpected(&self, expected: &str) -> Error {
         Error::new(E0006, self.span(), format!("expected {expected}, found {}", self.peek()))
+    }
+
+    /// The error after an element of a list closed by `closer` when neither
+    /// `,` nor `closer` follows. When the list goes on with `closer` on the
+    /// next line, the fix-it adds the missing trailing `,`.
+    fn missing_comma(&self, closer: &Tok, expected: &str) -> Error {
+        let e = self.unexpected(expected);
+        let next = self.toks.get(self.pos + 1).map(|t| &t.tok);
+        if self.at(&Tok::Semi) && next == Some(closer) && self.pos > 0 {
+            let at = self.toks[self.pos - 1].end;
+            return e.fix("add a trailing `,`", at, at, ",");
+        }
+        e
     }
 
     fn expect(&mut self, t: &Tok) -> Result<Span> {
@@ -252,20 +265,33 @@ impl Parser {
         self.expect(&Tok::LParen)?;
         let mut params = Vec::new();
         while !self.at(&Tok::RParen) {
+            let comptime = self.eat(&Tok::Kw(Kw::Comptime));
             let (pname, pspan) = self.ident()?;
             self.expect(&Tok::Colon)?;
             let ty = self.type_expr()?;
-            params.push(Param { name: pname, span: pspan, ty });
+            params.push(Param { name: pname, span: pspan, ty, comptime });
             if !self.eat(&Tok::Comma) {
                 break;
             }
         }
         self.expect(&Tok::RParen)?;
         let ret = match self.peek() {
-            Tok::LBrace | Tok::Semi | Tok::RBrace | Tok::Eof => None,
+            Tok::LBrace | Tok::Semi | Tok::RBrace | Tok::Eof | Tok::Kw(Kw::Where) => None,
             _ => Some(self.type_expr()?),
         };
-        Ok(FnDecl { name, span, is_pub, is_extern, params, ret, body: None })
+        let mut bounds = Vec::new();
+        if self.eat(&Tok::Kw(Kw::Where)) {
+            loop {
+                let (param, span) = self.ident()?;
+                self.expect(&Tok::Colon)?;
+                let (iface, iface_span) = self.ident()?;
+                bounds.push(Bound { param, span, iface, iface_span });
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+        }
+        Ok(FnDecl { name, span, is_pub, is_extern, params, ret, bounds, body: None })
     }
 
     /// `struct Name { fields and methods }`: fields are separated by `,` or
@@ -273,6 +299,12 @@ impl Parser {
     fn struct_decl(&mut self, is_pub: bool) -> Result<StructDecl> {
         self.expect(&Tok::Kw(Kw::Struct))?;
         let (name, span) = self.ident()?;
+        self.struct_body(name, span, is_pub)
+    }
+
+    /// `{ fields and methods }` of a struct declaration or of an anonymous
+    /// `struct { ... }`.
+    fn struct_body(&mut self, name: String, span: Span, is_pub: bool) -> Result<StructDecl> {
         self.expect(&Tok::LBrace)?;
         let (mut fields, mut methods) = (Vec::new(), Vec::new());
         loop {
@@ -346,7 +378,7 @@ impl Parser {
         let ret = Some(TypeExpr { kind: TypeExprKind::ErrorUnion(None, Box::new(void)), span });
         let name = format!("test#{}", self.tests);
         self.tests += 1;
-        let func = FnDecl { name, span, is_pub: false, is_extern: false, params: vec![], ret, body };
+        let func = FnDecl { name, span, is_pub: false, is_extern: false, params: vec![], ret, bounds: vec![], body };
         Ok(TestDecl { name: String::from_utf8_lossy(&bytes).into_owned(), func })
     }
 
@@ -446,6 +478,16 @@ impl Parser {
                 self.bump();
                 if self.eat(&Tok::Bang) {
                     TypeExprKind::ErrorUnion(Some((name, span)), Box::new(self.type_expr()?))
+                } else if self.eat(&Tok::LParen) {
+                    let mut args = Vec::new();
+                    while !self.at(&Tok::RParen) {
+                        args.push(self.type_expr()?);
+                        if !self.eat(&Tok::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect(&Tok::RParen)?;
+                    TypeExprKind::Generic(name, args)
                 } else {
                     TypeExprKind::Named(name)
                 }
@@ -455,7 +497,8 @@ impl Parser {
                 match self.peek().clone() {
                     Tok::RBracket => {
                         self.bump();
-                        TypeExprKind::Slice(Box::new(self.type_expr()?))
+                        let mutable = self.eat(&Tok::Kw(Kw::Mut));
+                        TypeExprKind::Slice(Box::new(self.type_expr()?), mutable)
                     }
                     Tok::Star => {
                         self.bump();
@@ -489,7 +532,7 @@ impl Parser {
             }
             Tok::Kw(k) if is_unsupported_kw(k) => return Err(not_supported(k, span)),
             Tok::Kw(Kw::Struct) => {
-                return Err(Error::new(E0007, span, "anonymous struct types are not yet supported"));
+                return Err(Error::new(E0007, span, "an anonymous `struct { ... }` can only be returned from a type function"));
             }
             _ => return Err(self.unexpected("type")),
         };
@@ -511,10 +554,13 @@ impl Parser {
                 return Err(self.unexpected("`}`"));
             }
             let start = self.pos;
-            let r = self.stmt().and_then(|s| {
-                stmts.push(s);
-                self.end_of_stmt()
-            });
+            let r = match self.peek() {
+                Tok::Kw(Kw::Else) => Err(self.else_on_new_line(stmts.last())),
+                _ => self.stmt().and_then(|s| {
+                    stmts.push(s);
+                    self.end_of_stmt()
+                }),
+            };
             if let Err(e) = r {
                 self.errors.push(e);
                 self.no_struct_lit = false;
@@ -523,6 +569,28 @@ impl Parser {
         }
         self.no_struct_lit = saved;
         Ok(Block { stmts, span })
+    }
+
+    /// `else` at the start of a statement: the `}` before it ended the line.
+    /// When `prev` is an `if` without `else` that ends right before the
+    /// line break, the fix-it joins the two lines.
+    fn else_on_new_line(&self, prev: Option<&Stmt>) -> Error {
+        let e = Error::new(E0008, self.span(), "`else` must be on the same line as the `}` that closes the `if` block");
+        let mut last = prev;
+        while let Some(Stmt { kind: StmtKind::If { els, .. }, .. }) = last {
+            match els {
+                Some(s) => last = Some(s),
+                None => break,
+            }
+        }
+        let open_if = matches!(last, Some(Stmt { kind: StmtKind::If { els: None, .. }, .. }));
+        if open_if && self.pos >= 2 {
+            let (brace, semi) = (&self.toks[self.pos - 2], &self.toks[self.pos - 1]);
+            if brace.tok == Tok::RBrace && semi.span == brace.end && self.span().line == brace.span.line + 1 {
+                return e.fix("put `else` on the line of the `}`", brace.end, self.span(), " ");
+            }
+        }
+        e
     }
 
     fn stmt(&mut self) -> Result<Stmt> {
@@ -544,13 +612,6 @@ impl Parser {
                 StmtKind::Let { name, mutable: kw == Kw::Var, ty, init }
             }
             Tok::Kw(Kw::If) => return self.if_stmt(),
-            Tok::Kw(Kw::Else) => {
-                return Err(Error::new(
-                    E0008,
-                    span,
-                    "`else` must be on the same line as the `}` that closes the `if` block",
-                ));
-            }
             Tok::Kw(Kw::While) => {
                 self.bump();
                 let cond = self.header_expr()?;
@@ -790,6 +851,11 @@ impl Parser {
                     let span = self.bump().span;
                     e = Expr { kind: ExprKind::Deref(Box::new(e)), span };
                 }
+                // `F(T) { ... }`: a literal of the struct that `F(T)` returns.
+                Tok::LBrace if !self.no_struct_lit && matches!(e.kind, ExprKind::Call { .. }) => {
+                    let ty = expr_to_type(&e)?;
+                    e = Expr { kind: ExprKind::StructLit { ty, fields: self.field_inits()? }, span: e.span };
+                }
                 Tok::LBracket => {
                     let span = self.bump().span;
                     let saved = std::mem::replace(&mut self.no_struct_lit, false);
@@ -816,17 +882,27 @@ impl Parser {
         let saved = std::mem::replace(&mut self.no_struct_lit, false);
         let mut args = Vec::new();
         while !self.at(&Tok::RParen) {
-            args.push(self.expr()?);
+            args.push(self.arg()?);
             if !self.eat(&Tok::Comma) {
                 break;
             }
         }
         if !self.at(&Tok::RParen) {
-            return Err(self.unexpected("`,` or `)`"));
+            return Err(self.missing_comma(&Tok::RParen, "`,` or `)`"));
         }
         self.bump();
         self.no_struct_lit = saved;
         Ok(args)
+    }
+
+    /// A call argument: an expression, or a type that does not read as an
+    /// expression (`*T`, `?T`, `dyn I`), for a `comptime` parameter.
+    fn arg(&mut self) -> Result<Expr> {
+        if matches!(self.peek(), Tok::Star | Tok::Question | Tok::Kw(Kw::Dyn)) {
+            let span = self.span();
+            return Ok(Expr { kind: ExprKind::Type(self.type_expr()?), span });
+        }
+        self.expr()
     }
 
     fn primary(&mut self) -> Result<Expr> {
@@ -855,7 +931,10 @@ impl Parser {
                     _ if name == "false" => ExprKind::Bool(false),
                     _ if name == "null" => ExprKind::Null,
                     Tok::LParen => ExprKind::Call { name, args: self.args()? },
-                    Tok::LBrace if !self.no_struct_lit => self.struct_lit(name)?,
+                    Tok::LBrace if !self.no_struct_lit => {
+                        let ty = TypeExpr { kind: TypeExprKind::Named(name), span };
+                        ExprKind::StructLit { ty, fields: self.field_inits()? }
+                    }
                     _ => ExprKind::Ident(name),
                 }
             }
@@ -873,8 +952,11 @@ impl Parser {
             }
             Tok::LBracket => {
                 let ty = self.type_expr()?;
-                if !matches!(ty.kind, TypeExprKind::Array(..)) {
-                    return Err(Error::new(E0007, span, "only fixed-size array literals (`[N]T{...}`) are supported"));
+                if !self.at(&Tok::LBrace) {
+                    return Ok(Expr { kind: ExprKind::Type(ty), span });
+                }
+                if !matches!(ty.kind, TypeExprKind::Array(..) | TypeExprKind::Slice(..)) {
+                    return Err(Error::new(E0007, span, "only array literals (`[N]T{...}`) and the empty slice (`[]T{}`) are supported"));
                 }
                 self.expect(&Tok::LBrace)?;
                 let saved = std::mem::replace(&mut self.no_struct_lit, false);
@@ -886,7 +968,7 @@ impl Parser {
                     }
                 }
                 if !self.at(&Tok::RBrace) {
-                    return Err(self.unexpected("`,` or `}` (multi-line literals need a trailing comma)"));
+                    return Err(self.missing_comma(&Tok::RBrace, "`,` or `}` (multi-line literals need a trailing comma)"));
                 }
                 self.bump();
                 self.no_struct_lit = saved;
@@ -914,6 +996,10 @@ impl Parser {
                 }
                 self.no_struct_lit = saved;
                 ExprKind::Match { scrutinee, arms }
+            }
+            Tok::Kw(Kw::Struct) => {
+                self.bump();
+                ExprKind::StructType(self.struct_body(String::new(), span, false)?)
             }
             Tok::Kw(k) if is_unsupported_kw(k) => return Err(not_supported(k, span)),
             _ => return Err(self.unexpected("expression")),
@@ -959,10 +1045,6 @@ impl Parser {
         Ok(MatchArm { variant, fields, rest, body, span })
     }
 
-    fn struct_lit(&mut self, name: String) -> Result<ExprKind> {
-        Ok(ExprKind::StructLit { name, fields: self.field_inits()? })
-    }
-
     /// `{ name: value, ... }` of a struct or variant literal.
     fn field_inits(&mut self) -> Result<Vec<FieldInit>> {
         self.expect(&Tok::LBrace)?;
@@ -977,11 +1059,25 @@ impl Parser {
             }
         }
         if !self.at(&Tok::RBrace) {
-            return Err(self.unexpected("`,` or `}` (multi-line literals need a trailing comma)"));
+            return Err(self.missing_comma(&Tok::RBrace, "`,` or `}` (multi-line literals need a trailing comma)"));
         }
         self.bump();
         Ok(fields)
     }
+}
+
+/// The type that a call-shaped expression names: `F(A, B)` in a struct
+/// literal `F(A, B) { ... }`.
+fn expr_to_type(e: &Expr) -> Result<TypeExpr> {
+    let kind = match &e.kind {
+        ExprKind::Ident(n) => TypeExprKind::Named(n.clone()),
+        ExprKind::Call { name, args } => {
+            TypeExprKind::Generic(name.clone(), args.iter().map(expr_to_type).collect::<Result<_>>()?)
+        }
+        ExprKind::Type(t) => return Ok(t.clone()),
+        _ => return Err(Error::new(E0006, e.span, "expected a type")),
+    };
+    Ok(TypeExpr { kind, span: e.span })
 }
 
 #[cfg(test)]
@@ -1027,7 +1123,7 @@ mod tests {
         let e = parse_src("import std").unwrap_err();
         assert_eq!(e.msg, "`import` (modules) is not yet supported");
         let e = parse_src("fn f() {\n comptime x\n}").unwrap_err();
-        assert_eq!(e.msg, "`comptime` is not yet supported");
+        assert_eq!(e.msg, "`comptime` is only supported on a parameter (`comptime T: type`)");
     }
 
     /// `catch` binds looser than `+` and tighter than `==`.

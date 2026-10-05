@@ -203,6 +203,8 @@ impl fmt::Display for Tok {
 pub struct Token {
     pub tok: Tok,
     pub span: Span,
+    /// The position just after the token.
+    pub end: Span,
 }
 
 /// Does a newline after this token terminate the statement?
@@ -266,7 +268,8 @@ impl Lexer {
     }
 
     fn push(&mut self, tok: Tok, span: Span) {
-        self.toks.push(Token { tok, span });
+        let end = self.here();
+        self.toks.push(Token { tok, span, end });
     }
 
     fn terminate(&mut self, span: Span) {

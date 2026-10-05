@@ -1,0 +1,24 @@
+struct Size {
+    width: i64
+    height: i64
+}
+
+fn area(s: Szie) i64 {
+    return s.width * s.heigth
+}
+
+pub fn main() {
+    let count = 0
+    count += 1
+    let s = Size {
+        width: 2,
+        height: 3
+    }
+    @println(aera(s))
+    if count > 0 {
+        @println(cont)
+    }
+    else {
+        @println(0)
+    }
+}

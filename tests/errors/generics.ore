@@ -1,0 +1,71 @@
+// Misuse of `comptime` parameters and type functions.
+
+struct Node {
+    id: i64
+}
+
+struct Edge {
+    w: i64
+}
+
+fn Handle(comptime T: type) type {
+    return struct {
+        index: u32
+    }
+}
+
+fn index(h: Handle(Node)) u32 {
+    return h.index
+}
+
+fn pick(comptime T: type, x: T) T {
+    return x
+}
+
+fn bad(comptime n: i64) i64 {
+    return 1
+}
+
+fn Mixed(comptime T: type, n: i64) type {
+    return struct {
+        v: T
+    }
+}
+
+fn Wrap(comptime T: type) type {
+    let x = 1
+    return struct {
+        v: T
+    }
+}
+
+fn Shadow(comptime Node: type) type {
+    return struct {
+        v: Node
+    }
+}
+
+fn local(comptime T: type, x: T) {
+    let T = 1
+}
+
+fn inferred(comptime T: type, x: T) !T {
+    return x
+}
+
+fn notIface(comptime T: type) type where T: Node {
+    return struct {
+        v: T
+    }
+}
+
+pub fn main() {
+    let e = Handle(Edge) { index: 0 }
+    let i = index(e)
+    let h: Handle = e
+    let p = Handle(Node)
+    let q = Handle(Node, Edge) { index: 0 }
+    let r = pick(1, 2)
+    let s = Handle(Node).make()
+    let t = pick(i64, 2)
+}

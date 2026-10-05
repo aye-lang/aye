@@ -1,0 +1,12 @@
+fn total(xs: []i64) i64 {
+    var sum = 0
+    for i in 0..xs.len {
+        sum += xs[i]
+    }
+    return sum
+}
+
+pub fn main() {
+    var xs = [3]i64{1, 2, 3}
+    @println(total(xs[..]))
+}

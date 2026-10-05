@@ -1,6 +1,6 @@
 //! Compiler driver: runs the pipeline and invokes clang.
 
-use crate::diag::{Diag, Error, json_str};
+use crate::diag::{Diag, Error, Fix, Span, json_str, offset};
 use crate::{ast, cgen, lexer, oir, parser, sema};
 use std::io::Write;
 use std::path::Path;
@@ -63,6 +63,36 @@ fn front_end(file_name: &str, src: &str, need_main: Option<bool>) -> Result<sema
     let ast = parser::parse(toks).map_err(diags)?;
     let need_main = need_main.unwrap_or_else(|| !ast.items.iter().any(|i| matches!(i, ast::Item::Test(_))));
     sema::check(&ast, need_main).map_err(diags)
+}
+
+/// Apply the fix-its of `diags` to `src`, in order of position: a fix is
+/// applied unless one of its edits overlaps an edit applied before (two
+/// insertions at one position overlap too); a fix equal to an applied one
+/// is skipped. Returns the new text and, for each applied fix, the position
+/// of its first edit and its description.
+pub fn apply_fixes(src: &str, diags: &[Diag]) -> (String, Vec<(Span, String)>) {
+    let mut fixes: Vec<&Fix> = diags.iter().filter_map(|d| d.fix.as_ref()).collect();
+    fixes.sort_by_key(|f| (f.edits[0].start.line, f.edits[0].start.col));
+    let mut applied: Vec<&Fix> = Vec::new();
+    let mut edits: Vec<(usize, usize, &str)> = Vec::new();
+    for f in fixes {
+        if applied.contains(&f) {
+            continue;
+        }
+        let ranges: Vec<(usize, usize)> = f.edits.iter().map(|e| (offset(src, e.start), offset(src, e.end))).collect();
+        let overlaps = ranges.iter().any(|&(s, e)| edits.iter().any(|&(ts, te, _)| (s < te && ts < e) || s == ts));
+        if overlaps {
+            continue;
+        }
+        edits.extend(ranges.iter().zip(&f.edits).map(|(&(s, e), edit)| (s, e, edit.replacement.as_str())));
+        applied.push(f);
+    }
+    edits.sort_by_key(|&(s, ..)| std::cmp::Reverse(s));
+    let mut out = src.to_string();
+    for (s, e, r) in edits {
+        out.replace_range(s..e, r);
+    }
+    (out, applied.iter().map(|f| (f.edits[0].start, f.help.clone())).collect())
 }
 
 /// Run the front end, OIR lowering and C generation for an executable;

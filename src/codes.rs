@@ -129,7 +129,7 @@ E0006 = 6 {
 }
 E0007 = 7 {
     "not yet supported",
-    "The feature is part of Ore but not of the stage0 compiler yet (for example `import`, `interface`, `comptime`, `test` blocks or global variables). Write the program without it.",
+    "The feature is part of Ore but not of the stage0 compiler yet (for example `import`, `extern struct` or global variables), or the keyword is used where stage0 does not support it (`comptime` only marks a type parameter, `comptime T: type`). Write the program without it.",
     r#"import std
 
 pub fn main() {
@@ -548,7 +548,7 @@ E0032 = 32 {
 }
 E0033 = 33 {
     "write through a read-only pointer or slice",
-    "Data behind a `*T` pointer or in a slice `[]T` is read-only. Use a `*mut T` (made with `&mut x`) to write through a pointer.",
+    "Data behind a `*T` pointer or in a slice `[]T` is read-only. Use a `*mut T` (made with `&mut x`) to write through a pointer, and a `[]mut T` (from slicing a `var` array, or from `alloc.alloc`) to write slice elements.",
     r#"struct P { x: i32 }
 
 fn reset(p: *P) {
@@ -1322,7 +1322,7 @@ pub fn main() {
 }
 E0071 = 71 {
     "unknown method",
-    "The type has no method with this name. Methods are the functions declared in a struct body; `dyn I` has the methods of interface `I`; `Allocator` has `create` and `destroy`, and `General` and `Arena` have `init`, `allocator` and `deinit`. Check the spelling, or declare the method in the struct.",
+    "The type has no method with this name. Methods are the functions declared in a struct body; `dyn I` has the methods of interface `I`; `Allocator` has `create`, `destroy`, `alloc` and `free`, and `General` and `Arena` have `init`, `allocator` and `deinit`. Check the spelling, or declare the method in the struct.",
     r#"struct Counter {
     n: i32
 }
@@ -1452,6 +1452,151 @@ test "make" {
     let alloc = @testAllocator()
     let p = try make(alloc, 1)
     defer alloc.destroy(p)
+}
+"#,
+}
+E0076 = 76 {
+    "invalid generic declaration",
+    "A `comptime` parameter has type `type` (`comptime T: type`); stage0 has no other compile-time values. A type function (returning `type`) takes only `comptime` parameters, and only top-level functions have them. A `where` constraint names a `comptime` parameter and an interface (`where T: Shape`). A generic function spells out its error set (`E!T`).",
+    r#"fn first(comptime n: i64, xs: []i64) i64 {
+    return xs[0]
+}
+
+pub fn main() {
+}
+"#,
+    r#"fn first(comptime T: type, xs: []T) T {
+    return xs[0]
+}
+
+pub fn main() {
+}
+"#,
+}
+E0077 = 77 {
+    "invalid type function",
+    "The body of a type function (a function that returns `type`) is a single `return struct { ... }`. The struct's fields and methods can use the `comptime` parameters, and `Self` names the struct. An anonymous `struct { ... }` is allowed nowhere else; declare a named struct with `struct Name { ... }`.",
+    r#"fn Box(comptime T: type) type {
+    let size = 1
+    return struct {
+        value: T
+    }
+}
+
+pub fn main() {
+}
+"#,
+    r#"fn Box(comptime T: type) type {
+    return struct {
+        value: T
+    }
+}
+
+pub fn main() {
+}
+"#,
+}
+E0078 = 78 {
+    "type parameter used without a constraint",
+    "A generic is checked once, where it is defined, with its `comptime` types unknown. A value of such a type `T` can be moved, copied and pointed to, but it has no fields, operators or methods. A method can be called when a constraint `where T: I` names an interface `I` that declares it; every instantiation must then implement `I`.",
+    r#"interface Area {
+    fn area(self: *Self) f64
+}
+
+fn total(comptime T: type, items: []T) f64 {
+    var sum = 0.0
+    for i in 0..items.len {
+        sum += items[i].area()
+    }
+    return sum
+}
+
+pub fn main() {
+}
+"#,
+    r#"interface Area {
+    fn area(self: *Self) f64
+}
+
+fn total(comptime T: type, items: []T) f64 where T: Area {
+    var sum = 0.0
+    for i in 0..items.len {
+        sum += items[i].area()
+    }
+    return sum
+}
+
+pub fn main() {
+}
+"#,
+}
+E0079 = 79 {
+    "unsatisfied `where` constraint",
+    "A generic is instantiated with a type that does not implement the interface of one of its `where` constraints. Give the type the missing method, with the interface's signature, or use another type. A generic that instantiates another one with its own parameter needs the same constraint on that parameter.",
+    r#"interface Area {
+    fn area(self: *Self) f64
+}
+
+struct Square {
+    side: f64
+}
+
+fn twice(comptime T: type, x: T) f64 where T: Area {
+    return x.area() * 2.0
+}
+
+pub fn main() {
+    let a = twice(Square, Square { side: 2.0 })
+}
+"#,
+    r#"interface Area {
+    fn area(self: *Self) f64
+}
+
+struct Square {
+    side: f64
+
+    fn area(self: *Self) f64 {
+        return self.side * self.side
+    }
+}
+
+fn twice(comptime T: type, x: T) f64 where T: Area {
+    return x.area() * 2.0
+}
+
+pub fn main() {
+    let a = twice(Square, Square { side: 2.0 })
+}
+"#,
+}
+E0080 = 80 {
+    "invalid type arguments",
+    "A type function names a type only with its arguments, `Box(i64)`, and only a type function takes type arguments. The argument of a `comptime` parameter must be a type, and the number of arguments must match the parameters.",
+    r#"fn Box(comptime T: type) type {
+    return struct {
+        value: T
+    }
+}
+
+fn unbox(b: Box) i64 {
+    return 0
+}
+
+pub fn main() {
+}
+"#,
+    r#"fn Box(comptime T: type) type {
+    return struct {
+        value: T
+    }
+}
+
+fn unbox(b: Box(i64)) i64 {
+    return b.value
+}
+
+pub fn main() {
 }
 "#,
 }

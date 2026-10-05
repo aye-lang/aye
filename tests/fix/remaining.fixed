@@ -1,0 +1,6 @@
+// `ore fix` applies what it can and reports the rest.
+pub fn main() {
+    var n = 1
+    n = 2
+    @println(missing)
+}
