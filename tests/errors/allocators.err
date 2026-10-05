@@ -1,0 +1,9 @@
+allocators.ore:6:13: error[E0075]: `@testAllocator()` can only be used in a `test` block (pass the allocator to other functions)
+allocators.ore:7:25: error[E0074]: `Node` is a type, not a value: `create` takes the initial value, e.g. `alloc.create(Node { ... })`
+allocators.ore:12:17: error[E0032]: method `allocator` takes `self: *mut Self`: cannot take `&mut` of `gpa`: it is immutable (declare it with `var`)
+allocators.ore:15:29: error[E0023]: mismatched types: `destroy` needs a pointer from `create`, found `Node`
+allocators.ore:16:20: error[E0071]: type `Allocator` has no method `resize`
+allocators.ore:17:20: error[E0061]: unhandled error: `create` returns `AllocError!*mut Node` (handle the error with `try` or `catch`)
+allocators.ore:18:21: error[E0071]: type `General` has no method `create`
+allocators.ore:19:18: error[E0023]: mismatched types: expected `bool`, found integer literal
+allocators.ore:20:13: error[E0023]: mismatched types: expected `bool`, found integer literal

@@ -1,0 +1,8 @@
+test "create and destroy" ... ok
+test "leaks a node" ... FAILED
+    tests/tests/leak.ore:18:23: leak: 16 bytes allocated here were never freed
+test "arena without deinit" ... FAILED
+    tests/tests/leak.ore:25:23: leak: 4112 bytes allocated here were never freed
+test "arena with deinit" ... ok
+
+2 passed; 2 failed

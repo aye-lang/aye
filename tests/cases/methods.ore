@@ -1,0 +1,57 @@
+// Methods: functions declared in a struct body, `Self`, call sugar and
+// static calls.
+
+struct Counter {
+    n: i32
+    hits: u32
+
+    // No `self` parameter: called as `Counter.new()`.
+    pub fn new(start: i32) Self {
+        return Self { n: start, hits: 0 }
+    }
+
+    // `x.bump(..)` passes `&mut x`.
+    fn bump(self: *mut Self, by: i32) {
+        self.n += by
+        self.hits += 1
+    }
+
+    // `x.get()` passes `&x`.
+    fn get(self: *Self) i32 {
+        return self.n
+    }
+
+    // By value: `x.doubled()` passes a copy.
+    fn doubled(self: Self) Counter {
+        return Counter { n: self.n * 2, hits: self.hits }
+    }
+
+    fn reset(self: *mut Self) {
+        self.* = Self.new(0)
+    }
+}
+
+fn bumpTwice(c: *mut Counter) {
+    c.bump(1)
+    c.bump(1)
+}
+
+pub fn main() {
+    var c = Counter.new(5)
+    c.bump(10)
+    @println(c.get())
+    bumpTwice(&mut c)
+    @println(c.n)
+    @println(c.hits)
+    let d = c.doubled()
+    @println(d.get())
+    // Static call with an explicit receiver.
+    @println(Counter.get(&d))
+    let p = &mut c
+    p.bump(100)
+    @println(p.get())
+    @println(p.doubled().n)
+    c.reset()
+    @println(c.n)
+    @println(Counter.new(3).doubled().n)
+}

@@ -45,6 +45,15 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
   - With a block, the block runs on an error. If the payload `T` is not `void`, the block must end with `return`, `break` or `continue` on every path.
   - With an expression, the expression replaces the error: it must have type `T` (`f() catch 0`, `f() catch |e| match e { ... }`). If `T` is `void`, it must be a call.
 - **`errdefer`** takes a block or a simple statement, like `defer`. It is an error in a function that does not return an error union, because it would never run.
+- **Methods** are functions declared in a struct body (`fn` or `pub fn`), in any order with the fields. In the struct, `Self` names it. Enums have no methods yet.
+  - The first parameter decides how a method takes its receiver, as in Zig: `self: Self` (a copy), `self: *Self` or `self: *mut Self`. The name `self` is a convention, not a rule. A function without such a parameter is called only as `Type.f(args)`.
+  - `x.m(args)` passes the receiver as the first argument. For `*Self` and `*mut Self`, a pointer `x` is passed as it is, and a place `x` is passed as `&x` or `&mut x`; `&mut` needs a writable place, as for `&mut x` itself. A temporary is never borrowed implicitly (`make().get()` with `self: *Self` is an error). For `self: Self`, a pointer receiver is dereferenced (copied).
+  - `Type.f(args)` calls any function of the struct with all arguments written out, also a method: `Counter.get(&c)`.
+  - Method names are scoped to their struct: a method can share its name with a top-level function, but not with a field of its struct. Its parameters follow the shadowing rule.
+- **Interfaces:** `interface Name { fn m(self: *Self, ...) T }`, one method signature per line, without bodies. The first parameter must be `self: *Self` or `self: *mut Self`, and an error union return type must name its set (`E!T`).
+- **`dyn I`** is a type. A `dyn` value is made only by an implicit conversion: a `*T` or `*mut T` where `dyn I` is expected (`show(&mut sq)`, `let s: dyn Shape = &c`).
+- **Test blocks:** `test "name" { ... }` at the top level. The body is checked like a `!void` function, so it can use `try`. Test names in a file must differ.
+  - `ore build`, `ore run` and `ore emit-c` leave test blocks out (they are still type-checked) and need `pub fn main()`. `ore test` does not need `main`. `ore check` needs `main` unless the file has a test block.
 
 ## Types and checking
 
@@ -76,6 +85,17 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
 - **Pattern bindings and `|v|` captures** are immutable copies, and they follow the shadowing rule below.
 - **Shadowing** is not allowed in any scope. A `let`/`var` binding, a parameter or a `for` variable is an error when its name is already visible: a local in the same or an enclosing block, a parameter of the function, or a top-level `fn`, `extern fn` or `struct`. Sibling blocks and different functions can reuse a name.
 - **`isize` and `usize`** are 64-bit. Stage0 assumes an LP64 target.
+- **Interface conformance is structural**, as in Go: a struct implements `I` when it has every method of `I`, with the same parameter types after `self` and the same return type. There is no `impl` declaration. It is checked where a pointer converts to `dyn I`, and the error names the missing or different method.
+  - A method that takes `self: *mut Self` needs an interface method declared with `self: *mut Self`, and a `*mut T` (`&mut x`). Methods that take `self: *Self` or `self: Self` work from `&x` too.
+  - Calls through a `dyn` need no mutability: whether it was made from `&mut` was checked at the conversion.
+- **Allocators without generics:** `Allocator`, `General`, `Arena` and the error set `AllocError { OutOfMemory }` are predeclared names, like `i32`; they cannot be redefined. They move into `std.mem` and `std.heap` with modules (M5).
+  - `Allocator` is a fat pointer like `dyn`: a data pointer and a vtable of byte-level `alloc` and `free` functions. It is not `dyn` of a user-visible interface, because its typed methods take a type or any value, which an interface method cannot express without generics. Only `General` and `Arena` make one (`gpa.allocator()`); Ore code cannot implement it yet. `resize` waits for a container that grows.
+  - `General.init()`, `Arena.init(backing)`; `x.allocator()` and `x.deinit()` take `self: *mut Self`, so the variable must be a `var`.
+  - `alloc.create(value)` returns `AllocError!*mut T`, with the memory set to `value`. Ore has no uninitialized variables (`let` and `var` need an initializer), so heap memory starts initialized too. `alloc.create(Node)`, with a type, is an error that says to pass the initial value.
+  - `alloc.destroy(p)` takes a `*T` or `*mut T`.
+  - Not in M3: `alloc.alloc(T, n)`, `alloc.free(slice)` and `[]mut T`. They need a rule for the initial value of each element, and with M4's generics they can be ordinary std functions on the byte-level vtable.
+- **Test builtins:** `@expect(cond)` and `@expectEqual(expected, actual)`, in Zig's argument order. `@expectEqual` compares integers, floats, `bool` and `[]u8` (by bytes); a literal takes the type of the other side. They can be used in any function.
+  - `@testAllocator()` is the leak-checked allocator of the running test. It can be used only in a `test` block; other functions take an `Allocator` parameter.
 - **`extern fn` signatures** can use only integer, float, `bool` and `[*]T` types, and the function cannot be variadic. Calls go straight to the C symbol of the same name.
 - **Error recovery:** every stage reports all of its errors, sorted by position and deduplicated, at most 50.
   - The lexer skips the rest of a bad line.
@@ -104,6 +124,18 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
 - **An error returned from `main`** flushes stdout, writes `error: <Name>` to stderr, and in debug mode then `error return trace:` and one `file:line:col` line per entry, where the error started first. The exit status is 1. Safe and fast mode record no trace, so they print only the first line.
 - **Recursive types:** a struct or enum that contains itself by value (also through an array or `?T`) is an error. Through a pointer it is fine.
 - **`#line` directives** come before every generated statement so that debug info points to the `.ore` source.
+- **C names:** a function is `ore_f_name`, a method `ore_m_<len><Struct>_<method>` (the length keeps the names apart), and test `N` is `ore_t_N`.
+- **`dyn I` layout:** `struct { void *ptr; const struct ore_VT_I *vt; }`. The vtable has one function pointer per interface method, in declaration order. Each (interface, struct) pair that is converted gets one static vtable of thunks; a thunk casts `ptr` back to the struct pointer (or copies the value for `self: Self`) and calls the method.
+- **`General`** calls libc `malloc` and `free`.
+  - In debug mode it records each allocation with the position of the `create` call. Freed memory is kept until `deinit`, so an address is never reused and every double free is caught: it panics at the second `destroy` with `double free of memory allocated at F:L:C and already freed at F:L:C`. Freeing memory that this allocator did not allocate also panics.
+  - `deinit` writes `file:line:col: leak: N bytes allocated here were never freed` to stderr for each allocation that was not freed, in allocation order, then frees all memory. A leak does not change the exit status of a program; under `ore test` it fails the test.
+  - In safe and fast mode there are no records: `destroy` is `free`, `deinit` does nothing, and a double free is undefined behavior. Use-after-free is not detected in any mode.
+- **`Arena`** takes chunks of 4096 bytes (more for a larger value) from its backing allocator and bumps a pointer in the newest chunk. `destroy` does nothing; `deinit` gives every chunk back. A leaked arena shows up in its backing allocator as chunks allocated at the `create` that needed them.
+- Alignment is at most 16 bytes, which `malloc` gives. When an allocator returns no memory, `create` returns `AllocError.OutOfMemory`.
+- **`ore test`** compiles all tests of the file into one executable whose argument is the index of the test to run, and runs each selected test in its own process. So a panic, a failed assertion or a crash ends only that test.
+  - A failed assertion writes `file:line:col: assertion failed: <reason>` to stderr and exits with status 1. The reason is `condition is false` or `expected X, found Y`.
+  - After the test body returns, a returned error is reported as `main` reports it (with the error return trace in debug mode), and then the leaks of `@testAllocator()`. The test allocator records allocations in every mode.
+  - A test passes when its process exits with status 0. The output format and the `--json` schema are in the README.
 
 ## Differences from the design doc (to resolve later)
 
@@ -111,3 +143,7 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
 - The doc shows structs only as anonymous type expressions (`struct { ... }`, returned from type functions) with newline-separated fields. Stage0 uses a named declaration, `struct Name { ... }`. If type functions arrive, this might become `let Name = struct { ... }`.
 - The doc shows `defer` only with a call (`defer f.close()`). Stage0 also accepts an assignment or a block.
 - The doc has no `@` builtins. Its logging goes through `std.log`, and `std` does not exist yet. `@print` and `@println` are a stage0-only convenience until `std` lands.
+- The doc writes `std.heap.General` and `import std.mem.Allocator`. Stage0 predeclares `General`, `Arena` and `Allocator` until modules and `std` exist (M5).
+- The doc's `Allocator` interface has `alloc`, `resize` and `free`. Stage0's vtable has `alloc` and `free`, and Ore code uses the typed `create` and `destroy`.
+- The doc says `General` detects use-after-free in debug mode. Stage0 detects leaks and double frees only.
+- The doc says tests use a debug allocator by default. Stage0 spells it `@testAllocator()`, a builtin, until `std.testing` exists. Examples in doc comments do not run as tests yet.

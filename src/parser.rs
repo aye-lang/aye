@@ -11,7 +11,7 @@ use crate::diag::{Error, Result, Span};
 use crate::lexer::{Kw, Tok, Token};
 
 pub fn parse(tokens: Vec<Token>) -> std::result::Result<File, Vec<Error>> {
-    let mut p = Parser { toks: tokens, pos: 0, no_struct_lit: false, errors: Vec::new() };
+    let mut p = Parser { toks: tokens, pos: 0, no_struct_lit: false, errors: Vec::new(), tests: 0 };
     let f = p.file();
     if p.errors.is_empty() { Ok(f) } else { Err(p.errors) }
 }
@@ -23,16 +23,15 @@ struct Parser {
     /// starts the body rather than a struct literal (same rule as Go).
     no_struct_lit: bool,
     errors: Vec<Error>,
+    /// Number of `test` blocks so far.
+    tests: usize,
 }
 
 fn not_supported(kw: Kw, span: Span) -> Error {
     let what = match kw {
         Kw::Import => "`import` (modules)",
-        Kw::Interface => "`interface`",
-        Kw::Dyn => "`dyn`",
         Kw::Comptime => "`comptime`",
         Kw::Where => "`where`",
-        Kw::Test => "`test` blocks",
         _ => return Error::new(E0006, span, format!("unexpected `{}`", kw.as_str())),
     };
     Error::new(E0007, span, format!("{what} is not yet supported"))
@@ -42,10 +41,7 @@ fn not_supported(kw: Kw, span: Span) -> Error {
 const CATCH_PREC: u8 = 4;
 
 fn is_unsupported_kw(kw: Kw) -> bool {
-    matches!(
-        kw,
-        Kw::Import | Kw::Interface | Kw::Dyn | Kw::Comptime | Kw::Where | Kw::Test
-    )
+    matches!(kw, Kw::Import | Kw::Comptime | Kw::Where)
 }
 
 impl Parser {
@@ -165,7 +161,16 @@ impl Parser {
                     self.bump();
                     if matches!(
                         self.peek(),
-                        Tok::Kw(Kw::Fn | Kw::Pub | Kw::Extern | Kw::Struct | Kw::Enum | Kw::Error)
+                        Tok::Kw(
+                            Kw::Fn
+                                | Kw::Pub
+                                | Kw::Extern
+                                | Kw::Struct
+                                | Kw::Enum
+                                | Kw::Error
+                                | Kw::Interface
+                                | Kw::Test
+                        )
                     ) {
                         return;
                     }
@@ -215,15 +220,33 @@ impl Parser {
             Tok::Kw(Kw::Struct) => Ok(Item::Struct(self.struct_decl(is_pub)?)),
             Tok::Kw(Kw::Enum) => Ok(Item::Enum(self.enum_decl(is_pub)?)),
             Tok::Kw(Kw::Error) => Ok(Item::ErrorSet(self.error_decl(is_pub)?)),
+            Tok::Kw(Kw::Interface) => Ok(Item::Interface(self.interface_decl(is_pub)?)),
+            Tok::Kw(Kw::Test) if !is_pub => Ok(Item::Test(self.test_decl()?)),
             Tok::Kw(Kw::Let) | Tok::Kw(Kw::Var) => {
                 Err(Error::new(E0007, self.span(), "global variables are not yet supported"))
             }
             Tok::Kw(k) if is_unsupported_kw(k) => Err(not_supported(k, self.span())),
-            _ => Err(self.unexpected("declaration (`fn`, `extern fn`, `struct`, `enum` or `error`)")),
+            _ => Err(self.unexpected("declaration (`fn`, `extern fn`, `struct`, `enum`, `error`, `interface` or `test`)")),
         }
     }
 
     fn fn_decl(&mut self, is_pub: bool, is_extern: bool) -> Result<FnDecl> {
+        let mut f = self.fn_sig(is_pub, is_extern)?;
+        if is_extern {
+            if self.at(&Tok::LBrace) {
+                return Err(Error::new(E0011, self.span(), "`extern fn` cannot have a body"));
+            }
+        } else {
+            if !self.at(&Tok::LBrace) {
+                return Err(self.unexpected("`{` to start function body"));
+            }
+            f.body = Some(self.block()?);
+        }
+        Ok(f)
+    }
+
+    /// `fn name(params) ret`, without the body.
+    fn fn_sig(&mut self, is_pub: bool, is_extern: bool) -> Result<FnDecl> {
         self.expect(&Tok::Kw(Kw::Fn))?;
         let (name, span) = self.ident()?;
         self.expect(&Tok::LParen)?;
@@ -239,28 +262,92 @@ impl Parser {
         }
         self.expect(&Tok::RParen)?;
         let ret = match self.peek() {
-            Tok::LBrace | Tok::Semi | Tok::Eof => None,
+            Tok::LBrace | Tok::Semi | Tok::RBrace | Tok::Eof => None,
             _ => Some(self.type_expr()?),
         };
-        let body = if is_extern {
-            if self.at(&Tok::LBrace) {
-                return Err(Error::new(E0011, self.span(), "`extern fn` cannot have a body"));
-            }
-            None
-        } else {
-            if !self.at(&Tok::LBrace) {
-                return Err(self.unexpected("`{` to start function body"));
-            }
-            Some(self.block()?)
-        };
-        Ok(FnDecl { name, span, is_pub, is_extern, params, ret, body })
+        Ok(FnDecl { name, span, is_pub, is_extern, params, ret, body: None })
     }
 
+    /// `struct Name { fields and methods }`: fields are separated by `,` or
+    /// newlines; a method (`fn` or `pub fn`) ends with its block.
     fn struct_decl(&mut self, is_pub: bool) -> Result<StructDecl> {
         self.expect(&Tok::Kw(Kw::Struct))?;
         let (name, span) = self.ident()?;
-        let fields = self.field_list()?;
-        Ok(StructDecl { name, span, is_pub, fields })
+        self.expect(&Tok::LBrace)?;
+        let (mut fields, mut methods) = (Vec::new(), Vec::new());
+        loop {
+            self.skip_semis();
+            if self.eat(&Tok::RBrace) {
+                break;
+            }
+            if self.at(&Tok::Kw(Kw::Fn)) || self.at(&Tok::Kw(Kw::Pub)) {
+                let is_pub = self.eat(&Tok::Kw(Kw::Pub));
+                methods.push(self.fn_decl(is_pub, false)?);
+                if !self.at(&Tok::RBrace) {
+                    self.expect(&Tok::Semi)?;
+                }
+                continue;
+            }
+            let (fname, fspan) = self.ident()?;
+            self.expect(&Tok::Colon)?;
+            let ty = self.type_expr()?;
+            fields.push(FieldDecl { name: fname, span: fspan, ty });
+            match self.peek() {
+                Tok::Comma | Tok::Semi => {
+                    self.bump();
+                }
+                Tok::RBrace => {}
+                _ => return Err(self.unexpected("`,`, newline or `}` after struct field")),
+            }
+        }
+        Ok(StructDecl { name, span, is_pub, fields, methods })
+    }
+
+    /// `interface Name { fn m(self: *Self, ...) T ... }`, one method
+    /// signature per line.
+    fn interface_decl(&mut self, is_pub: bool) -> Result<InterfaceDecl> {
+        self.expect(&Tok::Kw(Kw::Interface))?;
+        let (name, span) = self.ident()?;
+        self.expect(&Tok::LBrace)?;
+        let mut methods = Vec::new();
+        loop {
+            self.skip_semis();
+            if self.eat(&Tok::RBrace) {
+                break;
+            }
+            if !self.at(&Tok::Kw(Kw::Fn)) {
+                return Err(self.unexpected("`fn` (an interface has only method signatures)"));
+            }
+            methods.push(self.fn_sig(false, false)?);
+            match self.peek() {
+                Tok::Semi => {
+                    self.bump();
+                }
+                Tok::RBrace => {}
+                Tok::LBrace => return Err(Error::new(E0006, self.span(), "an interface method has no body")),
+                _ => return Err(self.unexpected("newline or `}` after interface method")),
+            }
+        }
+        Ok(InterfaceDecl { name, span, is_pub, methods })
+    }
+
+    /// `test "name" { ... }`: a function `test#N() !void`.
+    fn test_decl(&mut self) -> Result<TestDecl> {
+        let span = self.expect(&Tok::Kw(Kw::Test))?;
+        let Tok::Str(bytes) = self.peek().clone() else {
+            return Err(self.unexpected("test name (a string literal)"));
+        };
+        self.bump();
+        if !self.at(&Tok::LBrace) {
+            return Err(self.unexpected("`{` to start test body"));
+        }
+        let body = Some(self.block()?);
+        let void = TypeExpr { kind: TypeExprKind::Named("void".to_string()), span };
+        let ret = Some(TypeExpr { kind: TypeExprKind::ErrorUnion(None, Box::new(void)), span });
+        let name = format!("test#{}", self.tests);
+        self.tests += 1;
+        let func = FnDecl { name, span, is_pub: false, is_extern: false, params: vec![], ret, body };
+        Ok(TestDecl { name: String::from_utf8_lossy(&bytes).into_owned(), func })
     }
 
     fn enum_decl(&mut self, is_pub: bool) -> Result<EnumDecl> {
@@ -396,6 +483,10 @@ impl Parser {
                 self.bump();
                 TypeExprKind::ErrorUnion(None, Box::new(self.type_expr()?))
             }
+            Tok::Kw(Kw::Dyn) => {
+                self.bump();
+                TypeExprKind::Dyn(self.ident()?.0)
+            }
             Tok::Kw(k) if is_unsupported_kw(k) => return Err(not_supported(k, span)),
             Tok::Kw(Kw::Struct) => {
                 return Err(Error::new(E0007, span, "anonymous struct types are not yet supported"));
@@ -509,7 +600,7 @@ impl Parser {
             }
             Tok::LBrace => StmtKind::Block(self.block()?),
             Tok::Kw(k) if is_unsupported_kw(k) => return Err(not_supported(k, span)),
-            Tok::Kw(Kw::Fn | Kw::Struct | Kw::Enum | Kw::Error | Kw::Pub | Kw::Extern) => {
+            Tok::Kw(Kw::Fn | Kw::Struct | Kw::Enum | Kw::Error | Kw::Pub | Kw::Extern | Kw::Interface | Kw::Test) => {
                 return Err(Error::new(E0010, span, "declarations are only allowed at the top level"));
             }
             _ => return self.simple_stmt(),
@@ -682,7 +773,10 @@ impl Parser {
                 Tok::Dot => {
                     self.bump();
                     let (name, span) = self.ident()?;
-                    if let ExprKind::Ident(enum_name) = &e.kind
+                    if self.at(&Tok::LParen) {
+                        let kind = ExprKind::MethodCall { base: Box::new(e), name, args: self.args()? };
+                        e = Expr { kind, span };
+                    } else if let ExprKind::Ident(enum_name) = &e.kind
                         && self.at(&Tok::LBrace)
                         && !self.no_struct_lit
                     {
@@ -930,8 +1024,8 @@ mod tests {
 
     #[test]
     fn unsupported_keywords() {
-        let e = parse_src("interface W {}").unwrap_err();
-        assert_eq!(e.msg, "`interface` is not yet supported");
+        let e = parse_src("import std").unwrap_err();
+        assert_eq!(e.msg, "`import` (modules) is not yet supported");
         let e = parse_src("fn f() {\n comptime x\n}").unwrap_err();
         assert_eq!(e.msg, "`comptime` is not yet supported");
     }

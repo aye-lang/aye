@@ -68,6 +68,34 @@ impl IntTy {
     }
 }
 
+/// The predeclared allocator types. Their methods are compiler intrinsics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BuiltinTy {
+    /// A data pointer and a vtable of byte-level `alloc` and `free`
+    /// functions, like `dyn`. Only `General` and `Arena` make one.
+    Allocator,
+    /// libc `malloc`/`free`; in debug mode it records each allocation's
+    /// site and reports leaks and double frees.
+    General,
+    /// Allocates from a backing allocator; `deinit` frees everything.
+    Arena,
+}
+
+impl BuiltinTy {
+    pub fn name(self) -> &'static str {
+        match self {
+            BuiltinTy::Allocator => "Allocator",
+            BuiltinTy::General => "General",
+            BuiltinTy::Arena => "Arena",
+        }
+    }
+}
+
+/// The error set of `Allocator.create`, predeclared. Its only error,
+/// `OutOfMemory`, has the error value 1.
+pub const ALLOC_ERROR: &str = "AllocError";
+pub const OUT_OF_MEMORY: u16 = 1;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FloatTy {
     F32,
@@ -98,6 +126,11 @@ pub enum Type {
     /// `E!T`: an error of set `E` (the name, as in `ErrorSet`) or a `T`.
     /// Only a function's return type.
     ErrorUnion(String, Box<Type>),
+    /// `dyn I`: a pointer to a value of a type that implements interface `I`,
+    /// and that type's vtable for `I`.
+    Dyn(String),
+    /// A predeclared allocator type.
+    Builtin(BuiltinTy),
     /// The type of something that already has a reported error.
     Error,
 }
@@ -136,6 +169,9 @@ impl Type {
             "f32" => Type::Float(FloatTy::F32),
             "f64" => Type::Float(FloatTy::F64),
             "bool" => Type::Bool,
+            "Allocator" => Type::Builtin(BuiltinTy::Allocator),
+            "General" => Type::Builtin(BuiltinTy::General),
+            "Arena" => Type::Builtin(BuiltinTy::Arena),
             _ => return None,
         })
     }
@@ -158,6 +194,8 @@ impl fmt::Display for Type {
             Type::Struct(n) | Type::Enum(n) | Type::ErrorSet(n) => f.write_str(n),
             Type::ErrorUnion(set, t) if set.starts_with(INFERRED) => write!(f, "!{t}"),
             Type::ErrorUnion(set, t) => write!(f, "{set}!{t}"),
+            Type::Dyn(i) => write!(f, "dyn {i}"),
+            Type::Builtin(b) => f.write_str(b.name()),
             Type::Error => f.write_str(ERROR_TY),
         }
     }
@@ -176,6 +214,33 @@ pub struct Program {
     /// Every error name; an error's value is its index plus one (0 means
     /// "no error"). The same name in two sets is the same error.
     pub errors: Vec<String>,
+    pub ifaces: Vec<IfaceDef>,
+    /// The (interface, struct) pairs that are converted to `dyn`; each one
+    /// needs a vtable.
+    pub vtables: Vec<(String, String)>,
+    /// Test names: test `i` is the function `test#i`.
+    pub tests: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IfaceDef {
+    pub name: String,
+    pub methods: Vec<IfaceMethod>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IfaceMethod {
+    pub name: String,
+    /// `self: *mut Self` (true) or `self: *Self`.
+    pub mutable: bool,
+    /// The parameters after `self`.
+    pub params: Vec<Type>,
+    pub ret: Type,
+}
+
+/// The function `name` is a test (`test#N`).
+pub fn is_test(name: &str) -> bool {
+    name.starts_with("test#")
 }
 
 #[derive(Debug, Clone)]
@@ -204,6 +269,7 @@ pub struct ExternFn {
     pub ret: Type,
 }
 
+/// A function's name is `f`, `Struct.method` or `test#N`.
 #[derive(Debug, Clone)]
 pub struct FnDef {
     pub name: String,
@@ -295,10 +361,34 @@ pub enum TExprKind {
     Try(Box<TExpr>),
     /// `x catch |e| body`; the type is the payload of `x`'s error union.
     Catch { expr: Box<TExpr>, capture: Option<VarId>, body: Box<TArmBody> },
+    /// A call through the vtable of a `dyn` value.
+    DynCall { recv: Box<TExpr>, method: String, args: Vec<TExpr> },
+    /// A `*T` or `*mut T` (T is the struct `strukt`) converted to `dyn I`.
+    ToDyn { ptr: Box<TExpr>, strukt: String },
+    /// `alloc.create(value)`: type `AllocError!*mut T`.
+    Create { alloc: Box<TExpr>, value: Box<TExpr> },
+    Intrinsic { op: Intrinsic, args: Vec<TExpr> },
     /// A `T` returned from an `E!T` function.
     OkWrap(Box<TExpr>),
     /// An error value returned from an `E!T` function.
     ErrWrap(Box<TExpr>),
+}
+
+/// Allocator methods and test builtins. Receivers are passed as pointers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Intrinsic {
+    GeneralInit,
+    GeneralAllocator,
+    GeneralDeinit,
+    ArenaInit,
+    ArenaAllocator,
+    ArenaDeinit,
+    /// `alloc.destroy(p)`: args are the allocator and the pointer.
+    Destroy,
+    TestAllocator,
+    Expect,
+    /// `@expectEqual(expected, actual)`
+    ExpectEqual,
 }
 
 #[derive(Debug, Clone)]
@@ -325,6 +415,17 @@ struct FnSig {
     is_extern: bool,
 }
 
+/// How a method takes its receiver, from the type of its first parameter.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Recv {
+    /// No `Self`, `*Self` or `*mut Self` first parameter: only `Type.f()`.
+    Static,
+    /// `self: Self`
+    Value,
+    /// `self: *Self` (false) or `self: *mut Self` (true).
+    Ptr(bool),
+}
+
 struct Checker<'a> {
     structs: HashMap<String, StructDef>,
     enums: HashMap<String, EnumDef>,
@@ -332,8 +433,14 @@ struct Checker<'a> {
     sets: HashMap<String, Vec<String>>,
     /// `Program::errors`.
     error_names: Vec<String>,
+    /// Functions by name: `f`, `Struct.method` and `test#N`.
     fns: HashMap<String, FnSig>,
-    fn_decls: HashMap<String, &'a ast::FnDecl>,
+    /// Each function's declaration and, for a method, its struct.
+    fn_decls: HashMap<String, (&'a ast::FnDecl, Option<String>)>,
+    /// The receiver of each method (`Struct.method`).
+    recvs: HashMap<String, Recv>,
+    ifaces: HashMap<String, IfaceDef>,
+    vtables: Vec<(String, String)>,
     /// Checked bodies; `None` while a body is being checked.
     bodies: HashMap<String, Option<FnDef>>,
     /// Top-level names (structs, enums, fns, extern fns) and where they are declared.
@@ -347,16 +454,24 @@ struct Checker<'a> {
     ret: Type,
     loop_depth: u32,
     in_defer: bool,
+    /// The struct whose method is checked (what `Self` means).
+    self_ty: Option<String>,
+    in_test: bool,
 }
 
-pub fn check(file: &ast::File) -> std::result::Result<Program, Vec<Error>> {
+/// Check a file. Without `require_main` (`ore test`, or `ore check` of a
+/// file with tests) the file does not need `pub fn main()`.
+pub fn check(file: &ast::File, require_main: bool) -> std::result::Result<Program, Vec<Error>> {
     let mut c = Checker {
         structs: HashMap::new(),
         enums: HashMap::new(),
-        sets: HashMap::new(),
-        error_names: Vec::new(),
+        sets: HashMap::from([(ALLOC_ERROR.to_string(), vec!["OutOfMemory".to_string()])]),
+        error_names: vec!["OutOfMemory".to_string()],
         fns: HashMap::new(),
         fn_decls: HashMap::new(),
+        recvs: HashMap::new(),
+        ifaces: HashMap::new(),
+        vtables: Vec::new(),
         bodies: HashMap::new(),
         top_spans: HashMap::new(),
         errors: Vec::new(),
@@ -366,8 +481,10 @@ pub fn check(file: &ast::File) -> std::result::Result<Program, Vec<Error>> {
         ret: Type::Void,
         loop_depth: 0,
         in_defer: false,
+        self_ty: None,
+        in_test: false,
     };
-    let p = c.program(file);
+    let p = c.program(file, require_main);
     if c.errors.is_empty() { Ok(p) } else { Err(c.errors) }
 }
 
@@ -462,17 +579,28 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn program(&mut self, file: &'a ast::File) -> Program {
+    fn program(&mut self, file: &'a ast::File, require_main: bool) -> Program {
         // 1. Top-level names. An item whose name is rejected is skipped.
         let mut items = Vec::new();
+        let mut tests: Vec<&'a ast::TestDecl> = Vec::new();
         for item in &file.items {
             let (name, span) = match item {
                 ast::Item::Struct(s) => (&s.name, s.span),
                 ast::Item::Enum(e) => (&e.name, e.span),
                 ast::Item::ErrorSet(e) => (&e.name, e.span),
                 ast::Item::Fn(f) => (&f.name, f.span),
+                ast::Item::Interface(i) => (&i.name, i.span),
+                ast::Item::Test(t) => {
+                    if tests.iter().any(|x| x.name == t.name) {
+                        self.report(Error::new(E0015, t.func.span, format!("test \"{}\" is defined more than once", t.name)));
+                        continue;
+                    }
+                    tests.push(t);
+                    items.push(item);
+                    continue;
+                }
             };
-            if Type::from_name(name).is_some() || matches!(name.as_str(), "true" | "false" | "null") {
+            if Type::from_name(name).is_some() || matches!(name.as_str(), "true" | "false" | "null" | "Self" | ALLOC_ERROR) {
                 self.report(Error::new(E0014, span, format!("`{name}` is a builtin name and cannot be redefined")));
                 continue;
             }
@@ -491,12 +619,15 @@ impl<'a> Checker<'a> {
                 ast::Item::ErrorSet(e) => {
                     self.sets.insert(e.name.clone(), vec![]);
                 }
-                ast::Item::Fn(_) => {}
+                ast::Item::Interface(i) => {
+                    self.ifaces.insert(i.name.clone(), IfaceDef { name: i.name.clone(), methods: vec![] });
+                }
+                ast::Item::Fn(_) | ast::Item::Test(_) => {}
             }
             items.push(item);
         }
         self.error_sets(&items);
-        // 2. Struct fields and enum variants.
+        // 2. Struct fields, enum variants and interface methods.
         for item in &items {
             match item {
                 ast::Item::Struct(s) => {
@@ -518,24 +649,50 @@ impl<'a> Checker<'a> {
                     }
                     self.enums.get_mut(&e.name).unwrap().variants = variants;
                 }
-                ast::Item::ErrorSet(_) | ast::Item::Fn(_) => {}
+                ast::Item::Interface(i) => {
+                    let methods = self.iface_methods(i);
+                    self.ifaces.get_mut(&i.name).unwrap().methods = methods;
+                }
+                ast::Item::ErrorSet(_) | ast::Item::Fn(_) | ast::Item::Test(_) => {}
             }
         }
         for item in &items {
             let (name, span) = match item {
                 ast::Item::Struct(s) => (&s.name, s.span),
                 ast::Item::Enum(e) => (&e.name, e.span),
-                ast::Item::ErrorSet(_) | ast::Item::Fn(_) => continue,
+                _ => continue,
             };
             if let Err(e) = self.check_recursive(name, name, span, &mut Vec::new()) {
                 self.report(e);
             }
         }
-        // 3. Function signatures.
+        // 3. Function, method and test signatures.
         let mut main_found = false;
         let mut externs = Vec::new();
+        let mut decls: Vec<(String, &'a ast::FnDecl, Option<String>)> = Vec::new();
         for item in &items {
-            let ast::Item::Fn(f) = item else { continue };
+            match item {
+                ast::Item::Fn(f) => decls.push((f.name.clone(), f, None)),
+                ast::Item::Struct(s) => {
+                    for m in &s.methods {
+                        if s.fields.iter().any(|f| f.name == m.name) {
+                            self.report(Error::new(E0015, m.span, format!("`{}` is both a field and a method of struct `{}`", m.name, s.name)));
+                            continue;
+                        }
+                        let key = format!("{}.{}", s.name, m.name);
+                        if decls.iter().any(|(k, ..)| *k == key) {
+                            self.report(Error::new(E0015, m.span, format!("duplicate method `{}` in struct `{}`", m.name, s.name)));
+                            continue;
+                        }
+                        decls.push((key, m, Some(s.name.clone())));
+                    }
+                }
+                ast::Item::Test(t) => decls.push((t.func.name.clone(), &t.func, None)),
+                _ => {}
+            }
+        }
+        for (key, f, owner) in &decls {
+            self.self_ty = owner.clone();
             let ffi_ok = |t: &Type| matches!(t, Type::Int(_) | Type::Float(_) | Type::Bool | Type::CPtr(_) | Type::Error);
             let mut params = Vec::new();
             for p in &f.params {
@@ -546,9 +703,18 @@ impl<'a> Checker<'a> {
                 params.push(ty);
             }
             let ret = match &f.ret {
-                Some(t) => self.resolve_ret(f, t),
+                Some(t) => self.resolve_ret(key, f.is_pub, t),
                 None => Type::Void,
             };
+            self.self_ty = None;
+            if let Some(s) = owner {
+                let recv = match params.first() {
+                    Some(Type::Struct(n)) if n == s => Recv::Value,
+                    Some(Type::Ptr(t, m)) if matches!(&**t, Type::Struct(n) if n == s) => Recv::Ptr(*m),
+                    _ => Recv::Static,
+                };
+                self.recvs.insert(key.clone(), recv);
+            }
             if f.is_extern {
                 if ret != Type::Void && !ffi_ok(&ret) {
                     let span = f.ret.as_ref().unwrap().span;
@@ -556,7 +722,7 @@ impl<'a> Checker<'a> {
                 }
                 externs.push(ExternFn { name: f.name.clone(), params: params.clone(), ret: ret.clone() });
             }
-            if f.name == "main" && !f.is_extern {
+            if key == "main" && !f.is_extern {
                 main_found = true;
                 let ret_ok = matches!(&ret, Type::Void | Type::Error)
                     || matches!(&ret, Type::ErrorUnion(_, p) if **p == Type::Void);
@@ -566,44 +732,77 @@ impl<'a> Checker<'a> {
                     self.report(Error::new(E0051, f.span, "`main` must take no parameters and return nothing or `!void`"));
                 }
             }
-            self.fns.insert(f.name.clone(), FnSig { params, ret, is_extern: f.is_extern });
+            self.fns.insert(key.clone(), FnSig { params, ret, is_extern: f.is_extern });
+            if !f.is_extern {
+                self.fn_decls.insert(key.clone(), (*f, owner.clone()));
+            }
         }
-        if !main_found {
+        if require_main && !main_found {
             self.report(Error::new(E0051, Span::new(1, 1), "no `pub fn main()` found"));
         }
         // 4. Bodies.
-        for item in &items {
-            if let ast::Item::Fn(f) = item
-                && !f.is_extern
-            {
-                self.fn_decls.insert(f.name.clone(), f);
-            }
+        let keys: Vec<&String> = decls.iter().filter(|(_, f, _)| !f.is_extern).map(|(k, ..)| k).collect();
+        for key in &keys {
+            let _ = self.ensure_body(key, Span::default());
         }
-        for item in &items {
-            if let ast::Item::Fn(f) = item
-                && !f.is_extern
-            {
-                let _ = self.ensure_body(&f.name, f.span);
-            }
-        }
-        let mut fns = Vec::new();
-        for item in &items {
-            if let ast::Item::Fn(f) = item
-                && !f.is_extern
-            {
-                fns.push(self.bodies.get_mut(&f.name).unwrap().take().unwrap());
-            }
-        }
+        let fns = keys.iter().map(|k| self.bodies.get_mut(*k).unwrap().take().unwrap()).collect();
         let mut structs = Vec::new();
         let mut enums = Vec::new();
+        let mut ifaces = Vec::new();
         for item in &items {
             match item {
                 ast::Item::Struct(s) => structs.push(self.structs[&s.name].clone()),
                 ast::Item::Enum(e) => enums.push(self.enums[&e.name].clone()),
-                ast::Item::ErrorSet(_) | ast::Item::Fn(_) => {}
+                ast::Item::Interface(i) => ifaces.push(self.ifaces[&i.name].clone()),
+                ast::Item::ErrorSet(_) | ast::Item::Fn(_) | ast::Item::Test(_) => {}
             }
         }
-        Program { structs, enums, externs, fns, errors: std::mem::take(&mut self.error_names) }
+        Program {
+            structs,
+            enums,
+            externs,
+            fns,
+            errors: std::mem::take(&mut self.error_names),
+            ifaces,
+            vtables: std::mem::take(&mut self.vtables),
+            tests: tests.iter().map(|t| t.name.clone()).collect(),
+        }
+    }
+
+    /// The method signatures of an interface. The first parameter of each
+    /// must be `self: *Self` or `self: *mut Self`.
+    fn iface_methods(&mut self, i: &ast::InterfaceDecl) -> Vec<IfaceMethod> {
+        let mut methods: Vec<IfaceMethod> = Vec::new();
+        for m in &i.methods {
+            if methods.iter().any(|x| x.name == m.name) {
+                self.report(Error::new(E0015, m.span, format!("duplicate method `{}` in interface `{}`", m.name, i.name)));
+                continue;
+            }
+            let mutable = match m.params.first().map(|p| &p.ty.kind) {
+                Some(TypeExprKind::Ptr(t, mutable)) if matches!(&t.kind, TypeExprKind::Named(n) if n == "Self") => *mutable,
+                _ => {
+                    self.report(Error::new(E0073, m.span, format!(
+                        "interface method `{}.{}` must take `self: *Self` or `self: *mut Self` as its first parameter",
+                        i.name, m.name
+                    )));
+                    continue;
+                }
+            };
+            let params = m.params[1..].iter().map(|p| self.resolve_or_report(&p.ty)).collect();
+            let ret = match &m.ret {
+                None => Type::Void,
+                Some(t @ ast::TypeExpr { kind: TypeExprKind::ErrorUnion(None, _), .. }) => {
+                    self.report(Error::new(E0065, t.span, format!(
+                        "interface method `{}.{}` must spell out its error set (`E!T`)",
+                        i.name, m.name
+                    )));
+                    Type::Error
+                }
+                Some(t) => self.resolve_ret(&m.name, false, t),
+            };
+            methods.push(IfaceMethod { name: m.name.clone(), mutable, params, ret });
+        }
+        methods
     }
 
     /// The errors of every error set. Each new error name gets the next
@@ -694,7 +893,7 @@ impl<'a> Checker<'a> {
     /// The return type of `f`. Only here can a type be an error union, and
     /// only there can its payload be `void`. `!T` gets a new, empty inferred
     /// set that its body fills in.
-    fn resolve_ret(&mut self, f: &ast::FnDecl, t: &ast::TypeExpr) -> Type {
+    fn resolve_ret(&mut self, name: &str, is_pub: bool, t: &ast::TypeExpr) -> Type {
         let TypeExprKind::ErrorUnion(set, payload) = &t.kind else {
             return self.resolve_or_report(t);
         };
@@ -711,14 +910,14 @@ impl<'a> Checker<'a> {
                 }
             },
             None => {
-                if f.is_pub && f.name != "main" {
+                if is_pub && name != "main" {
                     self.report(Error::new(
                         E0065,
                         t.span,
                         format!("a `pub` function must spell out its error set: write `ErrorSet!{payload}`, not `!{payload}`"),
                     ));
                 }
-                let set = format!("{INFERRED}{}", f.name);
+                let set = format!("{INFERRED}{name}");
                 self.sets.insert(set.clone(), vec![]);
                 set
             }
@@ -779,8 +978,22 @@ impl<'a> Checker<'a> {
                 None if self.structs.contains_key(n) => Type::Struct(n.clone()),
                 None if self.enums.contains_key(n) => Type::Enum(n.clone()),
                 None if self.sets.contains_key(n) => Type::ErrorSet(n.clone()),
+                None if n == "Self" => match &self.self_ty {
+                    Some(s) => Type::Struct(s.clone()),
+                    None => return err(E0017, t.span, "`Self` can only be used inside a struct (and as `*Self` or `*mut Self` in an interface method's `self` parameter)"),
+                },
+                None if self.ifaces.contains_key(n) => {
+                    return err(E0017, t.span, format!("`{n}` is an interface, not a type: write `dyn {n}`"));
+                }
                 None => return err(E0017, t.span, format!("unknown type `{n}`")),
             },
+            TypeExprKind::Dyn(n) => {
+                if !self.ifaces.contains_key(n) {
+                    let what = if self.top_spans.contains_key(n) || Type::from_name(n).is_some() { "is not an interface" } else { "is not defined" };
+                    return err(E0017, t.span, format!("`dyn {n}`: `{n}` {what}"));
+                }
+                Type::Dyn(n.clone())
+            }
             TypeExprKind::Array(n, elem) => Type::Array(Box::new(self.resolve_type(elem)?), *n),
             TypeExprKind::Slice(elem) => Type::Slice(Box::new(self.resolve_type(elem)?)),
             TypeExprKind::CPtr(elem) => Type::CPtr(Box::new(self.resolve_type(elem)?)),
@@ -858,15 +1071,20 @@ impl<'a> Checker<'a> {
             self.loop_depth,
             self.in_defer,
             self.failures,
+            self.self_ty.take(),
+            self.in_test,
         );
-        let def = self.fn_body(self.fn_decls[name]);
-        (self.vars, self.scopes, self.ret, self.loop_depth, self.in_defer, self.failures) = saved;
+        let def = self.fn_body(name);
+        (self.vars, self.scopes, self.ret, self.loop_depth, self.in_defer, self.failures, self.self_ty, self.in_test) = saved;
         self.bodies.insert(name.to_string(), Some(def));
         Ok(())
     }
 
-    fn fn_body(&mut self, f: &ast::FnDecl) -> FnDef {
-        let sig = self.fns[&f.name].clone();
+    fn fn_body(&mut self, name: &str) -> FnDef {
+        let (f, owner) = self.fn_decls[name].clone();
+        let sig = self.fns[name].clone();
+        self.self_ty = owner;
+        self.in_test = is_test(name);
         self.vars.clear();
         self.scopes = vec![HashMap::new()];
         self.ret = sig.ret.clone();
@@ -882,16 +1100,16 @@ impl<'a> Checker<'a> {
         if self.failures == failures && needs_value(&sig.ret) && !block_returns(&body, false) {
             self.report(Error::new(E0050, 
                 f.span,
-                format!("function `{}` must return a value of type `{}` on every path", f.name, sig.ret),
+                format!("function `{name}` must return a value of type `{}` on every path", sig.ret),
             ));
         }
         FnDef {
-            name: f.name.clone(),
+            name: name.to_string(),
             params,
             ret: sig.ret,
             vars: std::mem::take(&mut self.vars),
             body,
-            is_main: f.name == "main",
+            is_main: name == "main",
         }
     }
 
@@ -1057,7 +1275,11 @@ impl<'a> Checker<'a> {
     fn expr_stmt(&mut self, e: &ast::Expr) -> Result<TExpr> {
         match &e.kind {
             ExprKind::Match { .. } => self.match_expr(e, None, true),
-            ExprKind::Call { .. } | ExprKind::Builtin { .. } | ExprKind::Try(_) | ExprKind::Catch { .. } => {
+            ExprKind::Call { .. }
+            | ExprKind::MethodCall { .. }
+            | ExprKind::Builtin { .. }
+            | ExprKind::Try(_)
+            | ExprKind::Catch { .. } => {
                 let t = self.expr(e, None)?;
                 self.handled(t)
             }
@@ -1069,7 +1291,8 @@ impl<'a> Checker<'a> {
     fn handled(&self, t: TExpr) -> Result<TExpr> {
         if matches!(t.ty, Type::ErrorUnion(..)) {
             let what = match &t.kind {
-                TExprKind::Call { name, .. } => format!("`{name}` returns"),
+                TExprKind::Call { name, .. } | TExprKind::DynCall { method: name, .. } => format!("`{name}` returns"),
+                TExprKind::Create { .. } => "`create` returns".to_string(),
                 _ => "this expression has type".to_string(),
             };
             return err(E0061, t.span, format!("unhandled error: {what} `{}` (handle the error with `try` or `catch`)", t.ty));
@@ -1234,11 +1457,12 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Require `t` to have type `ty`. Three implicit coercions apply: a `T`
+    /// Require `t` to have type `ty`. Four implicit coercions apply: a `T`
     /// is wrapped where `?T` is expected, a `*mut T` is accepted where `*T`
-    /// is expected, and an error value is accepted by an error set that has
-    /// all of its errors.
-    fn coerce(&self, t: TExpr, ty: &Type) -> Result<TExpr> {
+    /// is expected, an error value is accepted by an error set that has
+    /// all of its errors, and a pointer to a struct that implements `I` is
+    /// accepted where `dyn I` is expected.
+    fn coerce(&mut self, t: TExpr, ty: &Type) -> Result<TExpr> {
         if t.ty == *ty {
             return Ok(t);
         }
@@ -1258,7 +1482,67 @@ impl<'a> Checker<'a> {
         {
             return Ok(TExpr { ty: ty.clone(), ..t });
         }
+        if let Type::Dyn(iface) = ty {
+            if let Type::Ptr(inner, mutable) = &t.ty
+                && let Type::Struct(s) = &**inner
+            {
+                let s = s.clone();
+                self.implements(&s, iface, *mutable, t.span)?;
+                let pair = (iface.clone(), s.clone());
+                if !self.vtables.contains(&pair) {
+                    self.vtables.push(pair);
+                }
+                let span = t.span;
+                return Ok(TExpr { kind: TExprKind::ToDyn { ptr: Box::new(t), strukt: s }, ty: ty.clone(), span });
+            }
+            if let Type::Struct(_) = &t.ty {
+                return err(E0023, t.span, format!(
+                    "mismatched types: expected `{ty}`, found `{}` (a `dyn` value points to its data: write `&mut x` or `&x`)",
+                    t.ty
+                ));
+            }
+        }
         Err(mismatch(t.span, ty, &t.ty))
+    }
+
+    /// Does struct `s` implement interface `iface`, for a `dyn` made from a
+    /// `*mut s` (`mutable`) or `*s`? It must have every method of the
+    /// interface, with the same parameter and return types.
+    fn implements(&self, s: &str, iface: &str, mutable: bool, span: Span) -> Result<()> {
+        let show_recv = |r: Recv| match r {
+            Recv::Value => "Self",
+            Recv::Ptr(false) => "*Self",
+            _ => "*mut Self",
+        };
+        let show = |recv: Option<&str>, params: &[Type], ret: &Type| {
+            let ps: Vec<String> = recv.map(str::to_string).into_iter().chain(params.iter().map(|p| p.to_string())).collect();
+            if *ret == Type::Void { format!("fn({})", ps.join(", ")) } else { format!("fn({}) {ret}", ps.join(", ")) }
+        };
+        let no = |why: String| err(E0072, span, format!("`{s}` does not implement `{iface}`: {why}"));
+        for m in &self.ifaces[iface].methods {
+            let key = format!("{s}.{}", m.name);
+            let (Some(sig), Some(&recv)) = (self.fns.get(&key), self.recvs.get(&key)) else {
+                return no(format!("it has no method `{}`", m.name));
+            };
+            let want = show(Some(if m.mutable { "*mut Self" } else { "*Self" }), &m.params, &m.ret);
+            if recv == Recv::Static || sig.params[1..] != m.params[..] || sig.ret != m.ret {
+                let have = match recv {
+                    Recv::Static => show(None, &sig.params, &sig.ret),
+                    r => show(Some(show_recv(r)), &sig.params[1..], &sig.ret),
+                };
+                return no(format!("method `{}` is `{have}`, but `{iface}` needs `{want}`", m.name));
+            }
+            if recv == Recv::Ptr(true) && !m.mutable {
+                return no(format!("method `{}` takes `self: *mut Self`, but `{iface}` declares `self: *Self`", m.name));
+            }
+            if recv == Recv::Ptr(true) && !mutable {
+                return err(E0072, span, format!(
+                    "a `dyn {iface}` made from a read-only pointer cannot call `{s}.{}`, which takes `self: *mut Self` (use `&mut`)",
+                    m.name
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Check an expression that must produce a value (not a void call, and
@@ -1351,27 +1635,56 @@ impl<'a> Checker<'a> {
                 None if self.fns.contains_key(name) => {
                     return err(E0020, span, format!("function `{name}` is not a value (call it with `{name}(...)`)"));
                 }
+                None if self.is_type_name(name) => return err(E0074, span, format!("`{name}` is a type, not a value")),
                 None => return err(E0018, span, format!("undefined variable `{name}`")),
             },
             ExprKind::Call { name, args } => {
-                let Some(sig) = self.fns.get(name).cloned() else {
+                if !self.fns.contains_key(name) {
                     return err(E0019, span, format!("undefined function `{name}`"));
+                }
+                return self.call(name, None, args, span);
+            }
+            ExprKind::MethodCall { base, name, args } => return self.method_call(base, name, args, span),
+            ExprKind::Builtin { name, args } if matches!(name.as_str(), "expect" | "expectEqual" | "testAllocator") => {
+                let n = match name.as_str() {
+                    "expect" => 1,
+                    "expectEqual" => 2,
+                    _ => 0,
                 };
-                if let Type::ErrorUnion(set, _) = &sig.ret
-                    && set.starts_with(INFERRED)
-                    && !sig.is_extern
-                {
-                    self.ensure_body(name, span)?;
+                if args.len() != n {
+                    let what = ["no arguments", "one argument", "two arguments"][n];
+                    return err(E0022, span, format!("`@{name}` takes {what}"));
                 }
-                if args.len() != sig.params.len() {
-                    return err(E0029, span, format!(
-                        "function `{name}` takes {} argument(s) but {} were given",
-                        sig.params.len(),
-                        args.len()
-                    ));
+                match name.as_str() {
+                    "expect" => {
+                        let c = self.expect(&args[0], &Type::Bool)?;
+                        (TExprKind::Intrinsic { op: Intrinsic::Expect, args: vec![c] }, Type::Void)
+                    }
+                    "expectEqual" => {
+                        let (want, got) = self.operand_pair(&args[0], &args[1], None)?;
+                        if want.ty != got.ty {
+                            return err(E0023, span, format!(
+                                "mismatched types in `@expectEqual`: `{}` and `{}` (use `as` to convert)",
+                                want.ty, got.ty
+                            ));
+                        }
+                        let ok = match &want.ty {
+                            Type::Int(_) | Type::Float(_) | Type::Bool => true,
+                            Type::Slice(el) => **el == Type::Int(IntTy::U8),
+                            _ => false,
+                        };
+                        if !ok {
+                            return err(E0022, span, format!("`@expectEqual` cannot compare values of type `{}`", want.ty));
+                        }
+                        (TExprKind::Intrinsic { op: Intrinsic::ExpectEqual, args: vec![want, got] }, Type::Void)
+                    }
+                    _ => {
+                        if !self.in_test {
+                            return err(E0075, span, "`@testAllocator()` can only be used in a `test` block (pass the allocator to other functions)");
+                        }
+                        (TExprKind::Intrinsic { op: Intrinsic::TestAllocator, args: vec![] }, Type::Builtin(BuiltinTy::Allocator))
+                    }
                 }
-                let args = args.iter().zip(&sig.params).map(|(a, p)| self.expect(a, p)).collect::<Result<_>>()?;
-                (TExprKind::Call { name: name.clone(), is_extern: sig.is_extern, args }, sig.ret)
             }
             ExprKind::Builtin { name, args } => {
                 let newline = match name.as_str() {
@@ -1573,6 +1886,9 @@ impl<'a> Checker<'a> {
                     Type::Struct(sname) => {
                         let def = &self.structs[sname];
                         let Some(index) = def.fields.iter().position(|(n, _)| n == name) else {
+                            if self.recvs.contains_key(&format!("{sname}.{name}")) {
+                                return err(E0038, span, format!("`{name}` is a method of struct `{sname}`, not a field: call it with `.{name}(...)`"));
+                            }
                             return err(E0038, span, format!("struct `{sname}` has no field `{name}`"));
                         };
                         let ty = def.fields[index].1.clone();
@@ -1631,6 +1947,10 @@ impl<'a> Checker<'a> {
                 (TExprKind::Slice { base: Box::new(b), lo, hi }, Type::Slice(Box::new(elem)))
             }
             ExprKind::StructLit { name, fields } => {
+                let name = &match (name.as_str(), &self.self_ty) {
+                    ("Self", Some(s)) => s.clone(),
+                    _ => name.clone(),
+                };
                 let Some(def) = self.structs.get(name).cloned() else {
                     return err(E0017, span, format!("unknown struct `{name}`"));
                 };
@@ -1663,6 +1983,217 @@ impl<'a> Checker<'a> {
             }
         };
         Ok(TExpr { kind, ty, span })
+    }
+
+    /// Does `name` name a type (not a value)?
+    fn is_type_name(&self, name: &str) -> bool {
+        Type::from_name(name).is_some()
+            || name == "Self"
+            || self.structs.contains_key(name)
+            || self.enums.contains_key(name)
+            || self.sets.contains_key(name)
+            || self.ifaces.contains_key(name)
+    }
+
+    /// A call of the function `key` (`f` or `Struct.method`). `recv` is the
+    /// receiver of a method call, passed as the first argument.
+    fn call(&mut self, key: &str, recv: Option<TExpr>, args: &[ast::Expr], span: Span) -> Result<TExpr> {
+        let sig = self.fns[key].clone();
+        if let Type::ErrorUnion(set, _) = &sig.ret
+            && set.starts_with(INFERRED)
+            && !sig.is_extern
+        {
+            self.ensure_body(key, span)?;
+        }
+        let skip = recv.is_some() as usize;
+        if args.len() + skip != sig.params.len() {
+            return err(E0029, span, format!(
+                "function `{key}` takes {} argument(s) but {} were given",
+                sig.params.len() - skip,
+                args.len()
+            ));
+        }
+        let mut targs = Vec::new();
+        if let Some(r) = recv {
+            targs.push(self.coerce(r, &sig.params[0])?);
+        }
+        for (a, p) in args.iter().zip(&sig.params[skip..]) {
+            targs.push(self.expect(a, p)?);
+        }
+        Ok(TExpr { kind: TExprKind::Call { name: key.to_string(), is_extern: sig.is_extern, args: targs }, ty: sig.ret, span })
+    }
+
+    /// `base.name(args)`: a static call `Type.name(args)`, a method call on a
+    /// struct, a call through a `dyn`, or an allocator method.
+    fn method_call(&mut self, base: &ast::Expr, name: &str, args: &[ast::Expr], span: Span) -> Result<TExpr> {
+        if let ExprKind::Ident(tn) = &base.kind
+            && self.lookup(tn).is_none()
+            && self.is_type_name(tn)
+        {
+            let tn = match (tn.as_str(), &self.self_ty) {
+                ("Self", Some(s)) => s.clone(),
+                _ => tn.clone(),
+            };
+            if let Some(Type::Builtin(b)) = Type::from_name(&tn) {
+                return self.builtin_static(b, name, args, span);
+            }
+            let key = format!("{tn}.{name}");
+            if !self.structs.contains_key(&tn) || !self.fns.contains_key(&key) {
+                let what = if self.structs.contains_key(&tn) { "struct" } else { "type" };
+                return err(E0071, span, format!("{what} `{tn}` has no method `{name}`"));
+            }
+            return self.call(&key, None, args, span);
+        }
+        let recv = self.value(base, None)?;
+        let inner = match &recv.ty {
+            Type::Ptr(t, _) => (**t).clone(),
+            t => t.clone(),
+        };
+        let deref = |r: TExpr| match &r.ty {
+            Type::Ptr(t, _) => {
+                let (ty, span) = ((**t).clone(), r.span);
+                TExpr { kind: TExprKind::Deref(Box::new(r)), ty, span }
+            }
+            _ => r,
+        };
+        match inner {
+            Type::Struct(s) => {
+                let key = format!("{s}.{name}");
+                let Some(&r) = self.recvs.get(&key) else {
+                    let hint = if self.structs[&s].fields.iter().any(|(f, _)| f == name) { " (it has a field of that name)" } else { "" };
+                    return err(E0071, span, format!("struct `{s}` has no method `{name}`{hint}"));
+                };
+                let recv = match r {
+                    Recv::Static => {
+                        return err(E0073, span, format!("`{key}` has no `self` parameter: call it as `{key}(...)`"));
+                    }
+                    Recv::Value => deref(recv),
+                    Recv::Ptr(m) => self.receiver_ptr(recv, m, name)?,
+                };
+                self.call(&key, Some(recv), args, span)
+            }
+            Type::Dyn(iface) => {
+                let recv = deref(recv);
+                let Some(m) = self.ifaces[&iface].methods.iter().find(|m| m.name == name).cloned() else {
+                    return err(E0071, span, format!("interface `{iface}` has no method `{name}`"));
+                };
+                if args.len() != m.params.len() {
+                    return err(E0029, span, format!(
+                        "method `{iface}.{name}` takes {} argument(s) but {} were given",
+                        m.params.len(),
+                        args.len()
+                    ));
+                }
+                let args = args.iter().zip(&m.params).map(|(a, p)| self.expect(a, p)).collect::<Result<_>>()?;
+                let kind = TExprKind::DynCall { recv: Box::new(recv), method: name.to_string(), args };
+                Ok(TExpr { kind, ty: m.ret, span })
+            }
+            Type::Builtin(b) => self.builtin_method(b, recv, name, args, span),
+            t => err(E0071, span, format!("type `{t}` has no method `{name}`")),
+        }
+    }
+
+    /// The receiver `recv` of a method that takes `self: *Self` or (with
+    /// `mutable`) `self: *mut Self`: a pointer is passed as is, and a place
+    /// is passed as `&place` or `&mut place`.
+    fn receiver_ptr(&self, recv: TExpr, mutable: bool, method: &str) -> Result<TExpr> {
+        match &recv.ty {
+            Type::Ptr(t, false) if mutable => err(E0033, recv.span, format!(
+                "method `{method}` takes `self: *mut Self`, but the receiver is a read-only pointer `{}` (use `*mut {t}`)",
+                recv.ty
+            )),
+            Type::Ptr(..) => Ok(recv),
+            _ => {
+                if !Self::is_lvalue(&recv) {
+                    let s = if mutable { "*mut Self" } else { "*Self" };
+                    return err(E0035, recv.span, format!(
+                        "cannot call `{method}` on a temporary value: it takes `self: {s}` (store the value in a variable first)"
+                    ));
+                }
+                if mutable {
+                    self.check_mutable(&recv, true).map_err(|e| Error {
+                        msg: format!("method `{method}` takes `self: *mut Self`: {}", e.msg),
+                        ..e
+                    })?;
+                }
+                let (ty, span) = (Type::Ptr(Box::new(recv.ty.clone()), mutable), recv.span);
+                Ok(TExpr { kind: TExprKind::AddrOf(Box::new(recv)), ty, span })
+            }
+        }
+    }
+
+    /// `General.init()` and `Arena.init(backing)`.
+    fn builtin_static(&mut self, b: BuiltinTy, name: &str, args: &[ast::Expr], span: Span) -> Result<TExpr> {
+        let (op, params, ty) = match (b, name) {
+            (BuiltinTy::General, "init") => (Intrinsic::GeneralInit, vec![], b),
+            (BuiltinTy::Arena, "init") => (Intrinsic::ArenaInit, vec![Type::Builtin(BuiltinTy::Allocator)], b),
+            _ => return err(E0071, span, format!("type `{}` has no method `{name}`", b.name())),
+        };
+        if args.len() != params.len() {
+            return err(E0029, span, format!(
+                "function `{}.{name}` takes {} argument(s) but {} were given",
+                b.name(),
+                params.len(),
+                args.len()
+            ));
+        }
+        let args = args.iter().zip(&params).map(|(a, p)| self.expect(a, p)).collect::<Result<_>>()?;
+        Ok(TExpr { kind: TExprKind::Intrinsic { op, args }, ty: Type::Builtin(ty), span })
+    }
+
+    /// The methods of `General` and `Arena` (`allocator`, `deinit`) and of
+    /// `Allocator` (`create`, `destroy`).
+    fn builtin_method(&mut self, b: BuiltinTy, recv: TExpr, name: &str, args: &[ast::Expr], span: Span) -> Result<TExpr> {
+        let n = if b == BuiltinTy::Allocator { 1 } else { 0 };
+        let known = match b {
+            BuiltinTy::Allocator => matches!(name, "create" | "destroy"),
+            _ => matches!(name, "allocator" | "deinit" | "init"),
+        };
+        if !known {
+            return err(E0071, span, format!("type `{}` has no method `{name}`", b.name()));
+        }
+        if name == "init" {
+            return err(E0073, span, format!("`{0}.init` has no `self` parameter: call it as `{0}.init(...)`", b.name()));
+        }
+        if args.len() != n {
+            return err(E0029, span, format!("method `{}.{name}` takes {n} argument(s) but {} were given", b.name(), args.len()));
+        }
+        if b != BuiltinTy::Allocator {
+            let general = b == BuiltinTy::General;
+            let (op, ty) = match name {
+                "allocator" if general => (Intrinsic::GeneralAllocator, Type::Builtin(BuiltinTy::Allocator)),
+                "allocator" => (Intrinsic::ArenaAllocator, Type::Builtin(BuiltinTy::Allocator)),
+                _ if general => (Intrinsic::GeneralDeinit, Type::Void),
+                _ => (Intrinsic::ArenaDeinit, Type::Void),
+            };
+            let r = self.receiver_ptr(recv, true, name)?;
+            return Ok(TExpr { kind: TExprKind::Intrinsic { op, args: vec![r] }, ty, span });
+        }
+        let alloc = match &recv.ty {
+            Type::Ptr(t, _) => {
+                let (ty, span) = ((**t).clone(), recv.span);
+                TExpr { kind: TExprKind::Deref(Box::new(recv)), ty, span }
+            }
+            _ => recv,
+        };
+        if name == "create" {
+            if let ExprKind::Ident(n) = &strip_parens(&args[0]).kind
+                && self.lookup(n).is_none()
+                && self.is_type_name(n)
+            {
+                return err(E0074, args[0].span, format!(
+                    "`{n}` is a type, not a value: `create` takes the initial value, e.g. `alloc.create({n} {{ ... }})`"
+                ));
+            }
+            let value = self.value(&args[0], None)?;
+            let ty = Type::ErrorUnion(ALLOC_ERROR.to_string(), Box::new(Type::Ptr(Box::new(value.ty.clone()), true)));
+            return Ok(TExpr { kind: TExprKind::Create { alloc: Box::new(alloc), value: Box::new(value) }, ty, span });
+        }
+        let p = self.value(&args[0], None)?;
+        if !matches!(p.ty, Type::Ptr(..)) {
+            return err(E0023, p.span, format!("mismatched types: `destroy` needs a pointer from `create`, found `{}`", p.ty));
+        }
+        Ok(TExpr { kind: TExprKind::Intrinsic { op: Intrinsic::Destroy, args: vec![alloc, p] }, ty: Type::Void, span })
     }
 
     /// Field initializers of a struct or variant literal, in source order.

@@ -1320,6 +1320,141 @@ pub fn main() {
 }
 "#,
 }
+E0071 = 71 {
+    "unknown method",
+    "The type has no method with this name. Methods are the functions declared in a struct body; `dyn I` has the methods of interface `I`; `Allocator` has `create` and `destroy`, and `General` and `Arena` have `init`, `allocator` and `deinit`. Check the spelling, or declare the method in the struct.",
+    r#"struct Counter {
+    n: i32
+}
+
+pub fn main() {
+    var c = Counter { n: 0 }
+    c.bump()
+}
+"#,
+    r#"struct Counter {
+    n: i32
+
+    fn bump(self: *mut Self) {
+        self.n += 1
+    }
+}
+
+pub fn main() {
+    var c = Counter { n: 0 }
+    c.bump()
+}
+"#,
+}
+E0072 = 72 {
+    "interface not implemented",
+    "A pointer to a struct converts to `dyn I` only when the struct has every method of interface `I`, with the same parameter and return types; no declaration is needed. A method that takes `self: *mut Self` needs a `*mut` pointer (`&mut x`) and an interface method declared with `self: *mut Self`.",
+    r#"interface Shape {
+    fn area(self: *Self) f64
+}
+
+struct Square {
+    side: f64
+}
+
+fn show(s: dyn Shape) {
+    @println(s.area())
+}
+
+pub fn main() {
+    var sq = Square { side: 2.0 }
+    show(&sq)
+}
+"#,
+    r#"interface Shape {
+    fn area(self: *Self) f64
+}
+
+struct Square {
+    side: f64
+
+    fn area(self: *Self) f64 {
+        return self.side * self.side
+    }
+}
+
+fn show(s: dyn Shape) {
+    @println(s.area())
+}
+
+pub fn main() {
+    var sq = Square { side: 2.0 }
+    show(&sq)
+}
+"#,
+}
+E0073 = 73 {
+    "invalid method receiver",
+    "`x.f()` calls a method whose first parameter is `self: Self`, `self: *Self` or `self: *mut Self`; a function in a struct without such a parameter is called as `Type.f()`. An interface method must take `self: *Self` or `self: *mut Self` first.",
+    r#"struct Counter {
+    n: i32
+
+    fn new() Self {
+        return Self { n: 0 }
+    }
+}
+
+pub fn main() {
+    var c = Counter { n: 1 }
+    let d = c.new()
+}
+"#,
+    r#"struct Counter {
+    n: i32
+
+    fn new() Self {
+        return Self { n: 0 }
+    }
+}
+
+pub fn main() {
+    let d = Counter.new()
+}
+"#,
+}
+E0074 = 74 {
+    "type used as a value",
+    "A type name appears where a value is expected. Write a value of the type instead, such as a struct literal `Node { ... }`. `alloc.create` takes the initial value: `alloc.create(Node { ... })`, not `alloc.create(Node)`.",
+    r#"struct Point { x: i32, y: i32 }
+
+pub fn main() {
+    let p = Point
+}
+"#,
+    r#"struct Point { x: i32, y: i32 }
+
+pub fn main() {
+    let p = Point { x: 0, y: 0 }
+}
+"#,
+}
+E0075 = 75 {
+    "test builtin outside a `test` block",
+    "`@testAllocator()` is the leak-checked allocator of a `test` block, so it can only be used in one. Other functions take an `Allocator` parameter; pass it the test allocator.",
+    r#"fn make(n: i64) AllocError!*mut i64 {
+    return @testAllocator().create(n)
+}
+
+test "make" {
+    let p = try make(1)
+}
+"#,
+    r#"fn make(alloc: Allocator, n: i64) AllocError!*mut i64 {
+    return alloc.create(n)
+}
+
+test "make" {
+    let alloc = @testAllocator()
+    let p = try make(alloc, 1)
+    defer alloc.destroy(p)
+}
+"#,
+}
 }
 
 #[cfg(test)]

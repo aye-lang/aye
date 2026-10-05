@@ -1,0 +1,49 @@
+// Acceptance (M3): a linked list built in an `Arena` and freed with one
+// `deinit`. The arena gets its memory from a `General`, which reports leaks
+// in debug mode; this program has none, so stderr stays empty.
+
+struct Node {
+    value: i64
+    next: ?*mut Node
+}
+
+// The list n-1, n-2, ..., 0, allocated in `alloc`.
+fn build(alloc: Allocator, n: i64) AllocError!?*mut Node {
+    var head: ?*mut Node = null
+    for i in 0..n {
+        head = try alloc.create(Node { value: i, next: head })
+    }
+    return head
+}
+
+fn sum(list: ?*mut Node) i64 {
+    var total: i64 = 0
+    var cur = list
+    while cur != null {
+        if cur |node| {
+            total += node.value
+            cur = node.next
+        }
+    }
+    return total
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var arena = Arena.init(gpa.allocator())
+    defer arena.deinit()
+
+    let list = try build(arena.allocator(), 1000)
+    @println(sum(list))
+    if list |first| {
+        @println(first.value)
+    }
+}
+
+// `ore run` and `ore build` ignore test blocks.
+test "a short list" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    @expectEqual(3, sum(try build(arena.allocator(), 3)))
+}

@@ -12,11 +12,12 @@
 //!   records error return trace entries (`TracePush`, `TraceRestore`);
 //! - makes runtime checks explicit: checked arithmetic carries its source
 //!   span, and indexing carries the length to check against;
-//! - lowers `match` to an `if` chain on the enum tag.
+//! - lowers `match` to an `if` chain on the enum tag;
+//! - lowers `alloc.create(v)` to an allocation, a null test and a store.
 
 use crate::ast::{BinOp, UnOp};
 use crate::diag::Span;
-use crate::sema::{self, FloatTy, IntTy, TArmBody, TExpr, TExprKind, TStmt, TStmtKind, Type};
+use crate::sema::{self, FloatTy, Intrinsic, IntTy, TArmBody, TExpr, TExprKind, TStmt, TStmtKind, Type};
 use std::collections::HashMap;
 
 pub type LocalId = usize;
@@ -29,6 +30,11 @@ pub struct Program {
     pub funcs: Vec<Func>,
     /// Error names; an error's value is its index plus one.
     pub errors: Vec<String>,
+    pub ifaces: Vec<sema::IfaceDef>,
+    /// (interface, struct) pairs that need a vtable.
+    pub vtables: Vec<(String, String)>,
+    /// Test names; test `i` is the function `test#i`.
+    pub tests: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +134,15 @@ pub enum Rvalue {
     Not(Operand),
     Cast { val: Operand, from: Type, to: Type, span: Span },
     Call { name: String, is_extern: bool, args: Vec<Operand> },
+    /// Call method `method` through the vtable of the `dyn` value `recv`.
+    DynCall { recv: Operand, method: String, args: Vec<Operand> },
+    /// The pointer `ptr` to struct `strukt` as a `dyn iface`.
+    ToDyn { ptr: Operand, iface: String, strukt: String },
+    /// Allocate a `ty` with the allocator `alloc`: a `?*mut ty`, null when
+    /// out of memory.
+    Alloc { alloc: Operand, ty: Type, span: Span },
+    /// An allocator method or test builtin, with the operand types.
+    Intrinsic { op: Intrinsic, args: Vec<(Operand, Type)>, span: Span },
     Print { arg: Option<(Operand, Type)>, newline: bool },
     /// Fields in declaration order.
     StructLit { name: String, fields: Vec<Operand> },
@@ -162,6 +177,9 @@ pub fn lower(p: &sema::Program) -> Program {
         externs: p.externs.clone(),
         funcs,
         errors: p.errors.clone(),
+        ifaces: p.ifaces.clone(),
+        vtables: p.vtables.clone(),
+        tests: p.tests.clone(),
     }
 }
 
@@ -204,7 +222,10 @@ fn has_call(e: &TExpr) -> bool {
         | TExprKind::Print { .. }
         | TExprKind::Match { .. }
         | TExprKind::Try(_)
-        | TExprKind::Catch { .. } => true,
+        | TExprKind::Catch { .. }
+        | TExprKind::DynCall { .. }
+        | TExprKind::Create { .. }
+        | TExprKind::Intrinsic { .. } => true,
         TExprKind::Int(_)
         | TExprKind::Float(_)
         | TExprKind::Bool(_)
@@ -224,7 +245,8 @@ fn has_call(e: &TExpr) -> bool {
         | TExprKind::AddrOf(expr)
         | TExprKind::Deref(expr)
         | TExprKind::OkWrap(expr)
-        | TExprKind::ErrWrap(expr) => has_call(expr),
+        | TExprKind::ErrWrap(expr)
+        | TExprKind::ToDyn { ptr: expr, .. } => has_call(expr),
         TExprKind::Slice { base, lo, hi } => {
             has_call(base) || lo.as_deref().is_some_and(has_call) || hi.as_deref().is_some_and(has_call)
         }
@@ -435,14 +457,14 @@ impl<'a> Lower<'a> {
                     self.push(out, StmtKind::Assign(local(t), Rvalue::Use(Operand::Local(*id))));
                     v = Some(Operand::Local(t));
                 }
-                match value.as_ref().map(|e| &e.kind) {
+                match value {
                     // An error: the trace gets this `return`, and `errdefer`s run.
-                    Some(TExprKind::ErrWrap(_)) => {
+                    Some(TExpr { kind: TExprKind::ErrWrap(_), .. }) => {
                         self.push(out, StmtKind::TracePush(s.span));
                         self.run_defers(false, true, out);
                     }
                     // An error union from a call: test it.
-                    Some(TExprKind::Call { .. }) if matches!(self.ret, Type::ErrorUnion(..)) => {
+                    Some(TExpr { kind: TExprKind::Call { .. } | TExprKind::DynCall { .. } | TExprKind::Create { .. }, ty: Type::ErrorUnion(..), .. }) => {
                         let Some(Operand::Local(u)) = v else { unreachable!() };
                         let c = self.temp(Type::Bool);
                         self.push(out, StmtKind::Assign(local(c), Rvalue::IsErr(local(u))));
@@ -705,6 +727,38 @@ impl<'a> Lower<'a> {
             TExprKind::Call { name, is_extern, args } => {
                 let args = args.iter().map(|a| self.operand(a, out)).collect();
                 Rvalue::Call { name: name.clone(), is_extern: *is_extern, args }
+            }
+            TExprKind::DynCall { recv, method, args } => {
+                let recv = self.operand(recv, out);
+                let args = args.iter().map(|a| self.operand(a, out)).collect();
+                Rvalue::DynCall { recv, method: method.clone(), args }
+            }
+            TExprKind::ToDyn { ptr, strukt } => {
+                let Type::Dyn(iface) = &e.ty else { unreachable!() };
+                Rvalue::ToDyn { ptr: self.operand(ptr, out), iface: iface.clone(), strukt: strukt.clone() }
+            }
+            TExprKind::Intrinsic { op, args } => {
+                let args = args.iter().map(|a| (self.operand(a, out), a.ty.clone())).collect();
+                Rvalue::Intrinsic { op: *op, args, span: e.span }
+            }
+            // `p = alloc(T)`; if `p` is not null, `p.* = value` and the
+            // result is `p`, else the error `OutOfMemory`.
+            TExprKind::Create { alloc, value } => {
+                let a = self.operand(alloc, out);
+                let v = self.operand(value, out);
+                let opt = Type::Optional(Box::new(Type::Ptr(Box::new(value.ty.clone()), true)));
+                let p = self.temp(opt.clone());
+                self.push(out, StmtKind::Assign(local(p), Rvalue::Alloc { alloc: a, ty: value.ty.clone(), span: e.span }));
+                let has = self.temp(Type::Bool);
+                self.push(out, StmtKind::Assign(local(has), Rvalue::IsSome { place: local(p), ty: opt }));
+                let u = self.temp(e.ty.clone());
+                let mut then = Vec::new();
+                self.push(&mut then, StmtKind::Assign(Place { local: p, proj: vec![Proj::Deref] }, Rvalue::Use(v)));
+                self.push(&mut then, StmtKind::Assign(local(u), Rvalue::Ok { val: Some(Operand::Local(p)), ty: e.ty.clone() }));
+                let oom = Operand::Int(sema::OUT_OF_MEMORY as i128, IntTy::U16);
+                let els = vec![Stmt { kind: StmtKind::Assign(local(u), Rvalue::Err { err: oom, ty: e.ty.clone() }), span: self.span }];
+                self.push(out, StmtKind::If { cond: Operand::Local(has), then, els });
+                Rvalue::Use(Operand::Local(u))
             }
             TExprKind::Print { arg, newline } => {
                 let arg = arg.as_ref().map(|a| (self.operand(a, out), a.ty.clone()));

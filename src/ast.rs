@@ -13,6 +13,8 @@ pub enum Item {
     Struct(StructDecl),
     Enum(EnumDecl),
     ErrorSet(ErrorSetDecl),
+    Interface(InterfaceDecl),
+    Test(TestDecl),
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +42,25 @@ pub struct StructDecl {
     pub span: Span,
     pub is_pub: bool,
     pub fields: Vec<FieldDecl>,
+    /// Functions declared in the struct body.
+    pub methods: Vec<FnDecl>,
+}
+
+/// `interface Name { fn m(self: *Self, ...) T ... }`. The methods have no body.
+#[derive(Debug, Clone)]
+pub struct InterfaceDecl {
+    pub name: String,
+    pub span: Span,
+    pub is_pub: bool,
+    pub methods: Vec<FnDecl>,
+}
+
+/// `test "name" { ... }`. The body is a function `test#N() !void`, where N
+/// counts the tests of the file from 0.
+#[derive(Debug, Clone)]
+pub struct TestDecl {
+    pub name: String,
+    pub func: FnDecl,
 }
 
 #[derive(Debug, Clone)]
@@ -103,6 +124,8 @@ pub enum TypeExprKind {
     Optional(Box<TypeExpr>),
     /// `E!T` (with the set name and its position), or `!T` (inferred set).
     ErrorUnion(Option<(String, Span)>, Box<TypeExpr>),
+    /// `dyn I`
+    Dyn(String),
 }
 
 #[derive(Debug, Clone)]
@@ -226,6 +249,8 @@ pub enum ExprKind {
     Char(u32),
     Ident(String),
     Call { name: String, args: Vec<Expr> },
+    /// `base.name(args)`: a method call, or `Type.name(args)`.
+    MethodCall { base: Box<Expr>, name: String, args: Vec<Expr> },
     Builtin { name: String, args: Vec<Expr> },
     Binary { op: BinOp, lhs: Box<Expr>, rhs: Box<Expr> },
     Unary { op: UnOp, expr: Box<Expr> },

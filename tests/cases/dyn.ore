@@ -1,0 +1,71 @@
+// `interface` and `dyn`: a struct implements an interface by having its
+// methods (no declaration needed). `dyn I` is a data pointer plus a vtable
+// pointer, made from `&x` or `&mut x`; it never allocates.
+
+interface Shape {
+    fn area(self: *Self) f64
+    fn scale(self: *mut Self, k: f64)
+}
+
+interface Named {
+    fn name(self: *Self) []u8
+}
+
+struct Square {
+    side: f64
+
+    fn area(self: *Self) f64 {
+        return self.side * self.side
+    }
+
+    fn scale(self: *mut Self, k: f64) {
+        self.side *= k
+    }
+
+    fn name(self: Self) []u8 {
+        return "square"
+    }
+}
+
+struct Circle {
+    r: f64
+
+    fn area(self: *Self) f64 {
+        return 3.0 * self.r * self.r
+    }
+
+    fn scale(self: *mut Self, k: f64) {
+        self.r *= k
+    }
+
+    fn name(self: *Self) []u8 {
+        return "circle"
+    }
+}
+
+fn grow(s: dyn Shape) f64 {
+    s.scale(2.0)
+    return s.area()
+}
+
+fn show(n: dyn Named) {
+    @println(n.name())
+}
+
+pub fn main() {
+    var sq = Square { side: 1.5 }
+    var c = Circle { r: 1.0 }
+    @println(grow(&mut sq))
+    @println(sq.side)
+    @println(grow(&mut c))
+    let shapes = [2]dyn Shape{&mut sq, &mut c}
+    var total = 0.0
+    for i in 0..shapes.len {
+        total += shapes[i].area()
+    }
+    @println(total)
+    show(&sq)
+    show(&c)
+    let s: dyn Named = &c
+    show(s)
+}

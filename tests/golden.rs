@@ -8,7 +8,11 @@
 //!   error return trace, so there stderr must be the first line only.
 //! - `tests/errors/X.ore`: must fail to compile with exactly the diagnostics
 //!   in `X.err`, one per line, in order.
-//! - `ore run` and `ore check` are also run through the built binary.
+//! - `tests/tests/X.ore`: `ore test X.ore` (debug mode) must print exactly
+//!   `X.out`, and `ore test --json X.ore` exactly `X.json` if it exists. The
+//!   exit status must be 0 when no test failed, and 1 otherwise.
+//! - `ore run`, `ore check` and `ore test --filter` are also run through the
+//!   built binary.
 
 use ore::diag::Diag;
 use ore::driver::{self, Mode};
@@ -98,6 +102,60 @@ fn error_case(path: &Path) -> Result<(), String> {
     }
 }
 
+/// `ore test` on a file of `tests/tests`, run from the crate root so that
+/// positions in the output start with `tests/tests/`.
+fn ore_test(args: &[&str]) -> Result<(String, Option<i32>), String> {
+    let out = Command::new(env!("CARGO_BIN_EXE_ore"))
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .arg("test")
+        .args(args)
+        .output()
+        .map_err(|e| e.to_string())?;
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if !stderr.is_empty() {
+        return Err(format!("`ore test {}` wrote to stderr:\n{stderr}", args.join(" ")));
+    }
+    Ok((String::from_utf8_lossy(&out.stdout).into_owned(), out.status.code()))
+}
+
+fn test_case(path: &Path) -> Result<(), String> {
+    let rel = format!("tests/tests/{}", name(path));
+    let expected = read(&path.with_extension("out")).ok_or("missing .out file")?;
+    let status = if expected.ends_with("; 0 failed\n") { 0 } else { 1 };
+    let mut runs = vec![(vec![rel.as_str()], expected)];
+    if let Some(json) = read(&path.with_extension("json")) {
+        runs.push((vec!["--json", rel.as_str()], json));
+    }
+    for (args, want) in runs {
+        let (got, code) = ore_test(&args)?;
+        if got != want {
+            return Err(format!("`ore test {}`: stdout mismatch\n--- expected\n{want}--- got\n{got}", args.join(" ")));
+        }
+        if code != Some(status) {
+            return Err(format!("`ore test {}`: expected exit status {status}, got {code:?}", args.join(" ")));
+        }
+    }
+    Ok(())
+}
+
+/// `ore test --filter`: only the tests whose name contains the text run.
+fn cli_test_filter() -> Result<(), String> {
+    let f = "tests/tests/outcomes.ore";
+    let want = format!(
+        "test \"expect fails\" ... FAILED\n    before\n    {f}:28:5: assertion failed: condition is false\n\
+         test \"expectEqual fails\" ... FAILED\n    {f}:33:5: assertion failed: expected 4, found 5\n\n0 passed; 2 failed\n"
+    );
+    let (got, code) = ore_test(&[f, "--filter", "expect"])?;
+    if got != want || code != Some(1) {
+        return Err(format!("`ore test --filter expect`: {code:?}\n--- expected\n{want}--- got\n{got}"));
+    }
+    let (got, code) = ore_test(&[f, "--filter", "no such test"])?;
+    if got != "\n0 passed; 0 failed\n" || code != Some(0) {
+        return Err(format!("`ore test --filter` with no match: {code:?}\n{got}"));
+    }
+    Ok(())
+}
+
 /// The `ore run` CLI end to end.
 fn cli_run(work: &Path) -> Result<(), String> {
     let _ = work;
@@ -184,6 +242,7 @@ fn main() {
 
     let run_cases = cases("cases");
     let err_cases = cases("errors");
+    let test_cases = cases("tests");
     let results: Vec<(String, Result<(), String>)> = std::thread::scope(|s| {
         let mut handles = Vec::new();
         for p in &run_cases {
@@ -193,10 +252,14 @@ fn main() {
         for p in &err_cases {
             handles.push((format!("errors/{}", name(p)), s.spawn(move || error_case(p))));
         }
+        for p in &test_cases {
+            handles.push((format!("tests/{}", name(p)), s.spawn(move || test_case(p))));
+        }
         let w = &work;
         handles.push(("cli/ore run".to_string(), s.spawn(move || cli_run(w))));
         handles.push(("cli/ore check".to_string(), s.spawn(cli_check)));
         handles.push(("cli/ore explain".to_string(), s.spawn(cli_explain)));
+        handles.push(("cli/ore test --filter".to_string(), s.spawn(cli_test_filter)));
         handles.into_iter().map(|(n, h)| (n, h.join().unwrap())).collect()
     });
     let _ = std::fs::remove_dir_all(&work);

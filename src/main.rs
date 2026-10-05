@@ -8,6 +8,7 @@ const USAGE: &str = "usage:
   ore run <file.ore> [--mode debug|safe|fast]
   ore emit-c <file.ore> [--mode debug|safe|fast]
   ore check <file.ore> [--json]
+  ore test <file.ore> [--filter <text>] [--json] [--mode debug|safe|fast]
   ore explain <code>";
 
 struct Args {
@@ -16,16 +17,18 @@ struct Args {
     out: Option<String>,
     mode: Mode,
     json: bool,
+    filter: String,
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut it = std::env::args().skip(1);
     let cmd = it.next().ok_or("missing command")?;
-    let (mut file, mut out, mut mode, mut json) = (None, None, Mode::Debug, false);
+    let (mut file, mut out, mut mode, mut json, mut filter) = (None, None, Mode::Debug, false, String::new());
     while let Some(a) = it.next() {
         match a.as_str() {
             "-o" if cmd == "build" => out = Some(it.next().ok_or("`-o` needs a path")?),
-            "--json" if cmd == "check" => json = true,
+            "--json" if cmd == "check" || cmd == "test" => json = true,
+            "--filter" if cmd == "test" => filter = it.next().ok_or("`--filter` needs a text")?,
             "--mode" => {
                 let m = it.next().ok_or("`--mode` needs a value")?;
                 mode = Mode::parse(&m).ok_or(format!("unknown mode `{m}`"))?;
@@ -35,7 +38,7 @@ fn parse_args() -> Result<Args, String> {
         }
     }
     let file = file.ok_or("missing input file")?;
-    Ok(Args { cmd, file, out, mode, json })
+    Ok(Args { cmd, file, out, mode, json, filter })
 }
 
 fn main() -> ExitCode {
@@ -63,7 +66,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    if !matches!(args.cmd.as_str(), "build" | "run" | "emit-c" | "check") {
+    if !matches!(args.cmd.as_str(), "build" | "run" | "emit-c" | "check" | "test") {
         eprintln!("ore: unknown command `{}`\n{USAGE}", args.cmd);
         return ExitCode::from(2);
     }
@@ -88,6 +91,9 @@ fn main() -> ExitCode {
             }
         }
         return if res.is_ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE };
+    }
+    if args.cmd == "test" {
+        return test(&args, &src);
     }
     let c = match driver::compile_to_c(&args.file, &src, args.mode) {
         Ok(c) => c,
@@ -129,4 +135,53 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `ore test`: one line per test, and for a failed test its output (stdout,
+/// then stderr) indented; or with `--json` one JSON document. The exit
+/// status is 1 if a test failed or the file does not compile.
+fn test(args: &Args, src: &str) -> ExitCode {
+    let results = match driver::run_tests(&args.file, src, args.mode, &args.filter) {
+        Ok(r) => r,
+        Err(driver::TestError::Compile(ds)) => {
+            if args.json {
+                let diags: Vec<String> = ds.iter().map(|d| d.to_json()).collect();
+                println!(
+                    r#"{{"file":{},"diagnostics":[{}],"tests":[],"passed":0,"failed":0}}"#,
+                    diag::json_str(&args.file),
+                    diags.join(",")
+                );
+            } else {
+                for d in ds {
+                    eprintln!("{d}");
+                }
+            }
+            return ExitCode::FAILURE;
+        }
+        Err(driver::TestError::Run(e)) => {
+            eprintln!("ore: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let failed = results.iter().filter(|r| !r.passed).count();
+    let passed = results.len() - failed;
+    if args.json {
+        let tests: Vec<String> = results.iter().map(|r| r.to_json()).collect();
+        println!(
+            r#"{{"file":{},"diagnostics":[],"tests":[{}],"passed":{passed},"failed":{failed}}}"#,
+            diag::json_str(&args.file),
+            tests.join(",")
+        );
+    } else {
+        for r in &results {
+            println!("test \"{}\" ... {}", r.name, if r.passed { "ok" } else { "FAILED" });
+            if !r.passed {
+                for l in r.stdout.lines().chain(r.stderr.lines()) {
+                    println!("    {l}");
+                }
+            }
+        }
+        println!("\n{passed} passed; {failed} failed");
+    }
+    if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
 }

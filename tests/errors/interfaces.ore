@@ -1,0 +1,50 @@
+interface Shape {
+    fn area(self: *Self) f64
+    fn grow(self: *mut Self)
+}
+
+interface Bad {
+    fn f(x: i32)
+}
+
+struct Square {
+    side: f64
+
+    fn area(self: *Self) f64 {
+        return self.side * self.side
+    }
+
+    fn grow(self: *mut Self) {
+        self.side *= 2.0
+    }
+}
+
+struct Wrong {
+    fn area(self: *Self) f32 {
+        return 1.0
+    }
+
+    fn grow(self: *mut Self) {
+    }
+}
+
+struct Empty {
+}
+
+fn use(s: dyn Shape) {
+    s.grow()
+    s.perimeter()
+}
+
+pub fn main() {
+    var sq = Square { side: 1.0 }
+    use(&mut sq)
+    use(&sq)
+    use(sq)
+    var w = Wrong {}
+    use(&mut w)
+    var e = Empty {}
+    use(&mut e)
+    let x: Shape = &mut sq
+    let y: dyn Square = &mut sq
+}

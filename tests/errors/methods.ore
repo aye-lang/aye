@@ -1,0 +1,54 @@
+struct Counter {
+    n: i32
+
+    fn new() Self {
+        return Self { n: 0 }
+    }
+
+    fn bump(self: *mut Self) {
+        self.n += 1
+    }
+
+    fn get(self: *Self) i32 {
+        return self.n
+    }
+}
+
+fn readOnly(c: *Counter) {
+    c.bump()
+}
+
+pub fn main() {
+    let c = Counter.new()
+    c.bump()
+    c.missing()
+    var d = Counter.new()
+    d.new()
+    @println(d.bump)
+    let t = Counter
+    @println(Counter.new().get())
+    Counter.nope()
+}
+
+fn bad(x: Self) {
+}
+
+struct Twice {
+    get: i32
+
+    fn get(self: *Self) i32 {
+        return 1
+    }
+
+    fn put(self: *Self) {
+    }
+
+    fn put(self: *Self) {
+    }
+}
+
+test "same name" {
+}
+
+test "same name" {
+}

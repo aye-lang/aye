@@ -32,15 +32,17 @@ keyword     = "fn" | "let" | "var" | "pub" | "import" | "struct" | "enum"
             | "while" | "break" | "continue" | "return" | "defer" | "errdefer"
             | "try" | "catch" | "comptime" | "where" | "as" | "test"
             | "mut" | "extern" ;
-(* import interface dyn comptime where test are reserved; stage0 reports
+(* import comptime where are reserved; stage0 reports
    "... is not yet supported".
-   `true`, `false`, `null`, `in` and the primitive type names are
-   predeclared identifiers, not keywords. *)
+   `true`, `false`, `null`, `in`, `Self`, the primitive type names, and
+   `Allocator`, `General`, `Arena` and `AllocError` are predeclared
+   identifiers, not keywords. *)
 
 (* --------------------------------------------------------- top level *)
 
 file        = { NEWLINE } , { item , ( NEWLINE | EOF ) , { NEWLINE } } ;
-item        = fn_decl | extern_fn | struct_decl | enum_decl | error_decl ;
+item        = fn_decl | extern_fn | struct_decl | enum_decl | error_decl
+            | interface_decl | test_decl ;
 
 fn_decl     = [ "pub" ] "fn" ident "(" [ params ] ")" [ ret_type ] block ;
 extern_fn   = [ "pub" ] "extern" "fn" ident "(" [ params ] ")" [ type ] ;
@@ -50,7 +52,12 @@ ret_type    = type
 params      = param { "," param } [ "," ] ;
 param       = ident ":" type ;
 
-struct_decl = [ "pub" ] "struct" ident field_list ;
+struct_decl = [ "pub" ] "struct" ident "{" { NEWLINE }
+              [ member { ( "," | NEWLINE ) { NEWLINE } member } [ "," ] { NEWLINE } ] "}" ;
+member      = field | fn_decl ;          (* a method, followed by a newline; fields and
+                                            methods come in any order *)
+               (* in a method, `Self` is the struct; a first parameter of type
+                  Self, *Self or *mut Self makes it callable as x.method() *)
 field_list  = "{" { NEWLINE }
               [ field { ( "," | NEWLINE ) { NEWLINE } field } [ "," ] { NEWLINE } ] "}" ;
 field       = ident ":" type ;
@@ -58,6 +65,13 @@ field       = ident ":" type ;
 enum_decl   = [ "pub" ] "enum" ident "{" { NEWLINE }
               variant { ( "," | NEWLINE ) { NEWLINE } variant } [ "," ] { NEWLINE } "}" ;
 variant     = ident [ field_list ] ;           (* field_list not empty *)
+
+interface_decl = [ "pub" ] "interface" ident "{" { NEWLINE }
+              [ fn_sig { NEWLINE { NEWLINE } fn_sig } { NEWLINE } ] "}" ;
+fn_sig      = "fn" ident "(" ident ":" "*" [ "mut" ] "Self" { "," param } [ "," ] ")" [ ret_type ] ;
+               (* the first parameter is self: *Self or self: *mut Self *)
+
+test_decl   = "test" string_lit block ;   (* the body is like a `!void` function *)
 
 error_decl  = [ "pub" ] "error" ident
               ( "{" { NEWLINE } ident { ( "," | NEWLINE ) { NEWLINE } ident } [ "," ] { NEWLINE } "}"
@@ -71,7 +85,8 @@ type        = ident                    (* i8 i16 i32 i64 isize u8 u16 u32 u64
             | "[" "]" type             (* slice            []T  *)
             | "[" "*" "]" type         (* C pointer (FFI)  [*]T *)
             | "*" [ "mut" ] type       (* pointer          *T, *mut T *)
-            | "?" type ;               (* optional         ?T   *)
+            | "?" type                 (* optional         ?T   *)
+            | "dyn" ident ;            (* interface value  dyn I *)
 (* an ident can also name an error set; its values are written Set.Name *)
 
 (* -------------------------------------------------------- statements *)
@@ -124,6 +139,7 @@ mul_expr    = cast_expr { ( "*" | "/" | "%" | "*%" ) cast_expr } ;
 cast_expr   = unary { "as" type } ;
 unary       = ( "-" | "!" | "&" [ "mut" ] | "try" ) unary | postfix ;
 postfix     = primary { "." ident
+                      | "." ident "(" [ args ] ")"             (* method call; Type.f(...) *)
                       | ".*"                                   (* dereference *)
                       | "[" expr "]"
                       | "[" [ expr ] ".." [ expr ] "]" } ;
@@ -134,7 +150,8 @@ primary     = int_lit | float_lit | string_lit | char_lit
             | ident "." ident "{" [ field_init { "," field_init } [ "," ] ] "}"   (* variant literal *)
             | match_expr
             | ident "(" [ args ] ")"                       (* call *)
-            | builtin "(" [ args ] ")"                     (* @print, @println *)
+            | builtin "(" [ args ] ")"                     (* @print @println @expect
+                                                              @expectEqual @testAllocator *)
             | ident "{" [ field_init { "," field_init } [ "," ] ] "}"   (* struct literal *)
             | "[" int_lit "]" type "{" [ args ] "}"        (* array literal *)
             | "(" expr ")" ;

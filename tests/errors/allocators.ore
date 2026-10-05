@@ -1,0 +1,21 @@
+struct Node {
+    value: i64
+}
+
+fn make(alloc: Allocator) AllocError!*mut Node {
+    let a = @testAllocator()
+    return alloc.create(Node)
+}
+
+pub fn main() !void {
+    let gpa = General.init()
+    let alloc = gpa.allocator()
+    var g2 = General.init()
+    let p = try g2.allocator().create(Node { value: 1 })
+    g2.allocator().destroy(p.*)
+    g2.allocator().resize(p)
+    g2.allocator().create(Node { value: 2 })
+    let q = General.create()
+    @expectEqual(1, true)
+    @expect(1)
+}

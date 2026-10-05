@@ -1,0 +1,12 @@
+methods.ore:18:5: error[E0033]: method `bump` takes `self: *mut Self`, but the receiver is a read-only pointer `*Counter` (use `*mut Counter`)
+methods.ore:23:5: error[E0032]: method `bump` takes `self: *mut Self`: cannot take `&mut` of `c`: it is immutable (declare it with `var`)
+methods.ore:24:7: error[E0071]: struct `Counter` has no method `missing`
+methods.ore:26:7: error[E0073]: `Counter.new` has no `self` parameter: call it as `Counter.new(...)`
+methods.ore:27:16: error[E0038]: `bump` is a method of struct `Counter`, not a field: call it with `.bump(...)`
+methods.ore:28:13: error[E0074]: `Counter` is a type, not a value
+methods.ore:29:22: error[E0035]: cannot call `get` on a temporary value: it takes `self: *Self` (store the value in a variable first)
+methods.ore:30:13: error[E0071]: struct `Counter` has no method `nope`
+methods.ore:33:11: error[E0017]: `Self` can only be used inside a struct (and as `*Self` or `*mut Self` in an interface method's `self` parameter)
+methods.ore:39:8: error[E0015]: `get` is both a field and a method of struct `Twice`
+methods.ore:46:8: error[E0015]: duplicate method `put` in struct `Twice`
+methods.ore:53:1: error[E0015]: test "same name" is defined more than once

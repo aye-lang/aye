@@ -29,6 +29,7 @@ ore build <file.ore> [-o out] [--mode debug|safe|fast]   # executable (default n
 ore run <file.ore> [--mode debug|safe|fast]               # build to a temp file and run
 ore emit-c <file.ore> [--mode debug|safe|fast]            # print the generated C
 ore check <file.ore> [--json]                             # front end only: report errors, no C, no clang
+ore test <file.ore> [--filter <text>] [--json] [--mode debug|safe|fast]   # run the file's `test` blocks
 ore explain <code>                                        # explain an error code, with a wrong and a fixed example
 ```
 
@@ -52,6 +53,59 @@ with the error and the fixed program (the table is `src/codes.rs`).
 `{"file":"...","diagnostics":[{"severity":"error","code":"E0023","line":L,"col":C,"message":"..."}]}`
 (`diagnostics` is `[]` when the file compiles). The compiler recovers from
 errors and reports all of them (up to 50), sorted by position.
+
+## Test blocks (`ore test`)
+
+`test "name" { ... }` blocks sit next to the code. `ore build` and `ore run`
+leave them out; `ore test` runs each one (only those whose name contains the
+`--filter` text) in its own process, so a panic ends only that test. A test
+fails when it panics, fails an assertion, returns an error, or leaks memory
+from `@testAllocator()`:
+
+```ore
+struct Node { value: i64, next: ?*mut Node }
+
+test "leaks a node" {
+    let alloc = @testAllocator()
+    let n = try alloc.create(Node { value: 2, next: null })
+    @expectEqual(2, n.value)
+}
+```
+
+```
+$ ore test list.ore
+test "leaks a node" ... FAILED
+    list.ore:5:23: leak: 16 bytes allocated here were never freed
+
+0 passed; 1 failed
+```
+
+A failed test's stdout and then its stderr follow its line, indented. The
+reasons on stderr are `file:L:C: assertion failed: expected 4, found 5` (or
+`condition is false`), `file:L:C: panic: <reason>`, `file:L:C: leak: ...`,
+and `error: <Name>` with the error return trace (debug mode). The exit
+status is 1 if a test failed or the file does not compile, and 0 otherwise.
+
+`ore test --json` prints one line to stdout (wrapped here):
+
+```
+{"file":"list.ore","diagnostics":[],
+ "tests":[{"name":"leaks a node","status":"fail",
+           "failures":[{"kind":"leak","line":5,"col":23,"message":"16 bytes allocated here were never freed"}],
+           "stdout":"","stderr":"list.ore:5:23: leak: 16 bytes allocated here were never freed\n"}],
+ "passed":0,"failed":1}
+```
+
+- `diagnostics`: the compile errors, as in `ore check --json`; then `tests` is
+  empty.
+- `status`: `"pass"` or `"fail"`.
+- `failures`, in the order they happened:
+  - `{"kind":"assertion"|"panic"|"leak","line":L,"col":C,"message":"..."}`
+  - `{"kind":"error","error":"Name","trace":[{"line":L,"col":C},...]}`: the
+    test returned an error; `trace` is empty outside debug mode.
+  - `{"kind":"crash","message":"terminated by signal 11"}`: the test ended
+    in another way.
+- `stdout`, `stderr`: the test's output.
 
 ## Example
 
@@ -82,8 +136,8 @@ pub fn main() {
 
 - Top level: `fn`, `pub fn`, `extern fn` (C functions), `struct Name { ... }`,
   `enum Name { A, B { field: T } }` (tagged union), `error Name { A, B }` and
-  `error All = A || B` (error sets). The entry point is `pub fn main()` or
-  `pub fn main() !void`.
+  `error All = A || B` (error sets), `interface Name { ... }`, `test "name" { }`.
+  The entry point is `pub fn main()` or `pub fn main() !void`.
 - Statements: `let`, `var`, `=` and compound assignment (`+= -= *= /= %= +%= -%= *%=`),
   `if`/`else`, `while`, `for i in lo..hi`, `break`, `continue`, `return`,
   `defer`, `errdefer`, nested blocks, call statements, `if x |v| { }` (unwrap a `?T`),
@@ -96,18 +150,32 @@ pub fn main() {
   `x == null`, enum values `Shape.Circle { r: 1.0 }` / `Color.Red`,
   exhaustive `match` with patterns `.V`, `.V { a, b: c, .. }` and `_`,
   error values `ParseError.Empty`, `try f()`, `f() catch |e| { ... }` and
-  `f() catch value`, and exhaustive `match e` on errors.
+  `f() catch value`, and exhaustive `match e` on errors, method calls
+  `x.m(...)` and `Type.f(...)`.
+- Methods: `fn` or `pub fn` in a struct body, with `Self` and a receiver
+  `self: Self`, `self: *Self` or `self: *mut Self`.
+- Interfaces: `interface Name { fn m(self: *Self, ...) T }`, implemented by
+  any struct that has the methods; `dyn Name` values made from `&x` or
+  `&mut x`, called through a vtable.
+- Memory: `var gpa = General.init()` (libc; leak and double-free reports in
+  debug mode), `Arena.init(backing)`, `x.allocator()`, `x.deinit()`; on an
+  `Allocator`: `try alloc.create(value)` (`AllocError!*mut T`) and
+  `alloc.destroy(p)`.
+- Tests: `test "name" { }`, `@expect(cond)`, `@expectEqual(expected, actual)`,
+  `@testAllocator()`.
 - Types: `i8..i64 u8..u64 isize usize f32 f64 bool`, structs, enums, error
-  sets, `[N]T`, `[]T`, `*T`, `*mut T`, `?T`, `[*]T` (FFI pointer), and, as a
+  sets, `[N]T`, `[]T`, `*T`, `*mut T`, `?T`, `[*]T` (FFI pointer), `dyn I`,
+  `Allocator`, `General`, `Arena`, and, as a
   function's return type only, error unions `E!T` and `!T` (inferred set; not
   on a `pub fn`).
 - Output: `@print(x)` / `@println(x)` / `@println()` for integers, floats,
   bools and `[]u8` strings; or call libc through `extern fn`.
 
-Not yet supported (reported as errors): generics/`comptime`, error payloads,
-error unions outside return types, `match` on anything but enums and errors,
-`while x |v|`, pointer arithmetic and comparison, `interface`/`dyn`, `import`,
-allocators/std, `test` blocks, `extern struct`, global variables.
+Not yet supported (reported as errors): generics/`comptime`, `where`, error
+payloads, error unions outside return types, `match` on anything but enums
+and errors, `while x |v|`, pointer arithmetic and comparison, methods on
+enums, `import`/std, slices from an allocator (`alloc.alloc`, `alloc.free`,
+`[]mut T`), `Pool`/`Handle`, `extern struct`, global variables.
 
 See [`docs/grammar.ebnf`](docs/grammar.ebnf) for the grammar and
 [`docs/decisions.md`](docs/decisions.md) for choices not fixed by the design doc.
@@ -131,4 +199,6 @@ the program must abort with exactly that stderr (debug and safe only). When a
 `*.stderr` file exists, `main` must return an error: exit status 1, and stderr
 equal to the file in debug mode, or to its first line (no trace) in safe and
 fast mode. Every `tests/errors/*.ore` must fail to compile with exactly the
-diagnostics in `*.err`, one per line.
+diagnostics in `*.err`, one per line. For every `tests/tests/*.ore`,
+`ore test` must print exactly `*.out` (and `ore test --json` exactly `*.json`,
+if it exists), with exit status 1 when a test failed.
