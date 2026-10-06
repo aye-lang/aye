@@ -1,0 +1,15 @@
+#document
+  <html>
+    <head>
+    <body>
+      "Text after a stray end tag\n"
+      <div>
+        <span>
+          "one"
+      "two\n"
+      <p>
+        "threefour"
+      "\n\n"
+      <p>
+        "after the body end tag"
+      "\n\ntext after the html end tag\n"

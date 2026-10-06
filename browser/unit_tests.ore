@@ -1,0 +1,75 @@
+// Unit tests of the modules that import other browser modules (`net`,
+// `html`): `ore test` compiles only the root module's tests, and those
+// modules cannot be roots of their own. `ore test browser` runs them.
+// url, dom and encoding have their tests in their own files.
+
+import dom
+import dom.NodeId
+import html
+import net
+import std.list.List
+import url
+
+test "content types" {
+    let ct = net.parseContentType("text/html; charset=\"UTF-8\"")
+    @expectEqual("text/html", ct.mime)
+    @expectEqual("UTF-8", ct.charset)
+    let plain = net.parseContentType("image/png")
+    @expectEqual("image/png", plain.mime)
+    @expectEqual("", plain.charset)
+}
+
+test "types of paths" {
+    @expectEqual("text/html", net.typeOfPath("/a/b/index.HTML"))
+    @expectEqual("text/plain", net.typeOfPath("notes.txt"))
+    @expectEqual("application/octet-stream", net.typeOfPath("/a.d/README"))
+}
+
+test "base64" {
+    let a = @testAllocator()
+    let s = try net.base64Decode(a, "SGVs bG8=")
+    defer a.free(s)
+    @expectEqual("Hello", s)
+    let t = try net.base64Decode(a, "SGVsbG8")
+    defer a.free(t)
+    @expectEqual("Hello", t)
+    let bad = net.base64Decode(a, "SGV$") catch |e| {
+        return
+    }
+    a.free(bad)
+    @expect(false)
+}
+
+test "fetch a data: URL" {
+    let a = @testAllocator()
+    let u = try url.parse(a, "data:text/html;charset=latin1;base64,PHA+Q2Fm6TwvcD4=#frag")
+    defer u.deinit(a)
+    let res = try net.fetch(a, &u)
+    defer res.deinit(a)
+    @expectEqual("text/html", res.mime)
+    @expectEqual("latin1", res.charset)
+    @expectEqual("<p>Caf\xE9</p>", res.body)
+}
+
+test "parse and query a document" {
+    let a = @testAllocator()
+    var doc = try html.parse(a, "<ul id=l><li>a<li class=x>b</ul><p id=p>t")
+    defer doc.deinit()
+    var items = List(NodeId).init(a)
+    defer items.deinit()
+    try doc.getElementsByTagName("li", &mut items)
+    @expectEqual(2, items.len())
+    let second = items.items()[1]
+    if doc.attr(second, "class") |v| {
+        @expectEqual("x", v)
+    } else {
+        @expect(false)
+    }
+    if doc.getElementById("l") |list| {
+        @expect(dom.isSame(doc.parent(second), list))
+    } else {
+        @expect(false)
+    }
+    @expect(dom.isSame(doc.nextSibling(items.items()[0]), second))
+    @expect(doc.getElementById("missing") == null)
+}

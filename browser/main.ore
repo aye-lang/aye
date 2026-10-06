@@ -1,0 +1,177 @@
+// anyknown: a web browser in Ore (see docs/browser.md). B1 has the
+// command line only:
+//
+//     anyknown dump --tree [--id ID | --tag NAME] FILE|URL
+//     anyknown dump --text [--id ID | --tag NAME] FILE|URL
+//
+// FILE is a path; URL is a `file:` or `data:` URL (`http:` and `https:`
+// come with libcurl). `--id` and `--tag` dump only the element with that
+// id, or every element with that tag name, instead of the document.
+
+import dom
+import dom.NodeId
+import encoding
+import html
+import net
+import std
+import std.list.List
+import std.mem.Allocator
+import std.text
+import url
+import url.Url
+
+let USAGE = "usage: anyknown dump --tree|--text [--id ID | --tag NAME] FILE|URL"
+
+pub fn main() {
+    var gpa = std.heap.General.init()
+    let status = run(gpa.allocator())
+    gpa.deinit()
+    std.os.exit(status)
+}
+
+fn run(alloc: Allocator) i32 {
+    let args = std.os.args(alloc) catch |e| {
+        std.log.err("out of memory")
+        return 1
+    }
+    defer alloc.free(args)
+    if args.len < 2 || !text.eql(args[1], "dump") {
+        std.log.err("{}", USAGE)
+        return 2
+    }
+    return dump(alloc, args[2..]) catch |e| {
+        std.log.err("{}", e)
+        return 1
+    }
+}
+
+// The command-line options of `dump`.
+struct Options {
+    tree: bool
+    id: []u8
+    tag: []u8
+    target: []u8
+}
+
+fn options(args: [][]u8) ?Options {
+    var o = Options { tree: false, id: "", tag: "", target: "" }
+    var mode = false
+    var i: usize = 0
+    while i < args.len {
+        let a = args[i]
+        if text.eql(a, "--tree") || text.eql(a, "--text") {
+            o.tree = text.eql(a, "--tree")
+            mode = true
+        } else if (text.eql(a, "--id") || text.eql(a, "--tag")) && i + 1 < args.len {
+            if text.eql(a, "--id") {
+                o.id = args[i + 1]
+            } else {
+                o.tag = args[i + 1]
+            }
+            i += 1
+        } else if o.target.len == 0 && !text.startsWith(a, "--") {
+            o.target = a
+        } else {
+            return null
+        }
+        i += 1
+    }
+    if !mode || o.target.len == 0 {
+        return null
+    }
+    return o
+}
+
+fn dump(alloc: Allocator, args: [][]u8) !i32 {
+    var o = Options { tree: false, id: "", tag: "", target: "" }
+    if options(args) |parsed| {
+        o = parsed
+    } else {
+        std.log.err("{}", USAGE)
+        return 2
+    }
+    let location = toUrl(alloc, o.target) catch |e| {
+        std.log.err("not a URL or file: {}", o.target)
+        return 1
+    }
+    defer location.deinit(alloc)
+    let res = net.fetch(alloc, &location) catch |e| {
+        std.log.err("cannot fetch {}: {}", location.href, net.describe(e))
+        return 1
+    }
+    defer res.deinit(alloc)
+
+    let src = try encoding.toUtf8(alloc, res.body, encoding.sniff(res.body, res.charset))
+    defer alloc.free(src)
+    var doc = try load(alloc, res.mime, src)
+    defer doc.deinit()
+
+    var roots = List(NodeId).init(alloc)
+    defer roots.deinit()
+    if o.id.len > 0 {
+        if doc.getElementById(o.id) |el| {
+            try roots.append(el)
+        }
+    } else if o.tag.len > 0 {
+        try doc.getElementsByTagName(o.tag, &mut roots)
+    } else {
+        try roots.append(doc.root)
+    }
+    var out = text.Builder.init(alloc)
+    defer out.deinit()
+    for r in roots.items() {
+        if o.tree {
+            try dumpTree(&doc, r, &mut out)
+        } else {
+            try dumpText(alloc, &doc, r, &mut out)
+        }
+    }
+    try std.fs.stdout().write(out.bytes())
+    return 0
+}
+
+// The document of a response: HTML is parsed; plain text becomes the
+// content of a `pre`.
+fn load(alloc: Allocator, mime: []u8, src: []u8) !dom.Document {
+    if !text.eql(mime, "text/plain") {
+        return html.parse(alloc, src)
+    }
+    var doc = try html.parse(alloc, "<pre>")
+    errdefer doc.deinit()
+    var pres = List(NodeId).init(alloc)
+    defer pres.deinit()
+    try doc.getElementsByTagName("pre", &mut pres)
+    try doc.appendText(pres.items()[0], src)
+    return doc
+}
+
+// The URL of a command-line argument: a URL with a scheme of two or more
+// letters, else a file path (relative to the working directory).
+fn toUrl(alloc: Allocator, arg: []u8) !Url {
+    let direct = url.parse(alloc, arg) catch |e| {
+        return fileUrl(alloc, arg)
+    }
+    if direct.scheme.len > 1 {
+        return direct
+    }
+    direct.deinit(alloc)
+    return fileUrl(alloc, arg)
+}
+
+fn fileUrl(alloc: Allocator, path: []u8) !Url {
+    var b = text.Builder.init(alloc)
+    defer b.deinit()
+    try b.append("file://")
+    if !text.startsWith(path, "/") {
+        let buf = try alloc.alloc(0 as u8, 4096)
+        defer alloc.free(buf)
+        let cwd = getcwd(buf.ptr, buf.len)
+        try b.append(buf[..strlen(buf.ptr)])
+        try b.appendByte('/')
+    }
+    try b.append(path)
+    return url.parse(alloc, b.bytes())
+}
+
+extern fn getcwd(buf: [*]u8, size: usize) [*]u8
+extern fn strlen(s: [*]u8) usize

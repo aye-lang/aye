@@ -1,0 +1,13 @@
+#document
+  <!--  before the doctype  -->
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Upper case"
+    "\n"
+    <body bgcolor="white">
+      <p>
+        "Tags and attribute names are lower-cased."
+      "\n\n\n"
+  <!--  after html  -->
