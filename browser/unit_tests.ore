@@ -1,13 +1,17 @@
 // Unit tests of the modules that import other browser modules (`net`,
-// `html`): `ore test` compiles only the root module's tests, and those
+// `html`, `css`): `ore test` compiles only the root module's tests, and those
 // modules cannot be roots of their own. `ore test browser` runs them.
 // url, dom and encoding have their tests in their own files.
 
+import css
 import dom
 import dom.NodeId
 import html
 import net
+import std.heap.Arena
 import std.list.List
+import std.mem.Allocator
+import std.text
 import url
 
 test "content types" {
@@ -72,4 +76,106 @@ test "parse and query a document" {
     }
     @expect(dom.isSame(doc.nextSibling(items.items()[0]), second))
     @expect(doc.getElementById("missing") == null)
+}
+
+test "css tokens" {
+    let a = @testAllocator()
+    var arena = Arena.init(a)
+    defer arena.deinit()
+    var toks = List(css.Token).init(a)
+    defer toks.deinit()
+    try css.tokenize(arena.allocator(), "a.b#x 12px -3.5e1% url( p.png ) f( 'q\\'s' @media/**/<!-- \\31 x", &mut toks)
+    let t = toks.items()
+    @expectEqual(19, t.len)
+    @expect(t[0].kind == css.Tok.Ident)
+    @expect(t[1].kind == css.Tok.Delim && t[1].delim == '.')
+    @expect(t[3].kind == css.Tok.Hash && t[3].flag)
+    @expectEqual("x", t[3].text)
+    @expect(t[5].kind == css.Tok.Dimension && t[5].num == 12.0 && t[5].flag)
+    @expectEqual("px", t[5].text)
+    @expect(t[7].kind == css.Tok.Percentage && t[7].num == -35.0)
+    @expect(t[9].kind == css.Tok.Url)
+    @expectEqual("p.png", t[9].text)
+    @expect(t[11].kind == css.Tok.Function)
+    @expectEqual("q's", t[13].text)
+    @expect(t[15].kind == css.Tok.AtKeyword)
+    @expect(t[16].kind == css.Tok.Cdo)
+    @expect(t[17].kind == css.Tok.Whitespace)
+    @expectEqual("1x", t[18].text)
+}
+
+// The specificity of the first selector of a one-rule sheet.
+fn specificityOf(a: Allocator, src: []u8) !u32 {
+    var sheet = try css.Sheet.init(a)
+    defer sheet.deinit()
+    try css.parseSheet(&mut sheet, src, css.Media { width: 800.0, height: 600.0 })
+    if sheet.rules.len() != 1 {
+        return 999999
+    }
+    return sheet.complexes.items()[sheet.rules.items()[0].sel_start].spec
+}
+
+test "css specificity" {
+    let a = @testAllocator()
+    @expectEqual(0x000001, try specificityOf(a, "p {}"))
+    @expectEqual(0x010101, try specificityOf(a, "#a .b c {}"))
+    @expectEqual(0x000200, try specificityOf(a, "[x]:first-child {}"))
+    @expectEqual(0x010001, try specificityOf(a, "p:not(.a, #b) {}"))
+    @expectEqual(0x000002, try specificityOf(a, "p::before {}"))
+    @expectEqual(0, try specificityOf(a, "* {}"))
+    @expectEqual(999999, try specificityOf(a, "p:nope {}"))
+}
+
+test "css colors and media" {
+    let a = @testAllocator()
+    if css.namedColor("RebeccaPurple") |c| {
+        @expect(c.r == 102 && c.g == 51 && c.b == 153 && c.a == 1.0)
+    } else {
+        @expect(false)
+    }
+    @expect(css.namedColor("nocolor") == null)
+    var sheet = try css.Sheet.init(a)
+    defer sheet.deinit()
+    let wide = css.Media { width: 1000.0, height: 600.0 }
+    @expect(try css.mediaMatches(&mut sheet, "", wide))
+    @expect(try css.mediaMatches(&mut sheet, "screen and (min-width: 900px)", wide))
+    @expect(!(try css.mediaMatches(&mut sheet, "print", wide)))
+    @expect(try css.mediaMatches(&mut sheet, "print, (orientation: landscape)", wide))
+    @expect(!(try css.mediaMatches(&mut sheet, "not all and (width > 999px)", wide)))
+}
+
+test "css cascade" {
+    let a = @testAllocator()
+    var doc = try html.parse(a, "<style>p { color: red } #x { margin: 1em 2px }</style><div style='font-size: 20px'><p id=x>t")
+    defer doc.deinit()
+    let media = css.Media { width: 800.0, height: 600.0 }
+    var ua = try css.Sheet.init(a)
+    defer ua.deinit()
+    try css.uaSheet(&mut ua, media)
+    var author = try css.Sheet.init(a)
+    defer author.deinit()
+    var styles = try css.Styles.init(a)
+    defer styles.deinit()
+    var src = text.Builder.init(a)
+    defer src.deinit()
+    var sheets = List(NodeId).init(a)
+    defer sheets.deinit()
+    try doc.getElementsByTagName("style", &mut sheets)
+    try doc.textContent(sheets.items()[0], &mut src)
+    try css.parseSheet(&mut author, src.bytes(), media)
+    try css.computeStyles(&doc, &ua, &author, media, &mut styles)
+    var out = text.Builder.init(a)
+    defer out.deinit()
+    if doc.getElementById("x") |p| {
+        if styles.get(p) |v| {
+            try css.writeValue(v[css.COLOR], &mut out)
+            try out.append(" ")
+            try css.writeValue(v[css.MARGIN_TOP], &mut out)
+            try out.append(" ")
+            try css.writeValue(v[css.MARGIN_TOP + 1], &mut out)
+            try out.append(" ")
+            try css.writeValue(v[css.DISPLAY], &mut out)
+        }
+    }
+    @expectEqual("rgb(255, 0, 0) 20px 2px block", out.bytes())
 }

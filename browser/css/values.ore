@@ -1,0 +1,823 @@
+// Property values: a declaration's tokens become `Decl`s of longhand
+// properties with specified `Value`s. Shorthands (`margin`, `padding`,
+// `border`, `border-top`..., `border-width`/`-style`/`-color`, `font`,
+// `background`, `list-style`, `overflow`, `text-decoration`) expand into
+// their longhands. An invalid value drops the declaration. Absolute units
+// (pt, pc, in, cm, mm, q) become px here; `ex` and `ch` are taken as
+// half an `em`.
+
+import std.list.List
+import std.math
+import std.mem.AllocError
+import std.text
+
+/// A component value: one token, or a function or block with its content.
+pub struct Comp {
+    toks: []Token
+}
+
+/// Adds the declaration `name: toks` (`toks` without the surrounding
+/// whitespace and `!important`) to `sheet`, expanded into longhands.
+/// Unknown properties and invalid values are ignored.
+pub fn addDeclaration(sheet: *mut Sheet, name: []u8, toks: []Token, important: bool) AllocError!void {
+    var buf = @zeroed([32]u8)
+    if name.len > buf.len {
+        return
+    }
+    for i, c in name {
+        buf[i] = lowerAscii(c)
+    }
+    let prop = buf[0..name.len]
+    let comps = try components(sheet, toks)
+    var d = Declarer { sheet: sheet, important: important }
+    if propertyIndex(prop) |p| {
+        if try parseValue(sheet, p, comps) |v| {
+            try d.add(p, v)
+        }
+        return
+    }
+    try d.shorthand(prop, comps)
+}
+
+fn lowerAscii(c: u8) u8 {
+    if c >= 'A' && c <= 'Z' {
+        return c + 32
+    }
+    return c
+}
+
+// The component values of `toks`, without whitespace.
+fn components(sheet: *mut Sheet, toks: []Token) AllocError![]Comp {
+    var list = List(Comp).init(sheet.arena.allocator())
+    var i = skipWhitespace(toks, 0)
+    while i < toks.len {
+        let j = skipComponent(toks, i)
+        try list.append(Comp { toks: toks[i..j] })
+        i = skipWhitespace(toks, j)
+    }
+    return list.items()
+}
+
+struct Declarer {
+    sheet: *mut Sheet
+    important: bool
+
+    fn add(self: *mut Self, prop: usize, v: Value) AllocError!void {
+        try self.sheet.decls.append(Decl { prop: prop, value: v, important: self.important })
+    }
+
+    fn shorthand(self: *mut Self, name: []u8, comps: []Comp) AllocError!void {
+        if text.eql(name, "margin") {
+            return self.sides(MARGIN_TOP, comps)
+        }
+        if text.eql(name, "padding") {
+            return self.sides(PADDING_TOP, comps)
+        }
+        if text.eql(name, "border-width") {
+            return self.sides(BORDER_TOP_WIDTH, comps)
+        }
+        if text.eql(name, "border-style") {
+            return self.sides(BORDER_TOP_STYLE, comps)
+        }
+        if text.eql(name, "border-color") {
+            return self.sides(BORDER_TOP_COLOR, comps)
+        }
+        if text.eql(name, "border") {
+            return self.border(0, 4, comps)
+        }
+        let sides = [4][]u8{"border-top", "border-right", "border-bottom", "border-left"}
+        for k, side in sides {
+            if text.eql(name, side) {
+                return self.border(k, k + 1, comps)
+            }
+        }
+        if text.eql(name, "overflow") {
+            return self.overflow(comps)
+        }
+        if text.eql(name, "font") {
+            return self.font(comps)
+        }
+        if text.eql(name, "background") {
+            return self.background(comps)
+        }
+        if text.eql(name, "list-style") {
+            return self.listStyle(comps)
+        }
+        if text.eql(name, "text-decoration") {
+            return self.textDecoration(comps)
+        }
+    }
+
+    // `inherit`, `initial` or `unset` for all of `props`; true when it was
+    // one of them.
+    fn wide(self: *mut Self, comps: []Comp, props: []usize) AllocError!bool {
+        if comps.len != 1 {
+            return false
+        }
+        if cssWide(comps[0]) |v| {
+            for p in props {
+                try self.add(p, v)
+            }
+            return true
+        }
+        return false
+    }
+
+    // 1 to 4 values for top, right, bottom and left (`first` is the
+    // longhand of the top side; the others follow it).
+    fn sides(self: *mut Self, first: usize, comps: []Comp) AllocError!void {
+        let all = [4]usize{first, first + 1, first + 2, first + 3}
+        if try self.wide(comps, all[..]) {
+            return
+        }
+        if comps.len == 0 || comps.len > 4 {
+            return
+        }
+        var vals = [4]Value{Value.Initial, Value.Initial, Value.Initial, Value.Initial}
+        for i, c in comps {
+            let one = [1]Comp{c}
+            if try parseValue(self.sheet, first, one[..]) |v| {
+                vals[i] = v
+            } else {
+                return
+            }
+        }
+        if comps.len < 2 {
+            vals[1] = vals[0]
+        }
+        if comps.len < 3 {
+            vals[2] = vals[0]
+        }
+        if comps.len < 4 {
+            vals[3] = vals[1]
+        }
+        for i in 0..4 {
+            try self.add(first + i, vals[i])
+        }
+    }
+
+    // `border` (sides 0..4) or `border-top` and the others (one side):
+    // a width, a style and a color in any order, each at most once.
+    fn border(self: *mut Self, from: usize, to: usize, comps: []Comp) AllocError!void {
+        var props = [12]usize{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+        var n: usize = 0
+        for s in from..to {
+            props[n] = BORDER_TOP_WIDTH + s
+            props[n + 1] = BORDER_TOP_STYLE + s
+            props[n + 2] = BORDER_TOP_COLOR + s
+            n += 3
+        }
+        if try self.wide(comps, props[..n]) {
+            return
+        }
+        if comps.len == 0 || comps.len > 3 {
+            return
+        }
+        var width = Value.Initial
+        var style = Value.Initial
+        var color = Value.Initial
+        var seen = [3]bool{false, false, false}
+        for c in comps {
+            let one = [1]Comp{c}
+            if cssWide(c) != null {
+                return
+            }
+            if !seen[0] {
+                if try parseValue(self.sheet, BORDER_TOP_WIDTH, one[..]) |v| {
+                    width = v
+                    seen[0] = true
+                    continue
+                }
+            }
+            if !seen[1] {
+                if try parseValue(self.sheet, BORDER_TOP_STYLE, one[..]) |v| {
+                    style = v
+                    seen[1] = true
+                    continue
+                }
+            }
+            if !seen[2] {
+                if colorValue(c) |v| {
+                    color = v
+                    seen[2] = true
+                    continue
+                }
+            }
+            return
+        }
+        for s in from..to {
+            try self.add(BORDER_TOP_WIDTH + s, width)
+            try self.add(BORDER_TOP_STYLE + s, style)
+            try self.add(BORDER_TOP_COLOR + s, color)
+        }
+    }
+
+    fn overflow(self: *mut Self, comps: []Comp) AllocError!void {
+        let props = [2]usize{OVERFLOW_X, OVERFLOW_Y}
+        if try self.wide(comps, props[..]) {
+            return
+        }
+        if comps.len == 0 || comps.len > 2 {
+            return
+        }
+        let first = [1]Comp{comps[0]}
+        let last = [1]Comp{comps[comps.len - 1]}
+        if try parseValue(self.sheet, OVERFLOW_X, first[..]) |x| {
+            if try parseValue(self.sheet, OVERFLOW_Y, last[..]) |y| {
+                try self.add(OVERFLOW_X, x)
+                try self.add(OVERFLOW_Y, y)
+            }
+        }
+    }
+
+    // `font: [style || variant || weight || stretch]? size[/line-height]?
+    // family`.
+    fn font(self: *mut Self, comps: []Comp) AllocError!void {
+        let props = [5]usize{FONT_STYLE, FONT_WEIGHT, FONT_SIZE, LINE_HEIGHT, FONT_FAMILY}
+        if try self.wide(comps, props[..]) {
+            return
+        }
+        var style = Value.Initial
+        var weight = Value.Initial
+        var line = Value.Initial
+        var i: usize = 0
+        var size = Value.Initial
+        var have_size = false
+        while i < comps.len {
+            let one = [1]Comp{comps[i]}
+            if try parseValue(self.sheet, FONT_SIZE, one[..]) |v| {
+                if !isNumberToken(comps[i]) {
+                    size = v
+                    have_size = true
+                    i += 1
+                    break
+                }
+            }
+            if isIdent(comps[i], "normal") || isIdent(comps[i], "small-caps") || isStretch(comps[i]) {
+                i += 1
+            } else if isIdent(comps[i], "italic") || isIdent(comps[i], "oblique") {
+                if try parseValue(self.sheet, FONT_STYLE, one[..]) |v| {
+                    style = v
+                }
+                i += 1
+            } else if try parseValue(self.sheet, FONT_WEIGHT, one[..]) |v| {
+                weight = v
+                i += 1
+            } else {
+                return
+            }
+        }
+        if !have_size {
+            return
+        }
+        if i < comps.len && isDelim(comps[i], '/') {
+            if i + 1 >= comps.len {
+                return
+            }
+            let one = [1]Comp{comps[i + 1]}
+            if try parseValue(self.sheet, LINE_HEIGHT, one[..]) |v| {
+                line = v
+            } else {
+                return
+            }
+            i += 2
+        }
+        if i >= comps.len {
+            return
+        }
+        if try fontFamily(self.sheet, comps[i..]) |family| {
+            try self.add(FONT_STYLE, style)
+            try self.add(FONT_WEIGHT, weight)
+            try self.add(FONT_SIZE, size)
+            try self.add(LINE_HEIGHT, line)
+            try self.add(FONT_FAMILY, family)
+        }
+    }
+
+    // `background`: only its color is kept; the other parts (images,
+    // positions, repeat, ...) are accepted and ignored.
+    fn background(self: *mut Self, comps: []Comp) AllocError!void {
+        let props = [1]usize{BACKGROUND_COLOR}
+        if try self.wide(comps, props[..]) {
+            return
+        }
+        var color = Value.Initial
+        for c in comps {
+            if colorValue(c) |v| {
+                color = v
+            }
+        }
+        try self.add(BACKGROUND_COLOR, color)
+    }
+
+    // `list-style`: only the type is kept (`inside`/`outside` and images
+    // are accepted and ignored).
+    fn listStyle(self: *mut Self, comps: []Comp) AllocError!void {
+        let props = [1]usize{LIST_STYLE_TYPE}
+        if try self.wide(comps, props[..]) {
+            return
+        }
+        var kind = Value.Initial
+        var nones: usize = 0
+        for c in comps {
+            let one = [1]Comp{c}
+            if isIdent(c, "none") {
+                nones += 1
+            } else if isIdent(c, "inside") || isIdent(c, "outside") || (c.toks[0].kind == Tok.Url) {
+            } else if try parseValue(self.sheet, LIST_STYLE_TYPE, one[..]) |v| {
+                kind = v
+            } else {
+                return
+            }
+        }
+        if nones > 0 {
+            kind = Value.Keyword { k: "none" }
+        }
+        try self.add(LIST_STYLE_TYPE, kind)
+    }
+
+    // `text-decoration`: the line keywords are kept; a style or color is
+    // accepted and ignored.
+    fn textDecoration(self: *mut Self, comps: []Comp) AllocError!void {
+        let props = [1]usize{TEXT_DECORATION_LINE}
+        if try self.wide(comps, props[..]) {
+            return
+        }
+        var lines = List(Comp).init(self.sheet.arena.allocator())
+        for c in comps {
+            if isIdent(c, "solid") || isIdent(c, "double") || isIdent(c, "dotted") || isIdent(c, "dashed") || isIdent(c, "wavy") || colorValue(c) != null {
+                continue
+            }
+            try lines.append(c)
+        }
+        if lines.len() == 0 {
+            try self.add(TEXT_DECORATION_LINE, Value.Initial)
+            return
+        }
+        if try decorationLines(self.sheet, lines.items()) |v| {
+            try self.add(TEXT_DECORATION_LINE, v)
+        }
+    }
+}
+
+fn isIdent(c: Comp, word: []u8) bool {
+    return c.toks.len == 1 && c.toks[0].kind == Tok.Ident && text.eqlIgnoreCase(c.toks[0].text, word)
+}
+
+fn isDelim(c: Comp, d: u32) bool {
+    return c.toks.len == 1 && c.toks[0].kind == Tok.Delim && c.toks[0].delim == d
+}
+
+fn isNumberToken(c: Comp) bool {
+    return c.toks.len == 1 && c.toks[0].kind == Tok.Number
+}
+
+fn isStretch(c: Comp) bool {
+    if c.toks.len != 1 || c.toks[0].kind != Tok.Ident {
+        return false
+    }
+    return inList(c.toks[0].text, "ultra-condensed extra-condensed condensed semi-condensed semi-expanded expanded extra-expanded ultra-expanded") != null
+}
+
+// `inherit`, `initial` or `unset`.
+fn cssWide(c: Comp) ?Value {
+    if isIdent(c, "inherit") {
+        return Value.Inherit
+    }
+    if isIdent(c, "initial") {
+        return Value.Initial
+    }
+    if isIdent(c, "unset") {
+        return Value.Unset
+    }
+    return null
+}
+
+// The word of the space-separated `list` equal to `word` ignoring case
+// (a slice of `list`, so it lives as long as `list`).
+fn inList(word: []u8, list: []u8) ?[]u8 {
+    var words = text.split(list, " ")
+    while words.next() |w| {
+        if text.eqlIgnoreCase(w, word) {
+            return w
+        }
+    }
+    return null
+}
+
+/// The specified value of the longhand `prop` from `comps`; null when it
+/// is invalid.
+pub fn parseValue(sheet: *mut Sheet, prop: usize, comps: []Comp) AllocError!?Value {
+    if comps.len == 0 {
+        return null
+    }
+    if comps.len == 1 {
+        if cssWide(comps[0]) |v| {
+            return v
+        }
+    }
+    let p = PROPERTIES[prop]
+    if p.kind == PKind.FontFamily {
+        return fontFamily(sheet, comps)
+    }
+    if p.kind == PKind.TextDecoration {
+        return decorationLines(sheet, comps)
+    }
+    if comps.len != 1 {
+        return null
+    }
+    return single(p, comps[0])
+}
+
+// A value of one component.
+fn single(p: Property, c: Comp) ?Value {
+    let t = c.toks[0]
+    if t.kind == Tok.Ident && c.toks.len == 1 && p.keywords.len > 0 {
+        if inList(t.text, p.keywords) |k| {
+            return Value.Keyword { k: k }
+        }
+    }
+    match p.kind {
+        .Keywords => {
+            return null
+        }
+        .Length => {
+            return lengthValue(c, true, false)
+        }
+        .LengthNonNeg => {
+            return lengthValue(c, true, true)
+        }
+        .Color => {
+            return colorValue(c)
+        }
+        .FontSize => {
+            return fontSize(c)
+        }
+        .FontWeight => {
+            return fontWeight(c)
+        }
+        .LineHeight => {
+            if isIdent(c, "normal") {
+                return Value.Keyword { k: "normal" }
+            }
+            if t.kind == Tok.Number && c.toks.len == 1 {
+                if t.num < 0.0 {
+                    return null
+                }
+                return Value.Number { v: t.num }
+            }
+            return lengthValue(c, true, true)
+        }
+        .BorderWidth => {
+            if isIdent(c, "thin") {
+                return Value.Px { v: 1.0 }
+            }
+            if isIdent(c, "medium") {
+                return Value.Px { v: 3.0 }
+            }
+            if isIdent(c, "thick") {
+                return Value.Px { v: 5.0 }
+            }
+            return lengthValue(c, false, true)
+        }
+        .FontFamily => {
+            return null
+        }
+        .TextDecoration => {
+            return null
+        }
+    }
+}
+
+// A length (or percentage when `percent`); null when not one, or
+// negative when `nonneg`.
+fn lengthValue(c: Comp, percent: bool, nonneg: bool) ?Value {
+    if c.toks.len != 1 {
+        return null
+    }
+    let t = c.toks[0]
+    if nonneg && t.num < 0.0 {
+        return null
+    }
+    if t.kind == Tok.Number && t.num == 0.0 {
+        return Value.Px { v: 0.0 }
+    }
+    if t.kind == Tok.Percentage && percent {
+        return Value.Percent { v: t.num }
+    }
+    if t.kind != Tok.Dimension {
+        return null
+    }
+    let u = t.text
+    if text.eqlIgnoreCase(u, "em") {
+        return Value.Em { v: t.num }
+    }
+    if text.eqlIgnoreCase(u, "rem") {
+        return Value.Rem { v: t.num }
+    }
+    if text.eqlIgnoreCase(u, "ex") || text.eqlIgnoreCase(u, "ch") {
+        return Value.Em { v: t.num * 0.5 }
+    }
+    if text.eqlIgnoreCase(u, "vw") {
+        return Value.Vw { v: t.num }
+    }
+    if text.eqlIgnoreCase(u, "vh") {
+        return Value.Vh { v: t.num }
+    }
+    if absoluteLength(t.num, u) |px| {
+        return Value.Px { v: px }
+    }
+    return null
+}
+
+/// `n` of the absolute unit `unit` in px; null for other units.
+pub fn absoluteLength(n: f64, unit: []u8) ?f64 {
+    if text.eqlIgnoreCase(unit, "px") {
+        return n
+    }
+    if text.eqlIgnoreCase(unit, "pt") {
+        return n * 4.0 / 3.0
+    }
+    if text.eqlIgnoreCase(unit, "pc") {
+        return n * 16.0
+    }
+    if text.eqlIgnoreCase(unit, "in") {
+        return n * 96.0
+    }
+    if text.eqlIgnoreCase(unit, "cm") {
+        return n * 96.0 / 2.54
+    }
+    if text.eqlIgnoreCase(unit, "mm") {
+        return n * 96.0 / 25.4
+    }
+    if text.eqlIgnoreCase(unit, "q") {
+        return n * 96.0 / 101.6
+    }
+    return null
+}
+
+fn fontSize(c: Comp) ?Value {
+    if c.toks[0].kind == Tok.Ident && c.toks.len == 1 {
+        let names = [8][]u8{"xx-small", "x-small", "small", "medium", "large", "x-large", "xx-large", "xxx-large"}
+        let sizes = [8]f64{9.0, 10.0, 13.0, 16.0, 18.0, 24.0, 32.0, 48.0}
+        for i, n in names {
+            if text.eqlIgnoreCase(c.toks[0].text, n) {
+                return Value.Px { v: sizes[i] }
+            }
+        }
+        if isIdent(c, "larger") {
+            return Value.Keyword { k: "larger" }
+        }
+        if isIdent(c, "smaller") {
+            return Value.Keyword { k: "smaller" }
+        }
+        return null
+    }
+    return lengthValue(c, true, true)
+}
+
+fn fontWeight(c: Comp) ?Value {
+    let t = c.toks[0]
+    if c.toks.len != 1 {
+        return null
+    }
+    if t.kind == Tok.Number {
+        if t.num >= 1.0 && t.num <= 1000.0 {
+            return Value.Number { v: t.num }
+        }
+        return null
+    }
+    if isIdent(c, "normal") {
+        return Value.Number { v: 400.0 }
+    }
+    if isIdent(c, "bold") {
+        return Value.Number { v: 700.0 }
+    }
+    if isIdent(c, "bolder") {
+        return Value.Keyword { k: "bolder" }
+    }
+    if isIdent(c, "lighter") {
+        return Value.Keyword { k: "lighter" }
+    }
+    return null
+}
+
+// A font family list: families separated by commas, each a string or
+// identifiers. The value is the list as text: `"Times New Roman", serif`.
+fn fontFamily(sheet: *mut Sheet, comps: []Comp) AllocError!?Value {
+    var b = text.Builder.init(sheet.arena.allocator())
+    var words: usize = 0
+    var quoted = false
+    for c in comps {
+        let t = c.toks[0]
+        if c.toks.len != 1 {
+            return null
+        }
+        if t.kind == Tok.Comma {
+            if words == 0 && !quoted {
+                return null
+            }
+            try b.append(", ")
+            words = 0
+            quoted = false
+        } else if t.kind == Tok.String {
+            if words > 0 || quoted {
+                return null
+            }
+            try b.appendByte('"')
+            for ch in t.text {
+                if ch == '"' || ch == '\\' {
+                    try b.appendByte('\\')
+                }
+                try b.appendByte(ch)
+            }
+            try b.appendByte('"')
+            quoted = true
+        } else if t.kind == Tok.Ident {
+            if quoted {
+                return null
+            }
+            if words > 0 {
+                try b.appendByte(' ')
+            }
+            try b.append(t.text)
+            words += 1
+        } else {
+            return null
+        }
+    }
+    if words == 0 && !quoted {
+        return null
+    }
+    return Value.Keyword { k: try b.toOwned() }
+}
+
+// `none`, or a set of `underline`, `overline`, `line-through` and `blink`
+// (each at most once), as text in that order.
+fn decorationLines(sheet: *mut Sheet, comps: []Comp) AllocError!?Value {
+    if comps.len == 1 && isIdent(comps[0], "none") {
+        return Value.Keyword { k: "none" }
+    }
+    let names = [4][]u8{"underline", "overline", "line-through", "blink"}
+    var seen = [4]bool{false, false, false, false}
+    for c in comps {
+        var found = false
+        for i, n in names {
+            if isIdent(c, n) && !seen[i] {
+                seen[i] = true
+                found = true
+            }
+        }
+        if !found {
+            return null
+        }
+    }
+    var b = text.Builder.init(sheet.arena.allocator())
+    for i, n in names {
+        if seen[i] {
+            if b.len() > 0 {
+                try b.appendByte(' ')
+            }
+            try b.append(n)
+        }
+    }
+    return Value.Keyword { k: try b.toOwned() }
+}
+
+// ---- colors
+
+/// A color: a named color, `transparent`, `currentcolor`, `#rgb`,
+/// `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb()` or `rgba()`.
+pub fn colorValue(c: Comp) ?Value {
+    let t = c.toks[0]
+    if c.toks.len == 1 && t.kind == Tok.Ident {
+        if text.eqlIgnoreCase(t.text, "transparent") {
+            return Value.Rgba { c: Color { r: 0, g: 0, b: 0, a: 0.0 } }
+        }
+        if text.eqlIgnoreCase(t.text, "currentcolor") {
+            return Value.CurrentColor
+        }
+        if namedColor(t.text) |col| {
+            return Value.Rgba { c: col }
+        }
+        return null
+    }
+    if c.toks.len == 1 && t.kind == Tok.Hash {
+        if hexColor(t.text) |col| {
+            return Value.Rgba { c: col }
+        }
+        return null
+    }
+    if t.kind == Tok.Function && (text.eqlIgnoreCase(t.text, "rgb") || text.eqlIgnoreCase(t.text, "rgba")) {
+        var end = c.toks.len
+        if c.toks[end - 1].kind == Tok.RParen {
+            end -= 1
+        }
+        if rgbFunction(c.toks[1..end]) |col| {
+            return Value.Rgba { c: col }
+        }
+    }
+    return null
+}
+
+/// The named color `name` (any case).
+pub fn namedColor(name: []u8) ?Color {
+    for entry in NAMED_COLORS {
+        if text.eqlIgnoreCase(entry[..entry.len - 7], name) {
+            return hexColor(entry[entry.len - 6..])
+        }
+    }
+    return null
+}
+
+fn hexColor(h: []u8) ?Color {
+    var digits = [8]u32{0, 0, 0, 0, 0, 0, 0, 0}
+    if h.len != 3 && h.len != 4 && h.len != 6 && h.len != 8 {
+        return null
+    }
+    for i, ch in h {
+        if hexValue(ch) |d| {
+            digits[i] = d
+        } else {
+            return null
+        }
+    }
+    if h.len <= 4 {
+        var a: u32 = 255
+        if h.len == 4 {
+            a = digits[3] * 17
+        }
+        return Color {
+            r: (digits[0] * 17) as u8,
+            g: (digits[1] * 17) as u8,
+            b: (digits[2] * 17) as u8,
+            a: a as f64 / 255.0,
+        }
+    }
+    var a: u32 = 255
+    if h.len == 8 {
+        a = digits[6] * 16 + digits[7]
+    }
+    return Color {
+        r: (digits[0] * 16 + digits[1]) as u8,
+        g: (digits[2] * 16 + digits[3]) as u8,
+        b: (digits[4] * 16 + digits[5]) as u8,
+        a: a as f64 / 255.0,
+    }
+}
+
+fn hexValue(c: u8) ?u32 {
+    if c >= '0' && c <= '9' {
+        return (c - '0') as u32
+    }
+    if c >= 'a' && c <= 'f' {
+        return (c - 'a') as u32 + 10
+    }
+    if c >= 'A' && c <= 'F' {
+        return (c - 'A') as u32 + 10
+    }
+    return null
+}
+
+// The arguments of `rgb()`/`rgba()`: three channels (numbers 0-255 or
+// percentages) and an optional alpha (a number 0-1 or a percentage),
+// separated by commas, or by spaces with `/` before the alpha.
+fn rgbFunction(toks: []Token) ?Color {
+    var vals = [4]f64{0.0, 0.0, 0.0, 1.0}
+    var n: usize = 0
+    for t in toks {
+        if t.kind == Tok.Whitespace || t.kind == Tok.Comma || (t.kind == Tok.Delim && t.delim == '/') {
+            continue
+        }
+        if n >= 4 {
+            return null
+        }
+        if t.kind == Tok.Number {
+            vals[n] = t.num
+        } else if t.kind == Tok.Percentage {
+            if n == 3 {
+                vals[n] = t.num / 100.0
+            } else {
+                vals[n] = t.num * 255.0 / 100.0
+            }
+        } else if t.kind == Tok.Ident && text.eqlIgnoreCase(t.text, "none") {
+            vals[n] = 0.0
+        } else {
+            return null
+        }
+        n += 1
+    }
+    if n < 3 {
+        return null
+    }
+    return Color {
+        r: channel(vals[0]),
+        g: channel(vals[1]),
+        b: channel(vals[2]),
+        a: math.clamp(vals[3], 0.0, 1.0),
+    }
+}
+
+fn channel(v: f64) u8 {
+    return math.round(math.clamp(v, 0.0, 255.0)) as u8
+}
