@@ -22,14 +22,14 @@
     - textbox "Notes for the courier" [e8] value="Ring twice.\nLeave at the door."
     - paragraph
       - text: Quantity:
-      - spinbutton "Quantity" [e9] value="2"
+      - spinbutton "Quantity" [e9] value="2" min="1"
     - paragraph
-      - slider "Volume" [e10] value="7"
+      - slider "Volume" [e10] value="7" min="0" max="100"
     - paragraph
       - textbox "Order id" [e11] [readonly] value="A-17"
     - group "Gift options" [disabled]
       - textbox "Gift message" [e12] [disabled]
       - button "Wrap it" [e13] [disabled]
     - button "Attachment" [e14]
-    - progressbar "Upload" value="40"
+    - progressbar "Upload" value="40" min="0" max="100"
     - button "Save" [e15]

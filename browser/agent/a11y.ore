@@ -51,7 +51,8 @@ let ST_DISABLED: u32 = 32
 let ST_REQUIRED: u32 = 64
 let ST_READONLY: u32 = 128
 let ST_FOCUSED: u32 = 256
-let STATE_NAMES = [9][]u8{"checked", "mixed", "selected", "expanded", "collapsed", "disabled", "required", "readonly", "focused"}
+let ST_INVALID: u32 = 512
+let STATE_NAMES = [10][]u8{"checked", "mixed", "selected", "expanded", "collapsed", "disabled", "required", "readonly", "focused", "invalid"}
 
 // Roles whose name comes from their content; their text is not repeated
 // as children.
@@ -78,6 +79,8 @@ pub struct AxNode {
     ref: u32
     url: []u8
     value: []u8
+    min: []u8
+    max: []u8
     states: u32
     // The text of a node whose only content is text ("paragraph: ...").
     inline: []u8
@@ -158,6 +161,8 @@ fn addAx(ax: *mut Ax, parent: ?usize, role: []u8, node: ?NodeId) AllocError!usiz
         ref: 0,
         url: "",
         value: "",
+        min: "",
+        max: "",
         states: 0,
         inline: "",
         closed: false,
@@ -265,6 +270,18 @@ fn walkNode(ax: *mut Ax, h: NodeId, parent: usize) AllocError!void {
     a.name = name
     a.level = level
     a.value = value
+    if html.isIn(role, "spinbutton slider progressbar meter") {
+        a.min = ax.page.doc.attr(h, "aria-valuemin") orelse (ax.page.doc.attr(h, "min") orelse "")
+        a.max = ax.page.doc.attr(h, "aria-valuemax") orelse (ax.page.doc.attr(h, "max") orelse "")
+        if text.eql(role, "slider") {
+            a.min = ax.page.doc.attr(h, "min") orelse "0"
+            a.max = ax.page.doc.attr(h, "max") orelse "100"
+        }
+        if text.eql(role, "progressbar") || text.eql(role, "meter") {
+            a.min = ax.page.doc.attr(h, "min") orelse "0"
+            a.max = ax.page.doc.attr(h, "max") orelse "1"
+        }
+    }
     a.url = href
     a.states = states
     a.ref = ref
@@ -524,7 +541,7 @@ fn nativeRole(ax: *Ax, el: NodeId) []u8 {
         if text.eqlIgnoreCase(t, "radio") {
             return "radio"
         }
-        if isButtonInput(p, el) || text.eqlIgnoreCase(t, "file") {
+        if isButtonInput(p, el) || text.eqlIgnoreCase(t, "file") || text.eqlIgnoreCase(t, "color") {
             return "button"
         }
         if text.eqlIgnoreCase(t, "range") {
@@ -994,7 +1011,7 @@ fn valueOf(ax: *mut Ax, el: NodeId, role: []u8) AllocError![]u8 {
     if text.eql(name, "textarea") {
         return dom.valueOf(&p.doc, el)
     }
-    if text.eql(name, "input") && html.isIn(role, "textbox searchbox spinbutton slider") {
+    if text.eql(name, "input") && (html.isIn(role, "textbox searchbox spinbutton slider") || text.eql(dom.inputType(&p.doc, el), "color")) {
         let v = dom.valueOf(&p.doc, el)
         if text.eqlIgnoreCase(inputType(p, el), "password") {
             let masked = try ax.alloc.alloc('*' as u8, v.len)
@@ -1068,7 +1085,10 @@ fn statesOf(p: *Page, el: NodeId, role: []u8, focused: ?NodeId) u32 {
     if isDisabled(p, el) {
         s |= ST_DISABLED
     }
-    if p.doc.attr(el, "required") != null || attrIs(p, el, "aria-required", "true") {
+    if !dom.validityOf(&p.doc, el).valid() || attrIs(p, el, "aria-invalid", "true") {
+        s |= ST_INVALID
+    }
+    if dom.isRequired(&p.doc, el) || attrIs(p, el, "aria-required", "true") {
         s |= ST_REQUIRED
     }
     if html.isIn(name, "input textarea") && p.doc.attr(el, "readonly") != null {
@@ -1136,6 +1156,14 @@ fn axLine(ax: *Ax, i: usize, depth: usize, out: *mut text.Builder, boxes: bool) 
     if a.value.len > 0 {
         try out.append(" value=")
         try quoteText(out, a.value)
+    }
+    if a.min.len > 0 {
+        try out.append(" min=")
+        try quoteText(out, a.min)
+    }
+    if a.max.len > 0 {
+        try out.append(" max=")
+        try quoteText(out, a.max)
     }
     if a.url.len > 0 {
         try out.append(" -> ")
@@ -1233,6 +1261,14 @@ fn axJson(ax: *Ax, i: usize, w: *mut Writer, boxes: bool) AllocError!void {
             }
         }
         try w.endArray()
+    }
+    if a.min.len > 0 {
+        try w.key("min")
+        try w.string(a.min)
+    }
+    if a.max.len > 0 {
+        try w.key("max")
+        try w.string(a.max)
     }
     if a.value.len > 0 {
         try w.key("value")

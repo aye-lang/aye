@@ -632,6 +632,9 @@ struct Builder {
             if kind == layout.ControlKind.Radio {
                 return self.radio(el, x, y, w, h)
             }
+            if kind == layout.ControlKind.Range || kind == layout.ControlKind.Color || kind == layout.ControlKind.Progress || kind == layout.ControlKind.Meter {
+                return widget(self, el, kind, x, y, w, h)
+            }
         }
         return self.placeholder(i, x, y, w, h)
     }

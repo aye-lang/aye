@@ -57,7 +57,7 @@ Same rules as `milestones.md`: tests first; a milestone is done when its
 acceptance tests pass. Tests run headless and offline (`file:` fixtures
 and a local test server), so CI needs no network and no display.
 
-**Status.** B1–B7 are done (B7 without the `screenshot` command); B8 is under way:
+**Status.** B1–B7 are done; B8 is under way:
 
 | | State | Tests (`cargo test --test browser`) |
 |---|---|---|
@@ -67,7 +67,7 @@ and a local test server), so CI needs no network and no display.
 | B4 paint and window | done | 13 golden PNGs, PNG checks, headless window tests |
 | B5 forms and images | done | form sessions over HTTP, window form scripts, image decoder unit tests, form and image screenshots |
 | B6 JavaScript | done | 212 conformance scripts (`anyknown js`), 30 DOM fixtures (`dump --tree --js`, also under GC stress), a to-do app session, window script test, GC unit tests |
-| B7 agent interface | done (no `screenshot`) | 17 snapshot/Markdown fixtures, session and MCP transcripts (with `eval` and `wait`), shared-window sessions over its socket (JSON lines, MCP through `anyknown connect`, pause, pointing, tabs) |
+| B7 agent interface | done | 17 snapshot/Markdown fixtures, session and MCP transcripts (with `eval` and `wait`), shared-window sessions over its socket (JSON lines, MCP through `anyknown connect`, pause, pointing, tabs) |
 | B8 the real web | in progress | net over the local server (`net_http`, the `net_cookies` and `base` agent sessions), HTML/CSS fixtures (templates, quirks, hints, `var()`/`calc()`, at-rules, `@import`), layout fixtures of site shapes (floats, positioned boxes, grid, `details`), hit testing by layer (`window_hit_layers`), JS conformance scripts for generators, async, Symbol and the web APIs |
 
 All the front ends share `engine/`: the window, `screenshot` and the
@@ -77,13 +77,16 @@ agent sessions load pages through `engine.load` and keep history in a
 - **B6 leftovers:** modules, layout queries (`getBoundingClientRect` is
   all zeros), custom elements and Shadow DOM (in progress),
   `MutationObserver` reporting (in progress).
-- **B7:** the `screenshot` command (in progress, with iframes).
-- **B8:** iframes (in progress), HTML5 form controls and validation (in
-  progress); rotations and skews other than quarter turns are not drawn;
-  sticky only against the viewport; no public suffix list for cookies (a
-  bare top-level name is refused, `co.uk` is not); no AVIF. The list of
-  public sites is in [`docs/browser-sites.md`](browser-sites.md) (20
-  sites; run of 2026-10-06: 8 ✅, 7 ⚠️, 5 ❌, before the work below).
+- **B8:** event listeners on another frame's nodes, moving nodes
+  between documents, frame history entries; calendar, color and file
+  pickers, `datalist`; rotations and skews other than quarter turns are
+  not drawn; sticky only against the viewport; no public suffix list for
+  cookies (a bare top-level name is refused, `co.uk` is not); no AVIF;
+  page loads are slow on big sites (in progress), and so is the JS
+  interpreter (in progress). The list of public sites is in
+  [`docs/browser-sites.md`](browser-sites.md) (20 sites; run of
+  2026-10-07: 14 ✅, 3 ⚠️, 3 ❌; the run of 2026-10-06, before the work
+  below, had 8 ✅, 7 ⚠️, 5 ❌).
 
 The compiler gaps the browser met, and which of them M9.5/M9.6 fixed,
 are in `browser/COMPILER_GAPS.md`.
@@ -518,4 +521,29 @@ on (`--no-js` turns it off), `dump` with `--js`.
     rectangle; `--md` puts each frame under `## Frame: URL`, the
     snapshot has `frame` nodes.
   - *Agent Markdown:* invisible list items are dropped, layout tables
-    are read row by row, `pre` keeps its line breaks.
+    are read row by row, `pre` keeps its line breaks (also in the
+    snapshot).
+  - *Iframes:* `srcdoc`, `src` or about:blank load as pages of their
+    own; `sandbox` turns off scripts and gives the frame its own
+    origin; at most 3 deep and 16 frames per tab. Scripts use
+    `parent`, `top`, `frames[i]`, `frameElement`, `contentWindow` and
+    `contentDocument` (same origin), `postMessage` between frames and
+    iframe `load` events; iframes added by scripts, or whose `src`
+    changes, load at the next layout. Links and forms follow their
+    `target`. The snapshot and `read` give refs inside frames and agent
+    actions work there; in the window, clicks reach the frame's
+    document.
+  - *HTML5 forms* (by GPT-6.1-sol through pi): text-like and calendar
+    inputs (date, time, datetime-local, month, week), number controls,
+    draggable range sliders, color swatches, file placeholders,
+    `output`, `progress` and `meter`. Constraint validation (required,
+    pattern, lengths, numeric and calendar bounds and steps, email and
+    URL mismatches, custom errors) with live `ValidityState`,
+    `checkValidity`/`reportValidity`/`setCustomValidity`,
+    `requestSubmit`, `reset` and FormData from the form's entries.
+    Invalid submissions fire `invalid`, focus the first invalid control
+    and show a tooltip in the window or a message to the agent. Form
+    owners (`form=`), labels, disabled fieldsets, submitter overrides
+    (`formaction`, `formmethod`, `formenctype`, `formnovalidate`),
+    `multipart/form-data`, the state pseudo-classes, and the a11y roles
+    and states (spinbutton, slider, required, invalid).

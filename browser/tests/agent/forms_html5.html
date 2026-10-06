@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<title>HTML5 controls</title>
+<form action="done.html">
+<label>Quantity <input name="quantity" type="number" min="1" max="10" step="1" required></label>
+<label>Volume <input type="range" name="volume" min="0" max="100" step="10"></label>
+<label>Date <input type="date" name="date" required></label>
+<label>Time <input type="time" name="time"></label>
+<label>Month <input type="month" name="month"></label>
+<label>Week <input type="week" name="week"></label>
+<label>Local <input type="datetime-local" name="local"></label>
+<label>Color <input type="color" name="color" value="#cc3366"></label>
+<label>File <input type="file" name="file"></label>
+<label>Email <input type="email" name="email"></label>
+<label>URL <input type="url" name="url"></label>
+<label>Phone <input type="tel" name="phone"></label>
+<label>Search <input type="search" name="search"></label>
+<button>Send</button><button type="reset">Reset</button>
+<progress aria-label="Upload" max="100" value="40"></progress>
+<meter aria-label="Capacity" min="0" max="10" value="6"></meter>
+<output>Result: 42</output>
+</form>
+<datalist><option>ignored</option></datalist><input type="hidden" value="secret">

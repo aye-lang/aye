@@ -288,6 +288,8 @@ pub let PRELUDE =
     \\    ev = new FocusEvent(type, {});
     \\  } else if (type === 'focusin' || type === 'focusout') {
     \\    ev = new FocusEvent(type, { bubbles: true });
+    \\  } else if (type === 'invalid') {
+    \\    ev = new Event(type, { cancelable: true });
     \\  } else if (type === 'load') {
     \\    ev = new Event(type, {});
     \\  } else {
@@ -422,6 +424,11 @@ pub let PRELUDE =
     \\reflect('defaultValue', 'value');
     \\for (const n of ['hidden', 'disabled', 'required', 'multiple', 'autofocus', 'open']) reflectBool(n, n);
     \\reflectBool('readOnly', 'readonly');
+    \\reflectBool('noValidate', 'novalidate');
+    \\reflectBool('formNoValidate', 'formnovalidate');
+    \\for (const n of ['min', 'max', 'step', 'pattern', 'enctype']) reflect(n, n);
+    \\for (const n of ['formAction', 'formMethod', 'formEnctype']) reflect(n, n.toLowerCase());
+    \\for (const n of ['minLength', 'maxLength']) getter(HTMLP, n, function () { const a = this.getAttribute(n.toLowerCase()); return a === null ? -1 : Number(a); }, function (v) { this.setAttribute(n.toLowerCase(), String(v)); });
     \\reflectBool('defaultChecked', 'checked');
     \\reflectBool('defaultSelected', 'selected');
     \\for (const n of ['href', 'src', 'action']) reflectUrl(n);
@@ -438,15 +445,10 @@ pub let PRELUDE =
     \\}, function (v) { this.setAttribute('tabindex', String(v)); });
     \\// value, checked, selected and selectedIndex are natives over the
     \\// page's form state (dom_api.ore).
-    \\getter(HTMLP, 'form', function () { return this.closest('form'); });
     \\getter(HTMLP, 'text', function () { return this.textContent; }, function (v) { this.textContent = v; });
     \\getter(HTMLP, 'innerText', function () { return this.textContent; }, function (v) { this.textContent = v; });
     \\getter(HTMLP, 'outerText', function () { return this.textContent; });
     \\hidden(HTMLP, 'submit', function () { ak.submit(this); });
-    \\hidden(HTMLP, 'requestSubmit', function () {
-    \\  if (hostEvent(this, 'submit')) ak.submit(this);
-    \\});
-    \\hidden(HTMLP, 'reset', function () { hostEvent(this, 'reset'); });
     \\hidden(HTMLP, 'select', function () {});
     \\
     \\// classList
@@ -2069,35 +2071,37 @@ pub let PRELUDE =
     \\hidden(URL, 'createObjectURL', function (blob) { return 'blob:' + ak.urlPart('origin') + '/' + crypto.randomUUID(); });
     \\hidden(URL, 'revokeObjectURL', function () {});
     \\
-    \\// FormData: name/value pairs, from a form's controls when given one.
+    \\// FormData: name/value pairs, from a form's successful controls (the
+    \\// entries a submission sends, form_api.ore) when given one.
+    \\function formValue(v, filename) {
+    \\  if (!(v instanceof Blob)) return String(v);
+    \\  if (v instanceof File && filename === undefined) return v;
+    \\  return new File([v], filename === undefined ? 'blob' : String(filename), { type: v.type });
+    \\}
     \\class FormData {
-    \\  constructor(form) {
+    \\  constructor(form, submitter) {
     \\    hidden(this, '_list', []);
     \\    if (form === undefined) return;
-    \\    for (const el of form.querySelectorAll('input, select, textarea, button')) {
-    \\      const name = el.getAttribute('name');
-    \\      if (!name || el.disabled) continue;
-    \\      const type = el.type;
-    \\      if (el.localName === 'button' || type === 'submit' || type === 'button' || type === 'reset' || type === 'image' || type === 'file') continue;
-    \\      if ((type === 'checkbox' || type === 'radio') && !el.checked) continue;
-    \\      if (el.localName === 'select') {
-    \\        for (const o of el.options) if (o.selected) this._list.push([name, o.value]);
-    \\        continue;
-    \\      }
-    \\      this._list.push([name, (type === 'checkbox' || type === 'radio') && !el.hasAttribute('value') ? 'on' : el.value]);
+    \\    if (!form || form.localName !== 'form') throw new TypeError('Expected a form');
+    \\    if (submitter !== undefined && submitter !== null) {
+    \\      if (!((submitter.localName === 'button' && submitter.type === 'submit') || (submitter.localName === 'input' && /^(submit|image)$/.test(submitter.type)))) throw new TypeError('Expected a submit button');
+    \\      if (submitter.form !== form) throw new DOMException('Submitter belongs to another form', 'NotFoundError');
+    \\    }
+    \\    for (const e of form._formEntries(submitter)) {
+    \\      this._list.push([e[0], e[2] ? new File([], '', { type: 'application/octet-stream' }) : e[1]]);
     \\    }
     \\  }
-    \\  append(k, v) { this._list.push([String(k), v instanceof Blob ? v : String(v)]); }
+    \\  append(k, v, filename) { this._list.push([String(k), formValue(v, filename)]); }
     \\  delete(k) { k = String(k); this._list = this._list.filter(p => p[0] !== k); }
     \\  get(k) { k = String(k); const p = this._list.find(p => p[0] === k); return p ? p[1] : null; }
     \\  getAll(k) { k = String(k); return this._list.filter(p => p[0] === k).map(p => p[1]); }
     \\  has(k) { k = String(k); return this._list.some(p => p[0] === k); }
-    \\  set(k, v) {
+    \\  set(k, v, filename) {
     \\    k = String(k);
     \\    const i = this._list.findIndex(p => p[0] === k);
-    \\    if (i < 0) this.append(k, v);
+    \\    if (i < 0) this.append(k, v, filename);
     \\    else {
-    \\      this._list[i][1] = v instanceof Blob ? v : String(v);
+    \\      this._list[i][1] = formValue(v, filename);
     \\      this._list = this._list.filter((p, j) => j <= i || p[0] !== k);
     \\    }
     \\  }

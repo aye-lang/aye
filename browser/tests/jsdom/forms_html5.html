@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<title>HTML5 forms</title>
+<form id="f"><input id="n" name="n" type="number" min="2" max="10" step="2" required><input id="email" type="email"><input id="date" type="date"><input id="p" pattern="[A-Z]{2}[0-9]+"><input id="c" type="checkbox" required><button id="send">Send</button><button type="reset">Reset</button></form>
+<input id="outside" form="f" name="external" value="yes">
+<fieldset disabled><input id="off" required><legend><input id="legend" value="enabled"></legend></fieldset>
+<pre id="results"></pre>
+<script>
+const f = document.getElementById('f'), n = document.getElementById('n');
+const email = document.getElementById('email'), date = document.getElementById('date'), p = document.getElementById('p'), c = document.getElementById('c');
+let lines = [];
+function test(name, value) { if (!value) throw new Error(name); lines.push(name); }
+test('required', n.validity.valueMissing && !f.checkValidity());
+n.value = '3'; test('step', n.validity.stepMismatch);
+n.value = '12'; test('maximum', n.validity.rangeOverflow);
+n.value = '0'; test('minimum', n.validity.rangeUnderflow);
+n.value = '4'; test('number valid', n.validity.valid);
+email.value = 'broken'; test('email mismatch', email.validity.typeMismatch);
+email.value = 'a@example.com'; test('email valid', email.checkValidity());
+date.value = '2024-02-29'; test('leap day', date.checkValidity());
+date.value = '2023-02-29'; test('bad date', !date.checkValidity());
+date.value = ''; p.value = 'AB12'; test('pattern valid', p.checkValidity());
+p.value = 'aB12'; test('pattern mismatch', p.validity.patternMismatch);
+p.value = 'AB12'; c.checked = true;
+n.setCustomValidity('Choose another number'); test('custom', n.validationMessage === 'Choose another number' && n.validity.customError);
+n.setCustomValidity(''); test('form valid', f.checkValidity());
+test('owner', document.getElementById('outside').form === f);
+test('fieldset', !document.getElementById('off').willValidate && document.getElementById('legend').willValidate);
+test('selectors', n.matches(':valid:required') && p.matches(':optional'));
+let invalid = 0, submitted = 0;
+n.addEventListener('invalid', function () { invalid++; });
+f.addEventListener('submit', function (e) { submitted++; e.preventDefault(); });
+n.value = ''; f.requestSubmit(); test('blocked submit', invalid === 1 && submitted === 0);
+n.value = '4'; f.requestSubmit(); test('request submit', submitted === 1);
+const data = new FormData(f); test('form data', data.get('n') === '4' && data.get('external') === 'yes');
+f.addEventListener('reset', function (e) { e.preventDefault(); }, { once: true });
+f.reset(); test('canceled reset', n.value === '4');
+f.reset(); test('reset', n.value === '' && !c.checked);
+document.getElementById('results').textContent = lines.join('\n');
+</script>

@@ -452,6 +452,7 @@ fn setUp(s: *mut Script) JsError!void {
     try installDom(s)
     try installWindow(s)
     try s.it.runScript(PRELUDE)
+    try s.it.runScript(FORM_PRELUDE)
 }
 
 /// Frees the script of a page (before its document).
