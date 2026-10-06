@@ -940,6 +940,14 @@ pub struct Interp {
                     }
                     return self.call0(p.value, receiver)
                 }
+                if key == A_PROTOTYPE && cls == Class.Function {
+                    match p.value {
+                        .Empty => {
+                            return self.materializePrototype(cur, i)
+                        }
+                        _ => {}
+                    }
+                }
                 return p.value
             }
             if cls == Class.Function && (key == A_NAME || key == A_LENGTH) {
@@ -2151,13 +2159,24 @@ pub struct Interp {
             return objVal(o)
         }
         if !fi.arrow && !fi.method && !fi.ctor && !fi.is_async {
-            try self.push(objVal(o))
-            let p = try self.newObject(self.object_proto)
-            try self.heap.addProp(p, A_CONSTRUCTOR, objVal(o), Value.Undefined, F_HIDDEN)
-            try self.heap.addProp(o, A_PROTOTYPE, objVal(p), Value.Undefined, F_WRITE)
-            self.pop()
+            // The own descriptor exists immediately, but most closures
+            // are never constructed or asked for their prototype.
+            try self.heap.addProp(o, A_PROTOTYPE, Value.Empty, Value.Undefined, F_WRITE)
         }
         return objVal(o)
+    }
+
+    // Empty in a function's own prototype slot is the lazy prototype,
+    // not a JS value. Materialization changes only its value, even when
+    // the function has been frozen; flags/order/layout remain unchanged.
+    fn materializePrototype(self: *mut Self, f: u32, slot: u32) JsError!Value {
+        let base = self.stack.len()
+        defer self.truncate(base)
+        try self.push(objVal(f))
+        let p = try self.newObject(self.object_proto)
+        try self.heap.addProp(p, A_CONSTRUCTOR, objVal(f), Value.Undefined, F_HIDDEN)
+        self.heap.obj(f).props[slot].value = objVal(p)
+        return objVal(p)
     }
 
     fn setHome(self: *mut Self, m: u32, home: u32) {
