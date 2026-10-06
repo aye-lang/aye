@@ -52,7 +52,7 @@ pub struct Images {
 
     /// The image of a style sheet's `url()`; `pic` for an SVG image.
     pub fn putUrl(self: *mut Self, key: []u8, bmp: *image.Bitmap, pic: ?*svg.Picture) AllocError!void {
-        try self.urls.put(key, ImageRef { generation: 0, bmp: bmp, pic: pic })
+        try self.urls.put(key, ImageRef { generation: 0, bmp: bmp, pic: pic, density: 1.0 })
     }
 
     pub fn hasUrl(self: *Self, key: []u8) bool {
