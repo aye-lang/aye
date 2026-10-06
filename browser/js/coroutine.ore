@@ -608,6 +608,29 @@ fn installGenerators(it: *mut Interp) JsError!void {
     try it.defineValue(it.global, "__engine", objVal(e))
     try it.defineNative(e, "kindOf", 1, engineKindOf)
     try it.defineNative(e, "setDrivers", 3, engineSetDrivers)
+    try it.defineNative(e, "construct", 3, engineConstruct)
+}
+
+// construct(C, args, newTarget): `new C(...args)` with that new.target
+// (Reflect.construct); `args` is an array.
+fn engineConstruct(it: *mut Interp, a: Args) JsError!Value {
+    let c = it.arg(a, 0)
+    let arr = objectOf(it.arg(a, 1))
+    var nt = objectOf(it.arg(a, 2))
+    if nt == NONE || !it.isCallable(objVal(nt)) {
+        nt = objectOf(c)
+    }
+    let base = it.stack.len()
+    try it.push(c)
+    try it.push(Value.Undefined)
+    var n: usize = 0
+    if arr != NONE {
+        n = it.heap.obj(arr).nelems as usize
+        for i in 0..n {
+            try it.push(it.heap.obj(arr).elems[i])
+        }
+    }
+    return it.constructAt(base, n, nt)
 }
 
 // ---- calls
