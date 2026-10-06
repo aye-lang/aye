@@ -95,7 +95,7 @@ pub fn reportUncaught(it: *mut Interp) {
     std.fs.stderr().write(b.bytes()) catch |e| {}
 }
 
-fn describeException(it: *mut Interp, b: *mut text.Builder) JsError!void {
+pub fn describeException(it: *mut Interp, b: *mut text.Builder) JsError!void {
     let ex = it.exception
     try it.push(ex)
     try b.append("Uncaught ")

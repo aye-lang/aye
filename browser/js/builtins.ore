@@ -1033,7 +1033,7 @@ fn installConsole(it: *mut Interp) JsError!void {
 
 // The text of console.log's arguments (with printf-like %s %d %i %f %o
 // %O %j %% in a first string argument).
-fn formatLog(it: *mut Interp, a: Args, b: *mut text.Builder) JsError!void {
+pub fn formatLog(it: *mut Interp, a: Args, b: *mut text.Builder) JsError!void {
     var next: usize = 0
     if a.argc > 0 && isStr(it.arg(a, 0)) {
         let fmtv = it.arg(a, 0)

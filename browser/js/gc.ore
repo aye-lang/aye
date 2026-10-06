@@ -128,10 +128,33 @@ pub fn collectGarbage(it: *mut Interp) {
     }
     markValue(it, it.exception)
     markValue(it, it.ret)
+    markValue(it, it.completion)
     for v in it.roots.items() {
         markValue(it, v)
     }
-    // Trace.
+    // Trace, then let the host keep more alive, until nothing changes.
+    drain(it)
+    if it.host |h| {
+        while h.trace(it) {
+            drain(it)
+        }
+    }
+    sweep(it)
+}
+
+/// For `Host.trace`: is object o marked (reachable) in this collection?
+pub fn gcMarked(it: *mut Interp, o: u32) bool {
+    return it.heap.objs.items()[o].mark
+}
+
+/// For `Host.trace`: marks object o (and later what it refers to).
+pub fn gcMark(it: *mut Interp, o: u32) {
+    markObj(it, o)
+}
+
+// Marks everything reachable from the gray objects, strings and
+// environments.
+fn drain(it: *mut Interp) {
     while true {
         if it.gray_objs.pop() |o| {
             traceObj(it, o)
@@ -147,7 +170,9 @@ pub fn collectGarbage(it: *mut Interp) {
             break
         }
     }
-    // Sweep.
+}
+
+fn sweep(it: *mut Interp) {
     var live: usize = 0
     for i in 0..it.heap.objs.len() {
         let ob = &mut it.heap.objs.items()[i]

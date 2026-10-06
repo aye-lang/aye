@@ -58,11 +58,28 @@ pub struct Frame {
     this_obj: u32
 }
 
-/// What the host (the DOM) learns from the engine: a host object was
-/// collected (design.md's `js_refs` finalizer).
+/// What the host (the DOM) learns from the engine, and what it adds:
+///
+/// - `finalize`: a host object was collected (design.md's `js_refs`
+///   finalizer).
+/// - `trace`: during a collection, after everything reachable from the
+///   roots is marked, the host may mark more (`gcMark`): the wrappers
+///   that must outlive their last reference (nodes in the document).
+///   It returns whether it marked anything; the collector then traces
+///   from those and asks again.
+/// - `getNamed`/`setNamed`: properties of host objects whose tag has
+///   `HOST_NAMED` set (`el.style.color`, `el.dataset.x`) are asked of
+///   the host first. `getNamed` returns `Value.Empty`, and `setNamed`
+///   false, for a key it leaves to the object itself.
 pub interface Host {
     fn finalize(self: *mut Self, tag: u32, index: u32, generation: u32)
+    fn trace(self: *mut Self, it: *mut Interp) bool
+    fn getNamed(self: *mut Self, it: *mut Interp, o: u32, key: u32) JsError!Value
+    fn setNamed(self: *mut Self, it: *mut Interp, o: u32, key: u32, v: Value) JsError!bool
 }
+
+/// A host object tag with this bit has named properties (see Host).
+pub let HOST_NAMED: u32 = 0x100
 
 let MAX_DEPTH: usize = 10000
 
@@ -106,6 +123,16 @@ pub struct Interp {
     // Values the host keeps alive.
     roots: List(Value)
     host: ?dyn Host
+    // The host's own state, for its native functions.
+    host_data: ?[*]u8
+    // Nested calls beyond this throw a RangeError. Scripts of pages run
+    // on the main thread, whose C stack is smaller than `anyknown js`'s.
+    max_depth: usize
+    // The value of the last expression statement run at the top level
+    // of the script that evalScript runs, and the number of frames below
+    // that script.
+    completion: Value
+    completion_base: usize
     msg: text.Builder
     out: text.Builder
     gc_count: u32
@@ -161,6 +188,10 @@ pub struct Interp {
             label: 0,
             roots: List(Value).init(alloc),
             host: null,
+            host_data: null,
+            max_depth: MAX_DEPTH,
+            completion: Value.Undefined,
+            completion_base: 0,
             msg: text.Builder.init(alloc),
             out: text.Builder.init(alloc),
             gc_count: 0,
@@ -555,6 +586,15 @@ pub struct Interp {
 
     // Searches the prototype chain from object o.
     fn getFrom(self: *mut Self, o: u32, key: u32, receiver: Value) JsError!Value {
+        if self.heap.obj(o).class == Class.Host && self.namedHost(o) {
+            let got = try self.host.?.getNamed(self, o, key)
+            match got {
+                .Empty => {}
+                _ => {
+                    return got
+                }
+            }
+        }
         var cur = o
         while cur != NONE {
             let ob = self.heap.obj(cur)
@@ -757,7 +797,23 @@ pub struct Interp {
         return self.setProp(v, key, value)
     }
 
+    // Is o a host object with named properties (and is there a host)?
+    fn namedHost(self: *Self, o: u32) bool {
+        if self.host == null {
+            return false
+        }
+        return match self.heap.obj(o).data {
+            .Host { tag, .. } => (tag & HOST_NAMED) != 0
+            _ => false
+        }
+    }
+
     fn setOn(self: *mut Self, o: u32, key: u32, value: Value, receiver: Value) JsError!void {
+        if self.heap.obj(o).class == Class.Host && self.namedHost(o) {
+            if try self.host.?.setNamed(self, o, key, value) {
+                return
+            }
+        }
         let ob = self.heap.obj(o)
         let cls = ob.class
         if cls == Class.Array || cls == Class.Arguments {
@@ -1498,7 +1554,7 @@ pub struct Interp {
         if fi.ctor && newTarget == NONE {
             return self.typeErrorAbout("Class constructor ", self.heap.atoms.name(fi.name), " cannot be invoked without 'new'")
         }
-        if self.frames.len() >= MAX_DEPTH {
+        if self.frames.len() >= self.max_depth {
             return self.rangeError("Maximum call stack size exceeded")
         }
         let nslots = self.ast.scopes.items()[fi.scope].nslots
@@ -2754,7 +2810,10 @@ pub struct Interp {
     pub fn exec(self: *mut Self, id: u32) JsError!Flow {
         match self.ast.nodes.items()[id] {
             .ExprStmt { e } => {
-                try self.eval(e)
+                let v = try self.eval(e)
+                if self.frames.len() == self.completion_base {
+                    self.completion = v
+                }
                 return Flow.Normal
             }
             .VarDecl { kind, list, n } => {
@@ -3236,6 +3295,28 @@ pub struct Interp {
         defer self.env = savedEnv
         try self.exec(root)
         return Value.Undefined
+    }
+
+    /// Runs a script like runScript and returns the value of its last
+    /// expression statement run at the top level (undefined for none),
+    /// as `eval` would.
+    pub fn evalScript(self: *mut Self, src: []u8) JsError!Value {
+        // The completion of an enclosing evalScript waits on the stack.
+        try self.push(self.completion)
+        let mark = self.stack.len() - 1
+        let savedBase = self.completion_base
+        self.completion = Value.Undefined
+        self.completion_base = self.frames.len()
+        defer self.completion_base = savedBase
+        self.runScript(src) catch |e| {
+            self.completion = self.stack.items()[mark]
+            self.truncate(mark)
+            return e
+        }
+        let v = self.completion
+        self.completion = self.stack.items()[mark]
+        self.truncate(mark)
+        return v
     }
 
     fn syntaxError(self: *mut Self, m: []u8) JsError!Value {

@@ -70,6 +70,28 @@ struct CountingHost {
         self.finalized += 1
         self.last_index = index
     }
+
+    fn trace(self: *mut Self, it: *mut Interp) bool {
+        return false
+    }
+
+    fn getNamed(self: *mut Self, it: *mut Interp, o: u32, key: u32) JsError!Value {
+        return Value.Empty
+    }
+
+    fn setNamed(self: *mut Self, it: *mut Interp, o: u32, key: u32, v: Value) JsError!bool {
+        return false
+    }
+}
+
+test "evalScript gives the completion value" {
+    var it = try Interp.create(@testAllocator())
+    defer it.deinit()
+    try installBuiltins(&mut it)
+    let v = try it.evalScript("var a = 2; function f() { return 9 } a * 21; f(); if (true) { 'last' }")
+    @expectEqual("last", it.heap.bytes(strOf(v)))
+    let w = try it.evalScript("let z = 1")
+    @expect(isUndef(w))
 }
 
 test "collected host objects are reported to the host" {
