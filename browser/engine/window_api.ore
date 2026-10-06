@@ -54,6 +54,7 @@ fn installWindow(s: *mut Script) JsError!void {
     try defMethod(it, o, "computedStyle", 2, akComputedStyle)
     try defMethod(it, o, "displayed", 1, akDisplayed)
     try defMethod(it, o, "cssNames", 0, akCssNames)
+    try defMethod(it, o, "supports", 1, akSupports)
 
     let c = try it.newObject(it.object_proto)
     try it.defineValue(it.global, "console", js.objVal(c))
@@ -510,6 +511,21 @@ fn akComputedStyle(it: *mut Interp, a: Args) JsError!Value {
         try setField(it, o, prop.name, b.bytes())
     }
     return it.pop()
+}
+
+// CSS.supports: does the `@supports` condition argument 0 hold? (A sheet
+// with the rule `@supports COND { a {} }` has the rule when it does.)
+fn akSupports(it: *mut Interp, a: Args) JsError!Value {
+    let b = try it.builder()
+    defer it.release(b)
+    try b.append("@supports ")
+    try argText(it, a, 0, b)
+    try b.append(" { a {} }")
+    var sheet = try css.Sheet.init(it.alloc)
+    defer sheet.deinit()
+    let s = scriptOf(it)
+    try css.parseSheet(&mut sheet, b.bytes(), css.Media { width: s.width, height: s.height })
+    return js.boolVal(sheet.rules.len() == 1)
 }
 
 // The names of the properties getComputedStyle has.

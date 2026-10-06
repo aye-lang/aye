@@ -391,9 +391,6 @@ pub let PRELUDE =
     \\  hostEvent(this, 'blur');
     \\  hostEvent(this, 'focusout');
     \\});
-    \\hidden(ElementP, 'getBoundingClientRect', function () {
-    \\  return { x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 };
-    \\});
     \\hidden(ElementP, 'scrollIntoView', function () {});
     \\// No geometry yet: a box for an element that is rendered (in the
     \\// document, no `display: none` on the way up), none for the others.
@@ -1857,5 +1854,426 @@ pub let PRELUDE =
     \\});
     \\hidden(G, 'XMLHttpRequest', XMLHttpRequest);
     \\
+    \\// ---- more interfaces: events, Blob and File, FormData, messaging, Range,
+    \\// Selection, DOMParser, style sheets, CSS
+    \\
+    \\// Event interfaces with their init fields.
+    \\function eventClass(name, Base, fields) {
+    \\  const C = class extends Base {
+    \\    constructor(type, init) {
+    \\      super(type, init);
+    \\      init = init || {};
+    \\      for (const k in fields) this[k] = init[k] === undefined ? fields[k] : init[k];
+    \\    }
+    \\  };
+    \\  Object.defineProperty(C, 'name', { value: name, configurable: true });
+    \\  hidden(G, name, C);
+    \\  return C;
+    \\}
+    \\eventClass('MessageEvent', Event, { data: null, origin: '', lastEventId: '', source: null, ports: [] });
+    \\eventClass('ErrorEvent', Event, { message: '', filename: '', lineno: 0, colno: 0, error: null });
+    \\eventClass('PopStateEvent', Event, { state: null });
+    \\eventClass('HashChangeEvent', Event, { oldURL: '', newURL: '' });
+    \\eventClass('StorageEvent', Event, { key: null, oldValue: null, newValue: null, url: '', storageArea: null });
+    \\eventClass('ProgressEvent', Event, { lengthComputable: false, loaded: 0, total: 0 });
+    \\eventClass('PageTransitionEvent', Event, { persisted: false });
+    \\eventClass('PromiseRejectionEvent', Event, { promise: null, reason: undefined });
+    \\eventClass('CloseEvent', Event, { wasClean: false, code: 0, reason: '' });
+    \\eventClass('AnimationEvent', Event, { animationName: '', elapsedTime: 0, pseudoElement: '' });
+    \\eventClass('TransitionEvent', Event, { propertyName: '', elapsedTime: 0, pseudoElement: '' });
+    \\eventClass('SubmitEvent', Event, { submitter: null });
+    \\eventClass('CompositionEvent', UIEvent, { data: '' });
+    \\eventClass('TouchEvent', UIEvent, { touches: [], targetTouches: [], changedTouches: [], altKey: false, ctrlKey: false, metaKey: false, shiftKey: false });
+    \\const PointerEvent = eventClass('PointerEvent', MouseEvent, { pointerId: 0, width: 1, height: 1, pressure: 0, tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0, pointerType: '', isPrimary: false });
+    \\eventClass('WheelEvent', MouseEvent, { deltaX: 0, deltaY: 0, deltaZ: 0, deltaMode: 0 });
+    \\eventClass('DragEvent', MouseEvent, { dataTransfer: null });
+    \\
+    \\// Blob and File: the bytes are a string of code units 0..255 (UTF-8 for
+    \\// string parts).
+    \\function blobBytes(parts) {
+    \\  let s = '';
+    \\  for (const p of parts || []) {
+    \\    if (p instanceof Blob) s += p._bytes;
+    \\    else if (p instanceof ArrayBuffer || ArrayBuffer.isView(p)) {
+    \\      const u = p instanceof ArrayBuffer ? new Uint8Array(p) : new Uint8Array(p.buffer, p.byteOffset, p.byteLength);
+    \\      for (let i = 0; i < u.length; i++) s += String.fromCharCode(u[i]);
+    \\    } else {
+    \\      for (const b of new TextEncoder().encode(String(p))) s += String.fromCharCode(b);
+    \\    }
+    \\  }
+    \\  return s;
+    \\}
+    \\class Blob {
+    \\  constructor(parts, options) {
+    \\    hidden(this, '_bytes', blobBytes(parts));
+    \\    hidden(this, '_type', options && options.type ? String(options.type).toLowerCase() : '');
+    \\  }
+    \\  get size() { return this._bytes.length; }
+    \\  get type() { return this._type; }
+    \\  slice(start, end, type) {
+    \\    const b = new Blob([], { type });
+    \\    b._bytes = this._bytes.slice(start === undefined ? 0 : start, end === undefined ? this._bytes.length : end);
+    \\    return b;
+    \\  }
+    \\  _array() {
+    \\    const u = new Uint8Array(this._bytes.length);
+    \\    for (let i = 0; i < u.length; i++) u[i] = this._bytes.charCodeAt(i);
+    \\    return u;
+    \\  }
+    \\  text() { return Promise.resolve(new TextDecoder().decode(this._array())); }
+    \\  arrayBuffer() { return Promise.resolve(this._array().buffer); }
+    \\}
+    \\class File extends Blob {
+    \\  constructor(parts, name, options) {
+    \\    super(parts, options);
+    \\    hidden(this, '_name', String(name));
+    \\    hidden(this, '_modified', options && options.lastModified !== undefined ? Number(options.lastModified) : Date.now());
+    \\  }
+    \\  get name() { return this._name; }
+    \\  get lastModified() { return this._modified; }
+    \\}
+    \\hidden(G, 'Blob', Blob);
+    \\hidden(G, 'File', File);
+    \\class FileReader extends EventTarget {
+    \\  constructor() {
+    \\    super();
+    \\    this.readyState = 0;
+    \\    this.result = null;
+    \\    this.error = null;
+    \\    for (const t of ['loadstart', 'progress', 'load', 'loadend', 'error', 'abort']) if (!HANDLERS.includes(t)) this['on' + t] = null;
+    \\  }
+    \\  _read(blob, how) {
+    \\    this.readyState = 1;
+    \\    setTimeout(() => {
+    \\      const bytes = blob._bytes;
+    \\      if (how === 'text') this.result = new TextDecoder().decode(blob._array());
+    \\      else if (how === 'url') this.result = 'data:' + (blob.type || 'application/octet-stream') + ';base64,' + btoa(bytes);
+    \\      else if (how === 'binary') this.result = bytes;
+    \\      else this.result = blob._array().buffer;
+    \\      this.readyState = 2;
+    \\      for (const t of ['load', 'loadend']) {
+    \\        const ev = new ProgressEvent(t, { loaded: bytes.length, total: bytes.length, lengthComputable: true });
+    \\        const h = HANDLERS.includes(t) ? null : this['on' + t];
+    \\        if (typeof h === 'function') callListener(h, this, ev, false);
+    \\        this.dispatchEvent(ev);
+    \\      }
+    \\    }, 0);
+    \\  }
+    \\  readAsText(b) { this._read(b, 'text'); }
+    \\  readAsDataURL(b) { this._read(b, 'url'); }
+    \\  readAsArrayBuffer(b) { this._read(b, 'buffer'); }
+    \\  readAsBinaryString(b) { this._read(b, 'binary'); }
+    \\  abort() {}
+    \\}
+    \\hidden(G, 'FileReader', FileReader);
+    \\hidden(URL, 'createObjectURL', function (blob) { return 'blob:' + ak.urlPart('origin') + '/' + crypto.randomUUID(); });
+    \\hidden(URL, 'revokeObjectURL', function () {});
+    \\
+    \\// FormData: name/value pairs, from a form's controls when given one.
+    \\class FormData {
+    \\  constructor(form) {
+    \\    hidden(this, '_list', []);
+    \\    if (form === undefined) return;
+    \\    for (const el of form.querySelectorAll('input, select, textarea, button')) {
+    \\      const name = el.getAttribute('name');
+    \\      if (!name || el.disabled) continue;
+    \\      const type = el.type;
+    \\      if (el.localName === 'button' || type === 'submit' || type === 'button' || type === 'reset' || type === 'image' || type === 'file') continue;
+    \\      if ((type === 'checkbox' || type === 'radio') && !el.checked) continue;
+    \\      if (el.localName === 'select') {
+    \\        for (const o of el.options) if (o.selected) this._list.push([name, o.value]);
+    \\        continue;
+    \\      }
+    \\      this._list.push([name, (type === 'checkbox' || type === 'radio') && !el.hasAttribute('value') ? 'on' : el.value]);
+    \\    }
+    \\  }
+    \\  append(k, v) { this._list.push([String(k), v instanceof Blob ? v : String(v)]); }
+    \\  delete(k) { k = String(k); this._list = this._list.filter(p => p[0] !== k); }
+    \\  get(k) { k = String(k); const p = this._list.find(p => p[0] === k); return p ? p[1] : null; }
+    \\  getAll(k) { k = String(k); return this._list.filter(p => p[0] === k).map(p => p[1]); }
+    \\  has(k) { k = String(k); return this._list.some(p => p[0] === k); }
+    \\  set(k, v) {
+    \\    k = String(k);
+    \\    const i = this._list.findIndex(p => p[0] === k);
+    \\    if (i < 0) this.append(k, v);
+    \\    else {
+    \\      this._list[i][1] = v instanceof Blob ? v : String(v);
+    \\      this._list = this._list.filter((p, j) => j <= i || p[0] !== k);
+    \\    }
+    \\  }
+    \\  forEach(f, thisArg) { for (const [k, v] of this._list.slice()) f.call(thisArg, v, k, this); }
+    \\  keys() { return this._list.map(p => p[0])[Symbol.iterator](); }
+    \\  values() { return this._list.map(p => p[1])[Symbol.iterator](); }
+    \\  entries() { return this._list.map(p => [p[0], p[1]])[Symbol.iterator](); }
+    \\  [Symbol.iterator]() { return this.entries(); }
+    \\}
+    \\hidden(G, 'FormData', FormData);
+    \\
+    \\// Messages: postMessage on the window and MessageChannel ports deliver a
+    \\// MessageEvent in a task of its own.
+    \\class MessagePort extends EventTarget {
+    \\  constructor() {
+    \\    super();
+    \\    hidden(this, '_other', null);
+    \\    hidden(this, '_closed', false);
+    \\    hidden(this, '_onmessage', null);
+    \\  }
+    \\  get onmessage() { return this._onmessage; }
+    \\  set onmessage(f) { this._onmessage = typeof f === 'function' ? f : null; }
+    \\  postMessage(data) {
+    \\    const to = this._other;
+    \\    if (!to || this._closed) return;
+    \\    setTimeout(() => {
+    \\      if (to._closed) return;
+    \\      const ev = new MessageEvent('message', { data });
+    \\      if (to._onmessage) callListener(to._onmessage, to, ev, false);
+    \\      to.dispatchEvent(ev);
+    \\    }, 0);
+    \\  }
+    \\  start() {}
+    \\  close() { this._closed = true; }
+    \\}
+    \\class MessageChannel {
+    \\  constructor() {
+    \\    hidden(this, 'port1', new MessagePort());
+    \\    hidden(this, 'port2', new MessagePort());
+    \\    this.port1._other = this.port2;
+    \\    this.port2._other = this.port1;
+    \\  }
+    \\}
+    \\hidden(G, 'MessagePort', MessagePort);
+    \\hidden(G, 'MessageChannel', MessageChannel);
+    \\class BroadcastChannel extends EventTarget {
+    \\  constructor(name) {
+    \\    super();
+    \\    this.name = String(name);
+    \\    this.onmessage = null;
+    \\  }
+    \\  postMessage() {}
+    \\  close() {}
+    \\}
+    \\hidden(G, 'BroadcastChannel', BroadcastChannel);
+    \\hidden(G, 'postMessage', function postMessage(data, origin) {
+    \\  const from = ak.urlPart('origin');
+    \\  setTimeout(() => {
+    \\    const ev = new MessageEvent('message', { data, origin: from, source: G });
+    \\    dispatch(G, ev);
+    \\  }, 0);
+    \\});
+    \\getter(G, 'onmessage', function () { return handlerOf(G, 'message'); }, function (v) { setHandler(G, 'message', v); });
+    \\
+    \\// DOMRect, Range and Selection: no geometry yet.
+    \\class DOMRectReadOnly {
+    \\  constructor(x, y, width, height) {
+    \\    hidden(this, '_r', [Number(x) || 0, Number(y) || 0, Number(width) || 0, Number(height) || 0]);
+    \\  }
+    \\  get x() { return this._r[0]; }
+    \\  get y() { return this._r[1]; }
+    \\  get width() { return this._r[2]; }
+    \\  get height() { return this._r[3]; }
+    \\  get left() { return Math.min(this._r[0], this._r[0] + this._r[2]); }
+    \\  get right() { return Math.max(this._r[0], this._r[0] + this._r[2]); }
+    \\  get top() { return Math.min(this._r[1], this._r[1] + this._r[3]); }
+    \\  get bottom() { return Math.max(this._r[1], this._r[1] + this._r[3]); }
+    \\  toJSON() { return { x: this.x, y: this.y, width: this.width, height: this.height, top: this.top, right: this.right, bottom: this.bottom, left: this.left }; }
+    \\}
+    \\class DOMRect extends DOMRectReadOnly {
+    \\  set x(v) { this._r[0] = Number(v); }
+    \\  set y(v) { this._r[1] = Number(v); }
+    \\  set width(v) { this._r[2] = Number(v); }
+    \\  set height(v) { this._r[3] = Number(v); }
+    \\  get x() { return this._r[0]; }
+    \\  get y() { return this._r[1]; }
+    \\  get width() { return this._r[2]; }
+    \\  get height() { return this._r[3]; }
+    \\}
+    \\hidden(G, 'DOMRectReadOnly', DOMRectReadOnly);
+    \\hidden(G, 'DOMRect', DOMRect);
+    \\hidden(ElementP, 'getBoundingClientRect', function () { return new DOMRect(0, 0, 0, 0); });
+    \\class Range {
+    \\  constructor() {
+    \\    this.startContainer = document;
+    \\    this.startOffset = 0;
+    \\    this.endContainer = document;
+    \\    this.endOffset = 0;
+    \\  }
+    \\  get collapsed() { return this.startContainer === this.endContainer && this.startOffset === this.endOffset; }
+    \\  get commonAncestorContainer() {
+    \\    const a = ancestry(this.startContainer), b = ancestry(this.endContainer);
+    \\    let i = 0;
+    \\    while (i < a.length && i < b.length && a[i] === b[i]) i++;
+    \\    return a[i - 1] || this.startContainer;
+    \\  }
+    \\  setStart(n, o) { this.startContainer = n; this.startOffset = o >>> 0; }
+    \\  setEnd(n, o) { this.endContainer = n; this.endOffset = o >>> 0; }
+    \\  setStartBefore(n) { this.setStart(n.parentNode, Array.prototype.indexOf.call(n.parentNode.childNodes, n)); }
+    \\  setStartAfter(n) { this.setStart(n.parentNode, Array.prototype.indexOf.call(n.parentNode.childNodes, n) + 1); }
+    \\  setEndBefore(n) { this.setEnd(n.parentNode, Array.prototype.indexOf.call(n.parentNode.childNodes, n)); }
+    \\  setEndAfter(n) { this.setEnd(n.parentNode, Array.prototype.indexOf.call(n.parentNode.childNodes, n) + 1); }
+    \\  selectNode(n) { this.setStartBefore(n); this.setEndAfter(n); }
+    \\  selectNodeContents(n) {
+    \\    this.setStart(n, 0);
+    \\    this.setEnd(n, n.nodeType === 1 || n.nodeType === 9 || n.nodeType === 11 ? n.childNodes.length : String(n.nodeValue || '').length);
+    \\  }
+    \\  collapse(toStart) {
+    \\    if (toStart) this.setEnd(this.startContainer, this.startOffset);
+    \\    else this.setStart(this.endContainer, this.endOffset);
+    \\  }
+    \\  cloneRange() {
+    \\    const r = new Range();
+    \\    r.setStart(this.startContainer, this.startOffset);
+    \\    r.setEnd(this.endContainer, this.endOffset);
+    \\    return r;
+    \\  }
+    \\  createContextualFragment(html) {
+    \\    const ctx = this.startContainer && this.startContainer.nodeType === 1 ? this.startContainer.localName : 'body';
+    \\    const box = document.createElement(ctx === 'html' ? 'body' : ctx);
+    \\    box.innerHTML = html;
+    \\    const f = document.createDocumentFragment();
+    \\    while (box.firstChild) f.appendChild(box.firstChild);
+    \\    return f;
+    \\  }
+    \\  insertNode(n) {
+    \\    const c = this.startContainer;
+    \\    if (c.nodeType === 3) c.parentNode.insertBefore(n, c.nextSibling);
+    \\    else c.insertBefore(n, c.childNodes[this.startOffset] || null);
+    \\  }
+    \\  getBoundingClientRect() { return new DOMRect(0, 0, 0, 0); }
+    \\  getClientRects() { return []; }
+    \\  detach() {}
+    \\  toString() { return this.startContainer === this.endContainer && this.startContainer.nodeType === 3 ? this.startContainer.data.slice(this.startOffset, this.endOffset) : ''; }
+    \\}
+    \\hidden(G, 'Range', Range);
+    \\hidden(Document.prototype, 'createRange', function () { return new Range(); });
+    \\class Selection {
+    \\  constructor() { hidden(this, '_ranges', []); }
+    \\  get rangeCount() { return this._ranges.length; }
+    \\  get isCollapsed() { return this._ranges.length === 0 || this._ranges[0].collapsed; }
+    \\  get anchorNode() { return this._ranges.length ? this._ranges[0].startContainer : null; }
+    \\  get focusNode() { return this._ranges.length ? this._ranges[0].endContainer : null; }
+    \\  get type() { return this._ranges.length === 0 ? 'None' : this.isCollapsed ? 'Caret' : 'Range'; }
+    \\  getRangeAt(i) {
+    \\    if (i < 0 || i >= this._ranges.length) throw new DOMException("Failed to execute 'getRangeAt' on 'Selection': " + i + " is not a valid index.", 'IndexSizeError');
+    \\    return this._ranges[i];
+    \\  }
+    \\  addRange(r) { this._ranges = [r]; }
+    \\  removeAllRanges() { this._ranges = []; }
+    \\  empty() { this._ranges = []; }
+    \\  collapse(n, o) {
+    \\    const r = new Range();
+    \\    r.setStart(n, o || 0);
+    \\    r.collapse(true);
+    \\    this._ranges = n ? [r] : [];
+    \\  }
+    \\  selectAllChildren(n) {
+    \\    const r = new Range();
+    \\    r.selectNodeContents(n);
+    \\    this._ranges = [r];
+    \\  }
+    \\  toString() { return this._ranges.map(r => r.toString()).join(''); }
+    \\}
+    \\hidden(G, 'Selection', Selection);
+    \\const selection = new Selection();
+    \\hidden(G, 'getSelection', function () { return selection; });
+    \\hidden(Document.prototype, 'getSelection', function () { return selection; });
+    \\
+    \\// DOMParser and XMLSerializer: HTML only (a page has one document, so the
+    \\// parsed one is a stand-in, as createHTMLDocument's).
+    \\class DOMParser {
+    \\  parseFromString(src, type) {
+    \\    const d = createHTMLDocument();
+    \\    const m = /<head[^>]*>([\s\S]*?)<\/head>/i.exec(src);
+    \\    if (m) d.head.innerHTML = m[1];
+    \\    const b = /<body[^>]*>([\s\S]*)<\/body>/i.exec(src);
+    \\    d.body.innerHTML = b ? b[1] : m ? src.slice(m.index + m[0].length) : src;
+    \\    const t = d.head.querySelector('title');
+    \\    d.title = t ? t.textContent : '';
+    \\    return d;
+    \\  }
+    \\}
+    \\hidden(G, 'DOMParser', DOMParser);
+    \\class XMLSerializer {
+    \\  serializeToString(n) {
+    \\    if (n.nodeType === 1) return n.outerHTML;
+    \\    if (n.nodeType === 3) return n.data.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    \\    if (n.nodeType === 8) return '<!--' + n.data + '-->';
+    \\    if (n === document) return '<!DOCTYPE html>' + document.documentElement.outerHTML;
+    \\    return Array.from(n.childNodes, c => this.serializeToString(c)).join('');
+    \\  }
+    \\}
+    \\hidden(G, 'XMLSerializer', XMLSerializer);
+    \\
+    \\// Style sheets: document.styleSheets (one per style element or linked
+    \\// sheet, without rules), constructable sheets, CSS.supports and escape.
+    \\class CSSStyleSheet {
+    \\  constructor(options) {
+    \\    hidden(this, '_rules', []);
+    \\    hidden(this, '_owner', null);
+    \\    this.disabled = !!(options && options.disabled);
+    \\    this.media = { mediaText: options && options.media ? String(options.media) : '', length: 0 };
+    \\  }
+    \\  get cssRules() { return this._rules.map(cssText => ({ cssText, type: 1 })); }
+    \\  get rules() { return this.cssRules; }
+    \\  get ownerNode() { return this._owner; }
+    \\  get href() { return this._owner && this._owner.localName === 'link' ? this._owner.href : null; }
+    \\  get type() { return 'text/css'; }
+    \\  get title() { return this._owner ? this._owner.getAttribute('title') : null; }
+    \\  get parentStyleSheet() { return null; }
+    \\  insertRule(rule, index) {
+    \\    index = index === undefined ? 0 : index >>> 0;
+    \\    if (index > this._rules.length) throw new DOMException("Failed to execute 'insertRule' on 'CSSStyleSheet': The index provided (" + index + ") is larger than the maximum index (" + this._rules.length + ").", 'IndexSizeError');
+    \\    this._rules.splice(index, 0, String(rule));
+    \\    return index;
+    \\  }
+    \\  deleteRule(index) { this._rules.splice(index >>> 0, 1); }
+    \\  addRule(sel, style, index) { return this.insertRule(sel + ' { ' + style + ' }', index === undefined ? this._rules.length : index); }
+    \\  removeRule(index) { this.deleteRule(index); }
+    \\  replaceSync(text) { this._rules = String(text).split('}').map(r => r.trim()).filter(Boolean).map(r => r + ' }'); }
+    \\  replace(text) {
+    \\    this.replaceSync(text);
+    \\    return Promise.resolve(this);
+    \\  }
+    \\}
+    \\hidden(G, 'CSSStyleSheet', CSSStyleSheet);
+    \\hidden(G, 'StyleSheet', CSSStyleSheet);
+    \\const sheetOf = new WeakMap();
+    \\getter(Document.prototype, 'styleSheets', function () {
+    \\  const list = [];
+    \\  for (const el of this.querySelectorAll('style, link[rel~="stylesheet" i]')) {
+    \\    let s = sheetOf.get(el);
+    \\    if (!s) {
+    \\      s = new CSSStyleSheet();
+    \\      s._owner = el;
+    \\      sheetOf.set(el, s);
+    \\    }
+    \\    list.push(s);
+    \\  }
+    \\  hidden(list, 'item', i => list[i] || null);
+    \\  return list;
+    \\});
+    \\for (const P of [HTMLStyleElement.prototype, HTMLLinkElement.prototype]) {
+    \\  getter(P, 'sheet', function () {
+    \\    for (const s of document.styleSheets) if (s.ownerNode === this) return s;
+    \\    return null;
+    \\  });
+    \\}
+    \\let adopted = [];
+    \\getter(Document.prototype, 'adoptedStyleSheets', function () { return adopted; }, function (v) { adopted = Array.from(v); });
+    \\hidden(G, 'CSS', {
+    \\  supports(a, b) { return ak.supports(b === undefined ? String(a) : '(' + String(a) + ': ' + String(b) + ')'); },
+    \\  escape(s) {
+    \\    s = String(s);
+    \\    let out = '';
+    \\    for (let i = 0; i < s.length; i++) {
+    \\      const c = s.charCodeAt(i), ch = s[i];
+    \\      if (c === 0) out += '�';
+    \\      else if ((c >= 1 && c <= 0x1f) || c === 0x7f || (i === 0 && c >= 48 && c <= 57) || (i === 1 && c >= 48 && c <= 57 && s.charCodeAt(0) === 45)) out += '\\' + c.toString(16) + ' ';
+    \\      else if (i === 0 && ch === '-' && s.length === 1) out += '\\-';
+    \\      else if (c >= 0x80 || ch === '-' || ch === '_' || /[0-9A-Za-z]/.test(ch)) out += ch;
+    \\      else out += '\\' + ch;
+    \\    }
+    \\    return out;
+    \\  },
+    \\});
     \\ak.setDispatch(hostEvent);
     \\})(__ak);
