@@ -25,12 +25,15 @@ browser/
   url/            URL parsing and resolution (WHATWG subset)
   net/            fetch: file:, data:, http(s) through libcurl, cache
   html/           tokenizer and tree builder (WHATWG subset), entities
-  dom/            Node, Document, Pool(Node), queries, mutation
+  dom/            Node, Document, Pool(Node), queries, mutation; the
+                  state of form controls (values, checkedness, focus)
   css/            tokenizer, parser, selectors, cascade, computed style
   layout/         block, inline (line breaking), lists, tables (simple),
                   flex (simple), text measurement
   engine/         Page (load, style, layout), Tab (history, scroll),
-                  hit testing, find in page
+                  hit testing, find in page, images, default actions
+                  and form submission
+  image/          PNG (zlib inflate), GIF and baseline JPEG decoders
   paint/          display list, software rasterizer, glyph cache, PNG
   js/             lexer, parser, interpreter, GC, builtins, DOM bindings
   agent/          snapshot (a11y tree with refs), Markdown, actions,
@@ -45,7 +48,7 @@ Same rules as `milestones.md`: tests first; a milestone is done when its
 acceptance tests pass. Tests run headless and offline (`file:` fixtures
 and a local test server), so CI needs no network and no display.
 
-**Status.** B1–B4 are done, and so are the cores of B6 and B7:
+**Status.** B1–B5 are done, and so are the cores of B6 and B7:
 
 | | State | Tests (`cargo test --test browser`) |
 |---|---|---|
@@ -53,7 +56,7 @@ and a local test server), so CI needs no network and no display.
 | B2 CSS and style | done | 25 `dump --style` fixtures |
 | B3 layout | done | 31 `dump --layout` fixtures (fixed font), system-font check |
 | B4 paint and window | done | 13 golden PNGs, PNG checks, headless window tests |
-| B5 forms and images | not started | |
+| B5 forms and images | done | form sessions over HTTP, window form scripts, image decoder unit tests, form and image screenshots |
 | B6 JavaScript | engine core done | 212 conformance scripts (`anyknown js`) |
 | B7 agent interface | core done | 17 snapshot/Markdown fixtures, 4 session and MCP transcripts |
 | B8 the real web | not started | |
@@ -62,9 +65,6 @@ All the front ends share `engine/`: the window, `screenshot` and the
 agent sessions load pages through `engine.load` and keep history in a
 `Tab`. What remains:
 
-- **B5:** form controls that can be edited and submitted (the agent's
-  `type`/`select` only record events today), and decoded images (PNG,
-  GIF) instead of placeholder boxes.
 - **B6:** DOM bindings (`document`, wrappers holding `Handle(Node)`),
   events and an event loop (`setTimeout`, `addEventListener`), running
   page scripts during load; then the DOM fixtures and the to-do app.
@@ -151,6 +151,69 @@ are in `browser/COMPILER_GAPS.md`.
 - **Acceptance:** a fixture form submitted to the local test server
   produces the expected request; image fixtures render to golden
   screenshots.
+- Done:
+  - *State* (`dom/controls.ore`): one place for what the window, the
+    agent and scripts share: `doc.controls` keyed by node (a field's
+    value and dirty flag, checkedness, the selectedness of options, the
+    caret and selection, a field's scroll offset) and the focus.
+    Attributes keep the defaults; a reset forgets the state. Functions:
+    `dom.valueOf`/`setValue`, `isChecked`/`setChecked` (radio groups
+    exclusive), `selectedOption`/`selectOption`/`isSelected`/
+    `selectedIndex`, `formOwner`, `isDisabled` (fieldsets, optgroups),
+    `resetForm`, and editing (`insertText`, `deleteBackward`,
+    `deleteForward`, `moveCaret`, `selectAll`, `setCaret`). CSS matches
+    `:checked`, `:disabled`, `:enabled` and `:focus` against it.
+  - *Default actions* (`engine/forms.ore`), for the event loop to call
+    after dispatching (unless the default was prevented):
+    `engine.activate(page, node)` returns what the caller does next:
+    `Follow { target }` (a link), `Submit { form, submitter }` (fire
+    `submit`, then `engine.submitForm`), `OpenSelect { el }`, `Changed`
+    (a checkbox, radio button, reset button, label, summary, or the
+    focus moved: style and lay out again) or `Nothing`.
+    `engine.implicitSubmit(page, field)` is Enter in a text field (the
+    first submit button, or no button when the form has one field).
+    `engine.submitForm` builds the request: GET (fields in the query)
+    or POST as application/x-www-form-urlencoded, multipart/form-data
+    (a fixed boundary; file inputs send an empty file) or text/plain;
+    `formaction`, `formmethod`, `formenctype`; the submitter's name and
+    value, an image button's `x`/`y`. `engine.navigateTo(tab, sub)`
+    loads it (POST through `net.fetchWith` with a body and
+    `Content-Type`; a redirect after a POST continues with a GET). The
+    history keeps URLs only: going back to a POST result loads it by
+    GET. Focus: `setFocus`, `nextFocus` (Tab order with `tabindex`).
+  - *Layout and paint* (`layout/controls.ore`): text fields, selects and
+    input buttons are inline-blocks with generated text (bullets for a
+    password, the placeholder in gray, the selected option's label);
+    `size`, `cols`, `rows` give default sizes; a `select` with
+    `multiple` or `size` > 1 is a list box with its selected options
+    highlighted; a `textarea` wraps; text fields scroll to their caret;
+    checkboxes and radio buttons are drawn replaced boxes; disabled
+    controls are gray (UA sheet). `fieldset`/`legend` are plain blocks
+    with a border (the legend does not sit on the border).
+  - *Window* (`ui/forms.ore`): click, Tab and Shift+Tab focus; a focus
+    ring; typing (SDL text input, so IME and UTF-8), Backspace, Delete,
+    arrows, Home/End, Shift to select, Cmd+A/C/X/V (SDL clipboard);
+    Enter submits (a new line in a `textarea`), Space toggles and
+    presses; a `select` opens a dropdown over the page (arrows, Enter,
+    Escape, clicks). `--state` adds the focused element and its value.
+  - *Agent*: `click` on a submit button and `type` with `submit` submit
+    for real; `type`, `select`, `press` and the snapshot use the same
+    state as the window.
+  - *Images* (`image/`, `engine/images.ore`): PNG (inflate with stored,
+    fixed and dynamic Huffman blocks; every color type and bit depth,
+    `PLTE`, `tRNS`, Adam7), GIF (first frame, LZW, transparency,
+    interlace), baseline JPEG (Huffman, IDCT, YCbCr, chroma
+    subsampling, restart markers). Images are fetched once per URL
+    (relative, `data:`) before each layout for elements that have none
+    yet; the natural size and aspect ratio feed layout (`width`/`height`
+    attributes and CSS), and paint scales them (bilinear, alpha
+    blended). Not yet: `srcset`, `background-image`, progressive JPEG,
+    animation.
+  - Tests: `agent_forms_http` (sessions over the local server's
+    `/echo`, which shows the request), `window_forms`, `fill_form`,
+    the `image` module's decoder tests (PngSuite-like fixtures made by
+    `browser/tests/image/make_fixtures.py`), the `paint/forms`,
+    `paint/decoded` and `layout/images` goldens.
 
 ### B6: JavaScript
 

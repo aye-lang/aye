@@ -8,7 +8,8 @@ browser (performance, correctness, code); then the ones declined by
 design; then the fixed ones. Each entry: **Need**, **Repro**,
 **Workaround** (what `browser/` does today), **Hit by** (component and
 branch: B1 url/net/html/dom/encoding and the CLI, B2 css, B3
-font/layout, B4 paint/engine/ui, B6 js, B7 agent) and **Status**.
+font/layout, B4 paint/engine/ui, B5 forms and images, B6 js, B7 agent)
+and **Status**.
 
 Fixed entries were checked against `target/release/ore` at the M9.6
 head with the repro or the milestone's feature form (`ore run`, `ore
@@ -119,9 +120,26 @@ there and can now be simplified.
 - **Status:** open. M9.5 documented the trap in the spec's pitfalls; the
   check is not done.
 
+#### 4. Every checked operation is a call in debug builds
+
+- **Need:** decode images (inflate, Huffman, IDCT, color conversion) at
+  a usable speed in the browser, which is built in debug mode.
+- **Repro:** profile any tight loop of indexing and arithmetic in a
+  debug build: each `+`, `*` and `xs[i]` is an out-of-line call
+  (`ore_add_usize`, `ore_idx`). Decoding a 1024x768 noisy image takes
+  about 180 ms (JPEG), 195 ms (PNG) and 80 ms (GIF) in debug, against
+  40, 33 and 7 ms with `--mode safe`, which has the same checks inline.
+- **Workaround:** the hot loops of `image/` were restructured (fewer
+  indexings per pixel, table-driven Huffman decoding, a whole row at a
+  time); pages keep images small.
+- **Suggestion:** inline the checks (or emit them as macros) in debug
+  mode too; only the error return traces need the calls.
+- **Hit by:** image (B5).
+- **Status:** open.
+
 ### Structs and initialization
 
-#### 4. No default field values; a struct or local cannot start uninitialized
+#### 5. No default field values; a struct or local cannot start uninitialized
 
 - **Need:** a 35-field layout `Box` that is mostly results starting at
   0; an `engine.Page` that gets its style sheets, computed styles and
@@ -153,7 +171,7 @@ there and can now be simplified.
 
 ### Error handling
 
-#### 5. No way to branch on an error union and fall through
+#### 6. No way to branch on an error union and fall through
 
 - **Need:** "use the URL after redirects if it parses, else keep the one
   we asked for", and "report the error, then go on with a fallback".
@@ -181,7 +199,7 @@ there and can now be simplified.
   without leaving the function. Missing: Zig's `if x |v| {} else |e| {}`,
   or a `catch` block that runs statements and then yields a value.
 
-#### 6. Error values have no `==`
+#### 7. Error values have no `==`
 
 - **Need:** "is this fetch error OutOfMemory (pass it on) or something to
   report?"
@@ -206,12 +224,13 @@ there and can now be simplified.
 
 - **Workaround:** a helper with a `match` and `_` (`fetchOutOfMemory` in
   `agent/session.ore`, gone since ef319a6 moved sessions onto
-  `engine.Page`). Enums without payloads have `==`; error values
-  could too.
-- **Hit by:** agent (B7).
+  `engine.Page`); the image decoder tests map each error to a number
+  with a `match` to compare it with the expected one. Enums without
+  payloads have `==`; error values could too.
+- **Hit by:** agent (B7), image (B5).
 - **Status:** open.
 
-#### 7. A `match` arm cannot produce the error union of an enclosing `return`
+#### 8. A `match` arm cannot produce the error union of an enclosing `return`
 
 - **Repro:**
 
@@ -231,7 +250,7 @@ there and can now be simplified.
 
 ### Optionals
 
-#### 8. `orelse` does not chain
+#### 9. `orelse` does not chain
 
 - **Repro:**
 
@@ -252,9 +271,40 @@ there and can now be simplified.
 - **Hit by:** agent (B7).
 - **Status:** open.
 
+### Enums
+
+#### 10. No test for one variant of an enum with payloads
+
+- **Need:** "did the default action do nothing?" for an
+  `engine.Activation`, whose other variants carry payloads (a URL, a
+  form and its submitter).
+- **Repro:**
+
+  ```ore
+  enum Act {
+      Nothing
+      Follow { href: []u8 }
+  }
+
+  pub fn main() {
+      let a = Act.Nothing
+      if a == Act.Nothing {        // E0025: `==` needs an enum without payloads
+          @println("nothing")
+      }
+  }
+  ```
+
+- **Workaround:** a statement `match` with an arm for the variant and
+  `_ => {}` (`clickPage` in `ui/forms.ore`, `submitFrom` in
+  `agent/actions.ore`).
+- **Suggestion:** `==` against a payload-free variant of any enum, or
+  an `is` test (`a is .Nothing`).
+- **Hit by:** ui, agent (B5).
+- **Status:** open.
+
 ### std and C interop
 
-#### 9. No reading of a stream piece by piece (stdin lines)
+#### 11. No reading of a stream piece by piece (stdin lines)
 
 - **Need:** the agent servers answer one JSON line at a time on stdin;
   `std.fs` only reads a whole file or stream (`readAll`), which never
@@ -269,7 +319,7 @@ there and can now be simplified.
 - **Hit by:** agent (B7).
 - **Status:** open.
 
-#### 10. No C `long`
+#### 12. No C `long`
 
 - **Repro:** `extern fn labs(x: c_long) c_long` is E0017 (unknown type).
 - **Workaround:** `FT_Long`, `FT_Pos` and `FT_Fixed` are C `long` (64
@@ -280,7 +330,7 @@ there and can now be simplified.
 - **Hit by:** font (B3).
 - **Status:** open.
 
-#### 11. No `extern union`
+#### 13. No `extern union`
 
 - **Repro:** `extern union U { a: i32, b: i64 }` is E0006 (expected `fn`
   or `struct` after `extern`).
@@ -294,7 +344,7 @@ there and can now be simplified.
 - **Hit by:** ui (B4).
 - **Status:** open.
 
-#### 12. `std.math` has no infinity or NaN
+#### 14. `std.math` has no infinity or NaN
 
 - **Repro:** `std.math.inf`, `std.math.nan`, `std.math.isNan` are E0081
   (module `std.math` has no ...).
@@ -305,9 +355,24 @@ there and can now be simplified.
 - **Hit by:** agent (B7), js (B6).
 - **Status:** open.
 
+#### 15. `std.math` has no trigonometry and no integer `min`/`max`
+
+- **Need:** the cosines of the JPEG IDCT; the smaller of two byte
+  offsets.
+- **Repro:** `std.math.cos(x)` is E0081 (module `std.math` has no
+  `cos`); `std.math.min(a, b)` with `a, b: usize` is E0023 (expected
+  `f64`).
+- **Workaround:** the IDCT's constants are written out
+  (`image/jpeg.ore`); `minUsize`/`maxUsize` helpers in
+  `engine/caret.ore` (a first version converted to `f64` and back).
+- **Suggestion:** `sin`, `cos`, `atan2`, `exp`, `log` from libm, and
+  `min`/`max`/`clamp` for `T: Integer`.
+- **Hit by:** image, engine (B5).
+- **Status:** open.
+
 ### Modules
 
-#### 13. The root module cannot be imported
+#### 16. The root module cannot be imported
 
 - **Need:** share code of the root module (`browser/*.ore`: `main.ore`,
   `style.ore`, `dump.ore`, ...) with a sub-module.
@@ -328,7 +393,7 @@ there and can now be simplified.
 
 ### Smaller things
 
-#### 14. No repeat form for array initializers
+#### 17. No repeat form for array initializers
 
 - **Repro:** `[4]i64{7} ** 4` is E0006 (expected expression, found `*`).
 - **Workaround:** an array of 13 `List`s (`free: [13]List([]mut T)` in
@@ -337,21 +402,21 @@ there and can now be simplified.
 - **Hit by:** js (B6).
 - **Status:** open.
 
-#### 15. No tuples or multiple results
+#### 18. No tuples or multiple results
 
 - **Workaround:** small structs carry pairs out of functions (`MinMax`,
   `Flow`, `OpenFrag`, `KindOf` in layout). Fine, a bit verbose.
 - **Hit by:** layout (B3).
 - **Status:** open.
 
-#### 16. No `@embedFile`
+#### 19. No `@embedFile`
 
 - **Need:** the user-agent style sheet as a plain `.css` file. Line
-  strings (entry 33) now cover most of this need.
+  strings (entry 37) now cover most of this need.
 - **Hit by:** css (B2).
 - **Status:** open.
 
-#### 17. No discard `_ = f()`
+#### 20. No discard `_ = f()`
 
 - **Repro:** `_ = f()` is E0018 (`undefined variable _`).
 - **Workaround:** a dropped result is fine as a statement
@@ -359,9 +424,22 @@ there and can now be simplified.
 - **Hit by:** js (B6).
 - **Status:** open.
 
+#### 21. Maps cannot have struct keys (a `Handle`)
+
+- **Need:** the state of form controls and the decoded image of each
+  element, keyed by node (`Handle(Node)`).
+- **Repro:** `IntMap(NodeId, Control)` does not satisfy `K: Integer`;
+  there is no `Map(K, V)` for structs with `==`.
+- **Workaround:** `IntMap(u32, ...)` keyed by `handle.index`, with the
+  generation stored in the value and compared by hand
+  (`Controls.get` in `dom/controls.ore`, `layout.Images`), as the spec
+  advises.
+- **Hit by:** dom, layout (B5).
+- **Status:** open (by the spec today).
+
 ## Declined by design
 
-#### 18. A struct's methods must all be in its body (one file)
+#### 22. A struct's methods must all be in its body (one file)
 
 - **Need:** split a large type's code across the files of its module.
 - **Workaround:** free functions taking `*mut S`: the parser, selector
@@ -369,13 +447,16 @@ there and can now be simplified.
   media)`, not `sheet.parse(src)`); the chrome's `drawToolbar(ui)`
   because `Ui`'s methods are all in `ui/window.ore`; JS built-ins such
   as `fn arrayPush(it: *mut Interp, a: Args)`. `js/interp.ore` is still
-  about 3300 lines with ~150 methods.
-- **Hit by:** css (B2), ui (B4), js (B6).
+  about 3300 lines with ~150 methods. The state of form controls is a
+  field of `dom.Document`, but its operations live in
+  `dom/controls.ore` as `dom.valueOf(doc, el)`, `dom.setChecked(doc,
+  el, on)` (not `doc.valueOf(el)`), so that `dom.ore` stays the tree.
+- **Hit by:** css (B2), ui (B4), dom (B5), js (B6).
 - **Status:** declined: decisions.md ("A struct's methods stay in its
   body"), documented in M9.6. Of the declined items this one costs the
   most code.
 
-#### 19. A top-level name in one file blocks locals in every file of the module
+#### 23. A top-level name in one file blocks locals in every file of the module
 
 - **Repro:** with `fn px(v: f64) f64` in `app/a.ore`, `let px = v / 2.0`
   in `app/main.ore` is E0016 (no shadowing, spec §6).
@@ -383,14 +464,17 @@ there and can now be simplified.
   (`numberOr` in css, `alen`, `appendWtf8` in js). Cases: `px` in
   `css/cascade.ore` broke locals in `media.ore` and `values.ore`; `fn
   screen` in `ui/chrome.ore` broke `let screen` in `ui/window.ore`; `fn
-  len` in `js/builtins_array.ore` broke locals in `numconv.ore`.
+  len` in `js/builtins_array.ore` broke locals in `numconv.ore`; `fn
+  label` in `ui/chrome.ore` broke `var label` in `ui/forms.ore`, whose
+  `fn edited` broke `var edited` in `ui/window.ore` (renamed
+  `afterEdit`).
 - **Suggestion (B6):** exempt locals from clashing with functions of
   other files.
-- **Hit by:** css (B2), ui (B4), js (B6).
+- **Hit by:** css (B2), ui (B4, B5), js (B6).
 - **Status:** the rule is by design; the message that did not name the
-  other file is fixed (entry 38).
+  other file is fixed (entry 42).
 
-#### 20. An import name blocks the same local name
+#### 24. An import name blocks the same local name
 
 - **Repro:** `import url` then `let url = ...` is E0016.
 - **Workaround:** the CLI calls its URL `location` (`main.ore`).
@@ -399,7 +483,7 @@ there and can now be simplified.
   one error, "`std` is already the name of the import at 1:8 (shadowing
   is not allowed: rename the local)", no cascading E0085).
 
-#### 21. Other declined items (clear messages, by design)
+#### 25. Other declined items (clear messages, by design)
 
 - `test` and `where` are keywords, so they cannot name a field or a
   local: the JS AST's `if`/`for` nodes call the condition `cond` (js,
@@ -415,7 +499,7 @@ there and can now be simplified.
 Verified at HEAD with `target/release/ore`; repros in the entry text or
 the milestone's feature form.
 
-#### 22. Sub-modules that import siblings could not be tested
+#### 26. Sub-modules that import siblings could not be tested
 
 - **Hit by:** url, net, html (B1). **Status:** fixed in M9.5. Verified:
   a program `mt/` with `html` importing `dom`, tests in both: `ore test
@@ -426,7 +510,7 @@ the milestone's feature form.
   Browser still uses the workaround: `browser/unit_tests.ore` holds the
   `html`/`net` tests in the root module, calling only `pub` functions.
 
-#### 23. A `match` arm could not list several enum variants
+#### 27. A `match` arm could not list several enum variants
 
 - **Hit by:** html, CLI (B1), js (B6). **Status:** fixed in M9.5.
   Verified: `.A, .B => 1` / `.C => 2` prints 1 1 2. Browser still uses
@@ -434,7 +518,7 @@ the milestone's feature form.
   `dump.ore`; `=> 7` four times in the precedence table of
   `js/parser.ore`.
 
-#### 24. `?T == T` did not compile, and the hint said to use `as`
+#### 28. `?T == T` did not compile, and the hint said to use `as`
 
 - **Hit by:** encoding (B1), js (B6). **Status:** fixed in M9.5 (`?T ==
   T`, `?T == ?T`; the `as` hint only where `as` converts). Verified: `f()
@@ -442,7 +526,7 @@ the milestone's feature form.
   print true false false true true. Browser still uses the workaround:
   `labelIs` in `encoding.ore`, `Interp.hasClass` in js.
 
-#### 25. No `orelse`, `.?` or `unreachable`
+#### 29. No `orelse`, `.?` or `unreachable`
 
 - **Hit by:** dom, html (B1), js (B6). **Status:** fixed in M9.5.
   Verified: `find(xs, w) orelse return 99`, `orelse unreachable`, `orelse
@@ -453,7 +537,7 @@ the milestone's feature form.
   JS natives that always throw end in `try it.typeError(...)` and a dead
   `return NONE`.
 
-#### 26. Structs had no `==`; `Handle(T)` had no `eql`
+#### 30. Structs had no `==`; `Handle(T)` had no `eql`
 
 - **Hit by:** dom, html (B1). **Status:** fixed in M9.5 (`==` on structs
   whose fields all compare). Verified: `P { x: 1, ok: true } == P { x: 1,
@@ -461,7 +545,7 @@ the milestone's feature form.
   (`h1 == h1` true, `h1 == h2` false). Browser still uses the
   workaround: `dom.same(a, b)` / `dom.isSame(?a, b)` (19 uses).
 
-#### 27. Array literals had to spell their length
+#### 31. Array literals had to spell their length
 
 - **Hit by:** html (B1), css (B2). **Status:** fixed in M9.5 (`[_]T{...}`).
   Verified: `[_][]u8{"a", "b", "c"}` has `.len` 3. Browser still uses
@@ -470,12 +554,12 @@ the milestone's feature form.
   space-separated strings searched with `isIn(name, "dd dt li ...")`
   (70 uses) instead of arrays.
 
-#### 28. `return f()` of a void call in a `void` or `E!void` function
+#### 32. `return f()` of a void call in a `void` or `E!void` function
 
 - **Hit by:** html (B1). **Status:** fixed in M9.5. Verified: `return
   g()` with `fn g()` in both an `E!void` and a `void` function.
 
-#### 29. `std.log.err` needed a string literal as the format
+#### 33. `std.log.err` needed a string literal as the format
 
 - **Hit by:** CLI (B1). **Status:** fixed in M9.5. Verified:
   `std.log.err(USAGE)` with `let USAGE = "usage: x"` prints `error:
@@ -483,12 +567,12 @@ the milestone's feature form.
   SHOT_USAGE)` in `shot.ore`, `std.log.err("{}", UI_USAGE)` in
   `ui/window.ore`.
 
-#### 30. A `*mut Self` method could not be called on a temporary
+#### 34. A `*mut Self` method could not be called on a temporary
 
 - **Hit by:** CLI (B1). **Status:** fixed in M9.5. Verified:
   `std.text.split("k=v", "=").next() orelse "none"` gives `k`.
 
-#### 31. Two implicit adjustments did not chain (`[]mut T` to `?[]T`, `E![]mut T` to `E![]T`)
+#### 35. Two implicit adjustments did not chain (`[]mut T` to `?[]T`, `E![]mut T` to `E![]T`)
 
 - **Hit by:** css (B2). **Status:** fixed in M9.6. Verified: `fn get(s:
   []mut u8) ?[]u8 { return s }`, and an `AllocError![]u8` function
@@ -496,33 +580,33 @@ the milestone's feature form.
   workaround: `let values: []Value = v` in `css/cascade.ore`, `let owned
   = try b.toOwned()` in `css/tokenizer.ore`.
 
-#### 32. `*mut S` did not convert to `?dyn I`
+#### 36. `*mut S` did not convert to `?dyn I`
 
 - **Hit by:** js (B6). **Status:** fixed in M9.6. Verified: `e.host =
   &mut h` with `host: ?dyn Host`, then `if e.host |d| { d.finalize(1) }`
   updates `h`. Browser still uses the workaround: `let d: dyn Host =
   &mut h` in `js/unit_tests.ore`.
 
-#### 33. Multi-line string literals
+#### 37. Multi-line string literals
 
 - **Hit by:** css (B2). **Status:** fixed in M9.6 (`\\` line strings).
   Verified: a two-line `\\` constant prints both lines. Browser still
   uses the workaround: `css/ua.ore` is a `[50][]u8` with one rule per
-  string. `@embedFile` stays open (entry 16).
+  string. `@embedFile` stays open (entry 19).
 
-#### 34. An array length could not be a constant
+#### 38. An array length could not be a constant
 
 - **Hit by:** css (B2). **Status:** fixed in M9.6. Verified: `let N:
   usize = 3`, `[N]u8{1, 2, 3}` and `[N * 2]u8{...}` have lengths 3 and 6.
   Browser still uses the workaround: `css.PROPERTIES` is `[57]Property`
   and `css.NPROPS` repeats the 57.
 
-#### 35. `defer if`
+#### 39. `defer if`
 
 - **Hit by:** css (B2). **Status:** fixed in M9.6. Verified: `defer if
   open { ... }` runs at the end of the scope.
 
-#### 36. A C library could not be optional (libcurl, FreeType, SDL2)
+#### 40. A C library could not be optional (libcurl, FreeType, SDL2)
 
 - **Need:** build the browser, and its headless commands and tests,
   where libcurl, FreeType or SDL2 is missing.
@@ -537,7 +621,7 @@ the milestone's feature form.
   (`net` could fall back to `FetchError.Unsupported`, `font.System` fail
   at run time).
 
-#### 37. One C function had to have one signature in every module
+#### 41. One C function had to have one signature in every module
 
 - **Hit by:** engine (B4). **Status:** works at HEAD (no milestone
   lists it). Verified: `getcwd` declared returning `[*]u8` in the root
@@ -545,17 +629,17 @@ the milestone's feature form.
   the workaround: `engine/engine.ore` declares `getcwd` returning
   `[*]u8` like `main.ore`.
 
-#### 38. E0016 did not name the file of a declaration in another file
+#### 42. E0016 did not name the file of a declaration in another file
 
 - **Hit by:** css (B2), ui (B4), js (B6). **Status:** fixed in M9.6.
   Verified: `already declared at sh/a.ore:1:4` (was `at 1:4`, which read
-  as a line of the current file). The rule itself stays (entry 19).
+  as a line of the current file). The rule itself stays (entry 23).
 
-#### 39. `@zeroed` of an array of `bool`
+#### 43. `@zeroed` of an array of `bool`
 
 - **Hit by:** agent (B7). **Status:** works at HEAD (no milestone
   lists it). Verified: `@zeroed([64]bool)` compiles and
   `flags[3]` is `false`. Browser still uses the workaround: the JSON
   `Writer` keeps its per-level "a value was written" flags in a `u64`
   bitmask (at most 64 levels of nesting). `@zeroed` of a plain struct
-  stays open (entry 4).
+  stays open (entry 5).
