@@ -132,6 +132,9 @@ struct LiveList {
     // `Script.version` of `items`; `fresh` false before the first walk.
     version: u64
     fresh: bool
+    // The list object (for trace: a reachable list keeps its tree's
+    // wrappers).
+    obj: u32
 }
 
 struct Timer {
@@ -315,30 +318,17 @@ pub struct Script {
         }
     }
 
-    // Marks the wrappers of nodes in the document, and of nodes in trees
-    // that a marked wrapper's node is in (a script can walk to them).
+    // Marks the wrappers of the nodes a script can reach again, so that a
+    // node keeps one wrapper (with its properties, and its entries in
+    // weak collections) while it can be seen: the wrappers of nodes in
+    // the trees of the documents (the page's own and the other pages'
+    // it holds nodes of), and of nodes in a tree with a marked wrapper,
+    // a marked live list, or (the page's own) a pending mutation record.
     fn trace(self: *mut Self, it: *mut Interp) bool {
-        let doc = &self.page.doc
-        var live = IntMap(u32, bool).init(self.alloc)
-        defer live.deinit()
-        live.put(doc.root.index, true) catch |e| {
-            return false
-        }
-        var all = self.wrappers.iterator()
-        while all.next() |w| {
-            let h = NodeId { index: w.key, generation: w.value.generation }
-            if js.gcMarked(it, w.value.obj) && doc.isLive(h) {
-                live.put(doc.shadowIncludingRoot(h).index, true) catch |e| {
-                    return false
-                }
-            }
-        }
-        var marked = false
-        var rest = self.wrappers.iterator()
-        while rest.next() |w| {
-            let h = NodeId { index: w.key, generation: w.value.generation }
-            if !js.gcMarked(it, w.value.obj) && doc.isLive(h) && live.contains(doc.shadowIncludingRoot(h).index) {
-                js.gcMark(it, w.value.obj)
+        var marked = traceDoc(self, it, &mut self.page.doc, 0, &self.wrappers, true)
+        for f in self.foreign.items() {
+            let page = findPage(self.page, f.page_id) orelse continue
+            if traceDoc(self, it, &mut page.doc, f.page_id, &f.wrappers, false) {
                 marked = true
             }
         }
@@ -359,6 +349,58 @@ pub struct Script {
 }
 
 /// The script of the native function's engine.
+// Script.trace for the document of page `page_id` (0: the page's own)
+// and the wrappers of its nodes; true if it marked any.
+fn traceDoc(s: *mut Script, it: *mut Interp, doc: *mut dom.Document, page_id: u32, wrappers: *IntMap(u32, Wrapper), own: bool) bool {
+    var live = IntMap(u32, bool).init(s.alloc)
+    defer live.deinit()
+    live.put(doc.root.index, true) catch |e| {
+        return false
+    }
+    var all = wrappers.iterator()
+    while all.next() |w| {
+        let h = NodeId { index: w.key, generation: w.value.generation }
+        if js.gcMarked(it, w.value.obj) && doc.isLive(h) {
+            live.put(doc.shadowIncludingRoot(h).index, true) catch |e| {
+                return false
+            }
+        }
+    }
+    for l in s.lists.items() {
+        if l.used && l.page_id == page_id && l.obj != js.NONE && js.gcMarked(it, l.obj) && doc.isLive(l.root) {
+            live.put(doc.shadowIncludingRoot(l.root).index, true) catch |e| {
+                return false
+            }
+        }
+    }
+    if own {
+        for m in doc.log.items() {
+            if doc.isLive(m.target) {
+                live.put(doc.shadowIncludingRoot(m.target).index, true) catch |e| {
+                    return false
+                }
+            }
+            if m.node |n| {
+                if doc.isLive(n) {
+                    live.put(doc.shadowIncludingRoot(n).index, true) catch |e| {
+                        return false
+                    }
+                }
+            }
+        }
+    }
+    var marked = false
+    var rest = wrappers.iterator()
+    while rest.next() |w| {
+        let h = NodeId { index: w.key, generation: w.value.generation }
+        if !js.gcMarked(it, w.value.obj) && doc.isLive(h) && live.contains(doc.shadowIncludingRoot(h).index) {
+            js.gcMark(it, w.value.obj)
+            marked = true
+        }
+    }
+    return marked
+}
+
 fn scriptOf(it: *mut Interp) *mut Script {
     return @downcast(*mut Script, it.host.?).?
 }

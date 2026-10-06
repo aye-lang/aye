@@ -46,6 +46,7 @@ fn newList(it: *mut Interp, kind: u8, root: NodeId, arg: []u8) JsError!Value {
         items: List(NodeId).init(s.alloc),
         version: 0,
         fresh: false,
+        obj: js.NONE,
     }
     var slot: u32 = 0
     if s.free_lists.pop() |free| {
@@ -73,6 +74,7 @@ fn newList(it: *mut Interp, kind: u8, root: NodeId, arg: []u8) JsError!Value {
         }
         return e
     }
+    s.lists.items()[slot].obj = o
     return js.objVal(o)
 }
 
