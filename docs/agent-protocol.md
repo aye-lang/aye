@@ -185,7 +185,7 @@ session goes on after an error.
 | `wait` | `selector` (CSS; at most `ms`, 5000 by default), or `ms` alone, or neither (until no timer is left, at most 5 s of page time) | `result` ("found ... after N ms", or "waited N ms"); an error after the time without a match |
 | `eval` | `expression`: a script; its last expression statement is the result | `result`: a string as it is, anything else as `console.log` shows it; an uncaught exception is the error |
 | `tabs`, `tab_new`, `tab_select`, `tab_close`, `user_context` | | only in a window ([A shared window](#a-shared-window)) |
-| `screenshot` | | not supported yet |
+| `screenshot` | `ref` (the element's border box), or `full` (bool: the whole document, at most 16384 px tall); neither: the viewport as scrolled | `result` (what it shows and its size), `url`, `title`, `width`, `height`, `png` (the PNG file in base64) |
 
 Scripts in a session (`todo.jsonl` in `browser/tests/agent/sessions/`):
 
@@ -239,6 +239,9 @@ What the actions do:
   the viewport shows.
 - **find**: at most 20 matches, each with 30 characters of context, the
   nearest element around it that has a ref, and `[offscreen]`.
+- **screenshot**: paints the page as the window would, with the system's
+  fonts (a shared window's own); the session's layout, refs and boxes
+  do not change. Without system fonts, text shows as boxes.
 
 ## MCP
 
@@ -257,7 +260,9 @@ per line. It supports protocol versions `2025-11-25`, `2025-06-18`,
 - `tools/call` returns `{"content": [{"type": "text", "text": ...}],
   "isError": bool}`. A tool that fails (no page, unknown ref, missing
   argument) is a result with `isError: true`; an unknown tool is the
-  JSON-RPC error -32602.
+  JSON-RPC error -32602. `browser_screenshot` puts an image block
+  (`{"type": "image", "data": BASE64, "mimeType": "image/png"}`) before
+  the text.
 - Other methods are -32601; invalid JSON is -32700; a message that is
   not an object (batches included) is -32600.
 
@@ -275,6 +280,7 @@ per line. It supports protocol versions `2025-11-25`, `2025-06-18`,
 | `browser_find` | `text` | the matches |
 | `browser_wait` | `selector`, `ms` | as `wait` |
 | `browser_eval` | `expression` | the value, as `eval` |
+| `browser_screenshot` | `ref`, `full` | the image, then what it shows, `URL:`, `Title:` |
 
 A session:
 

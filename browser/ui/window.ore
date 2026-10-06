@@ -197,7 +197,7 @@ fn withFonts(alloc: Allocator, o: UiOptions, measure: dyn font.Measurer, system:
         }
         if r |renderer| {
             defer SDL_DestroyRenderer(renderer)
-            let first_tab = newSlot(alloc, measure, 1) catch |e| {
+            let first_tab = newSlot(alloc, measure, system, 1) catch |e| {
                 std.log.err("out of memory")
                 return 1
             }

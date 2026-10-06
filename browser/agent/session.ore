@@ -52,6 +52,12 @@ pub struct Session {
     // measurer (`measure`), so that the agent sees the human's layout.
     font: font.Fixed
     measure: ?dyn font.Measurer
+    // The system's fonts, to draw text in screenshots (screenshot.ore):
+    // the window's, or opened at the first screenshot (`own_system`);
+    // null when there are none.
+    system: ?*mut font.System
+    own_system: bool
+    tried_system: bool
     media: css.Media
     // Node index to the border box of its boxes and fragments.
     rects: IntMap(u32, Rect)
@@ -82,6 +88,9 @@ fn newSession(alloc: Allocator, width: f64, height: f64) AllocError!Session {
         tab: tab,
         font: font.Fixed.init(),
         measure: null,
+        system: null,
+        own_system: false,
+        tried_system: false,
         media: css.Media { width: width, height: height },
         rects: IntMap(u32, Rect).init(alloc),
         ref_base: 1,
@@ -98,10 +107,13 @@ fn newSession(alloc: Allocator, width: f64, height: f64) AllocError!Session {
 
 /// A session for a tab of a window: its layouts measure text with the
 /// window's `measure`, in a viewport of `width` x `height` px (the
-/// window updates `media` when it is resized).
-pub fn newWindowSession(alloc: Allocator, measure: dyn font.Measurer, width: f64, height: f64) AllocError!Session {
+/// window updates `media` when it is resized); screenshots draw text with
+/// the window's `system` fonts.
+pub fn newWindowSession(alloc: Allocator, measure: dyn font.Measurer, system: ?*mut font.System, width: f64, height: f64) AllocError!Session {
     var s = try newSession(alloc, width, height)
     s.measure = measure
+    s.system = system
+    s.tried_system = true
     return s
 }
 
@@ -115,6 +127,12 @@ pub fn freeSession(s: *mut Session) {
         s.alloc.free(e)
     }
     s.events.deinit()
+    if s.own_system {
+        if s.system |sys| {
+            sys.deinit()
+            s.alloc.destroy(sys)
+        }
+    }
 }
 
 fn recordEvent(s: *mut Session, what: []u8) AllocError!void {

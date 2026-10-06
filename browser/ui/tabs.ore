@@ -28,8 +28,8 @@ pub struct TabSlot {
     seen: u64
 }
 
-fn newSlot(alloc: Allocator, measure: dyn font.Measurer, id: u32) AllocError!*mut TabSlot {
-    var s = try agent.newWindowSession(alloc, measure, 800.0, 600.0)
+fn newSlot(alloc: Allocator, measure: dyn font.Measurer, system: ?*mut font.System, id: u32) AllocError!*mut TabSlot {
+    var s = try agent.newWindowSession(alloc, measure, system, 800.0, 600.0)
     errdefer agent.freeSession(&mut s)
     return alloc.create(TabSlot { id: id, session: s, shown: 0, seen: 0 })
 }
@@ -89,7 +89,7 @@ fn openTab(ui: *mut Ui, show: bool) AllocError!?usize {
     if ui.count >= MAX_TABS {
         return null
     }
-    let slot = try newSlot(ui.alloc, ui.measure, ui.next_tab)
+    let slot = try newSlot(ui.alloc, ui.measure, ui.painter.system, ui.next_tab)
     ui.next_tab += 1
     let i = ui.count
     ui.slots[i] = slot

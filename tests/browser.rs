@@ -693,6 +693,93 @@ fn agent_errors() {
     expect(&["dump", "--md", "data:text/html,<h2>Hi</h2><p>a <b>b</b>"], 0, "## Hi\n\na **b**\n", "");
 }
 
+fn base64_decode(s: &str) -> Vec<u8> {
+    let digit = |c: u8| match c {
+        b'A'..=b'Z' => c - b'A',
+        b'a'..=b'z' => c - b'a' + 26,
+        b'0'..=b'9' => c - b'0' + 52,
+        b'+' => 62,
+        b'/' => 63,
+        _ => panic!("not base64: {:?}", c as char),
+    };
+    let (mut out, mut acc, mut bits) = (Vec::new(), 0u32, 0);
+    for &c in s.as_bytes().iter().filter(|&&c| c != b'=') {
+        acc = acc << 6 | digit(c) as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    out
+}
+
+/// The string value of `"key":"..."` in one JSON line (no escapes in it).
+fn json_str<'a>(line: &'a str, key: &str) -> &'a str {
+    let k = format!("\"{key}\":\"");
+    let at = line.find(&k).unwrap_or_else(|| panic!("no {key} in {line}")) + k.len();
+    &line[at..at + line[at..].find('"').unwrap()]
+}
+
+/// `screenshot` in `anyknown agent` and `browser_screenshot` in `anyknown
+/// mcp`: PNGs (base64) of the viewport, the whole page and one element.
+#[test]
+fn agent_screenshot() {
+    use std::io::Write;
+    let session = |mode: &str, input: &str| -> Vec<String> {
+        let mut child = Command::new(anyknown())
+            .current_dir(root())
+            .args([mode, "--width", "400", "--height", "300"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+        text(&out.stdout).lines().map(String::from).collect()
+    };
+    let png_size = |b64: &str, name: &str| {
+        let path = scratch().join(name);
+        std::fs::write(&path, base64_decode(b64)).unwrap();
+        check_png(&path)
+    };
+    let lines = session("agent", concat!(
+        "{\"id\":1,\"cmd\":\"screenshot\"}\n",
+        "{\"id\":2,\"cmd\":\"navigate\",\"url\":\"browser/tests/agent/form_login.html\"}\n",
+        "{\"id\":3,\"cmd\":\"screenshot\",\"ref\":\"e2\"}\n",
+        "{\"id\":4,\"cmd\":\"screenshot\",\"ref\":\"e99\"}\n",
+        "{\"id\":5,\"cmd\":\"snapshot\"}\n",
+        "{\"id\":6,\"cmd\":\"navigate\",\"url\":\"browser/tests/paint/full.html\"}\n",
+        "{\"id\":7,\"cmd\":\"screenshot\"}\n",
+        "{\"id\":8,\"cmd\":\"screenshot\",\"full\":true}\n",
+    ));
+    assert_eq!(lines.len(), 8);
+    assert_eq!(lines[0], "{\"id\":1,\"ok\":false,\"error\":\"no page: navigate first\"}");
+    let (w, h) = png_size(json_str(&lines[2], "png"), "agent_ref.png");
+    assert!(w < 400 && h < 300, "element {w}x{h}");
+    assert!(lines[2].contains("\"result\":\"screenshot of textbox \\\"Email address\\\" [e2]"), "{}", lines[2]);
+    assert!(lines[3].contains("\"ok\":false,\"error\":\"unknown ref e99"), "{}", lines[3]);
+    // The page is laid out as before the screenshots: refs keep working.
+    assert!(lines[4].contains("textbox \\\"Email address\\\" [e2]"), "{}", lines[4]);
+    assert!(lines[6].contains("\"result\":\"screenshot of the viewport, 400x300 px"), "{}", lines[6]);
+    assert_eq!(png_size(json_str(&lines[6], "png"), "agent_viewport.png"), (400, 300));
+    let (w, h) = png_size(json_str(&lines[7], "png"), "agent_full.png");
+    assert!(w == 400 && h > 300, "whole page {w}x{h}");
+    assert!(json_str(&lines[7], "result").starts_with(&format!("screenshot of the whole page, 400x{h} px")), "{}", lines[7]);
+
+    let lines = session("mcp", concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"browser_screenshot\",\"arguments\":{}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"browser_navigate\",\"arguments\":{\"url\":\"browser/tests/agent/links.html\"}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"browser_screenshot\",\"arguments\":{}}}\n",
+    ));
+    assert_eq!(lines.len(), 3);
+    assert!(lines[0].contains("\"isError\":true") && !lines[0].contains("\"image\""), "{}", lines[0]);
+    assert!(lines[2].contains("\"type\":\"image\"") && lines[2].contains("\"mimeType\":\"image/png\"") && lines[2].contains("\"isError\":false"), "{}", &lines[2][..200.min(lines[2].len())]);
+    assert_eq!(png_size(json_str(&lines[2], "data"), "mcp_viewport.png"), (400, 300));
+}
+
 /// A window shared by its user and agents (`--agent-socket`,
 /// ui/agents.ore): `browser/tests/agent/window/X.jsonl` is sent over the
 /// window's Unix socket (from this test, or through `anyknown connect
