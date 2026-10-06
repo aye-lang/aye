@@ -828,6 +828,40 @@ fn runMicrotasks(s: *mut Script) AllocError!void {
         try addConsole(s, "[error] ", "too many microtasks: the rest were dropped")
     }
     try reportRejections(s)
+    js.clearKeptObjects(&mut s.it)
+}
+
+// Calls the due FinalizationRegistry callbacks of the script, each as a
+// task; true if any ran.
+fn runCleanupsOf(s: *mut Script) AllocError!bool {
+    var ran = false
+    while js.takeCleanup(&mut s.it) |c| {
+        let base = s.it.stack.len()
+        try jsPush(s, c.callback)
+        try jsPush(s, Value.Undefined)
+        try jsPush(s, c.held)
+        try callReported(s, base, 1)
+        try runMicrotasks(s)
+        ran = true
+    }
+    if ran {
+        try afterTask(s)
+    }
+    return ran
+}
+
+// runCleanupsOf for the page and its frames.
+fn runCleanups(p: *mut Page) AllocError!bool {
+    var ran = false
+    if p.script |s| {
+        ran = try runCleanupsOf(s)
+    }
+    for f in p.frames.items() {
+        if try runCleanups(f.page) {
+            ran = true
+        }
+    }
+    return ran
 }
 
 // Logs the promises rejected with no handler by the end of a microtask
@@ -968,6 +1002,9 @@ pub fn runDueTimers(p: *mut Page) AllocError!bool {
         }
         try afterTask(s)
         ran = n > 0
+        if try runCleanupsOf(s) {
+            ran = true
+        }
     }
     var k: usize = 0
     while k < p.frames.len() {
@@ -1011,9 +1048,10 @@ fn nextTimer(p: *mut Page, limit: f64) ?NextTimer {
 
 /// Runs the first timer (of the page or of its frames) due before
 /// `deadline` (ms on the page's clock), moving the virtual clock to it.
-/// False when there is none.
+/// When there is none, the due FinalizationRegistry callbacks run
+/// instead; false when there were none either.
 pub fn runNextTimer(p: *mut Page, deadline: f64) AllocError!bool {
-    let n = nextTimer(p, deadline - pageClock(p)) orelse return false
+    let n = nextTimer(p, deadline - pageClock(p)) orelse return runCleanups(p)
     try runTimer(n.script, n.index)
     try afterTask(n.script)
     if !n.script.real {
