@@ -2348,8 +2348,13 @@ pub let PRELUDE =
     \\    // documents and shadow roots that adopted the sheet.
     \\    hidden(this, '_text', null);
     \\    hidden(this, '_adopters', new Set());
-    \\    this.disabled = !!(options && options.disabled);
+    \\    hidden(this, '_disabled', !!(options && options.disabled));
     \\    this.media = { mediaText: options && options.media ? String(options.media) : '', length: 0 };
+    \\  }
+    \\  get disabled() { return this._disabled; }
+    \\  set disabled(v) {
+    \\    this._disabled = !!v;
+    \\    for (const owner of this._adopters) pushAdopted(owner);
     \\  }
     \\  get cssRules() { return this._rules.map(cssText => ({ cssText, type: 1 })); }
     \\  get rules() { return this.cssRules; }

@@ -1,6 +1,8 @@
-// The inputs to authorSheets, not every DOM mutation. In particular,
-// preload links and empty style elements do not affect the cascade.
-// Include media and the base URL too: changing either must reparse.
+// The inputs to authorSheets, not every DOM mutation: the style and link
+// elements of the document and of its shadow trees, and the adopted
+// sheets. In particular, preload links and empty style elements do not
+// affect the cascade. Include media and the base URL too: changing
+// either must reparse.
 import css
 import dom
 import dom.Document
@@ -10,9 +12,28 @@ import std.mem.AllocError
 import std.text
 
 fn sheetSourceKey(doc: *Document) u64 {
-    var key: u64 = 1469598103934665603
-    var base_seen = false
-    var cur: ?NodeId = doc.root
+    var key = treeSourceKey(doc, doc.root, 1469598103934665603)
+    for root in doc.shadows.items() {
+        if doc.isLive(root) && doc.isConnected(root) {
+            key = sheetMix(key, 4)
+            key = sheetMix(key, root.index as u64)
+            key = treeSourceKey(doc, root, key)
+        }
+    }
+    for ad in doc.adopted.items() {
+        key = sheetMix(key, 5)
+        key = sheetMix(key, ad.root.index as u64)
+        key = sheetTextKey(key, ad.css)
+    }
+    return key
+}
+
+// `key` with the sheet sources of the tree of `root` (the document node
+// or a shadow root) mixed in; the document's first `base` too.
+fn treeSourceKey(doc: *Document, root: NodeId, start: u64) u64 {
+    var key = start
+    var base_seen = !dom.same(root, doc.root)
+    var cur: ?NodeId = root
     while cur |h| {
         let n = doc.node(h)
         if n.kind == Kind.Element {
@@ -41,7 +62,7 @@ fn sheetSourceKey(doc: *Document) u64 {
                 key = sheetTextKey(key, doc.attr(h, "media") orelse "")
             }
         }
-        cur = doc.following(h, doc.root)
+        cur = doc.following(h, root)
     }
     return key
 }

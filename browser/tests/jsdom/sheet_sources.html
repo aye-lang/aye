@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<title>Style sheet changes after a style read</title>
+<p id="p">text</p>
+<div id="host"></div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const p = document.getElementById('p');
+log('none', getComputedStyle(p).color);
+// The document's style elements: adding, changing the text and the
+// media, removing.
+const docStyle = document.createElement('style');
+docStyle.textContent = 'p { color: teal }';
+document.head.appendChild(docStyle);
+log('doc style', getComputedStyle(p).color);
+docStyle.textContent = 'p { color: navy }';
+log('doc text', getComputedStyle(p).color);
+docStyle.setAttribute('media', 'print');
+log('doc media off', getComputedStyle(p).color);
+docStyle.removeAttribute('media');
+log('doc media on', getComputedStyle(p).color);
+docStyle.remove();
+log('doc removed', getComputedStyle(p).color);
+// Adopted sheets: adopting, replacing the text, disabling, dropping.
+const sheet = new CSSStyleSheet();
+sheet.replaceSync('p { color: red }');
+document.adoptedStyleSheets = [sheet];
+log('adopted', getComputedStyle(p).color);
+sheet.replaceSync('p { color: green }');
+log('replaced', getComputedStyle(p).color);
+sheet.insertRule('p { color: purple }', 1);
+log('inserted', getComputedStyle(p).color);
+sheet.disabled = true;
+log('disabled', getComputedStyle(p).color, sheet.disabled);
+sheet.disabled = false;
+log('enabled', getComputedStyle(p).color, sheet.disabled);
+document.adoptedStyleSheets = [];
+log('dropped', getComputedStyle(p).color);
+// A shadow tree's style element and adopted sheets.
+const root = document.getElementById('host').attachShadow({ mode: 'open' });
+root.innerHTML = '<b id="b">b</b>';
+const b = root.getElementById('b');
+log('shadow', getComputedStyle(b).color);
+const style = document.createElement('style');
+style.textContent = 'b { color: blue }';
+root.appendChild(style);
+log('shadow style', getComputedStyle(b).color);
+style.textContent = 'b { color: olive }';
+log('shadow text', getComputedStyle(b).color);
+style.setAttribute('media', 'print');
+log('shadow media off', getComputedStyle(b).color);
+style.removeAttribute('media');
+log('shadow media on', getComputedStyle(b).color);
+style.remove();
+log('shadow removed', getComputedStyle(b).color);
+const shadowSheet = new CSSStyleSheet();
+shadowSheet.replaceSync('b { color: maroon }');
+root.adoptedStyleSheets = [shadowSheet];
+log('shadow adopted', getComputedStyle(b).color, getComputedStyle(p).color);
+shadowSheet.replaceSync('b { color: lime }');
+log('shadow replaced', getComputedStyle(b).color);
+shadowSheet.disabled = true;
+log('shadow disabled', getComputedStyle(b).color);
+shadowSheet.disabled = false;
+root.adoptedStyleSheets = [];
+log('shadow dropped', getComputedStyle(b).color);
+// The host leaving the document takes its shadow sheets along.
+root.adoptedStyleSheets = [shadowSheet];
+const host = document.getElementById('host');
+host.remove();
+log('host out', JSON.stringify(getComputedStyle(b).color));
+document.body.appendChild(host);
+log('host back', getComputedStyle(b).color);
+</script>

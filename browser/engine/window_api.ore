@@ -608,7 +608,7 @@ fn computedStyling(s: *mut Script) AllocError!*mut Styling {
             if c.version == s.style_version {
                 return c
             }
-            let key = sheetsKey(&p.doc)
+            let key = sheetSourceKey(&p.doc)
             if key == s.computed_sheets {
                 c.styles.deinit()
                 c.styles = try css.Styles.init(s.alloc)
@@ -630,14 +630,8 @@ fn computedStyling(s: *mut Script) AllocError!*mut Styling {
     errdefer styles.deinit()
     let c = try p.alloc.create(Styling { media: media, ua: ua, author: author, styles: styles, version: s.style_version })
     s.computed = c
-    s.computed_sheets = sheetsKey(&p.doc)
+    s.computed_sheets = sheetSourceKey(&p.doc)
     return c
-}
-
-// What the author style sheets come from: the style elements (their text)
-// and the stylesheet links (their href and rel), hashed into a number.
-fn sheetsKey(doc: *Document) u64 {
-    return sheetSourceKey(doc)
 }
 
 fn dropComputed(s: *mut Script) {
