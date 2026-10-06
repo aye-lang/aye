@@ -1,0 +1,6 @@
+{"id":1,"cmd":"navigate","url":"browser/tests/jsdom/forms_html5.html"}
+{"id":2,"cmd":"eval","expression":"document.getElementById('n').value = ''; document.getElementById('c').checked = true; 'ready'"}
+{"id":3,"cmd":"click","ref":"e7"}
+{"id":4,"cmd":"type","ref":"e2","text":"6"}
+{"id":5,"cmd":"press","key":"ArrowUp"}
+{"id":6,"cmd":"eval","expression":"document.getElementById('n').value"}
