@@ -1,0 +1,13 @@
+const f = (n) => n > 0 ? 'pos' : n < 0 ? 'neg' : 'zero';
+console.log(f(5), f(-2), f(0));
+console.log(1 && 2, 0 && 2, '' && 'x', null && 1, 'a' && 'b' && 'c');
+console.log(1 || 2, 0 || 2, '' || 'x', null || undefined, false || 0 || 'last');
+console.log(null ?? 'd', undefined ?? 'd', 0 ?? 'd', '' ?? 'd', false ?? 'd', NaN ?? 'd');
+let calls = 0;
+const side = () => { calls++; return true; };
+false && side();
+true || side();
+'x' ?? side();
+console.log('calls', calls);
+console.log(!0, !1, !!'', !!'a', !null, !!{}, !![]);
+console.log((null || undefined) ?? 'both nullish');

@@ -1,0 +1,88 @@
+// image: decoders for the raster formats a page can use (PNG, GIF,
+// JPEG) into one RGBA bitmap type. The input is untrusted bytes from the
+// network, so every decoder checks every index itself and reports a
+// malformed or truncated file as `ImageError.Invalid`: a panic here
+// would take the whole browser down.
+
+import std.mem.Allocator
+
+/// A decoded image: RGBA, 8 bits per channel, straight (not
+/// premultiplied) alpha, rows top to bottom, `width * height * 4` bytes.
+pub struct Bitmap {
+    width: usize
+    height: usize
+    pixels: []mut u8
+
+    /// Frees the pixels.
+    pub fn deinit(self: *Self, alloc: Allocator) {
+        alloc.free(self.pixels)
+    }
+}
+
+/// `Invalid`: the bytes are not a well-formed image (or are cut short).
+/// `Unsupported`: well-formed, but a feature or size this decoder does
+/// not handle (progressive JPEG, CMYK, a huge image).
+pub error ImageError { OutOfMemory, Invalid, Unsupported }
+
+/// An image format, as recognized by its signature bytes.
+pub enum Format {
+    Png
+    Gif
+    Jpeg
+    Unknown
+}
+
+// Larger images are refused before anything is allocated: 40 million
+// pixels are 160 MB of RGBA already.
+let MAX_SIDE: usize = 16384
+let MAX_PIXELS: usize = 40000000
+
+/// The format of `data`, from its first bytes (the Content-Type of a
+/// response is often wrong, so browsers sniff images).
+pub fn sniff(data: []u8) Format {
+    if data.len >= 8 && data[0] == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G' &&
+        data[4] == 0x0D && data[5] == 0x0A && data[6] == 0x1A && data[7] == 0x0A {
+        return Format.Png
+    }
+    if data.len >= 6 && data[0] == 'G' && data[1] == 'I' && data[2] == 'F' && data[3] == '8' &&
+        (data[4] == '7' || data[4] == '9') && data[5] == 'a' {
+        return Format.Gif
+    }
+    if data.len >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
+        return Format.Jpeg
+    }
+    return Format.Unknown
+}
+
+/// Decodes a PNG, GIF (its first frame) or baseline JPEG, chosen by
+/// `sniff`. Free the result with `deinit`.
+pub fn decode(alloc: Allocator, data: []u8) ImageError!Bitmap {
+    let format = sniff(data)
+    if format == Format.Png {
+        return decodePng(alloc, data)
+    }
+    if format == Format.Gif {
+        return decodeGif(alloc, data)
+    }
+    if format == Format.Jpeg {
+        return decodeJpeg(alloc, data)
+    }
+    return ImageError.Unsupported
+}
+
+// Zero sizes are malformed; huge ones are legal but refused.
+fn checkSize(width: usize, height: usize) ImageError!void {
+    if width == 0 || height == 0 {
+        return ImageError.Invalid
+    }
+    if width > MAX_SIDE || height > MAX_SIDE || width * height > MAX_PIXELS {
+        return ImageError.Unsupported
+    }
+}
+
+// A transparent black bitmap of a checked size.
+fn newBitmap(alloc: Allocator, width: usize, height: usize) ImageError!Bitmap {
+    try checkSize(width, height)
+    let pixels = try alloc.alloc(0 as u8, width * height * 4)
+    return Bitmap { width: width, height: height, pixels: pixels }
+}

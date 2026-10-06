@@ -1,0 +1,715 @@
+// Default actions and forms: what a click (or Enter, or Space) does to
+// a page once scripts had their say (the event loop dispatches `click`
+// first and calls `activate` unless the default was prevented), the
+// focus, and form submission.
+//
+// - `activate(page, node)`: the default action of a click on `node` (or
+//   inside it): a link navigates, a submit button submits its form, a
+//   reset button resets it, a checkbox toggles, a radio button is
+//   checked (both fire `input` and `change` at the page's scripts), a label activates its control, a `summary` opens and closes
+//   its `details`, a `select` opens. Navigation and submission are
+//   returned to the caller, which owns the tab (and, for submission,
+//   dispatches `submit` first, then calls `submitForm`).
+// - `implicitSubmit(page, field)`: Enter in a text field.
+// - `submitForm(page, form, submitter)`: the request of a submission:
+//   GET with the fields in the query, or POST as
+//   application/x-www-form-urlencoded, multipart/form-data or
+//   text/plain; `navigateTo` loads it in a tab.
+// - Focus: `focusables`, `nextFocus`, `setFocus`.
+//
+// The state of the controls is in `doc.controls` (dom/controls.ore).
+
+import dom
+import dom.Document
+import dom.Kind
+import dom.NodeId
+import layout
+import net
+import std
+import std.list.List
+import std.map.IntMap
+import std.mem.AllocError
+import std.mem.Allocator
+import std.sort
+import std.text
+import url
+import url.Url
+
+/// What the caller has to do after a default action.
+pub enum Activation {
+    // Nothing happened.
+    Nothing
+    // The state of the page changed (checkedness, focus, a form reset,
+    // a `details` opened): style and lay it out again.
+    Changed
+    // Follow a link: navigate the tab to `target` (owned: `deinit` it).
+    Follow { target: Url }
+    // Submit `form` (dispatch `submit`, then `submitForm`).
+    Submit { form: NodeId, submitter: ?NodeId }
+    // Open the options of the `select` `el` (the window's dropdown).
+    OpenSelect { el: NodeId }
+}
+
+/// The default action of activating `node` (a click on it, or on
+/// something inside it): see the top of the file. Also moves the focus
+/// to what was activated when it takes the focus.
+pub fn activate(page: *mut Page, node: NodeId) AllocError!Activation {
+    let doc = &mut page.doc
+    let el = activationTarget(doc, node) orelse return Activation.Nothing
+    if dom.isDisabled(doc, el) {
+        return Activation.Nothing
+    }
+    let moved = focusOn(page, el)
+    if doc.isElement(el, "a") || doc.isElement(el, "area") {
+        let href = text.trim(doc.attr(el, "href") orelse "")
+        let target = url.resolve(page.alloc, &page.url, href) catch |e| {
+            return Activation.Nothing
+        }
+        if text.eql(target.scheme, "javascript") || text.eql(target.scheme, "mailto") {
+            target.deinit(page.alloc)
+            return Activation.Nothing
+        }
+        return Activation.Follow { target: target }
+    }
+    if doc.isElement(el, "label") {
+        if labelControl(doc, el) |control| {
+            if dom.isDisabled(doc, control) {
+                return Activation.Nothing
+            }
+            // The label's own focus went to the control.
+            if dom.isTextField(doc, control) || doc.isElement(control, "select") {
+                setFocus(page, control)
+                return Activation.Changed
+            }
+            return activate(page, control)
+        }
+        return Activation.Nothing
+    }
+    if doc.isElement(el, "summary") {
+        if doc.parent(el) |d| {
+            if doc.isElement(d, "details") {
+                if doc.attr(d, "open") != null {
+                    removeAttr(doc, d, "open")
+                } else {
+                    try doc.setAttr(d, "open", "")
+                }
+                return Activation.Changed
+            }
+        }
+        return changedIf(moved)
+    }
+    if dom.isCheckable(doc, el) {
+        if dom.isRadio(doc, el) {
+            if dom.isChecked(doc, el) {
+                return changedIf(moved)
+            }
+            try dom.setChecked(doc, el, true)
+        } else {
+            try dom.setChecked(doc, el, !dom.isChecked(doc, el))
+        }
+        try dispatchEvent(page, el, "input", "")
+        try dispatchEvent(page, el, "change", "")
+        return Activation.Changed
+    }
+    if dom.isSubmitButton(doc, el) {
+        if dom.formOwner(doc, el) |form| {
+            return Activation.Submit { form: form, submitter: el }
+        }
+        return changedIf(moved)
+    }
+    if dom.isResetButton(doc, el) {
+        if dom.formOwner(doc, el) |form| {
+            try dom.resetForm(doc, form)
+            return Activation.Changed
+        }
+        return changedIf(moved)
+    }
+    if doc.isElement(el, "select") {
+        return Activation.OpenSelect { el: el }
+    }
+    return changedIf(moved)
+}
+
+fn changedIf(moved: bool) Activation {
+    if moved {
+        return Activation.Changed
+    }
+    return Activation.Nothing
+}
+
+// The element whose default action a click on `node` runs: the nearest
+// link, control, label or summary around it (itself included).
+fn activationTarget(doc: *Document, node: NodeId) ?NodeId {
+    var cur: ?NodeId = node
+    while cur |c| {
+        let n = doc.node(c)
+        if n.kind == Kind.Element {
+            if (text.eql(n.name, "a") || text.eql(n.name, "area")) && doc.attr(c, "href") != null {
+                return c
+            }
+            if dom.isControl(doc, c) || text.eql(n.name, "label") || text.eql(n.name, "summary") {
+                return c
+            }
+            if text.eql(n.name, "option") {
+                // A click on an option goes to its select.
+                if dom.selectOf(doc, c) |sel| {
+                    return sel
+                }
+            }
+            if focusableElement(doc, c) {
+                return c
+            }
+        }
+        cur = doc.parent(c)
+    }
+    return null
+}
+
+/// The control of a label: the element its `for` names (when that is a
+/// control), else the first control inside it.
+pub fn labelControl(doc: *Document, label: NodeId) ?NodeId {
+    if doc.attr(label, "for") |id| {
+        if doc.getElementById(id) |c| {
+            if dom.isControl(doc, c) {
+                return c
+            }
+        }
+        return null
+    }
+    var cur = doc.following(label, label)
+    while cur |c| {
+        if dom.isControl(doc, c) && !(doc.isElement(c, "input") && text.eql(dom.inputType(doc, c), "hidden")) {
+            return c
+        }
+        cur = doc.following(c, label)
+    }
+    return null
+}
+
+fn removeAttr(doc: *mut Document, el: NodeId, name: []u8) {
+    let n = doc.node(el)
+    var k: usize = 0
+    for i in 0..n.attrs.len {
+        let at = n.attrs[i]
+        if !text.eql(at.name, name) {
+            n.attrs[k] = at
+            k += 1
+        }
+    }
+    n.attrs = n.attrs[0..k]
+}
+
+/// Enter in the text field `field`: submits its form with its default
+/// button (the first submit button), or without a button when the form
+/// has none and this is its only text field. A disabled default button
+/// submits nothing.
+pub fn implicitSubmit(page: *mut Page, field: NodeId) AllocError!Activation {
+    let doc = &page.doc
+    let form = dom.formOwner(doc, field) orelse return Activation.Nothing
+    var list = List(NodeId).init(page.alloc)
+    defer list.deinit()
+    try dom.formControls(doc, form, &mut list)
+    var fields: usize = 0
+    for c in list.items() {
+        if dom.isSubmitButton(doc, c) {
+            if dom.isDisabled(doc, c) {
+                return Activation.Nothing
+            }
+            return Activation.Submit { form: form, submitter: c }
+        }
+        if doc.isElement(c, "input") && dom.isTextField(doc, c) {
+            fields += 1
+        }
+    }
+    if fields <= 1 {
+        return Activation.Submit { form: form, submitter: null }
+    }
+    return Activation.Nothing
+}
+
+// ---- focus
+
+/// Can `el` take the focus, judging by the tree alone: a link with an
+/// `href`, a control (not hidden or disabled), a `summary`, or an
+/// element with a `tabindex` of 0 or more?
+fn focusableElement(doc: *Document, el: NodeId) bool {
+    let n = doc.node(el)
+    if n.kind != Kind.Element {
+        return false
+    }
+    if doc.attr(el, "tabindex") |v| {
+        let i = text.parseInt(text.trim(v)) catch -1
+        if i >= 0 {
+            return !dom.isDisabled(doc, el)
+        }
+    }
+    if text.eql(n.name, "a") || text.eql(n.name, "area") {
+        return doc.attr(el, "href") != null
+    }
+    if text.eql(n.name, "input") && text.eql(dom.inputType(doc, el), "hidden") {
+        return false
+    }
+    if dom.isControl(doc, el) || text.eql(n.name, "summary") {
+        return !dom.isDisabled(doc, el)
+    }
+    return false
+}
+
+// Moves the focus to `el` when it can take it; says whether the focus
+// changed.
+fn focusOn(page: *mut Page, el: NodeId) bool {
+    if !focusableElement(&page.doc, el) {
+        return false
+    }
+    if dom.isSame(page.doc.controls.focus, el) {
+        return false
+    }
+    setFocus(page, el)
+    return true
+}
+
+/// Moves the focus to `el` (null: nowhere). A text field gets the caret
+/// at the end of its value.
+pub fn setFocus(page: *mut Page, el: ?NodeId) {
+    page.doc.controls.focus = el
+    if el |f| {
+        if dom.isTextField(&page.doc, f) {
+            let n = dom.valueOf(&page.doc, f).len
+            if page.doc.controls.get(f) == null {
+                dom.setCaret(&mut page.doc, f, n) catch |e| {
+                }
+            }
+        }
+    }
+}
+
+/// Appends to `out` the elements that take the focus with Tab, in
+/// order: positive `tabindex` values first (ascending, then in tree
+/// order), then the others in tree order. Only elements with a box in
+/// the page's layout count (not `display: none`).
+pub fn focusables(page: *Page, out: *mut List(NodeId)) AllocError!void {
+    var boxed = IntMap(u32, bool).init(page.alloc)
+    defer boxed.deinit()
+    if page.tree |t| {
+        for i in 0..t.boxes.len() {
+            if t.bx(i).node |n| {
+                try boxed.put(n.index, true)
+            }
+        }
+    }
+    var first = List(Ordered).init(page.alloc)
+    defer first.deinit()
+    let doc = &page.doc
+    var cur: ?NodeId = doc.root
+    var seq: usize = 0
+    while cur |h| {
+        if focusableElement(doc, h) && boxed.contains(h.index) && !(doc.attr(h, "tabindex") != null && tabIndex(doc, h) < 0) {
+            let ti = tabIndex(doc, h)
+            if ti > 0 {
+                try first.append(Ordered { el: h, tab: ti, seq: seq })
+            }
+            seq += 1
+        }
+        cur = doc.following(h, doc.root)
+    }
+    sort.sort(Ordered, first.items(), byTabIndex)
+    for o in first.items() {
+        try out.append(o.el)
+    }
+    cur = doc.root
+    while cur |h| {
+        if focusableElement(doc, h) && boxed.contains(h.index) && tabIndex(doc, h) == 0 {
+            try out.append(h)
+        }
+        cur = doc.following(h, doc.root)
+    }
+}
+
+struct Ordered {
+    el: NodeId
+    tab: i64
+    seq: usize
+}
+
+fn byTabIndex(a: Ordered, b: Ordered) bool {
+    if a.tab != b.tab {
+        return a.tab < b.tab
+    }
+    return a.seq < b.seq
+}
+
+// The `tabindex` of an element (0 when missing or not a number).
+fn tabIndex(doc: *Document, el: NodeId) i64 {
+    if doc.attr(el, "tabindex") |v| {
+        return text.parseInt(text.trim(v)) catch 0
+    }
+    return 0
+}
+
+/// The element after (or, not `forward`, before) the focused one in Tab
+/// order, wrapping around; null when nothing takes the focus.
+pub fn nextFocus(page: *Page, forward: bool) AllocError!?NodeId {
+    var all = List(NodeId).init(page.alloc)
+    defer all.deinit()
+    try focusables(page, &mut all)
+    let n = all.len()
+    if n == 0 {
+        return null
+    }
+    var at: ?usize = null
+    if page.doc.controls.focus |f| {
+        for i, e in all.items() {
+            if e == f {
+                at = i
+            }
+        }
+    }
+    if at |i| {
+        if forward {
+            return all.items()[(i + 1) % n]
+        }
+        return all.items()[(i + n - 1) % n]
+    }
+    if forward {
+        return all.items()[0]
+    }
+    return all.items()[n - 1]
+}
+
+// ---- submission
+
+/// A form submission to load: GET when `body` is null.
+pub struct Submission {
+    target: Url
+    // POST: the body and its content type (owned).
+    post: bool
+    content_type: []mut u8
+    body: []mut u8
+
+    pub fn deinit(self: *Self, alloc: Allocator) {
+        self.target.deinit(alloc)
+        alloc.free(self.content_type)
+        alloc.free(self.body)
+    }
+}
+
+/// The boundary of multipart/form-data bodies (fixed, so that requests
+/// are the same from one run to the next).
+pub let BOUNDARY = "----anyknownFormBoundary7MA4YWxkTrZu0gW"
+
+/// The request that submits `form` with `submitter` (the button that
+/// submitted it, or null): its action (the submitter's `formaction`,
+/// else the form's `action`, else the document's URL), method and
+/// encoding. Null when it goes nowhere (a `javascript:` action, method
+/// `dialog`, an action that is not a URL).
+pub fn submitForm(page: *mut Page, form: NodeId, submitter: ?NodeId) AllocError!?Submission {
+    let doc = &page.doc
+    let alloc = page.alloc
+    var action = text.trim(doc.attr(form, "action") orelse "")
+    var method = doc.attr(form, "method") orelse "get"
+    var enctype = doc.attr(form, "enctype") orelse ""
+    if submitter |s| {
+        if doc.attr(s, "formaction") |a| {
+            action = text.trim(a)
+        }
+        if doc.attr(s, "formmethod") |m| {
+            method = m
+        }
+        if doc.attr(s, "formenctype") |e| {
+            enctype = e
+        }
+    }
+    method = text.trim(method)
+    if text.eqlIgnoreCase(method, "dialog") {
+        return null
+    }
+    let post = text.eqlIgnoreCase(method, "post")
+    var target = url.resolve(alloc, &page.url, action) catch |e| {
+        return null
+    }
+    if text.eql(target.scheme, "javascript") {
+        target.deinit(alloc)
+        return null
+    }
+    errdefer target.deinit(alloc)
+    var entries = List(FormEntry).init(alloc)
+    defer freeEntries(alloc, &mut entries)
+    try formEntries(page, form, submitter, &mut entries)
+    var body = text.Builder.init(alloc)
+    defer body.deinit()
+    var ctype = text.Builder.init(alloc)
+    defer ctype.deinit()
+    let multipart = text.eqlIgnoreCase(text.trim(enctype), "multipart/form-data")
+    let plain = text.eqlIgnoreCase(text.trim(enctype), "text/plain")
+    if post && multipart {
+        try ctype.append("multipart/form-data; boundary=")
+        try ctype.append(BOUNDARY)
+        try multipartBody(&mut body, entries.items())
+    } else if post && plain {
+        try ctype.append("text/plain")
+        for e in entries.items() {
+            try body.append(e.name)
+            try body.appendByte('=')
+            try body.append(e.value)
+            try body.append("\r\n")
+        }
+    } else {
+        try urlencoded(&mut body, entries.items())
+        if post {
+            try ctype.append("application/x-www-form-urlencoded")
+        }
+    }
+    if !post {
+        // The fields replace the query of the action URL.
+        let with_query = try queryUrl(alloc, &target, body.bytes())
+        target.deinit(alloc)
+        target = with_query
+        body.clear()
+    }
+    let ct = try ctype.toOwned()
+    errdefer alloc.free(ct)
+    let data = try body.toOwned()
+    return Submission { target: target, post: post, content_type: ct, body: data }
+}
+
+// `target` with its query replaced by `query` (the fragment stays).
+fn queryUrl(alloc: Allocator, target: *Url, query: []u8) AllocError!Url {
+    var b = text.Builder.init(alloc)
+    defer b.deinit()
+    let href = target.href
+    var end = href.len
+    if text.indexOf(href, "#") |hash| {
+        end = hash
+    }
+    var base_end = end
+    if std.mem.indexOf(href[..end], '?') |q| {
+        base_end = q
+    }
+    try b.append(href[..base_end])
+    try b.appendByte('?')
+    try b.append(query)
+    try b.append(href[end..])
+    let u = url.parse(alloc, b.bytes()) catch |e| {
+        return AllocError.OutOfMemory
+    }
+    return u
+}
+
+/// One name and value of a form's data (owned).
+struct FormEntry {
+    name: []mut u8
+    value: []mut u8
+    // A file input: the value is a file name (always empty here).
+    file: bool
+}
+
+fn freeEntries(alloc: Allocator, list: *mut List(FormEntry)) {
+    for e in list.items() {
+        alloc.free(e.name)
+        alloc.free(e.value)
+    }
+    list.deinit()
+}
+
+fn addEntry(alloc: Allocator, out: *mut List(FormEntry), name: []u8, value: []u8, file: bool) AllocError!void {
+    let n = try crlf(alloc, name)
+    errdefer alloc.free(n)
+    let v = try crlf(alloc, value)
+    errdefer alloc.free(v)
+    try out.append(FormEntry { name: n, value: v, file: file })
+}
+
+// `s` with every line break (CR, LF or CRLF) as CRLF.
+fn crlf(alloc: Allocator, s: []u8) AllocError![]mut u8 {
+    var b = text.Builder.init(alloc)
+    defer b.deinit()
+    var i: usize = 0
+    while i < s.len {
+        let c = s[i]
+        if c == '\r' {
+            try b.append("\r\n")
+            if i + 1 < s.len && s[i + 1] == '\n' {
+                i += 1
+            }
+        } else if c == '\n' {
+            try b.append("\r\n")
+        } else {
+            try b.appendByte(c)
+        }
+        i += 1
+    }
+    return b.toOwned()
+}
+
+/// The entry list of `form` (HTML's "constructing the entry list"): its
+/// enabled controls with a name, in tree order; buttons only when they
+/// are the submitter; checkboxes and radio buttons only when checked;
+/// each selected option of a select; an image button as `name.x` and
+/// `name.y`.
+fn formEntries(page: *mut Page, form: NodeId, submitter: ?NodeId, out: *mut List(FormEntry)) AllocError!void {
+    let doc = &page.doc
+    let alloc = page.alloc
+    var list = List(NodeId).init(alloc)
+    defer list.deinit()
+    try dom.formControls(doc, form, &mut list)
+    for el in list.items() {
+        if dom.isDisabled(doc, el) || inDatalist(doc, el) {
+            continue
+        }
+        let is_submitter = dom.isSame(submitter, el)
+        let name = doc.attr(el, "name") orelse ""
+        if doc.isElement(el, "input") && text.eql(dom.inputType(doc, el), "image") {
+            if is_submitter {
+                var b = text.Builder.init(alloc)
+                defer b.deinit()
+                if name.len > 0 {
+                    try b.append(name)
+                    try b.appendByte('.')
+                }
+                try b.append("x")
+                try addEntry(alloc, out, b.bytes(), "0", false)
+                b.clear()
+                if name.len > 0 {
+                    try b.append(name)
+                    try b.appendByte('.')
+                }
+                try b.append("y")
+                try addEntry(alloc, out, b.bytes(), "0", false)
+            }
+            continue
+        }
+        if name.len == 0 {
+            continue
+        }
+        if doc.isElement(el, "button") || dom.isSubmitButton(doc, el) || dom.isResetButton(doc, el) || (doc.isElement(el, "input") && text.eql(dom.inputType(doc, el), "button")) {
+            if is_submitter {
+                try addEntry(alloc, out, name, buttonValue(doc, el), false)
+            }
+            continue
+        }
+        if dom.isCheckable(doc, el) {
+            if dom.isChecked(doc, el) {
+                try addEntry(alloc, out, name, dom.valueOf(doc, el), false)
+            }
+            continue
+        }
+        if doc.isElement(el, "select") {
+            var opts = List(NodeId).init(alloc)
+            defer opts.deinit()
+            try dom.options(doc, el, &mut opts)
+            for o in opts.items() {
+                if dom.isSelected(doc, o) && !dom.isDisabled(doc, o) {
+                    try addEntry(alloc, out, name, dom.valueOf(doc, o), false)
+                }
+            }
+            continue
+        }
+        if doc.isElement(el, "input") && text.eql(dom.inputType(doc, el), "file") {
+            try addEntry(alloc, out, name, "", true)
+            continue
+        }
+        if doc.isElement(el, "input") && text.eql(dom.inputType(doc, el), "hidden") && text.eqlIgnoreCase(name, "_charset_") {
+            try addEntry(alloc, out, name, "UTF-8", false)
+            continue
+        }
+        try addEntry(alloc, out, name, dom.valueOf(doc, el), false)
+    }
+}
+
+fn buttonValue(doc: *Document, el: NodeId) []u8 {
+    return doc.attr(el, "value") orelse ""
+}
+
+fn inDatalist(doc: *Document, el: NodeId) bool {
+    var cur = doc.parent(el)
+    while cur |c| {
+        if doc.isElement(c, "datalist") {
+            return true
+        }
+        cur = doc.parent(c)
+    }
+    return false
+}
+
+/// The application/x-www-form-urlencoded serialization of the entries:
+/// `name=value` joined by `&`; a space is `+`; bytes other than ASCII
+/// letters, digits and `*-._` are `%XX`.
+fn urlencoded(out: *mut text.Builder, entries: []FormEntry) AllocError!void {
+    for i, e in entries {
+        if i > 0 {
+            try out.appendByte('&')
+        }
+        try formEncode(out, e.name)
+        try out.appendByte('=')
+        try formEncode(out, e.value)
+    }
+}
+
+fn formEncode(out: *mut text.Builder, s: []u8) AllocError!void {
+    let hex = "0123456789ABCDEF"
+    for c in s {
+        let plain = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '*' || c == '-' || c == '.' || c == '_'
+        if plain {
+            try out.appendByte(c)
+        } else if c == ' ' {
+            try out.appendByte('+')
+        } else {
+            try out.appendByte('%')
+            try out.appendByte(hex[(c >> 4) as usize])
+            try out.appendByte(hex[(c & 15) as usize])
+        }
+    }
+}
+
+/// The multipart/form-data body of the entries, with `BOUNDARY`. Names
+/// and file names escape `"` as `%22` and line breaks as `%0D%0A`; a
+/// file input sends an empty file.
+fn multipartBody(out: *mut text.Builder, entries: []FormEntry) AllocError!void {
+    for e in entries {
+        try out.append("--")
+        try out.append(BOUNDARY)
+        try out.append("\r\nContent-Disposition: form-data; name=\"")
+        try headerEscape(out, e.name)
+        try out.appendByte('"')
+        if e.file {
+            try out.append("; filename=\"")
+            try headerEscape(out, e.value)
+            try out.append("\"\r\nContent-Type: application/octet-stream\r\n\r\n\r\n")
+        } else {
+            try out.append("\r\n\r\n")
+            try out.append(e.value)
+            try out.append("\r\n")
+        }
+    }
+    try out.append("--")
+    try out.append(BOUNDARY)
+    try out.append("--\r\n")
+}
+
+fn headerEscape(out: *mut text.Builder, s: []u8) AllocError!void {
+    for c in s {
+        if c == '"' {
+            try out.append("%22")
+        } else if c == '\r' {
+            try out.append("%0D")
+        } else if c == '\n' {
+            try out.append("%0A")
+        } else {
+            try out.appendByte(c)
+        }
+    }
+}
+
+/// Loads a submission in `tab` as a new history entry (POST bodies are
+/// not kept: going back to the entry, or reloading it, loads its URL by
+/// GET). Returns whether a page was loaded.
+pub fn navigateTo(tab: *mut Tab, sub: *Submission) AllocError!bool {
+    if !sub.post {
+        return tab.navigate(&sub.target)
+    }
+    var body = net.Body { content_type: sub.content_type, data: sub.body }
+    let p = try loadWith(tab.alloc, &sub.target, &body)
+    errdefer p.destroy()
+    try tab.push(&sub.target, p)
+    return true
+}

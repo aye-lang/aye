@@ -1,0 +1,7 @@
+Rex makes a sound 4 false
+true true
+true
+3
+5 3 3
+[ 'name', 'legs' ] true
+Animal { name: 'Rex', legs: 5 }

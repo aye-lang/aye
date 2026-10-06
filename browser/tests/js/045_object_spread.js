@@ -1,0 +1,17 @@
+const a = { x: 1, y: 2 };
+const b = { ...a, z: 3 };
+const c = { ...a, x: 10 };
+const d = { x: 10, ...a };
+console.log(b, c, d);
+console.log({ ...null, ...undefined, ...'hi', ...[7, 8] });
+const nested = { inner: { v: 1 } };
+const copy = { ...nested };
+copy.inner.v = 2;
+console.log(nested.inner.v, copy === nested, copy.inner === nested.inner);
+const withGetter = { get g() { return 'computed'; } };
+const spreadG = { ...withGetter };
+console.log(Object.getOwnPropertyDescriptor(spreadG, 'g').value);
+const proto = { inherited: 1 };
+const child = Object.create(proto);
+child.own = 2;
+console.log({ ...child });

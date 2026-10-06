@@ -1,0 +1,50 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <p>
+      display: block
+      color: rgb(255, 0, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: left
+    <p class="skip">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: left
+    <p id="special">
+      display: block
+      color: rgb(255, 0, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: right
+    <p class="double">
+      display: block
+      color: rgb(255, 0, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: left
+      white-space: pre
+    <ul>
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      padding-left: 40px
+      <li>
+        display: list-item
+      <li>
+        display: list-item
+        font-style: italic
+      <li>
+        display: list-item
+    <span>
+      font-weight: 700

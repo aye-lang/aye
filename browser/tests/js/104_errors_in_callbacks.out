@@ -1,0 +1,8 @@
+map fail at 2
+TypeError forEach 1
+RangeError cmp
+reviver 2
+reduce str
+replacer
+toJSON
+[ 1, 2, 3 ]

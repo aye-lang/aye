@@ -1,0 +1,11 @@
+const a = { kind: 'a' };
+const b = { own: 1 };
+console.log(Object.getPrototypeOf(b) === Object.prototype);
+Object.setPrototypeOf(b, a);
+console.log(b.kind, Object.getPrototypeOf(b) === a);
+console.log(Object.getPrototypeOf([]) === Array.prototype, Object.getPrototypeOf(Array.prototype) === Object.prototype);
+console.log(Object.getPrototypeOf(Object.prototype));
+console.log(Object.getPrototypeOf(function () {}) === Function.prototype);
+const r = Object.setPrototypeOf({ x: 1 }, null);
+console.log(Object.getPrototypeOf(r), r.x);
+console.log(Object.getPrototypeOf('str') === String.prototype, Object.getPrototypeOf(5) === Number.prototype);

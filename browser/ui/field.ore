@@ -1,0 +1,142 @@
+// A one-line text field (the address bar, the find bar): UTF-8 text, a
+// caret (a byte offset at a code point boundary), and "everything
+// selected" (after Cmd+L), which the next edit replaces.
+
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+pub struct Field {
+    alloc: Allocator
+    buf: text.Builder
+    caret: usize
+    all: bool
+
+    pub fn init(alloc: Allocator) Field {
+        return Field { alloc: alloc, buf: text.Builder.init(alloc), caret: 0, all: false }
+    }
+
+    pub fn deinit(self: *mut Self) {
+        self.buf.deinit()
+    }
+
+    pub fn bytes(self: *Self) []u8 {
+        return self.buf.bytes()
+    }
+
+    /// Replaces the text; the caret goes to the end.
+    pub fn set(self: *mut Self, s: []u8) AllocError!void {
+        self.buf.clear()
+        try self.buf.append(s)
+        self.caret = s.len
+        self.all = false
+    }
+
+    pub fn selectAll(self: *mut Self) {
+        self.all = true
+        self.caret = self.buf.len()
+    }
+
+    /// Inserts `s` at the caret (replacing everything when selected).
+    pub fn insert(self: *mut Self, s: []u8) AllocError!void {
+        if self.all {
+            self.buf.clear()
+            self.caret = 0
+            self.all = false
+        }
+        var b = text.Builder.init(self.alloc)
+        defer b.deinit()
+        let old = self.buf.bytes()
+        try b.append(old[..self.caret])
+        try b.append(s)
+        try b.append(old[self.caret..])
+        try self.splice(b.bytes(), self.caret + s.len)
+    }
+
+    // Takes `s` as the new text with the caret at `caret`.
+    fn splice(self: *mut Self, s: []u8, caret: usize) AllocError!void {
+        self.buf.clear()
+        try self.buf.append(s)
+        self.caret = caret
+    }
+
+    /// Deletes the code point before the caret (or everything when
+    /// selected).
+    pub fn backspace(self: *mut Self) AllocError!void {
+        if self.all {
+            return self.set("")
+        }
+        if self.caret == 0 {
+            return
+        }
+        let start = prevBoundary(self.buf.bytes(), self.caret)
+        try self.remove(start, self.caret)
+    }
+
+    /// Deletes the code point after the caret.
+    pub fn delete(self: *mut Self) AllocError!void {
+        if self.all {
+            return self.set("")
+        }
+        if self.caret >= self.buf.len() {
+            return
+        }
+        let end = nextBoundary(self.buf.bytes(), self.caret)
+        try self.remove(self.caret, end)
+    }
+
+    fn remove(self: *mut Self, from: usize, to: usize) AllocError!void {
+        var b = text.Builder.init(self.alloc)
+        defer b.deinit()
+        let old = self.buf.bytes()
+        try b.append(old[..from])
+        try b.append(old[to..])
+        try self.splice(b.bytes(), from)
+    }
+
+    pub fn left(self: *mut Self) {
+        if self.all {
+            self.all = false
+            self.caret = 0
+            return
+        }
+        if self.caret > 0 {
+            self.caret = prevBoundary(self.buf.bytes(), self.caret)
+        }
+    }
+
+    pub fn right(self: *mut Self) {
+        self.all = false
+        if self.caret < self.buf.len() {
+            self.caret = nextBoundary(self.buf.bytes(), self.caret)
+        }
+    }
+
+    pub fn home(self: *mut Self) {
+        self.all = false
+        self.caret = 0
+    }
+
+    pub fn end(self: *mut Self) {
+        self.all = false
+        self.caret = self.buf.len()
+    }
+}
+
+// The start of the code point before offset `i` (> 0).
+fn prevBoundary(s: []u8, i: usize) usize {
+    var k = i - 1
+    while k > 0 && (s[k] & 0xC0) == 0x80 {
+        k -= 1
+    }
+    return k
+}
+
+// The end of the code point at offset `i` (< s.len).
+fn nextBoundary(s: []u8, i: usize) usize {
+    var k = i + 1
+    while k < s.len && (s[k] & 0xC0) == 0x80 {
+        k += 1
+    }
+    return k
+}

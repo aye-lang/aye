@@ -1,0 +1,33 @@
+#document
+  <!DOCTYPE html>
+  <html lang="en">
+    <head>
+      "\n  "
+      <meta charset="utf-8">
+      "\n  "
+      <title>
+        "A basic page"
+      "\n  "
+      <link rel="stylesheet" href="style.css">
+      "\n"
+    "\n"
+    <body>
+      "\n  "
+      <h1>
+        "Welcome"
+      "\n  "
+      <p>
+        "This is a "
+        <em>
+          "small"
+        " page with a "
+        <a href="/next">
+          "link"
+        "."
+      "\n  "
+      <div id="main" class="content">
+        "\n    "
+        <p>
+          "Second paragraph."
+        "\n  "
+      "\n\n\n"

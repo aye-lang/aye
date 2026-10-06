@@ -1,0 +1,21 @@
+<!doctype html>
+<title>Hidden things</title>
+<style>
+.gone { display: none }
+.invisible { visibility: hidden }
+.shown { visibility: visible }
+</style>
+<body>
+<h1>Hidden things</h1>
+<p>Visible paragraph.</p>
+<p class=gone>Display none.</p>
+<p hidden>Hidden attribute.</p>
+<div class=invisible>Invisible text. <span class=shown>But this is visible.</span> <a href=/x>Invisible link</a></div>
+<div aria-hidden=true>Hidden from assistive technology. <a href=/y>Link</a></div>
+<p style="display:none">Inline style none.</p>
+<button class=invisible>Invisible button</button>
+<input type=hidden value=secret>
+<noscript>Enable scripts.</noscript>
+<template><p>Template content.</p></template>
+<p>Last visible paragraph.</p>
+</body>

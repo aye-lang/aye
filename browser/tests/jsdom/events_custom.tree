@@ -1,0 +1,16 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Custom events"
+      "\n"
+    <body>
+      <div id="d">
+      "\n"
+      <pre id="out">
+        "detail Ada true true greet\nhandleEvent ping 1\nhandleEvent ping 2\nkey Enter d false\nTypeError\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst d = document.getElementById('d');\nd.addEventListener('greet', e => log('detail', e.detail.name, e instanceof CustomEvent, e instanceof Event, e.type));\nd.dispatchEvent(new CustomEvent('greet', { detail: { name: 'Ada' } }));\nconst handler = { count: 0, handleEvent(e) { this.count++; log('handleEvent', e.type, this.count); } };\nd.addEventListener('ping', handler);\nd.dispatchEvent(new Event('ping'));\nd.dispatchEvent(new Event('ping'));\nconst k = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true });\ndocument.addEventListener('keydown', e => log('key', e.key, e.target.id, e.isTrusted));\nd.dispatchEvent(k);\ntry { d.dispatchEvent({ type: 'fake' }); } catch (e) { log(e.name); }\n"
+      "\n"

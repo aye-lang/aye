@@ -1,0 +1,4 @@
+C<B<A B<A A
+sB<sA sB<sA
+[ 'A', 'B<A', 'C<B<A' ]
+own+proto greet

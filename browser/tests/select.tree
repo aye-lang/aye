@@ -1,0 +1,29 @@
+#document
+  <html>
+    <head>
+    <body>
+      <form action="/go">
+        "\n"
+        <label>
+          "Pick "
+          <select name="s">
+            "\n  "
+            <option>
+              "One\n  "
+            <option selected="">
+              "Two\n  "
+            <optgroup label="G">
+              "\n    "
+              <option>
+                "Three\n  "
+            <optgroup label="H">
+              "\n    "
+              <option>
+                "Four\n"
+        "\n"
+        <button>
+          "Send "
+        <button>
+          "nested button closes"
+        "\n"
+      "\n"

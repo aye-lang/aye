@@ -1,0 +1,5 @@
+Point { x: 1, y: 2 } Point3 { x: 1, y: 2, z: 3 } Empty {}
+[ Point { x: 0, y: 0 } ] { p: Point { x: 5, y: 6 } }
+[Function: named] [class Point] [class Point3 extends Point] [Function: max]
+[ [Function: named] ] { f: [Function: named] }
+[Object: null prototype] {} [Object: null prototype] { k: 'v' }

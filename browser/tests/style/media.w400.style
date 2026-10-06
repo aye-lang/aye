@@ -1,0 +1,77 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+    <style media="print">
+      display: none
+    <style media="screen and (min-width: 100px)">
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <p class="screen">
+      display: block
+      color: rgb(255, 0, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="print">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="wide">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="narrow">
+      display: block
+      color: rgb(0, 128, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="mid">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="notprint">
+      display: block
+      font-weight: 700
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="land">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="list">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="em">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="dark">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="unknown">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="broken">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="empty">
+      display: block
+      color: rgb(0, 0, 255)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="p2 p3">
+      display: block
+      color: rgb(0, 0, 255)
+      margin-top: 16px
+      margin-bottom: 16px

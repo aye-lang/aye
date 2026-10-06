@@ -1,0 +1,18 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Stopping"
+      "\n"
+    <body>
+      <div id="outer">
+        <div id="inner">
+          "x"
+      "\n"
+      <pre id="out">
+        "inner 1\ninner 2 still runs\nonce\ntap first\ntap first\nzap\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst outer = document.getElementById('outer');\nconst inner = document.getElementById('inner');\nouter.addEventListener('click', () => log('outer: not reached'));\ninner.addEventListener('click', e => { log('inner 1'); e.stopPropagation(); });\ninner.addEventListener('click', () => log('inner 2 still runs'));\ninner.click();\nconst once = () => log('once');\ninner.addEventListener('tap', once, { once: true });\ninner.addEventListener('tap', e => { log('tap first'); e.stopImmediatePropagation(); });\ninner.addEventListener('tap', () => log('tap: not reached'));\ninner.dispatchEvent(new Event('tap'));\ninner.dispatchEvent(new Event('tap'));\nconst gone = () => log('removed: not reached');\ninner.addEventListener('zap', gone);\ninner.addEventListener('zap', gone);\ninner.removeEventListener('zap', gone);\ninner.addEventListener('zap', () => log('zap'), true);\ninner.removeEventListener('zap', () => {});\ninner.dispatchEvent(new Event('zap'));\n"
+      "\n"

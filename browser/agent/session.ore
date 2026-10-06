@@ -1,0 +1,295 @@
+// agent: the browser without pixels, for AI agents (docs/browser.md, B7).
+//
+// - session.ore: a `Session`: a tab (engine.Tab: the page shown and its
+//   history) and what the agent keeps about the page: where its nodes
+//   are (laid out with the fixed-metric font) and their refs. The focus
+//   and the state of form controls are the page's (`doc.controls`), as
+//   in the window.
+// - a11y.ore: the accessibility tree (`snapshot`) with refs `e1, e2, ...`.
+// - markdown.ore: the main content as Markdown (`read`).
+// - actions.ore: navigate, back, forward, reload, click, type, select,
+//   press, scroll, find, wait, eval; snapshot diffs.
+// - scripts.ore: events for the actions, eval and wait, and what
+//   follows when scripts ran (navigations, layout, focus).
+// - json.ore: a JSON parser and writer.
+// - server.ore: `anyknown agent` (JSON lines) and `anyknown mcp` (MCP over
+//   stdio), and `anyknown dump --a11y|--md`.
+
+import css
+import dom.NodeId
+import engine
+import engine.Page
+import font
+import layout
+import std
+import std.list.List
+import std.map.IntMap
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+import url
+import url.Url
+
+/// A rectangle in document coordinates (px).
+pub struct Rect {
+    x: f64
+    y: f64
+    w: f64
+    h: f64
+}
+
+/// The state of one agent: a tab, what the agent knows of the page it
+/// shows, and what the page's scripts would have seen (recorded events).
+pub struct Session {
+    alloc: Allocator
+    tab: engine.Tab
+    // Measures text for layouts: the fixed-metric font, so that boxes do
+    // not depend on the fonts of the system.
+    font: font.Fixed
+    media: css.Media
+    // Node index to the border box of its boxes and fragments.
+    rects: IntMap(u32, Rect)
+    // Refs: `refs[i]` is the node of ref number `ref_base + i`.
+    ref_base: u32
+    refs: List(NodeId)
+    ref_of: IntMap(u32, u32)
+    // The number of the next ref: refs are unique in a session, so a ref
+    // of an old page is never taken for another node.
+    next_ref: u32
+    // Owned descriptions of clicks, key presses and submissions that
+    // scripts will see once they run.
+    events: List([]u8)
+}
+
+fn newSession(alloc: Allocator, width: f64, height: f64) Session {
+    return Session {
+        alloc: alloc,
+        tab: engine.Tab.init(alloc),
+        font: font.Fixed.init(),
+        media: css.Media { width: width, height: height },
+        rects: IntMap(u32, Rect).init(alloc),
+        ref_base: 1,
+        refs: List(NodeId).init(alloc),
+        ref_of: IntMap(u32, u32).init(alloc),
+        next_ref: 1,
+        events: List([]u8).init(alloc),
+    }
+}
+
+fn freeSession(s: *mut Session) {
+    s.tab.deinit()
+    s.rects.deinit()
+    s.refs.deinit()
+    s.ref_of.deinit()
+    for e in s.events.items() {
+        s.alloc.free(e)
+    }
+    s.events.deinit()
+}
+
+fn recordEvent(s: *mut Session, what: []u8) AllocError!void {
+    let copy = try s.alloc.alloc(0 as u8, what.len)
+    std.mem.copy(copy, what)
+    try s.events.append(copy)
+}
+
+// ---- the page shown
+
+/// After the tab shows a new document: forgets the refs of the old one,
+/// lays it out and scrolls where the tab wants.
+fn newDocument(s: *mut Session) AllocError!void {
+    s.refs.clear()
+    s.ref_of.deinit()
+    s.ref_of = IntMap(u32, u32).init(s.alloc)
+    s.ref_base = s.next_ref
+    try relayout(s)
+    s.tab.settle(maxScroll(s))
+}
+
+/// Lays the page out again (after it was loaded, or after the DOM
+/// changed), and finds the rectangles of its nodes.
+fn relayout(s: *mut Session) AllocError!void {
+    let p = s.tab.page.?
+    try p.restyle()
+    try p.layoutPage(&mut s.font, s.media.width, s.media.height)
+    s.rects.deinit()
+    s.rects = IntMap(u32, Rect).init(s.alloc)
+    let t = p.tree.?
+    for i in 0..t.boxes.len() {
+        let b = t.bx(i).*
+        if b.node |n| {
+            if b.kind != layout.BoxKind.Inline && b.kind != layout.BoxKind.Text && b.kind != layout.BoxKind.LineBreak {
+                try addRect(s, n, Rect { x: b.ax, y: b.ay, w: b.w, h: b.h })
+            }
+        }
+        if layout.hasInlineContent(t, i) {
+            let cx = b.ax + b.border[3] + b.padding[3]
+            let cy = b.ay + b.border[0] + b.padding[0]
+            for li in b.line_start..b.line_end {
+                let line = t.lines.items()[li]
+                for fi in line.frag_start..line.frag_end {
+                    let f = t.frags.items()[fi]
+                    if f.kind != layout.FragKind.Atomic {
+                        if t.bx(f.box).node |fn_node| {
+                            try addRect(s, fn_node, Rect { x: cx + f.x, y: cy + f.y, w: f.w, h: f.h })
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn addRect(s: *mut Session, n: NodeId, r: Rect) AllocError!void {
+    if s.rects.getPtr(n.index) |old| {
+        let x0 = minF(old.x, r.x)
+        let y0 = minF(old.y, r.y)
+        let x1 = maxF(old.x + old.w, r.x + r.w)
+        let y1 = maxF(old.y + old.h, r.y + r.h)
+        old.* = Rect { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+        return
+    }
+    try s.rects.put(n.index, r)
+}
+
+fn minF(a: f64, b: f64) f64 {
+    if a < b {
+        return a
+    }
+    return b
+}
+
+fn maxF(a: f64, b: f64) f64 {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+/// The rectangle of `n`: of its own boxes, else of its nearest ancestor
+/// that has one.
+fn rectOf(s: *Session, n: NodeId) ?Rect {
+    let p = s.tab.page.?
+    var cur: ?NodeId = n
+    while cur |c| {
+        if s.rects.get(c.index) |r| {
+            return r
+        }
+        cur = p.doc.parent(c)
+    }
+    return null
+}
+
+/// The height of the document's content.
+fn docHeight(s: *Session) f64 {
+    if s.tab.page |p| {
+        if p.tree |t| {
+            if t.root |r| {
+                let b = t.boxes.items()[r]
+                return b.ay + b.h + b.margin[2]
+            }
+        }
+    }
+    return 0.0
+}
+
+fn maxScroll(s: *Session) f64 {
+    return maxF(0.0, docHeight(s) - s.media.height)
+}
+
+/// Is `r` outside the viewport (scrolled to the tab's offset)?
+fn offscreen(s: *Session, r: Rect) bool {
+    return r.y + r.h <= s.tab.scroll || r.y >= s.tab.scroll + s.media.height
+}
+
+/// `s` with runs of ASCII whitespace as one space, trimmed.
+fn collapse(alloc: Allocator, s: []u8) AllocError![]u8 {
+    var b = text.Builder.init(alloc)
+    defer b.deinit()
+    var space = false
+    for c in s {
+        if layout.isWhite(c) {
+            space = b.len() > 0
+        } else {
+            if space {
+                try b.appendByte(' ')
+                space = false
+            }
+            try b.appendByte(c)
+        }
+    }
+    let out = try b.toOwned()
+    return out
+}
+
+// ---- refs
+
+/// The ref number of `n`, given one if it has none.
+fn refFor(s: *mut Session, n: NodeId) AllocError!u32 {
+    if s.ref_of.get(n.index) |r| {
+        return r
+    }
+    let r = s.next_ref
+    try s.refs.append(n)
+    try s.ref_of.put(n.index, r)
+    s.next_ref += 1
+    return r
+}
+
+/// The node of the ref `name` ("e12" or "12") on the page shown.
+fn nodeOfRef(s: *Session, name: []u8) ?NodeId {
+    var digits = text.trim(name)
+    if digits.len > 0 && (digits[0] == 'e' || digits[0] == 'E') {
+        digits = digits[1..]
+    }
+    let n = text.parseInt(digits) catch |e| {
+        return null
+    }
+    if n < s.ref_base as i64 {
+        return null
+    }
+    let i = (n - s.ref_base as i64) as usize
+    if i >= s.refs.len() {
+        return null
+    }
+    let h = s.refs.items()[i]
+    // Scripts may have removed (and freed) the node.
+    if s.tab.page |p| {
+        if !p.doc.isLive(h) {
+            return null
+        }
+    }
+    return h
+}
+
+// ---- URLs
+
+/// The URL an agent means by `target`: relative to the current page
+/// (which an absolute URL is too); without a page, as typed in an
+/// address bar (`engine.urlOfInput`: a URL, a file path, a host name).
+fn targetUrl(s: *Session, alloc: Allocator, target: []u8) AllocError!?Url {
+    let t = text.trim(target)
+    if t.len == 0 {
+        return null
+    }
+    if s.tab.page |p| {
+        let r = url.resolve(alloc, &p.url, t) catch |e| {
+            return null
+        }
+        return r
+    }
+    let u = engine.urlOfInput(alloc, t) catch |e| {
+        return null
+    }
+    return u
+}
+
+/// `href` resolved against the page, or `href` itself when it does not
+/// resolve.
+fn absoluteHref(p: *Page, alloc: Allocator, href: []u8) AllocError![]u8 {
+    let t = text.trim(href)
+    let r = url.resolve(alloc, &p.url, t) catch |e| {
+        return t
+    }
+    return r.href
+}

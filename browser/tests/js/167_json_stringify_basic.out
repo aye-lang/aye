@@ -1,0 +1,10 @@
+{"a":1,"b":"two","c":true,"d":null,"e":[1,2],"f":{"g":{}}}
+[1,"a",null,true,[],{}]
+"str" 42 null true
+undefined undefined undefined
+[null,null,null,null,0]
+{"n":null,"i":null,"ok":1}
+"quote \" backslash \\ newline \n tab \t ctrl \u0001 é 😀"
+{"key with \"quotes\"":1} {"1":"a","2":"b"}
+{} {} ["1970-01-01T00:00:00.000Z"]
+"  " "\ud800"

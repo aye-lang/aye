@@ -1,0 +1,13 @@
+#document
+  <html>
+    <head>
+    <body>
+      <p>
+        "Windows\nline\nendings"
+      "\n"
+      <pre>
+        "first line dropped\nsecond"
+      "\n"
+      <p>
+        "NUL: [�]"
+      "\n"

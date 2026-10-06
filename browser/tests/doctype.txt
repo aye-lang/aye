@@ -1,0 +1,1 @@
+Tags and attribute names are lower-cased.

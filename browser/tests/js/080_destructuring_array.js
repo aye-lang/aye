@@ -1,0 +1,18 @@
+const [a, b, c] = [1, 2, 3];
+console.log(a, b, c);
+const [x, , z] = [1, 2, 3];
+console.log(x, z);
+const [p = 'dp', q = 'dq'] = [undefined, null];
+console.log(p, q);
+const [h, ...t] = [1, 2, 3, 4];
+console.log(h, t);
+const [s1, s2, ...srest] = 'hello';
+console.log(s1, s2, srest);
+const [[n1, n2], [n3]] = [[1, 2], [3]];
+console.log(n1, n2, n3);
+const [m1, m2] = new Map([['k1', 'v1'], ['k2', 'v2']]);
+console.log(m1, m2);
+const [u1, u2] = [1];
+console.log(u1, u2);
+const [first] = new Set(['only', 'x']);
+console.log(first);

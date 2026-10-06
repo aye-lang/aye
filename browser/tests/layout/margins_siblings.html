@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0 }
+div { height: 20px }
+.a { margin-bottom: 30px }
+.b { margin-top: 20px; margin-bottom: 10px }
+.c { margin-top: 25px }
+.neg { margin-top: -10px }
+.both { margin-top: 15px; margin-bottom: -5px }
+</style>
+<div class="a">a</div>
+<div class="b">b (20 collapses into 30)</div>
+<div class="c">c (25 wins over 10)</div>
+<div class="neg">neg (-10 with 0)</div>
+<div class="both">both</div>
+<div class="c">c after -5 and 25</div>
