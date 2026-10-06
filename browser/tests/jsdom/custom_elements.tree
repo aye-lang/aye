@@ -1,0 +1,28 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Custom elements"
+      "\n"
+    <body>
+      <x-greet id="parsed" name="Grace" title="not observed">
+        <b>
+          "light"
+      "\n"
+      <div id="host">
+        <x-broken>
+      "\n"
+      <button is="x-button" id="fancy">
+        "Go"
+      "\n"
+      <pre id="out">
+        "before define true HTMLElement undefined\nconstructor parsed true Ada\nattribute parsed name  Ada\nconnected parsed\nafter define true hello Ada 0 true x-greet\nattribute parsed name Ada Grace\nconstructor (new) false \ncreated true false\nconnected made\ndisconnected made\nconstructor (new) false \nnew x-greet true true\nconstructor markup true Lin\nattribute markup name  Lin\nconnected markup\nmarkup true\nconstructor markup false Lin\nattribute markup name  Lin\nclone true false\nerrors NotSupportedError, SyntaxError, NotSupportedError, SyntaxError, Failed to construct 'HTMLElement': Illegal constructor\ndisconnected markup\nbroken \nfancy connected Go\nis true true true\nis created true x-button\nlate before upgrade HTMLElement\nlate constructed\nlate after upgrade Late\ncard <h2><slot name=\"title\">Untitled</slot></h2><slot></slot> 1\nwhenDefined Greet\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst parsed = document.getElementById('parsed');\nlog('before define', parsed instanceof HTMLElement, parsed.constructor.name, typeof parsed.greet);\ncustomElements.whenDefined('x-greet').then(c => log('whenDefined', c.name));\n\nclass Greet extends HTMLElement {\n  static get observedAttributes() { return ['name']; }\n  count = 0;\n  constructor() {\n    super();\n    log('constructor', this.id || '(new)', this.isConnected, this.getAttribute('name'));\n  }\n  connectedCallback() { log('connected', this.id || '(new)'); }\n  disconnectedCallback() { log('disconnected', this.id || '(new)'); }\n  attributeChangedCallback(name, old, value) { log('attribute', this.id || '(new)', name, old, value); }\n  greet() { return 'hello ' + this.getAttribute('name'); }\n}\n// Defining upgrades the elements already in the document.\ncustomElements.define('x-greet', Greet);\nlog('after define', parsed instanceof Greet, parsed.greet(), parsed.count, customElements.get('x-greet') === Greet, customElements.getName(Greet));\nparsed.setAttribute('name', 'Grace');\nparsed.setAttribute('title', 'not observed');\n\n// Made by a script: constructed at once.\nconst made = document.createElement('x-greet');\nlog('created', made instanceof Greet, made.isConnected);\nmade.id = 'made';\ndocument.getElementById('host').appendChild(made);\nmade.remove();\nconst direct = new Greet();\nlog('new', direct.localName, direct instanceof Greet, direct === direct);\n\n// Markup: upgraded when inserted into the document.\nconst box = document.getElementById('host');\nbox.innerHTML = '<x-greet id=\"markup\" name=\"Lin\"></x-greet>';\nlog('markup', box.firstChild instanceof Greet);\nconst clone = box.firstChild.cloneNode(true);\nlog('clone', clone instanceof Greet, clone.isConnected);\n\n// Errors.\nconst errors = [];\nfor (const [name, ctor] of [['x-greet', class extends HTMLElement {}], ['nohyphen', class extends HTMLElement {}], ['x-other', Greet], ['font-face', class extends HTMLElement {}]]) {\n  try { customElements.define(name, ctor); } catch (e) { errors.push(e.name); }\n}\ntry { new HTMLElement(); } catch (e) { errors.push(e.message); }\nlog('errors', errors.join(', '));\n\n// A constructor that throws leaves the element as it was.\ndocument.getElementById('host').innerHTML = '<x-broken></x-broken>';\ncustomElements.define('x-broken', class extends HTMLElement { constructor() { super(); throw new Error('broken constructor'); } });\nlog('broken', document.querySelector('x-broken').constructor.name);\n\n// A customized built-in element (is=).\nclass FancyButton extends HTMLButtonElement {\n  connectedCallback() { log('fancy connected', this.textContent); }\n  get fancy() { return true; }\n}\ncustomElements.define('x-button', FancyButton, { extends: 'button' });\nconst fancy = document.getElementById('fancy');\nlog('is', fancy instanceof FancyButton, fancy instanceof HTMLButtonElement, fancy.fancy);\nconst made2 = document.createElement('button', { is: 'x-button' });\nlog('is created', made2 instanceof FancyButton, made2.getAttribute('is'));\n\n// upgrade() for a tree out of the document.\nconst outside = document.createElement('div');\noutside.innerHTML = '<x-late></x-late>';\ncustomElements.define('x-late', class Late extends HTMLElement { constructor() { super(); log('late constructed'); } });\nlog('late before upgrade', outside.firstChild.constructor.name);\ncustomElements.upgrade(outside);\nlog('late after upgrade', outside.firstChild.constructor.name);\n\n// A shadow root made in the constructor.\ncustomElements.define('x-card', class extends HTMLElement {\n  constructor() {\n    super();\n    this.attachShadow({ mode: 'open' }).innerHTML = '<h2><slot name=\"title\">Untitled</slot></h2><slot></slot>';\n  }\n});\nconst card = document.createElement('x-card');\ncard.innerHTML = '<span slot=\"title\">Title</span> body';\ndocument.body.appendChild(card);\nlog('card', card.shadowRoot.innerHTML, card.shadowRoot.querySelector('slot').assignedNodes().length);\n"
+      "\n"
+      <x-card>
+        <span slot="title">
+          "Title"
+        " body"

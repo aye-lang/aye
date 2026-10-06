@@ -56,6 +56,7 @@ fn installWindow(s: *mut Script) JsError!void {
     try defMethod(it, o, "displayed", 1, akDisplayed)
     try defMethod(it, o, "cssNames", 0, akCssNames)
     try defMethod(it, o, "supports", 1, akSupports)
+    try installComponents(s, o)
 
     let c = try it.newObject(it.object_proto)
     try it.defineValue(it.global, "console", js.objVal(c))
@@ -201,6 +202,7 @@ fn akActivate(it: *mut Interp, a: Args) JsError!Value {
         .Changed => {
             s.version += 1
             s.style_version += 1
+            try flushMutations(it)
         }
         _ => {}
     }
