@@ -7,7 +7,9 @@ agent protocol is in `docs/agent-protocol.md`.
 ## Build and run
 
 From the repository root, with SDL2, FreeType and libcurl installed
-(`pkg-config` must find them):
+(`pkg-config` must find them); HarfBuzz (text shaping: Arabic, Indic
+scripts, icon font ligatures) and libbrotlidec (WOFF 2 web fonts) are
+used when they are installed:
 
 ```
 cargo build --release
