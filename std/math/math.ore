@@ -39,6 +39,30 @@ pub fn abs(x: f64) f64 {
     return x
 }
 
+/// Positive infinity (`-inf()` is negative infinity).
+pub fn inf() f64 {
+    return ore_std_inf()
+}
+
+/// A NaN ("not a number"). It is not equal to anything, itself included:
+/// test with `isNan`.
+pub fn nan() f64 {
+    return ore_std_nan()
+}
+
+/// Is `x` a NaN?
+pub fn isNan(x: f64) bool {
+    return x != x
+}
+
+/// Is `x` infinite (either sign)?
+pub fn isInf(x: f64) bool {
+    return x == inf() || x == -inf()
+}
+
+extern fn ore_std_inf() f64
+extern fn ore_std_nan() f64
+
 /// `x` limited to `lo..=hi`.
 pub fn clamp(x: f64, lo: f64, hi: f64) f64 {
     return min(max(x, lo), hi)

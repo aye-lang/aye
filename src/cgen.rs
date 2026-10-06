@@ -447,6 +447,8 @@ ORE_RT bool ore_std_exists(uint8_t *path, size_t len) {
     ore_rt_free(p);
     return r == 0;
 }
+ORE_RT double ore_std_inf(void) { return __builtin_inf(); }
+ORE_RT double ore_std_nan(void) { return __builtin_nan(""); }
 ORE_RT uint64_t ore_std_monotonic_ns(void) {
     int64_t ts[2] = {0, 0};
     ore_rt_clock_gettime(ORE_CLOCK_MONOTONIC, ts);

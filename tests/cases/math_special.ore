@@ -1,0 +1,17 @@
+// M9.7: std.math.inf, nan, isNan and isInf.
+import std.math
+
+pub fn main() {
+    let big = math.inf()
+    @println(big > 1.0e308)
+    @println(-big < -1.0e308)
+    @println(math.isInf(big))
+    @println(math.isInf(-big))
+    @println(math.isInf(1.0e308))
+    let n = math.nan()
+    @println(math.isNan(n))
+    @println(n == n)
+    @println(math.isNan(big - big))
+    @println(math.isNan(0.5))
+    @println(big)
+}

@@ -1344,8 +1344,35 @@ std.fs.stdin() File
 std.fs.stdout() File
 std.fs.stderr() File
 File.readAll(self: Self, alloc: Allocator) ReadError![]mut u8   read to the end (empty file: empty slice); free with alloc.free
+File.read(self: Self, buf: []mut u8) ReadError!usize            at most buf.len bytes; 0 at the end
+File.reader(self: Self, alloc: Allocator) Reader                 buffered, for readLine
 File.write(self: Self, bytes: []u8) WriteError!void              write everything (flushes @print output first)
 File.close(self: Self)
+struct Reader                                                    a file and a buffer from alloc
+Reader.readLine(self: *mut Self) ReadError!?[]u8   the next line without \n or \r\n; null at the end; valid until the next call
+Reader.deinit(self: *mut Self)
+```
+
+`readLine` reads only what it needs, so an interactive program answers
+each line as it arrives:
+
+```ore
+import std
+import std.mem.Allocator
+
+fn echo(alloc: Allocator) !void {
+    var r = std.fs.stdin().reader(alloc)
+    defer r.deinit()
+    while try r.readLine() |line| {
+        @println(line)
+    }
+}
+
+pub fn main() !void {
+    var gpa = std.heap.General.init()
+    defer gpa.deinit()
+    try echo(gpa.allocator())
+}
 ```
 
 ### std.list
@@ -1475,6 +1502,10 @@ std.math.min(a: f64, b: f64) f64
 std.math.max(a: f64, b: f64) f64
 std.math.abs(x: f64) f64
 std.math.clamp(x: f64, lo: f64, hi: f64) f64
+std.math.inf() f64                         positive infinity; -inf() is negative
+std.math.nan() f64                         a NaN (not equal to itself)
+std.math.isNan(x: f64) bool
+std.math.isInf(x: f64) bool                either sign
 ```
 
 Only `f64`: Ore has no generic arithmetic. Convert with `as`.

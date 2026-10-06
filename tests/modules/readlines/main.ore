@@ -1,0 +1,33 @@
+// M9.7: `std.fs` reads stdin line by line (`File.reader`, `readLine`):
+// `\r\n` endings, empty lines, a line longer than the buffer, and a last
+// line without `\n`. Also `File.read` into a buffer.
+import std
+import std.mem.Allocator
+
+fn readAll(alloc: Allocator) !void {
+    var r = std.fs.stdin().reader(alloc)
+    defer r.deinit()
+    var n: usize = 0
+    while try r.readLine() |line| {
+        n += 1
+        if line.len > 80 {
+            @print(line.len)
+            @print(" bytes, ending ")
+            @println(line[line.len - 3..])
+        } else {
+            @print("[")
+            @print(line)
+            @println("]")
+        }
+    }
+    @print(n)
+    @println(" lines")
+}
+
+pub fn main() !void {
+    var gpa = std.heap.General.init()
+    defer gpa.deinit()
+    try readAll(gpa.allocator())
+    var buf = [4]u8{0, 0, 0, 0}
+    @println(try std.fs.stdin().read(buf[..]))
+}
