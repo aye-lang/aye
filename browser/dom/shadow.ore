@@ -1,0 +1,423 @@
+// Shadow trees (DOM Standard, shadow trees and slots). A shadow root is a
+// fragment node (a `Document` node that is not the document) whose
+// `shadow` is its host; the host's `shadow` is the root. The root is a
+// tree of its own (no parent), held by its host (`js_refs`, as template
+// contents are), so it is freed with the document only.
+//
+// The children of a host are assigned to the `slot` elements of its
+// shadow tree (`assignSlots`): an element with a `slot` attribute to the
+// first slot of that `name`, other elements and text to the first slot
+// without one. `Node.slot` keeps the assignment.
+//
+// What is rendered is the flat tree: a host's children there are its
+// shadow root's, a slot's are the nodes assigned to it (its own children
+// when it has none), and the children of a host that no slot takes are
+// not in it. The `flat*` functions walk it; in a document without
+// shadow roots they are the plain tree's.
+
+import std.list.List
+import std.mem.AllocError
+import std.text
+
+/// Is `el` an element that may host a shadow root: a custom element
+/// name (one with a hyphen) or one of the HTML elements the DOM Standard
+/// lists?
+pub fn canHostShadow(doc: *Document, el: NodeId) bool {
+    let n = doc.node(el)
+    if n.kind != Kind.Element || doc.namespaceOf(el) != NS_HTML {
+        return false
+    }
+    if text.indexOf(n.name, "-") != null {
+        return true
+    }
+    var names = text.split("article aside blockquote body div footer h1 h2 h3 h4 h5 h6 header main nav p section span", " ")
+    while names.next() |w| {
+        if text.eql(w, n.name) {
+            return true
+        }
+    }
+    return false
+}
+
+/// Attaches a new, empty shadow root to `host` (which has none) and
+/// returns it; `closed` for the mode "closed".
+pub fn attachShadow(doc: *mut Document, host: NodeId, closed: bool) AllocError!NodeId {
+    let root = try doc.createFragment()
+    try doc.shadows.append(root)
+    let r = doc.node(root)
+    r.js_refs = 1
+    r.shadow = host
+    r.data = "open"
+    if closed {
+        r.data = "closed"
+    }
+    doc.node(host).shadow = root
+    return root
+}
+
+/// The shadow root of the element `h`, if it hosts one.
+pub fn shadowRootOf(doc: *Document, h: NodeId) ?NodeId {
+    let n = doc.node(h)
+    if n.kind == Kind.Element {
+        return n.shadow
+    }
+    return null
+}
+
+/// Is `h` a shadow root?
+pub fn isShadowRoot(doc: *Document, h: NodeId) bool {
+    let n = doc.node(h)
+    return n.kind == Kind.Document && n.shadow != null
+}
+
+/// The host of the shadow root `root` (null for other nodes, or when
+/// the host was freed).
+pub fn hostOf(doc: *Document, root: NodeId) ?NodeId {
+    let n = doc.node(root)
+    if n.kind != Kind.Document {
+        return null
+    }
+    if n.shadow |host| {
+        if doc.isLive(host) {
+            return host
+        }
+    }
+    return null
+}
+
+/// Is the shadow root `root` closed?
+pub fn isClosedShadow(doc: *Document, root: NodeId) bool {
+    return text.eql(doc.node(root).data, "closed")
+}
+
+/// The host of the shadow tree that `h` is in (null when `h` is in the
+/// document's tree or in a tree out of it).
+pub fn hostOfTree(doc: *Document, h: NodeId) ?NodeId {
+    return hostOf(doc, doc.treeRoot(h))
+}
+
+/// Is `h` an HTML `slot` element?
+pub fn isSlot(doc: *Document, h: NodeId) bool {
+    let n = doc.node(h)
+    return n.kind == Kind.Element && n.ns == NS_HTML && text.eql(n.name, "slot") && doc.namespaceOf(h) == NS_HTML
+}
+
+/// The name of the slot `slot` ("" for the default slot).
+pub fn slotName(doc: *Document, slot: NodeId) []u8 {
+    return doc.attr(slot, "name") orelse ""
+}
+
+// The name of the slot a child of a host goes to; null for nodes that
+// are not slottable (comments).
+fn slottableName(doc: *Document, h: NodeId) ?[]u8 {
+    let n = doc.node(h)
+    if n.kind == Kind.Element {
+        return doc.attr(h, "slot") orelse ""
+    }
+    if n.kind == Kind.Text {
+        return ""
+    }
+    return null
+}
+
+/// Assigns the children of every shadow host to the slots of its shadow
+/// tree. While the document is `recording`, the slots whose assigned
+/// nodes changed are added to `changed_slots` (once each).
+pub fn assignSlots(doc: *mut Document) AllocError!void {
+    if doc.shadows.len() == 0 {
+        return
+    }
+    var slots = List(NodeId).init(doc.alloc)
+    defer slots.deinit()
+    for root in doc.shadows.items() {
+        if !doc.isLive(root) {
+            continue
+        }
+        let host = hostOf(doc, root) orelse continue
+        slots.clear()
+        var cur = doc.following(root, root)
+        while cur |h| {
+            if isSlot(doc, h) {
+                try slots.append(h)
+            }
+            cur = doc.following(h, root)
+        }
+        var child = doc.node(host).first_child
+        while child |c| {
+            var to: ?NodeId = null
+            if slottableName(doc, c) |name| {
+                for s in slots.items() {
+                    if text.eql(slotName(doc, s), name) {
+                        to = s
+                        break
+                    }
+                }
+            }
+            let old = doc.node(c).slot
+            if !sameOpt(old, to) {
+                if doc.recording {
+                    if old |o| {
+                        try noteSlot(doc, o)
+                    }
+                    if to |t| {
+                        try noteSlot(doc, t)
+                    }
+                }
+                doc.node(c).slot = to
+            }
+            child = doc.node(c).next
+        }
+    }
+}
+
+fn noteSlot(doc: *mut Document, s: NodeId) AllocError!void {
+    for x in doc.changed_slots.items() {
+        if same(x, s) {
+            return
+        }
+    }
+    try doc.changed_slots.append(s)
+}
+
+fn sameOpt(a: ?NodeId, b: ?NodeId) bool {
+    if a |x| {
+        return isSame(b, x)
+    }
+    return b == null
+}
+
+/// The host whose children may be assigned to the slot `slot`: the
+/// host of the shadow tree it is in.
+pub fn slotHost(doc: *Document, slot: NodeId) ?NodeId {
+    if doc.shadows.len() == 0 {
+        return null
+    }
+    return hostOfTree(doc, slot)
+}
+
+/// The first node assigned to `slot` (null when none is).
+pub fn firstAssigned(doc: *Document, slot: NodeId) ?NodeId {
+    let host = slotHost(doc, slot) orelse return null
+    var cur = doc.node(host).first_child
+    while cur |c| {
+        if isSame(doc.node(c).slot, slot) {
+            return c
+        }
+        cur = doc.node(c).next
+    }
+    return null
+}
+
+/// The node assigned to the same slot after `h` (`h` is assigned).
+fn nextAssigned(doc: *Document, h: NodeId, slot: NodeId) ?NodeId {
+    var cur = doc.node(h).next
+    while cur |c| {
+        if isSame(doc.node(c).slot, slot) {
+            return c
+        }
+        cur = doc.node(c).next
+    }
+    return null
+}
+
+// ---- the flat tree
+
+/// The first child of `h` in the flat tree.
+pub fn flatFirstChild(doc: *Document, h: NodeId) ?NodeId {
+    let n = doc.node(h)
+    if n.kind == Kind.Element {
+        if n.shadow |r| {
+            return doc.node(r).first_child
+        }
+        if doc.shadows.len() > 0 && isSlot(doc, h) {
+            if firstAssigned(doc, h) |a| {
+                return a
+            }
+        }
+    }
+    return n.first_child
+}
+
+/// The next sibling of `h` in the flat tree.
+pub fn flatNextSibling(doc: *Document, h: NodeId) ?NodeId {
+    let n = doc.node(h)
+    if n.slot |s| {
+        return nextAssigned(doc, h, s)
+    }
+    return n.next
+}
+
+/// The parent of `h` in the flat tree: its slot when it is assigned to
+/// one, the host for the top nodes of a shadow tree; null for the
+/// children of a host that no slot takes (they are not rendered).
+pub fn flatParent(doc: *Document, h: NodeId) ?NodeId {
+    let n = doc.node(h)
+    if n.slot |s| {
+        return s
+    }
+    let p = n.parent orelse return null
+    let pn = doc.node(p)
+    if pn.shadow |other| {
+        if pn.kind == Kind.Document {
+            // `p` is a shadow root: the parent is its host.
+            if doc.isLive(other) {
+                return other
+            }
+            return null
+        }
+        // `p` is a host and `h` is not assigned.
+        return null
+    }
+    return p
+}
+
+/// The parent element of `el` in the flat tree (null at the root).
+pub fn flatParentElement(doc: *Document, el: NodeId) ?NodeId {
+    if flatParent(doc, el) |p| {
+        if doc.node(p).kind == Kind.Element {
+            return p
+        }
+    }
+    return null
+}
+
+/// The node after `h` in the flat tree (a node before its children),
+/// staying inside the flat subtree of `top`.
+pub fn flatFollowing(doc: *Document, h: NodeId, top: NodeId) ?NodeId {
+    if flatFirstChild(doc, h) |c| {
+        return c
+    }
+    return flatFollowingSkip(doc, h, top)
+}
+
+/// Like `flatFollowing`, but skips the flat children of `h`.
+pub fn flatFollowingSkip(doc: *Document, h: NodeId, top: NodeId) ?NodeId {
+    var cur = h
+    while !same(cur, top) {
+        if flatNextSibling(doc, cur) |next| {
+            return next
+        }
+        cur = flatParent(doc, cur) orelse return null
+    }
+    return null
+}
+
+/// Appends the text of every text node in the flat subtree of `h`.
+pub fn flatTextContent(doc: *Document, h: NodeId, out: *mut text.Builder) AllocError!void {
+    var cur: ?NodeId = h
+    while cur |c| {
+        let n = doc.node(c)
+        if n.kind == Kind.Text {
+            try out.append(n.data)
+        }
+        cur = flatFollowing(doc, c, h)
+    }
+}
+
+/// The node after `h` in shadow-including tree order (a host, then its
+/// shadow tree, then its children), inside the subtree of `top`.
+pub fn shadowIncludingFollowing(doc: *Document, h: NodeId, top: NodeId) ?NodeId {
+    let n = doc.node(h)
+    if n.kind == Kind.Element {
+        if n.shadow |r| {
+            return r
+        }
+    }
+    if n.first_child |c| {
+        return c
+    }
+    var cur = h
+    while !same(cur, top) {
+        let cn = doc.node(cur)
+        if cn.next |next| {
+            return next
+        }
+        if cn.parent |p| {
+            cur = p
+            continue
+        }
+        // The end of a shadow tree: the children of its host are next.
+        let host = hostOf(doc, cur) orelse return null
+        if same(host, top) {
+            return doc.node(host).first_child
+        }
+        if doc.node(host).first_child |c| {
+            return c
+        }
+        cur = host
+    }
+    return null
+}
+
+test "shadow trees, slots and the flat tree" {
+    var doc = try Document.init(@testAllocator())
+    defer doc.deinit()
+    let body = try doc.createElement("body", []Attr{})
+    doc.appendChild(doc.root, body)
+    let host = try doc.createElement("x-card", []Attr{})
+    doc.appendChild(body, host)
+    let title_attrs = [1]Attr{Attr { name: "slot", value: "title" }}
+    let title = try doc.createElement("h2", title_attrs[..])
+    doc.appendChild(host, title)
+    try doc.appendText(host, "text")
+    let note = try doc.createComment("c")
+    doc.appendChild(host, note)
+    @expect(canHostShadow(&doc, host))
+    @expect(!canHostShadow(&doc, note))
+
+    let root = try attachShadow(&mut doc, host, false)
+    @expect(isShadowRoot(&doc, root))
+    @expect(isSame(hostOf(&doc, root), host))
+    @expect(isSame(shadowRootOf(&doc, host), root))
+    let header = try doc.createElement("header", []Attr{})
+    doc.appendChild(root, header)
+    let named_attrs = [1]Attr{Attr { name: "name", value: "title" }}
+    let named = try doc.createElement("slot", named_attrs[..])
+    doc.appendChild(header, named)
+    let rest = try doc.createElement("slot", []Attr{})
+    doc.appendChild(root, rest)
+    try doc.appendText(rest, "fallback")
+    @expect(doc.isConnected(named))
+    @expect(same(doc.treeRoot(named), root))
+    @expect(isSame(hostOfTree(&doc, named), host))
+
+    doc.recording = true
+    try assignSlots(&mut doc)
+    doc.recording = false
+    @expectEqual(2, doc.changed_slots.len())
+    @expect(isSame(doc.node(title).slot, named))
+    let text_node = doc.node(title).next.?
+    @expect(isSame(doc.node(text_node).slot, rest))
+    @expect(doc.node(note).slot == null)
+
+    // The flat tree: host > header > slot[title] > h2, slot > "text".
+    @expect(isSame(flatFirstChild(&doc, host), header))
+    @expect(isSame(flatParent(&doc, header), host))
+    @expect(isSame(flatFirstChild(&doc, named), title))
+    @expect(isSame(flatParent(&doc, title), named))
+    @expect(isSame(flatFirstChild(&doc, rest), text_node))
+    @expect(flatParent(&doc, note) == null)
+    var out = text.Builder.init(@testAllocator())
+    defer out.deinit()
+    try flatTextContent(&doc, host, &mut out)
+    @expectEqual("text", out.bytes())
+
+    // A slot with nothing assigned shows its own children.
+    doc.detach(text_node)
+    try assignSlots(&mut doc)
+    out.clear()
+    try flatTextContent(&doc, host, &mut out)
+    @expectEqual("fallback", out.bytes())
+
+    // Shadow-including order: host, its shadow tree, then its children.
+    var order = List(NodeId).init(@testAllocator())
+    defer order.deinit()
+    var cur: ?NodeId = body
+    while cur |h| {
+        try order.append(h)
+        cur = shadowIncludingFollowing(&doc, h, body)
+    }
+    @expectEqual(9, order.len())
+    @expect(same(order.items()[2], root))
+    @expect(same(order.items()[7], title))
+}
