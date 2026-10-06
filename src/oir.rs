@@ -784,6 +784,75 @@ impl<'a> Lower<'a> {
         out.extend(chain.unwrap_or_default());
     }
 
+    /// The place of the operand `op` of type `ty`: a constant goes to a
+    /// temporary.
+    fn spill(&mut self, op: Operand, ty: &Type, out: &mut Block) -> Place {
+        match op {
+            Operand::Local(id) => local(id),
+            op => {
+                let t = self.temp(ty.clone());
+                self.push(out, StmtKind::Assign(local(t), Rvalue::Use(op)));
+                local(t)
+            }
+        }
+    }
+
+    /// The value at `p` as an operand.
+    fn load(&mut self, p: Place, ty: &Type, out: &mut Block) -> Operand {
+        if p.proj.is_empty() {
+            return Operand::Local(p.local);
+        }
+        let t = self.temp(ty.clone());
+        self.push(out, StmtKind::Assign(local(t), Rvalue::Load(p)));
+        Operand::Local(t)
+    }
+
+    /// `a == b` for the values of type `ty` at `a` and `b`, a `bool`: a
+    /// struct field by field (stopping at the first difference), an
+    /// optional by `has` and then its value, the rest with C's `==`.
+    fn equal(&mut self, a: Place, b: Place, ty: &Type, out: &mut Block) -> Operand {
+        let span = self.span;
+        let r = self.temp(Type::Bool);
+        match ty {
+            Type::Struct(name) => {
+                let fields = self.structs[name.as_str()].fields.clone();
+                self.push(out, StmtKind::Assign(local(r), Rvalue::Use(Operand::Bool(true))));
+                // Each field's test runs only when the fields before it are equal.
+                let mut tail: Block = Vec::new();
+                for (f, ft) in fields.iter().rev() {
+                    let mut b_ = Vec::new();
+                    let c = self.equal(field(a.clone(), f), field(b.clone(), f), ft, &mut b_);
+                    self.push(&mut b_, StmtKind::Assign(local(r), Rvalue::Use(c)));
+                    if !tail.is_empty() {
+                        let rest = std::mem::take(&mut tail);
+                        b_.push(Stmt { kind: StmtKind::If { cond: Operand::Local(r), then: rest, els: vec![] }, span });
+                    }
+                    tail = b_;
+                }
+                out.extend(tail);
+            }
+            Type::Optional(inner) if !is_ptr_optional(ty) => {
+                let ha = self.temp(Type::Bool);
+                self.push(out, StmtKind::Assign(local(ha), Rvalue::IsSome { place: a.clone(), ty: ty.clone() }));
+                let hb = self.temp(Type::Bool);
+                self.push(out, StmtKind::Assign(local(hb), Rvalue::IsSome { place: b.clone(), ty: ty.clone() }));
+                let same = Rvalue::Binary { op: BinOp::Eq, lhs: Operand::Local(ha), rhs: Operand::Local(hb), ty: Type::Bool, span };
+                self.push(out, StmtKind::Assign(local(r), same));
+                let mut vals = Vec::new();
+                let c = self.equal(field(a, "val"), field(b, "val"), inner, &mut vals);
+                self.push(&mut vals, StmtKind::Assign(local(r), Rvalue::Use(c)));
+                let both = vec![Stmt { kind: StmtKind::If { cond: Operand::Local(ha), then: vals, els: vec![] }, span }];
+                self.push(out, StmtKind::If { cond: Operand::Local(r), then: both, els: vec![] });
+            }
+            _ => {
+                let (x, y) = (self.load(a, ty, out), self.load(b, ty, out));
+                let rv = Rvalue::Binary { op: BinOp::Eq, lhs: x, rhs: y, ty: ty.clone(), span };
+                self.push(out, StmtKind::Assign(local(r), rv));
+            }
+        }
+        Operand::Local(r)
+    }
+
     fn operand(&mut self, e: &'a TExpr, out: &mut Block) -> Operand {
         match self.rvalue(e, out) {
             Rvalue::Use(op) => op,
@@ -971,6 +1040,16 @@ impl<'a> Lower<'a> {
                 let (then, els) = if *op == BinOp::And { (rb, vec![]) } else { (vec![], rb) };
                 self.push(out, StmtKind::If { cond: Operand::Local(t), then, els });
                 Rvalue::Use(Operand::Local(t))
+            }
+            // Structs and optionals (other than pointers) compare part by part.
+            TExprKind::Binary { op: op @ (BinOp::Eq | BinOp::Ne), lhs, rhs }
+                if matches!(lhs.ty, Type::Struct(_)) || (matches!(lhs.ty, Type::Optional(_)) && !is_ptr_optional(&lhs.ty)) =>
+            {
+                let l = self.operand(lhs, out);
+                let r = self.operand(rhs, out);
+                let (a, b) = (self.spill(l, &lhs.ty, out), self.spill(r, &lhs.ty, out));
+                let eq = self.equal(a, b, &lhs.ty, out);
+                if *op == BinOp::Eq { Rvalue::Use(eq) } else { Rvalue::Not(eq) }
             }
             TExprKind::Binary { op, lhs, rhs } => {
                 let l = self.operand(lhs, out);

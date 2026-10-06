@@ -586,9 +586,12 @@ left-associative; comparisons do not chain, `a < b < c` is an error):
 - In an `if` or `while` condition a `|` outside parentheses starts the
   capture `|v|`: write a bitwise or there as `if (a | b) != 0`.
 - `==` and `!=` work on integers, floats, `bool`, pointers (`*T`, `[*]T`:
-  the same address) and enums without payloads, and between an optional
-  and `null`. Structs, arrays, slices and enums with payloads cannot be
-  compared; compare `[]u8` contents with `std.mem.eql(a, b)`.
+  the same address), enums without payloads, structs whose fields all
+  compare (field by field: `h1 == h2` for two `Handle(T)`), and optionals
+  of those: `?T == ?T` (equal when both are `null` or both hold equal
+  values), `?T == T` (`opt == E.A` is false for `null`), and `?T == null`.
+  Arrays, slices and enums with payloads cannot be compared; compare `[]u8`
+  contents with `std.mem.eql(a, b)`.
 - `&&`, `||`, `!` take `bool` and short-circuit.
 - Evaluation order is left to right everywhere.
 
@@ -1503,7 +1506,7 @@ end. The edits of one diagnostic are applied together.
 - A function with a return type needs a `return` at the end of every path;
   a `while true { }` loop does not count, so add a final `return` after it.
 - Enum values are always qualified: `Color.Red`, never `.Red` (patterns use
-  `.Red`). Structs, and enums with payloads, have no `==`.
+  `.Red`). Enums with payloads, arrays and slices have no `==`.
 - An error union cannot be stored: `let r = f()` for `f() E!T` is an error;
   write `try f()` or `f() catch ...`. `try` needs the enclosing function to
   return an error union.

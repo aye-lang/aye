@@ -418,7 +418,7 @@ E0024 = 24 {
 }
 E0025 = 25 {
     "invalid operand type",
-    "The operator does not work on this type: arithmetic needs numbers (`%` and the wrapping operators need integers), unary `-` needs a signed integer or a float, and `!` needs `bool`.",
+    "The operator does not work on this type: arithmetic needs numbers (`%` and the wrapping operators need integers), unary `-` needs a signed integer or a float, and `!` needs `bool`. `==` and `!=` compare numbers, `bool`, pointers, enums without fields, structs whose fields all compare, and optionals of those; not slices (use `std.text.eql`), arrays or enums with fields (use `match`).",
     r#"pub fn main() {
     let n: u32 = 5
     let m = -n

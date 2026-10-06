@@ -1,0 +1,75 @@
+// `==` and `!=` between `?T` and `T` (and two `?T`), and on structs whose
+// fields all compare (field by field).
+
+import std.heap.General
+import std.pool.Pool
+
+enum Label { Utf8, Latin1 }
+
+struct Node {
+    depth: i64
+}
+
+struct P {
+    x: i64
+    y: i64
+}
+
+struct Seg {
+    a: P
+    b: P
+    open: bool
+    label: Label
+    next: ?u32
+}
+
+fn label(n: i64) ?Label {
+    if n == 0 {
+        return null
+    }
+    return Label.Utf8
+}
+
+fn seg(x: i64, next: ?u32) Seg {
+    return Seg { a: P { x: x, y: 2 }, b: P { x: 3, y: 4 }, open: true, label: Label.Latin1, next: next }
+}
+
+pub fn main() !void {
+    @println(label(1) == Label.Utf8)
+    @println(label(1) != Label.Latin1)
+    @println(label(0) == Label.Utf8)
+    @println(label(0) != Label.Utf8)
+    @println(Label.Utf8 == label(1))
+    let n: ?i64 = 3
+    let none: ?i64 = null
+    @println(n == 3)
+    @println(3 != n)
+    @println(n == none)
+    @println(none == null)
+    let a = P { x: 1, y: 2 }
+    let b = P { x: 1, y: 2 }
+    let c = P { x: 1, y: 3 }
+    @println(a == b)
+    @println(a != c)
+    @println(seg(1, 5) == seg(1, 5))
+    @println(seg(1, 5) == seg(2, 5))
+    @println(seg(1, null) == seg(1, 5))
+    @println(seg(1, null) == seg(1, null))
+    let maybe: ?P = a
+    @println(maybe == b)
+    @println(maybe == c)
+    var x = Node { depth: 1 }
+    let px: ?*Node = &x
+    @println(px == &x)
+
+    var gpa = General.init()
+    defer gpa.deinit()
+    var nodes = Pool(Node).init(gpa.allocator(), 4)
+    defer nodes.deinit()
+    let h1 = try nodes.insert(Node { depth: 1 })
+    let h2 = try nodes.insert(Node { depth: 2 })
+    let again = h1
+    @println(h1 == again)
+    @println(h1 == h2)
+    @println(h1 != h2)
+}

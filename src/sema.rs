@@ -2754,6 +2754,47 @@ impl<'a> Checker<'a> {
         self.handled(t)
     }
 
+    /// The operands of `==` or `!=`: like `operand_pair`, except that an
+    /// untyped literal or `null` compared with a `?T` is checked as a `T`.
+    fn eq_operands(&mut self, l: &ast::Expr, r: &ast::Expr) -> Result<(TExpr, TExpr)> {
+        let payload = |t: &Type| match t {
+            Type::Optional(inner) => (**inner).clone(),
+            t => t.clone(),
+        };
+        if is_untyped(l) && !is_untyped(r) {
+            let rt = self.value(r, None)?;
+            let lt = self.value(l, Some(&payload(&rt.ty)))?;
+            Ok((lt, rt))
+        } else {
+            let lt = self.value(l, None)?;
+            let rt = self.value(r, Some(&payload(&lt.ty)))?;
+            Ok((lt, rt))
+        }
+    }
+
+    /// Why `==` cannot compare two values of type `t` (an empty reason if
+    /// there is nothing more to say), or `None` if it can: numbers, `bool`,
+    /// pointers, enums without fields, optionals of those, and structs whose
+    /// fields all compare.
+    fn why_not_comparable(&self, t: &Type) -> Option<String> {
+        match t {
+            Type::Int(_) | Type::Float(_) | Type::Bool | Type::Ptr(..) | Type::CPtr(_) => None,
+            Type::Enum(n) if self.enums[n].variants.iter().any(|v| !v.fields.is_empty()) => {
+                Some("it has variants with fields (use `match`)".to_string())
+            }
+            Type::Enum(_) => None,
+            Type::Struct(n) => self.structs[n].fields.iter().find(|(_, ft)| self.why_not_comparable(ft).is_some()).map(|(f, ft)| {
+                format!("its field `{f}` has type `{ft}`, which `==` cannot compare")
+            }),
+            Type::Optional(inner) => self.why_not_comparable(inner).map(|why| match why.strip_prefix("it has ") {
+                Some(rest) => format!("`{inner}` has {rest}"),
+                None if why.is_empty() => format!("`{inner}` cannot be compared"),
+                None => format!("`{inner}` cannot be compared: {why}"),
+            }),
+            _ => Some(String::new()),
+        }
+    }
+
     /// Check two operands that must share a type; an untyped literal on either
     /// side takes the type of the other side.
     fn operand_pair(&mut self, l: &ast::Expr, r: &ast::Expr, hint: Option<&Type>) -> Result<(TExpr, TExpr)> {
@@ -3000,32 +3041,31 @@ impl<'a> Checker<'a> {
                     (TExprKind::Binary { op, lhs: Box::new(l), rhs: Box::new(r) }, Type::Bool)
                 } else {
                     let hint = if op.is_arith() { expected.filter(|t| t.is_numeric()) } else { None };
-                    let (l, r) = self.operand_pair(lhs, rhs, hint)?;
+                    let eq = matches!(op, BinOp::Eq | BinOp::Ne);
+                    let (mut l, mut r) = if eq { self.eq_operands(lhs, rhs)? } else { self.operand_pair(lhs, rhs, hint)? };
+                    // `?T == T`: the `T` is wrapped, and two `?T` compare.
+                    if eq {
+                        if matches!(&l.ty, Type::Optional(inner) if **inner == r.ty) {
+                            r = self.coerce(r, &l.ty.clone())?;
+                        } else if matches!(&r.ty, Type::Optional(inner) if **inner == l.ty) {
+                            l = self.coerce(l, &r.ty.clone())?;
+                        }
+                    }
                     // `*mut T` and `*T` compare as pointers.
                     let same_ptr = matches!((&l.ty, &r.ty), (Type::Ptr(a, _), Type::Ptr(b, _)) if a == b);
-                    if l.ty != r.ty && !(same_ptr && matches!(op, BinOp::Eq | BinOp::Ne)) {
-                        return err(E0023, span, format!(
-                            "mismatched types in `{}`: `{}` and `{}` (use `as` to convert)",
-                            op.as_str(),
-                            l.ty,
-                            r.ty
-                        ));
+                    if l.ty != r.ty && !(same_ptr && eq) {
+                        let hint = if l.ty.is_numeric() && r.ty.is_numeric() { " (use `as` to convert)" } else { "" };
+                        return err(E0023, span, format!("mismatched types in `{}`: `{}` and `{}`{hint}", op.as_str(), l.ty, r.ty));
                     }
                     let ty = if op.is_arith() {
                         self.arith_operand_ok(op, &l.ty, span)?;
                         l.ty.clone()
                     } else {
-                        let ok = match (op, &l.ty) {
-                            (BinOp::Eq | BinOp::Ne, Type::Int(_) | Type::Float(_) | Type::Bool | Type::Ptr(..) | Type::CPtr(_)) => true,
-                            (BinOp::Eq | BinOp::Ne, Type::Enum(n)) => {
-                                if self.enums[n].variants.iter().any(|v| !v.fields.is_empty()) {
-                                    return err(E0025, span, format!(
-                                        "operator `{}` cannot be applied to `{n}`: it has variants with fields (use `match`)",
-                                        op.as_str()
-                                    ));
-                                }
-                                true
+                        let ok = match self.why_not_comparable(&l.ty) {
+                            Some(why) if eq && !why.is_empty() => {
+                                return err(E0025, span, format!("operator `{}` cannot be applied to `{}`: {why}", op.as_str(), l.ty));
                             }
+                            None if eq => true,
                             _ => l.ty.is_numeric(),
                         };
                         if !ok {

@@ -1,4 +1,4 @@
-struct P { x: i64 }
+struct P { x: []u8 }
 
 enum Shape {
     Circle { r: f64 }
@@ -14,6 +14,16 @@ fn f(a: f64, b: bool, c: u32, d: u64, s: Shape, p: P, q: P) {
     var m: f64 = 1.0
     m |= 2.0
     let u = "a" == "b"
+}
+
+struct Q { p: P, n: i64 }
+
+fn g(o: ?i64, k: i32, s: ?Shape, q: Q, r: ?[]u8) {
+    let a = o == k
+    let b = s == Shape.Empty
+    let c = q != q
+    let e = r == r
+    let h = o == true
 }
 
 pub fn main() {

@@ -2,6 +2,11 @@ operators.ore:9:15: error[E0025]: operator `&` cannot be applied to `f64`
 operators.ore:10:13: error[E0025]: operator `~` requires an integer, found `bool`
 operators.ore:11:15: error[E0023]: mismatched types in `<<`: `u32` and `u64` (use `as` to convert)
 operators.ore:12:15: error[E0025]: operator `==` cannot be applied to `Shape`: it has variants with fields (use `match`)
-operators.ore:13:15: error[E0025]: operator `==` cannot be applied to `P`
+operators.ore:13:15: error[E0025]: operator `==` cannot be applied to `P`: its field `x` has type `[]u8`, which `==` cannot compare
 operators.ore:15:7: error[E0025]: operator `|` cannot be applied to `f64`
 operators.ore:16:17: error[E0025]: operator `==` cannot be applied to `[]u8`
+operators.ore:22:15: error[E0023]: mismatched types in `==`: `?i64` and `i32`
+operators.ore:23:15: error[E0025]: operator `==` cannot be applied to `?Shape`: `Shape` has variants with fields (use `match`)
+operators.ore:24:15: error[E0025]: operator `!=` cannot be applied to `Q`: its field `p` has type `P`, which `==` cannot compare
+operators.ore:25:15: error[E0025]: operator `==` cannot be applied to `?[]u8`: `[]u8` cannot be compared
+operators.ore:26:15: error[E0023]: mismatched types in `==`: `?i64` and `bool`
