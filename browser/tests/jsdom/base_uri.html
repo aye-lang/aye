@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<title>baseURI</title>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const out = document.getElementById('out');
+const tail = (s) => s.slice(s.lastIndexOf('/jsdom/'));
+log('no base:', document.baseURI === document.URL, out.baseURI === document.URL, tail(document.baseURI));
+const detached = document.createElement('span');
+log('detached:', detached.baseURI === document.URL, document.createTextNode('t').baseURI === document.URL);
+const base = document.createElement('base');
+base.setAttribute('href', 'sub/dir/');
+document.head.appendChild(base);
+log('relative base:', tail(document.baseURI), tail(out.baseURI));
+log('new URL:', tail(new URL('x.json', document.baseURI).href), tail(new URL('../y.json', document.baseURI).href));
+base.setAttribute('href', 'https://example.com/a/b');
+log('absolute base:', document.baseURI, new URL('x.json', document.baseURI).href);
+const second = document.createElement('base');
+second.setAttribute('href', 'https://example.org/');
+document.head.appendChild(second);
+log('first base wins:', document.baseURI);
+base.removeAttribute('href');
+log('first with href wins:', document.baseURI);
+second.remove();
+base.remove();
+log('removed:', document.baseURI === document.URL);
+</script>
