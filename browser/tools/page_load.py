@@ -16,7 +16,7 @@ SITES = {
     "github": "https://github.com/rust-lang/rust",
     "youtube": "https://www.youtube.com/",
 }
-PHASES = ("fetch", "decode", "html", "scripts", "sheets", "css_parse",
+PHASES = ("fetch", "decode", "html", "scripts", "timers", "sheets", "css_parse",
           "cascade_read", "cascade", "images", "layout", "paint_build", "paint", "markdown")
 TRACE = re.compile(r"ANYKNOWN_TIMING\t([^\t]+)\t(\d+)\t(.*)")
 
