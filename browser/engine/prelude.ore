@@ -285,6 +285,8 @@ pub let PRELUDE =
     \\    ev = new FocusEvent(type, {});
     \\  } else if (type === 'focusin' || type === 'focusout') {
     \\    ev = new FocusEvent(type, { bubbles: true });
+    \\  } else if (type === 'invalid') {
+    \\    ev = new Event(type, { cancelable: true });
     \\  } else if (type === 'load') {
     \\    ev = new Event(type, {});
     \\  } else {
@@ -413,6 +415,11 @@ pub let PRELUDE =
     \\reflect('defaultValue', 'value');
     \\for (const n of ['hidden', 'disabled', 'required', 'multiple', 'autofocus', 'open']) reflectBool(n, n);
     \\reflectBool('readOnly', 'readonly');
+    \\reflectBool('noValidate', 'novalidate');
+    \\reflectBool('formNoValidate', 'formnovalidate');
+    \\for (const n of ['min', 'max', 'step', 'pattern', 'enctype']) reflect(n, n);
+    \\for (const n of ['formAction', 'formMethod', 'formEnctype']) reflect(n, n.toLowerCase());
+    \\for (const n of ['minLength', 'maxLength']) getter(HTMLP, n, function () { const a = this.getAttribute(n.toLowerCase()); return a === null ? -1 : Number(a); }, function (v) { this.setAttribute(n.toLowerCase(), String(v)); });
     \\reflectBool('defaultChecked', 'checked');
     \\reflectBool('defaultSelected', 'selected');
     \\for (const n of ['href', 'src', 'action']) reflectUrl(n);
@@ -430,15 +437,10 @@ pub let PRELUDE =
     \\// value, checked, selected and selectedIndex are natives over the
     \\// page's form state (dom_api.ore).
     \\getter(HTMLP, 'options', function () { return this.querySelectorAll('option'); });
-    \\getter(HTMLP, 'form', function () { return this.closest('form'); });
     \\getter(HTMLP, 'text', function () { return this.textContent; }, function (v) { this.textContent = v; });
     \\getter(HTMLP, 'innerText', function () { return this.textContent; }, function (v) { this.textContent = v; });
     \\getter(HTMLP, 'outerText', function () { return this.textContent; });
     \\hidden(HTMLP, 'submit', function () { ak.submit(this); });
-    \\hidden(HTMLP, 'requestSubmit', function () {
-    \\  if (hostEvent(this, 'submit')) ak.submit(this);
-    \\});
-    \\hidden(HTMLP, 'reset', function () { hostEvent(this, 'reset'); });
     \\hidden(HTMLP, 'select', function () {});
     \\
     \\// classList

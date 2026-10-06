@@ -89,6 +89,7 @@ fn clickPage(ui: *mut Ui, x: f64, y: f64) AllocError!void {
     if try clickListBox(ui, p, node, dy) {
         return
     }
+    if try clickRange(ui, p, node, x) { return }
     let before = p.doc.controls.focus
     let act = try engine.activate(p, node)
     if p.doc.controls.focus |f| {
@@ -217,6 +218,10 @@ fn runActivation(ui: *mut Ui, act: engine.Activation) AllocError!void {
 // canceled it.
 fn submit(ui: *mut Ui, form: NodeId, submitter: ?NodeId) AllocError!void {
     let p = ui.tab.page orelse return
+    if !(try engine.validateSubmission(p, form, submitter)) {
+        if p.doc.controls.validation |c| { showElement(ui, c) }
+        return restyled(ui)
+    }
     if !(try engine.dispatchEvent(p, form, "submit", "")) {
         return restyled(ui)
     }
@@ -252,6 +257,16 @@ fn pageKey(ui: *mut Ui, sym: i32, mods: u16) AllocError!bool {
         return true
     }
     let f = p.doc.controls.focus orelse return false
+    p.doc.controls.focus_visible = true
+    let range = p.doc.isElement(f, "input") && text.eql(dom.inputType(&p.doc, f), "range")
+    if !cmd && (sym == SDLK_UP || sym == SDLK_DOWN || (range && (sym == SDLK_LEFT || sym == SDLK_RIGHT))) {
+        if try dom.stepValue(&mut p.doc, f, sym == SDLK_UP || sym == SDLK_RIGHT) {
+            try engine.dispatchEvent(p, f, "input", "")
+            try engine.dispatchEvent(p, f, "change", "")
+            try afterEdit(ui)
+            return true
+        }
+    }
     if dom.isTextField(&p.doc, f) {
         return fieldKey(ui, p, f, sym, cmd, shift)
     }
@@ -517,6 +532,7 @@ fn drawPageState(ui: *mut Ui, v: paint.View) AllocError!void {
             }
         }
     }
+    try drawValidation(ui, p, v)
     if ui.dropdown |dd| {
         try drawDropdown(ui, p, dd, v)
     }
@@ -595,7 +611,7 @@ fn writeFocus(ui: *mut Ui, out: *mut text.Builder) AllocError!void {
         try out.append(n)
     }
     try out.appendByte('\n')
-    if dom.isTextField(&p.doc, f) || p.doc.isElement(f, "select") {
+    if dom.isTextField(&p.doc, f) || p.doc.isElement(f, "select") || (p.doc.isElement(f, "input") && (text.eql(dom.inputType(&p.doc, f), "range") || text.eql(dom.inputType(&p.doc, f), "color"))) {
         try out.append("value ")
         try out.append(dom.valueOf(&p.doc, f))
         try out.appendByte('\n')

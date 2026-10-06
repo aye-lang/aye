@@ -28,6 +28,7 @@ pub struct Control {
     // A text field's value once edited or set (`dirty`), owned.
     value: []mut u8
     dirty: bool
+    custom: []mut u8
     // A checkbox or radio button, once changed.
     checked: bool
     checked_dirty: bool
@@ -48,15 +49,18 @@ pub struct Controls {
     // The focused element (a control, a link, or anything with a
     // `tabindex`); null for none.
     focus: ?NodeId
+    validation: ?NodeId
+    focus_visible: bool
 
     pub fn init(alloc: Allocator) Controls {
-        return Controls { alloc: alloc, map: IntMap(u32, Control).init(alloc), focus: null }
+        return Controls { alloc: alloc, map: IntMap(u32, Control).init(alloc), focus: null, validation: null, focus_visible: true }
     }
 
     pub fn deinit(self: *mut Self) {
         var it = self.map.iterator()
         while it.next() |e| {
             self.alloc.free(e.value.value)
+            self.alloc.free(e.value.custom)
         }
         self.map.deinit()
     }
@@ -78,12 +82,14 @@ pub struct Controls {
         }
         if self.map.getPtr(el.index) |stale| {
             self.alloc.free(stale.value)
+            self.alloc.free(stale.custom)
         }
         let empty = try self.alloc.alloc(0 as u8, 0)
         try self.map.put(el.index, Control {
             generation: el.generation,
             value: empty,
             dirty: false,
+            custom: try self.alloc.alloc(0 as u8, 0),
             checked: false,
             checked_dirty: false,
             selected: false,
@@ -98,8 +104,13 @@ pub struct Controls {
     /// Forgets the state of `el` (a reset).
     pub fn forget(self: *mut Self, el: NodeId) {
         if self.get(el) |c| {
-            self.alloc.free(c.value)
-            self.map.remove(el.index)
+            // Reset restores values, but does not clear custom validity.
+            c.dirty = false
+            c.checked_dirty = false
+            c.selected_dirty = false
+            c.caret = 0
+            c.anchor = 0
+            c.scroll = 0.0
         }
     }
 }
@@ -279,7 +290,7 @@ pub fn formOwner(doc: *Document, el: NodeId) ?NodeId {
 pub fn formControls(doc: *Document, form: NodeId, out: *mut List(NodeId)) AllocError!void {
     var cur: ?NodeId = doc.root
     while cur |h| {
-        if isControl(doc, h) {
+        if isControl(doc, h) || doc.isElement(h, "output") {
             if formOwner(doc, h) |f| {
                 if f == form {
                     try out.append(h)
@@ -315,7 +326,7 @@ fn childText(doc: *Document, el: NodeId) []u8 {
 /// The default value of a control: an `input`'s `value` attribute, a
 /// `textarea`'s text.
 pub fn defaultValue(doc: *Document, el: NodeId) []u8 {
-    if doc.isElement(el, "textarea") {
+    if doc.isElement(el, "textarea") || doc.isElement(el, "output") {
         return childText(doc, el)
     }
     return doc.attr(el, "value") orelse ""
@@ -346,6 +357,24 @@ pub fn valueOf(doc: *Document, el: NodeId) []u8 {
             return c.value
         }
     }
+    if doc.isElement(el, "input") {
+        let t = inputType(doc, el)
+        if text.eql(t, "file") { return "" }
+        if text.eql(t, "color") {
+            let color = defaultValue(doc, el)
+            if validColor(color) { return color }
+            return "#000000"
+        }
+        if text.eql(t, "range") {
+            let min = rangeMin(doc, el)
+            let max = rangeMax(doc, el)
+            let raw = scalar(t, defaultValue(doc, el)) orelse ((min + max) / 2.0)
+            let n = rangeValue(doc, el, raw)
+            var b = text.Builder.init(doc.strings.allocator())
+            b.appendFloat(n) catch return ""
+            return b.bytes()
+        }
+    }
     return defaultValue(doc, el)
 }
 
@@ -367,12 +396,34 @@ pub fn setValue(doc: *mut Document, el: NodeId, v: []u8) AllocError!void {
         }
         return
     }
+    doc.controls.validation = null
     var clean = v
+    if doc.isElement(el, "input") && text.eql(inputType(doc, el), "file") {
+        return
+    }
+    if doc.isElement(el, "input") && text.eql(inputType(doc, el), "color") && !validColor(clean) {
+        clean = "#000000"
+    }
     var stripped = text.Builder.init(doc.alloc)
     defer stripped.deinit()
+    var normalized = text.Builder.init(doc.alloc)
+    defer normalized.deinit()
+    if doc.isElement(el, "input") && text.eql(inputType(doc, el), "range") {
+        let raw = scalar("range", clean) orelse ((rangeMin(doc, el) + rangeMax(doc, el)) / 2.0)
+        try normalized.appendFloat(rangeValue(doc, el, raw))
+        clean = normalized.bytes()
+    }
+    if doc.isElement(el, "input") && text.eql(inputType(doc, el), "color") {
+        for ch in clean {
+            var c = ch
+            if c >= 'A' && c <= 'F' { c += 32 }
+            try normalized.appendByte(c)
+        }
+        clean = normalized.bytes()
+    }
     if doc.isElement(el, "input") {
         // An input's value is one line.
-        for c in v {
+        for c in clean {
             if c != '\n' && c != '\r' {
                 try stripped.appendByte(c)
             }

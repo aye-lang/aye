@@ -45,6 +45,13 @@ pub enum SelKind {
     Disabled
     Enabled
     Focus
+    FocusWithin
+    FocusVisible
+    Valid
+    Invalid
+    Required
+    Optional
+    PlaceholderShown
     Never
     Not
     // `:is()` and `:where()`.
@@ -413,9 +420,16 @@ fn pseudoClass(name: []u8) ?SelKind {
     if text.eqlIgnoreCase(name, "enabled") {
         return SelKind.Enabled
     }
+    if text.eqlIgnoreCase(name, "focus-visible") { return SelKind.FocusVisible }
     if text.eqlIgnoreCase(name, "focus") {
         return SelKind.Focus
     }
+    if text.eqlIgnoreCase(name, "focus-within") { return SelKind.FocusWithin }
+    if text.eqlIgnoreCase(name, "valid") { return SelKind.Valid }
+    if text.eqlIgnoreCase(name, "invalid") { return SelKind.Invalid }
+    if text.eqlIgnoreCase(name, "required") { return SelKind.Required }
+    if text.eqlIgnoreCase(name, "optional") { return SelKind.Optional }
+    if text.eqlIgnoreCase(name, "placeholder-shown") { return SelKind.PlaceholderShown }
     // States the browser does not have yet, and the pseudo-elements of
     // CSS 2 written with one colon.
     if text.eqlIgnoreCase(name, "visited") || text.eqlIgnoreCase(name, "active") || text.eqlIgnoreCase(name, "focus-within") || text.eqlIgnoreCase(name, "focus-visible") || text.eqlIgnoreCase(name, "target") || isLegacyPseudoElement(name) {
@@ -647,6 +661,36 @@ fn matchSimple(sheet: *Sheet, doc: *Document, s: Simple, el: NodeId) bool {
         }
         .Focus => {
             return dom.isSame(doc.controls.focus, el)
+        }
+        .FocusVisible => {
+            return dom.isSame(doc.controls.focus, el) && (doc.controls.focus_visible || dom.isTextField(doc, el))
+        }
+        .FocusWithin => {
+            var cur = doc.controls.focus
+            while cur |c| {
+                if c == el { return true }
+                cur = doc.parent(c)
+            }
+            return false
+        }
+        .Valid, .Invalid => {
+            if doc.isElement(el, "form") || doc.isElement(el, "fieldset") {
+                var valid = true
+                var cur: ?NodeId = doc.root
+                while cur |c| {
+                    if (doc.isElement(el, "form") && dom.isSame(dom.formOwner(doc, c), el)) || (doc.isElement(el, "fieldset") && descendantOf(doc, c, el)) {
+                        valid = valid && dom.validityOf(doc, c).valid()
+                    }
+                    cur = doc.following(c, doc.root)
+                }
+                return valid == (s.kind == SelKind.Valid)
+            }
+            return dom.willValidate(doc, el) && dom.validityOf(doc, el).valid() == (s.kind == SelKind.Valid)
+        }
+        .Required => { return dom.isRequired(doc, el) }
+        .Optional => { return dom.supportsRequired(doc, el) && !dom.isRequired(doc, el) }
+        .PlaceholderShown => {
+            return dom.isTextField(doc, el) && doc.attr(el, "placeholder") != null && dom.valueOf(doc, el).len == 0
         }
         .Never => {
             return false

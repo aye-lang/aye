@@ -1,0 +1,9 @@
+pub fn validColor(s: []u8) bool {
+    if s.len != 7 || s[0] != '#' { return false }
+    for c in s[1..] {
+        if !(c >= '0' && c <= '9') && !(c >= 'a' && c <= 'f') && !(c >= 'A' && c <= 'F') {
+            return false
+        }
+    }
+    return true
+}

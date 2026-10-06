@@ -186,7 +186,7 @@ fn akActivate(it: *mut Interp, a: Args) JsError!Value {
             try setNavigation(s, target.href)
         }
         .Submit { form, submitter } => {
-            if try dispatchEvent(s.page, form, "submit", "") {
+            if (try validateSubmission(s.page, form, submitter)) && (try dispatchEvent(s.page, form, "submit", "")) {
                 s.nav_kind = NavKind.Submit
                 s.nav_form = form
                 s.nav_submitter = submitter

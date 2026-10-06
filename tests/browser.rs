@@ -594,6 +594,30 @@ fn window_forms() {
     assert!(failures.is_empty(), "{} of {} scripts failed:\n\n{}", failures.len(), cases.len(), failures.join("\n"));
 }
 
+/// HTML5 form keyboard input, dragging, validation and reset share the
+/// real SDL handler. The transcript also checks scripts see drag change.
+#[test]
+fn window_forms_html5() {
+    if !has_sdl() { return; }
+    let cases = [
+        "key:tab key:up key:up",
+        "key:tab text:3 key:up",
+        "key:tab key:tab key:right key:down",
+        "click:40,95 move:160,95 release:160,95",
+        "key:tab key:tab key:tab key:return",
+        "key:tab text:4 key:tab key:tab key:return",
+    ];
+    let mut transcript = String::new();
+    for events in cases {
+        let out = run_window(&["browser/tests/ui/forms_html5.html", "--font", "fixed", "--width", "400", "--height", "340", "--frames", "1", "--state", "--text", "--events", events]);
+        assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+        transcript.push_str(&format!("events: {events}\n{}\n", rooted(&text(&out.stdout))));
+    }
+    let mut failures = Vec::new();
+    check_golden(&root().join("browser/tests/ui/forms_html5.out"), &transcript, "HTML5 window forms", &mut failures);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 // ---- the agent interface (browser/agent, docs/agent-protocol.md)
 
 /// `s` with the repository's path written as `$ROOT`, so that goldens

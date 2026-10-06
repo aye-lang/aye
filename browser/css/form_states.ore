@@ -1,0 +1,12 @@
+import dom
+import dom.Document
+import dom.NodeId
+
+fn descendantOf(doc: *Document, node: NodeId, ancestor: NodeId) bool {
+    var cur = doc.parent(node)
+    while cur |c| {
+        if c == ancestor { return true }
+        cur = doc.parent(c)
+    }
+    return false
+}

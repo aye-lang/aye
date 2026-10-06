@@ -1,0 +1,131 @@
+events: key:tab key:up key:up
+url file://$ROOT/browser/tests/ui/forms_html5.html
+scroll 0
+focus page
+address file://$ROOT/browser/tests/ui/forms_html5.html
+history 1 of 1
+matches 0
+status 
+element input name=n
+value 6
+
+body { margin: 8px; font: 16px monospace }
+input { position: absolute; left: 10px; top: 10px; width: 100px }
+input[type=range] { top: 50px; width: 160px }
+button { position: absolute; left: 10px; top: 90px }
+p { position: absolute; top: 150px }
+
+Submit
+
+
+const range = document.querySelector('input[type=range]');
+range.addEventListener('change', function () { document.getElementById('events').textContent = 'range changed: ' + range.value; });
+
+
+events: key:tab text:3 key:up
+url file://$ROOT/browser/tests/ui/forms_html5.html
+scroll 0
+focus page
+address file://$ROOT/browser/tests/ui/forms_html5.html
+history 1 of 1
+matches 0
+status 
+element input name=n
+value 4
+
+body { margin: 8px; font: 16px monospace }
+input { position: absolute; left: 10px; top: 10px; width: 100px }
+input[type=range] { top: 50px; width: 160px }
+button { position: absolute; left: 10px; top: 90px }
+p { position: absolute; top: 150px }
+
+Submit
+
+
+const range = document.querySelector('input[type=range]');
+range.addEventListener('change', function () { document.getElementById('events').textContent = 'range changed: ' + range.value; });
+
+
+events: key:tab key:tab key:right key:down
+url file://$ROOT/browser/tests/ui/forms_html5.html
+scroll 0
+focus page
+address file://$ROOT/browser/tests/ui/forms_html5.html
+history 1 of 1
+matches 0
+status 
+element input name=r
+value 20
+
+body { margin: 8px; font: 16px monospace }
+input { position: absolute; left: 10px; top: 10px; width: 100px }
+input[type=range] { top: 50px; width: 160px }
+button { position: absolute; left: 10px; top: 90px }
+p { position: absolute; top: 150px }
+
+Submit
+range changed: 20
+
+const range = document.querySelector('input[type=range]');
+range.addEventListener('change', function () { document.getElementById('events').textContent = 'range changed: ' + range.value; });
+
+
+events: click:40,95 move:160,95 release:160,95
+url file://$ROOT/browser/tests/ui/forms_html5.html
+scroll 0
+focus page
+address file://$ROOT/browser/tests/ui/forms_html5.html
+history 1 of 1
+matches 0
+status 
+element input name=r
+value 100
+
+body { margin: 8px; font: 16px monospace }
+input { position: absolute; left: 10px; top: 10px; width: 100px }
+input[type=range] { top: 50px; width: 160px }
+button { position: absolute; left: 10px; top: 90px }
+p { position: absolute; top: 150px }
+
+Submit
+range changed: 100
+
+const range = document.querySelector('input[type=range]');
+range.addEventListener('change', function () { document.getElementById('events').textContent = 'range changed: ' + range.value; });
+
+
+events: key:tab key:tab key:tab key:return
+url file://$ROOT/browser/tests/ui/forms_html5.html
+scroll 0
+focus page
+address file://$ROOT/browser/tests/ui/forms_html5.html
+history 1 of 1
+matches 0
+status 
+element input name=n
+value 
+
+body { margin: 8px; font: 16px monospace }
+input { position: absolute; left: 10px; top: 10px; width: 100px }
+input[type=range] { top: 50px; width: 160px }
+button { position: absolute; left: 10px; top: 90px }
+p { position: absolute; top: 150px }
+
+Submit
+
+
+const range = document.querySelector('input[type=range]');
+range.addEventListener('change', function () { document.getElementById('events').textContent = 'range changed: ' + range.value; });
+
+
+events: key:tab text:4 key:tab key:tab key:return
+url file://$ROOT/browser/tests/ui/result.html?n=4&r=20
+scroll 0
+focus page
+address file://$ROOT/browser/tests/ui/result.html?n=4&r=20
+history 2 of 2
+matches 0
+status 
+Result
+The form was sent.
+

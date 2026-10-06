@@ -1,0 +1,38 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Form types and state"
+      "\n"
+    <body>
+      <form id="f">
+        <input id="field" name="field" type="number" placeholder="Hint" required="">
+        <button id="send">
+          "Send"
+        <button id="skip" formnovalidate="">
+          "Skip"
+        <input id="upload" name="upload" type="file">
+        <input name="hidden" type="hidden" value="secret">
+        <output id="output">
+          "original"
+        <fieldset disabled="">
+          <legend>
+            <input name="legend" value="included">
+          <input name="disabled" value="excluded">
+        <select name="select" multiple="">
+          <option value="one" selected="">
+            "One"
+          <option value="two" selected="">
+            "Two"
+        <label for="flag">
+          "Flag"
+        <input id="flag" name="flag" type="checkbox">
+      "\n"
+      <input id="external" name="external" form="f" value="outside">
+      <pre id="results">
+        "date 2000-02-29\ndate 1900-02-29\ndate 2024-13-01\ntime 23:59\ntime 24:00\ntime 12:30:20\ntime 12:30:20.250\ndatetime-local 2024-02-29T12:30\ndatetime-local 2024-02-30T12:30\nmonth 2024-12\nmonth 2024-00\nweek 2020-W53\nweek 2021-W53\ndate 2024-01-02\ndate 2024-01-03\nemail alice@example.com\nemail alice example.com\nemail alice@example.com, bob@example.org\nurl https://example.com/path\nurl example.com\nurl https://\ntel +1 (555) 123-4567\nsearch query\ngroup pattern\nfull pattern\ntoo short\ntoo long\nplaceholder\nfocus selectors\ncolor\ncolor fallback\nrange round\nrange clamp\nlive validity\ninvalid not bubbling\nnovalidate\nformnovalidate\nsuccessful controls\nempty file\nordered form data\noutput\noutput reset\nreset preserves custom error"
+      "\n"
+      <script>
+        "\nconst f = document.getElementById('f'), field = document.getElementById('field');\nconst out = [];\nfunction test(name, ok) { if (!ok) throw new Error(name); out.push(name); }\nfunction type(kind, value, good) { field.type = kind; field.value = value; test(kind + ' ' + value, field.checkValidity() === good); }\ntype('date', '2000-02-29', true); type('date', '1900-02-29', false); type('date', '2024-13-01', false);\ntype('time', '23:59', true); type('time', '24:00', false); type('time', '12:30:20', false); field.step = 'any'; type('time', '12:30:20.250', true);\ntype('datetime-local', '2024-02-29T12:30', true); type('datetime-local', '2024-02-30T12:30', false);\ntype('month', '2024-12', true); type('month', '2024-00', false);\ntype('week', '2020-W53', true); type('week', '2021-W53', false);\nfield.step = '2'; field.min = '2024-01-01'; type('date', '2024-01-02', false); type('date', '2024-01-03', true);\nfield.removeAttribute('step'); field.removeAttribute('min');\ntype('email', 'alice@example.com', true); type('email', 'alice example.com', false); field.multiple = true; type('email', 'alice@example.com, bob@example.org', true); field.multiple = false;\ntype('url', 'https://example.com/path', true); type('url', 'example.com', false); type('url', 'https://', false);\ntype('tel', '+1 (555) 123-4567', true); type('search', 'query', true);\nfield.type = 'text'; field.pattern = '(ab|cd)+[0-9]?'; field.value = 'abcd2'; test('group pattern', field.checkValidity()); field.value = 'abcd22'; test('full pattern', !field.checkValidity()); field.removeAttribute('pattern');\nfield.minLength = 3; field.maxLength = 5; field.value = 'ab'; test('too short', field.validity.tooShort); field.value = 'abcdef'; test('too long', field.validity.tooLong); field.removeAttribute('minlength'); field.removeAttribute('maxlength');\nfield.placeholder = 'Hint'; field.value = ''; test('placeholder', field.matches(':placeholder-shown')); field.focus(); test('focus selectors', field.matches(':focus:focus-visible') && f.matches(':focus-within'));\nfield.type = 'color'; field.value = '#AA33FF'; test('color', field.value === '#aa33ff'); field.value = 'red'; test('color fallback', field.value === '#000000');\nfield.type = 'range'; field.min = '10'; field.max = '20'; field.step = '2'; field.value = '15'; test('range round', field.value === '16'); field.value = '999'; test('range clamp', field.value === '20'); field.removeAttribute('min'); field.removeAttribute('max'); field.removeAttribute('step');\nfield.type = 'number'; field.value = '4'; const state = field.validity; field.required = true; field.value = ''; test('live validity', state.valueMissing);\nlet invalid = 0, bubble = 0, submitted = 0;\nfield.addEventListener('invalid', e => { invalid++; e.preventDefault(); }); f.addEventListener('invalid', () => { bubble++; });\nf.addEventListener('submit', e => { submitted++; e.preventDefault(); });\nf.requestSubmit(); test('invalid not bubbling', invalid === 1 && bubble === 0 && submitted === 0);\nf.noValidate = true; f.requestSubmit(); test('novalidate', submitted === 1); f.noValidate = false;\nf.requestSubmit(document.getElementById('skip')); test('formnovalidate', submitted === 2);\nfield.value = '4'; const data = new FormData(f); test('successful controls', data.get('external') === 'outside' && data.get('hidden') === 'secret' && data.get('legend') === 'included' && !data.has('disabled') && data.getAll('select').join(',') === 'one,two' && !data.has('flag'));\nconst file = data.get('upload'); test('empty file', file instanceof File && file.name === '' && file.size === 0 && file.type === 'application/octet-stream');\ndata.append('field', 'another'); data.set('field', 'replaced'); test('ordered form data', data.getAll('field').length === 1 && data.get('field') === 'replaced');\nconst output = document.getElementById('output'); output.value = 'changed'; test('output', output.value === 'changed' && !output.willValidate); f.reset(); test('output reset', output.value === 'original');\nfield.setCustomValidity('kept'); f.reset(); test('reset preserves custom error', field.validationMessage === 'kept'); field.setCustomValidity('');\ndocument.getElementById('results').textContent = out.join('\\n');\n"
+      "\n"

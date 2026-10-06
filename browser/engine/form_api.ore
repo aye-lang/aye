@@ -1,0 +1,167 @@
+// Forms' DOM bindings kept separate from the general DOM API.
+import dom
+import dom.NodeId
+import js
+import js.Args
+import js.Interp
+import js.JsError
+import js.Value
+import std.list.List
+import std.mem.AllocError
+import std.text
+
+fn installFormApi(it: *mut Interp, html: u32) JsError!void {
+    try accessor(it, html, "_validity", controlValidity, null)
+    try accessor(it, html, "willValidate", controlWillValidate, null)
+    try accessor(it, html, "validationMessage", controlValidationMessage, null)
+    try accessor(it, html, "form", controlForm, null)
+    try defMethod(it, html, "checkValidity", 0, controlCheckValidity)
+    try defMethod(it, html, "reportValidity", 0, controlReportValidity)
+    try defMethod(it, html, "setCustomValidity", 1, controlCustomValidity)
+    try defMethod(it, html, "requestSubmit", 1, formRequestSubmit)
+    try defMethod(it, html, "reset", 0, formReset)
+    try defMethod(it, html, "_formEntries", 1, formDataEntries)
+}
+
+fn controlForm(it: *mut Interp, a: Args) JsError!Value {
+    return wrapOpt(it, dom.formOwner(docOf(it), try thisElement(it, a)))
+}
+
+fn controlValidity(it: *mut Interp, a: Args) JsError!Value {
+    let v = dom.validityOf(docOf(it), try thisElement(it, a))
+    let o = try it.newObject(it.object_proto)
+    try it.push(js.objVal(o))
+    try it.defineValue(o, "valueMissing", js.boolVal(v.valueMissing))
+    try it.defineValue(o, "typeMismatch", js.boolVal(v.typeMismatch))
+    try it.defineValue(o, "patternMismatch", js.boolVal(v.patternMismatch))
+    try it.defineValue(o, "tooLong", js.boolVal(v.tooLong))
+    try it.defineValue(o, "tooShort", js.boolVal(v.tooShort))
+    try it.defineValue(o, "rangeUnderflow", js.boolVal(v.rangeUnderflow))
+    try it.defineValue(o, "rangeOverflow", js.boolVal(v.rangeOverflow))
+    try it.defineValue(o, "stepMismatch", js.boolVal(v.stepMismatch))
+    try it.defineValue(o, "badInput", js.boolVal(v.badInput))
+    try it.defineValue(o, "customError", js.boolVal(v.customError))
+    try it.defineValue(o, "valid", js.boolVal(v.valid()))
+    return it.pop()
+}
+
+fn controlWillValidate(it: *mut Interp, a: Args) JsError!Value {
+    return js.boolVal(dom.willValidate(docOf(it), try thisElement(it, a)))
+}
+
+fn controlValidationMessage(it: *mut Interp, a: Args) JsError!Value {
+    return it.newString(dom.validationMessage(docOf(it), try thisElement(it, a)))
+}
+
+fn controlCustomValidity(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 0, b)
+    try dom.setCustomValidity(docOf(it), h, b.bytes())
+    changed(it)
+    return Value.Undefined
+}
+
+// Checks all candidates, dispatching a non-bubbling, cancelable invalid
+// event for each. Canceling invalid suppresses that control's UI, not
+// the validation failure. Rechecking values happens on the next check.
+pub fn validate(page: *mut Page, el: NodeId, report: bool) AllocError!bool {
+    var controls = List(NodeId).init(page.alloc)
+    defer controls.deinit()
+    if page.doc.isElement(el, "form") {
+        try dom.formControls(&page.doc, el, &mut controls)
+    } else {
+        try controls.append(el)
+    }
+    var valid = true
+    var first: ?NodeId = null
+    for c in controls.items() {
+        if !page.doc.isLive(c) { continue }
+        if !dom.validityOf(&page.doc, c).valid() {
+            valid = false
+            let show = try dispatchEvent(page, c, "invalid", "")
+            if show && first == null && page.doc.isLive(c) {
+                first = c
+            }
+        }
+    }
+    if report {
+        if first |c| { setFocus(page, c) }
+        page.doc.controls.validation = first
+        if page.script |s| { s.version += 1 }
+    }
+    return valid
+}
+
+pub fn validateSubmission(page: *mut Page, form: NodeId, submitter: ?NodeId) AllocError!bool {
+    if page.doc.attr(form, "novalidate") != null { return true }
+    if submitter |s| {
+        if page.doc.attr(s, "formnovalidate") != null { return true }
+    }
+    return validate(page, form, true)
+}
+
+fn controlCheckValidity(it: *mut Interp, a: Args) JsError!Value {
+    return js.boolVal(try validate(scriptOf(it).page, try thisElement(it, a), false))
+}
+
+fn controlReportValidity(it: *mut Interp, a: Args) JsError!Value {
+    return js.boolVal(try validate(scriptOf(it).page, try thisElement(it, a), true))
+}
+
+fn formRequestSubmit(it: *mut Interp, a: Args) JsError!Value {
+    let form = try thisElement(it, a)
+    let s = scriptOf(it)
+    if !s.page.doc.isElement(form, "form") { return Value.Undefined }
+    var submitter: ?NodeId = null
+    if !js.isNullish(it.arg(a, 0)) {
+        submitter = handleOf(it, it.arg(a, 0), TAG_NODE)
+        if submitter == null || !dom.isSubmitButton(&s.page.doc, submitter.?) {
+            try it.typeError("The submitter is not a submit button")
+            return Value.Undefined
+        }
+        if !dom.isSame(dom.formOwner(&s.page.doc, submitter.?), form) {
+            return domError(it, "NotFoundError", "The submitter is not owned by this form")
+        }
+    }
+    if (try validateSubmission(s.page, form, submitter)) && (try dispatchEvent(s.page, form, "submit", "")) {
+        s.nav_kind = NavKind.Submit
+        s.nav_form = form
+        s.nav_submitter = submitter
+    }
+    return Value.Undefined
+}
+
+fn formReset(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let p = scriptOf(it).page
+    if p.doc.isElement(h, "form") && (try dispatchEvent(p, h, "reset", "")) {
+        try dom.resetForm(&mut p.doc, h)
+        p.doc.controls.validation = null
+        changed(it)
+    }
+    return Value.Undefined
+}
+
+// The same successful-control list used by network submission.
+fn formDataEntries(it: *mut Interp, a: Args) JsError!Value {
+    let form = try thisElement(it, a)
+    var entries = List(FormEntry).init(it.alloc)
+    defer freeEntries(it.alloc, &mut entries)
+    let submitter = handleOf(it, it.arg(a, 0), TAG_NODE)
+    try formEntries(scriptOf(it).page, form, submitter, &mut entries)
+    let arr = try it.newArray(0)
+    try it.push(js.objVal(arr))
+    for e in entries.items() {
+        let pair = try it.newArray(0)
+        try it.push(js.objVal(pair))
+        let name = try it.newString(e.name)
+        try it.heap.pushElem(pair, name)
+        let value = try it.newString(e.value)
+        try it.heap.pushElem(pair, value)
+        try it.heap.pushElem(pair, js.boolVal(e.file))
+        try it.heap.pushElem(arr, it.pop())
+    }
+    return it.pop()
+}
