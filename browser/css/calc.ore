@@ -1,0 +1,300 @@
+// Math functions (CSS Values 4, a subset): `calc()`, `min()`, `max()`
+// and `clamp()` with `+ - * /`, parentheses and nesting, over numbers,
+// percentages and lengths (px and the absolute units, em, rem, ex, ch,
+// vw, vh, vmin, vmax). They are evaluated at computed-value time, when
+// the font size and the viewport are known (a declaration with one is
+// kept as tokens until then, see `Decl.raw`): the cascade sets the
+// context with `setCalcContext`.
+//
+// A percentage stays a percentage (or `Value.Calc` when it is mixed with
+// pixels) unless the property resolves it (font-size, line-height). A
+// `min()`/`max()` of a percentage and a length cannot be decided before
+// layout: it is approximated with the percentage of the viewport width.
+
+import std.math
+import std.text
+
+struct CalcContext {
+    // The px of 1em, 1rem, 1vw and 1vh.
+    em: f64
+    rem: f64
+    vw: f64
+    vh: f64
+    // What 100% is, when the property resolves percentages here; < 0
+    // when it does not.
+    percent_of: f64
+}
+
+var calc_ctx = CalcContext { em: 16.0, rem: 16.0, vw: 0.0, vh: 0.0, percent_of: -1.0 }
+
+/// Sets what relative units in math functions refer to.
+pub fn setCalcContext(em: f64, rem: f64, vw: f64, vh: f64, percent_of: f64) {
+    calc_ctx = CalcContext { em: em, rem: rem, vw: vw, vh: vh, percent_of: percent_of }
+}
+
+/// Is `t` a math function that this file evaluates?
+pub fn isMathFunction(t: Token) bool {
+    if t.kind != Tok.Function {
+        return false
+    }
+    return text.eqlIgnoreCase(t.text, "calc") || text.eqlIgnoreCase(t.text, "min") || text.eqlIgnoreCase(t.text, "max") || text.eqlIgnoreCase(t.text, "clamp")
+}
+
+// A value during the evaluation: a number, or a length of `px` pixels
+// plus `pct` percent.
+struct Quantity {
+    number: bool
+    num: f64
+    px: f64
+    pct: f64
+}
+
+fn numberQ(n: f64) Quantity {
+    return Quantity { number: true, num: n, px: 0.0, pct: 0.0 }
+}
+
+fn lengthQ(px: f64, pct: f64) Quantity {
+    return Quantity { number: false, num: 0.0, px: px, pct: pct }
+}
+
+/// The value of the math function whose tokens (from the function token
+/// to its `)`) are `toks`: a `Number`, `Px`, `Percent` or `Calc`; null
+/// when it is invalid.
+pub fn calcValue(toks: []Token) ?Value {
+    var p = CalcParser { toks: toks, i: 0 }
+    let q = p.term() orelse return null
+    if skipWhitespace(toks, p.i) < toks.len {
+        return null
+    }
+    if q.number {
+        return Value.Number { v: q.num }
+    }
+    if q.pct == 0.0 {
+        return Value.Px { v: q.px }
+    }
+    if calc_ctx.percent_of >= 0.0 {
+        return Value.Px { v: q.px + q.pct * calc_ctx.percent_of / 100.0 }
+    }
+    if q.px == 0.0 {
+        return Value.Percent { v: q.pct }
+    }
+    return Value.Calc { pct: q.pct, px: q.px }
+}
+
+struct CalcParser {
+    toks: []Token
+    i: usize
+
+    // A sum: products joined by `+` and `-` (with spaces around them).
+    fn sum(self: *mut Self, end: usize) ?Quantity {
+        var a = self.product(end) orelse return null
+        while true {
+            let j = skipWhitespace(self.toks[..end], self.i)
+            if j >= end {
+                self.i = j
+                return a
+            }
+            let t = self.toks[j]
+            if t.kind != Tok.Delim || (t.delim != '+' && t.delim != '-') {
+                return null
+            }
+            self.i = j + 1
+            let b = self.product(end) orelse return null
+            var sign = 1.0
+            if t.delim == '-' {
+                sign = -1.0
+            }
+            if a.number != b.number {
+                return null
+            }
+            a = Quantity { number: a.number, num: a.num + sign * b.num, px: a.px + sign * b.px, pct: a.pct + sign * b.pct }
+        }
+        return a
+    }
+
+    // A product: terms joined by `*` and `/` (one side a number).
+    fn product(self: *mut Self, end: usize) ?Quantity {
+        var a = self.termIn(end) orelse return null
+        while true {
+            let j = skipWhitespace(self.toks[..end], self.i)
+            if j >= end {
+                return a
+            }
+            let t = self.toks[j]
+            if t.kind != Tok.Delim || (t.delim != '*' && t.delim != '/') {
+                return a
+            }
+            self.i = j + 1
+            let b = self.termIn(end) orelse return null
+            if t.delim == '*' {
+                if a.number {
+                    a = scaled(b, a.num)
+                } else if b.number {
+                    a = scaled(a, b.num)
+                } else {
+                    return null
+                }
+            } else {
+                if !b.number || b.num == 0.0 {
+                    return null
+                }
+                a = scaled(a, 1.0 / b.num)
+            }
+        }
+        return a
+    }
+
+    fn termIn(self: *mut Self, end: usize) ?Quantity {
+        self.i = skipWhitespace(self.toks[..end], self.i)
+        if self.i >= end {
+            return null
+        }
+        return self.term()
+    }
+
+    // A number, percentage, dimension, `( sum )` or math function at `i`.
+    fn term(self: *mut Self) ?Quantity {
+        self.i = skipWhitespace(self.toks, self.i)
+        if self.i >= self.toks.len {
+            return null
+        }
+        let t = self.toks[self.i]
+        if t.kind == Tok.Number {
+            self.i += 1
+            return numberQ(t.num)
+        }
+        if t.kind == Tok.Percentage {
+            self.i += 1
+            return lengthQ(0.0, t.num)
+        }
+        if t.kind == Tok.Dimension {
+            self.i += 1
+            if unitPx(t.num, t.text) |px| {
+                return lengthQ(px, 0.0)
+            }
+            return null
+        }
+        if t.kind == Tok.Ident {
+            self.i += 1
+            if text.eqlIgnoreCase(t.text, "pi") {
+                return numberQ(math.pi)
+            }
+            if text.eqlIgnoreCase(t.text, "e") {
+                return numberQ(2.718281828459045)
+            }
+            return null
+        }
+        if t.kind == Tok.LParen {
+            let close = blockEnd(self.toks, self.i)
+            self.i += 1
+            let q = self.sum(close) orelse return null
+            self.i = close + 1
+            return q
+        }
+        if !isMathFunction(t) {
+            return null
+        }
+        let close = blockEnd(self.toks, self.i)
+        let name = t.text
+        self.i += 1
+        var args = [3]Quantity{numberQ(0.0), numberQ(0.0), numberQ(0.0)}
+        var n: usize = 0
+        var picked = numberQ(0.0)
+        var have = false
+        while true {
+            // One argument: up to the next comma at this level.
+            var stop = self.i
+            while stop < close && self.toks[stop].kind != Tok.Comma {
+                stop = skipComponent(self.toks[..close], stop)
+            }
+            let q = self.sum(stop) orelse return null
+            if text.eqlIgnoreCase(name, "calc") {
+                picked = q
+                have = true
+            } else if text.eqlIgnoreCase(name, "clamp") {
+                if n >= 3 {
+                    return null
+                }
+                args[n] = q
+            } else if !have {
+                picked = q
+                have = true
+            } else {
+                if picked.number != q.number {
+                    return null
+                }
+                let smaller = less(q, picked)
+                if text.eqlIgnoreCase(name, "min") == smaller {
+                    picked = q
+                }
+            }
+            n += 1
+            if stop >= close {
+                break
+            }
+            self.i = stop + 1
+        }
+        self.i = close + 1
+        if text.eqlIgnoreCase(name, "calc") && n != 1 {
+            return null
+        }
+        if text.eqlIgnoreCase(name, "clamp") {
+            if n != 3 || args[0].number != args[1].number || args[1].number != args[2].number {
+                return null
+            }
+            // max(lo, min(value, hi))
+            var v = args[1]
+            if less(args[2], v) {
+                v = args[2]
+            }
+            if less(v, args[0]) {
+                v = args[0]
+            }
+            return v
+        }
+        return picked
+    }
+}
+
+fn scaled(q: Quantity, k: f64) Quantity {
+    return Quantity { number: q.number, num: q.num * k, px: q.px * k, pct: q.pct * k }
+}
+
+// Is `a` less than `b`? Percentages are taken of the reference length,
+// or of the viewport width when it is not known yet.
+fn less(a: Quantity, b: Quantity) bool {
+    if a.number {
+        return a.num < b.num
+    }
+    var base = calc_ctx.percent_of
+    if base < 0.0 {
+        base = calc_ctx.vw * 100.0
+    }
+    return a.px + a.pct * base / 100.0 < b.px + b.pct * base / 100.0
+}
+
+// `n` of the length unit `unit` in px; null for other units.
+fn unitPx(n: f64, unit: []u8) ?f64 {
+    if text.eqlIgnoreCase(unit, "em") {
+        return n * calc_ctx.em
+    }
+    if text.eqlIgnoreCase(unit, "rem") {
+        return n * calc_ctx.rem
+    }
+    if text.eqlIgnoreCase(unit, "ex") || text.eqlIgnoreCase(unit, "ch") {
+        return n * calc_ctx.em * 0.5
+    }
+    if text.eqlIgnoreCase(unit, "vw") {
+        return n * calc_ctx.vw
+    }
+    if text.eqlIgnoreCase(unit, "vh") {
+        return n * calc_ctx.vh
+    }
+    if text.eqlIgnoreCase(unit, "vmin") {
+        return n * math.min(calc_ctx.vw, calc_ctx.vh)
+    }
+    if text.eqlIgnoreCase(unit, "vmax") {
+        return n * math.max(calc_ctx.vw, calc_ctx.vh)
+    }
+    return absoluteLength(n, unit)
+}

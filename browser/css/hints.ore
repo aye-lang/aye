@@ -48,12 +48,12 @@ pub fn writeHints(doc: *Document, el: NodeId, out: *mut text.Builder) AllocError
         }
         if doc.attr(el, "face") |v| {
             if text.trim(v).len > 0 {
-                try decl(out, "font-family", text.trim(v))
+                try hintDecl(out, "font-family", text.trim(v))
             }
         }
         if doc.attr(el, "size") |v| {
             if fontSizeHint(v) |size| {
-                try decl(out, "font-size", size)
+                try hintDecl(out, "font-size", size)
             }
         }
     }
@@ -61,22 +61,22 @@ pub fn writeHints(doc: *Document, el: NodeId, out: *mut text.Builder) AllocError
         let a = text.trim(v)
         if text.eql(name, "table") {
             if text.eqlIgnoreCase(a, "center") {
-                try decl(out, "margin-left", "auto")
-                try decl(out, "margin-right", "auto")
+                try hintDecl(out, "margin-left", "auto")
+                try hintDecl(out, "margin-right", "auto")
             }
         } else if isOneOf(name, "div p h1 h2 h3 h4 h5 h6 caption thead tbody tfoot tr td th legend") {
             if text.eqlIgnoreCase(a, "center") || text.eqlIgnoreCase(a, "middle") || text.eqlIgnoreCase(a, "absmiddle") {
-                try decl(out, "text-align", "center")
+                try hintDecl(out, "text-align", "center")
             } else if text.eqlIgnoreCase(a, "left") || text.eqlIgnoreCase(a, "right") || text.eqlIgnoreCase(a, "justify") {
-                try decl(out, "text-align", a)
+                try hintDecl(out, "text-align", a)
             }
         } else if text.eql(name, "hr") {
             if text.eqlIgnoreCase(a, "left") {
-                try decl(out, "margin-left", "0")
-                try decl(out, "margin-right", "auto")
+                try hintDecl(out, "margin-left", "0")
+                try hintDecl(out, "margin-right", "auto")
             } else if text.eqlIgnoreCase(a, "right") {
-                try decl(out, "margin-left", "auto")
-                try decl(out, "margin-right", "0")
+                try hintDecl(out, "margin-left", "auto")
+                try hintDecl(out, "margin-right", "0")
             }
         }
     }
@@ -116,7 +116,7 @@ pub fn writeHints(doc: *Document, el: NodeId, out: *mut text.Builder) AllocError
             }
         }
         if doc.attr(el, "nowrap") != null {
-            try decl(out, "white-space", "nowrap")
+            try hintDecl(out, "white-space", "nowrap")
         }
     }
     if text.eql(name, "img") {
@@ -134,13 +134,13 @@ pub fn writeHints(doc: *Document, el: NodeId, out: *mut text.Builder) AllocError
     if isOneOf(name, "ol ul li") {
         if doc.attr(el, "type") |v| {
             if listType(text.trim(v)) |t| {
-                try decl(out, "list-style-type", t)
+                try hintDecl(out, "list-style-type", t)
             }
         }
     }
 }
 
-fn decl(out: *mut text.Builder, prop: []u8, value: []u8) AllocError!void {
+fn hintDecl(out: *mut text.Builder, prop: []u8, value: []u8) AllocError!void {
     try out.append(prop)
     try out.append(": ")
     try out.append(value)

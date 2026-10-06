@@ -23,8 +23,17 @@ pub fn lengthOf(v: Value, base: f64) ?f64 {
     return match v {
         .Px { v: n } => n
         .Percent { v: n } => percentOf(n, base)
+        .Calc { pct, px } => calcOf(pct, px, base)
         _ => null
     }
+}
+
+// `calc(pct% + px)`; null when the base is unknown, as for a percentage.
+fn calcOf(pct: f64, px: f64, base: f64) ?f64 {
+    if base < 0.0 {
+        return null
+    }
+    return base * pct / 100.0 + px
 }
 
 fn percentOf(n: f64, base: f64) ?f64 {

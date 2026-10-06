@@ -1,0 +1,10 @@
+viewport 800x600
+  block <html> (0, 0) 800x40
+    block <body> (0, 0) 800x40
+      block <div class="outer"> (20, 0) 760x40
+        block <div class="inner"> (20, 0) 410x20
+          line (30, 0) 390x20
+            text (30, 2) 8x16 "x"
+        block <div class="minmax"> (20, 20) 300x20
+          line (20, 20) 300x20
+            text (20, 22) 8x16 "y"

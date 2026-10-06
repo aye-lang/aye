@@ -1,0 +1,132 @@
+// Custom properties and `var()` (CSS Variables 1). A custom property
+// cascades like any property and is inherited; its value is a list of
+// tokens. Most elements declare none, so they share the custom
+// properties of their parent: a `CustomLevel` holds what one element
+// declares and points to the level it inherits from, and lookups walk up
+// the chain. A custom property that uses `var()` is substituted once,
+// against the level where it is declared (cycles make it invalid).
+
+import std.list.List
+import std.map.StrMap
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+/// The custom properties declared by one element, over those of `parent`.
+pub struct CustomLevel {
+    parent: ?*mut CustomLevel
+    vars: StrMap(CustomVar)
+}
+
+pub struct CustomVar {
+    raw: []Token
+    // 0: not substituted yet, 1: being substituted, 2: `value` is done,
+    // 3: invalid.
+    state: u8
+    value: []Token
+}
+
+// The longest chain of `var()` references that is followed.
+let MAX_VAR_DEPTH: usize = 32
+
+/// Does `toks` use `var()`?
+pub fn hasVar(toks: []Token) bool {
+    for t in toks {
+        if t.kind == Tok.Function && text.eqlIgnoreCase(t.text, "var") {
+            return true
+        }
+    }
+    return false
+}
+
+/// The tokens of the custom property `name` as seen from `level`; null
+/// when it is not defined or invalid.
+fn lookupVar(alloc: Allocator, level: ?*mut CustomLevel, name: []u8, depth: usize) AllocError!?[]Token {
+    var cur = level
+    while cur |l| {
+        if l.vars.getPtr(name) |cv| {
+            return resolveVar(alloc, l, cv, depth)
+        }
+        cur = l.parent
+    }
+    return null
+}
+
+fn resolveVar(alloc: Allocator, l: *mut CustomLevel, cv: *mut CustomVar, depth: usize) AllocError!?[]Token {
+    if cv.state == 2 {
+        return cv.value
+    }
+    if cv.state != 0 {
+        // Invalid, or a cycle.
+        cv.state = 3
+        return null
+    }
+    if !hasVar(cv.raw) {
+        cv.value = cv.raw
+        cv.state = 2
+        return cv.raw
+    }
+    cv.state = 1
+    if try substituteVars(alloc, cv.raw, l, depth + 1) |out| {
+        // A cycle may have marked it invalid meanwhile.
+        if cv.state == 3 {
+            return null
+        }
+        cv.value = out
+        cv.state = 2
+        return out
+    }
+    cv.state = 3
+    return null
+}
+
+/// `toks` with every `var(--name)` or `var(--name, fallback)` replaced by
+/// the tokens of the custom property (or the fallback); null when one is
+/// neither defined nor has a fallback (the declaration is then invalid
+/// at computed-value time).
+pub fn substituteVars(alloc: Allocator, toks: []Token, level: ?*mut CustomLevel, depth: usize) AllocError!?[]Token {
+    if depth > MAX_VAR_DEPTH {
+        return null
+    }
+    var out = List(Token).init(alloc)
+    var i: usize = 0
+    while i < toks.len {
+        let t = toks[i]
+        if t.kind != Tok.Function || !text.eqlIgnoreCase(t.text, "var") {
+            try out.append(t)
+            i += 1
+            continue
+        }
+        let close = blockEnd(toks, i)
+        var args = toks[i + 1..]
+        if close < toks.len {
+            args = toks[i + 1..close]
+        }
+        i = close + 1
+        let j = skipWhitespace(args, 0)
+        if j >= args.len || args[j].kind != Tok.Ident || !text.startsWith(args[j].text, "--") {
+            return null
+        }
+        let k = skipWhitespace(args, j + 1)
+        var fallback: ?[]Token = null
+        if k < args.len {
+            if args[k].kind != Tok.Comma {
+                return null
+            }
+            fallback = args[k + 1..]
+        }
+        if try lookupVar(alloc, level, args[j].text, depth) |v| {
+            for x in v {
+                try out.append(x)
+            }
+        } else if fallback |f| {
+            let sub = (try substituteVars(alloc, f, level, depth + 1)) orelse return null
+            for x in sub {
+                try out.append(x)
+            }
+        } else {
+            return null
+        }
+    }
+    return out.items()
+}

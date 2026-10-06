@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<style>
+:root { --side: 20px }
+body { margin: 0 }
+.outer { width: calc(100% - 2 * var(--side)); margin: 0 auto }
+.inner { width: calc(50% + 10px); height: calc(1em + 4px); padding: 0 calc(var(--side) / 2) }
+.minmax { width: min(300px, 90%); height: clamp(5px, 2em, 20px) }
+</style>
+<div class="outer"><div class="inner">x</div><div class="minmax">y</div></div>
