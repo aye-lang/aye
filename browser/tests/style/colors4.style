@@ -94,6 +94,8 @@
       background-color: rgb(170, 187, 204)
       margin-top: 16px
       margin-bottom: 16px
+      background-image: url("x.png")
+      background-repeat: no-repeat
     <p class="named">
       display: block
       color: rgb(102, 51, 153)

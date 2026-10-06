@@ -12,8 +12,10 @@
 
 import std.list.List
 import std.mem
+import std.mem.Allocator
 import std.mem.AllocError
 import std.text
+import url
 
 /// Declarations `start..end` of `Sheet.decls`.
 pub struct DeclRange {
@@ -52,7 +54,40 @@ fn tokens(sheet: *mut Sheet, src: []u8) AllocError![]Token {
     mem.copy(copy, src)
     var list = List(Token).init(a)
     try tokenize(a, copy, &mut list)
+    if sheet.base.len > 0 {
+        try absoluteUrls(a, sheet.base, list.items())
+    }
     return list.items()
+}
+
+// The `url()`s of `toks` resolved against `base` (not those that are
+// only a fragment, `url(#id)`, nor `data:` URLs).
+fn absoluteUrls(a: Allocator, base: []u8, toks: []mut Token) AllocError!void {
+    var parsed: ?url.Url = null
+    for i in 0..toks.len {
+        var k = i
+        if toks[i].kind == Tok.Function && text.eqlIgnoreCase(toks[i].text, "url") {
+            k = skipWhitespace(toks, i + 1)
+            if k >= toks.len || toks[k].kind != Tok.String {
+                continue
+            }
+        } else if toks[i].kind != Tok.Url {
+            continue
+        }
+        let s = text.trim(toks[k].text)
+        if s.len == 0 || s[0] == '#' || text.startsWith(s, "data:") {
+            continue
+        }
+        if parsed == null {
+            parsed = url.parse(a, base) catch |e| {
+                return
+            }
+        }
+        if url.resolve(a, &parsed.?, s) |u| {
+            toks[k].text = u.href
+        } else |e| {
+        }
+    }
 }
 
 // ---- blocks and component values, on a token slice

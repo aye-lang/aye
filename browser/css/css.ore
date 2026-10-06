@@ -83,6 +83,11 @@ pub enum PKind {
     // An SVG paint: a color, or one of `keywords`, or `url(#id)` with an
     // optional fallback, kept as its text (a `Keyword`) for svg to read.
     Paint
+    // Comma-separated layers of component values (backgrounds, masks,
+    // corner radii, shadows, dashes), or one of `keywords`: kept as their
+    // text (a `Keyword`), lengths in px and URLs absolute, for paint to
+    // read with `readLayers` (layers.ore).
+    Layers
 }
 
 pub struct Property {
@@ -96,7 +101,7 @@ pub struct Property {
     initial: Value
 }
 
-pub let NPROPS: usize = 79
+pub let NPROPS: usize = 97
 
 pub let DISPLAY: usize = 0
 pub let POSITION: usize = 1
@@ -162,16 +167,36 @@ pub let STROKE_MITERLIMIT: usize = 75
 pub let OPACITY: usize = 76
 pub let STOP_COLOR: usize = 77
 pub let STOP_OPACITY: usize = 78
+// Backgrounds, masks, corner radii and shadows (layers.ore), in the order
+// of `PROPERTIES`: `background-image` to `background-attachment`,
+// `mask-image` to `mask-repeat`, the four corners from the top left
+// clockwise.
+pub let BACKGROUND_IMAGE: usize = 79
+pub let BACKGROUND_POSITION: usize = 80
+pub let BACKGROUND_SIZE: usize = 81
+pub let BACKGROUND_REPEAT: usize = 82
+pub let BACKGROUND_ORIGIN: usize = 83
+pub let BACKGROUND_CLIP: usize = 84
+pub let BACKGROUND_ATTACHMENT: usize = 85
+pub let MASK_IMAGE: usize = 86
+pub let MASK_POSITION: usize = 87
+pub let MASK_SIZE: usize = 88
+pub let MASK_REPEAT: usize = 89
+pub let BORDER_TOP_LEFT_RADIUS: usize = 90
+pub let BOX_SHADOW: usize = 94
+pub let STROKE_DASHARRAY: usize = 95
+pub let STROKE_DASHOFFSET: usize = 96
 
 let DISPLAYS = "inline block list-item inline-block table inline-table table-row-group table-header-group table-footer-group table-row table-cell table-column-group table-column table-caption flex inline-flex grid inline-grid flow-root contents none"
 let BORDER_STYLES = "none hidden dotted dashed solid double groove ridge inset outset"
 let LIST_STYLES = "disc circle square decimal decimal-leading-zero lower-roman upper-roman lower-greek lower-alpha lower-latin upper-alpha upper-latin armenian georgian none"
 let OVERFLOWS = "visible hidden clip scroll auto"
+let BOXES = "border-box padding-box content-box text"
 let ALIGNS = "normal stretch flex-start flex-end start end self-start self-end center baseline"
 let BLACK = Color { r: 0, g: 0, b: 0, a: 1.0 }
 let TRANSPARENT = Color { r: 0, g: 0, b: 0, a: 0.0 }
 
-pub let PROPERTIES = [79]Property{
+pub let PROPERTIES = [97]Property{
     Property { name: "display", inherited: false, kind: PKind.Keywords, keywords: DISPLAYS, initial: Value.Keyword { k: "inline" } },
     Property { name: "position", inherited: false, kind: PKind.Keywords, keywords: "static relative absolute fixed sticky", initial: Value.Keyword { k: "static" } },
     Property { name: "color", inherited: true, kind: PKind.Color, keywords: "", initial: Value.Rgba { c: BLACK } },
@@ -252,6 +277,24 @@ pub let PROPERTIES = [79]Property{
     Property { name: "opacity", inherited: false, kind: PKind.Number, keywords: "", initial: Value.Number { v: 1.0 } },
     Property { name: "stop-color", inherited: false, kind: PKind.Color, keywords: "", initial: Value.Rgba { c: BLACK } },
     Property { name: "stop-opacity", inherited: false, kind: PKind.Number, keywords: "", initial: Value.Number { v: 1.0 } },
+    Property { name: "background-image", inherited: false, kind: PKind.Layers, keywords: "none", initial: Value.Keyword { k: "none" } },
+    Property { name: "background-position", inherited: false, kind: PKind.Layers, keywords: "", initial: Value.Keyword { k: "0% 0%" } },
+    Property { name: "background-size", inherited: false, kind: PKind.Layers, keywords: "auto cover contain", initial: Value.Keyword { k: "auto" } },
+    Property { name: "background-repeat", inherited: false, kind: PKind.Layers, keywords: "repeat no-repeat repeat-x repeat-y space round", initial: Value.Keyword { k: "repeat" } },
+    Property { name: "background-origin", inherited: false, kind: PKind.Layers, keywords: BOXES, initial: Value.Keyword { k: "padding-box" } },
+    Property { name: "background-clip", inherited: false, kind: PKind.Layers, keywords: BOXES, initial: Value.Keyword { k: "border-box" } },
+    Property { name: "background-attachment", inherited: false, kind: PKind.Layers, keywords: "scroll fixed local", initial: Value.Keyword { k: "scroll" } },
+    Property { name: "mask-image", inherited: false, kind: PKind.Layers, keywords: "none", initial: Value.Keyword { k: "none" } },
+    Property { name: "mask-position", inherited: false, kind: PKind.Layers, keywords: "", initial: Value.Keyword { k: "0% 0%" } },
+    Property { name: "mask-size", inherited: false, kind: PKind.Layers, keywords: "auto cover contain", initial: Value.Keyword { k: "auto" } },
+    Property { name: "mask-repeat", inherited: false, kind: PKind.Layers, keywords: "repeat no-repeat repeat-x repeat-y space round", initial: Value.Keyword { k: "repeat" } },
+    Property { name: "border-top-left-radius", inherited: false, kind: PKind.Layers, keywords: "", initial: Value.Keyword { k: "0px" } },
+    Property { name: "border-top-right-radius", inherited: false, kind: PKind.Layers, keywords: "", initial: Value.Keyword { k: "0px" } },
+    Property { name: "border-bottom-right-radius", inherited: false, kind: PKind.Layers, keywords: "", initial: Value.Keyword { k: "0px" } },
+    Property { name: "border-bottom-left-radius", inherited: false, kind: PKind.Layers, keywords: "", initial: Value.Keyword { k: "0px" } },
+    Property { name: "box-shadow", inherited: false, kind: PKind.Layers, keywords: "none", initial: Value.Keyword { k: "none" } },
+    Property { name: "stroke-dasharray", inherited: true, kind: PKind.Layers, keywords: "none", initial: Value.Keyword { k: "none" } },
+    Property { name: "stroke-dashoffset", inherited: true, kind: PKind.LineHeight, keywords: "", initial: Value.Px { v: 0.0 } },
 }
 
 /// The index of the longhand property `name` (lower case).
@@ -318,6 +361,9 @@ pub struct Sheet {
     // The URLs of the `@import` rules whose media match, as the parser
     // met them (the loader fetches them: engine/sheets.ore).
     imports: List([]u8)
+    // The URL that the `url()`s of the source being parsed are relative
+    // to ("": they stay as written); set by the loader around a parse.
+    base: []u8
 
     pub fn init(alloc: Allocator) AllocError!Sheet {
         let arena = try alloc.create(Arena.init(alloc))
@@ -331,6 +377,7 @@ pub struct Sheet {
             simples: List(Simple).init(a),
             decls: List(Decl).init(a),
             imports: List([]u8).init(a),
+            base: "",
         }
     }
 

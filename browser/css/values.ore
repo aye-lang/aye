@@ -1,7 +1,8 @@
 // Property values: a declaration's tokens become `Decl`s of longhand
 // properties with specified `Value`s. Shorthands (`margin`, `padding`,
 // `border`, `border-top`..., `border-width`/`-style`/`-color`, `font`,
-// `background`, `list-style`, `overflow`, `text-decoration`, `inset`,
+// `background`, `mask`, `border-radius` (layers.ore), `list-style`,
+// `overflow`, `text-decoration`, `inset`,
 // `gap`, `flex`, `flex-flow`, `grid-column`, `grid-row`, `grid-area`,
 // `grid-gap`) expand into their longhands. The grid track lists and
 // placements are kept as their text (`Raw`) for layout to read. An invalid
@@ -37,8 +38,8 @@ pub fn addDeclaration(sheet: *mut Sheet, name: []u8, toks: []Token, important: b
     for i, c in name {
         buf[i] = lowerAscii(c)
     }
-    let prop = buf[0..name.len]
-    if needsComputing(toks) {
+    let prop = unprefixed(buf[0..name.len])
+    if needsComputing(toks) || layersNeedComputing(prop, toks) {
         // Without `var()`, an invalid math function drops the declaration
         // now (its validity does not depend on the element).
         let checked = hasVar(toks) || (try validNow(sheet, prop, toks))
@@ -159,8 +160,17 @@ fn shorthandLonghands(name: []u8, out: []mut usize) usize {
         first = FLEX_GROW
         n = 3
     } else if text.eql(name, "background") {
-        first = BACKGROUND_COLOR
-        n = 1
+        out[0] = BACKGROUND_COLOR
+        for k in 0..7 {
+            out[k + 1] = BACKGROUND_IMAGE + k
+        }
+        return 8
+    } else if text.eql(name, "mask") {
+        first = MASK_IMAGE
+        n = 4
+    } else if text.eql(name, "border-radius") {
+        first = BORDER_TOP_LEFT_RADIUS
+        n = 4
     } else if text.eql(name, "list-style") {
         first = LIST_STYLE_TYPE
         n = 1
@@ -265,7 +275,13 @@ struct Declarer {
             return self.font(comps)
         }
         if text.eql(name, "background") {
-            return self.background(comps)
+            return layeredShorthand(self, comps, false)
+        }
+        if text.eql(name, "mask") {
+            return layeredShorthand(self, comps, true)
+        }
+        if text.eql(name, "border-radius") {
+            return borderRadius(self, comps)
         }
         if text.eql(name, "list-style") {
             return self.listStyle(comps)
@@ -639,24 +655,6 @@ struct Declarer {
         }
     }
 
-    // `background`: only its color is kept; the other parts (images,
-    // positions, repeat, ...) are accepted and ignored.
-    fn background(self: *mut Self, comps: []Comp) AllocError!void {
-        let props = [1]usize{BACKGROUND_COLOR}
-        if try self.wide(comps, props[..]) {
-            return
-        }
-        var color = Value.Initial
-        for c in comps {
-            if colorValue(c) |v| {
-                color = v
-            } else if unknownColorFunction(c) {
-                return
-            }
-        }
-        try self.add(BACKGROUND_COLOR, color)
-    }
-
     // `list-style`: only the type is kept (`inside`/`outside` and images
     // are accepted and ignored).
     fn listStyle(self: *mut Self, comps: []Comp) AllocError!void {
@@ -778,6 +776,9 @@ pub fn parseValue(sheet: *mut Sheet, prop: usize, comps: []Comp) AllocError!?Val
         }
         return rawValue(sheet, comps)
     }
+    if p.kind == PKind.Layers {
+        return layersValue(sheet, prop, comps)
+    }
     if p.kind == PKind.Paint {
         let t = comps[0].toks[0]
         if t.kind == Tok.Url || (t.kind == Tok.Function && text.eqlIgnoreCase(t.text, "url")) {
@@ -871,7 +872,7 @@ fn single(p: Property, c: Comp) ?Value {
             }
             return null
         }
-        .Raw => {
+        .Raw, .Layers => {
             return null
         }
         .Paint => {

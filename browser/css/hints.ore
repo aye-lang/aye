@@ -149,7 +149,7 @@ pub fn writeHints(doc: *Document, el: NodeId, out: *mut text.Builder) AllocError
 // The SVG elements that take presentation attributes, and those
 // attributes (`display` only as `none`).
 let SVG_ELEMENTS = "svg g path rect circle ellipse line polyline polygon use symbol defs stop lineargradient radialgradient switch marker pattern clippath mask text tspan"
-let SVG_PRESENTATION = "fill stroke stroke-width fill-opacity stroke-opacity fill-rule stroke-linecap stroke-linejoin stroke-miterlimit opacity stop-color stop-opacity color visibility"
+let SVG_PRESENTATION = "fill stroke stroke-width stroke-dasharray stroke-dashoffset fill-opacity stroke-opacity fill-rule stroke-linecap stroke-linejoin stroke-miterlimit opacity stop-color stop-opacity color visibility"
 
 fn svgHints(doc: *Document, el: NodeId, out: *mut text.Builder) AllocError!void {
     for at in doc.node(el).attrs {
