@@ -59,6 +59,16 @@ pub struct ImageCache {
         self.referrer = copy
     }
 
+    // Was `href` fetched already (decoded or not)?
+    fn known(self: *Self, href: []u8) bool {
+        for e in self.entries.items() {
+            if text.eql(e.href, href) {
+                return true
+            }
+        }
+        return false
+    }
+
     /// The bitmap of `href`, fetched and decoded the first time.
     fn bitmapOf(self: *mut Self, href: []u8) AllocError!?*mut image.Bitmap {
         for e in self.entries.items() {
@@ -167,6 +177,9 @@ fn prefetchImages(cache: *mut ImageCache, doc: *Document, base: *Url) AllocError
             continue
         }
         defer target.deinit(cache.alloc)
+        if cache.known(target.withoutFragment()) {
+            continue
+        }
         try hrefs.append(target.withoutFragment())
         try hrefs.appendByte('\n')
     }
