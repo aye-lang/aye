@@ -179,6 +179,7 @@ fn withFonts(alloc: Allocator, o: UiOptions, measure: dyn font.Measurer, system:
         }
     }
     engine.setScripting(o.js)
+    engine.setCanvasFixed(system == null)
     engine.setRealClock(true)
     // The console goes to stderr, except in headless test runs.
     engine.setConsoleEcho(o.frames == 0 && !o.exit_when_idle)

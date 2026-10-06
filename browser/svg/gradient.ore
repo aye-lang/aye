@@ -45,6 +45,8 @@ pub struct Gradient {
     cx: f64
     cy: f64
     r: f64
+    // Canvas radial gradients may have a nonzero inner circle.
+    r0: f64 = 0.0
     fx: f64
     fy: f64
     a0: f64
@@ -80,9 +82,10 @@ pub struct Gradient {
         let ddy = y - self.fy
         let cdx = self.cx - self.fx
         let cdy = self.cy - self.fy
-        let a = cdx * cdx + cdy * cdy - self.r * self.r
-        let b = ddx * cdx + ddy * cdy
-        let c = ddx * ddx + ddy * ddy
+        let dr = self.r - self.r0
+        let a = cdx * cdx + cdy * cdy - dr * dr
+        let b = ddx * cdx + ddy * cdy + self.r0 * dr
+        let c = ddx * ddx + ddy * ddy - self.r0 * self.r0
         if math.abs(a) < 0.000001 {
             if b <= 0.0 {
                 return self.colorAt(0.0)

@@ -30,6 +30,12 @@ struct CanvasBitmap {
 // the total below 64 MiB leaves room for coverage and compositing layers.
 let CANVAS_SIDE: usize = 16384
 let CANVAS_PIXELS: usize = 16777216
+var canvas_fixed: bool = false
+
+/// Front ends select the same deterministic test font as layout.
+pub fn setCanvasFixed(fixed: bool) {
+    canvas_fixed = fixed
+}
 
 fn installCanvas(it: *mut Interp, o: u32) JsError!void {
     try defMethod(it, o, "canvasInfo", 1, akCanvasInfo)
@@ -290,6 +296,8 @@ fn canvasPaint(it: *mut Interp, style: Value, bmp: *image.Bitmap, px: []mut u8) 
             }
             return
         }
+        let smoothing = try canvasProp(it, style, "smoothing")
+        let smooth = js.isUndef(smoothing) || it.toBoolean(smoothing)
         let repeatX = it.toBoolean(try canvasProp(it, style, "repeatX"))
         let repeatY = it.toBoolean(try canvasProp(it, style, "repeatY"))
         for y in 0..bmp.height {
@@ -309,12 +317,12 @@ fn canvasPaint(it: *mut Interp, style: Value, bmp: *image.Bitmap, px: []mut u8) 
                     }
                     continue
                 }
-                let j = (math.floor(sy) as usize * img.width + math.floor(sx) as usize) * 4
-                let a = (px[i + 3] as u32 * img.pixels[j + 3] as u32 + 127) / 255
-                for k in 0..3 {
-                    px[i + k] = ((img.pixels[j + k] as u32 * a + 127) / 255) as u8
-                }
-                px[i + 3] = a as u8
+                let sample = paint.sampleImage(img.pixels, img.width, img.height, sx, sy, smooth)
+                let cover = px[i + 3] as u32
+                px[i] = ((sample.r * cover + 127) / 255) as u8
+                px[i + 1] = ((sample.g * cover + 127) / 255) as u8
+                px[i + 2] = ((sample.b * cover + 127) / 255) as u8
+                px[i + 3] = ((sample.a * cover + 127) / 255) as u8
             }
         }
         return
@@ -342,6 +350,9 @@ fn canvasPaint(it: *mut Interp, style: Value, bmp: *image.Bitmap, px: []mut u8) 
         ss[k].c = svg.Color { r: cc[0], g: cc[1], b: cc[2], a: cc[3] }
     }
     var g = svg.Gradient { kind: (kind - 1.0) as u8, spread: svg.PAD, m: matrix, x1: n[0], y1: n[1], x2: n[2], y2: n[3], cx: n[3], cy: n[4], r: n[5], fx: n[0], fy: n[1], a0: n[0] + math.pi / 2.0, t0: 0.0, t1: 1.0, stops: ss }
+    if kind == 2.0 {
+        g.r0 = n[2]
+    }
     if kind == 3.0 {
         g.cx = n[1]
         g.cy = n[2]
@@ -700,13 +711,25 @@ fn akCanvasText(it: *mut Interp, a: Args) JsError!Value {
     try it.push(str)
     defer it.pop()
     let textBytes = it.heap.bytes(js.strOf(str))
-    var sys = font.System.init(it.alloc) catch |e| {
-        return Value.Null
+    let page = scriptOf(it).page
+    if page.images == null {
+        page.images = try page.alloc.create(ImageCache.init(page.alloc))
     }
-    defer sys.deinit()
-    let m: dyn font.Measurer = &mut sys
-    let width = m.width(f, textBytes)
-    let metrics = m.metrics(f)
+    let cache = page.images.?
+    if !canvas_fixed && cache.canvas_fonts == null {
+        let sys = font.System.init(it.alloc) catch |e| {
+            return Value.Null
+        }
+        cache.canvas_fonts = try it.alloc.create(sys)
+    }
+    var fixed = font.Fixed.init()
+    var width = fixed.width(f, textBytes)
+    var metrics = fixed.metrics(f)
+    if !canvas_fixed {
+        let m: dyn font.Measurer = cache.canvas_fonts.?
+        width = m.width(f, textBytes)
+        metrics = m.metrics(f)
+    }
     let arr = try it.newArray(0)
     try it.push(js.objVal(arr))
     defer it.pop()
@@ -727,7 +750,11 @@ fn akCanvasText(it: *mut Interp, a: Args) JsError!Value {
     var mask = try paint.Canvas.init(it.alloc, w, h)
     defer mask.deinit()
     mask.clear(paint.Rgba { r: 0, g: 0, b: 0, a: 0 })
-    var painter = paint.TextPainter.init(it.alloc, &mut sys)
+    var sys: ?*mut font.System = null
+    if !canvas_fixed {
+        sys = cache.canvas_fonts
+    }
+    var painter = paint.TextPainter.init(it.alloc, sys)
     defer painter.deinit()
     try painter.draw(&mut mask, 2.0, metrics.ascent + 2.0, textBytes, f, 1.0, paint.Rgba { r: 255, g: 255, b: 255, a: 255 })
     let data = try it.newArray(0)

@@ -2,6 +2,7 @@
 // rectangles, opaque and alpha-blended rectangle fills, and coverage
 // masks (antialiased glyphs) blended in a color.
 
+import std
 import std.list.List
 import std.mem.AllocError
 import std.mem.Allocator
@@ -220,11 +221,31 @@ pub struct Canvas {
 }
 
 // A color with premultiplied alpha, each channel 0 to 255.
-struct Premul {
+pub struct Premul {
     r: u32
     g: u32
     b: u32
     a: u32
+}
+
+/// Samples a straight RGBA image at source pixel centers, returning
+/// premultiplied channels. Canvas affine images use the same bilinear
+/// interpolation as the display-list image renderer.
+pub fn sampleImage(pixels: []u8, w: usize, h: usize, x: f64, y: f64, smooth: bool) Premul {
+    if !smooth {
+        return premul(pixels, (y as usize * w + x as usize) * 4)
+    }
+    let fx = std.math.clamp(x - 0.5, 0.0, (w - 1) as f64)
+    let fy = std.math.clamp(y - 0.5, 0.0, (h - 1) as f64)
+    let x0 = std.math.floor(fx) as usize
+    let y0 = std.math.floor(fy) as usize
+    let x1 = std.math.minOf(usize, x0 + 1, w - 1)
+    let y1 = std.math.minOf(usize, y0 + 1, h - 1)
+    let wx = ((fx - x0 as f64) * 256.0) as u32
+    let wy = ((fy - y0 as f64) * 256.0) as u32
+    let top = mix(premul(pixels, (y0 * w + x0) * 4), premul(pixels, (y0 * w + x1) * 4), wx)
+    let bottom = mix(premul(pixels, (y1 * w + x0) * 4), premul(pixels, (y1 * w + x1) * 4), wx)
+    return mix(top, bottom, wy)
 }
 
 fn premul(pixels: []u8, i: usize) Premul {

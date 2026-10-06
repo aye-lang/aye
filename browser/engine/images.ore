@@ -14,6 +14,7 @@ import dom
 import dom.Document
 import dom.NodeId
 import image
+import font
 import layout
 import net
 import std
@@ -39,13 +40,14 @@ pub struct ImageCache {
     entries: List(CachedImage)
     nodes: layout.Images
     canvases: List(CanvasBitmap)
+    canvas_fonts: ?*mut font.System
     // The URL of the page, sent as the Referer (owned).
     referrer: []mut u8
     // The keys of `nodes.urls` (owned).
     keys: List([]mut u8)
 
     pub fn init(alloc: Allocator) ImageCache {
-        return ImageCache { alloc: alloc, entries: List(CachedImage).init(alloc), nodes: layout.Images.init(alloc), canvases: List(CanvasBitmap).init(alloc), referrer: alloc.alloc(0 as u8, 0) catch unreachable, keys: List([]mut u8).init(alloc) }
+        return ImageCache { alloc: alloc, entries: List(CachedImage).init(alloc), nodes: layout.Images.init(alloc), canvases: List(CanvasBitmap).init(alloc), canvas_fonts: null, referrer: alloc.alloc(0 as u8, 0) catch unreachable, keys: List([]mut u8).init(alloc) }
     }
 
     pub fn deinit(self: *mut Self) {
@@ -66,6 +68,10 @@ pub struct ImageCache {
             self.alloc.destroy(c.bmp)
         }
         self.canvases.deinit()
+        if self.canvas_fonts |sys| {
+            sys.deinit()
+            self.alloc.destroy(sys)
+        }
         self.nodes.deinit()
         self.alloc.free(self.referrer)
         for k in self.keys.items() {
