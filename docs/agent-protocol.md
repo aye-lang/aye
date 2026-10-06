@@ -4,24 +4,37 @@ The anyknown browser gives AI agents the engine without pixels: the page
 as an accessibility tree with refs, the main content as Markdown, and
 actions on refs. Two stdio servers carry it:
 
-- `anyknown agent [--width PX] [--height PX]`: JSON lines (this document,
-  first part).
-- `anyknown mcp [--width PX] [--height PX]`: a Model Context Protocol
-  server (second part).
+- `anyknown agent [--width PX] [--height PX] [--no-js]`: JSON lines
+  (this document, first part).
+- `anyknown mcp [--width PX] [--height PX] [--no-js]`: a Model Context
+  Protocol server (second part).
 
 Both keep one session: the page shown, the history, the refs. The
 viewport is 800x600 px unless given. Text is measured with the browser's
-fixed-metric font, so boxes are approximate but stable. JavaScript does
-not run yet (B6): clicks that only scripts would handle are recorded as
-events and said so in the result. Forms work (B5): the agent and the
-window share the state of the controls (values, checkedness, selected
-options, the focus), and submitting a form loads the response.
+fixed-metric font, so boxes are approximate but stable. Forms work
+(B5): the agent and the window share the state of the controls
+(values, checkedness, selected options, the focus), and submitting a
+form loads the response.
+
+Pages run their scripts (B6; not with `--no-js`). Actions fire the
+events a user's would, before their default action: `click` fires
+`click` (a canceled one does nothing more), `type` and `select` fire
+`input` and `change`, `press` fires `keydown` at the focused element
+(else the body), typing fires `input`, a submission fires `submit`. A
+navigation that a script asks for (`location.href = ...`, a link it
+clicks, `history.back()`) happens after the action and is added to its
+`result`. Time is the page's own: after an action only the timers that
+are due run (a `setTimeout(f, 0)`); `wait` moves the clock forward,
+taking no real time. Console messages (`[log] ...`, uncaught
+exceptions as `[error] Uncaught ...`, alerts as `[alert] ...`) come
+with the next response, as a `console` array (JSON lines) or a
+`Console:` section (MCP).
 
 For goldens and quick looks, the same views are on the command line:
 
 ```
-anyknown dump --a11y [--boxes] [--json] [--width PX] FILE|URL
-anyknown dump --md [--refs] [--width PX] FILE|URL
+anyknown dump --a11y [--boxes] [--json] [--js] [--width PX] FILE|URL
+anyknown dump --md [--refs] [--js] [--width PX] FILE|URL
 ```
 
 The code is in `browser/agent/`; the goldens in `browser/tests/agent/`.
@@ -140,8 +153,21 @@ session goes on after an error.
 | `press` | `key` | as `click` |
 | `scroll` | `ref`, or `dy` (px, negative is up) | as `click` |
 | `find` | `text` (ignoring ASCII case) | `result`: the matches |
-| `wait` | | `result` (returns at once: no scripts yet) |
-| `eval`, `screenshot`, `tabs` | | not supported yet |
+| `wait` | `selector` (CSS; at most `ms`, 5000 by default), or `ms` alone, or neither (until no timer is left, at most 5 s of page time) | `result` ("found ... after N ms", or "waited N ms"); an error after the time without a match |
+| `eval` | `expression`: a script; its last expression statement is the result | `result`: a string as it is, anything else as `console.log` shows it; an uncaught exception is the error |
+| `screenshot`, `tabs` | | not supported yet |
+
+Scripts in a session (`todo.jsonl` in `browser/tests/agent/sessions/`):
+
+```
+{"id":2,"cmd":"type","ref":"e2","text":"Buy milk"}
+{"id":3,"cmd":"click","ref":"e3"}
+{"id":3,"ok":true,"result":"clicked button \"Add\" [e3]; a script canceled the submission",...,"diff":"...+   - listitem\n+     - checkbox \"Buy milk\" [e4]\n..."}
+{"id":6,"cmd":"wait","selector":"#saved:not(.hidden)"}
+{"id":6,"ok":true,"result":"found status after 300 ms",...}
+{"id":9,"cmd":"eval","expression":"document.querySelectorAll('li').length"}
+{"id":9,"ok":true,"result":"2",...}
+```
 
 After an action, a response has `snapshot` when a new document is shown
 (a link followed), else `diff` when the snapshot changed: the changed
@@ -217,7 +243,8 @@ per line. It supports protocol versions `2025-11-25`, `2025-06-18`,
 | `browser_press` | `key` | as `browser_click` |
 | `browser_scroll` | `ref` or `dy` | as `browser_click` |
 | `browser_find` | `text` | the matches |
-| `browser_wait` | | that there is nothing to wait for |
+| `browser_wait` | `selector`, `ms` | as `wait` |
+| `browser_eval` | `expression` | the value, as `eval` |
 
 A session:
 

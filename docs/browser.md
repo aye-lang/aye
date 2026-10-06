@@ -32,10 +32,11 @@ browser/
                   flex (simple), text measurement
   engine/         Page (load, style, layout), Tab (history, scroll),
                   hit testing, find in page, images, default actions
-                  and form submission
+                  and form submission, page scripts (DOM bindings,
+                  prelude, event loop)
   image/          PNG (zlib inflate), GIF and baseline JPEG decoders
   paint/          display list, software rasterizer, glyph cache, PNG
-  js/             lexer, parser, interpreter, GC, builtins, DOM bindings
+  js/             lexer, parser, interpreter, GC, builtins, host interface
   agent/          snapshot (a11y tree with refs), Markdown, actions,
                   JSON-lines and MCP stdio servers
   ui/             SDL2 window, chrome (address bar, tabs), input
@@ -48,7 +49,7 @@ Same rules as `milestones.md`: tests first; a milestone is done when its
 acceptance tests pass. Tests run headless and offline (`file:` fixtures
 and a local test server), so CI needs no network and no display.
 
-**Status.** B1–B5 are done, and so are the cores of B6 and B7:
+**Status.** B1–B6 are done, and so is the core of B7:
 
 | | State | Tests (`cargo test --test browser`) |
 |---|---|---|
@@ -57,21 +58,21 @@ and a local test server), so CI needs no network and no display.
 | B3 layout | done | 31 `dump --layout` fixtures (fixed font), system-font check |
 | B4 paint and window | done | 13 golden PNGs, PNG checks, headless window tests |
 | B5 forms and images | done | form sessions over HTTP, window form scripts, image decoder unit tests, form and image screenshots |
-| B6 JavaScript | engine core done | 212 conformance scripts (`anyknown js`) |
-| B7 agent interface | core done | 17 snapshot/Markdown fixtures, 4 session and MCP transcripts |
+| B6 JavaScript | done | 212 conformance scripts (`anyknown js`), 30 DOM fixtures (`dump --tree --js`, also under GC stress), a to-do app session, window script test, GC unit tests |
+| B7 agent interface | core done | 17 snapshot/Markdown fixtures, session and MCP transcripts (with `eval` and `wait`) |
 | B8 the real web | not started | |
 
 All the front ends share `engine/`: the window, `screenshot` and the
 agent sessions load pages through `engine.load` and keep history in a
 `Tab`. What remains:
 
-- **B6:** DOM bindings (`document`, wrappers holding `Handle(Node)`),
-  events and an event loop (`setTimeout`, `addEventListener`), running
-  page scripts during load; then the DOM fixtures and the to-do app.
-- **B7:** actions that reach the page through JS and forms (`eval`,
-  real input and submission), `screenshot` and `tabs` commands, and the
-  shared window (`--agent-socket`) where a human and an agent drive one
-  page.
+- **B6 leftovers:** scripts that run while the document is parsed
+  (`document.write`, an inline script seeing only the DOM before it),
+  modules, unhandled-rejection reports, `getComputedStyle` and layout
+  queries (`getBoundingClientRect` is all zeros), live NodeLists,
+  interrupting a script that never returns.
+- **B7:** `screenshot` and `tabs` commands, and the shared window
+  (`--agent-socket`) where a human and an agent drive one page.
 - **B8:** the real web (cookies, gzip, `<base>`, a list of public sites).
 
 The compiler gaps the browser met, and which of them M9.5/M9.6 fixed,
@@ -233,7 +234,7 @@ are in `browser/COMPILER_GAPS.md`.
   golden console output; DOM fixtures whose `dump --tree` after scripts
   matches goldens; a to-do app fixture that works in the window.
 
-**The engine core (done; DOM bindings next).** `anyknown js FILE` runs a
+**The engine core (done).** `anyknown js FILE` runs a
 script; `browser/tests/js/` holds the conformance scripts with Node's
 output as goldens.
 
@@ -264,11 +265,77 @@ output as goldens.
   integers, and `Interp.host: ?dyn Host` gets `finalize(tag, index,
   generation)` when the collector frees one (the `js_refs` decrement).
   `addRoot`/`removeRoot` keep values (event listeners) alive.
-- *Not yet:* generators, async/Promise, Symbol, BigInt, Proxy, typed
-  arrays, tagged templates, `new.target`, time zones (local time is UTC),
-  full Unicode case mapping and normalization.
+- *Not yet:* generators, async/await (Promise is the page prelude's,
+  below), Symbol, BigInt, Proxy, typed arrays, tagged templates,
+  `new.target`, time zones (local time is UTC), full Unicode case
+  mapping and normalization, `Function`/`eval` of strings (the browser
+  compiles inline handlers with `Interp.evalScript`).
   A plain function call gets `this === undefined` (strict-mode rule), and
   top-level `var`/`function` are properties of the global object.
+
+**Pages (done).** `engine/script.ore` gives every page an engine
+(`Page.script`) when scripting is on: the window and the agent turn it
+on (`--no-js` turns it off), `dump` with `--js`.
+
+- *Loading:* after the parse, the `script` elements run in document
+  order (inline, or `src` fetched relative to the page); external
+  `defer` and `async` scripts run after the others (async as defer);
+  `type=module` and data types are skipped; then DOMContentLoaded
+  (`readyState` "interactive") and load ("complete"). An uncaught
+  exception is a console message and the next script runs. With
+  scripts on, `noscript` is `display: none` (a UA rule).
+- *Bindings:* a node's wrapper is a host object holding its
+  `Handle(Node)`, one per node (`Script.wrappers`), each counting in
+  the node's `js_refs` (also the `style` and `dataset` objects). A
+  collected wrapper decrements it (`Host.finalize`), and a tree out of
+  the document is freed once no node of it is held
+  (`Document.releaseIfUnused`). The collector asks the host to keep
+  alive (`Host.trace`) the wrappers of nodes in the document and in any
+  tree a reachable wrapper is in, so listeners and expando properties
+  last as long as their nodes. A stale handle is a TypeError, never a
+  use after free. Natives (`dom_api.ore`): Node (tree, text,
+  `appendChild`/`insertBefore`/`removeChild`/`replaceChild`/`remove`,
+  `cloneNode`, `contains`), Element (attributes, `id`, `className`,
+  `innerHTML` get/set through the HTML parser with the context's table
+  or select wrapping, `outerHTML`, `children`, `matches`, `closest`,
+  `querySelector(All)` through the CSS selector matcher,
+  `getElementsBy*`), Document (`body`, `head`, `title` get/set,
+  `readyState`, `activeElement`, `currentScript`, `create*`), and form
+  state through `doc.controls` (`value`, `checked`, `selected`,
+  `selectedIndex`, focus). `style.camelCase` and `dataset.camelCase`
+  are named host properties (`Host.getNamed`/`setNamed`) over the
+  `style` and `data-*` attributes. Lists are arrays made at the call
+  (not live).
+- *Prelude* (`prelude.ore`, JavaScript): EventTarget with capture,
+  target (capturing listeners first) and bubble phases through the
+  window, `once`, `stopPropagation`, `stopImmediatePropagation`,
+  `preventDefault`; Event, CustomEvent, MouseEvent, KeyboardEvent,
+  FocusEvent, InputEvent; `onclick`-style properties and attributes
+  (compiled when first needed, last writer wins, `return false`
+  cancels); `append`/`prepend`/`before`/`after`/`replaceWith`,
+  `insertAdjacentHTML`, `classList`, reflected attributes, `click()`
+  (the click event, then `engine.activate` unless canceled), `focus()`;
+  timers, `requestAnimationFrame`, `queueMicrotask`, `location`
+  (setting it navigates after the script returns), `history`,
+  `localStorage` (in memory, per origin, while a page is open) and
+  `sessionStorage`, `alert`/`confirm`/`prompt` (console messages, never
+  blocking), a Promise with microtasks, and `fetch` (GET, synchronous
+  underneath, settling in a microtask; `text()`, `json()`).
+- *Event loop:* timers (ordered by due time, then by scheduling) and
+  microtasks after every task. Time is virtual for `dump` and the agent
+  (the loop jumps to the next timer; `dump --js` runs until no timer is
+  left, at most 30 s of page time) and real in the window, whose
+  `SDL_WaitEventTimeout` wakes for the next timer. Clicks and keys
+  (window, agent) fire their events first and skip the default action
+  when canceled; checkbox toggles fire `input` and `change`; a submit
+  fires `submit`. After scripts changed the document (`domVersion`),
+  the front end styles (style sheets parsed again) and lays out again;
+  a navigation they asked for (`takeNavigation`) happens then.
+- *Console:* messages ("[log] ...", "[error] Uncaught ...") go to
+  stderr for `dump --js` and the window, and with the agent's
+  responses (`console`).
+- *Stack:* page scripts run on the main thread, so calls nest at most
+  400 deep (a RangeError beyond).
 
 ### B7: Agent interface
 
@@ -284,8 +351,9 @@ output as goldens.
   a form, follow a link by ref, read a JS-rendered list) with golden
   transcripts; an MCP handshake and `tools/list` golden.
 - The protocol is in `docs/agent-protocol.md`. Done so far: snapshot,
-  read, navigation, click, type, select, press, scroll, find and wait
-  (forms and scripts record events), `dump --a11y` and `dump --md`.
+  read, navigation, click, type, select, press, scroll, find, `eval`
+  and `wait` (scripts run; actions fire their events), `dump --a11y`
+  and `dump --md` (`--js` to run scripts).
 
 ### B8: The real web
 

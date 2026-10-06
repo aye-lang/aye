@@ -541,7 +541,7 @@ fn mcpMessage(s: *mut Session, tmp: Allocator, line: []u8, out: *mut text.Builde
         try w.string("0.1.0")
         try w.endObject()
         try w.key("instructions")
-        try w.string("A web browser without pixels. Start with browser_navigate; browser_snapshot lists the page as an accessibility tree whose interactive elements and headings carry refs like e12; act on them with browser_click, browser_type, browser_select. browser_read gives the main content as Markdown. JavaScript does not run yet.")
+        try w.string("A web browser without pixels. Start with browser_navigate; browser_snapshot lists the page as an accessibility tree whose interactive elements and headings carry refs like e12; act on them with browser_click, browser_type, browser_select. browser_read gives the main content as Markdown. Pages run their scripts: browser_eval runs JavaScript in the page, browser_wait lets timers run (page time, not real time).")
         try w.endObject()
         return w.endObject()
     }
@@ -723,7 +723,7 @@ fn toolList(w: *mut Writer) AllocError!void {
     try toolStart(w, "browser_read", "Read", "The main content of the page as Markdown (navigation, headers and footers are left out when the page marks its main content). Links are followed by their refs.")
     try toolProp(w, "refs", "boolean", "Write the ref after each link (default true).")
     try toolEnd(w, "", true)
-    try toolStart(w, "browser_click", "Click", "Click an element by ref: the page's scripts get the click event, then (unless they cancel it) follow a link, toggle a checkbox or radio button, open a details element. Form submission is recorded until forms are supported.")
+    try toolStart(w, "browser_click", "Click", "Click an element by ref: the page's scripts get the click event, then (unless they cancel it) follow a link, toggle a checkbox or radio button, submit a form, open a details element.")
     try toolProp(w, "ref", "string", "The ref of the element, from the snapshot (e12).")
     try toolEnd(w, "ref", false)
     try toolStart(w, "browser_type", "Type", "Replace the text of a text field (input or textarea) by ref.")
