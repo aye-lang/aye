@@ -261,6 +261,9 @@ pub struct Sheet {
     compounds: List(Compound)
     simples: List(Simple)
     decls: List(Decl)
+    // The URLs of the `@import` rules whose media match, as the parser
+    // met them (the loader fetches them: engine/sheets.ore).
+    imports: List([]u8)
 
     pub fn init(alloc: Allocator) AllocError!Sheet {
         let arena = try alloc.create(Arena.init(alloc))
@@ -273,11 +276,36 @@ pub struct Sheet {
             compounds: List(Compound).init(a),
             simples: List(Simple).init(a),
             decls: List(Decl).init(a),
+            imports: List([]u8).init(a),
         }
     }
 
     pub fn deinit(self: *mut Self) {
         self.arena.deinit()
         self.alloc.destroy(self.arena)
+    }
+
+    /// Moves the rules `mid..` (those of imported sheets, parsed last)
+    /// before the rules `from..mid`, so that they come first in the
+    /// cascade order as `@import` wants.
+    pub fn moveRulesFirst(self: *mut Self, from: usize, mid: usize) AllocError!void {
+        let rules = self.rules.items()
+        if mid <= from || mid >= rules.len {
+            return
+        }
+        let a = self.arena.allocator()
+        let copy = try a.alloc(rules[0], rules.len - from)
+        var n: usize = 0
+        for k in mid..rules.len {
+            copy[n] = rules[k]
+            n += 1
+        }
+        for k in from..mid {
+            copy[n] = rules[k]
+            n += 1
+        }
+        for k in 0..n {
+            rules[from + k] = copy[k]
+        }
     }
 }

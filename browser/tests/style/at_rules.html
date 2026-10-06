@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<style>
+@charset "utf-8";
+@layer base, components;
+@import url("imported.css");
+@import "imported_print.css" print;
+@namespace svg url(http://www.w3.org/2000/svg);
+@font-face { font-family: X; src: url(x.woff2) format("woff2"); }
+@keyframes spin { from { transform: rotate(0) } to { transform: rotate(360deg) } }
+.k { color: red }
+@supports (display: grid) { .s1 { color: green } }
+@supports not (display: grid) { .s2 { color: red } }
+@supports (display: flex) and (not (color: nonsense)) { .s3 { color: green } }
+@supports (backdrop-filter: blur(2px)) or (color: blue) { .s4 { color: green } }
+@supports (backdrop-filter: blur(2px)) { .s5 { color: red } }
+@supports selector(:focus-visible) { .s6 { color: green } }
+@supports (--custom: 1) { .s7 { color: green } }
+@supports (width: calc(100% - 1px)) { .s8 { color: green } }
+@layer base { .l1 { color: green } }
+@layer { .l2 { color: green } }
+@container sidebar (min-width: 400px) { .c1 { color: red } }
+@page { margin: 1cm }
+@unknown-thing foo { .u { color: red } }
+@unknown-statement foo;
+.after { color: green; transform: rotate(3deg); transition: all 1s; animation: spin 2s; box-shadow: 0 0 1px red; filter: blur(1px); border-radius: 4px; will-change: transform; display: grid }
+.grid { display: inline-grid }
+@media (prefers-reduced-motion: no-preference) { .m1 { color: green } }
+@media (prefers-reduced-motion: reduce) { .m2 { color: red } }
+@media (prefers-color-scheme: dark) { .m3 { color: red } }
+@media (hover: hover) and (pointer: fine) { .m4 { color: green } }
+@media (min-width: 40em) { .m5 { color: green } }
+@media (width >= 600px) { .m6 { color: green } }
+@media (400px <= width <= 1000px) { .m7 { color: green } }
+@media print { .m8 { color: red } }
+@media not print { .m9 { color: green } }
+@media (max-width: 600px) or (orientation: landscape) { .m10 { color: green } }
+@media screen and (not (max-width: 600px)) { .m11 { color: green } }
+@media (min-resolution: 2dppx), (-webkit-min-device-pixel-ratio: 2) { .m12 { color: red } }
+@media (forced-colors: active) { .m13 { color: red } }
+@media only screen and (min-width: 768px) and (max-width: 1024px) { .m14 { color: green } }
+@media (any-hover: hover) { .m15 { color: green } }
+</style>
+<p class="i1">imported</p><p class="ip">print import</p>
+<p class="k s1">s1</p><p class="s2">s2</p><p class="s3">s3</p><p class="s4">s4</p><p class="s5">s5</p><p class="s6">s6</p>
+<p class="s7">s7</p><p class="s8">s8</p><p class="l1">l1</p><p class="l2">l2</p><p class="c1">c1</p><p class="u">u</p>
+<p class="after">after</p><p class="grid">grid</p>
+<p class="m1">m1</p><p class="m2">m2</p><p class="m3">m3</p><p class="m4">m4</p><p class="m5">m5</p>
+<p class="m6">m6</p><p class="m7">m7</p><p class="m8">m8</p><p class="m9">m9</p><p class="m10">m10</p>
+<p class="m11">m11</p><p class="m12">m12</p><p class="m13">m13</p><p class="m14">m14</p><p class="m15">m15</p>

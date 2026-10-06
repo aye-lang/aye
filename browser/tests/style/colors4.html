@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<style>
+.h1 { color: hsl(120, 100%, 25%) } .h2 { color: hsl(0deg 100% 50% / 50%) } .h3 { color: hsla(240, 100%, 50%, 0.25) }
+.h4 { color: hsl(0.5turn 50% 50%) } .h5 { color: hsl(-120 100% 50%) }
+.r1 { color: rgb(255 0 0 / 0.5) } .r2 { color: #0f08 } .r3 { color: rgba(0 0 255 / 10%) }
+.ld { color: light-dark(#111, #eee) } .sys { color: LinkText; background-color: Canvas }
+.cur { color: green; border: 1px solid currentcolor }
+.bad1 { color: red; color: color-mix(in srgb, red, blue) } .bad2 { color: red; color: oklch(0.5 0.1 200) }
+.bad3 { background: green; background: oklch(0.5 0.1 200) } .ok { background: url(x.png) no-repeat #abc }
+.named { color: rebeccapurple; background-color: LightGoldenRodYellow }
+</style>
+<p class="h1">h1</p><p class="h2">h2</p><p class="h3">h3</p><p class="h4">h4</p><p class="h5">h5</p>
+<p class="r1">r1</p><p class="r2">r2</p><p class="r3">r3</p><p class="ld">ld</p><p class="sys">sys</p>
+<p class="cur">cur</p><p class="bad1">bad1</p><p class="bad2">bad2</p><p class="bad3">bad3</p><p class="ok">ok</p>
+<p class="named">named</p>

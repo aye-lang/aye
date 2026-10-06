@@ -582,6 +582,8 @@ struct Declarer {
         for c in comps {
             if colorValue(c) |v| {
                 color = v
+            } else if unknownColorFunction(c) {
+                return
             }
         }
         try self.add(BACKGROUND_COLOR, color)
@@ -1043,8 +1045,11 @@ fn decorationLines(sheet: *mut Sheet, comps: []Comp) AllocError!?Value {
 
 // ---- colors
 
-/// A color: a named color, `transparent`, `currentcolor`, `#rgb`,
-/// `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb()` or `rgba()`.
+/// A color: a named color, `transparent`, `currentcolor`, a system color
+/// (`Canvas`, `LinkText`, ...), `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`,
+/// `rgb()`/`rgba()`, `hsl()`/`hsla()` (comma or space syntax, `/ alpha`)
+/// or `light-dark(light, dark)` (the light one). Other color functions
+/// (`color-mix()`, `oklch()`, ...) are not supported: null.
 pub fn colorValue(c: Comp) ?Value {
     let t = c.toks[0]
     if c.toks.len == 1 && t.kind == Tok.Ident {
@@ -1057,6 +1062,9 @@ pub fn colorValue(c: Comp) ?Value {
         if namedColor(t.text) |col| {
             return Value.Rgba { c: col }
         }
+        if systemColor(t.text) |col| {
+            return Value.Rgba { c: col }
+        }
         return null
     }
     if c.toks.len == 1 && t.kind == Tok.Hash {
@@ -1065,16 +1073,117 @@ pub fn colorValue(c: Comp) ?Value {
         }
         return null
     }
-    if t.kind == Tok.Function && (text.eqlIgnoreCase(t.text, "rgb") || text.eqlIgnoreCase(t.text, "rgba")) {
-        var end = c.toks.len
-        if c.toks[end - 1].kind == Tok.RParen {
-            end -= 1
-        }
-        if rgbFunction(c.toks[1..end]) |col| {
+    if t.kind != Tok.Function {
+        return null
+    }
+    var end = c.toks.len
+    if c.toks[end - 1].kind == Tok.RParen {
+        end -= 1
+    }
+    let args = c.toks[1..end]
+    if text.eqlIgnoreCase(t.text, "rgb") || text.eqlIgnoreCase(t.text, "rgba") {
+        if rgbFunction(args) |col| {
             return Value.Rgba { c: col }
+        }
+    } else if text.eqlIgnoreCase(t.text, "hsl") || text.eqlIgnoreCase(t.text, "hsla") {
+        if hslFunction(args) |col| {
+            return Value.Rgba { c: col }
+        }
+    } else if text.eqlIgnoreCase(t.text, "light-dark") {
+        // The first argument: the color scheme is light.
+        let i = skipWhitespace(args, 0)
+        if i < args.len {
+            let j = skipComponent(args, i)
+            let k = skipWhitespace(args, j)
+            if k < args.len && args[k].kind == Tok.Comma {
+                return colorValue(Comp { toks: args[i..j] })
+            }
         }
     }
     return null
+}
+
+/// Is `c` a color function that this file does not know (`color-mix()`,
+/// `oklch()`, ...)? A shorthand with one is dropped, as a browser that
+/// does not know it would.
+pub fn unknownColorFunction(c: Comp) bool {
+    let t = c.toks[0]
+    if t.kind != Tok.Function {
+        return false
+    }
+    return inList(t.text, "color-mix color oklch oklab lab lch hwb device-cmyk contrast-color") != null
+}
+
+// The CSS system colors, as a light theme draws them.
+fn systemColor(name: []u8) ?Color {
+    let names = [_][]u8{"canvas", "canvastext", "linktext", "visitedtext", "activetext", "buttonface", "buttontext", "buttonborder", "field", "fieldtext", "highlight", "highlighttext", "selecteditem", "selecteditemtext", "mark", "marktext", "graytext", "accentcolor", "accentcolortext"}
+    let hex = [_][]u8{"ffffff", "000000", "0000ee", "551a8b", "ff0000", "efefef", "000000", "767676", "ffffff", "000000", "3390ff", "ffffff", "3390ff", "ffffff", "ffff00", "000000", "6d6d6d", "0075ff", "ffffff"}
+    for i, n in names {
+        if text.eqlIgnoreCase(n, name) {
+            return hexColor(hex[i])
+        }
+    }
+    return null
+}
+
+// The arguments of `hsl()`/`hsla()`: a hue (a number of degrees or an
+// angle), saturation and lightness (percentages or numbers) and an
+// optional alpha, separated by commas, or by spaces with `/`.
+fn hslFunction(toks: []Token) ?Color {
+    var vals = [4]f64{0.0, 0.0, 0.0, 1.0}
+    var n: usize = 0
+    for t in toks {
+        if t.kind == Tok.Whitespace || t.kind == Tok.Comma || (t.kind == Tok.Delim && t.delim == '/') {
+            continue
+        }
+        if n >= 4 {
+            return null
+        }
+        if t.kind == Tok.Number {
+            vals[n] = t.num
+        } else if t.kind == Tok.Percentage {
+            if n == 3 {
+                vals[n] = t.num / 100.0
+            } else {
+                vals[n] = t.num
+            }
+        } else if t.kind == Tok.Dimension && n == 0 {
+            if text.eqlIgnoreCase(t.text, "deg") {
+                vals[0] = t.num
+            } else if text.eqlIgnoreCase(t.text, "turn") {
+                vals[0] = t.num * 360.0
+            } else if text.eqlIgnoreCase(t.text, "rad") {
+                vals[0] = t.num * 180.0 / math.pi
+            } else if text.eqlIgnoreCase(t.text, "grad") {
+                vals[0] = t.num * 0.9
+            } else {
+                return null
+            }
+        } else if t.kind == Tok.Ident && text.eqlIgnoreCase(t.text, "none") {
+            vals[n] = 0.0
+        } else {
+            return null
+        }
+        n += 1
+    }
+    if n < 3 {
+        return null
+    }
+    let h = vals[0] - math.floor(vals[0] / 360.0) * 360.0
+    let sat = math.clamp(vals[1] / 100.0, 0.0, 1.0)
+    let light = math.clamp(vals[2] / 100.0, 0.0, 1.0)
+    // CSS Color 4, 7.1: hsl to rgb.
+    let r = hslChannel(0.0, h, sat, light)
+    let g = hslChannel(8.0, h, sat, light)
+    let b = hslChannel(4.0, h, sat, light)
+    return Color { r: channel(r * 255.0), g: channel(g * 255.0), b: channel(b * 255.0), a: math.clamp(vals[3], 0.0, 1.0) }
+}
+
+fn hslChannel(n: f64, hue: f64, sat: f64, light: f64) f64 {
+    let raw = n + hue / 30.0
+    let k = raw - math.floor(raw / 12.0) * 12.0
+    let a = sat * math.min(light, 1.0 - light)
+    return light - a * math.max(-1.0, math.min(math.min(k - 3.0, 9.0 - k), 1.0))
 }
 
 /// The named color `name` (any case).

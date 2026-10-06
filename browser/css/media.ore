@@ -1,10 +1,17 @@
 // Media queries (Media Queries 4 subset), evaluated against a `Media`: a
-// screen of `width` x `height` CSS pixels, light color scheme, with a fine
-// pointer that can hover. Supported: lists separated by commas, `not` and
-// `only`, the media types `all`, `screen` (true) and others (false),
-// features joined by `and`: `width`, `height` (with `min-`/`max-` or a
-// range `(width >= 600px)`), `orientation`, `prefers-color-scheme`,
-// `hover`, `pointer`, `color`. Anything else makes its query false.
+// screen of `width` x `height` CSS pixels at 1dppx, light color scheme,
+// no preference for reduced motion or contrast, with a fine pointer that
+// can hover. Supported: lists separated by commas, `not` and `only`, the
+// media types `all`, `screen` (true) and others (`print`: false), and
+// conditions of features in parentheses joined by `and`, `or` and `not`
+// (nested in parentheses too). Features: `width`, `height` (with `min-`/
+// `max-`, `device-`, or ranges `(width >= 600px)`, `(400px < width <
+// 700px)`), `orientation`, `aspect-ratio`, `resolution` and the
+// `device-pixel-ratio` forms, `prefers-color-scheme`,
+// `prefers-reduced-motion`, `prefers-contrast`, `forced-colors`,
+// `inverted-colors`, `hover`, `any-hover`, `pointer`, `any-pointer`,
+// `color`, `color-gamut`, `dynamic-range`, `display-mode`, `update`,
+// `monochrome`, `grid`. Anything else makes its query false.
 
 import std.text
 
@@ -29,47 +36,38 @@ pub fn mediaListMatches(toks: []Token, m: Media) bool {
 
 fn queryMatches(toks: []Token, m: Media) bool {
     var i = skipWhitespace(toks, 0)
-    var negate = false
-    if i < toks.len && toks[i].kind == Tok.Ident {
-        if text.eqlIgnoreCase(toks[i].text, "not") {
-            negate = true
-            i = skipWhitespace(toks, i + 1)
-        } else if text.eqlIgnoreCase(toks[i].text, "only") {
-            i = skipWhitespace(toks, i + 1)
-        }
-    }
-    var ok = true
-    var need_and = false
-    if i < toks.len && toks[i].kind == Tok.Ident {
-        let kind = toks[i].text
-        ok = text.eqlIgnoreCase(kind, "all") || text.eqlIgnoreCase(kind, "screen")
-        i = skipWhitespace(toks, i + 1)
-        need_and = true
-    } else if i >= toks.len {
+    if i >= toks.len {
         return false
     }
-    while i < toks.len {
-        if need_and {
-            if toks[i].kind != Tok.Ident || !text.eqlIgnoreCase(toks[i].text, "and") {
-                return false
-            }
-            i = skipWhitespace(toks, i + 1)
-            if i >= toks.len {
-                return false
-            }
-        }
-        if toks[i].kind != Tok.LParen {
+    // A condition alone: `(...)` or `not (...)`.
+    if toks[i].kind == Tok.LParen || (isWord(toks[i], "not") && nextIs(toks, i + 1, Tok.LParen)) {
+        var c = Condition { toks: toks, i: i, m: m }
+        let ok = c.condition(toks.len)
+        return ok && c.i >= toks.len
+    }
+    var negate = false
+    if isWord(toks[i], "not") {
+        negate = true
+        i = skipWhitespace(toks, i + 1)
+    } else if isWord(toks[i], "only") {
+        i = skipWhitespace(toks, i + 1)
+    }
+    if i >= toks.len || toks[i].kind != Tok.Ident {
+        return false
+    }
+    let kind = toks[i].text
+    var ok = text.eqlIgnoreCase(kind, "all") || text.eqlIgnoreCase(kind, "screen")
+    i = skipWhitespace(toks, i + 1)
+    if i < toks.len {
+        if !isWord(toks[i], "and") {
             return false
         }
-        let close = blockEnd(toks, i)
-        if close >= toks.len {
+        var c = Condition { toks: toks, i: skipWhitespace(toks, i + 1), m: m }
+        let cond = c.condition(toks.len)
+        if c.i < toks.len {
             return false
         }
-        if !featureMatches(toks[i + 1..close], m) {
-            ok = false
-        }
-        i = skipWhitespace(toks, close + 1)
-        need_and = true
+        ok = ok && cond
     }
     if negate {
         return !ok
@@ -77,91 +75,334 @@ fn queryMatches(toks: []Token, m: Media) bool {
     return ok
 }
 
-// The inside of `( ... )`.
+fn isWord(t: Token, word: []u8) bool {
+    return t.kind == Tok.Ident && text.eqlIgnoreCase(t.text, word)
+}
+
+// Is the first token at or after `i` that is not whitespace a `kind`?
+fn nextIs(toks: []Token, i: usize, kind: Tok) bool {
+    let j = skipWhitespace(toks, i)
+    return j < toks.len && toks[j].kind == kind
+}
+
+// A media condition: `not (...)`, or `(...)` joined by `and` or `or`.
+struct Condition {
+    toks: []Token
+    i: usize
+    m: Media
+
+    fn condition(self: *mut Self, end: usize) bool {
+        self.i = skipWhitespace(self.toks[..end], self.i)
+        if self.i < end && isWord(self.toks[self.i], "not") {
+            self.i += 1
+            return !self.inParens(end)
+        }
+        var v = self.inParens(end)
+        var op: []u8 = ""
+        while true {
+            self.i = skipWhitespace(self.toks[..end], self.i)
+            if self.i >= end {
+                return v
+            }
+            let t = self.toks[self.i]
+            if !isWord(t, "and") && !isWord(t, "or") {
+                self.i = end + 1
+                return false
+            }
+            if op.len > 0 && !text.eqlIgnoreCase(op, t.text) {
+                // `and` and `or` mixed without parentheses.
+                self.i = end + 1
+                return false
+            }
+            op = t.text
+            self.i += 1
+            let w = self.inParens(end)
+            if isWord(t, "and") {
+                v = v && w
+            } else {
+                v = v || w
+            }
+        }
+        return v
+    }
+
+    // `( condition )` or `( feature )`.
+    fn inParens(self: *mut Self, end: usize) bool {
+        self.i = skipWhitespace(self.toks[..end], self.i)
+        if self.i >= end || self.toks[self.i].kind != Tok.LParen {
+            self.i = end + 1
+            return false
+        }
+        let close = blockEnd(self.toks[..end], self.i)
+        let inner = self.toks[self.i + 1..close]
+        self.i = close + 1
+        let k = skipWhitespace(inner, 0)
+        if k < inner.len && (inner[k].kind == Tok.LParen || (isWord(inner[k], "not") && nextIs(inner, k + 1, Tok.LParen))) {
+            var c = Condition { toks: inner, i: k, m: self.m }
+            let ok = c.condition(inner.len)
+            return ok && c.i >= inner.len
+        }
+        return featureMatches(inner, self.m)
+    }
+}
+
+// The comparison operator at `i` (`=`, `<`, `<=`, `>`, `>=`) and the
+// index after it; ":" at `i` when there is none.
+fn operatorAt(toks: []Token, i: usize, op: *mut []u8) usize {
+    if i >= toks.len || toks[i].kind != Tok.Delim {
+        op.* = ""
+        return i
+    }
+    let first = toks[i].delim
+    if first != '<' && first != '>' && first != '=' {
+        op.* = ""
+        return i
+    }
+    var or_equal = false
+    var j = i + 1
+    if j < toks.len && toks[j].kind == Tok.Delim && toks[j].delim == '=' && first != '=' {
+        or_equal = true
+        j += 1
+    }
+    if first == '=' {
+        op.* = "="
+    } else if first == '<' && or_equal {
+        op.* = "<="
+    } else if first == '<' {
+        op.* = "<"
+    } else if or_equal {
+        op.* = ">="
+    } else {
+        op.* = ">"
+    }
+    return j
+}
+
+// `a op b`.
+fn compare(a: f64, op: []u8, b: f64) bool {
+    if text.eql(op, "<") {
+        return a < b
+    }
+    if text.eql(op, "<=") {
+        return a <= b
+    }
+    if text.eql(op, ">") {
+        return a > b
+    }
+    if text.eql(op, ">=") {
+        return a >= b
+    }
+    return a == b
+}
+
+// `op` seen from the other side (`5 < width` is `width > 5`).
+fn flipped(op: []u8) []u8 {
+    if text.eql(op, "<") {
+        return ">"
+    }
+    if text.eql(op, "<=") {
+        return ">="
+    }
+    if text.eql(op, ">") {
+        return "<"
+    }
+    if text.eql(op, ">=") {
+        return "<="
+    }
+    return op
+}
+
+// The inside of `( ... )`: `feature`, `feature: value`, `feature op
+// value`, `value op feature` or `value op feature op value`.
 fn featureMatches(toks: []Token, m: Media) bool {
     var i = skipWhitespace(toks, 0)
-    if i >= toks.len || toks[i].kind != Tok.Ident {
+    if i >= toks.len {
         return false
+    }
+    if toks[i].kind != Tok.Ident {
+        // A range with the value first.
+        let first = toks[i]
+        var op1: []u8 = ""
+        i = skipWhitespace(toks, operatorAt(toks, skipWhitespace(toks, i + 1), &mut op1))
+        if op1.len == 0 || i >= toks.len || toks[i].kind != Tok.Ident {
+            return false
+        }
+        let feature = toks[i].text
+        let actual = rangeValue(feature, m) orelse return false
+        let low = valueOf(feature, first) orelse return false
+        if !compare(actual, flipped(op1), low) {
+            return false
+        }
+        i = skipWhitespace(toks, i + 1)
+        if i >= toks.len {
+            return true
+        }
+        var op2: []u8 = ""
+        i = skipWhitespace(toks, operatorAt(toks, i, &mut op2))
+        if op2.len == 0 || i >= toks.len || skipWhitespace(toks, i + 1) < toks.len {
+            return false
+        }
+        let high = valueOf(feature, toks[i]) orelse return false
+        return compare(actual, op2, high)
     }
     let feature = toks[i].text
     i = skipWhitespace(toks, i + 1)
     if i >= toks.len {
-        // A boolean context: is the feature not zero or `none`?
-        return text.eqlIgnoreCase(feature, "width") || text.eqlIgnoreCase(feature, "height") || text.eqlIgnoreCase(feature, "color") || text.eqlIgnoreCase(feature, "hover") || text.eqlIgnoreCase(feature, "pointer")
+        return booleanFeature(feature)
     }
-    var op: []u8 = ":"
+    var op: []u8 = ""
     if toks[i].kind == Tok.Colon {
+        op = ":"
         i += 1
-    } else if toks[i].kind == Tok.Delim && (toks[i].delim == '<' || toks[i].delim == '>' || toks[i].delim == '=') {
-        let first = toks[i].delim
-        var or_equal = false
-        if i + 1 < toks.len && toks[i + 1].kind == Tok.Delim && toks[i + 1].delim == '=' && first != '=' {
-            or_equal = true
-            i += 1
-        }
-        i += 1
-        if first == '=' {
-            op = "="
-        } else if first == '<' && or_equal {
-            op = "<="
-        } else if first == '<' {
-            op = "<"
-        } else if or_equal {
-            op = ">="
-        } else {
-            op = ">"
-        }
     } else {
-        return false
+        i = operatorAt(toks, i, &mut op)
+        if op.len == 0 {
+            return false
+        }
     }
     i = skipWhitespace(toks, i)
-    if i >= toks.len || skipWhitespace(toks, i + 1) < toks.len {
+    if i >= toks.len {
         return false
     }
+    // `aspect-ratio: 16/9` has three tokens; other values one.
     let v = toks[i]
-    var axis: f64 = -1.0
-    var prefix: []u8 = ""
-    if text.endsWith(feature, "width") {
-        axis = m.width
-        prefix = feature[..feature.len - 5]
-    } else if text.endsWith(feature, "height") {
-        axis = m.height
-        prefix = feature[..feature.len - 6]
+    var ratio_end = i + 1
+    var ratio = -1.0
+    if v.kind == Tok.Number {
+        let slash = skipWhitespace(toks, i + 1)
+        if slash < toks.len && toks[slash].kind == Tok.Delim && toks[slash].delim == '/' {
+            let den = skipWhitespace(toks, slash + 1)
+            if den < toks.len && toks[den].kind == Tok.Number && toks[den].num > 0.0 {
+                ratio = v.num / toks[den].num
+                ratio_end = den + 1
+            }
+        }
     }
-    if axis >= 0.0 {
-        var px = 0.0
-        if mediaLength(v) |l| {
-            px = l
-        } else {
-            return false
-        }
-        if text.eqlIgnoreCase(prefix, "min-") && text.eql(op, ":") {
-            return axis >= px
-        }
-        if text.eqlIgnoreCase(prefix, "max-") && text.eql(op, ":") {
-            return axis <= px
-        }
-        if prefix.len > 0 {
-            return false
-        }
-        if text.eql(op, ":") || text.eql(op, "=") {
-            return axis == px
-        }
-        if text.eql(op, "<") {
-            return axis < px
-        }
-        if text.eql(op, "<=") {
-            return axis <= px
-        }
-        if text.eql(op, ">") {
-            return axis > px
-        }
-        return axis >= px
-    }
-    if !text.eql(op, ":") || v.kind != Tok.Ident {
+    if skipWhitespace(toks, ratio_end) < toks.len {
         return false
     }
-    let word = v.text
+    if text.eql(op, ":") {
+        var prefix: []u8 = ""
+        var name = feature
+        if text.startsWith(name, "-webkit-") {
+            name = name[8..]
+        }
+        if text.startsWith(name, "min-") {
+            prefix = "min-"
+            name = name[4..]
+        } else if text.startsWith(name, "max-") {
+            prefix = "max-"
+            name = name[4..]
+        }
+        if rangeValue(name, m) |actual| {
+            var want = 0.0
+            if ratio >= 0.0 {
+                want = ratio
+            } else if valueOf(name, v) |x| {
+                want = x
+            } else {
+                return false
+            }
+            if prefix.len == 0 {
+                return actual == want
+            }
+            if text.eql(prefix, "min-") {
+                return actual >= want
+            }
+            return actual <= want
+        }
+        if prefix.len > 0 || v.kind != Tok.Ident {
+            return discreteNumber(feature, v)
+        }
+        return discreteFeature(feature, v.text, m)
+    }
+    let actual = rangeValue(feature, m) orelse return false
+    var want = ratio
+    if ratio < 0.0 {
+        want = valueOf(feature, v) orelse return false
+    }
+    return compare(actual, op, want)
+}
+
+// The value of a range feature of the screen (width and height in px,
+// aspect ratios, resolution in dppx); null for other features.
+fn rangeValue(feature: []u8, m: Media) ?f64 {
+    var f = feature
+    if text.startsWith(f, "device-") {
+        f = f[7..]
+    }
+    if text.startsWith(f, "-webkit-") {
+        f = f[8..]
+    }
+    if text.eqlIgnoreCase(f, "width") {
+        return m.width
+    }
+    if text.eqlIgnoreCase(f, "height") {
+        return m.height
+    }
+    if text.eqlIgnoreCase(f, "aspect-ratio") {
+        if m.height <= 0.0 {
+            return null
+        }
+        return m.width / m.height
+    }
+    if text.eqlIgnoreCase(f, "resolution") || text.eqlIgnoreCase(f, "pixel-ratio") {
+        return 1.0
+    }
+    if text.eqlIgnoreCase(f, "color") {
+        return 8.0
+    }
+    if text.eqlIgnoreCase(f, "monochrome") || text.eqlIgnoreCase(f, "color-index") {
+        return 0.0
+    }
+    return null
+}
+
+// A value compared with the range feature `feature`: lengths in px for
+// width and height, resolutions in dppx, plain numbers.
+fn valueOf(feature: []u8, t: Token) ?f64 {
+    if text.endsWith(feature, "width") || text.endsWith(feature, "height") {
+        return mediaLength(t)
+    }
+    if t.kind == Tok.Number {
+        return t.num
+    }
+    if t.kind == Tok.Dimension {
+        if text.eqlIgnoreCase(t.text, "dppx") || text.eqlIgnoreCase(t.text, "x") {
+            return t.num
+        }
+        if text.eqlIgnoreCase(t.text, "dpi") {
+            return t.num / 96.0
+        }
+        if text.eqlIgnoreCase(t.text, "dpcm") {
+            return t.num * 2.54 / 96.0
+        }
+    }
+    return null
+}
+
+// A feature in a boolean context: is it not zero or `none`?
+fn booleanFeature(feature: []u8) bool {
+    let truthy = "width height color hover any-hover pointer any-pointer color-gamut dynamic-range video-dynamic-range display-mode update orientation aspect-ratio resolution"
+    var words = text.split(truthy, " ")
+    while words.next() |w| {
+        if text.eqlIgnoreCase(w, feature) {
+            return true
+        }
+    }
+    return false
+}
+
+// `feature: number` for features that are not ranges (`grid: 0`).
+fn discreteNumber(feature: []u8, v: Token) bool {
+    if text.eqlIgnoreCase(feature, "grid") {
+        return v.kind == Tok.Number && v.num == 0.0
+    }
+    return false
+}
+
+// `feature: keyword`.
+fn discreteFeature(feature: []u8, word: []u8, m: Media) bool {
     if text.eqlIgnoreCase(feature, "orientation") {
         if m.height >= m.width {
             return text.eqlIgnoreCase(word, "portrait")
@@ -171,11 +412,32 @@ fn featureMatches(toks: []Token, m: Media) bool {
     if text.eqlIgnoreCase(feature, "prefers-color-scheme") {
         return text.eqlIgnoreCase(word, "light")
     }
-    if text.eqlIgnoreCase(feature, "hover") {
+    if text.eqlIgnoreCase(feature, "hover") || text.eqlIgnoreCase(feature, "any-hover") {
         return text.eqlIgnoreCase(word, "hover")
     }
-    if text.eqlIgnoreCase(feature, "pointer") {
+    if text.eqlIgnoreCase(feature, "pointer") || text.eqlIgnoreCase(feature, "any-pointer") {
         return text.eqlIgnoreCase(word, "fine")
+    }
+    if text.eqlIgnoreCase(feature, "prefers-reduced-motion") || text.eqlIgnoreCase(feature, "prefers-contrast") || text.eqlIgnoreCase(feature, "prefers-reduced-transparency") || text.eqlIgnoreCase(feature, "prefers-reduced-data") {
+        return text.eqlIgnoreCase(word, "no-preference")
+    }
+    if text.eqlIgnoreCase(feature, "forced-colors") || text.eqlIgnoreCase(feature, "inverted-colors") {
+        return text.eqlIgnoreCase(word, "none")
+    }
+    if text.eqlIgnoreCase(feature, "color-gamut") {
+        return text.eqlIgnoreCase(word, "srgb")
+    }
+    if text.eqlIgnoreCase(feature, "dynamic-range") || text.eqlIgnoreCase(feature, "video-dynamic-range") {
+        return text.eqlIgnoreCase(word, "standard")
+    }
+    if text.eqlIgnoreCase(feature, "display-mode") {
+        return text.eqlIgnoreCase(word, "browser")
+    }
+    if text.eqlIgnoreCase(feature, "update") {
+        return text.eqlIgnoreCase(word, "fast")
+    }
+    if text.eqlIgnoreCase(feature, "scan") {
+        return text.eqlIgnoreCase(word, "progressive")
     }
     return false
 }
