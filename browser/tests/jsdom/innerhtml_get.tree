@@ -1,0 +1,26 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Serializing"
+      "\n"
+    <body>
+      <div id="src" data-x="say \"hi\"">
+        <p id="new">
+          "replaced"
+        <p>
+          "and more"
+        <br>
+        <input type="text" value="v">
+        <!-- c -->
+        <style>
+          "p > b { }"
+        " "
+      "\n"
+      <pre id="out">
+        "<p class=\"a\">x &lt; y &amp; z &gt; w</p><br><input type=\"text\" value=\"v\"><!--c--><style>p > b { }</style>&nbsp;\n<p class=\"a\">x &lt; y &amp; z &gt; w</p>\ntrue\n<p id=\"new\">replaced</p><p>and more</p><\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst src = document.getElementById('src');\nlog(src.innerHTML);\nlog(src.firstChild.outerHTML);\nconst copy = document.createElement('div');\ncopy.innerHTML = src.innerHTML;\nlog(copy.innerHTML === src.innerHTML);\nsrc.firstChild.outerHTML = '<p id=\"new\">replaced</p><p>and more</p>';\nlog(src.innerHTML.slice(0, 40));\n"
+      "\n"

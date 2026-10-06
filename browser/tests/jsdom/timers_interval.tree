@@ -1,0 +1,14 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Intervals"
+      "\n"
+    <body>
+      <pre id="out">
+        "ids are numbers number true\narguments x y\nthree frames\ntick 1 100\nbetween ticks\ntick 2 200\ntick 3 300\nstring callback\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nlet n = 0;\nconst start = performance.now();\nconst id = setInterval(() => {\n  n++;\n  log('tick', n, Math.round(performance.now() - start));\n  if (n === 3) clearInterval(id);\n}, 100);\nsetTimeout(() => log('between ticks'), 150);\nsetTimeout((a, b) => log('arguments', a, b), 5, 'x', 'y');\nconst gone = setTimeout(() => log('cleared: not reached'), 50);\nclearTimeout(gone);\nsetTimeout(\"log('string callback')\", 400);\nlet frames = 0;\nfunction frame() {\n  frames++;\n  if (frames < 3) requestAnimationFrame(frame);\n  else log('three frames');\n}\nrequestAnimationFrame(frame);\nconst raf = requestAnimationFrame(() => log('canceled frame: not reached'));\ncancelAnimationFrame(raf);\nlog('ids are numbers', typeof id, id > 0);\n"
+      "\n"

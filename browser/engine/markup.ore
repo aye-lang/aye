@@ -1,0 +1,188 @@
+// innerHTML and outerHTML: a subtree as HTML (the HTML fragment
+// serialization algorithm, simplified), and HTML parsed into new nodes.
+
+import dom
+import dom.Document
+import dom.Kind
+import dom.NodeId
+import html
+import std.list.List
+import std.mem.AllocError
+import std.text
+
+let VOID_ELEMENTS = "area base basefont bgsound br col embed frame hr img input keygen link meta param source track wbr"
+// Elements whose text is written as it is.
+let RAW_TEXT_ELEMENTS = "style script xmp iframe noembed noframes plaintext noscript"
+
+/// Appends the HTML of the children of `h` to `out`.
+fn serializeChildren(doc: *Document, h: NodeId, out: *mut text.Builder) AllocError!void {
+    var cur = doc.firstChild(h)
+    while cur |c| {
+        try serializeNode(doc, c, out)
+        cur = doc.nextSibling(c)
+    }
+}
+
+/// Appends the HTML of `h` and its descendants to `out`.
+fn serializeNode(doc: *Document, h: NodeId, out: *mut text.Builder) AllocError!void {
+    let n = doc.node(h).*
+    match n.kind {
+        .Element => {
+            try out.appendByte('<')
+            try out.append(n.name)
+            for at in n.attrs {
+                try out.appendByte(' ')
+                try out.append(at.name)
+                try out.append("=\"")
+                try escapeMarkup(at.value, true, out)
+                try out.appendByte('"')
+            }
+            try out.appendByte('>')
+            if html.isIn(n.name, VOID_ELEMENTS) {
+                return
+            }
+            try serializeChildren(doc, h, out)
+            try out.append("</")
+            try out.append(n.name)
+            try out.appendByte('>')
+        }
+        .Text => {
+            var raw = false
+            if n.parent |p| {
+                let pn = doc.node(p)
+                raw = pn.kind == Kind.Element && html.isIn(pn.name, RAW_TEXT_ELEMENTS)
+            }
+            if raw {
+                try out.append(n.data)
+            } else {
+                try escapeMarkup(n.data, false, out)
+            }
+        }
+        .Comment => {
+            try out.append("<!--")
+            try out.append(n.data)
+            try out.append("-->")
+        }
+        .Doctype => {
+            try out.append("<!DOCTYPE ")
+            try out.append(n.name)
+            try out.appendByte('>')
+        }
+        .Document => {
+            try serializeChildren(doc, h, out)
+        }
+    }
+}
+
+// `&`, no-break spaces and, in text, `<` and `>`, or, in an attribute,
+// `"` as character references.
+fn escapeMarkup(s: []u8, attribute: bool, out: *mut text.Builder) AllocError!void {
+    var i: usize = 0
+    while i < s.len {
+        let c = s[i]
+        if c == '&' {
+            try out.append("&amp;")
+        } else if c == 0xC2 && i + 1 < s.len && s[i + 1] == 0xA0 {
+            try out.append("&nbsp;")
+            i += 1
+        } else if attribute && c == '"' {
+            try out.append("&quot;")
+        } else if !attribute && c == '<' {
+            try out.append("&lt;")
+        } else if !attribute && c == '>' {
+            try out.append("&gt;")
+        } else {
+            try out.appendByte(c)
+        }
+        i += 1
+    }
+}
+
+/// Parses `src` as the content of an element named `context` and appends
+/// the new top-level nodes to `out`, in order (in the page's document,
+/// not in the tree yet).
+fn parseFragment(p: *mut Page, context: []u8, src: []u8, out: *mut List(NodeId)) AllocError!void {
+    // Table parts and options need their context to be parsed at all.
+    var path = [3][]u8{"", "", ""}
+    var depth: usize = 0
+    if html.isIn(context, "tbody thead tfoot") {
+        path[0] = "table"
+        path[1] = "tbody"
+        depth = 2
+    } else if text.eql(context, "tr") {
+        path[0] = "table"
+        path[1] = "tbody"
+        path[2] = "tr"
+        depth = 3
+    } else if text.eql(context, "table") || text.eql(context, "select") {
+        path[0] = context
+        depth = 1
+    }
+    var b = text.Builder.init(p.alloc)
+    defer b.deinit()
+    try b.append("<body>")
+    for i in 0..depth {
+        try b.appendByte('<')
+        try b.append(path[i])
+        try b.appendByte('>')
+    }
+    try b.append(src)
+    var tmp = try html.parse(p.alloc, b.bytes())
+    defer tmp.deinit()
+    var box: ?NodeId = null
+    if tmp.documentElement() |root| {
+        box = firstChildNamed(&tmp, root, "body")
+    }
+    for i in 0..depth {
+        if box |at| {
+            box = firstChildNamed(&tmp, at, path[i])
+        }
+    }
+    let top = box orelse return
+    var cur = tmp.firstChild(top)
+    while cur |c| {
+        try out.append(try importNode(&mut p.doc, &tmp, c))
+        cur = tmp.nextSibling(c)
+    }
+}
+
+fn firstChildNamed(doc: *Document, parent: NodeId, name: []u8) ?NodeId {
+    var cur = doc.firstChild(parent)
+    while cur |c| {
+        if doc.isElement(c, name) {
+            return c
+        }
+        cur = doc.nextSibling(c)
+    }
+    return null
+}
+
+/// A copy in `dst` of the node `h` of `src` and its descendants.
+fn importNode(dst: *mut Document, src: *Document, h: NodeId) AllocError!NodeId {
+    let n = src.node(h).*
+    var copy = dst.root
+    match n.kind {
+        .Element => {
+            copy = try dst.createElement(n.name, n.attrs)
+        }
+        .Text => {
+            copy = try dst.createText(n.data)
+        }
+        .Comment => {
+            copy = try dst.createComment(n.data)
+        }
+        .Doctype => {
+            copy = try dst.createDoctype(n.name)
+        }
+        .Document => {
+            return dst.root
+        }
+    }
+    var cur = src.firstChild(h)
+    while cur |c| {
+        let k = try importNode(dst, src, c)
+        dst.appendChild(copy, k)
+        cur = src.nextSibling(c)
+    }
+    return copy
+}

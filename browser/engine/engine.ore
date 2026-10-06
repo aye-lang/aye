@@ -6,6 +6,8 @@
 // - sheets.ore: the author style sheet of a document.
 // - tab.ore: `Tab`: the current page, its scroll offset and history.
 // - hit.ore: what is at a point (links), find in page, fragments.
+// - script.ore (and dom_api, window_api, markup, prelude, activate): the
+//   page's JavaScript and its event loop.
 //
 // A `Page` is allocated on the heap and never moves, because its layout
 // tree points at its document and styles.
@@ -32,6 +34,8 @@ pub struct Styling {
     ua: css.Sheet
     author: css.Sheet
     styles: css.Styles
+    // `domVersion` of the document these styles are for.
+    version: u64
 }
 
 pub struct Page {
@@ -50,10 +54,15 @@ pub struct Page {
     // Set by `layoutPage`.
     styling: ?*mut Styling
     tree: ?*mut layout.Tree
+    // The page's JavaScript (null when scripts are off).
+    script: ?*mut Script
 
     /// Frees the page and everything in it.
     pub fn destroy(self: *mut Self) {
         let alloc = self.alloc
+        if self.script |s| {
+            destroyScript(s)
+        }
         self.dropTree()
         self.dropStyling()
         self.doc.deinit()
@@ -83,12 +92,14 @@ pub struct Page {
     /// Styles and lays out the page for a viewport `width` x `height` CSS
     /// px, measuring text with `measure` (which must outlive the
     /// layout). Style sheets are parsed again when the viewport changed,
-    /// since media queries and `vw`/`vh` depend on it.
+    /// since media queries and `vw`/`vh` depend on it, and after
+    /// scripts changed the document (they may have changed the sheets).
     pub fn layoutPage(self: *mut Self, measure: dyn font.Measurer, width: f64, height: f64) AllocError!void {
         self.dropTree()
+        setViewport(self, width, height)
         var same = false
         if self.styling |st| {
-            same = st.media.width == width && st.media.height == height
+            same = st.media.width == width && st.media.height == height && st.version == domVersion(self)
         }
         if !same {
             self.dropStyling()
@@ -109,6 +120,12 @@ pub struct Page {
     pub fn restyle(self: *mut Self) AllocError!void {
         self.dropTree()
         if self.styling |st| {
+            if st.version != domVersion(self) {
+                // Scripts changed the document: the sheets are parsed
+                // again by the next layout.
+                self.dropStyling()
+                return
+            }
             st.styles.deinit()
             st.styles = try css.Styles.init(self.alloc)
             try css.computeStyles(&self.doc, &st.ua, &st.author, st.media, &mut st.styles)
@@ -119,13 +136,16 @@ pub struct Page {
         var ua = try css.Sheet.init(self.alloc)
         errdefer ua.deinit()
         try css.uaSheet(&mut ua, media)
+        if self.script != null {
+            try css.parseSheet(&mut ua, "noscript { display: none }", media)
+        }
         var author = try css.Sheet.init(self.alloc)
         errdefer author.deinit()
         try authorSheets(self.alloc, &self.doc, &self.url, media, &mut author)
         var styles = try css.Styles.init(self.alloc)
         errdefer styles.deinit()
         try css.computeStyles(&self.doc, &ua, &author, media, &mut styles)
-        return self.alloc.create(Styling { media: media, ua: ua, author: author, styles: styles })
+        return self.alloc.create(Styling { media: media, ua: ua, author: author, styles: styles, version: domVersion(self) })
     }
 }
 
@@ -150,7 +170,14 @@ pub fn load(alloc: Allocator, target: *Url) AllocError!*mut Page {
     defer alloc.free(src)
     var doc = try documentOf(alloc, res.mime, src)
     errdefer doc.deinit()
-    return newPage(alloc, located, res.status, "", doc)
+    let p = try newPage(alloc, located, res.status, "", doc)
+    if scriptingEnabled() && !text.eql(res.mime, "text/plain") {
+        runPageScripts(p) catch |e| {
+            p.destroy()
+            return e
+        }
+    }
+    return p
 }
 
 // The URL after redirects (`moved`, when not empty), else a copy of
@@ -175,6 +202,7 @@ fn newPage(alloc: Allocator, located: Url, status: i64, failure: []u8, doc: Docu
         title: title,
         styling: null,
         tree: null,
+        script: null,
     })
 }
 

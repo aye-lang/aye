@@ -1,0 +1,14 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Promises"
+      "\n"
+    <body>
+      <pre id="out">
+        "sync end\nthen 1\nrejected later\nthen 2\nsettled rejected,fulfilled\nthenable\ncaught boom\nfinally\nafter finally recovered\nrace fast\nall 1,2,3\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nnew Promise(resolve => resolve(1))\n  .then(v => { log('then', v); return v + 1; })\n  .then(v => { log('then', v); throw new Error('boom'); })\n  .catch(e => { log('caught', e.message); return 'recovered'; })\n  .finally(() => log('finally'))\n  .then(v => log('after finally', v));\nPromise.all([1, Promise.resolve(2), new Promise(r => setTimeout(() => r(3), 10))]).then(vs => log('all', vs.join(',')));\nPromise.race([new Promise(r => setTimeout(() => r('slow'), 50)), new Promise(r => setTimeout(() => r('fast'), 5))]).then(v => log('race', v));\nPromise.allSettled([Promise.reject(new Error('no')), Promise.resolve('yes')]).then(rs => log('settled', rs.map(r => r.status).join(',')));\nconst thenable = { then(ok) { ok('thenable'); } };\nPromise.resolve(thenable).then(v => log(v));\nPromise.reject(new Error('later')).catch(e => log('rejected', e.message));\nlog('sync end');\n"
+      "\n"

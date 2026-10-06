@@ -1,0 +1,25 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "cloneNode"
+      "\n"
+    <body>
+      <div id="orig" class="c">
+        <p>
+          "para "
+          <b>
+            "bold"
+      "\n"
+      <div id="copy" class="c">
+        <p>
+          "para "
+          <b>
+            "changed"
+      <pre id="out">
+        "0 1 false false orig\n<p>para <b>bold</b></p> | <p>para <b>changed</b></p> true\nt true false\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst orig = document.getElementById('orig');\nconst shallow = orig.cloneNode();\nconst deep = orig.cloneNode(true);\nlog(shallow.childNodes.length, deep.childNodes.length, deep.isConnected, deep === orig, deep.id);\ndeep.id = 'copy';\ndeep.querySelector('b').textContent = 'changed';\ndocument.body.insertBefore(deep, document.getElementById('out'));\nlog(orig.innerHTML, '|', deep.innerHTML, deep.isConnected);\nconst t = document.createTextNode('t');\nlog(t.cloneNode().data, orig.isSameNode(orig), orig.isSameNode(deep));\n"
+      "\n"

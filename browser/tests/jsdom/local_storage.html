@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<title>localStorage</title>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+localStorage.clear();
+log(localStorage.length, localStorage.getItem('k'));
+localStorage.setItem('k', 'v');
+localStorage.setItem('n', 5);
+localStorage.setItem('k', 'v2');
+log(localStorage.length, localStorage.getItem('k'), typeof localStorage.getItem('n'), localStorage.key(0), localStorage.key(5));
+localStorage.removeItem('k');
+log(localStorage.length, localStorage.getItem('k'));
+sessionStorage.setItem('s', '1');
+log(sessionStorage.getItem('s'), sessionStorage.length);
+</script>

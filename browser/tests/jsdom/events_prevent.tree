@@ -1,0 +1,21 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "preventDefault"
+      "\n"
+    <body>
+      <a id="link" href="elsewhere.html">
+        "go"
+      "\n"
+      <input id="box" type="checkbox">
+      "\n"
+      <input id="box2" type="checkbox" checked="">
+      "\n"
+      <pre id="out">
+        "canceled true true\nnot cancelable false\ndispatch returned false true\nchange true\nchecked false true true\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst link = document.getElementById('link');\nlink.addEventListener('click', e => { e.preventDefault(); log('canceled', e.defaultPrevented, e.cancelable); });\nlink.click();\nconst plain = new Event('x');\nplain.preventDefault();\nlog('not cancelable', plain.defaultPrevented);\nconst c = new Event('y', { cancelable: true });\ndocument.body.addEventListener('y', e => e.preventDefault());\nlog('dispatch returned', document.body.dispatchEvent(c), c.defaultPrevented);\nconst box = document.getElementById('box');\nbox.addEventListener('click', e => e.preventDefault());\nbox.click();\nconst box2 = document.getElementById('box2');\nbox2.addEventListener('change', e => log('change', e.target.checked));\nbox2.click();\nlog('checked', box.checked, box2.checked, location.pathname.endsWith('events_prevent.html'));\n"
+      "\n"

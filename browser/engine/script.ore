@@ -1,0 +1,894 @@
+// The scripts of a page (docs/browser.md, B6): a JavaScript engine per
+// page with the DOM bindings, and the page's event loop.
+//
+// - script.ore: `Script` (the engine of a page and what the bindings
+//   keep), running the page's scripts while it loads, the event loop
+//   (timers, microtasks) and what the front ends call: events from the
+//   user, `eval`, pending navigations, the console.
+// - dom_api.ore: Node, Element, Document and the style and dataset
+//   objects (natives over `Handle(Node)` wrappers).
+// - window_api.ore: the natives the prelude uses for the window (timers,
+//   location, storage, fetch, console).
+// - markup.ore: innerHTML (serializing, and parsing a fragment).
+// - prelude.ore: the JavaScript part of the bindings.
+// - activate.ore: default actions (links, checkboxes, submit events).
+//
+// Wrappers follow design.md's JS boundary: a wrapper holds a node's
+// handle and counts in its `js_refs`; the collector reports a collected
+// wrapper (`finalize`), and a tree out of the document is freed once no
+// node of it is held. Wrappers of nodes in the document (or in a tree
+// that a script still reaches) are kept alive by `trace`, so their
+// listeners and expando properties last as long as their nodes.
+//
+// Simplifications: scripts run after the whole document is parsed (an
+// inline script sees the complete DOM, `document.write` is missing);
+// `async` scripts run like `defer` ones; modules are skipped; a script
+// that never returns hangs the browser. Time is virtual for `dump` and
+// the agent (the event loop jumps to the next timer) and real for the
+// window.
+
+import dom
+import dom.Kind
+import dom.NodeId
+import encoding
+import js
+import js.Interp
+import js.JsError
+import js.Value
+import net
+import std
+import std.list.List
+import std.map.IntMap
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+import std.time
+import url
+
+let TAG_NODE: u32 = 1
+// HOST_NAMED (0x100) | 2 and | 3: properties are the declarations of the
+// `style` attribute, and the `data-*` attributes.
+let TAG_STYLE: u32 = 0x102
+let TAG_DATASET: u32 = 0x103
+
+// Nested calls in page scripts: the main thread's C stack is 8 MB and a
+// call of the tree-walking interpreter takes several KB of it.
+let PAGE_DEPTH: usize = 400
+let MAX_CONSOLE: usize = 1000
+let MAX_MICROTASKS: usize = 100000
+// Timer callbacks one call of the event loop runs at most.
+let MAX_TASKS: usize = 10000
+
+var scripting_on: bool = false
+var real_clock: bool = false
+var echo_console: bool = false
+
+/// Whether pages loaded from now on run their scripts (off by default;
+/// the window, the agent and `dump --js` turn it on).
+pub fn setScripting(on: bool) {
+    scripting_on = on
+}
+
+pub fn scriptingEnabled() bool {
+    return scripting_on
+}
+
+/// Timers follow the real clock (the window) instead of a virtual one
+/// that the event loop advances (`dump`, the agent).
+pub fn setRealClock(on: bool) {
+    real_clock = on
+}
+
+/// Console messages (and alerts, uncaught exceptions) are also written
+/// to stderr as they happen.
+pub fn setConsoleEcho(on: bool) {
+    echo_console = on
+}
+
+struct Wrapper {
+    generation: u32
+    obj: u32
+}
+
+struct Timer {
+    id: u32
+    due: f64
+    interval: f64
+    repeat: bool
+    // requestAnimationFrame: called with the time instead of arguments.
+    raf: bool
+    // The root of the array [callback, ...arguments].
+    root: u32
+    // Breaks ties between timers due at the same time.
+    seq: u64
+}
+
+/// What a script asked the tab to do; the front end does it once the
+/// script returned (`takeNavigation`).
+pub enum NavKind {
+    None
+    To
+    History
+    Reload
+}
+
+pub struct Navigation {
+    kind: NavKind
+    // To: the absolute URL (owned by the script: copy it before
+    // navigating).
+    href: []u8
+    // History: -1 back, 1 forward.
+    step: i64
+}
+
+/// The JavaScript of a page. On the heap, never moved: the engine's host
+/// is a pointer to it.
+pub struct Script {
+    alloc: Allocator
+    page: *mut Page
+    it: Interp
+    // Node index to its wrapper (a node has at most one).
+    wrappers: IntMap(u32, Wrapper)
+    node_proto: u32
+    element_proto: u32
+    document_proto: u32
+    text_proto: u32
+    comment_proto: u32
+    doctype_proto: u32
+    style_proto: u32
+    dataset_proto: u32
+    // The root of the prelude's `hostEvent` (NONE before it ran).
+    dispatcher: u32
+    timers: List(Timer)
+    next_timer: u32
+    seq: u64
+    // Roots of the callbacks queued by queueMicrotask, in order.
+    microtasks: List(u32)
+    // Milliseconds since the page started (see setRealClock).
+    now: f64
+    start_ms: u64
+    real: bool
+    // Messages ("[log] text"), owned, until a front end takes them.
+    console: List([]mut u8)
+    nav_kind: NavKind
+    nav_href: []mut u8
+    nav_step: i64
+    // Counts changes to the document by scripts (styles and layout are
+    // out of date when it moved).
+    version: u64
+    title_version: u64
+    focus: ?NodeId
+    // A script moved the focus (focus(), blur()) since the browser last
+    // asked (scriptMovedFocus).
+    focus_moved: bool
+    // document.readyState: 0 loading, 1 interactive, 2 complete.
+    ready: u8
+    current: ?NodeId
+    width: f64
+    height: f64
+    // Calls from the browser into the page that have not returned
+    // (microtasks run when it is back to 0).
+    depth: u32
+
+    // ---- js.Host
+
+    fn finalize(self: *mut Self, tag: u32, index: u32, generation: u32) {
+        let h = NodeId { index: index, generation: generation }
+        if tag == TAG_NODE {
+            if self.wrappers.get(index) |w| {
+                if w.generation == generation {
+                    self.wrappers.remove(index)
+                }
+            }
+        }
+        let doc = &mut self.page.doc
+        if !doc.isLive(h) {
+            return
+        }
+        let n = doc.node(h)
+        if n.js_refs > 0 {
+            n.js_refs -= 1
+        }
+        if n.js_refs == 0 {
+            doc.releaseIfUnused(h)
+        }
+    }
+
+    // Marks the wrappers of nodes in the document, and of nodes in trees
+    // that a marked wrapper's node is in (a script can walk to them).
+    fn trace(self: *mut Self, it: *mut Interp) bool {
+        let doc = &self.page.doc
+        var live = IntMap(u32, bool).init(self.alloc)
+        defer live.deinit()
+        live.put(doc.root.index, true) catch |e| {
+            return false
+        }
+        var all = self.wrappers.iterator()
+        while all.next() |w| {
+            let h = NodeId { index: w.key, generation: w.value.generation }
+            if js.gcMarked(it, w.value.obj) && doc.isLive(h) {
+                live.put(doc.treeRoot(h).index, true) catch |e| {
+                    return false
+                }
+            }
+        }
+        var marked = false
+        var rest = self.wrappers.iterator()
+        while rest.next() |w| {
+            let h = NodeId { index: w.key, generation: w.value.generation }
+            if !js.gcMarked(it, w.value.obj) && doc.isLive(h) && live.contains(doc.treeRoot(h).index) {
+                js.gcMark(it, w.value.obj)
+                marked = true
+            }
+        }
+        return marked
+    }
+
+    fn getNamed(self: *mut Self, it: *mut Interp, o: u32, key: u32) JsError!Value {
+        return namedGet(self, o, key)
+    }
+
+    fn setNamed(self: *mut Self, it: *mut Interp, o: u32, key: u32, v: Value) JsError!bool {
+        return namedSet(self, o, key, v)
+    }
+}
+
+/// The script of the native function's engine.
+fn scriptOf(it: *mut Interp) *mut Script {
+    return @ptrCast(*mut Script, it.host_data.?)
+}
+
+// ---- creating and freeing
+
+fn createScript(p: *mut Page) AllocError!*mut Script {
+    let alloc = p.alloc
+    var interp = Interp.create(alloc) catch |e| {
+        return AllocError.OutOfMemory
+    }
+    let s = alloc.create(Script {
+        alloc: alloc,
+        page: p,
+        it: interp,
+        wrappers: IntMap(u32, Wrapper).init(alloc),
+        node_proto: js.NONE,
+        element_proto: js.NONE,
+        document_proto: js.NONE,
+        text_proto: js.NONE,
+        comment_proto: js.NONE,
+        doctype_proto: js.NONE,
+        style_proto: js.NONE,
+        dataset_proto: js.NONE,
+        dispatcher: js.NONE,
+        timers: List(Timer).init(alloc),
+        next_timer: 1,
+        seq: 0,
+        microtasks: List(u32).init(alloc),
+        now: 0.0,
+        start_ms: time.monotonicMs(),
+        real: real_clock,
+        console: List([]mut u8).init(alloc),
+        nav_kind: NavKind.None,
+        nav_href: try alloc.alloc(0 as u8, 0),
+        nav_step: 0,
+        version: 0,
+        title_version: 0,
+        focus: null,
+        focus_moved: false,
+        ready: 0,
+        current: null,
+        width: 800.0,
+        height: 600.0,
+        depth: 0,
+    }) catch |e| {
+        interp.deinit()
+        return e
+    }
+    s.it.host = s
+    s.it.host_data = @ptrCast([*]u8, s)
+    s.it.max_depth = PAGE_DEPTH
+    useStorage(alloc)
+    setUp(s) catch |e| {
+        match e {
+            .OutOfMemory => {
+                destroyScript(s)
+                return AllocError.OutOfMemory
+            }
+            _ => {
+                // The prelude threw: a bug of the browser. The page runs
+                // without (some of) the bindings.
+                try reportException(s)
+            }
+        }
+    }
+    return s
+}
+
+fn setUp(s: *mut Script) JsError!void {
+    try js.installBuiltins(&mut s.it)
+    if js.gcStressRequested() {
+        s.it.heap.threshold = 1
+    }
+    try installDom(s)
+    try installWindow(s)
+    try s.it.runScript(PRELUDE)
+}
+
+/// Frees the script of a page (before its document).
+pub fn destroyScript(s: *mut Script) {
+    s.it.host = null
+    s.it.deinit()
+    s.wrappers.deinit()
+    s.timers.deinit()
+    s.microtasks.deinit()
+    for line in s.console.items() {
+        s.alloc.free(line)
+    }
+    s.console.deinit()
+    s.alloc.free(s.nav_href)
+    releaseStorage()
+    s.alloc.destroy(s)
+}
+
+// ---- running the scripts of a page
+
+/// Runs the scripts of a page that was just loaded, in document order
+/// (external ones with `defer` or `async` last), then fires
+/// DOMContentLoaded and load. Timers stay pending for the event loop.
+pub fn runPageScripts(p: *mut Page) AllocError!void {
+    let s = try createScript(p)
+    p.script = s
+    var all = List(NodeId).init(p.alloc)
+    defer all.deinit()
+    var cur: ?NodeId = p.doc.root
+    while cur |h| {
+        if p.doc.isElement(h, "script") && isClassicScript(p, h) {
+            try all.append(h)
+        }
+        cur = p.doc.following(h, p.doc.root)
+    }
+    var later = List(NodeId).init(p.alloc)
+    defer later.deinit()
+    for el in all.items() {
+        let external = p.doc.attr(el, "src") != null
+        if external && (p.doc.attr(el, "defer") != null || p.doc.attr(el, "async") != null) {
+            try later.append(el)
+        } else {
+            try runScriptElement(s, el)
+        }
+    }
+    s.ready = 1
+    for el in later.items() {
+        try runScriptElement(s, el)
+    }
+    try fireLoadEvent(s, p.doc.root, "DOMContentLoaded")
+    s.ready = 2
+    try fireLoadEvent(s, null, "load")
+    try afterTask(s)
+}
+
+// Is the `script` element `el` a classic script (JavaScript, not a
+// module or data)?
+fn isClassicScript(p: *mut Page, el: NodeId) bool {
+    if p.doc.attr(el, "type") |raw| {
+        let t = text.trim(raw)
+        if t.len == 0 {
+            return true
+        }
+        var lower = [32]u8{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+        if t.len > lower.len {
+            return false
+        }
+        for i, c in t {
+            lower[i] = c
+        }
+        text.toLower(lower[0..t.len])
+        let name = lower[0..t.len]
+        return text.eql(name, "text/javascript") || text.eql(name, "application/javascript") || text.eql(name, "text/ecmascript") || text.eql(name, "application/x-javascript")
+    }
+    return true
+}
+
+fn runScriptElement(s: *mut Script, el: NodeId) AllocError!void {
+    let p = s.page
+    if !p.doc.isLive(el) {
+        return
+    }
+    if p.doc.attr(el, "src") |src| {
+        let target = url.resolve(s.alloc, &p.url, text.trim(src)) catch |e| {
+            return addConsole(s, "[error] Failed to load script: ", src)
+        }
+        defer target.deinit(s.alloc)
+        let res = net.fetch(s.alloc, &target) catch |e| {
+            match e {
+                .OutOfMemory => {
+                    return AllocError.OutOfMemory
+                }
+                _ => {}
+            }
+            return addConsole(s, "[error] Failed to load script: ", target.href)
+        }
+        defer res.deinit(s.alloc)
+        let code = try encoding.toUtf8(s.alloc, res.body, encoding.sniff(res.body, res.charset))
+        defer s.alloc.free(code)
+        return runSourceOf(s, el, code)
+    }
+    var b = text.Builder.init(s.alloc)
+    defer b.deinit()
+    try p.doc.textContent(el, &mut b)
+    return runSourceOf(s, el, b.bytes())
+}
+
+fn runSourceOf(s: *mut Script, el: NodeId, code: []u8) AllocError!void {
+    s.current = el
+    s.depth += 1
+    s.it.runScript(code) catch |e| {
+        s.depth -= 1
+        s.current = null
+        try uncaught(s, e)
+        return runMicrotasks(s)
+    }
+    s.depth -= 1
+    s.current = null
+    try runMicrotasks(s)
+}
+
+// Fires DOMContentLoaded on the document, or load on the window (`at`
+// null).
+fn fireLoadEvent(s: *mut Script, at: ?NodeId, name: []u8) AllocError!void {
+    if s.dispatcher == js.NONE {
+        return
+    }
+    let it = &mut s.it
+    let base = it.stack.len()
+    try jsPush(s, it.roots.items()[s.dispatcher])
+    try jsPush(s, Value.Undefined)
+    if at |h| {
+        try jsPush(s, try wrapFor(s, h))
+    } else {
+        try jsPush(s, js.objVal(it.global))
+    }
+    try jsPush(s, try stringFor(s, name))
+    try callReported(s, base, 2)
+    try runMicrotasks(s)
+}
+
+// ---- calling into the engine
+
+fn jsPush(s: *mut Script, v: Value) AllocError!void {
+    s.it.push(v) catch |e| {
+        return AllocError.OutOfMemory
+    }
+}
+
+fn wrapFor(s: *mut Script, h: NodeId) AllocError!Value {
+    return wrap(&mut s.it, h) catch |e| {
+        return AllocError.OutOfMemory
+    }
+}
+
+fn stringFor(s: *mut Script, b: []u8) AllocError!Value {
+    return s.it.newString(b) catch |e| {
+        return AllocError.OutOfMemory
+    }
+}
+
+// Calls stack[base] with `this` and argc arguments after it, as a call
+// from the browser: an uncaught exception is reported. Null after an
+// exception.
+fn callReported(s: *mut Script, base: usize, argc: usize) AllocError!?Value {
+    s.depth += 1
+    let r = s.it.callAt(base, argc) catch |e| {
+        s.depth -= 1
+        try uncaught(s, e)
+        return null
+    }
+    s.depth -= 1
+    return r
+}
+
+fn uncaught(s: *mut Script, e: JsError) AllocError!void {
+    match e {
+        .OutOfMemory => {
+            return AllocError.OutOfMemory
+        }
+        _ => {}
+    }
+    return reportException(s)
+}
+
+// Logs the pending exception: "[error] Uncaught TypeError: ...".
+fn reportException(s: *mut Script) AllocError!void {
+    var b = text.Builder.init(s.alloc)
+    defer b.deinit()
+    js.describeException(&mut s.it, &mut b) catch |e| {
+        return AllocError.OutOfMemory
+    }
+    s.it.exception = Value.Undefined
+    return addConsole(s, "[error] ", b.bytes())
+}
+
+/// Adds a console message: `kind` ("[log] ") then `msg`.
+fn addConsole(s: *mut Script, kind: []u8, msg: []u8) AllocError!void {
+    var b = text.Builder.init(s.alloc)
+    defer b.deinit()
+    try b.append(kind)
+    try b.append(msg)
+    if echo_console {
+        try b.appendByte('\n')
+        std.fs.stderr().write(b.bytes()) catch |e| {}
+        b.clear()
+        try b.append(kind)
+        try b.append(msg)
+    }
+    if s.console.len() >= MAX_CONSOLE {
+        s.alloc.free(s.console.orderedRemove(0))
+    }
+    try s.console.append(try b.toOwned())
+}
+
+// ---- the event loop
+
+fn runMicrotasks(s: *mut Script) AllocError!void {
+    if s.depth > 0 {
+        return
+    }
+    var head: usize = 0
+    while head < s.microtasks.len() {
+        let r = s.microtasks.items()[head]
+        head += 1
+        let f = s.it.roots.items()[r]
+        s.it.removeRoot(r)
+        if head > MAX_MICROTASKS {
+            continue
+        }
+        let base = s.it.stack.len()
+        try jsPush(s, f)
+        try jsPush(s, Value.Undefined)
+        try callReported(s, base, 0)
+    }
+    if head > MAX_MICROTASKS {
+        try addConsole(s, "[error] ", "too many microtasks: the rest were dropped")
+    }
+    s.microtasks.clear()
+}
+
+fn tick(s: *mut Script) {
+    if s.real {
+        s.now = (time.monotonicMs() - s.start_ms) as f64
+    }
+}
+
+// The timer due first (by time, then by order of scheduling), if it is
+// due at `limit` or before.
+fn earliest(s: *mut Script, limit: f64) ?usize {
+    var best: ?usize = null
+    for i, t in s.timers.items() {
+        if t.due > limit {
+            continue
+        }
+        if best |b| {
+            let o = s.timers.items()[b]
+            if t.due < o.due || (t.due == o.due && t.seq < o.seq) {
+                best = i
+            }
+        } else {
+            best = i
+        }
+    }
+    return best
+}
+
+fn runTimer(s: *mut Script, i: usize) AllocError!void {
+    let t = s.timers.items()[i]
+    if t.repeat {
+        var next = t.due + t.interval
+        if next <= s.now {
+            next = s.now + t.interval
+        }
+        s.timers.items()[i].due = next
+        s.timers.items()[i].seq = s.seq
+        s.seq += 1
+    } else {
+        s.timers.orderedRemove(i)
+    }
+    if !s.real && t.due > s.now {
+        s.now = t.due
+    }
+    let it = &mut s.it
+    let base = it.stack.len()
+    let arr = it.roots.items()[t.root]
+    try jsPush(s, arr)
+    let o = js.objectOf(arr)
+    let n = it.heap.obj(o).nelems
+    try jsPush(s, it.heap.obj(o).elems[0])
+    try jsPush(s, js.objVal(it.global))
+    var argc: usize = 0
+    if t.raf {
+        try jsPush(s, js.numVal(s.now))
+        argc = 1
+    } else {
+        for k in 1..n {
+            try jsPush(s, it.heap.obj(o).elems[k])
+            argc += 1
+        }
+    }
+    if !t.repeat {
+        it.removeRoot(t.root)
+    }
+    try callReported(s, base + 1, argc)
+    it.truncate(base)
+    try runMicrotasks(s)
+}
+
+fn removeTimer(s: *mut Script, id: u32) {
+    for i, t in s.timers.items() {
+        if t.id == id {
+            s.it.removeRoot(t.root)
+            s.timers.orderedRemove(i)
+            return
+        }
+    }
+}
+
+// After the browser ran scripts: the title follows the document.
+fn afterTask(s: *mut Script) AllocError!void {
+    if s.title_version == s.version {
+        return
+    }
+    s.title_version = s.version
+    let p = s.page
+    let t = try titleOf(p.alloc, &p.doc)
+    p.alloc.free(p.title)
+    p.title = t
+}
+
+/// Runs the timers that are due (and their microtasks); true if any
+/// ran.
+pub fn runDueTimers(p: *mut Page) AllocError!bool {
+    let s = p.script orelse return false
+    tick(s)
+    var ran: usize = 0
+    while earliest(s, s.now) |i| {
+        try runTimer(s, i)
+        ran += 1
+        if ran >= MAX_TASKS {
+            break
+        }
+        tick(s)
+    }
+    try afterTask(s)
+    return ran > 0
+}
+
+/// Runs the first timer due before `deadline` (ms on the page's clock),
+/// moving the virtual clock to it. False when there is none.
+pub fn runNextTimer(p: *mut Page, deadline: f64) AllocError!bool {
+    let s = p.script orelse return false
+    tick(s)
+    let i = earliest(s, deadline) orelse return false
+    try runTimer(s, i)
+    try afterTask(s)
+    return true
+}
+
+/// The page's clock, in ms since it started.
+pub fn pageClock(p: *mut Page) f64 {
+    if p.script |s| {
+        tick(s)
+        return s.now
+    }
+    return 0.0
+}
+
+/// Moves the virtual clock forward to `t` (after the timers before it
+/// ran).
+pub fn setPageClock(p: *mut Page, t: f64) {
+    if p.script |s| {
+        if !s.real && t > s.now {
+            s.now = t
+        }
+    }
+}
+
+/// Advances the virtual clock by `ms`, running the timers due on the way.
+pub fn advanceClock(p: *mut Page, ms: f64) AllocError!void {
+    let end = pageClock(p) + ms
+    var n: usize = 0
+    while n < MAX_TASKS && try runNextTimer(p, end) {
+        n += 1
+    }
+    setPageClock(p, end)
+}
+
+/// Runs timers until none is left or `max_ms` of the page's time
+/// passed (the virtual clock jumps from one timer to the next).
+pub fn runUntilIdle(p: *mut Page, max_ms: f64) AllocError!void {
+    let end = pageClock(p) + max_ms
+    var n: usize = 0
+    while n < MAX_TASKS && try runNextTimer(p, end) {
+        n += 1
+    }
+}
+
+/// Milliseconds until the next timer is due (0 when one is due); null
+/// when there is none.
+pub fn msUntilNextTimer(p: *mut Page) ?f64 {
+    let s = p.script orelse return null
+    tick(s)
+    let i = earliest(s, 1.0e300) orelse return null
+    let d = s.timers.items()[i].due - s.now
+    if d < 0.0 {
+        return 0.0
+    }
+    return d
+}
+
+// ---- what the front ends call
+
+/// Does the page run scripts?
+pub fn hasScripts(p: *Page) bool {
+    return p.script != null
+}
+
+/// Counts the changes scripts made to the document: when it moved since
+/// the last layout, the page needs styling and layout again.
+pub fn domVersion(p: *Page) u64 {
+    if p.script |s| {
+        return s.version
+    }
+    return 0
+}
+
+/// The size of the viewport, for innerWidth and innerHeight.
+pub fn setViewport(p: *mut Page, width: f64, height: f64) {
+    if p.script |s| {
+        s.width = width
+        s.height = height
+    }
+}
+
+/// Fires an event of the user (`click`, `keydown` with `key`, `input`,
+/// `change`, `submit`, `focus`...) at `target`, as the prelude's
+/// `hostEvent` makes it, and runs the microtasks. False when a listener
+/// canceled it (preventDefault): skip the default action.
+pub fn dispatchEvent(p: *mut Page, target: NodeId, kind: []u8, key: []u8) AllocError!bool {
+    let s = p.script orelse return true
+    if s.dispatcher == js.NONE || !p.doc.isLive(target) {
+        return true
+    }
+    let it = &mut s.it
+    let base = it.stack.len()
+    try jsPush(s, it.roots.items()[s.dispatcher])
+    try jsPush(s, Value.Undefined)
+    try jsPush(s, try wrapFor(s, target))
+    try jsPush(s, try stringFor(s, kind))
+    if key.len > 0 {
+        try jsPush(s, try stringFor(s, key))
+    } else {
+        try jsPush(s, Value.Undefined)
+    }
+    let r = try callReported(s, base, 3)
+    try runMicrotasks(s)
+    try afterTask(s)
+    if r |v| {
+        return s.it.toBoolean(v)
+    }
+    return true
+}
+
+/// Runs `src` as a script of the page and writes the value of its last
+/// expression to `out` (a string as it is, anything else as
+/// console.log shows it), or the uncaught exception. False for an
+/// exception, or when the page has no scripts.
+pub fn evalInPage(p: *mut Page, src: []u8, out: *mut text.Builder) AllocError!bool {
+    let s = p.script orelse {
+        try out.append("scripts do not run on this page")
+        return false
+    }
+    s.depth += 1
+    let v = s.it.evalScript(src) catch |e| {
+        s.depth -= 1
+        match e {
+            .OutOfMemory => {
+                return AllocError.OutOfMemory
+            }
+            _ => {}
+        }
+        js.describeException(&mut s.it, out) catch |err| {
+            return AllocError.OutOfMemory
+        }
+        s.it.exception = Value.Undefined
+        try runMicrotasks(s)
+        try afterTask(s)
+        return false
+    }
+    s.depth -= 1
+    try jsPush(s, v)
+    if js.isStr(v) {
+        try out.append(s.it.heap.bytes(js.strOf(v)))
+    } else {
+        js.inspectTop(&mut s.it, out, v) catch |e| {
+            return AllocError.OutOfMemory
+        }
+    }
+    s.it.pop()
+    try runMicrotasks(s)
+    try afterTask(s)
+    return true
+}
+
+/// The navigation a script asked for (location.href = ..., history.back(),
+/// location.reload()), once: the next call says None.
+pub fn takeNavigation(p: *mut Page) Navigation {
+    if p.script |s| {
+        let n = Navigation { kind: s.nav_kind, href: s.nav_href, step: s.nav_step }
+        s.nav_kind = NavKind.None
+        return n
+    }
+    return Navigation { kind: NavKind.None, href: "", step: 0 }
+}
+
+/// The element scripts focused (focus()), if it is still there.
+pub fn scriptFocus(p: *mut Page) ?NodeId {
+    if p.script |s| {
+        if s.focus |f| {
+            if p.doc.isLive(f) {
+                return f
+            }
+        }
+    }
+    return null
+}
+
+/// Did a script move the focus (focus(), blur()) since the last call?
+/// Then `scriptFocus` is where it is now.
+pub fn scriptMovedFocus(p: *mut Page) bool {
+    if p.script |s| {
+        let moved = s.focus_moved
+        s.focus_moved = false
+        return moved
+    }
+    return false
+}
+
+/// Tells the scripts which element has the focus (document.activeElement).
+pub fn setScriptFocus(p: *mut Page, el: ?NodeId) {
+    if p.script |s| {
+        s.focus = el
+    }
+}
+
+/// Moves the console messages (oldest first) into `out`, as copies in
+/// `tmp`.
+pub fn takeConsole(p: *mut Page, tmp: Allocator, out: *mut List([]u8)) AllocError!void {
+    let s = p.script orelse return
+    for line in s.console.items() {
+        let copy = try tmp.alloc(0 as u8, line.len)
+        std.mem.copy(copy, line)
+        try out.append(copy)
+        s.alloc.free(line)
+    }
+    s.console.clear()
+}
+
+/// Is `sel` a valid CSS selector list?
+pub fn isSelector(p: *mut Page, sel: []u8) AllocError!bool {
+    var parsed = try parseSelector(p, sel) orelse return false
+    parsed.sheet.deinit()
+    return true
+}
+
+/// The first element matching the CSS selector `sel`; null when there is
+/// none or `sel` is not a selector.
+pub fn querySelectorIn(p: *mut Page, sel: []u8) AllocError!?NodeId {
+    var parsed = try parseSelector(p, sel) orelse return null
+    defer parsed.sheet.deinit()
+    var cur = p.doc.following(p.doc.root, p.doc.root)
+    while cur |h| {
+        if p.doc.node(h).kind == Kind.Element && selectorMatches(&parsed, &p.doc, h) {
+            return h
+        }
+        cur = p.doc.following(h, p.doc.root)
+    }
+    return null
+}

@@ -1,7 +1,7 @@
 // anyknown: a web browser in Ore (see docs/browser.md).
 //
 //     anyknown [open] FILE|URL [--width W] [--height H] [--font fixed|system]
-//     anyknown dump --tree [--id ID | --tag NAME] FILE|URL
+//     anyknown dump --tree [--js] [--id ID | --tag NAME] FILE|URL
 //     anyknown dump --text [--id ID | --tag NAME] FILE|URL
 //     anyknown dump --style [--width PX] [--id ID | --tag NAME] FILE|URL
 //     anyknown dump --layout [--width PX] [--font fixed|system] FILE|URL
@@ -16,7 +16,9 @@
 // (layout_dump.ore), measuring text with the fixed-metric test font or
 // with the system's fonts. `screenshot` paints the page into a PNG
 // (shot.ore). Without a subcommand (or with `open`), the page opens in a
-// window (ui/).
+// window (ui/). `--js` runs the page's scripts first, and the event loop
+// until no timer is left (at most 30 s of the page's virtual time);
+// console messages go to stderr.
 //
 // For AI agents (browser/agent, docs/agent-protocol.md):
 //
@@ -30,6 +32,7 @@ import css
 import dom
 import dom.NodeId
 import encoding
+import engine
 import html
 import js
 import net
@@ -41,7 +44,7 @@ import ui
 import url
 import url.Url
 
-let USAGE = "usage: anyknown dump --tree|--text|--style|--layout [--width PX] [--font fixed|system] [--id ID | --tag NAME] FILE|URL"
+let USAGE = "usage: anyknown dump --tree|--text|--style|--layout [--js] [--width PX] [--font fixed|system] [--id ID | --tag NAME] FILE|URL"
 let USAGE_ALL = "usage: anyknown [open] FILE|URL | dump --tree|--text|--style|--layout|--a11y|--md ... FILE|URL | screenshot FILE|URL -o OUT.png | js FILE | agent | mcp"
 
 pub fn main() {
@@ -99,6 +102,7 @@ struct Options {
     style: bool
     layout: bool
     system_font: bool
+    js: bool
     width: f64
     id: []u8
     tag: []u8
@@ -106,7 +110,7 @@ struct Options {
 }
 
 fn options(args: [][]u8) ?Options {
-    var o = Options { tree: false, style: false, layout: false, system_font: false, width: 800.0, id: "", tag: "", target: "" }
+    var o = Options { tree: false, style: false, layout: false, system_font: false, js: false, width: 800.0, id: "", tag: "", target: "" }
     var mode = false
     var i: usize = 0
     while i < args.len {
@@ -120,6 +124,8 @@ fn options(args: [][]u8) ?Options {
         } else if text.eql(a, "--layout") {
             o.layout = true
             mode = true
+        } else if text.eql(a, "--js") {
+            o.js = true
         } else if text.eql(a, "--font") && i + 1 < args.len && (text.eql(args[i + 1], "fixed") || text.eql(args[i + 1], "system")) {
             o.system_font = text.eql(args[i + 1], "system")
             i += 1
@@ -149,7 +155,7 @@ fn options(args: [][]u8) ?Options {
 }
 
 fn dump(alloc: Allocator, args: [][]u8) !i32 {
-    var o = Options { tree: false, style: false, layout: false, system_font: false, width: 800.0, id: "", tag: "", target: "" }
+    var o = Options { tree: false, style: false, layout: false, system_font: false, js: false, width: 800.0, id: "", tag: "", target: "" }
     if options(args) |parsed| {
         o = parsed
     } else {
@@ -161,6 +167,9 @@ fn dump(alloc: Allocator, args: [][]u8) !i32 {
         return 1
     }
     defer location.deinit(alloc)
+    if o.js {
+        return dumpScripted(alloc, &o, &location)
+    }
     let res = net.fetch(alloc, &location) catch |e| {
         std.log.err("cannot fetch {}: {}", location.href, net.describe(e))
         return 1
@@ -211,13 +220,55 @@ fn dump(alloc: Allocator, args: [][]u8) !i32 {
         try std.fs.stdout().write(out.bytes())
         return 0
     }
-    for r in roots.items() {
+    try dumpRoots(alloc, &o, &doc, &location, roots.items(), &mut out)
+    try std.fs.stdout().write(out.bytes())
+    return 0
+}
+
+fn dumpRoots(alloc: Allocator, o: *Options, doc: *dom.Document, base: *Url, roots: []NodeId, out: *mut text.Builder) !void {
+    if o.style {
+        return dumpStyles(alloc, doc, base, css.Media { width: o.width, height: 600.0 }, roots, out)
+    }
+    for r in roots {
         if o.tree {
-            try dumpTree(&doc, r, &mut out)
+            try dumpTree(doc, r, out)
         } else {
-            try dumpText(alloc, &doc, r, &mut out)
+            try dumpText(alloc, doc, r, out)
         }
     }
+}
+
+// `dump --js`: the document after its scripts and timers ran.
+fn dumpScripted(alloc: Allocator, o: *Options, location: *Url) !i32 {
+    engine.setScripting(true)
+    engine.setConsoleEcho(true)
+    let p = try engine.load(alloc, location)
+    defer p.destroy()
+    if p.failure.len > 0 {
+        std.log.err("cannot fetch {}: {}", location.href, p.failure)
+        return 1
+    }
+    engine.setViewport(p, o.width, 600.0)
+    try engine.runUntilIdle(p, 30000.0)
+    var roots = List(NodeId).init(alloc)
+    defer roots.deinit()
+    if o.id.len > 0 {
+        if p.doc.getElementById(o.id) |el| {
+            try roots.append(el)
+        }
+    } else if o.tag.len > 0 {
+        try p.doc.getElementsByTagName(o.tag, &mut roots)
+    } else {
+        try roots.append(p.doc.root)
+    }
+    var out = text.Builder.init(alloc)
+    defer out.deinit()
+    if o.layout {
+        let status = try dumpLayout(alloc, &p.doc, &p.url, css.Media { width: o.width, height: 600.0 }, o.system_font, &mut out)
+        try std.fs.stdout().write(out.bytes())
+        return status
+    }
+    try dumpRoots(alloc, o, &p.doc, &p.url, roots.items(), &mut out)
     try std.fs.stdout().write(out.bytes())
     return 0
 }

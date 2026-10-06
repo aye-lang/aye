@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<title>Promises</title>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+new Promise(resolve => resolve(1))
+  .then(v => { log('then', v); return v + 1; })
+  .then(v => { log('then', v); throw new Error('boom'); })
+  .catch(e => { log('caught', e.message); return 'recovered'; })
+  .finally(() => log('finally'))
+  .then(v => log('after finally', v));
+Promise.all([1, Promise.resolve(2), new Promise(r => setTimeout(() => r(3), 10))]).then(vs => log('all', vs.join(',')));
+Promise.race([new Promise(r => setTimeout(() => r('slow'), 50)), new Promise(r => setTimeout(() => r('fast'), 5))]).then(v => log('race', v));
+Promise.allSettled([Promise.reject(new Error('no')), Promise.resolve('yes')]).then(rs => log('settled', rs.map(r => r.status).join(',')));
+const thenable = { then(ok) { ok('thenable'); } };
+Promise.resolve(thenable).then(v => log(v));
+Promise.reject(new Error('later')).catch(e => log('rejected', e.message));
+log('sync end');
+</script>

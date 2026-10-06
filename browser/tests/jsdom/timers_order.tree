@@ -1,0 +1,14 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Timer order"
+      "\n"
+    <body>
+      <pre id="out">
+        "script start\nscript end\nmicrotask 1\nqueueMicrotask\nmicrotask 2\nDOMContentLoaded\nload\ntimeout 0 a\ntimeout 0 b\nmicrotask inside timeout b\ntimeout after load\nnested timeout 0\ntimeout 10\ntimeout 10 second\nanimation frame number\ntimeout 20\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nlog('script start');\nsetTimeout(() => log('timeout 20'), 20);\nsetTimeout(() => log('timeout 0 a'), 0);\nsetTimeout(() => {\n  log('timeout 0 b');\n  Promise.resolve().then(() => log('microtask inside timeout b'));\n  setTimeout(() => log('nested timeout 0'), 0);\n}, 0);\nsetTimeout(() => log('timeout 10'), 10);\nsetTimeout(() => log('timeout 10 second'), 10);\nPromise.resolve().then(() => log('microtask 1')).then(() => log('microtask 2'));\nqueueMicrotask(() => log('queueMicrotask'));\nrequestAnimationFrame(t => log('animation frame', typeof t));\ndocument.addEventListener('DOMContentLoaded', () => log('DOMContentLoaded'));\nwindow.addEventListener('load', () => {\n  log('load');\n  setTimeout(() => log('timeout after load'), 0);\n});\nlog('script end');\n"
+      "\n"

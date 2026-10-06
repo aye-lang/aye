@@ -1,0 +1,14 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "localStorage"
+      "\n"
+    <body>
+      <pre id="out">
+        "0 \n2 v2 string k \n1 \n1 1\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nlocalStorage.clear();\nlog(localStorage.length, localStorage.getItem('k'));\nlocalStorage.setItem('k', 'v');\nlocalStorage.setItem('n', 5);\nlocalStorage.setItem('k', 'v2');\nlog(localStorage.length, localStorage.getItem('k'), typeof localStorage.getItem('n'), localStorage.key(0), localStorage.key(5));\nlocalStorage.removeItem('k');\nlog(localStorage.length, localStorage.getItem('k'));\nsessionStorage.setItem('s', '1');\nlog(sessionStorage.getItem('s'), sessionStorage.length);\n"
+      "\n"

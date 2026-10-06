@@ -1,0 +1,19 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Loading"
+      "\n"
+    <body>
+      <pre id="out">
+        "inline loading\nsecond inline SCRIPT\ndeferred script interactive\nDOMContentLoaded interactive true true\nDOMContentLoaded reaches window\nload complete true\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nlog('inline', document.readyState);\ndocument.addEventListener('DOMContentLoaded', e => log('DOMContentLoaded', document.readyState, e.target === document, e.bubbles));\nwindow.addEventListener('DOMContentLoaded', () => log('DOMContentLoaded reaches window'));\nwindow.addEventListener('load', e => log('load', document.readyState, e.target === window));\ndocument.addEventListener('load', () => log('load must not reach document'));\n"
+      "\n"
+      <script src="scripts/deferred.js" defer="">
+      "\n"
+      <script>
+        "log('second inline', document.currentScript.tagName);"
+      "\n"

@@ -1,0 +1,882 @@
+// The JavaScript that every page runs before its own scripts: events
+// (EventTarget, Event and its subclasses, capture and bubble dispatch,
+// `onclick` properties and attributes), the parts of Node and Element
+// that are easier in JavaScript (append, classList, reflected
+// attributes, `value`), the window (timers, location, history,
+// localStorage, alert), and a Promise with fetch, which the engine
+// lacks. It calls the native functions of the `ak` object
+// (window_api.ore) and hands `hostEvent` to the browser.
+//
+// Ore has no way to embed a file (browser/COMPILER_GAPS.md), so the
+// source is a multi-line string.
+
+pub let PRELUDE =
+    \\(function (ak) {
+    \\const G = globalThis;
+    \\delete G.__ak;
+    \\const ETP = EventTarget.prototype;
+    \\const NodeP = Node.prototype;
+    \\const ElementP = Element.prototype;
+    \\const HTMLP = HTMLElement.prototype;
+    \\
+    \\function hidden(o, k, v) {
+    \\  Object.defineProperty(o, k, { value: v, writable: true, configurable: true });
+    \\}
+    \\function getter(o, k, get, set) {
+    \\  Object.defineProperty(o, k, { get, set, configurable: true });
+    \\}
+    \\function report(e) {
+    \\  ak.report(e);
+    \\}
+    \\
+    \\class DOMException extends Error {
+    \\  constructor(message, name) {
+    \\    super(message === undefined ? '' : String(message));
+    \\    this.name = name === undefined ? 'Error' : String(name);
+    \\  }
+    \\}
+    \\hidden(G, 'DOMException', DOMException);
+    \\
+    \\// ---- events
+    \\
+    \\class Event {
+    \\  constructor(type, init) {
+    \\    init = init || {};
+    \\    this.type = String(type);
+    \\    this.bubbles = !!init.bubbles;
+    \\    this.cancelable = !!init.cancelable;
+    \\    this.composed = !!init.composed;
+    \\    this.defaultPrevented = false;
+    \\    this.target = null;
+    \\    this.currentTarget = null;
+    \\    this.eventPhase = 0;
+    \\    this.isTrusted = false;
+    \\    this.timeStamp = ak.now();
+    \\    hidden(this, '_stop', false);
+    \\    hidden(this, '_stopNow', false);
+    \\    hidden(this, '_path', null);
+    \\  }
+    \\  preventDefault() { if (this.cancelable) this.defaultPrevented = true; }
+    \\  stopPropagation() { this._stop = true; }
+    \\  stopImmediatePropagation() { this._stop = true; this._stopNow = true; }
+    \\  get srcElement() { return this.target; }
+    \\  get returnValue() { return !this.defaultPrevented; }
+    \\  set returnValue(v) { if (!v) this.preventDefault(); }
+    \\  get cancelBubble() { return this._stop; }
+    \\  set cancelBubble(v) { if (v) this._stop = true; }
+    \\  composedPath() { return this._path ? this._path.slice() : []; }
+    \\}
+    \\Event.NONE = 0;
+    \\Event.CAPTURING_PHASE = 1;
+    \\Event.AT_TARGET = 2;
+    \\Event.BUBBLING_PHASE = 3;
+    \\
+    \\class CustomEvent extends Event {
+    \\  constructor(type, init) {
+    \\    super(type, init);
+    \\    this.detail = init && init.detail !== undefined ? init.detail : null;
+    \\  }
+    \\}
+    \\class UIEvent extends Event {
+    \\  constructor(type, init) {
+    \\    super(type, init);
+    \\    this.view = null;
+    \\    this.detail = (init && init.detail) || 0;
+    \\  }
+    \\}
+    \\function modifiers(ev, init) {
+    \\  ev.ctrlKey = !!init.ctrlKey;
+    \\  ev.shiftKey = !!init.shiftKey;
+    \\  ev.altKey = !!init.altKey;
+    \\  ev.metaKey = !!init.metaKey;
+    \\}
+    \\class MouseEvent extends UIEvent {
+    \\  constructor(type, init) {
+    \\    super(type, init);
+    \\    init = init || {};
+    \\    this.clientX = init.clientX || 0;
+    \\    this.clientY = init.clientY || 0;
+    \\    this.button = init.button || 0;
+    \\    this.buttons = init.buttons || 0;
+    \\    this.relatedTarget = init.relatedTarget || null;
+    \\    modifiers(this, init);
+    \\  }
+    \\}
+    \\class KeyboardEvent extends UIEvent {
+    \\  constructor(type, init) {
+    \\    super(type, init);
+    \\    init = init || {};
+    \\    this.key = init.key === undefined ? '' : String(init.key);
+    \\    this.code = init.code === undefined ? '' : String(init.code);
+    \\    this.repeat = !!init.repeat;
+    \\    modifiers(this, init);
+    \\  }
+    \\}
+    \\class FocusEvent extends UIEvent {
+    \\  constructor(type, init) {
+    \\    super(type, init);
+    \\    this.relatedTarget = (init && init.relatedTarget) || null;
+    \\  }
+    \\}
+    \\class InputEvent extends UIEvent {
+    \\  constructor(type, init) {
+    \\    super(type, init);
+    \\    init = init || {};
+    \\    this.data = init.data === undefined ? null : init.data;
+    \\    this.inputType = init.inputType === undefined ? '' : String(init.inputType);
+    \\  }
+    \\}
+    \\for (const c of [Event, CustomEvent, UIEvent, MouseEvent, KeyboardEvent, FocusEvent, InputEvent]) hidden(G, c.name, c);
+    \\
+    \\function listenersOf(t) {
+    \\  let l = t.__listeners;
+    \\  if (!l) {
+    \\    l = [];
+    \\    hidden(t, '__listeners', l);
+    \\  }
+    \\  return l;
+    \\}
+    \\function captureOf(o) {
+    \\  return typeof o === 'boolean' ? o : !!(o && o.capture);
+    \\}
+    \\function addListener(t, type, fn, opts) {
+    \\  if (fn === null || fn === undefined) return;
+    \\  type = String(type);
+    \\  const capture = captureOf(opts);
+    \\  const once = !!(opts && typeof opts === 'object' && opts.once);
+    \\  const ls = listenersOf(t);
+    \\  for (const l of ls) if (l.type === type && l.fn === fn && l.capture === capture) return;
+    \\  ls.push({ type, fn, capture, once, removed: false });
+    \\}
+    \\function removeListener(t, type, fn, opts) {
+    \\  const ls = t.__listeners;
+    \\  if (!ls) return;
+    \\  type = String(type);
+    \\  const capture = captureOf(opts);
+    \\  for (let i = 0; i < ls.length; i++) {
+    \\    const l = ls[i];
+    \\    if (l.type === type && l.fn === fn && l.capture === capture) {
+    \\      l.removed = true;
+    \\      ls.splice(i, 1);
+    \\      return;
+    \\    }
+    \\  }
+    \\}
+    \\
+    \\// Inline handlers: `onclick` properties, and `onclick` attributes compiled
+    \\// when first needed (again when the attribute changes).
+    \\const HANDLERS = 'abort blur change click close contextmenu dblclick error focus input invalid keydown keypress keyup load mousedown mouseenter mouseleave mousemove mouseout mouseover mouseup reset resize scroll select submit toggle wheel'.split(' ');
+    \\function handlerTable(t) {
+    \\  let m = t.__handlers;
+    \\  if (!m) {
+    \\    m = {};
+    \\    hidden(t, '__handlers', m);
+    \\  }
+    \\  return m;
+    \\}
+    \\function attributeOf(t, type) {
+    \\  return typeof t.getAttribute === 'function' ? t.getAttribute('on' + type) : null;
+    \\}
+    \\// The handler set last: by the property, or by the attribute (compiled
+    \\// again when the attribute changes).
+    \\function handlerOf(t, type) {
+    \\  const m = t.__handlers;
+    \\  const e = m && m[type];
+    \\  const src = attributeOf(t, type);
+    \\  if (e && e.prop && e.src === src) return e.fn;
+    \\  if (src === null) return e && e.prop ? e.fn : null;
+    \\  if (e && !e.prop && e.src === src) return e.fn;
+    \\  let fn = null;
+    \\  try {
+    \\    fn = ak.compile(src);
+    \\  } catch (err) {
+    \\    report(err);
+    \\  }
+    \\  handlerTable(t)[type] = { fn, src, prop: false };
+    \\  return fn;
+    \\}
+    \\function setHandler(t, type, v) {
+    \\  handlerTable(t)[type] = { fn: typeof v === 'function' ? v : null, src: attributeOf(t, type), prop: true };
+    \\}
+    \\
+    \\function callListener(fn, t, ev, inline) {
+    \\  try {
+    \\    let r;
+    \\    if (typeof fn === 'function') r = fn.call(t, ev);
+    \\    else if (fn && typeof fn.handleEvent === 'function') r = fn.handleEvent(ev);
+    \\    if (inline && r === false) ev.preventDefault();
+    \\  } catch (e) {
+    \\    report(e);
+    \\  }
+    \\}
+    \\// Calls the capturing (or the other) listeners of `t`; the inline
+    \\// handler counts as a bubbling listener.
+    \\function invoke(t, ev, capture) {
+    \\  ev.currentTarget = t;
+    \\  if (!capture) {
+    \\    const h = handlerOf(t, ev.type);
+    \\    if (h) callListener(h, t, ev, true);
+    \\    if (ev._stopNow) return;
+    \\  }
+    \\  const ls = t.__listeners;
+    \\  if (!ls || ls.length === 0) return;
+    \\  for (const l of ls.slice()) {
+    \\    if (l.removed || l.type !== ev.type || l.capture !== capture) continue;
+    \\    if (l.once) removeListener(t, l.type, l.fn, l.capture);
+    \\    callListener(l.fn, t, ev, false);
+    \\    if (ev._stopNow) return;
+    \\  }
+    \\}
+    \\// Capture from the window down, the target (its capturing listeners
+    \\// first), then bubbling up.
+    \\function dispatch(target, ev) {
+    \\  ev.target = target;
+    \\  ev.defaultPrevented = false;
+    \\  ev._stop = false;
+    \\  ev._stopNow = false;
+    \\  const path = [];
+    \\  for (let n = target; n; n = n.parentNode) path.push(n);
+    \\  if (path[path.length - 1] === document) path.push(G);
+    \\  ev._path = path;
+    \\  for (let i = path.length - 1; i > 0 && !ev._stop; i--) {
+    \\    ev.eventPhase = 1;
+    \\    invoke(path[i], ev, true);
+    \\  }
+    \\  ev.eventPhase = 2;
+    \\  if (!ev._stop) invoke(target, ev, true);
+    \\  if (!ev._stop && !ev._stopNow) invoke(target, ev, false);
+    \\  if (ev.bubbles) {
+    \\    for (let i = 1; i < path.length && !ev._stop; i++) {
+    \\      ev.eventPhase = 3;
+    \\      invoke(path[i], ev, false);
+    \\    }
+    \\  }
+    \\  ev.eventPhase = 0;
+    \\  ev.currentTarget = null;
+    \\  return !ev.defaultPrevented;
+    \\}
+    \\function dispatchChecked(t, ev) {
+    \\  if (!(ev instanceof Event)) throw new TypeError("Failed to execute 'dispatchEvent' on 'EventTarget': parameter 1 is not of type 'Event'.");
+    \\  return dispatch(t, ev);
+    \\}
+    \\
+    \\hidden(ETP, 'addEventListener', function (type, fn, opts) { addListener(this, type, fn, opts); });
+    \\hidden(ETP, 'removeEventListener', function (type, fn, opts) { removeListener(this, type, fn, opts); });
+    \\hidden(ETP, 'dispatchEvent', function (ev) { return dispatchChecked(this, ev); });
+    \\hidden(G, 'addEventListener', function (type, fn, opts) { addListener(G, type, fn, opts); });
+    \\hidden(G, 'removeEventListener', function (type, fn, opts) { removeListener(G, type, fn, opts); });
+    \\hidden(G, 'dispatchEvent', function (ev) { return dispatchChecked(G, ev); });
+    \\for (const type of HANDLERS) {
+    \\  getter(ETP, 'on' + type, function () { return handlerOf(this, type); }, function (v) { setHandler(this, type, v); });
+    \\  getter(G, 'on' + type, function () { return handlerOf(G, type); }, function (v) { setHandler(G, type, v); });
+    \\}
+    \\
+    \\// An event the browser makes (a click, a key, the load of the page).
+    \\function hostEvent(target, type, key, x, y) {
+    \\  let ev;
+    \\  if (type === 'keydown' || type === 'keyup' || type === 'keypress') {
+    \\    ev = new KeyboardEvent(type, { bubbles: true, cancelable: true, key });
+    \\  } else if (type === 'click' || type === 'mousedown' || type === 'mouseup' || type === 'dblclick') {
+    \\    ev = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x || 0, clientY: y || 0, detail: 1 });
+    \\  } else if (type === 'input') {
+    \\    ev = new InputEvent(type, { bubbles: true, data: key === undefined ? null : key, inputType: 'insertText' });
+    \\  } else if (type === 'focus' || type === 'blur') {
+    \\    ev = new FocusEvent(type, {});
+    \\  } else if (type === 'focusin' || type === 'focusout') {
+    \\    ev = new FocusEvent(type, { bubbles: true });
+    \\  } else if (type === 'load') {
+    \\    ev = new Event(type, {});
+    \\  } else {
+    \\    ev = new Event(type, { bubbles: true, cancelable: type === 'submit' || type === 'reset' });
+    \\  }
+    \\  ev.isTrusted = true;
+    \\  return dispatch(target, ev);
+    \\}
+    \\
+    \\// ---- nodes
+    \\
+    \\function toNode(x) {
+    \\  return x instanceof Node ? x : document.createTextNode(String(x));
+    \\}
+    \\hidden(NodeP, 'append', function (...nodes) {
+    \\  for (const n of nodes) this.appendChild(toNode(n));
+    \\});
+    \\hidden(NodeP, 'prepend', function (...nodes) {
+    \\  const first = this.firstChild;
+    \\  for (const n of nodes) this.insertBefore(toNode(n), first);
+    \\});
+    \\hidden(NodeP, 'before', function (...nodes) {
+    \\  const p = this.parentNode;
+    \\  if (!p) return;
+    \\  for (const n of nodes) p.insertBefore(toNode(n), this);
+    \\});
+    \\hidden(NodeP, 'after', function (...nodes) {
+    \\  const p = this.parentNode;
+    \\  if (!p) return;
+    \\  const next = this.nextSibling;
+    \\  for (const n of nodes) p.insertBefore(toNode(n), next);
+    \\});
+    \\hidden(NodeP, 'replaceWith', function (...nodes) {
+    \\  const p = this.parentNode;
+    \\  if (!p) return;
+    \\  const next = this.nextSibling;
+    \\  p.removeChild(this);
+    \\  for (const n of nodes) p.insertBefore(toNode(n), next);
+    \\});
+    \\hidden(NodeP, 'replaceChildren', function (...nodes) {
+    \\  while (this.firstChild) this.removeChild(this.firstChild);
+    \\  for (const n of nodes) this.appendChild(toNode(n));
+    \\});
+    \\hidden(ElementP, 'toggleAttribute', function (name, force) {
+    \\  const has = this.hasAttribute(name);
+    \\  if (force === undefined ? has : !force) {
+    \\    if (has) this.removeAttribute(name);
+    \\    return false;
+    \\  }
+    \\  if (!has) this.setAttribute(name, '');
+    \\  return true;
+    \\});
+    \\function fragmentNodes(context, html) {
+    \\  const box = document.createElement(context);
+    \\  box.innerHTML = html;
+    \\  return box.childNodes;
+    \\}
+    \\hidden(ElementP, 'insertAdjacentHTML', function (where, html) {
+    \\  const parent = this.parentNode;
+    \\  const w = String(where).toLowerCase();
+    \\  const context = (w === 'beforebegin' || w === 'afterend') ? (parent && parent.localName ? parent.localName : 'div') : this.localName;
+    \\  insertAdjacent(this, w, fragmentNodes(context, html));
+    \\});
+    \\hidden(ElementP, 'insertAdjacentElement', function (where, el) {
+    \\  insertAdjacent(this, String(where).toLowerCase(), [el]);
+    \\  return el;
+    \\});
+    \\hidden(ElementP, 'insertAdjacentText', function (where, s) {
+    \\  insertAdjacent(this, String(where).toLowerCase(), [document.createTextNode(String(s))]);
+    \\});
+    \\function insertAdjacent(el, where, nodes) {
+    \\  if (where === 'beforebegin') el.before(...nodes);
+    \\  else if (where === 'afterbegin') el.prepend(...nodes);
+    \\  else if (where === 'beforeend') el.append(...nodes);
+    \\  else if (where === 'afterend') el.after(...nodes);
+    \\  else throw new DOMException("The value provided ('" + where + "') is not one of 'beforeBegin', 'afterBegin', 'beforeEnd', or 'afterEnd'.", 'SyntaxError');
+    \\}
+    \\hidden(HTMLP, 'click', function () {
+    \\  if (this.hasAttribute('disabled') && /^(button|input|select|textarea)$/.test(this.localName)) return;
+    \\  const ev = new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, detail: 1 });
+    \\  if (dispatch(this, ev)) ak.activate(this);
+    \\});
+    \\hidden(HTMLP, 'focus', function () {
+    \\  const prev = ak.focused();
+    \\  if (prev === this) return;
+    \\  ak.setFocus(this);
+    \\  if (prev) {
+    \\    hostEvent(prev, 'blur');
+    \\    hostEvent(prev, 'focusout');
+    \\  }
+    \\  hostEvent(this, 'focus');
+    \\  hostEvent(this, 'focusin');
+    \\});
+    \\hidden(HTMLP, 'blur', function () {
+    \\  if (ak.focused() !== this) return;
+    \\  ak.setFocus(null);
+    \\  hostEvent(this, 'blur');
+    \\  hostEvent(this, 'focusout');
+    \\});
+    \\hidden(ElementP, 'getBoundingClientRect', function () {
+    \\  return { x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 };
+    \\});
+    \\hidden(ElementP, 'scrollIntoView', function () {});
+    \\
+    \\// Attributes reflected as properties.
+    \\function reflect(name, attr) {
+    \\  getter(HTMLP, name, function () {
+    \\    const v = this.getAttribute(attr);
+    \\    return v === null ? '' : v;
+    \\  }, function (v) { this.setAttribute(attr, String(v)); });
+    \\}
+    \\function reflectBool(name, attr) {
+    \\  getter(HTMLP, name, function () { return this.hasAttribute(attr); }, function (v) {
+    \\    if (v) this.setAttribute(attr, '');
+    \\    else this.removeAttribute(attr);
+    \\  });
+    \\}
+    \\function reflectUrl(name) {
+    \\  getter(HTMLP, name, function () {
+    \\    const v = this.getAttribute(name);
+    \\    return v === null ? '' : ak.resolve(v);
+    \\  }, function (v) { this.setAttribute(name, String(v)); });
+    \\}
+    \\for (const n of ['title', 'lang', 'dir', 'name', 'placeholder', 'alt', 'rel', 'target', 'role', 'method', 'accessKey']) reflect(n, n.toLowerCase());
+    \\reflect('htmlFor', 'for');
+    \\reflect('defaultValue', 'value');
+    \\for (const n of ['hidden', 'disabled', 'required', 'multiple', 'autofocus', 'checked', 'selected', 'open']) reflectBool(n, n);
+    \\reflectBool('readOnly', 'readonly');
+    \\reflectBool('defaultChecked', 'checked');
+    \\reflectBool('defaultSelected', 'selected');
+    \\for (const n of ['href', 'src', 'action']) reflectUrl(n);
+    \\getter(HTMLP, 'type', function () {
+    \\  const v = this.getAttribute('type');
+    \\  if (this.localName === 'input') return v === null ? 'text' : v.toLowerCase();
+    \\  if (this.localName === 'button') return v === null ? 'submit' : v.toLowerCase();
+    \\  return v === null ? '' : v;
+    \\}, function (v) { this.setAttribute('type', String(v)); });
+    \\getter(HTMLP, 'tabIndex', function () {
+    \\  const v = this.getAttribute('tabindex');
+    \\  if (v !== null && /^\s*-?\d+\s*$/.test(v)) return parseInt(v, 10);
+    \\  return /^(a|button|input|select|textarea)$/.test(this.localName) ? 0 : -1;
+    \\}, function (v) { this.setAttribute('tabindex', String(v)); });
+    \\function options(sel) {
+    \\  return sel.querySelectorAll('option');
+    \\}
+    \\function selectedOption(sel) {
+    \\  const all = options(sel);
+    \\  for (const o of all) if (o.hasAttribute('selected')) return o;
+    \\  return all.length > 0 ? all[0] : null;
+    \\}
+    \\getter(HTMLP, 'value', function () {
+    \\  const t = this.localName;
+    \\  if (t === 'textarea') return this.textContent;
+    \\  if (t === 'select') {
+    \\    const o = selectedOption(this);
+    \\    return o ? o.value : '';
+    \\  }
+    \\  const v = this.getAttribute('value');
+    \\  if (v !== null) return v;
+    \\  if (t === 'option') return this.textContent.replace(/\s+/g, ' ').trim();
+    \\  if (t === 'input' && /^(checkbox|radio)$/.test(this.type)) return 'on';
+    \\  return '';
+    \\}, function (v) {
+    \\  v = v === null || v === undefined ? '' : String(v);
+    \\  const t = this.localName;
+    \\  if (t === 'textarea') this.textContent = v;
+    \\  else if (t === 'select') {
+    \\    for (const o of options(this)) {
+    \\      if (o.value === v) o.setAttribute('selected', '');
+    \\      else o.removeAttribute('selected');
+    \\    }
+    \\  } else this.setAttribute('value', v);
+    \\});
+    \\getter(HTMLP, 'options', function () { return options(this); });
+    \\getter(HTMLP, 'selectedIndex', function () {
+    \\  const all = options(this);
+    \\  const o = selectedOption(this);
+    \\  return o ? all.indexOf(o) : -1;
+    \\}, function (i) {
+    \\  options(this).forEach((o, j) => {
+    \\    if (j === i) o.setAttribute('selected', '');
+    \\    else o.removeAttribute('selected');
+    \\  });
+    \\});
+    \\getter(HTMLP, 'form', function () { return this.closest('form'); });
+    \\getter(HTMLP, 'text', function () { return this.textContent; }, function (v) { this.textContent = v; });
+    \\getter(HTMLP, 'innerText', function () { return this.textContent; }, function (v) { this.textContent = v; });
+    \\getter(HTMLP, 'outerText', function () { return this.textContent; });
+    \\hidden(HTMLP, 'submit', function () { ak.submit(this); });
+    \\hidden(HTMLP, 'requestSubmit', function () {
+    \\  if (hostEvent(this, 'submit')) ak.submit(this);
+    \\});
+    \\hidden(HTMLP, 'reset', function () { hostEvent(this, 'reset'); });
+    \\hidden(HTMLP, 'select', function () {});
+    \\
+    \\// classList
+    \\class DOMTokenList {
+    \\  constructor(el) { hidden(this, '_el', el); }
+    \\  _get() {
+    \\    const c = this._el.getAttribute('class');
+    \\    return c ? c.split(/[ \t\n\f\r]+/).filter(Boolean) : [];
+    \\  }
+    \\  _set(list) {
+    \\    if (list.length === 0 && !this._el.hasAttribute('class')) return;
+    \\    this._el.setAttribute('class', list.join(' '));
+    \\  }
+    \\  _check(t) {
+    \\    t = String(t);
+    \\    if (t === '') throw new DOMException("The token provided must not be empty.", 'SyntaxError');
+    \\    if (/[ \t\n\f\r]/.test(t)) throw new DOMException("The token provided ('" + t + "') contains HTML space characters, which are not valid in tokens.", 'InvalidCharacterError');
+    \\    return t;
+    \\  }
+    \\  get length() { return this._get().length; }
+    \\  get value() { return this._el.getAttribute('class') || ''; }
+    \\  set value(v) { this._el.setAttribute('class', String(v)); }
+    \\  item(i) {
+    \\    const l = this._get();
+    \\    return i >= 0 && i < l.length ? l[i] : null;
+    \\  }
+    \\  contains(t) { return this._get().includes(String(t)); }
+    \\  add(...tokens) {
+    \\    const l = this._get().filter((x, i, a) => a.indexOf(x) === i);
+    \\    for (const t of tokens) {
+    \\      const c = this._check(t);
+    \\      if (!l.includes(c)) l.push(c);
+    \\    }
+    \\    this._set(l);
+    \\  }
+    \\  remove(...tokens) {
+    \\    const gone = tokens.map(t => this._check(t));
+    \\    this._set(this._get().filter((x, i, a) => !gone.includes(x) && a.indexOf(x) === i));
+    \\  }
+    \\  toggle(t, force) {
+    \\    t = this._check(t);
+    \\    const has = this.contains(t);
+    \\    if (force === undefined ? has : !force) {
+    \\      this.remove(t);
+    \\      return false;
+    \\    }
+    \\    if (!has) this.add(t);
+    \\    return true;
+    \\  }
+    \\  replace(a, b) {
+    \\    a = this._check(a);
+    \\    b = this._check(b);
+    \\    const l = this._get();
+    \\    const i = l.indexOf(a);
+    \\    if (i < 0) return false;
+    \\    l[i] = b;
+    \\    this._set(l.filter((x, j) => l.indexOf(x) === j));
+    \\    return true;
+    \\  }
+    \\  forEach(f, thisArg) { this._get().forEach((t, i) => f.call(thisArg, t, i, this)); }
+    \\  toString() { return this.value; }
+    \\}
+    \\hidden(G, 'DOMTokenList', DOMTokenList);
+    \\getter(ElementP, 'classList', function () {
+    \\  let l = this.__classList;
+    \\  if (!l) {
+    \\    l = new DOMTokenList(this);
+    \\    hidden(this, '__classList', l);
+    \\  }
+    \\  return l;
+    \\}, function (v) { this.setAttribute('class', String(v)); });
+    \\
+    \\// ---- the document
+    \\
+    \\getter(Document.prototype, 'defaultView', function () { return G; });
+    \\getter(Document.prototype, 'location', function () { return location; }, function (v) { location.href = v; });
+    \\getter(Document.prototype, 'URL', function () { return ak.url(); });
+    \\getter(Document.prototype, 'documentURI', function () { return ak.url(); });
+    \\getter(Document.prototype, 'visibilityState', function () { return 'visible'; });
+    \\getter(Document.prototype, 'hidden', function () { return false; });
+    \\let cookies = '';
+    \\getter(Document.prototype, 'cookie', function () { return cookies; }, function (v) {
+    \\  const pair = String(v).split(';')[0];
+    \\  const eq = pair.indexOf('=');
+    \\  const name = eq < 0 ? '' : pair.slice(0, eq).trim();
+    \\  const kept = cookies === '' ? [] : cookies.split('; ').filter(c => c.slice(0, c.indexOf('=')) !== name);
+    \\  kept.push(pair.trim());
+    \\  cookies = kept.join('; ');
+    \\});
+    \\hidden(Document.prototype, 'hasFocus', function () { return true; });
+    \\hidden(Document.prototype, 'createEvent', function () { return new Event(''); });
+    \\hidden(Event.prototype, 'initEvent', function (type, bubbles, cancelable) {
+    \\  this.type = String(type);
+    \\  this.bubbles = !!bubbles;
+    \\  this.cancelable = !!cancelable;
+    \\});
+    \\
+    \\// ---- the window
+    \\
+    \\hidden(G, 'window', G);
+    \\hidden(G, 'self', G);
+    \\hidden(G, 'top', G);
+    \\hidden(G, 'parent', G);
+    \\hidden(G, 'frames', G);
+    \\hidden(G, 'name', '');
+    \\hidden(G, 'closed', false);
+    \\hidden(G, 'devicePixelRatio', 1);
+    \\getter(G, 'innerWidth', function () { return ak.viewport(0); });
+    \\getter(G, 'innerHeight', function () { return ak.viewport(1); });
+    \\getter(G, 'outerWidth', function () { return ak.viewport(0); });
+    \\getter(G, 'outerHeight', function () { return ak.viewport(1); });
+    \\hidden(G, 'scrollX', 0);
+    \\hidden(G, 'scrollY', 0);
+    \\hidden(G, 'pageXOffset', 0);
+    \\hidden(G, 'pageYOffset', 0);
+    \\hidden(G, 'scrollTo', function () {});
+    \\hidden(G, 'scrollBy', function () {});
+    \\hidden(G, 'scroll', function () {});
+    \\hidden(G, 'focus', function () {});
+    \\hidden(G, 'blur', function () {});
+    \\hidden(G, 'navigator', { userAgent: 'Mozilla/5.0 (anyknown)', language: 'en-US', languages: ['en-US', 'en'], onLine: true, cookieEnabled: true, platform: '', vendor: '' });
+    \\hidden(G, 'screen', { width: 1280, height: 800, availWidth: 1280, availHeight: 800, colorDepth: 24, pixelDepth: 24 });
+    \\hidden(G, 'performance', { now: () => ak.now(), timeOrigin: Date.now() });
+    \\
+    \\function messageOf(m) {
+    \\  return m === undefined ? '' : String(m);
+    \\}
+    \\hidden(G, 'alert', function (m) { ak.alert('alert', messageOf(m)); });
+    \\hidden(G, 'confirm', function (m) { ak.alert('confirm', messageOf(m)); return false; });
+    \\hidden(G, 'prompt', function (m) { ak.alert('prompt', messageOf(m)); return null; });
+    \\
+    \\// Timers: the event loop runs them (engine/script.ore).
+    \\function callableOf(fn) {
+    \\  if (typeof fn === 'function') return fn;
+    \\  const src = String(fn);
+    \\  return function () { ak.evalGlobal(src); };
+    \\}
+    \\hidden(G, 'setTimeout', function (fn, ms, ...args) { return ak.setTimer(callableOf(fn), ms, false, args, false); });
+    \\hidden(G, 'setInterval', function (fn, ms, ...args) { return ak.setTimer(callableOf(fn), ms, true, args, false); });
+    \\hidden(G, 'clearTimeout', function (id) { ak.clearTimer(id); });
+    \\hidden(G, 'clearInterval', function (id) { ak.clearTimer(id); });
+    \\hidden(G, 'requestAnimationFrame', function (fn) {
+    \\  if (typeof fn !== 'function') throw new TypeError("Failed to execute 'requestAnimationFrame' on 'Window': The callback provided as parameter 1 is not a function.");
+    \\  return ak.setTimer(fn, 16, false, [], true);
+    \\});
+    \\hidden(G, 'cancelAnimationFrame', function (id) { ak.clearTimer(id); });
+    \\hidden(G, 'queueMicrotask', function (fn) {
+    \\  if (typeof fn !== 'function') throw new TypeError("Failed to execute 'queueMicrotask' on 'Window': The callback provided as parameter 1 is not a function.");
+    \\  ak.queueMicrotask(fn);
+    \\});
+    \\
+    \\// location and history: navigation happens after the script returns.
+    \\const urlParts = ['protocol', 'host', 'hostname', 'port', 'pathname', 'search', 'hash', 'origin'];
+    \\const location = {
+    \\  get href() { return ak.url(); },
+    \\  set href(v) { ak.navigate(String(v)); },
+    \\  assign(v) { ak.navigate(String(v)); },
+    \\  replace(v) { ak.navigate(String(v)); },
+    \\  reload() { ak.reload(); },
+    \\  toString() { return ak.url(); },
+    \\};
+    \\for (const part of urlParts) {
+    \\  getter(location, part, function () { return ak.urlPart(part); }, part === 'hash' ? function (v) {
+    \\    let h = String(v);
+    \\    if (h !== '' && h[0] !== '#') h = '#' + h;
+    \\    ak.navigate(h === '' ? ak.url().split('#')[0] : h);
+    \\  } : undefined);
+    \\}
+    \\getter(G, 'location', function () { return location; }, function (v) { ak.navigate(String(v)); });
+    \\hidden(G, 'history', {
+    \\  back() { ak.historyGo(-1); },
+    \\  forward() { ak.historyGo(1); },
+    \\  go(n) { ak.historyGo(Number(n) || 0); },
+    \\  pushState() {},
+    \\  replaceState() {},
+    \\  get length() { return 1; },
+    \\  state: null,
+    \\});
+    \\
+    \\// localStorage: in memory, per origin, shared by the pages of the process.
+    \\class Storage {
+    \\  constructor(local) { hidden(this, '_local', local); hidden(this, '_items', new Map()); }
+    \\  getItem(k) {
+    \\    k = String(k);
+    \\    if (this._local) return ak.storage(0, k);
+    \\    return this._items.has(k) ? this._items.get(k) : null;
+    \\  }
+    \\  setItem(k, v) {
+    \\    if (this._local) ak.storage(1, String(k), String(v));
+    \\    else this._items.set(String(k), String(v));
+    \\  }
+    \\  removeItem(k) {
+    \\    if (this._local) ak.storage(2, String(k));
+    \\    else this._items.delete(String(k));
+    \\  }
+    \\  clear() {
+    \\    if (this._local) ak.storage(3);
+    \\    else this._items.clear();
+    \\  }
+    \\  key(i) {
+    \\    if (this._local) return ak.storage(4, Number(i));
+    \\    const keys = Array.from(this._items.keys());
+    \\    return i >= 0 && i < keys.length ? keys[i] : null;
+    \\  }
+    \\  get length() { return this._local ? ak.storage(5) : this._items.size; }
+    \\}
+    \\hidden(G, 'Storage', Storage);
+    \\hidden(G, 'localStorage', new Storage(true));
+    \\hidden(G, 'sessionStorage', new Storage(false));
+    \\
+    \\// ---- Promise (the engine has none) and fetch
+    \\
+    \\class Promise {
+    \\  constructor(executor) {
+    \\    if (typeof executor !== 'function') throw new TypeError('Promise resolver ' + executor + ' is not a function');
+    \\    hidden(this, '_state', 0);
+    \\    hidden(this, '_value', undefined);
+    \\    hidden(this, '_reactions', []);
+    \\    const [resolve, reject] = resolvers(this);
+    \\    try {
+    \\      executor(resolve, reject);
+    \\    } catch (e) {
+    \\      reject(e);
+    \\    }
+    \\  }
+    \\  then(onFulfilled, onRejected) {
+    \\    let resolve, reject;
+    \\    const next = new Promise((res, rej) => {
+    \\      resolve = res;
+    \\      reject = rej;
+    \\    });
+    \\    const r = { onFulfilled, onRejected, resolve, reject };
+    \\    if (this._state === 0) this._reactions.push(r);
+    \\    else react(this, r);
+    \\    return next;
+    \\  }
+    \\  catch(onRejected) { return this.then(undefined, onRejected); }
+    \\  finally(f) {
+    \\    if (typeof f !== 'function') return this.then(f, f);
+    \\    return this.then(
+    \\      v => Promise.resolve(f()).then(() => v),
+    \\      e => Promise.resolve(f()).then(() => { throw e; }),
+    \\    );
+    \\  }
+    \\  static resolve(v) {
+    \\    if (v instanceof Promise) return v;
+    \\    return new Promise(res => res(v));
+    \\  }
+    \\  static reject(e) { return new Promise((res, rej) => rej(e)); }
+    \\  static all(items) {
+    \\    return new Promise((resolve, reject) => {
+    \\      const list = Array.from(items);
+    \\      const out = new Array(list.length);
+    \\      let left = list.length;
+    \\      if (left === 0) resolve(out);
+    \\      list.forEach((p, i) => {
+    \\        Promise.resolve(p).then(v => {
+    \\          out[i] = v;
+    \\          if (--left === 0) resolve(out);
+    \\        }, reject);
+    \\      });
+    \\    });
+    \\  }
+    \\  static allSettled(items) {
+    \\    return new Promise(resolve => {
+    \\      const list = Array.from(items);
+    \\      const out = new Array(list.length);
+    \\      let left = list.length;
+    \\      if (left === 0) resolve(out);
+    \\      list.forEach((p, i) => {
+    \\        const done = r => {
+    \\          out[i] = r;
+    \\          if (--left === 0) resolve(out);
+    \\        };
+    \\        Promise.resolve(p).then(value => done({ status: 'fulfilled', value }), reason => done({ status: 'rejected', reason }));
+    \\      });
+    \\    });
+    \\  }
+    \\  static race(items) {
+    \\    return new Promise((resolve, reject) => {
+    \\      for (const p of items) Promise.resolve(p).then(resolve, reject);
+    \\    });
+    \\  }
+    \\  static any(items) {
+    \\    return new Promise((resolve, reject) => {
+    \\      const list = Array.from(items);
+    \\      let left = list.length;
+    \\      if (left === 0) reject(new Error('All promises were rejected'));
+    \\      for (const p of list) Promise.resolve(p).then(resolve, () => {
+    \\        if (--left === 0) reject(new Error('All promises were rejected'));
+    \\      });
+    \\    });
+    \\  }
+    \\}
+    \\// The resolve and reject functions of a promise: the first call wins.
+    \\function resolvers(p) {
+    \\  let done = false;
+    \\  const resolve = v => {
+    \\    if (done) return;
+    \\    done = true;
+    \\    resolveWith(p, v);
+    \\  };
+    \\  const reject = e => {
+    \\    if (done) return;
+    \\    done = true;
+    \\    settle(p, 2, e);
+    \\  };
+    \\  return [resolve, reject];
+    \\}
+    \\function resolveWith(p, v) {
+    \\  if (v === p) return settle(p, 2, new TypeError('Chaining cycle detected for promise #<Promise>'));
+    \\  if (v !== null && (typeof v === 'object' || typeof v === 'function')) {
+    \\    let then;
+    \\    try {
+    \\      then = v.then;
+    \\    } catch (e) {
+    \\      return settle(p, 2, e);
+    \\    }
+    \\    if (typeof then === 'function') {
+    \\      ak.queueMicrotask(() => {
+    \\        const [res, rej] = resolvers(p);
+    \\        try {
+    \\          then.call(v, res, rej);
+    \\        } catch (e) {
+    \\          rej(e);
+    \\        }
+    \\      });
+    \\      return;
+    \\    }
+    \\  }
+    \\  settle(p, 1, v);
+    \\}
+    \\function settle(p, state, v) {
+    \\  if (p._state !== 0) return;
+    \\  p._state = state;
+    \\  p._value = v;
+    \\  const rs = p._reactions;
+    \\  p._reactions = [];
+    \\  for (const r of rs) react(p, r);
+    \\}
+    \\function react(p, r) {
+    \\  ak.queueMicrotask(() => {
+    \\    const f = p._state === 1 ? r.onFulfilled : r.onRejected;
+    \\    if (typeof f !== 'function') {
+    \\      if (p._state === 1) r.resolve(p._value);
+    \\      else r.reject(p._value);
+    \\      return;
+    \\    }
+    \\    let out;
+    \\    try {
+    \\      out = f(p._value);
+    \\    } catch (e) {
+    \\      r.reject(e);
+    \\      return;
+    \\    }
+    \\    r.resolve(out);
+    \\  });
+    \\}
+    \\hidden(G, 'Promise', Promise);
+    \\
+    \\class Headers {
+    \\  constructor(type) { hidden(this, '_type', type); }
+    \\  get(name) { return String(name).toLowerCase() === 'content-type' ? this._type : null; }
+    \\  has(name) { return String(name).toLowerCase() === 'content-type'; }
+    \\}
+    \\class Response {
+    \\  constructor(r) {
+    \\    this.status = r.status;
+    \\    this.ok = r.status >= 200 && r.status < 300;
+    \\    this.statusText = this.ok ? 'OK' : '';
+    \\    this.url = r.url;
+    \\    this.headers = new Headers(r.type);
+    \\    this.bodyUsed = false;
+    \\    hidden(this, '_body', r.body);
+    \\  }
+    \\  text() {
+    \\    this.bodyUsed = true;
+    \\    return Promise.resolve(this._body);
+    \\  }
+    \\  json() {
+    \\    this.bodyUsed = true;
+    \\    return new Promise(resolve => resolve(JSON.parse(this._body)));
+    \\  }
+    \\}
+    \\hidden(G, 'Headers', Headers);
+    \\hidden(G, 'Response', Response);
+    \\// fetch: GET only; the request is made at once (synchronously), the
+    \\// promise settles in a microtask.
+    \\hidden(G, 'fetch', function (input, init) {
+    \\  return new Promise((resolve, reject) => {
+    \\    const method = init && init.method ? String(init.method).toUpperCase() : 'GET';
+    \\    if (method !== 'GET') {
+    \\      reject(new TypeError('Failed to fetch: only GET is supported'));
+    \\      return;
+    \\    }
+    \\    const r = ak.fetch(String(input && input.url !== undefined ? input.url : input));
+    \\    if (r.error !== undefined) reject(new TypeError('Failed to fetch: ' + r.error));
+    \\    else resolve(new Response(r));
+    \\  });
+    \\});
+    \\
+    \\ak.setDispatch(hostEvent);
+    \\})(__ak);

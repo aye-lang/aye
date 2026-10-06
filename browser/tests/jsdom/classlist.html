@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<title>classList</title>
+<style>.big { font-size: 32px } .red { color: red } .gone { display: none } .bold { font-weight: bold }</style>
+<p id="p" class="red gone">text</p>
+<p id="q">other</p>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const p = document.getElementById('p');
+p.classList.add('big', 'bold');
+p.classList.remove('gone');
+log(p.classList.contains('red'), p.classList.length, p.classList.item(0), String(p.classList));
+log(p.classList.toggle('red'), p.classList.toggle('red'), p.classList.toggle('x', false));
+p.classList.replace('bold', 'heavy');
+const q = document.getElementById('q');
+q.classList.remove('nothing');
+log(q.hasAttribute('class'));
+q.classList.toggle('gone');
+try { p.classList.add('has space'); } catch (e) { log(e.name); }
+log(p.className);
+</script>

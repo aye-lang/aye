@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html><head><title>Old title</title></head>
+<body>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+log(document.title);
+document.title = '  New   title ';
+log(JSON.stringify(document.title), document.querySelector('title').textContent);
+log(location.protocol, location.pathname.split('/').pop(), location.search === '', location.hash === '');
+log(location.href === document.URL, typeof history.back, history.length, navigator.userAgent.includes('anyknown'));
+log(window === globalThis, self === window, window.document === document, innerWidth, innerHeight);
+</script>
+</body></html>
