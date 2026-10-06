@@ -410,6 +410,7 @@ pub let LIB =
     \\// in order; inside, `await` and `yield` both stop `g` (kindOf tells
     \\// which).
     \\const kindOf = G.__engine.kindOf;
+    \\const engineConstruct = G.__engine.construct;
     \\function asyncGenDriver(g) {
     \\  const queue = [];
     \\  let running = false;
@@ -541,12 +542,8 @@ pub let LIB =
     \\const Reflect = {
     \\  apply(f, t, args) { return Function.prototype.apply.call(f, t, args); },
     \\  construct(C, args, NT) {
-    \\    if (NT !== undefined && NT !== C) {
-    \\      const o = Object.create(NT.prototype);
-    \\      const r = C.apply(o, args);
-    \\      return r !== null && typeof r === 'object' ? r : o;
-    \\    }
-    \\    return new C(...args);
+    \\    if (typeof C !== 'function') throw new TypeError('Reflect.construct: target is not a constructor');
+    \\    return engineConstruct(C, Array.from(args), NT === undefined ? C : NT);
     \\  },
     \\  defineProperty(o, k, d) {
     \\    try { Object.defineProperty(o, k, d); return true; } catch (e) { return false; }

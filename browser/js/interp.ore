@@ -172,6 +172,10 @@ pub struct Interp {
     gc_count: u32
     // The object for the next derived-constructor frame (see Frame).
     derived_this: u32
+    // The `this_obj` of the last constructor frame that returned: what
+    // `this` of a derived constructor ended up as (super() may return
+    // another object, as HTMLElement's does for custom elements).
+    ctor_this: u32
     iterator_proto: u32
     math_obj: u32
     json_obj: u32
@@ -273,6 +277,7 @@ pub struct Interp {
             out: text.Builder.init(alloc),
             gc_count: 0,
             derived_this: NONE,
+            ctor_this: NONE,
             iterator_proto: NONE,
             math_obj: NONE,
             json_obj: NONE,
@@ -1864,6 +1869,9 @@ pub struct Interp {
                 if isObject(r) {
                     return r
                 }
+                if fi.derived && self.ctor_this != NONE {
+                    return objVal(self.ctor_this)
+                }
                 return self.slot(base + 1)
             }
             .Native { id } => {
@@ -1932,6 +1940,7 @@ pub struct Interp {
         self.env = e
         defer {
             self.env = saved
+            self.ctor_this = self.frames.items()[self.frames.len() - 1].this_obj
             self.frames.pop()
         }
         if fi.this_slot != NONE {
@@ -1970,7 +1979,9 @@ pub struct Interp {
                 for i in 0..argc {
                     try self.push(self.slot(argBase + i))
                 }
-                try self.superConstruct(fobj, base, argc)
+                let top = self.frames.len() - 1
+                let result = try self.superConstruct(fobj, base, argc, self.frames.items()[top].new_target)
+                self.frames.items()[top].this_obj = result
             }
             return Value.Undefined
         }
@@ -2153,10 +2164,15 @@ pub struct Interp {
 
     // super(...) of the derived constructor `fn`: stack[base] is the
     // parent constructor, stack[base + 1] `this`.
-    fn superConstruct(self: *mut Self, fnObj: u32, base: usize, argc: usize) JsError!void {
+    // super(...): runs the parent constructor on `this` (stack[base + 1])
+    // with the arguments, then the field initializers of `fnObj`. The
+    // result is what `this` is from then on: the object the parent
+    // returned, if it returned one.
+    fn superConstruct(self: *mut Self, fnObj: u32, base: usize, argc: usize, newTarget: u32) JsError!u32 {
         defer self.truncate(base)
         let pv = self.slot(base)
         let thisv = self.slot(base + 1)
+        var result = objectOf(thisv)
         var p = objectOf(pv)
         if p != NONE && self.heap.obj(p).class == Class.Proxy {
             p = unwrapProxy(self, p)
@@ -2175,7 +2191,16 @@ pub struct Interp {
                     pthis = Value.Empty
                     self.derived_this = objectOf(thisv)
                 }
-                try self.invoke(func, env, p, pthis, base + 2, argc, p)
+                var nt = newTarget
+                if nt == NONE {
+                    nt = p
+                }
+                let r = try self.invoke(func, env, p, pthis, base + 2, argc, nt)
+                if isObject(r) {
+                    result = objectOf(r)
+                } else if pfi.derived && self.ctor_this != NONE {
+                    result = self.ctor_this
+                }
             }
             .Native { id } => {
                 let ne = self.natives.items()[id]
@@ -2186,7 +2211,10 @@ pub struct Interp {
                 try self.typeError("Super constructor is not a constructor")
             }
         }
-        try self.initFields(fnObj, objectOf(thisv))
+        // Kept on the stack while the initializers run.
+        try self.push(objVal(result))
+        try self.initFields(fnObj, result)
+        return result
     }
 
     fn evalClass(self: *mut Self, c: u32) JsError!Value {
@@ -2533,11 +2561,15 @@ pub struct Interp {
                     return self.typeError("'super' keyword unexpected here")
                 }
                 var thisObj = NONE
+                var newTarget = NONE
                 var fr = self.frames.len()
+                var at = fr
                 while fr > 0 {
                     fr -= 1
                     if self.frames.items()[fr].func == fnObj {
                         thisObj = self.frames.items()[fr].this_obj
+                        newTarget = self.frames.items()[fr].new_target
+                        at = fr
                         break
                     }
                 }
@@ -2554,7 +2586,12 @@ pub struct Interp {
                 }
                 try self.push(thisv)
                 let argc = try self.pushArgs(list, n)
-                try self.superConstruct(fnObj, base, argc)
+                let result = try self.superConstruct(fnObj, base, argc, newTarget)
+                if thisObj != NONE && result != thisObj && at < self.frames.len() {
+                    // The parent constructor returned another object.
+                    self.frames.items()[at].this_obj = result
+                    thisv = objVal(result)
+                }
                 try self.assignIdent(this_node, thisv, true)
                 return Value.Undefined
             }

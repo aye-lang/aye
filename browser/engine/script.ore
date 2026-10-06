@@ -322,7 +322,7 @@ pub struct Script {
         while all.next() |w| {
             let h = NodeId { index: w.key, generation: w.value.generation }
             if js.gcMarked(it, w.value.obj) && doc.isLive(h) {
-                live.put(doc.treeRoot(h).index, true) catch |e| {
+                live.put(doc.shadowIncludingRoot(h).index, true) catch |e| {
                     return false
                 }
             }
@@ -331,7 +331,7 @@ pub struct Script {
         var rest = self.wrappers.iterator()
         while rest.next() |w| {
             let h = NodeId { index: w.key, generation: w.value.generation }
-            if !js.gcMarked(it, w.value.obj) && doc.isLive(h) && live.contains(doc.treeRoot(h).index) {
+            if !js.gcMarked(it, w.value.obj) && doc.isLive(h) && live.contains(doc.shadowIncludingRoot(h).index) {
                 js.gcMark(it, w.value.obj)
                 marked = true
             }
