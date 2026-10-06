@@ -1864,6 +1864,21 @@ pub let PRELUDE =
     \\  if (height !== undefined) img.setAttribute('height', String(height));
     \\  return img;
     \\});
+    \\// Media elements play nothing: play() fails as for an unsupported source.
+    \\const MediaP = HTMLMediaElement.prototype;
+    \\hidden(MediaP, 'play', function () { return Promise.reject(new DOMException('The element has no supported sources.', 'NotSupportedError')); });
+    \\hidden(MediaP, 'pause', function () {});
+    \\hidden(MediaP, 'load', function () {});
+    \\hidden(MediaP, 'canPlayType', function () { return ''; });
+    \\for (const [k, v] of [['paused', true], ['currentTime', 0], ['duration', NaN], ['volume', 1], ['muted', false], ['readyState', 0], ['ended', false]]) {
+    \\  getter(MediaP, k, function () { return this['__' + k] === undefined ? v : this['__' + k]; }, function (x) { hidden(this, '__' + k, x); });
+    \\}
+    \\hidden(G, 'Audio', function Audio(src) {
+    \\  const a = document.createElement('audio');
+    \\  a.setAttribute('preload', 'auto');
+    \\  if (src !== undefined) a.setAttribute('src', String(src));
+    \\  return a;
+    \\});
     \\hidden(G, 'Option', function Option(text, value, defaultSelected, selected) {
     \\  const o = document.createElement('option');
     \\  if (text !== undefined) o.textContent = String(text);
