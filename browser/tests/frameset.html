@@ -1,0 +1,17 @@
+<html>
+<head>
+<title>Frames</title>
+</head>
+<!-- The frameset takes the place of the body; inside it only frames,
+     framesets and noframes count. -->
+<frameset cols="18,82">
+  <frame src="frames/menu.html" name="left">
+  <frameset rows="50%,*">
+    <frame src="frames/top.html" name="top">
+    <frame name="empty">
+  </frameset>
+  <noframes><body><p>Your browser does not show frames.</p></body></noframes>
+  dropped text <div>dropped element</div>
+</frameset>
+<p>after the frameset: dropped</p>
+</html>
