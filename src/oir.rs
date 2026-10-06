@@ -97,6 +97,9 @@ pub enum StmtKind {
     /// always (`unreachable`). In `fast` mode the check is left out, and
     /// reaching an unconditional one is undefined behavior.
     Check { cond: Option<Operand>, msg: &'static str, span: Span },
+    /// A block of `@setSafety(on)`: its runtime checks are those of the
+    /// build mode (`on`) or none.
+    Safety { on: bool, body: Block },
 }
 
 #[derive(Debug, Clone)]
@@ -343,7 +346,10 @@ fn field(mut p: Place, name: &str) -> Place {
 }
 
 fn is_terminator(s: Option<&Stmt>) -> bool {
-    matches!(s.map(|s| &s.kind), Some(StmtKind::Break | StmtKind::Continue | StmtKind::Return(_)))
+    match s.map(|s| &s.kind) {
+        Some(StmtKind::Safety { body, .. }) => is_terminator(body.last()),
+        k => matches!(k, Some(StmtKind::Break | StmtKind::Continue | StmtKind::Return(_))),
+    }
 }
 
 fn has_call(e: &TExpr) -> bool {
@@ -465,6 +471,12 @@ impl<'a> Lower<'a> {
     }
 
     fn scoped(&mut self, stmts: &'a [TStmt], scope: Scope<'a>, out: &mut Block) {
+        if let Some(TStmt { kind: TStmtKind::SetSafety(on), span }) = stmts.first() {
+            let mut body = Vec::new();
+            self.scoped(&stmts[1..], scope, &mut body);
+            out.push(Stmt { kind: StmtKind::Safety { on: *on, body }, span: *span });
+            return;
+        }
         self.scopes.push(scope);
         for s in stmts {
             self.stmt(s, out);
@@ -755,6 +767,8 @@ impl<'a> Lower<'a> {
             }
             TStmtKind::Block(b) => self.block(b, false, out),
             TStmtKind::Expr(e) => self.eval(e, out),
+            // Handled by `scoped`, as the first statement of a block.
+            TStmtKind::SetSafety(_) => {}
         }
     }
 

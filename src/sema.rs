@@ -447,6 +447,9 @@ pub enum TStmtKind {
     ErrDefer(Vec<TStmt>),
     Block(Vec<TStmt>),
     Expr(TExpr),
+    /// `@setSafety(on)`, the first statement of a block: the runtime checks
+    /// of the rest of the block are on (as the build mode has them) or off.
+    SetSafety(bool),
 }
 
 #[derive(Debug, Clone)]
@@ -2571,7 +2574,17 @@ impl<'a> Checker<'a> {
     fn block(&mut self, b: &ast::Block) -> Vec<TStmt> {
         self.scopes.push(HashMap::new());
         let mut out = Vec::new();
-        for s in &b.stmts {
+        for (i, s) in b.stmts.iter().enumerate() {
+            if i == 0
+                && let StmtKind::Expr(ast::Expr { kind: ExprKind::Builtin { name, args }, span }) = &s.kind
+                && name == "setSafety"
+            {
+                match args.as_slice() {
+                    [ast::Expr { kind: ExprKind::Bool(on), .. }] => out.push(TStmt { kind: TStmtKind::SetSafety(*on), span: s.span }),
+                    _ => self.report(Error::new(E0108, *span, "`@setSafety` takes `true` or `false`, written out")),
+                }
+                continue;
+            }
             match self.stmt(s) {
                 Ok(t) => out.push(t),
                 Err(e) => self.report(e),
@@ -3490,6 +3503,9 @@ impl<'a> Checker<'a> {
                 }
             }
             ExprKind::Builtin { name, args } if name.starts_with("atomic") => return self.atomic(name, args, span),
+            ExprKind::Builtin { name, .. } if name == "setSafety" => {
+                return err(E0108, span, "`@setSafety` must be the first statement of a block (it applies to the whole block)");
+            }
             ExprKind::Builtin { name, args } if name == "hash" => {
                 let [a] = args.as_slice() else {
                     return err(E0022, span, "`@hash` takes one argument, the value to hash");

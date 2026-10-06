@@ -2312,6 +2312,38 @@ pub fn main() {
 }
 "#,
 }
+E0108 = 108 {
+    "misplaced `@setSafety`",
+    "`@setSafety(false)` turns off the runtime checks (overflow, bounds, division, shift, cast, `unreachable`) of the block it starts, and of the blocks inside it, as in `fast` mode; `@setSafety(true)` turns them back on in an inner block. It must be the first statement of a block, so that it covers the whole block, and its argument is `true` or `false` written out. It does not change the functions the block calls.",
+    r#"fn sum(xs: []u8) u8 {
+    var s: u8 = 0
+    @setSafety(false)
+    for x in xs {
+        s +%= x
+    }
+    return s
+}
+
+pub fn main() {
+    var xs = [2]u8{1, 2}
+    @println(sum(xs[..]))
+}
+"#,
+    r#"fn sum(xs: []u8) u8 {
+    @setSafety(false)
+    var s: u8 = 0
+    for x in xs {
+        s +%= x
+    }
+    return s
+}
+
+pub fn main() {
+    var xs = [2]u8{1, 2}
+    @println(sum(xs[..]))
+}
+"#,
+}
 }
 
 #[cfg(test)]

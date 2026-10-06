@@ -1,0 +1,4 @@
+set_safety.ore:3:5: error[E0108]: `@setSafety` takes `true` or `false`, written out
+set_safety.ore:8:5: error[E0108]: `@setSafety` must be the first statement of a block (it applies to the whole block)
+set_safety.ore:12:12: error[E0108]: `@setSafety` must be the first statement of a block (it applies to the whole block)
+set_safety.ore:16:5: error[E0108]: `@setSafety` takes `true` or `false`, written out

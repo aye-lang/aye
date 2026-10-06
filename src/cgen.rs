@@ -565,7 +565,7 @@ ORE_RT void ore_cond_free(uint8_t *c) {
 /// mode). With `tests`, `main` runs one test instead of `ore_f_main`.
 pub fn emit(p: &Program, files: &[String], checks: bool, trace: bool, tests: bool) -> String {
     let files = files.iter().map(|f| c_str(f.as_bytes())).collect();
-    let mut g = Gen { out: String::new(), files, trace, checks, loops: Vec::new(), next_label: 0 };
+    let mut g = Gen { out: String::new(), files, trace, checks, mode_checks: checks, loops: Vec::new(), next_label: 0 };
     g.program(p, checks, tests);
     g.out
 }
@@ -629,6 +629,8 @@ struct Gen {
     /// Emit runtime checks: not in `fast` mode, nor in a `@setSafety(false)`
     /// block.
     checks: bool,
+    /// The build mode has runtime checks (not `fast`).
+    mode_checks: bool,
     /// For each enclosing loop: the label `continue` jumps to, if any.
     loops: Vec<Option<String>>,
     next_label: usize,
@@ -1209,6 +1211,12 @@ impl Gen {
                     self.line(ind, &line);
                 }
             }
+            StmtKind::Safety { on, body } => {
+                let saved = self.checks;
+                self.checks = *on && self.mode_checks;
+                self.block(f, body, ind);
+                self.checks = saved;
+            }
             StmtKind::Check { cond: None, msg, span } => {
                 if self.checks {
                     self.line(ind, &format!("ore_panic({}, \"{msg}\");", line_col(*span)));
@@ -1654,6 +1662,7 @@ fn sizeof_types(b: &Block, out: &mut Vec<Type>) {
                 sizeof_types(a, out);
                 sizeof_types(b, out);
             }
+            StmtKind::Safety { body, .. } => sizeof_types(body, out),
             _ => {}
         }
     }

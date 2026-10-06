@@ -240,7 +240,8 @@ primary     = int_lit | float_lit | string_lit | char_lit
                                                               as in F(T).init() *)
             | builtin "(" [ args ] ")"                     (* @print @println @expect @expectEqual
                                                               @testAllocator @sizeOf @zeroed @ptrCast
-                                                              @hash *)
+                                                              @hash; @setSafety(true|false) only as the
+                                                              first statement of a block *)
             | ident "{" [ field_init { "," field_init } [ "," ] ] "}"   (* struct literal *)
             | path "(" [ args ] ")" "{" [ field_init { "," field_init } [ "," ] ] "}"
                                                            (* literal of a type function's struct:

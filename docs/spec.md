@@ -133,7 +133,7 @@ pub fn main() {
 - Builtins start with `@`: `@print`, `@println`, `@expect`, `@expectEqual`,
   `@testAllocator`, `@sizeOf`, `@zeroed`, `@ptrCast`, `@link`,
   `@linkOptional`, `@hasLink`, `@atomicLoad`, `@atomicStore`, `@atomicAdd`,
-  `@atomicSub`, `@atomicCas`, `@hash`.
+  `@atomicSub`, `@atomicCas`, `@hash`, `@setSafety`.
 
 **Newlines end statements** (Go's rule). A newline is a statement
 terminator when the last token on the line is an identifier, a literal,
@@ -1362,6 +1362,7 @@ failure is `{"kind":"assertion"|"panic"|"leak","line":L,"col":C,"message":M}`,
 - `@sizeOf(T)`, `@zeroed(T)`, `@ptrCast(T, p)`, `@link("lib")`,
   `@linkOptional("lib")`, `@hasLink("lib")`: section 4.
 - `@hash(x)`: section 11 (`where T: Hash`).
+- `@setSafety(false)`, `@setSafety(true)`: section 16.
 
 ## 15. std
 
@@ -1856,6 +1857,11 @@ pub fn main() !void {
   asks for more.
 - `fast` mode removes the checks: overflow wraps, out-of-bounds access is
   undefined behavior.
+- `@setSafety(false)`, as the first statement of a block (a function body
+  too), removes the checks of that block and the blocks in it, as `fast`
+  mode does; `@setSafety(true)` in an inner block brings back the build
+  mode's checks. The argument is `true` or `false` written out (E0108).
+  Functions called from the block keep their checks.
 - Struct fields, arrays and slices are laid out by the compiler; only an
   `extern struct` promises C layout.
 
