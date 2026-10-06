@@ -48,6 +48,9 @@ fn flexIntrinsic(t: *mut Tree, i: usize) AllocError!MinMax {
     var r = MinMax { min: 0.0, max: 0.0 }
     let n = t.children(i).len
     for k in 0..n {
+        if t.bx(t.children(i)[k]).abs != 0 {
+            continue
+        }
         let o = try outerIntrinsic(t, t.children(i)[k])
         var g = 0.0
         if k > 0 {
@@ -85,7 +88,14 @@ fn layoutFlex(t: *mut Tree, i: usize, cw: f64, ch: f64) AllocError!f64 {
     defer items.deinit()
     let n = t.children(i).len
     for k in 0..n {
-        try items.append(try flexItem(t, t.children(i)[k], row, cw, ch))
+        let c = t.children(i)[k]
+        if t.bx(c).abs != 0 {
+            // Its static position: the start of the content box.
+            t.bx(c).x = 0.0
+            t.bx(c).y = 0.0
+            continue
+        }
+        try items.append(try flexItem(t, c, row, cw, ch))
     }
     let all = items.items()
     // Lines: ranges of `all`.

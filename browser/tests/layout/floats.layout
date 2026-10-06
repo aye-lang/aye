@@ -1,0 +1,64 @@
+viewport 800x600
+  block <html> (0, 0) 800x340
+    block <body> (0, 0) 400x340
+      block <div class="l"> (0, 0) 100x50 float left
+        line (0, 0) 100x20
+          text (0, 2) 32x16 "left"
+      block <div class="r"> (320, 0) 80x30 float right
+        line (320, 0) 80x20
+          text (320, 2) 40x16 "right"
+      block <p> (0, 0) 400x80
+        line (100, 0) 220x20
+          text (100, 2) 176x16 "text beside the floats"
+        line (100, 20) 220x20
+          text (100, 22) 208x16 "wraps around them and goes"
+        line (100, 40) 300x20
+          text (100, 42) 288x16 "on below them when they end: one two"
+        line (0, 60) 400x20
+          text (0, 62) 152x16 "three four five six"
+      block <div class="clear"> (0, 80) 400x20
+        line (0, 80) 400x20
+          text (0, 82) 56x16 "cleared"
+      block <div class="l" style="width: 150px; height: 20px"> (0, 100) 150x20 float left
+        line (0, 100) 150x20
+          text (0, 102) 8x16 "a"
+      block <div class="l" style="width: 150px; height: 20px"> (150, 100) 150x20 float left
+        line (150, 100) 150x20
+          text (150, 102) 8x16 "b"
+      block <div class="l" style="width: 150px; height: 20px"> (0, 120) 150x20 float left
+        line (0, 120) 150x20
+          text (0, 122) 56x16 "c drops"
+      block <div class="bfc"> (300, 100) 100x40
+        line (300, 100) 100x20
+          text (300, 102) 80x16 "beside the"
+        line (300, 120) 100x20
+          text (300, 122) 48x16 "floats"
+      block <div class="clear"> (0, 140) 400x0
+      block <p> (0, 140) 400x40
+        line (40, 140) 360x20
+          text (40, 142) 56x16 "inline "
+          text (96, 142) 256x16 "float at the line start and text"
+        line (40, 160) 360x20
+          text (40, 162) 192x16 "beside it over two lines"
+        replaced <img class="l" alt=""> (0, 140) 40x40 float left
+      block <div class="bfc"> (0, 180) 400x60
+        line (0, 180) 320x20
+          text (0, 182) 40x16 "short"
+        block <div class="r" style="height: 60px"> (320, 180) 80x60 float right
+          line (320, 180) 80x20
+            text (320, 182) 72x16 "contained"
+      block <div style="float: right"> (296, 240) 104x20 float right
+        line (296, 240) 104x20
+          text (296, 242) 104x16 "shrink to fit"
+      block <p style="clear: right"> (0, 260) 400x20
+        line (0, 260) 400x20
+          text (0, 262) 40x16 "after"
+      block <p> (0, 280) 400x20
+        line (0, 280) 400x20
+          text (0, 282) 224x16 "a wide word beside a float: "
+          text (224, 282) 144x16 "wordthatdoesnotfit"
+        block <span style="float: left; width: 380px; height: 10px"> (0, 300) 380x10 float left
+      block <p> (0, 300) 400x40
+        line (0, 320) 400x20
+          text (0, 322) 224x16 "wordthatdoesnotfit beside it"
+        block <span style="float: left; width: 380px; height: 10px"> (0, 310) 380x10 float left

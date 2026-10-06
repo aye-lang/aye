@@ -1,0 +1,42 @@
+viewport 800x600
+  block <html> (0, 0) 800x196
+    block <body> (0, 10) 800x186
+      block <div class="cb"> (10, 10) 314x114
+        line (17, 17) 300x20
+          text (17, 19) 80x16 "flow text "
+          text (97, 19) 40x16 "after"
+        block <div class="tl"> (12, 12) 50x20 absolute
+          line (12, 12) 50x20
+            text (12, 14) 16x16 "TL"
+        block <span class="static"> (97, 17) 48x20 absolute
+          line (97, 17) 48x20
+            text (97, 19) 48x16 "static"
+        block <div class="br"> (216, 91) 96x20 absolute
+          line (216, 91) 96x20
+            text (216, 93) 96x16 "bottom right"
+        block <div class="stretch"> (32, 52) 270x20 absolute
+          line (32, 52) 270x20
+            text (32, 54) 72x16 "stretched"
+          block <div class="inner"> (34, 54) 16x20 absolute
+            line (34, 54) 16x20
+              text (34, 56) 16x16 "in"
+        block <div class="center"> (117, 72) 100x10 absolute
+          line (117, 72) 100x20
+            text (117, 74) 8x16 "c"
+        block <div class="tall"> (262, 22) 20x90 absolute
+      block <p> (0, 140) 800x20
+        line (0, 140) 800x20
+          text (0, 142) 184x16 "the flow continues here"
+      block <div class="fixed"> (0, 570) 800x30 fixed
+        line (0, 570) 800x20
+          text (0, 572) 104x16 "cookie banner"
+      block <div class="icb"> (619, 5) 176x20 absolute
+        line (619, 5) 176x20
+          text (619, 7) 176x16 "no positioned ancestor"
+      flex <div style="display: flex"> (0, 176) 800x20
+        block <div style="position: absolute; top: 0"> (0, 0) 120x20 absolute
+          line (0, 0) 120x20
+            text (0, 2) 120x16 "out of the flex"
+        block <div> (0, 176) 32x20
+          line (0, 176) 32x20
+            text (0, 178) 32x16 "item"

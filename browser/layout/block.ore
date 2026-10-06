@@ -154,10 +154,14 @@ fn layoutRoot(t: *mut Tree, r: usize) AllocError!void {
 fn isFormattingRoot(t: *Tree, i: usize) bool {
     let b = t.bx(i)
     if b.parent |p| {
-        if t.bx(p).kind == BoxKind.Flex {
+        let pk = t.bx(p).kind
+        if pk == BoxKind.Flex || pk == BoxKind.Grid || pk == BoxKind.Table {
             return true
         }
     } else {
+        return true
+    }
+    if b.oof() {
         return true
     }
     if b.kind != BoxKind.Block && b.kind != BoxKind.Anonymous {
@@ -254,21 +258,46 @@ fn replacedSize(t: *mut Tree, i: usize, cb_w: f64, cb_h: f64) {
 /// are `he` (left and right) and `ve` (top and bottom): its
 /// `width`/`height`, else its `width`/`height` attributes; a missing one
 /// follows the other by the aspect ratio of its natural size (an
-/// image's); with neither, the natural size; else 0.
+/// image's); with neither, the natural size; else, for `svg` (its
+/// `viewBox` gives the ratio), `iframe`, `embed`, `object`, `video` and
+/// `canvas`, 300 x 150; else 0.
 fn replacedDims(t: *Tree, i: usize, cb_w: f64, cb_h: f64, he: f64, ve: f64) Size {
     let style = t.bx(i).style
     var w: ?f64 = sizeOf(style, style[css.WIDTH], cb_w, he)
     if w == null {
-        let aw = attrPx(t, i, "width")
+        let aw = attrPx(t, i, "width", cb_w)
         if aw > 0.0 {
             w = aw + he
         }
     }
     var h: ?f64 = sizeOf(style, style[css.HEIGHT], cb_h, ve)
     if h == null {
-        let ah = attrPx(t, i, "height")
+        let ah = attrPx(t, i, "height", cb_h)
         if ah > 0.0 {
             h = ah + ve
+        }
+    }
+    if naturalSize(t, i) == null {
+        if defaultRatio(t, i) |ratio| {
+            // 300 x 150, or a ratio that one given size follows.
+            if w |ww| {
+                if h == null {
+                    if ratio > 0.0 {
+                        h = (ww - he) / ratio + ve
+                    } else {
+                        h = 150.0 + ve
+                    }
+                }
+            } else if h |hh| {
+                if ratio > 0.0 {
+                    w = (hh - ve) * ratio + he
+                } else {
+                    w = 300.0 + he
+                }
+            } else {
+                w = 300.0 + he
+                h = 150.0 + ve
+            }
         }
     }
     if naturalSize(t, i) |n| {
@@ -289,18 +318,65 @@ fn replacedDims(t: *Tree, i: usize, cb_w: f64, cb_h: f64, he: f64, ve: f64) Size
 }
 
 // The attribute `name` of the element of box `i` as px (a number, maybe
-// followed by "px"); 0 when missing or not a number.
-fn attrPx(t: *Tree, i: usize, name: []u8) f64 {
+// followed by "px", "em", or "%" of `base` when that is known); 0 when
+// missing or not a number.
+fn attrPx(t: *Tree, i: usize, name: []u8, base: f64) f64 {
     if t.bx(i).node |el| {
         if t.doc.attr(el, name) |v| {
             var s = text.trim(v)
+            var k = 1.0
             if text.endsWith(s, "px") {
                 s = s[..s.len - 2]
+            } else if text.endsWith(s, "em") {
+                s = s[..s.len - 2]
+                k = numberOf(t.bx(i).style[css.FONT_SIZE], 16.0)
+            } else if text.endsWith(s, "%") {
+                if base < 0.0 {
+                    return 0.0
+                }
+                s = s[..s.len - 1]
+                k = base / 100.0
             }
             let n = text.parseFloat(s) catch 0.0
             if n > 0.0 {
-                return n
+                return n * k
             }
+        }
+    }
+    return 0.0
+}
+
+// For replaced elements that are 300 x 150 when nothing sizes them:
+// the width/height ratio a single given size follows (0 for none, as
+// for frames); null for other elements.
+fn defaultRatio(t: *Tree, i: usize) ?f64 {
+    let el = t.bx(i).node orelse return null
+    let name = t.doc.node(el).name
+    if text.eql(name, "iframe") || text.eql(name, "embed") || text.eql(name, "object") {
+        return 0.0
+    }
+    if text.eql(name, "video") || text.eql(name, "canvas") {
+        return 2.0
+    }
+    if !text.eql(name, "svg") {
+        return null
+    }
+    // The ratio of the `viewBox` (min-x min-y width height).
+    if t.doc.attr(el, "viewbox") |vb| {
+        var nums = [4]f64{0.0, 0.0, 0.0, 0.0}
+        var n: usize = 0
+        var start: usize = 0
+        for k in 0..vb.len + 1 {
+            if k == vb.len || vb[k] == ' ' || vb[k] == ',' {
+                if k > start && n < 4 {
+                    nums[n] = text.parseFloat(vb[start..k]) catch 0.0
+                    n += 1
+                }
+                start = k + 1
+            }
+        }
+        if n == 4 && nums[2] > 0.0 && nums[3] > 0.0 {
+            return nums[2] / nums[3]
         }
     }
     return 0.0
@@ -319,6 +395,19 @@ fn layoutContents(t: *mut Tree, i: usize, cb_h: f64) AllocError!void {
         }
     }
     let root = isFormattingRoot(t, i)
+    // The origin of the content box for floats: a new formatting
+    // context, or the parent's origin and this box's offset in it.
+    let save_fx = t.fx
+    let save_fy = t.fy
+    let save_base = t.float_base
+    if root {
+        t.fx = 0.0
+        t.fy = 0.0
+        t.float_base = t.floats.len()
+    } else {
+        t.fx = save_fx + b.margin[3] + b.border[3] + b.padding[3]
+        t.fy = save_fy + t.hint_y + b.border[0] + b.padding[0]
+    }
     let auto_height = ch < 0.0 && sizeOf(b.style, b.style[css.MIN_HEIGHT], cb_h, 0.0) == null
     let top_open = !root && b.border[0] == 0.0 && b.padding[0] == 0.0
     let bottom_open = !root && b.border[2] == 0.0 && b.padding[2] == 0.0 && auto_height
@@ -346,12 +435,29 @@ fn layoutContents(t: *mut Tree, i: usize, cb_h: f64) AllocError!void {
         content_h = try layoutFlex(t, i, cw, ch)
         empty = t.children(i).len == 0
         childBaselines(t, i)
+    } else if kind == BoxKind.Grid {
+        content_h = try layoutGrid(t, i, cw, ch)
+        empty = t.children(i).len == 0
+        childBaselines(t, i)
     } else {
         let r = try flow(t, i, cw, ch, top_open, bottom_open)
         content_h = r.height
         empty = r.empty
         childBaselines(t, i)
     }
+    if root {
+        // A formatting context root holds its floats.
+        if t.floats.len() > t.float_base {
+            content_h = math.max(content_h, floatsBottom(t))
+            empty = false
+        }
+        while t.floats.len() > t.float_base {
+            _ = t.floats.pop()
+        }
+    }
+    t.fx = save_fx
+    t.fy = save_fy
+    t.float_base = save_base
     let bb = t.bx(i)
     var h = content_h + vEdges(bb)
     if ch >= 0.0 {
@@ -379,6 +485,9 @@ fn childBaselines(t: *mut Tree, i: usize) {
     var last = -1.0
     for c in t.children(i) {
         let cb = t.bx(c)
+        if cb.oof() {
+            continue
+        }
         if cb.first_baseline >= 0.0 && first < 0.0 {
             first = cb.y + cb.first_baseline
         }
@@ -413,9 +522,61 @@ fn flow(t: *mut Tree, p: usize, cw: f64, ch: f64, top_open: bool, bottom_open: b
     let n = t.children(p).len
     for k in 0..n {
         let c = t.children(p)[k]
-        try layoutBlockLevel(t, c, cw, ch)
+        let ob = t.bx(c)
+        if ob.abs != 0 {
+            // Laid out later; its static position for now.
+            ob.x = 0.0
+            ob.y = 0.0
+            if started || !top_open {
+                ob.y = y + pending.value()
+            }
+            continue
+        }
+        if ob.float != 0 {
+            try layoutAtomic(t, c, cw)
+            var fy = 0.0
+            if started || !top_open {
+                fy = y + pending.value()
+            }
+            try placeFloat(t, c, fy, cw)
+            continue
+        }
+        // Where the child's border box goes, as far as known before its
+        // layout (for floats), below the floats it clears; a formatting
+        // context root goes beside the floats.
+        var est = 0.0
+        if started || !top_open {
+            var s = pending
+            s.merge(collapsedTop(t, c, cw))
+            est = y + s.value()
+        }
+        var clear_to: ?f64 = null
+        if clearanceY(t, clearOf(ob.style)) |cy| {
+            if cy > est {
+                clear_to = cy
+                est = cy
+            }
+        }
+        var shift = 0.0
+        var room = cw
+        if t.floats.len() > t.float_base && isFormattingRoot(t, c) {
+            let band = bandAt(t, est, 1.0, cw)
+            shift = band.left
+            room = band.width()
+        }
+        t.hint_y = est
+        try layoutBlockLevel(t, c, room, ch)
         let cb = t.bx(c)
-        cb.x = cb.margin[3]
+        cb.x = shift + cb.margin[3]
+        if clear_to |cy| {
+            // Clearance: below the floats, margins do not collapse
+            // across it.
+            cb.y = cy
+            started = true
+            y = cb.y + cb.h
+            pending = cb.bottom_strut
+            continue
+        }
         if cb.through {
             pending.merge(cb.top_strut)
             if started || !top_open {

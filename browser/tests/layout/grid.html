@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0 }
+div div { height: 20px }
+.g { display: grid; grid-template-columns: 100px 1fr 2fr; gap: 10px; width: 500px; margin-bottom: 10px }
+.g2 { display: grid; grid-template-columns: repeat(3, minmax(50px, 1fr)); column-gap: 4px; row-gap: 6px; width: 400px; margin-bottom: 10px }
+.span2 { grid-column: span 2 }
+.g3 { display: grid; grid-template-columns: auto auto; width: 400px; margin-bottom: 10px }
+.g4 { display: grid; grid-template-areas: "head head" "side main"; grid-template-columns: 100px 1fr; width: 400px; margin-bottom: 10px }
+.g5 { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); width: 400px; margin-bottom: 10px }
+.g6 { display: grid; grid-template-columns: subgrid; width: 400px; margin-bottom: 10px }
+.full { grid-column: 1 / -1 }
+.g7 { display: inline-grid; grid-template-columns: 30px 40px }
+</style>
+<div class="g"><div>a</div><div>b</div><div>c</div><div>d</div></div>
+<div class="g2"><div class="span2">wide</div><div>x</div><div>y</div><div class="full">full row</div><div style="grid-column: 2">second</div></div>
+<div class="g3"><div>short</div><div>a longer cell</div></div>
+<div class="g4"><div style="grid-area: main">main</div><div style="grid-area: head">head</div><div style="grid-area: side">side</div></div>
+<div class="g5"><div>1</div><div>2</div><div>3</div><div>4</div></div>
+<div class="g6"><div>one column</div><div>fallback</div></div>
+<div style="display: grid">text run<div style="height: auto">item</div></div>
+<p>inline <span class="g7"><b>1</b><b>2</b><b>3</b></span> grid</p>

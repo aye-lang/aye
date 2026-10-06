@@ -14,7 +14,9 @@
 // Block containers with inline content list their lines, and each line
 // its fragments: text runs, the parts of inline boxes (their content
 // indented below them) and atomic inlines (with their own subtree).
-// List items show their marker first.
+// List items show their marker first. Floats and absolutely positioned
+// boxes say so after their size; those inside inline content follow
+// the lines.
 
 import css
 import dom.Kind
@@ -52,6 +54,15 @@ fn dumpBox(t: *Tree, i: usize, depth: usize, out: *mut text.Builder) AllocError!
     }
     try out.appendByte(' ')
     try rect(out, b.ax, b.ay, b.w, b.h)
+    if b.float == 1 {
+        try out.append(" float left")
+    } else if b.float == 2 {
+        try out.append(" float right")
+    } else if b.abs == 1 {
+        try out.append(" absolute")
+    } else if b.abs == 2 {
+        try out.append(" fixed")
+    }
     try out.appendByte('\n')
     let cx = b.ax + b.border[3] + b.padding[3]
     let cy = b.ay + b.border[0] + b.padding[0]
@@ -74,10 +85,23 @@ fn dumpBox(t: *Tree, i: usize, depth: usize, out: *mut text.Builder) AllocError!
                 try dumpFrag(t, t.frags.items()[fi], depth + 2, cx, cy, out)
             }
         }
+        try dumpOutOfFlow(t, i, depth + 1, out)
         return
     }
     for c in t.children(i) {
         try dumpBox(t, c, depth + 1, out)
+    }
+}
+
+// The out-of-flow boxes among the inline content of box `i`.
+fn dumpOutOfFlow(t: *Tree, i: usize, depth: usize, out: *mut text.Builder) AllocError!void {
+    for c in t.children(i) {
+        let cb = t.bx(c)
+        if cb.oof() {
+            try dumpBox(t, c, depth, out)
+        } else if cb.kind == BoxKind.Inline {
+            try dumpOutOfFlow(t, c, depth, out)
+        }
     }
 }
 
@@ -132,6 +156,7 @@ fn kindName(t: *Tree, i: usize) []u8 {
         .Row => "row"
         .Cell => "cell"
         .Flex => inlineName(b, "flex", "inline-flex")
+        .Grid => inlineName(b, "grid", "inline-grid")
     }
 }
 

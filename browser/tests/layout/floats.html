@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0; width: 400px }
+.l { float: left; width: 100px; height: 50px }
+.r { float: right; width: 80px; height: 30px }
+img.l { width: 40px; height: 40px }
+.clear { clear: both }
+.bfc { overflow: hidden }
+p { margin: 0 }
+</style>
+<div class="l">left</div>
+<div class="r">right</div>
+<p>text beside the floats wraps around them and goes on below them when they end: one two three four five six</p>
+<div class="clear">cleared</div>
+<div class="l" style="width: 150px; height: 20px">a</div>
+<div class="l" style="width: 150px; height: 20px">b</div>
+<div class="l" style="width: 150px; height: 20px">c drops</div>
+<div class="bfc">beside the floats</div>
+<div class="clear"></div>
+<p>inline <img class="l" alt=""> float at the line start and text beside it over two lines</p>
+<div class="bfc"><div class="r" style="height: 60px">contained</div>short</div>
+<div style="float: right">shrink to fit</div>
+<p style="clear: right">after</p>
+<p>a wide word beside a float: <span style="float: left; width: 380px; height: 10px"></span>wordthatdoesnotfit</p>
+<p><span style="float: left; width: 380px; height: 10px"></span>wordthatdoesnotfit beside it</p>

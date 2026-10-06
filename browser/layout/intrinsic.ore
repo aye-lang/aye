@@ -38,10 +38,15 @@ fn intrinsic(t: *mut Tree, i: usize) AllocError!MinMax {
         r = try tableIntrinsic(t, i)
     } else if kind == BoxKind.Flex {
         r = try flexIntrinsic(t, i)
+    } else if kind == BoxKind.Grid {
+        r = try gridIntrinsic(t, i)
     } else if hasInlineContent(t, i) {
         r = try inlineIntrinsic(t, i)
     } else {
         for c in t.children(i) {
+            if t.bx(c).abs != 0 {
+                continue
+            }
             let o = try outerIntrinsic(t, c)
             r.min = math.max(r.min, o.min)
             r.max = math.max(r.max, o.max)
