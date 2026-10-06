@@ -1,0 +1,45 @@
+// std.math: float math on `f64`. `sqrt`, `floor`, `ceil`, `round` and
+// `pow` are C's libm functions.
+
+pub let pi: f64 = 3.141592653589793
+
+/// The square root; NaN for a negative `x`.
+pub extern fn sqrt(x: f64) f64
+
+/// The largest integer value not above `x`.
+pub extern fn floor(x: f64) f64
+
+/// The smallest integer value not below `x`.
+pub extern fn ceil(x: f64) f64
+
+/// The nearest integer value; halfway cases go away from zero.
+pub extern fn round(x: f64) f64
+
+/// `x` to the power `y`.
+pub extern fn pow(x: f64, y: f64) f64
+
+pub fn min(a: f64, b: f64) f64 {
+    if b < a {
+        return b
+    }
+    return a
+}
+
+pub fn max(a: f64, b: f64) f64 {
+    if b > a {
+        return b
+    }
+    return a
+}
+
+pub fn abs(x: f64) f64 {
+    if x < 0.0 {
+        return -x
+    }
+    return x
+}
+
+/// `x` limited to `lo..=hi`.
+pub fn clamp(x: f64, lo: f64, hi: f64) f64 {
+    return min(max(x, lo), hi)
+}

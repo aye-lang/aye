@@ -1,0 +1,167 @@
+// M8: std.map.StrMap(V) and IntMap(K, V), with removal (backward shift)
+// checked against a table of expected values.
+
+import std.heap.General
+import std.map.IntMap
+import std.map.StrMap
+import std.mem.Allocator
+import std.text.Builder
+
+// An `IntMap` key: a node id.
+struct NodeId {
+    v: u32
+
+    fn key(self: *Self) u64 {
+        return self.v as u64
+    }
+}
+
+fn strings(alloc: Allocator) !void {
+    var m = StrMap(i64).init(alloc)
+    defer m.deinit()
+    @println(m.get("a") == null)
+    @println(m.remove("a"))
+    try m.put("apple", 1)
+    try m.put("banana", 2)
+    try m.put("cherry", 3)
+    try m.put("apple", 10)
+    @println(m.len())
+    if m.get("apple") |v| {
+        @println(v)
+    }
+    if m.getPtr("banana") |p| {
+        p.* += 5
+    }
+    @println(m.get("banana") != null)
+    if m.get("banana") |v| {
+        @println(v)
+    }
+    @println(m.contains("cherry"))
+    @println(m.remove("cherry"))
+    @println(m.contains("cherry"))
+    @println(m.len())
+
+    // Iteration visits each entry once; the sum does not depend on order.
+    var sum: i64 = 0
+    var n: usize = 0
+    var it = m.iterator()
+    while it.next() |e| {
+        sum += e.value.*
+        e.value.* = 0
+        n += 1
+    }
+    @println(sum)
+    @println(n)
+    if m.get("apple") |v| {
+        @println(v)
+    }
+}
+
+// Many keys, made with a Builder, then every third removed.
+fn many(alloc: Allocator) !void {
+    var b = Builder.init(alloc)
+    defer b.deinit()
+    for i in (0 as i64)..500 {
+        try b.append("key")
+        try b.appendInt(i)
+        try b.appendByte(' ')
+    }
+    // The keys point into the builder's bytes, which no longer change.
+    let all = b.bytes()
+    var m = StrMap(i64).init(alloc)
+    defer m.deinit()
+    var start: usize = 0
+    var k: i64 = 0
+    for i, c in all {
+        if c == ' ' {
+            try m.put(all[start..i], k)
+            k += 1
+            start = i + 1
+        }
+    }
+    @println(m.len())
+    start = 0
+    k = 0
+    var removed: usize = 0
+    for i, c in all {
+        if c == ' ' {
+            if k % 3 == 0 && m.remove(all[start..i]) {
+                removed += 1
+            }
+            k += 1
+            start = i + 1
+        }
+    }
+    @println(removed)
+    @println(m.len())
+    var ok = true
+    start = 0
+    k = 0
+    for i, c in all {
+        if c == ' ' {
+            let v = m.get(all[start..i])
+            if k % 3 == 0 {
+                ok = ok && v == null
+            } else if v |x| {
+                ok = ok && x == k
+            } else {
+                ok = false
+            }
+            k += 1
+            start = i + 1
+        }
+    }
+    @println(ok)
+}
+
+fn ints(alloc: Allocator) !void {
+    var m = IntMap(NodeId, []u8).init(alloc)
+    defer m.deinit()
+    try m.put(NodeId { v: 7 }, "seven")
+    try m.put(NodeId { v: 1 }, "one")
+    try m.put(NodeId { v: 7 }, "SEVEN")
+    @println(m.len())
+    if m.get(NodeId { v: 7 }) |s| {
+        @println(s)
+    }
+    @println(m.contains(NodeId { v: 2 }))
+    for i in (0 as u32)..1000 {
+        try m.put(NodeId { v: i * 3 }, "x")
+    }
+    @println(m.len())
+    var removed: usize = 0
+    for i in (0 as u32)..3000 {
+        if i % 2 == 0 && m.remove(NodeId { v: i }) {
+            removed += 1
+        }
+    }
+    @println(removed)
+    var ok = true
+    for i in (0 as u32)..3000 {
+        let want = (i % 3 == 0 || i == 1 || i == 7) && i % 2 == 1
+        ok = ok && m.contains(NodeId { v: i }) == want
+    }
+    @println(ok)
+    var count: usize = 0
+    var it = m.iterator()
+    while it.next() |e| {
+        ok = ok && e.key.v % 2 == 1
+        count += 1
+    }
+    @println(count == m.len())
+    @println(ok)
+    if m.getPtr(NodeId { v: 1 }) |p| {
+        p.* = "uno"
+    }
+    if m.get(NodeId { v: 1 }) |s| {
+        @println(s)
+    }
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    try strings(gpa.allocator())
+    try many(gpa.allocator())
+    try ints(gpa.allocator())
+}

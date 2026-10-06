@@ -1,0 +1,111 @@
+// std.pool: generational handles (Example 3 of the design doc). A
+// `Pool(T)` keeps values in slots, and a `Handle(T)` is a slot index plus
+// the slot's generation when the value was inserted. Removing a value
+// bumps the slot's generation, so `get` with a stale handle returns `null`
+// instead of reading whatever the slot holds now.
+
+import std.mem.AllocError
+import std.mem.Allocator
+
+/// Names a value of a `Pool(T)`.
+pub fn Handle(comptime T: type) type {
+    return struct {
+        index: u32
+        generation: u32
+    }
+}
+
+fn Slot(comptime T: type) type {
+    return struct {
+        value: T
+        generation: u32
+        // While the slot is free: the next slot of the free list.
+        next_free: ?u32
+    }
+}
+
+/// Values of type `T` in slots that are reused after `remove`.
+pub fn Pool(comptime T: type) type {
+    return struct {
+        slots: []mut Slot(T)
+        free_list: ?u32
+        alloc: Allocator
+        // Slots in use or on the free list; `slots[len..]` is spare room.
+        len: u32
+        // The number of slots of the first allocation.
+        capacity: u32
+
+        /// An empty pool. Allocates nothing yet: the first `insert`
+        /// allocates `capacity` slots (at least 1) and fills the spare ones
+        /// with copies of its value; later the slots double.
+        pub fn init(alloc: Allocator, capacity: u32) Self {
+            return Self {
+                slots: []mut Slot(T){},
+                free_list: null,
+                alloc: alloc,
+                len: 0,
+                capacity: capacity,
+            }
+        }
+
+        pub fn deinit(self: *mut Self) {
+            self.alloc.free(self.slots)
+            self.slots = []mut Slot(T){}
+            self.free_list = null
+            self.len = 0
+        }
+
+        pub fn insert(self: *mut Self, value: T) AllocError!Handle(T) {
+            if self.free_list |i| {
+                let slot = &mut self.slots[i]
+                self.free_list = slot.next_free
+                slot.value = value
+                slot.next_free = null
+                return Handle(T) { index: i, generation: slot.generation }
+            }
+            if self.len as usize == self.slots.len {
+                try self.grow(value)
+            }
+            let i = self.len
+            self.slots[i] = Slot(T) { value: value, generation: 0, next_free: null }
+            self.len += 1
+            return Handle(T) { index: i, generation: 0 }
+        }
+
+        // Moves the slots to an allocation twice as large (`capacity` slots
+        // the first time). `fill` fills the new spare slots.
+        fn grow(self: *mut Self, fill: T) AllocError!void {
+            var n = self.capacity as usize
+            if self.slots.len > 0 {
+                n = self.slots.len * 2
+            }
+            if n == 0 {
+                n = 1
+            }
+            let slots = try self.alloc.alloc(Slot(T) { value: fill, generation: 0, next_free: null }, n)
+            for i in 0..self.slots.len {
+                slots[i] = self.slots[i]
+            }
+            self.alloc.free(self.slots)
+            self.slots = slots
+        }
+
+        // Every handle to the slot becomes stale. Removing through a stale
+        // handle does nothing.
+        pub fn remove(self: *mut Self, h: Handle(T)) {
+            if self.get(h) == null {
+                return
+            }
+            let slot = &mut self.slots[h.index]
+            slot.generation +%= 1
+            slot.next_free = self.free_list
+            self.free_list = h.index
+        }
+
+        pub fn get(self: *Self, h: Handle(T)) ?*mut T {
+            let slot = &mut self.slots[h.index]
+            if slot.generation != h.generation { return null }
+            return &mut slot.value
+        }
+    }
+}

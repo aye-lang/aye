@@ -5,6 +5,7 @@
 //     Allocator.destroy(p: *T)
 //     Allocator.alloc(value, n) AllocError![]mut T
 //     Allocator.free(s: []T)
+//     Allocator.resize(s: []T, n, fill: T) AllocError![]mut T
 //     error AllocError { OutOfMemory }
 
 /// Do `a` and `b` have the same bytes?
@@ -20,9 +21,31 @@ pub fn eql(a: []u8, b: []u8) bool {
     return true
 }
 
-/// Copy `src` to the start of `dst`; panics if `dst` is shorter.
+/// Copy `src` to the start of `dst`; panics if `dst` is shorter. The two
+/// may overlap.
 pub fn copy(dst: []mut u8, src: []u8) {
-    for i in 0..src.len {
-        dst[i] = src[i]
+    let to = dst[..src.len]
+    if src.len > 0 {
+        memmove(to.ptr, src.ptr, src.len)
     }
 }
+
+/// Set every byte of `dst` to `b`.
+pub fn set(dst: []mut u8, b: u8) {
+    if dst.len > 0 {
+        memset(dst.ptr, b as i32, dst.len)
+    }
+}
+
+/// The index of the first byte `b` in `s`.
+pub fn indexOf(s: []u8, b: u8) ?usize {
+    for i, c in s {
+        if c == b {
+            return i
+        }
+    }
+    return null
+}
+
+extern fn memmove(dst: [*]u8, src: [*]u8, n: usize) [*]u8
+extern fn memset(dst: [*]u8, c: i32, n: usize) [*]u8

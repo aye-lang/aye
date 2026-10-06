@@ -1,0 +1,76 @@
+// M8: std.list.List(T).
+
+import std.heap.General
+import std.list.List
+
+struct Point {
+    x: i64
+    y: i64
+}
+
+fn show(xs: []i64) {
+    for i, x in xs {
+        if i > 0 {
+            @print(" ")
+        }
+        @print(x)
+    }
+    @println()
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+
+    var xs = List(i64).init(alloc)
+    defer xs.deinit()
+    @println(xs.len())
+    @println(xs.pop() == null)
+    // Grows past the first 8 elements and again past 16.
+    for i in (0 as i64)..20 {
+        try xs.append(i * i)
+    }
+    @println(xs.len())
+    show(xs.items()[15..])
+    if xs.pop() |last| {
+        @println(last)
+    }
+    try xs.insert(0, -1)
+    try xs.insert(3, -3)
+    try xs.insert(xs.len(), -100)
+    show(xs.items()[..6])
+    @println(xs.orderedRemove(0))
+    @println(xs.swapRemove(1))
+    show(xs.items())
+    let items = xs.items()
+    items[0] = 42
+    show(xs.items()[..2])
+    xs.clear()
+    @println(xs.len())
+    try xs.append(7)
+    show(xs.items())
+
+    var points = List(Point).init(alloc)
+    defer points.deinit()
+    for i in (0 as i64)..3 {
+        try points.append(Point { x: i, y: -i })
+    }
+    for p in points.items() {
+        @println(p.x - p.y)
+    }
+
+    var words = List([]u8).init(alloc)
+    defer words.deinit()
+    try words.append("one")
+    try words.append("two")
+    try words.insert(1, "one and a half")
+    for w in words.items() {
+        @println(w)
+    }
+    while words.pop() |w| {
+        @print(w.len)
+        @print(" ")
+    }
+    @println()
+}

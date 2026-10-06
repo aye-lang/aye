@@ -1,0 +1,456 @@
+// std.text: byte strings (`[]u8`, UTF-8 by convention).
+//
+// Case functions and `trim` know ASCII only. Floats are formatted with C's
+// `ecvt` (6 significant digits, laid out as printf's `%g`, the same text
+// as `@print`) and parsed with C's `strtod` after Ore checks the syntax.
+
+import std.mem
+import std.mem.AllocError
+import std.mem.Allocator
+
+pub error ParseError { Invalid, Overflow }
+
+/// Do `a` and `b` have the same bytes?
+pub fn eql(a: []u8, b: []u8) bool {
+    return mem.eql(a, b)
+}
+
+/// Like `eql`, but ASCII letters match either case.
+pub fn eqlIgnoreCase(a: []u8, b: []u8) bool {
+    if a.len != b.len {
+        return false
+    }
+    for i, c in a {
+        if lower(c) != lower(b[i]) {
+            return false
+        }
+    }
+    return true
+}
+
+pub fn startsWith(s: []u8, prefix: []u8) bool {
+    return prefix.len <= s.len && mem.eql(s[..prefix.len], prefix)
+}
+
+pub fn endsWith(s: []u8, suffix: []u8) bool {
+    return suffix.len <= s.len && mem.eql(s[s.len - suffix.len..], suffix)
+}
+
+/// The index of the first `needle` in `s`; an empty needle is at 0.
+pub fn indexOf(s: []u8, needle: []u8) ?usize {
+    if needle.len > s.len {
+        return null
+    }
+    for i in 0..s.len - needle.len + 1 {
+        if mem.eql(s[i..i + needle.len], needle) {
+            return i
+        }
+    }
+    return null
+}
+
+/// `s` without ASCII whitespace (space, `\t`, `\n`, `\r`) at either end.
+pub fn trim(s: []u8) []u8 {
+    var lo: usize = 0
+    var hi = s.len
+    while lo < hi && isSpace(s[lo]) {
+        lo += 1
+    }
+    while hi > lo && isSpace(s[hi - 1]) {
+        hi -= 1
+    }
+    return s[lo..hi]
+}
+
+/// Changes the ASCII letters of `s` to lower case, in place.
+pub fn toLower(s: []mut u8) {
+    for i, c in s {
+        s[i] = lower(c)
+    }
+}
+
+/// The pieces of `s` between the separators `sep`: `split("a,,b", ",")`
+/// gives "a", "", "b". An empty `sep` gives `s` as the only piece.
+pub fn split(s: []u8, sep: []u8) Split {
+    return Split { rest: s, sep: sep, done: false }
+}
+
+/// The iterator of `split`.
+pub struct Split {
+    rest: []u8
+    sep: []u8
+    done: bool
+
+    /// The next piece; null after the last one.
+    pub fn next(self: *mut Self) ?[]u8 {
+        if self.done {
+            return null
+        }
+        if self.sep.len > 0 {
+            if indexOf(self.rest, self.sep) |i| {
+                let piece = self.rest[..i]
+                self.rest = self.rest[i + self.sep.len..]
+                return piece
+            }
+        }
+        self.done = true
+        return self.rest
+    }
+}
+
+/// A decimal integer with an optional sign: "42", "-7", "+3".
+pub fn parseInt(s: []u8) ParseError!i64 {
+    var i: usize = 0
+    var negative = false
+    if s.len > 0 && (s[0] == '-' || s[0] == '+') {
+        negative = s[0] == '-'
+        i = 1
+    }
+    if i == s.len {
+        return ParseError.Invalid
+    }
+    // Accumulated as a negative number, which reaches the i64 minimum.
+    var n: i64 = 0
+    while i < s.len {
+        let c = s[i]
+        if c < '0' || c > '9' {
+            return ParseError.Invalid
+        }
+        let d = (c - '0') as i64
+        if n < (-9223372036854775807 - 1 + d) / 10 {
+            return ParseError.Overflow
+        }
+        n = n * 10 - d
+        i += 1
+    }
+    if negative {
+        return n
+    }
+    if n == -9223372036854775807 - 1 {
+        return ParseError.Overflow
+    }
+    return -n
+}
+
+/// A decimal float: an optional sign, digits with an optional `.`
+/// (digits on at least one side), and an optional exponent `e`/`E` with
+/// an optional sign. At most 63 bytes. Too large a value is `Overflow`.
+pub fn parseFloat(s: []u8) ParseError!f64 {
+    var i: usize = 0
+    if i < s.len && (s[i] == '-' || s[i] == '+') {
+        i += 1
+    }
+    let int_start = i
+    i = skipDigits(s, i)
+    var digits = i - int_start
+    if i < s.len && s[i] == '.' {
+        let frac_start = i + 1
+        i = skipDigits(s, frac_start)
+        digits += i - frac_start
+    }
+    if digits == 0 {
+        return ParseError.Invalid
+    }
+    if i < s.len && (s[i] == 'e' || s[i] == 'E') {
+        i += 1
+        if i < s.len && (s[i] == '-' || s[i] == '+') {
+            i += 1
+        }
+        let exp_start = i
+        i = skipDigits(s, exp_start)
+        if i == exp_start {
+            return ParseError.Invalid
+        }
+    }
+    if i != s.len || s.len > 63 {
+        return ParseError.Invalid
+    }
+    var buf = ZEROS
+    mem.copy(buf[..], s)
+    let v = strtod(buf[..].ptr, []u8{}.ptr)
+    if v > 1.7976931348623157e308 || v < -1.7976931348623157e308 {
+        return ParseError.Overflow
+    }
+    return v
+}
+
+/// A Unicode code point and the number of bytes it took.
+pub struct Decoded {
+    code: u32
+    len: usize
+}
+
+/// Decodes the first UTF-8 sequence of `s`. An invalid sequence gives
+/// U+FFFD with `len` 1; an empty `s` gives U+FFFD with `len` 0.
+pub fn decode(s: []u8) Decoded {
+    let bad = Decoded { code: 0xFFFD, len: 1 }
+    if s.len == 0 {
+        return Decoded { code: 0xFFFD, len: 0 }
+    }
+    let b = s[0]
+    var n: usize = 0
+    var code: u32 = 0
+    var min: u32 = 0
+    match b {
+        0x00..=0x7F => {
+            return Decoded { code: b as u32, len: 1 }
+        }
+        0xC2..=0xDF => {
+            n = 2
+            code = (b & 0x1F) as u32
+            min = 0x80
+        }
+        0xE0..=0xEF => {
+            n = 3
+            code = (b & 0x0F) as u32
+            min = 0x800
+        }
+        0xF0..=0xF4 => {
+            n = 4
+            code = (b & 0x07) as u32
+            min = 0x10000
+        }
+        _ => {
+            return bad
+        }
+    }
+    if s.len < n {
+        return bad
+    }
+    for i in 1..n {
+        let c = s[i]
+        if c & 0xC0 != 0x80 {
+            return bad
+        }
+        code = (code << 6) | (c & 0x3F) as u32
+    }
+    if code < min || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF) {
+        return bad
+    }
+    return Decoded { code: code, len: n }
+}
+
+/// Writes the UTF-8 bytes of `code` to the start of `out` and returns how
+/// many (1 to 4; panics if `out` is too short). A surrogate or a value
+/// above U+10FFFF is written as U+FFFD.
+pub fn encode(code: u32, out: []mut u8) usize {
+    var c = code
+    if c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF) {
+        c = 0xFFFD
+    }
+    if c < 0x80 {
+        out[0] = c as u8
+        return 1
+    }
+    if c < 0x800 {
+        out[1] = (0x80 | (c & 0x3F)) as u8
+        out[0] = (0xC0 | (c >> 6)) as u8
+        return 2
+    }
+    if c < 0x10000 {
+        out[2] = (0x80 | (c & 0x3F)) as u8
+        out[1] = (0x80 | ((c >> 6) & 0x3F)) as u8
+        out[0] = (0xE0 | (c >> 12)) as u8
+        return 3
+    }
+    out[3] = (0x80 | (c & 0x3F)) as u8
+    out[2] = (0x80 | ((c >> 6) & 0x3F)) as u8
+    out[1] = (0x80 | ((c >> 12) & 0x3F)) as u8
+    out[0] = (0xF0 | (c >> 18)) as u8
+    return 4
+}
+
+/// Builds a byte string in memory from `alloc`.
+pub struct Builder {
+    buf: []mut u8
+    count: usize
+    alloc: Allocator
+
+    /// An empty builder; nothing is allocated until the first append.
+    pub fn init(alloc: Allocator) Builder {
+        return Builder { buf: []mut u8{}, count: 0, alloc: alloc }
+    }
+
+    pub fn deinit(self: *mut Self) {
+        self.alloc.free(self.buf)
+        self.buf = []mut u8{}
+        self.count = 0
+    }
+
+    /// The bytes so far; valid until the next append.
+    pub fn bytes(self: *Self) []u8 {
+        return self.buf[..self.count]
+    }
+
+    pub fn len(self: *Self) usize {
+        return self.count
+    }
+
+    /// Removes the bytes; keeps the memory.
+    pub fn clear(self: *mut Self) {
+        self.count = 0
+    }
+
+    pub fn append(self: *mut Self, s: []u8) AllocError!void {
+        try self.reserve(s.len)
+        mem.copy(self.buf[self.count..], s)
+        self.count += s.len
+    }
+
+    pub fn appendByte(self: *mut Self, b: u8) AllocError!void {
+        try self.reserve(1)
+        self.buf[self.count] = b
+        self.count += 1
+    }
+
+    /// Appends the UTF-8 bytes of the code point `code` (see `encode`).
+    pub fn appendChar(self: *mut Self, code: u32) AllocError!void {
+        try self.reserve(4)
+        self.count += encode(code, self.buf[self.count..])
+    }
+
+    pub fn appendInt(self: *mut Self, v: i64) AllocError!void {
+        if v < 0 {
+            try self.appendByte('-')
+            // -(v + 1) + 1 cannot overflow, even for the i64 minimum.
+            return self.appendUint((-(v + 1)) as u64 + 1)
+        }
+        return self.appendUint(v as u64)
+    }
+
+    pub fn appendUint(self: *mut Self, v: u64) AllocError!void {
+        var digits = [20]u8{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+        var n: usize = 0
+        var x = v
+        while true {
+            digits[19 - n] = '0' + (x % 10) as u8
+            n += 1
+            x /= 10
+            if x == 0 {
+                break
+            }
+        }
+        return self.append(digits[20 - n..])
+    }
+
+    /// Appends `v` as printf's `%g` (and `@print`) writes it: 6 significant
+    /// digits, trailing zeros removed, an exponent below 1e-4 and from 1e6.
+    pub fn appendFloat(self: *mut Self, v: f64) AllocError!void {
+        if v != v {
+            return self.append("nan")
+        }
+        if copysign(1.0, v) < 0.0 {
+            try self.appendByte('-')
+        }
+        let a = fabs(v)
+        if a > 1.7976931348623157e308 {
+            return self.append("inf")
+        }
+        if a == 0.0 {
+            return self.appendByte('0')
+        }
+        var point = [1]i32{0}
+        var sign = [1]i32{0}
+        let all = ecvt(a, 6, point[..].ptr, sign[..].ptr)[0..6]
+        // The 6 digits without trailing zeros.
+        var n: usize = 6
+        while n > 1 && all[n - 1] == '0' {
+            n -= 1
+        }
+        let digits = all[..n]
+        let exp = point[0] as i64 - 1
+        if exp < -4 || exp >= 6 {
+            try self.appendByte(digits[0])
+            if n > 1 {
+                try self.appendByte('.')
+                try self.append(digits[1..])
+            }
+            try self.appendByte('e')
+            var e = exp
+            if e < 0 {
+                try self.appendByte('-')
+                e = -e
+            } else {
+                try self.appendByte('+')
+            }
+            if e < 10 {
+                try self.appendByte('0')
+            }
+            return self.appendInt(e)
+        }
+        if exp < 0 {
+            try self.append("0.")
+            for k in (0 as i64)..-exp - 1 {
+                try self.appendByte('0')
+            }
+            return self.append(digits)
+        }
+        let whole = exp as usize + 1
+        if n <= whole {
+            try self.append(digits)
+            for k in n..whole {
+                try self.appendByte('0')
+            }
+            return
+        }
+        try self.append(digits[..whole])
+        try self.appendByte('.')
+        return self.append(digits[whole..])
+    }
+
+    /// The bytes in new memory of exactly their length, from the builder's
+    /// allocator (free them with `alloc.free`). The builder is empty after.
+    pub fn toOwned(self: *mut Self) AllocError![]mut u8 {
+        let out = try self.alloc.resize(self.buf, self.count, 0)
+        self.buf = []mut u8{}
+        self.count = 0
+        return out
+    }
+
+    // Makes room for `n` more bytes.
+    fn reserve(self: *mut Self, n: usize) AllocError!void {
+        if self.count + n <= self.buf.len {
+            return
+        }
+        var cap = self.buf.len * 2
+        if cap < 16 {
+            cap = 16
+        }
+        if cap < self.count + n {
+            cap = self.count + n
+        }
+        self.buf = try self.alloc.resize(self.buf, cap, 0)
+    }
+}
+
+let ZEROS = [64]u8{
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+}
+
+fn lower(c: u8) u8 {
+    if c >= 'A' && c <= 'Z' {
+        return c + 32
+    }
+    return c
+}
+
+fn isSpace(c: u8) bool {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r'
+}
+
+fn skipDigits(s: []u8, from: usize) usize {
+    var i = from
+    while i < s.len && s[i] >= '0' && s[i] <= '9' {
+        i += 1
+    }
+    return i
+}
+
+// `end` is a `char **` in C; std passes null.
+extern fn strtod(s: [*]u8, end: [*]u8) f64
+extern fn ecvt(x: f64, digits: i32, point: [*]i32, sign: [*]i32) [*]u8
+extern fn copysign(x: f64, y: f64) f64
+extern fn fabs(x: f64) f64

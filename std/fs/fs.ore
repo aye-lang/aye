@@ -5,6 +5,7 @@ import std.mem.Allocator
 pub error OpenError { NotFound, AccessDenied, OpenFailed }
 pub error ReadError { ReadFailed, OutOfMemory }
 pub error WriteError { WriteFailed }
+pub error ReadFileError = OpenError || ReadError
 
 /// An open file: a file descriptor.
 pub struct File {
@@ -65,7 +66,11 @@ pub struct File {
 
 /// Open the file at `path` for reading.
 pub fn open(path: []u8) OpenError!File {
-    let fd = ore_std_open(path.ptr, path.len)
+    return openResult(ore_std_open(path.ptr, path.len))
+}
+
+// A descriptor, or -errno, as a `File` or an error.
+fn openResult(fd: i32) OpenError!File {
     if fd == -2 {
         return OpenError.NotFound
     }
@@ -76,6 +81,24 @@ pub fn open(path: []u8) OpenError!File {
         return OpenError.OpenFailed
     }
     return File { fd: fd }
+}
+
+/// Create the file at `path` for writing, or empty it if it exists.
+pub fn create(path: []u8) OpenError!File {
+    return openResult(ore_std_create(path.ptr, path.len))
+}
+
+/// Is there a file or directory at `path`?
+pub fn exists(path: []u8) bool {
+    return ore_std_exists(path.ptr, path.len)
+}
+
+/// Read the whole file at `path` into new memory from `alloc` (free it
+/// with `alloc.free`).
+pub fn readFile(alloc: Allocator, path: []u8) ReadFileError![]mut u8 {
+    let f = try open(path)
+    defer f.close()
+    return f.readAll(alloc)
 }
 
 pub fn stdin() File {
@@ -91,6 +114,8 @@ pub fn stderr() File {
 }
 
 extern fn ore_std_open(path: [*]u8, len: usize) i32
+extern fn ore_std_create(path: [*]u8, len: usize) i32
+extern fn ore_std_exists(path: [*]u8, len: usize) bool
 extern fn read(fd: i32, buf: [*]u8, n: usize) isize
 extern fn write(fd: i32, buf: [*]u8, n: usize) isize
 extern fn close(fd: i32) i32

@@ -1,0 +1,52 @@
+// M8: std.testing.allocator() is the leak-checked allocator of the test,
+// the same one as `@testAllocator()`; std containers report leaks at their
+// allocation site in std.
+
+import std.list.List
+import std.map.StrMap
+import std.testing
+import std.text.Builder
+
+test "list" {
+    var xs = List(i64).init(testing.allocator())
+    defer xs.deinit()
+    for i in (0 as i64)..100 {
+        try xs.append(i)
+    }
+    @expectEqual(100, xs.len())
+    @expectEqual(4950, sum(xs.items()))
+}
+
+test "map and builder" {
+    let alloc = testing.allocator()
+    var m = StrMap(usize).init(alloc)
+    defer m.deinit()
+    var b = Builder.init(alloc)
+    defer b.deinit()
+    try b.append("x=")
+    try b.appendFloat(0.5)
+    try m.put(b.bytes(), b.len())
+    @expect(m.contains("x=0.5"))
+    if m.get("x=0.5") |n| {
+        @expectEqual(5, n)
+    }
+}
+
+test "same allocator as @testAllocator" {
+    let a = testing.allocator()
+    let p = try a.create(1 as i64)
+    @testAllocator().destroy(p)
+}
+
+test "a list that is not freed leaks" {
+    var xs = List(u8).init(testing.allocator())
+    try xs.append(1)
+}
+
+fn sum(xs: []i64) i64 {
+    var t: i64 = 0
+    for x in xs {
+        t += x
+    }
+    return t
+}

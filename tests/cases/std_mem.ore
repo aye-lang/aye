@@ -1,0 +1,60 @@
+// M8: std.mem.copy, set and indexOf, and Allocator.resize with General and
+// Arena.
+
+import std.heap.Arena
+import std.heap.General
+import std.mem
+import std.mem.Allocator
+
+struct Pair {
+    a: i64
+    b: i64
+}
+
+fn resizes(alloc: Allocator) !void {
+    var xs = try alloc.alloc(Pair { a: 1, b: 2 }, 2)
+    xs[1].a = 10
+    // Grows: the old elements are kept, the new ones are the fill value.
+    xs = try alloc.resize(xs, 4, Pair { a: 0, b: -1 })
+    for p in xs {
+        @print(p.a)
+        @print(",")
+        @print(p.b)
+        @print(" ")
+    }
+    @println()
+    // Shrinks.
+    xs = try alloc.resize(xs, 1, Pair { a: 0, b: 0 })
+    @println(xs.len)
+    @println(xs[0].a)
+    // To nothing: the memory is freed.
+    xs = try alloc.resize(xs, 0, Pair { a: 0, b: 0 })
+    @println(xs.len)
+    // From nothing.
+    var bytes = try alloc.resize([]mut u8{}, 3, 'z')
+    defer alloc.free(bytes)
+    @println(bytes)
+}
+
+pub fn main() !void {
+    var buf = [8]u8{'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'}
+    mem.copy(buf[2..], "XYZ")
+    @println(buf[..])
+    // Overlapping.
+    mem.copy(buf[1..], buf[..4])
+    @println(buf[..])
+    mem.set(buf[4..], '-')
+    @println(buf[..])
+    mem.set(buf[..0], '!')
+    if mem.indexOf(buf[..], '-') |i| {
+        @println(i)
+    }
+    @println(mem.indexOf("abc", 'z') == null)
+
+    var gpa = General.init()
+    defer gpa.deinit()
+    try resizes(gpa.allocator())
+    var arena = Arena.init(gpa.allocator())
+    defer arena.deinit()
+    try resizes(arena.allocator())
+}

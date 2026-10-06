@@ -1,0 +1,103 @@
+// std.list: a growable list.
+
+import std.mem.AllocError
+import std.mem.Allocator
+
+/// A list of `T` values in one allocation that grows as needed. A slice
+/// from `items()` is valid until the next `append` or `insert`.
+pub fn List(comptime T: type) type {
+    return struct {
+        buf: []mut T
+        count: usize
+        alloc: Allocator
+
+        /// An empty list; nothing is allocated until the first `append`.
+        pub fn init(alloc: Allocator) Self {
+            return Self { buf: []mut T{}, count: 0, alloc: alloc }
+        }
+
+        /// Frees the memory; the list is empty again.
+        pub fn deinit(self: *mut Self) {
+            self.alloc.free(self.buf)
+            self.buf = []mut T{}
+            self.count = 0
+        }
+
+        pub fn len(self: *Self) usize {
+            return self.count
+        }
+
+        /// The elements, in order.
+        pub fn items(self: *Self) []mut T {
+            return self.buf[..self.count]
+        }
+
+        pub fn append(self: *mut Self, value: T) AllocError!void {
+            if self.count == self.buf.len {
+                try self.grow(value)
+            }
+            self.buf[self.count] = value
+            self.count += 1
+        }
+
+        /// Removes and returns the last element; null when empty.
+        pub fn pop(self: *mut Self) ?T {
+            if self.count == 0 {
+                return null
+            }
+            self.count -= 1
+            return self.buf[self.count]
+        }
+
+        /// Inserts `value` at index `i` (at most `len()`), moving the later
+        /// elements up.
+        pub fn insert(self: *mut Self, i: usize, value: T) AllocError!void {
+            let later = self.buf[i..self.count]
+            if self.count == self.buf.len {
+                try self.grow(value)
+            }
+            var j = self.count
+            while j > i {
+                self.buf[j] = self.buf[j - 1]
+                j -= 1
+            }
+            self.buf[i] = value
+            self.count += 1
+        }
+
+        /// Removes and returns the element at index `i`, moving the later
+        /// elements down (keeps the order).
+        pub fn orderedRemove(self: *mut Self, i: usize) T {
+            let value = self.buf[..self.count][i]
+            for j in i + 1..self.count {
+                self.buf[j - 1] = self.buf[j]
+            }
+            self.count -= 1
+            return value
+        }
+
+        /// Removes and returns the element at index `i`, moving the last
+        /// element into its place (does not keep the order).
+        pub fn swapRemove(self: *mut Self, i: usize) T {
+            let value = self.buf[..self.count][i]
+            self.count -= 1
+            self.buf[i] = self.buf[self.count]
+            return value
+        }
+
+        /// Removes every element; keeps the memory.
+        pub fn clear(self: *mut Self) {
+            self.count = 0
+        }
+
+        // Doubles the room (8 elements the first time); `fill` is a value
+        // for the new spare elements.
+        fn grow(self: *mut Self, fill: T) AllocError!void {
+            var n: usize = 8
+            if self.buf.len > 0 {
+                n = self.buf.len * 2
+            }
+            self.buf = try self.alloc.resize(self.buf, n, fill)
+        }
+    }
+}

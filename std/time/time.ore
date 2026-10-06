@@ -1,0 +1,19 @@
+// std.time: the monotonic clock and sleeping.
+
+/// Milliseconds on a clock that never goes back (not the time of day; its
+/// start is unspecified). Subtract two readings to measure a duration.
+pub fn monotonicMs() u64 {
+    return ore_std_monotonic_ns() / 1000000
+}
+
+/// Waits at least `ms` milliseconds.
+pub fn sleep(ms: u64) {
+    // A C `struct timespec`: seconds and nanoseconds. When a signal ends
+    // the sleep early, `nanosleep` stores the time left in it.
+    var ts = [2]i64{(ms / 1000) as i64, (ms % 1000 * 1000000) as i64}
+    while nanosleep(ts[..].ptr, ts[..].ptr) != 0 {
+    }
+}
+
+extern fn ore_std_monotonic_ns() u64
+extern fn nanosleep(req: [*]i64, rem: [*]i64) i32

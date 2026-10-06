@@ -38,10 +38,16 @@ pub struct SourceFile {
 const STD_FILES: &[(&str, &str, &str)] = &[
     ("std.fs", "std/fs/fs.ore", include_str!("../std/fs/fs.ore")),
     ("std.heap", "std/heap/heap.ore", include_str!("../std/heap/heap.ore")),
+    ("std.list", "std/list/list.ore", include_str!("../std/list/list.ore")),
     ("std.log", "std/log/log.ore", include_str!("../std/log/log.ore")),
+    ("std.map", "std/map/map.ore", include_str!("../std/map/map.ore")),
+    ("std.math", "std/math/math.ore", include_str!("../std/math/math.ore")),
     ("std.mem", "std/mem/mem.ore", include_str!("../std/mem/mem.ore")),
     ("std.os", "std/os/os.ore", include_str!("../std/os/os.ore")),
+    ("std.pool", "std/pool/pool.ore", include_str!("../std/pool/pool.ore")),
     ("std.testing", "std/testing/testing.ore", include_str!("../std/testing/testing.ore")),
+    ("std.text", "std/text/text.ore", include_str!("../std/text/text.ore")),
+    ("std.time", "std/time/time.ore", include_str!("../std/time/time.ore")),
 ];
 
 /// Items of std that the compiler provides (their declarations would need
