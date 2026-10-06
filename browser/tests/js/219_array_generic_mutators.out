@@ -1,0 +1,11 @@
+2 a b 3
+3 c 0,1,2,length,jquery
+z 2 false
+x 1 y false
+3 u v y 3
+true 1 2 3 4
+true 4 1
+[ 3, 2 ] 3 4 m 1 false
+true 0 0 3
+[ 3, 'more' ]
+1 undefined

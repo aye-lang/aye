@@ -12,15 +12,15 @@ fn installArray(it: *mut Interp) JsError!void {
     try it.defineNative(c, "from", 1, arrayFrom)
     try it.defineNative(c, "of", 0, arrayOf)
     let p = it.array_proto
-    try it.defineNative(p, "push", 1, arrayPush)
-    try it.defineNative(p, "pop", 0, arrayPop)
-    try it.defineNative(p, "shift", 0, arrayShift)
-    try it.defineNative(p, "unshift", 1, arrayUnshift)
+    try it.defineNative(p, "push", 1, genericPush)
+    try it.defineNative(p, "pop", 0, genericPop)
+    try it.defineNative(p, "shift", 0, genericShift)
+    try it.defineNative(p, "unshift", 1, genericUnshift)
     try it.defineNative(p, "slice", 2, arraySlice)
-    try it.defineNative(p, "splice", 2, arraySplice)
+    try it.defineNative(p, "splice", 2, genericSplice)
     try it.defineNative(p, "concat", 1, arrayConcat)
     try it.defineNative(p, "join", 1, arrayJoin)
-    try it.defineNative(p, "reverse", 0, arrayReverse)
+    try it.defineNative(p, "reverse", 0, genericReverse)
     try it.defineNative(p, "indexOf", 1, arrayIndexOf)
     try it.defineNative(p, "lastIndexOf", 1, arrayLastIndexOf)
     try it.defineNative(p, "includes", 1, arrayIncludes)
@@ -35,8 +35,8 @@ fn installArray(it: *mut Interp) JsError!void {
     try it.defineNative(p, "findLastIndex", 1, arrayFindLastIndex)
     try it.defineNative(p, "reduce", 1, arrayReduce)
     try it.defineNative(p, "reduceRight", 1, arrayReduceRight)
-    try it.defineNative(p, "sort", 1, arraySort)
-    try it.defineNative(p, "fill", 1, arrayFill)
+    try it.defineNative(p, "sort", 1, genericSort)
+    try it.defineNative(p, "fill", 1, genericFill)
     try it.defineNative(p, "at", 1, arrayAt)
     try it.defineNative(p, "flat", 0, arrayFlat)
     try it.defineNative(p, "flatMap", 1, arrayFlatMap)
@@ -72,6 +72,81 @@ fn thisArray(it: *mut Interp, a: Args) JsError!u32 {
     it.truncate(first)
     try it.push(objVal(arr))
     return arr
+}
+
+// A method that changes its array, called on another array-like object
+// (`push.apply(jq, nodes)` on a jQuery object): `f` changes a copy
+// (thisArray), which is then written back to the object: its indices
+// and `length`.
+fn onArrayLike(it: *mut Interp, a: Args, f: NativeFn) JsError!Value {
+    if !isObject(a.this) {
+        return f(it, a)
+    }
+    let o = objectOf(a.this)
+    let cls = it.heap.obj(o).class
+    if cls == Class.Array || cls == Class.Arguments {
+        return f(it, a)
+    }
+    let base = it.stack.len()
+    defer it.truncate(base)
+    let copy = try thisArray(it, a)
+    let old = alen(it, copy)
+    var b = a
+    b.this = objVal(copy)
+    var r = try f(it, b)
+    if isObject(r) && objectOf(r) == copy {
+        r = a.this
+    }
+    try it.push(r)
+    let n = alen(it, copy)
+    for i in 0..n {
+        let e = it.heap.obj(copy).elems[i]
+        match e {
+            .Empty => {
+                try it.deleteProp(o, try it.toKey(numVal(i as f64)))
+            }
+            _ => try it.setIndex(a.this, numVal(i as f64), e)
+        }
+    }
+    var i = n
+    while i < old {
+        try it.deleteProp(o, try it.toKey(numVal(i as f64)))
+        i += 1
+    }
+    try it.setProp(a.this, A_LENGTH, numVal(n as f64))
+    return r
+}
+
+fn genericPush(it: *mut Interp, a: Args) JsError!Value {
+    return onArrayLike(it, a, arrayPush)
+}
+
+fn genericPop(it: *mut Interp, a: Args) JsError!Value {
+    return onArrayLike(it, a, arrayPop)
+}
+
+fn genericShift(it: *mut Interp, a: Args) JsError!Value {
+    return onArrayLike(it, a, arrayShift)
+}
+
+fn genericUnshift(it: *mut Interp, a: Args) JsError!Value {
+    return onArrayLike(it, a, arrayUnshift)
+}
+
+fn genericSplice(it: *mut Interp, a: Args) JsError!Value {
+    return onArrayLike(it, a, arraySplice)
+}
+
+fn genericReverse(it: *mut Interp, a: Args) JsError!Value {
+    return onArrayLike(it, a, arrayReverse)
+}
+
+fn genericSort(it: *mut Interp, a: Args) JsError!Value {
+    return onArrayLike(it, a, arraySort)
+}
+
+fn genericFill(it: *mut Interp, a: Args) JsError!Value {
+    return onArrayLike(it, a, arrayFill)
 }
 
 fn alen(it: *mut Interp, o: u32) u32 {
