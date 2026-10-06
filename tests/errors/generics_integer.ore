@@ -1,0 +1,47 @@
+// Misuse of the built-in constraint `Integer` and of `std.sort.sort`.
+
+import std
+import std.map.IntMap
+
+struct Id {
+    v: u32
+}
+
+struct Integer {
+    v: i64
+}
+
+fn widen(comptime T: type, x: T) u64 {
+    return x as u64
+}
+
+fn add(comptime T: type, a: T, b: T) T where T: Integer {
+    return a + b
+}
+
+fn narrow(comptime T: type, x: i64) T where T: Integer {
+    return x as T
+}
+
+fn twice(comptime T: type, x: T) i64 where T: Integer {
+    return x as i64 * 2
+}
+
+fn passOn(comptime U: type, x: U) i64 {
+    return twice(U, x)
+}
+
+fn byValue(a: i64, b: i64) bool {
+    return a < b
+}
+
+fn ids(m: ?*IntMap(Id, i64)) {}
+
+pub fn main() {
+    @println(twice(f64, 1.5))
+    @println(twice(Id, Id { v: 1 }))
+    @println(twice(bool, true))
+    var a = [2]u32{2, 1}
+    std.sort.sort(u32, a[..], byValue)
+    ids(null)
+}

@@ -1,20 +1,11 @@
-// M8: std.map.StrMap(V) and IntMap(K, V), with removal (backward shift)
-// checked against a table of expected values.
+// M8: std.map.StrMap(V) and IntMap(K, V) with integer keys, with removal
+// (backward shift) checked against a table of expected values.
 
 import std.heap.General
 import std.map.IntMap
 import std.map.StrMap
 import std.mem.Allocator
 import std.text.Builder
-
-// An `IntMap` key: a node id.
-struct NodeId {
-    v: u32
-
-    fn key(self: *Self) u64 {
-        return self.v as u64
-    }
-}
 
 fn strings(alloc: Allocator) !void {
     var m = StrMap(i64).init(alloc)
@@ -115,23 +106,23 @@ fn many(alloc: Allocator) !void {
 }
 
 fn ints(alloc: Allocator) !void {
-    var m = IntMap(NodeId, []u8).init(alloc)
+    var m = IntMap(u32, []u8).init(alloc)
     defer m.deinit()
-    try m.put(NodeId { v: 7 }, "seven")
-    try m.put(NodeId { v: 1 }, "one")
-    try m.put(NodeId { v: 7 }, "SEVEN")
+    try m.put(7, "seven")
+    try m.put(1, "one")
+    try m.put(7, "SEVEN")
     @println(m.len())
-    if m.get(NodeId { v: 7 }) |s| {
+    if m.get(7) |s| {
         @println(s)
     }
-    @println(m.contains(NodeId { v: 2 }))
+    @println(m.contains(2))
     for i in (0 as u32)..1000 {
-        try m.put(NodeId { v: i * 3 }, "x")
+        try m.put(i * 3, "x")
     }
     @println(m.len())
     var removed: usize = 0
     for i in (0 as u32)..3000 {
-        if i % 2 == 0 && m.remove(NodeId { v: i }) {
+        if i % 2 == 0 && m.remove(i) {
             removed += 1
         }
     }
@@ -139,22 +130,58 @@ fn ints(alloc: Allocator) !void {
     var ok = true
     for i in (0 as u32)..3000 {
         let want = (i % 3 == 0 || i == 1 || i == 7) && i % 2 == 1
-        ok = ok && m.contains(NodeId { v: i }) == want
+        ok = ok && m.contains(i) == want
     }
     @println(ok)
     var count: usize = 0
     var it = m.iterator()
     while it.next() |e| {
-        ok = ok && e.key.v % 2 == 1
+        ok = ok && e.key % 2 == 1
         count += 1
     }
     @println(count == m.len())
     @println(ok)
-    if m.getPtr(NodeId { v: 1 }) |p| {
+    if m.getPtr(1) |p| {
         p.* = "uno"
     }
-    if m.get(NodeId { v: 1 }) |s| {
+    if m.get(1) |s| {
         @println(s)
+    }
+}
+
+// Signed keys, negative ones too, and the extremes of i64 and u64.
+fn signed(alloc: Allocator) !void {
+    var m = IntMap(i64, i64).init(alloc)
+    defer m.deinit()
+    for i in (0 as i64)..200 {
+        try m.put(i - 100, i)
+    }
+    try m.put(-9223372036854775807 - 1, 1)
+    try m.put(9223372036854775807, 2)
+    @println(m.len())
+    if m.get(-100) |v| {
+        @println(v)
+    }
+    if m.get(-9223372036854775807 - 1) |v| {
+        @println(v)
+    }
+    @println(m.remove(-1))
+    @println(m.contains(-1))
+    @println(m.contains(1))
+    var u = IntMap(u64, bool).init(alloc)
+    defer u.deinit()
+    try u.put(18446744073709551615, true)
+    try u.put(0, false)
+    @println(u.contains(18446744073709551615))
+    @println(u.contains(9223372036854775807))
+    var b = IntMap(u8, u8).init(alloc)
+    defer b.deinit()
+    for i in (0 as u16)..256 {
+        try b.put(i as u8, (255 - i) as u8)
+    }
+    @println(b.len())
+    if b.get(250) |v| {
+        @println(v)
     }
 }
 
@@ -164,4 +191,5 @@ pub fn main() !void {
     try strings(gpa.allocator())
     try many(gpa.allocator())
     try ints(gpa.allocator())
+    try signed(gpa.allocator())
 }

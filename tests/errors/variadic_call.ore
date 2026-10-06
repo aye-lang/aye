@@ -1,0 +1,9 @@
+extern fn printf(format: [*]u8, ...) i32
+
+pub fn main() {
+    printf()
+    printf("%s".ptr, "slice")
+    let p = printf
+    printf("%d".ptr, 3000000000)
+    printf("%d %f\n".ptr, 1, 2.5)
+}

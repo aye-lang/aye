@@ -129,15 +129,13 @@ E0006 = 6 {
 }
 E0007 = 7 {
     "not yet supported",
-    "The feature is part of Ore but not of the stage0 compiler yet (for example `extern struct`), or the keyword is used where stage0 does not support it (`comptime` only marks a type parameter, `comptime T: type`). Write the program without it.",
-    r#"extern struct Point {
-    x: i32
-}
-
-pub fn main() {
+    "The feature is part of Ore but not of the stage0 compiler yet, or the keyword is used where stage0 does not support it (`comptime` only marks a type parameter, `comptime T: type`; `where` follows a function's return type). Write the program without it.",
+    r#"pub fn main() {
+    comptime let x = 1
 }
 "#,
     r#"pub fn main() {
+    let x = 1
 }
 "#,
 }
@@ -195,8 +193,8 @@ pub fn main() {
 "#,
 }
 E0011 = 11 {
-    "`extern fn` with a body",
-    "An `extern fn` declares a C function; its body is in C. Remove the body.",
+    "`extern fn` with a body that is not `pub`",
+    "An `extern fn` without a body declares a C function. With a body, it is an Ore function exported to C under its own name, and it must be `pub extern fn`. Remove the body to declare a C function, or add `pub` to export the function.",
     r#"extern fn puts(s: [*]u8) i32 {
 }
 
@@ -345,28 +343,28 @@ pub fn main() {
 "#,
 }
 E0020 = 20 {
-    "function used as a value",
-    "Functions are not values. Call the function with `name(...)`.",
-    r#"fn one() i32 {
-    return 1
+    "function that is not a value",
+    "A top-level function is a value of type `fn(A, B) R`, but a generic function and a variadic C function are not: call them. A method is called on its value (`x.m()`) or as `Type.m(x)`.",
+    r#"fn first(comptime T: type, a: T, b: T) T {
+    return a
 }
 
 pub fn main() {
-    let x = one
+    let f = first
 }
 "#,
-    r#"fn one() i32 {
-    return 1
+    r#"fn first(comptime T: type, a: T, b: T) T {
+    return a
 }
 
 pub fn main() {
-    let x = one()
+    let f = first(i64, 1, 2)
 }
 "#,
 }
 E0021 = 21 {
     "unknown builtin",
-    "Stage0 has only the builtins `@print` and `@println`.",
+    "The builtins are `@print`, `@println`, `@expect`, `@expectEqual`, `@testAllocator`, `@sizeOf`, `@zeroed`, `@ptrCast` and `@link`.",
     r#"pub fn main() {
     @printf("hi")
 }
@@ -378,7 +376,7 @@ E0021 = 21 {
 }
 E0022 = 22 {
     "wrong builtin arguments",
-    "`@print(x)` takes one argument and `@println(x)` at most one. They print integers, floats, `bool` and `[]u8` strings; print the fields of a struct one by one.",
+    "Each builtin takes fixed arguments. `@print(x)` takes one argument and `@println(x)` at most one; they print integers, floats, `bool` and `[]u8` strings (print the fields of a struct one by one). `@sizeOf(T)` and `@zeroed(T)` take a type, and `@ptrCast(T, p)` a type and a pointer.",
     r#"struct P { x: i32 }
 
 pub fn main() {
@@ -626,7 +624,7 @@ E0036 = 36 {
 }
 E0037 = 37 {
     "invalid cast",
-    "`as` converts only between numeric types. Other conversions are written out, for example with `if`.",
+    "`as` converts only between numeric types. Other conversions are written out, for example with `if`. In a generic, a `T` converts with `as` only with `where T: Integer`, and nothing converts to `T`.",
     r#"pub fn main() {
     let flag = true
     let n = flag as i32
@@ -871,8 +869,8 @@ E0051 = 51 {
 "#,
 }
 E0052 = 52 {
-    "type not allowed in `extern fn`",
-    "An `extern fn` signature can use only integer, float, `bool` and `[*]T` types. Pass a string as `s.ptr` with type `[*]u8`.",
+    "type that is not C-compatible",
+    "Types that cross into C need a C layout: the parameters and result of an `extern fn` (also of an exported `pub extern fn`), the fields of an `extern struct`, and the arguments after `...`. These are integers, floats, `bool`, pointers to C-compatible types (`*T`, `*mut T`, `[*]T`), optional pointers (`?*T`, `?[*]T`, `?fn(...)`), `extern struct`s, functions `fn(A) R` of C-compatible types, and arrays as fields. A slice is a pointer and a length: pass `s.ptr` (a `[*]T`) and `s.len`.",
     r#"extern fn strlen(s: []u8) usize
 
 pub fn main() {
@@ -1539,7 +1537,7 @@ pub fn main() {
 }
 E0079 = 79 {
     "unsatisfied `where` constraint",
-    "A generic is instantiated with a type that does not implement the interface of one of its `where` constraints. Give the type the missing method, with the interface's signature, or use another type. A generic that instantiates another one with its own parameter needs the same constraint on that parameter.",
+    "A generic is instantiated with a type that does not implement the interface of one of its `where` constraints, or with a type that is not an integer type for the built-in `where T: Integer`. Give the type the missing method, with the interface's signature, or use another type. A generic that instantiates another one with its own parameter needs the same constraint on that parameter.",
     r#"interface Area {
     fn area(self: *Self) f64
 }
@@ -1827,6 +1825,158 @@ E0090 = 90 {
     for i in 0..n {
         @println(i)
     }
+}
+"#,
+}
+E0091 = 91 {
+    "variadic function that is not a C function",
+    "Only a C function, declared with `extern fn` and no body, can be variadic: `...` is its last parameter and follows at least one other, as in C (`extern fn printf(format: [*]u8, ...) i32`). An Ore function is not variadic: give it a slice.",
+    r#"fn sum(first: i64, ...) i64 {
+    return first
+}
+
+pub fn main() {
+    @println(sum(1, 2, 3))
+}
+"#,
+    r#"fn sum(xs: []i64) i64 {
+    var t: i64 = 0
+    for x in xs {
+        t += x
+    }
+    return t
+}
+
+pub fn main() {
+    let xs = [3]i64{1, 2, 3}
+    @println(sum(xs[..]))
+}
+"#,
+}
+E0092 = 92 {
+    "invalid `@ptrCast`",
+    "`@ptrCast(T, p)` reads the pointer `p` as the pointer type `T`; both are `*T`, `*mut T`, `[*]T`, or `?` of one. It cannot make a read-only `*T` writable, or an optional pointer non-optional: unwrap it first with `if p |v| { }`. Numbers are converted with `as`.",
+    r#"extern fn malloc(n: usize) ?[*]u8
+extern fn free(p: ?[*]u8)
+
+pub fn main() {
+    let m = malloc(16)
+    let words = @ptrCast([*]u32, m)
+    words[0] = 1
+    free(m)
+}
+"#,
+    r#"extern fn malloc(n: usize) ?[*]u8
+extern fn free(p: ?[*]u8)
+
+pub fn main() {
+    let m = malloc(16)
+    if m |bytes| {
+        let words = @ptrCast([*]u32, bytes)
+        words[0] = 1
+    }
+    free(m)
+}
+"#,
+}
+E0093 = 93 {
+    "`@zeroed` of a type without an all-zero value",
+    "`@zeroed(T)` is the value whose bytes are all zero. Numbers, `bool`, optional pointers (`?*T`, `?[*]T`, `?fn(...)`), `extern struct`s made of them and arrays of these have one. A pointer that is not optional cannot be null, and an Ore struct is made with a literal: make the field optional, or write a literal.",
+    r#"extern struct Node {
+    value: i32
+    next: *Node
+}
+
+pub fn main() {
+    let n = @zeroed(Node)
+}
+"#,
+    r#"extern struct Node {
+    value: i32
+    next: ?*Node
+}
+
+pub fn main() {
+    let n = @zeroed(Node)
+}
+"#,
+}
+E0094 = 94 {
+    "misplaced `@link`",
+    "`@link(\"name\")` names a C library to link with. It is a declaration: it stands at the top level of a file, and its string names a `pkg-config` package (whose flags are used), a library (`-lname`) or a macOS framework (`framework:Cocoa`). No other builtin can be used at the top level.",
+    r#"extern fn cos(x: f64) f64
+
+pub fn main() {
+    @link("m")
+    @println(cos(0.0))
+}
+"#,
+    r#"@link("m")
+
+extern fn cos(x: f64) f64
+
+pub fn main() {
+    @println(cos(0.0))
+}
+"#,
+}
+E0095 = 95 {
+    "call of a value that is not a function",
+    "Only a function value, of type `fn(A) R`, can be called. An optional function (`?fn(A) R`) is unwrapped first: `if f |g| { g(x) }`.",
+    r#"fn hello() {
+    @println("hello")
+}
+
+pub fn main() {
+    var callback: ?fn() = null
+    callback = hello
+    callback()
+}
+"#,
+    r#"fn hello() {
+    @println("hello")
+}
+
+pub fn main() {
+    var callback: ?fn() = null
+    callback = hello
+    if callback |f| {
+        f()
+    }
+}
+"#,
+}
+E0096 = 96 {
+    "conflicting C function declarations",
+    "A C function has one signature and at most one definition. Every `extern fn` that names it, in any module, must give it the same C signature (pointers are one C pointer type: `*T`, `*mut T`, `[*]T` and `?*T` are alike), and only one `pub extern fn` can export a name.",
+    r#"// file: main.ore
+import other
+
+extern fn abs(x: i32) i32
+
+pub fn main() {
+    @println(abs(-3) + other.half(4))
+}
+// file: other/other.ore
+extern fn abs(x: i64) i64
+
+pub fn half(x: i32) i32 {
+    return x / 2
+}
+"#,
+    r#"// file: main.ore
+import other
+
+extern fn abs(x: i32) i32
+
+pub fn main() {
+    @println(abs(-3) + other.half(4))
+}
+// file: other/other.ore
+extern fn abs(x: i32) i32
+
+pub fn half(x: i32) i32 {
+    return abs(x) / 2
 }
 "#,
 }

@@ -25,6 +25,16 @@ pub enum Item {
     Interface(InterfaceDecl),
     Test(TestDecl),
     Global(GlobalDecl),
+    /// `@link("name")`: a C library to link with.
+    Link(LinkDecl),
+}
+
+/// `@link("name")` at the top level: `name` is a `pkg-config` package, a
+/// library (`-lname`) or `framework:Name` (macOS).
+#[derive(Debug, Clone)]
+pub struct LinkDecl {
+    pub name: String,
+    pub span: Span,
 }
 
 /// A top-level `let NAME = value` constant, `var name = value` global, or
@@ -47,12 +57,16 @@ pub struct FnDecl {
     pub name: String,
     pub span: Span,
     pub is_pub: bool,
+    /// `extern fn`: a C function without a body, or with a body an Ore
+    /// function exported to C under its own name.
     pub is_extern: bool,
     pub params: Vec<Param>,
+    /// The `...` after the parameters of a variadic C function.
+    pub variadic: Option<Span>,
     pub ret: Option<TypeExpr>,
     /// `where T: I, ...`: the constraints on the `comptime` parameters.
     pub bounds: Vec<Bound>,
-    /// `None` for `extern fn`.
+    /// `None` for an `extern fn` that declares a C function.
     pub body: Option<Block>,
 }
 
@@ -80,6 +94,8 @@ pub struct StructDecl {
     pub name: String,
     pub span: Span,
     pub is_pub: bool,
+    /// `extern struct`: C layout, C-compatible fields.
+    pub is_extern: bool,
     pub fields: Vec<FieldDecl>,
     /// Functions declared in the struct body.
     pub methods: Vec<FnDecl>,
@@ -171,6 +187,8 @@ pub enum TypeExprKind {
     Dyn(String),
     /// `F(A, B)`: the type that the type function `F` returns.
     Generic(String, Vec<TypeExpr>),
+    /// `fn(A, B) R`: a function; no result type is `void`.
+    Fn(Vec<TypeExpr>, Option<Box<TypeExpr>>),
 }
 
 #[derive(Debug, Clone)]
@@ -317,6 +335,8 @@ pub enum ExprKind {
     Char(u32),
     Ident(String),
     Call { name: String, args: Vec<Expr> },
+    /// `callee(args)` where the callee is not a name: `f()(x)`, `ops[i](x)`.
+    CallExpr { callee: Box<Expr>, args: Vec<Expr> },
     /// `base.name(args)`: a method call, or `Type.name(args)`.
     MethodCall { base: Box<Expr>, name: String, args: Vec<Expr> },
     Builtin { name: String, args: Vec<Expr> },

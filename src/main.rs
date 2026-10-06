@@ -125,7 +125,7 @@ fn main() -> ExitCode {
         }
     };
     if args.cmd == "emit-c" {
-        print!("{c}");
+        print!("{}", c.c);
         return ExitCode::SUCCESS;
     }
     let exe = match (&args.cmd[..], &args.out) {

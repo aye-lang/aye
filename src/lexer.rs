@@ -103,6 +103,8 @@ pub enum Tok {
     DotDot,
     /// `..=`, an inclusive range in a `match` pattern.
     DotDotEq,
+    /// `...`, the variadic part of a C function's parameters.
+    Ellipsis,
     /// `.*`, pointer dereference.
     DotStar,
     /// `=>` in a `match` arm.
@@ -175,6 +177,7 @@ impl fmt::Display for Tok {
             Tok::Dot => "`.`",
             Tok::DotDot => "`..`",
             Tok::DotDotEq => "`..=`",
+            Tok::Ellipsis => "`...`",
             Tok::DotStar => "`.*`",
             Tok::FatArrow => "`=>`",
             Tok::Amp => "`&`",
@@ -546,7 +549,11 @@ impl Lexer {
             ('?', _) => Tok::Question,
             ('.', Some('.')) => {
                 self.bump();
-                if self.peek() == Some('=') { take(self, Tok::DotDotEq) } else { Tok::DotDot }
+                match self.peek() {
+                    Some('=') => take(self, Tok::DotDotEq),
+                    Some('.') => take(self, Tok::Ellipsis),
+                    _ => Tok::DotDot,
+                }
             }
             ('.', Some('*')) => take(self, Tok::DotStar),
             ('.', _) => Tok::Dot,
@@ -696,7 +703,7 @@ mod tests {
     #[test]
     fn bitwise_and_shift_ops() {
         assert_eq!(
-            toks("a << b >>= c &= ~d ^ e |= f ..= g"),
+            toks("a << b >>= c &= ~d ^ e |= f ..= g ..."),
             vec![
                 Tok::Ident("a".into()),
                 Tok::Shl,
@@ -712,7 +719,7 @@ mod tests {
                 Tok::Ident("f".into()),
                 Tok::DotDotEq,
                 Tok::Ident("g".into()),
-                Tok::Semi,
+                Tok::Ellipsis,
                 Tok::Eof,
             ]
         );

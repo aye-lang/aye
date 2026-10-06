@@ -1,0 +1,140 @@
+// Acceptance (M7): open an SDL2 window, fill its pixels from Ore, show
+// one frame and quit. The test runs it with SDL_VIDEODRIVER=dummy, so it
+// needs no display; `ore run` without it shows a window for one frame.
+@link("sdl2")
+
+extern struct SDL_Window {}
+
+// Only the first fields: SDL owns it, and Ore reads it through a pointer.
+extern struct SDL_PixelFormat {
+    format: u32
+    palette: ?[*]u8
+    bitsPerPixel: u8
+    bytesPerPixel: u8
+}
+
+extern struct SDL_Rect {
+    x: i32
+    y: i32
+    w: i32
+    h: i32
+}
+
+extern struct SDL_Surface {
+    flags: u32
+    format: *SDL_PixelFormat
+    w: i32
+    h: i32
+    pitch: i32
+    pixels: ?[*]u8
+    userdata: ?[*]u8
+    locked: i32
+    listBlitmap: ?[*]u8
+    clipRect: SDL_Rect
+    map: ?[*]u8
+    refcount: i32
+}
+
+// `SDL_Event` is a 56-byte union aligned like a pointer.
+extern struct SDL_Event {
+    kind: u32
+    pad: u32
+    data: [6]u64
+}
+
+extern fn SDL_Init(flags: u32) i32
+extern fn SDL_Quit()
+extern fn SDL_GetError() [*]u8
+extern fn SDL_CreateWindow(title: [*]u8, x: i32, y: i32, w: i32, h: i32, flags: u32) ?*mut SDL_Window
+extern fn SDL_DestroyWindow(w: *mut SDL_Window)
+extern fn SDL_GetWindowSurface(w: *mut SDL_Window) ?*mut SDL_Surface
+extern fn SDL_UpdateWindowSurface(w: *mut SDL_Window) i32
+extern fn SDL_FillRect(dst: *mut SDL_Surface, rect: ?*SDL_Rect, color: u32) i32
+extern fn SDL_MapRGB(format: *SDL_PixelFormat, r: u8, g: u8, b: u8) u32
+extern fn SDL_PollEvent(event: *mut SDL_Event) i32
+extern fn strlen(s: [*]u8) usize
+
+let SDL_INIT_VIDEO: u32 = 0x20
+let SDL_WINDOWPOS_UNDEFINED: i32 = 0x1FFF0000
+let WIDTH: i32 = 64
+let HEIGHT: i32 = 48
+
+fn fail(what: []u8) {
+    let e = SDL_GetError()
+    @print(what)
+    @print(" failed: ")
+    @println(e[0..strlen(e)])
+}
+
+// A gradient: red grows to the right, green downwards. Returns the sum of
+// the pixels as read back.
+fn paint(s: *mut SDL_Surface) u64 {
+    var sum: u64 = 0
+    if s.pixels |pixels| {
+        let pitch = s.pitch as usize
+        let width = s.w as usize
+        for y in 0..s.h as usize {
+            let row = @ptrCast([*]u32, pixels[y * pitch..y * pitch + width * 4].ptr)
+            for x in 0..width {
+                row[x] = SDL_MapRGB(s.format, (x * 4) as u8, (y * 5) as u8, 128)
+            }
+            for x in 0..width {
+                sum += row[x] as u64
+            }
+        }
+    }
+    return sum
+}
+
+// The pixel at (x, y).
+fn pixel(s: *mut SDL_Surface, x: usize, y: usize) u32 {
+    if s.pixels |pixels| {
+        let row = @ptrCast([*]u32, pixels[y * s.pitch as usize..y * s.pitch as usize + 4 * (x + 1)].ptr)
+        return row[x]
+    }
+    return 0
+}
+
+fn frame(window: *mut SDL_Window) {
+    let surface = SDL_GetWindowSurface(window)
+    if surface |s| {
+        @print("surface ")
+        @print(s.w)
+        @print("x")
+        @println(s.h)
+        @println(s.format.bytesPerPixel)
+        if s.format.bytesPerPixel != 4 {
+            @println("not 32 bits per pixel")
+            return
+        }
+        @println(paint(s))
+        let box = SDL_Rect { x: 8, y: 8, w: 4, h: 4 }
+        SDL_FillRect(s, &box, SDL_MapRGB(s.format, 255, 255, 255))
+        @println(pixel(s, 9, 9) == SDL_MapRGB(s.format, 255, 255, 255))
+        @println(pixel(s, 12, 9) == SDL_MapRGB(s.format, 48, 45, 128))
+        if SDL_UpdateWindowSurface(window) != 0 {
+            fail("SDL_UpdateWindowSurface")
+        }
+        var event = @zeroed(SDL_Event)
+        while SDL_PollEvent(&mut event) != 0 {
+        }
+    } else {
+        fail("SDL_GetWindowSurface")
+    }
+}
+
+pub fn main() {
+    if SDL_Init(SDL_INIT_VIDEO) != 0 {
+        fail("SDL_Init")
+        return
+    }
+    let w = SDL_CreateWindow("Ore".ptr, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, WIDTH, HEIGHT, 0)
+    if w |window| {
+        frame(window)
+        SDL_DestroyWindow(window)
+    } else {
+        fail("SDL_CreateWindow")
+    }
+    SDL_Quit()
+    @println("done")
+}

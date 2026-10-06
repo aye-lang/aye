@@ -1,0 +1,31 @@
+struct S {
+    f: fn(i64) i64
+    n: i64
+}
+
+fn add(a: i64, b: i64) i64 {
+    return a + b
+}
+
+fn neg(x: i64) i64 {
+    return -x
+}
+
+fn id(comptime T: type, x: T) T {
+    return x
+}
+
+pub fn main() {
+    let n: i64 = 3
+    n(1)
+    let g = id
+    let h: fn(i64) i64 = add
+    let k = add
+    k(1)
+    var maybe: ?fn() = null
+    maybe()
+    let s = S { f: add, n: 1 }
+    let t = S { f: neg, n: 1 }
+    t.n(2)
+    t.f(1, 2)
+}

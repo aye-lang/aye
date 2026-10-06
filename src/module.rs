@@ -45,6 +45,7 @@ const STD_FILES: &[(&str, &str, &str)] = &[
     ("std.mem", "std/mem/mem.ore", include_str!("../std/mem/mem.ore")),
     ("std.os", "std/os/os.ore", include_str!("../std/os/os.ore")),
     ("std.pool", "std/pool/pool.ore", include_str!("../std/pool/pool.ore")),
+    ("std.sort", "std/sort/sort.ore", include_str!("../std/sort/sort.ore")),
     ("std.testing", "std/testing/testing.ore", include_str!("../std/testing/testing.ore")),
     ("std.text", "std/text/text.ore", include_str!("../std/text/text.ore")),
     ("std.time", "std/time/time.ore", include_str!("../std/time/time.ore")),
@@ -295,7 +296,7 @@ impl Loader<'_> {
                             AstItem::ErrorSet(e) => (&e.name, e.span, e.is_pub, Kind::Other),
                             AstItem::Interface(i) => (&i.name, i.span, i.is_pub, Kind::Other),
                             AstItem::Global(g) => (&g.name, g.span, g.is_pub, Kind::Struct),
-                            AstItem::Test(_) => continue,
+                            AstItem::Test(_) | AstItem::Link(_) => continue,
                         };
                         module.items.entry(name.clone()).or_insert(Decl { is_pub, kind, span });
                     }
@@ -604,6 +605,7 @@ impl Loader<'_> {
                 }
             }
             AstItem::Test(t) => self.func(&mut t.func),
+            AstItem::Link(_) => {}
         }
     }
 
@@ -665,6 +667,14 @@ impl Loader<'_> {
             | TypeExprKind::CPtr(e)
             | TypeExprKind::Ptr(e, _)
             | TypeExprKind::Optional(e) => self.ty(e),
+            TypeExprKind::Fn(params, ret) => {
+                for p in params {
+                    self.ty(p);
+                }
+                if let Some(r) = ret {
+                    self.ty(r);
+                }
+            }
         }
     }
 
@@ -756,6 +766,10 @@ impl Loader<'_> {
                     Ok(Res::Unresolved) => {}
                     Err(err) => self.report(err),
                 }
+                self.args(args);
+            }
+            ExprKind::CallExpr { callee, args } => {
+                self.expr(callee);
                 self.args(args);
             }
             ExprKind::MethodCall { base, name, args } => {
@@ -938,6 +952,7 @@ impl Loader<'_> {
                         AstItem::ErrorSet(x) => x.name = canonical(&path, &x.name),
                         AstItem::Interface(x) => x.name = canonical(&path, &x.name),
                         AstItem::Global(x) => x.name = canonical(&path, &x.name),
+                        AstItem::Link(_) => {}
                     }
                     items.push(item);
                 }
