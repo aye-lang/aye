@@ -130,6 +130,12 @@ assert(canvas.toDataURL('image/png').startsWith('data:image/png;base64,iVBOR'), 
 ctx.font = '20px sans-serif';
 assert(ctx.measureText('MMMM').width > ctx.measureText('M').width, 'measureText monotonicity');
 assert(ctx.measureText('Hello').actualBoundingBoxAscent > 0 && ctx.measureText('Hello').fontBoundingBoxDescent >= 0, 'text metrics');
+assert(ctx.measureText('g').actualBoundingBoxDescent > 0, 'glyph-specific descent');
+assert(ctx.measureText(' ').actualBoundingBoxRight === 0, 'space has no ink');
+ctx.save();
+ctx.textBaseline = 'top';
+assert(ctx.measureText('Hello').fontBoundingBoxAscent === 0, 'baseline-relative metrics');
+ctx.restore();
 const image = new Image();
 image.src = '../paint/img/photo.png';
 assert(image.naturalWidth > 0 && image.naturalHeight > 0, 'detached image dimensions');

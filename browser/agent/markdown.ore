@@ -672,9 +672,9 @@ fn mdInline(md: *mut Md, el: NodeId, inl: *mut text.Builder) AllocError!void {
             try inl.append(fallback.bytes())
         } else {
             try inl.append("[canvas ")
-            try inl.append(md.page.doc.attr(el, "width") orelse "300")
+            try inl.appendUint(engine.canvasDimension(&md.page.doc, el, "width", 300) as u64)
             try inl.appendByte('x')
-            try inl.append(md.page.doc.attr(el, "height") orelse "150")
+            try inl.appendUint(engine.canvasDimension(&md.page.doc, el, "height", 150) as u64)
             try inl.appendByte(']')
         }
         return

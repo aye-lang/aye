@@ -79,6 +79,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.reply(302, [("Location", "/basic.html")])
         elif path == "/redirect-style":
             self.reply(302, [("Location", "/style/link.html")])
+        elif path == "/canvas-image-redirect":
+            port = self.server.server_address[1]
+            self.reply(302, [("Location", f"http://localhost:{port}/paint/img/photo.png")])
         elif path == "/redirect-loop":
             self.reply(302, [("Location", "/redirect-loop")])
         elif path == "/agent":

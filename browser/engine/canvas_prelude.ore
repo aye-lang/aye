@@ -232,7 +232,7 @@ pub let CANVAS_PRELUDE =
     \\  }
     \\}
     \\function dimensions(w, h) {
-    \\  if (!finite([w, h]) || w <= 0 || h <= 0 || w > 16384 || h > 16384 || w*h > 16777216) throw new DOMException('Invalid bitmap size', 'IndexSizeError');
+    \\  if (!finite([w, h]) || !Number.isInteger(w) || !Number.isInteger(h) || w <= 0 || h <= 0 || w > 16384 || h > 16384 || w*h > 16777216) throw new DOMException('Invalid bitmap size', 'IndexSizeError');
     \\}
     \\// The interpreter's typed arrays are JS polyfills. Use the existing one
     \\// when installed, rather than installing a second typed-array subsystem.
@@ -515,28 +515,45 @@ pub let CANVAS_PRELUDE =
     \\    }
     \\    ak.canvasPixels(this._node, x+x0, y+y0, x1-x0, y1-y0, out);
     \\  }
+    \\  _rtl() {
+    \\    return this.direction === 'rtl' || (this.direction === 'inherit' && getComputedStyle(this._node).direction === 'rtl');
+    \\  }
+    \\  _baselineOffset(a) {
+    \\    if (this.textBaseline === 'top' || this.textBaseline === 'hanging') return a[1];
+    \\    if (this.textBaseline === 'middle') return (a[1]-a[2])/2;
+    \\    if (this.textBaseline === 'bottom' || this.textBaseline === 'ideographic') return -a[2];
+    \\    return 0;
+    \\  }
     \\  measureText(text) {
     \\    this._sync();
-    \\    const a = ak.canvasText(this.font, String(text), false) || [0, 8, 2];
+    \\    const rtl = this._rtl();
+    \\    const a = ak.canvasText(this.font, String(text).replace(/[\t\n\f\r]/g, ' '), false, rtl) || [0, 8, 2, null, 0, 0, 0, 0, 0, 0];
     \\    let left = 0;
     \\    if (this.textAlign === 'center') left = a[0]/2;
-    \\    else if (this.textAlign === 'right' || (this.textAlign === 'end' && this.direction !== 'rtl') || (this.textAlign === 'start' && this.direction === 'rtl')) left = a[0];
-    \\    return {width: a[0], actualBoundingBoxLeft: left, actualBoundingBoxRight: a[0]-left, actualBoundingBoxAscent: a[1], actualBoundingBoxDescent: a[2], fontBoundingBoxAscent: a[1], fontBoundingBoxDescent: a[2], emHeightAscent: a[1], emHeightDescent: a[2], alphabeticBaseline: 0};
+    \\    else if (this.textAlign === 'right' || (this.textAlign === 'end' && !rtl) || (this.textAlign === 'start' && rtl)) left = a[0];
+    \\    const baseline = this._baselineOffset(a);
+    \\    return {width: a[0], actualBoundingBoxLeft: left+a[6], actualBoundingBoxRight: a[7]-left, actualBoundingBoxAscent: a[8]-baseline, actualBoundingBoxDescent: a[9]+baseline, fontBoundingBoxAscent: a[1]-baseline, fontBoundingBoxDescent: a[2]+baseline, emHeightAscent: a[1]-baseline, emHeightDescent: a[2]+baseline, alphabeticBaseline: baseline};
     \\  }
     \\  _text(text, x, y, maxWidth, stroke) {
     \\    this._sync();
     \\    if (!finite([x, y]) || (maxWidth !== undefined && (!finite([maxWidth]) || maxWidth <= 0))) return;
-    \\    const a = ak.canvasText(this.font, String(text), true);
+    \\    const rtl = this._rtl();
+    \\    const a = ak.canvasText(this.font, String(text).replace(/[\t\n\f\r]/g, ' '), true, rtl);
     \\    if (!a || !a[3]) return;
     \\    const width = a[0];
     \\    const k = maxWidth === undefined || width <= maxWidth ? 1 : maxWidth/width;
     \\    if (this.textAlign === 'center') x -= width*k/2;
-    \\    else if (this.textAlign === 'right' || (this.textAlign === 'end' && this.direction !== 'rtl') || (this.textAlign === 'start' && this.direction === 'rtl')) x -= width*k;
-    \\    if (this.textBaseline === 'top' || this.textBaseline === 'hanging') y += a[1];
-    \\    else if (this.textBaseline === 'middle') y += (a[1]-a[2])/2;
-    \\    else if (this.textBaseline === 'bottom' || this.textBaseline === 'ideographic') y -= a[2];
-    \\    const mask = {data: a[3], width: a[4], height: a[5], matrix: mul(this._matrix, [k, 0, 0, 1, x-2*k, y-a[1]-2]), stroke: stroke ? this.lineWidth : 0};
+    \\    else if (this.textAlign === 'right' || (this.textAlign === 'end' && !rtl) || (this.textAlign === 'start' && rtl)) x -= width*k;
+    \\    y += this._baselineOffset(a);
+    \\    const mask = {data: a[3], width: a[4], height: a[5], matrix: mul(this._matrix, [k, 0, 0, 1, x+a[10]*k, y+a[11]]), stroke: stroke ? this.lineWidth : 0};
     \\    const clip = this._clips.length ? this._svg('<rect width="100000" height="100000" fill="white"/>', this._clips) : null;
+    \\    const shadow = ak.canvasColor(this.shadowColor);
+    \\    if (shadow && shadow[3]) {
+    \\      const shifted = Object.assign({}, mask, {matrix: mask.matrix.slice()});
+    \\      shifted.matrix[4] += this.shadowOffsetX;
+    \\      shifted.matrix[5] += this.shadowOffsetY;
+    \\      ak.canvasDraw(this._node, shifted, {kind: 0, color: shadow, blur: this.shadowBlur}, this.globalAlpha, this.globalCompositeOperation, clip);
+    \\    }
     \\    ak.canvasDraw(this._node, mask, this._paint(stroke ? this.strokeStyle : this.fillStyle), this.globalAlpha, this.globalCompositeOperation, clip);
     \\  }
     \\  fillText(text, x, y, maxWidth) {

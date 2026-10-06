@@ -384,9 +384,8 @@ fn canvas_animation() {
     let out = run_window(&[page, "--frames", "60", "--font", "fixed", "--text", "--save", animated.to_str().unwrap()]);
     assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
     assert!(text(&out.stdout).contains("three frames drawn"), "{}", text(&out.stdout));
-    // A different fragment would also change the address bar. Use an
-    // event-loop dump to verify pixels separately rather than treating
-    // that expected chrome difference as a bitmap difference.
+    // The fragment also changes the address bar; compare only the page
+    // area when checking the animated and immediate bitmap pixels.
     let static_page = format!("{page}#static");
     let out = run_window(&[&static_page, "--frames", "1", "--font", "fixed", "--text", "--save", immediate.to_str().unwrap()]);
     assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
@@ -414,6 +413,22 @@ assert pixels(sys.argv[1]) == pixels(sys.argv[2]), 'canvas repaint did not match
     if let Ok(out) = Command::new("python3").args(["-c", script, animated.to_str().unwrap(), immediate.to_str().unwrap()]).output() {
         assert!(out.status.success(), "{}", text(&out.stderr));
     }
+}
+
+/// Cross-origin pixel reads are refused, even when a page sets a
+/// crossorigin attribute without a CORS-validated image response.
+#[test]
+fn canvas_origin_clean() {
+    let Some(srv) = server() else {
+        println!("skipped: cannot start python3 for the test server");
+        return;
+    };
+    expect(
+        &["dump", "--text", "--js", &format!("{}/canvas/origin.html", srv.base)],
+        0,
+        "canvas origin-clean checks passed\n",
+        "",
+    );
 }
 
 fn crc32(data: &[u8]) -> u32 {

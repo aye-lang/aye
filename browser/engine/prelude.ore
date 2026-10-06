@@ -829,8 +829,9 @@ pub let PRELUDE =
     \\const CanvasP = HTMLCanvasElement.prototype;
     \\for (const [k, d] of [['width', 300], ['height', 150]]) {
     \\  getter(CanvasP, k, function () {
-    \\    const v = parseInt(this.getAttribute(k), 10);
-    \\    return v >= 0 ? v : d;
+    \\    const attr = this.getAttribute(k);
+    \\    const v = /^\s*\+?\d+/.test(attr || '') ? parseInt(attr, 10) : NaN;
+    \\    return v >= 0 && v <= 4294967295 ? v : d;
     \\  }, function (v) { this.setAttribute(k, String(Number(v) >>> 0)); });
     \\}
     \\hidden(DocumentFragment.prototype, 'getElementById', function (id) {
