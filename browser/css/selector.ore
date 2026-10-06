@@ -5,13 +5,15 @@
 // `:last-of-type`, `:root`, `:empty`, `:link`, `:any-link`, `:hover`
 // (nothing is hovered yet), the states of form controls (`:checked`,
 // `:disabled`, `:enabled`, `:focus`, from `dom.controls`),
-// `:not(list)`, and pseudo-elements (valid, but
-// they match no element). A selector with anything else is invalid, and
-// so is its whole rule.
+// `:not(list)`, `:is(list)` and `:where(list)` (also `:matches()` and
+// `:-webkit-any()`; forgiving: invalid selectors in the list are
+// dropped), and pseudo-elements (valid, but they match no element). A
+// selector with anything else is invalid, and so is its whole rule.
 //
 // A sheet keeps selectors in three flat lists: a `Complex` is a range of
 // `Compound`s (left to right), a `Compound` a range of `Simple`s. The
-// argument of `:not()` is a range of `Complex`es.
+// argument of `:not()`, `:is()` and `:where()` is a range of
+// `Complex`es.
 
 import dom
 import dom.Document
@@ -42,6 +44,8 @@ pub enum SelKind {
     Focus
     Never
     Not
+    // `:is()` and `:where()`.
+    Is
 }
 
 pub struct Simple {
@@ -53,7 +57,7 @@ pub struct Simple {
     op: u8
     // Attr: compare the value ignoring ASCII case.
     ci: bool
-    // Not: the argument, `Sheet.complexes[sub_start..sub_end]`.
+    // Not, Is: the argument, `Sheet.complexes[sub_start..sub_end]`.
     sub_start: usize
     sub_end: usize
 }
@@ -241,6 +245,28 @@ fn parseComplex(sheet: *mut Sheet, all: []Token) AllocError!?Complex {
                         return null
                     }
                     i = close + 1
+                } else if n.kind == Tok.Function && isMatchesAny(n.text) {
+                    let close = blockEnd(toks, next)
+                    if close >= hi {
+                        return null
+                    }
+                    let inner = try parseForgiving(sheet, toks[next + 1..close])
+                    var s = simple(SelKind.Is, "")
+                    s.sub_start = inner.start
+                    s.sub_end = inner.end
+                    try simples.append(s)
+                    if !text.eqlIgnoreCase(n.text, "where") {
+                        // `:where()` adds nothing to the specificity.
+                        var most: u32 = 0
+                        for k in inner.start..inner.end {
+                            let sp = sheet.complexes.items()[k].spec
+                            if sp > most {
+                                most = sp
+                            }
+                        }
+                        spec.add(most)
+                    }
+                    i = close + 1
                 } else {
                     return null
                 }
@@ -288,6 +314,33 @@ fn parseComplex(sheet: *mut Sheet, all: []Token) AllocError!?Complex {
         })
     }
     return Complex { start: compound_base, end: sheet.compounds.len(), spec: spec.pack() }
+}
+
+fn isMatchesAny(name: []u8) bool {
+    return text.eqlIgnoreCase(name, "is") || text.eqlIgnoreCase(name, "where") || text.eqlIgnoreCase(name, "matches") || text.eqlIgnoreCase(name, "-webkit-any")
+}
+
+// A forgiving selector list (`:is()`, `:where()`): its valid selectors,
+// appended to `sheet`.
+fn parseForgiving(sheet: *mut Sheet, toks: []Token) AllocError!SelRange {
+    let a = sheet.arena.allocator()
+    var parsed = List(Complex).init(a)
+    var i: usize = 0
+    while i <= toks.len {
+        var j = i
+        while j < toks.len && toks[j].kind != Tok.Comma {
+            j = skipComponent(toks, j)
+        }
+        if try parseComplex(sheet, toks[i..j]) |cx| {
+            try parsed.append(cx)
+        }
+        i = j + 1
+    }
+    let start = sheet.complexes.len()
+    for cx in parsed.items() {
+        try sheet.complexes.append(cx)
+    }
+    return SelRange { start: start, end: sheet.complexes.len() }
 }
 
 // The kind of a pseudo-class name; null for an unknown one.
@@ -567,6 +620,14 @@ fn matchSimple(sheet: *Sheet, doc: *Document, s: Simple, el: NodeId) bool {
                 }
             }
             return true
+        }
+        .Is => {
+            for k in s.sub_start..s.sub_end {
+                if matchesComplex(sheet, doc, sheet.complexes.items()[k], el) {
+                    return true
+                }
+            }
+            return false
         }
     }
 }
