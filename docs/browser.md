@@ -78,12 +78,15 @@ agent sessions load pages through `engine.load` and keep history in a
   all zeros), custom elements and Shadow DOM (in progress),
   `MutationObserver` reporting (in progress).
 - **B8:** event listeners on another frame's nodes, moving nodes
-  between documents, frame history entries; HTML5 form controls and validation (in
-  progress); rotations and skews other than quarter turns are not drawn;
-  sticky only against the viewport; no public suffix list for cookies (a
-  bare top-level name is refused, `co.uk` is not); no AVIF. The list of
-  public sites is in [`docs/browser-sites.md`](browser-sites.md) (20
-  sites; run of 2026-10-06: 8 ✅, 7 ⚠️, 5 ❌, before the work below).
+  between documents, frame history entries; calendar, color and file
+  pickers, `datalist`; rotations and skews other than quarter turns are
+  not drawn; sticky only against the viewport; no public suffix list for
+  cookies (a bare top-level name is refused, `co.uk` is not); no AVIF;
+  page loads are slow on big sites (in progress), and so is the JS
+  interpreter (in progress). The list of public sites is in
+  [`docs/browser-sites.md`](browser-sites.md) (20 sites; run of
+  2026-10-07: 14 ✅, 3 ⚠️, 3 ❌; the run of 2026-10-06, before the work
+  below, had 8 ✅, 7 ⚠️, 5 ❌).
 
 The compiler gaps the browser met, and which of them M9.5/M9.6 fixed,
 are in `browser/COMPILER_GAPS.md`.
@@ -530,3 +533,17 @@ on (`--no-js` turns it off), `dump` with `--js`.
     `target`. The snapshot and `read` give refs inside frames and agent
     actions work there; in the window, clicks reach the frame's
     document.
+  - *HTML5 forms* (by GPT-6.1-sol through pi): text-like and calendar
+    inputs (date, time, datetime-local, month, week), number controls,
+    draggable range sliders, color swatches, file placeholders,
+    `output`, `progress` and `meter`. Constraint validation (required,
+    pattern, lengths, numeric and calendar bounds and steps, email and
+    URL mismatches, custom errors) with live `ValidityState`,
+    `checkValidity`/`reportValidity`/`setCustomValidity`,
+    `requestSubmit`, `reset` and FormData from the form's entries.
+    Invalid submissions fire `invalid`, focus the first invalid control
+    and show a tooltip in the window or a message to the agent. Form
+    owners (`form=`), labels, disabled fieldsets, submitter overrides
+    (`formaction`, `formmethod`, `formenctype`, `formnovalidate`),
+    `multipart/form-data`, the state pseudo-classes, and the a11y roles
+    and states (spinbutton, slider, required, invalid).
