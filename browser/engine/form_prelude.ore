@@ -1,4 +1,5 @@
-// Script-level live ValidityState and ordered FormData facade.
+// Script-level live ValidityState over the native `_validity`
+// (form_api.ore).
 pub let FORM_PRELUDE =
     \\(function () {
     \\const P = HTMLElement.prototype;
@@ -12,61 +13,4 @@ pub let FORM_PRELUDE =
     \\  return this._validityState;
     \\}, configurable: true});
     \\globalThis.ValidityState = ValidityState;
-    \\class Blob {
-    \\  constructor(parts, options) {
-    \\    Object.defineProperty(this, '_text', {value: (parts || []).map(p => String(p)).join('')});
-    \\    Object.defineProperty(this, 'size', {value: new TextEncoder().encode(this._text).length});
-    \\    Object.defineProperty(this, 'type', {value: String((options || {}).type || '').toLowerCase()});
-    \\  }
-    \\  text() { return Promise.resolve(this._text); }
-    \\}
-    \\class File extends Blob {
-    \\  constructor(parts, name, options) {
-    \\    super(parts, options);
-    \\    Object.defineProperty(this, 'name', {value: String(name)});
-    \\    Object.defineProperty(this, 'lastModified', {value: Number((options || {}).lastModified || 0)});
-    \\  }
-    \\}
-    \\globalThis.Blob = Blob; globalThis.File = File;
-    \\class FormData {
-    \\  constructor(form, submitter) {
-    \\    this._entries = [];
-    \\    if (form !== undefined) {
-    \\      if (!form || form.localName !== 'form') throw new TypeError('Expected a form');
-    \\      if (submitter !== undefined && submitter !== null) {
-    \\        if (!submitter || !((submitter.localName === 'button' && submitter.type === 'submit') || (submitter.localName === 'input' && /^(submit|image)$/.test(submitter.type)))) throw new TypeError('Expected a submit button');
-    \\        if (submitter.form !== form) throw new DOMException('Submitter belongs to another form', 'NotFoundError');
-    \\      }
-    \\      for (const e of form._formEntries(submitter)) {
-    \\        this._entries.push([e[0], e[2] ? new File([], '', {type: 'application/octet-stream'}) : e[1]]);
-    \\      }
-    \\    }
-    \\  }
-    \\  append(name, value, filename) {
-    \\    if (value instanceof Blob) value = filename === undefined && value instanceof File ? value : new File([value._text], filename === undefined ? 'blob' : filename, {type: value.type});
-    \\    else value = String(value);
-    \\    this._entries.push([String(name), value]);
-    \\  }
-    \\  get(name) { name = String(name); const e = this._entries.find(e => e[0] === name); return e ? e[1] : null; }
-    \\  getAll(name) { name = String(name); return this._entries.filter(e => e[0] === name).map(e => e[1]); }
-    \\  has(name) { return this.getAll(name).length > 0; }
-    \\  delete(name) { name = String(name); this._entries = this._entries.filter(e => e[0] !== name); }
-    \\  set(name, value) {
-    \\    name = String(name);
-    \\    if (!(value instanceof Blob)) value = String(value);
-    \\    else if (!(value instanceof File)) value = new File([value._text], 'blob', {type: value.type});
-    \\    let found = false; const next = [];
-    \\    for (const e of this._entries) {
-    \\      if (e[0] !== name) next.push(e);
-    \\      else if (!found) { next.push([name, value]); found = true; }
-    \\    }
-    \\    if (!found) next.push([name, value]); this._entries = next;
-    \\  }
-    \\  *entries() { for (const e of this._entries) yield [e[0], e[1]]; }
-    \\  *keys() { for (const e of this._entries) yield e[0]; }
-    \\  *values() { for (const e of this._entries) yield e[1]; }
-    \\  [Symbol.iterator]() { return this.entries(); }
-    \\  forEach(fn, that) { for (const e of this._entries) fn.call(that, e[1], e[0], this); }
-    \\}
-    \\globalThis.FormData = FormData;
     \\})();
