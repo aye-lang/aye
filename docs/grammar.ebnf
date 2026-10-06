@@ -8,8 +8,9 @@
    the lexer inserts it (Go rule) at a line break or at end of file when the
    last token on the line is one of
        identifier, integer/float/string/char literal,
-       ")"  "]"  "}"  ".*"  "return"  "break"  "continue".
-   An explicit ";" is a lexical error. *)
+       ")"  "]"  "}"  ".*"  "return"  "break"  "continue",
+   except after a line_str when the next line starts with "\\", ",", ")",
+   "]" or "}".  An explicit ";" is a lexical error. *)
 
 (* ------------------------------------------------------------ lexical *)
 
@@ -22,7 +23,9 @@ int_lit     = dec_lit | "0x" hex_digit { hex_digit | "_" }
 dec_lit     = digit , { digit | "_" } ;
 float_lit   = dec_lit "." dec_lit [ exponent ] | dec_lit exponent ;
 exponent    = ( "e" | "E" ) [ "+" | "-" ] dec_lit ;
-string_lit  = '"' , { char | escape } , '"' ;          (* single line, UTF-8 *)
+string_lit  = '"' , { char | escape } , '"'           (* single line, UTF-8 *)
+            | line_str , { line_str } ;               (* consecutive lines, joined with "\n" *)
+line_str    = "\\" , { char } ;                       (* to the end of the line, no escapes *)
 char_lit    = "'" , ( char | escape ) , "'" ;           (* one code point *)
 escape      = "\n" | "\t" | "\r" | "\0" | "\\" | '\"' | "\'" | "\x" hex_digit hex_digit ;
 builtin     = "@" ident ;

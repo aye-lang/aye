@@ -1,0 +1,2 @@
+line_strings.ore:2:13: error[E0004]: unterminated string literal (a string ends on its line; write a multi-line string as lines that start with `\\`)
+line_strings.ore:3:13: error[E0001]: unexpected character `\` (a multi-line string's lines start with `\\`)

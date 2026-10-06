@@ -2,8 +2,10 @@
 //!
 //! A newline (or end of file) becomes a `Tok::Semi` terminator when the
 //! previous token is an identifier, a literal, `)`, `]`, `}`, one of the
-//! keywords `return`, `break`, `continue`, `unreachable`, or `.*`, `.?`.
-//! Ore source never contains an explicit `;`.
+//! keywords `return`, `break`, `continue`, `unreachable`, or `.*`, `.?`;
+//! except that after a line of a multi-line string (`\\ text`), a newline
+//! before another such line, or before a line that starts with `,`, `)`,
+//! `]` or `}`, is not one. Ore source never contains an explicit `;`.
 //!
 //! After a lexical error the rest of the line is skipped and lexing goes on,
 //! so every bad line is reported.
@@ -93,6 +95,9 @@ pub enum Tok {
     Int(u64),
     Float(f64),
     Str(Vec<u8>),
+    /// One line of a multi-line string, `\\ text`: the text after `\\`
+    /// up to the end of the line. The parser joins consecutive lines.
+    LineStr(Vec<u8>),
     Char(u32),
     Kw(Kw),
     LParen,
@@ -167,7 +172,7 @@ impl fmt::Display for Tok {
             Tok::Builtin(n) => return write!(f, "`@{n}`"),
             Tok::Int(_) => "integer literal",
             Tok::Float(_) => "float literal",
-            Tok::Str(_) => "string literal",
+            Tok::Str(_) | Tok::LineStr(_) => "string literal",
             Tok::Char(_) => "character literal",
             Tok::Kw(k) => return write!(f, "`{}`", k.as_str()),
             Tok::Semi => "newline",
@@ -246,6 +251,7 @@ fn ends_statement(t: &Tok) -> bool {
             | Tok::Int(_)
             | Tok::Float(_)
             | Tok::Str(_)
+            | Tok::LineStr(_)
             | Tok::Char(_)
             | Tok::RParen
             | Tok::RBracket
@@ -331,7 +337,9 @@ impl Lexer {
             let span = self.here();
             match c {
                 '\n' => {
-                    self.terminate(span);
+                    if !self.continues_line_str() {
+                        self.terminate(span);
+                    }
                     self.bump();
                 }
                 ' ' | '\t' | '\r' => {
@@ -366,6 +374,16 @@ impl Lexer {
                     let s = self.string(span)?;
                     self.push(Tok::Str(s), span);
                 }
+                '\\' if self.peek_at(1) == Some('\\') => {
+                    self.bump();
+                    self.bump();
+                    let mut text = String::new();
+                    while let Some(c) = self.peek().filter(|&c| c != '\n' && !(c == '\r' && self.peek_at(1) == Some('\n'))) {
+                        text.push(c);
+                        self.bump();
+                    }
+                    self.push(Tok::LineStr(text.into_bytes()), span);
+                }
                 '\'' => {
                     let c = self.char_lit(span)?;
                     self.push(Tok::Char(c), span);
@@ -377,6 +395,24 @@ impl Lexer {
             }
         }
         Ok(())
+    }
+
+    /// At a newline after a line of a multi-line string: the string goes on
+    /// (the next line starts with `\\`), or the next line starts with `,`,
+    /// `)`, `]` or `}`, which a line string cannot be followed by on its line.
+    fn continues_line_str(&self) -> bool {
+        if !matches!(self.toks.last(), Some(Token { tok: Tok::LineStr(_), .. })) {
+            return false;
+        }
+        let mut i = self.pos + 1;
+        while matches!(self.chars.get(i), Some(' ' | '\t' | '\r')) {
+            i += 1;
+        }
+        match self.chars.get(i) {
+            Some('\\') => self.chars.get(i + 1) == Some(&'\\'),
+            Some(',' | ')' | ']' | '}') => true,
+            _ => false,
+        }
     }
 
     fn ident(&mut self) -> String {
@@ -510,7 +546,10 @@ impl Lexer {
                     self.bump();
                     return Ok(out);
                 }
-                None | Some('\n') => return Err(Error::new(E0004, span, "unterminated string literal")),
+                None | Some('\n') => {
+                    let msg = "unterminated string literal (a string ends on its line; write a multi-line string as lines that start with `\\\\`)";
+                    return Err(Error::new(E0004, span, msg));
+                }
                 Some('\\') if self.peek_at(1) == Some('x') => {
                     // `\xHH` is a raw byte, not a code point.
                     let b = self.escaped(span)?;
@@ -622,6 +661,9 @@ impl Lexer {
             ('%', _) => Tok::Percent,
             (';', _) => {
                 return Err(Error::new(E0002, span, "unexpected `;` (Ore ends statements at newlines)"));
+            }
+            ('\\', _) => {
+                return Err(Error::new(E0001, span, "unexpected character `\\` (a multi-line string's lines start with `\\\\`)"));
             }
             _ => return Err(Error::new(E0001, span, format!("unexpected character `{c}`"))),
         };
@@ -750,6 +792,28 @@ mod tests {
                 Tok::DotDotEq,
                 Tok::Ident("g".into()),
                 Tok::Ellipsis,
+                Tok::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn line_strings() {
+        let ls = |s: &str| Tok::LineStr(s.as_bytes().to_vec());
+        assert_eq!(
+            toks("let a =\n  \\\\x \"y\" // z\n  \\\\\r\nf(\\\\w\n)\n"),
+            vec![
+                Tok::Kw(Kw::Let),
+                Tok::Ident("a".into()),
+                Tok::Assign,
+                ls("x \"y\" // z"),
+                ls(""),
+                Tok::Semi,
+                Tok::Ident("f".into()),
+                Tok::LParen,
+                ls("w"),
+                Tok::RParen,
+                Tok::Semi,
                 Tok::Eof,
             ]
         );

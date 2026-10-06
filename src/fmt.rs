@@ -206,7 +206,9 @@ fn classify(items: &mut [Item]) {
                 for_header = true;
                 Role::Keyword
             }
-            Tok::Ident(_) | Tok::Builtin(_) | Tok::Int(_) | Tok::Float(_) | Tok::Str(_) | Tok::Char(_) => Role::Operand,
+            Tok::Ident(_) | Tok::Builtin(_) | Tok::Int(_) | Tok::Float(_) | Tok::Str(_) | Tok::LineStr(_) | Tok::Char(_) => {
+                Role::Operand
+            }
             Tok::Kw(_) => Role::Keyword,
             Tok::Comma => Role::Comma,
             Tok::Colon => Role::Colon,
@@ -336,6 +338,10 @@ fn layout(scan: &Scan) -> (String, Vec<u32>) {
     let mut bases: Vec<usize> = Vec::new();
     // The previous code line continues its statement on the next line.
     let mut cont = false;
+    // The indentation of the previous code line when it ends with a line of
+    // a multi-line string: the string's next line, or the `,` after it, is
+    // indented like it.
+    let mut line_str: Option<usize> = None;
     let mut lines: Vec<Option<Line>> = Vec::new();
     for (l, idx) in by_line.iter().enumerate() {
         let comment = scan.comments[l].clone();
@@ -345,8 +351,9 @@ fn layout(scan: &Scan) -> (String, Vec<u32>) {
             continue;
         };
         let continued = cont && !matches!(items[first].role, Role::Close(_));
-        let indent = match items[first].role {
-            Role::Close(_) => bases.last().copied().unwrap_or(0),
+        let indent = match (items[first].role, line_str) {
+            (Role::Close(_), _) => bases.last().copied().unwrap_or(0),
+            (Role::Operand | Role::Comma, Some(n)) if matches!(items[first].tok, Tok::LineStr(_) | Tok::Comma) => n,
             _ => inner + continued as usize,
         };
         for &i in idx {
@@ -364,6 +371,7 @@ fn layout(scan: &Scan) -> (String, Vec<u32>) {
         let last = *idx.last().unwrap();
         let next_ends = items.get(last + 1).is_none_or(|n| n.role == Role::Semi);
         cont = !next_ends && !matches!(items[last].role, Role::Open(_) | Role::Comma);
+        line_str = matches!(items[last].tok, Tok::LineStr(_)).then_some(indent);
         let code = join(idx.iter().map(|&i| &items[i]));
         lines.push(Some(Line { indent, code, comment }));
     }

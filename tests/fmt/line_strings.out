@@ -1,0 +1,17 @@
+let UA =
+    \\body { margin: 8px }
+    \\p {}
+
+pub fn main() {
+    let s = \\one
+    @println(s)
+    show(
+        \\a
+        \\b
+    )
+    let parts = [_][]u8{
+        \\x
+        ,
+        "y",
+    }
+}

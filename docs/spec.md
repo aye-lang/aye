@@ -103,13 +103,38 @@ context; `ore doc --signatures std` prints all of std.
 - String literals `"text"` are single-line, have type `[]u8` (UTF-8 bytes,
   read-only), and are followed in memory by a NUL byte that `.len` does not
   count. Escapes: `\n \t \r \0 \\ \" \' \xHH`.
+- Multi-line strings: consecutive lines that start (after indentation)
+  with `\\`. Each line's text runs from after `\\` to the end of the line,
+  as written (no escapes; `//` is text); the lines are joined with `\n`,
+  with no newline after the last (add an empty `\\` line for one). It is a
+  `[]u8` like any string. A `,` or closing bracket that follows goes on
+  the next line:
+
+```ore
+let STYLE =
+    \\body { margin: 8px }
+    \\p { color: "red" }
+
+pub fn main() {
+    @println(STYLE)
+    let lines = [_][]u8{
+        \\a
+        \\b
+        ,
+        "c",
+    }
+    @println(lines.len)
+}
+```
+
 - Builtins start with `@`: `@print`, `@println`, `@expect`, `@expectEqual`,
   `@testAllocator`, `@sizeOf`, `@zeroed`, `@ptrCast`, `@link`.
 
 **Newlines end statements** (Go's rule). A newline is a statement
 terminator when the last token on the line is an identifier, a literal,
-`)`, `]`, `}`, `.*`, `return`, `break` or `continue`. An explicit `;` is an
-error. Consequences:
+`)`, `]`, `}`, `.*`, `return`, `break` or `continue` (after a line of a
+multi-line string, only when the next line does not start with `\\`, `,`,
+`)`, `]` or `}`). An explicit `;` is an error. Consequences:
 
 - `else` must be on the same line as the `}` before it: `} else {`.
 - A call, struct literal or array literal that spans lines needs a trailing

@@ -1,0 +1,5 @@
+pub fn main() {
+    let s = "a
+    let t = \ b
+    @println(s)
+}

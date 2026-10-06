@@ -1162,6 +1162,16 @@ impl Parser {
                 self.bump();
                 ExprKind::Str(s)
             }
+            // Consecutive lines of a multi-line string, joined with `\n`.
+            Tok::LineStr(mut s) => {
+                self.bump();
+                while let Tok::LineStr(more) = self.peek().clone() {
+                    self.bump();
+                    s.push(b'\n');
+                    s.extend(more);
+                }
+                ExprKind::Str(s)
+            }
             Tok::Char(c) => {
                 self.bump();
                 ExprKind::Char(c)

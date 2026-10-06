@@ -1,0 +1,37 @@
+// Multi-line string literals: each line starts with `\\` and runs to the
+// end of the line, without escapes; the lines are joined with `\n`, with
+// no newline after the last one.
+
+let UA =
+    \\body { margin: 8px }
+    \\p { margin: 1em 0; content: "\n" } // not a comment
+
+fn show(s: []u8) {
+    @println(s)
+}
+
+pub fn main() {
+    @println(UA)
+    @println(UA.len)
+    let one = \\just one line
+    show(one)
+    show(
+        \\in a call
+        \\  indented
+    )
+    let parts = [_][]u8{
+        \\first
+        \\element
+        ,
+        "second",
+    }
+    @println(parts[0])
+    @println(parts.len)
+    let empty =
+        \\
+    @println(empty.len)
+    let trailing =
+        \\line
+        \\
+    @println(trailing.len)
+}
