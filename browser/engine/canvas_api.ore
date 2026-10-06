@@ -40,7 +40,7 @@ pub fn setCanvasFixed(fixed: bool) {
 
 fn installCanvas(it: *mut Interp, o: u32) JsError!void {
     try defMethod(it, o, "canvasInfo", 1, akCanvasInfo)
-    try defMethod(it, o, "canvasDraw", 6, akCanvasDraw)
+    try defMethod(it, o, "canvasDraw", 10, akCanvasDraw)
     try defMethod(it, o, "canvasPixels", 6, akCanvasPixels)
     try defMethod(it, o, "canvasPng", 1, akCanvasPng)
     try defMethod(it, o, "canvasColor", 1, akCanvasColor)
@@ -290,18 +290,203 @@ fn canvasTarget(b: *image.Bitmap, px: []mut u8) svg.Target {
     return wholeCanvas(b).target(px)
 }
 
-fn canvasPicture(it: *mut Interp, v: Value) JsError!?*mut svg.Picture {
-    let sv = try it.toStringValue(v)
-    try it.push(sv)
-    defer it.pop()
-    return svg.parseImage(it.alloc, it.heap.bytes(js.strOf(sv)))
-}
-
 fn freePicture(alloc: std.mem.Allocator, pic: ?*mut svg.Picture) {
     if pic |p| {
         p.deinit()
         alloc.destroy(p)
     }
+}
+
+// Paths are built straight into pictures, as the SVG builder would
+// build them from `<path d=...>`: the same path parser, colors and
+// stroke attributes, without markup to write, parse and cascade.
+let CANVAS_WHITE = svg.Color { r: 255, g: 255, b: 255, a: 255 }
+let CANVAS_NONE = svg.Color { r: 0, g: 0, b: 0, a: 0 }
+let CANVAS_STROKES: usize = 16
+
+// The stroke attributes of a draw (`key`, their markup), as the SVG
+// cascade reads them. Numbers must be read exactly as CSS reads them, so
+// each distinct `key` is parsed once as SVG; its width is 0 when the
+// stroke draws nothing.
+pub struct CanvasStroke {
+    key: []mut u8
+    width: f64
+    cap: u8
+    join: u8
+    miter: f64
+    dashes: []mut f64
+    offset: f64
+
+    pub fn deinit(self: Self, alloc: std.mem.Allocator) {
+        alloc.free(self.key)
+        alloc.free(self.dashes)
+    }
+}
+
+fn canvasStroke(it: *mut Interp, key: Value) JsError!CanvasStroke {
+    let page = scriptOf(it).active
+    if page.images == null {
+        page.images = try page.alloc.create(ImageCache.init(page.alloc))
+    }
+    let cache = page.images.?
+    let kv = try it.toStringValue(key)
+    try it.push(kv)
+    defer it.pop()
+    let bytes = it.heap.bytes(js.strOf(kv))
+    for st in cache.canvas_strokes.items() {
+        if text.eql(st.key, bytes) {
+            return st
+        }
+    }
+    var b = text.Builder.init(it.alloc)
+    defer b.deinit()
+    try b.append("<svg><path d=\"M0 0\" fill=\"none\" stroke=\"white\" ")
+    try b.append(bytes)
+    try b.append("/></svg>")
+    let owned = try page.alloc.alloc(0 as u8, bytes.len)
+    std.mem.copy(owned, bytes)
+    var st = CanvasStroke { key: owned, width: 0.0, cap: 0, join: 0, miter: 4.0, dashes: []mut f64{}, offset: 0.0 }
+    let pic = svg.parseImage(it.alloc, b.bytes()) catch |e| {
+        page.alloc.free(owned)
+        return e
+    }
+    defer freePicture(it.alloc, pic)
+    var dash_start: usize = 0
+    var dash_end: usize = 0
+    if pic |p| {
+        if p.shapes.len() > 0 && p.shapes.items()[0].stroke.a > 0 {
+            let s = p.shapes.items()[0]
+            st.width = s.stroke_width
+            st.cap = s.cap
+            st.join = s.join
+            st.miter = s.miter_limit
+            st.offset = s.dash_offset
+            dash_start = s.dash_start
+            dash_end = s.dash_end
+        }
+    }
+    st.dashes = page.alloc.alloc(0.0, dash_end - dash_start) catch |e| {
+        page.alloc.free(owned)
+        return e
+    }
+    if pic |p| {
+        for i in dash_start..dash_end {
+            st.dashes[i - dash_start] = p.dashes.items()[i]
+        }
+    }
+    if cache.canvas_strokes.len() >= CANVAS_STROKES {
+        cache.canvas_strokes.swapRemove(0).deinit(page.alloc)
+    }
+    cache.canvas_strokes.append(st) catch |e| {
+        st.deinit(page.alloc)
+        return e
+    }
+    return st
+}
+
+fn canvasShape(verb_start: usize, verb_end: usize, coord_start: usize, fill: svg.Color, evenodd: bool) svg.Shape {
+    return svg.Shape {
+        verb_start: verb_start,
+        verb_end: verb_end,
+        coord_start: coord_start,
+        fill: fill,
+        stroke: CANVAS_NONE,
+        stroke_width: 1.0,
+        evenodd: evenodd,
+        cap: 0,
+        join: 0,
+        miter_limit: 4.0,
+        fill_grad: 0,
+        stroke_grad: 0,
+        dash_start: 0,
+        dash_end: 0,
+        dash_offset: 0.0,
+        group: 0,
+        opacity: 1.0,
+        clip: 0,
+    }
+}
+
+// The path `d` filled (`stroke` null) or stroked in white, moved by
+// (`dx`, `dy`) for a shadow.
+fn canvasPathPicture(alloc: std.mem.Allocator, d: []u8, stroke: ?CanvasStroke, evenodd: bool, dx: f64, dy: f64) AllocError!*mut svg.Picture {
+    let pic = try svg.newPicture(alloc)
+    errdefer freePicture(alloc, pic)
+    var pen = svg.Pen { m: svg.translate(dx, dy), verbs: &mut pic.verbs, coords: &mut pic.coords }
+    try svg.parsePath(&mut pen, d)
+    if pic.verbs.len() == 0 {
+        return pic
+    }
+    var shape = canvasShape(0, pic.verbs.len(), 0, CANVAS_WHITE, evenodd)
+    if stroke |st| {
+        if st.width <= 0.0 {
+            return pic
+        }
+        shape.fill = CANVAS_NONE
+        shape.stroke = CANVAS_WHITE
+        shape.stroke_width = st.width
+        shape.cap = st.cap
+        shape.join = st.join
+        shape.miter_limit = st.miter
+        if st.dashes.len > 0 {
+            for v in st.dashes {
+                try pic.dashes.append(v)
+            }
+            shape.dash_end = st.dashes.len
+            shape.dash_offset = st.offset
+        }
+    }
+    try pic.shapes.append(shape)
+    return pic
+}
+
+fn canvasMark(pic: *mut svg.Picture, kind: u8, clip: usize) AllocError!void {
+    var mark = canvasShape(pic.verbs.len(), pic.verbs.len(), pic.coords.len(), CANVAS_NONE, false)
+    mark.stroke_width = 0.0
+    mark.group = kind
+    mark.clip = clip
+    return pic.shapes.append(mark)
+}
+
+// The clip region: an infinite white rectangle inside one group per
+// clip path (`paths`: [d, evenodd] pairs, outermost first), as SVG builds
+// nested `<g clip-path>` elements.
+fn canvasClipPicture(it: *mut Interp, paths: Value) JsError!*mut svg.Picture {
+    let pic = try svg.newPicture(it.alloc)
+    errdefer freePicture(it.alloc, pic)
+    let count = try canvasNum(it, paths, "length")
+    var n: usize = 0
+    if count >= 0.0 && count <= 4096.0 {
+        n = count as usize
+    }
+    for i in 0..n {
+        let pair = try canvasIndex(it, paths, i)
+        let evenodd = it.toBoolean(try canvasIndex(it, pair, 1))
+        let dv = try it.toStringValue(try canvasIndex(it, pair, 0))
+        try it.push(dv)
+        defer it.pop()
+        let start = pic.clip_shapes.len()
+        let verb_start = pic.verbs.len()
+        let coord_start = pic.coords.len()
+        var pen = svg.Pen { m: svg.IDENTITY, verbs: &mut pic.verbs, coords: &mut pic.coords }
+        try svg.parsePath(&mut pen, it.heap.bytes(js.strOf(dv)))
+        if pic.verbs.len() > verb_start {
+            try pic.clip_shapes.append(canvasShape(verb_start, pic.verbs.len(), coord_start, CANVAS_WHITE, evenodd))
+        }
+        try pic.clips.append(svg.ClipPath { start: start, end: pic.clip_shapes.len() })
+        try canvasMark(pic, 1, 0)
+    }
+    let verb_start = pic.verbs.len()
+    let coord_start = pic.coords.len()
+    var pen = svg.Pen { m: svg.IDENTITY, verbs: &mut pic.verbs, coords: &mut pic.coords }
+    try svg.rectPath(&mut pen, 0.0, 0.0, 100000.0, 100000.0, 0.0, 0.0)
+    try pic.shapes.append(canvasShape(verb_start, pic.verbs.len(), coord_start, CANVAS_WHITE, false))
+    var k = n
+    while k > 0 {
+        try canvasMark(pic, 2, k)
+        k -= 1
+    }
+    return pic
 }
 
 // The pixels a draw can change: `w` x `h` of the canvas from (`x`, `y`).
@@ -713,10 +898,19 @@ fn akCanvasDraw(it: *mut Interp, a: Args) JsError!Value {
         text_mask = try readTextMask(it, it.arg(a, 1))
         textMaskBounds(&text_mask, &mut bounds)
     } else {
-        pic = try canvasPicture(it, it.arg(a, 1))
-        if pic |p| {
-            grow = pictureBounds(p, &mut bounds)
+        var stroke: ?CanvasStroke = null
+        if !js.isNullish(it.arg(a, 6)) {
+            stroke = try canvasStroke(it, it.arg(a, 6))
         }
+        let evenodd = it.toBoolean(it.arg(a, 7))
+        let dx = try it.toNumber(it.arg(a, 8))
+        let dy = try it.toNumber(it.arg(a, 9))
+        let dv = try it.toStringValue(it.arg(a, 1))
+        try it.push(dv)
+        defer it.pop()
+        let made = try canvasPathPicture(it.alloc, it.heap.bytes(js.strOf(dv)), stroke, evenodd, dx, dy)
+        pic = made
+        grow = pictureBounds(made, &mut bounds)
     }
     let blur = try canvasNum(it, it.arg(a, 2), "blur")
     let blurred = blur > 0.0 && blur <= 1024.0
@@ -765,11 +959,9 @@ fn akCanvasDraw(it: *mut Interp, a: Args) JsError!Value {
     }
     if !js.isNullish(it.arg(a, 5)) {
         clip = try it.alloc.alloc(0 as u8, px.len)
-        let clip_pic = try canvasPicture(it, it.arg(a, 5))
+        let clip_pic = try canvasClipPicture(it, it.arg(a, 5))
         defer freePicture(it.alloc, clip_pic)
-        if clip_pic |p| {
-            try svg.render(it.alloc, p, area.target(clip.?), 0.0, 0.0, size.width as f64, size.height as f64, 1.0)
-        }
+        try svg.render(it.alloc, clip_pic, area.target(clip.?), 0.0, 0.0, size.width as f64, size.height as f64, 1.0)
     }
     let alpha = try it.toNumber(it.arg(a, 3))
     if alpha == alpha && alpha >= 0.0 && alpha <= 1.0 {

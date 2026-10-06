@@ -44,13 +44,15 @@ pub struct ImageCache {
     nodes: layout.Images
     canvases: List(CanvasBitmap)
     canvas_fonts: ?*mut font.System
+    // Canvas stroke attributes as SVG reads them (canvas_api.ore).
+    canvas_strokes: List(CanvasStroke)
     // The URL of the page, sent as the Referer (owned).
     referrer: []mut u8
     // The keys of `nodes.urls` (owned).
     keys: List([]mut u8)
 
     pub fn init(alloc: Allocator) ImageCache {
-        return ImageCache { alloc: alloc, entries: List(CachedImage).init(alloc), nodes: layout.Images.init(alloc), canvases: List(CanvasBitmap).init(alloc), canvas_fonts: null, referrer: alloc.alloc(0 as u8, 0) catch unreachable, keys: List([]mut u8).init(alloc) }
+        return ImageCache { alloc: alloc, entries: List(CachedImage).init(alloc), nodes: layout.Images.init(alloc), canvases: List(CanvasBitmap).init(alloc), canvas_fonts: null, canvas_strokes: List(CanvasStroke).init(alloc), referrer: alloc.alloc(0 as u8, 0) catch unreachable, keys: List([]mut u8).init(alloc) }
     }
 
     pub fn deinit(self: *mut Self) {
@@ -75,6 +77,10 @@ pub struct ImageCache {
             sys.deinit()
             self.alloc.destroy(sys)
         }
+        for st in self.canvas_strokes.items() {
+            st.deinit(self.alloc)
+        }
+        self.canvas_strokes.deinit()
         self.nodes.deinit()
         self.alloc.free(self.referrer)
         for k in self.keys.items() {
