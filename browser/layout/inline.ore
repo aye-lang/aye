@@ -465,6 +465,16 @@ fn layoutInline(t: *mut Tree, i: usize, avail: f64) AllocError!f64 {
         var lower = false
         let lh = lb.strut.line_height
         lb.setBand(bandAt(t, lb.y, lh, avail))
+        if t.lines.len() == t.bx(i).line_start {
+            // `text-indent` moves the first line's start.
+            let indent = lengthOr0(t.bx(i).style[css.TEXT_INDENT], avail)
+            if rtl {
+                lb.avail -= indent
+            } else {
+                lb.left += indent
+                lb.avail -= indent
+            }
+        }
         while k < ps.len {
             let e = chunkEnd(ps, k)
             if ps[k].kind == PieceKind.Float {

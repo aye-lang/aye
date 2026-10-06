@@ -1,0 +1,14 @@
+viewport 800x600
+  block <html> (0, 0) 800x112
+    block <body> (0, 16) 300x96
+      block <p> (0, 16) 300x40
+        line (32, 16) 268x20
+          text (32, 18) 256x16 "Indented first line that goes on"
+        line (0, 36) 300x20
+          text (0, 38) 256x16 "to wrap onto a second line here."
+      block <h1> (0, 72) 300x20
+        line (-9999, 72) 10299x20
+          text (-9999, 74) 96x16 "Hidden title"
+      block <div> (0, 92) 300x20
+        line (30, 92) 270x20
+          text (30, 94) 88x16 "ten percent"
