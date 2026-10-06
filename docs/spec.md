@@ -62,6 +62,8 @@ ore check <path> [--json]                             report all compile errors;
 ore fix <path>                                        apply the fix-its of `ore check` in place, repeat (at most 10 rounds)
 ore test <path> [--filter text] [--json] [--mode m]   run the root module's `test` blocks, each in its own process
 ore emit-c <path> [--mode m]                          print the generated C
+ore fmt [--check] <path>                              format in place (a directory: every .ore file under it); --check lists files that would change, exit 1
+ore doc --signatures <path>                           print every pub declaration with its /// comment, no bodies; <path> may be std or std.text
 ore explain <code>                                    explain an error code (E0001...) with a wrong and a fixed program
 ore spec                                              print this document
 ```
@@ -73,10 +75,20 @@ other files in its directory are not compiled with it. Build modes: `debug`
 run`: the program's status; 1 when `main` returns an error; 134 after a
 panic.
 
+`ore fmt` is the canonical layout: 4-space indentation, one space around
+binary operators and after `,` and `:`, `[3]u8{1, 2}` but `Point { x: 1 }`.
+It keeps every comment and every line break (they end statements), drops
+extra blank lines (at most one in a row), and is idempotent. It refuses a
+file that does not lex or whose brackets do not match. `ore doc
+--signatures` prints a module's API (pub functions, structs with fields
+and pub methods, enums, interfaces, error sets, constants) as compact
+context; `ore doc --signatures std` prints all of std.
+
 ## 3. Lexical structure
 
 - Source is UTF-8. Comments start with `//` and run to the end of the line.
-  There are no block comments.
+  There are no block comments. `///` lines right above a declaration or
+  member are its doc comment (`ore doc` shows them).
 - Identifiers: a letter or `_`, then letters, digits or `_` (ASCII only).
 - Keywords (28): `fn let var pub import struct enum error interface dyn
   match if else for while break continue return defer errdefer try catch

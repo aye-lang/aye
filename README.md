@@ -34,9 +34,23 @@ ore emit-c <path> [--mode debug|safe|fast]            # print the generated C
 ore check <path> [--json]                             # front end only: report errors, no C, no clang
 ore fix <path>                                        # apply the fix-its of `ore check` in place
 ore test <path> [--filter <text>] [--json] [--mode debug|safe|fast]   # run the root module's `test` blocks
+ore fmt [--check] <path>                              # format in place (a directory: every .ore file under it)
+ore doc --signatures <path>                           # every pub declaration with its /// comment (also `std`, `std.text`)
 ore explain <code>                                    # explain an error code, with a wrong and a fixed example
 ore spec                                              # print the language reference (docs/spec.md)
 ```
+
+`ore fmt` works on tokens and keeps every comment and line break; it sets
+indentation (4 spaces) and spacing, keeps at most one blank line in a row and
+lines up runs of trailing comments. It is idempotent and never changes the
+tokens (so `ore check` reports the same errors, on the same lines unless a
+blank line went away). `--check` writes nothing, lists the files that would
+change and exits 1 if there is one. A file that does not lex or whose brackets
+do not match is reported and left alone. `ore doc --signatures` prints the pub
+API of a file, a directory module and its submodules, or the embedded std:
+signatures without bodies, fields and variants, pub methods, and each
+declaration's `///` doc comment, grouped by module. It is meant as context for
+an AI agent next to `ore spec`.
 
 `ore spec` prints [`docs/spec.md`](docs/spec.md), a self-contained
 language reference (about 10k tokens) meant to be given to an AI agent
