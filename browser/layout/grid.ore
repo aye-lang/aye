@@ -959,6 +959,19 @@ fn isPercentHeight(v: Value) bool {
     }
 }
 
+// `justify-self` of grid item `c` (its grid's `justify-items` for
+// `auto`).
+fn justifyOf(t: *Tree, c: usize) []u8 {
+    let own = keywordOf(t.bx(c).style[css.JUSTIFY_SELF])
+    if !text.eql(own, "auto") {
+        return own
+    }
+    if t.bx(c).parent |p| {
+        return keywordOf(t.bx(p).style[css.JUSTIFY_ITEMS])
+    }
+    return "normal"
+}
+
 fn isFixedRow(g: *Grid, r: usize) bool {
     if r < g.rows.len() {
         let tr = g.rows.items()[r]
@@ -984,10 +997,30 @@ fn gridItemContents(t: *mut Tree, c: usize, aw: f64, cw: f64) AllocError!void {
         return
     }
     let room = aw - b.margin[1] - b.margin[3]
+    let justify = justifyOf(t, c)
+    let stretch = text.eql(justify, "normal") || text.eql(justify, "stretch") || text.eql(justify, "legacy") || text.eql(justify, "baseline")
     if specifiedWidth(t, c, aw) |w| {
         t.bx(c).w = w
-    } else {
+    } else if stretch {
         t.bx(c).w = clampWidth(t, c, room, aw)
+    } else {
+        // Not stretched: as wide as its content, within the area.
+        let mm = try intrinsic(t, c)
+        t.bx(c).w = clampWidth(t, c, math.min(mm.max, math.max(mm.min, room)), aw)
+    }
+    if !stretch {
+        let jb = t.bx(c)
+        let slack = aw - jb.w - jb.margin[1] - jb.margin[3]
+        if slack > 0.0 {
+            if text.eql(justify, "center") {
+                jb.margin[3] += slack / 2.0
+                jb.margin[1] += slack / 2.0
+            } else if text.eql(justify, "end") || text.eql(justify, "right") || text.eql(justify, "flex-end") || text.eql(justify, "self-end") {
+                jb.margin[3] += slack
+            } else {
+                jb.margin[1] += slack
+            }
+        }
     }
     // `auto` margins center the item in its area.
     let bb = t.bx(c)

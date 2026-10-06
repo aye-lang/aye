@@ -2,12 +2,12 @@ viewport 800x600
   block <html> (0, 0) 800x102
     block <body> (0, 0) 800x102
       grid <section class="s"> (0, 0) 600x50
-        grid <div class="g"> (0, 0) 568x50
-          block <div class="wide"> (0, 0) 423.5x50
-            replaced <img src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%221200%22 height=%22100%22/%3E" alt=""> (0, 0) 423.5x50
-          block <div> (433.5, 0) 134.5x50
-            line (433.5, 0) 134.5x20
-              text (433.5, 2) 32x16 "side"
+        grid <div class="g"> (16, 0) 568x50
+          block <div class="wide"> (16, 0) 423.5x50
+            replaced <img src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%221200%22 height=%22100%22/%3E" alt=""> (16, 0) 423.5x50
+          block <div> (449.5, 0) 134.5x50
+            line (449.5, 0) 134.5x20
+              text (449.5, 2) 32x16 "side"
       table <table> (0, 50) 486x52
         row-group <tbody> (0, 50) 486x52
           row <tr> (0, 50) 486x52

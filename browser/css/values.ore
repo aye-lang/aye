@@ -184,11 +184,13 @@ fn shorthandLonghands(name: []u8, out: []mut usize) usize {
     }
     if text.eql(name, "place-items") {
         out[0] = ALIGN_ITEMS
-        return 1
+        out[1] = JUSTIFY_ITEMS
+        return 2
     }
     if text.eql(name, "place-self") {
         out[0] = ALIGN_SELF
-        return 1
+        out[1] = JUSTIFY_SELF
+        return 2
     }
     if text.eql(name, "place-content") {
         out[0] = JUSTIFY_CONTENT
@@ -386,15 +388,21 @@ struct Declarer {
             return self.pair(pl[0], pl[1], comps)
         }
         if text.eql(name, "place-items") || text.eql(name, "place-self") {
-            // The `align-` half (there is no `justify-items`).
+            // `align [justify]` (justify as align when alone).
             var prop = ALIGN_ITEMS
+            var across = JUSTIFY_ITEMS
             if text.eql(name, "place-self") {
                 prop = ALIGN_SELF
+                across = JUSTIFY_SELF
             }
             if comps.len == 1 || comps.len == 2 {
                 let first = [1]Comp{comps[0]}
+                let last = [1]Comp{comps[comps.len - 1]}
                 if try parseValue(self.sheet, prop, first[..]) |v| {
-                    try self.add(prop, v)
+                    if try parseValue(self.sheet, across, last[..]) |w| {
+                        try self.add(prop, v)
+                        try self.add(across, w)
+                    }
                 }
             }
             return
