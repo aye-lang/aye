@@ -2256,6 +2256,42 @@ pub fn main() {
 }
 "#,
 }
+E0106 = 106 {
+    "`is` on a value that is not an enum",
+    "`x is .V` tests whether the enum value `x` (or the enum that the pointer `x` points to) holds the variant `V`, without binding its fields: it is a `bool`. Only enums have variants; compare other values with `==` (error values too). To use the fields of the variant, `match` on it.",
+    r#"error ParseError { Empty, Bad }
+
+fn parse(s: []u8) ParseError!i64 {
+    return ParseError.Empty
+}
+
+pub fn main() {
+    let r = parse("") catch |e| {
+        if e is .Empty {
+            @println("empty")
+        }
+        return
+    }
+    @println(r)
+}
+"#,
+    r#"error ParseError { Empty, Bad }
+
+fn parse(s: []u8) ParseError!i64 {
+    return ParseError.Empty
+}
+
+pub fn main() {
+    let r = parse("") catch |e| {
+        if e == ParseError.Empty {
+            @println("empty")
+        }
+        return
+    }
+    @println(r)
+}
+"#,
+}
 }
 
 #[cfg(test)]

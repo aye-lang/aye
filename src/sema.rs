@@ -520,6 +520,8 @@ pub enum TExprKind {
     Unwrap(Box<TExpr>),
     /// `unreachable`: a panic (in `fast` mode, undefined behavior).
     Unreachable,
+    /// `x is .V`: does the enum value `x` hold variant `index`?
+    IsVariant { expr: Box<TExpr>, index: usize },
     /// A call through the vtable of a `dyn` value.
     DynCall { recv: Box<TExpr>, method: String, args: Vec<TExpr> },
     /// A `*T` or `*mut T` (T is the struct `strukt`) converted to `dyn I`.
@@ -3646,6 +3648,27 @@ impl<'a> Checker<'a> {
                 (TExprKind::Catch { expr: Box::new(t), capture, body: Box::new(body?) }, payload)
             }
             ExprKind::Unreachable => (TExprKind::Unreachable, expected.cloned().unwrap_or(Type::Void)),
+            ExprKind::Is { expr, variant, variant_span } => {
+                let mut t = self.value(expr, None)?;
+                // A pointer to an enum is tested through the pointer.
+                if let Type::Ptr(pointee, _) = &t.ty {
+                    let (ty, span) = ((**pointee).clone(), t.span);
+                    t = TExpr { kind: TExprKind::Deref(Box::new(t)), ty, span };
+                }
+                let Type::Enum(ename) = &t.ty else {
+                    return err(E0106, span, format!(
+                        "`is` tests the variant of an enum value, found `{}`{}",
+                        t.ty,
+                        if matches!(t.ty, Type::ErrorSet(_)) { " (compare error values with `==`)" } else { "" }
+                    ));
+                };
+                let def = &self.enums[ename];
+                let Some(index) = def.variants.iter().position(|v| v.name == *variant) else {
+                    let e = Error::new(E0041, *variant_span, format!("enum `{ename}` has no variant `{variant}`"));
+                    return Err(suggest(e, variant, *variant_span, def.variants.iter().map(|v| v.name.as_str())));
+                };
+                (TExprKind::IsVariant { expr: Box::new(t), index }, Type::Bool)
+            }
             ExprKind::Unwrap(inner) => {
                 let t = self.value(inner, None)?;
                 let Type::Optional(v) = &t.ty else {

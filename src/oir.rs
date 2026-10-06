@@ -389,6 +389,7 @@ fn has_call(e: &TExpr) -> bool {
         | TExprKind::OkWrap(expr)
         | TExprKind::ErrWrap(expr)
         | TExprKind::PtrCast(expr)
+        | TExprKind::IsVariant { expr, .. }
         | TExprKind::ToDyn { ptr: expr, .. }
         | TExprKind::ToAllocator { ptr: expr, .. } => has_call(expr),
         TExprKind::Slice { base, lo, hi } => {
@@ -1311,6 +1312,13 @@ impl<'a> Lower<'a> {
                 }
             }
             TExprKind::ArrayRepeat(x) => Rvalue::ArrayRepeat { ty: e.ty.clone(), val: self.operand(x, out) },
+            TExprKind::IsVariant { expr, index } => {
+                let p = self.place(expr, out);
+                let tag = self.temp(Type::Int(IntTy::U32));
+                self.push(out, StmtKind::Assign(local(tag), Rvalue::Load(field(p, "tag"))));
+                let rhs = Operand::Int(*index as i128, IntTy::U32);
+                Rvalue::Binary { op: BinOp::Eq, lhs: Operand::Local(tag), rhs, ty: Type::Int(IntTy::U32), span: e.span }
+            }
             TExprKind::ArrayLit(elems) => {
                 let elems = elems.iter().map(|x| self.operand(x, out)).collect();
                 Rvalue::ArrayLit { ty: e.ty.clone(), elems }

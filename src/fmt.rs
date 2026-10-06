@@ -212,6 +212,8 @@ fn classify(items: &mut [Item]) {
             Tok::Kw(_) => Role::Keyword,
             Tok::Comma => Role::Comma,
             Tok::Colon => Role::Colon,
+            // `x is .V`: the `.` starts the pattern.
+            Tok::Dot if prev_tok == Some(&Tok::Kw(Kw::Is)) => Role::Prefix,
             Tok::Dot | Tok::DotDot | Tok::DotDotEq | Tok::Ellipsis => Role::Tight,
             Tok::DotStar | Tok::DotQuestion => Role::Postfix,
             Tok::Minus | Tok::Amp | Tok::Star if operand => Role::Binary,
