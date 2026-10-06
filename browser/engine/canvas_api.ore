@@ -287,77 +287,235 @@ fn akCanvasImageSize(it: *mut Interp, a: Args) JsError!Value {
 }
 
 fn canvasTarget(b: *image.Bitmap, px: []mut u8) svg.Target {
-    return svg.Target { pixels: px, width: b.width, ox: 0, oy: 0, x0: 0, y0: 0, x1: b.width as i64, y1: b.height as i64 }
+    return wholeCanvas(b).target(px)
 }
 
-fn canvasSvg(it: *mut Interp, v: Value, bmp: *image.Bitmap, px: []mut u8) JsError!void {
+fn canvasPicture(it: *mut Interp, v: Value) JsError!?*mut svg.Picture {
     let sv = try it.toStringValue(v)
     try it.push(sv)
     defer it.pop()
-    let pic = (try svg.parseImage(it.alloc, it.heap.bytes(js.strOf(sv)))) orelse return
-    defer it.alloc.destroy(pic)
-    defer pic.deinit()
-    try svg.render(it.alloc, pic, canvasTarget(bmp, px), 0.0, 0.0, bmp.width as f64, bmp.height as f64, 1.0)
+    return svg.parseImage(it.alloc, it.heap.bytes(js.strOf(sv)))
 }
 
-// Coverage from SVG is multiplied by the paint's alpha. Compositing is
-// evaluated over the entire clipping region (including transparent source
-// pixels for copy/source-in), not just over the source's bounding box.
-fn canvasComposite(dst: []mut u8, src: []u8, clip: ?[]u8, alpha: f64, mode: []u8) {
+fn freePicture(alloc: std.mem.Allocator, pic: ?*mut svg.Picture) {
+    if pic |p| {
+        p.deinit()
+        alloc.destroy(p)
+    }
+}
+
+// The pixels a draw can change: `w` x `h` of the canvas from (`x`, `y`).
+// Layers for coverage, paint and clip are this size, not the canvas's.
+struct CanvasArea {
+    x: i64
+    y: i64
+    w: usize
+    h: usize
+
+    fn target(self: Self, px: []mut u8) svg.Target {
+        return svg.Target { pixels: px, width: self.w, ox: self.x, oy: self.y, x0: self.x, y0: self.y, x1: self.x + self.w as i64, y1: self.y + self.h as i64 }
+    }
+}
+
+fn wholeCanvas(bmp: *image.Bitmap) CanvasArea {
+    return CanvasArea { x: 0, y: 0, w: bmp.width, h: bmp.height }
+}
+
+// Device-space bounds of what a draw covers, collected point by point.
+struct CanvasBounds {
+    x0: f64
+    y0: f64
+    x1: f64
+    y1: f64
+    any: bool
+
+    fn add(self: *mut Self, x: f64, y: f64) {
+        if x != x || y != y || math.isInf(x) || math.isInf(y) {
+            return
+        }
+        if !self.any {
+            self.x0 = x
+            self.y0 = y
+            self.x1 = x
+            self.y1 = y
+            self.any = true
+            return
+        }
+        self.x0 = math.min(self.x0, x)
+        self.y0 = math.min(self.y0, y)
+        self.x1 = math.max(self.x1, x)
+        self.y1 = math.max(self.y1, y)
+    }
+
+    // The bounds grown by `grow` px plus a margin of two pixels, within
+    // the canvas. The margin keeps the first column of the area free of
+    // coverage, so that scanlines clamped to it add up exactly like
+    // scanlines over the whole canvas.
+    fn area(self: Self, grow_in: f64, bmp: *image.Bitmap) CanvasArea {
+        var grow = grow_in
+        if !(grow < 1000000000.0) {
+            grow = 1000000000.0
+        }
+        if !self.any {
+            return CanvasArea { x: 0, y: 0, w: 0, h: 0 }
+        }
+        let x0 = math.clamp(math.floor(self.x0 - grow) - 2.0, 0.0, bmp.width as f64)
+        let y0 = math.clamp(math.floor(self.y0 - grow) - 2.0, 0.0, bmp.height as f64)
+        let x1 = math.clamp(math.ceil(self.x1 + grow) + 2.0, 0.0, bmp.width as f64)
+        let y1 = math.clamp(math.ceil(self.y1 + grow) + 2.0, 0.0, bmp.height as f64)
+        if x1 <= x0 || y1 <= y0 {
+            return CanvasArea { x: 0, y: 0, w: 0, h: 0 }
+        }
+        return CanvasArea { x: x0 as i64, y: y0 as i64, w: (x1 - x0) as usize, h: (y1 - y0) as usize }
+    }
+}
+
+// The points of `pic` and how far its strokes reach beyond them: half
+// the width, times the miter limit for miter joins (a miter reaches
+// half the width over the cosine of half its angle, at most the limit)
+// or the square root of two for square caps.
+fn pictureBounds(pic: *svg.Picture, bounds: *mut CanvasBounds) f64 {
+    let co = pic.coords.items()
     var i: usize = 0
-    while i < dst.len {
-        var cover = 1.0
-        if clip |c| {
-            cover = c[i + 3] as f64 / 255.0
+    while i + 1 < co.len {
+        bounds.add(co[i], co[i + 1])
+        i += 2
+    }
+    var grow = 0.0
+    for s in pic.shapes.items() {
+        if s.group != 0 || s.stroke.a == 0 {
+            continue
         }
-        let sa = math.floor(src[i + 3] as f64 * alpha + 0.5) / 255.0
-        let da = dst[i + 3] as f64 / 255.0
-        var fs = 1.0
-        var fd = 1.0 - sa
-        if text.eql(mode, "copy") {
-            fd = 0.0
-        } else if text.eql(mode, "destination-out") || text.eql(mode, "clear") {
-            fs = 0.0
-        } else if text.eql(mode, "source-in") {
-            fs = da
-            fd = 0.0
-        } else if text.eql(mode, "lighter") {
-            fd = 1.0
-        } else if text.eql(mode, "source-atop") {
-            fs = da
-        } else if text.eql(mode, "source-out") {
-            fs = 1.0 - da
-            fd = 0.0
-        } else if text.eql(mode, "destination-over") {
-            fs = 1.0 - da
-            fd = 1.0
-        } else if text.eql(mode, "destination-in") {
-            fs = 0.0
-            fd = sa
-        } else if text.eql(mode, "destination-atop") {
-            fs = 1.0 - da
-            fd = sa
-        } else if text.eql(mode, "xor") {
-            fs = 1.0 - da
+        var factor = 1.0
+        if s.cap == 2 {
+            factor = 1.5
         }
-        let oa = math.min(1.0, sa * fs + da * fd)
-        let outa = oa * cover + da * (1.0 - cover)
-        for k in 0..3 {
-            let sc = math.floor(src[i + k] as f64 * alpha + 0.5) / 255.0
-            let dc = dst[i + k] as f64 / 255.0 * da
-            var out = sc * fs + dc * fd
-            if text.eql(mode, "multiply") {
-                out = sc * (1.0 - da) + dc * (1.0 - sa) + sc * dc
+        if s.join == 0 {
+            factor = math.max(factor, s.miter_limit)
+        }
+        grow = math.max(grow, s.stroke_width / 2.0 * factor)
+    }
+    return grow
+}
+
+// The reach of paint.boxBlur3's three passes for a shadow blur.
+fn blurReach(blur: f64) f64 {
+    let sigma = blur / 2.0
+    let size = math.sqrt(4.0 * sigma * sigma + 1.0)
+    return 3.0 * math.max(1.0, math.floor(size / 2.0)) + 1.0
+}
+
+// The operations that change pixels where the source is transparent:
+// these composite over the whole canvas (within the clip).
+fn unboundedMode(mode: []u8) bool {
+    return text.eql(mode, "copy") || text.eql(mode, "source-in") || text.eql(mode, "source-out") || text.eql(mode, "destination-in") || text.eql(mode, "destination-atop")
+}
+
+let MODE_OVER: u8 = 0
+let MODE_COPY: u8 = 1
+let MODE_DEST_OUT: u8 = 2
+let MODE_SOURCE_IN: u8 = 3
+let MODE_LIGHTER: u8 = 4
+let MODE_SOURCE_ATOP: u8 = 5
+let MODE_SOURCE_OUT: u8 = 6
+let MODE_DEST_OVER: u8 = 7
+let MODE_DEST_IN: u8 = 8
+let MODE_DEST_ATOP: u8 = 9
+let MODE_XOR: u8 = 10
+let MODE_MULTIPLY: u8 = 11
+
+fn modeOf(mode: []u8) u8 {
+    if text.eql(mode, "copy") {
+        return MODE_COPY
+    } else if text.eql(mode, "destination-out") || text.eql(mode, "clear") {
+        return MODE_DEST_OUT
+    } else if text.eql(mode, "source-in") {
+        return MODE_SOURCE_IN
+    } else if text.eql(mode, "lighter") {
+        return MODE_LIGHTER
+    } else if text.eql(mode, "source-atop") {
+        return MODE_SOURCE_ATOP
+    } else if text.eql(mode, "source-out") {
+        return MODE_SOURCE_OUT
+    } else if text.eql(mode, "destination-over") {
+        return MODE_DEST_OVER
+    } else if text.eql(mode, "destination-in") {
+        return MODE_DEST_IN
+    } else if text.eql(mode, "destination-atop") {
+        return MODE_DEST_ATOP
+    } else if text.eql(mode, "xor") {
+        return MODE_XOR
+    } else if text.eql(mode, "multiply") {
+        return MODE_MULTIPLY
+    }
+    return MODE_OVER
+}
+
+// Coverage from SVG is multiplied by the paint's alpha. `src` and `clip`
+// are layers of `area`. Unbounded operations (copy, source-in, ...) get
+// the whole canvas as their area, so that they apply over the entire
+// clipping region; elsewhere a transparent source leaves pixels as they
+// are.
+fn canvasComposite(dst: []mut u8, dst_width: usize, area: CanvasArea, src: []u8, clip: ?[]u8, alpha: f64, mode_name: []u8) {
+    let mode = modeOf(mode_name)
+    for y in 0..area.h {
+        var i = y * area.w * 4
+        var j = ((area.y as usize + y) * dst_width + area.x as usize) * 4
+        for x in 0..area.w {
+            var cover = 1.0
+            if clip |c| {
+                cover = c[i + 3] as f64 / 255.0
             }
-            out = math.min(1.0, out) * cover + dc * (1.0 - cover)
-            var straight = 0.0
-            if outa > 0.0 {
-                straight = math.clamp(out / outa, 0.0, 1.0)
+            let sa = math.floor(src[i + 3] as f64 * alpha + 0.5) / 255.0
+            let da = dst[j + 3] as f64 / 255.0
+            var fs = 1.0
+            var fd = 1.0 - sa
+            if mode == MODE_COPY {
+                fd = 0.0
+            } else if mode == MODE_DEST_OUT {
+                fs = 0.0
+            } else if mode == MODE_SOURCE_IN {
+                fs = da
+                fd = 0.0
+            } else if mode == MODE_LIGHTER {
+                fd = 1.0
+            } else if mode == MODE_SOURCE_ATOP {
+                fs = da
+            } else if mode == MODE_SOURCE_OUT {
+                fs = 1.0 - da
+                fd = 0.0
+            } else if mode == MODE_DEST_OVER {
+                fs = 1.0 - da
+                fd = 1.0
+            } else if mode == MODE_DEST_IN {
+                fs = 0.0
+                fd = sa
+            } else if mode == MODE_DEST_ATOP {
+                fs = 1.0 - da
+                fd = sa
+            } else if mode == MODE_XOR {
+                fs = 1.0 - da
             }
-            dst[i + k] = math.floor(straight * 255.0 + 0.5) as u8
+            let oa = math.min(1.0, sa * fs + da * fd)
+            let outa = oa * cover + da * (1.0 - cover)
+            for k in 0..3 {
+                let sc = math.floor(src[i + k] as f64 * alpha + 0.5) / 255.0
+                let dc = dst[j + k] as f64 / 255.0 * da
+                var out = sc * fs + dc * fd
+                if mode == MODE_MULTIPLY {
+                    out = sc * (1.0 - da) + dc * (1.0 - sa) + sc * dc
+                }
+                out = math.min(1.0, out) * cover + dc * (1.0 - cover)
+                var straight = 0.0
+                if outa > 0.0 {
+                    straight = math.clamp(out / outa, 0.0, 1.0)
+                }
+                dst[j + k] = math.floor(straight * 255.0 + 0.5) as u8
+            }
+            dst[j + 3] = math.floor(outa * 255.0 + 0.5) as u8
+            i += 4
+            j += 4
         }
-        dst[i + 3] = math.floor(outa * 255.0 + 0.5) as u8
-        i += 4
     }
 }
 
@@ -368,7 +526,7 @@ fn canvasByte(n: f64) u8 {
     return math.floor(math.clamp(n, 0.0, 255.0) + 0.5) as u8
 }
 
-fn canvasPaint(it: *mut Interp, style: Value, bmp: *image.Bitmap, px: []mut u8) JsError!void {
+fn canvasPaint(it: *mut Interp, style: Value, area: CanvasArea, px: []mut u8) JsError!void {
     let kind = try canvasNum(it, style, "kind")
     if !(kind >= 0.0 && kind <= 4.0 && math.floor(kind) == kind) {
         for i in 0..px.len {
@@ -413,8 +571,10 @@ fn canvasPaint(it: *mut Interp, style: Value, bmp: *image.Bitmap, px: []mut u8) 
             }
             return
         }
-        for y in 0..bmp.height {
-            for x in 0..bmp.width {
+        for ay in 0..area.h {
+            for ax in 0..area.w {
+                let x = area.x + ax as i64
+                let y = area.y + ay as i64
                 var sx = inv.mapX(x as f64 + 0.5, y as f64 + 0.5)
                 var sy = inv.mapY(x as f64 + 0.5, y as f64 + 0.5)
                 if repeatX {
@@ -423,7 +583,7 @@ fn canvasPaint(it: *mut Interp, style: Value, bmp: *image.Bitmap, px: []mut u8) 
                 if repeatY {
                     sy -= math.floor(sy / img.height as f64) * img.height as f64
                 }
-                let i = (y * bmp.width + x) * 4
+                let i = (ay * area.w + ax) * 4
                 if sx < 0.0 || sy < 0.0 || sx >= img.width as f64 || sy >= img.height as f64 {
                     for k in 0..4 {
                         px[i + k] = 0
@@ -476,12 +636,14 @@ fn canvasPaint(it: *mut Interp, style: Value, bmp: *image.Bitmap, px: []mut u8) 
         g.cx = n[1]
         g.cy = n[2]
     }
-    for y in 0..bmp.height {
-        for x in 0..bmp.width {
+    for ay in 0..area.h {
+        for ax in 0..area.w {
+            let x = area.x + ax as i64
+            let y = area.y + ay as i64
             let xx = inv.mapX(x as f64 + 0.5, y as f64 + 0.5)
             let yy = inv.mapY(x as f64 + 0.5, y as f64 + 0.5)
             let c = g.at(xx, yy)
-            let i = (y * bmp.width + x) * 4
+            let i = (ay * area.w + ax) * 4
             let a = (px[i + 3] as u32 * c.a as u32 + 127) / 255
             px[i] = ((c.r as u32 * a + 127) / 255) as u8
             px[i + 1] = ((c.g as u32 * a + 127) / 255) as u8
@@ -527,26 +689,54 @@ fn akCanvasDraw(it: *mut Interp, a: Args) JsError!Value {
     // was reset during argument conversion.
     var size = image.Bitmap { width: bmp.width, height: bmp.height, pixels: bmp.pixels }
     let epoch = c.epoch
-    let px = try it.alloc.alloc(0 as u8, bmp.pixels.len)
-    defer it.alloc.free(px)
+    var bounds = CanvasBounds { x0: 0.0, y0: 0.0, x1: 0.0, y1: 0.0, any: false }
+    var grow = 0.0
+    var text_mask = CanvasMask { mask: []mut u8{}, w: 0.0, h: 0.0, m: svg.IDENTITY, inv: svg.IDENTITY, radius: 0 }
+    defer if text_mask.mask.len > 0 {
+        it.alloc.free(text_mask.mask)
+    }
+    var pic: ?*mut svg.Picture = null
+    defer freePicture(it.alloc, pic)
     if js.objectOf(it.arg(a, 1)) != js.NONE {
-        try canvasTextMask(it, it.arg(a, 1), &size, px)
+        text_mask = try readTextMask(it, it.arg(a, 1))
+        textMaskBounds(&text_mask, &mut bounds)
     } else {
-        try canvasSvg(it, it.arg(a, 1), &size, px)
+        pic = try canvasPicture(it, it.arg(a, 1))
+        if pic |p| {
+            grow = pictureBounds(p, &mut bounds)
+        }
     }
     let blur = try canvasNum(it, it.arg(a, 2), "blur")
-    if blur > 0.0 && blur <= 1024.0 {
-        let cover = try it.alloc.alloc(0 as u8, size.width * size.height)
+    let blurred = blur > 0.0 && blur <= 1024.0
+    if blurred {
+        grow += blurReach(blur)
+    }
+    let mode = try it.toStringValue(it.arg(a, 4))
+    try it.push(mode)
+    defer it.pop()
+    var area = bounds.area(grow, &size)
+    if unboundedMode(it.heap.bytes(js.strOf(mode))) {
+        area = wholeCanvas(&size)
+    }
+    let px = try it.alloc.alloc(0 as u8, area.w * area.h * 4)
+    defer it.alloc.free(px)
+    if pic |p| {
+        try svg.render(it.alloc, p, area.target(px), 0.0, 0.0, size.width as f64, size.height as f64, 1.0)
+    } else {
+        drawTextMask(&text_mask, area, px)
+    }
+    if blurred {
+        let cover = try it.alloc.alloc(0 as u8, area.w * area.h)
         defer it.alloc.free(cover)
         for i in 0..cover.len {
             cover[i] = px[i * 4 + 3]
         }
-        try paint.boxBlur3(it.alloc, cover, size.width, size.height, blur / 2.0)
+        try paint.boxBlur3(it.alloc, cover, area.w, area.h, blur / 2.0)
         for i in 0..cover.len {
             px[i * 4 + 3] = cover[i]
         }
     }
-    try canvasPaint(it, it.arg(a, 2), &size, px)
+    try canvasPaint(it, it.arg(a, 2), area, px)
     let tainted = try canvasPaintTainted(it, it.arg(a, 2))
     if tainted {
         for i in 0..page.images.?.canvases.len() {
@@ -563,11 +753,12 @@ fn akCanvasDraw(it: *mut Interp, a: Args) JsError!Value {
     }
     if !js.isNullish(it.arg(a, 5)) {
         clip = try it.alloc.alloc(0 as u8, px.len)
-        try canvasSvg(it, it.arg(a, 5), &size, clip.?)
+        let clip_pic = try canvasPicture(it, it.arg(a, 5))
+        defer freePicture(it.alloc, clip_pic)
+        if clip_pic |p| {
+            try svg.render(it.alloc, p, area.target(clip.?), 0.0, 0.0, size.width as f64, size.height as f64, 1.0)
+        }
     }
-    let mode = try it.toStringValue(it.arg(a, 4))
-    try it.push(mode)
-    defer it.pop()
     let alpha = try it.toNumber(it.arg(a, 3))
     if alpha == alpha && alpha >= 0.0 && alpha <= 1.0 {
         for current in page.images.?.canvases.items() {
@@ -575,7 +766,7 @@ fn akCanvasDraw(it: *mut Interp, a: Args) JsError!Value {
                 return Value.Undefined
             }
         }
-        canvasComposite(bmp.pixels, px, clip, alpha, it.heap.bytes(js.strOf(mode)))
+        canvasComposite(bmp.pixels, bmp.width, area, px, clip, alpha, it.heap.bytes(js.strOf(mode)))
         scriptOf(it).active = page
         canvasChanged(it)
     }
@@ -624,6 +815,17 @@ fn akCanvasPixels(it: *mut Interp, a: Args) JsError!Value {
                 byte = math.clamp(v, 0.0, 255.0)
             }
             incoming.?[i] = math.floor(byte + 0.5) as u8
+        }
+        // A transparent pixel has no color (as in a premultiplied
+        // bitmap); draws only rewrite the pixels they can change.
+        var i: usize = 0
+        while i < incoming.?.len {
+            if incoming.?[i + 3] == 0 {
+                incoming.?[i] = 0
+                incoming.?[i + 1] = 0
+                incoming.?[i + 2] = 0
+            }
+            i += 4
         }
     }
     var arr: u32 = js.NONE
@@ -790,29 +992,80 @@ fn akCanvasPath(it: *mut Interp, a: Args) JsError!Value {
 // Affinely placed glyph coverage. The glyphs themselves are shaped and
 // rasterized by TextPainter, exactly as in the display list. strokeText
 // approximates an outline by dilating and eroding the coverage mask.
-fn canvasTextMask(it: *mut Interp, v: Value, bmp: *image.Bitmap, px: []mut u8) JsError!void {
+struct CanvasMask {
+    // Glyph coverage, `w` x `h`, empty when there is nothing to draw.
+    mask: []mut u8
+    w: f64
+    h: f64
+    m: svg.Matrix
+    inv: svg.Matrix
+    radius: i64
+}
+
+fn readTextMask(it: *mut Interp, v: Value) JsError!CanvasMask {
+    var out = CanvasMask { mask: []mut u8{}, w: 0.0, h: 0.0, m: svg.IDENTITY, inv: svg.IDENTITY, radius: 0 }
     let w = try canvasNum(it, v, "width")
     let h = try canvasNum(it, v, "height")
     if w < 1.0 || h < 1.0 || w > 16384.0 || h > 16384.0 || w * h > CANVAS_PIXELS as f64 {
-        return
+        return out
     }
     let sw = w as usize
     let sh = h as usize
     let data = try canvasProp(it, v, "data")
     let mask = try it.alloc.alloc(0 as u8, sw * sh)
-    defer it.alloc.free(mask)
+    errdefer it.alloc.free(mask)
     for i in 0..mask.len {
         mask[i] = (try it.toNumber(try canvasIndex(it, data, i * 4 + 3))) as u8
     }
     let m = try canvasMatrix(it, try canvasProp(it, v, "matrix"))
-    let inv = svg.invert(m) orelse return
+    let inv = svg.invert(m) orelse {
+        it.alloc.free(mask)
+        return out
+    }
     let stroke = try canvasNum(it, v, "stroke")
     var radius: i64 = 0
     if stroke > 0.0 {
         radius = math.ceil(math.min(stroke, 64.0) / 2.0) as i64
     }
-    for y in 0..bmp.height {
-        for x in 0..bmp.width {
+    return CanvasMask { mask: mask, w: w, h: h, m: m, inv: inv, radius: radius }
+}
+
+// The canvas pixels whose centers can map into the mask (grown by the
+// stroke radius).
+fn textMaskBounds(t: *CanvasMask, bounds: *mut CanvasBounds) {
+    if t.mask.len == 0 {
+        return
+    }
+    let m = t.m
+    let r = t.radius as f64
+    for corner in 0..4 {
+        var x = -r
+        var y = -r
+        if corner == 1 || corner == 2 {
+            x = t.w + r
+        }
+        if corner >= 2 {
+            y = t.h + r
+        }
+        bounds.add(m.mapX(x, y), m.mapY(x, y))
+    }
+}
+
+fn drawTextMask(t: *CanvasMask, area: CanvasArea, px: []mut u8) {
+    if t.mask.len == 0 {
+        return
+    }
+    let w = t.w
+    let h = t.h
+    let sw = w as usize
+    let sh = h as usize
+    let inv = t.inv
+    let radius = t.radius
+    let mask = t.mask
+    for ay in 0..area.h {
+        for ax in 0..area.w {
+            let x = area.x + ax as i64
+            let y = area.y + ay as i64
             let sx = inv.mapX(x as f64 + 0.5, y as f64 + 0.5)
             let sy = inv.mapY(x as f64 + 0.5, y as f64 + 0.5)
             if sx < -radius as f64 || sy < -radius as f64 || sx >= w + radius as f64 || sy >= h + radius as f64 {
@@ -835,7 +1088,7 @@ fn canvasTextMask(it: *mut Interp, v: Value, bmp: *image.Bitmap, px: []mut u8) J
             if radius > 0 {
                 high -= low
             }
-            let i = (y * bmp.width + x) * 4
+            let i = (ay * area.w + ax) * 4
             for k in 0..4 {
                 px[i + k] = high
             }
