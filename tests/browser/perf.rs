@@ -11,6 +11,14 @@ fn live_frame_index_follows_mutations() {
 }
 
 #[test]
+fn cached_sheets_follow_media_changes() {
+    let page = "data:text/html,<style id=css>p{color:red}</style><p id=out></p><script>let p=document.getElementById('out');let css=document.getElementById('css');let r=[getComputedStyle(p).color];document.head.appendChild(document.createElement('style'));r.push(getComputedStyle(p).color);css.setAttribute('media','(max-width:1px)');r.push(getComputedStyle(p).color);p.textContent=r.join('|');</script>";
+    let out = Command::new(anyknown()).current_dir(root()).args(["dump", "--text", "--js", page]).output().unwrap();
+    assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "rgb(255, 0, 0)|rgb(255, 0, 0)|rgb(0, 0, 0)\n");
+}
+
+#[test]
 fn timing_preserves_output() {
     let args = ["dump", "--md", "--js", "browser/tests/agent/noscript.html"];
     let plain = Command::new(anyknown()).current_dir(root()).args(args).output().unwrap();

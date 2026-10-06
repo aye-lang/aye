@@ -66,6 +66,8 @@ pub struct Page {
     title: []u8
     // Set by `layoutPage`.
     styling: ?*mut Styling
+    // The stylesheet source fingerprint for styling (sheet_cache.ore).
+    sheet_key: u64
     tree: ?*mut layout.Tree
     // The page's JavaScript (null when scripts are off).
     script: ?*mut Script
@@ -164,9 +166,9 @@ pub struct Page {
 
     /// Styles and lays out the page for a viewport `width` x `height` CSS
     /// px, measuring text with `measure` (which must outlive the
-    /// layout). Style sheets are parsed again when the viewport changed,
-    /// since media queries and `vw`/`vh` depend on it, and after
-    /// scripts changed the document (they may have changed the sheets).
+    /// layout). Style sheets are parsed again when the viewport changed
+    /// (media queries and `vw`/`vh` depend on it), or their sources
+    /// changed; ordinary DOM changes reuse the parsed sheets.
     pub fn layoutPage(self: *mut Self, measure: dyn font.Measurer, width: f64, height: f64) AllocError!void {
         self.dropTree()
         try syncFrames(self)
@@ -176,8 +178,21 @@ pub struct Page {
             same = st.media.width == width && st.media.height == height && st.version == domVersion(self)
         }
         if !same {
-            self.dropStyling()
-            self.styling = try self.styleFor(css.Media { width: width, height: height })
+            let key = sheetSourceKey(&self.doc)
+            if self.styling |st| {
+                if st.media.width == width && st.media.height == height && self.sheet_key == key {
+                    st.styles.deinit()
+                    st.styles = try css.Styles.init(self.alloc)
+                    try css.computeStyles(&self.doc, &st.ua, &st.author, st.media, &mut st.styles)
+                    st.version = domVersion(self)
+                    same = true
+                }
+            }
+            if !same {
+                self.dropStyling()
+                self.styling = try self.styleFor(css.Media { width: width, height: height })
+                self.sheet_key = key
+            }
         }
         if self.styling |st| {
             try loadWebFonts(self.alloc, &mut st.author, self.url.href, measure)
@@ -207,19 +222,22 @@ pub struct Page {
     pub fn restyle(self: *mut Self) AllocError!void {
         self.dropTree()
         if self.styling |st| {
-            if st.version != domVersion(self) {
-                // Scripts changed the document: the sheets are parsed
-                // again by the next layout.
+            if st.version != domVersion(self) && self.sheet_key != sheetSourceKey(&self.doc) {
+                // A stylesheet source changed: rebuild it at layout.
                 self.dropStyling()
                 return
             }
             st.styles.deinit()
             st.styles = try css.Styles.init(self.alloc)
             try css.computeStyles(&self.doc, &st.ua, &st.author, st.media, &mut st.styles)
+            st.version = domVersion(self)
         }
     }
 
     fn styleFor(self: *mut Self, media: css.Media) AllocError!*mut Styling {
+        if try takeReaderStyling(self, media) |cached| {
+            return cached
+        }
         var ua = try css.Sheet.init(self.alloc)
         errdefer ua.deinit()
         try css.uaSheet(&mut ua, media)
@@ -333,6 +351,7 @@ fn newPage(alloc: Allocator, located: Url, status: i64, failure: []u8, doc: Docu
         encoding: encoding.Encoding.Utf8,
         title: title,
         styling: null,
+        sheet_key: 0,
         tree: null,
         script: null,
         images: null,
