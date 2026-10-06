@@ -226,7 +226,9 @@ pub fn Pair(comptime T: type) type {
 generic is checked once, where it is defined: a value of type `T` can be
 moved, copied and pointed to, and its methods are those of its `where`
 constraints. The built-in constraint `where T: Integer` admits only
-integer types and lets `x as u64` convert a `T`. A type argument that does
+integer types and gives a `T` the integer operators, literals and `as`
+(each instance is checked again with its type); `where T: Hash` admits
+the types `==` compares and gives a `T` `==` and `@hash(x)`. A type argument that does
 not satisfy a constraint is an error at the instantiation. The generated C
 has one copy per instance.
 [`tests/cases/pool.ore`](tests/cases/pool.ore) is the design doc's
@@ -320,7 +322,7 @@ pub fn main() {
   `mod.Name` in expressions and types, the embedded `std` (above).
 - Generics: `comptime T: type` parameters, type functions
   (`fn Pool(comptime T: type) type { return struct { ... } }`), and
-  `where T: Interface, ...` (or the built-in `Integer`) after the return type. A call passes types for
+  `where T: Interface, ...` (or the built-in `Integer` and `Hash`) after the return type. A call passes types for
   the `comptime` parameters: `max(i64, a, b)`; `Pool(Node)` is a type.
   The entry point is `pub fn main()` or `pub fn main() !void`.
 - Statements: `let`, `var`, `=` and compound assignment (`+= -= *= /= %= +%= -%= *%= &= |= ^= <<= >>=`),
@@ -345,7 +347,10 @@ pub fn main() {
   `x.m(...)` and `Type.f(...)`, struct literals of a type function's
   struct `Pair(i64) { ... }`, the empty slice `[]T{}`, the repeat literal
   `[64]bool{false, ..}`, `x orelse y` (chaining through optionals), function values
-  (`let f: fn(i64) i64 = twice`, `f(1)`, `s.callback(x)`).
+  (`let f: fn(i64) i64 = twice`, `f(1)`, `s.callback(x)`), `x is .V` (does
+  the enum `x` hold variant `V`), `@hash(x)`, and on `simd[N]T` vectors
+  lane-wise `+ - * /` and comparisons (a mask), `v[i]`, `@splat`,
+  `@reduceAdd`, `@reduceMin`, `@reduceMax`, `@all`, `@any`, `@select`.
 - Methods: `fn` or `pub fn` in a struct or enum body, with `Self` and a receiver
   `self: Self`, `self: *Self` or `self: *mut Self`.
 - Interfaces: `interface Name { fn m(self: *Self, ...) T }`, implemented by
@@ -359,7 +364,9 @@ pub fn main() {
   `alloc.destroy(p)`, `try alloc.alloc(value, n)` (`AllocError![]mut T`,
   every element set to `value`) and `alloc.free(slice)`.
 - Tests: `test "name" { }`, `@expect(cond)`, `@expectEqual(expected, actual)`,
-  `@testAllocator()`.
+  `@testAllocator()`, and ```` ```ore ```` examples in `///` doc comments.
+- Safety: `@setSafety(false)` as the first statement of a block turns
+  off its runtime checks.
 - C interop: `extern fn` with C-compatible types (also `extern struct`s by
   value, pointers to them, function types as callbacks, and `...` for
   variadic functions such as `snprintf`), `[*]T` indexing and slicing,
@@ -369,7 +376,7 @@ pub fn main() {
   the program can do without.
 - Types: `i8..i64 u8..u64 isize usize f32 f64 bool` (and `c_int`,
   `c_long`, ... for C), structs, enums, error
-  sets, `[N]T` (`N` a constant), `[]T`, `[]mut T` (writable elements), `*T`, `*mut T`, `?T`,
+  sets, `[N]T` (`N` a constant), `simd[N]T` (vectors), `[]T`, `[]mut T` (writable elements), `*T`, `*mut T`, `?T`,
   `[*]T` (FFI pointer), `fn(A, B) R`, `dyn I`, `std.mem.Allocator`, `std.heap.General`,
   `std.heap.Arena`, instances
   of type functions (`Pool(Node)`), and, as a

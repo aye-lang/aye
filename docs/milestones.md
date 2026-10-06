@@ -250,6 +250,33 @@ engine, B6 and B7).
   `fib(25)` within 10 s (before: 963 s and 55 s; after: 0.07 s and
   0.02 s).
 
+## M9.8: Round 4 and design leftovers
+
+The browser's fourth list (B5: image decoding, layout) and promises of
+`docs/design.md` that were not implemented yet.
+
+- **Runtime:** runtime checks are emitted inline (`__builtin_*_overflow`
+  into the destination, an `if` before the statement) instead of calls
+  that clang does not inline at `-O0`; `@setSafety(false)` as the first
+  statement of a block turns its checks off (E0108).
+- **Language:** `x is .V` tests an enum's variant (E0106); `where T:
+  Integer` gives `T` the integer operators and literals, each instance
+  checked again with its type; the built-in `where T: Hash` and `@hash(x)`
+  for every type `==` compares (E0107); `simd[N]T` vectors with lane-wise
+  `+ - * /`, masks from comparisons, `v[i]`, `@splat`, `@reduceAdd`,
+  `@reduceMin`, `@reduceMax`, `@all`, `@any`, `@select` (E0109); no limit
+  on the number of instances of a generic (only on their nesting).
+- **std:** `std.math` trigonometry, `exp`, logarithms, `hypot`, `fmod`,
+  `trunc`, `sign`, and `minOf`/`maxOf`/`absOf`/`clampOf` for any integer
+  type; `std.map.HashMap(K, V)` with struct keys; `std.diag.Diagnostics`
+  for detailed errors (`diags: *mut Diagnostics`).
+- **Tests:** `ore test` runs the ```` ```ore ```` blocks of `///` doc
+  comments as tests, with errors and failures at their lines.
+- **Acceptance:** golden and error tests for each item, `ore explain`
+  texts for E0106 to E0109, `ore fmt` on the new syntax, and a decode-like
+  loop (RGB to gray over 4 MiB, 8 rounds) in debug mode at 0.54 s instead
+  of 1.52 s (0.55 s with no checks at all at `-O0`; safe mode 0.05 s).
+
 ## M10: Threads
 
 - **std:** `std.thread` (`spawn`, `join`), `std.sync` (`Mutex`,
