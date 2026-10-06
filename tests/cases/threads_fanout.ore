@@ -1,0 +1,91 @@
+// Fan work out to four threads through a `Channel`, collect the results
+// through another one, and join the threads (M10). The workers also count
+// jobs in an `Atomic` and in a counter guarded by a `Mutex`.
+
+import std.heap.General
+import std.sync.Atomic
+import std.sync.Channel
+import std.sync.Mutex
+import std.thread
+
+let JOBS: u64 = 100
+
+struct Shared {
+    jobs: Channel(u64)
+    results: Channel(u64)
+    done: Atomic(u64)
+    lock: Mutex
+    perWorker: [4]u64
+}
+
+struct Worker {
+    id: usize
+    shared: *mut Shared
+}
+
+/// The sum of the squares of 1 to n.
+fn squares(n: u64) u64 {
+    var total: u64 = 0
+    for i in 1..n + 1 {
+        total += i * i
+    }
+    return total
+}
+
+fn work(w: *mut Worker) {
+    let s = w.shared
+    while s.jobs.recv() |n| {
+        s.results.send(squares(n)) catch unreachable
+        let _ = s.done.add(1)
+        s.lock.lock()
+        s.perWorker[w.id] += 1
+        s.lock.unlock()
+    }
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    var shared = Shared {
+        jobs: try Channel(u64).init(alloc, 4),
+        results: try Channel(u64).init(alloc, JOBS as usize),
+        done: Atomic(u64).init(0),
+        lock: Mutex.init(),
+        perWorker: [4]u64{0, 0, 0, 0},
+    }
+    defer shared.lock.deinit()
+    defer shared.results.deinit()
+    defer shared.jobs.deinit()
+    var workers = [4]Worker{
+        Worker { id: 0, shared: &mut shared },
+        Worker { id: 1, shared: &mut shared },
+        Worker { id: 2, shared: &mut shared },
+        Worker { id: 3, shared: &mut shared },
+    }
+    var threads = [4]?thread.Thread{null, null, null, null}
+    for i in 0..4 {
+        threads[i] = try thread.spawn(Worker, work, &mut workers[i])
+    }
+    for n in 1..JOBS + 1 {
+        try shared.jobs.send(n)
+    }
+    shared.jobs.close()
+    var total: u64 = 0
+    for i in 0..JOBS {
+        total += shared.results.recv().?
+    }
+    for t in threads {
+        t.?.join()
+    }
+    @println(total)
+    @println(shared.done.load())
+    shared.lock.lock()
+    @println(shared.perWorker[0] + shared.perWorker[1] + shared.perWorker[2] + shared.perWorker[3])
+    shared.lock.unlock()
+    shared.results.close()
+    @println(shared.results.recv() == null)
+    shared.jobs.send(1) catch |e| {
+        @println("send after close: closed")
+    }
+}

@@ -146,8 +146,9 @@ ORE_INT_OPS(u64, uint64_t, uint64_t, 64, 0, 0)
 ORE_INT_OPS(usize, size_t, size_t, 64, 0, 0)
 
 #define ORE_TRACE_MAX 64
-static __attribute__((unused)) struct { int line, col; } ore_trace[ORE_TRACE_MAX];
-static __attribute__((unused)) uint32_t ore_trace_len;
+/* Each thread has its own error return trace. */
+static _Thread_local __attribute__((unused)) struct { int line, col; } ore_trace[ORE_TRACE_MAX];
+static _Thread_local __attribute__((unused)) uint32_t ore_trace_len;
 ORE_RT void ore_trace_push(int line, int col) {
     if (ore_trace_len < ORE_TRACE_MAX) {
         ore_trace[ore_trace_len].line = line;
@@ -400,6 +401,70 @@ ORE_RT uint64_t ore_std_monotonic_ns(void) {
     int64_t ts[2] = {0, 0};
     ore_rt_clock_gettime(ORE_CLOCK_MONOTONIC, ts);
     return (uint64_t)ts[0] * 1000000000u + (uint64_t)ts[1];
+}
+
+/* std.thread and std.sync: pthreads. A `pthread_t` is 8 bytes on macOS and
+   Linux; a mutex or condition variable lives on the C heap (128 bytes holds
+   either on both), so an Ore value that refers to it can be copied. */
+extern int ore_rt_pthread_create(uint64_t *, const void *, void *(*)(void *), void *) __asm__(ORE_SYM("pthread_create"));
+extern int ore_rt_pthread_join(uint64_t, void **) __asm__(ORE_SYM("pthread_join"));
+extern int ore_rt_pthread_mutex_init(void *, const void *) __asm__(ORE_SYM("pthread_mutex_init"));
+extern int ore_rt_pthread_mutex_lock(void *) __asm__(ORE_SYM("pthread_mutex_lock"));
+extern int ore_rt_pthread_mutex_unlock(void *) __asm__(ORE_SYM("pthread_mutex_unlock"));
+extern int ore_rt_pthread_mutex_destroy(void *) __asm__(ORE_SYM("pthread_mutex_destroy"));
+extern int ore_rt_pthread_cond_init(void *, const void *) __asm__(ORE_SYM("pthread_cond_init"));
+extern int ore_rt_pthread_cond_wait(void *, void *) __asm__(ORE_SYM("pthread_cond_wait"));
+extern int ore_rt_pthread_cond_signal(void *) __asm__(ORE_SYM("pthread_cond_signal"));
+extern int ore_rt_pthread_cond_broadcast(void *) __asm__(ORE_SYM("pthread_cond_broadcast"));
+extern int ore_rt_pthread_cond_destroy(void *) __asm__(ORE_SYM("pthread_cond_destroy"));
+struct ore_thread_start { void (*f)(uint8_t *); uint8_t *arg; };
+static void *ore_thread_main(void *p) {
+    struct ore_thread_start s = *(struct ore_thread_start *)p;
+    ore_rt_free(p);
+    s.f(s.arg);
+    return 0;
+}
+ORE_RT bool ore_thread_spawn(void (*f)(uint8_t *), uint8_t *arg, uint64_t *out) {
+    struct ore_thread_start *s = ore_rt_malloc(sizeof *s);
+    if (!s) return false;
+    s->f = f;
+    s->arg = arg;
+    if (ore_rt_pthread_create(out, 0, ore_thread_main, s) != 0) {
+        ore_rt_free(s);
+        return false;
+    }
+    return true;
+}
+ORE_RT void ore_thread_join(uint64_t t) { ore_rt_pthread_join(t, 0); }
+ORE_RT __attribute__((noreturn, cold)) void ore_sync_oom(void) {
+    ore_rt_fflush(0);
+    ore_rt_dprintf(2, "panic: out of memory for a mutex or condition variable\n");
+    ore_rt_abort();
+}
+ORE_RT uint8_t *ore_mutex_new(void) {
+    void *m = ore_rt_malloc(128);
+    if (!m) ore_sync_oom();
+    ore_rt_pthread_mutex_init(m, 0);
+    return m;
+}
+ORE_RT void ore_mutex_lock(uint8_t *m) { ore_rt_pthread_mutex_lock(m); }
+ORE_RT void ore_mutex_unlock(uint8_t *m) { ore_rt_pthread_mutex_unlock(m); }
+ORE_RT void ore_mutex_free(uint8_t *m) {
+    ore_rt_pthread_mutex_destroy(m);
+    ore_rt_free(m);
+}
+ORE_RT uint8_t *ore_cond_new(void) {
+    void *c = ore_rt_malloc(128);
+    if (!c) ore_sync_oom();
+    ore_rt_pthread_cond_init(c, 0);
+    return c;
+}
+ORE_RT void ore_cond_wait(uint8_t *c, uint8_t *m) { ore_rt_pthread_cond_wait(c, m); }
+ORE_RT void ore_cond_signal(uint8_t *c) { ore_rt_pthread_cond_signal(c); }
+ORE_RT void ore_cond_broadcast(uint8_t *c) { ore_rt_pthread_cond_broadcast(c); }
+ORE_RT void ore_cond_free(uint8_t *c) {
+    ore_rt_pthread_cond_destroy(c);
+    ore_rt_free(c);
 }
 "#;
 
@@ -1235,6 +1300,17 @@ impl Gen {
                 Type::Bool => format!("ore_expect_eq_b({}, {}, {lc})", a[0], a[1]),
                 _ => format!("ore_expect_eq_s(({0}).ptr, ({0}).len, ({1}).ptr, ({1}).len, {lc})", a[0], a[1]),
             },
+            Intrinsic::AtomicLoad => format!("__atomic_load_n({}, __ATOMIC_SEQ_CST)", a[0]),
+            Intrinsic::AtomicStore => format!("__atomic_store_n({}, {}, __ATOMIC_SEQ_CST)", a[0], a[1]),
+            Intrinsic::AtomicAdd => format!("__atomic_fetch_add({}, {}, __ATOMIC_SEQ_CST)", a[0], a[1]),
+            Intrinsic::AtomicSub => format!("__atomic_fetch_sub({}, {}, __ATOMIC_SEQ_CST)", a[0], a[1]),
+            Intrinsic::AtomicCas => format!(
+                "({{ {} ore_expected = {}; __atomic_compare_exchange_n({}, &ore_expected, {}, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); }})",
+                c_type(&args[1].1),
+                a[1],
+                a[0],
+                a[2]
+            ),
         }
     }
 

@@ -227,3 +227,8 @@ The browser's second list (`browser/COMPILER_GAPS.md`, entries 10 to 15).
   `Channel(T)`, `Atomic(T)`).
 - **Acceptance:** a golden program that fans work out to four threads
   through a `Channel` and joins them; CI runs it under ThreadSanitizer.
+- **Done as:** pthreads through runtime hooks in the C prelude, atomics as
+  builtins (`@atomicLoad` ... `@atomicCas`, C11 `__atomic`), `@ptrCast`
+  between function types, and `ore build --cflags` for
+  `-fsanitize=thread` (the golden test skips the ThreadSanitizer run where
+  clang's ThreadSanitizer does not work).

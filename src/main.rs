@@ -4,12 +4,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 const USAGE: &str = "usage (<path> is a .ore file, or a directory: a module of all its .ore files):
-  ore build <path> [-o out] [--mode debug|safe|fast]
-  ore run <path> [--mode debug|safe|fast] [-- args...]
+  ore build <path> [-o out] [--mode debug|safe|fast] [--cflags <flags>]
+  ore run <path> [--mode debug|safe|fast] [--cflags <flags>] [-- args...]
   ore emit-c <path> [--mode debug|safe|fast]
   ore check <path> [--json]
   ore fix <path>
-  ore test <path> [--filter <text>] [--module <module>] [--json] [--mode debug|safe|fast]
+  ore test <path> [--filter <text>] [--module <module>] [--json] [--mode debug|safe|fast] [--cflags <flags>]
+  (--cflags: more flags for clang, such as \"-fsanitize=thread\")
   ore fmt [--check] <path>      (<path>: a .ore file, or a directory searched recursively)
   ore doc --signatures <path>   (<path> may also be `std` or `std.<module>`)
   ore explain <code>
@@ -29,6 +30,8 @@ struct Args {
     module: Option<String>,
     /// `ore run ... -- args`: the program's arguments.
     prog_args: Vec<String>,
+    /// `--cflags "..."`: more flags for clang.
+    cflags: Vec<String>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -36,6 +39,7 @@ fn parse_args() -> Result<Args, String> {
     let cmd = it.next().ok_or("missing command")?;
     let (mut file, mut out, mut mode, mut json, mut filter, mut module) = (None, None, Mode::Debug, false, String::new(), None);
     let mut prog_args = Vec::new();
+    let mut cflags = Vec::new();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--" if cmd == "run" => prog_args.extend(it.by_ref()),
@@ -43,6 +47,9 @@ fn parse_args() -> Result<Args, String> {
             "--json" if cmd == "check" || cmd == "test" => json = true,
             "--filter" if cmd == "test" => filter = it.next().ok_or("`--filter` needs a text")?,
             "--module" if cmd == "test" => module = Some(it.next().ok_or("`--module` needs a module path, such as `html`")?),
+            "--cflags" if matches!(cmd.as_str(), "build" | "run" | "test") => {
+                cflags.extend(it.next().ok_or("`--cflags` needs flags, such as \"-fsanitize=thread\"")?.split_whitespace().map(String::from));
+            }
             "--mode" => {
                 let m = it.next().ok_or("`--mode` needs a value")?;
                 mode = Mode::parse(&m).ok_or(format!("unknown mode `{m}`"))?;
@@ -52,7 +59,7 @@ fn parse_args() -> Result<Args, String> {
         }
     }
     let file = file.ok_or("missing input file or directory")?;
-    Ok(Args { cmd, file, out, mode, json, filter, module, prog_args })
+    Ok(Args { cmd, file, out, mode, json, filter, module, prog_args, cflags })
 }
 
 fn main() -> ExitCode {
@@ -125,7 +132,7 @@ fn main() -> ExitCode {
     if args.cmd == "test" {
         return test(&args, root);
     }
-    let c = match driver::compile_root(root, args.mode) {
+    let mut c = match driver::compile_root(root, args.mode) {
         Ok(c) => c,
         Err(ds) => {
             for d in ds {
@@ -143,6 +150,7 @@ fn main() -> ExitCode {
         ("build", None) => PathBuf::from(Path::new(&args.file).file_stem().unwrap_or("main".as_ref())),
         _ => std::env::temp_dir().join(format!("ore-run-{}", std::process::id())),
     };
+    c.cflags = args.cflags.clone();
     if let Err(e) = driver::cc(&c, &exe, args.mode) {
         eprintln!("ore: {e}");
         return ExitCode::FAILURE;
@@ -330,7 +338,7 @@ fn fix(path: &str) -> ExitCode {
 /// then stderr) indented; or with `--json` one JSON document. The exit
 /// status is 1 if a test failed or the file does not compile.
 fn test(args: &Args, root: Root) -> ExitCode {
-    let results = match driver::run_tests(root, args.mode, &args.filter, args.module.as_deref()) {
+    let results = match driver::run_tests(root, args.mode, &args.filter, args.module.as_deref(), &args.cflags) {
         Ok(r) => r,
         Err(driver::TestError::Compile(ds)) => {
             if args.json {

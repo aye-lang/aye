@@ -46,8 +46,10 @@ pub const STD_FILES: &[(&str, &str, &str)] = &[
     ("std.os", "std/os/os.ore", include_str!("../std/os/os.ore")),
     ("std.pool", "std/pool/pool.ore", include_str!("../std/pool/pool.ore")),
     ("std.sort", "std/sort/sort.ore", include_str!("../std/sort/sort.ore")),
+    ("std.sync", "std/sync/sync.ore", include_str!("../std/sync/sync.ore")),
     ("std.testing", "std/testing/testing.ore", include_str!("../std/testing/testing.ore")),
     ("std.text", "std/text/text.ore", include_str!("../std/text/text.ore")),
+    ("std.thread", "std/thread/thread.ore", include_str!("../std/thread/thread.ore")),
     ("std.time", "std/time/time.ore", include_str!("../std/time/time.ore")),
 ];
 

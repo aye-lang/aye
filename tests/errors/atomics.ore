@@ -1,0 +1,13 @@
+fn f(p: *i64) {
+}
+
+pub fn main() {
+    var n: i64 = 0
+    var x: f64 = 1.0
+    let a = @atomicAdd(n, 1)
+    let b = @atomicLoad(&x)
+    @atomicStore(&n, 2)
+    let c = @atomicCas(&mut n, 1)
+    let g = @ptrCast(fn([*]u8), n)
+    let h = @ptrCast(fn([*]u8), f)
+}

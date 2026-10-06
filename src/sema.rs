@@ -534,6 +534,14 @@ pub enum Intrinsic {
     Expect,
     /// `@expectEqual(expected, actual)`
     ExpectEqual,
+    /// `@atomicLoad(p)`, `@atomicStore(p, v)`, `@atomicAdd(p, v)` and
+    /// `@atomicSub(p, v)` (the value before), `@atomicCas(p, expected, new)`
+    /// (whether it was `expected` and is `new` now); sequentially consistent.
+    AtomicLoad,
+    AtomicStore,
+    AtomicAdd,
+    AtomicSub,
+    AtomicCas,
 }
 
 #[derive(Debug, Clone)]
@@ -3106,6 +3114,7 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
+            ExprKind::Builtin { name, args } if name.starts_with("atomic") => return self.atomic(name, args, span),
             ExprKind::Builtin { name, args } if name == "hasLink" => {
                 let lib = match args.as_slice() {
                     [ast::Expr { kind: ExprKind::Str(s), .. }] => String::from_utf8_lossy(s).into_owned(),
@@ -3890,6 +3899,45 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// `@atomicLoad(p)`, `@atomicStore(p, v)`, `@atomicAdd(p, v)`,
+    /// `@atomicSub(p, v)` and `@atomicCas(p, expected, new)` on a pointer to
+    /// an integer (`*mut` to write).
+    fn atomic(&mut self, name: &str, args: &[ast::Expr], span: Span) -> Result<TExpr> {
+        let (op, n) = match name {
+            "atomicLoad" => (Intrinsic::AtomicLoad, 1),
+            "atomicStore" => (Intrinsic::AtomicStore, 2),
+            "atomicAdd" => (Intrinsic::AtomicAdd, 2),
+            "atomicSub" => (Intrinsic::AtomicSub, 2),
+            "atomicCas" => (Intrinsic::AtomicCas, 3),
+            _ => return err(E0021, span, format!("unknown builtin `@{name}`")),
+        };
+        if args.len() != n {
+            let what = ["", "one argument, a pointer", "two arguments, a pointer and a value", "three arguments: a pointer, the expected value and the new one"][n];
+            return err(E0022, span, format!("`@{name}` takes {what}"));
+        }
+        let p = self.value(&args[0], None)?;
+        let (elem, mutable) = match &p.ty {
+            Type::Ptr(e, m) => ((**e).clone(), *m),
+            t => return err(E0101, p.span, format!("`@{name}` needs a pointer to an integer (`&mut x`), found `{t}`")),
+        };
+        if !(elem.is_int() || self.integer_param(&elem)) {
+            return err(E0101, p.span, format!("`@{name}` works on integers, found a pointer to `{elem}`"));
+        }
+        if op != Intrinsic::AtomicLoad && !mutable {
+            return err(E0101, p.span, format!("`@{name}` writes, so it needs a `*mut {elem}` (`&mut x`), found `{}`", p.ty));
+        }
+        let mut targs = vec![p];
+        for a in &args[1..] {
+            targs.push(self.expect(a, &elem)?);
+        }
+        let ty = match op {
+            Intrinsic::AtomicStore => Type::Void,
+            Intrinsic::AtomicCas => Type::Bool,
+            _ => elem,
+        };
+        Ok(TExpr { kind: TExprKind::Intrinsic { op, args: targs }, ty, span })
+    }
+
     /// `@sizeOf(T)`, `@zeroed(T)` and `@ptrCast(T, p)`. `@link` belongs at
     /// the top level.
     fn c_builtin(&mut self, name: &str, args: &[ast::Expr], span: Span) -> Result<TExpr> {
@@ -3955,9 +4003,18 @@ impl<'a> Checker<'a> {
                 _ => None,
             }
         }
+        // A function to another function type: the C function pointer is
+        // called with other parameter types (`fn(*mut Job)` as `fn([*]u8)`).
+        if let Type::Fn(..) = to {
+            let f = self.value(arg, None)?;
+            if !matches!(f.ty, Type::Fn(..)) {
+                return err(E0092, f.span, format!("`@ptrCast` to a function type converts a function, found `{}`", f.ty));
+            }
+            return Ok(TExpr { kind: TExprKind::PtrCast(Box::new(f)), ty: to, span });
+        }
         let Some((to_opt, _)) = kind(&to) else {
             return err(E0092, to_span, format!(
-                "`@ptrCast` converts to a pointer type (`*T`, `*mut T`, `[*]T` or `?` of one), not to `{to}`"
+                "`@ptrCast` converts to a pointer type (`*T`, `*mut T`, `[*]T` or `?` of one) or between function types, not to `{to}`"
             ));
         };
         let p = self.value(arg, None)?;

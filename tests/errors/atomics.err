@@ -1,0 +1,5 @@
+atomics.ore:7:24: error[E0101]: `@atomicAdd` needs a pointer to an integer (`&mut x`), found `i64`
+atomics.ore:8:25: error[E0101]: `@atomicLoad` works on integers, found a pointer to `f64`
+atomics.ore:9:18: error[E0101]: `@atomicStore` writes, so it needs a `*mut i64` (`&mut x`), found `*i64`
+atomics.ore:10:13: error[E0022]: `@atomicCas` takes three arguments: a pointer, the expected value and the new one
+atomics.ore:11:33: error[E0092]: `@ptrCast` to a function type converts a function, found `i64`

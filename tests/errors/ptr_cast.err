@@ -1,5 +1,5 @@
 ptr_cast.ore:3:29: error[E0092]: `@ptrCast` converts a pointer, found `i32` (convert numbers with `as`)
-ptr_cast.ore:4:22: error[E0092]: `@ptrCast` converts to a pointer type (`*T`, `*mut T`, `[*]T` or `?` of one), not to `i64`
+ptr_cast.ore:4:22: error[E0092]: `@ptrCast` converts to a pointer type (`*T`, `*mut T`, `[*]T` or `?` of one) or between function types, not to `i64`
 ptr_cast.ore:6:13: error[E0092]: `@ptrCast` cannot make the read-only pointer `*i32` writable (`*mut i32`)
 ptr_cast.ore:8:13: error[E0092]: `@ptrCast` cannot turn the optional `?[*]u8` into `[*]u8`: unwrap it first (`if p |v| { ... }`)
 ptr_cast.ore:9:13: error[E0022]: `@ptrCast` takes two arguments: the type and the pointer

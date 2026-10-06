@@ -40,6 +40,9 @@ ore explain <code>                                    # explain an error code, w
 ore spec                                              # print the language reference (docs/spec.md)
 ```
 
+`build`, `run` and `test` take `--cflags "flags"` for more clang flags, such
+as `--cflags -fsanitize=thread`.
+
 `ore fmt` works on tokens and keeps every comment and line break; it sets
 indentation (4 spaces) and spacing, keeps at most one blank line in a row and
 lines up runs of trailing comments. It is idempotent and never changes the
@@ -239,7 +242,8 @@ imports one item. `std` is embedded in the compiler (sources in
 (`General`, `Arena`), `std.list` (`List(T)`), `std.map` (`StrMap(V)`,
 `IntMap(K, V)`), `std.text` (`Builder`, search, `split`, parsing, UTF-8),
 `std.math`, `std.sort` (`sort(T, items, less)`), `std.pool` (`Pool(T)`,
-`Handle(T)`), `std.time`,
+`Handle(T)`), `std.time`, `std.thread` (`spawn`, `Thread.join`), `std.sync`
+(`Mutex`, `Channel(T)`, `Atomic(T)`),
 `std.testing`, `std.log` (`err`, `info`) and `std.os` (`args`, `exit`).
 `ore spec` lists every function. Cyclic imports are an error.
 

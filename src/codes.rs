@@ -1855,7 +1855,7 @@ pub fn main() {
 }
 E0092 = 92 {
     "invalid `@ptrCast`",
-    "`@ptrCast(T, p)` reads the pointer `p` as the pointer type `T`; both are `*T`, `*mut T`, `[*]T`, or `?` of one. It cannot make a read-only `*T` writable, or an optional pointer non-optional: unwrap it first with `if p |v| { }`. Numbers are converted with `as`.",
+    "`@ptrCast(T, p)` reads the pointer `p` as the pointer type `T`; both are `*T`, `*mut T`, `[*]T`, or `?` of one, or both are function types (`fn(*mut Job)` as `fn([*]u8)`, for a C callback). It cannot make a read-only `*T` writable, or an optional pointer non-optional: unwrap it first with `if p |v| { }`. Numbers are converted with `as`.",
     r#"extern fn malloc(n: usize) ?[*]u8
 extern fn free(p: ?[*]u8)
 
@@ -2080,6 +2080,22 @@ pub fn main() {
     if @hasLink("libcurl") {
         @println("with libcurl")
     }
+}
+"#,
+}
+E0101 = 101 {
+    "atomic operation on something that is not an integer",
+    "`@atomicLoad(p)`, `@atomicStore(p, v)`, `@atomicAdd(p, v)`, `@atomicSub(p, v)` and `@atomicCas(p, expected, new)` read and write one integer that several threads share, through a pointer to it: `&x` to load, `&mut x` (a `var`, or a field through a `*mut`) for the others. Share other values through a `std.sync.Mutex`, or use `std.sync.Atomic(T)`.",
+    r#"pub fn main() {
+    var n: i64 = 0
+    let old = @atomicAdd(n, 1)
+    @println(old)
+}
+"#,
+    r#"pub fn main() {
+    var n: i64 = 0
+    let old = @atomicAdd(&mut n, 1)
+    @println(old)
 }
 "#,
 }

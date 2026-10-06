@@ -58,6 +58,7 @@ files all belong to it (see section 12). The root module must declare
 ```
 ore run <path> [--mode debug|safe|fast] [-- args...]  build to a temp file and run (args go to the program)
 ore build <path> [-o out] [--mode m]                  build an executable (default name: the file or directory name)
+    [--cflags "flags"]                                (build, run, test) more clang flags: --cflags -fsanitize=thread
 ore check <path> [--json]                             report all compile errors; no C, no clang
 ore fix <path>                                        apply the fix-its of `ore check` in place, repeat (at most 10 rounds)
 ore test <path> [--filter text] [--json] [--mode m]   run the root module's `test` blocks, each in its own process
@@ -129,7 +130,8 @@ pub fn main() {
 
 - Builtins start with `@`: `@print`, `@println`, `@expect`, `@expectEqual`,
   `@testAllocator`, `@sizeOf`, `@zeroed`, `@ptrCast`, `@link`,
-  `@linkOptional`, `@hasLink`.
+  `@linkOptional`, `@hasLink`, `@atomicLoad`, `@atomicStore`, `@atomicAdd`,
+  `@atomicSub`, `@atomicCas`.
 
 **Newlines end statements** (Go's rule). A newline is a statement
 terminator when the last token on the line is an identifier, a literal,
@@ -475,7 +477,8 @@ check, `p[lo..hi]` (both bounds) gives a `[]mut T`, and it does not track
 read-only data. `?[*]T` compares with `null` and unwraps with `if p |q|`.
 `@ptrCast(T, p)` converts between pointer types (`*T`, `*mut T`, `[*]T`, `?`
 of one), for example `@ptrCast([*]u8, &mut state)` for a C `void *` and
-back; it cannot make a `*T` writable or an optional non-optional.
+back, or between function types (`@ptrCast(fn([*]u8), f)` for a C
+callback); it cannot make a `*T` writable or an optional non-optional.
 `@sizeOf(T)` is a `usize`; `@zeroed(T)` is the all-zero value of a number,
 optional pointer, `extern struct` or array of them.
 
@@ -1200,6 +1203,8 @@ failure is `{"kind":"assertion"|"panic"|"leak","line":L,"col":C,"message":M}`,
   `bool` or `[]u8` to stdout (buffered C stdio). A `u8` is an integer:
   `@print(s[i])` writes `104`; write one character with `@print(s[i..i + 1])`.
 - `@expect`, `@expectEqual`, `@testAllocator`: section 13.
+- `@atomicLoad`, `@atomicStore`, `@atomicAdd`, `@atomicSub`, `@atomicCas`:
+  section 15 (std.sync).
 - `@sizeOf(T)`, `@zeroed(T)`, `@ptrCast(T, p)`, `@link("lib")`,
   `@linkOptional("lib")`, `@hasLink("lib")`: section 4.
 
@@ -1433,6 +1438,81 @@ Pool.remove(self: *mut Self, h: Handle(T))           a stale handle does nothing
 std.time.monotonicMs() u64                 milliseconds on a clock that never goes back
 std.time.sleep(ms: u64)                    wait at least ms milliseconds
 ```
+
+### std.thread
+
+```
+std.thread.spawn(comptime T: type, f: fn(*mut T), arg: *mut T) SpawnError!Thread   run f(arg) in a new thread
+Thread.join(self: Self)                    wait until the thread's function returns; join every thread once
+std.thread.SpawnError { SystemResources }
+```
+
+`arg` must stay valid until the thread is joined. What threads share goes
+through `std.sync`; an allocator (`General`, `Arena`) is not thread-safe:
+give each thread its own. A panic in any thread ends the program; each
+thread has its own error return trace.
+
+### std.sync
+
+```
+std.sync.Mutex                             a lock; copies are the same lock
+Mutex.init() Mutex
+Mutex.lock(self: *Self)                    wait for the lock and take it
+Mutex.unlock(self: *Self)
+Mutex.deinit(self: *Self)                  once, when no thread uses it
+std.sync.Channel(T)                        a bounded queue between threads; share a *mut Channel(T)
+Channel.init(alloc: Allocator, capacity: usize) AllocError!Channel(T)
+Channel.send(self: *mut Self, value: T) ChannelError!void   waits while full; Closed after close
+Channel.recv(self: *mut Self) ?T           waits while empty; null once closed and empty
+Channel.close(self: *mut Self)             wake every waiting thread
+Channel.deinit(self: *mut Self)
+std.sync.ChannelError { Closed }
+std.sync.Atomic(T)                         an integer shared without a lock (where T: Integer)
+Atomic.init(value: T) Atomic(T)
+Atomic.load(self: *Self) T
+Atomic.store(self: *mut Self, value: T)
+Atomic.add(self: *mut Self, n: T) T        returns the value before; wraps
+Atomic.sub(self: *mut Self, n: T) T        returns the value before; wraps
+Atomic.compareSwap(self: *mut Self, expected: T, new: T) bool   set to new if it is expected
+```
+
+Every atomic operation is sequentially consistent. They are also builtins
+on a pointer to an integer: `@atomicLoad(&x)`, `@atomicStore(&mut x, v)`,
+`@atomicAdd(&mut x, v)`, `@atomicSub(&mut x, v)` (the value before),
+`@atomicCas(&mut x, expected, new)` (E0101 otherwise). A program fanning
+work out to threads:
+
+```ore
+import std.heap.General
+import std.sync.Channel
+import std.thread
+
+fn work(jobs: *mut Channel(u64)) {
+    while jobs.recv() |n| {
+        @println(n * n)
+    }
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var jobs = try Channel(u64).init(gpa.allocator(), 4)
+    defer jobs.deinit()
+    var ts = [2]?thread.Thread{null, null}
+    for i in 0..2 {
+        ts[i] = try thread.spawn(Channel(u64), work, &mut jobs)
+    }
+    for n in 1..5 {
+        try jobs.send(n as u64)
+    }
+    jobs.close()
+    for t in ts {
+        t.?.join()
+    }
+}
+```
+
+The order of the lines it prints varies from run to run.
 
 ### std.testing
 

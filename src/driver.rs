@@ -153,6 +153,8 @@ pub fn apply_fixes(src: &str, diags: &[Diag]) -> (String, Vec<(Span, String)>) {
 pub struct CProgram {
     pub c: String,
     pub links: Vec<String>,
+    /// More flags for clang (`--cflags`), such as `-fsanitize=thread`.
+    pub cflags: Vec<String>,
 }
 
 /// Run the front end, OIR lowering and C generation for an executable of a
@@ -172,7 +174,7 @@ pub fn compile_root(root: Root, mode: Mode) -> Result<CProgram, Vec<Diag>> {
     let links = linked(&typed);
     let ir = oir::lower(&typed, &links);
     let c = cgen::emit(&ir, &file_names(&checked.files), mode != Mode::Fast, mode == Mode::Debug, false);
-    Ok(CProgram { c, links })
+    Ok(CProgram { c, links, cflags: Vec::new() })
 }
 
 /// The libraries the program is linked with: those of `@link`, and those
@@ -222,7 +224,7 @@ pub fn compile_tests_to_c(root: Root, mode: Mode) -> Result<(CProgram, Vec<sema:
     let ir = oir::lower(&typed, &links);
     let files = file_names(&checked.files);
     let c = cgen::emit(&ir, &files, mode != Mode::Fast, mode == Mode::Debug, true);
-    Ok((CProgram { c, links }, typed.tests, files))
+    Ok((CProgram { c, links, cflags: Vec::new() }, typed.tests, files))
 }
 
 /// The outcome of one test.
@@ -254,8 +256,10 @@ pub enum TestError {
 /// aside) and run each one in its own process, so that a panic ends only
 /// that test. Only tests whose shown name (`name`, `module: name`)
 /// contains `filter` run, and with `module`, only those of that module.
-pub fn run_tests(root: Root, mode: Mode, filter: &str, module: Option<&str>) -> Result<Vec<TestResult>, TestError> {
-    let (c, tests, files) = compile_tests_to_c(root, mode).map_err(TestError::Compile)?;
+/// `cflags` are more flags for clang.
+pub fn run_tests(root: Root, mode: Mode, filter: &str, module: Option<&str>, cflags: &[String]) -> Result<Vec<TestResult>, TestError> {
+    let (mut c, tests, files) = compile_tests_to_c(root, mode).map_err(TestError::Compile)?;
+    c.cflags = cflags.to_vec();
     if let Some(m) = module
         && !tests.iter().any(|t| t.module == m)
     {
@@ -394,8 +398,10 @@ pub fn link_flags(links: &[String]) -> Vec<String> {
 /// program's libraries.
 pub fn cc(p: &CProgram, out: &Path, mode: Mode) -> Result<(), String> {
     let mut cmd = Command::new("clang");
-    cmd.args(["-std=gnu11", "-fwrapv", "-fno-strict-aliasing", "-Wno-incompatible-library-redeclaration"])
+    // `-pthread`: std.thread and std.sync call pthreads.
+    cmd.args(["-std=gnu11", "-fwrapv", "-fno-strict-aliasing", "-pthread", "-Wno-incompatible-library-redeclaration"])
         .args(mode.clang_flags())
+        .args(&p.cflags)
         .args(["-x", "c", "-", "-o"])
         .arg(out)
         // std.math calls libm.

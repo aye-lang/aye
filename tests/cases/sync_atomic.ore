@@ -1,0 +1,52 @@
+// std.sync.Atomic, the atomic builtins, and a Mutex shared by four
+// threads.
+
+import std.sync.Atomic
+import std.sync.Mutex
+import std.thread
+
+struct Counter {
+    lock: Mutex
+    n: i64
+    hits: Atomic(u32)
+}
+
+fn bump(c: *mut Counter) {
+    for i in 0..1000 {
+        c.lock.lock()
+        c.n += 1
+        c.lock.unlock()
+        let _ = c.hits.add(1)
+    }
+}
+
+pub fn main() !void {
+    var a = Atomic(u8).init(250)
+    @println(a.add(10))
+    @println(a.load())
+    @println(a.sub(5))
+    @println(a.load())
+    @println(a.compareSwap(0, 7))
+    @println(a.compareSwap(255, 7))
+    a.store(42)
+    @println(a.load())
+
+    var raw: i64 = 5
+    @println(@atomicAdd(&mut raw, -7))
+    @println(@atomicLoad(&raw))
+    @println(@atomicCas(&mut raw, -2, 9))
+    @atomicStore(&mut raw, 1)
+    @println(raw)
+
+    var c = Counter { lock: Mutex.init(), n: 0, hits: Atomic(u32).init(0) }
+    defer c.lock.deinit()
+    var ts = [4]?thread.Thread{null, null, null, null}
+    for i in 0..4 {
+        ts[i] = try thread.spawn(Counter, bump, &mut c)
+    }
+    for t in ts {
+        t.?.join()
+    }
+    @println(c.n)
+    @println(c.hits.load())
+}

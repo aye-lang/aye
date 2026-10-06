@@ -31,6 +31,9 @@
 //!   `app.toml`, or none); `ore test app` runs its tests.
 //! - `ore run`, `ore build -o`, `ore check`, `ore test --filter` and `ore
 //!   test --module` are also run through the built binary.
+//! - `ore build --cflags -fsanitize=thread`: the M10 fan-out program runs
+//!   under ThreadSanitizer without a report (skipped where ThreadSanitizer
+//!   does not run).
 
 use ore::diag::Diag;
 use ore::driver::{self, Mode};
@@ -374,6 +377,71 @@ fn cli_build_link(work: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Run `cmd` and wait at most `secs` seconds for it (`None` on a timeout:
+/// it is killed).
+fn output_within(cmd: &mut Command, secs: u64) -> Option<std::process::Output> {
+    use std::process::Stdio;
+    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().ok()?;
+    let start = std::time::Instant::now();
+    loop {
+        if child.try_wait().ok()?.is_some() {
+            return child.wait_with_output().ok();
+        }
+        if start.elapsed().as_secs() >= secs {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// Does clang's ThreadSanitizer work here: a C program with two threads,
+/// built with `-fsanitize=thread`, runs cleanly?
+fn tsan_works(work: &Path) -> bool {
+    let src = work.join("tsan_probe.c");
+    let exe = work.join("tsan_probe");
+    let c = "#include <pthread.h>\nstatic void *f(void *p) { return p; }\n\
+             int main(void) { pthread_t t; pthread_create(&t, 0, f, 0); return pthread_join(t, 0); }\n";
+    if std::fs::write(&src, c).is_err() {
+        return false;
+    }
+    let built = Command::new("clang").args(["-fsanitize=thread", "-pthread"]).arg(&src).arg("-o").arg(&exe).status();
+    if !built.is_ok_and(|s| s.success()) {
+        return false;
+    }
+    output_within(&mut Command::new(&exe), 30).is_some_and(|o| o.status.success() && o.stderr.is_empty())
+}
+
+/// M10: the fan-out program built with `--cflags -fsanitize=thread` runs
+/// without a ThreadSanitizer report and prints what it prints without it.
+fn cli_tsan(work: &Path) -> Result<(), String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    // The flags reach clang: one it does not know fails the build.
+    let bad = work.join("hello_bad_flag");
+    let (_, err, code) = ore(root, &["build", "tests/cases/hello.ore", "--cflags", "-fno-such-ore-flag", "-o", bad.to_str().unwrap()])?;
+    if code != Some(1) || !err.contains("clang failed") {
+        return Err(format!("`ore build --cflags -fno-such-ore-flag`: {code:?}\n{err}"));
+    }
+    if !tsan_works(work) {
+        println!("skipped cli/ore build --cflags -fsanitize=thread: clang's ThreadSanitizer does not run here");
+        return Ok(());
+    }
+    let exe = work.join("threads_fanout_tsan");
+    let args = ["build", "tests/cases/threads_fanout.ore", "--cflags", "-fsanitize=thread", "-o", exe.to_str().unwrap()];
+    let (_, err, code) = ore(root, &args)?;
+    if code != Some(0) {
+        return Err(format!("`ore {}` failed: {code:?}\n{err}", args.join(" ")));
+    }
+    let out = output_within(&mut Command::new(&exe), 120).ok_or("the program did not finish within 120 s")?;
+    let want = read(&root.join("tests/cases/threads_fanout.out")).unwrap();
+    let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    if !out.status.success() || stdout != want || !stderr.is_empty() {
+        return Err(format!("under ThreadSanitizer: {}\n--- stdout\n{stdout}--- stderr\n{stderr}", out.status));
+    }
+    Ok(())
+}
+
 /// The `ore check` CLI: exit code, stdout and stderr, text and `--json`.
 fn cli_check() -> Result<(), String> {
     let ok = "tests/cases/hello.ore";
@@ -492,6 +560,7 @@ fn main() {
         handles.push(("cli/ore run".to_string(), s.spawn(move || cli_run(w))));
         handles.push(("cli/ore build -o".to_string(), s.spawn(move || cli_build_link(w))));
         handles.push(("cli/ore check".to_string(), s.spawn(cli_check)));
+        handles.push(("cli/ore build --cflags -fsanitize=thread".to_string(), s.spawn(move || cli_tsan(w))));
         handles.push(("cli/ore explain".to_string(), s.spawn(cli_explain)));
         handles.push(("cli/ore test --filter".to_string(), s.spawn(cli_test_filter)));
         handles.push(("cli/ore test --module".to_string(), s.spawn(cli_test_module)));
