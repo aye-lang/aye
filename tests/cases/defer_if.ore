@@ -1,0 +1,32 @@
+// `defer if` and `errdefer if`: the `if` runs when the scope exits.
+
+error E { Bad }
+
+fn work(fail: bool, verbose: bool) E!void {
+    defer if verbose {
+        @println("work done")
+    } else {
+        @println("quiet")
+    }
+    errdefer if verbose {
+        @println("work failed")
+    }
+    if fail {
+        return E.Bad
+    }
+    @println("working")
+}
+
+pub fn main() {
+    var n: i64 = 0
+    {
+        defer if n == 0 {
+            n = 10
+        }
+        n = 0
+    }
+    @println(n)
+    work(false, true) catch @println("caught")
+    work(true, true) catch @println("caught")
+    work(true, false) catch @println("caught")
+}

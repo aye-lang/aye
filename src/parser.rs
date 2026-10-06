@@ -817,6 +817,8 @@ impl Parser {
                 let inner_span = self.span();
                 let inner = if self.at(&Tok::LBrace) {
                     Stmt { kind: StmtKind::Block(self.block()?), span: inner_span }
+                } else if self.at(&Tok::Kw(Kw::If)) {
+                    self.if_stmt()?
                 } else {
                     self.simple_stmt()?
                 };

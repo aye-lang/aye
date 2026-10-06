@@ -329,6 +329,10 @@ pub fn main() {
 - A struct literal names its type and lists every field once:
   `Point { x: 1.0, y: 2.0 }`. There are no default field values.
 - A method cannot have the name of a field of its struct.
+- A struct's methods are all in its body, so one file shows the whole
+  type (what `ore doc` prints, and what a reader or an AI needs to read).
+  Code in other files of the module takes the struct as a parameter
+  (`fn parseSheet(sheet: *mut Sheet, src: []u8)`).
 
 ### Enums (tagged unions)
 
@@ -563,7 +567,8 @@ pub fn main() {
 - `defer stmt` runs `stmt` when the enclosing block is left: at its end,
   or by `return` (after the return value is computed), `break` or
   `continue`. Several defers run in reverse order. The statement is a call,
-  an assignment or a block, and cannot contain `return` or `try`.
+  an assignment, an `if` (`defer if open { close() }`) or a block, and
+  cannot contain `return` or `try`.
   `errdefer` (section 8) runs only when an error is returned.
 - A block `{ ... }` opens a scope.
 - An expression used as a statement must be a call, `try`, `catch` or
