@@ -87,8 +87,10 @@ where       = "where" ident ":" path { "," ident ":" path } ;
 
 struct_decl = [ "pub" ] [ "extern" ] "struct" ident "{" { NEWLINE }
               [ member { ( "," | NEWLINE ) { NEWLINE } member } [ "," ] { NEWLINE } ] "}" ;
-member      = field | fn_decl ;          (* a method, followed by a newline; fields and
-                                            methods come in any order *)
+member      = field [ "=" expr ] | fn_decl ;
+                                         (* a field with a default value, a constant that a
+                                            literal leaving the field out gives it; a method,
+                                            followed by a newline; any order *)
                (* in a method, `Self` is the struct; a first parameter of type
                   Self, *Self or *mut Self makes it callable as x.method().
                   An extern struct has C layout and C-compatible fields. *)

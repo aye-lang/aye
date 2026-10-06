@@ -330,12 +330,30 @@ pub fn main() {
   without such a parameter is called as `Type.f(args)`. Any method can be
   called as `Type.f(receiver, args)`.
 - A struct literal names its type and lists every field once:
-  `Point { x: 1.0, y: 2.0 }`. There are no default field values.
+  `Point { x: 1.0, y: 2.0 }`, except fields with a default value, `w: f64
+  = 100.0`, which it may leave out (`Box { h: 2.0 }`, `Box {}`). A default
+  is a constant like a top-level `let` (literals, constants, operators,
+  `as`, `@zeroed(T)`, array, struct and enum literals; no calls: E0103).
+  Enum variant fields have no defaults.
 - A method cannot have the name of a field of its struct.
 - A struct's methods are all in its body, so one file shows the whole
   type (what `ore doc` prints, and what a reader or an AI needs to read).
   Code in other files of the module takes the struct as a parameter
   (`fn parseSheet(sheet: *mut Sheet, src: []u8)`).
+
+```ore
+struct Box {
+    x: f64 = 0.0
+    w: f64 = 100.0
+    h: f64
+    open: [8]bool = @zeroed([8]bool)
+}
+
+pub fn main() {
+    let b = Box { h: 20.0 }
+    @println(b.x + b.w + b.h)
+}
+```
 
 ### Enums (tagged unions)
 

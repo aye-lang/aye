@@ -1418,7 +1418,7 @@ fn const_init(p: &Program, v: &ConstVal, ty: &Type) -> String {
         (ConstVal::Fn(name, true), _) => extern_symbol(name).to_string(),
         (ConstVal::Fn(name, false), _) => fn_name(name),
         (ConstVal::Null, t) if is_ptr_optional(t) => "0".to_string(),
-        (ConstVal::Null, _) => "{0}".to_string(),
+        (ConstVal::Null, _) | (ConstVal::Zeroed, _) => "{0}".to_string(),
         (ConstVal::Some(x), Type::Optional(inner)) => format!("{{true, {}}}", const_init(p, x, inner)),
         (ConstVal::Agg(elems), Type::Array(el, _)) => format!("{{{{{}}}}}", list(elems, &vec![&**el; elems.len()])),
         (ConstVal::Agg(fields), Type::Struct(name)) => {

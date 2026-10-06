@@ -689,6 +689,9 @@ impl Loader<'_> {
     fn struct_decl(&mut self, s: &mut ast::StructDecl) {
         for f in &mut s.fields {
             self.ty(&mut f.ty);
+            if let Some(d) = &mut f.default {
+                self.expr(d);
+            }
         }
         for m in &mut s.methods {
             self.func(m);

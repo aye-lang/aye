@@ -1,0 +1,50 @@
+// M9.7: struct fields can have default values, which a literal that
+// leaves the field out gives them; `@zeroed` is a constant too.
+let ZERO: f32 = 0.0
+
+struct Box {
+    x: f32 = ZERO
+    y: f32 = ZERO
+    w: f32 = 100.0
+    h: f32
+    depth: u32 = 1 + 2
+    name: []u8 = "box"
+    parent: ?u32 = null
+    flags: [64]bool = @zeroed([64]bool)
+    grid: [2][3]u8 = @zeroed([2][3]u8)
+    color: Color = Color.Black
+}
+
+enum Color { Black, White }
+
+struct Point { x: i64 = 0, y: i64 = 0 }
+
+fn Stack(comptime T: type) type {
+    return struct {
+        items: []T = []T{}
+        top: usize = 0
+        limit: usize = 16
+    }
+}
+
+let EMPTY = Point {}
+let FLAGS = @zeroed([8]bool)
+let SECOND = FLAGS[1]
+
+pub fn main() {
+    var b = Box { h: 2.0, name: "root" }
+    b.flags[63] = true
+    @println(b.x + b.w + b.h)
+    @println(b.depth)
+    @println(b.name)
+    @println(b.parent == null)
+    @println(b.flags[63])
+    @println(b.grid[1][2])
+    @println(b.color == Color.Black)
+    let p = Point { y: 5 }
+    @println(p.x + p.y)
+    @println(EMPTY == Point { x: 0, y: 0 })
+    let s = Stack(i64) { limit: 4 }
+    @println(s.items.len + s.top + s.limit)
+    @println(SECOND)
+}

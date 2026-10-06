@@ -441,7 +441,8 @@ impl Parser {
             let (fname, fspan) = self.ident()?;
             self.expect(&Tok::Colon)?;
             let ty = self.type_expr()?;
-            fields.push(FieldDecl { name: fname, span: fspan, ty });
+            let default = if self.eat(&Tok::Assign) { Some(self.expr()?) } else { None };
+            fields.push(FieldDecl { name: fname, span: fspan, ty, default });
             match self.peek() {
                 Tok::Comma | Tok::Semi => {
                     self.bump();
@@ -584,7 +585,10 @@ impl Parser {
             let (fname, fspan) = self.ident()?;
             self.expect(&Tok::Colon)?;
             let ty = self.type_expr()?;
-            fields.push(FieldDecl { name: fname, span: fspan, ty });
+            fields.push(FieldDecl { name: fname, span: fspan, ty, default: None });
+            if self.at(&Tok::Assign) {
+                return Err(Error::new(E0006, self.span(), "only struct fields can have a default value, not the fields of an enum variant"));
+            }
             match self.peek() {
                 Tok::Comma | Tok::Semi => {
                     self.bump();

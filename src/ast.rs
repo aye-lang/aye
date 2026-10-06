@@ -163,6 +163,9 @@ pub struct FieldDecl {
     pub name: String,
     pub span: Span,
     pub ty: TypeExpr,
+    /// `name: T = value`: the value a struct literal that leaves the field
+    /// out gives it (a constant). Only struct fields have one.
+    pub default: Option<Expr>,
 }
 
 #[derive(Debug, Clone)]

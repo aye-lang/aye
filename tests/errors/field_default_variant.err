@@ -1,0 +1,1 @@
+field_default_variant.ore:2:21: error[E0006]: only struct fields can have a default value, not the fields of an enum variant

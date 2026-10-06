@@ -1,0 +1,4 @@
+field_defaults.ore:6:14: error[E0103]: the default value of field `x` must be a constant: literals, `let` constants, operators, `as`, `@zeroed`, and array, struct and enum literals (no calls)
+field_defaults.ore:7:14: error[E0023]: mismatched types: expected `i64`, found float literal
+field_defaults.ore:18:14: error[E0089]: `D` is defined in terms of itself
+field_defaults.ore:22:13: error[E0039]: missing field `y` in `B` literal

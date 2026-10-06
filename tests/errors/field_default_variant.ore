@@ -1,0 +1,7 @@
+enum Shape {
+    Circle { r: f64 = 1.0 }
+    Empty
+}
+
+pub fn main() {
+}

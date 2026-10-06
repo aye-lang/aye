@@ -1,0 +1,23 @@
+fn one() i64 {
+    return 1
+}
+
+struct A {
+    x: i64 = one()
+    y: i64 = 1.5
+}
+
+struct B {
+    x: i64 = 0
+    y: i64
+}
+
+let D = C {}
+
+struct C {
+    n: i64 = D.n
+}
+
+pub fn main() {
+    let b = B { x: 2 }
+}

@@ -305,6 +305,8 @@ pub enum ConstVal {
     EmptySlice,
     /// A top-level function; `true` for a C function (`extern fn`).
     Fn(String, bool),
+    /// `@zeroed(T)` of an array or struct: every byte zero.
+    Zeroed,
 }
 
 #[derive(Debug, Clone)]
@@ -590,6 +592,28 @@ struct GlobalInfo {
     value: Option<ConstVal>,
 }
 
+/// The default values of a struct's fields (aligned with its fields), with
+/// the `comptime` parameters and the module they are checked in.
+struct DefaultDecls<'a> {
+    exprs: Vec<Option<&'a ast::Expr>>,
+    env: Vec<(String, Type, Span)>,
+    module: String,
+}
+
+/// The default value expressions of the fields `decls`, aligned with the
+/// fields `fields` keeps (a duplicate is left out).
+fn default_exprs(decls: &[ast::FieldDecl]) -> Vec<Option<&ast::Expr>> {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut out = Vec::new();
+    for f in decls {
+        if !seen.contains(&f.name.as_str()) {
+            seen.push(&f.name);
+            out.push(f.default.as_ref());
+        }
+    }
+    out
+}
+
 /// How a method takes its receiver, from the type of its first parameter.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Recv {
@@ -682,6 +706,12 @@ struct Checker<'a> {
     alias_decls: HashMap<String, &'a ast::GlobalDecl>,
     aliases: HashMap<String, Type>,
     aliases_active: Vec<String>,
+    /// The default values of struct fields (`x: T = value`), by struct:
+    /// each field's expression, and the context to check them in.
+    default_decls: HashMap<String, DefaultDecls<'a>>,
+    /// Checked defaults (`None`: it has an error), and those being checked.
+    defaults: HashMap<(String, usize), Option<TExpr>>,
+    defaults_active: Vec<(String, usize)>,
     // Per-function state.
     vars: Vec<VarInfo>,
     scopes: Vec<HashMap<String, (VarId, Span)>>,
@@ -744,6 +774,9 @@ pub fn check(file: &ast::File, require_main: bool, files: &[String]) -> std::res
         alias_decls: HashMap::new(),
         aliases: HashMap::new(),
         aliases_active: Vec::new(),
+        default_decls: HashMap::new(),
+        defaults: HashMap::new(),
+        defaults_active: Vec::new(),
         vars: Vec::new(),
         scopes: Vec::new(),
         ret: Type::Void,
@@ -849,6 +882,17 @@ fn fits(v: i128, it: IntTy, span: Span) -> Result<i128> {
         return err(E0089, span, format!("integer overflow in a constant: `{v}` does not fit in `{}`", it.name()));
     }
     Ok(v)
+}
+
+/// The value of `@zeroed(t)` in a constant.
+fn zero_of(t: &Type) -> ConstVal {
+    match t {
+        Type::Int(_) => ConstVal::Int(0),
+        Type::Float(_) => ConstVal::Float(0.0),
+        Type::Bool => ConstVal::Bool(false),
+        Type::Optional(_) => ConstVal::Null,
+        _ => ConstVal::Zeroed,
+    }
 }
 
 /// `v` wrapped around to a value of `it`.
@@ -1132,6 +1176,11 @@ impl<'a> Checker<'a> {
                         }
                     }
                     self.structs.get_mut(&s.name).unwrap().fields = fields;
+                    let exprs = default_exprs(&s.fields);
+                    if exprs.iter().any(Option::is_some) {
+                        let module = module_of(&s.name).to_string();
+                        self.default_decls.insert(s.name.clone(), DefaultDecls { exprs, env: Vec::new(), module });
+                    }
                 }
                 ast::Item::Enum(e) => {
                     if e.variants.is_empty() {
@@ -1277,9 +1326,18 @@ impl<'a> Checker<'a> {
                 self.report(e);
             }
         }
-        // Globals, before the bodies that use them.
+        // Globals, before the bodies that use them, and field defaults.
         for g in self.global_decls.clone() {
             let _ = self.global(&g.name, g.span);
+        }
+        let mut with_defaults: Vec<(String, usize)> = self
+            .default_decls
+            .iter()
+            .flat_map(|(s, d)| d.exprs.iter().enumerate().filter(|(_, e)| e.is_some()).map(|(i, _)| (s.clone(), i)))
+            .collect();
+        with_defaults.sort();
+        for (s, i) in with_defaults {
+            let _ = self.field_default(&s, i, Span::default());
         }
         // 4. Bodies: the generics' own instances first, so that a generic
         // with errors is known before its other instances are checked (they
@@ -1437,6 +1495,7 @@ impl<'a> Checker<'a> {
             TExprKind::Null => ConstVal::Null,
             TExprKind::EmptySlice => ConstVal::EmptySlice,
             TExprKind::FnRef { name, is_extern } => ConstVal::Fn(name.clone(), *is_extern),
+            TExprKind::Zeroed => zero_of(&e.ty),
             TExprKind::ErrorValue(v) => ConstVal::Error(*v),
             TExprKind::Some(x) => ConstVal::Some(Box::new(self.fold(x)?)),
             TExprKind::Global(n) => match self.globals.get(n) {
@@ -1458,18 +1517,22 @@ impl<'a> Checker<'a> {
             TExprKind::ArrayLit(elems) => ConstVal::Agg(elems.iter().map(|x| self.fold(x)).collect::<Result<_>>()?),
             TExprKind::Field { base, index } => match self.fold(base)? {
                 ConstVal::Agg(mut fields) => fields.swap_remove(*index),
+                ConstVal::Zeroed => zero_of(&e.ty),
                 _ => unreachable!(),
             },
             TExprKind::ArrayLen(base) => match base.ty {
                 Type::Array(_, n) => ConstVal::Int(n as i128),
                 _ => unreachable!(),
             },
-            TExprKind::Index { base, index } if matches!(base.ty, Type::Array(..)) => {
-                let (ConstVal::Agg(mut elems), ConstVal::Int(i)) = (self.fold(base)?, self.fold(index)?) else { unreachable!() };
-                if i >= elems.len() as i128 {
-                    return err(E0089, span, format!("index {i} is out of bounds for length {}", elems.len()));
+            TExprKind::Index { base, index } if let Type::Array(_, n) = base.ty => {
+                let (b, ConstVal::Int(i)) = (self.fold(base)?, self.fold(index)?) else { unreachable!() };
+                if i >= n as i128 {
+                    return err(E0089, span, format!("index {i} is out of bounds for length {n}"));
                 }
-                elems.swap_remove(i as usize)
+                match b {
+                    ConstVal::Agg(mut elems) => elems.swap_remove(i as usize),
+                    _ => zero_of(&e.ty),
+                }
             }
             TExprKind::Unary { op, expr } => match (op, self.fold(expr)?, &e.ty) {
                 (UnOp::Not, ConstVal::Bool(b), _) => ConstVal::Bool(!b),
@@ -1534,6 +1597,53 @@ impl<'a> Checker<'a> {
                 return err(E0089, span, "a global's initializer must be a constant: literals, `let` constants, operators, `as` casts, and array, struct and enum literals (no calls)");
             }
         })
+    }
+
+    /// The default value of field `index` of struct `s`, checked the first
+    /// time (`span` is the literal that needs it): a constant of the
+    /// field's type, checked in the struct's module.
+    fn field_default(&mut self, s: &str, index: usize, span: Span) -> Result<TExpr> {
+        let key = (s.to_string(), index);
+        if let Some(d) = self.defaults.get(&key) {
+            return d.clone().ok_or_else(silent);
+        }
+        let (fname, ty) = self.structs[s].fields[index].clone();
+        if self.defaults_active.contains(&key) {
+            return err(E0089, span, format!("the default value of field `{fname}` of `{s}` is defined in terms of itself"));
+        }
+        let d = &self.default_decls[s];
+        let (expr, env, module) = (d.exprs[index].unwrap(), d.env.clone(), d.module.clone());
+        self.defaults_active.push(key.clone());
+        let saved = (
+            std::mem::take(&mut self.vars),
+            std::mem::replace(&mut self.scopes, vec![HashMap::new()]),
+            std::mem::replace(&mut self.ret, Type::Void),
+            std::mem::take(&mut self.loop_depth),
+            std::mem::take(&mut self.in_defer),
+            self.self_ty.replace(s.to_string()),
+            std::mem::take(&mut self.in_test),
+            std::mem::replace(&mut self.env, env),
+            std::mem::replace(&mut self.module, module),
+        );
+        let r = self.expect(expr, &ty).and_then(|t| match self.fold(&t) {
+            Ok(_) => Ok(t),
+            Err(e) if e.code == E0089 && e.msg.contains("global's initializer") => err(E0103, e.span, format!(
+                "the default value of field `{fname}` must be a constant: literals, `let` constants, operators, `as`, `@zeroed`, and array, struct and enum literals (no calls)"
+            )),
+            Err(e) => Err(e),
+        });
+        (self.vars, self.scopes, self.ret, self.loop_depth, self.in_defer, self.self_ty, self.in_test, self.env, self.module) =
+            saved;
+        self.defaults_active.pop();
+        let d = match r {
+            Ok(t) => Some(t),
+            Err(e) => {
+                self.report(e);
+                None
+            }
+        };
+        self.defaults.insert(key, d.clone());
+        d.ok_or_else(silent)
     }
 
     /// Check the generic `g` (once): its declaration, and its instance for
@@ -1768,6 +1878,11 @@ impl<'a> Checker<'a> {
         }
         let fields = self.fields(&sdecl.fields, &format!("struct `{name}`"));
         self.structs.get_mut(&name).unwrap().fields = fields;
+        let exprs = default_exprs(&sdecl.fields);
+        if exprs.iter().any(Option::is_some) {
+            let decls = DefaultDecls { exprs, env: self.env.clone(), module: module_of(g).to_string() };
+            self.default_decls.insert(name.clone(), decls);
+        }
         let mut keys: Vec<String> = Vec::new();
         for m in &sdecl.methods {
             if sdecl.fields.iter().any(|f| f.name == m.name) {
@@ -3586,7 +3701,7 @@ impl<'a> Checker<'a> {
                     let structs = self.structs.keys().filter(|n| !n.contains(['(', ' '])).map(String::as_str);
                     return Err(suggest(e, name, span, structs));
                 };
-                let inits = self.field_inits(&def.fields, fields, &format!("struct `{name}`"), name, span)?;
+                let inits = self.field_inits(&def.fields, fields, &format!("struct `{name}`"), name, Some(name), span)?;
                 (TExprKind::StructLit(inits), Type::Struct(name.clone()))
             }
             ExprKind::VariantLit { enum_name, variant, fields } => {
@@ -3602,7 +3717,7 @@ impl<'a> Checker<'a> {
                 if v.fields.is_empty() {
                     return err(E0042, span, format!("variant `{lit}` has no fields; write `{lit}`"));
                 }
-                let inits = self.field_inits(&v.fields, fields, &format!("variant `{lit}`"), &lit, span)?;
+                let inits = self.field_inits(&v.fields, fields, &format!("variant `{lit}`"), &lit, None, span)?;
                 (TExprKind::Variant { index, fields: inits }, Type::Enum(enum_name.clone()))
             }
             ExprKind::ArrayLit { ty, elems } => {
@@ -4278,14 +4393,17 @@ impl<'a> Checker<'a> {
         Ok(TExpr { kind: TExprKind::Intrinsic { op: Intrinsic::Destroy, args: vec![alloc, p] }, ty: Type::Void, span })
     }
 
-    /// Field initializers of a struct or variant literal, in source order.
-    /// `owner` names the struct or variant in messages, `lit` the literal.
+    /// Field initializers of a struct or variant literal, in source order,
+    /// then the default values of the fields it leaves out (`strukt` is the
+    /// struct of a struct literal). `owner` names the struct or variant in
+    /// messages, `lit` the literal.
     fn field_inits(
         &mut self,
         def: &[(String, Type)],
         fields: &[ast::FieldInit],
         owner: &str,
         lit: &str,
+        strukt: Option<&str>,
         span: Span,
     ) -> Result<Vec<(usize, TExpr)>> {
         let mut inits: Vec<(usize, TExpr)> = Vec::new();
@@ -4300,10 +4418,16 @@ impl<'a> Checker<'a> {
             let v = self.expect(&f.value, &def[index].1)?;
             inits.push((index, v));
         }
-        if let Some((missing, _)) =
-            def.iter().enumerate().find(|(i, _)| !inits.iter().any(|(j, _)| j == i)).map(|(_, f)| f)
-        {
-            return err(E0039, span, format!("missing field `{missing}` in `{lit}` literal"));
+        for (i, (name, _)) in def.iter().enumerate() {
+            if inits.iter().any(|(j, _)| *j == i) {
+                continue;
+            }
+            let has_default = strukt.and_then(|s| self.default_decls.get(s)).is_some_and(|d| d.exprs[i].is_some());
+            if !has_default {
+                return err(E0039, span, format!("missing field `{name}` in `{lit}` literal"));
+            }
+            let v = self.field_default(strukt.unwrap(), i, span)?;
+            inits.push((i, TExpr { span, ..v }));
         }
         Ok(inits)
     }

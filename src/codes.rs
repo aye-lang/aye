@@ -659,7 +659,7 @@ pub fn main() {
 }
 E0039 = 39 {
     "missing field in a literal",
-    "A struct or variant literal must give every field a value.",
+    "A struct or variant literal must give every field a value, except a struct field that has a default value (`x: f64 = 0.0`).",
     r#"struct P { x: i32, y: i32 }
 
 pub fn main() {
@@ -2136,6 +2136,36 @@ pub fn main() {
         n = -1
     }
     @println(n)
+}
+"#,
+}
+E0103 = 103 {
+    "a field's default value is not a constant",
+    "A struct field can have a default value, `x: f64 = 0.0`, which a struct literal that leaves the field out gives it. The value is computed when the program is compiled, like a `let` constant: literals, `let` constants, operators, `as`, `@zeroed`, and array, struct and enum literals. A call is not allowed: initialize such a field in the literal (or in an `init` function).",
+    r#"fn origin() f64 {
+    return 0.0
+}
+
+struct Box {
+    x: f64 = origin()
+    w: f64 = 0.0
+}
+
+pub fn main() {
+    let b = Box { w: 2.0 }
+    @println(b.x + b.w)
+}
+"#,
+    r#"let ORIGIN: f64 = 0.0
+
+struct Box {
+    x: f64 = ORIGIN
+    w: f64 = 0.0
+}
+
+pub fn main() {
+    let b = Box { w: 2.0 }
+    @println(b.x + b.w)
 }
 "#,
 }
