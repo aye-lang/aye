@@ -3649,6 +3649,9 @@ impl<'a> Checker<'a> {
                 return self.c_builtin(name, args, span);
             }
             ExprKind::Builtin { name, args } if name == "downcast" => return self.downcast(args, span),
+            ExprKind::Builtin { name, args } if name == "embedFile" => {
+                (TExprKind::Str(self.embed_file(args, span)?), Type::Slice(Box::new(Type::Int(IntTy::U8)), false))
+            }
             ExprKind::Builtin { name, args } => {
                 let newline = match name.as_str() {
                     "print" => false,
@@ -4638,6 +4641,35 @@ impl<'a> Checker<'a> {
             Type::Ptr(..) | Type::CPtr(_) | Type::Fn(..) => Some(format!("it cannot be null (use `?{t}`)")),
             _ => Some("it makes numbers, `bool`, optional pointers, `extern struct`s and arrays of them".to_string()),
         }
+    }
+
+    /// `@embedFile("path")`: the bytes of the file at `path`, relative to
+    /// the directory of the source file that names it, read now.
+    fn embed_file(&self, args: &[ast::Expr], span: Span) -> Result<Vec<u8>> {
+        let [arg] = args else {
+            return err(E0022, span, "`@embedFile` takes one argument, a string literal: the path of the file");
+        };
+        let ExprKind::Str(path) = &strip_parens(arg).kind else {
+            return err(E0111, arg.span, "`@embedFile` takes a string literal, the path of the file: `@embedFile(\"ua.css\")`");
+        };
+        let path = String::from_utf8_lossy(path).into_owned();
+        if std::path::Path::new(&path).is_absolute() {
+            return err(E0111, arg.span, format!(
+                "`@embedFile` takes a path relative to the source file, not the absolute `{path}` (the build would depend on this machine)"
+            ));
+        }
+        let file = self.files.get(span.file as usize).map_or("", String::as_str);
+        let full = std::path::Path::new(file).parent().unwrap_or(std::path::Path::new("")).join(&path);
+        let shown = full.to_string_lossy().into_owned();
+        if full.is_dir() {
+            return err(E0111, span, format!("`@embedFile` cannot read `{shown}`: it is a directory"));
+        }
+        std::fs::read(&full).or_else(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => err(E0111, span, format!(
+                "`@embedFile` cannot read `{shown}`: no such file (the path is relative to the directory of this source file)"
+            )),
+            _ => err(E0111, span, format!("`@embedFile` cannot read `{shown}`: {e}")),
+        })
     }
 
     /// `@downcast(*S, d)` or `@downcast(*mut S, d)`: the `dyn I` value `d`

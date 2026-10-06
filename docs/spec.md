@@ -131,7 +131,8 @@ pub fn main() {
 ```
 
 - Builtins start with `@`: `@print`, `@println`, `@expect`, `@expectEqual`,
-  `@testAllocator`, `@sizeOf`, `@zeroed`, `@ptrCast`, `@downcast`, `@link`,
+  `@testAllocator`, `@sizeOf`, `@zeroed`, `@ptrCast`, `@downcast`,
+  `@embedFile`, `@link`,
   `@linkOptional`, `@hasLink`, `@atomicLoad`, `@atomicStore`, `@atomicAdd`,
   `@atomicSub`, `@atomicCas`, `@hash`, `@setSafety`, `@splat`,
   `@reduceAdd`, `@reduceMin`, `@reduceMax`, `@all`, `@any`, `@select`.
@@ -1406,6 +1407,12 @@ failure is `{"kind":"assertion"|"panic"|"leak","line":L,"col":C,"message":M}`,
   `@linkOptional("lib")`, `@hasLink("lib")`: section 4.
 - `@hash(x)`: section 11 (`where T: Hash`).
 - `@downcast(*S, d)`: section 10.
+- `@embedFile("path")`: the bytes of the file at `path` as a `[]u8`
+  constant, read when the program is compiled (`let UA =
+  @embedFile("ua.css")`, also in a function). The argument is a string
+  literal, the path is relative to the directory of the source file that
+  names it, and an absolute path, a missing file or a directory is E0111.
+  The bytes are kept as they are (no newline is added or removed).
 - `@splat`, `@reduceAdd`, `@reduceMin`, `@reduceMax`, `@all`, `@any`,
   `@select`: section 5 (simd).
 - `@setSafety(false)`, `@setSafety(true)`: section 16.

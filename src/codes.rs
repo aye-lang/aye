@@ -2400,6 +2400,26 @@ fn pageOf(h: dyn Host) ?*mut Page {
 }
 "#,
 }
+E0111 = 111 {
+    "invalid `@embedFile`",
+    "`@embedFile(\"path\")` is the bytes of a file as a `[]u8` constant, read when the program is compiled: a style sheet or a script kept as a file of its own, which its own tools can check. The argument is a string literal (a constant would hide which file the program depends on), and the path is relative to the directory of the source file that names it, so a module's files travel with it. An absolute path is refused, since the build would then depend on the machine. The file must exist and be a regular file.",
+    r#"let NAME = "greeting.txt"
+let GREETING = @embedFile(NAME)
+
+pub fn main() {
+    @print(GREETING)
+}
+"#,
+    r#"// file: main.ore
+let GREETING = @embedFile("greeting.txt")
+
+pub fn main() {
+    @print(GREETING)
+}
+// file: greeting.txt
+hello
+"#,
+}
 }
 
 #[cfg(test)]

@@ -1,0 +1,5 @@
+pub let RULES = @embedFile("rules.css")
+
+pub fn rulesLen() usize {
+    return RULES.len
+}
