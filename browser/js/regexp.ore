@@ -1349,6 +1349,29 @@ pub fn regexpSearch(it: *mut Interp, s: u32, rv: Value) JsError!Value {
     return numVal(unitOffset(it.heap.bytes(s), caps[0] as usize) as f64)
 }
 
+// The groups object of a match (name to group value from `groups`, the
+// array of the match and its groups), or undefined when the regexp has
+// no named groups.
+fn namedGroups(it: *mut Interp, prog: *RegexProg, groups: u32) JsError!Value {
+    var named = false
+    for nm in prog.names.items() {
+        if nm != A_EMPTY {
+            named = true
+        }
+    }
+    if !named {
+        return Value.Undefined
+    }
+    let go = try it.newObject(NONE)
+    try it.push(objVal(go))
+    for i, nm in prog.names.items() {
+        if nm != A_EMPTY {
+            try it.defineOwn(go, nm, it.heap.obj(groups).elems[i + 1], F_DEFAULT)
+        }
+    }
+    return it.pop()
+}
+
 pub fn regexpReplace(it: *mut Interp, s: u32, re: Value, repl: Value, all: bool) JsError!Value {
     let o = objectOf(re)
     let prog = progOf(it, o)
@@ -1397,6 +1420,8 @@ pub fn regexpReplace(it: *mut Interp, s: u32, re: Value, repl: Value, all: bool)
                 try it.heap.pushElem(groups, Value.Undefined)
             }
         }
+        let named = try namedGroups(it, prog, groups)
+        try it.push(named)
         if fnRepl {
             let cb = it.stack.len()
             try it.push(repl)
@@ -1406,11 +1431,17 @@ pub fn regexpReplace(it: *mut Interp, s: u32, re: Value, repl: Value, all: bool)
             }
             try it.push(numVal(unitOffset(it.heap.bytes(s), ms) as f64))
             try it.push(strVal(s))
-            let r = try it.callAt(cb, prog.ngroups as usize + 3)
+            var argc = prog.ngroups as usize + 3
+            if !isUndef(named) {
+                try it.push(named)
+                argc += 1
+            }
+            let r = try it.callAt(cb, argc)
             try it.appendString(b, r)
         } else {
-            try appendReplacement(it, b, it.heap.bytes(strOf(replS)), it.heap.bytes(s), ms, me, groups)
+            try appendReplacement(it, b, it.heap.bytes(strOf(replS)), it.heap.bytes(s), ms, me, groups, named)
         }
+        it.pop()
         it.pop()
         last = me
         from = me

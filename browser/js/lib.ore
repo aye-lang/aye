@@ -3,8 +3,8 @@
 // generators (coroutine.ore), WeakMap and WeakSet (holding their keys
 // strongly), WeakRef, Reflect, typed arrays (arrays of converted numbers;
 // a view of an ArrayBuffer is a copy), DataView, an English-only Intl,
-// Date setters and formats, String.raw, escape/unescape and smaller
-// methods.
+// Date setters and formats, String.raw, escape/unescape, structuredClone
+// and smaller methods.
 //
 // The source is kept in a multi-line string (no @embedFile, see
 // browser/COMPILER_GAPS.md).
@@ -740,4 +740,39 @@ pub let LIB =
     \\};
     \\hidden(G, 'Intl', Intl);
     \\hidden(Number.prototype, 'toLocaleString', function (locale, o) { return numberFormat(Number(this), o); });
+    \\
+    \\// ---- structuredClone: plain data, arrays, Date, RegExp, Map, Set, errors,
+    \\// wrapped primitives and typed arrays; cycles and shared parts are kept;
+    \\// a class instance becomes a plain object
+    \\const cloneErrors = { Error, EvalError, RangeError, ReferenceError, SyntaxError, TypeError, URIError };
+    \\hidden(G, 'structuredClone', function structuredClone(value) {
+    \\  const seen = new Map();
+    \\  function fail(v) {
+    \\    const msg = (typeof v === 'function' ? 'function' : String(v)) + ' could not be cloned.';
+    \\    throw typeof G.DOMException === 'function' ? new G.DOMException(msg, 'DataCloneError') : new TypeError(msg);
+    \\  }
+    \\  function clone(v) {
+    \\    if (typeof v === 'symbol' || typeof v === 'function') fail(v);
+    \\    if (v === null || typeof v !== 'object') return v;
+    \\    if (seen.has(v)) return seen.get(v);
+    \\    const tag = Object.prototype.toString.call(v);
+    \\    let out;
+    \\    if (Array.isArray(v)) out = new Array(v.length);
+    \\    else if (v instanceof Date) out = new Date(v.getTime());
+    \\    else if (v instanceof RegExp) out = new RegExp(v.source, v.flags);
+    \\    else if (v instanceof Map) out = new Map();
+    \\    else if (v instanceof Set) out = new Set();
+    \\    else if (v instanceof Error) out = new (cloneErrors[v.name] || Error)(v.message);
+    \\    else if (ArrayBuffer.isView(v)) out = new v.constructor(v);
+    \\    else if (tag === '[object Number]' || tag === '[object String]' || tag === '[object Boolean]') out = Object(v.valueOf());
+    \\    else if (tag !== '[object Object]') fail(v);
+    \\    else out = {};
+    \\    seen.set(v, out);
+    \\    if (v instanceof Map) for (const [k, x] of v) out.set(clone(k), clone(x));
+    \\    else if (v instanceof Set) for (const x of v) out.add(clone(x));
+    \\    else if (Array.isArray(v) || tag === '[object Object]') for (const k of Object.keys(v)) out[k] = clone(v[k]);
+    \\    return out;
+    \\  }
+    \\  return clone(value);
+    \\});
     \\})();
