@@ -722,6 +722,9 @@ fn canvasComposite(dst: []mut u8, dst_width: usize, area: CanvasArea, src: []u8,
     // round trip through these formulas gives back its bytes (a
     // transparent destination pixel is 0,0,0,0 already).
     let bounded = !unboundedMode(mode_name)
+    // Source-over of an opaque source pixel at full alpha and coverage
+    // gives the source pixel (the formulas below reduce to it exactly).
+    let over = mode == MODE_OVER && alpha == 1.0
     for y in 0..area.h {
         var i = y * area.w * 4
         var j = ((area.y as usize + y) * dst_width + area.x as usize) * 4
@@ -730,6 +733,21 @@ fn canvasComposite(dst: []mut u8, dst_width: usize, area: CanvasArea, src: []u8,
                 i += 4
                 j += 4
                 continue
+            }
+            if over && src[i + 3] == 255 {
+                var full = true
+                if clip |c| {
+                    full = c[i + 3] == 255
+                }
+                if full {
+                    dst[j] = src[i]
+                    dst[j + 1] = src[i + 1]
+                    dst[j + 2] = src[i + 2]
+                    dst[j + 3] = 255
+                    i += 4
+                    j += 4
+                    continue
+                }
             }
             var cover = 1.0
             if clip |c| {
@@ -854,6 +872,15 @@ fn canvasPaint(it: *mut Interp, style: Value, area: CanvasArea, px: []mut u8) Js
         }
         for ay in 0..area.h {
             for ax in 0..area.w {
+                let i = (ay * area.w + ax) * 4
+                // Paint times no coverage is nothing (the color bytes
+                // may hold coverage from before a shadow's blur).
+                if px[i + 3] == 0 {
+                    for k in 0..4 {
+                        px[i + k] = 0
+                    }
+                    continue
+                }
                 let x = area.x + ax as i64
                 let y = area.y + ay as i64
                 var sx = inv.mapX(x as f64 + 0.5, y as f64 + 0.5)
@@ -864,7 +891,6 @@ fn canvasPaint(it: *mut Interp, style: Value, area: CanvasArea, px: []mut u8) Js
                 if repeatY {
                     sy -= math.floor(sy / img.height as f64) * img.height as f64
                 }
-                let i = (ay * area.w + ax) * 4
                 if sx < 0.0 || sy < 0.0 || sx >= img.width as f64 || sy >= img.height as f64 {
                     for k in 0..4 {
                         px[i + k] = 0
@@ -919,12 +945,18 @@ fn canvasPaint(it: *mut Interp, style: Value, area: CanvasArea, px: []mut u8) Js
     }
     for ay in 0..area.h {
         for ax in 0..area.w {
+            let i = (ay * area.w + ax) * 4
+            if px[i + 3] == 0 {
+                for k in 0..4 {
+                    px[i + k] = 0
+                }
+                continue
+            }
             let x = area.x + ax as i64
             let y = area.y + ay as i64
             let xx = inv.mapX(x as f64 + 0.5, y as f64 + 0.5)
             let yy = inv.mapY(x as f64 + 0.5, y as f64 + 0.5)
             let c = g.at(xx, yy)
-            let i = (ay * area.w + ax) * 4
             let a = (px[i + 3] as u32 * c.a as u32 + 127) / 255
             px[i] = ((c.r as u32 * a + 127) / 255) as u8
             px[i + 1] = ((c.g as u32 * a + 127) / 255) as u8
