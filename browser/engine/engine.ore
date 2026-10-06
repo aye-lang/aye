@@ -73,7 +73,7 @@ pub struct Page {
     images: ?*mut ImageCache
     // The documents of its `frame` and `iframe` elements (frames.ore).
     frames: List(Frame)
-    // Live frame-element lookups, invalidated by domVersion.
+    // Live frame-element lookups, invalidated by Document.tree_version.
     frame_elements: FrameElementIndex
     // Unique among the pages of the process (`findPage`).
     id: u32

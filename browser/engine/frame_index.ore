@@ -1,6 +1,7 @@
 // The live window.frames list. Scripts ask for window.length often
 // (including while testing whether a property is a frame index); walking
-// the whole document for each read was a page-load hot spot.
+// the whole document for each read was a page-load hot spot. Attribute
+// changes (notably lazy-loaded image src/style) cannot change this list.
 import dom.NodeId
 import std.list.List
 import std.mem.Allocator
@@ -19,7 +20,7 @@ pub fn frameElements(p: *mut Page, n: ?usize) FrameElements {
     if p.plain {
         return FrameElements { count: 0, el: null }
     }
-    let version = domVersion(p)
+    let version = p.doc.tree_version
     let index = &mut p.frame_elements
     if !index.valid || index.version != version {
         index.valid = false

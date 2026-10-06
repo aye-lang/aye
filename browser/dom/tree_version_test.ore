@@ -1,0 +1,27 @@
+test "structural version follows links, not attributes or text" {
+    var doc = try Document.init(@testAllocator())
+    defer doc.deinit()
+    let el = try doc.createElement("div", []Attr{})
+    let detached = doc.tree_version
+    try doc.setAttr(el, "class", "active")
+    @expectEqual(detached, doc.tree_version)
+    doc.appendChild(doc.root, el)
+    let inserted = doc.tree_version
+    @expect(inserted > detached)
+    try doc.setAttr(el, "src", "image.png")
+    @expectEqual(inserted, doc.tree_version)
+    try doc.appendText(el, "first")
+    let text_added = doc.tree_version
+    @expect(text_added > inserted)
+    try doc.appendText(el, " second")
+    @expectEqual(text_added, doc.tree_version)
+    let frame = try doc.createElement("iframe", []Attr{})
+    doc.insertBefore(doc.root, frame, el)
+    let before = doc.tree_version
+    @expect(before > text_added)
+    doc.appendChild(doc.root, frame)
+    let moved = doc.tree_version
+    @expect(moved > before)
+    doc.detach(frame)
+    @expect(doc.tree_version > moved)
+}
