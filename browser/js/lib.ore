@@ -537,6 +537,16 @@ pub let LIB =
     \\  return hint === 'number' ? this.getTime() : this.toString();
     \\});
     \\
+    \\// ---- Object.prototype.__proto__ (Annex B): the prototype as an accessor
+    \\
+    \\Object.defineProperty(Object.prototype, '__proto__', {
+    \\  get() { return Object.getPrototypeOf(this); },
+    \\  set(p) {
+    \\    if ((typeof p === 'object' || typeof p === 'function') && this !== null && (typeof this === 'object' || typeof this === 'function')) Object.setPrototypeOf(this, p);
+    \\  },
+    \\  configurable: true,
+    \\});
+    \\
     \\// ---- Reflect
     \\
     \\const Reflect = {
