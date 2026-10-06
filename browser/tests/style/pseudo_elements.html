@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<style>
+p { color: blue }
+p::before { content: "* "; font-weight: bold }
+.x:after { content: attr(title); color: inherit }
+::after { display: block }
+.y::before { color: red }
+p:hover::before, p::before:hover { content: "never" }
+</style>
+<p>before</p>
+<p class="x" title="t">after</p>
+<div class="y">no content: no pseudo-element</div>

@@ -112,7 +112,8 @@ pub fn needsComputing(toks: []Token) bool {
 }
 
 // The physical property of a logical one (for horizontal left-to-right
-// text), else `name`.
+// text), `mask-image` for the mask shorthands and prefixed names (only
+// whether there is a mask matters), else `name`.
 fn logicalAlias(name: []u8) []u8 {
     let pairs = [_][]u8{
         "margin-inline-start", "margin-left", "margin-inline-end", "margin-right",
@@ -132,6 +133,7 @@ fn logicalAlias(name: []u8) []u8 {
         "inline-size", "width", "block-size", "height",
         "min-inline-size", "min-width", "max-inline-size", "max-width",
         "min-block-size", "min-height", "max-block-size", "max-height",
+        "-webkit-mask-image", "mask-image", "mask", "mask-image", "-webkit-mask", "mask-image",
     }
     var k: usize = 0
     while k + 1 < pairs.len {

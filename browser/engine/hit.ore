@@ -142,7 +142,7 @@ fn hitBox(t: *Tree, i: usize, x: f64, y: f64, layer: usize) ?NodeId {
                         return n
                     }
                 } else if inside(x, y, cx + f.x, cy + f.y, f.w, f.h) {
-                    if t.bx(f.box).node |n| {
+                    if nodeOf(t, f.box) |n| {
                         return n
                     }
                 }
@@ -162,7 +162,20 @@ fn hitBox(t: *Tree, i: usize, x: f64, y: f64, layer: usize) ?NodeId {
         }
     }
     if b.kind != BoxKind.Inline && b.kind != BoxKind.Text && inside(x, y, b.ax, b.ay, b.w, b.h) {
-        return b.node
+        return nodeOf(t, i)
+    }
+    return null
+}
+
+// The node of box `i`: for a pseudo-element's box, its element's.
+fn nodeOf(t: *Tree, i: usize) ?NodeId {
+    var cur: ?usize = i
+    while cur |k| {
+        let b = t.bx(k)
+        if b.pseudo == 0 {
+            return b.node
+        }
+        cur = b.parent
     }
     return null
 }

@@ -50,6 +50,10 @@ fn dumpBox(t: *Tree, i: usize, depth: usize, out: *mut text.Builder) AllocError!
             try quote(out, a.value)
         }
         try out.appendByte('>')
+    } else if b.pseudo == 1 {
+        try out.append(" ::before")
+    } else if b.pseudo == 2 {
+        try out.append(" ::after")
     } else {
         try out.append(" (anonymous)")
     }
@@ -152,6 +156,10 @@ fn dumpFrag(t: *Tree, f: Frag, depth: usize, cx: f64, cy: f64, out: *mut text.Bu
                     try quote(out, a.value)
                 }
                 try out.appendByte('>')
+            } else if t.bx(f.box).pseudo == 1 && t.bx(f.box).kind == BoxKind.Inline {
+                try out.append(" ::before")
+            } else if t.bx(f.box).pseudo == 2 && t.bx(f.box).kind == BoxKind.Inline {
+                try out.append(" ::after")
             }
             try out.appendByte(' ')
             try rect(out, cx + f.x, cy + f.y, f.w, f.h)

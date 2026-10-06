@@ -202,6 +202,13 @@ pub fn colorOf(v: Value, current: Rgba) Rgba {
     }
 }
 
+// Has the box a `mask-image`? Masks are not drawn, and the background
+// they would cut into a shape (an icon) is left out rather than painted
+// as a rectangle.
+fn masked(style: []Value) bool {
+    return !layout.isKeyword(style[css.MASK_IMAGE], "none")
+}
+
 fn isVisible(style: []Value) bool {
     return layout.isKeyword(style[css.VISIBILITY], "visible")
 }
@@ -331,7 +338,7 @@ struct Builder {
         let visible = isVisible(b.style)
         self.extend(b.ax + b.w + b.margin[1], b.ay + b.h + b.margin[2])
         if visible {
-            if self.skip_bg != i {
+            if self.skip_bg != i && !masked(b.style) {
                 try self.fill(b.ax, b.ay, b.w, b.h, colorOf(b.style[css.BACKGROUND_COLOR], WHITE))
             }
             try self.borders(b.style, b.ax, b.ay, b.w, b.h, b.border, true, true)
@@ -419,7 +426,9 @@ struct Builder {
                 }
                 let x = cx + f.x
                 let y = cy + f.y
-                try self.fill(x, y, f.w, f.h, colorOf(b.style[css.BACKGROUND_COLOR], WHITE))
+                if !masked(b.style) {
+                    try self.fill(x, y, f.w, f.h, colorOf(b.style[css.BACKGROUND_COLOR], WHITE))
+                }
                 let first = !self.hasFrag(f.box, self.t.lines.items()[l0].frag_start, fi)
                 let last = !self.hasFrag(f.box, fi + 1, self.t.lines.items()[l1 - 1].frag_end)
                 try self.borders(b.style, x, y, f.w, f.h, b.border, first, last)
