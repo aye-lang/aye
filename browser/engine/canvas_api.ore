@@ -498,6 +498,18 @@ fn canvasComposite(dst: []mut u8, dst_width: usize, area: CanvasArea, src: []u8,
             }
             let oa = math.min(1.0, sa * fs + da * fd)
             let outa = oa * cover + da * (1.0 - cover)
+            let alpha_byte = math.floor(outa * 255.0 + 0.5) as u8
+            if alpha_byte == 0 {
+                // Transparent pixels have no color (as in a premultiplied
+                // bitmap), also when the alpha rounds to 0.
+                dst[j] = 0
+                dst[j + 1] = 0
+                dst[j + 2] = 0
+                dst[j + 3] = 0
+                i += 4
+                j += 4
+                continue
+            }
             for k in 0..3 {
                 let sc = math.floor(src[i + k] as f64 * alpha + 0.5) / 255.0
                 let dc = dst[j + k] as f64 / 255.0 * da
@@ -512,7 +524,7 @@ fn canvasComposite(dst: []mut u8, dst_width: usize, area: CanvasArea, src: []u8,
                 }
                 dst[j + k] = math.floor(straight * 255.0 + 0.5) as u8
             }
-            dst[j + 3] = math.floor(outa * 255.0 + 0.5) as u8
+            dst[j + 3] = alpha_byte
             i += 4
             j += 4
         }
