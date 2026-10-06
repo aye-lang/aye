@@ -802,7 +802,9 @@ pub struct Ui {
                 try self.click(be.x as f64, be.y as f64)
             }
         } else if kind == SDL_MOUSEBUTTONUP {
-            if ev.button.button == SDL_BUTTON_LEFT { try releaseRange(self) }
+            if ev.button.button == SDL_BUTTON_LEFT {
+                try releaseRange(self)
+            }
         } else if kind == SDL_MOUSEWHEEL {
             let wh = &ev.wheel
             var dy = wh.precise_y as f64
@@ -961,7 +963,9 @@ pub struct Ui {
         self.mouse_in = true
         self.mouse_x = x
         self.mouse_y = y
-        if self.range_drag { try dragRange(self, x) }
+        if self.range_drag {
+            try dragRange(self, x)
+        }
         if y < self.top() {
             let r = addressRect(self)
             let over_field = x >= r.x && x < r.x + r.w

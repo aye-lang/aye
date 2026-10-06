@@ -405,7 +405,9 @@ fn submitForm(s: *mut Session, tmp: Allocator, p: *mut Page, form: NodeId, submi
         try relayout(s)
         let invalid = p.doc.controls.validation
         var message: []u8 = "The form is invalid."
-        if invalid |c| { message = dom.validationMessage(&p.doc, c) }
+        if invalid |c| {
+            message = dom.validationMessage(&p.doc, c)
+        }
         return done(try concat(tmp, what, "; submission blocked: ", message))
     }
     try recordOn(s, tmp, p, "submit of", form)

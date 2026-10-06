@@ -90,7 +90,9 @@ fn clickPage(ui: *mut Ui, x: f64, y: f64) AllocError!void {
     if try clickListBox(ui, p, node, dy) {
         return
     }
-    if try clickRange(ui, p, node, x) { return }
+    if try clickRange(ui, p, node, x) {
+        return
+    }
     let before = p.doc.controls.focus
     let act = try engine.activate(p, node)
     if p.doc.controls.focus |f| {
@@ -262,7 +264,9 @@ fn runActivation(ui: *mut Ui, act: engine.Activation) AllocError!void {
 fn submit(ui: *mut Ui, form: NodeId, submitter: ?NodeId) AllocError!void {
     let p = ui.tab.page orelse return
     if !(try engine.validateSubmission(p, form, submitter)) {
-        if p.doc.controls.validation |c| { showElement(ui, c) }
+        if p.doc.controls.validation |c| {
+            showElement(ui, c)
+        }
         return restyled(ui)
     }
     if !(try engine.dispatchEvent(p, form, "submit", "")) {

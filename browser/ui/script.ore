@@ -75,7 +75,9 @@ fn scriptEvent(word: []u8) ?SDL_Event {
         }
         if text.startsWith(word, "click:") || text.startsWith(word, "release:") {
             ev.kind = SDL_MOUSEBUTTONDOWN
-            if text.startsWith(word, "release:") { ev.kind = SDL_MOUSEBUTTONUP }
+            if text.startsWith(word, "release:") {
+                ev.kind = SDL_MOUSEBUTTONUP
+            }
             let be = &mut ev.button
             be.button = SDL_BUTTON_LEFT
             be.x = x as i32

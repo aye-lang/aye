@@ -28,6 +28,7 @@ pub struct Control {
     // A text field's value once edited or set (`dirty`), owned.
     value: []mut u8
     dirty: bool
+    // The message of `setCustomValidity`, owned; empty for none.
     custom: []mut u8
     // A checkbox or radio button, once changed.
     checked: bool
@@ -49,8 +50,14 @@ pub struct Controls {
     // The focused element (a control, a link, or anything with a
     // `tabindex`); null for none.
     focus: ?NodeId
+    // The control whose validation message the window shows, after a
+    // blocked submission or `reportValidity()`.
     validation: ?NodeId
+    // Whether `:focus-visible` matches the focused element: false after
+    // a click on anything but a text field.
     focus_visible: bool
+    // Matches a `pattern` attribute (with the page's RegExp engine);
+    // null: the bounded matcher of pattern.ore.
     pattern_match: ?fn(Allocator, []u8, []u8) bool
 
     pub fn init(alloc: Allocator) Controls {
@@ -361,14 +368,18 @@ pub fn valueOf(doc: *Document, el: NodeId) []u8 {
     }
     if doc.isElement(el, "input") {
         let t = inputType(doc, el)
-        if text.eql(t, "file") { return "" }
+        if text.eql(t, "file") {
+            return ""
+        }
         if text.eql(t, "color") {
             let color = value
             if validColor(color) {
                 var lower = text.Builder.init(doc.strings.allocator())
                 for ch in color {
                     var c = ch
-                    if c >= 'A' && c <= 'F' { c += 32 }
+                    if c >= 'A' && c <= 'F' {
+                        c += 32
+                    }
                     lower.appendByte(c) catch return "#000000"
                 }
                 return lower.bytes()
@@ -426,7 +437,9 @@ pub fn setValue(doc: *mut Document, el: NodeId, v: []u8) AllocError!void {
     if doc.isElement(el, "input") && text.eql(inputType(doc, el), "color") {
         for ch in clean {
             var c = ch
-            if c >= 'A' && c <= 'F' { c += 32 }
+            if c >= 'A' && c <= 'F' {
+                c += 32
+            }
             try normalized.appendByte(c)
         }
         clean = normalized.bytes()

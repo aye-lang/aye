@@ -162,9 +162,15 @@ pub fn controlKind(doc: *dom.Document, el: NodeId) ControlKind {
         }
         return ControlKind.Select
     }
-    if text.eql(n.name, "progress") { return ControlKind.Progress }
-    if text.eql(n.name, "meter") { return ControlKind.Meter }
-    if text.eql(n.name, "output") { return ControlKind.Output }
+    if text.eql(n.name, "progress") {
+        return ControlKind.Progress
+    }
+    if text.eql(n.name, "meter") {
+        return ControlKind.Meter
+    }
+    if text.eql(n.name, "output") {
+        return ControlKind.Output
+    }
     if !text.eql(n.name, "input") {
         return ControlKind.None
     }
@@ -175,8 +181,12 @@ pub fn controlKind(doc: *dom.Document, el: NodeId) ControlKind {
     if text.eql(t, "radio") {
         return ControlKind.Radio
     }
-    if text.eql(t, "range") { return ControlKind.Range }
-    if text.eql(t, "color") { return ControlKind.Color }
+    if text.eql(t, "range") {
+        return ControlKind.Range
+    }
+    if text.eql(t, "color") {
+        return ControlKind.Color
+    }
     if text.eql(t, "submit") || text.eql(t, "reset") || text.eql(t, "button") || text.eql(t, "file") {
         return ControlKind.InputButton
     }
@@ -217,7 +227,9 @@ fn attrInt(doc: *dom.Document, el: NodeId, name: []u8, fallback: i64) i64 {
 /// Is the element a replaced box of its own (beyond `img` and the other
 /// embedded elements): a checkbox, a radio button, an image input?
 fn isReplacedInput(doc: *dom.Document, el: NodeId) bool {
-    if doc.isElement(el, "progress") || doc.isElement(el, "meter") { return true }
+    if doc.isElement(el, "progress") || doc.isElement(el, "meter") {
+        return true
+    }
     if !doc.isElement(el, "input") {
         return false
     }
@@ -255,7 +267,9 @@ fn controlContent(t: *mut Tree, b: usize, el: NodeId) AllocError!bool {
         .None, .Checkbox, .Radio, .Range, .Color, .Progress, .Meter => {
             return false
         }
-        .Output => { try shown.append(dom.valueOf(t.doc, el)) }
+        .Output => {
+            try shown.append(dom.valueOf(t.doc, el))
+        }
         .Field, .Area => {
             let v = dom.valueOf(t.doc, el)
             if v.len == 0 {
