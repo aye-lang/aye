@@ -300,6 +300,7 @@ fn finalUrl(alloc: Allocator, target: *Url, moved: []u8) url.UrlError!Url {
 
 fn newPage(alloc: Allocator, located: Url, status: i64, failure: []u8, doc: Document) AllocError!*mut Page {
     var d = doc
+    d.controls.pattern_match = formPattern
     let title = try titleOf(alloc, &d)
     errdefer alloc.free(title)
     var base = try documentBase(alloc, &d, &located)

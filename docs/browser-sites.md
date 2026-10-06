@@ -1,8 +1,8 @@
 # Real-site checklist
 
 The B8 list of public pages (`docs/browser.md`, B8), loaded with the
-browser and checked by hand. Run of **2026-10-06**, at `d1c8800`
-(all B8 slices merged), on macOS, built with `browser/build.sh` (`--mode
+browser and checked by hand. Run of **2026-10-07**, at `e86268c`
+(B7 screenshot and B8 iframes merged), on macOS, built with `browser/build.sh` (`--mode
 fast`). The network was in Taiwan, so Google answered in Traditional
 Chinese.
 
@@ -27,66 +27,56 @@ page's content is not available.
 
 | Site | URL | Status | Load | JS errors | Notes |
 |---|---|---|---|---|---|
-| example.com | https://example.com/ | ✅ | 0.4 s | 0 | Text and layout right. The script-added translations: the Chinese line is boxes (no CJK font), Arabic is drawn left to right with unjoined letters (no bidi, no shaping). |
-| Wikipedia (en) | https://en.wikipedia.org/wiki/Web_browser | ✅ | 2.9 s | 0 | Article, infobox image and headings render well. SVG logo and icons are empty boxes; the wordmark is cut off; "145 languages" overlaps an icon box. Markdown starts with 12 empty list items (hidden menu entries). Agent search on Special:Search works. |
-| Hacker News | https://news.ycombinator.com/ | ✅ | 1.9 s | 0 | Looks like the real page. SVG logo is an empty box, vote arrows missing. In Markdown the whole story list is one table cell. Agent `click` on "new" works. |
-| GitHub repository | https://github.com/rust-lang/rust | ⚠️ | 8.4 s | 0 | Header, tabs, file list and About panel render; the README is in the Markdown. SVG icons are empty boxes; the "last commit" columns stay empty (skeleton bars). Slowest site. Agent `click` on a link works. |
-| MDN | https://developer.mozilla.org/en-US/docs/Web/HTML/Element/details | ⚠️ | 1.3 s | 0 | Markdown is clean. On screen the header is empty (inline SVG logo, nav missing), breadcrumb items run together, and the sidebar nav is squeezed into a narrow column that overlaps the article text. |
-| Python docs | https://docs.python.org/3/tutorial/index.html | ✅ | 3.1 s | 1 | Renders like a desktop browser. `select.add is not a function` (theme switcher). Agent `click` to the next chapter works. |
-| rustdoc (std) | https://doc.rust-lang.org/std/vec/struct.Vec.html | ✅ | 2.1 s | 2 | Sidebar, code highlighting and prose render well. SVG logo is a box. `HTMLLinkElement is not defined`, a TDZ error (`settingsDataset`): no search bar or settings. |
-| BBC News | https://www.bbc.com/news | ⚠️ | 3.9 s | 5 | Nav bars and headlines readable, Markdown has the stories. Logo missing, lead images missing (grey placeholders), the right column runs past the viewport, headline web font falls back to serif. Errors include `de is not a function` (also on react.dev) and a piano SDK error. |
-| CNN Lite | https://lite.cnn.com/ | ✅ | 0.6 s | 1 | Plain list of stories, renders right. `f is not a function`. |
-| old Reddit | https://old.reddit.com/r/programming/ | ❌ | 3.7 s | 0 | The site redirects logged-out clients to `/login/?reason=lor2` (curl gets the same 302), and that login page renders blank. |
-| Stack Overflow | https://stackoverflow.com/questions/11227809/... | ❌ | 0.4 s | 0 | Cloudflare challenge ("Just a moment...", "Enable JavaScript and cookies to continue"); it does not pass. curl with a Chrome User-Agent gets 403 too. |
-| Lobsters | https://lobste.rs/ | ✅ | 1.9 s | 0 | Renders like the real page; a few symbol glyphs are boxes. |
-| Go docs | https://go.dev/doc/effective_go | ⚠️ | 1.7 s | 3 | Article readable, Markdown complete. The off-canvas nav drawer (`position: fixed` + `transform: translateX(100%)`) is drawn open over the right half; Material icon names show as text ("arrow_drop_down"); the skip link is visible. jQuery fails (`S.fn.init is not a constructor`), `:scope` selector rejected by `querySelectorAll`. (Replaces www.gnu.org, which timed out for curl as well.) |
-| DuckDuckGo HTML | https://html.duckduckgo.com/html/?q=ore+programming+language | ✅ | 4.4 s | 0 | Results readable; some icons are boxes. Agent `type` + submit (a POST form) works. |
-| Google | https://www.google.com/ | ⚠️ | 0.9 s | 3 | Logo and box render, but the zh-TW text is all boxes (no CJK font) and the search box is not centred. `_._DumpException is not a function` (3x). |
-| Wikipedia (ja) | https://ja.wikipedia.org/wiki/ウェブブラウザ | ⚠️ | 6.6 s | 0 | UTF-8 decoded right: the Markdown is full Japanese text. On screen every Japanese character is a box (no CJK font), so a person cannot read it. Same SVG and empty-list-item issues as en. |
-| 阿部寛 (Shift_JIS) | http://abehiroshi.la.coocan.jp/ | ❌ | 0.2 s | 0 | Blank page: `<frameset>` is not supported (the frames end up nested in `body`, nothing shown). Shift_JIS is read as windows-1252: the title and the frame page (`top.htm`) are mojibake. |
-| ZOL (GBK) | https://www.zol.com.cn/ | ❌ | 5.3 s | 4 | GBK read as windows-1252: all Chinese text is mojibake, on screen and in Markdown. Images and the layout grid render. jQuery fails (`S.fn.init is not a constructor`) and three follow-on errors. |
-| YouTube | https://www.youtube.com/ | ❌ | 6.0 s | 5 | Only the grey loading skeleton; Markdown is empty. The app does not boot: `document.createElementNS is not a function`, `DocumentFragment is not defined`, `initCustomEvent is not a function`, no `performance` navigation timing (`responseStart`). |
-| react.dev | https://react.dev/ | ⚠️ | 1.9 s | 2 | Renders well, including code panes and the live previews. SVG logo missing, the search box's key hint overlaps its label. In Markdown the code blocks lose their line breaks (each block is one line). `de is not a function` (2x). |
+| example.com | https://example.com/ | ✅ | 0.3 s | 0 | Text and layout right. The script-added translations now render: Chinese is drawn, Arabic is joined and right to left. |
+| Wikipedia (en) | https://en.wikipedia.org/wiki/Web_browser | ✅ | 2.8 s | 0 | Looks like the real page: logo and icons (SVG) are drawn, article, infobox image and headings right. One figure further down is an empty white frame. Markdown is clean (no empty list items). Agent search on Special:Search works (typed, submitted, results page loaded). |
+| Hacker News | https://news.ycombinator.com/ | ✅ | 1.3 s | 0 | Looks like the real page, logo drawn; the vote arrows are tiny. Markdown is a numbered list of stories. Agent `click` on "new" works (`/newest` loaded). |
+| GitHub repository | https://github.com/rust-lang/rust | ⚠️ | 5.2 s | 0 | Header, tabs, icons, file list and About panel render. The "last commit" message and date columns and the commit bar stay as skeleton bars (the data does not load), and the Markdown has empty "Latest commit" and "History" sections. Agent `click` on "Contributing" works (it scrolls to `#`; the link is an in-page toggle). |
+| MDN | https://developer.mozilla.org/en-US/docs/Web/HTML/Element/details | ✅ | 0.7 s | 0 | Header with logo, breadcrumb, "In this article" sidebar and the article lay out correctly. A blank 90 px band above the header; browser-support icons partly missing. |
+| Python docs | https://docs.python.org/3/tutorial/index.html | ✅ | 0.9 s | 0 | Renders like a desktop browser, theme and version selectors work. Agent `click` to the next chapter works. |
+| rustdoc (std) | https://doc.rust-lang.org/std/vec/struct.Vec.html | ✅ | 1.3 s | 0 | Sidebar, code highlighting and prose render well; the logo is a black blob. No search bar or settings button in the top bar. |
+| BBC News | https://www.bbc.com/news | ⚠️ | 2.6 s | 0 | Markdown has the stories. On screen the page looks unstyled: the logo and the "NEWS" banner are huge SVG letters (each about 290 px, the page is 1000+ px before the first story), the menus are bullet lists and plain buttons, headlines are serif links. Story images do load (the first screenful has none). |
+| CNN Lite | https://lite.cnn.com/ | ✅ | 0.6 s | 0 | Plain list of stories, renders right. |
+| old Reddit | https://old.reddit.com/r/programming/ | ❌ | 4.1 s | 0 | The site redirects logged-out clients to `/login/?reason=lor2` (curl gets the same 302). The login page now draws its header and chat-bubble background but no login form; the Markdown is only a skip link. |
+| Stack Overflow | https://stackoverflow.com/questions/11227809/... | ❌ | 0.4 s | 0 | Cloudflare challenge (HTTP 403, "Just a moment..."): blank page, empty Markdown. curl with a Chrome User-Agent gets 403 too. |
+| Lobsters | https://lobste.rs/ | ✅ | 1.9 s | 0 | Renders like the real page, symbols and avatars included. |
+| Go docs | https://go.dev/doc/effective_go | ✅ | 2.5 s | 0 | Header, breadcrumb, two-column table of contents right; the nav drawer is closed. Flaws: the breadcrumb separator is a grey box (icon font), the cookie bar covers the bottom. Markdown complete. |
+| DuckDuckGo HTML | https://html.duckduckgo.com/html/?q=ore+programming+language | ✅ | 2.1 s | 0 | Results readable; a few favicons are empty boxes. Agent `type` + submit (a POST form) works. |
+| Google | https://www.google.com/ | ✅ | 0.8 s | 0 | Logo, centred search box, buttons and the zh-TW text (CJK glyphs now drawn) all right. The two buttons touch. |
+| Wikipedia (ja) | https://ja.wikipedia.org/wiki/ウェブブラウザ | ✅ | 5.3 s | 0 | Japanese text readable on screen and in Markdown. The browser-share pie chart (SVG) is drawn as oversized blue and orange blocks. |
+| 阿部寛 (Shift_JIS) | http://abehiroshi.la.coocan.jp/ | ✅ | 0.8 s | 0 | Frameset works: menu frame and top frame laid out side by side, Shift_JIS decoded, photo and text right. The "最新情報" banner wraps in a narrow cell. Markdown has a section per frame. |
+| ZOL (GBK) | https://www.zol.com.cn/ | ⚠️ | 16-20 s | 0 | GBK decoded: Chinese text, images, logos and the product grid render. The right edge is cut off (search box, nav, a column past 1024 px). Slowest site by far (16.3 s and 20.2 s in two runs). |
+| YouTube | https://www.youtube.com/ | ❌ | 5.0 s | 0 | Only the grey loading skeleton; Markdown is empty. No script error is logged any more, but the app still does not render its feed. |
+| react.dev | https://react.dev/ | ✅ | 3.6 s | 0 | Renders well: logo, search box, hero, buttons. Markdown code blocks keep their line breaks. |
 
-**Totals:** 8 ✅, 7 ⚠️, 5 ❌ (20 sites). No crash and no timeout in
-the browser; every run ended in under 9 s.
+**Totals:** 14 ✅, 3 ⚠️, 3 ❌ (20 sites). Previous run (2026-10-06,
+`d1c8800`): 8 ✅, 7 ⚠️, 5 ❌. No crash and no timeout; the slowest run
+was 20 s (ZOL), the others under 6 s. No site logs a JS error.
+
+Changes: ⚠️ to ✅ (MDN, go.dev, Google, Wikipedia ja, react.dev); ❌ to
+✅ (阿部寛); ❌ to ⚠️ (ZOL). All other sites keep their status (GitHub and
+BBC stay ⚠️; Reddit, Stack Overflow and YouTube stay ❌).
 
 ## Top failure causes
 
-Ranked by the number of sites they hurt; each maps to the remaining
-work in `docs/browser.md` ("What remains" under the status table) or is
-marked as not yet listed there.
+Ranked by the number of sites hurt and how much of the page is lost.
 
-1. **Missing DOM and web APIs, so site scripts throw** (9 sites: Python
-   docs, rustdoc, BBC, CNN Lite, go.dev, Google, ZOL, YouTube,
-   react.dev). Seen: `createElementNS`, `DocumentFragment`,
-   `HTMLLinkElement` and other interface globals, `initCustomEvent`,
-   `HTMLSelectElement.add`, the `:scope` selector, `performance`
-   timing; jQuery 3 does not initialise (`S.fn.init is not a
-   constructor`, 2 sites); minified bundles fail with `de`/`f is not a
-   function` (not diagnosed). Partly the *B6 leftovers* (modules,
-   `getComputedStyle`, live NodeLists); most of the missing APIs are not
-   listed yet. YouTube is the case where this makes the page empty.
-2. **SVG is not painted** (8 sites: Wikipedia en and ja, Hacker News,
-   GitHub, MDN, rustdoc, BBC, react.dev): `<svg>` and `.svg` images are
-   sized boxes, so logos and icons are empty. Not listed yet (B8 sizes
-   replaced boxes only).
-3. **No font fallback for CJK and symbols, no bidi or shaping** (5
-   sites: example.com, Google, Wikipedia ja, Lobsters, DuckDuckGo):
-   characters the sans/serif/mono faces lack are boxes; Arabic is drawn
-   unjoined left to right. Web fonts and icon fonts are not loaded
-   either (BBC, go.dev). Not listed yet.
-4. **Layout of current responsive CSS** (4 sites: MDN, BBC, go.dev,
-   Google): no CSS `transform` (go.dev's drawer is drawn open), a
-   sidebar overlapping the article (MDN), a column past the viewport
-   (BBC), a centred form that is not (Google). Partly the *B8 `fixed`
-   and `sticky`* item; `transform` is not listed yet.
-5. **Agent Markdown flaws** (4 sites: Wikipedia en and ja, Hacker News,
-   react.dev): empty `- ` items for hidden menu entries, a layout table
-   kept as one cell, `<pre>` code blocks joined into one line. Not
-   listed yet (B7 view).
-
-Smaller causes: legacy charsets (2 sites: Shift_JIS, GBK; the *B8 "no
-Shift_JIS, GBK or Big5"* item), bot walls (2 sites: Reddit's logged-out
-redirect, Cloudflare's challenge; both refuse curl too, so not purely
-the browser), `<frameset>` (1 site; not listed yet).
+1. **Bot walls and login redirects** (2 sites: Stack Overflow,
+   Reddit): Cloudflare answers 403 with a challenge page; old Reddit
+   redirects to a login page with no form. Both refuse curl too, so this
+   is not purely the browser.
+2. **A page that does not boot, with no error** (1 site: YouTube, and
+   the missing commit data on GitHub): the app shows only its skeleton;
+   the console has no `[error]`, so the cause (a request that never
+   completes, a feature check, a missing API that is caught) is not
+   diagnosed.
+3. **CSS not applied or applied wrong on large sites** (BBC, ZOL,
+   Wikipedia ja pie chart): BBC looks unstyled, with SVG wordmarks drawn
+   at 290 px and menus as bullet lists; ZOL's content runs past the
+   right edge; an SVG chart is drawn as oversized blocks. Probably
+   `width`/`height` of inline SVG and overflow or sizing rules.
+4. **Slow loads** (ZOL 16-20 s, GitHub 5.2 s, Wikipedia ja 5.3 s,
+   YouTube 5.0 s): subresources and scripts of heavy pages.
+5. **Small drawing gaps** (go.dev breadcrumb, MDN header band,
+   rustdoc top bar, Wikipedia en blank figure, DuckDuckGo favicons):
+   icon fonts, a missing search bar, empty frames for images or
+   embedded media.

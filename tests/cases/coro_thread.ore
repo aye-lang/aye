@@ -1,0 +1,54 @@
+// M12: coroutines on threads. Each thread makes and resumes coroutines of
+// its own (with an allocator of its own); a coroutine stays on the thread
+// that made it.
+import std.coro
+import std.heap.General
+import std.thread
+
+struct Gen {
+    next: u64
+    step: u64
+}
+
+fn gen(g: *mut Gen) {
+    for i in 0..1000 {
+        g.next += g.step
+        coro.yield()
+    }
+}
+
+struct Job {
+    step: u64
+    sum: u64
+}
+
+fn work(j: *mut Job) {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var a = Gen { next: 0, step: j.step }
+    var b = Gen { next: 0, step: j.step * 2 }
+    let ca = coro.create(Gen, gpa.allocator(), 64 << 10, gen, &mut a) catch |e| {
+        return
+    }
+    defer ca.deinit()
+    let cb = coro.create(Gen, gpa.allocator(), 64 << 10, gen, &mut b) catch |e| {
+        return
+    }
+    defer cb.deinit()
+    while !ca.isDone() {
+        ca.resume()
+        cb.resume()
+        j.sum += a.next + b.next
+    }
+}
+
+pub fn main() !void {
+    var j1 = Job { step: 1, sum: 0 }
+    var j2 = Job { step: 5, sum: 0 }
+    let t1 = try thread.spawn(Job, work, &mut j1)
+    let t2 = try thread.spawn(Job, work, &mut j2)
+    t1.join()
+    t2.join()
+    @println(j1.sum)
+    @println(j2.sum)
+}

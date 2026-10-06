@@ -1,0 +1,6 @@
+{"id":1,"cmd":"navigate","url":"$BASE/forms/html5.html"}
+{"id":2,"cmd":"click","ref":"e6"}
+{"id":3,"cmd":"type","ref":"e1","text":"Ada"}
+{"id":4,"cmd":"click","ref":"e6"}
+{"id":5,"cmd":"back"}
+{"id":6,"cmd":"eval","expression":"document.querySelector('[formnovalidate]').click()"}

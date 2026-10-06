@@ -1,0 +1,70 @@
+// std.coro: stackful coroutines. A coroutine is a function that runs on a
+// stack of its own and can stop in the middle, from any depth of calls
+// (`yield`), to be continued later where it stopped (`resume`).
+
+import std.mem.AllocError
+import std.mem.Allocator
+
+/// A coroutine made by `create`. Copies of a `Coroutine` are the same
+/// coroutine; `deinit` it once. It runs only on the thread that created
+/// it, and only when that thread resumes it: its function and the code
+/// that resumes it never run at the same time.
+pub struct Coroutine {
+    block: []mut u64
+    alloc: Allocator
+
+    /// Runs the coroutine, from where it stopped (or the start of its
+    /// function), until it calls `yield` or its function returns. In
+    /// debug and safe mode, resuming a coroutine that has finished, one
+    /// that is running (the caller, or a coroutine that resumed it), or
+    /// resuming it on another thread than the one that created it panics.
+    pub fn resume(self: Self) {
+        ore_coro_resume(self.block.ptr)
+    }
+
+    /// Has its function returned?
+    pub fn isDone(self: Self) bool {
+        return ore_coro_done(self.block.ptr)
+    }
+
+    /// Frees the stack and the coroutine. A coroutine that is suspended in
+    /// the middle is freed where it stopped: the `defer`s of its function
+    /// do not run. Freeing a running coroutine panics in debug and safe
+    /// mode.
+    pub fn deinit(self: Self) {
+        ore_coro_free(self.block.ptr)
+        self.alloc.free(self.block)
+    }
+}
+
+/// Makes a coroutine that runs `f(arg)` on a stack of at least `stack`
+/// bytes (rounded up to a multiple of 64 KiB, at least 64 KiB), with a
+/// guard region below it: running out of the stack panics with `panic:
+/// stack overflow` in debug and safe mode. The stack is reserved, and only
+/// the part that is used is taken. The function starts at the first
+/// `resume`; `arg` must stay valid until the coroutine is freed. The
+/// coroutine's bookkeeping comes from `alloc`; OutOfMemory also when the
+/// system has no address space left for the stack.
+pub fn create(comptime T: type, alloc: Allocator, stack: usize, f: fn(*mut T), arg: *mut T) AllocError!Coroutine {
+    let zero: u64 = 0
+    let block = try alloc.alloc(zero, ore_coro_words())
+    if !ore_coro_init(block.ptr, stack, @ptrCast(fn([*]u8), f), @ptrCast([*]u8, arg)) {
+        alloc.free(block)
+        return AllocError.OutOfMemory
+    }
+    return Coroutine { block: block, alloc: alloc }
+}
+
+/// Stops the running coroutine: the `resume` that ran it returns, and the
+/// next `resume` continues after this call. Outside a coroutine it panics
+/// in debug and safe mode.
+pub fn yield() {
+    ore_coro_yield()
+}
+
+extern fn ore_coro_words() usize
+extern fn ore_coro_init(block: [*]u64, stack: usize, f: fn([*]u8), arg: [*]u8) bool
+extern fn ore_coro_resume(block: [*]u64)
+extern fn ore_coro_yield()
+extern fn ore_coro_done(block: [*]u64) bool
+extern fn ore_coro_free(block: [*]u64)

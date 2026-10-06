@@ -22,30 +22,6 @@ removed in cff3f60.
 
 ### Allocator and runtime
 
-#### 2. The C stack is the only stack (no coroutines)
-
-- **Need:** deep recursion, and generators or async functions that stop
-  in the middle of the tree-walking interpreter. The interpreter uses
-  about 7 KB of C stack per JavaScript call in a debug build, so 1100
-  nested calls overflowed the 8 MB main thread.
-- **Repro:** a recursion with a 1 KB local and no base case reached:
-  exit status 139 (SIGSEGV), no Ore diagnostic, before M9.7. Now it
-  prints `panic: stack overflow (deep recursion: run it on a thread with
-  a larger stack, std.thread.spawnWithStack)`.
-- **Workaround:** `js.runOnBigStack` starts the script on a thread with
-  a 1 GB stack; the engine throws a RangeError at 10000 frames, like
-  Node, and measures the C stack it has used (`Interp.markStackBase`).
-  A generator or async function that stops in the middle of the tree
-  walk runs on a thread of its own (`js/coroutine.ore`,
-  `std.thread.spawnWithStack` with 256 MB reserved), and two
-  `std.sync.Channel`s hand control back and forth so only one thread
-  runs JavaScript at a time: a thread per live generator, 4000 at most.
-- **Hit by:** js (B6, B8).
-- **Status:** partly fixed. M9.7 made an overflow panic in debug and
-  safe mode (756cc94) and added `std.thread.spawnWithStack` (915a6c0).
-  Stackful coroutines (a stack switch in std) stay open: deferred in
-  decisions.md (M9.9).
-
 #### 3. Pointers into a growing `List` or `Pool` dangle
 
 - **Need:** keep a `*mut Node` or `*mut Box` across a call that may add
@@ -204,6 +180,30 @@ form. The commit is the one that fixed the gap.
   200000 pairs run in 0.9 s including the compile. Browser still uses
   the workaround: `js/slabs.ore` (size-class free lists cut from
   chunks) for the heap's slices.
+
+#### 2. The C stack was the only stack (no coroutines)
+
+- **Need:** deep recursion, and generators or async functions that stop
+  in the middle of the tree-walking interpreter. The interpreter uses
+  about 7 KB of C stack per JavaScript call in a debug build, so 1100
+  nested calls overflowed the 8 MB main thread.
+- **Repro:** a recursion with a 1 KB local and no base case reached:
+  exit status 139 (SIGSEGV), no Ore diagnostic, before M9.7. Now it
+  prints `panic: stack overflow (deep recursion: run it on a thread with
+  a larger stack, std.thread.spawnWithStack)`.
+- **Workaround:** `js.runOnBigStack` starts the script on a thread with
+  a 1 GB stack; the engine throws a RangeError at 10000 frames, like
+  Node, and measures the C stack it has used (`Interp.markStackBase`).
+  A generator or async function that stops in the middle of the tree
+  walk runs on a `std.coro` coroutine (`js/coroutine.ore`, 256 MB
+  reserved), resumed on the engine's thread (M12; before, a thread per
+  live generator and two `std.sync.Channel`s).
+- **Hit by:** js (B6, B8).
+- **Status:** fixed. M9.7 made an overflow panic in debug and safe
+  mode (756cc94) and added `std.thread.spawnWithStack` (915a6c0); M12
+  added stackful coroutines, `std.coro` (9bc621a), and the engine runs
+  generators and async functions on them (34e46aa). Deep recursion
+  runs on a thread or a coroutine with a large stack.
 
 #### 4. Every checked operation was a call in debug builds
 

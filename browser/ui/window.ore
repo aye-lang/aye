@@ -309,6 +309,7 @@ pub struct Ui {
     hand: bool
     // The options of a `select`, open over the page.
     dropdown: ?Dropdown
+    range_drag: bool
     arrow_cursor: ?*mut SDL_Cursor
     hand_cursor: ?*mut SDL_Cursor
     ibeam_cursor: ?*mut SDL_Cursor
@@ -360,6 +361,7 @@ pub struct Ui {
             hover: text.Builder.init(alloc),
             hand: false,
             dropdown: null,
+            range_drag: false,
             arrow_cursor: SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW),
             hand_cursor: SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND),
             ibeam_cursor: SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM),
@@ -586,6 +588,7 @@ pub struct Ui {
     // wants, and show the URL and title.
     fn navigated(self: *mut Self, loaded: bool) AllocError!void {
         self.dropdown = null
+        self.range_drag = false
         if loaded {
             // The agents' refs are of the old document.
             self.slots[self.active].?.shown += 1
@@ -798,6 +801,10 @@ pub struct Ui {
             if be.button == SDL_BUTTON_LEFT {
                 try self.click(be.x as f64, be.y as f64)
             }
+        } else if kind == SDL_MOUSEBUTTONUP {
+            if ev.button.button == SDL_BUTTON_LEFT {
+                try releaseRange(self)
+            }
         } else if kind == SDL_MOUSEWHEEL {
             let wh = &ev.wheel
             var dy = wh.precise_y as f64
@@ -956,6 +963,9 @@ pub struct Ui {
         self.mouse_in = true
         self.mouse_x = x
         self.mouse_y = y
+        if self.range_drag {
+            try dragRange(self, x)
+        }
         if y < self.top() {
             let r = addressRect(self)
             let over_field = x >= r.x && x < r.x + r.w

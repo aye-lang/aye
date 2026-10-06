@@ -1,0 +1,38 @@
+// M12: a coroutine is resumed only on the thread that made it; resuming it
+// on another thread panics (debug and safe mode).
+import std.coro
+import std.heap.General
+import std.thread
+
+struct Ticks {
+    n: u64
+}
+
+fn tick(t: *mut Ticks) {
+    while true {
+        t.n += 1
+        coro.yield()
+    }
+}
+
+struct Job {
+    co: coro.Coroutine
+}
+
+fn steal(j: *mut Job) {
+    j.co.resume()
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var t = Ticks { n: 0 }
+    let co = try coro.create(Ticks, gpa.allocator(), 64 << 10, tick, &mut t)
+    defer co.deinit()
+    co.resume()
+    @println(t.n)
+    var j = Job { co: co }
+    let th = try thread.spawn(Job, steal, &mut j)
+    th.join()
+    @println(t.n)
+}

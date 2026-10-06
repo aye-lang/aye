@@ -37,6 +37,7 @@ let UA_RULES = [_][]u8{
     "input[type=checkbox i], input[type=radio i] { margin: 3px 3px 3px 4px; padding: 0; border-style: none; background-color: transparent }",
     "input[type=image i] { padding: 0; border-style: none; background-color: transparent }",
     "input[type=hidden i] { display: none }",
+    "input[type=range i], input[type=color i], progress, meter { display: inline-block; background-color: transparent; border: none; padding: 0; vertical-align: middle }",
     "input:disabled, select:disabled, textarea:disabled, button:disabled { color: #6d6d6d; border-color: #c4c4c4 }",
     "body { margin: 8px }",
     "p, dl, listing, pre, plaintext, xmp { margin-top: 1em; margin-bottom: 1em }",

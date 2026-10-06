@@ -1,0 +1,69 @@
+// Range dragging and native validation UI, separate from window plumbing.
+import dom
+import dom.NodeId
+import engine
+import paint
+import std.math
+import std.mem.AllocError
+import std.text
+
+fn clickRange(ui: *mut Ui, p: *mut engine.Page, node: NodeId, x: f64) AllocError!bool {
+    if !p.doc.isElement(node, "input") || !text.eql(dom.inputType(&p.doc, node), "range") || dom.isDisabled(&p.doc, node) {
+        return false
+    }
+    engine.setFocus(p, node)
+    ui.range_drag = true
+    try dragRange(ui, x)
+    return true
+}
+
+fn dragRange(ui: *mut Ui, x: f64) AllocError!void {
+    let p = ui.tab.page orelse return
+    let el = p.doc.controls.focus orelse return
+    if !p.doc.isElement(el, "input") || !text.eql(dom.inputType(&p.doc, el), "range") || dom.isDisabled(&p.doc, el) {
+        ui.range_drag = false
+        return
+    }
+    let r = engine.boxRect(p, el) orelse return
+    if r.w <= 12.0 {
+        return
+    }
+    let min = dom.rangeMin(&p.doc, el)
+    let max = dom.rangeMax(&p.doc, el)
+    let fraction = math.max(0.0, math.min(1.0, (x - r.x - 6.0) / (r.w - 12.0)))
+    try dom.setRange(&mut p.doc, el, min + fraction * (max - min))
+    try engine.dispatchEvent(p, el, "input", "")
+    try restyled(ui)
+}
+
+fn releaseRange(ui: *mut Ui) AllocError!void {
+    if !ui.range_drag {
+        return
+    }
+    ui.range_drag = false
+    let p = ui.tab.page orelse return
+    if p.doc.controls.focus |el| {
+        try engine.dispatchEvent(p, el, "change", "")
+        try ui.afterScripts()
+    }
+}
+
+fn drawValidation(ui: *mut Ui, p: *mut engine.Page, v: paint.View) AllocError!void {
+    let el = p.doc.controls.validation orelse return
+    if !p.doc.isLive(el) || !dom.isSame(p.doc.controls.focus, el) {
+        return
+    }
+    let message = dom.validationMessage(&p.doc, el)
+    if message.len == 0 {
+        return
+    }
+    let r = engine.boxRect(p, el) orelse return
+    let f = dropdownFont()
+    let m = ui.measure.metrics(f)
+    let w = ui.measure.width(f, message) + 16.0
+    let h = m.ascent + m.descent + 12.0
+    let box = paint.Rect { x: r.x, y: r.y + r.h + 5.0, w: w, h: h }
+    ui.canvas.fillRect(paint.deviceRect(box, v), LINE)
+    ui.canvas.fillRect(paint.deviceRect(paint.Rect { x: box.x + 1.0, y: box.y + 1.0, w: w - 2.0, h: h - 2.0 }, v), PAPER)
+    try ui.painter.draw(&mut ui.canvas, (box.x + 8.0) * v.scale + v.dx, (box.y + 6.0 + m.ascent) * v.scale + v.dy, message, f, v.scale, INK)
+}

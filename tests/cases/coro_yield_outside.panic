@@ -1,0 +1,1 @@
+panic: std.coro: yield outside a coroutine

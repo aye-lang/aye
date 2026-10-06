@@ -1,0 +1,19 @@
+- form
+  - spinbutton "Quantity" [e1] [required] [invalid] min="1" max="10"
+  - slider "Volume" [e2] value="50" min="0" max="100"
+  - textbox "Date" [e3] [required] [invalid]
+  - textbox "Time" [e4]
+  - textbox "Month" [e5]
+  - textbox "Week" [e6]
+  - textbox "Local" [e7]
+  - button "Color" [e8] value="#cc3366"
+  - button "File" [e9]
+  - textbox "Email" [e10]
+  - textbox "URL" [e11]
+  - textbox "Phone" [e12]
+  - searchbox "Search" [e13]
+  - button "Send" [e14]
+  - button "Reset" [e15]
+  - progressbar "Upload" value="40" min="0" max="100"
+  - meter "Capacity" value="6" min="0" max="10"
+  - text: Result: 42

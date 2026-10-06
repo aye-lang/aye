@@ -1,0 +1,36 @@
+// M12: deep recursion inside a coroutine reaches the guard region below
+// its stack and panics with a message (debug and safe mode), as a thread
+// that runs out of its stack does.
+import std.coro
+import std.heap.General
+
+struct Job {
+    depth: u64
+}
+
+fn down(n: u64) u64 {
+    var pad = [16]u64{n, ..}
+    if n == 0 {
+        return 0
+    }
+    pad[n % 16] = down(n - 1)
+    return pad[n % 16] + 1
+}
+
+fn run(job: *mut Job) {
+    job.depth = down(job.depth)
+    coro.yield()
+    job.depth = down(100000000)
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var job = Job { depth: 100 }
+    let co = try coro.create(Job, gpa.allocator(), 256 << 10, run, &mut job)
+    defer co.deinit()
+    co.resume()
+    @println(job.depth)
+    co.resume()
+    @println("unreachable")
+}

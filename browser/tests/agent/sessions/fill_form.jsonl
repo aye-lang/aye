@@ -17,6 +17,7 @@
 {"id":17,"cmd":"press","key":"Shift+Tab"}
 {"id":18,"cmd":"press","key":"Enter"}
 {"id":19,"cmd":"back"}
+{"id":195,"cmd":"type","ref":"e11","text":"Ada"}
 {"id":20,"cmd":"click","ref":"e17"}
 {"id":21,"cmd":"back"}
 {"id":22,"cmd":"type","ref":"e20","text":"Grace","submit":true}

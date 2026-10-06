@@ -424,6 +424,7 @@ fn installDom(s: *mut Script) JsError!void {
     try accessor(it, html, "checked", controlChecked, controlSetChecked)
     try accessor(it, html, "selected", controlSelected, controlSetSelected)
     try accessor(it, html, "selectedIndex", controlSelectedIndex, controlSetSelectedIndex)
+    try installFormApi(it, html)
 
     try accessor(it, docp, "documentElement", documentElement, null)
     try accessor(it, docp, "body", documentBody, null)
@@ -1298,7 +1299,7 @@ fn elementSetOuterHtml(it: *mut Interp, a: Args) JsError!Value {
 fn controlValue(it: *mut Interp, a: Args) JsError!Value {
     let h = try thisElement(it, a)
     let doc = docOf(it)
-    if dom.isControl(doc, h) || doc.isElement(h, "option") || doc.isElement(h, "textarea") {
+    if dom.isControl(doc, h) || doc.isElement(h, "option") || doc.isElement(h, "textarea") || doc.isElement(h, "output") {
         return it.newString(dom.valueOf(doc, h))
     }
     return it.newString(doc.attr(h, "value") orelse "")
@@ -1312,7 +1313,7 @@ fn controlSetValue(it: *mut Interp, a: Args) JsError!Value {
         try argText(it, a, 0, b)
     }
     let doc = docOf(it)
-    if dom.isTextField(doc, h) || doc.isElement(h, "select") || doc.isElement(h, "textarea") {
+    if dom.isControl(doc, h) || doc.isElement(h, "output") {
         try dom.setValue(doc, h, b.bytes())
     } else {
         try doc.setAttr(h, "value", b.bytes())

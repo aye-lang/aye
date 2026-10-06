@@ -1,0 +1,6 @@
+error: Bad
+error return trace:
+coro_trace.ore:30:9
+coro_trace.ore:36:13
+coro_trace.ore:43:13
+coro_trace.ore:55:9
