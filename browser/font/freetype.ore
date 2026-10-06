@@ -1,0 +1,234 @@
+// `System`: the system's fonts through FreeType. Two families, each in
+// four variants (regular, bold, italic, bold italic): a sans-serif one
+// (Arial, Helvetica, Arial Unicode, DejaVu Sans) used for every family
+// that is not monospace, and a monospace one (Courier New, Menlo, DejaVu
+// Sans Mono). A variant that is missing falls back to the regular face of
+// its family, and the monospace family to the sans-serif one.
+//
+// Advances are read unscaled (font units, from the `hmtx` table) with the
+// legacy `kern` table's pair kerning when the face has one, and scaled to
+// the font size here, so one face serves every size. Paint (B4) will add
+// glyph rendering on the same faces.
+
+@link("freetype2")
+
+import std.mem.Allocator
+import std.text
+
+extern struct FTLibraryRec {}
+extern struct FTGlyphSlotRec {}
+
+// The start of `FT_FaceRec` (freetype.h), up to the fields we read.
+pub extern struct FTFaceRec {
+    num_faces: i64
+    face_index: i64
+    face_flags: i64
+    style_flags: i64
+    num_glyphs: i64
+    family_name: ?[*]u8
+    style_name: ?[*]u8
+    num_fixed_sizes: i32
+    available_sizes: ?[*]u8
+    num_charmaps: i32
+    charmaps: ?[*]u8
+    generic_data: ?[*]u8
+    generic_finalizer: ?[*]u8
+    bbox_x_min: i64
+    bbox_y_min: i64
+    bbox_x_max: i64
+    bbox_y_max: i64
+    units_per_em: u16
+    ascender: i16
+    descender: i16
+    height: i16
+    max_advance_width: i16
+    max_advance_height: i16
+    underline_position: i16
+    underline_thickness: i16
+    glyph: ?*mut FTGlyphSlotRec
+}
+
+extern struct FTVector {
+    x: i64
+    y: i64
+}
+
+extern fn FT_Init_FreeType(library: *mut ?*mut FTLibraryRec) i32
+extern fn FT_Done_FreeType(library: *mut FTLibraryRec) i32
+extern fn FT_New_Face(library: *mut FTLibraryRec, path: [*]u8, index: i64, face: *mut ?*mut FTFaceRec) i32
+extern fn FT_Done_Face(face: *mut FTFaceRec) i32
+extern fn FT_Get_Char_Index(face: *mut FTFaceRec, code: u64) u32
+extern fn FT_Get_Advance(face: *mut FTFaceRec, glyph: u32, flags: i32, advance: *mut i64) i32
+extern fn FT_Get_Kerning(face: *mut FTFaceRec, left: u32, right: u32, mode: u32, kerning: *mut FTVector) i32
+
+let FT_LOAD_NO_SCALE: i32 = 1
+let FT_KERNING_UNSCALED: u32 = 2
+let FT_FACE_FLAG_KERNING: i64 = 64
+let FT_STYLE_FLAG_ITALIC: i64 = 1
+let FT_STYLE_FLAG_BOLD: i64 = 2
+
+pub error FontError { NoFreeType, NoFont }
+
+// Candidate files of each face, by `faceSlot` (monospace * 4 + bold * 2
+// + italic), separated by `|`. Collections (.ttc) are searched for the
+// face with the wanted style flags.
+let SANS = "/System/Library/Fonts/Supplemental/Arial.ttf|/System/Library/Fonts/Helvetica.ttc|/Library/Fonts/Arial Unicode.ttf|/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf|/usr/share/fonts/TTF/DejaVuSans.ttf|/usr/share/fonts/dejavu/DejaVuSans.ttf"
+let SANS_ITALIC = "/System/Library/Fonts/Supplemental/Arial Italic.ttf|/System/Library/Fonts/Helvetica.ttc|/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf|/usr/share/fonts/TTF/DejaVuSans-Oblique.ttf|/usr/share/fonts/dejavu/DejaVuSans-Oblique.ttf"
+let SANS_BOLD = "/System/Library/Fonts/Supplemental/Arial Bold.ttf|/System/Library/Fonts/Helvetica.ttc|/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf|/usr/share/fonts/TTF/DejaVuSans-Bold.ttf|/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf"
+let SANS_BOLD_ITALIC = "/System/Library/Fonts/Supplemental/Arial Bold Italic.ttf|/System/Library/Fonts/Helvetica.ttc|/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf|/usr/share/fonts/TTF/DejaVuSans-BoldOblique.ttf|/usr/share/fonts/dejavu/DejaVuSans-BoldOblique.ttf"
+let MONO = "/System/Library/Fonts/Supplemental/Courier New.ttf|/System/Library/Fonts/Menlo.ttc|/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf|/usr/share/fonts/TTF/DejaVuSansMono.ttf|/usr/share/fonts/dejavu/DejaVuSansMono.ttf"
+let MONO_ITALIC = "/System/Library/Fonts/Supplemental/Courier New Italic.ttf|/System/Library/Fonts/Menlo.ttc|/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Oblique.ttf|/usr/share/fonts/TTF/DejaVuSansMono-Oblique.ttf|/usr/share/fonts/dejavu/DejaVuSansMono-Oblique.ttf"
+let MONO_BOLD = "/System/Library/Fonts/Supplemental/Courier New Bold.ttf|/System/Library/Fonts/Menlo.ttc|/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf|/usr/share/fonts/TTF/DejaVuSansMono-Bold.ttf|/usr/share/fonts/dejavu/DejaVuSansMono-Bold.ttf"
+let MONO_BOLD_ITALIC = "/System/Library/Fonts/Supplemental/Courier New Bold Italic.ttf|/System/Library/Fonts/Menlo.ttc|/usr/share/fonts/truetype/dejavu/DejaVuSansMono-BoldOblique.ttf|/usr/share/fonts/TTF/DejaVuSansMono-BoldOblique.ttf|/usr/share/fonts/dejavu/DejaVuSansMono-BoldOblique.ttf"
+
+pub struct System {
+    library: *mut FTLibraryRec
+    // By `faceSlot`; null when no file had that variant.
+    faces: [8]?*mut FTFaceRec
+    // `faces[0]`, which every lookup falls back to.
+    regular: *mut FTFaceRec
+
+    /// Loads the system fonts. `NoFont` when not even a regular
+    /// sans-serif face is found.
+    pub fn init(alloc: Allocator) FontError!System {
+        var lib: ?*mut FTLibraryRec = null
+        if FT_Init_FreeType(&mut lib) != 0 {
+            return FontError.NoFreeType
+        }
+        if lib |library| {
+            var faces = [8]?*mut FTFaceRec{null, null, null, null, null, null, null, null}
+            let lists = [8][]u8{SANS, SANS_ITALIC, SANS_BOLD, SANS_BOLD_ITALIC, MONO, MONO_ITALIC, MONO_BOLD, MONO_BOLD_ITALIC}
+            for slot, list in lists {
+                faces[slot] = findFace(alloc, library, list, (slot & 2) != 0, (slot & 1) != 0)
+            }
+            if faces[0] |regular| {
+                return System { library: library, faces: faces, regular: regular }
+            }
+            for f in faces {
+                if f |face| {
+                    FT_Done_Face(face)
+                }
+            }
+            FT_Done_FreeType(library)
+            return FontError.NoFont
+        }
+        return FontError.NoFreeType
+    }
+
+    pub fn deinit(self: *mut Self) {
+        for f in self.faces {
+            if f |face| {
+                FT_Done_Face(face)
+            }
+        }
+        FT_Done_FreeType(self.library)
+    }
+
+    /// The FreeType face for `f`, with the fallbacks.
+    pub fn faceFor(self: *Self, f: Font) *mut FTFaceRec {
+        let slot = faceSlot(f)
+        if self.faces[slot] |face| {
+            return face
+        }
+        if self.faces[slot & 4] |face| {
+            return face
+        }
+        return self.regular
+    }
+
+    pub fn metrics(self: *mut Self, f: Font) Metrics {
+        let face = self.faceFor(f)
+        let scale = f.size / face.units_per_em as f64
+        let ascent = face.ascender as f64 * scale
+        let descent = -(face.descender as f64) * scale
+        var gap = face.height as f64 * scale - ascent - descent
+        if gap < 0.0 {
+            gap = 0.0
+        }
+        return Metrics { ascent: ascent, descent: descent, line_gap: gap }
+    }
+
+    pub fn width(self: *mut Self, f: Font, s: []u8) f64 {
+        let face = self.faceFor(f)
+        let kerning = (face.face_flags & FT_FACE_FLAG_KERNING) != 0
+        var units: i64 = 0
+        var prev: u32 = 0
+        var i: usize = 0
+        while i < s.len {
+            let d = text.decode(s[i..])
+            i += d.len
+            let glyph = FT_Get_Char_Index(face, d.code as u64)
+            var advance: i64 = 0
+            if FT_Get_Advance(face, glyph, FT_LOAD_NO_SCALE, &mut advance) == 0 {
+                units += advance
+            }
+            if kerning && prev != 0 && glyph != 0 {
+                var k = FTVector { x: 0, y: 0 }
+                if FT_Get_Kerning(face, prev, glyph, FT_KERNING_UNSCALED, &mut k) == 0 {
+                    units += k.x
+                }
+            }
+            prev = glyph
+        }
+        return units as f64 * f.size / face.units_per_em as f64
+    }
+}
+
+// The first face of the files in `list` (separated by `|`) with the
+// wanted style.
+fn findFace(alloc: Allocator, library: *mut FTLibraryRec, list: []u8, bold: bool, italic: bool) ?*mut FTFaceRec {
+    let want = styleFlags(bold, italic)
+    var paths = text.split(list, "|")
+    while paths.next() |path| {
+        // FreeType wants a NUL-terminated path.
+        let z = alloc.alloc(0 as u8, path.len + 1) catch |e| {
+            return null
+        }
+        defer alloc.free(z)
+        for i, c in path {
+            z[i] = c
+        }
+        var count: i64 = 1
+        var index: i64 = 0
+        while index < count {
+            var out: ?*mut FTFaceRec = null
+            if FT_New_Face(library, z.ptr, index, &mut out) != 0 {
+                break
+            }
+            if out |face| {
+                count = face.num_faces
+                if (face.style_flags & 3) == want && face.units_per_em > 0 {
+                    return face
+                }
+                FT_Done_Face(face)
+            }
+            index += 1
+        }
+    }
+    return null
+}
+
+fn styleFlags(bold: bool, italic: bool) i64 {
+    var flags: i64 = 0
+    if bold {
+        flags = flags | FT_STYLE_FLAG_BOLD
+    }
+    if italic {
+        flags = flags | FT_STYLE_FLAG_ITALIC
+    }
+    return flags
+}
+
+fn faceSlot(f: Font) usize {
+    var slot: usize = 0
+    if f.mono {
+        slot += 4
+    }
+    if f.bold {
+        slot += 2
+    }
+    if f.italic {
+        slot += 1
+    }
+    return slot
+}
