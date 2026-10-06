@@ -67,6 +67,6 @@ pub fn main() !void {
     try out.write("\n")
     try std.fs.stderr().write("done\n")
     if verbose {
-        std.os.exit(3)      // defers do not run
+        std.os.exit(3) // defers do not run
     }
 }
