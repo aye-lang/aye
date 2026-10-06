@@ -71,15 +71,34 @@ pub struct Tab {
     /// document only scrolls. Returns whether a new page was loaded
     /// (which then needs a layout).
     pub fn navigate(self: *mut Self, target: *Url) AllocError!bool {
+        if self.sameDocument(target) {
+            try self.push(target, null)
+            return false
+        }
+        let p = try load(self.alloc, target)
+        errdefer p.destroy()
+        try self.push(target, p)
+        return true
+    }
+
+    /// Is `target` a fragment of the document shown?
+    pub fn sameDocument(self: *Self, target: *Url) bool {
+        if self.page |p| {
+            return target.has_fragment && text.eql(target.withoutFragment(), p.url.withoutFragment())
+        }
+        return false
+    }
+
+    /// Adds an entry for `target` after the current one (dropping the
+    /// entries forward of it) and shows `page`, the page of `target`
+    /// loaded; null when `target` is a fragment of the document shown,
+    /// which is only scrolled to (an empty fragment is the top).
+    pub fn push(self: *mut Self, target: *Url, page: ?*mut Page) AllocError!void {
         self.saveScroll()
         while self.entries.len() > self.current + 1 {
             if self.entries.pop() |e| {
                 self.alloc.free(e.href)
             }
-        }
-        var same_doc = false
-        if self.page |p| {
-            same_doc = target.has_fragment && text.eql(target.withoutFragment(), p.url.withoutFragment())
         }
         let href = try self.alloc.alloc(0 as u8, target.href.len)
         std.mem.copy(href, target.href)
@@ -87,48 +106,63 @@ pub struct Tab {
         self.current = self.entries.len() - 1
         try self.setFragment(target.fragment)
         self.restore = null
-        if same_doc {
-            return false
+        if page |p| {
+            try self.show(p)
+        } else if target.fragment.len == 0 {
+            self.restore = 0.0
         }
-        try self.loadCurrent()
-        return true
     }
 
     /// Goes one entry back; false when there is none.
     pub fn back(self: *mut Self) AllocError!bool {
-        if !self.canGoBack() {
-            return false
-        }
-        self.saveScroll()
-        self.current -= 1
-        try self.reopen()
-        return true
+        return self.go(-1)
     }
 
     pub fn forward(self: *mut Self) AllocError!bool {
-        if !self.canGoForward() {
-            return false
-        }
-        self.saveScroll()
-        self.current += 1
-        try self.reopen()
-        return true
+        return self.go(1)
     }
 
     /// Loads the current entry again, keeping the scroll offset.
     pub fn reload(self: *mut Self) AllocError!bool {
-        if self.current >= self.entries.len() {
+        return self.go(0)
+    }
+
+    // Loads the entry `step` away from the current one and moves there;
+    // false when there is none.
+    fn go(self: *mut Self, step: i64) AllocError!bool {
+        let href = self.hrefAt(step)
+        if href.len == 0 {
             return false
         }
-        self.saveScroll()
-        try self.reopen()
+        let target = url.parse(self.alloc, href) catch |e| {
+            return AllocError.OutOfMemory
+        }
+        defer target.deinit(self.alloc)
+        let p = try load(self.alloc, &target)
+        errdefer p.destroy()
+        try self.moveTo(step, p)
         return true
     }
 
-    fn reopen(self: *mut Self) AllocError!void {
+    /// The URL of the entry `step` entries away from the current one
+    /// (-1: back, 0: the current one, 1: forward); "" when there is none.
+    pub fn hrefAt(self: *Self, step: i64) []u8 {
+        let i = self.current as i64 + step
+        if i < 0 || i >= self.entries.len() as i64 {
+            return ""
+        }
+        return self.entries.items()[i as usize].href
+    }
+
+    /// Moves `step` entries (-1: back, 1: forward, 0: reload; see
+    /// `hrefAt`) and shows `page`, the page of that entry loaded, at the
+    /// scroll offset the entry was left at.
+    pub fn moveTo(self: *mut Self, step: i64, page: *mut Page) AllocError!void {
+        self.saveScroll()
+        self.current = (self.current as i64 + step) as usize
         try self.setFragment("")
         self.restore = self.entries.items()[self.current].scroll
-        try self.loadCurrent()
+        try self.show(page)
     }
 
     fn saveScroll(self: *mut Self) {
@@ -144,26 +178,21 @@ pub struct Tab {
         self.fragment = copy
     }
 
-    // Replaces the page with the current entry's, loaded. The entry
-    // takes the URL after redirects.
-    fn loadCurrent(self: *mut Self) AllocError!void {
+    // Replaces the page with `p`, the current entry's. The entry takes
+    // the URL after redirects.
+    fn show(self: *mut Self, p: *mut Page) AllocError!void {
         let entry = self.entries.items()[self.current]
-        let target = url.parse(self.alloc, entry.href) catch |e| {
-            return AllocError.OutOfMemory
-        }
-        defer target.deinit(self.alloc)
-        let p = try load(self.alloc, &target)
-        if self.page |old| {
-            old.destroy()
-        }
-        self.page = p
-        self.scroll = 0.0
         if !text.eql(p.url.href, entry.href) {
             let moved = try self.alloc.alloc(0 as u8, p.url.href.len)
             std.mem.copy(moved, p.url.href)
             self.alloc.free(entry.href)
             self.entries.items()[self.current].href = moved
         }
+        if self.page |old| {
+            old.destroy()
+        }
+        self.page = p
+        self.scroll = 0.0
     }
 
     /// After a layout of the page: scrolls to where the last navigation
@@ -174,10 +203,16 @@ pub struct Tab {
             self.scroll = r
         } else if self.fragment.len > 0 {
             if self.page |p| {
+                var y: ?f64 = null
                 if p.tree |t| {
-                    if fragmentY(t, self.fragment) |y| {
-                        self.scroll = y
-                    }
+                    y = fragmentY(t, self.fragment)
+                }
+                // Without such an element, `top` is the top.
+                if y == null && text.eqlIgnoreCase(self.fragment, "top") {
+                    y = 0.0
+                }
+                if y |top| {
+                    self.scroll = top
                 }
             }
         }

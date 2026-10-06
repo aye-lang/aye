@@ -89,17 +89,16 @@ fn dumpViews(alloc: Allocator, args: [][]u8) !i32 {
         std.log.err("{}", o.message)
         return 1
     }
-    let p = s.page.?
     var out = text.Builder.init(tmp)
     if md {
-        try out.append(try markdownOf(p, tmp, refs))
+        try out.append(try markdownOf(&mut s, tmp, refs))
     } else if as_json {
-        let ax = try buildAx(p, tmp)
+        let ax = try buildAx(&mut s, tmp)
         var w = Writer.init(&mut out)
         try writeAxJson(&ax, &mut w, boxes)
         try out.appendByte('\n')
     } else {
-        try out.append(try snapshotText(p, tmp, boxes))
+        try out.append(try snapshotText(&mut s, tmp, boxes))
     }
     try std.fs.stdout().write(out.bytes())
     return 0
@@ -365,7 +364,7 @@ fn argStr(doc: *mut Json, args: ?usize, name: []u8, why: *mut text.Builder) ?[]u
 
 fn agentCommand(s: *mut Session, tmp: Allocator, doc: *mut Json, req: usize, cmd: []u8, w: *mut Writer) !void {
     if text.eql(cmd, "snapshot") {
-        let p = s.page orelse {
+        if s.tab.page == null {
             return failField(w, tmp, "no page: navigate first")
         }
         let boxes = doc.getBool(req, "boxes") orelse false
@@ -373,24 +372,24 @@ fn agentCommand(s: *mut Session, tmp: Allocator, doc: *mut Json, req: usize, cmd
         try w.boolean(true)
         try pageFields(s, tmp, w)
         if text.eql(doc.getStr(req, "format") orelse "text", "json") {
-            let ax = try buildAx(p, tmp)
+            let ax = try buildAx(s, tmp)
             try w.key("tree")
             try writeAxJson(&ax, w, boxes)
         } else {
             try w.key("snapshot")
-            try w.string(try snapshotText(p, tmp, boxes))
+            try w.string(try snapshotText(s, tmp, boxes))
         }
         return
     }
     if text.eql(cmd, "read") {
-        let p = s.page orelse {
+        if s.tab.page == null {
             return failField(w, tmp, "no page: navigate first")
         }
         try w.key("ok")
         try w.boolean(true)
         try pageFields(s, tmp, w)
         try w.key("markdown")
-        try w.string(try markdownOf(p, tmp, doc.getBool(req, "refs") orelse true))
+        try w.string(try markdownOf(s, tmp, doc.getBool(req, "refs") orelse true))
         return
     }
     if text.eql(cmd, "find") {
@@ -427,7 +426,7 @@ fn outcomeFields(s: *mut Session, tmp: Allocator, o: Outcome, w: *mut Writer) !v
     try pageFields(s, tmp, w)
     if o.navigated {
         try w.key("snapshot")
-        try w.string(try snapshotText(s.page.?, tmp, false))
+        try w.string(try snapshotText(s, tmp, false))
     } else if o.diff.len > 0 {
         try w.key("diff")
         try w.string(o.diff)
@@ -435,11 +434,11 @@ fn outcomeFields(s: *mut Session, tmp: Allocator, o: Outcome, w: *mut Writer) !v
 }
 
 fn pageFields(s: *mut Session, tmp: Allocator, w: *mut Writer) AllocError!void {
-    if s.page |p| {
+    if s.tab.page |p| {
         try w.key("url")
-        try w.string(p.location.href)
+        try w.string(s.tab.href())
         try w.key("title")
-        try w.string(try pageTitle(p, tmp))
+        try w.string(p.title)
     }
 }
 
@@ -597,7 +596,7 @@ fn isTool(name: []u8) bool {
 /// result goes to `out`. False for a failure.
 fn callTool(s: *mut Session, tmp: Allocator, doc: *mut Json, cmd: []u8, args: ?usize, out: *mut text.Builder) !bool {
     if text.eql(cmd, "snapshot") || text.eql(cmd, "read") {
-        let p = s.page orelse {
+        if s.tab.page == null {
             try out.append("no page: navigate first")
             return false
         }
@@ -608,13 +607,13 @@ fn callTool(s: *mut Session, tmp: Allocator, doc: *mut Json, cmd: []u8, args: ?u
             if args |o| {
                 refs = doc.getBool(o, "refs") orelse true
             }
-            try out.append(try markdownOf(p, tmp, refs))
+            try out.append(try markdownOf(s, tmp, refs))
         } else {
             var boxes = false
             if args |o| {
                 boxes = doc.getBool(o, "boxes") orelse false
             }
-            try out.append(try snapshotText(p, tmp, boxes))
+            try out.append(try snapshotText(s, tmp, boxes))
         }
         return true
     }
@@ -642,7 +641,7 @@ fn callTool(s: *mut Session, tmp: Allocator, doc: *mut Json, cmd: []u8, args: ?u
         try out.append("\n\n")
         try pageHeader(s, tmp, out)
         try out.append("\n")
-        try out.append(try snapshotText(s.page.?, tmp, false))
+        try out.append(try snapshotText(s, tmp, false))
     } else if o.diff.len > 0 {
         try out.append("\n\nChanged lines of the snapshot:\n")
         try out.append(o.diff)
@@ -651,11 +650,11 @@ fn callTool(s: *mut Session, tmp: Allocator, doc: *mut Json, cmd: []u8, args: ?u
 }
 
 fn pageHeader(s: *mut Session, tmp: Allocator, out: *mut text.Builder) AllocError!void {
-    if s.page |p| {
+    if s.tab.page |p| {
         try out.append("URL: ")
-        try out.append(p.location.href)
+        try out.append(s.tab.href())
         try out.append("\nTitle: ")
-        try out.append(try pageTitle(p, tmp))
+        try out.append(p.title)
         try out.appendByte('\n')
     }
 }

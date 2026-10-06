@@ -25,6 +25,7 @@ import css
 import dom
 import dom.Kind
 import dom.NodeId
+import engine.Page
 import html
 import layout
 import std
@@ -81,6 +82,7 @@ pub struct AxNode {
 /// An accessibility tree; everything is in `alloc` (an arena).
 pub struct Ax {
     alloc: Allocator
+    session: *mut Session
     page: *mut Page
     nodes: List(AxNode)
     // `label for=ID` elements by ID.
@@ -90,20 +92,22 @@ pub struct Ax {
     mute: u32
 }
 
-/// Builds the accessibility tree of `p` in `alloc` (an arena), giving refs
-/// to the nodes that need one.
-fn buildAx(p: *mut Page, alloc: Allocator) AllocError!Ax {
-    var ax = try newAx(p, alloc)
+/// Builds the accessibility tree of the page shown in `alloc` (an
+/// arena), giving refs to the nodes that need one.
+fn buildAx(s: *mut Session, alloc: Allocator) AllocError!Ax {
+    var ax = try newAx(s, alloc)
     let root = try addAx(&mut ax, null, "document", null)
-    try walkChildren(&mut ax, p.doc.root, root)
+    try walkChildren(&mut ax, ax.page.doc.root, root)
     try finishAx(&mut ax, root)
     return ax
 }
 
-/// An empty tree of `p`, ready to compute roles and names.
-fn newAx(p: *mut Page, alloc: Allocator) AllocError!Ax {
+/// An empty tree of the page shown, ready to compute roles and names.
+fn newAx(s: *mut Session, alloc: Allocator) AllocError!Ax {
+    let p = s.tab.page.?
     var ax = Ax {
         alloc: alloc,
+        session: s,
         page: p,
         nodes: List(AxNode).init(alloc),
         labels: StrMap(NodeId).init(alloc),
@@ -214,10 +218,10 @@ fn walkNode(ax: *mut Ax, h: NodeId, parent: usize) AllocError!void {
     let level = headingLevel(ax.page, h, role)
     let value = try valueOf(ax, h, role)
     let href = linkUrl(ax.page, h, role)
-    let states = statesOf(ax.page, h, role)
+    let states = statesOf(ax.page, h, role, ax.session.focused)
     var ref: u32 = 0
     if html.isIn(role, INTERACTIVE) || text.eql(role, "heading") {
-        ref = try refFor(ax.page, h)
+        ref = try refFor(ax.session, h)
     }
     let a = axAt(ax, me)
     a.name = name
@@ -314,7 +318,7 @@ fn emptyAx(ax: *Ax, i: usize) bool {
 /// Is the element `el` rendered: it has a computed style without
 /// `display: none` and is not `aria-hidden`?
 fn rendered(p: *Page, el: NodeId) bool {
-    if p.styles.get(el) |style| {
+    if p.styling.?.styles.get(el) |style| {
         if layout.isKeyword(style[css.DISPLAY], "none") {
             return false
         }
@@ -338,7 +342,7 @@ fn rendered(p: *Page, el: NodeId) bool {
 
 /// Does `el` have `visibility: hidden` (or `collapse`)?
 fn styleHidden(p: *Page, el: NodeId) bool {
-    if p.styles.get(el) |style| {
+    if p.styling.?.styles.get(el) |style| {
         return !layout.isKeyword(style[css.VISIBILITY], "visible")
     }
     return false
@@ -355,7 +359,7 @@ fn textVisible(p: *Page, t: NodeId) bool {
 
 /// Does `el` start a new block (not an inline-level display)?
 fn isBlockLevel(p: *Page, el: NodeId) bool {
-    if p.styles.get(el) |style| {
+    if p.styling.?.styles.get(el) |style| {
         let d = layout.keywordOf(style[css.DISPLAY])
         return !html.isIn(d, "inline inline-block inline-table inline-flex inline-grid contents")
     }
@@ -925,7 +929,7 @@ fn optionLabel(ax: *mut Ax, opt: NodeId) AllocError![]u8 {
     return collapse(ax.alloc, b.bytes())
 }
 
-fn statesOf(p: *Page, el: NodeId, role: []u8) u32 {
+fn statesOf(p: *Page, el: NodeId, role: []u8, focused: ?NodeId) u32 {
     var s: u32 = 0
     let name = p.doc.node(el).name
     if text.eql(name, "input") && (text.eql(role, "checkbox") || text.eql(role, "radio")) {
@@ -970,7 +974,7 @@ fn statesOf(p: *Page, el: NodeId, role: []u8) u32 {
     if html.isIn(name, "input textarea") && p.doc.attr(el, "readonly") != null {
         s |= ST_READONLY
     }
-    if p.focused |f| {
+    if focused |f| {
         if f == el {
             s |= ST_FOCUSED
         }
@@ -1074,13 +1078,13 @@ fn axLine(ax: *Ax, i: usize, depth: usize, out: *mut text.Builder, boxes: bool) 
         try out.append(a.url)
     }
     if a.node |n| {
-        if ax.page.rects.get(n.index) |r| {
+        if ax.session.rects.get(n.index) |r| {
             if boxes {
                 try out.append(" [box=")
                 try writeRect(out, r)
                 try out.appendByte(']')
             }
-            if a.ref > 0 && offscreen(ax.page, r) {
+            if a.ref > 0 && offscreen(ax.session, r) {
                 try out.append(" [offscreen]")
             }
         }
@@ -1175,7 +1179,7 @@ fn axJson(ax: *Ax, i: usize, w: *mut Writer, boxes: bool) AllocError!void {
         try w.string(a.url)
     }
     if a.node |n| {
-        if ax.page.rects.get(n.index) |r| {
+        if ax.session.rects.get(n.index) |r| {
             if boxes {
                 try w.key("box")
                 try w.beginObject()
@@ -1189,7 +1193,7 @@ fn axJson(ax: *Ax, i: usize, w: *mut Writer, boxes: bool) AllocError!void {
                 try w.number(r.h)
                 try w.endObject()
             }
-            if a.ref > 0 && offscreen(ax.page, r) {
+            if a.ref > 0 && offscreen(ax.session, r) {
                 try w.key("offscreen")
                 try w.boolean(true)
             }

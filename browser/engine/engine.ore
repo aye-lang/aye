@@ -1,5 +1,5 @@
 // engine: a loaded page and a tab with its history, shared by the
-// window, `anyknown screenshot` and (later) the agent interface.
+// window, `anyknown screenshot` and the agent interface.
 //
 // - engine.ore: `Page`: load(url) -> fetch -> decode -> parse, then
 //   `layoutPage`: style sheets -> cascade -> layout, for a viewport.
@@ -101,6 +101,17 @@ pub struct Page {
                 lost.deinit()
                 return e
             }
+        }
+    }
+
+    /// Computes the styles again after the document changed, with the
+    /// same style sheets; `layoutPage` lays it out again.
+    pub fn restyle(self: *mut Self) AllocError!void {
+        self.dropTree()
+        if self.styling |st| {
+            st.styles.deinit()
+            st.styles = try css.Styles.init(self.alloc)
+            try css.computeStyles(&self.doc, &st.ua, &st.author, st.media, &mut st.styles)
         }
     }
 

@@ -14,6 +14,7 @@ import css
 import dom
 import dom.Kind
 import dom.NodeId
+import engine.Page
 import html
 import layout
 import std.list.List
@@ -23,6 +24,7 @@ import std.text
 
 struct Md {
     alloc: Allocator
+    session: *mut Session
     page: *mut Page
     refs: bool
 }
@@ -47,9 +49,10 @@ fn emitBlock(bl: *mut Blocks, s: []u8) AllocError!void {
     try bl.out.append(s)
 }
 
-/// The Markdown of the main content of `p`, in `tmp`.
-fn markdownOf(p: *mut Page, tmp: Allocator, refs: bool) AllocError![]u8 {
-    var md = Md { alloc: tmp, page: p, refs: refs }
+/// The Markdown of the main content of the page shown, in `tmp`.
+fn markdownOf(s: *mut Session, tmp: Allocator, refs: bool) AllocError![]u8 {
+    let p = s.tab.page.?
+    var md = Md { alloc: tmp, session: s, page: p, refs: refs }
     var bl = newBlocks(tmp, "\n\n")
     try mdContainer(&mut md, contentRoot(p), &mut bl)
     if bl.out.len() > 0 {
@@ -501,7 +504,7 @@ fn mdInline(md: *mut Md, el: NodeId, inl: *mut text.Builder) AllocError!void {
                 try close.append(try absoluteHref(md.page, md.alloc, h))
                 try close.appendByte(')')
                 if md.refs {
-                    let r = try refFor(md.page, el)
+                    let r = try refFor(md.session, el)
                     try close.append(" [e")
                     try close.appendUint(r as u64)
                     try close.appendByte(']')

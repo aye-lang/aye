@@ -10,6 +10,8 @@ import dom
 import dom.Document
 import dom.Kind
 import dom.NodeId
+import engine
+import engine.Page
 import html
 import std
 import std.list.List
@@ -55,21 +57,22 @@ fn failed(message: []u8) Outcome {
 /// Runs `act`; for an action that stays on the document, also the
 /// snapshot diff. Everything returned is in `tmp`.
 fn perform(s: *mut Session, tmp: Allocator, act: Action) AllocError!Outcome {
-    let before_page = s.page
+    let before_page = s.tab.page
     var before: []u8 = ""
-    if s.page |p| {
-        before = try snapshotText(p, tmp, false)
+    if before_page != null {
+        before = try snapshotText(s, tmp, false)
     }
     var o = try applyAction(s, tmp, act)
-    if o.ok && !o.navigated && before_page != null && s.page == before_page {
-        let after = try snapshotText(s.page.?, tmp, false)
+    if o.ok && !o.navigated && before_page != null && s.tab.page == before_page {
+        let after = try snapshotText(s, tmp, false)
         o.diff = try diffLines(tmp, before, after)
     }
     return o
 }
 
-fn snapshotText(p: *mut Page, tmp: Allocator, boxes: bool) AllocError![]u8 {
-    let ax = try buildAx(p, tmp)
+/// The snapshot of the page shown.
+fn snapshotText(s: *mut Session, tmp: Allocator, boxes: bool) AllocError![]u8 {
+    let ax = try buildAx(s, tmp)
     var out = text.Builder.init(tmp)
     try writeAxText(&ax, &mut out, boxes)
     return out.bytes()
@@ -91,7 +94,7 @@ fn applyAction(s: *mut Session, tmp: Allocator, act: Action) AllocError!Outcome 
 }
 
 fn waitFor(s: *mut Session) AllocError!Outcome {
-    if s.page == null {
+    if s.tab.page == null {
         return failed("no page: navigate first")
     }
     return done("nothing to wait for: the page is loaded and scripts do not run yet")
@@ -102,137 +105,73 @@ fn waitFor(s: *mut Session) AllocError!Outcome {
 fn navigate(s: *mut Session, tmp: Allocator, target: []u8) AllocError!Outcome {
     let dest = try targetUrl(s, tmp, target)
     if dest |w| {
-        return goTo(s, tmp, &w, true)
+        return goTo(s, tmp, &w)
     }
     return failed(try concat(tmp, "not a URL: ", target, ""))
 }
 
-/// Shows `target`: in the document when only the fragment differs, else
-/// by loading it. `push` adds a history entry (navigate, links); else
-/// the current entry is replaced (back, forward, reload).
-fn goTo(s: *mut Session, tmp: Allocator, target: *Url, push: bool) AllocError!Outcome {
-    if s.page |p| {
-        if push && target.has_fragment && text.eql(target.withoutFragment(), p.location.withoutFragment()) {
-            let moved = url.parse(s.alloc, target.href) catch |e| {
-                return AllocError.OutOfMemory
-            }
-            p.location.deinit(s.alloc)
-            p.location = moved
-            try pushHistory(s, moved.href)
-            scrollToFragment(p, target.fragment)
-            return done(try concat(tmp, "scrolled to #", target.fragment, ""))
+/// Shows `target` in a new history entry (navigate, links): in the
+/// document when only the fragment differs, else by loading it.
+fn goTo(s: *mut Session, tmp: Allocator, target: *Url) AllocError!Outcome {
+    if s.tab.sameDocument(target) {
+        try s.tab.push(target, null)
+        s.tab.settle(maxScroll(s))
+        return done(try concat(tmp, "scrolled to #", target.fragment, ""))
+    }
+    let p = try engine.load(s.alloc, target)
+    if p.failure.len > 0 {
+        return refused(tmp, p)
+    }
+    try s.tab.push(target, p)
+    return opened(s, tmp)
+}
+
+/// Back (`step` -1), forward (1) or reload (0).
+fn moveInHistory(s: *mut Session, tmp: Allocator, step: i64) AllocError!Outcome {
+    if s.tab.page == null {
+        return failed("no page: navigate first")
+    }
+    let href = s.tab.hrefAt(step)
+    if href.len == 0 {
+        if step < 0 {
+            return failed("no previous page in the history")
         }
+        return failed("no next page in the history")
     }
-    var why = text.Builder.init(tmp)
-    var base = s.next_ref
-    if s.page |old| {
-        base = old.ref_base + old.refs.len() as u32
+    let target = url.parse(tmp, href) catch |e| {
+        return failed(try concat(tmp, "not a URL: ", href, ""))
     }
-    let opened = try openPage(s.alloc, target, s.media, base, &mut why)
-    let p = opened orelse {
-        return failed(why.bytes())
+    let p = try engine.load(s.alloc, &target)
+    if p.failure.len > 0 {
+        return refused(tmp, p)
     }
-    if s.page |old| {
-        freePage(old)
-    }
-    s.page = p
-    s.next_ref = base
-    // Refs in document order, before anyone asks.
-    try buildAx(p, tmp)
-    s.next_ref = p.ref_base + p.refs.len() as u32
-    if p.location.has_fragment {
-        scrollToFragment(p, p.location.fragment)
-    }
-    if push {
-        try pushHistory(s, p.location.href)
-    } else if s.history.len() > 0 {
-        s.alloc.free(s.history.items()[s.index])
-        s.history.items()[s.index] = try dupOwned(s.alloc, p.location.href)
-    }
+    try s.tab.moveTo(step, p)
+    return opened(s, tmp)
+}
+
+// The error page of a fetch that failed: the agent is told why instead,
+// and the tab stays where it is.
+fn refused(tmp: Allocator, p: *mut Page) AllocError!Outcome {
+    let why = try concat(tmp, "cannot fetch ", p.url.href, try concat(tmp, ": ", p.failure, ""))
+    p.destroy()
+    return failed(why)
+}
+
+// After the tab moved to a new page: lays it out, gives the refs in
+// document order (before anyone asks), and says what was loaded.
+fn opened(s: *mut Session, tmp: Allocator) AllocError!Outcome {
+    try newDocument(s)
+    try buildAx(s, tmp)
+    let p = s.tab.page.?
     var msg = text.Builder.init(tmp)
     try msg.append("loaded ")
-    try msg.append(p.location.href)
+    try msg.append(p.url.href)
     if p.status != 200 {
         try msg.append(" (status ")
         try msg.appendInt(p.status)
         try msg.appendByte(')')
     }
     return Outcome { ok: true, message: msg.bytes(), navigated: true, diff: "" }
-}
-
-fn pushHistory(s: *mut Session, href: []u8) AllocError!void {
-    while s.history.len() > 0 && s.history.len() > s.index + 1 {
-        if s.history.pop() |h| {
-            s.alloc.free(h)
-        }
-    }
-    try s.history.append(try dupOwned(s.alloc, href))
-    s.index = s.history.len() - 1
-}
-
-fn dupOwned(alloc: Allocator, b: []u8) AllocError![]u8 {
-    let copy = try alloc.alloc(0 as u8, b.len)
-    std.mem.copy(copy, b)
-    return copy
-}
-
-/// Back (`step` -1), forward (1) or reload (0).
-fn moveInHistory(s: *mut Session, tmp: Allocator, step: i64) AllocError!Outcome {
-    if s.history.len() == 0 {
-        return failed("no page: navigate first")
-    }
-    if step < 0 && s.index == 0 {
-        return failed("no previous page in the history")
-    }
-    if step > 0 && s.index + 1 >= s.history.len() {
-        return failed("no next page in the history")
-    }
-    let old_index = s.index
-    if step < 0 {
-        s.index -= 1
-    } else if step > 0 {
-        s.index += 1
-    }
-    let href = s.history.items()[s.index]
-    let target = url.parse(tmp, href) catch |e| {
-        s.index = old_index
-        return failed(try concat(tmp, "not a URL: ", href, ""))
-    }
-    let o = try goTo(s, tmp, &target, false)
-    if !o.ok {
-        s.index = old_index
-    }
-    return o
-}
-
-/// Scrolls to the element with id `frag` (or an `a name=frag`).
-fn scrollToFragment(p: *mut Page, frag: []u8) {
-    var el = p.doc.getElementById(frag)
-    if el == null {
-        var cur: ?NodeId = p.doc.root
-        while cur |h| {
-            if p.doc.isElement(h, "a") {
-                if p.doc.attr(h, "name") |n| {
-                    if text.eql(n, frag) {
-                        el = h
-                        break
-                    }
-                }
-            }
-            cur = p.doc.following(h, p.doc.root)
-        }
-    }
-    if el |e| {
-        if rectOf(p, e) |r| {
-            p.scroll_y = clampScroll(p, r.y)
-        }
-    } else if frag.len == 0 || text.eqlIgnoreCase(frag, "top") {
-        p.scroll_y = 0.0
-    }
-}
-
-fn clampScroll(p: *Page, y: f64) f64 {
-    return std.math.clamp(y, 0.0, maxScroll(p))
 }
 
 // ---- elements
@@ -254,8 +193,8 @@ struct Target {
 }
 
 fn findTarget(s: *mut Session, tmp: Allocator, ref: []u8) AllocError!Target {
-    if s.page |p| {
-        if nodeOfRef(p, ref) |n| {
+    if s.tab.page |p| {
+        if nodeOfRef(s, ref) |n| {
             return Target { page: p, node: n, why: "" }
         }
         let why = try concat(tmp, "unknown ref ", ref, ": take a new snapshot (refs belong to one document)")
@@ -265,8 +204,8 @@ fn findTarget(s: *mut Session, tmp: Allocator, ref: []u8) AllocError!Target {
 }
 
 /// `role "name" [eN]` of `el`.
-fn describeNode(p: *mut Page, tmp: Allocator, el: NodeId) AllocError![]u8 {
-    var ax = try newAx(p, tmp)
+fn describeNode(s: *mut Session, tmp: Allocator, el: NodeId) AllocError![]u8 {
+    var ax = try newAx(s, tmp)
     var out = text.Builder.init(tmp)
     var role = roleOf(&ax, el)
     if role.len == 0 || text.eql(role, "skip") || text.eql(role, "generic-clickable") {
@@ -278,7 +217,7 @@ fn describeNode(p: *mut Page, tmp: Allocator, el: NodeId) AllocError![]u8 {
         try out.appendByte(' ')
         try quoteText(&mut out, name)
     }
-    if p.ref_of.get(el.index) |r| {
+    if s.ref_of.get(el.index) |r| {
         try out.append(" [e")
         try out.appendUint(r as u64)
         try out.appendByte(']')
@@ -388,8 +327,7 @@ fn removeAttr(doc: *mut Document, el: NodeId, name: []u8) {
 
 /// Records an event that forms or scripts will handle, and says so.
 fn recordOn(s: *mut Session, tmp: Allocator, what: []u8, el: NodeId) AllocError![]u8 {
-    let p = s.page.?
-    let who = try describeNode(p, tmp, el)
+    let who = try describeNode(s, tmp, el)
     let ev = try concat(tmp, what, " ", who)
     try recordEvent(s, ev)
     return ev
@@ -406,12 +344,12 @@ fn click(s: *mut Session, tmp: Allocator, ref: []u8) AllocError!Outcome {
 }
 
 fn clickNode(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId) AllocError!Outcome {
-    let who = try describeNode(p, tmp, el)
+    let who = try describeNode(s, tmp, el)
     if isDisabled(p, el) {
         return failed(try concat(tmp, "cannot click ", who, ": it is disabled"))
     }
     if isFocusable(p, el) {
-        p.focused = el
+        s.focused = el
     }
     // A link, or an element inside one.
     var cur: ?NodeId = el
@@ -425,7 +363,7 @@ fn clickNode(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId) AllocErr
         cur = p.doc.parent(c)
     }
     if isCheckable(p, el) {
-        return toggle(p, tmp, el, who)
+        return toggle(s, tmp, p, el, who)
     }
     if p.doc.attr(el, "role") |r| {
         if html.isIn(text.trim(r), "checkbox switch menuitemcheckbox") {
@@ -434,7 +372,7 @@ fn clickNode(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId) AllocErr
             } else {
                 try p.doc.setAttr(el, "aria-checked", "true")
             }
-            try relayout(p)
+            try relayout(s)
             try recordOn(s, tmp, "click on", el)
             return done(try concat(tmp, "toggled ", who, ""))
         }
@@ -444,11 +382,11 @@ fn clickNode(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId) AllocErr
             if p.doc.isElement(d, "details") {
                 if p.doc.attr(d, "open") != null {
                     removeAttr(&mut p.doc, d, "open")
-                    try relayout(p)
+                    try relayout(s)
                     return done(try concat(tmp, "collapsed ", who, ""))
                 }
                 try p.doc.setAttr(d, "open", "")
-                try relayout(p)
+                try relayout(s)
                 return done(try concat(tmp, "expanded ", who, ""))
             }
         }
@@ -462,7 +400,7 @@ fn clickNode(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId) AllocErr
         var sel = p.doc.parent(el)
         while sel |c| {
             if p.doc.isElement(c, "select") {
-                return chooseOption(p, tmp, c, el)
+                return chooseOption(s, tmp, p, c, el)
             }
             sel = p.doc.parent(c)
         }
@@ -486,10 +424,10 @@ fn followLink(s: *mut Session, tmp: Allocator, p: *mut Page, a: NodeId, who: []u
         try recordOn(s, tmp, "click on", a)
         return done(try concat(tmp, "clicked ", who, "; it runs a script, which is not supported yet"))
     }
-    let target = url.resolve(tmp, &p.location, href) catch |e| {
+    let target = url.resolve(tmp, &p.url, href) catch |e| {
         return failed(try concat(tmp, "cannot follow ", who, ": not a URL"))
     }
-    let o = try goTo(s, tmp, &target, true)
+    let o = try goTo(s, tmp, &target)
     if !o.ok {
         return o
     }
@@ -518,7 +456,7 @@ fn labelControl(p: *Page, label: NodeId) ?NodeId {
 
 /// Checks or unchecks a checkbox; checks a radio button and unchecks the
 /// others of its group.
-fn toggle(p: *mut Page, tmp: Allocator, el: NodeId, who: []u8) AllocError!Outcome {
+fn toggle(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId, who: []u8) AllocError!Outcome {
     if text.eqlIgnoreCase(inputType(p, el), "radio") {
         if p.doc.attr(el, "name") |group| {
             let form = formOf(p, el)
@@ -535,16 +473,16 @@ fn toggle(p: *mut Page, tmp: Allocator, el: NodeId, who: []u8) AllocError!Outcom
             }
         }
         try p.doc.setAttr(el, "checked", "")
-        try relayout(p)
+        try relayout(s)
         return done(try concat(tmp, "checked ", who, ""))
     }
     if p.doc.attr(el, "checked") != null {
         removeAttr(&mut p.doc, el, "checked")
-        try relayout(p)
+        try relayout(s)
         return done(try concat(tmp, "unchecked ", who, ""))
     }
     try p.doc.setAttr(el, "checked", "")
-    try relayout(p)
+    try relayout(s)
     return done(try concat(tmp, "checked ", who, ""))
 }
 
@@ -556,7 +494,7 @@ fn typeInto(s: *mut Session, tmp: Allocator, ref: []u8, input: []u8, submit: boo
         return failed(t.why)
     }
     let el = t.node.?
-    let who = try describeNode(p, tmp, el)
+    let who = try describeNode(s, tmp, el)
     if !isTextInput(p, el) {
         return failed(try concat(tmp, "cannot type into ", who, ": it is not a text field"))
     }
@@ -564,8 +502,8 @@ fn typeInto(s: *mut Session, tmp: Allocator, ref: []u8, input: []u8, submit: boo
         return failed(try concat(tmp, "cannot type into ", who, ": it is disabled or read-only"))
     }
     try setValue(p, el, input)
-    p.focused = el
-    try relayout(p)
+    s.focused = el
+    try relayout(s)
     var msg = text.Builder.init(tmp)
     try msg.append("typed ")
     try quoteText(&mut msg, input)
@@ -619,14 +557,14 @@ fn selectOption(s: *mut Session, tmp: Allocator, ref: []u8, option: []u8) AllocE
         return failed(t.why)
     }
     let sel = t.node.?
-    let who = try describeNode(p, tmp, sel)
+    let who = try describeNode(s, tmp, sel)
     if !p.doc.isElement(sel, "select") {
         return failed(try concat(tmp, "cannot select in ", who, ": it is not a select"))
     }
     if isDisabled(p, sel) {
         return failed(try concat(tmp, "cannot select in ", who, ": it is disabled"))
     }
-    var ax = try newAx(p, tmp)
+    var ax = try newAx(s, tmp)
     let want = text.trim(option)
     var found: ?NodeId = null
     var names = text.Builder.init(tmp)
@@ -665,10 +603,10 @@ fn selectOption(s: *mut Session, tmp: Allocator, ref: []u8, option: []u8) AllocE
         try msg.append(names.bytes())
         return failed(msg.bytes())
     }
-    return chooseOption(p, tmp, sel, opt)
+    return chooseOption(s, tmp, p, sel, opt)
 }
 
-fn chooseOption(p: *mut Page, tmp: Allocator, sel: NodeId, opt: NodeId) AllocError!Outcome {
+fn chooseOption(s: *mut Session, tmp: Allocator, p: *mut Page, sel: NodeId, opt: NodeId) AllocError!Outcome {
     if isDisabled(p, opt) {
         return failed("that option is disabled")
     }
@@ -682,14 +620,14 @@ fn chooseOption(p: *mut Page, tmp: Allocator, sel: NodeId, opt: NodeId) AllocErr
         }
     }
     try p.doc.setAttr(opt, "selected", "")
-    p.focused = sel
-    try relayout(p)
-    var ax = try newAx(p, tmp)
+    s.focused = sel
+    try relayout(s)
+    var ax = try newAx(s, tmp)
     var msg = text.Builder.init(tmp)
     try msg.append("selected ")
     try quoteText(&mut msg, try optionLabel(&mut ax, opt))
     try msg.append(" in ")
-    try msg.append(try describeNode(p, tmp, sel))
+    try msg.append(try describeNode(s, tmp, sel))
     return done(msg.bytes())
 }
 
@@ -700,7 +638,7 @@ fn chooseOption(p: *mut Page, tmp: Allocator, sel: NodeId, opt: NodeId) AllocErr
 /// or submits; Space toggles; Tab and Shift+Tab move the focus;
 /// PageDown, PageUp, Home, End, ArrowDown and ArrowUp scroll.
 fn press(s: *mut Session, tmp: Allocator, key: []u8) AllocError!Outcome {
-    let p = s.page orelse {
+    let p = s.tab.page orelse {
         return failed("no page: navigate first")
     }
     if key.len == 0 {
@@ -708,10 +646,10 @@ fn press(s: *mut Session, tmp: Allocator, key: []u8) AllocError!Outcome {
     }
     try recordEvent(s, try concat(tmp, "keydown ", key, ""))
     if text.eql(key, "Tab") || text.eql(key, "Shift+Tab") {
-        return moveFocus(p, tmp, text.eql(key, "Tab"))
+        return moveFocus(s, tmp, p, text.eql(key, "Tab"))
     }
-    if p.focused |f| {
-        let who = try describeNode(p, tmp, f)
+    if s.focused |f| {
+        let who = try describeNode(s, tmp, f)
         if isTextInput(p, f) {
             if text.eql(key, "Backspace") {
                 let v = try currentValue(p, tmp, f)
@@ -723,20 +661,20 @@ fn press(s: *mut Session, tmp: Allocator, key: []u8) AllocError!Outcome {
                     }
                 }
                 try setValue(p, f, v[..end])
-                try relayout(p)
+                try relayout(s)
                 return done(try concat(tmp, "deleted a character in ", who, ""))
             }
             if text.eql(key, "Enter") {
                 if p.doc.isElement(f, "textarea") {
                     try setValue(p, f, try concat(tmp, try currentValue(p, tmp, f), "\n", ""))
-                    try relayout(p)
+                    try relayout(s)
                     return done(try concat(tmp, "new line in ", who, ""))
                 }
                 return done(try concat(tmp, "Enter in ", who, try concat(tmp, "; ", try submitFrom(s, tmp, p, f), "")))
             }
             if isCharacter(key) {
                 try setValue(p, f, try concat(tmp, try currentValue(p, tmp, f), key, ""))
-                try relayout(p)
+                try relayout(s)
                 return done(try concat(tmp, "typed ", key, try concat(tmp, " into ", who, "")))
             }
         }
@@ -747,27 +685,27 @@ fn press(s: *mut Session, tmp: Allocator, key: []u8) AllocError!Outcome {
             return clickNode(s, tmp, p, f)
         }
         if text.eql(key, "Escape") {
-            p.focused = null
+            s.focused = null
             return done(try concat(tmp, "left ", who, ""))
         }
     }
     var dy = 0.0
     if text.eql(key, "PageDown") || text.eql(key, " ") || text.eql(key, "Space") {
-        dy = p.media.height * 0.875
+        dy = s.media.height * 0.875
     } else if text.eql(key, "PageUp") {
-        dy = -p.media.height * 0.875
+        dy = -s.media.height * 0.875
     } else if text.eql(key, "ArrowDown") {
         dy = 40.0
     } else if text.eql(key, "ArrowUp") {
         dy = -40.0
     } else if text.eql(key, "Home") {
-        dy = -p.scroll_y
+        dy = -s.tab.scroll
     } else if text.eql(key, "End") {
-        dy = maxScroll(p) - p.scroll_y
+        dy = maxScroll(s) - s.tab.scroll
     } else {
         return done(try concat(tmp, "pressed ", key, "; nothing to do (recorded the key event)"))
     }
-    return scrollBy(p, tmp, dy)
+    return scrollBy(s, tmp, dy)
 }
 
 // A key that types itself: one UTF-8 character.
@@ -776,13 +714,13 @@ fn isCharacter(key: []u8) bool {
     return d.len == key.len && d.code >= 0x20 && d.code != 0x7F
 }
 
-fn moveFocus(p: *mut Page, tmp: Allocator, forward: bool) AllocError!Outcome {
+fn moveFocus(s: *mut Session, tmp: Allocator, p: *mut Page, forward: bool) AllocError!Outcome {
     var all = List(NodeId).init(tmp)
     var cur: ?NodeId = p.doc.root
     var at: ?usize = null
     while cur |h| {
         if isFocusable(p, h) {
-            if p.focused |f| {
+            if s.focused |f| {
                 if f == h {
                     at = all.len()
                 }
@@ -805,47 +743,53 @@ fn moveFocus(p: *mut Page, tmp: Allocator, forward: bool) AllocError!Outcome {
         next = all.len() - 1
     }
     let el = all.items()[next]
-    p.focused = el
-    try refFor(p, el)
-    return done(try concat(tmp, "focused ", try describeNode(p, tmp, el), ""))
+    s.focused = el
+    try refFor(s, el)
+    return done(try concat(tmp, "focused ", try describeNode(s, tmp, el), ""))
 }
 
 // ---- scroll
 
 fn scroll(s: *mut Session, tmp: Allocator, ref: []u8, dy: f64) AllocError!Outcome {
     if ref.len == 0 {
-        let p = s.page orelse {
+        if s.tab.page == null {
             return failed("no page: navigate first")
         }
-        return scrollBy(p, tmp, dy)
+        return scrollBy(s, tmp, dy)
     }
     let t = try findTarget(s, tmp, ref)
     let p = t.page orelse {
         return failed(t.why)
     }
     let el = t.node.?
-    let who = try describeNode(p, tmp, el)
-    let r = rectOf(p, el) orelse {
+    let who = try describeNode(s, tmp, el)
+    let r = rectOf(s, el) orelse {
         return failed(try concat(tmp, "cannot scroll to ", who, ": it has no box"))
     }
-    p.scroll_y = clampScroll(p, r.y)
-    return done(try scrollMessage(p, tmp, try concat(tmp, "scrolled to ", who, "")))
+    scrollTo(s, r.y)
+    return done(try scrollMessage(s, tmp, try concat(tmp, "scrolled to ", who, "")))
 }
 
-fn scrollBy(p: *mut Page, tmp: Allocator, dy: f64) AllocError!Outcome {
-    p.scroll_y = clampScroll(p, p.scroll_y + dy)
-    return done(try scrollMessage(p, tmp, "scrolled"))
+fn scrollBy(s: *mut Session, tmp: Allocator, dy: f64) AllocError!Outcome {
+    scrollTo(s, s.tab.scroll + dy)
+    return done(try scrollMessage(s, tmp, "scrolled"))
 }
 
-fn scrollMessage(p: *Page, tmp: Allocator, what: []u8) AllocError![]u8 {
+// Scrolls to `y`, kept within the document.
+fn scrollTo(s: *mut Session, y: f64) {
+    s.tab.scroll = y
+    s.tab.clampScroll(maxScroll(s))
+}
+
+fn scrollMessage(s: *Session, tmp: Allocator, what: []u8) AllocError![]u8 {
     var b = text.Builder.init(tmp)
     try b.append(what)
     try b.append("; the viewport shows y ")
-    try writeNumberTo(&mut b, p.scroll_y)
+    try writeNumberTo(&mut b, s.tab.scroll)
     try b.append(" to ")
-    try writeNumberTo(&mut b, p.scroll_y + p.media.height)
+    try writeNumberTo(&mut b, s.tab.scroll + s.media.height)
     try b.append(" of ")
-    try writeNumberTo(&mut b, maxF(docHeight(p), p.media.height))
+    try writeNumberTo(&mut b, maxF(docHeight(s), s.media.height))
     return b.bytes()
 }
 
@@ -858,7 +802,7 @@ fn writeNumberTo(b: *mut text.Builder, v: f64) AllocError!void {
 /// The places of `needle` in the visible text (ignoring ASCII case),
 /// with the nearest element that has a ref; at most 20.
 fn findText(s: *mut Session, tmp: Allocator, needle: []u8) AllocError!Outcome {
-    let p = s.page orelse {
+    let p = s.tab.page orelse {
         return failed("no page: navigate first")
     }
     let want = text.trim(needle)
@@ -866,7 +810,7 @@ fn findText(s: *mut Session, tmp: Allocator, needle: []u8) AllocError!Outcome {
         return failed("nothing to find")
     }
     // Make sure every element that should have a ref has one.
-    try buildAx(p, tmp)
+    try buildAx(s, tmp)
     var out = text.Builder.init(tmp)
     var count: usize = 0
     var cur: ?NodeId = p.doc.root
@@ -883,7 +827,7 @@ fn findText(s: *mut Session, tmp: Allocator, needle: []u8) AllocError!Outcome {
                 let at = indexIgnoreCase(flat[from..], want) orelse break
                 count += 1
                 if count <= 20 {
-                    try findLine(p, tmp, h, flat, from + at, want.len, count, &mut out)
+                    try findLine(s, tmp, h, flat, from + at, want.len, count, &mut out)
                 }
                 from = from + at + want.len
             }
@@ -911,7 +855,7 @@ fn findText(s: *mut Session, tmp: Allocator, needle: []u8) AllocError!Outcome {
     return done(msg.bytes())
 }
 
-fn findLine(p: *mut Page, tmp: Allocator, t: NodeId, flat: []u8, at: usize, len: usize, count: usize, out: *mut text.Builder) AllocError!void {
+fn findLine(s: *mut Session, tmp: Allocator, t: NodeId, flat: []u8, at: usize, len: usize, count: usize, out: *mut text.Builder) AllocError!void {
     var lo = at
     var k: usize = 0
     while lo > 0 && k < 30 {
@@ -941,17 +885,18 @@ fn findLine(p: *mut Page, tmp: Allocator, t: NodeId, flat: []u8, at: usize, len:
     }
     try out.appendByte('"')
     // The nearest element around it that has a ref.
+    let p = s.tab.page.?
     var cur = p.doc.parent(t)
     while cur |c| {
-        if p.ref_of.get(c.index) |r| {
+        if s.ref_of.get(c.index) |r| {
             try out.append(" in ")
-            try out.append(try describeNode(p, tmp, c))
+            try out.append(try describeNode(s, tmp, c))
             break
         }
         cur = p.doc.parent(c)
     }
-    if rectOf(p, t) |r| {
-        if offscreen(p, r) {
+    if rectOf(s, t) |r| {
+        if offscreen(s, r) {
             try out.append(" [offscreen]")
         }
     }
