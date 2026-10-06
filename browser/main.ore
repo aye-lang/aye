@@ -13,7 +13,15 @@
 // 600 px high. `--layout` prints the box tree laid out in that viewport
 // (layout_dump.ore), measuring text with the fixed-metric test font or
 // with the system's fonts.
+//
+// For AI agents (browser/agent, docs/agent-protocol.md):
+//
+//     anyknown agent [--width PX] [--height PX]   JSON lines on stdio
+//     anyknown mcp [--width PX] [--height PX]     an MCP server on stdio
+//     anyknown dump --a11y [--boxes] [--json] FILE|URL
+//     anyknown dump --md [--refs] FILE|URL
 
+import agent
 import css
 import dom
 import dom.NodeId
@@ -42,6 +50,12 @@ fn run(alloc: Allocator) i32 {
         return 1
     }
     defer alloc.free(args)
+    if args.len >= 2 && (text.eql(args[1], "agent") || text.eql(args[1], "mcp")) {
+        return agent.serveMain(alloc, args[2..], text.eql(args[1], "mcp"))
+    }
+    if args.len >= 2 && text.eql(args[1], "dump") && agent.isAgentDump(args[2..]) {
+        return agent.dumpMain(alloc, args[2..])
+    }
     if args.len < 2 || !text.eql(args[1], "dump") {
         std.log.err("{}", USAGE)
         return 2

@@ -1,0 +1,561 @@
+// The main content of a page as Markdown (`read`): the `main` element
+// (or `role=main`), else the first `article`, else the body, so that
+// navigation, headers, footers and sidebars are dropped when the page
+// says where its content is.
+//
+// Headings, paragraphs, lists (nested), links `[text](url)` (with
+// `[e5]` after them when refs are asked for), emphasis, code and `pre`
+// blocks, block quotes, tables as GFM tables, images `![alt](src)` and
+// rules. URLs are absolute. Whitespace collapses as in HTML; form
+// controls, scripts and what is not rendered are left out. Text is not
+// escaped, except `|` in table cells.
+
+import css
+import dom
+import dom.Kind
+import dom.NodeId
+import html
+import layout
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+struct Md {
+    alloc: Allocator
+    page: *mut Page
+    refs: bool
+}
+
+/// Blocks of Markdown, joined by `sep` ("\n\n"; "\n" inside list items).
+struct Blocks {
+    out: text.Builder
+    sep: []u8
+}
+
+fn newBlocks(alloc: Allocator, sep: []u8) Blocks {
+    return Blocks { out: text.Builder.init(alloc), sep: sep }
+}
+
+fn emitBlock(bl: *mut Blocks, s: []u8) AllocError!void {
+    if s.len == 0 {
+        return
+    }
+    if bl.out.len() > 0 {
+        try bl.out.append(bl.sep)
+    }
+    try bl.out.append(s)
+}
+
+/// The Markdown of the main content of `p`, in `tmp`.
+fn markdownOf(p: *mut Page, tmp: Allocator, refs: bool) AllocError![]u8 {
+    var md = Md { alloc: tmp, page: p, refs: refs }
+    var bl = newBlocks(tmp, "\n\n")
+    try mdContainer(&mut md, contentRoot(p), &mut bl)
+    if bl.out.len() > 0 {
+        try bl.out.appendByte('\n')
+    }
+    return bl.out.bytes()
+}
+
+/// `main` (or `role=main`), else the first `article`, else `body`, else
+/// the document.
+fn contentRoot(p: *mut Page) NodeId {
+    var article: ?NodeId = null
+    var body: ?NodeId = null
+    var cur: ?NodeId = p.doc.root
+    while cur |h| {
+        let n = p.doc.node(h)
+        if n.kind == Kind.Element {
+            if !rendered(p, h) {
+                cur = p.doc.followingSkip(h, p.doc.root)
+                continue
+            }
+            if text.eql(n.name, "main") || attrIs(p, h, "role", "main") {
+                return h
+            }
+            if article == null && text.eql(n.name, "article") {
+                article = h
+            }
+            if body == null && text.eql(n.name, "body") {
+                body = h
+            }
+        }
+        cur = p.doc.following(h, p.doc.root)
+    }
+    if article |a| {
+        return a
+    }
+    if body |b| {
+        return b
+    }
+    return p.doc.root
+}
+
+// Is `el` laid out as a block (or a list item, a table part, ...)?
+fn mdBlock(md: *Md, el: NodeId) bool {
+    return isBlockLevel(md.page, el)
+}
+
+/// Writes the content of `h` as blocks: runs of inline content become
+/// paragraphs, block children their own blocks.
+fn mdContainer(md: *mut Md, h: NodeId, bl: *mut Blocks) AllocError!void {
+    var inl = text.Builder.init(md.alloc)
+    var cur = md.page.doc.firstChild(h)
+    while cur |c| {
+        let n = md.page.doc.node(c).*
+        if n.kind == Kind.Text {
+            if textVisible(md.page, c) {
+                try appendCollapsed(&mut inl, n.data)
+            }
+        } else if n.kind == Kind.Element && rendered(md.page, c) {
+            if mdBlock(md, c) {
+                try flushParagraph(md, &mut inl, bl)
+                try mdBlockElement(md, c, bl)
+            } else {
+                try mdInline(md, c, &mut inl)
+            }
+        }
+        cur = md.page.doc.nextSibling(c)
+    }
+    try flushParagraph(md, &mut inl, bl)
+}
+
+fn flushParagraph(md: *mut Md, inl: *mut text.Builder, bl: *mut Blocks) AllocError!void {
+    let para = try hardBreaks(md.alloc, inl.bytes())
+    try emitBlock(bl, para)
+    inl.clear()
+}
+
+/// Inline text with `\n` for `<br>`: trimmed lines joined by Markdown
+/// hard breaks (a backslash at the end of the line).
+fn hardBreaks(alloc: Allocator, s: []u8) AllocError![]u8 {
+    var out = text.Builder.init(alloc)
+    var lines = text.split(s, "\n")
+    var pending = 0 as usize
+    while lines.next() |line| {
+        let t = text.trim(line)
+        if t.len == 0 {
+            if out.len() > 0 {
+                pending += 1
+            }
+            continue
+        }
+        if out.len() > 0 {
+            try out.append("\\\n")
+        }
+        pending = 0
+        try out.append(t)
+    }
+    return out.bytes()
+}
+
+/// Appends `s` with whitespace collapsed: a space only after something
+/// that is not already a space or a line break.
+fn appendCollapsed(inl: *mut text.Builder, s: []u8) AllocError!void {
+    for c in s {
+        if layout.isWhite(c) {
+            let b = inl.bytes()
+            if b.len > 0 && b[b.len - 1] != ' ' && b[b.len - 1] != '\n' {
+                try inl.appendByte(' ')
+            }
+        } else {
+            try inl.appendByte(c)
+        }
+    }
+}
+
+fn tagOf(md: *Md, el: NodeId) []u8 {
+    return md.page.doc.node(el).name
+}
+
+fn mdBlockElement(md: *mut Md, el: NodeId, bl: *mut Blocks) AllocError!void {
+    let name = tagOf(md, el)
+    if html.isIn(name, "h1 h2 h3 h4 h5 h6") {
+        var inl = text.Builder.init(md.alloc)
+        try mdInlineChildren(md, el, &mut inl)
+        let t = try oneLine(md.alloc, inl.bytes())
+        if t.len == 0 {
+            return
+        }
+        var b = text.Builder.init(md.alloc)
+        for i in 0..(name[1] - '0') as usize {
+            try b.appendByte('#')
+        }
+        try b.appendByte(' ')
+        try b.append(t)
+        return emitBlock(bl, b.bytes())
+    }
+    if html.isIn(name, "ul ol menu") {
+        return mdList(md, el, text.eql(name, "ol"), bl)
+    }
+    if text.eql(name, "pre") {
+        return mdPre(md, el, bl)
+    }
+    if text.eql(name, "blockquote") {
+        var inner = newBlocks(md.alloc, "\n\n")
+        try mdContainer(md, el, &mut inner)
+        return emitBlock(bl, try prefixLines(md.alloc, inner.out.bytes(), "> ", ">"))
+    }
+    if text.eql(name, "table") {
+        return mdTable(md, el, bl)
+    }
+    if text.eql(name, "hr") {
+        return emitBlock(bl, "---")
+    }
+    if html.isIn(name, "img") {
+        var inl = text.Builder.init(md.alloc)
+        try mdInline(md, el, &mut inl)
+        return emitBlock(bl, inl.bytes())
+    }
+    if html.isIn(name, "input select textarea button script style template iframe video audio canvas svg object embed noscript") {
+        return
+    }
+    try mdContainer(md, el, bl)
+}
+
+/// `s` on one line: line breaks become spaces, trimmed.
+fn oneLine(alloc: Allocator, s: []u8) AllocError![]u8 {
+    var out = text.Builder.init(alloc)
+    for c in s {
+        if c == '\n' {
+            try appendCollapsed(&mut out, " ")
+        } else {
+            try out.appendByte(c)
+        }
+    }
+    return text.trim(out.bytes())
+}
+
+/// Every line of `s` with `prefix` (`empty` for empty lines).
+fn prefixLines(alloc: Allocator, s: []u8, prefix: []u8, empty: []u8) AllocError![]u8 {
+    var out = text.Builder.init(alloc)
+    var lines = text.split(s, "\n")
+    var first = true
+    while lines.next() |line| {
+        if !first {
+            try out.appendByte('\n')
+        }
+        first = false
+        if line.len == 0 {
+            try out.append(empty)
+        } else {
+            try out.append(prefix)
+            try out.append(line)
+        }
+    }
+    return out.bytes()
+}
+
+fn mdList(md: *mut Md, el: NodeId, ordered: bool, bl: *mut Blocks) AllocError!void {
+    var out = text.Builder.init(md.alloc)
+    var number: i64 = 1
+    if ordered {
+        if md.page.doc.attr(el, "start") |v| {
+            number = text.parseInt(text.trim(v)) catch 1
+        }
+    }
+    var cur = md.page.doc.firstChild(el)
+    while cur |c| {
+        let n = md.page.doc.node(c).*
+        cur = md.page.doc.nextSibling(c)
+        if n.kind != Kind.Element || !rendered(md.page, c) {
+            continue
+        }
+        var marker = text.Builder.init(md.alloc)
+        if ordered {
+            try marker.appendInt(number)
+            try marker.append(". ")
+            number += 1
+        } else {
+            try marker.append("- ")
+        }
+        var item = newBlocks(md.alloc, "\n")
+        if text.eql(n.name, "li") || !html.isIn(n.name, "ul ol menu") {
+            try mdContainer(md, c, &mut item)
+        } else {
+            // A list right inside a list: indent it under the previous item.
+            try mdBlockElement(md, c, &mut item)
+            let nested = try prefixLines(md.alloc, item.out.bytes(), "  ", "")
+            if out.len() > 0 {
+                try out.appendByte('\n')
+            }
+            try out.append(nested)
+            continue
+        }
+        if out.len() > 0 {
+            try out.appendByte('\n')
+        }
+        try out.append(marker.bytes())
+        var pad = text.Builder.init(md.alloc)
+        for k in 0..marker.len() {
+            try pad.appendByte(' ')
+        }
+        let body = try prefixLines(md.alloc, item.out.bytes(), pad.bytes(), "")
+        // The first line goes after the marker.
+        try out.append(body[pad.len()..])
+    }
+    try emitBlock(bl, out.bytes())
+}
+
+fn mdPre(md: *mut Md, el: NodeId, bl: *mut Blocks) AllocError!void {
+    var raw = text.Builder.init(md.alloc)
+    try md.page.doc.textContent(el, &mut raw)
+    var body = raw.bytes()
+    while body.len > 0 && (body[body.len - 1] == '\n' || body[body.len - 1] == '\r') {
+        body = body[..body.len - 1]
+    }
+    var fence = "```"
+    if text.indexOf(body, "```") != null {
+        fence = "~~~~"
+    }
+    var b = text.Builder.init(md.alloc)
+    try b.append(fence)
+    // The language of `<code class="language-x">` inside.
+    var cur = md.page.doc.firstChild(el)
+    while cur |c| {
+        if md.page.doc.isElement(c, "code") {
+            if md.page.doc.attr(c, "class") |cls| {
+                var words = text.split(cls, " ")
+                while words.next() |w| {
+                    if text.startsWith(w, "language-") {
+                        try b.append(w[9..])
+                        break
+                    }
+                    if text.startsWith(w, "lang-") {
+                        try b.append(w[5..])
+                        break
+                    }
+                }
+            }
+        }
+        cur = md.page.doc.nextSibling(c)
+    }
+    try b.appendByte('\n')
+    if body.len > 0 {
+        try b.append(body)
+        try b.appendByte('\n')
+    }
+    try b.append(fence)
+    try emitBlock(bl, b.bytes())
+}
+
+/// A table as a GFM table: the first row is the header; cells are inline
+/// text on one line, `|` escaped. The caption comes before, in bold.
+fn mdTable(md: *mut Md, el: NodeId, bl: *mut Blocks) AllocError!void {
+    var rows = List(NodeId).init(md.alloc)
+    var cur = md.page.doc.firstChild(el)
+    while cur |c| {
+        let n = md.page.doc.node(c)
+        if n.kind == Kind.Element && rendered(md.page, c) {
+            if text.eql(n.name, "tr") {
+                try rows.append(c)
+            } else if html.isIn(n.name, "thead tbody tfoot") {
+                var r = n.first_child
+                while r |row| {
+                    if md.page.doc.isElement(row, "tr") && rendered(md.page, row) {
+                        try rows.append(row)
+                    }
+                    r = md.page.doc.nextSibling(row)
+                }
+            } else if text.eql(n.name, "caption") {
+                var inl = text.Builder.init(md.alloc)
+                try mdInlineChildren(md, c, &mut inl)
+                let t = try oneLine(md.alloc, inl.bytes())
+                if t.len > 0 {
+                    var cap = text.Builder.init(md.alloc)
+                    try cap.append("**")
+                    try cap.append(t)
+                    try cap.append("**")
+                    try emitBlock(bl, cap.bytes())
+                }
+            }
+        }
+        cur = md.page.doc.nextSibling(c)
+    }
+    if rows.len() == 0 {
+        return
+    }
+    // The cells of every row.
+    var cells = List(List([]u8)).init(md.alloc)
+    var columns: usize = 0
+    for row in rows.items() {
+        var line = List([]u8).init(md.alloc)
+        var c = md.page.doc.firstChild(row)
+        while c |cell| {
+            if (md.page.doc.isElement(cell, "td") || md.page.doc.isElement(cell, "th")) && rendered(md.page, cell) {
+                var inl = text.Builder.init(md.alloc)
+                try mdInlineChildren(md, cell, &mut inl)
+                try line.append(try cellText(md.alloc, inl.bytes()))
+                var span: i64 = 1
+                if md.page.doc.attr(cell, "colspan") |v| {
+                    span = text.parseInt(text.trim(v)) catch 1
+                }
+                var k: i64 = 1
+                while k < span && k < 100 {
+                    try line.append("")
+                    k += 1
+                }
+            }
+            c = md.page.doc.nextSibling(cell)
+        }
+        if line.len() > columns {
+            columns = line.len()
+        }
+        try cells.append(line)
+    }
+    if columns == 0 {
+        return
+    }
+    var out = text.Builder.init(md.alloc)
+    for i, line in cells.items() {
+        if i > 0 {
+            try out.appendByte('\n')
+        }
+        try out.append("|")
+        for k in 0..columns {
+            try out.appendByte(' ')
+            if k < line.len() {
+                try out.append(line.items()[k])
+            }
+            try out.append(" |")
+        }
+        if i == 0 {
+            try out.append("\n|")
+            for k in 0..columns {
+                try out.append(" --- |")
+            }
+        }
+    }
+    try emitBlock(bl, out.bytes())
+}
+
+fn cellText(alloc: Allocator, s: []u8) AllocError![]u8 {
+    let t = try oneLine(alloc, s)
+    var out = text.Builder.init(alloc)
+    for c in t {
+        if c == '|' {
+            try out.append("\\|")
+        } else {
+            try out.appendByte(c)
+        }
+    }
+    return out.bytes()
+}
+
+// ---- inline content
+
+fn mdInlineChildren(md: *mut Md, el: NodeId, inl: *mut text.Builder) AllocError!void {
+    var cur = md.page.doc.firstChild(el)
+    while cur |c| {
+        let n = md.page.doc.node(c).*
+        if n.kind == Kind.Text {
+            if textVisible(md.page, c) {
+                try appendCollapsed(inl, n.data)
+            }
+        } else if n.kind == Kind.Element && rendered(md.page, c) {
+            if mdBlock(md, c) && !text.eql(n.name, "img") {
+                // A block inside inline content (or a table cell): its
+                // text, between spaces.
+                try appendCollapsed(inl, " ")
+                try mdInlineChildren(md, c, inl)
+                try appendCollapsed(inl, " ")
+            } else {
+                try mdInline(md, c, inl)
+            }
+        }
+        cur = md.page.doc.nextSibling(c)
+    }
+}
+
+fn mdInline(md: *mut Md, el: NodeId, inl: *mut text.Builder) AllocError!void {
+    let name = tagOf(md, el)
+    if text.eql(name, "br") {
+        try inl.appendByte('\n')
+        return
+    }
+    if text.eql(name, "img") {
+        let alt = text.trim(md.page.doc.attr(el, "alt") orelse (md.page.doc.attr(el, "title") orelse ""))
+        let src = md.page.doc.attr(el, "src") orelse ""
+        if alt.len == 0 && md.page.doc.attr(el, "alt") != null {
+            return
+        }
+        try inl.append("![")
+        try inl.append(try oneLine(md.alloc, alt))
+        try inl.append("](")
+        try inl.append(try absoluteHref(md.page, md.alloc, src))
+        try inl.appendByte(')')
+        return
+    }
+    if html.isIn(name, "input select textarea button script style template iframe video audio canvas svg object embed noscript") {
+        return
+    }
+    var sub = text.Builder.init(md.alloc)
+    try mdInlineChildren(md, el, &mut sub)
+    if text.eql(name, "a") {
+        if md.page.doc.attr(el, "href") |href| {
+            let h = text.trim(href)
+            if !text.startsWith(h, "javascript:") {
+                var close = text.Builder.init(md.alloc)
+                try close.append("](")
+                try close.append(try absoluteHref(md.page, md.alloc, h))
+                try close.appendByte(')')
+                if md.refs {
+                    let r = try refFor(md.page, el)
+                    try close.append(" [e")
+                    try close.appendUint(r as u64)
+                    try close.appendByte(']')
+                }
+                return wrapInline(inl, sub.bytes(), "[", close.bytes())
+            }
+        }
+        return appendRaw(inl, sub.bytes())
+    }
+    if html.isIn(name, "em i cite dfn var") {
+        return wrapInline(inl, sub.bytes(), "*", "*")
+    }
+    if html.isIn(name, "strong b") {
+        return wrapInline(inl, sub.bytes(), "**", "**")
+    }
+    if html.isIn(name, "del s strike") {
+        return wrapInline(inl, sub.bytes(), "~~", "~~")
+    }
+    if html.isIn(name, "code kbd samp tt") {
+        if text.indexOf(sub.bytes(), "`") != null {
+            return wrapInline(inl, sub.bytes(), "`` ", " ``")
+        }
+        return wrapInline(inl, sub.bytes(), "`", "`")
+    }
+    try appendRaw(inl, sub.bytes())
+}
+
+/// Appends already collapsed inline text, without doubling a space.
+fn appendRaw(inl: *mut text.Builder, s: []u8) AllocError!void {
+    var t = s
+    if t.len > 0 && t[0] == ' ' {
+        try appendCollapsed(inl, " ")
+        t = t[1..]
+    }
+    try inl.append(t)
+}
+
+/// Appends `open` + `s` + `close`, with the spaces at the ends of `s`
+/// moved outside (`**bold** text`, not `**bold **text`). Nothing for
+/// empty text (but its space).
+fn wrapInline(inl: *mut text.Builder, s: []u8, open: []u8, close: []u8) AllocError!void {
+    let lead = s.len > 0 && s[0] == ' '
+    let trail = s.len > 0 && s[s.len - 1] == ' '
+    let t = text.trim(s)
+    if lead || (t.len == 0 && trail) {
+        try appendCollapsed(inl, " ")
+    }
+    if t.len == 0 {
+        return
+    }
+    try inl.append(open)
+    try inl.append(t)
+    try inl.append(close)
+    if trail {
+        try inl.appendByte(' ')
+    }
+}
