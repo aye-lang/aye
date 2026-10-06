@@ -3,7 +3,12 @@
 //! The generated C includes only freestanding headers (stdint/stddef/stdbool)
 //! so user `extern fn` declarations never clash with libc headers. The
 //! runtime reaches libc through asm-labelled aliases (`ore_rt_printf` ->
-//! `printf`). Overflow, bounds and cast checks are emitted as calls to small
+//! `printf`). An `extern fn` is declared from its Ore signature, and an
+//! `extern struct` is a C struct with its fields in declaration order (as
+//! every struct is), so the C layout is what the Ore declaration says; it
+//! must match the library's. A function type is a `typedef` of a C function
+//! pointer, and a `pub extern fn` is defined under its own name, not
+//! `static`. Overflow, bounds and cast checks are emitted as calls to small
 //! inline helpers; `ORE_CHECKS` turns their checks off in `fast` mode.
 //! `ORE_TRACE` (debug mode) keeps the error return trace that is printed when
 //! `main` returns an error, and turns on the leak and double-free tracking of
@@ -522,6 +527,14 @@ fn mangle(t: &Type) -> String {
         Type::ErrorUnion(_, t) => format!("U_{}", mangle(t)),
         Type::Dyn(i) => format!("D_{}", c_name(i)),
         Type::Builtin(b) => b.c_name().into(),
+        // Each part with its length first, so that the name is unambiguous.
+        Type::Fn(params, ret) => {
+            let parts: String = params.iter().chain([&**ret]).map(|t| {
+                let m = mangle(t);
+                format!("{}{m}", m.len())
+            }).collect();
+            format!("F{}_{parts}", params.len())
+        }
         Type::Param(..) | Type::Error => unreachable!(),
     }
 }
@@ -543,7 +556,8 @@ fn c_type(t: &Type) -> String {
         | Type::Optional(_)
         | Type::ErrorUnion(..)
         | Type::Dyn(_)
-        | Type::Builtin(_) => format!("ore_{}", mangle(t)),
+        | Type::Builtin(_)
+        | Type::Fn(..) => format!("ore_{}", mangle(t)),
         Type::Param(..) | Type::Error => unreachable!(),
     }
 }
@@ -619,20 +633,24 @@ impl Gen {
         // Modules that declare the same C function share one declaration.
         let mut declared = HashSet::new();
         for e in &p.externs {
-            let params: Vec<String> = e.params.iter().map(c_type).collect();
+            let mut params: Vec<String> = e.params.iter().map(c_type).collect();
+            if e.variadic {
+                params.push("...".to_string());
+            }
             let params = if params.is_empty() { "void".to_string() } else { params.join(", ") };
             let decl = format!("extern {} {}({params});", c_type(&e.ret), extern_symbol(&e.name));
             if declared.insert(decl.clone()) {
                 self.line(0, &decl);
             }
         }
-        for g in &p.globals {
-            let init = const_init(p, &g.value, &g.ty);
-            let _ = writeln!(self.out, "static __attribute__((unused)) {} {} = {init};", c_type(&g.ty), global_name(&g.name));
-        }
+        // Prototypes come before the globals, whose values can be functions.
         for f in &p.funcs {
             let sig = self.signature(f);
             let _ = writeln!(self.out, "{sig};");
+        }
+        for g in &p.globals {
+            let init = const_init(p, &g.value, &g.ty);
+            let _ = writeln!(self.out, "static __attribute__((unused)) {} {} = {init};", c_type(&g.ty), global_name(&g.name));
         }
         for (i, s) in &p.vtables {
             self.vtable(p, i, s);
@@ -719,6 +737,11 @@ impl Gen {
             for l in &f.locals {
                 add(&l.ty, &mut all);
             }
+            let mut sized = Vec::new();
+            sizeof_types(&f.body, &mut sized);
+            for t in &sized {
+                add(t, &mut all);
+            }
         }
         for m in p.ifaces.iter().flat_map(|i| &i.methods) {
             for t in m.params.iter().chain(std::iter::once(&m.ret)) {
@@ -732,6 +755,18 @@ impl Gen {
         for t in &composite {
             let n = c_type(t);
             let _ = writeln!(self.out, "typedef struct {n} {n};");
+        }
+        // Function pointer types, after the types they name (`all` lists a
+        // type after its parts) and before the structs that hold them.
+        let mut fns = HashSet::new();
+        for t in all.iter().filter(|t| matches!(t, Type::Fn(..))) {
+            let Type::Fn(params, ret) = t else { unreachable!() };
+            let n = c_type(t);
+            if fns.insert(n.clone()) {
+                let ps: Vec<String> = params.iter().map(c_type).collect();
+                let ps = if ps.is_empty() { "void".to_string() } else { ps.join(", ") };
+                let _ = writeln!(self.out, "typedef {} (*{n})({ps});", c_type(ret));
+            }
         }
         // Definitions: a type's by-value components must be complete first.
         let mut done = HashSet::new();
@@ -817,6 +852,9 @@ impl Gen {
         let params: Vec<String> =
             f.params.iter().map(|&id| format!("{} {}", c_type(&f.locals[id].ty), Self::local_name(f, id))).collect();
         let params = if params.is_empty() { "void".to_string() } else { params.join(", ") };
+        if f.export {
+            return format!("{} {}({params})", c_type(&f.ret), extern_symbol(&f.name));
+        }
         format!("static {} {}({params})", c_type(&f.ret), fn_name(&f.name))
     }
 
@@ -913,6 +951,8 @@ impl Gen {
             Operand::Float(v, ft) => c_float_of(*v, *ft),
             Operand::Bool(b) => b.to_string(),
             Operand::Str(s) => format!("((ore_S_u8){{(uint8_t*){}, {}}})", c_str(s), s.len()),
+            Operand::Fn { name, is_extern: true } => extern_symbol(name).to_string(),
+            Operand::Fn { name, is_extern: false } => fn_name(name),
         }
     }
 
@@ -927,9 +967,10 @@ impl Gen {
                 Proj::Index { index, len: Len::Array(n), span } => {
                     s = format!("{s}.a[ore_idx({}, {n}, {})]", self.operand(f, index), line_col(*span));
                 }
-                Proj::Index { index, len: Len::Slice | Len::Unchecked, span } => {
+                Proj::Index { index, len: Len::Slice, span } => {
                     s = format!("{s}.ptr[ore_idx({}, {s}.len, {})]", self.operand(f, index), line_col(*span));
                 }
+                Proj::Index { index, len: Len::Unchecked, .. } => s = format!("{s}[{}]", self.operand(f, index)),
                 Proj::Deref => s = format!("(*{s})"),
             }
         }
@@ -998,6 +1039,17 @@ impl Gen {
                 let name = if *is_extern { extern_symbol(name).to_string() } else { fn_name(name) };
                 format!("{name}({})", args.join(", "))
             }
+            Rvalue::CallValue { callee, args } => {
+                let args: Vec<String> = args.iter().map(|a| self.operand(f, a)).collect();
+                format!("{}({})", self.operand(f, callee), args.join(", "))
+            }
+            Rvalue::SizeOf(t) => format!("((size_t)sizeof({}))", c_type(t)),
+            // A struct is zeroed by bytes, so its padding is zero too.
+            Rvalue::Zeroed(t) if is_composite(t) => {
+                format!("({{ {} z_; __builtin_memset(&z_, 0, sizeof z_); z_; }})", c_type(t))
+            }
+            Rvalue::Zeroed(t) => format!("(({})0)", c_type(t)),
+            Rvalue::PtrCast { val, ty } => format!("(({}){})", c_type(ty), self.operand(f, val)),
             Rvalue::DynCall { recv, method, args } => {
                 let r = self.operand(f, recv);
                 let args: String = args.iter().map(|a| format!(", {}", self.operand(f, a))).collect();
@@ -1177,6 +1229,8 @@ fn const_init(p: &Program, v: &ConstVal, ty: &Type) -> String {
         (ConstVal::Str(s), _) => format!("{{(uint8_t*){}, {}}}", c_str(s), s.len()),
         (ConstVal::EmptySlice, _) => "{0, 0}".to_string(),
         (ConstVal::Error(e), _) => e.to_string(),
+        (ConstVal::Fn(name, true), _) => extern_symbol(name).to_string(),
+        (ConstVal::Fn(name, false), _) => fn_name(name),
         (ConstVal::Null, t) if is_ptr_optional(t) => "0".to_string(),
         (ConstVal::Null, _) => "{0}".to_string(),
         (ConstVal::Some(x), Type::Optional(inner)) => format!("{{true, {}}}", const_init(p, x, inner)),
@@ -1197,6 +1251,20 @@ fn const_init(p: &Program, v: &ConstVal, ty: &Type) -> String {
     }
 }
 
+/// The types of `@sizeOf` in `b`: no value of them may exist.
+fn sizeof_types(b: &Block, out: &mut Vec<Type>) {
+    for s in b {
+        match &s.kind {
+            StmtKind::Assign(_, Rvalue::SizeOf(t)) | StmtKind::Eval(Rvalue::SizeOf(t)) => out.push(t.clone()),
+            StmtKind::If { then: a, els: b, .. } | StmtKind::Loop { body: a, cont: b } => {
+                sizeof_types(a, out);
+                sizeof_types(b, out);
+            }
+            _ => {}
+        }
+    }
+}
+
 fn collect_type(t: &Type, seen: &mut HashSet<Type>, all: &mut Vec<Type>) {
     if !seen.insert(t.clone()) {
         return;
@@ -1208,6 +1276,11 @@ fn collect_type(t: &Type, seen: &mut HashSet<Type>, all: &mut Vec<Type>) {
         | Type::Ptr(e, _)
         | Type::Optional(e)
         | Type::ErrorUnion(_, e) => collect_type(e, seen, all),
+        Type::Fn(params, ret) => {
+            for t in params.iter().chain([&**ret]) {
+                collect_type(t, seen, all);
+            }
+        }
         _ => {}
     }
     all.push(t.clone());

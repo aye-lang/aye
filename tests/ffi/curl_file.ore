@@ -1,0 +1,70 @@
+// Acceptance (M7): fetch a `file://` URL through libcurl into a buffer,
+// with an Ore write callback. `curl_easy_setopt` is variadic.
+@link("libcurl")
+
+extern struct Curl {}
+
+extern fn curl_easy_init() ?*mut Curl
+extern fn curl_easy_setopt(h: *mut Curl, option: i32, ...) i32
+extern fn curl_easy_perform(h: *mut Curl) i32
+extern fn curl_easy_cleanup(h: *mut Curl)
+extern fn curl_easy_strerror(code: i32) [*]u8
+extern fn getcwd(buf: [*]u8, size: usize) ?[*]u8
+extern fn snprintf(buf: [*]u8, size: usize, format: [*]u8, ...) i32
+extern fn strlen(s: [*]u8) usize
+
+let CURLOPT_WRITEDATA: i32 = 10001
+let CURLOPT_URL: i32 = 10002
+let CURLOPT_WRITEFUNCTION: i32 = 20011
+
+struct Buffer {
+    bytes: [256]u8
+    len: usize
+    calls: i64
+}
+
+// libcurl calls this with each piece of the body; `user` is the
+// `CURLOPT_WRITEDATA` pointer. Returning less than `size * n` stops the
+// transfer.
+fn onData(data: [*]u8, size: usize, n: usize, user: [*]u8) usize {
+    let buf = @ptrCast(*mut Buffer, user)
+    let total = size * n
+    if buf.len + total > buf.bytes.len {
+        return 0
+    }
+    for i in 0..total {
+        buf.bytes[buf.len + i] = data[i]
+    }
+    buf.len += total
+    buf.calls += 1
+    return total
+}
+
+fn text(p: [*]u8) []u8 {
+    return p[0..strlen(p)]
+}
+
+pub fn main() {
+    var dir = @zeroed([1024]u8)
+    var url = @zeroed([1200]u8)
+    if getcwd(dir[..].ptr, dir.len) |cwd| {
+        snprintf(url[..].ptr, url.len, "file://%s/tests/ffi/curl_file.txt".ptr, cwd)
+    }
+    let h = curl_easy_init()
+    if h |curl| {
+        var buf = Buffer { bytes: @zeroed([256]u8), len: 0, calls: 0 }
+        curl_easy_setopt(curl, CURLOPT_URL, url[..].ptr)
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, onData)
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, @ptrCast([*]u8, &mut buf))
+        let code = curl_easy_perform(curl)
+        if code != 0 {
+            @println(text(curl_easy_strerror(code)))
+        }
+        curl_easy_cleanup(curl)
+        @println(buf.calls > 0)
+        @println(buf.len)
+        @print(buf.bytes[0..buf.len])
+    } else {
+        @println("curl_easy_init failed")
+    }
+}

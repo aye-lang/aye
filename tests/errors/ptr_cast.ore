@@ -1,0 +1,12 @@
+pub fn main() {
+    var x: i32 = 1
+    let a = @ptrCast([*]u8, x)
+    let b = @ptrCast(i64, &mut x)
+    let p: *i32 = &x
+    let c = @ptrCast(*mut i32, p)
+    let o: ?[*]u8 = null
+    let d = @ptrCast([*]u8, o)
+    let e = @ptrCast([*]u8)
+    let f = @ptrCast(x, &mut x)
+    let g = @ptrCast(?[*]u32, o)
+}

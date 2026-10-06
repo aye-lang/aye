@@ -278,7 +278,7 @@ impl Loader<'_> {
                             AstItem::ErrorSet(e) => (&e.name, e.span, e.is_pub, Kind::Other),
                             AstItem::Interface(i) => (&i.name, i.span, i.is_pub, Kind::Other),
                             AstItem::Global(g) => (&g.name, g.span, g.is_pub, Kind::Struct),
-                            AstItem::Test(_) => continue,
+                            AstItem::Test(_) | AstItem::Link(_) => continue,
                         };
                         module.items.entry(name.clone()).or_insert(Decl { is_pub, kind, span });
                     }
@@ -587,6 +587,7 @@ impl Loader<'_> {
                 }
             }
             AstItem::Test(t) => self.func(&mut t.func),
+            AstItem::Link(_) => {}
         }
     }
 
@@ -648,6 +649,14 @@ impl Loader<'_> {
             | TypeExprKind::CPtr(e)
             | TypeExprKind::Ptr(e, _)
             | TypeExprKind::Optional(e) => self.ty(e),
+            TypeExprKind::Fn(params, ret) => {
+                for p in params {
+                    self.ty(p);
+                }
+                if let Some(r) = ret {
+                    self.ty(r);
+                }
+            }
         }
     }
 
@@ -739,6 +748,10 @@ impl Loader<'_> {
                     Ok(Res::Unresolved) => {}
                     Err(err) => self.report(err),
                 }
+                self.args(args);
+            }
+            ExprKind::CallExpr { callee, args } => {
+                self.expr(callee);
                 self.args(args);
             }
             ExprKind::MethodCall { base, name, args } => {
@@ -921,6 +934,7 @@ impl Loader<'_> {
                         AstItem::ErrorSet(x) => x.name = canonical(&path, &x.name),
                         AstItem::Interface(x) => x.name = canonical(&path, &x.name),
                         AstItem::Global(x) => x.name = canonical(&path, &x.name),
+                        AstItem::Link(_) => {}
                     }
                     items.push(item);
                 }

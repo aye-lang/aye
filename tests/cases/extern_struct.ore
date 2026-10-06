@@ -1,0 +1,63 @@
+// `extern struct` (M7): C layout, passed to and returned from C by value
+// and by pointer, with `@sizeOf`, `@zeroed` and `@ptrCast`.
+
+extern struct DivT {
+    quot: i32
+    rem: i32
+}
+
+extern struct InAddr {
+    addr: u32
+}
+
+extern struct Packet {
+    tag: u8
+    len: u32
+    data: [4]u8
+    inner: DivT
+    next: ?*Packet
+}
+
+// libc: `div` returns a struct by value, `inet_ntoa` takes one.
+extern fn div(a: i32, b: i32) DivT
+extern fn inet_ntoa(a: InAddr) [*]u8
+extern fn strlen(s: [*]u8) usize
+extern fn memcpy(dst: [*]u8, src: [*]u8, n: usize) [*]u8
+extern fn memcmp(a: [*]u8, b: [*]u8, n: usize) i32
+
+fn text(p: [*]u8) []u8 {
+    return p[0..strlen(p)]
+}
+
+pub fn main() {
+    let d = div(17, 5)
+    @println(d.quot)
+    @println(d.rem)
+    // 127.0.0.1 in network byte order on a little-endian machine.
+    @println(text(inet_ntoa(InAddr { addr: 0x0100007f })))
+
+    @println(@sizeOf(DivT))
+    @println(@sizeOf(InAddr))
+    @println(@sizeOf(Packet))
+    @println(@sizeOf([3]u16))
+    @println(@sizeOf(?*Packet))
+
+    var p = @zeroed(Packet)
+    @println(p.len)
+    @println(p.next == null)
+    p.tag = 7
+    p.len = 3
+    p.data[2] = 42
+    p.inner = d
+    var q = @zeroed(Packet)
+    let n = @sizeOf(Packet)
+    memcpy(@ptrCast([*]u8, &mut q), @ptrCast([*]u8, &p), n)
+    @println(memcmp(@ptrCast([*]u8, &q), @ptrCast([*]u8, &p), n) == 0)
+    @println(q.tag)
+    @println(q.data[2])
+    @println(q.inner.rem)
+    p.next = &q
+    if p.next |next| {
+        @println(next.len)
+    }
+}

@@ -1,0 +1,61 @@
+// Acceptance (M7): libc's `qsort` sorts with Ore comparators passed as
+// function values, and the variadic `snprintf` formats a float.
+
+extern fn qsort(base: [*]i32, n: usize, size: usize, cmp: fn([*]i32, [*]i32) i32)
+extern fn snprintf(buf: [*]u8, size: usize, format: [*]u8, ...) i32
+
+fn ascending(a: [*]i32, b: [*]i32) i32 {
+    if a[0] < b[0] {
+        return -1
+    }
+    if a[0] > b[0] {
+        return 1
+    }
+    return 0
+}
+
+fn descending(a: [*]i32, b: [*]i32) i32 {
+    return ascending(b, a)
+}
+
+fn show(xs: []i32) {
+    for i, x in xs {
+        if i > 0 {
+            @print(" ")
+        }
+        @print(x)
+    }
+    @println()
+}
+
+pub fn main() {
+    var xs = [7]i32{42, -7, 19, 0, 3, 19, -100}
+    let s = xs[..]
+    qsort(s.ptr, s.len, @sizeOf(i32), ascending)
+    show(s)
+    let order: fn([*]i32, [*]i32) i32 = descending
+    qsort(s.ptr, s.len, @sizeOf(i32), order)
+    show(s)
+
+    // An `f32` is promoted to `double`, as C does for `...`; an untyped
+    // integer literal is a C `int`.
+    var buf = @zeroed([64]u8)
+    let ratio: f32 = 2.5
+    let n = snprintf(
+        buf[..].ptr,
+        buf.len,
+        "pi is %.4f, ratio %.1f, %d items, %s, %lld".ptr,
+        3.14159265,
+        ratio,
+        7,
+        "done".ptr,
+        -9000000000 as i64,
+    )
+    @println(buf[0..n as usize])
+    // The result is the length the whole text needs; only `size - 1`
+    // bytes and a NUL are written.
+    let m = snprintf(buf[..].ptr, 6, "%s".ptr, "truncated".ptr)
+    @println(m)
+    @println(buf[0..5])
+    @println(buf[5])
+}

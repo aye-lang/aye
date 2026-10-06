@@ -188,9 +188,9 @@ impl Parser {
     }
 
     /// Skip a failed declaration: up to the next line that starts with a
-    /// declaration keyword, or end of file. `let` and `var` start a
-    /// declaration only in the first column (else they are statements of a
-    /// function body).
+    /// declaration keyword, or end of file. `let`, `var` and a builtin
+    /// (`@link`) start a declaration only in the first column (else they are
+    /// statements of a function body).
     fn sync_item(&mut self) {
         loop {
             match self.peek() {
@@ -211,6 +211,7 @@ impl Parser {
                                 | Kw::Test
                                 | Kw::Import
                         ),
+                        Tok::Builtin(_) => self.span().col == 1,
                         _ => false,
                     };
                     if decl {
@@ -255,13 +256,12 @@ impl Parser {
                 self.bump();
                 match self.peek() {
                     Tok::Kw(Kw::Fn) => Ok(Item::Fn(self.fn_decl(is_pub, true)?)),
-                    Tok::Kw(Kw::Struct) => {
-                        Err(Error::new(E0007, self.span(), "`extern struct` is not yet supported"))
-                    }
-                    _ => Err(self.unexpected("`fn` after `extern`")),
+                    Tok::Kw(Kw::Struct) => Ok(Item::Struct(self.struct_decl(is_pub, true)?)),
+                    _ => Err(self.unexpected("`fn` or `struct` after `extern`")),
                 }
             }
-            Tok::Kw(Kw::Struct) => Ok(Item::Struct(self.struct_decl(is_pub)?)),
+            Tok::Builtin(n) => Ok(Item::Link(self.link_decl(&n, is_pub)?)),
+            Tok::Kw(Kw::Struct) => Ok(Item::Struct(self.struct_decl(is_pub, false)?)),
             Tok::Kw(Kw::Enum) => Ok(Item::Enum(self.enum_decl(is_pub)?)),
             Tok::Kw(Kw::Error) => Ok(Item::ErrorSet(self.error_decl(is_pub)?)),
             Tok::Kw(Kw::Interface) => Ok(Item::Interface(self.interface_decl(is_pub)?)),
@@ -291,6 +291,31 @@ impl Parser {
         Ok(GlobalDecl { name, span, is_pub, mutable, kw_span, ty, init })
     }
 
+    /// `@link("name")`, the only builtin at the top level.
+    fn link_decl(&mut self, name: &str, is_pub: bool) -> Result<LinkDecl> {
+        let span = self.span();
+        if name != "link" {
+            return Err(Error::new(E0094, span, format!(
+                "only `@link(\"name\")` can be used at the top level of a file; `@{name}` belongs in a function"
+            )));
+        }
+        if is_pub {
+            return Err(Error::new(E0094, span, "`@link` cannot be `pub`"));
+        }
+        self.bump();
+        self.expect(&Tok::LParen)?;
+        let at = self.span();
+        let Tok::Str(bytes) = self.peek().clone() else {
+            return Err(Error::new(E0094, at, "`@link` takes a string literal: `@link(\"name\")`"));
+        };
+        if bytes.is_empty() {
+            return Err(Error::new(E0094, at, "`@link` needs a library name: `@link(\"curl\")`"));
+        }
+        self.bump();
+        self.expect(&Tok::RParen)?;
+        Ok(LinkDecl { name: String::from_utf8_lossy(&bytes).into_owned(), span })
+    }
+
     /// `import a.b.c`
     fn import(&mut self) -> Result<Import> {
         let span = self.expect(&Tok::Kw(Kw::Import))?;
@@ -311,11 +336,19 @@ impl Parser {
         Ok((name, span))
     }
 
+    /// A function. An `extern fn` without a body declares a C function; with
+    /// a body it is exported to C and must be `pub`.
     fn fn_decl(&mut self, is_pub: bool, is_extern: bool) -> Result<FnDecl> {
         let mut f = self.fn_sig(is_pub, is_extern)?;
         if is_extern {
             if self.at(&Tok::LBrace) {
-                return Err(Error::new(E0011, self.span(), "`extern fn` cannot have a body"));
+                if !is_pub {
+                    return Err(Error::new(E0011, self.span(), "an `extern fn` with a body is exported to C and must be `pub extern fn` (remove the body to declare a C function)"));
+                }
+                if let Some(span) = f.variadic {
+                    return Err(Error::new(E0091, span, "only an `extern fn` without a body (a C function) can be variadic"));
+                }
+                f.body = Some(self.block()?);
             }
         } else {
             if !self.at(&Tok::LBrace) {
@@ -332,7 +365,22 @@ impl Parser {
         let (name, span) = self.ident()?;
         self.expect(&Tok::LParen)?;
         let mut params = Vec::new();
+        let mut variadic = None;
         while !self.at(&Tok::RParen) {
+            if self.at(&Tok::Ellipsis) {
+                let span = self.bump().span;
+                if !is_extern {
+                    return Err(Error::new(E0091, span, "only an `extern fn` without a body (a C function) can be variadic"));
+                }
+                if !self.at(&Tok::RParen) {
+                    return Err(Error::new(E0091, span, "`...` must be the last parameter"));
+                }
+                if params.is_empty() {
+                    return Err(Error::new(E0091, span, "a variadic C function needs a parameter before `...`"));
+                }
+                variadic = Some(span);
+                break;
+            }
             let comptime = self.eat(&Tok::Kw(Kw::Comptime));
             let (pname, pspan) = self.ident()?;
             self.expect(&Tok::Colon)?;
@@ -359,20 +407,20 @@ impl Parser {
                 }
             }
         }
-        Ok(FnDecl { name, span, is_pub, is_extern, params, ret, bounds, body: None })
+        Ok(FnDecl { name, span, is_pub, is_extern, params, variadic, ret, bounds, body: None })
     }
 
     /// `struct Name { fields and methods }`: fields are separated by `,` or
     /// newlines; a method (`fn` or `pub fn`) ends with its block.
-    fn struct_decl(&mut self, is_pub: bool) -> Result<StructDecl> {
+    fn struct_decl(&mut self, is_pub: bool, is_extern: bool) -> Result<StructDecl> {
         self.expect(&Tok::Kw(Kw::Struct))?;
         let (name, span) = self.ident()?;
-        self.struct_body(name, span, is_pub)
+        self.struct_body(name, span, is_pub, is_extern)
     }
 
     /// `{ fields and methods }` of a struct declaration or of an anonymous
     /// `struct { ... }`.
-    fn struct_body(&mut self, name: String, span: Span, is_pub: bool) -> Result<StructDecl> {
+    fn struct_body(&mut self, name: String, span: Span, is_pub: bool, is_extern: bool) -> Result<StructDecl> {
         self.expect(&Tok::LBrace)?;
         let (mut fields, mut methods) = (Vec::new(), Vec::new());
         loop {
@@ -400,7 +448,7 @@ impl Parser {
                 _ => return Err(self.unexpected("`,`, newline or `}` after struct field")),
             }
         }
-        Ok(StructDecl { name, span, is_pub, fields, methods })
+        Ok(StructDecl { name, span, is_pub, is_extern, fields, methods })
     }
 
     /// `interface Name { fn m(self: *Self, ...) T ... }`, one method
@@ -446,7 +494,8 @@ impl Parser {
         let ret = Some(TypeExpr { kind: TypeExprKind::ErrorUnion(None, Box::new(void)), span });
         let name = format!("test#{}", self.tests);
         self.tests += 1;
-        let func = FnDecl { name, span, is_pub: false, is_extern: false, params: vec![], ret, bounds: vec![], body };
+        let func =
+            FnDecl { name, span, is_pub: false, is_extern: false, params: vec![], variadic: None, ret, bounds: vec![], body };
         Ok(TestDecl { name: String::from_utf8_lossy(&bytes).into_owned(), func })
     }
 
@@ -605,6 +654,24 @@ impl Parser {
             Tok::Kw(Kw::Dyn) => {
                 self.bump();
                 TypeExprKind::Dyn(self.path()?.0)
+            }
+            // `fn(A, B) R`: a result type follows when the next token can
+            // start a type.
+            Tok::Kw(Kw::Fn) => {
+                self.bump();
+                self.expect(&Tok::LParen)?;
+                let mut params = Vec::new();
+                while !self.at(&Tok::RParen) {
+                    params.push(self.type_expr()?);
+                    if !self.eat(&Tok::Comma) {
+                        break;
+                    }
+                }
+                self.expect(&Tok::RParen)?;
+                let starts_type =
+                    matches!(self.peek(), Tok::Ident(_) | Tok::LBracket | Tok::Star | Tok::Question | Tok::Kw(Kw::Dyn | Kw::Fn));
+                let ret = if starts_type { Some(Box::new(self.type_expr()?)) } else { None };
+                TypeExprKind::Fn(params, ret)
             }
             Tok::Kw(k) if is_unsupported_kw(k) => return Err(not_supported(k, span)),
             Tok::Kw(Kw::Struct) => {
@@ -992,6 +1059,11 @@ impl Parser {
                     let ty = expr_to_type(&e)?;
                     e = Expr { kind: ExprKind::StructLit { ty, fields: self.field_inits()? }, span: e.span };
                 }
+                // A call of a value that is not a name: `f()(x)`, `ops[i](x)`.
+                Tok::LParen => {
+                    let args = self.args()?;
+                    e = Expr { span: e.span, kind: ExprKind::CallExpr { callee: Box::new(e), args } };
+                }
                 Tok::LBracket => {
                     let span = self.bump().span;
                     let saved = self.enter_nested();
@@ -1032,9 +1104,10 @@ impl Parser {
     }
 
     /// A call argument: an expression, or a type that does not read as an
-    /// expression (`*T`, `?T`, `dyn I`), for a `comptime` parameter.
+    /// expression (`*T`, `?T`, `dyn I`, `fn(A) R`), for a `comptime`
+    /// parameter or a builtin that takes a type.
     fn arg(&mut self) -> Result<Expr> {
-        if matches!(self.peek(), Tok::Star | Tok::Question | Tok::Kw(Kw::Dyn)) {
+        if matches!(self.peek(), Tok::Star | Tok::Question | Tok::Kw(Kw::Dyn | Kw::Fn)) {
             let span = self.span();
             return Ok(Expr { kind: ExprKind::Type(self.type_expr()?), span });
         }
@@ -1135,7 +1208,7 @@ impl Parser {
             }
             Tok::Kw(Kw::Struct) => {
                 self.bump();
-                ExprKind::StructType(self.struct_body(String::new(), span, false)?)
+                ExprKind::StructType(self.struct_body(String::new(), span, false, false)?)
             }
             Tok::Kw(k) if is_unsupported_kw(k) => return Err(not_supported(k, span)),
             _ => return Err(self.unexpected("expression")),

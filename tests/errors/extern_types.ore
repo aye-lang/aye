@@ -1,0 +1,22 @@
+struct Plain { x: i32 }
+enum E { A, B }
+
+extern struct Bad {
+    name: []u8
+    plain: Plain
+    e: E
+    ok: [4]u8
+    opt: ?i32
+}
+
+extern fn takesArray(a: [4]u8)
+extern fn takesPlain(p: Plain) i32
+extern fn returnsSlice() []u8
+extern fn takesCallback(f: fn([]u8))
+
+pub extern fn exported(s: []u8) i32 {
+    return 0
+}
+
+pub fn main() {
+}

@@ -16,7 +16,8 @@
 //!   the integer;
 //! - reads globals in place: a global is a local slot that names it;
 //! - lowers `alloc.create(v)` and `alloc.alloc(v, n)` to an allocation, a
-//!   null test and the error union.
+//!   null test and the error union;
+//! - indexes a C pointer `[*]T` without a check.
 
 use crate::ast::{BinOp, UnOp};
 use crate::diag::Span;
@@ -50,6 +51,8 @@ pub struct Func {
     pub locals: Vec<Local>,
     pub body: Block,
     pub is_main: bool,
+    /// Exported to C under its own name (`pub extern fn`).
+    pub export: bool,
 }
 
 /// A function-wide local slot: a user variable (`name` set) or a temporary.
@@ -98,6 +101,8 @@ pub enum Operand {
     Bool(bool),
     /// String literal, type `[]u8`.
     Str(Vec<u8>),
+    /// A top-level function as a value; `is_extern` for a C name.
+    Fn { name: String, is_extern: bool },
 }
 
 /// A memory location: a local followed by field/index projections.
@@ -117,10 +122,10 @@ pub enum Proj {
     Deref,
 }
 
-/// Is `t` a `?*T`? It is represented as a C pointer that may be null;
-/// every other `?T` is a `{ has, val }` struct.
+/// Is `t` an optional pointer, `?*T`, `?[*]T` or `?fn(...)`? It is a C
+/// pointer that may be null; every other `?T` is a `{ has, val }` struct.
 pub fn is_ptr_optional(t: &Type) -> bool {
-    matches!(t, Type::Optional(inner) if matches!(**inner, Type::Ptr(..)))
+    matches!(t, Type::Optional(inner) if matches!(**inner, Type::Ptr(..) | Type::CPtr(_) | Type::Fn(..)))
 }
 
 /// Length of the indexed/sliced sequence.
@@ -130,8 +135,8 @@ pub enum Len {
     Array(u64),
     /// Slice `[]T`, length read at runtime.
     Slice,
-    /// C pointer `[*]T`: no length to check against (slicing only, with
-    /// both bounds).
+    /// C pointer `[*]T`: no length to check against (slicing needs both
+    /// bounds).
     Unchecked,
 }
 
@@ -149,6 +154,14 @@ pub enum Rvalue {
     InRanges { val: Operand, ranges: Vec<(i128, i128)>, ty: IntTy },
     Cast { val: Operand, from: Type, to: Type, span: Span },
     Call { name: String, is_extern: bool, args: Vec<Operand> },
+    /// Call the function value `callee`.
+    CallValue { callee: Operand, args: Vec<Operand> },
+    /// The size of `ty` in bytes, a `usize`.
+    SizeOf(Type),
+    /// The all-zero value of `ty`.
+    Zeroed(Type),
+    /// The pointer `val` as the pointer type `ty`.
+    PtrCast { val: Operand, ty: Type },
     /// Call method `method` through the vtable of the `dyn` value `recv`.
     DynCall { recv: Operand, method: String, args: Vec<Operand> },
     /// The pointer `ptr` to struct `strukt` as a `dyn iface`.
@@ -245,6 +258,7 @@ fn is_terminator(s: Option<&Stmt>) -> bool {
 fn has_call(e: &TExpr) -> bool {
     match &e.kind {
         TExprKind::Call { .. }
+        | TExprKind::CallValue { .. }
         | TExprKind::Print { .. }
         | TExprKind::Log { .. }
         | TExprKind::Match { .. }
@@ -262,7 +276,10 @@ fn has_call(e: &TExpr) -> bool {
         | TExprKind::Global(_)
         | TExprKind::Null
         | TExprKind::EmptySlice
-        | TExprKind::ErrorValue(_) => false,
+        | TExprKind::ErrorValue(_)
+        | TExprKind::FnRef { .. }
+        | TExprKind::SizeOf(_)
+        | TExprKind::Zeroed => false,
         TExprKind::Binary { lhs, rhs, .. } | TExprKind::Index { base: lhs, index: rhs } => has_call(lhs) || has_call(rhs),
         TExprKind::Unary { expr, .. }
         | TExprKind::Cast(expr)
@@ -276,6 +293,7 @@ fn has_call(e: &TExpr) -> bool {
         | TExprKind::Deref(expr)
         | TExprKind::OkWrap(expr)
         | TExprKind::ErrWrap(expr)
+        | TExprKind::PtrCast(expr)
         | TExprKind::ToDyn { ptr: expr, .. } => has_call(expr),
         TExprKind::Slice { base, lo, hi } => {
             has_call(base) || lo.as_deref().is_some_and(has_call) || hi.as_deref().is_some_and(has_call)
@@ -316,6 +334,7 @@ impl<'a> Lower<'a> {
             locals: l.locals,
             body,
             is_main: f.is_main,
+            export: f.export,
         }
     }
 
@@ -794,6 +813,7 @@ impl<'a> Lower<'a> {
             TExprKind::Index { base, index } => {
                 let len = match &base.ty {
                     Type::Array(_, n) => Len::Array(*n),
+                    Type::CPtr(_) => Len::Unchecked,
                     _ => Len::Slice,
                 };
                 let mut p = self.place(base, out);
@@ -853,6 +873,15 @@ impl<'a> Lower<'a> {
                 let args = args.iter().map(|a| self.operand(a, out)).collect();
                 Rvalue::Call { name: name.clone(), is_extern: *is_extern, args }
             }
+            TExprKind::FnRef { name, is_extern } => Rvalue::Use(Operand::Fn { name: name.clone(), is_extern: *is_extern }),
+            TExprKind::CallValue { callee, args } => {
+                let callee = self.operand(callee, out);
+                let args = args.iter().map(|a| self.operand(a, out)).collect();
+                Rvalue::CallValue { callee, args }
+            }
+            TExprKind::SizeOf(t) => Rvalue::SizeOf(t.clone()),
+            TExprKind::Zeroed => Rvalue::Zeroed(e.ty.clone()),
+            TExprKind::PtrCast(x) => Rvalue::PtrCast { val: self.operand(x, out), ty: e.ty.clone() },
             TExprKind::DynCall { recv, method, args } => {
                 let recv = self.operand(recv, out);
                 let args = args.iter().map(|a| self.operand(a, out)).collect();

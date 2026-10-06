@@ -154,6 +154,9 @@ pub enum Type {
     Dyn(String),
     /// A predeclared allocator type.
     Builtin(BuiltinTy),
+    /// `fn(A, B) R`: a top-level function as a value (a C function
+    /// pointer). The result is `Void` for none.
+    Fn(Vec<Type>, Box<Type>),
     /// A `comptime` type parameter while its generic is checked: the
     /// generic's name and the parameter's name. Never reaches codegen:
     /// generated code is monomorphized.
@@ -227,6 +230,14 @@ impl fmt::Display for Type {
             Type::ErrorUnion(set, t) => write!(f, "{set}!{t}"),
             Type::Dyn(i) => write!(f, "dyn {i}"),
             Type::Builtin(b) => f.write_str(b.name()),
+            Type::Fn(params, ret) => {
+                let ps: Vec<String> = params.iter().map(|p| p.to_string()).collect();
+                write!(f, "fn({})", ps.join(", "))?;
+                if **ret != Type::Void {
+                    write!(f, " {ret}")?;
+                }
+                Ok(())
+            }
             Type::Param(_, n) => f.write_str(n),
             Type::Error => f.write_str(ERROR_TY),
         }
@@ -254,6 +265,8 @@ pub struct Program {
     pub tests: Vec<String>,
     /// Top-level `let` constants and `var` globals, with their values.
     pub globals: Vec<GlobalDef>,
+    /// The libraries of every `@link`, in order of first appearance.
+    pub links: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -282,6 +295,8 @@ pub enum ConstVal {
     Error(u16),
     /// `[]T{}`
     EmptySlice,
+    /// A top-level function; `true` for a C function (`extern fn`).
+    Fn(String, bool),
 }
 
 #[derive(Debug, Clone)]
@@ -329,6 +344,8 @@ pub struct ExternFn {
     pub name: String,
     pub params: Vec<Type>,
     pub ret: Type,
+    /// Ends with `...`.
+    pub variadic: bool,
 }
 
 /// A function's name is `f`, `Struct.method` or `test#N`.
@@ -340,6 +357,8 @@ pub struct FnDef {
     pub vars: Vec<VarInfo>,
     pub body: Vec<TStmt>,
     pub is_main: bool,
+    /// `pub extern fn` with a body: exported to C under its own name.
+    pub export: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -404,7 +423,19 @@ pub enum TExprKind {
     Var(VarId),
     /// A top-level `let` constant or `var` global.
     Global(String),
+    /// `is_extern`: a C function, called by its C name (also an exported
+    /// Ore function).
     Call { name: String, is_extern: bool, args: Vec<TExpr> },
+    /// A top-level function as a value, of type `fn(...)`.
+    FnRef { name: String, is_extern: bool },
+    /// A call of a function value.
+    CallValue { callee: Box<TExpr>, args: Vec<TExpr> },
+    /// `@sizeOf(T)`: the size of `T` in bytes, as C lays it out.
+    SizeOf(Type),
+    /// `@zeroed(T)`: the all-zero value of the type `ty`.
+    Zeroed,
+    /// `@ptrCast(T, p)`: the pointer `p` as the pointer type `ty`.
+    PtrCast(Box<TExpr>),
     /// `@print(x)` / `@println(x)` / `@println()`.
     Print { arg: Option<Box<TExpr>>, newline: bool },
     Binary { op: BinOp, lhs: Box<TExpr>, rhs: Box<TExpr> },
@@ -496,6 +527,8 @@ struct FnSig {
     params: Vec<Type>,
     ret: Type,
     is_extern: bool,
+    /// A C function whose parameters end with `...`.
+    variadic: bool,
 }
 
 /// The pattern of a `match` arm: the variant index or error value (`None`
@@ -614,6 +647,10 @@ struct Checker<'a> {
     env: Vec<(String, Type, Span)>,
     /// The module of the function being checked (`""`: the root module).
     module: String,
+    /// The `extern struct`s: C layout, C-compatible fields.
+    extern_structs: HashSet<String>,
+    /// `Program::links`.
+    links: Vec<String>,
 }
 
 /// Check a file. Without `require_main` (`ore test`, or `ore check` of a
@@ -660,6 +697,8 @@ pub fn check(file: &ast::File, require_main: bool) -> std::result::Result<Progra
         in_test: false,
         env: Vec::new(),
         module: String::new(),
+        extern_structs: HashSet::new(),
+        links: Vec::new(),
     };
     let p = c.program(file, require_main);
     if c.errors.is_empty() { Ok(p) } else { Err(c.errors) }
@@ -857,6 +896,19 @@ fn needs_value(t: &Type) -> bool {
     }
 }
 
+/// The C type that `t` becomes, written as a type: a pointer is a C
+/// pointer, whether it is `mut`, `[*]` or optional. Two declarations of one
+/// C function must have the same shape.
+fn c_shape(t: &Type) -> Type {
+    match t {
+        Type::Ptr(e, _) | Type::CPtr(e) => Type::CPtr(Box::new(c_shape(e))),
+        Type::Optional(e) if matches!(**e, Type::Ptr(..) | Type::CPtr(_) | Type::Fn(..)) => c_shape(e),
+        Type::Fn(params, ret) => Type::Fn(params.iter().map(c_shape).collect(), Box::new(c_shape(ret))),
+        Type::Array(e, n) => Type::Array(Box::new(c_shape(e)), *n),
+        t => t.clone(),
+    }
+}
+
 /// An error of set `set` in a message: `` `Set.Name` ``, or `` `Name` `` for
 /// an inferred set.
 fn qualify(set: &str, name: &str) -> String {
@@ -901,6 +953,12 @@ impl<'a> Checker<'a> {
                 ast::Item::Fn(f) => (&f.name, f.span),
                 ast::Item::Interface(i) => (&i.name, i.span),
                 ast::Item::Global(g) => (&g.name, g.span),
+                ast::Item::Link(l) => {
+                    if !self.links.contains(&l.name) {
+                        self.links.push(l.name.clone());
+                    }
+                    continue;
+                }
                 ast::Item::Test(t) => {
                     if tests.iter().any(|x| x.name == t.name) {
                         self.report(Error::new(E0015, t.func.span, format!("test \"{}\" is defined more than once", t.name)));
@@ -924,6 +982,9 @@ impl<'a> Checker<'a> {
             match item {
                 ast::Item::Struct(s) => {
                     self.structs.insert(s.name.clone(), StructDef { name: s.name.clone(), fields: vec![] });
+                    if s.is_extern {
+                        self.extern_structs.insert(s.name.clone());
+                    }
                 }
                 ast::Item::Enum(e) => {
                     self.enums.insert(e.name.clone(), EnumDef { name: e.name.clone(), variants: vec![] });
@@ -938,7 +999,7 @@ impl<'a> Checker<'a> {
                     self.generics.insert(f.name.clone(), f);
                 }
                 ast::Item::Global(g) => self.global_decls.push(g),
-                ast::Item::Fn(_) | ast::Item::Test(_) => {}
+                ast::Item::Fn(_) | ast::Item::Test(_) | ast::Item::Link(_) => {}
             }
             items.push(item);
         }
@@ -969,6 +1030,19 @@ impl<'a> Checker<'a> {
             match item {
                 ast::Item::Struct(s) => {
                     let fields = self.fields(&s.fields, &format!("struct `{}`", s.name));
+                    if s.is_extern {
+                        for f in &s.fields {
+                            let Some((_, ty)) = fields.iter().find(|(n, _)| *n == f.name) else { continue };
+                            if !self.c_compat(ty, true) {
+                                self.report(Error::new(E0052, f.ty.span, format!(
+                                    "field `{}` of `extern struct {}` has type `{ty}`, which is not C-compatible{}",
+                                    f.name,
+                                    s.name,
+                                    self.c_hint(ty, true)
+                                )));
+                            }
+                        }
+                    }
                     self.structs.get_mut(&s.name).unwrap().fields = fields;
                 }
                 ast::Item::Enum(e) => {
@@ -990,7 +1064,7 @@ impl<'a> Checker<'a> {
                     let methods = self.iface_methods(i);
                     self.ifaces.get_mut(&i.name).unwrap().methods = methods;
                 }
-                ast::Item::ErrorSet(_) | ast::Item::Fn(_) | ast::Item::Test(_) | ast::Item::Global(_) => {}
+                ast::Item::ErrorSet(_) | ast::Item::Fn(_) | ast::Item::Test(_) | ast::Item::Global(_) | ast::Item::Link(_) => {}
             }
         }
         for item in &items {
@@ -1006,6 +1080,9 @@ impl<'a> Checker<'a> {
         // 3. Function, method and test signatures.
         let mut main_found = false;
         let mut externs = Vec::new();
+        // C functions (declared and exported) by C name: the function type,
+        // its C shape, whether it is variadic, and whether it is defined.
+        let mut symbols: HashMap<String, (Type, Type, bool, bool)> = HashMap::new();
         let mut decls: Vec<(String, &'a ast::FnDecl, Option<String>)> = Vec::new();
         for item in &items {
             match item {
@@ -1047,18 +1124,41 @@ impl<'a> Checker<'a> {
                 self.report(Error::new(E0076, p.span, "only a top-level function can have `comptime` parameters"));
             }
             let sig = self.register(key, f, owner.clone(), None);
-            let ffi_ok = |t: &Type| matches!(t, Type::Int(_) | Type::Float(_) | Type::Bool | Type::CPtr(_) | Type::Error);
             if f.is_extern {
+                let not_c = |ty: &Type, c: &Self| {
+                    format!("type `{ty}` cannot be used in an `extern fn` signature: it is not C-compatible{}", c.c_hint(ty, false))
+                };
                 for (p, ty) in f.params.iter().zip(&sig.params) {
-                    if !ffi_ok(ty) {
-                        self.report(Error::new(E0052, p.ty.span, format!("type `{ty}` cannot be used in an `extern fn` signature")));
+                    if !self.c_compat(ty, false) {
+                        self.report(Error::new(E0052, p.ty.span, not_c(ty, self)));
                     }
                 }
-                if sig.ret != Type::Void && !ffi_ok(&sig.ret) {
+                if sig.ret != Type::Void && !self.c_compat(&sig.ret, false) {
                     let span = f.ret.as_ref().unwrap().span;
-                    self.report(Error::new(E0052, span, format!("type `{}` cannot be used in an `extern fn` signature", sig.ret)));
+                    self.report(Error::new(E0052, span, not_c(&sig.ret, self)));
                 }
-                externs.push(ExternFn { name: f.name.clone(), params: sig.params.clone(), ret: sig.ret.clone() });
+                if f.body.is_none() {
+                    let (params, ret, variadic) = (sig.params.clone(), sig.ret.clone(), sig.variadic);
+                    externs.push(ExternFn { name: f.name.clone(), params, ret, variadic });
+                }
+                // One C symbol, one C signature and at most one definition.
+                let sym = key.rsplit("::").next().unwrap().to_string();
+                let ty = Type::Fn(sig.params.clone(), Box::new(sig.ret.clone()));
+                let (shape, defined) = (c_shape(&ty), f.body.is_some());
+                match symbols.get_mut(&sym) {
+                    Some((first, s, v, _)) if *s != shape || *v != sig.variadic => {
+                        let msg = format!("C function `{sym}` is declared twice with different signatures: `{first}` and `{ty}`");
+                        self.report(Error::new(E0096, f.span, msg));
+                    }
+                    Some((.., true)) if defined => {
+                        let msg = format!("C function `{sym}` is defined twice: each `pub extern fn` needs its own name");
+                        self.report(Error::new(E0096, f.span, msg));
+                    }
+                    Some((.., d)) => *d |= defined,
+                    None => {
+                        symbols.insert(sym, (ty, shape, sig.variadic, defined));
+                    }
+                }
             }
             if key == "main" && !f.is_extern {
                 main_found = true;
@@ -1094,7 +1194,7 @@ impl<'a> Checker<'a> {
         // with errors is known before its other instances are checked (they
         // are checked quietly); then the functions, then each instance as it
         // is made.
-        self.queue.extend(decls.iter().filter(|(_, f, _)| !f.is_extern).map(|(k, ..)| k.clone()));
+        self.queue.extend(decls.iter().filter(|(_, f, _)| f.body.is_some()).map(|(k, ..)| k.clone()));
         let own: Vec<String> = self.queue.iter().filter(|k| self.is_abstract_fn(k)).cloned().collect();
         for key in own {
             let _ = self.ensure_body(&key, Span::default());
@@ -1121,7 +1221,7 @@ impl<'a> Checker<'a> {
                 ast::Item::Struct(s) => structs.push(self.structs[&s.name].clone()),
                 ast::Item::Enum(e) => enums.push(self.enums[&e.name].clone()),
                 ast::Item::Interface(i) => ifaces.push(self.ifaces[&i.name].clone()),
-                ast::Item::ErrorSet(_) | ast::Item::Fn(_) | ast::Item::Test(_) | ast::Item::Global(_) => {}
+                ast::Item::ErrorSet(_) | ast::Item::Fn(_) | ast::Item::Test(_) | ast::Item::Global(_) | ast::Item::Link(_) => {}
             }
         }
         let globals = self
@@ -1148,6 +1248,7 @@ impl<'a> Checker<'a> {
             vtables,
             tests: tests.iter().map(|t| t.name.clone()).collect(),
             globals,
+            links: std::mem::take(&mut self.links),
         }
     }
 
@@ -1243,6 +1344,7 @@ impl<'a> Checker<'a> {
             TExprKind::Str(s) => ConstVal::Str(s.clone()),
             TExprKind::Null => ConstVal::Null,
             TExprKind::EmptySlice => ConstVal::EmptySlice,
+            TExprKind::FnRef { name, is_extern } => ConstVal::Fn(name.clone(), *is_extern),
             TExprKind::ErrorValue(v) => ConstVal::Error(*v),
             TExprKind::Some(x) => ConstVal::Some(Box::new(self.fold(x)?)),
             TExprKind::Global(n) => match self.globals.get(n) {
@@ -1451,6 +1553,7 @@ impl<'a> Checker<'a> {
             | Type::Ptr(e, _)
             | Type::Optional(e)
             | Type::ErrorUnion(_, e) => self.has_param(e),
+            Type::Fn(params, ret) => params.iter().any(|p| self.has_param(p)) || self.has_param(ret),
             _ => false,
         }
     }
@@ -1643,9 +1746,9 @@ impl<'a> Checker<'a> {
             };
             self.recvs.insert(key.to_string(), recv);
         }
-        let sig = FnSig { params, ret, is_extern: f.is_extern };
+        let sig = FnSig { params, ret, is_extern: f.is_extern, variadic: f.variadic.is_some() };
         self.fns.insert(key.to_string(), sig.clone());
-        if !f.is_extern {
+        if f.body.is_some() {
             self.fn_decls.insert(key.to_string(), FnCtx { decl: f, owner, env: self.env.clone(), generic });
         }
         sig
@@ -1909,6 +2012,26 @@ impl<'a> Checker<'a> {
             TypeExprKind::ErrorUnion(..) => {
                 return err(E0066, t.span, "error union types can only be used as a function's return type");
             }
+            TypeExprKind::Fn(params, ret) => {
+                let params = params.iter().map(|p| self.resolve_type(p)).collect::<Result<Vec<_>>>()?;
+                let ret = match ret.as_deref() {
+                    None => Type::Void,
+                    // A function type can name an error set, as a function does.
+                    Some(ast::TypeExpr { kind: TypeExprKind::ErrorUnion(Some((set, sp)), payload), .. }) => {
+                        let set = self.set_name(set, *sp)?;
+                        let payload = match &payload.kind {
+                            TypeExprKind::Named(n) if n == "void" => Type::Void,
+                            _ => self.resolve_type(payload)?,
+                        };
+                        Type::ErrorUnion(set, Box::new(payload))
+                    }
+                    Some(r @ ast::TypeExpr { kind: TypeExprKind::ErrorUnion(None, _), .. }) => {
+                        return err(E0065, r.span, "a function type must spell out its error set (`E!T`)");
+                    }
+                    Some(r) => self.resolve_type(r)?,
+                };
+                Type::Fn(params, Box::new(ret))
+            }
         })
     }
 
@@ -2070,6 +2193,7 @@ impl<'a> Checker<'a> {
             vars: std::mem::take(&mut self.vars),
             body,
             is_main: name == "main",
+            export: f.is_extern,
         }
     }
 
@@ -2274,6 +2398,7 @@ impl<'a> Checker<'a> {
         match &e.kind {
             ExprKind::Match { .. } => self.match_expr(e, None, true),
             ExprKind::Call { .. }
+            | ExprKind::CallExpr { .. }
             | ExprKind::MethodCall { .. }
             | ExprKind::Builtin { .. }
             | ExprKind::Try(_)
@@ -2436,6 +2561,8 @@ impl<'a> Checker<'a> {
                     let what = if addr_of { "take `&mut` of an element of" } else { "assign through" };
                     err(E0033, t.span, format!("cannot {what} a slice `{}`: its elements are read-only (use `[]mut {el}`)", base.ty))
                 }
+                // A C pointer is unchecked: it does not track read-only data.
+                Type::CPtr(_) => Ok(()),
                 _ => self.check_mutable(base, addr_of),
             },
             TExprKind::Deref(p) => match &p.ty {
@@ -2457,7 +2584,7 @@ impl<'a> Checker<'a> {
         match &t.kind {
             TExprKind::Var(_) | TExprKind::Global(_) | TExprKind::Deref(_) => true,
             TExprKind::Field { base, .. } => Self::is_lvalue(base),
-            TExprKind::Index { base, .. } => matches!(base.ty, Type::Slice(..)) || Self::is_lvalue(base),
+            TExprKind::Index { base, .. } => matches!(base.ty, Type::Slice(..) | Type::CPtr(_)) || Self::is_lvalue(base),
             _ => false,
         }
     }
@@ -2682,8 +2809,23 @@ impl<'a> Checker<'a> {
                 None if self.generics.get(name).is_some_and(|f| is_type_fn(f)) => {
                     return err(E0080, span, format!("`{name}` is a type function: write `{name}(T)`"));
                 }
-                None if self.fns.contains_key(name) || self.generics.contains_key(name) => {
-                    return err(E0020, span, format!("function `{name}` is not a value (call it with `{name}(...)`)"));
+                // A top-level function is a value; methods, tests and
+                // instances have names with other characters.
+                None if self.fns.contains_key(name) && !name.contains(['.', '#', '(']) => {
+                    let sig = self.fns[name].clone();
+                    if sig.variadic {
+                        return err(E0020, span, format!("the variadic C function `{name}` is not a value (call it)"));
+                    }
+                    if let Type::ErrorUnion(set, _) = &sig.ret
+                        && set.starts_with(INFERRED)
+                    {
+                        self.ensure_body(name, span)?;
+                    }
+                    let kind = TExprKind::FnRef { name: name.clone(), is_extern: sig.is_extern };
+                    (kind, Type::Fn(sig.params, Box::new(sig.ret)))
+                }
+                None if self.generics.contains_key(name) => {
+                    return err(E0020, span, format!("the generic function `{name}` is not a value (call it with its type arguments)"));
                 }
                 None if self.is_type_name(name) => return err(E0074, span, format!("`{name}` is a type, not a value")),
                 None => {
@@ -2692,6 +2834,15 @@ impl<'a> Checker<'a> {
                 }
             },
             ExprKind::Call { name, args } if name == LOG_ERR || name == LOG_INFO => return self.log(name == LOG_ERR, args, span),
+            // A call of a function value in a local or a global.
+            ExprKind::Call { name, args } if self.lookup(name).is_some() || self.global_decls.iter().any(|g| g.name == *name) => {
+                let callee = self.value(&ast::Expr { kind: ExprKind::Ident(name.clone()), span }, None)?;
+                return self.call_value(callee, Some(name), args, span);
+            }
+            ExprKind::CallExpr { callee, args } => {
+                let callee = self.value(callee, None)?;
+                return self.call_value(callee, None, args, span);
+            }
             ExprKind::Call { name, args } => {
                 if let Some(&f) = self.generics.get(name) {
                     if is_type_fn(f) {
@@ -2755,6 +2906,9 @@ impl<'a> Checker<'a> {
                         (TExprKind::Intrinsic { op: Intrinsic::TestAllocator, args: vec![] }, Type::Builtin(BuiltinTy::Allocator))
                     }
                 }
+            }
+            ExprKind::Builtin { name, args } if matches!(name.as_str(), "sizeOf" | "zeroed" | "ptrCast" | "link") => {
+                return self.c_builtin(name, args, span);
             }
             ExprKind::Builtin { name, args } => {
                 let newline = match name.as_str() {
@@ -3002,8 +3156,9 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Index { base, index } => {
                 let b = self.value(base, None)?;
+                // A C pointer is indexed without a check.
                 let elem = match &b.ty {
-                    Type::Array(el, _) | Type::Slice(el, _) => (**el).clone(),
+                    Type::Array(el, _) | Type::Slice(el, _) | Type::CPtr(el) => (**el).clone(),
                     t => return err(E0043, span, format!("cannot index into a value of type `{t}`")),
                 };
                 let i = self.value(index, Some(&USIZE))?;
@@ -3029,7 +3184,7 @@ impl<'a> Checker<'a> {
                         if lo.is_none() || hi.is_none() {
                             return err(E0043, span, format!("slicing a `{}` needs both bounds (`p[lo..hi]`): it has no length", b.ty));
                         }
-                        ((**el).clone(), false)
+                        ((**el).clone(), true)
                     }
                     t => return err(E0043, span, format!("cannot slice a value of type `{t}`")),
                 };
@@ -3188,10 +3343,12 @@ impl<'a> Checker<'a> {
             self.ensure_body(key, span)?;
         }
         let skip = recv.is_some() as usize;
-        if args.len() + skip != sig.params.len() {
+        let fixed = sig.params.len();
+        if args.len() + skip != fixed && !(sig.variadic && args.len() + skip > fixed) {
             return err(E0029, span, format!(
-                "function `{key}` takes {} argument(s) but {} were given",
-                sig.params.len() - skip,
+                "function `{key}` takes {}{} argument(s) but {} were given",
+                if sig.variadic { "at least " } else { "" },
+                fixed - skip,
                 args.len()
             ));
         }
@@ -3201,6 +3358,9 @@ impl<'a> Checker<'a> {
         }
         for (a, p) in args.iter().zip(&sig.params[skip..]) {
             targs.push(self.expect(a, p)?);
+        }
+        for a in &args[fixed - skip..] {
+            targs.push(self.c_vararg(a)?);
         }
         Ok(TExpr { kind: TExprKind::Call { name: key.to_string(), is_extern: sig.is_extern, args: targs }, ty: sig.ret, span })
     }
@@ -3272,6 +3432,15 @@ impl<'a> Checker<'a> {
                     let Some(def) = self.structs.get(&s) else {
                         return err(E0071, span, format!("enum `{s}` has no method `{name}`"));
                     };
+                    // `s.f(args)` calls the function in the field `f`.
+                    let fn_field = def.fields.iter().position(|(f, t)| {
+                        f == name && (matches!(t, Type::Fn(..)) || matches!(t, Type::Optional(i) if matches!(**i, Type::Fn(..))))
+                    });
+                    if let Some(index) = fn_field {
+                        let ty = def.fields[index].1.clone();
+                        let field = TExpr { kind: TExprKind::Field { base: Box::new(deref(recv)), index }, ty, span };
+                        return self.call_value(field, Some(name), args, span);
+                    }
                     let hint = if def.fields.iter().any(|(f, _)| f == name) { " (it has a field of that name)" } else { "" };
                     return err(E0071, span, format!("struct `{s}` has no method `{name}`{hint}"));
                 };
@@ -3370,6 +3539,174 @@ impl<'a> Checker<'a> {
         }
         let key = self.instantiate_fn(&f.name, types, span)?;
         self.call(&key, None, &values, span)
+    }
+
+    /// A call of the function value `callee`; `what` names it in messages.
+    fn call_value(&mut self, callee: TExpr, what: Option<&str>, args: &[ast::Expr], span: Span) -> Result<TExpr> {
+        let shown = what.map_or("this value".to_string(), |w| format!("`{w}`"));
+        let (params, ret) = match &callee.ty {
+            Type::Fn(params, ret) => (params.clone(), (**ret).clone()),
+            Type::Optional(inner) if matches!(**inner, Type::Fn(..)) => {
+                return err(E0095, span, format!(
+                    "cannot call {shown}: its type is `{}`, an optional (unwrap it first: `if {} |f| {{ f() }}`)",
+                    callee.ty,
+                    what.unwrap_or("x")
+                ));
+            }
+            t => return err(E0095, span, format!("cannot call {shown}: its type is `{t}`, not a function type")),
+        };
+        if args.len() != params.len() {
+            return err(E0029, span, format!(
+                "function value {}of type `{}` takes {} argument(s) but {} were given",
+                what.map_or(String::new(), |w| format!("`{w}` ")),
+                callee.ty,
+                params.len(),
+                args.len()
+            ));
+        }
+        let args = args.iter().zip(&params).map(|(a, p)| self.expect(a, p)).collect::<Result<_>>()?;
+        Ok(TExpr { kind: TExprKind::CallValue { callee: Box::new(callee), args }, ty: ret, span })
+    }
+
+    /// An argument for the `...` of a C function. Its type must be
+    /// C-compatible; an untyped integer literal is a C `int` (`i32`). C
+    /// promotes the value as for any `...` (`f32` to `double`, smaller
+    /// integers and `bool` to `int`).
+    fn c_vararg(&mut self, a: &ast::Expr) -> Result<TExpr> {
+        let mut t = self.value(a, None)?;
+        if is_untyped(a) && t.ty == I64 {
+            t = self.value(a, Some(&Type::Int(IntTy::I32))).map_err(|mut e| {
+                if e.code == E0024 {
+                    e.msg += " (an integer literal passed to `...` is a C `int`: add `as i64`)";
+                }
+                e
+            })?;
+        }
+        if !self.c_compat(&t.ty, false) {
+            return err(E0052, t.span, format!(
+                "`{}` cannot be passed to the `...` of a C function: it is not C-compatible{}",
+                t.ty,
+                self.c_hint(&t.ty, false)
+            ));
+        }
+        Ok(t)
+    }
+
+    /// Can a value of type `t` cross into C with the same layout? An array
+    /// only as a field (`field`): C passes an array argument by pointer.
+    fn c_compat(&self, t: &Type, field: bool) -> bool {
+        match t {
+            Type::Int(_) | Type::Float(_) | Type::Bool | Type::Error => true,
+            Type::Struct(n) => self.extern_structs.contains(n),
+            Type::Array(e, _) => field && self.c_compat(e, true),
+            Type::CPtr(e) | Type::Ptr(e, _) => self.c_compat(e, true),
+            Type::Optional(e) => matches!(**e, Type::CPtr(_) | Type::Ptr(..) | Type::Fn(..)) && self.c_compat(e, false),
+            Type::Fn(params, ret) => {
+                params.iter().all(|p| self.c_compat(p, false)) && (**ret == Type::Void || self.c_compat(ret, false))
+            }
+            _ => false,
+        }
+    }
+
+    /// Why `t` is not C-compatible, for a message (`field` as for `c_compat`).
+    fn c_hint(&self, t: &Type, field: bool) -> String {
+        match t {
+            Type::Slice(el, _) => format!(" (a slice is a pointer and a length: use `[*]{el}` and a `usize`)"),
+            Type::Struct(n) if !n.contains('(') && !self.extern_structs.contains(n) => {
+                format!(" (declare it `extern struct {n}` to give it C layout)")
+            }
+            Type::Array(el, _) if !field => format!(" (C passes an array by pointer: use `*{t}` or `[*]{el}`)"),
+            Type::Optional(_) => " (only optional pointers are: `?*T`, `?[*]T` and `?fn(...)`)".to_string(),
+            Type::Fn(..) => " (the parameters and result of a function that C calls must be C-compatible)".to_string(),
+            _ => String::new(),
+        }
+    }
+
+    /// `@sizeOf(T)`, `@zeroed(T)` and `@ptrCast(T, p)`. `@link` belongs at
+    /// the top level.
+    fn c_builtin(&mut self, name: &str, args: &[ast::Expr], span: Span) -> Result<TExpr> {
+        if name == "link" {
+            return err(E0094, span, "`@link` must be at the top level of a file, outside functions");
+        }
+        let cast = name == "ptrCast";
+        if args.len() != 1 + cast as usize {
+            let msg = if cast { "`@ptrCast` takes two arguments: the type and the pointer".to_string() } else { format!("`@{name}` takes one argument, a type") };
+            return err(E0022, span, msg);
+        }
+        let local = matches!(&args[0].kind, ExprKind::Ident(n) if self.lookup(n).is_some());
+        let ty = match expr_type(&args[0]) {
+            Some(t) if !local => self.resolve_type(&t)?,
+            _ if cast => return err(E0022, args[0].span, "the first argument of `@ptrCast` must be a type"),
+            _ => return err(E0022, args[0].span, format!("the argument of `@{name}` must be a type, such as `@{name}(i32)`")),
+        };
+        match name {
+            "sizeOf" => Ok(TExpr { kind: TExprKind::SizeOf(ty), ty: USIZE, span }),
+            "zeroed" => {
+                if let Some(why) = self.why_not_zeroable(&ty) {
+                    return err(E0093, args[0].span, format!("`@zeroed` cannot make a `{ty}`: {why}"));
+                }
+                Ok(TExpr { kind: TExprKind::Zeroed, ty, span })
+            }
+            _ => self.ptr_cast(ty, args[0].span, &args[1], span),
+        }
+    }
+
+    /// Why `@zeroed(t)` cannot make a `t`, or `None`: numbers, `bool`,
+    /// optional pointers, `extern struct`s and arrays of them have an
+    /// all-zero value.
+    fn why_not_zeroable(&self, t: &Type) -> Option<String> {
+        match t {
+            Type::Int(_) | Type::Float(_) | Type::Bool => None,
+            Type::Optional(e) if matches!(**e, Type::Ptr(..) | Type::CPtr(_) | Type::Fn(..)) => None,
+            Type::Array(e, _) => self.why_not_zeroable(e),
+            Type::Struct(n) if self.extern_structs.contains(n) => self.structs[n].fields.iter().find_map(|(f, ft)| {
+                let why = self.why_not_zeroable(ft)?;
+                Some(match ft {
+                    Type::Ptr(..) | Type::CPtr(_) | Type::Fn(..) => {
+                        format!("its field `{f}` has type `{ft}`, which cannot be null (use `?{ft}`)")
+                    }
+                    _ => format!("its field `{f}` has type `{ft}`: {why}"),
+                })
+            }),
+            Type::Struct(_) => Some("only an `extern struct` has a defined all-zero value".to_string()),
+            Type::Ptr(..) | Type::CPtr(_) | Type::Fn(..) => Some(format!("it cannot be null (use `?{t}`)")),
+            _ => Some("it makes numbers, `bool`, optional pointers, `extern struct`s and arrays of them".to_string()),
+        }
+    }
+
+    /// `@ptrCast(T, p)`: the pointer `p` (`*T`, `*mut T`, `[*]T` or `?` of
+    /// one) as the pointer type `to` (written at `to_span`). It cannot make
+    /// a read-only `*T` writable, or an optional pointer non-optional.
+    fn ptr_cast(&mut self, to: Type, to_span: Span, arg: &ast::Expr, span: Span) -> Result<TExpr> {
+        // Is the pointer type optional, and can it write?
+        fn kind(t: &Type) -> Option<(bool, bool)> {
+            match t {
+                Type::Ptr(_, m) => Some((false, *m)),
+                Type::CPtr(_) => Some((false, true)),
+                Type::Optional(e) => kind(e).filter(|(opt, _)| !opt).map(|(_, w)| (true, w)),
+                _ => None,
+            }
+        }
+        let Some((to_opt, _)) = kind(&to) else {
+            return err(E0092, to_span, format!(
+                "`@ptrCast` converts to a pointer type (`*T`, `*mut T`, `[*]T` or `?` of one), not to `{to}`"
+            ));
+        };
+        let p = self.value(arg, None)?;
+        let Some((from_opt, from_writable)) = kind(&p.ty) else {
+            return err(E0092, p.span, format!("`@ptrCast` converts a pointer, found `{}` (convert numbers with `as`)", p.ty));
+        };
+        if from_opt && !to_opt {
+            return err(E0092, span, format!(
+                "`@ptrCast` cannot turn the optional `{}` into `{to}`: unwrap it first (`if p |v| {{ ... }}`)",
+                p.ty
+            ));
+        }
+        let to_mut = matches!(&to, Type::Ptr(_, true)) || matches!(&to, Type::Optional(e) if matches!(**e, Type::Ptr(_, true)));
+        if !from_writable && to_mut {
+            return err(E0092, span, format!("`@ptrCast` cannot make the read-only pointer `{}` writable (`{to}`)", p.ty));
+        }
+        Ok(TExpr { kind: TExprKind::PtrCast(Box::new(p)), ty: to, span })
     }
 
     /// The receiver `recv` of a method that takes `self: *Self` or (with

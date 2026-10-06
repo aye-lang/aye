@@ -1,0 +1,22 @@
+struct Plain { x: i32 }
+
+extern struct HasPtr {
+    p: *i32
+    n: i32
+}
+
+extern struct Fine {
+    a: u8
+    b: [2]f64
+    f: ?fn(i32) i32
+}
+
+pub fn main() {
+    let a = @zeroed(Plain)
+    let b = @zeroed(HasPtr)
+    let c = @zeroed([]u8)
+    let d = @sizeOf(1)
+    let e = @zeroed(Fine)
+    let g = @zeroed(i32, 2)
+    @link("m")
+}

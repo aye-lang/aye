@@ -1,0 +1,6 @@
+@link("")
+@link(m)
+@print("x")
+
+pub fn main() {
+}

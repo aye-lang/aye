@@ -1,0 +1,74 @@
+// Function values (M7): a top-level function is a value of type
+// `fn(A, B) R`. It can be stored in variables, globals, struct fields,
+// arrays and optionals, passed, returned and called.
+
+struct Op {
+    name: []u8
+    apply: fn(i64, i64) i64
+}
+
+fn add(a: i64, b: i64) i64 {
+    return a + b
+}
+
+fn mul(a: i64, b: i64) i64 {
+    return a * b
+}
+
+fn pick(big: bool) fn(i64, i64) i64 {
+    if big {
+        return mul
+    }
+    return add
+}
+
+fn fold(xs: []i64, start: i64, f: fn(i64, i64) i64) i64 {
+    var acc = start
+    for x in xs {
+        acc = f(acc, x)
+    }
+    return acc
+}
+
+fn hello() {
+    @println("hello")
+}
+
+let DEFAULT: fn(i64, i64) i64 = add
+var current = mul
+
+pub fn main() {
+    let xs = [4]i64{1, 2, 3, 4}
+    @println(fold(xs[..], 0, add))
+    @println(fold(xs[..], 1, mul))
+    let ops = [2]Op{Op { name: "add", apply: add }, Op { name: "mul", apply: mul }}
+    for op in ops {
+        @print(op.name)
+        @print(" ")
+        @println(op.apply(6, 7))
+    }
+    let first = &ops[0]
+    @println(first.apply(1, 2))
+    @println(pick(true)(3, 5))
+    var f = pick(false)
+    @println(f(3, 5))
+    f = mul
+    @println(f(3, 5))
+    let table = [2]fn(i64, i64) i64{add, mul}
+    @println(table[1](4, 4))
+    var maybe: ?fn() = null
+    if maybe |g| {
+        g()
+    } else {
+        @println("no callback")
+    }
+    maybe = hello
+    if maybe |g| {
+        g()
+    }
+    @println(maybe != null)
+    @println(DEFAULT(20, 22))
+    @println(current(6, 6))
+    current = DEFAULT
+    @println(current(6, 6))
+}

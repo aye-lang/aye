@@ -1,0 +1,51 @@
+// C pointers (M7): `[*]T` indexing (read and write) and slicing to
+// `[]mut T`, `?[*]T` compared with `null`, `@ptrCast` between pointer
+// types, and `.ptr` of a slice.
+
+extern fn malloc(n: usize) ?[*]u8
+extern fn free(p: ?[*]u8)
+extern fn strchr(s: [*]u8, c: i32) ?[*]u8
+extern fn strlen(s: [*]u8) usize
+
+pub fn main() {
+    let m = malloc(4 * @sizeOf(u32))
+    if m |bytes| {
+        let words = @ptrCast([*]u32, bytes)
+        for i in 0..4 {
+            words[i] = (i as u32 + 1) * 1000
+        }
+        @println(words[3])
+        let s = words[0..4]
+        s[0] = 7
+        @println(words[0])
+        var total: u32 = 0
+        for w in s {
+            total += w
+        }
+        @println(total)
+        // The low byte of `7` on a little-endian machine.
+        @println(bytes[0])
+    }
+    free(m)
+
+    let hello = "hello, world"
+    let comma = strchr(hello.ptr, ',')
+    @println(comma != null)
+    if comma |c| {
+        @println(c[0..strlen(c)])
+    }
+    @println(strchr(hello.ptr, 'z') == null)
+
+    var x: i32 = 5
+    let px = @ptrCast([*]i32, &mut x)
+    px[0] = 6
+    @println(x)
+    let r = @ptrCast(*mut i32, px)
+    r.* = 9
+    @println(x)
+    let none: ?[*]u8 = null
+    @println(@ptrCast(?[*]u32, none) == null)
+    let arr = [3]u8{1, 2, 3}
+    let view = arr[..]
+    @println(view.ptr[2])
+}

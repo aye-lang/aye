@@ -6,6 +6,10 @@
 //!   `X.stderr` exists, `main` must return an error: exit status 1, and
 //!   stderr equal to `X.stderr` in debug mode; safe and fast mode print no
 //!   error return trace, so there stderr must be the first line only.
+//! - `tests/ffi/X.ore`: like `tests/cases`, for programs that link C
+//!   libraries with `@link`; skipped when `pkg-config` does not know a
+//!   package listed in `X.needs`. Programs run with `SDL_VIDEODRIVER=dummy`,
+//!   so SDL2 needs no display.
 //! - `tests/errors/X.ore`: must fail to compile with exactly the diagnostics
 //!   in `X.err`, one per line, in order.
 //! - `tests/tests/X.ore`: `ore test X.ore` (debug mode) must print exactly
@@ -25,8 +29,8 @@
 //! - `tests/example1/`: Example 1 of the design doc, the directory module
 //!   `app`, run in `ok`, `missing` and `invalid` (each with its own
 //!   `app.toml`, or none); `ore test app` runs its tests.
-//! - `ore run`, `ore check` and `ore test --filter` are also run through the
-//!   built binary.
+//! - `ore run`, `ore build -o`, `ore check` and `ore test --filter` are also
+//!   run through the built binary.
 
 use ore::diag::Diag;
 use ore::driver::{self, Mode};
@@ -35,6 +39,13 @@ use std::process::Command;
 
 fn read(p: &Path) -> Option<String> {
     std::fs::read_to_string(p).ok()
+}
+
+/// The packages in `X.needs` that `pkg-config` does not know.
+fn missing_packages(path: &Path) -> Vec<String> {
+    let needs = read(&path.with_extension("needs")).unwrap_or_default();
+    let known = |p: &str| Command::new("pkg-config").args(["--exists", p]).status().is_ok_and(|s| s.success());
+    needs.split_whitespace().filter(|p| !known(p)).map(String::from).collect()
 }
 
 fn cases(dir: &str) -> Vec<PathBuf> {
@@ -71,7 +82,7 @@ fn run_case(path: &Path, work: &Path) -> Result<(), String> {
         let c = driver::compile_to_c(&name(path), &src, mode).map_err(|d| join(&d))?;
         let exe = work.join(format!("{}-{mode:?}", path.file_stem().unwrap().to_string_lossy()));
         driver::cc(&c, &exe, mode)?;
-        let out = Command::new(&exe).output().map_err(|e| e.to_string())?;
+        let out = Command::new(&exe).env("SDL_VIDEODRIVER", "dummy").output().map_err(|e| e.to_string())?;
         let stdout = String::from_utf8_lossy(&out.stdout);
         let stderr = String::from_utf8_lossy(&out.stderr);
         if stdout != expected_out {
@@ -104,6 +115,15 @@ fn run_case(path: &Path, work: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn ffi_case(path: &Path, work: &Path) -> Result<(), String> {
+    let missing = missing_packages(path);
+    if !missing.is_empty() {
+        println!("skipped ffi/{}: pkg-config does not know {}", name(path), missing.join(", "));
+        return Ok(());
+    }
+    run_case(path, work)
 }
 
 fn error_case(path: &Path) -> Result<(), String> {
@@ -308,6 +328,28 @@ fn cli_run(work: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// `ore build -o PATH` links the libraries of `@link`, and the program
+/// runs (from the crate root, where it finds its data file).
+fn cli_build_link(work: &Path) -> Result<(), String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src = root.join("tests/ffi/curl_file.ore");
+    if !missing_packages(&src).is_empty() {
+        println!("skipped cli/ore build -o: pkg-config does not know libcurl");
+        return Ok(());
+    }
+    let exe = work.join("curl_file_cli");
+    let (_, err, code) = ore(root, &["build", "tests/ffi/curl_file.ore", "-o", exe.to_str().unwrap()])?;
+    if code != Some(0) {
+        return Err(format!("`ore build -o` failed: {code:?}\n{err}"));
+    }
+    let out = Command::new(&exe).current_dir(root).output().map_err(|e| e.to_string())?;
+    let want = read(&src.with_extension("out")).unwrap();
+    if !out.status.success() || String::from_utf8_lossy(&out.stdout) != want {
+        return Err(format!("the program of `ore build -o` printed:\n{}", String::from_utf8_lossy(&out.stdout)));
+    }
+    Ok(())
+}
+
 /// The `ore check` CLI: exit code, stdout and stderr, text and `--json`.
 fn cli_check() -> Result<(), String> {
     let ok = "tests/cases/hello.ore";
@@ -396,12 +438,17 @@ fn main() {
     let err_cases = cases("errors");
     let test_cases = cases("tests");
     let fix_cases = cases("fix");
+    let ffi_cases = cases("ffi");
     let mod_cases = module_dirs();
     let results: Vec<(String, Result<(), String>)> = std::thread::scope(|s| {
         let mut handles = Vec::new();
         for p in &run_cases {
             let w = &work;
             handles.push((format!("cases/{}", name(p)), s.spawn(move || run_case(p, w))));
+        }
+        for p in &ffi_cases {
+            let w = &work;
+            handles.push((format!("ffi/{}", name(p)), s.spawn(move || ffi_case(p, w))));
         }
         for p in &err_cases {
             handles.push((format!("errors/{}", name(p)), s.spawn(move || error_case(p))));
@@ -419,6 +466,7 @@ fn main() {
         handles.push(("example1".to_string(), s.spawn(example1)));
         let w = &work;
         handles.push(("cli/ore run".to_string(), s.spawn(move || cli_run(w))));
+        handles.push(("cli/ore build -o".to_string(), s.spawn(move || cli_build_link(w))));
         handles.push(("cli/ore check".to_string(), s.spawn(cli_check)));
         handles.push(("cli/ore explain".to_string(), s.spawn(cli_explain)));
         handles.push(("cli/ore test --filter".to_string(), s.spawn(cli_test_filter)));

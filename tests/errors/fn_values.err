@@ -1,0 +1,8 @@
+fn_values.ore:20:5: error[E0095]: cannot call `n`: its type is `i64`, not a function type
+fn_values.ore:21:13: error[E0020]: the generic function `id` is not a value (call it with its type arguments)
+fn_values.ore:22:26: error[E0023]: mismatched types: expected `fn(i64) i64`, found `fn(i64, i64) i64`
+fn_values.ore:24:5: error[E0029]: function value `k` of type `fn(i64, i64) i64` takes 2 argument(s) but 1 were given
+fn_values.ore:26:5: error[E0095]: cannot call `maybe`: its type is `?fn()`, an optional (unwrap it first: `if maybe |f| { f() }`)
+fn_values.ore:27:20: error[E0023]: mismatched types: expected `fn(i64) i64`, found `fn(i64, i64) i64`
+fn_values.ore:29:7: error[E0071]: struct `S` has no method `n` (it has a field of that name)
+fn_values.ore:30:7: error[E0029]: function value `f` of type `fn(i64) i64` takes 1 argument(s) but 2 were given

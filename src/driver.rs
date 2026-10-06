@@ -148,22 +148,29 @@ pub fn apply_fixes(src: &str, diags: &[Diag]) -> (String, Vec<(Span, String)>) {
     (out, applied.iter().map(|f| (f.edits[0].start, f.help.clone())).collect())
 }
 
+/// A program in C, and the libraries it links with (`@link`).
+pub struct CProgram {
+    pub c: String,
+    pub links: Vec<String>,
+}
+
 /// Run the front end, OIR lowering and C generation for an executable of a
 /// single file; see `compile_root`.
-pub fn compile_to_c(file_name: &str, src: &str, mode: Mode) -> Result<String, Vec<Diag>> {
+pub fn compile_to_c(file_name: &str, src: &str, mode: Mode) -> Result<CProgram, Vec<Diag>> {
     compile_root(Root::single(file_name, src), mode)
 }
 
 /// Run the front end, OIR lowering and C generation for an executable;
 /// `test` blocks are left out. File names are used in diagnostics, `#line`
 /// directives and panic messages.
-pub fn compile_root(root: Root, mode: Mode) -> Result<String, Vec<Diag>> {
+pub fn compile_root(root: Root, mode: Mode) -> Result<CProgram, Vec<Diag>> {
     let checked = front_end(root, Some(true));
     let mut typed = checked.result?;
     typed.fns.retain(|f| !sema::is_test(&f.name));
     typed.tests.clear();
     let ir = oir::lower(&typed);
-    Ok(cgen::emit(&ir, &file_names(&checked.files), mode != Mode::Fast, mode == Mode::Debug, false))
+    let c = cgen::emit(&ir, &file_names(&checked.files), mode != Mode::Fast, mode == Mode::Debug, false);
+    Ok(CProgram { c, links: typed.links })
 }
 
 fn file_names(files: &[SourceFile]) -> Vec<String> {
@@ -172,12 +179,13 @@ fn file_names(files: &[SourceFile]) -> Vec<String> {
 
 /// Like `compile_root`, for a test executable: its argument is the index
 /// of the test to run. Also returns the test names and the file names.
-pub fn compile_tests_to_c(root: Root, mode: Mode) -> Result<(String, Vec<String>, Vec<String>), Vec<Diag>> {
+pub fn compile_tests_to_c(root: Root, mode: Mode) -> Result<(CProgram, Vec<String>, Vec<String>), Vec<Diag>> {
     let checked = front_end(root, Some(false));
     let typed = checked.result?;
     let ir = oir::lower(&typed);
     let files = file_names(&checked.files);
-    Ok((cgen::emit(&ir, &files, mode != Mode::Fast, mode == Mode::Debug, true), typed.tests, files))
+    let c = cgen::emit(&ir, &files, mode != Mode::Fast, mode == Mode::Debug, true);
+    Ok((CProgram { c, links: typed.links }, typed.tests, files))
 }
 
 /// The outcome of one test.
@@ -310,19 +318,67 @@ impl TestResult {
     }
 }
 
-/// Compile generated C to an executable with clang.
-pub fn cc(c_src: &str, out: &Path, mode: Mode) -> Result<(), String> {
+/// The clang flags for the libraries of `@link`: `-framework Name` for
+/// `framework:Name`, the `--cflags --libs` of a package that `pkg-config`
+/// knows, and `-lname` otherwise.
+pub fn link_flags(links: &[String]) -> Vec<String> {
+    let mut flags = Vec::new();
+    for l in links {
+        if let Some(fw) = l.strip_prefix("framework:") {
+            flags.extend(["-framework".to_string(), fw.to_string()]);
+            continue;
+        }
+        match Command::new("pkg-config").args(["--cflags", "--libs", l]).output() {
+            Ok(o) if o.status.success() => {
+                flags.extend(String::from_utf8_lossy(&o.stdout).split_whitespace().map(String::from));
+            }
+            _ => flags.push(format!("-l{l}")),
+        }
+    }
+    flags
+}
+
+/// Compile generated C to an executable with clang, linked with the
+/// program's libraries.
+pub fn cc(p: &CProgram, out: &Path, mode: Mode) -> Result<(), String> {
     let mut cmd = Command::new("clang");
     cmd.args(["-std=gnu11", "-fwrapv", "-fno-strict-aliasing", "-Wno-incompatible-library-redeclaration"])
         .args(mode.clang_flags())
         .args(["-x", "c", "-", "-o"])
         .arg(out)
         .stdin(Stdio::piped());
+    // `-x none` ends `-x c`, so that a library file among the link flags is
+    // not read as C (clang warns that it is unused when there is none).
+    let flags = link_flags(&p.links);
+    if !flags.is_empty() {
+        cmd.args(["-Wno-unused-command-line-argument", "-x", "none"]).args(flags);
+    }
     let mut child = cmd.spawn().map_err(|e| format!("failed to run clang: {e}"))?;
-    child.stdin.take().unwrap().write_all(c_src.as_bytes()).map_err(|e| e.to_string())?;
+    child.stdin.take().unwrap().write_all(p.c.as_bytes()).map_err(|e| e.to_string())?;
     let status = child.wait().map_err(|e| e.to_string())?;
     if !status.success() {
+        if !p.links.is_empty() {
+            return Err(format!(
+                "clang failed: check that the libraries of `@link` ({}) are installed (if they are, this is a compiler bug)",
+                p.links.join(", ")
+            ));
+        }
         return Err("clang failed on the generated C (this is a compiler bug)".to_string());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn link_flags_for_frameworks_libraries_and_packages() {
+        let flags = |names: &[&str]| link_flags(&names.iter().map(|n| n.to_string()).collect::<Vec<_>>());
+        assert_eq!(flags(&["framework:Cocoa", "ore_no_such_library"]), ["-framework", "Cocoa", "-lore_no_such_library"]);
+        // A package that pkg-config knows gives its flags.
+        if Command::new("pkg-config").args(["--exists", "libcurl"]).status().is_ok_and(|s| s.success()) {
+            assert!(flags(&["libcurl"]).iter().any(|f| f == "-lcurl"));
+        }
+    }
 }
