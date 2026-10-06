@@ -328,7 +328,18 @@ on (`--no-js` turns it off), `dump` with `--js`.
   `sessionStorage`, `alert`/`confirm`/`prompt` (console messages, never
   blocking), microtasks (the engine's job queue, which Promise uses),
   and `fetch` (GET, synchronous underneath, settling in a microtask;
-  `text()`, `json()`).
+  `text()`, `json()`, an aborted `signal`).
+- *More web APIs* (B8, prelude): `URL` and `URLSearchParams` (parsed
+  by `url/`), `atob`/`btoa`, `TextEncoder`/`TextDecoder` (UTF-8),
+  `EventTarget` as a constructor, `AbortController`/`AbortSignal`,
+  `matchMedia` (the CSS media queries against the viewport),
+  `XMLHttpRequest` (GET, on the same fetch), `crypto.getRandomValues`
+  and `randomUUID` (from `Math.random`), `requestIdleCallback`,
+  `reportError`, `Image`, `Option`, `origin`, and `customElements`
+  (definitions kept, elements never upgraded). The observers are
+  stand-ins: `IntersectionObserver` reports each target visible once
+  (lazy loading proceeds), `ResizeObserver` reports each target once,
+  and `MutationObserver` never reports.
 - *Event loop:* timers (ordered by due time, then by scheduling) and
   microtasks after every task. Time is virtual for `dump` and the agent
   (the loop jumps to the next timer; `dump --js` runs until no timer is

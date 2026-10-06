@@ -3,8 +3,10 @@
 // `onclick` properties and attributes), the parts of Node and Element
 // that are easier in JavaScript (append, classList, reflected
 // attributes, `value`), the window (timers, location, history,
-// localStorage, alert), and fetch. It calls the native functions of the
-// `ak` object (window_api.ore) and hands `hostEvent` to the browser.
+// localStorage, alert), fetch, and more web APIs (URL, atob, TextEncoder,
+// AbortController, the observers, matchMedia, XMLHttpRequest...). It
+// calls the native functions of the `ak` object (window_api.ore) and
+// hands `hostEvent` to the browser.
 //
 // Ore has no way to embed a file (browser/COMPILER_GAPS.md), so the
 // source is a multi-line string.
@@ -679,6 +681,10 @@ pub let PRELUDE =
     \\// promise settles in a microtask.
     \\hidden(G, 'fetch', function (input, init) {
     \\  return new Promise((resolve, reject) => {
+    \\    if (init && init.signal && init.signal.aborted) {
+    \\      reject(init.signal.reason);
+    \\      return;
+    \\    }
     \\    const method = init && init.method ? String(init.method).toUpperCase() : 'GET';
     \\    if (method !== 'GET') {
     \\      reject(new TypeError('Failed to fetch: only GET is supported'));
@@ -689,6 +695,559 @@ pub let PRELUDE =
     \\    else resolve(new Response(r));
     \\  });
     \\});
+    \\
+    \\// ---- more web APIs: what real sites call often
+    \\
+    \\// EventTarget can be made and extended (the native one is an interface
+    \\// object); a function expression, so that ETP above is the native one.
+    \\const EventTargetCtor = function EventTarget() {
+    \\  if (new.target === undefined) throw new TypeError("Failed to construct 'EventTarget': Please use the 'new' operator, this DOM object constructor cannot be called as a function.");
+    \\};
+    \\EventTargetCtor.prototype = ETP;
+    \\hidden(ETP, 'constructor', EventTargetCtor);
+    \\hidden(G, 'EventTarget', EventTargetCtor);
+    \\
+    \\// atob and btoa
+    \\const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    \\hidden(G, 'btoa', function btoa(s) {
+    \\  s = String(s);
+    \\  let out = '';
+    \\  for (let i = 0; i < s.length; i += 3) {
+    \\    const a = s.charCodeAt(i), b = s.charCodeAt(i + 1), c = s.charCodeAt(i + 2);
+    \\    if (a > 255 || b > 255 || c > 255) throw new DOMException("Failed to execute 'btoa' on 'Window': The string to be encoded contains characters outside of the Latin1 range.", 'InvalidCharacterError');
+    \\    const n = (a << 16) | ((b || 0) << 8) | (c || 0);
+    \\    out += B64[n >> 18] + B64[(n >> 12) & 63] + (i + 1 < s.length ? B64[(n >> 6) & 63] : '=') + (i + 2 < s.length ? B64[n & 63] : '=');
+    \\  }
+    \\  return out;
+    \\});
+    \\hidden(G, 'atob', function atob(s) {
+    \\  s = String(s).replace(/[\t\n\f\r ]/g, '');
+    \\  if (s.length % 4 === 0) s = s.replace(/==?$/, '');
+    \\  if (s.length % 4 === 1 || /[^A-Za-z0-9+/]/.test(s)) throw new DOMException("Failed to execute 'atob' on 'Window': The string to be decoded is not correctly encoded.", 'InvalidCharacterError');
+    \\  let out = '';
+    \\  let bits = 0, n = 0;
+    \\  for (const ch of s) {
+    \\    n = (n << 6) | B64.indexOf(ch);
+    \\    bits += 6;
+    \\    if (bits >= 8) {
+    \\      bits -= 8;
+    \\      out += String.fromCharCode((n >> bits) & 255);
+    \\    }
+    \\  }
+    \\  return out;
+    \\});
+    \\
+    \\// TextEncoder and TextDecoder: UTF-8 only
+    \\class TextEncoder {
+    \\  get encoding() { return 'utf-8'; }
+    \\  encode(s) {
+    \\    const bytes = [];
+    \\    for (const ch of String(s === undefined ? '' : s)) {
+    \\      let c = ch.codePointAt(0);
+    \\      if (c >= 0xD800 && c <= 0xDFFF) c = 0xFFFD;
+    \\      if (c < 0x80) bytes.push(c);
+    \\      else if (c < 0x800) bytes.push(0xC0 | (c >> 6), 0x80 | (c & 63));
+    \\      else if (c < 0x10000) bytes.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    \\      else bytes.push(0xF0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    \\    }
+    \\    return new Uint8Array(bytes);
+    \\  }
+    \\}
+    \\class TextDecoder {
+    \\  constructor(label) {
+    \\    const l = label === undefined ? 'utf-8' : String(label).trim().toLowerCase();
+    \\    if (l !== 'utf-8' && l !== 'utf8' && l !== 'unicode-1-1-utf-8') throw new RangeError("Failed to construct 'TextDecoder': The encoding label provided ('" + label + "') is invalid.");
+    \\  }
+    \\  get encoding() { return 'utf-8'; }
+    \\  decode(input) {
+    \\    if (input === undefined) return '';
+    \\    const b = input instanceof ArrayBuffer ? new Uint8Array(input) : input;
+    \\    let out = '';
+    \\    let i = 0;
+    \\    if (b[0] === 0xEF && b[1] === 0xBB && b[2] === 0xBF) i = 3;
+    \\    while (i < b.length) {
+    \\      const x = b[i];
+    \\      const need = x < 0x80 ? 0 : x >= 0xC2 && x < 0xE0 ? 1 : x >= 0xE0 && x < 0xF0 ? 2 : x >= 0xF0 && x < 0xF5 ? 3 : -1;
+    \\      let c = need === 0 ? x : need === 1 ? x & 31 : need === 2 ? x & 15 : x & 7;
+    \\      let j = 1;
+    \\      while (need > 0 && j <= need && i + j < b.length && (b[i + j] & 0xC0) === 0x80) {
+    \\        c = (c << 6) | (b[i + j] & 63);
+    \\        j++;
+    \\      }
+    \\      if (need < 0 || j <= need || (need === 2 && (c < 0x800 || (c >= 0xD800 && c <= 0xDFFF))) || (need === 3 && (c < 0x10000 || c > 0x10FFFF))) {
+    \\        out += '�';
+    \\        i += need < 0 ? 1 : j;
+    \\      } else {
+    \\        out += String.fromCodePoint(c);
+    \\        i += j;
+    \\      }
+    \\    }
+    \\    return out;
+    \\  }
+    \\}
+    \\hidden(G, 'TextEncoder', TextEncoder);
+    \\hidden(G, 'TextDecoder', TextDecoder);
+    \\
+    \\// URLSearchParams and URL (the parsing is the browser's: ak.parseUrl)
+    \\function formEncode(s) {
+    \\  return encodeURIComponent(s).replace(/[!'()~]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase()).replace(/%20/g, '+');
+    \\}
+    \\function formDecode(s) {
+    \\  s = s.replace(/\+/g, ' ');
+    \\  try {
+    \\    return decodeURIComponent(s);
+    \\  } catch (e) {
+    \\    return s.replace(/%([0-9A-Fa-f]{2})/g, (m, h) => String.fromCharCode(parseInt(h, 16)));
+    \\  }
+    \\}
+    \\class URLSearchParams {
+    \\  constructor(init) {
+    \\    hidden(this, '_list', []);
+    \\    hidden(this, '_url', null);
+    \\    if (init === undefined || init === null) return;
+    \\    if (typeof init === 'object' || typeof init === 'function') {
+    \\      if (typeof init[Symbol.iterator] === 'function') {
+    \\        for (const pair of init) {
+    \\          const p = Array.from(pair);
+    \\          if (p.length !== 2) throw new TypeError("Failed to construct 'URLSearchParams': Sequence initializer must only contain pair elements");
+    \\          this._list.push([String(p[0]), String(p[1])]);
+    \\        }
+    \\      } else {
+    \\        for (const k of Object.keys(init)) this._list.push([k, String(init[k])]);
+    \\      }
+    \\      return;
+    \\    }
+    \\    this._parse(String(init));
+    \\  }
+    \\  _parse(s) {
+    \\    this._list.length = 0;
+    \\    if (s[0] === '?') s = s.slice(1);
+    \\    for (const piece of s.split('&')) {
+    \\      if (piece === '') continue;
+    \\      const eq = piece.indexOf('=');
+    \\      this._list.push(eq < 0 ? [formDecode(piece), ''] : [formDecode(piece.slice(0, eq)), formDecode(piece.slice(eq + 1))]);
+    \\    }
+    \\  }
+    \\  _update() {
+    \\    if (this._url) this._url._setSearch(this.toString());
+    \\  }
+    \\  get size() { return this._list.length; }
+    \\  append(k, v) { this._list.push([String(k), String(v)]); this._update(); }
+    \\  delete(k, v) {
+    \\    k = String(k);
+    \\    for (let i = this._list.length - 1; i >= 0; i--) {
+    \\      if (this._list[i][0] === k && (v === undefined || this._list[i][1] === String(v))) this._list.splice(i, 1);
+    \\    }
+    \\    this._update();
+    \\  }
+    \\  get(k) {
+    \\    k = String(k);
+    \\    const p = this._list.find(p => p[0] === k);
+    \\    return p ? p[1] : null;
+    \\  }
+    \\  getAll(k) {
+    \\    k = String(k);
+    \\    return this._list.filter(p => p[0] === k).map(p => p[1]);
+    \\  }
+    \\  has(k, v) {
+    \\    k = String(k);
+    \\    return this._list.some(p => p[0] === k && (v === undefined || p[1] === String(v)));
+    \\  }
+    \\  set(k, v) {
+    \\    k = String(k);
+    \\    v = String(v);
+    \\    const i = this._list.findIndex(p => p[0] === k);
+    \\    if (i < 0) this._list.push([k, v]);
+    \\    else {
+    \\      this._list[i][1] = v;
+    \\      for (let j = this._list.length - 1; j > i; j--) if (this._list[j][0] === k) this._list.splice(j, 1);
+    \\    }
+    \\    this._update();
+    \\  }
+    \\  sort() {
+    \\    const keyed = this._list.map((p, i) => [p, i]);
+    \\    keyed.sort((a, b) => (a[0][0] < b[0][0] ? -1 : a[0][0] > b[0][0] ? 1 : a[1] - b[1]));
+    \\    this._list.splice(0, this._list.length, ...keyed.map(x => x[0]));
+    \\    this._update();
+    \\  }
+    \\  forEach(f, thisArg) {
+    \\    for (const [k, v] of this._list.slice()) f.call(thisArg, v, k, this);
+    \\  }
+    \\  keys() { return this._list.map(p => p[0])[Symbol.iterator](); }
+    \\  values() { return this._list.map(p => p[1])[Symbol.iterator](); }
+    \\  entries() { return this._list.map(p => [p[0], p[1]])[Symbol.iterator](); }
+    \\  [Symbol.iterator]() { return this.entries(); }
+    \\  toString() { return this._list.map(p => formEncode(p[0]) + '=' + formEncode(p[1])).join('&'); }
+    \\}
+    \\Object.defineProperty(URLSearchParams.prototype, Symbol.toStringTag, { value: 'URLSearchParams', configurable: true });
+    \\hidden(G, 'URLSearchParams', URLSearchParams);
+    \\
+    \\const URL_PARTS = ['href', 'protocol', 'username', 'password', 'host', 'hostname', 'port', 'pathname', 'search', 'hash', 'origin'];
+    \\function parsedUrl(input, base) {
+    \\  const parts = base === undefined ? ak.parseUrl(String(input)) : ak.parseUrl(String(input), String(base));
+    \\  if (parts === null) return null;
+    \\  const p = {};
+    \\  URL_PARTS.forEach((k, i) => { p[k] = parts[i]; });
+    \\  return p;
+    \\}
+    \\class URL {
+    \\  constructor(input, base) {
+    \\    const p = parsedUrl(input, base);
+    \\    if (p === null) throw new TypeError("Failed to construct 'URL': Invalid URL");
+    \\    hidden(this, '_p', p);
+    \\    hidden(this, '_params', null);
+    \\  }
+    \\  static canParse(input, base) { return parsedUrl(input, base) !== null; }
+    \\  static parse(input, base) {
+    \\    try {
+    \\      return new URL(input, base);
+    \\    } catch (e) {
+    \\      return null;
+    \\    }
+    \\  }
+    \\  _set(href) {
+    \\    const p = parsedUrl(href);
+    \\    if (p !== null) this._p = p;
+    \\    if (this._params) this._params._parse(this._p.search);
+    \\  }
+    \\  _setSearch(q) {
+    \\    const p = parsedUrl(this._rebuild({ search: q === '' ? '' : '?' + q }));
+    \\    if (p !== null) this._p = p;
+    \\  }
+    \\  _rebuild(change) {
+    \\    const p = Object.assign({}, this._p, change);
+    \\    const user = p.username === '' && p.password === '' ? '' : p.username + (p.password === '' ? '' : ':' + p.password) + '@';
+    \\    const slashes = p.host !== '' || p.protocol === 'file:' ? '//' : '';
+    \\    return p.protocol + slashes + user + p.host + p.pathname + p.search + p.hash;
+    \\  }
+    \\  get href() { return this._p.href; }
+    \\  set href(v) {
+    \\    const p = parsedUrl(v);
+    \\    if (p === null) throw new TypeError("Failed to set the 'href' property on 'URL': Invalid URL");
+    \\    this._set(p.href);
+    \\  }
+    \\  get origin() { return this._p.origin; }
+    \\  get protocol() { return this._p.protocol; }
+    \\  set protocol(v) { this._set(this._rebuild({ protocol: String(v).replace(/:?$/, ':') })); }
+    \\  get username() { return this._p.username; }
+    \\  set username(v) { this._set(this._rebuild({ username: encodeURIComponent(String(v)) })); }
+    \\  get password() { return this._p.password; }
+    \\  set password(v) { this._set(this._rebuild({ password: encodeURIComponent(String(v)) })); }
+    \\  get host() { return this._p.host; }
+    \\  set host(v) { this._set(this._rebuild({ host: String(v) })); }
+    \\  get hostname() { return this._p.hostname; }
+    \\  set hostname(v) { this._set(this._rebuild({ host: String(v) + (this._p.port === '' ? '' : ':' + this._p.port) })); }
+    \\  get port() { return this._p.port; }
+    \\  set port(v) { this._set(this._rebuild({ host: this._p.hostname + (String(v) === '' ? '' : ':' + String(v)) })); }
+    \\  get pathname() { return this._p.pathname; }
+    \\  set pathname(v) {
+    \\    v = String(v);
+    \\    this._set(this._rebuild({ pathname: v[0] === '/' ? v : '/' + v }));
+    \\  }
+    \\  get search() { return this._p.search; }
+    \\  set search(v) {
+    \\    v = String(v);
+    \\    if (v[0] === '?') v = v.slice(1);
+    \\    this._set(this._rebuild({ search: v === '' ? '' : '?' + v }));
+    \\  }
+    \\  get searchParams() {
+    \\    if (!this._params) {
+    \\      this._params = new URLSearchParams(this._p.search);
+    \\      this._params._url = this;
+    \\    }
+    \\    return this._params;
+    \\  }
+    \\  get hash() { return this._p.hash; }
+    \\  set hash(v) {
+    \\    v = String(v);
+    \\    if (v[0] === '#') v = v.slice(1);
+    \\    this._set(this._rebuild({ hash: v === '' ? '' : '#' + v }));
+    \\  }
+    \\  toString() { return this._p.href; }
+    \\  toJSON() { return this._p.href; }
+    \\}
+    \\Object.defineProperty(URL.prototype, Symbol.toStringTag, { value: 'URL', configurable: true });
+    \\hidden(G, 'URL', URL);
+    \\
+    \\// AbortController and AbortSignal
+    \\class AbortSignal extends EventTarget {
+    \\  constructor() {
+    \\    super();
+    \\    hidden(this, '_aborted', false);
+    \\    hidden(this, '_reason', undefined);
+    \\  }
+    \\  get aborted() { return this._aborted; }
+    \\  get reason() { return this._reason; }
+    \\  throwIfAborted() { if (this._aborted) throw this._reason; }
+    \\  _abort(reason) {
+    \\    if (this._aborted) return;
+    \\    this._aborted = true;
+    \\    this._reason = reason === undefined ? new DOMException('signal is aborted without reason', 'AbortError') : reason;
+    \\    this.dispatchEvent(new Event('abort'));
+    \\  }
+    \\  static abort(reason) {
+    \\    const s = new AbortSignal();
+    \\    s._abort(reason);
+    \\    return s;
+    \\  }
+    \\  static timeout(ms) {
+    \\    const s = new AbortSignal();
+    \\    setTimeout(() => s._abort(new DOMException('signal timed out', 'TimeoutError')), ms);
+    \\    return s;
+    \\  }
+    \\  static any(signals) {
+    \\    const s = new AbortSignal();
+    \\    for (const x of signals) {
+    \\      if (x.aborted) {
+    \\        s._abort(x.reason);
+    \\        break;
+    \\      }
+    \\      x.addEventListener('abort', () => s._abort(x.reason));
+    \\    }
+    \\    return s;
+    \\  }
+    \\}
+    \\class AbortController {
+    \\  constructor() { hidden(this, '_signal', new AbortSignal()); }
+    \\  get signal() { return this._signal; }
+    \\  abort(reason) { this._signal._abort(reason); }
+    \\}
+    \\hidden(G, 'AbortSignal', AbortSignal);
+    \\hidden(G, 'AbortController', AbortController);
+    \\
+    \\// Observers: IntersectionObserver reports every target visible once (so
+    \\// lazy loading goes on), ResizeObserver reports each target once;
+    \\// MutationObserver never reports (the DOM keeps no mutation records).
+    \\class IntersectionObserver {
+    \\  constructor(callback, options) {
+    \\    if (typeof callback !== 'function') throw new TypeError("Failed to construct 'IntersectionObserver': parameter 1 is not of type 'Function'.");
+    \\    hidden(this, '_callback', callback);
+    \\    hidden(this, '_targets', []);
+    \\    this.root = (options && options.root) || null;
+    \\    this.rootMargin = (options && options.rootMargin) || '0px';
+    \\    this.thresholds = [].concat((options && options.threshold) || 0);
+    \\  }
+    \\  observe(target) {
+    \\    if (this._targets.includes(target)) return;
+    \\    this._targets.push(target);
+    \\    setTimeout(() => {
+    \\      if (!this._targets.includes(target)) return;
+    \\      const rect = target.getBoundingClientRect();
+    \\      const entry = { target, isIntersecting: true, intersectionRatio: 1, boundingClientRect: rect, intersectionRect: rect, rootBounds: null, time: performance.now() };
+    \\      this._callback([entry], this);
+    \\    }, 0);
+    \\  }
+    \\  unobserve(target) { this._targets = this._targets.filter(t => t !== target); }
+    \\  disconnect() { this._targets = []; }
+    \\  takeRecords() { return []; }
+    \\}
+    \\class ResizeObserver {
+    \\  constructor(callback) {
+    \\    if (typeof callback !== 'function') throw new TypeError("Failed to construct 'ResizeObserver': parameter 1 is not of type 'Function'.");
+    \\    hidden(this, '_callback', callback);
+    \\    hidden(this, '_targets', []);
+    \\  }
+    \\  observe(target) {
+    \\    if (this._targets.includes(target)) return;
+    \\    this._targets.push(target);
+    \\    requestAnimationFrame(() => {
+    \\      if (!this._targets.includes(target)) return;
+    \\      const r = target.getBoundingClientRect();
+    \\      const size = [{ inlineSize: r.width, blockSize: r.height }];
+    \\      this._callback([{ target, contentRect: r, borderBoxSize: size, contentBoxSize: size, devicePixelContentBoxSize: size }], this);
+    \\    });
+    \\  }
+    \\  unobserve(target) { this._targets = this._targets.filter(t => t !== target); }
+    \\  disconnect() { this._targets = []; }
+    \\}
+    \\class MutationObserver {
+    \\  constructor(callback) {
+    \\    if (typeof callback !== 'function') throw new TypeError("Failed to construct 'MutationObserver': parameter 1 is not of type 'Function'.");
+    \\  }
+    \\  observe() {}
+    \\  disconnect() {}
+    \\  takeRecords() { return []; }
+    \\}
+    \\hidden(G, 'IntersectionObserver', IntersectionObserver);
+    \\hidden(G, 'ResizeObserver', ResizeObserver);
+    \\hidden(G, 'MutationObserver', MutationObserver);
+    \\
+    \\// matchMedia: the browser's media queries against the viewport
+    \\class MediaQueryList extends EventTarget {
+    \\  constructor(media) {
+    \\    super();
+    \\    hidden(this, '_media', media);
+    \\  }
+    \\  get media() { return this._media; }
+    \\  get matches() { return ak.matchMedia(this._media); }
+    \\  addListener(f) { this.addEventListener('change', f); }
+    \\  removeListener(f) { this.removeEventListener('change', f); }
+    \\}
+    \\hidden(G, 'MediaQueryList', MediaQueryList);
+    \\hidden(G, 'matchMedia', function matchMedia(q) { return new MediaQueryList(String(q)); });
+    \\
+    \\// crypto: random values from Math.random (not for secrets)
+    \\const crypto = {
+    \\  getRandomValues(a) {
+    \\    if (!ArrayBuffer.isView(a)) throw new TypeError("Failed to execute 'getRandomValues' on 'Crypto': parameter 1 is not of type 'ArrayBufferView'.");
+    \\    for (let i = 0; i < a.length; i++) a[i] = Math.floor(Math.random() * 4294967296);
+    \\    return a;
+    \\  },
+    \\  randomUUID() {
+    \\    const h = [];
+    \\    for (let i = 0; i < 32; i++) h.push(Math.floor(Math.random() * 16));
+    \\    h[12] = 4;
+    \\    h[16] = 8 | (h[16] & 3);
+    \\    const s = h.map(x => x.toString(16)).join('');
+    \\    return s.slice(0, 8) + '-' + s.slice(8, 12) + '-' + s.slice(12, 16) + '-' + s.slice(16, 20) + '-' + s.slice(20);
+    \\  },
+    \\};
+    \\hidden(G, 'crypto', crypto);
+    \\
+    \\// Smaller things
+    \\hidden(G, 'requestIdleCallback', function (fn) {
+    \\  const start = ak.now();
+    \\  return ak.setTimer(() => fn({ didTimeout: false, timeRemaining: () => Math.max(0, 50 - (ak.now() - start)) }), 1, false, [], false);
+    \\});
+    \\hidden(G, 'cancelIdleCallback', function (id) { ak.clearTimer(id); });
+    \\hidden(G, 'reportError', function (e) { report(e); });
+    \\getter(G, 'origin', function () { return ak.urlPart('origin'); });
+    \\hidden(G, 'isSecureContext', true);
+    \\hidden(G, 'Image', function Image(width, height) {
+    \\  const img = document.createElement('img');
+    \\  if (width !== undefined) img.setAttribute('width', String(width));
+    \\  if (height !== undefined) img.setAttribute('height', String(height));
+    \\  return img;
+    \\});
+    \\hidden(G, 'Option', function Option(text, value, defaultSelected, selected) {
+    \\  const o = document.createElement('option');
+    \\  if (text !== undefined) o.textContent = String(text);
+    \\  if (value !== undefined) o.setAttribute('value', String(value));
+    \\  if (defaultSelected || selected) o.setAttribute('selected', '');
+    \\  return o;
+    \\});
+    \\// customElements: definitions are kept, elements are not upgraded
+    \\const definitions = new Map();
+    \\const waiting = new Map();
+    \\hidden(G, 'customElements', {
+    \\  define(name, ctor) {
+    \\    name = String(name);
+    \\    if (definitions.has(name)) throw new DOMException("Failed to execute 'define' on 'CustomElementRegistry': the name \"" + name + "\" has already been used with this registry", 'NotSupportedError');
+    \\    definitions.set(name, ctor);
+    \\    if (waiting.has(name)) {
+    \\      waiting.get(name)(ctor);
+    \\      waiting.delete(name);
+    \\    }
+    \\  },
+    \\  get(name) { return definitions.get(String(name)); },
+    \\  whenDefined(name) {
+    \\    name = String(name);
+    \\    if (definitions.has(name)) return Promise.resolve(definitions.get(name));
+    \\    return new Promise(resolve => {
+    \\      const prev = waiting.get(name);
+    \\      waiting.set(name, prev ? c => { prev(c); resolve(c); } : resolve);
+    \\    });
+    \\  },
+    \\  upgrade() {},
+    \\});
+    \\
+    \\// XMLHttpRequest: GET only, on the browser's fetch (synchronous
+    \\// underneath); an asynchronous request completes in a task of its own.
+    \\class XMLHttpRequest extends EventTarget {
+    \\  constructor() {
+    \\    super();
+    \\    this.readyState = 0;
+    \\    this.status = 0;
+    \\    this.statusText = '';
+    \\    this.responseText = '';
+    \\    this.responseType = '';
+    \\    this.responseURL = '';
+    \\    this.timeout = 0;
+    \\    this.withCredentials = false;
+    \\    for (const t of XHR_EVENTS) if (!HANDLERS.includes(t)) this['on' + t] = null;
+    \\    hidden(this, '_method', 'GET');
+    \\    hidden(this, '_url', '');
+    \\    hidden(this, '_async', true);
+    \\    hidden(this, '_type', '');
+    \\    hidden(this, '_sent', false);
+    \\  }
+    \\  open(method, url, async) {
+    \\    this._method = String(method).toUpperCase();
+    \\    this._url = String(url);
+    \\    this._async = async !== false;
+    \\    this._sent = false;
+    \\    this.status = 0;
+    \\    this.responseText = '';
+    \\    this._state(1);
+    \\  }
+    \\  setRequestHeader() {}
+    \\  overrideMimeType() {}
+    \\  getResponseHeader(name) {
+    \\    return this.readyState >= 2 && String(name).toLowerCase() === 'content-type' && this._type !== '' ? this._type : null;
+    \\  }
+    \\  getAllResponseHeaders() {
+    \\    return this.readyState >= 2 && this._type !== '' ? 'content-type: ' + this._type + '\r\n' : '';
+    \\  }
+    \\  get response() {
+    \\    if (this.responseType !== 'json') return this.responseText;
+    \\    try {
+    \\      return JSON.parse(this.responseText);
+    \\    } catch (e) {
+    \\      return null;
+    \\    }
+    \\  }
+    \\  send() {
+    \\    if (this.readyState !== 1 || this._sent) throw new DOMException("Failed to execute 'send' on 'XMLHttpRequest': The object's state must be OPENED.", 'InvalidStateError');
+    \\    this._sent = true;
+    \\    if (this._async) setTimeout(() => this._load(), 0);
+    \\    else this._load();
+    \\  }
+    \\  abort() {
+    \\    if (!this._sent) return;
+    \\    this._sent = false;
+    \\    this.readyState = 0;
+    \\    this._fire('abort');
+    \\    this._fire('loadend');
+    \\  }
+    \\  _load() {
+    \\    if (!this._sent) return;
+    \\    const r = this._method === 'GET' ? ak.fetch(this._url) : { error: 'only GET is supported' };
+    \\    if (r.error !== undefined) {
+    \\      this._state(4);
+    \\      this._fire('error');
+    \\      this._fire('loadend');
+    \\      return;
+    \\    }
+    \\    this.status = r.status;
+    \\    this.statusText = r.status >= 200 && r.status < 300 ? 'OK' : '';
+    \\    this.responseURL = r.url;
+    \\    this._type = r.type;
+    \\    this._state(2);
+    \\    this.responseText = r.body;
+    \\    this._state(3);
+    \\    this._state(4);
+    \\    this._fire('load');
+    \\    this._fire('loadend');
+    \\  }
+    \\  _state(n) {
+    \\    this.readyState = n;
+    \\    this._fire('readystatechange');
+    \\  }
+    \\  _fire(type) {
+    \\    const ev = new Event(type);
+    \\    // `onload` and the like are the EventTarget's (HANDLERS); the others
+    \\    // are plain properties.
+    \\    const h = HANDLERS.includes(type) ? null : this['on' + type];
+    \\    if (typeof h === 'function') callListener(h, this, ev, false);
+    \\    this.dispatchEvent(ev);
+    \\  }
+    \\}
+    \\const XHR_EVENTS = ['readystatechange', 'loadstart', 'progress', 'load', 'error', 'abort', 'timeout', 'loadend'];
+    \\['UNSENT', 'OPENED', 'HEADERS_RECEIVED', 'LOADING', 'DONE'].forEach((k, i) => {
+    \\  XMLHttpRequest[k] = i;
+    \\  XMLHttpRequest.prototype[k] = i;
+    \\});
+    \\hidden(G, 'XMLHttpRequest', XMLHttpRequest);
     \\
     \\ak.setDispatch(hostEvent);
     \\})(__ak);

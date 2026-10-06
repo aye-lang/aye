@@ -4,6 +4,7 @@
 // localStorage lives in memory, per origin, for as long as a page of the
 // process is open (`local_store`).
 
+import css
 import dom.NodeId
 import encoding
 import js
@@ -37,6 +38,8 @@ fn installWindow(s: *mut Script) JsError!void {
     try defMethod(it, o, "resolve", 1, akResolve)
     try defMethod(it, o, "url", 0, akUrl)
     try defMethod(it, o, "urlPart", 1, akUrlPart)
+    try defMethod(it, o, "parseUrl", 2, akParseUrl)
+    try defMethod(it, o, "matchMedia", 1, akMatchMedia)
     try defMethod(it, o, "navigate", 1, akNavigate)
     try defMethod(it, o, "reload", 0, akReload)
     try defMethod(it, o, "historyGo", 1, akHistoryGo)
@@ -256,13 +259,68 @@ fn akUrlPart(it: *mut Interp, a: Args) JsError!Value {
     let which = try it.builder()
     defer it.release(which)
     try argText(it, a, 0, which)
-    let u = &scriptOf(it).page.url
-    let part = which.bytes()
     let b = try it.builder()
     defer it.release(b)
-    if text.eql(part, "protocol") {
+    try appendUrlPart(b, &scriptOf(it).page.url, which.bytes())
+    return it.newString(b.bytes())
+}
+
+// The parts of a URL the URL class shows, in the order of akParseUrl's
+// array.
+let URL_PARTS = [_][]u8{"href", "protocol", "username", "password", "host", "hostname", "port", "pathname", "search", "hash", "origin"}
+
+// parseUrl(input, base): the parts of `input` (resolved against `base`
+// when given) as an array in the order of URL_PARTS, or null when it is
+// not a valid URL.
+fn akParseUrl(it: *mut Interp, a: Args) JsError!Value {
+    let input = try it.builder()
+    defer it.release(input)
+    try argText(it, a, 0, input)
+    var parsed: ?url.Url = null
+    if js.isUndef(it.arg(a, 1)) {
+        parsed = url.parse(it.alloc, input.bytes()) catch |e| {
+            return Value.Null
+        }
+    } else {
+        let baseText = try it.builder()
+        defer it.release(baseText)
+        try argText(it, a, 1, baseText)
+        var base = url.parse(it.alloc, baseText.bytes()) catch |e| {
+            return Value.Null
+        }
+        defer base.deinit(it.alloc)
+        parsed = url.resolve(it.alloc, &base, input.bytes()) catch |e| {
+            return Value.Null
+        }
+    }
+    let u = parsed orelse return Value.Null
+    defer u.deinit(it.alloc)
+    let arr = try it.newArray(0)
+    try it.push(js.objVal(arr))
+    let b = try it.builder()
+    defer it.release(b)
+    for part in URL_PARTS {
+        b.clear()
+        try appendUrlPart(b, &u, part)
+        let v = try it.newString(b.bytes())
+        try it.heap.pushElem(arr, v)
+    }
+    return it.pop()
+}
+
+// Appends a part of `u` as the URL class and `location` show it.
+fn appendUrlPart(b: *mut text.Builder, u: *url.Url, part: []u8) AllocError!void {
+    if text.eql(part, "href") {
+        try b.append(u.href)
+    } else if text.eql(part, "username") {
+        try b.append(u.username)
+    } else if text.eql(part, "password") {
+        try b.append(u.password)
+    } else if text.eql(part, "protocol") {
         try b.append(u.scheme)
         try b.appendByte(':')
+    } else if text.eql(part, "origin") && !hasTupleOrigin(u.scheme) {
+        try b.append("null")
     } else if text.eql(part, "host") || text.eql(part, "origin") {
         if text.eql(part, "origin") {
             try b.append(u.scheme)
@@ -290,7 +348,23 @@ fn akUrlPart(it: *mut Interp, a: Args) JsError!Value {
             try b.append(u.fragment)
         }
     }
-    return it.newString(b.bytes())
+}
+
+// Schemes whose origin is scheme, host and port (others: "null").
+fn hasTupleOrigin(scheme: []u8) bool {
+    return text.eql(scheme, "http") || text.eql(scheme, "https") || text.eql(scheme, "ws") || text.eql(scheme, "wss") || text.eql(scheme, "ftp")
+}
+
+// matchMedia(query): does the media query list match the viewport?
+fn akMatchMedia(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    let q = try it.builder()
+    defer it.release(q)
+    try argText(it, a, 0, q)
+    var sheet = try css.Sheet.init(it.alloc)
+    defer sheet.deinit()
+    let m = try css.mediaMatches(&mut sheet, q.bytes(), css.Media { width: s.width, height: s.height })
+    return js.boolVal(m)
 }
 
 fn akNavigate(it: *mut Interp, a: Args) JsError!Value {
