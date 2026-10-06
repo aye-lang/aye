@@ -33,6 +33,7 @@ import dom
 import dom.Kind
 import dom.NodeId
 import encoding
+import font
 import js
 import js.Interp
 import js.JsError
@@ -254,6 +255,17 @@ pub struct Script {
     // Calls from the browser into the page that have not returned
     // (microtasks run when it is back to 0).
     depth: u32
+    // The layout geometry questions read (geometry.ore), and the font it
+    // measures with when the page was never laid out.
+    geom: ?*mut Geometry
+    fixed: font.Fixed
+    // The scroll offsets scripts gave scroll containers, by node index.
+    scrolls: IntMap(u32, ScrollOffset)
+    // The window's scroll offset; `scroll_moved` when a script moved it
+    // since a front end took it (`takeScriptScroll`).
+    scroll_x: f64
+    scroll_y: f64
+    scroll_moved: bool
 
     // ---- js.Host
 
@@ -423,6 +435,12 @@ fn createScript(p: *mut Page) AllocError!*mut Script {
         width: 800.0,
         height: 600.0,
         depth: 0,
+        geom: null,
+        fixed: font.Fixed.init(),
+        scrolls: IntMap(u32, ScrollOffset).init(alloc),
+        scroll_x: 0.0,
+        scroll_y: 0.0,
+        scroll_moved: false,
     }) catch |e| {
         interp.deinit()
         return e
@@ -489,6 +507,8 @@ pub fn destroyScript(s: *mut Script) {
     s.tag_protos.deinit()
     s.written.deinit()
     dropComputed(s)
+    dropGeometry(s)
+    s.scrolls.deinit()
     s.timers.deinit()
     for line in s.console.items() {
         s.alloc.free(line)

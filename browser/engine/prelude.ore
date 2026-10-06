@@ -444,12 +444,6 @@ pub let PRELUDE =
     \\  hostEvent(this, 'blur');
     \\  hostEvent(this, 'focusout');
     \\});
-    \\hidden(ElementP, 'scrollIntoView', function () {});
-    \\// No geometry yet: a box for an element that is rendered (in the
-    \\// document, no `display: none` on the way up), none for the others.
-    \\hidden(ElementP, 'getClientRects', function () {
-    \\  return ak.displayed(this) ? [this.getBoundingClientRect()] : [];
-    \\});
     \\
     \\// Attributes reflected as properties.
     \\function reflect(name, attr) {
@@ -1078,13 +1072,6 @@ pub let PRELUDE =
     \\getter(G, 'innerHeight', function () { return ak.viewport(1); });
     \\getter(G, 'outerWidth', function () { return ak.viewport(0); });
     \\getter(G, 'outerHeight', function () { return ak.viewport(1); });
-    \\hidden(G, 'scrollX', 0);
-    \\hidden(G, 'scrollY', 0);
-    \\hidden(G, 'pageXOffset', 0);
-    \\hidden(G, 'pageYOffset', 0);
-    \\hidden(G, 'scrollTo', function () {});
-    \\hidden(G, 'scrollBy', function () {});
-    \\hidden(G, 'scroll', function () {});
     \\hidden(G, 'focus', function () {});
     \\hidden(G, 'blur', function () {});
     \\class Navigator {
@@ -2197,7 +2184,7 @@ pub let PRELUDE =
     \\});
     \\getter(G, 'onmessage', function () { return handlerOf(G, 'message'); }, function (v) { setHandler(G, 'message', v); });
     \\
-    \\// DOMRect, Range and Selection: no geometry yet.
+    \\// DOMRect, Range and Selection (ranges have no geometry yet).
     \\class DOMRectReadOnly {
     \\  constructor(x, y, width, height) {
     \\    hidden(this, '_r', [Number(x) || 0, Number(y) || 0, Number(width) || 0, Number(height) || 0]);
@@ -2222,9 +2209,131 @@ pub let PRELUDE =
     \\  get width() { return this._r[2]; }
     \\  get height() { return this._r[3]; }
     \\}
+    \\DOMRectReadOnly.fromRect = function (r) { r = r || {}; return new this(r.x, r.y, r.width, r.height); };
+    \\DOMRect.fromRect = DOMRectReadOnly.fromRect;
+    \\class DOMRectList {
+    \\  constructor(rects) {
+    \\    hidden(this, '_rects', rects);
+    \\    for (let i = 0; i < rects.length; i++) Object.defineProperty(this, i, { value: rects[i], enumerable: true });
+    \\  }
+    \\  get length() { return this._rects.length; }
+    \\  item(i) { return this._rects[i >>> 0] || null; }
+    \\}
+    \\hidden(DOMRectList.prototype, Symbol.iterator, ArrayP.values);
     \\hidden(G, 'DOMRectReadOnly', DOMRectReadOnly);
     \\hidden(G, 'DOMRect', DOMRect);
-    \\hidden(ElementP, 'getBoundingClientRect', function () { return new DOMRect(0, 0, 0, 0); });
+    \\hidden(G, 'DOMRectList', DOMRectList);
+    \\
+    \\// Geometry (engine/geometry.ore): a layout of the document made when a
+    \\// script asks after a change, reused until the next one. Elements that
+    \\// are not rendered have no boxes: no rectangles, zero sizes.
+    \\function clientRects(el) {
+    \\  const q = ak.rects(el), out = [];
+    \\  for (let i = 0; i < q.length; i += 4) out.push(new DOMRect(q[i], q[i + 1], q[i + 2], q[i + 3]));
+    \\  return out;
+    \\}
+    \\hidden(ElementP, 'getClientRects', function () { return new DOMRectList(clientRects(this)); });
+    \\hidden(ElementP, 'getBoundingClientRect', function () {
+    \\  const rects = clientRects(this);
+    \\  const sized = rects.filter(r => r.width !== 0 && r.height !== 0);
+    \\  if (sized.length === 0) return rects.length ? rects[0] : new DOMRect(0, 0, 0, 0);
+    \\  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    \\  for (const r of sized) {
+    \\    x0 = Math.min(x0, r.x);
+    \\    y0 = Math.min(y0, r.y);
+    \\    x1 = Math.max(x1, r.x + r.width);
+    \\    y1 = Math.max(y1, r.y + r.height);
+    \\  }
+    \\  return new DOMRect(x0, y0, x1 - x0, y1 - y0);
+    \\});
+    \\['offsetTop', 'offsetLeft', 'offsetWidth', 'offsetHeight'].forEach((name, k) => {
+    \\  getter(HTMLP, name, function () { return ak.metric(this, k); });
+    \\});
+    \\getter(HTMLP, 'offsetParent', function () { return ak.offsetParent(this); });
+    \\['clientTop', 'clientLeft', 'clientWidth', 'clientHeight'].forEach((name, k) => {
+    \\  getter(ElementP, name, function () { return ak.metric(this, 4 + k); });
+    \\});
+    \\getter(ElementP, 'scrollWidth', function () { return ak.metric(this, 10); });
+    \\getter(ElementP, 'scrollHeight', function () { return ak.metric(this, 11); });
+    \\// A scroll that moved fires `scroll` (at the element, or at the document
+    \\// for the window) as a task.
+    \\function scrolled(target) {
+    \\  setTimeout(() => {
+    \\    if (target === G) dispatch(document, new Event('scroll', { bubbles: true }));
+    \\    else dispatch(target, new Event('scroll'));
+    \\  }, 0);
+    \\}
+    \\function scrollTarget(el, left, top) {
+    \\  if (ak.setScroll(el, left, top)) scrolled(el === null || el === document.documentElement ? G : el);
+    \\}
+    \\getter(ElementP, 'scrollTop', function () { return ak.metric(this, 8); }, function (v) { scrollTarget(this, NaN, Number(v) || 0); });
+    \\getter(ElementP, 'scrollLeft', function () { return ak.metric(this, 9); }, function (v) { scrollTarget(this, Number(v) || 0, NaN); });
+    \\// scrollTo(x, y) or scrollTo({ left, top }); scrollBy adds to where it is.
+    \\function scrollArgs(args, x0, y0, by) {
+    \\  let left = NaN, top = NaN;
+    \\  const o = args[0];
+    \\  if (args.length >= 2) {
+    \\    left = Number(args[0]) || 0;
+    \\    top = Number(args[1]) || 0;
+    \\  } else if (o && typeof o === 'object') {
+    \\    if (o.left !== undefined) left = Number(o.left) || 0;
+    \\    if (o.top !== undefined) top = Number(o.top) || 0;
+    \\  }
+    \\  if (by) {
+    \\    left = isNaN(left) ? NaN : x0 + left;
+    \\    top = isNaN(top) ? NaN : y0 + top;
+    \\  }
+    \\  return [left, top];
+    \\}
+    \\function elementScroll(by) {
+    \\  return function (...args) {
+    \\    const [left, top] = scrollArgs(args, this.scrollLeft, this.scrollTop, by);
+    \\    scrollTarget(this, left, top);
+    \\  };
+    \\}
+    \\hidden(ElementP, 'scrollTo', elementScroll(false));
+    \\hidden(ElementP, 'scroll', elementScroll(false));
+    \\hidden(ElementP, 'scrollBy', elementScroll(true));
+    \\function windowScroll(by) {
+    \\  return function (...args) {
+    \\    const [left, top] = scrollArgs(args, ak.windowScroll(0), ak.windowScroll(1), by);
+    \\    scrollTarget(null, left, top);
+    \\  };
+    \\}
+    \\hidden(G, 'scrollTo', windowScroll(false));
+    \\hidden(G, 'scroll', windowScroll(false));
+    \\hidden(G, 'scrollBy', windowScroll(true));
+    \\getter(G, 'scrollX', function () { return ak.windowScroll(0); });
+    \\getter(G, 'scrollY', function () { return ak.windowScroll(1); });
+    \\getter(G, 'pageXOffset', function () { return ak.windowScroll(0); });
+    \\getter(G, 'pageYOffset', function () { return ak.windowScroll(1); });
+    \\// scrollIntoView: the scroll containers around the element (innermost
+    \\// first), then the window, scroll vertically so that it shows at the
+    \\// `block` position (`start` by default; `false` is `end`).
+    \\function alignBy(top, height, view, block) {
+    \\  if (block === 'end') return top + height - view;
+    \\  if (block === 'center') return top + height / 2 - view / 2;
+    \\  if (block === 'nearest') {
+    \\    if (top < 0) return top;
+    \\    if (top + height > view) return Math.min(top, top + height - view);
+    \\    return 0;
+    \\  }
+    \\  return top;
+    \\}
+    \\hidden(ElementP, 'scrollIntoView', function (arg) {
+    \\  let block = 'start';
+    \\  if (arg === false) block = 'end';
+    \\  else if (arg && typeof arg === 'object' && arg.block) block = String(arg.block);
+    \\  for (let c = this.parentElement; c && c !== document.documentElement; c = c.parentElement) {
+    \\    if (!ak.metric(c, 12)) continue;
+    \\    const r = this.getBoundingClientRect(), cr = c.getBoundingClientRect();
+    \\    const delta = alignBy(r.top - (cr.top + c.clientTop), r.height, c.clientHeight, block);
+    \\    if (delta) scrollTarget(c, NaN, c.scrollTop + delta);
+    \\  }
+    \\  const r = this.getBoundingClientRect();
+    \\  const delta = alignBy(r.top, r.height, ak.viewport(1), block);
+    \\  if (delta) scrollTarget(null, NaN, ak.windowScroll(1) + delta);
+    \\});
     \\class Range {
     \\  constructor() {
     \\    this.startContainer = document;

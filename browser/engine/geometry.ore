@@ -1,0 +1,702 @@
+// Geometry for scripts: getBoundingClientRect, getClientRects, the
+// offset*, client* and scroll* properties of elements, and the window's
+// scroll offset.
+//
+// A script that asks for geometry gets a forced synchronous layout: the
+// first question after the document changed (`domVersion`) or the
+// viewport did styles and lays out the document (`Script.geom`); the
+// next ones reuse that layout while nothing changed. It is the page's
+// own cascade and layout, measured with the measurer of the page's last
+// layout (`Page.measure`), else with the fixed-metric font (`dump
+// --js`, scripts that run before the first layout).
+//
+// Client rectangles are border boxes relative to the viewport: their
+// place in the document minus the window's scroll offset
+// (`Script.scroll_x`, `scroll_y`) and the scroll offsets of the scroll
+// containers around them (`Script.scrolls`). Fixed boxes do not move
+// with either.
+//
+// Simplifications: transforms are ignored; element scroll offsets exist
+// for scripts only (paint does not scroll the content of boxes);
+// offsetTop and offsetLeft ignore scroll offsets; nodes of other pages'
+// documents, text nodes and ranges have no geometry.
+
+import css
+import dom
+import dom.NodeId
+import font
+import js
+import js.Args
+import js.Interp
+import js.JsError
+import js.Value
+import layout
+import std.list.List
+import std.map.IntMap
+import std.math
+import std.mem.AllocError
+import std.text
+
+let NO_BOX: usize = 0xFFFFFFFFFFFFFFFF
+
+// A layout of the document for scripts.
+struct Geometry {
+    tree: *mut layout.Tree
+    // The computed values the tree's boxes point at.
+    styles: *mut css.Styles
+    // Node index to its first box, and box to the next box of the same
+    // node (NO_BOX for none).
+    first: IntMap(u32, usize)
+    next: List(usize)
+    // `domVersion` and the viewport this layout is for.
+    version: u64
+    width: f64
+    height: f64
+}
+
+// The scroll offset a script gave a scroll container.
+struct ScrollOffset {
+    generation: u32
+    x: f64
+    y: f64
+}
+
+// A rectangle in CSS px.
+struct Area {
+    x: f64
+    y: f64
+    w: f64
+    h: f64
+}
+
+fn installGeometry(s: *mut Script, o: u32) JsError!void {
+    let it = &mut s.it
+    try defMethod(it, o, "rects", 1, akRects)
+    try defMethod(it, o, "metric", 2, akMetric)
+    try defMethod(it, o, "offsetParent", 1, akOffsetParent)
+    try defMethod(it, o, "setScroll", 3, akSetScroll)
+    try defMethod(it, o, "windowScroll", 1, akWindowScroll)
+}
+
+fn dropGeometry(s: *mut Script) {
+    if s.geom |g| {
+        g.tree.deinit()
+        s.alloc.destroy(g.tree)
+        g.styles.deinit()
+        s.alloc.destroy(g.styles)
+        g.first.deinit()
+        g.next.deinit()
+        s.alloc.destroy(g)
+    }
+    s.geom = null
+}
+
+// The layout of the document as it is now, at the window's scroll
+// offset: the last one when nothing changed since, else a new one.
+fn geometry(s: *mut Script) AllocError!*mut Geometry {
+    let p = s.page
+    let version = domVersion(p)
+    if s.geom |g| {
+        if g.version == version && g.width == s.width && g.height == s.height {
+            followScroll(s, g)
+            return g
+        }
+    }
+    dropGeometry(s)
+    let st = try computedStyling(s)
+    let styles = try s.alloc.create(try css.Styles.init(s.alloc))
+    errdefer {
+        styles.deinit()
+        s.alloc.destroy(styles)
+    }
+    try dom.assignSlots(&mut p.doc)
+    try css.computeStyles(&p.doc, &st.ua, &st.author, st.media, styles)
+    var images: ?*layout.Images = null
+    if p.images |imgs| {
+        images = &imgs.nodes
+    }
+    var measure: dyn font.Measurer = &mut s.fixed
+    if p.measure |m| {
+        measure = m
+    }
+    let laid = try layout.layoutDocumentWith(s.alloc, &p.doc, styles, images, measure, s.width, s.height)
+    let tree = s.alloc.create(laid) catch |e| {
+        var lost = laid
+        lost.deinit()
+        return e
+    }
+    errdefer {
+        tree.deinit()
+        s.alloc.destroy(tree)
+    }
+    var first = IntMap(u32, usize).init(s.alloc)
+    errdefer first.deinit()
+    var next = List(usize).init(s.alloc)
+    errdefer next.deinit()
+    // Boxes in reverse order, so that each node's chain is in tree order.
+    for i in 0..tree.boxes.len() {
+        try next.append(NO_BOX)
+    }
+    var k = tree.boxes.len()
+    while k > 0 {
+        k -= 1
+        if tree.bx(k).node |n| {
+            if first.get(n.index) |after| {
+                next.items()[k] = after
+            }
+            try first.put(n.index, k)
+        }
+    }
+    let g = try s.alloc.create(Geometry { tree: tree, styles: styles, first: first, next: next, version: version, width: s.width, height: s.height })
+    s.geom = g
+    followScroll(s, g)
+    return g
+}
+
+// Moves the fixed and sticky boxes of the layout to the window's scroll
+// offset.
+fn followScroll(s: *mut Script, g: *mut Geometry) {
+    if g.tree.scroll_y != s.scroll_y {
+        _ = layout.scrollTo(g.tree, s.scroll_y)
+    }
+}
+
+// The first box of `el`, if it has one.
+fn firstBox(g: *Geometry, el: NodeId) ?usize {
+    return g.first.get(el.index)
+}
+
+// Appends the border boxes of the boxes of `el` (one per line for an
+// inline box) to `out`, in the document's coordinates.
+fn boxAreas(g: *Geometry, el: NodeId, out: *mut List(Area)) AllocError!void {
+    let t = g.tree
+    var cur = firstBox(g, el) orelse return
+    while cur != NO_BOX {
+        let b = t.bx(cur)
+        if b.kind == layout.BoxKind.Inline {
+            try inlineAreas(t, cur, out)
+        } else if b.kind != layout.BoxKind.Text && b.kind != layout.BoxKind.LineBreak {
+            try out.append(Area { x: b.ax, y: b.ay, w: b.w, h: b.h })
+        }
+        cur = g.next.items()[cur]
+    }
+}
+
+// The fragments of inline box `i` on the lines of its block container.
+fn inlineAreas(t: *layout.Tree, i: usize, out: *mut List(Area)) AllocError!void {
+    var up = t.bx(i).parent
+    while up |c| {
+        if layout.hasInlineContent(t, c) {
+            let b = t.bx(c)
+            let cx = b.ax + b.border[3] + b.padding[3]
+            let cy = b.ay + b.border[0] + b.padding[0]
+            for li in b.line_start..b.line_end {
+                let line = t.lines.items()[li]
+                for fi in line.frag_start..line.frag_end {
+                    let f = t.frags.items()[fi]
+                    if f.box == i && f.kind == layout.FragKind.Inline {
+                        try out.append(Area { x: cx + f.x, y: cy + f.y, w: f.w, h: f.h })
+                    }
+                }
+            }
+            return
+        }
+        up = t.bx(c).parent
+    }
+}
+
+// How far box `i` is moved on screen: by the scroll offsets of the
+// scroll containers around it and by the window's, unless it is fixed.
+fn scrolledBy(s: *mut Script, g: *Geometry, i: usize) Area {
+    let t = g.tree
+    var d = Area { x: s.scroll_x, y: s.scroll_y, w: 0.0, h: 0.0 }
+    if t.bx(i).abs == 2 {
+        d.x = 0.0
+        return d
+    }
+    var up = t.bx(i).parent
+    while up |c| {
+        let b = t.bx(c)
+        if s.scrolls.len() > 0 {
+            if b.node |n| {
+                if s.scrolls.get(n.index) |o| {
+                    if o.generation == n.generation {
+                        let max = maxScroll(g, c)
+                        d.x += math.clamp(o.x, 0.0, max.x)
+                        d.y += math.clamp(o.y, 0.0, max.y)
+                    }
+                }
+            }
+        }
+        if b.abs == 2 {
+            // Fixed: in the viewport, wherever the window is scrolled.
+            d.x -= s.scroll_x
+            return d
+        }
+        up = b.parent
+    }
+    return d
+}
+
+// The client rectangles of `el`: its border boxes relative to the
+// viewport.
+fn clientAreas(s: *mut Script, el: NodeId, out: *mut List(Area)) AllocError!void {
+    let g = try geometry(s)
+    let t = g.tree
+    var cur = firstBox(g, el) orelse return
+    while cur != NO_BOX {
+        let start = out.len()
+        let b = t.bx(cur)
+        if b.kind == layout.BoxKind.Inline {
+            try inlineAreas(t, cur, out)
+        } else if b.kind != layout.BoxKind.Text && b.kind != layout.BoxKind.LineBreak {
+            try out.append(Area { x: b.ax, y: b.ay, w: b.w, h: b.h })
+        }
+        if out.len() > start {
+            let d = scrolledBy(s, g, cur)
+            for k in start..out.len() {
+                out.items()[k].x -= d.x
+                out.items()[k].y -= d.y
+            }
+        }
+        cur = g.next.items()[cur]
+    }
+}
+
+// The smallest rectangle around `areas` that are not empty (the first
+// one when all are), as getBoundingClientRect.
+fn bounds(areas: []Area) Area {
+    if areas.len == 0 {
+        return Area { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }
+    }
+    var found = false
+    var x0 = 0.0
+    var y0 = 0.0
+    var x1 = 0.0
+    var y1 = 0.0
+    for a in areas {
+        if a.w == 0.0 || a.h == 0.0 {
+            continue
+        }
+        if !found {
+            x0 = a.x
+            y0 = a.y
+            x1 = a.x + a.w
+            y1 = a.y + a.h
+            found = true
+            continue
+        }
+        x0 = math.min(x0, a.x)
+        y0 = math.min(y0, a.y)
+        x1 = math.max(x1, a.x + a.w)
+        y1 = math.max(y1, a.y + a.h)
+    }
+    if !found {
+        return areas[0]
+    }
+    return Area { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+}
+
+// Is box `i` a scroll container (overflow other than `visible` and
+// `clip`)? The root's and the body's overflow is the viewport's.
+fn isScroller(g: *Geometry, i: usize) bool {
+    let t = g.tree
+    let b = t.bx(i)
+    if b.kind == layout.BoxKind.Inline || b.kind == layout.BoxKind.Text || b.kind == layout.BoxKind.LineBreak {
+        return false
+    }
+    if t.root == i {
+        return false
+    }
+    if b.node |el| {
+        if t.doc.isElement(el, "body") {
+            return false
+        }
+    }
+    return scrolls(b.style[css.OVERFLOW_X]) || scrolls(b.style[css.OVERFLOW_Y])
+}
+
+fn scrolls(v: css.Value) bool {
+    return !layout.isKeyword(v, "visible") && !layout.isKeyword(v, "clip")
+}
+
+// Does box `i` clip what overflows it (so that it does not add to the
+// scrolling area around it)?
+fn clipsOverflow(g: *Geometry, i: usize) bool {
+    let t = g.tree
+    let b = t.bx(i)
+    if t.root == i {
+        return false
+    }
+    if b.node |el| {
+        if t.doc.isElement(el, "body") {
+            return false
+        }
+    }
+    return !layout.isKeyword(b.style[css.OVERFLOW_X], "visible") || !layout.isKeyword(b.style[css.OVERFLOW_Y], "visible")
+}
+
+// The right and bottom edges (in `w`, `h`) of what box `i` holds: its
+// descendants' boxes with their end margins and its lines' fragments,
+// not going into boxes that clip.
+fn contentEdges(g: *Geometry, i: usize, edges: *mut Area) {
+    let t = g.tree
+    let b = t.bx(i)
+    if layout.hasInlineContent(t, i) {
+        let cx = b.ax + b.border[3] + b.padding[3]
+        let cy = b.ay + b.border[0] + b.padding[0]
+        for li in b.line_start..b.line_end {
+            let line = t.lines.items()[li]
+            for fi in line.frag_start..line.frag_end {
+                let f = t.frags.items()[fi]
+                edges.w = math.max(edges.w, cx + f.x + f.w)
+                edges.h = math.max(edges.h, cy + f.y + f.h)
+            }
+        }
+    }
+    for c in t.children(i) {
+        let cb = t.bx(c)
+        if cb.kind == layout.BoxKind.Inline || cb.kind == layout.BoxKind.Text || cb.kind == layout.BoxKind.LineBreak {
+            contentEdges(g, c, edges)
+            continue
+        }
+        edges.w = math.max(edges.w, cb.ax + cb.w + cb.margin[1])
+        edges.h = math.max(edges.h, cb.ay + cb.h + cb.margin[2])
+        if !clipsOverflow(g, c) {
+            contentEdges(g, c, edges)
+        }
+    }
+}
+
+// The scrolling area of box `i` (not inline): its padding box and what
+// overflows it, with the end padding after the content, from the
+// padding box's top left corner.
+fn scrollArea(g: *Geometry, i: usize) Area {
+    let b = g.tree.bx(i)
+    let px = b.ax + b.border[3]
+    let py = b.ay + b.border[0]
+    let pw = b.w - b.border[1] - b.border[3]
+    let ph = b.h - b.border[0] - b.border[2]
+    var edges = Area { x: 0.0, y: 0.0, w: px + pw, h: py + ph }
+    var inner = Area { x: 0.0, y: 0.0, w: px, h: py }
+    contentEdges(g, i, &mut inner)
+    edges.w = math.max(edges.w, inner.w + b.padding[1])
+    edges.h = math.max(edges.h, inner.h + b.padding[2])
+    return Area { x: px, y: py, w: edges.w - px, h: edges.h - py }
+}
+
+// How far a script can scroll box `i` (`w`, `h` unused).
+fn maxScroll(g: *Geometry, i: usize) Area {
+    let b = g.tree.bx(i)
+    let area = scrollArea(g, i)
+    let cw = b.w - b.border[1] - b.border[3]
+    let ch = b.h - b.border[0] - b.border[2]
+    return Area { x: math.max(0.0, area.w - cw), y: math.max(0.0, area.h - ch), w: 0.0, h: 0.0 }
+}
+
+// The size of the document's scrolling area: the viewport and what the
+// root's boxes reach.
+fn documentArea(s: *mut Script, g: *Geometry) Area {
+    var edges = Area { x: 0.0, y: 0.0, w: s.width, h: s.height }
+    if g.tree.root |r| {
+        let b = g.tree.bx(r)
+        edges.w = math.max(edges.w, b.ax + b.w + b.margin[1])
+        edges.h = math.max(edges.h, b.ay + b.h + b.margin[2])
+        contentEdges(g, r, &mut edges)
+    }
+    return edges
+}
+
+// Sets the window's scroll offset, kept within the document; whether it
+// moved.
+fn scrollWindow(s: *mut Script, x: f64, y: f64) AllocError!bool {
+    let g = try geometry(s)
+    let area = documentArea(s, g)
+    let nx = math.clamp(x, 0.0, math.max(0.0, area.w - s.width))
+    let ny = math.clamp(y, 0.0, math.max(0.0, area.h - s.height))
+    if nx == s.scroll_x && ny == s.scroll_y {
+        return false
+    }
+    s.scroll_x = nx
+    s.scroll_y = ny
+    s.scroll_moved = true
+    followScroll(s, g)
+    return true
+}
+
+// The element of argument `i` when it is one of the document's, in it.
+fn connectedElement(it: *mut Interp, a: Args, i: usize) ?NodeId {
+    let h = ownHandle(it, it.arg(a, i)) orelse return null
+    let s = scriptOf(it)
+    if s.page.doc.node(h).kind != dom.Kind.Element || !s.page.doc.isConnected(h) {
+        return null
+    }
+    return h
+}
+
+fn isRoot(s: *mut Script, el: NodeId) bool {
+    if s.page.doc.documentElement() |r| {
+        return dom.same(r, el)
+    }
+    return false
+}
+
+// rects(el): the client rectangles of `el` as [x, y, width, height, ...].
+fn akRects(it: *mut Interp, a: Args) JsError!Value {
+    let arr = try it.newArray(0)
+    try it.push(js.objVal(arr))
+    let el = connectedElement(it, a, 0) orelse return it.pop()
+    let s = scriptOf(it)
+    var areas = List(Area).init(s.alloc)
+    defer areas.deinit()
+    try clientAreas(s, el, &mut areas)
+    for r in areas.items() {
+        try it.heap.pushElem(arr, js.numVal(r.x))
+        try it.heap.pushElem(arr, js.numVal(r.y))
+        try it.heap.pushElem(arr, js.numVal(r.w))
+        try it.heap.pushElem(arr, js.numVal(r.h))
+    }
+    return it.pop()
+}
+
+// metric(el, k): 0 offsetTop, 1 offsetLeft, 2 offsetWidth, 3
+// offsetHeight, 4 clientTop, 5 clientLeft, 6 clientWidth, 7
+// clientHeight, 8 scrollTop, 9 scrollLeft, 10 scrollWidth, 11
+// scrollHeight, 12 whether it is a scroll container (0 or 1).
+fn akMetric(it: *mut Interp, a: Args) JsError!Value {
+    let k = try it.toNumber(it.arg(a, 1))
+    let el = connectedElement(it, a, 0) orelse return js.numVal(0.0)
+    let s = scriptOf(it)
+    return js.numVal(try metric(s, el, k as i64))
+}
+
+fn metric(s: *mut Script, el: NodeId, k: i64) AllocError!f64 {
+    let g = try geometry(s)
+    let root = isRoot(s, el)
+    if root {
+        // The root's client area is the viewport, and its scrolling
+        // area and offset the document's.
+        if k == 6 {
+            return s.width
+        }
+        if k == 7 {
+            return s.height
+        }
+        if k == 8 {
+            return s.scroll_y
+        }
+        if k == 9 {
+            return s.scroll_x
+        }
+        if k == 10 || k == 11 {
+            let area = documentArea(s, g)
+            if k == 10 {
+                return math.round(area.w)
+            }
+            return math.round(area.h)
+        }
+    }
+    let i = firstBox(g, el) orelse return 0.0
+    let b = g.tree.bx(i)
+    let inline_box = b.kind == layout.BoxKind.Inline
+    if k <= 3 {
+        return offsetMetric(s, g, el, k)
+    }
+    if k == 12 {
+        if isScroller(g, i) {
+            return 1.0
+        }
+        return 0.0
+    }
+    if inline_box {
+        return 0.0
+    }
+    if k == 4 {
+        return math.round(b.border[0])
+    }
+    if k == 5 {
+        return math.round(b.border[3])
+    }
+    if k == 6 {
+        return math.round(b.w - b.border[1] - b.border[3])
+    }
+    if k == 7 {
+        return math.round(b.h - b.border[0] - b.border[2])
+    }
+    if k == 8 || k == 9 {
+        if !isScroller(g, i) {
+            return 0.0
+        }
+        let o = s.scrolls.get(el.index) orelse return 0.0
+        if o.generation != el.generation {
+            return 0.0
+        }
+        let max = maxScroll(g, i)
+        if k == 8 {
+            return math.clamp(o.y, 0.0, max.y)
+        }
+        return math.clamp(o.x, 0.0, max.x)
+    }
+    if k == 10 || k == 11 {
+        let area = scrollArea(g, i)
+        if k == 10 {
+            return math.round(area.w)
+        }
+        return math.round(area.h)
+    }
+    return 0.0
+}
+
+// offsetTop, offsetLeft, offsetWidth and offsetHeight (k 0 to 3), from
+// the layout without scroll offsets.
+fn offsetMetric(s: *mut Script, g: *Geometry, el: NodeId, k: i64) AllocError!f64 {
+    var areas = List(Area).init(s.alloc)
+    defer areas.deinit()
+    try boxAreas(g, el, &mut areas)
+    if areas.len() == 0 {
+        return 0.0
+    }
+    if k == 2 || k == 3 {
+        let r = bounds(areas.items())
+        if k == 2 {
+            return math.round(r.w)
+        }
+        return math.round(r.h)
+    }
+    if s.page.doc.isElement(el, "body") {
+        return 0.0
+    }
+    let first = areas.items()[0]
+    var x = first.x
+    var y = first.y
+    if try offsetParentOf(s, g, el) |op| {
+        if !s.page.doc.isElement(op, "body") || isPositioned(s, op) {
+            var outer = List(Area).init(s.alloc)
+            defer outer.deinit()
+            try boxAreas(g, op, &mut outer)
+            if outer.len() > 0 {
+                let ob = g.tree.bx(firstBox(g, op).?)
+                x -= outer.items()[0].x + ob.border[3]
+                y -= outer.items()[0].y + ob.border[0]
+            }
+        }
+    }
+    if k == 0 {
+        return math.round(y)
+    }
+    return math.round(x)
+}
+
+fn positionOf(s: *mut Script, el: NodeId) AllocError![]u8 {
+    let values = try computedValues(s, el) orelse return "static"
+    return layout.keywordOf(values[css.POSITION])
+}
+
+fn isPositioned(s: *mut Script, el: NodeId) bool {
+    let pos = positionOf(s, el) catch return false
+    return pos.len > 0 && !text.eql(pos, "static")
+}
+
+// The offsetParent of `el`: null when it has no box, is the root or the
+// body, or is fixed; else its nearest positioned ancestor, or the
+// nearest `td`, `th` or `table` when `el` is not positioned, or the
+// body.
+fn offsetParentOf(s: *mut Script, g: *Geometry, el: NodeId) AllocError!?NodeId {
+    let doc = &s.page.doc
+    if firstBox(g, el) == null || isRoot(s, el) || doc.isElement(el, "body") {
+        return null
+    }
+    let pos = try positionOf(s, el)
+    if text.eql(pos, "fixed") {
+        return null
+    }
+    let static_el = text.eql(pos, "static")
+    var up = dom.flatParentElement(doc, el)
+    while up |c| {
+        if doc.isElement(c, "body") {
+            return c
+        }
+        if isPositioned(s, c) {
+            return c
+        }
+        if static_el && (doc.isElement(c, "td") || doc.isElement(c, "th") || doc.isElement(c, "table")) {
+            return c
+        }
+        up = dom.flatParentElement(doc, c)
+    }
+    return null
+}
+
+fn akOffsetParent(it: *mut Interp, a: Args) JsError!Value {
+    let el = connectedElement(it, a, 0) orelse return Value.Null
+    let s = scriptOf(it)
+    let g = try geometry(s)
+    let op = try offsetParentOf(s, g, el) orelse return Value.Null
+    return wrap(it, op)
+}
+
+// setScroll(el, left, top): scrolls the element (the window for null or
+// the root element) to `left`, `top` (NaN: where it is); whether it
+// moved. Only scroll containers scroll.
+fn akSetScroll(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    var left = try it.toNumber(it.arg(a, 1))
+    var top = try it.toNumber(it.arg(a, 2))
+    var target: ?NodeId = null
+    if !js.isNullish(it.arg(a, 0)) {
+        target = connectedElement(it, a, 0) orelse return js.boolVal(false)
+    }
+    let el = target orelse {
+        return js.boolVal(try scrollWindowTo(s, left, top))
+    }
+    if isRoot(s, el) {
+        return js.boolVal(try scrollWindowTo(s, left, top))
+    }
+    let g = try geometry(s)
+    let i = firstBox(g, el) orelse return js.boolVal(false)
+    if !isScroller(g, i) {
+        return js.boolVal(false)
+    }
+    var old = ScrollOffset { generation: el.generation, x: 0.0, y: 0.0 }
+    if s.scrolls.get(el.index) |o| {
+        if o.generation == el.generation {
+            old = o
+        }
+    }
+    let max = maxScroll(g, i)
+    old.x = math.clamp(old.x, 0.0, max.x)
+    old.y = math.clamp(old.y, 0.0, max.y)
+    var moved = old
+    if !math.isNan(left) {
+        moved.x = math.clamp(left, 0.0, max.x)
+    }
+    if !math.isNan(top) {
+        moved.y = math.clamp(top, 0.0, max.y)
+    }
+    if moved.x == old.x && moved.y == old.y {
+        return js.boolVal(false)
+    }
+    try s.scrolls.put(el.index, moved)
+    return js.boolVal(true)
+}
+
+fn scrollWindowTo(s: *mut Script, left: f64, top: f64) AllocError!bool {
+    var x = s.scroll_x
+    var y = s.scroll_y
+    if !math.isNan(left) {
+        x = left
+    }
+    if !math.isNan(top) {
+        y = top
+    }
+    return scrollWindow(s, x, y)
+}
+
+// windowScroll(k): the window's scroll offset, x (0) or y (1).
+fn akWindowScroll(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    if try it.toNumber(it.arg(a, 0)) == 0.0 {
+        return js.numVal(s.scroll_x)
+    }
+    return js.numVal(s.scroll_y)
+}
