@@ -1,10 +1,13 @@
 // Actions on a session: navigate, back, forward, reload, click, type,
-// select, press, scroll, wait, and find. Each returns an `Outcome`: a
-// short message, whether a new document is shown, and for actions that
-// stay on the document, the lines of the snapshot that changed.
+// select, press, scroll, wait, eval, and find. Each returns an
+// `Outcome`: a short message, whether a new document is shown, and for
+// actions that stay on the document, the lines of the snapshot that
+// changed.
 //
-// Without forms and scripts (B5, B6), what they would do is recorded in
-// `Session.events`: clicks on buttons, submissions, key presses.
+// Clicks, typing, key presses and selections fire their events at the
+// page's scripts first (scripts.ore); a canceled click skips the default
+// action. Without forms (B5), submissions are recorded in
+// `Session.events`, with the clicks and key presses.
 
 import dom
 import dom.Document
@@ -32,7 +35,10 @@ pub enum Action {
     Press { key: []u8 }
     // To the element `ref`, or by `dy` px when `ref` is empty.
     Scroll { ref: []u8, dy: f64 }
-    Wait
+    // For an element matching `selector`, or `ms` of the page's time
+    // (0: until no timer is left).
+    Wait { selector: []u8, ms: f64 }
+    Eval { src: []u8 }
 }
 
 pub struct Outcome {
@@ -63,6 +69,7 @@ fn perform(s: *mut Session, tmp: Allocator, act: Action) AllocError!Outcome {
         before = try snapshotText(s, tmp, false)
     }
     var o = try applyAction(s, tmp, act)
+    try settleScripts(s, tmp, &mut o)
     if o.ok && !o.navigated && before_page != null && s.tab.page == before_page {
         let after = try snapshotText(s, tmp, false)
         o.diff = try diffLines(tmp, before, after)
@@ -89,15 +96,9 @@ fn applyAction(s: *mut Session, tmp: Allocator, act: Action) AllocError!Outcome 
         .Select { ref, option } => try selectOption(s, tmp, ref, option)
         .Press { key } => try press(s, tmp, key)
         .Scroll { ref, dy } => try scroll(s, tmp, ref, dy)
-        .Wait => try waitFor(s)
+        .Wait { selector, ms } => try waitFor(s, tmp, selector, ms)
+        .Eval { src } => try evalScript(s, tmp, src)
     }
-}
-
-fn waitFor(s: *mut Session) AllocError!Outcome {
-    if s.tab.page == null {
-        return failed("no page: navigate first")
-    }
-    return done("nothing to wait for: the page is loaded and scripts do not run yet")
 }
 
 // ---- navigation
@@ -351,6 +352,9 @@ fn clickNode(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId) AllocErr
     if isFocusable(p, el) {
         s.focused = el
     }
+    if !(try fire(s, p, el, "click", "")) {
+        return done(try concat(tmp, "clicked ", who, "; a script canceled the default action"))
+    }
     // A link, or an element inside one.
     var cur: ?NodeId = el
     while cur |c| {
@@ -415,6 +419,9 @@ fn clickNode(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId) AllocErr
         }
     }
     try recordOn(s, tmp, "click on", el)
+    if engine.hasScripts(p) {
+        return done(try concat(tmp, "clicked ", who, ""))
+    }
     return done(try concat(tmp, "clicked ", who, "; nothing happens until scripts run (recorded the click event)"))
 }
 
@@ -473,15 +480,18 @@ fn toggle(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId, who: []u8) 
             }
         }
         try p.doc.setAttr(el, "checked", "")
+        try fireChange(s, p, el)
         try relayout(s)
         return done(try concat(tmp, "checked ", who, ""))
     }
     if p.doc.attr(el, "checked") != null {
         removeAttr(&mut p.doc, el, "checked")
+        try fireChange(s, p, el)
         try relayout(s)
         return done(try concat(tmp, "unchecked ", who, ""))
     }
     try p.doc.setAttr(el, "checked", "")
+    try fireChange(s, p, el)
     try relayout(s)
     return done(try concat(tmp, "checked ", who, ""))
 }
@@ -503,6 +513,7 @@ fn typeInto(s: *mut Session, tmp: Allocator, ref: []u8, input: []u8, submit: boo
     }
     try setValue(p, el, input)
     s.focused = el
+    try fireChange(s, p, el)
     try relayout(s)
     var msg = text.Builder.init(tmp)
     try msg.append("typed ")
@@ -621,6 +632,7 @@ fn chooseOption(s: *mut Session, tmp: Allocator, p: *mut Page, sel: NodeId, opt:
     }
     try p.doc.setAttr(opt, "selected", "")
     s.focused = sel
+    try fireChange(s, p, sel)
     try relayout(s)
     var ax = try newAx(s, tmp)
     var msg = text.Builder.init(tmp)
@@ -645,6 +657,9 @@ fn press(s: *mut Session, tmp: Allocator, key: []u8) AllocError!Outcome {
         return failed("no key")
     }
     try recordEvent(s, try concat(tmp, "keydown ", key, ""))
+    if !(try fire(s, p, keyTarget(s, p), "keydown", domKey(key))) {
+        return done(try concat(tmp, "pressed ", key, "; a script canceled it"))
+    }
     if text.eql(key, "Tab") || text.eql(key, "Shift+Tab") {
         return moveFocus(s, tmp, p, text.eql(key, "Tab"))
     }
@@ -661,6 +676,7 @@ fn press(s: *mut Session, tmp: Allocator, key: []u8) AllocError!Outcome {
                     }
                 }
                 try setValue(p, f, v[..end])
+                try fire(s, p, f, "input", "")
                 try relayout(s)
                 return done(try concat(tmp, "deleted a character in ", who, ""))
             }
@@ -674,6 +690,7 @@ fn press(s: *mut Session, tmp: Allocator, key: []u8) AllocError!Outcome {
             }
             if isCharacter(key) {
                 try setValue(p, f, try concat(tmp, try currentValue(p, tmp, f), key, ""))
+                try fire(s, p, f, "input", key)
                 try relayout(s)
                 return done(try concat(tmp, "typed ", key, try concat(tmp, " into ", who, "")))
             }
@@ -706,6 +723,37 @@ fn press(s: *mut Session, tmp: Allocator, key: []u8) AllocError!Outcome {
         return done(try concat(tmp, "pressed ", key, "; nothing to do (recorded the key event)"))
     }
     return scrollBy(s, tmp, dy)
+}
+
+// Where a key press goes: the focused element, else the body (else the
+// document).
+fn keyTarget(s: *mut Session, p: *mut Page) NodeId {
+    if s.focused |f| {
+        if p.doc.isLive(f) {
+            return f
+        }
+    }
+    if p.doc.documentElement() |root| {
+        var cur = p.doc.firstChild(root)
+        while cur |c| {
+            if p.doc.isElement(c, "body") {
+                return c
+            }
+            cur = p.doc.nextSibling(c)
+        }
+    }
+    return p.doc.root
+}
+
+// KeyboardEvent.key of a key name of `press` ("Space" is " ").
+fn domKey(key: []u8) []u8 {
+    if text.eql(key, "Space") {
+        return " "
+    }
+    if text.eql(key, "Shift+Tab") {
+        return "Tab"
+    }
+    return key
 }
 
 // A key that types itself: one UTF-8 character.

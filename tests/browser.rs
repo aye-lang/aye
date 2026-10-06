@@ -232,7 +232,7 @@ fn queries() {
 
 #[test]
 fn errors() {
-    let usage = "error: usage: anyknown dump --tree|--text|--style|--layout [--width PX] [--font fixed|system] [--id ID | --tag NAME] FILE|URL\n";
+    let usage = "error: usage: anyknown dump --tree|--text|--style|--layout [--js] [--width PX] [--font fixed|system] [--id ID | --tag NAME] FILE|URL\n";
     expect(&[], 2, "", "error: usage: anyknown [open] FILE|URL | dump --tree|--text|--style|--layout|--a11y|--md ... FILE|URL | screenshot FILE|URL -o OUT.png | js FILE | agent | mcp\n");
     expect(&["dump", "--tree"], 2, "", usage);
     expect(&["dump", "--layout", "--font", "serif", "browser/tests/basic.html"], 2, "", usage);
@@ -472,7 +472,7 @@ fn window_frames() {
     let out = run_window(&["browser/tests/paint/text.html", "--font", "fixed", "--width", "500", "--height", "300", "--frames", "1", "--save", png.to_str().unwrap()]);
     assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
     assert_eq!(check_png(&png), (500, 300));
-    expect(&["--frames", "1", "--bogus", "x.html"], 2, "", "error: usage: anyknown [open] FILE|URL [--width W] [--height H] [--font fixed|system] [--frames N [--events SCRIPT] [--state] [--save OUT.png]]\n");
+    expect(&["--frames", "1", "--bogus", "x.html"], 2, "", "error: usage: anyknown [open] FILE|URL [--width W] [--height H] [--font fixed|system] [--no-js] [--frames N [--events SCRIPT] [--state] [--text] [--save OUT.png]]\n");
 }
 
 /// Scripted input (`--events`, ui/script.ore) through the window's event
@@ -617,14 +617,14 @@ fn agent_sessions() {
 
 #[test]
 fn agent_errors() {
-    let usage = "error: usage: anyknown dump --a11y [--boxes] [--json] | --md [--refs] [--width PX] FILE|URL\n";
+    let usage = "error: usage: anyknown dump --a11y [--boxes] [--json] | --md [--refs] [--js] [--width PX] FILE|URL\n";
     expect(&["dump", "--a11y"], 2, "", usage);
     expect(&["dump", "--md", "--width", "x", "browser/tests/agent/article.html"], 2, "", usage);
     expect(&["dump", "--md", "browser/tests/agent/missing.html"], 1, "", &format!(
         "error: cannot fetch file://{}/browser/tests/agent/missing.html: not found\n",
         root().display()
     ));
-    expect(&["agent", "--color"], 2, "", "error: usage: anyknown agent|mcp [--width PX] [--height PX]\n");
+    expect(&["agent", "--color"], 2, "", "error: usage: anyknown agent|mcp [--width PX] [--height PX] [--no-js]\n");
     expect(&["dump", "--a11y", "data:text/html,<button>OK</button>"], 0, "- button \"OK\" [e1]\n", "");
     expect(&["dump", "--md", "data:text/html,<h2>Hi</h2><p>a <b>b</b>"], 0, "## Hi\n\na **b**\n", "");
 }
@@ -719,4 +719,128 @@ fn js_conformance() {
 fn js_command_line() {
     expect(&["js", "browser/tests/js/missing.js"], 1, "", "error: cannot read browser/tests/js/missing.js\n");
     expect(&["js"], 2, "", "error: usage: anyknown js FILE\n");
+}
+
+// ---- page scripts and the DOM bindings (browser/engine/script.ore)
+
+/// One run of a DOM fixture: `args` then the page; stdout must be
+/// `golden`, and stderr (console messages, uncaught exceptions) must be
+/// `err_golden`, or empty when there is no such file.
+fn jsdom_case(args: &[&str], page: &Path, golden: &Path, err_golden: Option<&Path>, bless: bool) -> Option<String> {
+    let rel = page.strip_prefix(root()).unwrap().to_string_lossy().into_owned();
+    let mut all: Vec<&str> = args.to_vec();
+    all.push(&rel);
+    let out = run(&all);
+    let got = rooted(&text(&out.stdout));
+    let stderr = rooted(&text(&out.stderr));
+    if bless {
+        std::fs::write(golden, &got).unwrap();
+        if let Some(e) = err_golden {
+            if stderr.is_empty() {
+                let _ = std::fs::remove_file(e);
+            } else {
+                std::fs::write(e, &stderr).unwrap();
+            }
+        }
+        return None;
+    }
+    let mut problems = Vec::new();
+    if !out.status.success() {
+        problems.push(format!("status {}", out.status));
+    }
+    let want = std::fs::read_to_string(golden).unwrap_or_default();
+    if got != want {
+        problems.push(format!("stdout differs from {}\n--- expected\n{want}--- got\n{got}", golden.display()));
+    }
+    let want_err = err_golden.and_then(|e| std::fs::read_to_string(e).ok()).unwrap_or_default();
+    if stderr != want_err {
+        problems.push(format!("stderr differs\n--- expected\n{want_err}--- got\n{stderr}"));
+    }
+    if problems.is_empty() { None } else { Some(format!("{rel} {args:?}: {}", problems.join("\n"))) }
+}
+
+/// `browser/tests/jsdom/X.html`: `anyknown dump --tree --js` must print
+/// `X.tree` (the document after its scripts and timers ran), with the
+/// console on stderr equal to `X.err` (or empty). `X.style` and `X.a11y`,
+/// when they exist, are `dump --style --js` and `dump --a11y --js`.
+#[test]
+fn jsdom_fixtures() {
+    let dir = root().join("browser").join("tests").join("jsdom");
+    let mut pages: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "html"))
+        .collect();
+    pages.sort();
+    assert!(pages.len() >= 25, "expected at least 25 DOM fixtures, found {}", pages.len());
+    let bless = std::env::var_os("ANYKNOWN_BLESS").is_some();
+    let mut runs: Vec<(Vec<&str>, PathBuf, PathBuf, Option<PathBuf>)> = Vec::new();
+    for p in &pages {
+        runs.push((vec!["dump", "--tree", "--js"], p.clone(), p.with_extension("tree"), Some(p.with_extension("err"))));
+        for (flag, ext) in [("--style", "style"), ("--a11y", "a11y")] {
+            let golden = p.with_extension(ext);
+            if golden.exists() {
+                runs.push((vec!["dump", flag, "--js"], p.clone(), golden, None));
+            }
+        }
+    }
+    anyknown();
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let failures: Vec<String> = std::thread::scope(|s| {
+        let handles: Vec<_> = runs
+            .chunks(runs.len().div_ceil(threads))
+            .map(|chunk| {
+                s.spawn(move || {
+                    chunk
+                        .iter()
+                        .filter_map(|(args, page, golden, err)| jsdom_case(args, page, golden, err.as_deref(), bless))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    });
+    assert!(failures.is_empty(), "{} of {} DOM fixture runs failed:\n\n{}", failures.len(), runs.len(), failures.join("\n\n"));
+}
+
+/// The DOM fixtures again with a collection at every allocation
+/// (`ANYKNOWN_JS_GC=stress`): the bindings keep what they hold reachable.
+/// `gc_wrappers` allocates too much for that.
+#[test]
+fn jsdom_gc_stress() {
+    let dir = root().join("browser").join("tests").join("jsdom");
+    let mut pages: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "html") && !p.ends_with("gc_wrappers.html"))
+        .collect();
+    pages.sort();
+    anyknown();
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let failures: Vec<String> = std::thread::scope(|s| {
+        let handles: Vec<_> = pages
+            .chunks(pages.len().div_ceil(threads))
+            .map(|chunk| {
+                s.spawn(move || {
+                    let mut bad = Vec::new();
+                    for page in chunk {
+                        let rel = page.strip_prefix(root()).unwrap().to_string_lossy().into_owned();
+                        let out = Command::new(anyknown())
+                            .current_dir(root())
+                            .env("ANYKNOWN_JS_GC", "stress")
+                            .args(["dump", "--tree", "--js", &rel])
+                            .output()
+                            .unwrap();
+                        let want = std::fs::read_to_string(page.with_extension("tree")).unwrap_or_default();
+                        if !out.status.success() || rooted(&text(&out.stdout)) != want {
+                            bad.push(format!("{rel}: {}\n{}", out.status, text(&out.stderr)));
+                        }
+                    }
+                    bad
+                })
+            })
+            .collect();
+        handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    });
+    assert!(failures.is_empty(), "{} DOM fixtures failed under GC stress:\n\n{}", failures.len(), failures.join("\n\n"));
 }

@@ -6,7 +6,9 @@
 // - a11y.ore: the accessibility tree (`snapshot`) with refs `e1, e2, ...`.
 // - markdown.ore: the main content as Markdown (`read`).
 // - actions.ore: navigate, back, forward, reload, click, type, select,
-//   press, scroll, find, wait; snapshot diffs.
+//   press, scroll, find, wait, eval; snapshot diffs.
+// - scripts.ore: events for the actions, eval and wait, and what
+//   follows when scripts ran (navigations, layout, focus).
 // - json.ore: a JSON parser and writer.
 // - server.ore: `anyknown agent` (JSON lines) and `anyknown mcp` (MCP over
 //   stdio), and `anyknown dump --a11y|--md`.
@@ -251,7 +253,14 @@ fn nodeOfRef(s: *Session, name: []u8) ?NodeId {
     if i >= s.refs.len() {
         return null
     }
-    return s.refs.items()[i]
+    let h = s.refs.items()[i]
+    // Scripts may have removed (and freed) the node.
+    if s.tab.page |p| {
+        if !p.doc.isLive(h) {
+            return null
+        }
+    }
+    return h
 }
 
 // ---- URLs

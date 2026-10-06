@@ -1,14 +1,18 @@
 // The agent's command lines and stdio servers:
 //
-//     anyknown agent [--width PX] [--height PX]   JSON lines (docs/agent-protocol.md)
-//     anyknown mcp [--width PX] [--height PX]     MCP over stdio (JSON-RPC 2.0)
-//     anyknown dump --a11y [--boxes] [--json] [--width PX] FILE|URL
-//     anyknown dump --md [--refs] [--width PX] FILE|URL
+//     anyknown agent [--width PX] [--height PX] [--no-js]   JSON lines (docs/agent-protocol.md)
+//     anyknown mcp [--width PX] [--height PX] [--no-js]     MCP over stdio (JSON-RPC 2.0)
+//     anyknown dump --a11y [--boxes] [--json] [--js] [--width PX] FILE|URL
+//     anyknown dump --md [--refs] [--js] [--width PX] FILE|URL
+//
+// The servers run the pages' scripts unless --no-js; the dumps only with
+// --js (then after the timers that are due ran).
 //
 // Each request is one line of JSON; each response is one line. Requests
 // are handled in order; everything a request allocates is in an arena
 // freed after its response.
 
+import engine
 import html
 import std
 import std.heap.Arena
@@ -16,8 +20,8 @@ import std.mem.AllocError
 import std.mem.Allocator
 import std.text
 
-let DUMP_USAGE = "usage: anyknown dump --a11y [--boxes] [--json] | --md [--refs] [--width PX] FILE|URL"
-let SERVE_USAGE = "usage: anyknown agent|mcp [--width PX] [--height PX]"
+let DUMP_USAGE = "usage: anyknown dump --a11y [--boxes] [--json] | --md [--refs] [--js] [--width PX] FILE|URL"
+let SERVE_USAGE = "usage: anyknown agent|mcp [--width PX] [--height PX] [--no-js]"
 
 let MCP_VERSION = "2025-06-18"
 let MCP_VERSIONS = "2025-11-25 2025-06-18 2025-03-26 2024-11-05"
@@ -60,6 +64,8 @@ fn dumpViews(alloc: Allocator, args: [][]u8) !i32 {
             as_json = true
         } else if text.eql(a, "--refs") {
             refs = true
+        } else if text.eql(a, "--js") {
+            engine.setScripting(true)
         } else if text.eql(a, "--width") && i + 1 < args.len {
             width = text.parseFloat(args[i + 1]) catch 0.0
             if width <= 0.0 {
@@ -109,7 +115,13 @@ pub fn serveMain(alloc: Allocator, args: [][]u8, mcp: bool) i32 {
     var width = 800.0
     var height = 600.0
     var i: usize = 0
+    engine.setScripting(true)
     while i < args.len {
+        if text.eql(args[i], "--no-js") {
+            engine.setScripting(false)
+            i += 1
+            continue
+        }
         if (text.eql(args[i], "--width") || text.eql(args[i], "--height")) && i + 1 < args.len {
             let v = text.parseFloat(args[i + 1]) catch 0.0
             if v <= 0.0 {
@@ -305,7 +317,17 @@ fn actionOf(doc: *mut Json, args: ?usize, cmd: []u8, why: *mut text.Builder) All
         return Action.Reload
     }
     if text.eql(cmd, "wait") {
-        return Action.Wait
+        var selector: []u8 = ""
+        var ms = 0.0
+        if args |o| {
+            selector = doc.getStr(o, "selector") orelse ""
+            ms = doc.getNum(o, "ms") orelse 0.0
+        }
+        return Action.Wait { selector: selector, ms: ms }
+    }
+    if text.eql(cmd, "eval") {
+        let src = argStr(doc, args, "expression", why) orelse return null
+        return Action.Eval { src: src }
     }
     if text.eql(cmd, "click") {
         let r = argStr(doc, args, "ref", why) orelse return null
@@ -400,7 +422,7 @@ fn agentCommand(s: *mut Session, tmp: Allocator, doc: *mut Json, req: usize, cmd
         let o = try findText(s, tmp, needle)
         return outcomeFields(s, tmp, o, w)
     }
-    if text.eql(cmd, "eval") || text.eql(cmd, "screenshot") || text.eql(cmd, "tabs") {
+    if text.eql(cmd, "screenshot") || text.eql(cmd, "tabs") {
         return failField(w, tmp, try concat(tmp, "\"", cmd, "\" is not supported yet"))
     }
     var why = text.Builder.init(tmp)
@@ -430,6 +452,15 @@ fn outcomeFields(s: *mut Session, tmp: Allocator, o: Outcome, w: *mut Writer) !v
     } else if o.diff.len > 0 {
         try w.key("diff")
         try w.string(o.diff)
+    }
+    let lines = try consoleLines(s, tmp)
+    if lines.len > 0 {
+        try w.key("console")
+        try w.beginArray()
+        for l in lines {
+            try w.string(l)
+        }
+        try w.endArray()
     }
 }
 
@@ -586,7 +617,7 @@ fn rpcError(w: *mut Writer, id: []u8, code: i64, message: []u8) AllocError!void 
     try w.endObject()
 }
 
-let TOOLS = "browser_navigate browser_back browser_forward browser_reload browser_snapshot browser_read browser_click browser_type browser_select browser_press browser_scroll browser_find browser_wait"
+let TOOLS = "browser_navigate browser_back browser_forward browser_reload browser_snapshot browser_read browser_click browser_type browser_select browser_press browser_scroll browser_find browser_wait browser_eval"
 
 fn isTool(name: []u8) bool {
     return text.startsWith(name, "browser_") && html.isIn(name, TOOLS)
@@ -634,6 +665,14 @@ fn callTool(s: *mut Session, tmp: Allocator, doc: *mut Json, cmd: []u8, args: ?u
     }
     let o = try perform(s, tmp, a)
     try out.append(o.message)
+    let lines = try consoleLines(s, tmp)
+    if lines.len > 0 {
+        try out.append("\n\nConsole:")
+        for l in lines {
+            try out.appendByte('\n')
+            try out.append(l)
+        }
+    }
     if !o.ok {
         return false
     }
@@ -678,7 +717,7 @@ fn toolList(w: *mut Writer) AllocError!void {
     try toolStart(w, "browser_read", "Read", "The main content of the page as Markdown (navigation, headers and footers are left out when the page marks its main content). Links are followed by their refs.")
     try toolProp(w, "refs", "boolean", "Write the ref after each link (default true).")
     try toolEnd(w, "", true)
-    try toolStart(w, "browser_click", "Click", "Click an element by ref: follow a link, toggle a checkbox or radio button, open a details element. Buttons and form submission are recorded until forms and scripts are supported.")
+    try toolStart(w, "browser_click", "Click", "Click an element by ref: the page's scripts get the click event, then (unless they cancel it) follow a link, toggle a checkbox or radio button, open a details element. Form submission is recorded until forms are supported.")
     try toolProp(w, "ref", "string", "The ref of the element, from the snapshot (e12).")
     try toolEnd(w, "ref", false)
     try toolStart(w, "browser_type", "Type", "Replace the text of a text field (input or textarea) by ref.")
@@ -700,8 +739,13 @@ fn toolList(w: *mut Writer) AllocError!void {
     try toolStart(w, "browser_find", "Find", "Find text on the page (ignoring case): each match with its context and the nearest element with a ref.")
     try toolProp(w, "text", "string", "The text to find.")
     try toolEnd(w, "text", true)
-    try toolStart(w, "browser_wait", "Wait", "Wait for the page; returns at once while scripts do not run.")
-    try toolEnd(w, "", true)
+    try toolStart(w, "browser_wait", "Wait", "Let the page's scripts run: until an element matches a CSS selector, for a time, or (neither) until no timer is left (at most 5 s). Time is the page's: waiting takes no real time.")
+    try toolProp(w, "selector", "string", "A CSS selector to wait for (at most ms, 5000 by default).")
+    try toolProp(w, "ms", "number", "Milliseconds of the page's time to wait.")
+    try toolEnd(w, "", false)
+    try toolStart(w, "browser_eval", "Evaluate JavaScript", "Run JavaScript in the page and return the value of its last expression (strings as they are, other values as console.log shows them).")
+    try toolProp(w, "expression", "string", "The script; its last expression statement is the result.")
+    try toolEnd(w, "expression", false)
     try w.endArray()
 }
 
