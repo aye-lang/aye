@@ -1,0 +1,19 @@
+<!doctype html>
+<title>Cookies and base</title>
+<base href="/log/">
+<link rel="stylesheet" href="a.css">
+<link rel="stylesheet" href="a.css">
+<link rel="stylesheet" href="nostore.css">
+<link rel="stylesheet" href="nostore.css">
+<script src="s.js"></script>
+<h1>Cookies and base</h1>
+<p><img src="i.png" alt="a picture"></p>
+<p id="c"></p>
+<script>
+document.cookie = "js=6; path=/";
+document.cookie = "h=hacked; path=/";
+document.getElementById("c").textContent = "cookie: " + document.cookie;
+</script>
+<p><a href="next.html">next</a></p>
+<form action="form" method="post"><input name="q" value="1"><button>Send</button></form>
+<form action="find"><input name="q" value="2"><button>Find</button></form>

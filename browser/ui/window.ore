@@ -823,7 +823,7 @@ pub struct Ui {
         }
         if self.linkAt(x, y) |link| {
             if self.tab.page |p| {
-                let target = url.resolve(self.alloc, &p.url, text.trim(link.href)) catch |e| {
+                let target = url.resolve(self.alloc, p.baseUrl(), text.trim(link.href)) catch |e| {
                     return self.setLink(link.href)
                 }
                 defer target.deinit(self.alloc)

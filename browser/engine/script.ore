@@ -397,11 +397,11 @@ fn runScriptElement(s: *mut Script, el: NodeId) AllocError!void {
         return
     }
     if p.doc.attr(el, "src") |src| {
-        let target = url.resolve(s.alloc, &p.url, text.trim(src)) catch |e| {
+        let target = p.resolve(s.alloc, src) catch |e| {
             return addConsole(s, "[error] Failed to load script: ", src)
         }
         defer target.deinit(s.alloc)
-        let res = net.fetch(s.alloc, &target) catch |e| {
+        let res = net.request(s.alloc, &target, net.Request { kind: net.Kind.Script, referrer: p.url.href }) catch |e| {
             match e {
                 .OutOfMemory => {
                     return AllocError.OutOfMemory

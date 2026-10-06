@@ -1,0 +1,10 @@
+{"id":1,"cmd":"navigate","url":"$BASE/log/typed.html"}
+{"id":2,"cmd":"navigate","url":"$BASE/net/start"}
+{"id":3,"cmd":"click","ref":"e2"}
+{"id":4,"cmd":"back"}
+{"id":5,"cmd":"click","ref":"e10"}
+{"id":6,"cmd":"back"}
+{"id":7,"cmd":"click","ref":"e18"}
+{"id":8,"cmd":"navigate","url":"$BASE/big"}
+{"id":9,"cmd":"navigate","url":"$BASE/log"}
+{"id":10,"cmd":"read"}

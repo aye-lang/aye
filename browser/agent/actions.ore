@@ -444,7 +444,7 @@ fn followLink(s: *mut Session, tmp: Allocator, p: *mut Page, a: NodeId, who: []u
         try recordOn(s, tmp, "click on", a)
         return done(try concat(tmp, "clicked ", who, "; it runs a script, which is not supported yet"))
     }
-    let target = url.resolve(tmp, &p.url, href) catch |e| {
+    let target = p.follow(tmp, href) catch |e| {
         return failed(try concat(tmp, "cannot follow ", who, ": not a URL"))
     }
     let o = try goTo(s, tmp, &target)

@@ -1,5 +1,6 @@
 // The images of a page: every `img` (and `input type=image`) with a
-// `src` is fetched (relative to the page's URL; `data:` URLs too) and
+// `src` is fetched (relative to the page's base URL, with the page's URL
+// as the Referer; `data:` URLs too) and
 // decoded once per URL, and the elements are mapped to their bitmaps
 // for layout (natural sizes) and paint. `updateImages` runs before each
 // layout and only fetches what is new (elements added by scripts); a
@@ -30,9 +31,11 @@ pub struct ImageCache {
     alloc: Allocator
     entries: List(CachedImage)
     nodes: layout.Images
+    // The URL of the page, sent as the Referer (owned).
+    referrer: []mut u8
 
     pub fn init(alloc: Allocator) ImageCache {
-        return ImageCache { alloc: alloc, entries: List(CachedImage).init(alloc), nodes: layout.Images.init(alloc) }
+        return ImageCache { alloc: alloc, entries: List(CachedImage).init(alloc), nodes: layout.Images.init(alloc), referrer: alloc.alloc(0 as u8, 0) catch unreachable }
     }
 
     pub fn deinit(self: *mut Self) {
@@ -45,6 +48,15 @@ pub struct ImageCache {
         }
         self.entries.deinit()
         self.nodes.deinit()
+        self.alloc.free(self.referrer)
+    }
+
+    // Sends `href` as the Referer of the images fetched from now on.
+    fn setReferrer(self: *mut Self, href: []u8) AllocError!void {
+        let copy = try self.alloc.alloc(0 as u8, href.len)
+        std.mem.copy(copy, href)
+        self.alloc.free(self.referrer)
+        self.referrer = copy
     }
 
     /// The bitmap of `href`, fetched and decoded the first time.
@@ -57,7 +69,7 @@ pub struct ImageCache {
         let owned = try self.alloc.alloc(0 as u8, href.len)
         std.mem.copy(owned, href)
         var bmp: ?*mut image.Bitmap = null
-        let decoded = fetchImage(self.alloc, href)
+        let decoded = fetchImage(self.alloc, href, self.referrer)
         if decoded |d| {
             bmp = self.alloc.create(d) catch |e| {
                 var lost = d
@@ -79,12 +91,12 @@ pub struct ImageCache {
 }
 
 // Fetches and decodes `href`; null when either fails.
-fn fetchImage(alloc: Allocator, href: []u8) ?image.Bitmap {
+fn fetchImage(alloc: Allocator, href: []u8, referrer: []u8) ?image.Bitmap {
     let target = url.parse(alloc, href) catch |e| {
         return null
     }
     defer target.deinit(alloc)
-    let res = net.fetch(alloc, &target) catch |e| {
+    let res = net.request(alloc, &target, net.Request { kind: net.Kind.Image, referrer: referrer }) catch |e| {
         return null
     }
     defer res.deinit(alloc)
@@ -106,9 +118,15 @@ pub fn updateImages(page: *mut Page) AllocError!void {
     return fillImages(page.images.?, &page.doc, &page.url)
 }
 
-/// Fetches the images of the elements of `doc` that `cache` has no
-/// bitmap for, resolving their URLs against `base`.
-pub fn fillImages(cache: *mut ImageCache, doc: *Document, base: *Url) AllocError!void {
+/// Fetches the images of the elements of `doc` (whose URL is
+/// `address`) that `cache` has no bitmap for, resolving their URLs
+/// against the document's base URL.
+pub fn fillImages(cache: *mut ImageCache, doc: *Document, address: *Url) AllocError!void {
+    if cache.referrer.len == 0 {
+        try cache.setReferrer(address.href)
+    }
+    var base = try documentBase(cache.alloc, doc, address)
+    defer base.deinit(cache.alloc)
     var cur: ?NodeId = doc.root
     while cur |h| {
         cur = doc.following(h, doc.root)
@@ -119,7 +137,7 @@ pub fn fillImages(cache: *mut ImageCache, doc: *Document, base: *Url) AllocError
         if src.len == 0 {
             continue
         }
-        let target = url.resolve(cache.alloc, base, src) catch |e| {
+        let target = url.resolve(cache.alloc, &base, src) catch |e| {
             continue
         }
         defer target.deinit(cache.alloc)

@@ -518,15 +518,7 @@ pub let PRELUDE =
     \\getter(Document.prototype, 'documentURI', function () { return ak.url(); });
     \\getter(Document.prototype, 'visibilityState', function () { return 'visible'; });
     \\getter(Document.prototype, 'hidden', function () { return false; });
-    \\let cookies = '';
-    \\getter(Document.prototype, 'cookie', function () { return cookies; }, function (v) {
-    \\  const pair = String(v).split(';')[0];
-    \\  const eq = pair.indexOf('=');
-    \\  const name = eq < 0 ? '' : pair.slice(0, eq).trim();
-    \\  const kept = cookies === '' ? [] : cookies.split('; ').filter(c => c.slice(0, c.indexOf('=')) !== name);
-    \\  kept.push(pair.trim());
-    \\  cookies = kept.join('; ');
-    \\});
+    \\getter(Document.prototype, 'cookie', function () { return ak.cookie(); }, function (v) { ak.setCookie(String(v)); });
     \\hidden(Document.prototype, 'hasFocus', function () { return true; });
     \\hidden(Document.prototype, 'createEvent', function () { return new Event(''); });
     \\hidden(Event.prototype, 'initEvent', function (type, bubbles, cancelable) {
