@@ -1,0 +1,224 @@
+// Floats (CSS 2.1 9.5, simplified): a float is laid out like an
+// inline-block (shrink-to-fit width, a formatting context of its own)
+// and placed on its side of the current block container as high as it
+// fits: not above an earlier float of its formatting context, below the
+// floats its `clear` names, and below floats that leave too little room
+// beside them. Line boxes beside floats get shorter (`bandAt`), blocks
+// that establish a formatting context get narrower, `clear` moves a
+// block below floats, and a formatting context root grows to contain its
+// floats.
+//
+// Floats are kept in `Tree.floats` in the coordinates of their
+// formatting context root's content box; `Tree.fx`, `Tree.fy` give the
+// origin of the content box of the block container being laid out in
+// those coordinates. A float in a line goes at the top of that line when
+// it fits beside the line's content so far, else below the line.
+
+import css
+import css.Value
+import std.math
+import std.mem.AllocError
+import std.text
+
+/// A placed float: its margin box in the coordinates of its formatting
+/// context root's content box.
+pub struct FloatBox {
+    box: usize
+    left: bool
+    x: f64
+    y: f64
+    w: f64
+    h: f64
+}
+
+// The horizontal room between floats in the current container, in its
+// content coordinates.
+struct Band {
+    left: f64
+    right: f64
+
+    fn width(self: Self) f64 {
+        return self.right - self.left
+    }
+}
+
+// The room left by the floats of the current formatting context in the
+// current container (content box `cw` wide) from `y` to `y + h`
+// (container coordinates).
+fn bandAt(t: *Tree, y: f64, h: f64, cw: f64) Band {
+    var l = t.fx
+    var r = t.fx + cw
+    let top = t.fy + y
+    let bottom = top + math.max(h, 0.01)
+    let fl = t.floats.items()
+    for k in t.float_base..fl.len {
+        let f = fl[k]
+        if f.h > 0.0 && f.y < bottom && f.y + f.h > top {
+            if f.left {
+                l = math.max(l, f.x + f.w)
+            } else {
+                r = math.min(r, f.x)
+            }
+        }
+    }
+    return Band { left: l - t.fx, right: math.max(r, l) - t.fx }
+}
+
+// The nearest bottom edge of the floats beside `y`..`y + h` (container
+// coordinates), where the room may widen; null when no float is there.
+fn nextFloatBottom(t: *Tree, y: f64, h: f64) ?f64 {
+    let top = t.fy + y
+    let bottom = top + math.max(h, 0.01)
+    var best: ?f64 = null
+    let fl = t.floats.items()
+    for k in t.float_base..fl.len {
+        let f = fl[k]
+        if f.h > 0.0 && f.y < bottom && f.y + f.h > top {
+            let fb = f.y + f.h
+            if best |b| {
+                if fb < b {
+                    best = fb
+                }
+            } else {
+                best = fb
+            }
+        }
+    }
+    if best |b| {
+        return b - t.fy
+    }
+    return null
+}
+
+// The sides that `clear` names: 1 left, 2 right, 3 both, 0 none.
+fn clearOf(style: []Value) u8 {
+    let c = keywordOf(style[css.CLEAR])
+    if text.eql(c, "left") || text.eql(c, "inline-start") {
+        return 1
+    }
+    if text.eql(c, "right") || text.eql(c, "inline-end") {
+        return 2
+    }
+    if text.eql(c, "both") {
+        return 3
+    }
+    return 0
+}
+
+// The bottom of the floats on the sides `which` (`clearOf`) in the
+// current formatting context, in container coordinates; null when there
+// are none.
+fn clearanceY(t: *Tree, which: u8) ?f64 {
+    if which == 0 {
+        return null
+    }
+    var best: ?f64 = null
+    let fl = t.floats.items()
+    for k in t.float_base..fl.len {
+        let f = fl[k]
+        let side = sideBit(f.left)
+        if (side & which) != 0 {
+            let fb = f.y + f.h - t.fy
+            if best |b| {
+                best = math.max(b, fb)
+            } else {
+                best = fb
+            }
+        }
+    }
+    return best
+}
+
+// The `clearOf` bit of a float's side.
+fn sideBit(left: bool) u8 {
+    if left {
+        return 1
+    }
+    return 2
+}
+
+// The bottom of the floats of the current formatting context (its
+// root's content coordinates), or 0.
+fn floatsBottom(t: *Tree) f64 {
+    var b = 0.0
+    let fl = t.floats.items()
+    for k in t.float_base..fl.len {
+        b = math.max(b, fl[k].y + fl[k].h)
+    }
+    return b
+}
+
+// Has the float `i` been placed in the current formatting context?
+fn isPlaced(t: *Tree, i: usize) bool {
+    let fl = t.floats.items()
+    for k in t.float_base..fl.len {
+        if fl[k].box == i {
+            return true
+        }
+    }
+    return false
+}
+
+/// Places the laid-out float `i` in the current container (content box
+/// `cw` wide) at `y` or below (container coordinates): sets its `x`,
+/// `y` relative to the container's content box and adds it to the
+/// floats of the formatting context.
+fn placeFloat(t: *mut Tree, i: usize, y: f64, cw: f64) AllocError!void {
+    let b = t.bx(i)
+    let ow = b.margin[3] + b.w + b.margin[1]
+    let oh = b.margin[0] + b.h + b.margin[2]
+    var top = y
+    let fl = t.floats.items()
+    for k in t.float_base..fl.len {
+        top = math.max(top, fl[k].y - t.fy)
+    }
+    if clearanceY(t, clearOf(b.style)) |c| {
+        top = math.max(top, c)
+    }
+    var band = bandAt(t, top, oh, cw)
+    while band.width() < ow - 0.001 {
+        if nextFloatBottom(t, top, oh) |nb| {
+            top = nb
+            band = bandAt(t, top, oh, cw)
+        } else {
+            break
+        }
+    }
+    var x = band.left
+    let left = b.float != 2
+    if !left {
+        x = band.right - ow
+    }
+    try t.floats.append(FloatBox { box: i, left: left, x: t.fx + x, y: t.fy + top, w: ow, h: oh })
+    let fb = t.bx(i)
+    fb.x = x + fb.margin[3]
+    fb.y = top + fb.margin[0]
+}
+
+// The top margin of block `c` collapsed with those of its first
+// children that it touches, as far as known before laying it out (for
+// the float offsets of its content).
+fn collapsedTop(t: *Tree, c: usize, cw: f64) Strut {
+    var s = Strut.of(lengthOr0(t.bx(c).style[css.MARGIN_TOP], cw))
+    var cur = c
+    while !isFormattingRoot(t, cur) && !hasInlineContent(t, cur) {
+        let st = t.bx(cur).style
+        if lengthOr0(st[css.BORDER_TOP_WIDTH], cw) != 0.0 || lengthOr0(st[css.PADDING_TOP], cw) != 0.0 {
+            break
+        }
+        var first: ?usize = null
+        for k in t.children(cur) {
+            if !t.bx(k).oof() {
+                first = k
+                break
+            }
+        }
+        let f = first orelse break
+        if t.bx(f).inline_level {
+            break
+        }
+        s.add(lengthOr0(t.bx(f).style[css.MARGIN_TOP], cw))
+        cur = f
+    }
+    return s
+}

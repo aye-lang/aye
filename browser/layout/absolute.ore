@@ -1,0 +1,142 @@
+// Absolute positioning (CSS 2.1 10.3.7 and 10.6.4, simplified). During
+// the main layout an absolutely positioned box takes no space; its `x`,
+// `y` hold its static position (where its margin box would have started
+// in the flow). Once everything else is laid out and placed, the boxes
+// are laid out in tree order (so a box comes before the ones inside it)
+// in their containing block: the padding box of the nearest positioned
+// ancestor, or the initial containing block (the first screen, at the
+// top of the document), which is also the containing block of `fixed`
+// boxes. `left`/`right`/`top`/`bottom` (percentages of the containing
+// block, `auto` for the static position), a width from `left` and
+// `right` when `width` is `auto` (else shrink-to-fit), a height from
+// `top` and `bottom`, and `auto` margins that center.
+
+import css
+import css.Value
+import std.math
+import std.mem.AllocError
+import std.text
+
+struct Area {
+    x: f64
+    y: f64
+    w: f64
+    h: f64
+}
+
+/// Is the box positioned (a containing block for absolutely positioned
+/// descendants, painted in a layer)?
+pub fn isPositioned(style: []Value) bool {
+    return !isKeyword(style[css.POSITION], "static")
+}
+
+fn layoutAbsolutes(t: *mut Tree) AllocError!void {
+    let n = t.absolutes.len()
+    for k in 0..n {
+        try layoutAbsolute(t, t.absolutes.items()[k])
+    }
+}
+
+// The containing block of the absolutely positioned box `i`: absolute
+// coordinates of a padding box.
+fn containingArea(t: *Tree, i: usize) Area {
+    let icb = Area { x: 0.0, y: 0.0, w: t.viewport_w, h: t.viewport_h }
+    if t.bx(i).abs == 2 {
+        return icb
+    }
+    var cur = t.bx(i).parent
+    while cur |c| {
+        let b = t.bx(c)
+        if b.kind != BoxKind.Inline && b.kind != BoxKind.Text && (b.abs != 0 || isPositioned(b.style)) {
+            return Area {
+                x: b.ax + b.border[3],
+                y: b.ay + b.border[0],
+                w: math.max(0.0, b.w - b.border[1] - b.border[3]),
+                h: math.max(0.0, b.h - b.border[0] - b.border[2]),
+            }
+        }
+        cur = b.parent
+    }
+    return icb
+}
+
+fn layoutAbsolute(t: *mut Tree, i: usize) AllocError!void {
+    let cb = containingArea(t, i)
+    let b0 = t.bx(i)
+    // The static position, and the origin of `x`, `y`.
+    let sx = b0.ax
+    let sy = b0.ay
+    let ox = b0.ax - b0.x
+    let oy = b0.ay - b0.y
+    resolveEdges(t, i, cb.w)
+    let b = t.bx(i)
+    let s = b.style
+    let left = lengthOf(s[css.INSET_TOP + 3], cb.w)
+    let right = lengthOf(s[css.INSET_TOP + 1], cb.w)
+    let top = lengthOf(s[css.INSET_TOP], cb.h)
+    let bottom = lengthOf(s[css.INSET_TOP + 2], cb.h)
+    b.margin[3] = lengthOr0(s[css.MARGIN_TOP + 3], cb.w)
+    b.margin[1] = lengthOr0(s[css.MARGIN_TOP + 1], cb.w)
+    let avail = cb.w - (left orelse 0.0) - (right orelse 0.0)
+    let kind = b.kind
+    if kind == BoxKind.Image {
+        replacedSize(t, i, cb.w, cb.h)
+    } else if kind == BoxKind.Table {
+        try layoutTable(t, i, avail)
+    } else {
+        if specifiedWidth(t, i, cb.w) |w| {
+            t.bx(i).w = w
+        } else if left != null && right != null {
+            let bb = t.bx(i)
+            bb.w = clampWidth(t, i, avail - bb.margin[1] - bb.margin[3], cb.w)
+        } else {
+            try shrinkToFit(t, i, avail)
+        }
+        try layoutContents(t, i, cb.h)
+    }
+    let r = t.bx(i)
+    // A height from `top` and `bottom`.
+    if top != null && bottom != null && isKeyword(s[css.HEIGHT], "auto") && kind != BoxKind.Image {
+        r.h = clampHeight(t, i, cb.h - top.? - bottom.? - r.margin[0] - r.margin[2], cb.h)
+    }
+    // `auto` margins share what is left between the offsets.
+    if left != null && right != null {
+        let free = cb.w - left.? - right.? - r.w - r.margin[1] - r.margin[3]
+        let la = isKeyword(s[css.MARGIN_TOP + 3], "auto")
+        let ra = isKeyword(s[css.MARGIN_TOP + 1], "auto")
+        if la && ra {
+            r.margin[3] += math.max(0.0, free) / 2.0
+        } else if la {
+            r.margin[3] += free
+        }
+    }
+    if top != null && bottom != null {
+        let free = cb.h - top.? - bottom.? - r.h - r.margin[0] - r.margin[2]
+        let ta = isKeyword(s[css.MARGIN_TOP], "auto")
+        let ba = isKeyword(s[css.MARGIN_TOP + 2], "auto")
+        if ta && ba {
+            r.margin[0] += math.max(0.0, free) / 2.0
+        } else if ta {
+            r.margin[0] += free
+        }
+    }
+    var ax = sx + r.margin[3]
+    if left |l| {
+        ax = cb.x + l + r.margin[3]
+    } else if right |rr| {
+        ax = cb.x + cb.w - rr - r.margin[1] - r.w
+    }
+    var ay = sy + r.margin[0]
+    if top |tp| {
+        ay = cb.y + tp + r.margin[0]
+    } else if bottom |bt| {
+        ay = cb.y + cb.h - bt - r.margin[2] - r.h
+    }
+    r.rel_x = 0.0
+    r.rel_y = 0.0
+    r.x = ax - ox
+    r.y = ay - oy
+    r.ax = ax
+    r.ay = ay
+    placeChildren(t, i, ax + r.border[3] + r.padding[3], ay + r.border[0] + r.padding[0])
+}

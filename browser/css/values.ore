@@ -2,7 +2,9 @@
 // properties with specified `Value`s. Shorthands (`margin`, `padding`,
 // `border`, `border-top`..., `border-width`/`-style`/`-color`, `font`,
 // `background`, `list-style`, `overflow`, `text-decoration`, `inset`,
-// `gap`, `flex`, `flex-flow`) expand into their longhands. An invalid
+// `gap`, `flex`, `flex-flow`, `grid-column`, `grid-row`, `grid-area`,
+// `grid-gap`) expand into their longhands. The grid track lists and
+// placements are kept as their text (`Raw`) for layout to read. An invalid
 // value drops the declaration. Absolute units (pt, pc, in, cm, mm, q)
 // become px here; `ex` and `ch` are taken as half an `em`.
 //
@@ -282,6 +284,72 @@ struct Declarer {
         }
         if text.eql(name, "flex-flow") {
             return self.flexFlow(comps)
+        }
+        if text.eql(name, "grid-column") {
+            return self.gridLines(comps, GRID_COLUMN_START, GRID_COLUMN_START + 1, 0, 0)
+        }
+        if text.eql(name, "grid-row") {
+            return self.gridLines(comps, GRID_COLUMN_START + 2, GRID_COLUMN_START + 3, 0, 0)
+        }
+        if text.eql(name, "grid-area") {
+            return self.gridLines(comps, GRID_COLUMN_START + 2, GRID_COLUMN_START, GRID_COLUMN_START + 3, GRID_COLUMN_START + 1)
+        }
+        if text.eql(name, "grid-gap") {
+            return self.gap(comps)
+        }
+        if text.eql(name, "grid-row-gap") || text.eql(name, "grid-column-gap") {
+            var prop = ROW_GAP
+            if text.eql(name, "grid-column-gap") {
+                prop = COLUMN_GAP
+            }
+            if try parseValue(self.sheet, prop, comps) |v| {
+                try self.add(prop, v)
+            }
+        }
+    }
+
+    // `grid-column` and `grid-row` (`a [/ b]`: the longhands `p0`, `p1`;
+    // `p2` = `p3` = 0) or `grid-area` (`a [/ b [/ c [/ d]]]`: row start,
+    // column start, row end, column end). A missing value is the first
+    // one when that is a name, else `auto`.
+    fn gridLines(self: *mut Self, comps: []Comp, p0: usize, p1: usize, p2: usize, p3: usize) AllocError!void {
+        var props = [4]usize{p0, p1, p2, p3}
+        var n: usize = 2
+        if p2 != 0 {
+            n = 4
+        }
+        if try self.wide(comps, props[0..n]) {
+            return
+        }
+        var vals = [4]Value{Value.Initial, Value.Initial, Value.Initial, Value.Initial}
+        var count: usize = 0
+        var start: usize = 0
+        for k in 0..comps.len + 1 {
+            if k < comps.len && !isDelim(comps[k], '/') {
+                continue
+            }
+            if count == n || k == start {
+                return
+            }
+            vals[count] = rawValue(self.sheet, comps[start..k]) orelse return
+            count += 1
+            start = k + 1
+        }
+        for k in count..n {
+            // A missing value: the name of its pair's start (the row
+            // start for the column start), else auto.
+            var src: usize = 0
+            if k >= 2 {
+                src = k - 2
+            }
+            var v = Value.Keyword { k: "auto" }
+            if isName(vals[src]) {
+                v = vals[src]
+            }
+            vals[k] = v
+        }
+        for k in 0..n {
+            try self.add(props[k], vals[k])
         }
     }
 
@@ -702,6 +770,14 @@ pub fn parseValue(sheet: *mut Sheet, prop: usize, comps: []Comp) AllocError!?Val
     if p.kind == PKind.TextDecoration {
         return decorationLines(sheet, comps)
     }
+    if p.kind == PKind.Raw {
+        if comps.len == 1 && comps[0].toks[0].kind == Tok.Ident && comps[0].toks.len == 1 {
+            if inList(comps[0].toks[0].text, p.keywords) |k| {
+                return Value.Keyword { k: k }
+            }
+        }
+        return rawValue(sheet, comps)
+    }
     if comps.len != 1 {
         return null
     }
@@ -783,6 +859,113 @@ fn single(p: Property, c: Comp) ?Value {
             }
             return null
         }
+        .Int => {
+            if t.kind == Tok.Number && c.toks.len == 1 && t.flag {
+                return Value.Number { v: t.num }
+            }
+            return null
+        }
+        .Raw => {
+            return null
+        }
+    }
+}
+
+// Is `v` a grid line name (one identifier other than `auto` and `span`)?
+fn isName(v: Value) bool {
+    let k = match v {
+        .Keyword { k } => k
+        _ => ""
+    }
+    if k.len == 0 || text.eql(k, "auto") || text.indexOf(k, " ") != null {
+        return false
+    }
+    let c = k[0]
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || (c == '-' && k.len > 1 && !(k[1] >= '0' && k[1] <= '9'))
+}
+
+/// The text of `comps` (tokens written back, components separated by a
+/// space) as a `Keyword` in the sheet's arena; null when empty.
+fn rawValue(sheet: *mut Sheet, comps: []Comp) ?Value {
+    if comps.len == 0 {
+        return null
+    }
+    var out = text.Builder.init(sheet.arena.allocator())
+    for k, c in comps {
+        if k > 0 {
+            out.append(" ") catch return null
+        }
+        for tk in c.toks {
+            writeToken(tk, &mut out) catch return null
+        }
+    }
+    let bytes = out.toOwned() catch return null
+    return Value.Keyword { k: bytes }
+}
+
+fn writeToken(t: Token, out: *mut text.Builder) AllocError!void {
+    match t.kind {
+        .Ident, .AtKeyword, .Url, .BadUrl => {
+            try out.append(t.text)
+        }
+        .Function => {
+            try out.append(t.text)
+            try out.appendByte('(')
+        }
+        .Hash => {
+            try out.appendByte('#')
+            try out.append(t.text)
+        }
+        .String, .BadString => {
+            try out.appendByte('"')
+            try out.append(t.text)
+            try out.appendByte('"')
+        }
+        .Delim => {
+            try out.appendChar(t.delim)
+        }
+        .Number => {
+            try writeNumber(t.num, out)
+        }
+        .Percentage => {
+            try writeNumber(t.num, out)
+            try out.appendByte('%')
+        }
+        .Dimension => {
+            try writeNumber(t.num, out)
+            try out.append(t.text)
+        }
+        .Whitespace => {
+            try out.appendByte(' ')
+        }
+        .Colon => {
+            try out.appendByte(':')
+        }
+        .Semicolon => {
+            try out.appendByte(';')
+        }
+        .Comma => {
+            try out.appendByte(',')
+        }
+        .LBracket => {
+            try out.appendByte('[')
+        }
+        .RBracket => {
+            try out.appendByte(']')
+        }
+        .LParen => {
+            try out.appendByte('(')
+        }
+        .RParen => {
+            try out.appendByte(')')
+        }
+        .LBrace => {
+            try out.appendByte('{')
+        }
+        .RBrace => {
+            try out.appendByte('}')
+        }
+        .Cdo, .Cdc => {}
     }
 }
 

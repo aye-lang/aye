@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0 }
+.cb { position: relative; margin: 10px; padding: 5px; width: 300px; height: 100px; border: 2px solid }
+.tl { position: absolute; top: 0; left: 0; width: 50px; height: 20px }
+.br { position: absolute; bottom: 10%; right: 10px }
+.stretch { position: absolute; left: 20px; right: 20px; top: 40px }
+.static { position: absolute }
+.center { position: absolute; left: 0; right: 0; width: 100px; margin: 0 auto; top: 60px; height: 10px }
+.fixed { position: fixed; bottom: 0; left: 0; right: 0; height: 30px }
+.icb { position: absolute; top: 5px; right: 5px }
+.tall { position: absolute; top: 10px; bottom: 10px; left: 250px; width: 20px }
+.inner { position: absolute; top: 2px; left: 2px }
+</style>
+<div class="cb">
+  <div class="tl">TL</div>
+  flow text <span class="static">static</span> after
+  <div class="br">bottom right</div>
+  <div class="stretch">stretched <div class="inner">in</div></div>
+  <div class="center">c</div>
+  <div class="tall"></div>
+</div>
+<p>the flow continues here</p>
+<div class="fixed">cookie banner</div>
+<div class="icb">no positioned ancestor</div>
+<div style="position: absolute; top: 200px; left: 10px; display: none">hidden</div>
+<div style="display: flex"><div style="position: absolute; top: 0">out of the flex</div><div>item</div></div>

@@ -1,0 +1,951 @@
+// Grid layout (CSS Grid 1, simplified).
+//
+// - Columns from `grid-template-columns`: lengths (px, %, em, rem, vw,
+//   vh and the absolute units), `fr`, `auto` (also `min-content`,
+//   `max-content`, `fit-content()`), `minmax(min, max)` and
+//   `repeat(N | auto-fill | auto-fit, tracks)`; line names are skipped.
+//   Without columns there is one. Rows from `grid-template-rows` the
+//   same way (`fr` only when the height is definite); more rows are
+//   `auto`. Gaps from `column-gap` and `row-gap`.
+// - Areas from `grid-template-areas`; items placed by
+//   `grid-column-start`/`-end` and `grid-row-start`/`-end` (the
+//   `grid-column`, `grid-row` and `grid-area` shorthands): line numbers
+//   (negative ones from the end), `span N`, area names (and
+//   `name-start`, `name-end`), `auto`. Lines past the last column add
+//   `auto` columns. Then auto-placement, row by row: items with a
+//   definite row first, then the others from a cursor that only moves
+//   forward (no `dense`, no column flow).
+// - Track sizing: fixed tracks; content-sized tracks (`auto` and the
+//   `auto` minimums of `fr`) start at the min-content width of their
+//   items (items spanning several tracks share theirs) and grow toward
+//   max-content; `fr` tracks share what is left (at least their
+//   minimum); with no `fr` track, `auto` tracks stretch. Rows are as high
+//   as their items. Items stretch in both axes unless their size is set
+//   or `align-self` says otherwise.
+// - Anything else (subgrid, masonry, unparsable tracks) falls back to
+//   one column, so the content stays readable.
+
+import css
+import css.Value
+import std.list.List
+import std.math
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+// A track: its minimum (px, or -1 for the min-content of its items),
+// its maximum (px, or -1 for max-content) and its flex factor (fr; 0
+// for none).
+struct Track {
+    min: f64
+    max: f64
+    fr: f64
+}
+
+// A grid item and its area (0-based column and row, spans).
+struct GridItem {
+    box: usize
+    col: usize
+    row: usize
+    cspan: usize
+    rspan: usize
+}
+
+// A named area of `grid-template-areas`: columns `c0..c1`, rows
+// `r0..r1`.
+struct GridArea {
+    name: []u8
+    c0: usize
+    c1: usize
+    r0: usize
+    r1: usize
+}
+
+// What the lengths of a grid container are relative to.
+struct Units {
+    font: f64
+    root_font: f64
+    vw: f64
+    vh: f64
+}
+
+fn unitsOf(t: *Tree, i: usize) Units {
+    var root_font = 16.0
+    if t.root |r| {
+        root_font = numberOf(t.bx(r).style[css.FONT_SIZE], 16.0)
+    }
+    return Units {
+        font: numberOf(t.bx(i).style[css.FONT_SIZE], 16.0),
+        root_font: root_font,
+        vw: t.viewport_w,
+        vh: t.viewport_h,
+    }
+}
+
+// A length of a track list (`base`: what % refers to, or -1); null when
+// it is not one.
+fn trackLength(s: []u8, base: f64, u: Units) ?f64 {
+    var k: usize = 0
+    while k < s.len && ((s[k] >= '0' && s[k] <= '9') || s[k] == '.' || s[k] == '-' || s[k] == '+') {
+        k += 1
+    }
+    if k == 0 {
+        return null
+    }
+    let n = text.parseFloat(s[..k]) catch return null
+    let unit = s[k..]
+    if unit.len == 0 {
+        if n == 0.0 {
+            return 0.0
+        }
+        return null
+    }
+    if text.eql(unit, "%") {
+        if base < 0.0 {
+            return null
+        }
+        return base * n / 100.0
+    }
+    if text.eqlIgnoreCase(unit, "em") {
+        return n * u.font
+    }
+    if text.eqlIgnoreCase(unit, "rem") {
+        return n * u.root_font
+    }
+    if text.eqlIgnoreCase(unit, "ex") || text.eqlIgnoreCase(unit, "ch") {
+        return n * u.font * 0.5
+    }
+    if text.eqlIgnoreCase(unit, "vw") {
+        return n * u.vw / 100.0
+    }
+    if text.eqlIgnoreCase(unit, "vh") {
+        return n * u.vh / 100.0
+    }
+    return css.absoluteLength(n, unit)
+}
+
+// The flex factor of `Nfr`; null when it is not one.
+fn frOf(s: []u8) ?f64 {
+    if !text.endsWith(s, "fr") || s.len < 3 {
+        return null
+    }
+    let n = text.parseFloat(s[..s.len - 2]) catch return null
+    if n < 0.0 {
+        return null
+    }
+    return n
+}
+
+// One track size (no `repeat`); null when it is not understood.
+fn parseTrack(s: []u8, base: f64, u: Units) ?Track {
+    let auto = Track { min: -1.0, max: -1.0, fr: 0.0 }
+    if text.eql(s, "auto") || text.eql(s, "min-content") || text.eql(s, "max-content") || text.startsWith(s, "fit-content(") || text.startsWith(s, "calc(") {
+        return auto
+    }
+    if frOf(s) |f| {
+        return Track { min: -1.0, max: -1.0, fr: f }
+    }
+    if text.startsWith(s, "minmax(") && text.endsWith(s, ")") {
+        let inner = s[7..s.len - 1]
+        let comma = text.indexOf(inner, ",") orelse return null
+        let a = text.trim(inner[..comma])
+        let b = text.trim(inner[comma + 1..])
+        var r = auto
+        if trackLength(a, base, u) |n| {
+            r.min = n
+        } else if parseTrack(a, base, u) == null {
+            return null
+        }
+        if frOf(b) |f| {
+            r.fr = f
+        } else if trackLength(b, base, u) |n| {
+            r.max = math.max(n, r.min)
+        } else if parseTrack(b, base, u) == null {
+            return null
+        }
+        return r
+    }
+    if trackLength(s, base, u) |n| {
+        return Track { min: n, max: n, fr: 0.0 }
+    }
+    if text.endsWith(s, "%") {
+        // A percentage of an unknown size.
+        return auto
+    }
+    return null
+}
+
+// The next space-separated item of `s` from `k` (brackets and
+// parentheses kept together); returns its end.
+fn itemEnd(s: []u8, k: usize) usize {
+    var depth: usize = 0
+    var e = k
+    while e < s.len {
+        let c = s[e]
+        if c == '(' || c == '[' {
+            depth += 1
+        } else if (c == ')' || c == ']') && depth > 0 {
+            depth -= 1
+        } else if c == ' ' && depth == 0 {
+            break
+        }
+        e += 1
+    }
+    return e
+}
+
+// The tracks of a track list (`base`: the size % refers to, or -1;
+// `gap` for `auto-fill`) appended to `out`; false when the list is not
+// understood.
+fn parseTracks(alloc: Allocator, s: []u8, base: f64, gap: f64, u: Units, out: *mut List(Track)) AllocError!bool {
+    var k: usize = 0
+    while k < s.len {
+        if s[k] == ' ' || s[k] == ',' {
+            k += 1
+            continue
+        }
+        let e = itemEnd(s, k)
+        let item = s[k..e]
+        k = e
+        if item[0] == '[' {
+            continue
+        }
+        if text.startsWith(item, "repeat(") && text.endsWith(item, ")") {
+            let inner = item[7..item.len - 1]
+            let comma = text.indexOf(inner, ",") orelse return false
+            let count = text.trim(inner[..comma])
+            var one = List(Track).init(alloc)
+            defer one.deinit()
+            if !(try parseTracks(alloc, text.trim(inner[comma + 1..]), base, gap, u, &mut one)) || one.len() == 0 {
+                return false
+            }
+            var n: usize = 1
+            if text.eql(count, "auto-fill") || text.eql(count, "auto-fit") {
+                // As many as fit (at least their minimum each).
+                var each = 0.0
+                for tr in one.items() {
+                    each += math.max(tr.min, tr.max) + gap
+                }
+                if base > 0.0 && each > 0.0 {
+                    n = math.max(1.0, math.floor((base + gap) / each)) as usize
+                }
+            } else {
+                let c = text.parseInt(count) catch return false
+                if c < 1 || c > 1000 {
+                    return false
+                }
+                n = c as usize
+            }
+            for r in 0..n {
+                for tr in one.items() {
+                    try out.append(tr)
+                }
+            }
+            continue
+        }
+        let tr = parseTrack(item, base, u) orelse return false
+        try out.append(tr)
+    }
+    return true
+}
+
+// The areas of `grid-template-areas` (rows of quoted strings); the
+// number of its columns, 0 when there are none.
+fn parseAreas(s: []u8, out: *mut List(GridArea)) AllocError!usize {
+    var cols: usize = 0
+    var row: usize = 0
+    var k: usize = 0
+    while k < s.len {
+        if s[k] != '"' {
+            k += 1
+            continue
+        }
+        var e = k + 1
+        while e < s.len && s[e] != '"' {
+            e += 1
+        }
+        let line = s[k + 1..e]
+        k = e + 1
+        var col: usize = 0
+        var words = text.split(line, " ")
+        while words.next() |w| {
+            if w.len == 0 {
+                continue
+            }
+            if !text.eql(w, ".") && w[0] != '.' {
+                var found = false
+                for a in out.items() {
+                    if text.eql(a.name, w) {
+                        found = true
+                    }
+                }
+                if found {
+                    let all = out.items()
+                    for j in 0..all.len {
+                        if text.eql(all[j].name, w) {
+                            all[j].c0 = math.min(all[j].c0 as f64, col as f64) as usize
+                            all[j].c1 = math.max(all[j].c1 as f64, (col + 1) as f64) as usize
+                            all[j].r1 = row + 1
+                        }
+                    }
+                } else {
+                    try out.append(GridArea { name: w, c0: col, c1: col + 1, r0: row, r1: row + 1 })
+                }
+            }
+            col += 1
+        }
+        cols = math.max(cols as f64, col as f64) as usize
+        row += 1
+    }
+    return cols
+}
+
+// A line of an item's placement: a line index (0-based), a span, a
+// name, or auto.
+struct LineRef {
+    // 0 auto, 1 line, 2 span.
+    kind: u8
+    n: i64
+}
+
+// The placement value `v` of an item: a line number (negative from the
+// end of `count` tracks), `span N`, an area name (its `start` or `end`
+// line), or auto.
+fn lineRef(v: Value, areas: []GridArea, count: usize, column: bool, end: bool) LineRef {
+    let s = text.trim(keywordOf(v))
+    let none = LineRef { kind: 0, n: 0 }
+    if s.len == 0 || text.eql(s, "auto") {
+        return none
+    }
+    if text.startsWith(s, "span") {
+        let rest = text.trim(s[4..])
+        var n: i64 = 1
+        if rest.len > 0 {
+            n = text.parseInt(rest) catch 1
+        }
+        if n < 1 {
+            n = 1
+        }
+        return LineRef { kind: 2, n: math.min(n as f64, 1000.0) as i64 }
+    }
+    if text.parseInt(s) |n| {
+        if n > 0 {
+            return LineRef { kind: 1, n: math.min((n - 1) as f64, 1000.0) as i64 }
+        }
+        if n < 0 {
+            let idx = count as i64 + 1 + n
+            if idx < 0 {
+                return LineRef { kind: 1, n: 0 }
+            }
+            return LineRef { kind: 1, n: idx }
+        }
+        return none
+    } else |e| {}
+    // An area name.
+    var name = s
+    var want_end = end
+    if text.endsWith(s, "-start") {
+        name = s[..s.len - 6]
+        want_end = false
+    } else if text.endsWith(s, "-end") {
+        name = s[..s.len - 4]
+        want_end = true
+    }
+    for a in areas {
+        if text.eql(a.name, name) {
+            var line = a.r0
+            if column && want_end {
+                line = a.c1
+            } else if column {
+                line = a.c0
+            } else if want_end {
+                line = a.r1
+            }
+            return LineRef { kind: 1, n: line as i64 }
+        }
+    }
+    return none
+}
+
+// From the start and end of a placement: the start line (or -1 for
+// auto) and the span.
+fn resolveLines(a: LineRef, b: LineRef) [2]i64 {
+    if a.kind == 1 {
+        if b.kind == 1 {
+            if b.n > a.n {
+                return [2]i64{a.n, b.n - a.n}
+            }
+            if b.n < a.n {
+                return [2]i64{b.n, a.n - b.n}
+            }
+            return [2]i64{a.n, 1}
+        }
+        if b.kind == 2 {
+            return [2]i64{a.n, b.n}
+        }
+        return [2]i64{a.n, 1}
+    }
+    var span: i64 = 1
+    if a.kind == 2 {
+        span = a.n
+    }
+    if b.kind == 1 {
+        let start = b.n - span
+        if start < 0 {
+            return [2]i64{0, math.max(1.0, b.n as f64) as i64}
+        }
+        return [2]i64{start, span}
+    }
+    if b.kind == 2 && a.kind != 2 {
+        span = b.n
+    }
+    return [2]i64{-1, span}
+}
+
+// The cells taken by placed items, row by row, `cols` per row.
+struct Occupancy {
+    cells: *mut List(bool)
+    cols: usize
+
+    fn rows(self: *Self) usize {
+        return self.cells.len() / self.cols
+    }
+
+    fn isFree(self: *Self, col: usize, row: usize, cspan: usize, rspan: usize) bool {
+        if col + cspan > self.cols {
+            return false
+        }
+        for r in row..row + rspan {
+            if r >= self.rows() {
+                continue
+            }
+            for c in col..col + cspan {
+                if self.cells.items()[r * self.cols + c] {
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
+    fn take(self: *mut Self, col: usize, row: usize, cspan: usize, rspan: usize) AllocError!void {
+        while self.rows() < row + rspan {
+            for c in 0..self.cols {
+                try self.cells.append(false)
+            }
+        }
+        for r in row..row + rspan {
+            for c in col..col + cspan {
+                self.cells.items()[r * self.cols + c] = true
+            }
+        }
+    }
+}
+
+// The grid of container `i` (content box `cw` wide, -1 when measuring):
+// its columns (and rows from `grid-template-rows` when `ch` >= 0) and
+// its placed items.
+struct Grid {
+    cols: List(Track)
+    rows: List(Track)
+    items: List(GridItem)
+    nrows: usize
+
+    fn deinit(self: *mut Self) {
+        self.cols.deinit()
+        self.rows.deinit()
+        self.items.deinit()
+    }
+}
+
+fn gapOfGrid(v: Value, base: f64) f64 {
+    return lengthOr0(v, base)
+}
+
+fn buildGrid(t: *mut Tree, i: usize, cw: f64, ch: f64) AllocError!Grid {
+    let style = t.bx(i).style
+    let u = unitsOf(t, i)
+    var g = Grid {
+        cols: List(Track).init(t.backing),
+        rows: List(Track).init(t.backing),
+        items: List(GridItem).init(t.backing),
+        nrows: 0,
+    }
+    errdefer g.deinit()
+    let col_gap = gapOfGrid(style[css.COLUMN_GAP], cw)
+    let row_gap = gapOfGrid(style[css.ROW_GAP], ch)
+    var areas = List(GridArea).init(t.backing)
+    defer areas.deinit()
+    var area_cols = try parseAreas(keywordOf(style[css.GRID_TEMPLATE_AREAS]), &mut areas)
+    let template = keywordOf(style[css.GRID_TEMPLATE_COLUMNS])
+    if !text.eql(template, "none") && template.len > 0 {
+        if !(try parseTracks(t.backing, template, cw, col_gap, u, &mut g.cols)) {
+            // Not understood: one column.
+            g.cols.clear()
+            areas.clear()
+            area_cols = 0
+        }
+    }
+    while g.cols.len() < area_cols {
+        try g.cols.append(Track { min: -1.0, max: -1.0, fr: 1.0 })
+    }
+    if g.cols.len() == 0 {
+        try g.cols.append(Track { min: -1.0, max: -1.0, fr: 1.0 })
+    }
+    let rows_template = keywordOf(style[css.GRID_TEMPLATE_ROWS])
+    if !text.eql(rows_template, "none") && rows_template.len > 0 {
+        if !(try parseTracks(t.backing, rows_template, ch, row_gap, u, &mut g.rows)) {
+            g.rows.clear()
+        }
+    }
+    // Placement.
+    var ncols = g.cols.len()
+    let nrows_explicit = g.rows.len()
+    var placed = List(bool).init(t.backing)
+    defer placed.deinit()
+    let kids = t.children(i)
+    // Definite positions first; columns past the grid add tracks.
+    for c in kids {
+        if t.bx(c).abs != 0 {
+            continue
+        }
+        let s = t.bx(c).style
+        let cl = resolveLines(lineRef(s[css.GRID_COLUMN_START], areas.items(), ncols, true, false), lineRef(s[css.GRID_COLUMN_START + 1], areas.items(), ncols, true, true))
+        let rl = resolveLines(lineRef(s[css.GRID_COLUMN_START + 2], areas.items(), nrows_explicit, false, false), lineRef(s[css.GRID_COLUMN_START + 3], areas.items(), nrows_explicit, false, true))
+        var it = GridItem { box: c, col: 0, row: 0, cspan: cl[1] as usize, rspan: rl[1] as usize }
+        if cl[0] >= 0 {
+            it.col = cl[0] as usize
+            while g.cols.len() < it.col + it.cspan {
+                try g.cols.append(Track { min: -1.0, max: -1.0, fr: 0.0 })
+            }
+        } else {
+            it.col = 1 << 30
+        }
+        if rl[0] >= 0 {
+            it.row = rl[0] as usize
+        } else {
+            it.row = 1 << 30
+        }
+        try g.items.append(it)
+    }
+    ncols = g.cols.len()
+    var cells = List(bool).init(t.backing)
+    defer cells.deinit()
+    var occ = Occupancy { cells: &mut cells, cols: ncols }
+    let all = g.items.items()
+    let auto_pos: usize = 1 << 30
+    // Items with a definite row.
+    for k in 0..all.len {
+        if all[k].row == auto_pos {
+            continue
+        }
+        if all[k].cspan > ncols {
+            all[k].cspan = ncols
+        }
+        if all[k].col == auto_pos {
+            var c: usize = 0
+            while c + all[k].cspan <= ncols && !occ.isFree(c, all[k].row, all[k].cspan, all[k].rspan) {
+                c += 1
+            }
+            if c + all[k].cspan > ncols {
+                c = 0
+            }
+            all[k].col = c
+        }
+        try occ.take(all[k].col, all[k].row, all[k].cspan, all[k].rspan)
+    }
+    // The others, from a cursor.
+    var cur_row: usize = 0
+    var cur_col: usize = 0
+    for k in 0..all.len {
+        if all[k].row != auto_pos {
+            continue
+        }
+        if all[k].cspan > ncols {
+            all[k].cspan = ncols
+        }
+        let cs = all[k].cspan
+        let rs = all[k].rspan
+        if all[k].col != auto_pos {
+            let col = all[k].col
+            if col < cur_col {
+                cur_row += 1
+            }
+            cur_col = col
+            while !occ.isFree(col, cur_row, cs, rs) {
+                cur_row += 1
+            }
+        } else {
+            while true {
+                if cur_col + cs > ncols {
+                    cur_col = 0
+                    cur_row += 1
+                    continue
+                }
+                if occ.isFree(cur_col, cur_row, cs, rs) {
+                    break
+                }
+                cur_col += 1
+            }
+        }
+        all[k].col = cur_col
+        all[k].row = cur_row
+        try occ.take(cur_col, cur_row, cs, rs)
+        cur_col += cs
+    }
+    g.nrows = math.max(occ.rows() as f64, nrows_explicit as f64) as usize
+    return g
+}
+
+// The min-content and max-content contributions of the items to the
+// tracks `tracks` (columns), from items of one track and then spread
+// from items spanning several; returns the sizes in `mins` and `maxs`.
+fn contributions(t: *mut Tree, g: *Grid, mins: *mut List(f64), maxs: *mut List(f64)) AllocError!void {
+    let n = g.cols.len()
+    for k in 0..n {
+        try mins.append(0.0)
+        try maxs.append(0.0)
+    }
+    for pass in 0..2 {
+        for it in g.items.items() {
+            if (pass == 0) != (it.cspan == 1) {
+                continue
+            }
+            let mm = try outerIntrinsic(t, it.box)
+            var have_min = 0.0
+            var have_max = 0.0
+            var content: usize = 0
+            for c in it.col..it.col + it.cspan {
+                have_min += mins.items()[c]
+                have_max += maxs.items()[c]
+                if g.cols.items()[c].min < 0.0 || g.cols.items()[c].max < 0.0 {
+                    content += 1
+                }
+            }
+            if content == 0 {
+                continue
+            }
+            let add_min = math.max(0.0, mm.min - have_min) / content as f64
+            let add_max = math.max(0.0, mm.max - have_max) / content as f64
+            for c in it.col..it.col + it.cspan {
+                let tr = g.cols.items()[c]
+                if tr.min < 0.0 || tr.max < 0.0 {
+                    mins.items()[c] += add_min
+                    maxs.items()[c] = math.max(maxs.items()[c] + add_max, mins.items()[c])
+                }
+            }
+        }
+    }
+}
+
+// The widths of the columns of `g` in `cw` px (`gap` between them).
+fn sizeColumns(t: *mut Tree, g: *Grid, cw: f64, gap: f64, out: *mut List(f64)) AllocError!void {
+    var mins = List(f64).init(t.backing)
+    defer mins.deinit()
+    var maxs = List(f64).init(t.backing)
+    defer maxs.deinit()
+    try contributions(t, g, &mut mins, &mut maxs)
+    let tracks = g.cols.items()
+    let n = tracks.len
+    var limit = List(f64).init(t.backing)
+    defer limit.deinit()
+    var used = gap * (n as f64 - 1.0)
+    var frs = 0.0
+    for k in 0..n {
+        let tr = tracks[k]
+        var base = tr.min
+        if base < 0.0 {
+            base = mins.items()[k]
+        }
+        var lim = tr.max
+        if lim < 0.0 {
+            lim = maxs.items()[k]
+        }
+        if tr.fr > 0.0 {
+            lim = base
+            frs += tr.fr
+        }
+        try out.append(base)
+        try limit.append(math.max(lim, base))
+        used += base
+    }
+    let sizes = out.items()
+    // Grow the tracks toward their limits.
+    var free = cw - used
+    for round in 0..n + 1 {
+        if free <= 0.001 {
+            break
+        }
+        var growing: usize = 0
+        for k in 0..n {
+            if limit.items()[k] > sizes[k] + 0.001 {
+                growing += 1
+            }
+        }
+        if growing == 0 {
+            break
+        }
+        let share = free / growing as f64
+        for k in 0..n {
+            let room = limit.items()[k] - sizes[k]
+            if room > 0.001 {
+                let add = math.min(share, room)
+                sizes[k] += add
+                free -= add
+            }
+        }
+    }
+    if frs > 0.0 {
+        // The fr tracks share what is left, each at least its base.
+        var fixed = gap * (n as f64 - 1.0)
+        for k in 0..n {
+            if tracks[k].fr <= 0.0 {
+                fixed += sizes[k]
+            }
+        }
+        var inflexible = List(bool).init(t.backing)
+        defer inflexible.deinit()
+        for k in 0..n {
+            try inflexible.append(tracks[k].fr <= 0.0)
+        }
+        for round in 0..n + 1 {
+            var factors = 0.0
+            var rest = cw - fixed
+            for k in 0..n {
+                if !inflexible.items()[k] {
+                    factors += tracks[k].fr
+                } else if tracks[k].fr > 0.0 {
+                    rest -= sizes[k]
+                }
+            }
+            if factors <= 0.0 {
+                break
+            }
+            let unit = math.max(0.0, rest) / math.max(factors, 1.0)
+            var again = false
+            for k in 0..n {
+                if inflexible.items()[k] {
+                    continue
+                }
+                let want = unit * tracks[k].fr
+                if want < sizes[k] {
+                    inflexible.items()[k] = true
+                    again = true
+                }
+            }
+            if !again {
+                for k in 0..n {
+                    if !inflexible.items()[k] {
+                        sizes[k] = unit * tracks[k].fr
+                    }
+                }
+                break
+            }
+        }
+    } else if free > 0.001 {
+        // No fr track: the auto tracks stretch.
+        var autos: usize = 0
+        for k in 0..n {
+            if tracks[k].max < 0.0 {
+                autos += 1
+            }
+        }
+        if autos > 0 {
+            for k in 0..n {
+                if tracks[k].max < 0.0 {
+                    sizes[k] += free / autos as f64
+                }
+            }
+        }
+    }
+}
+
+/// The intrinsic widths of grid container `i` (without its edges).
+fn gridIntrinsic(t: *mut Tree, i: usize) AllocError!MinMax {
+    var g = try buildGrid(t, i, -1.0, -1.0)
+    defer g.deinit()
+    var mins = List(f64).init(t.backing)
+    defer mins.deinit()
+    var maxs = List(f64).init(t.backing)
+    defer maxs.deinit()
+    try contributions(t, &g, &mut mins, &mut maxs)
+    let n = g.cols.len()
+    let gap = gapOfGrid(t.bx(i).style[css.COLUMN_GAP], -1.0) * (n as f64 - 1.0)
+    var r = MinMax { min: gap, max: gap }
+    for k in 0..n {
+        let tr = g.cols.items()[k]
+        var lo = tr.min
+        if lo < 0.0 {
+            lo = mins.items()[k]
+        }
+        var hi = tr.max
+        if hi < 0.0 || tr.fr > 0.0 {
+            hi = maxs.items()[k]
+        }
+        r.min += lo
+        r.max += math.max(lo, hi)
+    }
+    return r
+}
+
+/// Lays out the items of grid container `i` in its content box (`cw`
+/// wide, `ch` high or -1); returns the content height.
+fn layoutGrid(t: *mut Tree, i: usize, cw: f64, ch: f64) AllocError!f64 {
+    let style = t.bx(i).style
+    let col_gap = gapOfGrid(style[css.COLUMN_GAP], cw)
+    let row_gap = gapOfGrid(style[css.ROW_GAP], ch)
+    var g = try buildGrid(t, i, cw, ch)
+    defer g.deinit()
+    var widths = List(f64).init(t.backing)
+    defer widths.deinit()
+    try sizeColumns(t, &g, cw, col_gap, &mut widths)
+    let ws = widths.items()
+    // Column offsets.
+    var xs = List(f64).init(t.backing)
+    defer xs.deinit()
+    var x = 0.0
+    for k in 0..ws.len {
+        try xs.append(x)
+        x += ws[k] + col_gap
+    }
+    // Items: widths, then their contents.
+    for it in g.items.items() {
+        var aw = col_gap * (it.cspan as f64 - 1.0)
+        for c in it.col..it.col + it.cspan {
+            aw += ws[c]
+        }
+        try gridItemContents(t, it.box, aw, cw)
+    }
+    // Row heights: fixed rows, then items of one row, then those
+    // spanning more.
+    var hs = List(f64).init(t.backing)
+    defer hs.deinit()
+    for r in 0..g.nrows {
+        var h = 0.0
+        if r < g.rows.len() {
+            let tr = g.rows.items()[r]
+            if tr.min >= 0.0 && tr.fr <= 0.0 {
+                h = tr.min
+            }
+        }
+        try hs.append(h)
+    }
+    for pass in 0..2 {
+        for it in g.items.items() {
+            if (pass == 0) != (it.rspan == 1) {
+                continue
+            }
+            let b = t.bx(it.box)
+            let need = b.margin[0] + b.h + b.margin[2]
+            var have = row_gap * (it.rspan as f64 - 1.0)
+            for r in it.row..it.row + it.rspan {
+                have += hs.items()[r]
+            }
+            if need > have {
+                let last = it.row + it.rspan - 1
+                if isFixedRow(&g, last) {
+                    continue
+                }
+                hs.items()[last] += need - have
+            }
+        }
+    }
+    // fr rows share the rest of a definite height.
+    if ch >= 0.0 {
+        var frs = 0.0
+        var used = row_gap * math.max(0.0, g.nrows as f64 - 1.0)
+        for r in 0..g.nrows {
+            used += hs.items()[r]
+            if r < g.rows.len() {
+                frs += g.rows.items()[r].fr
+            }
+        }
+        if frs > 0.0 && ch > used {
+            for r in 0..g.rows.len() {
+                if r < g.nrows {
+                    hs.items()[r] += (ch - used) * g.rows.items()[r].fr / frs
+                }
+            }
+        }
+    }
+    var ys = List(f64).init(t.backing)
+    defer ys.deinit()
+    var y = 0.0
+    for r in 0..g.nrows {
+        try ys.append(y)
+        y += hs.items()[r]
+        if r + 1 < g.nrows {
+            y += row_gap
+        }
+    }
+    // Positions, and alignment in the area's height.
+    for it in g.items.items() {
+        var ah = row_gap * (it.rspan as f64 - 1.0)
+        for r in it.row..it.row + it.rspan {
+            ah += hs.items()[r]
+        }
+        let b = t.bx(it.box)
+        b.x = xs.items()[it.col] + b.margin[3]
+        let align = alignOf(t, it.box)
+        let outer = b.margin[0] + b.h + b.margin[2]
+        var dy = 0.0
+        if (text.eql(align, "stretch") || text.eql(align, "normal")) && isKeyword(b.style[css.HEIGHT], "auto") && b.kind != BoxKind.Image {
+            let sb = t.bx(it.box)
+            sb.h = clampHeight(t, it.box, ah - sb.margin[0] - sb.margin[2], ch)
+        } else if text.eql(align, "center") {
+            dy = (ah - outer) / 2.0
+        } else if text.eql(align, "end") || text.eql(align, "flex-end") || text.eql(align, "self-end") {
+            dy = ah - outer
+        }
+        let pb = t.bx(it.box)
+        pb.y = ys.items()[it.row] + pb.margin[0] + dy
+    }
+    // Absolutely positioned children: their static position.
+    for c in t.children(i) {
+        if t.bx(c).abs != 0 {
+            t.bx(c).x = 0.0
+            t.bx(c).y = 0.0
+        }
+    }
+    return y
+}
+
+fn isFixedRow(g: *Grid, r: usize) bool {
+    if r < g.rows.len() {
+        let tr = g.rows.items()[r]
+        return tr.min >= 0.0 && tr.max >= 0.0 && tr.fr <= 0.0
+    }
+    return false
+}
+
+// Lays out grid item `c` in an area `aw` px wide: its width (stretched
+// when `auto`), margins and content.
+fn gridItemContents(t: *mut Tree, c: usize, aw: f64, cw: f64) AllocError!void {
+    resolveEdges(t, c, cw)
+    let b = t.bx(c)
+    b.margin[3] = lengthOr0(b.style[css.MARGIN_TOP + 3], cw)
+    b.margin[1] = lengthOr0(b.style[css.MARGIN_TOP + 1], cw)
+    let kind = b.kind
+    if kind == BoxKind.Image {
+        replacedSize(t, c, aw, -1.0)
+        return
+    }
+    if kind == BoxKind.Table {
+        try layoutTable(t, c, aw)
+        return
+    }
+    let room = aw - b.margin[1] - b.margin[3]
+    if specifiedWidth(t, c, aw) |w| {
+        t.bx(c).w = w
+    } else {
+        t.bx(c).w = clampWidth(t, c, room, aw)
+    }
+    // `auto` margins center the item in its area.
+    let bb = t.bx(c)
+    let free = aw - bb.w - bb.margin[1] - bb.margin[3]
+    if free > 0.0 && isKeyword(bb.style[css.MARGIN_TOP + 3], "auto") && isKeyword(bb.style[css.MARGIN_TOP + 1], "auto") {
+        bb.margin[3] = free / 2.0
+        bb.margin[1] = free / 2.0
+    }
+    try layoutContents(t, c, -1.0)
+}

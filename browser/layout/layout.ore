@@ -10,6 +10,9 @@
 // - intrinsic.ore: min-content and max-content widths.
 // - table.ore: tables with automatic column widths.
 // - flex.ore: flexbox (row and column, wrap, grow and shrink).
+// - grid.ore: grid (track lists, areas, line placement, auto-placement).
+// - float.ore: floats, clearance, lines and boxes beside floats.
+// - absolute.ore: absolutely positioned boxes, laid out last.
 // - markers.ore: list item markers.
 // - controls.ore: form controls (generated content, sizes) and images.
 // - dump.ore: the box tree as text (`anyknown dump --layout`).
@@ -21,10 +24,16 @@
 // into absolute positions (`ax`, `ay`). Lines and fragments are relative
 // to the content box of their block container.
 //
-// Simplifications: no floats and no absolute positioning (`absolute` and
-// `fixed` boxes stay in the flow); an inline box that contains a block
-// becomes a block box; vertical-align is always `baseline`; table cells
-// do not span rows; border-spacing and border-collapse are ignored.
+// Out-of-flow boxes: floats (`float.ore`) and absolutely positioned
+// boxes (`absolute`, `fixed`; laid out after the rest, `absolute.ore`)
+// stay children of their parent, take no space in its flow and are
+// left out of anonymous block wrapping (they join a neighboring run).
+//
+// Simplifications: an inline box that contains a block becomes a block
+// box; vertical-align is always `baseline`; table cells do not span
+// rows; border-spacing and border-collapse are ignored; `fixed` boxes
+// are positioned in the initial containing block (they stay on the
+// first screen); `sticky` is `relative` without offsets.
 
 import css
 import css.Value
@@ -40,15 +49,15 @@ import std.mem.Allocator
 import std.text
 
 pub enum BoxKind {
-    // A block container: block, list-item, flow-root, table-caption,
-    // grid (laid out as a block); also orphaned table parts.
+    // A block container: block, list-item, flow-root, table-caption;
+    // also orphaned table parts.
     Block
     // An anonymous block box around the inline content of a block
     // container that also has block children.
     Anonymous
     // An inline box (`span`, `a`, ...).
     Inline
-    // An inline-level block container (inline-block, inline-grid).
+    // An inline-level block container (inline-block).
     InlineBlock
     Text
     // A replaced element: `img` (and other elements whose content is not
@@ -60,6 +69,8 @@ pub enum BoxKind {
     Row
     Cell
     Flex
+    // A grid container (`grid.ore`).
+    Grid
 }
 
 /// Collapsed vertical margins: the largest positive and the most
@@ -110,6 +121,10 @@ pub struct Box {
     text: []u8
     // Table cells: the number of columns the cell spans.
     span: usize
+    // Out of flow: `float` (0 none, 1 left, 2 right) and absolute
+    // positioning (0 none, 1 absolute, 2 fixed).
+    float: u8
+    abs: u8
 
     // Geometry (see the top of the file): the border box, and the used
     // margins, borders and padding (top, right, bottom, left).
@@ -151,6 +166,11 @@ pub struct Box {
     has_intrinsic: bool
     min_w: f64
     max_w: f64
+
+    /// Is the box out of flow (a float, or absolutely positioned)?
+    pub fn oof(self: *Self) bool {
+        return self.float != 0 || self.abs != 0
+    }
 }
 
 /// A line box; relative to its block container's content box.
@@ -208,6 +228,20 @@ pub struct Tree {
     frags: List(Frag)
     // The box of the root element, if it has one.
     root: ?usize
+    // The floats of the block formatting contexts being laid out
+    // (`floats[float_base..]` are the current one's), and the origin of
+    // the content box of the block container being laid out in the
+    // coordinates of its formatting context root's content box.
+    floats: List(FloatBox)
+    float_base: usize
+    fx: f64
+    fy: f64
+    // Set by block flow before a child is laid out: the estimated top of
+    // its border box in its parent's content box.
+    hint_y: f64
+    // Absolutely positioned boxes, in tree order, laid out after the
+    // rest.
+    absolutes: List(usize)
 
     pub fn deinit(self: *mut Self) {
         self.arena.deinit()
@@ -234,6 +268,8 @@ pub struct Tree {
             inline_level: false,
             text: "",
             span: 1,
+            float: 0,
+            abs: 0,
             x: 0.0,
             y: 0.0,
             w: 0.0,
@@ -296,6 +332,12 @@ pub fn layoutDocumentWith(alloc: Allocator, doc: *Document, styles: *css.Styles,
         lines: List(Line).init(a),
         frags: List(Frag).init(a),
         root: null,
+        floats: List(FloatBox).init(a),
+        float_base: 0,
+        fx: 0.0,
+        fy: 0.0,
+        hint_y: 0.0,
+        absolutes: List(usize).init(a),
     }
     errdefer t.deinit()
     if doc.documentElement() |el| {
@@ -310,6 +352,7 @@ pub fn layoutDocumentWith(alloc: Allocator, doc: *Document, styles: *css.Styles,
                 try prepareText(&mut t)
                 try layoutRoot(&mut t, r)
                 place(&mut t, r, 0.0, 0.0)
+                try layoutAbsolutes(&mut t)
             }
         }
     }
@@ -339,7 +382,7 @@ fn kindOf(name: []u8, display: []u8) ?KindOf {
     if text.eql(display, "inline") {
         return KindOf { kind: BoxKind.Inline, inline_level: true }
     }
-    if text.eql(display, "inline-block") || text.eql(display, "inline-grid") {
+    if text.eql(display, "inline-block") {
         return KindOf { kind: BoxKind.InlineBlock, inline_level: true }
     }
     if text.eql(display, "table") || text.eql(display, "inline-table") {
@@ -347,6 +390,9 @@ fn kindOf(name: []u8, display: []u8) ?KindOf {
     }
     if text.eql(display, "flex") || text.eql(display, "inline-flex") {
         return KindOf { kind: BoxKind.Flex, inline_level: inl }
+    }
+    if text.eql(display, "grid") || text.eql(display, "inline-grid") {
+        return KindOf { kind: BoxKind.Grid, inline_level: inl }
     }
     if text.eql(display, "table-row-group") || text.eql(display, "table-header-group") || text.eql(display, "table-footer-group") {
         return KindOf { kind: BoxKind.RowGroup, inline_level: false }
@@ -399,6 +445,7 @@ fn buildElement(t: *mut Tree, parent: usize, el: NodeId) AllocError!void {
             let b = try t.newBox(k.kind, el, style, parent)
             t.bx(b).inline_level = k.inline_level
             try t.appendChild(parent, b)
+            try outOfFlow(t, b, parent)
             if k.kind == BoxKind.Cell {
                 if t.doc.attr(el, "colspan") |v| {
                     let n = text.parseInt(text.trim(v)) catch 1
@@ -411,12 +458,60 @@ fn buildElement(t: *mut Tree, parent: usize, el: NodeId) AllocError!void {
                 try listMarker(t, b, el)
             }
             if k.kind != BoxKind.Image && k.kind != BoxKind.LineBreak {
-                if !(try controlContent(t, b, el)) {
+                if text.eql(name, "details") && t.doc.attr(el, "open") == null {
+                    // A closed `details` shows only its summary.
+                    try buildSummary(t, b, el)
+                } else if !(try controlContent(t, b, el)) {
                     try buildChildren(t, b, el)
                 }
             }
         }
     }
+}
+
+// The box of the first `summary` child of the `details` element `el`.
+fn buildSummary(t: *mut Tree, parent: usize, el: NodeId) AllocError!void {
+    var cur = t.doc.firstChild(el)
+    while cur |c| {
+        if t.doc.isElement(c, "summary") {
+            return buildElement(t, parent, c)
+        }
+        cur = t.doc.nextSibling(c)
+    }
+}
+
+// Marks box `b` (a new child of `parent`) as a float or an absolutely
+// positioned box after its `position` and `float`, and makes it
+// block-level (CSS 2.1 9.7). Floats in flex and grid containers are
+// items like the others.
+fn outOfFlow(t: *mut Tree, b: usize, parent: usize) AllocError!void {
+    let k = t.bx(b).kind
+    if k == BoxKind.LineBreak || k == BoxKind.Text {
+        return
+    }
+    let s = t.bx(b).style
+    let pos = keywordOf(s[css.POSITION])
+    if text.eql(pos, "absolute") || text.eql(pos, "fixed") {
+        t.bx(b).abs = 1
+        if text.eql(pos, "fixed") {
+            t.bx(b).abs = 2
+        }
+        try t.absolutes.append(b)
+    } else {
+        let pk = t.bx(parent).kind
+        if pk == BoxKind.Flex || pk == BoxKind.Grid {
+            return
+        }
+        let f = keywordOf(s[css.FLOAT])
+        if text.eql(f, "left") || text.eql(f, "inline-start") {
+            t.bx(b).float = 1
+        } else if text.eql(f, "right") || text.eql(f, "inline-end") {
+            t.bx(b).float = 2
+        } else {
+            return
+        }
+    }
+    blockify(t, b)
 }
 
 // Is the box a block container (its children are either all
@@ -428,14 +523,20 @@ fn isBlockContainer(k: BoxKind) bool {
     }
 }
 
-// Does box `i` hold inline content (lines)?
+// Does box `i` hold inline content (lines)? Out-of-flow children do
+// not count.
 pub fn hasInlineContent(t: *Tree, i: usize) bool {
     let b = t.bx(i)
     if !isBlockContainer(b.kind) {
         return false
     }
-    let kids = b.children.items()
-    return kids.len > 0 && t.bx(kids[0]).inline_level
+    for c in b.children.items() {
+        let cb = t.bx(c)
+        if !cb.oof() {
+            return cb.inline_level
+        }
+    }
+    return false
 }
 
 // Normalizes the subtree of `i` (children first): an inline box with a
@@ -452,7 +553,7 @@ fn fixUp(t: *mut Tree, i: usize) AllocError!void {
     if kind == BoxKind.Inline {
         var block = false
         for c in t.children(i) {
-            if !t.bx(c).inline_level {
+            if !t.bx(c).inline_level && !t.bx(c).oof() {
                 block = true
             }
         }
@@ -474,7 +575,7 @@ fn fixUp(t: *mut Tree, i: usize) AllocError!void {
         }
         return wrapInline(t, i)
     }
-    if kind == BoxKind.Flex {
+    if kind == BoxKind.Flex || kind == BoxKind.Grid {
         try wrapInline(t, i)
         for c in t.children(i) {
             blockify(t, c)
@@ -492,7 +593,8 @@ fn fixUp(t: *mut Tree, i: usize) AllocError!void {
     }
 }
 
-// A flex item: block-level.
+// A flex or grid item, a float, an absolutely positioned box:
+// block-level.
 fn blockify(t: *mut Tree, i: usize) {
     let b = t.bx(i)
     b.inline_level = false
@@ -502,37 +604,41 @@ fn blockify(t: *mut Tree, i: usize) {
 }
 
 // When box `i` has both block-level and inline-level children, wraps
-// each run of inline-level children in an anonymous block, dropping runs
-// of only collapsible whitespace. In a flex container every element is
-// an item of its own, and only runs of text are wrapped.
+// each run of inline-level children (with the out-of-flow boxes among
+// them) in an anonymous block, dropping runs of only collapsible
+// whitespace. In a flex or grid container every element is an item of
+// its own (or out of flow), and only runs of text are wrapped.
 fn wrapInline(t: *mut Tree, i: usize) AllocError!void {
     let kids = t.children(i)
     var inl = false
     var blk = false
     for c in kids {
+        if t.bx(c).oof() {
+            continue
+        }
         if t.bx(c).inline_level {
             inl = true
         } else {
             blk = true
         }
     }
-    let flex = t.bx(i).kind == BoxKind.Flex
-    if !inl || (!blk && !flex) {
+    let items = t.bx(i).kind == BoxKind.Flex || t.bx(i).kind == BoxKind.Grid
+    if !inl || (!blk && !items) {
         return
     }
     var out = List(usize).init(t.alloc)
     var k: usize = 0
     while k < kids.len {
         let c = kids[k]
-        if !t.bx(c).inline_level || (flex && t.bx(c).kind != BoxKind.Text) {
+        if standsAlone(t, c, items) {
             try out.append(c)
             k += 1
             continue
         }
         var end = k
         var empty = true
-        while end < kids.len && t.bx(kids[end]).inline_level && (!flex || t.bx(kids[end]).kind == BoxKind.Text) {
-            if !isCollapsibleSpace(t, kids[end]) {
+        while end < kids.len && !standsAlone(t, kids[end], items) {
+            if !t.bx(kids[end]).oof() && !isCollapsibleSpace(t, kids[end]) {
                 empty = false
             }
             end += 1
@@ -543,10 +649,26 @@ fn wrapInline(t: *mut Tree, i: usize) AllocError!void {
                 try t.appendChild(anon, t.children(i)[j])
             }
             try out.append(anon)
+        } else {
+            for j in k..end {
+                if t.bx(kids[j]).oof() {
+                    try out.append(kids[j])
+                }
+            }
         }
         k = end
     }
     t.bx(i).children = out
+}
+
+// Does child `c` stay out of anonymous blocks: an in-flow block-level
+// box, or in a flex or grid container (`items`) anything but text?
+fn standsAlone(t: *Tree, c: usize, items: bool) bool {
+    let b = t.bx(c)
+    if items {
+        return b.kind != BoxKind.Text
+    }
+    return !b.oof() && !b.inline_level
 }
 
 // A new anonymous box of `kind` (not yet a child of `parent`) with the

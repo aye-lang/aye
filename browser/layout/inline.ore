@@ -39,6 +39,9 @@ fn prepareRun(t: *mut Tree, i: usize, space: *mut bool) AllocError!void {
     for k in 0..n {
         let c = t.children(i)[k]
         let kind = t.bx(c).kind
+        if t.bx(c).oof() {
+            continue
+        }
         if kind == BoxKind.Text {
             try prepareTextBox(t, c, space)
         } else if kind == BoxKind.Inline {
@@ -106,6 +109,10 @@ enum PieceKind {
     Close
     Atomic
     Break
+    // An out-of-flow box: a float, or an absolutely positioned box (its
+    // static position is set where the piece goes).
+    Float
+    Abs
 }
 
 struct Piece {
@@ -159,7 +166,9 @@ struct Collector {
         for k in 0..n {
             let c = self.t.children(i)[k]
             let kind = self.t.bx(c).kind
-            if kind == BoxKind.Text {
+            if self.t.bx(c).oof() {
+                try self.outOfFlow(c, depth)
+            } else if kind == BoxKind.Text {
                 try self.textPieces(c, depth, rel_x, rel_y)
             } else if kind == BoxKind.Inline {
                 try self.inlineBox(c, depth, rel_x, rel_y)
@@ -196,6 +205,23 @@ struct Collector {
         close.rel_x = rx
         close.rel_y = ry
         try self.out.append(close)
+    }
+
+    // A float (laid out now; when measuring intrinsic widths, it counts
+    // as an atomic inline) or an absolutely positioned box.
+    fn outOfFlow(self: *mut Self, i: usize, depth: usize) AllocError!void {
+        var p = piece(PieceKind.Abs, i, depth)
+        if self.t.bx(i).float != 0 {
+            p.kind = PieceKind.Float
+            if self.avail >= 0.0 {
+                try layoutAtomic(self.t, i, self.avail)
+            } else {
+                let mm = try outerIntrinsic(self.t, i)
+                p.w = mm.max
+                p.min_w = mm.min
+            }
+        }
+        try self.out.append(p)
     }
 
     fn atomic(self: *mut Self, i: usize, depth: usize, rel_x: f64, rel_y: f64) AllocError!void {
@@ -291,13 +317,16 @@ fn collectPieces(t: *mut Tree, i: usize, avail: f64, out: *mut List(Piece)) Allo
 
 // The end (exclusive) of the chunk of pieces that starts at `k`: up to
 // and with the next soft piece or forced break, and the ends of inline
-// boxes right after it.
+// boxes right after it. An out-of-flow piece is a chunk of its own.
 fn chunkEnd(ps: []Piece, k: usize) usize {
+    if isOutOfFlow(ps[k]) {
+        return k + 1
+    }
     var e = k
-    while e < ps.len && !ps[e].soft && ps[e].kind != PieceKind.Break {
+    while e < ps.len && !ps[e].soft && ps[e].kind != PieceKind.Break && !isOutOfFlow(ps[e]) {
         e += 1
     }
-    if e < ps.len {
+    if e < ps.len && !isOutOfFlow(ps[e]) {
         e += 1
     }
     while e < ps.len && ps[e].kind == PieceKind.Close {
@@ -306,13 +335,18 @@ fn chunkEnd(ps: []Piece, k: usize) usize {
     return e
 }
 
+fn isOutOfFlow(p: Piece) bool {
+    return p.kind == PieceKind.Float || p.kind == PieceKind.Abs
+}
+
 // Does the piece put something on a line (as opposed to collapsible
-// spaces and empty inline box edges)?
+// spaces, empty inline box edges and out-of-flow boxes)?
 fn isContent(p: Piece) bool {
     return match p.kind {
         .Word, .Atomic, .Break => true
         .Space => !p.collapsible
         .Open, .Close => p.w != 0.0
+        .Float, .Abs => false
     }
 }
 
@@ -364,7 +398,7 @@ fn inlineIntrinsic(t: *mut Tree, i: usize) AllocError!MinMax {
                 spaces += p.w
                 continue
             }
-            if p.kind == PieceKind.Atomic {
+            if p.kind == PieceKind.Atomic || p.kind == PieceKind.Float {
                 w += spaces + p.min_w
             } else {
                 w += spaces + p.w
@@ -379,8 +413,8 @@ fn inlineIntrinsic(t: *mut Tree, i: usize) AllocError!MinMax {
 
 // ---- lines
 
-// Lays out the inline content of box `i` in lines `avail` px wide;
-// returns the height of the lines.
+// Lays out the inline content of box `i` in lines `avail` px wide (less
+// the floats beside each line); returns the height of the lines.
 fn layoutInline(t: *mut Tree, i: usize, avail: f64) AllocError!f64 {
     var pieces = List(Piece).init(t.backing)
     defer pieces.deinit()
@@ -389,9 +423,13 @@ fn layoutInline(t: *mut Tree, i: usize, avail: f64) AllocError!f64 {
     // The inline boxes open at the end of the previous line.
     var open = List(usize).init(t.backing)
     defer open.deinit()
+    // Floats that go below the current line.
+    var below = List(usize).init(t.backing)
+    defer below.deinit()
     var lb = LineBuilder {
         t: t,
         container: i,
+        left: 0.0,
         avail: avail,
         strut: textMetrics(t, t.bx(i).style),
         align: keywordOf(t.bx(i).style[css.TEXT_ALIGN]),
@@ -405,8 +443,28 @@ fn layoutInline(t: *mut Tree, i: usize, avail: f64) AllocError!f64 {
         var width = 0.0
         var content = false
         var forced = false
+        var lower = false
+        let lh = lb.strut.line_height
+        lb.setBand(bandAt(t, lb.y, lh, avail))
         while k < ps.len {
             let e = chunkEnd(ps, k)
+            if ps[k].kind == PieceKind.Float {
+                // At the top of this line when it fits beside the
+                // content so far, else below the line.
+                let fi = ps[k].box
+                let fb = t.bx(fi)
+                let ow = fb.margin[3] + fb.w + fb.margin[1]
+                if !isPlaced(t, fi) {
+                    if width + ow <= lb.avail + 0.001 || (!content && lb.avail >= avail - 0.001) {
+                        try placeFloat(t, fi, lb.y, avail)
+                        lb.setBand(bandAt(t, lb.y, lh, avail))
+                    } else {
+                        try below.append(fi)
+                    }
+                }
+                k = e
+                continue
+            }
             var w = 0.0
             var fit = 0.0
             var has = false
@@ -424,8 +482,18 @@ fn layoutInline(t: *mut Tree, i: usize, avail: f64) AllocError!f64 {
                     has = true
                 }
             }
-            if content && width + fit > avail + 0.001 {
+            if content && width + fit > lb.avail + 0.001 {
                 break
+            }
+            if !content && has && fit > lb.avail + 0.001 && lb.avail < avail - 0.001 {
+                // Too narrow beside the floats: go below one of them.
+                if nextFloatBottom(t, lb.y, lh) |nb| {
+                    if nb > lb.y {
+                        lb.y = nb
+                        lower = true
+                        break
+                    }
+                }
             }
             width += w
             content = content || has
@@ -435,7 +503,17 @@ fn layoutInline(t: *mut Tree, i: usize, avail: f64) AllocError!f64 {
                 break
             }
         }
+        if lower {
+            k = start
+            continue
+        }
         try lb.line(ps[start..k], forced, k >= ps.len)
+        for fi in below.items() {
+            if !isPlaced(t, fi) {
+                try placeFloat(t, fi, lb.y, avail)
+            }
+        }
+        below.clear()
     }
     t.bx(i).line_end = t.lines.len()
     return lb.y
@@ -453,12 +531,19 @@ fn lastIsBreak(ps: []Piece, k: usize, e: usize) bool {
 struct LineBuilder {
     t: *mut Tree
     container: usize
+    // The left edge and width of the current line (beside the floats).
+    left: f64
     avail: f64
     strut: TextMetrics
     align: []u8
     // The top of the next line.
     y: f64
     open: *mut List(usize)
+
+    fn setBand(self: *mut Self, b: Band) {
+        self.left = b.left
+        self.avail = math.max(0.0, b.width())
+    }
 
     // Makes a line of `ps` (unless it holds nothing). `forced`: it ends
     // with a forced break; `last`: it is the last line.
@@ -484,9 +569,15 @@ struct LineBuilder {
         let kp = keep.items()
         if first >= ps.len {
             // Nothing on the line: only the inline boxes it opens and
-            // closes count.
+            // closes count, and the static positions of absolutely
+            // positioned boxes.
             for p in kp {
                 try self.track(p)
+                if p.kind == PieceKind.Abs {
+                    let ab = self.t.bx(p.box)
+                    ab.x = self.left
+                    ab.y = self.y
+                }
             }
             return
         }
@@ -519,6 +610,9 @@ struct LineBuilder {
         var above = self.strut.ascent + half
         var below = self.strut.descent + half
         for p in kp {
+            if isOutOfFlow(p) {
+                continue
+            }
             if p.kind == PieceKind.Atomic {
                 let b = self.t.bx(p.box)
                 let a = atomicAscent(self.t, p.box)
@@ -534,7 +628,7 @@ struct LineBuilder {
         let baseline = self.y + above
         let line_index = self.t.lines.len()
         try self.t.lines.append(Line {
-            x: 0.0,
+            x: self.left,
             y: self.y,
             w: self.avail,
             h: above + below,
@@ -546,7 +640,7 @@ struct LineBuilder {
         // first, then the pieces.
         var stack = List(OpenFrag).init(self.t.backing)
         defer stack.deinit()
-        x = offset
+        x = self.left + offset
         for d, ib in self.open.items() {
             try stack.append(try self.inlineFrag(ib, d, x, baseline))
         }
@@ -620,6 +714,12 @@ struct LineBuilder {
                 .Break => {
                     prev_text = false
                 }
+                .Abs => {
+                    let ab = self.t.bx(p.box)
+                    ab.x = px
+                    ab.y = self.y
+                }
+                .Float => {}
             }
         }
         // Inline boxes that go on to the next line end here.
@@ -687,7 +787,7 @@ fn atomicAscent(t: *Tree, i: usize) f64 {
     if b.last_baseline >= 0.0 && b.kind == BoxKind.InlineBlock && !scrollsLines(t, i) {
         return b.margin[0] + b.last_baseline
     }
-    if b.first_baseline >= 0.0 && (b.kind == BoxKind.Flex || b.kind == BoxKind.Table) {
+    if b.first_baseline >= 0.0 && (b.kind == BoxKind.Flex || b.kind == BoxKind.Grid || b.kind == BoxKind.Table) {
         return b.margin[0] + b.first_baseline
     }
     return b.margin[0] + b.h + b.margin[2]

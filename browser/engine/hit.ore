@@ -28,16 +28,96 @@ fn inside(x: f64, y: f64, rx: f64, ry: f64, rw: f64, rh: f64) bool {
 }
 
 /// The deepest node whose box (or line fragment) contains (`x`, `y`):
-/// a text node or an element; null for none.
+/// a text node or an element; null for none. The topmost wins: layers
+/// (positioned boxes) are searched in the reverse of their painting
+/// order, and content clipped by `overflow` is not hit outside its
+/// clip.
 pub fn nodeAt(t: *Tree, x: f64, y: f64) ?NodeId {
     if t.root |r| {
-        return hitBox(t, r, x, y)
+        return hitLayer(t, r, x, y) catch null
     }
     return null
 }
 
-fn hitBox(t: *Tree, i: usize, x: f64, y: f64) ?NodeId {
+fn hitLayer(t: *Tree, i: usize, x: f64, y: f64) AllocError!?NodeId {
+    var ls = List(paint.LayerRef).init(t.backing)
+    defer ls.deinit()
+    try paint.layersOf(t, i, &mut ls)
+    let all = ls.items()
+    var k = all.len
+    while k > 0 {
+        k -= 1
+        if all[k].z >= 0.0 {
+            if try hitLayer(t, all[k].box, x, y) |n| {
+                return n
+            }
+        }
+    }
+    if hitBox(t, i, x, y, i) |n| {
+        return n
+    }
+    k = all.len
+    while k > 0 {
+        k -= 1
+        if all[k].z < 0.0 {
+            if try hitLayer(t, all[k].box, x, y) |n| {
+                return n
+            }
+        }
+    }
+    return null
+}
+
+// Does box `i` clip its content to its padding box (overflow other
+// than visible; not the root and the body)?
+fn clips(t: *Tree, i: usize) bool {
+    let b = t.bx(i)
+    if layout.isKeyword(b.style[css.OVERFLOW_X], "visible") && layout.isKeyword(b.style[css.OVERFLOW_Y], "visible") {
+        return false
+    }
+    if t.root == i {
+        return false
+    }
+    if b.node |el| {
+        if t.doc.isElement(el, "body") {
+            return false
+        }
+    }
+    return true
+}
+
+// The floats among the inline content of box `i`, topmost first.
+fn hitFloats(t: *Tree, i: usize, x: f64, y: f64, layer: usize) ?NodeId {
+    let kids = t.children(i)
+    var k = kids.len
+    while k > 0 {
+        k -= 1
+        let c = kids[k]
+        if t.bx(c).float != 0 {
+            if hitBox(t, c, x, y, layer) |n| {
+                return n
+            }
+        } else if t.bx(c).kind == BoxKind.Inline {
+            if hitFloats(t, c, x, y, layer) |n| {
+                return n
+            }
+        }
+    }
+    return null
+}
+
+// Box `i` of the layer `layer` (other layers are left out).
+fn hitBox(t: *Tree, i: usize, x: f64, y: f64, layer: usize) ?NodeId {
+    if i != layer && paint.isLayer(t, i) {
+        return null
+    }
     let b = t.bx(i).*
+    if clips(t, i) && !inside(x, y, b.ax + b.border[3], b.ay + b.border[0], b.w - b.border[1] - b.border[3], b.h - b.border[0] - b.border[2]) {
+        if inside(x, y, b.ax, b.ay, b.w, b.h) {
+            return b.node
+        }
+        return null
+    }
     if layout.hasInlineContent(t, i) {
         let cx = b.ax + b.border[3] + b.padding[3]
         let cy = b.ay + b.border[0] + b.padding[0]
@@ -50,7 +130,7 @@ fn hitBox(t: *Tree, i: usize, x: f64, y: f64) ?NodeId {
                 fi -= 1
                 let f = t.frags.items()[fi]
                 if f.kind == FragKind.Atomic {
-                    if hitBox(t, f.box, x, y) |n| {
+                    if hitBox(t, f.box, x, y, layer) |n| {
                         return n
                     }
                 } else if inside(x, y, cx + f.x, cy + f.y, f.w, f.h) {
@@ -60,12 +140,15 @@ fn hitBox(t: *Tree, i: usize, x: f64, y: f64) ?NodeId {
                 }
             }
         }
+        if hitFloats(t, i, x, y, layer) |n| {
+            return n
+        }
     } else {
         let kids = t.children(i)
         var k = kids.len
         while k > 0 {
             k -= 1
-            if hitBox(t, kids[k], x, y) |n| {
+            if hitBox(t, kids[k], x, y, layer) |n| {
                 return n
             }
         }
@@ -77,10 +160,16 @@ fn hitBox(t: *Tree, i: usize, x: f64, y: f64) ?NodeId {
 }
 
 /// The link at (`x`, `y`): the nearest `a` element with an `href`
-/// around the node there.
+/// around the node there, or a frame (`iframe`, `embed`, `object`) and
+/// the address it shows.
 pub fn linkAt(t: *Tree, x: f64, y: f64) ?Link {
     var cur = nodeAt(t, x, y)
     while cur |n| {
+        if paint.frameSource(t.doc, n) |src| {
+            if src.len > 0 {
+                return Link { el: n, href: src }
+            }
+        }
         if t.doc.isElement(n, "a") {
             if t.doc.attr(n, "href") |href| {
                 return Link { el: n, href: href }

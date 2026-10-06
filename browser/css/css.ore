@@ -75,6 +75,11 @@ pub enum PKind {
     TextDecoration
     // A number that is not negative, or one of `keywords`.
     Number
+    // An integer (any sign), or one of `keywords`.
+    Int
+    // Any component values, or one of `keywords`: kept as their text
+    // (a `Keyword`) for layout to read (the grid properties).
+    Raw
 }
 
 pub struct Property {
@@ -88,7 +93,7 @@ pub struct Property {
     initial: Value
 }
 
-pub let NPROPS: usize = 57
+pub let NPROPS: usize = 67
 
 pub let DISPLAY: usize = 0
 pub let POSITION: usize = 1
@@ -131,6 +136,15 @@ pub let ALIGN_ITEMS: usize = 53
 pub let ALIGN_SELF: usize = 54
 pub let ROW_GAP: usize = 55
 pub let COLUMN_GAP: usize = 56
+pub let FLOAT: usize = 57
+pub let CLEAR: usize = 58
+pub let Z_INDEX: usize = 59
+pub let GRID_TEMPLATE_COLUMNS: usize = 60
+pub let GRID_TEMPLATE_ROWS: usize = 61
+pub let GRID_TEMPLATE_AREAS: usize = 62
+// `grid-column-start`, `grid-column-end`, `grid-row-start`,
+// `grid-row-end` in this order.
+pub let GRID_COLUMN_START: usize = 63
 
 let DISPLAYS = "inline block list-item inline-block table inline-table table-row-group table-header-group table-footer-group table-row table-cell table-column-group table-column table-caption flex inline-flex grid inline-grid flow-root contents none"
 let BORDER_STYLES = "none hidden dotted dashed solid double groove ridge inset outset"
@@ -140,7 +154,7 @@ let ALIGNS = "normal stretch flex-start flex-end start end self-start self-end c
 let BLACK = Color { r: 0, g: 0, b: 0, a: 1.0 }
 let TRANSPARENT = Color { r: 0, g: 0, b: 0, a: 0.0 }
 
-pub let PROPERTIES = [57]Property{
+pub let PROPERTIES = [67]Property{
     Property { name: "display", inherited: false, kind: PKind.Keywords, keywords: DISPLAYS, initial: Value.Keyword { k: "inline" } },
     Property { name: "position", inherited: false, kind: PKind.Keywords, keywords: "static relative absolute fixed sticky", initial: Value.Keyword { k: "static" } },
     Property { name: "color", inherited: true, kind: PKind.Color, keywords: "", initial: Value.Rgba { c: BLACK } },
@@ -198,6 +212,16 @@ pub let PROPERTIES = [57]Property{
     Property { name: "align-self", inherited: false, kind: PKind.Keywords, keywords: "auto normal stretch flex-start flex-end start end self-start self-end center baseline", initial: Value.Keyword { k: "auto" } },
     Property { name: "row-gap", inherited: false, kind: PKind.LengthNonNeg, keywords: "normal", initial: Value.Keyword { k: "normal" } },
     Property { name: "column-gap", inherited: false, kind: PKind.LengthNonNeg, keywords: "normal", initial: Value.Keyword { k: "normal" } },
+    Property { name: "float", inherited: false, kind: PKind.Keywords, keywords: "none left right inline-start inline-end", initial: Value.Keyword { k: "none" } },
+    Property { name: "clear", inherited: false, kind: PKind.Keywords, keywords: "none left right both inline-start inline-end", initial: Value.Keyword { k: "none" } },
+    Property { name: "z-index", inherited: false, kind: PKind.Int, keywords: "auto", initial: Value.Keyword { k: "auto" } },
+    Property { name: "grid-template-columns", inherited: false, kind: PKind.Raw, keywords: "none", initial: Value.Keyword { k: "none" } },
+    Property { name: "grid-template-rows", inherited: false, kind: PKind.Raw, keywords: "none", initial: Value.Keyword { k: "none" } },
+    Property { name: "grid-template-areas", inherited: false, kind: PKind.Raw, keywords: "none", initial: Value.Keyword { k: "none" } },
+    Property { name: "grid-column-start", inherited: false, kind: PKind.Raw, keywords: "auto", initial: Value.Keyword { k: "auto" } },
+    Property { name: "grid-column-end", inherited: false, kind: PKind.Raw, keywords: "auto", initial: Value.Keyword { k: "auto" } },
+    Property { name: "grid-row-start", inherited: false, kind: PKind.Raw, keywords: "auto", initial: Value.Keyword { k: "auto" } },
+    Property { name: "grid-row-end", inherited: false, kind: PKind.Raw, keywords: "auto", initial: Value.Keyword { k: "auto" } },
 }
 
 /// The index of the longhand property `name` (lower case).

@@ -1,0 +1,90 @@
+viewport 800x600
+  block <html> (0, 0) 800x460
+    block <body> (0, 0) 800x444
+      grid <div class="g"> (0, 0) 500x50
+        block <div> (0, 0) 100x20
+          line (0, 0) 100x20
+            text (0, 2) 8x16 "a"
+        block <div> (110, 0) 126.67x20
+          line (110, 0) 126.67x20
+            text (110, 2) 8x16 "b"
+        block <div> (246.67, 0) 253.33x20
+          line (246.67, 0) 253.33x20
+            text (246.67, 2) 8x16 "c"
+        block <div> (0, 30) 100x20
+          line (0, 30) 100x20
+            text (0, 32) 8x16 "d"
+      grid <div class="g2"> (0, 60) 400x98
+        block <div class="span2"> (0, 60) 265.33x20
+          line (0, 60) 265.33x20
+            text (0, 62) 32x16 "wide"
+        block <div> (269.33, 60) 130.67x20
+          line (269.33, 60) 130.67x20
+            text (269.33, 62) 8x16 "x"
+        block <div> (0, 86) 130.67x20
+          line (0, 86) 130.67x20
+            text (0, 88) 8x16 "y"
+        block <div class="full"> (0, 112) 400x20
+          line (0, 112) 400x20
+            text (0, 114) 64x16 "full row"
+        block <div style="grid-column: 2"> (134.67, 138) 130.67x20
+          line (134.67, 138) 130.67x20
+            text (134.67, 140) 48x16 "second"
+      grid <div class="g3"> (0, 168) 400x20
+        block <div> (0, 168) 168x20
+          line (0, 168) 168x20
+            text (0, 170) 40x16 "short"
+        block <div> (168, 168) 232x20
+          line (168, 168) 232x20
+            text (168, 170) 104x16 "a longer cell"
+      grid <div class="g4"> (0, 198) 400x40
+        block <div style="grid-area: main"> (100, 218) 300x20
+          line (100, 218) 300x20
+            text (100, 220) 32x16 "main"
+        block <div style="grid-area: head"> (0, 198) 400x20
+          line (0, 198) 400x20
+            text (0, 200) 32x16 "head"
+        block <div style="grid-area: side"> (0, 218) 100x20
+          line (0, 218) 100x20
+            text (0, 220) 32x16 "side"
+      grid <div class="g5"> (0, 248) 400x40
+        block <div> (0, 248) 133.33x20
+          line (0, 248) 133.33x20
+            text (0, 250) 8x16 "1"
+        block <div> (133.33, 248) 133.33x20
+          line (133.33, 248) 133.33x20
+            text (133.33, 250) 8x16 "2"
+        block <div> (266.67, 248) 133.33x20
+          line (266.67, 248) 133.33x20
+            text (266.67, 250) 8x16 "3"
+        block <div> (0, 268) 133.33x20
+          line (0, 268) 133.33x20
+            text (0, 270) 8x16 "4"
+      grid <div class="g6"> (0, 298) 400x40
+        block <div> (0, 298) 400x20
+          line (0, 298) 400x20
+            text (0, 300) 80x16 "one column"
+        block <div> (0, 318) 400x20
+          line (0, 318) 400x20
+            text (0, 320) 64x16 "fallback"
+      grid <div style="display: grid"> (0, 348) 800x40
+        block (anonymous) (0, 348) 800x20
+          line (0, 348) 800x20
+            text (0, 350) 64x16 "text run"
+        block <div style="height: auto"> (0, 368) 800x20
+          line (0, 368) 800x20
+            text (0, 370) 32x16 "item"
+      block <p> (0, 404) 800x40
+        line (0, 404) 800x40
+          text (0, 406) 56x16 "inline "
+          inline-grid <span class="g7"> (56, 404) 70x40
+            block <b> (56, 404) 30x20
+              line (56, 404) 30x20
+                text (56, 406) 8x16 "1"
+            block <b> (86, 404) 40x20
+              line (86, 404) 40x20
+                text (86, 406) 8x16 "2"
+            block <b> (56, 424) 30x20
+              line (56, 424) 30x20
+                text (56, 426) 8x16 "3"
+          text (126, 406) 40x16 " grid"
