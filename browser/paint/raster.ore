@@ -1,0 +1,159 @@
+// The software rasterizer: an RGBA8 canvas with a stack of clip
+// rectangles, opaque and alpha-blended rectangle fills, and coverage
+// masks (antialiased glyphs) blended in a color.
+
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+
+/// An 8-bit color with straight (not premultiplied) alpha.
+pub struct Rgba {
+    r: u8
+    g: u8
+    b: u8
+    a: u8
+}
+
+/// A rectangle of pixels: columns `x0..x1`, rows `y0..y1` (ends
+/// excluded). Empty when `x1 <= x0` or `y1 <= y0`.
+pub struct IRect {
+    x0: i64
+    y0: i64
+    x1: i64
+    y1: i64
+}
+
+pub fn intersect(a: IRect, b: IRect) IRect {
+    var r = a
+    if b.x0 > r.x0 {
+        r.x0 = b.x0
+    }
+    if b.y0 > r.y0 {
+        r.y0 = b.y0
+    }
+    if b.x1 < r.x1 {
+        r.x1 = b.x1
+    }
+    if b.y1 < r.y1 {
+        r.y1 = b.y1
+    }
+    return r
+}
+
+/// Pixels in memory: `width * height` RGBA quadruples, row after row.
+pub struct Canvas {
+    alloc: Allocator
+    width: usize
+    height: usize
+    pixels: []mut u8
+    // Drawing is limited to `clip` (always inside the canvas).
+    clip: IRect
+    clips: List(IRect)
+
+    pub fn init(alloc: Allocator, width: usize, height: usize) AllocError!Canvas {
+        let pixels = try alloc.alloc(255 as u8, width * height * 4)
+        return Canvas {
+            alloc: alloc,
+            width: width,
+            height: height,
+            pixels: pixels,
+            clip: IRect { x0: 0, y0: 0, x1: width as i64, y1: height as i64 },
+            clips: List(IRect).init(alloc),
+        }
+    }
+
+    pub fn deinit(self: *mut Self) {
+        self.alloc.free(self.pixels)
+        self.clips.deinit()
+    }
+
+    /// Fills the whole canvas (ignoring the clip) with `c`.
+    pub fn clear(self: *mut Self, c: Rgba) {
+        var i: usize = 0
+        while i < self.pixels.len {
+            self.pixels[i] = c.r
+            self.pixels[i + 1] = c.g
+            self.pixels[i + 2] = c.b
+            self.pixels[i + 3] = c.a
+            i += 4
+        }
+    }
+
+    /// Limits drawing to `r` too, until the matching `popClip`.
+    pub fn pushClip(self: *mut Self, r: IRect) AllocError!void {
+        try self.clips.append(self.clip)
+        self.clip = intersect(self.clip, r)
+    }
+
+    pub fn popClip(self: *mut Self) {
+        if self.clips.pop() |prev| {
+            self.clip = prev
+        }
+    }
+
+    /// Fills `r` (inside the clip) with `c`, blending when `c.a < 255`.
+    pub fn fillRect(self: *mut Self, r: IRect, c: Rgba) {
+        if c.a == 0 {
+            return
+        }
+        let k = intersect(r, self.clip)
+        if k.x1 <= k.x0 || k.y1 <= k.y0 {
+            return
+        }
+        for y in k.y0 as usize..k.y1 as usize {
+            var i = (y * self.width + k.x0 as usize) * 4
+            let end = (y * self.width + k.x1 as usize) * 4
+            if c.a == 255 {
+                while i < end {
+                    self.pixels[i] = c.r
+                    self.pixels[i + 1] = c.g
+                    self.pixels[i + 2] = c.b
+                    self.pixels[i + 3] = 255
+                    i += 4
+                }
+            } else {
+                while i < end {
+                    self.blend(i, c, c.a as u32)
+                    i += 4
+                }
+            }
+        }
+    }
+
+    /// Blends `c` through a coverage mask: `h` rows of `w` bytes, `pitch`
+    /// bytes apart, whose top-left pixel goes to (`x`, `y`).
+    pub fn blitMask(self: *mut Self, x: i64, y: i64, w: usize, h: usize, mask: []u8, pitch: usize, c: Rgba) {
+        let k = intersect(IRect { x0: x, y0: y, x1: x + w as i64, y1: y + h as i64 }, self.clip)
+        if k.x1 <= k.x0 || k.y1 <= k.y0 {
+            return
+        }
+        for py in k.y0..k.y1 {
+            let row = (py - y) as usize * pitch
+            var i = (py as usize * self.width + k.x0 as usize) * 4
+            for px in k.x0..k.x1 {
+                let cover = mask[row + (px - x) as usize] as u32
+                if cover > 0 {
+                    self.blend(i, c, (cover * c.a as u32 + 127) / 255)
+                }
+                i += 4
+            }
+        }
+    }
+
+    // Blends `c` with opacity `alpha` (0 to 255) into the pixel at byte
+    // `i`.
+    fn blend(self: *mut Self, i: usize, c: Rgba, alpha: u32) {
+        if alpha >= 255 {
+            self.pixels[i] = c.r
+            self.pixels[i + 1] = c.g
+            self.pixels[i + 2] = c.b
+            self.pixels[i + 3] = 255
+            return
+        }
+        let rest = 255 - alpha
+        self.pixels[i] = ((c.r as u32 * alpha + self.pixels[i] as u32 * rest + 127) / 255) as u8
+        self.pixels[i + 1] = ((c.g as u32 * alpha + self.pixels[i + 1] as u32 * rest + 127) / 255) as u8
+        self.pixels[i + 2] = ((c.b as u32 * alpha + self.pixels[i + 2] as u32 * rest + 127) / 255) as u8
+        self.pixels[i + 3] = (alpha + (self.pixels[i + 3] as u32 * rest + 127) / 255) as u8
+    }
+}

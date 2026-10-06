@@ -1,0 +1,42 @@
+#document
+  <html>
+    <head>
+    <body>
+      <ul>
+        "\n  "
+        <li>
+          "One\n  "
+        <li>
+          "Two\n    "
+          <ul>
+            "\n      "
+            <li>
+              "Two point one\n      "
+            <li>
+              "Two point two\n    "
+          "\n  "
+        <li>
+          "Three"
+        "\n"
+      "\n"
+      <ol>
+        "\n  "
+        <li>
+          <p>
+            "Paragraph in an item\n  "
+        <li>
+          "Next item\n"
+      "\n"
+      <dl>
+        "\n  "
+        <dt>
+          "Term"
+        <dd>
+          "Definition\n  "
+        <dt>
+          "Other term\n  "
+        <dd>
+          "Other definition\n"
+      "\n"
+      <li>
+        "Stray item without a list\n"

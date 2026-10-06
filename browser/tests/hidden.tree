@@ -1,0 +1,33 @@
+#document
+  <html>
+    <head>
+      <title>
+        "Hidden things"
+      <style>
+        ".x{}"
+    "\n"
+    <body>
+      "\n"
+      <p>
+        "Visible"
+      "\n"
+      <p hidden="">
+        "Hidden by the attribute"
+      "\n"
+      <template>
+        <p>
+          "Template content"
+      "\n"
+      <noscript>
+        <p>
+          "Shown: scripts never run in B1"
+      "\n"
+      <script>
+        "var hidden = true;"
+      "\n"
+      <iframe src="x.html">
+        "fallback"
+      "\n"
+      <p>
+        "Also visible"
+      "\n\n"

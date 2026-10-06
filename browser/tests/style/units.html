@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<style>
+html { font-size: 20px }
+.px { margin-top: 10px }
+.em { font-size: 2em; margin-top: 1em; padding-left: 0.5em }
+.rem { margin-top: 2rem; font-size: 0.5rem }
+.pct { width: 50%; height: 25%; font-size: 150%; line-height: 120% }
+.vw { width: 50vw; height: 10vh; margin-left: 1vw }
+.abs { margin-top: 12pt; margin-right: 1in; margin-bottom: 2.54cm; margin-left: 10mm; padding-top: 1pc }
+.half { padding-left: 2ex; padding-right: 4ch }
+.zero { margin-top: 0; width: 0 }
+.unitless { margin-top: 10; width: 10 }
+.badunit { margin-top: 10furlongs }
+.dec { margin-top: .5px; margin-bottom: 1e1px; margin-left: +3px }
+</style>
+<div class="px">px</div>
+<div class="em">em: <span class="em">nested em</span></div>
+<div class="rem">rem</div>
+<div class="pct">percent</div>
+<div class="vw">viewport units</div>
+<div class="abs">absolute units</div>
+<div class="half">ex and ch</div>
+<div class="zero">unitless zero</div>
+<div class="unitless">unitless non-zero is invalid</div>
+<div class="badunit">unknown unit</div>
+<div class="dec">number syntax</div>

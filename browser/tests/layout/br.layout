@@ -1,0 +1,21 @@
+viewport 800x600
+  block <html> (0, 0) 800x224
+    block <body> (0, 16) 800x208
+      block <p> (0, 16) 800x80
+        line (0, 16) 800x20
+          text (0, 18) 24x16 "one"
+        line (0, 36) 800x20
+          text (0, 38) 24x16 "two"
+        line (0, 56) 800x20
+        line (0, 76) 800x20
+          text (0, 78) 32x16 "four"
+      block <p> (0, 112) 800x20
+        line (0, 112) 800x20
+          text (0, 114) 64x16 "trailing"
+      block <p> (0, 148) 800x20
+        line (0, 148) 800x20
+      block <div> (0, 184) 800x40
+        line (0, 184) 800x20
+          text (0, 186) 8x16 "a"
+        line (0, 204) 800x20
+          text (0, 206) 8x16 "b"

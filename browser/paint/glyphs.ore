@@ -1,0 +1,165 @@
+// Drawing text: with the system's fonts, glyphs rendered by FreeType
+// (antialiased, 8-bit coverage) are kept in a glyph cache and blended
+// into the canvas; with the fixed-metric test font, each glyph is a
+// plain box in its cell, so screenshots do not depend on the machine.
+//
+// Glyphs go at the pen positions that layout measured: the advances are
+// those of `font.Measurer.width`, scaled to device pixels, and each
+// glyph's origin is rounded to a whole pixel.
+
+import font
+import std.list.List
+import std.map.IntMap
+import std.math
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+// A cached glyph bitmap: `w` x `h` coverage bytes at `data[offset..]`.
+struct Glyph {
+    ok: bool
+    w: usize
+    h: usize
+    left: i64
+    top: i64
+    offset: usize
+}
+
+pub struct TextPainter {
+    alloc: Allocator
+    // The system's fonts; null to draw the fixed-metric font's boxes.
+    system: ?*mut font.System
+    // Key: glyph id << 32 | size in 1/64 px << 3 | face slot.
+    index: IntMap(u64, usize)
+    glyphs: List(Glyph)
+    data: List(u8)
+
+    pub fn init(alloc: Allocator, system: ?*mut font.System) TextPainter {
+        return TextPainter {
+            alloc: alloc,
+            system: system,
+            index: IntMap(u64, usize).init(alloc),
+            glyphs: List(Glyph).init(alloc),
+            data: List(u8).init(alloc),
+        }
+    }
+
+    pub fn deinit(self: *mut Self) {
+        self.index.deinit()
+        self.glyphs.deinit()
+        self.data.deinit()
+    }
+
+    /// Draws `s` in `f` (CSS px) and color `c`, its baseline starting at
+    /// (`x`, `y`) in device pixels, at `scale` device pixels per CSS px.
+    pub fn draw(self: *mut Self, canvas: *mut Canvas, x: f64, y: f64, s: []u8, f: font.Font, scale: f64, c: Rgba) AllocError!void {
+        if self.system |sys| {
+            return self.drawSystem(sys, canvas, x, y, s, f, scale, c)
+        }
+        drawFixed(canvas, x, y, s, f, scale, c)
+    }
+
+    fn drawSystem(self: *mut Self, sys: *mut font.System, canvas: *mut Canvas, x: f64, y: f64, s: []u8, f: font.Font, scale: f64, c: Rgba) AllocError!void {
+        let size64 = math.floor(f.size * scale * 64.0 + 0.5) as i64
+        if size64 <= 0 || size64 > 0x1FFFFFFF {
+            return
+        }
+        let base = roundPx(y)
+        var pen = 0.0
+        var prev: u32 = 0
+        var i: usize = 0
+        while i < s.len {
+            let d = text.decode(s[i..])
+            i += d.len
+            let g = sys.glyphIndex(f, d.code)
+            // The advance includes the kerning with the glyph before,
+            // which moves this glyph's origin.
+            let adv = sys.advance(f, prev, g)
+            var kern = 0.0
+            if prev != 0 {
+                kern = adv - sys.advance(f, 0, g)
+            }
+            let origin = roundPx(x + (pen + kern) * scale)
+            if d.code != ' ' as u32 && d.code != '\t' as u32 && d.code != '\n' as u32 {
+                let gi = try self.glyph(sys, f, size64, g)
+                let gl = self.glyphs.items()[gi]
+                if gl.ok && gl.w > 0 && gl.h > 0 {
+                    let mask = self.data.items()[gl.offset..gl.offset + gl.w * gl.h]
+                    canvas.blitMask(origin + gl.left, base - gl.top, gl.w, gl.h, mask, gl.w, c)
+                }
+            }
+            pen += adv
+            prev = g
+        }
+    }
+
+    // The index in `glyphs` of glyph `g` of the face of `f` at `size64`,
+    // rendering it on first use.
+    fn glyph(self: *mut Self, sys: *mut font.System, f: font.Font, size64: i64, g: u32) AllocError!usize {
+        let key = (g as u64 << 32) | (size64 as u64 << 3) | font.faceSlot(f) as u64
+        if self.index.get(key) |gi| {
+            return gi
+        }
+        var gl = Glyph { ok: false, w: 0, h: 0, left: 0, top: 0, offset: self.data.len() }
+        if sys.render(f, size64, g) |bm| {
+            if bm.buffer |buf| {
+                gl.ok = true
+                gl.w = bm.width as usize
+                gl.h = bm.rows as usize
+                gl.left = bm.left as i64
+                gl.top = bm.top as i64
+                for row in 0..gl.h {
+                    // A negative pitch means rows go bottom-up.
+                    var start: usize = 0
+                    if bm.pitch >= 0 {
+                        start = row * bm.pitch as usize
+                    } else {
+                        start = (gl.h - 1 - row) * (-bm.pitch) as usize
+                    }
+                    for col in 0..gl.w {
+                        try self.data.append(buf[start + col])
+                    }
+                }
+            } else {
+                gl.ok = true
+            }
+        }
+        try self.glyphs.append(gl)
+        let gi = self.glyphs.len() - 1
+        try self.index.put(key, gi)
+        return gi
+    }
+}
+
+/// Rounds a device coordinate to the nearest pixel edge.
+pub fn roundPx(v: f64) i64 {
+    return math.floor(v + 0.5) as i64
+}
+
+// The fixed-metric font: each glyph advances 0.5em (1em when wide) and
+// is drawn as a box inset in its cell: x-height tall for lower-case
+// letters (with a descender for g, j, p, q, y), cap height for the rest.
+// Spaces and zero-width characters draw nothing.
+fn drawFixed(canvas: *mut Canvas, x: f64, y: f64, s: []u8, f: font.Font, scale: f64, c: Rgba) {
+    let em = f.size * scale
+    var pen = x
+    var i: usize = 0
+    while i < s.len {
+        let d = text.decode(s[i..])
+        i += d.len
+        let adv = 0.5 * em * font.columns(d.code) as f64
+        if adv > 0.0 && d.code > 0x20 && d.code != 0xA0 {
+            var top = y - 0.7 * em
+            var bottom = y
+            if d.code >= 'a' as u32 && d.code <= 'z' as u32 {
+                top = y - 0.5 * em
+                if d.code == 'g' as u32 || d.code == 'j' as u32 || d.code == 'p' as u32 || d.code == 'q' as u32 || d.code == 'y' as u32 {
+                    bottom = y + 0.2 * em
+                }
+            }
+            let r = IRect { x0: roundPx(pen + adv * 0.15), y0: roundPx(top), x1: roundPx(pen + adv * 0.85), y1: roundPx(bottom) }
+            canvas.fillRect(r, c)
+        }
+        pen += adv
+    }
+}

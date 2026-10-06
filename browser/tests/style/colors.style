@@ -1,0 +1,106 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <p class="n1">
+      display: block
+      color: rgb(255, 0, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="n2">
+      display: block
+      color: rgb(102, 51, 153)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="n3">
+      display: block
+      color: rgb(250, 250, 210)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="n4">
+      display: block
+      color: rgb(128, 128, 128)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="h3">
+      display: block
+      color: rgb(255, 136, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="h4">
+      display: block
+      color: rgba(255, 136, 0, 0.53)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="h6">
+      display: block
+      color: rgb(0, 255, 127)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="h8">
+      display: block
+      color: rgba(17, 34, 51, 0.5)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="r1">
+      display: block
+      color: rgb(255, 128, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="r2">
+      display: block
+      color: rgba(10, 20, 30, 0.5)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="r3">
+      display: block
+      color: rgb(255, 128, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="r4">
+      display: block
+      color: rgba(1, 2, 3, 0.25)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="r5">
+      display: block
+      color: rgb(255, 0, 13)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="r6">
+      display: block
+      color: rgba(0, 0, 0, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="t">
+      display: block
+      color: rgb(0, 0, 255)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="bad1">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="bad2">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="bad3">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="bad4">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <div class="bg">
+      display: block
+      background-color: rgb(170, 187, 204)

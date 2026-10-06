@@ -1,0 +1,70 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <p title="t">
+      display: block
+      font-style: italic
+      margin-top: 16px
+      margin-bottom: 16px
+    <p lang="en">
+      display: block
+      color: rgb(255, 0, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p lang="en-US">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="big warn">
+      display: block
+      font-weight: 700
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="warning">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <p lang="fr">
+      display: block
+      color: rgb(0, 0, 255)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p lang="fr-CA">
+      display: block
+      color: rgb(0, 0, 255)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p lang="french">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <a href="https://example.com/doc.pdf">
+      color: rgb(0, 128, 0)
+      text-decoration-line: line-through
+      white-space: pre
+    <a href="http://other.org/x.pdf">
+      color: rgb(0, 0, 238)
+      text-decoration-line: line-through
+    <p data-x="YES">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: right
+    <p data-y="">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      visibility: hidden
+    <p data-z="z">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px

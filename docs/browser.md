@@ -29,6 +29,8 @@ browser/
   css/            tokenizer, parser, selectors, cascade, computed style
   layout/         block, inline (line breaking), lists, tables (simple),
                   flex (simple), text measurement
+  engine/         Page (load, style, layout), Tab (history, scroll),
+                  hit testing, find in page
   paint/          display list, software rasterizer, glyph cache, PNG
   js/             lexer, parser, interpreter, GC, builtins, DOM bindings
   agent/          snapshot (a11y tree with refs), Markdown, actions,
@@ -96,6 +98,16 @@ and a local test server), so CI needs no network and no display.
   Cmd+[ and Cmd+], find in page (Cmd+F).
 - **Acceptance:** screenshot golden tests compared by pixel hash; a
   manual checklist run once per milestone for the window.
+- Done: `anyknown screenshot FILE|URL -o out.png [--width W] [--height
+  H] [--font fixed|system] [--full]` and `anyknown [open] FILE|URL`.
+  Golden PNGs (`browser/tests/paint/`, fixed font, compared byte for
+  byte), PNG checks, and headless window tests (SDL's dummy driver,
+  `--frames N` with scripted `--events`, `--state`, `--save`; see
+  `browser/ui/script.ore`). The interactive checks are in
+  `docs/browser-manual-checklist.md`. Simplifications: painting follows
+  tree order (no z-index or stacking contexts), clips are rectangles,
+  the 3-D border styles are solid, and the style sheets are parsed again
+  when the window is resized.
 
 ### B5: Forms and images
 

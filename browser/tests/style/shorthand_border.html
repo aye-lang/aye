@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<style>
+.all { border: 2px solid red }
+.any { border: dashed blue thick }
+.top { border-top: 1px dotted }
+.wsc { border-width: 1px 2px; border-style: solid double groove ridge; border-color: red green }
+.none { border-width: 7px }
+.hidden { border: 4px hidden green }
+.side { border: 1px solid; border-left: none; border-right-width: thin }
+.bad { border: 1px solid red blue }
+.cc { color: purple; border: medium inset }
+</style>
+<div class="all">all</div>
+<div class="any">any order</div>
+<div class="top">top only</div>
+<div class="wsc">width style color</div>
+<div class="none">width without style is 0</div>
+<div class="hidden">hidden</div>
+<div class="side">sides</div>
+<div class="bad">invalid: two colors</div>
+<div class="cc">currentcolor</div>

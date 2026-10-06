@@ -1,0 +1,75 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <span class="d1">
+      display: inline-block
+    <span class="d2">
+      display: flex
+    <span class="d3">
+      display: none
+    <span class="d4">
+    <div class="pos">
+      display: block
+      position: relative
+    <div class="posbad">
+      display: block
+    <div class="ta">
+      display: block
+      text-align: justify
+    <div class="ws">
+      display: block
+      white-space: pre-wrap
+    <div class="vis">
+      display: block
+      visibility: hidden
+    <div class="sz">
+      display: block
+      width: 100px
+      height: 50%
+      min-width: 10px
+      min-height: 0px
+      max-width: 80%
+    <div class="szbad">
+      display: block
+    <p class="lh1">
+      display: block
+      line-height: 1.5
+      margin-top: 16px
+      margin-bottom: 16px
+      <span>
+        line-height: 1.5
+    <p class="lh2">
+      display: block
+      line-height: 20px
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="lh3">
+      display: block
+      line-height: 32px
+      margin-top: 16px
+      margin-bottom: 16px
+      <span style="font-size: 10px">
+        font-size: 10px
+        line-height: 32px
+    <p class="lh4">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="lh5">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="neg">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      margin-left: -16px

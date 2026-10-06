@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<style>
+#a { color: red; font-style: italic }
+p { margin: 1px }
+</style>
+<p id="a" style="color: blue">inline beats id</p>
+<p style="margin-left: 20px; bogus: 1; padding: -3px; padding-top: 4px">valid parts kept</p>
+<p style="color: green; color: purple">last wins</p>
+<p style="  ">empty</p>
+<p style="font-weight: bold; ] junk; color: red; text-align: center">recovers</p>

@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0 }
+#a { display: flex; flex-flow: column wrap; gap: 4px 2em; justify-content: space-between; align-items: center }
+#b { flex: 1 }
+#c { flex: none; align-self: flex-end }
+#d { flex: 2 3 10% }
+#e { flex: 50px }
+#f { flex: auto; order: 2 }
+#g { position: relative; inset: 1px 2px; box-sizing: border-box }
+#h { flex: 1 2 3 }
+#i { gap: 5%; flex-basis: content; flex-grow: -1; flex-shrink: 2 }
+</style>
+<div id="a">
+  <div id="b"></div><div id="c"></div><div id="d"></div><div id="e"></div><div id="f"></div>
+  <div id="g"></div><div id="h"></div><div id="i"></div>
+</div>

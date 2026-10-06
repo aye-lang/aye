@@ -1,0 +1,193 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <title>
+      display: none
+    <script>
+      display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <h1>
+      display: block
+      font-size: 32px
+      font-weight: 700
+      margin-top: 21.44px
+      margin-bottom: 21.44px
+    <h2>
+      display: block
+      font-size: 24px
+      font-weight: 700
+      margin-top: 19.92px
+      margin-bottom: 19.92px
+    <h3>
+      display: block
+      font-size: 18.72px
+      font-weight: 700
+      margin-top: 18.72px
+      margin-bottom: 18.72px
+    <h4>
+      display: block
+      font-weight: 700
+      margin-top: 21.28px
+      margin-bottom: 21.28px
+    <h5>
+      display: block
+      font-size: 13.28px
+      font-weight: 700
+      margin-top: 22.18px
+      margin-bottom: 22.18px
+    <h6>
+      display: block
+      font-size: 10.72px
+      font-weight: 700
+      margin-top: 24.98px
+      margin-bottom: 24.98px
+    <ul>
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      padding-left: 40px
+      <li>
+        display: list-item
+        <ul>
+          display: block
+          padding-left: 40px
+          list-style-type: circle
+          <li>
+            display: list-item
+            list-style-type: circle
+            <ol>
+              display: block
+              padding-left: 40px
+              list-style-type: decimal
+              <li>
+                display: list-item
+                list-style-type: decimal
+            <ul>
+              display: block
+              padding-left: 40px
+              list-style-type: square
+              <li>
+                display: list-item
+                list-style-type: square
+    <ol>
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      padding-left: 40px
+      list-style-type: decimal
+      <li>
+        display: list-item
+        list-style-type: decimal
+    <p>
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      <b>
+        font-weight: 700
+      <strong>
+        font-weight: 700
+      <i>
+        font-style: italic
+      <em>
+        font-style: italic
+      <u>
+        text-decoration-line: underline
+      <s>
+        text-decoration-line: line-through
+      <code>
+        font-family: monospace
+      <small>
+        font-size: 13.33px
+      <big>
+        font-size: 19.2px
+      <mark>
+        background-color: rgb(255, 255, 0)
+      <sub>
+        font-size: 13.33px
+    <pre>
+      display: block
+      font-family: monospace
+      margin-top: 16px
+      margin-bottom: 16px
+      white-space: pre
+    <blockquote>
+      display: block
+      margin-top: 16px
+      margin-right: 40px
+      margin-bottom: 16px
+      margin-left: 40px
+    <hr>
+      display: block
+      color: rgb(128, 128, 128)
+      margin-top: 8px
+      margin-right: auto
+      margin-bottom: 8px
+      margin-left: auto
+      border-top-width: 1px
+      border-right-width: 1px
+      border-bottom-width: 1px
+      border-left-width: 1px
+      border-top-style: inset
+      border-right-style: inset
+      border-bottom-style: inset
+      border-left-style: inset
+      overflow-x: hidden
+      overflow-y: hidden
+    <table>
+      display: table
+      <tbody>
+        display: table-row-group
+        <tr>
+          display: table-row
+          <th>
+            display: table-cell
+            font-weight: 700
+            padding-top: 1px
+            padding-right: 1px
+            padding-bottom: 1px
+            padding-left: 1px
+            text-align: center
+          <td>
+            display: table-cell
+            padding-top: 1px
+            padding-right: 1px
+            padding-bottom: 1px
+            padding-left: 1px
+    <center>
+      display: block
+      text-align: center
+    <p hidden="">
+      display: none
+      margin-top: 16px
+      margin-bottom: 16px
+    <dl>
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      <dt>
+        display: block
+      <dd>
+        display: block
+        margin-left: 40px
+    <a href="/">
+      color: rgb(0, 0, 238)
+      text-decoration-line: underline
+    <a>
+    <form>
+      display: block
+      <input>
+        display: inline-block
+      <button>
+        display: inline-block
+      <textarea>
+        display: inline-block
+        font-family: monospace
+        white-space: pre-wrap

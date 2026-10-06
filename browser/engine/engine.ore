@@ -1,0 +1,324 @@
+// engine: a loaded page and a tab with its history, shared by the
+// window, `anyknown screenshot` and (later) the agent interface.
+//
+// - engine.ore: `Page`: load(url) -> fetch -> decode -> parse, then
+//   `layoutPage`: style sheets -> cascade -> layout, for a viewport.
+// - sheets.ore: the author style sheet of a document.
+// - tab.ore: `Tab`: the current page, its scroll offset and history.
+// - hit.ore: what is at a point (links), find in page, fragments.
+//
+// A `Page` is allocated on the heap and never moves, because its layout
+// tree points at its document and styles.
+
+import css
+import dom.Document
+import dom.NodeId
+import encoding
+import font
+import html
+import layout
+import net
+import std
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+import url
+import url.Url
+
+// The style sheets and computed styles of a page for one viewport.
+pub struct Styling {
+    media: css.Media
+    ua: css.Sheet
+    author: css.Sheet
+    styles: css.Styles
+}
+
+pub struct Page {
+    alloc: Allocator
+    // The URL of the document: after redirects, or the one asked for
+    // when the fetch failed.
+    url: Url
+    // The HTTP status (200 for `file:` and `data:`); 0 when the fetch
+    // failed and the document is an error page.
+    status: i64
+    // Why the fetch failed ("" when it did not).
+    failure: []u8
+    doc: Document
+    // The text of the first `title`, whitespace collapsed (owned).
+    title: []u8
+    // Set by `layoutPage`.
+    styling: ?*mut Styling
+    tree: ?*mut layout.Tree
+
+    /// Frees the page and everything in it.
+    pub fn destroy(self: *mut Self) {
+        let alloc = self.alloc
+        self.dropTree()
+        self.dropStyling()
+        self.doc.deinit()
+        alloc.free(self.title)
+        self.url.deinit(alloc)
+        alloc.destroy(self)
+    }
+
+    fn dropTree(self: *mut Self) {
+        if self.tree |t| {
+            t.deinit()
+            self.alloc.destroy(t)
+        }
+        self.tree = null
+    }
+
+    fn dropStyling(self: *mut Self) {
+        if self.styling |st| {
+            st.styles.deinit()
+            st.author.deinit()
+            st.ua.deinit()
+            self.alloc.destroy(st)
+        }
+        self.styling = null
+    }
+
+    /// Styles and lays out the page for a viewport `width` x `height` CSS
+    /// px, measuring text with `measure` (which must outlive the
+    /// layout). Style sheets are parsed again when the viewport changed,
+    /// since media queries and `vw`/`vh` depend on it.
+    pub fn layoutPage(self: *mut Self, measure: dyn font.Measurer, width: f64, height: f64) AllocError!void {
+        self.dropTree()
+        var same = false
+        if self.styling |st| {
+            same = st.media.width == width && st.media.height == height
+        }
+        if !same {
+            self.dropStyling()
+            self.styling = try self.styleFor(css.Media { width: width, height: height })
+        }
+        if self.styling |st| {
+            let tree = try layout.layoutDocument(self.alloc, &self.doc, &st.styles, measure, width, height)
+            self.tree = self.alloc.create(tree) catch |e| {
+                var lost = tree
+                lost.deinit()
+                return e
+            }
+        }
+    }
+
+    fn styleFor(self: *mut Self, media: css.Media) AllocError!*mut Styling {
+        var ua = try css.Sheet.init(self.alloc)
+        errdefer ua.deinit()
+        try css.uaSheet(&mut ua, media)
+        var author = try css.Sheet.init(self.alloc)
+        errdefer author.deinit()
+        try authorSheets(self.alloc, &self.doc, &self.url, media, &mut author)
+        var styles = try css.Styles.init(self.alloc)
+        errdefer styles.deinit()
+        try css.computeStyles(&self.doc, &ua, &author, media, &mut styles)
+        return self.alloc.create(Styling { media: media, ua: ua, author: author, styles: styles })
+    }
+}
+
+/// Loads `target`: fetches it, decodes and parses the document. A fetch
+/// that fails gives an error page saying why. Free with `destroy`.
+pub fn load(alloc: Allocator, target: *Url) AllocError!*mut Page {
+    let res = net.fetch(alloc, target) catch |e| {
+        match e {
+            .OutOfMemory => {
+                return AllocError.OutOfMemory
+            }
+            _ => {}
+        }
+        return errorPage(alloc, target, net.describe(e))
+    }
+    defer res.deinit(alloc)
+    var located = finalUrl(alloc, target, res.url) catch |e| {
+        return AllocError.OutOfMemory
+    }
+    errdefer located.deinit(alloc)
+    let src = try encoding.toUtf8(alloc, res.body, encoding.sniff(res.body, res.charset))
+    defer alloc.free(src)
+    var doc = try documentOf(alloc, res.mime, src)
+    errdefer doc.deinit()
+    return newPage(alloc, located, res.status, "", doc)
+}
+
+// The URL after redirects (`moved`, when not empty), else a copy of
+// `target`.
+fn finalUrl(alloc: Allocator, target: *Url, moved: []u8) url.UrlError!Url {
+    if moved.len > 0 {
+        return url.parse(alloc, moved)
+    }
+    return url.parse(alloc, target.href)
+}
+
+fn newPage(alloc: Allocator, located: Url, status: i64, failure: []u8, doc: Document) AllocError!*mut Page {
+    var d = doc
+    let title = try titleOf(alloc, &d)
+    errdefer alloc.free(title)
+    return alloc.create(Page {
+        alloc: alloc,
+        url: located,
+        status: status,
+        failure: failure,
+        doc: d,
+        title: title,
+        styling: null,
+        tree: null,
+    })
+}
+
+// A page that says why `target` could not be loaded.
+fn errorPage(alloc: Allocator, target: *Url, why: []u8) AllocError!*mut Page {
+    var b = text.Builder.init(alloc)
+    defer b.deinit()
+    try b.append("<title>Cannot load page</title><h1>Cannot load this page</h1><p>")
+    try escaped(&mut b, target.href)
+    try b.append("</p><p>")
+    try escaped(&mut b, why)
+    try b.append("</p>")
+    var doc = try html.parse(alloc, b.bytes())
+    errdefer doc.deinit()
+    var located = url.parse(alloc, target.href) catch |e| {
+        return AllocError.OutOfMemory
+    }
+    errdefer located.deinit(alloc)
+    return newPage(alloc, located, 0, why, doc)
+}
+
+fn escaped(b: *mut text.Builder, s: []u8) AllocError!void {
+    for c in s {
+        if c == '<' {
+            try b.append("&lt;")
+        } else if c == '&' {
+            try b.append("&amp;")
+        } else {
+            try b.appendByte(c)
+        }
+    }
+}
+
+/// The document of a response: HTML is parsed; plain text becomes the
+/// content of a `pre`.
+pub fn documentOf(alloc: Allocator, mime: []u8, src: []u8) AllocError!Document {
+    if !text.eql(mime, "text/plain") {
+        return html.parse(alloc, src)
+    }
+    var doc = try html.parse(alloc, "<pre>")
+    errdefer doc.deinit()
+    var pres = List(NodeId).init(alloc)
+    defer pres.deinit()
+    try doc.getElementsByTagName("pre", &mut pres)
+    try doc.appendText(pres.items()[0], src)
+    return doc
+}
+
+// The text of the first `title` element, whitespace collapsed.
+fn titleOf(alloc: Allocator, doc: *Document) AllocError![]u8 {
+    var titles = List(NodeId).init(alloc)
+    defer titles.deinit()
+    try doc.getElementsByTagName("title", &mut titles)
+    var b = text.Builder.init(alloc)
+    defer b.deinit()
+    if titles.len() > 0 {
+        var raw = text.Builder.init(alloc)
+        defer raw.deinit()
+        try doc.textContent(titles.items()[0], &mut raw)
+        var space = false
+        for c in raw.bytes() {
+            if layout.isWhite(c) {
+                space = b.len() > 0
+            } else {
+                if space {
+                    try b.appendByte(' ')
+                    space = false
+                }
+                try b.appendByte(c)
+            }
+        }
+    }
+    let owned = try b.toOwned()
+    return owned
+}
+
+/// The URL of what the user typed (an address bar, a command-line
+/// argument): a URL with a scheme of two or more letters; else a path to
+/// an existing file (relative to the working directory); else, when it
+/// starts with a host name (a dot before the first `/`, and not a
+/// file name ending in `.html`, `.htm` or `.txt`), an `https:` URL.
+pub fn urlOfInput(alloc: Allocator, input: []u8) url.UrlError!Url {
+    let s = text.trim(input)
+    if hasScheme(s) {
+        return url.parse(alloc, s)
+    }
+    if !std.fs.exists(s) && looksLikeHost(s) {
+        var b = text.Builder.init(alloc)
+        defer b.deinit()
+        b.append("https://") catch |e| {
+            return url.UrlError.OutOfMemory
+        }
+        b.append(s) catch |e| {
+            return url.UrlError.OutOfMemory
+        }
+        return url.parse(alloc, b.bytes())
+    }
+    return fileUrl(alloc, s)
+}
+
+fn looksLikeHost(s: []u8) bool {
+    if s.len == 0 || text.startsWith(s, ".") || std.mem.indexOf(s, ' ') != null {
+        return false
+    }
+    var host = s
+    if std.mem.indexOf(s, '/') |slash| {
+        host = s[..slash]
+    }
+    if std.mem.indexOf(host, '.') == null {
+        return false
+    }
+    return !text.endsWith(host, ".html") && !text.endsWith(host, ".htm") && !text.endsWith(host, ".txt")
+}
+
+// Does `s` start with a scheme of two or more letters and a `:`?
+fn hasScheme(s: []u8) bool {
+    var i: usize = 0
+    while i < s.len {
+        let c = s[i]
+        if c == ':' {
+            return i > 1
+        }
+        let letter = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+        if !letter && (i == 0 || !((c >= '0' && c <= '9') || c == '+' || c == '-' || c == '.')) {
+            return false
+        }
+        i += 1
+    }
+    return false
+}
+
+fn fileUrl(alloc: Allocator, path: []u8) url.UrlError!Url {
+    var b = text.Builder.init(alloc)
+    defer b.deinit()
+    b.append("file://") catch |e| {
+        return url.UrlError.OutOfMemory
+    }
+    if !text.startsWith(path, "/") {
+        let buf = alloc.alloc(0 as u8, 4096) catch |e| {
+            return url.UrlError.OutOfMemory
+        }
+        defer alloc.free(buf)
+        let cwd = getcwd(buf.ptr, buf.len)
+        b.append(buf[..strlen(buf.ptr)]) catch |e| {
+            return url.UrlError.OutOfMemory
+        }
+        b.appendByte('/') catch |e| {
+            return url.UrlError.OutOfMemory
+        }
+    }
+    b.append(path) catch |e| {
+        return url.UrlError.OutOfMemory
+    }
+    return url.parse(alloc, b.bytes())
+}
+
+extern fn getcwd(buf: [*]u8, size: usize) [*]u8
+extern fn strlen(s: [*]u8) usize

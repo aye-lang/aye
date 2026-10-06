@@ -1,0 +1,694 @@
+// Inline formatting: whitespace processing, the pieces of inline
+// content, line breaking, alignment and the fragments of each line.
+//
+// The content of a block container with inline children is flattened
+// into pieces: words, spaces, the start and end of inline boxes, atomic
+// inlines and forced breaks. A line may break after a piece marked
+// `soft` (a space where lines wrap, a hyphen, around atomic inlines) and
+// must break after a forced break (`<br>`, a kept newline). Lines are
+// filled greedily, one unbreakable chunk at a time. Lines also break
+// around wide East Asian characters (without the finer rules of UAX 14).
+
+import css
+import css.Value
+import font
+import std.list.List
+import std.math
+import std.mem.AllocError
+import std.text
+
+// ---- whitespace
+
+/// Processes the whitespace of every text box, per block container with
+/// inline content (CSS Text 3, 4.1.1): with `white-space` normal, nowrap
+/// and pre-line, runs of spaces and tabs (and newlines, except for
+/// pre-line) become one space, also across inline boxes; with pre and
+/// pre-wrap, tabs become spaces up to the next multiple of 8 columns.
+fn prepareText(t: *mut Tree) AllocError!void {
+    for i in 0..t.boxes.len() {
+        if hasInlineContent(t, i) {
+            var space = true
+            try prepareRun(t, i, &mut space)
+        }
+    }
+}
+
+// `space`: the text so far ends with a collapsible space.
+fn prepareRun(t: *mut Tree, i: usize, space: *mut bool) AllocError!void {
+    let n = t.children(i).len
+    for k in 0..n {
+        let c = t.children(i)[k]
+        let kind = t.bx(c).kind
+        if kind == BoxKind.Text {
+            try prepareTextBox(t, c, space)
+        } else if kind == BoxKind.Inline {
+            try prepareRun(t, c, space)
+        } else if kind == BoxKind.LineBreak {
+            space.* = true
+        } else {
+            space.* = false
+        }
+    }
+}
+
+fn prepareTextBox(t: *mut Tree, i: usize, space: *mut bool) AllocError!void {
+    let raw = t.bx(i).text
+    let ws = whiteSpaceOf(t.bx(i).style)
+    var out = List(u8).init(t.alloc)
+    if ws.collapse {
+        for c in raw {
+            if c == '\n' && ws.newlines {
+                while out.len() > 0 && out.items()[out.len() - 1] == ' ' {
+                    out.pop()
+                }
+                try out.append('\n')
+                space.* = true
+            } else if isWhite(c) {
+                if !space.* {
+                    try out.append(' ')
+                    space.* = true
+                }
+            } else {
+                try out.append(c)
+                space.* = false
+            }
+        }
+    } else {
+        var column: usize = 0
+        for c in raw {
+            if c == '\n' {
+                try out.append(c)
+                column = 0
+            } else if c == '\t' {
+                let n = 8 - column % 8
+                for k in 0..n {
+                    try out.append(' ')
+                }
+                column += n
+            } else if c != '\r' {
+                try out.append(c)
+                if (c & 0xC0) != 0x80 {
+                    column += 1
+                }
+            }
+        }
+        space.* = false
+    }
+    t.bx(i).text = out.items()
+}
+
+// ---- pieces
+
+enum PieceKind {
+    Word
+    Space
+    Open
+    Close
+    Atomic
+    Break
+}
+
+struct Piece {
+    kind: PieceKind
+    box: usize
+    // Word and Space: `box.text[start..end]`.
+    start: usize
+    end: usize
+    // The advance on the line. Atomic: the margin box width (when
+    // measuring intrinsic widths, the max-content one).
+    w: f64
+    // Atomic, intrinsic widths: the min-content margin box width.
+    min_w: f64
+    // A line may break after this piece.
+    soft: bool
+    // A space removed at the start and end of a line.
+    collapsible: bool
+    // Inline boxes around the piece.
+    depth: usize
+    // The relative offsets of those inline boxes (Open: with its own).
+    rel_x: f64
+    rel_y: f64
+}
+
+fn piece(kind: PieceKind, box: usize, depth: usize) Piece {
+    return Piece {
+        kind: kind,
+        box: box,
+        start: 0,
+        end: 0,
+        w: 0.0,
+        min_w: 0.0,
+        soft: false,
+        collapsible: false,
+        depth: depth,
+        rel_x: 0.0,
+        rel_y: 0.0,
+    }
+}
+
+// Where the pieces of a block container go, and how atomic inlines are
+// measured: laid out in `avail` px (`avail` >= 0) or by their intrinsic
+// widths (`avail` < 0).
+struct Collector {
+    t: *mut Tree
+    out: *mut List(Piece)
+    avail: f64
+
+    fn run(self: *mut Self, i: usize, depth: usize, rel_x: f64, rel_y: f64) AllocError!void {
+        let n = self.t.children(i).len
+        for k in 0..n {
+            let c = self.t.children(i)[k]
+            let kind = self.t.bx(c).kind
+            if kind == BoxKind.Text {
+                try self.textPieces(c, depth, rel_x, rel_y)
+            } else if kind == BoxKind.Inline {
+                try self.inlineBox(c, depth, rel_x, rel_y)
+            } else if kind == BoxKind.LineBreak {
+                var p = piece(PieceKind.Break, c, depth)
+                p.rel_x = rel_x
+                p.rel_y = rel_y
+                try self.out.append(p)
+            } else {
+                try self.atomic(c, depth, rel_x, rel_y)
+            }
+        }
+    }
+
+    fn inlineBox(self: *mut Self, i: usize, depth: usize, rel_x: f64, rel_y: f64) AllocError!void {
+        let base = basePercent(self.avail)
+        resolveEdges(self.t, i, base)
+        let b = self.t.bx(i)
+        let style = b.style
+        b.margin[1] = lengthOr0(style[css.MARGIN_TOP + 1], base)
+        b.margin[3] = lengthOr0(style[css.MARGIN_TOP + 3], base)
+        relOffsets(self.t, i, base, -1.0)
+        let rx = rel_x + b.rel_x
+        let ry = rel_y + b.rel_y
+        var open = piece(PieceKind.Open, i, depth)
+        open.w = b.margin[3] + b.border[3] + b.padding[3]
+        open.rel_x = rx
+        open.rel_y = ry
+        let close_w = b.margin[1] + b.border[1] + b.padding[1]
+        try self.out.append(open)
+        try self.run(i, depth + 1, rx, ry)
+        var close = piece(PieceKind.Close, i, depth)
+        close.w = close_w
+        close.rel_x = rx
+        close.rel_y = ry
+        try self.out.append(close)
+    }
+
+    fn atomic(self: *mut Self, i: usize, depth: usize, rel_x: f64, rel_y: f64) AllocError!void {
+        var p = piece(PieceKind.Atomic, i, depth)
+        p.rel_x = rel_x
+        p.rel_y = rel_y
+        if self.avail >= 0.0 {
+            try layoutAtomic(self.t, i, self.avail)
+            let b = self.t.bx(i)
+            p.w = b.margin[3] + b.w + b.margin[1]
+        } else {
+            let mm = try outerIntrinsic(self.t, i)
+            p.w = mm.max
+            p.min_w = mm.min
+        }
+        // Lines may break before and after an atomic inline where they
+        // wrap.
+        if whiteSpaceOf(self.t.bx(i).style).wrap {
+            p.soft = true
+            let n = self.out.len()
+            if n > 0 {
+                self.out.items()[n - 1].soft = true
+            }
+        }
+        try self.out.append(p)
+    }
+
+    fn textPieces(self: *mut Self, i: usize, depth: usize, rel_x: f64, rel_y: f64) AllocError!void {
+        let s = self.t.bx(i).text
+        let style = self.t.bx(i).style
+        let ws = whiteSpaceOf(style)
+        let f = fontOf(style)
+        var k: usize = 0
+        while k < s.len {
+            var p = piece(PieceKind.Word, i, depth)
+            p.rel_x = rel_x
+            p.rel_y = rel_y
+            p.start = k
+            if s[k] == '\n' {
+                p.kind = PieceKind.Break
+                k += 1
+            } else if s[k] == ' ' {
+                while k < s.len && s[k] == ' ' {
+                    k += 1
+                }
+                p.kind = PieceKind.Space
+                p.soft = ws.wrap
+                p.collapsible = ws.collapse
+            } else {
+                while k < s.len && s[k] != ' ' && s[k] != '\n' {
+                    // A line may break before and after a wide (East
+                    // Asian) character.
+                    let d = text.decode(s[k..])
+                    if ws.wrap && font.columns(d.code) == 2 {
+                        if k == p.start {
+                            k += d.len
+                        }
+                        p.soft = true
+                        break
+                    }
+                    // A line may break after a hyphen between two
+                    // other characters.
+                    if s[k] == '-' && ws.wrap && k > p.start && s[k - 1] != '-' && k + 1 < s.len && s[k + 1] != ' ' && s[k + 1] != '\n' && s[k + 1] != '-' {
+                        k += 1
+                        p.soft = true
+                        break
+                    }
+                    k += d.len
+                }
+            }
+            p.end = k
+            if p.kind != PieceKind.Break {
+                p.w = self.t.measure.width(f, s[p.start..p.end])
+            }
+            try self.out.append(p)
+        }
+    }
+}
+
+// The base of percentages of inline boxes: the container's width, or 0
+// when measuring intrinsic widths.
+fn basePercent(avail: f64) f64 {
+    if avail < 0.0 {
+        return 0.0
+    }
+    return avail
+}
+
+fn collectPieces(t: *mut Tree, i: usize, avail: f64, out: *mut List(Piece)) AllocError!void {
+    var c = Collector { t: t, out: out, avail: avail }
+    try c.run(i, 0, 0.0, 0.0)
+}
+
+// The end (exclusive) of the chunk of pieces that starts at `k`: up to
+// and with the next soft piece or forced break, and the ends of inline
+// boxes right after it.
+fn chunkEnd(ps: []Piece, k: usize) usize {
+    var e = k
+    while e < ps.len && !ps[e].soft && ps[e].kind != PieceKind.Break {
+        e += 1
+    }
+    if e < ps.len {
+        e += 1
+    }
+    while e < ps.len && ps[e].kind == PieceKind.Close {
+        e += 1
+    }
+    return e
+}
+
+// Does the piece put something on a line (as opposed to collapsible
+// spaces and empty inline box edges)?
+fn isContent(p: Piece) bool {
+    return match p.kind {
+        .Word, .Atomic, .Break => true
+        .Space => !p.collapsible
+        .Open, .Close => p.w != 0.0
+    }
+}
+
+// ---- intrinsic widths
+
+/// The min-content and max-content widths of the inline content of
+/// box `i` (its content box).
+fn inlineIntrinsic(t: *mut Tree, i: usize) AllocError!MinMax {
+    var pieces = List(Piece).init(t.backing)
+    defer pieces.deinit()
+    try collectPieces(t, i, -1.0, &mut pieces)
+    let ps = pieces.items()
+    var r = MinMax { min: 0.0, max: 0.0 }
+    // max-content: lines end only at forced breaks.
+    var line = 0.0
+    var trailing = 0.0
+    var started = false
+    for p in ps {
+        if p.kind == PieceKind.Break {
+            r.max = math.max(r.max, line - trailing)
+            line = 0.0
+            trailing = 0.0
+            started = false
+            continue
+        }
+        if p.kind == PieceKind.Space && p.collapsible {
+            if started {
+                line += p.w
+                trailing += p.w
+            }
+            continue
+        }
+        if isContent(p) {
+            started = true
+        }
+        line += p.w
+        trailing = 0.0
+    }
+    r.max = math.max(r.max, line - trailing)
+    // min-content: the widest chunk.
+    var k: usize = 0
+    while k < ps.len {
+        let e = chunkEnd(ps, k)
+        var w = 0.0
+        var spaces = 0.0
+        for j in k..e {
+            let p = ps[j]
+            if p.kind == PieceKind.Space {
+                spaces += p.w
+                continue
+            }
+            if p.kind == PieceKind.Atomic {
+                w += spaces + p.min_w
+            } else {
+                w += spaces + p.w
+            }
+            spaces = 0.0
+        }
+        r.min = math.max(r.min, w)
+        k = e
+    }
+    return r
+}
+
+// ---- lines
+
+// Lays out the inline content of box `i` in lines `avail` px wide;
+// returns the height of the lines.
+fn layoutInline(t: *mut Tree, i: usize, avail: f64) AllocError!f64 {
+    var pieces = List(Piece).init(t.backing)
+    defer pieces.deinit()
+    try collectPieces(t, i, avail, &mut pieces)
+    let ps = pieces.items()
+    // The inline boxes open at the end of the previous line.
+    var open = List(usize).init(t.backing)
+    defer open.deinit()
+    var lb = LineBuilder {
+        t: t,
+        container: i,
+        avail: avail,
+        strut: textMetrics(t, t.bx(i).style),
+        align: keywordOf(t.bx(i).style[css.TEXT_ALIGN]),
+        y: 0.0,
+        open: &mut open,
+    }
+    t.bx(i).line_start = t.lines.len()
+    var k: usize = 0
+    while k < ps.len {
+        let start = k
+        var width = 0.0
+        var content = false
+        var forced = false
+        while k < ps.len {
+            let e = chunkEnd(ps, k)
+            var w = 0.0
+            var fit = 0.0
+            var has = false
+            for j in k..e {
+                let p = ps[j]
+                if !content && !has && p.kind == PieceKind.Space && p.collapsible {
+                    // Removed at the start of the line.
+                    continue
+                }
+                w += p.w
+                if p.kind != PieceKind.Space && p.kind != PieceKind.Close {
+                    fit = w
+                }
+                if isContent(p) {
+                    has = true
+                }
+            }
+            if content && width + fit > avail + 0.001 {
+                break
+            }
+            width += w
+            content = content || has
+            k = e
+            if ps[e - 1].kind == PieceKind.Break || lastIsBreak(ps, k, e) {
+                forced = true
+                break
+            }
+        }
+        try lb.line(ps[start..k], forced, k >= ps.len)
+    }
+    t.bx(i).line_end = t.lines.len()
+    return lb.y
+}
+
+// Is there a forced break among the Close pieces that end a chunk?
+fn lastIsBreak(ps: []Piece, k: usize, e: usize) bool {
+    var j = e
+    while j > 0 && ps[j - 1].kind == PieceKind.Close {
+        j -= 1
+    }
+    return j > 0 && ps[j - 1].kind == PieceKind.Break
+}
+
+struct LineBuilder {
+    t: *mut Tree
+    container: usize
+    avail: f64
+    strut: TextMetrics
+    align: []u8
+    // The top of the next line.
+    y: f64
+    open: *mut List(usize)
+
+    // Makes a line of `ps` (unless it holds nothing). `forced`: it ends
+    // with a forced break; `last`: it is the last line.
+    fn line(self: *mut Self, ps: []Piece, forced: bool, last: bool) AllocError!void {
+        // The pieces that stay: without collapsible spaces at the start
+        // and at the end.
+        var first: usize = 0
+        while first < ps.len && !isContent(ps[first]) {
+            first += 1
+        }
+        var end = ps.len
+        while end > first && (!isContent(ps[end - 1]) || ps[end - 1].kind == PieceKind.Break) {
+            end -= 1
+        }
+        var keep = List(Piece).init(self.t.backing)
+        defer keep.deinit()
+        for j, p in ps {
+            if p.kind == PieceKind.Space && p.collapsible && (j < first || j >= end) {
+                continue
+            }
+            try keep.append(p)
+        }
+        let kp = keep.items()
+        if first >= ps.len {
+            // Nothing on the line: only the inline boxes it opens and
+            // closes count.
+            for p in kp {
+                try self.track(p)
+            }
+            return
+        }
+        // Horizontal positions, alignment and justification.
+        var used = 0.0
+        var spaces: usize = 0
+        var x = 0.0
+        for j, p in kp {
+            x += p.w
+            if p.kind != PieceKind.Space {
+                used = x
+            } else if j + 1 < kp.len {
+                spaces += 1
+            }
+        }
+        var offset = 0.0
+        var extra = 0.0
+        let free = self.avail - used
+        if free > 0.0 {
+            if text.eql(self.align, "right") || text.eql(self.align, "end") {
+                offset = free
+            } else if text.eql(self.align, "center") {
+                offset = free / 2.0
+            } else if text.eql(self.align, "justify") && !forced && !last && spaces > 0 {
+                extra = free / spaces as f64
+            }
+        }
+        // Vertical extent: the strut, then every piece's inline box.
+        let half = (self.strut.line_height - self.strut.ascent - self.strut.descent) / 2.0
+        var above = self.strut.ascent + half
+        var below = self.strut.descent + half
+        for p in kp {
+            if p.kind == PieceKind.Atomic {
+                let b = self.t.bx(p.box)
+                let a = atomicAscent(self.t, p.box)
+                above = math.max(above, a)
+                below = math.max(below, b.margin[0] + b.h + b.margin[2] - a)
+            } else {
+                let m = textMetrics(self.t, self.t.bx(p.box).style)
+                let lh = (m.line_height - m.ascent - m.descent) / 2.0
+                above = math.max(above, m.ascent + lh)
+                below = math.max(below, m.descent + lh)
+            }
+        }
+        let baseline = self.y + above
+        let line_index = self.t.lines.len()
+        try self.t.lines.append(Line {
+            x: 0.0,
+            y: self.y,
+            w: self.avail,
+            h: above + below,
+            baseline: above,
+            frag_start: self.t.frags.len(),
+            frag_end: 0,
+        })
+        // Fragments: the inline boxes still open from the last line
+        // first, then the pieces.
+        var stack = List(OpenFrag).init(self.t.backing)
+        defer stack.deinit()
+        x = offset
+        for d, ib in self.open.items() {
+            try stack.append(try self.inlineFrag(ib, d, x, baseline))
+        }
+        var prev_text = false
+        for p in kp {
+            let px = x
+            var w = p.w
+            if p.kind == PieceKind.Space {
+                w += extra
+            }
+            x += w
+            match p.kind {
+                .Open => {
+                    let fx = px + self.t.bx(p.box).margin[3]
+                    try stack.append(try self.inlineFrag(p.box, p.depth, fx, baseline))
+                    try self.open.append(p.box)
+                    prev_text = false
+                }
+                .Close => {
+                    let b = self.t.bx(p.box)
+                    if stack.pop() |o| {
+                        self.t.frags.items()[o.frag].w = px + b.border[1] + b.padding[1] - o.left
+                    }
+                    self.open.pop()
+                    prev_text = false
+                }
+                .Word, .Space => {
+                    let n = self.t.frags.len()
+                    var merged = false
+                    if prev_text {
+                        let fr = &mut self.t.frags.items()[n - 1]
+                        if fr.box == p.box && fr.end == p.start {
+                            fr.end = p.end
+                            fr.w += w
+                            merged = true
+                        }
+                    }
+                    if !merged {
+                        let m = textMetrics(self.t, self.t.bx(p.box).style)
+                        try self.t.frags.append(Frag {
+                            kind: FragKind.Text,
+                            box: p.box,
+                            depth: p.depth,
+                            start: p.start,
+                            end: p.end,
+                            x: px + p.rel_x,
+                            y: baseline - m.ascent + p.rel_y,
+                            w: w,
+                            h: m.ascent + m.descent,
+                        })
+                    }
+                    prev_text = true
+                }
+                .Atomic => {
+                    let b = self.t.bx(p.box)
+                    b.x = px + b.margin[3] + p.rel_x
+                    b.y = baseline - atomicAscent(self.t, p.box) + b.margin[0] + p.rel_y
+                    try self.t.frags.append(Frag {
+                        kind: FragKind.Atomic,
+                        box: p.box,
+                        depth: p.depth,
+                        start: 0,
+                        end: 0,
+                        x: b.x,
+                        y: b.y,
+                        w: b.w,
+                        h: b.h,
+                    })
+                    prev_text = false
+                }
+                .Break => {
+                    prev_text = false
+                }
+            }
+        }
+        // Inline boxes that go on to the next line end here.
+        for o in stack.items() {
+            self.t.frags.items()[o.frag].w = x - o.left
+        }
+        self.t.lines.items()[line_index].frag_end = self.t.frags.len()
+        self.y += above + below
+    }
+
+    // Keeps track of the inline boxes open across lines on a line
+    // without fragments.
+    fn track(self: *mut Self, p: Piece) AllocError!void {
+        if p.kind == PieceKind.Open {
+            try self.open.append(p.box)
+        } else if p.kind == PieceKind.Close {
+            self.open.pop()
+        }
+    }
+
+    // A fragment of the inline box `ib` whose left border edge is at `x`
+    // (before relative offsets); its width is set when it ends.
+    fn inlineFrag(self: *mut Self, ib: usize, depth: usize, x: f64, baseline: f64) AllocError!OpenFrag {
+        let b = self.t.bx(ib)
+        let m = textMetrics(self.t, b.style)
+        var rx = 0.0
+        var ry = 0.0
+        var cur: ?usize = ib
+        while cur |c| {
+            if c == self.container {
+                break
+            }
+            rx += self.t.bx(c).rel_x
+            ry += self.t.bx(c).rel_y
+            cur = self.t.bx(c).parent
+        }
+        try self.t.frags.append(Frag {
+            kind: FragKind.Inline,
+            box: ib,
+            depth: depth,
+            start: 0,
+            end: 0,
+            x: x + rx,
+            y: baseline - m.ascent - b.padding[0] - b.border[0] + ry,
+            w: 0.0,
+            h: m.ascent + m.descent + b.padding[0] + b.padding[2] + b.border[0] + b.border[2],
+        })
+        return OpenFrag { frag: self.t.frags.len() - 1, left: x }
+    }
+}
+
+// The fragment of an inline box on the current line, and its left edge
+// before relative offsets.
+struct OpenFrag {
+    frag: usize
+    left: f64
+}
+
+// The distance from the top of the margin box of an atomic inline to its
+// baseline: the baseline of the last line inside an inline-block, of the
+// first line inside an inline table or flex container, or else the
+// bottom margin edge.
+fn atomicAscent(t: *Tree, i: usize) f64 {
+    let b = t.bx(i)
+    if b.last_baseline >= 0.0 && b.kind == BoxKind.InlineBlock {
+        return b.margin[0] + b.last_baseline
+    }
+    if b.first_baseline >= 0.0 && (b.kind == BoxKind.Flex || b.kind == BoxKind.Table) {
+        return b.margin[0] + b.first_baseline
+    }
+    return b.margin[0] + b.h + b.margin[2]
+}
