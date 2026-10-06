@@ -198,6 +198,16 @@ fn ore_unit_tests() {
             text(&out.stderr)
         );
     }
+    // Modules that import other browser modules, tested from the root.
+    for module in ["svg"] {
+        let out = ore().args(["test", "browser", "--module", module]).output().unwrap();
+        let stdout = text(&out.stdout);
+        assert!(
+            out.status.success() && stdout.contains(" passed; 0 failed"),
+            "`ore test browser --module {module}` failed:\n{stdout}{}",
+            text(&out.stderr)
+        );
+    }
 }
 
 /// `anyknown args...` must exit with `status` and print exactly `stdout`

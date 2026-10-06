@@ -5,8 +5,11 @@
 // no pixels), and the elements are mapped to their bitmaps for layout
 // (natural sizes) and paint. `updateImages` runs before each layout and
 // only fetches what is new (elements added by scripts); a URL that
-// failed is not fetched again.
+// failed is not fetched again. The images of the style sheets
+// (`background-image`, `mask-image` of the elements that are displayed)
+// are fetched with them, and mapped by their URL for paint.
 
+import css
 import dom
 import dom.Document
 import dom.NodeId
@@ -14,6 +17,7 @@ import image
 import layout
 import net
 import std
+import std.heap.Arena
 import std.list.List
 import std.mem.AllocError
 import std.mem.Allocator
@@ -36,9 +40,11 @@ pub struct ImageCache {
     nodes: layout.Images
     // The URL of the page, sent as the Referer (owned).
     referrer: []mut u8
+    // The keys of `nodes.urls` (owned).
+    keys: List([]mut u8)
 
     pub fn init(alloc: Allocator) ImageCache {
-        return ImageCache { alloc: alloc, entries: List(CachedImage).init(alloc), nodes: layout.Images.init(alloc), referrer: alloc.alloc(0 as u8, 0) catch unreachable }
+        return ImageCache { alloc: alloc, entries: List(CachedImage).init(alloc), nodes: layout.Images.init(alloc), referrer: alloc.alloc(0 as u8, 0) catch unreachable, keys: List([]mut u8).init(alloc) }
     }
 
     pub fn deinit(self: *mut Self) {
@@ -56,6 +62,10 @@ pub struct ImageCache {
         self.entries.deinit()
         self.nodes.deinit()
         self.alloc.free(self.referrer)
+        for k in self.keys.items() {
+            self.alloc.free(k)
+        }
+        self.keys.deinit()
     }
 
     // Sends `href` as the Referer of the images fetched from now on.
@@ -187,25 +197,59 @@ fn pixelsOf(v: f64) usize {
     return std.math.floor(v + 0.5) as usize
 }
 
-/// Fetches the images of the page's elements that have none yet, and
-/// maps the elements to their bitmaps.
+/// Fetches the images of the page's elements and style sheets that have
+/// none yet, and maps the elements (and URLs) to their bitmaps.
 pub fn updateImages(page: *mut Page) AllocError!void {
     if page.images == null {
         page.images = try page.alloc.create(ImageCache.init(page.alloc))
     }
-    return fillImages(page.images.?, &page.doc, &page.url)
+    var styles: ?*css.Styles = null
+    if page.styling |st| {
+        styles = &st.styles
+    }
+    return fillImagesWith(page.images.?, &page.doc, &page.url, styles)
 }
 
 /// Fetches the images of the elements of `doc` (whose URL is
 /// `address`) that `cache` has no bitmap for, resolving their URLs
 /// against the document's base URL.
 pub fn fillImages(cache: *mut ImageCache, doc: *Document, address: *Url) AllocError!void {
+    return fillImagesWith(cache, doc, address, null)
+}
+
+// `fillImages`, and the images of the style sheets when there are
+// `styles`.
+fn fillImagesWith(cache: *mut ImageCache, doc: *Document, address: *Url, styles: ?*css.Styles) AllocError!void {
     if cache.referrer.len == 0 {
         try cache.setReferrer(address.href)
     }
     var base = try documentBase(cache.alloc, doc, address)
     defer base.deinit(cache.alloc)
-    try prefetchImages(cache, doc, &base)
+    var arena = Arena.init(cache.alloc)
+    defer arena.deinit()
+    var keys = List([]u8).init(arena.allocator())
+    if styles |st| {
+        try styleUrls(arena.allocator(), doc, st, &cache.nodes, &mut keys)
+    }
+    try prefetchImages(cache, doc, &base, keys.items())
+    for key in keys.items() {
+        if cache.nodes.hasUrl(key) {
+            continue
+        }
+        let target = url.resolve(cache.alloc, &base, text.trim(key)) catch |e| {
+            continue
+        }
+        defer target.deinit(cache.alloc)
+        if try cache.bitmapOf(target.withoutFragment()) |bmp| {
+            let owned = try cache.alloc.alloc(0 as u8, key.len)
+            std.mem.copy(owned, key)
+            cache.keys.append(owned) catch |e| {
+                cache.alloc.free(owned)
+                return e
+            }
+            try cache.nodes.putUrl(owned, bmp, cache.pictureOf(target.withoutFragment()))
+        }
+    }
     var cur: ?NodeId = doc.root
     while cur |h| {
         cur = doc.following(h, doc.root)
@@ -230,11 +274,25 @@ pub fn fillImages(cache: *mut ImageCache, doc: *Document, address: *Url) AllocEr
     }
 }
 
-// Fetches the new images of `doc` concurrently into the session's cache
-// (net.prefetch), before `fillImages` takes them one by one.
-fn prefetchImages(cache: *mut ImageCache, doc: *Document, base: *Url) AllocError!void {
+// Fetches the new images of `doc` (and the URLs `extra` of its style
+// sheets) concurrently into the session's cache (net.prefetch), before
+// `fillImages` takes them one by one.
+fn prefetchImages(cache: *mut ImageCache, doc: *Document, base: *Url, extra: [][]u8) AllocError!void {
     var hrefs = text.Builder.init(cache.alloc)
     defer hrefs.deinit()
+    for key in extra {
+        if cache.nodes.hasUrl(key) {
+            continue
+        }
+        let target = url.resolve(cache.alloc, base, text.trim(key)) catch |e| {
+            continue
+        }
+        defer target.deinit(cache.alloc)
+        if !cache.known(target.withoutFragment()) && !text.startsWith(target.href, "data:") {
+            try hrefs.append(target.withoutFragment())
+            try hrefs.appendByte('\n')
+        }
+    }
     var cur: ?NodeId = doc.root
     while cur |h| {
         cur = doc.following(h, doc.root)
@@ -256,6 +314,57 @@ fn prefetchImages(cache: *mut ImageCache, doc: *Document, base: *Url) AllocError
         try hrefs.appendByte('\n')
     }
     net.prefetch(cache.alloc, hrefs.bytes(), net.Kind.Image, cache.referrer)
+}
+
+// The URLs of the images of the style sheets (as their computed values
+// write them) that elements of `doc` that are displayed use, and that
+// `nodes` has no image for, into `out` (allocated with `alloc`, an
+// arena).
+fn styleUrls(alloc: Allocator, doc: *Document, styles: *css.Styles, nodes: *layout.Images, out: *mut List([]u8)) AllocError!void {
+    var cur: ?NodeId = doc.root
+    while cur |h| {
+        cur = doc.following(h, doc.root)
+        let values = styles.get(h) orelse continue
+        let start = out.len()
+        try css.layerUrls(alloc, values[css.BACKGROUND_IMAGE], out)
+        try css.layerUrls(alloc, values[css.MASK_IMAGE], out)
+        if out.len() == start {
+            continue
+        }
+        if !displayed(doc, styles, h) {
+            while out.len() > start {
+                _ = out.pop()
+            }
+            continue
+        }
+        var k = start
+        while k < out.len() {
+            let key = out.items()[k]
+            var seen = nodes.hasUrl(key)
+            for j in 0..k {
+                seen = seen || text.eql(out.items()[j], key)
+            }
+            if seen {
+                _ = out.swapRemove(k)
+            } else {
+                k += 1
+            }
+        }
+    }
+}
+
+// Is `el` displayed (no `display: none` on it or an ancestor)?
+fn displayed(doc: *Document, styles: *css.Styles, el: NodeId) bool {
+    var cur: ?NodeId = el
+    while cur |h| {
+        if styles.get(h) |values| {
+            if layout.isKeyword(values[css.DISPLAY], "none") {
+                return false
+            }
+        }
+        cur = doc.parent(h)
+    }
+    return true
 }
 
 fn isImageElement(doc: *Document, el: NodeId) bool {

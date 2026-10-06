@@ -16,12 +16,14 @@
 // `xlink:href`); `defs`, `symbol`, gradients and the like draw nothing
 // themselves. Styling goes through the cascade (css): presentation
 // attributes are hints, so `style` attributes and style sheets work, with
-// `fill`, `stroke` (`currentColor`; a gradient's color halfway), their
-// opacities, `stroke-width`, `fill-rule`, `stroke-linecap`,
-// `stroke-linejoin`, `stroke-miterlimit`, `opacity` (per shape, not per
-// group), `display: none` and `visibility`. Content inside a `use`
-// inherits from the `use`. Left out: text, images, patterns, clip paths,
-// masks, markers, filters, dashes, real gradients.
+// `fill`, `stroke` (`currentColor`, linear and radial gradients:
+// gradient.ore), their opacities, `stroke-width`, `fill-rule`,
+// `stroke-linecap`, `stroke-linejoin`, `stroke-miterlimit`,
+// `stroke-dasharray`, `stroke-dashoffset`, `opacity` (a group's drawn
+// into a layer of its own, then blended), `display: none` and
+// `visibility`; the `clip-path` attribute (a `clipPath` of shapes in user
+// space, `clip-rule`). Content inside a `use` inherits from the `use`.
+// Left out: text, images, patterns, masks, markers, filters.
 
 import css
 import css.Value
@@ -61,6 +63,28 @@ pub struct Shape {
     // 0 miter, 1 round, 2 bevel.
     join: u8
     miter_limit: f64
+    // A gradient paints the fill (stroke) instead of a color: its index
+    // in `Picture.gradients` plus 1; 0 for none.
+    fill_grad: usize
+    stroke_grad: usize
+    // The stroke's dashes and gaps (`Picture.dashes`), and where the
+    // pattern starts, in the picture's coordinates.
+    dash_start: usize
+    dash_end: usize
+    dash_offset: f64
+    // Not a path but the start (1) or the end (2) of a group: the shapes
+    // in between are drawn into a layer of their own, which the end
+    // blends below with `opacity`, through the clip path `clip` (its
+    // index in `Picture.clips` plus 1; 0 for none).
+    group: u8
+    opacity: f64
+    clip: usize
+}
+
+/// A clip path: the union of the fills of `Picture.clip_shapes[start..end]`.
+pub struct ClipPath {
+    start: usize
+    end: usize
 }
 
 /// What an `svg` element draws, in the coordinates of its viewBox (or in
@@ -76,11 +100,22 @@ pub struct Picture {
     shapes: List(Shape)
     verbs: List(u8)
     coords: List(f64)
+    gradients: List(Gradient)
+    dashes: List(f64)
+    clips: List(ClipPath)
+    clip_shapes: List(Shape)
 
     pub fn deinit(self: *mut Self) {
         self.shapes.deinit()
         self.verbs.deinit()
         self.coords.deinit()
+        for g in self.gradients.items() {
+            self.alloc.free(g.stops)
+        }
+        self.gradients.deinit()
+        self.dashes.deinit()
+        self.clips.deinit()
+        self.clip_shapes.deinit()
     }
 
     /// The natural size of an SVG image: its `width` and `height`, a
@@ -153,8 +188,12 @@ pub fn build(alloc: Allocator, doc: *Document, styles: *css.Styles, root: NodeId
         shapes: List(Shape).init(alloc),
         verbs: List(u8).init(alloc),
         coords: List(f64).init(alloc),
+        gradients: List(Gradient).init(alloc),
+        dashes: List(f64).init(alloc),
+        clips: List(ClipPath).init(alloc),
+        clip_shapes: List(Shape).init(alloc),
     })
-    var b = Builder { doc: doc, styles: styles, pic: pic }
+    var b = Builder { doc: doc, styles: styles, pic: pic, clipping: false, clip_depth: 0 }
     let values = styles.get(root) orelse return pic
     var vw = 300.0
     var vh = 150.0
@@ -179,6 +218,8 @@ pub fn build(alloc: Allocator, doc: *Document, styles: *css.Styles, root: NodeId
         cap: 0,
         join: 0,
         miter_limit: 4.0,
+        dashes: Value.Keyword { k: "none" },
+        dash_offset: 0.0,
         visible: true,
         vw: vw,
         vh: vh,
@@ -329,6 +370,9 @@ struct Ctx {
     cap: u8
     join: u8
     miter_limit: f64
+    // `stroke-dasharray` (its computed value) and `stroke-dashoffset`.
+    dashes: Value
+    dash_offset: f64
     visible: bool
     // The size of the nearest viewport, for percentages.
     vw: f64
@@ -341,6 +385,9 @@ struct Builder {
     doc: *Document
     styles: *css.Styles
     pic: *mut Picture
+    // Building a clip path: shapes go to `clip_shapes`, filled opaque.
+    clipping: bool
+    clip_depth: usize
 
     // Takes into `ctx` the properties that the cascade set on the element
     // whose computed values are `values` (those that differ from its
@@ -398,6 +445,12 @@ struct Builder {
         if set(values, parent, css.VISIBILITY) {
             ctx.visible = text.eql(keywordOf(values[css.VISIBILITY]), "visible")
         }
+        if set(values, parent, css.STROKE_DASHARRAY) {
+            ctx.dashes = values[css.STROKE_DASHARRAY]
+        }
+        if set(values, parent, css.STROKE_DASHOFFSET) {
+            ctx.dash_offset = numberOf(values[css.STROKE_DASHOFFSET], 0.0)
+        }
         ctx.opacity *= math.clamp(numberOf(values[css.OPACITY], 1.0), 0.0, 1.0)
     }
 
@@ -411,7 +464,9 @@ struct Builder {
         }
     }
 
-    // Element `el` inside an element whose context is `outer`.
+    // Element `el` inside an element whose context is `outer`. A
+    // container with an `opacity` below 1, or an element with a clip path,
+    // is a group.
     fn element(self: *mut Self, el: NodeId, outer: Ctx) AllocError!void {
         let values = self.styles.get(el) orelse return
         if text.eql(keywordOf(values[css.DISPLAY]), "none") {
@@ -430,6 +485,87 @@ struct Builder {
         if self.doc.attr(el, "transform") |t| {
             ctx.m = mul(ctx.m, parseTransform(t))
         }
+        if self.clipping {
+            return self.content(el, name, ctx)
+        }
+        let own = math.clamp(numberOf(values[css.OPACITY], 1.0), 0.0, 1.0)
+        let container = isOneOf(name, "g a switch svg use")
+        let clip = try self.clipPathOf(el, ctx)
+        if !(container && own < 1.0) && clip == 0 {
+            return self.content(el, name, ctx)
+        }
+        if own <= 0.0 {
+            return
+        }
+        var opacity = 1.0
+        if container {
+            // The group's opacity, not each shape's.
+            ctx.opacity = outer.opacity
+            opacity = own
+        }
+        try self.mark(1, 1.0, 0)
+        try self.content(el, name, ctx)
+        return self.mark(2, opacity, clip)
+    }
+
+    // The start (1) or end (2) of a group.
+    fn mark(self: *mut Self, kind: u8, opacity: f64, clip: usize) AllocError!void {
+        let n = self.pic.verbs.len()
+        try self.pic.shapes.append(Shape {
+            verb_start: n,
+            verb_end: n,
+            coord_start: self.pic.coords.len(),
+            fill: NO_COLOR,
+            stroke: NO_COLOR,
+            stroke_width: 0.0,
+            evenodd: false,
+            cap: 0,
+            join: 0,
+            miter_limit: 4.0,
+            fill_grad: 0,
+            stroke_grad: 0,
+            dash_start: 0,
+            dash_end: 0,
+            dash_offset: 0.0,
+            group: kind,
+            opacity: opacity,
+            clip: clip,
+        })
+    }
+
+    // The clip path of `el` (its `clip-path` attribute: a `clipPath` in
+    // user space) as its index in `Picture.clips` plus 1; 0 for none.
+    fn clipPathOf(self: *mut Self, el: NodeId, ctx: Ctx) AllocError!usize {
+        let attr = self.doc.attr(el, "clip-path") orelse return 0
+        let target = idRef(self.doc, attr) orelse return 0
+        if !self.doc.isElement(target, "clippath") || self.clip_depth > 2 {
+            return 0
+        }
+        if self.doc.attr(target, "clippathunits") |u| {
+            if text.eql(text.trim(u), "objectBoundingBox") {
+                return 0
+            }
+        }
+        var cctx = ctx
+        if self.doc.attr(target, "transform") |t| {
+            cctx.m = mul(cctx.m, parseTransform(t))
+        }
+        let start = self.pic.clip_shapes.len()
+        self.clipping = true
+        self.clip_depth += 1
+        self.children(target, cctx) catch |e| {
+            self.clipping = false
+            self.clip_depth -= 1
+            return e
+        }
+        self.clipping = false
+        self.clip_depth -= 1
+        try self.pic.clips.append(ClipPath { start: start, end: self.pic.clip_shapes.len() })
+        return self.pic.clips.len()
+    }
+
+    // What element `el` draws, its context resolved.
+    fn content(self: *mut Self, el: NodeId, name: []u8, ctx: Ctx) AllocError!void {
         if text.eql(name, "g") || text.eql(name, "a") || text.eql(name, "switch") {
             return self.children(el, ctx)
         }
@@ -451,27 +587,96 @@ struct Builder {
         if self.pic.verbs.len() == start {
             return
         }
-        let fill = self.resolve(ctx.fill, ctx.color, ctx.fill_opacity * ctx.opacity)
-        var stroke = self.resolve(ctx.stroke, ctx.color, ctx.stroke_opacity * ctx.opacity)
-        let width = ctx.stroke_width * ctx.m.scale()
-        if width <= 0.0 {
-            stroke.a = 0
-        }
-        if fill.a == 0 && stroke.a == 0 {
-            return
-        }
-        try self.pic.shapes.append(Shape {
+        var shape = Shape {
             verb_start: start,
             verb_end: self.pic.verbs.len(),
             coord_start: coord_start,
-            fill: fill,
-            stroke: stroke,
-            stroke_width: width,
+            fill: NO_COLOR,
+            stroke: NO_COLOR,
+            stroke_width: 0.0,
             evenodd: ctx.evenodd,
             cap: ctx.cap,
             join: ctx.join,
             miter_limit: ctx.miter_limit,
-        })
+            fill_grad: 0,
+            stroke_grad: 0,
+            dash_start: 0,
+            dash_end: 0,
+            dash_offset: 0.0,
+            group: 0,
+            opacity: 1.0,
+            clip: 0,
+        }
+        if self.clipping {
+            shape.fill = Color { r: 255, g: 255, b: 255, a: 255 }
+            var rule: []u8 = ""
+            if self.doc.attr(el, "clip-rule") |r| {
+                rule = text.trim(r)
+            }
+            shape.evenodd = text.eql(rule, "evenodd")
+            return self.pic.clip_shapes.append(shape)
+        }
+        let fill = try self.resolve(ctx.fill, ctx, ctx.fill_opacity * ctx.opacity, coord_start)
+        var stroke = try self.resolve(ctx.stroke, ctx, ctx.stroke_opacity * ctx.opacity, coord_start)
+        let width = ctx.stroke_width * ctx.m.scale()
+        if width <= 0.0 {
+            stroke.c.a = 0
+        }
+        if fill.c.a == 0 && stroke.c.a == 0 {
+            return
+        }
+        shape.fill = fill.c
+        shape.fill_grad = fill.grad
+        shape.stroke = stroke.c
+        shape.stroke_grad = stroke.grad
+        shape.stroke_width = width
+        if stroke.c.a > 0 {
+            try self.dashes(&mut shape, ctx)
+        }
+        try self.pic.shapes.append(shape)
+    }
+
+    // The dash pattern of the context into `Picture.dashes` for `shape`
+    // (none when it is invalid or adds up to nothing).
+    fn dashes(self: *mut Self, shape: *mut Shape, ctx: Ctx) AllocError!void {
+        if text.eql(keywordOf(ctx.dashes), "none") {
+            return
+        }
+        let start = self.pic.dashes.len()
+        let k = ctx.m.scale()
+        if !(try css.readNumbers(ctx.dashes, &mut self.pic.dashes)) {
+            self.dropDashes(start)
+            return
+        }
+        var total = 0.0
+        let n = self.pic.dashes.len() - start
+        for i in start..start + n {
+            let d = self.pic.dashes.items()[i]
+            if d < 0.0 {
+                self.dropDashes(start)
+                return
+            }
+            self.pic.dashes.items()[i] = d * k
+            total += d
+        }
+        if total <= 0.0 {
+            self.dropDashes(start)
+            return
+        }
+        if n % 2 == 1 {
+            for i in start..start + n {
+                try self.pic.dashes.append(self.pic.dashes.items()[i])
+            }
+        }
+        shape.dash_start = start
+        shape.dash_end = self.pic.dashes.len()
+        shape.dash_offset = ctx.dash_offset * k
+    }
+
+    fn dropDashes(self: *mut Self, start: usize) {
+        while self.pic.dashes.len() > start {
+            _ = self.pic.dashes.pop()
+        }
     }
 
     // The path of a basic shape or `path` into `pen`; false for other
@@ -617,118 +822,115 @@ struct Builder {
         return self.element(target, ctx)
     }
 
-    // The color of a paint for an element whose `color` is `current`,
-    // with `opacity` applied (alpha 0: nothing).
-    fn resolve(self: *mut Self, p: Paint, current: Color, opacity: f64) Color {
-        var c = match p {
-            .None => NO_COLOR
-            .Solid { c } => c
-            .Current => current
-            .Ref { s } => self.referenced(s, current)
+    // The color (or gradient) of a paint for a shape whose points start
+    // at `coord_start`, in context `ctx`, with `opacity` applied (alpha 0:
+    // nothing).
+    fn resolve(self: *mut Self, p: Paint, ctx: Ctx, opacity: f64, coord_start: usize) AllocError!Painted {
+        var c = NO_COLOR
+        match p {
+            .None => {}
+            .Solid { c: k } => {
+                c = k
+            }
+            .Current => {
+                c = ctx.color
+            }
+            .Ref { s } => {
+                if gradientRef(self.doc, s) |g| {
+                    let k = try self.gradient(g, ctx, opacity, coord_start)
+                    if k > 0 {
+                        return Painted { c: Color { r: 0, g: 0, b: 0, a: 255 }, grad: k }
+                    }
+                    return Painted { c: NO_COLOR, grad: 0 }
+                }
+                c = fallback(s, ctx.color)
+            }
         }
         c.a = alpha(c.a as f64 / 255.0 * opacity)
-        return c
+        return Painted { c: c, grad: 0 }
     }
 
-    // The color of `url(#id) [fallback]` (the text `s`): a gradient's
-    // color halfway along it, or else the fallback color.
-    fn referenced(self: *mut Self, s: []u8, current: Color) Color {
-        var i: usize = 0
-        while i < s.len && s[i] != '#' {
-            i += 1
-        }
-        var end = i + 1
-        while end < s.len && s[end] != ' ' && s[end] != '"' && s[end] != '\'' && s[end] != ')' {
-            end += 1
-        }
-        if i < s.len && end > i + 1 {
-            if self.doc.getElementById(s[i + 1..end]) |g| {
-                if self.gradientColor(g, current, 0) |c| {
-                    return c
+    // The gradient element `g` for the shape whose points start at
+    // `coord_start`: its index in `Picture.gradients` plus 1; 0 when it
+    // paints nothing.
+    fn gradient(self: *mut Self, g: NodeId, ctx: Ctx, opacity: f64, coord_start: usize) AllocError!usize {
+        // The shape's box in user space (of its points, control points
+        // included).
+        var x0 = 0.0
+        var y0 = 0.0
+        var x1 = 0.0
+        var y1 = 0.0
+        if invert(ctx.m) |inv| {
+            let co = self.pic.coords.items()
+            var i = coord_start
+            while i + 1 < co.len {
+                let x = inv.mapX(co[i], co[i + 1])
+                let y = inv.mapY(co[i], co[i + 1])
+                if i == coord_start || x < x0 {
+                    x0 = x
                 }
+                if i == coord_start || x > x1 {
+                    x1 = x
+                }
+                if i == coord_start || y < y0 {
+                    y0 = y
+                }
+                if i == coord_start || y > y1 {
+                    y1 = y
+                }
+                i += 2
             }
         }
-        // The fallback after the reference.
-        var rest = s[math.minOf(usize, end, s.len)..]
-        if rest.len > 0 && rest[0] == ')' {
-            rest = rest[1..]
-        }
-        rest = text.trim(rest)
-        if text.eql(rest, "currentcolor") || text.eql(rest, "currentColor") {
-            return current
-        }
-        return NO_COLOR
-    }
-
-    // The color halfway along the gradient `g` (its stops, or those of
-    // the gradient its `href` names).
-    fn gradientColor(self: *mut Self, g: NodeId, current: Color, depth: usize) ?Color {
-        if !self.doc.isElement(g, "lineargradient") && !self.doc.isElement(g, "radialgradient") {
-            return null
-        }
-        var below = NO_COLOR
-        var below_at = -1.0
-        var above = NO_COLOR
-        var above_at = 2.0
-        var any = false
-        var cur = self.doc.firstChild(g)
-        while cur |c| {
-            if self.doc.isElement(c, "stop") {
-                if self.styles.get(c) |values| {
-                    var color = colorOf(values[css.STOP_COLOR], colorOf(values[css.COLOR], current))
-                    color.a = alpha(color.a as f64 / 255.0 * math.clamp(numberOf(values[css.STOP_OPACITY], 1.0), 0.0, 1.0))
-                    var at = 0.0
-                    if self.doc.attr(c, "offset") |o| {
-                        at = lengthOf(o, 1.0) orelse 0.0
-                    }
-                    any = true
-                    if at <= 0.5 && at >= below_at {
-                        below = color
-                        below_at = at
-                    }
-                    if at >= 0.5 && at < above_at {
-                        above = color
-                        above_at = at
-                    }
-                }
-            }
-            cur = self.doc.nextSibling(c)
-        }
-        if !any {
-            if depth < 4 {
-                var href = self.doc.attr(g, "href") orelse ""
-                if href.len == 0 {
-                    href = self.doc.attr(g, "xlink:href") orelse ""
-                }
-                if href.len > 1 && href[0] == '#' {
-                    if self.doc.getElementById(href[1..]) |next| {
-                        return self.gradientColor(next, current, depth + 1)
-                    }
-                }
-            }
-            return null
-        }
-        if below_at < 0.0 {
-            return above
-        }
-        if above_at > 1.5 {
-            return below
-        }
-        if above_at <= below_at {
-            return below
-        }
-        let t = (0.5 - below_at) / (above_at - below_at)
-        return Color {
-            r: lerp(below.r, above.r, t),
-            g: lerp(below.g, above.g, t),
-            b: lerp(below.b, above.b, t),
-            a: lerp(below.a, above.a, t),
-        }
+        let made = try gradientOf(self.pic.alloc, self.doc, self.styles, g, ctx.m, x0, y0, x1 - x0, y1 - y0, ctx.vw, ctx.vh, opacity, ctx.color)
+        let grad = made orelse return 0
+        try self.pic.gradients.append(grad)
+        return self.pic.gradients.len()
     }
 }
 
-fn lerp(a: u8, b: u8, t: f64) u8 {
-    return math.floor(a as f64 + (b as f64 - a as f64) * t + 0.5) as u8
+// A paint resolved: a color, or a gradient (`grad` > 0) whose stops have
+// the opacity.
+struct Painted {
+    c: Color
+    grad: usize
+}
+
+// The fallback of a paint `url(#id) fallback` (the text `s`, maybe
+// without `url(`) that refers to no gradient: `currentColor` (`current`),
+// or nothing.
+fn fallback(s: []u8, current: Color) Color {
+    var end: usize = 0
+    while end < s.len && s[end] != '#' {
+        end += 1
+    }
+    while end < s.len && s[end] != ' ' && s[end] != ')' {
+        end += 1
+    }
+    var rest = s[end..]
+    if rest.len > 0 && rest[0] == ')' {
+        rest = rest[1..]
+    }
+    rest = text.trim(rest)
+    if text.eql(rest, "currentcolor") || text.eql(rest, "currentColor") {
+        return current
+    }
+    return NO_COLOR
+}
+
+// The element that `url(#id)` (or `#id`) in `s` names.
+fn idRef(doc: *Document, s: []u8) ?NodeId {
+    var i: usize = 0
+    while i < s.len && s[i] != '#' {
+        i += 1
+    }
+    var end = i + 1
+    while end < s.len && s[end] != ' ' && s[end] != '"' && s[end] != '\'' && s[end] != ')' {
+        end += 1
+    }
+    if i >= s.len || end <= i + 1 {
+        return null
+    }
+    return doc.getElementById(s[i + 1..end])
 }
 
 // Is the property `p` set on the element itself (not inherited)?

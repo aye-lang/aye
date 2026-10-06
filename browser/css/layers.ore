@@ -1,0 +1,1213 @@
+// Layered values: backgrounds (`background-image` to
+// `background-attachment` and the `background` shorthand), masks
+// (`mask-image` to `mask-repeat`, `mask`), corner radii (the four
+// `border-*-radius` and `border-radius`), `box-shadow` and
+// `stroke-dasharray`. Their values are kept as text (`PKind.Layers`):
+// components separated by a space and layers by ", ", with lengths in px
+// (relative units and math functions are resolved at computed-value time,
+// so a declaration with one is kept as tokens until then, as with
+// `var()`) and URLs as `url("...")` (absolute when the sheet had a base
+// URL: parser.ore). Paint reads them back with `readLayers` and the
+// `read...` functions below. `-webkit-` names of these properties are
+// aliases.
+
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+// ---- writing
+
+/// The longhand or shorthand that the `-webkit-` property `name` (lower
+/// case) is an alias of; `name` when it is not one.
+pub fn unprefixed(name: []u8) []u8 {
+    if !text.startsWith(name, "-webkit-") {
+        return name
+    }
+    let rest = name[8..]
+    if inList(rest, "mask mask-image mask-position mask-size mask-repeat border-radius border-top-left-radius border-top-right-radius border-bottom-right-radius border-bottom-left-radius box-shadow background-size background-clip background-origin") != null {
+        return rest
+    }
+    return name
+}
+
+/// Is `prop` a layered property or shorthand whose tokens `toks` have a
+/// relative length, so that it must be parsed at computed-value time?
+pub fn layersNeedComputing(prop: []u8, toks: []Token) bool {
+    var relative = false
+    for t in toks {
+        if t.kind == Tok.Dimension && inList(t.text, "em rem ex ch vw vh vmin vmax") != null {
+            relative = true
+            break
+        }
+    }
+    if !relative {
+        return false
+    }
+    if propertyIndex(prop) |p| {
+        return PROPERTIES[p].kind == PKind.Layers
+    }
+    return inList(prop, "background mask border-radius") != null
+}
+
+/// The value of the layered longhand `prop` from `comps`: one of its
+/// keywords, or its text; null when it is invalid.
+pub fn layersValue(sheet: *mut Sheet, prop: usize, comps: []Comp) AllocError!?Value {
+    let p = PROPERTIES[prop]
+    if comps.len == 1 && comps[0].toks.len == 1 && comps[0].toks[0].kind == Tok.Ident {
+        if inList(comps[0].toks[0].text, p.keywords) |k| {
+            return Value.Keyword { k: k }
+        }
+    }
+    if prop == BACKGROUND_IMAGE || prop == MASK_IMAGE {
+        var n: usize = 0
+        for c in comps {
+            if isComma(c) {
+                if n != 1 {
+                    return null
+                }
+                n = 0
+                continue
+            }
+            if !isIdent(c, "none") && !isImage(c) {
+                return null
+            }
+            n += 1
+        }
+        if n != 1 {
+            return null
+        }
+    }
+    var out = text.Builder.init(sheet.arena.allocator())
+    if !(try writeComps(comps, &mut out)) {
+        return null
+    }
+    return Value.Keyword { k: try out.toOwned() }
+}
+
+// Is `c` an image: `url()`, a gradient, or `image-set()`?
+fn isImage(c: Comp) bool {
+    let t = c.toks[0]
+    if t.kind == Tok.Url {
+        return true
+    }
+    if t.kind != Tok.Function {
+        return false
+    }
+    var name = t.text
+    if text.startsWith(name, "-webkit-") {
+        name = name[8..]
+    }
+    return inList(name, "url linear-gradient radial-gradient conic-gradient repeating-linear-gradient repeating-radial-gradient repeating-conic-gradient image-set") != null
+}
+
+fn isComma(c: Comp) bool {
+    return c.toks.len == 1 && c.toks[0].kind == Tok.Comma
+}
+
+// Writes `comps`: a space between components, ", " between layers.
+// False when a math function is invalid.
+fn writeComps(comps: []Comp, out: *mut text.Builder) AllocError!bool {
+    for k, c in comps {
+        if isComma(c) {
+            try out.appendByte(',')
+            continue
+        }
+        if k > 0 {
+            try out.appendByte(' ')
+        }
+        if !(try writeComp(c, out)) {
+            return false
+        }
+    }
+    return true
+}
+
+// One component: a length in px, a URL as `url("...")`, a function with
+// its arguments written the same way, other tokens as they are.
+fn writeComp(c: Comp, out: *mut text.Builder) AllocError!bool {
+    let t = c.toks[0]
+    if isMathFunction(t) {
+        let v = calcValue(c.toks) orelse return false
+        try writeLength(v, out)
+        return true
+    }
+    if t.kind == Tok.Dimension && c.toks.len == 1 {
+        if lengthValue(c, true, false) |v| {
+            try writeLength(v, out)
+            return true
+        }
+    }
+    if t.kind == Tok.Url {
+        try writeUrl(t.text, out)
+        return true
+    }
+    if t.kind == Tok.Function {
+        let inner = argsOf(c.toks)
+        if text.eqlIgnoreCase(t.text, "url") {
+            let i = skipWhitespace(inner, 0)
+            if i < inner.len && inner[i].kind == Tok.String {
+                try writeUrl(inner[i].text, out)
+                return true
+            }
+        }
+        try out.append(t.text)
+        try out.appendByte('(')
+        var args = List(Comp).init(out.alloc)
+        defer args.deinit()
+        try splitComps(inner, &mut args)
+        let ok = try writeComps(args.items(), out)
+        try out.appendByte(')')
+        return ok
+    }
+    for tk in c.toks {
+        try writeToken(tk, out)
+    }
+    return true
+}
+
+// The tokens inside a function or block (without its first and closing
+// tokens).
+fn argsOf(toks: []Token) []Token {
+    var end = toks.len
+    if end > 1 && toks[end - 1].kind == Tok.RParen {
+        end -= 1
+    }
+    return toks[1..end]
+}
+
+fn writeUrl(s: []u8, out: *mut text.Builder) AllocError!void {
+    try out.append("url(\"")
+    try out.append(s)
+    try out.append("\")")
+}
+
+// A length (relative units resolved with the calc context) as `Npx`,
+// `N%`, `N` or `calc(N% + Mpx)`.
+fn writeLength(v: Value, out: *mut text.Builder) AllocError!void {
+    var px = 0.0
+    match v {
+        .Px { v: n } => {
+            px = n
+        }
+        .Em { v: n } => {
+            px = n * calc_ctx.em
+        }
+        .Rem { v: n } => {
+            px = n * calc_ctx.rem
+        }
+        .Vw { v: n } => {
+            px = n * calc_ctx.vw
+        }
+        .Vh { v: n } => {
+            px = n * calc_ctx.vh
+        }
+        .Percent { v: n } => {
+            try writeNumber(n, out)
+            try out.appendByte('%')
+            return
+        }
+        .Number { v: n } => {
+            try writeNumber(n, out)
+            return
+        }
+        .Calc { pct, px: p } => {
+            try out.append("calc(")
+            try writeNumber(pct, out)
+            try out.append("% + ")
+            try writeNumber(p, out)
+            try out.append("px)")
+            return
+        }
+        _ => {}
+    }
+    try writeNumber(px, out)
+    try out.append("px")
+}
+
+// The component values of `toks` into `out`, without whitespace.
+fn splitComps(toks: []Token, out: *mut List(Comp)) AllocError!void {
+    var i = skipWhitespace(toks, 0)
+    while i < toks.len {
+        let j = skipComponent(toks, i)
+        try out.append(Comp { toks: toks[i..j] })
+        i = skipWhitespace(toks, j)
+    }
+}
+
+// ---- shorthands
+
+// The parts of one layer of `background` or `mask`, as ranges of its
+// components (`a..b` empty when missing).
+struct LayerParts {
+    image: ?Comp
+    pos_a: usize
+    pos_b: usize
+    size_a: usize
+    size_b: usize
+    rep_a: usize
+    rep_b: usize
+    attach: ?Comp
+    box1: ?Comp
+    box2: ?Comp
+    color: ?Value
+}
+
+// Is `c` a part of a position: a side keyword or a length?
+fn isPositionPart(c: Comp) bool {
+    if c.toks[0].kind == Tok.Ident && c.toks.len == 1 {
+        return inList(c.toks[0].text, "left right top bottom center") != null
+    }
+    return isLength(c)
+}
+
+fn isLength(c: Comp) bool {
+    let t = c.toks[0]
+    if isMathFunction(t) {
+        return true
+    }
+    if c.toks.len != 1 {
+        return false
+    }
+    return t.kind == Tok.Percentage || (t.kind == Tok.Number && t.num == 0.0) || (t.kind == Tok.Dimension && lengthValue(c, true, false) != null)
+}
+
+// The parts of the layer `comps`; null when it is invalid. `mask`: a
+// layer of `mask` (no color or attachment; modes and compositing
+// operators are skipped).
+fn layerParts(comps: []Comp, mask: bool) ?LayerParts {
+    var lp = LayerParts { image: null, pos_a: 0, pos_b: 0, size_a: 0, size_b: 0, rep_a: 0, rep_b: 0, attach: null, box1: null, box2: null, color: null }
+    var i: usize = 0
+    while i < comps.len {
+        let c = comps[i]
+        if isImage(c) || isIdent(c, "none") {
+            if lp.image != null {
+                return null
+            }
+            lp.image = c
+            i += 1
+            continue
+        }
+        if isPositionPart(c) {
+            if lp.pos_b > lp.pos_a {
+                return null
+            }
+            lp.pos_a = i
+            while i < comps.len && isPositionPart(comps[i]) {
+                i += 1
+            }
+            lp.pos_b = i
+            if i < comps.len && isDelim(comps[i], '/') {
+                i += 1
+                lp.size_a = i
+                while i < comps.len && i < lp.size_a + 2 && (isLength(comps[i]) || isIdent(comps[i], "auto") || isIdent(comps[i], "cover") || isIdent(comps[i], "contain")) {
+                    i += 1
+                }
+                lp.size_b = i
+                if lp.size_b == lp.size_a {
+                    return null
+                }
+            }
+            continue
+        }
+        if c.toks.len == 1 && c.toks[0].kind == Tok.Ident {
+            let w = c.toks[0].text
+            if inList(w, "repeat no-repeat repeat-x repeat-y space round") != null {
+                if lp.rep_b > lp.rep_a {
+                    return null
+                }
+                lp.rep_a = i
+                i += 1
+                if inList(w, "repeat-x repeat-y") == null && i < comps.len && comps[i].toks[0].kind == Tok.Ident && inList(comps[i].toks[0].text, "repeat no-repeat space round") != null {
+                    i += 1
+                }
+                lp.rep_b = i
+                continue
+            }
+            if !mask && inList(w, "scroll fixed local") != null {
+                lp.attach = c
+                i += 1
+                continue
+            }
+            if inList(w, "border-box padding-box content-box text fill-box stroke-box view-box no-clip") != null {
+                if lp.box1 == null {
+                    lp.box1 = c
+                } else if lp.box2 == null {
+                    lp.box2 = c
+                } else {
+                    return null
+                }
+                i += 1
+                continue
+            }
+            if mask && inList(w, "alpha luminance match-source add subtract intersect exclude") != null {
+                i += 1
+                continue
+            }
+        }
+        if !mask {
+            if colorValue(c) |v| {
+                if lp.color != null {
+                    return null
+                }
+                lp.color = v
+                i += 1
+                continue
+            }
+        }
+        return null
+    }
+    return lp
+}
+
+// Writes `comps[a..b]`, or `dflt` when it is empty.
+fn writePart(comps: []Comp, a: usize, b: usize, dflt: []u8, out: *mut text.Builder) AllocError!bool {
+    if b <= a {
+        try out.append(dflt)
+        return true
+    }
+    return writeComps(comps[a..b], out)
+}
+
+fn writeOne(c: ?Comp, dflt: []u8, out: *mut text.Builder) AllocError!bool {
+    if c |one| {
+        return writeComp(one, out)
+    }
+    try out.append(dflt)
+    return true
+}
+
+/// `background` (`mask` when `mask`): its layers into the longhands
+/// (`background-color` from the last layer only). Invalid: nothing.
+fn layeredShorthand(d: *mut Declarer, comps: []Comp, mask: bool) AllocError!void {
+    var first = BACKGROUND_IMAGE
+    var count: usize = 7
+    if mask {
+        first = MASK_IMAGE
+        count = 4
+    }
+    var all = [8]usize{BACKGROUND_COLOR, first, first + 1, first + 2, first + 3, first + 4, first + 5, first + 6}
+    if mask {
+        if try d.wide(comps, all[1..5]) {
+            return
+        }
+    } else if try d.wide(comps, all[..]) {
+        return
+    }
+    if comps.len == 0 {
+        return
+    }
+    let a = d.sheet.arena.allocator()
+    var image = text.Builder.init(a)
+    var pos = text.Builder.init(a)
+    var size = text.Builder.init(a)
+    var rep = text.Builder.init(a)
+    var origin = text.Builder.init(a)
+    var clip = text.Builder.init(a)
+    var attach = text.Builder.init(a)
+    var color = Value.Initial
+    var start: usize = 0
+    var k: usize = 0
+    while k <= comps.len {
+        if k < comps.len && !isComma(comps[k]) {
+            k += 1
+            continue
+        }
+        let layer = comps[start..k]
+        let last = k == comps.len
+        let lp = layerParts(layer, mask) orelse return
+        if lp.color != null && !last {
+            return
+        }
+        if lp.color |cv| {
+            color = cv
+        }
+        if start > 0 {
+            try image.append(", ")
+            try pos.append(", ")
+            try size.append(", ")
+            try rep.append(", ")
+            try origin.append(", ")
+            try clip.append(", ")
+            try attach.append(", ")
+        }
+        var ok = try writeOne(lp.image, "none", &mut image)
+        ok = ok && (try writePart(layer, lp.pos_a, lp.pos_b, "0% 0%", &mut pos))
+        ok = ok && (try writePart(layer, lp.size_a, lp.size_b, "auto", &mut size))
+        ok = ok && (try writePart(layer, lp.rep_a, lp.rep_b, "repeat", &mut rep))
+        var origin_box = lp.box1
+        var clip_box = lp.box2
+        if clip_box == null {
+            clip_box = lp.box1
+        }
+        var dflt_origin = "padding-box"
+        if mask {
+            dflt_origin = "border-box"
+        }
+        ok = ok && (try writeOne(origin_box, dflt_origin, &mut origin))
+        ok = ok && (try writeOne(clip_box, "border-box", &mut clip))
+        ok = ok && (try writeOne(lp.attach, "scroll", &mut attach))
+        if !ok {
+            return
+        }
+        start = k + 1
+        k += 1
+    }
+    if !mask {
+        try d.add(BACKGROUND_COLOR, color)
+    }
+    try d.add(first, Value.Keyword { k: try image.toOwned() })
+    try d.add(first + 1, Value.Keyword { k: try pos.toOwned() })
+    try d.add(first + 2, Value.Keyword { k: try size.toOwned() })
+    try d.add(first + 3, Value.Keyword { k: try rep.toOwned() })
+    if !mask {
+        try d.add(BACKGROUND_ORIGIN, Value.Keyword { k: try origin.toOwned() })
+        try d.add(BACKGROUND_CLIP, Value.Keyword { k: try clip.toOwned() })
+        try d.add(BACKGROUND_ATTACHMENT, Value.Keyword { k: try attach.toOwned() })
+    }
+}
+
+/// `border-radius`: 1 to 4 horizontal radii, then maybe `/` and 1 to 4
+/// vertical ones, for the corners from the top left clockwise.
+fn borderRadius(d: *mut Declarer, comps: []Comp) AllocError!void {
+    let all = [4]usize{BORDER_TOP_LEFT_RADIUS, BORDER_TOP_LEFT_RADIUS + 1, BORDER_TOP_LEFT_RADIUS + 2, BORDER_TOP_LEFT_RADIUS + 3}
+    if try d.wide(comps, all[..]) {
+        return
+    }
+    var slash = comps.len
+    for k, c in comps {
+        if isDelim(c, '/') {
+            slash = k
+        }
+    }
+    let h = comps[..slash]
+    var v = h
+    if slash < comps.len {
+        v = comps[slash + 1..]
+    }
+    if h.len == 0 || h.len > 4 || v.len == 0 || v.len > 4 {
+        return
+    }
+    for c in comps {
+        if !isDelim(c, '/') && !isLength(c) {
+            return
+        }
+    }
+    for corner in 0..4 {
+        var out = text.Builder.init(d.sheet.arena.allocator())
+        if !(try writeComp(h[cornerIndex(corner, h.len)], &mut out)) {
+            return
+        }
+        if slash < comps.len {
+            try out.appendByte(' ')
+            if !(try writeComp(v[cornerIndex(corner, v.len)], &mut out)) {
+                return
+            }
+        }
+        try d.add(BORDER_TOP_LEFT_RADIUS + corner, Value.Keyword { k: try out.toOwned() })
+    }
+}
+
+// Which of `n` values (1 to 4) goes to corner (or side) `k`.
+fn cornerIndex(k: usize, n: usize) usize {
+    if n == 1 {
+        return 0
+    }
+    if n == 2 {
+        return k % 2
+    }
+    if n == 3 && k == 3 {
+        return 1
+    }
+    return k
+}
+
+// ---- reading (paint)
+
+/// A length of `px` plus `pct` percent of a reference length.
+pub struct LenPct {
+    px: f64
+    pct: f64
+
+    pub fn of(self: Self, ref: f64) f64 {
+        return self.px + self.pct * ref / 100.0
+    }
+}
+
+/// The layers of the layered value `v` (its components, a list per
+/// layer), tokenized with `alloc` (an arena: nothing is freed). None
+/// for a keyword that is not a layer of its own (`none`).
+pub fn readLayers(alloc: Allocator, v: Value, out: *mut List([]Comp)) AllocError!void {
+    let s = match v {
+        .Keyword { k } => k
+        _ => ""
+    }
+    if s.len == 0 || text.eql(s, "none") {
+        return
+    }
+    var toks = List(Token).init(alloc)
+    try tokenize(alloc, s, &mut toks)
+    var comps = List(Comp).init(alloc)
+    try splitComps(toks.items(), &mut comps)
+    let all = comps.items()
+    var start: usize = 0
+    for k in 0..all.len + 1 {
+        if k == all.len || isComma(all[k]) {
+            try out.append(all[start..k])
+            start = k + 1
+        }
+    }
+}
+
+/// The URL of an image (`url()`, or the first one of `image-set()`).
+pub fn imageUrl(c: Comp) ?[]u8 {
+    let t = c.toks[0]
+    if t.kind == Tok.Url {
+        return t.text
+    }
+    if t.kind != Tok.Function {
+        return null
+    }
+    if text.eqlIgnoreCase(t.text, "url") {
+        for tk in c.toks {
+            if tk.kind == Tok.String {
+                return tk.text
+            }
+        }
+        return null
+    }
+    if text.endsWith(t.text, "image-set") {
+        for i in 1..c.toks.len {
+            let tk = c.toks[i]
+            if tk.kind == Tok.Url || tk.kind == Tok.String {
+                return tk.text
+            }
+            if tk.kind == Tok.Function && text.eqlIgnoreCase(tk.text, "url") {
+                return imageUrl(Comp { toks: c.toks[i..skipComponent(c.toks, i)] })
+            }
+        }
+    }
+    return null
+}
+
+/// The URLs in the layered value `v` (images of every layer) into `out`.
+pub fn layerUrls(alloc: Allocator, v: Value, out: *mut List([]u8)) AllocError!void {
+    let s = match v {
+        .Keyword { k } => k
+        _ => ""
+    }
+    if text.indexOf(s, "url(") == null {
+        return
+    }
+    var layers = List([]Comp).init(alloc)
+    defer layers.deinit()
+    try readLayers(alloc, v, &mut layers)
+    for l in layers.items() {
+        if l.len > 0 {
+            if imageUrl(l[0]) |u| {
+                try out.append(u)
+            }
+        }
+    }
+}
+
+/// A length or percentage component; null when it is not one.
+pub fn lenPctOf(c: Comp) ?LenPct {
+    let t = c.toks[0]
+    if isMathFunction(t) {
+        let v = calcValue(c.toks) orelse return null
+        return match v {
+            .Px { v: n } => LenPct { px: n, pct: 0.0 }
+            .Percent { v: n } => LenPct { px: 0.0, pct: n }
+            .Calc { pct, px } => LenPct { px: px, pct: pct }
+            .Number { v: n } => LenPct { px: n, pct: 0.0 }
+            _ => null
+        }
+    }
+    if c.toks.len != 1 {
+        return null
+    }
+    if t.kind == Tok.Percentage {
+        return LenPct { px: 0.0, pct: t.num }
+    }
+    if t.kind == Tok.Number {
+        return LenPct { px: t.num, pct: 0.0 }
+    }
+    if t.kind == Tok.Dimension {
+        if absoluteLength(t.num, t.text) |px| {
+            return LenPct { px: px, pct: 0.0 }
+        }
+        if text.eqlIgnoreCase(t.text, "em") || text.eqlIgnoreCase(t.text, "rem") {
+            return LenPct { px: t.num * 16.0, pct: 0.0 }
+        }
+    }
+    return null
+}
+
+/// A position: the offsets of a point from the left and the top.
+pub struct Position {
+    x: LenPct
+    y: LenPct
+}
+
+let CENTER = LenPct { px: 0.0, pct: 50.0 }
+
+/// A position from its 1 to 4 components (`background-position`, `at`
+/// of a gradient); the center when there are none.
+pub fn readPosition(comps: []Comp) Position {
+    var p = Position { x: CENTER, y: CENTER }
+    if comps.len == 0 {
+        return p
+    }
+    if comps.len <= 2 {
+        let a = comps[0]
+        var b: ?Comp = null
+        if comps.len == 2 {
+            b = comps[1]
+        }
+        // The vertical one first (`top left`, `bottom 10px`...)?
+        var swap = isIdent(a, "top") || isIdent(a, "bottom")
+        if b |second| {
+            swap = swap || isIdent(second, "left") || isIdent(second, "right")
+            if isIdent(a, "center") && (isIdent(second, "left") || isIdent(second, "right")) {
+                swap = true
+            }
+        }
+        if swap {
+            p.y = sideOffset(a, null)
+            if b |second| {
+                p.x = sideOffset(second, null)
+            }
+        } else {
+            p.x = sideOffset(a, null)
+            if b |second| {
+                p.y = sideOffset(second, null)
+            }
+        }
+        return p
+    }
+    // Keywords, each maybe followed by an offset.
+    var i: usize = 0
+    while i < comps.len {
+        let kw = comps[i]
+        var off: ?Comp = null
+        if i + 1 < comps.len && isLength(comps[i + 1]) {
+            off = comps[i + 1]
+            i += 1
+        }
+        i += 1
+        let v = sideOffset(kw, off)
+        if isIdent(kw, "top") || isIdent(kw, "bottom") {
+            p.y = v
+        } else if isIdent(kw, "left") || isIdent(kw, "right") {
+            p.x = v
+        }
+    }
+    return p
+}
+
+// A side keyword (or a length) with an offset from that side.
+fn sideOffset(c: Comp, off: ?Comp) LenPct {
+    var o = LenPct { px: 0.0, pct: 0.0 }
+    if off |oc| {
+        o = lenPctOf(oc) orelse o
+    }
+    if isIdent(c, "left") || isIdent(c, "top") {
+        return o
+    }
+    if isIdent(c, "right") || isIdent(c, "bottom") {
+        return LenPct { px: -o.px, pct: 100.0 - o.pct }
+    }
+    if isIdent(c, "center") {
+        return CENTER
+    }
+    return lenPctOf(c) orelse LenPct { px: 0.0, pct: 0.0 }
+}
+
+/// `background-size`: `cover` (kind 1), `contain` (2), or a width and a
+/// height (kind 0; null: `auto`).
+pub struct BgSize {
+    kind: u8
+    w: ?LenPct
+    h: ?LenPct
+}
+
+pub fn readSize(comps: []Comp) BgSize {
+    var s = BgSize { kind: 0, w: null, h: null }
+    if comps.len == 0 {
+        return s
+    }
+    if isIdent(comps[0], "cover") {
+        s.kind = 1
+        return s
+    }
+    if isIdent(comps[0], "contain") {
+        s.kind = 2
+        return s
+    }
+    s.w = lenPctOf(comps[0])
+    if comps.len > 1 {
+        s.h = lenPctOf(comps[1])
+    }
+    return s
+}
+
+/// Repetition along one axis.
+pub let REPEAT: u8 = 0
+pub let NO_REPEAT: u8 = 1
+pub let SPACE: u8 = 2
+pub let ROUND: u8 = 3
+
+/// `background-repeat`: along x and along y.
+pub fn readRepeat(comps: []Comp) [2]u8 {
+    var r = [2]u8{REPEAT, REPEAT}
+    if comps.len == 0 {
+        return r
+    }
+    if isIdent(comps[0], "repeat-x") {
+        r[1] = NO_REPEAT
+        return r
+    }
+    if isIdent(comps[0], "repeat-y") {
+        r[0] = NO_REPEAT
+        return r
+    }
+    r[0] = repeatOf(comps[0])
+    r[1] = r[0]
+    if comps.len > 1 {
+        r[1] = repeatOf(comps[1])
+    }
+    return r
+}
+
+fn repeatOf(c: Comp) u8 {
+    if isIdent(c, "no-repeat") {
+        return NO_REPEAT
+    }
+    if isIdent(c, "space") {
+        return SPACE
+    }
+    if isIdent(c, "round") {
+        return ROUND
+    }
+    return REPEAT
+}
+
+/// A box of `background-origin`/`-clip`: 0 the border box, 1 the
+/// padding box, 2 the content box, 3 `text`.
+pub fn readBox(comps: []Comp, dflt: u8) u8 {
+    if comps.len == 0 {
+        return dflt
+    }
+    if isIdent(comps[0], "border-box") {
+        return 0
+    }
+    if isIdent(comps[0], "padding-box") {
+        return 1
+    }
+    if isIdent(comps[0], "content-box") {
+        return 2
+    }
+    if isIdent(comps[0], "text") {
+        return 3
+    }
+    return dflt
+}
+
+/// A corner radius (`border-*-radius`): horizontal and vertical.
+pub fn readRadius(v: Value) [2]LenPct {
+    let zero = LenPct { px: 0.0, pct: 0.0 }
+    var r = [2]LenPct{zero, zero}
+    let s = match v {
+        .Keyword { k } => k
+        _ => ""
+    }
+    if s.len == 0 || text.eql(s, "0px") {
+        return r
+    }
+    var words = text.split(s, " ")
+    var n: usize = 0
+    while words.next() |w| {
+        if n < 2 {
+            r[n] = lenPctText(w) orelse zero
+        }
+        n += 1
+    }
+    if n == 1 {
+        r[1] = r[0]
+    }
+    return r
+}
+
+// A length written by `writeLength` (`Npx`, `N%` or `N`).
+fn lenPctText(w: []u8) ?LenPct {
+    var num = w
+    var pct = false
+    if text.endsWith(w, "px") {
+        num = w[..w.len - 2]
+    } else if text.endsWith(w, "%") {
+        num = w[..w.len - 1]
+        pct = true
+    }
+    let n = text.parseFloat(num) catch |e| {
+        return null
+    }
+    if pct {
+        return LenPct { px: 0.0, pct: n }
+    }
+    return LenPct { px: n, pct: 0.0 }
+}
+
+/// A shadow of `box-shadow`.
+pub struct Shadow {
+    inset: bool
+    x: f64
+    y: f64
+    blur: f64
+    spread: f64
+    // `Rgba`, or `CurrentColor`.
+    color: Value
+}
+
+/// A layer of `box-shadow`; null when it is invalid.
+pub fn readShadow(comps: []Comp) ?Shadow {
+    var s = Shadow { inset: false, x: 0.0, y: 0.0, blur: 0.0, spread: 0.0, color: Value.CurrentColor }
+    var lens = [4]f64{0.0, 0.0, 0.0, 0.0}
+    var n: usize = 0
+    for c in comps {
+        if isIdent(c, "inset") {
+            s.inset = true
+        } else if lenPctOf(c) |l| {
+            if n >= 4 {
+                return null
+            }
+            lens[n] = l.px
+            n += 1
+        } else if colorValue(c) |v| {
+            s.color = v
+        } else {
+            return null
+        }
+    }
+    if n < 2 {
+        return null
+    }
+    s.x = lens[0]
+    s.y = lens[1]
+    s.blur = lens[2]
+    if s.blur < 0.0 {
+        s.blur = 0.0
+    }
+    s.spread = lens[3]
+    return s
+}
+
+/// The numbers of a list like `stroke-dasharray` (lengths in px) into
+/// `out`; false when one is not a number.
+pub fn readNumbers(v: Value, out: *mut List(f64)) AllocError!bool {
+    let s = match v {
+        .Keyword { k } => k
+        _ => ""
+    }
+    var words = text.split(s, " ")
+    while words.next() |w0| {
+        var w = w0
+        if text.endsWith(w, ",") {
+            w = w[..w.len - 1]
+        }
+        if w.len == 0 {
+            continue
+        }
+        let l = lenPctText(w) orelse return false
+        try out.append(l.px + l.pct)
+    }
+    return true
+}
+
+// ---- gradients
+
+/// A color stop: `color` (`Rgba` or `CurrentColor`) at `pos` (null: to
+/// be placed between its neighbours). For a conic gradient, a position
+/// in degrees is a percentage of the turn.
+pub struct Stop {
+    color: Value
+    pos: ?LenPct
+}
+
+/// A CSS gradient, before it is sized: `kind` 0 linear, 1 radial, 2
+/// conic.
+pub struct Gradient {
+    kind: u8
+    repeating: bool
+    // Linear: the direction in degrees (0 to the top, clockwise), or
+    // towards a corner (`corner`; `cx`, `cy` -1 for left/top, 1 for
+    // right/bottom).
+    angle: f64
+    corner: bool
+    cx: f64
+    cy: f64
+    // Radial: a circle (else an ellipse) and its extent: 0
+    // farthest-corner, 1 closest-side, 2 closest-corner, 3 farthest-side,
+    // 4 the radii `rx` and `ry`.
+    circle: bool
+    extent: u8
+    rx: LenPct
+    ry: LenPct
+    // Radial and conic: the center. Conic: the angle it starts from.
+    at: Position
+    from: f64
+    stops: List(Stop)
+}
+
+/// The gradient of an image component; null when it is not one or is
+/// invalid. Allocates with `alloc` (an arena).
+pub fn readGradient(alloc: Allocator, c: Comp) AllocError!?Gradient {
+    let t = c.toks[0]
+    if t.kind != Tok.Function {
+        return null
+    }
+    var name = t.text
+    var legacy = false
+    if text.startsWith(name, "-webkit-") {
+        name = name[8..]
+        legacy = true
+    }
+    var g = Gradient {
+        kind: 0,
+        repeating: false,
+        angle: 180.0,
+        corner: false,
+        cx: 0.0,
+        cy: 0.0,
+        circle: false,
+        extent: 0,
+        rx: LenPct { px: 0.0, pct: 0.0 },
+        ry: LenPct { px: 0.0, pct: 0.0 },
+        at: Position { x: CENTER, y: CENTER },
+        from: 0.0,
+        stops: List(Stop).init(alloc),
+    }
+    if text.startsWith(name, "repeating-") {
+        g.repeating = true
+        name = name[10..]
+    }
+    if text.eql(name, "linear-gradient") {
+        g.kind = 0
+    } else if text.eql(name, "radial-gradient") {
+        g.kind = 1
+    } else if text.eql(name, "conic-gradient") {
+        g.kind = 2
+    } else {
+        return null
+    }
+    var args = List(Comp).init(alloc)
+    try splitComps(argsOf(c.toks), &mut args)
+    let all = args.items()
+    // The arguments, as groups between commas.
+    var start: usize = 0
+    var first = true
+    for k in 0..all.len + 1 {
+        if k < all.len && !isComma(all[k]) {
+            continue
+        }
+        let group = all[start..k]
+        start = k + 1
+        if group.len == 0 {
+            return null
+        }
+        if first {
+            first = false
+            if colorValue(group[0]) == null && !isIdent(group[0], "currentcolor") {
+                if !lineOf(&mut g, group, legacy) {
+                    return null
+                }
+                continue
+            }
+        }
+        if !(try stopsOf(&mut g, group)) {
+            return null
+        }
+    }
+    if g.stops.len() < 1 {
+        return null
+    }
+    return g
+}
+
+// The first argument of a gradient (its direction, shape, extent,
+// center); false when it is invalid.
+fn lineOf(g: *mut Gradient, group: []Comp, legacy: bool) bool {
+    if g.kind == 0 {
+        if group.len == 1 {
+            if angleOf(group[0]) |a| {
+                g.angle = a
+                if legacy {
+                    g.angle = 90.0 - a
+                }
+                return true
+            }
+        }
+        var i: usize = 0
+        if !legacy {
+            if !isIdent(group[0], "to") {
+                return false
+            }
+            i = 1
+        }
+        var x = 0.0
+        var y = 0.0
+        while i < group.len {
+            let c = group[i]
+            if isIdent(c, "left") {
+                x = -1.0
+            } else if isIdent(c, "right") {
+                x = 1.0
+            } else if isIdent(c, "top") {
+                y = -1.0
+            } else if isIdent(c, "bottom") {
+                y = 1.0
+            } else if !isIdent(c, "center") {
+                return false
+            }
+            i += 1
+        }
+        if legacy {
+            // The side it starts from.
+            x = -x
+            y = -y
+        }
+        if x != 0.0 && y != 0.0 {
+            g.corner = true
+            g.cx = x
+            g.cy = y
+        } else if x < 0.0 {
+            g.angle = 270.0
+        } else if x > 0.0 {
+            g.angle = 90.0
+        } else if y < 0.0 {
+            g.angle = 0.0
+        } else {
+            g.angle = 180.0
+        }
+        return true
+    }
+    var i: usize = 0
+    var lens: usize = 0
+    while i < group.len {
+        let c = group[i]
+        if isIdent(c, "at") {
+            g.at = readPosition(group[i + 1..])
+            return true
+        }
+        if g.kind == 2 {
+            if isIdent(c, "from") && i + 1 < group.len {
+                g.from = angleOf(group[i + 1]) orelse 0.0
+                i += 2
+                continue
+            }
+            return false
+        }
+        if isIdent(c, "circle") {
+            g.circle = true
+        } else if isIdent(c, "ellipse") {
+            g.circle = false
+        } else if isIdent(c, "closest-side") || isIdent(c, "contain") {
+            g.extent = 1
+        } else if isIdent(c, "closest-corner") {
+            g.extent = 2
+        } else if isIdent(c, "farthest-side") {
+            g.extent = 3
+        } else if isIdent(c, "farthest-corner") || isIdent(c, "cover") {
+            g.extent = 0
+        } else if lenPctOf(c) |l| {
+            g.extent = 4
+            if lens == 0 {
+                g.rx = l
+                g.ry = l
+            } else {
+                g.ry = l
+            }
+            lens += 1
+        } else if legacy && isPositionPart(c) {
+            // `-webkit-radial-gradient(center, ...)`.
+            g.at = readPosition(group)
+            return true
+        } else {
+            return false
+        }
+        i += 1
+    }
+    if lens == 1 && !g.circle && g.extent == 4 {
+        g.circle = true
+    }
+    return true
+}
+
+// An angle in degrees (`deg`, `grad`, `rad`, `turn`, or 0).
+fn angleOf(c: Comp) ?f64 {
+    if c.toks.len != 1 {
+        return null
+    }
+    let t = c.toks[0]
+    if t.kind == Tok.Number && t.num == 0.0 {
+        return 0.0
+    }
+    if t.kind != Tok.Dimension {
+        return null
+    }
+    if text.eqlIgnoreCase(t.text, "deg") {
+        return t.num
+    }
+    if text.eqlIgnoreCase(t.text, "grad") {
+        return t.num * 0.9
+    }
+    if text.eqlIgnoreCase(t.text, "rad") {
+        return t.num * 180.0 / 3.141592653589793
+    }
+    if text.eqlIgnoreCase(t.text, "turn") {
+        return t.num * 360.0
+    }
+    return null
+}
+
+// A color stop with 0 to 2 positions, or a color hint (a position alone,
+// skipped).
+fn stopsOf(g: *mut Gradient, group: []Comp) AllocError!bool {
+    var color: ?Value = null
+    var n: usize = 0
+    for c in group {
+        if colorValue(c) |v| {
+            if color != null {
+                return false
+            }
+            color = v
+            continue
+        }
+        var pos: ?LenPct = null
+        if g.kind == 2 {
+            if angleOf(c) |a| {
+                if !(c.toks[0].kind == Tok.Number) {
+                    pos = LenPct { px: 0.0, pct: a / 3.6 }
+                }
+            }
+        }
+        if pos == null {
+            pos = lenPctOf(c)
+        }
+        let p = pos orelse return false
+        let col = color orelse {
+            // A color hint.
+            if group.len == 1 {
+                return true
+            }
+            return false
+        }
+        try g.stops.append(Stop { color: col, pos: p })
+        n += 1
+    }
+    if n == 0 {
+        let col = color orelse return false
+        try g.stops.append(Stop { color: col, pos: null })
+    }
+    return true
+}

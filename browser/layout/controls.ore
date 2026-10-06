@@ -26,23 +26,53 @@ import dom.NodeId
 import image
 import std.list.List
 import std.map.IntMap
+import std.map.StrMap
 import std.math
 import std.mem.AllocError
 import std.mem.Allocator
 import std.text
 import svg
 
-/// The decoded images of a document, by element. The bitmaps belong to
-/// whoever filled the map (the page's image cache).
+/// The decoded images of a document, by element, and those of its style
+/// sheets (`background-image`, `mask-image`) by URL as the computed value
+/// writes it. The bitmaps and keys belong to whoever filled the map (the
+/// page's image cache).
 pub struct Images {
     map: IntMap(u32, ImageRef)
+    urls: StrMap(ImageRef)
 
     pub fn init(alloc: Allocator) Images {
-        return Images { map: IntMap(u32, ImageRef).init(alloc) }
+        return Images { map: IntMap(u32, ImageRef).init(alloc), urls: StrMap(ImageRef).init(alloc) }
     }
 
     pub fn deinit(self: *mut Self) {
         self.map.deinit()
+        self.urls.deinit()
+    }
+
+    /// The image of a style sheet's `url()`; `pic` for an SVG image.
+    pub fn putUrl(self: *mut Self, key: []u8, bmp: *image.Bitmap, pic: ?*svg.Picture) AllocError!void {
+        try self.urls.put(key, ImageRef { generation: 0, bmp: bmp, pic: pic })
+    }
+
+    pub fn hasUrl(self: *Self, key: []u8) bool {
+        return self.urls.contains(key)
+    }
+
+    /// The bitmap of a style sheet's `url()` (only its size for an SVG
+    /// image), and its picture.
+    pub fn urlBitmap(self: *Self, key: []u8) ?*image.Bitmap {
+        if self.urls.get(key) |r| {
+            return r.bmp
+        }
+        return null
+    }
+
+    pub fn urlPicture(self: *Self, key: []u8) ?*svg.Picture {
+        if self.urls.get(key) |r| {
+            return r.pic
+        }
+        return null
     }
 
     pub fn put(self: *mut Self, el: NodeId, bmp: *image.Bitmap) AllocError!void {

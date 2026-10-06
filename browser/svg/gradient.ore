@@ -1,0 +1,389 @@
+// Gradients as paint servers: `linearGradient` and `radialGradient`
+// elements (`gradientUnits`, `gradientTransform`, `spreadMethod`, their
+// stops, and what they inherit from the gradient their `href` names),
+// and the CSS gradients that paint makes into the same `Gradient`. A
+// pixel's color is found from its center mapped back into the
+// gradient's space; colors between stops are mixed with premultiplied
+// alpha (so that a transparent stop does not darken its neighbour).
+
+import css
+import css.Value
+import dom
+import dom.NodeId
+import std.list.List
+import std.math
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+/// A stop: color `c` at `t` (0 to 1, in order).
+pub struct GradStop {
+    t: f64
+    c: Color
+}
+
+pub let LINEAR: u8 = 0
+pub let RADIAL: u8 = 1
+pub let CONIC: u8 = 2
+
+pub let PAD: u8 = 0
+pub let REFLECT: u8 = 1
+pub let REPEAT: u8 = 2
+
+pub struct Gradient {
+    kind: u8
+    spread: u8
+    // From the gradient's space to the coordinates of what it paints.
+    m: Matrix
+    // Linear: from (x1, y1) to (x2, y2). Radial: the circle (cx, cy, r)
+    // and the focal point (fx, fy). Conic: around (cx, cy), starting at
+    // the angle `a0` (radians, 0 up, clockwise).
+    x1: f64
+    y1: f64
+    x2: f64
+    y2: f64
+    cx: f64
+    cy: f64
+    r: f64
+    fx: f64
+    fy: f64
+    a0: f64
+    // The part `t0..t1` of the gradient line that the stops span (a
+    // repeating CSS gradient repeats it); 0 and 1 otherwise.
+    t0: f64
+    t1: f64
+    stops: []GradStop
+
+    /// The color at (`x`, `y`) of the gradient's space.
+    pub fn at(self: *Self, x: f64, y: f64) Color {
+        if self.kind == LINEAR {
+            let dx = self.x2 - self.x1
+            let dy = self.y2 - self.y1
+            let len = dx * dx + dy * dy
+            if len <= 0.0 {
+                return self.last()
+            }
+            return self.colorAt(((x - self.x1) * dx + (y - self.y1) * dy) / len)
+        }
+        if self.kind == CONIC {
+            var a = math.atan2(x - self.cx, self.cy - y) - self.a0
+            let turn = 2.0 * math.pi
+            a = a - math.floor(a / turn) * turn
+            return self.colorAt(a / turn)
+        }
+        if self.r <= 0.0 {
+            return self.last()
+        }
+        // The circle through the point among those from the focal point
+        // (t = 0) to the outer circle (t = 1).
+        let ddx = x - self.fx
+        let ddy = y - self.fy
+        let cdx = self.cx - self.fx
+        let cdy = self.cy - self.fy
+        let a = cdx * cdx + cdy * cdy - self.r * self.r
+        let b = ddx * cdx + ddy * cdy
+        let c = ddx * ddx + ddy * ddy
+        if math.abs(a) < 0.000001 {
+            if b <= 0.0 {
+                return self.colorAt(0.0)
+            }
+            return self.colorAt(c / (2.0 * b))
+        }
+        let disc = b * b - a * c
+        if disc < 0.0 {
+            return self.colorAt(0.0)
+        }
+        return self.colorAt((b - math.sqrt(disc)) / a)
+    }
+
+    fn last(self: *Self) Color {
+        if self.stops.len == 0 {
+            return Color { r: 0, g: 0, b: 0, a: 0 }
+        }
+        return self.stops[self.stops.len - 1].c
+    }
+
+    /// The color at `t` along the gradient.
+    pub fn colorAt(self: *Self, t_in: f64) Color {
+        let n = self.stops.len
+        if n == 0 {
+            return Color { r: 0, g: 0, b: 0, a: 0 }
+        }
+        var t = t_in
+        if self.t1 > self.t0 {
+            t = (t - self.t0) / (self.t1 - self.t0)
+        } else if self.spread == REPEAT {
+            return self.last()
+        }
+        if math.isNan(t) {
+            t = 0.0
+        }
+        if self.spread == REPEAT {
+            t = t - math.floor(t)
+        } else if self.spread == REFLECT {
+            t = t - math.floor(t / 2.0) * 2.0
+            if t > 1.0 {
+                t = 2.0 - t
+            }
+        }
+        let s = self.stops
+        if t <= s[0].t {
+            return s[0].c
+        }
+        if t >= s[n - 1].t {
+            return s[n - 1].c
+        }
+        var i: usize = 0
+        while i + 1 < n && s[i + 1].t <= t {
+            i += 1
+        }
+        let width = s[i + 1].t - s[i].t
+        if width <= 0.0 {
+            return s[i + 1].c
+        }
+        return mixColors(s[i].c, s[i + 1].c, (t - s[i].t) / width)
+    }
+}
+
+/// `a` and `b` mixed, `f` of `b`, with premultiplied alpha.
+pub fn mixColors(a: Color, b: Color, f: f64) Color {
+    let aa = a.a as f64 * (1.0 - f)
+    let ba = b.a as f64 * f
+    let sum = aa + ba
+    if sum <= 0.0 {
+        return Color { r: 0, g: 0, b: 0, a: 0 }
+    }
+    return Color {
+        r: math.floor((a.r as f64 * aa + b.r as f64 * ba) / sum + 0.5) as u8,
+        g: math.floor((a.g as f64 * aa + b.g as f64 * ba) / sum + 0.5) as u8,
+        b: math.floor((a.b as f64 * aa + b.b as f64 * ba) / sum + 0.5) as u8,
+        a: math.floor(sum + 0.5) as u8,
+    }
+}
+
+/// Fills the part of `t` inside its clip and inside the rectangle
+/// `x0..x1`, `y0..y1` (device px) with the gradient `g`, whose space
+/// maps to device px by `m`.
+pub fn fillGradient(t: Target, x0: i64, y0: i64, x1: i64, y1: i64, g: *Gradient, m: Matrix) {
+    let inv = invert(m) orelse return
+    let cx0 = math.maxOf(i64, x0, t.x0)
+    let cy0 = math.maxOf(i64, y0, t.y0)
+    let cx1 = math.minOf(i64, x1, t.x1)
+    let cy1 = math.minOf(i64, y1, t.y1)
+    if cx1 <= cx0 || cy1 <= cy0 {
+        return
+    }
+    for row in cy0..cy1 {
+        let py = row as f64 + 0.5
+        var i = t.index(cx0, row)
+        for col in cx0..cx1 {
+            let px = col as f64 + 0.5
+            let c = g.at(inv.mapX(px, py), inv.mapY(px, py))
+            blend(t.pixels, i, c, c.a as u32)
+            i += 4
+        }
+    }
+}
+
+// ---- gradient elements
+
+/// The gradient element that a paint `url(#id) [fallback]` (its text
+/// `s`) refers to, if there is one.
+pub fn gradientRef(doc: *dom.Document, s: []u8) ?NodeId {
+    let g = idRef(doc, s) orelse return null
+    if doc.isElement(g, "lineargradient") || doc.isElement(g, "radialgradient") {
+        return g
+    }
+    return null
+}
+
+// The gradient that `el` refers to by `href` (or `xlink:href`).
+fn hrefGradient(doc: *dom.Document, el: NodeId) ?NodeId {
+    var href = doc.attr(el, "href") orelse ""
+    if href.len == 0 {
+        href = doc.attr(el, "xlink:href") orelse ""
+    }
+    let h = text.trim(href)
+    if h.len < 2 || h[0] != '#' {
+        return null
+    }
+    let g = doc.getElementById(h[1..]) orelse return null
+    if doc.isElement(g, "lineargradient") || doc.isElement(g, "radialgradient") {
+        return g
+    }
+    return null
+}
+
+/// The attribute `name` of the gradient `el` or of the first gradient of
+/// its `href` chain that has it.
+fn gradAttr(doc: *dom.Document, el: NodeId, name: []u8) ?[]u8 {
+    var cur: ?NodeId = el
+    var depth: usize = 0
+    while cur |g| {
+        if doc.attr(g, name) |v| {
+            return v
+        }
+        depth += 1
+        if depth > 8 {
+            return null
+        }
+        cur = hrefGradient(doc, g)
+    }
+    return null
+}
+
+/// The gradient element `el` as a `Gradient` for a shape whose box in
+/// user space is `bx, by, bw, bh`, user space mapping to the picture by
+/// `user`; `vw`, `vh` the viewport (percentages of user-space lengths);
+/// the stops' alpha times `opacity`, their `currentColor` `current`.
+/// Null when it paints nothing (no stops, an empty box).
+pub fn gradientOf(alloc: Allocator, doc: *dom.Document, styles: *css.Styles, el: NodeId, user: Matrix, bx: f64, by: f64, bw: f64, bh: f64, vw: f64, vh: f64, opacity: f64, current: Color) AllocError!?Gradient {
+    let radial = doc.isElement(el, "radialgradient")
+    let units = gradAttr(doc, el, "gradientunits") orelse "objectBoundingBox"
+    let bbox = !text.eql(text.trim(units), "userSpaceOnUse")
+    var g = Gradient {
+        kind: LINEAR,
+        spread: PAD,
+        m: user,
+        x1: 0.0,
+        y1: 0.0,
+        x2: 1.0,
+        y2: 0.0,
+        cx: 0.5,
+        cy: 0.5,
+        r: 0.5,
+        fx: 0.5,
+        fy: 0.5,
+        a0: 0.0,
+        t0: 0.0,
+        t1: 1.0,
+        stops: []GradStop{},
+    }
+    var rw = vw
+    var rh = vh
+    if bbox {
+        if bw <= 0.0 || bh <= 0.0 {
+            return null
+        }
+        g.m = mul(user, Matrix { a: bw, b: 0.0, c: 0.0, d: bh, e: bx, f: by })
+        rw = 1.0
+        rh = 1.0
+    } else {
+        g.x2 = vw
+        g.cx = vw / 2.0
+        g.cy = vh / 2.0
+        g.r = math.sqrt((vw * vw + vh * vh) / 2.0) / 2.0
+    }
+    if gradAttr(doc, el, "gradienttransform") |tr| {
+        g.m = mul(g.m, parseTransform(tr))
+    }
+    if gradAttr(doc, el, "spreadmethod") |sm| {
+        let v = text.trim(sm)
+        if text.eql(v, "reflect") {
+            g.spread = REFLECT
+        } else if text.eql(v, "repeat") {
+            g.spread = REPEAT
+        }
+    }
+    let rd = math.sqrt((rw * rw + rh * rh) / 2.0)
+    if radial {
+        g.kind = RADIAL
+        g.cx = coord(doc, el, "cx", rw, g.cx)
+        g.cy = coord(doc, el, "cy", rh, g.cy)
+        g.r = coord(doc, el, "r", rd, g.r)
+        g.fx = coord(doc, el, "fx", rw, g.cx)
+        g.fy = coord(doc, el, "fy", rh, g.cy)
+        // A focal point outside the circle is moved onto it.
+        let dx = g.fx - g.cx
+        let dy = g.fy - g.cy
+        let dist = math.hypot(dx, dy)
+        if dist > g.r * 0.99 && dist > 0.0 {
+            g.fx = g.cx + dx / dist * g.r * 0.99
+            g.fy = g.cy + dy / dist * g.r * 0.99
+        }
+    } else {
+        g.x1 = coord(doc, el, "x1", rw, g.x1)
+        g.y1 = coord(doc, el, "y1", rh, g.y1)
+        g.x2 = coord(doc, el, "x2", rw, g.x2)
+        g.y2 = coord(doc, el, "y2", rh, g.y2)
+    }
+    // The stops: its own, or those of the first gradient of its `href`
+    // chain that has some.
+    var holder: ?NodeId = el
+    var depth: usize = 0
+    while holder |h| {
+        if hasStops(doc, h) || depth > 8 {
+            break
+        }
+        depth += 1
+        holder = hrefGradient(doc, h)
+    }
+    let src = holder orelse return null
+    var stops = List(GradStop).init(alloc)
+    defer stops.deinit()
+    var last = 0.0
+    var cur = doc.firstChild(src)
+    while cur |c| {
+        if doc.isElement(c, "stop") {
+            if styles.get(c) |values| {
+                var color = match values[css.STOP_COLOR] {
+                    .Rgba { c: k } => Color { r: k.r, g: k.g, b: k.b, a: alphaByte(k.a) }
+                    _ => current
+                }
+                let so = math.clamp(numberValue(values[css.STOP_OPACITY], 1.0), 0.0, 1.0)
+                color.a = alphaByte(color.a as f64 / 255.0 * so * opacity)
+                var at = 0.0
+                if doc.attr(c, "offset") |o| {
+                    at = lengthOf(o, 1.0) orelse 0.0
+                }
+                at = math.clamp(at, last, 1.0)
+                last = at
+                try stops.append(GradStop { t: at, c: color })
+            }
+        }
+        cur = doc.nextSibling(c)
+    }
+    if stops.len() == 0 {
+        return null
+    }
+    let owned = try alloc.alloc(stops.items()[0], stops.len())
+    for k, st in stops.items() {
+        owned[k] = st
+    }
+    g.stops = owned
+    return g
+}
+
+fn hasStops(doc: *dom.Document, el: NodeId) bool {
+    var cur = doc.firstChild(el)
+    while cur |c| {
+        if doc.isElement(c, "stop") {
+            return true
+        }
+        cur = doc.nextSibling(c)
+    }
+    return false
+}
+
+// A coordinate attribute of a gradient (inherited along `href`): a
+// number, or a percentage of `ref`; `d` when missing.
+fn coord(doc: *dom.Document, el: NodeId, name: []u8, ref: f64, d: f64) f64 {
+    if gradAttr(doc, el, name) |v| {
+        if lengthOf(v, ref) |n| {
+            return n
+        }
+    }
+    return d
+}
+
+fn alphaByte(a: f64) u8 {
+    return math.floor(math.clamp(a, 0.0, 1.0) * 255.0 + 0.5) as u8
+}
+
+fn numberValue(v: Value, d: f64) f64 {
+    return match v {
+        .Number { v: n } => n
+        .Px { v: n } => n
+        _ => d
+    }
+}

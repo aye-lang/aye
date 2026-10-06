@@ -3,7 +3,9 @@
 // base URL, with the document's URL as the Referer; the session's cache
 // keeps them), in document order, for the media that match. A sheet's
 // `@import` rules are fetched relative to the sheet (its URL the Referer)
-// and come before its rules (at most `MAX_IMPORT_DEPTH` sheets deep).
+// and come before its rules (at most `MAX_IMPORT_DEPTH` sheets deep). The
+// `url()`s of a fetched sheet are made absolute against its URL as it is
+// parsed.
 
 import css
 import dom.Document
@@ -29,7 +31,7 @@ pub fn authorSheets(alloc: Allocator, doc: *Document, address: *Url, media: css.
             var src = text.Builder.init(alloc)
             defer src.deinit()
             try doc.textContent(h, &mut src)
-            try parseWithImports(alloc, &base, address, src.bytes(), media, sheet)
+            try parseWithImports(alloc, &base, address, src.bytes(), media, sheet, false)
         } else if doc.isElement(h, "link") && isStylesheetLink(doc, h) && (try mediaOk(doc, h, media, sheet)) {
             if doc.attr(h, "href") |href| {
                 try linkedSheet(alloc, &base, address, href, media, sheet)
@@ -96,18 +98,27 @@ fn linkedSheet(alloc: Allocator, base: *Url, address: *Url, href: []u8, media: c
     defer res.deinit(alloc)
     let src = try encoding.toUtf8(alloc, res.body, encoding.sniff(res.body, res.charset))
     defer alloc.free(src)
-    try parseWithImports(alloc, &target, &target, src, media, sheet)
+    try parseWithImports(alloc, &target, &target, src, media, sheet, true)
 }
 
 let MAX_IMPORT_DEPTH: usize = 4
 var import_depth: usize = 0
 
 // Parses the sheet `src` (at `base`, fetched for `address`) into `sheet`,
-// with the sheets it imports before its rules.
-fn parseWithImports(alloc: Allocator, base: *Url, address: *Url, src: []u8, media: css.Media, sheet: *mut css.Sheet) AllocError!void {
+// with the sheets it imports before its rules. A fetched sheet
+// (`fetched`) has its `url()`s made absolute; those of a `style` element
+// stay relative to the document.
+fn parseWithImports(alloc: Allocator, base: *Url, address: *Url, src: []u8, media: css.Media, sheet: *mut css.Sheet, fetched: bool) AllocError!void {
     let first_rule = sheet.rules.len()
     let first_import = sheet.imports.len()
     let first_face = sheet.font_faces.len()
+    // `url()`s are relative to the sheet.
+    let outer_base = sheet.base
+    sheet.base = ""
+    if fetched {
+        sheet.base = base.href
+    }
+    defer sheet.base = outer_base
     try css.parseSheet(sheet, src, media)
     try setFontBase(sheet, first_face, base.href)
     let n = sheet.imports.len() - first_import
