@@ -80,6 +80,9 @@ fn clickPage(ui: *mut Ui, x: f64, y: f64) AllocError!void {
     }
     let p = ui.tab.page orelse return
     let t = p.tree orelse return
+    if engine.frameAt(p, x, dy) |fp| {
+        return clickFrame(ui, fp)
+    }
     let node = engine.nodeAt(t, x, dy) orelse {
         return blur(ui)
     }
@@ -179,6 +182,18 @@ fn blur(ui: *mut Ui) AllocError!void {
 
 /// Does what an activation asks: follow a link, submit a form, open a
 /// dropdown, or show the changed page.
+// A click in a frame's document: a link there loads in the tab (in
+// place of the frameset); other clicks do nothing.
+fn clickFrame(ui: *mut Ui, fp: engine.FramePoint) AllocError!void {
+    let ft = fp.page.tree orelse return
+    let link = engine.linkAt(ft, fp.x, fp.y) orelse return
+    let target = fp.page.follow(ui.alloc, link.href) catch |e| {
+        return
+    }
+    defer target.deinit(ui.alloc)
+    return ui.go(&target)
+}
+
 fn runActivation(ui: *mut Ui, act: engine.Activation) AllocError!void {
     match act {
         .Nothing => {

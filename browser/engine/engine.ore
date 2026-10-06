@@ -26,6 +26,7 @@ import layout
 import net
 import std
 import std.list.List
+import std.math
 import std.mem.AllocError
 import std.mem.Allocator
 import std.text
@@ -253,6 +254,8 @@ fn loadDocument(alloc: Allocator, target: *Url, body: ?*net.Body, depth: usize, 
 pub struct Frame {
     el: NodeId
     page: *mut Page
+    // How far the document is scrolled in the frame, in px.
+    scroll: f64
 }
 
 // Frames inside frames go this deep, and a page has at most this many.
@@ -287,7 +290,7 @@ fn loadFrames(p: *mut Page, depth: usize) AllocError!void {
         defer target.deinit(p.alloc)
         try net.noteNavigation(target.href, p.url.href)
         let child = try loadDocument(p.alloc, &target, null, depth + 1, p.encoding)
-        p.frames.append(Frame { el: h, page: child }) catch |e| {
+        p.frames.append(Frame { el: h, page: child, scroll: 0.0 }) catch |e| {
             child.destroy()
             return e
         }
@@ -311,21 +314,101 @@ fn layoutFrames(p: *mut Page, measure: dyn font.Measurer) AllocError!void {
     let t = p.tree orelse {
         return
     }
-    for f in p.frames.items() {
-        for bi in 0..t.boxes.len() {
+    for k in 0..p.frames.len() {
+        let f = p.frames.items()[k]
+        if frameBox(t, f.el) |bi| {
             let b = t.bx(bi).*
-            if b.node == null || !dom.same(b.node.?, f.el) {
-                continue
-            }
             if b.w > 0.0 && b.h > 0.0 {
                 try f.page.layoutPage(measure, b.w, b.h)
                 if f.page.tree |sub| {
-                    try t.frames.append(layout.FrameView { node: f.el, tree: sub })
+                    let scroll = math.min(f.scroll, maxFrameScroll(sub, b.h))
+                    p.frames.items()[k].scroll = scroll
+                    try t.frames.append(layout.FrameView { node: f.el, tree: sub, scroll: scroll })
                 }
             }
-            break
         }
     }
+}
+
+// The box of the frame element `el` in `t`.
+fn frameBox(t: *layout.Tree, el: NodeId) ?usize {
+    for bi in 0..t.boxes.len() {
+        if t.bx(bi).node |n| {
+            if dom.same(n, el) {
+                return bi
+            }
+        }
+    }
+    return null
+}
+
+// How far a frame `h` px high can scroll the document laid out in `sub`.
+fn maxFrameScroll(sub: *layout.Tree, h: f64) f64 {
+    if sub.root |r| {
+        let b = sub.bx(r)
+        return math.max(0.0, b.h + b.margin[0] + b.margin[2] - h)
+    }
+    return 0.0
+}
+
+/// A point in the document of a frame: the frame's page and the point
+/// in its document's coordinates.
+pub struct FramePoint {
+    page: *mut Page
+    x: f64
+    y: f64
+}
+
+/// The innermost frame at (`x`, `y`) (document px) of `p` and the point
+/// in its document; null when the point is in no frame.
+pub fn frameAt(p: *mut Page, x: f64, y: f64) ?FramePoint {
+    let t = p.tree orelse {
+        return null
+    }
+    for f in p.frames.items() {
+        if frameBox(t, f.el) |bi| {
+            let b = t.bx(bi).*
+            if x >= b.ax && x < b.ax + b.w && y >= b.ay && y < b.ay + b.h && f.page.tree != null {
+                let fx = x - b.ax
+                let fy = y - b.ay + f.scroll
+                if frameAt(f.page, fx, fy) |inner| {
+                    return inner
+                }
+                return FramePoint { page: f.page, x: fx, y: fy }
+            }
+        }
+    }
+    return null
+}
+
+/// Scrolls the innermost frame at (`x`, `y`) (document px) of `p` by
+/// `dy` px; false when the point is in no frame. Build the display list
+/// again after it.
+pub fn scrollFrameAt(p: *mut Page, x: f64, y: f64, dy: f64) bool {
+    let t = p.tree orelse {
+        return false
+    }
+    for k in 0..p.frames.len() {
+        let f = p.frames.items()[k]
+        let bi = frameBox(t, f.el) orelse continue
+        let b = t.bx(bi).*
+        let sub = f.page.tree orelse continue
+        if !(x >= b.ax && x < b.ax + b.w && y >= b.ay && y < b.ay + b.h) {
+            continue
+        }
+        if scrollFrameAt(f.page, x - b.ax, y - b.ay + f.scroll, dy) {
+            return true
+        }
+        let scroll = math.max(0.0, math.min(f.scroll + dy, maxFrameScroll(sub, b.h)))
+        p.frames.items()[k].scroll = scroll
+        for v in 0..t.frames.len() {
+            if dom.same(t.frames.items()[v].node, f.el) {
+                t.frames.items()[v].scroll = scroll
+            }
+        }
+        return true
+    }
+    return false
 }
 
 // The URL after redirects (`moved`, when not empty), else a copy of

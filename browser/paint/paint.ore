@@ -546,7 +546,7 @@ struct Builder {
         if self.t.bx(i).node |el| {
             for fv in self.t.frames.items() {
                 if dom.same(fv.node, el) {
-                    return self.subframe(fv.tree, x, y, w, h)
+                    return self.subframe(fv.tree, fv.scroll, x, y, w, h)
                 }
             }
             if self.t.images |imgs| {
@@ -573,9 +573,10 @@ struct Builder {
         return self.placeholder(i, x, y, w, h)
     }
 
-    // The display list of a frame's document `sub`, moved to (`x`, `y`)
-    // and clipped to `w` x `h` on its canvas color.
-    fn subframe(self: *mut Self, sub: *mut Tree, x: f64, y: f64, w: f64, h: f64) AllocError!void {
+    // The display list of a frame's document `sub` (scrolled by
+    // `scroll`), moved to (`x`, `y`) and clipped to `w` x `h` on its
+    // canvas color.
+    fn subframe(self: *mut Self, sub: *mut Tree, scroll: f64, x: f64, y: f64, w: f64, h: f64) AllocError!void {
         if w <= 0.0 || h <= 0.0 {
             return
         }
@@ -585,7 +586,7 @@ struct Builder {
         try self.add(Item.Clip { r: r })
         try self.add(Item.Fill { r: r, c: inner.background })
         for it in inner.items.items() {
-            try self.add(moved(it, x, y))
+            try self.add(moved(it, x, y - scroll))
         }
         try self.add(Item.Unclip)
     }
