@@ -1867,6 +1867,12 @@ pub let PRELUDE =
     \\  if (height !== undefined) img.setAttribute('height', String(height));
     \\  return img;
     \\});
+    \\// The engine fetches images for rendering, not for scripts: decode()
+    \\// settles at once, fulfilled when the image has a source.
+    \\hidden(HTMLImageElement.prototype, 'decode', function () {
+    \\  if (this.getAttribute('src')) return Promise.resolve();
+    \\  return Promise.reject(new DOMException('The source image cannot be decoded.', 'EncodingError'));
+    \\});
     \\// Media elements play nothing: play() fails as for an unsupported source.
     \\const MediaP = HTMLMediaElement.prototype;
     \\hidden(MediaP, 'play', function () { return Promise.reject(new DOMException('The element has no supported sources.', 'NotSupportedError')); });
