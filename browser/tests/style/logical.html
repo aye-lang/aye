@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<style>
+.a { margin-inline: 1px 2px; margin-block: 3px }
+.b { padding-inline: 4px; padding-block: 5px 6px }
+.c { margin-inline-start: 7px; margin-inline-end: auto; padding-block-start: 8px; padding-block-end: 9px }
+.d { position: absolute; inset-inline: 0 10px; inset-block-start: 11px }
+.e { inline-size: 12px; block-size: 13px; min-inline-size: 1px; max-block-size: 50%; border-inline-start: 2px solid red; border-block-end-width: 3px }
+.f { display: flex; place-items: center start; place-content: end space-between }
+.g { place-self: end; margin-inline: var(--m, 14px) }
+</style>
+<div class="a">a</div>
+<div class="b">b</div>
+<div class="c">c</div>
+<div class="d">d</div>
+<div class="e">e</div>
+<div class="f"><span class="g">f g</span></div>
