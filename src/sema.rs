@@ -3947,7 +3947,14 @@ impl<'a> Checker<'a> {
                 }
             }
             ExprKind::Index { base, index } => {
-                let b = self.value(base, None)?;
+                let mut b = self.value(base, None)?;
+                // Like field access, indexing dereferences a pointer to an array.
+                if let Type::Ptr(pointee, _) = &b.ty
+                    && let Type::Array(..) = **pointee
+                {
+                    let (ty, span) = ((**pointee).clone(), b.span);
+                    b = TExpr { kind: TExprKind::Deref(Box::new(b)), ty, span };
+                }
                 // A C pointer is indexed without a check.
                 let elem = match &b.ty {
                     Type::Array(el, _) | Type::Slice(el, _) | Type::CPtr(el) | Type::Simd(el, _) => (**el).clone(),

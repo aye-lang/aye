@@ -338,7 +338,8 @@ pub fn main() {
   literals, field access, `as` numeric casts, arrays `[3]i32{1, 2, 3}`,
   bounds-checked indexing, slicing `a[lo..hi]` (also `p[lo..hi]` of a `[*]T`,
   unchecked), `.len`, `.ptr`, `&x`, `&mut x`,
-  `p.*` (field access through a pointer dereferences it), `null`,
+  `p.*` (field access and array indexing through a pointer dereference it),
+  `null`,
   `x == null`, enum values `Shape.Circle { r: 1.0 }` / `Color.Red`,
   exhaustive `match` with patterns `.V`, `.V { a, b: c, .. }` and `_`, and on
   integers with `1`, `'a'`, `'a'..='z'` and several patterns per arm,

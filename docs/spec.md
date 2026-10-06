@@ -773,6 +773,7 @@ pub fn main() {
 `&x` makes a `*T`, `&mut x` a `*mut T` (`x` must be a `var` or reached
 through a `*mut`). `p.*` dereferences. Field access and method calls go
 through one pointer level automatically: `p.x`, `p.x = 1` for `p: *mut S`.
+So does indexing a pointer to an array: `a[i]`, `a[i] = 1` for `a: *mut [N]T`.
 `p == q` is true when both point to the same place. There is no pointer
 arithmetic and no null pointer: use `?*T`. A temporary cannot be borrowed
 (`&f()` is an error), but a method that takes `*Self` or `*mut Self` can

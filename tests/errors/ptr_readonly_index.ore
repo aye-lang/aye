@@ -1,0 +1,6 @@
+fn set(a: *[4]u8) {
+    a[0] = 7
+}
+
+pub fn main() {
+}

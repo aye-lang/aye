@@ -31,7 +31,7 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
 - **Pointers:** `*T` is read-only, `*mut T` is writable. They are made with `&x` and `&mut x`.
   - `&mut x` needs a writable place: a `var`, or data behind a `*mut`. `&` of a temporary (`&f()`) is an error.
   - Dereference is `p.*`, as in Zig (`*` already starts the type).
-  - Field access dereferences one pointer level, as in Go and Zig: `p.x`, and `p.x = 1` when `p: *mut T`.
+  - Field access dereferences one pointer level, as in Go and Zig: `p.x`, and `p.x = 1` when `p: *mut T`. So does indexing a pointer to an array: `a[i]` for `a: *[N]T`.
   - There is no pointer arithmetic. `==` and `!=` compare pointers by address (M6), also a `*T` with a `*mut T`; `<` and the other orderings do not apply.
 - **Optionals:** `?T`, with the literal `null`. `null` is a predeclared identifier like `true`, so it is not a keyword.
   - `if x |v| { } else { }` unwraps, as in Zig. `v` is immutable and visible only in the first block.
