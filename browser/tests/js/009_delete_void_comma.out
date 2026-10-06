@@ -1,0 +1,9 @@
+true { b: 2, c: 3 } false
+true [ 'b', 'c' ]
+{ c: 3 }
+3 undefined false
+undefined undefined undefined
+3
+2 20
+0 10
+3 7

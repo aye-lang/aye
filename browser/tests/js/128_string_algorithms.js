@@ -1,0 +1,13 @@
+const isPal = (s) => { const c = s.toLowerCase().replace(/[^a-z0-9]/g, ''); return c === [...c].reverse().join(''); };
+console.log(isPal('A man, a plan, a canal: Panama'), isPal('hello'));
+const caesar = (s, k) => s.replace(/[a-z]/g, (c) => String.fromCharCode((c.charCodeAt(0) - 97 + k) % 26 + 97));
+console.log(caesar('hello world', 3), caesar(caesar('abcxyz', 13), 13));
+const wordFreq = 'a b a c b a'.split(' ').reduce((m, w) => (m[w] = (m[w] || 0) + 1, m), {});
+console.log(wordFreq);
+const camel = 'hello-big-world'.replace(/-(\w)/g, (_, c) => c.toUpperCase());
+const kebab = 'helloBigWorld'.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase());
+console.log(camel, kebab);
+const titled = 'the lord of the rings'.split(' ').map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
+console.log(titled);
+const rle = 'aaabccdddd'.replace(/(.)\1*/g, (m, c) => c + m.length);
+console.log(rle);

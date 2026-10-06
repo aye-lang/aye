@@ -1,0 +1,13 @@
+const items = [];
+for (let i = 0; i < 30; i++) items.push({ key: i % 3, id: i });
+const sorted = items.slice().sort((a, b) => a.key - b.key);
+console.log(sorted.map((x) => x.id).join(' '));
+const big = [];
+for (let i = 0; i < 1000; i++) big.push({ k: (i * 7919) % 10, i });
+big.sort((a, b) => a.k - b.k);
+let stable = true;
+for (let i = 1; i < big.length; i++) if (big[i - 1].k === big[i].k && big[i - 1].i > big[i].i) stable = false;
+console.log('stable', stable, big[0].i, big[999].i);
+const nums = Array.from({ length: 200 }, (_, i) => (i * 37) % 101);
+nums.sort((a, b) => a - b);
+console.log(nums.slice(0, 10), nums.slice(-5));

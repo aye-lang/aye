@@ -1,0 +1,18 @@
+const arr = [10, 20, 30];
+arr.extra = 'x';
+const ks = [];
+for (const k in arr) ks.push(k);
+console.log(ks);
+const sparse = [];
+sparse[2] = 'two';
+sparse[5] = 'five';
+const sk = [];
+for (const k in sparse) sk.push(k);
+console.log(sk, sparse.length);
+const str = 'abc';
+const strk = [];
+for (const k in str) strk.push(k);
+console.log(strk);
+let total = 0;
+for (const k in { a: 1, b: 2, c: 3 }) total += k.length;
+console.log(total);

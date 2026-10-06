@@ -6,6 +6,9 @@
 //! - `ore test` on the browser's root module and on its standalone modules
 //!   (`url`, `dom`, `encoding`) must pass.
 //! - A few command-line cases: `data:` URLs, `--id`/`--tag`, errors.
+//! - `browser/tests/js/X.js`: `anyknown js` must print `X.out` (Node's
+//!   output) and exit 0 with an empty stderr, or, when `X.err` exists,
+//!   print it on stderr and exit 1 (an uncaught exception).
 //!
 //! To accept new output after a deliberate change, run
 //! `ANYKNOWN_BLESS=1 cargo test --test browser` and review the diff.
@@ -186,7 +189,7 @@ fn layout_system_font() {
 
 #[test]
 fn ore_unit_tests() {
-    for module in ["browser", "browser/url", "browser/dom", "browser/encoding", "browser/font"] {
+    for module in ["browser", "browser/url", "browser/dom", "browser/encoding", "browser/font", "browser/js"] {
         let out = ore().arg("test").arg(module).output().unwrap();
         let stdout = text(&out.stdout);
         assert!(
@@ -230,7 +233,7 @@ fn queries() {
 #[test]
 fn errors() {
     let usage = "error: usage: anyknown dump --tree|--text|--style|--layout [--width PX] [--font fixed|system] [--id ID | --tag NAME] FILE|URL\n";
-    expect(&[], 2, "", usage);
+    expect(&[], 2, "", "error: usage: anyknown [open] FILE|URL | dump --tree|--text|--style|--layout|--a11y|--md ... FILE|URL | screenshot FILE|URL -o OUT.png | js FILE | agent | mcp\n");
     expect(&["dump", "--tree"], 2, "", usage);
     expect(&["dump", "--layout", "--font", "serif", "browser/tests/basic.html"], 2, "", usage);
     expect(&["dump", "--tree", "browser/tests/missing.html"], 1, "", &format!(
@@ -656,4 +659,64 @@ fn agent_http() {
     assert!(lines[0].contains("\"title\":\"Site home\""), "{got}");
     assert!(lines[1].contains(&format!("\"url\":\"{base}/agent/site/docs.html\"")), "{got}");
     assert!(lines[1].contains("heading \\\"Documentation\\\" [level=1] [e10]"), "{got}");
+}
+
+/// One JS conformance script: None when it passes, else what went wrong.
+fn js_case(js: &Path, bless: bool) -> Option<String> {
+    let rel = js.strip_prefix(root()).unwrap().to_string_lossy().into_owned();
+    let out = run(&["js", &rel]);
+    let got = text(&out.stdout);
+    let golden = js.with_extension("out");
+    if bless {
+        std::fs::write(&golden, &got).unwrap();
+        return None;
+    }
+    let want = std::fs::read_to_string(&golden).unwrap_or_default();
+    let mut problems = Vec::new();
+    if got != want {
+        problems.push(format!("stdout differs from {}\n--- expected\n{want}--- got\n{got}", golden.display()));
+    }
+    let stderr = text(&out.stderr);
+    match std::fs::read_to_string(js.with_extension("err")) {
+        Ok(want_err) => {
+            if stderr != want_err || out.status.code() != Some(1) {
+                problems.push(format!("expected status 1 and stderr {want_err:?}, got {} and {stderr:?}", out.status));
+            }
+        }
+        Err(_) => {
+            if !out.status.success() || !stderr.is_empty() {
+                problems.push(format!("expected status 0 and no stderr, got {}:\n{stderr}", out.status));
+            }
+        }
+    }
+    if problems.is_empty() { None } else { Some(format!("{rel}: {}", problems.join("\n"))) }
+}
+
+#[test]
+fn js_conformance() {
+    let dir = root().join("browser").join("tests").join("js");
+    let mut scripts: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "js"))
+        .collect();
+    scripts.sort();
+    assert!(scripts.len() >= 150, "expected at least 150 JS scripts, found {}", scripts.len());
+    anyknown();
+    let bless = std::env::var_os("ANYKNOWN_BLESS").is_some();
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let failures: Vec<String> = std::thread::scope(|s| {
+        let handles: Vec<_> = scripts
+            .chunks(scripts.len().div_ceil(threads))
+            .map(|chunk| s.spawn(move || chunk.iter().filter_map(|js| js_case(js, bless)).collect::<Vec<_>>()))
+            .collect();
+        handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    });
+    assert!(failures.is_empty(), "{} of {} JS scripts failed:\n\n{}", failures.len(), scripts.len(), failures.join("\n\n"));
+}
+
+#[test]
+fn js_command_line() {
+    expect(&["js", "browser/tests/js/missing.js"], 1, "", "error: cannot read browser/tests/js/missing.js\n");
+    expect(&["js"], 2, "", "error: usage: anyknown js FILE\n");
 }

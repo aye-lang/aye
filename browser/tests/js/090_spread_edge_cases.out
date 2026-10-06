@@ -1,0 +1,6 @@
+TypeError
+TypeError
+{} {} { '0': 'a', '1': 'b' }
+[ undefined, 'b' ] [ '0', '1' ]
+2 0
+[ 'a', 'b', 'c' ]

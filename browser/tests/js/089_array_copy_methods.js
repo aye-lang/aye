@@ -1,0 +1,14 @@
+const orig = [3, 1, 2];
+const s1 = orig.slice();
+const s2 = Array.from(orig);
+const s3 = [].concat(orig);
+const s4 = [...orig];
+s1.sort(); s2.reverse(); s3.push(4); s4.pop();
+console.log(orig, s1, s2, s3, s4);
+const objs = [{ v: 1 }];
+const cp = [...objs];
+cp[0].v = 2;
+console.log(objs[0].v);
+const deep = JSON.parse(JSON.stringify([{ v: 1, a: [1] }]));
+deep[0].a.push(2);
+console.log(deep);

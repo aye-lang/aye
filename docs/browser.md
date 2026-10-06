@@ -138,6 +138,43 @@ and a local test server), so CI needs no network and no display.
   golden console output; DOM fixtures whose `dump --tree` after scripts
   matches goldens; a to-do app fixture that works in the window.
 
+**The engine core (done; DOM bindings next).** `anyknown js FILE` runs a
+script; `browser/tests/js/` holds the conformance scripts with Node's
+output as goldens.
+
+- *Pipeline:* tokens (all up front) → AST in one `List(Node)` per engine
+  → a resolver that gives every variable an environment slot (`depth`,
+  `slot`) → a tree-walking interpreter. Exceptions are the Ore error
+  `JsError.Thrown` (the value in `Interp.exception`), so they pass through
+  native functions with `try`.
+- *Strings:* WTF-8 bytes (UTF-8 that can hold lone surrogates) with the
+  UTF-16 length cached, as decided in design.md: the DOM and the engine
+  share UTF-8, and `length`, `charCodeAt` and indices follow UTF-16.
+  ASCII strings index their bytes; others are decoded when an operation
+  needs positions. String comparison is by bytes (code point order,
+  which differs from UTF-16 order only between astral characters and
+  U+E000..U+FFFF). A concatenation of 64 bytes or more makes a rope that
+  is copied flat only when its bytes are needed, so `s += x` in a loop
+  is linear.
+- *Heap and GC:* objects, strings and environments are `u32` indices into
+  three lists with free lists; mark and sweep from the roots (global
+  object, intrinsics, environments, the value stack, frames, pending
+  exception and return value, host roots), every 2× live allocations.
+  A value held across an allocation must be on the interpreter's stack
+  (calls take `[f, this, args...]` from it). `ANYKNOWN_JS_GC=stress`
+  collects at every allocation to check that discipline.
+- *Host interface:* native functions are a table of `fn(*mut Interp,
+  Args) JsError!Value`; `Interp.newHostObject(proto, tag, index,
+  generation)` makes a wrapper that holds a `Handle(Node)` as three
+  integers, and `Interp.host: ?dyn Host` gets `finalize(tag, index,
+  generation)` when the collector frees one (the `js_refs` decrement).
+  `addRoot`/`removeRoot` keep values (event listeners) alive.
+- *Not yet:* generators, async/Promise, Symbol, BigInt, Proxy, typed
+  arrays, tagged templates, `new.target`, time zones (local time is UTC),
+  full Unicode case mapping and normalization.
+  A plain function call gets `this === undefined` (strict-mode rule), and
+  top-level `var`/`function` are properties of the global object.
+
 ### B7: Agent interface
 
 - `anyknown agent`: JSON lines on stdio. Commands: `navigate`, `back`,
