@@ -347,7 +347,7 @@ pub let CANVAS_PRELUDE =
     \\    return '<svg width="'+this._node.width+'" height="'+this._node.height+'"><defs>'+defs+'</defs>'+open+content+close+'</svg>';
     \\  }
     \\  _paint(v) {
-    \\    if (v instanceof CanvasPattern) return Object.assign({}, v, {matrix: mul(this._matrix, v.matrix)});
+    \\    if (v instanceof CanvasPattern || v instanceof CanvasGradient) return Object.assign({}, v, {matrix: mul(this._matrix, v.matrix)});
     \\    return typeof v === 'string' ? {kind: 0, color: ak.canvasColor(v)} : v;
     \\  }
     \\  _draw(d, stroke, rule, style, mode) {
@@ -408,18 +408,18 @@ pub let CANVAS_PRELUDE =
     \\  createLinearGradient(x0, y0, x1, y1) {
     \\    this._sync();
     \\    if (!finite([x0, y0, x1, y1])) throw new DOMException('Invalid gradient', 'NotSupportedError');
-    \\    return new CanvasGradient(1, [x0, y0, x1, y1], this._matrix);
+    \\    return new CanvasGradient(1, [x0, y0, x1, y1], identity());
     \\  }
     \\  createRadialGradient(x0, y0, r0, x1, y1, r1) {
     \\    this._sync();
     \\    if (!finite([x0, y0, r0, x1, y1, r1])) throw new DOMException('Invalid gradient', 'NotSupportedError');
     \\    if (r0 < 0 || r1 < 0) throw new DOMException('Negative radius', 'IndexSizeError');
-    \\    return new CanvasGradient(2, [x0, y0, r0, x1, y1, r1], this._matrix);
+    \\    return new CanvasGradient(2, [x0, y0, r0, x1, y1, r1], identity());
     \\  }
     \\  createConicGradient(angle, x, y) {
     \\    this._sync();
     \\    if (!finite([angle, x, y])) throw new DOMException('Invalid gradient', 'NotSupportedError');
-    \\    return new CanvasGradient(3, [angle, x, y], this._matrix);
+    \\    return new CanvasGradient(3, [angle, x, y], identity());
     \\  }
     \\  createPattern(image, repeat) {
     \\    this._sync();

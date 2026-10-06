@@ -9,7 +9,7 @@ fallback and glyph coverage. There is no separate canvas rasterizer.
 
 ## Offline coverage
 
-- `jsdom/canvas_api.html` runs `api.js`: 52 explicit assertions on context
+- `jsdom/canvas_api.html` runs `api.js`: 53 explicit assertions on context
   identity, resets, validated state, compositing pixels, transforms, dash
   state, Path2D, winding rules and hit tests, clipping, ImageData, text
   metrics, image/canvas/ImageBitmap sources, patterns, gradients, PNG
