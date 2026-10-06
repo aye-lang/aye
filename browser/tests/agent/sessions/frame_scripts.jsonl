@@ -1,0 +1,7 @@
+{"id":1,"cmd":"navigate","url":"browser/tests/frames/iframe_nav.html"}
+{"id":2,"cmd":"wait","ms":50}
+{"id":3,"cmd":"click","ref":"e1"}
+{"id":4,"cmd":"click","ref":"e2"}
+{"id":5,"cmd":"click","ref":"e3"}
+{"id":6,"cmd":"click","ref":"e4"}
+{"id":7,"cmd":"eval","expression":"[window.length, frames[0].document.getElementById('said').textContent].join(' / ')"}

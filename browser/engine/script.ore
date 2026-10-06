@@ -923,11 +923,17 @@ pub fn domVersion(p: *Page) u64 {
 }
 
 /// `domVersion` of the page and of the pages of its frames: when it
-/// moved, something in the tab needs a layout again.
+/// moved, something in the tab needs a layout again (also when a frame's
+/// scripts asked for a navigation, which the next layout follows).
 pub fn treeVersion(p: *Page) u64 {
     var v = domVersion(p)
     for f in p.frames.items() {
         v += treeVersion(f.page)
+        if f.page.script |s| {
+            if s.nav_kind != NavKind.None {
+                v += 1
+            }
+        }
     }
     return v
 }
