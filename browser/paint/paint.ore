@@ -16,7 +16,11 @@
 // among its inline content, its lines and their fragments, or its child
 // boxes). A layer keeps the clips of the ancestors that clip it (not
 // those inside the containing block of an absolutely positioned box,
-// none for a fixed one). Borders become fills
+// none for a fixed one). A transformed box is a layer too, and the items
+// of its layer are mapped by the part of its transform that layout left
+// to paint (`layout/transform.ore`); so is a box clipped by `clip` or
+// `clip-path: inset()`, its layer drawn inside the clip. Fixed boxes do
+// not extend the document. Borders become fills
 // (dashed and dotted ones a row of short fills). Text items refer to the
 // layout tree's text: keep the tree alive as long as the list.
 //
@@ -24,8 +28,8 @@
 // the canvas), borders (solid, dashed, dotted, double; the 3-D styles are
 // solid), color, text-decoration-line (underline, overline,
 // line-through; propagated from ancestors, not into atomic inlines),
-// list markers, images (decoded ones scaled into their content box,
-// else a frame with their `alt` text), frames (`iframe`, `embed`,
+// list markers, images (decoded ones scaled into their content box after
+// `object-fit`, else a frame with their `alt` text), frames (`iframe`, `embed`,
 // `object`: a frame with their address as a link), SVG (inline `svg`
 // elements and SVG images, drawn by svg/ into their content box), form
 // controls (checkboxes and radio buttons drawn, a `select`'s arrow, a list box's selected
@@ -106,6 +110,8 @@ pub fn build(alloc: Allocator, t: *mut Tree) AllocError!DisplayList {
         list: DisplayList { items: List(Item).init(alloc), background: WHITE, width: t.viewport_w, height: t.viewport_h },
         skip_bg: null,
         painting: null,
+        m: layout.Affine.identity(),
+        fixed: false,
     }
     errdefer b.list.deinit()
     if t.root |r| {
@@ -121,7 +127,7 @@ pub fn isLayer(t: *Tree, i: usize) bool {
     if b.kind == BoxKind.Inline || b.kind == BoxKind.Text || b.kind == BoxKind.LineBreak {
         return false
     }
-    return b.abs != 0 || layout.isPositioned(b.style)
+    return b.abs != 0 || layout.isPositioned(b.style) || layout.isTransformed(t, i) || layout.clipOf(t, i) != null
 }
 
 /// A layer inside another: its z-index (`auto` is 0) and tree order.
@@ -200,6 +206,13 @@ pub fn colorOf(v: Value, current: Rgba) Rgba {
     }
 }
 
+// Has the box a `mask-image`? Masks are not drawn, and the background
+// they would cut into a shape (an icon) is left out rather than painted
+// as a rectangle.
+fn masked(style: []Value) bool {
+    return !layout.isKeyword(style[css.MASK_IMAGE], "none")
+}
+
 fn isVisible(style: []Value) bool {
     return layout.isKeyword(style[css.VISIBILITY], "visible")
 }
@@ -211,9 +224,17 @@ struct Builder {
     skip_bg: ?usize
     // The layer being painted (its descendant layers wait).
     painting: ?usize
+    // The transforms of the layers being painted (`layout.Xform`), and
+    // whether they are inside a fixed box (which does not extend the
+    // document).
+    m: layout.Affine
+    fixed: bool
 
     fn add(self: *mut Self, it: Item) AllocError!void {
-        try self.list.items.append(it)
+        if self.m.isIdentity() {
+            return self.list.items.append(it)
+        }
+        try self.list.items.append(transformed(it, self.m, self.t))
     }
 
     fn fill(self: *mut Self, x: f64, y: f64, w: f64, h: f64, c: Rgba) AllocError!void {
@@ -225,6 +246,9 @@ struct Builder {
     }
 
     fn extend(self: *mut Self, right: f64, bottom: f64) {
+        if self.fixed {
+            return
+        }
         if right > self.list.width {
             self.list.width = right
         }
@@ -244,6 +268,12 @@ struct Builder {
             }
         }
         let outer = self.painting
+        let outer_m = self.m
+        self.m = self.m.then(layout.xformOf(self.t, i))
+        let clip = layout.clipOf(self.t, i)
+        if clip |c| {
+            try self.add(Item.Clip { r: Rect { x: c[0], y: c[1], w: c[2], h: c[3] } })
+        }
         self.painting = i
         try self.box(i)
         self.painting = outer
@@ -252,6 +282,10 @@ struct Builder {
                 try self.clippedLayer(l.box)
             }
         }
+        if clip != null {
+            try self.add(Item.Unclip)
+        }
+        self.m = outer_m
     }
 
     // Layer `i` inside the clips of the ancestors that clip it.
@@ -281,7 +315,10 @@ struct Builder {
             }
             cur = cb.parent
         }
+        let outer_fixed = self.fixed
+        self.fixed = self.fixed || lb.abs == 2
         try self.layer(i)
+        self.fixed = outer_fixed
         for k in 0..pushed {
             try self.add(Item.Unclip)
         }
@@ -312,7 +349,7 @@ struct Builder {
         let visible = isVisible(b.style)
         self.extend(b.ax + b.w + b.margin[1], b.ay + b.h + b.margin[2])
         if visible {
-            if self.skip_bg != i {
+            if self.skip_bg != i && !masked(b.style) {
                 try self.fill(b.ax, b.ay, b.w, b.h, colorOf(b.style[css.BACKGROUND_COLOR], WHITE))
             }
             try self.borders(b.style, b.ax, b.ay, b.w, b.h, b.border, true, true)
@@ -400,7 +437,9 @@ struct Builder {
                 }
                 let x = cx + f.x
                 let y = cy + f.y
-                try self.fill(x, y, f.w, f.h, colorOf(b.style[css.BACKGROUND_COLOR], WHITE))
+                if !masked(b.style) {
+                    try self.fill(x, y, f.w, f.h, colorOf(b.style[css.BACKGROUND_COLOR], WHITE))
+                }
                 let first = !self.hasFrag(f.box, self.t.lines.items()[l0].frag_start, fi)
                 let last = !self.hasFrag(f.box, fi + 1, self.t.lines.items()[l1 - 1].frag_end)
                 try self.borders(b.style, x, y, f.w, f.h, b.border, first, last)
@@ -552,7 +591,16 @@ struct Builder {
                 if imgs.get(el) |bmp| {
                     if w > 0.0 && h > 0.0 {
                         self.extend(x + w, y + h)
-                        try self.add(Item.Image { r: Rect { x: x, y: y, w: w, h: h }, w: bmp.width, h: bmp.height, pixels: bmp.pixels })
+                        let box = Rect { x: x, y: y, w: w, h: h }
+                        let r = fitted(box, bmp.width as f64, bmp.height as f64, layout.keywordOf(self.t.bx(i).style[css.OBJECT_FIT]))
+                        let clip = r.w > w || r.h > h
+                        if clip {
+                            try self.add(Item.Clip { r: box })
+                        }
+                        try self.add(Item.Image { r: r, w: bmp.width, h: bmp.height, pixels: bmp.pixels })
+                        if clip {
+                            try self.add(Item.Unclip)
+                        }
                     }
                     return
                 }
@@ -731,6 +779,74 @@ struct Builder {
             }
         }
     }
+}
+
+// Where an image of `iw` x `ih` pixels goes in the content box `box`
+// after `object-fit` (centered): `fill` stretches it, `contain` and
+// `cover` keep its ratio inside or over the box (which clips it),
+// `none` keeps its size, `scale-down` is the smaller of those two.
+fn fitted(box: Rect, iw: f64, ih: f64, fit: []u8) Rect {
+    if iw <= 0.0 || ih <= 0.0 || text.eql(fit, "fill") || fit.len == 0 {
+        return box
+    }
+    var k = 1.0
+    let sx = box.w / iw
+    let sy = box.h / ih
+    if text.eql(fit, "contain") {
+        k = math.min(sx, sy)
+    } else if text.eql(fit, "cover") {
+        k = math.max(sx, sy)
+    } else if text.eql(fit, "scale-down") {
+        k = math.min(1.0, math.min(sx, sy))
+    }
+    let w = iw * k
+    let h = ih * k
+    return Rect { x: box.x + (box.w - w) / 2.0, y: box.y + (box.h - h) / 2.0, w: w, h: h }
+}
+
+// Item `it` mapped by `m` (scales, flips and quarter turns): rectangles
+// become their images; text keeps its direction, scaled, at the top
+// left of the image of its box.
+fn transformed(it: Item, m: layout.Affine, t: *mut Tree) Item {
+    match it {
+        .Fill { r, c } => {
+            return Item.Fill { r: mapRect(r, m), c: c }
+        }
+        .Image { r, w, h, pixels } => {
+            return Item.Image { r: mapRect(r, m), w: w, h: h, pixels: pixels }
+        }
+        .Clip { r } => {
+            return Item.Clip { r: mapRect(r, m) }
+        }
+        .Text { x, y, s, face, c } => {
+            let k = math.sqrt(math.abs(m.a * m.d - m.b * m.c))
+            let up = face.size * 0.8
+            let box = mapRect(Rect { x: x, y: y - up, w: t.measure.width(face, s), h: face.size }, m)
+            var f = face
+            f.size = face.size * k
+            return Item.Text { x: box.x, y: box.y + up * k, s: s, face: f, c: c }
+        }
+        .Unclip => {
+            return Item.Unclip
+        }
+    }
+}
+
+// The bounding box of the image of `r` by `m`.
+fn mapRect(r: Rect, m: layout.Affine) Rect {
+    let xs = [4]f64{m.x(r.x, r.y), m.x(r.x + r.w, r.y), m.x(r.x, r.y + r.h), m.x(r.x + r.w, r.y + r.h)}
+    let ys = [4]f64{m.y(r.x, r.y), m.y(r.x + r.w, r.y), m.y(r.x, r.y + r.h), m.y(r.x + r.w, r.y + r.h)}
+    var x0 = xs[0]
+    var x1 = xs[0]
+    var y0 = ys[0]
+    var y1 = ys[0]
+    for k in 1..4 {
+        x0 = math.min(x0, xs[k])
+        x1 = math.max(x1, xs[k])
+        y0 = math.min(y0, ys[k])
+        y1 = math.max(y1, ys[k])
+    }
+    return Rect { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
 }
 
 /// The address an `iframe`, `embed` (`src`) or `object` (`data`)

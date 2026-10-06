@@ -9,8 +9,12 @@
 //       <p class="note">
 //         display: block
 //         color: rgb(255, 0, 0)
+//         ::before
+//           content: "* "
 //
-// Text, comments and the doctype are left out.
+// An element's `::before` and `::after` follow its own values (with the
+// values that differ from the element's). Text, comments and the
+// doctype are left out.
 
 import css
 import dom
@@ -55,13 +59,16 @@ fn styleNode(doc: *Document, styles: *css.Styles, h: NodeId, depth: usize, out: 
         }
         try out.append(">\n")
         if styles.get(h) |values| {
-            for i, p in css.PROPERTIES {
-                if !css.sameValue(styles.initial[i], values[i]) {
+            try styleValues(styles.initial, values, depth + 1, out)
+            for which in 1..3 {
+                if styles.pseudo(h, which as u8) |pv| {
                     try indent(out, depth + 1)
-                    try out.append(p.name)
-                    try out.append(": ")
-                    try css.writeValue(values[i], out)
-                    try out.appendByte('\n')
+                    if which == 1 {
+                        try out.append("::before\n")
+                    } else {
+                        try out.append("::after\n")
+                    }
+                    try styleValues(values, pv, depth + 2, out)
                 }
             }
         }
@@ -73,6 +80,19 @@ fn styleNode(doc: *Document, styles: *css.Styles, h: NodeId, depth: usize, out: 
     while cur |c| {
         try styleNode(doc, styles, c, inner, out)
         cur = doc.node(c).next
+    }
+}
+
+// The values of `values` that differ from `base`.
+fn styleValues(base: []css.Value, values: []css.Value, depth: usize, out: *mut text.Builder) AllocError!void {
+    for i, p in css.PROPERTIES {
+        if !css.sameValue(base[i], values[i]) {
+            try indent(out, depth)
+            try out.append(p.name)
+            try out.append(": ")
+            try css.writeValue(values[i], out)
+            try out.appendByte('\n')
+        }
     }
 }
 

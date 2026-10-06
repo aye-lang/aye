@@ -53,6 +53,8 @@
         text-align: center
       <div>
         display: block
+        margin-right: auto
+        margin-left: auto
         text-align: center
       <div style="width: 50%; margin-left: 10px">
         display: block

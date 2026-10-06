@@ -1,0 +1,21 @@
+viewport 800x600
+  block <html> (0, 0) 800x20
+    block <body> (0, 0) 800x20
+      grid <div id="g"> (0, 0) 800x20
+        block <div id="a"> (0, 0) 596x20
+          grid <div id="in"> (0, 0) 596x20
+            block <div> (0, 0) 137x20
+              line (0, 0) 137x20
+                inline-block <span class="w"> (0, 4.8) 100x10
+            block <div> (153, 0) 137x20
+              line (153, 0) 137x20
+                inline-block <span class="w"> (153, 4.8) 100x10
+            block <div> (306, 0) 137x20
+              line (306, 0) 137x20
+                inline-block <span class="w"> (306, 4.8) 100x10
+            block <div> (459, 0) 137x20
+              line (459, 0) 137x20
+                inline-block <span class="w"> (459, 4.8) 100x10
+        block <div id="b"> (612, 0) 188x20
+          line (612, 0) 188x20
+            inline-block <span class="w"> (612, 4.8) 100x10

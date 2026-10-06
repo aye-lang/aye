@@ -1,0 +1,51 @@
+viewport 800x600
+  block <html> (0, 0) 800x151.2
+    block <body> (0, 0) 800x151.2
+      flex <ol> (0, 0) 800x21.2
+        list-item <li> (0, 0) 48x21.2
+          line (0, 0) 48x21.2
+            text (0, 3.2) 24x16 "Web"
+            inline-block ::after (28, 0) 16x16
+        list-item <li> (48, 0) 56x21.2
+          line (48, 0) 56x21.2
+            text (48, 3.2) 32x16 "HTML"
+            inline-block ::after (84, 0) 16x16
+        list-item <li> (104, 0) 56x21.2
+          line (104, 0) 56x20
+            text (104, 2) 56x16 "details"
+      block <p> (0, 21.2) 800x20
+        line (0, 21.2) 800x20
+          inline <q> (0, 23.2) 64x16
+            inline ::before (0, 23.2) 8x16
+              text (0, 23.2) 8x16 "“"
+            text (8, 23.2) 48x16 "quoted"
+            inline ::after (56, 23.2) 8x16
+              text (56, 23.2) 8x16 "”"
+          text (64, 23.2) 8x16 " "
+          inline <span class="note"> (72, 23.2) 80x16
+            inline ::before (72, 23.2) 48x16
+              text (72, 23.2) 48x16 "Note: "
+            text (120, 23.2) 32x16 "text"
+          text (152, 23.2) 8x16 " "
+          inline <a href="x.html" title="more"> (160, 23.2) 88x16
+            text (160, 23.2) 32x16 "link"
+            inline ::after (192, 23.2) 56x16
+              text (192, 23.2) 56x16 " (more)"
+      block <div class="clear"> (0, 41.2) 800x50
+        block (anonymous) (0, 41.2) 800x20
+          line (50, 41.2) 750x20
+            text (50, 43.2) 208x16 "the parent holds its float"
+          block <div class="float"> (0, 41.2) 50x50 float left
+        block ::after (0, 91.2) 800x0
+      block <div class="icon" style="position: relative"> (0, 91.2) 800x20
+        line (0, 91.2) 800x20
+          text (0, 93.2) 80x16 "positioned"
+        block ::before (792, 91.2) 8x20 absolute
+          line (792, 91.2) 8x20
+            text (792, 93.2) 8x16 "*"
+      block <p class="none"> (0, 111.2) 800x20
+        line (0, 111.2) 800x20
+          text (0, 113.2) 192x16 "no box for content: none"
+      block <p class="plain"> (0, 131.2) 800x20
+        line (0, 131.2) 800x20
+          text (0, 133.2) 176x16 "no box without content"

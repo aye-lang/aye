@@ -1,0 +1,53 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <div class="a">
+      display: block
+      margin-top: 3px
+      margin-right: 2px
+      margin-bottom: 3px
+      margin-left: 1px
+    <div class="b">
+      display: block
+      padding-top: 5px
+      padding-right: 4px
+      padding-bottom: 6px
+      padding-left: 4px
+    <div class="c">
+      display: block
+      margin-right: auto
+      margin-left: 7px
+      padding-top: 8px
+      padding-bottom: 9px
+    <div class="d">
+      display: block
+      position: absolute
+      top: 11px
+      right: 10px
+      left: 0px
+    <div class="e">
+      display: block
+      border-left-width: 2px
+      border-left-style: solid
+      border-left-color: rgb(255, 0, 0)
+      width: 12px
+      height: 13px
+      min-width: 1px
+      max-height: 50%
+    <div class="f">
+      display: flex
+      justify-content: space-between
+      align-items: center
+      <span class="g">
+        margin-right: 14px
+        margin-left: 14px
+        align-self: end

@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0 }
+.f { display: flex; width: 200px; margin-bottom: 4px }
+.f div { flex: 1 1 300px; height: 20px }
+</style>
+<div class="f"><div>Unbreakable_long_word_here</div><div>b</div></div>
+<div class="f"><div style="overflow: hidden">Unbreakable_long_word_here</div><div>b</div></div>
+<div class="f"><div style="max-width: 60px">Unbreakable_long_word_here</div><div>b</div></div>
+<div class="f"><div style="min-width: 0">Unbreakable_long_word_here</div><div>b</div></div>

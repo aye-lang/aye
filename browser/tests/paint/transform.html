@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<style>
+body { margin: 8px }
+div { width: 60px; height: 20px; margin-bottom: 30px }
+.a { background-color: tomato; transform: translate(20px, 10px) }
+.b { background-color: gold; transform: scale(2); transform-origin: 0 0; border: 1px solid black }
+.c { background-color: skyblue; transform: rotate(90deg) }
+.d { background-color: lightgreen; transform: scaleX(-1) translateX(-100px) }
+.e { position: absolute; top: 8px; left: 200px; width: 100px; height: 100px; background-color: #ddd; transform: translateX(50%) }
+.e div { background-color: purple; transform: scale(0.5); margin: 0 }
+.drawer { position: fixed; top: 0; right: 0; width: 100px; height: 100%; background-color: black; transform: translateX(100%) }
+</style>
+<div class="a">A</div>
+<div class="b">B</div>
+<div class="c">C</div>
+<div class="d">D</div>
+<div class="e">E<div>F</div></div>
+<div class="drawer">drawer</div>

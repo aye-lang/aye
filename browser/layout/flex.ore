@@ -2,8 +2,9 @@
 // their reverses), `flex-wrap` for rows, `gap`, flex-grow/shrink/basis
 // with min/max clamping (9.7), `justify-content`, `align-items` and
 // `align-self` (stretch, start, end, center; baseline as start), and
-// auto margins on the main axis. Columns flex only when the container's
-// height is definite.
+// auto margins on the main axis. The automatic minimum width of an item
+// in a row is its min-content width (none when it clips its overflow).
+// Columns flex only when the container's height is definite.
 
 import css
 import std.list.List
@@ -274,17 +275,22 @@ fn flexItem(t: *mut Tree, c: usize, row: bool, cw: f64, ch: f64) AllocError!Item
         } else {
             it.basis = mm.max
         }
+        if sizeOf(s, s[css.MAX_WIDTH], cw, he) |mx| {
+            it.max = mx
+        }
         if sizeOf(s, s[css.MIN_WIDTH], cw, he) |mn| {
             it.min = mn
+        } else if !isKeyword(s[css.OVERFLOW_X], "visible") {
+            // A scroll container (or one that clips) has no automatic
+            // minimum.
+            it.min = he
         } else {
-            // The automatic minimum size: the min-content width.
-            it.min = mm.min
+            // The automatic minimum size: the min-content width (at most
+            // its width and its max-width).
+            it.min = math.min(mm.min, it.max)
             if spec |w| {
                 it.min = math.min(it.min, w)
             }
-        }
-        if sizeOf(s, s[css.MAX_WIDTH], cw, he) |mx| {
-            it.max = mx
         }
     } else {
         let ve = vEdges(b)

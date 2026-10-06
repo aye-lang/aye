@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<!-- Items spanning several columns: their min-content contribution
+     includes the gaps they span (BBC's 24-column grid). All 24 columns
+     are 18px: #a 0..596, #b 612..800. -->
+<style>
+body { margin: 0 }
+#g { display: grid; grid-template-columns: repeat(24, 1fr); column-gap: 16px }
+#a { grid-column: 1 / span 18 }
+#b { grid-column: 19 / span 6 }
+#in { display: grid; grid-template-columns: repeat(20, 1fr); column-gap: 16px }
+#in > div { grid-column: span 5 }
+.w { display: inline-block; width: 100px; height: 10px }
+</style>
+<div id="g">
+  <div id="a"><div id="in">
+    <div><span class="w"></span></div><div><span class="w"></span></div>
+    <div><span class="w"></span></div><div><span class="w"></span></div>
+  </div></div>
+  <div id="b"><span class="w"></span></div>
+</div>

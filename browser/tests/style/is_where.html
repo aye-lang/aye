@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<style>
+:is(.a, .b) p { color: green }
+:where(#w) p { font-style: italic }
+p { font-style: normal }
+:is(#i) p { font-weight: 700 }
+p.x { font-weight: 400 }
+:is(.c, ::bogus, %%) span { text-align: right }
+ul :matches(li, dd) { white-space: pre }
+:-webkit-any(ol) li { visibility: hidden }
+:is(.d > em) { text-decoration-line: underline }
+</style>
+<div class="a"><p>green (.a)</p></div>
+<div class="b"><p>green (.b)</p></div>
+<div id="w"><p>normal: :where() adds no specificity</p></div>
+<div id="i"><p class="x">bold: :is(#i) outweighs p.x</p></div>
+<div class="c"><span>right: invalid selectors in :is() are dropped</span></div>
+<ul><li>pre</li></ul>
+<ol><li>hidden</li></ol>
+<div class="d"><em>underlined</em></div>
