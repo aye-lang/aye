@@ -15,6 +15,8 @@ async function run() {
   check('initial state', img.complete && img.naturalWidth === 0 && img.naturalHeight === 0 && img.currentSrc === '');
   const created = document.createElement('img');
   check('createElement initial', created.complete && created.width === 0 && created.height === 0);
+  const converted = new Image(-1, 3.8);
+  check('constructor unsigned dimensions', converted.width === 4294967295 && converted.height === 3);
   check('decode without source', await fails(created.decode()));
   await parsed.decode();
   await task();
@@ -81,6 +83,28 @@ async function run() {
   markup.attributes.getNamedItem('src').value = BAD;
   check('Attr restarts request', !markup.complete && await fails(markup.decode()));
   await task();
+  const clone = parsed.cloneNode();
+  let cloneLoads = 0;
+  clone.onload = () => cloneLoads++;
+  // The first timer precedes the event queued by the decode microtask.
+  await task();
+  await task();
+  check('detached clone request', cloneLoads === 1 && clone.complete && clone.naturalWidth === 2);
+  const picture = document.createElement('picture');
+  const source = document.createElement('source');
+  const pictureImg = document.createElement('img');
+  pictureImg.src = BAD;
+  source.setAttribute('srcset', PNG + ' 2x');
+  picture.append(source, pictureImg);
+  await pictureImg.decode();
+  check('picture selection', pictureImg.currentSrc === PNG && pictureImg.naturalWidth === 1);
+  source.setAttribute('srcset', BAD);
+  check('picture source replacement', await fails(pictureImg.decode()));
+  source.setAttribute('srcset', PNG);
+  await pictureImg.decode();
+  check('picture source recovery', pictureImg.naturalHeight === 4);
+  host.appendChild(pictureImg);
+  check('moved out of picture', await fails(pictureImg.decode()) && pictureImg.currentSrc === BAD);
   check('event state ordering', eventStates);
   check('final event counts', loads === 2 && errors === 3);
 }

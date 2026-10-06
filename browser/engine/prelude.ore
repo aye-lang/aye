@@ -1903,8 +1903,8 @@ pub let PRELUDE =
     \\hidden(G, 'isSecureContext', true);
     \\hidden(G, 'Image', function Image(width, height) {
     \\  const img = document.createElement('img');
-    \\  if (width !== undefined) img.setAttribute('width', String(width));
-    \\  if (height !== undefined) img.setAttribute('height', String(height));
+    \\  if (width !== undefined) img.width = width;
+    \\  if (height !== undefined) img.height = height;
     \\  return img;
     \\});
     \\// Image requests: the native bridge uses rendering's selector/cache and
@@ -1918,7 +1918,8 @@ pub let PRELUDE =
     \\  if (old) for (const waiter of old.waiters.splice(0)) waiter.reject(imageEncodingError());
     \\  const src = el.getAttribute('src'), srcset = el.getAttribute('srcset') || '';
     \\  const empty = !srcset && (src === null || src === '');
-    \\  const state = { complete: empty, width: 0, height: 0, currentSrc: '', status: 'pending', waiters: [] };
+    \\  const parent = el.parentNode;
+    \\  const state = { complete: empty, width: 0, height: 0, currentSrc: '', status: 'pending', waiters: [], picture: !!parent && parent.localName === 'picture' };
     \\  hidden(el, '__imageRequest', state);
     \\  ak.queueMicrotask(() => {
     \\    if (el.__imageRequest !== state) return;
@@ -1956,7 +1957,17 @@ pub let PRELUDE =
     \\    const kind = recs[i], target = recs[i + 1], node = recs[i + 2], name = recs[i + 5];
     \\    if (!target) continue;
     \\    if (kind === 1 && target instanceof HTMLImageElement && ['src', 'srcset', 'sizes', 'crossorigin', 'referrerpolicy'].includes(name)) imageUpdate(target);
-    \\    if (kind === 3 && node) imageDiscover(node);
+    \\    if (kind === 3 && node) {
+    \\      imageDiscover(node);
+    \\      // Moving a loaded img out of a picture must reselect its own src.
+    \\      if (node instanceof HTMLImageElement && node.__imageRequest) {
+    \\        const parent = node.parentNode;
+    \\        if (!parent || parent.localName !== 'picture') {
+    \\          const previous = node.__imageRequest;
+    \\          if (previous.picture) imageUpdate(node);
+    \\        }
+    \\      }
+    \\    }
     \\    // picture sources affect their sibling img, not just their own wrapper.
     \\    const picture = target.localName === 'picture' ? target : target.localName === 'source' ? target.parentNode : null;
     \\    if (picture && picture.localName === 'picture' && (kind === 0 || kind === 3 || (kind === 1 && ['srcset', 'sizes', 'media', 'type'].includes(name)))) {
@@ -3132,11 +3143,13 @@ pub let PRELUDE =
     \\const nativeCloneNode = NodeP.cloneNode;
     \\hidden(NodeP, 'cloneNode', function (deep) {
     \\  const c = nativeCloneNode.call(this, deep);
+    \\  imageDiscover(c);
     \\  if (ceDefs.size > 0 && !ak.inTemplate(this)) for (const el of ak.customIn(c)) ceTryUpgrade(el);
     \\  return c;
     \\});
     \\hidden(Document.prototype, 'importNode', function (node, deep) {
     \\  const c = nativeCloneNode.call(node, !!deep);
+    \\  imageDiscover(c);
     \\  if (ceDefs.size > 0) for (const el of ak.customIn(c)) ceTryUpgrade(el);
     \\  return c;
     \\});

@@ -1,6 +1,7 @@
 <!doctype html><title>Resource reflections</title><pre id="results"></pre><script>
 const out = document.getElementById('results');
 function check(name, value) { out.append(name + ': ' + (value ? 'PASS' : 'FAIL') + '\n'); }
+check('parser script defaults', !document.currentScript.async && !document.currentScript.defer && !document.currentScript.noModule);
 const style = document.createElement('style');
 check('style defaults', style.media === '' && style.type === '');
 style.media = 'screen'; style.type = 'text/css';
