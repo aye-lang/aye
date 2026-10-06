@@ -1738,7 +1738,7 @@ pub fn main() {
 }
 E0086 = 86 {
     "invalid `std.log` format",
-    "`std.log.err(format, args...)` and `std.log.info(...)` take a string literal and one argument for each `{}` in it. An argument is an integer, a float, a `bool`, a `[]u8` or an error value (printed as its name).",
+    "`std.log.err(format, args...)` and `std.log.info(...)` take a string literal (or a constant `let NAME = \"...\"`) and one argument for each `{}` in it. An argument is an integer, a float, a `bool`, a `[]u8` or an error value (printed as its name).",
     r#"import std
 
 pub fn main() {

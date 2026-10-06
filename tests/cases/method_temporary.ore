@@ -1,0 +1,31 @@
+// A method that takes `self: *Self` or `self: *mut Self` can be called on
+// a temporary: it gets a pointer to a copy that lives until the function
+// returns.
+
+import std.text
+
+struct Counter {
+    n: i32
+
+    fn new() Self {
+        return Self { n: 4 }
+    }
+
+    fn bump(self: *mut Self) i32 {
+        self.n += 1
+        return self.n
+    }
+
+    fn get(self: *Self) i32 {
+        return self.n
+    }
+}
+
+pub fn main() {
+    @println(Counter.new().get())
+    @println(Counter.new().bump())
+    @println(text.split("key=value", "=").next().?)
+    if text.split("", ",").next() |first| {
+        @println(first.len)
+    }
+}

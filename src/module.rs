@@ -219,6 +219,9 @@ struct Loader<'a> {
     file: usize,
     imports: HashMap<String, (Binding, Span)>,
     last_import: Option<Span>,
+    /// Import names that a local of the current function was given (an
+    /// error): its uses are the local's, not reported again.
+    shadowed: Vec<String>,
 }
 
 /// Load the root module (`root`, in the directory `base`) and every module
@@ -237,6 +240,7 @@ pub fn load(root: Vec<SourceFile>, base: &Path) -> (Vec<SourceFile>, Result<ast:
         file: 0,
         imports: HashMap::new(),
         last_import: None,
+        shadowed: Vec::new(),
     };
     l.add_module(String::new(), root);
     let mut m = 0;
@@ -491,6 +495,9 @@ impl Loader<'_> {
 
     /// A name written without a path.
     fn resolve_name(&mut self, name: &str, span: Span) -> Result<Res, Error> {
+        if self.shadowed.iter().any(|n| n == name) {
+            return Ok(Res::Unresolved);
+        }
         let module = &self.modules[self.cur];
         if module.items.contains_key(name) {
             return Ok(Res::Item(canonical(&module.path, name), module.items[name].kind));
@@ -580,10 +587,19 @@ impl Loader<'_> {
     /// cannot shadow an import or (outside the root module, where sema
     /// checks it) a top-level name of the module.
     fn bind(&mut self, name: &str, span: Span) {
-        let prev = self.imports.get(name).map(|(_, s)| *s).or_else(|| match self.cur {
+        if let Some(&(_, prev)) = self.imports.get(name) {
+            let msg = format!(
+                "`{name}` is already the name of the import at {}:{} (shadowing is not allowed: rename the local)",
+                prev.line, prev.col
+            );
+            self.report(Error::new(E0016, span, msg));
+            self.shadowed.push(name.to_string());
+            return;
+        }
+        let prev = match self.cur {
             0 => None,
             m => self.modules[m].items.get(name).map(|d| d.span),
-        });
+        };
         if let Some(prev) = prev {
             let msg = format!("`{name}` is already declared at {}:{} (shadowing is not allowed)", prev.line, prev.col);
             self.report(Error::new(E0016, span, msg));
@@ -641,6 +657,7 @@ impl Loader<'_> {
     }
 
     fn func(&mut self, f: &mut ast::FnDecl) {
+        self.shadowed.clear();
         for p in &mut f.params {
             if f.body.is_some() {
                 self.bind(&p.name, p.span);

@@ -9,3 +9,9 @@ pub fn main() {
     std.log.info("{}", P { x: 1 })
     std.log.err("{}", 1, 2)
 }
+
+var FMT = "changes {}"
+
+fn g() {
+    std.log.err(FMT, 1)
+}

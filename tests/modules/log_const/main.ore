@@ -1,0 +1,14 @@
+// `std.log` takes a string constant as its format, also one of another
+// module.
+
+import std
+import texts
+
+let USAGE = "usage: log_const <file>"
+let COUNT = "{} files"
+
+pub fn main() {
+    std.log.err(USAGE)
+    std.log.info(COUNT, 3)
+    std.log.info(texts.DONE, "all")
+}

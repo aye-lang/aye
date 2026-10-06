@@ -8,4 +8,5 @@ pub fn main() {
     let a = std
     let b = std.fs.nope(1)
     let fs = 2
+    @println(fs + 1)
 }

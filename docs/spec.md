@@ -643,7 +643,9 @@ pub fn main() {
 through a `*mut`). `p.*` dereferences. Field access and method calls go
 through one pointer level automatically: `p.x`, `p.x = 1` for `p: *mut S`.
 `p == q` is true when both point to the same place. There is no pointer
-arithmetic and no null pointer: use `?*T`. A temporary cannot be borrowed (`&f()` is an error).
+arithmetic and no null pointer: use `?*T`. A temporary cannot be borrowed
+(`&f()` is an error), but a method that takes `*Self` or `*mut Self` can
+be called on one, `text.split(s, ",").next()`: it gets a pointer to a copy.
 
 ### Optionals
 
@@ -1059,7 +1061,8 @@ pub fn main() {
   interfaces, and `pub fn` methods) can be used from another module. Fields
   and enum variants are visible wherever their type is.
 - An import name cannot also be declared in the module, and locals cannot
-  shadow it. Modules cannot import each other in a cycle.
+  shadow it (`import url` and `let url = ...` is an error: rename the
+  local). Modules cannot import each other in a cycle.
 - The `test` blocks of every module are checked with the program (`ore
   check`, `ore build`) and run by `ore test` (section 13); std's are not.
 - Errors and types from other modules are shown with their path in
@@ -1379,9 +1382,10 @@ std.log.err(format, args...)     writes "error: <message>\n" to stderr
 std.log.info(format, args...)    writes "info: <message>\n" to stderr
 ```
 
-`format` must be a string literal. Each `{}` in it is replaced by the next
-argument: an integer, float, `bool`, `[]u8`, or an error value (written as
-its name). The number of `{}` must equal the number of arguments. Other
+`format` must be a string literal or a string constant (`let USAGE =
+"..."`, also another module's `pub let`). Each `{}` in it is replaced by
+the next argument: an integer, float, `bool`, `[]u8`, or an error value
+(written as its name). The number of `{}` must equal the number of arguments. Other
 characters, including lone braces, are written as they are. Pending `@print`
 output is flushed first.
 

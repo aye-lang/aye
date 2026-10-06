@@ -3430,15 +3430,27 @@ impl<'a> Checker<'a> {
     }
 
     /// `std.log.err(format, args...)` or `std.log.info(...)`: `format` is a
-    /// string literal, and each `{}` in it takes the next argument, an
-    /// integer, float, `bool`, `[]u8` or error value.
+    /// string literal or a constant (top-level `let`) that is one, and each
+    /// `{}` in it takes the next argument, an integer, float, `bool`, `[]u8`
+    /// or error value.
     fn log(&mut self, error: bool, args: &[ast::Expr], span: Span) -> Result<TExpr> {
         let f = if error { "std.log.err" } else { "std.log.info" };
         let Some(first) = args.first() else {
             return err(E0086, span, format!("`{f}` needs a format string: `{f}(\"text {{}}\", value)`"));
         };
-        let ExprKind::Str(format) = &strip_parens(first).kind else {
-            return err(E0086, first.span, format!("the format of `{f}` must be a string literal (print a value with `{f}(\"{{}}\", value)`)"));
+        let not_constant =
+            || err(E0086, first.span, format!("the format of `{f}` must be a string literal or constant (print a value with `{f}(\"{{}}\", value)`)"));
+        let format = match &strip_parens(first).kind {
+            ExprKind::Str(s) => s.clone(),
+            ExprKind::Ident(n) if self.lookup(n).is_none() && self.global_decls.iter().any(|g| g.name == *n) => {
+                let (_, mutable) = self.global(n, first.span)?;
+                match &self.globals[n].value {
+                    Some(ConstVal::Str(s)) if !mutable => s.clone(),
+                    None => return Err(silent()),
+                    _ => return not_constant(),
+                }
+            }
+            _ => return not_constant(),
         };
         let mut pieces = vec![Vec::new()];
         let mut i = 0;
@@ -3880,8 +3892,9 @@ impl<'a> Checker<'a> {
     }
 
     /// The receiver `recv` of a method that takes `self: *Self` or (with
-    /// `mutable`) `self: *mut Self`: a pointer is passed as is, and a place
-    /// is passed as `&place` or `&mut place`.
+    /// `mutable`) `self: *mut Self`: a pointer is passed as is, a place as
+    /// `&place` or `&mut place` (it must be mutable for `*mut Self`), and a
+    /// temporary as a pointer to a copy of it.
     fn receiver_ptr(&self, recv: TExpr, mutable: bool, method: &str) -> Result<TExpr> {
         match &recv.ty {
             Type::Ptr(t, false) if mutable => err(E0033, recv.span, format!(
@@ -3890,13 +3903,7 @@ impl<'a> Checker<'a> {
             )),
             Type::Ptr(..) => Ok(recv),
             _ => {
-                if !Self::is_lvalue(&recv) {
-                    let s = if mutable { "*mut Self" } else { "*Self" };
-                    return err(E0035, recv.span, format!(
-                        "cannot call `{method}` on a temporary value: it takes `self: {s}` (store the value in a variable first)"
-                    ));
-                }
-                if mutable {
+                if mutable && Self::is_lvalue(&recv) {
                     self.check_mutable(&recv, true).map_err(|e| Error {
                         msg: format!("method `{method}` takes `self: *mut Self`: {}", e.msg),
                         ..e
