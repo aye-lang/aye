@@ -810,6 +810,9 @@ struct Matcher {
     // most the stack allows (a deeper match fails).
     depth: u32
     max_depth: u32
+    // A bounded attempt must retry, even if a shallower alternative
+    // matched after the preferred path ran out of stack.
+    exhausted: bool
 
     fn inSet(self: *Self, cls: u32, c: u32) bool {
         let set = self.prog.sets.items()[cls]
@@ -844,6 +847,7 @@ struct Matcher {
         self.depth += 1
         defer self.depth -= 1
         if self.depth > self.max_depth {
+            self.exhausted = true
             return false
         }
         var pc = pcIn
@@ -1011,12 +1015,20 @@ struct Matcher {
 fn search(it: *mut Interp, prog: *RegexProg, s: []u8, from: usize, caps: []mut i64) AllocError!bool {
     let regs = try it.heap.int_mem.get(prog.nregs as usize + 1, -1)
     defer it.heap.int_mem.put(regs)
-    var m = Matcher { prog: prog, s: s, caps: caps, regs: regs, steps: 0, behind: 0, depth: 0, max_depth: SMALL_DEPTH }
+    var m = Matcher { prog: prog, s: s, caps: caps, regs: regs, steps: 0, behind: 0, depth: 0, max_depth: SMALL_DEPTH, exhausted: false }
     if s.len - from <= BIG_SUBJECT {
         return searchFrom(&mut m, from)
     }
-    // The matcher recurses once per backtracking point (each repetition
-    // of `x*`): long subjects match on a thread with a large stack.
+    // Subject length is not match depth: most searches of a long string
+    // match a short token. Try with a small, bounded C stack first; only
+    // a path that actually exceeds it needs the large-stack thread.
+    m.max_depth = INLINE_DEPTH
+    let found = searchFrom(&mut m, from)
+    if !m.exhausted {
+        return found
+    }
+    m.exhausted = false
+    m.steps = 0
     m.max_depth = BIG_DEPTH
     var job = SearchJob { m: &mut m, from: from, found: false }
     if thread.spawnWithStack(SearchJob, searchJob, &mut job, BIG_STACK) |t| {
@@ -1028,6 +1040,7 @@ fn search(it: *mut Interp, prog: *RegexProg, s: []u8, from: usize, caps: []mut i
     return job.found
 }
 
+let INLINE_DEPTH: u32 = 128
 let BIG_SUBJECT: usize = 2000
 let SMALL_DEPTH: u32 = 20000
 let BIG_DEPTH: u32 = 4000000
@@ -1050,7 +1063,11 @@ fn searchFrom(m: *mut Matcher, from: usize) bool {
         for i in 0..m.caps.len {
             m.caps[i] = -1
         }
-        if m.run(0, start) {
+        let found = m.run(0, start)
+        if m.exhausted && m.max_depth == INLINE_DEPTH {
+            return false
+        }
+        if found {
             return true
         }
         if m.prog.sticky || start == s.len {
