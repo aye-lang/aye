@@ -1,0 +1,50 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <p>
+      display: block
+      color: rgb(255, 0, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+      white-space: nowrap
+    <p class="note">
+      display: block
+      color: rgb(0, 128, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+      white-space: nowrap
+    <p id="main" class="note">
+      display: block
+      color: rgb(0, 0, 255)
+      margin-top: 16px
+      margin-bottom: 16px
+      white-space: nowrap
+    <p class="a">
+      display: block
+      color: rgb(255, 0, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+      white-space: nowrap
+    <p class="b a">
+      display: block
+      color: rgb(255, 0, 0)
+      font-style: italic
+      margin-top: 16px
+      margin-bottom: 16px
+      white-space: nowrap
+    <div class="box">
+      display: block
+      text-align: center
+      <span id="s1" class="x y">
+        font-weight: 900
+        text-align: center
+    <span class="box">

@@ -80,6 +80,47 @@ fn fixtures() {
     assert!(failures.is_empty(), "{} of {} fixture runs failed:\n\n{}", failures.len(), htmls.len() * 2, failures.join("\n"));
 }
 
+/// `browser/tests/style/X.html`: `anyknown dump --style` must print
+/// `X.style`; `media.html` is also dumped 400px wide into
+/// `media.w400.style`.
+#[test]
+fn style_fixtures() {
+    let dir = root().join("browser").join("tests").join("style");
+    let mut htmls: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "html"))
+        .collect();
+    htmls.sort();
+    assert!(htmls.len() >= 20, "expected at least 20 style fixtures, found {}", htmls.len());
+    let mut runs: Vec<(Vec<String>, PathBuf)> = htmls
+        .iter()
+        .map(|h| (vec![h.strip_prefix(root()).unwrap().to_string_lossy().into_owned()], h.with_extension("style")))
+        .collect();
+    runs.push((vec!["--width".into(), "400".into(), "browser/tests/style/media.html".into()], dir.join("media.w400.style")));
+    let bless = std::env::var_os("ANYKNOWN_BLESS").is_some();
+    let mut failures = Vec::new();
+    for (args, golden) in &runs {
+        let mut all = vec!["dump", "--style"];
+        all.extend(args.iter().map(|s| s.as_str()));
+        let out = run(&all);
+        let got = text(&out.stdout);
+        if !out.status.success() || !out.stderr.is_empty() {
+            failures.push(format!("{args:?}: {}\n{}", out.status, text(&out.stderr)));
+            continue;
+        }
+        if bless {
+            std::fs::write(golden, &got).unwrap();
+            continue;
+        }
+        let want = std::fs::read_to_string(golden).unwrap_or_default();
+        if got != want {
+            failures.push(format!("{args:?}: output differs from {}\n--- expected\n{want}--- got\n{got}", golden.display()));
+        }
+    }
+    assert!(failures.is_empty(), "{} of {} style runs failed:\n\n{}", failures.len(), runs.len(), failures.join("\n"));
+}
+
 #[test]
 fn ore_unit_tests() {
     for module in ["browser", "browser/url", "browser/dom", "browser/encoding"] {
@@ -125,7 +166,7 @@ fn queries() {
 
 #[test]
 fn errors() {
-    let usage = "error: usage: anyknown dump --tree|--text [--id ID | --tag NAME] FILE|URL\n";
+    let usage = "error: usage: anyknown dump --tree|--text|--style [--width PX] [--id ID | --tag NAME] FILE|URL\n";
     expect(&[], 2, "", usage);
     expect(&["dump", "--tree"], 2, "", usage);
     expect(&["dump", "--tree", "browser/tests/missing.html"], 1, "", &format!(
@@ -180,6 +221,10 @@ fn http() {
     expect(&["dump", "--text", &format!("{base}/redirect")], 0, &basic, "");
     expect(&["dump", "--text", &format!("{base}/agent")], 0, "anyknown/0.1\n", "");
     expect(&["dump", "--text", &format!("{base}/gzip")], 0, &format!("{}\n", ["compressed"; 50].join(" ")), "");
+    // Style sheets linked from a page over HTTP are fetched relative to
+    // the URL after redirects.
+    let link_style = std::fs::read_to_string(root().join("browser/tests/style/link.style")).unwrap();
+    expect(&["dump", "--style", &format!("{base}/redirect-style")], 0, &link_style, "");
     // The charset of the Content-Type header decodes the body.
     expect(&["dump", "--text", &format!("{base}/latin1")], 0, "Café à la crème\n", "");
     // An error status still has a page.

@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<style>
+.d1 { display: inline-block } .d2 { display: FLEX } .d3 { display: none } .d4 { display: bogus }
+.pos { position: relative } .posbad { position: absolutely }
+.ta { text-align: justify } .ws { white-space: pre-wrap } .vis { visibility: hidden }
+.sz { width: 100px; height: 50%; min-width: 10px; max-width: 80%; min-height: 0; max-height: none }
+.szbad { width: -10px; max-width: auto; min-height: none }
+.lh1 { line-height: 1.5 } .lh2 { line-height: 20px } .lh3 { line-height: 2em } .lh4 { line-height: normal } .lh5 { line-height: -1 }
+.neg { margin-left: -1em }
+</style>
+<span class="d1">inline-block</span><span class="d2">flex</span><span class="d3">none</span><span class="d4">bogus</span>
+<div class="pos">relative</div><div class="posbad">invalid</div>
+<div class="ta">justify</div><div class="ws">pre-wrap</div><div class="vis">hidden</div>
+<div class="sz">sizes</div><div class="szbad">invalid sizes</div>
+<p class="lh1">1.5<span>inherits the number</span></p>
+<p class="lh2">20px</p>
+<p class="lh3">2em<span style="font-size: 10px">inherits px</span></p>
+<p class="lh4">normal</p><p class="lh5">negative</p>
+<p class="neg">negative em margin</p>

@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<style>
+p:not(.skip) { color: red }
+li:not(:first-child):not(:last-child) { font-style: italic }
+:not(p, li, html, body, ul, head, style) { font-weight: 700 }
+p:not(#special) { text-align: left }
+#special { text-align: right }
+p:not(:not(.double)) { white-space: pre }
+</style>
+<p>plain</p>
+<p class="skip">skipped</p>
+<p id="special">special</p>
+<p class="double">double</p>
+<ul><li>a</li><li>b</li><li>c</li></ul>
+<span>span</span>
