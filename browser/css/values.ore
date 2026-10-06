@@ -778,6 +778,12 @@ pub fn parseValue(sheet: *mut Sheet, prop: usize, comps: []Comp) AllocError!?Val
         }
         return rawValue(sheet, comps)
     }
+    if p.kind == PKind.Paint {
+        let t = comps[0].toks[0]
+        if t.kind == Tok.Url || (t.kind == Tok.Function && text.eqlIgnoreCase(t.text, "url")) {
+            return rawValue(sheet, comps)
+        }
+    }
     if comps.len != 1 {
         return null
     }
@@ -867,6 +873,9 @@ fn single(p: Property, c: Comp) ?Value {
         }
         .Raw => {
             return null
+        }
+        .Paint => {
+            return colorValue(c)
         }
     }
 }

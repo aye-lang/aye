@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A Y in an orange square (like Hacker News's logo), a class from a style sheet. -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="40" height="40" viewBox="4 4 188 188">
+  <style><![CDATA[ .bg { fill: #f60 } ]]></style>
+  <path class="bg" d="m4 4h188v188h-188z"/>
+  <path d="m73.25 45.01 22.75 47.39 22.75-47.39h19.57l-34.32 64.49v41.49h-15.98v-41.49l-34.32-64.49z" fill="#fff"/>
+</svg>

@@ -1,10 +1,11 @@
 // The images of a page: every `img` (and `input type=image`) with a
 // `src` is fetched (relative to the page's base URL, with the page's URL
-// as the Referer; `data:` URLs too) and
-// decoded once per URL, and the elements are mapped to their bitmaps
-// for layout (natural sizes) and paint. `updateImages` runs before each
-// layout and only fetches what is new (elements added by scripts); a
-// URL that failed is not fetched again.
+// as the Referer; `data:` URLs too) and decoded once per URL (an SVG
+// image becomes an `svg.Picture` and a bitmap with its natural size and
+// no pixels), and the elements are mapped to their bitmaps for layout
+// (natural sizes) and paint. `updateImages` runs before each layout and
+// only fetches what is new (elements added by scripts); a URL that
+// failed is not fetched again.
 
 import dom
 import dom.Document
@@ -17,14 +18,16 @@ import std.list.List
 import std.mem.AllocError
 import std.mem.Allocator
 import std.text
+import svg
 import url
 import url.Url
 
 /// One fetched URL and its bitmap (null when it could not be fetched
-/// or decoded).
+/// or decoded), and its picture when it is an SVG image.
 struct CachedImage {
     href: []mut u8
     bmp: ?*mut image.Bitmap
+    pic: ?*mut svg.Picture
 }
 
 pub struct ImageCache {
@@ -44,6 +47,10 @@ pub struct ImageCache {
             if e.bmp |b| {
                 b.deinit(self.alloc)
                 self.alloc.destroy(b)
+            }
+            if e.pic |p| {
+                p.deinit()
+                self.alloc.destroy(p)
             }
         }
         self.entries.deinit()
@@ -69,6 +76,16 @@ pub struct ImageCache {
         return false
     }
 
+    /// The picture of `href` when it is a fetched SVG image.
+    fn pictureOf(self: *Self, href: []u8) ?*mut svg.Picture {
+        for e in self.entries.items() {
+            if text.eql(e.href, href) {
+                return e.pic
+            }
+        }
+        return null
+    }
+
     /// The bitmap of `href`, fetched and decoded the first time.
     fn bitmapOf(self: *mut Self, href: []u8) AllocError!?*mut image.Bitmap {
         for e in self.entries.items() {
@@ -79,29 +96,40 @@ pub struct ImageCache {
         let owned = try self.alloc.alloc(0 as u8, href.len)
         std.mem.copy(owned, href)
         var bmp: ?*mut image.Bitmap = null
-        let decoded = fetchImage(self.alloc, href, self.referrer)
+        var pic: ?*mut svg.Picture = null
+        let decoded = fetchImage(self.alloc, href, self.referrer, &mut pic)
         if decoded |d| {
             bmp = self.alloc.create(d) catch |e| {
                 var lost = d
                 lost.deinit(self.alloc)
                 self.alloc.free(owned)
+                dropPicture(self.alloc, pic)
                 return e
             }
         }
-        self.entries.append(CachedImage { href: owned, bmp: bmp }) catch |e| {
+        self.entries.append(CachedImage { href: owned, bmp: bmp, pic: pic }) catch |e| {
             self.alloc.free(owned)
             if bmp |b| {
                 b.deinit(self.alloc)
                 self.alloc.destroy(b)
             }
+            dropPicture(self.alloc, pic)
             return e
         }
         return bmp
     }
 }
 
-// Fetches and decodes `href`; null when either fails.
-fn fetchImage(alloc: Allocator, href: []u8, referrer: []u8) ?image.Bitmap {
+fn dropPicture(alloc: Allocator, pic: ?*mut svg.Picture) {
+    if pic |p| {
+        p.deinit()
+        alloc.destroy(p)
+    }
+}
+
+// Fetches and decodes `href`; null when either fails. An SVG image
+// goes to `pic`, its bitmap is only its natural size.
+fn fetchImage(alloc: Allocator, href: []u8, referrer: []u8, pic: *mut ?*mut svg.Picture) ?image.Bitmap {
     let target = url.parse(alloc, href) catch |e| {
         return null
     }
@@ -113,10 +141,50 @@ fn fetchImage(alloc: Allocator, href: []u8, referrer: []u8) ?image.Bitmap {
     if res.status >= 400 {
         return null
     }
+    if isSvg(res.mime, res.body) {
+        return svgImage(alloc, res.body, pic)
+    }
     let bmp = image.decode(alloc, res.body) catch |e| {
         return null
     }
     return bmp
+}
+
+// Is the response an SVG image (by its type, or by a start that is
+// markup and not a raster signature)?
+fn isSvg(mime: []u8, body: []u8) bool {
+    if image.sniff(body) != image.Format.Unknown {
+        return false
+    }
+    if text.eql(mime, "image/svg+xml") {
+        return true
+    }
+    let head = text.trim(body[..std.math.minOf(usize, body.len, 1024)])
+    return text.startsWith(head, "<") && text.indexOf(head, "<svg") != null
+}
+
+fn svgImage(alloc: Allocator, body: []u8, out: *mut ?*mut svg.Picture) ?image.Bitmap {
+    let p = svg.parseImage(alloc, body) catch |e| {
+        return null
+    }
+    let pic = p orelse return null
+    let size = pic.naturalSize()
+    let none = alloc.alloc(0 as u8, 0) catch |e| {
+        dropPicture(alloc, pic)
+        return null
+    }
+    out.* = pic
+    return image.Bitmap { width: pixelsOf(size.w), height: pixelsOf(size.h), pixels: none }
+}
+
+fn pixelsOf(v: f64) usize {
+    if v < 1.0 {
+        return 1
+    }
+    if v > 16384.0 {
+        return 16384
+    }
+    return std.math.floor(v + 0.5) as usize
 }
 
 /// Fetches the images of the page's elements that have none yet, and
@@ -153,7 +221,11 @@ pub fn fillImages(cache: *mut ImageCache, doc: *Document, address: *Url) AllocEr
         }
         defer target.deinit(cache.alloc)
         if try cache.bitmapOf(target.withoutFragment()) |bmp| {
-            try cache.nodes.put(h, bmp)
+            if cache.pictureOf(target.withoutFragment()) |pic| {
+                try cache.nodes.putPicture(h, bmp, pic)
+            } else {
+                try cache.nodes.put(h, bmp)
+            }
         }
     }
 }
