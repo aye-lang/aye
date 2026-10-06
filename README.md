@@ -200,8 +200,10 @@ pub fn Pair(comptime T: type) type {
 `Pool(Node).init(alloc, 16)`. The same arguments give the same type. A
 generic is checked once, where it is defined: a value of type `T` can be
 moved, copied and pointed to, and its methods are those of its `where`
-constraints. A type argument that does not implement a constraint is an
-error at the instantiation. The generated C has one copy per instance.
+constraints. The built-in constraint `where T: Integer` admits only
+integer types and lets `x as u64` convert a `T`. A type argument that does
+not satisfy a constraint is an error at the instantiation. The generated C
+has one copy per instance.
 [`tests/cases/pool.ore`](tests/cases/pool.ore) is the design doc's
 `Pool(T)` and `Handle(T)`.
 
@@ -286,7 +288,7 @@ pub fn main() {
   `mod.Name` in expressions and types, the embedded `std` (above).
 - Generics: `comptime T: type` parameters, type functions
   (`fn Pool(comptime T: type) type { return struct { ... } }`), and
-  `where T: Interface, ...` after the return type. A call passes types for
+  `where T: Interface, ...` (or the built-in `Integer`) after the return type. A call passes types for
   the `comptime` parameters: `max(i64, a, b)`; `Pool(Node)` is a type.
   The entry point is `pub fn main()` or `pub fn main() !void`.
 - Statements: `let`, `var`, `=` and compound assignment (`+= -= *= /= %= +%= -%= *%= &= |= ^= <<= >>=`),

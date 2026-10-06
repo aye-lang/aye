@@ -82,7 +82,7 @@ panic.
   match if else for while break continue return defer errdefer try catch
   comptime where as test mut extern`.
 - Predeclared names (not keywords, cannot be declared again): `true false
-  null Self type` and the primitive types `i8 i16 i32 i64 isize u8 u16 u32
+  null Self type Integer` and the primitive types `i8 i16 i32 i64 isize u8 u16 u32
   u64 usize f32 f64 bool`. `in` is special only in a `for` header.
 - Integer literals: `42`, `1_000`, `0xff`, `0o17`, `0b1010`. Float literals:
   `1.5`, `2.0e-3`, `1e9` (a float needs digits on both sides of `.`).
@@ -975,6 +975,25 @@ pub fn main() {
   its `where` constraints. `where T: A, T: B` (no `+`) follows the return
   type. A type argument that does not satisfy a constraint is an error at
   the instantiation.
+- `where T: Integer` is built in: only integer types satisfy it, and a `T`
+  value converts with `as` to any numeric type (`x as u64`, which panics if
+  the value does not fit, as for any integer). That is all: no operators or
+  literals on `T`, and nothing converts to `T`.
+
+```ore
+fn total(comptime T: type, xs: []T) i64 where T: Integer {
+    var s: i64 = 0
+    for x in xs {
+        s += x as i64
+    }
+    return s
+}
+
+pub fn main() {
+    var b = [2]u8{200, 100}
+    @println(total(u8, b[..]))
+}
+```
 - Generic functions and methods of a type function's struct must spell out
   their error sets (`E!T`). A top-level `let P = Pair(i64)` names an
   instance (a type alias, section 4).
@@ -1159,8 +1178,7 @@ StrMap.iterator(self: *Self) StrMapIterator(V)
 std.map.StrMapIterator(V)
 StrMapIterator.next(self: *mut Self) ?StrEntry(V)                  any order
 std.map.StrEntry(V) { key: []u8, value: *mut V }
-interface Key { fn key(self: *Self) u64 }
-std.map.IntMap(K, V) where K: Key          keys identified by the integer k.key()
+std.map.IntMap(K, V) where K: Integer      integer keys, any sign: IntMap(u32, V)
 IntMap.init(alloc: Allocator) IntMap(K, V)
 IntMap.deinit(self: *mut Self)
 IntMap.len(self: *Self) usize
@@ -1175,21 +1193,12 @@ IntMapIterator.next(self: *mut Self) ?IntEntry(K, V)
 std.map.IntEntry(K, V) { key: K, value: *mut V }
 ```
 
-A type parameter has no operators and integers have no methods, so an
-`IntMap` key is a struct with a `key()` method (a node id, a handle):
+A struct (a node id) is not a key: use its integer field.
 
 ```ore
 import std.heap.General
 import std.map.IntMap
 import std.map.StrMap
-
-struct NodeId {
-    v: u32
-
-    fn key(self: *Self) u64 {
-        return self.v as u64
-    }
-}
 
 pub fn main() !void {
     var gpa = General.init()
@@ -1205,10 +1214,10 @@ pub fn main() !void {
         @println(e.key)
         @println(e.value.*)
     }
-    var names = IntMap(NodeId, []u8).init(gpa.allocator())
+    var names = IntMap(u32, []u8).init(gpa.allocator())
     defer names.deinit()
-    try names.put(NodeId { v: 7 }, "seven")
-    @println(names.contains(NodeId { v: 7 }))
+    try names.put(7, "seven")
+    @println(names.contains(7))
 }
 ```
 

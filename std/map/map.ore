@@ -10,12 +10,6 @@ import std.mem
 import std.mem.AllocError
 import std.mem.Allocator
 
-/// The key of an `IntMap`: `key()` gives the integer that identifies the
-/// value. Two keys are the same key when their `key()` is equal.
-pub interface Key {
-    fn key(self: *Self) u64
-}
-
 fn StrSlot(comptime V: type) type {
     return struct {
         key: []u8
@@ -221,9 +215,8 @@ pub fn IntMapIterator(comptime K: type, comptime V: type) type {
     }
 }
 
-/// A map from keys `K` to `V` values, where a key is identified by the
-/// integer of its `key()` method (see `Key`).
-pub fn IntMap(comptime K: type, comptime V: type) type where K: Key {
+/// A map from integer keys `K` (`IntMap(u32, V)`) to `V` values.
+pub fn IntMap(comptime K: type, comptime V: type) type where K: Integer {
     return struct {
         slots: []mut IntSlot(K, V)
         count: usize
@@ -247,7 +240,7 @@ pub fn IntMap(comptime K: type, comptime V: type) type where K: Key {
 
         /// Sets the value of `key`, adding the entry if it is new.
         pub fn put(self: *mut Self, key: K, value: V) AllocError!void {
-            let id = key.key()
+            let id = bits(K, key)
             if self.find(id) |i| {
                 self.slots[i].value = value
                 return
@@ -260,26 +253,26 @@ pub fn IntMap(comptime K: type, comptime V: type) type where K: Key {
         }
 
         pub fn get(self: *Self, key: K) ?V {
-            if self.find(key.key()) |i| {
+            if self.find(bits(K, key)) |i| {
                 return self.slots[i].value
             }
             return null
         }
 
         pub fn getPtr(self: *Self, key: K) ?*mut V {
-            if self.find(key.key()) |i| {
+            if self.find(bits(K, key)) |i| {
                 return &mut self.slots[i].value
             }
             return null
         }
 
         pub fn contains(self: *Self, key: K) bool {
-            return self.find(key.key()) != null
+            return self.find(bits(K, key)) != null
         }
 
         /// Removes the entry of `key`; false when there was none.
         pub fn remove(self: *mut Self, key: K) bool {
-            if self.find(key.key()) |found| {
+            if self.find(bits(K, key)) |found| {
                 let mask = self.slots.len - 1
                 var hole = found
                 var j = found
@@ -348,6 +341,15 @@ pub fn IntMap(comptime K: type, comptime V: type) type where K: Key {
             self.alloc.free(old)
         }
     }
+}
+
+// The 64 bits of an integer key, as two's complement: an `as` conversion
+// would panic on a negative key.
+fn bits(comptime K: type, key: K) u64 where K: Integer {
+    if key as f64 < 0.0 {
+        return ~((-(key as i64 + 1)) as u64)
+    }
+    return key as u64
 }
 
 // FNV-1a.

@@ -1,0 +1,42 @@
+// `where T: Integer`: a type parameter that only integer types satisfy,
+// whose values convert with `as`. Also passed on to another generic.
+
+fn total(comptime T: type, xs: []T) i64 where T: Integer {
+    var s: i64 = 0
+    for x in xs {
+        s += x as i64
+    }
+    return s
+}
+
+// Calls `total` with its own `T`, which has the same constraint.
+fn average(comptime T: type, xs: []T) f64 where T: Integer {
+    return total(T, xs) as f64 / xs.len as f64
+}
+
+fn Counter(comptime K: type) type where K: Integer {
+    return struct {
+        last: K
+        bits: u64
+
+        fn see(self: *mut Self, k: K) {
+            self.last = k
+            self.bits |= (1 as u64) << (k as u64 % 64)
+        }
+    }
+}
+
+pub fn main() {
+    var bytes = [3]u8{200, 100, 7}
+    @println(total(u8, bytes[..]))
+    var neg = [3]i32{-5, 2, -1}
+    @println(total(i32, neg[..]))
+    @println(average(i32, neg[..]))
+    var c = Counter(u16) { last: 0, bits: 0 }
+    c.see(3)
+    c.see(65)
+    @println(c.last)
+    @println(c.bits)
+    var keys = [1]i64{-1}
+    @println(total(i64, keys[..]))
+}

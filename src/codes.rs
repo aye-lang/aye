@@ -624,7 +624,7 @@ E0036 = 36 {
 }
 E0037 = 37 {
     "invalid cast",
-    "`as` converts only between numeric types. Other conversions are written out, for example with `if`.",
+    "`as` converts only between numeric types. Other conversions are written out, for example with `if`. In a generic, a `T` converts with `as` only with `where T: Integer`, and nothing converts to `T`.",
     r#"pub fn main() {
     let flag = true
     let n = flag as i32
@@ -1537,7 +1537,7 @@ pub fn main() {
 }
 E0079 = 79 {
     "unsatisfied `where` constraint",
-    "A generic is instantiated with a type that does not implement the interface of one of its `where` constraints. Give the type the missing method, with the interface's signature, or use another type. A generic that instantiates another one with its own parameter needs the same constraint on that parameter.",
+    "A generic is instantiated with a type that does not implement the interface of one of its `where` constraints, or with a type that is not an integer type for the built-in `where T: Integer`. Give the type the missing method, with the interface's signature, or use another type. A generic that instantiates another one with its own parameter needs the same constraint on that parameter.",
     r#"interface Area {
     fn area(self: *Self) f64
 }

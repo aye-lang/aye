@@ -170,6 +170,9 @@ pub enum Type {
 /// The most instances of one generic.
 const MAX_INSTANCES: usize = 64;
 
+/// The built-in `where` constraint that only integer types satisfy.
+const INTEGER: &str = "Integer";
+
 /// Name prefix of the inferred error set of a `!T` function.
 const INFERRED: &str = "error set of ";
 
@@ -622,6 +625,9 @@ struct Checker<'a> {
     /// every method signature is known; done after that.
     sigs_done: bool,
     pending_bounds: Vec<(String, Vec<Type>, Span)>,
+    /// Instances made before their constraint check failed: their methods
+    /// are checked quietly (the error is at the instantiation).
+    unsatisfied: Vec<String>,
     pending_recursive: Vec<(String, Span)>,
     /// Function bodies to check, in order. Instances add their functions.
     queue: Vec<String>,
@@ -683,6 +689,7 @@ pub fn check(file: &ast::File, require_main: bool) -> std::result::Result<Progra
         failed: HashSet::new(),
         sigs_done: false,
         pending_bounds: Vec::new(),
+        unsatisfied: Vec::new(),
         pending_recursive: Vec::new(),
         queue: Vec::new(),
         global_decls: Vec::new(),
@@ -973,7 +980,7 @@ impl<'a> Checker<'a> {
                 }
             };
             let bare = name.rsplit("::").next().unwrap();
-            if Type::from_name(bare).is_some() || matches!(bare, "true" | "false" | "null" | "Self" | "type") {
+            if Type::from_name(bare).is_some() || matches!(bare, "true" | "false" | "null" | "Self" | "type" | INTEGER) {
                 self.report(Error::new(E0014, span, format!("`{name}` is a builtin name and cannot be redefined")));
                 continue;
             }
@@ -1182,6 +1189,9 @@ impl<'a> Checker<'a> {
         for (g, args, span) in std::mem::take(&mut self.pending_bounds) {
             if let Err(e) = self.check_bounds(&g, &args, span) {
                 self.report(e);
+                if let Some(n) = self.instances.get(&(g, args)) {
+                    self.unsatisfied.push(n.clone());
+                }
             }
         }
         for (name, span) in std::mem::take(&mut self.pending_recursive) {
@@ -1512,7 +1522,7 @@ impl<'a> Checker<'a> {
         for b in &f.bounds {
             if !f.params.iter().any(|p| p.comptime && p.name == b.param) {
                 self.report(Error::new(E0076, b.span, format!("`{}` is not a `comptime` parameter of `{g}`", b.param)));
-            } else if !self.ifaces.contains_key(&b.iface) {
+            } else if b.iface != INTEGER && !self.ifaces.contains_key(&b.iface) {
                 self.report(Error::new(E0076, b.iface_span, format!(
                     "`{}` is not an interface (a `where` constraint names an interface)",
                     b.iface
@@ -1532,6 +1542,21 @@ impl<'a> Checker<'a> {
                 span,
                 "the body of a function that returns `type` must be a single `return struct { ... }`",
             ));
+        }
+    }
+
+    /// Is `t` a type parameter with `where T: Integer`?
+    fn integer_param(&self, t: &Type) -> bool {
+        matches!(t, Type::Param(g, p) if self.bounds.get(&(g.clone(), p.clone())).is_some_and(|v| v.iter().any(|i| i == INTEGER)))
+    }
+
+    /// The hint for an operator applied to a type parameter with `where T: Integer`.
+    fn integer_hint(&self, t: &Type) -> String {
+        match t {
+            Type::Param(_, p) if self.integer_param(t) => {
+                format!(" (`where {p}: Integer` allows only `as`: convert first, e.g. `x as i64`)")
+            }
+            _ => String::new(),
         }
     }
 
@@ -1601,17 +1626,20 @@ impl<'a> Checker<'a> {
         let params: Vec<&ast::Param> = decl.params.iter().filter(|p| p.comptime).collect();
         for b in &decl.bounds {
             let Some(i) = params.iter().position(|p| p.name == b.param) else { continue };
-            if i >= args.len() || !self.ifaces.contains_key(&b.iface) {
+            let integer = b.iface == INTEGER;
+            if i >= args.len() || !integer && !self.ifaces.contains_key(&b.iface) {
                 continue;
             }
             let (p, iface) = (&b.param, &b.iface);
             let need = format!("`where {p}: {iface}` of `{g}` at {}:{}", b.span.line, b.span.col);
             match &args[i] {
+                t if integer && t.is_int() => {}
                 Type::Param(pg, pn) => {
                     if !self.bounds.get(&(pg.clone(), pn.clone())).is_some_and(|v| v.contains(iface)) {
                         return err(E0079, span, format!("`{pn}` does not satisfy {need} (add `where {pn}: {iface}`)"));
                     }
                 }
+                t if integer => return err(E0079, span, format!("`{t}` does not satisfy {need}: it is not an integer type")),
                 Type::Struct(s) => {
                     if let Some(why) = self.why_not(s, iface) {
                         return err(E0079, span, format!("`{s}` does not satisfy {need}: {why}"));
@@ -2124,7 +2152,8 @@ impl<'a> Checker<'a> {
         self.bodies.insert(name.to_string(), None);
         // The instances of a generic with errors are checked quietly.
         let quiet = !self.is_abstract_fn(name)
-            && self.fn_decls[name].generic.as_ref().is_some_and(|g| self.failed.contains(g));
+            && self.fn_decls[name].generic.as_ref().is_some_and(|g| self.failed.contains(g))
+            || self.unsatisfied.iter().any(|n| name.strip_prefix(n.as_str()).is_some_and(|m| m.starts_with('.')));
         let saved_quiet = std::mem::replace(&mut self.quiet, quiet);
         let saved = (
             std::mem::take(&mut self.vars),
@@ -2778,7 +2807,7 @@ impl<'a> Checker<'a> {
             _ => unreachable!(),
         };
         if !ok {
-            return err(E0025, span, format!("operator `{}` cannot be applied to `{ty}`", op.as_str()));
+            return err(E0025, span, format!("operator `{}` cannot be applied to `{ty}`{}", op.as_str(), self.integer_hint(ty)));
         }
         Ok(())
     }
@@ -2999,7 +3028,12 @@ impl<'a> Checker<'a> {
                             _ => l.ty.is_numeric(),
                         };
                         if !ok {
-                            return err(E0025, span, format!("operator `{}` cannot be applied to `{}`", op.as_str(), l.ty));
+                            return err(E0025, span, format!(
+                                "operator `{}` cannot be applied to `{}`{}",
+                                op.as_str(),
+                                l.ty,
+                                self.integer_hint(&l.ty)
+                            ));
                         }
                         Type::Bool
                     };
@@ -3060,8 +3094,14 @@ impl<'a> Checker<'a> {
             ExprKind::Cast { expr, ty } => {
                 let to = self.resolve_type(ty)?;
                 let t = self.value(expr, None)?;
-                if !t.ty.is_numeric() || !to.is_numeric() {
-                    return err(E0037, span, format!("cannot cast `{}` to `{to}` (only numeric casts are supported)", t.ty));
+                // A `T` with `where T: Integer` converts like an integer.
+                if !(t.ty.is_numeric() || self.integer_param(&t.ty)) || !to.is_numeric() {
+                    let hint = match (&t.ty, &to) {
+                        (Type::Param(_, p), _) if to.is_numeric() => format!(" (add `where {p}: Integer` to convert it like an integer)"),
+                        (_, Type::Param(_, p)) => format!(" (nothing converts to the `comptime` type `{p}`)"),
+                        _ => " (only numeric casts are supported)".to_string(),
+                    };
+                    return err(E0037, span, format!("cannot cast `{}` to `{to}`{hint}", t.ty));
                 }
                 (TExprKind::Cast(Box::new(t)), to)
             }
@@ -3487,7 +3527,7 @@ impl<'a> Checker<'a> {
             // While a generic is checked: a method of a `where` constraint.
             Type::Param(g, p) => {
                 let ifaces = self.bounds.get(&(g, p.clone())).cloned().unwrap_or_default();
-                let found = ifaces.iter().find_map(|i| self.ifaces[i].methods.iter().find(|m| m.name == name)).cloned();
+                let found = ifaces.iter().filter_map(|i| self.ifaces.get(i)).find_map(|i| i.methods.iter().find(|m| m.name == name)).cloned();
                 let Some(m) = found else {
                     if ifaces.is_empty() {
                         return err(E0078, span, format!(
