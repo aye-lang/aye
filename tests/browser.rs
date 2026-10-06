@@ -1329,8 +1329,9 @@ fn window_scroll_positions() {
 /// A frameset in the window (`browser/tests/ui/frames.html`, 400x340: a
 /// 100 px menu frame, `long.html` in the rest): the wheel scrolls the
 /// frame under the mouse (up to its document's end), the status line
-/// shows a frame's link resolved in the frame, and clicking it loads it
-/// in the tab.
+/// shows a frame's link resolved in the frame, and clicking a link loads
+/// it in its own frame, in the frame its target names, or (`_top`) in
+/// the tab.
 #[test]
 fn window_framesets() {
     if !has_sdl() {
@@ -1339,12 +1340,15 @@ fn window_framesets() {
     }
     let ui = format!("file://{}/browser/tests/ui/", root().display());
     let page = "url frames.html\nscroll 0\nfocus page\naddress frames.html\nhistory 1 of 1\nmatches 0\n";
+    let urls = "frame_urls frame_menu.html long.html\n";
     let cases: &[(&str, String)] = &[
-        ("move:20,58", format!("{page}status other.html\nframes 0 0\n")),
-        ("move:200,100 wheel:-2", format!("{page}status \nframes 0 80\n")),
-        ("move:200,100 wheel:-100", format!("{page}status \nframes 0 960\n")),
-        ("move:200,100 wheel:-2 move:20,100 wheel:-2 key:down", format!("{page}status \nframes 0 80\n")),
-        ("click:20,58", "url other.html\nscroll 0\nfocus page\naddress other.html\nhistory 2 of 2\nmatches 0\nstatus \n".to_string()),
+        ("move:20,58", format!("{page}status other.html\nframes 0 0\n{urls}")),
+        ("move:200,100 wheel:-2", format!("{page}status \nframes 0 80\n{urls}")),
+        ("move:200,100 wheel:-100", format!("{page}status \nframes 0 960\n{urls}")),
+        ("move:200,100 wheel:-2 move:20,200 wheel:-2 key:down", format!("{page}status \nframes 0 80\n{urls}")),
+        ("click:20,58", format!("{page}status \nframes 0 0\nframe_urls other.html long.html\n")),
+        ("click:20,95", format!("{page}status \nframes 0 0\nframe_urls frame_menu.html other.html\n")),
+        ("click:20,131", "url other.html\nscroll 0\nfocus page\naddress other.html\nhistory 2 of 2\nmatches 0\nstatus \n".to_string()),
     ];
     let mut failures = Vec::new();
     for (events, want) in cases {

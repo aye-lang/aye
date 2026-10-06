@@ -221,6 +221,12 @@ fn writeState(ui: *mut Ui, out: *mut text.Builder) AllocError!void {
                 try out.appendInt(std.math.floor(f.scroll + 0.5) as i64)
             }
             try out.append("\n")
+            try out.append("frame_urls")
+            for f in p.frames.items() {
+                try out.append(" ")
+                try out.append(f.page.url.href)
+            }
+            try out.append("\n")
         }
     }
     if ui.agents |a| {
