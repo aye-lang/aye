@@ -42,7 +42,13 @@ pub struct File {
             alloc.free(buf)
             return []mut u8{}
         }
-        return buf[..len]
+        // The exact size, so that `alloc.free` of the result frees what was
+        // allocated.
+        let exact = alloc.resize(buf, len, 0) catch |e| {
+            alloc.free(buf)
+            return e
+        }
+        return exact
     }
 
     /// Write all of `bytes`. Output of `@print` is flushed first, so the

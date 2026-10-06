@@ -273,6 +273,9 @@ pub struct Program {
     /// The (interface, struct) pairs that are converted to `dyn`; each one
     /// needs a vtable.
     pub vtables: Vec<(String, String)>,
+    /// The structs converted to `Allocator` (each needs a vtable of
+    /// thunks to its `alloc` and `free`).
+    pub alloc_impls: Vec<String>,
     /// The tests: test `i` is the function `test#i` of its module.
     pub tests: Vec<TestDef>,
     /// Top-level `let` constants and `var` globals, with their values.
@@ -516,6 +519,9 @@ pub enum TExprKind {
     DynCall { recv: Box<TExpr>, method: String, args: Vec<TExpr> },
     /// A `*T` or `*mut T` (T is the struct `strukt`) converted to `dyn I`.
     ToDyn { ptr: Box<TExpr>, strukt: String },
+    /// A `*mut S` converted to `Allocator`: calls go to `S.alloc` and
+    /// `S.free`.
+    ToAllocator { ptr: Box<TExpr>, strukt: String },
     /// `alloc.create(value)`: type `AllocError!*mut T`.
     Create { alloc: Box<TExpr>, value: Box<TExpr> },
     /// `alloc.alloc(value, len)`: type `AllocError![]mut T`, every element
@@ -672,6 +678,7 @@ struct Checker<'a> {
     recvs: HashMap<String, Recv>,
     ifaces: HashMap<String, IfaceDef>,
     vtables: Vec<(String, String)>,
+    alloc_impls: Vec<String>,
     /// Checked bodies; `None` while a body is being checked.
     bodies: HashMap<String, Option<FnDef>>,
     /// Top-level names (structs, enums, fns, extern fns) and where they are declared.
@@ -764,6 +771,7 @@ pub fn check(file: &ast::File, require_main: bool, files: &[String]) -> std::res
         recvs: HashMap::new(),
         ifaces: HashMap::new(),
         vtables: Vec::new(),
+        alloc_impls: Vec::new(),
         bodies: HashMap::new(),
         top_spans: HashMap::new(),
         errors: Vec::new(),
@@ -1416,6 +1424,7 @@ impl<'a> Checker<'a> {
             errors: std::mem::take(&mut self.error_names),
             ifaces,
             vtables,
+            alloc_impls: std::mem::take(&mut self.alloc_impls).into_iter().filter(|s| !self.abstract_structs.contains(s)).collect(),
             tests: tests.iter().map(|t| TestDef { module: t.module.clone(), name: t.name.clone() }).collect(),
             globals,
             optional_links: self.optional_links.iter().filter(|l| !self.links.contains(l)).cloned().collect(),
@@ -3002,6 +3011,32 @@ impl<'a> Checker<'a> {
         {
             return Ok(TExpr { ty: ty.clone(), ..t });
         }
+        if *ty == Type::Builtin(BuiltinTy::Allocator) {
+            if let Type::Ptr(inner, mutable) = &t.ty
+                && let Type::Struct(s) = &**inner
+            {
+                let s = s.clone();
+                if let Some(why) = self.why_not_allocator(&s) {
+                    return err(E0105, t.span, format!("`{s}` cannot be an `Allocator`: {why}"));
+                }
+                if !mutable {
+                    return err(E0105, t.span, format!(
+                        "an `Allocator` is made from a `*mut {s}` (write `&mut x`): its `alloc` and `free` take `self: *mut Self`"
+                    ));
+                }
+                if !self.alloc_impls.contains(&s) {
+                    self.alloc_impls.push(s.clone());
+                }
+                let span = t.span;
+                return Ok(TExpr { kind: TExprKind::ToAllocator { ptr: Box::new(t), strukt: s }, ty: ty.clone(), span });
+            }
+            if let Type::Struct(_) = &t.ty {
+                return err(E0023, t.span, format!(
+                    "mismatched types: expected `{ty}`, found `{}` (an `Allocator` points to its data: write `&mut x`)",
+                    t.ty
+                ));
+            }
+        }
         if let Type::Dyn(iface) = ty {
             if let Type::Ptr(inner, mutable) = &t.ty
                 && let Type::Struct(s) = &**inner
@@ -3041,6 +3076,28 @@ impl<'a> Checker<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Why struct `s` cannot be an `Allocator`, or `None` if it can: it
+    /// needs `fn alloc(self: *mut Self, size: usize, align: usize) ?[*]u8`
+    /// and `fn free(self: *mut Self, p: [*]u8, size: usize)`.
+    fn why_not_allocator(&self, s: &str) -> Option<String> {
+        let me = Type::Ptr(Box::new(Type::Struct(s.to_string())), true);
+        let bytes = Type::CPtr(Box::new(Type::Int(IntTy::U8)));
+        let want = [
+            ("alloc", vec![me.clone(), USIZE, USIZE], Type::Optional(Box::new(bytes.clone())), "fn alloc(self: *mut Self, size: usize, align: usize) ?[*]u8"),
+            ("free", vec![me, bytes, USIZE], Type::Void, "fn free(self: *mut Self, p: [*]u8, size: usize)"),
+        ];
+        for (name, params, ret, shown) in want {
+            match self.fns.get(&format!("{s}.{name}")) {
+                None => return Some(format!("it has no method `{name}` (it needs `{shown}`)")),
+                Some(sig) if sig.params != params || sig.ret != ret => {
+                    return Some(format!("its method `{name}` must be `{shown}`"));
+                }
+                _ => {}
+            }
+        }
+        None
     }
 
     /// Why struct `s` does not implement interface `iface`, or `None` if it

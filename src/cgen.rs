@@ -172,24 +172,26 @@ ORE_RT int ore_main_error(uint16_t e) {
 
 /* Allocator: a data pointer and a vtable of byte-level functions. `line` and
    `col` are the Ore call that allocates or frees; leak and double-free
-   reports name it. Alignment is at most 16, which malloc guarantees. */
+   reports name it. `free` gets the size that was allocated. Alignment is
+   at most 16, which malloc guarantees. */
 typedef struct ore_alloc_vt {
     void *(*alloc)(void *self, size_t size, size_t align, int line, int col);
-    void (*free)(void *self, void *p, int line, int col);
+    void (*free)(void *self, void *p, size_t size, int line, int col);
 } ore_alloc_vt;
 typedef struct ore_Allocator { void *ptr; const ore_alloc_vt *vt; } ore_Allocator;
 ORE_RT void *ore_alloc(ore_Allocator a, size_t size, size_t align, int line, int col) {
     return a.vt->alloc(a.ptr, size, align, line, col);
 }
-ORE_RT void ore_free(ore_Allocator a, void *p, int line, int col) { a.vt->free(a.ptr, p, line, col); }
+ORE_RT void ore_free(ore_Allocator a, void *p, size_t size, int line, int col) { a.vt->free(a.ptr, p, size, line, col); }
 /* `n` elements of `size` bytes; null when the size overflows. */
 ORE_RT void *ore_alloc_n(ore_Allocator a, size_t n, size_t size, size_t align, int line, int col) {
     if (size && n > SIZE_MAX / size) return 0;
     return ore_alloc(a, n * size, align, line, col);
 }
-/* Free a slice; an empty one was not allocated. */
-ORE_RT void ore_free_n(ore_Allocator a, void *p, size_t n, int line, int col) {
-    if (n) ore_free(a, p, line, col);
+/* Free a slice of `n` elements of `size` bytes; an empty one was not
+   allocated. */
+ORE_RT void ore_free_n(ore_Allocator a, void *p, size_t n, size_t size, int line, int col) {
+    if (n) ore_free(a, p, n * size, line, col);
 }
 
 /* General: libc malloc/free. With `track` (debug mode, and the test
@@ -251,8 +253,9 @@ ORE_RT void ore_general_release(ore_alloc_hdr *h) {
     h->state = 0;
     ore_rt_free(h);
 }
-ORE_RT void ore_general_free(void *self, void *p, int line, int col) {
+ORE_RT void ore_general_free(void *self, void *p, size_t size, int line, int col) {
     ore_General *g = self;
+    (void)size;
     if (!g->track) {
         ore_rt_free(p);
         return;
@@ -335,14 +338,14 @@ ORE_RT void *ore_arena_alloc(void *self, size_t size, size_t align, int line, in
     a->used = size;
     return c + 1;
 }
-ORE_RT void ore_arena_free(void *self, void *p, int line, int col) {}
+ORE_RT void ore_arena_free(void *self, void *p, size_t size, int line, int col) {}
 static __attribute__((unused)) const ore_alloc_vt ore_arena_vt = {ore_arena_alloc, ore_arena_free};
 ORE_RT ore_Arena ore_arena_init(ore_Allocator backing) { return (ore_Arena){backing, 0, 0}; }
 ORE_RT ore_Allocator ore_arena_allocator(ore_Arena *a) { return (ore_Allocator){a, &ore_arena_vt}; }
 ORE_RT void ore_arena_deinit(ore_Arena *a, int line, int col) {
     for (ore_arena_chunk *c = a->chunks, *next; c; c = next) {
         next = c->next;
-        ore_free(a->backing, c, line, col);
+        ore_free(a->backing, c, sizeof(ore_arena_chunk) + c->size, line, col);
     }
     a->chunks = 0;
     a->used = 0;
@@ -817,6 +820,24 @@ impl Gen {
         for (i, s) in &p.vtables {
             self.vtable(p, i, s);
         }
+        // A struct used as an `Allocator`: thunks from the runtime's vtable
+        // to its `alloc` and `free` (the position is not passed on).
+        for s in &p.alloc_impls {
+            if !p.funcs.iter().any(|x| x.name == format!("{s}.alloc")) {
+                continue;
+            }
+            let (a, fr) = (fn_name(&format!("{s}.alloc")), fn_name(&format!("{s}.free")));
+            let (st, n) = (c_type(&Type::Struct(s.clone())), c_name(s));
+            let _ = writeln!(
+                self.out,
+                "static void *ore_at_alloc_{n}(void *self, size_t size, size_t align, int line, int col) {{ return {a}(({st} *)self, size, align); }}"
+            );
+            let _ = writeln!(
+                self.out,
+                "static void ore_at_free_{n}(void *self, void *p, size_t size, int line, int col) {{ {fr}(({st} *)self, (uint8_t *)p, size); }}"
+            );
+            let _ = writeln!(self.out, "static const ore_alloc_vt ore_at_vt_{n} = {{ore_at_alloc_{n}, ore_at_free_{n}}};");
+        }
         for f in &p.funcs {
             self.func(f);
         }
@@ -1234,6 +1255,9 @@ impl Gen {
             Rvalue::ToDyn { ptr, iface, strukt } => {
                 format!("((ore_D_{}){{(void *){}, &{}}})", c_name(iface), self.operand(f, ptr), vtable_name(iface, strukt))
             }
+            Rvalue::ToAllocator { ptr, strukt } => {
+                format!("((ore_Allocator){{(void *){}, &ore_at_vt_{}}})", self.operand(f, ptr), c_name(strukt))
+            }
             Rvalue::Alloc { alloc, ty, span } => {
                 let t = c_type(ty);
                 format!("(({t} *)ore_alloc({}, sizeof({t}), _Alignof({t}), {}))", self.operand(f, alloc), line_col(*span))
@@ -1247,7 +1271,7 @@ impl Gen {
                 let (copy, free) = match old {
                     Some(o) => (
                         format!("__typeof__({0}) o_ = {0}; for (; i_ < n_ && i_ < o_.len; i_++) p_[i_] = o_.ptr[i_]; ", self.operand(f, o)),
-                        format!("ore_free_n({a}, (void *)o_.ptr, o_.len, {lc}); "),
+                        format!("ore_free_n({a}, (void *)o_.ptr, o_.len, sizeof({t}), {lc}); "),
                     ),
                     None => (String::new(), String::new()),
                 };
@@ -1369,8 +1393,8 @@ impl Gen {
             Intrinsic::ArenaInit => format!("ore_arena_init({})", a[0]),
             Intrinsic::ArenaAllocator => format!("ore_arena_allocator({})", a[0]),
             Intrinsic::ArenaDeinit => format!("ore_arena_deinit({}, {lc})", a[0]),
-            Intrinsic::Destroy => format!("ore_free({}, (void *){}, {lc})", a[0], a[1]),
-            Intrinsic::Free => format!("ore_free_n({0}, (void *)({1}).ptr, ({1}).len, {lc})", a[0], a[1]),
+            Intrinsic::Destroy => format!("ore_free({0}, (void *){1}, sizeof(*{1}), {lc})", a[0], a[1]),
+            Intrinsic::Free => format!("ore_free_n({0}, (void *)({1}).ptr, ({1}).len, sizeof(*({1}).ptr), {lc})", a[0], a[1]),
             Intrinsic::TestAllocator => "ore_test_allocator()".into(),
             Intrinsic::Expect => format!("ore_expect({}, {lc})", a[0]),
             Intrinsic::ExpectEqual => match &args[0].1 {

@@ -2211,6 +2211,51 @@ pub fn main() {
 }
 "#,
 }
+E0105 = 105 {
+    "struct used as an `Allocator`",
+    "A struct can be an `Allocator` (to give code that allocates a pool, a slab or a counting allocator) when it has two methods: `fn alloc(self: *mut Self, size: usize, align: usize) ?[*]u8` (null when out of memory) and `fn free(self: *mut Self, p: [*]u8, size: usize)`. The `Allocator` is made from a `*mut S`, written `&mut x`, where an `Allocator` is expected, like a `dyn`.",
+    r#"import std.mem.Allocator
+
+struct Counter {
+    count: usize
+
+    fn alloc(self: *mut Self, size: usize) ?[*]u8 {
+        self.count += 1
+        return null
+    }
+}
+
+fn use(a: Allocator) {
+}
+
+pub fn main() {
+    var c = Counter { count: 0 }
+    use(&mut c)
+}
+"#,
+    r#"import std.mem.Allocator
+
+struct Counter {
+    count: usize
+
+    fn alloc(self: *mut Self, size: usize, align: usize) ?[*]u8 {
+        self.count += 1
+        return null
+    }
+
+    fn free(self: *mut Self, p: [*]u8, size: usize) {
+    }
+}
+
+fn use(a: Allocator) {
+}
+
+pub fn main() {
+    var c = Counter { count: 0 }
+    use(&mut c)
+}
+"#,
+}
 }
 
 #[cfg(test)]

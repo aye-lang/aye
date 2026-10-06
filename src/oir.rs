@@ -37,6 +37,8 @@ pub struct Program {
     pub ifaces: Vec<sema::IfaceDef>,
     /// (interface, struct) pairs that need a vtable.
     pub vtables: Vec<(String, String)>,
+    /// The structs used as `Allocator` (thunks and a vtable each).
+    pub alloc_impls: Vec<String>,
     /// The tests; test `i` is the function `test#i` of its module.
     pub tests: Vec<sema::TestDef>,
     /// Globals and their values.
@@ -170,6 +172,8 @@ pub enum Rvalue {
     DynCall { recv: Operand, method: String, args: Vec<Operand> },
     /// The pointer `ptr` to struct `strukt` as a `dyn iface`.
     ToDyn { ptr: Operand, iface: String, strukt: String },
+    /// The pointer `ptr` to struct `strukt` as an `Allocator`.
+    ToAllocator { ptr: Operand, strukt: String },
     /// Allocate a `ty` with the allocator `alloc`: a `?*mut ty`, null when
     /// out of memory.
     Alloc { alloc: Operand, ty: Type, span: Span },
@@ -231,6 +235,7 @@ pub fn lower(p: &sema::Program, linked: &[String]) -> Program {
         errors: p.errors.clone(),
         ifaces: p.ifaces.clone(),
         vtables,
+        alloc_impls: p.alloc_impls.clone(),
         tests: p.tests.clone(),
         globals: p.globals.clone(),
     }
@@ -384,7 +389,8 @@ fn has_call(e: &TExpr) -> bool {
         | TExprKind::OkWrap(expr)
         | TExprKind::ErrWrap(expr)
         | TExprKind::PtrCast(expr)
-        | TExprKind::ToDyn { ptr: expr, .. } => has_call(expr),
+        | TExprKind::ToDyn { ptr: expr, .. }
+        | TExprKind::ToAllocator { ptr: expr, .. } => has_call(expr),
         TExprKind::Slice { base, lo, hi } => {
             has_call(base) || lo.as_deref().is_some_and(has_call) || hi.as_deref().is_some_and(has_call)
         }
@@ -1145,6 +1151,11 @@ impl<'a> Lower<'a> {
                 let Type::Dyn(iface) = &e.ty else { unreachable!() };
                 self.refs.push(Ref::Vtable(iface.clone(), strukt.clone()));
                 Rvalue::ToDyn { ptr: self.operand(ptr, out), iface: iface.clone(), strukt: strukt.clone() }
+            }
+            TExprKind::ToAllocator { ptr, strukt } => {
+                self.refs.push(Ref::Fn(format!("{strukt}.alloc")));
+                self.refs.push(Ref::Fn(format!("{strukt}.free")));
+                Rvalue::ToAllocator { ptr: self.operand(ptr, out), strukt: strukt.clone() }
             }
             TExprKind::Intrinsic { op, args } => {
                 let args = args.iter().map(|a| (self.operand(a, out), a.ty.clone())).collect();

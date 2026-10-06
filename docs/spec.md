@@ -1058,7 +1058,8 @@ pub fn main() !void {
 - On an `Allocator`: `create(value)` returns `AllocError!*mut T` holding
   `value`; `destroy(p)` frees it. `alloc(value, n)` returns
   `AllocError![]mut T` with `n` copies of `value`; `free(slice)` frees it
-  (pass the whole slice from `alloc`, not a sub-slice that starts later).
+  (pass the whole slice from `alloc`, not a shorter one: an allocator
+  gets its size).
   Memory is always initialized, so you pass a value, not a type:
   `alloc.create(Node { ... })`, `alloc.alloc(0 as u8, n)`.
 - `alloc.resize(s, n, fill)` returns a slice of `n` elements: the first
@@ -1066,6 +1067,44 @@ pub fn main() !void {
   is freed (do not use it again); on `OutOfMemory` it is unchanged. It may
   move the elements: write `s = try alloc.resize(s, n, fill)`.
 - `AllocError` is `error AllocError { OutOfMemory }`.
+- A struct with `fn alloc(self: *mut Self, size: usize, align: usize)
+  ?[*]u8` (null: out of memory) and `fn free(self: *mut Self, p: [*]u8,
+  size: usize)` is an `Allocator` too: write `&mut slab` where an
+  `Allocator` is expected (E0105). `free` gets the size that was
+  allocated; `align` is at most 16.
+
+```ore
+import std.heap.General
+import std.mem.Allocator
+
+struct Counting {
+    backing: Allocator
+    bytes: usize = 0
+
+    fn alloc(self: *mut Self, size: usize, align: usize) ?[*]u8 {
+        let s = self.backing.alloc(0 as u8, size) catch |e| {
+            return null
+        }
+        self.bytes += size
+        return s.ptr
+    }
+
+    fn free(self: *mut Self, p: [*]u8, size: usize) {
+        self.bytes -= size
+        self.backing.free(p[0..size])
+    }
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var c = Counting { backing: gpa.allocator() }
+    let a: Allocator = &mut c
+    let xs = try a.alloc(0 as u64, 8)
+    @println(c.bytes)
+    a.free(xs)
+}
+```
 - Reads after free are not detected (they see `0xDD` bytes in debug mode).
   Prefer arenas for data with one lifetime.
 - For a growable array use `std.list.List(T)`; for text, `std.text.Builder`.

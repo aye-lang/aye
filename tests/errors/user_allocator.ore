@@ -1,0 +1,41 @@
+import std.mem.Allocator
+
+struct NoFree {
+    n: usize
+
+    fn alloc(self: *mut Self, size: usize, align: usize) ?[*]u8 {
+        return null
+    }
+}
+
+struct WrongFree {
+    n: usize
+
+    fn alloc(self: *mut Self, size: usize, align: usize) ?[*]u8 {
+        return null
+    }
+
+    fn free(self: *mut Self, p: [*]u8) {
+    }
+}
+
+struct Good {
+    n: usize
+
+    fn alloc(self: *mut Self, size: usize, align: usize) ?[*]u8 {
+        return null
+    }
+
+    fn free(self: *mut Self, p: [*]u8, size: usize) {
+    }
+}
+
+pub fn main() {
+    var a = NoFree { n: 0 }
+    var b = WrongFree { n: 0 }
+    var c = Good { n: 0 }
+    let x: Allocator = &mut a
+    let y: Allocator = &mut b
+    let z: Allocator = &c
+    let w: Allocator = c
+}

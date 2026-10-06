@@ -1,0 +1,101 @@
+// M9.7: a struct with `alloc` and `free` methods is an `Allocator`: here a
+// slab allocator for 32-byte blocks over a backing allocator, which checks
+// that `free` gets the size that was allocated.
+import std.heap.General
+import std.list.List
+import std.mem.Allocator
+
+struct Node {
+    value: i64
+    next: ?*mut Node
+}
+
+struct Slab {
+    backing: Allocator
+    free_list: ?[*]u8 = null
+    chunks: List([]mut u8)
+    live: usize = 0
+    big: usize = 0
+
+    fn alloc(self: *mut Self, size: usize, align: usize) ?[*]u8 {
+        if size > 32 {
+            self.big += 1
+            let s = self.backing.alloc(0 as u8, size) catch |e| {
+                return null
+            }
+            return s.ptr
+        }
+        if self.free_list == null {
+            let chunk = self.backing.alloc(0 as u8, 32 * 64) catch |e| {
+                return null
+            }
+            self.chunks.append(chunk) catch |e| {
+                self.backing.free(chunk)
+                return null
+            }
+            for i in 0..64 {
+                self.push(chunk[i * 32..].ptr)
+            }
+        }
+        let block = self.free_list.?
+        self.free_list = @ptrCast(*?[*]u8, block).*
+        self.live += 1
+        return block
+    }
+
+    fn free(self: *mut Self, p: [*]u8, size: usize) {
+        if size > 32 {
+            self.big -= 1
+            self.backing.free(p[0..size])
+            return
+        }
+        self.live -= 1
+        self.push(p)
+    }
+
+    fn push(self: *mut Self, block: [*]u8) {
+        @ptrCast(*mut ?[*]u8, block).* = self.free_list
+        self.free_list = block
+    }
+
+    fn deinit(self: *mut Self) {
+        for c in self.chunks.items() {
+            self.backing.free(c)
+        }
+        self.chunks.deinit()
+    }
+}
+
+fn build(a: Allocator, n: i64) !?*mut Node {
+    var head: ?*mut Node = null
+    for i in (0 as i64)..n {
+        head = try a.create(Node { value: i, next: head })
+    }
+    return head
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var slab = Slab { backing: gpa.allocator(), chunks: List([]mut u8).init(gpa.allocator()) }
+    defer slab.deinit()
+    let a: Allocator = &mut slab
+    var head = try build(a, 100)
+    @println(slab.live)
+    var sum: i64 = 0
+    while head |n| {
+        sum += n.value
+        head = n.next
+        a.destroy(n)
+    }
+    @println(sum)
+    @println(slab.live)
+    var l = List(i64).init(&mut slab)
+    for i in (0 as i64)..1000 {
+        try l.append(i)
+    }
+    @println(slab.big)
+    l.deinit()
+    @println(slab.big)
+    @println(slab.live)
+}
