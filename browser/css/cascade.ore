@@ -39,6 +39,7 @@ import dom
 import dom.Document
 import dom.Kind
 import dom.NodeId
+import perf
 import std.heap.Arena
 import std.list.List
 import std.map.IntMap
@@ -206,6 +207,8 @@ struct Scope {
 /// sheet `ua` and the author sheet `author` (with the sheets of its
 /// shadow trees) and `style` attributes.
 pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, out: *mut Styles) AllocError!void {
+    let began = perf.start()
+    defer perf.end("cascade", began, "document")
     let a = out.arena.allocator()
     let wins = try a.alloc(Win { set: false, level: 0, spec: 0, d: NO_DECL }, NPROPS)
     var c = Computer {
@@ -291,6 +294,8 @@ fn stylePseudos(c: *mut Computer, ua: *Sheet, ua_pseudo: []usize, h: NodeId) All
 /// Computes the style of the element `el` and of its ancestors only (what
 /// getComputedStyle needs), into `out`; nothing when `out` has it.
 pub fn computeStylesOf(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, el: NodeId, out: *mut Styles) AllocError!void {
+    let began = perf.start()
+    defer perf.end("cascade_read", began, "ancestors")
     if out.map.contains(el.index) {
         return
     }
@@ -534,27 +539,48 @@ struct Computer {
     // Offers the declarations of every rule of `sheet` (at the level
     // `level`) that matches `el` (`how`: MATCH_*).
     fn consider(self: *mut Self, sheet: *Sheet, el: NodeId, level: u8, how: u8) AllocError!void {
+        if how == MATCH_ELEMENT {
+            let candidates = try sheet.index.candidates(sheet, self.doc, el)
+            var previous: ?usize = null
+            for ri in candidates {
+                if previous == ri {
+                    continue
+                }
+                previous = ri
+                try self.considerRule(sheet, ri, el, level, how)
+            }
+            return
+        }
+        // `::slotted()` and `::part()` rules describe the slot or the
+        // host in their rightmost compound, not `el`: try them all.
+        for ri in 0..sheet.rules.len() {
+            try self.considerRule(sheet, ri, el, level, how)
+        }
+    }
+
+    // Offers the declarations of the rule `ri` of `sheet` (at the level
+    // `level`) when it matches `el` (`how`: MATCH_*).
+    fn considerRule(self: *mut Self, sheet: *Sheet, ri: usize, el: NodeId, level: u8, how: u8) AllocError!void {
         let complexes = sheet.complexes.items()
-        let decls = sheet.decls.items()
-        for r in sheet.rules.items() {
-            var matched = false
-            var spec: u32 = 0
-            for k in r.sel_start..r.sel_end {
-                let cx = complexes[k]
-                if (!matched || cx.spec > spec) && self.ruleMatches(sheet, cx, el, how) {
-                    matched = true
-                    if cx.spec > spec {
-                        spec = cx.spec
-                    }
+        let r = sheet.rules.items()[ri]
+        var matched = false
+        var spec: u32 = 0
+        for k in r.sel_start..r.sel_end {
+            let cx = complexes[k]
+            if (!matched || cx.spec > spec) && self.ruleMatches(sheet, cx, el, how) {
+                matched = true
+                if cx.spec > spec {
+                    spec = cx.spec
                 }
             }
-            if !matched {
-                continue
-            }
-            for k in r.decl_start..r.decl_end {
-                let d = decls[k]
-                try self.offer(d, declLevel(level, d.important), spec)
-            }
+        }
+        if !matched {
+            return
+        }
+        let decls = sheet.decls.items()
+        for k in r.decl_start..r.decl_end {
+            let d = decls[k]
+            try self.offer(d, declLevel(level, d.important), spec)
         }
     }
 

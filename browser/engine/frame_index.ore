@@ -1,0 +1,48 @@
+// The live window.frames list. Scripts ask for window.length often
+// (including while testing whether a property is a frame index); walking
+// the whole document for each read was a page-load hot spot. Attribute
+// changes (notably lazy-loaded image src/style) cannot change this list.
+import dom.NodeId
+import std.list.List
+import std.mem.Allocator
+
+pub struct FrameElementIndex {
+    nodes: List(NodeId)
+    version: u64
+    valid: bool
+
+    pub fn init(alloc: Allocator) FrameElementIndex {
+        return FrameElementIndex { nodes: List(NodeId).init(alloc), version: 0, valid: false }
+    }
+}
+
+pub fn frameElements(p: *mut Page, n: ?usize) FrameElements {
+    if p.plain {
+        return FrameElements { count: 0, el: null }
+    }
+    let version = p.doc.tree_version
+    let index = &mut p.frame_elements
+    if !index.valid || index.version != version {
+        index.valid = false
+        index.nodes.clear()
+        var cur: ?NodeId = p.doc.root
+        while cur |h| {
+            if isFrameElement(&p.doc, h) {
+                index.nodes.append(h) catch |e| {
+                    // Keep the infallible API: a failed cache allocation
+                    // falls back to the original scan.
+                    return scanFrameElements(p, n)
+                }
+            }
+            cur = p.doc.following(h, p.doc.root)
+        }
+        index.version = version
+        index.valid = true
+    }
+    if n |want| {
+        if want < index.nodes.len() {
+            return FrameElements { count: want + 1, el: index.nodes.items()[want] }
+        }
+    }
+    return FrameElements { count: index.nodes.len(), el: null }
+}

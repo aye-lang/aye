@@ -43,11 +43,16 @@ fn settleScripts(s: *mut Session, tmp: Allocator, o: *mut Outcome) AllocError!vo
         if !engine.hasScripts(p) {
             return
         }
-        try engine.runDueTimers(p)
+        let ran = try engine.runDueTimers(p)
         let nav = engine.takeNavigation(p)
         var step: i64 = 0
         match nav.kind {
             .None => {
+                // opened/newDocument already laid out a navigation.
+                // With no due task, there is nothing new to render.
+                if o.navigated && !ran && p.tree != null {
+                    return
+                }
                 return relayout(s)
             }
             .To => {

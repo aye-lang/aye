@@ -120,6 +120,9 @@ pub struct Document {
     // it hands out stays valid when the document is moved.
     strings: *mut Arena
     root: NodeId
+    // Changes to child/sibling links, not attributes or text data. Live
+    // structural lookups (window.frames) need not rescan after src/style.
+    tree_version: u64
     // The state of form controls and the focus (controls.ore).
     controls: Controls
     // Quirks mode (no doctype, or a legacy one): set by the HTML parser.
@@ -152,6 +155,7 @@ pub struct Document {
             nodes: nodes,
             strings: strings,
             root: root,
+            tree_version: 0,
             controls: Controls.init(alloc),
             quirks: false,
             templates: List(NodeId).init(alloc),
@@ -302,6 +306,7 @@ pub struct Document {
             if self.recording {
                 self.record(Mutation { kind: 0, added: false, target: p, node: child, prev: c.prev, next: c.next, name: "", old: null })
             }
+            self.tree_version += 1
             let parent = self.node(p)
             if c.prev |prev| {
                 self.node(prev).next = c.next
@@ -323,6 +328,7 @@ pub struct Document {
     /// Makes `child` the last child of `parent` (taking it out of where it
     /// was first).
     pub fn appendChild(self: *mut Self, parent: NodeId, child: NodeId) {
+        self.tree_version += 1
         self.detach(child)
         let p = self.node(parent)
         let c = self.node(child)
@@ -343,6 +349,7 @@ pub struct Document {
     /// `before` is null.
     pub fn insertBefore(self: *mut Self, parent: NodeId, child: NodeId, before: ?NodeId) {
         if before |b| {
+            self.tree_version += 1
             self.detach(child)
             let c = self.node(child)
             let bn = self.node(b)
