@@ -1,0 +1,15 @@
+Error msg Error: msg true
+TypeError tm TypeError: tm true true
+[
+  'RangeError:true',
+  'SyntaxError:true',
+  'ReferenceError:true',
+  'EvalError:true',
+  'URIError:true'
+]
+Error true Error
+Renamed: orig
+Renamed: changed
+[] no new
+true false
+Error TypeError

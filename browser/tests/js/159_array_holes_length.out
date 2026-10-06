@@ -1,0 +1,8 @@
+[ 1, <1 empty item>, 3 ] 3 false undefined
+[ <5 empty items>, 'x' ] 6
+[ 1, 2 ] undefined
+[ 1, 2, <2 empty items> ] false
+[ <3 empty items> ] [ <3 empty items> ] [ 1, 1, 1 ]
+3 2
+[ 'a', <1 empty item>, 'c' ] [ '0', '2' ]
+[ undefined, <1 empty item>, null ]

@@ -1,0 +1,7 @@
+ababab aaa aa
+<a><b> <a> 0
+bird [ 'abcd', 'a', 'bcd', '' ]
+ll 2023
+100 10
+[^aeiou\s]+ true true
+x.y-z_1 true true false

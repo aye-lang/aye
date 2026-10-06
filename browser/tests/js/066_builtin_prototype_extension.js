@@ -1,0 +1,11 @@
+Array.prototype.sumAll = function () { return this.reduce((a, b) => a + b, 0); };
+console.log([1, 2, 3].sumAll());
+String.prototype.shout = function () { return this.toUpperCase() + '!'; };
+console.log('hey'.shout());
+Number.prototype.double = function () { return this * 2; };
+console.log((21).double());
+const keys = [];
+for (const k in [1]) keys.push(k);
+console.log(keys);
+delete Array.prototype.sumAll;
+console.log(typeof [].sumAll);

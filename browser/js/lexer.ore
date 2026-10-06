@@ -1,0 +1,908 @@
+// js/lexer: JavaScript source text to tokens. The whole script is
+// tokenized up front (the parser needs arbitrary lookahead for arrow
+// functions). A `/` starts a regular expression literal when the token
+// before it cannot end an expression. Template literals are split into
+// head, middle and tail tokens with a stack of brace depths.
+//
+// String values are "cooked" into WTF-8 bytes: UTF-8, where a lone
+// surrogate (from a `\uD800` escape) is encoded like a code point and a
+// surrogate pair is joined into one 4-byte sequence.
+
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+pub enum Tok {
+    Eof
+    Ident
+    Num
+    Str
+    // A template without substitutions, and the pieces of one with some.
+    Template
+    TemplateHead
+    TemplateMiddle
+    TemplateTail
+    Regex
+    // keywords
+    KwVar
+    KwLet
+    KwConst
+    KwFunction
+    KwReturn
+    KwIf
+    KwElse
+    KwFor
+    KwWhile
+    KwDo
+    KwBreak
+    KwContinue
+    KwNew
+    KwDelete
+    KwTypeof
+    KwInstanceof
+    KwIn
+    KwThis
+    KwNull
+    KwTrue
+    KwFalse
+    KwThrow
+    KwTry
+    KwCatch
+    KwFinally
+    KwSwitch
+    KwCase
+    KwDefault
+    KwClass
+    KwExtends
+    KwSuper
+    KwVoid
+    KwDebugger
+    // punctuators
+    LBrace
+    RBrace
+    LParen
+    RParen
+    LBracket
+    RBracket
+    Dot
+    Ellipsis
+    Semi
+    Comma
+    Lt
+    Gt
+    Le
+    Ge
+    EqEq
+    NotEq
+    EqEqEq
+    NotEqEq
+    Plus
+    Minus
+    Star
+    Slash
+    Percent
+    StarStar
+    PlusPlus
+    MinusMinus
+    Shl
+    Shr
+    UShr
+    Amp
+    Pipe
+    Caret
+    Bang
+    Tilde
+    AndAnd
+    OrOr
+    Question
+    QuestionQuestion
+    QuestionDot
+    Colon
+    Assign
+    PlusAssign
+    MinusAssign
+    StarAssign
+    SlashAssign
+    PercentAssign
+    StarStarAssign
+    ShlAssign
+    ShrAssign
+    UShrAssign
+    AmpAssign
+    PipeAssign
+    CaretAssign
+    AndAndAssign
+    OrOrAssign
+    QQAssign
+    Arrow
+}
+
+pub struct Token {
+    kind: Tok
+    // Source bytes of the token.
+    start: u32
+    end: u32
+    line: u32
+    // Is there a line terminator between this token and the one before?
+    nl: bool
+    // Num: the value. Regex: the length of the pattern in the cooked bytes.
+    num: f64
+    // Str, Template*, Regex: the cooked bytes are cooked[off..off + len]
+    // (a regex: the pattern, then the flags).
+    off: u32
+    len: u32
+}
+
+pub error SyntaxErr { Syntax, OutOfMemory }
+
+/// The output of `tokenize`; on a syntax error `message` says what and
+/// `line` where.
+pub struct Lexed {
+    toks: List(Token)
+    cooked: text.Builder
+    message: text.Builder
+    line: u32
+
+    pub fn init(alloc: Allocator) Lexed {
+        return Lexed {
+            toks: List(Token).init(alloc),
+            cooked: text.Builder.init(alloc),
+            message: text.Builder.init(alloc),
+            line: 0,
+        }
+    }
+
+    pub fn deinit(self: *mut Self) {
+        self.toks.deinit()
+        self.cooked.deinit()
+        self.message.deinit()
+    }
+
+    pub fn cookedOf(self: *Self, t: Token) []u8 {
+        return self.cooked.bytes()[t.off as usize..(t.off + t.len) as usize]
+    }
+}
+
+struct Lexer {
+    src: []u8
+    pos: usize
+    line: u32
+    out: *mut Lexed
+    // Brace depth at each open `${` of a template.
+    braces: List(u32)
+    depth: u32
+    nl: bool
+
+    fn fail(self: *mut Self, msg: []u8) SyntaxErr!void {
+        self.out.message.clear()
+        try self.out.message.append(msg)
+        self.out.line = self.line
+        return SyntaxErr.Syntax
+    }
+
+    fn peekAt(self: *Self, k: usize) u8 {
+        if self.pos + k < self.src.len {
+            return self.src[self.pos + k]
+        }
+        return 0
+    }
+
+    fn emit(self: *mut Self, kind: Tok, start: usize, num: f64, off: usize, len: usize) AllocError!void {
+        try self.out.toks.append(Token {
+            kind: kind,
+            start: start as u32,
+            end: self.pos as u32,
+            line: self.line,
+            nl: self.nl,
+            num: num,
+            off: off as u32,
+            len: len as u32,
+        })
+        self.nl = false
+    }
+
+    fn lastKind(self: *Self) ?Tok {
+        let n = self.out.toks.len()
+        if n == 0 {
+            return null
+        }
+        return self.out.toks.items()[n - 1].kind
+    }
+
+    fn run(self: *mut Self) SyntaxErr!void {
+        self.nl = true
+        while true {
+            try self.skipSpace()
+            if self.pos >= self.src.len {
+                if self.braces.len() > 0 {
+                    return self.fail("Unterminated template literal")
+                }
+                return self.emit(Tok.Eof, self.pos, 0.0, 0, 0)
+            }
+            try self.token()
+        }
+    }
+
+    // Skips white space and comments; sets `nl` on a line terminator.
+    fn skipSpace(self: *mut Self) SyntaxErr!void {
+        while self.pos < self.src.len {
+            let c = self.src[self.pos]
+            if c == '\n' {
+                self.nl = true
+                self.line += 1
+                self.pos += 1
+            } else if c == ' ' || c == '\t' || c == '\r' || c == 0x0B || c == 0x0C {
+                self.pos += 1
+            } else if c == 0xC2 && self.peekAt(1) == 0xA0 {
+                self.pos += 2
+            } else if c == 0xEF && self.peekAt(1) == 0xBB && self.peekAt(2) == 0xBF {
+                self.pos += 3
+            } else if c == 0xE2 && self.peekAt(1) == 0x80 && (self.peekAt(2) == 0xA8 || self.peekAt(2) == 0xA9) {
+                self.nl = true
+                self.line += 1
+                self.pos += 3
+            } else if c == '/' && self.peekAt(1) == '/' {
+                while self.pos < self.src.len && self.src[self.pos] != '\n' {
+                    self.pos += 1
+                }
+            } else if c == '/' && self.peekAt(1) == '*' {
+                self.pos += 2
+                var closed = false
+                while self.pos < self.src.len {
+                    if self.src[self.pos] == '*' && self.peekAt(1) == '/' {
+                        self.pos += 2
+                        closed = true
+                        break
+                    }
+                    if self.src[self.pos] == '\n' {
+                        self.nl = true
+                        self.line += 1
+                    }
+                    self.pos += 1
+                }
+                if !closed {
+                    return self.fail("Invalid or unexpected token")
+                }
+            } else {
+                return
+            }
+        }
+    }
+
+    fn token(self: *mut Self) SyntaxErr!void {
+        let start = self.pos
+        let c = self.src[self.pos]
+        if isIdStart(c) || c == '\\' {
+            while self.pos < self.src.len && isIdPart(self.src[self.pos]) {
+                self.pos += 1
+            }
+            if self.pos == start {
+                return self.fail("Invalid or unexpected token")
+            }
+            return self.emit(keyword(self.src[start..self.pos]), start, 0.0, 0, 0)
+        }
+        if isDigit(c) || (c == '.' && isDigit(self.peekAt(1))) {
+            return self.number()
+        }
+        if c == '"' || c == '\'' {
+            return self.string(c)
+        }
+        if c == '`' {
+            self.pos += 1
+            return self.template(start, true)
+        }
+        if c == '}' && self.braces.len() > 0 && self.braces.items()[self.braces.len() - 1] == self.depth {
+            if self.braces.pop() |d| {
+                self.pos += 1
+                return self.template(start, false)
+            }
+        }
+        if c == '/' {
+            var regex = true
+            if self.lastKind() |k| {
+                regex = !endsExpr(k)
+            }
+            if regex {
+                return self.regex(start)
+            }
+        }
+        return self.punct(start, c)
+    }
+
+    fn number(self: *mut Self) SyntaxErr!void {
+        let start = self.pos
+        let c = self.src[self.pos]
+        var value = 0.0
+        let next = self.peekAt(1) | 0x20
+        if c == '0' && (next == 'x' || next == 'o' || next == 'b') {
+            var base = 16.0
+            if next == 'o' {
+                base = 8.0
+            } else if next == 'b' {
+                base = 2.0
+            }
+            self.pos += 2
+            var any = false
+            while self.pos < self.src.len {
+                let d = self.src[self.pos]
+                if d == '_' {
+                    self.pos += 1
+                    continue
+                }
+                let v = hexVal(d)
+                if v < 0 || v as f64 >= base {
+                    break
+                }
+                value = value * base + v as f64
+                any = true
+                self.pos += 1
+            }
+            if !any {
+                return self.fail("Invalid or unexpected token")
+            }
+        } else {
+            // Decimal: copy the digits without `_` and let strtod convert.
+            var buf = @zeroed([80]u8)
+            var n: usize = 0
+            var seenDot = false
+            var seenExp = false
+            while self.pos < self.src.len {
+                let d = self.src[self.pos]
+                var take = false
+                if isDigit(d) {
+                    take = true
+                } else if d == '_' {
+                    self.pos += 1
+                    continue
+                } else if d == '.' && !seenDot && !seenExp {
+                    seenDot = true
+                    take = true
+                } else if (d == 'e' || d == 'E') && !seenExp {
+                    seenExp = true
+                    take = true
+                    if self.peekAt(1) == '+' || self.peekAt(1) == '-' {
+                        if n < 78 {
+                            buf[n] = d
+                            n += 1
+                        }
+                        self.pos += 1
+                        buf[n] = self.src[self.pos]
+                        n += 1
+                        self.pos += 1
+                        continue
+                    }
+                }
+                if !take {
+                    break
+                }
+                if n < 78 {
+                    buf[n] = d
+                    n += 1
+                }
+                self.pos += 1
+            }
+            buf[n] = 0
+            value = strtod(buf[..].ptr, null)
+        }
+        if self.pos < self.src.len && isIdStart(self.src[self.pos]) {
+            return self.fail("Invalid or unexpected token")
+        }
+        return self.emit(Tok.Num, start, value, 0, 0)
+    }
+
+    // Reads an escape after `\` (at self.pos) into the cooked bytes.
+    fn escape(self: *mut Self, inTemplate: bool) SyntaxErr!void {
+        let b = &mut self.out.cooked
+        let c = self.src[self.pos]
+        self.pos += 1
+        if c == 'n' {
+            return b.appendByte('\n')
+        }
+        if c == 't' {
+            return b.appendByte('\t')
+        }
+        if c == 'r' {
+            return b.appendByte('\r')
+        }
+        if c == 'b' {
+            return b.appendByte(0x08)
+        }
+        if c == 'f' {
+            return b.appendByte(0x0C)
+        }
+        if c == 'v' {
+            return b.appendByte(0x0B)
+        }
+        if c == '0' && !isDigit(self.peekAt(0)) {
+            return b.appendByte(0)
+        }
+        if c == '\r' {
+            if self.peekAt(0) == '\n' {
+                self.pos += 1
+            }
+            self.line += 1
+            return
+        }
+        if c == '\n' {
+            self.line += 1
+            return
+        }
+        if c == 'x' {
+            let h1 = hexVal(self.peekAt(0))
+            let h2 = hexVal(self.peekAt(1))
+            if h1 < 0 || h2 < 0 {
+                return self.fail("Invalid hexadecimal escape sequence")
+            }
+            self.pos += 2
+            return appendWtf8(b, (h1 * 16 + h2) as u32)
+        }
+        if c == 'u' {
+            var cp = try self.unicodeEscape()
+            if cp >= 0xD800 && cp <= 0xDBFF && self.peekAt(0) == '\\' && self.peekAt(1) == 'u' {
+                let save = self.pos
+                self.pos += 2
+                let lo = try self.unicodeEscape()
+                if lo >= 0xDC00 && lo <= 0xDFFF {
+                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00)
+                } else {
+                    self.pos = save
+                }
+            }
+            return appendWtf8(b, cp)
+        }
+        // Any other character stands for itself (with its UTF-8 bytes).
+        return b.appendByte(c)
+    }
+
+    // The value of `XXXX` or `{X...}` after `\u`.
+    fn unicodeEscape(self: *mut Self) SyntaxErr!u32 {
+        var v: u32 = 0
+        if self.peekAt(0) == '{' {
+            self.pos += 1
+            var any = false
+            while self.pos < self.src.len && self.src[self.pos] != '}' {
+                let h = hexVal(self.src[self.pos])
+                if h < 0 || v > 0x10FFFF {
+                    try self.fail("Invalid Unicode escape sequence")
+                }
+                v = v * 16 + h as u32
+                any = true
+                self.pos += 1
+            }
+            if !any || self.pos >= self.src.len || v > 0x10FFFF {
+                try self.fail("Invalid Unicode escape sequence")
+            }
+            self.pos += 1
+            return v
+        }
+        for k in 0..4 {
+            let h = hexVal(self.peekAt(k))
+            if h < 0 {
+                try self.fail("Invalid Unicode escape sequence")
+            }
+            v = v * 16 + h as u32
+        }
+        self.pos += 4
+        return v
+    }
+
+    fn string(self: *mut Self, quote: u8) SyntaxErr!void {
+        let start = self.pos
+        self.pos += 1
+        let off = self.out.cooked.len()
+        while true {
+            if self.pos >= self.src.len || self.src[self.pos] == '\n' {
+                return self.fail("Invalid or unexpected token")
+            }
+            let c = self.src[self.pos]
+            if c == quote {
+                self.pos += 1
+                break
+            }
+            if c == '\\' {
+                self.pos += 1
+                if self.pos >= self.src.len {
+                    return self.fail("Invalid or unexpected token")
+                }
+                try self.escape(false)
+            } else {
+                try self.out.cooked.appendByte(c)
+                self.pos += 1
+            }
+        }
+        return self.emit(Tok.Str, start, 0.0, off, self.out.cooked.len() - off)
+    }
+
+    // A template piece after "`" (head=true) or after the `}` closing a
+    // substitution.
+    fn template(self: *mut Self, start: usize, head: bool) SyntaxErr!void {
+        let off = self.out.cooked.len()
+        while true {
+            if self.pos >= self.src.len {
+                return self.fail("Unterminated template literal")
+            }
+            let c = self.src[self.pos]
+            if c == '`' {
+                self.pos += 1
+                var kind = Tok.TemplateTail
+                if head {
+                    kind = Tok.Template
+                }
+                return self.emit(kind, start, 0.0, off, self.out.cooked.len() - off)
+            }
+            if c == '$' && self.peekAt(1) == '{' {
+                self.pos += 2
+                try self.braces.append(self.depth)
+                var kind = Tok.TemplateMiddle
+                if head {
+                    kind = Tok.TemplateHead
+                }
+                return self.emit(kind, start, 0.0, off, self.out.cooked.len() - off)
+            }
+            if c == '\\' {
+                self.pos += 1
+                if self.pos >= self.src.len {
+                    return self.fail("Unterminated template literal")
+                }
+                try self.escape(true)
+            } else if c == '\r' {
+                // CRLF and CR in a template are LF.
+                try self.out.cooked.appendByte('\n')
+                self.pos += 1
+                if self.peekAt(0) == '\n' {
+                    self.pos += 1
+                }
+                self.line += 1
+            } else {
+                if c == '\n' {
+                    self.line += 1
+                }
+                try self.out.cooked.appendByte(c)
+                self.pos += 1
+            }
+        }
+        return
+    }
+
+    fn regex(self: *mut Self, start: usize) SyntaxErr!void {
+        self.pos += 1
+        let off = self.out.cooked.len()
+        var inClass = false
+        while true {
+            if self.pos >= self.src.len || self.src[self.pos] == '\n' {
+                return self.fail("Invalid regular expression: missing /")
+            }
+            let c = self.src[self.pos]
+            if c == '\\' && self.pos + 1 < self.src.len {
+                try self.out.cooked.appendByte(c)
+                try self.out.cooked.appendByte(self.src[self.pos + 1])
+                self.pos += 2
+                continue
+            }
+            if c == '[' {
+                inClass = true
+            } else if c == ']' {
+                inClass = false
+            } else if c == '/' && !inClass {
+                self.pos += 1
+                break
+            }
+            try self.out.cooked.appendByte(c)
+            self.pos += 1
+        }
+        let patternLen = self.out.cooked.len() - off
+        while self.pos < self.src.len && isIdPart(self.src[self.pos]) {
+            try self.out.cooked.appendByte(self.src[self.pos])
+            self.pos += 1
+        }
+        return self.emit(Tok.Regex, start, patternLen as f64, off, self.out.cooked.len() - off)
+    }
+
+    fn punct(self: *mut Self, start: usize, c: u8) SyntaxErr!void {
+        let c1 = self.peekAt(1)
+        let c2 = self.peekAt(2)
+        let c3 = self.peekAt(3)
+        var kind = Tok.Eof
+        var n: usize = 1
+        if c == '{' {
+            kind = Tok.LBrace
+            self.depth += 1
+        } else if c == '}' {
+            kind = Tok.RBrace
+            if self.depth > 0 {
+                self.depth -= 1
+            }
+        } else if c == '(' {
+            kind = Tok.LParen
+        } else if c == ')' {
+            kind = Tok.RParen
+        } else if c == '[' {
+            kind = Tok.LBracket
+        } else if c == ']' {
+            kind = Tok.RBracket
+        } else if c == ';' {
+            kind = Tok.Semi
+        } else if c == ',' {
+            kind = Tok.Comma
+        } else if c == ':' {
+            kind = Tok.Colon
+        } else if c == '~' {
+            kind = Tok.Tilde
+        } else if c == '.' {
+            kind = Tok.Dot
+            if c1 == '.' && c2 == '.' {
+                kind = Tok.Ellipsis
+                n = 3
+            }
+        } else if c == '?' {
+            kind = Tok.Question
+            if c1 == '?' {
+                kind = Tok.QuestionQuestion
+                n = 2
+                if c2 == '=' {
+                    kind = Tok.QQAssign
+                    n = 3
+                }
+            } else if c1 == '.' && !isDigit(c2) {
+                kind = Tok.QuestionDot
+                n = 2
+            }
+        } else if c == '<' {
+            kind = Tok.Lt
+            if c1 == '=' {
+                kind = Tok.Le
+                n = 2
+            } else if c1 == '<' {
+                kind = Tok.Shl
+                n = 2
+                if c2 == '=' {
+                    kind = Tok.ShlAssign
+                    n = 3
+                }
+            }
+        } else if c == '>' {
+            kind = Tok.Gt
+            if c1 == '=' {
+                kind = Tok.Ge
+                n = 2
+            } else if c1 == '>' {
+                kind = Tok.Shr
+                n = 2
+                if c2 == '=' {
+                    kind = Tok.ShrAssign
+                    n = 3
+                } else if c2 == '>' {
+                    kind = Tok.UShr
+                    n = 3
+                    if c3 == '=' {
+                        kind = Tok.UShrAssign
+                        n = 4
+                    }
+                }
+            }
+        } else if c == '=' {
+            kind = Tok.Assign
+            if c1 == '=' {
+                kind = Tok.EqEq
+                n = 2
+                if c2 == '=' {
+                    kind = Tok.EqEqEq
+                    n = 3
+                }
+            } else if c1 == '>' {
+                kind = Tok.Arrow
+                n = 2
+            }
+        } else if c == '!' {
+            kind = Tok.Bang
+            if c1 == '=' {
+                kind = Tok.NotEq
+                n = 2
+                if c2 == '=' {
+                    kind = Tok.NotEqEq
+                    n = 3
+                }
+            }
+        } else if c == '+' {
+            kind = Tok.Plus
+            if c1 == '+' {
+                kind = Tok.PlusPlus
+                n = 2
+            } else if c1 == '=' {
+                kind = Tok.PlusAssign
+                n = 2
+            }
+        } else if c == '-' {
+            kind = Tok.Minus
+            if c1 == '-' {
+                kind = Tok.MinusMinus
+                n = 2
+            } else if c1 == '=' {
+                kind = Tok.MinusAssign
+                n = 2
+            }
+        } else if c == '*' {
+            kind = Tok.Star
+            if c1 == '*' {
+                kind = Tok.StarStar
+                n = 2
+                if c2 == '=' {
+                    kind = Tok.StarStarAssign
+                    n = 3
+                }
+            } else if c1 == '=' {
+                kind = Tok.StarAssign
+                n = 2
+            }
+        } else if c == '/' {
+            kind = Tok.Slash
+            if c1 == '=' {
+                kind = Tok.SlashAssign
+                n = 2
+            }
+        } else if c == '%' {
+            kind = Tok.Percent
+            if c1 == '=' {
+                kind = Tok.PercentAssign
+                n = 2
+            }
+        } else if c == '&' {
+            kind = Tok.Amp
+            if c1 == '&' {
+                kind = Tok.AndAnd
+                n = 2
+                if c2 == '=' {
+                    kind = Tok.AndAndAssign
+                    n = 3
+                }
+            } else if c1 == '=' {
+                kind = Tok.AmpAssign
+                n = 2
+            }
+        } else if c == '|' {
+            kind = Tok.Pipe
+            if c1 == '|' {
+                kind = Tok.OrOr
+                n = 2
+                if c2 == '=' {
+                    kind = Tok.OrOrAssign
+                    n = 3
+                }
+            } else if c1 == '=' {
+                kind = Tok.PipeAssign
+                n = 2
+            }
+        } else if c == '^' {
+            kind = Tok.Caret
+            if c1 == '=' {
+                kind = Tok.CaretAssign
+                n = 2
+            }
+        } else {
+            return self.fail("Invalid or unexpected token")
+        }
+        self.pos += n
+        return self.emit(kind, start, 0.0, 0, 0)
+    }
+}
+
+/// Splits `src` into tokens (ending with `Eof`) in `out`.
+pub fn tokenize(alloc: Allocator, src: []u8, out: *mut Lexed) SyntaxErr!void {
+    var lx = Lexer {
+        src: src,
+        pos: 0,
+        line: 1,
+        out: out,
+        braces: List(u32).init(alloc),
+        depth: 0,
+        nl: false,
+    }
+    defer lx.braces.deinit()
+    return lx.run()
+}
+
+fn isIdStart(c: u8) bool {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '$' || c >= 0x80
+}
+
+fn isIdPart(c: u8) bool {
+    return isIdStart(c) || (c >= '0' && c <= '9')
+}
+
+fn isDigit(c: u8) bool {
+    return c >= '0' && c <= '9'
+}
+
+fn hexVal(c: u8) i32 {
+    if c >= '0' && c <= '9' {
+        return (c - '0') as i32
+    }
+    if c >= 'a' && c <= 'f' {
+        return (c - 'a') as i32 + 10
+    }
+    if c >= 'A' && c <= 'F' {
+        return (c - 'A') as i32 + 10
+    }
+    return -1
+}
+
+/// Appends the code point `cp` (any value up to 0x10FFFF, surrogates too)
+/// in WTF-8.
+pub fn appendWtf8(b: *mut text.Builder, cp: u32) AllocError!void {
+    if cp < 0x80 {
+        return b.appendByte(cp as u8)
+    }
+    if cp < 0x800 {
+        try b.appendByte((0xC0 | (cp >> 6)) as u8)
+        return b.appendByte((0x80 | (cp & 0x3F)) as u8)
+    }
+    if cp < 0x10000 {
+        try b.appendByte((0xE0 | (cp >> 12)) as u8)
+        try b.appendByte((0x80 | ((cp >> 6) & 0x3F)) as u8)
+        return b.appendByte((0x80 | (cp & 0x3F)) as u8)
+    }
+    try b.appendByte((0xF0 | (cp >> 18)) as u8)
+    try b.appendByte((0x80 | ((cp >> 12) & 0x3F)) as u8)
+    try b.appendByte((0x80 | ((cp >> 6) & 0x3F)) as u8)
+    return b.appendByte((0x80 | (cp & 0x3F)) as u8)
+}
+
+fn keyword(s: []u8) Tok {
+    if s.len < 2 || s.len > 10 || s[0] < 'b' || s[0] > 'w' {
+        return Tok.Ident
+    }
+    return match s[0] {
+        'b' => kw(s, "break", Tok.KwBreak)
+        'c' => kw3(s, "case", Tok.KwCase, "catch", Tok.KwCatch, "const", Tok.KwConst, "class", Tok.KwClass, "continue", Tok.KwContinue)
+        'd' => kw3(s, "do", Tok.KwDo, "delete", Tok.KwDelete, "default", Tok.KwDefault, "debugger", Tok.KwDebugger, "do", Tok.KwDo)
+        'e' => kw3(s, "else", Tok.KwElse, "extends", Tok.KwExtends, "else", Tok.KwElse, "else", Tok.KwElse, "else", Tok.KwElse)
+        'f' => kw3(s, "for", Tok.KwFor, "function", Tok.KwFunction, "false", Tok.KwFalse, "finally", Tok.KwFinally, "for", Tok.KwFor)
+        'i' => kw3(s, "if", Tok.KwIf, "in", Tok.KwIn, "instanceof", Tok.KwInstanceof, "if", Tok.KwIf, "if", Tok.KwIf)
+        'l' => kw(s, "let", Tok.KwLet)
+        'n' => kw3(s, "new", Tok.KwNew, "null", Tok.KwNull, "new", Tok.KwNew, "new", Tok.KwNew, "new", Tok.KwNew)
+        'r' => kw(s, "return", Tok.KwReturn)
+        's' => kw3(s, "switch", Tok.KwSwitch, "super", Tok.KwSuper, "switch", Tok.KwSwitch, "switch", Tok.KwSwitch, "switch", Tok.KwSwitch)
+        't' => kw3(s, "this", Tok.KwThis, "true", Tok.KwTrue, "throw", Tok.KwThrow, "try", Tok.KwTry, "typeof", Tok.KwTypeof)
+        'v' => kw3(s, "var", Tok.KwVar, "void", Tok.KwVoid, "var", Tok.KwVar, "var", Tok.KwVar, "var", Tok.KwVar)
+        'w' => kw(s, "while", Tok.KwWhile)
+        _ => Tok.Ident
+    }
+}
+
+fn kw(s: []u8, a: []u8, ta: Tok) Tok {
+    if text.eql(s, a) {
+        return ta
+    }
+    return Tok.Ident
+}
+
+fn kw3(s: []u8, a: []u8, ta: Tok, b: []u8, tb: Tok, c: []u8, tc: Tok, d: []u8, td: Tok, e: []u8, te: Tok) Tok {
+    if text.eql(s, a) {
+        return ta
+    }
+    if text.eql(s, b) {
+        return tb
+    }
+    if text.eql(s, c) {
+        return tc
+    }
+    if text.eql(s, d) {
+        return td
+    }
+    if text.eql(s, e) {
+        return te
+    }
+    return Tok.Ident
+}
+
+// Can a token of this kind end an expression (so a `/` after it divides)?
+fn endsExpr(k: Tok) bool {
+    return k == Tok.Ident || k == Tok.Num || k == Tok.Str || k == Tok.Template ||
+        k == Tok.TemplateTail || k == Tok.Regex || k == Tok.RParen || k == Tok.RBracket ||
+        k == Tok.RBrace || k == Tok.KwThis || k == Tok.KwSuper || k == Tok.KwNull ||
+        k == Tok.KwTrue || k == Tok.KwFalse || k == Tok.PlusPlus || k == Tok.MinusMinus
+}
+
+extern fn strtod(s: [*]u8, end: ?[*]u8) f64
+

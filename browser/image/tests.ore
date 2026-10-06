@@ -1,0 +1,316 @@
+// Tests of the image module: inflate on hand-made streams, and every
+// decoder against the fixtures in browser/tests/image (made by
+// make_fixtures.py there, which also writes the expected pixels).
+
+import std
+import std.mem.Allocator
+
+fn inflatesTo(a: Allocator, stream: []u8, expected: []u8) !bool {
+    let out = try inflateZlib(a, stream)
+    defer a.free(out)
+    return std.mem.eql(expected, out)
+}
+
+// Error values have no `==`: compare them through a number.
+fn errorCode(e: ImageError) u8 {
+    return match e {
+        .OutOfMemory => 0
+        .Invalid => 1
+        .Unsupported => 2
+    }
+}
+
+// Does inflating `stream` fail with `expected`?
+fn inflateFails(a: Allocator, stream: []u8, expected: ImageError) bool {
+    let out = inflateZlib(a, stream) catch |e| {
+        return errorCode(e) == errorCode(expected)
+    }
+    a.free(out)
+    return false
+}
+
+test "inflate: stored block" {
+    @expect(try inflatesTo(@testAllocator(), "\x78\x01\x01\x05\x00\xFA\xFFhello\x06\x2C\x02\x15", "hello"))
+}
+
+test "inflate: fixed Huffman block" {
+    @expect(try inflatesTo(@testAllocator(), "\x78\x01\xCB\x48\xCD\xC9\xC9\x57\xC8\x40\x27\x15\x01\x70\xD5\x08\xD2", "hello hello hello hello!"))
+}
+
+test "inflate: dynamic Huffman block" {
+    let stream = "\x78\xDA\x15\xC8\x41\x0D\x00\x40\x10\x83\x40\x2B\xB5\x46\x39\xFF\x1A\xAE\xFB\x98\x84\x00\x0D\xA4\x13\x81\x43\x37\xD5\xB7\xD8\xA7\xD6\x0F\x11\xB6\x0D\xBB"
+    @expect(try inflatesTo(@testAllocator(), stream, "aab aa baa  caaacaaaabab cccdabaaa abcbc"))
+}
+
+test "inflate: back-reference into an earlier block" {
+    // Two blocks (and an empty stored one from a sync flush between
+    // them); the second is one match into the first.
+    let stream = "\x78\xDA\x4A\x4C\x4A\x4E\x49\x4D\x4B\xCF\xC8\xCC\x4A\xA4\x0A\x0B\x00\x00\x00\xFF\xFF\xA3\x36\x0B\x00\xEF\x4D\x3F\x71"
+    let a = @testAllocator()
+    let out = try inflateZlib(a, stream)
+    defer a.free(out)
+    @expectEqual(160, out.len)
+    for i in 0..out.len {
+        @expectEqual("abcdefghij"[i % 10], out[i])
+    }
+}
+
+test "inflate: bad streams" {
+    let a = @testAllocator()
+    // Header not a multiple of 31; not deflate; preset dictionary.
+    @expect(inflateFails(a, "\x78\x02\x01\x05\x00\xFA\xFFhello\x06\x2C\x02\x15", ImageError.Invalid))
+    @expect(inflateFails(a, "\x79\x9C\x01\x05\x00\xFA\xFFhello\x06\x2C\x02\x15", ImageError.Invalid))
+    @expect(inflateFails(a, "\x78\xBB\x01\x05\x00\xFA\xFFhello\x06\x2C\x02\x15", ImageError.Unsupported))
+    // Wrong Adler-32, NLEN not the complement, cut short.
+    @expect(inflateFails(a, "\x78\x01\x01\x05\x00\xFA\xFFhello\x06\x2C\x02\x16", ImageError.Invalid))
+    @expect(inflateFails(a, "\x78\x01\x01\x05\x00\xFB\xFFhello\x06\x2C\x02\x15", ImageError.Invalid))
+    @expect(inflateFails(a, "\x78\x01\x01\x05\x00\xFA\xFFhel", ImageError.Invalid))
+    @expect(inflateFails(a, "\x78\x01\xCB\x48\xCD\xC9\xC9\x57\xC8\x40", ImageError.Invalid))
+    // Block type 3.
+    @expect(inflateFails(a, "\x78\x01\x07\x00\x00\x00\x00\x00", ImageError.Invalid))
+    // A fixed block whose first symbol is a match (distance 1, nothing
+    // written yet).
+    @expect(inflateFails(a, "\x78\x01\x03\x02\x00\x00\x00\x00\x00\x00", ImageError.Invalid))
+    @expect(inflateFails(a, "", ImageError.Invalid))
+}
+
+let FIXTURE_DIR = "browser/tests/image/"
+
+// The name of an error as manifest.txt writes it.
+fn errorName(e: ImageError) []u8 {
+    return match e {
+        .OutOfMemory => "out-of-memory"
+        .Invalid => "invalid"
+        .Unsupported => "unsupported"
+    }
+}
+
+fn readFixture(a: Allocator, name: []u8) ![]mut u8 {
+    var path = std.text.Builder.init(a)
+    defer path.deinit()
+    try path.append(FIXTURE_DIR)
+    try path.append(name)
+    return std.fs.readFile(a, path.bytes())
+}
+
+// Checks every fixture of manifest.txt whose file name starts with
+// `prefix`, printing the name of each one that fails. Returns how many
+// failed.
+fn checkFixtures(a: Allocator, prefix: []u8) !usize {
+    let manifest = try readFixture(a, "manifest.txt")
+    defer a.free(manifest)
+    var lines = std.text.split(manifest, "\n")
+    var failed: usize = 0
+    var checked: usize = 0
+    while lines.next() |line| {
+        if !std.text.startsWith(line, prefix) {
+            continue
+        }
+        var fields = std.text.split(line, " ")
+        let name = fields.next() orelse ""
+        let w = std.text.parseInt(fields.next() orelse "") catch -1
+        let h = std.text.parseInt(fields.next() orelse "") catch -1
+        let check = fields.next() orelse ""
+        if w < 0 || h < 0 || !(try checkFixture(a, name, w as usize, h as usize, check)) {
+            @print("FAILED: ")
+            @println(name)
+            failed += 1
+        }
+        checked += 1
+    }
+    @expect(checked > 0)
+    return failed
+}
+
+fn checkFixture(a: Allocator, name: []u8, w: usize, h: usize, check: []u8) !bool {
+    let data = try readFixture(a, name)
+    defer a.free(data)
+    if std.text.eql(check, "invalid") || std.text.eql(check, "unsupported") {
+        let bad = decode(a, data) catch |e| {
+            return std.text.eql(check, errorName(e))
+        }
+        bad.deinit(a)
+        return false
+    }
+    let bmp = decode(a, data) catch |e| {
+        @println(errorName(e))
+        return false
+    }
+    defer bmp.deinit(a)
+    if bmp.width != w || bmp.height != h {
+        return false
+    }
+    var rgba = std.text.Builder.init(a)
+    defer rgba.deinit()
+    try rgba.append(name[..std.text.indexOf(name, ".") orelse name.len])
+    try rgba.append(".rgba")
+    let want = try readFixture(a, rgba.bytes())
+    defer a.free(want)
+    if std.text.eql(check, "exact") {
+        return std.mem.eql(want, bmp.pixels)
+    }
+    @print(name)
+    @print(": ")
+    return jpegClose(want, bmp.pixels)
+}
+
+// JPEG decoders may differ a little (IDCT rounding): compared with
+// libjpeg-turbo's decoding (Pillow's), the mean absolute difference of
+// the color samples must be at most JPEG_MEAN_TOLERANCE / 100 and no
+// sample may be off by more than JPEG_MAX_TOLERANCE. Measured: means of
+// 0.01 to 0.03 and maxima of 1 to 3 on every fixture. Replicating
+// chroma instead of libjpeg's triangle filter gives means of 2.4 to 5.0
+// and maxima of 38 to 57, so these bounds still catch a wrong decoder.
+let JPEG_MEAN_TOLERANCE: u64 = 25
+let JPEG_MAX_TOLERANCE: u64 = 8
+
+fn jpegClose(want: []u8, got: []u8) bool {
+    if want.len != got.len {
+        return false
+    }
+    var sum: u64 = 0
+    var max: u64 = 0
+    for i in 0..want.len {
+        var d: u64 = 0
+        if want[i] > got[i] {
+            d = (want[i] - got[i]) as u64
+        } else {
+            d = (got[i] - want[i]) as u64
+        }
+        sum += d
+        if d > max {
+            max = d
+        }
+    }
+    // Alpha is 255 on both sides: count only the color samples.
+    let samples = (want.len / 4 * 3) as u64
+    @print("mean x100 ")
+    @print(sum * 100 / samples)
+    @print(", max ")
+    @println(max)
+    return sum * 100 <= JPEG_MEAN_TOLERANCE * samples && max <= JPEG_MAX_TOLERANCE
+}
+
+test "png fixtures" {
+    @expectEqual(0, try checkFixtures(@testAllocator(), "png_"))
+}
+
+test "gif fixtures" {
+    @expectEqual(0, try checkFixtures(@testAllocator(), "gif_"))
+}
+
+test "jpeg fixtures" {
+    @expectEqual(0, try checkFixtures(@testAllocator(), "jpeg_"))
+}
+
+test "empty input" {
+    @expectEqual(0, try checkFixtures(@testAllocator(), "empty"))
+}
+
+test "sniff" {
+    @expect(sniff("\x89PNG\r\n\x1A\n") == Format.Png)
+    @expect(sniff("GIF87a") == Format.Gif)
+    @expect(sniff("GIF89a") == Format.Gif)
+    @expect(sniff("GIF88a") == Format.Unknown)
+    @expect(sniff("\xFF\xD8\xFF\xE0") == Format.Jpeg)
+    @expect(sniff("\xFF\xD8") == Format.Unknown)
+    @expect(sniff("") == Format.Unknown)
+}
+
+test "gif: LZW code size above 8 bits" {
+    let a = @testAllocator()
+    // 1x1, two global colors, then an image whose LZW minimum code size
+    // is 9.
+    let gif = "GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xFF\xFF\xFF\x2C\x00\x00\x00\x00\x01\x00\x01\x00\x00\x09\x01\x00\x00\x3B"
+    @expect(decodeFails(a, gif, 1))
+    let ok = "GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xFF\xFF\xFF\x2C\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x4C\x01\x00\x3B"
+    let bmp = try decodeGif(a, ok)
+    defer bmp.deinit(a)
+    @expectEqual(4, bmp.pixels.len)
+    @expectEqual(255, bmp.pixels[0])
+    @expectEqual(255, bmp.pixels[3])
+}
+
+test "decoders refuse other formats" {
+    let a = @testAllocator()
+    let gif = try readFixture(a, "gif_two_colors.gif")
+    defer a.free(gif)
+    let png = try readFixture(a, "png_zfixed.png")
+    defer a.free(png)
+    @expect(decodeFails(a, png, 1))
+    @expect(decodeFails(a, gif, 2))
+    @expect(decodeFails(a, gif, 0))
+    @expect(decodeFails(a, png, 2))
+}
+
+// Does decoder `which` (0 PNG, 1 GIF, 2 JPEG) return Invalid?
+fn decodeFails(a: Allocator, data: []u8, which: u8) bool {
+    if which == 0 {
+        let p = decodePng(a, data) catch |e| {
+            return errorCode(e) == 1
+        }
+        p.deinit(a)
+    } else if which == 1 {
+        let g = decodeGif(a, data) catch |e| {
+            return errorCode(e) == 1
+        }
+        g.deinit(a)
+    } else {
+        let j = decodeJpeg(a, data) catch |e| {
+            return errorCode(e) == 1
+        }
+        j.deinit(a)
+    }
+    return false
+}
+
+// Every good fixture cut at 16 places and with 32 random corruptions (1
+// to 4 bytes each, half of them in the first 100 bytes, where the
+// headers are): any result is fine except a panic or a leak.
+test "damaged files never panic" {
+    let a = @testAllocator()
+    let manifest = try readFixture(a, "manifest.txt")
+    defer a.free(manifest)
+    var lines = std.text.split(manifest, "\n")
+    var seed: u64 = 12345
+    var runs: usize = 0
+    while lines.next() |line| {
+        if line.len == 0 || std.text.indexOf(line, "_bad_") != null || std.text.startsWith(line, "empty") {
+            continue
+        }
+        var fields = std.text.split(line, " ")
+        let name = fields.next() orelse ""
+        let data = try readFixture(a, name)
+        defer a.free(data)
+        for t in 0..16 {
+            decodeAndDrop(a, data[..data.len * t / 16])
+            runs += 1
+        }
+        let copy = try a.alloc(0 as u8, data.len)
+        defer a.free(copy)
+        for t in 0..32 {
+            std.mem.copy(copy, data)
+            seed = seed *% 6364136223846793005 +% 1442695040888963407
+            let flips = (seed >> 60) % 4 + 1
+            var span = data.len
+            if t % 2 == 0 && span > 100 {
+                span = 100
+            }
+            for f in 0..flips {
+                seed = seed *% 6364136223846793005 +% 1442695040888963407
+                let at = ((seed >> 33) % span as u64) as usize
+                copy[at] = ((seed >> 13) & 255) as u8
+            }
+            decodeAndDrop(a, copy)
+            runs += 1
+        }
+    }
+    @expect(runs > 1000)
+}
+
+fn decodeAndDrop(a: Allocator, data: []u8) {
+    let bmp = decode(a, data) catch |e| {
+        return
+    }
+    bmp.deinit(a)
+}

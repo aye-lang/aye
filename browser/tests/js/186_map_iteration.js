@@ -1,0 +1,11 @@
+const m = new Map([['one', 1], ['two', 2], ['three', 3]]);
+for (const [k, v] of m) console.log(k, v);
+m.forEach((v, k, map) => console.log('forEach', k, v, map === m));
+console.log([...m.keys()], [...m.values()], [...m.entries()]);
+console.log(Array.from(m, ([k, v]) => k + '=' + v).join('&'));
+m.delete('two');
+m.set('two', 22);
+console.log([...m.keys()]);
+const counts = new Map();
+for (const w of 'the cat and the hat and the bat'.split(' ')) counts.set(w, (counts.get(w) || 0) + 1);
+console.log([...counts].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)));

@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<title>Timer order</title>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+log('script start');
+setTimeout(() => log('timeout 20'), 20);
+setTimeout(() => log('timeout 0 a'), 0);
+setTimeout(() => {
+  log('timeout 0 b');
+  Promise.resolve().then(() => log('microtask inside timeout b'));
+  setTimeout(() => log('nested timeout 0'), 0);
+}, 0);
+setTimeout(() => log('timeout 10'), 10);
+setTimeout(() => log('timeout 10 second'), 10);
+Promise.resolve().then(() => log('microtask 1')).then(() => log('microtask 2'));
+queueMicrotask(() => log('queueMicrotask'));
+requestAnimationFrame(t => log('animation frame', typeof t));
+document.addEventListener('DOMContentLoaded', () => log('DOMContentLoaded'));
+window.addEventListener('load', () => {
+  log('load');
+  setTimeout(() => log('timeout after load'), 0);
+});
+log('script end');
+</script>

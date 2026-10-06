@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<title>Stopping</title>
+<div id="outer"><div id="inner">x</div></div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const outer = document.getElementById('outer');
+const inner = document.getElementById('inner');
+outer.addEventListener('click', () => log('outer: not reached'));
+inner.addEventListener('click', e => { log('inner 1'); e.stopPropagation(); });
+inner.addEventListener('click', () => log('inner 2 still runs'));
+inner.click();
+const once = () => log('once');
+inner.addEventListener('tap', once, { once: true });
+inner.addEventListener('tap', e => { log('tap first'); e.stopImmediatePropagation(); });
+inner.addEventListener('tap', () => log('tap: not reached'));
+inner.dispatchEvent(new Event('tap'));
+inner.dispatchEvent(new Event('tap'));
+const gone = () => log('removed: not reached');
+inner.addEventListener('zap', gone);
+inner.addEventListener('zap', gone);
+inner.removeEventListener('zap', gone);
+inner.addEventListener('zap', () => log('zap'), true);
+inner.removeEventListener('zap', () => {});
+inner.dispatchEvent(new Event('zap'));
+</script>

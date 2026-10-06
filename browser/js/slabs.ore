@@ -1,0 +1,118 @@
+// js/slabs: the engine's own memory for the many small, short-lived
+// slices of the heap (property tables, elements, environment slots,
+// string bytes). Slices come in size classes of 1, 2, 4, ... 4096
+// elements, cut from large chunks, and go back to a free list of their
+// class. Larger slices come from the allocator directly.
+//
+// Why: in debug mode std.heap.General keeps every allocation record and
+// never reuses freed memory, and its `free` scans all records, so a
+// garbage-collected heap that allocates and frees per object would be
+// quadratic and grow without bound (see browser/COMPILER_GAPS.md).
+
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+
+let CLASSES: usize = 13
+let LARGEST: usize = 4096
+let CHUNK: usize = 16384
+
+pub fn Slabs(comptime T: type) type {
+    return struct {
+        alloc: Allocator
+        chunks: List([]mut T)
+        cur: []mut T
+        used: usize
+        free: [13]List([]mut T)
+
+        pub fn init(alloc: Allocator) Self {
+            return Self {
+                alloc: alloc,
+                chunks: List([]mut T).init(alloc),
+                cur: []mut T{},
+                used: 0,
+                free: [13]List([]mut T){
+                    List([]mut T).init(alloc), List([]mut T).init(alloc), List([]mut T).init(alloc),
+                    List([]mut T).init(alloc), List([]mut T).init(alloc), List([]mut T).init(alloc),
+                    List([]mut T).init(alloc), List([]mut T).init(alloc), List([]mut T).init(alloc),
+                    List([]mut T).init(alloc), List([]mut T).init(alloc), List([]mut T).init(alloc),
+                    List([]mut T).init(alloc),
+                },
+            }
+        }
+
+        pub fn deinit(self: *mut Self) {
+            for c in self.chunks.items() {
+                self.alloc.free(c)
+            }
+            self.chunks.deinit()
+            for i in 0..CLASSES {
+                self.free[i].deinit()
+            }
+        }
+
+        fn classOf(n: usize) usize {
+            var k: usize = 0
+            var size: usize = 1
+            while size < n {
+                size *= 2
+                k += 1
+            }
+            return k
+        }
+
+        /// A slice of n elements (n > 0), each `fill`.
+        pub fn get(self: *mut Self, n: usize, fill: T) AllocError![]mut T {
+            if n > LARGEST {
+                return self.alloc.alloc(fill, n)
+            }
+            let k = Self.classOf(n)
+            var s = []mut T{}
+            if self.free[k].pop() |f| {
+                s = f
+            } else {
+                let size = (1 as usize) << k
+                if self.used + size > self.cur.len {
+                    let c = try self.alloc.alloc(fill, CHUNK)
+                    try self.chunks.append(c)
+                    self.cur = c
+                    self.used = 0
+                }
+                s = self.cur[self.used..self.used + size]
+                self.used += size
+            }
+            let out = s[..n]
+            for i in 0..n {
+                out[i] = fill
+            }
+            return out
+        }
+
+        /// Gives back a slice exactly as `get` returned it.
+        pub fn put(self: *mut Self, s: []mut T) {
+            if s.len == 0 {
+                return
+            }
+            if s.len > LARGEST {
+                self.alloc.free(s)
+                return
+            }
+            let k = Self.classOf(s.len)
+            let full = s.ptr[0..(1 as usize) << k]
+            self.free[k].append(full) catch |e| {}
+        }
+
+        /// A slice of n elements with the first ones copied from s; s is
+        /// given back.
+        pub fn grow(self: *mut Self, s: []mut T, n: usize, fill: T) AllocError![]mut T {
+            let out = try self.get(n, fill)
+            for i in 0..s.len {
+                if i < n {
+                    out[i] = s[i]
+                }
+            }
+            self.put(s)
+            return out
+        }
+    }
+}

@@ -1,0 +1,83 @@
+#document
+  <!DOCTYPE html>
+  <html lang="en">
+    <head>
+      "\n"
+      <meta charset="utf-8">
+      "\n"
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      "\n"
+      <title>
+        "Notes on Ore – anyknown"
+      "\n"
+      <script src="/analytics.js" async="">
+      "\n"
+    "\n"
+    <body class="post">
+      "\n"
+      <header>
+        "\n  "
+        <nav>
+          <a href="/">
+            "anyknown"
+          " · "
+          <a href="/blog/">
+            "Blog"
+        "\n"
+      "\n"
+      <main>
+        "\n"
+        <article>
+          "\n  "
+          <h1>
+            "Notes on Ore"
+          "\n  "
+          <p class="byline">
+            "By "
+            <a href="/me">
+              "someone"
+            ", "
+            <time datetime="2026-10-06">
+              "October 6"
+            "\n  "
+          <p>
+            "Ore is a systems language "
+            <em>
+              "without"
+            " garbage collection.\n  Memory comes from explicit "
+            <code>
+              "Allocator"
+            " values.\n  "
+          <h2>
+            "Why another language?"
+          "\n  "
+          <ol>
+            "\n    "
+            <li>
+              "Errors are values.\n    "
+            <li>
+              "Enums are tagged unions.\n    "
+            <li>
+              "No hidden allocation.\n  "
+          "\n  "
+          <blockquote>
+            <p>
+              "Simple things should be simple."
+          "\n  "
+          <pre>
+            <code>
+              "fn main() {\n    @println(\"hi\")\n}"
+          "\n  "
+          <figure>
+            <img src="fig.png" alt="A figure">
+            <figcaption>
+              "Figure 1: a figure."
+          "\n"
+        "\n"
+      "\n"
+      <footer>
+        <p>
+          "© 2026 anyknown. "
+          <a href="/about">
+            "About"
+      "\n\n\n"

@@ -1,0 +1,42 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <link rel="stylesheet" href="link.css">
+      display: none
+    <link rel="alternate stylesheet" href="sub/alternate.css">
+      display: none
+    <link rel="stylesheet" href="sub/other.css" media="print">
+      display: none
+    <link rel="stylesheet" href="missing.css">
+      display: none
+    <link rel="Stylesheet" href="sub/other.css">
+      display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <p class="first">
+      display: block
+      color: rgb(0, 128, 0)
+      margin-top: 32px
+      margin-bottom: 16px
+    <p class="second">
+      display: block
+      color: rgb(128, 0, 128)
+      font-style: italic
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="third">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: center
+    <p class="alt">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px

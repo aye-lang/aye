@@ -1,0 +1,15 @@
+const out = [];
+['a', 'b', 'c'].forEach((x, i, arr) => out.push(i + x + arr.length));
+console.log(out, [1].forEach(() => 1));
+console.log([1, 2, 3].some((x) => x > 2), [1, 2, 3].some((x) => x > 5), [].some(() => true));
+console.log([1, 2, 3].every((x) => x > 0), [1, 2, 3].every((x) => x > 1), [].every(() => false));
+let calls = 0;
+[1, 2, 3, 4].some((x) => { calls++; return x === 2; });
+console.log(calls);
+calls = 0;
+[1, 2, 3, 4].every((x) => { calls++; return x < 2; });
+console.log(calls);
+const sparse = [1, , 3];
+let n = 0;
+sparse.forEach(() => n++);
+console.log(n);

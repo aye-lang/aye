@@ -1,0 +1,20 @@
+- main
+  - heading "Sign in" [level=1] [e1]
+  - form "Sign in"
+    - paragraph
+      - textbox "Email address" [e2] [required]
+    - paragraph
+      - textbox "Password" [e3] [required] value="*******"
+    - paragraph
+      - checkbox "Remember me" [e4] [checked]
+    - paragraph
+      - textbox "One-time code" [e5]
+    - paragraph
+      - textbox "Nickname" [e6]
+    - paragraph
+      - button "Sign in" [e7]
+      - button "Use a passkey" [e8] [disabled]
+      - button "Reset" [e9]
+      - button "Sign in later" [e10]
+    - paragraph
+      - link "Forgot your password?" [e11] -> /forgot

@@ -1,0 +1,4 @@
+[ 1, 2, 3 ] dynamic quoted numeric
+[] 5
+function true
+[ 'other', 'x' ]

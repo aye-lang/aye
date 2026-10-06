@@ -1,0 +1,10 @@
+console.log('aaa'.replace('a', 'b'), 'aaa'.replaceAll('a', 'b'));
+console.log('hello world'.replace('world', '[$&]'), 'x-y'.replace('-', '$$'));
+console.log('john smith'.replace(/(\w+) (\w+)/, '$2, $1'), 'abc'.replace('b', "$`|$'"));
+console.log('a.b.c'.replace('.', '!'), 'a.b.c'.replaceAll('.', '!'));
+console.log('abc'.replace('b', (m, off, str) => `<${m}@${off} in ${str}>`));
+console.log('1 2 3'.replace(/\d/g, (d) => d * 2));
+console.log('price: 10, 20'.replace(/(\d+)/g, (m, g1, off) => `$${g1}(${off})`));
+console.log('aaa'.replaceAll('aa', 'b'), 'abc'.replace('', '_'), 'abc'.replaceAll('', '_'));
+console.log('x'.replace('y', 'z'), 'Tom & Jerry'.replace(/&/g, '&amp;'));
+console.log('2020-05-06'.replace(/(\d+)-(\d+)-(\d+)/, '$3/$2/$1'), 'ab'.replace(/(a)/, '$1$1$2'));

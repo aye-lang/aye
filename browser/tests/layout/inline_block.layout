@@ -1,0 +1,48 @@
+viewport 800x600
+  block <html> (0, 0) 800x342
+    block <body> (0, 16) 800x310
+      block <p> (0, 16) 800x26
+        line (0, 16) 800x26
+          text (0, 21) 56x16 "before "
+          inline-block <span class="ib"> (56, 16) 110x26
+            line (59, 19) 104x20
+              text (59, 21) 104x16 "shrink to fit"
+          text (166, 21) 48x16 " after"
+      block <p> (0, 58) 800x46
+        line (0, 58) 800x46
+          text (0, 83) 56x16 "before "
+          inline-block <span class="ib"> (56, 58) 46x46
+            line (59, 61) 40x20
+              text (59, 63) 24x16 "two"
+            line (59, 81) 40x20
+              text (59, 83) 40x16 "lines"
+          text (102, 83) 264x16 " after: baseline of the last line"
+      block <p> (0, 120) 800x66
+        line (0, 120) 800x66
+          inline-block <span class="ib fixed"> (0, 120) 106x66
+            line (3, 123) 100x20
+              text (3, 125) 88x16 "fixed width"
+            line (3, 143) 100x20
+              text (3, 145) 72x16 "with text"
+            line (3, 163) 100x20
+              text (3, 165) 80x16 "that wraps"
+          text (106, 165) 40x16 " next"
+      block <p> (0, 202) 800x26
+        line (0, 202) 800x26
+          inline-block <span class="ib" style="margin: 0 10px"> (10, 202) 62x26
+            line (13, 205) 56x20
+              text (13, 207) 56x16 "margins"
+          inline-block <span class="ib"> (82, 202) 70x26
+            line (85, 205) 64x20
+              text (85, 207) 64x16 "touching"
+      block <div style="width: 150px"> (0, 244) 150x46
+        line (0, 244) 150x46
+          inline-block <span class="ib"> (0, 244) 150x46
+            line (3, 247) 144x20
+              text (3, 249) 104x16 "a long inline"
+            line (3, 267) 144x20
+              text (3, 269) 128x16 "block that wraps"
+      block <p> (0, 306) 800x20
+        line (0, 306) 800x20
+          inline-block <span class="ib"> (0, 314.8) 6x6
+          text (6, 308) 152x16 " empty inline-block"

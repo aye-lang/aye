@@ -1,0 +1,15 @@
+const o = { a: 1, b: 2, c: 3 };
+console.log(delete o.a, o, 'a' in o);
+console.log(delete o.zzz, Object.keys(o));
+delete o['b'];
+console.log(o);
+const arr = [1, 2, 3];
+delete arr[1];
+console.log(arr.length, arr[1], 1 in arr);
+console.log(void 0, void 'x', typeof void 0);
+let i = (1, 2, 3);
+console.log(i);
+let k = 0;
+const r = (k++, k++, k * 10);
+console.log(k, r);
+for (let p = 0, q = 10; p < q; p += 3, q -= 3) console.log(p, q);

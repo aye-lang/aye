@@ -1,0 +1,10 @@
+const original = { s: 'text "quoted" é 😀', n: 1.5, neg: -3, big: 1e21, small: 1e-7, arr: [true, false, null], nested: { deep: { deeper: [1, { x: 'y' }] } } };
+const json = JSON.stringify(original);
+console.log(json);
+const back = JSON.parse(json);
+console.log(JSON.stringify(back) === json, back.nested.deep.deeper[1].x);
+const pretty = JSON.stringify(original, null, 2);
+console.log(JSON.stringify(JSON.parse(pretty)) === json);
+const lossy = JSON.parse(JSON.stringify({ u: undefined, d: new Date(0), nan: NaN }));
+console.log(lossy);
+console.log(JSON.stringify(JSON.parse('{"a":"\\u0000\\u001f"}')));

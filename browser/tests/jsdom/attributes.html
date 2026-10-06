@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<title>Attributes</title>
+<a id="link" href="page.html" title="T" data-user-id="7" data-x="1">link</a>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const a = document.getElementById('link');
+log(a.getAttribute('href'), a.getAttribute('HREF'), a.getAttribute('missing'));
+log(a.hasAttribute('title'), a.hasAttribute('nope'), a.getAttributeNames().join(','));
+a.setAttribute('Title', 'New');
+a.setAttribute('target', '_blank');
+a.removeAttribute('data-x');
+log(a.title, a.target, a.id, a.className === '');
+a.id = 'renamed';
+a.className = 'one two';
+log(document.getElementById('renamed') === a, a.hasAttributes());
+log(a.dataset.userId, a.dataset.missing);
+a.dataset.userId = '8';
+a.dataset.newThing = 'yes';
+a.toggleAttribute('hidden');
+a.toggleAttribute('hidden');
+a.toggleAttribute('download', true);
+log(a.getAttribute('data-user-id'), a.getAttribute('data-new-thing'));
+</script>

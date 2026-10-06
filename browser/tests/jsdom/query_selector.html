@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<title>Queries</title>
+<div id="root" class="box">
+  <ul class="menu"><li class="item first"><a href="#a">A</a></li><li class="item"><a href="#b">B</a></li><li class="item last" data-k="v">C</li></ul>
+  <p class="note item">note</p>
+</div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const names = list => Array.from(list).map(e => e.textContent).join(',');
+log(document.querySelector('.item').textContent);
+log(names(document.querySelectorAll('li.item')));
+log(names(document.querySelectorAll('ul > li:last-child, p.note')));
+log(names(document.querySelectorAll('[data-k=v]')), document.querySelectorAll('div *').length);
+const root = document.getElementById('root');
+log(names(root.querySelectorAll('li:not(.first) a')), root.querySelector('#nothing'));
+const c = document.querySelector('li.last');
+log(c.matches('.menu .item'), c.matches('p'), c.closest('div').id, c.closest('section'));
+log(names(document.getElementsByClassName('item')), names(root.getElementsByClassName('item first')));
+log(document.getElementsByTagName('LI').length, root.getElementsByTagName('*').length);
+try { document.querySelector('li[[['); } catch (e) { log(e.name); }
+</script>

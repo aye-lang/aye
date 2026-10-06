@@ -1,0 +1,18 @@
+viewport 800x600
+  block <html> (0, 0) 800x220.4
+    block <body> (0, 16) 800x188.4
+      block <p> (0, 16) 800x55.2
+        line (0, 16) 800x55.2
+          text (0, 53.2) 40x16 "Text "
+          replaced <img src="a.png" width="100" height="50" alt="A"> (40, 16) 100x50
+          text (140, 53.2) 56x16 " after."
+      block <p> (0, 87.2) 800x20
+        line (0, 87.2) 800x20
+          text (0, 89.2) 72x16 "No size: "
+          replaced <img src="b.png" alt="missing image"> (72, 102) 0x0
+          text (72, 89.2) 8x16 "."
+      replaced <img class="block" src="c.png" width="200" height="20"> (300, 123.2) 200x20
+      block <p> (0, 159.2) 800x45.2
+        line (0, 159.2) 800x45.2
+          replaced <img class="styled" src="d.png" width="999"> (0, 159.2) 50x40
+          replaced <img src="e.png" width="20px" height="10"> (50, 189.2) 20x10

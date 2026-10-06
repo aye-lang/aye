@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<title>preventDefault</title>
+<a id="link" href="elsewhere.html">go</a>
+<input id="box" type="checkbox">
+<input id="box2" type="checkbox">
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const link = document.getElementById('link');
+link.addEventListener('click', e => { e.preventDefault(); log('canceled', e.defaultPrevented, e.cancelable); });
+link.click();
+const plain = new Event('x');
+plain.preventDefault();
+log('not cancelable', plain.defaultPrevented);
+const c = new Event('y', { cancelable: true });
+document.body.addEventListener('y', e => e.preventDefault());
+log('dispatch returned', document.body.dispatchEvent(c), c.defaultPrevented);
+const box = document.getElementById('box');
+box.addEventListener('click', e => e.preventDefault());
+box.click();
+const box2 = document.getElementById('box2');
+box2.addEventListener('change', e => log('change', e.target.checked));
+box2.click();
+log('checked', box.checked, box2.checked, location.pathname.endsWith('events_prevent.html'));
+</script>

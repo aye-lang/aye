@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<title>Loading</title>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+log('inline', document.readyState);
+document.addEventListener('DOMContentLoaded', e => log('DOMContentLoaded', document.readyState, e.target === document, e.bubbles));
+window.addEventListener('DOMContentLoaded', () => log('DOMContentLoaded reaches window'));
+window.addEventListener('load', e => log('load', document.readyState, e.target === window));
+document.addEventListener('load', () => log('load must not reach document'));
+</script>
+<script src="scripts/deferred.js" defer></script>
+<script>log('second inline', document.currentScript.tagName);</script>

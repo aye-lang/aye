@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<title>Document</title>
+<input id="field">
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+log(document.documentElement.tagName, document.head.tagName, document.body.tagName);
+const c = document.createComment('made');
+document.body.appendChild(c);
+log(c.nodeType, c.nodeName, c.data);
+const el = document.createElement('DIV');
+el.id = 'late';
+log(document.getElementById('late'), el.tagName, el.localName);
+document.body.appendChild(el);
+log(document.getElementById('late') === el);
+log(document.activeElement.tagName);
+const field = document.getElementById('field');
+field.addEventListener('focus', () => log('focus event'));
+field.focus();
+log(document.activeElement === field);
+field.blur();
+log(document.activeElement.tagName);
+try { document.body.appendChild(document.documentElement); } catch (e) { log(e.name); }
+try { document.body.removeChild(document.head); } catch (e) { log(e.name); }
+try { new HTMLElement(); } catch (e) { log(e.name); }
+</script>

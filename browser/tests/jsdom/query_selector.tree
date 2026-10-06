@@ -1,0 +1,30 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Queries"
+      "\n"
+    <body>
+      <div id="root" class="box">
+        "\n  "
+        <ul class="menu">
+          <li class="item first">
+            <a href="#a">
+              "A"
+          <li class="item">
+            <a href="#b">
+              "B"
+          <li class="item last" data-k="v">
+            "C"
+        "\n  "
+        <p class="note item">
+          "note"
+        "\n"
+      "\n"
+      <pre id="out">
+        "A\nA,B,C\nC,note\nC 7\nB \ntrue false root \nA,B,C,note A\n3 7\nSyntaxError\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst names = list => Array.from(list).map(e => e.textContent).join(',');\nlog(document.querySelector('.item').textContent);\nlog(names(document.querySelectorAll('li.item')));\nlog(names(document.querySelectorAll('ul > li:last-child, p.note')));\nlog(names(document.querySelectorAll('[data-k=v]')), document.querySelectorAll('div *').length);\nconst root = document.getElementById('root');\nlog(names(root.querySelectorAll('li:not(.first) a')), root.querySelector('#nothing'));\nconst c = document.querySelector('li.last');\nlog(c.matches('.menu .item'), c.matches('p'), c.closest('div').id, c.closest('section'));\nlog(names(document.getElementsByClassName('item')), names(root.getElementsByClassName('item first')));\nlog(document.getElementsByTagName('LI').length, root.getElementsByTagName('*').length);\ntry { document.querySelector('li[[['); } catch (e) { log(e.name); }\n"
+      "\n"

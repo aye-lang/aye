@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<style>
+body { margin: 8px }
+.row { display: flex; gap: 8px; background-color: #ddd; padding: 4px; margin-bottom: 8px }
+.row div { height: 30px; padding: 2px }
+.a { background-color: tomato; width: 50px }
+.b { background-color: gold; flex-grow: 1 }
+.c { background-color: skyblue; width: 70px }
+.col { display: flex; flex-direction: column; width: 100px; border: 1px solid black }
+.col div { background-color: lightgreen; margin: 2px; height: 16px }
+</style>
+<div class="row"><div class="a">A</div><div class="b">B grows</div><div class="c">C</div></div>
+<div class="col"><div>one</div><div>two</div></div>

@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<title>Text</title>
+<p id="p">Hello <b>bold</b> world</p>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const p = document.getElementById('p');
+log('textContent:', p.textContent);
+const t = p.firstChild;
+log('nodeType', t.nodeType, 'nodeName', t.nodeName, 'data', JSON.stringify(t.data), 'length', t.length);
+t.data = 'Goodbye ';
+p.lastChild.nodeValue = ' moon';
+log('after:', p.textContent);
+const q = document.createElement('p');
+q.textContent = '<not markup> & stuff';
+document.body.insertBefore(q, document.getElementById('out'));
+log('q children', q.childNodes.length, q.firstChild.nodeName);
+q.textContent = '';
+log('emptied', q.childNodes.length, q.hasChildNodes());
+log('document.textContent', document.textContent, 'element nodeValue', p.nodeValue);
+</script>

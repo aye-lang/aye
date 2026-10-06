@@ -1,0 +1,848 @@
+// jpeg: the baseline JPEG decoder (sequential DCT, Huffman coding, 8-bit
+// samples; SOF0 and SOF1). Grayscale and 3-component images (YCbCr, or
+// RGB when an Adobe marker or the component ids say so), any sampling
+// factors from 1 to 4, restart intervals, and both interleaved and
+// one-component scans. Progressive, lossless, arithmetic-coded, 12-bit
+// and CMYK files are `Unsupported`.
+//
+// The output follows libjpeg's default choices where they are visible:
+// the "fancy" (triangle filter) chroma upsampling for 2x1, 1x2 and 2x2
+// subsampling, and its fixed-point YCbCr to RGB conversion. The IDCT is
+// the float AAN one (libjpeg's jidctflt.c), within a step of libjpeg's
+// default integer IDCT.
+
+import std
+import std.mem.Allocator
+
+// Coefficients come in zigzag order: JPEG_ZIGZAG[k] is the position (row
+// * 8 + column) of the k-th.
+let JPEG_ZIGZAG = [64]usize{
+    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5,
+    12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28,
+    35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
+    58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
+}
+
+// The AAN IDCT wants coefficient (u, v) scaled by JPEG_AAN[u] *
+// JPEG_AAN[v] (JPEG_AAN[k] = cos(k pi / 16) * sqrt(2), 1 for k = 0); the
+// scaling is folded into the dequantization, with the final division
+// by 8.
+let JPEG_AAN = [8]f32{1.0, 1.387039845, 1.306562965, 1.175875602, 1.0, 0.785694958, 0.541196100, 0.275899379}
+
+// A Huffman table (codes of 1 to 16 bits, most significant bit first).
+// `fast[bits]` is `length << 8 | symbol` for the code that starts the
+// next 9 bits, 0 when it is longer. Longer codes are found the libjpeg
+// way: codes of one length are consecutive, from `mincode` to `maxcode`.
+struct JpegHuff {
+    fast: [512]u16
+    mincode: [17]i32
+    maxcode: [17]i32
+    valptr: [17]i32
+    values: [256]u8
+    defined: bool
+}
+
+// One component of the frame. Its samples go to `plane` of the decoder
+// at `offset`, `stride` bytes per row: whole blocks, padded to whole
+// MCUs.
+struct JpegComp {
+    id: u8
+    h: usize
+    v: usize
+    tq: usize
+    // The tables of the current scan.
+    td: usize
+    ta: usize
+    // The DC value of the previous block.
+    pred: i32
+    offset: usize
+    stride: usize
+    // Size of the component in samples (before upsampling).
+    width: usize
+    height: usize
+}
+
+struct JpegDecoder {
+    width: usize
+    height: usize
+    ncomp: usize
+    comps: [3]JpegComp
+    hmax: usize
+    vmax: usize
+    mcus_x: usize
+    mcus_y: usize
+    // Quantization tables, 64 values each in zigzag order.
+    // Quantization tables (zigzag order) with the IDCT's scale factors
+    // folded in.
+    quant: [256]f32
+    quant_defined: [4]bool
+    dc: [4]JpegHuff
+    ac: [4]JpegHuff
+    restart: usize
+    // Adobe APP14 transform: -1 when there is no APP14, 0 for RGB.
+    adobe: i32
+    plane: []mut u8
+    has_frame: bool
+    scans: usize
+}
+
+// Entropy-coded data: bytes with 0xFF 0x00 meaning 0xFF, read most
+// significant bit first, up to the next marker. Past a marker the
+// reader yields zeros (a corrupt file decodes to garbage, as in
+// libjpeg); past the end of the data it also yields zeros, counted in
+// `over`, and consuming those is an error (the file was cut short).
+struct JpegBits {
+    src: []u8
+    pos: usize
+    buf: u64
+    count: u64
+    over: u64
+    at_marker: bool
+
+    fn refill(self: *mut Self) {
+        while self.count <= 56 {
+            var b: u64 = 0
+            if self.at_marker {
+                b = 0
+            } else if self.pos >= self.src.len {
+                self.over += 1
+            } else if self.src[self.pos] != 0xFF {
+                b = self.src[self.pos] as u64
+                self.pos += 1
+            } else if self.pos + 1 >= self.src.len {
+                self.pos = self.src.len
+                self.over += 1
+            } else if self.src[self.pos + 1] == 0 {
+                b = 0xFF
+                self.pos += 2
+            } else {
+                self.at_marker = true
+            }
+            self.buf = (self.buf << 8) | b
+            self.count += 8
+        }
+    }
+
+    fn consume(self: *mut Self, n: u64) ImageError!void {
+        if n > self.count || self.count - n < self.over * 8 {
+            return ImageError.Invalid
+        }
+        self.count -= n
+        if self.count < 64 {
+            self.buf = self.buf & (((1 as u64) << self.count) - 1)
+        }
+    }
+
+    // The next `n` bits (1 to 16) without consuming them.
+    fn peek(self: *mut Self, n: u64) u64 {
+        return (self.buf >> (self.count - n)) & (((1 as u64) << n) - 1)
+    }
+
+    // Drops what is buffered and steps over the RSTn marker expected at
+    // a restart. A missing marker is tolerated.
+    fn restartAt(self: *mut Self) {
+        self.buf = 0
+        self.count = 0
+        self.over = 0
+        self.at_marker = false
+        // Fill bytes (0xFF) may come before the marker.
+        while self.pos + 1 < self.src.len && self.src[self.pos] == 0xFF && self.src[self.pos + 1] == 0xFF {
+            self.pos += 1
+        }
+        if self.pos + 1 < self.src.len && self.src[self.pos] == 0xFF && self.src[self.pos + 1] >= 0xD0 && self.src[self.pos + 1] <= 0xD7 {
+            self.pos += 2
+        }
+    }
+}
+
+/// Decodes a baseline JPEG file. Free the result with `deinit`.
+pub fn decodeJpeg(alloc: Allocator, data: []u8) ImageError!Bitmap {
+    if data.len < 4 || data[0] != 0xFF || data[1] != 0xD8 {
+        return ImageError.Invalid
+    }
+    var dec = JpegDecoder {
+        width: 0,
+        height: 0,
+        ncomp: 0,
+        comps: [3]JpegComp{jpegEmptyComp(), jpegEmptyComp(), jpegEmptyComp()},
+        hmax: 1,
+        vmax: 1,
+        mcus_x: 0,
+        mcus_y: 0,
+        quant: @zeroed([256]f32),
+        quant_defined: [4]bool{false, false, false, false},
+        dc: [4]JpegHuff{jpegEmptyHuff(), jpegEmptyHuff(), jpegEmptyHuff(), jpegEmptyHuff()},
+        ac: [4]JpegHuff{jpegEmptyHuff(), jpegEmptyHuff(), jpegEmptyHuff(), jpegEmptyHuff()},
+        restart: 0,
+        adobe: -1,
+        // Empty until the frame header gives the size.
+        plane: []mut u8{},
+        has_frame: false,
+        scans: 0,
+    }
+    defer if dec.has_frame {
+        alloc.free(dec.plane)
+    }
+    var pos: usize = 2
+    while pos < data.len {
+        // Markers: 0xFF (any number of them), then the code. Bytes
+        // between segments are skipped, as libjpeg does.
+        if data[pos] != 0xFF {
+            pos += 1
+            continue
+        }
+        while pos < data.len && data[pos] == 0xFF {
+            pos += 1
+        }
+        if pos >= data.len {
+            break
+        }
+        let m = data[pos]
+        pos += 1
+        if m == 0xD9 {
+            break
+        }
+        if m == 0x01 || m == 0xD8 || (m >= 0xD0 && m <= 0xD7) {
+            continue
+        }
+        if data.len - pos < 2 {
+            return ImageError.Invalid
+        }
+        let seg = (data[pos] as usize << 8) | data[pos + 1] as usize
+        if seg < 2 || seg > data.len - pos {
+            return ImageError.Invalid
+        }
+        let body = data[pos + 2..pos + seg]
+        pos += seg
+        if m == 0xC0 || m == 0xC1 {
+            try jpegFrame(&mut dec, alloc, body)
+        } else if m >= 0xC2 && m <= 0xCF && m != 0xC4 && m != 0xC8 && m != 0xCC {
+            // Progressive, lossless, hierarchical, arithmetic coding.
+            return ImageError.Unsupported
+        } else if m == 0xC4 {
+            try jpegTables(&mut dec, body)
+        } else if m == 0xDB {
+            try jpegQuant(&mut dec, body)
+        } else if m == 0xDD {
+            if body.len < 2 {
+                return ImageError.Invalid
+            }
+            dec.restart = (body[0] as usize << 8) | body[1] as usize
+        } else if m == 0xEE {
+            if body.len >= 12 && std.mem.eql(body[0..5], "Adobe") {
+                dec.adobe = body[11] as i32
+            }
+        } else if m == 0xDA {
+            pos = try jpegScan(&mut dec, data, body, pos)
+        }
+    }
+    if dec.scans == 0 {
+        return ImageError.Invalid
+    }
+    return jpegOutput(&dec, alloc)
+}
+
+fn jpegEmptyComp() JpegComp {
+    return JpegComp {
+        id: 0,
+        h: 1,
+        v: 1,
+        tq: 0,
+        td: 0,
+        ta: 0,
+        pred: 0,
+        offset: 0,
+        stride: 0,
+        width: 0,
+        height: 0,
+    }
+}
+
+fn jpegEmptyHuff() JpegHuff {
+    return JpegHuff {
+        fast: @zeroed([512]u16),
+        mincode: @zeroed([17]i32),
+        maxcode: @zeroed([17]i32),
+        valptr: @zeroed([17]i32),
+        values: @zeroed([256]u8),
+        defined: false,
+    }
+}
+
+// SOF0/SOF1: sizes, components and their sampling factors. Allocates
+// the sample planes.
+fn jpegFrame(dec: *mut JpegDecoder, alloc: Allocator, body: []u8) ImageError!void {
+    if dec.has_frame || body.len < 6 {
+        return ImageError.Invalid
+    }
+    if body[0] != 8 {
+        return ImageError.Unsupported
+    }
+    let height = (body[1] as usize << 8) | body[2] as usize
+    let width = (body[3] as usize << 8) | body[4] as usize
+    let n = body[5] as usize
+    if n == 4 || n == 2 {
+        return ImageError.Unsupported
+    }
+    if n != 1 && n != 3 {
+        return ImageError.Invalid
+    }
+    if height == 0 {
+        // The height comes later in a DNL marker: nobody writes those.
+        return ImageError.Unsupported
+    }
+    try checkSize(width, height)
+    if body.len < 6 + n * 3 {
+        return ImageError.Invalid
+    }
+    dec.width = width
+    dec.height = height
+    dec.ncomp = n
+    for i in 0..n {
+        let c = body[6 + i * 3..9 + i * 3]
+        let h = (c[1] >> 4) as usize
+        let v = (c[1] & 15) as usize
+        if h < 1 || h > 4 || v < 1 || v > 4 || c[2] > 3 {
+            return ImageError.Invalid
+        }
+        dec.comps[i].id = c[0]
+        dec.comps[i].h = h
+        dec.comps[i].v = v
+        dec.comps[i].tq = c[2] as usize
+        if h > dec.hmax {
+            dec.hmax = h
+        }
+        if v > dec.vmax {
+            dec.vmax = v
+        }
+    }
+    dec.mcus_x = (width + 8 * dec.hmax - 1) / (8 * dec.hmax)
+    dec.mcus_y = (height + 8 * dec.vmax - 1) / (8 * dec.vmax)
+    var total: usize = 0
+    for i in 0..n {
+        let c = &mut dec.comps[i]
+        c.offset = total
+        c.stride = dec.mcus_x * c.h * 8
+        c.width = (width * c.h + dec.hmax - 1) / dec.hmax
+        c.height = (height * c.v + dec.vmax - 1) / dec.vmax
+        total += c.stride * dec.mcus_y * c.v * 8
+    }
+    dec.plane = try alloc.alloc(0 as u8, total)
+    dec.has_frame = true
+}
+
+// DHT: one or more Huffman tables.
+fn jpegTables(dec: *mut JpegDecoder, body: []u8) ImageError!void {
+    var p: usize = 0
+    while p < body.len {
+        if body.len - p < 17 {
+            return ImageError.Invalid
+        }
+        let class = body[p] >> 4
+        let slot = (body[p] & 15) as usize
+        if class > 1 || slot > 3 {
+            return ImageError.Invalid
+        }
+        let counts = body[p + 1..p + 17]
+        var total: usize = 0
+        for c in counts {
+            total += c as usize
+        }
+        if total > 256 || total > body.len - p - 17 {
+            return ImageError.Invalid
+        }
+        let values = body[p + 17..p + 17 + total]
+        if class == 0 {
+            try jpegBuildHuff(&mut dec.dc[slot], counts, values)
+        } else {
+            try jpegBuildHuff(&mut dec.ac[slot], counts, values)
+        }
+        p += 17 + total
+    }
+}
+
+fn jpegBuildHuff(h: *mut JpegHuff, counts: []u8, values: []u8) ImageError!void {
+    h.fast = @zeroed([512]u16)
+    for i in 0..values.len {
+        h.values[i] = values[i]
+    }
+    var code: i32 = 0
+    var k: i32 = 0
+    for len in 1..17 {
+        let n = counts[len - 1] as i32
+        h.valptr[len] = k
+        h.mincode[len] = code
+        h.maxcode[len] = code + n - 1
+        // Codes of `len` bits must fit in `len` bits.
+        if code + n > ((1 as i32) << len as i32) {
+            return ImageError.Invalid
+        }
+        if len <= 9 {
+            for j in 0..n {
+                let c = (code + j) as usize
+                let shift = 9 - len
+                let entry = ((len as u16) << 8) | h.values[(k + j) as usize] as u16
+                for f in (c << shift)..((c + 1) << shift) {
+                    h.fast[f] = entry
+                }
+            }
+        }
+        code = (code + n) << 1
+        k += n
+    }
+    h.defined = true
+}
+
+// DQT: one or more quantization tables, 8- or 16-bit values.
+fn jpegQuant(dec: *mut JpegDecoder, body: []u8) ImageError!void {
+    var p: usize = 0
+    while p < body.len {
+        let precision = body[p] >> 4
+        let slot = (body[p] & 15) as usize
+        p += 1
+        if precision > 1 || slot > 3 {
+            return ImageError.Invalid
+        }
+        let size = 64 * (1 + precision as usize)
+        if size > body.len - p {
+            return ImageError.Invalid
+        }
+        for i in 0..64 {
+            var q: u32 = body[p + i] as u32
+            if precision == 1 {
+                q = (body[p + i * 2] as u32 << 8) | body[p + i * 2 + 1] as u32
+            }
+            let at = JPEG_ZIGZAG[i]
+            dec.quant[slot * 64 + i] = q as f32 * JPEG_AAN[at / 8] * JPEG_AAN[at % 8] / 8.0
+        }
+        dec.quant_defined[slot] = true
+        p += size
+    }
+}
+
+// SOS: the scan header in `body`, then the entropy-coded data from
+// `pos`. Returns the position after the data (at the next marker).
+fn jpegScan(dec: *mut JpegDecoder, data: []u8, body: []u8, pos: usize) ImageError!usize {
+    if !dec.has_frame || body.len < 1 {
+        return ImageError.Invalid
+    }
+    let ns = body[0] as usize
+    if ns < 1 || ns > dec.ncomp || body.len < 1 + ns * 2 + 3 {
+        return ImageError.Invalid
+    }
+    var members = [3]usize{0, 0, 0}
+    for i in 0..ns {
+        let id = body[1 + i * 2]
+        let tables = body[2 + i * 2]
+        var found = false
+        for j in 0..dec.ncomp {
+            if dec.comps[j].id == id {
+                members[i] = j
+                found = true
+            }
+        }
+        if !found {
+            return ImageError.Invalid
+        }
+        let c = &mut dec.comps[members[i]]
+        c.td = (tables >> 4) as usize
+        c.ta = (tables & 15) as usize
+        if c.td > 3 || c.ta > 3 || !dec.dc[c.td].defined || !dec.ac[c.ta].defined || !dec.quant_defined[c.tq] {
+            return ImageError.Invalid
+        }
+        c.pred = 0
+    }
+    var br = JpegBits { src: data, pos: pos, buf: 0, count: 0, over: 0, at_marker: false }
+    var block = @zeroed([64]f32)
+    let coef = block[..]
+    var n: usize = 0
+    if ns == 1 {
+        // A one-component scan covers the component's own blocks, not
+        // whole MCUs.
+        let ci = members[0]
+        let bw = (dec.comps[ci].width + 7) / 8
+        let bh = (dec.comps[ci].height + 7) / 8
+        for by in 0..bh {
+            for bx in 0..bw {
+                jpegRestart(dec, &mut br, n)
+                try jpegBlock(dec, &mut br, ci, coef)
+                jpegStore(dec, ci, coef, bx, by)
+                n += 1
+            }
+        }
+    } else {
+        for my in 0..dec.mcus_y {
+            for mx in 0..dec.mcus_x {
+                jpegRestart(dec, &mut br, n)
+                for i in 0..ns {
+                    let ci = members[i]
+                    let h = dec.comps[ci].h
+                    let v = dec.comps[ci].v
+                    for y in 0..v {
+                        for x in 0..h {
+                            try jpegBlock(dec, &mut br, ci, coef)
+                            jpegStore(dec, ci, coef, mx * h + x, my * v + y)
+                        }
+                    }
+                }
+                n += 1
+            }
+        }
+    }
+    dec.scans += 1
+    return br.pos
+}
+
+// Before MCU `n`: at a restart interval, the bit reader starts over at
+// a byte and the DC predictions go back to 0.
+fn jpegRestart(dec: *mut JpegDecoder, br: *mut JpegBits, n: usize) {
+    if dec.restart == 0 || n == 0 || n % dec.restart != 0 {
+        return
+    }
+    br.restartAt()
+    for i in 0..dec.ncomp {
+        dec.comps[i].pred = 0
+    }
+}
+
+fn jpegDecodeHuff(br: *mut JpegBits, h: *JpegHuff) ImageError!u8 {
+    br.refill()
+    let e = h.fast[br.peek(9) as usize]
+    if e != 0 {
+        try br.consume((e >> 8) as u64)
+        return (e & 255) as u8
+    }
+    for len in 10..17 {
+        let code = br.peek(len as u64) as i32
+        if code >= h.mincode[len] && code <= h.maxcode[len] {
+            try br.consume(len as u64)
+            return h.values[(h.valptr[len] + code - h.mincode[len]) as usize]
+        }
+    }
+    return ImageError.Invalid
+}
+
+// The signed value of `s` (1 to 15) more bits: a leading 0 bit means a
+// negative number.
+fn jpegReceive(br: *mut JpegBits, s: u64) ImageError!i32 {
+    br.refill()
+    let v = br.peek(s) as i32
+    try br.consume(s)
+    if v < ((1 as i32) << (s - 1) as i32) {
+        return v - ((1 as i32) << s as i32) + 1
+    }
+    return v
+}
+
+// One 8x8 block: Huffman-coded DC difference and AC run/size pairs,
+// dequantized into `coef` (natural order). The DC sum wraps instead of
+// overflowing: a corrupt file gives garbage pixels, never a panic.
+fn jpegBlock(dec: *mut JpegDecoder, br: *mut JpegBits, ci: usize, coef: []mut f32) ImageError!void {
+    for i in 0..64 {
+        coef[i] = 0.0
+    }
+    let c = &mut dec.comps[ci]
+    let q = c.tq * 64
+    let s = try jpegDecodeHuff(br, &dec.dc[c.td])
+    if s > 15 {
+        return ImageError.Invalid
+    }
+    var diff: i32 = 0
+    if s > 0 {
+        diff = try jpegReceive(br, s as u64)
+    }
+    c.pred = c.pred +% diff
+    coef[0] = c.pred as f32 * dec.quant[q]
+    var k: usize = 1
+    while k < 64 {
+        let rs = try jpegDecodeHuff(br, &dec.ac[c.ta])
+        let run = (rs >> 4) as usize
+        let size = (rs & 15) as u64
+        if size == 0 {
+            if run != 15 {
+                break
+            }
+            k += 16
+            continue
+        }
+        k += run
+        if k > 63 {
+            return ImageError.Invalid
+        }
+        let value = try jpegReceive(br, size)
+        coef[JPEG_ZIGZAG[k]] = value as f32 * dec.quant[q + k]
+        k += 1
+    }
+}
+
+// The inverse DCT of `coef` (dequantized and scaled, see JPEG_AAN) into
+// the block at (bx, by) of component `ci`'s plane, level-shifted by 128
+// and clamped to 0..255: a 1-D IDCT down each column, then along each
+// row. A column with only a DC term (most of them) is constant. `coef`
+// is overwritten.
+fn jpegStore(dec: *mut JpegDecoder, ci: usize, coef: []mut f32, bx: usize, by: usize) {
+    var work = @zeroed([64]f32)
+    let ws = work[..]
+    for x in 0..8 {
+        if coef[x + 8] == 0.0 && coef[x + 16] == 0.0 && coef[x + 24] == 0.0 && coef[x + 32] == 0.0 &&
+            coef[x + 40] == 0.0 && coef[x + 48] == 0.0 && coef[x + 56] == 0.0 {
+            let dcv = coef[x]
+            for y in 0..8 {
+                ws[y * 8 + x] = dcv
+            }
+        } else {
+            jpegIdct1(coef, x, 8, ws)
+        }
+    }
+    for y in 0..8 {
+        jpegIdct1(ws, y * 8, 1, coef)
+    }
+    let c = &dec.comps[ci]
+    let base = c.offset + by * 8 * c.stride + bx * 8
+    for y in 0..8 {
+        let row = base + y * c.stride
+        for x in 0..8 {
+            var v = coef[y * 8 + x] + 128.5
+            if v < 0.0 {
+                v = 0.0
+            }
+            if v > 255.0 {
+                v = 255.0
+            }
+            dec.plane[row + x] = v as u8
+        }
+    }
+}
+
+// One 8-point IDCT (Arai, Agui and Nakajima's factorization, as in
+// libjpeg's jidctflt.c) of src[at + k * step] into out[at + k * step],
+// k = 0..7.
+fn jpegIdct1(src: []f32, at: usize, step: usize, out: []mut f32) {
+    // Even part.
+    let e0 = src[at]
+    let e1 = src[at + 2 * step]
+    let e2 = src[at + 4 * step]
+    let e3 = src[at + 6 * step]
+    let t10 = e0 + e2
+    let t11 = e0 - e2
+    let t13 = e1 + e3
+    let t12 = (e1 - e3) * 1.414213562 - t13
+    let a0 = t10 + t13
+    let a3 = t10 - t13
+    let a1 = t11 + t12
+    let a2 = t11 - t12
+    // Odd part.
+    let o4 = src[at + step]
+    let o5 = src[at + 3 * step]
+    let o6 = src[at + 5 * step]
+    let o7 = src[at + 7 * step]
+    let z13 = o6 + o5
+    let z10 = o6 - o5
+    let z11 = o4 + o7
+    let z12 = o4 - o7
+    let b7 = z11 + z13
+    let b11 = (z11 - z13) * 1.414213562
+    let z5 = (z10 + z12) * 1.847759065
+    let b10 = 1.082392200 * z12 - z5
+    let b12 = -2.613125930 * z10 + z5
+    let b6 = b12 - b7
+    let b5 = b11 - b6
+    let b4 = b10 + b5
+    out[at] = a0 + b7
+    out[at + 7 * step] = a0 - b7
+    out[at + step] = a1 + b6
+    out[at + 6 * step] = a1 - b6
+    out[at + 2 * step] = a2 + b5
+    out[at + 5 * step] = a2 - b5
+    out[at + 4 * step] = a3 + b4
+    out[at + 3 * step] = a3 - b4
+}
+
+// Upsamples every component to the image size, converts to RGB and
+// returns the bitmap.
+fn jpegOutput(dec: *JpegDecoder, alloc: Allocator) ImageError!Bitmap {
+    var bmp = try newBitmap(alloc, dec.width, dec.height)
+    errdefer bmp.deinit(alloc)
+    let w = dec.width
+    let h = dec.height
+    let full = try alloc.alloc(0 as u8, w * h * dec.ncomp)
+    defer alloc.free(full)
+    for i in 0..dec.ncomp {
+        jpegUpsample(dec, i, full[i * w * h..(i + 1) * w * h])
+    }
+    let px = bmp.pixels
+    let n = w * h
+    var o: usize = 0
+    if dec.ncomp == 1 {
+        for i in 0..n {
+            let g = full[i]
+            px[o] = g
+            px[o + 1] = g
+            px[o + 2] = g
+            px[o + 3] = 255
+            o += 4
+        }
+        return bmp
+    }
+    let cbs = full[n..2 * n]
+    let crs = full[2 * n..]
+    let ids_rgb = dec.comps[0].id == 'R' && dec.comps[1].id == 'G' && dec.comps[2].id == 'B'
+    if dec.adobe == 0 || (dec.adobe < 0 && ids_rgb) {
+        for i in 0..n {
+            px[o] = full[i]
+            px[o + 1] = cbs[i]
+            px[o + 2] = crs[i]
+            px[o + 3] = 255
+            o += 4
+        }
+        return bmp
+    }
+    // libjpeg's jdcolor.c: 16-bit fixed point through tables, rounded
+    // (the 32768 in cb_g rounds the green sum).
+    var cr_r = @zeroed([256]i32)
+    var cb_b = @zeroed([256]i32)
+    var cr_g = @zeroed([256]i32)
+    var cb_g = @zeroed([256]i32)
+    for k in 0..256 {
+        let x = k as i32 - 128
+        cr_r[k] = (91881 * x + 32768) >> 16
+        cb_b[k] = (116130 * x + 32768) >> 16
+        cr_g[k] = -46802 * x
+        cb_g[k] = -22554 * x + 32768
+    }
+    for i in 0..n {
+        let y = full[i] as i32
+        let cb = cbs[i] as usize
+        let cr = crs[i] as usize
+        px[o] = jpegClamp(y + cr_r[cr])
+        px[o + 1] = jpegClamp(y + ((cb_g[cb] + cr_g[cr]) >> 16))
+        px[o + 2] = jpegClamp(y + cb_b[cb])
+        px[o + 3] = 255
+        o += 4
+    }
+    return bmp
+}
+
+fn jpegClamp(v: i32) u8 {
+    if v < 0 {
+        return 0
+    }
+    if v > 255 {
+        return 255
+    }
+    return v as u8
+}
+
+// Component `ci` at the full image size into `out` (width * height).
+// Factors of 2 use libjpeg's triangle filters: each output sample is
+// 3/4 of the nearest input sample and 1/4 of the next nearest, in each
+// subsampled direction. Other factors replicate samples.
+fn jpegUpsample(dec: *JpegDecoder, ci: usize, out: []mut u8) {
+    let c = &dec.comps[ci]
+    let src = dec.plane[c.offset..]
+    let w = dec.width
+    let h = dec.height
+    let sx = dec.hmax / c.h
+    let sy = dec.vmax / c.v
+    let exact = sx * c.h == dec.hmax && sy * c.v == dec.vmax
+    let cw = c.width
+    let ch = c.height
+    if exact && sx == 1 && sy == 1 {
+        for y in 0..h {
+            std.mem.copy(out[y * w..(y + 1) * w], src[y * c.stride..y * c.stride + w])
+        }
+        return
+    }
+    if exact && sx == 2 && sy == 1 {
+        for y in 0..h {
+            let row = src[y * c.stride..]
+            jpegFancyRow(row, row, cw, out[y * w..(y + 1) * w], false)
+        }
+        return
+    }
+    if exact && sx == 1 && sy == 2 {
+        for y in 0..h {
+            let r = y / 2
+            let this = src[r * c.stride..]
+            // The nearer neighbor row: above for even output rows, below
+            // for odd ones (the edge rows repeat).
+            var other = r
+            var bias: u32 = 1
+            if y % 2 == 0 {
+                if r > 0 {
+                    other = r - 1
+                }
+            } else {
+                bias = 2
+                if r + 1 < ch {
+                    other = r + 1
+                }
+            }
+            let near = src[other * c.stride..]
+            for x in 0..w {
+                out[y * w + x] = ((this[x] as u32 * 3 + near[x] as u32 + bias) >> 2) as u8
+            }
+        }
+        return
+    }
+    if exact && sx == 2 && sy == 2 {
+        for y in 0..h {
+            let r = y / 2
+            var other = r
+            if y % 2 == 0 {
+                if r > 0 {
+                    other = r - 1
+                }
+            } else if r + 1 < ch {
+                other = r + 1
+            }
+            jpegFancyRow(src[r * c.stride..], src[other * c.stride..], cw, out[y * w..(y + 1) * w], true)
+        }
+        return
+    }
+    for y in 0..h {
+        let r = y * c.v / dec.vmax
+        for x in 0..w {
+            out[y * w + x] = src[r * c.stride + x * c.h / dec.hmax]
+        }
+    }
+}
+
+// One output row of a component upsampled 2x horizontally: each output
+// sample is 3/4 of the nearest input sample and 1/4 of the next nearest
+// (jdsample.c h2v1_fancy_upsample). With `vertical`, the input samples
+// are first mixed 3:1 with the nearer row `near` (h2v2_fancy_upsample,
+// which rounds differently). At the ends the missing neighbor is the
+// sample itself, which gives libjpeg's edge values.
+fn jpegFancyRow(this: []u8, near: []u8, cw: usize, out: []mut u8, vertical: bool) {
+    let w = out.len
+    var mid = this[0] as u32 * 4
+    if vertical {
+        mid = this[0] as u32 * 3 + near[0] as u32
+    }
+    var left = mid
+    for i in 0..cw {
+        var right = mid
+        if i + 1 < cw {
+            right = this[i + 1] as u32 * 4
+            if vertical {
+                right = this[i + 1] as u32 * 3 + near[i + 1] as u32
+            }
+        }
+        // Sums of 4 parts each; the h2v2 ones are 16 parts.
+        let x = 2 * i
+        if vertical {
+            out[x] = ((mid * 3 + left + 8) >> 4) as u8
+            if x + 1 < w {
+                out[x + 1] = ((mid * 3 + right + 7) >> 4) as u8
+            }
+        } else {
+            out[x] = ((mid * 3 + left + 4) >> 4) as u8
+            if x + 1 < w {
+                out[x + 1] = ((mid * 3 + right + 8) >> 4) as u8
+            }
+        }
+        left = mid
+        mid = right
+    }
+}

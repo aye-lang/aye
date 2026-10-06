@@ -1,0 +1,7 @@
+{ name: 'Ann', age: 30, greet: [Function: greet] } hi Ann
+{ '2': 'two', dyn: 1, dyn2: 2, ab: 3 }
+{} 0
+1 2
+1 2 three three
+{ '3': 'three', 'with space': 1, 'dash-key': 2 }
+{ a: 3, b: 2 }

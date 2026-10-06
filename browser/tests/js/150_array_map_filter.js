@@ -1,0 +1,10 @@
+const a = [1, 2, 3, 4, 5];
+console.log(a.map((x) => x * x), a.filter((x) => x % 2), a.map((x, i) => x * i));
+console.log(a.map((x, i, arr) => arr.length), a.filter((x, i) => i > 2));
+console.log(['1', '2', '3'].map(Number), ['a', '', 'b', null, 0, 'c'].filter(Boolean));
+console.log([1, , 3].map((x) => x * 2), [1, , 3].filter(() => true));
+const users = [{ n: 'a', age: 30 }, { n: 'b', age: 17 }, { n: 'c', age: 45 }];
+console.log(users.filter((u) => u.age >= 18).map((u) => u.n.toUpperCase()));
+const visited = [];
+[10, 20, 30].map((x, i) => visited.push(i));
+console.log(visited);

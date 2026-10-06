@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<title>Intervals</title>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+let n = 0;
+const start = performance.now();
+const id = setInterval(() => {
+  n++;
+  log('tick', n, Math.round(performance.now() - start));
+  if (n === 3) clearInterval(id);
+}, 100);
+setTimeout(() => log('between ticks'), 150);
+setTimeout((a, b) => log('arguments', a, b), 5, 'x', 'y');
+const gone = setTimeout(() => log('cleared: not reached'), 50);
+clearTimeout(gone);
+setTimeout("log('string callback')", 400);
+let frames = 0;
+function frame() {
+  frames++;
+  if (frames < 3) requestAnimationFrame(frame);
+  else log('three frames');
+}
+requestAnimationFrame(frame);
+const raf = requestAnimationFrame(() => log('canceled frame: not reached'));
+cancelAnimationFrame(raf);
+log('ids are numbers', typeof id, id > 0);
+</script>

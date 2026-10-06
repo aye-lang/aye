@@ -1,0 +1,9 @@
+inner 2 3
+innermost 4
+outer 1 undefined
+z
+undefined
+0 0
+1 10
+undefined
+{ a: 2, b: 3 }

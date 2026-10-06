@@ -1,0 +1,12 @@
+try > catch x > finally
+f try
+f finally
+from try
+g catch 1
+g finally
+from catch
+body 0
+fin 0
+fin 1
+body 2
+fin 2

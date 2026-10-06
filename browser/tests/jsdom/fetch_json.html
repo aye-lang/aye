@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<title>fetch</title>
+<ul id="items"></ul>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+fetch('scripts/items.json')
+  .then(r => { log('status', r.status, r.ok, r.headers.get('Content-Type')); return r.json(); })
+  .then(items => {
+    const ul = document.getElementById('items');
+    for (const it of items) {
+      const li = document.createElement('li');
+      li.textContent = it.name;
+      ul.appendChild(li);
+    }
+  });
+fetch('scripts/nothing.json').then(r => log('missing', r.ok), e => log('failed', e.name));
+fetch('scripts/items.json', { method: 'POST' }).catch(e => log('post', e.message));
+log('fetch returns', fetch('scripts/items.json') instanceof Promise);
+</script>

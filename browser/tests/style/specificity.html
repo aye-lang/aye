@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<style>
+#id { color: blue }
+.cls { color: green }
+p { color: red }
+p.cls.other { font-style: italic }
+.cls.other { font-style: normal }
+div p { text-align: center }
+p { text-align: left }
+body div > p { white-space: pre }
+div > p.cls { white-space: nowrap }
+[title] { font-weight: 300 }
+p { font-weight: 800 }
+span { font-weight: 600 }
+span { font-weight: 500 }
+</style>
+<div>
+  <p id="id" class="cls other" title="t">id wins color</p>
+  <p class="cls">class wins color</p>
+  <p>type</p>
+</div>
+<span>later of equal specificity wins</span>

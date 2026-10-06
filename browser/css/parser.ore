@@ -1,0 +1,239 @@
+// The style sheet parser (CSS Syntax 3, section 5, simplified): a sheet is
+// a list of style rules and at-rules. `@media` blocks whose query matches
+// the `Media` are parsed as if their rules were at the top level; other
+// at-rules (`@import`, `@font-face`, `@keyframes`, `@supports`, ...) are
+// skipped. A rule with an invalid selector is dropped whole; an invalid
+// declaration is dropped up to the next `;`. Blocks are matched by their
+// bracket kind, so a stray `}` or `)` inside a value cannot end a rule.
+
+import std.list.List
+import std.mem
+import std.mem.AllocError
+import std.text
+
+/// Declarations `start..end` of `Sheet.decls`.
+pub struct DeclRange {
+    start: usize
+    end: usize
+}
+
+/// Parses the style sheet `src` and appends its rules to `sheet`.
+pub fn parseSheet(sheet: *mut Sheet, src: []u8, media: Media) AllocError!void {
+    let toks = try tokens(sheet, src)
+    var p = Parser { sheet: sheet, toks: toks, media: media }
+    try p.rules(0, toks.len, true)
+}
+
+/// Parses a list of declarations (a `style` attribute) into `sheet` and
+/// returns where they are.
+pub fn parseInline(sheet: *mut Sheet, src: []u8) AllocError!DeclRange {
+    let toks = try tokens(sheet, src)
+    var p = Parser { sheet: sheet, toks: toks, media: Media { width: 0.0, height: 0.0 } }
+    let start = sheet.decls.len()
+    try p.declarations(0, toks.len)
+    return DeclRange { start: start, end: sheet.decls.len() }
+}
+
+/// Does the media query list `query` (a `media` attribute) match? An
+/// empty list matches.
+pub fn mediaMatches(sheet: *mut Sheet, query: []u8, media: Media) AllocError!bool {
+    let toks = try tokens(sheet, query)
+    return mediaListMatches(toks, media)
+}
+
+// The tokens of a copy of `src` in the sheet's arena.
+fn tokens(sheet: *mut Sheet, src: []u8) AllocError![]Token {
+    let a = sheet.arena.allocator()
+    let copy = try a.alloc(0 as u8, src.len)
+    mem.copy(copy, src)
+    var list = List(Token).init(a)
+    try tokenize(a, copy, &mut list)
+    return list.items()
+}
+
+// ---- blocks and component values, on a token slice
+
+fn isOpener(k: Tok) bool {
+    return k == Tok.LBrace || k == Tok.LBracket || k == Tok.LParen || k == Tok.Function
+}
+
+fn closerOf(k: Tok) Tok {
+    if k == Tok.LBrace {
+        return Tok.RBrace
+    }
+    if k == Tok.LBracket {
+        return Tok.RBracket
+    }
+    return Tok.RParen
+}
+
+/// The index of the token that closes the block opened at `i`, or
+/// `toks.len` when it is not closed.
+pub fn blockEnd(toks: []Token, i: usize) usize {
+    let want = closerOf(toks[i].kind)
+    var j = i + 1
+    while j < toks.len {
+        let k = toks[j].kind
+        if k == want {
+            return j
+        }
+        if isOpener(k) {
+            j = blockEnd(toks, j)
+        }
+        j += 1
+    }
+    return toks.len
+}
+
+/// The index just after the component value that starts at `i`: one
+/// token, or a whole block or function.
+pub fn skipComponent(toks: []Token, i: usize) usize {
+    if isOpener(toks[i].kind) {
+        let end = blockEnd(toks, i)
+        if end < toks.len {
+            return end + 1
+        }
+        return end
+    }
+    return i + 1
+}
+
+/// The index of the first non-whitespace token at or after `i`.
+pub fn skipWhitespace(toks: []Token, i: usize) usize {
+    var j = i
+    while j < toks.len && toks[j].kind == Tok.Whitespace {
+        j += 1
+    }
+    return j
+}
+
+struct Parser {
+    sheet: *mut Sheet
+    toks: []Token
+    media: Media
+
+    // Rules in `lo..hi`.
+    fn rules(self: *mut Self, lo: usize, hi: usize, top: bool) AllocError!void {
+        var i = lo
+        while i < hi {
+            let k = self.toks[i].kind
+            if k == Tok.Whitespace || (top && (k == Tok.Cdo || k == Tok.Cdc)) {
+                i += 1
+            } else if k == Tok.AtKeyword {
+                i = try self.atRule(i, hi)
+            } else {
+                i = try self.styleRule(i, hi)
+            }
+        }
+    }
+
+    // The at-rule at `i`; returns the index after it.
+    fn atRule(self: *mut Self, i: usize, hi: usize) AllocError!usize {
+        let within = self.toks[..hi]
+        var j = i + 1
+        while j < hi {
+            let k = self.toks[j].kind
+            if k == Tok.Semicolon {
+                return j + 1
+            }
+            if k == Tok.LBrace {
+                let close = blockEnd(within, j)
+                if text.eqlIgnoreCase(self.toks[i].text, "media") && mediaListMatches(self.toks[i + 1..j], self.media) {
+                    try self.rules(j + 1, close, false)
+                }
+                return close + 1
+            }
+            j = skipComponent(within, j)
+        }
+        return hi
+    }
+
+    // The style rule at `i`; returns the index after it.
+    fn styleRule(self: *mut Self, i: usize, hi: usize) AllocError!usize {
+        let within = self.toks[..hi]
+        var j = i
+        while j < hi && self.toks[j].kind != Tok.LBrace {
+            j = skipComponent(within, j)
+        }
+        if j >= hi {
+            return hi
+        }
+        let close = blockEnd(within, j)
+        if try parseSelectors(self.sheet, self.toks[i..j]) |sel| {
+            let start = self.sheet.decls.len()
+            try self.declarations(j + 1, close)
+            try self.sheet.rules.append(Rule {
+                sel_start: sel.start,
+                sel_end: sel.end,
+                decl_start: start,
+                decl_end: self.sheet.decls.len(),
+            })
+        }
+        return close + 1
+    }
+
+    // Declarations in `lo..hi`, separated by `;`.
+    fn declarations(self: *mut Self, lo: usize, hi: usize) AllocError!void {
+        let within = self.toks[..hi]
+        var i = lo
+        while i < hi {
+            let k = self.toks[i].kind
+            if k == Tok.Whitespace || k == Tok.Semicolon {
+                i += 1
+                continue
+            }
+            var end = i
+            if k == Tok.AtKeyword {
+                // A nested at-rule: skipped, with its block.
+                end = i + 1
+                while end < hi && self.toks[end].kind != Tok.Semicolon && self.toks[end].kind != Tok.LBrace {
+                    end = skipComponent(within, end)
+                }
+                if end < hi && self.toks[end].kind == Tok.LBrace {
+                    end = blockEnd(within, end)
+                }
+                i = end + 1
+                continue
+            }
+            while end < hi && self.toks[end].kind != Tok.Semicolon {
+                end = skipComponent(within, end)
+            }
+            if k == Tok.Ident {
+                try self.declaration(i, end)
+            }
+            i = end + 1
+        }
+    }
+
+    // `name : value [!important]` in `lo..hi`.
+    fn declaration(self: *mut Self, lo: usize, hi: usize) AllocError!void {
+        let toks = self.toks[..hi]
+        var j = skipWhitespace(toks, lo + 1)
+        if j >= hi || toks[j].kind != Tok.Colon {
+            return
+        }
+        j = skipWhitespace(toks, j + 1)
+        var end = trimEnd(toks, j, hi)
+        var important = false
+        if end > j && toks[end - 1].kind == Tok.Ident && text.eqlIgnoreCase(toks[end - 1].text, "important") {
+            let bang = trimEnd(toks, j, end - 1)
+            if bang > j && toks[bang - 1].kind == Tok.Delim && toks[bang - 1].delim == '!' {
+                important = true
+                end = trimEnd(toks, j, bang - 1)
+            }
+        }
+        if end <= j {
+            return
+        }
+        try addDeclaration(self.sheet, toks[lo].text, toks[j..end], important)
+    }
+}
+
+// `hi` without the whitespace tokens before it (not going below `lo`).
+fn trimEnd(toks: []Token, lo: usize, hi: usize) usize {
+    var e = hi
+    while e > lo && toks[e - 1].kind == Tok.Whitespace {
+        e -= 1
+    }
+    return e
+}

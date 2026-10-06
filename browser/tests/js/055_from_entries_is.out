@@ -1,0 +1,6 @@
+{ a: 1, b: 2 }
+{ '1': 'one', x: 'X' }
+{ apple: 2, pear: 4, kiwi: 6 }
+{}
+true true false true
+false true false

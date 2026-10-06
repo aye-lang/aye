@@ -1,0 +1,16 @@
+viewport 800x600
+  block <html> (0, 0) 800x164
+    block <body> (0, 16) 120x132
+      block <p> (0, 16) 120x40
+        line (0, 16) 120x20
+          text (0, 18) 112x16 "日本語のテキス"
+        line (0, 36) 120x20
+          text (0, 38) 16x16 "ト"
+      block <p> (0, 72) 120x20
+        line (0, 72) 120x20
+          text (0, 74) 120x16 "mixed 中文 text"
+      block <p> (0, 108) 120x40
+        line (0, 108) 120x20
+          text (0, 110) 96x16 "café näive —"
+        line (0, 128) 120x20
+          text (0, 130) 32x16 "dash"

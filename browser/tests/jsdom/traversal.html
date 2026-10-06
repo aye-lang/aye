@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<title>Traversal</title>
+<div id="d">text<span id="s1">one</span><!--c--><span id="s2">two</span>tail</div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const d = document.getElementById('d');
+log(d.childNodes.length, d.children.length, d.childElementCount);
+log(d.childNodes.map(n => n.nodeName).join(','));
+log(d.firstChild.nodeType, d.firstElementChild.id, d.lastElementChild.id, d.lastChild.nodeValue);
+const s1 = document.getElementById('s1');
+log(s1.nextSibling.nodeType, s1.nextElementSibling.id, s1.previousSibling.data, s1.previousElementSibling);
+log(s1.parentNode === d, s1.parentElement.tagName, document.documentElement.parentNode === document, document.documentElement.parentElement);
+log(document.nodeType, document.nodeName, d.tagName, d.localName, d.ownerDocument === document, document.ownerDocument);
+log(s1.firstChild.parentNode.parentNode.id, d.contains(s1.firstChild), s1.contains(d), d.contains(d));
+log(document.body.firstElementChild === d, document.head.firstElementChild.tagName, document.doctype.name);
+log(s1.getRootNode() === document, s1 instanceof HTMLElement, s1 instanceof Element, s1 instanceof Node, d.firstChild instanceof Text);
+</script>
