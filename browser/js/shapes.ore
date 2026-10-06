@@ -19,8 +19,13 @@ struct Shape {
 
 // Bound persistent metadata even for scripts with unbounded dynamic keys.
 let MAX_SHAPES: usize = 16384
+// Avoid quadratic shared-index metadata for one ever-growing object.
+let MAX_SHAPE_PROPS: u32 = 128
 
 fn shapeTransition(h: *mut Heap, parent: u32, key: u32, slot: u32) AllocError!u32 {
+    if slot >= MAX_SHAPE_PROPS {
+        return NONE
+    }
     let transition = (parent as u64) << 32 | key as u64
     if h.transitions.get(transition) |s| {
         return s

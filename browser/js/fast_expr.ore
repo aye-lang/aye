@@ -24,6 +24,7 @@ enum ExprInst {
 }
 
 let EXPR_LIMIT: u32 = 64
+let EXPR_CODE_LIMIT: usize = 1048576
 let EXPR_STACK: u32 = 32
 
 fn noFastExpr() FastExpr {
@@ -50,6 +51,10 @@ fn compileFastExprs(it: *mut Interp) AllocError!void {
         let id = it.fast_exprs.len() as u32
         let start = it.expr_code.len() as u32
         var p = noFastExpr()
+        if it.expr_code.len() + EXPR_LIMIT as usize > EXPR_CODE_LIMIT {
+            try it.fast_exprs.append(p)
+            continue
+        }
         match it.ast.node(id) {
             .Num { v } => {
                 try it.expr_code.append(ExprInst.Num { n: v })
