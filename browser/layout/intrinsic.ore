@@ -1,6 +1,7 @@
 // Intrinsic widths: the min-content width (the narrowest a box gets
 // without overflow: its widest word or atomic inline) and the
-// max-content width (without any soft line break). Percentages count as
+// max-content width (without any soft line break); 0 for the content of
+// a query container (`container-type`: size containment). Percentages count as
 // `auto` here, and percentage margins and paddings as 0.
 
 import css
@@ -32,6 +33,10 @@ fn intrinsic(t: *mut Tree, i: usize) AllocError!MinMax {
         }
         let w = replacedDims(t, i, -1.0, -1.0, edges, vedges).w - edges
         r = MinMax { min: w, max: w }
+    } else if containsInlineSize(style) {
+        // A query container: its width does not depend on its content
+        // (`container-type: inline-size` or `size`).
+        r = MinMax { min: 0.0, max: 0.0 }
     } else if controlContentWidth(t, i) |cw| {
         r = MinMax { min: cw, max: cw }
     } else if kind == BoxKind.Table {
@@ -59,6 +64,15 @@ fn intrinsic(t: *mut Tree, i: usize) AllocError!MinMax {
     b.min_w = r.min
     b.max_w = r.max
     return r
+}
+
+// Does the style give the box inline-size containment (a query
+// container)?
+fn containsInlineSize(style: []css.Value) bool {
+    return match style[css.CONTAINER_TYPE] {
+        .Keyword { k } => k.len > 0 && k[0] != 'n'
+        _ => false
+    }
 }
 
 /// What box `i` contributes to its parent's intrinsic widths: its border

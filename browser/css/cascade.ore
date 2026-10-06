@@ -23,6 +23,20 @@
 // of their own (`Styles.pseudo`) from the rules that select them (no
 // `style` attribute), inheriting from the element, when their `content`
 // is not `normal` or `none`.
+//
+// Cascade layers (`@layer`): within a level, a declaration in a later
+// layer wins over one in an earlier layer whatever their specificity,
+// rules in no layer win over layered ones, and for `!important` the
+// order is reversed; presentational hints come before every layer.
+//
+// Container queries: a rule under `@container` applies when the
+// element's nearest query container (an ancestor with a `container-type`
+// and, when the rule names one, that `container-name`) has a size that
+// meets the condition. Sizes come from the previous layout
+// (`Styles.sizes`, which the engine fills before computing the styles
+// again: engine/containers.ore); without one, the condition is false.
+// Container units (`cqw`, `cqh`, `cqi`, `cqb`, `cqmin`, `cqmax`) are
+// relative to the nearest container, else to the viewport.
 
 import dom
 import dom.Document
@@ -56,6 +70,13 @@ pub struct Styles {
     // The computed initial values (what an element without any rule and
     // without a parent gets).
     initial: []mut Value
+    // Node index to the content-box size of a query container, as last
+    // laid out (`setContainerSize`).
+    sizes: IntMap(u32, ContainerSize)
+    // A container query or container unit depended on a container's
+    // size: the layout should tell the sizes and the styles be computed
+    // again when they changed.
+    queried: bool
 
     pub fn init(alloc: Allocator) AllocError!Styles {
         let arena = try alloc.create(Arena.init(alloc))
@@ -95,10 +116,33 @@ pub struct Styles {
             quirks: quirks,
             customs: IntMap(u32, *mut CustomLevel).init(alloc),
             initial: initial,
+            sizes: IntMap(u32, ContainerSize).init(alloc),
+            queried: false,
         }
     }
 
+    /// Sets the content-box size of the query container `el`; whether it
+    /// changed.
+    pub fn setContainerSize(self: *mut Self, el: NodeId, w: f64, h: f64) AllocError!bool {
+        if self.sizes.get(el.index) |old| {
+            if old.w == w && old.h == h && old.generation == el.generation {
+                return false
+            }
+        }
+        try self.sizes.put(el.index, ContainerSize { w: w, h: h, generation: el.generation })
+        return true
+    }
+
+    /// Takes the container sizes of `other` (computed styles about to be
+    /// dropped).
+    pub fn takeSizes(self: *mut Self, other: *mut Styles) {
+        let mine = self.sizes
+        self.sizes = other.sizes
+        other.sizes = mine
+    }
+
     pub fn deinit(self: *mut Self) {
+        self.sizes.deinit()
         self.map.deinit()
         self.before.deinit()
         self.after.deinit()
@@ -132,11 +176,20 @@ pub struct Styles {
     }
 }
 
-// The best declaration so far for one property.
+/// The content-box size of a query container (`h` < 0: only its inline
+/// size is queried).
+pub struct ContainerSize {
+    w: f64
+    h: f64
+    generation: u32
+}
+
+// The best declaration so far for one property. `spec` is the order
+// within a level: the layer's (`layerOrder`) above the specificity.
 struct Win {
     set: bool
     level: u8
-    spec: u32
+    spec: u64
     d: Decl
 }
 
@@ -145,7 +198,32 @@ struct CustomWin {
     name: []u8
     raw: []Token
     level: u8
-    spec: u32
+    spec: u64
+}
+
+// Where the declarations of the rule `r` of `sheet` with the
+// specificity `spec` stand among those of their level: its layer, then
+// its specificity, then whether it is scoped (`@scope`: a scoped rule
+// is nearer its element than one in no scope).
+fn ruleOrder(sheet: *Sheet, r: Rule, important: bool, spec: u32) u64 {
+    var key = layerOrder(sheet, r.layer, important) | ((spec as u64) << 1)
+    if r.scoped {
+        key = key | 1
+    }
+    return key
+}
+
+// Where the declarations of rules in the layer `layer` of `sheet` stand
+// among those of their level (above the specificity, shifted left by 32
+// bits): later layers above earlier ones and rules in no layer above all,
+// reversed for `!important`; 0 is left for presentational hints.
+fn layerOrder(sheet: *Sheet, layer: u32, important: bool) u64 {
+    let layers = sheet.layers.items()
+    let rank = layers[layer].rank as u64
+    if important {
+        return (layers.len as u64 - rank) << 32
+    }
+    return (rank + 1) << 32
 }
 
 let NO_DECL = Decl { prop: 0, value: Value.Initial, important: false, raw: []Token{}, name: "" }
@@ -165,6 +243,7 @@ pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, o
         custom_wins: List(CustomWin).init(out.alloc),
         custom_index: StrMap(usize).init(out.alloc),
         level: null,
+        el: doc.root,
     }
     defer c.deinit()
     var hints = text.Builder.init(out.alloc)
@@ -218,6 +297,7 @@ pub fn computeStylesOf(doc: *Document, ua: *Sheet, author: *Sheet, media: Media,
         custom_wins: List(CustomWin).init(out.alloc),
         custom_index: StrMap(usize).init(out.alloc),
         level: null,
+        el: doc.root,
     }
     defer c.deinit()
     var hints = text.Builder.init(out.alloc)
@@ -247,6 +327,7 @@ fn styleElement(c: *mut Computer, ua: *Sheet, author: *Sheet, hints: *mut text.B
         c.wins[i].set = false
     }
     c.clearCustoms()
+    c.el = h
     try c.consider(ua, h, false)
     if doc.quirks {
         try c.consider(&out.quirks, h, false)
@@ -303,6 +384,8 @@ struct Computer {
     custom_index: StrMap(usize)
     // The custom properties the element sees.
     level: ?*mut CustomLevel
+    // The element being styled (for container units).
+    el: NodeId
 
     fn deinit(self: *mut Self) {
         self.centered.deinit()
@@ -334,7 +417,7 @@ struct Computer {
                     }
                 }
             }
-            if !matched {
+            if !matched || (r.cond != 0 && !self.containerOk(sheet, r.cond, el, false)) {
                 continue
             }
             for k in r.decl_start..r.decl_end {
@@ -347,9 +430,65 @@ struct Computer {
                 } else if d.important {
                     level = 6
                 }
-                try self.offer(d, level, spec)
+                try self.offer(d, level, ruleOrder(sheet, r, d.important, spec))
             }
         }
+    }
+
+    // Does the element `el` (or its pseudo-element, when `pseudo`) meet
+    // the `@container` condition `cond` (1 + index) of `sheet` and those
+    // around it?
+    fn containerOk(self: *mut Self, sheet: *Sheet, cond: u32, el: NodeId, pseudo: bool) bool {
+        var c = cond
+        while c != 0 {
+            let cc = sheet.conditions.items()[(c - 1) as usize]
+            let found = self.queryContainer(el, cc.name, pseudo) orelse return false
+            self.out.queried = true
+            let size = self.out.sizes.get(found.index) orelse return false
+            if size.generation != found.generation || !containerQueryMatches(cc.toks, size.w, size.h) {
+                return false
+            }
+            c = cc.parent
+        }
+        return true
+    }
+
+    // The nearest query container of `el` (`el` itself too for its
+    // pseudo-elements) named `name` ("": any).
+    fn queryContainer(self: *Self, el: NodeId, name: []u8, pseudo: bool) ?NodeId {
+        var cur = parentElement(self.doc, el)
+        if pseudo {
+            cur = el
+        }
+        while cur |p| {
+            if self.out.map.get(p.index) |values| {
+                let kind = keywordText(values[CONTAINER_TYPE])
+                if kind.len > 0 && !text.eql(kind, "normal") && (name.len == 0 || hasName(keywordText(values[CONTAINER_NAME]), name)) {
+                    return p
+                }
+            }
+            cur = parentElement(self.doc, p)
+        }
+        return null
+    }
+
+    // Container units: the size of the nearest query container of the
+    // element being styled (the small viewport's when it has none).
+    fn setContainerContext(self: *mut Self) {
+        var w = self.media.width / 100.0
+        var h = self.media.height / 100.0
+        if self.queryContainer(self.el, "", false) |found| {
+            self.out.queried = true
+            if self.out.sizes.get(found.index) |size| {
+                if size.generation == found.generation {
+                    w = size.w / 100.0
+                    if size.h >= 0.0 {
+                        h = size.h / 100.0
+                    }
+                }
+            }
+        }
+        setContainerUnits(w, h)
     }
 
     // Offers the declarations of the rules `rules` of `sheet` that select
@@ -371,7 +510,7 @@ struct Computer {
                     }
                 }
             }
-            if !matched {
+            if !matched || (r.cond != 0 && !self.containerOk(sheet, r.cond, el, true)) {
                 continue
             }
             any = true
@@ -385,7 +524,7 @@ struct Computer {
                 } else if d.important {
                     level = 6
                 }
-                try self.offer(d, level, spec)
+                try self.offer(d, level, ruleOrder(sheet, r, d.important, spec))
             }
         }
         return any
@@ -393,7 +532,7 @@ struct Computer {
 
     // `d` wins its property unless an earlier declaration has a higher
     // level, or the same level and a higher specificity.
-    fn offer(self: *mut Self, d: Decl, level: u8, spec: u32) AllocError!void {
+    fn offer(self: *mut Self, d: Decl, level: u8, spec: u64) AllocError!void {
         if d.prop == CUSTOM {
             return self.offerCustom(d, level, spec)
         }
@@ -403,7 +542,7 @@ struct Computer {
         }
     }
 
-    fn offerCustom(self: *mut Self, d: Decl, level: u8, spec: u32) AllocError!void {
+    fn offerCustom(self: *mut Self, d: Decl, level: u8, spec: u64) AllocError!void {
         let win = CustomWin { name: d.name, raw: d.raw, level: level, spec: spec }
         if self.custom_index.get(d.name) |i| {
             let w = self.custom_wins.items()[i]
@@ -434,6 +573,9 @@ struct Computer {
     // parsed (math functions see the calc context); `unset` when invalid.
     fn pending(self: *mut Self, p: usize, d: Decl) AllocError!Value {
         var toks = d.raw
+        if usesContainerUnits(toks) {
+            self.setContainerContext()
+        }
         if hasVar(toks) {
             toks = (try substituteVars(self.out.arena.allocator(), toks, self.level, 0)) orelse return Value.Unset
         }
@@ -609,6 +751,17 @@ struct Computer {
             _ => v
         }
     }
+}
+
+// Is `name` one of the space-separated names of `list`?
+fn hasName(list: []u8, name: []u8) bool {
+    var it = text.split(list, " ")
+    while it.next() |w| {
+        if text.eql(w, name) {
+            return true
+        }
+    }
+    return false
 }
 
 fn keywordText(v: Value) []u8 {

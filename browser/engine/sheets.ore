@@ -44,7 +44,10 @@ pub fn authorSheets(alloc: Allocator, doc: *Document, address: *Url, media: css.
                     continue
                 }
             }
+            // `@scope` without a prelude scopes to the element's parent.
+            sheet.scope_root = doc.parent(h)
             try parseWithImports(alloc, &base, address, src.bytes(), media, sheet, false)
+            sheet.scope_root = null
         } else if doc.isElement(h, "link") && isStylesheetLink(doc, h) && (try mediaOk(doc, h, media, sheet)) {
             let scripted = doc.sheets.ofOwner(h)
             var disabled = false
@@ -170,9 +173,13 @@ fn parseWithImports(alloc: Allocator, base: *Url, address: *Url, src: []u8, medi
     let mid = sheet.rules.len()
     import_depth += 1
     defer import_depth -= 1
+    let outer_layer = sheet.base_layer
     for k in 0..n {
         let href = sheet.imports.items()[first_import + k]
+        // The imported sheet's rules go into the layer of its `@import`.
+        sheet.base_layer = sheet.import_layers.items()[first_import + k]
         try linkedSheet(alloc, base, address, href, media, sheet)
     }
+    sheet.base_layer = outer_layer
     try sheet.moveRulesFirst(first_rule, mid)
 }

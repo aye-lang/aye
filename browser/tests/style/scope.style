@@ -1,0 +1,51 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <div class="card">
+      display: block
+      font-weight: 700
+      <img alt="hidden">
+        font-weight: 700
+        visibility: hidden
+      <p>
+        display: block
+        color: rgb(255, 0, 0)
+        font-weight: 700
+        font-style: italic
+        margin-top: 16px
+        margin-bottom: 16px
+      <div class="content">
+        display: block
+        font-weight: 700
+        <img alt="shown">
+          font-weight: 700
+        <p>
+          display: block
+          color: rgb(255, 0, 0)
+          font-weight: 700
+          margin-top: 16px
+          margin-bottom: 16px
+    <div class="media">
+      display: block
+      <p>
+        display: block
+        color: rgb(0, 128, 0)
+        margin-top: 16px
+        margin-bottom: 16px
+    <img alt="shown: not in a card">
+    <section>
+      display: block
+      <style>
+        display: none
+      <span>
+        text-decoration-line: underline
+    <span>

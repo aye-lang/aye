@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<style>
+@layer reset, base, components;
+@import url(layered.css) layer(base);
+@layer components {
+  p { color: green }
+  #a { font-weight: 700 !important }
+}
+@layer reset {
+  #c p { color: red }
+  p { font-style: italic }
+  #a { font-weight: 300 !important }
+}
+p { text-align: right }
+@layer base {
+  #b { color: red }
+  @layer inner { #b { text-decoration-line: underline } }
+  #b { text-decoration-line: none }
+}
+@layer base.inner { #d { color: blue } }
+@layer { #e { color: purple } }
+@layer { #e { color: teal } }
+@layer theme { #f { color: navy } }
+#f { white-space: pre }
+@layer components { #f { color: olive } }
+.u { color: orange }
+@layer late { #u.u { color: red } }
+p.v { color: silver !important }
+@layer v { .v { color: red !important } }
+</style>
+<div id="c"><p>green: a later layer beats a more specific earlier one</p></div>
+<p id="a">light: an earlier layer's !important wins</p>
+<p id="b">green, not underlined: a layer's own rules beat its sublayers</p>
+<p id="d">green: base.inner comes before components</p>
+<p id="e">teal: the second anonymous layer</p>
+<p id="f">navy, pre: theme comes after components</p>
+<p id="u" class="u">orange: rules in no layer beat layered ones</p>
+<p class="v">red: a layered !important beats one in no layer</p>
+<p id="g">green: the imported sheet is in the layer base, before components</p>

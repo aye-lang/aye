@@ -184,7 +184,7 @@ pub struct Page {
             if self.images |imgs| {
                 nodes = &imgs.nodes
             }
-            let tree = try layout.layoutDocumentWith(self.alloc, &self.doc, &st.styles, nodes, measure, width, height)
+            let tree = try layoutQueried(self.alloc, &self.doc, &st.ua, &st.author, st.media, &mut st.styles, nodes, measure, width, height)
             self.tree = self.alloc.create(tree) catch |e| {
                 var lost = tree
                 lost.deinit()
@@ -205,9 +205,7 @@ pub struct Page {
                 self.dropStyling()
                 return
             }
-            st.styles.deinit()
-            st.styles = try css.Styles.init(self.alloc)
-            try css.computeStyles(&self.doc, &st.ua, &st.author, st.media, &mut st.styles)
+            try restyleWithSizes(self.alloc, &self.doc, &st.ua, &st.author, st.media, &mut st.styles)
         }
     }
 

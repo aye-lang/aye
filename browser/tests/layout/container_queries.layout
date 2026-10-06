@@ -1,0 +1,61 @@
+viewport 800x600
+  block <html> (0, 0) 800x470
+    block <body> (0, 0) 800x470
+      block <div class="wide"> (0, 0) 600x70
+        block <div class="item"> (0, 0) 200x10
+          line (0, 0) 200x20
+            text (0, 2) 32x16 "wide"
+        block <div class="unit"> (0, 10) 300x60
+          line (0, 10) 300x20
+            text (0, 12) 32x16 "half"
+      block <div class="narrow"> (0, 70) 300x30
+        block <div class="item"> (0, 70) 100x10
+          line (0, 70) 100x20
+            text (0, 72) 48x16 "narrow"
+        block <div class="tall"> (0, 80) 300x20
+          line (0, 80) 300x20
+            text (0, 82) 248x16 "inline-size: no height to query"
+      block <div class="named"> (0, 100) 500x60
+        block <div class="side"> (0, 100) 500x30
+          line (0, 100) 500x20
+            text (0, 102) 56x16 "sidebar"
+        block <div class="narrow"> (0, 130) 300x30
+          block <div class="side"> (0, 130) 300x30
+            line (0, 130) 300x20
+              text (0, 132) 160x16 "nearest is not named"
+      block <div class="sized"> (0, 160) 200x100
+        block <div class="box"> (0, 160) 200x20
+          line (0, 160) 200x20
+            text (0, 162) 72x16 "landscape"
+        block <div class="unit"> (0, 180) 100x10
+          line (0, 180) 100x20
+            text (0, 182) 88x16 "50cqw 10cqh"
+      block <div class="item"> (0, 260) 50x10
+        line (0, 260) 50x20
+          text (0, 262) 16x16 "no"
+        line (0, 280) 50x20
+          text (0, 282) 80x16 "container:"
+        line (0, 300) 50x20
+          text (0, 302) 32x16 "50px"
+      flex <div class="row"> (0, 270) 800x200
+        block <div class="shrink"> (0, 270) 0x200
+          line (0, 270) 0x20
+            text (0, 272) 8x16 "a"
+          line (0, 290) 0x20
+            text (0, 292) 32x16 "long"
+          line (0, 310) 0x20
+            text (0, 312) 32x16 "text"
+          line (0, 330) 0x20
+            text (0, 332) 32x16 "that"
+          line (0, 350) 0x20
+            text (0, 352) 24x16 "the"
+          line (0, 370) 0x20
+            text (0, 372) 72x16 "container"
+          line (0, 390) 0x20
+            text (0, 392) 32x16 "does"
+          line (0, 410) 0x20
+            text (0, 412) 24x16 "not"
+          line (0, 430) 0x20
+            text (0, 432) 32x16 "size"
+          line (0, 450) 0x20
+            text (0, 452) 16x16 "to"

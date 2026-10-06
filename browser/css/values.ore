@@ -108,6 +108,9 @@ pub fn needsComputing(toks: []Token) bool {
         if t.kind == Tok.Function && (text.eqlIgnoreCase(t.text, "var") || isMathFunction(t)) {
             return true
         }
+        if t.kind == Tok.Dimension && isContextUnit(t.text) {
+            return true
+        }
     }
     return false
 }
@@ -190,6 +193,11 @@ fn shorthandLonghands(name: []u8, out: []mut usize) usize {
     if text.eql(name, "place-content") {
         out[0] = JUSTIFY_CONTENT
         return 1
+    }
+    if text.eql(name, "container") {
+        out[0] = CONTAINER_NAME
+        out[1] = CONTAINER_TYPE
+        return 2
     }
     if text.eql(name, "margin") {
         first = MARGIN_TOP
@@ -405,6 +413,9 @@ struct Declarer {
         if text.eql(name, "flex") {
             return self.flex(comps)
         }
+        if text.eql(name, "container") {
+            return self.container(comps)
+        }
         if text.eql(name, "flex-flow") {
             return self.flexFlow(comps)
         }
@@ -429,6 +440,30 @@ struct Declarer {
                 try self.add(prop, v)
             }
         }
+    }
+
+    // `container: name [/ type]`.
+    fn container(self: *mut Self, comps: []Comp) AllocError!void {
+        var props = [2]usize{CONTAINER_NAME, CONTAINER_TYPE}
+        if try self.wide(comps, props[..]) {
+            return
+        }
+        var slash = comps.len
+        for k, c in comps {
+            if isDelim(c, '/') {
+                slash = k
+            }
+        }
+        if slash == 0 {
+            return
+        }
+        let names = rawValue(self.sheet, comps[..slash]) orelse return
+        var kind = Value.Keyword { k: "normal" }
+        if slash < comps.len {
+            kind = (try parseValue(self.sheet, CONTAINER_TYPE, comps[slash + 1..])) orelse return
+        }
+        try self.add(CONTAINER_NAME, names)
+        try self.add(CONTAINER_TYPE, kind)
     }
 
     // `grid-column` and `grid-row` (`a [/ b]`: the longhands `p0`, `p1`;
@@ -1146,6 +1181,10 @@ fn lengthValue(c: Comp, percent: bool, nonneg: bool) ?Value {
     }
     if absoluteLength(t.num, u) |px| {
         return Value.Px { v: px }
+    }
+    if isContextUnit(u) {
+        // Kept as tokens until computed (`needsComputing`).
+        return Value.Px { v: contextPx(t.num, u) }
     }
     return null
 }
