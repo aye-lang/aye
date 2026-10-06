@@ -85,20 +85,42 @@ pub fn runSource(alloc: Allocator, src: []u8) i32 {
         return uncaughtStatus(&mut it, e)
     }
     // The microtasks (promise reactions), as Node runs them after the
-    // script.
-    while it.takeJob() |f| {
-        let base = it.stack.len()
-        it.push(f) catch |e| {
-            return 1
+    // script, then each due FinalizationRegistry callback as a task of
+    // its own.
+    while true {
+        while it.takeJob() |f| {
+            if callTask(&mut it, f, Value.Undefined, 0) |status| {
+                return status
+            }
         }
-        it.push(Value.Undefined) catch |e| {
-            return 1
-        }
-        it.callAt(base, 0) catch |e| {
-            return uncaughtStatus(&mut it, e)
+        clearKeptObjects(&mut it)
+        let c = takeCleanup(&mut it) orelse break
+        if callTask(&mut it, c.callback, c.held, 1) |status| {
+            return status
         }
     }
     return 0
+}
+
+// Calls f (with argument `arg` when argc is 1): null, or the exit status
+// of an uncaught exception.
+fn callTask(it: *mut Interp, f: Value, arg: Value, argc: usize) ?i32 {
+    let base = it.stack.len()
+    it.push(f) catch |e| {
+        return 1
+    }
+    it.push(Value.Undefined) catch |e| {
+        return 1
+    }
+    if argc == 1 {
+        it.push(arg) catch |e| {
+            return 1
+        }
+    }
+    it.callAt(base, argc) catch |e| {
+        return uncaughtStatus(it, e)
+    }
+    return null
 }
 
 fn uncaughtStatus(it: *mut Interp, e: JsError) i32 {
