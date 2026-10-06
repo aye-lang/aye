@@ -1,0 +1,6 @@
+fn f(xs: [_]u8) {
+}
+
+pub fn main() {
+    let n = @sizeOf([_]u8)
+}

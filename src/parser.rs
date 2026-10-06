@@ -635,6 +635,7 @@ impl Parser {
                         self.expect(&Tok::RBracket)?;
                         TypeExprKind::Array(n, Box::new(self.type_expr()?))
                     }
+                    Tok::Ident(n) if n == "_" => return Err(inferred_length(span)),
                     _ => return Err(self.unexpected("array length (integer literal), `]` or `*`")),
                 }
             }
@@ -1159,29 +1160,29 @@ impl Parser {
                 self.expect(&Tok::RParen)?;
                 ExprKind::Paren(Box::new(inner))
             }
+            // `[_]T{...}`: the elements give the length.
+            Tok::LBracket
+                if matches!(self.toks.get(self.pos + 1).map(|t| &t.tok), Some(Tok::Ident(n)) if n == "_")
+                    && self.toks.get(self.pos + 2).map(|t| &t.tok) == Some(&Tok::RBracket) =>
+            {
+                self.pos += 3;
+                let elem = self.type_expr()?;
+                if !self.at(&Tok::LBrace) {
+                    return Err(inferred_length(span));
+                }
+                let elems = self.array_elems()?;
+                let ty = TypeExpr { kind: TypeExprKind::Array(elems.len() as u64, Box::new(elem)), span };
+                ExprKind::ArrayLit { ty, elems }
+            }
             Tok::LBracket => {
                 let ty = self.type_expr()?;
                 if !self.at(&Tok::LBrace) {
                     return Ok(Expr { kind: ExprKind::Type(ty), span });
                 }
                 if !matches!(ty.kind, TypeExprKind::Array(..) | TypeExprKind::Slice(..)) {
-                    return Err(Error::new(E0007, span, "only array literals (`[N]T{...}`) and the empty slice (`[]T{}`) are supported"));
+                    return Err(Error::new(E0007, span, "only array literals (`[N]T{...}`, `[_]T{...}`) and the empty slice (`[]T{}`) are supported"));
                 }
-                self.expect(&Tok::LBrace)?;
-                let saved = self.enter_nested();
-                let mut elems = Vec::new();
-                while !self.at(&Tok::RBrace) {
-                    elems.push(self.expr()?);
-                    if !self.eat(&Tok::Comma) {
-                        break;
-                    }
-                }
-                if !self.at(&Tok::RBrace) {
-                    return Err(self.missing_comma(&Tok::RBrace, "`,` or `}` (multi-line literals need a trailing comma)"));
-                }
-                self.bump();
-                self.leave_nested(saved);
-                ExprKind::ArrayLit { ty, elems }
+                ExprKind::ArrayLit { ty, elems: self.array_elems()? }
             }
             Tok::Kw(Kw::Match) => {
                 self.bump();
@@ -1214,6 +1215,25 @@ impl Parser {
             _ => return Err(self.unexpected("expression")),
         };
         Ok(Expr { kind, span })
+    }
+
+    /// `{a, b, c}` of an array literal.
+    fn array_elems(&mut self) -> Result<Vec<Expr>> {
+        self.expect(&Tok::LBrace)?;
+        let saved = self.enter_nested();
+        let mut elems = Vec::new();
+        while !self.at(&Tok::RBrace) {
+            elems.push(self.expr()?);
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        if !self.at(&Tok::RBrace) {
+            return Err(self.missing_comma(&Tok::RBrace, "`,` or `}` (multi-line literals need a trailing comma)"));
+        }
+        self.bump();
+        self.leave_nested(saved);
+        Ok(elems)
     }
 
     /// `pattern => body`, where the pattern is `_`, variant patterns
@@ -1319,6 +1339,15 @@ impl Parser {
         self.bump();
         Ok(fields)
     }
+}
+
+/// `[_]T` at `span` outside an array literal.
+fn inferred_length(span: Span) -> Error {
+    Error::new(
+        E0045,
+        span,
+        "`[_]T` is only for an array literal, `[_]T{...}`, whose elements give the length; a type needs the length: `[3]T`",
+    )
 }
 
 /// The type that a call-shaped expression names: `F(A, B)` in a struct

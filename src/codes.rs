@@ -759,7 +759,7 @@ E0044 = 44 {
 }
 E0045 = 45 {
     "array literal length",
-    "An array literal `[N]T{...}` must have exactly N elements.",
+    "An array literal `[N]T{...}` must have exactly N elements; `[_]T{...}` takes its length from the elements. `[_]` is not a type: elsewhere the length is written, `[3]T`. A slice literal can only be empty, `[]T{}`.",
     r#"pub fn main() {
     let xs = [3]i32{1, 2}
 }

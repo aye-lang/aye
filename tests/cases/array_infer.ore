@@ -1,0 +1,31 @@
+// `[_]T{...}`: the length of an array literal is the number of elements.
+
+let NAMES = [_][]u8{
+    "dd",
+    "dt",
+    "li",
+}
+
+fn isIn(name: []u8, set: [3][]u8) bool {
+    for s in set {
+        if s.len == name.len && s[0] == name[0] && s[1] == name[1] {
+            return true
+        }
+    }
+    return false
+}
+
+pub fn main() {
+    let xs = [_]i64{1, 2, 3, 4}
+    @println(xs.len)
+    var sum: i64 = 0
+    for x in xs {
+        sum += x
+    }
+    @println(sum)
+    @println(NAMES.len)
+    @println(isIn("li", NAMES))
+    @println(isIn("ul", NAMES))
+    let one = [_]u8{7}
+    @println(one[0])
+}

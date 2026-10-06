@@ -219,7 +219,8 @@ primary     = int_lit | float_lit | string_lit | char_lit
             | path "(" [ args ] ")" "{" [ field_init { "," field_init } [ "," ] ] "}"
                                                            (* literal of a type function's struct:
                                                               Pair(i64) { ... }; the args are types *)
-            | "[" int_lit "]" type "{" [ args ] "}"        (* array literal *)
+            | "[" ( int_lit | "_" ) "]" type "{" [ args ] "}"   (* array literal; [_]: length from
+                                                              the elements, only here *)
             | "[" "]" [ "mut" ] type "{" "}"               (* the empty slice []T{} *)
             | struct_type                                  (* only after `return` in a type function *)
             | "(" expr ")" ;

@@ -619,9 +619,10 @@ pub fn main() {
 }
 ```
 
-- An array literal states its length: `[3]u8{1, 2, 3}` (no `[_]`). A slice
-  literal can only be empty: `[]T{}`. Make other slices by slicing an array
-  or with `alloc.alloc` (section 9).
+- An array literal states its length, `[3]u8{1, 2, 3}`, or takes it from
+  the elements, `[_]u8{1, 2, 3}` (only in a literal: a type needs `[3]u8`).
+  A slice literal can only be empty: `[]T{}`. Make other slices by slicing
+  an array or with `alloc.alloc` (section 9).
 - Indexing `x[i]` and slicing `x[lo..hi]`, `x[lo..]`, `x[..hi]`, `x[..]`
   are bounds-checked (panic). Indices are unsigned integers (`usize`
   usually); a signed index needs `as usize`.
