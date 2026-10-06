@@ -1,6 +1,6 @@
-// anyknown: a web browser in Ore (see docs/browser.md). So far it has
-// the command line only:
+// anyknown: a web browser in Ore (see docs/browser.md).
 //
+//     anyknown [open] FILE|URL [--width W] [--height H] [--font fixed|system]
 //     anyknown dump --tree [--id ID | --tag NAME] FILE|URL
 //     anyknown dump --text [--id ID | --tag NAME] FILE|URL
 //     anyknown dump --style [--width PX] [--id ID | --tag NAME] FILE|URL
@@ -14,7 +14,8 @@
 // 600 px high. `--layout` prints the box tree laid out in that viewport
 // (layout_dump.ore), measuring text with the fixed-metric test font or
 // with the system's fonts. `screenshot` paints the page into a PNG
-// (shot.ore).
+// (shot.ore). Without a subcommand (or with `open`), the page opens in a
+// window (ui/).
 
 import css
 import dom
@@ -26,6 +27,7 @@ import std
 import std.list.List
 import std.mem.Allocator
 import std.text
+import ui
 import url
 import url.Url
 
@@ -46,6 +48,12 @@ fn run(alloc: Allocator) i32 {
     defer alloc.free(args)
     if args.len >= 2 && text.eql(args[1], "screenshot") {
         return screenshot(alloc, args[2..])
+    }
+    if args.len >= 2 && text.eql(args[1], "open") {
+        return ui.run(alloc, args[2..])
+    }
+    if args.len >= 2 && !text.eql(args[1], "dump") {
+        return ui.run(alloc, args[1..])
     }
     if args.len < 2 || !text.eql(args[1], "dump") {
         std.log.err("{}", USAGE)

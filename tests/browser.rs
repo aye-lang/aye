@@ -441,3 +441,78 @@ fn screenshot_errors() {
         root().display()
     ));
 }
+
+fn has_sdl() -> bool {
+    Command::new("pkg-config").args(["--exists", "sdl2"]).status().is_ok_and(|s| s.success())
+}
+
+/// `anyknown args...` with SDL's dummy video driver (no display).
+fn run_window(args: &[&str]) -> Output {
+    Command::new(anyknown()).current_dir(root()).env("SDL_VIDEODRIVER", "dummy").args(args).output().unwrap()
+}
+
+/// The window, headless: a frame or two, then exit 0 with nothing on
+/// stderr (no leaks). Skipped when SDL2 is not installed.
+#[test]
+fn window_frames() {
+    if !has_sdl() {
+        println!("skipped: no SDL2");
+        return;
+    }
+    for args in [vec!["--frames", "1", "browser/tests/article.html"], vec!["open", "browser/tests/links.html", "--frames", "2", "--font", "fixed"]] {
+        let out = run_window(&args);
+        assert!(out.status.success(), "anyknown {args:?}: {}\n{}{}", out.status, text(&out.stdout), text(&out.stderr));
+        assert!(out.stderr.is_empty(), "anyknown {args:?}: {}", text(&out.stderr));
+    }
+    // The last frame, saved: the window's size, chrome included.
+    let png = scratch().join("window.png");
+    let out = run_window(&["browser/tests/paint/text.html", "--font", "fixed", "--width", "500", "--height", "300", "--frames", "1", "--save", png.to_str().unwrap()]);
+    assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
+    assert_eq!(check_png(&png), (500, 300));
+    expect(&["--frames", "1", "--bogus", "x.html"], 2, "", "error: usage: anyknown [open] FILE|URL [--width W] [--height H] [--font fixed|system] [--frames N [--events SCRIPT] [--state] [--save OUT.png]]\n");
+}
+
+/// Scripted input (`--events`, ui/script.ore) through the window's event
+/// handler: scrolling, links, fragments, history, the address bar, find.
+#[test]
+fn window_events() {
+    if !has_sdl() {
+        println!("skipped: no SDL2");
+        return;
+    }
+    let ui = format!("file://{}/browser/tests/ui/", root().display());
+    // A 400x340 window: the page is 1260 px tall in a 300 px viewport.
+    let cases: &[(&str, &str)] = &[
+        ("key:down wheel:-1", "url long.html\nscroll 80\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus \n"),
+        ("key:end key:pageup key:space key:up", "url long.html\nscroll 920\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus \n"),
+        ("key:end key:home wheel:3", "url long.html\nscroll 0\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus \n"),
+        // A link to a fragment scrolls to its element (y 958).
+        ("click:30,58", "url long.html#end\nscroll 958\nfocus page\naddress long.html#end\nhistory 2 of 2\nmatches 0\nstatus \n"),
+        // Back and forward restore scroll offsets.
+        ("key:pagedown key:home click:30,58 key:cmd+[ key:cmd+]", "url long.html#end\nscroll 958\nfocus page\naddress long.html#end\nhistory 2 of 2\nmatches 0\nstatus \n"),
+        ("click:130,58 key:cmd+[", "url long.html\nscroll 0\nfocus page\naddress long.html\nhistory 1 of 2\nmatches 0\nstatus \n"),
+        ("move:130,58", "url long.html\nscroll 0\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus other.html\n"),
+        // The back button, the forward button, reload.
+        ("click:130,58 click:20,20 click:50,20 click:85,20", "url other.html\nscroll 0\nfocus page\naddress other.html\nhistory 2 of 2\nmatches 0\nstatus \n"),
+        // Typing in the address bar (Cmd+L selects everything first).
+        ("key:cmd+l text:other.htm key:backspace text:ml key:escape", "url long.html\nscroll 0\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus \n"),
+        ("key:cmd+l text:browser/tests/ui/other.html", "url long.html\nscroll 0\nfocus address\naddress browser/tests/ui/other.html\nhistory 1 of 1\nmatches 0\nstatus \n"),
+        ("key:cmd+l text:browser/tests/ui/other.html key:return", "url other.html\nscroll 0\nfocus page\naddress other.html\nhistory 2 of 2\nmatches 0\nstatus \n"),
+        // Find in page: matches, Enter scrolls to the next one.
+        // ("To the end", "Other", "The end"; the third is at y 962, shown a
+        // third down the 268 px left above the find bar.)
+        ("key:cmd+f text:the", "url long.html\nscroll 0\nfocus find\naddress long.html\nhistory 1 of 1\nmatches 3\nstatus \n"),
+        ("key:cmd+f text:the key:return key:return", "url long.html\nscroll 873\nfocus find\naddress long.html\nhistory 1 of 1\nmatches 3\nstatus \n"),
+        ("key:cmd+f text:the key:return key:return key:shift+return", "url long.html\nscroll 0\nfocus find\naddress long.html\nhistory 1 of 1\nmatches 3\nstatus \n"),
+        ("key:cmd+f text:the key:escape", "url long.html\nscroll 0\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus \n"),
+    ];
+    let mut failures = Vec::new();
+    for (events, want) in cases {
+        let out = run_window(&["browser/tests/ui/long.html", "--font", "fixed", "--width", "400", "--height", "340", "--frames", "1", "--state", "--events", events]);
+        let got = text(&out.stdout).replace(&ui, "");
+        if !out.status.success() || !out.stderr.is_empty() || got != *want {
+            failures.push(format!("--events {events:?}: {}\n{}--- expected\n{want}--- got\n{got}", out.status, text(&out.stderr)));
+        }
+    }
+    assert!(failures.is_empty(), "{} of {} scripts failed:\n\n{}", failures.len(), cases.len(), failures.join("\n"));
+}

@@ -297,3 +297,61 @@ Suggestion: `c_long`/`c_ulong` aliases that follow the target.
   be fetched again after anything that may append a box (only the tree
   builder does), so layout code re-reads `t.bx(i)` after every call
   instead of keeping a pointer across calls.
+
+## B4
+
+### 19. SDL2 is now a hard requirement too
+
+Same root as gaps 14 and 16: `browser/ui/sdl.ore` has `@link("sdl2")`,
+so every build of the browser, including `dump` and `screenshot` and
+all their tests, needs SDL2 installed. `tests/browser.rs` skips the
+window tests when `pkg-config --exists sdl2` fails, but by then the
+build has already failed. Workaround: none. Optional linking plus
+`@hasLibrary` (or a build tag) would keep the headless commands
+buildable without SDL2 and FreeType.
+
+### 20. No way to branch on an error union without leaving the function
+
+Needed: "use the URL after redirects if it parses, else keep the one
+we asked for". `if url.parse(a, s) |u| { ... } else |e| { ... }` does
+not exist, and a `catch |e| { ... }` block must end with `return`,
+`break` or `continue` when the payload is not void, so it cannot fall
+through to "keep the old value". Workaround: a helper that picks its
+input before parsing (`finalUrl` in `engine/engine.ore`), or returning
+from inside the `catch` (`mouseMoved` in `ui/window.ore`). Zig's
+`if (x) |v| {} else |e| {}` would do.
+
+### 21. A struct value cannot be "not yet initialized"
+
+`engine.Page` gets its style sheets and computed styles only when it is
+first laid out. `@zeroed` works only for numbers, optional pointers and
+extern structs, and there are no default field values (gap 18), so
+`Page` keeps `styling: ?*mut Styling` and `tree: ?*mut layout.Tree`,
+each allocated on its own. That also keeps the tree's pointers into the
+page stable, so it is not bad, but it is forced.
+
+### 22. Unions through `@ptrCast`
+
+`SDL_Event` is a C union. Ore has no `extern union`, so `ui/sdl.ore`
+declares `SDL_Event` as 56 bytes with the common `kind` field and casts
+`*SDL_Event` to a pointer to each event's extern struct
+(`@ptrCast(*SDL_KeyboardEvent, ev)`). It works; the size and alignment
+of the union are written by hand, and nothing checks that an event
+struct fits in it. An `extern union`, or a compile-time assertion on
+`@sizeOf`, would.
+
+### 23. Smaller things
+
+- Gap 13 again, still confusing: `fn screen(...)` in `ui/chrome.ore`
+  made `let screen = ...` in `ui/window.ore` an error reported as
+  `browser/ui/window.ore:826:9: ... already declared at 71:4`: line 71
+  of `chrome.ore`, not of `window.ore`.
+- Gap 15 again: the chrome is drawn by free functions taking `*mut Ui`
+  (`drawToolbar(ui)`) because `Ui`'s methods must all be in
+  `window.ore`.
+- One C function, one signature in every module: `engine` wanted
+  `getcwd` to return `?[*]u8` (C returns NULL on failure), but `main.ore`
+  already declares it returning `[*]u8`, so both use that.
+- `where` is a keyword (generic constraints), so it cannot name a local;
+  the message (`expected identifier, found `where``) is clear.
+
