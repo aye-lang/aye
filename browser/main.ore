@@ -49,7 +49,10 @@ let USAGE_ALL = "usage: anyknown [open] FILE|URL | dump --tree|--text|--style|--
 
 pub fn main() {
     var gpa = std.heap.General.init()
+    net.start(gpa.allocator()) catch |e| {
+    }
     let status = run(gpa.allocator())
+    net.stop()
     gpa.deinit()
     std.os.exit(status)
 }

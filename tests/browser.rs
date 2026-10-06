@@ -286,7 +286,7 @@ fn http() {
     // A page over HTTP reads as from a file, also after a redirect.
     expect(&["dump", "--text", &format!("{base}/basic.html")], 0, &basic, "");
     expect(&["dump", "--text", &format!("{base}/redirect")], 0, &basic, "");
-    expect(&["dump", "--text", &format!("{base}/agent")], 0, "anyknown/0.1\n", "");
+    expect(&["dump", "--text", &format!("{base}/agent")], 0, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) anyknown/0.1\n", "");
     expect(&["dump", "--text", &format!("{base}/gzip")], 0, &format!("{}\n", ["compressed"; 50].join(" ")), "");
     // Style sheets linked from a page over HTTP are fetched relative to
     // the URL after redirects.
@@ -973,4 +973,43 @@ fn jsdom_gc_stress() {
         handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
     });
     assert!(failures.is_empty(), "{} DOM fixtures failed under GC stress:\n\n{}", failures.len(), failures.join("\n\n"));
+}
+
+// ---- B8: net
+
+/// Request headers, cookies kept in a file, size limits, TLS errors and
+/// `<meta charset>` over HTTP. (Cookies, the Referer and the cache within
+/// one session: `browser/tests/agent/http/net_cookies.jsonl`.)
+#[test]
+fn net_http() {
+    let Some(srv) = server() else {
+        println!("skipped: cannot start python3 for the test server");
+        return;
+    };
+    let base = &srv.base;
+    // A URL the user typed: no Referer, no cookies yet.
+    let headers = "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\nAccept-Language: en-US,en;q=0.9\nReferer: \nCookie: \n";
+    expect(&["dump", "--text", &format!("{base}/headers")], 0, headers, "");
+    // ANYKNOWN_COOKIE_FILE keeps the persistent cookies (p, Max-Age)
+    // from one run to the next; session cookies (a, d) end with the run.
+    let file = scratch().join("cookies.txt");
+    let _ = std::fs::remove_file(&file);
+    let with_file = |url: String| {
+        Command::new(anyknown()).current_dir(root()).env("ANYKNOWN_COOKIE_FILE", &file).args(["dump", "--text", &url]).output().unwrap()
+    };
+    let first = with_file(format!("{base}/net/start"));
+    assert!(first.status.success() && first.stderr.is_empty(), "{}", text(&first.stderr));
+    let saved = std::fs::read_to_string(&file).unwrap();
+    assert!(saved.starts_with("127.0.0.1\t1\t/\t0\t0\t") && saved.ends_with("\tp\t5\n") && saved.lines().count() == 1, "{saved}");
+    let second = with_file(format!("{base}/headers"));
+    assert!(text(&second.stdout).contains("\nCookie: p=5\n"), "{}", text(&second.stdout));
+    // Too large: 33 MiB, with and without a Content-Length.
+    for big in ["big", "big?stream"] {
+        expect(&["dump", "--text", &format!("{base}/{big}")], 1, "", &format!("error: cannot fetch {base}/{big}: the response is too large\n"));
+    }
+    // TLS to a server that speaks plain HTTP.
+    let https = base.replace("http://", "https://");
+    expect(&["dump", "--text", &format!("{https}/")], 1, "", &format!("error: cannot fetch {https}/: the secure connection failed (TLS)\n"));
+    // No charset in the Content-Type: the <meta charset> decides.
+    expect(&["dump", "--text", &format!("{base}/meta-charset")], 0, "\u{201c}quoted\u{201d} caf\u{e9}\n", "");
 }
