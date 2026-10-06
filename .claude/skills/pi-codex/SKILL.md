@@ -8,7 +8,8 @@ description: Delegate an implementation task in this repo to GPT (openai/gpt-6.1
 `pi_run.py` (next to this file) runs `pi -p --mode json` with stdin closed,
 a non-interactive environment (`GIT_EDITOR=true`, `PAGER=cat`, ...) and
 extra system rules (never ask, never run interactive commands, give long
-commands a bash `timeout`, commit as you go, end with a report). A watchdog
+commands a bash `timeout`, commit as you go, read and extend
+`docs/practices/`, end with a report). A watchdog
 thread kills the process group when:
 
 | condition | default |
