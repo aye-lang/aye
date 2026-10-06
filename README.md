@@ -212,10 +212,14 @@ compiles that file alone as a module (its sibling files are not part of
 it). `import a.b` loads the module in the directory `a/b` under the root
 module's directory, and binds `b` in the importing file; `import a.b.Name`
 imports one item. `std` is embedded in the compiler (sources in
-[`std/`](std)): `std.fs` (`open`, `stdin`/`stdout`/`stderr`,
-`File.readAll`/`write`/`close`), `std.mem` (`Allocator`, `AllocError`,
-`eql`, `copy`), `std.heap` (`General`, `Arena`), `std.log` (`err`, `info`)
-and `std.os` (`args`, `exit`). Cyclic imports are an error.
+[`std/`](std)): `std.fs` (`open`, `create`, `exists`, `readFile`,
+`stdin`/`stdout`/`stderr`, `File.readAll`/`write`/`close`), `std.mem`
+(`Allocator`, `AllocError`, `eql`, `copy`, `set`, `indexOf`), `std.heap`
+(`General`, `Arena`), `std.list` (`List(T)`), `std.map` (`StrMap(V)`,
+`IntMap(K, V)`), `std.text` (`Builder`, search, `split`, parsing, UTF-8),
+`std.math`, `std.pool` (`Pool(T)`, `Handle(T)`), `std.time`,
+`std.testing`, `std.log` (`err`, `info`) and `std.os` (`args`, `exit`).
+`ore spec` lists every function. Cyclic imports are an error.
 
 ```ore
 import std
