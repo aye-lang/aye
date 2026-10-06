@@ -63,6 +63,7 @@ fn installWindow(s: *mut Script) JsError!void {
     try installCssom(s, o)
     try installComponents(s, o)
     try installCanvas(it, o)
+    try installImages(it, o)
 
     let c = try it.newObject(it.object_proto)
     try it.defineValue(it.global, "console", js.objVal(c))

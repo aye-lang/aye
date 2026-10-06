@@ -238,6 +238,34 @@ fn pixelsOf(v: f64) usize {
     return std.math.floor(v + 0.5) as usize
 }
 
+// One selected request, with an owned resolved URL. Script state and
+// rendering use the same source selector and the same decoded URL cache.
+struct LoadedElementImage {
+    // Owned resolved URL; the caller releases it with cache.alloc.
+    target: Url
+    // Borrowed decoded bitmap; null for a broken request.
+    bmp: ?*mut image.Bitmap
+    // Selected source density in image pixels per CSS pixel.
+    density: f64
+}
+
+fn loadElementImage(cache: *mut ImageCache, doc: *Document, h: NodeId, base: *Url, media: css.Media) AllocError!?LoadedElementImage {
+    // Even an empty or broken replacement must drop the old rendered bitmap.
+    cache.nodes.map.remove(h.index)
+    let choice = (try chooseImage(cache.alloc, doc, h, media)) orelse return null
+    let target = url.resolve(cache.alloc, base, choice.url) catch return null
+    errdefer target.deinit(cache.alloc)
+    let bmp = try cache.bitmapOf(target.withoutFragment())
+    if bmp |b| {
+        if cache.pictureOf(target.withoutFragment()) |pic| {
+            try cache.nodes.putPicture(h, b, pic)
+        } else {
+            try cache.nodes.putScaled(h, b, choice.density)
+        }
+    }
+    return LoadedElementImage { target: target, bmp: bmp, density: choice.density }
+}
+
 /// Fetches the images of the page's elements and style sheets that have
 /// none yet, and maps the elements (and URLs) to their bitmaps. `media`
 /// (the viewport) picks among `srcset` candidates and `picture` sources.
@@ -295,20 +323,11 @@ fn fillImagesWith(cache: *mut ImageCache, doc: *Document, address: *Url, styles:
     var cur: ?NodeId = doc.root
     while cur |h| {
         cur = dom.shadowIncludingFollowing(doc, h, doc.root)
-        if !isImageElement(doc, h) || cache.nodes.get(h) != null {
+        if !isImageElement(doc, h) {
             continue
         }
-        let choice = (try chooseImage(cache.alloc, doc, h, media)) orelse continue
-        let target = url.resolve(cache.alloc, &base, choice.url) catch |e| {
-            continue
-        }
-        defer target.deinit(cache.alloc)
-        if try cache.bitmapOf(target.withoutFragment()) |bmp| {
-            if cache.pictureOf(target.withoutFragment()) |pic| {
-                try cache.nodes.putPicture(h, bmp, pic)
-            } else {
-                try cache.nodes.putScaled(h, bmp, choice.density)
-            }
+        if try loadElementImage(cache, doc, h, &base, media) |loaded| {
+            loaded.target.deinit(cache.alloc)
         }
     }
 }
@@ -335,7 +354,7 @@ fn prefetchImages(cache: *mut ImageCache, doc: *Document, base: *Url, extra: [][
     var cur: ?NodeId = doc.root
     while cur |h| {
         cur = dom.shadowIncludingFollowing(doc, h, doc.root)
-        if !isImageElement(doc, h) || cache.nodes.get(h) != null {
+        if !isImageElement(doc, h) {
             continue
         }
         let choice = (try chooseImage(cache.alloc, doc, h, media)) orelse continue

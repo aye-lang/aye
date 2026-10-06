@@ -609,25 +609,7 @@ pub let CANVAS_PRELUDE =
     \\    }
     \\  });
     \\}
-    \\// Natural image dimensions use the ordinary image cache, even for a
-    \\// detached Image element. Attribute dimensions do not alter drawImage's
-    \\// source bitmap.
-    \\for (const key of ['width', 'height', 'naturalWidth', 'naturalHeight']) {
-    \\  Object.defineProperty(HTMLImageElement.prototype, key, {
-    \\    configurable: true,
-    \\    get: function () {
-    \\      const height = key === 'height' || key === 'naturalHeight';
-    \\      if (key === 'width' || key === 'height') {
-    \\        const attr = this.getAttribute(key);
-    \\        if (attr !== null && Number(attr) >= 0) return Math.trunc(Number(attr));
-    \\      }
-    \\      return ak.canvasImageSize(this, height);
-    \\    },
-    \\    set: key === 'width' || key === 'height' ? function (v) {
-    \\      this.setAttribute(key, String(Number(v) >>> 0));
-    \\    } : undefined
-    \\  });
-    \\}
+    \\// Image state and dimensions are installed by prelude.ore.
     \\// WeakMap holds its keys strongly, so the context lives on the wrapper:
     \\// a detached canvas, its context and its bitmap can then be freed.
     \\const P = HTMLCanvasElement.prototype;

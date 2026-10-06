@@ -154,6 +154,30 @@ JS performance merge `b2193b7`).
 **Why:** a cache hit skips the slow path's special cases; the benchmark
 still passes while a site gets the wrong value.
 
+### Root native return values across mutation hooks
+**Context:** a DOM native creates a JS value, then changes the document.
+**Bad:** `styleRemoveProperty` kept its return string in an Ore local
+while `changed()` called the prelude's mutation hook; GC stress reused
+the string's cell and returned "style" instead of "none".
+**Good:** push the return value before a mutation and pop it afterwards
+(`browser/engine/dom_api.ore`, `styleRemoveProperty`). Image requests use
+the same mutation log as observers, so hooks now run even without a
+page-created MutationObserver. The `style_props.html` fixture covers this.
+**Why:** Ore locals are not GC roots; a hook can allocate or invoke JS
+before the native returns.
+
+### Keep one decoder and version each observable image request
+**Context:** image state exposed to JS and images used by layout/canvas.
+**Bad:** `decode()` formerly fulfilled for any nonempty src, including
+broken images; canvas dimensions synchronously fetched images and
+overrode the prelude's getters.
+**Good:** `loadElementImage` in `browser/engine/images.ore` shares source
+selection and the URL cache. The prelude owns request state, invalidates
+old decode waiters, and checks request identity before each event task.
+Canvas fixtures await `decode()` before reading dimensions or drawing.
+**Why:** a URL cache is not per-element request state. A replaced request
+must not publish dimensions or fire a stale load/error event.
+
 ## Code style
 
 ### Write blocks and comments like the surrounding code

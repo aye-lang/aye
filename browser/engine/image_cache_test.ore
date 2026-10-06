@@ -1,0 +1,40 @@
+import css
+import dom
+import url
+
+test "image requests share decoded URLs and replace rendered mappings" {
+    let a = @testAllocator()
+    var doc = try dom.Document.init(a)
+    defer doc.deinit()
+    var cache = ImageCache.init(a)
+    defer cache.deinit()
+    let address = try url.parse(a, "https://example.test/page")
+    defer address.deinit(a)
+    let media = css.Media { width: 800.0, height: 600.0 }
+    let img = try doc.createElement("img", []dom.Attr{})
+    doc.appendChild(doc.root, img)
+    let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAAECAYAAACk7+45AAAAEUlEQVR4nGP4z8DwH4QZcDMAHxMP8b9IbMkAAAAASUVORK5CYII="
+    try doc.setAttr(img, "src", png)
+    try fillImages(&mut cache, &doc, &address, media)
+    let first = cache.nodes.get(img).?
+    @expectEqual(2 as usize, first.width)
+    @expectEqual(4 as usize, first.height)
+    try fillImages(&mut cache, &doc, &address, media)
+    @expectEqual(1 as usize, cache.entries.len())
+    @expect(cache.nodes.get(img) == first)
+
+    try doc.setAttr(img, "src", "data:image/png;base64,bm90IGEgcG5n")
+    try fillImages(&mut cache, &doc, &address, media)
+    @expect(cache.nodes.get(img) == null)
+    @expectEqual(2 as usize, cache.entries.len())
+    try fillImages(&mut cache, &doc, &address, media)
+    @expectEqual(2 as usize, cache.entries.len())
+
+    try doc.setAttr(img, "src", png)
+    try fillImages(&mut cache, &doc, &address, media)
+    @expect(cache.nodes.get(img) == first)
+    @expectEqual(2 as usize, cache.entries.len())
+    doc.removeAttr(img, "src")
+    try fillImages(&mut cache, &doc, &address, media)
+    @expect(cache.nodes.get(img) == null)
+}
