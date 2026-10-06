@@ -1,0 +1,79 @@
+// M9.7: `orelse` chains through optionals, error values compare with
+// `==`, and `_ = x` drops a value.
+error FetchError { NotFound, OutOfMemory, Timeout }
+error Small { NotFound }
+
+fn alt(s: []u8) ?[]u8 {
+    if s.len > 3 {
+        return s
+    }
+    return null
+}
+
+fn title(s: []u8) ?[]u8 {
+    if s.len > 1 {
+        return s
+    }
+    return null
+}
+
+fn fetch(n: i64) FetchError!i64 {
+    if n == 0 {
+        return FetchError.NotFound
+    }
+    if n == 1 {
+        return FetchError.Timeout
+    }
+    return n
+}
+
+fn small() Small!i64 {
+    return Small.NotFound
+}
+
+fn sideEffect(n: *mut i64) i64 {
+    n.* += 1
+    return n.*
+}
+
+// `Small.NotFound` and `FetchError.NotFound` are one error.
+fn sameError() bool {
+    let a = small() catch |e| {
+        let b = fetch(0) catch |g| {
+            return e == g
+        }
+        return false
+    }
+    return false
+}
+
+pub fn main() {
+    // `a orelse b orelse c`: the alt, else the title, else nothing.
+    @println(alt("image.png") orelse title("image.png") orelse "")
+    @println(alt("ab") orelse title("ab") orelse "none")
+    @println(alt("a") orelse title("a") orelse "none")
+    let maybe: ?[]u8 = alt("a") orelse title("a")
+    @println(maybe == null)
+    let n: ?i64 = null
+    @println(n orelse null == null)
+
+    // `==` on error values, also of different sets.
+    for i in (0 as i64)..3 {
+        let v = fetch(i) catch |e| {
+            if e == FetchError.NotFound {
+                @println("not found")
+            } else if e != FetchError.OutOfMemory {
+                @println("other error")
+            }
+            continue
+        }
+        @println(v)
+    }
+    @println(sameError())
+
+    // `_ = x` evaluates `x` and drops the value.
+    var k: i64 = 0
+    _ = sideEffect(&mut k)
+    _ = k
+    @println(k)
+}

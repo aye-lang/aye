@@ -1509,6 +1509,7 @@ impl<'a> Checker<'a> {
                         _ => a != b,
                     }),
                     (ConstVal::Variant(a, _), ConstVal::Variant(b, _), _) => ConstVal::Bool((a == b) == (op == BinOp::Eq)),
+                    (ConstVal::Error(a), ConstVal::Error(b), _) => ConstVal::Bool((a == b) == (op == BinOp::Eq)),
                     _ => return err(E0089, span, "this comparison cannot be computed when the program is compiled"),
                 }
             }
@@ -2363,6 +2364,12 @@ impl<'a> Checker<'a> {
                 let init = init?;
                 TStmtKind::Let(id.ok_or_else(silent)?, init)
             }
+            // `_ = x`: evaluate `x` and drop its value (not an error union).
+            StmtKind::Assign { target: ast::Expr { kind: ExprKind::Ident(n), .. }, op: AssignOp::Set, value }
+                if n == "_" && self.lookup(n).is_none() =>
+            {
+                TStmtKind::Expr(self.value(value, None)?)
+            }
             StmtKind::Assign { target, op, value } => {
                 let target = self.value(target, None)?;
                 self.check_mutable(&target, false)?;
@@ -2894,13 +2901,29 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// `a == b` on error values: an error value written out (`E.A`) must be
+    /// one that the other side's set has, or the comparison is always false.
+    fn error_comparable(&self, a: &TExpr, b: &TExpr, span: Span) -> Result<()> {
+        for (x, y) in [(a, b), (b, a)] {
+            let (TExprKind::ErrorValue(v), Type::ErrorSet(set)) = (&x.kind, &y.ty) else { continue };
+            let name = &self.error_names[*v as usize - 1];
+            if !self.sets[set].contains(name) {
+                return err(E0060, span, format!(
+                    "this comparison is always false: {} has no error `{name}`",
+                    describe_set(set)
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Why `==` cannot compare two values of type `t` (an empty reason if
     /// there is nothing more to say), or `None` if it can: numbers, `bool`,
     /// pointers, enums without fields, optionals of those, and structs whose
     /// fields all compare.
     fn why_not_comparable(&self, t: &Type) -> Option<String> {
         match t {
-            Type::Int(_) | Type::Float(_) | Type::Bool | Type::Ptr(..) | Type::CPtr(_) => None,
+            Type::Int(_) | Type::Float(_) | Type::Bool | Type::Ptr(..) | Type::CPtr(_) | Type::ErrorSet(_) => None,
             Type::Enum(n) if self.enums[n].variants.iter().any(|v| !v.fields.is_empty()) => {
                 Some("it has variants with fields (use `match`)".to_string())
             }
@@ -3186,8 +3209,13 @@ impl<'a> Checker<'a> {
                             l = self.coerce(l, &r.ty.clone())?;
                         }
                     }
-                    // `*mut T` and `*T` compare as pointers.
-                    let same_ptr = matches!((&l.ty, &r.ty), (Type::Ptr(a, _), Type::Ptr(b, _)) if a == b);
+                    // `*mut T` and `*T` compare as pointers, and two error
+                    // values by their error, whatever their sets.
+                    let same_ptr = matches!((&l.ty, &r.ty), (Type::Ptr(a, _), Type::Ptr(b, _)) if a == b)
+                        || matches!((&l.ty, &r.ty), (Type::ErrorSet(_), Type::ErrorSet(_)));
+                    if eq && let (Type::ErrorSet(_), Type::ErrorSet(_)) = (&l.ty, &r.ty) {
+                        self.error_comparable(&l, &r, span)?;
+                    }
                     if l.ty != r.ty && !(same_ptr && eq) {
                         let hint = if l.ty.is_numeric() && r.ty.is_numeric() { " (use `as` to convert)" } else { "" };
                         return err(E0023, span, format!("mismatched types in `{}`: `{}` and `{}`{hint}", op.as_str(), l.ty, r.ty));
@@ -3345,6 +3373,9 @@ impl<'a> Checker<'a> {
                     }
                 };
                 let failures = self.failures;
+                // A fallback that is itself a `?T` (`a orelse b orelse c`)
+                // makes the result a `?T`.
+                let mut ty = payload.clone();
                 let body = match &**body {
                     ArmBody::Block(b) => {
                         let stmts = self.block(b);
@@ -3356,9 +3387,20 @@ impl<'a> Checker<'a> {
                             Ok(TArmBody::Block(stmts))
                         }
                     }
-                    ArmBody::Expr(x) => self.expect(x, &payload).map(TArmBody::Expr),
+                    ArmBody::Expr(x) if is_null(x) => {
+                        ty = t.ty.clone();
+                        self.expect(x, &ty).map(TArmBody::Expr)
+                    }
+                    ArmBody::Expr(x) => match self.value(x, Some(Self::hint(x, &payload))) {
+                        Ok(v) if v.ty == t.ty && v.ty != payload => {
+                            ty = t.ty.clone();
+                            Ok(TArmBody::Expr(v))
+                        }
+                        Ok(v) => self.coerce(v, &payload).map(TArmBody::Expr),
+                        Err(e) => Err(e),
+                    },
                 };
-                (TExprKind::OrElse { expr: Box::new(t), body: Box::new(body?) }, payload)
+                (TExprKind::OrElse { expr: Box::new(t), body: Box::new(body?) }, ty)
             }
             // `Set.Name`: an error value.
             ExprKind::Field { base, name } if matches!(&base.kind, ExprKind::Ident(n) if self.sets.contains_key(n)) => {

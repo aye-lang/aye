@@ -1039,6 +1039,11 @@ impl Gen {
                 let line = format!("{} = {};", self.place(f, place), self.rvalue(f, rv));
                 self.line(ind, &line);
             }
+            // A value dropped with `_ = x` is cast to `void` (no warning).
+            StmtKind::Eval(rv @ (Rvalue::Use(_) | Rvalue::Load(_))) => {
+                let line = format!("(void){};", self.rvalue(f, rv));
+                self.line(ind, &line);
+            }
             StmtKind::Eval(rv) => {
                 let line = format!("{};", self.rvalue(f, rv));
                 self.line(ind, &line);

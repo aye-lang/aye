@@ -1,0 +1,5 @@
+ergonomics3.ore:13:9: error[E0061]: unhandled error: `fetch` returns `FetchError!i64` (handle the error with `try` or `catch`)
+ergonomics3.ore:15:14: error[E0060]: this comparison is always false: error set `FetchError` has no error `Busy`
+ergonomics3.ore:18:14: error[E0025]: operator `<` cannot be applied to `FetchError`
+ergonomics3.ore:23:32: error[E0023]: mismatched types: expected `i64`, found `[]u8`
+ergonomics3.ore:24:39: error[E0023]: mismatched types: expected `i64`, found float literal

@@ -1,0 +1,25 @@
+error FetchError { NotFound, Timeout }
+error Other { Busy }
+
+fn fetch() FetchError!i64 {
+    return FetchError.NotFound
+}
+
+fn opt() ?i64 {
+    return null
+}
+
+pub fn main() {
+    _ = fetch()
+    let v = fetch() catch |e| {
+        if e == Other.Busy {
+            return
+        }
+        if e < FetchError.Timeout {
+            return
+        }
+        return
+    }
+    let s: []u8 = opt() orelse "x"
+    let w = opt() orelse opt() orelse 1.5
+}

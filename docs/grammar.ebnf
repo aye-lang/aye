@@ -153,7 +153,8 @@ for_stmt    = "for" ident "in" header_expr ".." header_expr block
             | "for" [ ident "," ] ident "in" header_expr block ;
                (* half-open range lo..hi; or the elements of an array or
                   slice, with their usize index; "in" is a contextual identifier *)
-simple_stmt = expr [ assign_op expr ] ;   (* a bare expr must be a call, try, catch or match *)
+simple_stmt = expr [ assign_op expr ] ;   (* a bare expr must be a call, try, catch or match;
+                                             "_" "=" expr drops the value of any expr *)
 assign_op   = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "+%=" | "-%=" | "*%="
             | "&=" | "|=" | "^=" | "<<=" | ">>=" ;
 
@@ -194,7 +195,8 @@ cmp_expr    = catch_expr [ cmp_op catch_expr ] ;
 cmp_op      = "==" | "!=" | "<" | "<=" | ">" | ">=" ;
 catch_expr  = bit_expr { ( "catch" [ "|" ident "|" ] | "orelse" ) fallback } ;
                (* x catch |e| { ... } runs the block on an error; x catch v gives v;
-                  x orelse v gives v when the optional x is null *)
+                  x orelse v gives v when the optional x is null; a ?T v makes
+                  the result a ?T, so a orelse b orelse c chains *)
 fallback    = block | "return" [ expr ] | "break" | "continue" | bit_expr ;
 bit_expr    = shift_expr { "&" shift_expr } | shift_expr { "|" shift_expr }
             | shift_expr { "^" shift_expr } ;   (* one operator per chain *)

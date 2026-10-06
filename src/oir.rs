@@ -806,8 +806,10 @@ impl<'a> Lower<'a> {
         let has = self.temp(Type::Bool);
         self.push(out, StmtKind::Assign(local(has), Rvalue::IsSome { place: p.clone(), ty: expr.ty.clone() }));
         let mut then = Vec::new();
+        // A `?T` result (`a orelse b` where `b` is a `?T`) takes `x` whole.
         if let Some(r) = result {
-            self.push(&mut then, StmtKind::Assign(local(r), Rvalue::Load(Self::unwrap_place(p, &expr.ty))));
+            let p = if e.ty == expr.ty { p } else { Self::unwrap_place(p, &expr.ty) };
+            self.push(&mut then, StmtKind::Assign(local(r), Rvalue::Load(p)));
         }
         let mut els = Vec::new();
         match (&**body, result) {

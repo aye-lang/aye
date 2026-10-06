@@ -603,6 +603,7 @@ pub fn main() {
 - A block `{ ... }` opens a scope.
 - An expression used as a statement must be a call, `try`, `catch` or
   `match`. A call's non-void result may be dropped, except an error union.
+  `_ = x` evaluates any `x` and drops its value (not an error union).
 
 **No shadowing anywhere**: a new name (local, parameter, `for` variable,
 capture, pattern binding) cannot reuse any name visible at that point,
@@ -652,7 +653,9 @@ left-associative; comparisons do not chain, `a < b < c` is an error):
 - In an `if` or `while` condition a `|` outside parentheses starts the
   capture `|v|`: write a bitwise or there as `if (a | b) != 0`.
 - `==` and `!=` work on integers, floats, `bool`, pointers (`*T`, `[*]T`:
-  the same address), enums without payloads, structs whose fields all
+  the same address), enums without payloads, error values (`e ==
+  FetchError.NotFound`, also between sets: the same error; E0060 when the
+  set cannot hold it), structs whose fields all
   compare (field by field: `h1 == h2` for two `Handle(T)`), and optionals
   of those: `?T == ?T` (equal when both are `null` or both hold equal
   values), `?T == T` (`opt == E.A` is false for `null`), and `?T == null`.
@@ -763,6 +766,8 @@ optional type (`var m: ?i64 = null`).
 - `x orelse d` is the value of `x`, or `d` (a `T`, evaluated only when `x`
   is `null`). Instead of `d`: `return [value]`, `break`, `continue`, or a
   block that ends with one of them or `unreachable`. `catch` takes the same.
+  When `d` is a `?T` itself, the result is a `?T`, so `orelse` chains:
+  `alt(i) orelse title(i) orelse ""` is a `[]u8`.
 - `x.?` is the value of `x`; a `null` panics (`unwrap of null`). It is a
   place when `x` is: `opt.?.count += 1`.
 - `unreachable` panics (`reached unreachable code`); it can stand for a
