@@ -1,0 +1,5 @@
+// A header with C errors.
+
+let c = @cimport("header_errors.h", "-DLEVEL=2")
+
+pub fn main() {}

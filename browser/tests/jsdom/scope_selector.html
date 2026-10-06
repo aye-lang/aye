@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<title>:scope</title>
+<style>:scope > body { color: red }</style>
+<nav id="nav"><ul class="list"><li class="item"><a href="#1">1</a></li><li class="item"><ul class="list"><li class="item"><a href="#2">2</a></li></ul></li></ul></nav>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const nav = document.getElementById('nav');
+const list = nav.firstChild;
+// :scope is the element the query is on.
+log(nav.querySelectorAll(':scope > .list > .item > a').length, nav.querySelectorAll(':scope .item > a').length, list.querySelectorAll(':scope > .item').length);
+log(nav.querySelector(':scope > ul').className, list.querySelector(':scope > li > ul > li > a').textContent, nav.querySelector(':scope') === null);
+log(nav.querySelectorAll(':scope > .list > .item > a, :scope > .x').length);
+// On the document it is the root element.
+log(document.querySelectorAll(':scope > body').length, document.querySelector(':scope').tagName);
+// matches and closest: the element itself.
+const a2 = document.querySelector('a[href="#2"]');
+log(a2.matches(':scope'), a2.matches(':scope > a'), nav.matches(':scope'), a2.closest(':scope') === a2, a2.closest('li:not(:scope)') !== null);
+// In a style sheet it is :root.
+log(getComputedStyle(document.body).color);
+</script>

@@ -3,6 +3,7 @@
 
 pub mod ast;
 pub mod cgen;
+pub mod cimport;
 pub mod codes;
 pub mod diag;
 pub mod doc;

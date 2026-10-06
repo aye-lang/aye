@@ -1,6 +1,8 @@
 // paint: from a laid-out box tree to pixels.
 //
 // - paint.ore: the display list (`build`) and drawing it (`render`).
+// - background.ore: backgrounds (images, gradients), masks, rounded
+//   corners and box shadows.
 // - raster.ore: the RGBA canvas (fills, clips, coverage masks).
 // - glyphs.ore: text: FreeType glyphs through a glyph cache, or boxes
 //   for the fixed-metric test font.
@@ -25,7 +27,8 @@
 // layout tree's text: keep the tree alive as long as the list.
 //
 // Supported: background-color (the root's, or else the body's, fills
-// the canvas), borders (solid, dashed, dotted, double; the 3-D styles are
+// the canvas), background images, masks, `border-radius` and
+// `box-shadow` (background.ore), borders (solid, dashed, dotted, double; the 3-D styles are
 // solid), color, text-decoration-line (underline, overline,
 // line-through; propagated from ancestors, not into atomic inlines),
 // list markers, images (decoded ones scaled into their content box after
@@ -73,6 +76,18 @@ pub enum Item {
     // Drawing is limited to `r` until the matching `Unclip`.
     Clip { r: Rect }
     Unclip
+    // An image layer of a background or mask (background.ore): tiles of
+    // `src`, the first one at `tile`, others every `sx` (`sy`) px across
+    // (down) when `rx` (`ry`), inside `clip`.
+    Tiles { clip: Rect, tile: Rect, sx: f64, sy: f64, rx: bool, ry: bool, src: Source }
+    // A shadow of the box `r` (corners `radii`).
+    Shadow { r: Rect, radii: Radii, dx: f64, dy: f64, blur: f64, spread: f64, c: Rgba, inset: bool }
+    // Drawing goes into a transparent layer over `r` (after `Mask`, into
+    // its mask) until `EndLayer`, which blends it below through the box
+    // `r` with corners `radii` and the mask's alpha.
+    Layer { r: Rect }
+    Mask
+    EndLayer { r: Rect, radii: Radii }
 }
 
 pub struct DisplayList {
@@ -208,13 +223,6 @@ pub fn colorOf(v: Value, current: Rgba) Rgba {
     }
 }
 
-// Has the box a `mask-image`? Masks are not drawn, and the background
-// they would cut into a shape (an icon) is left out rather than painted
-// as a rectangle.
-fn masked(style: []Value) bool {
-    return !layout.isKeyword(style[css.MASK_IMAGE], "none")
-}
-
 fn isVisible(style: []Value) bool {
     return layout.isKeyword(style[css.VISIBILITY], "visible")
 }
@@ -348,13 +356,14 @@ struct Builder {
             return
         }
         let b = self.t.bx(i).*
+        if layout.numberOf(b.style[css.OPACITY], 1.0) <= 0.0 {
+            // Fully transparent (other opacities are not supported).
+            return
+        }
         let visible = isVisible(b.style)
         self.extend(b.ax + b.w + b.margin[1], b.ay + b.h + b.margin[2])
         if visible {
-            if self.skip_bg != i && !masked(b.style) {
-                try self.fill(b.ax, b.ay, b.w, b.h, colorOf(b.style[css.BACKGROUND_COLOR], WHITE))
-            }
-            try self.borders(b.style, b.ax, b.ay, b.w, b.h, b.border, true, true)
+            try decorate(self, i, b.ax, b.ay, b.w, b.h, b.border, b.padding, true, true)
         }
         let cx = b.ax + b.border[3] + b.padding[3]
         let cy = b.ay + b.border[0] + b.padding[0]
@@ -439,12 +448,9 @@ struct Builder {
                 }
                 let x = cx + f.x
                 let y = cy + f.y
-                if !masked(b.style) {
-                    try self.fill(x, y, f.w, f.h, colorOf(b.style[css.BACKGROUND_COLOR], WHITE))
-                }
                 let first = !self.hasFrag(f.box, self.t.lines.items()[l0].frag_start, fi)
                 let last = !self.hasFrag(f.box, fi + 1, self.t.lines.items()[l1 - 1].frag_end)
-                try self.borders(b.style, x, y, f.w, f.h, b.border, first, last)
+                try decorate(self, f.box, x, y, f.w, f.h, b.border, b.padding, first, last)
             }
             .Text => {
                 if !isVisible(b.style) || f.end <= f.start {
@@ -859,6 +865,45 @@ fn transformed(it: Item, m: layout.Affine, t: *mut Tree) Item {
         .Unclip => {
             return Item.Unclip
         }
+        .Tiles { clip, tile, sx, sy, rx, ry, src } => {
+            let nt = mapRect(tile, m)
+            // A quarter turn swaps the directions the tiles repeat in.
+            if math.abs(m.a) >= math.abs(m.b) {
+                return Item.Tiles { clip: mapRect(clip, m), tile: nt, sx: sx * math.abs(m.a), sy: sy * math.abs(m.d), rx: rx, ry: ry, src: mappedSource(src, m, tile, nt, t) }
+            }
+            return Item.Tiles { clip: mapRect(clip, m), tile: nt, sx: sy * math.abs(m.c), sy: sx * math.abs(m.b), rx: ry, ry: rx, src: mappedSource(src, m, tile, nt, t) }
+        }
+        .Shadow { r, radii, dx, dy, blur, spread, c, inset } => {
+            let k = math.sqrt(math.abs(m.a * m.d - m.b * m.c))
+            return Item.Shadow { r: mapRect(r, m), radii: scaledRadii(radii, k), dx: m.a * dx + m.c * dy, dy: m.b * dx + m.d * dy, blur: blur * k, spread: spread * k, c: c, inset: inset }
+        }
+        .Layer { r } => {
+            return Item.Layer { r: mapRect(r, m) }
+        }
+        .Mask => {
+            return Item.Mask
+        }
+        .EndLayer { r, radii } => {
+            let k = math.sqrt(math.abs(m.a * m.d - m.b * m.c))
+            return Item.EndLayer { r: mapRect(r, m), radii: scaledRadii(radii, k) }
+        }
+    }
+}
+
+// The source of a tile `tile` mapped by `m` to `nt`: a gradient (in the
+// tile's coordinates) gets the map; images are scaled into the tile.
+fn mappedSource(src: Source, m: layout.Affine, tile: Rect, nt: Rect, t: *mut Tree) Source {
+    match src {
+        .Gradient { g } => {
+            let to = svg.Matrix { a: m.a, b: m.b, c: m.c, d: m.d, e: m.x(tile.x, tile.y) - nt.x, f: m.y(tile.x, tile.y) - nt.y }
+            var copy = g.*
+            copy.m = svg.mul(to, g.m)
+            let p = t.alloc.create(copy) catch return src
+            return Source.Gradient { g: p }
+        }
+        _ => {
+            return src
+        }
     }
 }
 
@@ -888,6 +933,11 @@ fn moved(it: Item, dx: f64, dy: f64) Item {
         .Svg { r, pic } => Item.Svg { r: Rect { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h }, pic: pic }
         .Clip { r } => Item.Clip { r: Rect { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h } }
         .Unclip => Item.Unclip
+        .Tiles { clip, tile, sx, sy, rx, ry, src } => Item.Tiles { clip: Rect { x: clip.x + dx, y: clip.y + dy, w: clip.w, h: clip.h }, tile: Rect { x: tile.x + dx, y: tile.y + dy, w: tile.w, h: tile.h }, sx: sx, sy: sy, rx: rx, ry: ry, src: src }
+        .Shadow { r, radii, dx: sdx, dy: sdy, blur, spread, c, inset } => Item.Shadow { r: Rect { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h }, radii: radii, dx: sdx, dy: sdy, blur: blur, spread: spread, c: c, inset: inset }
+        .Layer { r } => Item.Layer { r: Rect { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h } }
+        .Mask => Item.Mask
+        .EndLayer { r, radii } => Item.EndLayer { r: Rect { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h }, radii: radii }
     }
 }
 
@@ -929,7 +979,12 @@ pub fn deviceRect(r: Rect, v: View) IRect {
 
 /// Draws the items of `list` onto `canvas` (inside its clip). Text far
 /// outside the clip is skipped.
-pub fn render(list: *DisplayList, canvas: *mut Canvas, v: View, painter: *mut TextPainter) AllocError!void {
+pub fn render(list: *DisplayList, target: *mut Canvas, view: View, painter: *mut TextPainter) AllocError!void {
+    // The layers being drawn; `canvas` and `v` are the top one's.
+    var frames = List(Frame).init(target.alloc)
+    defer dropFrames(&mut frames)
+    var canvas = target
+    var v = view
     for it in list.items.items() {
         match it {
             .Fill { r, c } => canvas.fillRect(deviceRect(r, v), c)
@@ -944,13 +999,41 @@ pub fn render(list: *DisplayList, canvas: *mut Canvas, v: View, painter: *mut Te
             .Svg { r, pic } => {
                 let d = deviceRect(r, v)
                 let k = canvas.clip
-                let t = svg.Target { pixels: canvas.pixels, width: canvas.width, x0: k.x0, y0: k.y0, x1: k.x1, y1: k.y1 }
+                let t = svg.Target { pixels: canvas.pixels, width: canvas.width, ox: 0, oy: 0, x0: k.x0, y0: k.y0, x1: k.x1, y1: k.y1 }
                 try svg.render(canvas.alloc, pic, t, d.x0 as f64, d.y0 as f64, (d.x1 - d.x0) as f64, (d.y1 - d.y0) as f64, v.scale)
             }
             .Clip { r } => {
                 try canvas.pushClip(deviceRect(r, v))
             }
             .Unclip => canvas.popClip()
+            .Tiles { clip, tile, sx, sy, rx, ry, src } => {
+                try drawTiles(canvas, v, clip, tile, sx, sy, rx, ry, src)
+            }
+            .Shadow { r, radii, dx, dy, blur, spread, c, inset } => {
+                try drawShadow(canvas, v, r, radii, dx, dy, blur, spread, c, inset)
+            }
+            .Layer { r } => {
+                try beginLayer(&mut frames, canvas, v, r)
+                let f = frames.items()[frames.len() - 1]
+                canvas = f.layer
+                v = layerView(f)
+            }
+            .Mask => {
+                if try beginMask(&mut frames) |m| {
+                    canvas = m
+                }
+            }
+            .EndLayer { r, radii } => {
+                if frames.pop() |f| {
+                    canvas = f.outer
+                    v = f.outer_view
+                    endLayer(f, r, radii) catch |e| {
+                        dropFrame(f)
+                        return e
+                    }
+                    dropFrame(f)
+                }
+            }
         }
     }
 }

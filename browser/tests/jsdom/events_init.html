@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<title>Event constructors and init</title>
+<div id="outer"><button id="b">b</button></div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const b = document.getElementById('b');
+const outer = document.getElementById('outer');
+outer.addEventListener('ping', e => log('outer', e.type, e.detail, e.bubbles, e.target === b, e instanceof CustomEvent));
+b.addEventListener('ping', e => log('button', e.type, e.cancelable, e.eventPhase));
+// The constructors.
+const e1 = new Event('ping');
+log(e1.type, e1.bubbles, e1.cancelable, e1.defaultPrevented, e1.isTrusted, e1 instanceof Event, typeof e1.timeStamp);
+let missing = '';
+try { new Event(); } catch (e) { missing = e.name; }
+log(missing);
+b.dispatchEvent(e1);
+b.dispatchEvent(new CustomEvent('ping', { bubbles: true, detail: { n: 1 } }));
+log(new CustomEvent('x').detail, new CustomEvent('x', { detail: 0 }).detail);
+// The old way: createEvent, then initEvent or initCustomEvent.
+const e2 = document.createEvent('CustomEvent');
+log(e2 instanceof CustomEvent, e2.type === '');
+e2.initCustomEvent('ping', true, true, 'old');
+b.dispatchEvent(e2);
+const e3 = document.createEvent('Event');
+e3.initEvent('ping', true, false);
+b.dispatchEvent(e3);
+const e4 = document.createEvent('HTMLEvents');
+e4.initEvent('click', true, true);
+b.addEventListener('click', e => { e.preventDefault(); log('click', e instanceof Event, e.defaultPrevented); });
+log('dispatched', b.dispatchEvent(e4));
+const e5 = document.createEvent('MouseEvents');
+e5.initMouseEvent('mousedown', true, true, window, 1, 0, 0, 7, 8, false, false, true, false, 0, null);
+b.addEventListener('mousedown', e => log('mouse', e.clientX, e.clientY, e.shiftKey, e instanceof MouseEvent));
+b.dispatchEvent(e5);
+let bad = '';
+try { document.createEvent('NoSuchEvent'); } catch (e) { bad = e.name; }
+log(bad);
+</script>

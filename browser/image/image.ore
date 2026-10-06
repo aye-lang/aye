@@ -1,9 +1,10 @@
 // image: decoders for the raster formats a page can use (PNG, GIF,
-// JPEG) into one RGBA bitmap type. The input is untrusted bytes from the
-// network, so every decoder checks every index itself and reports a
-// malformed or truncated file as `ImageError.Invalid`: a panic here
-// would take the whole browser down.
+// JPEG, WebP) into one RGBA bitmap type. The input is untrusted bytes
+// from the network, so every decoder checks every index itself and
+// reports a malformed or truncated file as `ImageError.Invalid`: a
+// panic here would take the whole browser down.
 
+import std
 import std.mem.Allocator
 
 /// A decoded image: RGBA, 8 bits per channel, straight (not
@@ -21,7 +22,7 @@ pub struct Bitmap {
 
 /// `Invalid`: the bytes are not a well-formed image (or are cut short).
 /// `Unsupported`: well-formed, but a feature or size this decoder does
-/// not handle (progressive JPEG, CMYK, a huge image).
+/// not handle (arithmetic-coded or 12-bit JPEG, a huge image).
 pub error ImageError { OutOfMemory, Invalid, Unsupported }
 
 /// An image format, as recognized by its signature bytes.
@@ -29,6 +30,7 @@ pub enum Format {
     Png
     Gif
     Jpeg
+    Webp
     Unknown
 }
 
@@ -51,11 +53,14 @@ pub fn sniff(data: []u8) Format {
     if data.len >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
         return Format.Jpeg
     }
+    if data.len >= 12 && std.mem.eql(data[0..4], "RIFF") && std.mem.eql(data[8..12], "WEBP") {
+        return Format.Webp
+    }
     return Format.Unknown
 }
 
-/// Decodes a PNG, GIF (its first frame) or baseline JPEG, chosen by
-/// `sniff`. Free the result with `deinit`.
+/// Decodes a PNG, GIF (its first frame), JPEG or WebP (its first
+/// frame), chosen by `sniff`. Free the result with `deinit`.
 pub fn decode(alloc: Allocator, data: []u8) ImageError!Bitmap {
     let format = sniff(data)
     if format == Format.Png {
@@ -66,6 +71,9 @@ pub fn decode(alloc: Allocator, data: []u8) ImageError!Bitmap {
     }
     if format == Format.Jpeg {
         return decodeJpeg(alloc, data)
+    }
+    if format == Format.Webp {
+        return decodeWebp(alloc, data)
     }
     return ImageError.Unsupported
 }

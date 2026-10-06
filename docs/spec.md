@@ -65,6 +65,7 @@ ore test <path> [--filter text] [--json] [--mode m]   run the root module's `tes
 ore emit-c <path> [--mode m]                          print the generated C
 ore fmt [--check] <path>                              format in place (a directory: every .ore file under it); --check lists files that would change, exit 1
 ore doc --signatures <path>                           print every pub declaration with its /// comment, no bodies; <path> may be std or std.text
+ore cimport <header> [-Idir] [-DNAME[=value]] [--link lib]   print the Ore declarations that @cimport makes of a C header
 ore explain <code>                                    explain an error code (E0001...) with a wrong and a fixed program
 ore spec                                              print this document
 ```
@@ -133,7 +134,7 @@ pub fn main() {
 - Builtins start with `@`: `@print`, `@println`, `@expect`, `@expectEqual`,
   `@testAllocator`, `@sizeOf`, `@zeroed`, `@ptrCast`, `@downcast`,
   `@embedFile`, `@link`,
-  `@linkOptional`, `@hasLink`, `@atomicLoad`, `@atomicStore`, `@atomicAdd`,
+  `@linkOptional`, `@cimport`, `@hasLink`, `@atomicLoad`, `@atomicStore`, `@atomicAdd`,
   `@atomicSub`, `@atomicCas`, `@hash`, `@setSafety`, `@splat`,
   `@reduceAdd`, `@reduceMin`, `@reduceMax`, `@all`, `@any`, `@select`.
 
@@ -511,6 +512,66 @@ callback); it cannot make a `*T` writable or an optional non-optional.
 `bool` (`false`), optional pointer, `extern struct`, `extern union` or
 array of them (`@zeroed([64]bool)`, `@zeroed([4][4]u8)`), and a constant
 (usable in a global or a field default).
+
+### C headers
+
+`@cimport` declares a C header's functions, types and constants, read
+with libclang, instead of writing `extern fn`s by hand:
+
+```ore
+@link("zlib")
+
+let z = @cimport("zlib.h")
+let m = @cimport("math.h")
+
+pub fn main() {
+    let text = "hello, hello, hello"
+    var packed = @zeroed([64]u8)
+    var size: z.uLongf = packed.len as z.uLongf
+    if z.compress(packed[..].ptr, &mut size, text.ptr, text.len as z.uLong) == z.Z_OK {
+        @println(size)
+    }
+    @println(m.sqrt(2.0))
+}
+```
+
+- `let name = @cimport("header.h", flags...)` is a top-level declaration:
+  the whole value of a `let` that is not `pub`, typed or a `var` (E0112).
+  The header and the flags are string literals. `name` is a module of
+  the header's declarations, visible in every file of the module:
+  `z.compress`, `z.Z_OK`, `z.z_stream`.
+- Flags: `-Idir` (relative to the source file's directory), `-DNAME`,
+  `-DNAME=value`, `-UNAME`, `-Fdir` (macOS frameworks) and `-std=c11`.
+- The header is looked for next to the source file, then on the include
+  path: the `-I` flags, the `pkg-config --cflags` of the module's `@link`
+  and `@linkOptional` libraries, the system's headers (the macOS SDK) and
+  Homebrew's. Not found, or with errors: E0113. `@cimport` declares; the
+  library is still linked with `@link`.
+- What it declares (`ore cimport header.h` prints it):
+  - functions: `pub extern fn` with C's types (`int` is `c_int`, `size_t`
+    `usize`, `char *` and `void *` `?[*]u8`, `const T *` `?*T`, `T *`
+    `?*mut T`, a function pointer `?fn(...)`), `...` when variadic;
+  - structs and unions: `extern struct`/`extern union` with their fields,
+    or opaque (`extern struct Name {}`, for pointers only) when the header
+    does not define them or they have bit-fields, `packed` or `aligned`
+    layout, or a field Ore cannot express; a tag that clashes with
+    another name is `struct_name`;
+  - enums: a `pub let` per constant, of the enum's integer type, and the
+    enum's name as an alias of that type;
+  - typedefs: aliases (`z.uLong`), also those of other headers that the
+    declarations use (`pthread_t`);
+  - `#define`s whose value is a number or a string: `pub let` constants
+    with C's type of the value (`c_int`, `c_long`, `f64`...).
+
+  Static and inline functions, C variables, function-like macros and
+  names that are Ore keywords are left out (a comment in the generated
+  source says which).
+- libclang is loaded when a header is first read: next to the selected
+  clang on macOS (the Command Line Tools), with `llvm-config` or in
+  `/usr/lib/llvm-N` on Linux, or from `$LIBCLANG_PATH`. Missing: E0114.
+  The declarations are cached in `~/.cache/ore/cimport`
+  (`$ORE_CACHE_DIR/cimport`) until a file the header includes changes; a
+  cached header needs no libclang.
 
 ## 5. Types
 
@@ -1404,7 +1465,8 @@ failure is `{"kind":"assertion"|"panic"|"leak","line":L,"col":C,"message":M}`,
 - `@atomicLoad`, `@atomicStore`, `@atomicAdd`, `@atomicSub`, `@atomicCas`:
   section 15 (std.sync).
 - `@sizeOf(T)`, `@zeroed(T)`, `@ptrCast(T, p)`, `@link("lib")`,
-  `@linkOptional("lib")`, `@hasLink("lib")`: section 4.
+  `@linkOptional("lib")`, `@hasLink("lib")`, `@cimport("header.h")`:
+  section 4.
 - `@hash(x)`: section 11 (`where T: Hash`).
 - `@downcast(*S, d)`: section 10.
 - `@embedFile("path")`: the bytes of the file at `path` as a `[]u8`

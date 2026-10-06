@@ -23,6 +23,6 @@ a.addEventListener('load', () => {
   a.contentDocument.getElementById('msg').textContent = 'Changed by the parent';
   a.contentWindow.postMessage({ n: 1 }, '*');
 });
-addEventListener('message', e => log('message', JSON.stringify(e.data), '| from a', e.source === a.contentWindow, '| origin', e.origin));
+addEventListener('message', e => log('message', JSON.stringify(e.data), '| from a', e.source === a.contentWindow, '| origin', e.origin, '|', e instanceof MessageEvent));
 addEventListener('load', () => log('parent load'));
 </script>

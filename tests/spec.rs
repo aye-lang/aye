@@ -33,6 +33,11 @@ fn ore_blocks_compile() {
     let progs = blocks("ore");
     assert!(progs.len() >= 10, "only {} ```ore blocks", progs.len());
     for (line, code) in progs {
+        // `@cimport` reads C headers with libclang (or its cache).
+        if code.contains("@cimport") && !ore::cimport::libclang_available() {
+            println!("skipped docs/spec.md:{line}: no libclang");
+            continue;
+        }
         if let Err(ds) = ore::driver::check("spec.ore", &code) {
             let ds: Vec<String> = ds.iter().map(|d| d.to_string()).collect();
             panic!("docs/spec.md:{line}: the block does not compile:\n{}\n{code}", ds.join("\n"));

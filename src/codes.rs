@@ -2420,6 +2420,61 @@ pub fn main() {
 hello
 "#,
 }
+E0112 = 112 {
+    "invalid `@cimport`",
+    "`@cimport(\"header.h\", \"-Iinclude\", \"-DNAME=1\")` reads a C header with libclang and makes an Ore module of its declarations, which a top-level `let` names: `let c = @cimport(\"zlib.h\")`, then `c.deflate(...)` and `c.Z_OK`. It is a declaration, not a value, so it appears only as the whole value of a top-level `let`, which cannot be `pub`, have a type or be a `var`. The header and the flags are string literals. The flags are include directories (`-Idir`, relative to the source file), definitions (`-DNAME`, `-DNAME=value`, `-UNAME`), framework directories (`-Fdir`) and `-std=...`; the `pkg-config --cflags` of the module's `@link` libraries are added. `ore cimport header.h` prints the generated declarations.",
+    r#"pub fn main() {
+    let m = @cimport("math.h")
+    @println(m.sqrt(2.0))
+}
+"#,
+    r#"let m = @cimport("math.h")
+
+pub fn main() {
+    @println(m.sqrt(2.0))
+}
+"#,
+}
+E0113 = 113 {
+    "C header cannot be imported",
+    "libclang could not read the header of a `@cimport`: it is not found, or it has errors. A header is looked for next to the source file, then on the include path: the flags' `-I` directories, the `pkg-config --cflags` of the module's `@link` and `@linkOptional` libraries, the system's headers and Homebrew's. Check the name (`SDL2/SDL.h`, not `SDL.h`, unless an `-I` directory or `@link(\"sdl2\")` makes it findable), install the library's development headers, or add its directory with `\"-I/path/include\"`. For errors in the header, a definition it expects (`\"-DNAME=1\"`) may be missing; `ore cimport header.h` shows the same errors outside the program.",
+    r#"let geo = @cimport("no_such_header.h")
+
+pub fn main() {
+    @println(1)
+}
+"#,
+    r#"// file: main.ore
+let geo = @cimport("point.h")
+
+pub fn main() {
+    let p = geo.Point { x: 1, y: 2 }
+    @println(p.x + p.y)
+}
+// file: point.h
+struct Point {
+    int x;
+    int y;
+};
+"#,
+}
+E0114 = 114 {
+    "libclang not found",
+    "`@cimport` reads C headers with libclang, which the compiler loads when it first needs it (the compiler itself does not depend on it), and it was not found. On macOS it comes with the Xcode command line tools (`xcode-select --install`): the compiler looks next to `xcrun --find clang`, in the command line tools and in Homebrew's `llvm`. On Linux, install libclang (`libclang-dev` or `clang` packages); the compiler asks `llvm-config --libdir` and looks in `/usr/lib/llvm-*/lib`. `LIBCLANG_PATH` (the library, or its directory) overrides the search. A header that was imported before is read from the cache (`~/.cache/ore/cimport`, or `$ORE_CACHE_DIR/cimport`) without libclang, as long as its files did not change. Without libclang, declare the C functions by hand with `extern fn` and `extern struct`, or check in what `ore cimport header.h` prints where libclang is installed as a module of its own and `import` it.",
+    r#"// This program reports E0114 only where libclang is missing.
+let m = @cimport("math.h")
+
+pub fn main() {
+    @println(m.sqrt(2.0))
+}
+"#,
+    r#"extern fn sqrt(x: f64) f64
+
+pub fn main() {
+    @println(sqrt(2.0))
+}
+"#,
+}
 }
 
 #[cfg(test)]
@@ -2458,7 +2513,13 @@ mod tests {
     /// Each wrong example reports its code, and each fix compiles.
     #[test]
     fn examples_are_accurate() {
+        let libclang = crate::cimport::libclang_available();
         for info in ALL {
+            // `@cimport` needs libclang; E0114's wrong example reports it
+            // only where libclang is missing.
+            if info.code == E0114 && libclang || !libclang && info.fix.contains("@cimport") {
+                continue;
+            }
             match check("wrong", info.wrong) {
                 Ok(_) => panic!("{}: the wrong example compiles", info.code),
                 Err(ds) => assert!(

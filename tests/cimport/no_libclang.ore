@@ -1,0 +1,8 @@
+// Without libclang (LIBCLANG_PATH points nowhere, in no_libclang.env), a
+// header that is not in the cache cannot be imported.
+
+let m = @cimport("math.h")
+
+pub fn main() {
+    @println(m.sqrt(4.0))
+}

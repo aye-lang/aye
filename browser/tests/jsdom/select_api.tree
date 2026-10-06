@@ -1,0 +1,26 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "select"
+      "\n"
+    <body>
+      "\n"
+      <select id="m" multiple="">
+        <option>
+          "x"
+        <option selected="">
+          "y"
+        <option selected="">
+          "z"
+        <optgroup>
+          <option>
+            "in group"
+      "\n"
+      <pre id="out">
+        "select-one 2 2 true true true 1 1 b\n5 first,second,a,b,c 3 b\n6 z  Z\n4 a,b,c,z 1\nc true 2\na\n2 a,b\n3 \"\"\nselect-multiple 2 1 yz\n4 in group\n\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst s = document.getElementById('s');\nconst opts = s.options;\nlog(s.type, s.length, opts.length, opts instanceof HTMLOptionsCollection, opts instanceof HTMLCollection, opts === s.options, s.selectedIndex, opts.selectedIndex, s.value);\n// add: at the end, before an option, before an index.\ns.add(new Option('C', 'c'));\ns.add(new Option('First', 'first'), s.options[0]);\ns.add(new Option('Second', 'second'), 1);\nlog(opts.length, Array.from(opts, o => o.value).join(','), s.selectedIndex, s.value);\nopts.add(new Option('Z', 'z'));\nlog(s.length, s.item(5).value, s.namedItem('nope'), s.options[5].text);\n// remove(i) takes an option out; remove() takes the select out.\ns.remove(0);\nopts.remove(0);\nlog(s.length, Array.from(s.options, o => o.value).join(','), s.selectedIndex);\ns.selectedIndex = 2;\nlog(s.value, opts[2].selected, opts.selectedIndex);\nopts.selectedIndex = 0;\nlog(s.value);\ns.length = 2;\nlog(s.length, Array.from(s.options, o => o.value).join(','));\ns.length = 3;\nlog(s.length, JSON.stringify(s.options[2].value));\nconst m = document.getElementById('m');\nlog(m.type, m.selectedOptions.length, m.selectedIndex, Array.from(m.selectedOptions, o => o.text).join(''));\n// An optgroup's options count too.\nconst g = document.createElement('optgroup');\ng.appendChild(new Option('in group'));\nm.appendChild(g);\nlog(m.options.length, m.options[3].text);\ns.remove();\nlog(document.getElementById('s'));\n"
+      "\n"

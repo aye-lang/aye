@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<title>performance</title>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const t0 = performance.now();
+log(typeof t0, t0 >= 0, performance.now() >= t0, performance.timeOrigin > 1.5e12, performance instanceof EventTarget);
+// Navigation timing, both ways.
+const t = performance.timing;
+log(t.navigationStart > 0, t.responseStart >= t.navigationStart, t.domContentLoadedEventStart, t.loadEventEnd, typeof t.toJSON().fetchStart);
+const nav = performance.getEntriesByType('navigation');
+log(nav.length, nav[0].entryType, nav[0].type, nav[0].startTime, typeof nav[0].responseStart, nav[0].domContentLoadedEventStart, nav[0].loadEventEnd);
+log(performance.navigation.type, performance.getEntriesByType('paint').length, performance.getEntriesByType('resource').length);
+// Marks and measures.
+const m1 = performance.mark('start', { detail: 'go' });
+setTimeout(() => {
+  performance.mark('end');
+  const m = performance.measure('span', 'start', 'end');
+  log(m1.entryType, m1.name, m1.detail, m.entryType, m.duration >= 50, performance.getEntriesByName('start').length, performance.getEntriesByType('mark').length);
+  const all = performance.measure('all');
+  log(all.startTime, all.duration > 0, performance.getEntriesByName('span', 'measure').length, performance.getEntriesByName('span', 'mark').length);
+  const opts = performance.measure('opts', { start: 'start', duration: 5 });
+  log(opts.duration, opts.startTime === m1.startTime);
+  let bad = '';
+  try { performance.measure('x', 'nope'); } catch (e) { bad = e.name; }
+  log(bad);
+  performance.clearMarks('start');
+  log(performance.getEntriesByType('mark').map(e => e.name).join(','));
+  performance.clearMarks();
+  performance.clearMeasures();
+  log(performance.getEntries().length, performance.getEntries()[0].entryType);
+  // After the load: the moments are there.
+  const n = performance.getEntriesByType('navigation')[0];
+  log(t.domContentLoadedEventStart > 0, t.loadEventEnd >= t.domContentLoadedEventStart, n.domContentLoadedEventEnd >= n.domContentLoadedEventStart, n.loadEventEnd >= n.loadEventStart);
+  log(typeof PerformanceObserver, PerformanceObserver.supportedEntryTypes.includes('mark'), new PerformanceObserver(() => {}).takeRecords().length);
+}, 50);
+</script>

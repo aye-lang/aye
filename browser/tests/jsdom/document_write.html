@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<title>document.write</title>
+<p id="before">before</p>
+<script>
+document.write('<p id="w1">written <b>bold</b></p>');
+document.write('<p id="w2">', 'two parts', '</p>');
+document.writeln('<span>line</span>');
+document.write('<script>document.write("<i id=nested>nested</i>");<\/script>');
+</script>
+<p id="after">after</p>
+<script src="scripts/writes.js"></script>
+<ul><script>document.write('<li>in list</li>')</script></ul>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const ids = Array.from(document.body.querySelectorAll('[id]'), e => e.id);
+log(ids.join(' '));
+log(document.getElementById('w1').previousElementSibling.tagName, document.getElementById('after').previousElementSibling.tagName);
+log(document.querySelector('ul').children.length, document.querySelector('ul li').textContent);
+// After the parser is done, writes are ignored (a browser would open a
+// new document).
+document.addEventListener('DOMContentLoaded', () => {
+  document.write('<p id="late">late</p>');
+  log('late', document.getElementById('late'));
+});
+setTimeout(() => {
+  document.write('<p id="later">later</p>');
+  log('later', document.getElementById('later'), document.open() === document);
+  document.close();
+}, 0);
+</script>

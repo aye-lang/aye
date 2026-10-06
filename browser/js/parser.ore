@@ -25,6 +25,8 @@ pub struct Parser {
     // generator (`yield` is one).
     in_async: bool
     in_gen: bool
+    // In strict mode code: after a "use strict" directive, in a class.
+    strict: bool
     // The lowest stack address the recursion may reach (0: no limit).
     floor: u64
 
@@ -78,7 +80,11 @@ pub struct Parser {
         return false
     }
 
+    // The text of a token; the name of an identifier written with escapes.
     fn tokText(self: *Self, t: Token) []u8 {
+        if t.kind == Tok.Ident && t.len > 0 {
+            return self.lx.cookedOf(t)
+        }
         return self.src[t.start as usize..t.end as usize]
     }
 
@@ -222,6 +228,9 @@ pub struct Parser {
 
     /// Parses the whole script into a `Block` node.
     pub fn program(self: *mut Self) SyntaxErr!u32 {
+        if self.useStrict() {
+            self.strict = true
+        }
         let m = self.mark()
         while !self.at(Tok.Eof) {
             try self.push(try self.statement())
@@ -230,6 +239,23 @@ pub struct Parser {
         let l = try self.list(m)
         let scope = try self.newScope()
         return self.mk(Node.Block { list: l, n: n, scope: scope }, 0)
+    }
+
+    // Does the directive prologue that starts here (string literal
+    // statements) have "use strict"?
+    fn useStrict(self: *Self) bool {
+        var k: usize = 0
+        while self.kindAt(k) == Tok.Str {
+            let t = self.tokText(self.tokAt(k))
+            if text.eql(t, "\"use strict\"") || text.eql(t, "'use strict'") {
+                return true
+            }
+            k += 1
+            if self.kindAt(k) == Tok.Semi {
+                k += 1
+            }
+        }
+        return false
     }
 
     fn statement(self: *mut Self) SyntaxErr!u32 {
@@ -1477,6 +1503,7 @@ pub struct Parser {
             nbody: 0,
             expr: 0,
             arrow: false,
+            strict: self.strict,
             method: false,
             generator: false,
             is_async: false,
@@ -1506,6 +1533,11 @@ pub struct Parser {
 
     fn functionBody(self: *mut Self, f: u32) SyntaxErr!void {
         try self.expect(Tok.LBrace)
+        let outer = self.strict
+        if self.useStrict() {
+            self.strict = true
+        }
+        self.ast.funcs.items()[f].strict = self.strict
         let m = self.mark()
         while !self.at(Tok.RBrace) {
             if self.at(Tok.Eof) {
@@ -1513,6 +1545,7 @@ pub struct Parser {
             }
             try self.push(try self.statement())
         }
+        self.strict = outer
         self.pos += 1
         let n = self.count(m)
         let l = try self.list(m)
@@ -1551,6 +1584,10 @@ pub struct Parser {
         let cid = self.ast.classes.len() as u32
         try self.ast.classes.append(ClassInfo { name: name, scope: NONE, heritage: heritage, ctor: NONE, members: 0, n: 0 })
         try self.expect(Tok.LBrace)
+        // A class body is strict mode code.
+        let outer = self.strict
+        self.strict = true
+        defer self.strict = outer
         var ctor = NONE
         let m = self.mark()
         while !self.eat(Tok.RBrace) {

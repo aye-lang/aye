@@ -1,0 +1,28 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        ":scope"
+      "\n"
+      <style>
+        ":scope > body { color: red }"
+      "\n"
+    <body>
+      <nav id="nav">
+        <ul class="list">
+          <li class="item">
+            <a href="#1">
+              "1"
+          <li class="item">
+            <ul class="list">
+              <li class="item">
+                <a href="#2">
+                  "2"
+      "\n"
+      <pre id="out">
+        "1 2 2\nlist 2 true\n1\n1 HTML\ntrue false true true true\nrgb(255, 0, 0)\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst nav = document.getElementById('nav');\nconst list = nav.firstChild;\n// :scope is the element the query is on.\nlog(nav.querySelectorAll(':scope > .list > .item > a').length, nav.querySelectorAll(':scope .item > a').length, list.querySelectorAll(':scope > .item').length);\nlog(nav.querySelector(':scope > ul').className, list.querySelector(':scope > li > ul > li > a').textContent, nav.querySelector(':scope') === null);\nlog(nav.querySelectorAll(':scope > .list > .item > a, :scope > .x').length);\n// On the document it is the root element.\nlog(document.querySelectorAll(':scope > body').length, document.querySelector(':scope').tagName);\n// matches and closest: the element itself.\nconst a2 = document.querySelector('a[href=\"#2\"]');\nlog(a2.matches(':scope'), a2.matches(':scope > a'), nav.matches(':scope'), a2.closest(':scope') === a2, a2.closest('li:not(:scope)') !== null);\n// In a style sheet it is :root.\nlog(getComputedStyle(document.body).color);\n"
+      "\n"

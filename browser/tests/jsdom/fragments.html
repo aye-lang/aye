@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<title>Fragments and namespaces</title>
+<ul id="list"><li id="first">first</li></ul>
+<template id="tpl"><p class="t">from <b>template</b></p></template>
+<div id="box"></div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const list = document.getElementById('list');
+// A fragment's children move into the parent; the fragment ends up empty.
+const f = document.createDocumentFragment();
+for (const t of ['a', 'b', 'c']) {
+  const li = document.createElement('li');
+  li.textContent = t;
+  f.appendChild(li);
+}
+log(f.nodeType, f.nodeName, f.childNodes.length, f.firstChild.textContent, f.querySelectorAll('li').length, f.textContent, f.parentNode);
+const returned = list.appendChild(f);
+log(returned === f, f.childNodes.length, list.children.length, list.lastChild.textContent);
+const g = new DocumentFragment();
+g.append('x', document.createElement('hr'));
+list.insertBefore(g, document.getElementById('first'));
+log(list.firstChild.nodeType, list.firstChild.data, list.childNodes[1].tagName, g.firstChild);
+const h = document.createDocumentFragment();
+h.appendChild(document.createElement('em'));
+list.replaceChild(h, list.firstChild);
+log(list.firstChild.tagName, list.childNodes.length);
+document.getElementById('box').append(new DocumentFragment());
+log(document.getElementById('box').childNodes.length);
+// Templates: content is a fragment; importNode or cloneNode copies it.
+const tpl = document.getElementById('tpl');
+log(tpl.content instanceof DocumentFragment, tpl.content === tpl.content, tpl.childNodes.length, tpl.content.childNodes.length);
+const copy = document.importNode(tpl.content, true);
+log(copy.nodeType, copy.firstChild.className, copy.firstChild.innerHTML, copy === tpl.content);
+document.getElementById('box').appendChild(copy);
+log(document.getElementById('box').innerHTML, tpl.content.childNodes.length);
+const empty = document.createElement('template');
+log(empty.content.childNodes.length, empty.content.nodeType);
+// The frag's own getElementById, textContent.
+const k = document.createDocumentFragment();
+k.appendChild(document.createElement('span')).id = 'inner';
+log(k.getElementById('inner').tagName, k.getElementById('none'));
+k.textContent = 'replaced';
+log(k.childNodes.length, k.firstChild.nodeType);
+// createElementNS
+const SVG = 'http://www.w3.org/2000/svg';
+const svg = document.createElementNS(SVG, 'svg');
+const path = document.createElementNS(SVG, 'path');
+svg.appendChild(path);
+log(svg.namespaceURI, svg.tagName, svg.localName, path.namespaceURI, path instanceof SVGElement, svg instanceof SVGSVGElement, path instanceof HTMLElement);
+const div = document.createElementNS('http://www.w3.org/1999/xhtml', 'div');
+log(div.namespaceURI, div.tagName, div instanceof HTMLDivElement);
+const other = document.createElementNS(null, 'thing');
+log(other.namespaceURI, other.tagName, other instanceof HTMLElement, other instanceof Element);
+log(svg.cloneNode(true).namespaceURI, svg.cloneNode(true).firstChild.namespaceURI);
+// Attributes with namespaces, Attr objects and `attributes`.
+path.setAttributeNS(null, 'd', 'M0 0');
+const use = document.createElementNS(SVG, 'use');
+use.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', '#icon');
+log(path.getAttribute('d'), use.getAttribute('xlink:href'), use.getAttributeNS('http://www.w3.org/1999/xlink', 'href'), use.hasAttributeNS(null, 'href'));
+use.removeAttributeNS('http://www.w3.org/1999/xlink', 'href');
+log(use.hasAttribute('xlink:href'));
+const attr = document.createAttributeNS('http://www.w3.org/1999/xlink', 'xlink:title');
+attr.value = 'tip';
+use.setAttributeNode(attr);
+log(attr.name, attr.localName, attr.prefix, attr.namespaceURI, attr.ownerElement === use, use.getAttribute('xlink:title'));
+const plain = document.createAttribute('Data-X');
+plain.value = '1';
+div.setAttributeNode(plain);
+div.setAttribute('id', 'z');
+const attrs = div.attributes;
+log(attrs.length, attrs[0].name, attrs[0].value, attrs.getNamedItem('id').value, attrs.id.nodeType, attrs.item(5));
+div.getAttributeNode('id').value = 'changed';
+log(div.id, Array.from(div.attributes, a => a.name + '=' + a.value).join(' '));
+</script>

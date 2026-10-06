@@ -208,7 +208,7 @@ struct Inspector {
                 }
             }
             .Str { s } => try appendQuoted(b, self.it.heap.bytes(s))
-            .Obj { o } => try self.object(b, o, rt)
+            .Obj { o } => try self.object(b, unwrapProxy(self.it, o), rt)
         }
     }
 

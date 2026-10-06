@@ -26,6 +26,15 @@ pub enum Kind {
     Comment
 }
 
+// The namespace of an element (`Node.ns`). An element the HTML parser or
+// `createElement` made is NS_HTML, also inside `svg` and `math`: what is
+// under those tells (`namespaceOf`). `createElementNS` sets the others.
+pub let NS_HTML: u8 = 0
+pub let NS_SVG: u8 = 1
+pub let NS_MATHML: u8 = 2
+// Any other namespace, or none.
+pub let NS_OTHER: u8 = 3
+
 pub struct Attr {
     name: []u8
     value: []u8
@@ -46,6 +55,8 @@ pub struct Node {
     next: ?NodeId
     // The JavaScript objects that hold this node (wrappers).
     js_refs: u32
+    // Element: NS_HTML, NS_SVG, ...
+    ns: u8
 }
 
 /// Names a node of a `Document`.
@@ -159,11 +170,52 @@ pub struct Document {
         return self.nodes.insert(blank(Kind.Doctype, try self.dup(name), ""))
     }
 
+    /// A new, empty document fragment: a `Document` node that is not the
+    /// document's, the root of a tree of its own.
+    pub fn createFragment(self: *mut Self) AllocError!NodeId {
+        return self.nodes.insert(blank(Kind.Document, "#document-fragment", ""))
+    }
+
+    /// Is `h` a document fragment (a template's contents, or one that a
+    /// script made)?
+    pub fn isFragment(self: *Self, h: NodeId) bool {
+        return self.node(h).kind == Kind.Document && !same(h, self.root)
+    }
+
+    /// The namespace of the element `el`: its own when it has one, else
+    /// SVG or MathML inside an `svg` or `math` element (up to a
+    /// `foreignObject`), else HTML.
+    pub fn namespaceOf(self: *Self, el: NodeId) u8 {
+        var cur: ?NodeId = el
+        while cur |c| {
+            let n = self.node(c)
+            if n.kind != Kind.Element {
+                return NS_HTML
+            }
+            if n.ns != NS_HTML {
+                return n.ns
+            }
+            if text.eql(n.name, "svg") {
+                return NS_SVG
+            }
+            if text.eql(n.name, "math") {
+                return NS_MATHML
+            }
+            if text.eql(n.name, "foreignobject") && !same(c, el) {
+                return NS_HTML
+            }
+            cur = n.parent
+        }
+        return NS_HTML
+    }
+
     /// A new, empty fragment for the contents of the template `t`: a
     /// tree of its own, out of the document, so that rendering, text and
-    /// queries never see it.
+    /// queries never see it. The template holds it (`js_refs`), so it is
+    /// freed with the document only.
     pub fn createTemplateContent(self: *mut Self, t: NodeId) AllocError!NodeId {
-        let frag = try self.nodes.insert(blank(Kind.Document, "#document-fragment", ""))
+        let frag = try self.createFragment()
+        self.node(frag).js_refs = 1
         try self.templates.append(t)
         try self.templates.append(frag)
         return frag
@@ -488,6 +540,7 @@ fn blank(kind: Kind, name: []u8, data: []u8) Node {
         prev: null,
         next: null,
         js_refs: 0,
+        ns: NS_HTML,
     }
 }
 

@@ -1,0 +1,28 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "getComputedStyle"
+      "\n"
+      <style>
+        "\nbody { font-size: 20px }\n.box { color: rgb(0, 128, 0); margin: 1em 2px; display: flex; float: left }\n.box p { color: inherit; font-weight: bold }\n#hidden { display: none }\n"
+      "\n"
+      <style>
+        "#hidden { color: rgb(4, 5, 6) }"
+      <style>
+        ".late img { display: block }"
+    <body>
+      <div class="box late" id="box" style="padding-left: 3px; color: red;">
+        <p id="p">
+          "text"
+        <img src="a.png">
+      "\n"
+      <div id="hidden" class="box">
+      "\n"
+      <pre id="out">
+        "rgb(0, 128, 0) flex 20px 2px 3px 20px 20px left left\nrgb(0, 128, 0) 700 20px block 20px true\nnone true number true string \nrgb(255, 0, 0) rgb(255, 0, 0) none\n\"\" 0 rgb(255, 0, 0)\nNoModificationAllowedError TypeError\ninline rgb(255, 0, 0)\nrgb(1, 2, 3)\nrgb(4, 5, 6)\nblock\nhttps: user example.com:8080 example.com 8080 /p/q ?x=1 #frag https://example.com:8080 true\nhttps://user:pw@example.com:8080/other?x=1#h true\ntrue true Netscape en-US,en false true\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst box = document.getElementById('box');\nconst cs = getComputedStyle(box);\nlog(cs.color, cs.display, cs.marginTop, cs.marginLeft, cs.paddingLeft, cs.getPropertyValue('margin-top'), cs.getPropertyValue('MARGIN-BOTTOM'), cs.cssFloat, cs.float);\nconst p = window.getComputedStyle(document.getElementById('p'));\nlog(p.color, p.fontWeight, p.fontSize, p.display, p.getPropertyValue('font-size'), p.getPropertyValue('--nope') === '');\nlog(getComputedStyle(document.getElementById('hidden')).display, cs instanceof CSSStyleDeclaration, typeof cs.length, cs.length > 20, typeof cs.item(0), cs.getPropertyPriority('color'));\n// It follows changes to the document.\nbox.style.color = 'red';\ndocument.getElementById('hidden').className = 'box';\nlog(getComputedStyle(box).color, cs.color, getComputedStyle(document.getElementById('hidden')).display);\n// A node out of the document has no computed style.\nconst loose = document.createElement('div');\nlog(JSON.stringify(getComputedStyle(loose).display), getComputedStyle(loose).length, getComputedStyle(box, '::before').color);\nlet ro = '';\ntry { cs.setProperty('color', 'blue'); } catch (e) { ro = e.name; }\nlet notEl = '';\ntry { getComputedStyle(document); } catch (e) { notEl = e.name; }\nlog(ro, notEl);\n// Changes to attributes no selector looks at, to style sheets, to classes.\nconst img = document.createElement('img');\nbox.appendChild(img);\nimg.setAttribute('src', 'a.png');\nlog(getComputedStyle(img).display, getComputedStyle(img).color);\nconst st = document.createElement('style');\nst.textContent = '#hidden { color: rgb(1, 2, 3) }';\ndocument.head.appendChild(st);\nlog(getComputedStyle(document.getElementById('hidden')).color);\nst.textContent = '#hidden { color: rgb(4, 5, 6) }';\nlog(getComputedStyle(document.getElementById('hidden')).color);\nconst extra = document.createElement('style');\nextra.textContent = '.late img { display: block }';\ndocument.head.appendChild(extra);\nbox.classList.add('late');\nlog(getComputedStyle(img).display);\n// a: the parts of its URL; navigator.\nconst a = document.createElement('a');\na.href = 'https://user:pw@example.com:8080/p/q?x=1#frag';\nlog(a.protocol, a.username, a.host, a.hostname, a.port, a.pathname, a.search, a.hash, a.origin, String(a) === a.href);\na.pathname = '/other';\na.hash = 'h';\nlog(a.getAttribute('href'), document.createElement('a').protocol === '');\nlog(navigator instanceof Navigator, navigator.userAgent.includes('anyknown'), navigator.appName, navigator.languages.join(','), navigator.javaEnabled(), navigator.hardwareConcurrency > 0);\n"
+      "\n"

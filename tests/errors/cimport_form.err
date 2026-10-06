@@ -1,0 +1,7 @@
+cimport_form.ore:5:5: error[E0112]: a `@cimport` cannot be `pub`: export Ore functions that wrap the C ones instead
+cimport_form.ore:6:1: error[E0112]: a `@cimport` is named with `let`: `let b = @cimport(...)`
+cimport_form.ore:7:8: error[E0112]: a `@cimport` has no type: `let c = @cimport(...)`
+cimport_form.ore:8:9: error[E0112]: `@cimport` needs a header: `@cimport("zlib.h")`
+cimport_form.ore:9:18: error[E0112]: `@cimport` takes string literals: the header, then flags (`@cimport("zlib.h", "-DZ_PREFIX")`)
+cimport_form.ore:10:28: error[E0112]: `-O2` is not a flag `@cimport` takes: an include directory (`-Iinclude`), a definition (`-DNAME` or `-DNAME=value`), `-UNAME`, a framework directory (`-Fdir`) or `-std=c11`
+cimport_form.ore:11:18: error[E0112]: the first argument of `@cimport` is the header, such as `"zlib.h"`

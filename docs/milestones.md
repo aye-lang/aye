@@ -309,3 +309,38 @@ what remained.
   between function types, and `ore build --cflags` for
   `-fsanitize=thread` (the golden test skips the ThreadSanitizer run where
   clang's ThreadSanitizer does not work).
+
+## M11: cimport
+
+C headers read with libclang instead of declarations written by hand, as
+`design.md` plans for the second stage of C interop.
+
+- **Language:** `let c = @cimport("header.h", "-Idir", "-DNAME=1")` at the
+  top level makes a module of the header's functions (`pub extern fn`,
+  variadic ones too), structs and unions (`extern struct`/`extern union`
+  with fields, or opaque for bit-fields, packed layout and undefined
+  records), enum constants, typedefs (also those of other headers that
+  the declarations use) and `#define`d numbers and strings (E0112 for
+  the form). The include path has the `pkg-config --cflags` of the
+  module's `@link` libraries, the macOS SDK and Homebrew's headers.
+- **Toolchain:** libclang is loaded with `dlopen` when a header is first
+  read, so the compiler neither links nor needs it otherwise; the
+  generated declarations are cached in `~/.cache/ore/cimport`
+  (`$ORE_CACHE_DIR`) until a file the header includes changes, and a
+  cached header needs no libclang. `ore cimport HEADER` prints the
+  generated source. E0113 for a header that is not found or has errors,
+  E0114 when libclang is missing, each with an `ore explain` text.
+- **Browser:** `browser/js/js.ore` declares its POSIX threads from
+  `pthread.h` (`pthread_attr_t` and `pthread_t` were a 128-byte and a
+  `u64` guess).
+- **Acceptance:** a golden header with every mapped kind and the skipped
+  ones (`tests/cimport/basics.h`, its generated source compared too);
+  programs that call zlib and `math.h`, and start a thread through
+  `pthread.h`; each run again without libclang from the cache; error
+  tests for the form, a missing header, a header with errors and a
+  missing libclang; `ore fmt` on `@cimport`; the browser builds and
+  `cargo test --test browser` passes.
+- **Done as:** generated Ore source parsed as an ordinary module, so the
+  checker, `ore check --json` and the C generator are unchanged; see
+  `docs/decisions.md`, "C headers (M11)", for the mapping, the cache and
+  what happens without libclang.

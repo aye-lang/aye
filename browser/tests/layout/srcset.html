@@ -1,0 +1,13 @@
+<!doctype html>
+<style>
+body { margin: 8px }
+p { margin: 0 0 4px }
+</style>
+<!-- photo.png is 64x48, badge.png 24x24, icon.gif 16x16. -->
+<p>x: <img src="../paint/img/icon.gif" srcset="../paint/img/photo.png 2x, ../paint/img/badge.png">
+   <img srcset="../paint/img/photo.png 3x, ../paint/img/badge.png 0.5x">
+<p>w: <img srcset="../paint/img/photo.png 64w, ../paint/img/badge.png 24w" sizes="(max-width: 400px) 100vw, 32px">
+   <img srcset="../paint/img/badge.png 24w, ../paint/img/photo.png 64w" sizes="20vw">
+<p>picture: <picture><source type="image/avif" srcset="../paint/img/photo.png"><source srcset="../paint/img/badge.png" media="(max-width: 500px)"><source type="image/gif" srcset="../paint/img/icon.gif 0.5x"><img src="../paint/img/photo.png"></picture>
+   <picture><source type="image/jxl" srcset="../paint/img/badge.png"><img src="../paint/img/photo.png" width="10"></picture>
+<p>data: <img srcset="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAHUlEQVR4nGP8z8Dwn7GBAQ6YkDlgAVQuukDD/0YAv8EFCPiGbhIAAAAASUVORK5CYII= 0.25x">

@@ -161,6 +161,9 @@ pub struct FuncInfo {
     // Arrow functions with an expression body (and class fields): the body.
     expr: u32
     arrow: bool
+    // Strict mode code ("use strict", a class): a plain call gets
+    // `this` undefined; in sloppy code it gets the global object.
+    strict: bool
     // Methods, getters and setters cannot be called with `new`.
     method: bool
     // function* and async function: calls run the body as a coroutine.

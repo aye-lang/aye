@@ -1,7 +1,8 @@
 // Property values: a declaration's tokens become `Decl`s of longhand
 // properties with specified `Value`s. Shorthands (`margin`, `padding`,
 // `border`, `border-top`..., `border-width`/`-style`/`-color`, `font`,
-// `background`, `list-style`, `overflow`, `text-decoration`, `inset`,
+// `background`, `mask`, `border-radius` (layers.ore), `list-style`,
+// `overflow`, `text-decoration`, `inset`,
 // `gap`, `flex`, `flex-flow`, `grid-column`, `grid-row`, `grid-area`,
 // `grid-gap`, and the logical `margin-inline`, `margin-block`,
 // `padding-inline`, `padding-block`, `inset-inline`, `inset-block`,
@@ -43,8 +44,8 @@ pub fn addDeclaration(sheet: *mut Sheet, name: []u8, toks: []Token, important: b
     for i, c in name {
         buf[i] = lowerAscii(c)
     }
-    let prop = logicalAlias(buf[0..name.len])
-    if needsComputing(toks) {
+    let prop = unprefixed(logicalAlias(buf[0..name.len]))
+    if needsComputing(toks) || layersNeedComputing(prop, toks) {
         // Without `var()`, an invalid math function drops the declaration
         // now (its validity does not depend on the element).
         let checked = hasVar(toks) || (try validNow(sheet, prop, toks))
@@ -112,8 +113,7 @@ pub fn needsComputing(toks: []Token) bool {
 }
 
 // The physical property of a logical one (for horizontal left-to-right
-// text), `mask-image` for the mask shorthands and prefixed names (only
-// whether there is a mask matters), else `name`.
+// text), else `name`.
 fn logicalAlias(name: []u8) []u8 {
     let pairs = [_][]u8{
         "margin-inline-start", "margin-left", "margin-inline-end", "margin-right",
@@ -133,7 +133,6 @@ fn logicalAlias(name: []u8) []u8 {
         "inline-size", "width", "block-size", "height",
         "min-inline-size", "min-width", "max-inline-size", "max-width",
         "min-block-size", "min-height", "max-block-size", "max-height",
-        "-webkit-mask-image", "mask-image", "mask", "mask-image", "-webkit-mask", "mask-image",
     }
     var k: usize = 0
     while k + 1 < pairs.len {
@@ -240,8 +239,17 @@ fn shorthandLonghands(name: []u8, out: []mut usize) usize {
         first = FLEX_GROW
         n = 3
     } else if text.eql(name, "background") {
-        first = BACKGROUND_COLOR
-        n = 1
+        out[0] = BACKGROUND_COLOR
+        for k in 0..7 {
+            out[k + 1] = BACKGROUND_IMAGE + k
+        }
+        return 8
+    } else if text.eql(name, "mask") {
+        first = MASK_IMAGE
+        n = 4
+    } else if text.eql(name, "border-radius") {
+        first = BORDER_TOP_LEFT_RADIUS
+        n = 4
     } else if text.eql(name, "list-style") {
         first = LIST_STYLE_TYPE
         n = 1
@@ -346,7 +354,13 @@ struct Declarer {
             return self.font(comps)
         }
         if text.eql(name, "background") {
-            return self.background(comps)
+            return layeredShorthand(self, comps, false)
+        }
+        if text.eql(name, "mask") {
+            return layeredShorthand(self, comps, true)
+        }
+        if text.eql(name, "border-radius") {
+            return borderRadius(self, comps)
         }
         if text.eql(name, "list-style") {
             return self.listStyle(comps)
@@ -768,24 +782,6 @@ struct Declarer {
         }
     }
 
-    // `background`: only its color is kept; the other parts (images,
-    // positions, repeat, ...) are accepted and ignored.
-    fn background(self: *mut Self, comps: []Comp) AllocError!void {
-        let props = [1]usize{BACKGROUND_COLOR}
-        if try self.wide(comps, props[..]) {
-            return
-        }
-        var color = Value.Initial
-        for c in comps {
-            if colorValue(c) |v| {
-                color = v
-            } else if unknownColorFunction(c) {
-                return
-            }
-        }
-        try self.add(BACKGROUND_COLOR, color)
-    }
-
     // `list-style`: only the type is kept (`inside`/`outside` and images
     // are accepted and ignored).
     fn listStyle(self: *mut Self, comps: []Comp) AllocError!void {
@@ -907,6 +903,9 @@ pub fn parseValue(sheet: *mut Sheet, prop: usize, comps: []Comp) AllocError!?Val
         }
         return rawValue(sheet, comps)
     }
+    if p.kind == PKind.Layers {
+        return layersValue(sheet, prop, comps)
+    }
     if p.kind == PKind.Paint {
         let t = comps[0].toks[0]
         if t.kind == Tok.Url || (t.kind == Tok.Function && text.eqlIgnoreCase(t.text, "url")) {
@@ -1000,7 +999,7 @@ fn single(p: Property, c: Comp) ?Value {
             }
             return null
         }
-        .Raw => {
+        .Raw, .Layers => {
             return null
         }
         .Paint => {

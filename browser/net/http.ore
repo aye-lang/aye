@@ -370,7 +370,7 @@ fn acceptOf(kind: Kind) []u8 {
     return match kind {
         .Document => "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
         .Style => "text/css,*/*;q=0.1"
-        .Image => "image/png,image/gif,image/jpeg,image/*;q=0.8,*/*;q=0.5"
+        .Image => "image/webp,image/png,image/gif,image/jpeg,image/svg+xml,image/*;q=0.8,*/*;q=0.5"
         .Script, .Other => "*/*"
     }
 }

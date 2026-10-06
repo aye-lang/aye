@@ -13,6 +13,7 @@ const USAGE: &str = "usage (<path> is a .ore file, or a directory: a module of a
   (--cflags: more flags for clang, such as \"-fsanitize=thread\")
   ore fmt [--check] <path>      (<path>: a .ore file, or a directory searched recursively)
   ore doc --signatures <path>   (<path> may also be `std` or `std.<module>`)
+  ore cimport <header> [-Idir] [-DNAME[=value]] [--link <lib>]   (print the Ore declarations `@cimport` makes of a C header)
   ore explain <code>
   ore spec";
 
@@ -74,6 +75,7 @@ fn main() -> ExitCode {
     match std::env::args().nth(1).as_deref() {
         Some("fmt") => return fmt_cmd(std::env::args().skip(2).collect()),
         Some("doc") => return doc_cmd(std::env::args().skip(2).collect()),
+        Some("cimport") => return cimport_cmd(std::env::args().skip(2).collect()),
         _ => {}
     }
     if std::env::args().nth(1).as_deref() == Some("explain") {
@@ -381,4 +383,55 @@ fn test(args: &Args, root: Root) -> ExitCode {
         println!("\n{passed} passed; {failed} failed");
     }
     if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+}
+
+/// `ore cimport HEADER [flags] [--link lib]`: print the Ore source that
+/// `@cimport` generates for a header (bypassing the cache). The header and
+/// relative `-I` paths are relative to the working directory.
+fn cimport_cmd(args: Vec<String>) -> ExitCode {
+    let mut header = None;
+    let mut flags = Vec::new();
+    let mut links = Vec::new();
+    let mut it = args.into_iter();
+    while let Some(a) = it.next() {
+        if a == "--link" {
+            match it.next() {
+                Some(l) => links.push(l),
+                None => {
+                    eprintln!("ore: `--link` needs a library name\n{USAGE}");
+                    return ExitCode::from(2);
+                }
+            }
+        } else if a.starts_with('-') {
+            if let Err(e) = ore::cimport::check_flag(&a) {
+                eprintln!("ore: {e}");
+                return ExitCode::from(2);
+            }
+            flags.push(a);
+        } else if header.is_none() {
+            header = Some(a);
+        } else {
+            eprintln!("ore: `cimport` takes one header\n{USAGE}");
+            return ExitCode::from(2);
+        }
+    }
+    let Some(header) = header else {
+        eprintln!("ore: `cimport` needs a header, such as `zlib.h`\n{USAGE}");
+        return ExitCode::from(2);
+    };
+    let req = ore::cimport::Request { header, flags, dir: PathBuf::from("."), links };
+    match ore::cimport::generate(&req) {
+        Ok((source, _)) => {
+            print!("{source}");
+            ExitCode::SUCCESS
+        }
+        Err(f) => {
+            let (code, msg) = match f {
+                ore::cimport::Failure::NoLibclang(m) => (codes::E0114, m),
+                ore::cimport::Failure::Header(m) => (codes::E0113, m),
+            };
+            eprintln!("error[{code}]: {msg}");
+            ExitCode::FAILURE
+        }
+    }
 }

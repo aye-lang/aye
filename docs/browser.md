@@ -28,14 +28,21 @@ browser/
   dom/            Node, Document, Pool(Node), queries, mutation; the
                   state of form controls (values, checkedness, focus)
   css/            tokenizer, parser, selectors, cascade, computed style
-  layout/         block, inline (line breaking), lists, tables (simple),
-                  flex (simple), text measurement
+  layout/         block, inline (line breaking, UAX 14, bidi), lists,
+                  tables, flex, grid, floats, positioned and sticky
+                  boxes, transforms, framesets, text measurement
   engine/         Page (load, style, layout), Tab (history, scroll),
                   hit testing, find in page, images, default actions
                   and form submission, page scripts (DOM bindings,
                   prelude, event loop)
-  image/          PNG (zlib inflate), GIF and baseline JPEG decoders
-  paint/          display list, software rasterizer, glyph cache, PNG
+  image/          PNG (zlib inflate), GIF, JPEG (baseline, progressive,
+                  CMYK) and WebP (VP8L, VP8) decoders
+  svg/            SVG parsing and rasterizing (paths, shapes, gradients)
+  font/           FreeType faces, fallback chain, HarfBuzz shaping
+  webfont/        WOFF and WOFF 2 decoding for `@font-face`
+  encoding/       WHATWG encodings: windows-1252 and the CJK ones
+  paint/          display list, software rasterizer, glyph cache,
+                  backgrounds, masks, shadows, PNG
   js/             lexer, parser, interpreter, GC, builtins, host interface
   agent/          snapshot (a11y tree with refs), Markdown, actions,
                   JSON-lines and MCP stdio servers, a window's agents
@@ -67,19 +74,16 @@ All the front ends share `engine/`: the window, `screenshot` and the
 agent sessions load pages through `engine.load` and keep history in a
 `Tab`. What remains:
 
-- **B6 leftovers:** scripts that run while the document is parsed
-  (`document.write`, an inline script seeing only the DOM before it),
-  modules, `getComputedStyle` and layout
-  queries (`getBoundingClientRect` is all zeros), live NodeLists.
-- **B7:** the `screenshot` command.
-- **B8:** `fixed` boxes scroll away with the page (they are placed once
-  in the initial containing block) and `sticky` is `relative`; the
-  observers are stand-ins (below); no `getComputedStyle` or
-  `getBoundingClientRect`; no Shift_JIS, GBK or Big5 (only UTF-8 and
-  windows-1252) and no public suffix list for cookies (a bare top-level
-  name is refused, `co.uk` is not). The list of public sites is in
-  [`docs/browser-sites.md`](browser-sites.md) (20 sites, 2026-10-06:
-  8 ✅, 7 ⚠️, 5 ❌, with the failure causes ranked).
+- **B6 leftovers:** modules, layout queries (`getBoundingClientRect` is
+  all zeros), custom elements and Shadow DOM (in progress),
+  `MutationObserver` reporting (in progress).
+- **B7:** the `screenshot` command (in progress, with iframes).
+- **B8:** iframes (in progress), HTML5 form controls and validation (in
+  progress); rotations and skews other than quarter turns are not drawn;
+  sticky only against the viewport; no public suffix list for cookies (a
+  bare top-level name is refused, `co.uk` is not); no AVIF. The list of
+  public sites is in [`docs/browser-sites.md`](browser-sites.md) (20
+  sites; run of 2026-10-06: 8 ✅, 7 ⚠️, 5 ❌, before the work below).
 
 The compiler gaps the browser met, and which of them M9.5/M9.6 fixed,
 are in `browser/COMPILER_GAPS.md`.
@@ -444,3 +448,74 @@ on (`--no-js` turns it off), `dump` with `--js`.
   - *JavaScript:* generators and async functions, Symbol and the
     iterator protocol, `Function` and `eval` of strings, the web APIs
     above, a processor-time budget per task (B6, above).
+  - *JS and DOM APIs for real sites:* the init of a `for` loop is
+    resolved (jQuery 3, minified bundles); Annex B block functions;
+    sloppy-mode `this`; `\u` escapes in identifiers; `Proxy`; Array
+    methods on array-likes. `createElementNS`, `DocumentFragment`,
+    `CustomEvent`/`initCustomEvent`, the Event constructors, interface
+    globals per tag that work with `instanceof` and prototype patching;
+    select `add`/`remove`/`options`/`selectedIndex`, `:scope`,
+    `performance` timing/navigation/mark/measure, live collections,
+    `document.write` while parsing, TreeWalker/NodeIterator, Range,
+    DOMParser, Blob/File/FileReader, FormData, MessageChannel,
+    constructable style sheets, `a` URL parts, Navigator;
+    `getComputedStyle` styles only the element and its ancestors. The
+    checklist's scripted sites (Python docs, rustdoc, CNN Lite,
+    react.dev, YouTube, go.dev, BBC, Google, ZOL) log no errors.
+  - *Layout of current CSS:* `transform` and `transform-origin` (the
+    translation moves the box after layout; scales, flips and quarter
+    turns are drawn and hit-tested); a transformed box is a layer and
+    the containing block of its absolute and fixed descendants.
+    `position: fixed` boxes stay in the viewport while scrolling and
+    `sticky` ones stick within their parent (`layout/scroll.ore`).
+    `::before`/`::after` with `content` (strings, `attr()`, quotes);
+    `:is()`/`:where()`; logical properties; `aspect-ratio`;
+    `object-fit`; `clip: rect()` and `clip-path: inset()`. Percentage
+    table columns and `<center>` around auto-width tables; grid gaps
+    under spanning items; flex items that clip their overflow have no
+    automatic minimum.
+  - *SVG* (`svg/`): inline `<svg>` and SVG images (`<img>`, CSS
+    images, `data:` URLs) become pictures: `path` (all commands, arcs as
+    cubics), `rect` (rounded), `circle`, `ellipse`, `line`, `polyline`,
+    `polygon`, `g`, nested `svg`, `use`/`symbol`, `transform`, `viewBox`
+    and `preserveAspectRatio`. Presentation attributes are hints in the
+    cascade, with the properties `fill`, `stroke`, their opacities,
+    `stroke-width`, `fill-rule`, caps, joins, dashes, `opacity`,
+    `stop-color`; `currentColor` works. Linear and radial gradients are
+    paint servers; group `opacity` is drawn into its own layer;
+    `clip-path` from a `clipPath`. Curves are flattened, strokes become
+    polygons, fills use antialiased scanlines (nonzero and even-odd).
+  - *Backgrounds:* `background-image` (images and linear, radial,
+    conic and repeating gradients), several layers, `-position`,
+    `-size`, `-repeat` (including space and round), `-origin`, `-clip`,
+    a basic `fixed` attachment, the `background` shorthand; images in
+    style sheets are fetched with the page's and resolved against their
+    sheet. `mask-image` (and `mask`, `-webkit-` names), `border-radius`,
+    blurred outer and inset `box-shadow`.
+  - *Images:* progressive JPEG, Adobe CMYK and YCCK, EXIF orientation;
+    WebP lossless (VP8L) and lossy (VP8, bit-exact with libwebp) with
+    VP8X, ALPH alpha and the first frame of an animation; formats are
+    sniffed. `picture` sources, `srcset` (x and w) and `sizes` pick an
+    image's URL; image requests accept WebP.
+  - *Fonts and text* (`font/`, `webfont/`, `css/fontface.ore`,
+    `layout/bidi.ore`, `layout/linebreak.ore`): a character the font
+    lacks comes from a chain of system fallback fonts (PingFang,
+    Hiragino, Apple SD Gothic Neo, Arial Unicode, Apple Symbols, STIX,
+    Apple Color Emoji; Noto and DejaVu on Linux). Text is shaped by
+    HarfBuzz when it is installed (complex scripts, emoji sequences,
+    ligatures), and layout measures with the same shaping. East Asian
+    line breaks follow basic UAX 14; bidi basics (`direction`, `dir`,
+    levels, lines reordered). `@font-face` in TTF, OTF, WOFF and WOFF 2
+    (Brotli), matched by family, weight, style and unicode-range, icon
+    font ligatures included.
+  - *Encodings and frames:* Shift_JIS, EUC-JP, ISO-2022-JP, GBK,
+    gb18030, Big5 and EUC-KR (WHATWG decoders and encoders, tables
+    generated from the index files) in the meta prescan and
+    Content-Type; forms submit in the page's encoding or
+    `accept-charset`. `<frameset>`/`<frame>`: the frameset replaces the
+    body, rows and columns (px, %, *) are laid out, each frame's
+    document is loaded, laid out, painted and scrolled in its
+    rectangle; `--md` puts each frame under `## Frame: URL`, the
+    snapshot has `frame` nodes.
+  - *Agent Markdown:* invisible list items are dropped, layout tables
+    are read row by row, `pre` keeps its line breaks.

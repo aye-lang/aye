@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<title>getComputedStyle</title>
+<style>
+body { font-size: 20px }
+.box { color: rgb(0, 128, 0); margin: 1em 2px; display: flex; float: left }
+.box p { color: inherit; font-weight: bold }
+#hidden { display: none }
+</style>
+<div class="box" id="box" style="padding-left: 3px"><p id="p">text</p></div>
+<div id="hidden"></div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const box = document.getElementById('box');
+const cs = getComputedStyle(box);
+log(cs.color, cs.display, cs.marginTop, cs.marginLeft, cs.paddingLeft, cs.getPropertyValue('margin-top'), cs.getPropertyValue('MARGIN-BOTTOM'), cs.cssFloat, cs.float);
+const p = window.getComputedStyle(document.getElementById('p'));
+log(p.color, p.fontWeight, p.fontSize, p.display, p.getPropertyValue('font-size'), p.getPropertyValue('--nope') === '');
+log(getComputedStyle(document.getElementById('hidden')).display, cs instanceof CSSStyleDeclaration, typeof cs.length, cs.length > 20, typeof cs.item(0), cs.getPropertyPriority('color'));
+// It follows changes to the document.
+box.style.color = 'red';
+document.getElementById('hidden').className = 'box';
+log(getComputedStyle(box).color, cs.color, getComputedStyle(document.getElementById('hidden')).display);
+// A node out of the document has no computed style.
+const loose = document.createElement('div');
+log(JSON.stringify(getComputedStyle(loose).display), getComputedStyle(loose).length, getComputedStyle(box, '::before').color);
+let ro = '';
+try { cs.setProperty('color', 'blue'); } catch (e) { ro = e.name; }
+let notEl = '';
+try { getComputedStyle(document); } catch (e) { notEl = e.name; }
+log(ro, notEl);
+// Changes to attributes no selector looks at, to style sheets, to classes.
+const img = document.createElement('img');
+box.appendChild(img);
+img.setAttribute('src', 'a.png');
+log(getComputedStyle(img).display, getComputedStyle(img).color);
+const st = document.createElement('style');
+st.textContent = '#hidden { color: rgb(1, 2, 3) }';
+document.head.appendChild(st);
+log(getComputedStyle(document.getElementById('hidden')).color);
+st.textContent = '#hidden { color: rgb(4, 5, 6) }';
+log(getComputedStyle(document.getElementById('hidden')).color);
+const extra = document.createElement('style');
+extra.textContent = '.late img { display: block }';
+document.head.appendChild(extra);
+box.classList.add('late');
+log(getComputedStyle(img).display);
+// a: the parts of its URL; navigator.
+const a = document.createElement('a');
+a.href = 'https://user:pw@example.com:8080/p/q?x=1#frag';
+log(a.protocol, a.username, a.host, a.hostname, a.port, a.pathname, a.search, a.hash, a.origin, String(a) === a.href);
+a.pathname = '/other';
+a.hash = 'h';
+log(a.getAttribute('href'), document.createElement('a').protocol === '');
+log(navigator instanceof Navigator, navigator.userAgent.includes('anyknown'), navigator.appName, navigator.languages.join(','), navigator.javaEnabled(), navigator.hardwareConcurrency > 0);
+</script>

@@ -1,0 +1,78 @@
+// Every kind of declaration `@cimport` makes of `basics.h`: constants
+// from `#define` and enums, structs, unions (named, nested, anonymous
+// members), function pointers, variadic functions, structs by value and
+// by pointer, and opaque types.
+
+let s = @cimport("basics.h")
+
+fn ascending(a: ?[*]u8, b: ?[*]u8) c_int {
+    let x = @ptrCast(?[*]c_int, a) orelse return 0
+    let y = @ptrCast(?[*]c_int, b) orelse return 0
+    return x[0] - y[0]
+}
+
+var finished: c_int = 0
+
+fn done(code: c_int) {
+    finished = code
+}
+
+pub fn main() {
+    @println(s.SHAPES_VERSION)
+    @println(s.SHAPES_NAME)
+    @println(s.SHAPES_SCALE * 2.0)
+    @println(s.SHAPES_HALF)
+    @println(s.SHAPES_MASK)
+    @println(s.SHAPES_BIG)
+    @println(s.SHAPES_NEG)
+    @println(s.SHAPES_LETTER)
+    @println(s.GREEN + s.BLUE)
+    let size: s.size_class = s.SMALL
+    @println(size)
+
+    var r = @zeroed(s.rect)
+    r.corners[1] = s.point { x: 3, y: 4 }
+    r.color = s.BLUE
+    r.label = "unit".ptr
+    r.tag = s.rect_tag { id: 7 }
+    r.anon4.ratio = 0.25
+    r.fn_ = 1
+    r.match_ = 1.5
+    r.visible = true
+    r.done = done
+    @println(r.corners[1].x + r.corners[1].y)
+    @println(r.tag.id)
+    @println(r.anon4.ratio)
+    @println(@sizeOf(s.rect))
+    if r.done |f| {
+        f(9)
+    }
+    @println(finished)
+
+    var n = @zeroed(s.number)
+    n.d = 1.0
+    @println(n.bytes[7])
+
+    let q = s.div(17, 5)
+    @println(q.quot)
+    @println(q.rem)
+    @println(s.abs(-4))
+    @println(s.hypot(3.0, 4.0))
+    @println(s.strlen("four".ptr))
+
+    var xs = [5]c_int{5, 3, 9, 1, 7}
+    s.qsort(@ptrCast(?[*]u8, xs[..].ptr), xs.len, @sizeOf(c_int), ascending)
+    @println(xs[0])
+    @println(xs[4])
+
+    var buf = @zeroed([32]u8)
+    let len = s.snprintf(buf[..].ptr, buf.len, "%s %d %.2f".ptr, r.label, r.tag.id, r.match_)
+    @println(buf[0..len as usize])
+
+    let t: s.time_t = 86400 * 366
+    var tm = @zeroed(s.tm)
+    if s.gmtime_r(&t, &mut tm) |p| {
+        @println(p.tm_year + 1900)
+        @println(tm.tm_mday)
+    }
+}

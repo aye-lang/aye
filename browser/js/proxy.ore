@@ -1,0 +1,352 @@
+// js/proxy: Proxy objects. `new Proxy(target, handler)` is an object of
+// class Proxy whose data holds the target and the handler. Every
+// property operation on it (get, set, has, deleteProperty, ownKeys,
+// getOwnPropertyDescriptor, defineProperty, getPrototypeOf,
+// setPrototypeOf) and a call or `new` (apply, construct) goes to the
+// handler's trap of that name, or to the target when the handler has
+// none. Its `proto` field is the target's at creation, so `instanceof`
+// sees through it. The checks of the results against the target's
+// invariants are not made. Where the engine cannot throw (a property
+// test without an exception path), a proxy is its target.
+
+import std.list.List
+
+fn installProxy(it: *mut Interp) JsError!void {
+    let c = try it.newNative("Proxy", 2, proxyCtor)
+    try it.defineValue(it.global, "Proxy", objVal(c))
+    try it.defineNative(c, "revocable", 2, proxyRevocable)
+    it.proxy_revoke = try it.newNative("", 0, proxyRevoke)
+    try it.addRoot(objVal(it.proxy_revoke))
+}
+
+fn proxyCtor(it: *mut Interp, a: Args) JsError!Value {
+    if a.new_target == NONE {
+        return it.typeError("Constructor Proxy requires 'new'")
+    }
+    return newProxy(it, it.arg(a, 0), it.arg(a, 1))
+}
+
+fn newProxy(it: *mut Interp, target: Value, handler: Value) JsError!Value {
+    if !isObject(target) || !isObject(handler) {
+        return it.typeError("Cannot create proxy with a non-object as target or handler")
+    }
+    let t = objectOf(target)
+    return objVal(try it.newObjectOf(Class.Proxy, it.heap.obj(t).proto, ObjData.Proxy { target: t, handler: objectOf(handler) }))
+}
+
+// Proxy.revocable(target, handler): { proxy, revoke }.
+fn proxyRevocable(it: *mut Interp, a: Args) JsError!Value {
+    let p = try newProxy(it, it.arg(a, 0), it.arg(a, 1))
+    try it.push(p)
+    let r = try it.newObject(it.object_proto)
+    try it.push(objVal(r))
+    // revoke: proxyRevoke bound to the proxy.
+    let f = try it.newObjectOf(Class.Function, it.function_proto, ObjData.Bound { target: it.proxy_revoke, this_v: p })
+    try it.defineOwn(r, try it.intern("proxy"), p, F_DEFAULT)
+    try it.defineOwn(r, try it.intern("revoke"), objVal(f), F_DEFAULT)
+    it.pop()
+    it.pop()
+    return objVal(r)
+}
+
+fn proxyRevoke(it: *mut Interp, a: Args) JsError!Value {
+    let o = objectOf(a.this)
+    if o != NONE {
+        match it.heap.obj(o).data {
+            .Proxy { target, .. } => {
+                it.heap.obj(o).data = ObjData.Proxy { target: target, handler: NONE }
+            }
+            _ => {}
+        }
+    }
+    return Value.Undefined
+}
+
+/// The target of proxy o.
+pub fn proxyTarget(it: *Interp, o: u32) u32 {
+    return match it.heap.obj(o).data {
+        .Proxy { target, .. } => target
+        _ => NONE
+    }
+}
+
+/// o, or the innermost target when o is a proxy.
+pub fn unwrapProxy(it: *Interp, o: u32) u32 {
+    var cur = o
+    while cur != NONE && it.heap.obj(cur).class == Class.Proxy {
+        cur = proxyTarget(it, cur)
+    }
+    return cur
+}
+
+/// Is v an array, or a proxy of one (Array.isArray)?
+pub fn isArrayValue(it: *Interp, v: Value) bool {
+    let o = objectOf(v)
+    if o == NONE {
+        return false
+    }
+    let u = unwrapProxy(it, o)
+    return u != NONE && it.heap.obj(u).class == Class.Array
+}
+
+// The trap `name` of proxy o's handler, or Undefined when it has none.
+fn trap(it: *mut Interp, o: u32, name: []u8) JsError!Value {
+    let handler = match it.heap.obj(o).data {
+        .Proxy { handler, .. } => handler
+        _ => NONE
+    }
+    if handler == NONE {
+        try it.typeErrorAbout("Cannot perform '", name, "' on a proxy that has been revoked")
+    }
+    let f = try it.getProp(objVal(handler), try it.intern(name))
+    if isNullish(f) {
+        return Value.Undefined
+    }
+    if !it.isCallable(f) {
+        try it.typeErrorAbout("proxy trap '", name, "' is not a function")
+    }
+    return f
+}
+
+fn handlerOf(it: *Interp, o: u32) Value {
+    return match it.heap.obj(o).data {
+        .Proxy { handler, .. } => objVal(handler)
+        _ => Value.Undefined
+    }
+}
+
+// A property key as a value: a string, or the symbol.
+fn keyValue(it: *mut Interp, key: u32) JsError!Value {
+    if isSymbolAtom(it, key) {
+        return symbolOfAtom(it, key)
+    }
+    return it.atomValue(key)
+}
+
+// Starts a call of trap f of proxy o: pushes f and the handler (its
+// `this`); the caller pushes the arguments and calls `callTrap`.
+fn startTrap(it: *mut Interp, o: u32, f: Value) JsError!usize {
+    let base = it.stack.len()
+    try it.push(f)
+    try it.push(handlerOf(it, o))
+    return base
+}
+
+fn callTrap(it: *mut Interp, base: usize) JsError!Value {
+    return it.callAt(base, it.stack.len() - base - 2)
+}
+
+fn proxyGet(it: *mut Interp, o: u32, key: u32, receiver: Value) JsError!Value {
+    let f = try trap(it, o, "get")
+    let t = proxyTarget(it, o)
+    if isUndef(f) {
+        return it.getFrom(t, key, receiver)
+    }
+    let base = try startTrap(it, o, f)
+    try it.push(objVal(t))
+    try it.push(try keyValue(it, key))
+    try it.push(receiver)
+    return callTrap(it, base)
+}
+
+fn proxySet(it: *mut Interp, o: u32, key: u32, value: Value, receiver: Value) JsError!void {
+    let f = try trap(it, o, "set")
+    let t = proxyTarget(it, o)
+    if isUndef(f) {
+        return it.setOn(t, key, value, receiver)
+    }
+    let base = try startTrap(it, o, f)
+    try it.push(objVal(t))
+    try it.push(try keyValue(it, key))
+    try it.push(value)
+    try it.push(receiver)
+    try callTrap(it, base)
+}
+
+fn proxyHas(it: *mut Interp, o: u32, key: u32) JsError!bool {
+    let f = try trap(it, o, "has")
+    let t = proxyTarget(it, o)
+    if isUndef(f) {
+        return it.hasPropertyJs(t, key)
+    }
+    let base = try startTrap(it, o, f)
+    try it.push(objVal(t))
+    try it.push(try keyValue(it, key))
+    return it.toBoolean(try callTrap(it, base))
+}
+
+fn proxyDelete(it: *mut Interp, o: u32, key: u32) JsError!bool {
+    let f = try trap(it, o, "deleteProperty")
+    let t = proxyTarget(it, o)
+    if isUndef(f) {
+        return it.deleteProp(t, key)
+    }
+    let base = try startTrap(it, o, f)
+    try it.push(objVal(t))
+    try it.push(try keyValue(it, key))
+    return it.toBoolean(try callTrap(it, base))
+}
+
+/// The descriptor of own property `key` of proxy o (Undefined when it
+/// has none): the getOwnPropertyDescriptor trap, else the target's.
+fn proxyOwnDescriptor(it: *mut Interp, o: u32, key: u32) JsError!Value {
+    let f = try trap(it, o, "getOwnPropertyDescriptor")
+    let t = proxyTarget(it, o)
+    if isUndef(f) {
+        return ownDescriptor(it, t, key)
+    }
+    let base = try startTrap(it, o, f)
+    try it.push(objVal(t))
+    try it.push(try keyValue(it, key))
+    return callTrap(it, base)
+}
+
+fn proxyHasOwn(it: *mut Interp, o: u32, key: u32) JsError!bool {
+    return !isUndef(try proxyOwnDescriptor(it, o, key))
+}
+
+fn proxyDefine(it: *mut Interp, o: u32, key: u32, desc: Value) JsError!void {
+    let f = try trap(it, o, "defineProperty")
+    let t = proxyTarget(it, o)
+    if isUndef(f) {
+        return definePropertyFrom(it, t, key, desc)
+    }
+    let base = try startTrap(it, o, f)
+    try it.push(objVal(t))
+    try it.push(try keyValue(it, key))
+    try it.push(desc)
+    if !it.toBoolean(try callTrap(it, base)) {
+        try it.typeErrorAbout("'defineProperty' on proxy: trap returned falsish for property '", it.heap.atoms.name(key), "'")
+    }
+}
+
+/// Object.getPrototypeOf of object o (NONE for null).
+pub fn prototypeOf(it: *mut Interp, o: u32) JsError!u32 {
+    if it.heap.obj(o).class != Class.Proxy {
+        return it.heap.obj(o).proto
+    }
+    let f = try trap(it, o, "getPrototypeOf")
+    let t = proxyTarget(it, o)
+    if isUndef(f) {
+        return prototypeOf(it, t)
+    }
+    let base = try startTrap(it, o, f)
+    try it.push(objVal(t))
+    return objectOf(try callTrap(it, base))
+}
+
+/// Object.setPrototypeOf for proxy o.
+fn proxySetPrototype(it: *mut Interp, o: u32, proto: Value) JsError!void {
+    let f = try trap(it, o, "setPrototypeOf")
+    let t = proxyTarget(it, o)
+    if isUndef(f) {
+        if it.heap.obj(t).class == Class.Proxy {
+            return proxySetPrototype(it, t, proto)
+        }
+        it.heap.obj(t).proto = objectOf(proto)
+        return
+    }
+    let base = try startTrap(it, o, f)
+    try it.push(objVal(t))
+    try it.push(proto)
+    try callTrap(it, base)
+}
+
+/// The own keys of proxy o: the string keys (`symbols` false) or the
+/// symbol keys; only the enumerable ones unless `all`.
+fn proxyOwnKeys(it: *mut Interp, o: u32, out: *mut List(u32), all: bool, symbols: bool) JsError!void {
+    let f = try trap(it, o, "ownKeys")
+    let t = proxyTarget(it, o)
+    if isUndef(f) {
+        if symbols {
+            return it.ownSymbolKeys(t, out)
+        }
+        return it.ownKeys(t, out, all)
+    }
+    let mark = it.stack.len()
+    defer it.truncate(mark)
+    let base = try startTrap(it, o, f)
+    try it.push(objVal(t))
+    let r = try callTrap(it, base)
+    if !isObject(r) {
+        try it.typeError("CreateListFromArrayLike called on non-object")
+    }
+    try it.push(r)
+    let n = try it.toNumber(try it.getProp(r, A_LENGTH))
+    var i: f64 = 0.0
+    while i < n {
+        let kv = try it.getIndex(r, numVal(i))
+        i += 1.0
+        let isSym = isSymbol(it, kv)
+        if isSym != symbols {
+            continue
+        }
+        let key = try it.toKey(kv)
+        if !all {
+            let d = try proxyOwnDescriptor(it, o, key)
+            if isUndef(d) {
+                continue
+            }
+            try it.push(d)
+            let e = try it.getProp(d, A_ENUMERABLE)
+            it.pop()
+            if !it.toBoolean(e) {
+                continue
+            }
+        }
+        try out.append(key)
+    }
+}
+
+/// Calls proxy o (stack[base]) with `this` stack[base + 1] and the argc
+/// values after it; pops them.
+fn proxyCall(it: *mut Interp, o: u32, base: usize, argc: usize) JsError!Value {
+    defer it.truncate(base)
+    let f = try trap(it, o, "apply")
+    let t = proxyTarget(it, o)
+    if isUndef(f) {
+        it.setSlot(base, objVal(t))
+        return it.callAt(base, argc)
+    }
+    let args = try argsArray(it, base, argc)
+    let nb = try startTrap(it, o, f)
+    try it.push(objVal(t))
+    try it.push(it.slot(base + 1))
+    try it.push(args)
+    return callTrap(it, nb)
+}
+
+/// `new` proxy o (stack[base]) with the argc values after stack[base + 1].
+fn proxyConstruct(it: *mut Interp, o: u32, base: usize, argc: usize, newTarget: u32) JsError!Value {
+    defer it.truncate(base)
+    let f = try trap(it, o, "construct")
+    let t = proxyTarget(it, o)
+    var nt = newTarget
+    if nt == o {
+        nt = t
+    }
+    if isUndef(f) {
+        it.setSlot(base, objVal(t))
+        return it.constructAt(base, argc, nt)
+    }
+    let args = try argsArray(it, base, argc)
+    let nb = try startTrap(it, o, f)
+    try it.push(objVal(t))
+    try it.push(args)
+    try it.push(objVal(newTarget))
+    let r = try callTrap(it, nb)
+    if !isObject(r) {
+        return it.typeError("proxy [[Construct]] must return an object")
+    }
+    return r
+}
+
+// The arguments stack[base + 2..] as an array (pushed, so rooted).
+fn argsArray(it: *mut Interp, base: usize, argc: usize) JsError!Value {
+    let arr = try it.newArray(0)
+    try it.push(objVal(arr))
+    for i in 0..argc {
+        try it.heap.pushElem(arr, it.slot(base + 2 + i))
+    }
+    return objVal(arr)
+}
