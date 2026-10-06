@@ -183,10 +183,11 @@ let SERIF_BOLD_ITALIC = "/System/Library/Fonts/Supplemental/Times New Roman Bold
 // The fallback faces, in the order they are tried: every file of the
 // list that exists (the first face of a collection). macOS first (CJK:
 // PingFang, Hiragino Sans, STHeiti, Hiragino Sans GB, Apple SD Gothic
-// Neo; then Arial Unicode, Apple Symbols, the Apple Color Emoji bitmaps),
+// Neo; then Arial Unicode, Apple Symbols, STIX Two Math, the Apple Color
+// Emoji bitmaps),
 // then the usual paths of Linux distributions (Noto CJK, DejaVu, Noto
 // symbols and scripts, Noto Color Emoji), without fontconfig.
-let FALLBACKS = "/System/Library/PrivateFrameworks/FontServices.framework/Versions/A/Resources/Reserved/PingFangUI.ttc|/System/Library/Fonts/PingFang.ttc|/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc|/System/Library/Fonts/STHeiti Light.ttc|/System/Library/Fonts/Hiragino Sans GB.ttc|/System/Library/Fonts/AppleSDGothicNeo.ttc|/System/Library/Fonts/Supplemental/Arial Unicode.ttf|/Library/Fonts/Arial Unicode.ttf|/System/Library/Fonts/Apple Symbols.ttf|/System/Library/Fonts/Apple Color Emoji.ttc|/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc|/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc|/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc|/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf|/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc|/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf|/usr/share/fonts/TTF/DejaVuSans.ttf|/usr/share/fonts/dejavu/DejaVuSans.ttf|/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf|/usr/share/fonts/truetype/noto/NotoSansSymbols-Regular.ttf|/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf|/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf|/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf|/usr/share/fonts/truetype/freefont/FreeSans.ttf|/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf|/usr/share/fonts/noto/NotoColorEmoji.ttf"
+let FALLBACKS = "/System/Library/PrivateFrameworks/FontServices.framework/Versions/A/Resources/Reserved/PingFangUI.ttc|/System/Library/Fonts/PingFang.ttc|/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc|/System/Library/Fonts/STHeiti Light.ttc|/System/Library/Fonts/Hiragino Sans GB.ttc|/System/Library/Fonts/AppleSDGothicNeo.ttc|/System/Library/Fonts/Supplemental/Arial Unicode.ttf|/Library/Fonts/Arial Unicode.ttf|/System/Library/Fonts/Apple Symbols.ttf|/System/Library/Fonts/Supplemental/STIXTwoMath.otf|/System/Library/Fonts/Apple Color Emoji.ttc|/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc|/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc|/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc|/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf|/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc|/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf|/usr/share/fonts/TTF/DejaVuSans.ttf|/usr/share/fonts/dejavu/DejaVuSans.ttf|/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf|/usr/share/fonts/truetype/noto/NotoSansSymbols-Regular.ttf|/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf|/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf|/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf|/usr/share/fonts/truetype/freefont/FreeSans.ttf|/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf|/usr/share/fonts/noto/NotoColorEmoji.ttf"
 
 // No face (in `covered`, `Run.face`).
 let NO_FACE: u32 = 0xFFFFFFFF
@@ -455,7 +456,10 @@ pub struct System {
         while i < s.len {
             let d = text.decode(s[i..])
             var face = cur
-            if cur == NO_FACE || !joinsPrevious(d.code) || (FT_Get_Char_Index(self.faces.items()[cur as usize].ft, d.code as u64) == 0 && !ignorable(d.code)) {
+            if i + d.len < s.len && text.decode(s[i + d.len..]).code == 0xFE0F {
+                // Emoji presentation: from a color face when there is one.
+                face = try self.pickColor(span, slot, d.code)
+            } else if cur == NO_FACE || !joinsPrevious(d.code) || (FT_Get_Char_Index(self.faces.items()[cur as usize].ft, d.code as u64) == 0 && !ignorable(d.code)) {
                 face = try self.pick(span, slot, d.code)
             }
             if face != cur {
@@ -555,9 +559,7 @@ pub struct System {
         if !face.hb_tried {
             face.hb_tried = true
             if @hasLink("harfbuzz") {
-                if !face.color {
-                    face.hb = hbFontOf(face.ft)
-                }
+                face.hb = hbFontOf(face.ft)
             }
         }
         return face.hb
@@ -598,6 +600,19 @@ pub struct System {
             return slot
         }
         return found
+    }
+
+    // The face for `code` followed by the emoji variation selector: the
+    // first color fallback face with a glyph for it, else `pick`'s.
+    fn pickColor(self: *mut Self, span: Span, slot: u32, code: u32) AllocError!u32 {
+        try self.loadFallbacks()
+        for fi in self.fallbacks.items() {
+            let face = self.faces.items()[fi]
+            if face.color && FT_Get_Char_Index(face.ft, code as u64) != 0 {
+                return fi as u32
+            }
+        }
+        return self.pick(span, slot, code)
     }
 
     fn loadFallbacks(self: *mut Self) AllocError!void {
