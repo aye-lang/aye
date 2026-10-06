@@ -297,3 +297,89 @@ Suggestion: `c_long`/`c_ulong` aliases that follow the target.
   be fetched again after anything that may append a box (only the tree
   builder does), so layout code re-reads `t.bx(i)` after every call
   instead of keeping a pointer across calls.
+
+## B7
+
+### 19. Error values have no `==`
+
+```ore
+error E { A, B }
+
+fn f() E!i64 {
+    return E.A
+}
+
+pub fn main() {
+    let v = f() catch |e| {
+        if e == E.A {
+            return
+        }
+        return
+    }
+}
+```
+
+`error[E0025]: operator `==` cannot be applied to `E``. Needed: "is this
+fetch error OutOfMemory (pass it on) or something to report?" in
+`agent/session.ore`. Workaround: a helper with a `match` and `_`
+(`fetchOutOfMemory`). Enums without payloads have `==`; error values
+could too.
+
+### 20. `orelse` does not chain through optionals
+
+```ore
+fn a() ?[]u8 {
+    return null
+}
+
+pub fn main() {
+    let s = a() orelse a() orelse "none"
+    @println(s)
+}
+```
+
+`error[E0023]: mismatched types: expected `[]u8`, found `?[]u8``: the
+left `orelse` wants a `[]u8` on its right. "The alt, else the title, else
+nothing" for images in `agent/markdown.ore` is written `x orelse (y
+orelse "")`. Right associativity (or `?T orelse ?T` giving `?T`) would
+read naturally.
+
+### 21. No line-by-line reading of stdin
+
+`std.fs` reads a whole file or stream (`readAll`), which never returns
+for an interactive stdin, but the agent servers answer one JSON line at
+a time. Workaround: `LineReader` in `agent/server.ore` over `extern fn
+read(fd: i32, ...)` (the same signature std's `fs.ore` uses) with a
+`Builder` of pending bytes. A `File.read(buf) ReadError!usize` and a
+buffered `readLine` in std would replace it.
+
+### 22. The root module cannot be imported
+
+`browser/agent` needs what `browser/main.ore` and `browser/style.ore`
+already do (a file path or URL to a `Url`, a response to a document, the
+author style sheets of a document), but those live in the root module,
+and a module cannot import the root. They are copied into
+`agent/session.ore` (`relativeUrl`, `parseDocument`, `agentSheets`).
+Moving them into a module (`page/`) is the real fix and is left for the
+unification with the window's tabs.
+
+### 23. Smaller things
+
+- A `match` arm cannot produce an error union for the enclosing
+  `return`: `return match act { .Back => back(s) ... }` is `E0061`
+  (unhandled error) until every arm says `try back(s)`.
+- The actions call each other (`clickNode` follows a label to its
+  control, `press` clicks), so their error set cannot be inferred
+  (`E0069`); they all spell `AllocError!Outcome`. Clear message, as
+  documented.
+- std.math has no infinity, NaN, `isNan` or `isInf`: the JSON number
+  writer tests `v != v || v - v != 0.0`, and an overflowing number gets
+  infinity from `1.7976931348623157e308 * 10.0` at run time.
+- `@zeroed` covers numbers, pointers and arrays of them, not `[64]bool`:
+  the JSON `Writer` keeps its per-level "a value was written" flags in a
+  `u64` bitmask (so at most 64 levels of nesting).
+- `layout.Tree` points to its document, styles and font, so a page that
+  owns all four must stay on the heap (`alloc.create(Page { ... })`) and
+  build the tree after it is there; with no uninitialized fields, the
+  tree is a `?layout.Tree` filled in a second step and read with
+  `p.tree.?`.
