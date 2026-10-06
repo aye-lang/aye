@@ -1,6 +1,7 @@
 // The author style sheet of a document: its `<style>` elements and
 // `<link rel=stylesheet>` sheets (fetched relative to the document's
-// URL), in document order, for the media that match.
+// base URL, with the document's URL as the Referer; the session's cache
+// keeps them), in document order, for the media that match.
 
 import css
 import dom.Document
@@ -13,9 +14,13 @@ import std.text
 import url
 import url.Url
 
-/// Appends to `sheet` the style sheets of `doc` whose media match.
-/// Sheets that cannot be fetched are skipped.
-pub fn authorSheets(alloc: Allocator, doc: *Document, base: *Url, media: css.Media, sheet: *mut css.Sheet) AllocError!void {
+/// Appends to `sheet` the style sheets of `doc`, whose URL is
+/// `address`, whose media match. Sheets that cannot be fetched are
+/// skipped.
+pub fn authorSheets(alloc: Allocator, doc: *Document, address: *Url, media: css.Media, sheet: *mut css.Sheet) AllocError!void {
+    var base = try documentBase(alloc, doc, address)
+    defer base.deinit(alloc)
+    try prefetchSheets(alloc, doc, &base, address, media, sheet)
     var cur: ?NodeId = doc.root
     while cur |h| {
         if doc.isElement(h, "style") && (try mediaOk(doc, h, media, sheet)) {
@@ -25,11 +30,33 @@ pub fn authorSheets(alloc: Allocator, doc: *Document, base: *Url, media: css.Med
             try css.parseSheet(sheet, src.bytes(), media)
         } else if doc.isElement(h, "link") && isStylesheetLink(doc, h) && (try mediaOk(doc, h, media, sheet)) {
             if doc.attr(h, "href") |href| {
-                try linkedSheet(alloc, base, href, media, sheet)
+                try linkedSheet(alloc, &base, address, href, media, sheet)
             }
         }
         cur = doc.following(h, doc.root)
     }
+}
+
+// Fetches the linked sheets concurrently into the session's cache
+// (net.prefetch), before they are taken one by one.
+fn prefetchSheets(alloc: Allocator, doc: *Document, base: *Url, address: *Url, media: css.Media, sheet: *mut css.Sheet) AllocError!void {
+    var hrefs = text.Builder.init(alloc)
+    defer hrefs.deinit()
+    var cur: ?NodeId = doc.root
+    while cur |h| {
+        if doc.isElement(h, "link") && isStylesheetLink(doc, h) && (try mediaOk(doc, h, media, sheet)) {
+            if doc.attr(h, "href") |href| {
+                if url.resolve(alloc, base, text.trim(href)) |target| {
+                    defer target.deinit(alloc)
+                    try hrefs.append(target.withoutFragment())
+                    try hrefs.appendByte('\n')
+                } else |e| {
+                }
+            }
+        }
+        cur = doc.following(h, doc.root)
+    }
+    net.prefetch(alloc, hrefs.bytes(), net.Kind.Style, address.href)
 }
 
 fn mediaOk(doc: *Document, el: NodeId, media: css.Media, sheet: *mut css.Sheet) AllocError!bool {
@@ -56,12 +83,12 @@ fn isStylesheetLink(doc: *Document, el: NodeId) bool {
     return found
 }
 
-fn linkedSheet(alloc: Allocator, base: *Url, href: []u8, media: css.Media, sheet: *mut css.Sheet) AllocError!void {
+fn linkedSheet(alloc: Allocator, base: *Url, address: *Url, href: []u8, media: css.Media, sheet: *mut css.Sheet) AllocError!void {
     let target = url.resolve(alloc, base, text.trim(href)) catch |e| {
         return
     }
     defer target.deinit(alloc)
-    let res = net.fetch(alloc, &target) catch |e| {
+    let res = net.request(alloc, &target, net.Request { kind: net.Kind.Style, referrer: address.href }) catch |e| {
         return
     }
     defer res.deinit(alloc)

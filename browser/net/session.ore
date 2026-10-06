@@ -1,0 +1,173 @@
+// The network session of the process (`start` ... `stop`): one libcurl
+// easy handle reused for every HTTP request, and a share handle that
+// keeps connections, TLS sessions and DNS answers for it and for the
+// concurrent fetches of multi.ore; the cookie jar (cookies.ore), the
+// cache of subresources (cache.ore), and the referrer of the next
+// navigation. Without a session (unit tests), every request has a handle
+// of its own and no cookies or cache.
+
+import std
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+import url
+import url.Url
+
+extern fn time(t: ?[*]i64) i64
+extern struct CurlShare {}
+extern fn curl_share_init() ?*mut CurlShare
+extern fn curl_share_setopt(sh: *mut CurlShare, option: i32, ...) i32
+extern fn curl_share_cleanup(sh: *mut CurlShare) i32
+
+let CURLSHOPT_SHARE: i32 = 1
+let CURL_LOCK_DATA_DNS: i32 = 3
+let CURL_LOCK_DATA_SSL_SESSION: i32 = 4
+let CURL_LOCK_DATA_CONNECT: i32 = 5
+extern fn getenv(name: [*]u8) ?[*]u8
+
+struct Session {
+    alloc: Allocator
+    curl: ?*mut Curl
+    share: ?*mut CurlShare
+    jar: Jar
+    cache: Cache
+    // ANYKNOWN_COOKIE_FILE, or empty.
+    cookie_file: []mut u8
+    // `noteNavigation`: the URL of the next navigation from a page and
+    // the page's URL.
+    nav_target: []mut u8
+    nav_referrer: []mut u8
+}
+
+var session: ?*mut Session = null
+
+/// Starts the session: every fetch until `stop` shares it. Loads the
+/// cookies of the file named by ANYKNOWN_COOKIE_FILE, if there is one.
+pub fn start(alloc: Allocator) AllocError!void {
+    if session != null {
+        return
+    }
+    var file = []mut u8{}
+    if getenv("ANYKNOWN_COOKIE_FILE".ptr) |p| {
+        file = try dup(alloc, p[0..strlen(p)])
+    }
+    let s = alloc.create(Session {
+        alloc: alloc,
+        curl: null,
+        share: curl_share_init(),
+        jar: Jar.init(alloc),
+        cache: Cache.init(alloc),
+        cookie_file: file,
+        nav_target: []mut u8{},
+        nav_referrer: []mut u8{},
+    }) catch |e| {
+        release(alloc, file)
+        return e
+    }
+    session = s
+    if s.share |sh| {
+        curl_share_setopt(sh, CURLSHOPT_SHARE, CURL_LOCK_DATA_CONNECT)
+        curl_share_setopt(sh, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS)
+        curl_share_setopt(sh, CURLSHOPT_SHARE, CURL_LOCK_DATA_SSL_SESSION)
+    }
+    if file.len > 0 && std.fs.exists(file) {
+        let saved = std.fs.readFile(alloc, file) catch |e| {
+            return
+        }
+        defer alloc.free(saved)
+        try s.jar.load(saved, now())
+    }
+}
+
+/// Ends the session: saves the cookies (when there is a cookie file and
+/// they changed) and frees everything.
+pub fn stop() {
+    let s = session orelse return
+    session = null
+    if s.cookie_file.len > 0 && s.jar.changed {
+        saveCookies(s) catch |e| {
+        }
+    }
+    if s.curl |c| {
+        curl_easy_cleanup(c)
+    }
+    if s.share |sh| {
+        curl_share_cleanup(sh)
+    }
+    s.jar.deinit()
+    s.cache.deinit()
+    release(s.alloc, s.cookie_file)
+    release(s.alloc, s.nav_target)
+    release(s.alloc, s.nav_referrer)
+    s.alloc.destroy(s)
+}
+
+fn saveCookies(s: *mut Session) AllocError!void {
+    var b = text.Builder.init(s.alloc)
+    defer b.deinit()
+    try s.jar.save(now(), &mut b)
+    let f = std.fs.create(s.cookie_file) catch |e| {
+        return
+    }
+    defer f.close()
+    f.write(b.bytes()) catch |e| {
+    }
+}
+
+/// Seconds since 1970 (UTC).
+pub fn now() i64 {
+    return time(null)
+}
+
+/// Remembers that the next load of `target` is a navigation from the
+/// page at `referrer` (a link, a form, a script), so that it is sent as
+/// the Referer. The next document fetch forgets it.
+pub fn noteNavigation(target: []u8, referrer: []u8) AllocError!void {
+    let s = session orelse return
+    let t = try dup(s.alloc, withoutHash(target))
+    let r = dup(s.alloc, referrer) catch |e| {
+        release(s.alloc, t)
+        return e
+    }
+    release(s.alloc, s.nav_target)
+    release(s.alloc, s.nav_referrer)
+    s.nav_target = t
+    s.nav_referrer = r
+}
+
+/// Appends to `out` the cookies that a script of the page at `page`
+/// sees (`document.cookie`).
+pub fn scriptCookies(page: *Url, out: *mut text.Builder) AllocError!void {
+    let s = session orelse return
+    return s.jar.header(page, true, now(), out)
+}
+
+/// Stores a cookie set by a script of the page at `page`
+/// (`document.cookie = line`).
+pub fn setScriptCookie(page: *Url, line: []u8) AllocError!void {
+    let s = session orelse return
+    return s.jar.store(page, line, true, now())
+}
+
+fn withoutHash(href: []u8) []u8 {
+    if std.mem.indexOf(href, '#') |i| {
+        return href[..i]
+    }
+    return href
+}
+
+// A copy of `s` (an empty literal when empty: free with `release`).
+fn dup(alloc: Allocator, s: []u8) AllocError![]mut u8 {
+    if s.len == 0 {
+        return []mut u8{}
+    }
+    let out = try alloc.alloc(0 as u8, s.len)
+    std.mem.copy(out, s)
+    return out
+}
+
+fn release(alloc: Allocator, s: []mut u8) {
+    if s.len > 0 {
+        alloc.free(s)
+    }
+}

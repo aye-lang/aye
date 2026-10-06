@@ -1,19 +1,26 @@
-// `http:` and `https:` URLs through libcurl's easy interface: redirects
-// (at most 20, to http and https only), the user agent "anyknown/0.1",
-// every content encoding libcurl knows (gzip, deflate, ...), a connect
-// timeout of 10 s and a total timeout of 30 s. The body is collected by a
-// write callback into a `text.Builder`; the status, the final URL and the
-// `Content-Type` come from `curl_easy_getinfo`. Responses of any status
-// are returned (a 404 page is still a page); curl's own failures become
-// `FetchError`s. A POST sends its body with its `Content-Type`; a
-// redirect after it (301, 302, 303) continues with a GET, as browsers
-// do.
+// `http:` and `https:` URLs through libcurl's easy interface. Redirects
+// are followed here, not by libcurl (at most 20, to http and https only),
+// so that each request of the chain gets its own cookies and each
+// response's `Set-Cookie` headers are stored for its own URL; a POST
+// that is redirected with 301, 302 or 303 continues with a GET, as
+// browsers do (307 and 308 keep it). Every request sends a browser-like
+// User-Agent, an Accept header for its kind, Accept-Language, the
+// Referer (see `referrerOf`) and the cookies of the jar; libcurl decodes
+// every content encoding it knows (gzip, deflate, br...). A connect
+// timeout of 10 s, a total timeout of 30 s, and at most 32 MB for a
+// document or 16 MB for a subresource (else `TooLarge`). Responses of
+// any status are returned (a 404 page is still a page); libcurl's own
+// failures become `FetchError`s. In a session (session.ore) one easy
+// handle serves every request, so connections are kept alive, and
+// subresources come from the cache when they can.
 
 @link("libcurl")
 
+import std
 import std.mem.AllocError
 import std.mem.Allocator
 import std.text
+import url
 import url.Url
 
 extern struct Curl {}
@@ -22,6 +29,7 @@ extern fn curl_easy_init() ?*mut Curl
 extern fn curl_easy_setopt(h: *mut Curl, option: i32, ...) i32
 extern fn curl_easy_perform(h: *mut Curl) i32
 extern fn curl_easy_getinfo(h: *mut Curl, info: i32, ...) i32
+extern fn curl_easy_reset(h: *mut Curl)
 extern fn curl_easy_cleanup(h: *mut Curl)
 extern struct CurlList {}
 extern fn curl_slist_append(list: ?*mut CurlList, s: [*]u8) ?*mut CurlList
@@ -31,31 +39,44 @@ extern fn strlen(s: [*]u8) usize
 let CURLOPT_WRITEDATA: i32 = 10001
 let CURLOPT_POSTFIELDS: i32 = 10015
 let CURLOPT_HTTPHEADER: i32 = 10023
+let CURLOPT_HEADERDATA: i32 = 10029
 let CURLOPT_POSTFIELDSIZE: i32 = 60
 let CURLOPT_URL: i32 = 10002
 let CURLOPT_USERAGENT: i32 = 10018
-let CURLOPT_FOLLOWLOCATION: i32 = 52
-let CURLOPT_MAXREDIRS: i32 = 68
 let CURLOPT_NOSIGNAL: i32 = 99
 let CURLOPT_ACCEPT_ENCODING: i32 = 10102
 let CURLOPT_TIMEOUT_MS: i32 = 155
 let CURLOPT_CONNECTTIMEOUT_MS: i32 = 156
-let CURLOPT_REDIR_PROTOCOLS_STR: i32 = 10319
 let CURLOPT_WRITEFUNCTION: i32 = 20011
+let CURLOPT_HEADERFUNCTION: i32 = 20079
+let CURLOPT_MAXFILESIZE_LARGE: i32 = 30117
+let CURLOPT_SHARE: i32 = 10100
 
-let CURLINFO_EFFECTIVE_URL: i32 = 1048577
 let CURLINFO_RESPONSE_CODE: i32 = 2097154
 let CURLINFO_CONTENT_TYPE: i32 = 1048594
+let CURLINFO_REDIRECT_URL: i32 = 1048607
 
-let USER_AGENT = "anyknown/0.1"
+/// The User-Agent: what sites expect of a desktop browser, and the
+/// browser's own name.
+pub let USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) anyknown/0.1"
+let ACCEPT_LANGUAGE = "en-US,en;q=0.9"
 let MAX_REDIRECTS: i64 = 20
 let CONNECT_TIMEOUT_MS: i64 = 10000
 let TIMEOUT_MS: i64 = 30000
+let MAX_DOCUMENT: usize = 32 << 20
+let MAX_SUBRESOURCE: usize = 16 << 20
 
-// Where the write callback puts the body.
+// Where the callbacks put the response.
 struct Sink {
     body: text.Builder
+    // The most bytes the body may have.
+    limit: usize
     out_of_memory: bool
+    too_large: bool
+    // The values of the `Set-Cookie` headers, one per line.
+    cookies: text.Builder
+    // `Cache-Control: no-store`.
+    no_store: bool
 }
 
 // libcurl calls this with each piece of the body; returning less than
@@ -66,6 +87,10 @@ fn onBody(data: [*]u8, size: usize, n: usize, user: [*]u8) usize {
     if total == 0 {
         return 0
     }
+    if sink.body.len() + total > sink.limit {
+        sink.too_large = true
+        return 0
+    }
     sink.body.append(data[0..total]) catch |e| {
         sink.out_of_memory = true
         return 0
@@ -73,101 +98,314 @@ fn onBody(data: [*]u8, size: usize, n: usize, user: [*]u8) usize {
     return total
 }
 
-fn fetchHttp(alloc: Allocator, target: *Url, post: ?*Body) FetchError!Response {
+// libcurl calls this with each header line (the status line first).
+fn onHeader(data: [*]u8, size: usize, n: usize, user: [*]u8) usize {
+    let sink = @ptrCast(*mut Sink, user)
+    let total = size * n
+    let line = text.trim(data[0..total])
+    if text.startsWith(line, "HTTP/") {
+        // A new response (after a 100 Continue): forget the last one's.
+        sink.cookies.clear()
+        sink.no_store = false
+        return total
+    }
+    let colon = std.mem.indexOf(line, ':') orelse return total
+    let name = text.trim(line[..colon])
+    let value = text.trim(line[colon + 1..])
+    if text.eqlIgnoreCase(name, "set-cookie") {
+        sink.cookies.append(value) catch |e| {
+            sink.out_of_memory = true
+            return 0
+        }
+        sink.cookies.appendByte('\n') catch |e| {
+            sink.out_of_memory = true
+            return 0
+        }
+    } else if text.eqlIgnoreCase(name, "cache-control") && containsIgnoreCase(value, "no-store") {
+        sink.no_store = true
+    }
+    return total
+}
+
+fn containsIgnoreCase(s: []u8, word: []u8) bool {
+    var i: usize = 0
+    while i + word.len <= s.len {
+        if text.eqlIgnoreCase(s[i..i + word.len], word) {
+            return true
+        }
+        i += 1
+    }
+    return false
+}
+
+fn fetchHttp(alloc: Allocator, target: *Url, req: Request) FetchError!Response {
+    let cacheable = req.body == null && req.kind != Kind.Document && req.kind != Kind.Other
+    if session |s| {
+        if cacheable {
+            if try s.cache.lookup(alloc, target.withoutFragment()) |hit| {
+                return hit
+            }
+        }
+        if s.curl == null {
+            s.curl = curl_easy_init()
+        }
+        if s.curl |curl| {
+            var keep = cacheable
+            var res = try transfer(alloc, curl, target, req, s, &mut keep)
+            if keep && res.status >= 200 && res.status < 300 {
+                s.cache.keep(target.withoutFragment(), &res, false) catch |e| {
+                    res.deinit(alloc)
+                    return FetchError.OutOfMemory
+                }
+            }
+            return res
+        }
+        return FetchError.Network
+    }
     if curl_easy_init() |curl| {
         defer curl_easy_cleanup(curl)
-        return transfer(alloc, curl, target, post)
+        var keep = false
+        return transfer(alloc, curl, target, req, null, &mut keep)
     }
     return FetchError.Network
 }
 
-fn transfer(alloc: Allocator, curl: *mut Curl, target: *Url, post: ?*Body) FetchError!Response {
-    // libcurl wants a NUL-terminated URL, without the fragment.
-    let href = target.withoutFragment()
-    let address = alloc.alloc(0 as u8, href.len + 1) catch |e| {
-        return FetchError.OutOfMemory
+// The request (and the requests of its redirects) on `curl`. `keep` is
+// cleared when the response says it must not be cached.
+fn transfer(alloc: Allocator, curl: *mut Curl, target: *Url, req: Request, s: ?*mut Session, keep: *mut bool) FetchError!Response {
+    var limit = MAX_SUBRESOURCE
+    if req.kind == Kind.Document {
+        limit = MAX_DOCUMENT
     }
-    defer alloc.free(address)
-    for i, c in href {
-        address[i] = c
+    var sink = Sink {
+        body: text.Builder.init(alloc),
+        limit: limit,
+        out_of_memory: false,
+        too_large: false,
+        cookies: text.Builder.init(alloc),
+        no_store: false,
+    }
+    defer sink.body.deinit()
+    defer sink.cookies.deinit()
+    // The URL of the request; libcurl wants it NUL-terminated, without
+    // the fragment.
+    var here = text.Builder.init(alloc)
+    defer here.deinit()
+    try here.append(target.withoutFragment())
+    var post = req.body
+    var hops: i64 = 0
+    var status: i64 = 0
+    while true {
+        var at = url.parse(alloc, here.bytes()) catch |e| {
+            return FetchError.Invalid
+        }
+        defer at.deinit(alloc)
+        sink.body.clear()
+        sink.cookies.clear()
+        sink.no_store = false
+        curl_easy_reset(curl)
+        try here.appendByte(0)
+        var headers: ?*mut CurlList = null
+        defer curl_slist_free_all(headers)
+        headers = try prepare(alloc, curl, here.bytes().ptr, &at, req, post, s, &mut sink)
+        let code = curl_easy_perform(curl)
+        if sink.out_of_memory {
+            return FetchError.OutOfMemory
+        }
+        if sink.too_large {
+            return FetchError.TooLarge
+        }
+        if code != 0 {
+            return curlError(code)
+        }
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &mut status)
+        try storeCookies(s, &at, &sink)
+        var location: ?[*]u8 = null
+        curl_easy_getinfo(curl, CURLINFO_REDIRECT_URL, &mut location)
+        let next = location orelse break
+        if status != 301 && status != 302 && status != 303 && status != 307 && status != 308 {
+            break
+        }
+        hops += 1
+        if hops > MAX_REDIRECTS {
+            return FetchError.TooManyRedirects
+        }
+        let moved = next[0..strlen(next)]
+        if !text.startsWith(moved, "http://") && !text.startsWith(moved, "https://") {
+            return FetchError.Unsupported
+        }
+        if status == 303 || ((status == 301 || status == 302) && post != null) {
+            post = null
+        }
+        here.clear()
+        try here.append(withoutHash(moved))
+    }
+    if sink.no_store {
+        keep.* = false
     }
 
-    var sink = Sink { body: text.Builder.init(alloc), out_of_memory: false }
-    defer sink.body.deinit()
-    curl_easy_setopt(curl, CURLOPT_URL, address.ptr)
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1 as i64)
-    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, MAX_REDIRECTS)
-    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https".ptr)
+    var content_type: ?[*]u8 = null
+    curl_easy_getinfo(curl, CURLINFO_CONTENT_TYPE, &mut content_type)
+    // `here` ends with the NUL added for libcurl.
+    let final_url = here.bytes()[..here.len() - 1]
+    var ct: []u8 = ""
+    if content_type |p| {
+        ct = p[0..strlen(p)]
+    } else {
+        var path = final_url
+        if std.mem.indexOf(path, '?') |q| {
+            path = path[..q]
+        }
+        ct = typeOfPath(path)
+    }
+    let body = try sink.body.toOwned()
+    var res = try respond(alloc, ct, body)
+    res.status = status
+    if !text.eql(final_url, target.withoutFragment()) {
+        res.url = copyBytes(alloc, final_url) catch |e| {
+            res.deinit(alloc)
+            return e
+        }
+    }
+    return res
+}
+
+// Sets the options of a request for `req` to `address` (`at` as a
+// NUL-terminated string), the response going to `sink`. Returns the
+// header list, to free after the transfer.
+fn prepare(alloc: Allocator, curl: *mut Curl, address: [*]u8, at: *Url, req: Request, post: ?*Body, s: ?*mut Session, sink: *mut Sink) FetchError!?*mut CurlList {
+    let headers = try requestHeaders(alloc, at, req, post, s)
+    curl_easy_setopt(curl, CURLOPT_URL, address)
     curl_easy_setopt(curl, CURLOPT_USERAGENT, USER_AGENT.ptr)
     curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "".ptr)
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, CONNECT_TIMEOUT_MS)
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, TIMEOUT_MS)
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1 as i64)
+    curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE, sink.limit as i64)
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, onBody)
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, @ptrCast([*]u8, &mut sink))
-    var headers: ?*mut CurlList = null
-    defer curl_slist_free_all(headers)
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, @ptrCast([*]u8, sink))
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, onHeader)
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, @ptrCast([*]u8, sink))
+    if headers |h| {
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, h)
+    }
     if post |b| {
-        var h = text.Builder.init(alloc)
-        defer h.deinit()
-        h.append("Content-Type: ") catch |e| {
-            return FetchError.OutOfMemory
-        }
-        h.append(b.content_type) catch |e| {
-            return FetchError.OutOfMemory
-        }
-        h.appendByte(0) catch |e| {
-            return FetchError.OutOfMemory
-        }
-        // libcurl sends application/x-www-form-urlencoded by itself, and
-        // drops it after a redirect to a GET; other types need a header
-        // (kept after a redirect).
-        if !text.eql(b.content_type, "application/x-www-form-urlencoded") {
-            headers = curl_slist_append(null, h.bytes().ptr)
-            if headers == null {
-                return FetchError.OutOfMemory
-            }
-            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers)
-        }
         curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, b.data.len as i64)
         // An empty body still needs a pointer: libcurl would otherwise
         // read the body from a callback.
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, b.data.ptr)
     }
-    let code = curl_easy_perform(curl)
-    if sink.out_of_memory {
-        return FetchError.OutOfMemory
-    }
-    if code != 0 {
-        return curlError(code)
-    }
-
-    var status: i64 = 0
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &mut status)
-    var content_type: ?[*]u8 = null
-    curl_easy_getinfo(curl, CURLINFO_CONTENT_TYPE, &mut content_type)
-    var effective: ?[*]u8 = null
-    curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &mut effective)
-
-    var ct: []u8 = ""
-    if content_type |p| {
-        ct = p[0..strlen(p)]
-    } else {
-        ct = typeOfPath(target.path)
-    }
-    let body = try sink.body.toOwned()
-    var res = try respond(alloc, ct, body)
-    res.status = status
-    if effective |p| {
-        let final_url = p[0..strlen(p)]
-        if !text.eql(final_url, href) {
-            res.url = copyBytes(alloc, final_url) catch |e| {
-                res.deinit(alloc)
-                return e
-            }
+    if s |ses| {
+        if ses.share |sh| {
+            curl_easy_setopt(curl, CURLOPT_SHARE, sh)
         }
     }
-    return res
+    return headers
+}
+
+// Stores the cookies of the response in `sink`, the response of `at`.
+fn storeCookies(s: ?*mut Session, at: *Url, sink: *Sink) AllocError!void {
+    let ses = s orelse return
+    var lines = text.split(sink.cookies.bytes(), "\n")
+    while lines.next() |line| {
+        if line.len > 0 {
+            try ses.jar.store(at, line, false, now())
+        }
+    }
+}
+
+// The headers of a request to `at` besides the User-Agent (a list for
+// libcurl; null when there is none).
+fn requestHeaders(alloc: Allocator, at: *Url, req: Request, post: ?*Body, s: ?*mut Session) FetchError!?*mut CurlList {
+    var list: ?*mut CurlList = null
+    errdefer curl_slist_free_all(list)
+    var h = text.Builder.init(alloc)
+    defer h.deinit()
+    try h.append("Accept: ")
+    try h.append(acceptOf(req.kind))
+    list = try addHeader(list, &mut h)
+    try h.append("Accept-Language: ")
+    try h.append(ACCEPT_LANGUAGE)
+    list = try addHeader(list, &mut h)
+    try h.append("Referer: ")
+    let before = h.len()
+    try referrerOf(alloc, req.referrer, at, &mut h)
+    if h.len() > before {
+        list = try addHeader(list, &mut h)
+    }
+    h.clear()
+    if s |ses| {
+        try h.append("Cookie: ")
+        let mark = h.len()
+        try ses.jar.header(at, false, now(), &mut h)
+        if h.len() > mark {
+            list = try addHeader(list, &mut h)
+        }
+        h.clear()
+    }
+    if post |b| {
+        // libcurl sends application/x-www-form-urlencoded by itself;
+        // other types need a header.
+        if !text.eql(b.content_type, "application/x-www-form-urlencoded") {
+            try h.append("Content-Type: ")
+            try h.append(b.content_type)
+            list = try addHeader(list, &mut h)
+        }
+    }
+    return list
+}
+
+// Appends the header in `h` to `list` and empties `h`.
+fn addHeader(list: ?*mut CurlList, h: *mut text.Builder) FetchError!?*mut CurlList {
+    try h.appendByte(0)
+    let more = curl_slist_append(list, h.bytes().ptr)
+    h.clear()
+    if more == null {
+        return FetchError.OutOfMemory
+    }
+    return more
+}
+
+fn acceptOf(kind: Kind) []u8 {
+    return match kind {
+        .Document => "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        .Style => "text/css,*/*;q=0.1"
+        .Image => "image/png,image/gif,image/jpeg,image/*;q=0.8,*/*;q=0.5"
+        .Script, .Other => "*/*"
+    }
+}
+
+/// Appends to `out` the Referer that a request to `to` from the page at
+/// `referrer` sends (the default policy, strict-origin-when-cross-origin):
+/// the page's URL without the fragment for the same origin, its origin
+/// for another one, nothing from https to http or from a page that is
+/// not http(s).
+pub fn referrerOf(alloc: Allocator, referrer: []u8, to: *Url, out: *mut text.Builder) AllocError!void {
+    if referrer.len == 0 {
+        return
+    }
+    let from = url.parse(alloc, referrer) catch |e| {
+        return
+    }
+    defer from.deinit(alloc)
+    let https = text.eql(from.scheme, "https")
+    if !https && !text.eql(from.scheme, "http") {
+        return
+    }
+    if https && !text.eql(to.scheme, "https") {
+        return
+    }
+    if text.eql(from.scheme, to.scheme) && text.eql(from.host, to.host) && text.eql(from.port, to.port) && from.username.len == 0 && from.password.len == 0 {
+        return out.append(from.withoutFragment())
+    }
+    try out.append(from.scheme)
+    try out.append("://")
+    try out.append(from.host)
+    if from.port.len > 0 {
+        try out.appendByte(':')
+        try out.append(from.port)
+    }
+    try out.appendByte('/')
 }
 
 fn copyBytes(alloc: Allocator, s: []u8) AllocError![]mut u8 {
@@ -187,6 +425,8 @@ fn curlError(code: i32) FetchError {
         7 => FetchError.CannotConnect
         28 => FetchError.Timeout
         47 => FetchError.TooManyRedirects
+        63 => FetchError.TooLarge
+        35, 51, 53, 54, 58, 59, 60, 64, 66, 77, 80, 82, 83, 90, 91, 98 => FetchError.Tls
         _ => FetchError.Network
     }
 }

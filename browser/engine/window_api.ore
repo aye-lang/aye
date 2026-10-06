@@ -44,6 +44,8 @@ fn installWindow(s: *mut Script) JsError!void {
     try defMethod(it, o, "viewport", 1, akViewport)
     try defMethod(it, o, "storage", 3, akStorage)
     try defMethod(it, o, "fetch", 1, akFetch)
+    try defMethod(it, o, "cookie", 0, akCookie)
+    try defMethod(it, o, "setCookie", 1, akSetCookie)
     try defMethod(it, o, "setDispatch", 1, akSetDispatch)
 
     let c = try it.newObject(it.object_proto)
@@ -235,7 +237,7 @@ fn argUrl(it: *mut Interp, a: Args) JsError!?url.Url {
     defer it.release(b)
     try argText(it, a, 0, b)
     let p = scriptOf(it).page
-    let r = url.resolve(it.alloc, &p.url, text.trim(b.bytes())) catch |e| {
+    let r = p.resolve(it.alloc, b.bytes()) catch |e| {
         return null
     }
     return r
@@ -302,6 +304,9 @@ fn akNavigate(it: *mut Interp, a: Args) JsError!Value {
             return Value.Undefined
         }
         try setNavigation(s, u.href)
+        net.noteNavigation(u.href, s.page.url.href) catch |e| {
+            return JsError.OutOfMemory
+        }
     }
     return Value.Undefined
 }
@@ -367,7 +372,8 @@ fn akFetch(it: *mut Interp, a: Args) JsError!Value {
         return it.pop()
     }
     defer target.deinit(it.alloc)
-    let res = net.fetch(it.alloc, &target) catch |e| {
+    let page = scriptOf(it).page
+    let res = net.request(it.alloc, &target, net.Request { kind: net.Kind.Other, referrer: page.url.href }) catch |e| {
         match e {
             .OutOfMemory => {
                 return JsError.OutOfMemory
@@ -389,6 +395,27 @@ fn akFetch(it: *mut Interp, a: Args) JsError!Value {
     try setField(it, r, "type", res.mime)
     try setField(it, r, "body", body)
     return it.pop()
+}
+
+// ---- document.cookie (the session's cookie jar, net/cookies.ore)
+
+fn akCookie(it: *mut Interp, a: Args) JsError!Value {
+    let b = try it.builder()
+    defer it.release(b)
+    net.scriptCookies(&scriptOf(it).page.url, b) catch |e| {
+        return JsError.OutOfMemory
+    }
+    return it.newString(b.bytes())
+}
+
+fn akSetCookie(it: *mut Interp, a: Args) JsError!Value {
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 0, b)
+    net.setScriptCookie(&scriptOf(it).page.url, b.bytes()) catch |e| {
+        return JsError.OutOfMemory
+    }
+    return Value.Undefined
 }
 
 fn setField(it: *mut Interp, o: u32, name: []u8, v: []u8) JsError!void {

@@ -1,5 +1,7 @@
 // net: fetching a URL: `file:` (file.ore), `data:` (data.ore), and
-// `http:` and `https:` through libcurl (http.ore).
+// `http:` and `https:` through libcurl (http.ore), with the cookie jar
+// (cookies.ore) and the cache (cache.ore) of the process's session
+// (session.ore).
 
 import std.mem.AllocError
 import std.mem.Allocator
@@ -19,6 +21,8 @@ pub error FetchError {
     CannotConnect
     Timeout
     TooManyRedirects
+    TooLarge
+    Tls
     Network
 }
 
@@ -53,24 +57,66 @@ pub struct Body {
     data: []u8
 }
 
-/// Fetches `target`.
+/// What a request is for: it decides the `Accept` header, the size
+/// limit, and whether the response may come from the cache.
+pub enum Kind {
+    // A page (a navigation, a form submission).
+    Document
+    Style
+    Image
+    Script
+    // A script's `fetch()`.
+    Other
+}
+
+pub struct Request {
+    kind: Kind = Kind.Document
+    // The URL of the page that asks, sent as the Referer (see
+    // `referrerOf`); "" for none (a URL the user typed). A document
+    // request without one takes the referrer of `noteNavigation`.
+    referrer: []u8 = ""
+    // A POST body (for `http:` and `https:`; other URLs ignore it).
+    body: ?*Body = null
+}
+
+/// Fetches `target` as a document the user asked for.
 pub fn fetch(alloc: Allocator, target: *Url) FetchError!Response {
-    return fetchWith(alloc, target, null)
+    return request(alloc, target, Request {})
 }
 
 /// Fetches `target`, by POST with `body` when there is one (for `http:`
 /// and `https:`; other URLs ignore it).
 pub fn fetchWith(alloc: Allocator, target: *Url, body: ?*Body) FetchError!Response {
+    return request(alloc, target, Request { body: body })
+}
+
+/// Fetches `target` for `req`.
+pub fn request(alloc: Allocator, target: *Url, req: Request) FetchError!Response {
     if text.eql(target.scheme, "file") {
         return fetchFile(alloc, target)
     }
     if text.eql(target.scheme, "data") {
         return fetchData(alloc, target)
     }
-    if text.eql(target.scheme, "http") || text.eql(target.scheme, "https") {
-        return fetchHttp(alloc, target, body)
+    if !text.eql(target.scheme, "http") && !text.eql(target.scheme, "https") {
+        return FetchError.Unsupported
     }
-    return FetchError.Unsupported
+    if req.kind != Kind.Document {
+        return fetchHttp(alloc, target, req)
+    }
+    // A navigation from a page (noteNavigation) sends the page's URL.
+    let s = session orelse return fetchHttp(alloc, target, req)
+    let hint_target = s.nav_target
+    let hint_referrer = s.nav_referrer
+    s.nav_target = []mut u8{}
+    s.nav_referrer = []mut u8{}
+    defer release(s.alloc, hint_target)
+    defer release(s.alloc, hint_referrer)
+    var r = req
+    if r.referrer.len == 0 && text.eql(hint_target, target.withoutFragment()) {
+        r.referrer = hint_referrer
+    }
+    return fetchHttp(alloc, target, r)
 }
 
 /// A message for a fetch error, for the command line.
@@ -87,6 +133,8 @@ pub fn describe(e: FetchError) []u8 {
         .CannotConnect => "cannot connect"
         .Timeout => "timed out"
         .TooManyRedirects => "too many redirects"
+        .TooLarge => "the response is too large"
+        .Tls => "the secure connection failed (TLS)"
         .Network => "network error"
     }
 }

@@ -288,7 +288,7 @@ fn targetUrl(s: *Session, alloc: Allocator, target: []u8) AllocError!?Url {
 /// resolve.
 fn absoluteHref(p: *Page, alloc: Allocator, href: []u8) AllocError![]u8 {
     let t = text.trim(href)
-    let r = url.resolve(alloc, &p.url, t) catch |e| {
+    let r = url.resolve(alloc, p.baseUrl(), t) catch |e| {
         return t
     }
     return r.href

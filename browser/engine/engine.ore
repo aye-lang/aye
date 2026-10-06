@@ -46,6 +46,8 @@ pub struct Page {
     // The URL of the document: after redirects, or the one asked for
     // when the fetch failed.
     url: Url
+    // The document's base URL (`baseUrl`).
+    base: Url
     // The HTTP status (200 for `file:` and `data:`); 0 when the fetch
     // failed and the document is an error page.
     status: i64
@@ -77,7 +79,33 @@ pub struct Page {
         self.doc.deinit()
         alloc.free(self.title)
         self.url.deinit(alloc)
+        self.base.deinit(alloc)
         alloc.destroy(self)
+    }
+
+    /// The URL that relative URLs of the document resolve against
+    /// (links, forms, images, style sheets, scripts): the `href` of the
+    /// first `base` element that has one, resolved against the
+    /// document's URL; else the document's URL.
+    pub fn baseUrl(self: *Self) *Url {
+        return &self.base
+    }
+
+    /// Resolves `href`, a URL of the document, against its base URL.
+    pub fn resolve(self: *Self, alloc: Allocator, href: []u8) url.UrlError!Url {
+        return url.resolve(alloc, &self.base, text.trim(href))
+    }
+
+    /// Resolves `href`, the URL of a link (or form) of the document that
+    /// the user follows: the next load of it sends the document's URL as
+    /// the Referer.
+    pub fn follow(self: *Self, alloc: Allocator, href: []u8) url.UrlError!Url {
+        let target = try self.resolve(alloc, href)
+        net.noteNavigation(target.href, self.url.href) catch |e| {
+            target.deinit(alloc)
+            return url.UrlError.OutOfMemory
+        }
+        return target
     }
 
     fn dropTree(self: *mut Self) {
@@ -212,9 +240,12 @@ fn newPage(alloc: Allocator, located: Url, status: i64, failure: []u8, doc: Docu
     var d = doc
     let title = try titleOf(alloc, &d)
     errdefer alloc.free(title)
+    var base = try documentBase(alloc, &d, &located)
+    errdefer base.deinit(alloc)
     return alloc.create(Page {
         alloc: alloc,
         url: located,
+        base: base,
         status: status,
         failure: failure,
         doc: d,
@@ -224,6 +255,32 @@ fn newPage(alloc: Allocator, located: Url, status: i64, failure: []u8, doc: Docu
         script: null,
         images: null,
     })
+}
+
+/// The base URL of `doc`, whose URL is `address` (see `Page.baseUrl`).
+pub fn documentBase(alloc: Allocator, doc: *Document, address: *Url) AllocError!Url {
+    var cur: ?NodeId = doc.root
+    while cur |h| {
+        if doc.isElement(h, "base") {
+            if doc.attr(h, "href") |href| {
+                if url.resolve(alloc, address, text.trim(href)) |b| {
+                    return b
+                } else |e| {
+                    match e {
+                        .OutOfMemory => {
+                            return AllocError.OutOfMemory
+                        }
+                        _ => {}
+                    }
+                }
+                break
+            }
+        }
+        cur = doc.following(h, doc.root)
+    }
+    return url.parse(alloc, address.href) catch |e| {
+        return AllocError.OutOfMemory
+    }
 }
 
 // A page that says why `target` could not be loaded.

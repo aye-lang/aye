@@ -62,7 +62,7 @@ pub fn activate(page: *mut Page, node: NodeId) AllocError!Activation {
     let moved = focusOn(page, el)
     if doc.isElement(el, "a") || doc.isElement(el, "area") {
         let href = text.trim(doc.attr(el, "href") orelse "")
-        let target = url.resolve(page.alloc, &page.url, href) catch |e| {
+        let target = page.follow(page.alloc, href) catch |e| {
             return Activation.Nothing
         }
         if text.eql(target.scheme, "javascript") || text.eql(target.scheme, "mailto") {
@@ -424,8 +424,16 @@ pub fn submitForm(page: *mut Page, form: NodeId, submitter: ?NodeId) AllocError!
         return null
     }
     let post = text.eqlIgnoreCase(method, "post")
-    var target = url.resolve(alloc, &page.url, action) catch |e| {
+    // An empty action is the document's URL; others resolve against the
+    // base URL.
+    var target = url.resolve(alloc, &page.url, "") catch |e| {
         return null
+    }
+    if action.len > 0 {
+        target.deinit(alloc)
+        target = page.resolve(alloc, action) catch |e| {
+            return null
+        }
     }
     if text.eql(target.scheme, "javascript") {
         target.deinit(alloc)
@@ -466,6 +474,7 @@ pub fn submitForm(page: *mut Page, form: NodeId, submitter: ?NodeId) AllocError!
         target = with_query
         body.clear()
     }
+    try net.noteNavigation(target.href, page.url.href)
     let ct = try ctype.toOwned()
     errdefer alloc.free(ct)
     let data = try body.toOwned()

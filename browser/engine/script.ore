@@ -349,6 +349,7 @@ pub fn runPageScripts(p: *mut Page) AllocError!void {
         }
         cur = p.doc.following(h, p.doc.root)
     }
+    try prefetchScripts(p, all.items())
     var later = List(NodeId).init(p.alloc)
     defer later.deinit()
     for el in all.items() {
@@ -391,17 +392,35 @@ fn isClassicScript(p: *mut Page, el: NodeId) bool {
     return true
 }
 
+// Fetches the external scripts of `els` concurrently into the session's
+// cache (net.prefetch), before they run one by one.
+fn prefetchScripts(p: *mut Page, els: []NodeId) AllocError!void {
+    var hrefs = text.Builder.init(p.alloc)
+    defer hrefs.deinit()
+    for el in els {
+        if p.doc.attr(el, "src") |src| {
+            if p.resolve(p.alloc, src) |target| {
+                defer target.deinit(p.alloc)
+                try hrefs.append(target.withoutFragment())
+                try hrefs.appendByte('\n')
+            } else |e| {
+            }
+        }
+    }
+    net.prefetch(p.alloc, hrefs.bytes(), net.Kind.Script, p.url.href)
+}
+
 fn runScriptElement(s: *mut Script, el: NodeId) AllocError!void {
     let p = s.page
     if !p.doc.isLive(el) {
         return
     }
     if p.doc.attr(el, "src") |src| {
-        let target = url.resolve(s.alloc, &p.url, text.trim(src)) catch |e| {
+        let target = p.resolve(s.alloc, src) catch |e| {
             return addConsole(s, "[error] Failed to load script: ", src)
         }
         defer target.deinit(s.alloc)
-        let res = net.fetch(s.alloc, &target) catch |e| {
+        let res = net.request(s.alloc, &target, net.Request { kind: net.Kind.Script, referrer: p.url.href }) catch |e| {
             match e {
                 .OutOfMemory => {
                     return AllocError.OutOfMemory

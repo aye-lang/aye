@@ -518,15 +518,7 @@ pub let PRELUDE =
     \\getter(Document.prototype, 'documentURI', function () { return ak.url(); });
     \\getter(Document.prototype, 'visibilityState', function () { return 'visible'; });
     \\getter(Document.prototype, 'hidden', function () { return false; });
-    \\let cookies = '';
-    \\getter(Document.prototype, 'cookie', function () { return cookies; }, function (v) {
-    \\  const pair = String(v).split(';')[0];
-    \\  const eq = pair.indexOf('=');
-    \\  const name = eq < 0 ? '' : pair.slice(0, eq).trim();
-    \\  const kept = cookies === '' ? [] : cookies.split('; ').filter(c => c.slice(0, c.indexOf('=')) !== name);
-    \\  kept.push(pair.trim());
-    \\  cookies = kept.join('; ');
-    \\});
+    \\getter(Document.prototype, 'cookie', function () { return ak.cookie(); }, function (v) { ak.setCookie(String(v)); });
     \\hidden(Document.prototype, 'hasFocus', function () { return true; });
     \\hidden(Document.prototype, 'createEvent', function () { return new Event(''); });
     \\hidden(Event.prototype, 'initEvent', function (type, bubbles, cancelable) {
@@ -558,7 +550,7 @@ pub let PRELUDE =
     \\hidden(G, 'scroll', function () {});
     \\hidden(G, 'focus', function () {});
     \\hidden(G, 'blur', function () {});
-    \\hidden(G, 'navigator', { userAgent: 'Mozilla/5.0 (anyknown)', language: 'en-US', languages: ['en-US', 'en'], onLine: true, cookieEnabled: true, platform: '', vendor: '' });
+    \\hidden(G, 'navigator', { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) anyknown/0.1', language: 'en-US', languages: ['en-US', 'en'], onLine: true, cookieEnabled: true, platform: '', vendor: '' });
     \\hidden(G, 'screen', { width: 1280, height: 800, availWidth: 1280, availHeight: 800, colorDepth: 24, pixelDepth: 24 });
     \\hidden(G, 'performance', { now: () => ak.now(), timeOrigin: Date.now() });
     \\

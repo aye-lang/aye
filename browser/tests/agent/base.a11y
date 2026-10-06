@@ -1,0 +1,11 @@
+- heading "Base URL" [level=1] [e1]
+- paragraph
+  - text: Relative links resolve against the first base element with an href:
+  - link "a guide" [e2] -> guide.html
+  - text: ,
+  - link "the API" [e3] -> ../api/
+  - text: ,
+  - link "the top" [e4] -> /top
+  - text: and
+  - link "a query" [e5] -> ?q=1
+  - text: .

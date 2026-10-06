@@ -1,0 +1,616 @@
+// The cookie jar (RFC 6265, the parts browsers agree on): `Set-Cookie`
+// headers of every HTTP response (redirects too) and `document.cookie`
+// assignments are stored; every HTTP request gets the matching cookies
+// in a `Cookie` header. Attributes: Domain (host-only without it; a
+// domain the host is not in, or one without a dot, rejects the cookie),
+// Path (the directory of the URL without it), Expires, Max-Age (wins
+// over Expires; zero or less deletes), Secure (set and sent over
+// https only), HttpOnly (hidden from scripts); SameSite is ignored. The
+// `__Secure-` and `__Host-` name prefixes are checked. A cookie with the
+// name, domain and path of a stored one replaces it (keeping its
+// creation order). No public suffix list.
+//
+// The jar lives in memory for the process; when the environment variable
+// ANYKNOWN_COOKIE_FILE names a file, its persistent cookies are loaded
+// from it at the start and written back at the end (one cookie per
+// line: domain, host-only, path, secure, http-only, expiry, name and
+// value, separated by tabs).
+
+import std
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+import url.Url
+
+struct Cookie {
+    name: []mut u8
+    value: []mut u8
+    // Lower case, without a leading dot.
+    domain: []mut u8
+    path: []mut u8
+    // Seconds since 1970 (UTC); only for a persistent cookie.
+    expires: i64
+    persistent: bool
+    host_only: bool
+    secure: bool
+    http_only: bool
+    // The order of creation (sent first among equal paths).
+    created: u64
+}
+
+pub struct Jar {
+    alloc: Allocator
+    cookies: List(Cookie)
+    next: u64
+    // Changed since loaded from the file.
+    changed: bool
+
+    pub fn init(alloc: Allocator) Jar {
+        return Jar { alloc: alloc, cookies: List(Cookie).init(alloc), next: 0, changed: false }
+    }
+
+    pub fn deinit(self: *mut Self) {
+        for c in self.cookies.items() {
+            freeCookie(self.alloc, c)
+        }
+        self.cookies.deinit()
+    }
+
+    /// Stores the cookie of a `Set-Cookie` header (`line`, the header's
+    /// value) received from `from`, or set by a script of a page at
+    /// `from` (which cannot set or replace an HttpOnly cookie). `clock`:
+    /// seconds since 1970. A cookie that does not apply is ignored.
+    pub fn store(self: *mut Self, from: *Url, line: []u8, script: bool, clock: i64) AllocError!void {
+        if !isHttp(from) || from.host.len == 0 {
+            return
+        }
+        var parts = text.split(line, ";")
+        let pair = parts.next() orelse return
+        var name: []u8 = ""
+        var value = text.trim(pair)
+        if std.mem.indexOf(pair, '=') |eq| {
+            name = text.trim(pair[..eq])
+            value = text.trim(pair[eq + 1..])
+        }
+        if name.len == 0 && value.len == 0 {
+            return
+        }
+        var domain: []u8 = ""
+        var path: []u8 = ""
+        var expires: i64 = 0
+        var persistent = false
+        var max_age = false
+        var secure = false
+        var http_only = false
+        while parts.next() |part| {
+            let attr = text.trim(part)
+            var key = attr
+            var arg: []u8 = ""
+            if std.mem.indexOf(attr, '=') |eq| {
+                key = text.trim(attr[..eq])
+                arg = text.trim(attr[eq + 1..])
+            }
+            if text.eqlIgnoreCase(key, "expires") {
+                if !max_age {
+                    if parseDate(arg) |t| {
+                        expires = t
+                        persistent = true
+                    }
+                }
+            } else if text.eqlIgnoreCase(key, "max-age") {
+                if parseSeconds(arg) |delta| {
+                    max_age = true
+                    persistent = true
+                    if delta <= 0 {
+                        expires = 0
+                    } else {
+                        expires = clock + delta
+                    }
+                }
+            } else if text.eqlIgnoreCase(key, "domain") {
+                if arg.len > 0 {
+                    domain = arg
+                    if domain[0] == '.' {
+                        domain = domain[1..]
+                    }
+                }
+            } else if text.eqlIgnoreCase(key, "path") {
+                if arg.len > 0 && arg[0] == '/' {
+                    path = arg
+                } else {
+                    path = ""
+                }
+            } else if text.eqlIgnoreCase(key, "secure") {
+                secure = true
+            } else if text.eqlIgnoreCase(key, "httponly") {
+                http_only = true
+            }
+        }
+        let https = text.eql(from.scheme, "https")
+        if (secure && !https) || (script && http_only) {
+            return
+        }
+        let host = from.host
+        var host_only = true
+        if domain.len > 0 {
+            if !domainMatch(host, domain) {
+                return
+            }
+            // A bare top-level name ("com") is a public suffix.
+            if std.mem.indexOf(domain, '.') == null && !text.eqlIgnoreCase(domain, host) {
+                return
+            }
+            host_only = false
+        } else {
+            domain = host
+        }
+        if text.startsWith(name, "__Secure-") && !secure {
+            return
+        }
+        if text.startsWith(name, "__Host-") && (!secure || !host_only || !text.eql(path, "/")) {
+            return
+        }
+        var dir = path
+        if dir.len == 0 {
+            dir = defaultPath(from.path)
+        }
+        var created = self.next
+        var i: usize = 0
+        while i < self.cookies.len() {
+            let old = self.cookies.items()[i]
+            if text.eql(old.name, name) && text.eqlIgnoreCase(old.domain, domain) && text.eql(old.path, dir) {
+                if script && old.http_only {
+                    return
+                }
+                created = old.created
+                freeCookie(self.alloc, self.cookies.orderedRemove(i))
+                self.changed = true
+            } else {
+                i += 1
+            }
+        }
+        if persistent && expires <= clock {
+            return
+        }
+        let c = Cookie {
+            name: try copyOf(self.alloc, name),
+            value: try copyOf(self.alloc, value),
+            domain: try lowerCopy(self.alloc, domain),
+            path: try copyOf(self.alloc, dir),
+            expires: expires,
+            persistent: persistent,
+            host_only: host_only,
+            secure: secure,
+            http_only: http_only,
+            created: created,
+        }
+        self.cookies.append(c) catch |e| {
+            freeCookie(self.alloc, c)
+            return e
+        }
+        if created == self.next {
+            self.next += 1
+        }
+        self.changed = true
+    }
+
+    /// Appends to `out` the cookies to send to `to` ("a=1; b=2"), in
+    /// the order browsers send them (longer paths first, then older);
+    /// for a script (`document.cookie`), without the HttpOnly ones.
+    pub fn header(self: *mut Self, to: *Url, script: bool, clock: i64, out: *mut text.Builder) AllocError!void {
+        if !isHttp(to) || to.host.len == 0 {
+            return
+        }
+        self.dropExpired(clock)
+        let https = text.eql(to.scheme, "https")
+        var path = to.path
+        if path.len == 0 {
+            path = "/"
+        }
+        // Sent in order: picked by a selection over the matching ones.
+        var last_len: usize = 0xFFFFFFFF
+        var last_created: u64 = 0
+        var first = true
+        var started = false
+        while true {
+            var best: ?usize = null
+            for i, c in self.cookies.items() {
+                if !self.sends(c, to.host, path, https, script) || !after(c, last_len, last_created, first) {
+                    continue
+                }
+                if best |b| {
+                    let o = self.cookies.items()[b]
+                    if c.path.len > o.path.len || (c.path.len == o.path.len && c.created < o.created) {
+                        best = i
+                    }
+                } else {
+                    best = i
+                }
+            }
+            let pick = best orelse break
+            let c = self.cookies.items()[pick]
+            if started {
+                try out.append("; ")
+            }
+            started = true
+            if c.name.len > 0 {
+                try out.append(c.name)
+                try out.appendByte('=')
+            }
+            try out.append(c.value)
+            last_len = c.path.len
+            last_created = c.created
+            first = false
+        }
+    }
+
+    fn sends(self: *Self, c: Cookie, host: []u8, path: []u8, https: bool, script: bool) bool {
+        if c.secure && !https {
+            return false
+        }
+        if c.http_only && script {
+            return false
+        }
+        if c.host_only {
+            if !text.eqlIgnoreCase(host, c.domain) {
+                return false
+            }
+        } else if !domainMatch(host, c.domain) {
+            return false
+        }
+        return pathMatch(path, c.path)
+    }
+
+    fn dropExpired(self: *mut Self, clock: i64) {
+        var i: usize = 0
+        while i < self.cookies.len() {
+            let c = self.cookies.items()[i]
+            if c.persistent && c.expires <= clock {
+                freeCookie(self.alloc, self.cookies.orderedRemove(i))
+                self.changed = true
+            } else {
+                i += 1
+            }
+        }
+    }
+
+    /// Adds the persistent cookies saved in `saved` (the file format
+    /// above); bad lines are skipped.
+    pub fn load(self: *mut Self, saved: []u8, clock: i64) AllocError!void {
+        var lines = text.split(saved, "\n")
+        while lines.next() |line| {
+            var f = [8][]u8{"", "", "", "", "", "", "", ""}
+            var fields = text.split(line, "\t")
+            var n: usize = 0
+            while fields.next() |field| {
+                if n < 8 {
+                    f[n] = field
+                }
+                n += 1
+            }
+            if n != 8 || f[0].len == 0 {
+                continue
+            }
+            let expires = text.parseInt(f[5]) catch |e| {
+                continue
+            }
+            if expires <= clock {
+                continue
+            }
+            let c = Cookie {
+                name: try copyOf(self.alloc, f[6]),
+                value: try copyOf(self.alloc, f[7]),
+                domain: try lowerCopy(self.alloc, f[0]),
+                path: try copyOf(self.alloc, f[2]),
+                expires: expires,
+                persistent: true,
+                host_only: text.eql(f[1], "1"),
+                secure: text.eql(f[3], "1"),
+                http_only: text.eql(f[4], "1"),
+                created: self.next,
+            }
+            self.cookies.append(c) catch |e| {
+                freeCookie(self.alloc, c)
+                return e
+            }
+            self.next += 1
+        }
+    }
+
+    /// The persistent cookies in the file format.
+    pub fn save(self: *mut Self, clock: i64, out: *mut text.Builder) AllocError!void {
+        self.dropExpired(clock)
+        for c in self.cookies.items() {
+            if !c.persistent {
+                continue
+            }
+            try out.append(c.domain)
+            try out.append(flag(c.host_only))
+            try out.appendByte('\t')
+            try out.append(c.path)
+            try out.append(flag(c.secure))
+            try out.append(flag(c.http_only))
+            try out.appendByte('\t')
+            try out.appendInt(c.expires)
+            try out.appendByte('\t')
+            try out.append(c.name)
+            try out.appendByte('\t')
+            try out.append(c.value)
+            try out.appendByte('\n')
+        }
+    }
+}
+
+// A flag field of the file, with the tab before it.
+fn flag(b: bool) []u8 {
+    if b {
+        return "\t1"
+    }
+    return "\t0"
+}
+
+// Comes `c` after the last cookie sent (length `len`, created `created`)
+// in the sending order?
+fn after(c: Cookie, len: usize, created: u64, first: bool) bool {
+    if first {
+        return true
+    }
+    return c.path.len < len || (c.path.len == len && c.created > created)
+}
+
+fn freeCookie(alloc: Allocator, c: Cookie) {
+    alloc.free(c.name)
+    alloc.free(c.value)
+    alloc.free(c.domain)
+    alloc.free(c.path)
+}
+
+fn copyOf(alloc: Allocator, s: []u8) AllocError![]mut u8 {
+    let out = try alloc.alloc(0 as u8, s.len)
+    std.mem.copy(out, s)
+    return out
+}
+
+fn lowerCopy(alloc: Allocator, s: []u8) AllocError![]mut u8 {
+    let out = try copyOf(alloc, s)
+    text.toLower(out)
+    return out
+}
+
+fn isHttp(u: *Url) bool {
+    return text.eql(u.scheme, "http") || text.eql(u.scheme, "https")
+}
+
+/// Is `host` in `domain` (equal, or a subdomain of it; an IP address
+/// only equal)?
+pub fn domainMatch(host: []u8, domain: []u8) bool {
+    if text.eqlIgnoreCase(host, domain) {
+        return true
+    }
+    if isIp(host) || host.len <= domain.len {
+        return false
+    }
+    let cut = host.len - domain.len
+    return host[cut - 1] == '.' && text.eqlIgnoreCase(host[cut..], domain)
+}
+
+fn isIp(host: []u8) bool {
+    if host.len > 0 && host[0] == '[' {
+        return true
+    }
+    for c in host {
+        if !((c >= '0' && c <= '9') || c == '.') {
+            return false
+        }
+    }
+    return true
+}
+
+/// Is a request for `path` in the cookie path `dir`?
+pub fn pathMatch(path: []u8, dir: []u8) bool {
+    if text.eql(path, dir) {
+        return true
+    }
+    if !text.startsWith(path, dir) {
+        return false
+    }
+    return dir[dir.len - 1] == '/' || path[dir.len] == '/'
+}
+
+/// The path of a cookie set without one: the directory of the URL path.
+pub fn defaultPath(path: []u8) []u8 {
+    if path.len == 0 || path[0] != '/' {
+        return "/"
+    }
+    var last: usize = 0
+    for i, c in path {
+        if c == '/' {
+            last = i
+        }
+    }
+    if last == 0 {
+        return "/"
+    }
+    return path[..last]
+}
+
+// Max-Age: digits with an optional leading `-`.
+fn parseSeconds(s: []u8) ?i64 {
+    if s.len == 0 || s.len > 18 {
+        return null
+    }
+    var neg = false
+    var i: usize = 0
+    if s[0] == '-' {
+        neg = true
+        i = 1
+    }
+    if i == s.len {
+        return null
+    }
+    var n: i64 = 0
+    while i < s.len {
+        if s[i] < '0' || s[i] > '9' {
+            return null
+        }
+        n = n * 10 + (s[i] - '0') as i64
+        i += 1
+    }
+    if neg {
+        return -n
+    }
+    return n
+}
+
+/// A cookie date ("Wed, 21 Oct 2015 07:28:00 GMT", and the other forms
+/// RFC 6265 section 5.1.1 accepts) in seconds since 1970; null when it
+/// is not one.
+pub fn parseDate(s: []u8) ?i64 {
+    var hour: i64 = -1
+    var minute: i64 = 0
+    var second: i64 = 0
+    var day: i64 = -1
+    var month: i64 = -1
+    var year: i64 = -1
+    var i: usize = 0
+    while i < s.len {
+        while i < s.len && isDelimiter(s[i]) {
+            i += 1
+        }
+        var j = i
+        while j < s.len && !isDelimiter(s[j]) {
+            j += 1
+        }
+        let tok = s[i..j]
+        i = j
+        if tok.len == 0 {
+            continue
+        }
+        if hour < 0 {
+            if timeOf(tok) |t| {
+                hour = t / 3600
+                minute = t / 60 % 60
+                second = t % 60
+                continue
+            }
+        }
+        let digits = leadingDigits(tok)
+        if day < 0 && (digits == 1 || digits == 2) {
+            day = numberOf(tok[..digits])
+            continue
+        }
+        if month < 0 && tok.len >= 3 {
+            if monthOf(tok[..3]) |m| {
+                month = m
+                continue
+            }
+        }
+        if year < 0 && digits >= 2 && digits <= 4 {
+            year = numberOf(tok[..digits])
+            continue
+        }
+    }
+    if year >= 70 && year <= 99 {
+        year += 1900
+    } else if year >= 0 && year <= 69 {
+        year += 2000
+    }
+    if hour < 0 || day < 1 || day > 31 || month < 1 || year < 1601 || hour > 23 || minute > 59 || second > 59 {
+        return null
+    }
+    return daysFromCivil(year, month, day) * 86400 + hour * 3600 + minute * 60 + second
+}
+
+fn isDelimiter(c: u8) bool {
+    return c == 0x09 || (c >= 0x20 && c <= 0x2F) || (c >= 0x3B && c <= 0x40) || (c >= 0x5B && c <= 0x60) || (c >= 0x7B && c <= 0x7E)
+}
+
+fn leadingDigits(s: []u8) usize {
+    var n: usize = 0
+    while n < s.len && s[n] >= '0' && s[n] <= '9' {
+        n += 1
+    }
+    return n
+}
+
+fn numberOf(digits: []u8) i64 {
+    var n: i64 = 0
+    for c in digits {
+        n = n * 10 + (c - '0') as i64
+    }
+    return n
+}
+
+// "hh:mm:ss" (one or two digits each) in seconds.
+fn timeOf(tok: []u8) ?i64 {
+    var parts = [3]i64{0, 0, 0}
+    var i: usize = 0
+    for k in 0..3 {
+        let n = leadingDigits(tok[i..])
+        if n < 1 || n > 2 {
+            return null
+        }
+        parts[k] = numberOf(tok[i..i + n])
+        i += n
+        if k < 2 {
+            if i >= tok.len || tok[i] != ':' {
+                return null
+            }
+            i += 1
+        }
+    }
+    return parts[0] * 3600 + parts[1] * 60 + parts[2]
+}
+
+fn monthOf(name: []u8) ?i64 {
+    var words = text.split("jan feb mar apr may jun jul aug sep oct nov dec", " ")
+    var m: i64 = 1
+    while words.next() |w| {
+        if text.eqlIgnoreCase(name, w) {
+            return m
+        }
+        m += 1
+    }
+    return null
+}
+
+// Days from 1970-01-01 to the date (proleptic Gregorian).
+fn daysFromCivil(year: i64, month: i64, day: i64) i64 {
+    var y = year
+    if month <= 2 {
+        y -= 1
+    }
+    var era = y / 400
+    if y < 0 {
+        era = (y - 399) / 400
+    }
+    let yoe = y - era * 400
+    var mp = month + 9
+    if month > 2 {
+        mp = month - 3
+    }
+    let doy = (153 * mp + 2) / 5 + day - 1
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+    return era * 146097 + doe - 719468
+}
+
+test "cookie dates" {
+    @expectEqual(1445412480, parseDate("Wed, 21 Oct 2015 07:28:00 GMT").?)
+    @expectEqual(1445412480, parseDate("Wednesday, 21-Oct-15 07:28:00 GMT").?)
+    @expectEqual(0, parseDate("Thu, 01 Jan 1970 00:00:00 GMT").?)
+    @expect(parseDate("tomorrow") == null)
+    @expect(parseDate("Wed, 21 Oct 2015") == null)
+}
+
+test "domain and path matching" {
+    @expect(domainMatch("www.example.com", "example.com"))
+    @expect(domainMatch("example.com", "example.com"))
+    @expect(!domainMatch("badexample.com", "example.com"))
+    @expect(!domainMatch("1.2.3.4", "2.3.4"))
+    @expect(pathMatch("/docs/a", "/docs"))
+    @expect(pathMatch("/docs/a", "/docs/"))
+    @expect(!pathMatch("/docsx", "/docs"))
+    @expectEqual("/docs", defaultPath("/docs/page.html"))
+    @expectEqual("/", defaultPath("/page.html"))
+}
