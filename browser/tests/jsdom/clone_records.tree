@@ -1,0 +1,25 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Cloning makes no mutation records"
+      "\n"
+    <body>
+      <pre id="out">
+        "-- append\nconnected c\n-- appended\nrecord DIV added X-CLONED\n"
+      "\n"
+      <div id="box">
+        <x-cloned id="c">
+          <span>
+            "kid"
+      "\n"
+      <template id="t">
+        #document-fragment
+          <x-cloned id="c">
+            <span>
+              "kid"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\ncustomElements.define('x-cloned', class extends HTMLElement {\n  connectedCallback() { log('connected', this.id); }\n});\nnew MutationObserver(recs => {\n  for (const r of recs) log('record', r.target.nodeName, 'added', Array.from(r.addedNodes, n => n.nodeName).join(','));\n}).observe(document.getElementById('box'), { childList: true, subtree: true });\nconst t = document.getElementById('t');\n// Building the copies is not observed; inserting one connects its\n// custom element once and makes one record.\nconst f = document.importNode(t.content, true);\nconst g = t.content.cloneNode(true);\nlog('-- append');\ndocument.getElementById('box').appendChild(f);\nlog('-- appended');\n"
+      "\n"
