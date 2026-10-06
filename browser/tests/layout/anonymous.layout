@@ -1,0 +1,46 @@
+viewport 800x600
+  block <html> (0, 0) 800x252
+    block <body> (0, 0) 800x236
+      block <div> (0, 0) 800x60
+        block (anonymous) (0, 0) 800x20
+          line (0, 0) 800x20
+            text (0, 2) 80x16 "loose text"
+        block <div> (0, 20) 800x20
+          line (0, 20) 800x20
+            text (0, 22) 56x16 "a block"
+        block (anonymous) (0, 40) 800x20
+          line (0, 40) 800x20
+            text (0, 42) 128x16 "more loose text "
+            inline <b> (128, 42) 32x16
+              text (128, 42) 32x16 "bold"
+      block <div> (0, 60) 800x60
+        block <span> (0, 60) 800x60
+          block (anonymous) (0, 60) 800x20
+            line (0, 60) 800x20
+              text (0, 62) 112x16 "an inline with"
+          block <div> (0, 80) 800x20
+            line (0, 80) 800x20
+              text (0, 82) 112x16 "a block inside"
+          block (anonymous) (0, 100) 800x20
+            line (0, 100) 800x20
+              text (0, 102) 16x16 "it"
+      block <div> (0, 120) 800x20
+        line (0, 120) 800x20
+          text (0, 122) 64x16 "visible "
+          text (64, 122) 72x16 "contents "
+          inline <i> (136, 122) 40x16
+            text (136, 122) 40x16 "child"
+      block <div> (0, 140) 800x40
+        block <div> (0, 140) 800x20
+          line (0, 140) 800x20
+            text (0, 142) 200x16 "whitespace between blocks"
+        block <div> (0, 160) 800x20
+          line (0, 160) 800x20
+            text (0, 162) 80x16 "is dropped"
+      block (anonymous) (0, 180) 800x20
+        line (0, 180) 800x20
+          inline <span> (0, 182) 216x16
+            text (0, 182) 216x16 "an inline at the body level"
+      block <p> (0, 216) 800x20
+        line (0, 216) 800x20
+          text (0, 218) 88x16 "a paragraph"

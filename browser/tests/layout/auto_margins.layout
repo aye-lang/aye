@@ -1,0 +1,20 @@
+viewport 800x600
+  block <html> (0, 0) 800x130
+    block <body> (0, 0) 800x120
+      block <div style="margin: 0 auto"> (299, 0) 202x22
+        line (300, 1) 200x20
+          text (300, 3) 64x16 "centered"
+      block <div style="margin-left: auto"> (598, 22) 202x22
+        line (599, 23) 200x20
+          text (599, 25) 40x16 "right"
+      block <div style="margin-right: auto; margin-left: 50px"> (50, 44) 202x22
+        line (51, 45) 200x20
+          text (51, 47) 56x16 "left 50"
+      block <div style="margin: 0 auto; width: 1000px"> (0, 66) 1002x22
+        line (1, 67) 1000x20
+          text (1, 69) 224x16 "too wide: no negative margin"
+      block <div style="margin: 10px 30px"> (30, 98) 202x22
+        line (31, 99) 200x20
+          text (31, 101) 160x16 "fixed margins, width"
+        line (31, 119) 200x20
+          text (31, 121) 128x16 "over-constrained"

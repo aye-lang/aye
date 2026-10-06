@@ -1,0 +1,71 @@
+viewport 800x600
+  block <html> (0, 0) 800x300
+    block <body> (0, 0) 800x300
+      block <ol start="8"> (0, 0) 800x80
+        list-item <li> (40, 0) 760x20
+          marker (16, 2) 24x16 "8. "
+          line (40, 0) 760x20
+            text (40, 2) 40x16 "eight"
+        list-item <li> (40, 20) 760x20
+          marker (16, 22) 24x16 "9. "
+          line (40, 20) 760x20
+            text (40, 22) 32x16 "nine"
+        list-item <li value="40"> (40, 40) 760x20
+          marker (8, 42) 32x16 "40. "
+          line (40, 40) 760x20
+            text (40, 42) 40x16 "forty"
+        list-item <li> (40, 60) 760x20
+          marker (8, 62) 32x16 "41. "
+          line (40, 60) 760x20
+            text (40, 62) 72x16 "forty-one"
+      block <ol style="list-style-type: lower-alpha"> (0, 80) 800x40
+        list-item <li> (40, 80) 760x20
+          marker (16, 82) 24x16 "a. "
+          line (40, 80) 760x20
+            text (40, 82) 8x16 "a"
+        list-item <li> (40, 100) 760x20
+          marker (16, 102) 24x16 "b. "
+          line (40, 100) 760x20
+            text (40, 102) 8x16 "b"
+      block <ol style="list-style-type: upper-roman" start="1999"> (0, 120) 800x40
+        list-item <li> (40, 120) 760x20
+          marker (-32, 122) 72x16 "MCMXCIX. "
+          line (40, 120) 760x20
+            text (40, 122) 56x16 "MCMXCIX"
+        list-item <li> (40, 140) 760x20
+          marker (8, 142) 32x16 "MM. "
+          line (40, 140) 760x20
+            text (40, 142) 16x16 "MM"
+      block <ol style="list-style-type: lower-roman" start="4"> (0, 160) 800x20
+        list-item <li> (40, 160) 760x20
+          marker (8, 162) 32x16 "iv. "
+          line (40, 160) 760x20
+            text (40, 162) 16x16 "iv"
+      block <ol style="list-style-type: decimal-leading-zero"> (0, 180) 800x20
+        list-item <li> (40, 180) 760x20
+          marker (8, 182) 32x16 "01. "
+          line (40, 180) 760x20
+            text (40, 182) 16x16 "01"
+      block <ol style="list-style-type: upper-alpha" start="27"> (0, 200) 800x20
+        list-item <li> (40, 200) 760x20
+          marker (8, 202) 32x16 "AA. "
+          line (40, 200) 760x20
+            text (40, 202) 16x16 "AA"
+      block <ol style="list-style-type: lower-greek" start="3"> (0, 220) 800x20
+        list-item <li> (40, 220) 760x20
+          marker (16, 222) 24x16 "γ. "
+          line (40, 220) 760x20
+            text (40, 222) 40x16 "gamma"
+      block <ul style="list-style-type: square"> (0, 240) 800x20
+        list-item <li> (40, 240) 760x20
+          marker (24, 242) 16x16 "▪ "
+          line (40, 240) 760x20
+            text (40, 242) 48x16 "square"
+      block <ul style="list-style: none"> (0, 260) 800x20
+        list-item <li> (40, 260) 760x20
+          line (40, 260) 760x20
+            text (40, 262) 72x16 "no marker"
+      list-item <div style="display: list-item; margin-left: 40px"> (40, 280) 760x20
+        marker (24, 282) 16x16 "• "
+        line (40, 280) 760x20
+          text (40, 282) 160x16 "a div as a list item"

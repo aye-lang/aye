@@ -1,0 +1,27 @@
+viewport 800x600
+  block <html> (0, 0) 800x152
+    block <body> (0, 0) 800x152
+      block <div class="r"> (20, 10) 800x30
+        block (anonymous) (20, 10) 800x20
+          line (20, 10) 800x20
+            text (20, 12) 208x16 "moved down 10 and right 20"
+        block <div> (20, 30) 800x20
+          line (20, 30) 800x20
+            text (20, 32) 120x16 "child moves too"
+      block <div class="rb"> (-15, 25) 800x30
+        line (-15, 25) 800x20
+          text (-15, 27) 176x16 "moved up 5 and left 15"
+      block <div> (0, 60) 800x20
+        line (0, 60) 800x20
+          text (0, 62) 304x16 "stays in the flow where the boxes were"
+      block <p> (0, 96) 800x20
+        line (0, 96) 800x20
+          text (0, 98) 80x16 "text with "
+          inline <span style="position: relative; top: -4px; left: 2px"> (82, 94) 104x16
+            text (82, 94) 72x16 "a raised "
+            inline <b> (154, 94) 32x16
+              text (154, 94) 32x16 "span"
+          text (184, 98) 56x16 " inside"
+      block <div style="position: relative; top: 10%"> (0, 132) 800x20
+        line (0, 132) 800x20
+          text (0, 134) 256x16 "10% of an auto height: no offset"

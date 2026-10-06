@@ -1,0 +1,24 @@
+viewport 800x600
+  block <html> (0, 0) 800x184
+    block <body> (0, 0) 800x184
+      block <p style="text-align: left"> (0, 0) 162x22
+        line (1, 1) 160x20
+          text (1, 3) 96x16 "left aligned"
+      block <p style="text-align: right"> (0, 26) 162x22
+        line (1, 27) 160x20
+          text (57, 29) 104x16 "right aligned"
+      block <p style="text-align: center"> (0, 52) 162x22
+        line (1, 53) 160x20
+          text (29, 55) 104x16 "centered text"
+      block <p style="text-align: justify"> (0, 78) 162x82
+        line (1, 79) 160x20
+          text (1, 81) 160x16 "justified text"
+        line (1, 99) 160x20
+          text (1, 101) 160x16 "spreads the words of"
+        line (1, 119) 160x20
+          text (1, 121) 160x16 "each line but the"
+        line (1, 139) 160x20
+          text (1, 141) 32x16 "last"
+      block <center> (0, 164) 800x20
+        line (0, 164) 800x20
+          text (324, 166) 152x16 "in a center element"

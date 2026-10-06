@@ -1,0 +1,45 @@
+viewport 800x600
+  block <html> (0, 0) 800x144
+    block <body> (0, 0) 800x140
+      flex <div class="f"> (0, 0) 300x20
+        block <div style="flex: 1"> (0, 0) 100x20
+          line (0, 0) 100x20
+            text (0, 2) 24x16 "one"
+        block <div style="flex: 2"> (100, 0) 200x20
+          line (100, 0) 200x20
+            text (100, 2) 24x16 "two"
+      flex <div class="f"> (0, 24) 300x20
+        block <div style="flex-grow: 1"> (0, 24) 268x20
+          line (0, 24) 268x20
+            text (0, 26) 40x16 "grows"
+        block <div> (268, 24) 32x20
+          line (268, 24) 32x20
+            text (268, 26) 32x16 "text"
+      flex <div class="f"> (0, 48) 300x20
+        block <div style="flex: 0 0 100px"> (0, 48) 100x20
+          line (0, 48) 100x20
+            text (0, 50) 40x16 "100px"
+        block <div style="flex: 1 1 0; min-width: 0"> (100, 48) 200x20
+          line (100, 48) 200x20
+            text (100, 50) 32x16 "rest"
+      flex <div class="f"> (0, 72) 300x20
+        block <div style="width: 200px"> (0, 72) 175x20
+          line (0, 72) 175x20
+            text (0, 74) 88x16 "200 shrinks"
+        block <div style="width: 200px; flex-shrink: 3"> (175, 72) 125x20
+          line (175, 72) 125x20
+            text (175, 74) 112x16 "200 shrinks 3x"
+      flex <div class="f"> (0, 96) 300x20
+        block <div style="flex: 1; max-width: 50px"> (0, 96) 50x20
+          line (0, 96) 50x20
+            text (0, 98) 24x16 "max"
+        block <div style="flex: 1"> (50, 96) 250x20
+          line (50, 96) 250x20
+            text (50, 98) 112x16 "takes the rest"
+      flex <div class="f"> (0, 120) 300x20
+        block (anonymous) (0, 120) 192x20
+          line (0, 120) 192x20
+            text (0, 122) 192x16 "text in a flex container"
+        block <span> (192, 120) 80x20
+          line (192, 120) 80x20
+            text (192, 122) 80x16 "and a span"

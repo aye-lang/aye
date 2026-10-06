@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0 }
+.c { display: flex; flex-direction: column; width: 200px; margin-bottom: 4px }
+</style>
+<div class="c" style="gap: 5px"><div>stretched</div><div style="width: 100px">fixed width</div></div>
+<div class="c" style="align-items: center"><div>centered</div><div>also centered</div></div>
+<div class="c" style="align-items: flex-end"><div>at the end</div></div>
+<div class="c" style="height: 100px"><div style="flex: 1">grows down</div><div>stays</div></div>
+<div class="c" style="height: 100px; justify-content: flex-end"><div>bottom</div></div>
+<div style="display: flex; height: 60px; align-items: center"><div>middle</div><div style="align-self: flex-end">end</div><div>centered too</div></div>
+<div style="display: flex; height: 40px"><div>stretched to 40</div></div>

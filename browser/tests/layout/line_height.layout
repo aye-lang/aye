@@ -1,0 +1,23 @@
+viewport 800x600
+  block <html> (0, 0) 800x160
+    block <body> (0, 0) 800x160
+      block <p style="line-height: 2"> (0, 0) 800x32
+        line (0, 0) 800x32
+          text (0, 8) 168x16 "line-height 2 at 16px"
+      block <p style="line-height: 10px"> (0, 32) 800x10
+        line (0, 32) 800x10
+          text (0, 29) 128x16 "line-height 10px"
+      block <p style="line-height: 150%; font-size: 20px"> (0, 42) 800x30
+        line (0, 42) 800x30
+          text (0, 47) 120x20 "150% of 20px"
+      block <p> (0, 72) 800x40
+        line (0, 72) 800x40
+          text (0, 88.8) 96x16 "normal with "
+          inline <span style="font-size: 32px"> (96, 76) 48x32
+            text (96, 76) 48x32 "big"
+          text (144, 88.8) 40x16 " text"
+      block <p style="line-height: 1"> (0, 112) 800x48
+        line (0, 112) 800x48
+          text (0, 128) 48x16 "tight "
+          inline <span style="line-height: 3"> (48, 128) 88x16
+            text (48, 128) 88x16 "tall inline"

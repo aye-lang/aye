@@ -121,9 +121,72 @@ fn style_fixtures() {
     assert!(failures.is_empty(), "{} of {} style runs failed:\n\n{}", failures.len(), runs.len(), failures.join("\n"));
 }
 
+/// `browser/tests/layout/X.html`: `anyknown dump --layout` (fixed-metric
+/// font, 800x600 viewport) must print `X.layout`; `percentages.html` is
+/// also laid out 400px wide into `percentages.w400.layout`.
+#[test]
+fn layout_fixtures() {
+    let dir = root().join("browser").join("tests").join("layout");
+    let mut htmls: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "html"))
+        .collect();
+    htmls.sort();
+    assert!(htmls.len() >= 25, "expected at least 25 layout fixtures, found {}", htmls.len());
+    let mut runs: Vec<(Vec<String>, PathBuf)> = htmls
+        .iter()
+        .map(|h| (vec![h.strip_prefix(root()).unwrap().to_string_lossy().into_owned()], h.with_extension("layout")))
+        .collect();
+    runs.push((
+        vec!["--width".into(), "400".into(), "browser/tests/layout/percentages.html".into()],
+        dir.join("percentages.w400.layout"),
+    ));
+    let bless = std::env::var_os("ANYKNOWN_BLESS").is_some();
+    let mut failures = Vec::new();
+    for (args, golden) in &runs {
+        let mut all = vec!["dump", "--layout"];
+        all.extend(args.iter().map(|s| s.as_str()));
+        let out = run(&all);
+        let got = text(&out.stdout);
+        if !out.status.success() || !out.stderr.is_empty() {
+            failures.push(format!("{args:?}: {}\n{}", out.status, text(&out.stderr)));
+            continue;
+        }
+        if bless {
+            std::fs::write(golden, &got).unwrap();
+            continue;
+        }
+        let want = std::fs::read_to_string(golden).unwrap_or_default();
+        if got != want {
+            failures.push(format!("{args:?}: output differs from {}\n--- expected\n{want}--- got\n{got}", golden.display()));
+        }
+    }
+    assert!(failures.is_empty(), "{} of {} layout runs failed:\n\n{}", failures.len(), runs.len(), failures.join("\n"));
+}
+
+/// `--font system` measures text with the system's fonts through
+/// FreeType; skipped when none of the known font files is there.
+#[test]
+fn layout_system_font() {
+    let page = "browser/tests/layout/nested.html";
+    let out = run(&["dump", "--layout", "--font", "system", page]);
+    if text(&out.stderr).contains("no system font found") {
+        println!("skipped: no system font");
+        return;
+    }
+    assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+    let got = text(&out.stdout);
+    assert!(got.starts_with("viewport 800x600\n  block <html> (0, 0) 800x"), "{got}");
+    assert!(got.contains("\"The Ore Times\""), "{got}");
+    // Proportional glyphs: widths differ from the fixed-metric font's.
+    let fixed = text(&run(&["dump", "--layout", page]).stdout);
+    assert_ne!(got, fixed);
+}
+
 #[test]
 fn ore_unit_tests() {
-    for module in ["browser", "browser/url", "browser/dom", "browser/encoding"] {
+    for module in ["browser", "browser/url", "browser/dom", "browser/encoding", "browser/font"] {
         let out = ore().arg("test").arg(module).output().unwrap();
         let stdout = text(&out.stdout);
         assert!(
@@ -166,9 +229,10 @@ fn queries() {
 
 #[test]
 fn errors() {
-    let usage = "error: usage: anyknown dump --tree|--text|--style [--width PX] [--id ID | --tag NAME] FILE|URL\n";
+    let usage = "error: usage: anyknown dump --tree|--text|--style|--layout [--width PX] [--font fixed|system] [--id ID | --tag NAME] FILE|URL\n";
     expect(&[], 2, "", usage);
     expect(&["dump", "--tree"], 2, "", usage);
+    expect(&["dump", "--layout", "--font", "serif", "browser/tests/basic.html"], 2, "", usage);
     expect(&["dump", "--tree", "browser/tests/missing.html"], 1, "", &format!(
         "error: cannot fetch file://{}/browser/tests/missing.html: not found\n",
         root().display()
