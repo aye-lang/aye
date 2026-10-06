@@ -21,11 +21,11 @@ extern struct FTGlyphSlotRec {}
 
 // The start of `FT_FaceRec` (freetype.h), up to the fields we read.
 pub extern struct FTFaceRec {
-    num_faces: i64
-    face_index: i64
-    face_flags: i64
-    style_flags: i64
-    num_glyphs: i64
+    num_faces: c_long
+    face_index: c_long
+    face_flags: c_long
+    style_flags: c_long
+    num_glyphs: c_long
     family_name: ?[*]u8
     style_name: ?[*]u8
     num_fixed_sizes: i32
@@ -34,10 +34,10 @@ pub extern struct FTFaceRec {
     charmaps: ?[*]u8
     generic_data: ?[*]u8
     generic_finalizer: ?[*]u8
-    bbox_x_min: i64
-    bbox_y_min: i64
-    bbox_x_max: i64
-    bbox_y_max: i64
+    bbox_x_min: c_long
+    bbox_y_min: c_long
+    bbox_x_max: c_long
+    bbox_y_max: c_long
     units_per_em: u16
     ascender: i16
     descender: i16
@@ -50,8 +50,8 @@ pub extern struct FTFaceRec {
 }
 
 extern struct FTVector {
-    x: i64
-    y: i64
+    x: c_long
+    y: c_long
 }
 
 extern struct FTGeneric {
@@ -77,9 +77,9 @@ extern struct FTGlyphSlot {
     next: ?[*]u8
     glyph_index: u32
     generic: FTGeneric
-    metrics: [8]i64
-    linear_hori_advance: i64
-    linear_vert_advance: i64
+    metrics: [8]c_long
+    linear_hori_advance: c_long
+    linear_vert_advance: c_long
     advance: FTVector
     format: u32
     bitmap: FTBitmap
@@ -102,12 +102,12 @@ pub struct GlyphBitmap {
 
 extern fn FT_Init_FreeType(library: *mut ?*mut FTLibraryRec) i32
 extern fn FT_Done_FreeType(library: *mut FTLibraryRec) i32
-extern fn FT_New_Face(library: *mut FTLibraryRec, path: [*]u8, index: i64, face: *mut ?*mut FTFaceRec) i32
+extern fn FT_New_Face(library: *mut FTLibraryRec, path: [*]u8, index: c_long, face: *mut ?*mut FTFaceRec) i32
 extern fn FT_Done_Face(face: *mut FTFaceRec) i32
-extern fn FT_Get_Char_Index(face: *mut FTFaceRec, code: u64) u32
-extern fn FT_Get_Advance(face: *mut FTFaceRec, glyph: u32, flags: i32, advance: *mut i64) i32
+extern fn FT_Get_Char_Index(face: *mut FTFaceRec, code: c_ulong) u32
+extern fn FT_Get_Advance(face: *mut FTFaceRec, glyph: u32, flags: i32, advance: *mut c_long) i32
 extern fn FT_Get_Kerning(face: *mut FTFaceRec, left: u32, right: u32, mode: u32, kerning: *mut FTVector) i32
-extern fn FT_Set_Char_Size(face: *mut FTFaceRec, width: i64, height: i64, hres: u32, vres: u32) i32
+extern fn FT_Set_Char_Size(face: *mut FTFaceRec, width: c_long, height: c_long, hres: u32, vres: u32) i32
 extern fn FT_Load_Glyph(face: *mut FTFaceRec, glyph: u32, flags: i32) i32
 
 let FT_LOAD_NO_SCALE: i32 = 1

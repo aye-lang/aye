@@ -1,0 +1,3 @@
+embed_file.ore:4:24: error[E0111]: `@embedFile` takes a string literal, the path of the file: `@embedFile("ua.css")`
+embed_file.ore:5:24: error[E0111]: `@embedFile` takes a path relative to the source file, not the absolute `/etc/hosts` (the build would depend on this machine)
+embed_file.ore:6:13: error[E0022]: `@embedFile` takes one argument, a string literal: the path of the file

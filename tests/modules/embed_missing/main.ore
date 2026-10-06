@@ -1,0 +1,6 @@
+let PRELUDE = @embedFile("prelude.js")
+
+pub fn main() {
+    @print(PRELUDE)
+    let dir = @embedFile("../embed_missing")
+}

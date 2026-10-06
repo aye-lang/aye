@@ -95,18 +95,15 @@ fn clickPage(ui: *mut Ui, x: f64, y: f64) AllocError!void {
             ui.dirty = true
         }
     }
-    match act {
-        .Nothing => {
-            // A click outside the focused element takes the focus away.
-            if before |b| {
-                if !inside(&p.doc, node, b) {
-                    return blur(ui)
-                }
+    if act is .Nothing {
+        // A click outside the focused element takes the focus away.
+        if before |b| {
+            if !inside(&p.doc, node, b) {
+                return blur(ui)
             }
-            ui.dirty = true
-            return
         }
-        _ => {}
+        ui.dirty = true
+        return
     }
     return runActivation(ui, act)
 }

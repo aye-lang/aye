@@ -11,19 +11,10 @@ fn inflatesTo(a: Allocator, stream: []u8, expected: []u8) !bool {
     return std.mem.eql(expected, out)
 }
 
-// Error values have no `==`: compare them through a number.
-fn errorCode(e: ImageError) u8 {
-    return match e {
-        .OutOfMemory => 0
-        .Invalid => 1
-        .Unsupported => 2
-    }
-}
-
 // Does inflating `stream` fail with `expected`?
 fn inflateFails(a: Allocator, stream: []u8, expected: ImageError) bool {
     let out = inflateZlib(a, stream) catch |e| {
-        return errorCode(e) == errorCode(expected)
+        return e == expected
     }
     a.free(out)
     return false
@@ -247,17 +238,17 @@ test "decoders refuse other formats" {
 fn decodeFails(a: Allocator, data: []u8, which: u8) bool {
     if which == 0 {
         let p = decodePng(a, data) catch |e| {
-            return errorCode(e) == 1
+            return e == ImageError.Invalid
         }
         p.deinit(a)
     } else if which == 1 {
         let g = decodeGif(a, data) catch |e| {
-            return errorCode(e) == 1
+            return e == ImageError.Invalid
         }
         g.deinit(a)
     } else {
         let j = decodeJpeg(a, data) catch |e| {
-            return errorCode(e) == 1
+            return e == ImageError.Invalid
         }
         j.deinit(a)
     }

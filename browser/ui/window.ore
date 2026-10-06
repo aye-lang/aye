@@ -146,7 +146,7 @@ pub fn run(alloc: Allocator, args: [][]u8) i32 {
     if uiOptions(args) |parsed| {
         o = parsed
     } else {
-        std.log.err("{}", UI_USAGE)
+        std.log.err(UI_USAGE)
         return 2
     }
     var sys = font.System.init(alloc) catch |e| {
@@ -737,7 +737,7 @@ pub struct Ui {
         if kind == SDL_QUIT {
             self.quit = true
         } else if kind == SDL_WINDOWEVENT {
-            let we = @ptrCast(*SDL_WindowEvent, ev)
+            let we = &ev.window
             if we.event == SDL_WINDOWEVENT_SIZE_CHANGED {
                 self.resized = true
             } else if we.event == SDL_WINDOWEVENT_EXPOSED {
@@ -747,25 +747,25 @@ pub struct Ui {
                 try self.clearHover(false)
             }
         } else if kind == SDL_KEYDOWN {
-            let ke = @ptrCast(*SDL_KeyboardEvent, ev)
+            let ke = &ev.key
             try self.key(ke.keysym.sym, ke.keysym.mods)
         } else if kind == SDL_TEXTINPUT {
-            let te = @ptrCast(*SDL_TextInputEvent, ev)
+            let te = &ev.text
             var n: usize = 0
             while n < te.text.len && te.text[n] != 0 {
                 n += 1
             }
             try self.typed(te.text[0..n])
         } else if kind == SDL_MOUSEMOTION {
-            let me = @ptrCast(*SDL_MouseMotionEvent, ev)
+            let me = &ev.motion
             try self.mouseMoved(me.x as f64, me.y as f64)
         } else if kind == SDL_MOUSEBUTTONDOWN {
-            let be = @ptrCast(*SDL_MouseButtonEvent, ev)
+            let be = &ev.button
             if be.button == SDL_BUTTON_LEFT {
                 try self.click(be.x as f64, be.y as f64)
             }
         } else if kind == SDL_MOUSEWHEEL {
-            let wh = @ptrCast(*SDL_MouseWheelEvent, ev)
+            let wh = &ev.wheel
             var dy = wh.precise_y as f64
             if dy == 0.0 {
                 dy = wh.y as f64

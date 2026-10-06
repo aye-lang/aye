@@ -99,8 +99,7 @@ test "collected host objects are reported to the host" {
     defer it.deinit()
     try installBuiltins(&mut it)
     var h = CountingHost { finalized: 0, last_index: 0 }
-    let d: dyn Host = &mut h
-    it.host = d
+    it.host = &mut h
     let kept = try it.newHostObject(it.object_proto, 1, 7, 0)
     let root = try it.addRoot(objVal(kept))
     for i in 0..10 {

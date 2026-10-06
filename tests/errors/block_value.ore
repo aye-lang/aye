@@ -1,0 +1,34 @@
+error E { A }
+
+fn f() E!u32 {
+    return 1
+}
+
+fn g() ?u32 {
+    return null
+}
+
+fn note() {
+    @println("note")
+}
+
+pub fn main() {
+    let a = f() catch |e| {
+        note()
+        true
+    }
+    let b = f() catch |e| {
+        note()
+        f()
+    }
+    let c = f() catch |e| {
+        note()
+    }
+    let d = g() orelse {
+        note()
+        "none"
+    }
+    let h = g() orelse {
+        let x: u32 = 2
+    }
+}

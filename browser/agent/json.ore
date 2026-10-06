@@ -278,7 +278,7 @@ pub fn writeString(out: *mut text.Builder, s: []u8) AllocError!void {
 /// `%g` ("0.5", "1e+300"). NaN and infinities, which JSON cannot hold, are
 /// written as `null`.
 pub fn writeNumber(out: *mut text.Builder, v: f64) AllocError!void {
-    if v != v || v - v != 0.0 {
+    if math.isNan(v) || math.isInf(v) {
         return out.append("null")
     }
     if v == math.floor(v) && v >= -9223372036854775808.0 && v < 9223372036854775808.0 {
@@ -294,13 +294,13 @@ pub struct Writer {
     out: *mut text.Builder
     // The number of open arrays and objects.
     depth: usize
-    // Bit d - 1: the container at depth d already has a value.
-    has: u64
+    // has[d - 1]: the container at depth d already has a value.
+    has: [64]bool = @zeroed([64]bool)
     // A key was written: the next value follows it without a comma.
     after_key: bool
 
     pub fn init(out: *mut text.Builder) Writer {
-        return Writer { out: out, depth: 0, has: 0, after_key: false }
+        return Writer { out: out, depth: 0, after_key: false }
     }
 
     pub fn beginObject(self: *mut Self) AllocError!void {
@@ -378,16 +378,15 @@ pub struct Writer {
         if self.depth == 0 {
             return
         }
-        let bit = (1 as u64) << (self.depth - 1) as u64
-        if self.has & bit != 0 {
+        if self.has[self.depth - 1] {
             try self.out.appendByte(',')
         }
-        self.has |= bit
+        self.has[self.depth - 1] = true
     }
 
     fn open(self: *mut Self) {
         self.depth += 1
-        self.has &= ~((1 as u64) << (self.depth - 1) as u64)
+        self.has[self.depth - 1] = false
     }
 }
 

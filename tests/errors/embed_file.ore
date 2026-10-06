@@ -1,0 +1,7 @@
+let NAME = "ua.css"
+
+pub fn main() {
+    let a = @embedFile(NAME)
+    let b = @embedFile("/etc/hosts")
+    let c = @embedFile()
+}

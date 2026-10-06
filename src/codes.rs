@@ -1227,7 +1227,7 @@ pub fn main() {
 }
 E0067 = 67 {
     "`catch` or `orelse` block without a value",
-    "When the call returns a value (`E!T` with T not `void`), a `catch` block must leave with `return`, `break` or `continue` (or end in `unreachable`). To give a replacement value instead, write `catch <expression>`, for example `catch 0` or `catch |e| match e { ... }`. The same holds for an `orelse` block: `x orelse { ... return }`, or `x orelse 0`.",
+    "When the call returns a value (`E!T` with T not `void`), a `catch` block gives the replacement value as its last line (`catch |e| { report(e); 0 }`), or leaves with `return`, `break` or `continue` (or ends in `unreachable`). A block that ends with a statement, such as a call that returns nothing, does neither. A replacement value without statements is `catch <expression>`, for example `catch 0` or `catch |e| match e { ... }`. The same holds for an `orelse` block: `x orelse { log(); 0 }`, `x orelse { ... return }`, or `x orelse 0`.",
     r#"error E { Failed }
 
 fn f() E!u32 {
@@ -1249,8 +1249,9 @@ fn f() E!u32 {
 pub fn main() {
     let x = f() catch |e| {
         @println("failed")
-        return
+        0
     }
+    @println(x)
 }
 "#,
 }
@@ -2356,6 +2357,67 @@ E0109 = 109 {
     let v = simd[4]f32{1.0, 2.0, 3.0, 0.0}
     @println(@reduceAdd(v))
 }
+"#,
+}
+E0110 = 110 {
+    "invalid `@downcast`",
+    "`@downcast(*S, d)` turns the `dyn I` value `d` back into a pointer to its struct: a `?*S`, or `null` when `d` was made from another type. The first argument is `*S` or `*mut S` for a struct `S` that implements `I` (otherwise the result would always be `null`); the second is a `dyn`, not a `?dyn` (unwrap it first). `*mut S` needs one of `S`'s methods for `I` to take `self: *mut Self`: only then was the `dyn` surely made from `&mut x`, since a `dyn` of read-only methods can point to a `let` value. Use it where a library keeps only the `dyn` of the code that uses it (a host, a callback's context) and that code needs its own struct back.",
+    r#"interface Host {
+    fn finalize(self: *mut Self)
+}
+
+struct Page {
+    title: []u8
+}
+
+pub fn main() {
+    var p = Page { title: "home" }
+}
+
+fn pageOf(h: dyn Host) ?*mut Page {
+    return @downcast(*mut Page, h)
+}
+"#,
+    r#"interface Host {
+    fn finalize(self: *mut Self)
+}
+
+struct Page {
+    title: []u8
+
+    fn finalize(self: *mut Self) {}
+}
+
+pub fn main() {
+    var p = Page { title: "home" }
+    let h: dyn Host = &mut p
+    let back = pageOf(h) orelse return
+    @println(back.title)
+}
+
+fn pageOf(h: dyn Host) ?*mut Page {
+    return @downcast(*mut Page, h)
+}
+"#,
+}
+E0111 = 111 {
+    "invalid `@embedFile`",
+    "`@embedFile(\"path\")` is the bytes of a file as a `[]u8` constant, read when the program is compiled: a style sheet or a script kept as a file of its own, which its own tools can check. The argument is a string literal (a constant would hide which file the program depends on), and the path is relative to the directory of the source file that names it, so a module's files travel with it. An absolute path is refused, since the build would then depend on the machine. The file must exist and be a regular file.",
+    r#"let NAME = "greeting.txt"
+let GREETING = @embedFile(NAME)
+
+pub fn main() {
+    @print(GREETING)
+}
+"#,
+    r#"// file: main.ore
+let GREETING = @embedFile("greeting.txt")
+
+pub fn main() {
+    @print(GREETING)
+}
+// file: greeting.txt
+hello
 "#,
 }
 }

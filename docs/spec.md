@@ -131,7 +131,8 @@ pub fn main() {
 ```
 
 - Builtins start with `@`: `@print`, `@println`, `@expect`, `@expectEqual`,
-  `@testAllocator`, `@sizeOf`, `@zeroed`, `@ptrCast`, `@link`,
+  `@testAllocator`, `@sizeOf`, `@zeroed`, `@ptrCast`, `@downcast`,
+  `@embedFile`, `@link`,
   `@linkOptional`, `@hasLink`, `@atomicLoad`, `@atomicStore`, `@atomicAdd`,
   `@atomicSub`, `@atomicCas`, `@hash`, `@setSafety`, `@splat`,
   `@reduceAdd`, `@reduceMin`, `@reduceMax`, `@all`, `@any`, `@select`.
@@ -827,7 +828,9 @@ optional type (`var m: ?i64 = null`).
 
 - `x orelse d` is the value of `x`, or `d` (a `T`, evaluated only when `x`
   is `null`). Instead of `d`: `return [value]`, `break`, `continue`, or a
-  block that ends with one of them or `unreachable`. `catch` takes the same.
+  block that ends with one of them, `unreachable` or a value (`x orelse {
+  log(); d }`: the last line, computed before the block's `defer`s run).
+  `catch` takes the same.
   When `d` is a `?T` itself, the result is a `?T`, so `orelse` chains:
   `alt(i) orelse title(i) orelse ""` is a `[]u8`.
 - `x.?` is the value of `x`; a `null` panics (`unwrap of null`). It is a
@@ -979,8 +982,9 @@ pub fn main() !void {
   function (which must return an error union whose set has the error).
 - `f() catch value` gives `value` on error; `f() catch |e| expr` can use
   the error. `f() catch |e| { ... }` runs the block on error; when the
-  payload is not `void` the block must end with `return`, `break` or
-  `continue`. A `return` there returns from the enclosing function. `catch` binds looser than `+` and tighter than `==`.
+  payload is not `void` the block must end with the replacement value (an
+  expression as its last line: `catch |e| { report(e); old }`) or leave
+  with `return`, `break` or `continue`. A `return` there returns from the enclosing function. `catch` binds looser than `+` and tighter than `==`.
 - `if f() |v| { A } else |e| { B }` branches on an error union without
   leaving the function: `A` gets the payload `v`, `B` the error `e` (for
   `E!void`: `if f() { A } else |e| { B }`). The `else |e|` is required
@@ -1183,6 +1187,13 @@ pub fn main() {
   the `dyn` to be made from `&mut x`.
 - `dyn I` is made only from a pointer, `&x` or `&mut x`, where a `dyn I` is
   expected. It does not allocate. Calls go through a vtable.
+- `@downcast(*S, d)` turns the `dyn I` value `d` back into a pointer to its
+  struct: a `?*S` that is `null` when `d` was made from another type (it
+  compares `d`'s vtable with `S`'s for `I`). `S` must implement `I`, and
+  `@downcast(*mut S, d)` needs one of `S`'s methods for `I` to take `self:
+  *mut Self`, so that the `dyn` was made from `&mut x` (E0110). A library
+  that keeps only a `dyn Host` lets the host get its own struct back:
+  `@downcast(*mut Page, it.host.?)`.
 
 ## 11. Generics
 
@@ -1395,6 +1406,13 @@ failure is `{"kind":"assertion"|"panic"|"leak","line":L,"col":C,"message":M}`,
 - `@sizeOf(T)`, `@zeroed(T)`, `@ptrCast(T, p)`, `@link("lib")`,
   `@linkOptional("lib")`, `@hasLink("lib")`: section 4.
 - `@hash(x)`: section 11 (`where T: Hash`).
+- `@downcast(*S, d)`: section 10.
+- `@embedFile("path")`: the bytes of the file at `path` as a `[]u8`
+  constant, read when the program is compiled (`let UA =
+  @embedFile("ua.css")`, also in a function). The argument is a string
+  literal, the path is relative to the directory of the source file that
+  names it, and an absolute path, a missing file or a directory is E0111.
+  The bytes are kept as they are (no newline is added or removed).
 - `@splat`, `@reduceAdd`, `@reduceMin`, `@reduceMax`, `@all`, `@any`,
   `@select`: section 5 (simd).
 - `@setSafety(false)`, `@setSafety(true)`: section 16.

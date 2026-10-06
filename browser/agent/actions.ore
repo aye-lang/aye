@@ -90,17 +90,17 @@ fn snapshotText(s: *mut Session, tmp: Allocator, boxes: bool) AllocError![]u8 {
 
 fn applyAction(s: *mut Session, tmp: Allocator, act: Action) AllocError!Outcome {
     return match act {
-        .Navigate { target } => try navigate(s, tmp, target)
-        .Back => try moveInHistory(s, tmp, -1)
-        .Forward => try moveInHistory(s, tmp, 1)
-        .Reload => try moveInHistory(s, tmp, 0)
-        .Click { ref } => try click(s, tmp, ref)
-        .Type { ref, input, submit } => try typeInto(s, tmp, ref, input, submit)
-        .Select { ref, option } => try selectOption(s, tmp, ref, option)
-        .Press { key } => try press(s, tmp, key)
-        .Scroll { ref, dy } => try scroll(s, tmp, ref, dy)
-        .Wait { selector, ms } => try waitFor(s, tmp, selector, ms)
-        .Eval { src } => try evalScript(s, tmp, src)
+        .Navigate { target } => navigate(s, tmp, target)
+        .Back => moveInHistory(s, tmp, -1)
+        .Forward => moveInHistory(s, tmp, 1)
+        .Reload => moveInHistory(s, tmp, 0)
+        .Click { ref } => click(s, tmp, ref)
+        .Type { ref, input, submit } => typeInto(s, tmp, ref, input, submit)
+        .Select { ref, option } => selectOption(s, tmp, ref, option)
+        .Press { key } => press(s, tmp, key)
+        .Scroll { ref, dy } => scroll(s, tmp, ref, dy)
+        .Wait { selector, ms } => waitFor(s, tmp, selector, ms)
+        .Eval { src } => evalScript(s, tmp, src)
     }
 }
 

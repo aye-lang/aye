@@ -1,0 +1,13 @@
+let UA = @embedFile("ua.css")
+fn f(h: dyn Host, s: []u8) i64 {
+    let p = @downcast(*mut Page, h) orelse return 0
+    let n = parse(s) catch |e| {
+        report(e)
+        p.count
+    }
+    let m = find(s) orelse {
+        log()
+        0
+    }
+    return n + m
+}

@@ -69,20 +69,20 @@ fn dumpViews(alloc: Allocator, args: [][]u8) !i32 {
         } else if text.eql(a, "--width") && i + 1 < args.len {
             width = text.parseFloat(args[i + 1]) catch 0.0
             if width <= 0.0 {
-                std.log.err("{}", DUMP_USAGE)
+                std.log.err(DUMP_USAGE)
                 return 2
             }
             i += 1
         } else if target.len == 0 && !text.startsWith(a, "--") {
             target = a
         } else {
-            std.log.err("{}", DUMP_USAGE)
+            std.log.err(DUMP_USAGE)
             return 2
         }
         i += 1
     }
     if target.len == 0 {
-        std.log.err("{}", DUMP_USAGE)
+        std.log.err(DUMP_USAGE)
         return 2
     }
     var s = try newSession(alloc, width, 600.0)
@@ -125,7 +125,7 @@ pub fn serveMain(alloc: Allocator, args: [][]u8, mcp: bool) i32 {
         if (text.eql(args[i], "--width") || text.eql(args[i], "--height")) && i + 1 < args.len {
             let v = text.parseFloat(args[i + 1]) catch 0.0
             if v <= 0.0 {
-                std.log.err("{}", SERVE_USAGE)
+                std.log.err(SERVE_USAGE)
                 return 2
             }
             if text.eql(args[i], "--width") {
@@ -136,7 +136,7 @@ pub fn serveMain(alloc: Allocator, args: [][]u8, mcp: bool) i32 {
             i += 2
             continue
         }
-        std.log.err("{}", SERVE_USAGE)
+        std.log.err(SERVE_USAGE)
         return 2
     }
     var s = newSession(alloc, width, height) catch |e| {

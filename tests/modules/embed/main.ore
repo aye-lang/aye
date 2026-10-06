@@ -1,0 +1,30 @@
+// `@embedFile("path")`: the bytes of a file, read when the program is
+// compiled, as a `[]u8` constant. The path is relative to the source file
+// that names it, so `sheets/sheets.ore` embeds `sheets/rules.css`.
+
+import sheets
+
+// A constant, like a string literal.
+let UA = @embedFile("ua.css")
+
+fn sum(bytes: []u8) u32 {
+    var t: u32 = 0
+    for b in bytes {
+        t += b as u32
+    }
+    return t
+}
+
+pub fn main() {
+    @print(UA)
+    @print(sheets.RULES)
+    @println(sheets.rulesLen())
+    // In a function, from a subdirectory.
+    let note = @embedFile("data/note.txt")
+    @print(note)
+    // Any bytes: NUL, 0xff.
+    let raw = @embedFile("data/bytes.bin")
+    @println(raw.len)
+    @println(raw[1])
+    @println(sum(raw))
+}
