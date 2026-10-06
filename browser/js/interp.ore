@@ -205,6 +205,8 @@ pub struct Interp {
     sym_has_instance: u32
     sym_to_primitive: u32
     sym_to_string_tag: u32
+    // The function that Proxy.revocable's `revoke` binds (proxy.ore).
+    proxy_revoke: u32
     // Generators and async functions (coroutine.ore).
     coroutines: List(?*mut Coroutine)
     current_co: ?*mut Coroutine
@@ -297,6 +299,7 @@ pub struct Interp {
             sym_has_instance: NONE,
             sym_to_primitive: NONE,
             sym_to_string_tag: NONE,
+            proxy_revoke: NONE,
             coroutines: List(?*mut Coroutine).init(alloc),
             current_co: null,
             co_saved: List(SavedCtx).init(alloc),
@@ -699,10 +702,16 @@ pub struct Interp {
     // ---- objects and properties
 
     pub fn isCallable(self: *Self, v: Value) bool {
-        return match v {
-            .Obj { o: oid } => self.heap.obj(oid).class == Class.Function
-            _ => false
+        let oid = objectOf(v)
+        if oid == NONE {
+            return false
         }
+        let c = self.heap.obj(oid).class
+        if c == Class.Proxy {
+            let t = proxyTarget(self, oid)
+            return t != NONE && self.isCallable(objVal(t))
+        }
+        return c == Class.Function
     }
 
     pub fn hasClass(self: *Self, v: Value, c: Class) bool {
@@ -857,6 +866,9 @@ pub struct Interp {
         while cur != NONE {
             let ob = self.heap.obj(cur)
             let cls = ob.class
+            if cls == Class.Proxy {
+                return proxyGet(self, cur, key, receiver)
+            }
             if cls == Class.Array || cls == Class.Arguments {
                 if key == A_LENGTH {
                     return numVal(ob.nelems as f64)
@@ -1078,6 +1090,9 @@ pub struct Interp {
         }
         let ob = self.heap.obj(o)
         let cls = ob.class
+        if cls == Class.Proxy {
+            return proxySet(self, o, key, value, receiver)
+        }
         if cls == Class.Array || cls == Class.Arguments {
             let idx = self.heap.atoms.indexOf(key)
             if idx != NONE {
@@ -1115,6 +1130,14 @@ pub struct Interp {
         // A setter or a read-only property up the chain?
         var cur = self.heap.obj(o).proto
         while cur != NONE {
+            if self.heap.obj(cur).class == Class.Proxy {
+                // A proxy up the chain: its set trap, else its target.
+                if !isUndef(try trap(self, cur, "set")) {
+                    return proxySet(self, cur, key, value, receiver)
+                }
+                cur = proxyTarget(self, cur)
+                continue
+            }
             if self.heap.findProp(cur, key) |i| {
                 let p = self.heap.obj(cur).props[i]
                 if (p.flags & F_ACCESSOR) != 0 {
@@ -1136,10 +1159,15 @@ pub struct Interp {
         return self.heap.addProp(o, key, value, Value.Undefined, F_DEFAULT)
     }
 
-    /// Does object o or its prototypes have `key`?
+    /// Does object o or its prototypes have `key`? (A proxy is its
+    /// target here: see hasPropertyJs.)
     pub fn hasProperty(self: *mut Self, o: u32, key: u32) bool {
         var cur = o
         while cur != NONE {
+            if self.heap.obj(cur).class == Class.Proxy {
+                cur = proxyTarget(self, cur)
+                continue
+            }
             if self.hasOwn(cur, key) {
                 return true
             }
@@ -1148,7 +1176,34 @@ pub struct Interp {
         return false
     }
 
+    /// `key in o`: hasProperty with the `has` traps of proxies.
+    pub fn hasPropertyJs(self: *mut Self, o: u32, key: u32) JsError!bool {
+        var cur = o
+        while cur != NONE {
+            if self.heap.obj(cur).class == Class.Proxy {
+                return proxyHas(self, cur, key)
+            }
+            if self.hasOwn(cur, key) {
+                return true
+            }
+            cur = self.heap.obj(cur).proto
+        }
+        return false
+    }
+
+    /// hasOwn with the getOwnPropertyDescriptor trap of a proxy.
+    pub fn hasOwnJs(self: *mut Self, o: u32, key: u32) JsError!bool {
+        if self.heap.obj(o).class == Class.Proxy {
+            return proxyHasOwn(self, o, key)
+        }
+        return self.hasOwn(o, key)
+    }
+
     pub fn hasOwn(self: *mut Self, o: u32, key: u32) bool {
+        if self.heap.obj(o).class == Class.Proxy {
+            let t = proxyTarget(self, o)
+            return t != NONE && self.hasOwn(t, key)
+        }
         if self.heap.obj(o).class == Class.Host && self.namedHost(o) && self.host.?.hasNamed(self, o, key) {
             return true
         }
@@ -1188,6 +1243,9 @@ pub struct Interp {
     /// delete v[key]; false when the property cannot be deleted.
     pub fn deleteProp(self: *mut Self, o: u32, key: u32) JsError!bool {
         let ob = self.heap.obj(o)
+        if ob.class == Class.Proxy {
+            return proxyDelete(self, o, key)
+        }
         if ob.frozen {
             return false
         }
@@ -1217,6 +1275,9 @@ pub struct Interp {
     /// creation. `all`: also the non-enumerable ones.
     pub fn ownKeys(self: *mut Self, o: u32, out: *mut List(u32), all: bool) JsError!void {
         let cls = self.heap.obj(o).class
+        if cls == Class.Proxy {
+            return proxyOwnKeys(self, o, out, all, false)
+        }
         if cls == Class.Array || cls == Class.Arguments {
             let n = self.heap.obj(o).nelems
             for i in 0..n {
@@ -1283,6 +1344,9 @@ pub struct Interp {
 
     /// Appends the symbol keys of o's own properties (as atoms).
     pub fn ownSymbolKeys(self: *mut Self, o: u32, out: *mut List(u32)) JsError!void {
+        if self.heap.obj(o).class == Class.Proxy {
+            return proxyOwnKeys(self, o, out, true, true)
+        }
         let np = self.heap.obj(o).nprops
         for i in 0..np {
             let k = self.heap.obj(o).props[i].key
@@ -1518,6 +1582,12 @@ pub struct Interp {
 
     /// typeof v, as an atom.
     pub fn typeOf(self: *Self, v: Value) []u8 {
+        if self.hasClass(v, Class.Proxy) {
+            if self.isCallable(v) {
+                return "function"
+            }
+            return "object"
+        }
         return match v {
             .Undefined => "undefined"
             .Empty => "undefined"
@@ -1674,7 +1744,7 @@ pub struct Interp {
                 return self.typeErrorAbout("Cannot use 'in' operator to search for '", kb.bytes(), "' in non-object")
             }
             let key = try self.toKey(a)
-            return boolVal(self.hasProperty(o, key))
+            return boolVal(try self.hasPropertyJs(o, key))
         }
         let x = try self.toNumber(a)
         let y = try self.toNumber(b)
@@ -1723,6 +1793,9 @@ pub struct Interp {
         defer self.truncate(base)
         let f = self.stack.items()[base]
         let o = objectOf(f)
+        if o != NONE && self.heap.obj(o).class == Class.Proxy && self.isCallable(f) {
+            return proxyCall(self, o, base, argc)
+        }
         if o == NONE || self.heap.obj(o).class != Class.Function {
             return self.notA(f, "a function")
         }
@@ -1759,6 +1832,9 @@ pub struct Interp {
         defer self.truncate(base)
         let f = self.stack.items()[base]
         let o = objectOf(f)
+        if o != NONE && self.heap.obj(o).class == Class.Proxy && self.isCallable(f) {
+            return proxyConstruct(self, o, base, argc, newTarget)
+        }
         if o == NONE || self.heap.obj(o).class != Class.Function {
             return self.notA(f, "a constructor")
         }
@@ -2081,7 +2157,10 @@ pub struct Interp {
         defer self.truncate(base)
         let pv = self.slot(base)
         let thisv = self.slot(base + 1)
-        let p = objectOf(pv)
+        var p = objectOf(pv)
+        if p != NONE && self.heap.obj(p).class == Class.Proxy {
+            p = unwrapProxy(self, p)
+        }
         if p == NONE || self.heap.obj(p).class != Class.Function {
             try self.typeError("Super constructor is not a constructor")
         }
@@ -3633,7 +3712,7 @@ pub struct Interp {
             cur = self.heap.obj(cur).proto
         }
         for key in keys.items() {
-            if !self.hasProperty(o, key) {
+            if !try self.hasPropertyJs(o, key) {
                 continue
             }
             let kv = try self.atomValue(key)

@@ -455,8 +455,8 @@ struct Stringifier {
                     }
                 }
                 try self.stack.append(o)
-                if it.heap.obj(o).class == Class.Array {
-                    try self.array(b, o)
+                if isArrayValue(it, objVal(o)) {
+                    try self.array(b, unwrapProxy(it, o))
                 } else {
                     try self.object(b, o)
                 }

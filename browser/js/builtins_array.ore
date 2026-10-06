@@ -210,10 +210,7 @@ fn arrayCtor(it: *mut Interp, a: Args) JsError!Value {
 }
 
 fn arrayIsArray(it: *mut Interp, a: Args) JsError!Value {
-    if it.classOf(it.arg(a, 0)) |c| {
-        return boolVal(c == Class.Array)
-    }
-    return boolVal(false)
+    return boolVal(isArrayValue(it, it.arg(a, 0)))
 }
 
 fn arrayOf(it: *mut Interp, a: Args) JsError!Value {
