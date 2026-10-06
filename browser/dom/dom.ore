@@ -1,0 +1,416 @@
+// dom: the document tree. Nodes live in a `Pool(Node)` and refer to each
+// other by `NodeId` (a `Handle(Node)`): parent, first and last child, and
+// the previous and next sibling. The strings of a document (tag names,
+// attributes, text) come from an arena that the document owns, so they
+// are freed together by `deinit`.
+//
+// B1 never removes nodes: a node taken out of the tree (`detach`) stays in
+// the pool until the document is freed.
+
+import std.heap.Arena
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+import std.pool.Handle
+import std.pool.Pool
+import std.text
+
+pub enum Kind {
+    Document
+    Doctype
+    Element
+    Text
+    Comment
+}
+
+pub struct Attr {
+    name: []u8
+    value: []u8
+}
+
+pub struct Node {
+    kind: Kind
+    // Element: the tag name in lower case. Doctype: the doctype's name.
+    name: []u8
+    // Text and Comment: the content.
+    data: []u8
+    // Element: the attributes in source order, each name once.
+    attrs: []mut Attr
+    parent: ?NodeId
+    first_child: ?NodeId
+    last_child: ?NodeId
+    prev: ?NodeId
+    next: ?NodeId
+}
+
+/// Names a node of a `Document`.
+pub let NodeId = Handle(Node)
+
+/// Do `a` and `b` name the same node?
+pub fn same(a: NodeId, b: NodeId) bool {
+    return a.index == b.index && a.generation == b.generation
+}
+
+/// Is `a` a node and the same node as `b`?
+pub fn isSame(a: ?NodeId, b: NodeId) bool {
+    if a |x| {
+        return same(x, b)
+    }
+    return false
+}
+
+pub struct Document {
+    alloc: Allocator
+    nodes: Pool(Node)
+    // Owns the strings of the nodes. On the heap, so that the `Allocator`
+    // it hands out stays valid when the document is moved.
+    strings: *mut Arena
+    root: NodeId
+
+    /// An empty document: only the `Document` node.
+    pub fn init(alloc: Allocator) AllocError!Document {
+        let strings = try alloc.create(Arena.init(alloc))
+        var nodes = Pool(Node).init(alloc, 256)
+        let root = nodes.insert(blank(Kind.Document, "", "")) catch |e| {
+            alloc.destroy(strings)
+            return e
+        }
+        return Document { alloc: alloc, nodes: nodes, strings: strings, root: root }
+    }
+
+    pub fn deinit(self: *mut Self) {
+        self.strings.deinit()
+        self.alloc.destroy(self.strings)
+        self.nodes.deinit()
+    }
+
+    /// The node of `h`. Every `NodeId` of a document stays valid while the
+    /// document lives (nodes are never removed from the pool).
+    pub fn node(self: *Self, h: NodeId) *mut Node {
+        if self.nodes.get(h) |n| {
+            return n
+        }
+        // Unreachable: Ore has no `unreachable`, and a stale handle would
+        // be a bug here. Index the slot anyway (see COMPILER_GAPS.md).
+        return &mut self.nodes.slots[h.index].value
+    }
+
+    /// A copy of `s` in the document's string arena.
+    pub fn dup(self: *mut Self, s: []u8) AllocError![]u8 {
+        if s.len == 0 {
+            return ""
+        }
+        let a = self.strings.allocator()
+        let out = try a.alloc(0 as u8, s.len)
+        for i, c in s {
+            out[i] = c
+        }
+        return out
+    }
+
+    // ---- creating nodes (not yet in the tree)
+
+    /// A new element named `name` (lower case) with copies of `attrs`.
+    pub fn createElement(self: *mut Self, name: []u8, attrs: []Attr) AllocError!NodeId {
+        var n = blank(Kind.Element, try self.dup(name), "")
+        if attrs.len > 0 {
+            let a = self.strings.allocator()
+            let copy = try a.alloc(Attr { name: "", value: "" }, attrs.len)
+            for i, at in attrs {
+                copy[i] = Attr { name: try self.dup(at.name), value: try self.dup(at.value) }
+            }
+            n.attrs = copy
+        }
+        return self.nodes.insert(n)
+    }
+
+    pub fn createText(self: *mut Self, data: []u8) AllocError!NodeId {
+        return self.nodes.insert(blank(Kind.Text, "", try self.dup(data)))
+    }
+
+    pub fn createComment(self: *mut Self, data: []u8) AllocError!NodeId {
+        return self.nodes.insert(blank(Kind.Comment, "", try self.dup(data)))
+    }
+
+    pub fn createDoctype(self: *mut Self, name: []u8) AllocError!NodeId {
+        return self.nodes.insert(blank(Kind.Doctype, try self.dup(name), ""))
+    }
+
+    // ---- changing the tree
+
+    /// Takes `child` out of its parent, if it has one.
+    pub fn detach(self: *mut Self, child: NodeId) {
+        let c = self.node(child)
+        if c.parent |p| {
+            let parent = self.node(p)
+            if c.prev |prev| {
+                self.node(prev).next = c.next
+            } else {
+                parent.first_child = c.next
+            }
+            if c.next |next| {
+                self.node(next).prev = c.prev
+            } else {
+                parent.last_child = c.prev
+            }
+        }
+        c.parent = null
+        c.prev = null
+        c.next = null
+    }
+
+    /// Makes `child` the last child of `parent` (taking it out of where it
+    /// was first).
+    pub fn appendChild(self: *mut Self, parent: NodeId, child: NodeId) {
+        self.detach(child)
+        let p = self.node(parent)
+        let c = self.node(child)
+        c.parent = parent
+        c.prev = p.last_child
+        if p.last_child |last| {
+            self.node(last).next = child
+        } else {
+            p.first_child = child
+        }
+        p.last_child = child
+    }
+
+    /// Puts `child` into `parent` just before `before`, or last when
+    /// `before` is null.
+    pub fn insertBefore(self: *mut Self, parent: NodeId, child: NodeId, before: ?NodeId) {
+        if before |b| {
+            self.detach(child)
+            let c = self.node(child)
+            let bn = self.node(b)
+            c.parent = parent
+            c.next = b
+            c.prev = bn.prev
+            if bn.prev |prev| {
+                self.node(prev).next = child
+            } else {
+                self.node(parent).first_child = child
+            }
+            bn.prev = child
+        } else {
+            self.appendChild(parent, child)
+        }
+    }
+
+    /// Appends text to `parent`: to its last child when that is a text
+    /// node, else as a new text node.
+    pub fn appendText(self: *mut Self, parent: NodeId, s: []u8) AllocError!void {
+        if s.len == 0 {
+            return
+        }
+        if self.node(parent).last_child |last| {
+            let n = self.node(last)
+            if n.kind == Kind.Text {
+                let a = self.strings.allocator()
+                let joined = try a.alloc(0 as u8, n.data.len + s.len)
+                for i, c in n.data {
+                    joined[i] = c
+                }
+                for i, c in s {
+                    joined[n.data.len + i] = c
+                }
+                n.data = joined
+                return
+            }
+        }
+        let t = try self.createText(s)
+        self.appendChild(parent, t)
+    }
+
+    /// Sets the attribute `name` of the element `el` to `value`.
+    pub fn setAttr(self: *mut Self, el: NodeId, name: []u8, value: []u8) AllocError!void {
+        let n = self.node(el)
+        for i, at in n.attrs {
+            if text.eql(at.name, name) {
+                let v = try self.dup(value)
+                self.node(el).attrs[i].value = v
+                return
+            }
+        }
+        let a = self.strings.allocator()
+        let more = try a.alloc(Attr { name: "", value: "" }, n.attrs.len + 1)
+        for i, at in n.attrs {
+            more[i] = at
+        }
+        more[n.attrs.len] = Attr { name: try self.dup(name), value: try self.dup(value) }
+        self.node(el).attrs = more
+    }
+
+    // ---- reading the tree
+
+    /// The value of the attribute `name` of `el`.
+    pub fn attr(self: *Self, el: NodeId, name: []u8) ?[]u8 {
+        for at in self.node(el).attrs {
+            if text.eql(at.name, name) {
+                return at.value
+            }
+        }
+        return null
+    }
+
+    /// Is `h` an element named `name`?
+    pub fn isElement(self: *Self, h: NodeId, name: []u8) bool {
+        let n = self.node(h)
+        return n.kind == Kind.Element && text.eql(n.name, name)
+    }
+
+    pub fn parent(self: *Self, h: NodeId) ?NodeId {
+        return self.node(h).parent
+    }
+
+    pub fn firstChild(self: *Self, h: NodeId) ?NodeId {
+        return self.node(h).first_child
+    }
+
+    pub fn lastChild(self: *Self, h: NodeId) ?NodeId {
+        return self.node(h).last_child
+    }
+
+    pub fn nextSibling(self: *Self, h: NodeId) ?NodeId {
+        return self.node(h).next
+    }
+
+    pub fn prevSibling(self: *Self, h: NodeId) ?NodeId {
+        return self.node(h).prev
+    }
+
+    /// The node after `h` in document order (depth first, a node before
+    /// its children), staying inside the subtree of `top`.
+    pub fn following(self: *Self, h: NodeId, top: NodeId) ?NodeId {
+        if self.node(h).first_child |c| {
+            return c
+        }
+        return self.followingSkip(h, top)
+    }
+
+    /// Like `following`, but skips the children of `h`.
+    pub fn followingSkip(self: *Self, h: NodeId, top: NodeId) ?NodeId {
+        var cur = h
+        while !same(cur, top) {
+            let n = self.node(cur)
+            if n.next |next| {
+                return next
+            }
+            if n.parent |p| {
+                cur = p
+            } else {
+                return null
+            }
+        }
+        return null
+    }
+
+    /// The first element child of the document (normally `html`).
+    pub fn documentElement(self: *Self) ?NodeId {
+        var cur = self.node(self.root).first_child
+        while cur |c| {
+            if self.node(c).kind == Kind.Element {
+                return c
+            }
+            cur = self.node(c).next
+        }
+        return null
+    }
+
+    /// The first element with the attribute `id` equal to `id`.
+    pub fn getElementById(self: *Self, id: []u8) ?NodeId {
+        var cur: ?NodeId = self.root
+        while cur |h| {
+            if self.node(h).kind == Kind.Element {
+                if self.attr(h, "id") |v| {
+                    if text.eql(v, id) {
+                        return h
+                    }
+                }
+            }
+            cur = self.following(h, self.root)
+        }
+        return null
+    }
+
+    /// Appends to `out` every element named `name` in document order;
+    /// `*` matches every element.
+    pub fn getElementsByTagName(self: *Self, name: []u8, out: *mut List(NodeId)) AllocError!void {
+        let all = text.eql(name, "*")
+        var cur: ?NodeId = self.root
+        while cur |h| {
+            let n = self.node(h)
+            if n.kind == Kind.Element && (all || text.eqlIgnoreCase(n.name, name)) {
+                try out.append(h)
+            }
+            cur = self.following(h, self.root)
+        }
+    }
+
+    /// Appends the text of every text node under `h` to `out`.
+    pub fn textContent(self: *Self, h: NodeId, out: *mut text.Builder) AllocError!void {
+        var cur: ?NodeId = h
+        while cur |c| {
+            let n = self.node(c)
+            if n.kind == Kind.Text {
+                try out.append(n.data)
+            }
+            cur = self.following(c, h)
+        }
+    }
+}
+
+fn blank(kind: Kind, name: []u8, data: []u8) Node {
+    return Node {
+        kind: kind,
+        name: name,
+        data: data,
+        attrs: []mut Attr{},
+        parent: null,
+        first_child: null,
+        last_child: null,
+        prev: null,
+        next: null,
+    }
+}
+
+test "build, query and walk a tree" {
+    var doc = try Document.init(@testAllocator())
+    defer doc.deinit()
+    let html = try doc.createElement("html", []Attr{})
+    doc.appendChild(doc.root, html)
+    let body = try doc.createElement("body", []Attr{})
+    doc.appendChild(html, body)
+    let first = try doc.createElement("p", []Attr{})
+    doc.appendChild(body, first)
+    let third = try doc.createElement("p", []Attr{})
+    doc.appendChild(body, third)
+    let second = try doc.createElement("div", []Attr{})
+    doc.insertBefore(body, second, third)
+    try doc.setAttr(second, "id", "mid")
+    try doc.appendText(second, "a")
+    try doc.appendText(second, "b")
+
+    @expect(isSame(doc.documentElement(), html))
+    @expect(isSame(doc.getElementById("mid"), second))
+    @expect(doc.getElementById("none") == null)
+    @expect(isSame(doc.nextSibling(first), second))
+    @expect(isSame(doc.prevSibling(third), second))
+    @expect(isSame(doc.parent(second), body))
+    @expect(isSame(doc.firstChild(body), first))
+    @expect(isSame(doc.lastChild(body), third))
+
+    var ps = List(NodeId).init(@testAllocator())
+    defer ps.deinit()
+    try doc.getElementsByTagName("p", &mut ps)
+    @expectEqual(2, ps.len())
+    @expect(same(ps.items()[1], third))
+
+    var out = text.Builder.init(@testAllocator())
+    defer out.deinit()
+    try doc.textContent(body, &mut out)
+    @expectEqual("ab", out.bytes())
+
+    doc.detach(second)
+    @expect(isSame(doc.nextSibling(first), third))
+    @expect(doc.parent(second) == null)
+}

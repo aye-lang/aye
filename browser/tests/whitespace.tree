@@ -1,0 +1,36 @@
+#document
+  <html>
+    <head>
+    <body>
+      "\n   "
+      <p>
+        "   Leading    and\n   trailing     spaces\tand\ttabs   "
+      "\n\n   "
+      <div>
+        "  block  "
+        <span>
+          " inline "
+        "  "
+        <b>
+          "bold"
+        "text  "
+      "\n   "
+      <p>
+        "non breaking space and a"
+        <br>
+        "\n   break"
+      "\n   "
+      <div>
+        <div>
+          <div>
+            "nested blocks"
+      "\n   "
+      <p>
+        "\n   "
+      "\n   "
+      <span>
+        "inline"
+      " "
+      <span>
+        "siblings"
+      "\n\n"

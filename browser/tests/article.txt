@@ -1,0 +1,24 @@
+anyknown · Blog
+
+Notes on Ore
+
+By someone, October 6
+
+Ore is a systems language without garbage collection. Memory comes from explicit Allocator values.
+
+Why another language?
+
+- Errors are values.
+- Enums are tagged unions.
+- No hidden allocation.
+
+Simple things should be simple.
+
+fn main() {
+    @println("hi")
+}
+
+[A figure]
+Figure 1: a figure.
+
+© 2026 anyknown. About

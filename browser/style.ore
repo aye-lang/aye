@@ -1,0 +1,142 @@
+// Style for `anyknown dump --style`: the author style sheet of a document
+// (its `<style>` elements and `<link rel=stylesheet>` sheets, fetched
+// relative to the document's URL, in document order), the cascade, and a
+// dump of the computed values that differ from the initial ones:
+//
+//     <body>
+//       display: block
+//       margin-top: 8px
+//       <p class="note">
+//         display: block
+//         color: rgb(255, 0, 0)
+//
+// Text, comments and the doctype are left out.
+
+import css
+import dom
+import dom.Document
+import dom.Kind
+import dom.NodeId
+import encoding
+import net
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+import url
+import url.Url
+
+/// Appends to `sheet` the style sheets of `doc` whose media match.
+/// Sheets that cannot be fetched are skipped.
+fn authorSheets(alloc: Allocator, doc: *Document, base: *Url, media: css.Media, sheet: *mut css.Sheet) !void {
+    var cur: ?NodeId = doc.root
+    while cur |h| {
+        if doc.isElement(h, "style") && (try mediaOk(doc, h, media, sheet)) {
+            var src = text.Builder.init(alloc)
+            defer src.deinit()
+            try doc.textContent(h, &mut src)
+            try css.parseSheet(sheet, src.bytes(), media)
+        } else if doc.isElement(h, "link") && isStylesheetLink(doc, h) && (try mediaOk(doc, h, media, sheet)) {
+            if doc.attr(h, "href") |href| {
+                try linkedSheet(alloc, base, href, media, sheet)
+            }
+        }
+        cur = doc.following(h, doc.root)
+    }
+}
+
+fn mediaOk(doc: *Document, el: NodeId, media: css.Media, sheet: *mut css.Sheet) AllocError!bool {
+    if doc.attr(el, "media") |q| {
+        return css.mediaMatches(sheet, q, media)
+    }
+    return true
+}
+
+// `rel` has the word `stylesheet` and not `alternate`.
+fn isStylesheetLink(doc: *Document, el: NodeId) bool {
+    var found = false
+    if doc.attr(el, "rel") |rel| {
+        var words = text.split(rel, " ")
+        while words.next() |w| {
+            if text.eqlIgnoreCase(w, "alternate") {
+                return false
+            }
+            if text.eqlIgnoreCase(w, "stylesheet") {
+                found = true
+            }
+        }
+    }
+    return found
+}
+
+fn linkedSheet(alloc: Allocator, base: *Url, href: []u8, media: css.Media, sheet: *mut css.Sheet) AllocError!void {
+    let target = url.resolve(alloc, base, text.trim(href)) catch |e| {
+        return
+    }
+    defer target.deinit(alloc)
+    let res = net.fetch(alloc, &target) catch |e| {
+        return
+    }
+    defer res.deinit(alloc)
+    let src = try encoding.toUtf8(alloc, res.body, encoding.sniff(res.body, res.charset))
+    defer alloc.free(src)
+    try css.parseSheet(sheet, src, media)
+}
+
+/// Computes the styles of `doc` (loaded from `base`) and appends the
+/// dump of each of `roots` to `out`.
+fn dumpStyles(alloc: Allocator, doc: *Document, base: *Url, media: css.Media, roots: []NodeId, out: *mut text.Builder) !void {
+    var ua = try css.Sheet.init(alloc)
+    defer ua.deinit()
+    try css.uaSheet(&mut ua, media)
+    var author = try css.Sheet.init(alloc)
+    defer author.deinit()
+    try authorSheets(alloc, doc, base, media, &mut author)
+    var styles = try css.Styles.init(alloc)
+    defer styles.deinit()
+    try css.computeStyles(doc, &ua, &author, media, &mut styles)
+    for r in roots {
+        try styleNode(doc, &styles, r, 0, out)
+    }
+}
+
+fn styleNode(doc: *Document, styles: *css.Styles, h: NodeId, depth: usize, out: *mut text.Builder) AllocError!void {
+    let n = doc.node(h)
+    var inner = depth
+    if n.kind == Kind.Element {
+        try indent(out, depth)
+        try out.appendByte('<')
+        try out.append(n.name)
+        for a in n.attrs {
+            try out.appendByte(' ')
+            try out.append(a.name)
+            try out.append("=")
+            try quoted(out, a.value)
+        }
+        try out.append(">\n")
+        if styles.get(h) |values| {
+            for i, p in css.PROPERTIES {
+                if !css.sameValue(styles.initial[i], values[i]) {
+                    try indent(out, depth + 1)
+                    try out.append(p.name)
+                    try out.append(": ")
+                    try css.writeValue(values[i], out)
+                    try out.appendByte('\n')
+                }
+            }
+        }
+        inner = depth + 1
+    } else if n.kind != Kind.Document {
+        return
+    }
+    var cur = n.first_child
+    while cur |c| {
+        try styleNode(doc, styles, c, inner, out)
+        cur = doc.node(c).next
+    }
+}
+
+fn indent(out: *mut text.Builder, depth: usize) AllocError!void {
+    for i in 0..depth {
+        try out.append("  ")
+    }
+}

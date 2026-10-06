@@ -1,0 +1,195 @@
+// Media queries (Media Queries 4 subset), evaluated against a `Media`: a
+// screen of `width` x `height` CSS pixels, light color scheme, with a fine
+// pointer that can hover. Supported: lists separated by commas, `not` and
+// `only`, the media types `all`, `screen` (true) and others (false),
+// features joined by `and`: `width`, `height` (with `min-`/`max-` or a
+// range `(width >= 600px)`), `orientation`, `prefers-color-scheme`,
+// `hover`, `pointer`, `color`. Anything else makes its query false.
+
+import std.text
+
+/// Does the media query list in `toks` match? An empty list matches.
+pub fn mediaListMatches(toks: []Token, m: Media) bool {
+    if skipWhitespace(toks, 0) >= toks.len {
+        return true
+    }
+    var i: usize = 0
+    while i <= toks.len {
+        var j = i
+        while j < toks.len && toks[j].kind != Tok.Comma {
+            j = skipComponent(toks, j)
+        }
+        if queryMatches(toks[i..j], m) {
+            return true
+        }
+        i = j + 1
+    }
+    return false
+}
+
+fn queryMatches(toks: []Token, m: Media) bool {
+    var i = skipWhitespace(toks, 0)
+    var negate = false
+    if i < toks.len && toks[i].kind == Tok.Ident {
+        if text.eqlIgnoreCase(toks[i].text, "not") {
+            negate = true
+            i = skipWhitespace(toks, i + 1)
+        } else if text.eqlIgnoreCase(toks[i].text, "only") {
+            i = skipWhitespace(toks, i + 1)
+        }
+    }
+    var ok = true
+    var need_and = false
+    if i < toks.len && toks[i].kind == Tok.Ident {
+        let kind = toks[i].text
+        ok = text.eqlIgnoreCase(kind, "all") || text.eqlIgnoreCase(kind, "screen")
+        i = skipWhitespace(toks, i + 1)
+        need_and = true
+    } else if i >= toks.len {
+        return false
+    }
+    while i < toks.len {
+        if need_and {
+            if toks[i].kind != Tok.Ident || !text.eqlIgnoreCase(toks[i].text, "and") {
+                return false
+            }
+            i = skipWhitespace(toks, i + 1)
+            if i >= toks.len {
+                return false
+            }
+        }
+        if toks[i].kind != Tok.LParen {
+            return false
+        }
+        let close = blockEnd(toks, i)
+        if close >= toks.len {
+            return false
+        }
+        if !featureMatches(toks[i + 1..close], m) {
+            ok = false
+        }
+        i = skipWhitespace(toks, close + 1)
+        need_and = true
+    }
+    if negate {
+        return !ok
+    }
+    return ok
+}
+
+// The inside of `( ... )`.
+fn featureMatches(toks: []Token, m: Media) bool {
+    var i = skipWhitespace(toks, 0)
+    if i >= toks.len || toks[i].kind != Tok.Ident {
+        return false
+    }
+    let feature = toks[i].text
+    i = skipWhitespace(toks, i + 1)
+    if i >= toks.len {
+        // A boolean context: is the feature not zero or `none`?
+        return text.eqlIgnoreCase(feature, "width") || text.eqlIgnoreCase(feature, "height") || text.eqlIgnoreCase(feature, "color") || text.eqlIgnoreCase(feature, "hover") || text.eqlIgnoreCase(feature, "pointer")
+    }
+    var op: []u8 = ":"
+    if toks[i].kind == Tok.Colon {
+        i += 1
+    } else if toks[i].kind == Tok.Delim && (toks[i].delim == '<' || toks[i].delim == '>' || toks[i].delim == '=') {
+        let first = toks[i].delim
+        var or_equal = false
+        if i + 1 < toks.len && toks[i + 1].kind == Tok.Delim && toks[i + 1].delim == '=' && first != '=' {
+            or_equal = true
+            i += 1
+        }
+        i += 1
+        if first == '=' {
+            op = "="
+        } else if first == '<' && or_equal {
+            op = "<="
+        } else if first == '<' {
+            op = "<"
+        } else if or_equal {
+            op = ">="
+        } else {
+            op = ">"
+        }
+    } else {
+        return false
+    }
+    i = skipWhitespace(toks, i)
+    if i >= toks.len || skipWhitespace(toks, i + 1) < toks.len {
+        return false
+    }
+    let v = toks[i]
+    var axis: f64 = -1.0
+    var prefix: []u8 = ""
+    if text.endsWith(feature, "width") {
+        axis = m.width
+        prefix = feature[..feature.len - 5]
+    } else if text.endsWith(feature, "height") {
+        axis = m.height
+        prefix = feature[..feature.len - 6]
+    }
+    if axis >= 0.0 {
+        var px = 0.0
+        if mediaLength(v) |l| {
+            px = l
+        } else {
+            return false
+        }
+        if text.eqlIgnoreCase(prefix, "min-") && text.eql(op, ":") {
+            return axis >= px
+        }
+        if text.eqlIgnoreCase(prefix, "max-") && text.eql(op, ":") {
+            return axis <= px
+        }
+        if prefix.len > 0 {
+            return false
+        }
+        if text.eql(op, ":") || text.eql(op, "=") {
+            return axis == px
+        }
+        if text.eql(op, "<") {
+            return axis < px
+        }
+        if text.eql(op, "<=") {
+            return axis <= px
+        }
+        if text.eql(op, ">") {
+            return axis > px
+        }
+        return axis >= px
+    }
+    if !text.eql(op, ":") || v.kind != Tok.Ident {
+        return false
+    }
+    let word = v.text
+    if text.eqlIgnoreCase(feature, "orientation") {
+        if m.height >= m.width {
+            return text.eqlIgnoreCase(word, "portrait")
+        }
+        return text.eqlIgnoreCase(word, "landscape")
+    }
+    if text.eqlIgnoreCase(feature, "prefers-color-scheme") {
+        return text.eqlIgnoreCase(word, "light")
+    }
+    if text.eqlIgnoreCase(feature, "hover") {
+        return text.eqlIgnoreCase(word, "hover")
+    }
+    if text.eqlIgnoreCase(feature, "pointer") {
+        return text.eqlIgnoreCase(word, "fine")
+    }
+    return false
+}
+
+// A length in a media feature, in px (`em` and `rem` are 16px).
+fn mediaLength(t: Token) ?f64 {
+    if t.kind == Tok.Number && t.num == 0.0 {
+        return 0.0
+    }
+    if t.kind != Tok.Dimension {
+        return null
+    }
+    if text.eqlIgnoreCase(t.text, "em") || text.eqlIgnoreCase(t.text, "rem") {
+        return t.num * 16.0
+    }
+    return absoluteLength(t.num, t.text)
+}

@@ -1,0 +1,238 @@
+// css: style sheets and computed style.
+//
+// - tokenizer.ore: CSS Syntax tokens.
+// - parser.ore: style sheets (rules, declarations, `@media`; other
+//   at-rules are skipped) into a `Sheet`, with error recovery.
+// - selector.ore: selectors (parsing, specificity, matching).
+// - values.ore: property values (lengths, colors, keywords, shorthands).
+// - media.ore: media queries against a `Media` (the viewport).
+// - cascade.ore: the cascade and computed values (`Styles`).
+// - ua.ore: the user-agent style sheet.
+//
+// A `Sheet` owns everything it parsed in an arena, including the strings
+// that computed values point to: keep the sheets alive as long as the
+// `Styles` computed from them.
+
+import std.heap.Arena
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+
+/// An RGBA color; `a` from 0 (transparent) to 1.
+pub struct Color {
+    r: u8
+    g: u8
+    b: u8
+    a: f64
+}
+
+/// A property value. Specified values may be any variant; computed values
+/// are `Keyword`, `Px`, `Percent`, `Number`, `Rgba` or `CurrentColor`.
+pub enum Value {
+    // A keyword, or a list of them ("underline overline"), or a font
+    // family list.
+    Keyword { k: []u8 }
+    Px { v: f64 }
+    Em { v: f64 }
+    Rem { v: f64 }
+    Vw { v: f64 }
+    Vh { v: f64 }
+    Percent { v: f64 }
+    Number { v: f64 }
+    Rgba { c: Color }
+    CurrentColor
+    Inherit
+    Initial
+    Unset
+}
+
+/// The viewport that media queries and `vw`/`vh` refer to.
+pub struct Media {
+    width: f64
+    height: f64
+}
+
+// ---- properties
+
+// What a property accepts.
+pub enum PKind {
+    // One of `keywords`.
+    Keywords
+    // A length or percentage (negative allowed), or one of `keywords`.
+    Length
+    // A length or percentage that is not negative, or one of `keywords`.
+    LengthNonNeg
+    Color
+    FontSize
+    FontWeight
+    LineHeight
+    FontFamily
+    BorderWidth
+    TextDecoration
+}
+
+pub struct Property {
+    name: []u8
+    inherited: bool
+    kind: PKind
+    // Space-separated keywords.
+    keywords: []u8
+    // The initial value, already computed (except border widths, which
+    // compute to 0 while the border style is `none`).
+    initial: Value
+}
+
+pub let NPROPS: usize = 42
+
+pub let DISPLAY: usize = 0
+pub let POSITION: usize = 1
+pub let COLOR: usize = 2
+pub let BACKGROUND_COLOR: usize = 3
+pub let FONT_SIZE: usize = 4
+pub let FONT_WEIGHT: usize = 5
+pub let FONT_STYLE: usize = 6
+pub let FONT_FAMILY: usize = 7
+pub let LINE_HEIGHT: usize = 8
+// Four sides in the order top, right, bottom, left.
+pub let MARGIN_TOP: usize = 9
+pub let PADDING_TOP: usize = 13
+pub let BORDER_TOP_WIDTH: usize = 17
+pub let BORDER_TOP_STYLE: usize = 21
+pub let BORDER_TOP_COLOR: usize = 25
+pub let WIDTH: usize = 29
+pub let HEIGHT: usize = 30
+pub let MIN_WIDTH: usize = 31
+pub let MIN_HEIGHT: usize = 32
+pub let MAX_WIDTH: usize = 33
+pub let MAX_HEIGHT: usize = 34
+pub let TEXT_ALIGN: usize = 35
+pub let TEXT_DECORATION_LINE: usize = 36
+pub let WHITE_SPACE: usize = 37
+pub let LIST_STYLE_TYPE: usize = 38
+pub let VISIBILITY: usize = 39
+pub let OVERFLOW_X: usize = 40
+pub let OVERFLOW_Y: usize = 41
+
+let DISPLAYS = "inline block list-item inline-block table inline-table table-row-group table-header-group table-footer-group table-row table-cell table-column-group table-column table-caption flex inline-flex grid inline-grid flow-root contents none"
+let BORDER_STYLES = "none hidden dotted dashed solid double groove ridge inset outset"
+let LIST_STYLES = "disc circle square decimal decimal-leading-zero lower-roman upper-roman lower-greek lower-alpha lower-latin upper-alpha upper-latin armenian georgian none"
+let OVERFLOWS = "visible hidden clip scroll auto"
+let BLACK = Color { r: 0, g: 0, b: 0, a: 1.0 }
+let TRANSPARENT = Color { r: 0, g: 0, b: 0, a: 0.0 }
+
+pub let PROPERTIES = [42]Property{
+    Property { name: "display", inherited: false, kind: PKind.Keywords, keywords: DISPLAYS, initial: Value.Keyword { k: "inline" } },
+    Property { name: "position", inherited: false, kind: PKind.Keywords, keywords: "static relative absolute fixed sticky", initial: Value.Keyword { k: "static" } },
+    Property { name: "color", inherited: true, kind: PKind.Color, keywords: "", initial: Value.Rgba { c: BLACK } },
+    Property { name: "background-color", inherited: false, kind: PKind.Color, keywords: "", initial: Value.Rgba { c: TRANSPARENT } },
+    Property { name: "font-size", inherited: true, kind: PKind.FontSize, keywords: "", initial: Value.Px { v: 16.0 } },
+    Property { name: "font-weight", inherited: true, kind: PKind.FontWeight, keywords: "", initial: Value.Number { v: 400.0 } },
+    Property { name: "font-style", inherited: true, kind: PKind.Keywords, keywords: "normal italic oblique", initial: Value.Keyword { k: "normal" } },
+    Property { name: "font-family", inherited: true, kind: PKind.FontFamily, keywords: "", initial: Value.Keyword { k: "serif" } },
+    Property { name: "line-height", inherited: true, kind: PKind.LineHeight, keywords: "", initial: Value.Keyword { k: "normal" } },
+    Property { name: "margin-top", inherited: false, kind: PKind.Length, keywords: "auto", initial: Value.Px { v: 0.0 } },
+    Property { name: "margin-right", inherited: false, kind: PKind.Length, keywords: "auto", initial: Value.Px { v: 0.0 } },
+    Property { name: "margin-bottom", inherited: false, kind: PKind.Length, keywords: "auto", initial: Value.Px { v: 0.0 } },
+    Property { name: "margin-left", inherited: false, kind: PKind.Length, keywords: "auto", initial: Value.Px { v: 0.0 } },
+    Property { name: "padding-top", inherited: false, kind: PKind.LengthNonNeg, keywords: "", initial: Value.Px { v: 0.0 } },
+    Property { name: "padding-right", inherited: false, kind: PKind.LengthNonNeg, keywords: "", initial: Value.Px { v: 0.0 } },
+    Property { name: "padding-bottom", inherited: false, kind: PKind.LengthNonNeg, keywords: "", initial: Value.Px { v: 0.0 } },
+    Property { name: "padding-left", inherited: false, kind: PKind.LengthNonNeg, keywords: "", initial: Value.Px { v: 0.0 } },
+    Property { name: "border-top-width", inherited: false, kind: PKind.BorderWidth, keywords: "", initial: Value.Px { v: 3.0 } },
+    Property { name: "border-right-width", inherited: false, kind: PKind.BorderWidth, keywords: "", initial: Value.Px { v: 3.0 } },
+    Property { name: "border-bottom-width", inherited: false, kind: PKind.BorderWidth, keywords: "", initial: Value.Px { v: 3.0 } },
+    Property { name: "border-left-width", inherited: false, kind: PKind.BorderWidth, keywords: "", initial: Value.Px { v: 3.0 } },
+    Property { name: "border-top-style", inherited: false, kind: PKind.Keywords, keywords: BORDER_STYLES, initial: Value.Keyword { k: "none" } },
+    Property { name: "border-right-style", inherited: false, kind: PKind.Keywords, keywords: BORDER_STYLES, initial: Value.Keyword { k: "none" } },
+    Property { name: "border-bottom-style", inherited: false, kind: PKind.Keywords, keywords: BORDER_STYLES, initial: Value.Keyword { k: "none" } },
+    Property { name: "border-left-style", inherited: false, kind: PKind.Keywords, keywords: BORDER_STYLES, initial: Value.Keyword { k: "none" } },
+    Property { name: "border-top-color", inherited: false, kind: PKind.Color, keywords: "", initial: Value.CurrentColor },
+    Property { name: "border-right-color", inherited: false, kind: PKind.Color, keywords: "", initial: Value.CurrentColor },
+    Property { name: "border-bottom-color", inherited: false, kind: PKind.Color, keywords: "", initial: Value.CurrentColor },
+    Property { name: "border-left-color", inherited: false, kind: PKind.Color, keywords: "", initial: Value.CurrentColor },
+    Property { name: "width", inherited: false, kind: PKind.LengthNonNeg, keywords: "auto", initial: Value.Keyword { k: "auto" } },
+    Property { name: "height", inherited: false, kind: PKind.LengthNonNeg, keywords: "auto", initial: Value.Keyword { k: "auto" } },
+    Property { name: "min-width", inherited: false, kind: PKind.LengthNonNeg, keywords: "auto", initial: Value.Keyword { k: "auto" } },
+    Property { name: "min-height", inherited: false, kind: PKind.LengthNonNeg, keywords: "auto", initial: Value.Keyword { k: "auto" } },
+    Property { name: "max-width", inherited: false, kind: PKind.LengthNonNeg, keywords: "none", initial: Value.Keyword { k: "none" } },
+    Property { name: "max-height", inherited: false, kind: PKind.LengthNonNeg, keywords: "none", initial: Value.Keyword { k: "none" } },
+    Property { name: "text-align", inherited: true, kind: PKind.Keywords, keywords: "start end left right center justify", initial: Value.Keyword { k: "start" } },
+    Property { name: "text-decoration-line", inherited: false, kind: PKind.TextDecoration, keywords: "", initial: Value.Keyword { k: "none" } },
+    Property { name: "white-space", inherited: true, kind: PKind.Keywords, keywords: "normal pre nowrap pre-wrap pre-line break-spaces", initial: Value.Keyword { k: "normal" } },
+    Property { name: "list-style-type", inherited: true, kind: PKind.Keywords, keywords: LIST_STYLES, initial: Value.Keyword { k: "disc" } },
+    Property { name: "visibility", inherited: true, kind: PKind.Keywords, keywords: "visible hidden collapse", initial: Value.Keyword { k: "visible" } },
+    Property { name: "overflow-x", inherited: false, kind: PKind.Keywords, keywords: OVERFLOWS, initial: Value.Keyword { k: "visible" } },
+    Property { name: "overflow-y", inherited: false, kind: PKind.Keywords, keywords: OVERFLOWS, initial: Value.Keyword { k: "visible" } },
+}
+
+/// The index of the longhand property `name` (lower case).
+pub fn propertyIndex(name: []u8) ?usize {
+    for i, p in PROPERTIES {
+        if eqlBytes(p.name, name) {
+            return i
+        }
+    }
+    return null
+}
+
+fn eqlBytes(a: []u8, b: []u8) bool {
+    if a.len != b.len {
+        return false
+    }
+    for i in 0..a.len {
+        if a[i] != b[i] {
+            return false
+        }
+    }
+    return true
+}
+
+// ---- style sheets
+
+/// A declaration of a longhand property.
+pub struct Decl {
+    prop: usize
+    value: Value
+    important: bool
+}
+
+/// A style rule: selectors `sel_start..sel_end` of `Sheet.complexes` and
+/// declarations `decl_start..decl_end` of `Sheet.decls`.
+pub struct Rule {
+    sel_start: usize
+    sel_end: usize
+    decl_start: usize
+    decl_end: usize
+}
+
+/// A style sheet: the rules of every source added to it, in order.
+pub struct Sheet {
+    alloc: Allocator
+    // Owns every list and string of the sheet. On the heap, so that the
+    // `Allocator` the lists hold stays valid when the sheet is moved.
+    arena: *mut Arena
+    rules: List(Rule)
+    complexes: List(Complex)
+    compounds: List(Compound)
+    simples: List(Simple)
+    decls: List(Decl)
+
+    pub fn init(alloc: Allocator) AllocError!Sheet {
+        let arena = try alloc.create(Arena.init(alloc))
+        let a = arena.allocator()
+        return Sheet {
+            alloc: alloc,
+            arena: arena,
+            rules: List(Rule).init(a),
+            complexes: List(Complex).init(a),
+            compounds: List(Compound).init(a),
+            simples: List(Simple).init(a),
+            decls: List(Decl).init(a),
+        }
+    }
+
+    pub fn deinit(self: *mut Self) {
+        self.arena.deinit()
+        self.alloc.destroy(self.arena)
+    }
+}
