@@ -26,6 +26,15 @@ pub struct CustomVar {
     value: []Token
 }
 
+// While the cascade runs: the initial values of the custom properties
+// registered with `@property` (the author sheet's).
+var registered_values: ?*StrMap([]Token) = null
+
+/// Sets (or, with null, ends) the registered custom properties.
+pub fn setRegistered(m: ?*StrMap([]Token)) {
+    registered_values = m
+}
+
 // The longest chain of `var()` references that is followed.
 let MAX_VAR_DEPTH: usize = 32
 
@@ -48,6 +57,13 @@ fn lookupVar(alloc: Allocator, level: ?*mut CustomLevel, name: []u8, depth: usiz
             return resolveVar(alloc, l, cv, depth)
         }
         cur = l.parent
+    }
+    if registered_values |m| {
+        if m.get(name) |initial| {
+            if initial.len > 0 {
+                return initial
+            }
+        }
     }
     return null
 }

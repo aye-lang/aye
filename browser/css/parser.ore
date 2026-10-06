@@ -253,6 +253,8 @@ struct Parser {
                     self.cond = outer
                 } else if text.eqlIgnoreCase(name, "scope") && parent == null {
                     try self.scopeRule(prelude, j + 1, close)
+                } else if text.eqlIgnoreCase(name, "property") && parent == null {
+                    try self.propertyRule(prelude, j + 1, close)
                 }
                 return close + 1
             }
@@ -406,6 +408,35 @@ struct Parser {
         try self.sheet.conditions.append(ContainerCondition { name: name, toks: prelude[i..], parent: self.cond })
         self.cond = self.sheet.conditions.len() as u32
         return true
+    }
+
+    // ---- @property
+
+    // `@property --name { syntax: ...; inherits: ...; initial-value: ... }`:
+    // `var(--name)` of an element without the property gets the initial
+    // value (`inherits` is not followed: registered properties inherit).
+    fn propertyRule(self: *mut Self, prelude: []Token, lo: usize, hi: usize) AllocError!void {
+        let k = skipWhitespace(prelude, 0)
+        if k >= prelude.len || prelude[k].kind != Tok.Ident || !text.startsWith(prelude[k].text, "--") || skipWhitespace(prelude, k + 1) < prelude.len {
+            return
+        }
+        let within = self.toks[..hi]
+        var i = lo
+        while i < hi {
+            var end = i
+            while end < hi && self.toks[end].kind != Tok.Semicolon {
+                end = skipComponent(within, end)
+            }
+            let n = skipWhitespace(within, i)
+            if n < end && self.toks[n].kind == Tok.Ident && text.eqlIgnoreCase(self.toks[n].text, "initial-value") {
+                let c = skipWhitespace(within, n + 1)
+                if c < end && self.toks[c].kind == Tok.Colon {
+                    let v = skipWhitespace(within, c + 1)
+                    try self.sheet.registered.put(prelude[k].text, self.toks[v..trimEnd(self.toks, v, end)])
+                }
+            }
+            i = end + 1
+        }
     }
 
     // ---- @scope

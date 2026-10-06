@@ -16,6 +16,7 @@
 import dom.NodeId
 import std.heap.Arena
 import std.list.List
+import std.map.StrMap
 import std.mem.AllocError
 import std.mem.Allocator
 
@@ -450,6 +451,8 @@ pub struct Sheet {
     base_layer: u32
     // The `@container` conditions of rules.
     conditions: List(ContainerCondition)
+    // `@property`: the initial values of registered custom properties.
+    registered: StrMap([]Token)
     // The element that a `@scope` without a prelude scopes to while the
     // source being parsed is a `style` element's (its parent); set by
     // the loader.
@@ -479,6 +482,7 @@ pub struct Sheet {
             layers: layers,
             base_layer: 0,
             conditions: List(ContainerCondition).init(a),
+            registered: StrMap([]Token).init(a),
             scope_root: null,
         }
     }

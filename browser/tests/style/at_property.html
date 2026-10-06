@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<style>
+@property --tw-gap { syntax: "<length>"; inherits: false; initial-value: 12px; }
+@property --tone { syntax: "<color>"; inherits: true; initial-value: green }
+@property --none { syntax: "*"; inherits: false }
+.a { margin-left: var(--tw-gap) }
+.b { --tw-gap: 30px; margin-left: var(--tw-gap) }
+p { color: var(--tone) }
+.c { color: var(--none, purple) }
+</style>
+<p class="a">green, margin 12px (initial value)</p>
+<p class="b">green, margin 30px</p>
+<p class="c">purple: no initial value, the fallback</p>

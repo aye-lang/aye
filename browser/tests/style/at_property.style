@@ -1,0 +1,29 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <p class="a">
+      display: block
+      color: rgb(0, 128, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+      margin-left: 12px
+    <p class="b">
+      display: block
+      color: rgb(0, 128, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+      margin-left: 30px
+    <p class="c">
+      display: block
+      color: rgb(128, 0, 128)
+      margin-top: 16px
+      margin-bottom: 16px

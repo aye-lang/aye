@@ -259,6 +259,8 @@ pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, o
     defer has_results.deinit()
     setHasCache(&mut has_results)
     defer setHasCache(null)
+    setRegistered(&author.registered)
+    defer setRegistered(null)
     var cur: ?NodeId = doc.root
     while cur |h| {
         if doc.node(h).kind == Kind.Element {
@@ -306,6 +308,8 @@ pub fn computeStylesOf(doc: *Document, ua: *Sheet, author: *Sheet, media: Media,
     defer c.deinit()
     var hints = text.Builder.init(out.alloc)
     defer hints.deinit()
+    setRegistered(&author.registered)
+    defer setRegistered(null)
     // From the root down, so that each element inherits from its parent.
     var chain = List(NodeId).init(out.alloc)
     defer chain.deinit()
