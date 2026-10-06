@@ -1,0 +1,40 @@
+viewport 800x600
+  block <html> (0, 0) 800x208
+    block <body> (0, 0) 800x204
+      block <p> (0, 0) 800x20
+        line (0, 0) 800x20
+          text (0, 2) 56x16 "straße "
+          inline <span class="u"> (56, 2) 56x16
+            text (56, 2) 56x16 "STRASSE"
+      block <p class="u w"> (0, 24) 64x40
+        line (0, 24) 64x20
+          text (0, 26) 48x16 "GROSSE"
+        line (0, 44) 64x20
+          text (0, 46) 40x16 "MASSE"
+      block <p class="u"> (0, 68) 800x20
+        line (0, 68) 800x20
+          text (0, 70) 128x16 "ÀÉÎ Ÿ ΑΒΓ АБВ Ё "
+          inline <span class="n"> (128, 70) 32x16
+            text (128, 70) 32x16 "kept"
+      block <p class="l"> (0, 92) 800x20
+        line (0, 92) 800x20
+          text (0, 94) 152x16 "àéî αβγ абв ё mixed"
+      block <p class="c"> (0, 116) 800x20
+        line (0, 116) 800x20
+          text (0, 118) 288x16 "Hello WORLD (Quoted) Don't 3rd É-ver"
+      block <p class="c"> (0, 140) 800x40
+        line (0, 140) 800x20
+          text (0, 142) 24x16 "Foo"
+          inline <span> (24, 142) 24x16
+            text (24, 142) 24x16 "bar"
+          text (48, 142) 8x16 " "
+          inline <span> (56, 142) 24x16
+            text (56, 142) 24x16 "Baz"
+          text (80, 142) 32x16 " Qux"
+        line (0, 160) 800x20
+          text (0, 162) 88x16 "After Break"
+      block <p class="b"> (0, 184) 800x20
+        line (0, 184) 800x20
+          inline ::before (0, 186) 56x16
+            text (0, 186) 56x16 "BEFORE "
+          text (56, 186) 32x16 "text"
