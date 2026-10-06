@@ -15,7 +15,9 @@ import std.mem.AllocError
 import std.mem.Allocator
 import std.text
 
-// A cached glyph bitmap: `w` x `h` coverage bytes at `data[offset..]`.
+// A cached glyph bitmap: `w` x `h` coverage bytes at `data[offset..]`;
+// a color glyph (emoji) has `w` x `h` RGBA pixels there instead, drawn
+// `scale` times their size.
 struct Glyph {
     ok: bool
     w: usize
@@ -23,16 +25,20 @@ struct Glyph {
     left: i64
     top: i64
     offset: usize
+    color: bool
+    scale: f64
 }
 
 pub struct TextPainter {
     alloc: Allocator
     // The system's fonts; null to draw the fixed-metric font's boxes.
     system: ?*mut font.System
-    // Key: glyph id << 32 | size in 1/64 px << 3 | face slot.
+    // Key: face << 52 | glyph id << 32 | size in 1/64 px.
     index: IntMap(u64, usize)
     glyphs: List(Glyph)
     data: List(u8)
+    // The glyphs of the text being drawn.
+    placed: List(font.Placed)
 
     pub fn init(alloc: Allocator, system: ?*mut font.System) TextPainter {
         return TextPainter {
@@ -41,6 +47,7 @@ pub struct TextPainter {
             index: IntMap(u64, usize).init(alloc),
             glyphs: List(Glyph).init(alloc),
             data: List(u8).init(alloc),
+            placed: List(font.Placed).init(alloc),
         }
     }
 
@@ -48,6 +55,7 @@ pub struct TextPainter {
         self.index.deinit()
         self.glyphs.deinit()
         self.data.deinit()
+        self.placed.deinit()
     }
 
     /// Draws `s` in `f` (CSS px) and color `c`, its baseline starting at
@@ -65,49 +73,53 @@ pub struct TextPainter {
             return
         }
         let base = roundPx(y)
-        var pen = 0.0
-        var prev: u32 = 0
-        var i: usize = 0
-        while i < s.len {
-            let d = text.decode(s[i..])
-            i += d.len
-            let g = sys.glyphIndex(f, d.code)
-            // The advance includes the kerning with the glyph before,
-            // which moves this glyph's origin.
-            let adv = sys.advance(f, prev, g)
-            var kern = 0.0
-            if prev != 0 {
-                kern = adv - sys.advance(f, 0, g)
+        self.placed.clear()
+        try sys.shapeText(f, s, &mut self.placed)
+        for k in 0..self.placed.len() {
+            let p = self.placed.items()[k]
+            let ch = s[p.cluster as usize]
+            if ch == ' ' || ch == '\t' || ch == '\n' {
+                continue
             }
-            let origin = roundPx(x + (pen + kern) * scale)
-            if d.code != ' ' as u32 && d.code != '\t' as u32 && d.code != '\n' as u32 {
-                let gi = try self.glyph(sys, f, size64, g)
-                let gl = self.glyphs.items()[gi]
-                if gl.ok && gl.w > 0 && gl.h > 0 {
-                    let mask = self.data.items()[gl.offset..gl.offset + gl.w * gl.h]
-                    canvas.blitMask(origin + gl.left, base - gl.top, gl.w, gl.h, mask, gl.w, c)
-                }
+            let origin = roundPx(x + p.x * scale)
+            let top = base - roundPx(p.y * scale)
+            let gi = try self.glyph(sys, p.face, size64, p.glyph)
+            let gl = self.glyphs.items()[gi]
+            if !gl.ok || gl.w == 0 || gl.h == 0 {
+                continue
             }
-            pen += adv
-            prev = g
+            if gl.color {
+                let px = self.data.items()[gl.offset..gl.offset + gl.w * gl.h * 4]
+                let x0 = origin + roundPx(gl.left as f64 * gl.scale)
+                let y0 = top - roundPx(gl.top as f64 * gl.scale)
+                let r = IRect { x0: x0, y0: y0, x1: x0 + roundPx(gl.w as f64 * gl.scale), y1: y0 + roundPx(gl.h as f64 * gl.scale) }
+                canvas.drawImage(r, gl.w, gl.h, px)
+            } else {
+                let mask = self.data.items()[gl.offset..gl.offset + gl.w * gl.h]
+                canvas.blitMask(origin + gl.left, top - gl.top, gl.w, gl.h, mask, gl.w, c)
+            }
         }
     }
 
-    // The index in `glyphs` of glyph `g` of the face of `f` at `size64`,
+    // The index in `glyphs` of glyph `g` of face `face` at `size64`,
     // rendering it on first use.
-    fn glyph(self: *mut Self, sys: *mut font.System, f: font.Font, size64: i64, g: u32) AllocError!usize {
-        let key = (g as u64 << 32) | (size64 as u64 << 4) | font.faceSlot(f) as u64
+    fn glyph(self: *mut Self, sys: *mut font.System, face: u32, size64: i64, g: u32) AllocError!usize {
+        let key = (face as u64 << 52) | ((g as u64 & 0xFFFFF) << 32) | size64 as u64
         if self.index.get(key) |gi| {
             return gi
         }
-        var gl = Glyph { ok: false, w: 0, h: 0, left: 0, top: 0, offset: self.data.len() }
-        if sys.render(f, size64, g) |bm| {
+        var gl = Glyph { ok: false, w: 0, h: 0, left: 0, top: 0, offset: self.data.len(), color: false, scale: 1.0 }
+        if sys.render(face, size64, g) |bm| {
             if bm.buffer |buf| {
                 gl.ok = true
                 gl.w = bm.width as usize
                 gl.h = bm.rows as usize
                 gl.left = bm.left as i64
                 gl.top = bm.top as i64
+                gl.color = bm.color
+                if bm.color && bm.ppem > 0.0 {
+                    gl.scale = size64 as f64 / 64.0 / bm.ppem
+                }
                 for row in 0..gl.h {
                     // A negative pitch means rows go bottom-up.
                     var start: usize = 0
@@ -116,8 +128,27 @@ pub struct TextPainter {
                     } else {
                         start = (gl.h - 1 - row) * (-bm.pitch) as usize
                     }
-                    for col in 0..gl.w {
-                        try self.data.append(buf[start + col])
+                    if gl.color {
+                        // Premultiplied BGRA to straight RGBA.
+                        for col in 0..gl.w {
+                            let o = start + col * 4
+                            let a = buf[o + 3] as u32
+                            if a == 0 {
+                                try self.data.append(0)
+                                try self.data.append(0)
+                                try self.data.append(0)
+                                try self.data.append(0)
+                            } else {
+                                try self.data.append(math.minOf(u32, 255, (buf[o + 2] as u32 * 255 + a / 2) / a) as u8)
+                                try self.data.append(math.minOf(u32, 255, (buf[o + 1] as u32 * 255 + a / 2) / a) as u8)
+                                try self.data.append(math.minOf(u32, 255, (buf[o] as u32 * 255 + a / 2) / a) as u8)
+                                try self.data.append(a as u8)
+                            }
+                        }
+                    } else {
+                        for col in 0..gl.w {
+                            try self.data.append(buf[start + col])
+                        }
                     }
                 }
             } else {

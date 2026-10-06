@@ -6,10 +6,13 @@
 //   line gap of 0.25em, so that layout goldens do not depend on the fonts
 //   of the machine.
 // - `System` (freetype.ore): the system's TrueType fonts through
-//   FreeType, for the window and screenshots.
+//   FreeType, for the window and screenshots, with fallback faces,
+//   shaping and web fonts.
 //
 // All lengths are in CSS px.
 
+import std.list.List
+import std.mem.AllocError
 import std.text
 
 /// What layout asks of a font: its size and the variant to use.
@@ -20,6 +23,26 @@ pub struct Font {
     mono: bool
     // A serif face (when `mono` is false).
     serif: bool = false
+    // The CSS weight (`bold` is weight >= 600), for web fonts.
+    weight: f64 = 400.0
+    // The CSS `font-family` list, for web fonts; "" for none.
+    family: []u8 = ""
+    // Right-to-left text (an odd bidi level): shaped and drawn from its
+    // end.
+    rtl: bool = false
+}
+
+/// The descriptors of an `@font-face` rule, for `Measurer.addWebFont`.
+pub struct FaceDesc {
+    family: []u8
+    // The `font-weight` range (one weight: both ends equal).
+    weight_lo: f64
+    weight_hi: f64
+    italic: bool
+    // `unicode-range`: pairs of code points (first, last); empty for all.
+    ranges: []u32
+    // The URL of the file, so that a file is added once.
+    url: []u8
 }
 
 /// The kinds of faces a CSS font family list maps to.
@@ -78,6 +101,9 @@ pub struct Metrics {
 pub interface Measurer {
     fn metrics(self: *mut Self, f: Font) Metrics
     fn width(self: *mut Self, f: Font, s: []u8) f64
+    // Adds a web font (a TrueType or OpenType file, copied); false when
+    // it cannot be used. The fixed-metric font ignores web fonts.
+    fn addWebFont(self: *mut Self, d: FaceDesc, file: []u8) AllocError!bool
 }
 
 /// The fixed-metric font of the layout tests.
@@ -102,6 +128,10 @@ pub struct Fixed {
             i += d.len
         }
         return ems * f.size
+    }
+
+    pub fn addWebFont(self: *mut Self, d: FaceDesc, file: []u8) AllocError!bool {
+        return false
     }
 }
 
@@ -155,21 +185,87 @@ test "system fonts, when there are any" {
     let mm = m.metrics(f)
     @expect(mm.ascent > 10.0 && mm.ascent < 18.0)
     @expect(mm.descent > 1.0 && mm.descent < 6.0)
-    // Advances glyph by glyph add up to the width.
-    var sum = 0.0
-    var prev: u32 = 0
-    for c in "AVATAR Hello" {
-        let g = s.glyphIndex(f, c as u32)
-        sum += s.advance(f, prev, g)
-        prev = g
+    // The placed glyphs end where the width says.
+    var placed = List(Placed).init(@testAllocator())
+    defer placed.deinit()
+    let w2 = s.shapeText(f, "AVATAR Hello", &mut placed) catch |e| {
+        return
     }
-    let w2 = m.width(f, "AVATAR Hello")
-    @expect(sum > w2 - 0.001 && sum < w2 + 0.001)
-    if s.render(f, 16 * 64, s.glyphIndex(f, 'H')) |bm| {
+    @expectEqual(12, placed.len())
+    @expect(w2 > m.width(f, "AVATAR") + m.width(f, "Hello"))
+    @expect(placed.items()[11].x > placed.items()[10].x)
+    let g = placed.items()[7]
+    if s.render(g.face, 16 * 64, g.glyph) |bm| {
         @expect(bm.width > 4 && bm.width < 20)
         @expect(bm.top > 8 && bm.top < 16)
         @expect(bm.buffer != null)
     } else {
         @expect(false)
     }
+}
+
+test "fallback faces for characters the font lacks" {
+    var s = System.init(@testAllocator()) catch |e| {
+        return
+    }
+    defer s.deinit()
+    var placed = List(Placed).init(@testAllocator())
+    defer placed.deinit()
+    let f = Font { size: 16.0, bold: false, italic: false, mono: false, serif: true }
+    let w = s.shapeText(f, "a日本", &mut placed) catch |e| {
+        return
+    }
+    @expectEqual(3, placed.len())
+    if placed.items()[1].glyph == 0 {
+        // No CJK font on this machine.
+        return
+    }
+    // The CJK characters come from another face, about 1em wide each.
+    @expect(placed.items()[1].face != placed.items()[0].face)
+    @expectEqual(placed.items()[1].face, placed.items()[2].face)
+    @expect(w > 2.0 * 12.0 && w < 10.0 + 2.0 * 20.0)
+    @expectEqual(w, s.width(f, "a日本"))
+}
+
+test "right-to-left text and shaping" {
+    var s = System.init(@testAllocator()) catch |e| {
+        return
+    }
+    defer s.deinit()
+    var ltr = List(Placed).init(@testAllocator())
+    defer ltr.deinit()
+    var rtl = List(Placed).init(@testAllocator())
+    defer rtl.deinit()
+    let f = Font { size: 16.0, bold: false, italic: false, mono: false }
+    let r = Font { size: 16.0, bold: false, italic: false, mono: false, rtl: true }
+    // Hebrew right to left: the first letter is drawn last, at the right.
+    let wl = s.shapeText(f, "אבג", &mut ltr) catch |e| {
+        return
+    }
+    let wr = s.shapeText(r, "אבג", &mut rtl) catch |e| {
+        return
+    }
+    @expectEqual(3, rtl.len())
+    @expect(wl > wr - 0.01 && wl < wr + 0.01)
+    @expectEqual(0, rtl.items()[2].cluster)
+    @expectEqual(4, rtl.items()[0].cluster)
+    @expect(rtl.items()[2].x > rtl.items()[0].x)
+    if !s.shapes() {
+        return
+    }
+    // Arabic letters join: the shaped glyphs of "سلام" are not the
+    // isolated forms the characters map to.
+    var arabic = List(Placed).init(@testAllocator())
+    defer arabic.deinit()
+    s.shapeText(r, "سلام", &mut arabic) catch |e| {
+        return
+    }
+    let first = arabic.items()[arabic.len() - 1]
+    @expectEqual(0, first.cluster)
+    var alone = List(Placed).init(@testAllocator())
+    defer alone.deinit()
+    s.shapeText(r, "س", &mut alone) catch |e| {
+        return
+    }
+    @expect(alone.items()[0].glyph != first.glyph)
 }
