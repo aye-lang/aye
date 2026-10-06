@@ -20,8 +20,12 @@
 //   items (items spanning several tracks share theirs) and grow toward
 //   max-content; `fr` tracks share what is left (at least their
 //   minimum); with no `fr` track, `auto` tracks stretch. Rows are as high
-//   as their items. Items stretch in both axes unless their size is set
-//   or `align-self` says otherwise.
+//   as their items; in a grid of definite height, `fr` rows share the
+//   rest, else `auto` rows stretch to fill it. Items stretch in both axes
+//   unless their size is set or `align-self` says otherwise. A percentage
+//   height resolves against the item's area when the grid's height is
+//   definite (such an item adds nothing to its row's height), else it is
+//   `auto`.
 // - Anything else (subgrid, masonry, unparsable tracks) falls back to
 //   one column, so the content stays readable.
 
@@ -839,6 +843,9 @@ fn layoutGrid(t: *mut Tree, i: usize, cw: f64, ch: f64) AllocError!f64 {
                 continue
             }
             let b = t.bx(it.box)
+            if ch >= 0.0 && isPercentHeight(b.style[css.HEIGHT]) {
+                continue
+            }
             let need = b.margin[0] + b.h + b.margin[2]
             var have = row_gap * (it.rspan as f64 - 1.0)
             for r in it.row..it.row + it.rspan {
@@ -869,6 +876,21 @@ fn layoutGrid(t: *mut Tree, i: usize, cw: f64, ch: f64) AllocError!f64 {
                     hs.items()[r] += (ch - used) * g.rows.items()[r].fr / frs
                 }
             }
+        } else if frs <= 0.0 && ch > used {
+            // `align-content: normal`: the auto rows stretch.
+            var autos: usize = 0
+            for r in 0..g.nrows {
+                if !isFixedRow(&g, r) {
+                    autos += 1
+                }
+            }
+            if autos > 0 {
+                for r in 0..g.nrows {
+                    if !isFixedRow(&g, r) {
+                        hs.items()[r] += (ch - used) / autos as f64
+                    }
+                }
+            }
         }
     }
     var ys = List(f64).init(t.backing)
@@ -886,6 +908,21 @@ fn layoutGrid(t: *mut Tree, i: usize, cw: f64, ch: f64) AllocError!f64 {
         var ah = row_gap * (it.rspan as f64 - 1.0)
         for r in it.row..it.row + it.rspan {
             ah += hs.items()[r]
+        }
+        if ch >= 0.0 && isPercentHeight(t.bx(it.box).style[css.HEIGHT]) {
+            // A percentage of the area's height.
+            if t.bx(it.box).kind == BoxKind.Image {
+                var aw = col_gap * (it.cspan as f64 - 1.0)
+                for c in it.col..it.col + it.cspan {
+                    aw += ws[c]
+                }
+                replacedSize(t, it.box, aw, ah)
+            } else {
+                let pb = t.bx(it.box)
+                if sizeOf(pb.style, pb.style[css.HEIGHT], ah, vEdges(pb)) |hh| {
+                    pb.h = clampHeight(t, it.box, hh, ah)
+                }
+            }
         }
         let b = t.bx(it.box)
         b.x = xs.items()[it.col] + b.margin[3]
@@ -911,6 +948,15 @@ fn layoutGrid(t: *mut Tree, i: usize, cw: f64, ch: f64) AllocError!f64 {
         }
     }
     return y
+}
+
+// Is `v` a height that is a percentage (or a math function of one)?
+fn isPercentHeight(v: Value) bool {
+    return match v {
+        .Percent { .. } => true
+        .Calc { .. } => true
+        _ => false
+    }
 }
 
 fn isFixedRow(g: *Grid, r: usize) bool {
