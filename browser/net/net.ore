@@ -1,6 +1,5 @@
-// net: fetching a URL. B1 fetches `file:` and `data:` URLs; `http:` and
-// `https:` go through `fetchHttp` (http.ore), which will call libcurl
-// once Ore can (M7) and until then reports `Unsupported`.
+// net: fetching a URL: `file:` (file.ore), `data:` (data.ore), and
+// `http:` and `https:` through libcurl (http.ore).
 
 import std.mem.AllocError
 import std.mem.Allocator
@@ -16,6 +15,11 @@ pub error FetchError {
     OutOfMemory
     Invalid
     Unsupported
+    CannotResolve
+    CannotConnect
+    Timeout
+    TooManyRedirects
+    Network
 }
 
 /// What a fetch returns. Every slice is owned by the response: free them
@@ -26,11 +30,18 @@ pub struct Response {
     // The `charset` parameter of the content type, or empty.
     charset: []mut u8
     body: []mut u8
+    // The HTTP status; 200 for `file:` and `data:`.
+    status: i64
+    // The URL of the body when redirects led elsewhere, else empty.
+    url: []mut u8
 
     pub fn deinit(self: *Self, alloc: Allocator) {
         alloc.free(self.mime)
         alloc.free(self.charset)
         alloc.free(self.body)
+        if self.url.len > 0 {
+            alloc.free(self.url)
+        }
     }
 }
 
@@ -58,6 +69,11 @@ pub fn describe(e: FetchError) []u8 {
         .OutOfMemory => "out of memory"
         .Invalid => "invalid data: URL"
         .Unsupported => "this kind of URL is not supported yet"
+        .CannotResolve => "cannot resolve the host"
+        .CannotConnect => "cannot connect"
+        .Timeout => "timed out"
+        .TooManyRedirects => "too many redirects"
+        .Network => "network error"
     }
 }
 
@@ -80,7 +96,7 @@ fn respond(alloc: Allocator, content_type: []u8, body: []mut u8) AllocError!Resp
     for i, c in ct.charset {
         charset[i] = c
     }
-    return Response { mime: mime, charset: charset, body: body }
+    return Response { mime: mime, charset: charset, body: body, status: 200, url: []mut u8{} }
 }
 
 /// A content type split into its MIME type and `charset` parameter.

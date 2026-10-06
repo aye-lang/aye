@@ -132,6 +132,66 @@ fn errors() {
         "error: cannot fetch file://{}/browser/tests/missing.html: not found\n",
         root().display()
     ));
-    expect(&["dump", "--text", "https://example.com/"], 1, "", "error: cannot fetch https://example.com/: this kind of URL is not supported yet\n");
+    expect(&["dump", "--text", "ftp://example.com/"], 1, "", "error: cannot fetch ftp://example.com/: this kind of URL is not supported yet\n");
     expect(&["dump", "--text", "data:text/html;base64,%%%"], 1, "", "error: cannot fetch data:text/html;base64,%%%: invalid data: URL\n");
+}
+
+/// The local test server (`browser/tests/server.py`) serving
+/// `browser/tests`; killed when dropped. `None` without python3.
+struct Server {
+    child: std::process::Child,
+    base: String,
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn server() -> Option<Server> {
+    use std::io::BufRead;
+    let tests = root().join("browser").join("tests");
+    let mut child = Command::new("python3")
+        .arg("-I")
+        .arg(tests.join("server.py"))
+        .arg(&tests)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut line = String::new();
+    std::io::BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).ok()?;
+    let port: u16 = line.trim().parse().ok()?;
+    Some(Server { child, base: format!("http://127.0.0.1:{port}") })
+}
+
+#[test]
+fn http() {
+    let Some(srv) = server() else {
+        println!("skipped: cannot start python3 for the test server");
+        return;
+    };
+    let base = &srv.base;
+    let basic = std::fs::read_to_string(root().join("browser/tests/basic.txt")).unwrap();
+    // A page over HTTP reads as from a file, also after a redirect.
+    expect(&["dump", "--text", &format!("{base}/basic.html")], 0, &basic, "");
+    expect(&["dump", "--text", &format!("{base}/redirect")], 0, &basic, "");
+    expect(&["dump", "--text", &format!("{base}/agent")], 0, "anyknown/0.1\n", "");
+    expect(&["dump", "--text", &format!("{base}/gzip")], 0, &format!("{}\n", ["compressed"; 50].join(" ")), "");
+    // The charset of the Content-Type header decodes the body.
+    expect(&["dump", "--text", &format!("{base}/latin1")], 0, "Café à la crème\n", "");
+    // An error status still has a page.
+    let out = run(&["dump", "--text", &format!("{base}/missing.html")]);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(text(&out.stdout).contains("404"), "{}", text(&out.stdout));
+    expect(
+        &["dump", "--text", &format!("{base}/redirect-loop")],
+        1,
+        "",
+        &format!("error: cannot fetch {base}/redirect-loop: too many redirects\n"),
+    );
+    // Nothing listens on port 1.
+    expect(&["dump", "--text", "http://127.0.0.1:1/"], 1, "", "error: cannot fetch http://127.0.0.1:1/: cannot connect\n");
 }

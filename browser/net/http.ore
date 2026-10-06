@@ -1,14 +1,155 @@
-// `http:` and `https:` URLs. B1 cannot fetch them yet: Ore's C interop
-// (M7) does not reach libcurl's variadic `curl_easy_setopt` and its
-// structs. Once it does, this file gets the libcurl easy handle: follow
-// redirects (`CURLOPT_FOLLOWLOCATION`, at most 20), collect the body
-// through a write callback into a `text.Builder`, read `Content-Type` for
-// `respond`, and map curl's errors onto `FetchError`. The rest of the
-// browser only sees `fetch` and `Response`.
+// `http:` and `https:` URLs through libcurl's easy interface: redirects
+// (at most 20, to http and https only), the user agent "anyknown/0.1",
+// every content encoding libcurl knows (gzip, deflate, ...), a connect
+// timeout of 10 s and a total timeout of 30 s. The body is collected by a
+// write callback into a `text.Builder`; the status, the final URL and the
+// `Content-Type` come from `curl_easy_getinfo`. Responses of any status
+// are returned (a 404 page is still a page); curl's own failures become
+// `FetchError`s.
 
+@link("libcurl")
+
+import std.mem.AllocError
 import std.mem.Allocator
+import std.text
 import url.Url
 
+extern struct Curl {}
+
+extern fn curl_easy_init() ?*mut Curl
+extern fn curl_easy_setopt(h: *mut Curl, option: i32, ...) i32
+extern fn curl_easy_perform(h: *mut Curl) i32
+extern fn curl_easy_getinfo(h: *mut Curl, info: i32, ...) i32
+extern fn curl_easy_cleanup(h: *mut Curl)
+extern fn strlen(s: [*]u8) usize
+
+let CURLOPT_WRITEDATA: i32 = 10001
+let CURLOPT_URL: i32 = 10002
+let CURLOPT_USERAGENT: i32 = 10018
+let CURLOPT_FOLLOWLOCATION: i32 = 52
+let CURLOPT_MAXREDIRS: i32 = 68
+let CURLOPT_NOSIGNAL: i32 = 99
+let CURLOPT_ACCEPT_ENCODING: i32 = 10102
+let CURLOPT_TIMEOUT_MS: i32 = 155
+let CURLOPT_CONNECTTIMEOUT_MS: i32 = 156
+let CURLOPT_REDIR_PROTOCOLS_STR: i32 = 10319
+let CURLOPT_WRITEFUNCTION: i32 = 20011
+
+let CURLINFO_EFFECTIVE_URL: i32 = 1048577
+let CURLINFO_RESPONSE_CODE: i32 = 2097154
+let CURLINFO_CONTENT_TYPE: i32 = 1048594
+
+let USER_AGENT = "anyknown/0.1"
+let MAX_REDIRECTS: i64 = 20
+let CONNECT_TIMEOUT_MS: i64 = 10000
+let TIMEOUT_MS: i64 = 30000
+
+// Where the write callback puts the body.
+struct Sink {
+    body: text.Builder
+    out_of_memory: bool
+}
+
+// libcurl calls this with each piece of the body; returning less than
+// `size * n` aborts the transfer (CURLE_WRITE_ERROR).
+fn onBody(data: [*]u8, size: usize, n: usize, user: [*]u8) usize {
+    let sink = @ptrCast(*mut Sink, user)
+    let total = size * n
+    if total == 0 {
+        return 0
+    }
+    sink.body.append(data[0..total]) catch |e| {
+        sink.out_of_memory = true
+        return 0
+    }
+    return total
+}
+
 fn fetchHttp(alloc: Allocator, target: *Url) FetchError!Response {
-    return FetchError.Unsupported
+    if curl_easy_init() |curl| {
+        defer curl_easy_cleanup(curl)
+        return transfer(alloc, curl, target)
+    }
+    return FetchError.Network
+}
+
+fn transfer(alloc: Allocator, curl: *mut Curl, target: *Url) FetchError!Response {
+    // libcurl wants a NUL-terminated URL, without the fragment.
+    let href = target.withoutFragment()
+    let address = alloc.alloc(0 as u8, href.len + 1) catch |e| {
+        return FetchError.OutOfMemory
+    }
+    defer alloc.free(address)
+    for i, c in href {
+        address[i] = c
+    }
+
+    var sink = Sink { body: text.Builder.init(alloc), out_of_memory: false }
+    defer sink.body.deinit()
+    curl_easy_setopt(curl, CURLOPT_URL, address.ptr)
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1 as i64)
+    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, MAX_REDIRECTS)
+    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https".ptr)
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, USER_AGENT.ptr)
+    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "".ptr)
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, CONNECT_TIMEOUT_MS)
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, TIMEOUT_MS)
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1 as i64)
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, onBody)
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, @ptrCast([*]u8, &mut sink))
+    let code = curl_easy_perform(curl)
+    if sink.out_of_memory {
+        return FetchError.OutOfMemory
+    }
+    if code != 0 {
+        return curlError(code)
+    }
+
+    var status: i64 = 0
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &mut status)
+    var content_type: ?[*]u8 = null
+    curl_easy_getinfo(curl, CURLINFO_CONTENT_TYPE, &mut content_type)
+    var effective: ?[*]u8 = null
+    curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &mut effective)
+
+    var ct: []u8 = ""
+    if content_type |p| {
+        ct = p[0..strlen(p)]
+    } else {
+        ct = typeOfPath(target.path)
+    }
+    let body = try sink.body.toOwned()
+    var res = try respond(alloc, ct, body)
+    res.status = status
+    if effective |p| {
+        let final_url = p[0..strlen(p)]
+        if !text.eql(final_url, href) {
+            res.url = copyBytes(alloc, final_url) catch |e| {
+                res.deinit(alloc)
+                return e
+            }
+        }
+    }
+    return res
+}
+
+fn copyBytes(alloc: Allocator, s: []u8) AllocError![]mut u8 {
+    let out = try alloc.alloc(0 as u8, s.len)
+    for i, c in s {
+        out[i] = c
+    }
+    return out
+}
+
+// The `FetchError` of a libcurl error code (CURLcode).
+fn curlError(code: i32) FetchError {
+    return match code {
+        1 => FetchError.Unsupported
+        3 => FetchError.Invalid
+        6 => FetchError.CannotResolve
+        7 => FetchError.CannotConnect
+        28 => FetchError.Timeout
+        47 => FetchError.TooManyRedirects
+        _ => FetchError.Network
+    }
 }
