@@ -1,12 +1,16 @@
 # Standalone JS benchmarks
 
-Run `browser/tests/jsbench/run.sh` from any directory. It builds
+Run `browser/tests/jsbench/run.sh` from any directory (requires Python 3).
+It builds
 `target/anyknown` in fast mode, verifies each stdout checksum (also with
 Node when installed), and reports the median of three end-to-end wall
 times in seconds. Startup, parsing, execution, and teardown are included.
 Use `BENCH_RUNS=5` for more samples, `BENCH_BIN=/path/to/saved/binary`
 to compare builds without rebuilding, and arguments to select workloads
-(e.g. `run.sh richards methods`). A mismatch or timeout is a failure.
+(e.g. `run.sh richards methods`). Set `BENCH_BASELINE=/path/to/old/binary`
+to interleave both builds, alternating their order each round, and print
+per-workload speedups and their geometric mean. Both binaries must have
+been built in fast mode. A mismatch or timeout is a failure.
 
 Richards, DeltaBlue, and NavierStokes are standalone ports from
 https://github.com/chromium/octane (the original algorithms are unchanged).
