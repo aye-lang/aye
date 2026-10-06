@@ -1862,7 +1862,12 @@ pub struct Interp {
             self.frames.pop()
         }
         if fi.this_slot != NONE {
-            self.heap.env(e).slots[fi.this_slot] = thisv
+            // Sloppy mode: a call without `this` gets the global object.
+            if !fi.strict && !fi.arrow && isNullish(thisv) {
+                self.heap.env(e).slots[fi.this_slot] = objVal(self.global)
+            } else {
+                self.heap.env(e).slots[fi.this_slot] = thisv
+            }
         }
         if fi.args_slot != NONE {
             let ao = try self.newObjectOf(Class.Arguments, self.object_proto, ObjData.None)
@@ -3886,6 +3891,7 @@ pub struct Interp {
             line: 0,
             in_async: false,
             in_gen: false,
+            strict: false,
             floor: self.stackFloor(),
         }
         defer p.tmp.deinit()
