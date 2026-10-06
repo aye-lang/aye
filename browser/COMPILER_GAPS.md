@@ -171,26 +171,6 @@ there and can now be simplified.
 
 ### Generics and function values
 
-#### 6. At most 64 instances of a generic in a whole program
-
-- **Need:** a `List` of whatever each part of the browser keeps: the
-  program passed 64 distinct `List(T)` when B5 and B6 were merged.
-- **Repro:** a program that uses `List(T0)` ... `List(T64)` (65
-  element types, no recursion) is E0080: "more than 64 instances of
-  `std.list.List`: it instantiates itself with larger and larger type
-  arguments". The limit is meant to stop runaway recursion (`Nest(?T)`
-  in `Nest(T)`), but it counts every instance in the program
-  (`check_instance_count` in `src/sema.rs`), and the message blames the
-  line that happened to be the 65th (`agent/markdown.ore`, unchanged).
-- **Workaround:** fewer element types: localStorage keeps its items as
-  three strings each in a `List([]mut u8)` instead of a
-  `List(StoreItem)` (`engine/window_api.ore`). The browser is now at
-  the limit: the next new `List(T)` anywhere fails to compile.
-- **Suggestion:** count only instances whose arguments grow (nested
-  instances of the same generic), or count per instantiation chain.
-- **Hit by:** engine, agent (B6 merging B5).
-- **Status:** open; urgent (it blocks any new list type).
-
 #### 7. Function values cannot carry state; a `dyn` cannot be turned back into its struct
 
 - **Need:** the JavaScript engine's native functions are a table of
@@ -459,6 +439,17 @@ there and can now be simplified.
 
 ### Smaller things
 
+#### 47. A pointer to an array cannot be indexed
+
+- **Need:** fill a `sockaddr_un` (a `[110]u8` local) in a helper.
+- **Repro:** `fn set(a: *mut [4]u8) { a[0] = 7 }` is E0043 ("cannot
+  index into a value of type `*mut [4]u8`"); Zig and Rust index through
+  the pointer.
+- **Workaround:** pass a slice (`addr: []mut u8`, called with
+  `addr[..]`) in `ui/socket.ore`.
+- **Hit by:** ui (B7).
+- **Status:** open, low impact.
+
 #### 20. No repeat form for array initializers
 
 - **Repro:** `[4]i64{7} ** 4` is E0006 (expected expression, found `*`).
@@ -569,6 +560,19 @@ there and can now be simplified.
 
 Verified at HEAD with `target/release/ore`; repros in the entry text or
 the milestone's feature form.
+
+#### 6. At most 64 instances of a generic in a whole program
+
+- **Need:** a `List` of whatever each part of the browser keeps: the
+  program passed 64 distinct `List(T)` when B5 and B6 were merged
+  (E0080, "more than 64 instances of `std.list.List`", blaming whichever
+  line was the 65th).
+- **Hit by:** engine, agent (B6 merging B5); B7 worked around it until
+  the fix (the window's tabs and agents add no new `List` type).
+- **Status:** fixed in M9.8 (2eedc32): no limit on the instances of a
+  generic. Browser still uses the workaround: localStorage keeps its
+  items as three strings each in a `List([]mut u8)`
+  (`engine/window_api.ore`).
 
 #### 29. Sub-modules that import siblings could not be tested
 

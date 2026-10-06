@@ -9,6 +9,11 @@ actions on refs. Two stdio servers carry it:
 - `anyknown mcp [--width PX] [--height PX] [--no-js]`: a Model Context
   Protocol server (second part).
 
+A window can take agents too: `anyknown --agent-socket PATH [URL]`
+serves both protocols on a Unix socket, on the pages a person sees and
+uses at the same time, and `anyknown connect PATH [--mcp]` bridges stdio
+to that socket for MCP clients ([A shared window](#a-shared-window)).
+
 Both keep one session: the page shown, the history, the refs. The
 viewport is 800x600 px unless given. Text is measured with the browser's
 fixed-metric font, so boxes are approximate but stable. Forms work
@@ -155,7 +160,8 @@ session goes on after an error.
 | `find` | `text` (ignoring ASCII case) | `result`: the matches |
 | `wait` | `selector` (CSS; at most `ms`, 5000 by default), or `ms` alone, or neither (until no timer is left, at most 5 s of page time) | `result` ("found ... after N ms", or "waited N ms"); an error after the time without a match |
 | `eval` | `expression`: a script; its last expression statement is the result | `result`: a string as it is, anything else as `console.log` shows it; an uncaught exception is the error |
-| `screenshot`, `tabs` | | not supported yet |
+| `tabs`, `tab_new`, `tab_select`, `tab_close`, `user_context` | | only in a window ([A shared window](#a-shared-window)) |
+| `screenshot` | | not supported yet |
 
 Scripts in a session (`todo.jsonl` in `browser/tests/agent/sessions/`):
 
@@ -258,3 +264,116 @@ A session:
 
 To use it from an MCP client, configure a stdio server whose command is
 the `anyknown` executable with the argument `mcp`.
+
+## A shared window
+
+`anyknown --agent-socket PATH [FILE|URL]` opens the window and listens
+on a Unix domain socket at `PATH` (a stale socket file there is
+replaced; the file is removed when the window closes). Agents connect
+to it while a person uses the window: they see the same pages and act
+on them, and the person sees what they do.
+
+- Each connection speaks JSON lines, as `anyknown agent`, unless its
+  first line is the hello `{"mcp":true}` (no response) or a JSON-RPC
+  message: then it speaks MCP, as `anyknown mcp`. At most 8 agents
+  connect at once.
+- The window serves requests between its own events, on its thread: a
+  request never runs while the page handles the person's input.
+- Commands act on the tab the person sees, unless the connection opened
+  or selected another (`tab_new`, `tab_select`); then they act there,
+  in the background, without changing the person's view.
+- The agent sees the window's layout: its fonts and its viewport (the
+  window's size under the toolbar). After the person navigates, the
+  next request gives the new document new refs.
+- `wait` takes real time here, while the person goes on using the
+  window (without a selector or `ms`: until no timer is left, at most
+  5 s). The response comes when the wait is over; the connection's
+  later requests wait for it.
+
+What the person sees and does:
+
+- **Activity.** Before an action, the target element is outlined in
+  purple with its ref (e.g. `e12`), fading out over about a second; an
+  `AI` badge sits in the toolbar while an agent is connected; the
+  status bar tells the last action (`agent: click button "Sign in"
+  [e3]`).
+- **Pause.** The toolbar's Pause button or Cmd+Shift+P (Ctrl+Shift+P)
+  pauses the agents: actions (`navigate`, `back`, `forward`, `reload`,
+  `click`, `type`, `select`, `press`, `scroll`, `eval` and the tab
+  commands) fail with `"paused by user"`; looking (`snapshot`, `read`,
+  `find`, `tabs`, `user_context`) still works. The same key resumes.
+- **Pointing.** Cmd+Shift+K points the agents at the element under the
+  mouse (else the focused one) and the selected text: every connection
+  gets a notification, and `user_context` keeps it as `pointed`.
+- **Focus.** `snapshot` adds `"focused":"e7"` (MCP: a `Focused:` line)
+  when an element of the page has the focus: the person's focus and the
+  agent's are the same.
+- **Tabs.** Cmd+T opens a tab, Cmd+W closes the shown one (the last one
+  closes the window), Cmd+1..8 show a tab and Cmd+9 the last one; with
+  two tabs or more, a tab strip under the toolbar shows them (a click
+  shows a tab, its `x` closes it). At most 16 tabs.
+
+The notification, as a JSON line and as MCP (`notifications/message`,
+whose `data` is the same object; `initialize` then also lists the
+`logging` capability, and `logging/setLevel` returns `{}`):
+
+```
+{"event":"user_pointed","tab":1,"url":"file:///.../form.html","ref":"e1","text":"Sign up","element":"heading \"Sign up\" [e1]"}
+{"jsonrpc":"2.0","method":"notifications/message","params":{"level":"notice","logger":"anyknown","data":{"event":"user_pointed",...}}}
+```
+
+The commands only a window has (MCP: `browser_` and the name):
+
+| `cmd` | arguments | response fields |
+| --- | --- | --- |
+| `tabs` | | `result` ("2 tabs"), `tabs`: `[{"id":1,"url":..,"title":..,"shown":true,"agent":false},...]` (`shown`: the person sees it; `agent`: this connection acts on it) |
+| `tab_new` | `show` (bool: also show it to the person) | `result`, `tab`: its id; the connection acts on it from now on |
+| `tab_select` | `tab` (an id), `show` (bool) | `result`, `tab` |
+| `tab_close` | `tab` (default: the one the connection acts on) | `result`; the last tab cannot be closed; connections on it go back to the shown tab |
+| `user_context` | | `tab`, `url`, `title` and `scroll` (px) of the shown tab; `selection` (the selected text of the focused text field, else the find bar's query while it has matches; never a password); `hovered` and `focused`: `{"ref","element","text"}` or `null`; `pointed`: the last `user_pointed` event's members, or `null` |
+
+Tab ids are numbers that are never reused. The argument is `tab`, not
+`id`, which is the request's own. A session (from
+`browser/tests/agent/window/shared.jsonl`; the window ran the scripted
+events `agents:5 move:100,90 key:cmd+shift+k`):
+
+```
+{"id":5,"cmd":"snapshot"}
+{"id":5,"ok":true,...,"snapshot":"...","focused":"e4"}
+{"event":"user_pointed","tab":1,"url":"file:///.../form.html","ref":"e1","text":"Sign up","element":"heading \"Sign up\" [e1]"}
+{"id":6,"cmd":"user_context"}
+{"id":6,"ok":true,"result":"the user's context","tab":1,"url":"file:///.../form.html","title":"Sign up","scroll":0,"selection":"","hovered":{"ref":"e1","element":"heading \"Sign up\" [e1]","text":"Sign up"},"focused":{"ref":"e4","element":"checkbox \"Send me news\" [e4]","text":""},"pointed":{...}}
+{"id":8,"cmd":"tab_new"}
+{"id":8,"ok":true,"result":"opened tab 2","tab":2}
+{"id":9,"cmd":"navigate","url":"browser/tests/agent/site/index.html"}
+```
+
+### `anyknown connect`
+
+MCP clients start a server as a command and talk to its stdio.
+`anyknown connect PATH [--mcp]` is that command for a window: it copies
+stdin to the socket and the socket to stdout until either ends (when
+stdin ends, the window answers what it was sent, then closes). With
+`--mcp` it sends the hello first. With Claude Code:
+
+```
+anyknown --agent-socket /tmp/ak.sock https://example.com/ &
+claude mcp add anyknown -- anyknown connect /tmp/ak.sock --mcp
+```
+
+The tools are those of `anyknown mcp` plus `browser_tabs`,
+`browser_tab_new`, `browser_tab_select`, `browser_tab_close` and
+`browser_user_context`, and the instructions tell the model that a
+person shares the window.
+
+### Headless (tests)
+
+`--exit-when-idle` closes the window once the last agent has left, and
+lets `--events`, `--state`, `--text` and `--save` work without
+`--frames`. In `--events`, the word `agents:N` makes the events after it
+wait until the agents made N requests (the MCP hello does not count);
+`--state` then adds the tabs, whether the agents are paused, and the
+status bar's activity line. `cargo test --test browser window_agents`
+runs `browser/tests/agent/window/X.jsonl` with the events of
+`X.events`, over the socket from the test or through `anyknown connect
+--mcp` for `X.mcp.jsonl`, against `X.out`.
