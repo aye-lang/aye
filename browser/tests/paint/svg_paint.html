@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<title>SVG paint servers</title>
+<style>
+body { margin: 4px }
+svg { margin: 2px; border: 1px solid #ccc }
+</style>
+<svg style="display: none">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#08f"/><stop offset="1" stop-color="#fff"/></linearGradient>
+    <linearGradient id="sun" href="#sky" gradientTransform="rotate(90 0.5 0.5)"/>
+    <linearGradient id="bars" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="10" y2="0" spreadMethod="repeat"><stop offset="0.5" stop-color="#000"/><stop offset="0.5" stop-color="#fc0"/></linearGradient>
+    <linearGradient id="mirror" x2="0.25" spreadMethod="reflect"><stop offset="0" stop-color="red"/><stop offset="100%" stop-color="blue" stop-opacity="0.2"/></linearGradient>
+    <radialGradient id="ball" cx="0.5" cy="0.5" r="0.5" fx="0.3" fy="0.3"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#a00"/></radialGradient>
+    <clipPath id="disc"><circle cx="40" cy="30" r="22"/></clipPath>
+  </defs>
+</svg>
+<!-- Linear gradients: bounding box units, href and gradientTransform, user space and repeat, reflect with stop-opacity. -->
+<svg width="80" height="60"><rect x="5" y="5" width="70" height="50" fill="url(#sky)" stroke="url(#sun)" stroke-width="4"/></svg>
+<svg width="80" height="60"><rect width="80" height="60" fill="url(#bars)"/></svg>
+<svg width="80" height="60"><rect width="80" height="60" fill="url(#mirror)"/></svg>
+<!-- A radial gradient with a focal point; group opacity over overlapping shapes. -->
+<svg width="80" height="60"><circle cx="40" cy="30" r="26" fill="url(#ball)"/></svg>
+<svg width="80" height="60"><g opacity="0.5"><circle cx="30" cy="30" r="20" fill="green"/><circle cx="50" cy="30" r="20" fill="green"/></g></svg>
+<!-- Dashes (an offset, round caps), a clip path. -->
+<svg width="80" height="60">
+  <line x1="5" y1="10" x2="75" y2="10" stroke="black" stroke-width="3" stroke-dasharray="8 4"/>
+  <line x1="5" y1="25" x2="75" y2="25" stroke="navy" stroke-width="4" stroke-dasharray="0 8" stroke-linecap="round"/>
+  <rect x="10" y="35" width="60" height="20" fill="none" stroke="purple" stroke-width="2" stroke-dasharray="6 3 2 3" stroke-dashoffset="4"/>
+</svg>
+<svg width="80" height="60"><g clip-path="url(#disc)"><rect width="40" height="60" fill="orange"/><rect x="40" width="40" height="60" fill="teal"/></g></svg>

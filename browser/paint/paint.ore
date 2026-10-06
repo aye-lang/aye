@@ -786,7 +786,7 @@ pub fn render(list: *DisplayList, canvas: *mut Canvas, v: View, painter: *mut Te
             .Svg { r, pic } => {
                 let d = deviceRect(r, v)
                 let k = canvas.clip
-                let t = svg.Target { pixels: canvas.pixels, width: canvas.width, x0: k.x0, y0: k.y0, x1: k.x1, y1: k.y1 }
+                let t = svg.Target { pixels: canvas.pixels, width: canvas.width, ox: 0, oy: 0, x0: k.x0, y0: k.y0, x1: k.x1, y1: k.y1 }
                 try svg.render(canvas.alloc, pic, t, d.x0 as f64, d.y0 as f64, (d.x1 - d.x0) as f64, (d.y1 - d.y0) as f64, v.scale)
             }
             .Clip { r } => {
