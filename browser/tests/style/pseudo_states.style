@@ -1,0 +1,119 @@
+<html lang="en-GB">
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <p>
+      display: block
+      color: rgb(0, 128, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p lang="fr-CA">
+      display: block
+      color: rgb(0, 0, 255)
+      margin-top: 16px
+      margin-bottom: 16px
+    <div dir="rtl">
+      display: block
+      direction: rtl
+      <span>
+        text-align: right
+        direction: rtl
+    <span>
+    <input required="" placeholder="x">
+      display: inline-block
+      background-color: rgb(255, 255, 255)
+      font-size: 13.33px
+      font-weight: 700
+      font-family: sans-serif
+      padding-top: 1px
+      padding-right: 2px
+      padding-bottom: 1px
+      padding-left: 2px
+      border-top-width: 1px
+      border-right-width: 1px
+      border-bottom-width: 1px
+      border-left-width: 1px
+      border-top-style: solid
+      border-right-style: solid
+      border-bottom-style: solid
+      border-left-style: solid
+      border-top-color: rgb(118, 118, 118)
+      border-right-color: rgb(118, 118, 118)
+      border-bottom-color: rgb(118, 118, 118)
+      border-left-color: rgb(118, 118, 118)
+      text-align: left
+      text-decoration-line: underline
+      white-space: pre
+      overflow-x: hidden
+      overflow-y: hidden
+    <input value="v" placeholder="y" readonly="">
+      display: inline-block
+      color: rgb(128, 128, 128)
+      background-color: rgb(255, 255, 255)
+      font-size: 13.33px
+      font-style: italic
+      font-family: sans-serif
+      padding-top: 1px
+      padding-right: 2px
+      padding-bottom: 1px
+      padding-left: 2px
+      border-top-width: 1px
+      border-right-width: 1px
+      border-bottom-width: 1px
+      border-left-width: 1px
+      border-top-style: solid
+      border-right-style: solid
+      border-bottom-style: solid
+      border-left-style: solid
+      border-top-color: rgb(118, 118, 118)
+      border-right-color: rgb(118, 118, 118)
+      border-bottom-color: rgb(118, 118, 118)
+      border-left-color: rgb(118, 118, 118)
+      text-align: left
+      white-space: pre
+      overflow-x: hidden
+      overflow-y: hidden
+    <div contenteditable="">
+      display: block
+      color: rgb(128, 0, 128)
+    <x-widget>
+      font-weight: 700
+    <a href="#">
+      color: rgb(0, 0, 238)
+      text-decoration-line: underline
+    <form>
+      display: block
+      <input>
+        display: inline-block
+        background-color: rgb(255, 255, 255)
+        font-size: 13.33px
+        font-style: italic
+        font-family: sans-serif
+        padding-top: 1px
+        padding-right: 2px
+        padding-bottom: 1px
+        padding-left: 2px
+        border-top-width: 1px
+        border-right-width: 1px
+        border-bottom-width: 1px
+        border-left-width: 1px
+        border-top-style: solid
+        border-right-style: solid
+        border-bottom-style: solid
+        border-left-style: solid
+        border-top-color: rgb(118, 118, 118)
+        border-right-color: rgb(118, 118, 118)
+        border-bottom-color: rgb(118, 118, 118)
+        border-left-color: rgb(118, 118, 118)
+        text-align: left
+        white-space: pre
+        overflow-x: hidden
+        overflow-y: hidden

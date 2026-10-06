@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<style>
+li:nth-child(odd) { color: red }
+li:nth-child(2n) { color: blue }
+li:nth-child(3) { font-weight: 700 }
+li:nth-child(-n+2) { font-style: italic }
+li:nth-last-child(1) { text-align: right }
+li:nth-child(2n + 1 of .x) { text-decoration-line: underline }
+li:nth-child(n+5) { white-space: pre }
+p:nth-of-type(2) { color: green }
+p:nth-last-of-type(1) { font-weight: 700 }
+em:only-of-type { color: purple }
+span:nth-child(0n+1) { color: teal }
+b:nth-child(foo), i { color: red }
+</style>
+<ul>
+<li>1: red italic</li>
+<li class="x">2: blue italic underline (1st .x)</li>
+<li>3: red bold</li>
+<li class="x">4: blue (2nd .x)</li>
+<li class="x">5: red pre underline (3rd .x)</li>
+<li>6: blue pre right</li>
+</ul>
+<div><span>teal</span><p>a</p><p>b: green</p><em>purple</em><p>c: bold</p></div>
+<div><em>not purple</em><em>not purple</em><i>not red: the rule with a bad nth is dropped</i></div>

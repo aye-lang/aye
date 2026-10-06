@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<style>
+p:lang(en) { color: green }
+p:lang(fr) { color: blue }
+span:dir(rtl) { text-align: right }
+input:required { font-weight: 700 }
+input:optional { font-style: italic }
+input:placeholder-shown { text-decoration-line: underline }
+input:read-only { color: gray }
+div:read-write { color: purple }
+x-widget:defined { font-weight: 700 }
+x-widget:not(:defined) { display: none }
+a:visited, a:active, a:target-within, a:open, a:invalid { color: red }
+form:focus-within { white-space: pre }
+</style>
+<p>green (en-GB)</p>
+<p lang="fr-CA">blue</p>
+<div dir="rtl"><span>right</span></div>
+<span>not right</span>
+<input required placeholder="x">
+<input value="v" placeholder="y" readonly>
+<div contenteditable>purple</div>
+<x-widget>shown and bold</x-widget>
+<a href="#">not red</a>
+<form><input></form>
