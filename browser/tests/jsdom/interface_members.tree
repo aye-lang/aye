@@ -1,0 +1,23 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Members of element interfaces"
+      "\n"
+    <body>
+      <pre id="out">
+        "div -\ncustom -\ninput value src type name form disabled checked validity checkValidity\na href text type name\nform name checkValidity submit\nselect value type name form disabled validity checkValidity\noption value text form disabled\niframe src name contentWindow\nHTMLElement.prototype -\ninput values v q text true f true true\nanchor true link\nselect o 0\n"
+      "\n"
+      <form id="f">
+        <input id="i" name="q" value="v" required="">
+        <select id="s">
+          <option selected="">
+            "o"
+      "\n"
+      <a id="a" href="/x">
+        "link"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\n// HTMLElement has only its own members; the others are on the interfaces\n// of the elements that have them.\nconst names = ['value', 'href', 'src', 'text', 'type', 'name', 'form', 'disabled', 'checked', 'validity', 'checkValidity', 'submit', 'contentWindow'];\nfunction has(el) { return names.filter(n => n in el).join(' ') || '-'; }\nlog('div', has(document.createElement('div')));\nlog('custom', has(document.createElement('x-thing')));\nlog('input', has(document.getElementById('i')));\nlog('a', has(document.getElementById('a')));\nlog('form', has(document.getElementById('f')));\nlog('select', has(document.getElementById('s')));\nlog('option', has(document.querySelector('option')));\nlog('iframe', has(document.createElement('iframe')));\nlog('HTMLElement.prototype', has(HTMLElement.prototype));\n// They still work where they belong.\nconst i = document.getElementById('i');\nlog('input values', i.value, i.name, i.type, i.required, i.form.id, i.validity.valid, i.checkValidity());\nlog('anchor', document.getElementById('a').href.endsWith('/x'), document.getElementById('a').text);\nlog('select', document.getElementById('s').value, document.getElementById('s').selectedIndex);\n"
+      "\n"

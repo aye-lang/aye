@@ -1,0 +1,18 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "document.all"
+      "\n"
+    <body>
+      <pre id="out">
+        "typeof undefined\n=== undefined false == undefined true == null true null == true\nfalsy true falsy same object true\n?? keeps it true || skips it other\nlength true item 0 HTML named x x\nguard   false 0 sanitized\nlive true\n"
+      "\n"
+      <p id="x" name="n">
+        "x"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst all = document.all;\nlog('typeof', typeof all);\nlog('=== undefined', all === undefined, '== undefined', all == undefined, '== null', all == null, 'null ==', null == all);\nlog('falsy', !all, all ? 'truthy' : 'falsy', 'same object', all === document.all);\nlog('?? keeps it', (all ?? 'other') === all, '|| skips it', all || 'other');\nlog('length', all.length === document.getElementsByTagName('*').length, 'item 0', all[0].tagName, 'named', all.x.id, all.namedItem('n').id);\n// The guard of polymer-resin (YouTube): falsy values other than\n// document.all pass through without sanitizing.\nfunction sanitize(v) { if (!v && v !== document.all) return v; return 'sanitized'; }\nlog('guard', sanitize(undefined), sanitize(null), sanitize(false), sanitize(0), sanitize('a'));\nconst p = document.createElement('p');\ndocument.body.appendChild(p);\nlog('live', all[all.length - 1] === p);\n"
+      "\n"
+      <p>

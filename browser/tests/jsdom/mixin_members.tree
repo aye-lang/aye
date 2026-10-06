@@ -1,0 +1,21 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "ParentNode and ChildNode members"
+      "\n"
+    <body>
+      <pre id="out">
+        "Node -\nElement children firstElementChild lastElementChild childElementCount querySelector querySelectorAll append prepend replaceChildren before after replaceWith remove\nDocument children firstElementChild lastElementChild childElementCount querySelector querySelectorAll append prepend replaceChildren\nDocumentFragment children firstElementChild lastElementChild childElementCount querySelector querySelectorAll append prepend replaceChildren\nCharacterData before after replaceWith remove\nDocumentType before after replaceWith remove\nelement 2 B I 2\nfragment 1 true\ndocument 1 HTML\ntext 1!2 false\n"
+      "\n"
+      <div id="d">
+        <b>
+          "1"
+        "!"
+        <i>
+          "2"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\n// The mixins are on the interfaces that include them, not on Node:\n// ShadyDOM saves each native member from exactly there.\nconst own = (P, names) => names.split(' ').filter(n => Object.getOwnPropertyDescriptor(P, n)).join(' ') || '-';\nconst parent = 'children firstElementChild lastElementChild childElementCount querySelector querySelectorAll append prepend replaceChildren';\nconst child = 'before after replaceWith remove';\nlog('Node', own(Node.prototype, parent + ' ' + child));\nlog('Element', own(Element.prototype, parent + ' ' + child));\nlog('Document', own(Document.prototype, parent));\nlog('DocumentFragment', own(DocumentFragment.prototype, parent));\nlog('CharacterData', own(CharacterData.prototype, child));\nlog('DocumentType', own(DocumentType.prototype, child));\n// They work on each.\nconst d = document.getElementById('d');\nlog('element', d.children.length, d.firstElementChild.tagName, d.lastElementChild.tagName, d.childElementCount);\nconst f = document.createDocumentFragment();\nf.append('a', document.createElement('span'));\nlog('fragment', f.children.length, f.querySelector('span') !== null);\nlog('document', document.children.length, document.firstElementChild.tagName);\nconst t = d.childNodes[1];\nt.after('!');\nt.remove();\nlog('text', d.textContent, 'children' in t);\n"
+      "\n"

@@ -29,6 +29,7 @@ fn installWindow(s: *mut Script) JsError!void {
     try it.defineValue(it.global, "__ak", js.objVal(o))
     try it.defineValue(it.global, "__canvasHost", js.objVal(o))
     try defMethod(it, o, "now", 0, akNow)
+    try defMethod(it, o, "markHtmlDda", 1, akMarkHtmlDda)
     try defMethod(it, o, "report", 1, akReport)
     try defMethod(it, o, "compile", 1, akCompile)
     try defMethod(it, o, "evalGlobal", 1, akEvalGlobal)
@@ -108,6 +109,17 @@ fn akNow(it: *mut Interp, a: Args) JsError!Value {
     let s = scriptOf(it)
     tick(s)
     return js.numVal(s.now)
+}
+
+// Gives the object argument 0 [[IsHTMLDDA]] (for `document.all`).
+fn akMarkHtmlDda(it: *mut Interp, a: Args) JsError!Value {
+    match it.arg(a, 0) {
+        .Obj { o } => {
+            it.heap.obj(o).htmldda = true
+        }
+        _ => {}
+    }
+    return Value.Undefined
 }
 
 // Reports an exception a listener threw, and goes on.

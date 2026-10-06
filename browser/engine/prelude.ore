@@ -1002,6 +1002,18 @@ pub let PRELUDE =
     \\getter(Document.prototype, 'images', function () { return this.getElementsByTagName('img'); });
     \\getter(Document.prototype, 'scripts', function () { return this.getElementsByTagName('script'); });
     \\getter(Document.prototype, 'embeds', function () { return this.getElementsByTagName('embed'); });
+    \\// document.all: every element, live; falsy and typeof "undefined" as in
+    \\// browsers ([[IsHTMLDDA]]), which scripts test with `x !== document.all`.
+    \\const allOf = new WeakMap();
+    \\getter(Document.prototype, 'all', function () {
+    \\  let c = allOf.get(this);
+    \\  if (c === undefined) {
+    \\    c = this.getElementsByTagName('*');
+    \\    ak.markHtmlDda(c);
+    \\    allOf.set(this, c);
+    \\  }
+    \\  return c;
+    \\});
     \\getter(Document.prototype, 'links', function () { return this.querySelectorAll('a[href], area[href]'); });
     \\hidden(Document.prototype, 'importNode', function (node, deep) { return node.cloneNode(!!deep); });
     \\hidden(Document.prototype, 'adoptNode', function (node) {
@@ -2688,6 +2700,10 @@ pub let PRELUDE =
     \\    }
     \\  }
     \\}
+    \\// The tree's own answer: pages override `isConnected` (ShadyDOM makes a
+    \\// fragment its shadow root, connected when the host is).
+    \\const nativeIsConnected = Object.getOwnPropertyDescriptor(NodeP, 'isConnected').get;
+    \\function isConnected(n) { return nativeIsConnected.call(n); }
     \\function onMutations(recs) {
     \\  if (registered.size > 0) queueRecords(recs);
     \\  if (ceDefs.size > 0) {
@@ -2695,8 +2711,10 @@ pub let PRELUDE =
     \\      const kind = recs[i], target = recs[i + 1], node = recs[i + 2];
     \\      if (target === null) continue;
     \\      if (kind === 1) ceAttributeChanged(target, recs[i + 5], recs[i + 6]);
-    \\      else if (kind === 3 && node && node.isConnected) ceConnected(node);
-    \\      else if (kind === 0 && node && !node.isConnected && target.isConnected) ceDisconnected(node);
+    \\      else if (kind === 3 && node && isConnected(node)) ceConnected(node);
+    \\      // Removed from a connected parent: disconnected, even when the same
+    \\      // method inserted it again (a move connects it after).
+    \\      else if (kind === 0 && node && isConnected(target)) ceDisconnected(node);
     \\    }
     \\  }
     \\  if (ak.shadowCount() > 0) {
@@ -2826,16 +2844,21 @@ pub let PRELUDE =
     \\      if (def.observed.has(a.name)) ceCall(def.attributeChangedCallback, el, [a.name, null, a.value, null]);
     \\    }
     \\  }
-    \\  if (def.connectedCallback && el.isConnected) ceCall(def.connectedCallback, el, []);
+    \\  if (def.connectedCallback && isConnected(el)) ceCall(def.connectedCallback, el, []);
     \\}
     \\function ceTryUpgrade(el) {
     \\  if (ak.ceState(el) !== 0) return;
     \\  const d = ceLookup(el);
     \\  if (d) ceUpgrade(el, d);
     \\}
+    \\// The reaction of each element is chosen when it is inserted: an element
+    \\// that an earlier callback upgrades meanwhile is not connected twice.
     \\function ceConnected(node) {
-    \\  for (const el of ak.customIn(node)) {
-    \\    if (ak.ceState(el) === 1) {
+    \\  const els = ak.customIn(node);
+    \\  const custom = els.map(el => ak.ceState(el) === 1);
+    \\  for (let i = 0; i < els.length; i++) {
+    \\    const el = els[i];
+    \\    if (custom[i]) {
     \\      const d = ceLookup(el);
     \\      if (d && d.connectedCallback) ceCall(d.connectedCallback, el, []);
     \\    } else ceTryUpgrade(el);
@@ -2988,8 +3011,46 @@ pub let PRELUDE =
     \\const nativeCloneNode = NodeP.cloneNode;
     \\hidden(NodeP, 'cloneNode', function (deep) {
     \\  const c = nativeCloneNode.call(this, deep);
+    \\  if (ceDefs.size > 0 && !ak.inTemplate(this)) for (const el of ak.customIn(c)) ceTryUpgrade(el);
+    \\  return c;
+    \\});
+    \\hidden(Document.prototype, 'importNode', function (node, deep) {
+    \\  const c = nativeCloneNode.call(node, !!deep);
     \\  if (ceDefs.size > 0) for (const el of ak.customIn(c)) ceTryUpgrade(el);
     \\  return c;
+    \\});
+    \\// The contents of templates belong to the document's inert template
+    \\// document: it has no browsing context and no custom element registry,
+    \\// so the elements it makes and clones are not upgraded (Polymer makes
+    \\// the wrappers of its templates with `t.ownerDocument.createElement`).
+    \\// The nodes stay the page's; a node is the inert document's while it is
+    \\// in a template's contents.
+    \\const inertDoc = Object.create(Document.prototype);
+    \\const INERT_FIELDS = {
+    \\  nodeType: 9, nodeName: '#document', defaultView: null, location: null, documentElement: null,
+    \\  head: null, body: null, parentNode: null, firstChild: null, lastChild: null, ownerDocument: null,
+    \\  readyState: 'complete', URL: 'about:blank', documentURI: 'about:blank', contentType: 'text/html',
+    \\  characterSet: 'UTF-8', compatMode: 'CSS1Compat', implementation,
+    \\};
+    \\for (const k in INERT_FIELDS) Object.defineProperty(inertDoc, k, { value: INERT_FIELDS[k], configurable: true });
+    \\hidden(inertDoc, 'createElement', function (name, options) {
+    \\  const el = nativeCreateElement.call(document, name);
+    \\  const is = typeof options === 'string' ? options : options && options.is;
+    \\  if (is !== undefined && is !== null) el.setAttribute('is', String(is));
+    \\  return el;
+    \\});
+    \\hidden(inertDoc, 'createElementNS', function (ns, name) { return nativeCreateElementNS.call(document, ns, name); });
+    \\hidden(inertDoc, 'importNode', function (node, deep) { return nativeCloneNode.call(node, !!deep); });
+    \\for (const k of ['createTextNode', 'createComment', 'createDocumentFragment', 'createEvent', 'createAttribute', 'createTreeWalker', 'createNodeIterator', 'createRange', 'adoptNode']) {
+    \\  hidden(inertDoc, k, function () { return document[k].apply(document, arguments); });
+    \\}
+    \\hidden(inertDoc, 'getElementById', () => null);
+    \\hidden(inertDoc, 'querySelector', () => null);
+    \\hidden(inertDoc, 'querySelectorAll', () => document.createDocumentFragment().querySelectorAll('*'));
+    \\const nativeOwnerDocument = Object.getOwnPropertyDescriptor(NodeP, 'ownerDocument').get;
+    \\getter(NodeP, 'ownerDocument', function () {
+    \\  const d = nativeOwnerDocument.call(this);
+    \\  return d !== null && ak.inTemplate(this) ? inertDoc : d;
     \\});
     \\
     \\// ElementInternals: the state and ARIA properties are kept, forms are
@@ -3559,5 +3620,63 @@ pub let PRELUDE =
     \\  return animationsWhere(t => t instanceof Node && t.isConnected && t.ownerDocument === this);
     \\});
     \\for (const c of [AnimationEffect, KeyframeEffect, AnimationTimeline, DocumentTimeline, AnimationPlaybackEvent, Animation]) hidden(G, c.name, c);
+    \\
+    \\// The members of some kinds of elements, defined on HTMLElement above,
+    \\// move to their interfaces: a div has no `value` or `href`, and scripts
+    \\// test that with `in` (polymer-resin sanitizes the bindings of the
+    \\// properties an element has natively).
+    \\const LISTED = 'Button FieldSet Input Object Output Select TextArea';
+    \\const MEMBERS = {
+    \\  name: 'Anchor Button Embed FieldSet Form IFrame Image Input Map Meta Object Output Select Slot TextArea',
+    \\  placeholder: 'Input TextArea', alt: 'Area Image Input', rel: 'Anchor Area Link Form',
+    \\  target: 'Anchor Area Base Form', srcdoc: 'IFrame', htmlFor: 'Label Output',
+    \\  method: 'Form', enctype: 'Form', action: 'Form', noValidate: 'Form', submit: 'Form',
+    \\  requestSubmit: 'Form', reset: 'Form', _formEntries: 'Form',
+    \\  defaultValue: 'Input Output TextArea',
+    \\  disabled: 'Button FieldSet Input Link OptGroup Option Select Style TextArea',
+    \\  required: 'Input Select TextArea', multiple: 'Input Select', open: 'Details Dialog',
+    \\  readOnly: 'Input TextArea', formNoValidate: 'Button Input', formAction: 'Button Input',
+    \\  formMethod: 'Button Input', formEnctype: 'Button Input',
+    \\  min: 'Input Meter', max: 'Input Meter Progress', step: 'Input', pattern: 'Input',
+    \\  minLength: 'Input TextArea', maxLength: 'Input TextArea',
+    \\  defaultChecked: 'Input', defaultSelected: 'Option',
+    \\  href: 'Anchor Area Base Link', src: 'Embed IFrame Image Input Media Script Source Track',
+    \\  type: 'Anchor Button Embed FieldSet Input LI Link Object OList Output Script Select Source Style TextArea UList',
+    \\  text: 'Anchor Area Body Option Script Title', select: 'Input TextArea',
+    \\  value: 'Button Data Input LI Meter Option Output Progress Select TextArea',
+    \\  checked: 'Input', selected: 'Option', selectedIndex: 'Select',
+    \\  form: 'Button FieldSet Input Label Legend Object Option Output Select TextArea',
+    \\  _validity: LISTED, willValidate: LISTED, validationMessage: LISTED, setCustomValidity: LISTED,
+    \\  checkValidity: LISTED + ' Form', reportValidity: LISTED + ' Form',
+    \\  contentWindow: 'IFrame Object', contentDocument: 'IFrame Object',
+    \\};
+    \\function moveMembers(from, table) {
+    \\  for (const k of Object.keys(table)) {
+    \\    const d = Object.getOwnPropertyDescriptor(from, k);
+    \\    if (!d) continue;
+    \\    for (const n of table[k].split(' ')) {
+    \\      const I = G['HTML' + n + 'Element'];
+    \\      if (I && !Object.prototype.hasOwnProperty.call(I.prototype, k)) Object.defineProperty(I.prototype, k, d);
+    \\    }
+    \\    delete from[k];
+    \\  }
+    \\}
+    \\moveMembers(HTMLP, MEMBERS);
+    \\// The same for the mixins defined on Node: ParentNode is on elements,
+    \\// documents and fragments, ChildNode on elements, character data and
+    \\// doctypes (ShadyDOM keeps the native members of exactly these).
+    \\function moveTo(from, names, targets) {
+    \\  for (const k of names.split(' ')) {
+    \\    const d = Object.getOwnPropertyDescriptor(from, k);
+    \\    if (!d) continue;
+    \\    for (const P of targets) if (!Object.prototype.hasOwnProperty.call(P, k)) Object.defineProperty(P, k, d);
+    \\    delete from[k];
+    \\  }
+    \\}
+    \\const DocP = Document.prototype, FragP = DocumentFragment.prototype;
+    \\moveTo(NodeP, 'children firstElementChild lastElementChild childElementCount querySelector querySelectorAll append prepend replaceChildren', [ElementP, DocP, FragP]);
+    \\moveTo(NodeP, 'getElementsByTagName getElementsByClassName', [ElementP, DocP]);
+    \\moveTo(NodeP, 'before after replaceWith remove', [ElementP, CharacterData.prototype, DocumentType.prototype]);
+    \\
     \\ak.setDispatch(hostEvent);
     \\})(__ak);
