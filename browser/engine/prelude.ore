@@ -2024,10 +2024,13 @@ pub let PRELUDE =
     \\    if (!el.__imageRequest) imageUpdate(el);
     \\  }
     \\}
-    \\function imageMutations(recs) {
+    \\function resourceMutations(recs) {
     \\  for (let i = 0; i < recs.length; i += 7) {
     \\    const kind = recs[i], target = recs[i + 1], node = recs[i + 2], name = recs[i + 5];
     \\    if (!target) continue;
+    \\    // Adding async clears a dynamically created script's force-async flag,
+    \\    // even when the content attribute is later removed without a getter.
+    \\    if (kind === 1 && target instanceof HTMLScriptElement && name === 'async' && target.hasAttribute('async')) hidden(target, '__forceAsync', false);
     \\    if (kind === 1 && target instanceof HTMLImageElement && ['src', 'srcset', 'sizes', 'crossorigin', 'referrerpolicy'].includes(name)) imageUpdate(target);
     \\    if (kind === 3 && node) {
     \\      imageDiscover(node);
@@ -3027,7 +3030,7 @@ pub let PRELUDE =
     \\const nativeIsConnected = Object.getOwnPropertyDescriptor(NodeP, 'isConnected').get;
     \\function isConnected(n) { return nativeIsConnected.call(n); }
     \\function onMutations(recs) {
-    \\  imageMutations(recs);
+    \\  resourceMutations(recs);
     \\  if (registered.size > 0) queueRecords(recs);
     \\  if (ceDefs.size > 0) {
     \\    for (let i = 0; i < recs.length; i += 7) {

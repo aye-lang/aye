@@ -27,6 +27,10 @@ for (const el of [link, document.createElement('script')]) {
   el.crossOrigin = null;
   check(el.localName + ' null', el.crossOrigin === null && !el.hasAttribute('crossorigin'));
 }
+const attributeScript = document.createElement('script');
+attributeScript.setAttribute('async', '');
+attributeScript.removeAttribute('async');
+check('script attribute clears force async', !attributeScript.async);
 const script = document.createElement('script');
 check('dynamic script async', script.async === true && !script.hasAttribute('async'));
 script.async = false; script.defer = true; script.noModule = true; script.type = 'module'; script.integrity = 'sha256-test';
