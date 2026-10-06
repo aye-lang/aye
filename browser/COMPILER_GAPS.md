@@ -256,3 +256,44 @@ tags, would let `net/http.ore` fall back to `FetchError.Unsupported`.
   across the files of its module: the parser, selector and cascade code
   for `css.Sheet` are free functions taking `*mut Sheet`
   (`css.parseSheet(&mut sheet, src, media)`, not `sheet.parse(src)`).
+
+## B3
+
+### 16. FreeType is now a hard requirement too
+
+Same root as gap 14: `browser/font/freetype.ore` has
+`@link("freetype2")`, so the browser no longer builds where FreeType is
+missing, although the layout tests only need the fixed-metric font.
+`tests/browser.rs` can only skip the `--font system` smoke test when no
+font *file* is found (`System.init` returns `FontError.NoFont`), not when
+the library is absent. Workaround: none (docs/browser.md lists FreeType as
+a platform library). An optional link plus `@hasLibrary("freetype2")`
+would let `font.System` fail at run time instead.
+
+### 17. No C `long`
+
+```ore
+extern struct FTFaceRec {
+    num_faces: i64   // FT_Long is C `long`
+}
+```
+
+`FT_Long`, `FT_Pos` and `FT_Fixed` are C `long`, which is 64 bits on
+macOS and Linux but 32 on Windows; Ore has `i32` for `int` and `usize` for
+`size_t` but nothing for `long`, so the prefix of `FT_FaceRec` and the
+signatures of `FT_New_Face`/`FT_Get_Advance` hard-code `i64` (LP64).
+Suggestion: `c_long`/`c_ulong` aliases that follow the target.
+
+### 18. Smaller things
+
+- Struct literals list every field (spec: no default values). The layout
+  `Box` has 35 fields, mostly results that start at 0; `Tree.newBox` is
+  the only literal, and a new field means one more line there. Per-field
+  defaults (`x: f64 = 0.0`) would remove the helper (`inline.piece` is
+  another).
+- No tuples or multiple results: small structs carry pairs out of
+  functions (`MinMax`, `Flow`, `OpenFrag`, `KindOf`). Fine, a bit verbose.
+- Gap 8 again: `Tree.bx(i)` returns `*mut Box` into `List(Box)`; it must
+  be fetched again after anything that may append a box (only the tree
+  builder does), so layout code re-reads `t.bx(i)` after every call
+  instead of keeping a pointer across calls.
