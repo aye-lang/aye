@@ -391,16 +391,32 @@ pub fn definePropertyFrom(it: *mut Interp, o: u32, key: u32, desc: Value) JsErro
     let hasGet = it.hasProperty(objectOf(desc), ga)
     let hasSet = it.hasProperty(objectOf(desc), sa)
     if hasGet || hasSet {
-        let getter = try it.getProp(desc, ga)
-        try it.push(getter)
-        let setter = try it.getProp(desc, sa)
-        try it.push(setter)
-        if exists && (old & F_ACCESSOR) == 0 {
+        // What the descriptor leaves out stays; `get: undefined` removes
+        // the getter.
+        var getter = Value.Undefined
+        var setter = Value.Undefined
+        if exists && (old & F_ACCESSOR) != 0 {
             if it.heap.findProp(o, key) |i| {
-                try it.heap.removeProp(o, i)
+                getter = it.heap.obj(o).props[i].value
+                setter = it.heap.obj(o).props[i].setter
             }
         }
-        try it.defineAccessor(o, key, getter, setter, flags)
+        if hasGet {
+            getter = try it.getProp(desc, ga)
+        }
+        try it.push(getter)
+        if hasSet {
+            setter = try it.getProp(desc, sa)
+        }
+        try it.push(setter)
+        if it.heap.findProp(o, key) |i| {
+            let p = &mut it.heap.obj(o).props[i]
+            p.value = getter
+            p.setter = setter
+            p.flags = flags | F_ACCESSOR
+        } else {
+            try it.defineAccessor(o, key, getter, setter, flags)
+        }
         it.pop()
         it.pop()
         return
