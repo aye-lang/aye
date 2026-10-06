@@ -98,7 +98,7 @@ def main():
     parser.add_argument("--warmup", type=int, default=1, help="unmeasured loads per binary/site before replay runs")
     parser.add_argument("--json", type=Path)
     parser.add_argument("--sample", action="store_true", help="macOS sample of the first replay")
-    parser.add_argument("--screenshot", action="store_true", help="also measure paint (separate output hash)")
+    parser.add_argument("--screenshot", action="store_true", help="benchmark the screenshot CLI instead (fixed font, separate output hash)")
     args = parser.parse_args()
     if args.repeat < 1 or args.warmup < 0:
         parser.error("--repeat must be positive and --warmup nonnegative")
