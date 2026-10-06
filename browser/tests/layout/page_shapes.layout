@@ -1,6 +1,6 @@
 viewport 800x600
-  block <html> (0, 0) 800x244
-    block <body> (0, 0) 800x244
+  block <html> (0, 0) 800x336
+    block <body> (0, 0) 800x320
       block <div class="wrap"> (250, 0) 300x40
         line (260, 0) 280x20
           text (260, 2) 240x16 "centered by max-width and auto"
@@ -30,3 +30,14 @@ viewport 800x600
       block <div style="transform: translate(10px); filter: blur(2px)"> (0, 224) 800x20
         line (0, 224) 800x20
           text (0, 226) 272x16 "transforms and filters are ignored"
+      block <details> (0, 244) 800x20
+        block <summary> (0, 244) 800x20
+          line (0, 244) 800x20
+            text (0, 246) 192x16 "closed: only the summary"
+      block <details open=""> (0, 264) 800x56
+        block <summary> (0, 264) 800x20
+          line (0, 264) 800x20
+            text (0, 266) 32x16 "open"
+        block <p> (0, 300) 800x20
+          line (0, 300) 800x20
+            text (0, 302) 40x16 "shown"

@@ -458,11 +458,25 @@ fn buildElement(t: *mut Tree, parent: usize, el: NodeId) AllocError!void {
                 try listMarker(t, b, el)
             }
             if k.kind != BoxKind.Image && k.kind != BoxKind.LineBreak {
-                if !(try controlContent(t, b, el)) {
+                if text.eql(name, "details") && t.doc.attr(el, "open") == null {
+                    // A closed `details` shows only its summary.
+                    try buildSummary(t, b, el)
+                } else if !(try controlContent(t, b, el)) {
                     try buildChildren(t, b, el)
                 }
             }
         }
+    }
+}
+
+// The box of the first `summary` child of the `details` element `el`.
+fn buildSummary(t: *mut Tree, parent: usize, el: NodeId) AllocError!void {
+    var cur = t.doc.firstChild(el)
+    while cur |c| {
+        if t.doc.isElement(c, "summary") {
+            return buildElement(t, parent, c)
+        }
+        cur = t.doc.nextSibling(c)
     }
 }
 
