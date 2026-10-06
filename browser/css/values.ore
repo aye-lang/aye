@@ -1,10 +1,10 @@
 // Property values: a declaration's tokens become `Decl`s of longhand
 // properties with specified `Value`s. Shorthands (`margin`, `padding`,
 // `border`, `border-top`..., `border-width`/`-style`/`-color`, `font`,
-// `background`, `list-style`, `overflow`, `text-decoration`) expand into
-// their longhands. An invalid value drops the declaration. Absolute units
-// (pt, pc, in, cm, mm, q) become px here; `ex` and `ch` are taken as
-// half an `em`.
+// `background`, `list-style`, `overflow`, `text-decoration`, `inset`,
+// `gap`, `flex`, `flex-flow`) expand into their longhands. An invalid
+// value drops the declaration. Absolute units (pt, pc, in, cm, mm, q)
+// become px here; `ex` and `ch` are taken as half an `em`.
 
 import std.list.List
 import std.math
@@ -106,6 +106,118 @@ struct Declarer {
         if text.eql(name, "text-decoration") {
             return self.textDecoration(comps)
         }
+        if text.eql(name, "inset") {
+            return self.sides(INSET_TOP, comps)
+        }
+        if text.eql(name, "gap") {
+            return self.gap(comps)
+        }
+        if text.eql(name, "flex") {
+            return self.flex(comps)
+        }
+        if text.eql(name, "flex-flow") {
+            return self.flexFlow(comps)
+        }
+    }
+
+    // `gap: row [column]`.
+    fn gap(self: *mut Self, comps: []Comp) AllocError!void {
+        let props = [2]usize{ROW_GAP, COLUMN_GAP}
+        if try self.wide(comps, props[..]) {
+            return
+        }
+        if comps.len == 0 || comps.len > 2 {
+            return
+        }
+        let first = [1]Comp{comps[0]}
+        let last = [1]Comp{comps[comps.len - 1]}
+        if try parseValue(self.sheet, ROW_GAP, first[..]) |row| {
+            if try parseValue(self.sheet, COLUMN_GAP, last[..]) |column| {
+                try self.add(ROW_GAP, row)
+                try self.add(COLUMN_GAP, column)
+            }
+        }
+    }
+
+    // `flex: none | auto | grow [shrink] [basis] | basis` (a lone number
+    // sets the basis to 0).
+    fn flex(self: *mut Self, comps: []Comp) AllocError!void {
+        let props = [3]usize{FLEX_GROW, FLEX_SHRINK, FLEX_BASIS}
+        if try self.wide(comps, props[..]) {
+            return
+        }
+        if comps.len == 1 && isIdent(comps[0], "none") {
+            try self.add(FLEX_GROW, Value.Number { v: 0.0 })
+            try self.add(FLEX_SHRINK, Value.Number { v: 0.0 })
+            try self.add(FLEX_BASIS, Value.Keyword { k: "auto" })
+            return
+        }
+        if comps.len == 1 && isIdent(comps[0], "auto") {
+            try self.add(FLEX_GROW, Value.Number { v: 1.0 })
+            try self.add(FLEX_SHRINK, Value.Number { v: 1.0 })
+            try self.add(FLEX_BASIS, Value.Keyword { k: "auto" })
+            return
+        }
+        if comps.len == 0 || comps.len > 3 {
+            return
+        }
+        var grow = Value.Number { v: 1.0 }
+        var shrink = Value.Number { v: 1.0 }
+        var basis = Value.Px { v: 0.0 }
+        var numbers: usize = 0
+        var have_basis = false
+        for c in comps {
+            let one = [1]Comp{c}
+            if isNumberToken(c) && numbers < 2 && !have_basis {
+                if try parseValue(self.sheet, FLEX_GROW, one[..]) |v| {
+                    if numbers == 0 {
+                        grow = v
+                    } else {
+                        shrink = v
+                    }
+                    numbers += 1
+                    continue
+                }
+                return
+            }
+            if have_basis {
+                return
+            }
+            if try parseValue(self.sheet, FLEX_BASIS, one[..]) |v| {
+                basis = v
+                have_basis = true
+            } else {
+                return
+            }
+        }
+        try self.add(FLEX_GROW, grow)
+        try self.add(FLEX_SHRINK, shrink)
+        try self.add(FLEX_BASIS, basis)
+    }
+
+    // `flex-flow: direction || wrap`.
+    fn flexFlow(self: *mut Self, comps: []Comp) AllocError!void {
+        let props = [2]usize{FLEX_DIRECTION, FLEX_WRAP}
+        if try self.wide(comps, props[..]) {
+            return
+        }
+        if comps.len == 0 || comps.len > 2 {
+            return
+        }
+        var direction = Value.Initial
+        var wrap = Value.Initial
+        for c in comps {
+            let one = [1]Comp{c}
+            if try parseValue(self.sheet, FLEX_DIRECTION, one[..]) |v| {
+                direction = v
+            } else if try parseValue(self.sheet, FLEX_WRAP, one[..]) |v| {
+                wrap = v
+            } else {
+                return
+            }
+        }
+        try self.add(FLEX_DIRECTION, direction)
+        try self.add(FLEX_WRAP, wrap)
     }
 
     // `inherit`, `initial` or `unset` for all of `props`; true when it was
@@ -484,6 +596,12 @@ fn single(p: Property, c: Comp) ?Value {
             return null
         }
         .TextDecoration => {
+            return null
+        }
+        .Number => {
+            if t.kind == Tok.Number && c.toks.len == 1 && t.num >= 0.0 {
+                return Value.Number { v: t.num }
+            }
             return null
         }
     }

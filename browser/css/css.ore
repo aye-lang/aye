@@ -69,6 +69,8 @@ pub enum PKind {
     FontFamily
     BorderWidth
     TextDecoration
+    // A number that is not negative, or one of `keywords`.
+    Number
 }
 
 pub struct Property {
@@ -82,7 +84,7 @@ pub struct Property {
     initial: Value
 }
 
-pub let NPROPS: usize = 42
+pub let NPROPS: usize = 57
 
 pub let DISPLAY: usize = 0
 pub let POSITION: usize = 1
@@ -112,15 +114,29 @@ pub let LIST_STYLE_TYPE: usize = 38
 pub let VISIBILITY: usize = 39
 pub let OVERFLOW_X: usize = 40
 pub let OVERFLOW_Y: usize = 41
+pub let BOX_SIZING: usize = 42
+// `top`, `right`, `bottom`, `left` in this order.
+pub let INSET_TOP: usize = 43
+pub let FLEX_DIRECTION: usize = 47
+pub let FLEX_WRAP: usize = 48
+pub let FLEX_GROW: usize = 49
+pub let FLEX_SHRINK: usize = 50
+pub let FLEX_BASIS: usize = 51
+pub let JUSTIFY_CONTENT: usize = 52
+pub let ALIGN_ITEMS: usize = 53
+pub let ALIGN_SELF: usize = 54
+pub let ROW_GAP: usize = 55
+pub let COLUMN_GAP: usize = 56
 
 let DISPLAYS = "inline block list-item inline-block table inline-table table-row-group table-header-group table-footer-group table-row table-cell table-column-group table-column table-caption flex inline-flex grid inline-grid flow-root contents none"
 let BORDER_STYLES = "none hidden dotted dashed solid double groove ridge inset outset"
 let LIST_STYLES = "disc circle square decimal decimal-leading-zero lower-roman upper-roman lower-greek lower-alpha lower-latin upper-alpha upper-latin armenian georgian none"
 let OVERFLOWS = "visible hidden clip scroll auto"
+let ALIGNS = "normal stretch flex-start flex-end start end self-start self-end center baseline"
 let BLACK = Color { r: 0, g: 0, b: 0, a: 1.0 }
 let TRANSPARENT = Color { r: 0, g: 0, b: 0, a: 0.0 }
 
-pub let PROPERTIES = [42]Property{
+pub let PROPERTIES = [57]Property{
     Property { name: "display", inherited: false, kind: PKind.Keywords, keywords: DISPLAYS, initial: Value.Keyword { k: "inline" } },
     Property { name: "position", inherited: false, kind: PKind.Keywords, keywords: "static relative absolute fixed sticky", initial: Value.Keyword { k: "static" } },
     Property { name: "color", inherited: true, kind: PKind.Color, keywords: "", initial: Value.Rgba { c: BLACK } },
@@ -163,6 +179,21 @@ pub let PROPERTIES = [42]Property{
     Property { name: "visibility", inherited: true, kind: PKind.Keywords, keywords: "visible hidden collapse", initial: Value.Keyword { k: "visible" } },
     Property { name: "overflow-x", inherited: false, kind: PKind.Keywords, keywords: OVERFLOWS, initial: Value.Keyword { k: "visible" } },
     Property { name: "overflow-y", inherited: false, kind: PKind.Keywords, keywords: OVERFLOWS, initial: Value.Keyword { k: "visible" } },
+    Property { name: "box-sizing", inherited: false, kind: PKind.Keywords, keywords: "content-box border-box", initial: Value.Keyword { k: "content-box" } },
+    Property { name: "top", inherited: false, kind: PKind.Length, keywords: "auto", initial: Value.Keyword { k: "auto" } },
+    Property { name: "right", inherited: false, kind: PKind.Length, keywords: "auto", initial: Value.Keyword { k: "auto" } },
+    Property { name: "bottom", inherited: false, kind: PKind.Length, keywords: "auto", initial: Value.Keyword { k: "auto" } },
+    Property { name: "left", inherited: false, kind: PKind.Length, keywords: "auto", initial: Value.Keyword { k: "auto" } },
+    Property { name: "flex-direction", inherited: false, kind: PKind.Keywords, keywords: "row row-reverse column column-reverse", initial: Value.Keyword { k: "row" } },
+    Property { name: "flex-wrap", inherited: false, kind: PKind.Keywords, keywords: "nowrap wrap wrap-reverse", initial: Value.Keyword { k: "nowrap" } },
+    Property { name: "flex-grow", inherited: false, kind: PKind.Number, keywords: "", initial: Value.Number { v: 0.0 } },
+    Property { name: "flex-shrink", inherited: false, kind: PKind.Number, keywords: "", initial: Value.Number { v: 1.0 } },
+    Property { name: "flex-basis", inherited: false, kind: PKind.LengthNonNeg, keywords: "auto content", initial: Value.Keyword { k: "auto" } },
+    Property { name: "justify-content", inherited: false, kind: PKind.Keywords, keywords: "normal flex-start flex-end start end left right center space-between space-around space-evenly stretch", initial: Value.Keyword { k: "normal" } },
+    Property { name: "align-items", inherited: false, kind: PKind.Keywords, keywords: ALIGNS, initial: Value.Keyword { k: "normal" } },
+    Property { name: "align-self", inherited: false, kind: PKind.Keywords, keywords: "auto normal stretch flex-start flex-end start end self-start self-end center baseline", initial: Value.Keyword { k: "auto" } },
+    Property { name: "row-gap", inherited: false, kind: PKind.LengthNonNeg, keywords: "normal", initial: Value.Keyword { k: "normal" } },
+    Property { name: "column-gap", inherited: false, kind: PKind.LengthNonNeg, keywords: "normal", initial: Value.Keyword { k: "normal" } },
 }
 
 /// The index of the longhand property `name` (lower case).
