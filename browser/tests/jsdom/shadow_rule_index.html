@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<title>Shadow sheets and the rule index</title>
+<style>.a { color: red } span { font-weight: bold } i { margin-left: 4px }</style>
+<div id="host"><span id="light" class="s">slotted</span></div>
+<script>
+// The shadow tree's sheet has as many rules as the document's, but
+// others: each sheet must be matched with its own rules.
+const root = document.getElementById('host').attachShadow({ mode: 'open' });
+root.innerHTML = '<style>.b { color: green } em { margin-left: 2px } ::slotted(.s) { color: blue }</style><p id="inner" class="b"><em>x</em></p><slot></slot>';
+</script>

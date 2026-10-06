@@ -1,0 +1,28 @@
+// Opt-in wall-clock phase tracing. No stdout changes, allocation or clock
+// reads when disabled. Durations are nanoseconds; nested phases overlap.
+import std
+
+extern fn getenv(name: [*]u8) ?[*]u8
+extern fn ore_std_monotonic_ns() u64
+
+var checked: bool = false
+var enabled: bool = false
+
+pub fn start() u64 {
+    if !checked {
+        checked = true
+        if getenv("ANYKNOWN_TIMING".ptr) |p| {
+            enabled = p[0] == '1'
+        }
+    }
+    if enabled {
+        return ore_std_monotonic_ns()
+    }
+    return 0
+}
+
+pub fn end(phase: []u8, began: u64, label: []u8) {
+    if began != 0 {
+        std.log.info("ANYKNOWN_TIMING\t{}\t{}\t{}", phase, ore_std_monotonic_ns() - began, label)
+    }
+}

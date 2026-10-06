@@ -46,6 +46,7 @@ import css.Value
 import dom
 import font
 import layout
+import perf
 import layout.BoxKind
 import layout.FragKind
 import layout.Tree
@@ -122,6 +123,8 @@ let SELECTED = Rgba { r: 206, g: 206, b: 206, a: 255 }
 
 /// The display list of a laid-out tree.
 pub fn build(alloc: Allocator, t: *mut Tree) AllocError!DisplayList {
+    let began = perf.start()
+    defer perf.end("paint_build", began, "document")
     var b = Builder {
         t: t,
         list: DisplayList { items: List(Item).init(alloc), background: WHITE, width: t.viewport_w, height: t.viewport_h },
@@ -983,6 +986,8 @@ pub fn deviceRect(r: Rect, v: View) IRect {
 /// Draws the items of `list` onto `canvas` (inside its clip). Text far
 /// outside the clip is skipped.
 pub fn render(list: *DisplayList, target: *mut Canvas, view: View, painter: *mut TextPainter) AllocError!void {
+    let began = perf.start()
+    defer perf.end("paint", began, "viewport")
     // The layers being drawn; `canvas` and `v` are the top one's.
     var frames = List(Frame).init(target.alloc)
     defer dropFrames(&mut frames)

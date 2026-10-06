@@ -1,0 +1,1491 @@
+{
+  "date": "2026-10-07",
+  "hardware": "Apple M2 Pro, 10 CPUs, 32 GB, macOS 26.5",
+  "mode": "fast",
+  "baseline": "ec6961c + timing-only additions",
+  "optimized": "b97bd1a",
+  "repeat": 7,
+  "warmup": 1,
+  "benchmark_epoch_ms": 1791331200000,
+  "archive": "target/page-load-fixed",
+  "units": "seconds",
+  "sites": {
+    "zol": {
+      "before": {
+        "wall": 2.644468333999612,
+        "phases": {
+          "fetch": 0.00101,
+          "decode": 0.004959,
+          "html": 0.021025,
+          "scripts": 0.181781,
+          "timers": 1.235834,
+          "sheets": 0.005761,
+          "css_parse": 0.004302,
+          "cascade_read": 0.16812,
+          "cascade": 0.642239,
+          "images": 0.440166,
+          "image_decode": 0.348827,
+          "layout": 0.022227,
+          "paint_build": 0,
+          "paint": 0,
+          "markdown": 0.00174,
+          "requests": 0.033196,
+          "prefetch": 0.000008
+        },
+        "sha256": "1378b859d435234da3027642842b225c6bc0cd1ff1bdce8352e287d7735eed60",
+        "bytes": 102606,
+        "top_scripts": [
+          {
+            "seconds": 0.040782,
+            "source": "https://icon.zol-img.com.cn/src/index/z.page.index.1.0.0.js"
+          },
+          {
+            "seconds": 0.036861,
+            "source": "https://p.zol-img.com.cn/da/index.js"
+          },
+          {
+            "seconds": 0.03422,
+            "source": "//static.mediav.com/js/ssp_ad_sdk.js"
+          },
+          {
+            "seconds": 0.029732,
+            "source": "https://icon.zol-img.com.cn/public/js/web_foot.js"
+          },
+          {
+            "seconds": 0.022726,
+            "source": "//stat.zol.com.cn/adrs/cg_gmine.js"
+          }
+        ],
+        "runs": [
+          {
+            "wall": 4.8215816669999185,
+            "phases": {
+              "requests": 0.041489,
+              "fetch": 0.001715,
+              "decode": 0.008764,
+              "html": 0.022037,
+              "prefetch": 0.000008,
+              "css_parse": 0.01362,
+              "cascade_read": 0.368786,
+              "scripts": 0.389026,
+              "sheets": 0.016753,
+              "cascade": 1.294875,
+              "image_decode": 0.565676,
+              "images": 0.689001,
+              "layout": 0.035197,
+              "timers": 2.225774,
+              "markdown": 0.001714
+            }
+          },
+          {
+            "wall": 2.8051187909986766,
+            "phases": {
+              "requests": 0.027867,
+              "fetch": 0.001534,
+              "decode": 0.004959,
+              "html": 0.021578,
+              "prefetch": 0.000006,
+              "css_parse": 0.004445,
+              "cascade_read": 0.189686,
+              "scripts": 0.181781,
+              "sheets": 0.005871,
+              "cascade": 0.704445,
+              "image_decode": 0.346467,
+              "images": 0.426187,
+              "layout": 0.021638,
+              "timers": 1.33662,
+              "markdown": 0.001903
+            }
+          },
+          {
+            "wall": 2.7584255000001576,
+            "phases": {
+              "requests": 0.02825,
+              "fetch": 0.000876,
+              "decode": 0.004742,
+              "html": 0.021025,
+              "prefetch": 0.000006,
+              "css_parse": 0.004392,
+              "cascade_read": 0.189005,
+              "scripts": 0.189567,
+              "sheets": 0.005934,
+              "cascade": 0.642239,
+              "image_decode": 0.348827,
+              "images": 0.440166,
+              "layout": 0.028851,
+              "timers": 1.344116,
+              "markdown": 0.00174
+            }
+          },
+          {
+            "wall": 2.644468333999612,
+            "phases": {
+              "requests": 0.033196,
+              "fetch": 0.000957,
+              "decode": 0.00525,
+              "html": 0.022316,
+              "prefetch": 0.000008,
+              "css_parse": 0.004094,
+              "cascade_read": 0.16812,
+              "scripts": 0.159133,
+              "sheets": 0.005642,
+              "cascade": 0.666687,
+              "image_decode": 0.384807,
+              "images": 0.466553,
+              "layout": 0.027361,
+              "timers": 1.235834,
+              "markdown": 0.001917
+            }
+          },
+          {
+            "wall": 2.5162020419993496,
+            "phases": {
+              "requests": 0.035857,
+              "fetch": 0.001071,
+              "decode": 0.004766,
+              "html": 0.020708,
+              "prefetch": 0.000007,
+              "css_parse": 0.004302,
+              "cascade_read": 0.143734,
+              "scripts": 0.199164,
+              "sheets": 0.005761,
+              "cascade": 0.606321,
+              "image_decode": 0.330308,
+              "images": 0.414529,
+              "layout": 0.020772,
+              "timers": 1.141893,
+              "markdown": 0.001678
+            }
+          },
+          {
+            "wall": 2.601408957998501,
+            "phases": {
+              "requests": 0.035172,
+              "fetch": 0.000854,
+              "decode": 0.005009,
+              "html": 0.020965,
+              "prefetch": 0.00001,
+              "css_parse": 0.003829,
+              "cascade_read": 0.162674,
+              "scripts": 0.155142,
+              "sheets": 0.005455,
+              "cascade": 0.606064,
+              "image_decode": 0.373134,
+              "images": 0.476306,
+              "layout": 0.022227,
+              "timers": 1.211925,
+              "markdown": 0.001962
+            }
+          },
+          {
+            "wall": 2.4438836669996817,
+            "phases": {
+              "requests": 0.028814,
+              "fetch": 0.00101,
+              "decode": 0.004813,
+              "html": 0.020485,
+              "prefetch": 0.000008,
+              "css_parse": 0.003921,
+              "cascade_read": 0.152501,
+              "scripts": 0.153842,
+              "sheets": 0.005379,
+              "cascade": 0.603202,
+              "image_decode": 0.329774,
+              "images": 0.405261,
+              "layout": 0.020796,
+              "timers": 1.15848,
+              "markdown": 0.001613
+            }
+          }
+        ]
+      },
+      "after": {
+        "wall": 1.2602309160010918,
+        "phases": {
+          "fetch": 0.000928,
+          "decode": 0.00484,
+          "html": 0.021507,
+          "scripts": 0.191588,
+          "timers": 0.146438,
+          "sheets": 0.000687,
+          "css_parse": 0.00318,
+          "cascade_read": 0.047311,
+          "cascade": 0.338507,
+          "images": 0.429584,
+          "image_decode": 0.351641,
+          "layout": 0.021995,
+          "paint_build": 0,
+          "paint": 0,
+          "markdown": 0.002056,
+          "requests": 0.032784,
+          "prefetch": 0.000007
+        },
+        "sha256": "1378b859d435234da3027642842b225c6bc0cd1ff1bdce8352e287d7735eed60",
+        "bytes": 102606,
+        "top_scripts": [
+          {
+            "seconds": 0.05148,
+            "source": "https://icon.zol-img.com.cn/src/index/z.page.index.1.0.0.js"
+          },
+          {
+            "seconds": 0.044344,
+            "source": "https://p.zol-img.com.cn/da/index.js"
+          },
+          {
+            "seconds": 0.041297,
+            "source": "//static.mediav.com/js/ssp_ad_sdk.js"
+          },
+          {
+            "seconds": 0.039801,
+            "source": "https://icon.zol-img.com.cn/public/js/web_foot.js"
+          },
+          {
+            "seconds": 0.032547,
+            "source": "//stat.zol.com.cn/adrs/cg_gmine.js"
+          }
+        ],
+        "runs": [
+          {
+            "wall": 1.361644457998409,
+            "phases": {
+              "requests": 0.032784,
+              "fetch": 0.00149,
+              "decode": 0.009133,
+              "html": 0.032922,
+              "prefetch": 0.000007,
+              "css_parse": 0.003411,
+              "cascade_read": 0.056671,
+              "scripts": 0.224994,
+              "cascade": 0.38172,
+              "image_decode": 0.353827,
+              "images": 0.435298,
+              "layout": 0.034765,
+              "sheets": 0.000728,
+              "timers": 0.172149,
+              "markdown": 0.001658
+            }
+          },
+          {
+            "wall": 1.301657541998793,
+            "phases": {
+              "requests": 0.03849,
+              "fetch": 0.000848,
+              "decode": 0.004673,
+              "html": 0.021507,
+              "prefetch": 0.000006,
+              "css_parse": 0.003062,
+              "cascade_read": 0.048048,
+              "scripts": 0.191588,
+              "cascade": 0.33571,
+              "image_decode": 0.38426,
+              "images": 0.483895,
+              "layout": 0.022003,
+              "sheets": 0.000657,
+              "timers": 0.136935,
+              "markdown": 0.003613
+            }
+          },
+          {
+            "wall": 2.1362475829992036,
+            "phases": {
+              "requests": 0.07155,
+              "fetch": 0.001546,
+              "decode": 0.012349,
+              "html": 0.036558,
+              "prefetch": 0.000008,
+              "css_parse": 0.005454,
+              "cascade_read": 0.047311,
+              "scripts": 0.404285,
+              "cascade": 0.68023,
+              "image_decode": 0.603358,
+              "images": 0.734685,
+              "layout": 0.021995,
+              "sheets": 0.000817,
+              "timers": 0.146438,
+              "markdown": 0.003026
+            }
+          },
+          {
+            "wall": 1.1909985420006706,
+            "phases": {
+              "requests": 0.027703,
+              "fetch": 0.000877,
+              "decode": 0.00509,
+              "html": 0.02047,
+              "prefetch": 0.00001,
+              "css_parse": 0.003943,
+              "cascade_read": 0.051231,
+              "scripts": 0.164027,
+              "cascade": 0.325108,
+              "image_decode": 0.332086,
+              "images": 0.405806,
+              "layout": 0.023072,
+              "sheets": 0.000779,
+              "timers": 0.157333,
+              "markdown": 0.001902
+            }
+          },
+          {
+            "wall": 1.2602309160010918,
+            "phases": {
+              "requests": 0.033793,
+              "fetch": 0.000928,
+              "decode": 0.00484,
+              "html": 0.022185,
+              "prefetch": 0.000008,
+              "css_parse": 0.00318,
+              "cascade_read": 0.046319,
+              "scripts": 0.196592,
+              "cascade": 0.350722,
+              "image_decode": 0.351641,
+              "images": 0.429584,
+              "layout": 0.02089,
+              "sheets": 0.000687,
+              "timers": 0.136953,
+              "markdown": 0.002056
+            }
+          },
+          {
+            "wall": 1.1558107500004553,
+            "phases": {
+              "requests": 0.028229,
+              "fetch": 0.000909,
+              "decode": 0.004775,
+              "html": 0.020715,
+              "prefetch": 0.000006,
+              "css_parse": 0.002891,
+              "cascade_read": 0.044709,
+              "scripts": 0.155098,
+              "cascade": 0.318383,
+              "image_decode": 0.331058,
+              "images": 0.401667,
+              "layout": 0.021705,
+              "sheets": 0.000677,
+              "timers": 0.155213,
+              "markdown": 0.001922
+            }
+          },
+          {
+            "wall": 1.1128088749992457,
+            "phases": {
+              "requests": 0.022756,
+              "fetch": 0.001014,
+              "decode": 0.004797,
+              "html": 0.020939,
+              "prefetch": 0.000005,
+              "css_parse": 0.003059,
+              "cascade_read": 0.043262,
+              "scripts": 0.158632,
+              "cascade": 0.338507,
+              "image_decode": 0.325302,
+              "images": 0.390919,
+              "layout": 0.021065,
+              "sheets": 0.000663,
+              "timers": 0.121313,
+              "markdown": 0.002077
+            }
+          }
+        ]
+      },
+      "url": "https://www.zol.com.cn/",
+      "requests": 818,
+      "body_bytes": 10996175
+    },
+    "wikipedia": {
+      "before": {
+        "wall": 1.2360325410008954,
+        "phases": {
+          "fetch": 0.000268,
+          "decode": 0.000493,
+          "html": 0.003786,
+          "scripts": 0.009307,
+          "timers": 0,
+          "sheets": 0.003933,
+          "css_parse": 0.003134,
+          "cascade_read": 0,
+          "cascade": 1.117897,
+          "images": 0.013321,
+          "image_decode": 0.006286,
+          "layout": 0.013356,
+          "paint_build": 0,
+          "paint": 0,
+          "markdown": 0.000854,
+          "requests": 0.001383,
+          "prefetch": 0.000003
+        },
+        "sha256": "0b78a4f821f09eb6dedf679fd4b34e0b88678a0f5dd8efefea3dd0a9a91451e5",
+        "bytes": 61283,
+        "top_scripts": [
+          {
+            "seconds": 0.005253,
+            "source": "/w/load.php?lang=ja&modules=startup&only=scripts&raw=1&skin=vector-2022"
+          },
+          {
+            "seconds": 0.000103,
+            "source": "inline"
+          },
+          {
+            "seconds": 0.00002,
+            "source": "inline"
+          },
+          {
+            "seconds": 0.00001,
+            "source": "inline"
+          }
+        ],
+        "runs": [
+          {
+            "wall": 0.38960150000093563,
+            "phases": {
+              "requests": 0.001388,
+              "fetch": 0.000233,
+              "decode": 0.000487,
+              "html": 0.00373,
+              "prefetch": 0.000002,
+              "css_parse": 0.003134,
+              "scripts": 0.007456,
+              "sheets": 0.004396,
+              "cascade": 0.272023,
+              "image_decode": 0.005865,
+              "images": 0.008507,
+              "layout": 0.009266,
+              "markdown": 0.000735
+            }
+          },
+          {
+            "wall": 0.3950603749999573,
+            "phases": {
+              "requests": 0.001365,
+              "fetch": 0.000258,
+              "decode": 0.000493,
+              "html": 0.003653,
+              "prefetch": 0.000002,
+              "css_parse": 0.003368,
+              "scripts": 0.0074,
+              "sheets": 0.003933,
+              "cascade": 0.303605,
+              "image_decode": 0.006286,
+              "images": 0.013321,
+              "layout": 0.013356,
+              "markdown": 0.000807
+            }
+          },
+          {
+            "wall": 0.49765416699847265,
+            "phases": {
+              "requests": 0.0017,
+              "fetch": 0.00065,
+              "decode": 0.001202,
+              "html": 0.006692,
+              "prefetch": 0.000003,
+              "css_parse": 0.003885,
+              "scripts": 0.007835,
+              "sheets": 0.005355,
+              "cascade": 0.391291,
+              "image_decode": 0.0115,
+              "images": 0.014745,
+              "layout": 0.00882,
+              "markdown": 0.000708
+            }
+          },
+          {
+            "wall": 2.9619194580009207,
+            "phases": {
+              "requests": 0.001491,
+              "fetch": 0.000382,
+              "decode": 0.000529,
+              "html": 0.00478,
+              "prefetch": 0.000003,
+              "css_parse": 0.003094,
+              "scripts": 0.050209,
+              "sheets": 0.003748,
+              "cascade": 2.770404,
+              "image_decode": 0.021433,
+              "images": 0.024678,
+              "layout": 0.044628,
+              "markdown": 0.000854
+            }
+          },
+          {
+            "wall": 1.314173499999015,
+            "phases": {
+              "requests": 0.001217,
+              "fetch": 0.000266,
+              "decode": 0.000497,
+              "html": 0.004772,
+              "prefetch": 0.000003,
+              "css_parse": 0.002907,
+              "scripts": 0.012591,
+              "sheets": 0.003569,
+              "cascade": 1.164492,
+              "image_decode": 0.00608,
+              "images": 0.020786,
+              "layout": 0.050414,
+              "markdown": 0.000901
+            }
+          },
+          {
+            "wall": 1.5148714589995507,
+            "phases": {
+              "requests": 0.001383,
+              "fetch": 0.000268,
+              "decode": 0.000487,
+              "html": 0.003731,
+              "prefetch": 0.000004,
+              "css_parse": 0.003117,
+              "scripts": 0.013473,
+              "sheets": 0.003844,
+              "cascade": 1.248251,
+              "image_decode": 0.006071,
+              "images": 0.011775,
+              "layout": 0.088596,
+              "markdown": 0.007636
+            }
+          },
+          {
+            "wall": 1.2360325410008954,
+            "phases": {
+              "requests": 0.001306,
+              "fetch": 0.000274,
+              "decode": 0.00049,
+              "html": 0.003786,
+              "prefetch": 0.000003,
+              "css_parse": 0.00349,
+              "scripts": 0.009307,
+              "sheets": 0.004871,
+              "cascade": 1.117897,
+              "image_decode": 0.009346,
+              "images": 0.01237,
+              "layout": 0.008974,
+              "markdown": 0.001037
+            }
+          }
+        ]
+      },
+      "after": {
+        "wall": 0.18340316700050607,
+        "phases": {
+          "fetch": 0.00034,
+          "decode": 0.000554,
+          "html": 0.004069,
+          "scripts": 0.008577,
+          "timers": 0,
+          "sheets": 0.003636,
+          "css_parse": 0.002912,
+          "cascade_read": 0,
+          "cascade": 0.089725,
+          "images": 0.008395,
+          "image_decode": 0.006088,
+          "layout": 0.004657,
+          "paint_build": 0,
+          "paint": 0,
+          "markdown": 0.000741,
+          "requests": 0.001342,
+          "prefetch": 0.000002
+        },
+        "sha256": "0b78a4f821f09eb6dedf679fd4b34e0b88678a0f5dd8efefea3dd0a9a91451e5",
+        "bytes": 61283,
+        "top_scripts": [
+          {
+            "seconds": 0.003787,
+            "source": "/w/load.php?lang=ja&modules=startup&only=scripts&raw=1&skin=vector-2022"
+          },
+          {
+            "seconds": 0.000197,
+            "source": "inline"
+          },
+          {
+            "seconds": 0.000031,
+            "source": "inline"
+          },
+          {
+            "seconds": 0.000015,
+            "source": "inline"
+          }
+        ],
+        "runs": [
+          {
+            "wall": 0.12797262499952922,
+            "phases": {
+              "requests": 0.001342,
+              "fetch": 0.00034,
+              "decode": 0.000554,
+              "html": 0.003912,
+              "prefetch": 0.000004,
+              "css_parse": 0.00296,
+              "scripts": 0.008577,
+              "sheets": 0.003663,
+              "cascade": 0.068108,
+              "image_decode": 0.005942,
+              "images": 0.008084,
+              "layout": 0.004657,
+              "markdown": 0.000737
+            }
+          },
+          {
+            "wall": 0.12615804199958802,
+            "phases": {
+              "requests": 0.001502,
+              "fetch": 0.000331,
+              "decode": 0.000501,
+              "html": 0.004069,
+              "prefetch": 0.000001,
+              "css_parse": 0.002912,
+              "scripts": 0.007873,
+              "sheets": 0.003636,
+              "cascade": 0.069249,
+              "image_decode": 0.006088,
+              "images": 0.008733,
+              "layout": 0.00488,
+              "markdown": 0.000751
+            }
+          },
+          {
+            "wall": 0.12757037499977741,
+            "phases": {
+              "requests": 0.001184,
+              "fetch": 0.000241,
+              "decode": 0.000484,
+              "html": 0.003691,
+              "prefetch": 0,
+              "css_parse": 0.002693,
+              "scripts": 0.007484,
+              "sheets": 0.003303,
+              "cascade": 0.070015,
+              "image_decode": 0.005847,
+              "images": 0.008148,
+              "layout": 0.004467,
+              "markdown": 0.000721
+            }
+          },
+          {
+            "wall": 0.18340316700050607,
+            "phases": {
+              "requests": 0.001723,
+              "fetch": 0.000288,
+              "decode": 0.000501,
+              "html": 0.003861,
+              "prefetch": 0.000044,
+              "css_parse": 0.003005,
+              "scripts": 0.011182,
+              "sheets": 0.003801,
+              "cascade": 0.089725,
+              "image_decode": 0.007172,
+              "images": 0.011464,
+              "layout": 0.00464,
+              "markdown": 0.002352
+            }
+          },
+          {
+            "wall": 0.2411368749999383,
+            "phases": {
+              "requests": 0.001537,
+              "fetch": 0.000523,
+              "decode": 0.001248,
+              "html": 0.004836,
+              "prefetch": 0.000002,
+              "css_parse": 0.002856,
+              "scripts": 0.009202,
+              "sheets": 0.003611,
+              "cascade": 0.105044,
+              "image_decode": 0.06866,
+              "images": 0.071031,
+              "layout": 0.005196,
+              "markdown": 0.000741
+            }
+          },
+          {
+            "wall": 0.40068008299931535,
+            "phases": {
+              "requests": 0.001326,
+              "fetch": 0.000485,
+              "decode": 0.001254,
+              "html": 0.008684,
+              "prefetch": 0.000003,
+              "css_parse": 0.004272,
+              "scripts": 0.020561,
+              "sheets": 0.004903,
+              "cascade": 0.262339,
+              "image_decode": 0.006273,
+              "images": 0.008387,
+              "layout": 0.034007,
+              "markdown": 0.000743
+            }
+          },
+          {
+            "wall": 0.2883030419998249,
+            "phases": {
+              "requests": 0.001341,
+              "fetch": 0.000567,
+              "decode": 0.001245,
+              "html": 0.005594,
+              "prefetch": 0.000002,
+              "css_parse": 0.002833,
+              "scripts": 0.007568,
+              "sheets": 0.003451,
+              "cascade": 0.18132,
+              "image_decode": 0.006021,
+              "images": 0.008395,
+              "layout": 0.004625,
+              "markdown": 0.00068
+            }
+          }
+        ]
+      },
+      "url": "https://ja.wikipedia.org/wiki/%E3%82%A6%E3%82%A7%E3%83%96%E3%83%96%E3%83%A9%E3%82%A6%E3%82%B6",
+      "requests": 29,
+      "body_bytes": 857473
+    },
+    "github": {
+      "before": {
+        "wall": 3.4444279999988794,
+        "phases": {
+          "fetch": 0.000298,
+          "decode": 0.000381,
+          "html": 0.002936,
+          "scripts": 0.003743,
+          "timers": 0,
+          "sheets": 0.044234,
+          "css_parse": 0.034231,
+          "cascade_read": 0,
+          "cascade": 3.320176,
+          "images": 0.001749,
+          "image_decode": 0.000399,
+          "layout": 0.007421,
+          "paint_build": 0,
+          "paint": 0,
+          "markdown": 0.000247,
+          "requests": 0.003008,
+          "prefetch": 0.000003
+        },
+        "sha256": "bcdee1dcbe9802fb7c5c526436a395947aa444bad230f21ee8e038b874b14e3c",
+        "bytes": 8355,
+        "top_scripts": [],
+        "runs": [
+          {
+            "wall": 8.361799000000246,
+            "phases": {
+              "requests": 0.004619,
+              "fetch": 0.000519,
+              "decode": 0.001151,
+              "html": 0.005138,
+              "prefetch": 0.000004,
+              "scripts": 0.007539,
+              "css_parse": 0.046857,
+              "sheets": 0.067705,
+              "cascade": 8.175502,
+              "image_decode": 0.000399,
+              "images": 0.002164,
+              "layout": 0.017387,
+              "markdown": 0.000269
+            }
+          },
+          {
+            "wall": 3.659571041998788,
+            "phases": {
+              "requests": 0.003767,
+              "fetch": 0.000564,
+              "decode": 0.001139,
+              "html": 0.003779,
+              "prefetch": 0.000002,
+              "scripts": 0.004687,
+              "css_parse": 0.043726,
+              "sheets": 0.060763,
+              "cascade": 3.524109,
+              "image_decode": 0.00039,
+              "images": 0.001751,
+              "layout": 0.007679,
+              "markdown": 0.000285
+            }
+          },
+          {
+            "wall": 3.4444279999988794,
+            "phases": {
+              "requests": 0.004037,
+              "fetch": 0.000296,
+              "decode": 0.00037,
+              "html": 0.002863,
+              "prefetch": 0.000003,
+              "scripts": 0.003563,
+              "css_parse": 0.034231,
+              "sheets": 0.044287,
+              "cascade": 3.320176,
+              "image_decode": 0.000398,
+              "images": 0.001749,
+              "layout": 0.007235,
+              "markdown": 0.000247
+            }
+          },
+          {
+            "wall": 3.310938709000766,
+            "phases": {
+              "requests": 0.002595,
+              "fetch": 0.000298,
+              "decode": 0.000367,
+              "html": 0.002884,
+              "prefetch": 0.000002,
+              "scripts": 0.003651,
+              "css_parse": 0.033807,
+              "sheets": 0.042418,
+              "cascade": 3.190735,
+              "image_decode": 0.000363,
+              "images": 0.001778,
+              "layout": 0.006948,
+              "markdown": 0.000246
+            }
+          },
+          {
+            "wall": 5.789568457999849,
+            "phases": {
+              "requests": 0.002362,
+              "fetch": 0.000276,
+              "decode": 0.000383,
+              "html": 0.002962,
+              "prefetch": 0.000005,
+              "scripts": 0.003743,
+              "css_parse": 0.033003,
+              "sheets": 0.041047,
+              "cascade": 5.663212,
+              "image_decode": 0.000403,
+              "images": 0.001351,
+              "layout": 0.007421,
+              "markdown": 0.000241
+            }
+          },
+          {
+            "wall": 3.30934733399954,
+            "phases": {
+              "requests": 0.002491,
+              "fetch": 0.000309,
+              "decode": 0.000381,
+              "html": 0.002936,
+              "prefetch": 0.000002,
+              "scripts": 0.003664,
+              "css_parse": 0.032751,
+              "sheets": 0.041289,
+              "cascade": 3.212716,
+              "image_decode": 0.000701,
+              "images": 0.001713,
+              "layout": 0.007478,
+              "markdown": 0.000233
+            }
+          },
+          {
+            "wall": 3.355517709000196,
+            "phases": {
+              "requests": 0.003008,
+              "fetch": 0.000259,
+              "decode": 0.000359,
+              "html": 0.002808,
+              "prefetch": 0.000003,
+              "scripts": 0.003834,
+              "css_parse": 0.035008,
+              "sheets": 0.044234,
+              "cascade": 3.222055,
+              "image_decode": 0.0004,
+              "images": 0.001458,
+              "layout": 0.006899,
+              "markdown": 0.000253
+            }
+          }
+        ]
+      },
+      "after": {
+        "wall": 0.5144968749991676,
+        "phases": {
+          "fetch": 0.000335,
+          "decode": 0.000388,
+          "html": 0.002942,
+          "scripts": 0.003671,
+          "timers": 0,
+          "sheets": 0.044585,
+          "css_parse": 0.035486,
+          "cascade_read": 0,
+          "cascade": 0.393531,
+          "images": 0.001285,
+          "image_decode": 0.000381,
+          "layout": 0.003846,
+          "paint_build": 0,
+          "paint": 0,
+          "markdown": 0.000244,
+          "requests": 0.003039,
+          "prefetch": 0.000002
+        },
+        "sha256": "bcdee1dcbe9802fb7c5c526436a395947aa444bad230f21ee8e038b874b14e3c",
+        "bytes": 8355,
+        "top_scripts": [],
+        "runs": [
+          {
+            "wall": 0.7742684590011777,
+            "phases": {
+              "requests": 0.004336,
+              "fetch": 0.000501,
+              "decode": 0.001189,
+              "html": 0.003275,
+              "prefetch": 0.000001,
+              "scripts": 0.003517,
+              "css_parse": 0.049393,
+              "sheets": 0.064922,
+              "cascade": 0.656819,
+              "image_decode": 0.000373,
+              "images": 0.001151,
+              "layout": 0.01314,
+              "markdown": 0.000246
+            }
+          },
+          {
+            "wall": 0.7171438750010566,
+            "phases": {
+              "requests": 0.003988,
+              "fetch": 0.000501,
+              "decode": 0.00112,
+              "html": 0.005207,
+              "prefetch": 0.000002,
+              "scripts": 0.005664,
+              "css_parse": 0.052321,
+              "sheets": 0.066243,
+              "cascade": 0.543909,
+              "image_decode": 0.000381,
+              "images": 0.001604,
+              "layout": 0.011369,
+              "markdown": 0.002935
+            }
+          },
+          {
+            "wall": 0.5100155839991203,
+            "phases": {
+              "requests": 0.003112,
+              "fetch": 0.00035,
+              "decode": 0.000388,
+              "html": 0.002914,
+              "prefetch": 0.000002,
+              "scripts": 0.003567,
+              "css_parse": 0.035967,
+              "sheets": 0.045839,
+              "cascade": 0.393531,
+              "image_decode": 0.000372,
+              "images": 0.001285,
+              "layout": 0.003333,
+              "markdown": 0.000212
+            }
+          },
+          {
+            "wall": 0.5056367500001215,
+            "phases": {
+              "requests": 0.002773,
+              "fetch": 0.000263,
+              "decode": 0.000387,
+              "html": 0.00288,
+              "prefetch": 0.000003,
+              "scripts": 0.003826,
+              "css_parse": 0.035486,
+              "sheets": 0.044585,
+              "cascade": 0.382216,
+              "image_decode": 0.000369,
+              "images": 0.001167,
+              "layout": 0.003476,
+              "markdown": 0.000216
+            }
+          },
+          {
+            "wall": 0.5745115420013462,
+            "phases": {
+              "requests": 0.002848,
+              "fetch": 0.000275,
+              "decode": 0.000373,
+              "html": 0.00295,
+              "prefetch": 0.000003,
+              "scripts": 0.003792,
+              "css_parse": 0.034963,
+              "sheets": 0.043898,
+              "cascade": 0.462618,
+              "image_decode": 0.000499,
+              "images": 0.001031,
+              "layout": 0.003583,
+              "markdown": 0.000212
+            }
+          },
+          {
+            "wall": 0.5043407909997768,
+            "phases": {
+              "requests": 0.002786,
+              "fetch": 0.000287,
+              "decode": 0.00039,
+              "html": 0.002876,
+              "prefetch": 0.000001,
+              "scripts": 0.003589,
+              "css_parse": 0.033721,
+              "sheets": 0.042433,
+              "cascade": 0.377792,
+              "image_decode": 0.000399,
+              "images": 0.001494,
+              "layout": 0.00393,
+              "markdown": 0.000244
+            }
+          },
+          {
+            "wall": 0.5144968749991676,
+            "phases": {
+              "requests": 0.003039,
+              "fetch": 0.000335,
+              "decode": 0.000388,
+              "html": 0.002942,
+              "prefetch": 0.000003,
+              "scripts": 0.003671,
+              "css_parse": 0.034705,
+              "sheets": 0.04379,
+              "cascade": 0.385366,
+              "image_decode": 0.000408,
+              "images": 0.002509,
+              "layout": 0.003846,
+              "markdown": 0.00028
+            }
+          }
+        ]
+      },
+      "url": "https://github.com/rust-lang/rust",
+      "requests": 24,
+      "body_bytes": 2837200
+    },
+    "youtube": {
+      "before": {
+        "wall": 1.201015708000341,
+        "phases": {
+          "fetch": 0.000865,
+          "decode": 0.001879,
+          "html": 0.007255,
+          "scripts": 0.82652,
+          "timers": 0.000227,
+          "sheets": 0.04313,
+          "css_parse": 0.110627,
+          "cascade_read": 0.002596,
+          "cascade": 0.259877,
+          "images": 0.000191,
+          "image_decode": 0,
+          "layout": 0.000368,
+          "paint_build": 0,
+          "paint": 0,
+          "markdown": 0.000046,
+          "requests": 0.010119,
+          "prefetch": 0.000004
+        },
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0,
+        "top_scripts": [
+          {
+            "seconds": 0.710967,
+            "source": "https://www.youtube.com/s/_/ytmainappweb/_/js/k=ytmainappweb.kevlar_base.en_US.TzSY5uMC8Qk.es5.O/am=AAAAABAAEICU/d=1/rs=AGKMywFNM31p2z02nLKVBmg9G2FWK64s2w/m=kevlar_base_module,kevlar_main_module,kevlar_base_sync_mod_chunk"
+          },
+          {
+            "seconds": 0.059582,
+            "source": "https://www.youtube.com/s/desktop/01aaffea/jsbin/web-animations-next-lite.min.vflset/web-animations-next-lite.min.js"
+          },
+          {
+            "seconds": 0.005531,
+            "source": "https://www.youtube.com/s/desktop/01aaffea/jsbin/webcomponents-all-noPatch.vflset/webcomponents-all-noPatch.js"
+          },
+          {
+            "seconds": 0.003181,
+            "source": "inline"
+          },
+          {
+            "seconds": 0.001925,
+            "source": "inline"
+          }
+        ],
+        "runs": [
+          {
+            "wall": 1.5733407500010799,
+            "phases": {
+              "requests": 0.009856,
+              "fetch": 0.00074,
+              "decode": 0.001877,
+              "html": 0.007533,
+              "prefetch": 0.000003,
+              "css_parse": 0.113299,
+              "cascade_read": 0.002602,
+              "scripts": 1.22227,
+              "sheets": 0.043035,
+              "cascade": 0.261873,
+              "images": 0.000204,
+              "layout": 0.000383,
+              "timers": 0.000226,
+              "markdown": 0.000051
+            }
+          },
+          {
+            "wall": 1.5776961250012391,
+            "phases": {
+              "requests": 0.010204,
+              "fetch": 0.001204,
+              "decode": 0.002293,
+              "html": 0.01719,
+              "prefetch": 0.000004,
+              "css_parse": 0.234338,
+              "cascade_read": 0.004395,
+              "scripts": 0.954262,
+              "sheets": 0.12238,
+              "cascade": 0.396863,
+              "images": 0.000206,
+              "layout": 0.00039,
+              "timers": 0.000249,
+              "markdown": 0.000049
+            }
+          },
+          {
+            "wall": 1.199697207999634,
+            "phases": {
+              "requests": 0.010119,
+              "fetch": 0.000736,
+              "decode": 0.001879,
+              "html": 0.0073,
+              "prefetch": 0.000004,
+              "css_parse": 0.108256,
+              "cascade_read": 0.002482,
+              "scripts": 0.82652,
+              "sheets": 0.04313,
+              "cascade": 0.255471,
+              "images": 0.000191,
+              "layout": 0.00034,
+              "timers": 0.00023,
+              "markdown": 0.000046
+            }
+          },
+          {
+            "wall": 1.5191880420006783,
+            "phases": {
+              "requests": 0.010297,
+              "fetch": 0.000888,
+              "decode": 0.001977,
+              "html": 0.007255,
+              "prefetch": 0.000005,
+              "css_parse": 0.110627,
+              "cascade_read": 0.002596,
+              "scripts": 1.118935,
+              "sheets": 0.044802,
+              "cascade": 0.259877,
+              "images": 0.000203,
+              "layout": 0.00041,
+              "timers": 0.000227,
+              "markdown": 0.000047
+            }
+          },
+          {
+            "wall": 1.1557460419990093,
+            "phases": {
+              "requests": 0.009795,
+              "fetch": 0.000865,
+              "decode": 0.001799,
+              "html": 0.007165,
+              "prefetch": 0.000004,
+              "css_parse": 0.105465,
+              "cascade_read": 0.002346,
+              "scripts": 0.80281,
+              "sheets": 0.042265,
+              "cascade": 0.248981,
+              "images": 0.000115,
+              "layout": 0.000325,
+              "timers": 0.000206,
+              "markdown": 0.00004
+            }
+          },
+          {
+            "wall": 1.201015708000341,
+            "phases": {
+              "requests": 0.010169,
+              "fetch": 0.000871,
+              "decode": 0.001945,
+              "html": 0.007211,
+              "prefetch": 0.000006,
+              "css_parse": 0.116956,
+              "cascade_read": 0.002604,
+              "scripts": 0.820356,
+              "sheets": 0.042586,
+              "cascade": 0.258997,
+              "images": 0.000157,
+              "layout": 0.000365,
+              "timers": 0.000223,
+              "markdown": 0.000041
+            }
+          },
+          {
+            "wall": 1.2008134160005284,
+            "phases": {
+              "requests": 0.008714,
+              "fetch": 0.000683,
+              "decode": 0.001821,
+              "html": 0.00719,
+              "prefetch": 0.000004,
+              "css_parse": 0.107112,
+              "cascade_read": 0.002442,
+              "scripts": 0.804357,
+              "sheets": 0.043481,
+              "cascade": 0.270636,
+              "images": 0.000172,
+              "layout": 0.000368,
+              "timers": 0.000241,
+              "markdown": 0.000041
+            }
+          }
+        ]
+      },
+      "after": {
+        "wall": 0.9353034169998864,
+        "phases": {
+          "fetch": 0.000851,
+          "decode": 0.001894,
+          "html": 0.007295,
+          "scripts": 0.839314,
+          "timers": 0.000187,
+          "sheets": 0,
+          "css_parse": 0.073622,
+          "cascade_read": 0.010154,
+          "cascade": 0.013446,
+          "images": 0.000101,
+          "image_decode": 0,
+          "layout": 0.000245,
+          "paint_build": 0,
+          "paint": 0,
+          "markdown": 0.000041,
+          "requests": 0.008935,
+          "prefetch": 0.000005
+        },
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0,
+        "top_scripts": [
+          {
+            "seconds": 0.734662,
+            "source": "https://www.youtube.com/s/_/ytmainappweb/_/js/k=ytmainappweb.kevlar_base.en_US.TzSY5uMC8Qk.es5.O/am=AAAAABAAEICU/d=1/rs=AGKMywFNM31p2z02nLKVBmg9G2FWK64s2w/m=kevlar_base_module,kevlar_main_module,kevlar_base_sync_mod_chunk"
+          },
+          {
+            "seconds": 0.056559,
+            "source": "https://www.youtube.com/s/desktop/01aaffea/jsbin/web-animations-next-lite.min.vflset/web-animations-next-lite.min.js"
+          },
+          {
+            "seconds": 0.003777,
+            "source": "https://www.youtube.com/s/desktop/01aaffea/jsbin/webcomponents-all-noPatch.vflset/webcomponents-all-noPatch.js"
+          },
+          {
+            "seconds": 0.003114,
+            "source": "inline"
+          },
+          {
+            "seconds": 0.001947,
+            "source": "inline"
+          }
+        ],
+        "runs": [
+          {
+            "wall": 0.9520477919995756,
+            "phases": {
+              "requests": 0.008365,
+              "fetch": 0.000849,
+              "decode": 0.002022,
+              "html": 0.007411,
+              "prefetch": 0.000005,
+              "css_parse": 0.073622,
+              "cascade_read": 0.009636,
+              "scripts": 0.839314,
+              "cascade": 0.013957,
+              "images": 0.000108,
+              "layout": 0.000283,
+              "timers": 0.000187,
+              "markdown": 0.000043
+            }
+          },
+          {
+            "wall": 0.8909868750015448,
+            "phases": {
+              "requests": 0.008671,
+              "fetch": 0.000792,
+              "decode": 0.001841,
+              "html": 0.007181,
+              "prefetch": 0.000003,
+              "css_parse": 0.07393,
+              "cascade_read": 0.010154,
+              "scripts": 0.837982,
+              "cascade": 0.013547,
+              "images": 0.000102,
+              "layout": 0.000289,
+              "timers": 0.000195,
+              "markdown": 0.000044
+            }
+          },
+          {
+            "wall": 0.8856591670009948,
+            "phases": {
+              "requests": 0.008935,
+              "fetch": 0.000986,
+              "decode": 0.001953,
+              "html": 0.007459,
+              "prefetch": 0.000005,
+              "css_parse": 0.072744,
+              "cascade_read": 0.009725,
+              "scripts": 0.826017,
+              "cascade": 0.013446,
+              "images": 0.000101,
+              "layout": 0.000245,
+              "timers": 0.000264,
+              "markdown": 0.000039
+            }
+          },
+          {
+            "wall": 0.8816571250008565,
+            "phases": {
+              "requests": 0.009509,
+              "fetch": 0.000878,
+              "decode": 0.001894,
+              "html": 0.007238,
+              "prefetch": 0.000005,
+              "css_parse": 0.081171,
+              "cascade_read": 0.010975,
+              "scripts": 0.821942,
+              "cascade": 0.012868,
+              "images": 0.000091,
+              "layout": 0.000219,
+              "timers": 0.000169,
+              "markdown": 0.000041
+            }
+          },
+          {
+            "wall": 0.9353034169998864,
+            "phases": {
+              "requests": 0.009282,
+              "fetch": 0.000849,
+              "decode": 0.001801,
+              "html": 0.007129,
+              "prefetch": 0.000004,
+              "css_parse": 0.07289,
+              "cascade_read": 0.009883,
+              "scripts": 0.842456,
+              "cascade": 0.013265,
+              "images": 0.000095,
+              "layout": 0.000232,
+              "timers": 0.000156,
+              "markdown": 0.000039
+            }
+          },
+          {
+            "wall": 1.2078692499999306,
+            "phases": {
+              "requests": 0.008656,
+              "fetch": 0.000889,
+              "decode": 0.001842,
+              "html": 0.007295,
+              "prefetch": 0.000004,
+              "css_parse": 0.072899,
+              "cascade_read": 0.010254,
+              "scripts": 1.148504,
+              "cascade": 0.013207,
+              "images": 0.000092,
+              "layout": 0.00023,
+              "timers": 0.000168,
+              "markdown": 0.000039
+            }
+          },
+          {
+            "wall": 1.263387832999797,
+            "phases": {
+              "requests": 0.009517,
+              "fetch": 0.000851,
+              "decode": 0.002497,
+              "html": 0.008822,
+              "prefetch": 0.000005,
+              "css_parse": 0.106754,
+              "cascade_read": 0.017527,
+              "scripts": 1.153541,
+              "cascade": 0.020785,
+              "images": 0.000116,
+              "layout": 0.000328,
+              "timers": 0.000228,
+              "markdown": 0.000167
+            }
+          }
+        ]
+      },
+      "url": "https://www.youtube.com/",
+      "requests": 17,
+      "body_bytes": 16673389
+    }
+  },
+  "live": {
+    "zol": {
+      "wall": 20.398691458998655,
+      "status": 0,
+      "phases": {
+        "requests": 9.749805000000016,
+        "fetch": 3.8632979999999995,
+        "decode": 0.004665,
+        "html": 0.020746999999999998,
+        "prefetch": 9.228183000000001,
+        "css_parse": 0.017617999999999998,
+        "cascade_read": 0.05226700000000016,
+        "scripts": 8.646651000000002,
+        "cascade": 0.318889,
+        "image_decode": 0.35731599999999997,
+        "images": 4.854574,
+        "layout": 0.021401,
+        "sheets": 0.000932,
+        "timers": 2.5612699999999995,
+        "markdown": 0.001881
+      }
+    },
+    "wikipedia": {
+      "wall": 2.5023347919996013,
+      "status": 0,
+      "phases": {
+        "requests": 1.2661019999999998,
+        "fetch": 0.716223,
+        "decode": 0.000512,
+        "html": 0.004439,
+        "prefetch": 1.0692780000000002,
+        "css_parse": 0.0035009999999999993,
+        "scripts": 0.140475,
+        "sheets": 0.160405,
+        "cascade": 0.06905000000000003,
+        "image_decode": 0.009878,
+        "images": 1.34354,
+        "layout": 0.00522,
+        "markdown": 0.000891
+      }
+    },
+    "github": {
+      "wall": 2.6938872909995553,
+      "status": 0,
+      "phases": {
+        "requests": 0.9259919999999996,
+        "fetch": 0.925425,
+        "decode": 0.000605,
+        "html": 0.00399,
+        "prefetch": 1.012346,
+        "scripts": 0.00422,
+        "css_parse": 0.049228,
+        "sheets": 0.616458,
+        "cascade": 0.601942,
+        "image_decode": 0.000606,
+        "images": 0.458889,
+        "layout": 0.004327,
+        "markdown": 0.000239
+      }
+    },
+    "youtube": {
+      "wall": 3.8794289590005064,
+      "status": 0,
+      "phases": {
+        "requests": 0.8920019999999997,
+        "fetch": 0.890304,
+        "decode": 0.004447,
+        "html": 0.012341000000000001,
+        "prefetch": 1.8703870000000002,
+        "css_parse": 0.08448500000000014,
+        "cascade_read": 0.011603,
+        "scripts": 2.895927,
+        "cascade": 0.015326,
+        "images": 0.000204,
+        "layout": 0.000444,
+        "timers": 0.000224,
+        "markdown": 0.000047
+      }
+    }
+  }
+}

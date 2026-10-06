@@ -19,6 +19,7 @@ import engine
 import engine.Page
 import html
 import layout
+import perf
 import std.list.List
 import std.mem.AllocError
 import std.mem.Allocator
@@ -57,6 +58,8 @@ fn emitBlock(bl: *mut Blocks, s: []u8) AllocError!void {
 
 /// The Markdown of the main content of the page shown, in `tmp`.
 fn markdownOf(s: *mut Session, tmp: Allocator, refs: bool) AllocError![]u8 {
+    let began = perf.start()
+    defer perf.end("markdown", began, "document")
     let p = s.tab.page.?
     var md = Md { alloc: tmp, session: s, page: p, refs: refs }
     var bl = newBlocks(tmp, "\n\n")

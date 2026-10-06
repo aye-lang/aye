@@ -1,0 +1,30 @@
+// Only the offline benchmark runner opts into this environment. Freeze
+// JavaScript's wall clock and PRNG so cache-busting request URLs replay;
+// ordinary browsing and the conformance tests keep the real builtins.
+extern fn getenv(name: [*]u8) ?[*]u8
+
+fn benchmarkEnabled() bool {
+    if getenv("ANYKNOWN_BENCHMARK".ptr) |p| {
+        return p[0] == '1'
+    }
+    return false
+}
+
+let BENCHMARK_PRELUDE =
+    \\(function () {
+    \\  const RealDate = Date;
+    \\  const epoch = 1791331200000;
+    \\  function FrozenDate(...args) {
+    \\    if (!new.target) return new RealDate(epoch).toString();
+    \\    return args.length ? new RealDate(...args) : new RealDate(epoch);
+    \\  }
+    \\  Object.setPrototypeOf(FrozenDate, RealDate);
+    \\  FrozenDate.prototype = RealDate.prototype;
+    \\  FrozenDate.now = function () { return epoch; };
+    \\  Date = FrozenDate;
+    \\  let seed = 1;
+    \\  Math.random = function () {
+    \\    seed = (seed * 1664525 + 1013904223) >>> 0;
+    \\    return seed / 4294967296;
+    \\  };
+    \\})();

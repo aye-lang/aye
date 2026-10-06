@@ -106,7 +106,7 @@ pub struct FrameElements {
     el: ?NodeId
 }
 
-pub fn frameElements(p: *Page, n: ?usize) FrameElements {
+fn scanFrameElements(p: *Page, n: ?usize) FrameElements {
     var count: usize = 0
     if p.plain {
         return FrameElements { count: 0, el: null }

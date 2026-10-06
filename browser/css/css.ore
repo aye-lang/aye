@@ -399,10 +399,18 @@ pub struct Sheet {
     // The document's author sheet: the sheets of its shadow trees
     // (`addScoped`), which apply in those trees only (cascade.ore).
     scoped: List(Scoped)
+    // The rules that may match an element (rule_index.ore), built when
+    // the cascade first needs it. On the heap, like `arena`.
+    index: *mut RuleIndex
 
     pub fn init(alloc: Allocator) AllocError!Sheet {
         let arena = try alloc.create(Arena.init(alloc))
         let a = arena.allocator()
+        let index = alloc.create(RuleIndex.init(alloc)) catch |e| {
+            arena.deinit()
+            alloc.destroy(arena)
+            return e
+        }
         return Sheet {
             alloc: alloc,
             arena: arena,
@@ -415,6 +423,7 @@ pub struct Sheet {
             font_faces: List(FontFace).init(a),
             base: "",
             scoped: List(Scoped).init(a),
+            index: index,
         }
     }
 
@@ -423,6 +432,8 @@ pub struct Sheet {
             sc.sheet.deinit()
             self.alloc.destroy(sc.sheet)
         }
+        self.index.deinit()
+        self.alloc.destroy(self.index)
         self.arena.deinit()
         self.alloc.destroy(self.arena)
     }
@@ -451,6 +462,7 @@ pub struct Sheet {
         if mid <= from || mid >= rules.len {
             return
         }
+        self.index.ready = false
         let a = self.arena.allocator()
         let copy = try a.alloc(rules[0], rules.len - from)
         var n: usize = 0

@@ -16,6 +16,7 @@ import dom.NodeId
 import image
 import layout
 import net
+import perf
 import std
 import std.heap.Arena
 import std.list.List
@@ -151,6 +152,8 @@ fn fetchImage(alloc: Allocator, href: []u8, referrer: []u8, pic: *mut ?*mut svg.
     if res.status >= 400 {
         return null
     }
+    let decode_began = perf.start()
+    defer perf.end("image_decode", decode_began, href)
     if isSvg(res.mime, res.body) {
         return svgImage(alloc, res.body, pic)
     }

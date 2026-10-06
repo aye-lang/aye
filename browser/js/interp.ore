@@ -120,6 +120,20 @@ pub struct Interp {
     alloc: Allocator
     heap: Heap
     ast: Ast
+    prop_caches: List(PropCache)
+    fast_exprs: List(FastExpr)
+    expr_code: List(ExprInst)
+    // Non-reentrant numeric recipe scratch (not GC values/roots).
+    expr_nums: [32]f64
+    expr_kinds: [32]u8
+    expr_call: bool
+    expr_parent: u32
+    expr_argbase: usize
+    expr_argc: usize
+    expr_first: u32
+    expr_nparams: u32
+    expr_this_slot: u32
+    expr_this: Value
     globals: GlobalNames
     natives: List(NativeEntry)
     stack: List(Value)
@@ -237,6 +251,19 @@ pub struct Interp {
             alloc: alloc,
             heap: try Heap.init(alloc),
             ast: try Ast.init(alloc),
+            prop_caches: List(PropCache).init(alloc),
+            fast_exprs: List(FastExpr).init(alloc),
+            expr_code: List(ExprInst).init(alloc),
+            expr_nums: @zeroed([32]f64),
+            expr_kinds: @zeroed([32]u8),
+            expr_call: false,
+            expr_parent: NONE,
+            expr_argbase: 0,
+            expr_argc: 0,
+            expr_first: 0,
+            expr_nparams: 0,
+            expr_this_slot: NONE,
+            expr_this: Value.Undefined,
             globals: GlobalNames.init(alloc),
             natives: List(NativeEntry).init(alloc),
             stack: List(Value).init(alloc),
@@ -331,6 +358,9 @@ pub struct Interp {
         self.joining.deinit()
         self.heap.deinit()
         self.ast.deinit()
+        self.prop_caches.deinit()
+        self.fast_exprs.deinit()
+        self.expr_code.deinit()
         self.globals.deinit()
         self.natives.deinit()
         self.stack.deinit()
@@ -950,6 +980,14 @@ pub struct Interp {
                         return Value.Undefined
                     }
                     return self.call0(p.value, receiver)
+                }
+                if key == A_PROTOTYPE && cls == Class.Function {
+                    match p.value {
+                        .Empty => {
+                            return self.materializePrototype(cur, i)
+                        }
+                        _ => {}
+                    }
                 }
                 return p.value
             }
@@ -1757,6 +1795,19 @@ pub struct Interp {
 
     // The arithmetic and bitwise operators on two values.
     pub fn binary(self: *mut Self, op: Op, a: Value, b: Value) JsError!Value {
+        match a {
+            .Num { n: x } => {
+                match b {
+                    .Num { n: y } => {
+                        if fastNumeric(op, x, y) |v| {
+                            return v
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
         if op == Op.Add {
             return self.add(a, b)
         }
@@ -1978,6 +2029,43 @@ pub struct Interp {
             return self.rangeError("Maximum call stack size exceeded")
         }
         try self.tick()
+        // A guarded, side-effect-free return needs neither a frame nor
+        // an environment. Failed guards run the ordinary call once.
+        if fi.simple && fi.args_slot == NONE && fi.self_slot == NONE && !fi.ctor && !fi.generator && !fi.is_async {
+            var expr = fi.expr
+            if expr == 0 && fi.nbody == 1 {
+                match self.ast.node(self.ast.item(fi.body, 0)) {
+                    .Return { arg } => {
+                        expr = arg
+                    }
+                    _ => {}
+                }
+            }
+            if expr != 0 && self.fast_exprs.items()[expr].n > 0 {
+                self.expr_call = true
+                self.expr_parent = penv
+                self.expr_argbase = argBase
+                self.expr_argc = argc
+                self.expr_first = fi.first_param
+                self.expr_nparams = fi.nparams
+                self.expr_this_slot = fi.this_slot
+                self.expr_this = thisv
+                if !fi.strict && !fi.arrow && isNullish(thisv) {
+                    self.expr_this = objVal(self.global)
+                }
+                let v = evalFastExpr(self, self.fast_exprs.items()[expr])
+                self.expr_call = false
+                match v {
+                    .Empty => {}
+                    _ => {
+                        if fi.expr == 0 {
+                            try self.tick()
+                        }
+                        return v
+                    }
+                }
+            }
+        }
         let nslots = self.ast.scopes.items()[fi.scope].nslots
         self.maybeGc()
         let e = try self.heap.newEnv(nslots, penv, Value.Undefined)
@@ -1989,6 +2077,13 @@ pub struct Interp {
             self.env = saved
             self.ctor_this = self.frames.items()[self.frames.len() - 1].this_obj
             self.frames.pop()
+            // No function/class was created inside: nothing can retain
+            // this environment after the call. Coroutine contexts keep
+            // theirs until the collector releases them.
+            if !self.ast.scopes.items()[fi.scope].closures && !fi.generator && !fi.is_async {
+                self.heap.freeEnv(e)
+                self.heap.free_envs.append(e) catch |err| {}
+            }
         }
         if fi.this_slot != NONE {
             // Sloppy mode: a call without `this` gets the global object.
@@ -2122,13 +2217,41 @@ pub struct Interp {
             return objVal(o)
         }
         if !fi.arrow && !fi.method && !fi.ctor && !fi.is_async {
-            try self.push(objVal(o))
-            let p = try self.newObject(self.object_proto)
-            try self.heap.addProp(p, A_CONSTRUCTOR, objVal(o), Value.Undefined, F_HIDDEN)
-            try self.heap.addProp(o, A_PROTOTYPE, objVal(p), Value.Undefined, F_WRITE)
-            self.pop()
+            // The own descriptor exists immediately, but most closures
+            // are never constructed or asked for their prototype.
+            try self.heap.addProp(o, A_PROTOTYPE, Value.Empty, Value.Undefined, F_WRITE)
         }
         return objVal(o)
+    }
+
+    // Empty in a function's own prototype slot is the lazy prototype,
+    // not a JS value. Materialization changes only its value, even when
+    // the function has been frozen; flags/order/layout remain unchanged.
+    fn resolveLazyPrototype(self: *mut Self, o: u32, key: u32) JsError!void {
+        if key != A_PROTOTYPE || self.heap.obj(o).class != Class.Function {
+            return
+        }
+        if self.heap.findProp(o, key) |slot| {
+            let p = self.heap.obj(o).props[slot]
+            if (p.flags & F_ACCESSOR) == 0 {
+                match p.value {
+                    .Empty => {
+                        try self.materializePrototype(o, slot)
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    fn materializePrototype(self: *mut Self, f: u32, slot: u32) JsError!Value {
+        let base = self.stack.len()
+        defer self.truncate(base)
+        try self.push(objVal(f))
+        let p = try self.newObject(self.object_proto)
+        try self.heap.addProp(p, A_CONSTRUCTOR, objVal(f), Value.Undefined, F_HIDDEN)
+        self.heap.obj(f).props[slot].value = objVal(p)
+        return objVal(p)
     }
 
     fn setHome(self: *mut Self, m: u32, home: u32) {
@@ -2365,7 +2488,7 @@ pub struct Interp {
         return e
     }
 
-    fn readIdent(self: *mut Self, name: u32, depth: u32, slot: u32) JsError!Value {
+    fn readIdent(self: *mut Self, id: u32, name: u32, depth: u32, slot: u32) JsError!Value {
         if depth <= DEPTH_GLOBAL_LEX {
             var v = Value.Undefined
             if depth == DEPTH_GLOBAL_LEX {
@@ -2388,6 +2511,16 @@ pub struct Interp {
         }
         if name == A_UNDEFINED {
             return Value.Undefined
+        }
+        // Global vars are own slots on the ordinary global object.
+        // A hit loads the current descriptor/value, not a cached value.
+        let c = self.prop_caches.items()[id]
+        if c.shape != NONE && c.proto_shape == NONE && self.heap.obj(self.global).shape == c.shape {
+            return getCachedProp(self, id, objVal(self.global), name)
+        }
+        if self.heap.findProp(self.global, name) |i| {
+            self.prop_caches.items()[id] = PropCache { shape: self.heap.obj(self.global).shape, proto_shape: NONE, slot: i }
+            return getCachedProp(self, id, objVal(self.global), name)
         }
         if !self.hasProperty(self.global, name) {
             return self.typeErrorRef(name)
@@ -2450,12 +2583,62 @@ pub struct Interp {
     // ---- expressions
 
     pub fn eval(self: *mut Self, id: u32) JsError!Value {
+        // Leaves cannot recurse. Keep them out of the large frame of
+        // the general evaluator, including its C-stack probe and roots.
+        match self.ast.nodes.items()[id] {
+            .Ident { name, depth, slot, .. } => {
+                if depth <= DEPTH_GLOBAL_LEX {
+                    var e = self.glex
+                    if depth < DEPTH_GLOBAL_LEX {
+                        e = self.envAt(depth)
+                    }
+                    let v = self.heap.envs.items()[e].slots[slot]
+                    match v {
+                        .Empty => {
+                            return self.uninitialized(name)
+                        }
+                        _ => {
+                            return v
+                        }
+                    }
+                }
+            }
+            .Num { v } => {
+                return numVal(v)
+            }
+            .Null => {
+                return Value.Null
+            }
+            .True => {
+                return boolVal(true)
+            }
+            .False => {
+                return boolVal(false)
+            }
+            .Binary { .. } => {
+                let p = self.fast_exprs.items()[id]
+                if p.n > 0 {
+                    let v = evalFastExpr(self, p)
+                    match v {
+                        .Empty => {}
+                        _ => {
+                            return v
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        return self.evalSlow(id)
+    }
+
+    fn evalSlow(self: *mut Self, id: u32) JsError!Value {
         if self.stackExhausted() {
             return self.rangeError("Maximum call stack size exceeded")
         }
         match self.ast.nodes.items()[id] {
             .Ident { name, depth, slot, .. } => {
-                return self.readIdent(name, depth, slot)
+                return self.readIdent(id, name, depth, slot)
             }
             .Num { v } => {
                 return numVal(v)
@@ -2482,7 +2665,7 @@ pub struct Interp {
                 return self.evalArray(list, n)
             }
             .ObjectLit { list, n } => {
-                return self.evalObject(list, n)
+                return self.evalObject(id, list, n)
             }
             .Func { f } => {
                 return self.makeClosure(f)
@@ -2576,7 +2759,7 @@ pub struct Interp {
                 if optional && isNullish(o) {
                     return JsError.ShortCircuit
                 }
-                return self.getProp(o, name)
+                return getCachedProp(self, id, o, name)
             }
             .Index { obj, key, optional } => {
                 let base = self.stack.len()
@@ -2800,7 +2983,7 @@ pub struct Interp {
                 }
                 try self.push(Value.Undefined)
                 try self.push(o)
-                let f = try self.getProp(o, name)
+                let f = try getCachedProp(self, callee, o, name)
                 self.setSlot(base, f)
             }
             .Index { obj, key, optional } => {
@@ -3050,9 +3233,27 @@ pub struct Interp {
         return self.pop()
     }
 
-    fn evalObject(self: *mut Self, list: u32, n: u32) JsError!Value {
+    fn evalObject(self: *mut Self, id: u32, list: u32, n: u32) JsError!Value {
+        let shape = try literalShape(self, id, list, n)
         let o = try self.newObject(self.object_proto)
         try self.push(objVal(o))
+        if shape != NONE {
+            if n > 0 {
+                self.heap.obj(o).props = try self.heap.prop_mem.get(n as usize, Prop { key: 0, value: Value.Undefined, setter: Value.Undefined, flags: F_DEFAULT })
+            }
+            for k in 0..n {
+                match self.ast.node(self.ast.item(list, k)) {
+                    .Prop { key, value, .. } => {
+                        let v = try self.eval(value)
+                        self.heap.obj(o).props[k] = Prop { key: key, value: v, setter: Value.Undefined, flags: F_DEFAULT }
+                        self.heap.obj(o).nprops = k + 1
+                    }
+                    _ => {}
+                }
+            }
+            self.heap.obj(o).shape = shape
+            return self.pop()
+        }
         for k in 0..n {
             match self.ast.node(self.ast.item(list, k)) {
                 .Prop { kind, key, computed, value } => {
@@ -3194,8 +3395,24 @@ pub struct Interp {
         let base = self.stack.len()
         defer self.truncate(base)
         match self.ast.node(arg) {
-            .Ident { name, depth, slot, .. } => {
-                let old = try self.toNumber(try self.readIdent(name, depth, slot))
+            .Ident { name, depth, slot, flags } => {
+                if depth <= DEPTH_GLOBAL_LEX && (flags & IDENT_CONST) == 0 {
+                    var e = self.glex
+                    if depth < DEPTH_GLOBAL_LEX {
+                        e = self.envAt(depth)
+                    }
+                    match self.heap.envs.items()[e].slots[slot] {
+                        .Num { n } => {
+                            self.heap.envs.items()[e].slots[slot] = numVal(n + delta)
+                            if prefix {
+                                return numVal(n + delta)
+                            }
+                            return numVal(n)
+                        }
+                        _ => {}
+                    }
+                }
+                let old = try self.toNumber(try self.readIdent(arg, name, depth, slot))
                 try self.assignIdent(arg, numVal(old + delta), false)
                 if prefix {
                     return numVal(old + delta)
@@ -3205,8 +3422,8 @@ pub struct Interp {
             .Member { obj, name, .. } => {
                 let o = try self.eval(obj)
                 try self.push(o)
-                let old = try self.toNumber(try self.getProp(o, name))
-                try self.setProp(o, name, numVal(old + delta))
+                let old = try self.toNumber(try getCachedProp(self, arg, o, name))
+                try setCachedProp(self, arg, o, name, numVal(old + delta))
                 if prefix {
                     return numVal(old + delta)
                 }
@@ -3258,7 +3475,7 @@ pub struct Interp {
                     try self.assignIdent(target, v, false)
                     return v
                 }
-                let cur = try self.readIdent(name, depth, slot)
+                let cur = try self.readIdent(target, name, depth, slot)
                 if self.logicalDone(op, cur) {
                     return cur
                 }
@@ -3278,10 +3495,10 @@ pub struct Interp {
                 if op == Op.None {
                     let v = try self.eval(value)
                     try self.push(v)
-                    try self.setProp(o, name, v)
+                    try setCachedProp(self, target, o, name, v)
                     return v
                 }
-                let cur = try self.getProp(o, name)
+                let cur = try getCachedProp(self, target, o, name)
                 if self.logicalDone(op, cur) {
                     return cur
                 }
@@ -3293,7 +3510,7 @@ pub struct Interp {
                     r = try self.binary(op, cur, rhs)
                     try self.push(r)
                 }
-                try self.setProp(o, name, r)
+                try setCachedProp(self, target, o, name, r)
                 return r
             }
             .Index { obj, key, .. } => {
@@ -3639,7 +3856,13 @@ pub struct Interp {
         let e = try self.newEnv(sc.nslots, self.env)
         let saved = self.env
         self.env = e
-        defer self.env = saved
+        defer {
+            self.env = saved
+            if !sc.closures {
+                self.heap.freeEnv(e)
+                self.heap.free_envs.append(e) catch |err| {}
+            }
+        }
         try self.hoist(scope)
         return self.execList(list, n)
     }
@@ -4074,6 +4297,10 @@ pub struct Interp {
         r.script(root) catch |e| {
             return self.syntaxError(message.bytes())
         }
+        while self.prop_caches.len() < self.ast.nodes.len() {
+            try self.prop_caches.append(emptyPropCache())
+        }
+        try compileFastExprs(self)
         try self.heap.growEnv(self.glex, self.globals.count)
         for name in r.top_vars.items() {
             if !self.hasOwn(self.global, name) {

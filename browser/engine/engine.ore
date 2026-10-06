@@ -28,6 +28,7 @@ import font
 import html
 import layout
 import net
+import perf
 import std
 import std.list.List
 import std.mem.AllocError
@@ -65,6 +66,8 @@ pub struct Page {
     title: []u8
     // Set by `layoutPage`.
     styling: ?*mut Styling
+    // The stylesheet source fingerprint for styling (sheet_cache.ore).
+    sheet_key: u64
     tree: ?*mut layout.Tree
     // The page's JavaScript (null when scripts are off).
     script: ?*mut Script
@@ -72,6 +75,8 @@ pub struct Page {
     images: ?*mut ImageCache
     // The documents of its `frame` and `iframe` elements (frames.ore).
     frames: List(Frame)
+    // Live frame-element lookups, invalidated by Document.tree_version.
+    frame_elements: FrameElementIndex
     // Unique among the pages of the process (`findPage`).
     id: u32
     // The page whose frame shows this one (null for a tab's page), and
@@ -108,6 +113,7 @@ pub struct Page {
             f.page.destroy()
         }
         self.frames.deinit()
+        self.frame_elements.nodes.deinit()
         self.doc.deinit()
         alloc.free(self.title)
         self.url.deinit(alloc)
@@ -160,9 +166,9 @@ pub struct Page {
 
     /// Styles and lays out the page for a viewport `width` x `height` CSS
     /// px, measuring text with `measure` (which must outlive the
-    /// layout). Style sheets are parsed again when the viewport changed,
-    /// since media queries and `vw`/`vh` depend on it, and after
-    /// scripts changed the document (they may have changed the sheets).
+    /// layout). Style sheets are parsed again when the viewport changed
+    /// (media queries and `vw`/`vh` depend on it), or their sources
+    /// changed; ordinary DOM changes reuse the parsed sheets.
     pub fn layoutPage(self: *mut Self, measure: dyn font.Measurer, width: f64, height: f64) AllocError!void {
         self.dropTree()
         try syncFrames(self)
@@ -172,24 +178,42 @@ pub struct Page {
             same = st.media.width == width && st.media.height == height && st.version == domVersion(self)
         }
         if !same {
-            self.dropStyling()
-            self.styling = try self.styleFor(css.Media { width: width, height: height })
+            let key = sheetSourceKey(&self.doc)
+            if self.styling |st| {
+                if st.media.width == width && st.media.height == height && self.sheet_key == key {
+                    st.styles.deinit()
+                    st.styles = try css.Styles.init(self.alloc)
+                    try dom.assignSlots(&mut self.doc)
+                    try css.computeStyles(&self.doc, &st.ua, &st.author, st.media, &mut st.styles)
+                    st.version = domVersion(self)
+                    same = true
+                }
+            }
+            if !same {
+                self.dropStyling()
+                self.styling = try self.styleFor(css.Media { width: width, height: height })
+                self.sheet_key = key
+            }
         }
         if self.styling |st| {
             try loadWebFonts(self.alloc, &mut st.author, self.url.href, measure)
         }
+        let images_began = perf.start()
         try updateImages(self, css.Media { width: width, height: height })
+        perf.end("images", images_began, self.url.href)
         if self.styling |st| {
             var nodes: ?*layout.Images = null
             if self.images |imgs| {
                 nodes = &imgs.nodes
             }
+            let layout_began = perf.start()
             let tree = try layout.layoutDocumentWith(self.alloc, &self.doc, &st.styles, nodes, measure, width, height)
             self.tree = self.alloc.create(tree) catch |e| {
                 var lost = tree
                 lost.deinit()
                 return e
             }
+            perf.end("layout", layout_began, self.url.href)
             try layoutFrames(self, measure)
         }
     }
@@ -199,9 +223,8 @@ pub struct Page {
     pub fn restyle(self: *mut Self) AllocError!void {
         self.dropTree()
         if self.styling |st| {
-            if st.version != domVersion(self) {
-                // Scripts changed the document: the sheets are parsed
-                // again by the next layout.
+            if st.version != domVersion(self) && self.sheet_key != sheetSourceKey(&self.doc) {
+                // A stylesheet source changed: rebuild it at layout.
                 self.dropStyling()
                 return
             }
@@ -209,11 +232,15 @@ pub struct Page {
             st.styles = try css.Styles.init(self.alloc)
             try dom.assignSlots(&mut self.doc)
             try css.computeStyles(&self.doc, &st.ua, &st.author, st.media, &mut st.styles)
+            st.version = domVersion(self)
         }
     }
 
     fn styleFor(self: *mut Self, media: css.Media) AllocError!*mut Styling {
         try dom.assignSlots(&mut self.doc)
+        if try takeReaderStyling(self, media) |cached| {
+            return cached
+        }
         var ua = try css.Sheet.init(self.alloc)
         errdefer ua.deinit()
         try css.uaSheet(&mut ua, media)
@@ -222,7 +249,9 @@ pub struct Page {
         }
         var author = try css.Sheet.init(self.alloc)
         errdefer author.deinit()
+        let sheets_began = perf.start()
         try authorSheets(self.alloc, &self.doc, &self.url, media, &mut author)
+        perf.end("sheets", sheets_began, self.url.href)
         var styles = try css.Styles.init(self.alloc)
         errdefer styles.deinit()
         try css.computeStyles(&self.doc, &ua, &author, media, &mut styles)
@@ -248,7 +277,9 @@ pub fn loadWith(alloc: Allocator, target: *Url, body: ?*net.Body) AllocError!*mu
 // bytes are in `fallback` when they do not say (a frame's: its parent's
 // encoding). Its scripts have not run (`runDocument`).
 fn fetchPage(alloc: Allocator, target: *Url, body: ?*net.Body, fallback: encoding.Encoding) AllocError!*mut Page {
+    let fetch_began = perf.start()
     let res = net.fetchWith(alloc, target, body) catch |e| {
+        perf.end("fetch", fetch_began, target.href)
         match e {
             .OutOfMemory => {
                 return AllocError.OutOfMemory
@@ -257,15 +288,20 @@ fn fetchPage(alloc: Allocator, target: *Url, body: ?*net.Body, fallback: encodin
         }
         return errorPage(alloc, target, net.describe(e))
     }
+    perf.end("fetch", fetch_began, target.href)
     defer res.deinit(alloc)
     var located = finalUrl(alloc, target, res.url) catch |e| {
         return AllocError.OutOfMemory
     }
     errdefer located.deinit(alloc)
+    let decode_began = perf.start()
     let enc = encoding.sniffOr(res.body, res.charset, fallback)
     let src = try encoding.toUtf8(alloc, res.body, enc)
     defer alloc.free(src)
+    perf.end("decode", decode_began, target.href)
+    let parse_began = perf.start()
     var doc = try documentOf(alloc, res.mime, src)
+    perf.end("html", parse_began, target.href)
     errdefer doc.deinit()
     let p = try newPage(alloc, located, res.status, "", doc)
     p.encoding = enc
@@ -278,14 +314,18 @@ fn fetchPage(alloc: Allocator, target: *Url, body: ?*net.Body, fallback: encodin
 // then fires their load events and the window's.
 fn runDocument(p: *mut Page, scripts: bool) AllocError!void {
     if scripts && !p.plain && !p.no_scripts {
+        let scripts_began = perf.start()
         try startPageScripts(p)
+        perf.end("scripts", scripts_began, p.url.href)
     }
     if !p.plain {
         try loadFrames(p)
     }
     if p.script != null {
+        let scripts_began = perf.start()
         try fireFrameLoads(p)
         try finishPageScripts(p)
+        perf.end("scripts", scripts_began, p.url.href)
     }
 }
 
@@ -315,10 +355,12 @@ fn newPage(alloc: Allocator, located: Url, status: i64, failure: []u8, doc: Docu
         encoding: encoding.Encoding.Utf8,
         title: title,
         styling: null,
+        sheet_key: 0,
         tree: null,
         script: null,
         images: null,
         frames: List(Frame).init(alloc),
+        frame_elements: FrameElementIndex.init(alloc),
         id: newPageId(),
         parent: null,
         depth: 0,
