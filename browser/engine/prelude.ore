@@ -545,6 +545,230 @@ pub let PRELUDE =
     \\constructible('DocumentFragment', () => document.createDocumentFragment());
     \\constructible('Text', s => document.createTextNode(s === undefined ? '' : s));
     \\constructible('Comment', s => document.createComment(s === undefined ? '' : s));
+    \\
+    \\// compareDocumentPosition, isEqualNode, normalize.
+    \\const POSITIONS = { DOCUMENT_POSITION_DISCONNECTED: 1, DOCUMENT_POSITION_PRECEDING: 2, DOCUMENT_POSITION_FOLLOWING: 4, DOCUMENT_POSITION_CONTAINS: 8, DOCUMENT_POSITION_CONTAINED_BY: 16, DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32 };
+    \\for (const k in POSITIONS) {
+    \\  Object.defineProperty(Node, k, { value: POSITIONS[k], enumerable: true });
+    \\  Object.defineProperty(NodeP, k, { value: POSITIONS[k], enumerable: true });
+    \\}
+    \\function ancestry(n) {
+    \\  const chain = [];
+    \\  for (; n; n = n.parentNode) chain.unshift(n);
+    \\  return chain;
+    \\}
+    \\hidden(NodeP, 'compareDocumentPosition', function (other) {
+    \\  if (!(other instanceof Node)) throw new TypeError("Failed to execute 'compareDocumentPosition' on 'Node': parameter 1 is not of type 'Node'.");
+    \\  if (other === this) return 0;
+    \\  const a = ancestry(this), b = ancestry(other);
+    \\  if (a[0] !== b[0]) return 1 | 32 | 4;
+    \\  let i = 0;
+    \\  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+    \\  if (i === a.length) return 16 | 4;
+    \\  if (i === b.length) return 8 | 2;
+    \\  for (let n = a[i].nextSibling; n; n = n.nextSibling) if (n === b[i]) return 4;
+    \\  return 2;
+    \\});
+    \\hidden(NodeP, 'isEqualNode', function (other) {
+    \\  if (!other || this.nodeType !== other.nodeType || this.nodeName !== other.nodeName || this.nodeValue !== other.nodeValue) return false;
+    \\  if (this.nodeType === 1) {
+    \\    const names = this.getAttributeNames();
+    \\    if (this.namespaceURI !== other.namespaceURI || names.length !== other.getAttributeNames().length) return false;
+    \\    for (const n of names) if (this.getAttribute(n) !== other.getAttribute(n)) return false;
+    \\  }
+    \\  const x = this.childNodes, y = other.childNodes;
+    \\  if (x.length !== y.length) return false;
+    \\  for (let i = 0; i < x.length; i++) if (!x[i].isEqualNode(y[i])) return false;
+    \\  return true;
+    \\});
+    \\hidden(NodeP, 'normalize', function () {
+    \\  let n = this.firstChild;
+    \\  while (n) {
+    \\    const next = n.nextSibling;
+    \\    if (n.nodeType === 3) {
+    \\      if (n.data === '') n.remove();
+    \\      else if (next && next.nodeType === 3) {
+    \\        next.data = n.data + next.data;
+    \\        n.remove();
+    \\      }
+    \\    } else if (n.nodeType === 1) n.normalize();
+    \\    n = next;
+    \\  }
+    \\});
+    \\
+    \\// NodeFilter, TreeWalker and NodeIterator (DOM 4, in JavaScript).
+    \\const NodeFilter = { FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3, SHOW_ALL: 0xFFFFFFFF, SHOW_ELEMENT: 0x1, SHOW_ATTRIBUTE: 0x2, SHOW_TEXT: 0x4, SHOW_CDATA_SECTION: 0x8, SHOW_ENTITY_REFERENCE: 0x10, SHOW_ENTITY: 0x20, SHOW_PROCESSING_INSTRUCTION: 0x40, SHOW_COMMENT: 0x80, SHOW_DOCUMENT: 0x100, SHOW_DOCUMENT_TYPE: 0x200, SHOW_DOCUMENT_FRAGMENT: 0x400, SHOW_NOTATION: 0x800 };
+    \\hidden(G, 'NodeFilter', NodeFilter);
+    \\function filterNode(t, n) {
+    \\  if (!(t.whatToShow & (1 << (n.nodeType - 1)))) return 3;
+    \\  const f = t.filter;
+    \\  if (f === null) return 1;
+    \\  return Number(typeof f === 'function' ? f(n) : f.acceptNode(n));
+    \\}
+    \\class TreeWalker {
+    \\  constructor(root, whatToShow, filter) {
+    \\    this.root = root;
+    \\    this.whatToShow = whatToShow === undefined ? 0xFFFFFFFF : whatToShow >>> 0;
+    \\    this.filter = filter || null;
+    \\    this.currentNode = root;
+    \\  }
+    \\  parentNode() {
+    \\    for (let n = this.currentNode; n && n !== this.root;) {
+    \\      n = n.parentNode;
+    \\      if (n && filterNode(this, n) === 1) return (this.currentNode = n);
+    \\    }
+    \\    return null;
+    \\  }
+    \\  _child(first) {
+    \\    let n = first ? this.currentNode.firstChild : this.currentNode.lastChild;
+    \\    while (n) {
+    \\      const r = filterNode(this, n);
+    \\      if (r === 1) return (this.currentNode = n);
+    \\      const inner = r === 3 ? (first ? n.firstChild : n.lastChild) : null;
+    \\      if (inner) {
+    \\        n = inner;
+    \\        continue;
+    \\      }
+    \\      while (n) {
+    \\        const sib = first ? n.nextSibling : n.previousSibling;
+    \\        if (sib) {
+    \\          n = sib;
+    \\          break;
+    \\        }
+    \\        const p = n.parentNode;
+    \\        if (!p || p === this.root || p === this.currentNode) return null;
+    \\        n = p;
+    \\      }
+    \\    }
+    \\    return null;
+    \\  }
+    \\  firstChild() { return this._child(true); }
+    \\  lastChild() { return this._child(false); }
+    \\  _sibling(next) {
+    \\    let n = this.currentNode;
+    \\    if (n === this.root) return null;
+    \\    while (true) {
+    \\      let s = next ? n.nextSibling : n.previousSibling;
+    \\      while (s) {
+    \\        n = s;
+    \\        const r = filterNode(this, n);
+    \\        if (r === 1) return (this.currentNode = n);
+    \\        s = next ? n.firstChild : n.lastChild;
+    \\        if (r === 2 || !s) s = next ? n.nextSibling : n.previousSibling;
+    \\      }
+    \\      n = n.parentNode;
+    \\      if (!n || n === this.root || filterNode(this, n) === 1) return null;
+    \\    }
+    \\  }
+    \\  nextSibling() { return this._sibling(true); }
+    \\  previousSibling() { return this._sibling(false); }
+    \\  previousNode() {
+    \\    let n = this.currentNode;
+    \\    while (n !== this.root) {
+    \\      let s = n.previousSibling;
+    \\      while (s) {
+    \\        n = s;
+    \\        let r = filterNode(this, n);
+    \\        while (r !== 2 && n.lastChild) {
+    \\          n = n.lastChild;
+    \\          r = filterNode(this, n);
+    \\        }
+    \\        if (r === 1) return (this.currentNode = n);
+    \\        s = n.previousSibling;
+    \\      }
+    \\      if (n === this.root || !n.parentNode) return null;
+    \\      n = n.parentNode;
+    \\      if (filterNode(this, n) === 1) return (this.currentNode = n);
+    \\    }
+    \\    return null;
+    \\  }
+    \\  nextNode() {
+    \\    let n = this.currentNode;
+    \\    let r = 1;
+    \\    while (true) {
+    \\      while (r !== 2 && n.firstChild) {
+    \\        n = n.firstChild;
+    \\        r = filterNode(this, n);
+    \\        if (r === 1) return (this.currentNode = n);
+    \\      }
+    \\      let s = null;
+    \\      for (let t = n; t; t = t.parentNode) {
+    \\        if (t === this.root) return null;
+    \\        if (t.nextSibling) {
+    \\          s = t.nextSibling;
+    \\          break;
+    \\        }
+    \\      }
+    \\      if (!s) return null;
+    \\      n = s;
+    \\      r = filterNode(this, n);
+    \\      if (r === 1) return (this.currentNode = n);
+    \\    }
+    \\  }
+    \\}
+    \\// The nodes after and before `n` in tree order, inside `root`.
+    \\function nodeAfter(n, root) {
+    \\  if (n.firstChild) return n.firstChild;
+    \\  for (; n && n !== root; n = n.parentNode) if (n.nextSibling) return n.nextSibling;
+    \\  return null;
+    \\}
+    \\function nodeBefore(n, root) {
+    \\  if (n === root) return null;
+    \\  let p = n.previousSibling;
+    \\  if (!p) return n.parentNode;
+    \\  while (p.lastChild) p = p.lastChild;
+    \\  return p;
+    \\}
+    \\class NodeIterator {
+    \\  constructor(root, whatToShow, filter) {
+    \\    this.root = root;
+    \\    this.whatToShow = whatToShow === undefined ? 0xFFFFFFFF : whatToShow >>> 0;
+    \\    this.filter = filter || null;
+    \\    this.referenceNode = root;
+    \\    this.pointerBeforeReferenceNode = true;
+    \\  }
+    \\  _move(forward) {
+    \\    let n = this.referenceNode;
+    \\    let before = this.pointerBeforeReferenceNode;
+    \\    while (true) {
+    \\      if (forward === before) before = !before;
+    \\      else {
+    \\        n = forward ? nodeAfter(n, this.root) : nodeBefore(n, this.root);
+    \\        if (!n) return null;
+    \\      }
+    \\      if (filterNode(this, n) === 1) {
+    \\        this.referenceNode = n;
+    \\        this.pointerBeforeReferenceNode = before;
+    \\        return n;
+    \\      }
+    \\    }
+    \\  }
+    \\  nextNode() { return this._move(true); }
+    \\  previousNode() { return this._move(false); }
+    \\  detach() {}
+    \\}
+    \\hidden(G, 'TreeWalker', TreeWalker);
+    \\hidden(G, 'NodeIterator', NodeIterator);
+    \\hidden(Document.prototype, 'createTreeWalker', function (root, whatToShow, filter) {
+    \\  if (!(root instanceof Node)) throw new TypeError("Failed to execute 'createTreeWalker' on 'Document': parameter 1 is not of type 'Node'.");
+    \\  return new TreeWalker(root, whatToShow, filter);
+    \\});
+    \\hidden(Document.prototype, 'createNodeIterator', function (root, whatToShow, filter) {
+    \\  if (!(root instanceof Node)) throw new TypeError("Failed to execute 'createNodeIterator' on 'Document': parameter 1 is not of type 'Node'.");
+    \\  return new NodeIterator(root, whatToShow, filter);
+    \\});
+    \\
+    \\// canvas: no drawing yet, so no context (as for an unknown type).
+    \\const CanvasP = HTMLCanvasElement.prototype;
+    \\hidden(CanvasP, 'getContext', function () { return null; });
+    \\hidden(CanvasP, 'toDataURL', function () { return 'data:,'; });
+    \\hidden(CanvasP, 'toBlob', function (cb) { setTimeout(() => cb(null), 0); });
+    \\for (const [k, d] of [['width', 300], ['height', 150]]) {
+    \\  getter(CanvasP, k, function () {
+    \\    const v = parseInt(this.getAttribute(k), 10);
+    \\    return v >= 0 ? v : d;
+    \\  }, function (v) { this.setAttribute(k, String(Number(v) >>> 0)); });
+    \\}
     \\hidden(DocumentFragment.prototype, 'getElementById', function (id) {
     \\  id = String(id);
     \\  for (const el of this.querySelectorAll('[id]')) if (el.id === id) return el;
@@ -876,7 +1100,10 @@ pub let PRELUDE =
     \\  if (x === undefined) return ak.now();
     \\  const name = String(x);
     \\  for (let i = entries.length - 1; i >= 0; i--) if (entries[i].entryType === 'mark' && entries[i].name === name) return entries[i].startTime;
-    \\  if (typeof navigation[name] === 'number') return navigation[name];
+    \\  if (name in timing) {
+    \\    if (timing[name] === 0) throw new DOMException("Failed to execute 'measure' on 'Performance': '" + name + "' is empty: either the event hasn't happened yet, or it would provide cross-origin timing information.", 'InvalidAccessError');
+    \\    return timing[name] - timeOrigin;
+    \\  }
     \\  throw new DOMException("Failed to execute 'measure' on 'Performance': The mark '" + name + "' does not exist.", 'SyntaxError');
     \\}
     \\class PerformanceEntry {
