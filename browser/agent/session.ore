@@ -71,6 +71,8 @@ pub struct Session {
     host: ?dyn Host
     conn: usize
     later: bool
+    // Documents the session gave new refs for (`newDocument`).
+    loads: u64
 }
 
 fn newSession(alloc: Allocator, width: f64, height: f64) AllocError!Session {
@@ -90,6 +92,7 @@ fn newSession(alloc: Allocator, width: f64, height: f64) AllocError!Session {
         host: null,
         conn: 0,
         later: false,
+        loads: 0,
     }
 }
 
@@ -129,6 +132,7 @@ fn newDocument(s: *mut Session) AllocError!void {
     s.ref_of.deinit()
     s.ref_of = IntMap(u32, u32).init(s.alloc)
     s.ref_base = s.next_ref
+    s.loads += 1
     try relayout(s)
     s.tab.settle(maxScroll(s))
 }

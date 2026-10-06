@@ -360,3 +360,13 @@ pub fn cut(tmp: Allocator, t: []u8, max: usize) AllocError![]u8 {
     }
     return concat(tmp, t[..end], "…", "")
 }
+
+/// The node of ref `name` ("e7") on the page of `s`.
+pub fn nodeOfRefIn(s: *Session, name: []u8) ?NodeId {
+    return nodeOfRef(s, name)
+}
+
+/// `a` then `b`.
+pub fn concatText(tmp: Allocator, a: []u8, b: []u8) AllocError![]u8 {
+    return concat(tmp, a, b, "")
+}
