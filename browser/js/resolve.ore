@@ -392,10 +392,11 @@ pub struct Resolver {
                 match self.ast.node(init) {
                     .VarDecl { .. } => {
                         try self.declareFor(init)
+                        try self.stmt(init)
                     }
-                    _ => {}
+                    // An expression (`for (i = 0; ...)`).
+                    _ => try self.expr(init)
                 }
-                try self.stmt(init)
                 try self.expr(cond)
                 try self.expr(update)
                 try self.stmt(body)
