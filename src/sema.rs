@@ -2070,7 +2070,13 @@ impl<'a> Checker<'a> {
                 let args = args.iter().map(|a| self.resolve_type(a)).collect::<Result<Vec<_>>>()?;
                 self.instantiate_type(g, args, t.span)?
             }
-            TypeExprKind::Array(n, elem) => Type::Array(Box::new(self.resolve_type(elem)?), *n),
+            TypeExprKind::Array(len, elem) => {
+                let n = match len {
+                    ast::ArrayLen::Lit(n) => *n,
+                    ast::ArrayLen::Const(e) => self.array_len(e)?,
+                };
+                Type::Array(Box::new(self.resolve_type(elem)?), n)
+            }
             TypeExprKind::Slice(elem, mutable) => Type::Slice(Box::new(self.resolve_type(elem)?), *mutable),
             TypeExprKind::CPtr(elem) => Type::CPtr(Box::new(self.resolve_type(elem)?)),
             TypeExprKind::Ptr(elem, mutable) => Type::Ptr(Box::new(self.resolve_type(elem)?), *mutable),
@@ -2099,6 +2105,23 @@ impl<'a> Checker<'a> {
                 Type::Fn(params, Box::new(ret))
             }
         })
+    }
+
+    /// The value of the constant expression `e`, an array length: an
+    /// integer that the program computes when it is compiled.
+    fn array_len(&mut self, e: &ast::Expr) -> Result<u64> {
+        let t = self.value(e, None)?;
+        if !t.ty.is_int() {
+            return err(E0099, e.span, format!("an array length must be an integer, found `{}`", t.ty));
+        }
+        let not_constant = || Error::new(E0099, e.span, "an array length must be a constant integer: a literal, a `let` constant, or arithmetic on them");
+        match self.fold(&t) {
+            Ok(ConstVal::Int(n)) if n < 0 => err(E0099, e.span, format!("an array length cannot be negative, found `{n}`")),
+            Ok(ConstVal::Int(n)) => Ok(n as u64),
+            Ok(_) => Err(not_constant()),
+            Err(x) if x.code == E0089 && x.msg.contains("global's initializer") => Err(not_constant()),
+            Err(x) => Err(x),
+        }
     }
 
     /// The struct or enum `name`.

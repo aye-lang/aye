@@ -631,13 +631,18 @@ impl Parser {
                         self.expect(&Tok::RBracket)?;
                         TypeExprKind::CPtr(Box::new(self.type_expr()?))
                     }
-                    Tok::Int(n) => {
-                        self.bump();
-                        self.expect(&Tok::RBracket)?;
-                        TypeExprKind::Array(n, Box::new(self.type_expr()?))
-                    }
                     Tok::Ident(n) if n == "_" => return Err(inferred_length(span)),
-                    _ => return Err(self.unexpected("array length (integer literal), `]` or `*`")),
+                    _ => {
+                        let saved = self.enter_nested();
+                        let len = self.expr()?;
+                        self.leave_nested(saved);
+                        self.expect(&Tok::RBracket)?;
+                        let len = match len.kind {
+                            ExprKind::Int(n) => ArrayLen::Lit(n),
+                            _ => ArrayLen::Const(Box::new(len)),
+                        };
+                        TypeExprKind::Array(len, Box::new(self.type_expr()?))
+                    }
                 }
             }
             Tok::Star => {
@@ -1213,7 +1218,7 @@ impl Parser {
                     return Err(inferred_length(span));
                 }
                 let elems = self.array_elems()?;
-                let ty = TypeExpr { kind: TypeExprKind::Array(elems.len() as u64, Box::new(elem)), span };
+                let ty = TypeExpr { kind: TypeExprKind::Array(ArrayLen::Lit(elems.len() as u64), Box::new(elem)), span };
                 ExprKind::ArrayLit { ty, elems }
             }
             Tok::LBracket => {

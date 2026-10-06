@@ -701,8 +701,13 @@ impl Loader<'_> {
                 }
                 self.ty(payload);
             }
-            TypeExprKind::Array(_, e)
-            | TypeExprKind::Slice(e, _)
+            TypeExprKind::Array(len, e) => {
+                if let ast::ArrayLen::Const(x) = len {
+                    self.expr(x);
+                }
+                self.ty(e);
+            }
+            TypeExprKind::Slice(e, _)
             | TypeExprKind::CPtr(e)
             | TypeExprKind::Ptr(e, _)
             | TypeExprKind::Optional(e) => self.ty(e),

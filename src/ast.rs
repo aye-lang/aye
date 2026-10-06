@@ -175,7 +175,7 @@ pub struct TypeExpr {
 pub enum TypeExprKind {
     Named(String),
     /// `[N]T`
-    Array(u64, Box<TypeExpr>),
+    Array(ArrayLen, Box<TypeExpr>),
     /// `[]T` (mutable = false) or `[]mut T` (mutable = true).
     Slice(Box<TypeExpr>, bool),
     /// `[*]T`
@@ -192,6 +192,15 @@ pub enum TypeExprKind {
     Generic(String, Vec<TypeExpr>),
     /// `fn(A, B) R`: a function; no result type is `void`.
     Fn(Vec<TypeExpr>, Option<Box<TypeExpr>>),
+}
+
+/// The length of an array type.
+#[derive(Debug, Clone)]
+pub enum ArrayLen {
+    /// An integer literal, or the elements' count of `[_]T{...}`.
+    Lit(u64),
+    /// A constant expression: `[N]T`, `[N * 2]T`, `[mod.N]T`.
+    Const(Box<Expr>),
 }
 
 #[derive(Debug, Clone)]

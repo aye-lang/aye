@@ -1,0 +1,18 @@
+let F = 1.5
+let NEG = -2
+var V = 3
+
+fn f(n: usize) {
+    let a = [n]u8{1}
+}
+
+struct S {
+    a: [F]u8
+    b: [NEG]u8
+    c: [V]u8
+    d: [unknown]u8
+}
+
+pub fn main() {
+    f(1)
+}

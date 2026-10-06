@@ -1,0 +1,35 @@
+// A constant as an array length: `[N]T` with a `let` constant (typed or
+// untyped integer), or arithmetic on constants, in types and literals.
+
+let N = 3
+let M: usize = 2
+let NPROPS = N + 1
+
+struct Table {
+    names: [NPROPS][]u8
+    counts: [M * 2]u32
+}
+
+let XS = [N]u8{1, 2, 3}
+let PROPS = [NPROPS][]u8{"color", "margin", "padding", "width"}
+
+fn sum(xs: [N]u8) u64 {
+    var total: u64 = 0
+    for x in xs {
+        total += x as u64
+    }
+    return total
+}
+
+pub fn main() {
+    let t = Table { names: PROPS, counts: [M * 2]u32{1, 2, 3, 4} }
+    @println(t.names.len)
+    @println(t.names[3])
+    @println(t.counts[3])
+    @println(sum(XS))
+    var buf = @zeroed([M]i64)
+    buf[1] = 5
+    @println(buf[0] + buf[1])
+    let ys: [N]u8 = XS
+    @println(ys.len)
+}

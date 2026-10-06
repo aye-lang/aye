@@ -1,0 +1,11 @@
+// A `pub` constant of another module as an array length.
+
+import css
+
+pub fn main() {
+    let names: [css.NPROPS][]u8 = css.PROPERTIES
+    @println(names[2])
+    let s = css.style()
+    let v: [css.NPROPS]i64 = s.values
+    @println(v[0] + v[2])
+}

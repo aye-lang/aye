@@ -2045,6 +2045,24 @@ pub fn main() {
 }
 "#,
 }
+E0099 = 99 {
+    "array length is not a constant integer",
+    "The length of an array type, `[N]T`, is known when the program is compiled: an integer literal, a top-level `let` constant of an integer type (also `pub` in another module: `[mod.N]T`), or arithmetic on them. A local, a `var` global, a call, a float or a negative number cannot be a length. For a length known only at run time, allocate a slice: `alloc.alloc(value, n)`.",
+    r#"pub fn main() {
+    var n: usize = 4
+    n += 1
+    let buf = [n]u8{1, 2, 3, 4, 5}
+    @println(buf.len)
+}
+"#,
+    r#"let N = 5
+
+pub fn main() {
+    let buf = [N]u8{1, 2, 3, 4, 5}
+    @println(buf.len)
+}
+"#,
+}
 }
 
 #[cfg(test)]

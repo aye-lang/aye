@@ -119,7 +119,8 @@ type        = path                     (* i8 i16 i32 i64 isize u8 u16 u32 u64
                                           usize f32 f64 bool, a struct or an enum,
                                           a comptime parameter, mod.Name *)
             | path "(" [ type { "," type } [ "," ] ] ")"    (* instance of a type function  Pool(Node) *)
-            | "[" int_lit "]" type     (* fixed array      [N]T *)
+            | "[" expr "]" type        (* fixed array      [N]T; the length is a
+                                          constant integer expression: 3, N, mod.N, N * 2 *)
             | "[" "]" [ "mut" ] type   (* slice            []T, []mut T (writable elements) *)
             | "[" "*" "]" type         (* C pointer (FFI)  [*]T *)
             | "*" [ "mut" ] type       (* pointer          *T, *mut T *)
@@ -226,7 +227,7 @@ primary     = int_lit | float_lit | string_lit | char_lit
             | path "(" [ args ] ")" "{" [ field_init { "," field_init } [ "," ] ] "}"
                                                            (* literal of a type function's struct:
                                                               Pair(i64) { ... }; the args are types *)
-            | "[" ( int_lit | "_" ) "]" type "{" [ args ] "}"   (* array literal; [_]: length from
+            | "[" ( expr | "_" ) "]" type "{" [ args ] "}"   (* array literal; [_]: length from
                                                               the elements, only here *)
             | "[" "]" [ "mut" ] type "{" "}"               (* the empty slice []T{} *)
             | struct_type                                  (* only after `return` in a type function *)

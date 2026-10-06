@@ -1,0 +1,11 @@
+pub let NPROPS = 3
+
+pub let PROPERTIES = [NPROPS][]u8{"color", "margin", "width"}
+
+pub struct Style {
+    values: [NPROPS]i64
+}
+
+pub fn style() Style {
+    return Style { values: [NPROPS]i64{1, 2, 3} }
+}
