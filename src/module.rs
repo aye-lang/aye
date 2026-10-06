@@ -35,7 +35,7 @@ pub struct SourceFile {
 }
 
 /// std, embedded: (module, file name, source).
-const STD_FILES: &[(&str, &str, &str)] = &[
+pub const STD_FILES: &[(&str, &str, &str)] = &[
     ("std.fs", "std/fs/fs.ore", include_str!("../std/fs/fs.ore")),
     ("std.heap", "std/heap/heap.ore", include_str!("../std/heap/heap.ore")),
     ("std.list", "std/list/list.ore", include_str!("../std/list/list.ore")),

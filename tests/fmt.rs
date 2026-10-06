@@ -1,4 +1,4 @@
-//! `ore fmt`.
+//! `ore fmt` and `ore doc`.
 //!
 //! - `tests/fmt/X.in` formats to exactly `X.out`, and `X.out` is already
 //!   formatted.
@@ -6,7 +6,7 @@
 //!   formats idempotently, and `ore check` gives the formatted file the
 //!   same diagnostics (code, message, and line after the formatter's line
 //!   map).
-//! - The `ore fmt` command.
+//! - The `ore fmt --check` and `ore doc --signatures` commands.
 
 use ore::diag::Diag;
 use std::path::{Path, PathBuf};
@@ -112,4 +112,21 @@ fn fmt_command() {
     assert!(err.contains("b.ore:1:10: error[E0002]"), "{err}");
     assert_eq!(std::fs::read_to_string(&clean).unwrap(), "let x = 1;\n");
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn doc_command() {
+    let (code, out, err) = ore(&["doc", "--signatures", "std"]);
+    assert_eq!(code, 0, "{err}");
+    for m in ["std.fs", "std.mem", "std.text", "std.time"] {
+        assert!(out.contains(&format!("// module {m}\n")), "{m} missing:\n{out}");
+    }
+    assert!(out.contains("pub fn open("), "{out}");
+    assert!(!out.contains("    let ") && !out.contains("    if "), "a body leaked:\n{out}");
+    let (code, out, _) = ore(&["doc", "--signatures", root().join("tests/modules/multi").to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(out.contains("\n// module shapes\n\npub struct Counter {\n    n: i64\n    pub fn init() Counter\n"), "{out}");
+    let (code, _, err) = ore(&["doc", "--signatures", "std.nope"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("no std module"), "{err}");
 }

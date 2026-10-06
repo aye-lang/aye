@@ -5,6 +5,7 @@ pub mod ast;
 pub mod cgen;
 pub mod codes;
 pub mod diag;
+pub mod doc;
 pub mod driver;
 pub mod fmt;
 pub mod lexer;

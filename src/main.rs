@@ -1,4 +1,4 @@
-use ore::{codes, diag, fmt};
+use ore::{codes, diag, doc, fmt};
 use ore::driver::{self, Mode, Root};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -11,6 +11,7 @@ const USAGE: &str = "usage (<path> is a .ore file, or a directory: a module of a
   ore fix <path>
   ore test <path> [--filter <text>] [--json] [--mode debug|safe|fast]
   ore fmt [--check] <path>      (<path>: a .ore file, or a directory searched recursively)
+  ore doc --signatures <path>   (<path> may also be `std` or `std.<module>`)
   ore explain <code>
   ore spec";
 
@@ -62,6 +63,7 @@ fn main() -> ExitCode {
     }
     match std::env::args().nth(1).as_deref() {
         Some("fmt") => return fmt_cmd(std::env::args().skip(2).collect()),
+        Some("doc") => return doc_cmd(std::env::args().skip(2).collect()),
         _ => {}
     }
     if std::env::args().nth(1).as_deref() == Some("explain") {
@@ -242,6 +244,29 @@ fn ore_files(path: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// `ore doc --signatures <path>`: the pub declarations of the modules at
+/// `path` (see `doc::signatures`).
+fn doc_cmd(args: Vec<String>) -> ExitCode {
+    let [flag, path] = &args[..] else {
+        eprintln!("ore: `doc` needs `--signatures` and one path\n{USAGE}");
+        return ExitCode::from(2);
+    };
+    if flag != "--signatures" {
+        eprintln!("ore: unexpected argument `{flag}`\n{USAGE}");
+        return ExitCode::from(2);
+    }
+    match doc::signatures(path) {
+        Ok(text) => {
+            print!("{text}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// `ore fix`: apply the fix-its that `ore check` reports, in place, and
