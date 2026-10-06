@@ -22,7 +22,7 @@
 use crate::ast::{self, ArmBody, ExprKind, Item as AstItem, StmtKind, TypeExprKind};
 use crate::codes::*;
 use crate::diag::{Error, Span};
-use crate::{lexer, parser};
+use crate::{cimport, lexer, parser};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -142,6 +142,11 @@ struct Module {
     path: String,
     files: Vec<usize>,
     items: HashMap<String, Decl>,
+    /// `let c = @cimport(...)` declarations, with their files.
+    cimports: Vec<(ast::CImportDecl, usize)>,
+    /// The libraries of `@link` and `@linkOptional` (`@cimport` uses their
+    /// `pkg-config --cflags`).
+    links: Vec<String>,
     /// A file of the module has syntax errors: names in it are not known,
     /// so lookups that fail are not reported.
     broken: bool,
@@ -217,6 +222,8 @@ struct Loader<'a> {
     asts: Vec<Option<ast::File>>,
     modules: Vec<Module>,
     by_path: HashMap<String, Option<usize>>,
+    /// The modules made by `@cimport`, by request (`None` after an error).
+    cimported: HashMap<String, Option<usize>>,
     /// The modules each module uses, with the first import or use.
     edges: Vec<Vec<(usize, Span)>>,
     errors: Vec<Error>,
@@ -241,6 +248,7 @@ pub fn load(root: Vec<SourceFile>, base: &Path, doc_tests: bool) -> (Vec<SourceF
         asts: Vec::new(),
         modules: Vec::new(),
         by_path: HashMap::new(),
+        cimported: HashMap::new(),
         edges: Vec::new(),
         errors: Vec::new(),
         cur: 0,
@@ -362,7 +370,8 @@ impl Loader<'_> {
     /// Parse the files of a new module and register its items.
     fn add_module(&mut self, path: String, files: Vec<SourceFile>) -> usize {
         let m = self.modules.len();
-        let mut module = Module { path: path.clone(), files: Vec::new(), items: HashMap::new(), broken: false };
+        let mut module =
+            Module { path: path.clone(), files: Vec::new(), items: HashMap::new(), cimports: Vec::new(), links: Vec::new(), broken: false };
         for f in files {
             let id = self.files.len();
             let set = |s: &mut Span| s.file = id as u16;
@@ -396,7 +405,15 @@ impl Loader<'_> {
                             AstItem::ErrorSet(e) => (&e.name, e.span, e.is_pub, Kind::Other),
                             AstItem::Interface(i) => (&i.name, i.span, i.is_pub, Kind::Other),
                             AstItem::Global(g) => (&g.name, g.span, g.is_pub, Kind::Struct),
-                            AstItem::Test(_) | AstItem::Link(_) => continue,
+                            AstItem::Link(l) => {
+                                module.links.push(l.name.clone());
+                                continue;
+                            }
+                            AstItem::CImport(c) => {
+                                module.cimports.push((c.clone(), id));
+                                continue;
+                            }
+                            AstItem::Test(_) => continue,
                         };
                         module.items.entry(name.clone()).or_insert(Decl { is_pub, kind, span });
                     }
@@ -484,12 +501,15 @@ impl Loader<'_> {
     }
 
     fn resolve_module(&mut self, m: usize) {
+        self.cur = m;
+        let cimports = self.cimports(m);
         for i in 0..self.modules[m].files.len() {
             let f = self.modules[m].files[i];
             let Some(mut ast) = self.asts[f].take() else { continue };
             self.cur = m;
             self.file = f;
-            self.imports = HashMap::new();
+            // A `@cimport` binds its name in every file of the module.
+            self.imports = cimports.iter().map(|(n, b, sp)| (n.clone(), (b.clone(), *sp))).collect();
             self.last_import = ast.imports.last().map(|i| i.span);
             for imp in &ast.imports {
                 self.import(imp);
@@ -502,6 +522,76 @@ impl Loader<'_> {
             }
             self.asts[f] = Some(ast);
         }
+    }
+
+    /// The `@cimport`s of module `m`: each name with the generated module
+    /// (made the first time a program imports a header with those flags
+    /// from that directory) and the declaration's position.
+    fn cimports(&mut self, m: usize) -> Vec<(String, Binding, Span)> {
+        let decls = self.modules[m].cimports.clone();
+        let links = self.modules[m].links.clone();
+        let mut out: Vec<(String, Binding, Span)> = Vec::new();
+        for (d, file) in decls {
+            if let Some((_, _, prev)) = out.iter().find(|(n, ..)| *n == d.name) {
+                let msg = format!("`{}` is declared more than once (first at {})", d.name, self.place(*prev, d.span));
+                self.report(Error::new(E0015, d.span, msg));
+                continue;
+            }
+            if let Some(prev) = self.modules[m].items.get(&d.name) {
+                let msg = format!("the `@cimport` named `{}` clashes with the declaration at {} (rename one)", d.name, self.place(prev.span, d.span));
+                self.report(Error::new(E0015, d.span, msg));
+                continue;
+            }
+            let dir = Path::new(&self.files[file].name).parent().unwrap_or(Path::new("")).to_path_buf();
+            let req = cimport::Request { header: d.header.clone(), flags: d.flags.clone(), dir, links: links.clone() };
+            let key = format!("{req:?}");
+            let q = match self.cimported.get(&key) {
+                Some(&q) => q,
+                None => {
+                    let q = match cimport::import(&req) {
+                        Ok(imp) => {
+                            let path = self.cimport_path(&d.name);
+                            let file = SourceFile { name: imp.path.to_string_lossy().into_owned(), text: imp.source, std: false };
+                            let q = self.add_module(path.clone(), vec![file]);
+                            // Not a module that `import` can find.
+                            self.by_path.remove(&path);
+                            Some(q)
+                        }
+                        Err(cimport::Failure::NoLibclang(msg)) => {
+                            self.report(Error::new(E0114, d.call_span, msg));
+                            None
+                        }
+                        Err(cimport::Failure::Header(msg)) => {
+                            self.report(Error::new(E0113, d.call_span, msg));
+                            None
+                        }
+                    };
+                    self.cimported.insert(key, q);
+                    q
+                }
+            };
+            let b = match q {
+                Some(q) => {
+                    self.edge(q, d.span);
+                    Binding::Module(q)
+                }
+                None => Binding::Bad,
+            };
+            out.push((d.name, b, d.span));
+        }
+        out
+    }
+
+    /// The path of a module made by `@cimport` and named `name`: `name`,
+    /// unless a module or a directory already has it.
+    fn cimport_path(&self, name: &str) -> String {
+        let mut path = name.to_string();
+        let mut n = 2;
+        while self.modules.iter().any(|m| m.path == path) || self.by_path.contains_key(&path) || self.base.join(&path).is_dir() {
+            path = format!("{name}{n}");
+            n += 1;
+        }
+        path
     }
 
     /// `import a.b.c`: bind `c` in the current file to a module or an item.
@@ -776,7 +866,7 @@ impl Loader<'_> {
                 }
             }
             AstItem::Test(t) => self.func(&mut t.func),
-            AstItem::Link(_) => {}
+            AstItem::Link(_) | AstItem::CImport(_) => {}
         }
     }
 
@@ -1144,6 +1234,7 @@ impl Loader<'_> {
                         AstItem::Interface(x) => x.name = canonical(&path, &x.name),
                         AstItem::Global(x) => x.name = canonical(&path, &x.name),
                         AstItem::Link(_) => {}
+                        AstItem::CImport(_) => continue,
                     }
                     items.push(item);
                 }

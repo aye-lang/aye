@@ -966,6 +966,11 @@ const TYPE_NAMES: &[&str] = &[
     "c_uint", "c_long", "c_ulong", "c_longlong", "c_ulonglong",
 ];
 
+/// Is `name` a primitive or predeclared type name?
+pub fn is_type_name(name: &str) -> bool {
+    TYPE_NAMES.contains(&name)
+}
+
 /// The module of the canonical name `name` (`util` for `util::f`; `""`
 /// for the root module).
 fn module_of(name: &str) -> &str {
@@ -1188,6 +1193,8 @@ impl<'a> Checker<'a> {
                 ast::Item::Fn(f) => (&f.name, f.span),
                 ast::Item::Interface(i) => (&i.name, i.span),
                 ast::Item::Global(g) => (&g.name, g.span),
+                // The module loader replaces each with a module.
+                ast::Item::CImport(_) => continue,
                 ast::Item::Link(l) => {
                     let list = if l.optional { &mut self.optional_links } else { &mut self.links };
                     if !list.contains(&l.name) {
@@ -1235,7 +1242,7 @@ impl<'a> Checker<'a> {
                     self.generics.insert(f.name.clone(), f);
                 }
                 ast::Item::Global(g) => self.global_decls.push(g),
-                ast::Item::Fn(_) | ast::Item::Test(_) | ast::Item::Link(_) => {}
+                ast::Item::Fn(_) | ast::Item::Test(_) | ast::Item::Link(_) | ast::Item::CImport(_) => {}
             }
             items.push(item);
         }
@@ -1310,7 +1317,7 @@ impl<'a> Checker<'a> {
                     let methods = self.iface_methods(i);
                     self.ifaces.get_mut(&i.name).unwrap().methods = methods;
                 }
-                ast::Item::ErrorSet(_) | ast::Item::Fn(_) | ast::Item::Test(_) | ast::Item::Global(_) | ast::Item::Link(_) => {}
+                ast::Item::ErrorSet(_) | ast::Item::Fn(_) | ast::Item::Test(_) | ast::Item::Global(_) | ast::Item::Link(_) | ast::Item::CImport(_) => {}
             }
         }
         for item in &items {
@@ -1479,7 +1486,7 @@ impl<'a> Checker<'a> {
                 ast::Item::Struct(s) => structs.push(self.structs[&s.name].clone()),
                 ast::Item::Enum(e) => enums.push(self.enums[&e.name].clone()),
                 ast::Item::Interface(i) => ifaces.push(self.ifaces[&i.name].clone()),
-                ast::Item::ErrorSet(_) | ast::Item::Fn(_) | ast::Item::Test(_) | ast::Item::Global(_) | ast::Item::Link(_) => {}
+                ast::Item::ErrorSet(_) | ast::Item::Fn(_) | ast::Item::Test(_) | ast::Item::Global(_) | ast::Item::Link(_) | ast::Item::CImport(_) => {}
             }
         }
         let globals = self
@@ -3649,6 +3656,9 @@ impl<'a> Checker<'a> {
                 return self.c_builtin(name, args, span);
             }
             ExprKind::Builtin { name, args } if name == "downcast" => return self.downcast(args, span),
+            ExprKind::Builtin { name, .. } if name == "cimport" => {
+                return err(E0112, span, "`@cimport` is a declaration at the top level of a file, not a value: `let c = @cimport(\"zlib.h\")`, then `c.name`");
+            }
             ExprKind::Builtin { name, args } if name == "embedFile" => {
                 (TExprKind::Str(self.embed_file(args, span)?), Type::Slice(Box::new(Type::Int(IntTy::U8)), false))
             }

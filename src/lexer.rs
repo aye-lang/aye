@@ -83,6 +83,11 @@ const KEYWORDS: &[(&str, Kw)] = &[
     ("is", Kw::Is),
 ];
 
+/// Is `word` an Ore keyword (`@cimport` renames C names that are)?
+pub fn is_keyword(word: &str) -> bool {
+    KEYWORDS.iter().any(|(k, _)| *k == word)
+}
+
 impl Kw {
     pub fn as_str(self) -> &'static str {
         KEYWORDS.iter().find(|(_, k)| *k == self).map(|(s, _)| *s).unwrap()
