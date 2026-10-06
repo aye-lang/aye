@@ -1211,14 +1211,16 @@ pub fn main() {
   and `.f(...)`: `Pair(i64) { ... }`, `Pool(Node).init(a)`.
 - A generic is checked once where it is defined. A value of type `T` can be
   copied, moved, pointed to, stored in arrays, slices and optionals, and
-  allocated; it has no fields, operators or methods except the methods of
-  its `where` constraints. `where T: A, T: B` (no `+`) follows the return
+  allocated; it has no fields, operators or methods except those of its
+  `where` constraints. `where T: A, T: B` (no `+`) follows the return
   type. A type argument that does not satisfy a constraint is an error at
   the instantiation.
-- `where T: Integer` is built in: only integer types satisfy it, and a `T`
-  value converts with `as` to any numeric type (`x as u64`, which panics if
-  the value does not fit, as for any integer). That is all: no operators or
-  literals on `T`, and nothing converts to `T`.
+- `where T: Integer` is built in: only integer types satisfy it. A `T`
+  then has the integer operators (arithmetic, bitwise, shifts,
+  comparisons), integer literals take type `T`, and `as` converts between
+  `T` and any numeric type (panicking if the value does not fit). Each
+  instance is checked again with its type: `-x` or the literal `300` with
+  `T = u8` is an error that names the instance.
 
 ```ore
 fn total(comptime T: type, xs: []T) i64 where T: Integer {
@@ -1229,9 +1231,20 @@ fn total(comptime T: type, xs: []T) i64 where T: Integer {
     return s
 }
 
+fn countAbove(comptime T: type, xs: []T, limit: T) T where T: Integer {
+    var n: T = 0
+    for x in xs {
+        if x > limit {
+            n += 1
+        }
+    }
+    return n
+}
+
 pub fn main() {
     var b = [2]u8{200, 100}
     @println(total(u8, b[..]))
+    @println(countAbove(u8, b[..], 150))
 }
 ```
 - Generic functions and methods of a type function's struct must spell out
@@ -1553,9 +1566,29 @@ std.math.inf() f64                         positive infinity; -inf() is negative
 std.math.nan() f64                         a NaN (not equal to itself)
 std.math.isNan(x: f64) bool
 std.math.isInf(x: f64) bool                either sign
+std.math.trunc(x: f64) f64                 toward zero; also libm:
+std.math.fmod(x: f64, y: f64) f64          remainder with the sign of x
+std.math.sin(x: f64) f64                   radians, as cos, tan
+std.math.cos(x: f64) f64
+std.math.tan(x: f64) f64
+std.math.asin(x: f64) f64                  NaN outside -1..=1, as acos
+std.math.acos(x: f64) f64
+std.math.atan(x: f64) f64
+std.math.atan2(y: f64, x: f64) f64         angle of (x, y), -pi..=pi
+std.math.exp(x: f64) f64
+std.math.log(x: f64) f64                   natural; as log2, log10
+std.math.log2(x: f64) f64
+std.math.log10(x: f64) f64
+std.math.hypot(x: f64, y: f64) f64         sqrt(x*x + y*y) without overflow
+std.math.sign(x: f64) f64                  -1, 0 or 1; NaN for NaN
+std.math.minOf(comptime T: type, a: T, b: T) T where T: Integer
+std.math.maxOf(comptime T: type, a: T, b: T) T where T: Integer
+std.math.absOf(comptime T: type, x: T) T where T: Integer        panics on the minimum of a signed T
+std.math.clampOf(comptime T: type, x: T, lo: T, hi: T) T where T: Integer
 ```
 
-Only `f64`: Ore has no generic arithmetic. Convert with `as`.
+The float functions take `f64` (convert an `f32` with `as`); the integer
+ones any integer type: `std.math.minOf(i32, a, b)`.
 
 ### std.sort
 

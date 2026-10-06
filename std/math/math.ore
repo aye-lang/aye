@@ -1,5 +1,5 @@
-// std.math: float math on `f64`. `sqrt`, `floor`, `ceil`, `round` and
-// `pow` are C's libm functions.
+// std.math: float math on `f64` (most functions are C's libm), and
+// `minOf`, `maxOf`, `absOf` and `clampOf` on any integer type.
 
 pub let pi: f64 = 3.141592653589793
 
@@ -17,6 +17,59 @@ pub extern fn round(x: f64) f64
 
 /// `x` to the power `y`.
 pub extern fn pow(x: f64, y: f64) f64
+
+/// `x` without its fraction: the integer value toward zero.
+pub extern fn trunc(x: f64) f64
+
+/// The remainder of `x / y`, with the sign of `x`.
+pub extern fn fmod(x: f64, y: f64) f64
+
+/// The sine of `x` (radians).
+pub extern fn sin(x: f64) f64
+
+/// The cosine of `x` (radians).
+pub extern fn cos(x: f64) f64
+
+/// The tangent of `x` (radians).
+pub extern fn tan(x: f64) f64
+
+/// The arc sine, in `-pi/2..=pi/2`; NaN outside `-1..=1`.
+pub extern fn asin(x: f64) f64
+
+/// The arc cosine, in `0..=pi`; NaN outside `-1..=1`.
+pub extern fn acos(x: f64) f64
+
+/// The arc tangent, in `-pi/2..=pi/2`.
+pub extern fn atan(x: f64) f64
+
+/// The angle of the point `(x, y)`, in `-pi..=pi`.
+pub extern fn atan2(y: f64, x: f64) f64
+
+/// `e` to the power `x`.
+pub extern fn exp(x: f64) f64
+
+/// The natural logarithm; NaN for a negative `x`, `-inf()` for 0.
+pub extern fn log(x: f64) f64
+
+/// The base-2 logarithm.
+pub extern fn log2(x: f64) f64
+
+/// The base-10 logarithm.
+pub extern fn log10(x: f64) f64
+
+/// `sqrt(x * x + y * y)`, without overflow in between.
+pub extern fn hypot(x: f64, y: f64) f64
+
+/// -1, 0 or 1 by the sign of `x` (0 for -0.0 too); NaN for a NaN.
+pub fn sign(x: f64) f64 {
+    if x > 0.0 {
+        return 1.0
+    }
+    if x < 0.0 {
+        return -1.0
+    }
+    return x
+}
 
 pub fn min(a: f64, b: f64) f64 {
     if b < a {
@@ -66,4 +119,34 @@ extern fn ore_std_nan() f64
 /// `x` limited to `lo..=hi`.
 pub fn clamp(x: f64, lo: f64, hi: f64) f64 {
     return min(max(x, lo), hi)
+}
+
+/// The smaller of two integers of type `T`: `minOf(i32, a, b)`.
+pub fn minOf(comptime T: type, a: T, b: T) T where T: Integer {
+    if b < a {
+        return b
+    }
+    return a
+}
+
+/// The larger of two integers of type `T`.
+pub fn maxOf(comptime T: type, a: T, b: T) T where T: Integer {
+    if b > a {
+        return b
+    }
+    return a
+}
+
+/// The absolute value of an integer; overflows (a panic) for the most
+/// negative value of a signed type.
+pub fn absOf(comptime T: type, x: T) T where T: Integer {
+    if x < 0 {
+        return 0 - x
+    }
+    return x
+}
+
+/// `x` limited to `lo..=hi`.
+pub fn clampOf(comptime T: type, x: T, lo: T, hi: T) T where T: Integer {
+    return minOf(T, maxOf(T, x, lo), hi)
 }

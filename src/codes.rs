@@ -624,7 +624,7 @@ E0036 = 36 {
 }
 E0037 = 37 {
     "invalid cast",
-    "`as` converts only between numeric types. Other conversions are written out, for example with `if`. In a generic, a `T` converts with `as` only with `where T: Integer`, and nothing converts to `T`.",
+    "`as` converts only between numeric types. Other conversions are written out, for example with `if`. In a generic, a `T` converts with `as` (to and from numeric types) only with `where T: Integer`.",
     r#"pub fn main() {
     let flag = true
     let n = flag as i32

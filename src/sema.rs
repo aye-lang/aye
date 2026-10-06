@@ -704,6 +704,11 @@ struct Checker<'a> {
     instances: HashMap<(String, Vec<Type>), String>,
     /// Instance structs in order of creation.
     instance_structs: Vec<String>,
+    /// Where each instance for concrete types was first made: errors in
+    /// its body (a literal that does not fit its integer type) name it.
+    instance_sites: HashMap<String, Span>,
+    /// The instance whose body is being checked, and its site.
+    in_instance: Option<(String, Span)>,
     /// The names of every instance (`instances`' values).
     instance_names: HashSet<String>,
     /// The nesting depth of each instance struct (see `type_depth`).
@@ -793,6 +798,8 @@ pub fn check(file: &ast::File, require_main: bool, files: &[String]) -> std::res
         instance_structs: Vec::new(),
         instance_depth: HashMap::new(),
         instance_names: HashSet::new(),
+        instance_sites: HashMap::new(),
+        in_instance: None,
         abstract_structs: HashSet::new(),
         bounds: HashMap::new(),
         defined: HashSet::new(),
@@ -1102,6 +1109,9 @@ impl<'a> Checker<'a> {
             while let Some(i) = e.msg.find(")#") {
                 let digits = e.msg[i + 2..].chars().take_while(char::is_ascii_digit).count();
                 e.msg.replace_range(i + 1..i + 2 + digits, "");
+            }
+            if let Some((name, site)) = self.in_instance.as_ref().filter(|_| e.code != E0080) {
+                e.msg = format!("{} (in the instance `{name}` made at {})", e.msg, self.place(*site, e.span));
             }
             // Canonical names of other modules are shown as paths.
             e.msg = e.msg.replace("::", ".");
@@ -1795,11 +1805,19 @@ impl<'a> Checker<'a> {
         matches!(t, Type::Param(g, p) if self.bounds.get(&(g.clone(), p.clone())).is_some_and(|v| v.iter().any(|i| i == INTEGER)))
     }
 
-    /// The hint for an operator applied to a type parameter with `where T: Integer`.
+    /// Is `t` an integer type, or a type parameter with `where T: Integer`
+    /// (which has the integer operators and literals; each instance is
+    /// checked again with its integer type)?
+    fn int_like(&self, t: &Type) -> bool {
+        t.is_int() || self.integer_param(t)
+    }
+
+    /// The hint for an operator applied to a type parameter without
+    /// `where T: Integer`.
     fn integer_hint(&self, t: &Type) -> String {
         match t {
-            Type::Param(_, p) if self.integer_param(t) => {
-                format!(" (`where {p}: Integer` allows only `as`: convert first, e.g. `x as i64`)")
+            Type::Param(_, p) if !self.integer_param(t) => {
+                format!(" (`{p}` is a `comptime` type: add `where {p}: Integer` for the integer operators)")
             }
             _ => String::new(),
         }
@@ -1933,6 +1951,9 @@ impl<'a> Checker<'a> {
         let depth = self.instance_depth(g, &key.1, span)?;
         let name = self.instance_name(g, &key.1);
         self.instance_names.insert(name.clone());
+        if !key.1.iter().any(|t| self.has_param(t)) {
+            self.instance_sites.insert(name.clone(), span);
+        }
         self.instances.insert(key.clone(), name.clone());
         self.instance_structs.push(name.clone());
         self.instance_depth.insert(name.clone(), depth);
@@ -1998,6 +2019,9 @@ impl<'a> Checker<'a> {
         self.instance_depth(g, &key.1, span)?;
         let name = self.instance_name(g, &key.1);
         self.instance_names.insert(name.clone());
+        if !key.1.iter().any(|t| self.has_param(t)) {
+            self.instance_sites.insert(name.clone(), span);
+        }
         self.instances.insert(key.clone(), name.clone());
         let identity = key.1 == self.own_params(decl);
         let is_abstract = key.1.iter().any(|t| self.has_param(t));
@@ -2488,6 +2512,8 @@ impl<'a> Checker<'a> {
         self.self_ty = owner;
         self.env = env;
         self.in_test = is_test(name);
+        let owner_site = self.self_ty.as_ref().and_then(|s| self.instance_sites.get(s).map(|&at| (s.clone(), at)));
+        self.in_instance = self.instance_sites.get(name).map(|&at| (name.to_string(), at)).or(owner_site);
         self.vars.clear();
         self.scopes = vec![HashMap::new()];
         self.ret = sig.ret.clone();
@@ -2506,6 +2532,7 @@ impl<'a> Checker<'a> {
                 format!("function `{name}` must return a value of type `{}` on every path", sig.ret),
             ));
         }
+        self.in_instance = None;
         FnDef {
             name: name.to_string(),
             params,
@@ -3254,6 +3281,10 @@ impl<'a> Checker<'a> {
                 return Ok(TExpr { kind: TExprKind::Float(v as f64), ty: expected.unwrap().clone(), span });
             }
             Some(t @ Type::Int(_)) => t.clone(),
+            // Checked again with the integer type of each instance.
+            Some(t @ Type::Param(..)) if self.integer_param(t) => {
+                return Ok(TExpr { kind: TExprKind::Int(v), ty: t.clone(), span });
+            }
             Some(t) => return err(E0023, span, format!("mismatched types: expected `{t}`, found integer literal")),
             None => I64,
         };
@@ -3275,7 +3306,7 @@ impl<'a> Checker<'a> {
 
     fn arith_operand_ok(&self, op: BinOp, ty: &Type, span: Span) -> Result<()> {
         let ok = match op {
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => ty.is_numeric(),
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => ty.is_numeric() || self.integer_param(ty),
             BinOp::Rem
             | BinOp::AddWrap
             | BinOp::SubWrap
@@ -3284,7 +3315,7 @@ impl<'a> Checker<'a> {
             | BinOp::BitOr
             | BinOp::BitXor
             | BinOp::Shl
-            | BinOp::Shr => ty.is_int(),
+            | BinOp::Shr => self.int_like(ty),
             _ => unreachable!(),
         };
         if !ok {
@@ -3492,7 +3523,7 @@ impl<'a> Checker<'a> {
                     let r = self.expect(rhs, &Type::Bool)?;
                     (TExprKind::Binary { op, lhs: Box::new(l), rhs: Box::new(r) }, Type::Bool)
                 } else {
-                    let hint = if op.is_arith() { expected.filter(|t| t.is_numeric()) } else { None };
+                    let hint = if op.is_arith() { expected.filter(|t| t.is_numeric() || self.integer_param(t)) } else { None };
                     let eq = matches!(op, BinOp::Eq | BinOp::Ne);
                     let (mut l, mut r) = if eq { self.eq_operands(lhs, rhs)? } else { self.operand_pair(lhs, rhs, hint)? };
                     // `?T == T`: the `T` is wrapped, and two `?T` compare.
@@ -3523,7 +3554,7 @@ impl<'a> Checker<'a> {
                                 return err(E0025, span, format!("operator `{}` cannot be applied to `{}`: {why}", op.as_str(), l.ty));
                             }
                             None if eq => true,
-                            _ => l.ty.is_numeric(),
+                            _ => l.ty.is_numeric() || self.integer_param(&l.ty),
                         };
                         if !ok {
                             return err(E0025, span, format!(
@@ -3542,11 +3573,11 @@ impl<'a> Checker<'a> {
                 ExprKind::Int(v) => return self.int_lit(-(*v as i128), span, expected),
                 ExprKind::Float(v) => return self.float_lit(-*v, span, expected),
                 _ => {
-                    let t = self.value(expr, expected.filter(|t| t.is_numeric()))?;
+                    let t = self.value(expr, expected.filter(|t| t.is_numeric() || self.integer_param(t)))?;
                     let ok = match &t.ty {
                         Type::Int(i) => i.signed(),
                         Type::Float(_) => true,
-                        _ => false,
+                        t => self.integer_param(t),
                     };
                     if !ok {
                         return err(E0025, span, format!("cannot negate a value of type `{}`", t.ty));
@@ -3556,8 +3587,8 @@ impl<'a> Checker<'a> {
                 }
             },
             ExprKind::Unary { op: UnOp::BitNot, expr } => {
-                let t = self.value(expr, expected.filter(|t| t.is_int()))?;
-                if !t.ty.is_int() {
+                let t = self.value(expr, expected.filter(|t| self.int_like(t)))?;
+                if !self.int_like(&t.ty) {
                     return err(E0025, span, format!("operator `~` requires an integer, found `{}`", t.ty));
                 }
                 let ty = t.ty.clone();
@@ -3593,10 +3624,10 @@ impl<'a> Checker<'a> {
                 let to = self.resolve_type(ty)?;
                 let t = self.value(expr, None)?;
                 // A `T` with `where T: Integer` converts like an integer.
-                if !(t.ty.is_numeric() || self.integer_param(&t.ty)) || !to.is_numeric() {
+                if !(t.ty.is_numeric() || self.integer_param(&t.ty)) || !(to.is_numeric() || self.integer_param(&to)) {
                     let hint = match (&t.ty, &to) {
                         (Type::Param(_, p), _) if to.is_numeric() => format!(" (add `where {p}: Integer` to convert it like an integer)"),
-                        (_, Type::Param(_, p)) => format!(" (nothing converts to the `comptime` type `{p}`)"),
+                        (_, Type::Param(_, p)) => format!(" (add `where {p}: Integer` to convert numbers to it)"),
                         _ => " (only numeric casts are supported)".to_string(),
                     };
                     return err(E0037, span, format!("cannot cast `{}` to `{to}`{hint}", t.ty));
