@@ -13,9 +13,10 @@ B8 the real web) and **Status**.
 
 Every entry was checked again against `target/release/ore` at the M9.8
 head (M9.9's re-check) with a small program per entry: the repro, or
-the milestone's feature form (`ore run`, `ore test`). "Browser still
-uses the workaround" means the old code is still there and can now be
-simplified.
+the milestone's feature form (`ore run`, `ore test`); M9.9 then fixed
+entries 7, 8 and 22. "Browser still uses the workaround" means the old
+code is still there and can now be simplified; small local ones were
+removed in cff3f60.
 
 ## Open
 
@@ -75,7 +76,17 @@ simplified.
 - **Status:** partly fixed (writes, in debug mode). A check at the use
   of a stale pointer is deferred in decisions.md (M9.9).
 
-### Structs and initialization
+### Smaller things
+
+#### 21. No tuples or multiple results
+
+- **Workaround:** small structs carry pairs out of functions (`MinMax`,
+  `Flow`, `OpenFrag`, `KindOf` in layout). Fine, a bit verbose.
+- **Hit by:** layout (B3).
+- **Status:** open (`fn f() (i64, i64)` is E0006); deferred in
+  decisions.md (M9.9).
+
+## Declined by design
 
 #### 5. A local cannot start uninitialized; `@zeroed` makes only C structs
 
@@ -96,79 +107,12 @@ simplified.
   such as `var fi: usize = 0` in the adoption agency algorithm
   (`html/parser.ore`).
 - **Hit by:** html (B1), layout (B3), engine (B4), agent (B7).
-- **Status:** partly fixed. Struct field defaults (`x: f64 = 0.0`) came
-  in M9.7 (dbe20f8; verified: `B { y: 2.0 }` with `x` defaulted), which
-  is what `Box` needed; the browser still lists every field. Locals
-  without an initializer and `@zeroed` of an Ore struct are declined
-  (decisions.md, M9.9).
-
-### Generics and function values
-
-#### 7. Function values cannot carry state; a `dyn` cannot be turned back into its struct
-
-- **Need:** the JavaScript engine's native functions are a table of
-  `fn(*mut Interp, Args) JsError!Value`; the DOM bindings' natives need
-  the page's `Script` (its document, wrappers, timers). The engine only
-  knows the host as a `dyn Host`.
-- **Repro:** a native cannot close over the script (no closures, spec
-  §4), and there is no way to get the `*mut Script` back from the
-  `dyn Host` it implements.
-- **Workaround:** `Interp.host_data: ?[*]u8` holds
-  `@ptrCast([*]u8, script)`; `scriptOf(it)` casts it back
-  (`engine/script.ore`), unchecked. Settings that every page shares
-  (`scripting_on`, `real_clock`, `local_store`) are module-level `var`s
-  with setter functions.
-- **Suggestion:** a context pointer typed by the generic that holds the
-  table (a `fn(*mut C, ...)` with `C` known), or a checked downcast of
-  `dyn I` to `*mut S`.
-- **Hit by:** engine (B6).
-- **Status:** open (no closures by spec; the downcast could be added).
-
-### Error handling
-
-#### 8. A `catch` block cannot run statements and then give a value
-
-- **Need:** "use the URL after redirects if it parses, else keep the one
-  we asked for", and "report the error, then go on with a fallback".
-- **Repro:**
-
-  ```ore
-  let u = parse("x") catch |e| {
-      @println("report")
-      old                      // E0031: expression value is not used
-  }
-  ```
-
-- **Workaround:** a helper that picks its input before parsing
-  (`finalUrl` in `engine/engine.ore`), or returning from inside the
-  `catch` (`mouseMoved` in `ui/window.ore`).
-- **Hit by:** engine, ui (B4).
-- **Status:** partly fixed. `parse(s) catch old` gives a value, and
-  M9.7 added Zig's `if parse(s) |u| { } else |e| { }` (f7f4754;
-  verified). A `catch` block that yields a value is open.
-
-### Smaller things
-
-#### 21. No tuples or multiple results
-
-- **Workaround:** small structs carry pairs out of functions (`MinMax`,
-  `Flow`, `OpenFrag`, `KindOf` in layout). Fine, a bit verbose.
-- **Hit by:** layout (B3).
-- **Status:** open (`fn f() (i64, i64)` is E0006); deferred in
-  decisions.md (M9.9).
-
-#### 22. No `@embedFile`
-
-- **Need:** the user-agent style sheet as a plain `.css` file, and the
-  900 lines of JavaScript that every page runs first
-  (`engine/prelude.ore`) as a `.js` file that tools can check. Line
-  strings (entry 40) now cover most of this need: the prelude is one,
-  written from a `.js` file during development.
-- **Repro:** `let S = @embedFile("ua.css")` is E0021 (unknown builtin).
-- **Hit by:** css (B2), engine (B6).
-- **Status:** open.
-
-## Declined by design
+- **Status:** the need is fixed, the two forms are declined. Struct field
+  defaults (`x: f64 = 0.0`) came in M9.7 (dbe20f8; verified: `B { y:
+  2.0 }` with `x` defaulted), which is what `Box` needed; the browser
+  still lists every field. Locals without an initializer and `@zeroed`
+  of an Ore struct are declined in decisions.md (M9.9): defaults, and
+  `catch`/`orelse` blocks with a value, cover the cases met.
 
 #### 19. The root module cannot be imported
 
@@ -284,22 +228,44 @@ form. The commit is the one that fixed the gap.
   items as three strings each in a `List([]mut u8)`
   (`engine/window_api.ore`).
 
+#### 7. A `dyn` could not be turned back into its struct; function values cannot carry state
+
+- **Need:** the JavaScript engine's native functions are a table of
+  `fn(*mut Interp, Args) JsError!Value`; the DOM bindings' natives need
+  the page's `Script`, which the engine only knows as a `dyn Host`.
+- **Hit by:** engine (B6). **Status:** fixed in M9.9 (8a1d3e9:
+  `@downcast(*mut S, d)`, a `?*mut S` checked against `d`'s vtable).
+  Verified: `@downcast(*mut Page, h)` gives the page, `null` for a
+  `dyn Host` made from another struct. Removed in cff3f60: `Interp.host_data`
+  and the unchecked `@ptrCast` in `scriptOf` (`engine/script.ore`), which
+  is now `@downcast(*mut Script, it.host.?).?`. Closures stay out by
+  spec (§4): settings every page shares are still module-level `var`s.
+
+#### 8. A `catch` block could not run statements and then give a value
+
+- **Need:** "report the error, then go on with a fallback".
+- **Hit by:** engine, ui (B4). **Status:** fixed: `if f() |v| { } else
+  |e| { }` in M9.7 (f7f4754), and a `catch` or `orelse` block that ends
+  with its value in M9.9 (d118815). Verified: `let v = parse(s) catch
+  |e| { @println("report"); old }`. Browser still uses the workaround:
+  `finalUrl` in `engine/engine.ore` picks its input before parsing.
+
 #### 9. Error values had no `==`
 
 - **Need:** "is this fetch error OutOfMemory (pass it on) or something to
   report?"
 - **Hit by:** agent (B7), image (B5). **Status:** fixed in M9.7
-  (eedf75d). Verified: `if e == E.A` in a `catch |e|` block. Browser
-  still uses the workaround: `image/tests.ore` maps each error to a
-  number with a `match` to compare it with the expected one.
+  (eedf75d). Verified: `if e == E.A` in a `catch |e|` block. The
+  browser's workaround (`image/tests.ore` mapped each error to a number
+  to compare them) was removed in cff3f60.
 
 #### 10. A `match` arm could not produce the error union of an enclosing `return`
 
 - **Hit by:** agent (B7). **Status:** fixed in M9.7 (f7f4754: `return
   match` whose arms are error unions, errors or values). Verified:
   `return match a { .Back => back(n) .Fwd => fwd(n) }` in an `E!i64`
-  function. Browser still uses the workaround: `try` in every arm of
-  `applyAction` (`agent/actions.ore`).
+  function. The `try` in every arm of
+  `applyAction` (`agent/actions.ore`) was removed in cff3f60.
 
 #### 11. Mapping one error set onto another took a `catch` block at every call
 
@@ -307,16 +273,15 @@ form. The commit is the one that fixed the gap.
   `JsError!Value` from code that returns `AllocError!...`.
 - **Hit by:** engine (B6). **Status:** works since M9.5 (b78afde:
   `catch` takes `return`, `break` or `continue` like `orelse`).
-  Verified: `let v = g() catch return AllocError.OutOfMemory`. One small
-  wrapper per callee (`wrapFor`, `stringFor`, `jsPush` in
-  `engine/script.ore`) is still the shortest way to call one many
-  times.
+  Verified: `let v = g() catch return AllocError.OutOfMemory`. The
+  wrappers in `engine/script.ore` (`wrapFor`, `stringFor`, `jsPush`) use
+  it since cff3f60: one line each instead of a block.
 
 #### 12. `orelse` did not chain
 
 - **Hit by:** agent (B7). **Status:** fixed in M9.7 (eedf75d). Verified:
-  `a() orelse a() orelse "none"` prints `none`. Browser still uses the
-  workaround: `x orelse (y orelse "")` in `agent/markdown.ore`.
+  `a() orelse a() orelse "none"` prints `none`. The parentheses
+  in `agent/markdown.ore` were removed in cff3f60.
 
 #### 13. No test for one variant of an enum with payloads
 
@@ -324,8 +289,7 @@ form. The commit is the one that fixed the gap.
   `engine.Activation`, whose other variants carry payloads.
 - **Hit by:** ui, agent (B5). **Status:** fixed in M9.8 (6af69f6: `x is
   .V`). Verified: `if a is .Nothing` on an enum whose other variant has
-  fields. Browser still uses the workaround: a statement `match` with
-  `_ => {}` in `submitFrom` (`agent/actions.ore`).
+  fields. `ui/forms.ore` tests `act is .Nothing` since cff3f60.
 
 #### 14. No reading of a stream piece by piece (stdin lines)
 
@@ -340,23 +304,24 @@ form. The commit is the one that fixed the gap.
 
 - **Hit by:** font (B3), js (B8). **Status:** fixed in M9.7 (1872d6b:
   `c_int`, `c_long`, `c_ulong` and the other C integer names).
-  Verified: `extern fn labs(x: c_long) c_long`. Browser still uses the
-  workaround: `font/freetype.ore` spells `FT_Long`, `FT_Pos` and
-  `FT_Fixed` as `i64`; `js/interp.ore` declares `clock` returning `u64`.
+  Verified: `extern fn labs(x: c_long) c_long`. `font/freetype.ore`
+  spells `FT_Long`, `FT_Pos` and `FT_Fixed` as `c_long` since cff3f60.
+  Browser still uses the workaround: `js/interp.ore` declares `clock`
+  returning `u64`.
 
 #### 16. No `extern union`
 
 - **Hit by:** ui (B4). **Status:** fixed in M9.7 (1872d6b). Verified:
-  `extern union U { a: i32, b: i64 }`, `U { b: 5 }.a` is 5. Browser
-  still uses the workaround: `ui/sdl.ore` declares `SDL_Event` as 56
-  bytes and casts it to each event's struct (`js/interp.ore` already
-  uses an `extern union` for `StackAddr`).
+  `extern union U { a: i32, b: i64 }`, `U { b: 5 }.a` is 5. Since
+  cff3f60 `ui/sdl.ore` declares `SDL_Event` as an `extern union` of the
+  events the window reads, and `ui/window.ore` and `ui/script.ore` take
+  `&ev.key`, `&ev.motion`, ... instead of `@ptrCast`.
 
 #### 17. `std.math` had no infinity or NaN
 
 - **Hit by:** agent (B7), js (B6). **Status:** fixed in M9.7 (d2a509d:
-  `std.math.inf()`, `nan()`, `isNan`, `isInf`). Verified. Browser still
-  uses the workaround: `v != v || v - v != 0.0` in `agent/json.ore`;
+  `std.math.inf()`, `nan()`, `isNan`, `isInf`). Verified. `agent/json.ore`
+  uses `isNan`/`isInf` since cff3f60. Browser still uses the workaround:
   `1.0 / 0.0` and `0.0 / 0.0` in the JS engine (about 35 places).
 
 #### 18. `std.math` had no trigonometry and no integer `min`/`max`
@@ -364,16 +329,28 @@ form. The commit is the one that fixed the gap.
 - **Hit by:** image, engine (B5). **Status:** fixed in M9.8 (bdd7d49:
   libm's `sin`, `cos`, `atan2`, `exp`, `log` and more, and
   `minOf`/`maxOf`/`absOf`/`clampOf` for any integer type). Verified:
-  `std.math.cos(0.0)` and `std.math.minOf(usize, a, b)`. Browser still
-  uses the workaround: the IDCT's written-out constants in
-  `image/jpeg.ore` (they are faster than computing them).
+  `std.math.cos(0.0)` and `std.math.minOf(usize, a, b)`. `minUsize`/`maxUsize`
+  in `engine/caret.ore` were replaced in cff3f60; the IDCT's written-out
+  constants in `image/jpeg.ore` stay (no need to compute them).
 
 #### 20. No repeat form for array initializers
 
 - **Hit by:** js (B6). **Status:** fixed in M9.7 (16ac1d9: `[N]T{value,
-  ..}`). Verified: `[4]i64{7, ..}[3]` is 7. Browser still uses the
-  workaround: 13 written-out initializers of `free: [13]List([]mut T)`
-  in `js/slabs.ore`.
+  ..}`). Verified: `[4]i64{7, ..}[3]` is 7. The 13 written-out
+  initializers in `js/slabs.ore` were replaced in cff3f60.
+
+#### 22. No `@embedFile`
+
+- **Need:** the user-agent style sheet as a plain `.css` file, and the
+  900 lines of JavaScript that every page runs first as a `.js` file
+  that tools can check.
+- **Hit by:** css (B2), engine (B6). **Status:** fixed in M9.9 (d286597:
+  `@embedFile("path")`, relative to the source file). Verified: a
+  directory program embeds files of its root and of a sub-module.
+  Browser still uses the workaround: `engine/prelude.ore` is a line
+  string written from a `.js` file, and `css/ua.ore` an array of rules
+  (each change is hundreds of lines, left for the owners of those
+  files).
 
 #### 23. No discard `_ = f()`
 
@@ -405,9 +382,9 @@ form. The commit is the one that fixed the gap.
 #### 30. A `match` arm could not list several enum variants
 
 - **Hit by:** html, CLI (B1), js (B6). **Status:** fixed in M9.5.
-  Verified: `.A, .B => 1` / `.C => 2` prints 1 1 2. Browser still uses
-  the workaround: duplicate `.Doctype => {}` / `.Comment => {}` arms in
-  `dump.ore`; `=> 7` four times in the precedence table of
+  Verified: `.A, .B => 1` / `.C => 2` prints 1 1 2. `dump.ore`
+  merges its two empty arms since cff3f60. Browser still uses the
+  workaround: `=> 7` four times in the precedence table of
   `js/parser.ore`.
 
 #### 31. `?T == T` did not compile, and the hint said to use `as`
@@ -415,8 +392,9 @@ form. The commit is the one that fixed the gap.
 - **Hit by:** encoding (B1), js (B6). **Status:** fixed in M9.5 (`?T ==
   T`, `?T == ?T`; the `as` hint only where `as` converts). Verified: `f()
   == E.A`, `f() == E.B`, `null == E.A`, `f() == f()`, `null == null`
-  print true false false true true. Browser still uses the workaround:
-  `labelIs` in `encoding.ore`, `Interp.hasClass` in js.
+  print true false false true true. `labelIs` in `encoding.ore` was
+  removed in cff3f60. Browser still uses the workaround: `Interp.hasClass`
+  in js.
 
 #### 32. No `orelse`, `.?` or `unreachable`
 
@@ -455,9 +433,9 @@ form. The commit is the one that fixed the gap.
 
 - **Hit by:** CLI (B1). **Status:** fixed in M9.5. Verified:
   `std.log.err(USAGE)` with `let USAGE = "usage: x"` prints `error:
-  usage: x`. Browser still uses the workaround: `std.log.err("{}",
-  SHOT_USAGE)` in `shot.ore`, `std.log.err("{}", UI_USAGE)` in
-  `ui/window.ore`.
+  usage: x`. The `std.log.err("{}",
+  X_USAGE)` calls of `main.ore`, `shot.ore`, `ui/window.ore`,
+  `ui/socket.ore` and `agent/server.ore` were replaced in cff3f60.
 
 #### 37. A `*mut Self` method could not be called on a temporary
 
@@ -468,16 +446,15 @@ form. The commit is the one that fixed the gap.
 
 - **Hit by:** css (B2). **Status:** fixed in M9.6. Verified: `fn get(s:
   []mut u8) ?[]u8 { return s }`, and an `AllocError![]u8` function
-  returning an `AllocError![]mut u8` call. Browser still uses the
-  workaround: `let values: []Value = v` in `css/cascade.ore`, `let owned
-  = try b.toOwned()` in `css/tokenizer.ore`.
+  returning an `AllocError![]mut u8` call. Both workarounds in
+  `css/` were removed in cff3f60.
 
 #### 39. `*mut S` did not convert to `?dyn I`
 
 - **Hit by:** js (B6). **Status:** fixed in M9.6. Verified: `e.host =
   &mut h` with `host: ?dyn Host`, then `if e.host |d| { d.finalize(1) }`
-  updates `h`. Browser still uses the workaround: `let d: dyn Host =
-  &mut h` in `js/unit_tests.ore`.
+  updates `h`. `js/unit_tests.ore` assigns `&mut h`
+  since cff3f60.
 
 #### 40. Multi-line string literals
 
@@ -531,10 +508,10 @@ form. The commit is the one that fixed the gap.
 
 - **Hit by:** agent (B7). **Status:** works at HEAD (no milestone
   lists it). Verified: `@zeroed([64]bool)` compiles and
-  `flags[3]` is `false`. Browser still uses the workaround: the JSON
-  `Writer` keeps its per-level "a value was written" flags in a `u64`
-  bitmask (at most 64 levels of nesting). `@zeroed` of a plain struct
-  stays open (entry 5).
+  `flags[3]` is `false`. The JSON `Writer`
+  (`agent/json.ore`) keeps its per-level flags in `has: [64]bool =
+  @zeroed([64]bool)` since cff3f60, instead of a `u64` bitmask. `@zeroed` of
+  a plain struct is declined (entry 5).
 
 #### 47. A pointer to an array could not be indexed
 
@@ -546,7 +523,7 @@ form. The commit is the one that fixed the gap.
 - **Hit by:** ui (B7). **Status:** fixed (319aa97): indexing
   dereferences one pointer level when the pointee is an array, like
   field access (`a[i]`, `a[i] = v`, bounds-checked; writing through a
-  `*[N]T` is E0033). Browser still uses the workaround: `ui/socket.ore`
-  passes a slice (`addr: []mut u8`, called with `addr[..]`). No other
+  `*[N]T` is E0033). `ui/socket.ore`'s `unixAddr` takes a
+  `*mut [110]u8` since cff3f60. No other
   code in `browser/` works around it (helpers that take `x[..]` take a
   slice by design).
