@@ -40,35 +40,60 @@ pub let CANVAS_PRELUDE =
     \\function escape(s) {
     \\  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
     \\}
+    \\// Path segments: a verb (0 M, 1 L, 2 C, 3 Z) followed by its points,
+    \\// or a string of path data from ak.canvasPath. The native side reads
+    \\// them exactly as it would parse their path data (`_d`), without
+    \\// writing and parsing every number.
+    \\function pathData(c) {
+    \\  let d = '';
+    \\  for (let i = 0; i < c.length;) {
+    \\    const v = c[i];
+    \\    if (typeof v === 'string') {
+    \\      d += v;
+    \\      i++;
+    \\    } else if (v === 3) {
+    \\      d += 'Z ';
+    \\      i++;
+    \\    } else {
+    \\      const n = v === 2 ? 6 : 2;
+    \\      d += 'MLC'[v] + c.slice(i+1, i+1+n).join(' ') + ' ';
+    \\      i += n+1;
+    \\    }
+    \\  }
+    \\  return d;
+    \\}
     \\class Path2D {
     \\  constructor(p) {
-    \\    this._d = '';
+    \\    this._c = [];
     \\    this._m = identity();
     \\    this._at = null;
     \\    this._start = null;
     \\    if (p instanceof Path2D) {
-    \\      this._d = p._d;
+    \\      this._c = p._c.slice();
     \\      this._at = p._at && p._at.slice();
     \\      this._start = p._start && p._start.slice();
     \\    } else if (typeof p === 'string') {
-    \\      this._d = ak.canvasPath(p, identity());
+    \\      this._c = [ak.canvasPath(p, identity())];
     \\    }
+    \\  }
+    \\  get _d() {
+    \\    return pathData(this._c);
     \\  }
     \\  addPath(p, transform) {
     \\    if (!(p instanceof Path2D)) throw new TypeError('Expected Path2D');
     \\    const m = transform ? matrix(transform) : identity();
-    \\    if (finite(m)) this._d += ak.canvasPath(p._d, m);
+    \\    if (finite(m)) this._c.push(ak.canvasPath(p._d, m));
     \\  }
     \\  closePath() {
     \\    if (this._at) {
-    \\      this._d += 'Z ';
+    \\      this._c.push(3);
     \\      this._at = this._start && this._start.slice();
     \\    }
     \\  }
     \\  moveTo(x, y) {
     \\    if (!finite([x, y])) return;
     \\    const p = point(this._m, Number(x), Number(y));
-    \\    this._d += 'M' + p.join(' ') + ' ';
+    \\    this._c.push(0, p[0], p[1]);
     \\    this._at = p;
     \\    this._start = p;
     \\  }
@@ -79,14 +104,15 @@ pub let CANVAS_PRELUDE =
     \\      return;
     \\    }
     \\    const p = point(this._m, Number(x), Number(y));
-    \\    this._d += 'L' + p.join(' ') + ' ';
+    \\    this._c.push(1, p[0], p[1]);
     \\    this._at = p;
     \\  }
     \\  bezierCurveTo(a, b, c, d, x, y) {
     \\    if (!finite([a, b, c, d, x, y])) return;
     \\    if (!this._at) this.moveTo(a, b);
     \\    const p = point(this._m, x, y);
-    \\    this._d += 'C' + point(this._m, a, b).concat(point(this._m, c, d), p).join(' ') + ' ';
+    \\    const p1 = point(this._m, a, b), p2 = point(this._m, c, d);
+    \\    this._c.push(2, p1[0], p1[1], p2[0], p2[1], p[0], p[1]);
     \\    this._at = p;
     \\  }
     \\  quadraticCurveTo(a, b, x, y) {
@@ -95,7 +121,7 @@ pub let CANVAS_PRELUDE =
     \\    const c = point(this._m, a, b);
     \\    const p = point(this._m, x, y);
     \\    const q = this._at;
-    \\    this._d += 'C' + [q[0]+(c[0]-q[0])*2/3, q[1]+(c[1]-q[1])*2/3, p[0]+(c[0]-p[0])*2/3, p[1]+(c[1]-p[1])*2/3, p[0], p[1]].join(' ') + ' ';
+    \\    this._c.push(2, q[0]+(c[0]-q[0])*2/3, q[1]+(c[1]-q[1])*2/3, p[0]+(c[0]-p[0])*2/3, p[1]+(c[1]-p[1])*2/3, p[0], p[1]);
     \\    this._at = p;
     \\  }
     \\  rect(x, y, w, h) {
@@ -335,7 +361,7 @@ pub let CANVAS_PRELUDE =
     \\    this._path = new Path2D();
     \\  }
     \\  _data(path) {
-    \\    return path instanceof Path2D ? ak.canvasPath(path._d, this._matrix) : this._path._d;
+    \\    return path instanceof Path2D ? ak.canvasPath(path._d, this._matrix) : this._path._c;
     \\  }
     \\  _shape(d, stroke, rule) {
     \\    const s = this._state;
@@ -360,8 +386,9 @@ pub let CANVAS_PRELUDE =
     \\    if (v instanceof CanvasPattern || v instanceof CanvasGradient) return Object.assign({}, v, {matrix: mul(this._matrix, v.matrix)});
     \\    return typeof v === 'string' ? {kind: 0, color: ak.canvasColor(v)} : v;
     \\  }
-    \\  // The path `d` is drawn as SVG would draw <path d=...> with these
-    \\  // stroke attributes and fill rule; clips are [d, evenodd] pairs.
+    \\  // The path `d` (path data or segments) is drawn as SVG would draw
+    \\  // <path d=...> with these stroke attributes and fill rule; clips
+    \\  // are [d, evenodd] pairs.
     \\  _draw(d, stroke, rule, style, mode) {
     \\    const key = stroke ? this._stroke() : null;
     \\    const evenodd = rule === 'evenodd';
@@ -385,7 +412,8 @@ pub let CANVAS_PRELUDE =
     \\  clip(path, rule) {
     \\    this._sync();
     \\    if (typeof path === 'string') rule = path;
-    \\    this._clips.push([this._data(path), rule === 'evenodd']);
+    \\    const d = this._data(path);
+    \\    this._clips.push([typeof d === 'string' ? d : d.slice(), rule === 'evenodd']);
     \\  }
     \\  _rect(x, y, w, h, stroke, clear) {
     \\    this._sync();
@@ -396,7 +424,7 @@ pub let CANVAS_PRELUDE =
     \\      p.moveTo(x, y);
     \\      p.lineTo(Number(x)+Number(w), Number(y)+Number(h));
     \\    } else p.rect(Number(x), Number(y), Number(w), Number(h));
-    \\    this._draw(p._d, stroke, undefined, clear ? {kind: 0, color: [0, 0, 0, 255]} : null, clear ? 'clear' : null);
+    \\    this._draw(p._c, stroke, undefined, clear ? {kind: 0, color: [0, 0, 0, 255]} : null, clear ? 'clear' : null);
     \\  }
     \\  fillRect(x, y, w, h) {
     \\    this._rect(x, y, w, h, false, false);
@@ -412,7 +440,8 @@ pub let CANVAS_PRELUDE =
     \\    const path = args[0] instanceof Path2D ? args.shift() : null;
     \\    const x = Number(args[0]), y = Number(args[1]);
     \\    if (!finite([x, y])) return false;
-    \\    return ak.canvasHit(this._svg(this._shape(this._data(path), stroke, args[2]), []), x, y, stroke);
+    \\    const d = this._data(path);
+    \\    return ak.canvasHit(this._svg(this._shape(typeof d === 'string' ? d : pathData(d), stroke, args[2]), []), x, y, stroke);
     \\  }
     \\  isPointInPath() {
     \\    return this._hit(false, Array.from(arguments));
@@ -476,7 +505,7 @@ pub let CANVAS_PRELUDE =
     \\    p._m = this._matrix;
     \\    p.rect(dx, dy, dw, dh);
     \\    const m = mul(this._matrix, [dw/sw, 0, 0, dh/sh, dx-sx*dw/sw, dy-sy*dh/sh]);
-    \\    this._draw(p._d, false, undefined, {kind: 4, image, matrix: m, repeatX: false, repeatY: false, smoothing: this.imageSmoothingEnabled});
+    \\    this._draw(p._c, false, undefined, {kind: 4, image, matrix: m, repeatX: false, repeatY: false, smoothing: this.imageSmoothingEnabled});
     \\  }
     \\  createImageData(w, h) {
     \\    if (typeof w === 'object') return new ImageData(w.width, w.height);

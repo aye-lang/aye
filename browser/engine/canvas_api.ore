@@ -407,13 +407,90 @@ fn canvasShape(verb_start: usize, verb_end: usize, coord_start: usize, fill: svg
     }
 }
 
-// The path `d` filled (`stroke` null) or stroked in white, moved by
-// (`dx`, `dy`) for a shadow.
-fn canvasPathPicture(alloc: std.mem.Allocator, d: []u8, stroke: ?CanvasStroke, evenodd: bool, dx: f64, dy: f64) AllocError!*mut svg.Picture {
+fn finiteNum(v: Value) ?f64 {
+    var n = 0.0
+    match v {
+        .Num { n: x } => {
+            n = x
+        }
+        _ => {
+            return null
+        }
+    }
+    if n != n || math.isInf(n) {
+        return null
+    }
+    // As svg.parsePath adds an absolute point to 0.
+    return 0.0 + n
+}
+
+// Path data from the prelude into `pen`: a string, or an array of
+// segments (a verb, 0 M, 1 L, 2 C or 3 Z, followed by its points, or a
+// string of path data). Segments draw exactly what svg.parsePath draws
+// from the path data they stand for (JS writes numbers so that they read
+// back exactly): its commands are absolute, and a command with a number
+// that is not finite ends the path.
+fn canvasSegments(it: *mut Interp, pen: *mut svg.Pen, v: Value) JsError!void {
+    if js.isStr(v) {
+        return svg.parsePath(pen, it.heap.bytes(js.strOf(v)))
+    }
+    if !it.hasClass(v, js.Class.Array) {
+        return
+    }
+    let o = js.objectOf(v)
+    var started = false
+    var i: usize = 0
+    var at = [6]f64{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}
+    while i < it.heap.elems(o).len {
+        let e = it.heap.elems(o)[i]
+        if js.isStr(e) {
+            let before = pen.verbs.len()
+            try svg.parsePath(pen, it.heap.bytes(js.strOf(e)))
+            started = started || pen.verbs.len() > before
+            i += 1
+            continue
+        }
+        let verb = finiteNum(e) orelse return
+        var n: usize = 2
+        if verb == 2.0 {
+            n = 6
+        } else if verb == 3.0 {
+            n = 0
+        } else if verb != 0.0 && verb != 1.0 {
+            return
+        }
+        if i + n >= it.heap.elems(o).len && n > 0 {
+            return
+        }
+        for k in 0..n {
+            at[k] = finiteNum(it.heap.elems(o)[i + 1 + k]) orelse return
+        }
+        i += n + 1
+        if verb == 3.0 {
+            if started {
+                try pen.close()
+            }
+        } else if verb == 0.0 {
+            try pen.moveTo(at[0], at[1])
+            started = true
+        } else if !started {
+            return
+        } else if verb == 1.0 {
+            try pen.lineTo(at[0], at[1])
+        } else {
+            try pen.cubicTo(at[0], at[1], at[2], at[3], at[4], at[5])
+        }
+    }
+}
+
+// The path `d` (see canvasSegments) filled (`stroke` null) or stroked
+// in white, moved by (`dx`, `dy`) for a shadow.
+fn canvasPathPicture(it: *mut Interp, d: Value, stroke: ?CanvasStroke, evenodd: bool, dx: f64, dy: f64) JsError!*mut svg.Picture {
+    let alloc = it.alloc
     let pic = try svg.newPicture(alloc)
     errdefer freePicture(alloc, pic)
     var pen = svg.Pen { m: svg.translate(dx, dy), verbs: &mut pic.verbs, coords: &mut pic.coords }
-    try svg.parsePath(&mut pen, d)
+    try canvasSegments(it, &mut pen, d)
     if pic.verbs.len() == 0 {
         return pic
     }
@@ -462,14 +539,12 @@ fn canvasClipPicture(it: *mut Interp, paths: Value) JsError!*mut svg.Picture {
     for i in 0..n {
         let pair = try canvasIndex(it, paths, i)
         let evenodd = it.toBoolean(try canvasIndex(it, pair, 1))
-        let dv = try it.toStringValue(try canvasIndex(it, pair, 0))
-        try it.push(dv)
-        defer it.pop()
+        let dv = try canvasIndex(it, pair, 0)
         let start = pic.clip_shapes.len()
         let verb_start = pic.verbs.len()
         let coord_start = pic.coords.len()
         var pen = svg.Pen { m: svg.IDENTITY, verbs: &mut pic.verbs, coords: &mut pic.coords }
-        try svg.parsePath(&mut pen, it.heap.bytes(js.strOf(dv)))
+        try canvasSegments(it, &mut pen, dv)
         if pic.verbs.len() > verb_start {
             try pic.clip_shapes.append(canvasShape(verb_start, pic.verbs.len(), coord_start, CANVAS_WHITE, evenodd))
         }
@@ -894,7 +969,7 @@ fn akCanvasDraw(it: *mut Interp, a: Args) JsError!Value {
     }
     var pic: ?*mut svg.Picture = null
     defer freePicture(it.alloc, pic)
-    if js.objectOf(it.arg(a, 1)) != js.NONE {
+    if js.objectOf(it.arg(a, 1)) != js.NONE && !it.hasClass(it.arg(a, 1), js.Class.Array) {
         text_mask = try readTextMask(it, it.arg(a, 1))
         textMaskBounds(&text_mask, &mut bounds)
     } else {
@@ -905,10 +980,7 @@ fn akCanvasDraw(it: *mut Interp, a: Args) JsError!Value {
         let evenodd = it.toBoolean(it.arg(a, 7))
         let dx = try it.toNumber(it.arg(a, 8))
         let dy = try it.toNumber(it.arg(a, 9))
-        let dv = try it.toStringValue(it.arg(a, 1))
-        try it.push(dv)
-        defer it.pop()
-        let made = try canvasPathPicture(it.alloc, it.heap.bytes(js.strOf(dv)), stroke, evenodd, dx, dy)
+        let made = try canvasPathPicture(it, it.arg(a, 1), stroke, evenodd, dx, dy)
         pic = made
         grow = pictureBounds(made, &mut bounds)
     }
