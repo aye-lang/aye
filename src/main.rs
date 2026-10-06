@@ -1,4 +1,4 @@
-use ore::{codes, diag};
+use ore::{codes, diag, fmt};
 use ore::driver::{self, Mode, Root};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -10,6 +10,7 @@ const USAGE: &str = "usage (<path> is a .ore file, or a directory: a module of a
   ore check <path> [--json]
   ore fix <path>
   ore test <path> [--filter <text>] [--json] [--mode debug|safe|fast]
+  ore fmt [--check] <path>      (<path>: a .ore file, or a directory searched recursively)
   ore explain <code>
   ore spec";
 
@@ -58,6 +59,10 @@ fn main() -> ExitCode {
         }
         print!("{SPEC}");
         return ExitCode::SUCCESS;
+    }
+    match std::env::args().nth(1).as_deref() {
+        Some("fmt") => return fmt_cmd(std::env::args().skip(2).collect()),
+        _ => {}
     }
     if std::env::args().nth(1).as_deref() == Some("explain") {
         let rest: Vec<String> = std::env::args().skip(2).collect();
@@ -155,6 +160,88 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `ore fmt [--check] <path>`: format a `.ore` file, or every `.ore` file
+/// under a directory (hidden directories skipped), in place. With
+/// `--check` nothing is written: the files that would change are listed
+/// and the exit status is 1 if there is one. A file that does not lex is
+/// reported and left alone (exit status 1).
+fn fmt_cmd(args: Vec<String>) -> ExitCode {
+    let check = args.iter().any(|a| a == "--check");
+    let paths: Vec<&String> = args.iter().filter(|a| *a != "--check").collect();
+    let [path] = &paths[..] else {
+        eprintln!("ore: `fmt` needs one path\n{USAGE}");
+        return ExitCode::from(2);
+    };
+    if path.starts_with('-') {
+        eprintln!("ore: unexpected argument `{path}`\n{USAGE}");
+        return ExitCode::from(2);
+    }
+    let mut files = Vec::new();
+    if let Err(e) = ore_files(Path::new(path), &mut files) {
+        eprintln!("ore: {e}");
+        return ExitCode::FAILURE;
+    }
+    let mut failed = false;
+    for f in files {
+        let name = f.to_string_lossy().into_owned();
+        let text = match std::fs::read_to_string(&f) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("ore: cannot read {name}: {e}");
+                failed = true;
+                continue;
+            }
+        };
+        let out = match fmt::format(&text) {
+            Ok(out) => out,
+            Err(errs) => {
+                for e in errs {
+                    eprintln!("{}", e.with_file(std::slice::from_ref(&name)).render());
+                }
+                failed = true;
+                continue;
+            }
+        };
+        if out == text {
+            continue;
+        }
+        if check {
+            println!("{name}");
+            failed = true;
+        } else if let Err(e) = std::fs::write(&f, out) {
+            eprintln!("ore: cannot write {name}: {e}");
+            failed = true;
+        }
+    }
+    if failed { ExitCode::FAILURE } else { ExitCode::SUCCESS }
+}
+
+/// `path` if it is a file, else the `.ore` files under the directory
+/// `path` (not in hidden directories), sorted.
+fn ore_files(path: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+    if !path.is_dir() {
+        if !path.exists() {
+            return Err(format!("cannot read {}: no such file or directory", path.display()));
+        }
+        out.push(path.to_path_buf());
+        return Ok(());
+    }
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .collect();
+    entries.sort();
+    for p in entries {
+        let hidden = p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'));
+        if p.is_dir() && !hidden {
+            ore_files(&p, out)?;
+        } else if p.is_file() && p.extension().is_some_and(|e| e == "ore") {
+            out.push(p);
+        }
+    }
+    Ok(())
 }
 
 /// `ore fix`: apply the fix-its that `ore check` reports, in place, and

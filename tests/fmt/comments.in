@@ -1,0 +1,34 @@
+
+
+// A file comment.
+//   indented text inside a comment stays as written.
+import std.text   // trailing on an import
+
+/// A point.
+struct Point {
+      /// The x coordinate.
+    x: i64    // across
+  y: i64 // down
+
+
+        // a stray comment before the method
+    fn sum(self: Self) i64 {   // after the brace
+        return self.x+self.y
+            // before the closing brace
+    }
+}
+
+pub fn main() {
+    let p = Point{ x:1,// one
+        y:2 ,   // two
+    }
+    @println(p.sum(  ) ) //done
+    let a = 1 // short
+    let longer_name = 2 // aligned with the line above
+    // between statements
+        @println(a+longer_name)   
+}
+// The end.
+
+
+

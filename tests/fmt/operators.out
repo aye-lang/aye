@@ -1,0 +1,29 @@
+fn total(a: i64, b: i64, c: i64) i64 {
+    return a +
+        b *
+        c -
+        -a
+}
+
+fn ptrs(p: *mut i64, q: ?*i64, r: [*]u8, s: []mut u8) !void {
+    p.* = p.* + 1
+    if q |v| {
+        @println(v.*)
+    }
+    let x = &mut s[0]
+    x.* = ~x.* & 0xFF | 0
+    let ok = !(p.* == 1) && 1 < 2 || 3 >= 4
+    if ok &&
+        p.* > 0 {
+        @println(1_000 + 0xff as i64)
+    }
+}
+
+pub fn main() {
+    var v: i64 = 1
+    let w: i64 = -v - -v
+    var buf = [4]u8{1, 2, 3, 4}
+    try ptrs(&mut v, &w, buf[..].ptr, buf[1..3])
+    @println(total(1, 2, 3) as u8 +% 250)
+    v += 1
+}

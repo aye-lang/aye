@@ -6,6 +6,7 @@ pub mod cgen;
 pub mod codes;
 pub mod diag;
 pub mod driver;
+pub mod fmt;
 pub mod lexer;
 pub mod module;
 pub mod oir;

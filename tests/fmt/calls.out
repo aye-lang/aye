@@ -1,0 +1,37 @@
+fn add(a: i64, b: i64) i64 {
+    return a + b
+}
+
+fn many(
+    a: i64,
+    b: i64,
+    c: i64,
+) i64 {
+    return a + b + c
+}
+
+struct Box { v: i64, w: []u8 }
+
+pub fn main() {
+    @println(many(
+        1,
+        add(
+            2,
+            3,
+        ),
+        4,
+    ))
+    let b = Box {
+        v: add(1, 2),
+        w: "x",
+    }
+    let xs = [3]i64{
+        1,
+        2,
+        3,
+    }
+    let ys = [2]Box{Box { v: 1, w: "a" }, Box { v: 2, w: "b" }}
+    @println(xs[0] + ys[1].v + b.v)
+    @println(add(1, add(2, add(3,
+        4))))
+}

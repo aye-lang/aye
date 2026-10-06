@@ -1,0 +1,38 @@
+interface Show {
+fn show(self: *Self)
+}
+
+fn max(comptime T: type,a: T,b: T) T where T: Show {
+return a
+}
+
+pub fn Pair(comptime T: type) type {
+return struct {
+first: T
+second: T
+pub fn swap(self: *mut Self) {
+let t = self.first
+self.first = self.second
+self.second = t
+}
+}
+}
+
+fn twice(x: i64) i64 { return x*2 }
+
+fn get() fn(i64) i64 { return twice }
+
+fn bytes(n: usize) []u8 {
+    let s: []u8 = "abc"
+    return s[0..n]
+}
+
+pub fn main() {
+    var p = Pair(i64){ first: 1, second: 2 }
+    p.swap()
+    let fs = [2]fn(i64) i64{twice,twice}
+    let opt: ?fn(i64) i64 = null
+    var z = @zeroed([32]u8)
+    let e = []i64{}
+    @println(get()(fs[1](p.first)) + @sizeOf(*u8) as i64)
+}
