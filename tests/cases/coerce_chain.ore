@@ -1,0 +1,85 @@
+// One implicit adjustment, then wrapping into an optional: `[]mut T` to
+// `?[]T`, `*mut T` to `?*T`, `*mut S` to `?dyn I`. In an error union's
+// payload, `mut` is dropped: `E![]mut T` is returned as `E![]T`.
+
+import std
+import std.mem.AllocError
+import std.mem.Allocator
+
+interface Named {
+    fn name(self: *Self) []u8
+}
+
+struct Cat {
+    n: i64
+
+    fn name(self: *Self) []u8 {
+        return "cat"
+    }
+}
+
+fn get(s: []mut u8) ?[]u8 {
+    if s.len == 0 {
+        return null
+    }
+    return s
+}
+
+fn first(p: *mut i64) ?*i64 {
+    return p
+}
+
+fn named(c: *mut Cat) ?dyn Named {
+    return c
+}
+
+fn copy(a: Allocator) AllocError![]mut u8 {
+    return a.alloc('x' as u8, 3)
+}
+
+fn bytes(a: Allocator) AllocError![]u8 {
+    return copy(a)
+}
+
+fn point(p: *mut i64) AllocError!*i64 {
+    return p
+}
+
+fn pointAgain(p: *mut i64) AllocError!*i64 {
+    return pointMut(p)
+}
+
+fn pointMut(p: *mut i64) AllocError!*mut i64 {
+    return p
+}
+
+fn show(s: ?[]u8) {
+    if s |v| {
+        @println(v)
+    } else {
+        @println("none")
+    }
+}
+
+pub fn main() !void {
+    var buf = [_]u8{'h', 'i'}
+    show(get(buf[..]))
+    show(get(buf[0..0]))
+    show(buf[..])
+    var n: i64 = 7
+    if first(&mut n) |p| {
+        @println(p.*)
+    }
+    var c = Cat { n: 1 }
+    if named(&mut c) |d| {
+        @println(d.name())
+    }
+    var g = std.heap.General.init()
+    defer g.deinit()
+    let a = g.allocator()
+    let b = try bytes(a)
+    defer a.free(b)
+    @println(b)
+    @println((try point(&mut n)).*)
+    @println((try pointAgain(&mut n)).*)
+}

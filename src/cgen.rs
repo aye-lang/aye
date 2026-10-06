@@ -548,8 +548,8 @@ fn mangle(t: &Type) -> String {
         // `[]T` and `[]mut T` share one C type.
         Type::Slice(e, _) => format!("S_{}", mangle(e)),
         Type::CPtr(e) => format!("P_{}", mangle(e)),
-        Type::Ptr(e, false) => format!("R_{}", mangle(e)),
-        Type::Ptr(e, true) => format!("RM_{}", mangle(e)),
+        // `*T` and `*mut T` too (`E!*mut T` is returned as `E!*T`).
+        Type::Ptr(e, _) => format!("R_{}", mangle(e)),
         Type::Optional(e) => format!("O_{}", mangle(e)),
         Type::Struct(n) => format!("s_{}", c_name(n)),
         Type::Enum(n) => format!("e_{}", c_name(n)),

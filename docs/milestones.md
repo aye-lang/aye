@@ -203,6 +203,24 @@ on its branch). Fix those in the compiler and std.
   texts for the new codes, a directory program whose sibling modules have
   tests, and `ore fmt` idempotent on the new syntax.
 
+## M9.6: Ergonomics, round 2
+
+The browser's second list (`browser/COMPILER_GAPS.md`, entries 10 to 15).
+
+- **Language:** one implicit adjustment followed by wrapping into an
+  optional (`[]mut T` to `?[]T`, `*mut S` to `?dyn I`), and dropping `mut`
+  in an error union's payload (`E![]mut T` returned as `E![]T`);
+  multi-line string literals (`\\` line strings); a constant as an array
+  length (`[N]T`, `[N]T{...}`, `[mod.N]T`); `defer if`.
+- **C interop:** `@linkOptional("name")` and `@hasLink("name")`: a program
+  builds where an optional library is missing, and an `if @hasLink(...)`
+  branch that cannot run is left out of the program.
+- **Diagnostics:** "already declared at" names the file when the
+  declaration is in another file of the module.
+- **Docs:** why a struct's methods cannot be split across files.
+- **Acceptance:** golden and error tests for each item, `ore explain`
+  texts for the new codes, and `ore fmt` idempotent on the new syntax.
+
 ## M10: Threads
 
 - **std:** `std.thread` (`spawn`, `join`), `std.sync` (`Mutex`,

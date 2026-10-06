@@ -1,0 +1,23 @@
+error E { Bad }
+
+fn f() E!i64 {
+    return 1
+}
+
+// Only `mut` is dropped in an error union's payload: an `E!T` is not an
+// `E!?T`.
+fn g() E!?i64 {
+    return f()
+}
+
+// `mut` cannot be added.
+fn h(p: *i64) ?*mut i64 {
+    return p
+}
+
+fn k(s: ?[]u8) ?[]mut u8 {
+    return s
+}
+
+pub fn main() {
+}

@@ -463,6 +463,10 @@ The only implicit adjustments: a `T` is accepted where `?T` is expected; a
 `*mut T` where `*T` is expected; a `[]mut T` where `[]T` is expected; an
 error value of one set where a set containing all its errors is expected;
 a `*S` or `*mut S` where `dyn I` is expected (if struct `S` implements `I`).
+One of the others may come before the wrapping (a `[]mut T` where `?[]T`
+is expected, a `*mut S` where `?dyn I` is), and `mut` is also dropped
+inside `?` and in a returned error union's payload (`E![]mut T` returned
+from an `E![]T` function). An `E!T` is never an `E!?T`.
 
 ### Untyped literals
 

@@ -921,6 +921,17 @@ fn block_returns(stmts: &[TStmt], or_jumps: bool) -> bool {
     })
 }
 
+/// Is `got` the type `want` with `mut` dropped: `*mut T` for `*T`, `[]mut T`
+/// for `[]T`, or either inside `?`? The two have one representation, so the
+/// value converts as it is.
+fn drops_mut(got: &Type, want: &Type) -> bool {
+    match (want, got) {
+        (Type::Ptr(w, false), Type::Ptr(g, true)) | (Type::Slice(w, false), Type::Slice(g, true)) => w == g,
+        (Type::Optional(w), Type::Optional(g)) => drops_mut(g, w),
+        _ => false,
+    }
+}
+
 /// Does a function returning `t` need a `return` with a value on every path?
 fn needs_value(t: &Type) -> bool {
     match t {
@@ -2511,14 +2522,15 @@ impl<'a> Checker<'a> {
                 let ty = Type::ErrorUnion(set.to_string(), Box::new(payload.clone()));
                 Ok(TExpr { kind: TExprKind::ErrWrap(Box::new(t)), ty, span })
             }
+            // The payload may drop `mut` (`E![]mut T` as `E![]T`).
             Type::ErrorUnion(src, p) => {
-                if **p != *payload {
+                if **p != *payload && !drops_mut(p, payload) {
                     let want = Type::ErrorUnion(set.to_string(), Box::new(payload.clone()));
                     return Err(mismatch(span, &want, &t.ty));
                 }
                 let errors = self.sets[src].iter().map(|n| (src.clone(), n.clone())).collect();
                 self.propagate(errors, span)?;
-                Ok(TExpr { ty: Type::ErrorUnion(set.to_string(), p.clone()), ..t })
+                Ok(TExpr { ty: Type::ErrorUnion(set.to_string(), Box::new(payload.clone())), ..t })
             }
             _ if *payload == Type::Void => {
                 err(E0049, span, format!("this function returns `{}`: return no value, or an error", self.ret))
@@ -2685,22 +2697,32 @@ impl<'a> Checker<'a> {
 
     /// Require `t` to have type `ty`. Four implicit coercions apply: a `T`
     /// is wrapped where `?T` is expected, a `*mut T` (`[]mut T`) is accepted
-    /// where `*T` (`[]T`) is expected, an error value is accepted by an error set that has
-    /// all of its errors, and a pointer to a struct that implements `I` is
-    /// accepted where `dyn I` is expected.
+    /// where `*T` (`[]T`) is expected (also inside `?`), an error value is
+    /// accepted by an error set that has all of its errors, and a pointer to
+    /// a struct that implements `I` is accepted where `dyn I` is expected.
+    /// One of the others can come before the wrapping: a `[]mut T` is
+    /// accepted where `?[]T` is expected.
     fn coerce(&mut self, t: TExpr, ty: &Type) -> Result<TExpr> {
         if t.ty == *ty {
             return Ok(t);
         }
-        if let Type::Optional(inner) = ty
-            && **inner == t.ty
-        {
-            let span = t.span;
-            return Ok(TExpr { kind: TExprKind::Some(Box::new(t)), ty: ty.clone(), span });
+        if let Type::Optional(inner) = ty {
+            let wrap = |t: TExpr| {
+                let span = t.span;
+                TExpr { kind: TExprKind::Some(Box::new(t)), ty: ty.clone(), span }
+            };
+            if **inner == t.ty {
+                return Ok(wrap(t));
+            }
+            if !matches!(t.ty, Type::Optional(_) | Type::Error) && !matches!(**inner, Type::Optional(_)) {
+                match self.coerce(t.clone(), inner) {
+                    Ok(t) => return Ok(wrap(t)),
+                    Err(e) if e.code != E0023 => return Err(e),
+                    Err(_) => {}
+                }
+            }
         }
-        if let (Type::Ptr(want, false), Type::Ptr(got, true)) | (Type::Slice(want, false), Type::Slice(got, true)) = (ty, &t.ty)
-            && want == got
-        {
+        if drops_mut(&t.ty, ty) {
             return Ok(TExpr { ty: ty.clone(), ..t });
         }
         if let (Type::ErrorSet(want), Type::ErrorSet(_)) = (ty, &t.ty)
