@@ -994,7 +994,8 @@ pub fn main() !void {
   in debug mode followed by `error return trace:` and one `file:line:col`
   per `return`/`try` the error passed through (where it started first), and
   exits with status 1.
-- Errors carry no payload. Report details through a parameter or `std.log`.
+- Errors carry no payload. Report details through a `diags: *mut
+  Diagnostics` parameter (`std.diag`, section 15) or `std.log`.
 
 ```ore
 import std
@@ -1792,6 +1793,65 @@ the next argument: an integer, float, `bool`, `[]u8`, or an error value
 (written as its name). The number of `{}` must equal the number of arguments. Other
 characters, including lone braces, are written as they are. Pending `@print`
 output is flushed first.
+
+### std.diag
+
+```
+std.diag.Diagnostic { code: u32, start: usize, end: usize, message: []u8 }   start..end: bytes of the input
+std.diag.Diagnostics
+Diagnostics.init(alloc: Allocator) Diagnostics
+Diagnostics.deinit(self: *mut Self)                 frees the messages too
+Diagnostics.add(self: *mut Self, code: u32, start: usize, end: usize, message: []u8) AllocError!void   copies message
+Diagnostics.len(self: *Self) usize
+Diagnostics.items(self: *Self) []Diagnostic         in order; valid until the next add/clear
+Diagnostics.clear(self: *mut Self)
+std.diag.LineCol { line: usize, col: usize }        from 1; col counts bytes
+std.diag.lineCol(text: []u8, offset: usize) LineCol
+```
+
+The convention for detailed errors: the function takes `diags: *mut
+Diagnostics`, adds one per problem (it may go on after one), and returns
+its error; the caller reads `diags.items()` in the `catch` block.
+
+```ore
+import std
+import std.diag
+import std.diag.Diagnostics
+import std.heap.General
+
+error ParseError { Invalid }
+
+fn parse(src: []u8, diags: *mut Diagnostics) !u32 {
+    var n: u32 = 0
+    for i, c in src {
+        if c < '0' || c > '9' {
+            try diags.add(1, i, i + 1, "not a digit")
+            continue
+        }
+        n = n * 10 + (c - '0') as u32
+    }
+    if diags.len() > 0 {
+        return ParseError.Invalid
+    }
+    return n
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var diags = Diagnostics.init(gpa.allocator())
+    defer diags.deinit()
+    let src = "4x2"
+    let n = parse(src, &mut diags) catch |e| {
+        for d in diags.items() {
+            let at = diag.lineCol(src, d.start)
+            std.log.err("{}:{}: {}", at.line, at.col, d.message)
+        }
+        return e
+    }
+    @println(n)
+}
+```
 
 ### std.os
 

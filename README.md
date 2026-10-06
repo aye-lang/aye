@@ -251,7 +251,9 @@ imports one item. `std` is embedded in the compiler (sources in
 `Handle(T)`), `std.time`, `std.thread` (`spawn`, `spawnWithStack`,
 `Thread.join`), `std.sync`
 (`Mutex`, `Channel(T)`, `Atomic(T)`),
-`std.testing`, `std.log` (`err`, `info`) and `std.os` (`args`, `exit`).
+`std.testing`, `std.log` (`err`, `info`), `std.diag` (`Diagnostics`, the
+`*mut Diagnostics` convention for detailed errors) and `std.os` (`args`,
+`exit`).
 `ore spec` lists every function. Cyclic imports are an error, so no module
 imports the root module: code that both need goes into a module of its own.
 
