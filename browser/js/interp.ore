@@ -16,8 +16,11 @@ import std.map.IntMap
 import std.mem.AllocError
 import std.mem.Allocator
 import std.text
+import std.time
 
-pub error JsError { Thrown, OutOfMemory, ShortCircuit }
+// Terminated: the script ran out of its budget (see startBudget); no
+// `catch` or `finally` runs, the host reports it.
+pub error JsError { Thrown, OutOfMemory, ShortCircuit, Terminated }
 
 pub enum Flow {
     Normal
@@ -153,6 +156,13 @@ pub struct Interp {
     key_lists: List(*mut List(u32))
     free_key_lists: List(*mut List(u32))
     units: List(u16)
+    // The budget of the running task (startBudget): statements and calls
+    // counted, and the limits (0: none).
+    steps: u64
+    step_limit: u64
+    deadline_ms: u64
+    budget_ms: u64
+    terminated: bool
 
     pub fn create(alloc: Allocator) JsError!Interp {
         var it = Interp {
@@ -210,6 +220,11 @@ pub struct Interp {
             key_lists: List(*mut List(u32)).init(alloc),
             free_key_lists: List(*mut List(u32)).init(alloc),
             units: List(u16).init(alloc),
+            steps: 0,
+            step_limit: 0,
+            deadline_ms: 0,
+            budget_ms: 0,
+            terminated: false,
         }
         return it
     }
@@ -279,6 +294,45 @@ pub struct Interp {
     pub fn releaseKeys(self: *mut Self, l: *mut List(u32)) {
         l.clear()
         self.free_key_lists.append(l) catch |e| {}
+    }
+
+    // ---- the budget of a task
+
+    /// Starts the budget of a task (a script, a timer callback, an
+    /// event): `ms` of wall time and `steps` statements and calls (0: no
+    /// limit). Running out of either ends the task with
+    /// JsError.Terminated, which no `catch` or `finally` sees.
+    pub fn startBudget(self: *mut Self, ms: u64, steps: u64) {
+        self.steps = 0
+        self.step_limit = steps
+        self.budget_ms = ms
+        self.deadline_ms = 0
+        if ms > 0 {
+            self.deadline_ms = time.monotonicMs() + ms
+        }
+        self.terminated = false
+    }
+
+    /// No limit until the next startBudget.
+    pub fn clearBudget(self: *mut Self) {
+        self.startBudget(0, 0)
+    }
+
+    fn tick(self: *mut Self) JsError!void {
+        self.steps += 1
+        if (self.steps & 1023) == 0 || self.terminated {
+            try self.checkBudget()
+        }
+    }
+
+    fn checkBudget(self: *mut Self) JsError!void {
+        if self.terminated {
+            return JsError.Terminated
+        }
+        if (self.step_limit > 0 && self.steps > self.step_limit) || (self.deadline_ms > 0 && time.monotonicMs() > self.deadline_ms) {
+            self.terminated = true
+            return JsError.Terminated
+        }
     }
 
     // ---- allocation (may collect garbage first)
@@ -1562,6 +1616,7 @@ pub struct Interp {
         if self.frames.len() >= self.max_depth {
             return self.rangeError("Maximum call stack size exceeded")
         }
+        try self.tick()
         let nslots = self.ast.scopes.items()[fi.scope].nslots
         self.maybeGc()
         let e = try self.heap.newEnv(nslots, penv, Value.Undefined)
@@ -2196,6 +2251,9 @@ pub struct Interp {
             .OutOfMemory => {
                 return JsError.OutOfMemory
             }
+            .Terminated => {
+                return JsError.Terminated
+            }
         }
     }
 
@@ -2813,6 +2871,7 @@ pub struct Interp {
     }
 
     pub fn exec(self: *mut Self, id: u32) JsError!Flow {
+        try self.tick()
         match self.ast.nodes.items()[id] {
             .ExprStmt { e } => {
                 let v = try self.eval(e)
@@ -3199,6 +3258,9 @@ pub struct Interp {
             }
             .ShortCircuit => {
                 return JsError.ShortCircuit
+            }
+            .Terminated => {
+                return JsError.Terminated
             }
         }
     }

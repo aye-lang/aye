@@ -58,6 +58,13 @@ let MAX_CONSOLE: usize = 1000
 let MAX_MICROTASKS: usize = 100000
 // Timer callbacks one call of the event loop runs at most.
 let MAX_TASKS: usize = 10000
+// The budget of one task (a script, a timer callback, an event, a
+// microtask), and of all the microtasks of one checkpoint: beyond it the
+// task ends (a console error) and the page goes on.
+pub let TASK_MS: u64 = 2000
+pub let TASK_STEPS: u64 = 100000000
+// Under GC stress (tests), only steps count, and fewer.
+let STRESS_STEPS: u64 = 2000000
 
 var scripting_on: bool = false
 var real_clock: bool = false
@@ -423,14 +430,14 @@ fn runScriptElement(s: *mut Script, el: NodeId) AllocError!void {
 
 fn runSourceOf(s: *mut Script, el: NodeId, code: []u8) AllocError!void {
     s.current = el
-    s.depth += 1
+    enter(s)
     s.it.runScript(code) catch |e| {
-        s.depth -= 1
+        leave(s)
         s.current = null
         try uncaught(s, e)
         return runMicrotasks(s)
     }
-    s.depth -= 1
+    leave(s)
     s.current = null
     try runMicrotasks(s)
 }
@@ -457,6 +464,26 @@ fn fireLoadEvent(s: *mut Script, at: ?NodeId, name: []u8) AllocError!void {
 
 // ---- calling into the engine
 
+// A call from the browser into the page starts a task with a fresh
+// budget (nested calls share it).
+fn enter(s: *mut Script) {
+    if s.depth == 0 {
+        if js.gcStressRequested() {
+            s.it.startBudget(0, STRESS_STEPS)
+        } else {
+            s.it.startBudget(TASK_MS, TASK_STEPS)
+        }
+    }
+    s.depth += 1
+}
+
+fn leave(s: *mut Script) {
+    s.depth -= 1
+    if s.depth == 0 {
+        s.it.clearBudget()
+    }
+}
+
 fn jsPush(s: *mut Script, v: Value) AllocError!void {
     s.it.push(v) catch |e| {
         return AllocError.OutOfMemory
@@ -479,13 +506,13 @@ fn stringFor(s: *mut Script, b: []u8) AllocError!Value {
 // from the browser: an uncaught exception is reported. Null after an
 // exception.
 fn callReported(s: *mut Script, base: usize, argc: usize) AllocError!?Value {
-    s.depth += 1
+    enter(s)
     let r = s.it.callAt(base, argc) catch |e| {
-        s.depth -= 1
+        leave(s)
         try uncaught(s, e)
         return null
     }
-    s.depth -= 1
+    leave(s)
     return r
 }
 
@@ -493,6 +520,10 @@ fn uncaught(s: *mut Script, e: JsError) AllocError!void {
     match e {
         .OutOfMemory => {
             return AllocError.OutOfMemory
+        }
+        .Terminated => {
+            s.it.exception = Value.Undefined
+            return addConsole(s, "[error] ", "Script terminated: it ran too long")
         }
         _ => {}
     }
@@ -536,12 +567,19 @@ fn runMicrotasks(s: *mut Script) AllocError!void {
         return
     }
     var head: usize = 0
+    let started = time.monotonicMs()
+    var late = false
     while head < s.microtasks.len() {
         let r = s.microtasks.items()[head]
         head += 1
         let f = s.it.roots.items()[r]
         s.it.removeRoot(r)
-        if head > MAX_MICROTASKS {
+        if head > MAX_MICROTASKS || late {
+            continue
+        }
+        if !js.gcStressRequested() && time.monotonicMs() - started > TASK_MS {
+            late = true
+            try addConsole(s, "[error] ", "microtasks ran too long: the rest were dropped")
             continue
         }
         let base = s.it.stack.len()
@@ -788,12 +826,19 @@ pub fn evalInPage(p: *mut Page, src: []u8, out: *mut text.Builder) AllocError!bo
         try out.append("scripts do not run on this page")
         return false
     }
-    s.depth += 1
+    enter(s)
     let v = s.it.evalScript(src) catch |e| {
-        s.depth -= 1
+        leave(s)
         match e {
             .OutOfMemory => {
                 return AllocError.OutOfMemory
+            }
+            .Terminated => {
+                s.it.exception = Value.Undefined
+                try out.append("Script terminated: it ran too long")
+                try runMicrotasks(s)
+                try afterTask(s)
+                return false
             }
             _ => {}
         }
@@ -805,7 +850,7 @@ pub fn evalInPage(p: *mut Page, src: []u8, out: *mut text.Builder) AllocError!bo
         try afterTask(s)
         return false
     }
-    s.depth -= 1
+    leave(s)
     try jsPush(s, v)
     if js.isStr(v) {
         try out.append(s.it.heap.bytes(js.strOf(v)))
