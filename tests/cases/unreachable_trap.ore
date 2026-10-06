@@ -1,0 +1,13 @@
+enum Kind { A, B }
+
+fn f(k: Kind) i64 {
+    return match k {
+        .A => 1
+        .B => unreachable
+    }
+}
+
+pub fn main() {
+    @println(f(Kind.A))
+    @println(f(Kind.B))
+}

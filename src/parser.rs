@@ -39,7 +39,8 @@ fn not_supported(kw: Kw, span: Span) -> Error {
     Error::new(E0007, span, what)
 }
 
-/// Binding strength of `catch`: looser than `& | ^`, tighter than comparisons.
+/// Binding strength of `catch` and `orelse`: looser than `& | ^`, tighter
+/// than comparisons.
 const CATCH_PREC: u8 = 4;
 
 fn is_unsupported_kw(kw: Kw) -> bool {
@@ -950,6 +951,12 @@ impl Parser {
                 lhs = self.catch(lhs)?;
                 continue;
             }
+            if self.at(&Tok::Kw(Kw::Orelse)) && CATCH_PREC >= min_prec {
+                let span = self.bump().span;
+                let body = Box::new(self.fallback()?);
+                lhs = Expr { kind: ExprKind::OrElse { expr: Box::new(lhs), body }, span };
+                continue;
+            }
             let Some((op, prec)) = self.binop() else { break };
             if prec < min_prec {
                 break;
@@ -985,12 +992,33 @@ impl Parser {
         } else {
             None
         };
-        let body = if self.at(&Tok::LBrace) {
-            ArmBody::Block(self.block()?)
-        } else {
-            ArmBody::Expr(self.binary(CATCH_PREC + 1)?)
-        };
+        let body = self.fallback()?;
         Ok(Expr { kind: ExprKind::Catch { expr: Box::new(lhs), capture, body: Box::new(body) }, span })
+    }
+
+    /// The body of `catch` or `orelse`: a block, `return [value]`, `break`
+    /// or `continue` (a block of that statement), or an expression that
+    /// binds tighter than `catch`.
+    fn fallback(&mut self) -> Result<ArmBody> {
+        let span = self.span();
+        let kind = match self.peek() {
+            Tok::LBrace => return Ok(ArmBody::Block(self.block()?)),
+            Tok::Kw(Kw::Return) => {
+                self.bump();
+                let ends = matches!(self.peek(), Tok::Semi | Tok::RBrace | Tok::Comma | Tok::RParen | Tok::RBracket);
+                StmtKind::Return(if ends { None } else { Some(self.expr()?) })
+            }
+            Tok::Kw(Kw::Break) => {
+                self.bump();
+                StmtKind::Break
+            }
+            Tok::Kw(Kw::Continue) => {
+                self.bump();
+                StmtKind::Continue
+            }
+            _ => return Ok(ArmBody::Expr(self.binary(CATCH_PREC + 1)?)),
+        };
+        Ok(ArmBody::Block(Block { stmts: vec![Stmt { kind, span }], span }))
     }
 
     fn cast(&mut self) -> Result<Expr> {
@@ -1049,6 +1077,10 @@ impl Parser {
                 Tok::DotStar => {
                     let span = self.bump().span;
                     e = Expr { kind: ExprKind::Deref(Box::new(e)), span };
+                }
+                Tok::DotQuestion => {
+                    let span = self.bump().span;
+                    e = Expr { kind: ExprKind::Unwrap(Box::new(e)), span };
                 }
                 // `F(T) { ... }`: a literal of the struct that `F(T)` returns
                 // (also `mod.F(T) { ... }`).
@@ -1210,6 +1242,10 @@ impl Parser {
             Tok::Kw(Kw::Struct) => {
                 self.bump();
                 ExprKind::StructType(self.struct_body(String::new(), span, false, false)?)
+            }
+            Tok::Kw(Kw::Unreachable) => {
+                self.bump();
+                ExprKind::Unreachable
             }
             Tok::Kw(k) if is_unsupported_kw(k) => return Err(not_supported(k, span)),
             _ => return Err(self.unexpected("expression")),

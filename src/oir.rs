@@ -91,6 +91,10 @@ pub enum StmtKind {
     /// Drop the trace entries added after the trace length in the local was
     /// saved (`Rvalue::TraceLen`): the error was handled by `catch`.
     TraceRestore(LocalId),
+    /// Panic at `span` with `msg` unless `cond` holds; without `cond`,
+    /// always (`unreachable`). In `fast` mode the check is left out, and
+    /// reaching an unconditional one is undefined behavior.
+    Check { cond: Option<Operand>, msg: &'static str, span: Span },
 }
 
 #[derive(Debug, Clone)]
@@ -266,6 +270,9 @@ fn has_call(e: &TExpr) -> bool {
         | TExprKind::Match { .. }
         | TExprKind::Try(_)
         | TExprKind::Catch { .. }
+        | TExprKind::OrElse { .. }
+        | TExprKind::Unwrap(_)
+        | TExprKind::Unreachable
         | TExprKind::DynCall { .. }
         | TExprKind::Create { .. }
         | TExprKind::AllocSlice { .. }
@@ -630,6 +637,8 @@ impl<'a> Lower<'a> {
         match e.kind {
             TExprKind::Match { .. } => self.lower_match(e, None, out),
             TExprKind::Catch { .. } => self.lower_catch(e, None, out),
+            TExprKind::OrElse { .. } => self.lower_orelse(e, None, out),
+            TExprKind::Unreachable => self.push(out, StmtKind::Check { cond: None, msg: "reached unreachable code", span: e.span }),
             TExprKind::Try(_) => {
                 self.lower_try(e, out);
             }
@@ -698,6 +707,31 @@ impl<'a> Lower<'a> {
             None => vec![],
         };
         self.push(out, StmtKind::If { cond: Operand::Local(c), then, els });
+    }
+
+    /// `x orelse body`: the value of the optional `x` goes to `result`, or
+    /// when it is `null` the body runs (its value goes to `result`).
+    fn lower_orelse(&mut self, e: &'a TExpr, result: Option<LocalId>, out: &mut Block) {
+        let TExprKind::OrElse { expr, body } = &e.kind else { unreachable!() };
+        let span = self.span;
+        let p = self.place(expr, out);
+        let has = self.temp(Type::Bool);
+        self.push(out, StmtKind::Assign(local(has), Rvalue::IsSome { place: p.clone(), ty: expr.ty.clone() }));
+        let mut then = Vec::new();
+        if let Some(r) = result {
+            self.push(&mut then, StmtKind::Assign(local(r), Rvalue::Load(Self::unwrap_place(p, &expr.ty))));
+        }
+        let mut els = Vec::new();
+        match (&**body, result) {
+            (TArmBody::Expr(x), Some(r)) => {
+                let rv = self.rvalue(x, &mut els);
+                self.push(&mut els, StmtKind::Assign(local(r), rv));
+            }
+            (TArmBody::Expr(x), None) => self.eval(x, &mut els),
+            (TArmBody::Block(stmts), _) => self.block(stmts, false, &mut els),
+        }
+        self.span = span;
+        self.push(out, StmtKind::If { cond: Operand::Local(has), then, els });
     }
 
     /// The value inside the optional at `p`.
@@ -880,6 +914,14 @@ impl<'a> Lower<'a> {
                 p.proj.push(Proj::Field(name));
                 p
             }
+            // `x.?`: panic unless `x` holds a value.
+            TExprKind::Unwrap(x) => {
+                let p = self.place(x, out);
+                let has = self.temp(Type::Bool);
+                self.push(out, StmtKind::Assign(local(has), Rvalue::IsSome { place: p.clone(), ty: x.ty.clone() }));
+                self.push(out, StmtKind::Check { cond: Some(Operand::Local(has)), msg: "unwrap of null", span: e.span });
+                Self::unwrap_place(p, &x.ty)
+            }
             TExprKind::SliceLen(base) | TExprKind::SlicePtr(base) => {
                 let name = if matches!(e.kind, TExprKind::SliceLen(_)) { "len" } else { "ptr" };
                 let mut p = self.place(base, out);
@@ -944,6 +986,16 @@ impl<'a> Lower<'a> {
                 let t = self.temp(e.ty.clone());
                 self.lower_catch(e, Some(t), out);
                 Rvalue::Use(Operand::Local(t))
+            }
+            TExprKind::OrElse { .. } => {
+                let t = self.temp(e.ty.clone());
+                self.lower_orelse(e, Some(t), out);
+                Rvalue::Use(Operand::Local(t))
+            }
+            // The panic does not return: the value is never read.
+            TExprKind::Unreachable => {
+                self.push(out, StmtKind::Check { cond: None, msg: "reached unreachable code", span: e.span });
+                Rvalue::Use(Operand::Local(self.temp(e.ty.clone())))
             }
             TExprKind::Call { name, is_extern, args } => {
                 let args = args.iter().map(|a| self.operand(a, out)).collect();
@@ -1070,6 +1122,7 @@ impl<'a> Lower<'a> {
             | TExprKind::SliceLen(_)
             | TExprKind::SlicePtr(_)
             | TExprKind::Index { .. }
+            | TExprKind::Unwrap(_)
             | TExprKind::Deref(_) => {
                 Rvalue::Load(self.place(e, out))
             }

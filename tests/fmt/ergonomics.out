@@ -1,0 +1,14 @@
+let NAMES = [_][]u8{"a", "b"}
+
+fn f(o: ?i64, k: Kind) i64 {
+    let a = o.? + 1
+    let b = o orelse return 0
+    let c = o orelse {
+        unreachable
+    }
+    return match k {
+        .A, .B => a
+        .C { .. }, .D => b + c
+        _ => unreachable
+    }
+}

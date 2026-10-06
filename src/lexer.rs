@@ -1,9 +1,9 @@
 //! Lexer with Go-style automatic terminator insertion.
 //!
 //! A newline (or end of file) becomes a `Tok::Semi` terminator when the
-//! previous token is an identifier, a literal, `)`, `]`, `}`, or one of the
-//! keywords `return`, `break`, `continue`, or `.*`. Ore source never contains
-//! an explicit `;`.
+//! previous token is an identifier, a literal, `)`, `]`, `}`, one of the
+//! keywords `return`, `break`, `continue`, `unreachable`, or `.*`, `.?`.
+//! Ore source never contains an explicit `;`.
 //!
 //! After a lexical error the rest of the line is skipped and lexing goes on,
 //! so every bad line is reported.
@@ -42,6 +42,8 @@ pub enum Kw {
     Test,
     Mut,
     Extern,
+    Orelse,
+    Unreachable,
 }
 
 const KEYWORDS: &[(&str, Kw)] = &[
@@ -73,6 +75,8 @@ const KEYWORDS: &[(&str, Kw)] = &[
     ("test", Kw::Test),
     ("mut", Kw::Mut),
     ("extern", Kw::Extern),
+    ("orelse", Kw::Orelse),
+    ("unreachable", Kw::Unreachable),
 ];
 
 impl Kw {
@@ -107,6 +111,8 @@ pub enum Tok {
     Ellipsis,
     /// `.*`, pointer dereference.
     DotStar,
+    /// `.?`, optional unwrap.
+    DotQuestion,
     /// `=>` in a `match` arm.
     FatArrow,
     /// `&`, address-of or bitwise and.
@@ -179,6 +185,7 @@ impl fmt::Display for Tok {
             Tok::DotDotEq => "`..=`",
             Tok::Ellipsis => "`...`",
             Tok::DotStar => "`.*`",
+            Tok::DotQuestion => "`.?`",
             Tok::FatArrow => "`=>`",
             Tok::Amp => "`&`",
             Tok::Pipe => "`|`",
@@ -244,6 +251,8 @@ fn ends_statement(t: &Tok) -> bool {
             | Tok::RBracket
             | Tok::RBrace
             | Tok::DotStar
+            | Tok::DotQuestion
+            | Tok::Kw(Kw::Unreachable)
             | Tok::Kw(Kw::Return)
             | Tok::Kw(Kw::Break)
             | Tok::Kw(Kw::Continue)
@@ -556,6 +565,7 @@ impl Lexer {
                 }
             }
             ('.', Some('*')) => take(self, Tok::DotStar),
+            ('.', Some('?')) => take(self, Tok::DotQuestion),
             ('.', _) => Tok::Dot,
             ('=', Some('=')) => take(self, Tok::EqEq),
             ('=', Some('>')) => take(self, Tok::FatArrow),
@@ -642,6 +652,26 @@ mod tests {
                 Tok::Int(2),
                 Tok::Semi,
                 Tok::Kw(Kw::Return),
+                Tok::Semi,
+                Tok::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn terminator_after_unwrap_and_unreachable() {
+        let id = |n: &str| Tok::Ident(n.into());
+        assert_eq!(
+            toks("x.?\nunreachable\ny orelse z"),
+            vec![
+                id("x"),
+                Tok::DotQuestion,
+                Tok::Semi,
+                Tok::Kw(Kw::Unreachable),
+                Tok::Semi,
+                id("y"),
+                Tok::Kw(Kw::Orelse),
+                id("z"),
                 Tok::Semi,
                 Tok::Eof,
             ]

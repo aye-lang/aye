@@ -972,6 +972,14 @@ impl Gen {
                 self.line(ind, &format!("ore_trace_len = {};", Self::local_name(f, *t)));
             }
             StmtKind::TracePush(_) | StmtKind::TraceRestore(_) => {}
+            StmtKind::Check { cond: Some(c), msg, span } => {
+                let line = format!("if (ORE_CHECKS && !{}) ore_panic({}, \"{msg}\");", self.operand(f, c), line_col(*span));
+                self.line(ind, &line);
+            }
+            StmtKind::Check { cond: None, msg, span } => {
+                self.line(ind, &format!("if (ORE_CHECKS) ore_panic({}, \"{msg}\");", line_col(*span)));
+                self.line(ind, "__builtin_unreachable();");
+            }
         }
     }
 

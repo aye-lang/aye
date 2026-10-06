@@ -466,6 +466,12 @@ pub enum TExprKind {
     Try(Box<TExpr>),
     /// `x catch |e| body`; the type is the payload of `x`'s error union.
     Catch { expr: Box<TExpr>, capture: Option<VarId>, body: Box<TArmBody> },
+    /// `x orelse body`; the type is the payload of the optional `x`.
+    OrElse { expr: Box<TExpr>, body: Box<TArmBody> },
+    /// `x.?`: the value of the optional `x` (a panic if it is `null`).
+    Unwrap(Box<TExpr>),
+    /// `unreachable`: a panic (in `fast` mode, undefined behavior).
+    Unreachable,
     /// A call through the vtable of a `dyn` value.
     DynCall { recv: Box<TExpr>, method: String, args: Vec<TExpr> },
     /// A `*T` or `*mut T` (T is the struct `strukt`) converted to `dyn I`.
@@ -887,13 +893,14 @@ fn suggest<'n>(e: Error, name: &str, span: Span, candidates: impl IntoIterator<I
 /// in `break` or `continue`)?
 fn block_returns(stmts: &[TStmt], or_jumps: bool) -> bool {
     stmts.iter().any(|s| match &s.kind {
-        TStmtKind::Return(_) => true,
+        TStmtKind::Return(_) | TStmtKind::Expr(TExpr { kind: TExprKind::Unreachable, .. }) => true,
         TStmtKind::Break | TStmtKind::Continue => or_jumps,
         TStmtKind::Block(b) => block_returns(b, or_jumps),
         TStmtKind::If { then, els, .. } => block_returns(then, or_jumps) && block_returns(els, or_jumps),
-        TStmtKind::Expr(TExpr { kind: TExprKind::Match { arms, .. }, .. }) => {
-            arms.iter().all(|a| matches!(&a.body, TArmBody::Block(b) if block_returns(b, or_jumps)))
-        }
+        TStmtKind::Expr(TExpr { kind: TExprKind::Match { arms, .. }, .. }) => arms.iter().all(|a| match &a.body {
+            TArmBody::Block(b) => block_returns(b, or_jumps),
+            TArmBody::Expr(x) => matches!(x.kind, TExprKind::Unreachable),
+        }),
         _ => false,
     })
 }
@@ -2435,6 +2442,7 @@ impl<'a> Checker<'a> {
             | ExprKind::MethodCall { .. }
             | ExprKind::Builtin { .. }
             | ExprKind::Try(_)
+            | ExprKind::Unreachable
             | ExprKind::Catch { .. } => {
                 let t = self.expr(e, None)?;
                 self.handled(t)
@@ -2587,7 +2595,7 @@ impl<'a> Checker<'a> {
                 }
                 Ok(())
             }
-            TExprKind::Field { base, .. } => self.check_mutable(base, addr_of),
+            TExprKind::Field { base, .. } | TExprKind::Unwrap(base) => self.check_mutable(base, addr_of),
             // The slice type decides, not where the slice is stored.
             TExprKind::Index { base, .. } => match &base.ty {
                 Type::Slice(_, true) => Ok(()),
@@ -2617,7 +2625,7 @@ impl<'a> Checker<'a> {
     fn is_lvalue(t: &TExpr) -> bool {
         match &t.kind {
             TExprKind::Var(_) | TExprKind::Global(_) | TExprKind::Deref(_) => true,
-            TExprKind::Field { base, .. } => Self::is_lvalue(base),
+            TExprKind::Field { base, .. } | TExprKind::Unwrap(base) => Self::is_lvalue(base),
             TExprKind::Index { base, .. } => matches!(base.ty, Type::Slice(..) | Type::CPtr(_)) || Self::is_lvalue(base),
             _ => false,
         }
@@ -3189,6 +3197,41 @@ impl<'a> Checker<'a> {
                     None => None,
                 };
                 (TExprKind::Catch { expr: Box::new(t), capture, body: Box::new(body?) }, payload)
+            }
+            ExprKind::Unreachable => (TExprKind::Unreachable, expected.cloned().unwrap_or(Type::Void)),
+            ExprKind::Unwrap(inner) => {
+                let t = self.value(inner, None)?;
+                let Type::Optional(v) = &t.ty else {
+                    return err(E0098, span, format!("`.?` needs an optional value (`?T`), found `{}`", t.ty));
+                };
+                let ty = (**v).clone();
+                (TExprKind::Unwrap(Box::new(t)), ty)
+            }
+            ExprKind::OrElse { expr, body } => {
+                let t = self.expr(expr, None)?;
+                let payload = match &t.ty {
+                    Type::Optional(v) => (**v).clone(),
+                    Type::Error => return Err(silent()),
+                    ty => {
+                        let hint = if matches!(ty, Type::ErrorUnion(..)) { " (handle an error union with `catch`)" } else { "" };
+                        return err(E0098, t.span, format!("`orelse` needs an optional value (`?T`), found `{ty}`{hint}"));
+                    }
+                };
+                let failures = self.failures;
+                let body = match &**body {
+                    ArmBody::Block(b) => {
+                        let stmts = self.block(b);
+                        if self.failures == failures && !block_returns(&stmts, true) {
+                            Err(Error::new(E0067, span, format!(
+                                "this `orelse` block must end with `return`, `break`, `continue` or `unreachable`; to give a `{payload}` instead, write `orelse <expression>`"
+                            )))
+                        } else {
+                            Ok(TArmBody::Block(stmts))
+                        }
+                    }
+                    ArmBody::Expr(x) => self.expect(x, &payload).map(TArmBody::Expr),
+                };
+                (TExprKind::OrElse { expr: Box::new(t), body: Box::new(body?) }, payload)
             }
             // `Set.Name`: an error value.
             ExprKind::Field { base, name } if matches!(&base.kind, ExprKind::Ident(n) if self.sets.contains_key(n)) => {
@@ -4137,13 +4180,18 @@ impl<'a> Checker<'a> {
         // literal or `null` decides the type of the `match`.
         let mut want = if is_stmt { None } else { expected.cloned() };
         let mut order: Vec<usize> = (0..arms.len()).collect();
+        let unreachable = |a: &ast::MatchArm| matches!(&a.body, ArmBody::Expr(x) if matches!(strip_parens(x).kind, ExprKind::Unreachable));
         if !is_stmt
             && want.is_none()
-            && let Some(i) = arms.iter().position(|a| matches!(&a.body, ArmBody::Expr(x) if !is_untyped(x) && !is_null(x)))
+            && let Some(i) = arms
+                .iter()
+                .position(|a| matches!(&a.body, ArmBody::Expr(x) if !is_untyped(x) && !is_null(x)) && !unreachable(a))
         {
             order.remove(i);
             order.insert(0, i);
         }
+        // `unreachable` takes the type of the other arms.
+        order.sort_by_key(|&i| unreachable(&arms[i]));
         let mut checked: Vec<Option<TArm>> = vec![None; arms.len()];
         for i in order {
             self.scopes.push(HashMap::new());

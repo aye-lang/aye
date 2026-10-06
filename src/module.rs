@@ -856,7 +856,13 @@ impl Loader<'_> {
             | ExprKind::AddrOf { expr, .. }
             | ExprKind::Deref(expr)
             | ExprKind::Try(expr)
+            | ExprKind::Unwrap(expr)
             | ExprKind::Paren(expr) => self.expr(expr),
+            ExprKind::Unreachable => {}
+            ExprKind::OrElse { expr, body } => {
+                self.expr(expr);
+                self.arm_body(body);
+            }
             ExprKind::Cast { expr, ty } => {
                 self.expr(expr);
                 self.ty(ty);

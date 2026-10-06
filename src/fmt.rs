@@ -51,7 +51,7 @@ pub(crate) enum Role {
     Binary,
     /// An operator without spaces: `a.b`, `0..n`, `'a'..='z'`, `E!T`, `...`.
     Tight,
-    /// `.*`
+    /// `.*`, `.?`
     Postfix,
     Comma,
     Colon,
@@ -211,7 +211,7 @@ fn classify(items: &mut [Item]) {
             Tok::Comma => Role::Comma,
             Tok::Colon => Role::Colon,
             Tok::Dot | Tok::DotDot | Tok::DotDotEq | Tok::Ellipsis => Role::Tight,
-            Tok::DotStar => Role::Postfix,
+            Tok::DotStar | Tok::DotQuestion => Role::Postfix,
             Tok::Minus | Tok::Amp | Tok::Star if operand => Role::Binary,
             Tok::Minus | Tok::Amp | Tok::Star | Tok::Tilde | Tok::Question => Role::Prefix,
             Tok::Bang if operand => Role::Tight,

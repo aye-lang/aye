@@ -1,0 +1,4 @@
+pub fn main() {
+    let o: ?i64 = null
+    @println(o.? + 1)
+}

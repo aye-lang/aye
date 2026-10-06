@@ -30,8 +30,8 @@ builtin     = "@" ident ;
 keyword     = "fn" | "let" | "var" | "pub" | "import" | "struct" | "enum"
             | "error" | "interface" | "dyn" | "match" | "if" | "else" | "for"
             | "while" | "break" | "continue" | "return" | "defer" | "errdefer"
-            | "try" | "catch" | "comptime" | "where" | "as" | "test"
-            | "mut" | "extern" ;
+            | "try" | "catch" | "orelse" | "unreachable" | "comptime" | "where"
+            | "as" | "test" | "mut" | "extern" ;
 (* `comptime` appears only before a parameter and `where` only after a
    return type; elsewhere they are errors.
    `true`, `false`, `null`, `in`, `Self`, `type` and the primitive type
@@ -172,22 +172,24 @@ cond_expr   = header_expr ;
      1  ||
      2  &&
      3  == != < <= > >=
-     4  catch
+     4  catch orelse
      5  & | ^
      6  << >>
      7  + - +% -%
      8  * / % *%
      9  as            (postfix cast, binds looser than unary: -x as f32 == (-x) as f32)
     10  - ! ~ & &mut try   (unary prefix)
-    11  call, index, slice, field, .*  *)
+    11  call, index, slice, field, .*, .?  *)
 
 expr        = or_expr ;
 or_expr     = and_expr { "||" and_expr } ;
 and_expr    = cmp_expr { "&&" cmp_expr } ;
 cmp_expr    = catch_expr [ cmp_op catch_expr ] ;
 cmp_op      = "==" | "!=" | "<" | "<=" | ">" | ">=" ;
-catch_expr  = bit_expr { "catch" [ "|" ident "|" ] ( block | bit_expr ) } ;
-               (* x catch |e| { ... } runs the block on an error; x catch v gives v *)
+catch_expr  = bit_expr { ( "catch" [ "|" ident "|" ] | "orelse" ) fallback } ;
+               (* x catch |e| { ... } runs the block on an error; x catch v gives v;
+                  x orelse v gives v when the optional x is null *)
+fallback    = block | "return" [ expr ] | "break" | "continue" | bit_expr ;
 bit_expr    = shift_expr { "&" shift_expr } | shift_expr { "|" shift_expr }
             | shift_expr { "^" shift_expr } ;   (* one operator per chain *)
 shift_expr  = add_expr { ( "<<" | ">>" ) add_expr } ;
@@ -198,12 +200,14 @@ unary       = ( "-" | "!" | "~" | "&" [ "mut" ] | "try" ) unary | postfix ;
 postfix     = primary { "." ident
                       | "." ident "(" [ args ] ")"             (* method call; Type.f(...) *)
                       | ".*"                                   (* dereference *)
+                      | ".?"                                   (* unwrap an optional *)
                       | "(" [ args ] ")"                       (* call of a function value
                                                                   that is not a name: f()(x) *)
                       | "[" expr "]"
                       | "[" [ expr ] ".." [ expr ] "]" } ;
 primary     = int_lit | float_lit | string_lit | char_lit
             | "true" | "false" | "null"
+            | "unreachable"                                (* panics; any type *)
             | ident
             | path "." ident                               (* variant without payload, or error *)
             | path "." ident "{" [ field_init { "," field_init } [ "," ] ] "}"

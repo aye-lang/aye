@@ -90,9 +90,9 @@ context; `ore doc --signatures std` prints all of std.
   There are no block comments. `///` lines right above a declaration or
   member are its doc comment (`ore doc` shows them).
 - Identifiers: a letter or `_`, then letters, digits or `_` (ASCII only).
-- Keywords (28): `fn let var pub import struct enum error interface dyn
+- Keywords (30): `fn let var pub import struct enum error interface dyn
   match if else for while break continue return defer errdefer try catch
-  comptime where as test mut extern`.
+  orelse unreachable comptime where as test mut extern`.
 - Predeclared names (not keywords, cannot be declared again): `true false
   null Self type Integer` and the primitive types `i8 i16 i32 i64 isize u8 u16 u32
   u64 usize f32 f64 bool`. `in` is special only in a `for` header.
@@ -564,14 +564,14 @@ left-associative; comparisons do not chain, `a < b < c` is an error):
 | 1 | `\|\|` |
 | 2 | `&&` |
 | 3 | `== != < <= > >=` |
-| 4 | `catch` |
+| 4 | `catch`, `orelse` |
 | 5 | `& \| ^` (not mixed without parentheses) |
 | 6 | `<< >>` |
 | 7 | `+ - +% -%` |
 | 8 | `* / % *%` |
 | 9 | `as` |
 | 10 | prefix `- ! ~ & &mut try` |
-| 11 | call `f()`, `x.f`, `x.m()`, `x[i]`, `x[a..b]`, `p.*` |
+| 11 | call `f()`, `x.f`, `x.m()`, `x[i]`, `x[a..b]`, `p.*`, `x.?` |
 
 - Arithmetic `+ - * / %` panics on overflow and division by zero (debug and
   safe mode); `+% -% *%` wrap. Integer `/` truncates toward zero; `%` is for
@@ -668,12 +668,36 @@ pub fn main() {
     }
     var maybe: ?i64 = null
     maybe = 3
+    @println(maybe.? + 1)
+}
+
+fn sumFound(xs: []i64, wants: []i64) i64 {
+    var t: i64 = 0
+    for w in wants {
+        let i = find(xs, w) orelse continue
+        t += xs[i]
+    }
+    return t
+}
+
+fn indexOr(xs: []i64, want: i64) usize {
+    return find(xs, want) orelse xs.len
 }
 ```
 
 `if x |v| { } else { }` unwraps: `v` is the value, visible in the first
 block; `while x |v| { }` loops while `x` has a value. `null` needs a known
-optional type (`var m: ?i64 = null`). There is no `orelse` and no `.?`.
+optional type (`var m: ?i64 = null`).
+
+- `x orelse d` is the value of `x`, or `d` (a `T`, evaluated only when `x`
+  is `null`). Instead of `d`: `return [value]`, `break`, `continue`, or a
+  block that ends with one of them or `unreachable`. `catch` takes the same.
+- `x.?` is the value of `x`; a `null` panics (`unwrap of null`). It is a
+  place when `x` is: `opt.?.count += 1`.
+- `unreachable` panics (`reached unreachable code`); it can stand for a
+  value of any type (`_ => unreachable`, `x orelse unreachable`). A
+  function may end with it instead of a `return`. In `fast` mode these
+  checks are gone, and reaching them is undefined behavior.
 
 ### match
 
@@ -1443,7 +1467,7 @@ pub fn main() !void {
   <reason>` to stderr and aborts (status 134). Reasons: `integer overflow`,
   `division by zero`, `index out of bounds: index I, len N`, `slice bounds
   out of range`, `integer cast out of range`, `shift amount out of range`,
-  `double free ...`.
+  `unwrap of null`, `reached unreachable code`, `double free ...`.
 - `fast` mode removes the checks: overflow wraps, out-of-bounds access is
   undefined behavior.
 - Struct fields, arrays and slices are laid out by the compiler; only an
@@ -1517,8 +1541,8 @@ end. The edits of one diagnostic are applied together.
   `p.*` (Zig), not `*p`.
 - `dyn I` is made from `&x`, never from a value; it does not box.
 - No `@import`, no `const` (a top-level `let` is a constant), no closures
-  (a function value cannot capture locals), no `orelse`, no `defer` with
-  `return` inside.
+  (a function value cannot capture locals), no `defer` with `return`
+  inside.
 - C's `void *` is `?[*]u8`; pass `&mut x` where C wants a pointer, and
   `@ptrCast` it when C wants a `void *`.
 - Output to stdout is `@print`/`@println` or `std.fs.stdout().write(bytes)`;

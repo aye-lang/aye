@@ -360,8 +360,16 @@ pub enum ExprKind {
     Match { scrutinee: Box<Expr>, arms: Vec<MatchArm> },
     /// `try x`
     Try(Box<Expr>),
-    /// `x catch |e| body`; the body is a block or an expression.
+    /// `x catch |e| body`; the body is a block or an expression. A body
+    /// `return`, `break` or `continue` is parsed as a block of it.
     Catch { expr: Box<Expr>, capture: Option<(String, Span)>, body: Box<ArmBody> },
+    /// `x orelse body`: the value of the optional `x`, or else the body (as
+    /// for `catch`).
+    OrElse { expr: Box<Expr>, body: Box<ArmBody> },
+    /// `x.?`: the value of the optional `x`; a panic if it is `null`.
+    Unwrap(Box<Expr>),
+    /// `unreachable`: a panic; its type is the one expected there.
+    Unreachable,
     /// `[N]T{a, b, c}`; `ty` is the array type. Also the empty slice
     /// `[]T{}`, where `ty` is a slice type.
     ArrayLit { ty: TypeExpr, elems: Vec<Expr> },

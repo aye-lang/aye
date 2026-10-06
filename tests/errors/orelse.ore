@@ -1,0 +1,21 @@
+error E { Bad }
+
+fn f() E!i64 {
+    return 1
+}
+
+fn g() ?i64 {
+    return null
+}
+
+pub fn main() {
+    let n: i64 = 3
+    let a = n.?
+    let b = n orelse 0
+    let c = f() orelse 0
+    let d = g() orelse true
+    let e = g() orelse {
+        @println("none")
+    }
+    let h = g() orelse return 5
+}

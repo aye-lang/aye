@@ -1,0 +1,6 @@
+orelse.ore:13:14: error[E0098]: `.?` needs an optional value (`?T`), found `i64`
+orelse.ore:14:13: error[E0098]: `orelse` needs an optional value (`?T`), found `i64`
+orelse.ore:15:13: error[E0098]: `orelse` needs an optional value (`?T`), found `E!i64` (handle an error union with `catch`)
+orelse.ore:16:24: error[E0023]: mismatched types: expected `i64`, found `bool`
+orelse.ore:17:17: error[E0067]: this `orelse` block must end with `return`, `break`, `continue` or `unreachable`; to give a `i64` instead, write `orelse <expression>`
+orelse.ore:20:31: error[E0049]: function has no return type but a value was returned

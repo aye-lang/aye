@@ -1,0 +1,133 @@
+// `orelse` gives a default for `null` or leaves (`return`, `break`,
+// `continue`, a block); `.?` unwraps an optional that must hold a value;
+// `unreachable` marks code that cannot run. `catch` takes `return`,
+// `break` and `continue` the same way.
+
+import std.heap.General
+import std.pool.Pool
+
+error ParseError { Empty }
+
+fn find(xs: []i64, want: i64) ?usize {
+    for i, x in xs {
+        if x == want {
+            return i
+        }
+    }
+    return null
+}
+
+fn indexOr(xs: []i64, want: i64) usize {
+    return find(xs, want) orelse 99
+}
+
+fn indexOrReturn(xs: []i64, want: i64) i64 {
+    let i = find(xs, want) orelse return -1
+    return i as i64
+}
+
+fn sumFound(xs: []i64, wants: []i64) i64 {
+    var t: i64 = 0
+    for w in wants {
+        let i = find(xs, w) orelse continue
+        t += xs[i]
+    }
+    return t
+}
+
+fn countUntilMissing(xs: []i64, wants: []i64) i64 {
+    var n: i64 = 0
+    for w in wants {
+        let i = find(xs, w) orelse break
+        n += 1
+    }
+    return n
+}
+
+fn report(xs: []i64, want: i64) {
+    let i = find(xs, want) orelse {
+        @println("missing")
+        return
+    }
+    @println(i)
+}
+
+fn noisy() usize {
+    @println("default computed")
+    return 0
+}
+
+fn sign(x: i64) i64 {
+    if x > 0 {
+        return 1
+    }
+    if x <= 0 {
+        return 0
+    }
+    unreachable
+}
+
+enum Kind { A, B, C }
+
+fn name(k: Kind) []u8 {
+    if k == Kind.C {
+        return "c"
+    }
+    return match k {
+        .A => "a"
+        .B => "b"
+        .C => unreachable
+    }
+}
+
+fn parse(s: []u8) ParseError!i64 {
+    if s.len == 0 {
+        return ParseError.Empty
+    }
+    return s.len as i64
+}
+
+fn parseOr(s: []u8) i64 {
+    let n = parse(s) catch return -1
+    return n
+}
+
+struct Node {
+    depth: i64
+}
+
+pub fn main() !void {
+    let xs = [_]i64{10, 20, 30}
+    @println(indexOr(xs[..], 20))
+    @println(indexOr(xs[..], 25))
+    @println(indexOrReturn(xs[..], 30))
+    @println(indexOrReturn(xs[..], 35))
+    let wants = [_]i64{10, 15, 30}
+    @println(sumFound(xs[..], wants[..]))
+    @println(countUntilMissing(xs[..], wants[..]))
+    report(xs[..], 30)
+    report(xs[..], 31)
+    @println(find(xs[..], 10) orelse noisy())
+    @println(find(xs[..], 11) orelse noisy())
+    @println(sign(-4))
+    @println(name(Kind.B))
+    @println(name(Kind.C))
+    @println(parseOr("abc"))
+    @println(parseOr(""))
+
+    let v: ?i64 = 5
+    @println(v.? + 1)
+    var o: ?Node = Node { depth: 1 }
+    o.?.depth = 3
+    @println(o.?.depth)
+    let at = find(xs[..], 30) orelse unreachable
+    @println(at)
+
+    var gpa = General.init()
+    defer gpa.deinit()
+    var nodes = Pool(Node).init(gpa.allocator(), 2)
+    defer nodes.deinit()
+    let h = try nodes.insert(Node { depth: 1 })
+    nodes.get(h).?.depth = 7
+    @println(nodes.get(h).?.depth)
+}

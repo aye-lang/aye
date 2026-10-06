@@ -1226,8 +1226,8 @@ pub fn main() {
 "#,
 }
 E0067 = 67 {
-    "`catch` block without a value",
-    "When the call returns a value (`E!T` with T not `void`), a `catch` block must leave with `return`, `break` or `continue`. To give a replacement value instead, write `catch <expression>`, for example `catch 0` or `catch |e| match e { ... }`.",
+    "`catch` or `orelse` block without a value",
+    "When the call returns a value (`E!T` with T not `void`), a `catch` block must leave with `return`, `break` or `continue` (or end in `unreachable`). To give a replacement value instead, write `catch <expression>`, for example `catch 0` or `catch |e| match e { ... }`. The same holds for an `orelse` block: `x orelse { ... return }`, or `x orelse 0`.",
     r#"error E { Failed }
 
 fn f() E!u32 {
@@ -2015,6 +2015,33 @@ fn size(s: Shape) i64 {
 
 pub fn main() {
     @println(size(Shape.Dot))
+}
+"#,
+}
+E0098 = 98 {
+    "`orelse` or `.?` on a value that is not optional",
+    "`x orelse default` and `x.?` take the value out of an optional `?T`. On an error union `E!T` use `catch` (or `try`); a value that is not optional needs neither.",
+    r#"fn first(xs: []i64) i64 {
+    return xs[0]
+}
+
+pub fn main() {
+    let xs = [_]i64{1, 2}
+    let n = first(xs[..]) orelse 0
+    @println(n)
+}
+"#,
+    r#"fn first(xs: []i64) ?i64 {
+    if xs.len == 0 {
+        return null
+    }
+    return xs[0]
+}
+
+pub fn main() {
+    let xs = [_]i64{1, 2}
+    let n = first(xs[..]) orelse 0
+    @println(n)
 }
 "#,
 }
