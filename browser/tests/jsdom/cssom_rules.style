@@ -1,0 +1,57 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <title>
+      display: none
+    <style id="plain">
+      display: none
+    <style id="off">
+      display: none
+    <style data-styled="active">
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <p id="a" class="ssr keep">
+      display: block
+      color: rgb(0, 128, 0)
+      font-weight: 700
+      font-style: italic
+      margin-top: 16px
+      margin-bottom: 16px
+    <p id="b">
+      display: block
+      font-weight: 700
+      margin-top: 16px
+      margin-bottom: 16px
+      text-decoration-line: underline
+    <p id="c">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <p id="d">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <p id="e">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: right
+    <p id="f">
+      display: block
+      font-size: 24px
+      margin-top: 24px
+      margin-bottom: 24px
+    <pre id="out">
+      display: block
+      font-family: monospace
+      margin-top: 16px
+      margin-bottom: 16px
+      white-space: pre
+    <script>
+      display: none

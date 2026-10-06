@@ -5,9 +5,12 @@
 // `@import` rules are fetched relative to the sheet (its URL the Referer)
 // and come before its rules (at most `MAX_IMPORT_DEPTH` sheets deep). The
 // `url()`s of a fetched sheet are made absolute against its URL as it is
-// parsed.
+// parsed. The rules scripts gave sheets through the CSSOM
+// (`doc.sheets`) take the place of a `style` element's text, come after a
+// link's rules, and those of `document.adoptedStyleSheets` come last.
 
 import css
+import dom
 import dom.Document
 import dom.NodeId
 import encoding
@@ -31,14 +34,53 @@ pub fn authorSheets(alloc: Allocator, doc: *Document, address: *Url, media: css.
             var src = text.Builder.init(alloc)
             defer src.deinit()
             try doc.textContent(h, &mut src)
+            if doc.sheets.ofOwner(h) |scripted| {
+                if text.eql(scripted.source, src.bytes()) {
+                    // Scripts changed its rules since it had this text.
+                    if !scripted.disabled {
+                        try scriptedRules(alloc, &base, address, scripted, media, sheet)
+                    }
+                    cur = doc.following(h, doc.root)
+                    continue
+                }
+            }
             try parseWithImports(alloc, &base, address, src.bytes(), media, sheet, false)
         } else if doc.isElement(h, "link") && isStylesheetLink(doc, h) && (try mediaOk(doc, h, media, sheet)) {
-            if doc.attr(h, "href") |href| {
-                try linkedSheet(alloc, &base, address, href, media, sheet)
+            let scripted = doc.sheets.ofOwner(h)
+            var disabled = false
+            if scripted |ss| {
+                disabled = ss.disabled
+            }
+            if !disabled {
+                if doc.attr(h, "href") |href| {
+                    try linkedSheet(alloc, &base, address, href, media, sheet)
+                }
+                if scripted |ss| {
+                    try scriptedRules(alloc, &base, address, ss, media, sheet)
+                }
             }
         }
         cur = doc.following(h, doc.root)
     }
+    for id in doc.sheets.adopted.items() {
+        if doc.sheets.byId(id) |ss| {
+            if ss.owner == null && !ss.disabled {
+                try scriptedRules(alloc, &base, address, ss, media, sheet)
+            }
+        }
+    }
+}
+
+// The rules a script gave a sheet (`dom.ScriptSheets`), parsed as one
+// sheet in the document.
+fn scriptedRules(alloc: Allocator, base: *Url, address: *Url, ss: *dom.ScriptSheet, media: css.Media, sheet: *mut css.Sheet) AllocError!void {
+    var src = text.Builder.init(alloc)
+    defer src.deinit()
+    for r in ss.rules.items() {
+        try src.append(r)
+        try src.appendByte('\n')
+    }
+    try parseWithImports(alloc, base, address, src.bytes(), media, sheet, false)
 }
 
 // Fetches the linked sheets concurrently into the session's cache

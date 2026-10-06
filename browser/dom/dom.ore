@@ -89,6 +89,8 @@ pub struct Document {
     // The contents of `template` elements: pairs of a template and the
     // root of its inert fragment (a tree out of the document).
     templates: List(NodeId)
+    // The rules scripts gave style sheets through the CSSOM (cssom.ore).
+    sheets: ScriptSheets
 
     /// An empty document: only the `Document` node.
     pub fn init(alloc: Allocator) AllocError!Document {
@@ -106,11 +108,13 @@ pub struct Document {
             controls: Controls.init(alloc),
             quirks: false,
             templates: List(NodeId).init(alloc),
+            sheets: ScriptSheets.init(alloc),
         }
     }
 
     pub fn deinit(self: *mut Self) {
         self.templates.deinit()
+        self.sheets.deinit()
         self.controls.deinit()
         self.strings.deinit()
         self.alloc.destroy(self.strings)

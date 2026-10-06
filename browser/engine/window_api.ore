@@ -57,6 +57,7 @@ fn installWindow(s: *mut Script) JsError!void {
     try defMethod(it, o, "cssNames", 0, akCssNames)
     try defMethod(it, o, "supports", 1, akSupports)
     try installFrames(s, o)
+    try installCssom(s, o)
 
     let c = try it.newObject(it.object_proto)
     try it.defineValue(it.global, "console", js.objVal(c))
@@ -630,10 +631,11 @@ fn computedStyling(s: *mut Script) AllocError!*mut Styling {
     return c
 }
 
-// What the author style sheets come from: the style elements (their text)
-// and the stylesheet links (their href and rel), hashed into a number.
+// What the author style sheets come from: the style elements (their text),
+// the stylesheet links (their href and rel) and the rules scripts gave
+// sheets (`doc.sheets`), hashed into a number.
 fn sheetsKey(doc: *Document) u64 {
-    var key: u64 = 1469598103934665603
+    var key = mix(1469598103934665603, doc.sheets.generation)
     var cur: ?NodeId = doc.root
     while cur |h| {
         let n = doc.node(h)
