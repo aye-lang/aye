@@ -105,6 +105,7 @@ pub extern struct SDL_WindowEvent {
 pub extern fn SDL_Init(flags: u32) i32
 pub extern fn SDL_Quit()
 pub extern fn SDL_GetError() [*]u8
+pub extern fn SDL_GetModState() u16
 pub extern fn SDL_SetHint(name: [*]u8, value: [*]u8) i32
 pub extern fn SDL_CreateWindow(title: [*]u8, x: i32, y: i32, w: i32, h: i32, flags: u32) ?*mut SDL_Window
 pub extern fn SDL_DestroyWindow(w: *mut SDL_Window)

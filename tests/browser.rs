@@ -1302,6 +1302,34 @@ fn window_hit_layers() {
 /// stays 40 px below the top until the end of its section, the sticky
 /// footer stays at the bottom, and a sticky box in a box that clips does
 /// not move. Hit testing sees them where they are drawn.
+/// A page wider than the window scrolls sideways (left and right
+/// arrows); the mouse then points at the page under it.
+#[test]
+fn window_sideways_scroll() {
+    if !has_sdl() {
+        println!("skipped: no SDL2");
+        return;
+    }
+    let dir = format!("file://{}/browser/tests/ui/", root().display());
+    let cases: &[(&str, &str)] = &[
+        ("move:250,80", ""),
+        ("key:right key:right key:right key:right key:right key:right key:right key:right key:right move:250,80", "other.html"),
+        ("key:right key:right key:right key:right key:right key:right key:right key:right key:right key:left key:left key:left key:left key:left key:left key:left key:left key:left move:250,80", ""),
+        ("key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right move:50,80", "other.html"),
+    ];
+    let mut failures = Vec::new();
+    for (events, want) in cases {
+        let out = run_window(&["browser/tests/ui/wide.html", "--font", "fixed", "--width", "400", "--height", "340", "--frames", "1", "--state", "--events", events]);
+        let got = text(&out.stdout).replace(&dir, "");
+        let status = got.lines().find(|l| l.starts_with("status ")).unwrap_or("").to_string();
+        let want_line = format!("status {want}");
+        if !out.status.success() || !out.stderr.is_empty() || status != want_line {
+            failures.push(format!("--events {events:?}: {}\n{}--- expected\n{want_line}\n--- got\n{got}", out.status, text(&out.stderr)));
+        }
+    }
+    assert!(failures.is_empty(), "{} of {} cases failed:\n\n{}", failures.len(), cases.len(), failures.join("\n"));
+}
+
 #[test]
 fn window_scroll_positions() {
     if !has_sdl() {
