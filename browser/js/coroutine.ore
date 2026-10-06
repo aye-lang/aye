@@ -1,9 +1,7 @@
 // js/coroutine: generators and async functions. The interpreter walks
 // the syntax tree on the C stack, so a function that can stop in the
-// middle (`yield`, `await`) runs on a thread of its own: a coroutine.
-// Only one thread runs JavaScript at a time; control passes between the
-// one that resumes a coroutine and the coroutine through two channels,
-// so the engine is never used by two threads at once.
+// middle (`yield`, `await`) runs on a C stack of its own: a coroutine of
+// std.coro, resumed and run on the engine's thread.
 //
 // A coroutine has its own value stack and frames (absolute indices into
 // the stack stay valid while it is suspended): `resume` swaps them into
@@ -22,16 +20,15 @@
 //   runs) the next time a coroutine is made, and when the engine is
 //   freed.
 
+import std.coro
 import std.list.List
 import std.mem.AllocError
-import std.sync.Channel
-import std.thread
 
-// Coroutines run on threads with this much stack (reserved, not taken).
+// Coroutines run on stacks of this size (reserved, not taken).
 let CO_STACK: usize = 256 << 20
 // What a coroutine's code may use of it (see Interp.markStackBase).
 let CO_ROOM: u64 = 200 << 20
-// Live coroutines at most (each is a thread).
+// Live coroutines at most (each reserves CO_STACK of address space).
 let MAX_COROUTINES: usize = 4000
 
 // Coroutine.state
@@ -66,8 +63,7 @@ pub struct Coroutine {
     stack: List(Value)
     frames: List(Frame)
     cenv: u32
-    // The bottom of its thread's stack (Interp.stack_base) while it is
-    // suspended.
+    // The bottom of its stack (Interp.stack_base) while it is suspended.
     cbase: u64
     state: u8
     mode: u8
@@ -79,9 +75,8 @@ pub struct Coroutine {
     // What the last stop was: 0 a yield, 1 an await.
     kind: u8
     is_async: bool
-    thread: ?thread.Thread
-    inbox: Channel(u8)
-    outbox: Channel(u8)
+    // Its C stack, from the first resume until it ends.
+    ctx: ?coro.Coroutine
     // The generator object (NONE once collected).
     obj: u32
 }
@@ -144,12 +139,7 @@ fn newCoroutine(it: *mut Interp, func: u32, env: u32, fobj: u32, thisv: Value, a
     }
     let g = try it.newObjectOf(Class.Generator, proto, ObjData.Prim { v: numVal(id as f64) })
     it.pop()
-    var inbox = try Channel(u8).init(it.alloc, 1)
-    var outbox = Channel(u8).init(it.alloc, 1) catch |e| {
-        inbox.deinit()
-        return e
-    }
-    let co = it.alloc.create(Coroutine {
+    let co = try it.alloc.create(Coroutine {
         it: it,
         id: id as u32,
         func: func,
@@ -168,28 +158,20 @@ fn newCoroutine(it: *mut Interp, func: u32, env: u32, fobj: u32, thisv: Value, a
         ret_value: Value.Undefined,
         kind: 0,
         is_async: isAsync,
-        thread: null,
-        inbox: inbox,
-        outbox: outbox,
+        ctx: null,
         obj: g,
-    }) catch |e| {
-        inbox.deinit()
-        outbox.deinit()
-        return e
-    }
+    })
     it.coroutines.items()[id] = co
     return objVal(g)
 }
 
-// The thread of a coroutine: waits to be resumed, runs the function,
-// reports how it ended.
+// The function of a coroutine's C stack: runs the JavaScript function,
+// sets how it ended.
 fn coMain(co: *mut Coroutine) {
-    co.inbox.recv()
     let it = co.it
     it.markStackBase(CO_ROOM)
     if co.mode == RESUME_KILL {
         co.outcome = OUT_TERMINATED
-        co.outbox.send(1) catch |e| {}
         return
     }
     if co.mode != RESUME_NEXT {
@@ -200,7 +182,6 @@ fn coMain(co: *mut Coroutine) {
         } else {
             co.outcome = OUT_RETURN
         }
-        co.outbox.send(1) catch |e| {}
         return
     }
     let base = it.stack.len()
@@ -214,7 +195,6 @@ fn coMain(co: *mut Coroutine) {
     co.args = NONE
     if !ok {
         co.outcome = OUT_OOM
-        co.outbox.send(1) catch |e| {}
         return
     }
     if it.invoke(co.func, co.env, co.fobj, co.this_v, base, n as usize, NONE) |r| {
@@ -243,7 +223,6 @@ fn coMain(co: *mut Coroutine) {
         }
     }
     it.truncate(base)
-    co.outbox.send(1) catch |e| {}
 }
 
 // Resumes co (mode, with `value`) until it yields or ends; the outcome
@@ -276,16 +255,15 @@ fn resume(it: *mut Interp, co: *mut Coroutine, mode: u8, value: Value) JsError!v
     co.transfer = value
     var failed = false
     if co.state == CO_NEW {
-        if thread.spawnWithStack(Coroutine, coMain, co, CO_STACK) |t| {
-            co.thread = t
+        if coro.create(Coroutine, it.alloc, CO_STACK, coMain, co) |c| {
+            co.ctx = c
         } else |e| {
             failed = true
         }
     }
     if !failed {
         co.state = CO_RUNNING
-        co.inbox.send(1) catch |e| {}
-        co.outbox.recv()
+        co.ctx.?.resume()
     }
     co.stack = it.stack
     co.frames = it.frames
@@ -304,7 +282,7 @@ fn resume(it: *mut Interp, co: *mut Coroutine, mode: u8, value: Value) JsError!v
     }
     if failed {
         co.state = CO_DONE
-        try it.rangeError("Cannot start a generator: no thread available")
+        try it.rangeError("Cannot start a generator: no memory for its stack")
     }
     if co.outcome == OUT_YIELD {
         co.state = CO_SUSPENDED
@@ -322,12 +300,12 @@ fn resume(it: *mut Interp, co: *mut Coroutine, mode: u8, value: Value) JsError!v
     }
 }
 
-// A coroutine that ended: its thread is joined and its stack freed.
+// A coroutine that ended: its C stack and value stack are freed.
 fn finish(co: *mut Coroutine) {
     co.state = CO_DONE
-    if co.thread |t| {
-        t.join()
-        co.thread = null
+    if co.ctx |c| {
+        c.deinit()
+        co.ctx = null
     }
     co.stack.clear()
     co.frames.clear()
@@ -347,8 +325,6 @@ fn destroyCoroutine(it: *mut Interp, co: *mut Coroutine) {
     }
     co.stack.deinit()
     co.frames.deinit()
-    co.inbox.deinit()
-    co.outbox.deinit()
     it.coroutines.items()[co.id] = null
     it.alloc.destroy(co)
 }
@@ -441,8 +417,7 @@ pub fn coYield(it: *mut Interp, v: Value, kind: u8) JsError!Value {
     co.kind = kind
     co.outcome = OUT_YIELD
     co.cbase = it.stack_base
-    co.outbox.send(1) catch |e| {}
-    co.inbox.recv()
+    coro.yield()
     if co.mode == RESUME_NEXT {
         return co.transfer
     }
