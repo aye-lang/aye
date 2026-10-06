@@ -1,0 +1,31 @@
+viewport 800x600
+  block <html> (0, 0) 800x96
+    block <body> (0, 0) 800x92
+      flex <div class="f"> (0, 0) 200x20
+        block <div> (0, 0) 208x20
+          line (0, 0) 208x20
+            text (0, 2) 208x16 "Unbreakable_long_word_here"
+        block <div> (208, 0) 8x20
+          line (208, 0) 8x20
+            text (208, 2) 8x16 "b"
+      flex <div class="f"> (0, 24) 200x20
+        block <div style="overflow: hidden"> (0, 24) 100x20
+          line (0, 24) 100x20
+            text (0, 26) 208x16 "Unbreakable_long_word_here"
+        block <div> (100, 24) 100x20
+          line (100, 24) 100x20
+            text (100, 26) 8x16 "b"
+      flex <div class="f"> (0, 48) 200x20
+        block <div style="max-width: 60px"> (0, 48) 60x20
+          line (0, 48) 60x20
+            text (0, 50) 208x16 "Unbreakable_long_word_here"
+        block <div> (60, 48) 140x20
+          line (60, 48) 140x20
+            text (60, 50) 8x16 "b"
+      flex <div class="f"> (0, 72) 200x20
+        block <div style="min-width: 0"> (0, 72) 100x20
+          line (0, 72) 100x20
+            text (0, 74) 208x16 "Unbreakable_long_word_here"
+        block <div> (100, 72) 100x20
+          line (100, 72) 100x20
+            text (100, 74) 8x16 "b"

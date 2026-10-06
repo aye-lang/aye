@@ -31,7 +31,12 @@ test "inline Markdown moves spaces out of emphasis" {
     @expectEqual("see **this** now", b.bytes())
     b.clear()
     try wrapInline(&mut b, "   ", "*", "*")
-    @expectEqual("", b.bytes())
+    @expectEqual(" ", b.bytes())
+    // The content of an inline element keeps its leading space (`a
+    // <span> (b)</span>`), so that the parent can keep it.
+    b.clear()
+    try appendCollapsed(&mut b, " (b)")
+    @expectEqual(" (b)", b.bytes())
 }
 
 test "hard breaks join trimmed lines" {

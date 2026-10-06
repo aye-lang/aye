@@ -1467,6 +1467,10 @@ impl Gen {
                 let args: String = args.iter().map(|a| format!(", {}", self.operand(f, a))).collect();
                 format!("{r}.vt->{}({r}.ptr{args})", c_field(method))
             }
+            Rvalue::Downcast { val, iface, strukt, ty } => {
+                let d = self.operand(f, val);
+                format!("({d}.vt == &{} ? ({}){d}.ptr : NULL)", vtable_name(iface, strukt), c_type(ty))
+            }
             Rvalue::ToDyn { ptr, iface, strukt } => {
                 format!("((ore_D_{}){{(void *){}, &{}}})", c_name(iface), self.operand(f, ptr), vtable_name(iface, strukt))
             }

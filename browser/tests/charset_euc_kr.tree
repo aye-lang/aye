@@ -1,0 +1,21 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      "\n"
+      <meta charset="euc-kr">
+      "\n"
+      <title>
+        "한국어 웹 페이지"
+      "\n"
+    "\n"
+    <body>
+      "\n"
+      <!--  A page in EUC-KR, declared by its meta element.  -->
+      "\n"
+      <h1>
+        "한국어 웹 페이지"
+      "\n"
+      <p>
+        "안녕하세요, 세계. 漢字도 있습니다."
+      "\n\n\n"

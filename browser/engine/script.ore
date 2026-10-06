@@ -308,16 +308,14 @@ pub struct Script {
 
 /// The script of the native function's engine.
 fn scriptOf(it: *mut Interp) *mut Script {
-    return @ptrCast(*mut Script, it.host_data.?)
+    return @downcast(*mut Script, it.host.?).?
 }
 
 // ---- creating and freeing
 
 fn createScript(p: *mut Page) AllocError!*mut Script {
     let alloc = p.alloc
-    var interp = Interp.create(alloc) catch |e| {
-        return AllocError.OutOfMemory
-    }
+    var interp = Interp.create(alloc) catch return AllocError.OutOfMemory
     let s = alloc.create(Script {
         alloc: alloc,
         page: p,
@@ -371,7 +369,6 @@ fn createScript(p: *mut Page) AllocError!*mut Script {
         return e
     }
     s.it.host = s
-    s.it.host_data = @ptrCast([*]u8, s)
     s.it.max_depth = PAGE_DEPTH
     useStorage(alloc)
     setUp(s) catch |e| {
@@ -525,7 +522,7 @@ fn runScriptElement(s: *mut Script, el: NodeId) AllocError!void {
             return addConsole(s, "[error] Failed to load script: ", target.href)
         }
         defer res.deinit(s.alloc)
-        let code = try encoding.toUtf8(s.alloc, res.body, encoding.sniff(res.body, res.charset))
+        let code = try encoding.toUtf8(s.alloc, res.body, encoding.sniffOr(res.body, res.charset, p.encoding))
         defer s.alloc.free(code)
         return runSourceOf(s, el, code)
     }
@@ -646,21 +643,15 @@ fn leave(s: *mut Script) {
 }
 
 fn jsPush(s: *mut Script, v: Value) AllocError!void {
-    s.it.push(v) catch |e| {
-        return AllocError.OutOfMemory
-    }
+    s.it.push(v) catch return AllocError.OutOfMemory
 }
 
 fn wrapFor(s: *mut Script, h: NodeId) AllocError!Value {
-    return wrap(&mut s.it, h) catch |e| {
-        return AllocError.OutOfMemory
-    }
+    return wrap(&mut s.it, h) catch return AllocError.OutOfMemory
 }
 
 fn stringFor(s: *mut Script, b: []u8) AllocError!Value {
-    return s.it.newString(b) catch |e| {
-        return AllocError.OutOfMemory
-    }
+    return s.it.newString(b) catch return AllocError.OutOfMemory
 }
 
 // Calls stack[base] with `this` and argc arguments after it, as a call

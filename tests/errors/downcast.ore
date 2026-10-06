@@ -1,0 +1,37 @@
+interface Host {
+    fn finalize(self: *mut Self, tag: u32)
+}
+
+interface Shape {
+    fn area(self: *Self) f64
+}
+
+struct Page {
+    freed: u32
+
+    fn finalize(self: *mut Self, tag: u32) {
+        self.freed += tag
+    }
+}
+
+struct Square {
+    side: f64
+
+    fn area(self: *Self) f64 {
+        return self.side * self.side
+    }
+}
+
+pub fn main() {
+    var page = Page { freed: 0 }
+    let h: dyn Host = &mut page
+    let sq = Square { side: 1.0 }
+    let s: dyn Shape = &sq
+    let opt: ?dyn Host = &mut page
+    let a = @downcast(*mut Square, s)
+    let b = @downcast(*Page, s)
+    let c = @downcast(*mut Page, 5)
+    let d = @downcast(Page, h)
+    let e = @downcast(*mut Page)
+    let f = @downcast(*mut Page, opt)
+}

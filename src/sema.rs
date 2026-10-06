@@ -467,6 +467,9 @@ pub enum TStmtKind {
     ErrDefer(Vec<TStmt>),
     Block(Vec<TStmt>),
     Expr(TExpr),
+    /// The last statement of a `catch` or `orelse` block that gives the
+    /// block's value: the value, computed before the block's `defer`s run.
+    Value(TExpr),
     /// `@setSafety(on)`, the first statement of a block: the runtime checks
     /// of the rest of the block are on (as the build mode has them) or off.
     SetSafety(bool),
@@ -553,6 +556,9 @@ pub enum TExprKind {
     DynCall { recv: Box<TExpr>, method: String, args: Vec<TExpr> },
     /// A `*T` or `*mut T` (T is the struct `strukt`) converted to `dyn I`.
     ToDyn { ptr: Box<TExpr>, strukt: String },
+    /// `@downcast(*S, d)`: the data pointer of the `dyn iface` value `d` when
+    /// it was made from a `strukt`, else `null`.
+    Downcast { value: Box<TExpr>, iface: String, strukt: String },
     /// A `*mut S` converted to `Allocator`: calls go to `S.alloc` and
     /// `S.free`.
     ToAllocator { ptr: Box<TExpr>, strukt: String },
@@ -1079,6 +1085,11 @@ fn block_returns(stmts: &[TStmt], or_jumps: bool) -> bool {
         }),
         _ => false,
     })
+}
+
+/// Does a `catch` or `orelse` block end with its value?
+fn gives_value(stmts: &[TStmt]) -> bool {
+    matches!(stmts.last(), Some(TStmt { kind: TStmtKind::Value(_), .. }))
 }
 
 /// Is `got` the type `want` with `mut` dropped: `*mut T` for `*T`, `[]mut T`
@@ -2620,6 +2631,18 @@ impl<'a> Checker<'a> {
 
     /// Statements with errors are reported and left out.
     fn block(&mut self, b: &ast::Block) -> Vec<TStmt> {
+        self.block_with(b, None)
+    }
+
+    /// The block of a `catch` or `orelse` whose value is a `want`: its last
+    /// statement may be an expression that gives the value
+    /// (`TStmtKind::Value`). A `void` expression there (a call), a `match`
+    /// with block arms and `unreachable` stay statements.
+    fn value_block(&mut self, b: &ast::Block, want: &Type) -> Vec<TStmt> {
+        self.block_with(b, Some(want))
+    }
+
+    fn block_with(&mut self, b: &ast::Block, value: Option<&Type>) -> Vec<TStmt> {
         self.scopes.push(HashMap::new());
         let mut out = Vec::new();
         for (i, s) in b.stmts.iter().enumerate() {
@@ -2633,6 +2656,16 @@ impl<'a> Checker<'a> {
                 }
                 continue;
             }
+            if let (Some(want), StmtKind::Expr(e), true) = (value, &s.kind, i + 1 == b.stmts.len())
+                && !matches!(&strip_parens(e).kind, ExprKind::Unreachable)
+                && !matches!(&strip_parens(e).kind, ExprKind::Match { arms, .. } if arms.iter().any(|a| matches!(a.body, ArmBody::Block(_))))
+            {
+                match self.tail_value(e, want) {
+                    Ok(kind) => out.push(TStmt { kind, span: s.span }),
+                    Err(e) => self.report(e),
+                }
+                continue;
+            }
             match self.stmt(s) {
                 Ok(t) => out.push(t),
                 Err(e) => self.report(e),
@@ -2640,6 +2673,19 @@ impl<'a> Checker<'a> {
         }
         self.scopes.pop();
         out
+    }
+
+    /// The last expression `e` of a value block (see `value_block`).
+    fn tail_value(&mut self, e: &ast::Expr, want: &Type) -> Result<TStmtKind> {
+        let t = self.expr(e, Some(Self::hint(e, want)))?;
+        match t.ty {
+            Type::Error => Err(silent()),
+            Type::Void => Ok(TStmtKind::Expr(t)),
+            _ => {
+                let t = self.handled(t)?;
+                Ok(TStmtKind::Value(self.coerce(t, want)?))
+            }
+        }
     }
 
     fn stmt(&mut self, s: &ast::Stmt) -> Result<TStmt> {
@@ -3602,6 +3648,10 @@ impl<'a> Checker<'a> {
             ExprKind::Builtin { name, args } if matches!(name.as_str(), "sizeOf" | "zeroed" | "ptrCast" | "link" | "linkOptional") => {
                 return self.c_builtin(name, args, span);
             }
+            ExprKind::Builtin { name, args } if name == "downcast" => return self.downcast(args, span),
+            ExprKind::Builtin { name, args } if name == "embedFile" => {
+                (TExprKind::Str(self.embed_file(args, span)?), Type::Slice(Box::new(Type::Int(IntTy::U8)), false))
+            }
             ExprKind::Builtin { name, args } => {
                 let newline = match name.as_str() {
                     "print" => false,
@@ -3798,10 +3848,10 @@ impl<'a> Checker<'a> {
                 let failures = self.failures;
                 let body = match &**body {
                     ArmBody::Block(b) => {
-                        let stmts = self.block(b);
-                        if payload != Type::Void && self.failures == failures && !block_returns(&stmts, true) {
+                        let stmts = if payload == Type::Void { self.block(b) } else { self.value_block(b, &payload) };
+                        if payload != Type::Void && self.failures == failures && !block_returns(&stmts, true) && !gives_value(&stmts) {
                             Err(Error::new(E0067, span, format!(
-                                "this `catch` block must end with `return`, `break` or `continue`; to give a `{payload}` instead, write `catch <expression>`"
+                                "this `catch` block must end with a `{payload}` value or leave with `return`, `break` or `continue`"
                             )))
                         } else {
                             Ok(TArmBody::Block(stmts))
@@ -3863,10 +3913,10 @@ impl<'a> Checker<'a> {
                 let mut ty = payload.clone();
                 let body = match &**body {
                     ArmBody::Block(b) => {
-                        let stmts = self.block(b);
-                        if self.failures == failures && !block_returns(&stmts, true) {
+                        let stmts = self.value_block(b, &payload);
+                        if self.failures == failures && !block_returns(&stmts, true) && !gives_value(&stmts) {
                             Err(Error::new(E0067, span, format!(
-                                "this `orelse` block must end with `return`, `break`, `continue` or `unreachable`; to give a `{payload}` instead, write `orelse <expression>`"
+                                "this `orelse` block must end with a `{payload}` value or leave with `return`, `break`, `continue` or `unreachable`"
                             )))
                         } else {
                             Ok(TArmBody::Block(stmts))
@@ -4591,6 +4641,84 @@ impl<'a> Checker<'a> {
             Type::Ptr(..) | Type::CPtr(_) | Type::Fn(..) => Some(format!("it cannot be null (use `?{t}`)")),
             _ => Some("it makes numbers, `bool`, optional pointers, `extern struct`s and arrays of them".to_string()),
         }
+    }
+
+    /// `@embedFile("path")`: the bytes of the file at `path`, relative to
+    /// the directory of the source file that names it, read now.
+    fn embed_file(&self, args: &[ast::Expr], span: Span) -> Result<Vec<u8>> {
+        let [arg] = args else {
+            return err(E0022, span, "`@embedFile` takes one argument, a string literal: the path of the file");
+        };
+        let ExprKind::Str(path) = &strip_parens(arg).kind else {
+            return err(E0111, arg.span, "`@embedFile` takes a string literal, the path of the file: `@embedFile(\"ua.css\")`");
+        };
+        let path = String::from_utf8_lossy(path).into_owned();
+        if std::path::Path::new(&path).is_absolute() {
+            return err(E0111, arg.span, format!(
+                "`@embedFile` takes a path relative to the source file, not the absolute `{path}` (the build would depend on this machine)"
+            ));
+        }
+        let file = self.files.get(span.file as usize).map_or("", String::as_str);
+        let full = std::path::Path::new(file).parent().unwrap_or(std::path::Path::new("")).join(&path);
+        let shown = full.to_string_lossy().into_owned();
+        if full.is_dir() {
+            return err(E0111, span, format!("`@embedFile` cannot read `{shown}`: it is a directory"));
+        }
+        std::fs::read(&full).or_else(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => err(E0111, span, format!(
+                "`@embedFile` cannot read `{shown}`: no such file (the path is relative to the directory of this source file)"
+            )),
+            _ => err(E0111, span, format!("`@embedFile` cannot read `{shown}`: {e}")),
+        })
+    }
+
+    /// `@downcast(*S, d)` or `@downcast(*mut S, d)`: the `dyn I` value `d`
+    /// as a `?*S` (`?*mut S`), `null` unless `d` was made from a pointer to
+    /// an `S`. `*mut S` needs one of `S`'s methods for `I` to take `self:
+    /// *mut Self`, which proves the `dyn` was made from `&mut`.
+    fn downcast(&mut self, args: &[ast::Expr], span: Span) -> Result<TExpr> {
+        let [to, arg] = args else {
+            return err(E0022, span, "`@downcast` takes two arguments: the pointer type and the `dyn` value");
+        };
+        let local = matches!(&to.kind, ExprKind::Ident(n) if self.lookup(n).is_some());
+        let ty = match expr_type(to) {
+            Some(t) if !local => self.resolve_type(&t)?,
+            _ => return err(E0110, to.span, "the first argument of `@downcast` must be a pointer type, such as `*mut S`"),
+        };
+        let (s, mutable) = match &ty {
+            Type::Ptr(inner, m) if matches!(&**inner, Type::Struct(_)) => {
+                let Type::Struct(s) = &**inner else { unreachable!() };
+                (s.clone(), *m)
+            }
+            _ => return err(E0110, to.span, format!("`@downcast` makes a pointer to a struct (`*S` or `*mut S`), not `{ty}`")),
+        };
+        let d = self.value(arg, None)?;
+        let iface = match &d.ty {
+            Type::Dyn(i) => i.clone(),
+            Type::Optional(inner) if matches!(&**inner, Type::Dyn(_)) => {
+                return err(E0110, d.span, format!(
+                    "`@downcast` takes a `dyn` value, found `{}` (unwrap it first: `opt.?`, or `if opt |d| {{ ... }}`)",
+                    d.ty
+                ));
+            }
+            t => return err(E0110, d.span, format!("`@downcast` takes a `dyn` value, found `{t}`")),
+        };
+        if let Some(why) = self.why_not(&s, &iface) {
+            return err(E0110, span, format!("`@downcast({ty}, ...)` of a `dyn {iface}` is always `null`: `{s}` does not implement `{iface}` ({why})"));
+        }
+        if mutable
+            && !self.ifaces[&iface].methods.iter().any(|m| self.recvs.get(&format!("{s}.{}", m.name)) == Some(&Recv::Ptr(true)))
+        {
+            return err(E0110, span, format!(
+                "`@downcast({ty}, ...)` of a `dyn {iface}`: the `dyn` may have been made from a read-only `&x`, since none of `{s}`'s `{iface}` methods takes `self: *mut Self` (downcast to `*{s}`)"
+            ));
+        }
+        let pair = (iface.clone(), s.clone());
+        if !self.vtables.contains(&pair) {
+            self.vtables.push(pair);
+        }
+        let ty = Type::Optional(Box::new(ty));
+        Ok(TExpr { kind: TExprKind::Downcast { value: Box::new(d), iface, strukt: s }, ty, span })
     }
 
     /// `@ptrCast(T, p)`: the pointer `p` (`*T`, `*mut T`, `[*]T` or `?` of

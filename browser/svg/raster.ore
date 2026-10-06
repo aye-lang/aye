@@ -1,0 +1,632 @@
+// Drawing a `Picture` into RGBA pixels. Each shape's path is flattened
+// into polylines in device px (curves to within a fifth of a pixel); its
+// fill, and its stroke outlined as polygons (a quadrilateral per segment,
+// a polygon per join and cap, all turning the same way so that the
+// nonzero rule unites them), become lists of edges. A list is filled by
+// scanlines: 16 sub-scanlines per row of pixels, each with the spans
+// between its crossings that the fill rule puts inside, whose exact
+// horizontal extent adds up as the coverage of the pixels (antialiasing).
+
+import std.list.List
+import std.math
+import std.mem.AllocError
+import std.mem.Allocator
+import std.sort
+
+/// Pixels to draw into: RGBA rows of `width` pixels; drawing is limited
+/// to columns `x0..x1` and rows `y0..y1` (inside the buffer).
+pub struct Target {
+    pixels: []mut u8
+    width: usize
+    x0: i64
+    y0: i64
+    x1: i64
+    y1: i64
+}
+
+/// Draws `pic` into the box at (`x`, `y`), `w` x `h` (device px, a CSS
+/// px being `px` of them), clipped to the box and to `t`.
+pub fn render(alloc: Allocator, pic: *Picture, t: Target, x: f64, y: f64, w: f64, h: f64, px: f64) AllocError!void {
+    var clip = t
+    if x > clip.x0 as f64 {
+        clip.x0 = math.ceil(x) as i64
+    }
+    if y > clip.y0 as f64 {
+        clip.y0 = math.ceil(y) as i64
+    }
+    if x + w < clip.x1 as f64 {
+        clip.x1 = math.floor(x + w) as i64
+    }
+    if y + h < clip.y1 as f64 {
+        clip.y1 = math.floor(y + h) as i64
+    }
+    if clip.x1 <= clip.x0 || clip.y1 <= clip.y0 || w <= 0.0 || h <= 0.0 {
+        return
+    }
+    let m = pic.placement(x, y, w, h, px)
+    let k = m.scale()
+    var r = Rasterizer {
+        alloc: alloc,
+        t: clip,
+        edges: List(Edge).init(alloc),
+        active: List(usize).init(alloc),
+        cross: List(Crossing).init(alloc),
+        pts: List(f64).init(alloc),
+        subs: List(Sub).init(alloc),
+        poly: List(f64).init(alloc),
+    }
+    defer r.deinit()
+    for s in pic.shapes.items() {
+        try r.flatten(pic, s, m)
+        if s.fill.a > 0 {
+            r.edges.clear()
+            try r.fillEdges()
+            try r.scan(s.evenodd, s.fill)
+        }
+        if s.stroke.a > 0 {
+            r.edges.clear()
+            try r.strokeEdges(s.stroke_width * k / 2.0, s.cap, s.join, s.miter_limit)
+            try r.scan(false, s.stroke)
+        }
+    }
+}
+
+// Sub-scanlines per row of pixels.
+let SUB: usize = 16
+// How far a flattened curve may be from the curve, in device px.
+let TOLERANCE = 0.2
+
+// An edge of a polygon going down (`y0 < y1`); `dir` is 1 if the
+// polygon goes down along it, else -1.
+struct Edge {
+    x0: f64
+    y0: f64
+    x1: f64
+    y1: f64
+    dxdy: f64
+    dir: i64
+}
+
+fn edgeBefore(a: Edge, b: Edge) bool {
+    return a.y0 < b.y0
+}
+
+struct Crossing {
+    x: f64
+    dir: i64
+}
+
+fn crossingBefore(a: Crossing, b: Crossing) bool {
+    return a.x < b.x
+}
+
+// A polyline: points `start..end` of `pts`.
+struct Sub {
+    start: usize
+    end: usize
+    closed: bool
+}
+
+struct Rasterizer {
+    alloc: Allocator
+    t: Target
+    edges: List(Edge)
+    active: List(usize)
+    cross: List(Crossing)
+    // The flattened path: x, y pairs, and its polylines.
+    pts: List(f64)
+    subs: List(Sub)
+    // A polygon being built (x, y pairs).
+    poly: List(f64)
+
+    fn deinit(self: *mut Self) {
+        self.edges.deinit()
+        self.active.deinit()
+        self.cross.deinit()
+        self.pts.deinit()
+        self.subs.deinit()
+        self.poly.deinit()
+    }
+
+    fn count(self: *Self) usize {
+        return self.pts.len() / 2
+    }
+
+    fn px(self: *Self, i: usize) f64 {
+        return self.pts.items()[2 * i]
+    }
+
+    fn py(self: *Self, i: usize) f64 {
+        return self.pts.items()[2 * i + 1]
+    }
+
+    fn point(self: *mut Self, x: f64, y: f64) AllocError!void {
+        try self.pts.append(x)
+        try self.pts.append(y)
+    }
+
+    // ---- flattening
+
+    // The path of `s`, transformed by `m`, into `pts` and `subs`.
+    fn flatten(self: *mut Self, pic: *Picture, s: Shape, m: Matrix) AllocError!void {
+        self.pts.clear()
+        self.subs.clear()
+        let verbs = pic.verbs.items()[s.verb_start..s.verb_end]
+        let co = pic.coords.items()
+        var ci = s.coord_start
+        // A polyline is open from point `start`; (sx, sy) is where the
+        // last one started (where a segment after a close starts).
+        var open = false
+        var start: usize = 0
+        var sx = 0.0
+        var sy = 0.0
+        for v in verbs {
+            if v == MOVE {
+                if open {
+                    try self.subs.append(Sub { start: start, end: self.count(), closed: false })
+                }
+                sx = m.mapX(co[ci], co[ci + 1])
+                sy = m.mapY(co[ci], co[ci + 1])
+                ci += 2
+                start = self.count()
+                try self.point(sx, sy)
+                open = true
+                continue
+            }
+            if v == CLOSE {
+                if open {
+                    try self.subs.append(Sub { start: start, end: self.count(), closed: true })
+                }
+                open = false
+                continue
+            }
+            if !open {
+                start = self.count()
+                try self.point(sx, sy)
+                open = true
+            }
+            if v == LINE {
+                try self.point(m.mapX(co[ci], co[ci + 1]), m.mapY(co[ci], co[ci + 1]))
+                ci += 2
+            } else {
+                let n = self.count() - 1
+                let x0 = self.px(n)
+                let y0 = self.py(n)
+                let x1 = m.mapX(co[ci], co[ci + 1])
+                let y1 = m.mapY(co[ci], co[ci + 1])
+                let x2 = m.mapX(co[ci + 2], co[ci + 3])
+                let y2 = m.mapY(co[ci + 2], co[ci + 3])
+                let x3 = m.mapX(co[ci + 4], co[ci + 5])
+                let y3 = m.mapY(co[ci + 4], co[ci + 5])
+                ci += 6
+                let dd = math.max(math.hypot(x0 - 2.0 * x1 + x2, y0 - 2.0 * y1 + y2), math.hypot(x1 - 2.0 * x2 + x3, y1 - 2.0 * y2 + y3))
+                var segs: usize = 1
+                let want = math.ceil(math.sqrt(0.75 * dd / TOLERANCE))
+                if want > 64.0 {
+                    segs = 64
+                } else if want > 1.0 {
+                    segs = want as usize
+                }
+                for i in 1..segs + 1 {
+                    let t = i as f64 / segs as f64
+                    let u = 1.0 - t
+                    let a = u * u * u
+                    let b = 3.0 * u * u * t
+                    let c = 3.0 * u * t * t
+                    let d = t * t * t
+                    try self.point(a * x0 + b * x1 + c * x2 + d * x3, a * y0 + b * y1 + c * y2 + d * y3)
+                }
+            }
+        }
+        if open {
+            try self.subs.append(Sub { start: start, end: self.count(), closed: false })
+        }
+    }
+
+    // ---- edges
+
+    fn edge(self: *mut Self, x0: f64, y0: f64, x1: f64, y1: f64, dir: i64) AllocError!void {
+        if y0 == y1 || !finite(x0) || !finite(y0) || !finite(x1) || !finite(y1) {
+            return
+        }
+        if y0 < y1 {
+            return self.edges.append(Edge { x0: x0, y0: y0, x1: x1, y1: y1, dxdy: (x1 - x0) / (y1 - y0), dir: dir })
+        }
+        return self.edges.append(Edge { x0: x1, y0: y1, x1: x0, y1: y0, dxdy: (x0 - x1) / (y0 - y1), dir: -dir })
+    }
+
+    // The fill: every polyline closed.
+    fn fillEdges(self: *mut Self) AllocError!void {
+        let n = self.subs.len()
+        for k in 0..n {
+            let s = self.subs.items()[k]
+            if s.end - s.start < 2 {
+                continue
+            }
+            for i in s.start..s.end {
+                var j = i + 1
+                if j == s.end {
+                    j = s.start
+                }
+                try self.edge(self.px(i), self.py(i), self.px(j), self.py(j), 1)
+            }
+        }
+    }
+
+    // The polygon in `poly`, turned to go the same way as all the others.
+    fn polygon(self: *mut Self) AllocError!void {
+        let p = self.poly.items()
+        let n = p.len / 2
+        if n < 3 {
+            return
+        }
+        var area = 0.0
+        for i in 0..n {
+            let j = (i + 1) % n
+            area += p[2 * i] * p[2 * j + 1] - p[2 * j] * p[2 * i + 1]
+        }
+        var dir: i64 = 1
+        if area < 0.0 {
+            dir = -1
+        }
+        for i in 0..n {
+            let j = (i + 1) % n
+            let q = self.poly.items()
+            try self.edge(q[2 * i], q[2 * i + 1], q[2 * j], q[2 * j + 1], dir)
+        }
+    }
+
+    fn vertex(self: *mut Self, x: f64, y: f64) AllocError!void {
+        try self.poly.append(x)
+        try self.poly.append(y)
+    }
+
+    fn circle(self: *mut Self, cx: f64, cy: f64, r: f64) AllocError!void {
+        var n: usize = 8
+        if r * 4.0 > 64.0 {
+            n = 64
+        } else if r * 4.0 > 8.0 {
+            n = (r * 4.0) as usize
+        }
+        self.poly.clear()
+        for i in 0..n {
+            let a = i as f64 * 2.0 * math.pi / n as f64
+            try self.vertex(cx + r * math.cos(a), cy + r * math.sin(a))
+        }
+        return self.polygon()
+    }
+
+    // The stroke of every polyline, `hw` px on each side.
+    fn strokeEdges(self: *mut Self, hw: f64, cap: u8, join: u8, limit: f64) AllocError!void {
+        if hw <= 0.0 || !finite(hw) {
+            return
+        }
+        // The points of the polyline without repeats.
+        var q = List(f64).init(self.alloc)
+        defer q.deinit()
+        let ns = self.subs.len()
+        for k in 0..ns {
+            let s = self.subs.items()[k]
+            q.clear()
+            for i in s.start..s.end {
+                let n = q.len()
+                if n >= 2 && near(q.items()[n - 2], q.items()[n - 1], self.px(i), self.py(i)) {
+                    continue
+                }
+                try q.append(self.px(i))
+                try q.append(self.py(i))
+            }
+            var n = q.len() / 2
+            let p = q.items()
+            if s.closed && n >= 2 && near(p[0], p[1], p[2 * n - 2], p[2 * n - 1]) {
+                n -= 1
+            }
+            if n == 1 {
+                // A zero-length subpath: a dot for round and square caps.
+                if cap == 1 {
+                    try self.circle(p[0], p[1], hw)
+                } else if cap == 2 {
+                    self.poly.clear()
+                    try self.vertex(p[0] - hw, p[1] - hw)
+                    try self.vertex(p[0] + hw, p[1] - hw)
+                    try self.vertex(p[0] + hw, p[1] + hw)
+                    try self.vertex(p[0] - hw, p[1] + hw)
+                    try self.polygon()
+                }
+                continue
+            }
+            if n < 2 {
+                continue
+            }
+            let closed = s.closed
+            var segs = n - 1
+            if closed {
+                segs = n
+            }
+            for i in 0..segs {
+                let j = (i + 1) % n
+                try self.segment(q.items()[2 * i], q.items()[2 * i + 1], q.items()[2 * j], q.items()[2 * j + 1], hw)
+            }
+            for i in 0..n {
+                if !closed && (i == 0 || i == n - 1) {
+                    continue
+                }
+                let a = (i + n - 1) % n
+                let b = (i + 1) % n
+                let r = q.items()
+                try self.joinAt(r[2 * a], r[2 * a + 1], r[2 * i], r[2 * i + 1], r[2 * b], r[2 * b + 1], hw, join, limit)
+            }
+            if !closed && cap != 0 {
+                let r = q.items()
+                try self.capAt(r[0], r[1], r[2], r[3], hw, cap)
+                try self.capAt(r[2 * n - 2], r[2 * n - 1], r[2 * n - 4], r[2 * n - 3], hw, cap)
+            }
+        }
+    }
+
+    // The quadrilateral of a segment.
+    fn segment(self: *mut Self, x0: f64, y0: f64, x1: f64, y1: f64, hw: f64) AllocError!void {
+        let len = math.hypot(x1 - x0, y1 - y0)
+        if len <= 0.0 {
+            return
+        }
+        let nx = -(y1 - y0) / len * hw
+        let ny = (x1 - x0) / len * hw
+        self.poly.clear()
+        try self.vertex(x0 + nx, y0 + ny)
+        try self.vertex(x1 + nx, y1 + ny)
+        try self.vertex(x1 - nx, y1 - ny)
+        try self.vertex(x0 - nx, y0 - ny)
+        return self.polygon()
+    }
+
+    // The join at (`x`, `y`) between the segments from (`ax`, `ay`) and
+    // to (`bx`, `by`), on the outer side of the turn.
+    fn joinAt(self: *mut Self, ax: f64, ay: f64, x: f64, y: f64, bx: f64, by: f64, hw: f64, kind: u8, limit: f64) AllocError!void {
+        let l1 = math.hypot(x - ax, y - ay)
+        let l2 = math.hypot(bx - x, by - y)
+        if l1 <= 0.0 || l2 <= 0.0 {
+            return
+        }
+        let d1x = (x - ax) / l1
+        let d1y = (y - ay) / l1
+        let d2x = (bx - x) / l2
+        let d2y = (by - y) / l2
+        let cross = d1x * d2y - d1y * d2x
+        if math.abs(cross) < 0.000001 && d1x * d2x + d1y * d2y > 0.0 {
+            return
+        }
+        if kind == 1 {
+            return self.circle(x, y, hw)
+        }
+        var s = hw
+        if cross > 0.0 {
+            s = -hw
+        }
+        let n1x = -d1y * s
+        let n1y = d1x * s
+        let n2x = -d2y * s
+        let n2y = d2x * s
+        self.poly.clear()
+        try self.vertex(x, y)
+        try self.vertex(x + n1x, y + n1y)
+        if kind == 0 {
+            let mx = n1x + n2x
+            let my = n1y + n2y
+            let ml = math.hypot(mx, my)
+            if ml > 0.000001 {
+                // cos of half the angle between the normals.
+                let half = ml / (2.0 * hw)
+                if 1.0 / half <= limit {
+                    let reach = hw / half
+                    try self.vertex(x + mx / ml * reach, y + my / ml * reach)
+                }
+            }
+        }
+        try self.vertex(x + n2x, y + n2y)
+        return self.polygon()
+    }
+
+    // A cap at the end (`x`, `y`) of a segment from (`ox`, `oy`).
+    fn capAt(self: *mut Self, x: f64, y: f64, ox: f64, oy: f64, hw: f64, kind: u8) AllocError!void {
+        if kind == 1 {
+            return self.circle(x, y, hw)
+        }
+        let len = math.hypot(x - ox, y - oy)
+        if len <= 0.0 {
+            return
+        }
+        let dx = (x - ox) / len * hw
+        let dy = (y - oy) / len * hw
+        self.poly.clear()
+        try self.vertex(x - dy, y + dx)
+        try self.vertex(x - dy + dx, y + dx + dy)
+        try self.vertex(x + dy + dx, y - dx + dy)
+        try self.vertex(x + dy, y - dx)
+        return self.polygon()
+    }
+
+    // ---- scanlines
+
+    // Fills `edges` with `c`, by the nonzero or the even-odd rule.
+    fn scan(self: *mut Self, evenodd: bool, c: Color) AllocError!void {
+        let edges = self.edges.items()
+        if edges.len == 0 {
+            return
+        }
+        var minx = edges[0].x0
+        var maxx = edges[0].x0
+        var miny = edges[0].y0
+        var maxy = edges[0].y1
+        for e in edges {
+            minx = math.min(minx, math.min(e.x0, e.x1))
+            maxx = math.max(maxx, math.max(e.x0, e.x1))
+            miny = math.min(miny, e.y0)
+            maxy = math.max(maxy, e.y1)
+        }
+        let t = self.t
+        var bx0 = t.x0
+        var bx1 = t.x1
+        var by0 = t.y0
+        var by1 = t.y1
+        if minx >= bx1 as f64 || maxx <= bx0 as f64 || miny >= by1 as f64 || maxy <= by0 as f64 {
+            return
+        }
+        if minx > bx0 as f64 {
+            bx0 = math.floor(minx) as i64
+        }
+        if maxx < bx1 as f64 {
+            bx1 = math.ceil(maxx) as i64
+        }
+        if miny > by0 as f64 {
+            by0 = math.floor(miny) as i64
+        }
+        if maxy < by1 as f64 {
+            by1 = math.ceil(maxy) as i64
+        }
+        sort.sort(Edge, edges, edgeBefore)
+        let bw = (bx1 - bx0) as usize
+        let cov = try self.alloc.alloc(0.0, bw + 1)
+        defer self.alloc.free(cov)
+        let acc = try self.alloc.alloc(0.0, bw + 1)
+        defer self.alloc.free(acc)
+        let lo = bx0 as f64
+        let hi = bx1 as f64
+        let w = 1.0 / SUB as f64
+        self.active.clear()
+        var next: usize = 0
+        for row in by0..by1 {
+            let top = row as f64
+            while next < edges.len && edges[next].y0 < top + 1.0 {
+                if edges[next].y1 > top {
+                    try self.active.append(next)
+                }
+                next += 1
+            }
+            var k: usize = 0
+            while k < self.active.len() {
+                if edges[self.active.items()[k]].y1 <= top {
+                    let gone = self.active.swapRemove(k)
+                } else {
+                    k += 1
+                }
+            }
+            if self.active.len() == 0 {
+                if next >= edges.len {
+                    break
+                }
+                continue
+            }
+            for i in 0..bw + 1 {
+                cov[i] = 0.0
+                acc[i] = 0.0
+            }
+            var any = false
+            for sub in 0..SUB {
+                let sy = top + (sub as f64 + 0.5) * w
+                self.cross.clear()
+                for a in self.active.items() {
+                    let e = edges[a]
+                    if e.y0 <= sy && sy < e.y1 {
+                        try self.cross.append(Crossing { x: e.x0 + (sy - e.y0) * e.dxdy, dir: e.dir })
+                    }
+                }
+                if self.cross.len() < 2 {
+                    continue
+                }
+                sort.sort(Crossing, self.cross.items(), crossingBefore)
+                var wind: i64 = 0
+                var from = 0.0
+                for cr in self.cross.items() {
+                    let was = inside(wind, evenodd)
+                    wind += cr.dir
+                    let now = inside(wind, evenodd)
+                    if !was && now {
+                        from = cr.x
+                    } else if was && !now {
+                        if span(cov, acc, from, cr.x, lo, hi, w) {
+                            any = true
+                        }
+                    }
+                }
+            }
+            if !any {
+                continue
+            }
+            var run = 0.0
+            var i = (row as usize * t.width + bx0 as usize) * 4
+            for k2 in 0..bw {
+                run += acc[k2]
+                let a = math.min(1.0, cov[k2] + run)
+                if a > 0.002 {
+                    blend(t.pixels, i, c, (a * c.a as f64 + 0.5) as u32)
+                }
+                i += 4
+            }
+        }
+    }
+}
+
+fn finite(v: f64) bool {
+    return !math.isNan(v) && !math.isInf(v)
+}
+
+fn near(x0: f64, y0: f64, x1: f64, y1: f64) bool {
+    return math.abs(x0 - x1) < 0.0001 && math.abs(y0 - y1) < 0.0001
+}
+
+fn inside(wind: i64, evenodd: bool) bool {
+    if evenodd {
+        return (wind & 1) != 0
+    }
+    return wind != 0
+}
+
+// Adds weight `w` to the pixels of the span `xa..xb` (clamped to
+// `lo..hi`): partly covered pixels by their share in `cov`, the run of
+// fully covered ones as a step in `acc`. False when it is empty.
+fn span(cov: []mut f64, acc: []mut f64, xa: f64, xb: f64, lo: f64, hi: f64, w: f64) bool {
+    var a = xa
+    var b = xb
+    if a < lo {
+        a = lo
+    }
+    if b > hi {
+        b = hi
+    }
+    if b <= a {
+        return false
+    }
+    let fa = math.floor(a)
+    let fb = math.floor(b)
+    let i = (fa - lo) as usize
+    if fa == fb {
+        cov[i] += (b - a) * w
+        return true
+    }
+    cov[i] += (fa + 1.0 - a) * w
+    let j = (fb - lo) as usize
+    acc[i + 1] += w
+    acc[j] -= w
+    cov[j] += (b - fb) * w
+    return true
+}
+
+// Blends `c` with opacity `cover` (0 to 255) into the pixel at byte `i`.
+fn blend(pixels: []mut u8, i: usize, c: Color, cover: u32) {
+    if cover == 0 {
+        return
+    }
+    if cover >= 255 {
+        pixels[i] = c.r
+        pixels[i + 1] = c.g
+        pixels[i + 2] = c.b
+        pixels[i + 3] = 255
+        return
+    }
+    let rest = 255 - cover
+    pixels[i] = ((c.r as u32 * cover + pixels[i] as u32 * rest + 127) / 255) as u8
+    pixels[i + 1] = ((c.g as u32 * cover + pixels[i + 1] as u32 * rest + 127) / 255) as u8
+    pixels[i + 2] = ((c.b as u32 * cover + pixels[i + 2] as u32 * rest + 127) / 255) as u8
+    pixels[i + 3] = (cover + (pixels[i + 3] as u32 * rest + 127) / 255) as u8
+}

@@ -3,11 +3,16 @@
 // (cells spanning columns spread theirs evenly); the table is as wide as
 // its columns' max-content widths when that fits, else the available
 // width (but at least the min-content widths), or its own `width`; the
-// space between min and max is shared in proportion. A row is as high as
-// its highest cell, and every cell is stretched to it. Captions go above
-// the rows. No border spacing, no rows spans.
+// space between min and max is shared in proportion. A column with a
+// percentage `width` gets that share of the table first (at least its
+// min-content width), and widens the table's max-content width to what
+// the percentage needs (as browsers do: `<td width=25%>` on both sides
+// of an auto column makes the table twice as wide as that column). A
+// row is as high as its highest cell, and every cell is stretched to
+// it. Captions go above the rows. No border spacing, no rows spans.
 
 import css
+import css.Value
 import std.list.List
 import std.math
 import std.mem.AllocError
@@ -27,8 +32,9 @@ fn tableRows(t: *Tree, i: usize, out: *mut List(usize)) AllocError!void {
 }
 
 // The min-content and max-content widths of the columns of table `i`,
-// and whether a cell gives the column a fixed `width`.
-fn columnWidths(t: *mut Tree, i: usize, mins: *mut List(f64), maxs: *mut List(f64), fixed: *mut List(bool)) AllocError!void {
+// whether a cell gives the column a fixed `width`, and the column's
+// percentage `width` (0: none; the total is cut at 100%).
+fn columnWidths(t: *mut Tree, i: usize, mins: *mut List(f64), maxs: *mut List(f64), fixed: *mut List(bool), pcts: *mut List(f64)) AllocError!void {
     var rows = List(usize).init(t.backing)
     defer rows.deinit()
     try tableRows(t, i, &mut rows)
@@ -44,9 +50,13 @@ fn columnWidths(t: *mut Tree, i: usize, mins: *mut List(f64), maxs: *mut List(f6
                     try mins.append(0.0)
                     try maxs.append(0.0)
                     try fixed.append(false)
+                    try pcts.append(0.0)
                 }
                 if span == 1 && lengthOf(t.bx(cell).style[css.WIDTH], -1.0) != null {
                     fixed.items()[col] = true
+                }
+                if span == 1 {
+                    pcts.items()[col] = math.max(pcts.items()[col], percentOfValue(t.bx(cell).style[css.WIDTH]))
                 }
                 if (pass == 0) == (span == 1) {
                     let mm = try outerIntrinsic(t, cell)
@@ -67,6 +77,45 @@ fn columnWidths(t: *mut Tree, i: usize, mins: *mut List(f64), maxs: *mut List(f6
             }
         }
     }
+    var total = 0.0
+    for c in 0..pcts.len() {
+        let p = math.min(pcts.items()[c], math.max(0.0, 100.0 - total))
+        pcts.items()[c] = p
+        total += p
+    }
+}
+
+// The percentage of a percentage `width` (0 for anything else).
+fn percentOfValue(v: Value) f64 {
+    return match v {
+        .Percent { v: n } => math.max(0.0, n)
+        _ => 0.0
+    }
+}
+
+// The max-content width of a table with these columns: the sum of their
+// max-content widths, or more when a percentage column needs it to get
+// its share (and the other columns theirs).
+fn maxWithPercents(maxs: []f64, pcts: []f64) f64 {
+    var r = sumOf(maxs)
+    var total = 0.0
+    var rest = 0.0
+    for c in 0..maxs.len {
+        if pcts[c] > 0.0 {
+            r = math.max(r, maxs[c] * 100.0 / pcts[c])
+            total += pcts[c]
+        } else {
+            rest += maxs[c]
+        }
+    }
+    if total < 100.0 {
+        r = math.max(r, rest * 100.0 / (100.0 - total))
+    } else if rest > 0.0 {
+        // The other columns get nothing of the percentages: as wide as
+        // can be.
+        r = math.max(r, 1000000.0)
+    }
+    return r
 }
 
 fn sumOf(xs: []f64) f64 {
@@ -86,8 +135,10 @@ fn tableIntrinsic(t: *mut Tree, i: usize) AllocError!MinMax {
     defer maxs.deinit()
     var fixed = List(bool).init(t.backing)
     defer fixed.deinit()
-    try columnWidths(t, i, &mut mins, &mut maxs, &mut fixed)
-    var r = MinMax { min: sumOf(mins.items()), max: sumOf(maxs.items()) }
+    var pcts = List(f64).init(t.backing)
+    defer pcts.deinit()
+    try columnWidths(t, i, &mut mins, &mut maxs, &mut fixed, &mut pcts)
+    var r = MinMax { min: sumOf(mins.items()), max: maxWithPercents(maxs.items(), pcts.items()) }
     for c in t.children(i) {
         if isCaption(t, c) {
             let o = try outerIntrinsic(t, c)
@@ -95,6 +146,37 @@ fn tableIntrinsic(t: *mut Tree, i: usize) AllocError!MinMax {
         }
     }
     return r
+}
+
+// The percentage columns get their share of `inner` (at least their
+// min-content width, less when the other columns' min-content widths
+// would not fit) and are fixed at it.
+fn percentColumns(mins: []mut f64, maxs: []mut f64, fixed: []mut bool, pcts: []f64, inner: f64) {
+    var want = 0.0
+    var slack = 0.0
+    var others = 0.0
+    for c in 0..mins.len {
+        if pcts[c] > 0.0 {
+            let w = math.max(mins[c], inner * pcts[c] / 100.0)
+            want += w
+            slack += w - mins[c]
+        } else {
+            others += mins[c]
+        }
+    }
+    let over = want + others - inner
+    var keep = 1.0
+    if over > 0.0 && slack > 0.0 {
+        keep = math.max(0.0, 1.0 - over / slack)
+    }
+    for c in 0..mins.len {
+        if pcts[c] > 0.0 {
+            let w = math.max(mins[c], inner * pcts[c] / 100.0)
+            mins[c] = mins[c] + (w - mins[c]) * keep
+            maxs[c] = mins[c]
+            fixed[c] = true
+        }
+    }
 }
 
 /// Lays out table `i` (edges and vertical margins resolved) in a
@@ -106,9 +188,10 @@ fn layoutTable(t: *mut Tree, i: usize, cb_w: f64) AllocError!void {
     defer maxs.deinit()
     var fixed = List(bool).init(t.backing)
     defer fixed.deinit()
-    try columnWidths(t, i, &mut mins, &mut maxs, &mut fixed)
-    let sum_min = sumOf(mins.items())
-    let sum_max = sumOf(maxs.items())
+    var pcts = List(f64).init(t.backing)
+    defer pcts.deinit()
+    try columnWidths(t, i, &mut mins, &mut maxs, &mut fixed, &mut pcts)
+    var sum_min = sumOf(mins.items())
     let b = t.bx(i)
     let edges = hEdges(b)
     let margins = lengthOr0(b.style[css.MARGIN_TOP + 1], cb_w) + lengthOr0(b.style[css.MARGIN_TOP + 3], cb_w)
@@ -116,8 +199,11 @@ fn layoutTable(t: *mut Tree, i: usize, cb_w: f64) AllocError!void {
     if specifiedWidth(t, i, cb_w) |w| {
         inner = math.max(w - edges, sum_min)
     } else {
-        inner = math.max(sum_min, math.min(sum_max, cb_w - margins - edges))
+        inner = math.max(sum_min, math.min(maxWithPercents(maxs.items(), pcts.items()), cb_w - margins - edges))
     }
+    percentColumns(mins.items(), maxs.items(), fixed.items(), pcts.items(), inner)
+    sum_min = sumOf(mins.items())
+    let sum_max = sumOf(maxs.items())
     // Column widths.
     let widths = mins.items()
     let n = widths.len

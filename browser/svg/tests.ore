@@ -1,0 +1,220 @@
+// Tests of the svg module: numbers, transforms, path data, the
+// rasterizer on small buffers, and pictures built from documents.
+
+import css
+import std.list.List
+import std.math
+import std.mem.Allocator
+
+fn close(a: f64, b: f64) bool {
+    return math.abs(a - b) < 0.001
+}
+
+test "numbers in attributes" {
+    var sc = Scanner { s: "1-2.5.5e1,  +3 .25", i: 0 }
+    @expect(close(1.0, sc.number().?))
+    @expect(close(-2.5, sc.number().?))
+    @expect(close(5.0, sc.number().?))
+    @expect(close(3.0, sc.number().?))
+    @expect(close(0.25, sc.number().?))
+    @expect(sc.atEnd())
+    @expect(close(12.0, lengthOf("12px", 0.0).?))
+    @expect(close(50.0, lengthOf("25%", 200.0).?))
+    @expect(close(96.0, lengthOf("1in", 0.0).?))
+    @expect(lengthOf("auto", 0.0) == null)
+}
+
+test "transform lists" {
+    let m = parseTransform("translate(10, 20) scale(2)")
+    @expect(close(12.0, m.mapX(1.0, 1.0)))
+    @expect(close(22.0, m.mapY(1.0, 1.0)))
+    // A quarter turn about (10, 10).
+    let r = parseTransform("rotate(90 10 10)")
+    @expect(close(10.0, r.mapX(20.0, 10.0)))
+    @expect(close(20.0, r.mapY(20.0, 10.0)))
+    let mx = parseTransform("matrix(1 0 0 1 5 6)")
+    @expect(close(5.0, mx.mapX(0.0, 0.0)))
+    @expect(close(6.0, mx.mapY(0.0, 0.0)))
+    // An error keeps what came before it.
+    let bad = parseTransform("translate(3) wobble(1)")
+    @expect(close(3.0, bad.mapX(0.0, 0.0)))
+}
+
+test "viewBox and preserveAspectRatio" {
+    let vb = parseViewBox("0 0 10 20").?
+    // Fitted into 100 x 100: scale 5, centered horizontally.
+    let m = viewBoxTransform(vb, DEFAULT_ASPECT, 0.0, 0.0, 100.0, 100.0)
+    @expect(close(25.0, m.mapX(0.0, 0.0)))
+    @expect(close(75.0, m.mapX(10.0, 20.0)))
+    @expect(close(100.0, m.mapY(10.0, 20.0)))
+    let n = viewBoxTransform(vb, parseAspect("none"), 0.0, 0.0, 100.0, 100.0)
+    @expect(close(100.0, n.mapX(10.0, 20.0)))
+    @expect(parseViewBox("0 0 0 10") == null)
+}
+
+// The verbs and points of path data `d`.
+fn pathOf(a: Allocator, d: []u8, verbs: *mut List(u8), coords: *mut List(f64)) !void {
+    var pen = Pen { m: IDENTITY, verbs: verbs, coords: coords }
+    try parsePath(&mut pen, d)
+}
+
+test "path data" {
+    let a = @testAllocator()
+    var verbs = List(u8).init(a)
+    defer verbs.deinit()
+    var coords = List(f64).init(a)
+    defer coords.deinit()
+    // Relative commands, implicit lines after a move, H and V, a close.
+    try pathOf(a, "m10 20 5 5h-5v-5z", &mut verbs, &mut coords)
+    @expectEqual(5, verbs.len())
+    @expectEqual(MOVE, verbs.items()[0])
+    @expectEqual(LINE, verbs.items()[1])
+    @expectEqual(CLOSE, verbs.items()[4])
+    let c = coords.items()
+    @expect(close(15.0, c[2]) && close(25.0, c[3]))
+    @expect(close(10.0, c[4]) && close(25.0, c[5]))
+    @expect(close(10.0, c[6]) && close(20.0, c[7]))
+    // Quadratic curves become cubics; an arc with packed flags ends
+    // where it says.
+    verbs.clear()
+    coords.clear()
+    try pathOf(a, "M0 0Q10 0 10 10a5 5 0 0110 0", &mut verbs, &mut coords)
+    @expectEqual(CUBIC, verbs.items()[1])
+    let n = coords.len()
+    @expect(close(20.0, coords.items()[n - 2]))
+    @expect(close(10.0, coords.items()[n - 1]))
+    // An error stops the path: what came before stays.
+    verbs.clear()
+    coords.clear()
+    try pathOf(a, "M0 0 L10 10 L20 x", &mut verbs, &mut coords)
+    @expectEqual(2, verbs.len())
+}
+
+// A transparent `w` x `h` buffer as a target.
+fn buffer(pixels: []mut u8, w: usize, h: usize) Target {
+    return Target { pixels: pixels, width: w, x0: 0, y0: 0, x1: w as i64, y1: h as i64 }
+}
+
+fn alphaAt(pixels: []u8, w: usize, x: usize, y: usize) u8 {
+    return pixels[(y * w + x) * 4 + 3]
+}
+
+// A picture of one shape, from path data, in px.
+fn picture(a: Allocator, d: []u8, fill: Color, stroke: Color, width: f64, evenodd: bool) !Picture {
+    var pic = Picture {
+        alloc: a,
+        view: null,
+        aspect: DEFAULT_ASPECT,
+        width: 0.0,
+        height: 0.0,
+        shapes: List(Shape).init(a),
+        verbs: List(u8).init(a),
+        coords: List(f64).init(a),
+    }
+    var pen = Pen { m: IDENTITY, verbs: &mut pic.verbs, coords: &mut pic.coords }
+    try parsePath(&mut pen, d)
+    try pic.shapes.append(Shape {
+        verb_start: 0,
+        verb_end: pic.verbs.len(),
+        coord_start: 0,
+        fill: fill,
+        stroke: stroke,
+        stroke_width: width,
+        evenodd: evenodd,
+        cap: 0,
+        join: 0,
+        miter_limit: 4.0,
+    })
+    return pic
+}
+
+let RED = Color { r: 255, g: 0, b: 0, a: 255 }
+
+test "fills cover pixels by their area" {
+    let a = @testAllocator()
+    let px = try a.alloc(0 as u8, 10 * 10 * 4)
+    defer a.free(px)
+    // From x 2.5 to 6, y 2 to 5.
+    var pic = try picture(a, "M2.5 2H6V5H2.5Z", RED, NO_COLOR, 0.0, false)
+    defer pic.deinit()
+    try render(a, &pic, buffer(px, 10, 10), 0.0, 0.0, 10.0, 10.0, 1.0)
+    @expectEqual(255, alphaAt(px, 10, 4, 3))
+    @expectEqual(255, px[(3 * 10 + 4) * 4])
+    @expectEqual(128, alphaAt(px, 10, 2, 3))
+    @expectEqual(0, alphaAt(px, 10, 6, 3))
+    @expectEqual(0, alphaAt(px, 10, 4, 5))
+    @expectEqual(0, alphaAt(px, 10, 1, 3))
+}
+
+test "fill rules" {
+    let a = @testAllocator()
+    let px = try a.alloc(0 as u8, 20 * 20 * 4)
+    defer a.free(px)
+    // A square in a square, both clockwise.
+    let d = "M0 0H20V20H0Z M5 5H15V15H5Z"
+    var pic = try picture(a, d, RED, NO_COLOR, 0.0, true)
+    defer pic.deinit()
+    try render(a, &pic, buffer(px, 20, 20), 0.0, 0.0, 20.0, 20.0, 1.0)
+    @expectEqual(255, alphaAt(px, 20, 2, 2))
+    @expectEqual(0, alphaAt(px, 20, 10, 10))
+    var nz = try picture(a, d, RED, NO_COLOR, 0.0, false)
+    defer nz.deinit()
+    try render(a, &nz, buffer(px, 20, 20), 0.0, 0.0, 20.0, 20.0, 1.0)
+    @expectEqual(255, alphaAt(px, 20, 10, 10))
+}
+
+test "strokes and clipping" {
+    let a = @testAllocator()
+    let px = try a.alloc(0 as u8, 20 * 20 * 4)
+    defer a.free(px)
+    // A line 4 px wide from (2, 10) to (30, 10), clipped at x 15.
+    var pic = try picture(a, "M2 10H30", NO_COLOR, RED, 4.0, false)
+    defer pic.deinit()
+    var t = buffer(px, 20, 20)
+    t.x1 = 15
+    try render(a, &pic, t, 0.0, 0.0, 20.0, 20.0, 1.0)
+    @expectEqual(255, alphaAt(px, 20, 5, 8))
+    @expectEqual(255, alphaAt(px, 20, 5, 11))
+    @expectEqual(0, alphaAt(px, 20, 5, 12))
+    @expectEqual(0, alphaAt(px, 20, 5, 7))
+    @expectEqual(0, alphaAt(px, 20, 1, 10))
+    @expectEqual(0, alphaAt(px, 20, 16, 10))
+}
+
+// The picture of the `svg` element in `src`, styled by its `style`
+// elements.
+fn built(a: Allocator, src: []u8) !*mut Picture {
+    return (try parseImage(a, src)).?
+}
+
+test "pictures from documents" {
+    let a = @testAllocator()
+    let src =
+        \\<svg width='20' height='10' viewBox='0 0 40 20' style='color: rgb(0, 128, 0)'>
+        \\<style>.c { fill: blue }</style>
+        \\<defs><path id='p' d='M0 0H4V4Z'/><linearGradient id='g'><stop offset='0' stop-color='#000'/>
+        \\<stop offset='1' stop-color='#fff'/></linearGradient></defs>
+        \\<rect width='5' height='5' class='c'/>
+        \\<g fill='currentColor' opacity='0.5'><use href='#p' x='10'/></g>
+        \\<circle r='3' fill='url(#g)' stroke='red' stroke-width='2' transform='scale(2)'/>
+        \\<rect width='5' height='5' display='none'/><text>skipped</text></svg>
+
+    let pic = try built(a, src)
+    defer a.destroy(pic)
+    defer pic.deinit()
+    @expectEqual(3, pic.shapes.len())
+    let s = pic.shapes.items()
+    @expectEqual(255, s[0].fill.b)
+    @expectEqual(0, s[0].stroke.a)
+    // The `use`d path inherits the green of `currentColor`, half opaque,
+    // moved by `x`.
+    @expectEqual(128, s[1].fill.g)
+    @expectEqual(128, s[1].fill.a)
+    @expect(close(10.0, pic.coords.items()[s[1].coord_start]))
+    // The gradient's middle, and a stroke scaled with its shape.
+    @expectEqual(128, s[2].fill.r)
+    @expectEqual(255, s[2].stroke.r)
+    @expect(close(4.0, s[2].stroke_width))
+    let n = pic.naturalSize()
+    @expect(close(20.0, n.w) && close(10.0, n.h))
+}

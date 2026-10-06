@@ -1,8 +1,7 @@
-// The part of SDL2 the window uses. `SDL_Event` is a C union: Ore
-// declares its size and alignment (56 bytes, pointer-aligned) with the
-// common header (`kind`), and reads each kind of event through
-// `@ptrCast` to an extern struct with that event's layout (SDL_events.h,
-// SDL 2.0.18 and later for the wheel's precise fields).
+// The part of SDL2 the window uses. `SDL_Event` is a C union of the
+// events the window reads, with the common header (`kind`) and padding
+// to SDL's 56 bytes, pointer-aligned (SDL_events.h, SDL 2.0.18 and later
+// for the wheel's precise fields).
 
 @link("sdl2")
 
@@ -18,10 +17,15 @@ pub extern struct SDL_Rect {
     h: i32
 }
 
-pub extern struct SDL_Event {
+pub extern union SDL_Event {
     kind: u32
-    pad: u32
-    data: [6]u64
+    window: SDL_WindowEvent
+    key: SDL_KeyboardEvent
+    text: SDL_TextInputEvent
+    motion: SDL_MouseMotionEvent
+    button: SDL_MouseButtonEvent
+    wheel: SDL_MouseWheelEvent
+    padding: [7]u64
 }
 
 pub extern struct SDL_Keysym {

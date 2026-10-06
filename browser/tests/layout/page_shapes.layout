@@ -27,9 +27,9 @@ viewport 800x600
           cell <div class="cell"> (150, 202) 150x22
             line (151, 203) 148x20
               text (151, 205) 8x16 "b"
-      block <div style="transform: translate(10px); filter: blur(2px)"> (0, 224) 800x20
-        line (0, 224) 800x20
-          text (0, 226) 272x16 "transforms and filters are ignored"
+      block <div style="transform: translate(10px); filter: blur(2px)"> (10, 224) 800x20
+        line (10, 224) 800x20
+          text (10, 226) 344x16 "moved by its transform; filters are ignored"
       block <details> (0, 244) 800x20
         block <summary> (0, 244) 800x20
           line (0, 244) 800x20

@@ -1,0 +1,28 @@
+<html>
+<head><title>Frameset grid</title></head>
+<!-- rows and cols in px, % and * (800x600 viewport): absolute lengths
+     first, then percentages of the whole, then * shares what is left
+     (2* twice as much); without *, what is left goes to the percentages,
+     else to the absolute lengths. Children fill the cells in row order;
+     one more child than cells gets no box size. -->
+<frameset rows="100,25%,*,2*">
+  <frameset cols="18,82">
+    <frame src="a.html">
+    <frame src="b.html">
+  </frameset>
+  <frameset cols="25%,25%">
+    <frame src="c.html">
+    <frame src="d.html">
+  </frameset>
+  <frameset cols="1000,1000">
+    <frame src="e.html">
+    <frame src="f.html">
+  </frameset>
+  <frameset cols="200,*,3*">
+    <frame src="g.html">
+    <frame src="h.html">
+    <frame src="i.html">
+  </frameset>
+  <frame src="extra.html">
+</frameset>
+</html>

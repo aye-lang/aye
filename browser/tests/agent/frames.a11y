@@ -1,0 +1,13 @@
+- frame "メニュー" -> file://$ROOT/browser/tests/frames/menu.html
+  - text: 　
+  - link "トップ" -> top.html
+  - text: 　
+  - link "映画出演" -> bottom.html
+  - text: 　
+  - link "English" -> english.html
+- frame "阿部 寛のホームページ" -> file://$ROOT/browser/tests/frames/top.html
+  - heading "阿部 寛のホームページ" [level=1]
+  - paragraph: 生年月日 1964年6月22日
+- frame "Bottom" -> file://$ROOT/browser/tests/frames/bottom.html
+  - paragraph: English page in the bottom frame.
+  - text: line one line two

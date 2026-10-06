@@ -40,7 +40,7 @@ fn scriptEvent(word: []u8) ?SDL_Event {
         }
         let sym = keySym(name) orelse return null
         ev.kind = SDL_KEYDOWN
-        let ke = @ptrCast(*mut SDL_KeyboardEvent, &mut ev)
+        let ke = &mut ev.key
         ke.keysym.sym = sym
         ke.keysym.mods = mods
         return ev
@@ -51,7 +51,7 @@ fn scriptEvent(word: []u8) ?SDL_Event {
             return null
         }
         ev.kind = SDL_TEXTINPUT
-        let te = @ptrCast(*mut SDL_TextInputEvent, &mut ev)
+        let te = &mut ev.text
         for i, c in s {
             if c == '_' {
                 te.text[i] = ' '
@@ -74,13 +74,13 @@ fn scriptEvent(word: []u8) ?SDL_Event {
         }
         if text.startsWith(word, "click:") {
             ev.kind = SDL_MOUSEBUTTONDOWN
-            let be = @ptrCast(*mut SDL_MouseButtonEvent, &mut ev)
+            let be = &mut ev.button
             be.button = SDL_BUTTON_LEFT
             be.x = x as i32
             be.y = y as i32
         } else {
             ev.kind = SDL_MOUSEMOTION
-            let me = @ptrCast(*mut SDL_MouseMotionEvent, &mut ev)
+            let me = &mut ev.motion
             me.x = x as i32
             me.y = y as i32
         }
@@ -91,7 +91,7 @@ fn scriptEvent(word: []u8) ?SDL_Event {
             return null
         }
         ev.kind = SDL_MOUSEWHEEL
-        let we = @ptrCast(*mut SDL_MouseWheelEvent, &mut ev)
+        let we = &mut ev.wheel
         we.y = n as i32
         we.precise_y = n as f32
         return ev
@@ -212,6 +212,17 @@ fn writeState(ui: *mut Ui, out: *mut text.Builder) AllocError!void {
     try out.append("\nstatus ")
     try out.append(ui.hover.bytes())
     try out.append("\n")
+    if ui.tab.page |p| {
+        if p.frames.len() > 0 {
+            // How far each frame's document is scrolled.
+            try out.append("frames")
+            for f in p.frames.items() {
+                try out.append(" ")
+                try out.appendInt(std.math.floor(f.scroll + 0.5) as i64)
+            }
+            try out.append("\n")
+        }
+    }
     if ui.agents |a| {
         // The window listens for agents: its tabs, and what the agents'
         // chrome shows.

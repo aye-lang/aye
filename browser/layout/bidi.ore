@@ -1,0 +1,443 @@
+// Bidirectional text (UAX 9, the basics), on the pieces of a block
+// container's inline content:
+//
+// - the paragraph level comes from the container's `direction` (the
+//   `dir` attribute maps to it in the UA sheet);
+// - words are split where right-to-left characters (Hebrew, Arabic and
+//   the other RTL scripts) start and end, and each piece gets a class:
+//   R, L, EN (digits) or N (spaces, punctuation, atomic inlines);
+// - the weak and neutral rules W7, N1 and N2 resolve EN and N pieces, and
+//   I1 and I2 give each piece its embedding level;
+// - each line is reordered by L2 (runs at each level from the highest
+//   reversed), and pieces at odd levels are shaped and drawn right to
+//   left.
+//
+// Not done: embeddings and isolates (`unicode-bidi`, `dir` on inline
+// elements, `bdi`, `bdo`, the explicit formatting characters), `dir=auto`,
+// the finer weak rules (W1 to W6: separators and terminators between
+// numbers, AN), mirroring of the box model (padding and margins stay
+// physical), and the order of neutrals inside a piece.
+
+import css
+import css.Value
+import std.list.List
+import std.math
+import std.mem.AllocError
+import std.text
+
+let BIDI_N: u8 = 0
+let BIDI_L: u8 = 1
+let BIDI_R: u8 = 2
+let BIDI_EN: u8 = 3
+
+/// Is the paragraph of a style right to left?
+fn isRtl(style: []Value) bool {
+    return isKeyword(style[css.DIRECTION], "rtl")
+}
+
+/// Is `c` a strong right-to-left character (bidi classes R and AL)?
+fn rtlChar(c: u32) bool {
+    if c < 0x590 {
+        return false
+    }
+    return (c <= 0x8FF && !(c >= 0x660 && c <= 0x669) && !(c >= 0x6F0 && c <= 0x6F9) && !(c >= 0x64B && c <= 0x65F) && c != 0x670 && !(c >= 0x591 && c <= 0x5BD)) || (c >= 0xFB1D && c <= 0xFDFF) || (c >= 0xFE70 && c <= 0xFEFE) || (c >= 0x10800 && c <= 0x10FFF) || (c >= 0x1E800 && c <= 0x1EFFF)
+}
+
+// Characters that go with their neighbours and never split a piece:
+// combining marks, joiners and direction marks.
+fn bidiTransparent(c: u32) bool {
+    return (c >= 0x300 && c <= 0x36F) || (c >= 0x591 && c <= 0x5BD) || (c >= 0x64B && c <= 0x65F) || c == 0x670 || (c >= 0x200B && c <= 0x200F) || (c >= 0xFE00 && c <= 0xFE0F)
+}
+
+/// Does a word split between `a` and `b` (the last character before `b`
+/// that is not transparent: 0 for none) because one is right to left
+/// and the other not?
+fn splitsBidi(a: u32, b: u32) bool {
+    if a == 0 || bidiTransparent(b) {
+        return false
+    }
+    return rtlChar(a) != rtlChar(b)
+}
+
+// Is `c` a strong left-to-right character (letters, ideographs)?
+fn ltrChar(c: u32) bool {
+    if c < 0x80 {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+    }
+    if c < 0xC0 {
+        return c == 0xAA || c == 0xB5 || c == 0xBA
+    }
+    if c == 0xD7 || c == 0xF7 || rtlChar(c) || bidiTransparent(c) {
+        return false
+    }
+    // Punctuation, symbols, arrows, box drawing, CJK punctuation,
+    // fullwidth punctuation and digits, specials.
+    if (c >= 0x2000 && c <= 0x2BFF) || (c >= 0x3000 && c <= 0x3004) || (c >= 0x3008 && c <= 0x3020) || (c >= 0xFE10 && c <= 0xFE6F) || (c >= 0xFF00 && c <= 0xFF20) || (c >= 0xFF3B && c <= 0xFF40) || (c >= 0xFF5B && c <= 0xFF65) || (c >= 0xFFF0 && c <= 0xFFFF) || (c >= 0x1F000 && c <= 0x1FAFF) {
+        return false
+    }
+    return true
+}
+
+/// The bidi class of a piece of text: R when it has a right-to-left
+/// character, else L when it has a letter, else EN when it has a digit,
+/// else N.
+fn bidiClassOf(s: []u8) u8 {
+    var class = BIDI_N
+    var i: usize = 0
+    while i < s.len {
+        let d = text.decode(s[i..])
+        i += d.len
+        if rtlChar(d.code) {
+            return BIDI_R
+        }
+        if ltrChar(d.code) {
+            class = BIDI_L
+        } else if class == BIDI_N && ((d.code >= '0' && d.code <= '9') || (d.code >= 0x660 && d.code <= 0x669) || (d.code >= 0x6F0 && d.code <= 0x6F9)) {
+            class = BIDI_EN
+        }
+    }
+    return class
+}
+
+/// Sets the embedding level of the pieces `ps` of a block container whose
+/// paragraph is right to left when `rtl`. Leaves every level 0 (and
+/// does nothing) for left-to-right paragraphs without right-to-left
+/// text.
+fn resolveLevels(ps: []mut Piece, rtl: bool) {
+    var any = rtl
+    for p in ps {
+        if p.bidi == BIDI_R {
+            any = true
+        }
+    }
+    if !any {
+        return
+    }
+    var base: u8 = 0
+    var e = BIDI_L
+    if rtl {
+        base = 1
+        e = BIDI_R
+    }
+    // W7: numbers after L (or at the start of an LTR paragraph) are L.
+    var strong = e
+    var j: usize = 0
+    while j < ps.len {
+        let p = ps[j]
+        var c = BIDI_N
+        if p.kind == PieceKind.Word {
+            c = p.bidi
+        } else if p.kind == PieceKind.Break {
+            strong = e
+        }
+        if c == BIDI_L || c == BIDI_R {
+            strong = c
+        } else if c == BIDI_EN && strong == BIDI_L {
+            c = BIDI_L
+        }
+        ps[j].bidi = c
+        j += 1
+    }
+    // N1, N2: a run of neutrals takes the direction around it when both
+    // sides agree (numbers count as R), else the paragraph's.
+    var k: usize = 0
+    while k < ps.len {
+        if !isNeutral(ps[k]) {
+            k += 1
+            continue
+        }
+        let start = k
+        while k < ps.len && isNeutral(ps[k]) {
+            k += 1
+        }
+        var before = e
+        var b = start
+        while b > 0 {
+            b -= 1
+            if ps[b].kind == PieceKind.Break {
+                break
+            }
+            if !isNeutral(ps[b]) {
+                before = strongOf(ps[b].bidi)
+                break
+            }
+        }
+        var after = e
+        if k < ps.len && ps[k].kind != PieceKind.Break {
+            after = strongOf(ps[k].bidi)
+        }
+        var dir = e
+        if before == after {
+            dir = before
+        }
+        for n in start..k {
+            ps[n].bidi = dir
+        }
+    }
+    // I1, I2.
+    for n in 0..ps.len {
+        let c = ps[n].bidi
+        var level = base
+        if base == 0 {
+            if c == BIDI_R {
+                level = 1
+            } else if c == BIDI_EN {
+                level = 2
+            }
+        } else if c == BIDI_L || c == BIDI_EN {
+            level = 2
+        }
+        ps[n].level = level
+    }
+    // Inline box edges and out-of-flow pieces sit at the level of the
+    // content they touch: an opening edge with what follows, a closing
+    // one with what precedes.
+    for n in 0..ps.len {
+        let kind = ps[n].kind
+        if kind == PieceKind.Open || kind == PieceKind.Float || kind == PieceKind.Abs {
+            var m = n + 1
+            while m < ps.len && !isContentKind(ps[m].kind) {
+                m += 1
+            }
+            if m < ps.len && ps[m].kind != PieceKind.Break {
+                ps[n].level = ps[m].level
+            } else {
+                ps[n].level = base
+            }
+        }
+    }
+    var n = ps.len
+    while n > 0 {
+        n -= 1
+        if ps[n].kind == PieceKind.Close {
+            var m = n
+            var found = false
+            while m > 0 {
+                m -= 1
+                if isContentKind(ps[m].kind) {
+                    found = ps[m].kind != PieceKind.Break
+                    break
+                }
+            }
+            if found {
+                ps[n].level = ps[m].level
+            } else {
+                ps[n].level = base
+            }
+        }
+    }
+}
+
+fn isContentKind(k: PieceKind) bool {
+    return k == PieceKind.Word || k == PieceKind.Space || k == PieceKind.Atomic || k == PieceKind.Break
+}
+
+// A piece the neutral rules resolve: spaces, atomic inlines and words
+// with no strong character or number.
+fn isNeutral(p: Piece) bool {
+    if p.kind == PieceKind.Space || p.kind == PieceKind.Atomic {
+        return true
+    }
+    return p.kind == PieceKind.Word && p.bidi == BIDI_N
+}
+
+fn strongOf(c: u8) u8 {
+    if c == BIDI_L {
+        return BIDI_L
+    }
+    if c == BIDI_N {
+        return BIDI_N
+    }
+    return BIDI_R
+}
+
+/// The visual order of the pieces `ps` of a line (L2): the indices of
+/// `ps` in `out`, each maximal run at level `lv` or above reversed, from
+/// the highest level down to the lowest odd one. False (and `out`
+/// empty) when the line has only level 0.
+fn visualOrder(ps: []Piece, out: []mut usize) bool {
+    var high: u8 = 0
+    var low_odd: u8 = 255
+    for p in ps {
+        if p.level > high {
+            high = p.level
+        }
+        if (p.level & 1) == 1 && p.level < low_odd {
+            low_odd = p.level
+        }
+    }
+    if high == 0 {
+        return false
+    }
+    for k in 0..ps.len {
+        out[k] = k
+    }
+    if low_odd == 255 {
+        low_odd = 1
+    }
+    var lv = high
+    while lv >= low_odd {
+        var k: usize = 0
+        while k < ps.len {
+            if ps[out[k]].level < lv {
+                k += 1
+                continue
+            }
+            let start = k
+            while k < ps.len && ps[out[k]].level >= lv {
+                k += 1
+            }
+            var a = start
+            var b = k - 1
+            while a < b {
+                let tmp = out[a]
+                out[a] = out[b]
+                out[b] = tmp
+                a += 1
+                b -= 1
+            }
+        }
+        lv -= 1
+    }
+    return true
+}
+
+// An inline box on a reordered line: its pieces are `kp[from..to]` in
+// logical order.
+struct BoxSpan {
+    box: usize
+    depth: usize
+    from: usize
+    to: usize
+}
+
+/// Makes the fragments of a line whose pieces `kp` (logical order) have
+/// right-to-left text, from `x0` (`extra`: the justification space per
+/// space): the pieces go in visual order, and an inline box's fragment
+/// spans its pieces on the line. False (nothing made) when the line is
+/// all left to right.
+fn bidiLine(lb: *mut LineBuilder, kp: []Piece, x0: f64, extra: f64, baseline: f64) AllocError!bool {
+    var order = List(usize).init(lb.t.backing)
+    defer order.deinit()
+    var xs = List(f64).init(lb.t.backing)
+    defer xs.deinit()
+    for j in 0..kp.len {
+        try order.append(j)
+        try xs.append(0.0)
+    }
+    if !visualOrder(kp, order.items()) {
+        return false
+    }
+    var x = x0
+    for oj in order.items() {
+        xs.items()[oj] = x
+        x += pieceWidth(kp[oj], extra)
+    }
+    // The inline boxes, outer ones first: those open from the last line,
+    // then those that open here.
+    var spans = List(BoxSpan).init(lb.t.backing)
+    defer spans.deinit()
+    var stack = List(usize).init(lb.t.backing)
+    defer stack.deinit()
+    for d, ib in lb.open.items() {
+        try spans.append(BoxSpan { box: ib, depth: d, from: 0, to: kp.len })
+        try stack.append(spans.len() - 1)
+    }
+    for j, p in kp {
+        if p.kind == PieceKind.Open {
+            try spans.append(BoxSpan { box: p.box, depth: p.depth, from: j, to: kp.len })
+            try stack.append(spans.len() - 1)
+        } else if p.kind == PieceKind.Close {
+            if stack.pop() |si| {
+                spans.items()[si].to = j + 1
+            }
+        }
+    }
+    for sp in spans.items() {
+        var lo = x
+        var hi = x0
+        for j in sp.from..sp.to {
+            lo = math.min(lo, xs.items()[j])
+            hi = math.max(hi, xs.items()[j] + pieceWidth(kp[j], extra))
+        }
+        if hi < lo {
+            lo = x0
+            hi = x0
+        }
+        let o = try lb.inlineFrag(sp.box, sp.depth, lo, baseline)
+        lb.t.frags.items()[o.frag].w = hi - lo
+    }
+    var prev_text = false
+    for oj in order.items() {
+        let p = kp[oj]
+        let px = xs.items()[oj]
+        let w = pieceWidth(p, extra)
+        match p.kind {
+            .Word, .Space => {
+                let rtl = (p.level & 1) == 1
+                let n = lb.t.frags.len()
+                var merged = false
+                if prev_text {
+                    let fr = &mut lb.t.frags.items()[n - 1]
+                    if fr.box == p.box && fr.end == p.start && fr.rtl == rtl {
+                        fr.end = p.end
+                        fr.w += w
+                        merged = true
+                    }
+                }
+                if !merged {
+                    let m = textMetrics(lb.t, lb.t.bx(p.box).style)
+                    try lb.t.frags.append(Frag {
+                        kind: FragKind.Text,
+                        box: p.box,
+                        depth: p.depth,
+                        start: p.start,
+                        end: p.end,
+                        x: px + p.rel_x,
+                        y: baseline - m.ascent + p.rel_y,
+                        w: w,
+                        h: m.ascent + m.descent,
+                        rtl: rtl,
+                    })
+                }
+                prev_text = true
+            }
+            .Atomic => {
+                let b = lb.t.bx(p.box)
+                b.x = px + b.margin[3] + p.rel_x
+                b.y = baseline - atomicAscent(lb.t, p.box) + b.margin[0] + p.rel_y
+                try lb.t.frags.append(Frag {
+                    kind: FragKind.Atomic,
+                    box: p.box,
+                    depth: p.depth,
+                    start: 0,
+                    end: 0,
+                    x: b.x,
+                    y: b.y,
+                    w: b.w,
+                    h: b.h,
+                })
+                prev_text = false
+            }
+            .Abs => {
+                let ab = lb.t.bx(p.box)
+                ab.x = px
+                ab.y = lb.y
+            }
+            _ => {
+                prev_text = false
+            }
+        }
+    }
+    for p in kp {
+        try lb.track(p)
+    }
+    return true
+}
+
+fn pieceWidth(p: Piece, extra: f64) f64 {
+    if p.kind == PieceKind.Space {
+        return p.w + extra
+    }
+    return p.w
+}

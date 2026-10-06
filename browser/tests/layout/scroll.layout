@@ -1,0 +1,22 @@
+viewport 800x600
+  block <html> (0, 0) 800x1780
+    block <body> (0, 0) 800x1780
+      block <a class="bar" href="fixed.html"> (0, 0) 100x30 fixed
+        line (0, 0) 100x20
+          text (0, 2) 40x16 "fixed"
+      block <div class="section"> (0, 0) 800x700
+        block <a class="stick" href="sticky.html"> (200, 100) 100x30
+          line (200, 100) 100x20
+            text (200, 102) 48x16 "sticky"
+        block <a class="under" href="under.html"> (200, 140) 100x30
+          line (200, 140) 100x20
+            text (200, 142) 40x16 "under"
+      block <div class="clip"> (0, 700) 800x50
+        block <div style="height: 20px"> (0, 700) 800x20
+        block <a href="clipped.html"> (0, 720) 100x30
+          line (0, 720) 100x20
+            text (0, 722) 56x16 "clipped"
+      block <div style="height: 1000px"> (0, 750) 800x1000
+      block <a class="foot" href="foot.html"> (300, 570) 100x30
+        line (300, 570) 100x20
+          text (300, 572) 32x16 "foot"

@@ -242,8 +242,7 @@ struct Tokenizer {
                 break
             }
         }
-        let owned = try b.toOwned()
-        return owned
+        return b.toOwned()
     }
 
     // The code point of an escape; `pos` is just after the `\`.

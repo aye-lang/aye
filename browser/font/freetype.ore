@@ -1,18 +1,29 @@
-// `System`: the system's fonts through FreeType. Two families, each in
+// `System`: the system's fonts through FreeType. Three families, each in
 // four variants (regular, bold, italic, bold italic): a sans-serif one
-// (Arial, Helvetica, Arial Unicode, DejaVu Sans) used for every family
-// that is not monospace, and a monospace one (Courier New, Menlo, DejaVu
+// (Arial, Helvetica, Arial Unicode, DejaVu Sans), a serif one (Times New
+// Roman, DejaVu Serif) and a monospace one (Courier New, Menlo, DejaVu
 // Sans Mono). A variant that is missing falls back to the regular face of
-// its family, and the monospace family to the sans-serif one.
+// its family, then to the sans-serif face with its style.
 //
-// Advances are read unscaled (font units, from the `hmtx` table) with the
-// legacy `kern` table's pair kerning when the face has one, and scaled to
-// the font size here, so one face serves every size. Paint renders glyphs
-// of the same faces (`glyphIndex`, `advance`, `render`), placing each at
-// the pen position these advances give, so text lands where layout put it.
+// A character that the face of a font lacks comes from the first
+// fallback face that has it (CJK, symbols, other scripts: `FALLBACKS`,
+// loaded on the first miss), so it is drawn instead of a box; web fonts
+// (`addWebFont`, from `@font-face`) come before the system faces for the
+// families that name them. Text is shaped into glyphs by `shape`: runs of
+// one face, through HarfBuzz when it is installed and the run needs it
+// (complex scripts, web fonts: harfbuzz.ore), else glyph by glyph with
+// the legacy `kern` table's pair kerning. Layout measures with the same
+// `shape` (`width`), so text lands where layout put it.
+//
+// Advances are in font units (unscaled), scaled to the font size here, so
+// one face serves every size.
 
 @link("freetype2")
 
+import std.list.List
+import std.map.IntMap
+import std.map.StrMap
+import std.mem.AllocError
 import std.mem.Allocator
 import std.text
 
@@ -21,23 +32,23 @@ extern struct FTGlyphSlotRec {}
 
 // The start of `FT_FaceRec` (freetype.h), up to the fields we read.
 pub extern struct FTFaceRec {
-    num_faces: i64
-    face_index: i64
-    face_flags: i64
-    style_flags: i64
-    num_glyphs: i64
+    num_faces: c_long
+    face_index: c_long
+    face_flags: c_long
+    style_flags: c_long
+    num_glyphs: c_long
     family_name: ?[*]u8
     style_name: ?[*]u8
     num_fixed_sizes: i32
-    available_sizes: ?[*]u8
+    available_sizes: ?[*]FTBitmapSize
     num_charmaps: i32
     charmaps: ?[*]u8
     generic_data: ?[*]u8
     generic_finalizer: ?[*]u8
-    bbox_x_min: i64
-    bbox_y_min: i64
-    bbox_x_max: i64
-    bbox_y_max: i64
+    bbox_x_min: c_long
+    bbox_y_min: c_long
+    bbox_x_max: c_long
+    bbox_y_max: c_long
     units_per_em: u16
     ascender: i16
     descender: i16
@@ -49,9 +60,17 @@ pub extern struct FTFaceRec {
     glyph: ?*mut FTGlyphSlotRec
 }
 
+extern struct FTBitmapSize {
+    height: i16
+    width: i16
+    size: c_long
+    x_ppem: c_long
+    y_ppem: c_long
+}
+
 extern struct FTVector {
-    x: i64
-    y: i64
+    x: c_long
+    y: c_long
 }
 
 extern struct FTGeneric {
@@ -77,9 +96,9 @@ extern struct FTGlyphSlot {
     next: ?[*]u8
     glyph_index: u32
     generic: FTGeneric
-    metrics: [8]i64
-    linear_hori_advance: i64
-    linear_vert_advance: i64
+    metrics: [8]c_long
+    linear_hori_advance: c_long
+    linear_vert_advance: c_long
     advance: FTVector
     format: u32
     bitmap: FTBitmap
@@ -87,10 +106,11 @@ extern struct FTGlyphSlot {
     bitmap_top: i32
 }
 
-/// A rendered glyph: `rows` rows of `width` coverage bytes (0 to 255),
-/// `pitch` bytes apart, in FreeType's memory (valid until the next
-/// `render`). `left` and `top` place it: its top-left pixel is at
-/// (pen x + left, baseline - top).
+/// A rendered glyph: `rows` rows of `width` pixels, `pitch` bytes apart,
+/// in FreeType's memory (valid until the next `render`): coverage bytes
+/// (0 to 255), or, when `color`, premultiplied BGRA pixels (4 bytes) at
+/// `ppem` px per em, which the painter scales. `left` and `top` place
+/// it: its top-left pixel is at (pen x + left, baseline - top).
 pub struct GlyphBitmap {
     width: u32
     rows: u32
@@ -98,25 +118,47 @@ pub struct GlyphBitmap {
     left: i32
     top: i32
     buffer: ?[*]u8
+    color: bool = false
+    ppem: f64 = 0.0
+}
+
+/// A glyph placed by `System.shape`: glyph `glyph` of face `face`, its
+/// origin `x` px right of the start of the text and `y` px above the
+/// baseline; `cluster` is the byte offset in the text of the character
+/// it comes from.
+pub struct Placed {
+    face: u32
+    glyph: u32
+    x: f64
+    y: f64
+    cluster: u32
 }
 
 extern fn FT_Init_FreeType(library: *mut ?*mut FTLibraryRec) i32
 extern fn FT_Done_FreeType(library: *mut FTLibraryRec) i32
-extern fn FT_New_Face(library: *mut FTLibraryRec, path: [*]u8, index: i64, face: *mut ?*mut FTFaceRec) i32
+extern fn FT_New_Face(library: *mut FTLibraryRec, path: [*]u8, index: c_long, face: *mut ?*mut FTFaceRec) i32
+extern fn FT_New_Memory_Face(library: *mut FTLibraryRec, data: [*]u8, size: c_long, index: c_long, face: *mut ?*mut FTFaceRec) i32
 extern fn FT_Done_Face(face: *mut FTFaceRec) i32
-extern fn FT_Get_Char_Index(face: *mut FTFaceRec, code: u64) u32
-extern fn FT_Get_Advance(face: *mut FTFaceRec, glyph: u32, flags: i32, advance: *mut i64) i32
+extern fn FT_Get_Char_Index(face: *mut FTFaceRec, code: c_ulong) u32
+extern fn FT_Get_Advance(face: *mut FTFaceRec, glyph: u32, flags: i32, advance: *mut c_long) i32
 extern fn FT_Get_Kerning(face: *mut FTFaceRec, left: u32, right: u32, mode: u32, kerning: *mut FTVector) i32
-extern fn FT_Set_Char_Size(face: *mut FTFaceRec, width: i64, height: i64, hres: u32, vres: u32) i32
+extern fn FT_Set_Char_Size(face: *mut FTFaceRec, width: c_long, height: c_long, hres: u32, vres: u32) i32
+extern fn FT_Select_Size(face: *mut FTFaceRec, index: i32) i32
 extern fn FT_Load_Glyph(face: *mut FTFaceRec, glyph: u32, flags: i32) i32
 
 let FT_LOAD_NO_SCALE: i32 = 1
-// FT_LOAD_RENDER | FT_LOAD_TARGET_LIGHT: an antialiased (8-bit gray)
-// bitmap, hinted vertically only, so advances stay close to unhinted.
-let FT_LOAD_RENDER_LIGHT: i32 = 0x10004
+// FT_LOAD_RENDER | FT_LOAD_NO_BITMAP | FT_LOAD_TARGET_LIGHT: an
+// antialiased (8-bit gray) bitmap from the outline (not an embedded
+// bitmap), hinted vertically only, so advances stay close to unhinted.
+let FT_LOAD_RENDER_LIGHT: i32 = 0x1000C
+// FT_LOAD_RENDER | FT_LOAD_COLOR: a color bitmap glyph (emoji).
+let FT_LOAD_RENDER_COLOR: i32 = 0x100004
 let FT_PIXEL_MODE_GRAY: u8 = 2
+let FT_PIXEL_MODE_BGRA: u8 = 7
 let FT_KERNING_UNSCALED: u32 = 2
+let FT_FACE_FLAG_SCALABLE: i64 = 1
 let FT_FACE_FLAG_KERNING: i64 = 64
+let FT_FACE_FLAG_COLOR: i64 = 16384
 let FT_STYLE_FLAG_ITALIC: i64 = 1
 let FT_STYLE_FLAG_BOLD: i64 = 2
 
@@ -138,12 +180,83 @@ let SERIF_ITALIC = "/System/Library/Fonts/Supplemental/Times New Roman Italic.tt
 let SERIF_BOLD = "/System/Library/Fonts/Supplemental/Times New Roman Bold.ttf|/System/Library/Fonts/Times.ttc|/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf|/usr/share/fonts/TTF/DejaVuSerif-Bold.ttf|/usr/share/fonts/dejavu/DejaVuSerif-Bold.ttf|/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf"
 let SERIF_BOLD_ITALIC = "/System/Library/Fonts/Supplemental/Times New Roman Bold Italic.ttf|/System/Library/Fonts/Times.ttc|/usr/share/fonts/truetype/dejavu/DejaVuSerif-BoldItalic.ttf|/usr/share/fonts/TTF/DejaVuSerif-BoldItalic.ttf|/usr/share/fonts/dejavu/DejaVuSerif-BoldItalic.ttf|/usr/share/fonts/truetype/liberation/LiberationSerif-BoldItalic.ttf"
 
+// The fallback faces, in the order they are tried: every file of the
+// list that exists (the first face of a collection). macOS first (CJK:
+// PingFang, Hiragino Sans, STHeiti, Hiragino Sans GB, Apple SD Gothic
+// Neo; then Arial Unicode, Apple Symbols, STIX Two Math, the Apple Color
+// Emoji bitmaps),
+// then the usual paths of Linux distributions (Noto CJK, DejaVu, Noto
+// symbols and scripts, Noto Color Emoji), without fontconfig.
+let FALLBACKS = "/System/Library/PrivateFrameworks/FontServices.framework/Versions/A/Resources/Reserved/PingFangUI.ttc|/System/Library/Fonts/PingFang.ttc|/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc|/System/Library/Fonts/STHeiti Light.ttc|/System/Library/Fonts/Hiragino Sans GB.ttc|/System/Library/Fonts/AppleSDGothicNeo.ttc|/System/Library/Fonts/Supplemental/Arial Unicode.ttf|/Library/Fonts/Arial Unicode.ttf|/System/Library/Fonts/Apple Symbols.ttf|/System/Library/Fonts/Supplemental/STIXTwoMath.otf|/System/Library/Fonts/Apple Color Emoji.ttc|/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc|/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc|/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc|/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf|/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc|/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf|/usr/share/fonts/TTF/DejaVuSans.ttf|/usr/share/fonts/dejavu/DejaVuSans.ttf|/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf|/usr/share/fonts/truetype/noto/NotoSansSymbols-Regular.ttf|/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf|/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf|/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf|/usr/share/fonts/truetype/freefont/FreeSans.ttf|/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf|/usr/share/fonts/noto/NotoColorEmoji.ttf"
+
+// No face (in `covered`, `Run.face`).
+let NO_FACE: u32 = 0xFFFFFFFF
+
+/// A loaded face: from a system font file, or a web font (from memory).
+pub struct Face {
+    ft: *mut FTFaceRec
+    // A web font's file, which FreeType reads until the face is done;
+    // empty for a system face.
+    data: []mut u8
+    kerning: bool
+    // Only color bitmaps at fixed sizes (emoji).
+    color: bool
+    // The HarfBuzz font, made on first use.
+    hb: ?*mut HbFont
+    hb_tried: bool
+}
+
+/// A web font face of `@font-face`, in `System.faces` at `face`.
+struct WebFace {
+    // Lower case.
+    family: []mut u8
+    weight_lo: f64
+    weight_hi: f64
+    italic: bool
+    // `unicode-range` as pairs (first, last); empty for all.
+    ranges: []mut u32
+    url: []mut u8
+    face: usize
+}
+
+// The web faces a font asks for: `System.chain_faces[start..start + len]`
+// (indices in `System.web`).
+struct Span {
+    start: usize
+    len: usize
+}
+
+// A run of text in one face: `s[start..end]`.
+struct Run {
+    start: usize
+    end: usize
+    face: u32
+}
+
 pub struct System {
+    alloc: Allocator
     library: *mut FTLibraryRec
-    // By `faceSlot`; null when no file had that variant.
-    faces: [12]?*mut FTFaceRec
-    // `faces[0]`, which every lookup falls back to.
-    regular: *mut FTFaceRec
+    faces: List(Face)
+    // The face of each variant by `faceSlot`: an index in `faces`.
+    slots: [12]usize
+    // The fallback faces in order (indices in `faces`), loaded on the
+    // first character that a font's faces lack.
+    fallbacks: List(usize)
+    fallbacks_loaded: bool
+    // Code point -> the first fallback face with a glyph for it, or
+    // NO_FACE.
+    covered: IntMap(u32, u32)
+    web: List(WebFace)
+    // The URLs of web fonts that could not be fetched or read.
+    failed: List([]mut u8)
+    // The web faces of each font family list, weight and style (the key:
+    // see `chainOf`); cleared when a web font is added.
+    chains: StrMap(Span)
+    chain_keys: List([]mut u8)
+    chain_faces: List(usize)
+    key: text.Builder
+    runs: List(Run)
+    hb_buffer: ?*mut HbBuffer
 
     /// Loads the system fonts. `NoFont` when not even a regular
     /// sans-serif face is found.
@@ -153,15 +266,61 @@ pub struct System {
             return FontError.NoFreeType
         }
         if lib |library| {
-            var faces = [12]?*mut FTFaceRec{null, ..}
+            var found = [12]?*mut FTFaceRec{null, ..}
             let lists = [12][]u8{SANS, SANS_ITALIC, SANS_BOLD, SANS_BOLD_ITALIC, MONO, MONO_ITALIC, MONO_BOLD, MONO_BOLD_ITALIC, SERIF, SERIF_ITALIC, SERIF_BOLD, SERIF_BOLD_ITALIC}
             for slot, list in lists {
-                faces[slot] = findFace(alloc, library, list, (slot & 2) != 0, (slot & 1) != 0)
+                found[slot] = findFace(alloc, library, list, (slot & 2) != 0, (slot & 1) != 0)
             }
-            if faces[0] |regular| {
-                return System { library: library, faces: faces, regular: regular }
+            if found[0] |regular| {
+                var s = System {
+                    alloc: alloc,
+                    library: library,
+                    faces: List(Face).init(alloc),
+                    slots: [12]usize{0, ..},
+                    fallbacks: List(usize).init(alloc),
+                    fallbacks_loaded: false,
+                    covered: IntMap(u32, u32).init(alloc),
+                    web: List(WebFace).init(alloc),
+                    failed: List([]mut u8).init(alloc),
+                    chains: StrMap(Span).init(alloc),
+                    chain_keys: List([]mut u8).init(alloc),
+                    chain_faces: List(usize).init(alloc),
+                    key: text.Builder.init(alloc),
+                    runs: List(Run).init(alloc),
+                    hb_buffer: null,
+                }
+                var index = [12]usize{0, ..}
+                var ok = true
+                for slot in 0..12 {
+                    if found[slot] |face| {
+                        index[slot] = s.faces.len()
+                        s.faces.append(faceOf(face, []mut u8{})) catch |e| {
+                            ok = false
+                        }
+                    }
+                }
+                if ok {
+                    // A missing variant: the regular face of its kind,
+                    // then the sans-serif face with its style.
+                    for slot in 0..12 {
+                        if found[slot] != null {
+                            s.slots[slot] = index[slot]
+                        } else if found[slot & 12] != null {
+                            s.slots[slot] = index[slot & 12]
+                        } else if found[slot & 3] != null {
+                            s.slots[slot] = index[slot & 3]
+                        } else {
+                            s.slots[slot] = index[0]
+                        }
+                    }
+                    if @hasLink("harfbuzz") {
+                        s.hb_buffer = hbBufferNew()
+                    }
+                    return s
+                }
+                s.faces.deinit()
             }
-            for f in faces {
+            for f in found {
                 if f |face| {
                     FT_Done_Face(face)
                 }
@@ -173,32 +332,51 @@ pub struct System {
     }
 
     pub fn deinit(self: *mut Self) {
-        for f in self.faces {
-            if f |face| {
-                FT_Done_Face(face)
+        for face in self.faces.items() {
+            if face.hb |h| {
+                if @hasLink("harfbuzz") {
+                    hbFontFree(h)
+                }
+            }
+            FT_Done_Face(face.ft)
+            if face.data.len > 0 {
+                self.alloc.free(face.data)
             }
         }
+        if self.hb_buffer |b| {
+            if @hasLink("harfbuzz") {
+                hbBufferFree(b)
+            }
+        }
+        for w in self.web.items() {
+            self.alloc.free(w.family)
+            self.alloc.free(w.ranges)
+            self.alloc.free(w.url)
+        }
+        for f in self.failed.items() {
+            self.alloc.free(f)
+        }
+        self.failed.deinit()
+        self.clearChains()
+        self.chains.deinit()
+        self.chain_keys.deinit()
+        self.chain_faces.deinit()
+        self.faces.deinit()
+        self.fallbacks.deinit()
+        self.covered.deinit()
+        self.web.deinit()
+        self.key.deinit()
+        self.runs.deinit()
         FT_Done_FreeType(self.library)
     }
 
-    /// The FreeType face for `f`, with the fallbacks: the regular face
-    /// of its kind, then the sans-serif face with the same style.
-    pub fn faceFor(self: *Self, f: Font) *mut FTFaceRec {
-        let slot = faceSlot(f)
-        if self.faces[slot] |face| {
-            return face
-        }
-        if self.faces[slot & 12] |face| {
-            return face
-        }
-        if self.faces[slot & 3] |face| {
-            return face
-        }
-        return self.regular
+    /// Does HarfBuzz shape text (ligatures, Arabic joining)?
+    pub fn shapes(self: *Self) bool {
+        return self.hb_buffer != null
     }
 
     pub fn metrics(self: *mut Self, f: Font) Metrics {
-        let face = self.faceFor(f)
+        let face = self.faces.items()[self.primaryFace(f)].ft
         let scale = f.size / face.units_per_em as f64
         let ascent = face.ascender as f64 * scale
         let descent = -(face.descender as f64) * scale
@@ -210,66 +388,416 @@ pub struct System {
     }
 
     pub fn width(self: *mut Self, f: Font, s: []u8) f64 {
-        let face = self.faceFor(f)
-        let kerning = (face.face_flags & FT_FACE_FLAG_KERNING) != 0
-        var units: i64 = 0
-        var prev: u32 = 0
+        return self.shapeText(f, s, null) catch |e| {
+            return 0.0
+        }
+    }
+
+    /// Is the web font `d` neither added nor failed yet?
+    pub fn webFontWanted(self: *mut Self, d: FaceDesc) bool {
+        for w in self.web.items() {
+            if text.eql(w.url, d.url) && text.eqlIgnoreCase(w.family, d.family) && w.weight_lo == d.weight_lo && w.weight_hi == d.weight_hi && w.italic == d.italic && w.ranges.len == d.ranges.len {
+                return false
+            }
+        }
+        for f in self.failed.items() {
+            if text.eql(f, d.url) {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// Adds the web font `file` (a TrueType or OpenType file, copied)
+    /// for the `@font-face` rule `d`; false when FreeType cannot read it
+    /// (or `file` is empty: it could not be fetched), and the URL is not
+    /// wanted again. A file already added for another rule is reused.
+    pub fn addWebFont(self: *mut Self, d: FaceDesc, file: []u8) AllocError!bool {
+        if !self.webFontWanted(d) {
+            return true
+        }
+        var fi: ?usize = null
+        for w in self.web.items() {
+            if text.eql(w.url, d.url) {
+                fi = w.face
+            }
+        }
+        if fi == null {
+            fi = try self.loadMemoryFace(file)
+        }
+        if fi == null {
+            let address = try self.alloc.alloc(0 as u8, d.url.len)
+            for i, c in d.url {
+                address[i] = c
+            }
+            try self.failed.append(address)
+            return false
+        }
+        if fi |face| {
+            let family = try self.alloc.alloc(0 as u8, d.family.len)
+            for i, c in d.family {
+                family[i] = c
+            }
+            text.toLower(family)
+            let ranges = try self.alloc.alloc(0 as u32, d.ranges.len)
+            for i, r in d.ranges {
+                ranges[i] = r
+            }
+            let address = try self.alloc.alloc(0 as u8, d.url.len)
+            for i, c in d.url {
+                address[i] = c
+            }
+            try self.web.append(WebFace {
+                family: family,
+                weight_lo: d.weight_lo,
+                weight_hi: d.weight_hi,
+                italic: d.italic,
+                ranges: ranges,
+                url: address,
+                face: face,
+            })
+            self.clearChains()
+        }
+        return true
+    }
+
+    // Loads the font file `file` (copied) as a face; its index in
+    // `faces`, null when FreeType cannot read it.
+    fn loadMemoryFace(self: *mut Self, file: []u8) AllocError!?usize {
+        if file.len == 0 {
+            return null
+        }
+        let data = try self.alloc.alloc(0 as u8, file.len)
+        for i, c in file {
+            data[i] = c
+        }
+        var out: ?*mut FTFaceRec = null
+        if FT_New_Memory_Face(self.library, data.ptr, data.len as i64, 0, &mut out) != 0 {
+            self.alloc.free(data)
+            return null
+        }
+        if out |ft| {
+            if ft.units_per_em == 0 {
+                FT_Done_Face(ft)
+                self.alloc.free(data)
+                return null
+            }
+            try self.faces.append(faceOf(ft, data))
+            return self.faces.len() - 1
+        }
+        self.alloc.free(data)
+        return null
+    }
+
+    /// Shapes `s` in `f` into glyphs, in visual order (right to left
+    /// text reversed when `f.rtl`), appended to `out` when it is not
+    /// null; returns the advance width of `s` in px.
+    pub fn shapeText(self: *mut Self, f: Font, s: []u8, out: ?*mut List(Placed)) AllocError!f64 {
+        let span = try self.chainOf(f)
+        let slot = self.slots[faceSlot(f)] as u32
+        self.runs.clear()
+        var cur = NO_FACE
+        var start: usize = 0
         var i: usize = 0
         while i < s.len {
             let d = text.decode(s[i..])
-            i += d.len
-            let glyph = FT_Get_Char_Index(face, d.code as u64)
-            var advance: i64 = 0
-            if FT_Get_Advance(face, glyph, FT_LOAD_NO_SCALE, &mut advance) == 0 {
-                units += advance
+            var face = cur
+            if i + d.len < s.len && text.decode(s[i + d.len..]).code == 0xFE0F {
+                // Emoji presentation: from a color face when there is one.
+                face = try self.pickColor(span, slot, d.code)
+            } else if cur == NO_FACE || !joinsPrevious(d.code) || (FT_Get_Char_Index(self.faces.items()[cur as usize].ft, d.code as u64) == 0 && !ignorable(d.code)) {
+                face = try self.pick(span, slot, d.code)
             }
-            if kerning && prev != 0 && glyph != 0 {
-                var k = FTVector { x: 0, y: 0 }
-                if FT_Get_Kerning(face, prev, glyph, FT_KERNING_UNSCALED, &mut k) == 0 {
-                    units += k.x
+            if face != cur {
+                if cur != NO_FACE {
+                    try self.runs.append(Run { start: start, end: i, face: cur })
+                }
+                cur = face
+                start = i
+            }
+            i += d.len
+        }
+        if cur != NO_FACE {
+            try self.runs.append(Run { start: start, end: s.len, face: cur })
+        }
+        var pen = 0.0
+        let n = self.runs.len()
+        for k in 0..n {
+            var r = self.runs.items()[k]
+            if f.rtl {
+                r = self.runs.items()[n - 1 - k]
+            }
+            pen = try self.shapeRun(f, s, r, pen, out)
+        }
+        return pen
+    }
+
+    // Shapes the run `r` of `s` starting at `pen` px; returns the pen
+    // after it.
+    fn shapeRun(self: *mut Self, f: Font, s: []u8, r: Run, pen: f64, out: ?*mut List(Placed)) AllocError!f64 {
+        let fi = r.face as usize
+        let ft = self.faces.items()[fi].ft
+        let scale = f.size / ft.units_per_em as f64
+        var x = pen
+        if @hasLink("harfbuzz") {
+            if self.hb_buffer |buf| {
+                if self.faces.items()[fi].data.len > 0 || needsShaping(s[r.start..r.end]) {
+                    if self.hbFontAt(fi) |font| {
+                        let n = hbShape(font, buf, s, r.start, r.end, f.rtl)
+                        for k in 0..n {
+                            let g = hbGlyphAt(buf, k)
+                            if out |list| {
+                                try list.append(Placed { face: r.face, glyph: g.glyph, x: x + g.x_offset as f64 * scale, y: g.y_offset as f64 * scale, cluster: g.cluster })
+                            }
+                            x += g.advance as f64 * scale
+                        }
+                        return x
+                    }
                 }
             }
+        }
+        // Glyph by glyph, with pair kerning; right to left text from its
+        // last character, with mirrored brackets.
+        let kerning = self.faces.items()[fi].kerning
+        var prev: u32 = 0
+        var i = r.start
+        var j = r.end
+        while (!f.rtl && i < r.end) || (f.rtl && j > r.start) {
+            var at = i
+            var code: u32 = 0
+            if f.rtl {
+                j -= 1
+                while j > r.start && (s[j] & 0xC0) == 0x80 {
+                    j -= 1
+                }
+                at = j
+                code = mirrored(text.decode(s[j..r.end]).code)
+            } else {
+                let d = text.decode(s[i..r.end])
+                code = d.code
+                i += d.len
+            }
+            let glyph = FT_Get_Char_Index(ft, code as u64)
+            var units: i64 = 0
+            var adv: i64 = 0
+            if FT_Get_Advance(ft, glyph, FT_LOAD_NO_SCALE, &mut adv) == 0 {
+                units = adv
+            }
+            var kern: i64 = 0
+            if kerning && prev != 0 && glyph != 0 {
+                var k = FTVector { x: 0, y: 0 }
+                if FT_Get_Kerning(ft, prev, glyph, FT_KERNING_UNSCALED, &mut k) == 0 {
+                    kern = k.x
+                }
+            }
+            if out |list| {
+                try list.append(Placed { face: r.face, glyph: glyph, x: x + kern as f64 * scale, y: 0.0, cluster: at as u32 })
+            }
+            x += (units + kern) as f64 * scale
             prev = glyph
         }
-        return units as f64 * f.size / face.units_per_em as f64
+        return x
     }
 
-    /// The glyph of the code point `code` in the face of `f` (0: none).
-    pub fn glyphIndex(self: *Self, f: Font, code: u32) u32 {
-        return FT_Get_Char_Index(self.faceFor(f), code as u64)
-    }
-
-    /// The advance in px of `glyph` after `prev` (0 for none) at
-    /// `f.size`, kerning included: the sum over a run is its `width`.
-    pub fn advance(self: *Self, f: Font, prev: u32, glyph: u32) f64 {
-        let face = self.faceFor(f)
-        var units: i64 = 0
-        var adv: i64 = 0
-        if FT_Get_Advance(face, glyph, FT_LOAD_NO_SCALE, &mut adv) == 0 {
-            units += adv
-        }
-        if (face.face_flags & FT_FACE_FLAG_KERNING) != 0 && prev != 0 && glyph != 0 {
-            var k = FTVector { x: 0, y: 0 }
-            if FT_Get_Kerning(face, prev, glyph, FT_KERNING_UNSCALED, &mut k) == 0 {
-                units += k.x
+    // The HarfBuzz font of face `fi`, made on first use.
+    fn hbFontAt(self: *mut Self, fi: usize) ?*mut HbFont {
+        let face = &mut self.faces.items()[fi]
+        if !face.hb_tried {
+            face.hb_tried = true
+            if @hasLink("harfbuzz") {
+                face.hb = hbFontOf(face.ft)
             }
         }
-        return units as f64 * f.size / face.units_per_em as f64
+        return face.hb
     }
 
-    /// Renders `glyph` of the face of `f` at `size64` / 64 px per em,
-    /// antialiased; null when FreeType cannot.
-    pub fn render(self: *mut Self, f: Font, size64: i64, glyph: u32) ?GlyphBitmap {
-        let face = self.faceFor(f)
-        if FT_Set_Char_Size(face, 0, size64, 72, 72) != 0 {
+    // The face for `code` (an index in `faces`): the first web face of
+    // `span` with a glyph for it, else the system face `slot`, else the
+    // first fallback face with one, else `slot` (its missing glyph).
+    fn pick(self: *mut Self, span: Span, slot: u32, code: u32) AllocError!u32 {
+        if code < 0x21 {
+            return slot
+        }
+        for k in 0..span.len {
+            let w = self.web.items()[self.chain_faces.items()[span.start + k]]
+            if inRanges(w.ranges, code) && FT_Get_Char_Index(self.faces.items()[w.face].ft, code as u64) != 0 {
+                return w.face as u32
+            }
+        }
+        if FT_Get_Char_Index(self.faces.items()[slot as usize].ft, code as u64) != 0 || ignorable(code) {
+            return slot
+        }
+        if self.covered.get(code) |known| {
+            if known == NO_FACE {
+                return slot
+            }
+            return known
+        }
+        try self.loadFallbacks()
+        var found = NO_FACE
+        for fi in self.fallbacks.items() {
+            if FT_Get_Char_Index(self.faces.items()[fi].ft, code as u64) != 0 {
+                found = fi as u32
+                break
+            }
+        }
+        try self.covered.put(code, found)
+        if found == NO_FACE {
+            return slot
+        }
+        return found
+    }
+
+    // The face for `code` followed by the emoji variation selector: the
+    // first color fallback face with a glyph for it, else `pick`'s.
+    fn pickColor(self: *mut Self, span: Span, slot: u32, code: u32) AllocError!u32 {
+        try self.loadFallbacks()
+        for fi in self.fallbacks.items() {
+            let face = self.faces.items()[fi]
+            if face.color && FT_Get_Char_Index(face.ft, code as u64) != 0 {
+                return fi as u32
+            }
+        }
+        return self.pick(span, slot, code)
+    }
+
+    fn loadFallbacks(self: *mut Self) AllocError!void {
+        if self.fallbacks_loaded {
+            return
+        }
+        self.fallbacks_loaded = true
+        var paths = text.split(FALLBACKS, "|")
+        while paths.next() |path| {
+            if openFace(self.alloc, self.library, path, 0) |ft| {
+                if ft.units_per_em == 0 {
+                    FT_Done_Face(ft)
+                    continue
+                }
+                try self.faces.append(faceOf(ft, []mut u8{}))
+                try self.fallbacks.append(self.faces.len() - 1)
+            }
+        }
+    }
+
+    // The face whose metrics a font has: its first web face, else its
+    // system face.
+    fn primaryFace(self: *mut Self, f: Font) usize {
+        let span = self.chainOf(f) catch |e| {
+            return self.slots[faceSlot(f)]
+        }
+        if span.len > 0 {
+            return self.web.items()[self.chain_faces.items()[span.start]].face
+        }
+        return self.slots[faceSlot(f)]
+    }
+
+    // The web faces that `f` asks for, in order: for each family of its
+    // list up to the first one that a system face serves (a generic or
+    // known family), the faces of that family that match its weight and
+    // style best (all of them: several `@font-face` rules may split one
+    // face by `unicode-range`).
+    fn chainOf(self: *mut Self, f: Font) AllocError!Span {
+        if self.web.len() == 0 || f.family.len == 0 {
+            return Span { start: 0, len: 0 }
+        }
+        self.key.clear()
+        try self.key.append(f.family)
+        try self.key.appendByte(0)
+        try self.key.appendInt(f.weight as i64)
+        if f.italic {
+            try self.key.appendByte('i')
+        }
+        if self.chains.get(self.key.bytes()) |known| {
+            return known
+        }
+        let start = self.chain_faces.len()
+        var parts = text.split(f.family, ",")
+        while parts.next() |part| {
+            var name = text.trim(part)
+            if name.len >= 2 && (name[0] == '"' || name[0] == '\'') {
+                name = text.trim(name[1..name.len - 1])
+            }
+            if isSystemFamily(name) {
+                break
+            }
+            // The best match of the family's faces (CSS Fonts 4, 5.2:
+            // style first, then weight), then every face like it.
+            var best: ?usize = null
+            for wi, w in self.web.items() {
+                if text.eqlIgnoreCase(w.family, name) {
+                    if best |b| {
+                        if better(w, self.web.items()[b], f) {
+                            best = wi
+                        }
+                    } else {
+                        best = wi
+                    }
+                }
+            }
+            if best |b| {
+                let bw = self.web.items()[b]
+                for wi, w in self.web.items() {
+                    if text.eqlIgnoreCase(w.family, name) && w.italic == bw.italic && w.weight_lo == bw.weight_lo && w.weight_hi == bw.weight_hi {
+                        try self.chain_faces.append(wi)
+                    }
+                }
+            }
+        }
+        let span = Span { start: start, len: self.chain_faces.len() - start }
+        let owned = try self.key.toOwned()
+        try self.chain_keys.append(owned)
+        try self.chains.put(owned, span)
+        return span
+    }
+
+    fn clearChains(self: *mut Self) {
+        for k in self.chain_keys.items() {
+            self.alloc.free(k)
+        }
+        self.chain_keys.clear()
+        self.chains.deinit()
+        self.chains = StrMap(Span).init(self.alloc)
+        self.chain_faces.clear()
+    }
+
+    /// Renders `glyph` of face `face` (of `Placed.face`) at `size64` / 64
+    /// px per em, antialiased; null when FreeType cannot.
+    pub fn render(self: *mut Self, face: u32, size64: i64, glyph: u32) ?GlyphBitmap {
+        let fc = self.faces.items()[face as usize]
+        let ft = fc.ft
+        var flags = FT_LOAD_RENDER_LIGHT
+        var ppem = 0.0
+        if fc.color {
+            // The strike nearest above the size (else the largest),
+            // scaled by the painter.
+            if ft.available_sizes |sizes| {
+                let want = size64 as f64 / 64.0
+                var pick: i32 = -1
+                for k in 0..ft.num_fixed_sizes as usize {
+                    let p = sizes[k].y_ppem as f64 / 64.0
+                    if pick < 0 || (p >= want && (ppem < want || p < ppem)) || (ppem < want && p > ppem) {
+                        pick = k as i32
+                        ppem = p
+                    }
+                }
+                if pick < 0 || FT_Select_Size(ft, pick) != 0 {
+                    return null
+                }
+            } else {
+                return null
+            }
+            flags = FT_LOAD_RENDER_COLOR
+        } else if FT_Set_Char_Size(ft, 0, size64, 72, 72) != 0 {
             return null
         }
-        if FT_Load_Glyph(face, glyph, FT_LOAD_RENDER_LIGHT) != 0 {
+        if FT_Load_Glyph(ft, glyph, flags) != 0 {
             return null
         }
-        if face.glyph |g| {
+        if ft.glyph |g| {
             let slot = @ptrCast(*mut FTGlyphSlot, g)
-            if slot.bitmap.pixel_mode != FT_PIXEL_MODE_GRAY && slot.bitmap.rows > 0 {
+            let mode = slot.bitmap.pixel_mode
+            let color = mode == FT_PIXEL_MODE_BGRA
+            if mode != FT_PIXEL_MODE_GRAY && !color && slot.bitmap.rows > 0 {
                 return null
             }
             return GlyphBitmap {
@@ -279,10 +807,155 @@ pub struct System {
                 left: slot.bitmap_left,
                 top: slot.bitmap_top,
                 buffer: slot.bitmap.buffer,
+                color: color,
+                ppem: ppem,
             }
         }
         return null
     }
+}
+
+fn faceOf(ft: *mut FTFaceRec, data: []mut u8) Face {
+    let color = (ft.face_flags & FT_FACE_FLAG_SCALABLE) == 0 && (ft.face_flags & FT_FACE_FLAG_COLOR) != 0
+    return Face {
+        ft: ft,
+        data: data,
+        kerning: (ft.face_flags & FT_FACE_FLAG_KERNING) != 0,
+        color: color,
+        hb: null,
+        hb_tried: false,
+    }
+}
+
+// Is web face `a` a better match than `b` for `f`?
+fn better(a: WebFace, b: WebFace, f: Font) bool {
+    if a.italic != b.italic {
+        return a.italic == f.italic
+    }
+    return weightDistance(a, f.weight) < weightDistance(b, f.weight)
+}
+
+// How far the weights of `w` are from `want`, in the order of CSS Fonts
+// 4, 5.2 (lower is better): 400 looks at 500 first, then lighter, then
+// heavier; below 400 lighter first; above 500 heavier first.
+fn weightDistance(w: WebFace, want: f64) f64 {
+    if w.weight_lo <= want && want <= w.weight_hi {
+        return 0.0
+    }
+    if want > 500.0 {
+        if w.weight_lo > want {
+            return w.weight_lo - want
+        }
+        return 1000.0 + want - w.weight_hi
+    }
+    if want < 400.0 {
+        if w.weight_hi < want {
+            return want - w.weight_hi
+        }
+        return 1000.0 + w.weight_lo - want
+    }
+    if w.weight_lo > want && w.weight_lo <= 500.0 {
+        return w.weight_lo - want
+    }
+    if w.weight_hi < want {
+        return 1000.0 + want - w.weight_hi
+    }
+    return 2000.0 + w.weight_lo - want
+}
+
+fn inRanges(ranges: []u32, code: u32) bool {
+    if ranges.len == 0 {
+        return true
+    }
+    var k: usize = 0
+    while k + 1 < ranges.len {
+        if ranges[k] <= code && code <= ranges[k + 1] {
+            return true
+        }
+        k += 2
+    }
+    return false
+}
+
+// Does a family name of a `font-family` list name one of the system's
+// faces (a generic family or a font the system faces stand for)?
+fn isSystemFamily(name: []u8) bool {
+    return inNames(name, MONO_NAMES) || inNames(name, SANS_NAMES) || inNames(name, SERIF_NAMES)
+}
+
+// Does `code` go with the character before it (a combining mark, a
+// joiner, a variation selector), so that it keeps that face when the
+// face has it?
+fn joinsPrevious(code: u32) bool {
+    return (code >= 0x300 && code <= 0x36F) || (code >= 0x483 && code <= 0x489) || (code >= 0x591 && code <= 0x5C7) || (code >= 0x610 && code <= 0x61A) || (code >= 0x64B && code <= 0x65F) || code == 0x670 || (code >= 0x6D6 && code <= 0x6ED) || (code >= 0x1AB0 && code <= 0x1AFF) || (code >= 0x1DC0 && code <= 0x1DFF) || (code >= 0x200B && code <= 0x200F) || (code >= 0x20D0 && code <= 0x20FF) || (code >= 0xFE00 && code <= 0xFE0F) || (code >= 0xFE20 && code <= 0xFE2F) || (code >= 0x1F3FB && code <= 0x1F3FF) || (code >= 0xE0100 && code <= 0xE01EF)
+}
+
+// Characters drawn as nothing, which no face needs to have: zero-width
+// spaces and joiners, direction marks, variation selectors, the BOM.
+fn ignorable(code: u32) bool {
+    return (code >= 0x200B && code <= 0x200F) || (code >= 0x202A && code <= 0x202E) || (code >= 0x2060 && code <= 0x2069) || (code >= 0xFE00 && code <= 0xFE0F) || code == 0xFEFF || code == 0xAD || (code >= 0xE0100 && code <= 0xE01EF)
+}
+
+// Does the text need a shaper: scripts whose glyphs change with their
+// neighbours (Hebrew to Myanmar, Khmer, Mongolian, Arabic presentation
+// forms...), combining marks, emoji sequences?
+fn needsShaping(s: []u8) bool {
+    var i: usize = 0
+    while i < s.len {
+        if s[i] < 0xCC {
+            i += 1
+            continue
+        }
+        let d = text.decode(s[i..])
+        let c = d.code
+        if (c >= 0x300 && c <= 0x36F) || (c >= 0x590 && c <= 0x10FF) || (c >= 0x1700 && c <= 0x1CFF) || (c >= 0x200C && c <= 0x200D) || (c >= 0xA800 && c <= 0xABFF) || (c >= 0xFB1D && c <= 0xFEFC) || (c >= 0x1F000 && c <= 0x1FAFF) {
+            return true
+        }
+        i += d.len
+    }
+    return false
+}
+
+// The mirrored form of a bracket in right-to-left text (for glyph by
+// glyph shaping; HarfBuzz mirrors by itself).
+fn mirrored(c: u32) u32 {
+    return match c {
+        '(' => ')' as u32
+        ')' => '(' as u32
+        '[' => ']' as u32
+        ']' => '[' as u32
+        '{' => '}' as u32
+        '}' => '{' as u32
+        '<' => '>' as u32
+        '>' => '<' as u32
+        0xAB => 0xBB
+        0xBB => 0xAB
+        _ => c
+    }
+}
+
+// The face `index` of the font file `path`, null when FreeType cannot
+// open it.
+fn openFace(alloc: Allocator, library: *mut FTLibraryRec, path: []u8, index: i64) ?*mut FTFaceRec {
+    // FreeType wants a NUL-terminated path.
+    let z = alloc.alloc(0 as u8, path.len + 1) catch |e| {
+        return null
+    }
+    defer alloc.free(z)
+    for i, c in path {
+        z[i] = c
+    }
+    var out: ?*mut FTFaceRec = null
+    if FT_New_Face(library, z.ptr, index, &mut out) != 0 {
+        return null
+    }
+    if out |face| {
+        if face.units_per_em > 0 || face.num_fixed_sizes > 0 {
+            return face
+        }
+        FT_Done_Face(face)
+    }
+    return null
 }
 
 // The first face of the files in `list` (separated by `|`) with the
@@ -291,27 +964,17 @@ fn findFace(alloc: Allocator, library: *mut FTLibraryRec, list: []u8, bold: bool
     let want = styleFlags(bold, italic)
     var paths = text.split(list, "|")
     while paths.next() |path| {
-        // FreeType wants a NUL-terminated path.
-        let z = alloc.alloc(0 as u8, path.len + 1) catch |e| {
-            return null
-        }
-        defer alloc.free(z)
-        for i, c in path {
-            z[i] = c
-        }
         var count: i64 = 1
         var index: i64 = 0
         while index < count {
-            var out: ?*mut FTFaceRec = null
-            if FT_New_Face(library, z.ptr, index, &mut out) != 0 {
-                break
-            }
-            if out |face| {
+            if openFace(alloc, library, path, index) |face| {
                 count = face.num_faces
                 if (face.style_flags & 3) == want && face.units_per_em > 0 {
                     return face
                 }
                 FT_Done_Face(face)
+            } else {
+                break
             }
             index += 1
         }

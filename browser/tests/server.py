@@ -28,6 +28,7 @@
 #   /big             33 MiB of text (with Content-Length; /big?stream
 #                    without, the end of the body closing the connection)
 #   /meta-charset    a Windows-1252 page declared only by <meta charset>
+#   /gbk             a GBK page declared only by Content-Type
 import gzip
 import html
 import http.server
@@ -115,6 +116,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             for _ in range(33):
                 self.wfile.write(b"x" * (1 << 20))
+        elif path == "/gbk":
+            body = "<title>\u4e2d\u6587</title><p>\u4e2d\u6587\u7f51\u9875</p>".encode("gbk")
+            self.reply(200, [("Content-Type", "text/html; charset=GBK")], body)
         elif path == "/meta-charset":
             body = "<meta charset=windows-1252><p>\u201cquoted\u201d caf\u00e9</p>".encode("cp1252")
             self.reply(200, [("Content-Type", "text/html")], body)

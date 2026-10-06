@@ -78,8 +78,11 @@ pub enum PKind {
     // An integer (any sign), or one of `keywords`.
     Int
     // Any component values, or one of `keywords`: kept as their text
-    // (a `Keyword`) for layout to read (the grid properties).
+    // (a `Keyword`) for layout to read (the grid properties, transforms).
     Raw
+    // An SVG paint: a color, or one of `keywords`, or `url(#id)` with an
+    // optional fallback, kept as its text (a `Keyword`) for svg to read.
+    Paint
 }
 
 pub struct Property {
@@ -93,7 +96,7 @@ pub struct Property {
     initial: Value
 }
 
-pub let NPROPS: usize = 67
+pub let NPROPS: usize = 88
 
 pub let DISPLAY: usize = 0
 pub let POSITION: usize = 1
@@ -145,6 +148,35 @@ pub let GRID_TEMPLATE_AREAS: usize = 62
 // `grid-column-start`, `grid-column-end`, `grid-row-start`,
 // `grid-row-end` in this order.
 pub let GRID_COLUMN_START: usize = 63
+// The SVG properties (svg/), from `fill` to `stop-opacity` in the order of
+// `PROPERTIES`.
+pub let FILL: usize = 67
+pub let STROKE: usize = 68
+pub let STROKE_WIDTH: usize = 69
+pub let STROKE_OPACITY: usize = 70
+pub let FILL_OPACITY: usize = 71
+pub let FILL_RULE: usize = 72
+pub let STROKE_LINECAP: usize = 73
+pub let STROKE_LINEJOIN: usize = 74
+pub let STROKE_MITERLIMIT: usize = 75
+pub let OPACITY: usize = 76
+pub let STOP_COLOR: usize = 77
+pub let STOP_OPACITY: usize = 78
+// Kept as their text for layout to read (`layout/transform.ore`).
+pub let TRANSFORM: usize = 79
+pub let TRANSFORM_ORIGIN: usize = 80
+// `aspect-ratio` is kept as its text too.
+pub let ASPECT_RATIO: usize = 81
+pub let OBJECT_FIT: usize = 82
+// The `content` of `::before` and `::after`, and `mask-image` (whether
+// the box is masked), kept as their text.
+pub let CONTENT: usize = 83
+pub let MASK_IMAGE: usize = 84
+// `clip` (of absolutely positioned boxes) and `clip-path`, as text.
+pub let CLIP: usize = 85
+pub let CLIP_PATH: usize = 86
+// `direction` (bidi).
+pub let DIRECTION: usize = 87
 
 let DISPLAYS = "inline block list-item inline-block table inline-table table-row-group table-header-group table-footer-group table-row table-cell table-column-group table-column table-caption flex inline-flex grid inline-grid flow-root contents none"
 let BORDER_STYLES = "none hidden dotted dashed solid double groove ridge inset outset"
@@ -154,7 +186,7 @@ let ALIGNS = "normal stretch flex-start flex-end start end self-start self-end c
 let BLACK = Color { r: 0, g: 0, b: 0, a: 1.0 }
 let TRANSPARENT = Color { r: 0, g: 0, b: 0, a: 0.0 }
 
-pub let PROPERTIES = [67]Property{
+pub let PROPERTIES = [88]Property{
     Property { name: "display", inherited: false, kind: PKind.Keywords, keywords: DISPLAYS, initial: Value.Keyword { k: "inline" } },
     Property { name: "position", inherited: false, kind: PKind.Keywords, keywords: "static relative absolute fixed sticky", initial: Value.Keyword { k: "static" } },
     Property { name: "color", inherited: true, kind: PKind.Color, keywords: "", initial: Value.Rgba { c: BLACK } },
@@ -222,6 +254,28 @@ pub let PROPERTIES = [67]Property{
     Property { name: "grid-column-end", inherited: false, kind: PKind.Raw, keywords: "auto", initial: Value.Keyword { k: "auto" } },
     Property { name: "grid-row-start", inherited: false, kind: PKind.Raw, keywords: "auto", initial: Value.Keyword { k: "auto" } },
     Property { name: "grid-row-end", inherited: false, kind: PKind.Raw, keywords: "auto", initial: Value.Keyword { k: "auto" } },
+    Property { name: "fill", inherited: true, kind: PKind.Paint, keywords: "none", initial: Value.Rgba { c: BLACK } },
+    Property { name: "stroke", inherited: true, kind: PKind.Paint, keywords: "none", initial: Value.Keyword { k: "none" } },
+    // A number (user units) or a length: as for `line-height`.
+    Property { name: "stroke-width", inherited: true, kind: PKind.LineHeight, keywords: "", initial: Value.Px { v: 1.0 } },
+    Property { name: "stroke-opacity", inherited: true, kind: PKind.Number, keywords: "", initial: Value.Number { v: 1.0 } },
+    Property { name: "fill-opacity", inherited: true, kind: PKind.Number, keywords: "", initial: Value.Number { v: 1.0 } },
+    Property { name: "fill-rule", inherited: true, kind: PKind.Keywords, keywords: "nonzero evenodd", initial: Value.Keyword { k: "nonzero" } },
+    Property { name: "stroke-linecap", inherited: true, kind: PKind.Keywords, keywords: "butt round square", initial: Value.Keyword { k: "butt" } },
+    Property { name: "stroke-linejoin", inherited: true, kind: PKind.Keywords, keywords: "miter miter-clip round bevel arcs", initial: Value.Keyword { k: "miter" } },
+    Property { name: "stroke-miterlimit", inherited: true, kind: PKind.Number, keywords: "", initial: Value.Number { v: 4.0 } },
+    Property { name: "opacity", inherited: false, kind: PKind.Number, keywords: "", initial: Value.Number { v: 1.0 } },
+    Property { name: "stop-color", inherited: false, kind: PKind.Color, keywords: "", initial: Value.Rgba { c: BLACK } },
+    Property { name: "stop-opacity", inherited: false, kind: PKind.Number, keywords: "", initial: Value.Number { v: 1.0 } },
+    Property { name: "transform", inherited: false, kind: PKind.Raw, keywords: "none", initial: Value.Keyword { k: "none" } },
+    Property { name: "transform-origin", inherited: false, kind: PKind.Raw, keywords: "", initial: Value.Keyword { k: "50% 50%" } },
+    Property { name: "aspect-ratio", inherited: false, kind: PKind.Raw, keywords: "auto", initial: Value.Keyword { k: "auto" } },
+    Property { name: "object-fit", inherited: false, kind: PKind.Keywords, keywords: "fill contain cover none scale-down", initial: Value.Keyword { k: "fill" } },
+    Property { name: "content", inherited: false, kind: PKind.Raw, keywords: "normal none", initial: Value.Keyword { k: "normal" } },
+    Property { name: "mask-image", inherited: false, kind: PKind.Raw, keywords: "none", initial: Value.Keyword { k: "none" } },
+    Property { name: "clip", inherited: false, kind: PKind.Raw, keywords: "auto", initial: Value.Keyword { k: "auto" } },
+    Property { name: "clip-path", inherited: false, kind: PKind.Raw, keywords: "none", initial: Value.Keyword { k: "none" } },
+    Property { name: "direction", inherited: true, kind: PKind.Keywords, keywords: "ltr rtl", initial: Value.Keyword { k: "ltr" } },
 }
 
 /// The index of the longhand property `name` (lower case).
@@ -288,6 +342,8 @@ pub struct Sheet {
     // The URLs of the `@import` rules whose media match, as the parser
     // met them (the loader fetches them: engine/sheets.ore).
     imports: List([]u8)
+    // The `@font-face` rules (fontface.ore).
+    font_faces: List(FontFace)
 
     pub fn init(alloc: Allocator) AllocError!Sheet {
         let arena = try alloc.create(Arena.init(alloc))
@@ -301,6 +357,7 @@ pub struct Sheet {
             simples: List(Simple).init(a),
             decls: List(Decl).init(a),
             imports: List([]u8).init(a),
+            font_faces: List(FontFace).init(a),
         }
     }
 

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body { margin: 4px; color: #333 }
+svg { border: 1px solid #ccc; margin: 2px }
+.blue { fill: rgb(0, 90, 200) }
+.icon { color: green }
+</style>
+</head>
+<body>
+<!-- Shapes: rect (rounded), circle, ellipse, line with caps, polyline. -->
+<svg width="120" height="80">
+  <rect x="5" y="5" width="40" height="30" fill="red"/>
+  <rect x="50" y="5" width="40" height="30" rx="8" class="blue"/>
+  <circle cx="105" cy="20" r="12" fill="none" stroke="black" stroke-width="3"/>
+  <ellipse cx="25" cy="58" rx="20" ry="10" fill="orange" stroke="navy" stroke-width="2"/>
+  <line x1="55" y1="45" x2="110" y2="45" stroke="purple" stroke-width="6" stroke-linecap="round"/>
+  <line x1="55" y1="58" x2="110" y2="58" stroke="purple" stroke-width="6" stroke-linecap="square"/>
+  <polyline points="55,75 70,65 85,75 100,65" fill="none" stroke="teal" stroke-width="3" stroke-linejoin="round"/>
+</svg>
+<!-- viewBox scaling, path commands, transforms, group opacity. -->
+<svg width="120" height="80" viewBox="0 0 60 40">
+  <path d="M5 35 C 5 5, 25 5, 25 35 Z" fill="#c00"/>
+  <path d="M30 5 q10 0 10 10 t10 10 a5 5 0 0 1 -10 10 s-5 -5 -10 0 z" fill="none" stroke="#06c" stroke-width="1"/>
+  <g transform="translate(45 8) rotate(45) scale(0.8)" opacity="0.5">
+    <rect x="-5" y="-5" width="10" height="10" fill="black"/>
+  </g>
+</svg>
+<!-- Fill rules, a miter join. -->
+<svg width="80" height="80" viewBox="0 0 100 100">
+  <polygon points="50,5 79,96 2,40 98,40 21,96" fill="gold" fill-rule="evenodd" stroke="black" stroke-width="2"/>
+</svg>
+<svg width="80" height="80" viewBox="0 0 100 100">
+  <path d="M50 5 L79 96 L2 40 L98 40 L21 96 Z" fill="gold" stroke="black" stroke-width="2" stroke-linejoin="bevel"/>
+</svg>
+<br>
+<!-- use and symbol, currentColor, a gradient's middle color, display none, style attribute. -->
+<svg style="display: none">
+  <symbol id="tick" viewBox="0 0 16 16"><path d="M2 8 l4 4 l8 -8" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+  <linearGradient id="grad"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient>
+</svg>
+<svg class="icon" width="32" height="32"><use href="#tick" width="32" height="32"/></svg>
+<svg width="32" height="32" style="color: #c0c"><use xlink:href="#tick"/></svg>
+<svg width="60" height="32"><rect width="60" height="32" fill="url(#grad)"/><circle cx="30" cy="16" r="6" style="fill: white; display: none"/><circle cx="45" cy="16" r="6" style="fill: white"/></svg>
+<!-- SVG images: a file, and a data: URL. -->
+<img src="img/logo.svg" alt="logo">
+<img src="img/logo.svg" width="20">
+<img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Ccircle cx='5' cy='5' r='4' fill='%2309c'/%3E%3C/svg%3E" width="30" height="30">
+</body>
+</html>

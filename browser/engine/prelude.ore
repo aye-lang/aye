@@ -943,7 +943,6 @@ pub let PRELUDE =
     \\getter(Document.prototype, 'cookie', function () { return ak.cookie(); }, function (v) { ak.setCookie(String(v)); });
     \\hidden(Document.prototype, 'hasFocus', function () { return true; });
     \\getter(Document.prototype, 'compatMode', function () { return 'CSS1Compat'; });
-    \\for (const k of ['characterSet', 'charset', 'inputEncoding']) getter(Document.prototype, k, function () { return 'UTF-8'; });
     \\getter(Document.prototype, 'contentType', function () { return 'text/html'; });
     \\getter(Document.prototype, 'referrer', function () { return ''; });
     \\getter(Document.prototype, 'scrollingElement', function () { return this.documentElement; });

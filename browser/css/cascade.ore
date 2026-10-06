@@ -15,9 +15,14 @@
 //
 // Presentational hints (hints.ore) come before the author sheets at
 // specificity zero, and in quirks mode the quirks rules of the UA sheet
-// apply. A block child of `<center>` (or of an element with
-// `align=center`) that has a width gets auto side margins, as the
-// `-webkit-center` alignment of browsers does.
+// apply. A block-level child in flow of `<center>` (or of an element
+// with `align=center`) gets auto side margins, as the `-webkit-center`
+// alignment of browsers does.
+//
+// The `::before` and `::after` pseudo-elements of an element get styles
+// of their own (`Styles.pseudo`) from the rules that select them (no
+// `style` attribute), inheriting from the element, when their `content`
+// is not `normal` or `none`.
 
 import dom
 import dom.Document
@@ -39,6 +44,9 @@ pub struct Styles {
     arena: *mut Arena
     // Node index to its values.
     map: IntMap(u32, []mut Value)
+    // Node index to the values of its `::before` and `::after`.
+    before: IntMap(u32, []mut Value)
+    after: IntMap(u32, []mut Value)
     // The `style` attributes and presentational hints, parsed.
     inline: Sheet
     // The UA rules of quirks mode.
@@ -81,6 +89,8 @@ pub struct Styles {
             alloc: alloc,
             arena: arena,
             map: IntMap(u32, []mut Value).init(alloc),
+            before: IntMap(u32, []mut Value).init(alloc),
+            after: IntMap(u32, []mut Value).init(alloc),
             inline: inline,
             quirks: quirks,
             customs: IntMap(u32, *mut CustomLevel).init(alloc),
@@ -90,6 +100,8 @@ pub struct Styles {
 
     pub fn deinit(self: *mut Self) {
         self.map.deinit()
+        self.before.deinit()
+        self.after.deinit()
         self.customs.deinit()
         self.quirks.deinit()
         self.inline.deinit()
@@ -100,7 +112,19 @@ pub struct Styles {
     /// The computed values of the element `el` (null for other nodes).
     pub fn get(self: *Self, el: NodeId) ?[]Value {
         if self.map.get(el.index) |v| {
-            // `[]mut Value` does not convert to `?[]Value` in one step.
+            return v
+        }
+        return null
+    }
+
+    /// The computed values of the `::before` (`pseudo` 1) or `::after`
+    /// (2) of `el`; null when it has none (no `content`).
+    pub fn pseudo(self: *Self, el: NodeId, pseudo: u8) ?[]Value {
+        var m = &self.before
+        if pseudo == 2 {
+            m = &self.after
+        }
+        if m.get(el.index) |v| {
             let values: []Value = v
             return values
         }
@@ -145,10 +169,32 @@ pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, o
     defer c.deinit()
     var hints = text.Builder.init(out.alloc)
     defer hints.deinit()
+    // The rules that select pseudo-elements.
+    var ua_pseudo = List(usize).init(out.alloc)
+    defer ua_pseudo.deinit()
+    var author_pseudo = List(usize).init(out.alloc)
+    defer author_pseudo.deinit()
+    try pseudoRules(ua, &mut ua_pseudo)
+    try pseudoRules(author, &mut author_pseudo)
     var cur: ?NodeId = doc.root
     while cur |h| {
         if doc.node(h).kind == Kind.Element {
             try styleElement(&mut c, ua, author, &mut hints, h)
+            if ua_pseudo.len() + author_pseudo.len() > 0 {
+                for which in 1..3 {
+                    for i in 0..wins.len {
+                        wins[i].set = false
+                    }
+                    c.clearCustoms()
+                    var any = try c.considerPseudo(ua, ua_pseudo.items(), h, false, which as u8)
+                    if try c.considerPseudo(author, author_pseudo.items(), h, true, which as u8) {
+                        any = true
+                    }
+                    if any {
+                        try c.computePseudo(h, which as u8)
+                    }
+                }
+            }
         }
         cur = doc.following(h, doc.root)
     }
@@ -228,6 +274,20 @@ fn styleElement(c: *mut Computer, ua: *Sheet, author: *Sheet, hints: *mut text.B
     try c.compute(h)
 }
 
+// The indices of the rules of `sheet` with a selector of a
+// pseudo-element.
+fn pseudoRules(sheet: *Sheet, out: *mut List(usize)) AllocError!void {
+    let complexes = sheet.complexes.items()
+    for ri, r in sheet.rules.items() {
+        for k in r.sel_start..r.sel_end {
+            if complexes[k].pseudo != 0 {
+                try out.append(ri)
+                break
+            }
+        }
+    }
+}
+
 struct Computer {
     doc: *Document
     media: Media
@@ -292,6 +352,45 @@ struct Computer {
         }
     }
 
+    // Offers the declarations of the rules `rules` of `sheet` that select
+    // the pseudo-element `pseudo` of `el`; whether one did.
+    fn considerPseudo(self: *mut Self, sheet: *Sheet, rules: []usize, el: NodeId, author: bool, pseudo: u8) AllocError!bool {
+        let complexes = sheet.complexes.items()
+        let decls = sheet.decls.items()
+        var any = false
+        for ri in rules {
+            let r = sheet.rules.items()[ri]
+            var matched = false
+            var spec: u32 = 0
+            for k in r.sel_start..r.sel_end {
+                let cx = complexes[k]
+                if (!matched || cx.spec > spec) && matchesPseudo(sheet, self.doc, cx, el, pseudo) {
+                    matched = true
+                    if cx.spec > spec {
+                        spec = cx.spec
+                    }
+                }
+            }
+            if !matched {
+                continue
+            }
+            any = true
+            for k in r.decl_start..r.decl_end {
+                let d = decls[k]
+                var level: u8 = 1
+                if author && d.important {
+                    level = 4
+                } else if author {
+                    level = 2
+                } else if d.important {
+                    level = 6
+                }
+                try self.offer(d, level, spec)
+            }
+        }
+        return any
+    }
+
     // `d` wins its property unless an earlier declaration has a higher
     // level, or the same level and a higher specificity.
     fn offer(self: *mut Self, d: Decl, level: u8, spec: u32) AllocError!void {
@@ -317,12 +416,9 @@ struct Computer {
         try self.custom_wins.append(win)
     }
 
-    // The custom properties of `el`: its own over its parent's.
-    fn customLevel(self: *mut Self, el: NodeId) AllocError!void {
-        var inherited: ?*mut CustomLevel = null
-        if parentElement(self.doc, el) |p| {
-            inherited = self.out.customs.get(p.index)
-        }
+    // The custom properties of an element (or pseudo-element): its own
+    // over those it inherits.
+    fn customLevel(self: *mut Self, inherited: ?*mut CustomLevel) AllocError!void {
         self.level = inherited
         if self.custom_wins.len() > 0 {
             let a = self.out.arena.allocator()
@@ -331,9 +427,6 @@ struct Computer {
                 try lvl.vars.put(w.name, CustomVar { raw: w.raw, state: 0, value: []Token{} })
             }
             self.level = lvl
-        }
-        if self.level |l| {
-            try self.out.customs.put(el.index, l)
         }
     }
 
@@ -359,13 +452,43 @@ struct Computer {
     fn compute(self: *mut Self, el: NodeId) AllocError!void {
         var parent = self.out.initial
         var is_root = true
+        var inherited: ?*mut CustomLevel = null
         if parentElement(self.doc, el) |p| {
             if self.out.map.get(p.index) |pv| {
                 parent = pv
                 is_root = false
             }
+            inherited = self.out.customs.get(p.index)
         }
-        try self.customLevel(el)
+        try self.customLevel(inherited)
+        if self.level |l| {
+            try self.out.customs.put(el.index, l)
+        }
+        let values = try self.computeValues(parent, is_root)
+        try self.alignCenter(el, values)
+        try self.out.map.put(el.index, values)
+    }
+
+    // The computed values of the pseudo-element `pseudo` of `el` from the
+    // winning declarations, kept when its `content` makes a box.
+    fn computePseudo(self: *mut Self, el: NodeId, pseudo: u8) AllocError!void {
+        let parent = self.out.map.get(el.index) orelse return
+        try self.customLevel(self.out.customs.get(el.index))
+        let values = try self.computeValues(parent, false)
+        let content = keywordText(values[CONTENT])
+        if content.len == 0 || text.eql(content, "normal") || text.eql(content, "none") {
+            return
+        }
+        if pseudo == 1 {
+            try self.out.before.put(el.index, values)
+        } else {
+            try self.out.after.put(el.index, values)
+        }
+    }
+
+    // The computed values from the winning declarations, inheriting from
+    // `parent`.
+    fn computeValues(self: *mut Self, parent: []Value, is_root: bool) AllocError![]mut Value {
         let values = try self.out.arena.allocator().alloc(Value.Initial, NPROPS)
         // font-size first: the other lengths are relative to it.
         let parent_font = numberOr(parent[FONT_SIZE], 16.0)
@@ -420,20 +543,21 @@ struct Computer {
             values[p] = self.absolute(v, font_px)
         }
         fixBorderWidths(values)
-        try self.alignCenter(el, values)
-        try self.out.map.put(el.index, values)
+        return values
     }
 
-    // `<center>` and `align=center`: a block child with a width gets auto
-    // side margins (unless it has margins of its own), and the alignment
-    // passes on to descendants until something sets another alignment.
+    // `<center>` and `align=center`: a block-level child in flow gets auto
+    // side margins (unless it has margins of its own): a table or a box
+    // narrower than the line (`width`, `max-width`) is centered, an
+    // auto-width block keeps its full width. The alignment passes on to
+    // descendants until something sets another alignment.
     fn alignCenter(self: *mut Self, el: NodeId, values: []mut Value) AllocError!void {
         var parent_centers = false
         if parentElement(self.doc, el) |p| {
             parent_centers = self.centered.contains(p.index)
         }
         let display = keywordText(values[DISPLAY])
-        if parent_centers && (text.eql(display, "block") || text.eql(display, "table")) && !isAutoKeyword(values[WIDTH]) && isZeroPx(values[MARGIN_TOP + 1]) && isZeroPx(values[MARGIN_TOP + 3]) {
+        if parent_centers && (text.eql(display, "block") || text.eql(display, "table")) && text.eql(keywordText(values[FLOAT]), "none") && !text.eql(keywordText(values[POSITION]), "absolute") && !text.eql(keywordText(values[POSITION]), "fixed") && isZeroPx(values[MARGIN_TOP + 1]) && isZeroPx(values[MARGIN_TOP + 3]) {
             values[MARGIN_TOP + 1] = Value.Keyword { k: "auto" }
             values[MARGIN_TOP + 3] = Value.Keyword { k: "auto" }
         }
@@ -492,10 +616,6 @@ fn keywordText(v: Value) []u8 {
         .Keyword { k } => k
         _ => ""
     }
-}
-
-fn isAutoKeyword(v: Value) bool {
-    return text.eql(keywordText(v), "auto")
 }
 
 fn isZeroPx(v: Value) bool {

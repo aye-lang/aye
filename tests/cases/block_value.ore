@@ -1,0 +1,111 @@
+// A `catch` or `orelse` block may end with an expression: the block's
+// value, given after its other statements ran (and before its `defer`s).
+
+error ParseError { Empty, Bad }
+
+fn parse(s: []u8) ParseError!i64 {
+    if s.len == 0 {
+        return ParseError.Empty
+    }
+    if s[0] < 48 || s[0] > 57 {
+        return ParseError.Bad
+    }
+    return (s[0] - 48) as i64
+}
+
+fn find(xs: []i64, want: i64) ?usize {
+    for i, x in xs {
+        if x == want {
+            return i
+        }
+    }
+    return null
+}
+
+fn fallback(e: ParseError) i64 {
+    return match e {
+        .Empty => -1
+        .Bad => -2
+    }
+}
+
+// Report the error, then go on with the old value.
+fn parseOr(s: []u8, old: i64) i64 {
+    let v = parse(s) catch |e| {
+        @println("cannot parse, keeping the old value")
+        old
+    }
+    return v
+}
+
+// The value is a call, and the block has a `defer` and an early `return`.
+fn parseOrCall(s: []u8) i64 {
+    let v = parse(s) catch |e| {
+        defer @println("  (defer ran after the value)")
+        if e == ParseError.Bad {
+            return 100
+        }
+        @println("  computing the fallback")
+        fallback(e)
+    }
+    return v
+}
+
+fn indexOr(xs: []i64, want: i64) usize {
+    let i = find(xs, want) orelse {
+        @println("missing, using the end")
+        xs.len
+    }
+    return i
+}
+
+// A value block inside a value block, and as an argument.
+fn nested(a: []u8, b: []u8) i64 {
+    return parse(a) catch |e| {
+        let inner = parse(b) catch |e2| {
+            @println("both failed")
+            0
+        }
+        inner * 10
+    }
+}
+
+fn show(x: i64) {
+    @println(x)
+}
+
+pub fn main() {
+    @println(parseOr("7", 1))
+    @println(parseOr("", 1))
+    @println(parseOrCall("3"))
+    @println(parseOrCall(""))
+    @println(parseOrCall("x"))
+    let xs = [_]i64{4, 5, 6}
+    @println(indexOr(xs[..], 5))
+    @println(indexOr(xs[..], 9))
+    @println(nested("2", "3"))
+    @println(nested("", "3"))
+    @println(nested("", ""))
+    show(parse("") catch |e| {
+        var t: i64 = 0
+        for i in 0..4 {
+            t += i as i64
+        }
+        t
+    })
+    var total: i64 = 0
+    for s in [_][]u8{"1", "", "2"} {
+        total += parse(s) catch |e| {
+            @println("skipping an empty one")
+            0
+        }
+    }
+    @println(total)
+    // A local of the block is in scope for its value.
+    let name: ?[]u8 = null
+    let shown = name orelse {
+        let n = "anonymous"
+        n
+    }
+    @println(shown)
+}

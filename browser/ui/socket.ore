@@ -61,7 +61,7 @@ fn isDarwin() bool {
 
 // A `sockaddr_un` for `path` in `addr`; its length, or 0 when the path
 // is too long (or empty).
-fn unixAddr(path: []u8, addr: []mut u8) u32 {
+fn unixAddr(path: []u8, addr: *mut [110]u8) u32 {
     if path.len == 0 || path.len > 100 {
         return 0
     }
@@ -94,7 +94,7 @@ fn noSigpipe(fd: i32) {
 /// first); -1 on failure.
 fn listenAt(path: []u8) i32 {
     var addr = @zeroed([110]u8)
-    let n = unixAddr(path, addr[..])
+    let n = unixAddr(path, &mut addr)
     if n == 0 {
         return -1
     }
@@ -113,7 +113,7 @@ fn listenAt(path: []u8) i32 {
 /// Removes the socket file at `path`.
 fn removeSocket(path: []u8) {
     var addr = @zeroed([110]u8)
-    if unixAddr(path, addr[..]) > 0 {
+    if unixAddr(path, &mut addr) > 0 {
         unlink(addr[2..].ptr)
     }
 }
@@ -121,7 +121,7 @@ fn removeSocket(path: []u8) {
 /// A connection to the socket at `path`; -1 on failure.
 fn connectTo(path: []u8) i32 {
     var addr = @zeroed([110]u8)
-    let n = unixAddr(path, addr[..])
+    let n = unixAddr(path, &mut addr)
     if n == 0 {
         return -1
     }
@@ -217,12 +217,12 @@ pub fn connectMain(alloc: Allocator, args: [][]u8) i32 {
         } else if path.len == 0 && !text.startsWith(a, "-") {
             path = a
         } else {
-            std.log.err("{}", CONNECT_USAGE)
+            std.log.err(CONNECT_USAGE)
             return 2
         }
     }
     if path.len == 0 {
-        std.log.err("{}", CONNECT_USAGE)
+        std.log.err(CONNECT_USAGE)
         return 2
     }
     let fd = connectTo(path)

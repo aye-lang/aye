@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<style>
+body { margin: 8px }
+div { width: 100px; height: 40px; background-color: tomato; margin-bottom: 8px }
+.skip { position: absolute; top: 8px; left: 150px; clip: rect(0 0 0 0) }
+.part { position: absolute; top: 60px; left: 150px; clip: rect(10px, 60px, auto, 20px) }
+.inset { clip-path: inset(10px 20px) }
+.half { clip-path: inset(0 50% 0 0); background-color: gold }
+.hidden { clip-path: inset(50%) }
+.round { clip-path: circle(40%); background-color: skyblue }
+</style>
+<div class="skip">skip link</div>
+<div class="part">partly</div>
+<div class="inset">inset</div>
+<div class="half">half</div>
+<div class="hidden">hidden</div>
+<div class="round">not clipped</div>

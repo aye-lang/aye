@@ -31,13 +31,7 @@ pub fn Slabs(comptime T: type) type {
                 chunks: List([]mut T).init(alloc),
                 cur: []mut T{},
                 used: 0,
-                free: [13]List([]mut T){
-                    List([]mut T).init(alloc), List([]mut T).init(alloc), List([]mut T).init(alloc),
-                    List([]mut T).init(alloc), List([]mut T).init(alloc), List([]mut T).init(alloc),
-                    List([]mut T).init(alloc), List([]mut T).init(alloc), List([]mut T).init(alloc),
-                    List([]mut T).init(alloc), List([]mut T).init(alloc), List([]mut T).init(alloc),
-                    List([]mut T).init(alloc),
-                },
+                free: [13]List([]mut T){List([]mut T).init(alloc), ..},
             }
         }
 

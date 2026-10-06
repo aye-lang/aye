@@ -3,7 +3,8 @@
 // heights (10.6.3: auto heights hold the content; percentages of a
 // definite containing block), vertical margin collapsing between
 // siblings, between a box and its first or last child, and through empty
-// boxes; replaced elements; relative positioning; absolute positions.
+// boxes; `aspect-ratio`; replaced elements; relative positioning;
+// absolute positions.
 
 import css
 import css.Value
@@ -254,6 +255,36 @@ fn replacedSize(t: *mut Tree, i: usize, cb_w: f64, cb_h: f64) {
     bb.last_baseline = -1.0
 }
 
+/// The `aspect-ratio` of box `i` (width / height) as "W / H" or "N";
+/// null for `auto`, and for `auto W / H` when it has a natural size.
+fn aspectRatio(t: *Tree, i: usize) ?f64 {
+    var s = text.trim(keywordOf(t.bx(i).style[css.ASPECT_RATIO]))
+    if text.startsWith(s, "auto") {
+        if naturalSize(t, i) != null {
+            return null
+        }
+        s = text.trim(s[4..])
+    }
+    if s.len == 0 {
+        return null
+    }
+    var slash = s.len
+    for k in 0..s.len {
+        if s[k] == '/' {
+            slash = k
+        }
+    }
+    let a = text.parseFloat(text.trim(s[..slash])) catch return null
+    var b = 1.0
+    if slash < s.len {
+        b = text.parseFloat(text.trim(s[slash + 1..])) catch return null
+    }
+    if a <= 0.0 || b <= 0.0 {
+        return null
+    }
+    return a / b
+}
+
 /// The border-box size of a replaced element whose padding and borders
 /// are `he` (left and right) and `ve` (top and bottom): its
 /// `width`/`height`, else its `width`/`height` attributes; a missing one
@@ -276,6 +307,19 @@ fn replacedDims(t: *Tree, i: usize, cb_w: f64, cb_h: f64, he: f64, ve: f64) Size
         let ah = attrPx(t, i, "height", cb_h)
         if ah > 0.0 {
             h = ah + ve
+        }
+    }
+    if aspectRatio(t, i) |r| {
+        // `aspect-ratio`: a missing size follows the given one.
+        if w |ww| {
+            if h == null {
+                h = (ww - he) / r + ve
+            }
+        } else if h |hh| {
+            w = (hh - ve) * r + he
+        } else if naturalSize(t, i) == null && cb_w > he {
+            w = cb_w
+            h = (cb_w - he) / r + ve
         }
     }
     if naturalSize(t, i) == null {
@@ -402,6 +446,19 @@ fn layoutContents(t: *mut Tree, i: usize, cb_h: f64) AllocError!void {
     let b = t.bx(i)
     let cw = math.max(0.0, b.w - hEdges(b))
     var ch = definiteContentHeight(t, i, cb_h)
+    // `aspect-ratio` with an auto height: the height the width gives
+    // (content may still make the box taller, as with min-height: auto).
+    var ratio_h = -1.0
+    if ch < 0.0 {
+        if aspectRatio(t, i) |r| {
+            let e = vEdges(b)
+            var rh = b.w / r - e
+            if !borderBoxSizing(b.style) {
+                rh = cw / r
+            }
+            ratio_h = math.max(0.0, clampHeight(t, i, rh + e, cb_h) - e)
+        }
+    }
     if ch < 0.0 {
         if controlContentHeight(t, i) |control_h| {
             ch = control_h
@@ -433,7 +490,11 @@ fn layoutContents(t: *mut Tree, i: usize, cb_h: f64) AllocError!void {
     var content_h = 0.0
     var empty = true
     let kind = b.kind
-    if hasInlineContent(t, i) {
+    if isFrameset(t, i) {
+        // The outermost frameset fills the viewport.
+        content_h = try layoutFrameset(t, i, cw, t.viewport_h)
+        empty = false
+    } else if hasInlineContent(t, i) {
         content_h = try layoutInline(t, i, cw)
         scrollControl(t, i)
         let bb = t.bx(i)
@@ -472,7 +533,7 @@ fn layoutContents(t: *mut Tree, i: usize, cb_h: f64) AllocError!void {
     t.fy = save_fy
     t.float_base = save_base
     let bb = t.bx(i)
-    var h = content_h + vEdges(bb)
+    var h = math.max(content_h, ratio_h) + vEdges(bb)
     if ch >= 0.0 {
         h = ch + vEdges(bb)
     }

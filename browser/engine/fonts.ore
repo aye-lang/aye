@@ -1,0 +1,233 @@
+// Web fonts: the `@font-face` rules of a page's author sheet whose family
+// a `font-family` declaration (or a custom property) names, and whose
+// `unicode-range` reaches Basic Latin or is absent, are fetched
+// concurrently (relative to their sheet, the page as the Referer),
+// unwrapped (webfont/) and given to the measurer, which keeps them by
+// URL across layouts and pages. The first source in a format we read is
+// taken: TrueType, OpenType, WOFF, and WOFF 2 when webfont can decode it.
+// At most `MAX_FONTS` files per page. Subsets for other scripts (CJK
+// fonts split by `unicode-range`) are left to the system's fallback
+// faces.
+
+import css
+import font
+import net
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+import url
+import webfont
+
+let MAX_FONTS: usize = 24
+
+/// Sets the base URL of the `@font-face` rules `from..` of `sheet` (a
+/// copy of `href`, in the sheet's arena).
+fn setFontBase(sheet: *mut css.Sheet, from: usize, href: []u8) AllocError!void {
+    if from >= sheet.font_faces.len() {
+        return
+    }
+    let a = sheet.arena.allocator()
+    let copy = try a.alloc(0 as u8, href.len)
+    for i, c in href {
+        copy[i] = c
+    }
+    for k in from..sheet.font_faces.len() {
+        sheet.font_faces.items()[k].base = copy
+    }
+}
+
+// A web font to fetch: the rule and the absolute URL of its source.
+struct Wanted {
+    face: usize
+    href: []mut u8
+}
+
+/// Fetches the web fonts of `author` that `measure` wants and adds them
+/// to it; `referrer` is the page's URL.
+fn loadWebFonts(alloc: Allocator, author: *mut css.Sheet, referrer: []u8, measure: dyn font.Measurer) AllocError!void {
+    let faces = author.font_faces.items()
+    if faces.len == 0 {
+        return
+    }
+    var wanted = List(Wanted).init(alloc)
+    defer {
+        for w in wanted.items() {
+            alloc.free(w.href)
+        }
+        wanted.deinit()
+    }
+    var hrefs = text.Builder.init(alloc)
+    defer hrefs.deinit()
+    for k, f in faces {
+        if wanted.len() >= MAX_FONTS {
+            break
+        }
+        if !reachesLatin(f.ranges) {
+            continue
+        }
+        let src = sourceOf(f) orelse continue
+        var base = url.parse(alloc, f.base) catch |e| {
+            continue
+        }
+        defer base.deinit(alloc)
+        let target = url.resolve(alloc, &base, text.trim(src)) catch |e| {
+            continue
+        }
+        defer target.deinit(alloc)
+        if !measure.webFontWanted(descOf(f, target.href)) || !(try familyUsed(author, f.family)) {
+            continue
+        }
+        let href = try alloc.alloc(0 as u8, target.href.len)
+        for i, c in target.href {
+            href[i] = c
+        }
+        try wanted.append(Wanted { face: k, href: href })
+        try hrefs.append(href)
+        try hrefs.appendByte('\n')
+    }
+    if wanted.len() == 0 {
+        return
+    }
+    net.prefetch(alloc, hrefs.bytes(), net.Kind.Script, referrer)
+    for w in wanted.items() {
+        let d = descOf(faces[w.face], w.href)
+        var file: []u8 = ""
+        var owned: ?[]mut u8 = null
+        defer {
+            if owned |o| {
+                alloc.free(o)
+            }
+        }
+        if url.parse(alloc, w.href) |target| {
+            defer target.deinit(alloc)
+            if net.request(alloc, &target, net.Request { kind: net.Kind.Script, referrer: referrer }) |res| {
+                defer res.deinit(alloc)
+                if res.status >= 200 && res.status < 300 {
+                    owned = try webfont.sfntOf(alloc, res.body)
+                }
+            } else |e| {
+            }
+        } else |e| {
+        }
+        if owned |o| {
+            file = o
+        }
+        measure.addWebFont(d, file) catch |e| {
+            return e
+        }
+    }
+}
+
+fn descOf(f: css.FontFace, href: []u8) font.FaceDesc {
+    return font.FaceDesc { family: f.family, weight_lo: f.weight_lo, weight_hi: f.weight_hi, italic: f.italic, ranges: f.ranges, url: href }
+}
+
+// Does the `unicode-range` (pairs) reach Basic Latin letters (or is it
+// absent)?
+fn reachesLatin(ranges: []u32) bool {
+    if ranges.len == 0 {
+        return true
+    }
+    var k: usize = 0
+    while k + 1 < ranges.len {
+        if ranges[k] <= 0x7A && ranges[k + 1] >= 0x61 {
+            return true
+        }
+        k += 2
+    }
+    return false
+}
+
+// The URL of the first source of `f` in a format we read.
+fn sourceOf(f: css.FontFace) ?[]u8 {
+    for s in f.srcs {
+        var ok = false
+        if s.format.len > 0 {
+            ok = text.eql(s.format, "truetype") || text.eql(s.format, "opentype") || text.eql(s.format, "woff") || (text.eql(s.format, "woff2") && webfont.woff2Supported())
+        } else {
+            var path = s.url
+            if text.indexOf(path, "?") |q| {
+                path = path[..q]
+            }
+            if text.indexOf(path, "#") |h| {
+                path = path[..h]
+            }
+            ok = endsWithIgnoreCase(path, ".ttf") || endsWithIgnoreCase(path, ".otf") || endsWithIgnoreCase(path, ".woff") || (endsWithIgnoreCase(path, ".woff2") && webfont.woff2Supported())
+        }
+        if ok {
+            return s.url
+        }
+    }
+    return null
+}
+
+fn endsWithIgnoreCase(s: []u8, suffix: []u8) bool {
+    return s.len >= suffix.len && text.eqlIgnoreCase(s[s.len - suffix.len..], suffix)
+}
+
+// Does a `font-family` declaration, or a custom property (a family list
+// in a variable), of `sheet` name `family`?
+fn familyUsed(sheet: *mut css.Sheet, family: []u8) AllocError!bool {
+    for d in sheet.decls.items() {
+        if d.prop == css.FONT_FAMILY && d.raw.len == 0 {
+            match d.value {
+                .Keyword { k } => {
+                    if listNames(k, family) {
+                        return true
+                    }
+                }
+                _ => {}
+            }
+        } else if d.prop == css.FONT_FAMILY || d.prop == css.CUSTOM {
+            for t in d.raw {
+                if (t.kind == css.Tok.String || t.kind == css.Tok.Ident) && text.eqlIgnoreCase(t.text, family) {
+                    return true
+                }
+            }
+            // An unquoted family of several words is several idents.
+            if text.indexOf(family, " ") != null {
+                var joined = text.Builder.init(sheet.alloc)
+                defer joined.deinit()
+                for t in d.raw {
+                    if t.kind == css.Tok.Ident {
+                        try joined.append(t.text)
+                    } else if t.kind == css.Tok.Whitespace {
+                        try joined.appendByte(' ')
+                    } else {
+                        try joined.appendByte(',')
+                    }
+                }
+                if listNames(joined.bytes(), family) {
+                    return true
+                }
+            }
+        }
+    }
+    return false
+}
+
+// Does the family list `list` name `family`?
+fn listNames(list: []u8, family: []u8) bool {
+    var parts = text.split(list, ",")
+    while parts.next() |part| {
+        var name = text.trim(part)
+        if name.len >= 2 && (name[0] == '"' || name[0] == '\'') {
+            name = text.trim(name[1..name.len - 1])
+        }
+        if text.eqlIgnoreCase(name, family) {
+            return true
+        }
+    }
+    return false
+}
+
+test "web font sources and families" {
+    @expect(reachesLatin([]u32{}))
+    let latin = [2]u32{0, 0xFF}
+    @expect(reachesLatin(latin[..]))
+    let others = [4]u32{0x400, 0x4FF, 0x4E00, 0x9FFF}
+    @expect(!reachesLatin(others[..]))
+    @expect(listNames("\"Material Icons\", sans-serif", "material icons"))
+    @expect(!listNames("Inter Display, sans-serif", "Inter"))
+}

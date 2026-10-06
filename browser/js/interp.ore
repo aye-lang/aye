@@ -159,8 +159,6 @@ pub struct Interp {
     // Values the host keeps alive.
     roots: List(Value)
     host: ?dyn Host
-    // The host's own state, for its native functions.
-    host_data: ?[*]u8
     // Nested calls beyond this throw a RangeError. Scripts of pages run
     // on the main thread, whose C stack is smaller than `anyknown js`'s.
     max_depth: usize
@@ -266,7 +264,6 @@ pub struct Interp {
             label: 0,
             roots: List(Value).init(alloc),
             host: null,
-            host_data: null,
             max_depth: MAX_DEPTH,
             completion: Value.Undefined,
             completion_base: 0,

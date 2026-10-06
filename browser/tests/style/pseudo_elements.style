@@ -1,0 +1,40 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <p>
+      display: block
+      color: rgb(0, 0, 255)
+      margin-top: 16px
+      margin-bottom: 16px
+      ::before
+        display: inline
+        font-weight: 700
+        margin-top: 0px
+        margin-bottom: 0px
+        content: "* "
+    <p class="x" title="t">
+      display: block
+      color: rgb(0, 0, 255)
+      margin-top: 16px
+      margin-bottom: 16px
+      ::before
+        display: inline
+        font-weight: 700
+        margin-top: 0px
+        margin-bottom: 0px
+        content: "* "
+      ::after
+        margin-top: 0px
+        margin-bottom: 0px
+        content: attr(title)
+    <div class="y">
+      display: block

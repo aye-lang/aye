@@ -177,6 +177,9 @@ pub enum Rvalue {
     DynCall { recv: Operand, method: String, args: Vec<Operand> },
     /// The pointer `ptr` to struct `strukt` as a `dyn iface`.
     ToDyn { ptr: Operand, iface: String, strukt: String },
+    /// The data pointer of the `dyn iface` value `val` as the optional
+    /// pointer type `ty` when its vtable is `strukt`'s, else `null`.
+    Downcast { val: Operand, iface: String, strukt: String, ty: Type },
     /// The pointer `ptr` to struct `strukt` as an `Allocator`.
     ToAllocator { ptr: Operand, strukt: String },
     /// Allocate a `ty` with the allocator `alloc`: a `?*mut ty`, null when
@@ -336,6 +339,9 @@ struct Lower<'a> {
     linked: &'a [String],
     /// The functions and vtables the code refers to.
     refs: Vec<Ref>,
+    /// Where the value of each enclosing `catch` or `orelse` block goes
+    /// (`None` when the value is dropped), innermost last.
+    values: Vec<Option<LocalId>>,
 }
 
 fn local(id: LocalId) -> Place {
@@ -399,6 +405,7 @@ fn has_call(e: &TExpr) -> bool {
         | TExprKind::PtrCast(expr)
         | TExprKind::IsVariant { expr, .. }
         | TExprKind::ToDyn { ptr: expr, .. }
+        | TExprKind::Downcast { value: expr, .. }
         | TExprKind::ToAllocator { ptr: expr, .. } => has_call(expr),
         TExprKind::Slice { base, lo, hi } => {
             has_call(base) || lo.as_deref().is_some_and(has_call) || hi.as_deref().is_some_and(has_call)
@@ -428,6 +435,7 @@ impl<'a> Lower<'a> {
             globals: HashMap::new(),
             linked,
             refs: Vec::new(),
+            values: Vec::new(),
         };
         let mut body = Vec::new();
         l.block(&f.body, false, &mut body);
@@ -769,6 +777,13 @@ impl<'a> Lower<'a> {
             }
             TStmtKind::Block(b) => self.block(b, false, out),
             TStmtKind::Expr(e) => self.eval(e, out),
+            TStmtKind::Value(e) => match self.values.last().copied().flatten() {
+                Some(r) => {
+                    let rv = self.rvalue(e, out);
+                    self.push(out, StmtKind::Assign(local(r), rv));
+                }
+                None => self.eval(e, out),
+            },
             // Handled by `scoped`, as the first statement of a block.
             TStmtKind::SetSafety(_) => {}
         }
@@ -840,7 +855,9 @@ impl<'a> Lower<'a> {
                 self.push(&mut then, StmtKind::TraceRestore(saved));
             }
             (TArmBody::Block(stmts), _) => {
+                self.values.push(result);
                 self.scoped(stmts, Scope { defers: Vec::new(), is_loop: false, restore: Some(saved) }, &mut then);
+                self.values.pop();
             }
         }
         self.span = span;
@@ -872,7 +889,11 @@ impl<'a> Lower<'a> {
                 self.push(&mut els, StmtKind::Assign(local(r), rv));
             }
             (TArmBody::Expr(x), None) => self.eval(x, &mut els),
-            (TArmBody::Block(stmts), _) => self.block(stmts, false, &mut els),
+            (TArmBody::Block(stmts), _) => {
+                self.values.push(result);
+                self.block(stmts, false, &mut els);
+                self.values.pop();
+            }
         }
         self.span = span;
         self.push(out, StmtKind::If { cond: Operand::Local(has), then, els });
@@ -1191,6 +1212,11 @@ impl<'a> Lower<'a> {
             TExprKind::SizeOf(t) => Rvalue::SizeOf(t.clone()),
             TExprKind::Zeroed => Rvalue::Zeroed(e.ty.clone()),
             TExprKind::PtrCast(x) => Rvalue::PtrCast { val: self.operand(x, out), ty: e.ty.clone() },
+            TExprKind::Downcast { value, iface, strukt } => {
+                self.refs.push(Ref::Vtable(iface.clone(), strukt.clone()));
+                let val = self.operand(value, out);
+                Rvalue::Downcast { val, iface: iface.clone(), strukt: strukt.clone(), ty: e.ty.clone() }
+            }
             TExprKind::DynCall { recv, method, args } => {
                 let recv = self.operand(recv, out);
                 let args = args.iter().map(|a| self.operand(a, out)).collect();

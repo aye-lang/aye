@@ -1,0 +1,101 @@
+// `@downcast(*mut S, d)` turns a `dyn I` back into a pointer to its
+// struct: `?*mut S`, `null` when `d` was made from another type. A host
+// that a library knows only as a `dyn` gets its own state back this way.
+
+interface Host {
+    fn finalize(self: *mut Self, tag: u32)
+}
+
+interface Shape {
+    fn area(self: *Self) f64
+}
+
+struct Page {
+    title: []u8
+    freed: u32
+
+    fn finalize(self: *mut Self, tag: u32) {
+        self.freed += tag
+    }
+}
+
+struct Worker {
+    jobs: i64
+
+    fn finalize(self: *mut Self, tag: u32) {
+        self.jobs -= 1
+    }
+}
+
+struct Square {
+    side: f64
+
+    fn area(self: *Self) f64 {
+        return self.side * self.side
+    }
+}
+
+struct Circle {
+    r: f64
+
+    fn area(self: *Self) f64 {
+        return 3.0 * self.r * self.r
+    }
+}
+
+fn Cell(comptime T: type) type {
+    return struct {
+        value: T
+
+        fn finalize(self: *mut Self, tag: u32) {}
+    }
+}
+
+// What a library keeps: only the `dyn`.
+struct Engine {
+    host: ?dyn Host
+}
+
+fn pageOf(e: *Engine) ?*mut Page {
+    let h = e.host orelse return null
+    return @downcast(*mut Page, h)
+}
+
+fn describe(s: dyn Shape) {
+    if @downcast(*Square, s) |sq| {
+        @println("a square of side")
+        @println(sq.side)
+    } else if @downcast(*Circle, s) |c| {
+        @println("a circle of radius")
+        @println(c.r)
+    }
+}
+
+pub fn main() {
+    var page = Page { title: "home", freed: 0 }
+    var worker = Worker { jobs: 3 }
+    var e = Engine { host: &mut page }
+    // The struct comes back, writable.
+    let p = pageOf(&e) orelse unreachable
+    p.freed = 7
+    @println(page.freed)
+    @println(p.title)
+    // Another struct behind the same interface: null.
+    e.host = &mut worker
+    @println(pageOf(&e) == null)
+    @println(@downcast(*mut Worker, e.host.?) != null)
+    // No host at all.
+    e.host = null
+    @println(pageOf(&e) == null)
+    // A read-only `dyn` gives read-only pointers.
+    let sq = Square { side: 2.0 }
+    let ci = Circle { r: 1.0 }
+    describe(&sq)
+    describe(&ci)
+    // A generic struct's instances are different types.
+    var a = Cell(i64) { value: 5 }
+    let d: dyn Host = &mut a
+    @println(@downcast(*mut Cell(i64), d) != null)
+    @println(@downcast(*mut Cell(u8), d) == null)
+    @println(@downcast(*mut Cell(i64), d).?.value)
+}

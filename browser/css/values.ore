@@ -3,10 +3,16 @@
 // `border`, `border-top`..., `border-width`/`-style`/`-color`, `font`,
 // `background`, `list-style`, `overflow`, `text-decoration`, `inset`,
 // `gap`, `flex`, `flex-flow`, `grid-column`, `grid-row`, `grid-area`,
-// `grid-gap`) expand into their longhands. The grid track lists and
-// placements are kept as their text (`Raw`) for layout to read. An invalid
-// value drops the declaration. Absolute units (pt, pc, in, cm, mm, q)
-// become px here; `ex` and `ch` are taken as half an `em`.
+// `grid-gap`, and the logical `margin-inline`, `margin-block`,
+// `padding-inline`, `padding-block`, `inset-inline`, `inset-block`,
+// `place-items`, `place-self`, `place-content`) expand into their
+// longhands. The other logical properties (`margin-inline-start`,
+// `inline-size`, `border-block-end`, ...) are their physical ones for
+// horizontal left-to-right text. The grid track lists and
+// placements and the transforms are kept as their text (`Raw`) for
+// layout to read. An invalid value drops the declaration. Absolute units
+// (pt, pc, in, cm, mm, q) become px here; `ex` and `ch` are taken as
+// half an `em`.
 //
 // Custom properties (`--name: tokens`) are kept as tokens. A value with
 // `var()` or a math function (`calc()`...) is kept as tokens too, for each
@@ -37,7 +43,7 @@ pub fn addDeclaration(sheet: *mut Sheet, name: []u8, toks: []Token, important: b
     for i, c in name {
         buf[i] = lowerAscii(c)
     }
-    let prop = buf[0..name.len]
+    let prop = logicalAlias(buf[0..name.len])
     if needsComputing(toks) {
         // Without `var()`, an invalid math function drops the declaration
         // now (its validity does not depend on the element).
@@ -105,12 +111,87 @@ pub fn needsComputing(toks: []Token) bool {
     return false
 }
 
+// The physical property of a logical one (for horizontal left-to-right
+// text), `mask-image` for the mask shorthands and prefixed names (only
+// whether there is a mask matters), else `name`.
+fn logicalAlias(name: []u8) []u8 {
+    let pairs = [_][]u8{
+        "margin-inline-start", "margin-left", "margin-inline-end", "margin-right",
+        "margin-block-start", "margin-top", "margin-block-end", "margin-bottom",
+        "padding-inline-start", "padding-left", "padding-inline-end", "padding-right",
+        "padding-block-start", "padding-top", "padding-block-end", "padding-bottom",
+        "inset-inline-start", "left", "inset-inline-end", "right",
+        "inset-block-start", "top", "inset-block-end", "bottom",
+        "border-inline-start", "border-left", "border-inline-end", "border-right",
+        "border-block-start", "border-top", "border-block-end", "border-bottom",
+        "border-inline-start-width", "border-left-width", "border-inline-end-width", "border-right-width",
+        "border-block-start-width", "border-top-width", "border-block-end-width", "border-bottom-width",
+        "border-inline-start-style", "border-left-style", "border-inline-end-style", "border-right-style",
+        "border-block-start-style", "border-top-style", "border-block-end-style", "border-bottom-style",
+        "border-inline-start-color", "border-left-color", "border-inline-end-color", "border-right-color",
+        "border-block-start-color", "border-top-color", "border-block-end-color", "border-bottom-color",
+        "inline-size", "width", "block-size", "height",
+        "min-inline-size", "min-width", "max-inline-size", "max-width",
+        "min-block-size", "min-height", "max-block-size", "max-height",
+        "-webkit-mask-image", "mask-image", "mask", "mask-image", "-webkit-mask", "mask-image",
+    }
+    var k: usize = 0
+    while k + 1 < pairs.len {
+        if text.eql(name, pairs[k]) {
+            return pairs[k + 1]
+        }
+        k += 2
+    }
+    return name
+}
+
+// The two longhands of a logical pair shorthand (`margin-inline`: the
+// start side first) or of `place-*`; null for other names.
+fn pairLonghands(name: []u8) ?[2]usize {
+    if text.eql(name, "margin-inline") {
+        return [2]usize{MARGIN_TOP + 3, MARGIN_TOP + 1}
+    }
+    if text.eql(name, "margin-block") {
+        return [2]usize{MARGIN_TOP, MARGIN_TOP + 2}
+    }
+    if text.eql(name, "padding-inline") {
+        return [2]usize{PADDING_TOP + 3, PADDING_TOP + 1}
+    }
+    if text.eql(name, "padding-block") {
+        return [2]usize{PADDING_TOP, PADDING_TOP + 2}
+    }
+    if text.eql(name, "inset-inline") {
+        return [2]usize{INSET_TOP + 3, INSET_TOP + 1}
+    }
+    if text.eql(name, "inset-block") {
+        return [2]usize{INSET_TOP, INSET_TOP + 2}
+    }
+    return null
+}
+
 // The longhands of the shorthand `name` into `out`; how many (0 when
 // `name` is not a shorthand).
 fn shorthandLonghands(name: []u8, out: []mut usize) usize {
     var first: usize = 0
     var n: usize = 0
     var step: usize = 1
+    if pairLonghands(name) |pl| {
+        out[0] = pl[0]
+        out[1] = pl[1]
+        return 2
+    }
+    if text.eql(name, "place-items") {
+        out[0] = ALIGN_ITEMS
+        return 1
+    }
+    if text.eql(name, "place-self") {
+        out[0] = ALIGN_SELF
+        return 1
+    }
+    if text.eql(name, "place-content") {
+        out[0] = JUSTIFY_CONTENT
+        return 1
+    }
     if text.eql(name, "margin") {
         first = MARGIN_TOP
         n = 4
@@ -279,6 +360,34 @@ struct Declarer {
         if text.eql(name, "gap") {
             return self.gap(comps)
         }
+        if pairLonghands(name) |pl| {
+            return self.pair(pl[0], pl[1], comps)
+        }
+        if text.eql(name, "place-items") || text.eql(name, "place-self") {
+            // The `align-` half (there is no `justify-items`).
+            var prop = ALIGN_ITEMS
+            if text.eql(name, "place-self") {
+                prop = ALIGN_SELF
+            }
+            if comps.len == 1 || comps.len == 2 {
+                let first = [1]Comp{comps[0]}
+                if try parseValue(self.sheet, prop, first[..]) |v| {
+                    try self.add(prop, v)
+                }
+            }
+            return
+        }
+        if text.eql(name, "place-content") {
+            // The `justify-content` half (the second value, or the
+            // only one).
+            if comps.len == 1 || comps.len == 2 {
+                let last = [1]Comp{comps[comps.len - 1]}
+                if try parseValue(self.sheet, JUSTIFY_CONTENT, last[..]) |v| {
+                    try self.add(JUSTIFY_CONTENT, v)
+                }
+            }
+            return
+        }
         if text.eql(name, "flex") {
             return self.flex(comps)
         }
@@ -368,6 +477,26 @@ struct Declarer {
             if try parseValue(self.sheet, COLUMN_GAP, last[..]) |column| {
                 try self.add(ROW_GAP, row)
                 try self.add(COLUMN_GAP, column)
+            }
+        }
+    }
+
+    // One or two values for the longhands `a` and `b` (one value sets
+    // both).
+    fn pair(self: *mut Self, a: usize, b: usize, comps: []Comp) AllocError!void {
+        let props = [2]usize{a, b}
+        if try self.wide(comps, props[..]) {
+            return
+        }
+        if comps.len == 0 || comps.len > 2 {
+            return
+        }
+        let first = [1]Comp{comps[0]}
+        let last = [1]Comp{comps[comps.len - 1]}
+        if try parseValue(self.sheet, a, first[..]) |va| {
+            if try parseValue(self.sheet, b, last[..]) |vb| {
+                try self.add(a, va)
+                try self.add(b, vb)
             }
         }
     }
@@ -778,6 +907,12 @@ pub fn parseValue(sheet: *mut Sheet, prop: usize, comps: []Comp) AllocError!?Val
         }
         return rawValue(sheet, comps)
     }
+    if p.kind == PKind.Paint {
+        let t = comps[0].toks[0]
+        if t.kind == Tok.Url || (t.kind == Tok.Function && text.eqlIgnoreCase(t.text, "url")) {
+            return rawValue(sheet, comps)
+        }
+    }
     if comps.len != 1 {
         return null
     }
@@ -867,6 +1002,9 @@ fn single(p: Property, c: Comp) ?Value {
         }
         .Raw => {
             return null
+        }
+        .Paint => {
+            return colorValue(c)
         }
     }
 }
