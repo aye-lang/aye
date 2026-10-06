@@ -1197,3 +1197,33 @@ fn window_hit_layers() {
     }
     assert!(failures.is_empty(), "{} of {} cases failed:\n\n{}", failures.len(), cases.len(), failures.join("\n"));
 }
+
+/// `browser/tests/fonts/`: a tiny font as TrueType, WOFF and WOFF 2
+/// (`@font-face`, system fonts): the three pages must look the same, and
+/// unlike the page without the font. WOFF 2 is checked where
+/// libbrotlidec is installed; skipped without a system font.
+#[test]
+fn web_font_files() {
+    let shot = |page: &str| -> Option<Vec<u8>> {
+        let out = scratch().join(format!("font_{page}.png"));
+        let path = format!("browser/tests/fonts/{page}.html");
+        let res = run(&["screenshot", &path, "-o", out.to_str().unwrap(), "--font", "system", "--width", "400", "--height", "80"]);
+        if text(&res.stderr).contains("no system font found") {
+            return None;
+        }
+        assert!(res.status.success() && res.stderr.is_empty(), "{page}: {}\n{}", res.status, text(&res.stderr));
+        Some(std::fs::read(&out).unwrap())
+    };
+    let Some(ttf) = shot("ttf") else {
+        println!("skipped: no system font");
+        return;
+    };
+    assert_ne!(ttf, shot("none").unwrap(), "the TrueType web font is not used");
+    assert_eq!(ttf, shot("woff").unwrap(), "WOFF renders unlike TrueType");
+    let brotli = Command::new("pkg-config").args(["--exists", "libbrotlidec"]).status().is_ok_and(|s| s.success());
+    if brotli {
+        assert_eq!(ttf, shot("woff2").unwrap(), "WOFF 2 renders unlike TrueType");
+    } else {
+        println!("WOFF 2 skipped: no libbrotlidec");
+    }
+}

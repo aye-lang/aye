@@ -1,7 +1,8 @@
 // webfont: the files of web fonts, made into what FreeType reads. WOFF 1
 // (zlib-compressed tables, inflated with the PNG decoder's inflate) is
 // turned back into the TrueType/OpenType file it wraps; TrueType,
-// OpenType and collections are taken as they are.
+// OpenType and collections are taken as they are; WOFF 2 needs Brotli
+// (woff2.ore).
 
 import image
 import std.mem.AllocError
@@ -202,13 +203,4 @@ test "WOFF 1 to TrueType" {
     } else {
         @expect(false)
     }
-}
-
-/// Can `sfntOf` read WOFF 2 files?
-pub fn woff2Supported() bool {
-    return false
-}
-
-fn unwoff2(alloc: Allocator, data: []u8) AllocError!?[]mut u8 {
-    return null
 }
