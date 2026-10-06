@@ -1,0 +1,27 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "template contents: inert document"
+      "\n"
+    <body>
+      <pre id="out">
+        "content not upgraded true true\ninert document true true  9\nsame inert document true true\nmade in inert document nothing true\ncloned in contents nothing\nimported ctor,attr [[list]],ctor,attr [[made]] true\nappended ctor,attr [[list]],ctor,attr [[made]]\n"
+      "\n"
+      <template id="t">
+        #document-fragment
+          <x-rep items="[[list]]">
+          <template>
+            #document-fragment
+              <x-rep items="nested">
+          <x-rep items="[[made]]">
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst seen = [];\ncustomElements.define('x-rep', class extends HTMLElement {\n  static get observedAttributes() { return ['items']; }\n  constructor() { super(); seen.push('ctor'); }\n  attributeChangedCallback(n, o, v) { seen.push('attr ' + v); }\n});\nconst t = document.getElementById('t');\nconst inert = t.content.ownerDocument;\nlog('content not upgraded', seen.length === 0, t.content.firstChild.constructor === HTMLElement);\nlog('inert document', inert !== document, inert instanceof Document, inert.defaultView, inert.nodeType);\nlog('same inert document', t.content.firstChild.ownerDocument === inert, document.body.ownerDocument === document);\n// Polymer wraps <template is=\"dom-repeat\"> this way, in the contents.\nconst made = inert.createElement('x-rep');\nmade.setAttribute('items', '[[made]]');\nt.content.appendChild(made);\nlog('made in inert document', seen.join(',') || 'nothing', made.ownerDocument === inert);\nt.content.firstChild.cloneNode(true);\nlog('cloned in contents', seen.join(',') || 'nothing');\nt.content.firstChild.setAttribute('items', '[[list]]');\nconst stamp = document.importNode(t.content, true);\nlog('imported', seen.join(','), stamp.firstChild.ownerDocument === document);\ndocument.body.appendChild(stamp);\nlog('appended', seen.join(','));\n"
+      "\n"
+      <x-rep items="[[list]]">
+      <template>
+        #document-fragment
+          <x-rep items="nested">
+      <x-rep items="[[made]]">

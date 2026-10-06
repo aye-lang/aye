@@ -2902,8 +2902,46 @@ pub let PRELUDE =
     \\const nativeCloneNode = NodeP.cloneNode;
     \\hidden(NodeP, 'cloneNode', function (deep) {
     \\  const c = nativeCloneNode.call(this, deep);
+    \\  if (ceDefs.size > 0 && !ak.inTemplate(this)) for (const el of ak.customIn(c)) ceTryUpgrade(el);
+    \\  return c;
+    \\});
+    \\hidden(Document.prototype, 'importNode', function (node, deep) {
+    \\  const c = nativeCloneNode.call(node, !!deep);
     \\  if (ceDefs.size > 0) for (const el of ak.customIn(c)) ceTryUpgrade(el);
     \\  return c;
+    \\});
+    \\// The contents of templates belong to the document's inert template
+    \\// document: it has no browsing context and no custom element registry,
+    \\// so the elements it makes and clones are not upgraded (Polymer makes
+    \\// the wrappers of its templates with `t.ownerDocument.createElement`).
+    \\// The nodes stay the page's; a node is the inert document's while it is
+    \\// in a template's contents.
+    \\const inertDoc = Object.create(Document.prototype);
+    \\const INERT_FIELDS = {
+    \\  nodeType: 9, nodeName: '#document', defaultView: null, location: null, documentElement: null,
+    \\  head: null, body: null, parentNode: null, firstChild: null, lastChild: null, ownerDocument: null,
+    \\  readyState: 'complete', URL: 'about:blank', documentURI: 'about:blank', contentType: 'text/html',
+    \\  characterSet: 'UTF-8', compatMode: 'CSS1Compat', implementation,
+    \\};
+    \\for (const k in INERT_FIELDS) Object.defineProperty(inertDoc, k, { value: INERT_FIELDS[k], configurable: true });
+    \\hidden(inertDoc, 'createElement', function (name, options) {
+    \\  const el = nativeCreateElement.call(document, name);
+    \\  const is = typeof options === 'string' ? options : options && options.is;
+    \\  if (is !== undefined && is !== null) el.setAttribute('is', String(is));
+    \\  return el;
+    \\});
+    \\hidden(inertDoc, 'createElementNS', function (ns, name) { return nativeCreateElementNS.call(document, ns, name); });
+    \\hidden(inertDoc, 'importNode', function (node, deep) { return nativeCloneNode.call(node, !!deep); });
+    \\for (const k of ['createTextNode', 'createComment', 'createDocumentFragment', 'createEvent', 'createAttribute', 'createTreeWalker', 'createNodeIterator', 'createRange', 'adoptNode']) {
+    \\  hidden(inertDoc, k, function () { return document[k].apply(document, arguments); });
+    \\}
+    \\hidden(inertDoc, 'getElementById', () => null);
+    \\hidden(inertDoc, 'querySelector', () => null);
+    \\hidden(inertDoc, 'querySelectorAll', () => document.createDocumentFragment().querySelectorAll('*'));
+    \\const nativeOwnerDocument = Object.getOwnPropertyDescriptor(NodeP, 'ownerDocument').get;
+    \\getter(NodeP, 'ownerDocument', function () {
+    \\  const d = nativeOwnerDocument.call(this);
+    \\  return d !== null && ak.inTemplate(this) ? inertDoc : d;
     \\});
     \\
     \\// ElementInternals: the state and ARIA properties are kept, forms are

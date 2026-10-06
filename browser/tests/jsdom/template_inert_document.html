@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<title>template contents: inert document</title>
+<pre id="out"></pre>
+<template id="t"><x-rep items="[[list]]"></x-rep><template><x-rep items="nested"></x-rep></template></template>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const seen = [];
+customElements.define('x-rep', class extends HTMLElement {
+  static get observedAttributes() { return ['items']; }
+  constructor() { super(); seen.push('ctor'); }
+  attributeChangedCallback(n, o, v) { seen.push('attr ' + v); }
+});
+const t = document.getElementById('t');
+const inert = t.content.ownerDocument;
+log('content not upgraded', seen.length === 0, t.content.firstChild.constructor === HTMLElement);
+log('inert document', inert !== document, inert instanceof Document, inert.defaultView, inert.nodeType);
+log('same inert document', t.content.firstChild.ownerDocument === inert, document.body.ownerDocument === document);
+// Polymer wraps <template is="dom-repeat"> this way, in the contents.
+const made = inert.createElement('x-rep');
+made.setAttribute('items', '[[made]]');
+t.content.appendChild(made);
+log('made in inert document', seen.join(',') || 'nothing', made.ownerDocument === inert);
+t.content.firstChild.cloneNode(true);
+log('cloned in contents', seen.join(',') || 'nothing');
+t.content.firstChild.setAttribute('items', '[[list]]');
+const stamp = document.importNode(t.content, true);
+log('imported', seen.join(','), stamp.firstChild.ownerDocument === document);
+document.body.appendChild(stamp);
+log('appended', seen.join(','));
+</script>
