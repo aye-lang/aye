@@ -343,20 +343,25 @@ pub fn main() {
   `x == null`, enum values `Shape.Circle { r: 1.0 }` / `Color.Red`,
   exhaustive `match` with patterns `.V`, `.V { a, b: c, .. }` and `_`, and on
   integers with `1`, `'a'`, `'a'..='z'` and several patterns per arm,
-  error values `ParseError.Empty`, `try f()`, `f() catch |e| { ... }` and
+  error values `ParseError.Empty`, `try f()`, `f() catch |e| { ... }` (a
+  block that ends with the replacement value, or leaves) and
   `f() catch value`, and exhaustive `match e` on errors, method calls
   `x.m(...)` and `Type.f(...)`, struct literals of a type function's
   struct `Pair(i64) { ... }`, the empty slice `[]T{}`, the repeat literal
-  `[64]bool{false, ..}`, `x orelse y` (chaining through optionals), function values
+  `[64]bool{false, ..}`, `x orelse y` (chaining through optionals; `x
+  orelse { ...; y }`), function values
   (`let f: fn(i64) i64 = twice`, `f(1)`, `s.callback(x)`), `x is .V` (does
   the enum `x` hold variant `V`), `@hash(x)`, and on `simd[N]T` vectors
   lane-wise `+ - * /` and comparisons (a mask), `v[i]`, `@splat`,
-  `@reduceAdd`, `@reduceMin`, `@reduceMax`, `@all`, `@any`, `@select`.
+  `@reduceAdd`, `@reduceMin`, `@reduceMax`, `@all`, `@any`, `@select`,
+  and `@embedFile("ua.css")` (a file's bytes as a `[]u8` constant, read
+  when the program is compiled).
 - Methods: `fn` or `pub fn` in a struct or enum body, with `Self` and a receiver
   `self: Self`, `self: *Self` or `self: *mut Self`.
 - Interfaces: `interface Name { fn m(self: *Self, ...) T }`, implemented by
   any struct that has the methods; `dyn Name` values made from `&x` or
-  `&mut x`, called through a vtable.
+  `&mut x`, called through a vtable, and turned back into their struct
+  with `@downcast(*mut S, d)` (`null` for another type).
 - Memory: `var gpa = std.heap.General.init()` (libc; leak, double-free and
   use-after-free-write reports in debug mode, constant time per call),
   `std.heap.Arena.init(backing)`, a struct with `alloc` and `free` methods

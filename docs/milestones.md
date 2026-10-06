@@ -277,6 +277,27 @@ The browser's fourth list (B5: image decoding, layout) and promises of
   loop (RGB to gray over 4 MiB, 8 rounds) in debug mode at 0.54 s instead
   of 1.52 s (0.55 s with no checks at all at `-O0`; safe mode 0.05 s).
 
+## M9.9: Round 5
+
+The browser's gap list (`browser/COMPILER_GAPS.md`) re-checked at the
+M9.8 head: most open entries were fixed by M9.5 to M9.8, and these are
+what remained.
+
+- **Language:** a `catch` or `orelse` block may end with an expression,
+  which is the block's value (`catch |e| { report(e); old }`), where it had
+  to end with `return`, `break` or `continue`; `@downcast(*mut S, d)` turns
+  a `dyn I` back into a pointer to its struct, `null` when `d` holds
+  another type (E0110).
+- **Toolchain:** `@embedFile("path")` is the bytes of a file as a `[]u8`
+  constant, read when the program is compiled, with the path relative to
+  the source file (E0111).
+- **Docs:** decisions for what stays open: tuples, stackful coroutines, a
+  check for pointers into a `List` that grew, uninitialized locals, and
+  `@zeroed` of an Ore struct.
+- **Acceptance:** golden and error tests for each item, a directory
+  program that embeds files from two directories, `ore explain` texts for
+  E0110 and E0111, and `ore fmt` idempotent on the new forms.
+
 ## M10: Threads
 
 - **std:** `std.thread` (`spawn`, `join`), `std.sync` (`Mutex`,
