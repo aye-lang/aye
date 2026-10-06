@@ -1,0 +1,198 @@
+// A tab: the current page, its vertical scroll offset, and the history
+// of the pages it showed (back and forward).
+
+import std
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+import url
+import url.Url
+
+/// A history entry: a URL and the scroll offset it was left at.
+pub struct Entry {
+    href: []mut u8
+    scroll: f64
+}
+
+pub struct Tab {
+    alloc: Allocator
+    page: ?*mut Page
+    entries: List(Entry)
+    current: usize
+    // The vertical scroll offset of the page, in CSS px.
+    scroll: f64
+    // After the next layout (`settle`): the scroll offset to go back to,
+    // or else the fragment to scroll to (owned; empty for none).
+    restore: ?f64
+    fragment: []mut u8
+
+    pub fn init(alloc: Allocator) Tab {
+        return Tab {
+            alloc: alloc,
+            page: null,
+            entries: List(Entry).init(alloc),
+            current: 0,
+            scroll: 0.0,
+            restore: null,
+            fragment: alloc.alloc(0 as u8, 0) catch unreachable,
+        }
+    }
+
+    pub fn deinit(self: *mut Self) {
+        if self.page |p| {
+            p.destroy()
+        }
+        for e in self.entries.items() {
+            self.alloc.free(e.href)
+        }
+        self.entries.deinit()
+        self.alloc.free(self.fragment)
+    }
+
+    /// The URL of the current entry ("" before the first navigation).
+    pub fn href(self: *Self) []u8 {
+        if self.current < self.entries.len() {
+            return self.entries.items()[self.current].href
+        }
+        return ""
+    }
+
+    pub fn canGoBack(self: *Self) bool {
+        return self.current > 0
+    }
+
+    pub fn canGoForward(self: *Self) bool {
+        return self.current + 1 < self.entries.len()
+    }
+
+    /// Goes to `target` in a new entry after the current one (dropping
+    /// the entries forward of it). A link to a fragment of the current
+    /// document only scrolls. Returns whether a new page was loaded
+    /// (which then needs a layout).
+    pub fn navigate(self: *mut Self, target: *Url) AllocError!bool {
+        self.saveScroll()
+        while self.entries.len() > self.current + 1 {
+            if self.entries.pop() |e| {
+                self.alloc.free(e.href)
+            }
+        }
+        var same_doc = false
+        if self.page |p| {
+            same_doc = target.has_fragment && text.eql(target.withoutFragment(), p.url.withoutFragment())
+        }
+        let href = try self.alloc.alloc(0 as u8, target.href.len)
+        std.mem.copy(href, target.href)
+        try self.entries.append(Entry { href: href, scroll: 0.0 })
+        self.current = self.entries.len() - 1
+        try self.setFragment(target.fragment)
+        self.restore = null
+        if same_doc {
+            return false
+        }
+        try self.loadCurrent()
+        return true
+    }
+
+    /// Goes one entry back; false when there is none.
+    pub fn back(self: *mut Self) AllocError!bool {
+        if !self.canGoBack() {
+            return false
+        }
+        self.saveScroll()
+        self.current -= 1
+        try self.reopen()
+        return true
+    }
+
+    pub fn forward(self: *mut Self) AllocError!bool {
+        if !self.canGoForward() {
+            return false
+        }
+        self.saveScroll()
+        self.current += 1
+        try self.reopen()
+        return true
+    }
+
+    /// Loads the current entry again, keeping the scroll offset.
+    pub fn reload(self: *mut Self) AllocError!bool {
+        if self.current >= self.entries.len() {
+            return false
+        }
+        self.saveScroll()
+        try self.reopen()
+        return true
+    }
+
+    fn reopen(self: *mut Self) AllocError!void {
+        try self.setFragment("")
+        self.restore = self.entries.items()[self.current].scroll
+        try self.loadCurrent()
+    }
+
+    fn saveScroll(self: *mut Self) {
+        if self.current < self.entries.len() {
+            self.entries.items()[self.current].scroll = self.scroll
+        }
+    }
+
+    fn setFragment(self: *mut Self, f: []u8) AllocError!void {
+        let copy = try self.alloc.alloc(0 as u8, f.len)
+        std.mem.copy(copy, f)
+        self.alloc.free(self.fragment)
+        self.fragment = copy
+    }
+
+    // Replaces the page with the current entry's, loaded. The entry
+    // takes the URL after redirects.
+    fn loadCurrent(self: *mut Self) AllocError!void {
+        let entry = self.entries.items()[self.current]
+        let target = url.parse(self.alloc, entry.href) catch |e| {
+            return AllocError.OutOfMemory
+        }
+        defer target.deinit(self.alloc)
+        let p = try load(self.alloc, &target)
+        if self.page |old| {
+            old.destroy()
+        }
+        self.page = p
+        self.scroll = 0.0
+        if !text.eql(p.url.href, entry.href) {
+            let moved = try self.alloc.alloc(0 as u8, p.url.href.len)
+            std.mem.copy(moved, p.url.href)
+            self.alloc.free(entry.href)
+            self.entries.items()[self.current].href = moved
+        }
+    }
+
+    /// After a layout of the page: scrolls to where the last navigation
+    /// wants (the saved offset, or the fragment's element), then keeps
+    /// the offset within `0..max`.
+    pub fn settle(self: *mut Self, max: f64) {
+        if self.restore |r| {
+            self.scroll = r
+        } else if self.fragment.len > 0 {
+            if self.page |p| {
+                if p.tree |t| {
+                    if fragmentY(t, self.fragment) |y| {
+                        self.scroll = y
+                    }
+                }
+            }
+        }
+        self.restore = null
+        self.setFragment("") catch |e| {
+        }
+        self.clampScroll(max)
+    }
+
+    pub fn clampScroll(self: *mut Self, max: f64) {
+        if self.scroll > max {
+            self.scroll = max
+        }
+        if self.scroll < 0.0 {
+            self.scroll = 0.0
+        }
+    }
+}

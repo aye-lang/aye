@@ -5,6 +5,7 @@
 
 import css
 import dom.Document
+import engine
 import font
 import layout
 import std
@@ -18,7 +19,7 @@ fn dumpLayout(alloc: Allocator, doc: *Document, base: *Url, media: css.Media, sy
     try css.uaSheet(&mut ua, media)
     var author = try css.Sheet.init(alloc)
     defer author.deinit()
-    try authorSheets(alloc, doc, base, media, &mut author)
+    try engine.authorSheets(alloc, doc, base, media, &mut author)
     var styles = try css.Styles.init(alloc)
     defer styles.deinit()
     try css.computeStyles(doc, &ua, &author, media, &mut styles)

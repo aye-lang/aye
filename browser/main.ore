@@ -5,6 +5,7 @@
 //     anyknown dump --text [--id ID | --tag NAME] FILE|URL
 //     anyknown dump --style [--width PX] [--id ID | --tag NAME] FILE|URL
 //     anyknown dump --layout [--width PX] [--font fixed|system] FILE|URL
+//     anyknown screenshot FILE|URL -o OUT.png [--width W] [--height H] [--font fixed|system] [--full]
 //
 // FILE is a path; URL is a `file:`, `data:`, `http:` or `https:` URL.
 // `--id` and `--tag` dump only the element with that id, or every element
@@ -12,7 +13,8 @@
 // styles (style.ore) for a viewport `--width` px wide (default 800) and
 // 600 px high. `--layout` prints the box tree laid out in that viewport
 // (layout_dump.ore), measuring text with the fixed-metric test font or
-// with the system's fonts.
+// with the system's fonts. `screenshot` paints the page into a PNG
+// (shot.ore).
 
 import css
 import dom
@@ -42,6 +44,9 @@ fn run(alloc: Allocator) i32 {
         return 1
     }
     defer alloc.free(args)
+    if args.len >= 2 && text.eql(args[1], "screenshot") {
+        return screenshot(alloc, args[2..])
+    }
     if args.len < 2 || !text.eql(args[1], "dump") {
         std.log.err("{}", USAGE)
         return 2

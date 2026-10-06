@@ -304,3 +304,140 @@ fn http() {
     // Nothing listens on port 1.
     expect(&["dump", "--text", "http://127.0.0.1:1/"], 1, "", "error: cannot fetch http://127.0.0.1:1/: cannot connect\n");
 }
+
+// ---- B4: paint and window
+
+/// A scratch directory for the files the browser writes.
+fn scratch() -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("anyknown-out-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// `browser/tests/paint/X.html`: `anyknown screenshot --font fixed` in a
+/// 400x300 viewport must write exactly `X.png`; `full.html` is also taken
+/// with `--full` into `full.full.png`.
+#[test]
+fn screenshot_fixtures() {
+    let dir = root().join("browser").join("tests").join("paint");
+    let mut htmls: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "html"))
+        .collect();
+    htmls.sort();
+    assert!(htmls.len() >= 10, "expected at least 10 paint fixtures, found {}", htmls.len());
+    let mut runs: Vec<(String, Vec<&str>, PathBuf)> =
+        htmls.iter().map(|h| (h.strip_prefix(root()).unwrap().to_string_lossy().into_owned(), vec![], h.with_extension("png"))).collect();
+    runs.push(("browser/tests/paint/full.html".into(), vec!["--full"], dir.join("full.full.png")));
+    let bless = std::env::var_os("ANYKNOWN_BLESS").is_some();
+    let out_dir = scratch();
+    let mut failures = Vec::new();
+    for (i, (page, extra, golden)) in runs.iter().enumerate() {
+        let out = out_dir.join(format!("shot{i}.png"));
+        let mut args = vec!["screenshot", page.as_str(), "-o", out.to_str().unwrap(), "--font", "fixed", "--width", "400", "--height", "300"];
+        args.extend(extra.iter());
+        let res = run(&args);
+        if !res.status.success() || !res.stderr.is_empty() {
+            failures.push(format!("{page} {extra:?}: {}\n{}", res.status, text(&res.stderr)));
+            continue;
+        }
+        let got = std::fs::read(&out).unwrap();
+        if bless {
+            std::fs::write(golden, &got).unwrap();
+            continue;
+        }
+        let want = std::fs::read(golden).unwrap_or_default();
+        if got != want {
+            failures.push(format!("{page} {extra:?}: the image differs from {} (new one: {})", golden.display(), out.display()));
+        }
+    }
+    assert!(failures.is_empty(), "{} of {} screenshots failed:\n\n{}", failures.len(), runs.len(), failures.join("\n"));
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in data {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 { 0xEDB8_8320 ^ (crc >> 1) } else { crc >> 1 };
+        }
+    }
+    !crc
+}
+
+/// Checks a PNG: signature, chunk CRCs, IHDR (8-bit RGBA), and, when
+/// python3 is there, that zlib inflates the IDAT data to the image's
+/// size. Returns (width, height).
+fn check_png(path: &Path) -> (u32, u32) {
+    let d = std::fs::read(path).unwrap();
+    assert_eq!(&d[..8], b"\x89PNG\r\n\x1a\n", "{}", path.display());
+    let be = |b: &[u8]| u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
+    let (mut i, mut size, mut kinds) = (8, (0, 0), Vec::new());
+    while i < d.len() {
+        let n = be(&d[i..]) as usize;
+        let kind = &d[i + 4..i + 8];
+        assert_eq!(crc32(&d[i + 4..i + 8 + n]), be(&d[i + 8 + n..]), "CRC of {} in {}", String::from_utf8_lossy(kind), path.display());
+        if kind == b"IHDR" {
+            size = (be(&d[i + 8..]), be(&d[i + 12..]));
+            assert_eq!(&d[i + 16..i + 21], &[8, 6, 0, 0, 0], "bit depth, color type and methods");
+        }
+        kinds.push(String::from_utf8_lossy(kind).into_owned());
+        i += 12 + n;
+    }
+    assert_eq!(kinds, ["IHDR", "IDAT", "IEND"], "{}", path.display());
+    let script = "import sys, zlib, struct\nd = open(sys.argv[1], 'rb').read()\nn = struct.unpack('>I', d[33:37])[0]\nprint(len(zlib.decompress(d[41:41 + n])))";
+    if let Ok(out) = Command::new("python3").args(["-I", "-c", script]).arg(path).output() {
+        if out.status.success() {
+            let len: u64 = text(&out.stdout).trim().parse().unwrap();
+            assert_eq!(len, size.1 as u64 * (size.0 as u64 * 4 + 1), "inflated size of {}", path.display());
+        }
+    }
+    size
+}
+
+#[test]
+fn png_validity() {
+    let out = scratch().join("valid.png");
+    let res = run(&["screenshot", "browser/tests/article.html", "-o", out.to_str().unwrap(), "--font", "fixed", "--width", "320", "--height", "200"]);
+    assert!(res.status.success() && res.stderr.is_empty(), "{}", text(&res.stderr));
+    assert_eq!(check_png(&out), (320, 200));
+    let full = scratch().join("valid_full.png");
+    let res = run(&["screenshot", "browser/tests/paint/full.html", "-o", full.to_str().unwrap(), "--font", "fixed", "--width", "300", "--height", "100", "--full"]);
+    assert!(res.status.success(), "{}", text(&res.stderr));
+    assert_eq!(check_png(&full), (300, 416));
+    for golden in std::fs::read_dir(root().join("browser/tests/paint")).unwrap() {
+        let p = golden.unwrap().path();
+        if p.extension().is_some_and(|e| e == "png") {
+            check_png(&p);
+        }
+    }
+}
+
+/// `--font system` draws FreeType glyphs; skipped without a system font.
+#[test]
+fn screenshot_system_font() {
+    let out = scratch().join("system.png");
+    let res = run(&["screenshot", "browser/tests/article.html", "-o", out.to_str().unwrap(), "--font", "system"]);
+    if text(&res.stderr).contains("no system font found") {
+        println!("skipped: no system font");
+        return;
+    }
+    assert!(res.status.success() && res.stderr.is_empty(), "{}\n{}", res.status, text(&res.stderr));
+    assert_eq!(check_png(&out), (800, 600));
+    let fixed = scratch().join("system_fixed.png");
+    run(&["screenshot", "browser/tests/article.html", "-o", fixed.to_str().unwrap(), "--font", "fixed"]);
+    assert_ne!(std::fs::read(&out).unwrap(), std::fs::read(&fixed).unwrap());
+}
+
+#[test]
+fn screenshot_errors() {
+    let usage = "error: usage: anyknown screenshot FILE|URL -o OUT.png [--width W] [--height H] [--font fixed|system] [--full]\n";
+    expect(&["screenshot", "browser/tests/basic.html"], 2, "", usage);
+    expect(&["screenshot", "-o", "x.png"], 2, "", usage);
+    expect(&["screenshot", "browser/tests/basic.html", "-o", "x.png", "--width", "0"], 2, "", usage);
+    expect(&["screenshot", "browser/tests/missing.html", "-o", "x.png", "--font", "fixed"], 1, "", &format!(
+        "error: cannot fetch file://{}/browser/tests/missing.html: not found\n",
+        root().display()
+    ));
+}

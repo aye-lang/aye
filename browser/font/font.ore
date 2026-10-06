@@ -98,4 +98,21 @@ test "system fonts, when there are any" {
     let mm = m.metrics(f)
     @expect(mm.ascent > 10.0 && mm.ascent < 18.0)
     @expect(mm.descent > 1.0 && mm.descent < 6.0)
+    // Advances glyph by glyph add up to the width.
+    var sum = 0.0
+    var prev: u32 = 0
+    for c in "AVATAR Hello" {
+        let g = s.glyphIndex(f, c as u32)
+        sum += s.advance(f, prev, g)
+        prev = g
+    }
+    let w2 = m.width(f, "AVATAR Hello")
+    @expect(sum > w2 - 0.001 && sum < w2 + 0.001)
+    if s.render(f, 16 * 64, s.glyphIndex(f, 'H')) |bm| {
+        @expect(bm.width > 4 && bm.width < 20)
+        @expect(bm.top > 8 && bm.top < 16)
+        @expect(bm.buffer != null)
+    } else {
+        @expect(false)
+    }
 }

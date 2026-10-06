@@ -7,8 +7,9 @@
 //
 // Advances are read unscaled (font units, from the `hmtx` table) with the
 // legacy `kern` table's pair kerning when the face has one, and scaled to
-// the font size here, so one face serves every size. Paint (B4) will add
-// glyph rendering on the same faces.
+// the font size here, so one face serves every size. Paint renders glyphs
+// of the same faces (`glyphIndex`, `advance`, `render`), placing each at
+// the pen position these advances give, so text lands where layout put it.
 
 @link("freetype2")
 
@@ -53,6 +54,52 @@ extern struct FTVector {
     y: i64
 }
 
+extern struct FTGeneric {
+    data: ?[*]u8
+    finalizer: ?[*]u8
+}
+
+extern struct FTBitmap {
+    rows: u32
+    width: u32
+    pitch: i32
+    buffer: ?[*]u8
+    num_grays: u16
+    pixel_mode: u8
+    palette_mode: u8
+    palette: ?[*]u8
+}
+
+// The start of `FT_GlyphSlotRec`, up to the bitmap and its offsets.
+extern struct FTGlyphSlot {
+    library: ?[*]u8
+    face: ?[*]u8
+    next: ?[*]u8
+    glyph_index: u32
+    generic: FTGeneric
+    metrics: [8]i64
+    linear_hori_advance: i64
+    linear_vert_advance: i64
+    advance: FTVector
+    format: u32
+    bitmap: FTBitmap
+    bitmap_left: i32
+    bitmap_top: i32
+}
+
+/// A rendered glyph: `rows` rows of `width` coverage bytes (0 to 255),
+/// `pitch` bytes apart, in FreeType's memory (valid until the next
+/// `render`). `left` and `top` place it: its top-left pixel is at
+/// (pen x + left, baseline - top).
+pub struct GlyphBitmap {
+    width: u32
+    rows: u32
+    pitch: i32
+    left: i32
+    top: i32
+    buffer: ?[*]u8
+}
+
 extern fn FT_Init_FreeType(library: *mut ?*mut FTLibraryRec) i32
 extern fn FT_Done_FreeType(library: *mut FTLibraryRec) i32
 extern fn FT_New_Face(library: *mut FTLibraryRec, path: [*]u8, index: i64, face: *mut ?*mut FTFaceRec) i32
@@ -60,8 +107,14 @@ extern fn FT_Done_Face(face: *mut FTFaceRec) i32
 extern fn FT_Get_Char_Index(face: *mut FTFaceRec, code: u64) u32
 extern fn FT_Get_Advance(face: *mut FTFaceRec, glyph: u32, flags: i32, advance: *mut i64) i32
 extern fn FT_Get_Kerning(face: *mut FTFaceRec, left: u32, right: u32, mode: u32, kerning: *mut FTVector) i32
+extern fn FT_Set_Char_Size(face: *mut FTFaceRec, width: i64, height: i64, hres: u32, vres: u32) i32
+extern fn FT_Load_Glyph(face: *mut FTFaceRec, glyph: u32, flags: i32) i32
 
 let FT_LOAD_NO_SCALE: i32 = 1
+// FT_LOAD_RENDER | FT_LOAD_TARGET_LIGHT: an antialiased (8-bit gray)
+// bitmap, hinted vertically only, so advances stay close to unhinted.
+let FT_LOAD_RENDER_LIGHT: i32 = 0x10004
+let FT_PIXEL_MODE_GRAY: u8 = 2
 let FT_KERNING_UNSCALED: u32 = 2
 let FT_FACE_FLAG_KERNING: i64 = 64
 let FT_STYLE_FLAG_ITALIC: i64 = 1
@@ -172,6 +225,56 @@ pub struct System {
         }
         return units as f64 * f.size / face.units_per_em as f64
     }
+
+    /// The glyph of the code point `code` in the face of `f` (0: none).
+    pub fn glyphIndex(self: *Self, f: Font, code: u32) u32 {
+        return FT_Get_Char_Index(self.faceFor(f), code as u64)
+    }
+
+    /// The advance in px of `glyph` after `prev` (0 for none) at
+    /// `f.size`, kerning included: the sum over a run is its `width`.
+    pub fn advance(self: *Self, f: Font, prev: u32, glyph: u32) f64 {
+        let face = self.faceFor(f)
+        var units: i64 = 0
+        var adv: i64 = 0
+        if FT_Get_Advance(face, glyph, FT_LOAD_NO_SCALE, &mut adv) == 0 {
+            units += adv
+        }
+        if (face.face_flags & FT_FACE_FLAG_KERNING) != 0 && prev != 0 && glyph != 0 {
+            var k = FTVector { x: 0, y: 0 }
+            if FT_Get_Kerning(face, prev, glyph, FT_KERNING_UNSCALED, &mut k) == 0 {
+                units += k.x
+            }
+        }
+        return units as f64 * f.size / face.units_per_em as f64
+    }
+
+    /// Renders `glyph` of the face of `f` at `size64` / 64 px per em,
+    /// antialiased; null when FreeType cannot.
+    pub fn render(self: *mut Self, f: Font, size64: i64, glyph: u32) ?GlyphBitmap {
+        let face = self.faceFor(f)
+        if FT_Set_Char_Size(face, 0, size64, 72, 72) != 0 {
+            return null
+        }
+        if FT_Load_Glyph(face, glyph, FT_LOAD_RENDER_LIGHT) != 0 {
+            return null
+        }
+        if face.glyph |g| {
+            let slot = @ptrCast(*mut FTGlyphSlot, g)
+            if slot.bitmap.pixel_mode != FT_PIXEL_MODE_GRAY && slot.bitmap.rows > 0 {
+                return null
+            }
+            return GlyphBitmap {
+                width: slot.bitmap.width,
+                rows: slot.bitmap.rows,
+                pitch: slot.bitmap.pitch,
+                left: slot.bitmap_left,
+                top: slot.bitmap_top,
+                buffer: slot.bitmap.buffer,
+            }
+        }
+        return null
+    }
 }
 
 // The first face of the files in `list` (separated by `|`) with the
@@ -219,7 +322,8 @@ fn styleFlags(bold: bool, italic: bool) i64 {
     return flags
 }
 
-fn faceSlot(f: Font) usize {
+/// The variant of `f` as an index 0..8: monospace * 4 + bold * 2 + italic.
+pub fn faceSlot(f: Font) usize {
     var slot: usize = 0
     if f.mono {
         slot += 4

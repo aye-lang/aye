@@ -17,70 +17,11 @@ import dom
 import dom.Document
 import dom.Kind
 import dom.NodeId
-import encoding
-import net
+import engine
 import std.mem.AllocError
 import std.mem.Allocator
 import std.text
-import url
 import url.Url
-
-/// Appends to `sheet` the style sheets of `doc` whose media match.
-/// Sheets that cannot be fetched are skipped.
-fn authorSheets(alloc: Allocator, doc: *Document, base: *Url, media: css.Media, sheet: *mut css.Sheet) !void {
-    var cur: ?NodeId = doc.root
-    while cur |h| {
-        if doc.isElement(h, "style") && (try mediaOk(doc, h, media, sheet)) {
-            var src = text.Builder.init(alloc)
-            defer src.deinit()
-            try doc.textContent(h, &mut src)
-            try css.parseSheet(sheet, src.bytes(), media)
-        } else if doc.isElement(h, "link") && isStylesheetLink(doc, h) && (try mediaOk(doc, h, media, sheet)) {
-            if doc.attr(h, "href") |href| {
-                try linkedSheet(alloc, base, href, media, sheet)
-            }
-        }
-        cur = doc.following(h, doc.root)
-    }
-}
-
-fn mediaOk(doc: *Document, el: NodeId, media: css.Media, sheet: *mut css.Sheet) AllocError!bool {
-    if doc.attr(el, "media") |q| {
-        return css.mediaMatches(sheet, q, media)
-    }
-    return true
-}
-
-// `rel` has the word `stylesheet` and not `alternate`.
-fn isStylesheetLink(doc: *Document, el: NodeId) bool {
-    var found = false
-    if doc.attr(el, "rel") |rel| {
-        var words = text.split(rel, " ")
-        while words.next() |w| {
-            if text.eqlIgnoreCase(w, "alternate") {
-                return false
-            }
-            if text.eqlIgnoreCase(w, "stylesheet") {
-                found = true
-            }
-        }
-    }
-    return found
-}
-
-fn linkedSheet(alloc: Allocator, base: *Url, href: []u8, media: css.Media, sheet: *mut css.Sheet) AllocError!void {
-    let target = url.resolve(alloc, base, text.trim(href)) catch |e| {
-        return
-    }
-    defer target.deinit(alloc)
-    let res = net.fetch(alloc, &target) catch |e| {
-        return
-    }
-    defer res.deinit(alloc)
-    let src = try encoding.toUtf8(alloc, res.body, encoding.sniff(res.body, res.charset))
-    defer alloc.free(src)
-    try css.parseSheet(sheet, src, media)
-}
 
 /// Computes the styles of `doc` (loaded from `base`) and appends the
 /// dump of each of `roots` to `out`.
@@ -90,7 +31,7 @@ fn dumpStyles(alloc: Allocator, doc: *Document, base: *Url, media: css.Media, ro
     try css.uaSheet(&mut ua, media)
     var author = try css.Sheet.init(alloc)
     defer author.deinit()
-    try authorSheets(alloc, doc, base, media, &mut author)
+    try engine.authorSheets(alloc, doc, base, media, &mut author)
     var styles = try css.Styles.init(alloc)
     defer styles.deinit()
     try css.computeStyles(doc, &ua, &author, media, &mut styles)
