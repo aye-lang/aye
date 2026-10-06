@@ -1,0 +1,57 @@
+viewport 800x600
+  block <html> (0, 0) 800x240
+    block <body> (0, 0) 800x240
+      block <div class="t1"> (10, 5) 100x20
+        block (anonymous) (10, 5) 100x20
+          line (10, 5) 100x20
+            text (10, 7) 88x16 "moved 10, 5"
+        block <div class="inner"> (20, 25) 40x20
+          line (20, 25) 40x20
+            text (20, 27) 24x16 "and"
+          line (20, 45) 40x20
+            text (20, 47) 24x16 "its"
+          line (20, 65) 40x20
+            text (20, 67) 40x16 "child"
+      block <div class="t2"> (-100, 40) 200x20
+        line (-100, 40) 200x20
+          text (-100, 42) 184x16 "left by half its width,"
+        line (-100, 60) 200x20
+          text (-100, 62) 144x16 "down by its height"
+      block <div class="t3"> (30, 30) 100x20
+        line (30, 30) 100x20
+          text (30, 32) 48x16 "matrix"
+      block <div class="t4"> (108, 60) 100x20
+        line (108, 60) 100x20
+          text (108, 62) 32x16 "calc"
+      block <div class="t5"> (0, 80) 100x20 linear(2, 0, 0, 2) at (0, 80)
+        line (0, 80) 100x20
+          text (0, 82) 88x16 "scaled: the"
+        line (0, 100) 100x20
+          text (0, 102) 72x16 "box stays"
+      block <div class="cb"> (0, 110) 300x40
+        line (0, 110) 300x20
+          text (0, 112) 240x16 "a transformed containing block"
+        block <div class="fixed"> (250, 110) 50x20 fixed
+          line (250, 110) 50x20
+            text (250, 112) 40x16 "fixed"
+      block <div class="drawer"> (800, 0) 250x600 fixed
+        line (800, 0) 250x20
+          text (800, 2) 160x16 "an off-canvas drawer"
+      block <div class="bad"> (0, 140) 100x20
+        line (0, 140) 100x20
+          text (0, 142) 72x16 "not moved"
+      block (anonymous) (0, 160) 800x20
+        line (0, 160) 800x20
+          inline <span style="transform: translateX(50px)"> (0, 162) 256x16
+            text (0, 162) 256x16 "inline boxes are not transformed"
+      block <div style="width: 100px; transform: rotate(90deg) translate(10px)"> (0, 190) 100x20 linear(0, 1, -1, 0) at (50, 200)
+        line (0, 190) 100x20
+          text (0, 192) 96x16 "quarter turn"
+      block <div style="width: 100px; transform: scaleX(-1); transform-origin: 0 0"> (0, 200) 100x20 linear(-1, 0, 0, 1) at (0, 200)
+        line (0, 200) 100x20
+          text (0, 202) 56x16 "flipped"
+      block <div style="width: 100px; transform: rotate(45deg)"> (0, 220) 100x20
+        line (0, 220) 100x20
+          text (0, 222) 72x16 "not drawn"
+        line (0, 240) 100x20
+          text (0, 242) 48x16 "turned"

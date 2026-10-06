@@ -1,0 +1,21 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      "\n"
+      <meta charset="iso-2022-jp">
+      "\n"
+      <title>
+        "メールの日本語"
+      "\n"
+    "\n"
+    <body>
+      "\n"
+      <!--  A page in ISO-2022-JP, declared by its meta element.  -->
+      "\n"
+      <h1>
+        "メールの日本語"
+      "\n"
+      <p>
+        "こんにちは、世界。ASCII text between."
+      "\n\n\n"

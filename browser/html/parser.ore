@@ -7,7 +7,9 @@
 // contents of a `template` go into an inert fragment out of the document
 // (`Document.templateContent`), parsed like body content. The doctype
 // decides quirks mode (`Document.quirks`; there a `table` does not close
-// an open `p`). Left out: frames, the template insertion modes (table
+// an open `p`). A `frameset` takes the place of the body (before the body
+// has content); inside it only `frameset`, `frame` and `noframes` count.
+// Left out: the template insertion modes (table
 // parts in a template are inserted as they come), and the foreign-content
 // rules of SVG and MathML (except that `<x/>` inside `svg` or `math`
 // closes itself; names are lower-cased there too).
@@ -77,6 +79,7 @@ pub fn parse(alloc: Allocator, src: []u8) AllocError!Document {
         body: null,
         skip_newline: false,
         templates: 0,
+        frameset_ok: true,
     }
     defer tb.deinit()
     var tokens = Tokenizer.init(alloc, input)
@@ -128,6 +131,9 @@ enum Mode {
     // element or the document, anything but whitespace returns to InBody.
     AfterBody
     AfterAfterBody
+    // In a `frameset`, and after the outermost one ended.
+    InFrameset
+    AfterFrameset
 }
 
 // An entry of the list of active formatting elements: an element, or a
@@ -151,6 +157,9 @@ struct TreeBuilder {
     // How many `template` elements are open: their content is parsed as
     // body content whatever the mode.
     templates: usize
+    // A `frameset` may still replace the body: it has no text and none
+    // of the elements that make it a page (WHATWG's "frameset-ok").
+    frameset_ok: bool
 
     fn deinit(self: *mut Self) {
         self.open.deinit()
@@ -182,6 +191,9 @@ struct TreeBuilder {
     fn process(self: *mut Self, t: Token) AllocError!void {
         let skip = self.skip_newline
         self.skip_newline = false
+        if self.mode == Mode.InFrameset || self.mode == Mode.AfterFrameset {
+            return self.inFrameset(t)
+        }
         if self.mode == Mode.AfterBody || self.mode == Mode.AfterAfterBody {
             if try self.afterBody(t) {
                 return
@@ -270,6 +282,77 @@ struct TreeBuilder {
         return true
     }
 
+    // A token in or after a frameset: frames, framesets and `noframes`
+    // (its text kept); other text but whitespace, and other elements,
+    // are dropped.
+    fn inFrameset(self: *mut Self, t: Token) AllocError!void {
+        match t {
+            .Doctype { .. } => {}
+            .Comment { data } => {
+                let c = try self.doc.createComment(data)
+                self.doc.appendChild(self.current(), c)
+            }
+            .Text { data } => {
+                if self.currentIs("noframes") {
+                    return self.doc.appendText(self.current(), data)
+                }
+                let n = leadingSpace(data)
+                if n > 0 {
+                    try self.doc.appendText(self.current(), data[..n])
+                }
+            }
+            .StartTag { name, attrs, self_closing } => {
+                if text.eql(name, "html") {
+                    return self.mergeAttrs(self.html, attrs)
+                }
+                if text.eql(name, "noframes") {
+                    let n = try self.insert(name, attrs)
+                    return
+                }
+                if self.mode != Mode.InFrameset {
+                    return
+                }
+                if text.eql(name, "frameset") {
+                    let f = try self.insert(name, attrs)
+                } else if text.eql(name, "frame") {
+                    let f = try self.insertVoid(name, attrs)
+                }
+            }
+            .EndTag { name } => {
+                if text.eql(name, "noframes") && self.currentIs("noframes") {
+                    self.pop()
+                } else if text.eql(name, "frameset") && self.mode == Mode.InFrameset && self.currentIs("frameset") {
+                    self.pop()
+                    if !self.currentIs("frameset") {
+                        self.mode = Mode.AfterFrameset
+                    }
+                }
+            }
+            .Eof => {}
+        }
+    }
+
+    // A `frameset` start tag in the body: it replaces the body when that
+    // is still empty (`frameset_ok`), else it is ignored.
+    fn framesetInBody(self: *mut Self, attrs: []Attr) AllocError!void {
+        if !self.frameset_ok || self.open.len() < 2 {
+            return
+        }
+        let body = self.body orelse {
+            return
+        }
+        if !dom.same(self.open.items()[1], body) {
+            return
+        }
+        self.doc.detach(body)
+        while self.open.len() > 1 {
+            self.pop()
+        }
+        self.body = null
+        let f = try self.insert("frameset", attrs)
+        self.mode = Mode.InFrameset
+    }
+
     // ---- text
 
     fn characters(self: *mut Self, data: []u8) AllocError!void {
@@ -323,6 +406,9 @@ struct TreeBuilder {
     fn bodyText(self: *mut Self, s: []u8) AllocError!void {
         if s.len == 0 {
             return
+        }
+        if leadingSpace(s) < s.len {
+            self.frameset_ok = false
         }
         if self.inTablePart() {
             if leadingSpace(s) == s.len {
@@ -404,6 +490,12 @@ struct TreeBuilder {
                     if text.eql(name, "body") {
                         self.body = try self.insert(name, attrs)
                         self.mode = Mode.InBody
+                        self.frameset_ok = false
+                        return
+                    }
+                    if text.eql(name, "frameset") {
+                        let f = try self.insert(name, attrs)
+                        self.mode = Mode.InFrameset
                         return
                     }
                     if text.eql(name, "head") {
@@ -438,8 +530,14 @@ struct TreeBuilder {
         if text.eql(name, "body") {
             return self.mergeAttrs(self.body, attrs)
         }
-        if text.eql(name, "head") || text.eql(name, "frameset") {
+        if text.eql(name, "frameset") {
+            return self.framesetInBody(attrs)
+        }
+        if text.eql(name, "head") || text.eql(name, "frame") {
             return
+        }
+        if isIn(name, "pre listing li dd dt button applet marquee object table area br embed img image keygen wbr input hr textarea iframe select xmp") {
+            self.frameset_ok = false
         }
         if isIn(name, HEAD_CONTENT) {
             let el = try self.insertMaybeVoid(name, attrs)

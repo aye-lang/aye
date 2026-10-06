@@ -1,0 +1,10 @@
+{"id":1,"cmd":"navigate","url":"$BASE/forms/shift_jis.html"}
+{"id":2,"cmd":"type","ref":"e1","text":"東京 中文 €한 ①"}
+{"id":3,"cmd":"click","ref":"e2"}
+{"id":4,"cmd":"read"}
+{"id":5,"cmd":"back"}
+{"id":6,"cmd":"click","ref":"e11"}
+{"id":7,"cmd":"read"}
+{"id":8,"cmd":"back"}
+{"id":9,"cmd":"click","ref":"e20"}
+{"id":10,"cmd":"read"}

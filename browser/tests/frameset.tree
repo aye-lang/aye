@@ -1,0 +1,25 @@
+#document
+  <html>
+    <head>
+      "\n"
+      <title>
+        "Frames"
+      "\n"
+    "\n"
+    <!--  The frameset takes the place of the body; inside it only frames,\n     framesets and noframes count.  -->
+    "\n"
+    <frameset cols="18,82">
+      "\n  "
+      <frame src="frames/menu.html" name="left">
+      "\n  "
+      <frameset rows="50%,*">
+        "\n    "
+        <frame src="frames/top.html" name="top">
+        "\n    "
+        <frame name="empty">
+        "\n  "
+      "\n  "
+      <noframes>
+        "<body><p>Your browser does not show frames.</p></body>"
+      "\n  \n"
+    "\n\n\n"

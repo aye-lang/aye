@@ -1,0 +1,14 @@
+<!doctype html>
+<style>
+body { margin: 8px }
+img { width: 80px; height: 80px; background-color: #ddd; margin: 0 4px 4px 0 }
+.r { width: 120px; aspect-ratio: 16 / 9; background-color: skyblue }
+.ri { width: 100px; height: auto; aspect-ratio: 1; object-fit: cover }
+</style>
+<img src="img/photo.png" alt="fill">
+<img src="img/photo.png" style="object-fit: contain" alt="contain">
+<img src="img/photo.png" style="object-fit: cover" alt="cover">
+<img src="img/photo.png" style="object-fit: none; width: 40px; height: 30px" alt="none">
+<img src="img/badge.png" style="object-fit: scale-down" alt="scale-down">
+<div class="r">16 / 9</div>
+<img class="ri" src="img/photo.png" alt="ratio 1">

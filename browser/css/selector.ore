@@ -5,13 +5,18 @@
 // `:last-of-type`, `:root`, `:empty`, `:link`, `:any-link`, `:hover`
 // (nothing is hovered yet), the states of form controls (`:checked`,
 // `:disabled`, `:enabled`, `:focus`, from `dom.controls`),
-// `:not(list)`, and pseudo-elements (valid, but
-// they match no element). A selector with anything else is invalid, and
-// so is its whole rule.
+// `:not(list)`, `:is(list)` and `:where(list)` (also `:matches()` and
+// `:-webkit-any()`; forgiving: invalid selectors in the list are
+// dropped), and pseudo-elements: `::before` and `::after` (also with one
+// colon) at the end of a selector make it select that pseudo-element of
+// the elements it matches (`Complex.pseudo`; cascade.ore computes their
+// styles); the others are valid but match nothing. A selector with
+// anything else is invalid, and so is its whole rule.
 //
 // A sheet keeps selectors in three flat lists: a `Complex` is a range of
 // `Compound`s (left to right), a `Compound` a range of `Simple`s. The
-// argument of `:not()` is a range of `Complex`es.
+// argument of `:not()`, `:is()` and `:where()` is a range of
+// `Complex`es.
 
 import dom
 import dom.Document
@@ -42,6 +47,8 @@ pub enum SelKind {
     Focus
     Never
     Not
+    // `:is()` and `:where()`.
+    Is
 }
 
 pub struct Simple {
@@ -53,7 +60,7 @@ pub struct Simple {
     op: u8
     // Attr: compare the value ignoring ASCII case.
     ci: bool
-    // Not: the argument, `Sheet.complexes[sub_start..sub_end]`.
+    // Not, Is: the argument, `Sheet.complexes[sub_start..sub_end]`.
     sub_start: usize
     sub_end: usize
 }
@@ -73,6 +80,9 @@ pub struct Complex {
     end: usize
     // (ids << 16) | (classes << 8) | types, each at most 255.
     spec: u32
+    // The pseudo-element it selects: 0 none (an element), 1 `::before`,
+    // 2 `::after`.
+    pseudo: u8
 }
 
 /// Selectors `start..end` of `Sheet.complexes`.
@@ -156,6 +166,7 @@ fn parseComplex(sheet: *mut Sheet, all: []Token) AllocError!?Complex {
     }
     var i = lo
     var combinator: u8 = 0
+    var pseudo: u8 = 0
     while true {
         let first = simples.len()
         while i < hi {
@@ -204,11 +215,21 @@ fn parseComplex(sheet: *mut Sheet, all: []Token) AllocError!?Complex {
                     if next + 1 >= hi || toks[next + 1].kind != Tok.Ident {
                         return null
                     }
-                    try simples.append(simple(SelKind.Never, ""))
+                    let which = pseudoElement(toks[next + 1].text)
+                    if which != 0 && next + 2 == hi && pseudo == 0 {
+                        pseudo = which
+                    } else {
+                        try simples.append(simple(SelKind.Never, ""))
+                    }
                     spec.types += 1
                     i = next + 2
                 } else if n.kind == Tok.Ident {
-                    if pseudoClass(n.text) |kind| {
+                    let which = pseudoElement(n.text)
+                    if which != 0 && next + 1 == hi && pseudo == 0 {
+                        // `:before`, `:after` (CSS 2).
+                        pseudo = which
+                        spec.types += 1
+                    } else if pseudoClass(n.text) |kind| {
                         try simples.append(simple(kind, ""))
                         if isLegacyPseudoElement(n.text) {
                             spec.types += 1
@@ -241,6 +262,28 @@ fn parseComplex(sheet: *mut Sheet, all: []Token) AllocError!?Complex {
                         return null
                     }
                     i = close + 1
+                } else if n.kind == Tok.Function && isMatchesAny(n.text) {
+                    let close = blockEnd(toks, next)
+                    if close >= hi {
+                        return null
+                    }
+                    let inner = try parseForgiving(sheet, toks[next + 1..close])
+                    var s = simple(SelKind.Is, "")
+                    s.sub_start = inner.start
+                    s.sub_end = inner.end
+                    try simples.append(s)
+                    if !text.eqlIgnoreCase(n.text, "where") {
+                        // `:where()` adds nothing to the specificity.
+                        var most: u32 = 0
+                        for k in inner.start..inner.end {
+                            let sp = sheet.complexes.items()[k].spec
+                            if sp > most {
+                                most = sp
+                            }
+                        }
+                        spec.add(most)
+                    }
+                    i = close + 1
                 } else {
                     return null
                 }
@@ -249,7 +292,11 @@ fn parseComplex(sheet: *mut Sheet, all: []Token) AllocError!?Complex {
             }
         }
         if simples.len() == first {
-            return null
+            if pseudo == 0 {
+                return null
+            }
+            // `::before` alone: of any element.
+            try simples.append(simple(SelKind.Universal, ""))
         }
         try compounds.append(Compound { start: first, end: simples.len(), combinator: combinator })
         // The combinator to the next compound.
@@ -287,7 +334,45 @@ fn parseComplex(sheet: *mut Sheet, all: []Token) AllocError!?Complex {
             combinator: c.combinator,
         })
     }
-    return Complex { start: compound_base, end: sheet.compounds.len(), spec: spec.pack() }
+    return Complex { start: compound_base, end: sheet.compounds.len(), spec: spec.pack(), pseudo: pseudo }
+}
+
+// The pseudo-element `name` selects: 1 `before`, 2 `after`, 0 others.
+fn pseudoElement(name: []u8) u8 {
+    if text.eqlIgnoreCase(name, "before") {
+        return 1
+    }
+    if text.eqlIgnoreCase(name, "after") {
+        return 2
+    }
+    return 0
+}
+
+fn isMatchesAny(name: []u8) bool {
+    return text.eqlIgnoreCase(name, "is") || text.eqlIgnoreCase(name, "where") || text.eqlIgnoreCase(name, "matches") || text.eqlIgnoreCase(name, "-webkit-any")
+}
+
+// A forgiving selector list (`:is()`, `:where()`): its valid selectors,
+// appended to `sheet`.
+fn parseForgiving(sheet: *mut Sheet, toks: []Token) AllocError!SelRange {
+    let a = sheet.arena.allocator()
+    var parsed = List(Complex).init(a)
+    var i: usize = 0
+    while i <= toks.len {
+        var j = i
+        while j < toks.len && toks[j].kind != Tok.Comma {
+            j = skipComponent(toks, j)
+        }
+        if try parseComplex(sheet, toks[i..j]) |cx| {
+            try parsed.append(cx)
+        }
+        i = j + 1
+    }
+    let start = sheet.complexes.len()
+    for cx in parsed.items() {
+        try sheet.complexes.append(cx)
+    }
+    return SelRange { start: start, end: sheet.complexes.len() }
 }
 
 // The kind of a pseudo-class name; null for an unknown one.
@@ -411,7 +496,13 @@ fn lowered(sheet: *mut Sheet, s: []u8) AllocError![]u8 {
 
 /// Does the selector `cx` of `sheet` match the element `el`?
 pub fn matchesComplex(sheet: *Sheet, doc: *Document, cx: Complex, el: NodeId) bool {
-    return matchFrom(sheet, doc, cx.start, cx.end - 1, el)
+    return cx.pseudo == 0 && matchFrom(sheet, doc, cx.start, cx.end - 1, el)
+}
+
+/// Does the selector `cx` select the pseudo-element `pseudo` (1
+/// `::before`, 2 `::after`) of `el`?
+pub fn matchesPseudo(sheet: *Sheet, doc: *Document, cx: Complex, el: NodeId, pseudo: u8) bool {
+    return cx.pseudo == pseudo && matchFrom(sheet, doc, cx.start, cx.end - 1, el)
 }
 
 // Does the compound `ci` match `el`, and the compounds before it (back to
@@ -567,6 +658,14 @@ fn matchSimple(sheet: *Sheet, doc: *Document, s: Simple, el: NodeId) bool {
                 }
             }
             return true
+        }
+        .Is => {
+            for k in s.sub_start..s.sub_end {
+                if matchesComplex(sheet, doc, sheet.complexes.items()[k], el) {
+                    return true
+                }
+            }
+            return false
         }
     }
 }

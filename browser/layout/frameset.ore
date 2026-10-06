@@ -1,0 +1,182 @@
+// Framesets (HTML's rendering section, "frames and framesets"): a
+// `frameset` fills its box (the outermost one the viewport) with a grid
+// of `rows` x `cols` cells, filled in row order by its `frame` and
+// `frameset` children. A list of dimensions is converted to pixels as the
+// standard says (absolute, then percentages, then `*` shares the rest);
+// space left over goes to the percentages, else to the absolute ones,
+// in proportion (as browsers do: `cols="18,82"` is 18% and 82%). Frames
+// have no borders here; the engine lays out each frame's document in its
+// box (`Tree.frames`).
+
+import dom.NodeId
+import std.list.List
+import std.math
+import std.mem.AllocError
+import std.text
+
+/// The laid-out document of a `frame` element: the engine adds them
+/// after the layout, paint draws them in the frame's box.
+pub struct FrameView {
+    node: NodeId
+    tree: *mut Tree
+    // How far its document is scrolled, in px.
+    scroll: f64
+}
+
+// One entry of a `rows` or `cols` list: 0 absolute, 1 percentage, 2
+// relative (`*`).
+struct Dim {
+    kind: u8
+    value: f64
+}
+
+/// Is box `i` a `frameset`?
+fn isFrameset(t: *Tree, i: usize) bool {
+    if t.bx(i).node |el| {
+        return t.doc.isElement(el, "frameset")
+    }
+    return false
+}
+
+/// Places the children of the frameset box `i` (content `w` x `h`) in
+/// its grid, and those of the framesets in it; returns `h`.
+fn layoutFrameset(t: *mut Tree, i: usize, w: f64, h: f64) AllocError!f64 {
+    let el = t.bx(i).node.?
+    var cols = List(f64).init(t.backing)
+    defer cols.deinit()
+    var rows = List(f64).init(t.backing)
+    defer rows.deinit()
+    try dimensions(t, t.doc.attr(el, "cols") orelse "", w, &mut cols)
+    try dimensions(t, t.doc.attr(el, "rows") orelse "", h, &mut rows)
+    let ncols = cols.len()
+    var k: usize = 0
+    let n = t.children(i).len
+    for ci in 0..n {
+        let c = t.children(i)[ci]
+        let z4 = [4]f64{0.0, 0.0, 0.0, 0.0}
+        let b = t.bx(c)
+        b.margin = z4
+        b.border = z4
+        b.padding = z4
+        b.first_baseline = -1.0
+        b.last_baseline = -1.0
+        b.x = 0.0
+        b.y = 0.0
+        b.w = 0.0
+        b.h = 0.0
+        if k >= ncols * rows.len() {
+            // More children than cells: not shown.
+            continue
+        }
+        let row = k / ncols
+        let col = k % ncols
+        k += 1
+        let x0 = edge(cols.items(), col)
+        let y0 = edge(rows.items(), row)
+        let cw = edge(cols.items(), col + 1) - x0
+        let ch = edge(rows.items(), row + 1) - y0
+        let cb = t.bx(c)
+        cb.x = x0
+        cb.y = y0
+        cb.w = cw
+        cb.h = ch
+        if isFrameset(t, c) {
+            _ = try layoutFrameset(t, c, cw, ch)
+        }
+    }
+    return h
+}
+
+// The start of track `k` (the end of the last one for `k == len`),
+// rounded to whole pixels so that frames touch.
+fn edge(sizes: []f64, k: usize) f64 {
+    var sum = 0.0
+    for j in 0..k {
+        sum += sizes[j]
+    }
+    return math.floor(sum + 0.5)
+}
+
+/// The sizes in px of the tracks of the list `spec` ("18,82", "50%,*",
+/// "2*,*") in `total` px; an empty list is one `*`.
+fn dimensions(t: *mut Tree, spec: []u8, total: f64, out: *mut List(f64)) AllocError!void {
+    var dims = List(Dim).init(t.backing)
+    defer dims.deinit()
+    var parts = text.split(spec, ",")
+    while parts.next() |part| {
+        try dims.append(parseDim(text.trim(part)))
+    }
+    if text.trim(spec).len == 0 {
+        dims.clear()
+        try dims.append(Dim { kind: 2, value: 1.0 })
+    }
+    var sums = [3]f64{0.0, 0.0, 0.0}
+    for d in dims.items() {
+        sums[d.kind as usize] += d.value
+        try out.append(0.0)
+    }
+    let sizes = out.items()
+    var remaining = total
+    // Absolute lengths, scaled down when they do not fit.
+    for j, d in dims.items() {
+        if d.kind == 0 {
+            if sums[0] > remaining && sums[0] > 0.0 {
+                sizes[j] = d.value * remaining / sums[0]
+            } else {
+                sizes[j] = d.value
+            }
+        }
+    }
+    remaining = math.max(0.0, remaining - sums[0])
+    // Percentages of the whole, scaled down when they do not fit.
+    let pct = sums[1] * total / 100.0
+    for j, d in dims.items() {
+        if d.kind == 1 {
+            if pct > remaining && sums[1] > 0.0 {
+                sizes[j] = d.value * remaining / sums[1]
+            } else {
+                sizes[j] = d.value * total / 100.0
+            }
+        }
+    }
+    remaining = math.max(0.0, remaining - pct)
+    // The rest: shared by the relative ones, else spread over the others.
+    var grow: u8 = 2
+    if sums[2] == 0.0 {
+        grow = 1
+        if sums[1] == 0.0 {
+            grow = 0
+        }
+    }
+    var base = 0.0
+    for j, d in dims.items() {
+        if d.kind == grow {
+            base += sizes[j]
+        }
+    }
+    for j, d in dims.items() {
+        if d.kind != grow {
+            continue
+        }
+        if grow == 2 {
+            sizes[j] = d.value * remaining / sums[2]
+        } else if base > 0.0 {
+            sizes[j] += sizes[j] * remaining / base
+        }
+    }
+}
+
+// "18" (px), "25%", "*", "2*".
+fn parseDim(s: []u8) Dim {
+    if s.len > 0 && s[s.len - 1] == '*' {
+        var v = 1.0
+        if s.len > 1 {
+            v = math.max(0.0, text.parseFloat(text.trim(s[..s.len - 1])) catch 1.0)
+        }
+        return Dim { kind: 2, value: v }
+    }
+    if s.len > 0 && s[s.len - 1] == '%' {
+        return Dim { kind: 1, value: math.max(0.0, text.parseFloat(text.trim(s[..s.len - 1])) catch 0.0) }
+    }
+    return Dim { kind: 0, value: math.max(0.0, text.parseFloat(s) catch 0.0) }
+}

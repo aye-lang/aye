@@ -1,0 +1,66 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <div class="a">
+      display: block
+      <p>
+        display: block
+        color: rgb(0, 128, 0)
+        margin-top: 16px
+        margin-bottom: 16px
+    <div class="b">
+      display: block
+      <p>
+        display: block
+        color: rgb(0, 128, 0)
+        margin-top: 16px
+        margin-bottom: 16px
+    <div id="w">
+      display: block
+      <p>
+        display: block
+        margin-top: 16px
+        margin-bottom: 16px
+    <div id="i">
+      display: block
+      <p class="x">
+        display: block
+        font-weight: 700
+        margin-top: 16px
+        margin-bottom: 16px
+    <div class="c">
+      display: block
+      <span>
+        text-align: right
+    <ul>
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      padding-left: 40px
+      <li>
+        display: list-item
+        white-space: pre
+    <ol>
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      padding-left: 40px
+      list-style-type: decimal
+      <li>
+        display: list-item
+        list-style-type: decimal
+        visibility: hidden
+    <div class="d">
+      display: block
+      <em>
+        font-style: italic
+        text-decoration-line: underline

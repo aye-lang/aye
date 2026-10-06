@@ -294,6 +294,7 @@ fn http() {
     expect(&["dump", "--style", &format!("{base}/redirect-style")], 0, &link_style, "");
     // The charset of the Content-Type header decodes the body.
     expect(&["dump", "--text", &format!("{base}/latin1")], 0, "Café à la crème\n", "");
+    expect(&["dump", "--text", &format!("{base}/gbk")], 0, "中文网页\n", "");
     // An error status still has a page.
     let out = run(&["dump", "--text", &format!("{base}/missing.html")]);
     assert_eq!(out.status.code(), Some(0));
@@ -1196,4 +1197,105 @@ fn window_hit_layers() {
         }
     }
     assert!(failures.is_empty(), "{} of {} cases failed:\n\n{}", failures.len(), cases.len(), failures.join("\n"));
+}
+
+/// Fixed and sticky boxes follow the scroll offset
+/// (`browser/tests/layout/scroll.html` in a 400x340 window: a 300 px
+/// viewport 40 px down): the fixed bar stays at the top, the sticky link
+/// stays 40 px below the top until the end of its section, the sticky
+/// footer stays at the bottom, and a sticky box in a box that clips does
+/// not move. Hit testing sees them where they are drawn.
+#[test]
+fn window_scroll_positions() {
+    if !has_sdl() {
+        println!("skipped: no SDL2");
+        return;
+    }
+    let dir = format!("file://{}/browser/tests/layout/", root().display());
+    let cases: &[(&str, &str)] = &[
+        ("move:20,50", "fixed.html"),
+        ("move:220,90", ""),
+        ("move:320,320", "foot.html"),
+        ("wheel:-5 move:20,50", "fixed.html"),
+        ("wheel:-5 move:220,90", "sticky.html"),
+        ("move:220,150", "sticky.html"),
+        ("move:220,190", "under.html"),
+        ("wheel:-17 move:220,90", ""),
+        ("wheel:-17 move:220,50", "sticky.html"),
+        ("wheel:-17 move:20,105", "clipped.html"),
+        ("key:end move:20,50", "fixed.html"),
+        ("key:end move:320,320", "foot.html"),
+    ];
+    let mut failures = Vec::new();
+    for (events, want) in cases {
+        let out = run_window(&["browser/tests/layout/scroll.html", "--font", "fixed", "--width", "400", "--height", "340", "--frames", "1", "--state", "--events", events]);
+        let got = text(&out.stdout).replace(&dir, "");
+        let status = got.lines().find(|l| l.starts_with("status ")).unwrap_or("").to_string();
+        let want_line = format!("status {want}");
+        if !out.status.success() || !out.stderr.is_empty() || status != want_line {
+            failures.push(format!("--events {events:?}: {}\n{}--- expected\n{want_line}\n--- got\n{got}", out.status, text(&out.stderr)));
+        }
+    }
+    assert!(failures.is_empty(), "{} of {} cases failed:\n\n{}", failures.len(), cases.len(), failures.join("\n"));
+}
+
+/// A frameset in the window (`browser/tests/ui/frames.html`, 400x340: a
+/// 100 px menu frame, `long.html` in the rest): the wheel scrolls the
+/// frame under the mouse (up to its document's end), the status line
+/// shows a frame's link resolved in the frame, and clicking it loads it
+/// in the tab.
+#[test]
+fn window_framesets() {
+    if !has_sdl() {
+        println!("skipped: no SDL2");
+        return;
+    }
+    let ui = format!("file://{}/browser/tests/ui/", root().display());
+    let page = "url frames.html\nscroll 0\nfocus page\naddress frames.html\nhistory 1 of 1\nmatches 0\n";
+    let cases: &[(&str, String)] = &[
+        ("move:20,58", format!("{page}status other.html\nframes 0 0\n")),
+        ("move:200,100 wheel:-2", format!("{page}status \nframes 0 80\n")),
+        ("move:200,100 wheel:-100", format!("{page}status \nframes 0 960\n")),
+        ("move:200,100 wheel:-2 move:20,100 wheel:-2 key:down", format!("{page}status \nframes 0 80\n")),
+        ("click:20,58", "url other.html\nscroll 0\nfocus page\naddress other.html\nhistory 2 of 2\nmatches 0\nstatus \n".to_string()),
+    ];
+    let mut failures = Vec::new();
+    for (events, want) in cases {
+        let out = run_window(&["browser/tests/ui/frames.html", "--font", "fixed", "--width", "400", "--height", "340", "--frames", "1", "--state", "--events", events]);
+        let got = text(&out.stdout).replace(&ui, "");
+        if !out.status.success() || !out.stderr.is_empty() || got != *want {
+            failures.push(format!("--events {events:?}: {}\n{}--- expected\n{want}--- got\n{got}", out.status, text(&out.stderr)));
+        }
+    }
+    assert!(failures.is_empty(), "{} of {} cases failed:\n\n{}", failures.len(), cases.len(), failures.join("\n"));
+}
+
+/// `browser/tests/fonts/`: a tiny font as TrueType, WOFF and WOFF 2
+/// (`@font-face`, system fonts): the three pages must look the same, and
+/// unlike the page without the font. WOFF 2 is checked where
+/// libbrotlidec is installed; skipped without a system font.
+#[test]
+fn web_font_files() {
+    let shot = |page: &str| -> Option<Vec<u8>> {
+        let out = scratch().join(format!("font_{page}.png"));
+        let path = format!("browser/tests/fonts/{page}.html");
+        let res = run(&["screenshot", &path, "-o", out.to_str().unwrap(), "--font", "system", "--width", "400", "--height", "80"]);
+        if text(&res.stderr).contains("no system font found") {
+            return None;
+        }
+        assert!(res.status.success() && res.stderr.is_empty(), "{page}: {}\n{}", res.status, text(&res.stderr));
+        Some(std::fs::read(&out).unwrap())
+    };
+    let Some(ttf) = shot("ttf") else {
+        println!("skipped: no system font");
+        return;
+    };
+    assert_ne!(ttf, shot("none").unwrap(), "the TrueType web font is not used");
+    assert_eq!(ttf, shot("woff").unwrap(), "WOFF renders unlike TrueType");
+    let brotli = Command::new("pkg-config").args(["--exists", "libbrotlidec"]).status().is_ok_and(|s| s.success());
+    if brotli {
+        assert_eq!(ttf, shot("woff2").unwrap(), "WOFF 2 renders unlike TrueType");
+    } else {
+        println!("WOFF 2 skipped: no libbrotlidec");
+    }
 }

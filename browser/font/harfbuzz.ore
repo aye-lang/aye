@@ -1,0 +1,114 @@
+// HarfBuzz, when it is installed: text shaping (ligatures, contextual
+// forms such as Arabic joining, mark positioning, GPOS kerning). Each
+// face gets a HarfBuzz font in font units (the scale is the face's units
+// per em), so its advances scale like FreeType's unscaled ones. Without
+// HarfBuzz, `System` places glyphs one by one (`@hasLink("harfbuzz")`).
+
+@linkOptional("harfbuzz")
+
+extern struct HbFace {}
+pub extern struct HbFont {}
+pub extern struct HbBuffer {}
+
+extern struct HbGlyphInfo {
+    codepoint: u32
+    mask: u32
+    cluster: u32
+    var1: u32
+    var2: u32
+}
+
+extern struct HbGlyphPosition {
+    x_advance: i32
+    y_advance: i32
+    x_offset: i32
+    y_offset: i32
+    reserved: u32
+}
+
+extern fn hb_ft_face_create_referenced(face: *mut FTFaceRec) ?*mut HbFace
+extern fn hb_face_destroy(face: *mut HbFace)
+extern fn hb_font_create(face: *mut HbFace) ?*mut HbFont
+extern fn hb_font_destroy(font: *mut HbFont)
+extern fn hb_font_set_scale(font: *mut HbFont, x: i32, y: i32)
+extern fn hb_buffer_create() ?*mut HbBuffer
+extern fn hb_buffer_destroy(buf: *mut HbBuffer)
+extern fn hb_buffer_clear_contents(buf: *mut HbBuffer)
+extern fn hb_buffer_add_utf8(buf: *mut HbBuffer, text: [*]u8, len: i32, offset: u32, item_len: i32)
+extern fn hb_buffer_set_direction(buf: *mut HbBuffer, dir: i32)
+extern fn hb_buffer_guess_segment_properties(buf: *mut HbBuffer)
+extern fn hb_shape(font: *mut HbFont, buf: *mut HbBuffer, features: ?[*]u8, n: u32)
+extern fn hb_buffer_get_glyph_infos(buf: *mut HbBuffer, n: *mut u32) ?[*]HbGlyphInfo
+extern fn hb_buffer_get_glyph_positions(buf: *mut HbBuffer, n: *mut u32) ?[*]HbGlyphPosition
+
+let HB_DIRECTION_LTR: i32 = 4
+let HB_DIRECTION_RTL: i32 = 5
+
+/// One glyph of a shaped run, in font units.
+pub struct HbGlyph {
+    glyph: u32
+    cluster: u32
+    advance: i32
+    x_offset: i32
+    y_offset: i32
+}
+
+// The HarfBuzz font of a FreeType face, in font units; null when
+// HarfBuzz cannot read it. Only called where `@hasLink("harfbuzz")`.
+fn hbFontOf(ft: *mut FTFaceRec) ?*mut HbFont {
+    if hb_ft_face_create_referenced(ft) |face| {
+        let font = hb_font_create(face)
+        hb_face_destroy(face)
+        if font |f| {
+            let upem = ft.units_per_em as i32
+            hb_font_set_scale(f, upem, upem)
+            return f
+        }
+    }
+    return null
+}
+
+fn hbBufferNew() ?*mut HbBuffer {
+    return hb_buffer_create()
+}
+
+fn hbFontFree(font: *mut HbFont) {
+    hb_font_destroy(font)
+}
+
+fn hbBufferFree(buf: *mut HbBuffer) {
+    hb_buffer_destroy(buf)
+}
+
+// Shapes `s[start..end]` (the rest of `s` is context) with `font` in the
+// direction `rtl`, leaving the glyphs in `buf`; returns their number.
+fn hbShape(font: *mut HbFont, buf: *mut HbBuffer, s: []u8, start: usize, end: usize, rtl: bool) usize {
+    hb_buffer_clear_contents(buf)
+    hb_buffer_add_utf8(buf, s.ptr, s.len as i32, start as u32, (end - start) as i32)
+    if rtl {
+        hb_buffer_set_direction(buf, HB_DIRECTION_RTL)
+    } else {
+        hb_buffer_set_direction(buf, HB_DIRECTION_LTR)
+    }
+    hb_buffer_guess_segment_properties(buf)
+    hb_shape(font, buf, null, 0)
+    var n: u32 = 0
+    hb_buffer_get_glyph_infos(buf, &mut n)
+    return n as usize
+}
+
+// The glyph `k` of the last `hbShape` in `buf`.
+fn hbGlyphAt(buf: *mut HbBuffer, k: usize) HbGlyph {
+    var n: u32 = 0
+    var out = HbGlyph { glyph: 0, cluster: 0, advance: 0, x_offset: 0, y_offset: 0 }
+    if hb_buffer_get_glyph_infos(buf, &mut n) |infos| {
+        out.glyph = infos[k].codepoint
+        out.cluster = infos[k].cluster
+    }
+    if hb_buffer_get_glyph_positions(buf, &mut n) |pos| {
+        out.advance = pos[k].x_advance
+        out.x_offset = pos[k].x_offset
+        out.y_offset = pos[k].y_offset
+    }
+    return out
+}

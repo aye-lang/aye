@@ -1,0 +1,13 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Frameset after a body"
+      "\n"
+      <!--  A frameset replaces a body that was implied and has no content yet\n     (empty elements do not count).  -->
+      "\n"
+    <frameset rows="*,*">
+      <frame src="a.html">
+      <frame src="b.html">
+    "\n"

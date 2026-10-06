@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0 }
+a { display: block; height: 30px; width: 100px }
+.bar { position: fixed; top: 0; left: 0; z-index: 1; background-color: #eee }
+.section { height: 600px; padding-top: 100px }
+.stick { position: sticky; top: 40px; margin-left: 200px }
+.foot { position: sticky; bottom: 0; margin-left: 300px }
+.under { margin-top: 10px; margin-left: 200px }
+.clip { overflow: hidden; height: 50px }
+.clip a { position: sticky; top: 0 }
+</style>
+<a class="bar" href="fixed.html">fixed</a>
+<div class="section"><a class="stick" href="sticky.html">sticky</a><a class="under" href="under.html">under</a></div>
+<div class="clip"><div style="height: 20px"></div><a href="clipped.html">clipped</a></div>
+<div style="height: 1000px"></div>
+<a class="foot" href="foot.html">foot</a>
