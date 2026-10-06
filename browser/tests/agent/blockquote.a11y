@@ -1,0 +1,12 @@
+- article
+  - heading "Quotes" [level=1] [e1]
+  - blockquote
+    - paragraph: First paragraph of the quote.
+    - paragraph: Second paragraph.
+    - blockquote: A nested quote.
+    - list
+      - listitem: A list in a quote
+    - paragraph: — Someone
+  - paragraph: After the quote.
+- navigation
+  - link "Not read: there is an article" [e2] -> /

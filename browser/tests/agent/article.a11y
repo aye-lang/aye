@@ -1,0 +1,44 @@
+- banner
+  - link "anyknown home" [e1] -> /
+    - img "anyknown home"
+  - navigation "Primary"
+    - link "Home" [e2] -> /
+    - text: ·
+    - link "Blog" [e3] -> /blog/
+    - text: ·
+    - link "About" [e4] -> /about
+- main
+  - article
+    - heading "Notes on Ore" [level=1] [e5]
+    - paragraph
+      - text: By
+      - link "someone" [e6] -> /people/me
+      - text: , October 6
+    - paragraph: Ore is a systems language without garbage collection. Memory comes from explicit Allocator values, and errors are values too.
+    - heading "Why another language?" [level=2] [e7]
+    - paragraph
+      - text: Three reasons, in
+      - link "no particular order" [e8] -> #order
+      - text: :
+    - list
+      - listitem: Errors are values.
+      - listitem: Enums are tagged unions.
+      - listitem: No hidden allocation.
+    - blockquote
+      - paragraph: Simple things should be simple.
+    - text: fn main() { @println("hi") }
+    - figure "Figure 1: a figure."
+      - img "A figure"
+    - paragraph
+      - text: Read
+      - link "the spec" [e9] -> https://example.com/spec?x=1&y=2
+      - text: next.
+- complementary
+  - heading "Related" [level=2] [e10]
+  - list
+    - listitem
+      - link "Other post" [e11] -> /other [offscreen]
+- contentinfo
+  - paragraph
+    - text: © 2026 anyknown.
+    - link "Privacy" [e12] -> /privacy [offscreen]

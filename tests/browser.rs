@@ -304,3 +304,144 @@ fn http() {
     // Nothing listens on port 1.
     expect(&["dump", "--text", "http://127.0.0.1:1/"], 1, "", "error: cannot fetch http://127.0.0.1:1/: cannot connect\n");
 }
+
+// ---- the agent interface (browser/agent, docs/agent-protocol.md)
+
+/// `s` with the repository's path written as `$ROOT`, so that goldens
+/// with absolute `file:` URLs do not depend on the checkout.
+fn rooted(s: &str) -> String {
+    s.replace(&root().display().to_string(), "$ROOT")
+}
+
+/// Compares `got` with the golden file (or writes it when blessing).
+fn check_golden(golden: &Path, got: &str, what: &str, failures: &mut Vec<String>) {
+    if std::env::var_os("ANYKNOWN_BLESS").is_some() {
+        std::fs::write(golden, got).unwrap();
+        return;
+    }
+    let want = std::fs::read_to_string(golden).unwrap_or_default();
+    if got != want {
+        failures.push(format!("{what}: output differs from {}\n--- expected\n{want}--- got\n{got}", golden.display()));
+    }
+}
+
+/// `browser/tests/agent/X.html`: `anyknown dump --a11y` must print
+/// `X.a11y` and `anyknown dump --md` must print `X.md`; a few fixtures
+/// also have `--boxes`, `--json` and `--refs` variants.
+#[test]
+fn agent_fixtures() {
+    let dir = root().join("browser").join("tests").join("agent");
+    let mut htmls: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "html"))
+        .collect();
+    htmls.sort();
+    assert!(htmls.len() >= 15, "expected at least 15 agent fixtures, found {}", htmls.len());
+    let mut runs: Vec<(Vec<String>, PathBuf)> = Vec::new();
+    for h in &htmls {
+        let rel = h.strip_prefix(root()).unwrap().to_string_lossy().into_owned();
+        runs.push((vec!["--a11y".into(), rel.clone()], h.with_extension("a11y")));
+        runs.push((vec!["--md".into(), rel], h.with_extension("md")));
+    }
+    let page = |name: &str| format!("browser/tests/agent/{name}.html");
+    runs.push((vec!["--a11y".into(), "--boxes".into(), page("long_page")], dir.join("long_page.boxes.a11y")));
+    runs.push((vec!["--a11y".into(), "--json".into(), page("form_login")], dir.join("form_login.json")));
+    runs.push((vec!["--a11y".into(), "--json".into(), "--boxes".into(), page("tables")], dir.join("tables.boxes.json")));
+    runs.push((vec!["--md".into(), "--refs".into(), page("article")], dir.join("article.refs.md")));
+    let mut failures = Vec::new();
+    for (args, golden) in &runs {
+        let mut all = vec!["dump"];
+        all.extend(args.iter().map(|s| s.as_str()));
+        let out = run(&all);
+        if !out.status.success() || !out.stderr.is_empty() {
+            failures.push(format!("{args:?}: {}\n{}", out.status, text(&out.stderr)));
+            continue;
+        }
+        check_golden(golden, &rooted(&text(&out.stdout)), &format!("{args:?}"), &mut failures);
+    }
+    assert!(failures.is_empty(), "{} of {} agent dumps failed:\n\n{}", failures.len(), runs.len(), failures.join("\n"));
+}
+
+/// `browser/tests/agent/sessions/X.jsonl`: requests fed to `anyknown
+/// agent` (or `anyknown mcp` for `X.mcp.jsonl`) on stdin; the responses
+/// must be `X.out` (`X.mcp.out`).
+#[test]
+fn agent_sessions() {
+    use std::io::Write;
+    let dir = root().join("browser").join("tests").join("agent").join("sessions");
+    let mut inputs: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        .collect();
+    inputs.sort();
+    assert!(inputs.len() >= 4, "expected at least 4 agent sessions, found {}", inputs.len());
+    let mut failures = Vec::new();
+    for input in &inputs {
+        let name = input.file_name().unwrap().to_string_lossy().into_owned();
+        let mode = if name.ends_with(".mcp.jsonl") { "mcp" } else { "agent" };
+        let mut child = Command::new(anyknown())
+            .current_dir(root())
+            .arg(mode)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(&std::fs::read(input).unwrap()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        if !out.status.success() || !out.stderr.is_empty() {
+            failures.push(format!("{name}: {}\n{}", out.status, text(&out.stderr)));
+            continue;
+        }
+        check_golden(&input.with_extension("out"), &rooted(&text(&out.stdout)), &name, &mut failures);
+    }
+    assert!(failures.is_empty(), "{} of {} agent sessions failed:\n\n{}", failures.len(), inputs.len(), failures.join("\n"));
+}
+
+#[test]
+fn agent_errors() {
+    let usage = "error: usage: anyknown dump --a11y [--boxes] [--json] | --md [--refs] [--width PX] FILE|URL\n";
+    expect(&["dump", "--a11y"], 2, "", usage);
+    expect(&["dump", "--md", "--width", "x", "browser/tests/agent/article.html"], 2, "", usage);
+    expect(&["dump", "--md", "browser/tests/agent/missing.html"], 1, "", &format!(
+        "error: cannot fetch file://{}/browser/tests/agent/missing.html: not found\n",
+        root().display()
+    ));
+    expect(&["agent", "--color"], 2, "", "error: usage: anyknown agent|mcp [--width PX] [--height PX]\n");
+    expect(&["dump", "--a11y", "data:text/html,<button>OK</button>"], 0, "- button \"OK\" [e1]\n", "");
+    expect(&["dump", "--md", "data:text/html,<h2>Hi</h2><p>a <b>b</b>"], 0, "## Hi\n\na **b**\n", "");
+}
+
+/// The agent over HTTP: a link followed from a page served by the test
+/// server.
+#[test]
+fn agent_http() {
+    use std::io::Write;
+    let Some(srv) = server() else {
+        println!("skipped: cannot start python3 for the test server");
+        return;
+    };
+    let base = &srv.base;
+    let mut child = Command::new(anyknown())
+        .current_dir(root())
+        .arg("agent")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let input = format!(
+        "{{\"id\":1,\"cmd\":\"navigate\",\"url\":\"{base}/agent/site/index.html\"}}\n{{\"id\":2,\"cmd\":\"click\",\"ref\":\"e1\"}}\n"
+    );
+    child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+    let got = text(&out.stdout);
+    let lines: Vec<&str> = got.lines().collect();
+    assert_eq!(lines.len(), 2, "{got}");
+    assert!(lines[0].contains("\"title\":\"Site home\""), "{got}");
+    assert!(lines[1].contains(&format!("\"url\":\"{base}/agent/site/docs.html\"")), "{got}");
+    assert!(lines[1].contains("heading \\\"Documentation\\\" [level=1] [e10]"), "{got}");
+}

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang=en>
+<head>
+<meta charset=utf-8>
+<title>Notes on Ore &ndash; anyknown</title>
+<link rel=stylesheet href=missing.css>
+<script>var tracking = "not text";</script>
+<style>.ad { display: none }</style>
+</head>
+<body>
+<header>
+  <a href="/" class=logo><img src=/logo.png alt="anyknown home"></a>
+  <nav aria-label="Primary"><a href="/">Home</a> &middot; <a href="/blog/">Blog</a> &middot; <a href="/about">About</a></nav>
+</header>
+<div class=ad>Buy things!</div>
+<main>
+<article>
+  <h1>Notes on Ore</h1>
+  <p class=byline>By <a href="/people/me">someone</a>, <time datetime=2026-10-06>October 6</time></p>
+  <p>Ore is a systems language <em>without</em> garbage collection.
+  Memory comes from explicit <code>Allocator</code> values, and errors
+  are <strong>values</strong> too.</p>
+  <h2 id=why>Why another language?</h2>
+  <p>Three reasons, in <a href="#order">no particular order</a>:</p>
+  <ol>
+    <li>Errors are values.
+    <li>Enums are tagged unions.
+    <li>No hidden allocation.
+  </ol>
+  <blockquote><p>Simple things should be simple.</p></blockquote>
+  <pre><code class="language-ore">fn main() {
+    @println("hi")
+}</code></pre>
+  <figure><img src="img/fig.png" alt="A figure"><figcaption>Figure 1: a figure.</figcaption></figure>
+  <p>Read <a href="https://example.com/spec?x=1&amp;y=2">the spec</a> next.</p>
+</article>
+</main>
+<aside><h2>Related</h2><ul><li><a href="/other">Other post</a></ul></aside>
+<footer><p>&copy; 2026 anyknown. <a href=/privacy>Privacy</a></p></footer>
+</body>
+</html>

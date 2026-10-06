@@ -1,0 +1,16 @@
+{"id":1,"cmd":"snapshot"}
+{"id":2,"cmd":"navigate","url":"browser/tests/agent/site/index.html"}
+{"id":3,"cmd":"click","ref":"e1"}
+{"id":4,"cmd":"back"}
+{"id":5,"cmd":"click","ref":"e1"}
+{"id":6,"cmd":"forward"}
+{"id":7,"cmd":"forward"}
+{"id":8,"cmd":"back"}
+{"id":9,"cmd":"back"}
+{"id":10,"cmd":"read"}
+{"id":11,"cmd":"click","ref":"e30"}
+{"id":12,"cmd":"click","ref":"e25"}
+{"id":13,"cmd":"click","ref":"e27"}
+{"id":14,"cmd":"back"}
+{"id":15,"cmd":"reload"}
+{"id":16,"cmd":"navigate","url":"docs.html"}

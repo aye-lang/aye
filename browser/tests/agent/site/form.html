@@ -1,0 +1,16 @@
+<!doctype html>
+<title>Sign up</title>
+<main>
+<h1>Sign up</h1>
+<form action="/signup">
+  <p><label for=name>Name</label> <input id=name name=name required>
+  <p><label for=bio>About you</label><br><textarea id=bio name=bio></textarea>
+  <p><label><input type=checkbox name=news> Send me news</label>
+  <p>Plan:
+     <label><input type=radio name=plan value=free checked> Free</label>
+     <label><input type=radio name=plan value=pro> Pro</label>
+  <p><label for=color>Favorite color</label>
+     <select id=color name=color><option>Red<option value=b>Blue<option>Green</select>
+  <p><button>Create account</button>
+</form>
+</main>

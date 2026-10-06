@@ -1,0 +1,36 @@
+- main
+  - heading "Results" [level=1] [e1]
+  - table "Race results"
+    - row
+      - columnheader "Place"
+      - columnheader "Runner"
+      - columnheader "Time"
+    - row
+      - cell "1"
+      - cell "Ann"
+        - link "Ann" [e2] -> /r/ann
+      - cell "2:01:13"
+    - row
+      - cell "2"
+      - cell "Bob | the fast"
+      - cell "2:03:40"
+    - row
+      - cell "Did not finish"
+      - cell "-"
+  - heading "Without a header" [level=2] [e3]
+  - table
+    - row
+      - cell "a"
+      - cell "b"
+    - row
+      - cell "c"
+  - heading "Row headers" [level=2] [e4]
+  - table
+    - row
+      - rowheader "Height"
+      - cell "180 cm"
+    - row
+      - rowheader "Weight"
+      - cell "75 kg"
+  - text: Layout cell one
+  - text: Layout cell two
