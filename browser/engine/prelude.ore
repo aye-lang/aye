@@ -2256,9 +2256,13 @@ pub let PRELUDE =
     \\getter(ElementP, 'scrollWidth', function () { return ak.metric(this, 10); });
     \\getter(ElementP, 'scrollHeight', function () { return ak.metric(this, 11); });
     \\// A scroll that moved fires `scroll` (at the element, or at the document
-    \\// for the window) as a task.
+    \\// for the window) as a task, once for the scrolls of a target until then.
+    \\const scrollPending = new Set();
     \\function scrolled(target) {
+    \\  if (scrollPending.has(target)) return;
+    \\  scrollPending.add(target);
     \\  setTimeout(() => {
+    \\    scrollPending.delete(target);
     \\    if (target === G) dispatch(document, new Event('scroll', { bubbles: true }));
     \\    else dispatch(target, new Event('scroll'));
     \\  }, 0);

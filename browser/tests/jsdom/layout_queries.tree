@@ -1,0 +1,41 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Layout queries"
+      "\n"
+      <style>
+        "\nbody { margin: 8px }\n#box { width: 100px; height: 50px; padding: 5px; border: 2px solid; margin: 10px 0 }\n#outer { position: relative; padding: 4px; border: 1px solid }\n#inner { margin-left: 20px; width: 30px; height: 10px; border-top: 3px solid }\n#line { width: 160px }\n#s { padding: 0 4px }\n#hidden { display: none }\ntd { padding: 0 }\n"
+      "\n"
+    <body>
+      <hr>
+      <div id="box" style="width: 200px; border-width: 0; padding: 0;">
+        "x"
+      "\n"
+      <div id="outer">
+        <div id="inner">
+      "\n"
+      <p id="line">
+        "Some "
+        <span id="s">
+          "inline text that wraps"
+        " end"
+      "\n"
+      <div id="hidden" style="display: block;">
+        <i id="hi">
+          "gone"
+      "\n"
+      <table id="t">
+        <tbody>
+          <tr>
+            <td id="cell">
+              <b id="b">
+                "x"
+      "\n"
+      <pre id="out">
+        "block 8,10,114,64 1 true\noffset 10 8 114 64 true\nclient 2 2 110 60 110 60\nnested 33,89,30,13 outer 4 24 3 10\ninline 2 true 48,125,92,16 8,145,84,16 8,145,84,16 \ninline bounds 8,125,132,36 132 36 0 0\ntable cell t BODY\nnone 0,0,0,0 0 0 0 0  0 0\nnone 0,0,0,0 0 0 0 0  0 0\nnone 0,0,0,0 0 0 0 0  0 0\nroot 800 600 800 600 800   0\nrestyled 8,10,214,64 214 210\nrestyled 8,10,200,50 0 200\nmoved 8,20,200,50 20\nshown true 1 20\nattached 50 50\nremoved 0 0\nDOMRect -2 1 2 6 {\"x\":1,\"y\":2,\"width\":3,\"height\":4,\"top\":2,\"right\":4,\"bottom\":6,\"left\":1}\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nfunction rect(r) { return [r.x, r.y, r.width, r.height].join(','); }\nconst $ = id => document.getElementById(id);\n// A block: its border box, relative to the viewport.\nconst box = $('box');\nlog('block', rect(box.getBoundingClientRect()), box.getClientRects().length, box.getClientRects()[0] instanceof DOMRect);\nlog('offset', box.offsetTop, box.offsetLeft, box.offsetWidth, box.offsetHeight, box.offsetParent === document.body);\nlog('client', box.clientTop, box.clientLeft, box.clientWidth, box.clientHeight, box.scrollWidth, box.scrollHeight);\n// Nested: offsets are from the padding edge of the positioned ancestor.\nconst inner = $('inner');\nlog('nested', rect(inner.getBoundingClientRect()), inner.offsetParent.id, inner.offsetTop, inner.offsetLeft, inner.clientTop, inner.clientHeight);\n// Inline: one rectangle per line; the bounding rectangle holds them all.\nconst s = $('s');\nconst rects = s.getClientRects();\nlog('inline', rects.length, rects instanceof DOMRectList, [...rects].map(rect).join(' '), rect(rects.item(1)), rects.item(9));\nlog('inline bounds', rect(s.getBoundingClientRect()), s.offsetWidth, s.offsetHeight, s.clientWidth, s.clientHeight);\n// Table cells are the offsetParent of what they hold.\nlog('table', $('b').offsetParent.id, $('cell').offsetParent.id, $('t').offsetParent.tagName);\n// Not rendered: display none (also inside it) and detached elements.\nconst loose = document.createElement('div');\nloose.style.width = '50px';\nfor (const el of [$('hidden'), $('hi'), loose]) {\n  log('none', rect(el.getBoundingClientRect()), el.getClientRects().length, el.offsetWidth, el.offsetHeight, el.offsetTop, el.offsetParent, el.clientWidth, el.scrollHeight);\n}\n// The root and the viewport.\nconst root = document.documentElement;\nlog('root', root.clientWidth, root.clientHeight, innerWidth, innerHeight, root.scrollWidth, root.offsetParent, document.body.offsetParent, document.body.offsetTop);\n// Changes between two queries are seen by the second one.\nbox.style.width = '200px';\nlog('restyled', rect(box.getBoundingClientRect()), box.offsetWidth, box.clientWidth);\nbox.style.borderWidth = '0';\nbox.style.padding = '0';\nlog('restyled', rect(box.getBoundingClientRect()), box.clientTop, box.clientWidth);\ndocument.body.insertBefore(document.createElement('hr'), box);\nlog('moved', rect(box.getBoundingClientRect()), box.offsetTop);\n$('hidden').style.display = 'block';\nlog('shown', rect($('hi').getBoundingClientRect()).split(',').map(Number).every(n => n >= 0), $('hi').getClientRects().length, $('hidden').offsetHeight);\ndocument.body.appendChild(loose);\nlog('attached', loose.offsetWidth, loose.getBoundingClientRect().width);\nloose.remove();\nlog('removed', loose.offsetWidth, loose.getClientRects().length);\n// DOMRect.\nconst r = DOMRect.fromRect({ x: 1, y: 2, width: -3, height: 4 });\nlog('DOMRect', r.left, r.right, r.top, r.bottom, JSON.stringify(new DOMRectReadOnly(1, 2, 3, 4)));\n"
+      "\n"

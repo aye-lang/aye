@@ -31,6 +31,7 @@ import js.Interp
 import js.JsError
 import js.Value
 import layout
+import perf
 import std.list.List
 import std.map.IntMap
 import std.math
@@ -103,6 +104,8 @@ fn geometry(s: *mut Script) AllocError!*mut Geometry {
         }
     }
     dropGeometry(s)
+    let began = perf.start()
+    defer perf.end("script_layout", began, p.url.href)
     let st = try computedStyling(s)
     let styles = try s.alloc.create(try css.Styles.init(s.alloc))
     errdefer {
@@ -569,7 +572,13 @@ fn offsetMetric(s: *mut Script, g: *Geometry, el: NodeId, k: i64) AllocError!f64
     let first = areas.items()[0]
     var x = first.x
     var y = first.y
-    if try offsetParentOf(s, g, el) |op| {
+    let parent = try offsetParentOf(s, g, el)
+    let b = g.tree.bx(firstBox(g, el).?)
+    if parent == null && b.abs == 2 {
+        // Fixed: where it is in the viewport.
+        y -= b.scroll_dy
+    }
+    if parent |op| {
         if !s.page.doc.isElement(op, "body") || isPositioned(s, op) {
             var outer = List(Area).init(s.alloc)
             defer outer.deinit()

@@ -19,6 +19,16 @@ fn cached_sheets_follow_media_changes() {
 }
 
 #[test]
+fn script_layout_is_reused_until_a_change() {
+    let page = "data:text/html,<div id=d>x</div><p id=out></p><script>let d=document.getElementById('d');let r=[d.offsetWidth,d.offsetHeight,d.getBoundingClientRect().width,d.clientWidth];d.style.width='10px';r.push(d.offsetWidth,d.getBoundingClientRect().width);document.getElementById('out').textContent=r.join(',');</script>";
+    let out = Command::new(anyknown()).current_dir(root()).env("ANYKNOWN_TIMING", "1").args(["dump", "--text", "--js", page]).output().unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "x\n\n784,20,784,784,10,10\n");
+    let trace = text(&out.stderr);
+    assert_eq!(trace.matches("ANYKNOWN_TIMING\tscript_layout\t").count(), 2, "{trace}");
+}
+
+#[test]
 fn timing_preserves_output() {
     let args = ["dump", "--md", "--js", "browser/tests/agent/noscript.html"];
     let plain = Command::new(anyknown()).current_dir(root()).args(args).output().unwrap();
