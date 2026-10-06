@@ -102,6 +102,9 @@ pub struct Obj {
     frozen: bool
     mark: bool
     live: bool
+    // [[IsHTMLDDA]] (`document.all`): typeof "undefined", falsy, and
+    // loosely equal to null and undefined.
+    htmldda: bool
 }
 
 pub struct StrCell {
@@ -223,6 +226,7 @@ pub struct Heap {
             frozen: false,
             mark: false,
             live: true,
+            htmldda: false,
         }
         if self.free_objs.pop() |i| {
             self.objs.items()[i] = o

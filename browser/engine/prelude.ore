@@ -1003,6 +1003,18 @@ pub let PRELUDE =
     \\getter(Document.prototype, 'images', function () { return this.getElementsByTagName('img'); });
     \\getter(Document.prototype, 'scripts', function () { return this.getElementsByTagName('script'); });
     \\getter(Document.prototype, 'embeds', function () { return this.getElementsByTagName('embed'); });
+    \\// document.all: every element, live; falsy and typeof "undefined" as in
+    \\// browsers ([[IsHTMLDDA]]), which scripts test with `x !== document.all`.
+    \\const allOf = new WeakMap();
+    \\getter(Document.prototype, 'all', function () {
+    \\  let c = allOf.get(this);
+    \\  if (c === undefined) {
+    \\    c = this.getElementsByTagName('*');
+    \\    ak.markHtmlDda(c);
+    \\    allOf.set(this, c);
+    \\  }
+    \\  return c;
+    \\});
     \\getter(Document.prototype, 'links', function () { return this.querySelectorAll('a[href], area[href]'); });
     \\hidden(Document.prototype, 'importNode', function (node, deep) { return node.cloneNode(!!deep); });
     \\hidden(Document.prototype, 'adoptNode', function (node) {

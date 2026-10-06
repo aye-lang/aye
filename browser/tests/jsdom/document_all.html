@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<title>document.all</title>
+<pre id="out"></pre>
+<p id="x" name="n">x</p>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const all = document.all;
+log('typeof', typeof all);
+log('=== undefined', all === undefined, '== undefined', all == undefined, '== null', all == null, 'null ==', null == all);
+log('falsy', !all, all ? 'truthy' : 'falsy', 'same object', all === document.all);
+log('?? keeps it', (all ?? 'other') === all, '|| skips it', all || 'other');
+log('length', all.length === document.getElementsByTagName('*').length, 'item 0', all[0].tagName, 'named', all.x.id, all.namedItem('n').id);
+// The guard of polymer-resin (YouTube): falsy values other than
+// document.all pass through without sanitizing.
+function sanitize(v) { if (!v && v !== document.all) return v; return 'sanitized'; }
+log('guard', sanitize(undefined), sanitize(null), sanitize(false), sanitize(0), sanitize('a'));
+const p = document.createElement('p');
+document.body.appendChild(p);
+log('live', all[all.length - 1] === p);
+</script>
