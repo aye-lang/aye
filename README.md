@@ -310,9 +310,11 @@ pub fn main() {
   The entry point is `pub fn main()` or `pub fn main() !void`.
 - Statements: `let`, `var`, `=` and compound assignment (`+= -= *= /= %= +%= -%= *%= &= |= ^= <<= >>=`),
   `if`/`else`, `while`, `for i in lo..hi`, `for x in seq`, `for i, x in seq`,
-  `break`, `continue`, `return`, `defer`, `errdefer`, nested blocks, call
+  `break`, `continue`, `return`, `defer`, `errdefer` (of a call, assignment,
+  `if` or block), nested blocks, call
   statements, `if x |v| { }` and `while x |v| { }` (unwrap a `?T`), `match` statements.
-- Expressions: integer/float/bool/string/char literals, `+ - * / %` (checked),
+- Expressions: integer/float/bool/string/char literals, multi-line strings
+  (`\\` lines), `+ - * / %` (checked),
   `+% -% *%` (wrapping), bitwise `& | ^ ~` and shifts `<< >>` (checked shift
   amount), comparisons (also of pointers and payload-less enums), `&& || !`, unary `-`, calls, struct
   literals, field access, `as` numeric casts, arrays `[3]i32{1, 2, 3}`,
@@ -344,9 +346,10 @@ pub fn main() {
   variadic functions such as `snprintf`), `[*]T` indexing and slicing,
   `?[*]T`, `@ptrCast(T, p)`, `@sizeOf(T)`, `@zeroed(T)`, and `@link("name")`
   (`pkg-config` flags, `-lname` or `framework:Name`) for `ore build`, `run`
-  and `test`.
+  and `test`; `@linkOptional("name")` with `@hasLink("name")` for a library
+  the program can do without.
 - Types: `i8..i64 u8..u64 isize usize f32 f64 bool`, structs, enums, error
-  sets, `[N]T`, `[]T`, `[]mut T` (writable elements), `*T`, `*mut T`, `?T`,
+  sets, `[N]T` (`N` a constant), `[]T`, `[]mut T` (writable elements), `*T`, `*mut T`, `?T`,
   `[*]T` (FFI pointer), `fn(A, B) R`, `dyn I`, `std.mem.Allocator`, `std.heap.General`,
   `std.heap.Arena`, instances
   of type functions (`Pool(Node)`), and, as a
