@@ -441,7 +441,7 @@ fn extern_symbol(name: &str) -> &str {
 
 /// C name of the Ore function `name`: `f`, `Struct.method` or `test#N`.
 fn fn_name(name: &str) -> String {
-    if let Some(n) = name.strip_prefix("test#") {
+    if let Some(n) = name.rsplit("::").next().and_then(|n| n.strip_prefix("test#")) {
         return format!("ore_t_{n}");
     }
     match name.rsplit_once('.') {

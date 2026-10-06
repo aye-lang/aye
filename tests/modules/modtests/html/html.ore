@@ -1,0 +1,26 @@
+import dom
+
+/// The number of tags in `text`.
+pub fn count(text: []u8) i64 {
+    var n: i64 = 0
+    for c in text {
+        if isOpen(c) {
+            n += 1
+        }
+    }
+    return n
+}
+
+fn isOpen(c: u8) bool {
+    return c == '<'
+}
+
+test "basic" {
+    @expectEqual(1, count("<p>"))
+}
+
+test "private helper and a sibling module" {
+    @expect(isOpen('<'))
+    let n = dom.Node { depth: 2 }
+    @expectEqual(3, dom.deeper(n).depth)
+}

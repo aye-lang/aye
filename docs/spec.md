@@ -1060,7 +1060,8 @@ pub fn main() {
   and enum variants are visible wherever their type is.
 - An import name cannot also be declared in the module, and locals cannot
   shadow it. Modules cannot import each other in a cycle.
-- `test` blocks of imported modules are not compiled.
+- The `test` blocks of every module are checked with the program (`ore
+  check`, `ore build`) and run by `ore test` (section 13); std's are not.
 - Errors and types from other modules are shown with their path in
   messages: `std.fs.File`, `std.mem.AllocError`.
 
@@ -1103,9 +1104,13 @@ test "allocations are checked" {
 ```
 
 - `test "name" { }` at the top level; the body is like a `!void` function
-  (it can use `try`). `ore test` runs each test of the root module in its
-  own process; `ore build`/`ore run` leave tests out. A module with tests
-  needs no `main` for `ore check` and `ore test`.
+  (it can use `try`) of its module, so it can call private functions.
+  `ore test dir` runs each test of every module of the program in its own
+  process (a module's test shows as `test "html: name"`); `--module html`
+  runs only the tests of module `html`. Give the program's directory, not
+  the module's: imports start there. `ore build`/`ore run` leave tests
+  out. A root module with tests needs no `main` for `ore check` and `ore
+  test`.
 - `@expect(cond)` and `@expectEqual(expected, actual)` (integers, floats,
   `bool`, `[]u8`) fail the test with `file:line:col: assertion failed:
   expected X, found Y`.

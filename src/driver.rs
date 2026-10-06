@@ -112,7 +112,8 @@ pub fn front_end(root: Root, need_main: Option<bool>) -> Checked {
         d
     };
     let result = ast.map_err(diags).and_then(|ast| {
-        let need_main = need_main.unwrap_or_else(|| !ast.items.iter().any(|i| matches!(i, ast::Item::Test(_))));
+        let need_main =
+            need_main.unwrap_or_else(|| !ast.items.iter().any(|i| matches!(i, ast::Item::Test(t) if t.module.is_empty())));
         sema::check(&ast, need_main).map_err(diags)
     });
     Checked { files, result }
@@ -178,8 +179,8 @@ fn file_names(files: &[SourceFile]) -> Vec<String> {
 }
 
 /// Like `compile_root`, for a test executable: its argument is the index
-/// of the test to run. Also returns the test names and the file names.
-pub fn compile_tests_to_c(root: Root, mode: Mode) -> Result<(CProgram, Vec<String>, Vec<String>), Vec<Diag>> {
+/// of the test to run. Also returns the tests and the file names.
+pub fn compile_tests_to_c(root: Root, mode: Mode) -> Result<(CProgram, Vec<sema::TestDef>, Vec<String>), Vec<Diag>> {
     let checked = front_end(root, Some(false));
     let typed = checked.result?;
     let ir = oir::lower(&typed);
@@ -213,16 +214,31 @@ pub enum TestError {
     Run(String),
 }
 
-/// `ore test`: compile the tests of the root module and run each one whose
-/// name contains `filter` in its own process, so that a panic ends only
-/// that test.
-pub fn run_tests(root: Root, mode: Mode, filter: &str) -> Result<Vec<TestResult>, TestError> {
-    let (c, names, files) = compile_tests_to_c(root, mode).map_err(TestError::Compile)?;
+/// `ore test`: compile the tests of every module of the program (std's
+/// aside) and run each one in its own process, so that a panic ends only
+/// that test. Only tests whose shown name (`name`, `module: name`)
+/// contains `filter` run, and with `module`, only those of that module.
+pub fn run_tests(root: Root, mode: Mode, filter: &str, module: Option<&str>) -> Result<Vec<TestResult>, TestError> {
+    let (c, tests, files) = compile_tests_to_c(root, mode).map_err(TestError::Compile)?;
+    if let Some(m) = module
+        && !tests.iter().any(|t| t.module == m)
+    {
+        let mut with: Vec<String> = Vec::new();
+        for t in tests.iter().filter(|t| !t.module.is_empty()) {
+            let shown = format!("`{}`", t.module);
+            if !with.contains(&shown) {
+                with.push(shown);
+            }
+        }
+        let list = if with.is_empty() { "none".to_string() } else { with.join(", ") };
+        return Err(TestError::Run(format!("no tests in module `{m}` (modules with tests: {list})")));
+    }
     let exe = std::env::temp_dir().join(format!("ore-test-{}", std::process::id()));
     cc(&c, &exe, mode).map_err(TestError::Run)?;
     let mut results = Vec::new();
-    for (i, name) in names.into_iter().enumerate() {
-        if !name.contains(filter) {
+    for (i, test) in tests.into_iter().enumerate() {
+        let name = test.shown();
+        if !name.contains(filter) || module.is_some_and(|m| m != test.module) {
             continue;
         }
         let out = match Command::new(&exe).arg(i.to_string()).output() {

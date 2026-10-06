@@ -11,8 +11,8 @@
 //! refers to an item of a module other than the root to its canonical name,
 //! `std::fs::open` or `util::Thing` (sema shows `::` as `.`). Names of the
 //! root module stay as they are written. The result is one AST for sema:
-//! the root module's items first, then the other modules' items. Only the
-//! root module's `test` blocks are kept.
+//! the root module's items first, then the other modules' items. The
+//! `test` blocks of every module but std's are kept.
 //!
 //! Imports are per file: `import std.fs` binds `fs` in its file only. A
 //! path such as `std.fs.open` is resolved one name at a time: a module's
@@ -395,7 +395,7 @@ impl Loader<'_> {
                 self.import(imp);
             }
             for item in &mut ast.items {
-                if m != 0 && matches!(item, AstItem::Test(_)) {
+                if self.files[f].std && matches!(item, AstItem::Test(_)) {
                     continue;
                 }
                 self.item(item);
@@ -428,7 +428,7 @@ impl Loader<'_> {
         let (first, span) = &path[0];
         let Some(mut q) = self.module(first, *span) else {
             let dir = self.base.join(first);
-            let msg = format!("cannot find module `{first}` (no directory `{}`)", dir.display());
+            let msg = format!("cannot find module `{first}` (no directory `{}`{})", dir.display(), self.sibling_hint(first));
             self.report(Error::new(E0081, *span, msg));
             return Binding::Bad;
         };
@@ -461,6 +461,28 @@ impl Loader<'_> {
         }
         self.edge(q, *span);
         Binding::Module(q)
+    }
+
+    /// When the module `first` is not found, but a directory above the
+    /// root module's has it: the root module is likely a module of a
+    /// larger program there.
+    fn sibling_hint(&self, first: &str) -> String {
+        for top in self.base.ancestors().skip(1) {
+            // `""` is the working directory.
+            let shown = if top.as_os_str().is_empty() { Path::new(".") } else { top };
+            if !shown.join(first).is_dir() {
+                continue;
+            }
+            let Ok(rel) = self.base.strip_prefix(top) else { break };
+            let module: Vec<String> = rel.iter().map(|c| c.to_string_lossy().into_owned()).collect();
+            return format!(
+                "; imports are found from the directory given to `ore`, and `{}` exists: give `{}` instead, with `--module {}` for `ore test`",
+                top.join(first).display(),
+                shown.display(),
+                module.join(".")
+            );
+        }
+        String::new()
     }
 
     fn not_pub(&self, name: &str, m: usize, span: Span) -> Error {
@@ -935,8 +957,7 @@ impl Loader<'_> {
     // -------------------------------------------------------------- merge
 
     /// One AST: the root module's items, then every other module's items
-    /// with canonical names. Root tests are numbered across its files;
-    /// other modules' tests are left out.
+    /// with canonical names. Tests are numbered across the program.
     fn merge(&mut self) -> ast::File {
         let mut items = Vec::new();
         let mut tests = 0;
@@ -947,11 +968,12 @@ impl Loader<'_> {
                 let ast = self.asts[f].take().unwrap();
                 for mut item in ast.items {
                     match &mut item {
-                        AstItem::Test(t) if m == 0 => {
-                            t.func.name = format!("test#{tests}");
+                        AstItem::Test(_) if self.files[f].std => continue,
+                        AstItem::Test(t) => {
+                            t.func.name = canonical(&path, &format!("test#{tests}"));
+                            t.module = path.clone();
                             tests += 1;
                         }
-                        AstItem::Test(_) => continue,
                         AstItem::Fn(x) => x.name = canonical(&path, &x.name),
                         AstItem::Struct(x) => x.name = canonical(&path, &x.name),
                         AstItem::Enum(x) => x.name = canonical(&path, &x.name),

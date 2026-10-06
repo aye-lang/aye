@@ -37,8 +37,8 @@ pub struct Program {
     pub ifaces: Vec<sema::IfaceDef>,
     /// (interface, struct) pairs that need a vtable.
     pub vtables: Vec<(String, String)>,
-    /// Test names; test `i` is the function `test#i`.
-    pub tests: Vec<String>,
+    /// The tests; test `i` is the function `test#i` of its module.
+    pub tests: Vec<sema::TestDef>,
     /// Globals and their values.
     pub globals: Vec<sema::GlobalDef>,
 }

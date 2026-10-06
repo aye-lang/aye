@@ -9,7 +9,7 @@ const USAGE: &str = "usage (<path> is a .ore file, or a directory: a module of a
   ore emit-c <path> [--mode debug|safe|fast]
   ore check <path> [--json]
   ore fix <path>
-  ore test <path> [--filter <text>] [--json] [--mode debug|safe|fast]
+  ore test <path> [--filter <text>] [--module <module>] [--json] [--mode debug|safe|fast]
   ore fmt [--check] <path>      (<path>: a .ore file, or a directory searched recursively)
   ore doc --signatures <path>   (<path> may also be `std` or `std.<module>`)
   ore explain <code>
@@ -25,6 +25,8 @@ struct Args {
     mode: Mode,
     json: bool,
     filter: String,
+    /// `ore test --module m`: only the tests of module `m`.
+    module: Option<String>,
     /// `ore run ... -- args`: the program's arguments.
     prog_args: Vec<String>,
 }
@@ -32,7 +34,7 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let mut it = std::env::args().skip(1);
     let cmd = it.next().ok_or("missing command")?;
-    let (mut file, mut out, mut mode, mut json, mut filter) = (None, None, Mode::Debug, false, String::new());
+    let (mut file, mut out, mut mode, mut json, mut filter, mut module) = (None, None, Mode::Debug, false, String::new(), None);
     let mut prog_args = Vec::new();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -40,6 +42,7 @@ fn parse_args() -> Result<Args, String> {
             "-o" if cmd == "build" => out = Some(it.next().ok_or("`-o` needs a path")?),
             "--json" if cmd == "check" || cmd == "test" => json = true,
             "--filter" if cmd == "test" => filter = it.next().ok_or("`--filter` needs a text")?,
+            "--module" if cmd == "test" => module = Some(it.next().ok_or("`--module` needs a module path, such as `html`")?),
             "--mode" => {
                 let m = it.next().ok_or("`--mode` needs a value")?;
                 mode = Mode::parse(&m).ok_or(format!("unknown mode `{m}`"))?;
@@ -49,7 +52,7 @@ fn parse_args() -> Result<Args, String> {
         }
     }
     let file = file.ok_or("missing input file or directory")?;
-    Ok(Args { cmd, file, out, mode, json, filter, prog_args })
+    Ok(Args { cmd, file, out, mode, json, filter, module, prog_args })
 }
 
 fn main() -> ExitCode {
@@ -327,7 +330,7 @@ fn fix(path: &str) -> ExitCode {
 /// then stderr) indented; or with `--json` one JSON document. The exit
 /// status is 1 if a test failed or the file does not compile.
 fn test(args: &Args, root: Root) -> ExitCode {
-    let results = match driver::run_tests(root, args.mode, &args.filter) {
+    let results = match driver::run_tests(root, args.mode, &args.filter, args.module.as_deref()) {
         Ok(r) => r,
         Err(driver::TestError::Compile(ds)) => {
             if args.json {

@@ -29,8 +29,8 @@
 //! - `tests/example1/`: Example 1 of the design doc, the directory module
 //!   `app`, run in `ok`, `missing` and `invalid` (each with its own
 //!   `app.toml`, or none); `ore test app` runs its tests.
-//! - `ore run`, `ore build -o`, `ore check` and `ore test --filter` are also
-//!   run through the built binary.
+//! - `ore run`, `ore build -o`, `ore check`, `ore test --filter` and `ore
+//!   test --module` are also run through the built binary.
 
 use ore::diag::Diag;
 use ore::driver::{self, Mode};
@@ -316,6 +316,30 @@ fn cli_test_filter() -> Result<(), String> {
     Ok(())
 }
 
+/// `ore test DIR --module PATH` runs the tests of one module of the
+/// program; a module that imports a sibling, given on its own, gets a hint.
+fn cli_test_module() -> Result<(), String> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/modules");
+    let runs: &[(&[&str], &str, &str, i32)] = &[
+        (&["test", "modtests", "--module", "dom"], "test \"dom: basic\" ... ok\n\n1 passed; 0 failed\n", "", 0),
+        (&["test", "modtests", "--module", "nope"], "", "ore: no tests in module `nope` (modules with tests: `html`, `dom`)\n", 1),
+        (
+            &["test", "modtests/html"],
+            "",
+            "modtests/html/html.ore:1:8: error[E0081]: cannot find module `dom` (no directory `modtests/html/dom`; imports are \
+             found from the directory given to `ore`, and `modtests/dom` exists: give `modtests` instead, with `--module html` for `ore test`)\n",
+            1,
+        ),
+    ];
+    for (args, want_out, want_err, want_code) in runs {
+        let (out, err, code) = ore(&dir, args)?;
+        if out != *want_out || err != *want_err || code != Some(*want_code) {
+            return Err(format!("`ore {}`: {code:?}\n--- stdout\n{out}--- stderr\n{err}", args.join(" ")));
+        }
+    }
+    Ok(())
+}
+
 /// The `ore run` CLI end to end.
 fn cli_run(work: &Path) -> Result<(), String> {
     let _ = work;
@@ -470,6 +494,7 @@ fn main() {
         handles.push(("cli/ore check".to_string(), s.spawn(cli_check)));
         handles.push(("cli/ore explain".to_string(), s.spawn(cli_explain)));
         handles.push(("cli/ore test --filter".to_string(), s.spawn(cli_test_filter)));
+        handles.push(("cli/ore test --module".to_string(), s.spawn(cli_test_module)));
         handles.into_iter().map(|(n, h)| (n, h.join().unwrap())).collect()
     });
     let _ = std::fs::remove_dir_all(&work);

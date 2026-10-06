@@ -1,0 +1,15 @@
+pub struct Node {
+    depth: i64
+}
+
+pub fn deeper(n: Node) Node {
+    return Node { depth: plus(n.depth) }
+}
+
+fn plus(d: i64) i64 {
+    return d + 1
+}
+
+test "basic" {
+    @expectEqual(1, plus(0))
+}

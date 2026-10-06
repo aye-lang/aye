@@ -33,7 +33,7 @@ ore run <path> [--mode debug|safe|fast] [-- args...]  # build to a temp file and
 ore emit-c <path> [--mode debug|safe|fast]            # print the generated C
 ore check <path> [--json]                             # front end only: report errors, no C, no clang
 ore fix <path>                                        # apply the fix-its of `ore check` in place
-ore test <path> [--filter <text>] [--json] [--mode debug|safe|fast]   # run the root module's `test` blocks
+ore test <path> [--filter <text>] [--module <m>] [--json] [--mode debug|safe|fast]   # run the `test` blocks of every module
 ore fmt [--check] <path>                              # format in place (a directory: every .ore file under it)
 ore doc --signatures <path>                           # every pub declaration with its /// comment (also `std`, `std.text`)
 ore explain <code>                                    # explain an error code, with a wrong and a fixed example
@@ -127,8 +127,11 @@ file compiles afterwards and 1 otherwise.
 ## Test blocks (`ore test`)
 
 `test "name" { ... }` blocks sit next to the code. `ore build` and `ore run`
-leave them out; `ore test` runs each one (only those whose name contains the
-`--filter` text) in its own process, so a panic ends only that test. A test
+leave them out; `ore test` runs each one of every module of the program
+(std aside; only those whose name contains the `--filter` text, and with
+`--module html` only those of module `html`) in its own process, so a panic
+ends only that test. A test of another module than the root shows as
+`test "html: name"`. A test
 fails when it panics, fails an assertion, returns an error, or leaks memory
 from `@testAllocator()`:
 

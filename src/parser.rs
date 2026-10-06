@@ -497,7 +497,7 @@ impl Parser {
         self.tests += 1;
         let func =
             FnDecl { name, span, is_pub: false, is_extern: false, params: vec![], variadic: None, ret, bounds: vec![], body };
-        Ok(TestDecl { name: String::from_utf8_lossy(&bytes).into_owned(), func })
+        Ok(TestDecl { name: String::from_utf8_lossy(&bytes).into_owned(), module: String::new(), func })
     }
 
     fn enum_decl(&mut self, is_pub: bool) -> Result<EnumDecl> {

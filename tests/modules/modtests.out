@@ -1,0 +1,6 @@
+test "root" ... ok
+test "html: basic" ... ok
+test "html: private helper and a sibling module" ... ok
+test "dom: basic" ... ok
+
+4 passed; 0 failed

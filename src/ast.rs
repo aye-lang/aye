@@ -111,10 +111,13 @@ pub struct InterfaceDecl {
 }
 
 /// `test "name" { ... }`. The body is a function `test#N() !void`, where N
-/// counts the tests of the file from 0.
+/// counts the tests of the file from 0 (module resolution numbers them
+/// across the program and puts them in their module: `html::test#3`).
 #[derive(Debug, Clone)]
 pub struct TestDecl {
     pub name: String,
+    /// The module's path (`html`, `net.http`); empty for the root module.
+    pub module: String,
     pub func: FnDecl,
 }
 

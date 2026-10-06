@@ -266,8 +266,8 @@ pub struct Program {
     /// The (interface, struct) pairs that are converted to `dyn`; each one
     /// needs a vtable.
     pub vtables: Vec<(String, String)>,
-    /// Test names: test `i` is the function `test#i`.
-    pub tests: Vec<String>,
+    /// The tests: test `i` is the function `test#i` of its module.
+    pub tests: Vec<TestDef>,
     /// Top-level `let` constants and `var` globals, with their values.
     pub globals: Vec<GlobalDef>,
     /// The libraries of every `@link`, in order of first appearance.
@@ -320,9 +320,25 @@ pub struct IfaceMethod {
     pub ret: Type,
 }
 
-/// The function `name` is a test (`test#N`).
+/// A `test` block.
+#[derive(Debug, Clone)]
+pub struct TestDef {
+    /// The module's path; empty for the root module.
+    pub module: String,
+    pub name: String,
+}
+
+impl TestDef {
+    /// The name `ore test` shows: `name`, or `module: name` outside the
+    /// root module.
+    pub fn shown(&self) -> String {
+        if self.module.is_empty() { self.name.clone() } else { format!("{}: {}", self.module, self.name) }
+    }
+}
+
+/// The function `name` is a test (`test#N`, `html::test#N`).
 pub fn is_test(name: &str) -> bool {
-    name.starts_with("test#")
+    name.rsplit("::").next().is_some_and(|n| n.starts_with("test#"))
 }
 
 #[derive(Debug, Clone)]
@@ -978,7 +994,7 @@ impl<'a> Checker<'a> {
                     continue;
                 }
                 ast::Item::Test(t) => {
-                    if tests.iter().any(|x| x.name == t.name) {
+                    if tests.iter().any(|x| x.name == t.name && x.module == t.module) {
                         self.report(Error::new(E0015, t.func.span, format!("test \"{}\" is defined more than once", t.name)));
                         continue;
                     }
@@ -1267,7 +1283,7 @@ impl<'a> Checker<'a> {
             errors: std::mem::take(&mut self.error_names),
             ifaces,
             vtables,
-            tests: tests.iter().map(|t| t.name.clone()).collect(),
+            tests: tests.iter().map(|t| TestDef { module: t.module.clone(), name: t.name.clone() }).collect(),
             globals,
             links: std::mem::take(&mut self.links),
         }
