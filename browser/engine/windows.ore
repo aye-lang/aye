@@ -49,6 +49,7 @@ fn installFrames(s: *mut Script, o: u32) JsError!void {
     try defMethod(it, o, "contentWindow", 1, akContentWindow)
     try defMethod(it, o, "contentDocument", 1, akContentDocument)
     try defMethod(it, o, "documentUrl", 1, akDocumentUrl)
+    try defMethod(it, o, "documentBase", 1, akDocumentBase)
     try defMethod(it, o, "documentWindow", 1, akDocumentWindow)
     try defMethod(it, o, "postMessage", 3, akPostMessage)
     try defMethod(it, o, "winDocument", 1, akWinDocument)
@@ -319,6 +320,24 @@ fn akDocumentUrl(it: *mut Interp, a: Args) JsError!Value {
         return it.newString(s.active.url.href)
     }
     return it.newString(s.page.url.href)
+}
+
+// The base URL of the document of node argument 0, computed at each
+// call so that a `base` element added or changed by a script counts.
+// about:blank and about:srcdoc documents keep the one they got from
+// their parent when they were made (`Page.base`).
+fn akDocumentBase(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    var p = s.page
+    if handleOf(it, it.arg(a, 0), TAG_NODE) |h| {
+        p = s.active
+    }
+    if text.startsWith(p.url.href, "about:") {
+        return it.newString(p.base.href)
+    }
+    var base = try documentBase(it.alloc, &p.doc, &p.url)
+    defer base.deinit(it.alloc)
+    return it.newString(base.href)
 }
 
 // The window of the document argument 0.

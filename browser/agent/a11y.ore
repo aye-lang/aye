@@ -587,6 +587,9 @@ fn nativeRole(ax: *Ax, el: NodeId) []u8 {
     if text.eql(name, "li") {
         return "listitem"
     }
+    if text.eql(name, "canvas") {
+        return "img"
+    }
     if text.eql(name, "img") {
         if p.doc.attr(el, "alt") |alt| {
             if alt.len == 0 {
@@ -904,6 +907,10 @@ fn nativeName(ax: *mut Ax, el: NodeId, b: *mut text.Builder) AllocError!void {
                 cur = dom.flatParent(&p.doc, c)
             }
         }
+        return
+    }
+    if text.eql(name, "canvas") {
+        try contentText(ax, el, b, true)
         return
     }
     if text.eql(name, "img") || text.eql(name, "area") {

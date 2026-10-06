@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0 }
+.s { display: grid; justify-items: center; width: 600px }
+.g { display: grid; width: 100%; max-width: calc(100% - 32px); grid-template-columns: repeat(4, 1fr); column-gap: 10px }
+.wide { grid-column: 1 / span 3 }
+img { width: 100%; height: 50px; display: block }
+</style>
+<!-- An image of width: 100% adds nothing to the min-content width: the
+     grid keeps to its 568px (BBC News). -->
+<section class="s"><div class="g"><div class="wide"><img src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%221200%22 height=%22100%22/%3E" alt=""></div><div>side</div></div></section>
+<table><tr><td><img src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22900%22 height=%22100%22/%3E" alt=""></td><td>cell</td></tr></table>

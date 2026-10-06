@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<style>
+@scope (.card) to (.content) {
+  img { visibility: hidden }
+  :scope { font-weight: 700 }
+  > p { font-style: italic }
+}
+@scope (.media) {
+  p { color: green }
+}
+p { color: red }
+</style>
+<div class="card">bold
+  <img alt="hidden">
+  <p>italic</p>
+  <div class="content"><img alt="shown"><p>not italic</p></div>
+</div>
+<div class="media"><p>green: at equal specificity, a scoped rule beats one in no scope</p></div>
+<img alt="shown: not in a card">
+<section>
+  <style>@scope { span { text-decoration-line: underline } }</style>
+  <span>underlined: inside the style element's parent</span>
+</section>
+<span>not underlined</span>

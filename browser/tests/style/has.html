@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<style>
+div:has(img) { color: red }
+div:has(> p.direct) { font-weight: 700 }
+h2:has(+ p) { font-style: italic }
+h3:has(~ .later) { text-align: right }
+section:has(.a .b) { white-space: pre }
+article:not(:has(span)) { color: green }
+.card:has(input:checked) { text-decoration-line: underline }
+ul:has(li:nth-child(3)) { color: blue }
+:has(> .missing, > .there) { visibility: hidden }
+</style>
+<div id="d1"><span><img alt=""></span>red: an img inside</div>
+<div id="d2"><span><p class="direct">not a child</p></span>not bold</div>
+<div id="d3"><p class="direct">child</p>bold</div>
+<h2>italic: a p follows</h2>
+<p>p</p>
+<h2>not italic</h2>
+<h3>right: a .later follows</h3>
+<p>x</p>
+<p class="later">later</p>
+<section><div class="a"><i class="b">pre</i></div></section>
+<section><div class="b"><i class="a">normal</i></div></section>
+<article>green: no span</article>
+<article><span>not green</span></article>
+<div class="card"><input type="checkbox" checked>underlined</div>
+<ul><li>1</li><li>2</li><li>3</li></ul>
+<ul><li>1</li></ul>
+<div id="vis"><b class="there">hidden parent</b></div>

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<title>Members of element interfaces</title>
+<pre id="out"></pre>
+<form id="f"><input id="i" name="q" value="v" required><select id="s"><option selected>o</option></select></form>
+<a id="a" href="/x">link</a>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+// HTMLElement has only its own members; the others are on the interfaces
+// of the elements that have them.
+const names = ['value', 'href', 'src', 'text', 'type', 'name', 'form', 'disabled', 'checked', 'validity', 'checkValidity', 'submit', 'contentWindow'];
+function has(el) { return names.filter(n => n in el).join(' ') || '-'; }
+log('div', has(document.createElement('div')));
+log('custom', has(document.createElement('x-thing')));
+log('input', has(document.getElementById('i')));
+log('a', has(document.getElementById('a')));
+log('form', has(document.getElementById('f')));
+log('select', has(document.getElementById('s')));
+log('option', has(document.querySelector('option')));
+log('iframe', has(document.createElement('iframe')));
+log('HTMLElement.prototype', has(HTMLElement.prototype));
+// They still work where they belong.
+const i = document.getElementById('i');
+log('input values', i.value, i.name, i.type, i.required, i.form.id, i.validity.valid, i.checkValidity());
+log('anchor', document.getElementById('a').href.endsWith('/x'), document.getElementById('a').text);
+log('select', document.getElementById('s').value, document.getElementById('s').selectedIndex);
+</script>

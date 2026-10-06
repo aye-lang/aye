@@ -1,0 +1,14 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "baseURI"
+      "\n"
+    <body>
+      <pre id="out">
+        "no base: true true /jsdom/base_uri.html\ndetached: true true\nrelative base: /jsdom/sub/dir/ /jsdom/sub/dir/\nnew URL: /jsdom/sub/dir/x.json /jsdom/sub/y.json\nabsolute base: https://example.com/a/b https://example.com/a/x.json\nfirst base wins: https://example.com/a/b\nfirst with href wins: https://example.org/\nremoved: true\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst out = document.getElementById('out');\nconst tail = (s) => s.slice(s.lastIndexOf('/jsdom/'));\nlog('no base:', document.baseURI === document.URL, out.baseURI === document.URL, tail(document.baseURI));\nconst detached = document.createElement('span');\nlog('detached:', detached.baseURI === document.URL, document.createTextNode('t').baseURI === document.URL);\nconst base = document.createElement('base');\nbase.setAttribute('href', 'sub/dir/');\ndocument.head.appendChild(base);\nlog('relative base:', tail(document.baseURI), tail(out.baseURI));\nlog('new URL:', tail(new URL('x.json', document.baseURI).href), tail(new URL('../y.json', document.baseURI).href));\nbase.setAttribute('href', 'https://example.com/a/b');\nlog('absolute base:', document.baseURI, new URL('x.json', document.baseURI).href);\nconst second = document.createElement('base');\nsecond.setAttribute('href', 'https://example.org/');\ndocument.head.appendChild(second);\nlog('first base wins:', document.baseURI);\nbase.removeAttribute('href');\nlog('first with href wins:', document.baseURI);\nsecond.remove();\nbase.remove();\nlog('removed:', document.baseURI === document.URL);\n"
+      "\n"

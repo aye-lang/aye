@@ -1,0 +1,53 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <div class="u">
+      display: block
+      text-transform: uppercase
+      <p>
+        display: block
+        margin-top: 16px
+        margin-bottom: 16px
+        text-transform: uppercase
+      <p class="l">
+        display: block
+        margin-top: 16px
+        margin-bottom: 16px
+        text-transform: lowercase
+      <p class="n">
+        display: block
+        margin-top: 16px
+        margin-bottom: 16px
+      <p class="i">
+        display: block
+        margin-top: 16px
+        margin-bottom: 16px
+      <p class="un">
+        display: block
+        margin-top: 16px
+        margin-bottom: 16px
+        text-transform: uppercase
+      <div class="c">
+        display: block
+        text-transform: capitalize
+        <span class="inh">
+          text-transform: capitalize
+      <p class="bad">
+        display: block
+        margin-top: 16px
+        margin-bottom: 16px
+        text-transform: uppercase
+    <p class="fw">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      text-transform: full-width

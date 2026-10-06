@@ -1,7 +1,8 @@
 // css: style sheets and computed style.
 //
 // - tokenizer.ore: CSS Syntax tokens.
-// - parser.ore: style sheets (rules, declarations, `@media`; other
+// - parser.ore: style sheets (rules, declarations, nesting, `@media`,
+//   `@supports`, `@layer`, `@container`, `@scope`, `@property`; other
 //   at-rules are skipped) into a `Sheet`, with error recovery.
 // - selector.ore: selectors (parsing, specificity, matching).
 // - values.ore: property values (lengths, colors, keywords, shorthands).
@@ -17,6 +18,7 @@
 import dom.NodeId
 import std.heap.Arena
 import std.list.List
+import std.map.StrMap
 import std.mem.AllocError
 import std.mem.Allocator
 
@@ -103,7 +105,7 @@ pub struct Property {
     initial: Value
 }
 
-pub let NPROPS: usize = 105
+pub let NPROPS: usize = 111
 
 pub let DISPLAY: usize = 0
 pub let POSITION: usize = 1
@@ -201,6 +203,17 @@ pub let BORDER_TOP_LEFT_RADIUS: usize = 98
 pub let BOX_SHADOW: usize = 102
 pub let STROKE_DASHARRAY: usize = 103
 pub let STROKE_DASHOFFSET: usize = 104
+// `@container` (cascade.ore): what kind of query container an element is
+// and its names (as text).
+pub let CONTAINER_TYPE: usize = 105
+pub let CONTAINER_NAME: usize = 106
+// The indent of the first line of a block container (layout/inline.ore).
+pub let TEXT_INDENT: usize = 107
+// How grid items sit across their area (layout/grid.ore).
+pub let JUSTIFY_ITEMS: usize = 108
+pub let JUSTIFY_SELF: usize = 109
+// `text-transform` (layout/inline.ore).
+pub let TEXT_TRANSFORM: usize = 110
 
 let DISPLAYS = "inline block list-item inline-block table inline-table table-row-group table-header-group table-footer-group table-row table-cell table-column-group table-column table-caption flex inline-flex grid inline-grid flow-root contents none"
 let BORDER_STYLES = "none hidden dotted dashed solid double groove ridge inset outset"
@@ -211,7 +224,7 @@ let ALIGNS = "normal stretch flex-start flex-end start end self-start self-end c
 let BLACK = Color { r: 0, g: 0, b: 0, a: 1.0 }
 let TRANSPARENT = Color { r: 0, g: 0, b: 0, a: 0.0 }
 
-pub let PROPERTIES = [105]Property{
+pub let PROPERTIES = [111]Property{
     Property { name: "display", inherited: false, kind: PKind.Keywords, keywords: DISPLAYS, initial: Value.Keyword { k: "inline" } },
     Property { name: "position", inherited: false, kind: PKind.Keywords, keywords: "static relative absolute fixed sticky", initial: Value.Keyword { k: "static" } },
     Property { name: "color", inherited: true, kind: PKind.Color, keywords: "", initial: Value.Rgba { c: BLACK } },
@@ -318,6 +331,13 @@ pub let PROPERTIES = [105]Property{
     Property { name: "box-shadow", inherited: false, kind: PKind.Layers, keywords: "none", initial: Value.Keyword { k: "none" } },
     Property { name: "stroke-dasharray", inherited: true, kind: PKind.Layers, keywords: "none", initial: Value.Keyword { k: "none" } },
     Property { name: "stroke-dashoffset", inherited: true, kind: PKind.LineHeight, keywords: "", initial: Value.Px { v: 0.0 } },
+    Property { name: "container-type", inherited: false, kind: PKind.Keywords, keywords: "normal size inline-size", initial: Value.Keyword { k: "normal" } },
+    Property { name: "container-name", inherited: false, kind: PKind.Raw, keywords: "none", initial: Value.Keyword { k: "none" } },
+    Property { name: "text-indent", inherited: true, kind: PKind.Length, keywords: "", initial: Value.Px { v: 0.0 } },
+    Property { name: "justify-items", inherited: false, kind: PKind.Keywords, keywords: "normal stretch start end center left right flex-start flex-end self-start self-end baseline legacy", initial: Value.Keyword { k: "normal" } },
+    Property { name: "justify-self", inherited: false, kind: PKind.Keywords, keywords: "auto normal stretch start end center left right flex-start flex-end self-start self-end baseline", initial: Value.Keyword { k: "auto" } },
+    // `full-width` and `full-size-kana` are accepted and lay out as `none`.
+    Property { name: "text-transform", inherited: true, kind: PKind.Keywords, keywords: "none uppercase lowercase capitalize full-width full-size-kana", initial: Value.Keyword { k: "none" } },
 }
 
 /// The index of the longhand property `name` (lower case).
@@ -328,6 +348,17 @@ pub fn propertyIndex(name: []u8) ?usize {
         }
     }
     return null
+}
+
+// Ranks the sublayers of `p` (in the order they were made), then `p`.
+fn rankLayer(layers: []mut Layer, p: u32, next: *mut u32) {
+    for k in 1..layers.len {
+        if layers[k].parent == p && k as u32 != p {
+            rankLayer(layers, k as u32, next)
+        }
+    }
+    layers[p].rank = next.*
+    next.* += 1
 }
 
 fn eqlBytes(a: []u8, b: []u8) bool {
@@ -368,6 +399,33 @@ pub struct Rule {
     sel_end: usize
     decl_start: usize
     decl_end: usize
+    // Its cascade layer: an index of `Sheet.layers` (0: not in a layer).
+    layer: u32
+    // The `@container` condition it is under: 1 + an index of
+    // `Sheet.conditions`; 0 for none.
+    cond: u32
+    // In `@scope`: at equal specificity, it wins over rules in none.
+    scoped: bool
+}
+
+/// A cascade layer (`@layer`): `name` is the full dotted name ("" for an
+/// anonymous layer), `parent` the layer it is in (0: none). `rank` orders
+/// the layers for the cascade: the sublayers of a layer come before its
+/// own rules, layers in the order they were first declared, and rules in
+/// no layer last (`rankLayers`).
+pub struct Layer {
+    name: []u8
+    parent: u32
+    rank: u32
+}
+
+/// An `@container` condition: the container's name ("" for the nearest
+/// container), the condition's tokens, and the condition of an
+/// enclosing `@container` (1 + index; 0 for none).
+pub struct ContainerCondition {
+    name: []u8
+    toks: []Token
+    parent: u32
 }
 
 /// The sheet of a shadow tree: its `style` and `link` elements and the
@@ -391,11 +449,27 @@ pub struct Sheet {
     // The URLs of the `@import` rules whose media match, as the parser
     // met them (the loader fetches them: engine/sheets.ore).
     imports: List([]u8)
+    // The layer each of `imports` goes into (`layer`, `layer(name)`; 0
+    // when in none: the importing sheet's).
+    import_layers: List(u32)
     // The `@font-face` rules (fontface.ore).
     font_faces: List(FontFace)
     // The URL that the `url()`s of the source being parsed are relative
     // to ("": they stay as written); set by the loader around a parse.
     base: []u8
+    // The cascade layers; the first is the place of rules in no layer.
+    layers: List(Layer)
+    // The layer the rules of the source being parsed go into (an
+    // imported sheet's `layer()`); set by the loader around a parse.
+    base_layer: u32
+    // The `@container` conditions of rules.
+    conditions: List(ContainerCondition)
+    // `@property`: the initial values of registered custom properties.
+    registered: StrMap([]Token)
+    // The element that a `@scope` without a prelude scopes to while the
+    // source being parsed is a `style` element's (its parent); set by
+    // the loader.
+    scope_root: ?NodeId
     // The document's author sheet: the sheets of its shadow trees
     // (`addScoped`), which apply in those trees only (cascade.ore).
     scoped: List(Scoped)
@@ -411,6 +485,14 @@ pub struct Sheet {
             alloc.destroy(arena)
             return e
         }
+        var layers = List(Layer).init(a)
+        layers.append(Layer { name: "", parent: 0, rank: 0 }) catch |e| {
+            index.deinit()
+            alloc.destroy(index)
+            arena.deinit()
+            alloc.destroy(arena)
+            return e
+        }
         return Sheet {
             alloc: alloc,
             arena: arena,
@@ -420,11 +502,41 @@ pub struct Sheet {
             simples: List(Simple).init(a),
             decls: List(Decl).init(a),
             imports: List([]u8).init(a),
+            import_layers: List(u32).init(a),
             font_faces: List(FontFace).init(a),
             base: "",
+            layers: layers,
+            base_layer: 0,
+            conditions: List(ContainerCondition).init(a),
+            registered: StrMap([]Token).init(a),
+            scope_root: null,
             scoped: List(Scoped).init(a),
             index: index,
         }
+    }
+
+    /// The layer named `name` (a full dotted name) inside the layer
+    /// `parent`, made when it does not exist yet.
+    pub fn layerNamed(self: *mut Self, parent: u32, name: []u8) AllocError!u32 {
+        let layers = self.layers.items()
+        for i, l in layers {
+            if i > 0 && l.name.len > 0 && l.parent == parent && eqlBytes(l.name, name) {
+                return i as u32
+            }
+        }
+        return self.newLayer(parent, name)
+    }
+
+    /// A new layer in `parent` (`name` "" for an anonymous one).
+    pub fn newLayer(self: *mut Self, parent: u32, name: []u8) AllocError!u32 {
+        try self.layers.append(Layer { name: name, parent: parent, rank: 0 })
+        return (self.layers.len() - 1) as u32
+    }
+
+    /// Orders the layers (`Layer.rank`) after layers were added.
+    pub fn rankLayers(self: *mut Self) {
+        var next: u32 = 0
+        rankLayer(self.layers.items(), 0, &mut next)
     }
 
     pub fn deinit(self: *mut Self) {

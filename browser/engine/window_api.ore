@@ -27,7 +27,9 @@ fn installWindow(s: *mut Script) JsError!void {
     let it = &mut s.it
     let o = try it.newObject(it.object_proto)
     try it.defineValue(it.global, "__ak", js.objVal(o))
+    try it.defineValue(it.global, "__canvasHost", js.objVal(o))
     try defMethod(it, o, "now", 0, akNow)
+    try defMethod(it, o, "markHtmlDda", 1, akMarkHtmlDda)
     try defMethod(it, o, "report", 1, akReport)
     try defMethod(it, o, "compile", 1, akCompile)
     try defMethod(it, o, "evalGlobal", 1, akEvalGlobal)
@@ -58,7 +60,9 @@ fn installWindow(s: *mut Script) JsError!void {
     try defMethod(it, o, "supports", 1, akSupports)
     try installFrames(s, o)
     try installGeometry(s, o)
+    try installCssom(s, o)
     try installComponents(s, o)
+    try installCanvas(it, o)
 
     let c = try it.newObject(it.object_proto)
     try it.defineValue(it.global, "console", js.objVal(c))
@@ -105,6 +109,17 @@ fn akNow(it: *mut Interp, a: Args) JsError!Value {
     let s = scriptOf(it)
     tick(s)
     return js.numVal(s.now)
+}
+
+// Gives the object argument 0 [[IsHTMLDDA]] (for `document.all`).
+fn akMarkHtmlDda(it: *mut Interp, a: Args) JsError!Value {
+    match it.arg(a, 0) {
+        .Obj { o } => {
+            it.heap.obj(o).htmldda = true
+        }
+        _ => {}
+    }
+    return Value.Undefined
 }
 
 // Reports an exception a listener threw, and goes on.
@@ -578,7 +593,7 @@ fn computedStyling(s: *mut Script) AllocError!*mut Styling {
             if c.version == s.style_version {
                 return c
             }
-            let key = sheetsKey(&p.doc)
+            let key = sheetSourceKey(&p.doc)
             if key == s.computed_sheets {
                 c.styles.deinit()
                 c.styles = try css.Styles.init(s.alloc)
@@ -600,14 +615,8 @@ fn computedStyling(s: *mut Script) AllocError!*mut Styling {
     errdefer styles.deinit()
     let c = try p.alloc.create(Styling { media: media, ua: ua, author: author, styles: styles, version: s.style_version })
     s.computed = c
-    s.computed_sheets = sheetsKey(&p.doc)
+    s.computed_sheets = sheetSourceKey(&p.doc)
     return c
-}
-
-// What the author style sheets come from: the style elements (their text)
-// and the stylesheet links (their href and rel), hashed into a number.
-fn sheetsKey(doc: *Document) u64 {
-    return sheetSourceKey(doc)
 }
 
 fn dropComputed(s: *mut Script) {

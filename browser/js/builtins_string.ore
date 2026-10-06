@@ -350,9 +350,10 @@ fn stringSubstr(it: *mut Interp, a: Args) JsError!Value {
     return substringOf(it, s, from, to)
 }
 
-// Upper or lower case of a code point (ASCII, Latin-1, Latin
-// Extended-A, the DŽ/LJ/NJ digraphs, Greek, Cyrillic).
-fn caseMap(cp: u32, upper: bool) u32 {
+/// Upper or lower case of a code point (ASCII, Latin-1, Latin
+/// Extended-A, the DŽ/LJ/NJ digraphs, Greek, Cyrillic). The result has
+/// the same UTF-8 length. Also used by layout for `text-transform`.
+pub fn caseMap(cp: u32, upper: bool) u32 {
     if cp >= 0x1C4 && cp <= 0x1CC {
         let base = 0x1C4 + ((cp - 0x1C4) / 3) * 3
         if upper {

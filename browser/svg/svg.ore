@@ -22,8 +22,10 @@
 // `stroke-dasharray`, `stroke-dashoffset`, `opacity` (a group's drawn
 // into a layer of its own, then blended), `display: none` and
 // `visibility`; the `clip-path` attribute (a `clipPath` of shapes in user
-// space, `clip-rule`). Content inside a `use` inherits from the `use`.
-// Left out: text, images, patterns, masks, markers, filters.
+// space, `clip-rule`), and the `mask` attribute as a clip to the union of
+// the mask's shapes. Content inside a `use` inherits from the `use`.
+// Left out: text, images, patterns, luminance and partial masks,
+// markers, filters.
 
 import css
 import css.Value
@@ -535,10 +537,29 @@ struct Builder {
 
     // The clip path of `el` (its `clip-path` attribute: a `clipPath` in
     // user space) as its index in `Picture.clips` plus 1; 0 for none.
+    // A `mask` (the `mask` attribute) clips the same way, to the union of
+    // its shapes: what icons' masks of white or opaque shapes do.
     fn clipPathOf(self: *mut Self, el: NodeId, ctx: Ctx) AllocError!usize {
-        let attr = self.doc.attr(el, "clip-path") orelse return 0
-        let target = idRef(self.doc, attr) orelse return 0
-        if !self.doc.isElement(target, "clippath") || self.clip_depth > 2 {
+        var target = el
+        if self.doc.attr(el, "clip-path") |attr| {
+            target = idRef(self.doc, attr) orelse return 0
+            if !self.doc.isElement(target, "clippath") {
+                return 0
+            }
+        } else if self.doc.attr(el, "mask") |attr| {
+            target = idRef(self.doc, attr) orelse return 0
+            if !self.doc.isElement(target, "mask") {
+                return 0
+            }
+            if self.doc.attr(target, "maskcontentunits") |u| {
+                if text.eql(text.trim(u), "objectBoundingBox") {
+                    return 0
+                }
+            }
+        } else {
+            return 0
+        }
+        if self.clip_depth > 2 {
             return 0
         }
         if self.doc.attr(target, "clippathunits") |u| {

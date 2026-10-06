@@ -301,7 +301,7 @@ fn clientAreas(s: *mut Script, el: NodeId, out: *mut List(Area)) AllocError!void
 
 // The smallest rectangle around `areas` that are not empty (the first
 // one when all are), as getBoundingClientRect.
-fn bounds(areas: []Area) Area {
+fn areaBounds(areas: []Area) Area {
     if areas.len == 0 {
         return Area { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }
     }
@@ -594,7 +594,7 @@ fn offsetMetric(s: *mut Script, g: *Geometry, el: NodeId, k: i64) AllocError!f64
         return 0.0
     }
     if k == 2 || k == 3 {
-        let r = bounds(areas.items())
+        let r = areaBounds(areas.items())
         if k == 2 {
             return math.round(r.w)
         }

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<title>CSSOM rules reach the cascade</title>
+<style data-styled="">.ssr { color: red }/*!sc*/
+.keep { font-style: italic }</style>
+<style id="plain">#a { font-weight: 700 } @media screen { #b { font-weight: 700 } } #c { text-align: right }</style>
+<style id="off">#d { text-align: center }</style>
+<p id="a" class="ssr keep">a: green (inserted), italic (from the removed tag), bold</p>
+<p id="b">b: bold (@media from the text), underlined (inserted at 0)</p>
+<p id="c">c: left (rule deleted)</p>
+<p id="d">d: left (sheet disabled)</p>
+<p id="e">e: right (adopted sheet)</p>
+<p id="f">f: 24px (inserted into a new empty style element)</p>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+// styled-components: reads the server's tag, removes it and inserts its
+// rules into a new tag through the CSSOM.
+const ssr = document.querySelector('style[data-styled]');
+const text = ssr.textContent;
+ssr.remove();
+const tag = document.createElement('style');
+tag.setAttribute('data-styled', 'active');
+document.head.appendChild(tag);
+const sheet = tag.sheet;
+let n = 0;
+for (const part of text.split('/*!sc*/')) if (part.trim()) sheet.insertRule(part.trim(), n++);
+sheet.insertRule('#a { color: green }', n++);
+sheet.insertRule('#f { font-size: 24px }', n++);
+log(sheet.cssRules.length, sheet.cssRules[0].selectorText, sheet.cssRules[2].cssText);
+try { sheet.insertRule('#x { color: red }', 99); } catch (e) { log(e.name); }
+
+const plain = document.getElementById('plain').sheet;
+log(plain.cssRules.length, plain.cssRules[1].type, plain.cssRules[1].media.mediaText);
+plain.insertRule('#b { text-decoration: underline }', 0);
+plain.deleteRule(3);
+log(plain.cssRules.length, plain.cssRules[3] === undefined);
+
+document.getElementById('off').sheet.disabled = true;
+
+const adopted = new CSSStyleSheet();
+adopted.replaceSync('#e { text-align: right } #e { color: blue }');
+adopted.deleteRule(1);
+document.adoptedStyleSheets = [adopted];
+log(adopted.cssRules.length, document.adoptedStyleSheets.length);
+</script>

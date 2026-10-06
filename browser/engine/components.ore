@@ -49,6 +49,7 @@ fn installComponents(s: *mut Script, ak: u32) JsError!void {
     try defMethod(it, ak, "customIn", 2, akCustomIn)
     try defMethod(it, ak, "ceState", 1, akCeState)
     try defMethod(it, ak, "setCeState", 2, akSetCeState)
+    try defMethod(it, ak, "inTemplate", 1, akInTemplate)
     try defMethod(it, ak, "setAdopted", 2, akSetAdopted)
 }
 
@@ -367,6 +368,15 @@ fn akCeState(it: *mut Interp, a: Args) JsError!Value {
         return js.numVal(docOf(it).node(h).ce as f64)
     }
     return js.numVal(0.0)
+}
+
+// inTemplate(node): is the node in the contents of a template (of its
+// inert document)?
+fn akInTemplate(it: *mut Interp, a: Args) JsError!Value {
+    if handleOf(it, it.arg(a, 0), TAG_NODE) |h| {
+        return js.boolVal(docOf(it).inTemplateContent(h))
+    }
+    return js.boolVal(false)
 }
 
 fn akSetCeState(it: *mut Interp, a: Args) JsError!Value {

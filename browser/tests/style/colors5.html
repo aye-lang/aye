@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<style>
+/* CSS Color 4 spaces, converted to sRGB. The comments are Chrome's
+   canvas pixels for the same color. */
+.a { color: oklch(92% .004 286.32) }        /* 228,228,231 */
+.b { color: oklch(0.21 0.006 285.885) }     /* 24,24,27 */
+.c { color: oklch(62.8% 0.2577 29.23) }     /* 255,0,0 */
+.d { color: oklch(70% 0.1 200 / 50%) }      /* 64,177,183 / 0.5 */
+.e { color: oklab(0.5 0.1 -0.1) }           /* 129,69,154 */
+.f { color: oklab(40% 25% -25%) }           /* 99,40,123 */
+.g { color: lab(50 40 -20) }                /* 171,90,154 */
+.h { color: lab(29.2345% 39.3825 20.0664) } /* 125,35,41 */
+.i { color: lch(52.2% 72.2 56.2deg) }       /* 198,93,6 */
+.j { color: lch(50% 0 none) }               /* 119,119,119 */
+.k { color: hwb(120 20% 30%) }              /* 51,179,51 */
+.l { color: hwb(0.5turn 60% 60%) }          /* 128,128,128 */
+.m { color: oklch(1 0 0) }                  /* 255,255,255 */
+/* Out of gamut, clipped: 0,175,0 */
+.n { color: oklch(0.6 0.4 145) }
+/* Invalid: commas, a percentage hue, a fourth component without `/`. */
+.bad1 { color: green; color: oklch(0.5, 0.1, 200) }
+.bad2 { color: green; color: oklch(0.5 0.1 50%) }
+.bad3 { color: green; color: lab(50 20 20 0.5) }
+/* Tailwind 4: palette variables used through var(). */
+:root { --zinc-200: oklch(92% .004 286.32) }
+.v { background-color: var(--zinc-200) }
+</style>
+<p class="a">a</p><p class="b">b</p><p class="c">c</p><p class="d">d</p><p class="e">e</p>
+<p class="f">f</p><p class="g">g</p><p class="h">h</p><p class="i">i</p><p class="j">j</p>
+<p class="k">k</p><p class="l">l</p><p class="m">m</p><p class="n">n</p>
+<p class="bad1">bad1</p><p class="bad2">bad2</p><p class="bad3">bad3</p><p class="v">v</p>

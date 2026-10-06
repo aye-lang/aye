@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<title>Custom element reactions on moves</title>
+<pre id="out"></pre>
+<div id="a"></div><div id="b"></div>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+class Logged extends HTMLElement {
+  connectedCallback() { log('connected', this.id); }
+  disconnectedCallback() { log('disconnected', this.id); }
+}
+customElements.define('x-logged', Logged);
+const a = document.getElementById('a'), b = document.getElementById('b');
+const x = document.createElement('x-logged');
+x.id = 'x';
+log('-- insert');
+a.appendChild(x);
+// A move between connected parents disconnects, then connects.
+log('-- move to b');
+b.appendChild(x);
+log('-- insertBefore in place');
+b.insertBefore(x, null);
+log('-- into a fragment');
+const f = document.createDocumentFragment();
+f.appendChild(x);
+log('-- fragment into a');
+a.appendChild(f);
+log('-- remove');
+x.remove();
+// Reactions follow the tree, not an overridden isConnected (ShadyDOM
+// turns a fragment into a shadow root that is connected with its host).
+const fake = document.createDocumentFragment();
+Object.defineProperty(fake, 'isConnected', { get: () => true });
+const y = document.createElement('x-logged');
+y.id = 'y';
+log('-- into a fragment that says it is connected');
+fake.appendChild(y);
+log('-- from it into b');
+b.appendChild(fake);
+
+// A parent whose connectedCallback moves a child that is not upgraded
+// yet: the child is upgraded and connected once.
+class Parent extends HTMLElement {
+  connectedCallback() {
+    log('connected', this.id);
+    this.appendChild(this.firstElementChild);
+  }
+}
+const holder = document.createElement('div');
+holder.innerHTML = '<x-parent id="p"><x-child id="c1"></x-child><x-child id="c2"></x-child></x-parent>';
+customElements.define('x-parent', Parent);
+customElements.define('x-child', class extends Logged {});
+log('-- connect parent');
+document.body.appendChild(holder);
+</script>

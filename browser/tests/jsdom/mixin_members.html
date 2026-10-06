@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<title>ParentNode and ChildNode members</title>
+<pre id="out"></pre>
+<div id="d"><b>1</b>text<i>2</i></div>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+// The mixins are on the interfaces that include them, not on Node:
+// ShadyDOM saves each native member from exactly there.
+const own = (P, names) => names.split(' ').filter(n => Object.getOwnPropertyDescriptor(P, n)).join(' ') || '-';
+const parent = 'children firstElementChild lastElementChild childElementCount querySelector querySelectorAll append prepend replaceChildren';
+const child = 'before after replaceWith remove';
+log('Node', own(Node.prototype, parent + ' ' + child));
+log('Element', own(Element.prototype, parent + ' ' + child));
+log('Document', own(Document.prototype, parent));
+log('DocumentFragment', own(DocumentFragment.prototype, parent));
+log('CharacterData', own(CharacterData.prototype, child));
+log('DocumentType', own(DocumentType.prototype, child));
+// They work on each.
+const d = document.getElementById('d');
+log('element', d.children.length, d.firstElementChild.tagName, d.lastElementChild.tagName, d.childElementCount);
+const f = document.createDocumentFragment();
+f.append('a', document.createElement('span'));
+log('fragment', f.children.length, f.querySelector('span') !== null);
+log('document', document.children.length, document.firstElementChild.tagName);
+const t = d.childNodes[1];
+t.after('!');
+t.remove();
+log('text', d.textContent, 'children' in t);
+</script>

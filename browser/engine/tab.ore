@@ -22,6 +22,8 @@ pub struct Tab {
     current: usize
     // The vertical scroll offset of the page, in CSS px.
     scroll: f64
+    // The horizontal one (a page wider than the window).
+    scroll_x: f64
     // After the next layout (`settle`): the scroll offset to go back to,
     // or else the fragment to scroll to (owned; empty for none).
     restore: ?f64
@@ -34,6 +36,7 @@ pub struct Tab {
             entries: List(Entry).init(alloc),
             current: 0,
             scroll: 0.0,
+            scroll_x: 0.0,
             restore: null,
             fragment: alloc.alloc(0 as u8, 0) catch unreachable,
         }
@@ -193,6 +196,7 @@ pub struct Tab {
         }
         self.page = p
         self.scroll = 0.0
+        self.scroll_x = 0.0
     }
 
     /// After a layout of the page: scrolls to where the last navigation

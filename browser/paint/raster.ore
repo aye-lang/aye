@@ -2,6 +2,7 @@
 // rectangles, opaque and alpha-blended rectangle fills, and coverage
 // masks (antialiased glyphs) blended in a color.
 
+import std
 import std.list.List
 import std.mem.AllocError
 import std.mem.Allocator
@@ -120,6 +121,88 @@ pub struct Canvas {
         }
     }
 
+    /// Fills the convex polygon with the corners (`p[0]`, `p[1]`), ...
+    /// (`p[6]`, `p[7]`) in device px (inside the clip) with `c`,
+    /// antialiased: 4 sample rows per pixel, exact coverage across.
+    pub fn fillQuad(self: *mut Self, p: [8]f64, c: Rgba) {
+        if c.a == 0 {
+            return
+        }
+        var top = p[1]
+        var bottom = p[1]
+        for k in 1..4 {
+            top = minF(top, p[k * 2 + 1])
+            bottom = maxF(bottom, p[k * 2 + 1])
+        }
+        var y0 = floorI(top)
+        var y1 = floorI(bottom) + 1
+        if y0 < self.clip.y0 {
+            y0 = self.clip.y0
+        }
+        if y1 > self.clip.y1 {
+            y1 = self.clip.y1
+        }
+        var py = y0
+        while py < y1 {
+            // The span of each sample row.
+            var ls = [4]f64{0.0, 0.0, 0.0, 0.0}
+            var rs = [4]f64{0.0, 0.0, 0.0, 0.0}
+            var lo = 1.0e18
+            var hi = -1.0e18
+            for s in 0..4 {
+                let sy = py as f64 + (s as f64 + 0.5) / 4.0
+                var l = 1.0e18
+                var r = -1.0e18
+                for k in 0..4 {
+                    let ax = p[k * 2]
+                    let ay = p[k * 2 + 1]
+                    let bx = p[((k + 1) % 4) * 2]
+                    let by = p[((k + 1) % 4) * 2 + 1]
+                    if (ay <= sy && by > sy) || (by <= sy && ay > sy) {
+                        let x = ax + (sy - ay) * (bx - ax) / (by - ay)
+                        l = minF(l, x)
+                        r = maxF(r, x)
+                    }
+                }
+                ls[s] = l
+                rs[s] = r
+                if r > l {
+                    lo = minF(lo, l)
+                    hi = maxF(hi, r)
+                }
+            }
+            if hi > lo {
+                var x0 = floorI(lo)
+                var x1 = floorI(hi) + 1
+                if x0 < self.clip.x0 {
+                    x0 = self.clip.x0
+                }
+                if x1 > self.clip.x1 {
+                    x1 = self.clip.x1
+                }
+                var px = x0
+                var i = (py as usize * self.width + x0 as usize) * 4
+                while px < x1 {
+                    var cover = 0.0
+                    for s in 0..4 {
+                        let a = maxF(ls[s], px as f64)
+                        let b = minF(rs[s], px as f64 + 1.0)
+                        if b > a {
+                            cover += b - a
+                        }
+                    }
+                    let alpha = (cover / 4.0 * c.a as f64 + 0.5) as u32
+                    if alpha > 0 {
+                        self.blend(i, c, alpha)
+                    }
+                    i += 4
+                    px += 1
+                }
+            }
+            py += 1
+        }
+    }
+
     /// Blends `c` through a coverage mask: `h` rows of `w` bytes, `pitch`
     /// bytes apart, whose top-left pixel goes to (`x`, `y`).
     pub fn blitMask(self: *mut Self, x: i64, y: i64, w: usize, h: usize, mask: []u8, pitch: usize, c: Rgba) {
@@ -220,11 +303,31 @@ pub struct Canvas {
 }
 
 // A color with premultiplied alpha, each channel 0 to 255.
-struct Premul {
+pub struct Premul {
     r: u32
     g: u32
     b: u32
     a: u32
+}
+
+/// Samples a straight RGBA image at source pixel centers, returning
+/// premultiplied channels. Canvas affine images use the same bilinear
+/// interpolation as the display-list image renderer.
+pub fn sampleImage(pixels: []u8, w: usize, h: usize, x: f64, y: f64, smooth: bool) Premul {
+    if !smooth {
+        return premul(pixels, (y as usize * w + x as usize) * 4)
+    }
+    let fx = std.math.clamp(x - 0.5, 0.0, (w - 1) as f64)
+    let fy = std.math.clamp(y - 0.5, 0.0, (h - 1) as f64)
+    let x0 = std.math.floor(fx) as usize
+    let y0 = std.math.floor(fy) as usize
+    let x1 = std.math.minOf(usize, x0 + 1, w - 1)
+    let y1 = std.math.minOf(usize, y0 + 1, h - 1)
+    let wx = ((fx - x0 as f64) * 256.0) as u32
+    let wy = ((fy - y0 as f64) * 256.0) as u32
+    let top = mix(premul(pixels, (y0 * w + x0) * 4), premul(pixels, (y0 * w + x1) * 4), wx)
+    let bottom = mix(premul(pixels, (y1 * w + x0) * 4), premul(pixels, (y1 * w + x1) * 4), wx)
+    return mix(top, bottom, wy)
 }
 
 fn premul(pixels: []u8, i: usize) Premul {
@@ -267,4 +370,26 @@ fn sampleAt(d: usize, dn: usize, sn: usize) usize {
         return max
     }
     return v
+}
+
+fn minF(a: f64, b: f64) f64 {
+    if a < b {
+        return a
+    }
+    return b
+}
+
+fn maxF(a: f64, b: f64) f64 {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+fn floorI(v: f64) i64 {
+    let t = v as i64
+    if (t as f64) > v {
+        return t - 1
+    }
+    return t
 }

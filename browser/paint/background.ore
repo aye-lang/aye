@@ -829,7 +829,7 @@ fn coverage(alloc: Allocator, x0: i64, y0: i64, pw: usize, ph: usize, x: f64, y:
 
 // Blurs the `w` x `h` alpha bytes `a` by three box blurs, which together
 // are close to a Gaussian blur of `sigma` px.
-fn boxBlur3(alloc: Allocator, a: []mut u8, w: usize, h: usize, sigma: f64) AllocError!void {
+pub fn boxBlur3(alloc: Allocator, a: []mut u8, w: usize, h: usize, sigma: f64) AllocError!void {
     let size = math.sqrt(4.0 * sigma * sigma + 1.0)
     let radius = math.maxOf(usize, 1, math.floor(size / 2.0) as usize)
     let tmp = try alloc.alloc(0 as u8, math.maxOf(usize, w, h))

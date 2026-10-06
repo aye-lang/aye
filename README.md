@@ -451,3 +451,7 @@ doc's Example 1 with an `app.toml` that is valid, missing and invalid.
 `tests/spec.rs` checks `docs/spec.md`: its ` ```ore ` programs compile, its
 ` ```ore-error ` programs do not, it names every pub function of std, and it
 stays within 30k tokens.
+
+Before you change the compiler, std or the browser, read
+[`docs/practices/`](docs/practices/README.md): good and bad cases from this
+project. When you learn a lesson that will come up again, add an entry there.

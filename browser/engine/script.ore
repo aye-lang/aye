@@ -244,7 +244,7 @@ pub struct Script {
     // Counts the changes that may change computed styles: all but those
     // of attributes no selector looks at in practice (`src`, `alt`...).
     style_version: u64
-    // The style sheets `computed` has: their elements (sheetsKey).
+    // The style sheets `computed` has: their sources (sheetSourceKey).
     computed_sheets: u64
     title_version: u64
     // document.readyState: 0 loading, 1 interactive, 2 complete.
@@ -493,6 +493,7 @@ fn setUp(s: *mut Script) JsError!void {
     try installWindow(s)
     try s.it.runScript(PRELUDE)
     try s.it.runScript(FORM_PRELUDE)
+    try s.it.runScript(CANVAS_PRELUDE)
 }
 
 /// Frees the script of a page (before its document).

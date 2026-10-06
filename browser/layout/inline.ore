@@ -12,6 +12,7 @@
 import css
 import css.Value
 import font
+import js
 import std.list.List
 import std.math
 import std.mem.AllocError
@@ -24,17 +25,20 @@ import std.text
 /// and pre-line, runs of spaces and tabs (and newlines, except for
 /// pre-line) become one space, also across inline boxes; with pre and
 /// pre-wrap, tabs become spaces up to the next multiple of 8 columns.
+/// Then `text-transform` changes the case of the text (`transformText`).
 fn prepareText(t: *mut Tree) AllocError!void {
     for i in 0..t.boxes.len() {
         if hasInlineContent(t, i) {
             var space = true
-            try prepareRun(t, i, &mut space)
+            var word = true
+            try prepareRun(t, i, &mut space, &mut word)
         }
     }
 }
 
-// `space`: the text so far ends with a collapsible space.
-fn prepareRun(t: *mut Tree, i: usize, space: *mut bool) AllocError!void {
+// `space`: the text so far ends with a collapsible space. `word`: it ends
+// outside a word (for `text-transform: capitalize`).
+fn prepareRun(t: *mut Tree, i: usize, space: *mut bool, word: *mut bool) AllocError!void {
     let n = t.children(i).len
     for k in 0..n {
         let c = t.children(i)[k]
@@ -43,18 +47,20 @@ fn prepareRun(t: *mut Tree, i: usize, space: *mut bool) AllocError!void {
             continue
         }
         if kind == BoxKind.Text {
-            try prepareTextBox(t, c, space)
+            try prepareTextBox(t, c, space, word)
         } else if kind == BoxKind.Inline {
-            try prepareRun(t, c, space)
+            try prepareRun(t, c, space, word)
         } else if kind == BoxKind.LineBreak {
             space.* = true
+            word.* = true
         } else {
             space.* = false
+            word.* = true
         }
     }
 }
 
-fn prepareTextBox(t: *mut Tree, i: usize, space: *mut bool) AllocError!void {
+fn prepareTextBox(t: *mut Tree, i: usize, space: *mut bool, word: *mut bool) AllocError!void {
     let raw = t.bx(i).text
     let ws = whiteSpaceOf(t.bx(i).style)
     var out = List(u8).init(t.alloc)
@@ -97,7 +103,65 @@ fn prepareTextBox(t: *mut Tree, i: usize, space: *mut bool) AllocError!void {
         }
         space.* = false
     }
+    transformText(out.items(), keywordOf(t.bx(i).style[css.TEXT_TRANSFORM]), word)
     t.bx(i).text = out.items()
+}
+
+/// Applies `text-transform` `mode` to the text `s` in place (CSS Text 3,
+/// 2.1): `uppercase` and `lowercase` map every letter (`js.caseMap`:
+/// Latin, Greek, Cyrillic); `capitalize` upper-cases the first letter or
+/// digit of each word, a word starting after whitespace (punctuation
+/// before its first letter is skipped: "(hello" gives "(Hello"); `none`,
+/// `full-width` and `full-size-kana` change nothing. Each mapping keeps
+/// the UTF-8 length (ß becomes SS, both two bytes; the dotted and dotless
+/// i of Turkish stay), so offsets in the text keep matching the DOM's.
+/// `word`: the text so far ends outside a word; updated.
+fn transformText(s: []mut u8, mode: []u8, word: *mut bool) {
+    let upper = text.eql(mode, "uppercase")
+    let lower = text.eql(mode, "lowercase")
+    let capitalize = text.eql(mode, "capitalize")
+    var buf = [4]u8{0, 0, 0, 0}
+    var i: usize = 0
+    while i < s.len {
+        let d = text.decode(s[i..])
+        let c = d.code
+        var to = c
+        if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == 0x0C || c == 0xA0 {
+            word.* = true
+        } else if isWordChar(c) {
+            if c == 0xDF && upper {
+                s[i] = 'S'
+                s[i + 1] = 'S'
+            } else if c == 0x130 || c == 0x131 {
+                // Their other cases have other lengths.
+            } else if upper || (capitalize && word.*) {
+                to = js.caseMap(c, true)
+            } else if lower {
+                to = js.caseMap(c, false)
+            }
+            word.* = false
+        }
+        if to != c && text.encode(to, buf[..]) == d.len {
+            for k in 0..d.len {
+                s[i + k] = buf[k]
+            }
+        }
+        i += d.len
+    }
+}
+
+// Is the code point `c` a letter or a digit, roughly: ASCII letters and
+// digits, and anything from U+00C0 on except the multiplication and
+// division signs and the punctuation and symbol blocks (U+2000 to
+// U+2BFF, U+3000 to U+303F).
+fn isWordChar(c: u32) bool {
+    if c < 0x80 {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+    }
+    if c < 0xC0 || c == 0xD7 || c == 0xF7 || c == 0xFFFD {
+        return false
+    }
+    return !(c >= 0x2000 && c <= 0x2BFF) && !(c >= 0x3000 && c <= 0x303F)
 }
 
 // ---- pieces
@@ -465,6 +529,16 @@ fn layoutInline(t: *mut Tree, i: usize, avail: f64) AllocError!f64 {
         var lower = false
         let lh = lb.strut.line_height
         lb.setBand(bandAt(t, lb.y, lh, avail))
+        if t.lines.len() == t.bx(i).line_start {
+            // `text-indent` moves the first line's start.
+            let indent = lengthOr0(t.bx(i).style[css.TEXT_INDENT], avail)
+            if rtl {
+                lb.avail -= indent
+            } else {
+                lb.left += indent
+                lb.avail -= indent
+            }
+        }
         while k < ps.len {
             let e = chunkEnd(ps, k)
             if ps[k].kind == PieceKind.Float {

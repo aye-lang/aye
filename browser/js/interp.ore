@@ -1445,7 +1445,7 @@ pub struct Interp {
             .Bool { b } => b
             .Num { n } => n == n && n != 0.0
             .Str { s } => self.heap.str(s).len16 > 0
-            .Obj { .. } => true
+            .Obj { o } => !self.heap.obj(o).htmldda
         }
     }
 
@@ -1616,7 +1616,7 @@ pub struct Interp {
 
     pub fn looseEquals(self: *mut Self, a: Value, b: Value) JsError!bool {
         if isNullish(a) || isNullish(b) {
-            return isNullish(a) && isNullish(b)
+            return (isNullish(a) || self.isHtmlDda(a)) && (isNullish(b) || self.isHtmlDda(b))
         }
         match a {
             .Num { n: x } => {
@@ -1667,6 +1667,9 @@ pub struct Interp {
             }
             return "object"
         }
+        if self.isHtmlDda(v) {
+            return "undefined"
+        }
         return match v {
             .Undefined => "undefined"
             .Empty => "undefined"
@@ -1675,6 +1678,14 @@ pub struct Interp {
             .Num { .. } => "number"
             .Str { .. } => "string"
             .Obj { o: oid } => objectTypeName(self.heap.obj(oid).class)
+        }
+    }
+
+    /// Whether v is an object with [[IsHTMLDDA]] (`document.all`).
+    pub fn isHtmlDda(self: *Self, v: Value) bool {
+        return match v {
+            .Obj { o } => self.heap.obj(o).htmldda
+            _ => false
         }
     }
 

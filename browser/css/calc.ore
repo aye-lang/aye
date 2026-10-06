@@ -1,10 +1,13 @@
 // Math functions (CSS Values 4, a subset): `calc()`, `min()`, `max()`
 // and `clamp()` with `+ - * /`, parentheses and nesting, over numbers,
 // percentages and lengths (px and the absolute units, em, rem, ex, ch,
-// vw, vh, vmin, vmax). They are evaluated at computed-value time, when
-// the font size and the viewport are known (a declaration with one is
-// kept as tokens until then, see `Decl.raw`): the cascade sets the
-// context with `setCalcContext`.
+// the viewport units, container units). They are evaluated at
+// computed-value time, when the font size and the viewport are known (a
+// declaration with one is kept as tokens until then, see `Decl.raw`):
+// the cascade sets the context with `setCalcContext` (and
+// `setContainerUnits`). Lengths in the units that need that context
+// outside math functions (`vmin`, `dvh`, `cqw`, ...: `isContextUnit`) are
+// kept as tokens the same way.
 //
 // A percentage stays a percentage (or `Value.Calc` when it is mixed with
 // pixels) unless the property resolves it (font-size, line-height). A
@@ -26,10 +29,50 @@ struct CalcContext {
 }
 
 var calc_ctx = CalcContext { em: 16.0, rem: 16.0, vw: 0.0, vh: 0.0, percent_of: -1.0 }
+// The px of 1cqw and 1cqh.
+var container_cqw = 0.0
+var container_cqh = 0.0
 
 /// Sets what relative units in math functions refer to.
 pub fn setCalcContext(em: f64, rem: f64, vw: f64, vh: f64, percent_of: f64) {
     calc_ctx = CalcContext { em: em, rem: rem, vw: vw, vh: vh, percent_of: percent_of }
+    container_cqw = vw
+    container_cqh = vh
+}
+
+/// Sets what container units refer to (after `setCalcContext`): the px
+/// of 1cqw and 1cqh.
+pub fn setContainerUnits(cqw: f64, cqh: f64) {
+    container_cqw = cqw
+    container_cqh = cqh
+}
+
+/// Is `unit` a length unit whose px depend on the viewport or a
+/// container in a way that the plain values (`Value.Vw`, ...) do not
+/// keep: `vmin`, `vmax`, `vi`, `vb`, the small, large and dynamic
+/// viewport units, the container units?
+pub fn isContextUnit(unit: []u8) bool {
+    var u = unit
+    if u.len > 2 && (u[0] == 's' || u[0] == 'l' || u[0] == 'd' || u[0] == 'S' || u[0] == 'L' || u[0] == 'D') && (u[1] == 'v' || u[1] == 'V') {
+        u = u[1..]
+    }
+    let words = [_][]u8{"vw", "vh", "vi", "vb", "vmin", "vmax", "cqw", "cqh", "cqi", "cqb", "cqmin", "cqmax"}
+    for w in words {
+        if text.eqlIgnoreCase(u, w) {
+            return !(text.eqlIgnoreCase(unit, "vw") || text.eqlIgnoreCase(unit, "vh"))
+        }
+    }
+    return false
+}
+
+/// Do the tokens hold a length in container units?
+pub fn usesContainerUnits(toks: []Token) bool {
+    for t in toks {
+        if t.kind == Tok.Dimension && t.text.len >= 3 && (t.text[0] == 'c' || t.text[0] == 'C') && (t.text[1] == 'q' || t.text[1] == 'Q') {
+            return true
+        }
+    }
+    return false
 }
 
 /// Is `t` a math function that this file evaluates?
@@ -273,6 +316,40 @@ fn less(a: Quantity, b: Quantity) bool {
     return a.px + a.pct * base / 100.0 < b.px + b.pct * base / 100.0
 }
 
+/// `n` of the length unit `unit` (`isContextUnit`) in px, in the
+/// current context.
+pub fn contextPx(n: f64, unit: []u8) f64 {
+    var u = unit
+    if u.len > 2 && (u[1] == 'v' || u[1] == 'V') {
+        // svh, lvw, dvmin, ...: the viewport does not change size.
+        u = u[1..]
+    }
+    let vw = calc_ctx.vw
+    let vh = calc_ctx.vh
+    if text.eqlIgnoreCase(u, "vw") || text.eqlIgnoreCase(u, "vi") {
+        return n * vw
+    }
+    if text.eqlIgnoreCase(u, "vh") || text.eqlIgnoreCase(u, "vb") {
+        return n * vh
+    }
+    if text.eqlIgnoreCase(u, "vmin") {
+        return n * math.min(vw, vh)
+    }
+    if text.eqlIgnoreCase(u, "vmax") {
+        return n * math.max(vw, vh)
+    }
+    if text.eqlIgnoreCase(u, "cqw") || text.eqlIgnoreCase(u, "cqi") {
+        return n * container_cqw
+    }
+    if text.eqlIgnoreCase(u, "cqh") || text.eqlIgnoreCase(u, "cqb") {
+        return n * container_cqh
+    }
+    if text.eqlIgnoreCase(u, "cqmin") {
+        return n * math.min(container_cqw, container_cqh)
+    }
+    return n * math.max(container_cqw, container_cqh)
+}
+
 // `n` of the length unit `unit` in px; null for other units.
 fn unitPx(n: f64, unit: []u8) ?f64 {
     if text.eqlIgnoreCase(unit, "em") {
@@ -284,17 +361,21 @@ fn unitPx(n: f64, unit: []u8) ?f64 {
     if text.eqlIgnoreCase(unit, "ex") || text.eqlIgnoreCase(unit, "ch") {
         return n * calc_ctx.em * 0.5
     }
-    if text.eqlIgnoreCase(unit, "vw") {
+    let axis = viewportAxis(unit)
+    if axis == 'w' {
         return n * calc_ctx.vw
     }
-    if text.eqlIgnoreCase(unit, "vh") {
+    if axis == 'h' {
         return n * calc_ctx.vh
     }
-    if text.eqlIgnoreCase(unit, "vmin") {
+    if axis == '<' {
         return n * math.min(calc_ctx.vw, calc_ctx.vh)
     }
-    if text.eqlIgnoreCase(unit, "vmax") {
+    if axis == '>' {
         return n * math.max(calc_ctx.vw, calc_ctx.vh)
+    }
+    if isContextUnit(unit) {
+        return contextPx(n, unit)
     }
     return absoluteLength(n, unit)
 }

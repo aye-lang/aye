@@ -25,6 +25,10 @@ target/release/ore build browser -o anyknown
 
 `cargo test --test browser` runs the browser's tests (headless, offline).
 
+Before coding, read [`docs/practices/`](../docs/practices/README.md)
+(`browser.md` for this directory); when you learn a lesson that will come
+up again, add an entry there.
+
 ## Use with Claude Code / MCP clients
 
 Two ways, depending on whether a person should see the page.

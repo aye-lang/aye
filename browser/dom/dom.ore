@@ -130,6 +130,8 @@ pub struct Document {
     // The contents of `template` elements: pairs of a template and the
     // root of its inert fragment (a tree out of the document).
     templates: List(NodeId)
+    // The rules scripts gave style sheets through the CSSOM (cssom.ore).
+    sheets: ScriptSheets
     // The shadow roots, in the order they were attached (shadow.ore).
     shadows: List(NodeId)
     // Slots whose assigned nodes changed (`assignSlots`), while
@@ -159,6 +161,7 @@ pub struct Document {
             controls: Controls.init(alloc),
             quirks: false,
             templates: List(NodeId).init(alloc),
+            sheets: ScriptSheets.init(alloc),
             shadows: List(NodeId).init(alloc),
             changed_slots: List(NodeId).init(alloc),
             adopted: List(Adopted).init(alloc),
@@ -169,6 +172,7 @@ pub struct Document {
 
     pub fn deinit(self: *mut Self) {
         self.templates.deinit()
+        self.sheets.deinit()
         self.shadows.deinit()
         self.changed_slots.deinit()
         self.adopted.deinit()
@@ -295,6 +299,24 @@ pub struct Document {
             i += 2
         }
         return null
+    }
+
+    /// Is `h` in the contents of a template (is its root a template's
+    /// fragment)? Such a node belongs to the template's inert document.
+    pub fn inTemplateContent(self: *Self, h: NodeId) bool {
+        var root = h
+        while self.node(root).parent |p| {
+            root = p
+        }
+        let items = self.templates.items()
+        var i: usize = 1
+        while i < items.len {
+            if same(items[i], root) {
+                return true
+            }
+            i += 2
+        }
+        return false
     }
 
     // ---- changing the tree

@@ -1,0 +1,10 @@
+viewport 800x600
+  block <html> (0, 0) 800x491
+    block <body> (0, 0) 800x491
+      block <div class="hero"> (0, 0) 200x300
+      block <div class="s"> (0, 300) 80x60
+      block <div class="c"> (0, 360) 60x61
+      block <div class="m"> (0, 421) 80x40
+      grid <div class="g"> (0, 461) 800x30
+        block <div> (0, 461) 80x30
+        block <div> (80, 461) 720x30

@@ -1,0 +1,136 @@
+// The rules that scripts gave the sheets of `style` and `link` elements
+// through the CSSOM (`insertRule`, `deleteRule`, `replaceSync`,
+// `disabled`), kept beside the tree for the style sheet loader
+// (engine/sheets.ore):
+//
+// - the sheet of a `style` element, once a script changed its rules,
+//   has them here with the element's text at that time (`source`); while
+//   the element still has that text, its rules come from here;
+// - rules inserted into the sheet of a stylesheet `link` come after the
+//   rules it fetched.
+//
+// (Constructed sheets reach the cascade as `adoptedStyleSheets`:
+// `Document.adopted`.)
+//
+// The prelude names each sheet by a number of its own (`ScriptSheet.id`).
+
+import std.list.List
+import std.mem
+import std.mem.AllocError
+import std.mem.Allocator
+
+pub struct ScriptSheet {
+    id: u32
+    // The `style` or `link` element (null once a newer sheet took its
+    // place).
+    owner: ?NodeId
+    // A `style` element's text when the CSSOM took its rules over
+    // (owned).
+    source: []mut u8
+    // The rules, each the text of one rule (owned).
+    rules: List([]mut u8)
+    disabled: bool
+}
+
+pub struct ScriptSheets {
+    alloc: Allocator
+    sheets: List(ScriptSheet)
+    // Moves on every change (it is part of what the styles depend on).
+    generation: u64
+
+    pub fn init(alloc: Allocator) ScriptSheets {
+        return ScriptSheets { alloc: alloc, sheets: List(ScriptSheet).init(alloc), generation: 0 }
+    }
+
+    pub fn deinit(self: *mut Self) {
+        for s in self.sheets.items() {
+            var sheet = s
+            self.freeRules(&mut sheet)
+            sheet.rules.deinit()
+            self.alloc.free(sheet.source)
+        }
+        self.sheets.deinit()
+    }
+
+    fn freeRules(self: *mut Self, s: *mut ScriptSheet) {
+        for r in s.rules.items() {
+            self.alloc.free(r)
+        }
+        s.rules.clear()
+    }
+
+    fn copy(self: *mut Self, s: []u8) AllocError![]mut u8 {
+        let out = try self.alloc.alloc(0 as u8, s.len)
+        mem.copy(out, s)
+        return out
+    }
+
+    /// The sheet `id`; null when scripts did not change it.
+    pub fn byId(self: *Self, id: u32) ?*mut ScriptSheet {
+        for i in 0..self.sheets.len() {
+            if self.sheets.items()[i].id == id {
+                return &mut self.sheets.items()[i]
+            }
+        }
+        return null
+    }
+
+    /// The changed sheet of the element `el`; null when it has none.
+    pub fn ofOwner(self: *Self, el: NodeId) ?*mut ScriptSheet {
+        for i in 0..self.sheets.len() {
+            if isSame(self.sheets.items()[i].owner, el) {
+                return &mut self.sheets.items()[i]
+            }
+        }
+        return null
+    }
+
+    /// Sets the sheet `id` of `owner`, whose owner had the text `source`,
+    /// to have no rules; `insert` adds them.
+    pub fn reset(self: *mut Self, id: u32, owner: ?NodeId, source: []u8) AllocError!void {
+        self.generation += 1
+        if self.byId(id) |s| {
+            self.freeRules(s)
+            let src = try self.copy(source)
+            self.alloc.free(s.source)
+            s.source = src
+            s.owner = owner
+            return
+        }
+        // An element has one sheet: a newer one replaces it.
+        if owner |el| {
+            if self.ofOwner(el) |old| {
+                old.owner = null
+            }
+        }
+        let src = try self.copy(source)
+        try self.sheets.append(ScriptSheet { id: id, owner: owner, source: src, rules: List([]mut u8).init(self.alloc), disabled: false })
+    }
+
+    /// Inserts the rule `rule` at `index` (clamped) of the sheet `id`.
+    pub fn insert(self: *mut Self, id: u32, index: usize, rule: []u8) AllocError!void {
+        let s = self.byId(id) orelse return
+        self.generation += 1
+        var at = index
+        if at > s.rules.len() {
+            at = s.rules.len()
+        }
+        try s.rules.insert(at, try self.copy(rule))
+    }
+
+    /// Removes the rule at `index` of the sheet `id`.
+    pub fn remove(self: *mut Self, id: u32, index: usize) {
+        let s = self.byId(id) orelse return
+        if index < s.rules.len() {
+            self.generation += 1
+            self.alloc.free(s.rules.orderedRemove(index))
+        }
+    }
+
+    pub fn setDisabled(self: *mut Self, id: u32, disabled: bool) {
+        if self.byId(id) |s| {
+            self.generation += 1
+            s.disabled = disabled
+        }
+    }
+}

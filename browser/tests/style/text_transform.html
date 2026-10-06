@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<style>
+.u { text-transform: uppercase }
+.l { text-transform: lowercase }
+.c { text-transform: capitalize }
+.fw { text-transform: full-width }
+.bad { text-transform: uppercase; text-transform: shout }
+.n { text-transform: none }
+.i { text-transform: initial }
+.inh { text-transform: inherit }
+.un { text-transform: unset }
+</style>
+<div class="u">
+  <p>inherited uppercase</p>
+  <p class="l">lowercase</p>
+  <p class="n">none</p>
+  <p class="i">initial</p>
+  <p class="un">unset inherits</p>
+  <div class="c"><span class="inh">inherit capitalize</span></div>
+  <p class="bad">invalid value dropped</p>
+</div>
+<p class="fw">full-width</p>

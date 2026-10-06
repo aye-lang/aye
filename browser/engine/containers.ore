@@ -1,0 +1,92 @@
+// Container queries (`@container`, container units) depend on the sizes
+// of their containers, which only a layout tells. A page is styled with
+// the sizes the last layout had (none at first: a condition on an
+// unknown size is false), laid out, and when a query depended on a
+// container whose size came out different, styled and laid out again,
+// at most twice more. Containers with `container-type: inline-size`
+// keep their width whatever their content (layout), so this settles.
+
+import css
+import dom.Document
+import dom.Kind
+import font
+import layout
+import std.map.IntMap
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+/// Lays out `doc` with `styles` (computed from `ua` and `author` for
+/// `media`) in a `width` x `height` viewport, computing the styles again
+/// while container queries need the containers' laid out sizes.
+pub fn layoutQueried(alloc: Allocator, doc: *Document, ua: *css.Sheet, author: *css.Sheet, media: css.Media, styles: *mut css.Styles, images: ?*layout.Images, measure: dyn font.Measurer, width: f64, height: f64) AllocError!layout.Tree {
+    var tree = try layout.layoutDocumentWith(alloc, doc, styles, images, measure, width, height)
+    var pass: usize = 0
+    while styles.queried && pass < 2 {
+        let moved = containerSizes(&tree, styles) catch |e| {
+            tree.deinit()
+            return e
+        }
+        if !moved {
+            break
+        }
+        tree.deinit()
+        try restyleWithSizes(alloc, doc, ua, author, media, styles)
+        tree = try layout.layoutDocumentWith(alloc, doc, styles, images, measure, width, height)
+        pass += 1
+    }
+    return tree
+}
+
+/// Computes `styles` again (the document changed), keeping the container
+/// sizes they had.
+pub fn restyleWithSizes(alloc: Allocator, doc: *Document, ua: *css.Sheet, author: *css.Sheet, media: css.Media, styles: *mut css.Styles) AllocError!void {
+    var fresh = try css.Styles.init(alloc)
+    fresh.takeSizes(styles)
+    styles.deinit()
+    styles.* = fresh
+    try css.computeStyles(doc, ua, author, media, styles)
+}
+
+// Records in `styles` the content-box size of each query container of
+// `tree`; whether one changed.
+fn containerSizes(tree: *layout.Tree, styles: *mut css.Styles) AllocError!bool {
+    var any_moved = false
+    // An element's first box (its principal box) tells its size.
+    var seen = IntMap(u32, bool).init(styles.alloc)
+    defer seen.deinit()
+    for b in tree.boxes.items() {
+        let el = b.node orelse continue
+        if tree.doc.node(el).kind != Kind.Element || seen.contains(el.index) {
+            continue
+        }
+        try seen.put(el.index, true)
+        let kind = keywordIn(b.style[css.CONTAINER_TYPE])
+        if kind.len == 0 || text.eql(kind, "normal") {
+            continue
+        }
+        let w = b.w - b.border[1] - b.border[3] - b.padding[1] - b.padding[3]
+        var h = -1.0
+        if text.eql(kind, "size") {
+            h = b.h - b.border[0] - b.border[2] - b.padding[0] - b.padding[2]
+        }
+        if try styles.setContainerSize(el, maxZero(w), h) {
+            any_moved = true
+        }
+    }
+    return any_moved
+}
+
+fn maxZero(v: f64) f64 {
+    if v < 0.0 {
+        return 0.0
+    }
+    return v
+}
+
+fn keywordIn(v: css.Value) []u8 {
+    return match v {
+        .Keyword { k } => k
+        _ => ""
+    }
+}

@@ -852,8 +852,18 @@ fn nodeCloneNode(it: *mut Interp, a: Args) JsError!Value {
 }
 
 /// A copy of `h` in the same document, with copies of its descendants
-/// when `deep`; not in the tree.
+/// when `deep`; not in the tree. Building the copy is no change of the
+/// tree for observers: left in the log, its records would reach them
+/// (and custom element reactions) with the next native, after the copy
+/// was inserted.
 fn copyNode(doc: *mut Document, h: NodeId, deep: bool) AllocError!NodeId {
+    let was = doc.recording
+    doc.recording = false
+    defer doc.recording = was
+    return copyTree(doc, h, deep)
+}
+
+fn copyTree(doc: *mut Document, h: NodeId, deep: bool) AllocError!NodeId {
     let n = doc.node(h).*
     var copy = doc.root
     match n.kind {
@@ -880,7 +890,7 @@ fn copyNode(doc: *mut Document, h: NodeId, deep: bool) AllocError!NodeId {
     if deep {
         var cur = doc.firstChild(h)
         while cur |c| {
-            let k = try copyNode(doc, c, true)
+            let k = try copyTree(doc, c, true)
             doc.appendChild(copy, k)
             cur = doc.nextSibling(c)
         }
@@ -889,7 +899,7 @@ fn copyNode(doc: *mut Document, h: NodeId, deep: bool) AllocError!NodeId {
             let to = try doc.createTemplateContent(copy)
             var each = doc.firstChild(from)
             while each |c| {
-                let k = try copyNode(doc, c, true)
+                let k = try copyTree(doc, c, true)
                 doc.appendChild(to, k)
                 each = doc.nextSibling(c)
             }
@@ -1182,6 +1192,7 @@ fn elementSetAttribute(it: *mut Interp, a: Args) JsError!Value {
     defer it.release(v)
     try argText(it, a, 1, v)
     try docOf(it).setAttr(h, name.bytes(), v.bytes())
+    try resetCanvas(scriptOf(it).active, h, name.bytes())
     try changedAttr(it, name.bytes())
     return Value.Undefined
 }
@@ -1194,6 +1205,7 @@ fn elementRemoveAttribute(it: *mut Interp, a: Args) JsError!Value {
     let doc = docOf(it)
     if doc.attr(h, b.bytes()) != null {
         doc.removeAttr(h, b.bytes())
+        try resetCanvas(scriptOf(it).active, h, b.bytes())
         try changedAttr(it, b.bytes())
     }
     return Value.Undefined

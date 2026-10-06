@@ -1,0 +1,12 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Damaged canvas input"
+    <body>
+      <canvas id="canvas" width="10" height="0">
+      <pre id="results">
+        "119 damaged-input operations survived"
+      <script src="../canvas/damaged.js">
+      "\n"

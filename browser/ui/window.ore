@@ -179,6 +179,7 @@ fn withFonts(alloc: Allocator, o: UiOptions, measure: dyn font.Measurer, system:
         }
     }
     engine.setScripting(o.js)
+    engine.setCanvasFixed(system == null)
     engine.setRealClock(true)
     // The console goes to stderr, except in headless test runs.
     engine.setConsoleEcho(o.frames == 0 && !o.exit_when_idle)
@@ -684,6 +685,19 @@ pub struct Ui {
         self.scrollBy(y - self.tab.scroll)
     }
 
+    // Scrolls a page wider than the window sideways by `dx` px.
+    fn scrollSideways(self: *mut Self, dx: f64) {
+        var max = 0.0
+        if self.list |l| {
+            max = std.math.max(0.0, l.width - self.win_w as f64)
+        }
+        let x = std.math.clamp(self.tab.scroll_x + dx, 0.0, max)
+        if x != self.tab.scroll_x {
+            self.tab.scroll_x = x
+            self.dirty = true
+        }
+    }
+
     // Moves the page's fixed and sticky boxes to the scroll offset when
     // they are not there yet (`draw` paints them again).
     fn followScroll(self: *mut Self) {
@@ -703,7 +717,7 @@ pub struct Ui {
             return false
         }
         let p = self.tab.page orelse return false
-        if !engine.scrollFrameAt(p, self.mouse_x, self.mouse_y - self.top() + self.tab.scroll, dy) {
+        if !engine.scrollFrameAt(p, self.mouse_x + self.tab.scroll_x, self.mouse_y - self.top() + self.tab.scroll, dy) {
             return false
         }
         if p.tree |t| {
@@ -825,10 +839,23 @@ pub struct Ui {
             if dy == 0.0 {
                 dy = wh.y as f64
             }
+            var dx = wh.precise_x as f64
+            if dx == 0.0 {
+                dx = wh.x as f64
+            }
             if wh.direction == SDL_MOUSEWHEEL_FLIPPED {
                 dy = -dy
+                dx = -dx
             }
-            if !(try self.scrollFrame(-dy * LINE_STEP)) {
+            if (SDL_GetModState() & KMOD_SHIFT) != 0 && dx == 0.0 {
+                // Shift turns the wheel sideways.
+                dx = -dy
+                dy = 0.0
+            }
+            if dx != 0.0 {
+                self.scrollSideways(dx * LINE_STEP)
+            }
+            if dy != 0.0 && !(try self.scrollFrame(-dy * LINE_STEP)) {
                 self.scrollBy(-dy * LINE_STEP)
             }
         }
@@ -912,6 +939,10 @@ pub struct Ui {
                 self.scrollTo(0.0)
             } else if sym == SDLK_END {
                 self.scrollTo(self.maxScroll())
+            } else if sym == SDLK_LEFT {
+                self.scrollSideways(-LINE_STEP)
+            } else if sym == SDLK_RIGHT {
+                self.scrollSideways(LINE_STEP)
             }
             return
         }
@@ -973,16 +1004,16 @@ pub struct Ui {
         }
     }
 
-    fn mouseMoved(self: *mut Self, x: f64, y: f64) AllocError!void {
+    fn mouseMoved(self: *mut Self, wx: f64, y: f64) AllocError!void {
         self.mouse_in = true
-        self.mouse_x = x
+        self.mouse_x = wx
         self.mouse_y = y
         if self.range_drag {
-            try dragRange(self, x)
+            try dragRange(self, wx + self.tab.scroll_x)
         }
         if y < self.top() {
             let r = addressRect(self)
-            let over_field = x >= r.x && x < r.x + r.w
+            let over_field = wx >= r.x && wx < r.x + r.w
             try self.clearHover(over_field)
             return
         }
@@ -990,6 +1021,8 @@ pub struct Ui {
             try self.clearHover(false)
             return
         }
+        // In the page's coordinates.
+        let x = wx + self.tab.scroll_x
         if self.tab.page |p| {
             if engine.frameAt(p, x, y - self.top() + self.tab.scroll) |fp| {
                 // A link in a frame's document, resolved there.
@@ -1094,10 +1127,11 @@ pub struct Ui {
             self.focus = Focus.Page
             self.dirty = true
         }
-        if !(try self.clickScripts(x, y)) {
+        let px = x + self.tab.scroll_x
+        if !(try self.clickScripts(px, y)) {
             return self.afterScripts()
         }
-        try clickPage(self, x, y)
+        try clickPage(self, px, y)
         try self.afterScripts()
     }
 
@@ -1236,7 +1270,7 @@ pub struct Ui {
         let top = self.top()
         let bottom = self.win_h as f64
         let content = paint.Rect { x: 0.0, y: top, w: self.win_w as f64, h: self.viewHeight() }
-        let v = paint.View { scale: s, dx: 0.0, dy: (top - self.tab.scroll) * s }
+        let v = paint.View { scale: s, dx: -self.tab.scroll_x * s, dy: (top - self.tab.scroll) * s }
         let flat = paint.View { scale: s, dx: 0.0, dy: 0.0 }
         try self.canvas.pushClip(paint.deviceRect(content, flat))
         if self.list |l| {

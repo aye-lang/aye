@@ -1,0 +1,40 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "CSSOM rules reach the cascade"
+      "\n"
+      "\n"
+      <style id="plain">
+        "#a { font-weight: 700 } @media screen { #b { font-weight: 700 } } #c { text-align: right }"
+      "\n"
+      <style id="off">
+        "#d { text-align: center }"
+      "\n"
+      <style data-styled="active">
+    <body>
+      <p id="a" class="ssr keep">
+        "a: green (inserted), italic (from the removed tag), bold"
+      "\n"
+      <p id="b">
+        "b: bold (@media from the text), underlined (inserted at 0)"
+      "\n"
+      <p id="c">
+        "c: left (rule deleted)"
+      "\n"
+      <p id="d">
+        "d: left (sheet disabled)"
+      "\n"
+      <p id="e">
+        "e: right (adopted sheet)"
+      "\n"
+      <p id="f">
+        "f: 24px (inserted into a new empty style element)"
+      "\n"
+      <pre id="out">
+        "4 .ssr #a { color: green }\nIndexSizeError\n3 4 screen\n3 true\n1 1\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\n// styled-components: reads the server's tag, removes it and inserts its\n// rules into a new tag through the CSSOM.\nconst ssr = document.querySelector('style[data-styled]');\nconst text = ssr.textContent;\nssr.remove();\nconst tag = document.createElement('style');\ntag.setAttribute('data-styled', 'active');\ndocument.head.appendChild(tag);\nconst sheet = tag.sheet;\nlet n = 0;\nfor (const part of text.split('/*!sc*/')) if (part.trim()) sheet.insertRule(part.trim(), n++);\nsheet.insertRule('#a { color: green }', n++);\nsheet.insertRule('#f { font-size: 24px }', n++);\nlog(sheet.cssRules.length, sheet.cssRules[0].selectorText, sheet.cssRules[2].cssText);\ntry { sheet.insertRule('#x { color: red }', 99); } catch (e) { log(e.name); }\n\nconst plain = document.getElementById('plain').sheet;\nlog(plain.cssRules.length, plain.cssRules[1].type, plain.cssRules[1].media.mediaText);\nplain.insertRule('#b { text-decoration: underline }', 0);\nplain.deleteRule(3);\nlog(plain.cssRules.length, plain.cssRules[3] === undefined);\n\ndocument.getElementById('off').sheet.disabled = true;\n\nconst adopted = new CSSStyleSheet();\nadopted.replaceSync('#e { text-align: right } #e { color: blue }');\nadopted.deleteRule(1);\ndocument.adoptedStyleSheets = [adopted];\nlog(adopted.cssRules.length, document.adoptedStyleSheets.length);\n"
+      "\n"

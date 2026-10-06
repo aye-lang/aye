@@ -243,7 +243,7 @@ fn mdBlockElement(md: *mut Md, el: NodeId, bl: *mut Blocks) AllocError!void {
     if text.eql(name, "hr") {
         return emitBlock(bl, "---")
     }
-    if html.isIn(name, "img") {
+    if html.isIn(name, "img canvas") {
         var inl = text.Builder.init(md.alloc)
         try mdInline(md, el, &mut inl)
         return emitBlock(bl, inl.bytes())
@@ -666,6 +666,20 @@ fn mdInline(md: *mut Md, el: NodeId, inl: *mut text.Builder) AllocError!void {
     let name = tagOf(md, el)
     if text.eql(name, "br") {
         try inl.appendByte('\n')
+        return
+    }
+    if text.eql(name, "canvas") {
+        var fallback = text.Builder.init(md.alloc)
+        try mdInlineChildren(md, el, &mut fallback)
+        if text.trim(fallback.bytes()).len > 0 {
+            try inl.append(fallback.bytes())
+        } else {
+            try inl.append("[canvas ")
+            try inl.appendUint(engine.canvasDimension(&md.page.doc, el, "width", 300) as u64)
+            try inl.appendByte('x')
+            try inl.appendUint(engine.canvasDimension(&md.page.doc, el, "height", 150) as u64)
+            try inl.appendByte(']')
+        }
         return
     }
     if text.eql(name, "img") {

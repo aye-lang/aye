@@ -184,6 +184,10 @@ pub struct Box {
     // The box of a pseudo-element and its text: 1 `::before`, 2
     // `::after`; else 0.
     pseudo: u8
+    // A border-box height its flex container imposed (a stretched or
+    // flexed item, CSS Flexbox 9.4 and 9.8): definite for its content
+    // while it is laid out again; -1 otherwise.
+    forced_h: f64
 
     /// Is the box out of flow (a float, or absolutely positioned)?
     pub fn oof(self: *Self) bool {
@@ -326,6 +330,7 @@ pub struct Tree {
             xform: null,
             scroll_dy: 0.0,
             pseudo: 0,
+            forced_h: -1.0,
         })
         return self.boxes.len() - 1
     }

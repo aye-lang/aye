@@ -632,7 +632,7 @@ fn hoveredNode(ui: *mut Ui) ?NodeId {
     }
     let p = ui.tab.page orelse return null
     let t = p.tree orelse return null
-    return engine.nodeAt(t, ui.mouse_x, ui.mouse_y - ui.top() + ui.tab.scroll)
+    return engine.nodeAt(t, ui.mouse_x + ui.tab.scroll_x, ui.mouse_y - ui.top() + ui.tab.scroll)
 }
 
 fn refText(tmp: Allocator, r: u32) AllocError![]u8 {

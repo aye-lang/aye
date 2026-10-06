@@ -101,12 +101,20 @@ fn dupText(sheet: *mut Sheet, s: []u8) AllocError![]u8 {
     return copy
 }
 
-/// Does a value use `var()` or a math function, so that it can only be
-/// parsed at computed-value time?
+/// Does a value use `var()`, a math function or `vmin`/`vmax`, so that it
+/// can only be parsed at computed-value time?
 pub fn needsComputing(toks: []Token) bool {
     for t in toks {
         if t.kind == Tok.Function && (text.eqlIgnoreCase(t.text, "var") || isMathFunction(t)) {
             return true
+        }
+        if t.kind == Tok.Dimension {
+            // `vmin`, `vmax` and the container units; `dvh` and the other
+            // viewport units are kept as `vw`/`vh` lengths.
+            let axis = viewportAxis(t.text)
+            if axis == '<' || axis == '>' || (axis == 0 && isContextUnit(t.text)) {
+                return true
+            }
         }
     }
     return false
@@ -181,15 +189,22 @@ fn shorthandLonghands(name: []u8, out: []mut usize) usize {
     }
     if text.eql(name, "place-items") {
         out[0] = ALIGN_ITEMS
-        return 1
+        out[1] = JUSTIFY_ITEMS
+        return 2
     }
     if text.eql(name, "place-self") {
         out[0] = ALIGN_SELF
-        return 1
+        out[1] = JUSTIFY_SELF
+        return 2
     }
     if text.eql(name, "place-content") {
         out[0] = JUSTIFY_CONTENT
         return 1
+    }
+    if text.eql(name, "container") {
+        out[0] = CONTAINER_NAME
+        out[1] = CONTAINER_TYPE
+        return 2
     }
     if text.eql(name, "margin") {
         first = MARGIN_TOP
@@ -378,15 +393,21 @@ struct Declarer {
             return self.pair(pl[0], pl[1], comps)
         }
         if text.eql(name, "place-items") || text.eql(name, "place-self") {
-            // The `align-` half (there is no `justify-items`).
+            // `align [justify]` (justify as align when alone).
             var prop = ALIGN_ITEMS
+            var across = JUSTIFY_ITEMS
             if text.eql(name, "place-self") {
                 prop = ALIGN_SELF
+                across = JUSTIFY_SELF
             }
             if comps.len == 1 || comps.len == 2 {
                 let first = [1]Comp{comps[0]}
+                let last = [1]Comp{comps[comps.len - 1]}
                 if try parseValue(self.sheet, prop, first[..]) |v| {
-                    try self.add(prop, v)
+                    if try parseValue(self.sheet, across, last[..]) |w| {
+                        try self.add(prop, v)
+                        try self.add(across, w)
+                    }
                 }
             }
             return
@@ -404,6 +425,9 @@ struct Declarer {
         }
         if text.eql(name, "flex") {
             return self.flex(comps)
+        }
+        if text.eql(name, "container") {
+            return self.container(comps)
         }
         if text.eql(name, "flex-flow") {
             return self.flexFlow(comps)
@@ -429,6 +453,30 @@ struct Declarer {
                 try self.add(prop, v)
             }
         }
+    }
+
+    // `container: name [/ type]`.
+    fn container(self: *mut Self, comps: []Comp) AllocError!void {
+        var props = [2]usize{CONTAINER_NAME, CONTAINER_TYPE}
+        if try self.wide(comps, props[..]) {
+            return
+        }
+        var slash = comps.len
+        for k, c in comps {
+            if isDelim(c, '/') {
+                slash = k
+            }
+        }
+        if slash == 0 {
+            return
+        }
+        let names = rawValue(self.sheet, comps[..slash]) orelse return
+        var kind = Value.Keyword { k: "normal" }
+        if slash < comps.len {
+            kind = (try parseValue(self.sheet, CONTAINER_TYPE, comps[slash + 1..])) orelse return
+        }
+        try self.add(CONTAINER_NAME, names)
+        try self.add(CONTAINER_TYPE, kind)
     }
 
     // `grid-column` and `grid-row` (`a [/ b]`: the longhands `p0`, `p1`;
@@ -1138,14 +1186,25 @@ fn lengthValue(c: Comp, percent: bool, nonneg: bool) ?Value {
     if text.eqlIgnoreCase(u, "ex") || text.eqlIgnoreCase(u, "ch") {
         return Value.Em { v: t.num * 0.5 }
     }
-    if text.eqlIgnoreCase(u, "vw") {
+    let axis = viewportAxis(u)
+    if axis == 'w' {
         return Value.Vw { v: t.num }
     }
-    if text.eqlIgnoreCase(u, "vh") {
+    if axis == 'h' {
         return Value.Vh { v: t.num }
+    }
+    if axis != 0 {
+        // `vmin`, `vmax`: in px of this cascade's viewport, as calc() does.
+        if unitPx(t.num, u) |px| {
+            return Value.Px { v: px }
+        }
     }
     if absoluteLength(t.num, u) |px| {
         return Value.Px { v: px }
+    }
+    if isContextUnit(u) {
+        // Kept as tokens until computed (`needsComputing`).
+        return Value.Px { v: contextPx(t.num, u) }
     }
     return null
 }
@@ -1207,6 +1266,34 @@ fn mathNumber(c: Comp) ?f64 {
 }
 
 /// `n` of the absolute unit `unit` in px; null for other units.
+/// The axis of a viewport-percentage unit: 'w' (`vw`), 'h' (`vh`), '<'
+/// (`vmin`), '>' (`vmax`), or 0 for other units. The small, large and
+/// dynamic viewports (`svh`, `lvh`, `dvh`, ...) are the window: it has
+/// no toolbars that come and go. `vi` and `vb` follow horizontal
+/// writing.
+pub fn viewportAxis(unit: []u8) u8 {
+    var u = unit
+    if u.len >= 3 && (u[1] | 0x20) == 'v' {
+        let c = u[0] | 0x20
+        if c == 's' || c == 'l' || c == 'd' {
+            u = u[1..]
+        }
+    }
+    if text.eqlIgnoreCase(u, "vw") || text.eqlIgnoreCase(u, "vi") {
+        return 'w'
+    }
+    if text.eqlIgnoreCase(u, "vh") || text.eqlIgnoreCase(u, "vb") {
+        return 'h'
+    }
+    if text.eqlIgnoreCase(u, "vmin") {
+        return '<'
+    }
+    if text.eqlIgnoreCase(u, "vmax") {
+        return '>'
+    }
+    return 0
+}
+
 pub fn absoluteLength(n: f64, unit: []u8) ?f64 {
     if text.eqlIgnoreCase(unit, "px") {
         return n
@@ -1367,9 +1454,11 @@ fn decorationLines(sheet: *mut Sheet, comps: []Comp) AllocError!?Value {
 
 /// A color: a named color, `transparent`, `currentcolor`, a system color
 /// (`Canvas`, `LinkText`, ...), `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`,
-/// `rgb()`/`rgba()`, `hsl()`/`hsla()` (comma or space syntax, `/ alpha`)
-/// or `light-dark(light, dark)` (the light one). Other color functions
-/// (`color-mix()`, `oklch()`, ...) are not supported: null.
+/// `rgb()`/`rgba()`, `hsl()`/`hsla()` (comma or space syntax, `/ alpha`),
+/// `hwb()`, `lab()`, `lch()`, `oklab()`, `oklch()` (converted to sRGB,
+/// out-of-gamut channels clipped) or `light-dark(light, dark)` (the light
+/// one). Other color functions (`color-mix()`, `color()`, ...) are not
+/// supported: null.
 pub fn colorValue(c: Comp) ?Value {
     let t = c.toks[0]
     if c.toks.len == 1 && t.kind == Tok.Ident {
@@ -1409,6 +1498,10 @@ pub fn colorValue(c: Comp) ?Value {
         if hslFunction(args) |col| {
             return Value.Rgba { c: col }
         }
+    } else if inList(t.text, "hwb lab lch oklab oklch") != null {
+        if color4Function(t.text, args) |col| {
+            return Value.Rgba { c: col }
+        }
     } else if text.eqlIgnoreCase(t.text, "light-dark") {
         // The first argument: the color scheme is light.
         let i = skipWhitespace(args, 0)
@@ -1424,14 +1517,14 @@ pub fn colorValue(c: Comp) ?Value {
 }
 
 /// Is `c` a color function that this file does not know (`color-mix()`,
-/// `oklch()`, ...)? A shorthand with one is dropped, as a browser that
+/// `color()`, ...)? A shorthand with one is dropped, as a browser that
 /// does not know it would.
 pub fn unknownColorFunction(c: Comp) bool {
     let t = c.toks[0]
     if t.kind != Tok.Function {
         return false
     }
-    return inList(t.text, "color-mix color oklch oklab lab lch hwb device-cmyk contrast-color") != null
+    return inList(t.text, "color-mix color device-cmyk contrast-color") != null
 }
 
 // The CSS system colors, as a light theme draws them.
@@ -1497,6 +1590,174 @@ fn hslFunction(toks: []Token) ?Color {
     let g = hslChannel(8.0, h, sat, light)
     let b = hslChannel(4.0, h, sat, light)
     return Color { r: channel(r * 255.0), g: channel(g * 255.0), b: channel(b * 255.0), a: math.clamp(vals[3], 0.0, 1.0) }
+}
+
+// The arguments of `hwb()`, `lab()`, `lch()`, `oklab()` and `oklch()`
+// (CSS Color 4, space syntax only): three components and an optional
+// `/ alpha`; a percentage is a fraction of its component's reference
+// range.
+fn color4Function(name: []u8, toks: []Token) ?Color {
+    let hwb = text.eqlIgnoreCase(name, "hwb")
+    let lab = text.eqlIgnoreCase(name, "lab") || text.eqlIgnoreCase(name, "lch")
+    let polar = text.eqlIgnoreCase(name, "lch") || text.eqlIgnoreCase(name, "oklch")
+    // The value of 100% for each component (a hue takes no percentage).
+    var full = [4]f64{1.0, 0.4, 0.4, 1.0}
+    var hue: usize = 9
+    if hwb {
+        full = [4]f64{0.0, 100.0, 100.0, 1.0}
+        hue = 0
+    } else if lab {
+        full = [4]f64{100.0, 125.0, 125.0, 1.0}
+        if polar {
+            full[1] = 150.0
+        }
+    }
+    if polar {
+        hue = 2
+    }
+    var vals = [4]f64{0.0, 0.0, 0.0, 1.0}
+    var n: usize = 0
+    var slash = false
+    for t in toks {
+        if t.kind == Tok.Whitespace {
+            continue
+        }
+        if t.kind == Tok.Delim && t.delim == '/' {
+            if n != 3 || slash {
+                return null
+            }
+            slash = true
+            continue
+        }
+        if n >= 4 || (n == 3 && !slash) {
+            return null
+        }
+        if t.kind == Tok.Number {
+            vals[n] = t.num
+        } else if t.kind == Tok.Percentage && n != hue {
+            vals[n] = t.num / 100.0 * full[n]
+        } else if t.kind == Tok.Dimension && n == hue {
+            if angleDegrees(t) |deg| {
+                vals[n] = deg
+            } else {
+                return null
+            }
+        } else if t.kind == Tok.Ident && text.eqlIgnoreCase(t.text, "none") {
+            vals[n] = 0.0
+        } else {
+            return null
+        }
+        n += 1
+    }
+    if n < 3 || (slash && n < 4) {
+        return null
+    }
+    let alpha = math.clamp(vals[3], 0.0, 1.0)
+    if hwb {
+        let w = math.max(vals[1], 0.0) / 100.0
+        let bl = math.max(vals[2], 0.0) / 100.0
+        if w + bl >= 1.0 {
+            let gray = channel(w / (w + bl) * 255.0)
+            return Color { r: gray, g: gray, b: gray, a: alpha }
+        }
+        let h = vals[0] - math.floor(vals[0] / 360.0) * 360.0
+        let k = 1.0 - w - bl
+        let r = hslChannel(0.0, h, 1.0, 0.5) * k + w
+        let g = hslChannel(8.0, h, 1.0, 0.5) * k + w
+        let b = hslChannel(4.0, h, 1.0, 0.5) * k + w
+        return Color { r: channel(r * 255.0), g: channel(g * 255.0), b: channel(b * 255.0), a: alpha }
+    }
+    let l = math.max(vals[0], 0.0)
+    var a = vals[1]
+    var b = vals[2]
+    if polar {
+        let chroma = math.max(vals[1], 0.0)
+        let rad = vals[2] * math.pi / 180.0
+        a = chroma * math.cos(rad)
+        b = chroma * math.sin(rad)
+    }
+    var lin = [3]f64{0.0, 0.0, 0.0}
+    if lab {
+        lin = labToLinear(l, a, b)
+    } else {
+        lin = oklabToLinear(l, a, b)
+    }
+    return Color { r: gammaChannel(lin[0]), g: gammaChannel(lin[1]), b: gammaChannel(lin[2]), a: alpha }
+}
+
+// An angle token in degrees; null for a unit that is not an angle.
+fn angleDegrees(t: Token) ?f64 {
+    if text.eqlIgnoreCase(t.text, "deg") {
+        return t.num
+    }
+    if text.eqlIgnoreCase(t.text, "turn") {
+        return t.num * 360.0
+    }
+    if text.eqlIgnoreCase(t.text, "rad") {
+        return t.num * 180.0 / math.pi
+    }
+    if text.eqlIgnoreCase(t.text, "grad") {
+        return t.num * 0.9
+    }
+    return null
+}
+
+// OKLab to linear-light sRGB (CSS Color 4, 18).
+fn oklabToLinear(l: f64, a: f64, b: f64) [3]f64 {
+    let lp = l + 0.3963377774 * a + 0.2158037573 * b
+    let mp = l - 0.1055613458 * a - 0.0638541728 * b
+    let sp = l - 0.0894841775 * a - 1.2914855480 * b
+    let lc = lp * lp * lp
+    let mc = mp * mp * mp
+    let sc = sp * sp * sp
+    return [3]f64{
+        4.0767416621 * lc - 3.3077115913 * mc + 0.2309699292 * sc,
+        -1.2684380046 * lc + 2.6097574011 * mc - 0.3413193965 * sc,
+        -0.0041960863 * lc - 0.7034186147 * mc + 1.7076147010 * sc,
+    }
+}
+
+// CIE Lab (D50) to linear-light sRGB: to XYZ, Bradford to D65, to sRGB
+// (CSS Color 4, 18).
+fn labToLinear(l: f64, a: f64, b: f64) [3]f64 {
+    let kappa = 24389.0 / 27.0
+    let epsilon = 216.0 / 24389.0
+    let fy = (l + 16.0) / 116.0
+    let fx = a / 500.0 + fy
+    let fz = fy - b / 200.0
+    var xr = (116.0 * fx - 16.0) / kappa
+    if fx * fx * fx > epsilon {
+        xr = fx * fx * fx
+    }
+    var yr = l / kappa
+    if l > kappa * epsilon {
+        yr = fy * fy * fy
+    }
+    var zr = (116.0 * fz - 16.0) / kappa
+    if fz * fz * fz > epsilon {
+        zr = fz * fz * fz
+    }
+    let x50 = xr * 0.3457 / 0.3585
+    let y50 = yr
+    let z50 = zr * (1.0 - 0.3457 - 0.3585) / 0.3585
+    let x = 0.9554734527042182 * x50 - 0.023098536874261423 * y50 + 0.0632593086610217 * z50
+    let y = -0.028369706963208136 * x50 + 1.0099954580106629 * y50 + 0.021041398966943008 * z50
+    let z = 0.012314001688319899 * x50 - 0.020507696433477912 * y50 + 1.3303659366080753 * z50
+    return [3]f64{
+        3.2409699419045226 * x - 1.537383177570094 * y - 0.4986107602930034 * z,
+        -0.9692436362808796 * x + 1.8759675015077202 * y + 0.04155505740717559 * z,
+        0.05563007969699366 * x - 0.20397695888897652 * y + 1.0569715142428786 * z,
+    }
+}
+
+// A linear-light sRGB channel, clipped and gamma-encoded, as 0-255.
+fn gammaChannel(c: f64) u8 {
+    let v = math.clamp(c, 0.0, 1.0)
+    var e = 12.92 * v
+    if v > 0.0031308 {
+        e = 1.055 * math.pow(v, 1.0 / 2.4) - 0.055
+    }
+    return channel(e * 255.0)
 }
 
 fn hslChannel(n: f64, hue: f64, sat: f64, light: f64) f64 {
