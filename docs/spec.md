@@ -572,7 +572,7 @@ pub fn main() {
 **No shadowing anywhere**: a new name (local, parameter, `for` variable,
 capture, pattern binding) cannot reuse any name visible at that point,
 including names of enclosing scopes, top-level declarations of the module
-and imports. Sibling blocks may reuse a name. A capture is scoped to its
+(in any of its files: the error names the file) and imports. Sibling blocks may reuse a name. A capture is scoped to its
 block or expression, so two `catch |e|` in one function may both use `e`.
 
 ```ore-error

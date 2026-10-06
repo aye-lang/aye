@@ -1,0 +1,12 @@
+// A local cannot reuse a top-level name of its module, declared in
+// another file: the message names that file.
+
+fn half(v: f64) f64 {
+    let px = v / 2.0
+    let half = px
+    return half
+}
+
+pub fn main() {
+    @println(half(2.0))
+}

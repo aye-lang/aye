@@ -419,8 +419,8 @@ impl Loader<'_> {
         }
         if let Some(d) = self.modules[self.cur].items.get(&name) {
             let msg = format!(
-                "the import of `{name}` clashes with the declaration of `{name}` at {}:{} (rename the declaration)",
-                d.span.line, d.span.col
+                "the import of `{name}` clashes with the declaration of `{name}` at {} (rename the declaration)",
+                self.place(d.span, name_span)
             );
             self.report(Error::new(E0015, name_span, msg));
             return;
@@ -574,6 +574,13 @@ impl Loader<'_> {
         None
     }
 
+    /// The position `at` in a message about `here`, with the file's name
+    /// when it is another file.
+    fn place(&self, at: Span, here: Span) -> String {
+        let names: Vec<String> = self.files.iter().map(|f| f.name.clone()).collect();
+        crate::sema::place(&names, at, here)
+    }
+
     fn not_imported(&self, name: &str, span: Span) -> Error {
         let hint = if STD_FILES.iter().any(|(m, ..)| *m == format!("std.{name}")) {
             format!(" (add `import std.{name}`)")
@@ -601,7 +608,7 @@ impl Loader<'_> {
             m => self.modules[m].items.get(name).map(|d| d.span),
         };
         if let Some(prev) = prev {
-            let msg = format!("`{name}` is already declared at {}:{} (shadowing is not allowed)", prev.line, prev.col);
+            let msg = format!("`{name}` is already declared at {} (shadowing is not allowed)", self.place(prev, span));
             self.report(Error::new(E0016, span, msg));
         }
     }

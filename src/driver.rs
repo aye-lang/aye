@@ -114,7 +114,7 @@ pub fn front_end(root: Root, need_main: Option<bool>) -> Checked {
     let result = ast.map_err(diags).and_then(|ast| {
         let need_main =
             need_main.unwrap_or_else(|| !ast.items.iter().any(|i| matches!(i, ast::Item::Test(t) if t.module.is_empty())));
-        sema::check(&ast, need_main).map_err(diags)
+        sema::check(&ast, need_main, &names).map_err(diags)
     });
     Checked { files, result }
 }

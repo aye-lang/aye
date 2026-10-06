@@ -1,0 +1,2 @@
+shadow_files/main.ore:5:5: error[E0016]: `px` is already declared at shadow_files/a.ore:1:4 (shadowing is not allowed)
+shadow_files/main.ore:6:5: error[E0016]: `half` is already declared at 4:4 (shadowing is not allowed)

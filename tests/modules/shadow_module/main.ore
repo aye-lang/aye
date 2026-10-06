@@ -1,0 +1,8 @@
+// A local of a module other than the root cannot reuse a top-level name
+// declared in another file of its module: the message names that file.
+
+import css
+
+pub fn main() {
+    @println(css.width(2.0))
+}

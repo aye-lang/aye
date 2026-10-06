@@ -683,12 +683,16 @@ struct Checker<'a> {
     extern_structs: HashSet<String>,
     /// `Program::links`.
     links: Vec<String>,
+    /// The program's files, indexed by `Span::file`.
+    files: Vec<String>,
 }
 
 /// Check a file. Without `require_main` (`ore test`, or `ore check` of a
 /// file with tests) the file does not need `pub fn main()`.
-pub fn check(file: &ast::File, require_main: bool) -> std::result::Result<Program, Vec<Error>> {
+/// `files` are the names of the program's files, indexed by `Span::file`.
+pub fn check(file: &ast::File, require_main: bool, files: &[String]) -> std::result::Result<Program, Vec<Error>> {
     let mut c = Checker {
+        files: files.to_vec(),
         structs: HashMap::new(),
         enums: HashMap::new(),
         sets: HashMap::from([(ALLOC_ERROR.to_string(), vec!["OutOfMemory".to_string()])]),
@@ -932,6 +936,16 @@ fn drops_mut(got: &Type, want: &Type) -> bool {
     }
 }
 
+/// The position `at` in a message about `here`: `line:col`, or
+/// `file:line:col` when `at` is in another file than `here` (`files` are
+/// the file names, indexed by `Span::file`).
+pub fn place(files: &[String], at: Span, here: Span) -> String {
+    match files.get(at.file as usize) {
+        Some(f) if at.file != here.file => format!("{f}:{}:{}", at.line, at.col),
+        _ => format!("{}:{}", at.line, at.col),
+    }
+}
+
 /// Does a function returning `t` need a `return` with a value on every path?
 fn needs_value(t: &Type) -> bool {
     match t {
@@ -969,6 +983,12 @@ fn describe_set(set: &str) -> String {
 }
 
 impl<'a> Checker<'a> {
+    /// The position `at` in a message about `here`: `line:col`, with the
+    /// file's name first when it is another file.
+    fn place(&self, at: Span, here: Span) -> String {
+        place(&self.files, at, here)
+    }
+
     /// Record an error and go on. Follow-up errors are dropped: the silent
     /// error, and any message that mentions `Type::Error`.
     fn report(&mut self, mut e: Error) {
@@ -1548,8 +1568,9 @@ impl<'a> Checker<'a> {
             let prev = seen.iter().find(|(n, _)| *n == p.name).map(|x| x.1).or(top);
             if let Some(prev) = prev {
                 self.report(Error::new(E0016, p.span, format!(
-                    "`{}` is already declared at {}:{} (shadowing is not allowed)",
-                    p.name, prev.line, prev.col
+                    "`{}` is already declared at {} (shadowing is not allowed)",
+                    p.name,
+                    self.place(prev, p.span)
                 )));
             }
             seen.push((&p.name, p.span));
@@ -1666,7 +1687,7 @@ impl<'a> Checker<'a> {
                 continue;
             }
             let (p, iface) = (&b.param, &b.iface);
-            let need = format!("`where {p}: {iface}` of `{g}` at {}:{}", b.span.line, b.span.col);
+            let need = format!("`where {p}: {iface}` of `{g}` at {}", self.place(b.span, span));
             match &args[i] {
                 t if integer && t.is_int() => {}
                 Type::Param(pg, pn) => {
@@ -2163,10 +2184,7 @@ impl<'a> Checker<'a> {
         // Top-level names of other modules are checked by module resolution.
         let top = if self.module.is_empty() { self.top_spans.get(name).copied() } else { None };
         if let Some(prev) = prev.or(top) {
-            return err(E0016, span, format!(
-                "`{name}` is already declared at {}:{} (shadowing is not allowed)",
-                prev.line, prev.col
-            ));
+            return err(E0016, span, format!("`{name}` is already declared at {} (shadowing is not allowed)", self.place(prev, span)));
         }
         let id = self.vars.len();
         self.scopes.last_mut().unwrap().insert(name.to_string(), (id, span));
