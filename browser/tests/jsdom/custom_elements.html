@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<title>Custom elements</title>
+<x-greet id="parsed" name="Ada"><b>light</b></x-greet>
+<div id="host"></div>
+<button is="x-button" id="fancy">Go</button>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const parsed = document.getElementById('parsed');
+log('before define', parsed instanceof HTMLElement, parsed.constructor.name, typeof parsed.greet, parsed.matches(':defined'), document.querySelectorAll(':not(:defined)').length);
+customElements.whenDefined('x-greet').then(c => log('whenDefined', c.name));
+
+class Greet extends HTMLElement {
+  static get observedAttributes() { return ['name']; }
+  count = 0;
+  constructor() {
+    super();
+    log('constructor', this.id || '(new)', this.isConnected, this.getAttribute('name'));
+  }
+  connectedCallback() { log('connected', this.id || '(new)'); }
+  disconnectedCallback() { log('disconnected', this.id || '(new)'); }
+  attributeChangedCallback(name, old, value) { log('attribute', this.id || '(new)', name, old, value); }
+  greet() { return 'hello ' + this.getAttribute('name'); }
+}
+// Defining upgrades the elements already in the document.
+customElements.define('x-greet', Greet);
+log('after define', parsed instanceof Greet, parsed.greet(), parsed.count, customElements.get('x-greet') === Greet, customElements.getName(Greet), parsed.matches(':defined'));
+parsed.setAttribute('name', 'Grace');
+parsed.setAttribute('title', 'not observed');
+
+// Made by a script: constructed at once.
+const made = document.createElement('x-greet');
+log('created', made instanceof Greet, made.isConnected);
+made.id = 'made';
+document.getElementById('host').appendChild(made);
+made.remove();
+const direct = new Greet();
+log('new', direct.localName, direct instanceof Greet, direct === direct);
+
+// Markup: upgraded when inserted into the document.
+const box = document.getElementById('host');
+box.innerHTML = '<x-greet id="markup" name="Lin"></x-greet>';
+log('markup', box.firstChild instanceof Greet);
+const clone = box.firstChild.cloneNode(true);
+log('clone', clone instanceof Greet, clone.isConnected);
+
+// Errors.
+const errors = [];
+for (const [name, ctor] of [['x-greet', class extends HTMLElement {}], ['nohyphen', class extends HTMLElement {}], ['x-other', Greet], ['font-face', class extends HTMLElement {}]]) {
+  try { customElements.define(name, ctor); } catch (e) { errors.push(e.name); }
+}
+try { new HTMLElement(); } catch (e) { errors.push(e.message); }
+log('errors', errors.join(', '));
+
+// A constructor that throws leaves the element as it was.
+document.getElementById('host').innerHTML = '<x-broken></x-broken>';
+customElements.define('x-broken', class extends HTMLElement { constructor() { super(); throw new Error('broken constructor'); } });
+log('broken', document.querySelector('x-broken').constructor.name);
+
+// A customized built-in element (is=).
+class FancyButton extends HTMLButtonElement {
+  connectedCallback() { log('fancy connected', this.textContent); }
+  get fancy() { return true; }
+}
+customElements.define('x-button', FancyButton, { extends: 'button' });
+const fancy = document.getElementById('fancy');
+log('is', fancy instanceof FancyButton, fancy instanceof HTMLButtonElement, fancy.fancy);
+const made2 = document.createElement('button', { is: 'x-button' });
+log('is created', made2 instanceof FancyButton, made2.getAttribute('is'));
+
+// upgrade() for a tree out of the document.
+const outside = document.createElement('div');
+outside.innerHTML = '<x-late></x-late>';
+customElements.define('x-late', class Late extends HTMLElement { constructor() { super(); log('late constructed'); } });
+log('late before upgrade', outside.firstChild.constructor.name);
+customElements.upgrade(outside);
+log('late after upgrade', outside.firstChild.constructor.name);
+
+// A shadow root made in the constructor.
+customElements.define('x-card', class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' }).innerHTML = '<h2><slot name="title">Untitled</slot></h2><slot></slot>';
+  }
+});
+const card = document.createElement('x-card');
+card.innerHTML = '<span slot="title">Title</span> body';
+document.body.appendChild(card);
+log('card', card.shadowRoot.innerHTML, card.shadowRoot.querySelector('slot').assignedNodes().length);
+</script>

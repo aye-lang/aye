@@ -311,7 +311,7 @@ fn clickNode(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId) AllocErr
         if p.doc.isElement(c, "button") || p.doc.isElement(c, "label") {
             break
         }
-        cur = p.doc.parent(c)
+        cur = dom.flatParent(&p.doc, c)
     }
     if dom.isCheckable(&p.doc, el) || dom.isSubmitButton(&p.doc, el) || dom.isResetButton(&p.doc, el) {
         let act = try engine.activate(p, el)
@@ -847,7 +847,7 @@ fn moveFocus(s: *mut Session, tmp: Allocator, p: *mut Page, forward: bool) Alloc
             }
             try all.append(h)
         }
-        cur = p.doc.following(h, p.doc.root)
+        cur = dom.flatFollowing(&p.doc, h, p.doc.root)
     }
     if all.len() == 0 {
         return done("nothing on the page takes the focus")
@@ -963,7 +963,7 @@ fn findIn(s: *mut Session, tmp: Allocator, p: *mut Page, want: []u8, count: *mut
     while cur |h| {
         let n = p.doc.node(h).*
         if n.kind == Kind.Element && (!rendered(p, h) || html.isIn(n.name, "script style template")) {
-            cur = p.doc.followingSkip(h, p.doc.root)
+            cur = dom.flatFollowingSkip(&p.doc, h, p.doc.root)
             continue
         }
         if n.kind == Kind.Text && textVisible(p, h) {
@@ -978,7 +978,7 @@ fn findIn(s: *mut Session, tmp: Allocator, p: *mut Page, want: []u8, count: *mut
                 from = from + at + want.len
             }
         }
-        cur = p.doc.following(h, p.doc.root)
+        cur = dom.flatFollowing(&p.doc, h, p.doc.root)
     }
     for k in 0..p.frames.len() {
         let f = p.frames.items()[k]
@@ -1018,14 +1018,14 @@ fn findLine(s: *mut Session, tmp: Allocator, p: *mut Page, t: NodeId, flat: []u8
     }
     try out.appendByte('"')
     // The nearest element around it that has a ref.
-    var cur = p.doc.parent(t)
+    var cur = dom.flatParent(&p.doc, t)
     while cur |c| {
         if refOf(s, p, c) |r| {
             try out.append(" in ")
             try out.append(try describeNode(s, tmp, p, c))
             break
         }
-        cur = p.doc.parent(c)
+        cur = dom.flatParent(&p.doc, c)
     }
     if rectOf(s, p, t) |r| {
         if offscreen(s, r) {

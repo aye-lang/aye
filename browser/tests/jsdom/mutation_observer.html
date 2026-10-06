@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<title>MutationObserver</title>
+<div id="box"><p id="a">a</p><p id="b">b</p></div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+function names(list) { return Array.from(list, n => n.nodeName + (n.id ? '#' + n.id : '')).join(',') || '-'; }
+function show(r) {
+  const parts = [r.type, names([r.target])];
+  if (r.type === 'childList') parts.push('+' + names(r.addedNodes), '-' + names(r.removedNodes), 'prev=' + names(r.previousSibling ? [r.previousSibling] : []), 'next=' + names(r.nextSibling ? [r.nextSibling] : []));
+  if (r.type === 'attributes') parts.push(r.attributeName);
+  if (r.oldValue !== null) parts.push('old=' + r.oldValue);
+  return parts.join(' ');
+}
+const box = document.getElementById('box');
+const a = document.getElementById('a');
+const b = document.getElementById('b');
+
+// Records are delivered in a microtask, after the script's own work.
+const mo = new MutationObserver((records, observer) => {
+  log('callback', records.length, observer === mo, records[0] instanceof MutationRecord);
+  for (const r of records) log(' ', show(r));
+});
+mo.observe(box, { childList: true, attributes: true, attributeOldValue: true, subtree: true, characterData: true, characterDataOldValue: true });
+const c = document.createElement('p');
+c.id = 'c';
+box.appendChild(c);
+box.insertBefore(document.createElement('hr'), a);
+a.setAttribute('class', 'x');
+a.className = 'y';
+a.removeAttribute('class');
+b.firstChild.data = 'B';
+b.firstChild.textContent = 'B2';
+box.removeChild(c);
+a.dataset.k = 'v';
+a.style.color = 'red';
+log('sync, before the microtask');
+
+// innerHTML is one record with the old and new children.
+Promise.resolve().then(() => {
+  b.innerHTML = '<i>1</i><i>2</i>';
+  // A fragment's children land in one record of the parent.
+  const frag = document.createDocumentFragment();
+  frag.append('t', document.createElement('em'));
+  box.append(frag);
+  b.replaceWith(document.createElement('span'));
+  log('takeRecords', mo.takeRecords().map(show).join(' | '));
+  mo.disconnect();
+  box.appendChild(document.createElement('br'));
+  log('after disconnect', mo.takeRecords().length);
+});
+
+// attributeFilter, observing without subtree, and errors.
+const filtered = new MutationObserver(rs => log('filtered', rs.map(show).join(' | ')));
+filtered.observe(a, { attributeFilter: ['title'] });
+a.setAttribute('lang', 'en');
+a.title = 'T';
+const errors = [];
+for (const opts of [{}, { attributeOldValue: true, attributes: false }, { characterDataOldValue: true, characterData: false }]) {
+  try { filtered.observe(a, opts); } catch (e) { errors.push(e.name); }
+}
+try { filtered.observe('no', { childList: true }); } catch (e) { errors.push(e.name); }
+log('errors', errors.join(','));
+// Two observers see the same change in the order they observed.
+const first = new MutationObserver(() => log('first'));
+const second = new MutationObserver(() => log('second'));
+second.observe(document.body, { childList: true });
+first.observe(document.body, { childList: true });
+document.body.appendChild(document.createComment('x'));
+</script>

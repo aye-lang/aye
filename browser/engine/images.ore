@@ -253,7 +253,7 @@ fn fillImagesWith(cache: *mut ImageCache, doc: *Document, address: *Url, styles:
     }
     var cur: ?NodeId = doc.root
     while cur |h| {
-        cur = doc.following(h, doc.root)
+        cur = dom.shadowIncludingFollowing(doc, h, doc.root)
         if !isImageElement(doc, h) || cache.nodes.get(h) != null {
             continue
         }
@@ -293,7 +293,7 @@ fn prefetchImages(cache: *mut ImageCache, doc: *Document, base: *Url, extra: [][
     }
     var cur: ?NodeId = doc.root
     while cur |h| {
-        cur = doc.following(h, doc.root)
+        cur = dom.shadowIncludingFollowing(doc, h, doc.root)
         if !isImageElement(doc, h) || cache.nodes.get(h) != null {
             continue
         }
@@ -319,7 +319,7 @@ fn prefetchImages(cache: *mut ImageCache, doc: *Document, base: *Url, extra: [][
 fn styleUrls(alloc: Allocator, doc: *Document, styles: *css.Styles, nodes: *layout.Images, out: *mut List([]u8)) AllocError!void {
     var cur: ?NodeId = doc.root
     while cur |h| {
-        cur = doc.following(h, doc.root)
+        cur = dom.shadowIncludingFollowing(doc, h, doc.root)
         let values = styles.get(h) orelse continue
         let start = out.len()
         try css.layerUrls(alloc, values[css.BACKGROUND_IMAGE], out)
@@ -365,7 +365,7 @@ fn displayed(doc: *Document, styles: *css.Styles, el: NodeId) bool {
                 return false
             }
         }
-        cur = doc.parent(h)
+        cur = dom.flatParent(doc, h)
     }
     return true
 }

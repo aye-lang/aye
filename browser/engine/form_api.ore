@@ -59,7 +59,7 @@ fn controlCustomValidity(it: *mut Interp, a: Args) JsError!Value {
     defer it.release(b)
     try argText(it, a, 0, b)
     try dom.setCustomValidity(docOf(it), h, b.bytes())
-    changed(it)
+    try changed(it)
     return Value.Undefined
 }
 
@@ -151,7 +151,7 @@ fn formReset(it: *mut Interp, a: Args) JsError!Value {
     if p.doc.isElement(h, "form") && (try dispatchEvent(p, h, "reset", "")) {
         try dom.resetForm(&mut p.doc, h)
         p.doc.controls.validation = null
-        changed(it)
+        try changed(it)
     }
     return Value.Undefined
 }

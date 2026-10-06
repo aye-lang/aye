@@ -207,11 +207,13 @@ pub struct Page {
             }
             st.styles.deinit()
             st.styles = try css.Styles.init(self.alloc)
+            try dom.assignSlots(&mut self.doc)
             try css.computeStyles(&self.doc, &st.ua, &st.author, st.media, &mut st.styles)
         }
     }
 
     fn styleFor(self: *mut Self, media: css.Media) AllocError!*mut Styling {
+        try dom.assignSlots(&mut self.doc)
         var ua = try css.Sheet.init(self.alloc)
         errdefer ua.deinit()
         try css.uaSheet(&mut ua, media)

@@ -1,0 +1,28 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Template contents"
+      "\n"
+    <body>
+      <div id="d">
+        <p class="a">
+          "one "
+          <b>
+            "two"
+        <!-- c -->
+      "\n"
+      <template id="parsed">
+        #document-fragment
+          <li>
+            "parsed "
+            <i>
+              "item"
+      "\n"
+      <pre id="out">
+        "children 0 content 2 true\ninnerHTML <p class=\"a\">one <b>two</b></p><!--c-->\nimport 2 <p class=\"a\">one <b>two</b></p>\ntemplate still has 2\nnested <span>inner</span> <template><span>inner</span></template>\nclone parsed item <li>parsed <i>item</i></li>\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\n// A template made by a script: innerHTML goes to its contents, as lit\n// and Polymer use it.\nconst t = document.createElement('template');\nt.innerHTML = '<p class=\"a\">one <b>two</b></p><!--c-->';\nlog('children', t.childNodes.length, 'content', t.content.childNodes.length, t.content instanceof DocumentFragment);\nlog('innerHTML', t.innerHTML);\nconst copy = document.importNode(t.content, true);\nlog('import', copy.childNodes.length, copy.firstChild.outerHTML);\ndocument.getElementById('d').appendChild(t.content.cloneNode(true));\nlog('template still has', t.content.childNodes.length);\n// Templates inside markup keep their contents.\nconst box = document.createElement('div');\nbox.innerHTML = '<template><span>inner</span></template>';\nconst inner = box.firstChild;\nlog('nested', inner.content.firstChild.outerHTML, box.innerHTML);\n// Cloning a template copies its contents.\nconst twin = document.getElementById('parsed').cloneNode(true);\nlog('clone', twin.content.firstChild.textContent, twin.innerHTML);\n"
+      "\n"

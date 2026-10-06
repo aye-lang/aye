@@ -1,0 +1,30 @@
+viewport 800x600
+  block <html> (0, 0) 800x180
+    block <body> (0, 0) 800x164
+      block <x-card> (0, 0) 800x72
+        block <header> (2, 2) 796x28
+          line (6, 6) 788x20
+            inline <b slot="title"> (6, 8) 104x16
+              text (6, 8) 104x16 "Slotted title"
+        block <div> (2, 30) 796x20
+          line (2, 30) 796x20
+            text (2, 32) 152x16 "Shadow text before "
+            inline <span class="light"> (154, 32) 112x16
+              text (154, 32) 112x16 "slotted inline"
+            text (266, 32) 80x16 " and after"
+        block (anonymous) (2, 50) 796x20
+          line (2, 50) 796x20
+            text (2, 52) 112x16 "Fallback shown"
+      block <div> (0, 88) 800x20
+        block <p> (0, 88) 800x20
+          line (0, 88) 800x20
+            text (0, 90) 208x16 "Only the shadow tree shows"
+      block <ol> (0, 124) 800x40
+        list-item <li> (40, 124) 760x20
+          marker (16, 126) 24x16 "1. "
+          line (40, 124) 760x20
+            text (40, 126) 24x16 "one"
+        list-item <li> (40, 144) 760x20
+          marker (16, 146) 24x16 "2. "
+          line (40, 144) 760x20
+            text (40, 146) 24x16 "two"

@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<style>
+p { color: red }
+x-box { color: green; margin-left: 4px }
+span { font-weight: 700 }
+.light { font-style: italic }
+</style>
+<x-box id=one><template shadowrootmode="open">
+<style>
+p { color: blue }
+span { text-align: center }
+div { margin-top: 9px }
+:host { margin-left: 50px; margin-right: 7px; padding-top: 3px !important }
+slot { color: purple }
+p::before { content: "> " }
+</style>
+<p>Shadow paragraph (blue: the document's p rule stays out)</p>
+<div><slot></slot></div>
+</template><span class="light">Slotted span: purple from the slot, not centered</span><p>Slotted p: red</p></x-box>
+<div style="padding-top: 1px" id=two><template shadowrootmode="open"><style>:host { padding-top: 5px !important; padding-bottom: 6px } div { color: teal }</style><b>no slot</b></template><div>Not slotted</div></div>
+<x-plain><template shadowrootmode="open"><p>Nested: <x-inner><template shadowrootmode="open"><style>i { color: olive }</style><i>inner</i><slot></slot></template><i>light of inner</i></x-inner></p></template></x-plain>

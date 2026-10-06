@@ -1,0 +1,24 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "MutationObserver"
+      "\n"
+    <body>
+      <div id="box">
+        <hr>
+        <p id="a" data-k="v" style="color: red;" lang="en" title="T">
+          "a"
+        <span>
+        "t"
+        <em>
+        <br>
+      "\n"
+      <pre id="out">
+        "sync, before the microtask\nerrors TypeError,TypeError,TypeError,TypeError\ncallback 12 true true\n  childList DIV#box +P#c -- prev=P#b next=-\n  childList DIV#box +HR -- prev=- next=P#a\n  attributes P#a class\n  attributes P#a class old=x\n  attributes P#a class old=y\n  characterData #text old=b\n  characterData #text old=B\n  childList DIV#box +- -P#c prev=P#b next=-\n  attributes P#a data-k\n  attributes P#a style\n  attributes P#a lang\n  attributes P#a title\nfiltered attributes P#a title\nfirst\nsecond\ntakeRecords childList P#b +I,I -#text prev=- next=- | childList DIV#box +#text,EM -- prev=P#b next=- | childList DIV#box +SPAN -P#b prev=P#a next=#text\nafter disconnect 0\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nfunction names(list) { return Array.from(list, n => n.nodeName + (n.id ? '#' + n.id : '')).join(',') || '-'; }\nfunction show(r) {\n  const parts = [r.type, names([r.target])];\n  if (r.type === 'childList') parts.push('+' + names(r.addedNodes), '-' + names(r.removedNodes), 'prev=' + names(r.previousSibling ? [r.previousSibling] : []), 'next=' + names(r.nextSibling ? [r.nextSibling] : []));\n  if (r.type === 'attributes') parts.push(r.attributeName);\n  if (r.oldValue !== null) parts.push('old=' + r.oldValue);\n  return parts.join(' ');\n}\nconst box = document.getElementById('box');\nconst a = document.getElementById('a');\nconst b = document.getElementById('b');\n\n// Records are delivered in a microtask, after the script's own work.\nconst mo = new MutationObserver((records, observer) => {\n  log('callback', records.length, observer === mo, records[0] instanceof MutationRecord);\n  for (const r of records) log(' ', show(r));\n});\nmo.observe(box, { childList: true, attributes: true, attributeOldValue: true, subtree: true, characterData: true, characterDataOldValue: true });\nconst c = document.createElement('p');\nc.id = 'c';\nbox.appendChild(c);\nbox.insertBefore(document.createElement('hr'), a);\na.setAttribute('class', 'x');\na.className = 'y';\na.removeAttribute('class');\nb.firstChild.data = 'B';\nb.firstChild.textContent = 'B2';\nbox.removeChild(c);\na.dataset.k = 'v';\na.style.color = 'red';\nlog('sync, before the microtask');\n\n// innerHTML is one record with the old and new children.\nPromise.resolve().then(() => {\n  b.innerHTML = '<i>1</i><i>2</i>';\n  // A fragment's children land in one record of the parent.\n  const frag = document.createDocumentFragment();\n  frag.append('t', document.createElement('em'));\n  box.append(frag);\n  b.replaceWith(document.createElement('span'));\n  log('takeRecords', mo.takeRecords().map(show).join(' | '));\n  mo.disconnect();\n  box.appendChild(document.createElement('br'));\n  log('after disconnect', mo.takeRecords().length);\n});\n\n// attributeFilter, observing without subtree, and errors.\nconst filtered = new MutationObserver(rs => log('filtered', rs.map(show).join(' | ')));\nfiltered.observe(a, { attributeFilter: ['title'] });\na.setAttribute('lang', 'en');\na.title = 'T';\nconst errors = [];\nfor (const opts of [{}, { attributeOldValue: true, attributes: false }, { characterDataOldValue: true, characterData: false }]) {\n  try { filtered.observe(a, opts); } catch (e) { errors.push(e.name); }\n}\ntry { filtered.observe('no', { childList: true }); } catch (e) { errors.push(e.name); }\nlog('errors', errors.join(','));\n// Two observers see the same change in the order they observed.\nconst first = new MutationObserver(() => log('first'));\nconst second = new MutationObserver(() => log('second'));\nsecond.observe(document.body, { childList: true });\nfirst.observe(document.body, { childList: true });\ndocument.body.appendChild(document.createComment('x'));\n"
+      "\n"
+      <!-- x -->

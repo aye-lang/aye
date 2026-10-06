@@ -14,6 +14,17 @@
 // styles); the others are valid but match nothing. A selector with
 // anything else is invalid, and so is its whole rule.
 //
+// Shadow trees (CSS Scoping): `:host`, `:host(compound)` and
+// `:host-context(compound)` match the shadow host of the sheet being
+// matched (`setShadowHost`; none for the document's sheets and for
+// scripts' queries), which matches nothing else (it is featureless), and
+// combinators going up from the top of its shadow tree reach it.
+// `::slotted(compound)` at the end of a selector selects the elements
+// assigned to the slots it matches (`matchesSlotted`), `::part(name)`
+// the elements with that `part` in the shadow trees of the hosts it
+// matches (`matchesPart`). `:defined` matches elements that are not
+// custom elements, or are defined ones.
+//
 // A sheet keeps selectors in three flat lists: a `Complex` is a range of
 // `Compound`s (left to right), a `Compound` a range of `Simple`s. The
 // argument of `:not()`, `:is()` and `:where()` is a range of
@@ -58,6 +69,14 @@ pub enum SelKind {
     Not
     // `:is()` and `:where()`.
     Is
+    // Shadow trees: `:host` (with an argument: `sub_start..sub_end`),
+    // `:host-context()`, the argument of `::slotted()`, the name of
+    // `::part()` (`name`), `:defined`.
+    Host
+    HostContext
+    Slotted
+    Part
+    Defined
 }
 
 pub struct Simple {
@@ -90,9 +109,13 @@ pub struct Complex {
     // (ids << 16) | (classes << 8) | types, each at most 255.
     spec: u32
     // The pseudo-element it selects: 0 none (an element), 1 `::before`,
-    // 2 `::after`.
+    // 2 `::after`, `PSEUDO_SLOTTED`, `PSEUDO_PART`.
     pseudo: u8
 }
+
+/// `Complex.pseudo` of `::slotted()` and `::part()`.
+pub let PSEUDO_SLOTTED: u8 = 3
+pub let PSEUDO_PART: u8 = 4
 
 /// Selectors `start..end` of `Sheet.complexes`.
 pub struct SelRange {
@@ -221,6 +244,28 @@ fn parseComplex(sheet: *mut Sheet, all: []Token) AllocError!?Complex {
                 let n = toks[next]
                 if n.kind == Tok.Colon {
                     // A pseudo-element.
+                    if next + 1 < hi && toks[next + 1].kind == Tok.Function && isShadowPseudo(toks[next + 1].text) {
+                        let close = blockEnd(toks, next + 1)
+                        if close >= hi {
+                            return null
+                        }
+                        if pseudo == 0 && close + 1 == hi {
+                            if try shadowPseudo(sheet, toks[next + 1], toks[next + 2..close], &mut spec) |sp| {
+                                try simples.append(sp)
+                                pseudo = PSEUDO_PART
+                                if sp.kind == SelKind.Slotted {
+                                    pseudo = PSEUDO_SLOTTED
+                                }
+                            } else {
+                                return null
+                            }
+                        } else {
+                            try simples.append(simple(SelKind.Never, ""))
+                        }
+                        spec.types += 1
+                        i = close + 1
+                        continue
+                    }
                     if next + 1 >= hi || toks[next + 1].kind != Tok.Ident {
                         return null
                     }
@@ -267,6 +312,25 @@ fn parseComplex(sheet: *mut Sheet, all: []Token) AllocError!?Complex {
                             }
                         }
                         spec.add(most)
+                    } else {
+                        return null
+                    }
+                    i = close + 1
+                } else if n.kind == Tok.Function && (text.eqlIgnoreCase(n.text, "host") || text.eqlIgnoreCase(n.text, "host-context")) {
+                    let close = blockEnd(toks, next)
+                    if close >= hi {
+                        return null
+                    }
+                    if try parseSelectors(sheet, toks[next + 1..close]) |inner| {
+                        var s = simple(SelKind.Host, "")
+                        if text.eqlIgnoreCase(n.text, "host-context") {
+                            s.kind = SelKind.HostContext
+                        }
+                        s.sub_start = inner.start
+                        s.sub_end = inner.end
+                        try simples.append(s)
+                        spec.classes += 1
+                        spec.add(mostSpecific(sheet, inner))
                     } else {
                         return null
                     }
@@ -357,6 +421,45 @@ fn pseudoElement(name: []u8) u8 {
     return 0
 }
 
+fn isShadowPseudo(name: []u8) bool {
+    return text.eqlIgnoreCase(name, "slotted") || text.eqlIgnoreCase(name, "part")
+}
+
+// The simple selector of `::slotted(args)` or `::part(args)` (`fun`);
+// null when the argument is invalid. Adds the specificity of the
+// argument of `::slotted()` to `spec`.
+fn shadowPseudo(sheet: *mut Sheet, fun: Token, args: []Token, spec: *mut Spec) AllocError!?Simple {
+    if text.eqlIgnoreCase(fun.text, "part") {
+        let lo = skipWhitespace(args, 0)
+        var hi = args.len
+        while hi > lo && args[hi - 1].kind == Tok.Whitespace {
+            hi -= 1
+        }
+        if hi != lo + 1 || args[lo].kind != Tok.Ident {
+            return null
+        }
+        return simple(SelKind.Part, args[lo].text)
+    }
+    let inner = (try parseSelectors(sheet, args)) orelse return null
+    var s = simple(SelKind.Slotted, "")
+    s.sub_start = inner.start
+    s.sub_end = inner.end
+    spec.add(mostSpecific(sheet, inner))
+    return s
+}
+
+// The highest specificity among the selectors `r`.
+fn mostSpecific(sheet: *Sheet, r: SelRange) u32 {
+    var most: u32 = 0
+    for k in r.start..r.end {
+        let sp = sheet.complexes.items()[k].spec
+        if sp > most {
+            most = sp
+        }
+    }
+    return most
+}
+
 fn isMatchesAny(name: []u8) bool {
     return text.eqlIgnoreCase(name, "is") || text.eqlIgnoreCase(name, "where") || text.eqlIgnoreCase(name, "matches") || text.eqlIgnoreCase(name, "-webkit-any")
 }
@@ -430,6 +533,12 @@ fn pseudoClass(name: []u8) ?SelKind {
     }
     if text.eqlIgnoreCase(name, "focus") {
         return SelKind.Focus
+    }
+    if text.eqlIgnoreCase(name, "host") {
+        return SelKind.Host
+    }
+    if text.eqlIgnoreCase(name, "defined") {
+        return SelKind.Defined
     }
     if text.eqlIgnoreCase(name, "focus-within") {
         return SelKind.FocusWithin
@@ -537,6 +646,16 @@ pub fn setSelectorScope(el: ?NodeId) {
     scope_element = el
 }
 
+// The shadow host of the sheet being matched (`:host`), null for the
+// document's sheets.
+var shadow_host: ?NodeId = null
+
+/// Sets the shadow host whose shadow tree's sheet is matched until the
+/// next call (null: a sheet of the document, or a query).
+pub fn setShadowHost(host: ?NodeId) {
+    shadow_host = host
+}
+
 fn isRoot(doc: *Document, el: NodeId) bool {
     return dom.isSame(doc.node(el).parent, doc.root)
 }
@@ -552,6 +671,115 @@ pub fn matchesPseudo(sheet: *Sheet, doc: *Document, cx: Complex, el: NodeId, pse
     return cx.pseudo == pseudo && matchFrom(sheet, doc, cx.start, cx.end - 1, el)
 }
 
+/// Does the `::slotted()` selector `cx` (of the sheet of a slot's shadow
+/// tree) select `el`: is `el` assigned to a slot that the selector
+/// matches, and does `el` match the argument?
+pub fn matchesSlotted(sheet: *Sheet, doc: *Document, cx: Complex, el: NodeId) bool {
+    if cx.pseudo != PSEUDO_SLOTTED {
+        return false
+    }
+    let slot = doc.node(el).slot orelse return false
+    let s = shadowSimple(sheet, cx) orelse return false
+    if !argumentMatches(sheet, doc, s, el) {
+        return false
+    }
+    return matchFrom(sheet, doc, cx.start, cx.end - 1, slot)
+}
+
+/// Does the `::part()` selector `cx` select `el`, an element of the
+/// shadow tree of `host`: has `el` that part, and does the selector
+/// match `host`?
+pub fn matchesPart(sheet: *Sheet, doc: *Document, cx: Complex, el: NodeId, host: NodeId) bool {
+    if cx.pseudo != PSEUDO_PART {
+        return false
+    }
+    let s = shadowSimple(sheet, cx) orelse return false
+    let parts = doc.attr(el, "part") orelse return false
+    return hasWord(parts, s.name, false) && matchFrom(sheet, doc, cx.start, cx.end - 1, host)
+}
+
+/// Can the selector `cx` match a shadow host from its shadow tree's
+/// sheet: has its last compound `:host` or `:host-context()`?
+pub fn selectsHost(sheet: *Sheet, cx: Complex) bool {
+    return cx.pseudo != PSEUDO_SLOTTED && cx.pseudo != PSEUDO_PART && hasHostSimple(sheet, sheet.compounds.items()[cx.end - 1])
+}
+
+// The `::slotted()` or `::part()` of the last compound of `cx`.
+fn shadowSimple(sheet: *Sheet, cx: Complex) ?Simple {
+    let comp = sheet.compounds.items()[cx.end - 1]
+    for k in comp.start..comp.end {
+        let s = sheet.simples.items()[k]
+        if s.kind == SelKind.Slotted || s.kind == SelKind.Part {
+            return s
+        }
+    }
+    return null
+}
+
+fn hasHostSimple(sheet: *Sheet, comp: Compound) bool {
+    for k in comp.start..comp.end {
+        let kind = sheet.simples.items()[k].kind
+        if kind == SelKind.Host || kind == SelKind.HostContext {
+            return true
+        }
+    }
+    return false
+}
+
+// Does `el` match one of the selectors of the argument of `s` (true
+// when it has none), matched outside the shadow tree?
+fn argumentMatches(sheet: *Sheet, doc: *Document, s: Simple, el: NodeId) bool {
+    if s.sub_start == s.sub_end {
+        return true
+    }
+    let saved = shadow_host
+    shadow_host = null
+    defer shadow_host = saved
+    for k in s.sub_start..s.sub_end {
+        if matchesComplex(sheet, doc, sheet.complexes.items()[k], el) {
+            return true
+        }
+    }
+    return false
+}
+
+// `:host-context()`: does the host `el`, or one of its ancestors
+// through the shadow trees it is in, match the argument of `s`?
+fn hostContextMatches(sheet: *Sheet, doc: *Document, s: Simple, el: NodeId) bool {
+    var cur: ?NodeId = el
+    while cur |c| {
+        if argumentMatches(sheet, doc, s, c) {
+            return true
+        }
+        let p = doc.node(c).parent orelse return false
+        if doc.node(p).kind == Kind.Element {
+            cur = p
+        } else {
+            cur = dom.hostOf(doc, p)
+        }
+    }
+    return false
+}
+
+// The element a descendant or child combinator leads to from `el`: its
+// parent element, or for the top of the shadow tree being matched, its
+// host; none from the host.
+fn upElement(doc: *Document, el: NodeId) ?NodeId {
+    let host = shadow_host orelse return parentElement(doc, el)
+    if dom.same(host, el) {
+        return null
+    }
+    let p = doc.node(el).parent orelse return null
+    let pn = doc.node(p)
+    if pn.kind == Kind.Element {
+        return p
+    }
+    if pn.kind == Kind.Document && dom.isSame(pn.shadow, host) {
+        return host
+    }
+    return null
+}
+
 // Does the compound `ci` match `el`, and the compounds before it (back to
 // `first`) match the elements that its combinator leads to?
 fn matchFrom(sheet: *Sheet, doc: *Document, first: usize, ci: usize, el: NodeId) bool {
@@ -564,9 +792,13 @@ fn matchFrom(sheet: *Sheet, doc: *Document, first: usize, ci: usize, el: NodeId)
     }
     let comb = comp.combinator
     if comb == '>' {
-        if parentElement(doc, el) |p| {
+        if upElement(doc, el) |p| {
             return matchFrom(sheet, doc, first, ci - 1, p)
         }
+        return false
+    }
+    if dom.isSame(shadow_host, el) && (comb == '+' || comb == '~') {
+        // The host has no siblings in its shadow tree.
         return false
     }
     if comb == '+' {
@@ -585,17 +817,21 @@ fn matchFrom(sheet: *Sheet, doc: *Document, first: usize, ci: usize, el: NodeId)
         }
         return false
     }
-    var up = parentElement(doc, el)
+    var up = upElement(doc, el)
     while up |p| {
         if matchFrom(sheet, doc, first, ci - 1, p) {
             return true
         }
-        up = parentElement(doc, p)
+        up = upElement(doc, p)
     }
     return false
 }
 
 fn matchCompound(sheet: *Sheet, doc: *Document, comp: Compound, el: NodeId) bool {
+    if dom.isSame(shadow_host, el) && !hasHostSimple(sheet, comp) {
+        // The host is featureless in its shadow tree.
+        return false
+    }
     for k in comp.start..comp.end {
         if !matchSimple(sheet, doc, sheet.simples.items()[k], el) {
             return false
@@ -752,6 +988,19 @@ fn matchSimple(sheet: *Sheet, doc: *Document, s: Simple, el: NodeId) bool {
                 }
             }
             return false
+        }
+        .Host => {
+            return dom.isSame(shadow_host, el) && argumentMatches(sheet, doc, s, el)
+        }
+        .HostContext => {
+            return dom.isSame(shadow_host, el) && hostContextMatches(sheet, doc, s, el)
+        }
+        .Slotted, .Part => {
+            // Checked by matchesSlotted and matchesPart.
+            return true
+        }
+        .Defined => {
+            return text.indexOf(n.name, "-") == null || n.ce == dom.CE_CUSTOM
         }
     }
 }

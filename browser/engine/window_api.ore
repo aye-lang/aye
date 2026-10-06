@@ -5,6 +5,7 @@
 // process is open (`local_store`).
 
 import css
+import dom
 import dom.Document
 import dom.Kind
 import dom.NodeId
@@ -57,6 +58,7 @@ fn installWindow(s: *mut Script) JsError!void {
     try defMethod(it, o, "cssNames", 0, akCssNames)
     try defMethod(it, o, "supports", 1, akSupports)
     try installFrames(s, o)
+    try installComponents(s, o)
 
     let c = try it.newObject(it.object_proto)
     try it.defineValue(it.global, "console", js.objVal(c))
@@ -202,6 +204,7 @@ fn akActivate(it: *mut Interp, a: Args) JsError!Value {
         .Changed => {
             s.version += 1
             s.style_version += 1
+            try flushMutations(it)
         }
         _ => {}
     }
@@ -572,7 +575,7 @@ fn akDisplayed(it: *mut Interp, a: Args) JsError!Value {
                 _ => {}
             }
         }
-        cur = s.page.doc.parent(c)
+        cur = dom.flatParent(&s.page.doc, c)
     }
     return js.boolVal(true)
 }
@@ -582,6 +585,7 @@ fn akDisplayed(it: *mut Interp, a: Args) JsError!Value {
 fn computedValues(s: *mut Script, h: NodeId) AllocError!?[]css.Value {
     let st = try computedStyling(s)
     if st.styles.get(h) == null {
+        try dom.assignSlots(&mut s.page.doc)
         try css.computeStylesOf(&s.page.doc, &st.ua, &st.author, st.media, h, &mut st.styles)
     }
     return st.styles.get(h)

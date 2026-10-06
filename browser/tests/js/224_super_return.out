@@ -1,0 +1,16 @@
+Base new.target A
+A this is made true a
+true A
+Base new.target B
+A this is made true a
+true B b
+Base new.target C
+A this is made true a
+C true true C a b
+true C
+true 1 2 true
+Base new.target E
+E arrow super true
+Base new.target B
+A this is made true a
+true B

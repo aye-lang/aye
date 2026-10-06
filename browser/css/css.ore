@@ -11,8 +11,10 @@
 //
 // A `Sheet` owns everything it parsed in an arena, including the strings
 // that computed values point to: keep the sheets alive as long as the
-// `Styles` computed from them.
+// `Styles` computed from them. The author sheet of a document also owns
+// the sheets of its shadow trees (`Sheet.scoped`).
 
+import dom.NodeId
 import std.heap.Arena
 import std.list.List
 import std.mem.AllocError
@@ -368,6 +370,13 @@ pub struct Rule {
     decl_end: usize
 }
 
+/// The sheet of a shadow tree: its `style` and `link` elements and the
+/// sheets scripts adopted for its shadow root `root`.
+pub struct Scoped {
+    root: NodeId
+    sheet: *mut Sheet
+}
+
 /// A style sheet: the rules of every source added to it, in order.
 pub struct Sheet {
     alloc: Allocator
@@ -387,6 +396,9 @@ pub struct Sheet {
     // The URL that the `url()`s of the source being parsed are relative
     // to ("": they stay as written); set by the loader around a parse.
     base: []u8
+    // The document's author sheet: the sheets of its shadow trees
+    // (`addScoped`), which apply in those trees only (cascade.ore).
+    scoped: List(Scoped)
 
     pub fn init(alloc: Allocator) AllocError!Sheet {
         let arena = try alloc.create(Arena.init(alloc))
@@ -402,12 +414,33 @@ pub struct Sheet {
             imports: List([]u8).init(a),
             font_faces: List(FontFace).init(a),
             base: "",
+            scoped: List(Scoped).init(a),
         }
     }
 
     pub fn deinit(self: *mut Self) {
+        for sc in self.scoped.items() {
+            sc.sheet.deinit()
+            self.alloc.destroy(sc.sheet)
+        }
         self.arena.deinit()
         self.alloc.destroy(self.arena)
+    }
+
+    /// A new, empty sheet for the shadow tree of `root`, owned by this
+    /// one.
+    pub fn addScoped(self: *mut Self, root: NodeId) AllocError!*mut Sheet {
+        var fresh = try Sheet.init(self.alloc)
+        let sheet = self.alloc.create(fresh) catch |e| {
+            fresh.deinit()
+            return e
+        }
+        self.scoped.append(Scoped { root: root, sheet: sheet }) catch |e| {
+            sheet.deinit()
+            self.alloc.destroy(sheet)
+            return e
+        }
+        return sheet
     }
 
     /// Moves the rules `mid..` (those of imported sheets, parsed last)

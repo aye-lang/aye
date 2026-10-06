@@ -179,11 +179,13 @@ fn axAt(ax: *Ax, i: usize) *mut AxNode {
     return &mut ax.nodes.items()[i]
 }
 
+// The children of `h` in the flat tree (a host's shadow tree, a slot's
+// assigned nodes), as what the page shows.
 fn walkChildren(ax: *mut Ax, h: NodeId, parent: usize) AllocError!void {
-    var cur = ax.page.doc.firstChild(h)
+    var cur = dom.flatFirstChild(&ax.page.doc, h)
     while cur |c| {
         try walkNode(ax, c, parent)
-        cur = ax.page.doc.nextSibling(c)
+        cur = dom.flatNextSibling(&ax.page.doc, c)
     }
 }
 
@@ -434,7 +436,7 @@ fn styleHidden(p: *Page, el: NodeId) bool {
 }
 
 fn textVisible(p: *Page, t: NodeId) bool {
-    if p.doc.parent(t) |el| {
+    if dom.flatParent(&p.doc, t) |el| {
         if p.doc.node(el).kind == Kind.Element {
             return !styleHidden(p, el)
         }
@@ -445,7 +447,7 @@ fn textVisible(p: *Page, t: NodeId) bool {
 /// Does the text node `t` keep its newlines (`white-space: pre`,
 /// `pre-wrap`, `pre-line`, `break-spaces`, as in `pre`)?
 fn keepsNewlines(p: *Page, t: NodeId) bool {
-    if p.doc.parent(t) |el| {
+    if dom.flatParent(&p.doc, t) |el| {
         if p.styling.?.styles.get(el) |style| {
             return layout.whiteSpaceOf(style).newlines
         }
@@ -692,12 +694,12 @@ fn nativeRole(ax: *Ax, el: NodeId) []u8 {
 
 // Is the table around `el` presentational (a layout table)?
 fn inPresentationTable(p: *Page, el: NodeId) bool {
-    var cur = p.doc.parent(el)
+    var cur = dom.flatParent(&p.doc, el)
     while cur |c| {
         if p.doc.isElement(c, "table") {
             return isLayoutTable(p, c)
         }
-        cur = p.doc.parent(c)
+        cur = dom.flatParent(&p.doc, c)
     }
     return false
 }
@@ -753,13 +755,13 @@ fn isLayoutTable(p: *Page, table: NodeId) bool {
 
 // Is `el` inside an element that scopes `header` and `footer`?
 fn inSectioning(p: *Page, el: NodeId) bool {
-    var cur = p.doc.parent(el)
+    var cur = dom.flatParent(&p.doc, el)
     while cur |c| {
         let n = p.doc.node(c)
         if n.kind == Kind.Element && html.isIn(n.name, "article aside main nav section") {
             return true
         }
-        cur = n.parent
+        cur = dom.flatParent(&p.doc, c)
     }
     return false
 }
@@ -893,13 +895,13 @@ fn nativeName(ax: *mut Ax, el: NodeId, b: *mut text.Builder) AllocError!void {
             }
         }
         if isBlank(b.bytes()) {
-            var cur = p.doc.parent(el)
+            var cur = dom.flatParent(&p.doc, el)
             while cur |c| {
                 if p.doc.isElement(c, "label") {
                     try contentText(ax, c, b, true)
                     break
                 }
-                cur = p.doc.parent(c)
+                cur = dom.flatParent(&p.doc, c)
             }
         }
         return
@@ -937,18 +939,19 @@ fn nativeName(ax: *mut Ax, el: NodeId, b: *mut text.Builder) AllocError!void {
 
 // The content of the first child element of `el` named `child`.
 fn childText(ax: *mut Ax, el: NodeId, child: []u8, b: *mut text.Builder) AllocError!void {
-    var cur = ax.page.doc.firstChild(el)
+    var cur = dom.flatFirstChild(&ax.page.doc, el)
     while cur |c| {
         if ax.page.doc.isElement(c, child) {
             try contentText(ax, c, b, true)
             return
         }
-        cur = ax.page.doc.nextSibling(c)
+        cur = dom.flatNextSibling(&ax.page.doc, c)
     }
 }
 
-/// Appends the text of `h` as a name: visible text, `alt` of images,
-/// `aria-label` of descendants; form controls inside are left out.
+/// Appends the text of `h` (in the flat tree) as a name: visible text,
+/// `alt` of images, `aria-label` of descendants; form controls inside
+/// are left out.
 fn contentText(ax: *mut Ax, h: NodeId, b: *mut text.Builder, top: bool) AllocError!void {
     let p = ax.page
     let n = p.doc.node(h).*
@@ -991,10 +994,10 @@ fn contentText(ax: *mut Ax, h: NodeId, b: *mut text.Builder, top: bool) AllocErr
     if block {
         try b.appendByte(' ')
     }
-    var cur = n.first_child
+    var cur = dom.flatFirstChild(&p.doc, h)
     while cur |c| {
         try contentText(ax, c, b, false)
-        cur = p.doc.nextSibling(c)
+        cur = dom.flatNextSibling(&p.doc, c)
     }
     if block {
         try b.appendByte(' ')

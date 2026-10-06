@@ -191,6 +191,7 @@ fn dump(alloc: Allocator, args: [][]u8) !i32 {
     defer alloc.free(src)
     var doc = try load(alloc, res.mime, src)
     defer doc.deinit()
+    try dom.assignSlots(&mut doc)
 
     var roots = List(NodeId).init(alloc)
     defer roots.deinit()
@@ -261,6 +262,7 @@ fn dumpScripted(alloc: Allocator, o: *Options, location: *Url) !i32 {
     }
     engine.setViewport(p, o.width, 600.0)
     try engine.runUntilIdle(p, 30000.0)
+    try dom.assignSlots(&mut p.doc)
     var roots = List(NodeId).init(alloc)
     defer roots.deinit()
     if o.id.len > 0 {
