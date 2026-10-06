@@ -26,9 +26,9 @@
 // line-through; propagated from ancestors, not into atomic inlines),
 // list markers, images (decoded ones scaled into their content box,
 // else a frame with their `alt` text), frames (`iframe`, `embed`,
-// `object`: a frame with their address as a link), inline `svg` (its
-// box only, nothing drawn), form controls (checkboxes and
-// radio buttons drawn, a `select`'s arrow, a list box's selected
+// `object`: a frame with their address as a link), SVG (inline `svg`
+// elements and SVG images, drawn by svg/ into their content box), form
+// controls (checkboxes and radio buttons drawn, a `select`'s arrow, a list box's selected
 // options), visibility, and overflow other than `visible` as a clip to
 // the padding box.
 
@@ -46,6 +46,7 @@ import std.mem.AllocError
 import std.mem.Allocator
 import std.sort
 import std.text
+import svg
 
 /// A rectangle in CSS px.
 pub struct Rect {
@@ -61,6 +62,8 @@ pub enum Item {
     Text { x: f64, y: f64, s: []u8, face: font.Font, c: Rgba }
     // An image of `w` x `h` RGBA pixels (the page's), scaled into `r`.
     Image { r: Rect, w: usize, h: usize, pixels: []u8 }
+    // An SVG drawing fitted into `r` and clipped to it.
+    Svg { r: Rect, pic: *svg.Picture }
     // Drawing is limited to `r` until the matching `Unclip`.
     Clip { r: Rect }
     Unclip
@@ -543,6 +546,9 @@ struct Builder {
     fn replaced(self: *mut Self, i: usize, x: f64, y: f64, w: f64, h: f64) AllocError!void {
         if self.t.bx(i).node |el| {
             if self.t.images |imgs| {
+                if imgs.picture(el) |pic| {
+                    return self.drawing(pic, x, y, w, h)
+                }
                 if imgs.get(el) |bmp| {
                     if w > 0.0 && h > 0.0 {
                         self.extend(x + w, y + h)
@@ -552,8 +558,9 @@ struct Builder {
                 }
             }
             if self.t.doc.isElement(el, "svg") {
-                // Its drawing is not rendered.
-                return
+                // The picture lives in the tree's arena, as long as the list.
+                let pic = try svg.build(self.t.alloc, self.t.doc, self.t.styles, el)
+                return self.drawing(pic, x, y, w, h)
             }
             let kind = layout.controlKind(self.t.doc, el)
             if kind == layout.ControlKind.Checkbox {
@@ -564,6 +571,13 @@ struct Builder {
             }
         }
         return self.placeholder(i, x, y, w, h)
+    }
+
+    fn drawing(self: *mut Self, pic: *svg.Picture, x: f64, y: f64, w: f64, h: f64) AllocError!void {
+        if w > 0.0 && h > 0.0 && pic.shapes.len() > 0 {
+            self.extend(x + w, y + h)
+            try self.add(Item.Svg { r: Rect { x: x, y: y, w: w, h: h }, pic: pic })
+        }
     }
 
     fn checkbox(self: *mut Self, el: dom.NodeId, x: f64, y: f64, w: f64, h: f64) AllocError!void {
@@ -769,6 +783,12 @@ pub fn render(list: *DisplayList, canvas: *mut Canvas, v: View, painter: *mut Te
                 }
             }
             .Image { r, w, h, pixels } => canvas.drawImage(deviceRect(r, v), w, h, pixels)
+            .Svg { r, pic } => {
+                let d = deviceRect(r, v)
+                let k = canvas.clip
+                let t = svg.Target { pixels: canvas.pixels, width: canvas.width, x0: k.x0, y0: k.y0, x1: k.x1, y1: k.y1 }
+                try svg.render(canvas.alloc, pic, t, d.x0 as f64, d.y0 as f64, (d.x1 - d.x0) as f64, (d.y1 - d.y0) as f64, v.scale)
+            }
             .Clip { r } => {
                 try canvas.pushClip(deviceRect(r, v))
             }

@@ -15,8 +15,9 @@
 //   widest option.
 // - The content of a text field moves by its scroll offset (kept in
 //   `dom.controls`, set by the window so that the caret shows).
-// - Images: `Images` maps elements to decoded bitmaps; a replaced box
-//   takes its natural size and aspect ratio from there.
+// - Images: `Images` maps elements to decoded bitmaps (and SVG images
+//   to their pictures); a replaced box takes its natural size and aspect
+//   ratio from there.
 
 import css
 import css.Value
@@ -29,6 +30,7 @@ import std.math
 import std.mem.AllocError
 import std.mem.Allocator
 import std.text
+import svg
 
 /// The decoded images of a document, by element. The bitmaps belong to
 /// whoever filled the map (the page's image cache).
@@ -44,7 +46,22 @@ pub struct Images {
     }
 
     pub fn put(self: *mut Self, el: NodeId, bmp: *image.Bitmap) AllocError!void {
-        try self.map.put(el.index, ImageRef { generation: el.generation, bmp: bmp })
+        try self.map.put(el.index, ImageRef { generation: el.generation, bmp: bmp, pic: null })
+    }
+
+    /// An SVG image: `bmp` has its natural size (and no pixels).
+    pub fn putPicture(self: *mut Self, el: NodeId, bmp: *image.Bitmap, pic: *svg.Picture) AllocError!void {
+        try self.map.put(el.index, ImageRef { generation: el.generation, bmp: bmp, pic: pic })
+    }
+
+    /// The picture of `el` when it shows an SVG image.
+    pub fn picture(self: *Self, el: NodeId) ?*svg.Picture {
+        if self.map.get(el.index) |r| {
+            if r.generation == el.generation {
+                return r.pic
+            }
+        }
+        return null
     }
 
     /// The bitmap of `el`; null when it has none (not an image, not
@@ -62,6 +79,7 @@ pub struct Images {
 struct ImageRef {
     generation: u32
     bmp: *image.Bitmap
+    pic: ?*svg.Picture
 }
 
 /// What kind of form control an element is, for layout and paint.
