@@ -68,10 +68,6 @@ pub struct Styles {
     // The computed initial values (what an element without any rule and
     // without a parent gets).
     initial: []mut Value
-    // Candidate rule indices, shared with lazy getComputedStyle reads.
-    ua_index: RuleIndex
-    author_index: RuleIndex
-    quirks_index: RuleIndex
 
     pub fn init(alloc: Allocator) AllocError!Styles {
         let arena = try alloc.create(Arena.init(alloc))
@@ -111,16 +107,10 @@ pub struct Styles {
             quirks: quirks,
             customs: IntMap(u32, *mut CustomLevel).init(alloc),
             initial: initial,
-            ua_index: RuleIndex.init(alloc),
-            author_index: RuleIndex.init(alloc),
-            quirks_index: RuleIndex.init(alloc),
         }
     }
 
     pub fn deinit(self: *mut Self) {
-        self.ua_index.deinit()
-        self.author_index.deinit()
-        self.quirks_index.deinit()
         self.map.deinit()
         self.before.deinit()
         self.after.deinit()
@@ -550,39 +540,22 @@ struct Computer {
     // `level`) that matches `el` (`how`: MATCH_*).
     fn consider(self: *mut Self, sheet: *Sheet, el: NodeId, level: u8, how: u8) AllocError!void {
         if how == MATCH_ELEMENT {
-            if self.ruleIndexOf(sheet, level) |index| {
-                let candidates = try index.candidates(sheet, self.doc, el)
-                var previous: ?usize = null
-                for ri in candidates {
-                    if previous == ri {
-                        continue
-                    }
-                    previous = ri
-                    try self.considerRule(sheet, ri, el, level, how)
+            let candidates = try sheet.index.candidates(sheet, self.doc, el)
+            var previous: ?usize = null
+            for ri in candidates {
+                if previous == ri {
+                    continue
                 }
-                return
+                previous = ri
+                try self.considerRule(sheet, ri, el, level, how)
             }
+            return
         }
         // `::slotted()` and `::part()` rules describe the slot or the
         // host in their rightmost compound, not `el`: try them all.
         for ri in 0..sheet.rules.len() {
             try self.considerRule(sheet, ri, el, level, how)
         }
-    }
-
-    // The candidate rule index of `sheet` (null: none, every rule is
-    // tried): the UA, quirks and document author sheets have one.
-    fn ruleIndexOf(self: *mut Self, sheet: *Sheet, level: u8) ?*mut RuleIndex {
-        if sheet == &self.out.quirks {
-            return &mut self.out.quirks_index
-        }
-        if level == L_UA {
-            return &mut self.out.ua_index
-        }
-        if self.scopes.len() > 0 && sheet == self.scopes.items()[0].sheet {
-            return &mut self.out.author_index
-        }
-        return null
     }
 
     // Offers the declarations of the rule `ri` of `sheet` (at the level

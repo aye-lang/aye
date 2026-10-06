@@ -57,8 +57,8 @@ pub struct RuleIndex {
         if self.ready && self.rules == sheet.rules.len() {
             return
         }
-        // Sheet sources are immutable for the lifetime of Styles. A
-        // caller appending rules is supported too, by rebuilding.
+        // The index belongs to its sheet; rules appended (or moved:
+        // `moveRulesFirst` clears `ready`) are indexed again.
         let alloc = self.alloc
         self.deinit()
         self.* = RuleIndex.init(alloc)
