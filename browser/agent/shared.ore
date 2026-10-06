@@ -337,7 +337,7 @@ pub fn refAt(s: *mut Session, tmp: Allocator, node: NodeId) AllocError!u32 {
         if refOf(s, p, c) |r| {
             return r
         }
-        cur = p.doc.parent(c)
+        cur = dom.flatParent(&p.doc, c)
     }
     var el = node
     if p.doc.node(el).kind != dom.Kind.Element {

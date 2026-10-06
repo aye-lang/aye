@@ -1,0 +1,12 @@
+- main
+  - heading "Slotted title" [level=1] [e1]
+  - paragraph: Shadow intro, before the slotted content.
+  - paragraph: First light paragraph.
+  - paragraph: Second light paragraph with bold text.
+  - paragraph
+    - text: Shadow outro with a
+    - link "shadow link" [e2] -> /more
+    - text: .
+  - button "Press me (shadow)" [e3]
+  - list
+    - listitem: light item

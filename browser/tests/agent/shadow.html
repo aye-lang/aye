@@ -1,0 +1,17 @@
+<!doctype html>
+<title>Shadow trees</title>
+<main>
+<x-article><template shadowrootmode="open"><style>:host { display: block }</style>
+<h1><slot name="title">Untitled</slot></h1>
+<p>Shadow intro, before the slotted content.</p>
+<slot></slot>
+<p>Shadow outro with a <a href="/more">shadow link</a>.</p>
+</template>
+<span slot="title">Slotted title</span>
+<p>First light paragraph.</p>
+<p>Second light paragraph with <b>bold</b> text.</p>
+<p slot="nowhere">Not slotted: not shown.</p>
+</x-article>
+<x-button><template shadowrootmode="closed"><button><slot></slot> <span>(shadow)</span></button></template>Press me</x-button>
+<ul><template shadowrootmode="open"><li>shadow item</li><slot></slot></template><li>light item</li></ul>
+</main>
