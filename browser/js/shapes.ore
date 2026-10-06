@@ -160,6 +160,11 @@ fn fillPropCache(it: *mut Interp, id: u32, o: u32, key: u32) {
         it.prop_caches.items()[id] = PropCache { shape: it.heap.obj(o).shape, proto_shape: NONE, slot: slot }
         return
     }
+    // A function without its own `name` or `length` has its own anyway
+    // (getFrom answers them before the prototype): never a proto hit.
+    if it.heap.obj(o).class == Class.Function && (key == A_NAME || key == A_LENGTH) {
+        return
+    }
     let p = it.heap.obj(o).proto
     if p != NONE && cacheable(it, p, key) {
         if it.heap.findProp(p, key) |slot| {
