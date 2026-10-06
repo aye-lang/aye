@@ -46,6 +46,7 @@ pub enum Kw {
     Extern,
     Orelse,
     Unreachable,
+    Is,
 }
 
 const KEYWORDS: &[(&str, Kw)] = &[
@@ -79,6 +80,7 @@ const KEYWORDS: &[(&str, Kw)] = &[
     ("extern", Kw::Extern),
     ("orelse", Kw::Orelse),
     ("unreachable", Kw::Unreachable),
+    ("is", Kw::Is),
 ];
 
 impl Kw {

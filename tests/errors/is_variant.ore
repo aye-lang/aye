@@ -1,0 +1,15 @@
+enum Shape {
+    Circle { r: f64 }
+    Empty
+}
+
+error E { A }
+
+pub fn main() {
+    let s = Shape.Empty
+    let n: i64 = 3
+    let e = E.A
+    @println(s is .Square)
+    @println(n is .Circle)
+    @println(e is .A)
+}

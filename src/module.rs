@@ -943,6 +943,7 @@ impl Loader<'_> {
             | ExprKind::Deref(expr)
             | ExprKind::Try(expr)
             | ExprKind::Unwrap(expr)
+            | ExprKind::Is { expr, .. }
             | ExprKind::Paren(expr) => self.expr(expr),
             ExprKind::Unreachable => {}
             ExprKind::OrElse { expr, body } => {

@@ -1577,7 +1577,7 @@ pub fn main() {
 }
 E0080 = 80 {
     "invalid type arguments",
-    "A type function names a type only with its arguments, `Box(i64)`, and only a type function takes type arguments. The argument of a `comptime` parameter must be a type, and the number of arguments must match the parameters.",
+    "A type function names a type only with its arguments, `Box(i64)`, and only a type function takes type arguments. The argument of a `comptime` parameter must be a type, and the number of arguments must match the parameters. A generic that instantiates itself with larger and larger type arguments (`Nest(?T)` inside `Nest(T)`) would never end: instances nested more than 32 deep are an error.",
     r#"fn Box(comptime T: type) type {
     return struct {
         value: T
@@ -2253,6 +2253,42 @@ fn use(a: Allocator) {
 pub fn main() {
     var c = Counter { count: 0 }
     use(&mut c)
+}
+"#,
+}
+E0106 = 106 {
+    "`is` on a value that is not an enum",
+    "`x is .V` tests whether the enum value `x` (or the enum that the pointer `x` points to) holds the variant `V`, without binding its fields: it is a `bool`. Only enums have variants; compare other values with `==` (error values too). To use the fields of the variant, `match` on it.",
+    r#"error ParseError { Empty, Bad }
+
+fn parse(s: []u8) ParseError!i64 {
+    return ParseError.Empty
+}
+
+pub fn main() {
+    let r = parse("") catch |e| {
+        if e is .Empty {
+            @println("empty")
+        }
+        return
+    }
+    @println(r)
+}
+"#,
+    r#"error ParseError { Empty, Bad }
+
+fn parse(s: []u8) ParseError!i64 {
+    return ParseError.Empty
+}
+
+pub fn main() {
+    let r = parse("") catch |e| {
+        if e == ParseError.Empty {
+            @println("empty")
+        }
+        return
+    }
+    @println(r)
 }
 "#,
 }

@@ -992,6 +992,17 @@ impl Parser {
                 lhs = Expr { kind: ExprKind::OrElse { expr: Box::new(lhs), body }, span };
                 continue;
             }
+            // `x is .V`, at the level of the comparisons.
+            if self.at(&Tok::Kw(Kw::Is)) && 3 >= min_prec {
+                let span = self.bump().span;
+                self.expect(&Tok::Dot)?;
+                let (variant, variant_span) = self.ident()?;
+                lhs = Expr { kind: ExprKind::Is { expr: Box::new(lhs), variant, variant_span }, span };
+                if self.at(&Tok::Kw(Kw::Is)) || self.binop().is_some_and(|(o, _)| o.is_comparison()) {
+                    return Err(Error::new(E0009, self.span(), "comparison operators cannot be chained"));
+                }
+                continue;
+            }
             let Some((op, prec)) = self.binop() else { break };
             if prec < min_prec {
                 break;
@@ -999,7 +1010,7 @@ impl Parser {
             let span = self.bump().span;
             let rhs = self.binary(prec + 1)?;
             lhs = Expr { kind: ExprKind::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) }, span };
-            if op.is_comparison() && self.binop().is_some_and(|(o, _)| o.is_comparison()) {
+            if op.is_comparison() && (self.at(&Tok::Kw(Kw::Is)) || self.binop().is_some_and(|(o, _)| o.is_comparison())) {
                 return Err(Error::new(E0009, self.span(), "comparison operators cannot be chained"));
             }
             if let Some((next, _)) = self.binop()

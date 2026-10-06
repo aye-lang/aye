@@ -91,9 +91,9 @@ context; `ore doc --signatures std` prints all of std.
   There are no block comments. `///` lines right above a declaration or
   member are its doc comment (`ore doc` shows them).
 - Identifiers: a letter or `_`, then letters, digits or `_` (ASCII only).
-- Keywords (30): `fn let var pub import struct enum error interface dyn
+- Keywords (31): `fn let var pub import struct enum error interface dyn
   match if else for while break continue return defer errdefer try catch
-  orelse unreachable comptime where as test mut extern`.
+  orelse unreachable comptime where as test mut extern is`.
 - Predeclared names (not keywords, cannot be declared again): `true false
   null Self type Integer` and the primitive types `i8 i16 i32 i64 isize u8 u16 u32
   u64 usize f32 f64 bool` and C's integer types `c_short c_ushort c_int
@@ -819,6 +819,10 @@ Arms are separated by newlines or `,`.
 - As an expression, each arm is an expression (not a block), and all arms
   have the same type.
 - As a statement, each arm is a block or a call.
+- `x is .V` is `true` when the enum value `x` (or the enum that the
+  pointer `x` points to) holds the variant `V`. It binds no fields (use
+  `match` for them) and sits with the comparisons: `(x is .V) == b`,
+  `!(x is .V)`.
 
 ```ore
 enum Cmd {
@@ -848,6 +852,8 @@ pub fn main() {
     run(Cmd.Move { dx: 1, dy: 2 })
     run(Cmd.Say { text: "hi" })
     @println(isQuit(Cmd.Quit))
+    let c = Cmd.Say { text: "x" }
+    @println(c is .Say)
 }
 ```
 

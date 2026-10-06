@@ -167,8 +167,13 @@ pub enum Type {
     Error,
 }
 
-/// The most instances of one generic.
-const MAX_INSTANCES: usize = 64;
+/// The deepest nesting of a type alias chain.
+const MAX_ALIAS_DEPTH: usize = 64;
+
+/// The deepest nesting of generic instances in a type argument: a generic
+/// that instantiates itself with a larger type (`Nest(?T)` in `Nest(T)`)
+/// would never end. There is no limit on the number of instances.
+const MAX_INSTANCE_DEPTH: usize = 32;
 
 /// The built-in `where` constraint that only integer types satisfy.
 const INTEGER: &str = "Integer";
@@ -515,6 +520,8 @@ pub enum TExprKind {
     Unwrap(Box<TExpr>),
     /// `unreachable`: a panic (in `fast` mode, undefined behavior).
     Unreachable,
+    /// `x is .V`: does the enum value `x` hold variant `index`?
+    IsVariant { expr: Box<TExpr>, index: usize },
     /// A call through the vtable of a `dyn` value.
     DynCall { recv: Box<TExpr>, method: String, args: Vec<TExpr> },
     /// A `*T` or `*mut T` (T is the struct `strukt`) converted to `dyn I`.
@@ -697,6 +704,10 @@ struct Checker<'a> {
     instances: HashMap<(String, Vec<Type>), String>,
     /// Instance structs in order of creation.
     instance_structs: Vec<String>,
+    /// The names of every instance (`instances`' values).
+    instance_names: HashSet<String>,
+    /// The nesting depth of each instance struct (see `type_depth`).
+    instance_depth: HashMap<String, usize>,
     /// Instance structs whose type arguments mention a type parameter.
     abstract_structs: HashSet<String>,
     /// The `where` constraints of each type parameter: interface names.
@@ -780,6 +791,8 @@ pub fn check(file: &ast::File, require_main: bool, files: &[String]) -> std::res
         generics: HashMap::new(),
         instances: HashMap::new(),
         instance_structs: Vec::new(),
+        instance_depth: HashMap::new(),
+        instance_names: HashSet::new(),
         abstract_structs: HashSet::new(),
         bounds: HashMap::new(),
         defined: HashSet::new(),
@@ -1436,7 +1449,7 @@ impl<'a> Checker<'a> {
     /// so that it is a type alias? Its value has the shape of a type, and
     /// its name is a type, a type function or another alias.
     fn is_alias(&self, g: &ast::GlobalDecl, depth: usize) -> bool {
-        if g.mutable || g.ty.is_some() || depth > MAX_INSTANCES {
+        if g.mutable || g.ty.is_some() || depth > MAX_ALIAS_DEPTH {
             return false;
         }
         match &g.init.kind {
@@ -1818,18 +1831,33 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Stop a generic that instantiates itself with larger and larger type
-    /// arguments (`Nest(?T)` in `Nest(T)`), which would never end.
-    fn check_instance_count(&self, g: &str, span: Span) -> Result<()> {
-        if self.instances.keys().filter(|(n, _)| n == g).count() >= MAX_INSTANCES {
+    /// How deeply `t` nests generic instances and other types: 1 for a
+    /// type without parts.
+    fn type_depth(&self, t: &Type) -> usize {
+        match t {
+            Type::Array(e, _) | Type::Slice(e, _) | Type::CPtr(e) | Type::Ptr(e, _) | Type::Optional(e) | Type::ErrorUnion(_, e) => {
+                1 + self.type_depth(e)
+            }
+            Type::Fn(params, ret) => 1 + params.iter().chain([&**ret]).map(|t| self.type_depth(t)).max().unwrap_or(0),
+            Type::Struct(n) => self.instance_depth.get(n).copied().unwrap_or(1),
+            _ => 1,
+        }
+    }
+
+    /// The depth of a new instance of `g` for `args`. Stop a generic that
+    /// instantiates itself with larger and larger type arguments (`Nest(?T)`
+    /// in `Nest(T)`), which would never end.
+    fn instance_depth(&self, g: &str, args: &[Type], span: Span) -> Result<usize> {
+        let depth = 1 + args.iter().map(|t| self.type_depth(t)).max().unwrap_or(0);
+        if depth > MAX_INSTANCE_DEPTH {
             if self.failed.contains(g) {
                 return Err(silent());
             }
             return err(E0080, span, format!(
-                "more than {MAX_INSTANCES} instances of `{g}`: it instantiates itself with larger and larger type arguments"
+                "`{g}` instantiates itself with larger and larger type arguments (instances nested more than {MAX_INSTANCE_DEPTH} deep), which would never end"
             ));
         }
-        Ok(())
+        Ok(depth)
     }
 
     /// The name of a new instance: `Pool(Node)`. Instances for type
@@ -1839,7 +1867,7 @@ impl<'a> Checker<'a> {
         let base = format!("{g}({})", args.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", "));
         let mut name = base.clone();
         let mut n = 1;
-        while self.instances.values().any(|v| *v == name) {
+        while self.instance_names.contains(&name) {
             n += 1;
             name = format!("{base}#{n}");
         }
@@ -1902,10 +1930,12 @@ impl<'a> Checker<'a> {
         if let Some(n) = self.instances.get(&key) {
             return Ok(Type::Struct(n.clone()));
         }
-        self.check_instance_count(g, span)?;
+        let depth = self.instance_depth(g, &key.1, span)?;
         let name = self.instance_name(g, &key.1);
+        self.instance_names.insert(name.clone());
         self.instances.insert(key.clone(), name.clone());
         self.instance_structs.push(name.clone());
+        self.instance_depth.insert(name.clone(), depth);
         self.structs.insert(name.clone(), StructDef { name: name.clone(), fields: vec![], is_union: false });
         let identity = key.1 == self.own_params(decl);
         let is_abstract = key.1.iter().any(|t| self.has_param(t));
@@ -1965,8 +1995,9 @@ impl<'a> Checker<'a> {
             return Ok(k.clone());
         }
         let decl = self.generics[g];
-        self.check_instance_count(g, span)?;
+        self.instance_depth(g, &key.1, span)?;
         let name = self.instance_name(g, &key.1);
+        self.instance_names.insert(name.clone());
         self.instances.insert(key.clone(), name.clone());
         let identity = key.1 == self.own_params(decl);
         let is_abstract = key.1.iter().any(|t| self.has_param(t));
@@ -3617,6 +3648,27 @@ impl<'a> Checker<'a> {
                 (TExprKind::Catch { expr: Box::new(t), capture, body: Box::new(body?) }, payload)
             }
             ExprKind::Unreachable => (TExprKind::Unreachable, expected.cloned().unwrap_or(Type::Void)),
+            ExprKind::Is { expr, variant, variant_span } => {
+                let mut t = self.value(expr, None)?;
+                // A pointer to an enum is tested through the pointer.
+                if let Type::Ptr(pointee, _) = &t.ty {
+                    let (ty, span) = ((**pointee).clone(), t.span);
+                    t = TExpr { kind: TExprKind::Deref(Box::new(t)), ty, span };
+                }
+                let Type::Enum(ename) = &t.ty else {
+                    return err(E0106, span, format!(
+                        "`is` tests the variant of an enum value, found `{}`{}",
+                        t.ty,
+                        if matches!(t.ty, Type::ErrorSet(_)) { " (compare error values with `==`)" } else { "" }
+                    ));
+                };
+                let def = &self.enums[ename];
+                let Some(index) = def.variants.iter().position(|v| v.name == *variant) else {
+                    let e = Error::new(E0041, *variant_span, format!("enum `{ename}` has no variant `{variant}`"));
+                    return Err(suggest(e, variant, *variant_span, def.variants.iter().map(|v| v.name.as_str())));
+                };
+                (TExprKind::IsVariant { expr: Box::new(t), index }, Type::Bool)
+            }
             ExprKind::Unwrap(inner) => {
                 let t = self.value(inner, None)?;
                 let Type::Optional(v) = &t.ty else {

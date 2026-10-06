@@ -34,7 +34,7 @@ keyword     = "fn" | "let" | "var" | "pub" | "import" | "struct" | "enum"
             | "error" | "interface" | "dyn" | "match" | "if" | "else" | "for"
             | "while" | "break" | "continue" | "return" | "defer" | "errdefer"
             | "try" | "catch" | "orelse" | "unreachable" | "comptime" | "where"
-            | "as" | "test" | "mut" | "extern" ;
+            | "as" | "test" | "mut" | "extern" | "is" ;
 (* `comptime` appears only before a parameter and `where` only after a
    return type; elsewhere they are errors.
    `true`, `false`, `null`, `in`, `Self`, `type`, the primitive type
@@ -190,7 +190,7 @@ cond_expr   = header_expr ;
    & | ^, which do not mix without parentheses (`a & b | c` is an error).
      1  ||
      2  &&
-     3  == != < <= > >=
+     3  == != < <= > >= is
      4  catch orelse
      5  & | ^
      6  << >>
@@ -203,7 +203,8 @@ cond_expr   = header_expr ;
 expr        = or_expr ;
 or_expr     = and_expr { "||" and_expr } ;
 and_expr    = cmp_expr { "&&" cmp_expr } ;
-cmp_expr    = catch_expr [ cmp_op catch_expr ] ;
+cmp_expr    = catch_expr [ cmp_op catch_expr | "is" "." ident ] ;
+               (* x is .V: does the enum x (or *x) hold the variant V; a bool *)
 cmp_op      = "==" | "!=" | "<" | "<=" | ">" | ">=" ;
 catch_expr  = bit_expr { ( "catch" [ "|" ident "|" ] | "orelse" ) fallback } ;
                (* x catch |e| { ... } runs the block on an error; x catch v gives v;

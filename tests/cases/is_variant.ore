@@ -1,0 +1,41 @@
+// `x is .V`: test the variant of an enum value without a full `match`.
+enum Token {
+    Num { value: i64 }
+    Ident { name: []u8 }
+    Plus
+    End
+}
+
+struct Node {
+    tok: Token
+}
+
+fn count(toks: []Token) usize {
+    var n: usize = 0
+    for t in toks {
+        if t is .Num || t is .Ident {
+            n += 1
+        }
+    }
+    return n
+}
+
+pub fn main() {
+    let toks = [4]Token{Token.Num { value: 1 }, Token.Plus, Token.Ident { name: "x" }, Token.End}
+    @println(count(toks[..]))
+    @println(toks[1] is .Plus)
+    @println(!(toks[0] is .Plus))
+    // Through a pointer, and on a field.
+    var node = Node { tok: Token.End }
+    let p = &mut node
+    @println(p.tok is .End)
+    let q = &toks[2]
+    @println(q is .Ident)
+    var i: usize = 0
+    while !(toks[i] is .End) {
+        i += 1
+    }
+    @println(i)
+    let last = (toks[3] is .End) == true
+    @println(last)
+}
