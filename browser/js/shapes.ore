@@ -73,6 +73,53 @@ fn emptyPropCache() PropCache {
     return PropCache { shape: NONE, proto_shape: NONE, slot: 0 }
 }
 
+// Static data-only literals reserve their final slot array once and fill
+// it directly. Duplicate keys, methods/accessors, spread, computed keys
+// and __proto__ retain the general builder. slot == 1 means examined.
+fn literalShape(it: *mut Interp, id: u32, list: u32, n: u32) AllocError!u32 {
+    let cache = it.prop_caches.items()[id]
+    if cache.slot == 1 {
+        return cache.shape
+    }
+    it.prop_caches.items()[id].slot = 1
+    for k in 0..n {
+        match it.ast.node(it.ast.item(list, k)) {
+            .Prop { kind, key, computed, .. } => {
+                if kind != PROP_INIT || computed || key == A_PROTO {
+                    return NONE
+                }
+                for j in 0..k {
+                    match it.ast.node(it.ast.item(list, j)) {
+                        .Prop { key: other, .. } => {
+                            if key == other {
+                                return NONE
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {
+                return NONE
+            }
+        }
+    }
+    var shape: u32 = 0
+    for k in 0..n {
+        match it.ast.node(it.ast.item(list, k)) {
+            .Prop { key, .. } => {
+                shape = try shapeTransition(&mut it.heap, shape, key, k)
+                if shape == NONE {
+                    return NONE
+                }
+            }
+            _ => {}
+        }
+    }
+    it.prop_caches.items()[id].shape = shape
+    return shape
+}
+
 // Only ordinary own-property semantics: arrays' length/indices, string
 // wrappers, proxies and host hooks must go through getProp/setProp.
 fn cacheable(it: *Interp, o: u32, key: u32) bool {

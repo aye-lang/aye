@@ -86,6 +86,17 @@ removed in cff3f60.
 - **Status:** open (`fn f() (i64, i64)` is E0006); deferred in
   decisions.md (M9.9).
 
+#### 48. Boolean-to-number casts are unavailable
+
+- **Need:** store comparison results in an unboxed numeric expression
+  stack without an enum value or a helper call per comparison.
+- **Repro:** `fn f(b: bool) u8 { return b as u8 }` is E0037
+  ("only numeric casts are supported").
+- **Workaround:** `js/fast_expr.ore` starts at 0.0 and assigns 1.0 in
+  an `if` block; clang can lower that to a conditional select.
+- **Hit by:** js performance (B8).
+- **Status:** open; casts remain numeric-only.
+
 ## Declined by design
 
 #### 5. A local cannot start uninitialized; `@zeroed` makes only C structs

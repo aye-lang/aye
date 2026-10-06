@@ -1,0 +1,357 @@
+// js/fast_expr: small, side-effect-free expression recipes. The tree
+// walk is still the general evaluator; a numeric expression can instead
+// run a flat recipe without recursive AST dispatch or temporary roots.
+// Every read is guarded (local slot, own data property, dense element),
+// every operator requires numbers, and a guard failure reruns the AST.
+// No recipe can call JS, allocate a JS value, or write a variable, so a
+// failed attempt has no observable effects and needs no GC roots.
+
+import std.mem.AllocError
+
+struct FastExpr {
+    start: u32
+    n: u32
+    depth: u32
+}
+
+enum ExprInst {
+    Num { n: f64 }
+    Local { depth: u32, slot: u32 }
+    Member { key: u32, shape: u32, slot: u32 }
+    Index
+    Binary { op: Op }
+    Unary { op: Op }
+}
+
+let EXPR_LIMIT: u32 = 64
+let EXPR_STACK: u32 = 32
+
+fn noFastExpr() FastExpr {
+    return FastExpr { start: 0, n: 0, depth: 0 }
+}
+
+fn copyExpr(it: *mut Interp, p: FastExpr) AllocError!void {
+    for k in 0..p.n {
+        // append can move the code list: copy each instruction first.
+        let inst = it.expr_code.items()[p.start + k]
+        try it.expr_code.append(inst)
+    }
+}
+
+fn recipeOp(op: Op) bool {
+    return op == Op.Add || op == Op.Sub || op == Op.Mul || op == Op.Div || op == Op.Mod || op == Op.Lt || op == Op.Gt || op == Op.Le || op == Op.Ge || op == Op.Eq || op == Op.NotEq || op == Op.StrictEq || op == Op.StrictNotEq || op == Op.BitAnd || op == Op.BitOr || op == Op.BitXor || op == Op.Shl || op == Op.Shr || op == Op.UShr
+}
+
+// Children precede their parent in the parser's AST. The resolver has
+// already filled in the locals' depth/slot. Unsupported children, deep
+// expressions, or an unusually large recipe stay in the general walk.
+fn compileFastExprs(it: *mut Interp) AllocError!void {
+    while it.fast_exprs.len() < it.ast.nodes.len() {
+        let id = it.fast_exprs.len() as u32
+        let start = it.expr_code.len() as u32
+        var p = noFastExpr()
+        match it.ast.node(id) {
+            .Num { v } => {
+                try it.expr_code.append(ExprInst.Num { n: v })
+                p = FastExpr { start: start, n: 1, depth: 1 }
+            }
+            .Ident { depth, slot, .. } => {
+                if depth <= DEPTH_GLOBAL_LEX {
+                    try it.expr_code.append(ExprInst.Local { depth: depth, slot: slot })
+                    p = FastExpr { start: start, n: 1, depth: 1 }
+                }
+            }
+            .Binary { op, l, r } => {
+                if l < id && r < id && recipeOp(op) {
+                    let a = it.fast_exprs.items()[l]
+                    let b = it.fast_exprs.items()[r]
+                    var depth = a.depth
+                    if 1 + b.depth > depth {
+                        depth = 1 + b.depth
+                    }
+                    if a.n > 0 && b.n > 0 && a.n + b.n + 1 <= EXPR_LIMIT && depth <= EXPR_STACK {
+                        try copyExpr(it, a)
+                        try copyExpr(it, b)
+                        try it.expr_code.append(ExprInst.Binary { op: op })
+                        p = FastExpr { start: start, n: a.n + b.n + 1, depth: depth }
+                    }
+                }
+            }
+            .Index { obj, key, optional } => {
+                if !optional && obj < id && key < id {
+                    let a = it.fast_exprs.items()[obj]
+                    let b = it.fast_exprs.items()[key]
+                    var depth = a.depth
+                    if 1 + b.depth > depth {
+                        depth = 1 + b.depth
+                    }
+                    if a.n > 0 && b.n > 0 && a.n + b.n + 1 <= EXPR_LIMIT && depth <= EXPR_STACK {
+                        try copyExpr(it, a)
+                        try copyExpr(it, b)
+                        try it.expr_code.append(ExprInst.Index)
+                        p = FastExpr { start: start, n: a.n + b.n + 1, depth: depth }
+                    }
+                }
+            }
+            .Member { obj, name, optional } => {
+                if !optional && obj < id {
+                    let a = it.fast_exprs.items()[obj]
+                    if a.n > 0 && a.n + 1 <= EXPR_LIMIT {
+                        try copyExpr(it, a)
+                        try it.expr_code.append(ExprInst.Member { key: name, shape: NONE, slot: 0 })
+                        p = FastExpr { start: start, n: a.n + 1, depth: a.depth }
+                    }
+                }
+            }
+            .Unary { op, arg } => {
+                if arg < id && (op == Op.Neg || op == Op.Plus || op == Op.BitNot) {
+                    let a = it.fast_exprs.items()[arg]
+                    if a.n > 0 && a.n + 1 <= EXPR_LIMIT {
+                        try copyExpr(it, a)
+                        try it.expr_code.append(ExprInst.Unary { op: op })
+                        p = FastExpr { start: start, n: a.n + 1, depth: a.depth }
+                    }
+                }
+            }
+            _ => {}
+        }
+        try it.fast_exprs.append(p)
+    }
+}
+
+// Scratch kinds: 0 number, 1 object, 2 boolean, 3 string, 4 undefined,
+// 5 null. Empty (an uninitialized binding/hole) fails the attempt.
+// Operators require numbers before any conversion could call JS.
+fn exprValue(it: *mut Interp, at: usize, v: Value) bool {
+    match v {
+        .Num { n } => {
+            it.expr_nums[at] = n
+            it.expr_kinds[at] = 0
+            return true
+        }
+        .Obj { o } => {
+            it.expr_nums[at] = o as f64
+            it.expr_kinds[at] = 1
+            return true
+        }
+        .Str { s } => {
+            it.expr_nums[at] = s as f64
+            it.expr_kinds[at] = 3
+            return true
+        }
+        .Bool { b } => {
+            it.expr_nums[at] = 0.0
+            if b {
+                it.expr_nums[at] = 1.0
+            }
+            it.expr_kinds[at] = 2
+            return true
+        }
+        .Undefined => {
+            it.expr_nums[at] = 0.0
+            it.expr_kinds[at] = 4
+            return true
+        }
+        .Null => {
+            it.expr_nums[at] = 0.0
+            it.expr_kinds[at] = 5
+            return true
+        }
+        _ => {
+            return false
+        }
+    }
+}
+
+// Empty means a guard failed, not a JS value. Scratch is reused without
+// initialization: each used entry is written before it is read. No call
+// can reenter the interpreter or collect while these indices are held.
+fn evalFastExpr(it: *mut Interp, p: FastExpr) Value {
+    var n: usize = 0
+    for k in 0..p.n {
+        let pc = p.start + k
+        match it.expr_code.items()[pc] {
+            .Num { n: v } => {
+                it.expr_nums[n] = v
+                it.expr_kinds[n] = 0
+                n += 1
+            }
+            .Local { depth, slot } => {
+                var e = it.glex
+                if it.expr_call && depth == 0 {
+                    var v = Value.Undefined
+                    if slot == it.expr_this_slot {
+                        v = it.expr_this
+                    } else if slot >= it.expr_first && slot - it.expr_first < it.expr_nparams {
+                        let arg = (slot - it.expr_first) as usize
+                        if arg < it.expr_argc {
+                            v = it.slot(it.expr_argbase + arg)
+                        }
+                    } else {
+                        return Value.Empty
+                    }
+                    if !exprValue(it, n, v) {
+                        return Value.Empty
+                    }
+                    n += 1
+                    continue
+                }
+                if depth < DEPTH_GLOBAL_LEX {
+                    e = it.env
+                    var d = depth
+                    if it.expr_call {
+                        e = it.expr_parent
+                        d -= 1
+                    }
+                    while d > 0 {
+                        e = it.heap.envs.items()[e].parent
+                        d -= 1
+                    }
+                }
+                if !exprValue(it, n, it.heap.envs.items()[e].slots[slot]) {
+                    return Value.Empty
+                }
+                n += 1
+            }
+            .Member { key, shape, slot } => {
+                if it.expr_kinds[n - 1] != 1 {
+                    return Value.Empty
+                }
+                let o = it.expr_nums[n - 1] as u32
+                if !cacheable(it, o, key) {
+                    return Value.Empty
+                }
+                var at = slot
+                if shape == NONE || it.heap.obj(o).shape != shape {
+                    if it.heap.findProp(o, key) |i| {
+                        at = i
+                        it.expr_code.items()[pc] = ExprInst.Member { key: key, shape: it.heap.obj(o).shape, slot: i }
+                    } else {
+                        return Value.Empty
+                    }
+                }
+                let prop = it.heap.obj(o).props[at]
+                if (prop.flags & F_ACCESSOR) != 0 || !exprValue(it, n - 1, prop.value) {
+                    return Value.Empty
+                }
+            }
+            .Index => {
+                if it.expr_kinds[n - 2] != 1 || it.expr_kinds[n - 1] != 0 {
+                    return Value.Empty
+                }
+                let ob = it.heap.obj(it.expr_nums[n - 2] as u32)
+                if ob.class != Class.Array && ob.class != Class.Arguments {
+                    return Value.Empty
+                }
+                let v = it.expr_nums[n - 1]
+                if !(v >= 0.0 && v < ob.nelems as f64) {
+                    return Value.Empty
+                }
+                let idx = v as u32
+                if idx as f64 != v {
+                    return Value.Empty
+                }
+                n -= 1
+                if !exprValue(it, n - 1, ob.elems[idx]) {
+                    return Value.Empty
+                }
+            }
+            .Binary { op } => {
+                if it.expr_kinds[n - 2] != 0 || it.expr_kinds[n - 1] != 0 {
+                    return Value.Empty
+                }
+                let x = it.expr_nums[n - 2]
+                let y = it.expr_nums[n - 1]
+                n -= 1
+                var v = 0.0
+                var kind: u8 = 0
+                match op {
+                    .Add => {
+                        v = x + y
+                    }
+                    .Sub => {
+                        v = x - y
+                    }
+                    .Mul => {
+                        v = x * y
+                    }
+                    .Div => {
+                        v = x / y
+                    }
+                    .Lt => {
+                        if x < y {
+                            v = 1.0
+                        }
+                        kind = 2
+                    }
+                    .Gt => {
+                        if x > y {
+                            v = 1.0
+                        }
+                        kind = 2
+                    }
+                    .Le => {
+                        if x <= y {
+                            v = 1.0
+                        }
+                        kind = 2
+                    }
+                    .Ge => {
+                        if x >= y {
+                            v = 1.0
+                        }
+                        kind = 2
+                    }
+                    .Eq => {
+                        if x == y {
+                            v = 1.0
+                        }
+                        kind = 2
+                    }
+                    .StrictEq => {
+                        if x == y {
+                            v = 1.0
+                        }
+                        kind = 2
+                    }
+                    .NotEq => {
+                        if x != y {
+                            v = 1.0
+                        }
+                        kind = 2
+                    }
+                    .StrictNotEq => {
+                        if x != y {
+                            v = 1.0
+                        }
+                        kind = 2
+                    }
+                    _ => {
+                        v = arith(op, x, y)
+                    }
+                }
+                it.expr_nums[n - 1] = v
+                it.expr_kinds[n - 1] = kind
+            }
+            .Unary { op } => {
+                if it.expr_kinds[n - 1] != 0 {
+                    return Value.Empty
+                }
+                let x = it.expr_nums[n - 1]
+                if op == Op.Neg {
+                    it.expr_nums[n - 1] = -x
+                } else if op == Op.BitNot {
+                    it.expr_nums[n - 1] = (~toInt32(x)) as f64
+                }
+            }
+        }
+    }
+    return match it.expr_kinds[0] {
+        0 => numVal(it.expr_nums[0])
+        1 => objVal(it.expr_nums[0] as u32)
+        2 => boolVal(it.expr_nums[0] != 0.0)
+        3 => strVal(it.expr_nums[0] as u32)
+        4 => Value.Undefined
+        _ => Value.Null
+    }
+}
