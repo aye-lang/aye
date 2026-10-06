@@ -61,6 +61,8 @@ pub fn run(lib: &Lib, header: &str, include: &str, args: &[String]) -> Result<(S
         seen: HashSet::new(),
         hint: None,
         macros: Vec::new(),
+        used_typedefs: Vec::new(),
+        used_typedef_names: HashSet::new(),
     };
     let top = lib.children(unsafe { (lib.clang_getTranslationUnitCursor)(tu) });
     g.prepass(&top);
@@ -177,6 +179,11 @@ struct Gen<'a> {
     /// The name for an anonymous record met as the type of a field.
     hint: Option<String>,
     macros: Vec<String>,
+    /// Typedefs of headers out of scope that the declarations use
+    /// (`pthread_attr_t` of `pthread.h`): declared too, so that programs
+    /// can name them.
+    used_typedefs: Vec<CXCursor>,
+    used_typedef_names: HashSet<String>,
 }
 
 /// A macro's value: Ore type and literal.
@@ -487,7 +494,11 @@ impl Gen<'_> {
                     "ssize_t" | "ptrdiff_t" | "intptr_t" => return Ok("isize".to_string()),
                     _ => {}
                 }
-                let under = unsafe { (lib.clang_getTypedefDeclUnderlyingType)(self.decl_of(t)) };
+                let decl = self.decl_of(t);
+                if ident(&name) && !reserved(&name) && !name.starts_with('_') && !self.in_scope(decl) && self.used_typedef_names.insert(name) {
+                    self.used_typedefs.push(decl);
+                }
+                let under = unsafe { (lib.clang_getTypedefDeclUnderlyingType)(decl) };
                 self.ty(under, by_value)
             }
             T_ELABORATED => self.ty(self.strip(t), by_value),
@@ -765,20 +776,31 @@ impl Gen<'_> {
     // ------------------------------------------------------------- output
 
     fn render(&mut self, header: &str, values: &[Value]) -> String {
-        // Records met only in types (from other headers, or nested ones).
+        // The typedefs of other headers that the declarations use (each
+        // may use more), then the fields of every record that has a
+        // definition: records met only in types (from other headers, or
+        // nested ones) can be used by value too.
+        let own = std::mem::take(&mut self.items);
+        let mut i = 0;
+        while i < self.used_typedefs.len() {
+            let c = self.used_typedefs[i];
+            self.typedef(c);
+            i += 1;
+        }
+        let used = std::mem::replace(&mut self.items, own);
         let mut i = 0;
         while i < self.rec_order.len() {
             let usr = self.rec_order[i].clone();
-            let r = &self.recs[&usr];
-            if r.in_scope && r.defined {
+            if self.recs[&usr].defined {
                 let _ = self.layout(&usr);
             }
             i += 1;
         }
         let mut items = std::mem::take(&mut self.items);
         let unplaced: Vec<String> = self.rec_order.iter().filter(|u| !self.recs[*u].placed).cloned().collect();
-        if !unplaced.is_empty() {
+        if !unplaced.is_empty() || !used.is_empty() {
             items.push(Item::Note("Types that the declarations above use, from other headers or nested in a struct.".to_string()));
+            items.extend(used);
             items.extend(unplaced.into_iter().map(Item::Record));
         }
         // Every top-level name, for parameters (no local may reuse one).
