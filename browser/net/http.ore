@@ -50,6 +50,7 @@ let CURLOPT_CONNECTTIMEOUT_MS: i32 = 156
 let CURLOPT_WRITEFUNCTION: i32 = 20011
 let CURLOPT_HEADERFUNCTION: i32 = 20079
 let CURLOPT_MAXFILESIZE_LARGE: i32 = 30117
+let CURLOPT_SHARE: i32 = 10100
 
 let CURLINFO_RESPONSE_CODE: i32 = 2097154
 let CURLINFO_CONTENT_TYPE: i32 = 1048594
@@ -152,7 +153,7 @@ fn fetchHttp(alloc: Allocator, target: *Url, req: Request) FetchError!Response {
             var keep = cacheable
             var res = try transfer(alloc, curl, target, req, s, &mut keep)
             if keep && res.status >= 200 && res.status < 300 {
-                s.cache.keep(target.withoutFragment(), &res) catch |e| {
+                s.cache.keep(target.withoutFragment(), &res, false) catch |e| {
                     res.deinit(alloc)
                     return FetchError.OutOfMemory
                 }
@@ -203,30 +204,10 @@ fn transfer(alloc: Allocator, curl: *mut Curl, target: *Url, req: Request, s: ?*
         sink.cookies.clear()
         sink.no_store = false
         curl_easy_reset(curl)
+        try here.appendByte(0)
         var headers: ?*mut CurlList = null
         defer curl_slist_free_all(headers)
-        headers = try requestHeaders(alloc, &at, req, post, s)
-        try here.appendByte(0)
-        curl_easy_setopt(curl, CURLOPT_URL, here.bytes().ptr)
-        curl_easy_setopt(curl, CURLOPT_USERAGENT, USER_AGENT.ptr)
-        curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "".ptr)
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, CONNECT_TIMEOUT_MS)
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, TIMEOUT_MS)
-        curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1 as i64)
-        curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE, limit as i64)
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, onBody)
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, @ptrCast([*]u8, &mut sink))
-        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, onHeader)
-        curl_easy_setopt(curl, CURLOPT_HEADERDATA, @ptrCast([*]u8, &mut sink))
-        if headers |h| {
-            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, h)
-        }
-        if post |b| {
-            curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, b.data.len as i64)
-            // An empty body still needs a pointer: libcurl would otherwise
-            // read the body from a callback.
-            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, b.data.ptr)
-        }
+        headers = try prepare(alloc, curl, here.bytes().ptr, &at, req, post, s, &mut sink)
         let code = curl_easy_perform(curl)
         if sink.out_of_memory {
             return FetchError.OutOfMemory
@@ -238,14 +219,7 @@ fn transfer(alloc: Allocator, curl: *mut Curl, target: *Url, req: Request, s: ?*
             return curlError(code)
         }
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &mut status)
-        if s |ses| {
-            var lines = text.split(sink.cookies.bytes(), "\n")
-            while lines.next() |line| {
-                if line.len > 0 {
-                    try ses.jar.store(&at, line, false, now())
-                }
-            }
-        }
+        try storeCookies(s, &at, &sink)
         var location: ?[*]u8 = null
         curl_easy_getinfo(curl, CURLINFO_REDIRECT_URL, &mut location)
         let next = location orelse break
@@ -294,6 +268,50 @@ fn transfer(alloc: Allocator, curl: *mut Curl, target: *Url, req: Request, s: ?*
         }
     }
     return res
+}
+
+// Sets the options of a request for `req` to `address` (`at` as a
+// NUL-terminated string), the response going to `sink`. Returns the
+// header list, to free after the transfer.
+fn prepare(alloc: Allocator, curl: *mut Curl, address: [*]u8, at: *Url, req: Request, post: ?*Body, s: ?*mut Session, sink: *mut Sink) FetchError!?*mut CurlList {
+    let headers = try requestHeaders(alloc, at, req, post, s)
+    curl_easy_setopt(curl, CURLOPT_URL, address)
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, USER_AGENT.ptr)
+    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "".ptr)
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, CONNECT_TIMEOUT_MS)
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, TIMEOUT_MS)
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1 as i64)
+    curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE, sink.limit as i64)
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, onBody)
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, @ptrCast([*]u8, sink))
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, onHeader)
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, @ptrCast([*]u8, sink))
+    if headers |h| {
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, h)
+    }
+    if post |b| {
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, b.data.len as i64)
+        // An empty body still needs a pointer: libcurl would otherwise
+        // read the body from a callback.
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, b.data.ptr)
+    }
+    if s |ses| {
+        if ses.share |sh| {
+            curl_easy_setopt(curl, CURLOPT_SHARE, sh)
+        }
+    }
+    return headers
+}
+
+// Stores the cookies of the response in `sink`, the response of `at`.
+fn storeCookies(s: ?*mut Session, at: *Url, sink: *Sink) AllocError!void {
+    let ses = s orelse return
+    var lines = text.split(sink.cookies.bytes(), "\n")
+    while lines.next() |line| {
+        if line.len > 0 {
+            try ses.jar.store(at, line, false, now())
+        }
+    }
 }
 
 // The headers of a request to `at` besides the User-Agent (a list for

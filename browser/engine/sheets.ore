@@ -20,6 +20,7 @@ import url.Url
 pub fn authorSheets(alloc: Allocator, doc: *Document, address: *Url, media: css.Media, sheet: *mut css.Sheet) AllocError!void {
     var base = try documentBase(alloc, doc, address)
     defer base.deinit(alloc)
+    try prefetchSheets(alloc, doc, &base, address, media, sheet)
     var cur: ?NodeId = doc.root
     while cur |h| {
         if doc.isElement(h, "style") && (try mediaOk(doc, h, media, sheet)) {
@@ -34,6 +35,28 @@ pub fn authorSheets(alloc: Allocator, doc: *Document, address: *Url, media: css.
         }
         cur = doc.following(h, doc.root)
     }
+}
+
+// Fetches the linked sheets concurrently into the session's cache
+// (net.prefetch), before they are taken one by one.
+fn prefetchSheets(alloc: Allocator, doc: *Document, base: *Url, address: *Url, media: css.Media, sheet: *mut css.Sheet) AllocError!void {
+    var hrefs = text.Builder.init(alloc)
+    defer hrefs.deinit()
+    var cur: ?NodeId = doc.root
+    while cur |h| {
+        if doc.isElement(h, "link") && isStylesheetLink(doc, h) && (try mediaOk(doc, h, media, sheet)) {
+            if doc.attr(h, "href") |href| {
+                if url.resolve(alloc, base, text.trim(href)) |target| {
+                    defer target.deinit(alloc)
+                    try hrefs.append(target.withoutFragment())
+                    try hrefs.appendByte('\n')
+                } else |e| {
+                }
+            }
+        }
+        cur = doc.following(h, doc.root)
+    }
+    net.prefetch(alloc, hrefs.bytes(), net.Kind.Style, address.href)
 }
 
 fn mediaOk(doc: *Document, el: NodeId, media: css.Media, sheet: *mut css.Sheet) AllocError!bool {

@@ -3,7 +3,9 @@
 // fragment), so laying out again, reloading or visiting another page of
 // the site does not fetch them again. A response with `Cache-Control:
 // no-store` is not kept; nothing expires within a session. At most
-// MAX_CACHE_BYTES of bodies are kept (later responses are not).
+// MAX_CACHE_BYTES of bodies are kept (later responses are not). The
+// concurrent fetches of multi.ore also keep, for one use, responses
+// that may not be cached.
 
 import std
 import std.list.List
@@ -20,6 +22,8 @@ struct Cached {
     status: i64
     // The URL after redirects, or empty.
     moved: []mut u8
+    // Served once, then dropped.
+    once: bool
 }
 
 pub struct Cache {
@@ -33,18 +37,24 @@ pub struct Cache {
 
     pub fn deinit(self: *mut Self) {
         for e in self.entries.items() {
-            release(self.alloc, e.href)
-            release(self.alloc, e.mime)
-            release(self.alloc, e.charset)
-            release(self.alloc, e.body)
-            release(self.alloc, e.moved)
+            freeEntry(self.alloc, e)
         }
         self.entries.deinit()
     }
 
-    /// A copy (from `alloc`) of the response kept for `href`, or null.
-    pub fn lookup(self: *Self, alloc: Allocator, href: []u8) AllocError!?Response {
+    /// Is there a response for `href`?
+    pub fn has(self: *Self, href: []u8) bool {
         for e in self.entries.items() {
+            if std.mem.eql(e.href, href) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// A copy (from `alloc`) of the response kept for `href`, or null.
+    pub fn lookup(self: *mut Self, alloc: Allocator, href: []u8) AllocError!?Response {
+        for i, e in self.entries.items() {
             if std.mem.eql(e.href, href) {
                 let mime = try copyBytes(alloc, e.mime)
                 errdefer alloc.free(mime)
@@ -56,14 +66,19 @@ pub struct Cache {
                 if e.moved.len > 0 {
                     moved = try dup(alloc, e.moved)
                 }
+                if e.once {
+                    self.bytes -= e.body.len
+                    freeEntry(self.alloc, self.entries.orderedRemove(i))
+                }
                 return Response { mime: mime, charset: charset, body: body, status: e.status, url: moved }
             }
         }
         return null
     }
 
-    /// Keeps a copy of `res`, the response for `href`.
-    pub fn keep(self: *mut Self, href: []u8, res: *Response) AllocError!void {
+    /// Keeps a copy of `res`, the response for `href` (for one use only
+    /// when `once`).
+    pub fn keep(self: *mut Self, href: []u8, res: *Response, once: bool) AllocError!void {
         if self.bytes + res.body.len > MAX_CACHE_BYTES {
             return
         }
@@ -75,15 +90,20 @@ pub struct Cache {
             body: try dup(a, res.body),
             status: res.status,
             moved: try dup(a, res.url),
+            once: once,
         }
         self.entries.append(e) catch |err| {
-            release(a, e.href)
-            release(a, e.mime)
-            release(a, e.charset)
-            release(a, e.body)
-            release(a, e.moved)
+            freeEntry(a, e)
             return err
         }
         self.bytes += res.body.len
     }
+}
+
+fn freeEntry(alloc: Allocator, e: Cached) {
+    release(alloc, e.href)
+    release(alloc, e.mime)
+    release(alloc, e.charset)
+    release(alloc, e.body)
+    release(alloc, e.moved)
 }

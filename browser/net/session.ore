@@ -1,6 +1,7 @@
 // The network session of the process (`start` ... `stop`): one libcurl
-// easy handle reused for every HTTP request (so connections, TLS
-// sessions and DNS answers are kept), the cookie jar (cookies.ore), the
+// easy handle reused for every HTTP request, and a share handle that
+// keeps connections, TLS sessions and DNS answers for it and for the
+// concurrent fetches of multi.ore; the cookie jar (cookies.ore), the
 // cache of subresources (cache.ore), and the referrer of the next
 // navigation. Without a session (unit tests), every request has a handle
 // of its own and no cookies or cache.
@@ -13,11 +14,21 @@ import url
 import url.Url
 
 extern fn time(t: ?[*]i64) i64
+extern struct CurlShare {}
+extern fn curl_share_init() ?*mut CurlShare
+extern fn curl_share_setopt(sh: *mut CurlShare, option: i32, ...) i32
+extern fn curl_share_cleanup(sh: *mut CurlShare) i32
+
+let CURLSHOPT_SHARE: i32 = 1
+let CURL_LOCK_DATA_DNS: i32 = 3
+let CURL_LOCK_DATA_SSL_SESSION: i32 = 4
+let CURL_LOCK_DATA_CONNECT: i32 = 5
 extern fn getenv(name: [*]u8) ?[*]u8
 
 struct Session {
     alloc: Allocator
     curl: ?*mut Curl
+    share: ?*mut CurlShare
     jar: Jar
     cache: Cache
     // ANYKNOWN_COOKIE_FILE, or empty.
@@ -43,6 +54,7 @@ pub fn start(alloc: Allocator) AllocError!void {
     let s = alloc.create(Session {
         alloc: alloc,
         curl: null,
+        share: curl_share_init(),
         jar: Jar.init(alloc),
         cache: Cache.init(alloc),
         cookie_file: file,
@@ -53,6 +65,11 @@ pub fn start(alloc: Allocator) AllocError!void {
         return e
     }
     session = s
+    if s.share |sh| {
+        curl_share_setopt(sh, CURLSHOPT_SHARE, CURL_LOCK_DATA_CONNECT)
+        curl_share_setopt(sh, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS)
+        curl_share_setopt(sh, CURLSHOPT_SHARE, CURL_LOCK_DATA_SSL_SESSION)
+    }
     if file.len > 0 && std.fs.exists(file) {
         let saved = std.fs.readFile(alloc, file) catch |e| {
             return
@@ -73,6 +90,9 @@ pub fn stop() {
     }
     if s.curl |c| {
         curl_easy_cleanup(c)
+    }
+    if s.share |sh| {
+        curl_share_cleanup(sh)
     }
     s.jar.deinit()
     s.cache.deinit()

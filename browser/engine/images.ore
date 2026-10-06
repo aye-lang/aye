@@ -127,6 +127,7 @@ pub fn fillImages(cache: *mut ImageCache, doc: *Document, address: *Url) AllocEr
     }
     var base = try documentBase(cache.alloc, doc, address)
     defer base.deinit(cache.alloc)
+    try prefetchImages(cache, doc, &base)
     var cur: ?NodeId = doc.root
     while cur |h| {
         cur = doc.following(h, doc.root)
@@ -145,6 +146,31 @@ pub fn fillImages(cache: *mut ImageCache, doc: *Document, address: *Url) AllocEr
             try cache.nodes.put(h, bmp)
         }
     }
+}
+
+// Fetches the new images of `doc` concurrently into the session's cache
+// (net.prefetch), before `fillImages` takes them one by one.
+fn prefetchImages(cache: *mut ImageCache, doc: *Document, base: *Url) AllocError!void {
+    var hrefs = text.Builder.init(cache.alloc)
+    defer hrefs.deinit()
+    var cur: ?NodeId = doc.root
+    while cur |h| {
+        cur = doc.following(h, doc.root)
+        if !isImageElement(doc, h) || cache.nodes.get(h) != null {
+            continue
+        }
+        let src = text.trim(doc.attr(h, "src") orelse "")
+        if src.len == 0 {
+            continue
+        }
+        let target = url.resolve(cache.alloc, base, src) catch |e| {
+            continue
+        }
+        defer target.deinit(cache.alloc)
+        try hrefs.append(target.withoutFragment())
+        try hrefs.appendByte('\n')
+    }
+    net.prefetch(cache.alloc, hrefs.bytes(), net.Kind.Image, cache.referrer)
 }
 
 fn isImageElement(doc: *Document, el: NodeId) bool {
