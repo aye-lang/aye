@@ -2976,6 +2976,21 @@ pub let PRELUDE =
     \\  }
     \\}
     \\moveMembers(HTMLP, MEMBERS);
+    \\// The same for the mixins defined on Node: ParentNode is on elements,
+    \\// documents and fragments, ChildNode on elements, character data and
+    \\// doctypes (ShadyDOM keeps the native members of exactly these).
+    \\function moveTo(from, names, targets) {
+    \\  for (const k of names.split(' ')) {
+    \\    const d = Object.getOwnPropertyDescriptor(from, k);
+    \\    if (!d) continue;
+    \\    for (const P of targets) if (!Object.prototype.hasOwnProperty.call(P, k)) Object.defineProperty(P, k, d);
+    \\    delete from[k];
+    \\  }
+    \\}
+    \\const DocP = Document.prototype, FragP = DocumentFragment.prototype;
+    \\moveTo(NodeP, 'children firstElementChild lastElementChild childElementCount querySelector querySelectorAll append prepend replaceChildren', [ElementP, DocP, FragP]);
+    \\moveTo(NodeP, 'getElementsByTagName getElementsByClassName', [ElementP, DocP]);
+    \\moveTo(NodeP, 'before after replaceWith remove', [ElementP, CharacterData.prototype, DocumentType.prototype]);
     \\
     \\ak.setDispatch(hostEvent);
     \\})(__ak);
