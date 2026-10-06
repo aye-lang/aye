@@ -129,6 +129,53 @@ pub fn render(alloc: Allocator, pic: *Picture, t: Target, x: f64, y: f64, w: f64
     }
 }
 
+/// Tests path coverage using exactly the flattened geometry and stroke
+/// polygons used by render. No pixel grid or antialiasing approximation
+/// is involved in the hit test.
+pub fn contains(alloc: Allocator, pic: *Picture, x: f64, y: f64, stroke: bool) AllocError!bool {
+    var r = Rasterizer {
+        alloc: alloc,
+        t: Target { pixels: []mut u8{}, width: 0, ox: 0, oy: 0, x0: 0, y0: 0, x1: 0, y1: 0 },
+        edges: List(Edge).init(alloc),
+        active: List(usize).init(alloc),
+        cross: List(Crossing).init(alloc),
+        pts: List(f64).init(alloc),
+        subs: List(Sub).init(alloc),
+        poly: List(f64).init(alloc),
+    }
+    defer r.deinit()
+    for s in pic.shapes.items() {
+        if s.group != 0 {
+            continue
+        }
+        try r.flatten(pic, s, IDENTITY)
+        r.edges.clear()
+        if stroke {
+            if s.dash_end > s.dash_start {
+                try r.dash(pic.dashes.items()[s.dash_start..s.dash_end], 1.0, s.dash_offset)
+            }
+            try r.strokeEdges(s.stroke_width / 2.0, s.cap, s.join, s.miter_limit)
+        } else {
+            try r.fillEdges()
+        }
+        var winding: i64 = 0
+        var crossings: usize = 0
+        for e in r.edges.items() {
+            if y >= e.y0 && y < e.y1 {
+                let at = e.x0 + (y - e.y0) * e.dxdy
+                if at >= x {
+                    winding += e.dir
+                    crossings += 1
+                }
+            }
+        }
+        if (!stroke && s.evenodd && crossings % 2 == 1) || ((stroke || !s.evenodd) && winding != 0) {
+            return true
+        }
+    }
+    return false
+}
+
 // A gradient paint of a picture: the gradient (`k` is its index plus 1)
 // and the map from device px to its space.
 struct GradPaint {

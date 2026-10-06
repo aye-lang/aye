@@ -38,13 +38,14 @@ pub struct ImageCache {
     alloc: Allocator
     entries: List(CachedImage)
     nodes: layout.Images
+    canvases: List(CanvasBitmap)
     // The URL of the page, sent as the Referer (owned).
     referrer: []mut u8
     // The keys of `nodes.urls` (owned).
     keys: List([]mut u8)
 
     pub fn init(alloc: Allocator) ImageCache {
-        return ImageCache { alloc: alloc, entries: List(CachedImage).init(alloc), nodes: layout.Images.init(alloc), referrer: alloc.alloc(0 as u8, 0) catch unreachable, keys: List([]mut u8).init(alloc) }
+        return ImageCache { alloc: alloc, entries: List(CachedImage).init(alloc), nodes: layout.Images.init(alloc), canvases: List(CanvasBitmap).init(alloc), referrer: alloc.alloc(0 as u8, 0) catch unreachable, keys: List([]mut u8).init(alloc) }
     }
 
     pub fn deinit(self: *mut Self) {
@@ -60,6 +61,11 @@ pub struct ImageCache {
             }
         }
         self.entries.deinit()
+        for c in self.canvases.items() {
+            c.bmp.deinit(self.alloc)
+            self.alloc.destroy(c.bmp)
+        }
+        self.canvases.deinit()
         self.nodes.deinit()
         self.alloc.free(self.referrer)
         for k in self.keys.items() {

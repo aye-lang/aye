@@ -1,0 +1,743 @@
+// Canvas bitmaps belong to the page's image cache, not to JS wrappers.
+// Geometry and coverage go through svg/; text through font/ and paint/.
+// The bitmap exposed to paint and PNG is straight RGBA. Temporary drawing
+// layers are premultiplied, like the SVG and display-list rasterizers.
+
+import css
+import dom
+import dom.NodeId
+import font
+import image
+import js
+import js.Args
+import js.Interp
+import js.JsError
+import js.Value
+import paint
+import std
+import std.math
+import std.mem.AllocError
+import std.text
+import svg
+
+struct CanvasBitmap {
+    node: NodeId
+    bmp: *mut image.Bitmap
+    epoch: u64
+}
+
+// A bounded allocation, also for detached and offscreen canvases. Keeping
+// the total below 64 MiB leaves room for coverage and compositing layers.
+let CANVAS_SIDE: usize = 16384
+let CANVAS_PIXELS: usize = 16777216
+
+fn installCanvas(it: *mut Interp, o: u32) JsError!void {
+    try defMethod(it, o, "canvasInfo", 1, akCanvasInfo)
+    try defMethod(it, o, "canvasDraw", 6, akCanvasDraw)
+    try defMethod(it, o, "canvasPixels", 6, akCanvasPixels)
+    try defMethod(it, o, "canvasPng", 1, akCanvasPng)
+    try defMethod(it, o, "canvasColor", 1, akCanvasColor)
+    try defMethod(it, o, "canvasHit", 4, akCanvasHit)
+    try defMethod(it, o, "canvasText", 3, akCanvasText)
+    try defMethod(it, o, "canvasPath", 2, akCanvasPath)
+}
+
+fn canvasDimension(doc: *dom.Document, h: NodeId, key: []u8, fallback: usize) usize {
+    let s = doc.attr(h, key) orelse return fallback
+    var scan = svg.Scanner { s: text.trim(s), i: 0 }
+    let n = scan.number() orelse return fallback
+    if n != n || n < 0.0 {
+        return fallback
+    }
+    if n > 4294967295.0 {
+        return 4294967295
+    }
+    return math.floor(n) as usize
+}
+
+fn canvasBitmap(it: *mut Interp, v: Value) JsError!*mut CanvasBitmap {
+    let h = handleOf(it, v, TAG_NODE) orelse {
+        try it.typeError("Canvas source is not an element")
+        return JsError.Thrown
+    }
+    let p = scriptOf(it).active
+    if !p.doc.isElement(h, "canvas") {
+        try it.typeError("Canvas source is not a canvas")
+        return JsError.Thrown
+    }
+    if p.images == null {
+        p.images = try p.alloc.create(ImageCache.init(p.alloc))
+    }
+    let cache = p.images.?
+    for i in 0..cache.canvases.len() {
+        let c = &mut cache.canvases.items()[i]
+        if dom.same(c.node, h) {
+            return c
+        }
+    }
+    let w = canvasDimension(&p.doc, h, "width", 300)
+    let ht = canvasDimension(&p.doc, h, "height", 150)
+    var size: usize = 0
+    if w <= CANVAS_SIDE && ht <= CANVAS_SIDE && w * ht <= CANVAS_PIXELS {
+        size = w * ht * 4
+    }
+    let px = try p.alloc.alloc(0 as u8, size)
+    let bmp = p.alloc.create(image.Bitmap { width: w, height: ht, pixels: px }) catch |e| {
+        p.alloc.free(px)
+        return e
+    }
+    cache.canvases.append(CanvasBitmap { node: h, bmp: bmp, epoch: 0 }) catch |e| {
+        bmp.deinit(p.alloc)
+        p.alloc.destroy(bmp)
+        return e
+    }
+    try cache.nodes.put(h, bmp)
+    return &mut cache.canvases.items()[cache.canvases.len() - 1]
+}
+
+// Attribute writes reset even when their value did not change. The epoch
+// tells the JS context to discard its state stack and current path too.
+fn resetCanvas(p: *mut Page, h: NodeId, key: []u8) AllocError!void {
+    if !p.doc.isElement(h, "canvas") || (!text.eql(key, "width") && !text.eql(key, "height")) {
+        return
+    }
+    let cache = p.images orelse return
+    for i in 0..cache.canvases.len() {
+        let c = &mut cache.canvases.items()[i]
+        if dom.same(c.node, h) {
+            let w = canvasDimension(&p.doc, h, "width", 300)
+            let ht = canvasDimension(&p.doc, h, "height", 150)
+            var size: usize = 0
+            if w <= CANVAS_SIDE && ht <= CANVAS_SIDE && w * ht <= CANVAS_PIXELS {
+                size = w * ht * 4
+            }
+            let px = try p.alloc.alloc(0 as u8, size)
+            p.alloc.free(c.bmp.pixels)
+            c.bmp.* = image.Bitmap { width: w, height: ht, pixels: px }
+            c.epoch += 1
+            return
+        }
+    }
+}
+
+fn canvasChanged(it: *mut Interp) {
+    let s = scriptOf(it)
+    if s.active == s.page {
+        s.version += 1
+    } else {
+        s.active.mutations += 1
+    }
+}
+
+fn akCanvasInfo(it: *mut Interp, a: Args) JsError!Value {
+    let c = try canvasBitmap(it, it.arg(a, 0))
+    return js.numVal(c.epoch as f64)
+}
+
+fn canvasProp(it: *mut Interp, v: Value, key: []u8) JsError!Value {
+    return it.getProp(v, try it.intern(key))
+}
+
+fn canvasNum(it: *mut Interp, v: Value, key: []u8) JsError!f64 {
+    return it.toNumber(try canvasProp(it, v, key))
+}
+
+fn canvasIndex(it: *mut Interp, v: Value, i: usize) JsError!Value {
+    return it.getIndex(v, js.numVal(i as f64))
+}
+
+fn canvasMatrix(it: *mut Interp, v: Value) JsError!svg.Matrix {
+    var n = [6]f64{1.0, 0.0, 0.0, 1.0, 0.0, 0.0}
+    for i in 0..6 {
+        n[i] = try it.toNumber(try canvasIndex(it, v, i))
+        if n[i] != n[i] || math.abs(n[i]) > 1000000000.0 {
+            return svg.scaling(0.0, 0.0)
+        }
+    }
+    return svg.Matrix { a: n[0], b: n[1], c: n[2], d: n[3], e: n[4], f: n[5] }
+}
+
+fn canvasColor(alloc: std.mem.Allocator, s: []u8) AllocError!?svg.Color {
+    var sheet = try css.Sheet.init(alloc)
+    defer sheet.deinit()
+    var b = text.Builder.init(alloc)
+    defer b.deinit()
+    try b.append("color:")
+    try b.append(s)
+    let range = try css.parseInline(&mut sheet, b.bytes())
+    if range.end != range.start + 1 {
+        return null
+    }
+    match sheet.decls.items()[range.start].value {
+        .Rgba { c } => {
+            return svg.Color { r: c.r, g: c.g, b: c.b, a: math.floor(math.clamp(c.a, 0.0, 1.0) * 255.0 + 0.5) as u8 }
+        }
+        _ => {
+            return null
+        }
+    }
+}
+
+fn akCanvasColor(it: *mut Interp, a: Args) JsError!Value {
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 0, b)
+    let c = (try canvasColor(it.alloc, b.bytes())) orelse return Value.Null
+    let arr = try it.newArray(0)
+    try it.push(js.objVal(arr))
+    try it.heap.pushElem(arr, js.numVal(c.r as f64))
+    try it.heap.pushElem(arr, js.numVal(c.g as f64))
+    try it.heap.pushElem(arr, js.numVal(c.b as f64))
+    try it.heap.pushElem(arr, js.numVal(c.a as f64))
+    it.pop()
+    return js.objVal(arr)
+}
+
+fn canvasTarget(b: *image.Bitmap, px: []mut u8) svg.Target {
+    return svg.Target { pixels: px, width: b.width, ox: 0, oy: 0, x0: 0, y0: 0, x1: b.width as i64, y1: b.height as i64 }
+}
+
+fn canvasSvg(it: *mut Interp, v: Value, bmp: *image.Bitmap, px: []mut u8) JsError!void {
+    let sv = try it.toStringValue(v)
+    try it.push(sv)
+    defer it.pop()
+    let pic = (try svg.parseImage(it.alloc, it.heap.bytes(js.strOf(sv)))) orelse return
+    defer pic.deinit()
+    defer it.alloc.destroy(pic)
+    try svg.render(it.alloc, pic, canvasTarget(bmp, px), 0.0, 0.0, bmp.width as f64, bmp.height as f64, 1.0)
+}
+
+// Coverage from SVG is multiplied by the paint's alpha. Compositing is
+// evaluated over the entire clipping region (including transparent source
+// pixels for copy/source-in), not just over the source's bounding box.
+fn canvasComposite(dst: []mut u8, src: []u8, clip: ?[]u8, alpha: f64, mode: []u8) {
+    var i: usize = 0
+    while i < dst.len {
+        var cover = 1.0
+        if clip |c| {
+            cover = c[i + 3] as f64 / 255.0
+        }
+        let sa = src[i + 3] as f64 / 255.0 * alpha
+        let da = dst[i + 3] as f64 / 255.0
+        var fs = 1.0
+        var fd = 1.0 - sa
+        if text.eql(mode, "copy") {
+            fd = 0.0
+        } else if text.eql(mode, "destination-out") || text.eql(mode, "clear") {
+            fs = 0.0
+        } else if text.eql(mode, "source-in") {
+            fs = da
+            fd = 0.0
+        } else if text.eql(mode, "lighter") {
+            fd = 1.0
+        }
+        let oa = math.min(1.0, sa * fs + da * fd)
+        let outa = oa * cover + da * (1.0 - cover)
+        for k in 0..3 {
+            let sc = src[i + k] as f64 / 255.0 * alpha
+            let dc = dst[i + k] as f64 / 255.0 * da
+            var out = sc * fs + dc * fd
+            if text.eql(mode, "multiply") {
+                out = sc * (1.0 - da) + dc * (1.0 - sa) + sc * dc
+            }
+            out = math.min(1.0, out) * cover + dc * (1.0 - cover)
+            var straight = 0.0
+            if outa > 0.0 {
+                straight = math.clamp(out / outa, 0.0, 1.0)
+            }
+            dst[i + k] = math.floor(straight * 255.0 + 0.5) as u8
+        }
+        dst[i + 3] = math.floor(outa * 255.0 + 0.5) as u8
+        i += 4
+    }
+}
+
+fn canvasPaint(it: *mut Interp, style: Value, bmp: *image.Bitmap, px: []mut u8) JsError!void {
+    let kind = try canvasNum(it, style, "kind")
+    let cv = try canvasProp(it, style, "color")
+    var color = [4]f64{0.0, 0.0, 0.0, 255.0}
+    if kind == 0.0 {
+        for k in 0..4 {
+            color[k] = try it.toNumber(try canvasIndex(it, cv, k))
+        }
+        var i: usize = 0
+        while i < px.len {
+            let a = px[i + 3] as f64 * color[3] / 255.0
+            for k in 0..3 {
+                px[i + k] = math.floor(color[k] * a / 255.0 + 0.5) as u8
+            }
+            px[i + 3] = math.floor(a + 0.5) as u8
+            i += 4
+        }
+        return
+    }
+    let matrix = try canvasMatrix(it, try canvasProp(it, style, "matrix"))
+    let inv = svg.invert(matrix) orelse return
+    if kind == 4.0 {
+        let source = try canvasProp(it, style, "image")
+        let h = handleOf(it, source, TAG_NODE) orelse return
+        let page = scriptOf(it).active
+        if page.doc.isElement(h, "canvas") {
+            let ignored = try canvasBitmap(it, source)
+        } else {
+            try updateImages(page, css.Media { width: 800.0, height: 600.0 })
+        }
+        let cache = page.images orelse return
+        let img = cache.nodes.get(h) orelse return
+        if img.width == 0 || img.height == 0 || img.pixels.len == 0 {
+            for i in 0..px.len {
+                px[i] = 0
+            }
+            return
+        }
+        let repeatX = it.toBoolean(try canvasProp(it, style, "repeatX"))
+        let repeatY = it.toBoolean(try canvasProp(it, style, "repeatY"))
+        for y in 0..bmp.height {
+            for x in 0..bmp.width {
+                var sx = inv.mapX(x as f64 + 0.5, y as f64 + 0.5)
+                var sy = inv.mapY(x as f64 + 0.5, y as f64 + 0.5)
+                if repeatX {
+                    sx -= math.floor(sx / img.width as f64) * img.width as f64
+                }
+                if repeatY {
+                    sy -= math.floor(sy / img.height as f64) * img.height as f64
+                }
+                let i = (y * bmp.width + x) * 4
+                if sx < 0.0 || sy < 0.0 || sx >= img.width as f64 || sy >= img.height as f64 {
+                    for k in 0..4 {
+                        px[i + k] = 0
+                    }
+                    continue
+                }
+                let j = (math.floor(sy) as usize * img.width + math.floor(sx) as usize) * 4
+                let a = (px[i + 3] as u32 * img.pixels[j + 3] as u32 + 127) / 255
+                for k in 0..3 {
+                    px[i + k] = ((img.pixels[j + k] as u32 * a + 127) / 255) as u8
+                }
+                px[i + 3] = a as u8
+            }
+        }
+        return
+    }
+    let coords = try canvasProp(it, style, "coords")
+    var n = [6]f64{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}
+    for k in 0..6 {
+        n[k] = try it.toNumber(try canvasIndex(it, coords, k))
+    }
+    let stops = try canvasProp(it, style, "stops")
+    let count = try canvasNum(it, stops, "length")
+    if count < 0.0 || count > 4096.0 {
+        return
+    }
+    let ss = try it.alloc.alloc(svg.GradStop { t: 0.0, c: svg.Color { r: 0, g: 0, b: 0, a: 0 } }, count as usize)
+    defer it.alloc.free(ss)
+    for k in 0..ss.len {
+        let stop = try canvasIndex(it, stops, k)
+        ss[k].t = try it.toNumber(try canvasIndex(it, stop, 0))
+        let col = try canvasIndex(it, stop, 1)
+        var cc = [4]u8{0, 0, 0, 0}
+        for j in 0..4 {
+            cc[j] = (try it.toNumber(try canvasIndex(it, col, j))) as u8
+        }
+        ss[k].c = svg.Color { r: cc[0], g: cc[1], b: cc[2], a: cc[3] }
+    }
+    var g = svg.Gradient { kind: (kind - 1.0) as u8, spread: svg.PAD, m: matrix, x1: n[0], y1: n[1], x2: n[2], y2: n[3], cx: n[3], cy: n[4], r: n[5], fx: n[0], fy: n[1], a0: n[0] + math.pi / 2.0, t0: 0.0, t1: 1.0, stops: ss }
+    if kind == 3.0 {
+        g.cx = n[1]
+        g.cy = n[2]
+    }
+    for y in 0..bmp.height {
+        for x in 0..bmp.width {
+            let xx = inv.mapX(x as f64 + 0.5, y as f64 + 0.5)
+            let yy = inv.mapY(x as f64 + 0.5, y as f64 + 0.5)
+            let c = g.at(xx, yy)
+            let i = (y * bmp.width + x) * 4
+            let a = (px[i + 3] as u32 * c.a as u32 + 127) / 255
+            px[i] = ((c.r as u32 * a + 127) / 255) as u8
+            px[i + 1] = ((c.g as u32 * a + 127) / 255) as u8
+            px[i + 2] = ((c.b as u32 * a + 127) / 255) as u8
+            px[i + 3] = a as u8
+        }
+    }
+}
+
+fn akCanvasDraw(it: *mut Interp, a: Args) JsError!Value {
+    let c = try canvasBitmap(it, it.arg(a, 0))
+    let bmp = c.bmp
+    let page = scriptOf(it).active
+    if bmp.pixels.len == 0 {
+        return Value.Undefined
+    }
+    let px = try it.alloc.alloc(0 as u8, bmp.pixels.len)
+    defer it.alloc.free(px)
+    if js.objectOf(it.arg(a, 1)) != js.NONE {
+        try canvasTextMask(it, it.arg(a, 1), bmp, px)
+    } else {
+        try canvasSvg(it, it.arg(a, 1), bmp, px)
+    }
+    let blur = try canvasNum(it, it.arg(a, 2), "blur")
+    if blur > 0.0 && blur <= 1024.0 {
+        let cover = try it.alloc.alloc(0 as u8, bmp.width * bmp.height)
+        defer it.alloc.free(cover)
+        for i in 0..cover.len {
+            cover[i] = px[i * 4 + 3]
+        }
+        try paint.boxBlur3(it.alloc, cover, bmp.width, bmp.height, blur / 2.0)
+        for i in 0..cover.len {
+            px[i * 4 + 3] = cover[i]
+        }
+    }
+    try canvasPaint(it, it.arg(a, 2), bmp, px)
+    scriptOf(it).active = page
+    var clip: ?[]mut u8 = null
+    defer if clip |cl| {
+        it.alloc.free(cl)
+    }
+    if !js.isNullish(it.arg(a, 5)) {
+        clip = try it.alloc.alloc(0 as u8, bmp.pixels.len)
+        try canvasSvg(it, it.arg(a, 5), bmp, clip.?)
+    }
+    let mode = try it.toStringValue(it.arg(a, 4))
+    try it.push(mode)
+    defer it.pop()
+    let alpha = try it.toNumber(it.arg(a, 3))
+    if alpha == alpha && alpha >= 0.0 && alpha <= 1.0 {
+        canvasComposite(bmp.pixels, px, clip, alpha, it.heap.bytes(js.strOf(mode)))
+        canvasChanged(it)
+    }
+    return Value.Undefined
+}
+
+// Pixel coordinates are checked before conversion to integers. This
+// bridge is also the allocation guard for ImageData in the prelude.
+fn akCanvasPixels(it: *mut Interp, a: Args) JsError!Value {
+    let c = try canvasBitmap(it, it.arg(a, 0))
+    let bmp = c.bmp
+    var n = [4]f64{0.0, 0.0, 0.0, 0.0}
+    for k in 0..4 {
+        n[k] = try it.toNumber(it.arg(a, k + 1))
+        if n[k] != n[k] || math.abs(n[k]) > 1000000000.0 {
+            return domError(it, "NotSupportedError", "Non-finite pixel rectangle")
+        }
+    }
+    if n[2] < 1.0 || n[3] < 1.0 || n[2] > CANVAS_SIDE as f64 || n[3] > CANVAS_SIDE as f64 || n[2] * n[3] > CANVAS_PIXELS as f64 {
+        return domError(it, "IndexSizeError", "Pixel rectangle is too large or empty")
+    }
+    let x0 = n[0] as i64
+    let y0 = n[1] as i64
+    let w = n[2] as usize
+    let h = n[3] as usize
+    let data = it.arg(a, 5)
+    let putting = !js.isNullish(data)
+    var arr: u32 = js.NONE
+    if !putting {
+        arr = try it.newArray(0)
+        try it.push(js.objVal(arr))
+    }
+    defer if !putting {
+        it.pop()
+    }
+    for y in 0..h {
+        for x in 0..w {
+            let xx = x0 + x as i64
+            let yy = y0 + y as i64
+            let inBitmap = xx >= 0 && yy >= 0 && xx < bmp.width as i64 && yy < bmp.height as i64 && bmp.pixels.len > 0
+            var i: usize = 0
+            if inBitmap {
+                i = (yy as usize * bmp.width + xx as usize) * 4
+            }
+            for k in 0..4 {
+                if putting {
+                    let v = try it.toNumber(try canvasIndex(it, data, (y * w + x) * 4 + k))
+                    if inBitmap {
+                        var byte = 0.0
+                        if v == v {
+                            byte = math.clamp(v, 0.0, 255.0)
+                        }
+                        bmp.pixels[i + k] = math.floor(byte + 0.5) as u8
+                    }
+                } else {
+                    var byte: u8 = 0
+                    if inBitmap {
+                        byte = bmp.pixels[i + k]
+                    }
+                    try it.heap.pushElem(arr, js.numVal(byte as f64))
+                }
+            }
+        }
+    }
+    if putting {
+        canvasChanged(it)
+        return Value.Undefined
+    }
+    return js.objVal(arr)
+}
+
+fn akCanvasPng(it: *mut Interp, a: Args) JsError!Value {
+    let c = try canvasBitmap(it, it.arg(a, 0))
+    if c.bmp.pixels.len == 0 {
+        return it.newString("data:,")
+    }
+    let png = try paint.encodePng(it.alloc, c.bmp.width, c.bmp.height, c.bmp.pixels)
+    defer it.alloc.free(png)
+    let b = try it.builder()
+    defer it.release(b)
+    try b.append("data:image/png;base64,")
+    let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    var i: usize = 0
+    while i < png.len {
+        let count = math.minOf(usize, 3, png.len - i)
+        var v = png[i] as u32 << 16
+        if count > 1 {
+            v = v | (png[i + 1] as u32 << 8)
+        }
+        if count > 2 {
+            v = v | png[i + 2] as u32
+        }
+        try b.appendByte(alphabet[((v >> 18) & 63) as usize])
+        try b.appendByte(alphabet[((v >> 12) & 63) as usize])
+        if count > 1 {
+            try b.appendByte(alphabet[((v >> 6) & 63) as usize])
+        } else {
+            try b.appendByte('=')
+        }
+        if count > 2 {
+            try b.appendByte(alphabet[(v & 63) as usize])
+        } else {
+            try b.appendByte('=')
+        }
+        i += count
+    }
+    return it.newString(b.bytes())
+}
+
+fn akCanvasHit(it: *mut Interp, a: Args) JsError!Value {
+    let x = try it.toNumber(it.arg(a, 1))
+    let y = try it.toNumber(it.arg(a, 2))
+    if x != x || y != y || math.abs(x) > 1000000000.0 || math.abs(y) > 1000000000.0 {
+        return js.boolVal(false)
+    }
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 0, b)
+    let pic = (try svg.parseImage(it.alloc, b.bytes())) orelse return js.boolVal(false)
+    defer pic.deinit()
+    defer it.alloc.destroy(pic)
+    return js.boolVal(try svg.contains(it.alloc, pic, x, y, it.toBoolean(it.arg(a, 3))))
+}
+
+
+// Normalize SVG path strings through the existing path parser. addPath
+// and transformed Path2D calls use this too, so relative commands, arcs
+// and quadratic curves need no second parser in the JS bindings.
+fn akCanvasPath(it: *mut Interp, a: Args) JsError!Value {
+    let b = try it.builder()
+    defer it.release(b)
+    let s = try js.argString(it, a, 0)
+    try it.push(s)
+    defer it.pop()
+    let src = it.heap.bytes(js.strOf(s))
+    if src.len > 1048576 {
+        return it.newString("")
+    }
+    try b.append("<svg><path d=\"")
+    for ch in src {
+        if ch == '"' {
+            try b.append("&quot;")
+        } else if ch == '&' {
+            try b.append("&amp;")
+        } else if ch == '<' {
+            try b.append("&lt;")
+        } else {
+            try b.appendByte(ch)
+        }
+    }
+    try b.append("\"/></svg>")
+    let pic = (try svg.parseImage(it.alloc, b.bytes())) orelse return it.newString("")
+    defer pic.deinit()
+    defer it.alloc.destroy(pic)
+    let m = try canvasMatrix(it, it.arg(a, 1))
+    b.clear()
+    for shape in pic.shapes.items() {
+        var ci = shape.coord_start
+        for verb in pic.verbs.items()[shape.verb_start..shape.verb_end] {
+            var count: usize = 0
+            if verb == svg.MOVE {
+                try b.appendByte('M')
+                count = 1
+            } else if verb == svg.LINE {
+                try b.appendByte('L')
+                count = 1
+            } else if verb == svg.CUBIC {
+                try b.appendByte('C')
+                count = 3
+            } else {
+                try b.append("Z ")
+            }
+            for j in 0..count {
+                let x = m.mapX(pic.coords.items()[ci], pic.coords.items()[ci + 1])
+                let y = m.mapY(pic.coords.items()[ci], pic.coords.items()[ci + 1])
+                ci += 2
+                if x != x || y != y || math.abs(x) > 100000000.0 || math.abs(y) > 100000000.0 {
+                    return it.newString("")
+                }
+                try b.appendFloat(x)
+                try b.appendByte(' ')
+                try b.appendFloat(y)
+                try b.appendByte(' ')
+            }
+        }
+    }
+    return it.newString(b.bytes())
+}
+
+// Affinely placed glyph coverage. The glyphs themselves are shaped and
+// rasterized by TextPainter, exactly as in the display list. strokeText
+// approximates an outline by dilating and eroding the coverage mask.
+fn canvasTextMask(it: *mut Interp, v: Value, bmp: *image.Bitmap, px: []mut u8) JsError!void {
+    let w = try canvasNum(it, v, "width")
+    let h = try canvasNum(it, v, "height")
+    if w < 1.0 || h < 1.0 || w > 16384.0 || h > 16384.0 || w * h > CANVAS_PIXELS as f64 {
+        return
+    }
+    let sw = w as usize
+    let sh = h as usize
+    let data = try canvasProp(it, v, "data")
+    let mask = try it.alloc.alloc(0 as u8, sw * sh)
+    defer it.alloc.free(mask)
+    for i in 0..mask.len {
+        mask[i] = (try it.toNumber(try canvasIndex(it, data, i * 4 + 3))) as u8
+    }
+    let m = try canvasMatrix(it, try canvasProp(it, v, "matrix"))
+    let inv = svg.invert(m) orelse return
+    let stroke = try canvasNum(it, v, "stroke")
+    var radius: i64 = 0
+    if stroke > 0.0 {
+        radius = math.ceil(math.min(stroke, 64.0) / 2.0) as i64
+    }
+    for y in 0..bmp.height {
+        for x in 0..bmp.width {
+            let sx = inv.mapX(x as f64 + 0.5, y as f64 + 0.5)
+            let sy = inv.mapY(x as f64 + 0.5, y as f64 + 0.5)
+            if sx < -radius as f64 || sy < -radius as f64 || sx >= w + radius as f64 || sy >= h + radius as f64 {
+                continue
+            }
+            let xx = math.floor(sx) as i64
+            let yy = math.floor(sy) as i64
+            var high: u8 = 0
+            var low: u8 = 255
+            for dy in -radius..radius + 1 {
+                for dx in -radius..radius + 1 {
+                    var cover: u8 = 0
+                    if xx + dx >= 0 && yy + dy >= 0 && xx + dx < sw as i64 && yy + dy < sh as i64 {
+                        cover = mask[(yy + dy) as usize * sw + (xx + dx) as usize]
+                    }
+                    high = math.maxOf(u8, high, cover)
+                    low = math.minOf(u8, low, cover)
+                }
+            }
+            if radius > 0 {
+                high -= low
+            }
+            let i = (y * bmp.width + x) * 4
+            for k in 0..4 {
+                px[i + k] = high
+            }
+        }
+    }
+}
+
+// The font shorthand is parsed by the same CSS parser as layout. The
+// system font module supplies shaping and fallback; metrics and glyph
+// masks are therefore consistent with ordinary page text.
+fn akCanvasText(it: *mut Interp, a: Args) JsError!Value {
+    let b = try it.builder()
+    defer it.release(b)
+    try b.append("font:")
+    try argText(it, a, 0, b)
+    var sheet = try css.Sheet.init(it.alloc)
+    defer sheet.deinit()
+    let range = try css.parseInline(&mut sheet, b.bytes())
+    var f = font.Font { size: 10.0, bold: false, italic: false, mono: false, family: "sans-serif" }
+    for d in sheet.decls.items()[range.start..range.end] {
+        if d.prop == css.FONT_SIZE {
+            match d.value {
+                .Px { v } => {
+                    f.size = math.clamp(v, 1.0, 1024.0)
+                }
+                _ => {}
+            }
+        } else if d.prop == css.FONT_WEIGHT {
+            match d.value {
+                .Number { v } => {
+                    f.bold = v >= 600.0
+                }
+                .Keyword { k } => {
+                    f.bold = text.eql(k, "bold")
+                }
+                _ => {}
+            }
+        } else if d.prop == css.FONT_STYLE {
+            match d.value {
+                .Keyword { k } => {
+                    f.italic = text.eql(k, "italic") || text.eql(k, "oblique")
+                }
+                _ => {}
+            }
+        } else if d.prop == css.FONT_FAMILY {
+            match d.value {
+                .Keyword { k } => {
+                    f.family = k
+                }
+                _ => {}
+            }
+        }
+    }
+    let generic = font.genericOf(f.family)
+    f.mono = generic == font.Generic.Mono
+    f.serif = generic == font.Generic.Serif
+    let str = try js.argString(it, a, 1)
+    try it.push(str)
+    defer it.pop()
+    let textBytes = it.heap.bytes(js.strOf(str))
+    var sys = font.System.init(it.alloc) catch |e| {
+        return Value.Null
+    }
+    defer sys.deinit()
+    let m: dyn font.Measurer = &mut sys
+    let width = m.width(f, textBytes)
+    let metrics = m.metrics(f)
+    let arr = try it.newArray(0)
+    try it.push(js.objVal(arr))
+    defer it.pop()
+    try it.heap.pushElem(arr, js.numVal(width))
+    try it.heap.pushElem(arr, js.numVal(metrics.ascent))
+    try it.heap.pushElem(arr, js.numVal(metrics.descent))
+    if !it.toBoolean(it.arg(a, 2)) {
+        return js.objVal(arr)
+    }
+    // A small glyph-mask bitmap is returned as a PNG-backed detached
+    // image. drawImage handles its affine transform and clipping.
+    if width <= 0.0 || width > 16380.0 {
+        try it.heap.pushElem(arr, Value.Null)
+        return js.objVal(arr)
+    }
+    let w = math.ceil(width + 4.0) as usize
+    let h = math.ceil(metrics.ascent + metrics.descent + 4.0) as usize
+    var mask = try paint.Canvas.init(it.alloc, w, h)
+    defer mask.deinit()
+    mask.clear(paint.Rgba { r: 0, g: 0, b: 0, a: 0 })
+    var painter = paint.TextPainter.init(it.alloc, &mut sys)
+    defer painter.deinit()
+    try painter.draw(&mut mask, 2.0, metrics.ascent + 2.0, textBytes, f, 1.0, paint.Rgba { r: 255, g: 255, b: 255, a: 255 })
+    let data = try it.newArray(0)
+    try it.push(js.objVal(data))
+    for px in mask.pixels {
+        try it.heap.pushElem(data, js.numVal(px as f64))
+    }
+    try it.heap.pushElem(arr, js.objVal(data))
+    it.pop()
+    try it.heap.pushElem(arr, js.numVal(w as f64))
+    try it.heap.pushElem(arr, js.numVal(h as f64))
+    return js.objVal(arr)
+}
