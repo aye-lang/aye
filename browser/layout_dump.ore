@@ -33,13 +33,13 @@ fn dumpLayout(alloc: Allocator, doc: *Document, base: *Url, media: css.Media, sy
             return 1
         }
         defer sys.deinit()
-        var tree = try layout.layoutDocumentWith(alloc, doc, &styles, &images.nodes, &mut sys, media.width, media.height)
+        var tree = try engine.layoutQueried(alloc, doc, &ua, &author, media, &mut styles, &images.nodes, &mut sys, media.width, media.height)
         defer tree.deinit()
         try layout.dumpTree(&tree, out)
         return 0
     }
     var fixed = font.Fixed.init()
-    var tree = try layout.layoutDocumentWith(alloc, doc, &styles, &images.nodes, &mut fixed, media.width, media.height)
+    var tree = try engine.layoutQueried(alloc, doc, &ua, &author, media, &mut styles, &images.nodes, &mut fixed, media.width, media.height)
     defer tree.deinit()
     try layout.dumpTree(&tree, out)
     return 0

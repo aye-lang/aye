@@ -47,7 +47,9 @@
       display: flex
       justify-content: space-between
       align-items: center
+      justify-items: start
       <span class="g">
         margin-right: 14px
         margin-left: 14px
         align-self: end
+        justify-self: end

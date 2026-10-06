@@ -15,6 +15,23 @@
 
 import std.text
 
+// While a container condition is evaluated: the features are those of
+// a query container (`inline-size`, `block-size`, `width`, `height`,
+// `aspect-ratio`, `orientation`), its size the `Media`'s (a height < 0
+// is not known).
+var in_container = false
+
+/// Does the `@container` condition `toks` hold for a container whose
+/// content box is `width` x `height` (`height` < 0: only its inline size
+/// can be queried)?
+pub fn containerQueryMatches(toks: []Token, width: f64, height: f64) bool {
+    in_container = true
+    var c = Condition { toks: toks, i: 0, m: Media { width: width, height: height } }
+    let ok = c.condition(toks.len)
+    in_container = false
+    return ok && c.i >= toks.len
+}
+
 /// Does the media query list in `toks` match? An empty list matches.
 pub fn mediaListMatches(toks: []Token, m: Media) bool {
     if skipWhitespace(toks, 0) >= toks.len {
@@ -359,6 +376,9 @@ fn featureMatches(toks: []Token, m: Media) bool {
 // The value of a range feature of the screen (width and height in px,
 // aspect ratios, resolution in dppx); null for other features.
 fn rangeValue(feature: []u8, m: Media) ?f64 {
+    if in_container {
+        return containerValue(feature, m)
+    }
     var f = feature
     if text.startsWith(f, "device-") {
         f = f[7..]
@@ -390,10 +410,27 @@ fn rangeValue(feature: []u8, m: Media) ?f64 {
     return null
 }
 
+// The size features of a query container.
+fn containerValue(feature: []u8, m: Media) ?f64 {
+    if text.eqlIgnoreCase(feature, "width") || text.eqlIgnoreCase(feature, "inline-size") {
+        return m.width
+    }
+    if m.height < 0.0 {
+        return null
+    }
+    if text.eqlIgnoreCase(feature, "height") || text.eqlIgnoreCase(feature, "block-size") {
+        return m.height
+    }
+    if text.eqlIgnoreCase(feature, "aspect-ratio") && m.height > 0.0 {
+        return m.width / m.height
+    }
+    return null
+}
+
 // A value compared with the range feature `feature`: lengths in px for
 // width and height, resolutions in dppx, plain numbers.
 fn valueOf(feature: []u8, t: Token) ?f64 {
-    if text.endsWith(feature, "width") || text.endsWith(feature, "height") {
+    if text.endsWith(feature, "width") || text.endsWith(feature, "height") || text.endsWith(feature, "-size") {
         return mediaLength(t)
     }
     if t.kind == Tok.Number {
@@ -415,6 +452,9 @@ fn valueOf(feature: []u8, t: Token) ?f64 {
 
 // A feature in a boolean context: is it not zero or `none`?
 fn booleanFeature(feature: []u8) bool {
+    if in_container {
+        return text.eqlIgnoreCase(feature, "width") || text.eqlIgnoreCase(feature, "inline-size")
+    }
     let truthy = "width height color hover any-hover pointer any-pointer color-gamut dynamic-range video-dynamic-range display-mode update orientation aspect-ratio resolution"
     var words = text.split(truthy, " ")
     while words.next() |w| {
@@ -435,6 +475,9 @@ fn discreteNumber(feature: []u8, v: Token) bool {
 
 // `feature: keyword`.
 fn discreteFeature(feature: []u8, word: []u8, m: Media) bool {
+    if in_container && (!text.eqlIgnoreCase(feature, "orientation") || m.height < 0.0) {
+        return false
+    }
     if text.eqlIgnoreCase(feature, "orientation") {
         if m.height >= m.width {
             return text.eqlIgnoreCase(word, "portrait")

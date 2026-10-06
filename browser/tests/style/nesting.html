@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<style>
+.card {
+  color: red;
+  .title { font-weight: 700 }
+  &.featured { text-align: center }
+  > p { font-style: italic }
+  + .after { color: blue }
+  &:hover, &.active { text-decoration-line: underline }
+  .wrap & { white-space: pre }
+  @media screen { background-color: yellow }
+  @media print { color: black }
+  @supports (display: grid) {
+    .grid { display: grid }
+  }
+  color: green;
+  em { color: purple; & b { font-weight: 400 } }
+  :is(span) { visibility: hidden }
+  --x: { a: b };
+  i { color: var(--y, teal) }
+}
+ul { li { list-style-type: square } }
+#spec .item { color: orange }
+.box { .item { color: navy } }
+&:root, body { margin-top: 3px }
+.bad { %%% { color: red } font-style: italic }
+</style>
+<div class="card"><h2 class="title">bold, green</h2><p>italic</p><span>hidden</span><i>teal</i>
+<em>purple <b>normal weight</b></em></div>
+<div class="after">blue</div>
+<div class="card featured active">centered, underlined</div>
+<div class="wrap"><div class="card">pre</div></div>
+<div class="card"><div class="grid">grid</div></div>
+<ul><li>square</li></ul>
+<div id="spec" class="box"><p class="item">orange: #spec .item (1,1,0) beats :is(.box) .item (0,2,0)</p></div>
+<p class="bad">italic: the bad nested rule is dropped alone</p>

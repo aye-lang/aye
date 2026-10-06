@@ -108,6 +108,9 @@ pub fn needsComputing(toks: []Token) bool {
         if t.kind == Tok.Function && (text.eqlIgnoreCase(t.text, "var") || isMathFunction(t)) {
             return true
         }
+        if t.kind == Tok.Dimension && isContextUnit(t.text) {
+            return true
+        }
     }
     return false
 }
@@ -181,15 +184,22 @@ fn shorthandLonghands(name: []u8, out: []mut usize) usize {
     }
     if text.eql(name, "place-items") {
         out[0] = ALIGN_ITEMS
-        return 1
+        out[1] = JUSTIFY_ITEMS
+        return 2
     }
     if text.eql(name, "place-self") {
         out[0] = ALIGN_SELF
-        return 1
+        out[1] = JUSTIFY_SELF
+        return 2
     }
     if text.eql(name, "place-content") {
         out[0] = JUSTIFY_CONTENT
         return 1
+    }
+    if text.eql(name, "container") {
+        out[0] = CONTAINER_NAME
+        out[1] = CONTAINER_TYPE
+        return 2
     }
     if text.eql(name, "margin") {
         first = MARGIN_TOP
@@ -378,15 +388,21 @@ struct Declarer {
             return self.pair(pl[0], pl[1], comps)
         }
         if text.eql(name, "place-items") || text.eql(name, "place-self") {
-            // The `align-` half (there is no `justify-items`).
+            // `align [justify]` (justify as align when alone).
             var prop = ALIGN_ITEMS
+            var across = JUSTIFY_ITEMS
             if text.eql(name, "place-self") {
                 prop = ALIGN_SELF
+                across = JUSTIFY_SELF
             }
             if comps.len == 1 || comps.len == 2 {
                 let first = [1]Comp{comps[0]}
+                let last = [1]Comp{comps[comps.len - 1]}
                 if try parseValue(self.sheet, prop, first[..]) |v| {
-                    try self.add(prop, v)
+                    if try parseValue(self.sheet, across, last[..]) |w| {
+                        try self.add(prop, v)
+                        try self.add(across, w)
+                    }
                 }
             }
             return
@@ -404,6 +420,9 @@ struct Declarer {
         }
         if text.eql(name, "flex") {
             return self.flex(comps)
+        }
+        if text.eql(name, "container") {
+            return self.container(comps)
         }
         if text.eql(name, "flex-flow") {
             return self.flexFlow(comps)
@@ -429,6 +448,30 @@ struct Declarer {
                 try self.add(prop, v)
             }
         }
+    }
+
+    // `container: name [/ type]`.
+    fn container(self: *mut Self, comps: []Comp) AllocError!void {
+        var props = [2]usize{CONTAINER_NAME, CONTAINER_TYPE}
+        if try self.wide(comps, props[..]) {
+            return
+        }
+        var slash = comps.len
+        for k, c in comps {
+            if isDelim(c, '/') {
+                slash = k
+            }
+        }
+        if slash == 0 {
+            return
+        }
+        let names = rawValue(self.sheet, comps[..slash]) orelse return
+        var kind = Value.Keyword { k: "normal" }
+        if slash < comps.len {
+            kind = (try parseValue(self.sheet, CONTAINER_TYPE, comps[slash + 1..])) orelse return
+        }
+        try self.add(CONTAINER_NAME, names)
+        try self.add(CONTAINER_TYPE, kind)
     }
 
     // `grid-column` and `grid-row` (`a [/ b]`: the longhands `p0`, `p1`;
@@ -1146,6 +1189,10 @@ fn lengthValue(c: Comp, percent: bool, nonneg: bool) ?Value {
     }
     if absoluteLength(t.num, u) |px| {
         return Value.Px { v: px }
+    }
+    if isContextUnit(u) {
+        // Kept as tokens until computed (`needsComputing`).
+        return Value.Px { v: contextPx(t.num, u) }
     }
     return null
 }

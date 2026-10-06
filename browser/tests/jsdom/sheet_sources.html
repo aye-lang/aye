@@ -19,6 +19,16 @@ docStyle.setAttribute('media', 'print');
 log('doc media off', getComputedStyle(p).color);
 docStyle.removeAttribute('media');
 log('doc media on', getComputedStyle(p).color);
+// The CSSOM: rules a script inserts into, deletes from, or disables in
+// an element's sheet.
+docStyle.sheet.insertRule('p { color: fuchsia }', 1);
+log('doc inserted', getComputedStyle(p).color);
+docStyle.sheet.deleteRule(1);
+log('doc deleted', getComputedStyle(p).color);
+docStyle.sheet.disabled = true;
+log('doc disabled', getComputedStyle(p).color);
+docStyle.sheet.disabled = false;
+log('doc enabled', getComputedStyle(p).color);
 docStyle.remove();
 log('doc removed', getComputedStyle(p).color);
 // Adopted sheets: adopting, replacing the text, disabling, dropping.

@@ -1,0 +1,79 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <div id="c">
+      display: block
+      <p>
+        display: block
+        color: rgb(0, 128, 0)
+        font-style: italic
+        margin-top: 16px
+        margin-bottom: 16px
+        text-align: right
+    <p id="a">
+      display: block
+      color: rgb(0, 128, 0)
+      font-weight: 300
+      font-style: italic
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: right
+    <p id="b">
+      display: block
+      color: rgb(0, 128, 0)
+      font-style: italic
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: right
+    <p id="d">
+      display: block
+      color: rgb(0, 128, 0)
+      font-style: italic
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: right
+    <p id="e">
+      display: block
+      color: rgb(0, 128, 128)
+      font-style: italic
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: right
+    <p id="f">
+      display: block
+      color: rgb(0, 0, 128)
+      font-style: italic
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: right
+      white-space: pre
+    <p id="u" class="u">
+      display: block
+      color: rgb(255, 165, 0)
+      font-style: italic
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: right
+    <p class="v">
+      display: block
+      color: rgb(255, 0, 0)
+      font-style: italic
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: right
+    <p id="g">
+      display: block
+      color: rgb(0, 128, 0)
+      font-style: italic
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: right

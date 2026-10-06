@@ -20,8 +20,12 @@
 //   items (items spanning several tracks share theirs) and grow toward
 //   max-content; `fr` tracks share what is left (at least their
 //   minimum); with no `fr` track, `auto` tracks stretch. Rows are as high
-//   as their items. Items stretch in both axes unless their size is set
-//   or `align-self` says otherwise.
+//   as their items; in a grid of definite height, `fr` rows share the
+//   rest, else `auto` rows stretch to fill it. Items stretch in both axes
+//   unless their size is set or `align-self` says otherwise. A percentage
+//   height resolves against the item's area when the grid's height is
+//   definite (such an item adds nothing to its row's height), else it is
+//   `auto`.
 // - Anything else (subgrid, masonry, unparsable tracks) falls back to
 //   one column, so the content stays readable.
 
@@ -839,6 +843,9 @@ fn layoutGrid(t: *mut Tree, i: usize, cw: f64, ch: f64) AllocError!f64 {
                 continue
             }
             let b = t.bx(it.box)
+            if ch >= 0.0 && isPercentHeight(b.style[css.HEIGHT]) {
+                continue
+            }
             let need = b.margin[0] + b.h + b.margin[2]
             var have = row_gap * (it.rspan as f64 - 1.0)
             for r in it.row..it.row + it.rspan {
@@ -869,6 +876,21 @@ fn layoutGrid(t: *mut Tree, i: usize, cw: f64, ch: f64) AllocError!f64 {
                     hs.items()[r] += (ch - used) * g.rows.items()[r].fr / frs
                 }
             }
+        } else if frs <= 0.0 && ch > used {
+            // `align-content: normal`: the auto rows stretch.
+            var autos: usize = 0
+            for r in 0..g.nrows {
+                if !isFixedRow(&g, r) {
+                    autos += 1
+                }
+            }
+            if autos > 0 {
+                for r in 0..g.nrows {
+                    if !isFixedRow(&g, r) {
+                        hs.items()[r] += (ch - used) / autos as f64
+                    }
+                }
+            }
         }
     }
     var ys = List(f64).init(t.backing)
@@ -886,6 +908,21 @@ fn layoutGrid(t: *mut Tree, i: usize, cw: f64, ch: f64) AllocError!f64 {
         var ah = row_gap * (it.rspan as f64 - 1.0)
         for r in it.row..it.row + it.rspan {
             ah += hs.items()[r]
+        }
+        if ch >= 0.0 && isPercentHeight(t.bx(it.box).style[css.HEIGHT]) {
+            // A percentage of the area's height.
+            if t.bx(it.box).kind == BoxKind.Image {
+                var aw = col_gap * (it.cspan as f64 - 1.0)
+                for c in it.col..it.col + it.cspan {
+                    aw += ws[c]
+                }
+                replacedSize(t, it.box, aw, ah)
+            } else {
+                let pb = t.bx(it.box)
+                if sizeOf(pb.style, pb.style[css.HEIGHT], ah, vEdges(pb)) |hh| {
+                    pb.h = clampHeight(t, it.box, hh, ah)
+                }
+            }
         }
         let b = t.bx(it.box)
         b.x = xs.items()[it.col] + b.margin[3]
@@ -913,6 +950,28 @@ fn layoutGrid(t: *mut Tree, i: usize, cw: f64, ch: f64) AllocError!f64 {
     return y
 }
 
+// Is `v` a height that is a percentage (or a math function of one)?
+fn isPercentHeight(v: Value) bool {
+    return match v {
+        .Percent { .. } => true
+        .Calc { .. } => true
+        _ => false
+    }
+}
+
+// `justify-self` of grid item `c` (its grid's `justify-items` for
+// `auto`).
+fn justifyOf(t: *Tree, c: usize) []u8 {
+    let own = keywordOf(t.bx(c).style[css.JUSTIFY_SELF])
+    if !text.eql(own, "auto") {
+        return own
+    }
+    if t.bx(c).parent |p| {
+        return keywordOf(t.bx(p).style[css.JUSTIFY_ITEMS])
+    }
+    return "normal"
+}
+
 fn isFixedRow(g: *Grid, r: usize) bool {
     if r < g.rows.len() {
         let tr = g.rows.items()[r]
@@ -938,10 +997,30 @@ fn gridItemContents(t: *mut Tree, c: usize, aw: f64, cw: f64) AllocError!void {
         return
     }
     let room = aw - b.margin[1] - b.margin[3]
+    let justify = justifyOf(t, c)
+    let stretch = text.eql(justify, "normal") || text.eql(justify, "stretch") || text.eql(justify, "legacy") || text.eql(justify, "baseline")
     if specifiedWidth(t, c, aw) |w| {
         t.bx(c).w = w
-    } else {
+    } else if stretch {
         t.bx(c).w = clampWidth(t, c, room, aw)
+    } else {
+        // Not stretched: as wide as its content, within the area.
+        let mm = try intrinsic(t, c)
+        t.bx(c).w = clampWidth(t, c, math.min(mm.max, math.max(mm.min, room)), aw)
+    }
+    if !stretch {
+        let jb = t.bx(c)
+        let slack = aw - jb.w - jb.margin[1] - jb.margin[3]
+        if slack > 0.0 {
+            if text.eql(justify, "center") {
+                jb.margin[3] += slack / 2.0
+                jb.margin[1] += slack / 2.0
+            } else if text.eql(justify, "end") || text.eql(justify, "right") || text.eql(justify, "flex-end") || text.eql(justify, "self-end") {
+                jb.margin[3] += slack
+            } else {
+                jb.margin[1] += slack
+            }
+        }
     }
     // `auto` margins center the item in its area.
     let bb = t.bx(c)

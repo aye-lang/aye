@@ -1,0 +1,21 @@
+viewport 800x600
+  block <html> (0, 0) 800x181.88
+    block <body> (0, 0) 800x181.88
+      block <div style="width:300px"> (0, 0) 300x26
+        grid <div class="t" style="height:26px"> (0, 0) 300x26
+          replaced <svg viewbox="0 0 104 27" class="c" style="height:50%"> (0, 0) 50.07x13
+      block <div style="width:300px"> (0, 26) 300x26
+        grid <div class="t" style="height:26px"> (0, 26) 300x26
+          replaced <svg viewbox="0 0 104 27" class="c" style="height:100%"> (0, 26) 0x0
+          block <div style="height:60px"> (0, 26) 300x60
+            line (0, 26) 300x20
+              text (0, 28) 8x16 "x"
+      block <div style="width:300px"> (0, 52) 300x77.88
+        grid <div class="t"> (0, 52) 300x77.88
+          replaced <svg viewbox="0 0 104 27" class="c" style="height:100%"> (0, 52) 300x77.88
+      block <div style="width:300px"> (0, 129.88) 300x26
+        grid <div class="t" style="height:26px"> (0, 129.88) 300x26
+          replaced <svg viewbox="0 0 104 27" class="c"> (0, 129.88) 300x77.88
+      block <div style="width:300px"> (0, 155.88) 300x26
+        grid <div class="t" style="height:26px;grid-template-rows:10px"> (0, 155.88) 300x26
+          replaced <svg viewbox="0 0 104 27" class="c" style="height:100%"> (0, 155.88) 38.52x10

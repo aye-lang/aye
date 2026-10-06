@@ -1,8 +1,9 @@
 // The inputs to authorSheets, not every DOM mutation: the style and link
-// elements of the document and of its shadow trees, and the adopted
-// sheets. In particular, preload links and empty style elements do not
-// affect the cascade. Include media and the base URL too: changing
-// either must reparse.
+// elements of the document and of its shadow trees, the adopted sheets,
+// and the rules scripts gave sheets through the CSSOM
+// (`doc.sheets.generation`). In particular, preload links and empty
+// style elements do not affect the cascade. Include media and the base
+// URL too: changing either must reparse.
 import css
 import dom
 import dom.Document
@@ -12,7 +13,8 @@ import std.mem.AllocError
 import std.text
 
 fn sheetSourceKey(doc: *Document) u64 {
-    var key = treeSourceKey(doc, doc.root, 1469598103934665603)
+    var key = sheetMix(1469598103934665603, doc.sheets.generation)
+    key = treeSourceKey(doc, doc.root, key)
     for root in doc.shadows.items() {
         if doc.isLive(root) && doc.isConnected(root) {
             key = sheetMix(key, 4)

@@ -1,0 +1,72 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <ul>
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      padding-left: 40px
+      <li>
+        display: list-item
+        color: rgb(255, 0, 0)
+        font-style: italic
+      <li class="x">
+        display: list-item
+        color: rgb(0, 0, 255)
+        font-style: italic
+        text-decoration-line: underline
+      <li>
+        display: list-item
+        color: rgb(255, 0, 0)
+        font-weight: 700
+      <li class="x">
+        display: list-item
+        color: rgb(0, 0, 255)
+      <li class="x">
+        display: list-item
+        color: rgb(255, 0, 0)
+        text-decoration-line: underline
+        white-space: pre
+      <li>
+        display: list-item
+        color: rgb(0, 0, 255)
+        text-align: right
+        white-space: pre
+    <div>
+      display: block
+      <span>
+        color: rgb(0, 128, 128)
+      <p>
+        display: block
+        margin-top: 16px
+        margin-bottom: 16px
+      <p>
+        display: block
+        color: rgb(0, 128, 0)
+        margin-top: 16px
+        margin-bottom: 16px
+      <em>
+        color: rgb(128, 0, 128)
+        font-style: italic
+      <p>
+        display: block
+        font-weight: 700
+        margin-top: 16px
+        margin-bottom: 16px
+    <div>
+      display: block
+      <em>
+        font-style: italic
+      <em>
+        font-style: italic
+      <i>
+        font-style: italic

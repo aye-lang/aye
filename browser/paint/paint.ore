@@ -29,7 +29,8 @@
 // Supported: background-color (the root's, or else the body's, fills
 // the canvas), background images, masks, `border-radius` and
 // `box-shadow` (background.ore), borders (solid, dashed, dotted, double; the 3-D styles are
-// solid), color, text-decoration-line (underline, overline,
+// solid; solid sides of different colors meet on the corners' diagonals,
+// as `Quad`s), color, text-decoration-line (underline, overline,
 // line-through; propagated from ancestors, not into atomic inlines),
 // list markers, images (decoded ones scaled into their content box after
 // `object-fit`, else a frame with their `alt` text), the documents of
@@ -39,7 +40,8 @@
 // images, drawn by svg/ into their content box), form controls
 // (checkboxes and radio buttons drawn, a `select`'s arrow, a list box's selected
 // options), visibility, and overflow other than `visible` as a clip to
-// the padding box.
+// the padding box (rounded by `border-radius`: a layer drawn through the
+// corners).
 
 import css
 import css.Value
@@ -68,6 +70,8 @@ pub struct Rect {
 
 pub enum Item {
     Fill { r: Rect, c: Rgba }
+    // A convex quadrilateral (corners in order: x, y pairs), filled.
+    Quad { p: [8]f64, c: Rgba }
     // `s` in the font `face`, its baseline starting at (`x`, `y`).
     Text { x: f64, y: f64, s: []u8, face: font.Font, c: Rgba }
     // An image of `w` x `h` RGBA pixels (the page's), scaled into `r`.
@@ -301,9 +305,32 @@ struct Builder {
         self.m = outer_m
     }
 
+    // Starts clipping to the padding box of box `i` (rounded by its
+    // corners: a layer drawn through them); `endClip` ends it.
+    fn beginClip(self: *mut Self, i: usize) AllocError!void {
+        let cb = self.t.bx(i).*
+        let r = Rect { x: cb.ax + cb.border[3], y: cb.ay + cb.border[0], w: cb.w - cb.border[1] - cb.border[3], h: cb.h - cb.border[0] - cb.border[2] }
+        if isRound(radiiOf(cb.style, cb.w, cb.h)) {
+            return self.add(Item.Layer { r: r })
+        }
+        try self.add(Item.Clip { r: r })
+    }
+
+    fn endClip(self: *mut Self, i: usize) AllocError!void {
+        let cb = self.t.bx(i).*
+        let radii = radiiOf(cb.style, cb.w, cb.h)
+        if isRound(radii) {
+            let r = Rect { x: cb.ax + cb.border[3], y: cb.ay + cb.border[0], w: cb.w - cb.border[1] - cb.border[3], h: cb.h - cb.border[0] - cb.border[2] }
+            return self.add(Item.EndLayer { r: r, radii: insetRadii(radii, cb.border[0], cb.border[1], cb.border[2], cb.border[3]) })
+        }
+        try self.add(Item.Unclip)
+    }
+
     // Layer `i` inside the clips of the ancestors that clip it.
     fn clippedLayer(self: *mut Self, i: usize) AllocError!void {
         var pushed: usize = 0
+        var clippers = List(usize).init(self.t.backing)
+        defer clippers.deinit()
         let lb = self.t.bx(i)
         var escaping = lb.abs != 0
         var cur = lb.parent
@@ -317,7 +344,7 @@ struct Builder {
                 escaping = false
             }
             if !escaping && self.clips(c) {
-                try self.add(Item.Clip { r: Rect { x: cb.ax + cb.border[3], y: cb.ay + cb.border[0], w: cb.w - cb.border[1] - cb.border[3], h: cb.h - cb.border[0] - cb.border[2] } })
+                try clippers.append(c)
                 pushed += 1
             }
             if cb.abs == 2 {
@@ -328,12 +355,18 @@ struct Builder {
             }
             cur = cb.parent
         }
+        // Outermost first.
+        var k = pushed
+        while k > 0 {
+            k -= 1
+            try self.beginClip(clippers.items()[k])
+        }
         let outer_fixed = self.fixed
         self.fixed = self.fixed || lb.abs == 2
         try self.layer(i)
         self.fixed = outer_fixed
-        for k in 0..pushed {
-            try self.add(Item.Unclip)
+        for c in clippers.items() {
+            try self.endClip(c)
         }
     }
 
@@ -395,9 +428,7 @@ struct Builder {
         }
         let clip = self.clips(i)
         if clip {
-            let px = b.ax + b.border[3]
-            let py = b.ay + b.border[0]
-            try self.add(Item.Clip { r: Rect { x: px, y: py, w: b.w - b.border[1] - b.border[3], h: b.h - b.border[0] - b.border[2] } })
+            try self.beginClip(i)
         }
         if layout.hasInlineContent(self.t, i) {
             try self.inlineFloats(i)
@@ -414,7 +445,7 @@ struct Builder {
             }
         }
         if clip {
-            try self.add(Item.Unclip)
+            try self.endClip(i)
         }
     }
 
@@ -525,6 +556,9 @@ struct Builder {
     // when `right` (the parts of an inline box split over lines).
     fn borders(self: *mut Self, style: []Value, x: f64, y: f64, w: f64, h: f64, widths: [4]f64, left: bool, right: bool) AllocError!void {
         let current = colorOf(style[css.COLOR], BLACK)
+        if try self.joinedBorders(style, current, x, y, w, h, widths, left, right) {
+            return
+        }
         let top = widths[0]
         let bottom = widths[2]
         for side in 0..4 {
@@ -547,6 +581,59 @@ struct Builder {
                 try self.side(kind, x + w - bw, y + top, bw, h - top - bottom, false, c)
             }
         }
+    }
+
+    // Solid borders whose adjacent sides differ in color (one of them
+    // transparent, say) meet on the diagonals of the corners: each side
+    // is a trapezoid (a triangle when the box has no content, as CSS
+    // triangles and pie charts use). False, and nothing drawn, when the
+    // sides do not need it.
+    fn joinedBorders(self: *mut Self, style: []Value, current: Rgba, x: f64, y: f64, w: f64, h: f64, widths: [4]f64, left: bool, right: bool) AllocError!bool {
+        var colors = [4]Rgba{current, current, current, current}
+        var on = [4]bool{false, false, false, false}
+        for side in 0..4 {
+            if widths[side] <= 0.0 || (side == 3 && !left) || (side == 1 && !right) {
+                continue
+            }
+            let kind = layout.keywordOf(style[css.BORDER_TOP_STYLE + side])
+            if text.eql(kind, "none") || text.eql(kind, "hidden") {
+                continue
+            }
+            if text.eql(kind, "dashed") || text.eql(kind, "dotted") || text.eql(kind, "double") {
+                return false
+            }
+            on[side] = true
+            colors[side] = colorOf(style[css.BORDER_TOP_COLOR + side], current)
+        }
+        var differ = false
+        for side in 0..4 {
+            let next = (side + 1) % 4
+            if on[side] && on[next] && !sameRgba(colors[side], colors[next]) {
+                differ = true
+            }
+        }
+        if !differ {
+            return false
+        }
+        let t = widths[0]
+        let r = widths[1]
+        let b = widths[2]
+        let l = widths[3]
+        let x1 = x + w
+        let y1 = y + h
+        let quads = [4][8]f64{
+            [8]f64{x, y, x1, y, x1 - r, y + t, x + l, y + t},
+            [8]f64{x1, y, x1, y1, x1 - r, y1 - b, x1 - r, y + t},
+            [8]f64{x1, y1, x, y1, x + l, y1 - b, x1 - r, y1 - b},
+            [8]f64{x, y1, x, y, x + l, y + t, x + l, y1 - b},
+        }
+        for side in 0..4 {
+            if on[side] && colors[side].a > 0 {
+                self.extend(x1, y1)
+                try self.add(Item.Quad { p: quads[side], c: colors[side] })
+            }
+        }
+        return true
     }
 
     // One side of a border: the strip at (`x`, `y`), `w` x `h`, running
@@ -851,6 +938,14 @@ fn transformed(it: Item, m: layout.Affine, t: *mut Tree) Item {
         .Fill { r, c } => {
             return Item.Fill { r: mapRect(r, m), c: c }
         }
+        .Quad { p, c } => {
+            var q = p
+            for k in 0..4 {
+                q[k * 2] = m.x(p[k * 2], p[k * 2 + 1])
+                q[k * 2 + 1] = m.y(p[k * 2], p[k * 2 + 1])
+            }
+            return Item.Quad { p: q, c: c }
+        }
         .Image { r, w, h, pixels } => {
             return Item.Image { r: mapRect(r, m), w: w, h: h, pixels: pixels }
         }
@@ -913,6 +1008,15 @@ fn mappedSource(src: Source, m: layout.Affine, tile: Rect, nt: Rect, t: *mut Tre
     }
 }
 
+fn movedQuad(p: [8]f64, dx: f64, dy: f64) [8]f64 {
+    var q = p
+    for k in 0..4 {
+        q[k * 2] = p[k * 2] + dx
+        q[k * 2 + 1] = p[k * 2 + 1] + dy
+    }
+    return q
+}
+
 // The bounding box of the image of `r` by `m`.
 fn mapRect(r: Rect, m: layout.Affine) Rect {
     let xs = [4]f64{m.x(r.x, r.y), m.x(r.x + r.w, r.y), m.x(r.x, r.y + r.h), m.x(r.x + r.w, r.y + r.h)}
@@ -934,6 +1038,7 @@ fn mapRect(r: Rect, m: layout.Affine) Rect {
 fn moved(it: Item, dx: f64, dy: f64) Item {
     return match it {
         .Fill { r, c } => Item.Fill { r: Rect { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h }, c: c }
+        .Quad { p, c } => Item.Quad { p: movedQuad(p, dx, dy), c: c }
         .Text { x, y, s, face, c } => Item.Text { x: x + dx, y: y + dy, s: s, face: face, c: c }
         .Image { r, w, h, pixels } => Item.Image { r: Rect { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h }, w: w, h: h, pixels: pixels }
         .Svg { r, pic } => Item.Svg { r: Rect { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h }, pic: pic }
@@ -996,6 +1101,14 @@ pub fn render(list: *DisplayList, target: *mut Canvas, view: View, painter: *mut
     for it in list.items.items() {
         match it {
             .Fill { r, c } => canvas.fillRect(deviceRect(r, v), c)
+            .Quad { p, c } => {
+                var q = p
+                for k in 0..4 {
+                    q[k * 2] = p[k * 2] * v.scale + v.dx
+                    q[k * 2 + 1] = p[k * 2 + 1] * v.scale + v.dy
+                }
+                canvas.fillQuad(q, c)
+            }
             .Text { x, y, s, face, c } => {
                 let base = y * v.scale + v.dy
                 let em = face.size * v.scale
@@ -1044,4 +1157,8 @@ pub fn render(list: *DisplayList, target: *mut Canvas, view: View, painter: *mut
             }
         }
     }
+}
+
+fn sameRgba(a: Rgba, b: Rgba) bool {
+    return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a
 }

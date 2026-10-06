@@ -181,10 +181,8 @@ pub struct Page {
             let key = sheetSourceKey(&self.doc)
             if self.styling |st| {
                 if st.media.width == width && st.media.height == height && self.sheet_key == key {
-                    st.styles.deinit()
-                    st.styles = try css.Styles.init(self.alloc)
                     try dom.assignSlots(&mut self.doc)
-                    try css.computeStyles(&self.doc, &st.ua, &st.author, st.media, &mut st.styles)
+                    try restyleWithSizes(self.alloc, &self.doc, &st.ua, &st.author, st.media, &mut st.styles)
                     st.version = domVersion(self)
                     same = true
                 }
@@ -207,7 +205,7 @@ pub struct Page {
                 nodes = &imgs.nodes
             }
             let layout_began = perf.start()
-            let tree = try layout.layoutDocumentWith(self.alloc, &self.doc, &st.styles, nodes, measure, width, height)
+            let tree = try layoutQueried(self.alloc, &self.doc, &st.ua, &st.author, st.media, &mut st.styles, nodes, measure, width, height)
             self.tree = self.alloc.create(tree) catch |e| {
                 var lost = tree
                 lost.deinit()
@@ -228,10 +226,8 @@ pub struct Page {
                 self.dropStyling()
                 return
             }
-            st.styles.deinit()
-            st.styles = try css.Styles.init(self.alloc)
             try dom.assignSlots(&mut self.doc)
-            try css.computeStyles(&self.doc, &st.ua, &st.author, st.media, &mut st.styles)
+            try restyleWithSizes(self.alloc, &self.doc, &st.ua, &st.author, st.media, &mut st.styles)
             st.version = domVersion(self)
         }
     }

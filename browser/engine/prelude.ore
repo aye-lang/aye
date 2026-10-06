@@ -2339,50 +2339,148 @@ pub let PRELUDE =
     \\hidden(G, 'XMLSerializer', XMLSerializer);
     \\
     \\// Style sheets: document.styleSheets (one per style element or linked
-    \\// sheet, without rules), constructable sheets, CSS.supports and escape.
+    \\// sheet), constructable sheets, CSS.supports and escape. A style
+    \\// element's rules are read from its text when a script first asks; a
+    \\// sheet whose rules a script changes hands them to the browser
+    \\// (ak.sheetReset/sheetInsert/...), which styles the page with them while
+    \\// the element keeps that text. A link's sheet starts empty here: rules
+    \\// inserted into it come after those it fetched. A new text makes a new
+    \\// sheet.
+    \\function splitRules(text) {
+    \\  const rules = [];
+    \\  let depth = 0, start = 0, i = 0;
+    \\  const n = text.length;
+    \\  while (i < n) {
+    \\    const c = text[i];
+    \\    if (c === '/' && text[i + 1] === '*') {
+    \\      const e = text.indexOf('*/', i + 2);
+    \\      i = e < 0 ? n : e + 2;
+    \\      continue;
+    \\    }
+    \\    if (c === '"' || c === "'") {
+    \\      i++;
+    \\      while (i < n && text[i] !== c && text[i] !== '\n') i += text[i] === '\\' ? 2 : 1;
+    \\      i++;
+    \\      continue;
+    \\    }
+    \\    if (c === '\\') { i += 2; continue; }
+    \\    if (c === '{' || c === '(' || c === '[') depth++;
+    \\    else if (c === '}' || c === ')' || c === ']') {
+    \\      if (depth > 0) depth--;
+    \\      if (depth === 0 && c === '}') {
+    \\        const r = text.slice(start, i + 1).trim();
+    \\        if (r) rules.push(r);
+    \\        start = i + 1;
+    \\      }
+    \\    } else if (c === ';' && depth === 0) {
+    \\      const r = text.slice(start, i + 1).trim();
+    \\      if (r[0] === '@') rules.push(r);
+    \\      start = i + 1;
+    \\    }
+    \\    i++;
+    \\  }
+    \\  return rules;
+    \\}
+    \\const RULE_TYPES = { media: 4, import: 3, 'font-face': 5, page: 6, keyframes: 7, '-webkit-keyframes': 7, namespace: 10, supports: 12, layer: 18, container: 0, property: 0 };
+    \\function ruleObject(sheet, text) {
+    \\  const m = /^@([-\w]+)/.exec(text);
+    \\  const r = { cssText: text, parentStyleSheet: sheet, parentRule: null };
+    \\  if (m) {
+    \\    r.type = RULE_TYPES[m[1].toLowerCase()] || 0;
+    \\    if (r.type === 4) r.media = { mediaText: text.slice(m[0].length, text.indexOf('{')).trim() };
+    \\    if (r.type === 7) r.name = text.slice(m[0].length, text.indexOf('{')).trim();
+    \\  } else {
+    \\    r.type = 1;
+    \\    r.selectorText = text.slice(0, text.indexOf('{')).trim();
+    \\  }
+    \\  return r;
+    \\}
+    \\let sheetIds = 0;
     \\class CSSStyleSheet {
     \\  constructor(options) {
-    \\    hidden(this, '_rules', []);
+    \\    hidden(this, '_list', null);
     \\    hidden(this, '_owner', null);
-    \\    // The text replace() gave (null once rules changed), and the
-    \\    // documents and shadow roots that adopted the sheet.
+    \\    hidden(this, '_source', '');
+    \\    hidden(this, '_id', ++sheetIds);
+    \\    hidden(this, '_handed', false);
+    \\    hidden(this, '_disabled', !!(options && options.disabled));
+    \\    // A constructed sheet: the text replace() gave (null once rules
+    \\    // changed), and the documents and shadow roots that adopted it.
     \\    hidden(this, '_text', null);
     \\    hidden(this, '_adopters', new Set());
-    \\    hidden(this, '_disabled', !!(options && options.disabled));
     \\    this.media = { mediaText: options && options.media ? String(options.media) : '', length: 0 };
     \\  }
-    \\  get disabled() { return this._disabled; }
-    \\  set disabled(v) {
-    \\    this._disabled = !!v;
+    \\  get _rules() {
+    \\    if (!this._list) this._list = this._owner && this._owner.localName === 'style' ? splitRules(this._source) : [];
+    \\    return this._list;
+    \\  }
+    \\  // The sheet of an element: the browser takes its rules over from the
+    \\  // text (once).
+    \\  _hand() {
+    \\    if (this._handed || !this._owner) return;
+    \\    const rules = this._rules;
+    \\    this._handed = true;
+    \\    ak.sheetReset(this._id, this._owner, this._source);
+    \\    for (let i = 0; i < rules.length; i++) ak.sheetInsert(this._id, i, rules[i]);
+    \\    if (this._disabled) ak.sheetDisabled(this._id, true);
+    \\  }
+    \\  // A constructed sheet changed: its adopters get its text again.
+    \\  _changed(text) {
+    \\    this._text = text;
     \\    for (const owner of this._adopters) pushAdopted(owner);
     \\  }
-    \\  get cssRules() { return this._rules.map(cssText => ({ cssText, type: 1 })); }
+    \\  get cssRules() { return this._rules.map(t => ruleObject(this, t)); }
     \\  get rules() { return this.cssRules; }
     \\  get ownerNode() { return this._owner; }
     \\  get href() { return this._owner && this._owner.localName === 'link' ? this._owner.href : null; }
     \\  get type() { return 'text/css'; }
     \\  get title() { return this._owner ? this._owner.getAttribute('title') : null; }
     \\  get parentStyleSheet() { return null; }
+    \\  get disabled() { return this._disabled; }
+    \\  set disabled(v) {
+    \\    v = !!v;
+    \\    if (v === this._disabled) return;
+    \\    this._disabled = v;
+    \\    if (!this._owner) this._changed(this._text);
+    \\    else if (this._handed) ak.sheetDisabled(this._id, v);
+    \\    else if (v) this._hand();
+    \\  }
     \\  insertRule(rule, index) {
+    \\    const rules = this._rules;
     \\    index = index === undefined ? 0 : index >>> 0;
-    \\    if (index > this._rules.length) throw new DOMException("Failed to execute 'insertRule' on 'CSSStyleSheet': The index provided (" + index + ") is larger than the maximum index (" + this._rules.length + ").", 'IndexSizeError');
-    \\    this._rules.splice(index, 0, String(rule));
-    \\    this._changed(null);
+    \\    if (index > rules.length) throw new DOMException("Failed to execute 'insertRule' on 'CSSStyleSheet': The index provided (" + index + ") is larger than the maximum index (" + rules.length + ").", 'IndexSizeError');
+    \\    rule = String(rule).trim();
+    \\    if (!/[{;]/.test(rule) && !/^@/.test(rule)) throw new DOMException("Failed to execute 'insertRule' on 'CSSStyleSheet': Failed to parse the rule '" + rule + "'.", 'SyntaxError');
+    \\    if (!this._owner) {
+    \\      rules.splice(index, 0, rule);
+    \\      this._changed(null);
+    \\      return index;
+    \\    }
+    \\    this._hand();
+    \\    rules.splice(index, 0, rule);
+    \\    ak.sheetInsert(this._id, index, rule);
     \\    return index;
     \\  }
     \\  deleteRule(index) {
-    \\    this._rules.splice(index >>> 0, 1);
-    \\    this._changed(null);
+    \\    const rules = this._rules;
+    \\    index = index >>> 0;
+    \\    if (index >= rules.length) throw new DOMException("Failed to execute 'deleteRule' on 'CSSStyleSheet': The index provided (" + index + ") is larger than the maximum index (" + (rules.length - 1) + ").", 'IndexSizeError');
+    \\    if (!this._owner) {
+    \\      rules.splice(index, 1);
+    \\      this._changed(null);
+    \\      return;
+    \\    }
+    \\    this._hand();
+    \\    rules.splice(index, 1);
+    \\    ak.sheetDelete(this._id, index);
     \\  }
-    \\  _changed(text) {
-    \\    this._text = text;
-    \\    for (const owner of this._adopters) pushAdopted(owner);
-    \\  }
-    \\  addRule(sel, style, index) { return this.insertRule(sel + ' { ' + style + ' }', index === undefined ? this._rules.length : index); }
-    \\  removeRule(index) { this.deleteRule(index); }
+    \\  addRule(sel, style, index) { this.insertRule(sel + ' { ' + style + ' }', index === undefined ? this._rules.length : index); return -1; }
+    \\  removeRule(index) { this.deleteRule(index === undefined ? 0 : index); }
     \\  replaceSync(text) {
-    \\    this._rules = String(text).split('}').map(r => r.trim()).filter(Boolean).map(r => r + ' }');
-    \\    this._changed(String(text));
+    \\    this._list = splitRules(String(text)).filter(r => !/^@import/i.test(r));
+    \\    if (!this._owner) return this._changed(null);
+    \\    this._handed = false;
+    \\    this._hand();
     \\  }
     \\  replace(text) {
     \\    this.replaceSync(text);
@@ -2392,26 +2490,27 @@ pub let PRELUDE =
     \\hidden(G, 'CSSStyleSheet', CSSStyleSheet);
     \\hidden(G, 'StyleSheet', CSSStyleSheet);
     \\const sheetOf = new WeakMap();
+    \\function ownedSheet(el) {
+    \\  const source = el.localName === 'style' ? el.textContent : '';
+    \\  let s = sheetOf.get(el);
+    \\  if (!s || s._source !== source) {
+    \\    s = new CSSStyleSheet();
+    \\    s._owner = el;
+    \\    s._source = source;
+    \\    sheetOf.set(el, s);
+    \\  }
+    \\  return s;
+    \\}
     \\getter(Document.prototype, 'styleSheets', function () {
     \\  const list = [];
-    \\  for (const el of this.querySelectorAll('style, link[rel~="stylesheet" i]')) {
-    \\    let s = sheetOf.get(el);
-    \\    if (!s) {
-    \\      s = new CSSStyleSheet();
-    \\      s._owner = el;
-    \\      sheetOf.set(el, s);
-    \\    }
-    \\    list.push(s);
-    \\  }
+    \\  for (const el of this.querySelectorAll('style, link[rel~="stylesheet" i]')) list.push(ownedSheet(el));
     \\  hidden(list, 'item', i => list[i] || null);
     \\  return list;
     \\});
-    \\for (const P of [HTMLStyleElement.prototype, HTMLLinkElement.prototype]) {
-    \\  getter(P, 'sheet', function () {
-    \\    for (const s of document.styleSheets) if (s.ownerNode === this) return s;
-    \\    return null;
-    \\  });
-    \\}
+    \\getter(HTMLStyleElement.prototype, 'sheet', function () { return this.isConnected ? ownedSheet(this) : null; });
+    \\getter(HTMLLinkElement.prototype, 'sheet', function () {
+    \\  return this.isConnected && /(^|\s)stylesheet(\s|$)/i.test(this.getAttribute('rel') || '') ? ownedSheet(this) : null;
+    \\});
     \\hidden(G, 'CSS', {
     \\  supports(a, b) { return ak.supports(b === undefined ? String(a) : '(' + String(a) + ': ' + String(b) + ')'); },
     \\  escape(s) {

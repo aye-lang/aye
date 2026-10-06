@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0 }
+.wide { width: 600px; container-type: inline-size }
+.narrow { width: 300px; container-type: inline-size }
+.named { width: 500px; container: sidebar / inline-size }
+.sized { width: 200px; height: 100px; container-type: size }
+.item { height: 10px; width: 50px }
+@container (min-width: 400px) { .item { width: 200px } }
+@container (width < 400px) { .item { width: 100px } }
+@container sidebar (inline-size > 450px) { .side { height: 30px } }
+@container nothing (width > 0px) { .side { height: 99px } }
+@container (orientation: landscape) and (height >= 100px) { .box { height: 20px } }
+@container (height > 0px) { .tall { height: 77px } }
+.unit { width: 50cqw; height: 10cqh }
+.row { display: flex }
+.row > .shrink { container-type: inline-size; flex: 0 1 auto }
+</style>
+<div class="wide"><div class="item">wide</div><div class="unit">half</div></div>
+<div class="narrow"><div class="item">narrow</div><div class="tall">inline-size: no height to query</div></div>
+<div class="named"><div class="side">sidebar</div><div class="narrow"><div class="side">nearest is not named</div></div></div>
+<div class="sized"><div class="box">landscape</div><div class="unit">50cqw 10cqh</div></div>
+<div class="item">no container: 50px</div>
+<div class="row"><div class="shrink">a long text that the container does not size to</div></div>
