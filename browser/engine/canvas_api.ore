@@ -245,14 +245,13 @@ fn canvasSource(it: *mut Interp, source: Value) JsError!?*mut image.Bitmap {
     if cache.referrer.len == 0 {
         try cache.setReferrer(p.url.href)
     }
-    // A changed src must not reuse the previous element mapping.
-    let src = p.doc.attr(h, "src") orelse return null
-    let target = p.resolve(it.alloc, src) catch |e| {
-        return null
-    }
-    defer target.deinit(it.alloc)
-    let bmp = (try cache.bitmapOf(target.withoutFragment())) orelse return null
-    let pic = cache.pictureOf(target.withoutFragment())
+    let base = try documentBase(cache.alloc, &p.doc, &p.url)
+    defer base.deinit(cache.alloc)
+    let s = scriptOf(it)
+    let loaded = (try loadElementImage(cache, &p.doc, h, &base, css.Media { width: s.width, height: s.height })) orelse return null
+    defer loaded.target.deinit(cache.alloc)
+    let bmp = loaded.bmp orelse return null
+    let pic = cache.pictureOf(loaded.target.withoutFragment())
     if pic |drawing| {
         if bmp.pixels.len == 0 && bmp.width <= CANVAS_SIDE && bmp.height <= CANVAS_SIDE && bmp.width * bmp.height <= CANVAS_PIXELS {
             let px = try it.alloc.alloc(0 as u8, bmp.width * bmp.height * 4)

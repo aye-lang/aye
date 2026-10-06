@@ -90,7 +90,7 @@ const img = new Image(10, 20);
 const opt = new Option('Label', 'v', true);
 log('image', img.tagName, img.getAttribute('width'), opt.tagName, opt.textContent, opt.getAttribute('value'), opt.hasAttribute('selected'));
 img.decode().catch(e => log('decode without src', e.name));
-img.src = 'pic.png';
+img.src = '../paint/img/photo.png';
 img.decode().then(() => log('decoded'));
 log('origin', origin, isSecureContext, typeof reportError);
 reportError(new Error('reported'));

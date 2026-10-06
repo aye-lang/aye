@@ -32,6 +32,26 @@ script.async = false; script.defer = true; script.noModule = true; script.type =
 check('script setters', !script.async && script.hasAttribute('defer') && script.hasAttribute('nomodule') && script.getAttribute('type') === 'module' && script.getAttribute('integrity') === 'sha256-test');
 script.setAttribute('async', 'false'); script.removeAttribute('defer'); script.removeAttribute('nomodule');
 check('script boolean presence', script.async && !script.defer && !script.noModule);
+const img = document.createElement('img');
+check('image reflection defaults', img.alt === '' && img.srcset === '' && img.sizes === '' && img.useMap === '' && !img.isMap && img.loading === 'eager' && img.decoding === 'auto' && img.fetchPriority === 'auto' && img.crossOrigin === null && img.referrerPolicy === '');
+for (const [name, value, attr] of [['alt', 'caption', 'alt'], ['srcset', 'pic.png 2x', 'srcset'], ['sizes', '50vw', 'sizes'], ['useMap', '#map', 'usemap']]) {
+  img[name] = value;
+  check('image ' + name, img.getAttribute(attr) === value && img[name] === value);
+}
+img.isMap = true;
+check('image isMap set', img.hasAttribute('ismap'));
+img.removeAttribute('ismap');
+check('image isMap attribute', !img.isMap);
+for (const [name, value, normalized, fallback] of [['loading', 'LAZY', 'lazy', 'eager'], ['decoding', 'ASYNC', 'async', 'auto'], ['fetchPriority', 'HIGH', 'high', 'auto'], ['referrerPolicy', 'NO-REFERRER', 'no-referrer', '']]) {
+  img[name] = value;
+  check('image ' + name + ' enum', img[name] === normalized && img.getAttribute(name.toLowerCase()) === value);
+  img.setAttribute(name.toLowerCase(), 'invalid');
+  check('image ' + name + ' invalid', img[name] === fallback);
+}
+img.crossOrigin = '';
+check('image crossorigin empty', img.crossOrigin === 'anonymous');
+img.crossOrigin = null;
+check('image crossorigin null', img.crossOrigin === null);
 const a = document.createElement('a');
 a.href = 'https://example.com:8443/a/b?q=1#top';
 check('anchor parts', a.protocol === 'https:' && a.host === 'example.com:8443' && a.hostname === 'example.com' && a.port === '8443' && a.pathname === '/a/b' && a.search === '?q=1' && a.hash === '#top' && a.origin === 'https://example.com:8443');

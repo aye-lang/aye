@@ -1,0 +1,44 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Image state"
+    <body>
+      <img id="parsed" alt="Parsed image" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAAECAYAAACk7+45AAAAEUlEQVR4nGP4z8DwH4QZcDMAHxMP8b9IbMkAAAAASUVORK5CYII=">
+      <pre id="results">
+        "Image constructor: PASS\n"
+        "initial state: PASS\n"
+        "createElement initial: PASS\n"
+        "decode without source: PASS\n"
+        "parsed load state: PASS\n"
+        "parsed loads once: PASS\n"
+        "source starts pending: PASS\n"
+        "decode is Promise: PASS\n"
+        "decoded before load task: PASS\n"
+        "attribute dimensions: PASS\n"
+        "natural dimension fallback: PASS\n"
+        "dimension setters: PASS\n"
+        "load once: PASS\n"
+        "replacement pending: PASS\n"
+        "broken decode: PASS\n"
+        "broken state: PASS\n"
+        "error once: PASS\n"
+        "empty source complete: PASS\n"
+        "empty decode: PASS\n"
+        "empty error once: PASS\n"
+        "removed source complete: PASS\n"
+        "removed decode: PASS\n"
+        "removed source no event: PASS\n"
+        "superseded decode: PASS\n"
+        "rapid updates coalesce: PASS\n"
+        "changed after decode: PASS\n"
+        "stale event canceled: PASS\n"
+        "srcset pending: PASS\n"
+        "srcset natural density: PASS\n"
+        "detached markup request: PASS\n"
+        "Attr restarts request: PASS\n"
+        "event state ordering: PASS\n"
+        "final event counts: PASS\n"
+      <script src="image_state.js">
+      "\n"
