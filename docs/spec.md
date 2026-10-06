@@ -913,6 +913,12 @@ pub fn main() !void {
   the error. `f() catch |e| { ... }` runs the block on error; when the
   payload is not `void` the block must end with `return`, `break` or
   `continue`. A `return` there returns from the enclosing function. `catch` binds looser than `+` and tighter than `==`.
+- `if f() |v| { A } else |e| { B }` branches on an error union without
+  leaving the function: `A` gets the payload `v`, `B` the error `e` (for
+  `E!void`: `if f() { A } else |e| { B }`). The `else |e|` is required
+  (E0102): it handles the error, and `B` may simply end.
+- `return match x { ... }` in an `E!T` function: each arm is what a
+  `return` takes, a `T`, an error value or an `E!T` call (no `try` needed).
 - `match e { .A => ..., .B => ... }` on an error value must cover every
   error of its set (or use `_`).
 - `errdefer stmt` runs when the scope is left by returning an error (a
@@ -922,6 +928,44 @@ pub fn main() !void {
   per `return`/`try` the error passed through (where it started first), and
   exits with status 1.
 - Errors carry no payload. Report details through a parameter or `std.log`.
+
+```ore
+import std
+
+error UrlError { Empty, NoScheme }
+
+fn parse(s: []u8) UrlError![]u8 {
+    if s.len == 0 {
+        return UrlError.Empty
+    }
+    return s
+}
+
+fn finalUrl(asked: []u8, redirected: []u8) []u8 {
+    var url = asked
+    if parse(redirected) |u| {
+        url = u
+    } else |e| {
+        std.log.info("keeping {}: {}", asked, e)
+    }
+    return url
+}
+
+enum Act { Open, Check, Fail }
+
+fn run(a: Act, s: []u8) ![]u8 {
+    return match a {
+        .Open => finalUrl(s, "")
+        .Check => parse(s)
+        .Fail => UrlError.NoScheme
+    }
+}
+
+pub fn main() !void {
+    @println(finalUrl("a", "b"))
+    @println(try run(Act.Check, "x"))
+}
+```
 
 ## 9. Memory
 

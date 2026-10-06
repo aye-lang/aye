@@ -407,6 +407,9 @@ pub enum TStmtKind {
     Assign { target: TExpr, op: Option<BinOp>, value: TExpr },
     /// With `capture`, `cond` is a `?T` and the variable gets its value.
     If { cond: TExpr, capture: Option<VarId>, then: Vec<TStmt>, els: Vec<TStmt> },
+    /// `if cond |value| { then } else |err| { els }` on the error union
+    /// `cond`: `value` gets the payload (none for `void`), `err` the error.
+    IfErr { cond: TExpr, value: Option<VarId>, then: Vec<TStmt>, err: VarId, els: Vec<TStmt> },
     /// With `capture`, `cond` is a `?T`: the loop runs while it has a value.
     While { cond: TExpr, capture: Option<VarId>, body: Vec<TStmt> },
     For { var: VarId, lo: TExpr, hi: TExpr, body: Vec<TStmt> },
@@ -933,7 +936,9 @@ fn block_returns(stmts: &[TStmt], or_jumps: bool) -> bool {
         TStmtKind::Return(_) | TStmtKind::Expr(TExpr { kind: TExprKind::Unreachable, .. }) => true,
         TStmtKind::Break | TStmtKind::Continue => or_jumps,
         TStmtKind::Block(b) => block_returns(b, or_jumps),
-        TStmtKind::If { then, els, .. } => block_returns(then, or_jumps) && block_returns(els, or_jumps),
+        TStmtKind::If { then, els, .. } | TStmtKind::IfErr { then, els, .. } => {
+            block_returns(then, or_jumps) && block_returns(els, or_jumps)
+        }
         TStmtKind::Expr(TExpr { kind: TExprKind::Match { arms, .. }, .. }) => arms.iter().all(|a| match &a.body {
             TArmBody::Block(b) => block_returns(b, or_jumps),
             TArmBody::Expr(x) => matches!(x.kind, TExprKind::Unreachable),
@@ -2383,7 +2388,46 @@ impl<'a> Checker<'a> {
                 };
                 TStmtKind::Assign { target, op, value }
             }
-            StmtKind::If { cond, capture, then, els } => {
+            StmtKind::If { cond, capture, then, els, err_capture: Some((ename, espan)) } => {
+                let u = self.expr(cond, None).and_then(|u| match &u.ty {
+                    Type::ErrorUnion(..) => Ok(u),
+                    Type::Error => Err(silent()),
+                    t => err(E0102, u.span, format!(
+                        "`else |{ename}|` takes the error of an error union (`E!T`), but the condition has type `{t}`"
+                    )),
+                });
+                let (set, payload) = match &u {
+                    Ok(TExpr { ty: Type::ErrorUnion(set, p), .. }) => (set.clone(), (**p).clone()),
+                    _ => (String::new(), Type::Error),
+                };
+                self.scopes.push(HashMap::new());
+                // `Err` when the capture has an error (reported).
+                let value: Result<Option<VarId>> = match capture {
+                    Some((n, sp)) if payload == Type::Void => {
+                        self.report(Error::new(E0102, *sp, format!(
+                            "the condition has type `{}`: there is no value to capture (write `if f() {{ }} else |{ename}| {{ }}`)",
+                            u.as_ref().map_or(Type::Error, |u| u.ty.clone())
+                        )));
+                        self.declare_or_report(n, Type::Error, false, *sp);
+                        Err(silent())
+                    }
+                    Some((n, sp)) => self.declare_or_report(n, payload.clone(), false, *sp).map(Some).ok_or_else(silent),
+                    None => Ok(None),
+                };
+                let then = self.block(then);
+                self.scopes.pop();
+                self.scopes.push(HashMap::new());
+                let ety = if set.is_empty() { Type::Error } else { Type::ErrorSet(set) };
+                let err_var = self.declare_or_report(ename, ety, false, *espan);
+                let els = match els.as_deref() {
+                    Some(ast::Stmt { kind: StmtKind::Block(b), .. }) => self.block(b),
+                    _ => unreachable!(),
+                };
+                self.scopes.pop();
+                let (cond, value, err) = (u?, value?, err_var.ok_or_else(silent)?);
+                TStmtKind::IfErr { cond, value, then, err, els }
+            }
+            StmtKind::If { cond, capture, then, els, err_capture: None } => {
                 let (cond, capture, then) = match capture {
                     None => (self.condition(cond, "if"), None, self.block(then)),
                     Some((name, name_span)) => {
@@ -2504,6 +2548,11 @@ impl<'a> Checker<'a> {
                             return err(E0049, e.span, "function has no return type but a value was returned");
                         }
                         Self::void_return(t, s.span)
+                    }
+                    // `return match x { ... }`: each arm is returned, so it
+                    // may be an error union, an error or a payload value.
+                    (Some(e), Type::ErrorUnion(..)) if matches!(strip_parens(e).kind, ExprKind::Match { .. }) => {
+                        TStmtKind::Return(Some(self.match_expr(strip_parens(e), Some(&ret), false)?))
                     }
                     (Some(e), Type::ErrorUnion(set, payload)) => {
                         let t = self.expr(e, (**payload != Type::Void).then(|| Self::hint(e, payload)))?;
@@ -2657,7 +2706,16 @@ impl<'a> Checker<'a> {
     /// The optional that `if x |name|` or `while x |name|` (`what`) unwraps,
     /// and the type of its value.
     fn optional_cond(&mut self, e: &ast::Expr, what: &str, name: &str) -> (Result<TExpr>, Type) {
-        let c = self.value(e, None).and_then(|c| match &c.ty {
+        let c = self.expr(e, None).and_then(|c| match &c.ty {
+            Type::ErrorUnion(..) if what == "if" => err(E0102, c.span, format!(
+                "`if x |{name}|` on an error union (`{}`) needs `else |e| {{ ... }}`, which handles the error",
+                c.ty
+            )),
+            Type::Void => err(E0030, c.span, "this expression does not produce a value"),
+            Type::Error => Err(silent()),
+            _ => self.handled(c),
+        });
+        let c = c.and_then(|c| match &c.ty {
             Type::Optional(_) => Ok(c),
             t => err(E0027, c.span, format!("`{what}` with `|{name}|` needs an optional (`?T`) value, found `{t}`")),
         });
@@ -4495,6 +4553,16 @@ impl<'a> Checker<'a> {
             }
             ArmBody::Expr(x) if is_stmt => TArmBody::Expr(self.expr_stmt(x)?),
             ArmBody::Expr(x) => TArmBody::Expr(match want {
+                // The `match` is returned (`return match ...`): the arm is
+                // what `return` takes.
+                Some(t @ Type::ErrorUnion(set, payload)) => {
+                    let hint = match strip_parens(x).kind {
+                        ExprKind::Unreachable => Some(t),
+                        _ => (**payload != Type::Void).then(|| Self::hint(x, payload)),
+                    };
+                    let v = self.expr(x, hint)?;
+                    self.return_union(v, set, payload)?
+                }
                 Some(t) => self.expect(x, t)?,
                 None => self.value(x, None)?,
             }),

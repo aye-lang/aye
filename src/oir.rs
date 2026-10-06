@@ -559,6 +559,27 @@ impl<'a> Lower<'a> {
                 self.span = s.span;
                 self.push(out, StmtKind::If { cond: c, then: t, els: e });
             }
+            // On an error, `err` gets it and the error branch runs; the
+            // trace entries of the error are dropped when that branch ends
+            // normally, as for `catch`.
+            TStmtKind::IfErr { cond, value, then, err, els } => {
+                let saved = self.temp(Type::Int(IntTy::U32));
+                self.push(out, StmtKind::Assign(local(saved), Rvalue::TraceLen));
+                let u = self.place(cond, out);
+                let c = self.temp(Type::Bool);
+                self.push(out, StmtKind::Assign(local(c), Rvalue::IsErr(u.clone())));
+                let mut ok = Vec::new();
+                if let Some(v) = value {
+                    self.push(&mut ok, StmtKind::Assign(local(*v), Rvalue::Load(field(u.clone(), "val"))));
+                }
+                self.block(then, false, &mut ok);
+                self.span = s.span;
+                let mut bad = Vec::new();
+                self.push(&mut bad, StmtKind::Assign(local(*err), Rvalue::Load(field(u, "err"))));
+                self.scoped(els, Scope { defers: Vec::new(), is_loop: false, restore: Some(saved) }, &mut bad);
+                self.span = s.span;
+                self.push(out, StmtKind::If { cond: Operand::Local(c), then: bad, els: ok });
+            }
             TStmtKind::While { cond, capture, body } => {
                 let mut b = Vec::new();
                 let (c, val) = match capture {
@@ -691,7 +712,12 @@ impl<'a> Lower<'a> {
                     }
                     // An error union from a call: test it.
                     Some(TExpr {
-                        kind: TExprKind::Call { .. } | TExprKind::DynCall { .. } | TExprKind::Create { .. } | TExprKind::AllocSlice { .. },
+                        kind:
+                            TExprKind::Call { .. }
+                            | TExprKind::DynCall { .. }
+                            | TExprKind::Create { .. }
+                            | TExprKind::AllocSlice { .. }
+                            | TExprKind::Match { .. },
                         ty: Type::ErrorUnion(..),
                         ..
                     }) => {

@@ -2099,6 +2099,46 @@ E0101 = 101 {
 }
 "#,
 }
+E0102 = 102 {
+    "`if` on an error union",
+    "`if f() |v| { ... } else |e| { ... }` branches on an error union without leaving the function: the first block gets the value, the `else` block the error (for `E!void`, write `if f() { ... } else |e| { ... }`). The `else |e|` is required, since it is what handles the error, and it takes only an error union.",
+    r#"error ParseError { Empty }
+
+fn parse(s: []u8) ParseError!i64 {
+    if s.len == 0 {
+        return ParseError.Empty
+    }
+    return 1
+}
+
+pub fn main() {
+    var n: i64 = 0
+    if parse("") |v| {
+        n = v
+    }
+    @println(n)
+}
+"#,
+    r#"error ParseError { Empty }
+
+fn parse(s: []u8) ParseError!i64 {
+    if s.len == 0 {
+        return ParseError.Empty
+    }
+    return 1
+}
+
+pub fn main() {
+    var n: i64 = 0
+    if parse("") |v| {
+        n = v
+    } else |e| {
+        n = -1
+    }
+    @println(n)
+}
+"#,
+}
 }
 
 #[cfg(test)]

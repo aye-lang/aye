@@ -1,0 +1,5 @@
+error: Bad
+error return trace:
+error_branch_trace.ore:6:5
+error_branch_trace.ore:11:5
+error_branch_trace.ore:27:13

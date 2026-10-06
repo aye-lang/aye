@@ -1,0 +1,28 @@
+// M9.7: an error handled by `else |e|` leaves no entries in the error
+// return trace, and `errdefer` runs when a returned `match` gives an error.
+error E { Bad, Worse }
+
+fn fail() E!i64 {
+    return E.Bad
+}
+
+fn pick(n: i64) E!i64 {
+    errdefer @println("errdefer ran")
+    return match n {
+        0 => fail()
+        1 => E.Worse
+        _ => n
+    }
+}
+
+pub fn main() !void {
+    if fail() |v| {
+        @println(v)
+    } else |e| {
+        @println("handled")
+    }
+    @println(try pick(7))
+    let w = pick(1) catch 0
+    @println(w)
+    let x = try pick(0)
+}

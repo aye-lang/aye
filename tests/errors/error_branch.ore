@@ -1,0 +1,32 @@
+error E { Bad }
+
+fn f() E!i64 {
+    return E.Bad
+}
+
+fn g() E!void {
+    return E.Bad
+}
+
+fn opt() ?i64 {
+    return null
+}
+
+pub fn main() {
+    if f() |v| {
+        @println(v)
+    }
+    if opt() |v| {
+        @println(v)
+    } else |e| {
+        @println("no")
+    }
+    if g() |v| {
+    } else |e| {
+    }
+    if f() |v| {
+        @println(v)
+    } else |e| {
+        @println(e == E.Bad)
+    }
+}

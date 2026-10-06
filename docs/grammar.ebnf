@@ -144,8 +144,11 @@ stmt        = let_stmt | if_stmt | while_stmt | for_stmt
             | simple_stmt ;
 
 let_stmt    = ( "let" | "var" ) ident [ ":" type ] "=" expr ;
-if_stmt     = "if" cond_expr [ "|" ident "|" ] block [ "else" ( if_stmt | block ) ] ;
-               (* with "|v|" the header is a ?T and v is its value *)
+if_stmt     = "if" cond_expr [ "|" ident "|" ] block
+              [ "else" ( if_stmt | block | "|" ident "|" block ) ] ;
+               (* with "|v|" the header is a ?T and v is its value;
+                  with "else |e|" it is an error union E!T: v is the
+                  payload and e the error *)
                (* "else" must follow "}" on the same line *)
 while_stmt  = "while" cond_expr [ "|" ident "|" ] block ;
                (* with "|v|": loop while the header, evaluated each time, has a value *)

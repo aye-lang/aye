@@ -222,8 +222,10 @@ pub enum StmtKind {
     /// `let` (mutable = false) or `var` (mutable = true).
     Let { name: String, mutable: bool, ty: Option<TypeExpr>, init: Expr },
     Assign { target: Expr, op: AssignOp, value: Expr },
-    /// `capture` is the `v` of `if x |v| { }`.
-    If { cond: Expr, capture: Option<(String, Span)>, then: Block, els: Option<Box<Stmt>> },
+    /// `capture` is the `v` of `if x |v| { }`; `err_capture` the `e` of
+    /// `else |e| { }`, which makes `cond` an error union (`els` is then a
+    /// block).
+    If { cond: Expr, capture: Option<(String, Span)>, then: Block, els: Option<Box<Stmt>>, err_capture: Option<(String, Span)> },
     /// `capture` is the `v` of `while x |v| { }`.
     While { cond: Expr, capture: Option<(String, Span)>, body: Block },
     /// `for var in lo..hi { body }`

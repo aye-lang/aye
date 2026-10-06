@@ -858,6 +858,7 @@ impl Parser {
         let cond = self.cond_header()?;
         let capture = self.capture()?;
         let then = self.block()?;
+        let mut err_capture = None;
         let els = if self.eat(&Tok::Kw(Kw::Else)) {
             let else_span = self.span();
             match self.peek() {
@@ -865,12 +866,23 @@ impl Parser {
                 Tok::LBrace => {
                     Some(Box::new(Stmt { kind: StmtKind::Block(self.block()?), span: else_span }))
                 }
-                _ => return Err(self.unexpected("`if` or `{` after `else`")),
+                // `else |e| { ... }`: the error of an error union.
+                Tok::Pipe => {
+                    self.bump();
+                    err_capture = Some(self.ident()?);
+                    self.expect(&Tok::Pipe)?;
+                    if !self.at(&Tok::LBrace) {
+                        return Err(self.unexpected("`{` after `else |e|`"));
+                    }
+                    let span = self.span();
+                    Some(Box::new(Stmt { kind: StmtKind::Block(self.block()?), span }))
+                }
+                _ => return Err(self.unexpected("`if`, `{` or `|e|` after `else`")),
             }
         } else {
             None
         };
-        Ok(Stmt { kind: StmtKind::If { cond, capture, then, els }, span })
+        Ok(Stmt { kind: StmtKind::If { cond, capture, then, els, err_capture }, span })
     }
 
     /// Expression statement or assignment.

@@ -1,0 +1,71 @@
+// M9.7: branch on an error union without leaving the function
+// (`if f() |v| { } else |e| { }`), and a `match` returned from an `E!T`
+// function whose arms are error unions, errors or values.
+error UrlError { Empty, NoScheme }
+
+struct Url {
+    scheme: []u8
+}
+
+fn parse(s: []u8) UrlError!Url {
+    if s.len == 0 {
+        return UrlError.Empty
+    }
+    if s[0] != 'h' {
+        return UrlError.NoScheme
+    }
+    return Url { scheme: "http" }
+}
+
+fn check(s: []u8) UrlError!void {
+    let u = try parse(s)
+}
+
+// The URL after redirects if it parses, else the one asked for.
+fn finalUrl(asked: Url, redirected: []u8) Url {
+    var url = asked
+    if parse(redirected) |u| {
+        url = u
+    } else |e| {
+        @println(e == UrlError.NoScheme)
+    }
+    return url
+}
+
+enum Action { Back, Forward, Reload, Stop }
+
+fn back(n: i64) UrlError!i64 {
+    if n < 0 {
+        return UrlError.Empty
+    }
+    return n - 1
+}
+
+fn act(a: Action, n: i64) !i64 {
+    return match a {
+        .Back => back(n)
+        .Forward => n + 1
+        .Reload => UrlError.NoScheme
+        .Stop => unreachable
+    }
+}
+
+pub fn main() {
+    let start = Url { scheme: "file" }
+    @println(finalUrl(start, "https://x").scheme)
+    @println(finalUrl(start, "ftp://x").scheme)
+    if check("") {
+        @println("valid")
+    } else |e| {
+        @println(e == UrlError.Empty)
+    }
+    if check("h") {
+        @println("valid")
+    } else |e| {
+        @println("invalid")
+    }
+    @println(act(Action.Back, 5) catch -100)
+    @println(act(Action.Back, -5) catch -100)
+    @println(act(Action.Forward, 5) catch -100)
+    @println(act(Action.Reload, 5) catch -100)
+}

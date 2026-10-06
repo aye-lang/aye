@@ -781,9 +781,9 @@ impl Loader<'_> {
                 self.expr(target);
                 self.expr(value);
             }
-            StmtKind::If { cond, capture, then, els } => {
+            StmtKind::If { cond, capture, then, els, err_capture } => {
                 self.expr(cond);
-                if let Some((n, sp)) = capture {
+                for (n, sp) in capture.iter().chain(err_capture.iter()) {
                     self.bind(n, *sp);
                 }
                 self.block(then);
