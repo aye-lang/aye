@@ -5,6 +5,7 @@
 // process is open (`local_store`).
 
 import css
+import dom.Document
 import dom.Kind
 import dom.NodeId
 import encoding
@@ -199,6 +200,7 @@ fn akActivate(it: *mut Interp, a: Args) JsError!Value {
         }
         .Changed => {
             s.version += 1
+            s.style_version += 1
         }
         _ => {}
     }
@@ -492,8 +494,7 @@ fn akComputedStyle(it: *mut Interp, a: Args) JsError!Value {
     if s.page.doc.node(h).kind != Kind.Element || !s.page.doc.isConnected(h) {
         return none
     }
-    let st = try computedStyling(s)
-    let values = st.styles.get(h) orelse return none
+    let values = try computedValues(s, h) orelse return none
     let b = try it.builder()
     defer it.release(b)
     if one {
@@ -548,6 +549,9 @@ fn akDisplayed(it: *mut Interp, a: Args) JsError!Value {
     if !s.page.doc.isConnected(h) {
         return js.boolVal(false)
     }
+    if (try computedValues(s, h)) == null {
+        return js.boolVal(false)
+    }
     let st = try computedStyling(s)
     var cur: ?NodeId = h
     while cur |c| {
@@ -566,9 +570,21 @@ fn akDisplayed(it: *mut Interp, a: Args) JsError!Value {
     return js.boolVal(true)
 }
 
-// The styles of the document as it is now: the page's when they are up
-// to date, else computed for the viewport and kept until the document
-// changes.
+// The computed values of the element `h` (in the document): the page's
+// when they are up to date, else computed for it and its ancestors only.
+fn computedValues(s: *mut Script, h: NodeId) AllocError!?[]css.Value {
+    let st = try computedStyling(s)
+    if st.styles.get(h) == null {
+        try css.computeStylesOf(&s.page.doc, &st.ua, &st.author, st.media, h, &mut st.styles)
+    }
+    return st.styles.get(h)
+}
+
+// The styles getComputedStyle reads: the page's when they are up to date;
+// else `Script.computed`, whose styles are computed per element
+// (computedValues) and dropped when a change may change them (not for
+// `src`: a lazy loader sets it in a loop and asks for styles each time);
+// its sheets are parsed again only when a style or link element changed.
 fn computedStyling(s: *mut Script) AllocError!*mut Styling {
     let p = s.page
     if p.styling |st| {
@@ -577,14 +593,69 @@ fn computedStyling(s: *mut Script) AllocError!*mut Styling {
         }
     }
     if s.computed |c| {
-        if c.version == s.version && c.media.width == s.width && c.media.height == s.height {
-            return c
+        if c.media.width == s.width && c.media.height == s.height {
+            if c.version == s.style_version {
+                return c
+            }
+            let key = sheetsKey(&p.doc)
+            if key == s.computed_sheets {
+                c.styles.deinit()
+                c.styles = try css.Styles.init(s.alloc)
+                c.version = s.style_version
+                return c
+            }
         }
     }
     dropComputed(s)
-    let c = try p.styleFor(css.Media { width: s.width, height: s.height })
+    let media = css.Media { width: s.width, height: s.height }
+    var ua = try css.Sheet.init(p.alloc)
+    errdefer ua.deinit()
+    try css.uaSheet(&mut ua, media)
+    try css.parseSheet(&mut ua, "noscript { display: none }", media)
+    var author = try css.Sheet.init(p.alloc)
+    errdefer author.deinit()
+    try authorSheets(p.alloc, &p.doc, &p.url, media, &mut author)
+    var styles = try css.Styles.init(p.alloc)
+    errdefer styles.deinit()
+    let c = try p.alloc.create(Styling { media: media, ua: ua, author: author, styles: styles, version: s.style_version })
     s.computed = c
+    s.computed_sheets = sheetsKey(&p.doc)
     return c
+}
+
+// What the author style sheets come from: the style elements (their text)
+// and the stylesheet links (their href and rel), hashed into a number.
+fn sheetsKey(doc: *Document) u64 {
+    var key: u64 = 1469598103934665603
+    var cur: ?NodeId = doc.root
+    while cur |h| {
+        let n = doc.node(h)
+        if n.kind == Kind.Element && (text.eql(n.name, "style") || text.eql(n.name, "link")) {
+            key = mix(key, h.index as u64)
+            if text.eql(n.name, "style") {
+                var t = n.first_child
+                while t |c| {
+                    for b in doc.node(c).data {
+                        key = mix(key, b as u64)
+                    }
+                    t = doc.node(c).next
+                }
+            } else {
+                for b in doc.attr(h, "href") orelse "" {
+                    key = mix(key, b as u64)
+                }
+                for b in doc.attr(h, "rel") orelse "" {
+                    key = mix(key, b as u64)
+                }
+            }
+        }
+        cur = doc.following(h, doc.root)
+    }
+    return key
+}
+
+fn mix(key: u64, v: u64) u64 {
+    return (key ^ v) *% 1099511628211
 }
 
 fn dropComputed(s: *mut Script) {

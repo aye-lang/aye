@@ -148,38 +148,84 @@ pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, o
     var cur: ?NodeId = doc.root
     while cur |h| {
         if doc.node(h).kind == Kind.Element {
-            for i in 0..wins.len {
-                wins[i].set = false
-            }
-            c.clearCustoms()
-            try c.consider(ua, h, false)
-            if doc.quirks {
-                try c.consider(&out.quirks, h, false)
-            }
-            hints.clear()
-            try writeHints(doc, h, &mut hints)
-            if hints.len() > 0 {
-                let range = try parseInline(&mut out.inline, hints.bytes())
-                for k in range.start..range.end {
-                    try c.offer(out.inline.decls.items()[k], 2, 0)
-                }
-            }
-            try c.consider(author, h, true)
-            if doc.attr(h, "style") |src| {
-                let range = try parseInline(&mut out.inline, src)
-                for k in range.start..range.end {
-                    let d = out.inline.decls.items()[k]
-                    var level: u8 = 3
-                    if d.important {
-                        level = 5
-                    }
-                    try c.offer(d, level, 0)
-                }
-            }
-            try c.compute(h)
+            try styleElement(&mut c, ua, author, &mut hints, h)
         }
         cur = doc.following(h, doc.root)
     }
+}
+
+/// Computes the style of the element `el` and of its ancestors only (what
+/// getComputedStyle needs), into `out`; nothing when `out` has it.
+pub fn computeStylesOf(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, el: NodeId, out: *mut Styles) AllocError!void {
+    if out.map.contains(el.index) {
+        return
+    }
+    let a = out.arena.allocator()
+    let wins = try a.alloc(Win { set: false, level: 0, spec: 0, d: NO_DECL }, NPROPS)
+    var c = Computer {
+        doc: doc,
+        media: media,
+        out: out,
+        wins: wins,
+        root_font: 16.0,
+        centered: IntMap(u32, bool).init(out.alloc),
+        custom_wins: List(CustomWin).init(out.alloc),
+        custom_index: StrMap(usize).init(out.alloc),
+        level: null,
+    }
+    defer c.deinit()
+    var hints = text.Builder.init(out.alloc)
+    defer hints.deinit()
+    // From the root down, so that each element inherits from its parent.
+    var chain = List(NodeId).init(out.alloc)
+    defer chain.deinit()
+    var cur: ?NodeId = el
+    while cur |h| {
+        if doc.node(h).kind == Kind.Element {
+            try chain.append(h)
+        }
+        cur = doc.node(h).parent
+    }
+    var i = chain.len()
+    while i > 0 {
+        i -= 1
+        try styleElement(&mut c, ua, author, &mut hints, chain.items()[i])
+    }
+}
+
+// The cascade for one element whose parent has its style.
+fn styleElement(c: *mut Computer, ua: *Sheet, author: *Sheet, hints: *mut text.Builder, h: NodeId) AllocError!void {
+    let doc = c.doc
+    let out = c.out
+    for i in 0..c.wins.len {
+        c.wins[i].set = false
+    }
+    c.clearCustoms()
+    try c.consider(ua, h, false)
+    if doc.quirks {
+        try c.consider(&out.quirks, h, false)
+    }
+    hints.clear()
+    try writeHints(doc, h, hints)
+    if hints.len() > 0 {
+        let range = try parseInline(&mut out.inline, hints.bytes())
+        for k in range.start..range.end {
+            try c.offer(out.inline.decls.items()[k], 2, 0)
+        }
+    }
+    try c.consider(author, h, true)
+    if doc.attr(h, "style") |src| {
+        let range = try parseInline(&mut out.inline, src)
+        for k in range.start..range.end {
+            let d = out.inline.decls.items()[k]
+            var level: u8 = 3
+            if d.important {
+                level = 5
+            }
+            try c.offer(d, level, 0)
+        }
+    }
+    try c.compute(h)
 }
 
 struct Computer {

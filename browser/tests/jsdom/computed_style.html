@@ -29,4 +29,28 @@ try { cs.setProperty('color', 'blue'); } catch (e) { ro = e.name; }
 let notEl = '';
 try { getComputedStyle(document); } catch (e) { notEl = e.name; }
 log(ro, notEl);
+// Changes to attributes no selector looks at, to style sheets, to classes.
+const img = document.createElement('img');
+box.appendChild(img);
+img.setAttribute('src', 'a.png');
+log(getComputedStyle(img).display, getComputedStyle(img).color);
+const st = document.createElement('style');
+st.textContent = '#hidden { color: rgb(1, 2, 3) }';
+document.head.appendChild(st);
+log(getComputedStyle(document.getElementById('hidden')).color);
+st.textContent = '#hidden { color: rgb(4, 5, 6) }';
+log(getComputedStyle(document.getElementById('hidden')).color);
+const extra = document.createElement('style');
+extra.textContent = '.late img { display: block }';
+document.head.appendChild(extra);
+box.classList.add('late');
+log(getComputedStyle(img).display);
+// a: the parts of its URL; navigator.
+const a = document.createElement('a');
+a.href = 'https://user:pw@example.com:8080/p/q?x=1#frag';
+log(a.protocol, a.username, a.host, a.hostname, a.port, a.pathname, a.search, a.hash, a.origin, String(a) === a.href);
+a.pathname = '/other';
+a.hash = 'h';
+log(a.getAttribute('href'), document.createElement('a').protocol === '');
+log(navigator instanceof Navigator, navigator.userAgent.includes('anyknown'), navigator.appName, navigator.languages.join(','), navigator.javaEnabled(), navigator.hardwareConcurrency > 0);
 </script>

@@ -213,6 +213,11 @@ pub struct Script {
     // Counts changes to the document by scripts (styles and layout are
     // out of date when it moved).
     version: u64
+    // Counts the changes that may change computed styles: all but those
+    // of attributes no selector looks at in practice (`src`, `alt`...).
+    style_version: u64
+    // The style sheets `computed` has: their elements (sheetsKey).
+    computed_sheets: u64
     title_version: u64
     // document.readyState: 0 loading, 1 interactive, 2 complete.
     ready: u8
@@ -353,6 +358,8 @@ fn createScript(p: *mut Page) AllocError!*mut Script {
         nav_form: null,
         nav_submitter: null,
         version: 0,
+        style_version: 0,
+        computed_sheets: 0,
         title_version: 0,
         ready: 0,
         current: null,
@@ -587,6 +594,7 @@ fn insertWritten(s: *mut Script, el: NodeId) AllocError!void {
         }
     }
     s.version += 1
+    s.style_version += 1
     write_nesting += 1
     defer write_nesting -= 1
     for sc in scripts.items() {

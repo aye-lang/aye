@@ -33,8 +33,24 @@ fn docOf(it: *mut Interp) *mut Document {
 
 // Records that a script changed the document.
 fn changed(it: *mut Interp) {
-    scriptOf(it).version += 1
+    let s = scriptOf(it)
+    s.version += 1
+    s.style_version += 1
 }
+
+// Records that a script changed the attribute `name`: styles are not out
+// of date for the attributes of images and the like that no selector
+// looks at in practice (a lazy loader sets `src` in a loop and asks for
+// styles each time).
+fn changedAttr(it: *mut Interp, name: []u8) {
+    let s = scriptOf(it)
+    s.version += 1
+    if !hasClass(STYLE_NEUTRAL_ATTRS, name) {
+        s.style_version += 1
+    }
+}
+
+let STYLE_NEUTRAL_ATTRS = "src srcset sizes alt title loading decoding fetchpriority referrerpolicy crossorigin integrity nonce autocomplete"
 
 fn protoFor(s: *mut Script, h: NodeId) u32 {
     if s.page.doc.isFragment(h) {
@@ -1094,7 +1110,7 @@ fn elementSetAttribute(it: *mut Interp, a: Args) JsError!Value {
     defer it.release(v)
     try argText(it, a, 1, v)
     try docOf(it).setAttr(h, name.bytes(), v.bytes())
-    changed(it)
+    changedAttr(it, name.bytes())
     return Value.Undefined
 }
 
@@ -1106,7 +1122,7 @@ fn elementRemoveAttribute(it: *mut Interp, a: Args) JsError!Value {
     let doc = docOf(it)
     if doc.attr(h, b.bytes()) != null {
         doc.removeAttr(h, b.bytes())
-        changed(it)
+        changedAttr(it, b.bytes())
     }
     return Value.Undefined
 }
@@ -1429,6 +1445,7 @@ fn namedSet(s: *mut Script, o: u32, key: u32, value: Value) JsError!bool {
         try setStyleDecl(s, h, b.bytes(), v.bytes())
     }
     s.version += 1
+    s.style_version += 1
     return true
 }
 
