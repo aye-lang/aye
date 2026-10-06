@@ -1758,31 +1758,116 @@ pub let PRELUDE =
     \\hidden(G, 'AbortSignal', AbortSignal);
     \\hidden(G, 'AbortController', AbortController);
     \\
-    \\// Observers: IntersectionObserver reports every target visible once (so
-    \\// lazy loading goes on), ResizeObserver reports each target once
-    \\// (MutationObserver is with the web components below).
+    \\// Observers: IntersectionObserver from the layout (engine/geometry.ore),
+    \\// ResizeObserver reports each target once (MutationObserver is with the
+    \\// web components below).
+    \\//
+    \\// IntersectionObserver: the browser calls the layout hook after a task
+    \\// that changed the document, a scroll offset or the viewport; the
+    \\// observers check their targets at the next animation frame, and report
+    \\// those whose threshold index or isIntersecting changed (all of them the
+    \\// first time).
+    \\const intersectionObservers = new Set();
+    \\let intersectionCheck = 0;
+    \\function checkIntersectionsSoon() {
+    \\  if (intersectionCheck) return;
+    \\  intersectionCheck = requestAnimationFrame(() => {
+    \\    intersectionCheck = 0;
+    \\    for (const o of [...intersectionObservers]) o._check();
+    \\  });
+    \\}
+    \\// A rootMargin: top, right, bottom, left in px (percentages of the root's
+    \\// width or height).
+    \\function rootMargins(text, w, h) {
+    \\  const [t = '0px', r = t, b = t, l = r] = String(text).trim().split(/\s+/).filter(Boolean);
+    \\  return [t, r, b, l].map((p, i) => {
+    \\    const n = parseFloat(p) || 0;
+    \\    return p.endsWith('%') ? n / 100 * (i % 2 ? w : h) : n;
+    \\  });
+    \\}
+    \\function cutRect(a, b) {
+    \\  const x0 = Math.max(a[0], b[0]), y0 = Math.max(a[1], b[1]);
+    \\  const x1 = Math.min(a[0] + a[2], b[0] + b[2]), y1 = Math.min(a[1] + a[3], b[1] + b[3]);
+    \\  return x1 >= x0 && y1 >= y0 ? [x0, y0, x1 - x0, y1 - y0] : null;
+    \\}
+    \\function paddingBox(el) {
+    \\  const r = el.getBoundingClientRect();
+    \\  return [r.x + el.clientLeft, r.y + el.clientTop, el.clientWidth, el.clientHeight];
+    \\}
     \\class IntersectionObserver {
     \\  constructor(callback, options) {
     \\    if (typeof callback !== 'function') throw new TypeError("Failed to construct 'IntersectionObserver': parameter 1 is not of type 'Function'.");
     \\    hidden(this, '_callback', callback);
     \\    hidden(this, '_targets', []);
+    \\    hidden(this, '_seen', new Map());
+    \\    hidden(this, '_records', []);
     \\    this.root = (options && options.root) || null;
     \\    this.rootMargin = (options && options.rootMargin) || '0px';
-    \\    this.thresholds = [].concat((options && options.threshold) || 0);
+    \\    this.thresholds = [].concat((options && options.threshold) || 0).map(Number).sort((a, b) => a - b);
     \\  }
     \\  observe(target) {
     \\    if (this._targets.includes(target)) return;
     \\    this._targets.push(target);
-    \\    setTimeout(() => {
-    \\      if (!this._targets.includes(target)) return;
-    \\      const rect = target.getBoundingClientRect();
-    \\      const entry = { target, isIntersecting: true, intersectionRatio: 1, boundingClientRect: rect, intersectionRect: rect, rootBounds: null, time: performance.now() };
-    \\      this._callback([entry], this);
-    \\    }, 0);
+    \\    intersectionObservers.add(this);
+    \\    ak.setLayoutHook(checkIntersectionsSoon);
+    \\    checkIntersectionsSoon();
     \\  }
-    \\  unobserve(target) { this._targets = this._targets.filter(t => t !== target); }
-    \\  disconnect() { this._targets = []; }
-    \\  takeRecords() { return []; }
+    \\  unobserve(target) {
+    \\    this._targets = this._targets.filter(t => t !== target);
+    \\    this._seen.delete(target);
+    \\  }
+    \\  disconnect() {
+    \\    this._targets = [];
+    \\    this._seen.clear();
+    \\    intersectionObservers.delete(this);
+    \\  }
+    \\  takeRecords() {
+    \\    const r = this._records;
+    \\    this._records = [];
+    \\    return r;
+    \\  }
+    \\  _entry(target) {
+    \\    const root = this.root;
+    \\    let bounds = root ? paddingBox(root) : [0, 0, innerWidth, innerHeight];
+    \\    const m = rootMargins(this.rootMargin, bounds[2], bounds[3]);
+    \\    bounds = [bounds[0] - m[3], bounds[1] - m[0], bounds[2] + m[1] + m[3], bounds[3] + m[0] + m[2]];
+    \\    const box = target.getBoundingClientRect();
+    \\    const rendered = target.getClientRects().length > 0 && (!root || (root !== target && root.contains(target)));
+    \\    let cut = rendered ? cutRect([box.x, box.y, box.width, box.height], bounds) : null;
+    \\    // The scroll containers between the target and the root clip it.
+    \\    for (let c = target.parentElement; cut && c && c !== root && c !== document.documentElement; c = c.parentElement) {
+    \\      if (ak.metric(c, 12)) cut = cutRect(cut, paddingBox(c));
+    \\    }
+    \\    const area = box.width * box.height;
+    \\    const ratio = !cut ? 0 : area > 0 ? Math.min(1, cut[2] * cut[3] / area) : 1;
+    \\    let index = this.thresholds.findIndex(t => t > ratio);
+    \\    if (index < 0) index = this.thresholds.length;
+    \\    if (!rendered) index = -1;
+    \\    return {
+    \\      index,
+    \\      entry: {
+    \\        target,
+    \\        time: performance.now(),
+    \\        isIntersecting: !!cut,
+    \\        intersectionRatio: ratio,
+    \\        boundingClientRect: box,
+    \\        intersectionRect: cut ? new DOMRect(cut[0], cut[1], cut[2], cut[3]) : new DOMRect(0, 0, 0, 0),
+    \\        rootBounds: new DOMRect(bounds[0], bounds[1], bounds[2], bounds[3]),
+    \\      },
+    \\    };
+    \\  }
+    \\  _check() {
+    \\    for (const target of this._targets) {
+    \\      const { index, entry } = this._entry(target);
+    \\      const seen = this._seen.get(target);
+    \\      if (seen && seen[0] === index && seen[1] === entry.isIntersecting) continue;
+    \\      this._seen.set(target, [index, entry.isIntersecting]);
+    \\      this._records.push(entry);
+    \\    }
+    \\    const records = this.takeRecords();
+    \\    if (records.length === 0) return;
+    \\    try { this._callback(records, this); } catch (e) { report(e); }
+    \\  }
     \\}
     \\class ResizeObserver {
     \\  constructor(callback) {

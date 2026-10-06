@@ -77,6 +77,39 @@ fn installGeometry(s: *mut Script, o: u32) JsError!void {
     try defMethod(it, o, "offsetParent", 1, akOffsetParent)
     try defMethod(it, o, "setScroll", 3, akSetScroll)
     try defMethod(it, o, "windowScroll", 1, akWindowScroll)
+    try defMethod(it, o, "setLayoutHook", 1, akSetLayoutHook)
+}
+
+fn akSetLayoutHook(it: *mut Interp, a: Args) JsError!Value {
+    let f = try js.callableArg(it, a, 0)
+    let s = scriptOf(it)
+    if s.layout_hook != js.NONE {
+        it.removeRoot(s.layout_hook)
+    }
+    s.layout_hook = try it.addRoot(f)
+    s.hook_stamp = 0
+    return Value.Undefined
+}
+
+// After a task: calls the layout hook when the document or its geometry
+// changed since the last call (the prelude then checks its observers at
+// the next animation frame).
+fn runLayoutHook(s: *mut Script) AllocError!void {
+    if s.layout_hook == js.NONE {
+        return
+    }
+    let stamp = domVersion(s.page) + s.geometry_changes + 1
+    if stamp == s.hook_stamp {
+        return
+    }
+    s.hook_stamp = stamp
+    let it = &mut s.it
+    let base = it.stack.len()
+    try jsPush(s, it.roots.items()[s.layout_hook])
+    try jsPush(s, js.objVal(it.global))
+    _ = try callReported(s, base, 0)
+    it.truncate(base)
+    try runMicrotasks(s)
 }
 
 fn dropGeometry(s: *mut Script) {
@@ -423,6 +456,7 @@ fn scrollWindow(s: *mut Script, x: f64, y: f64) AllocError!bool {
     s.scroll_x = nx
     s.scroll_y = ny
     s.scroll_moved = true
+    s.geometry_changes += 1
     followScroll(s, g)
     return true
 }
@@ -686,6 +720,7 @@ fn akSetScroll(it: *mut Interp, a: Args) JsError!Value {
         return js.boolVal(false)
     }
     try s.scrolls.put(el.index, moved)
+    s.geometry_changes += 1
     return js.boolVal(true)
 }
 

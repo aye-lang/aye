@@ -266,6 +266,14 @@ pub struct Script {
     scroll_x: f64
     scroll_y: f64
     scroll_moved: bool
+    // Counts the changes to geometry that are not changes to the
+    // document: scroll offsets and the viewport.
+    geometry_changes: u64
+    // The prelude's rendering-update hook (IntersectionObserver; NONE
+    // until it set one), called after a task when the document or its
+    // geometry changed since the last call (`hook_stamp`).
+    layout_hook: u32
+    hook_stamp: u64
 
     // ---- js.Host
 
@@ -441,6 +449,9 @@ fn createScript(p: *mut Page) AllocError!*mut Script {
         scroll_x: 0.0,
         scroll_y: 0.0,
         scroll_moved: false,
+        geometry_changes: 0,
+        layout_hook: js.NONE,
+        hook_stamp: 0,
     }) catch |e| {
         interp.deinit()
         return e
@@ -961,6 +972,7 @@ fn removeTimer(s: *mut Script, id: u32) {
 
 // After the browser ran scripts: the title follows the document.
 fn afterTask(s: *mut Script) AllocError!void {
+    try runLayoutHook(s)
     if s.title_version == s.version {
         return
     }
@@ -1134,6 +1146,9 @@ pub fn treeVersion(p: *Page) u64 {
 /// The size of the viewport, for innerWidth and innerHeight.
 pub fn setViewport(p: *mut Page, width: f64, height: f64) {
     if p.script |s| {
+        if s.width != width || s.height != height {
+            s.geometry_changes += 1
+        }
         s.width = width
         s.height = height
     }
