@@ -755,6 +755,23 @@ pub let PRELUDE =
     \\  return new NodeIterator(root, whatToShow, filter);
     \\});
     \\
+    \\// a and area: the parts of their URL (HTMLHyperlinkElementUtils).
+    \\for (const P of [HTMLAnchorElement.prototype, HTMLAreaElement.prototype]) {
+    \\  for (const part of ['protocol', 'username', 'password', 'host', 'hostname', 'port', 'pathname', 'search', 'hash', 'origin']) {
+    \\    getter(P, part, function () {
+    \\      if (!this.hasAttribute('href')) return '';
+    \\      const u = URL.parse(this.href);
+    \\      return u === null ? (part === 'protocol' ? ':' : '') : u[part];
+    \\    }, part === 'origin' ? undefined : function (v) {
+    \\      const u = URL.parse(this.href);
+    \\      if (u === null) return;
+    \\      u[part] = v;
+    \\      this.setAttribute('href', u.href);
+    \\    });
+    \\  }
+    \\  hidden(P, 'toString', function () { return this.href; });
+    \\}
+    \\
     \\// canvas: no drawing yet, so no context (as for an unknown type).
     \\const CanvasP = HTMLCanvasElement.prototype;
     \\hidden(CanvasP, 'getContext', function () { return null; });
@@ -1021,7 +1038,33 @@ pub let PRELUDE =
     \\hidden(G, 'scroll', function () {});
     \\hidden(G, 'focus', function () {});
     \\hidden(G, 'blur', function () {});
-    \\hidden(G, 'navigator', { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) anyknown/0.1', language: 'en-US', languages: ['en-US', 'en'], onLine: true, cookieEnabled: true, platform: '', vendor: '' });
+    \\class Navigator {
+    \\  get userAgent() { return 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) anyknown/0.1'; }
+    \\  get appVersion() { return '5.0 (Macintosh; Intel Mac OS X 10_15_7) anyknown/0.1'; }
+    \\  get appName() { return 'Netscape'; }
+    \\  get appCodeName() { return 'Mozilla'; }
+    \\  get product() { return 'Gecko'; }
+    \\  get productSub() { return '20030107'; }
+    \\  get vendor() { return ''; }
+    \\  get vendorSub() { return ''; }
+    \\  get platform() { return ''; }
+    \\  get language() { return 'en-US'; }
+    \\  get languages() { return ['en-US', 'en']; }
+    \\  get onLine() { return true; }
+    \\  get cookieEnabled() { return true; }
+    \\  get doNotTrack() { return null; }
+    \\  get hardwareConcurrency() { return 4; }
+    \\  get maxTouchPoints() { return 0; }
+    \\  get webdriver() { return false; }
+    \\  get pdfViewerEnabled() { return false; }
+    \\  get plugins() { return []; }
+    \\  get mimeTypes() { return []; }
+    \\  javaEnabled() { return false; }
+    \\  sendBeacon() { return true; }
+    \\  vibrate() { return false; }
+    \\}
+    \\hidden(G, 'Navigator', Navigator);
+    \\hidden(G, 'navigator', new Navigator());
     \\hidden(G, 'screen', { width: 1280, height: 800, availWidth: 1280, availHeight: 800, colorDepth: 24, pixelDepth: 24 });
     \\
     \\// The window's interface: `window instanceof Window`.
