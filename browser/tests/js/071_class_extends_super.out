@@ -1,0 +1,6 @@
+Rex makes a noise (woof) dog/animal lab
+true true
+true Spot makes a noise (woof)
+true true
+Dog { name: 'Rex', breed: 'lab' }
+Bit makes a noise (woof) Puppy

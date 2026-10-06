@@ -1,0 +1,24 @@
+- main
+  - paragraph
+    - link "Relative" [e1] -> page.html
+    - text: ,
+    - link "root relative" [e2] -> /root.html
+    - text: ,
+    - link "absolute" [e3] -> https://example.com/abs?q=1#frag
+    - text: ,
+    - link "fragment" [e4] -> #section
+    - text: ,
+    - link "script link" [e5] -> javascript:void(0)
+    - text: ,
+    - link "mail me" [e6] -> mailto:me@example.com
+    - text: .
+  - paragraph
+    - link "Thumbnail" [e7] -> img.html
+      - img "Thumbnail"
+    - link "Only a title" [e8] -> titled.html
+    - link "Labelled link" [e9] -> labelled.html
+    - link "Spaced text" [e10] -> spaced.html
+    - text: Named anchor
+  - paragraph
+    - link "This is a very long link text that goes on and on, describing the page that it points to in great detail, more than any reasonable name should ever ne…" [e11] -> long.html
+  - heading "Section" [level=2] [e12]

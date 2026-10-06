@@ -1,0 +1,114 @@
+// `data:` URLs (RFC 2397 as the Fetch standard reads it):
+// `data:[<type>][;base64],<data>`. The data is percent-decoded, then
+// base64-decoded if the type ends with `;base64`. No type means
+// "text/plain;charset=US-ASCII".
+
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+import url
+import url.Url
+
+fn fetchData(alloc: Allocator, target: *Url) FetchError!Response {
+    // Everything after "data:", without the fragment.
+    let all = target.withoutFragment()[5..]
+    var comma: usize = 0
+    if indexOfByte(all, ',') |i| {
+        comma = i
+    } else {
+        return FetchError.Invalid
+    }
+    var content_type = text.trim(all[..comma])
+    let decoded = try url.percentDecode(alloc, all[comma + 1..])
+    var body = decoded
+    if endsWithBase64(content_type) {
+        content_type = text.trim(content_type[..content_type.len - 7])
+        if content_type.len > 0 && content_type[content_type.len - 1] == ';' {
+            content_type = content_type[..content_type.len - 1]
+        }
+        body = base64Decode(alloc, decoded) catch |e| {
+            alloc.free(decoded)
+            return e
+        }
+        alloc.free(decoded)
+    }
+    if content_type.len == 0 || content_type[0] == ';' {
+        content_type = "text/plain;charset=US-ASCII"
+    }
+    return respond(alloc, content_type, body)
+}
+
+fn endsWithBase64(s: []u8) bool {
+    if s.len < 7 || !text.eqlIgnoreCase(s[s.len - 6..], "base64") {
+        return false
+    }
+    let before = text.trim(s[..s.len - 6])
+    return before.len > 0 && before[before.len - 1] == ';'
+}
+
+fn indexOfByte(s: []u8, b: u8) ?usize {
+    for i, c in s {
+        if c == b {
+            return i
+        }
+    }
+    return null
+}
+
+/// Decodes base64 the "forgiving" way of the Infra standard: ASCII
+/// whitespace is ignored and the `=` padding is optional; anything else
+/// that is not base64 makes it `Invalid`.
+pub fn base64Decode(alloc: Allocator, s: []u8) FetchError![]mut u8 {
+    var clean = text.Builder.init(alloc)
+    defer clean.deinit()
+    for c in s {
+        if c != ' ' && c != '\t' && c != '\n' && c != '\x0C' && c != '\r' {
+            try clean.appendByte(c)
+        }
+    }
+    var input64 = clean.bytes()
+    if input64.len % 4 == 0 && text.endsWith(input64, "==") {
+        input64 = input64[..input64.len - 2]
+    } else if input64.len % 4 == 0 && text.endsWith(input64, "=") {
+        input64 = input64[..input64.len - 1]
+    }
+    if input64.len % 4 == 1 {
+        return FetchError.Invalid
+    }
+    var out = text.Builder.init(alloc)
+    errdefer out.deinit()
+    var acc: u32 = 0
+    var bits: u32 = 0
+    for c in input64 {
+        let v = sextet(c)
+        if v < 0 {
+            return FetchError.Invalid
+        }
+        acc = (acc << 6) | v as u32
+        bits += 6
+        if bits >= 8 {
+            bits -= 8
+            try out.appendByte(((acc >> bits) & 0xFF) as u8)
+        }
+    }
+    return out.toOwned()
+}
+
+fn sextet(c: u8) i64 {
+    if c >= 'A' && c <= 'Z' {
+        return (c - 'A') as i64
+    }
+    if c >= 'a' && c <= 'z' {
+        return (c - 'a') as i64 + 26
+    }
+    if c >= '0' && c <= '9' {
+        return (c - '0') as i64 + 52
+    }
+    if c == '+' {
+        return 62
+    }
+    if c == '/' {
+        return 63
+    }
+    return -1
+}

@@ -1,0 +1,10 @@
+console.log(new Array(3).fill(0), [1, 2, 3, 4].fill('x', 1, 3), [1, 2, 3].fill(9, -1));
+const grid = Array.from({ length: 2 }, () => new Array(3).fill('.'));
+grid[0][1] = '#';
+console.log(grid.map((r) => r.join('')).join('|'));
+const shared = new Array(2).fill([]);
+shared[0].push('same');
+console.log(shared);
+console.log([1, [2, [3, [4]]]].flat(), [1, [2, [3, [4]]]].flat(2), [1, [2, [3, [4]]]].flat(Infinity));
+console.log([[1, 2], [], [3]].flat(), [1, , 3, [4, , 6]].flat());
+console.log([1, 2, 3].flatMap((x) => [x, x * 10]), ['a b', 'c'].flatMap((s) => s.split(' ')), [1, 2].flatMap((x) => [[x]]));

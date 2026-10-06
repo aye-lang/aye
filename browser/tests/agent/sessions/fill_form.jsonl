@@ -1,0 +1,22 @@
+{"id":1,"cmd":"navigate","url":"browser/tests/agent/site/form.html"}
+{"id":2,"cmd":"type","ref":"e2","text":"Ada Lovelace"}
+{"id":3,"cmd":"snapshot"}
+{"id":4,"cmd":"type","ref":"e3","text":"Line one\nLine \"two\""}
+{"id":5,"cmd":"click","ref":"e4"}
+{"id":6,"cmd":"click","ref":"e4"}
+{"id":7,"cmd":"click","ref":"e6"}
+{"id":8,"cmd":"select","ref":"e7","option":"Blue"}
+{"id":9,"cmd":"select","ref":"e7","option":"green"}
+{"id":10,"cmd":"select","ref":"e7","option":"Purple"}
+{"id":11,"cmd":"type","ref":"e8","text":"nope"}
+{"id":12,"cmd":"select","ref":"e2","option":"x"}
+{"id":13,"cmd":"click","ref":"e2"}
+{"id":14,"cmd":"press","key":"Backspace"}
+{"id":15,"cmd":"press","key":"é"}
+{"id":16,"cmd":"press","key":"Tab"}
+{"id":17,"cmd":"press","key":"Shift+Tab"}
+{"id":18,"cmd":"press","key":"Enter"}
+{"id":19,"cmd":"click","ref":"e8"}
+{"id":20,"cmd":"type","ref":"e2","text":"Grace","submit":true}
+{"id":21,"cmd":"snapshot","format":"json"}
+{"id":22,"cmd":"read"}

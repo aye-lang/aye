@@ -1,0 +1,640 @@
+// Selectors (Selectors 4 subset): type, `*`, `.class`, `#id`, attributes
+// (`[a]`, `[a=v]`, `[a~=v]`, `[a|=v]`, `[a^=v]`, `[a$=v]`, `[a*=v]`, with
+// an `i` flag), the combinators ` `, `>`, `+` and `~`, the pseudo-classes
+// `:first-child`, `:last-child`, `:only-child`, `:first-of-type`,
+// `:last-of-type`, `:root`, `:empty`, `:link`, `:any-link`, `:hover`
+// (nothing is hovered yet), `:not(list)`, and pseudo-elements (valid, but
+// they match no element). A selector with anything else is invalid, and
+// so is its whole rule.
+//
+// A sheet keeps selectors in three flat lists: a `Complex` is a range of
+// `Compound`s (left to right), a `Compound` a range of `Simple`s. The
+// argument of `:not()` is a range of `Complex`es.
+
+import dom
+import dom.Document
+import dom.Kind
+import dom.NodeId
+import std.list.List
+import std.mem.AllocError
+import std.text
+
+pub enum SelKind {
+    Universal
+    Type
+    Id
+    Class
+    Attr
+    FirstChild
+    LastChild
+    OnlyChild
+    FirstOfType
+    LastOfType
+    Root
+    Empty
+    Hover
+    Link
+    Never
+    Not
+}
+
+pub struct Simple {
+    kind: SelKind
+    // Type, Id, Class, Attr: the name (lower case for Type and Attr).
+    name: []u8
+    // Attr: the value; `op` is 0 (exists), '=', '~', '|', '^', '$' or '*'.
+    value: []u8
+    op: u8
+    // Attr: compare the value ignoring ASCII case.
+    ci: bool
+    // Not: the argument, `Sheet.complexes[sub_start..sub_end]`.
+    sub_start: usize
+    sub_end: usize
+}
+
+pub struct Compound {
+    // `Sheet.simples[start..end]`.
+    start: usize
+    end: usize
+    // The combinator before this compound: ' ', '>', '+', '~', or 0 for
+    // the first compound.
+    combinator: u8
+}
+
+pub struct Complex {
+    // `Sheet.compounds[start..end]`.
+    start: usize
+    end: usize
+    // (ids << 16) | (classes << 8) | types, each at most 255.
+    spec: u32
+}
+
+/// Selectors `start..end` of `Sheet.complexes`.
+pub struct SelRange {
+    start: usize
+    end: usize
+}
+
+fn simple(kind: SelKind, name: []u8) Simple {
+    return Simple { kind: kind, name: name, value: "", op: 0, ci: false, sub_start: 0, sub_end: 0 }
+}
+
+/// Parses a selector list and appends it to `sheet`; null when it is
+/// invalid.
+pub fn parseSelectors(sheet: *mut Sheet, toks: []Token) AllocError!?SelRange {
+    let a = sheet.arena.allocator()
+    var parsed = List(Complex).init(a)
+    var i: usize = 0
+    while true {
+        var j = i
+        while j < toks.len && toks[j].kind != Tok.Comma {
+            j = skipComponent(toks, j)
+        }
+        if try parseComplex(sheet, toks[i..j]) |cx| {
+            try parsed.append(cx)
+        } else {
+            return null
+        }
+        if j >= toks.len {
+            break
+        }
+        i = j + 1
+    }
+    let start = sheet.complexes.len()
+    for cx in parsed.items() {
+        try sheet.complexes.append(cx)
+    }
+    return SelRange { start: start, end: sheet.complexes.len() }
+}
+
+// Counts of a specificity, while parsing.
+struct Spec {
+    ids: u32
+    classes: u32
+    types: u32
+
+    fn add(self: *mut Self, packed: u32) {
+        self.ids += packed >> 16
+        self.classes += (packed >> 8) & 255
+        self.types += packed & 255
+    }
+
+    fn pack(self: *Self) u32 {
+        return (cap(self.ids) << 16) | (cap(self.classes) << 8) | cap(self.types)
+    }
+}
+
+fn cap(n: u32) u32 {
+    if n > 255 {
+        return 255
+    }
+    return n
+}
+
+// One complex selector (no commas); null when invalid. Its simples and
+// compounds are collected first and appended at the end, so that the
+// selectors of a nested `:not()` do not land between them.
+fn parseComplex(sheet: *mut Sheet, all: []Token) AllocError!?Complex {
+    let a = sheet.arena.allocator()
+    var simples = List(Simple).init(a)
+    var compounds = List(Compound).init(a)
+    var spec = Spec { ids: 0, classes: 0, types: 0 }
+    var lo = skipWhitespace(all, 0)
+    var hi = all.len
+    while hi > lo && all[hi - 1].kind == Tok.Whitespace {
+        hi -= 1
+    }
+    let toks = all[..hi]
+    if lo >= hi {
+        return null
+    }
+    var i = lo
+    var combinator: u8 = 0
+    while true {
+        let first = simples.len()
+        while i < hi {
+            let t = toks[i]
+            if t.kind == Tok.Ident && simples.len() == first {
+                try simples.append(simple(SelKind.Type, try lowered(sheet, t.text)))
+                spec.types += 1
+                i += 1
+            } else if t.kind == Tok.Delim && t.delim == '*' && simples.len() == first {
+                try simples.append(simple(SelKind.Universal, ""))
+                i += 1
+            } else if t.kind == Tok.Hash {
+                if !t.flag {
+                    return null
+                }
+                try simples.append(simple(SelKind.Id, t.text))
+                spec.ids += 1
+                i += 1
+            } else if t.kind == Tok.Delim && t.delim == '.' {
+                if i + 1 >= hi || toks[i + 1].kind != Tok.Ident {
+                    return null
+                }
+                try simples.append(simple(SelKind.Class, toks[i + 1].text))
+                spec.classes += 1
+                i += 2
+            } else if t.kind == Tok.LBracket {
+                let close = blockEnd(toks, i)
+                if close >= hi {
+                    return null
+                }
+                if try attribute(sheet, toks[i + 1..close]) |s| {
+                    try simples.append(s)
+                } else {
+                    return null
+                }
+                spec.classes += 1
+                i = close + 1
+            } else if t.kind == Tok.Colon {
+                let next = i + 1
+                if next >= hi {
+                    return null
+                }
+                let n = toks[next]
+                if n.kind == Tok.Colon {
+                    // A pseudo-element.
+                    if next + 1 >= hi || toks[next + 1].kind != Tok.Ident {
+                        return null
+                    }
+                    try simples.append(simple(SelKind.Never, ""))
+                    spec.types += 1
+                    i = next + 2
+                } else if n.kind == Tok.Ident {
+                    if pseudoClass(n.text) |kind| {
+                        try simples.append(simple(kind, ""))
+                        if isLegacyPseudoElement(n.text) {
+                            spec.types += 1
+                        } else {
+                            spec.classes += 1
+                        }
+                    } else {
+                        return null
+                    }
+                    i = next + 1
+                } else if n.kind == Tok.Function && text.eqlIgnoreCase(n.text, "not") {
+                    let close = blockEnd(toks, next)
+                    if close >= hi {
+                        return null
+                    }
+                    if try parseSelectors(sheet, toks[next + 1..close]) |inner| {
+                        var s = simple(SelKind.Not, "")
+                        s.sub_start = inner.start
+                        s.sub_end = inner.end
+                        try simples.append(s)
+                        var most: u32 = 0
+                        for k in inner.start..inner.end {
+                            let sp = sheet.complexes.items()[k].spec
+                            if sp > most {
+                                most = sp
+                            }
+                        }
+                        spec.add(most)
+                    } else {
+                        return null
+                    }
+                    i = close + 1
+                } else {
+                    return null
+                }
+            } else {
+                break
+            }
+        }
+        if simples.len() == first {
+            return null
+        }
+        try compounds.append(Compound { start: first, end: simples.len(), combinator: combinator })
+        // The combinator to the next compound.
+        var spaced = false
+        while i < hi && toks[i].kind == Tok.Whitespace {
+            spaced = true
+            i += 1
+        }
+        if i >= hi {
+            break
+        }
+        let c = toks[i]
+        if c.kind == Tok.Delim && (c.delim == '>' || c.delim == '+' || c.delim == '~') {
+            combinator = c.delim as u8
+            i = skipWhitespace(toks, i + 1)
+            if i >= hi {
+                return null
+            }
+        } else if spaced {
+            combinator = ' '
+        } else {
+            return null
+        }
+    }
+    // Append, shifting the local indices.
+    let simple_base = sheet.simples.len()
+    for s in simples.items() {
+        try sheet.simples.append(s)
+    }
+    let compound_base = sheet.compounds.len()
+    for c in compounds.items() {
+        try sheet.compounds.append(Compound {
+            start: c.start + simple_base,
+            end: c.end + simple_base,
+            combinator: c.combinator,
+        })
+    }
+    return Complex { start: compound_base, end: sheet.compounds.len(), spec: spec.pack() }
+}
+
+// The kind of a pseudo-class name; null for an unknown one.
+fn pseudoClass(name: []u8) ?SelKind {
+    if text.eqlIgnoreCase(name, "first-child") {
+        return SelKind.FirstChild
+    }
+    if text.eqlIgnoreCase(name, "last-child") {
+        return SelKind.LastChild
+    }
+    if text.eqlIgnoreCase(name, "only-child") {
+        return SelKind.OnlyChild
+    }
+    if text.eqlIgnoreCase(name, "first-of-type") {
+        return SelKind.FirstOfType
+    }
+    if text.eqlIgnoreCase(name, "last-of-type") {
+        return SelKind.LastOfType
+    }
+    if text.eqlIgnoreCase(name, "root") {
+        return SelKind.Root
+    }
+    if text.eqlIgnoreCase(name, "empty") {
+        return SelKind.Empty
+    }
+    if text.eqlIgnoreCase(name, "hover") {
+        return SelKind.Hover
+    }
+    if text.eqlIgnoreCase(name, "link") || text.eqlIgnoreCase(name, "any-link") {
+        return SelKind.Link
+    }
+    // States the browser does not have yet, and the pseudo-elements of
+    // CSS 2 written with one colon.
+    if text.eqlIgnoreCase(name, "visited") || text.eqlIgnoreCase(name, "active") || text.eqlIgnoreCase(name, "focus") || text.eqlIgnoreCase(name, "focus-within") || text.eqlIgnoreCase(name, "focus-visible") || text.eqlIgnoreCase(name, "target") || isLegacyPseudoElement(name) {
+        return SelKind.Never
+    }
+    return null
+}
+
+fn isLegacyPseudoElement(name: []u8) bool {
+    return text.eqlIgnoreCase(name, "before") || text.eqlIgnoreCase(name, "after") || text.eqlIgnoreCase(name, "first-line") || text.eqlIgnoreCase(name, "first-letter")
+}
+
+// The inside of `[...]`; null when invalid.
+fn attribute(sheet: *mut Sheet, toks: []Token) AllocError!?Simple {
+    var i = skipWhitespace(toks, 0)
+    if i >= toks.len || toks[i].kind != Tok.Ident {
+        return null
+    }
+    var s = simple(SelKind.Attr, try lowered(sheet, toks[i].text))
+    i = skipWhitespace(toks, i + 1)
+    if i >= toks.len {
+        return s
+    }
+    let t = toks[i]
+    if t.kind != Tok.Delim {
+        return null
+    }
+    if t.delim == '=' {
+        s.op = '='
+        i += 1
+    } else if (t.delim == '~' || t.delim == '|' || t.delim == '^' || t.delim == '$' || t.delim == '*') && i + 1 < toks.len && toks[i + 1].kind == Tok.Delim && toks[i + 1].delim == '=' {
+        s.op = t.delim as u8
+        i += 2
+    } else {
+        return null
+    }
+    i = skipWhitespace(toks, i)
+    if i >= toks.len || (toks[i].kind != Tok.Ident && toks[i].kind != Tok.String) {
+        return null
+    }
+    s.value = toks[i].text
+    i = skipWhitespace(toks, i + 1)
+    if i < toks.len && toks[i].kind == Tok.Ident {
+        if text.eqlIgnoreCase(toks[i].text, "i") {
+            s.ci = true
+        } else if !text.eqlIgnoreCase(toks[i].text, "s") {
+            return null
+        }
+        i = skipWhitespace(toks, i + 1)
+    }
+    if i < toks.len {
+        return null
+    }
+    return s
+}
+
+// A lower-case copy of `s` in the sheet's arena (or `s` when it already
+// is lower case).
+fn lowered(sheet: *mut Sheet, s: []u8) AllocError![]u8 {
+    var upper = false
+    for c in s {
+        if c >= 'A' && c <= 'Z' {
+            upper = true
+        }
+    }
+    if !upper {
+        return s
+    }
+    let out = try sheet.arena.allocator().alloc(0 as u8, s.len)
+    for i, c in s {
+        out[i] = c
+    }
+    text.toLower(out)
+    return out
+}
+
+// ---- matching
+
+/// Does the selector `cx` of `sheet` match the element `el`?
+pub fn matchesComplex(sheet: *Sheet, doc: *Document, cx: Complex, el: NodeId) bool {
+    return matchFrom(sheet, doc, cx.start, cx.end - 1, el)
+}
+
+// Does the compound `ci` match `el`, and the compounds before it (back to
+// `first`) match the elements that its combinator leads to?
+fn matchFrom(sheet: *Sheet, doc: *Document, first: usize, ci: usize, el: NodeId) bool {
+    let comp = sheet.compounds.items()[ci]
+    if !matchCompound(sheet, doc, comp, el) {
+        return false
+    }
+    if ci == first {
+        return true
+    }
+    let comb = comp.combinator
+    if comb == '>' {
+        if parentElement(doc, el) |p| {
+            return matchFrom(sheet, doc, first, ci - 1, p)
+        }
+        return false
+    }
+    if comb == '+' {
+        if prevElement(doc, el) |p| {
+            return matchFrom(sheet, doc, first, ci - 1, p)
+        }
+        return false
+    }
+    if comb == '~' {
+        var cur = prevElement(doc, el)
+        while cur |p| {
+            if matchFrom(sheet, doc, first, ci - 1, p) {
+                return true
+            }
+            cur = prevElement(doc, p)
+        }
+        return false
+    }
+    var up = parentElement(doc, el)
+    while up |p| {
+        if matchFrom(sheet, doc, first, ci - 1, p) {
+            return true
+        }
+        up = parentElement(doc, p)
+    }
+    return false
+}
+
+fn matchCompound(sheet: *Sheet, doc: *Document, comp: Compound, el: NodeId) bool {
+    for k in comp.start..comp.end {
+        if !matchSimple(sheet, doc, sheet.simples.items()[k], el) {
+            return false
+        }
+    }
+    return true
+}
+
+fn matchSimple(sheet: *Sheet, doc: *Document, s: Simple, el: NodeId) bool {
+    let n = doc.node(el)
+    match s.kind {
+        .Universal => {
+            return true
+        }
+        .Type => {
+            return text.eql(n.name, s.name)
+        }
+        .Id => {
+            if doc.attr(el, "id") |v| {
+                return text.eql(v, s.name)
+            }
+            return false
+        }
+        .Class => {
+            if doc.attr(el, "class") |v| {
+                return hasWord(v, s.name, false)
+            }
+            return false
+        }
+        .Attr => {
+            return attrMatches(doc, s, el)
+        }
+        .FirstChild => {
+            return prevElement(doc, el) == null
+        }
+        .LastChild => {
+            return nextElement(doc, el) == null
+        }
+        .OnlyChild => {
+            return prevElement(doc, el) == null && nextElement(doc, el) == null
+        }
+        .FirstOfType => {
+            var cur = prevElement(doc, el)
+            while cur |p| {
+                if text.eql(doc.node(p).name, n.name) {
+                    return false
+                }
+                cur = prevElement(doc, p)
+            }
+            return true
+        }
+        .LastOfType => {
+            var cur = nextElement(doc, el)
+            while cur |p| {
+                if text.eql(doc.node(p).name, n.name) {
+                    return false
+                }
+                cur = nextElement(doc, p)
+            }
+            return true
+        }
+        .Root => {
+            if n.parent |p| {
+                return doc.node(p).kind == Kind.Document
+            }
+            return false
+        }
+        .Empty => {
+            var cur = n.first_child
+            while cur |c| {
+                let child = doc.node(c)
+                if child.kind == Kind.Element || (child.kind == Kind.Text && child.data.len > 0) {
+                    return false
+                }
+                cur = child.next
+            }
+            return true
+        }
+        .Hover => {
+            return false
+        }
+        .Link => {
+            return (text.eql(n.name, "a") || text.eql(n.name, "area")) && doc.attr(el, "href") != null
+        }
+        .Never => {
+            return false
+        }
+        .Not => {
+            for k in s.sub_start..s.sub_end {
+                if matchesComplex(sheet, doc, sheet.complexes.items()[k], el) {
+                    return false
+                }
+            }
+            return true
+        }
+    }
+}
+
+fn attrMatches(doc: *Document, s: Simple, el: NodeId) bool {
+    var v: []u8 = ""
+    if doc.attr(el, s.name) |found| {
+        v = found
+    } else {
+        return false
+    }
+    let want = s.value
+    if s.op == 0 {
+        return true
+    }
+    if s.op == '=' {
+        return sameText(v, want, s.ci)
+    }
+    if s.op == '~' {
+        return hasWord(v, want, s.ci)
+    }
+    if s.op == '|' {
+        return sameText(v, want, s.ci) || (v.len > want.len && v[want.len] == '-' && sameText(v[..want.len], want, s.ci))
+    }
+    if want.len == 0 || want.len > v.len {
+        return false
+    }
+    if s.op == '^' {
+        return sameText(v[..want.len], want, s.ci)
+    }
+    if s.op == '$' {
+        return sameText(v[v.len - want.len..], want, s.ci)
+    }
+    for i in 0..v.len - want.len + 1 {
+        if sameText(v[i..i + want.len], want, s.ci) {
+            return true
+        }
+    }
+    return false
+}
+
+fn sameText(a: []u8, b: []u8, ci: bool) bool {
+    if ci {
+        return text.eqlIgnoreCase(a, b)
+    }
+    return text.eql(a, b)
+}
+
+// Is `word` one of the whitespace-separated words of `list`?
+fn hasWord(list: []u8, word: []u8, ci: bool) bool {
+    if word.len == 0 {
+        return false
+    }
+    var i: usize = 0
+    while i < list.len {
+        while i < list.len && isSpaceByte(list[i]) {
+            i += 1
+        }
+        let start = i
+        while i < list.len && !isSpaceByte(list[i]) {
+            i += 1
+        }
+        if i > start && sameText(list[start..i], word, ci) {
+            return true
+        }
+    }
+    return false
+}
+
+fn isSpaceByte(c: u8) bool {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\x0C'
+}
+
+/// The parent of `el` when it is an element.
+pub fn parentElement(doc: *Document, el: NodeId) ?NodeId {
+    if doc.node(el).parent |p| {
+        if doc.node(p).kind == Kind.Element {
+            return p
+        }
+    }
+    return null
+}
+
+fn prevElement(doc: *Document, el: NodeId) ?NodeId {
+    var cur = doc.node(el).prev
+    while cur |c| {
+        if doc.node(c).kind == Kind.Element {
+            return c
+        }
+        cur = doc.node(c).prev
+    }
+    return null
+}
+
+fn nextElement(doc: *Document, el: NodeId) ?NodeId {
+    var cur = doc.node(el).next
+    while cur |c| {
+        if doc.node(c).kind == Kind.Element {
+            return c
+        }
+        cur = doc.node(c).next
+    }
+    return null
+}

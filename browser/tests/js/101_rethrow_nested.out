@@ -1,0 +1,5 @@
+OK default
+outer caught TypeError bad input
+inner finally
+outer inner
+ABC

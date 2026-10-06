@@ -1,0 +1,25 @@
+<!doctype html>
+<title>ARIA roles</title>
+<body>
+<div role=navigation aria-label="Breadcrumbs"><a href="/">Home</a> › <a href="/docs">Docs</a></div>
+<div role=main>
+  <div role=heading aria-level=3>A div heading</div>
+  <div role=button tabindex=0>Div button</div>
+  <span role=checkbox aria-checked=true tabindex=0>Accept terms</span>
+  <span role=checkbox aria-checked=mixed>Some selected</span>
+  <div role=switch aria-checked=false aria-label="Dark mode"></div>
+  <button aria-expanded=false aria-controls=menu>Menu</button>
+  <ul role=menu id=menu><li role=menuitem>Open<li role=menuitem>Close</ul>
+  <div role=tablist><button role=tab aria-selected=true>One</button><button role=tab aria-selected=false>Two</button></div>
+  <div tabindex=0>Focusable div</div>
+  <div onclick="go()">Clickable div</div>
+  <details><summary>More details</summary><p>Hidden until opened.</p></details>
+  <details open><summary>Open details</summary><p>Shown because open.</p></details>
+  <section aria-label="Comments"><p>No comments yet.</p></section>
+  <section><p>A section without a name.</p></section>
+  <dialog open aria-label="Notice"><p>Dialog text.</p></dialog>
+  <img src=a.png role=presentation alt="Ignored">
+  <a>Anchor without href</a>
+  <a href="/disabled" aria-disabled=true>Disabled link</a>
+</div>
+</body>

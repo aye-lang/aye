@@ -1,0 +1,81 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    color: rgb(0, 0, 128)
+    font-family: Georgia, serif
+    margin-top: 4px
+    margin-right: 4px
+    margin-bottom: 4px
+    margin-left: 4px
+    border-top-width: 1px
+    border-right-width: 1px
+    border-bottom-width: 1px
+    border-left-width: 1px
+    border-top-style: solid
+    border-right-style: solid
+    border-bottom-style: solid
+    border-left-style: solid
+    border-top-color: rgb(255, 0, 0)
+    border-right-color: rgb(255, 0, 0)
+    border-bottom-color: rgb(255, 0, 0)
+    border-left-color: rgb(255, 0, 0)
+    text-align: center
+    white-space: pre-line
+    <p>
+      display: block
+      color: rgb(0, 0, 128)
+      font-family: Georgia, serif
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: center
+      white-space: pre-line
+    <div class="box">
+      display: block
+      color: rgb(0, 0, 128)
+      font-family: Georgia, serif
+      padding-top: 5px
+      padding-right: 5px
+      padding-bottom: 5px
+      padding-left: 5px
+      text-align: center
+      white-space: pre-line
+      <p class="inh">
+        display: block
+        color: rgb(0, 0, 128)
+        font-family: Georgia, serif
+        margin-top: 16px
+        margin-bottom: 16px
+        padding-top: 5px
+        padding-right: 5px
+        padding-bottom: 5px
+        padding-left: 5px
+        text-align: center
+        white-space: pre-line
+    <p class="reset">
+      display: block
+      font-family: Georgia, serif
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: center
+      white-space: pre-line
+    <p class="cur">
+      display: block
+      color: rgb(0, 0, 128)
+      background-color: currentcolor
+      font-family: Georgia, serif
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: center
+      white-space: pre-line
+    <p class="un">
+      display: block
+      color: rgb(0, 0, 128)
+      font-family: Georgia, serif
+      margin-bottom: 16px
+      text-align: center
+      white-space: pre-line

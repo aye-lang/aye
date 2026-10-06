@@ -1,0 +1,27 @@
+viewport 800x600
+  block <html> (0, 0) 800x224
+    block <body> (0, 0) 800x220
+      block <div class="nowrap"> (0, 0) 122x22
+        line (1, 1) 120x20
+          text (1, 3) 248x16 "This text does not wrap at all."
+      block <div class="prewrap"> (0, 26) 122x62
+        line (1, 27) 120x20
+          text (1, 29) 104x16 "Kept   spaces"
+        line (1, 47) 120x20
+          text (1, 49) 120x16 "and lines that "
+        line (1, 67) 120x20
+          text (1, 69) 80x16 "wrap here."
+      block <div class="preline"> (0, 92) 122x62
+        line (1, 93) 120x20
+          text (1, 95) 72x16 "Collapsed"
+        line (1, 113) 120x20
+          text (1, 115) 48x16 "spaces"
+        line (1, 133) 120x20
+          text (1, 135) 120x16 "but kept lines."
+      block <div> (0, 158) 122x62
+        line (1, 159) 120x20
+          text (1, 161) 88x16 "Normal text"
+        line (1, 179) 120x20
+          text (1, 181) 120x16 "wraps at spaces"
+        line (1, 199) 120x20
+          text (1, 201) 40x16 "here."

@@ -1,0 +1,12 @@
+const a = [1, 2];
+console.log(a.push(3), a.push(4, 5), a);
+console.log(a.pop(), a.pop(), a);
+console.log(a.shift(), a);
+console.log(a.unshift(0), a.unshift(-2, -1), a);
+console.log([].pop(), [].shift(), [].push(), [].unshift());
+const b = [];
+for (let i = 0; i < 5; i++) b.unshift(i);
+console.log(b);
+const q = [];
+q.push('a', 'b', 'c');
+console.log(q.shift(), q.shift(), q.length);

@@ -1,0 +1,13 @@
+const o = { a: { b: { c: 42 } }, arr: [1, 2, 3], fn() { return 'called'; }, n: null };
+console.log(o?.a?.b?.c, o.x?.y, o.n?.z, o.x?.y.z.w);
+console.log(o.arr?.[1], o.missing?.[0], o?.['a']?.b);
+console.log(o.fn?.(), o.nofn?.(), o.a.b?.c?.toString());
+const nul = null;
+console.log(nul?.x, nul?.[0], nul?.());
+let count = 0;
+const u = undefined;
+u?.[count++];
+console.log(count);
+console.log((o.x?.y) === undefined, typeof o?.fn);
+const deep = { list: [{ name: 'a' }, null] };
+console.log(deep.list[0]?.name, deep.list[1]?.name, deep.list[5]?.name);

@@ -1,0 +1,434 @@
+// Flexbox (CSS Flexbox 1, simplified): row and column directions (and
+// their reverses), `flex-wrap` for rows, `gap`, flex-grow/shrink/basis
+// with min/max clamping (9.7), `justify-content`, `align-items` and
+// `align-self` (stretch, start, end, center; baseline as start), and
+// auto margins on the main axis. Columns flex only when the container's
+// height is definite.
+
+import css
+import std.list.List
+import std.math
+import std.mem.AllocError
+import std.text
+
+struct Item {
+    box: usize
+    basis: f64
+    hyp: f64
+    target: f64
+    min: f64
+    max: f64
+    frozen: bool
+    grow: f64
+    shrink: f64
+    // The margins on the main axis, and whether they are `auto`.
+    before: f64
+    after: f64
+    auto_before: bool
+    auto_after: bool
+}
+
+let INFINITE: f64 = 1.0e30
+
+// The used value of `row-gap` or `column-gap` (`normal` is 0).
+fn gapOf(v: css.Value, base: f64) f64 {
+    return lengthOr0(v, base)
+}
+
+fn isRow(t: *Tree, i: usize) bool {
+    return text.startsWith(keywordOf(t.bx(i).style[css.FLEX_DIRECTION]), "row")
+}
+
+/// The intrinsic widths of the flex container `i` (without its edges).
+fn flexIntrinsic(t: *mut Tree, i: usize) AllocError!MinMax {
+    let row = isRow(t, i)
+    let style = t.bx(i).style
+    let wrap = !isKeyword(style[css.FLEX_WRAP], "nowrap")
+    let gap = gapOf(style[css.COLUMN_GAP], -1.0)
+    var r = MinMax { min: 0.0, max: 0.0 }
+    let n = t.children(i).len
+    for k in 0..n {
+        let o = try outerIntrinsic(t, t.children(i)[k])
+        var g = 0.0
+        if k > 0 {
+            g = gap
+        }
+        if row {
+            r.max += o.max + g
+            if wrap {
+                r.min = math.max(r.min, o.min)
+            } else {
+                r.min += o.min + g
+            }
+        } else {
+            r.min = math.max(r.min, o.min)
+            r.max = math.max(r.max, o.max)
+        }
+    }
+    return r
+}
+
+/// Lays out the items of flex container `i` in its content box (`cw`
+/// wide, `ch` high or -1); returns the content height.
+fn layoutFlex(t: *mut Tree, i: usize, cw: f64, ch: f64) AllocError!f64 {
+    let style = t.bx(i).style
+    let row = isRow(t, i)
+    let reverse = text.endsWith(keywordOf(style[css.FLEX_DIRECTION]), "reverse")
+    let wrap = row && !isKeyword(style[css.FLEX_WRAP], "nowrap")
+    var main_gap = gapOf(style[css.ROW_GAP], ch)
+    var cross_gap = gapOf(style[css.COLUMN_GAP], cw)
+    if row {
+        main_gap = gapOf(style[css.COLUMN_GAP], cw)
+        cross_gap = gapOf(style[css.ROW_GAP], ch)
+    }
+    var items = List(Item).init(t.backing)
+    defer items.deinit()
+    let n = t.children(i).len
+    for k in 0..n {
+        try items.append(try flexItem(t, t.children(i)[k], row, cw, ch))
+    }
+    let all = items.items()
+    // Lines: ranges of `all`.
+    var breaks = List(usize).init(t.backing)
+    defer breaks.deinit()
+    var used = 0.0
+    for k, it in all {
+        let outer = it.hyp + it.before + it.after
+        if wrap && k > 0 && used + main_gap + outer > cw {
+            try breaks.append(k)
+            used = outer
+        } else if k > 0 {
+            used += main_gap + outer
+        } else {
+            used = outer
+        }
+    }
+    try breaks.append(all.len)
+    let lines = breaks.items()
+    var avail_main = cw
+    if !row {
+        avail_main = ch
+    }
+    var cross_pos = 0.0
+    var main_extent = 0.0
+    var start: usize = 0
+    for li, end in lines {
+        let line = all[start..end]
+        var outer_sum = 0.0
+        for it in line {
+            outer_sum += it.hyp + it.before + it.after
+        }
+        let gaps = main_gap * (line.len as f64 - 1.0)
+        var line_main = avail_main
+        if avail_main < 0.0 {
+            line_main = outer_sum + math.max(0.0, gaps)
+        }
+        resolveFlexible(line, line_main - math.max(0.0, gaps))
+        // Sizes on both axes, and the line's cross size.
+        var line_cross = 0.0
+        for it in line {
+            let b = t.bx(it.box)
+            if row {
+                b.w = it.target
+                try itemContents(t, it.box, cw, ch)
+                let cb = t.bx(it.box)
+                line_cross = math.max(line_cross, cb.h + cb.margin[0] + cb.margin[2])
+            } else {
+                b.h = it.target
+                line_cross = math.max(line_cross, b.w + b.margin[1] + b.margin[3])
+            }
+        }
+        if lines.len == 1 {
+            if row && ch >= 0.0 {
+                line_cross = ch
+            } else if !row {
+                line_cross = cw
+            }
+        }
+        // Main axis: auto margins, then justify-content.
+        var free = line_main
+        var autos: usize = 0
+        for it in line {
+            free -= it.target + it.before + it.after
+            if it.auto_before {
+                autos += 1
+            }
+            if it.auto_after {
+                autos += 1
+            }
+        }
+        free -= math.max(0.0, gaps)
+        var lead = 0.0
+        var between = main_gap
+        var auto_share = 0.0
+        if autos > 0 && free > 0.0 {
+            auto_share = free / autos as f64
+        } else if free > 0.0 {
+            let jc = keywordOf(style[css.JUSTIFY_CONTENT])
+            let m = line.len as f64
+            if text.eql(jc, "flex-end") || text.eql(jc, "end") || (text.eql(jc, "right") && row) {
+                lead = free
+            } else if text.eql(jc, "center") {
+                lead = free / 2.0
+            } else if text.eql(jc, "space-between") && line.len > 1 {
+                between += free / (m - 1.0)
+            } else if text.eql(jc, "space-around") {
+                lead = free / m / 2.0
+                between += free / m
+            } else if text.eql(jc, "space-evenly") {
+                lead = free / (m + 1.0)
+                between += free / (m + 1.0)
+            }
+        }
+        var pos = lead
+        for k, it in line {
+            if k > 0 {
+                pos += between
+            }
+            var before = it.before
+            if it.auto_before {
+                before += auto_share
+            }
+            var after = it.after
+            if it.auto_after {
+                after += auto_share
+            }
+            pos += before
+            var main_at = pos
+            if reverse {
+                main_at = line_main - pos - it.target
+            }
+            let cross_at = alignCross(t, it.box, row, line_cross, cw, ch)
+            let b = t.bx(it.box)
+            if row {
+                b.x = main_at
+                b.y = cross_pos + cross_at
+            } else {
+                b.y = main_at
+                b.x = cross_pos + cross_at
+            }
+            pos += it.target + after
+        }
+        main_extent = math.max(main_extent, pos)
+        cross_pos += line_cross
+        if li + 1 < lines.len {
+            cross_pos += cross_gap
+        }
+        start = end
+    }
+    if ch >= 0.0 {
+        return ch
+    }
+    if row {
+        return cross_pos
+    }
+    return main_extent
+}
+
+// An item of the container's line: its margins, basis and hypothetical
+// main size. Column items are laid out here (their height is their
+// content's).
+fn flexItem(t: *mut Tree, c: usize, row: bool, cw: f64, ch: f64) AllocError!Item {
+    resolveEdges(t, c, cw)
+    let s = t.bx(c).style
+    var it = Item {
+        box: c,
+        basis: 0.0,
+        hyp: 0.0,
+        target: 0.0,
+        min: 0.0,
+        max: INFINITE,
+        frozen: false,
+        grow: numberOf(s[css.FLEX_GROW], 0.0),
+        shrink: numberOf(s[css.FLEX_SHRINK], 1.0),
+        before: 0.0,
+        after: 0.0,
+        auto_before: false,
+        auto_after: false,
+    }
+    let b = t.bx(c)
+    b.margin[1] = lengthOr0(s[css.MARGIN_TOP + 1], cw)
+    b.margin[3] = lengthOr0(s[css.MARGIN_TOP + 3], cw)
+    if row {
+        let he = hEdges(b)
+        it.before = b.margin[3]
+        it.after = b.margin[1]
+        it.auto_before = isKeyword(s[css.MARGIN_TOP + 3], "auto")
+        it.auto_after = isKeyword(s[css.MARGIN_TOP + 1], "auto")
+        let mm = try intrinsic(t, c)
+        let spec = sizeOf(s, s[css.WIDTH], cw, he)
+        if sizeOf(s, s[css.FLEX_BASIS], cw, he) |fb| {
+            it.basis = fb
+        } else if spec |w| {
+            it.basis = w
+        } else {
+            it.basis = mm.max
+        }
+        if sizeOf(s, s[css.MIN_WIDTH], cw, he) |mn| {
+            it.min = mn
+        } else {
+            // The automatic minimum size: the min-content width.
+            it.min = mm.min
+            if spec |w| {
+                it.min = math.min(it.min, w)
+            }
+        }
+        if sizeOf(s, s[css.MAX_WIDTH], cw, he) |mx| {
+            it.max = mx
+        }
+    } else {
+        let ve = vEdges(b)
+        it.before = b.margin[0]
+        it.after = b.margin[2]
+        it.auto_before = isKeyword(s[css.MARGIN_TOP], "auto")
+        it.auto_after = isKeyword(s[css.MARGIN_TOP + 2], "auto")
+        // The cross size first: stretched, or shrink-to-fit.
+        let align = alignOf(t, c)
+        let stretch = (text.eql(align, "stretch") || text.eql(align, "normal")) && isKeyword(s[css.WIDTH], "auto")
+        if stretch {
+            b.w = clampWidth(t, c, cw - b.margin[1] - b.margin[3], cw)
+        } else {
+            try shrinkToFit(t, c, cw)
+        }
+        try itemContents(t, c, cw, ch)
+        let content = t.bx(c).h
+        let sb = t.bx(c)
+        if sizeOf(s, s[css.FLEX_BASIS], ch, ve) |fb| {
+            it.basis = fb
+        } else {
+            it.basis = content
+        }
+        if sizeOf(s, s[css.MIN_HEIGHT], ch, ve) |mn| {
+            it.min = mn
+        } else if isKeyword(s[css.HEIGHT], "auto") {
+            it.min = content
+        } else {
+            it.min = ve
+        }
+        if sizeOf(s, s[css.MAX_HEIGHT], ch, ve) |mx| {
+            it.max = mx
+        }
+        sb.top_strut = Strut.of(sb.margin[0])
+    }
+    it.hyp = math.max(it.min, math.min(it.basis, it.max))
+    return it
+}
+
+// Lays out the content of item `c` whose width is set.
+fn itemContents(t: *mut Tree, c: usize, cw: f64, ch: f64) AllocError!void {
+    let kind = t.bx(c).kind
+    if kind == BoxKind.Image {
+        let w = t.bx(c).w
+        replacedSize(t, c, cw, ch)
+        t.bx(c).w = w
+    } else if kind == BoxKind.Table {
+        try layoutTable(t, c, t.bx(c).w)
+    } else {
+        try layoutContents(t, c, ch)
+    }
+}
+
+// The `align-self` of item `c`, with `auto` taken from the container's
+// `align-items`.
+fn alignOf(t: *Tree, c: usize) []u8 {
+    let own = keywordOf(t.bx(c).style[css.ALIGN_SELF])
+    if !text.eql(own, "auto") {
+        return own
+    }
+    if t.bx(c).parent |p| {
+        return keywordOf(t.bx(p).style[css.ALIGN_ITEMS])
+    }
+    return "normal"
+}
+
+// Aligns item `c` in a line `line_cross` px across: stretches it when it
+// should; returns the offset of its border box.
+fn alignCross(t: *mut Tree, c: usize, row: bool, line_cross: f64, cw: f64, ch: f64) f64 {
+    let align = alignOf(t, c)
+    let b = t.bx(c)
+    var before = b.margin[3]
+    var size = b.w + b.margin[1] + b.margin[3]
+    if row {
+        before = b.margin[0]
+        size = b.h + b.margin[0] + b.margin[2]
+    }
+    if row && (text.eql(align, "stretch") || text.eql(align, "normal")) && isKeyword(b.style[css.HEIGHT], "auto") {
+        let h = clampHeight(t, c, line_cross - b.margin[0] - b.margin[2], ch)
+        t.bx(c).h = h
+        return before
+    }
+    if text.eql(align, "flex-end") || text.eql(align, "end") || text.eql(align, "self-end") {
+        return line_cross - size + before
+    }
+    if text.eql(align, "center") {
+        return (line_cross - size) / 2.0 + before
+    }
+    return before
+}
+
+// Resolves the flexible lengths of `line` in `avail` px (CSS Flexbox
+// 9.7): grows or shrinks the unfrozen items in proportion to their flex
+// factors, freezing those that hit their min or max, until all fit.
+fn resolveFlexible(line: []mut Item, avail: f64) {
+    var hyp_sum = 0.0
+    for it in line {
+        hyp_sum += it.hyp + it.before + it.after
+    }
+    let growing = hyp_sum < avail
+    for k in 0..line.len {
+        let it = line[k]
+        line[k].target = it.hyp
+        line[k].frozen = (growing && it.grow == 0.0) || (!growing && it.shrink == 0.0) || (growing && it.basis > it.hyp) || (!growing && it.basis < it.hyp)
+    }
+    for round in 0..line.len + 1 {
+        var used = 0.0
+        var factors = 0.0
+        var unfrozen: usize = 0
+        for it in line {
+            used += it.before + it.after
+            if it.frozen {
+                used += it.target
+            } else {
+                used += it.basis
+                unfrozen += 1
+                if growing {
+                    factors += it.grow
+                } else {
+                    factors += it.shrink * it.basis
+                }
+            }
+        }
+        if unfrozen == 0 {
+            return
+        }
+        let free = avail - used
+        var violation = 0.0
+        for k in 0..line.len {
+            let it = line[k]
+            if it.frozen {
+                continue
+            }
+            var target = it.basis
+            if factors > 0.0 {
+                if growing {
+                    target = it.basis + free * it.grow / factors
+                } else {
+                    target = it.basis + free * it.shrink * it.basis / factors
+                }
+            }
+            let clamped = math.max(it.min, math.min(target, it.max))
+            violation += clamped - target
+            line[k].target = clamped
+        }
+        // Freeze the items that hit a limit (all of them when none did).
+        for k in 0..line.len {
+            let it = line[k]
+            if it.frozen {
+                continue
+            }
+            if violation == 0.0 || (violation > 0.0 && it.target <= it.min) || (violation < 0.0 && it.target >= it.max) {
+                line[k].frozen = true
+            }
+        }
+    }
+}

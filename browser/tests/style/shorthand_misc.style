@@ -1,0 +1,64 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <div class="bg1">
+      display: block
+      background-color: rgb(255, 255, 0)
+    <div class="bg2">
+      display: block
+      background-color: rgb(16, 32, 48)
+    <div class="bg3">
+      display: block
+    <ul class="ls1">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      padding-left: 40px
+      list-style-type: square
+      <li>
+        display: list-item
+        list-style-type: square
+    <ul class="ls2">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      padding-left: 40px
+      list-style-type: none
+      <li>
+        display: list-item
+        list-style-type: none
+    <ol class="ls3">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      padding-left: 40px
+      list-style-type: upper-roman
+      <li>
+        display: list-item
+        list-style-type: upper-roman
+    <div class="ov1">
+      display: block
+      overflow-x: hidden
+      overflow-y: hidden
+    <div class="ov2">
+      display: block
+      overflow-x: hidden
+      overflow-y: scroll
+    <div class="ov3">
+      display: block
+    <a class="td1">
+      text-decoration-line: underline overline
+    <span class="td2">
+      text-decoration-line: line-through
+    <span class="td3">
+    <a href="/" class="td4">
+      color: rgb(0, 0, 238)

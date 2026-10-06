@@ -1,0 +1,15 @@
+const name = 'Ann', age = 30;
+const person = { name, age, greet() { return 'hi ' + this.name; } };
+console.log(person, person.greet());
+const key = 'dyn';
+const o = { [key]: 1, [key + '2']: 2, ['a' + 'b']: 3, [1 + 1]: 'two' };
+console.log(o);
+const empty = {};
+console.log(empty, Object.keys(empty).length);
+const nested = { a: { b: { c: 1 } }, list: [1, { x: 2 }] };
+console.log(nested.a.b.c, nested.list[1].x);
+const q = { 'with space': 1, 'dash-key': 2, 3: 'three' };
+console.log(q['with space'], q['dash-key'], q[3], q['3']);
+console.log(q);
+const dup = { a: 1, b: 2, a: 3 };
+console.log(dup);

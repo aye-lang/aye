@@ -1,0 +1,9 @@
+Text after a stray end tag
+one
+two
+
+threefour
+
+after the body end tag
+
+text after the html end tag

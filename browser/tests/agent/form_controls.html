@@ -1,0 +1,44 @@
+<!doctype html>
+<title>Preferences</title>
+<main>
+<h1>Preferences</h1>
+<form>
+  <fieldset>
+    <legend>Delivery</legend>
+    <label><input type=radio name=speed value=slow> Slow</label>
+    <label><input type=radio name=speed value=fast checked> Fast</label>
+    <label><input type=radio name=speed value=drone disabled> Drone</label>
+  </fieldset>
+  <label for=color>Color</label>
+  <select id=color name=color>
+    <option value=r>Red
+    <option value=g selected>Green
+    <optgroup label="Dark">
+      <option value=n>Navy
+      <option value=k disabled>Black
+    </optgroup>
+  </select>
+  <label for=toppings>Toppings</label>
+  <select id=toppings multiple>
+    <option selected>Cheese
+    <option>Olives
+    <option selected>Basil
+  </select>
+  <label for=size>Size</label> <select id=size><option>Small<option>Large</select>
+  <p id=notes-label>Notes for the courier</p>
+  <textarea aria-labelledby=notes-label rows=3>Ring twice.
+Leave at the door.</textarea>
+  <p>Quantity: <input type=number name=qty value=2 aria-label=Quantity min=1></p>
+  <p><input type=range name=vol value=7 aria-label=Volume></p>
+  <p><input type=text name=id value=A-17 readonly aria-label="Order id"></p>
+  <fieldset disabled>
+    <legend>Gift options</legend>
+    <input type=text aria-label="Gift message">
+    <button>Wrap it</button>
+  </fieldset>
+  <input type=hidden name=token value=secret>
+  <input type=file aria-label="Attachment">
+  <progress value=40 max=100 aria-label="Upload"></progress>
+  <button>Save</button>
+</form>
+</main>

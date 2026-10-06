@@ -1,0 +1,12 @@
+viewport 800x600
+  block <html> (0, 0) 800x203
+    block <body> (10, 10) 780x183
+      block <div class="outer"> (10, 10) 780x163
+        block <div class="inner"> (42, 27) 716x32
+        block <div class="inner"> (42, 64) 716x32
+          line (43, 65) 714x20
+            text (43, 67) 120x16 "text in a block"
+        block <div class="tall"> (22, 101) 756x60
+      block <div> (10, 173) 780x20
+        line (10, 173) 780x20
+          text (10, 175) 112x16 "After the box."

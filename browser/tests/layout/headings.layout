@@ -1,0 +1,36 @@
+viewport 800x600
+  block <html> (0, 0) 800x339.61
+    block <body> (8, 21.44) 784x302.17
+      block <h1> (8, 21.44) 784x40
+        line (8, 21.44) 784x40
+          text (8, 25.44) 176x32 "Heading one"
+      block <h2> (8, 82.88) 784x30
+        line (8, 82.88) 784x30
+          text (8, 85.88) 132x24 "Heading two"
+      block <h3> (8, 132.8) 784x23.4
+        line (8, 132.8) 784x23.4
+          text (8, 135.14) 121.68x18.72 "Heading three"
+      block <h4> (8, 177.48) 784x20
+        line (8, 177.48) 784x20
+          text (8, 179.48) 96x16 "Heading four"
+      block <h5> (8, 219.66) 784x16.6
+        line (8, 219.66) 784x16.6
+          text (8, 221.32) 79.68x13.28 "Heading five"
+      block <h6> (8, 261.24) 784x13.4
+        line (8, 261.24) 784x13.4
+          text (8, 262.58) 58.96x10.72 "Heading six"
+      block <p> (8, 299.61) 784x24
+        line (8, 299.61) 784x24
+          text (8, 304.57) 120x16 "Body text with "
+          inline <small> (128, 306.71) 33.33x13.33
+            text (128, 306.71) 33.33x13.33 "small"
+          text (161.33, 304.57) 16x16 ", "
+          inline <big> (177.33, 302.01) 28.8x19.2
+            text (177.33, 302.01) 28.8x19.2 "big"
+          text (206.13, 304.57) 16x16 ", "
+          inline <code> (222.13, 304.57) 32x16
+            text (222.13, 304.57) 32x16 "code"
+          text (254.13, 304.57) 40x16 " and "
+          inline <sub> (294.13, 306.71) 20x13.33
+            text (294.13, 306.71) 20x13.33 "sub"
+          text (314.13, 304.57) 8x16 "."

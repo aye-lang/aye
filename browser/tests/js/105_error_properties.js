@@ -1,0 +1,15 @@
+const e = new Error('msg');
+console.log(e.name, e.message, String(e), e instanceof Error);
+const t = new TypeError('tm');
+console.log(t.name, t.message, String(t), t instanceof TypeError, t instanceof Error);
+const kinds = [RangeError, SyntaxError, ReferenceError, EvalError, URIError];
+console.log(kinds.map((K) => new K('x').name + ':' + (new K('x') instanceof Error)));
+console.log(String(new Error()), new Error().message === '', String(new Error(undefined)));
+const e2 = new Error('orig');
+e2.name = 'Renamed';
+console.log(String(e2));
+e2.message = 'changed';
+console.log(`${e2}`);
+console.log(Object.keys(new Error('x')), Error('no new').message);
+console.log(Object.prototype.hasOwnProperty.call(e, 'message'), Object.prototype.hasOwnProperty.call(e, 'name'));
+console.log(Error.prototype.name, TypeError.prototype.name);

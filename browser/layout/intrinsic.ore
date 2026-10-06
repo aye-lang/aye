@@ -1,0 +1,76 @@
+// Intrinsic widths: the min-content width (the narrowest a box gets
+// without overflow: its widest word or atomic inline) and the
+// max-content width (without any soft line break). Percentages count as
+// `auto` here, and percentage margins and paddings as 0.
+
+import css
+import std.math
+import std.mem.AllocError
+
+pub struct MinMax {
+    min: f64
+    max: f64
+}
+
+/// The content-based border-box widths of box `i`, regardless of its own
+/// `width` (cached).
+fn intrinsic(t: *mut Tree, i: usize) AllocError!MinMax {
+    if t.bx(i).has_intrinsic {
+        return MinMax { min: t.bx(i).min_w, max: t.bx(i).max_w }
+    }
+    let style = t.bx(i).style
+    var edges = 0.0
+    for side in [2]usize{1, 3} {
+        edges += lengthOr0(style[css.PADDING_TOP + side], -1.0) + lengthOr0(style[css.BORDER_TOP_WIDTH + side], -1.0)
+    }
+    var r = MinMax { min: 0.0, max: 0.0 }
+    let kind = t.bx(i).kind
+    if kind == BoxKind.Image {
+        let w = attrPx(t, i, "width")
+        r = MinMax { min: w, max: w }
+    } else if kind == BoxKind.Table {
+        r = try tableIntrinsic(t, i)
+    } else if kind == BoxKind.Flex {
+        r = try flexIntrinsic(t, i)
+    } else if hasInlineContent(t, i) {
+        r = try inlineIntrinsic(t, i)
+    } else {
+        for c in t.children(i) {
+            let o = try outerIntrinsic(t, c)
+            r.min = math.max(r.min, o.min)
+            r.max = math.max(r.max, o.max)
+        }
+    }
+    r.min += edges
+    r.max = math.max(r.max + edges, r.min)
+    let b = t.bx(i)
+    b.has_intrinsic = true
+    b.min_w = r.min
+    b.max_w = r.max
+    return r
+}
+
+/// What box `i` contributes to its parent's intrinsic widths: its border
+/// box (its `width` when that is a length, within min/max-width), plus
+/// its margins.
+fn outerIntrinsic(t: *mut Tree, i: usize) AllocError!MinMax {
+    var r = try intrinsic(t, i)
+    let style = t.bx(i).style
+    var edges = 0.0
+    for side in [2]usize{1, 3} {
+        edges += lengthOr0(style[css.PADDING_TOP + side], -1.0) + lengthOr0(style[css.BORDER_TOP_WIDTH + side], -1.0)
+    }
+    if sizeOf(style, style[css.WIDTH], -1.0, edges) |w| {
+        r = MinMax { min: w, max: w }
+    }
+    if sizeOf(style, style[css.MAX_WIDTH], -1.0, edges) |mx| {
+        r.min = math.min(r.min, mx)
+        r.max = math.min(r.max, mx)
+    }
+    if sizeOf(style, style[css.MIN_WIDTH], -1.0, edges) |mn| {
+        r.min = math.max(r.min, mn)
+        r.max = math.max(r.max, mn)
+    }
+    let margins = lengthOr0(style[css.MARGIN_TOP + 1], -1.0) + lengthOr0(style[css.MARGIN_TOP + 3], -1.0)
+    return MinMax { min: r.min + margins, max: r.max + margins }
+}

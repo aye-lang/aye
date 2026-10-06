@@ -1,0 +1,2 @@
+{ g: [Getter], s: [Setter], gs: [Getter/Setter] }
+T {} 42

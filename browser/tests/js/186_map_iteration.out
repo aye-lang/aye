@@ -1,0 +1,16 @@
+one 1
+two 2
+three 3
+forEach one 1 true
+forEach two 2 true
+forEach three 3 true
+[ 'one', 'two', 'three' ] [ 1, 2, 3 ] [ [ 'one', 1 ], [ 'two', 2 ], [ 'three', 3 ] ]
+one=1&two=2&three=3
+[ 'one', 'three', 'two' ]
+[
+  [ 'the', 3 ],
+  [ 'and', 2 ],
+  [ 'bat', 1 ],
+  [ 'cat', 1 ],
+  [ 'hat', 1 ]
+]

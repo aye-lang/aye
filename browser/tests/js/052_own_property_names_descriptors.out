@@ -1,0 +1,8 @@
+[ 'a', 'b' ] [ 'a' ]
+[ '0', '1', 'length' ]
+[ '0', '1', 'length' ]
+{ value: 1, writable: true, enumerable: true, configurable: true }
+undefined
+{ value: 1, writable: true, enumerable: false, configurable: false }
+[ 'configurable', 'enumerable', 'get', 'set' ] undefined
+true

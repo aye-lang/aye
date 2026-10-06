@@ -1,0 +1,169 @@
+// The part of SDL2 the window uses. `SDL_Event` is a C union: Ore
+// declares its size and alignment (56 bytes, pointer-aligned) with the
+// common header (`kind`), and reads each kind of event through
+// `@ptrCast` to an extern struct with that event's layout (SDL_events.h,
+// SDL 2.0.18 and later for the wheel's precise fields).
+
+@link("sdl2")
+
+pub extern struct SDL_Window {}
+pub extern struct SDL_Renderer {}
+pub extern struct SDL_Texture {}
+pub extern struct SDL_Cursor {}
+
+pub extern struct SDL_Rect {
+    x: i32
+    y: i32
+    w: i32
+    h: i32
+}
+
+pub extern struct SDL_Event {
+    kind: u32
+    pad: u32
+    data: [6]u64
+}
+
+pub extern struct SDL_Keysym {
+    scancode: i32
+    sym: i32
+    mods: u16
+    unused: u32
+}
+
+pub extern struct SDL_KeyboardEvent {
+    kind: u32
+    timestamp: u32
+    window: u32
+    state: u8
+    repeat: u8
+    padding2: u8
+    padding3: u8
+    keysym: SDL_Keysym
+}
+
+pub extern struct SDL_TextInputEvent {
+    kind: u32
+    timestamp: u32
+    window: u32
+    text: [32]u8
+}
+
+pub extern struct SDL_MouseMotionEvent {
+    kind: u32
+    timestamp: u32
+    window: u32
+    which: u32
+    state: u32
+    x: i32
+    y: i32
+    xrel: i32
+    yrel: i32
+}
+
+pub extern struct SDL_MouseButtonEvent {
+    kind: u32
+    timestamp: u32
+    window: u32
+    which: u32
+    button: u8
+    state: u8
+    clicks: u8
+    padding1: u8
+    x: i32
+    y: i32
+}
+
+pub extern struct SDL_MouseWheelEvent {
+    kind: u32
+    timestamp: u32
+    window: u32
+    which: u32
+    x: i32
+    y: i32
+    direction: u32
+    precise_x: f32
+    precise_y: f32
+}
+
+pub extern struct SDL_WindowEvent {
+    kind: u32
+    timestamp: u32
+    window: u32
+    event: u8
+    padding1: u8
+    padding2: u8
+    padding3: u8
+    data1: i32
+    data2: i32
+}
+
+pub extern fn SDL_Init(flags: u32) i32
+pub extern fn SDL_Quit()
+pub extern fn SDL_GetError() [*]u8
+pub extern fn SDL_SetHint(name: [*]u8, value: [*]u8) i32
+pub extern fn SDL_CreateWindow(title: [*]u8, x: i32, y: i32, w: i32, h: i32, flags: u32) ?*mut SDL_Window
+pub extern fn SDL_DestroyWindow(w: *mut SDL_Window)
+pub extern fn SDL_SetWindowTitle(w: *mut SDL_Window, title: [*]u8)
+pub extern fn SDL_GetWindowSize(w: *mut SDL_Window, width: *mut i32, height: *mut i32)
+pub extern fn SDL_CreateRenderer(w: *mut SDL_Window, index: i32, flags: u32) ?*mut SDL_Renderer
+pub extern fn SDL_DestroyRenderer(r: *mut SDL_Renderer)
+pub extern fn SDL_GetRendererOutputSize(r: *mut SDL_Renderer, width: *mut i32, height: *mut i32) i32
+pub extern fn SDL_CreateTexture(r: *mut SDL_Renderer, format: u32, access: i32, w: i32, h: i32) ?*mut SDL_Texture
+pub extern fn SDL_DestroyTexture(t: *mut SDL_Texture)
+pub extern fn SDL_UpdateTexture(t: *mut SDL_Texture, rect: ?*SDL_Rect, pixels: [*]u8, pitch: i32) i32
+pub extern fn SDL_RenderClear(r: *mut SDL_Renderer) i32
+pub extern fn SDL_RenderCopy(r: *mut SDL_Renderer, t: *mut SDL_Texture, src: ?*SDL_Rect, dst: ?*SDL_Rect) i32
+pub extern fn SDL_RenderPresent(r: *mut SDL_Renderer)
+pub extern fn SDL_WaitEventTimeout(event: *mut SDL_Event, ms: i32) i32
+pub extern fn SDL_PollEvent(event: *mut SDL_Event) i32
+pub extern fn SDL_CreateSystemCursor(id: i32) ?*mut SDL_Cursor
+pub extern fn SDL_SetCursor(c: ?*mut SDL_Cursor)
+pub extern fn SDL_FreeCursor(c: *mut SDL_Cursor)
+pub extern fn SDL_StartTextInput()
+pub extern fn SDL_StopTextInput()
+
+pub let SDL_INIT_VIDEO: u32 = 0x20
+pub let SDL_WINDOWPOS_UNDEFINED: i32 = 0x1FFF0000
+pub let SDL_WINDOW_RESIZABLE: u32 = 0x20
+pub let SDL_WINDOW_ALLOW_HIGHDPI: u32 = 0x2000
+pub let SDL_RENDERER_SOFTWARE: u32 = 1
+pub let SDL_PIXELFORMAT_ABGR8888: u32 = 0x16762004
+pub let SDL_TEXTUREACCESS_STREAMING: i32 = 1
+
+pub let SDL_QUIT: u32 = 0x100
+pub let SDL_WINDOWEVENT: u32 = 0x200
+pub let SDL_KEYDOWN: u32 = 0x300
+pub let SDL_TEXTINPUT: u32 = 0x303
+pub let SDL_MOUSEMOTION: u32 = 0x400
+pub let SDL_MOUSEBUTTONDOWN: u32 = 0x401
+pub let SDL_MOUSEWHEEL: u32 = 0x403
+
+pub let SDL_WINDOWEVENT_EXPOSED: u8 = 3
+pub let SDL_WINDOWEVENT_SIZE_CHANGED: u8 = 6
+pub let SDL_WINDOWEVENT_LEAVE: u8 = 11
+pub let SDL_MOUSEWHEEL_FLIPPED: u32 = 1
+pub let SDL_BUTTON_LEFT: u8 = 1
+
+pub let SDL_SYSTEM_CURSOR_ARROW: i32 = 0
+pub let SDL_SYSTEM_CURSOR_IBEAM: i32 = 1
+pub let SDL_SYSTEM_CURSOR_HAND: i32 = 11
+
+pub let KMOD_SHIFT: u16 = 0x0003
+pub let KMOD_CTRL: u16 = 0x00C0
+pub let KMOD_GUI: u16 = 0x0C00
+
+pub let SDLK_RETURN: i32 = 13
+pub let SDLK_ESCAPE: i32 = 27
+pub let SDLK_BACKSPACE: i32 = 8
+pub let SDLK_SPACE: i32 = 32
+pub let SDLK_DELETE: i32 = 127
+pub let SDLK_RIGHT: i32 = 0x4000004F
+pub let SDLK_LEFT: i32 = 0x40000050
+pub let SDLK_DOWN: i32 = 0x40000051
+pub let SDLK_UP: i32 = 0x40000052
+pub let SDLK_HOME: i32 = 0x4000004A
+pub let SDLK_PAGEUP: i32 = 0x4000004B
+pub let SDLK_END: i32 = 0x4000004D
+pub let SDLK_PAGEDOWN: i32 = 0x4000004E
+pub let SDLK_KP_ENTER: i32 = 0x40000058

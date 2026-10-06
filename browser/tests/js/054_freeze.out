@@ -1,0 +1,6 @@
+{ a: 1, nested: { b: 20 } } true false
+TypeError
+[ 1, 2 ]
+false true true
+{ x: 2 } true false
+{ k: 1 } false true

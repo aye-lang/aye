@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<style>
+.bg1 { background: yellow }
+.bg2 { background: url(x.png) no-repeat #102030 center }
+.bg3 { background-color: red; background: none }
+.ls1 { list-style: square inside }
+.ls2 { list-style: none }
+.ls3 { list-style: upper-roman url(m.png) outside }
+.ov1 { overflow: hidden }
+.ov2 { overflow: hidden scroll }
+.ov3 { overflow: auto visible clip }
+.td1 { text-decoration: underline overline }
+.td2 { text-decoration: line-through dotted red }
+.td3 { text-decoration: underline underline }
+.td4 { text-decoration: none }
+</style>
+<div class="bg1">background color</div>
+<div class="bg2">background parts</div>
+<div class="bg3">background resets color</div>
+<ul class="ls1"><li>square</li></ul>
+<ul class="ls2"><li>none</li></ul>
+<ol class="ls3"><li>upper-roman</li></ol>
+<div class="ov1">hidden</div>
+<div class="ov2">two values</div>
+<div class="ov3">three values are invalid</div>
+<a class="td1">underline overline</a>
+<span class="td2">line-through with style and color</span>
+<span class="td3">repeated is invalid</span>
+<a href="/" class="td4">none</a>
