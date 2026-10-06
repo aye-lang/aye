@@ -1,0 +1,114 @@
+// Positions that follow the scroll offset of the viewport (`scrollTo`).
+//
+// - `position: fixed` boxes (whose containing block is the viewport, not
+//   a transformed ancestor) are laid out at the top of the document and
+//   move down with the scroll offset, so they stay where they are in the
+//   viewport.
+// - `position: sticky` boxes (with `top` and/or `bottom`; `left` and
+//   `right` are ignored, the viewport does not scroll sideways) are laid
+//   out like `relative` ones without offsets, then shifted so that their
+//   border box stays at least `top` below the top of the viewport (and
+//   `bottom` above its bottom) while their margin box stays inside the
+//   content box of their parent. A sticky box inside a box that clips
+//   (overflow other than `visible`; such boxes do not scroll) or inside
+//   a fixed or sticky box stays where it is.
+//
+// `Box.scroll_dy` is the offset applied to the box and its subtree.
+
+import css
+import std.math
+import std.mem.AllocError
+
+// Collects the fixed and sticky boxes of the subtree of `i` (tree order)
+// into `Tree.scrolled`. `held`: inside a fixed, sticky or transformed
+// box (which moves what is inside, or is its containing block);
+// `clipped`: inside a box that clips.
+fn collectScrolled(t: *mut Tree, i: usize, held: bool, clipped: bool) AllocError!void {
+    let b = t.bx(i)
+    let inline_kind = b.kind == BoxKind.Inline || b.kind == BoxKind.Text || b.kind == BoxKind.LineBreak
+    var in_held = held
+    var in_clipped = clipped
+    if !held && !inline_kind {
+        let sticky = isKeyword(b.style[css.POSITION], "sticky") && b.abs == 0 && b.float == 0 && (lengthOf(b.style[css.INSET_TOP], 0.0) != null || lengthOf(b.style[css.INSET_TOP + 2], 0.0) != null)
+        if b.abs == 2 || (sticky && !clipped) {
+            try t.scrolled.append(i)
+            in_held = true
+        }
+    }
+    if isTransformed(t, i) {
+        in_held = true
+    }
+    if !inline_kind && clipsContent(t, i) {
+        in_clipped = true
+    }
+    let n = t.children(i).len
+    for k in 0..n {
+        try collectScrolled(t, t.children(i)[k], in_held, in_clipped)
+    }
+}
+
+// Does box `i` clip its content (overflow other than `visible`; not the
+// root and the body, whose overflow is the viewport's)?
+fn clipsContent(t: *Tree, i: usize) bool {
+    let b = t.bx(i)
+    if isKeyword(b.style[css.OVERFLOW_X], "visible") && isKeyword(b.style[css.OVERFLOW_Y], "visible") {
+        return false
+    }
+    if t.root == i {
+        return false
+    }
+    if b.node |el| {
+        if t.doc.isElement(el, "body") {
+            return false
+        }
+    }
+    return true
+}
+
+/// Moves the fixed and sticky boxes for the viewport scrolled down by
+/// `y` px; whether a box moved.
+pub fn scrollTo(t: *mut Tree, y: f64) bool {
+    t.scroll_y = y
+    var moved = false
+    let n = t.scrolled.len()
+    for k in 0..n {
+        let i = t.scrolled.items()[k]
+        var want = y
+        if t.bx(i).abs != 2 {
+            want = stickyOffset(t, i, y)
+        }
+        let b = t.bx(i)
+        let d = want - b.scroll_dy
+        if d != 0.0 {
+            b.scroll_dy = want
+            shiftSubtree(t, i, 0.0, d)
+            moved = true
+        }
+    }
+    return moved
+}
+
+// The offset of the sticky box `i` with the viewport scrolled by `y`.
+fn stickyOffset(t: *mut Tree, i: usize, y: f64) f64 {
+    let b = t.bx(i).*
+    let p = t.bx(b.parent orelse return 0.0).*
+    let top0 = b.ay - b.scroll_dy
+    let vh = t.viewport_h
+    // The content box of the parent: the margin box stays inside.
+    let lo = p.ay + p.border[0] + p.padding[0] + b.margin[0] - top0
+    let hi = p.ay + p.h - p.border[2] - p.padding[2] - b.margin[2] - (top0 + b.h)
+    var off = 0.0
+    if lengthOf(b.style[css.INSET_TOP + 2], vh) |bottom| {
+        let over = top0 + b.h - (y + vh - bottom)
+        if over > 0.0 {
+            off = math.max(-over, math.min(0.0, lo))
+        }
+    }
+    if lengthOf(b.style[css.INSET_TOP], vh) |top| {
+        let under = y + top - top0
+        if under > 0.0 {
+            off = math.min(under, math.max(0.0, hi))
+        }
+    }
+    return off
+}

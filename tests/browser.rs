@@ -1197,3 +1197,43 @@ fn window_hit_layers() {
     }
     assert!(failures.is_empty(), "{} of {} cases failed:\n\n{}", failures.len(), cases.len(), failures.join("\n"));
 }
+
+/// Fixed and sticky boxes follow the scroll offset
+/// (`browser/tests/layout/scroll.html` in a 400x340 window: a 300 px
+/// viewport 40 px down): the fixed bar stays at the top, the sticky link
+/// stays 40 px below the top until the end of its section, the sticky
+/// footer stays at the bottom, and a sticky box in a box that clips does
+/// not move. Hit testing sees them where they are drawn.
+#[test]
+fn window_scroll_positions() {
+    if !has_sdl() {
+        println!("skipped: no SDL2");
+        return;
+    }
+    let dir = format!("file://{}/browser/tests/layout/", root().display());
+    let cases: &[(&str, &str)] = &[
+        ("move:20,50", "fixed.html"),
+        ("move:220,90", ""),
+        ("move:320,320", "foot.html"),
+        ("wheel:-5 move:20,50", "fixed.html"),
+        ("wheel:-5 move:220,90", "sticky.html"),
+        ("move:220,150", "sticky.html"),
+        ("move:220,190", "under.html"),
+        ("wheel:-17 move:220,90", ""),
+        ("wheel:-17 move:220,50", "sticky.html"),
+        ("wheel:-17 move:20,105", "clipped.html"),
+        ("key:end move:20,50", "fixed.html"),
+        ("key:end move:320,320", "foot.html"),
+    ];
+    let mut failures = Vec::new();
+    for (events, want) in cases {
+        let out = run_window(&["browser/tests/layout/scroll.html", "--font", "fixed", "--width", "400", "--height", "340", "--frames", "1", "--state", "--events", events]);
+        let got = text(&out.stdout).replace(&dir, "");
+        let status = got.lines().find(|l| l.starts_with("status ")).unwrap_or("").to_string();
+        let want_line = format!("status {want}");
+        if !out.status.success() || !out.stderr.is_empty() || status != want_line {
+            failures.push(format!("--events {events:?}: {}\n{}--- expected\n{want_line}\n--- got\n{got}", out.status, text(&out.stderr)));
+        }
+    }
+    assert!(failures.is_empty(), "{} of {} cases failed:\n\n{}", failures.len(), cases.len(), failures.join("\n"));
+}

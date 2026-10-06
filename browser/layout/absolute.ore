@@ -7,7 +7,8 @@
 // ancestor, or the initial containing block (the first screen, at the
 // top of the document), which is also the containing block of `fixed`
 // boxes. `left`/`right`/`top`/`bottom` (percentages of the containing
-// block, `auto` for the static position), a width from `left` and
+// block, `auto` for the static position; a transformed ancestor is the
+// containing block of both), a width from `left` and
 // `right` when `width` is `auto` (else shrink-to-fit), a height from
 // `top` and `bottom`, and `auto` margins that center.
 
@@ -41,13 +42,11 @@ fn layoutAbsolutes(t: *mut Tree) AllocError!void {
 // coordinates of a padding box.
 fn containingArea(t: *Tree, i: usize) Area {
     let icb = Area { x: 0.0, y: 0.0, w: t.viewport_w, h: t.viewport_h }
-    if t.bx(i).abs == 2 {
-        return icb
-    }
+    let fixed = t.bx(i).abs == 2
     var cur = t.bx(i).parent
     while cur |c| {
         let b = t.bx(c)
-        if b.kind != BoxKind.Inline && b.kind != BoxKind.Text && (b.abs != 0 || isPositioned(b.style)) {
+        if isTransformed(t, c) || (!fixed && b.kind != BoxKind.Inline && b.kind != BoxKind.Text && (b.abs != 0 || isPositioned(b.style))) {
             return Area {
                 x: b.ax + b.border[3],
                 y: b.ay + b.border[0],

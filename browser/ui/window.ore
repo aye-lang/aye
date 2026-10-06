@@ -293,6 +293,8 @@ pub struct Ui {
     next_tab: u32
     tab: *mut engine.Tab
     list: ?paint.DisplayList
+    // The page's fixed or sticky boxes moved since `list` was built.
+    relist: bool
     focus: Focus
     address: Field
     // Find in page: the bar is open, its query, the matches (document
@@ -348,6 +350,7 @@ pub struct Ui {
             next_tab: 2,
             tab: first.session.tab,
             list: null,
+            relist: false,
             focus: Focus.Page,
             address: Field.init(alloc),
             finding: false,
@@ -656,11 +659,24 @@ pub struct Ui {
         self.tab.clampScroll(self.maxScroll())
         if self.tab.scroll != before {
             self.dirty = true
+            self.followScroll()
         }
     }
 
     fn scrollTo(self: *mut Self, y: f64) {
         self.scrollBy(y - self.tab.scroll)
+    }
+
+    // Moves the page's fixed and sticky boxes to the scroll offset when
+    // they are not there yet (`draw` paints them again).
+    fn followScroll(self: *mut Self) {
+        if self.tab.page |p| {
+            if p.tree |t| {
+                if t.scroll_y != self.tab.scroll && layout.scrollTo(t, self.tab.scroll) {
+                    self.relist = true
+                }
+            }
+        }
     }
 
     fn openFind(self: *mut Self) AllocError!void {
@@ -1144,6 +1160,16 @@ pub struct Ui {
     // ---- drawing
 
     fn draw(self: *mut Self) AllocError!void {
+        self.followScroll()
+        if self.relist {
+            self.relist = false
+            if self.tab.page |p| {
+                if p.tree |t| {
+                    self.dropList()
+                    self.list = try paint.build(self.alloc, t)
+                }
+            }
+        }
         let s = self.scale
         let top = self.top()
         let bottom = self.win_h as f64

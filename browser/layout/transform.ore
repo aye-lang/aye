@@ -1,0 +1,481 @@
+// CSS transforms (2-D) and `transform-origin`, applied after layout.
+//
+// The transform of a box (`matrix()`, `translate()`, `translateX/Y()`,
+// `translate3d()`, `scale()`, `scaleX/Y()`, `scale3d()`, `rotate()`,
+// `rotateZ()`, `skew()`, `skewX/Y()`, the 2-D part of `matrix3d()`;
+// percentages of its border box) is the matrix M around its origin O:
+// a point p goes to O + M(p - O). That is its translation (M's e, f),
+// and its linear part A around O moved by it. The translation moves the
+// box and its subtree (`ax`, `ay`, so hit testing, the agent's view and
+// script geometry see it); the linear part, when it keeps rectangles
+// axis-aligned (scales, flips, quarter turns), is kept in `Tree.xforms`
+// for paint (bounding boxes of rectangles, images and text) and hit
+// testing (`Xform.invert`); other linear parts (a 45deg rotation, a
+// skew) are not drawn. A transformed box is a containing block for its
+// absolutely positioned and fixed descendants and is painted as a
+// layer. An unparsable transform is ignored.
+
+import css
+import std.math
+import std.mem.AllocError
+import std.text
+
+/// An affine map of the plane: (x, y) goes to (a x + c y + e,
+/// b x + d y + f).
+pub struct Affine {
+    a: f64
+    b: f64
+    c: f64
+    d: f64
+    e: f64
+    f: f64
+
+    pub fn identity() Affine {
+        return Affine { a: 1.0, b: 0.0, c: 0.0, d: 1.0, e: 0.0, f: 0.0 }
+    }
+
+    pub fn isIdentity(self: Self) bool {
+        return self.a == 1.0 && self.b == 0.0 && self.c == 0.0 && self.d == 1.0 && self.e == 0.0 && self.f == 0.0
+    }
+
+    /// `self` after `o`: p goes to self(o(p)).
+    pub fn then(self: Self, o: Affine) Affine {
+        return Affine {
+            a: self.a * o.a + self.c * o.b,
+            b: self.b * o.a + self.d * o.b,
+            c: self.a * o.c + self.c * o.d,
+            d: self.b * o.c + self.d * o.d,
+            e: self.a * o.e + self.c * o.f + self.e,
+            f: self.b * o.e + self.d * o.f + self.f,
+        }
+    }
+
+    pub fn x(self: Self, px: f64, py: f64) f64 {
+        return self.a * px + self.c * py + self.e
+    }
+
+    pub fn y(self: Self, px: f64, py: f64) f64 {
+        return self.b * px + self.d * py + self.f
+    }
+
+    /// The inverse map; null when it has none.
+    pub fn inverse(self: Self) ?Affine {
+        let det = self.a * self.d - self.b * self.c
+        if det == 0.0 {
+            return null
+        }
+        let a = self.d / det
+        let b = -self.b / det
+        let c = -self.c / det
+        let d = self.a / det
+        return Affine { a: a, b: b, c: c, d: d, e: -(a * self.e + c * self.f), f: -(b * self.e + d * self.f) }
+    }
+}
+
+/// The linear part of a box's transform that paint draws: (`a` `c`;
+/// `b` `d`) around the point (`ox`, `oy`) from the top-left of the
+/// box's border box (`ax`, `ay`).
+pub struct Xform {
+    a: f64
+    b: f64
+    c: f64
+    d: f64
+    ox: f64
+    oy: f64
+}
+
+/// The map of the transform of box `i` in document coordinates (around
+/// its origin at its current position); identity when it has none.
+pub fn xformOf(t: *Tree, i: usize) Affine {
+    if t.bx(i).xform |k| {
+        let x = t.xforms.items()[k]
+        let b = t.bx(i)
+        let ox = b.ax + x.ox
+        let oy = b.ay + x.oy
+        let m = Affine { a: x.a, b: x.b, c: x.c, d: x.d, e: 0.0, f: 0.0 }
+        let to = Affine { a: 1.0, b: 0.0, c: 0.0, d: 1.0, e: ox, f: oy }
+        let back = Affine { a: 1.0, b: 0.0, c: 0.0, d: 1.0, e: -ox, f: -oy }
+        return to.then(m.then(back))
+    }
+    return Affine.identity()
+}
+
+/// Has box `i` a transform (other than `none`)? Such a box is a
+/// containing block and a layer.
+pub fn isTransformed(t: *Tree, i: usize) bool {
+    let b = t.bx(i)
+    if b.kind == BoxKind.Inline || b.kind == BoxKind.Text || b.kind == BoxKind.LineBreak {
+        return false
+    }
+    return hasTransform(b.style)
+}
+
+fn hasTransform(style: []css.Value) bool {
+    let k = keywordOf(style[css.TRANSFORM])
+    return k.len > 0 && !text.eql(k, "none")
+}
+
+// Applies the transforms of the boxes in tree order (an ancestor's
+// first, so a descendant's moves with it).
+fn applyTransforms(t: *mut Tree, i: usize) AllocError!void {
+    if isTransformed(t, i) {
+        try applyTransform(t, i)
+    }
+    let n = t.children(i).len
+    for k in 0..n {
+        try applyTransforms(t, t.children(i)[k])
+    }
+}
+
+fn applyTransform(t: *mut Tree, i: usize) AllocError!void {
+    let b = t.bx(i).*
+    let u = unitsOf(t, i)
+    let m = parseTransform(keywordOf(b.style[css.TRANSFORM]), b.w, b.h, u) orelse return
+    let o = parseOrigin(keywordOf(b.style[css.TRANSFORM_ORIGIN]), b.w, b.h, u)
+    shiftSubtree(t, i, m.e, m.f)
+    let linear = m.a != 1.0 || m.b != 0.0 || m.c != 0.0 || m.d != 1.0
+    let aligned = (m.b == 0.0 && m.c == 0.0) || (m.a == 0.0 && m.d == 0.0)
+    if linear && aligned {
+        try t.xforms.append(Xform { a: m.a, b: m.b, c: m.c, d: m.d, ox: o[0], oy: o[1] })
+        t.bx(i).xform = t.xforms.len() - 1
+    }
+}
+
+/// Moves box `i` and its subtree by (`dx`, `dy`).
+pub fn shiftSubtree(t: *mut Tree, i: usize, dx: f64, dy: f64) {
+    if dx == 0.0 && dy == 0.0 {
+        return
+    }
+    let b = t.bx(i)
+    b.ax += dx
+    b.ay += dy
+    let n = t.children(i).len
+    for k in 0..n {
+        shiftSubtree(t, t.children(i)[k], dx, dy)
+    }
+}
+
+// ---- parsing
+
+// The matrix of a transform list in a `w` x `h` reference box; null when
+// it does not parse.
+fn parseTransform(s: []u8, w: f64, h: f64, u: Units) ?Affine {
+    var m = Affine.identity()
+    var k: usize = 0
+    var any = false
+    while true {
+        while k < s.len && isSpace(s[k]) {
+            k += 1
+        }
+        if k >= s.len {
+            break
+        }
+        let open = text.indexOf(s[k..], "(") orelse return null
+        let name = s[k..k + open]
+        let start = k + open + 1
+        let end = closing(s, start) orelse return null
+        var args = [16]f64{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}
+        let f = transformFunction(name, s[start..end], w, h, u, args[..]) orelse return null
+        m = m.then(f)
+        any = true
+        k = end + 1
+    }
+    if !any {
+        return null
+    }
+    return m
+}
+
+// The index of the `)` that closes the parenthesis before `start`.
+fn closing(s: []u8, start: usize) ?usize {
+    var depth: usize = 1
+    var k = start
+    while k < s.len {
+        if s[k] == '(' {
+            depth += 1
+        } else if s[k] == ')' {
+            depth -= 1
+            if depth == 0 {
+                return k
+            }
+        }
+        k += 1
+    }
+    return null
+}
+
+fn isSpace(c: u8) bool {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r'
+}
+
+// The arguments of a function (separated by commas or spaces) into
+// `out`; how many there are.
+fn splitArgs(s: []u8, out: []mut []u8) usize {
+    var n: usize = 0
+    var k: usize = 0
+    while k < s.len {
+        while k < s.len && (isSpace(s[k]) || s[k] == ',') {
+            k += 1
+        }
+        if k >= s.len {
+            break
+        }
+        let start = k
+        var depth: usize = 0
+        while k < s.len {
+            let c = s[k]
+            if c == '(' {
+                depth += 1
+            } else if c == ')' && depth > 0 {
+                depth -= 1
+            } else if depth == 0 && (isSpace(c) || c == ',') {
+                break
+            }
+            k += 1
+        }
+        if n < out.len {
+            out[n] = s[start..k]
+        }
+        n += 1
+    }
+    return n
+}
+
+fn transformFunction(name: []u8, inner: []u8, w: f64, h: f64, u: Units, nums: []mut f64) ?Affine {
+    var parts = [16][]u8{"", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}
+    let n = splitArgs(inner, parts[..])
+    if n == 0 || n > 16 {
+        return null
+    }
+    let id = Affine.identity()
+    if text.eqlIgnoreCase(name, "translate") || text.eqlIgnoreCase(name, "translate3d") {
+        let tx = lengthArg(parts[0], w, u) orelse return null
+        var ty = 0.0
+        if n >= 2 {
+            ty = lengthArg(parts[1], h, u) orelse return null
+        }
+        return Affine { a: 1.0, b: 0.0, c: 0.0, d: 1.0, e: tx, f: ty }
+    }
+    if text.eqlIgnoreCase(name, "translateX") {
+        let tx = lengthArg(parts[0], w, u) orelse return null
+        return Affine { a: 1.0, b: 0.0, c: 0.0, d: 1.0, e: tx, f: 0.0 }
+    }
+    if text.eqlIgnoreCase(name, "translateY") {
+        let ty = lengthArg(parts[0], h, u) orelse return null
+        return Affine { a: 1.0, b: 0.0, c: 0.0, d: 1.0, e: 0.0, f: ty }
+    }
+    if text.eqlIgnoreCase(name, "translateZ") {
+        return id
+    }
+    if text.eqlIgnoreCase(name, "scale") || text.eqlIgnoreCase(name, "scale3d") {
+        let sx = numberArg(parts[0]) orelse return null
+        var sy = sx
+        if n >= 2 {
+            sy = numberArg(parts[1]) orelse return null
+        }
+        return Affine { a: sx, b: 0.0, c: 0.0, d: sy, e: 0.0, f: 0.0 }
+    }
+    if text.eqlIgnoreCase(name, "scaleX") {
+        let sx = numberArg(parts[0]) orelse return null
+        return Affine { a: sx, b: 0.0, c: 0.0, d: 1.0, e: 0.0, f: 0.0 }
+    }
+    if text.eqlIgnoreCase(name, "scaleY") {
+        let sy = numberArg(parts[0]) orelse return null
+        return Affine { a: 1.0, b: 0.0, c: 0.0, d: sy, e: 0.0, f: 0.0 }
+    }
+    if text.eqlIgnoreCase(name, "scaleZ") || text.eqlIgnoreCase(name, "perspective") || text.eqlIgnoreCase(name, "rotateX") || text.eqlIgnoreCase(name, "rotateY") {
+        return id
+    }
+    if text.eqlIgnoreCase(name, "rotate") || text.eqlIgnoreCase(name, "rotateZ") {
+        let r = angleArg(parts[n - 1]) orelse return null
+        return rotation(r)
+    }
+    if text.eqlIgnoreCase(name, "skew") || text.eqlIgnoreCase(name, "skewX") || text.eqlIgnoreCase(name, "skewY") {
+        let ax = angleArg(parts[0]) orelse return null
+        var ay = 0.0
+        if n >= 2 {
+            ay = angleArg(parts[1]) orelse return null
+        }
+        if text.eqlIgnoreCase(name, "skewY") {
+            return Affine { a: 1.0, b: math.tan(ax), c: 0.0, d: 1.0, e: 0.0, f: 0.0 }
+        }
+        return Affine { a: 1.0, b: math.tan(ay), c: math.tan(ax), d: 1.0, e: 0.0, f: 0.0 }
+    }
+    if text.eqlIgnoreCase(name, "matrix") || text.eqlIgnoreCase(name, "matrix3d") {
+        if n != 6 && n != 16 {
+            return null
+        }
+        for k in 0..n {
+            nums[k] = numberArg(parts[k]) orelse return null
+        }
+        if n == 6 {
+            return Affine { a: nums[0], b: nums[1], c: nums[2], d: nums[3], e: nums[4], f: nums[5] }
+        }
+        return Affine { a: nums[0], b: nums[1], c: nums[4], d: nums[5], e: nums[12], f: nums[13] }
+    }
+    return null
+}
+
+// A rotation by `r` radians (clockwise on the screen), exact for
+// quarter turns.
+fn rotation(r: f64) Affine {
+    var cs = math.cos(r)
+    var sn = math.sin(r)
+    if math.abs(cs) < 0.000000001 {
+        cs = 0.0
+    }
+    if math.abs(sn) < 0.000000001 {
+        sn = 0.0
+    }
+    if math.abs(cs - 1.0) < 0.000000001 {
+        cs = 1.0
+    } else if math.abs(cs + 1.0) < 0.000000001 {
+        cs = -1.0
+    }
+    if math.abs(sn - 1.0) < 0.000000001 {
+        sn = 1.0
+    } else if math.abs(sn + 1.0) < 0.000000001 {
+        sn = -1.0
+    }
+    return Affine { a: cs, b: sn, c: -sn, d: cs, e: 0.0, f: 0.0 }
+}
+
+fn numberArg(s: []u8) ?f64 {
+    let n = text.parseFloat(s) catch return null
+    return n
+}
+
+// An angle in radians: deg, rad, grad, turn, or a bare 0.
+fn angleArg(s: []u8) ?f64 {
+    var k: usize = 0
+    while k < s.len && ((s[k] >= '0' && s[k] <= '9') || s[k] == '.' || s[k] == '-' || s[k] == '+') {
+        k += 1
+    }
+    if k == 0 {
+        return null
+    }
+    let n = text.parseFloat(s[..k]) catch return null
+    let unit = s[k..]
+    if text.eqlIgnoreCase(unit, "deg") {
+        return n * math.pi / 180.0
+    }
+    if text.eqlIgnoreCase(unit, "rad") {
+        return n
+    }
+    if text.eqlIgnoreCase(unit, "grad") {
+        return n * math.pi / 200.0
+    }
+    if text.eqlIgnoreCase(unit, "turn") {
+        return n * 2.0 * math.pi
+    }
+    if unit.len == 0 && n == 0.0 {
+        return 0.0
+    }
+    return null
+}
+
+// A length (percentages of `base`), or a `calc()` of a sum of lengths.
+fn lengthArg(s: []u8, base: f64, u: Units) ?f64 {
+    if text.startsWith(s, "calc(") && text.endsWith(s, ")") {
+        return calcSum(s[5..s.len - 1], base, u)
+    }
+    return trackLength(s, base, u)
+}
+
+// The terms of `a + b - c` (terms and operators separated by spaces;
+// a term may be `N * length` or `length * N`).
+fn calcSum(s: []u8, base: f64, u: Units) ?f64 {
+    var parts = [16][]u8{"", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}
+    let n = splitArgs(s, parts[..])
+    if n == 0 || n > 16 {
+        return null
+    }
+    var sum = 0.0
+    var sign = 1.0
+    var k: usize = 0
+    while k < n {
+        let p = parts[k]
+        if text.eql(p, "+") {
+            sign = 1.0
+            k += 1
+            continue
+        }
+        if text.eql(p, "-") {
+            sign = -1.0
+            k += 1
+            continue
+        }
+        var v = lengthArg(p, base, u)
+        if k + 2 < n && text.eql(parts[k + 1], "*") {
+            if v |l| {
+                v = l * (numberArg(parts[k + 2]) orelse return null)
+            } else {
+                v = (lengthArg(parts[k + 2], base, u) orelse return null) * (numberArg(p) orelse return null)
+            }
+            k += 2
+        } else if k + 2 < n && text.eql(parts[k + 1], "/") {
+            let d = numberArg(parts[k + 2]) orelse return null
+            if d == 0.0 {
+                return null
+            }
+            v = (v orelse return null) / d
+            k += 2
+        }
+        sum += sign * (v orelse return null)
+        sign = 1.0
+        k += 1
+    }
+    return sum
+}
+
+// `transform-origin`: up to two positions (keywords, lengths,
+// percentages of the box); the center when missing.
+fn parseOrigin(s: []u8, w: f64, h: f64, u: Units) [2]f64 {
+    var parts = [4][]u8{"", "", "", ""}
+    let n = splitArgs(s, parts[..])
+    var ox = w / 2.0
+    var oy = h / 2.0
+    if n == 0 || n > 3 {
+        return [2]f64{ox, oy}
+    }
+    // A single vertical keyword, or two values in either order of
+    // keywords.
+    var first = parts[0]
+    var second = ""
+    if n >= 2 {
+        second = parts[1]
+    }
+    if isVertical(first) || isHorizontal(second) {
+        let tmp = first
+        first = second
+        second = tmp
+    }
+    if first.len > 0 {
+        ox = originValue(first, w, u) orelse ox
+    }
+    if second.len > 0 {
+        oy = originValue(second, h, u) orelse oy
+    }
+    return [2]f64{ox, oy}
+}
+
+fn isVertical(s: []u8) bool {
+    return text.eqlIgnoreCase(s, "top") || text.eqlIgnoreCase(s, "bottom")
+}
+
+fn isHorizontal(s: []u8) bool {
+    return text.eqlIgnoreCase(s, "left") || text.eqlIgnoreCase(s, "right")
+}
+
+fn originValue(s: []u8, size: f64, u: Units) ?f64 {
+    if text.eqlIgnoreCase(s, "left") || text.eqlIgnoreCase(s, "top") {
+        return 0.0
+    }
+    if text.eqlIgnoreCase(s, "right") || text.eqlIgnoreCase(s, "bottom") {
+        return size
+    }
+    if text.eqlIgnoreCase(s, "center") {
+        return size / 2.0
+    }
+    return lengthArg(s, size, u)
+}

@@ -4,9 +4,10 @@
 // `background`, `list-style`, `overflow`, `text-decoration`, `inset`,
 // `gap`, `flex`, `flex-flow`, `grid-column`, `grid-row`, `grid-area`,
 // `grid-gap`) expand into their longhands. The grid track lists and
-// placements are kept as their text (`Raw`) for layout to read. An invalid
-// value drops the declaration. Absolute units (pt, pc, in, cm, mm, q)
-// become px here; `ex` and `ch` are taken as half an `em`.
+// placements and the transforms are kept as their text (`Raw`) for
+// layout to read. An invalid value drops the declaration. Absolute units
+// (pt, pc, in, cm, mm, q) become px here; `ex` and `ch` are taken as
+// half an `em`.
 //
 // Custom properties (`--name: tokens`) are kept as tokens. A value with
 // `var()` or a math function (`calc()`...) is kept as tokens too, for each

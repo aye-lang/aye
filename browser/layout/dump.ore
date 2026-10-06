@@ -16,7 +16,8 @@
 // indented below them) and atomic inlines (with their own subtree).
 // List items show their marker first. Floats and absolutely positioned
 // boxes say so after their size; those inside inline content follow
-// the lines.
+// the lines. A transform's linear part (`transform.ore`) follows as
+// `linear(a, b, c, d) at (x, y)`, its origin.
 
 import css
 import dom.Kind
@@ -62,6 +63,24 @@ fn dumpBox(t: *Tree, i: usize, depth: usize, out: *mut text.Builder) AllocError!
         try out.append(" absolute")
     } else if b.abs == 2 {
         try out.append(" fixed")
+    }
+    if b.xform |k| {
+        // The linear part of its transform that paint draws, and its
+        // origin.
+        let x = t.xforms.items()[k]
+        try out.append(" linear(")
+        let m = [4]f64{x.a, x.b, x.c, x.d}
+        for j in 0..4 {
+            if j > 0 {
+                try out.append(", ")
+            }
+            try css.writeNumber(m[j], out)
+        }
+        try out.append(") at (")
+        try css.writeNumber(b.ax + x.ox, out)
+        try out.append(", ")
+        try css.writeNumber(b.ay + x.oy, out)
+        try out.appendByte(')')
     }
     try out.appendByte('\n')
     let cx = b.ax + b.border[3] + b.padding[3]

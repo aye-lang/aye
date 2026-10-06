@@ -13,6 +13,8 @@
 // - grid.ore: grid (track lists, areas, line placement, auto-placement).
 // - float.ore: floats, clearance, lines and boxes beside floats.
 // - absolute.ore: absolutely positioned boxes, laid out last.
+// - transform.ore: CSS transforms, applied after layout.
+// - scroll.ore: fixed and sticky boxes following the scroll offset.
 // - markers.ore: list item markers.
 // - controls.ore: form controls (generated content, sizes) and images.
 // - dump.ore: the box tree as text (`anyknown dump --layout`).
@@ -32,8 +34,9 @@
 // Simplifications: an inline box that contains a block becomes a block
 // box; vertical-align is always `baseline`; table cells do not span
 // rows; border-spacing and border-collapse are ignored; `fixed` boxes
-// are positioned in the initial containing block (they stay on the
-// first screen); `sticky` is `relative` without offsets.
+// are positioned in the initial containing block and moved by
+// `scrollTo`, which also moves `sticky` boxes (else `relative` without
+// offsets).
 
 import css
 import css.Value
@@ -166,6 +169,12 @@ pub struct Box {
     has_intrinsic: bool
     min_w: f64
     max_w: f64
+    // The linear part of its transform that paint draws
+    // (`Tree.xforms`), if any.
+    xform: ?usize
+    // Fixed and sticky boxes: how far `scrollTo` moved the box and its
+    // subtree down.
+    scroll_dy: f64
 
     /// Is the box out of flow (a float, or absolutely positioned)?
     pub fn oof(self: *Self) bool {
@@ -242,6 +251,11 @@ pub struct Tree {
     // Absolutely positioned boxes, in tree order, laid out after the
     // rest.
     absolutes: List(usize)
+    // The linear parts of transforms (`Box.xform`), the fixed and sticky
+    // boxes in tree order, and the scroll offset they are at.
+    xforms: List(Xform)
+    scrolled: List(usize)
+    scroll_y: f64
 
     pub fn deinit(self: *mut Self) {
         self.arena.deinit()
@@ -296,6 +310,8 @@ pub struct Tree {
             has_intrinsic: false,
             min_w: 0.0,
             max_w: 0.0,
+            xform: null,
+            scroll_dy: 0.0,
         })
         return self.boxes.len() - 1
     }
@@ -338,6 +354,9 @@ pub fn layoutDocumentWith(alloc: Allocator, doc: *Document, styles: *css.Styles,
         fy: 0.0,
         hint_y: 0.0,
         absolutes: List(usize).init(a),
+        xforms: List(Xform).init(a),
+        scrolled: List(usize).init(a),
+        scroll_y: 0.0,
     }
     errdefer t.deinit()
     if doc.documentElement() |el| {
@@ -353,6 +372,9 @@ pub fn layoutDocumentWith(alloc: Allocator, doc: *Document, styles: *css.Styles,
                 try layoutRoot(&mut t, r)
                 place(&mut t, r, 0.0, 0.0)
                 try layoutAbsolutes(&mut t)
+                try applyTransforms(&mut t, r)
+                try collectScrolled(&mut t, r, false, false)
+                _ = scrollTo(&mut t, 0.0)
             }
         }
     }
