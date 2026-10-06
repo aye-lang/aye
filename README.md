@@ -219,7 +219,8 @@ imports one item. `std` is embedded in the compiler (sources in
 (`Allocator`, `AllocError`, `eql`, `copy`, `set`, `indexOf`), `std.heap`
 (`General`, `Arena`), `std.list` (`List(T)`), `std.map` (`StrMap(V)`,
 `IntMap(K, V)`), `std.text` (`Builder`, search, `split`, parsing, UTF-8),
-`std.math`, `std.pool` (`Pool(T)`, `Handle(T)`), `std.time`,
+`std.math`, `std.sort` (`sort(T, items, less)`), `std.pool` (`Pool(T)`,
+`Handle(T)`), `std.time`,
 `std.testing`, `std.log` (`err`, `info`) and `std.os` (`args`, `exit`).
 `ore spec` lists every function. Cyclic imports are an error.
 

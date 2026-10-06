@@ -1,0 +1,61 @@
+// std.sort: sorting a slice in place, ordered by a `less` function.
+
+/// Sorts `items` so that no element is `less` than the one before it.
+/// `less(a, b)` says whether `a` goes before `b`; it must be a strict
+/// order (`less(a, a)` is false). Not stable: equal elements may change
+/// places (break ties in `less`). Allocates nothing; O(n log n).
+pub fn sort(comptime T: type, items: []mut T, less: fn(T, T) bool) {
+    // Insertion sort is faster on short slices.
+    if items.len <= 12 {
+        insertion(T, items, less)
+        return
+    }
+    heapSort(T, items, less)
+}
+
+fn insertion(comptime T: type, items: []mut T, less: fn(T, T) bool) {
+    for i in 1..items.len {
+        let x = items[i]
+        var j = i
+        while j > 0 && less(x, items[j - 1]) {
+            items[j] = items[j - 1]
+            j -= 1
+        }
+        items[j] = x
+    }
+}
+
+fn heapSort(comptime T: type, items: []mut T, less: fn(T, T) bool) {
+    var start = items.len / 2
+    while start > 0 {
+        start -= 1
+        siftDown(T, items, start, items.len, less)
+    }
+    var end = items.len
+    while end > 1 {
+        end -= 1
+        let top = items[0]
+        items[0] = items[end]
+        items[end] = top
+        siftDown(T, items, 0, end, less)
+    }
+}
+
+// Restores the max-heap (the root is the element that goes last) below
+// `root` in `items[0..end]`.
+fn siftDown(comptime T: type, items: []mut T, root: usize, end: usize, less: fn(T, T) bool) {
+    var i = root
+    while i * 2 + 1 < end {
+        var child = i * 2 + 1
+        if child + 1 < end && less(items[child], items[child + 1]) {
+            child += 1
+        }
+        if !less(items[i], items[child]) {
+            return
+        }
+        let t = items[i]
+        items[i] = items[child]
+        items[child] = t
+        i = child
+    }
+}

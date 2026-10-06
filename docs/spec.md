@@ -1265,6 +1265,31 @@ std.math.clamp(x: f64, lo: f64, hi: f64) f64
 
 Only `f64`: Ore has no generic arithmetic. Convert with `as`.
 
+### std.sort
+
+```
+std.sort.sort(comptime T: type, items: []mut T, less: fn(T, T) bool)   in place, by less
+```
+
+`less(a, b)` says whether `a` goes before `b`, a strict order (`less(a, a)`
+is false). The sort is not stable (break ties in `less`), allocates
+nothing and takes O(n log n) time: insertion sort up to 12 elements, heap
+sort above. `less` is a function value (section 4): a top-level function.
+
+```ore
+import std
+
+fn byLen(a: []u8, b: []u8) bool {
+    return a.len < b.len
+}
+
+pub fn main() {
+    var words = [3][]u8{"ccc", "a", "bb"}
+    std.sort.sort([]u8, words[..], byLen)
+    @println(words[0])
+}
+```
+
 ### std.pool
 
 ```

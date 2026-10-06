@@ -1,0 +1,119 @@
+// std.sort.sort: generic, in place, ordered by a `less` function value.
+// Short slices (insertion sort) and long ones (heap sort), already sorted,
+// reversed and all-equal input, and structs ordered by two fields.
+
+import std
+import std.heap.General
+import std.mem.Allocator
+
+struct Point {
+    x: i64
+    y: i64
+}
+
+fn lessInt(a: i64, b: i64) bool {
+    return a < b
+}
+
+fn greaterInt(a: i64, b: i64) bool {
+    return a > b
+}
+
+// By x, then by y.
+fn lessPoint(a: Point, b: Point) bool {
+    if a.x != b.x {
+        return a.x < b.x
+    }
+    return a.y < b.y
+}
+
+fn printAll(xs: []i64) {
+    for x in xs {
+        @print(x)
+        @print(" ")
+    }
+    @println()
+}
+
+fn sorted(xs: []i64) bool {
+    for i in 1..xs.len {
+        if xs[i - 1] > xs[i] {
+            return false
+        }
+    }
+    return true
+}
+
+fn sum(xs: []i64) i64 {
+    var s: i64 = 0
+    for x in xs {
+        s += x
+    }
+    return s
+}
+
+// `n` pseudo-random values in 0..1000 (a linear congruential generator).
+fn random(alloc: Allocator, n: usize) ![]mut i64 {
+    let xs = try alloc.alloc(0 as i64, n)
+    var state: u64 = 12345
+    for i in 0..n {
+        state = state *% 6364136223846793005 +% 1442695040888963407
+        xs[i] = ((state >> 33) % 1000) as i64
+    }
+    return xs
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+
+    var empty = [0]i64{}
+    std.sort.sort(i64, empty[..], lessInt)
+    var one = [1]i64{4}
+    std.sort.sort(i64, one[..], lessInt)
+    printAll(one[..])
+
+    var small = [7]i64{5, -2, 9, 0, 5, 3, -7}
+    std.sort.sort(i64, small[..], lessInt)
+    printAll(small[..])
+    std.sort.sort(i64, small[..], greaterInt)
+    printAll(small[..])
+
+    let xs = try random(alloc, 1000)
+    defer alloc.free(xs)
+    let before = sum(xs)
+    std.sort.sort(i64, xs, lessInt)
+    @println(sorted(xs))
+    @println(sum(xs) == before)
+    @println(xs[0])
+    @println(xs[999])
+    // Already sorted, then reversed.
+    std.sort.sort(i64, xs, lessInt)
+    @println(sorted(xs))
+    std.sort.sort(i64, xs, greaterInt)
+    @println(xs[0] >= xs[999])
+    std.sort.sort(i64, xs, lessInt)
+    @println(sorted(xs))
+
+    let same = try alloc.alloc(3 as i64, 100)
+    defer alloc.free(same)
+    std.sort.sort(i64, same, lessInt)
+    @println(sum(same))
+
+    let points = try alloc.alloc(Point { x: 0, y: 0 }, 50)
+    defer alloc.free(points)
+    for i in 0..points.len {
+        points[i] = Point { x: (i % 5) as i64, y: (50 - i) as i64 }
+    }
+    std.sort.sort(Point, points, lessPoint)
+    var ok = true
+    for i in 1..points.len {
+        ok = ok && lessPoint(points[i - 1], points[i])
+    }
+    @println(ok)
+    @println(points[0].x)
+    @println(points[0].y)
+    @println(points[49].x)
+    @println(points[49].y)
+}
