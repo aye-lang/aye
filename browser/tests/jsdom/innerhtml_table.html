@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<title>Table fragments</title>
+<table><tbody id="rows"></tbody></table>
+<select id="pick"></select>
+<script>
+const rows = document.getElementById('rows');
+rows.innerHTML = '<tr><td>1</td><td>one</td></tr><tr><td>2</td><td>two</td></tr>';
+rows.lastElementChild.innerHTML = '<td>3</td><td>three</td>';
+document.getElementById('pick').innerHTML = '<option value="a">A</option><option value="b" selected>B</option>';
+</script>

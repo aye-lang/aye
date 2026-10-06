@@ -1,0 +1,1153 @@
+// The HTML tree builder: a WHATWG subset that never fails. It adds the
+// implied `html`, `head` and `body`, knows void elements, closes `p`,
+// `li`, `dd`/`dt`, `option` and table cells and rows when the next one
+// starts, and fixes misnested formatting tags (`<b><i></b></i>`) with the
+// adoption agency algorithm. Left out: foster parenting of text inside
+// tables, templates, frames, quirks mode (every document is parsed as
+// no-quirks: a `table` closes an open `p`), and the foreign-content rules
+// of SVG and MathML (except that `<x/>` inside `svg` or `math` closes
+// itself; names are lower-cased there too).
+
+import dom
+import dom.Attr
+import dom.Document
+import dom.NodeId
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+// ---- element sets, as space-separated names
+
+// Elements that may only appear in the head before the body starts.
+let HEAD_CONTENT = "base basefont bgsound link meta noframes script style template title"
+// Start tags that close an open `p` first.
+let CLOSES_P = "address article aside blockquote center details dialog dir div dl fieldset figcaption figure footer form header hgroup main menu nav ol p search section summary ul"
+// End tags that close an element of the same name in scope.
+let BLOCK_END = "address article aside blockquote button center details dialog dir div dl fieldset figcaption figure footer form header hgroup listing main menu nav ol pre search section summary ul"
+let HEADINGS = "h1 h2 h3 h4 h5 h6"
+let FORMATTING = "a b big code em font i nobr s small strike strong tt u"
+// Void elements: they never have content and have no end tag.
+let VOID = "area base basefont bgsound br col embed hr img input keygen link meta param source track wbr"
+// Elements whose end is implied by the start of a following element.
+let IMPLIED_END = "dd dt li optgroup option p rb rp rt rtc"
+// The "special" category: an unmatched end tag does not close past them.
+let SPECIAL = "address applet area article aside base basefont bgsound blockquote body br button caption center col colgroup dd details dir div dl dt embed fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hgroup hr html iframe img input keygen li link listing main marquee menu meta nav noembed noframes noscript object ol p param plaintext pre script search section select source style summary table tbody td template textarea tfoot th thead title tr track ul wbr xmp"
+// Elements that put a marker on the list of active formatting elements.
+let MARKERS = "applet caption marquee object td th"
+let TABLE_SECTIONS = "tbody tfoot thead"
+let CELLS = "td th"
+
+// Scopes: the elements that bound a search of the stack of open elements.
+let DEFAULT_SCOPE = "applet caption html table td th marquee object template"
+let BUTTON_SCOPE = "applet caption html table td th marquee object template button"
+let LIST_SCOPE = "applet caption html table td th marquee object template ol ul"
+let TABLE_SCOPE = "html table template"
+
+/// Is `name` one of the space-separated names of `set`?
+pub fn isIn(name: []u8, set: []u8) bool {
+    var words = text.split(set, " ")
+    while words.next() |w| {
+        if text.eql(w, name) {
+            return true
+        }
+    }
+    return false
+}
+
+/// Parses `src` (UTF-8) into a new document; free it with `deinit`.
+pub fn parse(alloc: Allocator, src: []u8) AllocError!Document {
+    let input = try normalize(alloc, src)
+    defer alloc.free(input)
+    var doc = try Document.init(alloc)
+    errdefer doc.deinit()
+    var tb = TreeBuilder {
+        doc: &mut doc,
+        open: List(NodeId).init(alloc),
+        active: List(Formatting).init(alloc),
+        mode: Mode.BeforeHtml,
+        html: null,
+        head: null,
+        body: null,
+        skip_newline: false,
+    }
+    defer tb.deinit()
+    var tokens = Tokenizer.init(alloc, input)
+    defer tokens.deinit()
+    while true {
+        let t = try tokens.next()
+        let done = match t {
+            .Eof => true
+            _ => false
+        }
+        if done {
+            break
+        }
+        try tb.process(t)
+    }
+    try tb.finish()
+    return doc
+}
+
+// Input preprocessing: CR LF and lone CR become LF, NUL becomes U+FFFD.
+fn normalize(alloc: Allocator, src: []u8) AllocError![]mut u8 {
+    var out = text.Builder.init(alloc)
+    errdefer out.deinit()
+    var i: usize = 0
+    while i < src.len {
+        let c = src[i]
+        if c == '\r' {
+            try out.appendByte('\n')
+            if i + 1 < src.len && src[i + 1] == '\n' {
+                i += 1
+            }
+        } else if c == 0 {
+            try out.appendChar(0xFFFD)
+        } else {
+            try out.appendByte(c)
+        }
+        i += 1
+    }
+    return out.toOwned()
+}
+
+enum Mode {
+    BeforeHtml
+    BeforeHead
+    InHead
+    AfterHead
+    InBody
+    // After `</body>`, and after `</html>`: comments go to the `html`
+    // element or the document, anything but whitespace returns to InBody.
+    AfterBody
+    AfterAfterBody
+}
+
+// An entry of the list of active formatting elements: an element, or a
+// marker (then `el` is unused).
+struct Formatting {
+    el: NodeId
+    marker: bool
+}
+
+struct TreeBuilder {
+    doc: *mut Document
+    // The stack of open elements; `html` at the bottom once it exists.
+    open: List(NodeId)
+    active: List(Formatting)
+    mode: Mode
+    html: ?NodeId
+    head: ?NodeId
+    body: ?NodeId
+    // A newline right after `<pre>`, `<listing>` or `<textarea>` is dropped.
+    skip_newline: bool
+
+    fn deinit(self: *mut Self) {
+        self.open.deinit()
+        self.active.deinit()
+    }
+
+    // At the end of the input: the implied html, head and body that are
+    // still missing (an empty document has all three).
+    fn finish(self: *mut Self) AllocError!void {
+        while true {
+            match self.mode {
+                .BeforeHtml => {
+                    try self.impliedHtml()
+                }
+                .BeforeHead => {
+                    try self.impliedHead()
+                }
+                .InHead => self.leaveHead()
+                .AfterHead => {
+                    try self.impliedBody()
+                }
+                _ => {
+                    return
+                }
+            }
+        }
+    }
+
+    fn process(self: *mut Self, t: Token) AllocError!void {
+        let skip = self.skip_newline
+        self.skip_newline = false
+        if self.mode == Mode.AfterBody || self.mode == Mode.AfterAfterBody {
+            if try self.afterBody(t) {
+                return
+            }
+            self.mode = Mode.InBody
+        }
+        match t {
+            .Doctype { name } => {
+                if self.html == null {
+                    let d = try self.doc.createDoctype(name)
+                    self.doc.appendChild(self.doc.root, d)
+                }
+            }
+            .Comment { data } => {
+                let c = try self.doc.createComment(data)
+                if self.html == null {
+                    self.doc.appendChild(self.doc.root, c)
+                } else {
+                    self.doc.appendChild(self.current(), c)
+                }
+            }
+            .Text { data } => {
+                if skip && text.startsWith(data, "\n") {
+                    try self.characters(data[1..])
+                } else {
+                    try self.characters(data)
+                }
+            }
+            .StartTag { name, attrs, self_closing } => {
+                try self.startTag(name, attrs, self_closing)
+            }
+            .EndTag { name } => {
+                try self.endTag(name)
+            }
+            .Eof => {}
+        }
+    }
+
+    // A token after `</body>` or `</html>`; false when it is content that
+    // goes back to the body.
+    fn afterBody(self: *mut Self, t: Token) AllocError!bool {
+        match t {
+            .Doctype { name } => {
+                return true
+            }
+            .Comment { data } => {
+                let c = try self.doc.createComment(data)
+                if self.mode == Mode.AfterBody {
+                    if self.html |h| {
+                        self.doc.appendChild(h, c)
+                    }
+                } else {
+                    self.doc.appendChild(self.doc.root, c)
+                }
+                return true
+            }
+            .Text { data } => {
+                if leadingSpace(data) < data.len {
+                    return false
+                }
+                let mode = self.mode
+                self.mode = Mode.InBody
+                try self.characters(data)
+                self.mode = mode
+                return true
+            }
+            .StartTag { name, attrs, self_closing } => {
+                if text.eql(name, "html") {
+                    try self.mergeAttrs(self.html, attrs)
+                    return true
+                }
+                return false
+            }
+            .EndTag { name } => {
+                if text.eql(name, "html") && self.mode == Mode.AfterBody {
+                    self.mode = Mode.AfterAfterBody
+                    return true
+                }
+                return false
+            }
+            .Eof => {
+                return true
+            }
+        }
+        return true
+    }
+
+    // ---- text
+
+    fn characters(self: *mut Self, data: []u8) AllocError!void {
+        var s = data
+        while true {
+            match self.mode {
+                .BeforeHtml => {
+                    s = s[leadingSpace(s)..]
+                    if s.len == 0 {
+                        return
+                    }
+                    try self.impliedHtml()
+                }
+                .BeforeHead => {
+                    s = s[leadingSpace(s)..]
+                    if s.len == 0 {
+                        return
+                    }
+                    try self.impliedHead()
+                }
+                .InHead => {
+                    let rest = try self.textNearHead(s)
+                    if rest |r| {
+                        s = r
+                        self.leaveHead()
+                    } else {
+                        return
+                    }
+                }
+                .AfterHead => {
+                    let rest = try self.textNearHead(s)
+                    if rest |r| {
+                        s = r
+                        try self.impliedBody()
+                    } else {
+                        return
+                    }
+                }
+                _ => {
+                    if s.len == 0 {
+                        return
+                    }
+                    try self.reconstruct()
+                    return self.doc.appendText(self.current(), s)
+                }
+            }
+        }
+    }
+
+    // Text in or after the head: inside `title`, `style` or `script` it is
+    // their content; else leading whitespace stays here and the rest, if
+    // any, is returned to go into the body.
+    fn textNearHead(self: *mut Self, s: []u8) AllocError!?[]u8 {
+        if !self.currentIs("head") && !self.currentIs("html") {
+            try self.doc.appendText(self.current(), s)
+            return null
+        }
+        let n = leadingSpace(s)
+        try self.doc.appendText(self.current(), s[..n])
+        if n == s.len {
+            return null
+        }
+        return s[n..]
+    }
+
+    // ---- start tags
+
+    fn startTag(self: *mut Self, name: []u8, attrs: []Attr, self_closing: bool) AllocError!void {
+        while true {
+            match self.mode {
+                .BeforeHtml => {
+                    if text.eql(name, "html") {
+                        let h = try self.doc.createElement(name, attrs)
+                        self.doc.appendChild(self.doc.root, h)
+                        try self.open.append(h)
+                        self.html = h
+                        self.mode = Mode.BeforeHead
+                        return
+                    }
+                    try self.impliedHtml()
+                }
+                .BeforeHead => {
+                    if text.eql(name, "html") {
+                        return self.mergeAttrs(self.html, attrs)
+                    }
+                    if text.eql(name, "head") {
+                        self.head = try self.insert(name, attrs)
+                        self.mode = Mode.InHead
+                        return
+                    }
+                    try self.impliedHead()
+                }
+                .InHead => {
+                    if text.eql(name, "html") {
+                        return self.mergeAttrs(self.html, attrs)
+                    }
+                    if text.eql(name, "head") {
+                        return
+                    }
+                    if isIn(name, HEAD_CONTENT) {
+                        let el = try self.insertMaybeVoid(name, attrs)
+                        return
+                    }
+                    self.leaveHead()
+                }
+                .AfterHead => {
+                    if text.eql(name, "html") {
+                        return self.mergeAttrs(self.html, attrs)
+                    }
+                    if text.eql(name, "body") {
+                        self.body = try self.insert(name, attrs)
+                        self.mode = Mode.InBody
+                        return
+                    }
+                    if text.eql(name, "head") {
+                        return
+                    }
+                    if isIn(name, HEAD_CONTENT) {
+                        // Into the head after all; the head is reopened
+                        // only for this element.
+                        if self.head |h| {
+                            try self.open.append(h)
+                            let el = try self.insertMaybeVoid(name, attrs)
+                            self.removeFromStack(h)
+                            return
+                        }
+                    }
+                    try self.impliedBody()
+                }
+                _ => {
+                    return self.inBodyStart(name, attrs, self_closing)
+                }
+            }
+        }
+    }
+
+    fn inBodyStart(self: *mut Self, name: []u8, attrs: []Attr, self_closing: bool) AllocError!void {
+        if text.eql(name, "html") {
+            return self.mergeAttrs(self.html, attrs)
+        }
+        if text.eql(name, "body") {
+            return self.mergeAttrs(self.body, attrs)
+        }
+        if text.eql(name, "head") || text.eql(name, "frameset") {
+            return
+        }
+        if isIn(name, HEAD_CONTENT) {
+            let el = try self.insertMaybeVoid(name, attrs)
+            return
+        }
+        if isIn(name, CLOSES_P) {
+            try self.closeP()
+            let el = try self.insert(name, attrs)
+            return
+        }
+        if isIn(name, HEADINGS) {
+            try self.closeP()
+            if isIn(self.currentName(), HEADINGS) {
+                self.pop()
+            }
+            let el = try self.insert(name, attrs)
+            return
+        }
+        if text.eql(name, "pre") || text.eql(name, "listing") {
+            try self.closeP()
+            let el = try self.insert(name, attrs)
+            self.skip_newline = true
+            return
+        }
+        if text.eql(name, "li") {
+            try self.closeListItem("li")
+            try self.closeP()
+            let el = try self.insert(name, attrs)
+            return
+        }
+        if text.eql(name, "dd") || text.eql(name, "dt") {
+            try self.closeListItem("dd dt")
+            try self.closeP()
+            let el = try self.insert(name, attrs)
+            return
+        }
+        if text.eql(name, "plaintext") || text.eql(name, "xmp") || text.eql(name, "table") {
+            try self.closeP()
+            try self.reconstruct()
+            let el = try self.insert(name, attrs)
+            return
+        }
+        if text.eql(name, "hr") {
+            try self.closeP()
+            let el = try self.insertVoid(name, attrs)
+            return
+        }
+        if text.eql(name, "button") {
+            if self.hasInScope("button", DEFAULT_SCOPE) {
+                self.generateImpliedEnd("")
+                self.popUntil("button")
+            }
+            try self.reconstruct()
+            let el = try self.insert(name, attrs)
+            return
+        }
+        if text.eql(name, "a") {
+            // An `a` inside an open `a` closes it first.
+            if self.lastActive("a") |i| {
+                let old = self.active.items()[i].el
+                try self.adoption("a")
+                self.removeFromActive(old)
+                self.removeFromStack(old)
+            }
+        }
+        if isIn(name, FORMATTING) {
+            try self.reconstruct()
+            let el = try self.insert(name, attrs)
+            self.noahsArk(el)
+            try self.active.append(Formatting { el: el, marker: false })
+            return
+        }
+        if text.eql(name, "applet") || text.eql(name, "marquee") || text.eql(name, "object") {
+            try self.reconstruct()
+            let el = try self.insert(name, attrs)
+            try self.pushMarker()
+            return
+        }
+        if text.eql(name, "image") {
+            try self.reconstruct()
+            let el = try self.insertVoid("img", attrs)
+            return
+        }
+        if isIn(name, VOID) {
+            try self.reconstruct()
+            let el = try self.insertVoid(name, attrs)
+            return
+        }
+        if text.eql(name, "textarea") {
+            let el = try self.insert(name, attrs)
+            self.skip_newline = true
+            return
+        }
+        if text.eql(name, "option") || text.eql(name, "optgroup") {
+            if self.currentIs("option") {
+                self.pop()
+            }
+            if text.eql(name, "optgroup") && self.currentIs("optgroup") {
+                self.pop()
+            }
+            try self.reconstruct()
+            let el = try self.insert(name, attrs)
+            return
+        }
+        if isIn(name, "caption colgroup col tbody tfoot thead tr td th") {
+            return self.tablePartStart(name, attrs)
+        }
+        // Any other element.
+        try self.reconstruct()
+        if self_closing && (isIn(name, "svg math") || self.inForeign()) {
+            let el = try self.insertVoid(name, attrs)
+            return
+        }
+        let el = try self.insert(name, attrs)
+    }
+
+    // The parts of a table. Without a table in scope they are ignored;
+    // missing `tbody` and `tr` elements are added.
+    fn tablePartStart(self: *mut Self, name: []u8, attrs: []Attr) AllocError!void {
+        if !self.hasInScope("table", TABLE_SCOPE) {
+            return
+        }
+        if text.eql(name, "caption") || text.eql(name, "colgroup") {
+            self.clearToContext("table")
+            let el = try self.insert(name, attrs)
+            if text.eql(name, "caption") {
+                try self.pushMarker()
+            }
+            return
+        }
+        if text.eql(name, "col") {
+            let el = try self.insertVoid(name, attrs)
+            return
+        }
+        if isIn(name, TABLE_SECTIONS) {
+            if self.hasInScope(TABLE_SECTIONS, TABLE_SCOPE) {
+                self.popUntil(TABLE_SECTIONS)
+            }
+            self.clearToContext("table")
+            let el = try self.insert(name, attrs)
+            return
+        }
+        if text.eql(name, "tr") {
+            if self.hasInScope("tr", TABLE_SCOPE) {
+                self.popUntil("tr")
+            }
+            self.clearToContext("table tbody tfoot thead")
+            if self.currentIs("table") {
+                let implied = try self.insert("tbody", []Attr{})
+            }
+            let el = try self.insert(name, attrs)
+            return
+        }
+        // td, th
+        if self.hasInScope(CELLS, TABLE_SCOPE) {
+            self.generateImpliedEnd("")
+            self.popUntil(CELLS)
+        }
+        self.clearToContext("table tbody tfoot thead tr")
+        if self.currentIs("table") {
+            let implied_body = try self.insert("tbody", []Attr{})
+        }
+        if isIn(self.currentName(), TABLE_SECTIONS) {
+            let implied_row = try self.insert("tr", []Attr{})
+        }
+        let el = try self.insert(name, attrs)
+        try self.pushMarker()
+    }
+
+    // ---- end tags
+
+    fn endTag(self: *mut Self, name: []u8) AllocError!void {
+        let ends_head = isIn(name, "head body html br")
+        while true {
+            match self.mode {
+                .BeforeHtml => {
+                    if !ends_head {
+                        return
+                    }
+                    try self.impliedHtml()
+                }
+                .BeforeHead => {
+                    if !ends_head {
+                        return
+                    }
+                    try self.impliedHead()
+                }
+                .InHead => {
+                    if text.eql(name, "head") {
+                        self.leaveHead()
+                        return
+                    }
+                    if ends_head {
+                        self.leaveHead()
+                    } else {
+                        if self.currentIs(name) && !self.currentIs("head") {
+                            self.pop()
+                        }
+                        return
+                    }
+                }
+                .AfterHead => {
+                    if !ends_head || text.eql(name, "head") {
+                        if self.currentIs(name) && !self.currentIs("html") {
+                            self.pop()
+                        }
+                        return
+                    }
+                    try self.impliedBody()
+                }
+                _ => {
+                    return self.inBodyEnd(name)
+                }
+            }
+        }
+    }
+
+    fn inBodyEnd(self: *mut Self, name: []u8) AllocError!void {
+        // The body stays open: content after `</body>` and `</html>` (other
+        // than comments) still goes into it.
+        if text.eql(name, "body") || text.eql(name, "html") {
+            if self.hasInScope("body", DEFAULT_SCOPE) {
+                self.mode = Mode.AfterBody
+                if text.eql(name, "html") {
+                    self.mode = Mode.AfterAfterBody
+                }
+            }
+            return
+        }
+        if text.eql(name, "head") {
+            return
+        }
+        if text.eql(name, "p") {
+            if !self.hasInScope("p", BUTTON_SCOPE) {
+                // `</p>` without a `p` makes an empty one.
+                let el = try self.insertVoid("p", []Attr{})
+                return
+            }
+            return self.closeP()
+        }
+        if text.eql(name, "br") {
+            try self.reconstruct()
+            let el = try self.insertVoid("br", []Attr{})
+            return
+        }
+        if text.eql(name, "li") {
+            if self.hasInScope("li", LIST_SCOPE) {
+                self.generateImpliedEnd("li")
+                self.popUntil("li")
+            }
+            return
+        }
+        if isIn(name, HEADINGS) {
+            if self.hasInScope(HEADINGS, DEFAULT_SCOPE) {
+                self.generateImpliedEnd("")
+                self.popUntil(HEADINGS)
+            }
+            return
+        }
+        if isIn(name, FORMATTING) {
+            return self.adoption(name)
+        }
+        if isIn(name, "table tbody tfoot thead tr td th caption") {
+            if self.hasInScope(name, TABLE_SCOPE) {
+                self.generateImpliedEnd("")
+                self.popUntil(name)
+            }
+            return
+        }
+        if isIn(name, BLOCK_END) || isIn(name, "dd dt applet marquee object select") {
+            if self.hasInScope(name, DEFAULT_SCOPE) {
+                self.generateImpliedEnd(name)
+                self.popUntil(name)
+            }
+            return
+        }
+        self.anyOtherEnd(name)
+    }
+
+    // An end tag without rules of its own: closes the nearest open
+    // element of that name, unless a special element is in the way.
+    fn anyOtherEnd(self: *mut Self, name: []u8) {
+        var i = self.open.len()
+        while i > 1 {
+            i -= 1
+            let h = self.open.items()[i]
+            let n = self.doc.node(h).name
+            if text.eql(n, name) {
+                self.generateImpliedEnd(name)
+                self.popUntilNode(h)
+                return
+            }
+            if isIn(n, SPECIAL) {
+                return
+            }
+        }
+    }
+
+    // ---- the adoption agency algorithm (WHATWG 13.2.6.4.7)
+
+    // For the end tag `subject` of a formatting element: closes it even
+    // when other elements were opened inside it and are still open, by
+    // splitting them so the tree stays a tree. `<b>1<p>2</b>3</p>` gives
+    // `<b>1</b><p><b>2</b>3</p>`.
+    fn adoption(self: *mut Self, subject: []u8) AllocError!void {
+        let cur = self.current()
+        if self.doc.isElement(cur, subject) && self.activeIndex(cur) == null {
+            self.pop()
+            return
+        }
+        var outer = 0
+        while outer < 8 {
+            outer += 1
+            var fi: usize = 0
+            if self.lastActive(subject) |i| {
+                fi = i
+            } else {
+                self.anyOtherEnd(subject)
+                return
+            }
+            let fe = self.active.items()[fi].el
+            var si: usize = 0
+            if self.stackIndex(fe) |i| {
+                si = i
+            } else {
+                self.active.orderedRemove(fi)
+                return
+            }
+            if !self.inScopeAt(si) {
+                return
+            }
+            // The furthest block: the first special element opened inside
+            // the formatting element.
+            var fb: ?usize = null
+            for k in si + 1..self.open.len() {
+                if fb == null && isIn(self.doc.node(self.open.items()[k]).name, SPECIAL) {
+                    fb = k
+                }
+            }
+            var fbi: usize = 0
+            if fb |k| {
+                fbi = k
+            } else {
+                self.popUntilNode(fe)
+                self.removeFromActive(fe)
+                return
+            }
+            let furthest = self.open.items()[fbi]
+            let common = self.open.items()[si - 1]
+            var bookmark = fi
+            var last_node = furthest
+            var node_i = fbi
+            var inner = 0
+            while true {
+                inner += 1
+                node_i -= 1
+                let nd = self.open.items()[node_i]
+                if dom.same(nd, fe) {
+                    break
+                }
+                var ai = self.activeIndex(nd)
+                if inner > 3 {
+                    if ai |i| {
+                        self.active.orderedRemove(i)
+                        if i < bookmark {
+                            bookmark -= 1
+                        }
+                        ai = null
+                    }
+                }
+                if ai |i| {
+                    let el = try self.cloneElement(nd)
+                    self.active.items()[i] = Formatting { el: el, marker: false }
+                    self.open.items()[node_i] = el
+                    if dom.same(last_node, furthest) {
+                        bookmark = i + 1
+                    }
+                    self.doc.appendChild(el, last_node)
+                    last_node = el
+                } else {
+                    self.open.orderedRemove(node_i)
+                }
+            }
+            self.doc.appendChild(common, last_node)
+            let neo = try self.cloneElement(fe)
+            while self.doc.firstChild(furthest) |c| {
+                self.doc.appendChild(neo, c)
+            }
+            self.doc.appendChild(furthest, neo)
+            if self.activeIndex(fe) |i| {
+                self.active.orderedRemove(i)
+                if i < bookmark {
+                    bookmark -= 1
+                }
+            }
+            try self.active.insert(bookmark, Formatting { el: neo, marker: false })
+            self.removeFromStack(fe)
+            if self.stackIndex(furthest) |i| {
+                try self.open.insert(i + 1, neo)
+            }
+        }
+    }
+
+    // A new element with the name and attributes of `h`.
+    fn cloneElement(self: *mut Self, h: NodeId) AllocError!NodeId {
+        let n = self.doc.node(h)
+        let name = n.name
+        let attrs = n.attrs
+        return self.doc.createElement(name, attrs)
+    }
+
+    // ---- the list of active formatting elements
+
+    fn pushMarker(self: *mut Self) AllocError!void {
+        return self.active.append(Formatting { el: self.doc.root, marker: true })
+    }
+
+    // Removes the entries up to and including the last marker.
+    fn clearToMarker(self: *mut Self) {
+        while self.active.pop() |e| {
+            if e.marker {
+                return
+            }
+        }
+    }
+
+    // The index of the last element named `name` after the last marker.
+    fn lastActive(self: *Self, name: []u8) ?usize {
+        let items = self.active.items()
+        var i = items.len
+        while i > 0 {
+            i -= 1
+            if items[i].marker {
+                return null
+            }
+            if self.doc.isElement(items[i].el, name) {
+                return i
+            }
+        }
+        return null
+    }
+
+    // Before `el` joins the list: at most three equal entries (same name
+    // and attributes) after the last marker, so that `<b><b><b><b>...`
+    // does not reopen every one of them.
+    fn noahsArk(self: *mut Self, el: NodeId) {
+        let items = self.active.items()
+        var count = 0
+        var earliest: usize = 0
+        var i = items.len
+        while i > 0 {
+            i -= 1
+            if items[i].marker {
+                break
+            }
+            if self.equalElements(items[i].el, el) {
+                count += 1
+                earliest = i
+            }
+        }
+        if count >= 3 {
+            self.active.orderedRemove(earliest)
+        }
+    }
+
+    // Same tag name and the same attributes (in any order)?
+    fn equalElements(self: *Self, a: NodeId, b: NodeId) bool {
+        let x = self.doc.node(a)
+        let y = self.doc.node(b)
+        if !text.eql(x.name, y.name) || x.attrs.len != y.attrs.len {
+            return false
+        }
+        for at in x.attrs {
+            if self.doc.attr(b, at.name) |v| {
+                if !text.eql(v, at.value) {
+                    return false
+                }
+            } else {
+                return false
+            }
+        }
+        return true
+    }
+
+    fn activeIndex(self: *Self, h: NodeId) ?usize {
+        for i, e in self.active.items() {
+            if !e.marker && dom.same(e.el, h) {
+                return i
+            }
+        }
+        return null
+    }
+
+    fn removeFromActive(self: *mut Self, h: NodeId) {
+        if self.activeIndex(h) |i| {
+            self.active.orderedRemove(i)
+        }
+    }
+
+    // Reopens the formatting elements that were closed implicitly, so that
+    // `<b>1<p>2</b>3` keeps `3` out of bold but `<p><b>1</p>2` keeps `2` in
+    // bold: the entries after the last marker that are no longer open are
+    // copied and opened again, in order.
+    fn reconstruct(self: *mut Self) AllocError!void {
+        let n = self.active.len()
+        if n == 0 {
+            return
+        }
+        let last = self.active.items()[n - 1]
+        if last.marker || self.stackIndex(last.el) != null {
+            return
+        }
+        var i = n - 1
+        while i > 0 {
+            let e = self.active.items()[i - 1]
+            if e.marker || self.stackIndex(e.el) != null {
+                break
+            }
+            i -= 1
+        }
+        for k in i..n {
+            let old = self.active.items()[k].el
+            let el = try self.cloneElement(old)
+            self.doc.appendChild(self.current(), el)
+            try self.open.append(el)
+            self.active.items()[k] = Formatting { el: el, marker: false }
+        }
+    }
+
+    // ---- the stack of open elements
+
+    fn current(self: *Self) NodeId {
+        let items = self.open.items()
+        if items.len == 0 {
+            return self.doc.root
+        }
+        return items[items.len - 1]
+    }
+
+    fn currentName(self: *Self) []u8 {
+        return self.doc.node(self.current()).name
+    }
+
+    fn currentIs(self: *Self, name: []u8) bool {
+        return self.doc.isElement(self.current(), name)
+    }
+
+    // Pops the current node (never `html`). Closing a cell, caption or
+    // object also clears the formatting elements opened inside it.
+    fn pop(self: *mut Self) {
+        if self.open.len() <= 1 {
+            return
+        }
+        if self.open.pop() |h| {
+            if isIn(self.doc.node(h).name, MARKERS) {
+                self.clearToMarker()
+            }
+        }
+    }
+
+    // Pops elements until one named in `set` has been popped.
+    fn popUntil(self: *mut Self, set: []u8) {
+        while self.open.len() > 1 {
+            let done = isIn(self.currentName(), set)
+            self.pop()
+            if done {
+                return
+            }
+        }
+    }
+
+    fn popUntilNode(self: *mut Self, h: NodeId) {
+        while self.open.len() > 1 {
+            let done = dom.same(self.current(), h)
+            self.pop()
+            if done {
+                return
+            }
+        }
+    }
+
+    // Pops until the current node is named in `set` (or is `html`).
+    fn clearToContext(self: *mut Self, set: []u8) {
+        while self.open.len() > 1 && !isIn(self.currentName(), set) {
+            self.pop()
+        }
+    }
+
+    fn stackIndex(self: *Self, h: NodeId) ?usize {
+        for i, e in self.open.items() {
+            if dom.same(e, h) {
+                return i
+            }
+        }
+        return null
+    }
+
+    fn removeFromStack(self: *mut Self, h: NodeId) {
+        if self.stackIndex(h) |i| {
+            self.open.orderedRemove(i)
+        }
+    }
+
+    // Is an element named in `targets` open, with no element named in
+    // `boundary` above it?
+    fn hasInScope(self: *Self, targets: []u8, boundary: []u8) bool {
+        let items = self.open.items()
+        var i = items.len
+        while i > 0 {
+            i -= 1
+            let n = self.doc.node(items[i]).name
+            if isIn(n, targets) {
+                return true
+            }
+            if isIn(n, boundary) {
+                return false
+            }
+        }
+        return false
+    }
+
+    // Is the open element at index `si` in the default scope?
+    fn inScopeAt(self: *Self, si: usize) bool {
+        let items = self.open.items()
+        for k in si + 1..items.len {
+            if isIn(self.doc.node(items[k]).name, DEFAULT_SCOPE) {
+                return false
+            }
+        }
+        return true
+    }
+
+    // Pops the elements whose end is implied (`p`, `li`, `option`, ...),
+    // except one named `except`.
+    fn generateImpliedEnd(self: *mut Self, except: []u8) {
+        while isIn(self.currentName(), IMPLIED_END) && !self.currentIs(except) {
+            self.pop()
+        }
+    }
+
+    fn closeP(self: *mut Self) AllocError!void {
+        if self.hasInScope("p", BUTTON_SCOPE) {
+            self.generateImpliedEnd("p")
+            self.popUntil("p")
+        }
+    }
+
+    // Before a new `li` (or `dd`/`dt`): closes the open one, unless a
+    // special element other than `address`, `div` and `p` is in the way.
+    fn closeListItem(self: *mut Self, names: []u8) AllocError!void {
+        var i = self.open.len()
+        while i > 0 {
+            i -= 1
+            let n = self.doc.node(self.open.items()[i]).name
+            if isIn(n, names) {
+                self.generateImpliedEnd(n)
+                self.popUntil(n)
+                return
+            }
+            if isIn(n, SPECIAL) && !isIn(n, "address div p") {
+                return
+            }
+        }
+    }
+
+    fn inForeign(self: *Self) bool {
+        for h in self.open.items() {
+            if isIn(self.doc.node(h).name, "svg math") {
+                return true
+            }
+        }
+        return false
+    }
+
+    // ---- inserting
+
+    // A new element appended to the current node and pushed.
+    fn insert(self: *mut Self, name: []u8, attrs: []Attr) AllocError!NodeId {
+        let el = try self.doc.createElement(name, attrs)
+        self.doc.appendChild(self.current(), el)
+        try self.open.append(el)
+        return el
+    }
+
+    // A new element appended to the current node, not pushed.
+    fn insertVoid(self: *mut Self, name: []u8, attrs: []Attr) AllocError!NodeId {
+        let el = try self.doc.createElement(name, attrs)
+        self.doc.appendChild(self.current(), el)
+        return el
+    }
+
+    fn insertMaybeVoid(self: *mut Self, name: []u8, attrs: []Attr) AllocError!NodeId {
+        if isIn(name, VOID) {
+            return self.insertVoid(name, attrs)
+        }
+        return self.insert(name, attrs)
+    }
+
+    // Adds the attributes of `attrs` that `target` does not have yet
+    // (a second `<html>` or `<body>` tag).
+    fn mergeAttrs(self: *mut Self, target: ?NodeId, attrs: []Attr) AllocError!void {
+        if target |t| {
+            for a in attrs {
+                if self.doc.attr(t, a.name) == null {
+                    try self.doc.setAttr(t, a.name, a.value)
+                }
+            }
+        }
+    }
+
+    fn impliedHtml(self: *mut Self) AllocError!void {
+        let h = try self.doc.createElement("html", []Attr{})
+        self.doc.appendChild(self.doc.root, h)
+        try self.open.append(h)
+        self.html = h
+        self.mode = Mode.BeforeHead
+    }
+
+    fn impliedHead(self: *mut Self) AllocError!void {
+        self.head = try self.insert("head", []Attr{})
+        self.mode = Mode.InHead
+    }
+
+    // Pops the head (and anything left open inside it).
+    fn leaveHead(self: *mut Self) {
+        if self.head |h| {
+            if self.stackIndex(h) != null {
+                self.popUntilNode(h)
+            }
+        }
+        self.mode = Mode.AfterHead
+    }
+
+    fn impliedBody(self: *mut Self) AllocError!void {
+        self.body = try self.insert("body", []Attr{})
+        self.mode = Mode.InBody
+    }
+}
+
+// The number of HTML whitespace bytes at the start of `s`.
+fn leadingSpace(s: []u8) usize {
+    var n: usize = 0
+    while n < s.len && (s[n] == ' ' || s[n] == '\t' || s[n] == '\n' || s[n] == '\x0C') {
+        n += 1
+    }
+    return n
+}

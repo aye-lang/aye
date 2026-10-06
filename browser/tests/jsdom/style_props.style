@@ -1,0 +1,28 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <title>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <div id="d" style="color: red; background-color: rgb(0, 128, 0); padding-left: 5px;">
+      display: block
+      color: rgb(255, 0, 0)
+      background-color: rgb(0, 128, 0)
+      padding-left: 5px
+    <div id="e" style="width: 50px; display: flex;">
+      display: flex
+      width: 50px
+    <pre id="out">
+      display: block
+      font-family: monospace
+      margin-top: 16px
+      margin-bottom: 16px
+      white-space: pre
+    <script>
+      display: none

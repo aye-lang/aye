@@ -1,0 +1,26 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      "\n"
+      <meta name="a" content="1">
+      "\n"
+      <meta name="b" content="2">
+      <title>
+        "Title after head"
+    "\n\n\n"
+    <!--  comment between head and body  -->
+    "\n"
+    <body>
+      "\n"
+      <p>
+        "Body text"
+      "\n"
+      <link rel="x" href="y">
+      "\n"
+      <title>
+        "title in body"
+      "\n"
+      <style>
+        "body{}"
+      "\n\n\n"

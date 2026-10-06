@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>To do</title>
+<style>
+  .done label { text-decoration: line-through; color: gray }
+  .hidden { display: none }
+</style>
+</head>
+<body>
+<h1>To do</h1>
+<form id="add">
+  <label>New item <input id="text" name="text" autocomplete="off"></label>
+  <button>Add</button>
+</form>
+<ul id="items"></ul>
+<p id="summary">Nothing to do.</p>
+<p id="saved" class="hidden" role="status">Saved</p>
+<script>
+const items = JSON.parse(localStorage.getItem('todo') || '[]');
+const list = document.getElementById('items');
+const field = document.getElementById('text');
+let savedTimer = 0;
+
+function save() {
+  localStorage.setItem('todo', JSON.stringify(items));
+  const saved = document.getElementById('saved');
+  saved.classList.add('hidden');
+  clearTimeout(savedTimer);
+  savedTimer = setTimeout(() => saved.classList.remove('hidden'), 300);
+}
+
+function render() {
+  list.innerHTML = '';
+  items.forEach((item, i) => {
+    const li = document.createElement('li');
+    li.className = item.done ? 'done' : '';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.id = 'item' + i;
+    box.checked = item.done;
+    box.addEventListener('change', () => { item.done = box.checked; save(); render(); });
+    const label = document.createElement('label');
+    label.htmlFor = box.id;
+    label.textContent = item.text;
+    const remove = document.createElement('button');
+    remove.textContent = 'Delete ' + item.text;
+    remove.onclick = () => { items.splice(i, 1); save(); render(); };
+    li.append(box, ' ', label, ' ', remove);
+    list.appendChild(li);
+  });
+  const left = items.filter(item => !item.done).length;
+  document.getElementById('summary').textContent =
+    items.length === 0 ? 'Nothing to do.' : `${left} of ${items.length} left`;
+  document.title = items.length === 0 ? 'To do' : `To do (${left})`;
+}
+
+document.getElementById('add').addEventListener('submit', e => {
+  e.preventDefault();
+  const t = field.value.trim();
+  if (t === '') return;
+  items.push({ text: t, done: false });
+  field.value = '';
+  save();
+  render();
+});
+
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+- heading "Hidden things" [level=1] [e1]
+- paragraph: Visible paragraph.
+- text: But this is visible.
+- paragraph: Last visible paragraph.

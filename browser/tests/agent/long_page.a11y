@@ -1,0 +1,16 @@
+- main
+  - heading "Top" [level=1] [e1]
+  - paragraph
+    - link "Near the top" [e2] -> #middle
+  - paragraph: Filler one.
+  - paragraph: Filler two.
+  - heading "Middle" [level=2] [e3] [offscreen]
+  - paragraph
+    - button "Below the fold" [e4] [offscreen]
+  - paragraph: Filler three, with the word needle.
+  - paragraph: Filler four.
+  - heading "Bottom" [level=2] [e5] [offscreen]
+  - paragraph
+    - link "Back to top" [e6] -> #top [offscreen]
+    - textbox "Last field" [e7] [offscreen]
+    - text: One more needle.

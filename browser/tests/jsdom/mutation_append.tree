@@ -1,0 +1,29 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Appending and removing"
+      "\n"
+    <body>
+      <!--  prepended  -->
+      <ul id="list">
+        <li>
+          "first"
+        <li id="b">
+          "b"
+        <li>
+          "replaced c"
+        <li>
+          "d"
+        <hr>
+        <span>
+          "moved"
+      "\n"
+      "\n"
+      <script>
+        "\nconst list = document.getElementById('list');\nconst b = document.createElement('li');\nb.id = 'b';\nb.appendChild(document.createTextNode('b'));\nlist.insertBefore(b, document.getElementById('c'));\nconst d = document.createElement('li');\nd.textContent = 'd';\nlist.appendChild(d);\nconst first = document.createElement('li');\nfirst.textContent = 'first';\nlist.insertBefore(first, list.firstChild);\nlist.insertBefore(document.createElement('hr'), null);\nconst spare = document.getElementById('spare');\nlist.appendChild(spare.firstChild);\nlist.removeChild(document.getElementById('a'));\nconst z = document.createElement('li');\nz.textContent = 'replaced c';\nlist.replaceChild(z, document.getElementById('c'));\nspare.remove();\ndocument.body.append('text and ', document.createElement('em'), '!');\ndocument.body.prepend(document.createComment(' prepended '));\n"
+      "\n"
+      "text and "
+      <em>
+      "!"

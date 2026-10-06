@@ -1,0 +1,7 @@
+pos neg zero
+2 0  null c
+1 2 x undefined last
+d d 0  false NaN
+calls 0
+true false false true true true true
+both nullish

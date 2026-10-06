@@ -1,0 +1,19 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Capture"
+      "\n"
+    <body>
+      <div id="outer">
+        <div id="inner">
+          <span id="leaf">
+            "x"
+      "\n"
+      <pre id="out">
+        "capture window\ncapture outer\ncapture inner\ncapture leaf\nbubble leaf\nbubble inner\nbubble outer\nbubble document\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst order = [];\nconst ids = ['outer', 'inner', 'leaf'];\nfor (const id of ids) {\n  const el = document.getElementById(id);\n  el.addEventListener('click', () => order.push('capture ' + id), true);\n  el.addEventListener('click', () => order.push('bubble ' + id));\n}\nwindow.addEventListener('click', () => order.push('capture window'), { capture: true });\ndocument.addEventListener('click', () => order.push('bubble document'), false);\ndocument.getElementById('leaf').click();\nlog(order.join('\\n'));\n"
+      "\n"

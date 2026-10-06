@@ -1,0 +1,30 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Table fragments"
+      "\n"
+    <body>
+      <table>
+        <tbody id="rows">
+          <tr>
+            <td>
+              "1"
+            <td>
+              "one"
+          <tr>
+            <td>
+              "3"
+            <td>
+              "three"
+      "\n"
+      <select id="pick">
+        <option value="a">
+          "A"
+        <option value="b" selected="">
+          "B"
+      "\n"
+      <script>
+        "\nconst rows = document.getElementById('rows');\nrows.innerHTML = '<tr><td>1</td><td>one</td></tr><tr><td>2</td><td>two</td></tr>';\nrows.lastElementChild.innerHTML = '<td>3</td><td>three</td>';\ndocument.getElementById('pick').innerHTML = '<option value=\"a\">A</option><option value=\"b\" selected>B</option>';\n"
+      "\n"

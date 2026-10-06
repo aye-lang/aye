@@ -1,0 +1,35 @@
+viewport 800x600
+  block <html> (0, 0) 800x174
+    block <body> (0, 16) 240x142
+      block <p> (0, 16) 240x40
+        line (0, 16) 240x20
+          text (0, 18) 48x16 "Plain "
+          inline <span> (51, 15) 173x22
+            text (56, 18) 168x16 "boxed words that wrap"
+        line (0, 36) 240x20
+          inline <span> (0, 35) 149x22
+            text (0, 38) 144x16 "onto the next line"
+          text (152, 38) 40x16 " end."
+      block <p> (0, 72) 240x50
+        line (0, 72) 240x30
+          text (0, 81.4) 48x16 "Mixed "
+          inline <em> (48, 75) 36x24
+            text (48, 75) 36x24 "big"
+          text (84, 81.4) 40x16 " and "
+          inline <small> (124, 86.2) 25x10
+            text (124, 86.2) 25x10 "small"
+          text (149, 81.4) 48x16 " text "
+          inline <b> (197, 81.4) 32x16
+            text (197, 81.4) 32x16 "bold"
+        line (0, 102) 240x20
+          inline <b> (0, 104) 80x16
+            inline <i> (0, 104) 48x16
+              text (0, 104) 48x16 "nested"
+            text (48, 104) 32x16 " run"
+          text (80, 104) 8x16 "."
+      block <p> (0, 138) 240x20
+        line (0, 138) 240x20
+          inline <a href="#"> (0, 140) 48x16
+            text (0, 140) 48x16 "a link"
+          inline <span> (51, 137) 10x22
+          text (64, 140) 48x16 "joined"

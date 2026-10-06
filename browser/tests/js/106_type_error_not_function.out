@@ -1,0 +1,7 @@
+TypeError: obj.foo is not a function
+obj.nested.bar is not a function
+obj.a is not a function
+notFn is not a function
+true
+ok ctor
+TypeError

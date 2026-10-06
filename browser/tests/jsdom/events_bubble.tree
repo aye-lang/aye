@@ -1,0 +1,19 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Bubbling"
+      "\n"
+    <body>
+      <div id="outer">
+        <div id="inner">
+          <button id="btn">
+            "Go"
+      "\n"
+      <pre id="out">
+        "bubble btn phase 2 target btn\nbubble inner phase 3 target btn\nbubble outer phase 3 target btn\nbubble body phase 3 target btn\nbubble document phase 3 target btn\nbubble window phase 3 target btn\nping at inner\npong bubbled to outer from btn\ndone 0 \n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst where = e => e.currentTarget === window ? 'window' : e.currentTarget === document ? 'document' : e.currentTarget.id || e.currentTarget.localName;\nfor (const t of [window, document, document.body, document.getElementById('outer'), document.getElementById('inner'), document.getElementById('btn')]) {\n  t.addEventListener('click', e => log('bubble', where(e), 'phase', e.eventPhase, 'target', e.target.id));\n}\ndocument.getElementById('btn').click();\nconst ev = new Event('ping');\ndocument.getElementById('inner').addEventListener('ping', e => log('ping at', where(e)));\ndocument.getElementById('outer').addEventListener('ping', e => log('ping must not bubble'));\ndocument.getElementById('inner').dispatchEvent(ev);\nconst ev2 = new Event('pong', { bubbles: true });\ndocument.getElementById('outer').addEventListener('pong', e => log('pong bubbled to', where(e), 'from', e.target.id));\ndocument.getElementById('btn').dispatchEvent(ev2);\nlog('done', ev2.eventPhase, ev2.currentTarget);\n"
+      "\n"

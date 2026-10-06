@@ -1,0 +1,591 @@
+// Forms in the window: clicks run the page's default actions
+// (engine.activate: links, buttons, checkboxes, labels, selects), Tab
+// and Shift+Tab move the focus, the focused text field takes typed text
+// (SDL text input, so IME and UTF-8 too) and editing keys, Space and
+// Enter press buttons and toggle checkboxes, Enter in a text field
+// submits its form, and a `select` opens a dropdown of its options over
+// the page. The focus ring, the caret and the selection are drawn over
+// the page; the state itself is the page's (`doc.controls`).
+
+import dom
+import dom.NodeId
+import engine
+import font
+import layout
+import paint
+import paint.Rgba
+import std
+import std.list.List
+import std.math
+import std.mem.AllocError
+import std.text
+
+/// An open dropdown of a `select`: its options in rows under the
+/// select, in document px.
+pub struct Dropdown {
+    sel: NodeId
+    x: f64
+    y: f64
+    w: f64
+    row: f64
+    count: usize
+    // The highlighted row.
+    hover: usize
+}
+
+let DROPDOWN_FONT: f64 = 13.333
+let CARET_INK = Rgba { r: 0, g: 0, b: 0, a: 255 }
+let SELECTED_TEXT = Rgba { r: 0, g: 110, b: 255, a: 90 }
+let ROW_HOVER = Rgba { r: 30, g: 110, b: 230, a: 255 }
+
+// The focused element of the page.
+fn pageFocus(ui: *Ui) ?NodeId {
+    if ui.tab.page |p| {
+        return p.doc.controls.focus
+    }
+    return null
+}
+
+// Styles and lays the page out again after its state changed.
+fn restyled(ui: *mut Ui) AllocError!void {
+    if ui.tab.page |p| {
+        try p.restyle()
+    }
+    try ui.relayout()
+}
+
+// After an edit of the focused text field: lays out again, keeping the
+// caret in view.
+fn afterEdit(ui: *mut Ui) AllocError!void {
+    try ui.relayout()
+    if ui.tab.page |p| {
+        if p.doc.controls.focus |f| {
+            if engine.revealCaret(p, f) {
+                try ui.relayout()
+            }
+        }
+    }
+}
+
+/// A click at the window point (`x`, `y`) of the page area.
+fn clickPage(ui: *mut Ui, x: f64, y: f64) AllocError!void {
+    let dy = y - TOOLBAR + ui.tab.scroll
+    if ui.dropdown |dd| {
+        ui.dropdown = null
+        ui.dirty = true
+        if x >= dd.x && x < dd.x + dd.w && dy >= dd.y && dy < dd.y + dd.row * dd.count as f64 {
+            try chooseOption(ui, dd.sel, ((dy - dd.y) / dd.row) as usize)
+        }
+        return
+    }
+    let p = ui.tab.page orelse return
+    let t = p.tree orelse return
+    let node = engine.nodeAt(t, x, dy) orelse {
+        return blur(ui)
+    }
+    if try clickListBox(ui, p, node, dy) {
+        return
+    }
+    let before = p.doc.controls.focus
+    let act = try engine.activate(p, node)
+    if p.doc.controls.focus |f| {
+        if dom.isTextField(&p.doc, f) && inside(&p.doc, node, f) {
+            // The caret goes where the click was.
+            try dom.setCaret(&mut p.doc, f, engine.offsetAt(p, f, x, dy))
+            ui.dirty = true
+        }
+    }
+    match act {
+        .Nothing => {
+            // A click outside the focused element takes the focus away.
+            if before |b| {
+                if !inside(&p.doc, node, b) {
+                    return blur(ui)
+                }
+            }
+            ui.dirty = true
+            return
+        }
+        _ => {}
+    }
+    return runActivation(ui, act)
+}
+
+// Is `node` `el` or inside it?
+fn inside(doc: *dom.Document, node: NodeId, el: NodeId) bool {
+    var cur: ?NodeId = node
+    while cur |c| {
+        if c == el {
+            return true
+        }
+        cur = doc.parent(c)
+    }
+    return false
+}
+
+// A click on a row of a list box (a `select` with `multiple` or a
+// `size`): selects that option (toggles it in a `multiple` one); false
+// when `node` is no list box.
+fn clickListBox(ui: *mut Ui, p: *mut engine.Page, node: NodeId, dy: f64) AllocError!bool {
+    if !p.doc.isElement(node, "select") || !layout.isListBox(&p.doc, node) || dom.isDisabled(&p.doc, node) {
+        return false
+    }
+    let t = p.tree orelse return false
+    var row: ?usize = null
+    for i in 0..t.boxes.len() {
+        let b = t.bx(i).*
+        if dom.isSame(b.node, node) && (b.kind == layout.BoxKind.InlineBlock || b.kind == layout.BoxKind.Block) {
+            var scroll = 0.0
+            if p.doc.controls.get(node) |c| {
+                scroll = c.scroll
+            }
+            let cy = b.ay + b.border[0] + b.padding[0] - scroll
+            for li in b.line_start..b.line_end {
+                let line = t.lines.items()[li]
+                if dy >= cy + line.y && dy < cy + line.y + line.h {
+                    row = li - b.line_start
+                }
+            }
+            break
+        }
+    }
+    engine.setFocus(p, node)
+    if row |k| {
+        var opts = List(NodeId).init(ui.alloc)
+        defer opts.deinit()
+        try dom.options(&p.doc, node, &mut opts)
+        if k < opts.len() && !dom.isDisabled(&p.doc, opts.items()[k]) {
+            let opt = opts.items()[k]
+            if p.doc.attr(node, "multiple") != null {
+                try dom.setSelected(&mut p.doc, opt, !dom.isSelected(&p.doc, opt))
+            } else {
+                try dom.selectOption(&mut p.doc, node, opt)
+            }
+        }
+    }
+    try restyled(ui)
+    return true
+}
+
+// Takes the focus away from the page's element.
+fn blur(ui: *mut Ui) AllocError!void {
+    if ui.tab.page |p| {
+        if p.doc.controls.focus != null {
+            engine.setFocus(p, null)
+            try restyled(ui)
+        }
+    }
+}
+
+/// Does what an activation asks: follow a link, submit a form, open a
+/// dropdown, or show the changed page.
+fn runActivation(ui: *mut Ui, act: engine.Activation) AllocError!void {
+    match act {
+        .Nothing => {
+            ui.dirty = true
+        }
+        .Changed => {
+            try restyled(ui)
+        }
+        .Follow { target } => {
+            defer target.deinit(ui.alloc)
+            try ui.go(&target)
+        }
+        .Submit { form, submitter } => {
+            try submit(ui, form, submitter)
+        }
+        .OpenSelect { el } => {
+            try restyled(ui)
+            try openDropdown(ui, el)
+        }
+    }
+}
+
+// Fires `submit` at the page's scripts, then submits unless they
+// canceled it.
+fn submit(ui: *mut Ui, form: NodeId, submitter: ?NodeId) AllocError!void {
+    let p = ui.tab.page orelse return
+    if !(try engine.dispatchEvent(p, form, "submit", "")) {
+        return restyled(ui)
+    }
+    return submitNow(ui, form, submitter)
+}
+
+fn submitNow(ui: *mut Ui, form: NodeId, submitter: ?NodeId) AllocError!void {
+    let p = ui.tab.page orelse return
+    let sub = (try engine.submitForm(p, form, submitter)) orelse return
+    defer sub.deinit(ui.alloc)
+    let loaded = try engine.navigateTo(&mut ui.tab, &sub)
+    try ui.navigated(loaded)
+}
+
+// ---- keys
+
+/// A key while the page has the focus; false when the page did not
+/// take it (the window scrolls).
+fn pageKey(ui: *mut Ui, sym: i32, mods: u16) AllocError!bool {
+    let p = ui.tab.page orelse return false
+    let cmd = (mods & (KMOD_GUI | KMOD_CTRL)) != 0
+    let shift = (mods & KMOD_SHIFT) != 0
+    if ui.dropdown != null {
+        return dropdownKey(ui, sym)
+    }
+    if sym == SDLK_TAB && !cmd {
+        let next = try engine.nextFocus(p, !shift)
+        engine.setFocus(p, next)
+        try restyled(ui)
+        if next |el| {
+            showElement(ui, el)
+        }
+        return true
+    }
+    let f = p.doc.controls.focus orelse return false
+    if dom.isTextField(&p.doc, f) {
+        return fieldKey(ui, p, f, sym, cmd, shift)
+    }
+    if cmd {
+        return false
+    }
+    let enter = sym == SDLK_RETURN || sym == SDLK_KP_ENTER
+    if sym == SDLK_ESCAPE {
+        try blur(ui)
+        return true
+    }
+    if p.doc.isElement(f, "select") {
+        if sym == SDLK_UP || sym == SDLK_DOWN {
+            try stepOption(ui, p, f, sym == SDLK_DOWN)
+            return true
+        }
+        if (sym == SDLK_SPACE || enter) && !layout.isListBox(&p.doc, f) {
+            try openDropdown(ui, f)
+            return true
+        }
+        return false
+    }
+    if sym == SDLK_SPACE && (dom.isCheckable(&p.doc, f) || p.doc.isElement(f, "button") || dom.isSubmitButton(&p.doc, f) || dom.isResetButton(&p.doc, f) || p.doc.isElement(f, "summary") || p.doc.isElement(f, "input")) {
+        try runActivation(ui, try engine.activate(p, f))
+        return true
+    }
+    if enter && !dom.isCheckable(&p.doc, f) {
+        try runActivation(ui, try engine.activate(p, f))
+        return true
+    }
+    return false
+}
+
+// A key in the focused text field `f`: editing, moving the caret,
+// the clipboard, Enter.
+fn fieldKey(ui: *mut Ui, p: *mut engine.Page, f: NodeId, sym: i32, cmd: bool, shift: bool) AllocError!bool {
+    let doc = &mut p.doc
+    if cmd {
+        if sym == 'a' {
+            try dom.selectAll(doc, f)
+        } else if sym == 'c' || sym == 'x' {
+            try copySelection(ui, doc, f)
+            if sym == 'x' && dom.selectedText(doc, f).len > 0 {
+                try dom.deleteBackward(doc, f)
+            }
+        } else if sym == 'v' {
+            try paste(doc, f)
+        } else if sym == SDLK_LEFT {
+            try dom.moveCaret(doc, f, dom.Motion.Home, shift)
+        } else if sym == SDLK_RIGHT {
+            try dom.moveCaret(doc, f, dom.Motion.End, shift)
+        } else if sym == SDLK_UP {
+            try dom.moveCaret(doc, f, dom.Motion.Start, shift)
+        } else if sym == SDLK_DOWN {
+            try dom.moveCaret(doc, f, dom.Motion.Finish, shift)
+        } else {
+            return false
+        }
+        ui.swallow = true
+        try afterEdit(ui)
+        return true
+    }
+    if sym == SDLK_RETURN || sym == SDLK_KP_ENTER {
+        if doc.isElement(f, "textarea") {
+            try dom.insertText(doc, f, "\n")
+            try engine.dispatchEvent(p, f, "input", "")
+            try afterEdit(ui)
+            return true
+        }
+        try runActivation(ui, try engine.implicitSubmit(p, f))
+        return true
+    }
+    if sym == SDLK_ESCAPE {
+        try blur(ui)
+        return true
+    }
+    if sym == SDLK_BACKSPACE {
+        try dom.deleteBackward(doc, f)
+        try engine.dispatchEvent(p, f, "input", "")
+    } else if sym == SDLK_DELETE {
+        try dom.deleteForward(doc, f)
+        try engine.dispatchEvent(p, f, "input", "")
+    } else if sym == SDLK_LEFT {
+        try dom.moveCaret(doc, f, dom.Motion.Left, shift)
+    } else if sym == SDLK_RIGHT {
+        try dom.moveCaret(doc, f, dom.Motion.Right, shift)
+    } else if sym == SDLK_HOME {
+        try dom.moveCaret(doc, f, dom.Motion.Home, shift)
+    } else if sym == SDLK_END {
+        try dom.moveCaret(doc, f, dom.Motion.End, shift)
+    } else if sym == SDLK_UP {
+        try dom.moveCaret(doc, f, dom.Motion.Up, shift)
+    } else if sym == SDLK_DOWN {
+        try dom.moveCaret(doc, f, dom.Motion.Down, shift)
+    } else {
+        // Other keys type text (SDL_TEXTINPUT), and do not scroll.
+        return true
+    }
+    try afterEdit(ui)
+    return true
+}
+
+/// Typed text, while the page has the focus; false when no text field
+/// took it.
+fn pageText(ui: *mut Ui, s: []u8) AllocError!bool {
+    let p = ui.tab.page orelse return false
+    let f = p.doc.controls.focus orelse return false
+    if !dom.isTextField(&p.doc, f) || p.doc.attr(f, "readonly") != null {
+        return false
+    }
+    try dom.insertText(&mut p.doc, f, s)
+    try engine.dispatchEvent(p, f, "input", s)
+    try afterEdit(ui)
+    return true
+}
+
+fn copySelection(ui: *mut Ui, doc: *dom.Document, f: NodeId) AllocError!void {
+    var s = dom.selectedText(doc, f)
+    if text.eql(dom.inputType(doc, f), "password") && doc.isElement(f, "input") {
+        s = ""
+    }
+    if s.len == 0 {
+        return
+    }
+    let z = try ui.alloc.alloc(0 as u8, s.len + 1)
+    defer ui.alloc.free(z)
+    std.mem.copy(z, s)
+    SDL_SetClipboardText(z.ptr)
+}
+
+fn paste(doc: *mut dom.Document, f: NodeId) AllocError!void {
+    if SDL_GetClipboardText() |p| {
+        defer SDL_free(p)
+        try dom.insertText(doc, f, p[0..strlen(p)])
+    }
+}
+
+// Selects the option before or after the shown one of a select.
+fn stepOption(ui: *mut Ui, p: *mut engine.Page, sel: NodeId, down: bool) AllocError!void {
+    var opts = List(NodeId).init(ui.alloc)
+    defer opts.deinit()
+    try dom.options(&p.doc, sel, &mut opts)
+    var i = try dom.selectedIndex(&p.doc, sel)
+    while true {
+        if down {
+            i += 1
+        } else {
+            i -= 1
+        }
+        if i < 0 || i >= opts.len() as i64 {
+            return
+        }
+        if !dom.isDisabled(&p.doc, opts.items()[i as usize]) {
+            break
+        }
+    }
+    try dom.selectOption(&mut p.doc, sel, opts.items()[i as usize])
+    try restyled(ui)
+}
+
+// Scrolls the page so that the element `el` shows.
+fn showElement(ui: *mut Ui, el: NodeId) {
+    let p = ui.tab.page orelse return
+    let r = engine.boxRect(p, el) orelse return
+    let view = ui.viewHeight()
+    if r.y < ui.tab.scroll {
+        ui.scrollTo(r.y - 8.0)
+    } else if r.y + r.h > ui.tab.scroll + view {
+        ui.scrollTo(r.y + r.h - view + 8.0)
+    }
+}
+
+// ---- the dropdown
+
+fn openDropdown(ui: *mut Ui, sel: NodeId) AllocError!void {
+    let p = ui.tab.page orelse return
+    if dom.isDisabled(&p.doc, sel) {
+        return
+    }
+    let r = engine.boxRect(p, sel) orelse return
+    var opts = List(NodeId).init(ui.alloc)
+    defer opts.deinit()
+    try dom.options(&p.doc, sel, &mut opts)
+    if opts.len() == 0 {
+        return
+    }
+    let f = dropdownFont()
+    let m = ui.measure.metrics(f)
+    let row = math.ceil(m.ascent + m.descent + m.line_gap) + 4.0
+    var w = r.w
+    var opt_text = text.Builder.init(ui.alloc)
+    defer opt_text.deinit()
+    for o in opts.items() {
+        opt_text.clear()
+        try dom.optionLabel(&p.doc, o, &mut opt_text)
+        w = math.max(w, ui.measure.width(f, opt_text.bytes()) + 16.0)
+    }
+    var hover: usize = 0
+    let shown = try dom.selectedIndex(&p.doc, sel)
+    if shown >= 0 {
+        hover = shown as usize
+    }
+    ui.dropdown = Dropdown { sel: sel, x: r.x, y: r.y + r.h, w: w, row: row, count: opts.len(), hover: hover }
+    ui.dirty = true
+}
+
+fn dropdownFont() font.Font {
+    return font.Font { size: DROPDOWN_FONT, bold: false, italic: false, mono: false }
+}
+
+fn dropdownKey(ui: *mut Ui, sym: i32) AllocError!bool {
+    var dd = ui.dropdown.?
+    if sym == SDLK_ESCAPE || sym == SDLK_TAB {
+        ui.dropdown = null
+    } else if sym == SDLK_DOWN && dd.hover + 1 < dd.count {
+        dd.hover += 1
+        ui.dropdown = dd
+    } else if sym == SDLK_UP && dd.hover > 0 {
+        dd.hover -= 1
+        ui.dropdown = dd
+    } else if sym == SDLK_RETURN || sym == SDLK_KP_ENTER || sym == SDLK_SPACE {
+        ui.dropdown = null
+        try chooseOption(ui, dd.sel, dd.hover)
+    }
+    ui.dirty = true
+    return true
+}
+
+// Selects option `k` of the select `sel` (unless it is disabled).
+fn chooseOption(ui: *mut Ui, sel: NodeId, k: usize) AllocError!void {
+    let p = ui.tab.page orelse return
+    var opts = List(NodeId).init(ui.alloc)
+    defer opts.deinit()
+    try dom.options(&p.doc, sel, &mut opts)
+    if k >= opts.len() || dom.isDisabled(&p.doc, opts.items()[k]) {
+        return
+    }
+    try dom.selectOption(&mut p.doc, sel, opts.items()[k])
+    try restyled(ui)
+}
+
+// ---- drawing
+
+/// Draws the focus ring, the caret and selection of the focused text
+/// field and the open dropdown, over the page drawn with the view `v`.
+fn drawPageState(ui: *mut Ui, v: paint.View) AllocError!void {
+    let p = ui.tab.page orelse return
+    if p.doc.controls.focus |f| {
+        if engine.boxRect(p, f) |r| {
+            ring(ui, paint.Rect { x: r.x - 2.0, y: r.y - 2.0, w: r.w + 4.0, h: r.h + 4.0 }, v)
+        }
+        if dom.isTextField(&p.doc, f) {
+            var rects = List(paint.Rect).init(ui.alloc)
+            defer rects.deinit()
+            try engine.selectionRects(p, f, &mut rects)
+            for r in rects.items() {
+                ui.canvas.fillRect(paint.deviceRect(r, v), SELECTED_TEXT)
+            }
+            if rects.len() == 0 {
+                if engine.caretRect(p, f) |c| {
+                    ui.canvas.fillRect(paint.deviceRect(c, v), CARET_INK)
+                }
+            }
+        }
+    }
+    if ui.dropdown |dd| {
+        try drawDropdown(ui, p, dd, v)
+    }
+}
+
+// A 2 px ring inside `r`.
+fn ring(ui: *mut Ui, r: paint.Rect, v: paint.View) {
+    let edges = [4]paint.Rect{
+        paint.Rect { x: r.x, y: r.y, w: r.w, h: 2.0 },
+        paint.Rect { x: r.x, y: r.y + r.h - 2.0, w: r.w, h: 2.0 },
+        paint.Rect { x: r.x, y: r.y + 2.0, w: 2.0, h: r.h - 4.0 },
+        paint.Rect { x: r.x + r.w - 2.0, y: r.y + 2.0, w: 2.0, h: r.h - 4.0 },
+    }
+    for e in edges {
+        ui.canvas.fillRect(paint.deviceRect(e, v), FOCUS_RING)
+    }
+}
+
+fn drawDropdown(ui: *mut Ui, p: *mut engine.Page, dd: Dropdown, v: paint.View) AllocError!void {
+    var opts = List(NodeId).init(ui.alloc)
+    defer opts.deinit()
+    try dom.options(&p.doc, dd.sel, &mut opts)
+    let all = paint.Rect { x: dd.x, y: dd.y, w: dd.w, h: dd.row * dd.count as f64 }
+    ui.canvas.fillRect(paint.deviceRect(paint.Rect { x: all.x + 2.0, y: all.y + 2.0, w: all.w, h: all.h }, v), Rgba { r: 0, g: 0, b: 0, a: 40 })
+    ui.canvas.fillRect(paint.deviceRect(all, v), PAPER)
+    let f = dropdownFont()
+    let m = ui.measure.metrics(f)
+    var opt_text = text.Builder.init(ui.alloc)
+    defer opt_text.deinit()
+    for k, o in opts.items() {
+        if k >= dd.count {
+            break
+        }
+        let top = dd.y + dd.row * k as f64
+        var ink = INK
+        if k == dd.hover {
+            ui.canvas.fillRect(paint.deviceRect(paint.Rect { x: dd.x, y: top, w: dd.w, h: dd.row }, v), ROW_HOVER)
+            ink = PAPER
+        }
+        if dom.isDisabled(&p.doc, o) {
+            ink = FADED
+        }
+        opt_text.clear()
+        try dom.optionLabel(&p.doc, o, &mut opt_text)
+        let base = math.floor(top + (dd.row + m.ascent - m.descent) / 2.0 + 0.5)
+        try ui.painter.draw(&mut ui.canvas, (dd.x + 6.0) * v.scale + v.dx, base * v.scale + v.dy, opt_text.bytes(), f, v.scale, ink)
+    }
+    let edges = [4]paint.Rect{
+        paint.Rect { x: all.x, y: all.y, w: all.w, h: 1.0 },
+        paint.Rect { x: all.x, y: all.y + all.h - 1.0, w: all.w, h: 1.0 },
+        paint.Rect { x: all.x, y: all.y, w: 1.0, h: all.h },
+        paint.Rect { x: all.x + all.w - 1.0, y: all.y, w: 1.0, h: all.h },
+    }
+    for e in edges {
+        ui.canvas.fillRect(paint.deviceRect(e, v), LINE)
+    }
+}
+
+/// Is the window point (`x`, `y`) over a text field of the page?
+fn overTextField(ui: *mut Ui, x: f64, y: f64) bool {
+    let p = ui.tab.page orelse return false
+    let t = p.tree orelse return false
+    let n = engine.nodeAt(t, x, y - TOOLBAR + ui.tab.scroll) orelse return false
+    return dom.isTextField(&p.doc, n)
+}
+
+/// The focused element and its value, for `--state` (nothing when the
+/// page has no focus).
+fn writeFocus(ui: *mut Ui, out: *mut text.Builder) AllocError!void {
+    let p = ui.tab.page orelse return
+    let f = p.doc.controls.focus orelse return
+    try out.append("element ")
+    try out.append(p.doc.node(f).name)
+    if p.doc.attr(f, "name") |n| {
+        try out.append(" name=")
+        try out.append(n)
+    }
+    try out.appendByte('\n')
+    if dom.isTextField(&p.doc, f) || p.doc.isElement(f, "select") {
+        try out.append("value ")
+        try out.append(dom.valueOf(&p.doc, f))
+        try out.appendByte('\n')
+    }
+}

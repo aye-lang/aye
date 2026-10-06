@@ -1,0 +1,34 @@
+#document
+  <html>
+    <head>
+    <body>
+      <nav>
+        <a href="/">
+          "Home"
+        " | "
+        <a href="/docs">
+          "Docs"
+        " | "
+        <a href="https://example.com/">
+          "Elsewhere"
+      "\n"
+      <p>
+        "Read "
+        <a href="a.html">
+          "the "
+          <b>
+            "first"
+          " chapter"
+        " or "
+        <a href="#top">
+          "jump"
+        "."
+      "\n"
+      <p>
+        <a href="/img">
+          <img src="pic.png" alt="A picture">
+        " "
+        <img src="no-alt.png">
+        " "
+        <img src="empty.png" alt="">
+      "\n"

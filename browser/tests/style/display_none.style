@@ -1,0 +1,25 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <div class="gone">
+      display: none
+      color: rgb(255, 0, 0)
+      <p>
+        display: block
+        color: rgb(255, 0, 0)
+        font-style: italic
+        margin-top: 16px
+        margin-bottom: 16px
+    <span class="shown">
+      display: block
+    <script class="shown">
+      display: block

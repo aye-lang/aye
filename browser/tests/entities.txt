@@ -1,0 +1,7 @@
+Named: & < > " '  |© é … — €
+
+Numeric: A B C � � � € Ÿ ©
+
+Without semicolon: & <5 ©2024 éx ¬it; ∉ ¬
+
+Not references: & &; &# &#x; &unknown; & &Amp;

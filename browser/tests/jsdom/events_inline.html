@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<title>Inline handlers</title>
+<button id="a" onclick="log('attribute handler on ' + this.id + ' ' + event.type)">A</button>
+<button id="b" onclick="return false">B</button>
+<button id="c">C</button>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+document.getElementById('a').click();
+const b = document.getElementById('b');
+const ev = new MouseEvent('click', { cancelable: true, bubbles: true });
+b.dispatchEvent(ev);
+log('return false cancels', ev.defaultPrevented);
+const c = document.getElementById('c');
+log('no handler', c.onclick);
+c.onclick = function (e) { log('property handler', this === c, e instanceof MouseEvent); };
+c.click();
+c.onclick = null;
+c.click();
+c.setAttribute('onclick', "log('set by setAttribute')");
+c.click();
+document.getElementById('a').onclick = () => log('property replaces attribute');
+document.getElementById('a').click();
+window.onload = () => log('window.onload');
+</script>

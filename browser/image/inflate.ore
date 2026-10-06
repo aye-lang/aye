@@ -1,0 +1,450 @@
+// inflate: the zlib (RFC 1950) and deflate (RFC 1951) decompressor that
+// PNG needs: stored, fixed-Huffman and dynamic-Huffman blocks, and the
+// Adler-32 check of the zlib trailer.
+//
+// Huffman codes are decoded through a 512-entry table indexed by the
+// next 9 bits (one lookup for nearly every symbol); longer codes fall
+// back to canonical decoding by code-length counts. The browser runs in
+// debug mode, so per-bit loops on the hot path would cost a lot.
+
+import std
+import std.mem.Allocator
+
+// Bits are read least significant first. Past the end of the input the
+// buffer is filled with zero bytes (so a 9-bit peek near the end works),
+// counted in `over`: consuming any of those bits means the stream was
+// cut short.
+struct InflateBits {
+    src: []u8
+    // The next byte of `src` to load.
+    pos: usize
+    buf: u64
+    // How many bits `buf` holds.
+    count: u64
+    // How many zero bytes past the end of `src` are in `buf` (its top).
+    over: u64
+
+    fn refill(self: *mut Self) {
+        while self.count <= 56 {
+            var b: u64 = 0
+            if self.pos < self.src.len {
+                b = self.src[self.pos] as u64
+                self.pos += 1
+            } else {
+                self.over += 1
+            }
+            self.buf = self.buf | (b << self.count)
+            self.count += 8
+        }
+    }
+
+    fn consume(self: *mut Self, n: u64) ImageError!void {
+        if n > self.count || self.count - n < self.over * 8 {
+            return ImageError.Invalid
+        }
+        self.buf = self.buf >> n
+        self.count -= n
+    }
+
+    // The next `n` bits (at most 32), first bit lowest.
+    fn bits(self: *mut Self, n: u64) ImageError!u64 {
+        self.refill()
+        let v = self.buf & ((1 << n) - 1)
+        try self.consume(n)
+        return v
+    }
+}
+
+// The decompressed bytes so far: `bytes[..len]`, growing by doubling up
+// to `limit` (a larger output is refused, so a tiny file cannot expand
+// into gigabytes).
+struct InflateOut {
+    alloc: Allocator
+    bytes: []mut u8
+    len: usize
+    limit: usize
+
+    fn reserve(self: *mut Self, extra: usize) ImageError!void {
+        if extra > self.limit - self.len {
+            return ImageError.Invalid
+        }
+        let need = self.len + extra
+        if need <= self.bytes.len {
+            return
+        }
+        var cap = self.bytes.len * 2
+        if cap < need {
+            cap = need
+        }
+        if cap > self.limit {
+            cap = self.limit
+        }
+        self.bytes = try self.alloc.resize(self.bytes, cap, 0)
+    }
+}
+
+// A Huffman code. `fast[bits]` is `symbol << 4 | length` for the code
+// that starts the 9 bits `bits` (read order), 0 when that code is longer
+// than 9 bits or unused. `counts[n]` is the number of codes of length
+// `n`, and `symbols` lists the symbols by code (canonical order).
+struct Huffman {
+    fast: [512]u16
+    counts: [16]u16
+    symbols: [288]u16
+}
+
+let INFLATE_FAST_BITS: u64 = 9
+let INFLATE_FAST_MASK: u64 = 511
+
+let INFLATE_LEN_BASE = [29]usize{3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258}
+let INFLATE_LEN_EXTRA = [29]u64{0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0}
+let INFLATE_DIST_BASE = [30]usize{1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577}
+let INFLATE_DIST_EXTRA = [30]u64{0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13}
+// The order in which a dynamic block lists the code-length code's lengths.
+let INFLATE_CL_ORDER = [19]usize{16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15}
+
+// Output of `inflateZlib` is capped at 1 GiB.
+let INFLATE_MAX_OUT: usize = 1073741824
+
+/// Decompresses a zlib stream (2-byte header, deflate data, Adler-32 of
+/// the output, which is checked). Free the result with `alloc.free`.
+pub fn inflateZlib(alloc: Allocator, data: []u8) ImageError![]mut u8 {
+    return zlibDecode(alloc, data, 0, INFLATE_MAX_OUT)
+}
+
+// `zlibDecode` with a guess of the output size (`hint`, allocated up
+// front) and a hard maximum (`limit`). PNG knows both exactly.
+fn zlibDecode(alloc: Allocator, data: []u8, hint: usize, limit: usize) ImageError![]mut u8 {
+    if data.len < 6 {
+        return ImageError.Invalid
+    }
+    let cmf = data[0] as u32
+    let flg = data[1] as u32
+    // Method 8 (deflate) with a window of at most 32 KiB, and the header
+    // a multiple of 31.
+    if (cmf & 15) != 8 || (cmf >> 4) > 7 || (cmf * 256 + flg) % 31 != 0 {
+        return ImageError.Invalid
+    }
+    if (flg & 0x20) != 0 {
+        // A preset dictionary: never used by PNG.
+        return ImageError.Unsupported
+    }
+    // Deflate expands at most 1032 times, so a tiny stream claiming a
+    // huge image does not get a huge buffer up front.
+    var first = hint
+    if first > data.len * 1032 {
+        first = data.len * 1032
+    }
+    if first < 256 {
+        first = 256
+    }
+    if first > limit {
+        first = limit
+    }
+    var out = InflateOut {
+        alloc: alloc,
+        bytes: try alloc.alloc(0 as u8, first),
+        len: 0,
+        limit: limit,
+    }
+    errdefer alloc.free(out.bytes)
+    var br = InflateBits { src: data, pos: 2, buf: 0, count: 0, over: 0 }
+    try inflateBlocks(&mut br, &mut out)
+    try br.consume(br.count % 8)
+    var sum: u32 = 0
+    for k in 0..4 {
+        sum = (sum << 8) | (try br.bits(8)) as u32
+    }
+    if sum != adler32(out.bytes[..out.len]) {
+        return ImageError.Invalid
+    }
+    if out.len != out.bytes.len {
+        out.bytes = try alloc.resize(out.bytes, out.len, 0)
+    }
+    return out.bytes
+}
+
+fn inflateBlocks(br: *mut InflateBits, out: *mut InflateOut) ImageError!void {
+    var last = false
+    var lit = emptyHuffman()
+    var dist = emptyHuffman()
+    while !last {
+        let header = try br.bits(3)
+        last = (header & 1) != 0
+        let kind = header >> 1
+        if kind == 0 {
+            try inflateStored(br, out)
+        } else if kind == 1 {
+            try fixedCodes(&mut lit, &mut dist)
+            try inflateCodes(br, out, &lit, &dist)
+        } else if kind == 2 {
+            try dynamicCodes(br, &mut lit, &mut dist)
+            try inflateCodes(br, out, &lit, &dist)
+        } else {
+            return ImageError.Invalid
+        }
+    }
+}
+
+// A stored block: byte-aligned LEN, its complement NLEN, LEN raw bytes.
+fn inflateStored(br: *mut InflateBits, out: *mut InflateOut) ImageError!void {
+    try br.consume(br.count % 8)
+    let len = try br.bits(16)
+    let nlen = try br.bits(16)
+    if (len ^ 0xFFFF) != nlen {
+        return ImageError.Invalid
+    }
+    // `buf` now holds whole bytes; the real ones (not padding) come
+    // right before `pos`.
+    let held = (br.count / 8 - br.over) as usize
+    let start = br.pos - held
+    let n = len as usize
+    if n > br.src.len - start {
+        return ImageError.Invalid
+    }
+    try out.reserve(n)
+    std.mem.copy(out.bytes[out.len..out.len + n], br.src[start..start + n])
+    out.len += n
+    br.pos = start + n
+    br.buf = 0
+    br.count = 0
+    br.over = 0
+}
+
+fn inflateCodes(br: *mut InflateBits, out: *mut InflateOut, lit: *Huffman, dist: *Huffman) ImageError!void {
+    while true {
+        let sym = try decodeSymbol(br, lit)
+        if sym < 256 {
+            if out.len == out.bytes.len {
+                try out.reserve(1)
+            }
+            out.bytes[out.len] = sym as u8
+            out.len += 1
+        } else if sym == 256 {
+            return
+        } else {
+            let li = sym - 257
+            if li >= 29 {
+                return ImageError.Invalid
+            }
+            let length = INFLATE_LEN_BASE[li] + (try br.bits(INFLATE_LEN_EXTRA[li])) as usize
+            let di = try decodeSymbol(br, dist)
+            if di >= 30 {
+                return ImageError.Invalid
+            }
+            let distance = INFLATE_DIST_BASE[di] + (try br.bits(INFLATE_DIST_EXTRA[di])) as usize
+            if distance > out.len {
+                return ImageError.Invalid
+            }
+            try out.reserve(length)
+            // Byte by byte: the source may overlap what is being written
+            // (a distance shorter than the length repeats a pattern).
+            var from = out.len - distance
+            let bytes = out.bytes
+            for k in out.len..out.len + length {
+                bytes[k] = bytes[from]
+                from += 1
+            }
+            out.len += length
+        }
+    }
+}
+
+// The fixed codes of block type 1 (RFC 1951, 3.2.6).
+fn fixedCodes(lit: *mut Huffman, dist: *mut Huffman) ImageError!void {
+    var lengths = @zeroed([288]u8)
+    for i in 0..288 {
+        if i < 144 {
+            lengths[i] = 8
+        } else if i < 256 {
+            lengths[i] = 9
+        } else if i < 280 {
+            lengths[i] = 7
+        } else {
+            lengths[i] = 8
+        }
+    }
+    try buildHuffman(lit, lengths[..])
+    var dl = @zeroed([30]u8)
+    for i in 0..30 {
+        dl[i] = 5
+    }
+    try buildHuffman(dist, dl[..])
+}
+
+// The header of a dynamic block: the code lengths of the two codes,
+// themselves Huffman-coded with a code-length code.
+fn dynamicCodes(br: *mut InflateBits, lit: *mut Huffman, dist: *mut Huffman) ImageError!void {
+    let hlit = (try br.bits(5)) as usize + 257
+    let hdist = (try br.bits(5)) as usize + 1
+    let hclen = (try br.bits(4)) as usize + 4
+    if hlit > 286 || hdist > 30 {
+        return ImageError.Invalid
+    }
+    var cl = @zeroed([19]u8)
+    for i in 0..hclen {
+        cl[INFLATE_CL_ORDER[i]] = (try br.bits(3)) as u8
+    }
+    var clcode = emptyHuffman()
+    try buildHuffman(&mut clcode, cl[..])
+    var lengths = @zeroed([316]u8)
+    let total = hlit + hdist
+    var n: usize = 0
+    while n < total {
+        let sym = try decodeSymbol(br, &clcode)
+        if sym < 16 {
+            lengths[n] = sym as u8
+            n += 1
+        } else {
+            var value: u8 = 0
+            var repeat: usize = 0
+            if sym == 16 {
+                if n == 0 {
+                    return ImageError.Invalid
+                }
+                value = lengths[n - 1]
+                repeat = 3 + (try br.bits(2)) as usize
+            } else if sym == 17 {
+                repeat = 3 + (try br.bits(3)) as usize
+            } else {
+                repeat = 11 + (try br.bits(7)) as usize
+            }
+            if repeat > total - n {
+                return ImageError.Invalid
+            }
+            for k in n..n + repeat {
+                lengths[k] = value
+            }
+            n += repeat
+        }
+    }
+    // Without a code for end-of-block the block could never end.
+    if lengths[256] == 0 {
+        return ImageError.Invalid
+    }
+    try buildHuffman(lit, lengths[..hlit])
+    try buildHuffman(dist, lengths[hlit..total])
+}
+
+fn emptyHuffman() Huffman {
+    return Huffman {
+        fast: @zeroed([512]u16),
+        counts: @zeroed([16]u16),
+        symbols: @zeroed([288]u16),
+    }
+}
+
+// Builds the canonical code of `lengths` (one per symbol, 0 = unused, at
+// most 288 symbols of at most 15 bits). An over-subscribed set is
+// invalid; an incomplete one is accepted, and its unused codes fail when
+// read.
+fn buildHuffman(h: *mut Huffman, lengths: []u8) ImageError!void {
+    h.fast = @zeroed([512]u16)
+    h.counts = @zeroed([16]u16)
+    for l in lengths {
+        if l > 15 {
+            return ImageError.Invalid
+        }
+        h.counts[l] += 1
+    }
+    h.counts[0] = 0
+    var left: i32 = 1
+    for len in 1..16 {
+        left = left * 2 - h.counts[len] as i32
+        if left < 0 {
+            return ImageError.Invalid
+        }
+    }
+    // Symbols sorted by length, then by value.
+    var offs = @zeroed([16]u16)
+    for len in 1..15 {
+        offs[len + 1] = offs[len] + h.counts[len]
+    }
+    for sym, l in lengths {
+        if l != 0 {
+            h.symbols[offs[l] as usize] = sym as u16
+            offs[l] += 1
+        }
+    }
+    // The first code of each length, then the fast table: a code of
+    // length l fills every entry whose low l bits are the code reversed
+    // (it is read most significant bit first).
+    var next = @zeroed([16]u32)
+    var code: u32 = 0
+    for len in 1..16 {
+        code = (code + h.counts[len - 1] as u32) << 1
+        next[len] = code
+    }
+    for sym, l in lengths {
+        if l == 0 {
+            continue
+        }
+        let c = next[l]
+        next[l] += 1
+        if l as u64 > INFLATE_FAST_BITS {
+            continue
+        }
+        var rev: u32 = 0
+        for k in 0..l {
+            rev = (rev << 1) | ((c >> k as u32) & 1)
+        }
+        let entry = ((sym as u16) << 4) | l as u16
+        let step = (1 as usize) << l as usize
+        var i = rev as usize
+        while i < 512 {
+            h.fast[i] = entry
+            i += step
+        }
+    }
+}
+
+fn decodeSymbol(br: *mut InflateBits, h: *Huffman) ImageError!usize {
+    br.refill()
+    let e = h.fast[(br.buf & INFLATE_FAST_MASK) as usize]
+    if e != 0 {
+        try br.consume((e & 15) as u64)
+        return (e >> 4) as usize
+    }
+    // Canonical decoding, one bit at a time (puff's method): `code` is
+    // the bits so far, `first` the first code of this length, `index`
+    // the number of symbols with shorter codes.
+    var code: i32 = 0
+    var first: i32 = 0
+    var index: i32 = 0
+    var b = br.buf
+    for len in 1..16 {
+        code = code | (b & 1) as i32
+        b = b >> 1
+        let count = h.counts[len] as i32
+        if code - count < first {
+            try br.consume(len as u64)
+            return h.symbols[(index + code - first) as usize] as usize
+        }
+        index += count
+        first = (first + count) << 1
+        code = code << 1
+    }
+    return ImageError.Invalid
+}
+
+// The Adler-32 checksum of `data` (the zlib trailer).
+fn adler32(data: []u8) u32 {
+    var a: u32 = 1
+    var b: u32 = 0
+    var i: usize = 0
+    while i < data.len {
+        // 5552 bytes keep the sums below 2^32 before the modulo.
+        var end = i + 5552
+        if end > data.len {
+            end = data.len
+        }
+        for k in i..end {
+            a += data[k] as u32
+            b += a
+        }
+        a = a % 65521
+        b = b % 65521
+        i = end
+    }
+    return (b << 16) | a
+}

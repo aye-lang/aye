@@ -1,0 +1,4 @@
+First newline dropped. <b>not bold</b> <ok>
+<b>xmp is raw</b> &amp;
+
+after
