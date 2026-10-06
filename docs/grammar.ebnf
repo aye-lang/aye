@@ -48,9 +48,11 @@ file        = { NEWLINE } , { ( import | item ) , ( NEWLINE | EOF ) , { NEWLINE 
 item        = fn_decl | extern_fn | struct_decl | enum_decl | error_decl
             | interface_decl | test_decl | global_decl | link_decl ;
 
-link_decl   = "@link" "(" string_lit ")" ;
+link_decl   = ( "@link" | "@linkOptional" ) "(" string_lit ")" ;
                (* a C library: a pkg-config package, -lname, or
-                  "framework:Name" (macOS); `@link` only at the top level *)
+                  "framework:Name" (macOS); only at the top level.
+                  @linkOptional links it only where it is installed;
+                  @hasLink("name") in an expression says whether it is *)
 
 global_decl = [ "pub" ] ( "let" | "var" ) ident [ ":" type ] "=" arg ;
                (* a constant (let) or global variable (var) whose value is

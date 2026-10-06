@@ -272,6 +272,9 @@ pub struct Program {
     pub globals: Vec<GlobalDef>,
     /// The libraries of every `@link`, in order of first appearance.
     pub links: Vec<String>,
+    /// The libraries of `@linkOptional` that no `@link` names: linked only
+    /// where they are installed.
+    pub optional_links: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -451,6 +454,9 @@ pub enum TExprKind {
     FnRef { name: String, is_extern: bool },
     /// A call of a function value.
     CallValue { callee: Box<TExpr>, args: Vec<TExpr> },
+    /// `@hasLink("name")`: is the library linked? Known when the program
+    /// is built, not when it is checked.
+    HasLink(String),
     /// `@sizeOf(T)`: the size of `T` in bytes, as C lays it out.
     SizeOf(Type),
     /// `@zeroed(T)`: the all-zero value of the type `ty`.
@@ -683,6 +689,8 @@ struct Checker<'a> {
     extern_structs: HashSet<String>,
     /// `Program::links`.
     links: Vec<String>,
+    /// The libraries of `@linkOptional`.
+    optional_links: Vec<String>,
     /// The program's files, indexed by `Span::file`.
     files: Vec<String>,
 }
@@ -736,6 +744,7 @@ pub fn check(file: &ast::File, require_main: bool, files: &[String]) -> std::res
         module: String::new(),
         extern_structs: HashSet::new(),
         links: Vec::new(),
+        optional_links: Vec::new(),
     };
     let p = c.program(file, require_main);
     if c.errors.is_empty() { Ok(p) } else { Err(c.errors) }
@@ -1019,8 +1028,9 @@ impl<'a> Checker<'a> {
                 ast::Item::Interface(i) => (&i.name, i.span),
                 ast::Item::Global(g) => (&g.name, g.span),
                 ast::Item::Link(l) => {
-                    if !self.links.contains(&l.name) {
-                        self.links.push(l.name.clone());
+                    let list = if l.optional { &mut self.optional_links } else { &mut self.links };
+                    if !list.contains(&l.name) {
+                        list.push(l.name.clone());
                     }
                     continue;
                 }
@@ -1316,6 +1326,7 @@ impl<'a> Checker<'a> {
             vtables,
             tests: tests.iter().map(|t| TestDef { module: t.module.clone(), name: t.name.clone() }).collect(),
             globals,
+            optional_links: self.optional_links.iter().filter(|l| !self.links.contains(l)).cloned().collect(),
             links: std::mem::take(&mut self.links),
         }
     }
@@ -3095,7 +3106,19 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
-            ExprKind::Builtin { name, args } if matches!(name.as_str(), "sizeOf" | "zeroed" | "ptrCast" | "link") => {
+            ExprKind::Builtin { name, args } if name == "hasLink" => {
+                let lib = match args.as_slice() {
+                    [ast::Expr { kind: ExprKind::Str(s), .. }] => String::from_utf8_lossy(s).into_owned(),
+                    _ => return err(E0100, span, "`@hasLink` takes a string literal, the name of a library: `@hasLink(\"libcurl\")`"),
+                };
+                if !self.links.contains(&lib) && !self.optional_links.contains(&lib) {
+                    return err(E0100, args[0].span, format!(
+                        "`@hasLink(\"{lib}\")`: no `@linkOptional(\"{lib}\")` (or `@link`) in the program"
+                    ));
+                }
+                (TExprKind::HasLink(lib), Type::Bool)
+            }
+            ExprKind::Builtin { name, args } if matches!(name.as_str(), "sizeOf" | "zeroed" | "ptrCast" | "link" | "linkOptional") => {
                 return self.c_builtin(name, args, span);
             }
             ExprKind::Builtin { name, args } => {
@@ -3870,8 +3893,8 @@ impl<'a> Checker<'a> {
     /// `@sizeOf(T)`, `@zeroed(T)` and `@ptrCast(T, p)`. `@link` belongs at
     /// the top level.
     fn c_builtin(&mut self, name: &str, args: &[ast::Expr], span: Span) -> Result<TExpr> {
-        if name == "link" {
-            return err(E0094, span, "`@link` must be at the top level of a file, outside functions");
+        if name == "link" || name == "linkOptional" {
+            return err(E0094, span, format!("`@{name}` must be at the top level of a file, outside functions"));
         }
         let cast = name == "ptrCast";
         if args.len() != 1 + cast as usize {

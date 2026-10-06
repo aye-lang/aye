@@ -1,0 +1,52 @@
+// `@linkOptional("name")` links a C library only where it is installed,
+// and `@hasLink("name")` says whether it is. An `if @hasLink(...)` keeps
+// only the branch that runs, and a function that nothing reachable calls
+// is left out: `withLibrary` calls a C function that no library defines,
+// and the program still links.
+
+@linkOptional("ore_no_such_library")
+@linkOptional("m")
+@link("m")
+
+extern fn ore_no_such_function(x: i64) i64
+extern fn cos(x: f64) f64
+
+fn withLibrary() i64 {
+    return ore_no_such_function(1)
+}
+
+struct Fake {
+    n: i64
+
+    fn get(self: *Self) i64 {
+        return ore_no_such_function(self.n)
+    }
+}
+
+interface Getter {
+    fn get(self: *Self) i64
+}
+
+fn viaDyn(g: dyn Getter) i64 {
+    return g.get()
+}
+
+let HAVE_M = true
+
+pub fn main() {
+    if @hasLink("ore_no_such_library") {
+        @println(withLibrary())
+        var f = Fake { n: 1 }
+        @println(viaDyn(&f))
+    } else {
+        @println("no library")
+    }
+    if !@hasLink("ore_no_such_library") && HAVE_M {
+        @println("still no library")
+    }
+    if @hasLink("m") {
+        @println(cos(0.0))
+    }
+    let known = @hasLink("ore_no_such_library")
+    @println(known)
+}

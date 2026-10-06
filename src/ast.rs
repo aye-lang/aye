@@ -30,11 +30,13 @@ pub enum Item {
 }
 
 /// `@link("name")` at the top level: `name` is a `pkg-config` package, a
-/// library (`-lname`) or `framework:Name` (macOS).
+/// library (`-lname`) or `framework:Name` (macOS). `@linkOptional("name")`
+/// (`optional`) links it only where it is installed.
 #[derive(Debug, Clone)]
 pub struct LinkDecl {
     pub name: String,
     pub span: Span,
+    pub optional: bool,
 }
 
 /// A top-level `let NAME = value` constant, `var name = value` global, or

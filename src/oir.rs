@@ -209,10 +209,16 @@ pub enum Rvalue {
     TraceLen,
 }
 
-pub fn lower(p: &sema::Program) -> Program {
+/// Lower the program. `linked` are the libraries it is linked with: an
+/// `if @hasLink(name)` keeps only the branch that runs. Only the functions
+/// and vtables that the program can reach are kept (from `main`, the
+/// tests, exported functions and globals), so a function that calls into
+/// a library that is not linked is left out when nothing calls it.
+pub fn lower(p: &sema::Program, linked: &[String]) -> Program {
     let structs: HashMap<&str, &sema::StructDef> = p.structs.iter().map(|s| (s.name.as_str(), s)).collect();
     let enums: HashMap<&str, &sema::EnumDef> = p.enums.iter().map(|e| (e.name.as_str(), e)).collect();
-    let funcs = p.fns.iter().map(|f| Lower::func(f, &structs, &enums)).collect();
+    let (funcs, refs): (Vec<Func>, Vec<Vec<Ref>>) = p.fns.iter().map(|f| Lower::func(f, &structs, &enums, linked)).unzip();
+    let (funcs, vtables) = reachable(p, funcs, refs);
     Program {
         structs: p.structs.clone(),
         enums: p.enums.clone(),
@@ -220,9 +226,75 @@ pub fn lower(p: &sema::Program) -> Program {
         funcs,
         errors: p.errors.clone(),
         ifaces: p.ifaces.clone(),
-        vtables: p.vtables.clone(),
+        vtables,
         tests: p.tests.clone(),
         globals: p.globals.clone(),
+    }
+}
+
+/// What a function's code refers to: a function (called or as a value),
+/// or the vtable of a struct for an interface (a `dyn` made).
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum Ref {
+    Fn(String),
+    Vtable(String, String),
+}
+
+/// The functions in `ConstVal::Fn` values of a global.
+fn const_fns(v: &sema::ConstVal, out: &mut Vec<Ref>) {
+    match v {
+        sema::ConstVal::Fn(name, false) => out.push(Ref::Fn(name.clone())),
+        sema::ConstVal::Some(x) => const_fns(x, out),
+        sema::ConstVal::Agg(xs) | sema::ConstVal::Variant(_, xs) => xs.iter().for_each(|x| const_fns(x, out)),
+        _ => {}
+    }
+}
+
+/// The functions and vtables reachable from `main`, the tests, the
+/// exported functions and the globals; `refs[i]` are those of `funcs[i]`.
+fn reachable(p: &sema::Program, funcs: Vec<Func>, refs: Vec<Vec<Ref>>) -> (Vec<Func>, Vec<(String, String)>) {
+    let index: HashMap<&str, usize> = funcs.iter().enumerate().map(|(i, f)| (f.name.as_str(), i)).collect();
+    let mut todo: Vec<Ref> = Vec::new();
+    for f in &funcs {
+        if f.is_main || f.export || sema::is_test(&f.name) {
+            todo.push(Ref::Fn(f.name.clone()));
+        }
+    }
+    for g in &p.globals {
+        const_fns(&g.value, &mut todo);
+    }
+    let mut seen: std::collections::HashSet<Ref> = std::collections::HashSet::new();
+    while let Some(r) = todo.pop() {
+        if !seen.insert(r.clone()) {
+            continue;
+        }
+        match &r {
+            Ref::Fn(name) => {
+                if let Some(&i) = index.get(name.as_str()) {
+                    todo.extend(refs[i].iter().cloned());
+                }
+            }
+            Ref::Vtable(iface, strukt) => {
+                let methods = p.ifaces.iter().filter(|i| i.name == *iface).flat_map(|i| &i.methods);
+                todo.extend(methods.map(|m| Ref::Fn(format!("{strukt}.{}", m.name))));
+            }
+        }
+    }
+    let vtables = p.vtables.iter().filter(|(i, s)| seen.contains(&Ref::Vtable(i.clone(), s.clone()))).cloned().collect();
+    let funcs = funcs.into_iter().filter(|f| seen.contains(&Ref::Fn(f.name.clone()))).collect();
+    (funcs, vtables)
+}
+
+/// The value of an `if` condition when it is known before the program runs:
+/// `@hasLink(name)`, `true`, `false`, and `!`, `&&`, `||` of those.
+fn static_bool(e: &TExpr, linked: &[String]) -> Option<bool> {
+    match &e.kind {
+        TExprKind::HasLink(name) => Some(linked.contains(name)),
+        TExprKind::Bool(b) => Some(*b),
+        TExprKind::Unary { op: UnOp::Not, expr } => static_bool(expr, linked).map(|b| !b),
+        TExprKind::Binary { op: BinOp::And, lhs, rhs } => Some(static_bool(lhs, linked)? && static_bool(rhs, linked)?),
+        TExprKind::Binary { op: BinOp::Or, lhs, rhs } => Some(static_bool(lhs, linked)? || static_bool(rhs, linked)?),
+        _ => None,
     }
 }
 
@@ -246,6 +318,10 @@ struct Lower<'a> {
     ret: Type,
     /// The local slot of each global the function uses.
     globals: HashMap<String, LocalId>,
+    /// The libraries the program is linked with (`@hasLink`).
+    linked: &'a [String],
+    /// The functions and vtables the code refers to.
+    refs: Vec<Ref>,
 }
 
 fn local(id: LocalId) -> Place {
@@ -287,6 +363,7 @@ fn has_call(e: &TExpr) -> bool {
         | TExprKind::EmptySlice
         | TExprKind::ErrorValue(_)
         | TExprKind::FnRef { .. }
+        | TExprKind::HasLink(_)
         | TExprKind::SizeOf(_)
         | TExprKind::Zeroed => false,
         TExprKind::Binary { lhs, rhs, .. } | TExprKind::Index { base: lhs, index: rhs } => has_call(lhs) || has_call(rhs),
@@ -317,7 +394,8 @@ impl<'a> Lower<'a> {
         f: &'a sema::FnDef,
         structs: &'a HashMap<&'a str, &'a sema::StructDef>,
         enums: &'a HashMap<&'a str, &'a sema::EnumDef>,
-    ) -> Func {
+        linked: &'a [String],
+    ) -> (Func, Vec<Ref>) {
         // Sema variables keep their ids as OIR locals; temporaries follow.
         let locals = f.vars.iter().map(|v| Local { name: Some(v.name.clone()), ty: v.ty.clone(), global: false }).collect();
         let mut l = Lower {
@@ -328,6 +406,8 @@ impl<'a> Lower<'a> {
             span: Span::default(),
             ret: f.ret.clone(),
             globals: HashMap::new(),
+            linked,
+            refs: Vec::new(),
         };
         let mut body = Vec::new();
         l.block(&f.body, false, &mut body);
@@ -336,7 +416,7 @@ impl<'a> Lower<'a> {
             let ok = l.ok_void(&mut body);
             l.push(&mut body, StmtKind::Return(Some(ok)));
         }
-        Func {
+        let func = Func {
             name: f.name.clone(),
             params: f.params.clone(),
             ret: f.ret.clone(),
@@ -344,7 +424,8 @@ impl<'a> Lower<'a> {
             body,
             is_main: f.is_main,
             export: f.export,
-        }
+        };
+        (func, l.refs)
     }
 
     fn temp(&mut self, ty: Type) -> LocalId {
@@ -450,6 +531,13 @@ impl<'a> Lower<'a> {
                 let v = self.operand(value, out);
                 let rv = Rvalue::Binary { op: *op, lhs: cur, rhs: v, ty: target.ty.clone(), span: s.span };
                 self.push(out, StmtKind::Assign(place, rv));
+            }
+            // A condition known now: only the branch that runs.
+            TStmtKind::If { cond, capture: None, then, els } if let Some(b) = static_bool(cond, self.linked) => {
+                let mut t = Vec::new();
+                self.block(if b { then } else { els }, false, &mut t);
+                self.span = s.span;
+                self.push(out, StmtKind::If { cond: Operand::Bool(true), then: t, els: Vec::new() });
             }
             TStmtKind::If { cond, capture, then, els } => {
                 let mut t = Vec::new();
@@ -999,9 +1087,14 @@ impl<'a> Lower<'a> {
             }
             TExprKind::Call { name, is_extern, args } => {
                 let args = args.iter().map(|a| self.operand(a, out)).collect();
+                self.refs.push(Ref::Fn(name.clone()));
                 Rvalue::Call { name: name.clone(), is_extern: *is_extern, args }
             }
-            TExprKind::FnRef { name, is_extern } => Rvalue::Use(Operand::Fn { name: name.clone(), is_extern: *is_extern }),
+            TExprKind::FnRef { name, is_extern } => {
+                self.refs.push(Ref::Fn(name.clone()));
+                Rvalue::Use(Operand::Fn { name: name.clone(), is_extern: *is_extern })
+            }
+            TExprKind::HasLink(name) => Rvalue::Use(Operand::Bool(self.linked.contains(name))),
             TExprKind::CallValue { callee, args } => {
                 let callee = self.operand(callee, out);
                 let args = args.iter().map(|a| self.operand(a, out)).collect();
@@ -1017,6 +1110,7 @@ impl<'a> Lower<'a> {
             }
             TExprKind::ToDyn { ptr, strukt } => {
                 let Type::Dyn(iface) = &e.ty else { unreachable!() };
+                self.refs.push(Ref::Vtable(iface.clone(), strukt.clone()));
                 Rvalue::ToDyn { ptr: self.operand(ptr, out), iface: iface.clone(), strukt: strukt.clone() }
             }
             TExprKind::Intrinsic { op, args } => {

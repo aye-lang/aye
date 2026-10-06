@@ -1903,7 +1903,7 @@ pub fn main() {
 }
 E0094 = 94 {
     "misplaced `@link`",
-    "`@link(\"name\")` names a C library to link with. It is a declaration: it stands at the top level of a file, and its string names a `pkg-config` package (whose flags are used), a library (`-lname`) or a macOS framework (`framework:Cocoa`). No other builtin can be used at the top level.",
+    "`@link(\"name\")` (and `@linkOptional(\"name\")`) names a C library to link with. It is a declaration: it stands at the top level of a file, and its string names a `pkg-config` package (whose flags are used), a library (`-lname`) or a macOS framework (`framework:Cocoa`). No other builtin can be used at the top level.",
     r#"extern fn cos(x: f64) f64
 
 pub fn main() {
@@ -2060,6 +2060,26 @@ E0099 = 99 {
 pub fn main() {
     let buf = [N]u8{1, 2, 3, 4, 5}
     @println(buf.len)
+}
+"#,
+}
+E0100 = 100 {
+    "`@hasLink` of a library the program does not link",
+    "`@hasLink(\"name\")` is `true` when the program is built with the library `name`. It takes a string literal, and the library must be declared at the top level of some file with `@linkOptional(\"name\")` (linked only where it is installed) or `@link(\"name\")` (always linked, so `@hasLink` is always `true`). Check the spelling against the declaration.",
+    r#"@linkOptional("libcurl")
+
+pub fn main() {
+    if @hasLink("curl") {
+        @println("with libcurl")
+    }
+}
+"#,
+    r#"@linkOptional("libcurl")
+
+pub fn main() {
+    if @hasLink("libcurl") {
+        @println("with libcurl")
+    }
 }
 "#,
 }

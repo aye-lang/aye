@@ -128,7 +128,8 @@ pub fn main() {
 ```
 
 - Builtins start with `@`: `@print`, `@println`, `@expect`, `@expectEqual`,
-  `@testAllocator`, `@sizeOf`, `@zeroed`, `@ptrCast`, `@link`.
+  `@testAllocator`, `@sizeOf`, `@zeroed`, `@ptrCast`, `@link`,
+  `@linkOptional`, `@hasLink`.
 
 **Newlines end statements** (Go's rule). A newline is a statement
 terminator when the last token on the line is an identifier, a literal,
@@ -442,6 +443,32 @@ pub fn main() {
   `pkg-config --cflags --libs name` when it knows `name`, else `-lname`;
   `@link("framework:Cocoa")` on macOS. `ore build`, `run` and `test` link
   the libraries of every module.
+- `@linkOptional("name")` links the library only where it is installed
+  (`pkg-config` knows it, or clang can link `-lname`), so the program
+  still builds where it is missing. `@hasLink("name")` is a `bool` known
+  at build time (E0100 if no `@linkOptional`/`@link` declares `name`). In
+  `if @hasLink("name") { ... } else { ... }` (also with `!`, `&&`, `||`)
+  both branches are checked, but only the one that runs is built; a
+  function that nothing built calls is left out of the program, so code
+  that calls the library may sit in helpers:
+
+```ore
+@linkOptional("libcurl")
+
+extern fn curl_global_init(flags: i64) i32
+
+fn start() bool {
+    return curl_global_init(3) == 0
+}
+
+pub fn main() {
+    if @hasLink("libcurl") {
+        @println(start())
+    } else {
+        @println("no libcurl: fetching is unsupported")
+    }
+}
+```
 
 `[*]T` is an unchecked C pointer: `p[i]` reads and writes without a bounds
 check, `p[lo..hi]` (both bounds) gives a `[]mut T`, and it does not track
@@ -1173,7 +1200,8 @@ failure is `{"kind":"assertion"|"panic"|"leak","line":L,"col":C,"message":M}`,
   `bool` or `[]u8` to stdout (buffered C stdio). A `u8` is an integer:
   `@print(s[i])` writes `104`; write one character with `@print(s[i..i + 1])`.
 - `@expect`, `@expectEqual`, `@testAllocator`: section 13.
-- `@sizeOf(T)`, `@zeroed(T)`, `@ptrCast(T, p)`, `@link("lib")`: section 4.
+- `@sizeOf(T)`, `@zeroed(T)`, `@ptrCast(T, p)`, `@link("lib")`,
+  `@linkOptional("lib")`, `@hasLink("lib")`: section 4.
 
 ## 15. std
 

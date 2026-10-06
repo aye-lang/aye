@@ -1,0 +1,3 @@
+has_link.ore:4:17: error[E0100]: `@hasLink("libbar")`: no `@linkOptional("libbar")` (or `@link`) in the program
+has_link.ore:8:8: error[E0100]: `@hasLink` takes a string literal, the name of a library: `@hasLink("libcurl")`
+has_link.ore:11:5: error[E0094]: `@linkOptional` must be at the top level of a file, outside functions

@@ -1,0 +1,12 @@
+@linkOptional("libfoo")
+
+pub fn main() {
+    if @hasLink("libbar") {
+        @println("bar")
+    }
+    let n = "libfoo"
+    if @hasLink(n) {
+        @println("foo")
+    }
+    @linkOptional("libfoo")
+}

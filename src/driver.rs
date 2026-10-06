@@ -169,9 +169,44 @@ pub fn compile_root(root: Root, mode: Mode) -> Result<CProgram, Vec<Diag>> {
     let mut typed = checked.result?;
     typed.fns.retain(|f| !sema::is_test(&f.name));
     typed.tests.clear();
-    let ir = oir::lower(&typed);
+    let links = linked(&typed);
+    let ir = oir::lower(&typed, &links);
     let c = cgen::emit(&ir, &file_names(&checked.files), mode != Mode::Fast, mode == Mode::Debug, false);
-    Ok(CProgram { c, links: typed.links })
+    Ok(CProgram { c, links })
+}
+
+/// The libraries the program is linked with: those of `@link`, and those
+/// of `@linkOptional` that are installed.
+fn linked(p: &sema::Program) -> Vec<String> {
+    p.links.iter().chain(p.optional_links.iter().filter(|l| link_available(l))).cloned().collect()
+}
+
+/// Is the library `name` (as `@link` names it) installed: a framework
+/// that exists, a package that `pkg-config` knows, or a library that
+/// clang can link with (`-lname`)?
+pub fn link_available(name: &str) -> bool {
+    if let Some(fw) = name.strip_prefix("framework:") {
+        return ["/System/Library/Frameworks", "/Library/Frameworks"]
+            .iter()
+            .any(|d| Path::new(d).join(format!("{fw}.framework")).exists());
+    }
+    if Command::new("pkg-config").args(["--exists", name]).status().is_ok_and(|s| s.success()) {
+        return true;
+    }
+    let exe = std::env::temp_dir().join(format!("ore-link-{}-{name}", std::process::id()));
+    let child = Command::new("clang")
+        .args(["-x", "c", "-", "-o"])
+        .arg(&exe)
+        .arg(format!("-l{name}"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    let Ok(mut child) = child else { return false };
+    let _ = child.stdin.take().unwrap().write_all(b"int main(void) { return 0; }\n");
+    let ok = child.wait().is_ok_and(|s| s.success());
+    let _ = std::fs::remove_file(&exe);
+    ok
 }
 
 fn file_names(files: &[SourceFile]) -> Vec<String> {
@@ -183,10 +218,11 @@ fn file_names(files: &[SourceFile]) -> Vec<String> {
 pub fn compile_tests_to_c(root: Root, mode: Mode) -> Result<(CProgram, Vec<sema::TestDef>, Vec<String>), Vec<Diag>> {
     let checked = front_end(root, Some(false));
     let typed = checked.result?;
-    let ir = oir::lower(&typed);
+    let links = linked(&typed);
+    let ir = oir::lower(&typed, &links);
     let files = file_names(&checked.files);
     let c = cgen::emit(&ir, &files, mode != Mode::Fast, mode == Mode::Debug, true);
-    Ok((CProgram { c, links: typed.links }, typed.tests, files))
+    Ok((CProgram { c, links }, typed.tests, files))
 }
 
 /// The outcome of one test.
@@ -367,7 +403,9 @@ pub fn cc(p: &CProgram, out: &Path, mode: Mode) -> Result<(), String> {
         .stdin(Stdio::piped());
     // `-x none` ends `-x c`, so that a library file among the link flags is
     // not read as C (clang warns that it is unused when there is none).
-    let flags = link_flags(&p.links);
+    // `-lm` is always there.
+    let links: Vec<String> = p.links.iter().filter(|l| *l != "m").cloned().collect();
+    let flags = link_flags(&links);
     if !flags.is_empty() {
         cmd.args(["-Wno-unused-command-line-argument", "-x", "none"]).args(flags);
     }

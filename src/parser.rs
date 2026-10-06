@@ -292,29 +292,30 @@ impl Parser {
         Ok(GlobalDecl { name, span, is_pub, mutable, kw_span, ty, init })
     }
 
-    /// `@link("name")`, the only builtin at the top level.
+    /// `@link("name")` or `@linkOptional("name")`, the only builtins at the
+    /// top level.
     fn link_decl(&mut self, name: &str, is_pub: bool) -> Result<LinkDecl> {
         let span = self.span();
-        if name != "link" {
+        if name != "link" && name != "linkOptional" {
             return Err(Error::new(E0094, span, format!(
-                "only `@link(\"name\")` can be used at the top level of a file; `@{name}` belongs in a function"
+                "only `@link(\"name\")` and `@linkOptional(\"name\")` can be used at the top level of a file; `@{name}` belongs in a function"
             )));
         }
         if is_pub {
-            return Err(Error::new(E0094, span, "`@link` cannot be `pub`"));
+            return Err(Error::new(E0094, span, format!("`@{name}` cannot be `pub`")));
         }
         self.bump();
         self.expect(&Tok::LParen)?;
         let at = self.span();
         let Tok::Str(bytes) = self.peek().clone() else {
-            return Err(Error::new(E0094, at, "`@link` takes a string literal: `@link(\"name\")`"));
+            return Err(Error::new(E0094, at, format!("`@{name}` takes a string literal: `@{name}(\"name\")`")));
         };
         if bytes.is_empty() {
-            return Err(Error::new(E0094, at, "`@link` needs a library name: `@link(\"curl\")`"));
+            return Err(Error::new(E0094, at, format!("`@{name}` needs a library name: `@{name}(\"curl\")`")));
         }
         self.bump();
         self.expect(&Tok::RParen)?;
-        Ok(LinkDecl { name: String::from_utf8_lossy(&bytes).into_owned(), span })
+        Ok(LinkDecl { name: String::from_utf8_lossy(&bytes).into_owned(), span, optional: name == "linkOptional" })
     }
 
     /// `import a.b.c`
