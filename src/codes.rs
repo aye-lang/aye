@@ -2169,6 +2169,48 @@ pub fn main() {
 }
 "#,
 }
+E0104 = 104 {
+    "union literal or field default",
+    "An `extern union` is a C union: its fields share one piece of memory, so a literal sets exactly one of them, `Event { key: k }`, and its fields have no default values. Reading another field than the one written reads the same bytes as that field's type, as in C.",
+    r#"extern struct Key {
+    code: i32
+}
+
+extern struct Mouse {
+    x: i32
+    y: i32
+}
+
+extern union Event {
+    key: Key
+    mouse: Mouse
+}
+
+pub fn main() {
+    let e = Event { key: Key { code: 1 }, mouse: Mouse { x: 0, y: 0 } }
+    @println(e.key.code)
+}
+"#,
+    r#"extern struct Key {
+    code: i32
+}
+
+extern struct Mouse {
+    x: i32
+    y: i32
+}
+
+extern union Event {
+    key: Key
+    mouse: Mouse
+}
+
+pub fn main() {
+    let e = Event { key: Key { code: 1 } }
+    @println(e.key.code)
+}
+"#,
+}
 }
 
 #[cfg(test)]

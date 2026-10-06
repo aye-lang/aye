@@ -717,7 +717,12 @@ fn c_type(t: &Type) -> String {
     }
 }
 
-/// Types emitted as a C struct.
+/// Is `t` an `extern union`?
+fn is_union(p: &Program, t: &Type) -> bool {
+    matches!(t, Type::Struct(n) if p.structs.iter().any(|s| s.name == *n && s.is_union))
+}
+
+/// Types emitted as a C struct (or union).
 fn is_composite(t: &Type) -> bool {
     match t {
         Type::Array(..) | Type::Slice(..) | Type::Struct(_) | Type::Enum(_) | Type::ErrorUnion(..) | Type::Dyn(_) => true,
@@ -909,7 +914,8 @@ impl Gen {
         self.out.push('\n');
         for t in &composite {
             let n = c_type(t);
-            let _ = writeln!(self.out, "typedef struct {n} {n};");
+            let kind = if is_union(p, t) { "union" } else { "struct" };
+            let _ = writeln!(self.out, "typedef {kind} {n} {n};");
         }
         // Function pointer types, after the types they name (`all` lists a
         // type after its parts) and before the structs that hold them.
@@ -951,7 +957,7 @@ impl Gen {
                 for (_, ft) in &def.fields {
                     self.define(ft, p, done);
                 }
-                let mut s = format!("struct {name} {{");
+                let mut s = format!("{} {name} {{", if def.is_union { "union" } else { "struct" });
                 for (fname, ft) in &def.fields {
                     let _ = write!(s, " {} {};", c_type(ft), c_field(fname));
                 }
@@ -1291,6 +1297,9 @@ impl Gen {
                 let fs: Vec<String> = fields.iter().map(|o| self.operand(f, o)).collect();
                 format!("(({}){{{}}})", c_type(&Type::Struct(name.clone())), fs.join(", "))
             }
+            Rvalue::UnionLit { name, field, val } => {
+                format!("(({}){{.{} = {}}})", c_type(&Type::Struct(name.clone())), c_field(field), self.operand(f, val))
+            }
             Rvalue::Variant { enum_name, tag, variant, fields } => {
                 let t = c_type(&Type::Enum(enum_name.clone()));
                 if fields.is_empty() {
@@ -1424,6 +1433,10 @@ fn const_init(p: &Program, v: &ConstVal, ty: &Type) -> String {
         (ConstVal::Agg(fields), Type::Struct(name)) => {
             let def = p.structs.iter().find(|s| s.name == *name).unwrap();
             format!("{{{}}}", list(fields, &def.fields.iter().map(|(_, t)| t).collect::<Vec<_>>()))
+        }
+        (ConstVal::Union(i, x), Type::Struct(name)) => {
+            let (f, t) = &p.structs.iter().find(|s| s.name == *name).unwrap().fields[*i];
+            format!("{{.{} = {}}}", c_field(f), const_init(p, x, t))
         }
         (ConstVal::Variant(tag, fields), Type::Enum(name)) => {
             let v = &p.enums.iter().find(|e| e.name == *name).unwrap().variants[*tag];

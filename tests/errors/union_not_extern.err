@@ -1,0 +1,1 @@
+union_not_extern.ore:1:1: error[E0006]: a union is declared `extern union Name { ... }` (a C union); a tagged union is an `enum`

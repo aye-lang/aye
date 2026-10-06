@@ -98,6 +98,8 @@ pub struct StructDecl {
     pub is_pub: bool,
     /// `extern struct`: C layout, C-compatible fields.
     pub is_extern: bool,
+    /// `extern union`: a C union, whose fields share their memory.
+    pub is_union: bool,
     pub fields: Vec<FieldDecl>,
     /// Functions declared in the struct body.
     pub methods: Vec<FnDecl>,

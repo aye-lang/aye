@@ -1,0 +1,18 @@
+extern union Bits {
+    f: f64
+    u: u64 = 0
+}
+
+extern union Num {
+    i: c_int
+    l: c_long
+}
+
+pub fn main() {
+    let a = Num { i: 1, l: 2 }
+    let b = Num {}
+    let c = Num { i: 1 }
+    let same = c == c
+    let x: c_long = 1
+    let y: i32 = x
+}

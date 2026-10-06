@@ -169,6 +169,14 @@ fn file_doc(scan: &Scan, out: &mut String) {
                 members(d, b.0 + 1, b.1, all_methods, "    ", &doc, out);
                 out.push_str("}\n");
             }
+            // `pub extern union Name { ... }`
+            (Some(Tok::Ident(u)), Some(b)) if u == "union" && d[0].line != d[d.len() - 1].line => {
+                out.push_str(&flat(&d[..b.0]));
+                out.push_str(" {\n");
+                let all_methods = kw == Some(&Tok::Kw(Kw::Interface));
+                members(d, b.0 + 1, b.1, all_methods, "    ", &doc, out);
+                out.push_str("}\n");
+            }
             _ => {
                 out.push_str(&flat(d));
                 out.push('\n');

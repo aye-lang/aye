@@ -258,7 +258,15 @@ impl Parser {
                 match self.peek() {
                     Tok::Kw(Kw::Fn) => Ok(Item::Fn(self.fn_decl(is_pub, true)?)),
                     Tok::Kw(Kw::Struct) => Ok(Item::Struct(self.struct_decl(is_pub, true)?)),
-                    _ => Err(self.unexpected("`fn` or `struct` after `extern`")),
+                    // `union` is a keyword only after `extern`.
+                    Tok::Ident(n) if n == "union" => {
+                        self.bump();
+                        let (name, span) = self.ident()?;
+                        let mut u = self.struct_body(name, span, is_pub, true)?;
+                        u.is_union = true;
+                        Ok(Item::Struct(u))
+                    }
+                    _ => Err(self.unexpected("`fn`, `struct` or `union` after `extern`")),
                 }
             }
             Tok::Builtin(n) => Ok(Item::Link(self.link_decl(&n, is_pub)?)),
@@ -269,6 +277,9 @@ impl Parser {
             Tok::Kw(Kw::Test) if !is_pub => Ok(Item::Test(self.test_decl()?)),
             Tok::Kw(Kw::Let) | Tok::Kw(Kw::Var) => Ok(Item::Global(self.global_decl(is_pub)?)),
             Tok::Kw(k) if is_unsupported_kw(k) => Err(not_supported(k, self.span())),
+            Tok::Ident(n) if n == "union" && matches!(self.toks.get(self.pos + 1).map(|t| &t.tok), Some(Tok::Ident(_))) => {
+                Err(Error::new(E0006, self.span(), "a union is declared `extern union Name { ... }` (a C union); a tagged union is an `enum`"))
+            }
             _ => Err(self.unexpected(
                 "declaration (`fn`, `extern fn`, `struct`, `enum`, `error`, `interface`, `let`, `var` or `test`)",
             )),
@@ -451,7 +462,7 @@ impl Parser {
                 _ => return Err(self.unexpected("`,`, newline or `}` after struct field")),
             }
         }
-        Ok(StructDecl { name, span, is_pub, is_extern, fields, methods })
+        Ok(StructDecl { name, span, is_pub, is_extern, is_union: false, fields, methods })
     }
 
     /// `interface Name { fn m(self: *Self, ...) T ... }`, one method

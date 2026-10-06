@@ -188,6 +188,8 @@ pub enum Rvalue {
     Log { error: bool, pieces: Vec<Vec<u8>>, args: Vec<(Operand, Type)> },
     /// Fields in declaration order.
     StructLit { name: String, fields: Vec<Operand> },
+    /// A value of the union `name` with its field `field` set.
+    UnionLit { name: String, field: String, val: Operand },
     /// Enum value; payload fields in declaration order.
     Variant { enum_name: String, tag: usize, variant: String, fields: Vec<Operand> },
     AddrOf(Place),
@@ -244,7 +246,7 @@ enum Ref {
 fn const_fns(v: &sema::ConstVal, out: &mut Vec<Ref>) {
     match v {
         sema::ConstVal::Fn(name, false) => out.push(Ref::Fn(name.clone())),
-        sema::ConstVal::Some(x) => const_fns(x, out),
+        sema::ConstVal::Some(x) | sema::ConstVal::Union(_, x) => const_fns(x, out),
         sema::ConstVal::Agg(xs) | sema::ConstVal::Variant(_, xs) => xs.iter().for_each(|x| const_fns(x, out)),
         _ => {}
     }
@@ -1269,6 +1271,12 @@ impl<'a> Lower<'a> {
                 };
                 let hi = hi.as_ref().map(|x| self.operand(x, out));
                 Rvalue::Slice { base, len, elem, lo, hi, span: e.span }
+            }
+            TExprKind::StructLit(inits) if matches!(&e.ty, Type::Struct(n) if self.structs[n.as_str()].is_union) => {
+                let Type::Struct(name) = &e.ty else { unreachable!() };
+                let (i, x) = &inits[0];
+                let field = self.structs[name.as_str()].fields[*i].0.clone();
+                Rvalue::UnionLit { name: name.clone(), field, val: self.operand(x, out) }
             }
             TExprKind::StructLit(inits) => {
                 let Type::Struct(name) = &e.ty else { unreachable!() };

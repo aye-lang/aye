@@ -1,0 +1,6 @@
+union Bits {
+    f: f64
+}
+
+pub fn main() {
+}

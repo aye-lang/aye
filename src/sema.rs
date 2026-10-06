@@ -207,6 +207,13 @@ impl Type {
             "f32" => Type::Float(FloatTy::F32),
             "f64" => Type::Float(FloatTy::F64),
             "bool" => Type::Bool,
+            // C's integer types, as on LP64 systems (macOS and Linux).
+            "c_short" => Type::Int(IntTy::I16),
+            "c_ushort" => Type::Int(IntTy::U16),
+            "c_int" => Type::Int(IntTy::I32),
+            "c_uint" => Type::Int(IntTy::U32),
+            "c_long" | "c_longlong" => Type::Int(IntTy::I64),
+            "c_ulong" | "c_ulonglong" => Type::Int(IntTy::U64),
             "std::mem::Allocator" => Type::Builtin(BuiltinTy::Allocator),
             "std::heap::General" => Type::Builtin(BuiltinTy::General),
             "std::heap::Arena" => Type::Builtin(BuiltinTy::Arena),
@@ -307,6 +314,8 @@ pub enum ConstVal {
     Fn(String, bool),
     /// `@zeroed(T)` of an array or struct: every byte zero.
     Zeroed,
+    /// A union's value: the field that is set and its value.
+    Union(usize, Box<ConstVal>),
 }
 
 #[derive(Debug, Clone)]
@@ -350,6 +359,8 @@ pub fn is_test(name: &str) -> bool {
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<(String, Type)>,
+    /// An `extern union`: the fields share their memory.
+    pub is_union: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -868,7 +879,10 @@ fn expr_type(e: &ast::Expr) -> Option<ast::TypeExpr> {
 }
 
 /// Primitive and predeclared type names, for spelling suggestions.
-const TYPE_NAMES: &[&str] = &["i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize", "f32", "f64", "bool"];
+const TYPE_NAMES: &[&str] = &[
+    "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize", "f32", "f64", "bool", "c_short", "c_ushort", "c_int",
+    "c_uint", "c_long", "c_ulong", "c_longlong", "c_ulonglong",
+];
 
 /// The module of the canonical name `name` (`util` for `util::f`; `""`
 /// for the root module).
@@ -1113,7 +1127,7 @@ impl<'a> Checker<'a> {
             self.top_spans.insert(name.clone(), span);
             match item {
                 ast::Item::Struct(s) => {
-                    self.structs.insert(s.name.clone(), StructDef { name: s.name.clone(), fields: vec![] });
+                    self.structs.insert(s.name.clone(), StructDef { name: s.name.clone(), fields: vec![], is_union: s.is_union });
                     if s.is_extern {
                         self.extern_structs.insert(s.name.clone());
                     }
@@ -1177,7 +1191,12 @@ impl<'a> Checker<'a> {
                     }
                     self.structs.get_mut(&s.name).unwrap().fields = fields;
                     let exprs = default_exprs(&s.fields);
-                    if exprs.iter().any(Option::is_some) {
+                    if let (true, Some(f)) = (s.is_union, s.fields.iter().find(|f| f.default.is_some())) {
+                        self.report(Error::new(E0104, f.span, format!(
+                            "a field of the union `{}` cannot have a default value: a literal sets exactly one field",
+                            s.name
+                        )));
+                    } else if exprs.iter().any(Option::is_some) {
                         let module = module_of(&s.name).to_string();
                         self.default_decls.insert(s.name.clone(), DefaultDecls { exprs, env: Vec::new(), module });
                     }
@@ -1505,6 +1524,10 @@ impl<'a> Checker<'a> {
                 Some(g) => g.value.clone().ok_or_else(silent)?,
                 None => return Err(silent()),
             },
+            TExprKind::StructLit(inits) if matches!(&e.ty, Type::Struct(n) if self.structs[n].is_union) => {
+                let (i, x) = &inits[0];
+                ConstVal::Union(*i, Box::new(self.fold(x)?))
+            }
             TExprKind::StructLit(inits) | TExprKind::Variant { fields: inits, .. } => {
                 let mut vals = inits.iter().map(|(i, x)| Ok((*i, self.fold(x)?))).collect::<Result<Vec<_>>>()?;
                 vals.sort_by_key(|(i, _)| *i);
@@ -1518,6 +1541,8 @@ impl<'a> Checker<'a> {
             TExprKind::Field { base, index } => match self.fold(base)? {
                 ConstVal::Agg(mut fields) => fields.swap_remove(*index),
                 ConstVal::Zeroed => zero_of(&e.ty),
+                ConstVal::Union(i, v) if i == *index => *v,
+                ConstVal::Union(..) => return err(E0089, span, "this constant union holds another field"),
                 _ => unreachable!(),
             },
             TExprKind::ArrayLen(base) => match base.ty {
@@ -1865,7 +1890,7 @@ impl<'a> Checker<'a> {
         let name = self.instance_name(g, &key.1);
         self.instances.insert(key.clone(), name.clone());
         self.instance_structs.push(name.clone());
-        self.structs.insert(name.clone(), StructDef { name: name.clone(), fields: vec![] });
+        self.structs.insert(name.clone(), StructDef { name: name.clone(), fields: vec![], is_union: false });
         let identity = key.1 == self.own_params(decl);
         let is_abstract = key.1.iter().any(|t| self.has_param(t));
         if is_abstract {
@@ -3101,6 +3126,7 @@ impl<'a> Checker<'a> {
                 Some("it has variants with fields (use `match`)".to_string())
             }
             Type::Enum(_) => None,
+            Type::Struct(n) if self.structs[n].is_union => Some("it is a union".to_string()),
             Type::Struct(n) => self.structs[n].fields.iter().find(|(_, ft)| self.why_not_comparable(ft).is_some()).map(|(f, ft)| {
                 format!("its field `{f}` has type `{ft}`, which `==` cannot compare")
             }),
@@ -4407,6 +4433,14 @@ impl<'a> Checker<'a> {
         span: Span,
     ) -> Result<Vec<(usize, TExpr)>> {
         let mut inits: Vec<(usize, TExpr)> = Vec::new();
+        if let Some(s) = strukt
+            && self.structs[s].is_union
+            && fields.len() != 1
+        {
+            let at = fields.get(1).map_or(span, |f| f.span);
+            let first = def.first().map_or("field", |(n, _)| n.as_str());
+            return err(E0104, at, format!("a literal of the union `{s}` sets exactly one field: `{s} {{ {first}: ... }}`"));
+        }
         for f in fields {
             let Some(index) = def.iter().position(|(n, _)| *n == f.name) else {
                 let e = Error::new(E0038, f.span, format!("{owner} has no field `{}`", f.name));
@@ -4417,6 +4451,9 @@ impl<'a> Checker<'a> {
             }
             let v = self.expect(&f.value, &def[index].1)?;
             inits.push((index, v));
+        }
+        if strukt.is_some_and(|s| self.structs[s].is_union) {
+            return Ok(inits);
         }
         for (i, (name, _)) in def.iter().enumerate() {
             if inits.iter().any(|(j, _)| *j == i) {

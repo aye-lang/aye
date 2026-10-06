@@ -1,0 +1,62 @@
+// M9.7: `extern union` (a C union) and the C integer type names
+// (`c_int`, `c_long`, ...: LP64 sizes).
+extern struct KeyEvent {
+    kind: u32
+    code: c_int
+}
+
+extern struct MouseEvent {
+    kind: u32
+    x: c_int
+    y: c_int
+}
+
+extern union Event {
+    kind: u32
+    key: KeyEvent
+    mouse: MouseEvent
+    padding: [56]u8
+}
+
+extern union Bits {
+    f: f64
+    u: u64
+    b: [8]u8
+}
+
+let ONE = Bits { f: 1.0 }
+
+extern fn labs(x: c_long) c_long
+extern fn abs(x: c_int) c_int
+extern fn memcpy(dst: [*]u8, src: [*]u8, n: usize) [*]u8
+
+fn describe(e: *Event) {
+    match e.kind {
+        1 => @println(e.key.code)
+        2 => @println(e.mouse.x + e.mouse.y)
+        _ => @println("other")
+    }
+}
+
+pub fn main() {
+    var e = Event { key: KeyEvent { kind: 1, code: 42 } }
+    describe(&e)
+    e.mouse = MouseEvent { kind: 2, x: 3, y: 4 }
+    describe(&e)
+    @println(@sizeOf(Event))
+    var z = @zeroed(Event)
+    @println(z.kind)
+    // Fill a union from bytes, as C code would through a `void *`.
+    var raw = [8]u8{0, 0, 0, 0, 0, 0, 0xF0, 0x3F}
+    var b = Bits { u: 0 }
+    let n = memcpy(@ptrCast([*]u8, &mut b), raw[..].ptr, 8)
+    @println(b.f)
+    @println(ONE.u)
+    @println(ONE.b[7])
+    let big: c_long = -5000000000
+    @println(labs(big))
+    @println(abs(-7))
+    let small: c_short = 3
+    let ul: c_ulong = 7
+    @println(small as c_long + ul as c_long)
+}

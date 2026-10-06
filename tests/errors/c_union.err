@@ -1,0 +1,5 @@
+c_union.ore:3:5: error[E0104]: a field of the union `Bits` cannot have a default value: a literal sets exactly one field
+c_union.ore:12:25: error[E0104]: a literal of the union `Num` sets exactly one field: `Num { i: ... }`
+c_union.ore:13:13: error[E0104]: a literal of the union `Num` sets exactly one field: `Num { i: ... }`
+c_union.ore:15:18: error[E0025]: operator `==` cannot be applied to `Num`: it is a union
+c_union.ore:17:18: error[E0023]: mismatched types: expected `i32`, found `i64`

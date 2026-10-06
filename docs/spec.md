@@ -96,7 +96,9 @@ context; `ore doc --signatures std` prints all of std.
   orelse unreachable comptime where as test mut extern`.
 - Predeclared names (not keywords, cannot be declared again): `true false
   null Self type Integer` and the primitive types `i8 i16 i32 i64 isize u8 u16 u32
-  u64 usize f32 f64 bool`. `in` is special only in a `for` header.
+  u64 usize f32 f64 bool` and C's integer types `c_short c_ushort c_int
+  c_uint c_long c_ulong c_longlong c_ulonglong`. `in` is special only in a
+  `for` header, `union` only after `extern`.
 - Integer literals: `42`, `1_000`, `0xff`, `0o17`, `0b1010`. Float literals:
   `1.5`, `2.0e-3`, `1e9` (a float needs digits on both sides of `.`).
 - Char literals `'a'`, `'\n'`, `'"'` are integers (the Unicode code point)
@@ -442,7 +444,9 @@ pub fn main() {
   headers), so it must match the library's. Modules that declare one C
   function give it the same signature.
 - C-compatible types, the only ones allowed in an `extern fn`: integers
-  (`i32` is C `int`, `usize` is `size_t`), floats, `bool`, pointers to
+  (`i32` is C `int`, `usize` is `size_t`; `c_int`, `c_long`, `c_ulong`,
+  ... name C's types: other names for `i32`, `i64`, `u64`, ..., the sizes
+  on 64-bit macOS and Linux), floats, `bool`, pointers to
   C-compatible types (`*T`, `*mut T`, `[*]T`), optional pointers (`?*T`,
   `?[*]T`, `?fn(...)`: C pointers that may be null), `extern struct`s by
   value, and `fn(A) R` of C-compatible types (a callback). C's `void *` is
@@ -457,6 +461,10 @@ pub fn main() {
   Declare the fields the C header has (a prefix is enough when C owns the
   value and Ore reads it through a pointer); an `extern struct` with no
   fields is an opaque C type, used behind pointers.
+- `extern union Name { fields }` is a C union: the fields (C-compatible)
+  share one piece of memory, a literal sets exactly one of them
+  (`Event { key: k }`, E0104), and reading another field reads the same
+  bytes, as in C (`SDL_Event`). It has no `==` and no field defaults.
 - `pub extern fn` with a body exports an Ore function to C under its own
   name (C-compatible signature). Without `pub`, a body is an error.
 - `@link("name")` at the top level links a C library: the flags of
@@ -498,7 +506,9 @@ of one), for example `@ptrCast([*]u8, &mut state)` for a C `void *` and
 back, or between function types (`@ptrCast(fn([*]u8), f)` for a C
 callback); it cannot make a `*T` writable or an optional non-optional.
 `@sizeOf(T)` is a `usize`; `@zeroed(T)` is the all-zero value of a number,
-optional pointer, `extern struct` or array of them.
+`bool` (`false`), optional pointer, `extern struct`, `extern union` or
+array of them (`@zeroed([64]bool)`, `@zeroed([4][4]u8)`), and a constant
+(usable in a global or a field default).
 
 ## 5. Types
 

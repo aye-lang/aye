@@ -37,15 +37,17 @@ keyword     = "fn" | "let" | "var" | "pub" | "import" | "struct" | "enum"
             | "as" | "test" | "mut" | "extern" ;
 (* `comptime` appears only before a parameter and `where` only after a
    return type; elsewhere they are errors.
-   `true`, `false`, `null`, `in`, `Self`, `type` and the primitive type
-   names are predeclared identifiers, not keywords. `Allocator`,
+   `true`, `false`, `null`, `in`, `Self`, `type`, the primitive type
+   names and C's integer type names (c_short c_ushort c_int c_uint c_long
+   c_ulong c_longlong c_ulonglong: i16 u16 i32 u32 i64 u64 i64 u64) are
+   predeclared identifiers, not keywords. `Allocator`,
    `AllocError`, `General` and `Arena` are items of std (`std.mem`,
    `std.heap`) and must be imported. *)
 
 (* --------------------------------------------------------- top level *)
 
 file        = { NEWLINE } , { ( import | item ) , ( NEWLINE | EOF ) , { NEWLINE } } ;
-item        = fn_decl | extern_fn | struct_decl | enum_decl | error_decl
+item        = fn_decl | extern_fn | struct_decl | union_decl | enum_decl | error_decl
             | interface_decl | test_decl | global_decl | link_decl ;
 
 link_decl   = ( "@link" | "@linkOptional" ) "(" string_lit ")" ;
@@ -94,6 +96,11 @@ member      = field [ "=" expr ] | fn_decl ;
                (* in a method, `Self` is the struct; a first parameter of type
                   Self, *Self or *mut Self makes it callable as x.method().
                   An extern struct has C layout and C-compatible fields. *)
+union_decl  = [ "pub" ] "extern" "union" ident "{" { NEWLINE }
+              [ member { ( "," | NEWLINE ) { NEWLINE } member } [ "," ] { NEWLINE } ] "}" ;
+               (* a C union: the fields share their memory; a literal sets
+                  exactly one field; no field defaults. "union" is an
+                  identifier everywhere else *)
 struct_type = "struct" "{" { NEWLINE }
               [ member { ( "," | NEWLINE ) { NEWLINE } member } [ "," ] { NEWLINE } ] "}" ;
                (* anonymous struct: only as the value a type function returns *)
