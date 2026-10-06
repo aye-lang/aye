@@ -1029,6 +1029,9 @@ fn search(it: *mut Interp, prog: *RegexProg, s: []u8, from: usize, caps: []mut i
     }
     m.exhausted = false
     m.steps = 0
+    for i in 0..regs.len {
+        regs[i] = -1
+    }
     m.max_depth = BIG_DEPTH
     var job = SearchJob { m: &mut m, from: from, found: false }
     if thread.spawnWithStack(SearchJob, searchJob, &mut job, BIG_STACK) |t| {

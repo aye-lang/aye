@@ -27,3 +27,13 @@ console.log(inherited.prototype.constructor === shadow);
 function invalid() {}
 Object.freeze(invalid);
 try { Object.defineProperty(invalid, "prototype", {value:{}}); } catch(e) { console.log(e.name); }
+var method = ({m() {}}).m;
+var reads = 0;
+Object.defineProperty(Function.prototype, "prototype", {get:function() { reads++; return {}; }, configurable:true});
+Object.defineProperty(method, "prototype", {value:{x:4}, configurable:true});
+console.log(reads, method.prototype.x);
+delete Function.prototype.prototype;
+var getter = function() { reads++; return 99; };
+Object.defineProperty(method, "prototype", {get:getter, configurable:true});
+console.log(Object.getOwnPropertyDescriptor(method, "prototype").get === getter, reads);
+console.log(method.prototype, reads);

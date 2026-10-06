@@ -367,7 +367,7 @@ pub fn definePropertyFrom(it: *mut Interp, o: u32, key: u32, desc: Value) JsErro
     if key == A_PROTOTYPE && it.heap.obj(o).class == Class.Function {
         let base = it.stack.len()
         try it.push(desc)
-        try it.getProp(objVal(o), key)
+        try it.resolveLazyPrototype(o, key)
         it.truncate(base)
     }
     var old: u8 = 0
@@ -497,9 +497,7 @@ pub fn ownDescriptor(it: *mut Interp, o: u32, key: u32) JsError!Value {
     try it.push(objVal(o))
     let d = try it.newObject(it.object_proto)
     try it.push(objVal(d))
-    if key == A_PROTOTYPE && it.heap.obj(o).class == Class.Function {
-        try it.getProp(objVal(o), key)
-    }
+    try it.resolveLazyPrototype(o, key)
     if it.heap.findProp(o, key) |i| {
         let p = it.heap.obj(o).props[i]
         if (p.flags & F_ACCESSOR) != 0 {

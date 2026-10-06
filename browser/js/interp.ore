@@ -2169,6 +2169,23 @@ pub struct Interp {
     // Empty in a function's own prototype slot is the lazy prototype,
     // not a JS value. Materialization changes only its value, even when
     // the function has been frozen; flags/order/layout remain unchanged.
+    fn resolveLazyPrototype(self: *mut Self, o: u32, key: u32) JsError!void {
+        if key != A_PROTOTYPE || self.heap.obj(o).class != Class.Function {
+            return
+        }
+        if self.heap.findProp(o, key) |slot| {
+            let p = self.heap.obj(o).props[slot]
+            if (p.flags & F_ACCESSOR) == 0 {
+                match p.value {
+                    .Empty => {
+                        try self.materializePrototype(o, slot)
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     fn materializePrototype(self: *mut Self, f: u32, slot: u32) JsError!Value {
         let base = self.stack.len()
         defer self.truncate(base)
