@@ -247,6 +247,8 @@ pub struct System {
     // NO_FACE.
     covered: IntMap(u32, u32)
     web: List(WebFace)
+    // The URLs of web fonts that could not be fetched or read.
+    failed: List([]mut u8)
     // The web faces of each font family list, weight and style (the key:
     // see `chainOf`); cleared when a web font is added.
     chains: StrMap(Span)
@@ -279,6 +281,7 @@ pub struct System {
                     fallbacks_loaded: false,
                     covered: IntMap(u32, u32).init(alloc),
                     web: List(WebFace).init(alloc),
+                    failed: List([]mut u8).init(alloc),
                     chains: StrMap(Span).init(alloc),
                     chain_keys: List([]mut u8).init(alloc),
                     chain_faces: List(usize).init(alloc),
@@ -350,6 +353,10 @@ pub struct System {
             self.alloc.free(w.ranges)
             self.alloc.free(w.url)
         }
+        for f in self.failed.items() {
+            self.alloc.free(f)
+        }
+        self.failed.deinit()
         self.clearChains()
         self.chains.deinit()
         self.chain_keys.deinit()
@@ -386,34 +393,47 @@ pub struct System {
         }
     }
 
-    /// Adds the web font `file` (a TrueType or OpenType file, copied)
-    /// for the `@font-face` rule `d`; false when FreeType cannot read it.
-    /// A font from the same URL with the same descriptors is added once.
-    pub fn addWebFont(self: *mut Self, d: FaceDesc, file: []u8) AllocError!bool {
+    /// Is the web font `d` neither added nor failed yet?
+    pub fn webFontWanted(self: *mut Self, d: FaceDesc) bool {
         for w in self.web.items() {
-            if text.eql(w.url, d.url) && text.eqlIgnoreCase(w.family, d.family) && w.weight_lo == d.weight_lo && w.italic == d.italic {
-                return true
-            }
-        }
-        if file.len == 0 {
-            return false
-        }
-        let data = try self.alloc.alloc(0 as u8, file.len)
-        for i, c in file {
-            data[i] = c
-        }
-        var out: ?*mut FTFaceRec = null
-        if FT_New_Memory_Face(self.library, data.ptr, data.len as i64, 0, &mut out) != 0 {
-            self.alloc.free(data)
-            return false
-        }
-        if out |ft| {
-            if ft.units_per_em == 0 {
-                FT_Done_Face(ft)
-                self.alloc.free(data)
+            if text.eql(w.url, d.url) && text.eqlIgnoreCase(w.family, d.family) && w.weight_lo == d.weight_lo && w.weight_hi == d.weight_hi && w.italic == d.italic && w.ranges.len == d.ranges.len {
                 return false
             }
-            try self.faces.append(faceOf(ft, data))
+        }
+        for f in self.failed.items() {
+            if text.eql(f, d.url) {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// Adds the web font `file` (a TrueType or OpenType file, copied)
+    /// for the `@font-face` rule `d`; false when FreeType cannot read it
+    /// (or `file` is empty: it could not be fetched), and the URL is not
+    /// wanted again. A file already added for another rule is reused.
+    pub fn addWebFont(self: *mut Self, d: FaceDesc, file: []u8) AllocError!bool {
+        if !self.webFontWanted(d) {
+            return true
+        }
+        var fi: ?usize = null
+        for w in self.web.items() {
+            if text.eql(w.url, d.url) {
+                fi = w.face
+            }
+        }
+        if fi == null {
+            fi = try self.loadMemoryFace(file)
+        }
+        if fi == null {
+            let address = try self.alloc.alloc(0 as u8, d.url.len)
+            for i, c in d.url {
+                address[i] = c
+            }
+            try self.failed.append(address)
+            return false
+        }
+        if fi |face| {
             let family = try self.alloc.alloc(0 as u8, d.family.len)
             for i, c in d.family {
                 family[i] = c
@@ -434,13 +454,39 @@ pub struct System {
                 italic: d.italic,
                 ranges: ranges,
                 url: address,
-                face: self.faces.len() - 1,
+                face: face,
             })
             self.clearChains()
-            return true
+        }
+        return true
+    }
+
+    // Loads the font file `file` (copied) as a face; its index in
+    // `faces`, null when FreeType cannot read it.
+    fn loadMemoryFace(self: *mut Self, file: []u8) AllocError!?usize {
+        if file.len == 0 {
+            return null
+        }
+        let data = try self.alloc.alloc(0 as u8, file.len)
+        for i, c in file {
+            data[i] = c
+        }
+        var out: ?*mut FTFaceRec = null
+        if FT_New_Memory_Face(self.library, data.ptr, data.len as i64, 0, &mut out) != 0 {
+            self.alloc.free(data)
+            return null
+        }
+        if out |ft| {
+            if ft.units_per_em == 0 {
+                FT_Done_Face(ft)
+                self.alloc.free(data)
+                return null
+            }
+            try self.faces.append(faceOf(ft, data))
+            return self.faces.len() - 1
         }
         self.alloc.free(data)
-        return false
+        return null
     }
 
     /// Shapes `s` in `f` into glyphs, in visual order (right to left

@@ -11,6 +11,7 @@
 //
 // All lengths are in CSS px.
 
+import std
 import std.list.List
 import std.mem.AllocError
 import std.text
@@ -101,8 +102,12 @@ pub struct Metrics {
 pub interface Measurer {
     fn metrics(self: *mut Self, f: Font) Metrics
     fn width(self: *mut Self, f: Font, s: []u8) f64
-    // Adds a web font (a TrueType or OpenType file, copied); false when
-    // it cannot be used. The fixed-metric font ignores web fonts.
+    // Should the file of the web font `d` be fetched (it is not there
+    // yet, and did not fail before)? The fixed-metric font ignores web
+    // fonts.
+    fn webFontWanted(self: *mut Self, d: FaceDesc) bool
+    // Adds a web font (a TrueType or OpenType file, copied; empty when it
+    // could not be fetched); false when it cannot be used.
     fn addWebFont(self: *mut Self, d: FaceDesc, file: []u8) AllocError!bool
 }
 
@@ -128,6 +133,10 @@ pub struct Fixed {
             i += d.len
         }
         return ems * f.size
+    }
+
+    pub fn webFontWanted(self: *mut Self, d: FaceDesc) bool {
+        return false
     }
 
     pub fn addWebFont(self: *mut Self, d: FaceDesc, file: []u8) AllocError!bool {
@@ -268,4 +277,59 @@ test "right-to-left text and shaping" {
         return
     }
     @expect(alone.items()[0].glyph != first.glyph)
+}
+
+test "web fonts by family, weight and unicode-range" {
+    var s = System.init(@testAllocator()) catch |e| {
+        return
+    }
+    defer s.deinit()
+    var file: []mut u8 = []mut u8{}
+    let paths = [2][]u8{"/System/Library/Fonts/Supplemental/Courier New.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"}
+    for p in paths {
+        if file.len == 0 {
+            if std.fs.open(p) |f| {
+                defer f.close()
+                file = f.readAll(@testAllocator()) catch |e| {
+                    return
+                }
+            } else |e| {
+            }
+        }
+    }
+    if file.len == 0 {
+        return
+    }
+    defer @testAllocator().free(file)
+    let latin = [2]u32{0x20, 0x7E}
+    let d = FaceDesc { family: "Test Face", weight_lo: 400.0, weight_hi: 400.0, italic: false, ranges: latin[..], url: "https://f.test/a.ttf" }
+    @expect(s.webFontWanted(d))
+    let added = s.addWebFont(d, file) catch |e| {
+        return
+    }
+    @expect(added)
+    @expect(!s.webFontWanted(d))
+    let bad = FaceDesc { family: "Bad", weight_lo: 400.0, weight_hi: 400.0, italic: false, ranges: latin[0..0], url: "https://f.test/bad.ttf" }
+    let junk = [4]u8{1, 2, 3, 4}
+    let ok = s.addWebFont(bad, junk[..]) catch |e| {
+        return
+    }
+    @expect(!ok)
+    @expect(!s.webFontWanted(bad))
+    var placed = List(Placed).init(@testAllocator())
+    defer placed.deinit()
+    // The web face is monospace: "iiii" and "MMMM" are as wide.
+    let f = Font { size: 16.0, bold: false, italic: false, mono: false, family: "\"Test Face\", serif" }
+    let wi = s.width(f, "iiii")
+    @expectEqual(wi, s.width(f, "MMMM"))
+    let serif = Font { size: 16.0, bold: false, italic: false, mono: false, family: "serif, \"Test Face\"" }
+    @expect(s.width(serif, "iiii") != s.width(serif, "MMMM"))
+    // A bold font still takes the only face of the family.
+    let bold = Font { size: 16.0, bold: true, italic: false, mono: false, weight: 700.0, family: "'test face'" }
+    @expectEqual(wi, s.width(bold, "iiii"))
+    // Outside its unicode-range, a character comes from the system face.
+    s.shapeText(f, "aé", &mut placed) catch |e| {
+        return
+    }
+    @expect(placed.items()[0].face != placed.items()[1].face)
 }

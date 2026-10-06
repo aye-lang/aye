@@ -107,7 +107,9 @@ var import_depth: usize = 0
 fn parseWithImports(alloc: Allocator, base: *Url, address: *Url, src: []u8, media: css.Media, sheet: *mut css.Sheet) AllocError!void {
     let first_rule = sheet.rules.len()
     let first_import = sheet.imports.len()
+    let first_face = sheet.font_faces.len()
     try css.parseSheet(sheet, src, media)
+    try setFontBase(sheet, first_face, base.href)
     let n = sheet.imports.len() - first_import
     if n == 0 || import_depth >= MAX_IMPORT_DEPTH {
         return

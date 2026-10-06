@@ -4,8 +4,9 @@
 // and of `@layer` blocks (layer order is ignored) are parsed as if they
 // were at the top level. `@import` rules before the first style rule are
 // recorded in `Sheet.imports` (with their media and `supports()`
-// checked) for the loader to fetch. Other at-rules (`@font-face`,
-// `@keyframes`, `@container`, `@page`, ...) are skipped with their block.
+// checked) for the loader to fetch. `@font-face` rules are read from the
+// text (fontface.ore). Other at-rules (`@keyframes`, `@container`,
+// `@page`, ...) are skipped with their block.
 // A rule with an invalid selector is dropped whole; an invalid
 // declaration is dropped up to the next `;`. Blocks are matched by their
 // bracket kind, so a stray `}` or `)` inside a value cannot end a rule.
@@ -26,6 +27,7 @@ pub fn parseSheet(sheet: *mut Sheet, src: []u8, media: Media) AllocError!void {
     let toks = try tokens(sheet, src)
     var p = Parser { sheet: sheet, toks: toks, media: media, styled: false }
     try p.rules(0, toks.len, true)
+    try fontFaceRules(sheet, src)
 }
 
 /// Parses a list of declarations (a `style` attribute) into `sheet` and

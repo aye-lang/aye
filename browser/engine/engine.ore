@@ -142,6 +142,9 @@ pub struct Page {
             self.dropStyling()
             self.styling = try self.styleFor(css.Media { width: width, height: height })
         }
+        if self.styling |st| {
+            try loadWebFonts(self.alloc, &mut st.author, self.url.href, measure)
+        }
         try updateImages(self)
         if self.styling |st| {
             var nodes: ?*layout.Images = null

@@ -290,6 +290,8 @@ pub struct Sheet {
     // The URLs of the `@import` rules whose media match, as the parser
     // met them (the loader fetches them: engine/sheets.ore).
     imports: List([]u8)
+    // The `@font-face` rules (fontface.ore).
+    font_faces: List(FontFace)
 
     pub fn init(alloc: Allocator) AllocError!Sheet {
         let arena = try alloc.create(Arena.init(alloc))
@@ -303,6 +305,7 @@ pub struct Sheet {
             simples: List(Simple).init(a),
             decls: List(Decl).init(a),
             imports: List([]u8).init(a),
+            font_faces: List(FontFace).init(a),
         }
     }
 
