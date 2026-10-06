@@ -10,6 +10,14 @@
 //!   libraries with `@link`; skipped when `pkg-config` does not know a
 //!   package listed in `X.needs`. Programs run with `SDL_VIDEODRIVER=dummy`,
 //!   so SDL2 needs no display.
+//! - `tests/cimport/X.ore`: programs with `@cimport`, run with `ore run`
+//!   from the crate root with a cache directory of their own: stdout must
+//!   equal `X.out`, and then `ore check` must pass without libclang (the
+//!   cache). If `X.err` exists, `ore check` must fail with exactly that on
+//!   stderr instead, with the variables of `X.env` (`NAME=value` lines) set.
+//!   `ore cimport tests/cimport/X.h` must print exactly `X.gen` where that
+//!   exists. Skipped without libclang, or when `pkg-config` does not know a
+//!   package of `X.needs`.
 //! - `tests/errors/X.ore`: must fail to compile with exactly the diagnostics
 //!   in `X.err`, one per line, in order.
 //! - `tests/tests/X.ore`: `ore test X.ore` (debug mode) must print exactly
@@ -129,6 +137,66 @@ fn ffi_case(path: &Path, work: &Path) -> Result<(), String> {
         return Ok(());
     }
     run_case(path, work)
+}
+
+/// Run the `ore` binary in the crate root with the environment `env`.
+fn ore_env(args: &[&str], env: &[(String, String)]) -> Result<(String, String, Option<i32>), String> {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_ore"));
+    cmd.current_dir(env!("CARGO_MANIFEST_DIR")).args(args);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().map_err(|e| e.to_string())?;
+    Ok((String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned(), out.status.code()))
+}
+
+fn cimport_case(path: &Path, work: &Path) -> Result<(), String> {
+    let x = name(path);
+    let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
+    let rel = format!("tests/cimport/{x}");
+    let mut env: Vec<(String, String)> = read(&path.with_extension("env"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+        .collect();
+    let without_libclang = env.iter().any(|(k, _)| k == "LIBCLANG_PATH");
+    if !without_libclang && !ore::cimport::libclang_available() {
+        println!("skipped cimport/{x}: no libclang");
+        return Ok(());
+    }
+    let missing = missing_packages(path);
+    if !missing.is_empty() {
+        println!("skipped cimport/{x}: pkg-config does not know {}", missing.join(", "));
+        return Ok(());
+    }
+    let cache = work.join(format!("cimport-cache-{stem}"));
+    env.push(("ORE_CACHE_DIR".to_string(), cache.to_string_lossy().into_owned()));
+    if let Some(want) = read(&path.with_extension("err")) {
+        let (_, err, code) = ore_env(&["check", &rel], &env)?;
+        if code != Some(1) || err != want {
+            return Err(format!("`ore check {rel}`: status {code:?}\n--- expected\n{want}--- got\n{err}"));
+        }
+    } else {
+        let want = read(&path.with_extension("out")).ok_or("missing .out file")?;
+        let (out, err, code) = ore_env(&["run", &rel], &env)?;
+        if code != Some(0) || out != want {
+            return Err(format!("`ore run {rel}`: status {code:?}, stderr:\n{err}\n--- expected\n{want}--- got\n{out}"));
+        }
+        // From the cache, without libclang.
+        env.push(("LIBCLANG_PATH".to_string(), "/nonexistent/libclang".to_string()));
+        let (_, err, code) = ore_env(&["check", &rel], &env)?;
+        if code != Some(0) {
+            return Err(format!("`ore check {rel}` without libclang (from the cache): status {code:?}\n{err}"));
+        }
+    }
+    let header = format!("tests/cimport/{stem}.h");
+    if let Some(want) = read(&path.with_extension("gen")) {
+        let (out, err, code) = ore_env(&["cimport", &header], &[])?;
+        if code != Some(0) || out != want {
+            return Err(format!("`ore cimport {header}`: status {code:?}, stderr:\n{err}\n--- expected\n{want}--- got\n{out}"));
+        }
+    }
+    Ok(())
 }
 
 fn error_case(path: &Path) -> Result<(), String> {
@@ -570,6 +638,7 @@ fn main() {
     let test_cases = cases("tests");
     let fix_cases = cases("fix");
     let ffi_cases = cases("ffi");
+    let cimport_cases = cases("cimport");
     let mod_cases = module_dirs();
     let results: Vec<(String, Result<(), String>)> = std::thread::scope(|s| {
         let mut handles = Vec::new();
@@ -583,6 +652,10 @@ fn main() {
         }
         for p in &err_cases {
             handles.push((format!("errors/{}", name(p)), s.spawn(move || error_case(p))));
+        }
+        for p in &cimport_cases {
+            let w = &work;
+            handles.push((format!("cimport/{}", name(p)), s.spawn(move || cimport_case(p, w))));
         }
         for p in &test_cases {
             handles.push((format!("tests/{}", name(p)), s.spawn(move || test_case(p))));

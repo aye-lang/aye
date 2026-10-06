@@ -1,0 +1,37 @@
+// System headers: zlib and the C math library, declared by `@cimport`
+// instead of by hand.
+
+@link("zlib")
+
+let z = @cimport("zlib.h")
+let m = @cimport("math.h")
+
+pub fn main() {
+    let text = "the quick brown fox jumps over the lazy dog, the quick brown fox"
+    var packed = @zeroed([256]u8)
+    var size: z.uLongf = packed.len as z.uLongf
+    @println(z.compress(packed[..].ptr, &mut size, text.ptr, text.len as z.uLong) == z.Z_OK)
+    @println(size < text.len as c_ulong)
+
+    var back = @zeroed([256]u8)
+    var n: c_ulong = back.len as c_ulong
+    @println(z.uncompress(back[..].ptr, &mut n, packed[..].ptr, size) == z.Z_OK)
+    @println(back[0..n as usize])
+    @println(z.crc32(0, text.ptr, text.len as c_uint))
+
+    // A stream, set up through the `z_stream` struct.
+    var st = @zeroed(z.z_stream)
+    @println(z.deflateInit_(&mut st, z.Z_BEST_COMPRESSION, z.ZLIB_VERSION.ptr, @sizeOf(z.z_stream) as c_int) == z.Z_OK)
+    st.next_in = text.ptr
+    st.avail_in = text.len as c_uint
+    st.next_out = packed[..].ptr
+    st.avail_out = packed.len as c_uint
+    @println(z.deflate(&mut st, z.Z_FINISH) == z.Z_STREAM_END)
+    @println(st.total_out == size)
+    @println(z.deflateEnd(&mut st) == z.Z_OK)
+
+    @println(m.sqrt(2.0))
+    @println(m.floor(-2.5))
+    @println(m.pow(2.0, 10.0))
+    @println(m.atan2(1.0, 1.0) * 4.0)
+}

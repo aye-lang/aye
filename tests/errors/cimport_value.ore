@@ -1,0 +1,6 @@
+// `@cimport` is not a value.
+
+pub fn main() {
+    let m = @cimport("math.h")
+    @println(m.sqrt(2.0))
+}

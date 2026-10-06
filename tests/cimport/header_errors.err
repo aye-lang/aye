@@ -1,0 +1,1 @@
+tests/cimport/header_errors.ore:3:9: error[E0113]: C header `header_errors.h` has errors: tests/cimport/header_errors.h:8:1: unknown type name 'unknown_type'

@@ -1,0 +1,1 @@
+tests/cimport/no_libclang.ore:4:9: error[E0114]: cannot load libclang, which `@cimport` needs to read C headers (tried /nonexistent/libclang); install the Xcode command line tools or LLVM (libclang), or set LIBCLANG_PATH to the library or its directory
