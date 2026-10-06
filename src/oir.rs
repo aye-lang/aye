@@ -732,7 +732,8 @@ impl<'a> Lower<'a> {
         let mut bodies = Vec::new();
         for arm in arms {
             let mut b = Vec::new();
-            if let (Some(vi), Some(def)) = (arm.variant, def) {
+            if let ([vi], Some(def)) = (&arm.variants[..], def) {
+                let vi = *vi;
                 let v = &def.variants[vi];
                 for &(var, fi) in &arm.bindings {
                     let mut p = place.clone();
@@ -755,18 +756,22 @@ impl<'a> Lower<'a> {
         }
         let mut chain: Option<Block> = None;
         for (arm, body) in arms.iter().zip(bodies).rev() {
-            chain = Some(match (chain, arm.variant) {
-                (Some(rest), _) if arm.variant.is_some() || !arm.ranges.is_empty() => {
+            chain = Some(match chain {
+                Some(rest) if !arm.variants.is_empty() || !arm.ranges.is_empty() => {
                     let c = self.temp(Type::Bool);
-                    let cmp = match arm.variant {
-                        Some(vi) => Rvalue::Binary {
+                    let cmp = match &arm.variants[..] {
+                        [vi] => Rvalue::Binary {
                             op: BinOp::Eq,
                             lhs: Operand::Local(tag),
-                            rhs: Operand::Int(vi as i128, tag_ty),
+                            rhs: Operand::Int(*vi as i128, tag_ty),
                             ty: Type::Int(tag_ty),
                             span,
                         },
-                        None => Rvalue::InRanges { val: Operand::Local(tag), ranges: arm.ranges.clone(), ty: tag_ty },
+                        [] => Rvalue::InRanges { val: Operand::Local(tag), ranges: arm.ranges.clone(), ty: tag_ty },
+                        vs => {
+                            let ranges = vs.iter().map(|&v| (v as i128, v as i128)).collect();
+                            Rvalue::InRanges { val: Operand::Local(tag), ranges, ty: tag_ty }
+                        }
                     };
                     vec![
                         Stmt { kind: StmtKind::Assign(Place { local: c, proj: vec![] }, cmp), span },

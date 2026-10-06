@@ -382,17 +382,26 @@ pub struct FieldInit {
 
 #[derive(Debug, Clone)]
 pub struct MatchArm {
-    /// `None` for the `_` pattern and for integer patterns.
-    pub variant: Option<String>,
+    /// Variant (or error) patterns, several per arm (`.A, .B =>`); empty
+    /// for `_` and integer patterns.
+    pub variants: Vec<VariantPat>,
     /// Integer and character patterns (`'a'`, `-1`, `'a'..='z'`), several
     /// per arm; empty for `_` and variant patterns.
     pub values: Vec<IntPat>,
-    /// `.V { a, b: c, .. }`: the field patterns; `None` for `.V` and `_`.
-    pub fields: Option<Vec<FieldPat>>,
-    /// The pattern ends with `..`.
-    pub rest: bool,
     pub body: ArmBody,
     pub span: Span,
+}
+
+/// `.V` or `.V { a, b: c, .. }` in a `match` arm.
+#[derive(Debug, Clone)]
+pub struct VariantPat {
+    pub name: String,
+    /// The `.`.
+    pub span: Span,
+    /// The field patterns; `None` for `.V`.
+    pub fields: Option<Vec<FieldPat>>,
+    /// The field patterns end with `..`.
+    pub rest: bool,
 }
 
 /// An integer or character pattern: the inclusive range `lo..=hi`, or a

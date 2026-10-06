@@ -1,0 +1,68 @@
+// A `match` arm can list several variants or errors: `.A, .B =>`. A
+// variant with fields is listed as `.V { .. }` there; an arm with several
+// patterns binds no fields.
+
+enum Token {
+    Doctype { name: []u8 }
+    Comment { text: []u8 }
+    Start { tag: []u8 }
+    End
+    Eof
+}
+
+fn isMarkup(t: Token) bool {
+    return match t {
+        .Doctype { .. }, .Comment { .. } => false
+        .Start { .. }, .End => true
+        .Eof => false
+    }
+}
+
+fn describe(t: Token) {
+    match t {
+        .Start { tag } => @println(tag)
+        .End,
+        .Eof => @println("end")
+        _ => @println("other")
+    }
+}
+
+error IoError { NotFound, Denied, Busy, Broken }
+
+fn open(n: i64) IoError!i64 {
+    if n == 0 {
+        return IoError.NotFound
+    }
+    if n == 1 {
+        return IoError.Denied
+    }
+    if n == 2 {
+        return IoError.Busy
+    }
+    return n
+}
+
+fn retry(n: i64) bool {
+    let v = open(n) catch |e| {
+        return match e {
+            .NotFound, .Denied => false
+            .Busy, .Broken => true
+        }
+    }
+    return v > 100
+}
+
+pub fn main() {
+    @println(isMarkup(Token.Comment { text: "x" }))
+    @println(isMarkup(Token.Start { tag: "p" }))
+    @println(isMarkup(Token.End))
+    @println(isMarkup(Token.Eof))
+    describe(Token.Start { tag: "div" })
+    describe(Token.End)
+    describe(Token.Eof)
+    describe(Token.Doctype { name: "html" })
+    @println(retry(0))
+    @println(retry(1))
+    @println(retry(2))
+    @println(retry(200))
+}

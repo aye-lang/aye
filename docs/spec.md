@@ -676,7 +676,8 @@ optional type (`var m: ?i64 = null`). There is no `orelse` and no `.?`.
 `match x { pattern => body ... }` works on enums, error values and
 integers, and must be exhaustive (or end with `_`). Enum patterns: `.V`,
 `.V { a, b }`, `.V { a: name }`, `.V { a, .. }` (ignore the other fields),
-`_`. Without `..` every payload field must be listed. Integer patterns:
+`_`. Without `..` every payload field must be listed. Several variants or
+errors per arm, `.A, .B { .. } =>`, bind no fields. Integer patterns:
 `10`, `-1`, `'a'`, inclusive ranges `'a'..='z'`, several per arm
 (`' ', '\t' =>`); without `_` they must cover every value of the type.
 Arms are separated by newlines or `,`.

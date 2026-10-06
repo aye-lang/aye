@@ -1,0 +1,42 @@
+enum Shape {
+    Circle { r: i64 }
+    Square { side: i64 }
+    Dot
+}
+
+fn a(s: Shape) i64 {
+    return match s {
+        .Circle { r }, .Square { .. } => 1
+        .Dot => 0
+    }
+}
+
+fn b(s: Shape) i64 {
+    return match s {
+        .Circle { .. }, .Square => 1
+        .Dot => 0
+    }
+}
+
+fn c(s: Shape) i64 {
+    return match s {
+        .Circle { .. }, .Dot, .Circle { .. } => 1
+        _ => 0
+    }
+}
+
+fn d(s: Shape) i64 {
+    return match s {
+        .Dot, .Line => 1
+        _ => 0
+    }
+}
+
+fn e(s: Shape) i64 {
+    return match s {
+        .Dot, .Square { .. } => 1
+    }
+}
+
+pub fn main() {
+}

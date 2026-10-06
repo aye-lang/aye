@@ -510,8 +510,9 @@ pub enum Intrinsic {
 
 #[derive(Debug, Clone)]
 pub struct TArm {
-    /// Variant index, or the error value in a `match` on errors; `None` for `_`.
-    pub variant: Option<usize>,
+    /// Variant indexes, or error values in a `match` on errors; empty for
+    /// `_` and integer patterns.
+    pub variants: Vec<usize>,
     /// In a `match` on an integer: the inclusive ranges the arm matches;
     /// empty for `_`.
     pub ranges: Vec<(i128, i128)>,
@@ -537,9 +538,9 @@ struct FnSig {
     variadic: bool,
 }
 
-/// The pattern of a `match` arm: the variant index or error value (`None`
-/// for `_` and integer patterns) and the integer ranges.
-type ArmPat = (Option<usize>, Vec<(i128, i128)>);
+/// The pattern of a `match` arm: the variant indexes or error values
+/// (empty for `_` and integer patterns) and the integer ranges.
+type ArmPat = (Vec<usize>, Vec<(i128, i128)>);
 
 /// A checked global.
 struct GlobalInfo {
@@ -3957,7 +3958,7 @@ impl<'a> Checker<'a> {
             }
             Type::ErrorSet(set) => (None, Some(set.clone()), self.sets[set].clone()),
             Type::Int(it) => {
-                let pats = Self::int_patterns(arms, *it, e.span)?.into_iter().map(|r| (None, r)).collect();
+                let pats = Self::int_patterns(arms, *it, e.span)?.into_iter().map(|r| (Vec::new(), r)).collect();
                 return self.match_arms(e, s, None, pats, expected, is_stmt);
             }
             t => return err(E0055, s.span, format!("`match` needs an enum, error or integer value, found `{t}`")),
@@ -3978,25 +3979,28 @@ impl<'a> Checker<'a> {
             if let Some(p) = arm.values.first() {
                 return err(E0088, p.span, format!("a `match` on `{}` takes `.Name` patterns, not integers", s.ty));
             }
-            match &arm.variant {
-                None => {
-                    wildcard = true;
-                    variants.push(None);
-                }
-                Some(name) => {
-                    let Some(i) = cases.iter().position(|v| v == name) else {
-                        return match (&def, &set) {
-                            (Some(d), _) => err(E0041, arm.span, format!("enum `{}` has no variant `{name}`", d.name)),
-                            (_, set) => err(E0060, arm.span, format!("{} has no error `{name}`", describe_set(set.as_ref().unwrap()))),
-                        };
-                    };
-                    if covered[i] {
-                        return err(E0057, arm.span, format!("{kind} {} is already matched by an earlier arm", show(name)));
-                    }
-                    covered[i] = true;
-                    variants.push(Some(i));
-                }
+            if arm.variants.is_empty() {
+                wildcard = true;
             }
+            let mut mine = Vec::new();
+            for v in &arm.variants {
+                let name = &v.name;
+                let Some(i) = cases.iter().position(|c| c == name) else {
+                    return match (&def, &set) {
+                        (Some(d), _) => err(E0041, v.span, format!("enum `{}` has no variant `{name}`", d.name)),
+                        (_, set) => err(E0060, v.span, format!("{} has no error `{name}`", describe_set(set.as_ref().unwrap()))),
+                    };
+                };
+                if mine.contains(&i) {
+                    return err(E0057, v.span, format!("{kind} {} is already matched by an earlier pattern of this arm", show(name)));
+                }
+                if covered[i] {
+                    return err(E0057, v.span, format!("{kind} {} is already matched by an earlier arm", show(name)));
+                }
+                covered[i] = true;
+                mine.push(i);
+            }
+            variants.push(mine);
         }
         if !wildcard {
             let missing: Vec<String> = cases.iter().zip(&covered).filter(|(_, c)| !**c).map(|(n, _)| show(n)).collect();
@@ -4007,8 +4011,8 @@ impl<'a> Checker<'a> {
         }
         // A `match` on errors tests the error value.
         if set.is_some() {
-            for v in &mut variants {
-                *v = v.map(|c| self.error_names.iter().position(|n| *n == cases[c]).unwrap() + 1);
+            for v in variants.iter_mut().flatten() {
+                *v = self.error_names.iter().position(|n| *n == cases[*v]).unwrap() + 1;
             }
         }
         let pats = variants.into_iter().map(|v| (v, Vec::new())).collect();
@@ -4027,8 +4031,8 @@ impl<'a> Checker<'a> {
             if wildcard {
                 return err(E0057, arm.span, "unreachable arm: the `_` arm above already matches everything");
             }
-            if let Some(v) = &arm.variant {
-                return err(E0088, arm.span, format!("a `match` on `{ty}` takes integer and character patterns, not `.{v}`"));
+            if let Some(v) = arm.variants.first() {
+                return err(E0088, arm.span, format!("a `match` on `{ty}` takes integer and character patterns, not `.{}`", v.name));
             }
             if arm.values.is_empty() {
                 wildcard = true;
@@ -4103,7 +4107,7 @@ impl<'a> Checker<'a> {
         let mut checked: Vec<Option<TArm>> = vec![None; arms.len()];
         for i in order {
             self.scopes.push(HashMap::new());
-            let arm = self.match_arm(def.as_ref(), &arms[i], pats[i].0, want.as_ref(), is_stmt);
+            let arm = self.match_arm(def.as_ref(), &arms[i], &pats[i].0, want.as_ref(), is_stmt);
             self.scopes.pop();
             let mut arm = arm?;
             arm.ranges = pats[i].1.clone();
@@ -4118,47 +4122,54 @@ impl<'a> Checker<'a> {
     }
 
     /// One arm: declare the pattern variables, then check the body.
-    /// `def` is `None` in a `match` on errors, where `variant` is the error
-    /// value, and on integers.
+    /// `def` is `None` in a `match` on errors, where `variants` are error
+    /// values, and on integers. An arm with several patterns binds nothing.
     fn match_arm(
         &mut self,
         def: Option<&EnumDef>,
         arm: &ast::MatchArm,
-        variant: Option<usize>,
+        variants: &[usize],
         want: Option<&Type>,
         is_stmt: bool,
     ) -> Result<TArm> {
         let mut bindings: Vec<(VarId, usize)> = Vec::new();
-        if def.is_none()
-            && let (Some(_), Some(name)) = (&arm.fields, &arm.variant)
-        {
-            return err(E0042, arm.span, format!("an error has no fields; write `.{name}`"));
-        }
-        if let (Some(vi), Some(def)) = (variant, def) {
+        for (p, &vi) in arm.variants.iter().zip(variants) {
+            let Some(def) = def else {
+                if p.fields.is_some() {
+                    return err(E0042, p.span, format!("an error has no fields; write `.{}`", p.name));
+                }
+                continue;
+            };
             let v = &def.variants[vi];
             let what = format!("{}.{}", def.name, v.name);
-            match (&arm.fields, v.fields.is_empty()) {
+            match (&p.fields, v.fields.is_empty()) {
                 (None, true) => {}
                 (None, false) => {
-                    return err(E0042, arm.span, format!("variant `{what}` has fields; match them with `.{} {{ .. }}`", v.name));
+                    return err(E0042, p.span, format!("variant `{what}` has fields; match them with `.{} {{ .. }}`", v.name));
                 }
-                (Some(_), true) => return err(E0042, arm.span, format!("variant `{what}` has no fields; write `.{}`", v.name)),
+                (Some(_), true) => return err(E0042, p.span, format!("variant `{what}` has no fields; write `.{}`", v.name)),
                 (Some(pats), false) => {
-                    for p in pats {
-                        let Some(fi) = v.fields.iter().position(|(n, _)| *n == p.field) else {
-                            return err(E0038, p.span, format!("variant `{what}` has no field `{}`", p.field));
+                    if let (Some(f), true) = (pats.first(), variants.len() > 1) {
+                        return err(E0097, f.span, format!(
+                            "an arm with several patterns cannot bind fields: match `{what}` in an arm of its own to use `{}`",
+                            f.binding
+                        ));
+                    }
+                    for f in pats {
+                        let Some(fi) = v.fields.iter().position(|(n, _)| *n == f.field) else {
+                            return err(E0038, f.span, format!("variant `{what}` has no field `{}`", f.field));
                         };
-                        if bindings.iter().any(|&(_, f)| f == fi) {
-                            return err(E0040, p.span, format!("field `{}` is matched twice", p.field));
+                        if bindings.iter().any(|&(_, x)| x == fi) {
+                            return err(E0040, f.span, format!("field `{}` is matched twice", f.field));
                         }
-                        let id = self.declare(&p.binding, v.fields[fi].1.clone(), false, p.binding_span)?;
+                        let id = self.declare(&f.binding, v.fields[fi].1.clone(), false, f.binding_span)?;
                         bindings.push((id, fi));
                     }
-                    if !arm.rest
+                    if !p.rest
                         && let Some((name, _)) =
                             v.fields.iter().enumerate().find(|(i, _)| !bindings.iter().any(|&(_, f)| f == *i)).map(|(_, f)| f)
                     {
-                        return err(E0058, arm.span, format!(
+                        return err(E0058, p.span, format!(
                             "pattern for `{what}` does not mention field `{name}` (add `..` to ignore the rest)"
                         ));
                     }
@@ -4176,6 +4187,6 @@ impl<'a> Checker<'a> {
                 None => self.value(x, None)?,
             }),
         };
-        Ok(TArm { variant, ranges: Vec::new(), bindings, body })
+        Ok(TArm { variants: variants.to_vec(), ranges: Vec::new(), bindings, body })
     }
 }

@@ -1,0 +1,5 @@
+match_multi.ore:9:19: error[E0097]: an arm with several patterns cannot bind fields: match `Shape.Circle` in an arm of its own to use `r`
+match_multi.ore:16:25: error[E0042]: variant `Shape.Square` has fields; match them with `.Square { .. }`
+match_multi.ore:23:31: error[E0057]: variant `Shape.Circle` is already matched by an earlier pattern of this arm
+match_multi.ore:30:15: error[E0041]: enum `Shape` has no variant `Line`
+match_multi.ore:36:12: error[E0056]: `match` is not exhaustive: missing variant `Shape.Circle`

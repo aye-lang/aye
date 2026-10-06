@@ -234,10 +234,12 @@ match_expr  = "match" header_expr "{" { NEWLINE }
               { arm ( "," | NEWLINE ) { NEWLINE } } "}" ;   (* the last separator is optional *)
 arm         = pattern "=>" ( block | expr ) ;   (* block only in a match statement *)
 pattern     = "_"
-            | "." ident [ "{" [ field_pat { "," field_pat } [ "," ".." ] | ".." ] "}" ]
+            | variant_pat { "," variant_pat }
             | int_pat { "," int_pat } ;
                (* in a match on errors: "." ident, the error's name;
-                  in a match on an integer: int_pat, several per arm *)
+                  in a match on an integer: int_pat, several per arm;
+                  an arm with several variant_pats binds no fields *)
+variant_pat = "." ident [ "{" [ field_pat { "," field_pat } [ "," ".." ] | ".." ] "}" ] ;
 int_pat     = int_value [ "..=" int_value ] ;    (* inclusive range 'a'..='z' *)
 int_value   = [ "-" ] int_lit | char_lit ;
 field_pat   = ident [ ":" ident ] ;

@@ -1980,6 +1980,44 @@ pub fn half(x: i32) i32 {
 }
 "#,
 }
+E0097 = 97 {
+    "field bindings in an arm with several patterns",
+    "A `match` arm can list several variants, `.A, .B => ...`, but then it binds no fields: the variants have different fields. A variant with fields is listed as `.V { .. }` there. To use a field, match that variant in an arm of its own.",
+    r#"enum Shape {
+    Circle { r: i64 }
+    Square { side: i64 }
+    Dot
+}
+
+fn size(s: Shape) i64 {
+    return match s {
+        .Circle { r }, .Square { .. } => r
+        .Dot => 0
+    }
+}
+
+pub fn main() {
+    @println(size(Shape.Dot))
+}
+"#,
+    r#"enum Shape {
+    Circle { r: i64 }
+    Square { side: i64 }
+    Dot
+}
+
+fn size(s: Shape) i64 {
+    return match s {
+        .Circle { r } => r
+        .Square { .. }, .Dot => 0
+    }
+}
+
+pub fn main() {
+    @println(size(Shape.Dot))
+}
+"#,
+}
 }
 
 #[cfg(test)]

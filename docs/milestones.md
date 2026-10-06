@@ -181,6 +181,28 @@ raised to about 30k tokens for this).
 - **Acceptance:** `ore fmt` is idempotent on every `.ore` file in the repo
   and the golden tests still pass after formatting all of them.
 
+## M9.5: Ergonomics from the browser
+
+The browser written in Ore recorded what hurt (`browser/COMPILER_GAPS.md`
+on its branch). Fix those in the compiler and std.
+
+- **Language:** several variants per `match` arm (`.A, .B =>`); `[_]T{...}`
+  (length from the elements); `==` between `?T` and `T` (and two `?T`), and
+  on structs whose fields all compare; `orelse` (a default, a block, or
+  `return`/`break`/`continue`), `.?` and `unreachable`; `return f()` of a
+  `void` call in a `void` or `E!void` function; a method that takes
+  `*Self` or `*mut Self` called on a temporary (`split(s, ",").next()`).
+- **std:** `std.log.err`/`info` accept a string constant as the format.
+- **Toolchain:** `ore test DIR` runs the tests of every module of the
+  program, `--module PATH` those of one module.
+- **Diagnostics:** the `as` hint only where `as` converts; a local named
+  like an import says so (and its uses are not reported again).
+- **Docs:** pointers into a growing `List` or `Pool` in the spec's
+  pitfalls.
+- **Acceptance:** golden and error tests for each item, `ore explain`
+  texts for the new codes, a directory program whose sibling modules have
+  tests, and `ore fmt` idempotent on the new syntax.
+
 ## M10: Threads
 
 - **std:** `std.thread` (`spawn`, `join`), `std.sync` (`Mutex`,

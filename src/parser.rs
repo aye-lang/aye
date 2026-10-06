@@ -1216,12 +1216,13 @@ impl Parser {
         Ok(Expr { kind, span })
     }
 
-    /// `pattern => body`, where the pattern is `_`, `.V`, `.V { a, b: c, .. }`
-    /// or integer patterns separated by `,` (`'a'..='z', '_'`), and the body
-    /// is a block or an expression.
+    /// `pattern => body`, where the pattern is `_`, variant patterns
+    /// separated by `,` (`.V`, `.V { a, b: c, .. }`) or integer patterns
+    /// separated by `,` (`'a'..='z', '_'`), and the body is a block or an
+    /// expression.
     fn match_arm(&mut self) -> Result<MatchArm> {
         let span = self.span();
-        let (mut variant, mut fields, mut rest, mut values) = (None, None, false, Vec::new());
+        let (mut variants, mut values) = (Vec::new(), Vec::new());
         match self.peek() {
             Tok::Int(_) | Tok::Char(_) | Tok::Minus => loop {
                 values.push(self.int_pat()?);
@@ -1232,33 +1233,45 @@ impl Parser {
             Tok::Ident(n) if n == "_" => {
                 self.bump();
             }
-            Tok::Dot => {
-                self.bump();
-                variant = Some(self.ident()?.0);
-                if self.eat(&Tok::LBrace) {
-                    let mut pats = Vec::new();
-                    while !self.at(&Tok::RBrace) {
-                        if self.eat(&Tok::DotDot) {
-                            rest = true;
-                            break;
-                        }
-                        let (field, fspan) = self.ident()?;
-                        let (binding, binding_span) =
-                            if self.eat(&Tok::Colon) { self.ident()? } else { (field.clone(), fspan) };
-                        pats.push(FieldPat { field, span: fspan, binding, binding_span });
-                        if !self.eat(&Tok::Comma) {
-                            break;
-                        }
-                    }
-                    self.expect(&Tok::RBrace)?;
-                    fields = Some(pats);
+            Tok::Dot => loop {
+                variants.push(self.variant_pat()?);
+                if !self.eat(&Tok::Comma) {
+                    break;
                 }
-            }
+                if !self.at(&Tok::Dot) {
+                    return Err(self.unexpected("`.Variant` after `,` in a pattern"));
+                }
+            },
             _ => return Err(self.unexpected("pattern (`.Variant`, an integer or character, or `_`)")),
         }
         self.expect(&Tok::FatArrow)?;
         let body = if self.at(&Tok::LBrace) { ArmBody::Block(self.block()?) } else { ArmBody::Expr(self.expr()?) };
-        Ok(MatchArm { variant, values, fields, rest, body, span })
+        Ok(MatchArm { variants, values, body, span })
+    }
+
+    /// `.V` or `.V { a, b: c, .. }`.
+    fn variant_pat(&mut self) -> Result<VariantPat> {
+        let span = self.expect(&Tok::Dot)?;
+        let name = self.ident()?.0;
+        let (mut fields, mut rest) = (None, false);
+        if self.eat(&Tok::LBrace) {
+            let mut pats = Vec::new();
+            while !self.at(&Tok::RBrace) {
+                if self.eat(&Tok::DotDot) {
+                    rest = true;
+                    break;
+                }
+                let (field, fspan) = self.ident()?;
+                let (binding, binding_span) = if self.eat(&Tok::Colon) { self.ident()? } else { (field.clone(), fspan) };
+                pats.push(FieldPat { field, span: fspan, binding, binding_span });
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+            self.expect(&Tok::RBrace)?;
+            fields = Some(pats);
+        }
+        Ok(VariantPat { name, span, fields, rest })
     }
 
     /// `1`, `-1`, `'a'` or the inclusive range `'a'..='z'`.

@@ -870,7 +870,7 @@ impl Loader<'_> {
             ExprKind::Match { scrutinee, arms } => {
                 self.expr(scrutinee);
                 for arm in arms {
-                    for p in arm.fields.iter().flatten() {
+                    for p in arm.variants.iter().flat_map(|v| v.fields.iter().flatten()) {
                         self.bind(&p.binding, p.binding_span);
                     }
                     self.arm_body(&mut arm.body);

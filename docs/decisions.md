@@ -42,7 +42,7 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
 - **`match`:** `match x { pattern => body }`. Arms are separated by newlines or `,`. The scrutinee follows the header rule of `if` (no bare struct literal).
   - Patterns: `.V`, `.V { a, b: name, .. }` and `_`. A field binds a variable of the same name, or `field: name`. Without `..`, every field must be listed.
   - Matching a variant twice, and any arm after `_`, is an error.
-  - On an integer (M6): integer and character literals (`10`, `-1`, `'a'`), inclusive ranges `'a'..='z'` (`'a'..'z'` is an error that says to write `..=`), and several patterns per arm, `'a', 'e' =>`. Several patterns are only for integers: an arm with `.A, .B` would raise the question of what its bindings are. Patterns are literals; named constants as patterns wait for a use. A pattern that does not fit the type (E0024), an empty range (E0088), and a value that an earlier pattern already matches (E0057) are errors.
+  - On an integer (M6): integer and character literals (`10`, `-1`, `'a'`), inclusive ranges `'a'..='z'` (`'a'..'z'` is an error that says to write `..=`), and several patterns per arm, `'a', 'e' =>`. Several variant patterns per arm came in M9.5 (see there). Patterns are literals; named constants as patterns wait for a use. A pattern that does not fit the type (E0024), an empty range (E0088), and a value that an earlier pattern already matches (E0057) are errors.
   - Exhaustiveness on integers is exact for every integer type: without `_`, the arms must cover every value (a `u8` with `0..=127` and `128..=255` needs no `_`). The error lists the first three missing ranges.
   - As a statement, an arm body is a block or a call. As an expression, it is an expression (not a block), and all arms must have the same type. With no expected type, the first arm that is not an untyped literal or `null` decides the type.
 - **New tokens:** `&`, `|`, `=>` and `.*`. `.*` ends a statement for semicolon insertion, like `)`. M6 adds `^ ~ << >> &= |= ^= <<= >>=` and `..=`; M7 adds `...`.
@@ -270,3 +270,9 @@ The rest of std is Ore too: no container or text function is a compiler builtin.
 - The doc says `General` detects use-after-free in debug mode. Stage0 detects leaks and double frees only.
 - The doc says tests use a debug allocator by default. Stage0 spells it `std.testing.allocator()` or `@testAllocator()`; tests ask for it explicitly. Examples in doc comments do not run as tests yet.
 - The doc's `FixedBuffer` allocator does not exist yet.
+
+## Ergonomics from the browser (M9.5)
+
+The browser written in Ore (`browser/COMPILER_GAPS.md` on its branch) listed what hurt. Each change below answers one entry.
+
+- **Several variants per `match` arm:** `.A, .B => ...` on enums and on errors, like the integer patterns. Such an arm binds no fields, since the variants' fields differ in names and types; a variant with fields is listed as `.V { .. }`, as in a single-variant arm, so dropping a payload stays visible. A binding there is E0097, which says to give the variant its own arm. Shared-name bindings were left out: they would need equal field types and a rule for what the binding means. A variant listed twice in one arm is E0057, like a variant matched by an earlier arm. Lowering tests the tag against the arm's tags (one `||` chain).
