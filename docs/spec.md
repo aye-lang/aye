@@ -1358,7 +1358,7 @@ std.pool.Handle(T) { index: u32, generation: u32 }   names a value; stale after 
 Pool.init(alloc: Allocator, capacity: u32) Pool(T)   capacity: slots of the first allocation
 Pool.deinit(self: *mut Self)
 Pool.insert(self: *mut Self, value: T) AllocError!Handle(T)
-Pool.get(self: *Self, h: Handle(T)) ?*mut T          null for a stale handle
+Pool.get(self: *Self, h: Handle(T)) ?*mut T          null for a stale handle; valid until the next insert
 Pool.remove(self: *mut Self, h: Handle(T))           a stale handle does nothing
 ```
 
@@ -1551,6 +1551,11 @@ end. The edits of one diagnostic are applied together.
 - Pointers are never null; optional pointers are `?*T`. Dereference is
   `p.*` (Zig), not `*p`.
 - `dyn I` is made from `&x`, never from a value; it does not box.
+- A pointer or slice into a `List` or `Pool` (`list.items()`,
+  `pool.get(h).?`) dangles after the next `append`, `insert` or `resize`,
+  which may move the elements; nothing detects it. Copy the fields you
+  need, or fetch the pointer again after growing; keep indices or
+  `Handle(T)`s across calls that grow.
 - No `@import`, no `const` (a top-level `let` is a constant), no closures
   (a function value cannot capture locals), no `defer` with `return`
   inside.
