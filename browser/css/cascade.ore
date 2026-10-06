@@ -28,6 +28,7 @@ import dom
 import dom.Document
 import dom.Kind
 import dom.NodeId
+import perf
 import std.heap.Arena
 import std.list.List
 import std.map.IntMap
@@ -153,6 +154,8 @@ let NO_DECL = Decl { prop: 0, value: Value.Initial, important: false, raw: []Tok
 /// Computes the style of every element of `doc` from the user-agent
 /// sheet `ua` and the author sheet `author` (and `style` attributes).
 pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, out: *mut Styles) AllocError!void {
+    let began = perf.start()
+    defer perf.end("cascade", began, "document")
     let a = out.arena.allocator()
     let wins = try a.alloc(Win { set: false, level: 0, spec: 0, d: NO_DECL }, NPROPS)
     var c = Computer {
@@ -203,6 +206,8 @@ pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, o
 /// Computes the style of the element `el` and of its ancestors only (what
 /// getComputedStyle needs), into `out`; nothing when `out` has it.
 pub fn computeStylesOf(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, el: NodeId, out: *mut Styles) AllocError!void {
+    let began = perf.start()
+    defer perf.end("cascade_read", began, "ancestors")
     if out.map.contains(el.index) {
         return
     }

@@ -51,6 +51,9 @@ struct Job {
 /// failures are left to the fetch that follows. Does nothing without a
 /// session.
 pub fn prefetch(alloc: Allocator, hrefs: []u8, kind: Kind, referrer: []u8) {
+    if archiveReplay() {
+        return
+    }
     let s = session orelse return
     let m = curl_multi_init() orelse return
     defer curl_multi_cleanup(m)

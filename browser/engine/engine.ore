@@ -28,6 +28,7 @@ import font
 import html
 import layout
 import net
+import perf
 import std
 import std.list.List
 import std.mem.AllocError
@@ -178,18 +179,22 @@ pub struct Page {
         if self.styling |st| {
             try loadWebFonts(self.alloc, &mut st.author, self.url.href, measure)
         }
+        let images_began = perf.start()
         try updateImages(self, css.Media { width: width, height: height })
+        perf.end("images", images_began, self.url.href)
         if self.styling |st| {
             var nodes: ?*layout.Images = null
             if self.images |imgs| {
                 nodes = &imgs.nodes
             }
+            let layout_began = perf.start()
             let tree = try layout.layoutDocumentWith(self.alloc, &self.doc, &st.styles, nodes, measure, width, height)
             self.tree = self.alloc.create(tree) catch |e| {
                 var lost = tree
                 lost.deinit()
                 return e
             }
+            perf.end("layout", layout_began, self.url.href)
             try layoutFrames(self, measure)
         }
     }
@@ -220,7 +225,9 @@ pub struct Page {
         }
         var author = try css.Sheet.init(self.alloc)
         errdefer author.deinit()
+        let sheets_began = perf.start()
         try authorSheets(self.alloc, &self.doc, &self.url, media, &mut author)
+        perf.end("sheets", sheets_began, self.url.href)
         var styles = try css.Styles.init(self.alloc)
         errdefer styles.deinit()
         try css.computeStyles(&self.doc, &ua, &author, media, &mut styles)
@@ -246,6 +253,7 @@ pub fn loadWith(alloc: Allocator, target: *Url, body: ?*net.Body) AllocError!*mu
 // bytes are in `fallback` when they do not say (a frame's: its parent's
 // encoding). Its scripts have not run (`runDocument`).
 fn fetchPage(alloc: Allocator, target: *Url, body: ?*net.Body, fallback: encoding.Encoding) AllocError!*mut Page {
+    let fetch_began = perf.start()
     let res = net.fetchWith(alloc, target, body) catch |e| {
         match e {
             .OutOfMemory => {
@@ -255,15 +263,20 @@ fn fetchPage(alloc: Allocator, target: *Url, body: ?*net.Body, fallback: encodin
         }
         return errorPage(alloc, target, net.describe(e))
     }
+    perf.end("fetch", fetch_began, target.href)
     defer res.deinit(alloc)
     var located = finalUrl(alloc, target, res.url) catch |e| {
         return AllocError.OutOfMemory
     }
     errdefer located.deinit(alloc)
+    let decode_began = perf.start()
     let enc = encoding.sniffOr(res.body, res.charset, fallback)
     let src = try encoding.toUtf8(alloc, res.body, enc)
     defer alloc.free(src)
+    perf.end("decode", decode_began, target.href)
+    let parse_began = perf.start()
     var doc = try documentOf(alloc, res.mime, src)
+    perf.end("html", parse_began, target.href)
     errdefer doc.deinit()
     let p = try newPage(alloc, located, res.status, "", doc)
     p.encoding = enc
@@ -276,14 +289,18 @@ fn fetchPage(alloc: Allocator, target: *Url, body: ?*net.Body, fallback: encodin
 // then fires their load events and the window's.
 fn runDocument(p: *mut Page, scripts: bool) AllocError!void {
     if scripts && !p.plain && !p.no_scripts {
+        let scripts_began = perf.start()
         try startPageScripts(p)
+        perf.end("scripts", scripts_began, p.url.href)
     }
     if !p.plain {
         try loadFrames(p)
     }
     if p.script != null {
         try fireFrameLoads(p)
+        let scripts_began = perf.start()
         try finishPageScripts(p)
+        perf.end("scripts", scripts_began, p.url.href)
     }
 }
 

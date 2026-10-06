@@ -46,6 +46,7 @@ import std.mem.AllocError
 import std.mem.Allocator
 import std.text
 import std.time
+import perf
 import url
 
 // A host object's tag is a kind (the low 12 bits) and, for a node of
@@ -446,6 +447,9 @@ fn createScript(p: *mut Page) AllocError!*mut Script {
 
 fn setUp(s: *mut Script) JsError!void {
     try js.installBuiltins(&mut s.it)
+    if benchmarkEnabled() {
+        try s.it.runScript(BENCHMARK_PRELUDE)
+    }
     if js.gcStressRequested() {
         s.it.heap.threshold = 1
     }
@@ -602,6 +606,8 @@ fn runScriptElement(s: *mut Script, el: NodeId) AllocError!void {
 }
 
 fn runSourceOf(s: *mut Script, el: NodeId, code: []u8) AllocError!void {
+    let began = perf.start()
+    defer perf.end("script", began, s.page.doc.attr(el, "src") orelse "inline")
     s.current = el
     s.written.clear()
     enter(s)
