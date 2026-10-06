@@ -508,7 +508,7 @@ fn nativeRole(ax: *Ax, el: NodeId) []u8 {
         if text.eqlIgnoreCase(t, "radio") {
             return "radio"
         }
-        if isButtonInput(p, el) || text.eqlIgnoreCase(t, "file") {
+        if isButtonInput(p, el) || text.eqlIgnoreCase(t, "file") || text.eqlIgnoreCase(t, "color") {
             return "button"
         }
         if text.eqlIgnoreCase(t, "range") {
@@ -978,7 +978,7 @@ fn valueOf(ax: *mut Ax, el: NodeId, role: []u8) AllocError![]u8 {
     if text.eql(name, "textarea") {
         return dom.valueOf(&p.doc, el)
     }
-    if text.eql(name, "input") && html.isIn(role, "textbox searchbox spinbutton slider") {
+    if text.eql(name, "input") && (html.isIn(role, "textbox searchbox spinbutton slider") || text.eql(dom.inputType(&p.doc, el), "color")) {
         let v = dom.valueOf(&p.doc, el)
         if text.eqlIgnoreCase(inputType(p, el), "password") {
             let masked = try ax.alloc.alloc('*' as u8, v.len)

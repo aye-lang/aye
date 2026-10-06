@@ -35,11 +35,14 @@ pub fn willValidate(doc: *Document, el: NodeId) bool {
     if doc.isElement(el, "select") || doc.isElement(el, "textarea") {
         return true
     }
+    if doc.isElement(el, "button") {
+        return text.eql(buttonType(doc, el), "submit")
+    }
     if !doc.isElement(el, "input") {
         return false
     }
     let t = inputType(doc, el)
-    return !text.eql(t, "hidden") && !text.eql(t, "button") && !text.eql(t, "submit") && !text.eql(t, "reset") && !text.eql(t, "image")
+    return !text.eql(t, "hidden") && !text.eql(t, "button") && !text.eql(t, "reset")
 }
 
 pub fn supportsRequired(doc: *Document, el: NodeId) bool {
@@ -82,7 +85,10 @@ pub fn validityOf(doc: *Document, el: NodeId) Validity {
         v.customError = c.custom.len > 0
     }
     let s = valueOf(doc, el)
-    let t = inputType(doc, el)
+    var t: []u8 = "text"
+    if doc.isElement(el, "input") {
+        t = inputType(doc, el)
+    }
     if isRadio(doc, el) {
         v.valueMissing = radioMissing(doc, el)
     } else if isRequired(doc, el) {
@@ -92,7 +98,7 @@ pub fn validityOf(doc: *Document, el: NodeId) Validity {
             v.valueMissing = s.len == 0
         }
     }
-    if s.len == 0 || isCheckable(doc, el) {
+    if s.len == 0 || isCheckable(doc, el) || (doc.isElement(el, "input") && (text.eql(t, "range") || text.eql(t, "color"))) {
         return v
     }
     if doc.isElement(el, "input") && text.eql(t, "email") {
@@ -120,7 +126,11 @@ pub fn validityOf(doc: *Document, el: NodeId) Validity {
         }
         if doc.isElement(el, "input") {
             if doc.attr(el, "pattern") |p| {
-                v.patternMismatch = !patternMatches(p, s)
+                if doc.controls.pattern_match |matches| {
+                    v.patternMismatch = !matches(doc.alloc, p, s)
+                } else {
+                    v.patternMismatch = !patternMatches(p, s)
+                }
             }
         }
     }
@@ -131,6 +141,15 @@ pub fn validityOf(doc: *Document, el: NodeId) Validity {
             }
             if attrScalar(doc, el, "max") |max| {
                 v.rangeOverflow = n > max
+            }
+            if text.eql(t, "time") {
+                let min = attrScalar(doc, el, "min")
+                let max = attrScalar(doc, el, "max")
+                if min != null && max != null && min.? > max.? {
+                    let outside = n < min.? && n > max.?
+                    v.rangeUnderflow = outside
+                    v.rangeOverflow = outside
+                }
             }
             if !text.eql(doc.attr(el, "step") orelse "", "any") {
                 let step = stepSize(doc, el)
@@ -198,7 +217,9 @@ fn urlValid(s: []u8) bool {
         }
     }
     if text.startsWith(s, "http:") || text.startsWith(s, "https:") || text.startsWith(s, "ftp:") {
-        if s.len <= colon + 3 || !text.startsWith(s[colon + 1..], "//") { return false }
+        if s.len <= colon + 3 || !text.startsWith(s[colon + 1..], "//") {
+            return false
+        }
         let first = s[colon + 3]
         return first != '/' && first != '?' && first != '#'
     }
@@ -316,13 +337,17 @@ fn civil(y: i64, m: i64, d: i64) f64 {
 }
 
 fn dateScalar(s: []u8) ?f64 {
-    if s.len != 10 || s[4] != '-' || s[7] != '-' {
+    if s.len < 10 {
         return null
     }
-    let y = digits(s[..4]) orelse return null
-    let m = digits(s[5..7]) orelse return null
-    let d = digits(s[8..]) orelse return null
-    if y == 0 || m < 1 || m > 12 || d < 1 {
+    let sep = s.len - 6
+    if s[sep] != '-' || s[sep + 3] != '-' {
+        return null
+    }
+    let y = digits(s[..sep]) orelse return null
+    let m = digits(s[sep + 1..sep + 3]) orelse return null
+    let d = digits(s[sep + 4..]) orelse return null
+    if y == 0 || y > 999999999 || m < 1 || m > 12 || d < 1 {
         return null
     }
     let days = [12]i64{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
@@ -356,7 +381,7 @@ fn timeScalar(s: []u8) ?f64 {
         }
         sec = whole as f64
         if s.len > 8 {
-            if s[8] != '.' || digits(s[9..]) == null {
+            if s.len > 12 || s[8] != '.' || digits(s[9..]) == null {
                 return null
             }
             sec += text.parseFloat(s[8..]) catch return null
@@ -388,30 +413,39 @@ pub fn scalar(t: []u8, s: []u8) ?f64 {
         return timeScalar(s)
     }
     if text.eql(t, "datetime-local") {
-        if s.len < 16 || (s[10] != 'T' && s[10] != ' ') {
-            return null
-        }
-        let d = dateScalar(s[..10]) orelse return null
-        let time = timeScalar(s[11..]) orelse return null
+        let sep = text.indexOf(s, "T") orelse (text.indexOf(s, " ") orelse return null)
+        let d = dateScalar(s[..sep]) orelse return null
+        let time = timeScalar(s[sep + 1..]) orelse return null
         return d * 86400.0 + time
     }
     if text.eql(t, "month") {
-        if s.len != 7 || s[4] != '-' {
+        if s.len < 7 {
             return null
         }
-        let y = digits(s[..4]) orelse return null
-        let m = digits(s[5..]) orelse return null
-        if y == 0 || m < 1 || m > 12 {
+        let sep = s.len - 3
+        if s[sep] != '-' {
+            return null
+        }
+        let y = digits(s[..sep]) orelse return null
+        let m = digits(s[sep + 1..]) orelse return null
+        if y == 0 || y > 999999999 || m < 1 || m > 12 {
             return null
         }
         return ((y - 1970) * 12 + m - 1) as f64
     }
     if text.eql(t, "week") {
-        if s.len != 8 || s[4] != '-' || s[5] != 'W' {
+        if s.len < 8 {
             return null
         }
-        let y = digits(s[..4]) orelse return null
-        let w = digits(s[6..]) orelse return null
+        let sep = s.len - 4
+        if s[sep] != '-' || s[sep + 1] != 'W' {
+            return null
+        }
+        let y = digits(s[..sep]) orelse return null
+        let w = digits(s[sep + 2..]) orelse return null
+        if y == 0 || y > 999999999 {
+            return null
+        }
         let jan1 = civil(y, 1, 1) as i64
         let weekday = ((jan1 + 3) % 7 + 7) % 7
         var max: i64 = 52
@@ -442,11 +476,15 @@ pub fn rangeValue(doc: *Document, el: NodeId, value: f64) f64 {
     let step = stepSize(doc, el)
     var n = math.max(min, math.min(max, value))
     if !text.eql(doc.attr(el, "step") orelse "", "any") {
-        n = min + math.floor((n - min) / step + 0.5) * step
+        let base = attrScalar(doc, el, "min") orelse (scalar("range", doc.attr(el, "value") orelse "") orelse 0.0)
+        n = base + math.floor((n - base) / step + 0.5) * step
         if n > max {
-            n -= step
+            n = base + math.floor((max - base) / step) * step
         }
-        n = math.max(min, n)
+        if n < min {
+            n = base + math.ceil((min - base) / step) * step
+        }
+        n = math.max(min, math.min(max, n))
     }
     return n
 }
@@ -466,8 +504,8 @@ pub fn stepValue(doc: *mut Document, el: NodeId, up: bool) AllocError!bool {
     let step = stepSize(doc, el)
     let min = attrScalar(doc, el, "min")
     let max = attrScalar(doc, el, "max")
-    let base = min orelse 0.0
-    let old = scalar(t, valueOf(doc, el)) orelse base
+    let base = min orelse (scalar(t, doc.attr(el, "value") orelse "") orelse 0.0)
+    let old = scalar(t, valueOf(doc, el)) orelse 0.0
     let q = (old - base) / step
     var n = base + (math.floor(q + 0.0000001) + 1.0) * step
     if !up {
@@ -477,7 +515,7 @@ pub fn stepValue(doc: *mut Document, el: NodeId, up: bool) AllocError!bool {
         n = math.max(v, n)
     }
     if max |v| {
-        n = math.min(v, n)
+        n = math.min(base + math.floor((v - base) / step) * step, n)
     }
     if text.eql(t, "range") {
         try setRange(doc, el, n)

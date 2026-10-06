@@ -18,6 +18,7 @@ type('email', 'alice@example.com', true); type('email', 'alice example.com', fal
 type('url', 'https://example.com/path', true); type('url', 'example.com', false); type('url', 'https://', false);
 type('tel', '+1 (555) 123-4567', true); type('search', 'query', true);
 field.type = 'text'; field.pattern = '(ab|cd)+[0-9]?'; field.value = 'abcd2'; test('group pattern', field.checkValidity()); field.value = 'abcd22'; test('full pattern', !field.checkValidity()); field.removeAttribute('pattern');
+field.pattern = '(?=.{3}$)([a-z])\\1\\1'; field.value = 'aaa'; test('lookahead and backreference', field.checkValidity()); field.value = 'aab'; test('backreference mismatch', !field.checkValidity()); field.pattern = '\\p{Letter}+'; field.value = 'αβ'; test('unicode pattern', field.checkValidity()); field.removeAttribute('pattern');
 field.minLength = 3; field.maxLength = 5; field.value = 'ab'; test('too short', field.validity.tooShort); field.value = 'abcdef'; test('too long', field.validity.tooLong); field.removeAttribute('minlength'); field.removeAttribute('maxlength');
 field.placeholder = 'Hint'; field.value = ''; test('placeholder', field.matches(':placeholder-shown')); field.focus(); test('focus selectors', field.matches(':focus:focus-visible') && f.matches(':focus-within'));
 field.type = 'color'; field.value = '#AA33FF'; test('color', field.value === '#aa33ff'); field.value = 'red'; test('color fallback', field.value === '#000000');

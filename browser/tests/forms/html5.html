@@ -1,0 +1,12 @@
+<!DOCTYPE html><title>Associated form controls</title>
+<form id="f" action="/unused" method="get">
+<label>Name <input name="name" required></label>
+<fieldset disabled><legend><input name="legend" value="included"></legend><input name="disabled" value="excluded"></fieldset>
+<label>File <input type="file" name="upload"></label>
+<input type="hidden" name="token" value="secret">
+<label><input type="checkbox" name="checked" checked>Checked</label>
+<label><input type="checkbox" name="unchecked">Unchecked</label>
+<button formaction="/echo" formmethod="post" formenctype="multipart/form-data" name="send" value="yes">Multipart</button>
+</form>
+<label>External <input form="f" name="external" value="outside"></label>
+<button form="f" formaction="/echo" formmethod="post" formenctype="text/plain" formnovalidate>Skip validation</button>

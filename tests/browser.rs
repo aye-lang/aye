@@ -608,10 +608,20 @@ fn window_forms_html5() {
         "key:tab text:4 key:tab key:tab key:return",
     ];
     let mut transcript = String::new();
-    for events in cases {
-        let out = run_window(&["browser/tests/ui/forms_html5.html", "--font", "fixed", "--width", "400", "--height", "340", "--frames", "1", "--state", "--text", "--events", events]);
+    let image = scratch().join("validation.png");
+    for (i, events) in cases.iter().enumerate() {
+        let mut args = vec!["browser/tests/ui/forms_html5.html", "--font", "fixed", "--width", "400", "--height", "340", "--frames", "1", "--state", "--text", "--events", events];
+        if i == 4 { args.extend(["--save", image.to_str().unwrap()]); }
+        let out = run_window(&args);
         assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
         transcript.push_str(&format!("events: {events}\n{}\n", rooted(&text(&out.stdout))));
+    }
+    let golden = root().join("browser/tests/ui/forms_html5.validation.png");
+    let got = std::fs::read(&image).unwrap();
+    if std::env::var_os("ANYKNOWN_BLESS").is_some() {
+        std::fs::write(&golden, &got).unwrap();
+    } else {
+        assert_eq!(got, std::fs::read(&golden).unwrap(), "validation tooltip differs: {}", image.display());
     }
     let mut failures = Vec::new();
     check_golden(&root().join("browser/tests/ui/forms_html5.out"), &transcript, "HTML5 window forms", &mut failures);

@@ -7,7 +7,7 @@ history 1 of 1
 matches 0
 status 
 element input name=n
-value 6
+value 4
 
 body { margin: 8px; font: 16px monospace }
 input { position: absolute; left: 10px; top: 10px; width: 100px }

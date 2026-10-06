@@ -476,6 +476,9 @@ fn typeInto(s: *mut Session, tmp: Allocator, ref: []u8, input: []u8, submit: boo
     }
     let el = t.node.?
     let who = try describeNode(s, tmp, el)
+    if p.doc.isElement(el, "input") && text.eql(dom.inputType(&p.doc, el), "file") {
+        return failed(try concat(tmp, "cannot type into ", who, ": file uploads are not supported"))
+    }
     if !isTextInput(p, el) {
         return failed(try concat(tmp, "cannot type into ", who, ": it is not a text field"))
     }

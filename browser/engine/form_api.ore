@@ -77,7 +77,9 @@ pub fn validate(page: *mut Page, el: NodeId, report: bool) AllocError!bool {
     var valid = true
     var first: ?NodeId = null
     for c in controls.items() {
-        if !page.doc.isLive(c) { continue }
+        if !page.doc.isLive(c) {
+            continue
+        }
         if !dom.validityOf(&page.doc, c).valid() {
             valid = false
             let show = try dispatchEvent(page, c, "invalid", "")
@@ -87,17 +89,25 @@ pub fn validate(page: *mut Page, el: NodeId, report: bool) AllocError!bool {
         }
     }
     if report {
-        if first |c| { setFocus(page, c) }
+        if first |c| {
+            setFocus(page, c)
+        }
         page.doc.controls.validation = first
-        if page.script |s| { s.version += 1 }
+        if page.script |s| {
+            s.version += 1
+        }
     }
     return valid
 }
 
 pub fn validateSubmission(page: *mut Page, form: NodeId, submitter: ?NodeId) AllocError!bool {
-    if page.doc.attr(form, "novalidate") != null { return true }
+    if page.doc.attr(form, "novalidate") != null {
+        return true
+    }
     if submitter |s| {
-        if page.doc.attr(s, "formnovalidate") != null { return true }
+        if page.doc.attr(s, "formnovalidate") != null {
+            return true
+        }
     }
     return validate(page, form, true)
 }
@@ -113,7 +123,9 @@ fn controlReportValidity(it: *mut Interp, a: Args) JsError!Value {
 fn formRequestSubmit(it: *mut Interp, a: Args) JsError!Value {
     let form = try thisElement(it, a)
     let s = scriptOf(it)
-    if !s.page.doc.isElement(form, "form") { return Value.Undefined }
+    if !s.page.doc.isElement(form, "form") {
+        return Value.Undefined
+    }
     var submitter: ?NodeId = null
     if !js.isNullish(it.arg(a, 0)) {
         submitter = handleOf(it, it.arg(a, 0), TAG_NODE)

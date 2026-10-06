@@ -52,7 +52,9 @@ pub let FORM_PRELUDE =
     \\  has(name) { return this.getAll(name).length > 0; }
     \\  delete(name) { name = String(name); this._entries = this._entries.filter(e => e[0] !== name); }
     \\  set(name, value) {
-    \\    name = String(name); value = String(value);
+    \\    name = String(name);
+    \\    if (!(value instanceof Blob)) value = String(value);
+    \\    else if (!(value instanceof File)) value = new File([value._text], 'blob', {type: value.type});
     \\    let found = false; const next = [];
     \\    for (const e of this._entries) {
     \\      if (e[0] !== name) next.push(e);
