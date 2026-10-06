@@ -37,7 +37,7 @@ ore spec                                              # print the language refer
 ```
 
 `ore spec` prints [`docs/spec.md`](docs/spec.md), a self-contained
-language reference (about 9k tokens) meant to be given to an AI agent
+language reference (about 10k tokens) meant to be given to an AI agent
 before it writes Ore. Every ` ```ore ` program in it is checked by
 `tests/spec.rs`.
 
@@ -269,9 +269,10 @@ pub fn main() {
 ## Supported subset
 
 - Top level: `fn`, `pub fn`, `extern fn` (C functions), `struct Name { ... }`,
-  `enum Name { A, B { field: T } }` (tagged union), `error Name { A, B }` and
+  `enum Name { A, B { field: T } }` (tagged union, with methods), `error Name { A, B }` and
   `error All = A || B` (error sets), `interface Name { ... }`, `test "name" { }`,
-  `import a.b` and `import a.b.Name`.
+  `import a.b` and `import a.b.Name`, constants `let NAME = value` and globals
+  `var name = value` (computed at compile time), type aliases `let Name = Type`.
 - Modules: directory modules, `pub` visibility across modules, paths
   `mod.Name` in expressions and types, the embedded `std` (above).
 - Generics: `comptime T: type` parameters, type functions
@@ -279,23 +280,25 @@ pub fn main() {
   `where T: Interface, ...` after the return type. A call passes types for
   the `comptime` parameters: `max(i64, a, b)`; `Pool(Node)` is a type.
   The entry point is `pub fn main()` or `pub fn main() !void`.
-- Statements: `let`, `var`, `=` and compound assignment (`+= -= *= /= %= +%= -%= *%=`),
-  `if`/`else`, `while`, `for i in lo..hi`, `break`, `continue`, `return`,
-  `defer`, `errdefer`, nested blocks, call statements, `if x |v| { }` (unwrap a `?T`),
-  `match` statements.
+- Statements: `let`, `var`, `=` and compound assignment (`+= -= *= /= %= +%= -%= *%= &= |= ^= <<= >>=`),
+  `if`/`else`, `while`, `for i in lo..hi`, `for x in seq`, `for i, x in seq`,
+  `break`, `continue`, `return`, `defer`, `errdefer`, nested blocks, call
+  statements, `if x |v| { }` and `while x |v| { }` (unwrap a `?T`), `match` statements.
 - Expressions: integer/float/bool/string/char literals, `+ - * / %` (checked),
-  `+% -% *%` (wrapping), comparisons, `&& || !`, unary `-`, calls, struct
+  `+% -% *%` (wrapping), bitwise `& | ^ ~` and shifts `<< >>` (checked shift
+  amount), comparisons (also of pointers and payload-less enums), `&& || !`, unary `-`, calls, struct
   literals, field access, `as` numeric casts, arrays `[3]i32{1, 2, 3}`,
   bounds-checked indexing, slicing `a[lo..hi]` (also `p[lo..hi]` of a `[*]T`,
   unchecked), `.len`, `.ptr`, `&x`, `&mut x`,
   `p.*` (field access through a pointer dereferences it), `null`,
   `x == null`, enum values `Shape.Circle { r: 1.0 }` / `Color.Red`,
-  exhaustive `match` with patterns `.V`, `.V { a, b: c, .. }` and `_`,
+  exhaustive `match` with patterns `.V`, `.V { a, b: c, .. }` and `_`, and on
+  integers with `1`, `'a'`, `'a'..='z'` and several patterns per arm,
   error values `ParseError.Empty`, `try f()`, `f() catch |e| { ... }` and
   `f() catch value`, and exhaustive `match e` on errors, method calls
   `x.m(...)` and `Type.f(...)`, struct literals of a type function's
   struct `Pair(i64) { ... }`, the empty slice `[]T{}`.
-- Methods: `fn` or `pub fn` in a struct body, with `Self` and a receiver
+- Methods: `fn` or `pub fn` in a struct or enum body, with `Self` and a receiver
   `self: Self`, `self: *Self` or `self: *mut Self`.
 - Interfaces: `interface Name { fn m(self: *Self, ...) T }`, implemented by
   any struct that has the methods; `dyn Name` values made from `&x` or
@@ -320,12 +323,10 @@ pub fn main() {
   `extern fn`.
 
 Not yet supported (reported as errors): `comptime` values other than types
-and compile-time execution beyond type functions, type aliases
-(`let P = Pool(Node)`), error payloads, error unions outside return types,
-`match` on anything but enums and errors, `while x |v|`, pointer arithmetic
-and comparison, methods on enums, `extern struct`, global variables,
-bitwise operators, `build.ore` and package dependencies, renaming imports,
-`ore fmt` and `ore doc`. std is minimal: no `Pool`/`Handle` (written in the
+and compile-time execution beyond type functions, error payloads, error
+unions outside return types, `match` on strings, pointer arithmetic, enums
+as `dyn` values, `extern struct`, `build.ore` and package dependencies,
+renaming imports, `ore fmt` and `ore doc`. std is minimal: no `Pool`/`Handle` (written in the
 program, as in `tests/cases/pool.ore`), no growable list, no string
 formatting into memory.
 
@@ -367,4 +368,4 @@ check X` must fail with exactly that. `tests/example1` runs the design
 doc's Example 1 with an `app.toml` that is valid, missing and invalid.
 `tests/spec.rs` checks `docs/spec.md`: its ` ```ore ` programs compile, its
 ` ```ore-error ` programs do not, it names every pub function of std, and it
-stays within 20k tokens.
+stays within 30k tokens.

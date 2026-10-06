@@ -43,7 +43,12 @@ keyword     = "fn" | "let" | "var" | "pub" | "import" | "struct" | "enum"
 
 file        = { NEWLINE } , { ( import | item ) , ( NEWLINE | EOF ) , { NEWLINE } } ;
 item        = fn_decl | extern_fn | struct_decl | enum_decl | error_decl
-            | interface_decl | test_decl ;
+            | interface_decl | test_decl | global_decl ;
+
+global_decl = [ "pub" ] ( "let" | "var" ) ident [ ":" type ] "=" arg ;
+               (* a constant (let) or global variable (var) whose value is
+                  computed at compile time; or, for a `let` without a type
+                  whose value names a type, a type alias: let P = Pool(Node) *)
 
 import      = "import" ident { "." ident } ;
                (* binds its last name in the file: a module (directory
@@ -81,7 +86,8 @@ field_list  = "{" { NEWLINE }
 field       = ident ":" type ;
 
 enum_decl   = [ "pub" ] "enum" ident "{" { NEWLINE }
-              variant { ( "," | NEWLINE ) { NEWLINE } variant } [ "," ] { NEWLINE } "}" ;
+              enum_member { ( "," | NEWLINE ) { NEWLINE } enum_member } [ "," ] { NEWLINE } "}" ;
+enum_member = variant | fn_decl ;              (* a method, followed by a newline; Self is the enum *)
 variant     = ident [ field_list ] ;           (* field_list not empty *)
 
 interface_decl = [ "pub" ] "interface" ident "{" { NEWLINE }
@@ -120,18 +126,25 @@ stmt        = let_stmt | if_stmt | while_stmt | for_stmt
             | simple_stmt ;
 
 let_stmt    = ( "let" | "var" ) ident [ ":" type ] "=" expr ;
-if_stmt     = "if" header_expr [ "|" ident "|" ] block [ "else" ( if_stmt | block ) ] ;
+if_stmt     = "if" cond_expr [ "|" ident "|" ] block [ "else" ( if_stmt | block ) ] ;
                (* with "|v|" the header is a ?T and v is its value *)
                (* "else" must follow "}" on the same line *)
-while_stmt  = "while" header_expr block ;
-for_stmt    = "for" ident "in" header_expr ".." header_expr block ;
-               (* half-open range lo..hi; "in" is a contextual identifier *)
+while_stmt  = "while" cond_expr [ "|" ident "|" ] block ;
+               (* with "|v|": loop while the header, evaluated each time, has a value *)
+for_stmt    = "for" ident "in" header_expr ".." header_expr block
+            | "for" [ ident "," ] ident "in" header_expr block ;
+               (* half-open range lo..hi; or the elements of an array or
+                  slice, with their usize index; "in" is a contextual identifier *)
 simple_stmt = expr [ assign_op expr ] ;   (* a bare expr must be a call, try, catch or match *)
-assign_op   = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "+%=" | "-%=" | "*%=" ;
+assign_op   = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "+%=" | "-%=" | "*%="
+            | "&=" | "|=" | "^=" | "<<=" | ">>=" ;
 
 (* header_expr is expr, except that `Name {` and `Enum.Variant {` are not
-   parsed as literals at its top level (write `(Name { ... })` there). *)
+   parsed as literals at its top level (write `(Name { ... })` there).
+   cond_expr, the header of `if` and `while`, is a header_expr in which a
+   "|" at the top level is not an operator: it starts the capture. *)
 header_expr = expr ;
+cond_expr   = header_expr ;
 
 (* ------------------------------------------------------- expressions *)
 
@@ -141,28 +154,34 @@ header_expr = expr ;
    Slicing a C pointer [*]T needs both bounds: p[0..n].
 
    Precedence, lowest to highest; binary operators are left-associative
-   except comparisons, which do not chain (`a < b < c` is an error).
+   except comparisons, which do not chain (`a < b < c` is an error), and
+   & | ^, which do not mix without parentheses (`a & b | c` is an error).
      1  ||
      2  &&
      3  == != < <= > >=
      4  catch
-     5  + - +% -%
-     6  * / % *%
-     7  as            (postfix cast, binds looser than unary: -x as f32 == (-x) as f32)
-     8  - ! & &mut try   (unary prefix)
-     9  call, index, slice, field, .*  *)
+     5  & | ^
+     6  << >>
+     7  + - +% -%
+     8  * / % *%
+     9  as            (postfix cast, binds looser than unary: -x as f32 == (-x) as f32)
+    10  - ! ~ & &mut try   (unary prefix)
+    11  call, index, slice, field, .*  *)
 
 expr        = or_expr ;
 or_expr     = and_expr { "||" and_expr } ;
 and_expr    = cmp_expr { "&&" cmp_expr } ;
 cmp_expr    = catch_expr [ cmp_op catch_expr ] ;
 cmp_op      = "==" | "!=" | "<" | "<=" | ">" | ">=" ;
-catch_expr  = add_expr { "catch" [ "|" ident "|" ] ( block | add_expr ) } ;
+catch_expr  = bit_expr { "catch" [ "|" ident "|" ] ( block | bit_expr ) } ;
                (* x catch |e| { ... } runs the block on an error; x catch v gives v *)
+bit_expr    = shift_expr { "&" shift_expr } | shift_expr { "|" shift_expr }
+            | shift_expr { "^" shift_expr } ;   (* one operator per chain *)
+shift_expr  = add_expr { ( "<<" | ">>" ) add_expr } ;
 add_expr    = mul_expr { ( "+" | "-" | "+%" | "-%" ) mul_expr } ;
 mul_expr    = cast_expr { ( "*" | "/" | "%" | "*%" ) cast_expr } ;
 cast_expr   = unary { "as" type } ;
-unary       = ( "-" | "!" | "&" [ "mut" ] | "try" ) unary | postfix ;
+unary       = ( "-" | "!" | "~" | "&" [ "mut" ] | "try" ) unary | postfix ;
 postfix     = primary { "." ident
                       | "." ident "(" [ args ] ")"             (* method call; Type.f(...) *)
                       | ".*"                                   (* dereference *)
@@ -198,6 +217,10 @@ match_expr  = "match" header_expr "{" { NEWLINE }
               { arm ( "," | NEWLINE ) { NEWLINE } } "}" ;   (* the last separator is optional *)
 arm         = pattern "=>" ( block | expr ) ;   (* block only in a match statement *)
 pattern     = "_"
-            | "." ident [ "{" [ field_pat { "," field_pat } [ "," ".." ] | ".." ] "}" ] ;
-               (* in a match on errors: "." ident, the error's name *)
+            | "." ident [ "{" [ field_pat { "," field_pat } [ "," ".." ] | ".." ] "}" ]
+            | int_pat { "," int_pat } ;
+               (* in a match on errors: "." ident, the error's name;
+                  in a match on an integer: int_pat, several per arm *)
+int_pat     = int_value [ "..=" int_value ] ;    (* inclusive range 'a'..='z' *)
+int_value   = [ "-" ] int_lit | char_lit ;
 field_pat   = ident [ ":" ident ] ;

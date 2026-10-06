@@ -6,8 +6,9 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
 ## Syntax
 
 - **Struct declaration:** `struct Name { field: T, ... }` at top level, with optional `pub`. Fields are separated by `,` or by newlines, and a trailing `,` is allowed.
-- **`for` loop:** the only form is `for i in lo..hi { }`. The range is half-open. `lo` and `hi` must have the same integer type, and `hi` is evaluated once, before the first iteration. `i` is immutable. `in` is a contextual identifier, not a keyword, so the keyword count stays at 28.
-- **Ranges** (`..`) are not general expressions. They appear only in a `for` header and in slicing.
+- **`for` loop:** `for i in lo..hi { }` counts; the range is half-open. `lo` and `hi` must have the same integer type, and `hi` is evaluated once, before the first iteration. `i` is immutable. `in` is a contextual identifier, not a keyword, so the keyword count stays at 28.
+  - `for x in seq { }` and `for i, x in seq { }` walk an array or a slice (M6). `seq` is evaluated once, before the first iteration: a slice is copied (its pointer and length), and an array is read in place, so an assignment to a later element in the body is seen. `x` is an immutable copy of the element and `i` an immutable `usize`. A range `for` has one variable: `for i, x in 0..n` is an error. To change the elements, index: `for i, x in s { s[i] = x * 2 }`.
+- **Ranges** (`..`) are not general expressions. They appear only in a `for` header and in slicing; `..=` only in a `match` pattern.
 - **Slicing:** `a[lo..hi]`, `a[lo..]`, `a[..hi]` and `a[..]`.
 - **Semicolons:** Go's insertion rule. A terminator is inserted after an identifier, a literal, `)`, `]`, `}`, `return`, `break` or `continue`. An explicit `;` is a lexical error.
   - `else` must be on the same line as the `}` before it.
@@ -19,6 +20,11 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
 - **`defer`** takes a block or a simple statement (a call or an assignment). A deferred body cannot `return`, and it cannot `break` or `continue` out of itself.
 - **`true` and `false`** are predeclared identifiers, not keywords. The parser reads them as literals.
 - **Initializers:** `let` and `var` must always have one (`var x: T = v`). There is no zero-initialization yet.
+- **Globals (M6):** a top-level `let NAME = value` is a constant, `var name = value` a global variable; `pub` makes either visible to other modules. Like a local `let`, an untyped integer literal gives `i64` (`let N = 4`); write `let N: usize = 4` for another type. Untyped constants, as in Go, would need a second kind of value that only constants have.
+  - The value is computed when the program is compiled, as in Zig: literals, other `let` constants (of any module, in any order), operators, `as` casts, `.len` of an array, a field or element of a constant, and array, struct and enum literals. A call, a `var` global, a constant defined in terms of itself, and an operation that would panic at run time (overflow, division by zero, a shift out of range, a cast out of range) are E0089. So a global needs no initialization code and no initialization order.
+  - The generated C is a static variable with a C initializer. An expression that reads a global copies it first, so a call later in the expression that changes a `var` global does not change the value already read.
+  - A constant cannot be assigned or borrowed with `&mut` (E0032, with the fix-it `let` to `var`); `&CONST` is a `*T`. Locals cannot shadow globals, as for other top-level names.
+- **Type aliases (M6):** a top-level `let Name = T` whose value names a type is an alias: `let NodePool = Pool(Node)`, `let Bytes = []u8`, `let P = *Node` (a value that does not read as an expression is parsed as a type, as for a `comptime` argument). It is decided by the value: a type name, a type function call or another alias makes an alias; it must be a `let` without a type annotation. An alias is the same type, not a new one, and works wherever its type does: in types, struct literals (`NodePool { ... }`), static calls (`NodePool.init(...)`) and enum values (`C.Red` after `let C = Color`).
 - **Array literals** need an explicit length: `[3]i32{1, 2, 3}`. There is no `[_]T` form yet.
 - **`pub`** on `fn`, `struct`, `enum`, `error`, `interface` and on methods makes them visible to other modules (see Modules below); it also decides the error set rule below.
 - **`main`:** the entry point must be `pub fn main()` in the root module, with no parameters, and with no return type or an error union with `void` (`!void`, `E!void`). The generated C `main` stores `argc`/`argv` for `std.os.args`, and returns 0, or 1 after reporting an error that `main` returned.
@@ -26,17 +32,23 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
   - `&mut x` needs a writable place: a `var`, or data behind a `*mut`. `&` of a temporary (`&f()`) is an error.
   - Dereference is `p.*`, as in Zig (`*` already starts the type).
   - Field access dereferences one pointer level, as in Go and Zig: `p.x`, and `p.x = 1` when `p: *mut T`.
-  - There is no pointer arithmetic or pointer comparison.
+  - There is no pointer arithmetic. `==` and `!=` compare pointers by address (M6), also a `*T` with a `*mut T`; `<` and the other orderings do not apply.
 - **Optionals:** `?T`, with the literal `null`. `null` is a predeclared identifier like `true`, so the keyword count stays at 28.
-  - `if x |v| { } else { }` unwraps, as in Zig. `v` is immutable and visible only in the first block. `while x |v|` is not supported yet.
+  - `if x |v| { } else { }` unwraps, as in Zig. `v` is immutable and visible only in the first block.
+  - `while x |v| { }` (M6) evaluates `x` before each iteration and runs the body while it has a value; `v` is visible in the body. `continue` evaluates `x` again.
   - `x == null` and `x != null` work, as in Zig (and Go's `nil`).
 - **Enums:** `enum Name { A, B { field: T, ... } }`. Variants are separated by `,` or newlines; payload fields are written like struct fields. A variant without payload has no `{}`.
   - A value always names the enum: `Shape.Circle { r: 1.0 }`, `Color.Red`. The shorthand `.Circle { }` is not supported, so there is one way to write it.
 - **`match`:** `match x { pattern => body }`. Arms are separated by newlines or `,`. The scrutinee follows the header rule of `if` (no bare struct literal).
   - Patterns: `.V`, `.V { a, b: name, .. }` and `_`. A field binds a variable of the same name, or `field: name`. Without `..`, every field must be listed.
   - Matching a variant twice, and any arm after `_`, is an error.
+  - On an integer (M6): integer and character literals (`10`, `-1`, `'a'`), inclusive ranges `'a'..='z'` (`'a'..'z'` is an error that says to write `..=`), and several patterns per arm, `'a', 'e' =>`. Several patterns are only for integers: an arm with `.A, .B` would raise the question of what its bindings are. Patterns are literals; named constants as patterns wait for a use. A pattern that does not fit the type (E0024), an empty range (E0088), and a value that an earlier pattern already matches (E0057) are errors.
+  - Exhaustiveness on integers is exact for every integer type: without `_`, the arms must cover every value (a `u8` with `0..=127` and `128..=255` needs no `_`). The error lists the first three missing ranges.
   - As a statement, an arm body is a block or a call. As an expression, it is an expression (not a block), and all arms must have the same type. With no expected type, the first arm that is not an untyped literal or `null` decides the type.
-- **New tokens:** `&`, `|`, `=>` and `.*`. `.*` ends a statement for semicolon insertion, like `)`.
+- **New tokens:** `&`, `|`, `=>` and `.*`. `.*` ends a statement for semicolon insertion, like `)`. M6 adds `^ ~ << >> &= |= ^= <<= >>=` and `..=`.
+- **Bitwise operators (M6):** `& | ^` bind tighter than comparisons and `catch` and looser than `+ -`; `<< >>` bind tighter than `& | ^` and looser than `+ -`. So `x & 1 == 0` is `(x & 1) == 0`, unlike C, and `1 + 2 << 3` is `(1 + 2) << 3`, as in Go's `<<` but not in C. `&`, `|` and `^` cannot be mixed without parentheses (E0087, reported at the second operator), as in Zig, so `a & b | c` is never misread; a chain of one of them (`a | b | c`) is fine.
+  - In an `if` or `while` header a `|` at the top level (outside parentheses, brackets and braces) starts the capture, and a `|` right after `catch` always does. So a bitwise or there is written in parentheses: `if (a | b) != 0`. When the capture does not parse, the error says so.
+  - Prefix `~` is bitwise not, with the precedence of the other prefix operators.
 - **Error sets:** `error Name { A, B }` at top level, with names separated by `,` or newlines. A merged set is a declaration too, `error All = A || B`, as in Zig's `const All = A || B`; `||` is not a type operator, so every set has a name that `rg "error All"` finds.
 - **Error values** are written `Set.Name`, like enum values (`return ParseError.Empty`). In `match e`, an arm is `.Name`, like an enum pattern.
 - **Error unions:** `E!T`, and `!T` with an inferred set. They are allowed only as a function's return type, not for parameters, fields or variables. `void` is a type name only as their payload (`!void`).
@@ -45,7 +57,8 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
   - With a block, the block runs on an error. If the payload `T` is not `void`, the block must end with `return`, `break` or `continue` on every path.
   - With an expression, the expression replaces the error: it must have type `T` (`f() catch 0`, `f() catch |e| match e { ... }`). If `T` is `void`, it must be a call.
 - **`errdefer`** takes a block or a simple statement, like `defer`. It is an error in a function that does not return an error union, because it would never run.
-- **Methods** are functions declared in a struct body (`fn` or `pub fn`), in any order with the fields. In the struct, `Self` names it. Enums have no methods yet.
+- **Methods** are functions declared in a struct body (`fn` or `pub fn`), in any order with the fields. In the struct, `Self` names it.
+  - Enums have methods too (M6), declared in the enum body with the variants, and called the same way (`c.next()`, `Color.name(c)`). In an enum, `Self` names it, also in values: `Self.Red`, `Self.Num { value: v }`. A method cannot have the name of a variant. Enums cannot be converted to `dyn` or satisfy a `where` constraint yet: those are checked for structs.
   - The first parameter decides how a method takes its receiver, as in Zig: `self: Self` (a copy), `self: *Self` or `self: *mut Self`. The name `self` is a convention, not a rule. A function without such a parameter is called only as `Type.f(args)`.
   - `x.m(args)` passes the receiver as the first argument. For `*Self` and `*mut Self`, a pointer `x` is passed as it is, and a place `x` is passed as `&x` or `&mut x`; `&mut` needs a writable place, as for `&mut x` itself. A temporary is never borrowed implicitly (`make().get()` with `self: *Self` is an error). For `self: Self`, a pointer receiver is dereferenced (copied).
   - `Type.f(args)` calls any function of the struct with all arguments written out, also a method: `Counter.get(&c)`.
@@ -56,7 +69,7 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
   - Only top-level functions have `comptime` parameters: not methods, interface methods or `extern fn`. A type function has only `comptime` parameters.
   - `where` follows the return type, as in Rust: `fn f(comptime T: type, x: T) i64 where T: Show {`. Each constraint is `Param: Interface`; two interfaces are written `T: A, T: B` (there is no `+`).
   - A call passes the type like any argument: `max(i64, a, b)`. `Pool(Node)` is a type wherever a type is written, and also before `.f(...)` and `{` in an expression: `Pool(Node).init(alloc, 16)`, `Handle(T) { index: i, generation: g }`. A type argument that does not read as an expression is written as a type: `f(*Node, p)`, `f([]u8, s)`.
-  - There are no type aliases: `let P = Pool(Node)` is an error (a type is not a value).
+  - A type alias names an instance: `let NodePool = Pool(Node)` (M6, see Type aliases above).
 - **The empty slice** is `[]T{}` (or `[]mut T{}`): a null pointer and length 0. A slice literal cannot have elements, because they would need storage that lives somewhere: put them in an array and slice it, or use `alloc.alloc`.
 - **Test blocks:** `test "name" { ... }` at the top level. The body is checked like a `!void` function, so it can use `try`. Test names in a file must differ.
   - `ore build`, `ore run` and `ore emit-c` leave test blocks out (they are still type-checked) and need `pub fn main()`. `ore test` does not need `main`. `ore check` needs `main` unless the file has a test block.
@@ -81,18 +94,19 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
   - `+ - * / %` and unary `-` panic on overflow. `/` and `%` also panic on division by zero. `MIN / -1` and `MIN % -1` count as overflow.
   - `+% -% *%` wrap.
   - `%` is integer-only.
-  - There are no bitwise or shift operators yet.
-- **Equality:** `==` and `!=` work on integers, floats and bools, and between an optional and `null`. Struct, array, slice, pointer and enum equality are not supported.
+  - `& | ^ ~ << >>` are integer-only. Both operands of a shift have one type, like other binary operators (`x << 3` gives `3` the type of `x`; `x << n` needs `n as T` when `n` has another type), as the milestone fixed; Go and Zig give the amount its own type instead.
+  - A shift amount of the bit width or more, or a negative one, panics in debug and safe mode with `shift amount out of range`; in fast mode the amount is masked to the width (as x86 does), so there is no undefined behavior. `<<` drops the bits shifted out and never panics on them, as in Go (Zig panics): hashing shifts bits out on purpose. `>>` of a signed value is arithmetic (copies the sign bit).
+- **Equality:** `==` and `!=` work on integers, floats and bools, and between an optional and `null`. M6 adds pointers (`*T`, `*mut T`, `[*]T`, by address) and enums whose variants all have no fields (by tag); an enum with a payload variant is E0025, with a hint to use `match`. Struct, array, slice and error equality are not supported.
 - **Unused call results:** an expression statement must be a call (or `try`, `catch` or `match`), and a non-void result may be dropped silently. Other expression statements are errors.
 - **Error unions must be handled:** a call that returns `E!T` must be the operand of `try` or `catch`, or be returned as is (`return f()`) from a function whose error set has all its errors. It cannot be stored, passed, used in an expression, or dropped as a statement.
 - **Implicit wrapping:** a `T` value is accepted where `?T` is expected (a typed `let`, an assignment, an argument, a `return`, a field). This wraps the value; it is not a conversion between types, so it does not break the "no implicit conversion" rule. `*mut T` is also accepted where `*T` is expected, as in Rust and Zig. There are no other implicit coercions.
-- **`match` is exhaustive:** without `_`, every variant must have an arm. The error names the missing variants (`missing variant `Shape.Rect``). `match` works on enums and on error values; on errors, every error of the set needs an arm (`missing error `ParseError.Overflow``).
+- **`match` is exhaustive:** without `_`, every variant must have an arm. The error names the missing variants (`missing variant `Shape.Rect``). `match` works on enums, on error values and on integers; on errors, every error of the set needs an arm (`missing error `ParseError.Overflow``), and on integers every value (`missing `0..=47``).
 - **An error is identified by its name**, as in Zig: the same name in two sets is the same error. Every error name gets a program-wide value (a `u16`; 0 means no error) in order of first declaration. A merged set `A || B` has the errors of both, and an error value converts to any set that has all of its errors (`ParseError` to `LoadError`). A literal `Set.Name` counts as only that error.
 - **Error set checking:** in an `E!T` function, every error that a `return` or a `try` can pass on must be in `E`. The inferred set of a `!T` function is the union of those errors; `return ParseError.Empty` adds only `Empty`. A `!T` function is checked before its callers, which need its set, so a `!T` function that calls itself, directly or through other `!T` functions, is an error.
 - **`pub` functions spell out their error set** (`E!T`). `!T` is only for functions that are not `pub`, and for `pub fn main() !void`.
 - **Diagnostic codes:** every diagnostic has a code (`E0001`, ...) from the table in `src/codes.rs`: a title, an explanation, a program with the error and the fixed program. A unit test checks that each wrong program reports its code and each fix compiles. Codes are never renumbered or reused; a new kind of error gets the next number. `ore explain <code>` prints an entry.
 - **Pattern bindings and `|v|` captures** are immutable copies, and they follow the shadowing rule below.
-- **Shadowing** is not allowed in any scope. A `let`/`var` binding, a parameter or a `for` variable is an error when its name is already visible: a local in the same or an enclosing block, a parameter of the function, or a top-level `fn`, `extern fn` or `struct`. Sibling blocks and different functions can reuse a name.
+- **Shadowing** is not allowed in any scope. A `let`/`var` binding, a parameter or a `for` variable is an error when its name is already visible: a local in the same or an enclosing block, a parameter of the function, or a top-level name (`fn`, `extern fn`, `struct`, a global, ...). Sibling blocks and different functions can reuse a name.
 - **`isize` and `usize`** are 64-bit. Stage0 assumes an LP64 target.
 - **Interface conformance is structural**, as in Go: a struct implements `I` when it has every method of `I`, with the same parameter types after `self` and the same return type. There is no `impl` declaration. It is checked where a pointer converts to `dyn I`, and the error names the missing or different method.
   - A method that takes `self: *mut Self` needs an interface method declared with `self: *mut Self`, and a `*mut T` (`&mut x`). Methods that take `self: *Self` or `self: Self` work from `&x` too.
@@ -152,7 +166,7 @@ std is small, written in Ore over `extern fn` into libc, and embedded in the com
 
 ## Toolchain (M5)
 
-- **`ore spec`** prints `docs/spec.md`, embedded in the binary: one Markdown language reference, meant to be all that an AI agent needs to write Ore. It must stay within about 20k tokens (counted as characters / 4; it is about 9k). In it, a ` ```ore ` block is a complete program that `ore check` accepts, and a ` ```ore-error ` block one that it rejects; `tests/spec.rs` checks both, and that every pub function and method of std is named as `name(`. Other fenced blocks are not checked.
+- **`ore spec`** prints `docs/spec.md`, embedded in the binary: one Markdown language reference, meant to be all that an AI agent needs to write Ore. It must stay within about 30k tokens (counted as characters / 4); the limit was 20k until M6 raised it for the language that the browser needs. In it, a ` ```ore ` block is a complete program that `ore check` accepts, and a ` ```ore-error ` block one that it rejects; `tests/spec.rs` checks both, and that every pub function and method of std is named as `name(`. Other fenced blocks are not checked.
 - **`ore check --json`:** each diagnostic has a `"file"`, the file of its position and of its fix-it's edits. `ore fix` applies the fixes of each file to that file and never writes std.
 - `ore test --json` failures have no file yet (a test's failure in another file of the module shows only its line and column there; the text output names the file).
 - Code examples of `ore explain` can be several files: lines `// file: path` start each one, and the code table's test writes them to a directory and checks `main.ore`.
@@ -171,7 +185,7 @@ std is small, written in Ore over `extern fn` into libc, and embedded in the com
 - **No libc headers:** the generated C includes only `stdint.h`, `stddef.h` and `stdbool.h`, so user `extern fn` declarations cannot conflict with libc headers. The runtime calls libc through asm-labelled aliases such as `ore_rt_printf`; `errno` is read through `__error` (macOS) or `__errno_location` (Linux).
 - **Value types:** arrays are emitted as C structs (`struct { T a[N]; }`), so they are copied by value like structs.
 - **Optional layout:** `?*T` is a C pointer that may be null, the same size as `*T`. Every other `?T` is `struct { bool has; T val; }`.
-- **Enum layout:** a `uint32_t` tag (the variant's index in the declaration) and a union with one struct per payload variant. `match` is lowered to an `if` chain on the tag; the last arm needs no test.
+- **Enum layout:** a `uint32_t` tag (the variant's index in the declaration) and a union with one struct per payload variant. `match` is lowered to an `if` chain on the tag; the last arm needs no test. A `match` on an integer is an `if` chain too, each arm testing its values and ranges.
 - **Error union layout:** `struct { uint16_t err; T val; }`, where `err` is 0 for no error; `!void` has only `err`. Unions with the same payload share one C type. An error set value is a `uint16_t`.
 - **`errdefer` timing:** an `errdefer` runs, in LIFO order with the `defer`s, when its scope is left by a `return` of an error, by a `return f()` whose union holds an error, or by a `try` that passes an error on. It does not run at the normal end of a block, on `break` or `continue`, or on a `return` without an error.
 - **Error return trace (debug mode only):** every `return` of an error and every `try` that passes one on adds its position. When `catch` handles an error, that is, its body ends normally or leaves with `break`, `continue` or a `return` without an error, the entries added since the `catch` started are dropped. Up to 64 entries are kept.

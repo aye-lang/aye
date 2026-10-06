@@ -83,7 +83,7 @@ panic.
   comptime where as test mut extern`.
 - Predeclared names (not keywords, cannot be declared again): `true false
   null Self type` and the primitive types `i8 i16 i32 i64 isize u8 u16 u32
-  u64 usize f32 f64 bool`. `in` is special only in `for i in a..b`.
+  u64 usize f32 f64 bool`. `in` is special only in a `for` header.
 - Integer literals: `42`, `1_000`, `0xff`, `0o17`, `0b1010`. Float literals:
   `1.5`, `2.0e-3`, `1e9` (a float needs digits on both sides of `.`).
 - Char literals `'a'`, `'\n'`, `'"'` are integers (the Unicode code point)
@@ -141,10 +141,10 @@ pub fn main() {
 ## 4. Declarations
 
 Only declarations appear at the top level of a file, in any order: `fn`,
-`extern fn`, `struct`, `enum`, `error`, `interface`, `test` and `import`.
-There are no global variables or constants. Every declaration starts with
-its keyword and name, so `fn name` finds a function's definition. `pub`
-makes a declaration visible to other modules.
+`extern fn`, `struct`, `enum`, `error`, `interface`, `let`, `var`, `test`
+and `import`. Every declaration starts with its keyword and name, so `fn
+name` finds a function's definition. `pub` makes a declaration visible to
+other modules.
 
 ### Functions
 
@@ -179,6 +179,46 @@ pub fn main() {
 - No overloading, default arguments, variadic functions, closures or
   function values. A function name is only called: `f(x)`.
 - Functions may call each other in any order, and recurse.
+
+### Constants, globals and type aliases
+
+```ore
+struct Point { x: i64, y: i64 }
+
+let MAX_ITEMS: usize = 3
+let PRIMES = [3]u32{2, 3, 5}
+let ORIGIN = Point { x: 0, y: MAX_ITEMS as i64 * 2 }
+let MASK: u32 = (1 << 8) - 1
+let Bytes = []u8
+var calls: i64 = 0
+
+fn shout(s: Bytes) {
+    calls += 1
+    @println(s)
+}
+
+pub fn main() {
+    var sum: u32 = 0
+    for p in PRIMES {
+        sum += p & MASK
+    }
+    @println(sum)
+    shout("hi")
+    @println(ORIGIN.y + calls)
+}
+```
+
+- `let NAME = value` at the top level is a constant, `var name = value` a
+  global variable. The value is computed by the compiler: literals, other
+  `let` constants, operators, `as`, and array, struct and enum literals. No
+  calls and no `var` globals; overflow there is a compile error. A global
+  is initialized before `main` runs, in any declaration order.
+- As for a local `let`, an untyped integer gives `i64`: write `let N:
+  usize = 4` for an index bound.
+- `let Name = Type` (a type name, `Pool(Node)`, `[]u8`, `*Node`, ...) is a
+  type alias: another name for the same type, usable in types, literals
+  (`Name { ... }`) and static calls (`Name.init()`).
+- Constants cannot be assigned. No local may reuse a global's name.
 
 ### Structs and methods
 
@@ -229,26 +269,37 @@ enum Shape {
     Circle { r: f64 }
     Rect { w: f64, h: f64 }
     Empty
-}
 
-fn area(s: Shape) f64 {
-    return match s {
-        .Circle { r } => 3.14159 * r * r
-        .Rect { w, h } => w * h
-        .Empty => 0.0
+    fn area(self: Self) f64 {
+        return match self {
+            .Circle { r } => 3.14159 * r * r
+            .Rect { w, h } => w * h
+            .Empty => 0.0
+        }
+    }
+
+    fn unit() Self {
+        return Self.Rect { w: 1.0, h: 1.0 }
     }
 }
 
+enum Dir { Left, Right }
+
 pub fn main() {
-    @println(area(Shape.Circle { r: 1.0 }))
-    @println(area(Shape.Rect { w: 2.0, h: 3.0 }))
-    @println(area(Shape.Empty))
+    let c = Shape.Circle { r: 1.0 }
+    @println(c.area())
+    @println(Shape.unit().area())
+    @println(Shape.area(Shape.Empty))
+    let d = Dir.Left
+    @println(d == Dir.Right)
 }
 ```
 
 A value always names the enum: `Shape.Empty`, `Shape.Circle { r: 1.0 }`
 (there is no `.Circle` shorthand in expressions). A variant without payload
-has no braces. Enums have no methods and no `==`; use `match`.
+has no braces. Functions in the enum body are methods, as for structs;
+`Self` is the enum. `==` and `!=` work only on enums whose variants all have
+no fields; `match` the others.
 
 ### Error sets
 
@@ -346,6 +397,13 @@ pub fn main() {
         @print(k)
     }
     @println()
+    var arr = [3]i64{1, 2, 3}
+    for j, x in arr {
+        arr[j] = x * 10
+    }
+    for x in arr[1..] {
+        @println(x)
+    }
     {
         let inner = b
         @println(inner)
@@ -356,17 +414,22 @@ pub fn main() {
 - `let x = v` binds an immutable name; `var x = v` a mutable one. A type
   may be given: `var x: u8 = 0`. An initializer is always required; there
   is no zero-initialization.
-- Assignment: `=`, and `+= -= *= /= %= +%= -%= *%=`. The target is a
-  `var`, a field or element of a `var`, data behind a `*mut T`, or an
-  element of a `[]mut T`.
+- Assignment: `=`, and `+= -= *= /= %= +%= -%= *%= &= |= ^= <<= >>=`. The
+  target is a `var`, a field or element of a `var`, data behind a `*mut T`,
+  or an element of a `[]mut T`.
 - `if cond { } else if cond { } else { }`; the condition must be `bool`
   (no truthiness). Braces are required.
 - `while cond { }`. There is no `do`/`loop`; use `while true { }`.
-- `for i in lo..hi { }` is the only `for`: `i` goes from `lo` up to `hi - 1`
+  `while x |v| { }` runs while the optional `x` (evaluated before each
+  iteration) has a value `v`.
+- `for i in lo..hi { }` counts: `i` goes from `lo` up to `hi - 1`
   (half-open), both bounds have the same integer type (`0..s.len` is
-  `usize`), `hi` is evaluated once, and `i` is immutable. To iterate a
-  slice: `for i in 0..s.len { }`. A range of two literals is `usize`, so
-  `-1..3` is an error; for a signed counter write `(0 as i64)..4`.
+  `usize`), `hi` is evaluated once, and `i` is immutable. A range of two
+  literals is `usize`, so `-1..3` is an error; for a signed counter write
+  `(0 as i64)..4`.
+- `for x in xs { }` and `for i, x in xs { }` walk an array or a slice: `x`
+  is a copy of each element, `i` its `usize` index; `xs` is evaluated once.
+  To change elements, assign `xs[i]`.
 - `break` and `continue` apply to the innermost loop.
 - `return`, `return value`.
 - `defer stmt` runs `stmt` when the enclosing block is left: at its end,
@@ -405,21 +468,30 @@ left-associative; comparisons do not chain, `a < b < c` is an error):
 | 2 | `&&` |
 | 3 | `== != < <= > >=` |
 | 4 | `catch` |
-| 5 | `+ - +% -%` |
-| 6 | `* / % *%` |
-| 7 | `as` |
-| 8 | prefix `- ! & &mut try` |
-| 9 | call `f()`, `x.f`, `x.m()`, `x[i]`, `x[a..b]`, `p.*` |
+| 5 | `& \| ^` (not mixed without parentheses) |
+| 6 | `<< >>` |
+| 7 | `+ - +% -%` |
+| 8 | `* / % *%` |
+| 9 | `as` |
+| 10 | prefix `- ! ~ & &mut try` |
+| 11 | call `f()`, `x.f`, `x.m()`, `x[i]`, `x[a..b]`, `p.*` |
 
 - Arithmetic `+ - * / %` panics on overflow and division by zero (debug and
   safe mode); `+% -% *%` wrap. Integer `/` truncates toward zero; `%` is for
   integers only. Unsigned subtraction below zero is an overflow: check
   first (`if i > 0 { i -= 1 }`). Both operands of a
   binary operator have the same type (use `as`).
-- There are no bitwise or shift operators.
-- `==` and `!=` work on integers, floats and `bool`, and between an optional
-  and `null`. Structs, enums, slices and pointers cannot be compared;
-  compare `[]u8` contents with `std.mem.eql(a, b)`.
+- Bitwise `& | ^`, prefix `~` and shifts `<< >>` take integers; both
+  operands have one type, also for a shift (`x << n` needs `n` of `x`'s
+  type). Unlike C, `x & 1 == 0` is `(x & 1) == 0`. `a & b | c` is an
+  error: write `(a & b) | c`. A shift by the bit width or more panics;
+  `<<` drops the bits shifted out; `>>` of a signed value keeps the sign.
+- In an `if` or `while` condition a `|` outside parentheses starts the
+  capture `|v|`: write a bitwise or there as `if (a | b) != 0`.
+- `==` and `!=` work on integers, floats, `bool`, pointers (`*T`, `[*]T`:
+  the same address) and enums without payloads, and between an optional
+  and `null`. Structs, arrays, slices and enums with payloads cannot be
+  compared; compare `[]u8` contents with `std.mem.eql(a, b)`.
 - `&&`, `||`, `!` take `bool` and short-circuit.
 - Evaluation order is left to right everywhere.
 
@@ -467,8 +539,8 @@ pub fn main() {
 `&x` makes a `*T`, `&mut x` a `*mut T` (`x` must be a `var` or reached
 through a `*mut`). `p.*` dereferences. Field access and method calls go
 through one pointer level automatically: `p.x`, `p.x = 1` for `p: *mut S`.
-There is no pointer arithmetic, no pointer comparison and no null pointer:
-use `?*T`. A temporary cannot be borrowed (`&f()` is an error).
+`p == q` is true when both point to the same place. There is no pointer
+arithmetic and no null pointer: use `?*T`. A temporary cannot be borrowed (`&f()` is an error).
 
 ### Optionals
 
@@ -499,15 +571,18 @@ pub fn main() {
 ```
 
 `if x |v| { } else { }` unwraps: `v` is the value, visible in the first
-block. `null` needs a known optional type (`var m: ?i64 = null`). There is no
-`while x |v|`, no `orelse` and no `.?`.
+block; `while x |v| { }` loops while `x` has a value. `null` needs a known
+optional type (`var m: ?i64 = null`). There is no `orelse` and no `.?`.
 
 ### match
 
-`match x { pattern => body ... }` works on enums and error values and must
-be exhaustive (or end with `_`). Patterns: `.V`, `.V { a, b }`, `.V { a: name }`,
-`.V { a, .. }` (ignore the other fields), `_`. Without `..` every payload
-field must be listed. Arms are separated by newlines or `,`.
+`match x { pattern => body ... }` works on enums, error values and
+integers, and must be exhaustive (or end with `_`). Enum patterns: `.V`,
+`.V { a, b }`, `.V { a: name }`, `.V { a, .. }` (ignore the other fields),
+`_`. Without `..` every payload field must be listed. Integer patterns:
+`10`, `-1`, `'a'`, inclusive ranges `'a'..='z'`, several per arm
+(`' ', '\t' =>`); without `_` they must cover every value of the type.
+Arms are separated by newlines or `,`.
 
 - As an expression, each arm is an expression (not a block), and all arms
   have the same type.
@@ -544,10 +619,34 @@ pub fn main() {
 }
 ```
 
-`match` works only on enums and error values: test integers and
-characters with `if`/`else if` chains. `Name {` in an `if`, `while`, `for`
-or `match` header starts the body (as in Go): put a struct literal there in
-parentheses.
+```ore
+fn class(c: u8) []u8 {
+    return match c {
+        'a'..='z', 'A'..='Z', '_' => "word"
+        '0'..='9' => "digit"
+        ' ', '\t', '\n' => "space"
+        _ => "other"
+    }
+}
+
+fn utf8Len(b: u8) usize {
+    return match b {
+        0x00..=0x7F => 1
+        0x80..=0xBF => 0
+        0xC0..=0xDF => 2
+        0xE0..=0xEF => 3
+        0xF0..=0xFF => 4
+    }
+}
+
+pub fn main() {
+    @println(class('x'))
+    @println(utf8Len(0xE4))
+}
+```
+
+`Name {` in an `if`, `while`, `for` or `match` header starts the body (as
+in Go): put a struct literal there in parentheses.
 
 ## 8. Errors
 
@@ -790,7 +889,8 @@ pub fn main() {
   type. A type argument that does not satisfy a constraint is an error at
   the instantiation.
 - Generic functions and methods of a type function's struct must spell out
-  their error sets (`E!T`). No type aliases: `let P = Pair(i64)` is an error.
+  their error sets (`E!T`). A top-level `let P = Pair(i64)` names an
+  instance (a type alias, section 4).
 
 ## 12. Modules and imports
 
@@ -1029,7 +1129,8 @@ pub fn main() !void {
 - A failed check panics: it flushes stdout, writes `file:line:col: panic:
   <reason>` to stderr and aborts (status 134). Reasons: `integer overflow`,
   `division by zero`, `index out of bounds: index I, len N`, `slice bounds
-  out of range`, `integer cast out of range`, `double free ...`.
+  out of range`, `integer cast out of range`, `shift amount out of range`,
+  `double free ...`.
 - `fast` mode removes the checks: overflow wraps, out-of-bounds access is
   undefined behavior.
 - Struct fields, arrays and slices are laid out by the compiler; there is
@@ -1076,21 +1177,23 @@ end. The edits of one diagnostic are applied together.
   `as`. Indices must be unsigned (`usize`); `.len` is `usize`.
 - `for i in 0..4` gives a `usize` (as in Zig; Go's `range 4` gives
   `int`); write `(0 as i64)..4` for a signed counter.
-- `for` only ranges over integers: `for i in 0..xs.len`. No `for x in xs`,
-  no `for (xs) |x|`, no C-style `for`.
+- `for x in xs` and `for i, x in xs` (index first, as in Go) give copies
+  of the elements. No `for (xs) |x|`, no C-style `for`.
 - String literals are `[]u8` and read-only; there is no `+` on strings, no
   string formatting into memory, and `==` does not compare slices
   (`std.mem.eql`).
 - Char literals are integers: `'a'` compares with a `u8` directly, and
   `@print` of a `u8` writes its number (print a one-byte slice instead).
-- `match` is only for enums and errors; no `switch`, no matching on
-  integers, characters or strings.
+- `match` is for enums, errors and integers (characters too); no
+  `switch`, no matching on strings, no `..` (exclusive) range patterns.
+- `&`, `|` and `^` bind tighter than `==` (unlike C) and cannot be mixed
+  without parentheses; a shift amount has the type of the shifted value.
 - `if` is a statement, not an expression: `let x = if c { 1 } else { 2 }`
   is an error. Declare `var x = 2` and assign in the `if`.
 - A function with a return type needs a `return` at the end of every path;
   a `while true { }` loop does not count, so add a final `return` after it.
 - Enum values are always qualified: `Color.Red`, never `.Red` (patterns use
-  `.Red`). Enums and structs have no `==`.
+  `.Red`). Structs, and enums with payloads, have no `==`.
 - An error union cannot be stored: `let r = f()` for `f() E!T` is an error;
   write `try f()` or `f() catch ...`. `try` needs the enclosing function to
   return an error union.
@@ -1100,9 +1203,8 @@ end. The edits of one diagnostic are applied together.
 - Pointers are never null; optional pointers are `?*T`. Dereference is
   `p.*` (Zig), not `*p`.
 - `dyn I` is made from `&x`, never from a value; it does not box.
-- No `@import`, no `const`, no globals, no closures, no function pointers,
-  no methods on enums, no bitwise operators, no `while x |v|`, no `orelse`,
-  no `defer` with `return` inside.
+- No `@import`, no `const` (a top-level `let` is a constant), no closures,
+  no function pointers, no `orelse`, no `defer` with `return` inside.
 - Output to stdout is `@print`/`@println` or `std.fs.stdout().write(bytes)`;
   `std.log` writes to stderr.
 - `main` is `pub fn main()` or `pub fn main() !void`; arguments come from

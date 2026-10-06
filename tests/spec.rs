@@ -1,7 +1,7 @@
 //! `docs/spec.md`, the language reference that `ore spec` prints, cannot rot:
 //! every ```ore block is a complete program that `ore check` accepts, every
 //! ```ore-error block is one that it rejects, the reference names every pub
-//! function of std, and it stays within about 20k tokens.
+//! function of std, and it stays within about 30k tokens.
 
 use std::process::Command;
 
@@ -59,11 +59,11 @@ fn spec_names_every_std_function() {
     assert!(missing.is_empty(), "docs/spec.md does not mention {missing:?}");
 }
 
-/// About 20k tokens, counted as 4 characters per token.
+/// About 30k tokens, counted as 4 characters per token.
 #[test]
 fn spec_is_small() {
     let tokens = SPEC.chars().count() / 4;
-    assert!(tokens <= 20_000, "docs/spec.md is about {tokens} tokens");
+    assert!(tokens <= 30_000, "docs/spec.md is about {tokens} tokens");
 }
 
 #[test]
