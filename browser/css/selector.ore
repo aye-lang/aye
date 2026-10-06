@@ -3,7 +3,9 @@
 // an `i` flag), the combinators ` `, `>`, `+` and `~`, the pseudo-classes
 // `:first-child`, `:last-child`, `:only-child`, `:first-of-type`,
 // `:last-of-type`, `:root`, `:empty`, `:link`, `:any-link`, `:hover`
-// (nothing is hovered yet), `:not(list)`, and pseudo-elements (valid, but
+// (nothing is hovered yet), the states of form controls (`:checked`,
+// `:disabled`, `:enabled`, `:focus`, from `dom.controls`),
+// `:not(list)`, and pseudo-elements (valid, but
 // they match no element). A selector with anything else is invalid, and
 // so is its whole rule.
 //
@@ -34,6 +36,10 @@ pub enum SelKind {
     Empty
     Hover
     Link
+    Checked
+    Disabled
+    Enabled
+    Focus
     Never
     Not
 }
@@ -313,9 +319,21 @@ fn pseudoClass(name: []u8) ?SelKind {
     if text.eqlIgnoreCase(name, "link") || text.eqlIgnoreCase(name, "any-link") {
         return SelKind.Link
     }
+    if text.eqlIgnoreCase(name, "checked") {
+        return SelKind.Checked
+    }
+    if text.eqlIgnoreCase(name, "disabled") {
+        return SelKind.Disabled
+    }
+    if text.eqlIgnoreCase(name, "enabled") {
+        return SelKind.Enabled
+    }
+    if text.eqlIgnoreCase(name, "focus") {
+        return SelKind.Focus
+    }
     // States the browser does not have yet, and the pseudo-elements of
     // CSS 2 written with one colon.
-    if text.eqlIgnoreCase(name, "visited") || text.eqlIgnoreCase(name, "active") || text.eqlIgnoreCase(name, "focus") || text.eqlIgnoreCase(name, "focus-within") || text.eqlIgnoreCase(name, "focus-visible") || text.eqlIgnoreCase(name, "target") || isLegacyPseudoElement(name) {
+    if text.eqlIgnoreCase(name, "visited") || text.eqlIgnoreCase(name, "active") || text.eqlIgnoreCase(name, "focus-within") || text.eqlIgnoreCase(name, "focus-visible") || text.eqlIgnoreCase(name, "target") || isLegacyPseudoElement(name) {
         return SelKind.Never
     }
     return null
@@ -523,6 +541,21 @@ fn matchSimple(sheet: *Sheet, doc: *Document, s: Simple, el: NodeId) bool {
         }
         .Link => {
             return (text.eql(n.name, "a") || text.eql(n.name, "area")) && doc.attr(el, "href") != null
+        }
+        .Checked => {
+            if dom.isCheckable(doc, el) {
+                return dom.isChecked(doc, el)
+            }
+            return text.eql(n.name, "option") && dom.isSelected(doc, el)
+        }
+        .Disabled => {
+            return dom.isDisabled(doc, el)
+        }
+        .Enabled => {
+            return (dom.isControl(doc, el) || text.eql(n.name, "option") || text.eql(n.name, "optgroup") || text.eql(n.name, "fieldset")) && !dom.isDisabled(doc, el)
+        }
+        .Focus => {
+            return dom.isSame(doc.controls.focus, el)
         }
         .Never => {
             return false
