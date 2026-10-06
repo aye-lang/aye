@@ -5,6 +5,7 @@
 // process is open (`local_store`).
 
 import css
+import dom.Kind
 import dom.NodeId
 import encoding
 import js
@@ -50,6 +51,9 @@ fn installWindow(s: *mut Script) JsError!void {
     try defMethod(it, o, "cookie", 0, akCookie)
     try defMethod(it, o, "setCookie", 1, akSetCookie)
     try defMethod(it, o, "setDispatch", 1, akSetDispatch)
+    try defMethod(it, o, "computedStyle", 2, akComputedStyle)
+    try defMethod(it, o, "displayed", 1, akDisplayed)
+    try defMethod(it, o, "cssNames", 0, akCssNames)
 
     let c = try it.newObject(it.object_proto)
     try it.defineValue(it.global, "console", js.objVal(c))
@@ -468,6 +472,113 @@ fn akFetch(it: *mut Interp, a: Args) JsError!Value {
     try setField(it, r, "type", res.mime)
     try setField(it, r, "body", body)
     return it.pop()
+}
+
+// ---- getComputedStyle
+
+// computedStyle(el): the computed values of the element, { "display":
+// "block", ... } with every property of css.PROPERTIES; null for a node
+// that is not an element in the document. computedStyle(el, name): the
+// value of the property `name` ("" when there is none).
+fn akComputedStyle(it: *mut Interp, a: Args) JsError!Value {
+    let one = !js.isUndef(it.arg(a, 1))
+    var none = Value.Null
+    if one {
+        none = try it.newString("")
+    }
+    let h = handleOf(it, it.arg(a, 0), TAG_NODE) orelse return none
+    let s = scriptOf(it)
+    if s.page.doc.node(h).kind != Kind.Element || !s.page.doc.isConnected(h) {
+        return none
+    }
+    let st = try computedStyling(s)
+    let values = st.styles.get(h) orelse return none
+    let b = try it.builder()
+    defer it.release(b)
+    if one {
+        try argText(it, a, 1, b)
+        let i = css.propertyIndex(b.bytes()) orelse return none
+        b.clear()
+        try css.writeValue(values[i], b)
+        return it.newString(b.bytes())
+    }
+    let o = try it.newObject(it.object_proto)
+    try it.push(js.objVal(o))
+    for i, prop in css.PROPERTIES {
+        b.clear()
+        try css.writeValue(values[i], b)
+        try setField(it, o, prop.name, b.bytes())
+    }
+    return it.pop()
+}
+
+// The names of the properties getComputedStyle has.
+fn akCssNames(it: *mut Interp, a: Args) JsError!Value {
+    let arr = try it.newArray(0)
+    try it.push(js.objVal(arr))
+    for prop in css.PROPERTIES {
+        let v = try it.newString(prop.name)
+        try it.heap.pushElem(arr, v)
+    }
+    return it.pop()
+}
+
+// Is the element argument 0 rendered: in the document, and neither it nor
+// an ancestor `display: none`? (getClientRects: libraries tell visible
+// elements by their boxes.)
+fn akDisplayed(it: *mut Interp, a: Args) JsError!Value {
+    let h = handleOf(it, it.arg(a, 0), TAG_NODE) orelse return js.boolVal(false)
+    let s = scriptOf(it)
+    if !s.page.doc.isConnected(h) {
+        return js.boolVal(false)
+    }
+    let st = try computedStyling(s)
+    var cur: ?NodeId = h
+    while cur |c| {
+        if st.styles.get(c) |values| {
+            match values[css.DISPLAY] {
+                .Keyword { k } => {
+                    if text.eql(k, "none") {
+                        return js.boolVal(false)
+                    }
+                }
+                _ => {}
+            }
+        }
+        cur = s.page.doc.parent(c)
+    }
+    return js.boolVal(true)
+}
+
+// The styles of the document as it is now: the page's when they are up
+// to date, else computed for the viewport and kept until the document
+// changes.
+fn computedStyling(s: *mut Script) AllocError!*mut Styling {
+    let p = s.page
+    if p.styling |st| {
+        if st.version == s.version && st.media.width == s.width && st.media.height == s.height {
+            return st
+        }
+    }
+    if s.computed |c| {
+        if c.version == s.version && c.media.width == s.width && c.media.height == s.height {
+            return c
+        }
+    }
+    dropComputed(s)
+    let c = try p.styleFor(css.Media { width: s.width, height: s.height })
+    s.computed = c
+    return c
+}
+
+fn dropComputed(s: *mut Script) {
+    if s.computed |c| {
+        c.styles.deinit()
+        c.author.deinit()
+        c.ua.deinit()
+        s.alloc.destroy(c)
+    }
+    s.computed = null
 }
 
 // ---- document.cookie (the session's cookie jar, net/cookies.ore)

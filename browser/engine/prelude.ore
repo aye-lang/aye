@@ -2,9 +2,11 @@
 // (EventTarget, Event and its subclasses, capture and bubble dispatch,
 // `onclick` properties and attributes), the parts of Node and Element
 // that are easier in JavaScript (append, classList, reflected
-// attributes, `value`), the window (timers, location, history,
-// localStorage, alert), fetch, and more web APIs (URL, atob, TextEncoder,
-// AbortController, the observers, matchMedia, XMLHttpRequest...). It
+// attributes, `value`, Attr, select), the interfaces scripts construct
+// or patch, the window (timers, location, history, localStorage, alert,
+// getComputedStyle, performance), fetch, and more web APIs (URL, atob,
+// TextEncoder, AbortController, the observers, matchMedia,
+// XMLHttpRequest...). It
 // calls the native functions of the `ak` object (window_api.ore) and
 // hands `hostEvent` to the browser.
 //
@@ -42,6 +44,7 @@ pub let PRELUDE =
     \\
     \\class Event {
     \\  constructor(type, init) {
+    \\    if (arguments.length === 0) throw new TypeError("Failed to construct 'Event': 1 argument required, but only 0 present.");
     \\    init = init || {};
     \\    this.type = String(type);
     \\    this.bubbles = !!init.bubbles;
@@ -291,7 +294,11 @@ pub let PRELUDE =
     \\    ev = new Event(type, { bubbles: true, cancelable: type === 'submit' || type === 'reset' });
     \\  }
     \\  ev.isTrusted = true;
-    \\  return dispatch(target, ev);
+    \\  const page = (type === 'DOMContentLoaded' && target === document) || (type === 'load' && target === G);
+    \\  if (page) pageEvent(type, false);
+    \\  const r = dispatch(target, ev);
+    \\  if (page) pageEvent(type, true);
+    \\  return r;
     \\}
     \\
     \\// ---- nodes
@@ -388,6 +395,11 @@ pub let PRELUDE =
     \\  return { x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 };
     \\});
     \\hidden(ElementP, 'scrollIntoView', function () {});
+    \\// No geometry yet: a box for an element that is rendered (in the
+    \\// document, no `display: none` on the way up), none for the others.
+    \\hidden(ElementP, 'getClientRects', function () {
+    \\  return ak.displayed(this) ? [this.getBoundingClientRect()] : [];
+    \\});
     \\
     \\// Attributes reflected as properties.
     \\function reflect(name, attr) {
@@ -429,7 +441,6 @@ pub let PRELUDE =
     \\}, function (v) { this.setAttribute('tabindex', String(v)); });
     \\// value, checked, selected and selectedIndex are natives over the
     \\// page's form state (dom_api.ore).
-    \\getter(HTMLP, 'options', function () { return this.querySelectorAll('option'); });
     \\getter(HTMLP, 'form', function () { return this.closest('form'); });
     \\getter(HTMLP, 'text', function () { return this.textContent; }, function (v) { this.textContent = v; });
     \\getter(HTMLP, 'innerText', function () { return this.textContent; }, function (v) { this.textContent = v; });
@@ -511,6 +522,178 @@ pub let PRELUDE =
     \\  return l;
     \\}, function (v) { this.setAttribute('class', String(v)); });
     \\
+    \\// ---- interfaces: Symbol.toStringTag, the ones scripts can construct,
+    \\// lists, attributes, select
+    \\
+    \\for (const name of Object.getOwnPropertyNames(G)) {
+    \\  if (!/^(Node|Element|Document|HTMLDocument|CharacterData|Text|Comment|DocumentType|DocumentFragment|NodeList|HTMLCollection|HTMLOptionsCollection|CSSStyleDeclaration|DOMStringMap|(HTML|SVG|MathML)\w*Element)$/.test(name)) continue;
+    \\  Object.defineProperty(G[name].prototype, Symbol.toStringTag, { value: name, configurable: true });
+    \\}
+    \\// DocumentFragment, Text and Comment can be made with `new`; their
+    \\// prototypes stay the natives'.
+    \\function constructible(name, make) {
+    \\  const native = G[name];
+    \\  const C = function () {
+    \\    if (new.target === undefined) throw new TypeError("Failed to construct '" + name + "': Please use the 'new' operator, this DOM object constructor cannot be called as a function.");
+    \\    return make.apply(null, arguments);
+    \\  };
+    \\  Object.defineProperty(C, 'name', { value: name, configurable: true });
+    \\  C.prototype = native.prototype;
+    \\  hidden(native.prototype, 'constructor', C);
+    \\  hidden(G, name, C);
+    \\}
+    \\constructible('DocumentFragment', () => document.createDocumentFragment());
+    \\constructible('Text', s => document.createTextNode(s === undefined ? '' : s));
+    \\constructible('Comment', s => document.createComment(s === undefined ? '' : s));
+    \\hidden(DocumentFragment.prototype, 'getElementById', function (id) {
+    \\  id = String(id);
+    \\  for (const el of this.querySelectorAll('[id]')) if (el.id === id) return el;
+    \\  return null;
+    \\});
+    \\
+    \\// NodeList and HTMLCollection: `length`, `item` and the indices are
+    \\// natives (live lists, engine/lists.ore).
+    \\const ArrayP = Array.prototype;
+    \\for (const P of [NodeList.prototype, HTMLCollection.prototype]) {
+    \\  hidden(P, Symbol.iterator, ArrayP.values);
+    \\}
+    \\for (const k of ['forEach', 'entries', 'keys', 'values']) hidden(NodeList.prototype, k, ArrayP[k]);
+    \\hidden(HTMLCollection.prototype, 'namedItem', function (name) {
+    \\  name = String(name);
+    \\  for (let i = 0; i < this.length; i++) {
+    \\    const el = this[i];
+    \\    if (el.id === name || el.getAttribute('name') === name) return el;
+    \\  }
+    \\  return null;
+    \\});
+    \\
+    \\// select and its options (an HTMLOptionsCollection knows its select).
+    \\const SelectP = HTMLSelectElement.prototype;
+    \\const nativeOptions = Object.getOwnPropertyDescriptor(SelectP, 'options').get;
+    \\getter(SelectP, 'options', function () {
+    \\  const c = nativeOptions.call(this);
+    \\  if (!c._select) hidden(c, '_select', this);
+    \\  return c;
+    \\});
+    \\function selectAdd(select, el, before) {
+    \\  if (before === undefined || before === null) {
+    \\    select.appendChild(el);
+    \\    return;
+    \\  }
+    \\  const ref = typeof before === 'number' ? select.options[before] : before;
+    \\  if (ref && ref.parentNode) ref.parentNode.insertBefore(el, ref);
+    \\  else select.appendChild(el);
+    \\}
+    \\hidden(SelectP, 'add', function (el, before) { selectAdd(this, el, before); });
+    \\const ChildRemove = NodeP.remove;
+    \\hidden(SelectP, 'remove', function (i) {
+    \\  if (arguments.length === 0) return ChildRemove.call(this);
+    \\  const o = this.options[Number(i)];
+    \\  if (o) o.remove();
+    \\});
+    \\hidden(SelectP, 'item', function (i) { return this.options.item(i); });
+    \\hidden(SelectP, 'namedItem', function (n) { return this.options.namedItem(n); });
+    \\getter(SelectP, 'length', function () { return this.options.length; }, function (n) {
+    \\  n = Number(n) >>> 0;
+    \\  while (this.options.length > n) this.options[this.options.length - 1].remove();
+    \\  while (this.options.length < n) this.appendChild(document.createElement('option'));
+    \\});
+    \\getter(SelectP, 'type', function () { return this.multiple ? 'select-multiple' : 'select-one'; });
+    \\getter(SelectP, 'selectedOptions', function () { return Array.prototype.filter.call(this.options, o => o.selected); });
+    \\const OptionsP = HTMLOptionsCollection.prototype;
+    \\hidden(OptionsP, 'add', function (el, before) { selectAdd(this._select, el, before); });
+    \\hidden(OptionsP, 'remove', function (i) { this._select.remove(i); });
+    \\getter(OptionsP, 'selectedIndex', function () { return this._select.selectedIndex; }, function (v) { this._select.selectedIndex = v; });
+    \\
+    \\// Attributes as Attr objects: snapshots that write through to their
+    \\// element.
+    \\class Attr {
+    \\  constructor(name, value, el, ns) {
+    \\    hidden(this, '_name', name);
+    \\    hidden(this, '_value', value);
+    \\    hidden(this, '_el', el || null);
+    \\    hidden(this, '_ns', ns === undefined ? null : ns);
+    \\  }
+    \\  get name() { return this._name; }
+    \\  get nodeName() { return this._name; }
+    \\  get localName() { const i = this._name.indexOf(':'); return i < 0 ? this._name : this._name.slice(i + 1); }
+    \\  get prefix() { const i = this._name.indexOf(':'); return i < 0 ? null : this._name.slice(0, i); }
+    \\  get namespaceURI() { return this._ns; }
+    \\  get ownerElement() { return this._el; }
+    \\  get nodeType() { return 2; }
+    \\  get specified() { return true; }
+    \\  get value() { return this._el ? (this._el.getAttribute(this._name) ?? this._value) : this._value; }
+    \\  set value(v) {
+    \\    this._value = String(v);
+    \\    if (this._el) this._el.setAttribute(this._name, this._value);
+    \\  }
+    \\  get nodeValue() { return this.value; }
+    \\  set nodeValue(v) { this.value = v; }
+    \\  get textContent() { return this.value; }
+    \\  set textContent(v) { this.value = v; }
+    \\}
+    \\hidden(G, 'Attr', Attr);
+    \\// Attribute names with a prefix keep it (`xlink:href`); the namespace
+    \\// itself is not kept: an attribute is in no namespace when it has no
+    \\// prefix, in any other when it has one (or, failing that, none).
+    \\function attrNamed(el, ns, local) {
+    \\  local = String(local).toLowerCase();
+    \\  if (ns !== null && ns !== undefined && ns !== '') {
+    \\    for (const n of el.getAttributeNames()) if (n.endsWith(':' + local)) return n;
+    \\  }
+    \\  return el.hasAttribute(local) ? local : null;
+    \\}
+    \\hidden(Document.prototype, 'createAttribute', function (name) { return new Attr(String(name).toLowerCase(), ''); });
+    \\hidden(Document.prototype, 'createAttributeNS', function (ns, name) { return new Attr(String(name), '', null, ns); });
+    \\hidden(ElementP, 'setAttributeNS', function (ns, name, value) { this.setAttribute(String(name), value); });
+    \\hidden(ElementP, 'getAttributeNS', function (ns, local) {
+    \\  const n = attrNamed(this, ns, local);
+    \\  return n === null ? null : this.getAttribute(n);
+    \\});
+    \\hidden(ElementP, 'hasAttributeNS', function (ns, local) { return attrNamed(this, ns, local) !== null; });
+    \\hidden(ElementP, 'removeAttributeNS', function (ns, local) {
+    \\  const n = attrNamed(this, ns, local);
+    \\  if (n !== null) this.removeAttribute(n);
+    \\});
+    \\hidden(ElementP, 'getAttributeNode', function (name) {
+    \\  const v = this.getAttribute(name);
+    \\  return v === null ? null : new Attr(String(name).toLowerCase(), v, this);
+    \\});
+    \\hidden(ElementP, 'getAttributeNodeNS', function (ns, local) {
+    \\  const n = attrNamed(this, ns, local);
+    \\  return n === null ? null : new Attr(n, this.getAttribute(n), this, ns);
+    \\});
+    \\function setAttributeNode(attr) {
+    \\  if (!(attr instanceof Attr)) throw new TypeError("Failed to execute 'setAttributeNode' on 'Element': parameter 1 is not of type 'Attr'.");
+    \\  const old = this.getAttributeNode(attr.name);
+    \\  this.setAttribute(attr.name, attr._value);
+    \\  attr._el = this;
+    \\  return old;
+    \\}
+    \\hidden(ElementP, 'setAttributeNode', setAttributeNode);
+    \\hidden(ElementP, 'setAttributeNodeNS', setAttributeNode);
+    \\hidden(ElementP, 'removeAttributeNode', function (attr) {
+    \\  this.removeAttribute(attr.name);
+    \\  attr._el = null;
+    \\  return attr;
+    \\});
+    \\// `attributes`: a NamedNodeMap made at the call (not live).
+    \\getter(ElementP, 'attributes', function () {
+    \\  const el = this;
+    \\  const list = el.getAttributeNames().map(n => new Attr(n, el.getAttribute(n), el));
+    \\  hidden(list, 'getNamedItem', name => el.getAttributeNode(name));
+    \\  hidden(list, 'getNamedItemNS', (ns, local) => el.getAttributeNodeNS(ns, local));
+    \\  hidden(list, 'item', i => list[i] || null);
+    \\  hidden(list, 'setNamedItem', a => el.setAttributeNode(a));
+    \\  hidden(list, 'removeNamedItem', name => {
+    \\    const a = el.getAttributeNode(name);
+    \\    el.removeAttribute(name);
+    \\    return a;
+    \\  });
+    \\  for (const a of list) if (!/^\d/.test(a.name) && !(a.name in list)) hidden(list, a.name, a);
+    \\  return list;
+    \\});
+    \\
     \\// ---- the document
     \\
     \\getter(Document.prototype, 'defaultView', function () { return G; });
@@ -521,11 +704,77 @@ pub let PRELUDE =
     \\getter(Document.prototype, 'hidden', function () { return false; });
     \\getter(Document.prototype, 'cookie', function () { return ak.cookie(); }, function (v) { ak.setCookie(String(v)); });
     \\hidden(Document.prototype, 'hasFocus', function () { return true; });
-    \\hidden(Document.prototype, 'createEvent', function () { return new Event(''); });
+    \\getter(Document.prototype, 'compatMode', function () { return 'CSS1Compat'; });
+    \\for (const k of ['characterSet', 'charset', 'inputEncoding']) getter(Document.prototype, k, function () { return 'UTF-8'; });
+    \\getter(Document.prototype, 'contentType', function () { return 'text/html'; });
+    \\getter(Document.prototype, 'referrer', function () { return ''; });
+    \\getter(Document.prototype, 'scrollingElement', function () { return this.documentElement; });
+    \\getter(Document.prototype, 'forms', function () { return this.getElementsByTagName('form'); });
+    \\getter(Document.prototype, 'images', function () { return this.getElementsByTagName('img'); });
+    \\getter(Document.prototype, 'scripts', function () { return this.getElementsByTagName('script'); });
+    \\getter(Document.prototype, 'embeds', function () { return this.getElementsByTagName('embed'); });
+    \\getter(Document.prototype, 'links', function () { return this.querySelectorAll('a[href], area[href]'); });
+    \\hidden(Document.prototype, 'importNode', function (node, deep) { return node.cloneNode(!!deep); });
+    \\hidden(Document.prototype, 'adoptNode', function (node) {
+    \\  if (node.parentNode) node.parentNode.removeChild(node);
+    \\  return node;
+    \\});
+    \\hidden(Document.prototype, 'open', function () { return this; });
+    \\hidden(Document.prototype, 'close', function () {});
+    \\// document.implementation: a page has one document, so the documents
+    \\// it makes are stand-ins whose nodes are the page's (out of its tree).
+    \\function createHTMLDocument(title) {
+    \\  const html = document.createElement('html');
+    \\  const head = html.appendChild(document.createElement('head'));
+    \\  const body = html.appendChild(document.createElement('body'));
+    \\  if (title !== undefined) head.appendChild(document.createElement('title')).textContent = String(title);
+    \\  const d = Object.create(Object.prototype);
+    \\  for (const k of ['createElement', 'createElementNS', 'createTextNode', 'createComment', 'createDocumentFragment', 'createEvent', 'createAttribute', 'importNode', 'adoptNode']) {
+    \\    hidden(d, k, function () { return document[k].apply(document, arguments); });
+    \\  }
+    \\  hidden(d, 'getElementById', id => html.querySelector('[id="' + String(id).replace(/["\\]/g, '\\$&') + '"]'));
+    \\  for (const k of ['querySelector', 'querySelectorAll', 'getElementsByTagName', 'getElementsByClassName']) {
+    \\    hidden(d, k, function () { return html[k].apply(html, arguments); });
+    \\  }
+    \\  Object.assign(d, { documentElement: html, head, body, nodeType: 9, nodeName: '#document', defaultView: null, readyState: 'complete', implementation });
+    \\  return d;
+    \\}
+    \\const implementation = {
+    \\  createHTMLDocument,
+    \\  createDocument() { return createHTMLDocument(); },
+    \\  createDocumentType(name) { return { name: String(name), nodeType: 10 }; },
+    \\  hasFeature() { return true; },
+    \\};
+    \\getter(Document.prototype, 'implementation', function () { return implementation; });
+    \\// createEvent: an event of the interface `kind` names, to initialize
+    \\// with initEvent (or initCustomEvent...).
+    \\const CREATE_EVENT = { event: Event, events: Event, htmlevents: Event, customevent: CustomEvent, uievent: UIEvent, uievents: UIEvent, mouseevent: MouseEvent, mouseevents: MouseEvent, keyboardevent: KeyboardEvent, focusevent: FocusEvent };
+    \\hidden(Document.prototype, 'createEvent', function (kind) {
+    \\  const C = CREATE_EVENT[String(kind).toLowerCase()];
+    \\  if (!C) throw new DOMException("Failed to execute 'createEvent' on 'Document': The provided event type ('" + kind + "') is invalid.", 'NotSupportedError');
+    \\  return new C('');
+    \\});
     \\hidden(Event.prototype, 'initEvent', function (type, bubbles, cancelable) {
     \\  this.type = String(type);
     \\  this.bubbles = !!bubbles;
     \\  this.cancelable = !!cancelable;
+    \\});
+    \\hidden(CustomEvent.prototype, 'initCustomEvent', function (type, bubbles, cancelable, detail) {
+    \\  this.initEvent(type, bubbles, cancelable);
+    \\  this.detail = detail === undefined ? null : detail;
+    \\});
+    \\hidden(UIEvent.prototype, 'initUIEvent', function (type, bubbles, cancelable, view, detail) {
+    \\  this.initEvent(type, bubbles, cancelable);
+    \\  this.view = view || null;
+    \\  this.detail = detail || 0;
+    \\});
+    \\hidden(MouseEvent.prototype, 'initMouseEvent', function (type, bubbles, cancelable, view, detail, sx, sy, cx, cy, ctrl, alt, shift, meta, button, related) {
+    \\  this.initUIEvent(type, bubbles, cancelable, view, detail);
+    \\  this.clientX = cx || 0;
+    \\  this.clientY = cy || 0;
+    \\  modifiers(this, { ctrlKey: ctrl, altKey: alt, shiftKey: shift, metaKey: meta });
+    \\  this.button = button || 0;
+    \\  this.relatedTarget = related || null;
     \\});
     \\
     \\// ---- the window
@@ -553,7 +802,147 @@ pub let PRELUDE =
     \\hidden(G, 'blur', function () {});
     \\hidden(G, 'navigator', { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) anyknown/0.1', language: 'en-US', languages: ['en-US', 'en'], onLine: true, cookieEnabled: true, platform: '', vendor: '' });
     \\hidden(G, 'screen', { width: 1280, height: 800, availWidth: 1280, availHeight: 800, colorDepth: 24, pixelDepth: 24 });
-    \\hidden(G, 'performance', { now: () => ak.now(), timeOrigin: Date.now() });
+    \\
+    \\// The window's interface: `window instanceof Window`.
+    \\const Window = function Window() {
+    \\  throw new TypeError('Illegal constructor');
+    \\};
+    \\Window.prototype = Object.create(ETP, { constructor: { value: Window, writable: true, configurable: true }, [Symbol.toStringTag]: { value: 'Window', configurable: true } });
+    \\hidden(G, 'Window', Window);
+    \\Object.setPrototypeOf(G, Window.prototype);
+    \\
+    \\// getComputedStyle: the cascade's computed values (ak.computedStyle),
+    \\// as a live, read-only declaration with kebab-case and camelCase names.
+    \\// A pseudo-element gets its element's values.
+    \\const CSS_NAMES = ak.cssNames();
+    \\class ComputedStyle {
+    \\  constructor(el) { hidden(this, '_el', el); }
+    \\  get length() { return this._el.isConnected ? CSS_NAMES.length : 0; }
+    \\  get cssText() { return ''; }
+    \\  item(i) { return i >= 0 && i < this.length ? CSS_NAMES[i] : ''; }
+    \\  getPropertyValue(name) { return ak.computedStyle(this._el, String(name).toLowerCase()); }
+    \\  getPropertyPriority() { return ''; }
+    \\  setProperty() { throw new DOMException("Failed to execute 'setProperty' on 'CSSStyleDeclaration': These styles are computed, and therefore read-only.", 'NoModificationAllowedError'); }
+    \\  removeProperty() { throw new DOMException("Failed to execute 'removeProperty' on 'CSSStyleDeclaration': These styles are computed, and therefore read-only.", 'NoModificationAllowedError'); }
+    \\}
+    \\for (const n of CSS_NAMES) {
+    \\  const get = function () { return ak.computedStyle(this._el, n); };
+    \\  getter(ComputedStyle.prototype, n, get);
+    \\  const camel = n.replace(/-([a-z])/g, (m, c) => c.toUpperCase());
+    \\  if (camel !== n) getter(ComputedStyle.prototype, camel, get);
+    \\  if (n === 'float') getter(ComputedStyle.prototype, 'cssFloat', get);
+    \\}
+    \\Object.setPrototypeOf(ComputedStyle.prototype, CSSStyleDeclaration.prototype);
+    \\hidden(G, 'getComputedStyle', function getComputedStyle(el, pseudo) {
+    \\  if (!(el instanceof Element)) throw new TypeError("Failed to execute 'getComputedStyle' on 'Window': parameter 1 is not of type 'Element'.");
+    \\  return new ComputedStyle(el);
+    \\});
+    \\
+    \\// performance: the page's clock (ms since it started), navigation
+    \\// timing (the parts a page has: DOMContentLoaded and load, set when
+    \\// they fire), marks and measures. Network timings are the start.
+    \\const timeOrigin = Date.now() - ak.now();
+    \\const navigation = {
+    \\  name: '', entryType: 'navigation', startTime: 0, duration: 0, initiatorType: 'navigation', nextHopProtocol: 'http/1.1',
+    \\  workerStart: 0, redirectStart: 0, redirectEnd: 0, fetchStart: 0, domainLookupStart: 0, domainLookupEnd: 0, connectStart: 0,
+    \\  connectEnd: 0, secureConnectionStart: 0, requestStart: 0, responseStart: 0, responseEnd: 0, transferSize: 0, encodedBodySize: 0,
+    \\  decodedBodySize: 0, serverTiming: [], unloadEventStart: 0, unloadEventEnd: 0, domInteractive: 0, domContentLoadedEventStart: 0,
+    \\  domContentLoadedEventEnd: 0, domComplete: 0, loadEventStart: 0, loadEventEnd: 0, type: 'navigate', redirectCount: 0,
+    \\  toJSON() { return Object.assign({}, this); },
+    \\};
+    \\getter(navigation, 'name', function () { return ak.url(); });
+    \\// performance.timing: the same moments in ms since the epoch; 0 for
+    \\// what did not happen (yet).
+    \\const happened = new Set(['navigationStart', 'fetchStart', 'domainLookupStart', 'domainLookupEnd', 'connectStart', 'connectEnd', 'requestStart', 'responseStart', 'responseEnd', 'domLoading']);
+    \\const timing = {};
+    \\for (const k of ['navigationStart', 'unloadEventStart', 'unloadEventEnd', 'redirectStart', 'redirectEnd', 'fetchStart', 'domainLookupStart', 'domainLookupEnd', 'connectStart', 'connectEnd', 'secureConnectionStart', 'requestStart', 'responseStart', 'responseEnd', 'domLoading', 'domInteractive', 'domContentLoadedEventStart', 'domContentLoadedEventEnd', 'domComplete', 'loadEventStart', 'loadEventEnd']) {
+    \\  Object.defineProperty(timing, k, { enumerable: true, get() {
+    \\    return happened.has(k) ? Math.round(timeOrigin + (navigation[k] || 0)) : 0;
+    \\  } });
+    \\}
+    \\hidden(timing, 'toJSON', function () { return Object.assign({}, this); });
+    \\// DOMContentLoaded and load (`end`: after their listeners).
+    \\function pageEvent(type, end) {
+    \\  const t = ak.now();
+    \\  const keys = type === 'DOMContentLoaded' ? (end ? ['domContentLoadedEventEnd'] : ['domInteractive', 'domContentLoadedEventStart']) : (end ? ['loadEventEnd', 'duration'] : ['domComplete', 'loadEventStart']);
+    \\  for (const k of keys) {
+    \\    navigation[k] = t;
+    \\    happened.add(k);
+    \\  }
+    \\}
+    \\let entries = [];
+    \\function timeOf(x) {
+    \\  if (typeof x === 'number') return x;
+    \\  if (x === undefined) return ak.now();
+    \\  const name = String(x);
+    \\  for (let i = entries.length - 1; i >= 0; i--) if (entries[i].entryType === 'mark' && entries[i].name === name) return entries[i].startTime;
+    \\  if (typeof navigation[name] === 'number') return navigation[name];
+    \\  throw new DOMException("Failed to execute 'measure' on 'Performance': The mark '" + name + "' does not exist.", 'SyntaxError');
+    \\}
+    \\class PerformanceEntry {
+    \\  constructor(name, entryType, startTime, duration, detail) {
+    \\    this.name = name;
+    \\    this.entryType = entryType;
+    \\    this.startTime = startTime;
+    \\    this.duration = duration;
+    \\    this.detail = detail === undefined ? null : detail;
+    \\  }
+    \\  toJSON() { return Object.assign({}, this); }
+    \\}
+    \\class Performance {
+    \\  get timeOrigin() { return timeOrigin; }
+    \\  get timing() { return timing; }
+    \\  get navigation() { return { type: 0, redirectCount: 0, TYPE_NAVIGATE: 0, TYPE_RELOAD: 1, TYPE_BACK_FORWARD: 2, TYPE_RESERVED: 255 }; }
+    \\  now() { return ak.now(); }
+    \\  mark(name, opts) {
+    \\    if (arguments.length === 0) throw new TypeError("Failed to execute 'mark' on 'Performance': 1 argument required, but only 0 present.");
+    \\    const e = new PerformanceEntry(String(name), 'mark', opts && opts.startTime !== undefined ? Number(opts.startTime) : ak.now(), 0, opts && opts.detail);
+    \\    entries.push(e);
+    \\    return e;
+    \\  }
+    \\  measure(name, start, end) {
+    \\    let detail;
+    \\    let s = 0, f = ak.now();
+    \\    if (start && typeof start === 'object') {
+    \\      detail = start.detail;
+    \\      if (start.start !== undefined) s = timeOf(start.start);
+    \\      if (start.end !== undefined) f = timeOf(start.end);
+    \\      if (start.duration !== undefined) {
+    \\        if (start.start !== undefined) f = s + Number(start.duration);
+    \\        else s = f - Number(start.duration);
+    \\      }
+    \\    } else {
+    \\      if (start !== undefined) s = timeOf(start);
+    \\      if (end !== undefined) f = timeOf(end);
+    \\    }
+    \\    const e = new PerformanceEntry(String(name), 'measure', s, f - s, detail);
+    \\    entries.push(e);
+    \\    return e;
+    \\  }
+    \\  clearMarks(name) { entries = entries.filter(e => e.entryType !== 'mark' || (name !== undefined && e.name !== String(name))); }
+    \\  clearMeasures(name) { entries = entries.filter(e => e.entryType !== 'measure' || (name !== undefined && e.name !== String(name))); }
+    \\  clearResourceTimings() {}
+    \\  setResourceTimingBufferSize() {}
+    \\  getEntries() { return [navigation].concat(entries).sort((a, b) => a.startTime - b.startTime); }
+    \\  getEntriesByType(type) { return this.getEntries().filter(e => e.entryType === String(type)); }
+    \\  getEntriesByName(name, type) { return this.getEntries().filter(e => e.name === String(name) && (type === undefined || e.entryType === String(type))); }
+    \\  toJSON() { return { timeOrigin, timing: timing.toJSON(), navigation: this.navigation }; }
+    \\}
+    \\Object.setPrototypeOf(Performance.prototype, ETP);
+    \\hidden(G, 'Performance', Performance);
+    \\hidden(G, 'PerformanceEntry', PerformanceEntry);
+    \\hidden(G, 'performance', new Performance());
+    \\// PerformanceObserver: entries are not reported (but observing works).
+    \\class PerformanceObserver {
+    \\  constructor(callback) {
+    \\    if (typeof callback !== 'function') throw new TypeError("Failed to construct 'PerformanceObserver': The callback provided as parameter 1 is not a function.");
+    \\  }
+    \\  observe() {}
+    \\  disconnect() {}
+    \\  takeRecords() { return []; }
+    \\  static get supportedEntryTypes() { return ['mark', 'measure', 'navigation']; }
+    \\}
+    \\hidden(G, 'PerformanceObserver', PerformanceObserver);
     \\
     \\function messageOf(m) {
     \\  return m === undefined ? '' : String(m);

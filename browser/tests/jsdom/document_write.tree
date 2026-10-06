@@ -1,0 +1,46 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "document.write"
+      "\n"
+    <body>
+      <p id="before">
+        "before"
+      "\n"
+      <script>
+        "\ndocument.write('<p id=\"w1\">written <b>bold</b></p>');\ndocument.write('<p id=\"w2\">', 'two parts', '</p>');\ndocument.writeln('<span>line</span>');\ndocument.write('<script>document.write(\"<i id=nested>nested</i>\");<\\/script>');\n"
+      <p id="w1">
+        "written "
+        <b>
+          "bold"
+      <p id="w2">
+        "two parts"
+      <span>
+        "line"
+      "\n"
+      <script>
+        "document.write(\"<i id=nested>nested</i>\");"
+      <i id="nested">
+        "nested"
+      "\n"
+      <p id="after">
+        "after"
+      "\n"
+      <script src="scripts/writes.js">
+      <div id="external">
+        "from an external script"
+      "\n"
+      <ul>
+        <script>
+          "document.write('<li>in list</li>')"
+        <li>
+          "in list"
+      "\n"
+      <pre id="out">
+        "before w1 w2 nested after external out\nSCRIPT I\n2 in list\nlate \nlater  true\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst ids = Array.from(document.body.querySelectorAll('[id]'), e => e.id);\nlog(ids.join(' '));\nlog(document.getElementById('w1').previousElementSibling.tagName, document.getElementById('after').previousElementSibling.tagName);\nlog(document.querySelector('ul').children.length, document.querySelector('ul li').textContent);\n// After the parser is done, writes are ignored (a browser would open a\n// new document).\ndocument.addEventListener('DOMContentLoaded', () => {\n  document.write('<p id=\"late\">late</p>');\n  log('late', document.getElementById('late'));\n});\nsetTimeout(() => {\n  document.write('<p id=\"later\">later</p>');\n  log('later', document.getElementById('later'), document.open() === document);\n  document.close();\n}, 0);\n"
+      "\n"

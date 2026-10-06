@@ -74,12 +74,14 @@ pub struct Frame {
 /// - `getNamed`/`setNamed`: properties of host objects whose tag has
 ///   `HOST_NAMED` set (`el.style.color`, `el.dataset.x`) are asked of
 ///   the host first. `getNamed` returns `Value.Empty`, and `setNamed`
-///   false, for a key it leaves to the object itself.
+///   false, for a key it leaves to the object itself. `hasNamed` says
+///   whether the host has the key (`in`, `hasOwnProperty`).
 pub interface Host {
     fn finalize(self: *mut Self, tag: u32, index: u32, generation: u32)
     fn trace(self: *mut Self, it: *mut Interp) bool
     fn getNamed(self: *mut Self, it: *mut Interp, o: u32, key: u32) JsError!Value
     fn setNamed(self: *mut Self, it: *mut Interp, o: u32, key: u32, v: Value) JsError!bool
+    fn hasNamed(self: *mut Self, it: *mut Interp, o: u32, key: u32) bool
 }
 
 /// A host object tag with this bit has named properties (see Host).
@@ -1150,6 +1152,9 @@ pub struct Interp {
     }
 
     pub fn hasOwn(self: *mut Self, o: u32, key: u32) bool {
+        if self.heap.obj(o).class == Class.Host && self.namedHost(o) && self.host.?.hasNamed(self, o, key) {
+            return true
+        }
         let ob = self.heap.obj(o)
         if ob.class == Class.Array || ob.class == Class.Arguments {
             if key == A_LENGTH {

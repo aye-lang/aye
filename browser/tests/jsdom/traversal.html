@@ -6,7 +6,7 @@
 function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
 const d = document.getElementById('d');
 log(d.childNodes.length, d.children.length, d.childElementCount);
-log(d.childNodes.map(n => n.nodeName).join(','));
+log(Array.from(d.childNodes, n => n.nodeName).join(','));
 log(d.firstChild.nodeType, d.firstElementChild.id, d.lastElementChild.id, d.lastChild.nodeValue);
 const s1 = document.getElementById('s1');
 log(s1.nextSibling.nodeType, s1.nextElementSibling.id, s1.previousSibling.data, s1.previousElementSibling);

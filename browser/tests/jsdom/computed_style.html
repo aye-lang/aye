@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<title>getComputedStyle</title>
+<style>
+body { font-size: 20px }
+.box { color: rgb(0, 128, 0); margin: 1em 2px; display: flex; float: left }
+.box p { color: inherit; font-weight: bold }
+#hidden { display: none }
+</style>
+<div class="box" id="box" style="padding-left: 3px"><p id="p">text</p></div>
+<div id="hidden"></div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const box = document.getElementById('box');
+const cs = getComputedStyle(box);
+log(cs.color, cs.display, cs.marginTop, cs.marginLeft, cs.paddingLeft, cs.getPropertyValue('margin-top'), cs.getPropertyValue('MARGIN-BOTTOM'), cs.cssFloat, cs.float);
+const p = window.getComputedStyle(document.getElementById('p'));
+log(p.color, p.fontWeight, p.fontSize, p.display, p.getPropertyValue('font-size'), p.getPropertyValue('--nope') === '');
+log(getComputedStyle(document.getElementById('hidden')).display, cs instanceof CSSStyleDeclaration, typeof cs.length, cs.length > 20, typeof cs.item(0), cs.getPropertyPriority('color'));
+// It follows changes to the document.
+box.style.color = 'red';
+document.getElementById('hidden').className = 'box';
+log(getComputedStyle(box).color, cs.color, getComputedStyle(document.getElementById('hidden')).display);
+// A node out of the document has no computed style.
+const loose = document.createElement('div');
+log(JSON.stringify(getComputedStyle(loose).display), getComputedStyle(loose).length, getComputedStyle(box, '::before').color);
+let ro = '';
+try { cs.setProperty('color', 'blue'); } catch (e) { ro = e.name; }
+let notEl = '';
+try { getComputedStyle(document); } catch (e) { notEl = e.name; }
+log(ro, notEl);
+</script>

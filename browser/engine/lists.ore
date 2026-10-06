@@ -1,0 +1,304 @@
+// Live lists: the NodeList of `childNodes` and `getElementsByName`, and
+// the HTMLCollection of `children`, `getElementsByTagName`,
+// `getElementsByClassName` and a select's `options`. A list is a host
+// object (TAG_LIST) over a slot of `Script.lists`, which holds its root
+// node (one of the node's js_refs) and the nodes it had at the last
+// `Script.version`: an index or `length` walks the tree again only after
+// a script changed the document.
+
+import dom
+import dom.Document
+import dom.Kind
+import dom.NodeId
+import js
+import js.Args
+import js.Interp
+import js.JsError
+import js.Value
+import std
+import std.list.List
+import std.mem.AllocError
+import std.text
+
+let LIST_CHILD_NODES: u8 = 0
+let LIST_CHILDREN: u8 = 1
+let LIST_TAG: u8 = 2
+let LIST_CLASS: u8 = 3
+let LIST_NAME: u8 = 4
+let LIST_OPTIONS: u8 = 5
+
+/// A new live list of `kind` under `root`, about `arg`.
+fn newList(it: *mut Interp, kind: u8, root: NodeId, arg: []u8) JsError!Value {
+    let s = scriptOf(it)
+    let copy = try s.alloc.alloc(0 as u8, arg.len)
+    std.mem.copy(copy, arg)
+    var l = LiveList {
+        used: true,
+        generation: 0,
+        kind: kind,
+        root: root,
+        arg: copy,
+        items: List(NodeId).init(s.alloc),
+        version: 0,
+        fresh: false,
+    }
+    var slot: u32 = 0
+    if s.free_lists.pop() |free| {
+        slot = free
+        l.generation = s.lists.items()[slot].generation + 1
+        s.lists.items()[slot] = l
+    } else {
+        slot = s.lists.len() as u32
+        s.lists.append(l) catch |e| {
+            s.alloc.free(copy)
+            return e
+        }
+    }
+    let generation = l.generation
+    s.page.doc.node(root).js_refs += 1
+    var proto = s.collection_proto
+    if kind == LIST_CHILD_NODES || kind == LIST_NAME {
+        proto = s.nodelist_proto
+    } else if kind == LIST_OPTIONS {
+        proto = s.options_proto
+    }
+    let o = it.newHostObject(proto, TAG_LIST, slot, generation) catch |e| {
+        if releaseList(s, slot, generation) |r| {
+            s.unref(r)
+        }
+        return e
+    }
+    return js.objVal(o)
+}
+
+/// Frees the slot of a collected list; its root, to unref.
+fn releaseList(s: *mut Script, index: u32, generation: u32) ?NodeId {
+    if index as usize >= s.lists.len() {
+        return null
+    }
+    let l = &mut s.lists.items()[index]
+    if !l.used || l.generation != generation {
+        return null
+    }
+    l.used = false
+    s.alloc.free(l.arg)
+    l.items.deinit()
+    s.free_lists.append(index) catch |e| {}
+    return l.root
+}
+
+// The slot of the list object `o`, or null.
+fn listSlot(s: *mut Script, o: u32) ?u32 {
+    match s.it.heap.obj(o).data {
+        .Host { tag, index, generation } => {
+            if tag == TAG_LIST && index as usize < s.lists.len() {
+                let l = &s.lists.items()[index]
+                if l.used && l.generation == generation {
+                    return index
+                }
+            }
+        }
+        _ => {}
+    }
+    return null
+}
+
+/// The nodes of the list in `slot`, walked again when the document
+/// changed since the last time.
+fn listNodes(s: *mut Script, slot: u32) AllocError![]NodeId {
+    let l = &mut s.lists.items()[slot]
+    if l.fresh && l.version == s.version {
+        return l.items.items()
+    }
+    l.items.clear()
+    l.fresh = true
+    l.version = s.version
+    let doc = &mut s.page.doc
+    let root = l.root
+    if !doc.isLive(root) {
+        return l.items.items()
+    }
+    if l.kind == LIST_CHILD_NODES || l.kind == LIST_CHILDREN {
+        var cur = doc.firstChild(root)
+        while cur |c| {
+            if l.kind == LIST_CHILD_NODES || doc.node(c).kind == Kind.Element {
+                try l.items.append(c)
+            }
+            cur = doc.nextSibling(c)
+        }
+        return l.items.items()
+    }
+    if l.kind == LIST_OPTIONS {
+        try dom.options(doc, root, &mut l.items)
+        return l.items.items()
+    }
+    let all = text.eql(l.arg, "*")
+    let classes = l.kind == LIST_CLASS && text.trim(l.arg).len > 0
+    var cur = doc.following(root, root)
+    while cur |c| {
+        let n = doc.node(c)
+        if n.kind == Kind.Element {
+            var take = false
+            if l.kind == LIST_TAG {
+                take = all || text.eqlIgnoreCase(n.name, l.arg)
+            } else if l.kind == LIST_CLASS {
+                take = classes && hasClasses(doc.attr(c, "class") orelse "", l.arg)
+            } else if l.kind == LIST_NAME {
+                if doc.attr(c, "name") |v| {
+                    take = text.eql(v, l.arg)
+                }
+            }
+            if take {
+                try l.items.append(c)
+            }
+        }
+        cur = doc.following(c, root)
+    }
+    return l.items.items()
+}
+
+// Does the class attribute `classes` have every word of `names`?
+fn hasClasses(classes: []u8, names: []u8) bool {
+    var i: usize = 0
+    while i < names.len {
+        while i < names.len && isSpace(names[i]) {
+            i += 1
+        }
+        var j = i
+        while j < names.len && !isSpace(names[j]) {
+            j += 1
+        }
+        if j > i && !hasClass(classes, names[i..j]) {
+            return false
+        }
+        i = j
+    }
+    return true
+}
+
+// The list `this` is, or a TypeError.
+fn thisList(it: *mut Interp, a: Args) JsError!u32 {
+    let o = js.objectOf(a.this)
+    if o != js.NONE {
+        if listSlot(scriptOf(it), o) |slot| {
+            return slot
+        }
+    }
+    try it.typeError("Illegal invocation")
+    return 0
+}
+
+fn listLength(it: *mut Interp, a: Args) JsError!Value {
+    let slot = try thisList(it, a)
+    let nodes = try listNodes(scriptOf(it), slot)
+    return js.numVal(nodes.len as f64)
+}
+
+fn listItem(it: *mut Interp, a: Args) JsError!Value {
+    let slot = try thisList(it, a)
+    let n = try js.argInteger(it, a, 0, 0.0)
+    let nodes = try listNodes(scriptOf(it), slot)
+    if n >= 0.0 && n < nodes.len as f64 {
+        return wrap(it, nodes[n as usize])
+    }
+    return Value.Null
+}
+
+/// Host.getNamed of a list: `list[i]`, and, for an HTMLCollection, the
+/// element whose id or name is the key.
+fn listGet(s: *mut Script, o: u32, key: u32) JsError!Value {
+    let it = &mut s.it
+    let slot = listSlot(s, o) orelse return Value.Empty
+    let idx = it.heap.atoms.indexOf(key)
+    if idx != js.NONE {
+        let nodes = try listNodes(s, slot)
+        if idx as usize < nodes.len {
+            return wrap(it, nodes[idx])
+        }
+        return Value.Undefined
+    }
+    let kind = s.lists.items()[slot].kind
+    if kind == LIST_CHILD_NODES || kind == LIST_NAME || it.hasProperty(it.heap.obj(o).proto, key) || it.heap.findProp(o, key) != null {
+        return Value.Empty
+    }
+    let name = it.heap.atoms.name(key)
+    let nodes = try listNodes(s, slot)
+    for h in nodes {
+        let doc = &s.page.doc
+        if doc.node(h).kind == Kind.Element {
+            if text.eql(doc.attr(h, "id") orelse "", name) || text.eql(doc.attr(h, "name") orelse "", name) {
+                return wrap(it, h)
+            }
+        }
+    }
+    return Value.Empty
+}
+
+/// Host.hasNamed of a list: an index below its length.
+fn listHas(s: *mut Script, o: u32, key: u32) bool {
+    let slot = listSlot(s, o) orelse return false
+    let idx = s.it.heap.atoms.indexOf(key)
+    if idx == js.NONE {
+        return false
+    }
+    let nodes = listNodes(s, slot) catch |e| {
+        return false
+    }
+    return idx as usize < nodes.len
+}
+
+/// Host.setNamed of a list: indices cannot be set (ignored, as in sloppy
+/// mode).
+fn listSet(s: *mut Script, o: u32, key: u32) bool {
+    return s.it.heap.atoms.indexOf(key) != js.NONE
+}
+
+// A live list of `this`, kept in the hidden property `key` of its
+// wrapper, so that `el.childNodes === el.childNodes`.
+fn sideList(it: *mut Interp, a: Args, kind: u8, key: []u8) JsError!Value {
+    let h = try thisNode(it, a)
+    let atom = try it.intern(key)
+    let wo = js.objectOf(a.this)
+    if it.heap.findProp(wo, atom) |i| {
+        return it.heap.obj(wo).props[i].value
+    }
+    let l = try newList(it, kind, h, "")
+    try it.push(l)
+    try it.defineOwn(wo, atom, l, js.F_WRITE | js.F_CONFIG)
+    return it.pop()
+}
+
+fn nodeChildNodes(it: *mut Interp, a: Args) JsError!Value {
+    return sideList(it, a, LIST_CHILD_NODES, "__childNodes")
+}
+
+fn nodeChildren(it: *mut Interp, a: Args) JsError!Value {
+    return sideList(it, a, LIST_CHILDREN, "__children")
+}
+
+fn selectOptions(it: *mut Interp, a: Args) JsError!Value {
+    try thisElement(it, a)
+    return sideList(it, a, LIST_OPTIONS, "__options")
+}
+
+// A new list of `kind` under `this`, about argument 0.
+fn argList(it: *mut Interp, a: Args, kind: u8) JsError!Value {
+    let h = try thisNode(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 0, b)
+    return newList(it, kind, h, b.bytes())
+}
+
+fn nodeGetElementsByTagName(it: *mut Interp, a: Args) JsError!Value {
+    return argList(it, a, LIST_TAG)
+}
+
+fn nodeGetElementsByClassName(it: *mut Interp, a: Args) JsError!Value {
+    return argList(it, a, LIST_CLASS)
+}
+
+fn documentGetElementsByName(it: *mut Interp, a: Args) JsError!Value {
+    try thisDocument(it, a)
+    return argList(it, a, LIST_NAME)
+}

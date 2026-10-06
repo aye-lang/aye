@@ -82,6 +82,10 @@ struct CountingHost {
     fn setNamed(self: *mut Self, it: *mut Interp, o: u32, key: u32, v: Value) JsError!bool {
         return false
     }
+
+    fn hasNamed(self: *mut Self, it: *mut Interp, o: u32, key: u32) bool {
+        return false
+    }
 }
 
 test "evalScript gives the completion value" {

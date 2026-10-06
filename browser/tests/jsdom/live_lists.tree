@@ -1,0 +1,27 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Live lists"
+      "\n"
+    <body>
+      <div id="box" class="c">
+        <p class="a" data-seen="">
+          "2"
+        <!--  note  -->
+        <span class="b">
+          "3"
+        <p class="a b" id="third" data-seen="">
+      "\n"
+      <form>
+        <input name="q" value="1">
+        <input name="q" value="2">
+        <input name="r">
+      "\n"
+      <pre id="out">
+        "5 3 2 1 2 true true\ntrue true true true false\n[object NodeList] [object HTMLCollection]\n6 4 3 2 1 true true\n4 3 2 1 P\ntrue true false    false\ntrue true  2\n2, P,SPAN,P\n0:P 1:#comment 2:SPAN 3:P 0123\n2\ntrue true true\nP\n1 1\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst box = document.getElementById('box');\nconst kids = box.childNodes;\nconst elems = box.children;\nconst ps = box.getElementsByTagName('p');\nconst all = document.getElementsByTagName('*');\nconst ab = document.getElementsByClassName('a b');\nconst qs = document.getElementsByName('q');\nconst before = all.length;\nlog(kids.length, elems.length, ps.length, ab.length, qs.length, kids === box.childNodes, elems === box.children);\nlog(kids instanceof NodeList, elems instanceof HTMLCollection, ps instanceof HTMLCollection, qs instanceof NodeList, Array.isArray(kids));\nlog(Object.prototype.toString.call(kids), Object.prototype.toString.call(elems));\n// They follow the document.\nconst p3 = document.createElement('p');\np3.className = 'a b';\np3.id = 'third';\nbox.appendChild(p3);\nlog(kids.length, elems.length, ps.length, ab.length, all.length - before, ps[2] === p3, ps.item(2) === p3);\nbox.removeChild(box.firstChild);\nps[0].remove();\nlog(kids.length, elems.length, ps.length, ab.length, kids[0].nodeName);\n// Indices, `in`, item(), named items, iteration.\nlog(0 in ps, 1 in ps, 5 in ps, ps[5], ps.item(5), ps.item(-1), ps.length in ps);\nlog(elems.third === p3, elems.namedItem('third') === p3, elems.namedItem('none'), qs.item(1).value);\nlog([...ps].map(p => p.textContent).join(','), Array.from(elems, e => e.tagName).join(','));\nconst seen = [];\nkids.forEach((n, i) => seen.push(i + ':' + n.nodeName));\nlog(seen.join(' '), [...kids.keys()].join(''));\nfor (const p of ps) p.setAttribute('data-seen', '');\nlog(document.querySelectorAll('[data-seen]').length);\n// An array-like test as libraries write it.\nfunction isArrayLike(o) { const n = o.length; return typeof n === 'number' && (n === 0 || (n > 0 && (n - 1) in o)); }\nlog(isArrayLike(ps), isArrayLike(kids), isArrayLike(document.getElementsByTagName('nothing')));\nps[0] = null;\nlog(ps[0].tagName);\n// A list under an element out of the document lives on with it.\nconst detached = document.createElement('div');\ndetached.innerHTML = '<i></i><i></i>';\nconst is = detached.getElementsByTagName('i');\ndetached.firstChild.remove();\nlog(is.length, detached.children.length);\n"
+      "\n"

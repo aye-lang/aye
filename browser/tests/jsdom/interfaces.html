@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<title>Interfaces</title>
+<div id="d"><a id="a" href="#x">link</a><img id="i" alt=""><span>s</span><x-widget id="w"></x-widget></div>
+<link id="l" rel="stylesheet" href="data:text/css,">
+<select id="sel"><option>o</option></select>
+<input id="in"><script id="sc">/* */</script>
+<svg id="svg"><path id="p"></path><foreignObject><b id="fb">x</b></foreignObject></svg>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const $ = id => document.getElementById(id);
+// Each element's wrapper has the prototype of its interface.
+const checks = [['d', HTMLDivElement], ['a', HTMLAnchorElement], ['i', HTMLImageElement], ['l', HTMLLinkElement],
+  ['sel', HTMLSelectElement], ['in', HTMLInputElement], ['sc', HTMLScriptElement], ['out', HTMLPreElement]];
+log(checks.map(([id, C]) => $(id) instanceof C).join(' '));
+log($('d') instanceof HTMLElement, $('d') instanceof Element, $('d') instanceof Node, $('d') instanceof EventTarget, $('d') instanceof HTMLSpanElement);
+log(Object.prototype.toString.call($('a')), Object.prototype.toString.call(document.body), String(document.querySelector('span')));
+log(Object.getPrototypeOf($('w')) === HTMLElement.prototype, document.createElement('h3') instanceof HTMLHeadingElement, document.createElement('video') instanceof HTMLMediaElement);
+log(document instanceof Document, document instanceof HTMLDocument, $('a').firstChild instanceof Text, window instanceof Window, window instanceof EventTarget);
+// Prototype patching reaches every element of the interface.
+HTMLElement.prototype.shout = function () { return this.tagName + '!'; };
+Element.prototype.whisper = function () { return this.localName; };
+HTMLAnchorElement.prototype.kind = 'anchor';
+log($('d').shout(), $('a').shout(), $('a').kind, $('d').kind, $('p').whisper(), typeof $('p').shout);
+// SVG and MathML elements, by where the parser put them.
+log($('svg') instanceof SVGSVGElement, $('svg') instanceof SVGElement, $('p') instanceof SVGElement, $('p') instanceof HTMLElement, $('fb') instanceof HTMLElement);
+log($('svg').namespaceURI, $('p').tagName, $('fb').namespaceURI, $('d').namespaceURI);
+// Interface objects are not constructors, except a few.
+let err = '';
+try { new HTMLDivElement(); } catch (e) { err = e.name; }
+log(err, typeof Node.ELEMENT_NODE, Node.DOCUMENT_FRAGMENT_NODE, HTMLElement.name, typeof HTMLLinkElement);
+const t = new Text('made');
+const c = new Comment('note');
+const f = new DocumentFragment();
+log(t.nodeType, t.data, t instanceof Text, c.nodeType, c.data, f.nodeType, f instanceof DocumentFragment, f.constructor === DocumentFragment);
+let called = '';
+try { Text('x'); } catch (e) { called = e.name; }
+log(called);
+</script>
