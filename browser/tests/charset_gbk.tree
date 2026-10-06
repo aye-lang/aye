@@ -1,0 +1,21 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      "\n"
+      <meta charset="gbk">
+      "\n"
+      <title>
+        "中关村在线"
+      "\n"
+    "\n"
+    <body>
+      "\n"
+      <!--  A page in GBK, declared by its meta element.  -->
+      "\n"
+      <h1>
+        "中关村在线"
+      "\n"
+      <p>
+        "大中华区专业IT网站 €：新闻、行情、导购、评测。"
+      "\n\n\n"

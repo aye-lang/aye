@@ -437,7 +437,7 @@ fn runScriptElement(s: *mut Script, el: NodeId) AllocError!void {
             return addConsole(s, "[error] Failed to load script: ", target.href)
         }
         defer res.deinit(s.alloc)
-        let code = try encoding.toUtf8(s.alloc, res.body, encoding.sniff(res.body, res.charset))
+        let code = try encoding.toUtf8(s.alloc, res.body, encoding.sniffOr(res.body, res.charset, p.encoding))
         defer s.alloc.free(code)
         return runSourceOf(s, el, code)
     }

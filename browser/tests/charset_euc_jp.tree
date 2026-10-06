@@ -1,0 +1,21 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      "\n"
+      <meta charset="EUC-JP">
+      "\n"
+      <title>
+        "日本語 (EUC-JP)"
+      "\n"
+    "\n"
+    <body>
+      "\n"
+      <!--  A page in EUC-JP, declared by its meta element.  -->
+      "\n"
+      <h1>
+        "日本語 (EUC-JP)"
+      "\n"
+      <p>
+        "東京都港区。半角ｶﾅ。"
+      "\n\n\n"

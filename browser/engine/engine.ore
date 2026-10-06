@@ -54,6 +54,8 @@ pub struct Page {
     // Why the fetch failed ("" when it did not).
     failure: []u8
     doc: Document
+    // The encoding the document was decoded from (forms submit in it).
+    encoding: encoding.Encoding
     // The text of the first `title`, whitespace collapsed (owned).
     title: []u8
     // Set by `layoutPage`.
@@ -213,11 +215,13 @@ pub fn loadWith(alloc: Allocator, target: *Url, body: ?*net.Body) AllocError!*mu
         return AllocError.OutOfMemory
     }
     errdefer located.deinit(alloc)
-    let src = try encoding.toUtf8(alloc, res.body, encoding.sniff(res.body, res.charset))
+    let enc = encoding.sniff(res.body, res.charset)
+    let src = try encoding.toUtf8(alloc, res.body, enc)
     defer alloc.free(src)
     var doc = try documentOf(alloc, res.mime, src)
     errdefer doc.deinit()
     let p = try newPage(alloc, located, res.status, "", doc)
+    p.encoding = enc
     if scriptingEnabled() && !text.eql(res.mime, "text/plain") {
         runPageScripts(p) catch |e| {
             p.destroy()
@@ -249,6 +253,7 @@ fn newPage(alloc: Allocator, located: Url, status: i64, failure: []u8, doc: Docu
         status: status,
         failure: failure,
         doc: d,
+        encoding: encoding.Encoding.Utf8,
         title: title,
         styling: null,
         tree: null,

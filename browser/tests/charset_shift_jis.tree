@@ -1,0 +1,21 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      "\n"
+      <meta http-equiv="Content-Type" content="text/html; charset=Shift_JIS">
+      "\n"
+      <title>
+        "日本語のページ"
+      "\n"
+    "\n"
+    <body>
+      "\n"
+      <!--  A page in Shift_JIS, declared by its meta element.  -->
+      "\n"
+      <h1>
+        "日本語のページ"
+      "\n"
+      <p>
+        "ひらがな、カタカナ、半角ｶﾀｶﾅ、記号①、漢字「阿部寛」。"
+      "\n\n\n"

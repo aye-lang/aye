@@ -1,0 +1,17 @@
+<!doctype html>
+<meta charset="shift_jis">
+<title>フォーム</title>
+<!-- A Shift_JIS page: its forms submit in Shift_JIS (what it cannot
+     write as &#N;), unless accept-charset names another encoding. -->
+<form action="/echo">
+  <p><label>検索 <input name="q" value="日本"></label>
+  <p><button name="go" value="ｶﾀｶﾅ">送信</button>
+</form>
+<form action="/echo" method="post">
+  <p><label>本文 <input name="本文" value="&#165;100"></label>
+  <p><button>POST</button>
+</form>
+<form action="/echo" accept-charset="unknown euc-kr">
+  <p><label>&#54620;&#44397;&#50612; <input name="k" value="&#54620;&#44397;"></label>
+  <p><button>EUC-KR</button>
+</form>

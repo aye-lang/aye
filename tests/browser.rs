@@ -294,6 +294,7 @@ fn http() {
     expect(&["dump", "--style", &format!("{base}/redirect-style")], 0, &link_style, "");
     // The charset of the Content-Type header decodes the body.
     expect(&["dump", "--text", &format!("{base}/latin1")], 0, "Café à la crème\n", "");
+    expect(&["dump", "--text", &format!("{base}/gbk")], 0, "中文网页\n", "");
     // An error status still has a page.
     let out = run(&["dump", "--text", &format!("{base}/missing.html")]);
     assert_eq!(out.status.code(), Some(0));
