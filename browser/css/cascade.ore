@@ -244,7 +244,7 @@ pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, o
 // The styles of the `::before` and `::after` of the element `h`.
 fn stylePseudos(c: *mut Computer, ua: *Sheet, ua_pseudo: []usize, h: NodeId) AllocError!void {
     let doc = c.doc
-    let root = doc.treeRoot(h)
+    let root = treeOf(doc, h)
     let own = c.scopeOf(root)
     var host_scope: ?usize = null
     if doc.node(h).shadow |sr| {
@@ -333,6 +333,15 @@ pub fn computeStylesOf(doc: *Document, ua: *Sheet, author: *Sheet, media: Media,
     }
 }
 
+// The root of the tree `h` is in (the document node, without looking,
+// when the document has no shadow trees).
+fn treeOf(doc: *Document, h: NodeId) NodeId {
+    if doc.shadows.len() == 0 {
+        return doc.root
+    }
+    return doc.treeRoot(h)
+}
+
 // The element whose style `el` inherits: its parent in the flat tree
 // (null at the root), or its parent element when it is a child of a
 // host that no slot takes.
@@ -373,7 +382,7 @@ fn styleElement(c: *mut Computer, ua: *Sheet, author: *Sheet, hints: *mut text.B
             try c.offer(out.inline.decls.items()[k], L_AUTHOR, 0)
         }
     }
-    let root = doc.treeRoot(h)
+    let root = treeOf(doc, h)
     if dom.same(root, doc.root) {
         try c.consider(author, h, L_AUTHOR, MATCH_ELEMENT)
     } else if c.scopeOf(root) |i| {
