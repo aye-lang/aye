@@ -128,20 +128,19 @@ keeps only `ValidityState` (`form_prelude.ore:7`).
 pass while the old API's users break.
 
 ### A missing feature fails like a browser with the feature off
-**Context:** a web API the engine cannot provide yet (canvas drawing,
-WebGL, ...).
+**Context:** a web API the engine cannot provide yet (WebGL, ...).
 **Bad:** an absent method throws `TypeError` and stops the whole script;
 a fake object that does nothing fails later, far from the cause.
 **Good:** answer as a real browser does when the feature is unavailable.
-`getContext()` returns null for every type
-(`browser/engine/prelude.ore:828-830`, added in `8d269de`):
+`getContext()` returns null for every type but `'2d'`
+(`browser/engine/canvas_prelude.ore:634-635`; before the canvas merge,
+`8d269de` returned null for `'2d'` too):
 ```
-\\// canvas: no drawing yet, so no context (as for an unknown type).
-\\const CanvasP = HTMLCanvasElement.prototype;
-\\hidden(CanvasP, 'getContext', function () { return null; });
+\\P.getContext = function (kind) {
+\\  if (String(kind) !== '2d') return null;
 ```
 **Why:** site scripts already handle the "not supported" answer and take
-their fallback path.
+their fallback path (the Mistral blog's three.js hero, `518b0d3`).
 
 ### A fast path must answer in the slow path's order
 **Context:** caches and inline caches in the JS engine (`browser/js/`).

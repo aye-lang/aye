@@ -1,0 +1,13 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Canvas API"
+    <body>
+      <canvas id="canvas" aria-label="Canvas tests" width="20" height="20">
+        "A test drawing"
+      <pre id="results">
+        "62 canvas API checks passed"
+      <script src="../canvas/api.js">
+      "\n"

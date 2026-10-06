@@ -710,6 +710,9 @@ struct Builder {
                     return
                 }
             }
+            if self.t.doc.isElement(el, "canvas") {
+                return
+            }
             if self.t.doc.isElement(el, "svg") {
                 // The picture lives in the tree's arena, as long as the list.
                 let pic = try svg.build(self.t.alloc, self.t.doc, self.t.styles, el)

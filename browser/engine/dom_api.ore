@@ -1182,6 +1182,7 @@ fn elementSetAttribute(it: *mut Interp, a: Args) JsError!Value {
     defer it.release(v)
     try argText(it, a, 1, v)
     try docOf(it).setAttr(h, name.bytes(), v.bytes())
+    try resetCanvas(scriptOf(it).active, h, name.bytes())
     try changedAttr(it, name.bytes())
     return Value.Undefined
 }
@@ -1194,6 +1195,7 @@ fn elementRemoveAttribute(it: *mut Interp, a: Args) JsError!Value {
     let doc = docOf(it)
     if doc.attr(h, b.bytes()) != null {
         doc.removeAttr(h, b.bytes())
+        try resetCanvas(scriptOf(it).active, h, b.bytes())
         try changedAttr(it, b.bytes())
     }
     return Value.Undefined

@@ -27,6 +27,7 @@ fn installWindow(s: *mut Script) JsError!void {
     let it = &mut s.it
     let o = try it.newObject(it.object_proto)
     try it.defineValue(it.global, "__ak", js.objVal(o))
+    try it.defineValue(it.global, "__canvasHost", js.objVal(o))
     try defMethod(it, o, "now", 0, akNow)
     try defMethod(it, o, "report", 1, akReport)
     try defMethod(it, o, "compile", 1, akCompile)
@@ -60,6 +61,7 @@ fn installWindow(s: *mut Script) JsError!void {
     try installFrames(s, o)
     try installCssom(s, o)
     try installComponents(s, o)
+    try installCanvas(it, o)
 
     let c = try it.newObject(it.object_proto)
     try it.defineValue(it.global, "console", js.objVal(c))

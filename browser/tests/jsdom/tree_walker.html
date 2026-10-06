@@ -43,7 +43,7 @@ for (let x = it.nextNode(); x; x = it.nextNode()) seen.push(x.data);
 log(seen.join(''), it.previousNode().data, it.previousNode().data, it.nextNode().data, it.pointerBeforeReferenceNode, it.referenceNode.data);
 const all = document.createNodeIterator(root);
 log(name(all.nextNode()), name(all.nextNode()), name(all.previousNode()), name(all.previousNode()), name(all.previousNode()));
-// canvas: no 2d context (yet).
+// canvas: the native 2d context and PNG serializer.
 const cv = $('cv');
 log(cv.width, cv.height, cv.getContext('2d'), typeof cv.toDataURL());
 log(performance.measure('m', 'navigationStart').startTime);

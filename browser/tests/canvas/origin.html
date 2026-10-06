@@ -1,0 +1,42 @@
+<!doctype html><canvas id="c" width="10" height="10"></canvas><pre id="results"></pre><script>
+const c = document.getElementById('c');
+const x = c.getContext('2d');
+const image = new Image();
+image.src = '../paint/img/photo.png';
+x.drawImage(image, 0, 0, 10, 10);
+if (x.getImageData(0, 0, 1, 1).data[3] === 0) throw new Error('same origin image');
+if (!c.toDataURL().startsWith('data:image/png')) throw new Error('same origin export');
+let refused = 0;
+function security(f) {
+  try {
+    f();
+    throw new Error('Expected SecurityError');
+  } catch (e) {
+    if (e.name !== 'SecurityError') throw e;
+    refused++;
+  }
+}
+image.setAttribute('crossorigin', 'anonymous');
+image.src = location.origin.replace('127.0.0.1', 'localhost') + '/paint/img/photo.png';
+x.drawImage(image, 0, 0, 10, 10);
+security(() => x.getImageData(0, 0, 1, 1));
+security(() => c.toDataURL());
+security(() => c.toBlob(() => {}));
+const off = new OffscreenCanvas(10, 10);
+off.getContext('2d').drawImage(c, 0, 0);
+security(() => off.getContext('2d').getImageData(0, 0, 1, 1));
+createImageBitmap(c).then(bitmap => {
+  const other = document.createElement('canvas');
+  other.getContext('2d').drawImage(bitmap, 0, 0);
+  security(() => other.toDataURL());
+  c.width = 10;
+  x.fillStyle = 'red';
+  x.fillRect(0, 0, 10, 10);
+  if (x.getImageData(0, 0, 1, 1).data[0] !== 255) throw new Error('reset must clean origin');
+  image.src = location.origin + '/canvas-image-redirect';
+  x.drawImage(image, 0, 0, 10, 10);
+  security(() => c.toDataURL());
+  if (refused !== 6) throw new Error('security check count');
+  document.getElementById('results').textContent = 'canvas origin-clean checks passed';
+});
+</script>

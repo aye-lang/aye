@@ -97,6 +97,8 @@ fn shoot(alloc: Allocator, o: ShotOptions, measure: dyn font.Measurer, system: ?
         return 1
     }
     defer location.deinit(alloc)
+    engine.setScripting(true)
+    engine.setCanvasFixed(system == null)
     let page = engine.load(alloc, &location) catch |e| {
         std.log.err("out of memory")
         return 1
@@ -104,6 +106,10 @@ fn shoot(alloc: Allocator, o: ShotOptions, measure: dyn font.Measurer, system: ?
     defer page.destroy()
     if page.failure.len > 0 {
         std.log.err("cannot fetch {}: {}", location.href, page.failure)
+        return 1
+    }
+    engine.runUntilIdle(page, 1000.0) catch |e| {
+        std.log.err("out of memory")
         return 1
     }
     let png = render(alloc, page, o, measure, system) catch |e| {
