@@ -642,9 +642,45 @@ pub struct Interp {
     pub fn makeError(self: *mut Self, proto: u32, m: []u8) JsError!Value {
         let o = try self.newObjectOf(Class.Error, proto, ObjData.None)
         try self.push(objVal(o))
+        if traceRequested() {
+            var b = text.Builder.init(self.alloc)
+            defer b.deinit()
+            try b.append(m)
+            try self.appendTrace(&mut b)
+            let traced = try self.newString(b.bytes())
+            try self.heap.addProp(o, A_MESSAGE, traced, Value.Undefined, F_HIDDEN)
+            return self.pop()
+        }
         let s = try self.newString(m)
         try self.heap.addProp(o, A_MESSAGE, s, Value.Undefined, F_HIDDEN)
         return self.pop()
+    }
+
+    // ANYKNOWN_JS_TRACE: the first 160 bytes of the source of each
+    // function running (at most 8), innermost first.
+    fn appendTrace(self: *mut Self, b: *mut text.Builder) JsError!void {
+        var fr = self.frames.len()
+        var shown: usize = 0
+        while fr > 0 && shown < 8 {
+            fr -= 1
+            let fo = self.frames.items()[fr].func
+            if fo == NONE {
+                continue
+            }
+            match self.heap.obj(fo).data {
+                .Closure { func, .. } => {
+                    let fi = self.ast.func(func)
+                    var end = fi.end
+                    if end > fi.start + 160 {
+                        end = fi.start + 160
+                    }
+                    try b.append("\n    in ")
+                    try b.append(self.ast.source.bytes()[fi.start as usize..end as usize])
+                    shown += 1
+                }
+                _ => {}
+            }
+        }
     }
 
     pub fn throwError(self: *mut Self, proto: u32, m: []u8) JsError!Value {
