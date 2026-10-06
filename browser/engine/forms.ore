@@ -61,6 +61,7 @@ pub fn activate(page: *mut Page, node: NodeId) AllocError!Activation {
         return Activation.Nothing
     }
     let moved = focusOn(page, el)
+    doc.controls.focus_visible = dom.isTextField(doc, el)
     if doc.isElement(el, "a") || doc.isElement(el, "area") {
         let href = text.trim(doc.attr(el, "href") orelse "")
         let target = page.follow(page.alloc, href) catch |e| {
@@ -120,7 +121,10 @@ pub fn activate(page: *mut Page, node: NodeId) AllocError!Activation {
     }
     if dom.isResetButton(doc, el) {
         if dom.formOwner(doc, el) |form| {
-            try dom.resetForm(doc, form)
+            if try dispatchEvent(page, form, "reset", "") {
+                try dom.resetForm(doc, form)
+                doc.controls.validation = null
+            }
             return Activation.Changed
         }
         return changedIf(moved)
@@ -273,6 +277,7 @@ fn focusOn(page: *mut Page, el: NodeId) bool {
 /// at the end of its value.
 pub fn setFocus(page: *mut Page, el: ?NodeId) {
     page.doc.controls.focus = el
+    page.doc.controls.focus_visible = true
     if el |f| {
         if dom.isTextField(&page.doc, f) {
             let n = dom.valueOf(&page.doc, f).len
@@ -594,7 +599,7 @@ fn formEntries(page: *mut Page, form: NodeId, submitter: ?NodeId, out: *mut List
     defer list.deinit()
     try dom.formControls(doc, form, &mut list)
     for el in list.items() {
-        if dom.isDisabled(doc, el) || inDatalist(doc, el) {
+        if doc.isElement(el, "output") || dom.isDisabled(doc, el) || inDatalist(doc, el) {
             continue
         }
         let is_submitter = dom.isSame(submitter, el)

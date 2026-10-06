@@ -1,0 +1,307 @@
+// Bounded full-string matching for HTML pattern attributes. No captures
+// are needed: grouping, alternation, classes and repetition share a
+// backtracking budget, so hostile patterns cannot stall style matching.
+import std.text
+
+struct PatternAtom {
+    end: usize
+    min: usize
+    max: usize
+    next: usize
+}
+
+fn atomEnd(p: []u8, at: usize) ?usize {
+    if at >= p.len {
+        return null
+    }
+    var end = at + 1
+    if p[at] == '\\' {
+        if end == p.len {
+            return null
+        }
+        return end + 1
+    }
+    if p[at] == '[' {
+        var i = end
+        if i < p.len && p[i] == '^' {
+            i += 1
+        }
+        let start = i
+        while i < p.len && p[i] != ']' {
+            if p[i] == '\\' {
+                i += 1
+            }
+            i += 1
+        }
+        if i >= p.len || i == start {
+            return null
+        }
+        return i + 1
+    }
+    if p[at] == '(' {
+        var depth: usize = 1
+        while end < p.len {
+            if p[end] == '\\' {
+                end += 2
+            } else if p[end] == '[' {
+                end = atomEnd(p, end) orelse return null
+            } else {
+                if p[end] == '(' {
+                    depth += 1
+                }
+                if p[end] == ')' {
+                    depth -= 1
+                }
+                end += 1
+                if depth == 0 {
+                    return end
+                }
+            }
+        }
+        return null
+    }
+    if p[at] == ')' || p[at] == '|' || p[at] == '*' || p[at] == '+' || p[at] == '?' || p[at] == '{' || p[at] == '}' {
+        return null
+    }
+    // Literal UTF-8 code points are consumed together.
+    while end < p.len && (p[end] & 0xC0) == 0x80 {
+        end += 1
+    }
+    return end
+}
+
+fn atomOf(p: []u8, at: usize) ?PatternAtom {
+    let end = atomEnd(p, at) orelse return null
+    var min: usize = 1
+    var max: usize = 1
+    var next = end
+    if p[at] == '^' || p[at] == '$' {
+        return PatternAtom { end: end, min: min, max: max, next: next }
+    }
+    if next < p.len {
+        if p[next] == '*' {
+            min = 0
+            max = 4096
+            next += 1
+        } else if p[next] == '+' {
+            max = 4096
+            next += 1
+        } else if p[next] == '?' {
+            min = 0
+            next += 1
+        } else if p[next] == '{' {
+            let close = text.indexOf(p[next..], "}") orelse return null
+            let nums = p[next + 1..next + close]
+            if text.indexOf(nums, ",") |comma| {
+                let lo = text.parseInt(nums[..comma]) catch return null
+                var hi: i64 = 4096
+                if comma + 1 < nums.len {
+                    hi = text.parseInt(nums[comma + 1..]) catch return null
+                }
+                if lo < 0 || hi < lo || hi > 4096 {
+                    return null
+                }
+                min = lo as usize
+                max = hi as usize
+            } else {
+                let n = text.parseInt(nums) catch return null
+                if n < 0 || n > 4096 {
+                    return null
+                }
+                min = n as usize
+                max = min
+            }
+            next += close + 1
+        }
+        if next < p.len && p[next] == '?' {
+            next += 1
+        }
+    }
+    return PatternAtom { end: end, min: min, max: max, next: next }
+}
+
+fn escaped(c: u8, value: u8) bool {
+    let digit = value >= '0' && value <= '9'
+    let word = digit || (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') || value == '_'
+    let space = value == ' ' || value == '\t' || value == '\n' || value == '\r'
+    if c == 'd' {
+        return digit
+    }
+    if c == 'D' {
+        return !digit
+    }
+    if c == 'w' {
+        return word
+    }
+    if c == 'W' {
+        return !word
+    }
+    if c == 's' {
+        return space
+    }
+    if c == 'S' {
+        return !space
+    }
+    if c == 'n' {
+        return value == '\n'
+    }
+    if c == 'r' {
+        return value == '\r'
+    }
+    if c == 't' {
+        return value == '\t'
+    }
+    return c == value
+}
+
+fn charMatches(p: []u8, s: []u8) bool {
+    if s.len == 0 {
+        return false
+    }
+    let c = s[0]
+    if p[0] == '.' {
+        return c != '\n' && c != '\r'
+    }
+    if p[0] == '\\' {
+        return s.len == 1 && escaped(p[1], c)
+    }
+    if p[0] != '[' {
+        return text.eql(p, s)
+    }
+    var i: usize = 1
+    let neg = p[i] == '^'
+    if neg {
+        i += 1
+    }
+    var found = false
+    while i + 1 < p.len {
+        if p[i] == '\\' && i + 2 < p.len {
+            found = found || escaped(p[i + 1], c)
+            i += 2
+        } else if i + 3 < p.len && p[i + 1] == '-' {
+            found = found || (c >= p[i] && c <= p[i + 2])
+            i += 3
+        } else {
+            found = found || p[i] == c
+            i += 1
+        }
+    }
+    return found != neg
+}
+
+// Validates before matching: an unsupported/malformed pattern must not
+// turn a partially matched prefix into a validation failure.
+fn validPattern(p: []u8, depth: usize) bool {
+    if depth > 64 {
+        return false
+    }
+    var at: usize = 0
+    while at < p.len {
+        if p[at] == '|' {
+            at += 1
+        } else {
+            let a = atomOf(p, at) orelse return false
+            if p[at] == '(' {
+                var inside = p[at + 1..a.end - 1]
+                if text.startsWith(inside, "?:") {
+                    inside = inside[2..]
+                }
+                if !validPattern(inside, depth + 1) {
+                    return false
+                }
+            }
+            at = a.next
+        }
+    }
+    return true
+}
+
+fn matchExpression(p: []u8, s: []u8, budget: *mut usize) bool {
+    var at: usize = 0
+    var start: usize = 0
+    while at < p.len {
+        if p[at] == '|' {
+            if matchSequence(p[start..at], 0, s, 0, budget) {
+                return true
+            }
+            start = at + 1
+            at += 1
+        } else {
+            let a = atomOf(p, at) orelse return false
+            at = a.next
+        }
+    }
+    return matchSequence(p[start..], 0, s, 0, budget)
+}
+
+fn matchSequence(p: []u8, at: usize, s: []u8, pos: usize, budget: *mut usize) bool {
+    if budget.* == 0 {
+        return false
+    }
+    budget.* -= 1
+    if at == p.len {
+        return pos == s.len
+    }
+    if p[at] == '^' {
+        return pos == 0 && matchSequence(p, at + 1, s, pos, budget)
+    }
+    if p[at] == '$' {
+        return pos == s.len && matchSequence(p, at + 1, s, pos, budget)
+    }
+    let a = atomOf(p, at) orelse return false
+    return matchRepeat(p, at, a, s, pos, 0, budget)
+}
+
+fn matchRepeat(p: []u8, at: usize, a: PatternAtom, s: []u8, pos: usize, count: usize, budget: *mut usize) bool {
+    if budget.* == 0 {
+        return false
+    }
+    budget.* -= 1
+    if count >= a.min && matchSequence(p, a.next, s, pos, budget) {
+        return true
+    }
+    if count == a.max {
+        return false
+    }
+    if p[at] == '(' {
+        var inside = p[at + 1..a.end - 1]
+        if text.startsWith(inside, "?:") {
+            inside = inside[2..]
+        }
+        var end = pos
+        while end <= s.len {
+            if (end == s.len || (s[end] & 0xC0) != 0x80) && matchExpression(inside, s[pos..end], budget) {
+                // Zero-width groups can satisfy a minimum but not loop.
+                if end > pos || count < a.min {
+                    if matchRepeat(p, at, a, s, end, count + 1, budget) {
+                        return true
+                    }
+                }
+            }
+            if budget.* == 0 {
+                return false
+            }
+            end += 1
+        }
+        return false
+    }
+    if pos == s.len {
+        return false
+    }
+    var end = pos + 1
+    while end < s.len && (s[end] & 0xC0) == 0x80 {
+        end += 1
+    }
+    if charMatches(p[at..a.end], s[pos..end]) {
+        return matchRepeat(p, at, a, s, end, count + 1, budget)
+    }
+    return false
+}
+
+pub fn patternMatches(pattern: []u8, s: []u8) bool {
+    if pattern.len > 512 || s.len > 4096 || !validPattern(pattern, 0) {
+        return true
+    }
+    var budget: usize = 100000
+    return matchExpression(pattern, s, &mut budget)
+}

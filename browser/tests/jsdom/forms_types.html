@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<title>Form types and state</title>
+<form id="f"><input id="field" name="field"><button id="send">Send</button><button id="skip" formnovalidate>Skip</button><input id="upload" name="upload" type="file"><input name="hidden" type="hidden" value="secret"><output id="output">original</output><fieldset disabled><legend><input name="legend" value="included"></legend><input name="disabled" value="excluded"></fieldset><select name="select" multiple><option value="one" selected>One</option><option value="two" selected>Two</option></select><label for="flag">Flag</label><input id="flag" name="flag" type="checkbox"></form>
+<input id="external" name="external" form="f" value="outside"><pre id="results"></pre>
+<script>
+const f = document.getElementById('f'), field = document.getElementById('field');
+const out = [];
+function test(name, ok) { if (!ok) throw new Error(name); out.push(name); }
+function type(kind, value, good) { field.type = kind; field.value = value; test(kind + ' ' + value, field.checkValidity() === good); }
+type('date', '2000-02-29', true); type('date', '1900-02-29', false); type('date', '2024-13-01', false);
+type('time', '23:59', true); type('time', '24:00', false); type('time', '12:30:20', false); field.step = 'any'; type('time', '12:30:20.250', true);
+type('datetime-local', '2024-02-29T12:30', true); type('datetime-local', '2024-02-30T12:30', false);
+type('month', '2024-12', true); type('month', '2024-00', false);
+type('week', '2020-W53', true); type('week', '2021-W53', false);
+field.step = '2'; field.min = '2024-01-01'; type('date', '2024-01-02', false); type('date', '2024-01-03', true);
+field.removeAttribute('step'); field.removeAttribute('min');
+type('email', 'alice@example.com', true); type('email', 'alice example.com', false); field.multiple = true; type('email', 'alice@example.com, bob@example.org', true); field.multiple = false;
+type('url', 'https://example.com/path', true); type('url', 'example.com', false); type('url', 'https://', false);
+type('tel', '+1 (555) 123-4567', true); type('search', 'query', true);
+field.type = 'text'; field.pattern = '(ab|cd)+[0-9]?'; field.value = 'abcd2'; test('group pattern', field.checkValidity()); field.value = 'abcd22'; test('full pattern', !field.checkValidity()); field.removeAttribute('pattern');
+field.pattern = '(?=.{3}$)([a-z])\\1\\1'; field.value = 'aaa'; test('lookahead and backreference', field.checkValidity()); field.value = 'aab'; test('backreference mismatch', !field.checkValidity()); field.pattern = '\\p{Letter}+'; field.value = 'αβ'; test('unicode pattern', field.checkValidity()); field.removeAttribute('pattern');
+field.minLength = 3; field.maxLength = 5; field.value = 'ab'; test('too short', field.validity.tooShort); field.value = 'abcdef'; test('too long', field.validity.tooLong); field.removeAttribute('minlength'); field.removeAttribute('maxlength');
+field.placeholder = 'Hint'; field.value = ''; test('placeholder', field.matches(':placeholder-shown')); field.focus(); test('focus selectors', field.matches(':focus:focus-visible') && f.matches(':focus-within'));
+field.type = 'color'; field.value = '#AA33FF'; test('color', field.value === '#aa33ff'); field.value = 'red'; test('color fallback', field.value === '#000000');
+field.type = 'range'; field.min = '10'; field.max = '20'; field.step = '2'; field.value = '15'; test('range round', field.value === '16'); field.value = '999'; test('range clamp', field.value === '20'); field.removeAttribute('min'); field.removeAttribute('max'); field.removeAttribute('step');
+field.type = 'number'; field.value = '4'; const state = field.validity; field.required = true; field.value = ''; test('live validity', state.valueMissing);
+let invalid = 0, bubble = 0, submitted = 0;
+field.addEventListener('invalid', e => { invalid++; e.preventDefault(); }); f.addEventListener('invalid', () => { bubble++; });
+f.addEventListener('submit', e => { submitted++; e.preventDefault(); });
+f.requestSubmit(); test('invalid not bubbling', invalid === 1 && bubble === 0 && submitted === 0);
+f.noValidate = true; f.requestSubmit(); test('novalidate', submitted === 1); f.noValidate = false;
+f.requestSubmit(document.getElementById('skip')); test('formnovalidate', submitted === 2);
+field.value = '4'; const data = new FormData(f); test('successful controls', data.get('external') === 'outside' && data.get('hidden') === 'secret' && data.get('legend') === 'included' && !data.has('disabled') && data.getAll('select').join(',') === 'one,two' && !data.has('flag'));
+const file = data.get('upload'); test('empty file', file instanceof File && file.name === '' && file.size === 0 && file.type === 'application/octet-stream');
+data.append('field', 'another'); data.set('field', 'replaced'); test('ordered form data', data.getAll('field').length === 1 && data.get('field') === 'replaced');
+const output = document.getElementById('output'); output.value = 'changed'; test('output', output.value === 'changed' && !output.willValidate); f.reset(); test('output reset', output.value === 'original');
+field.setCustomValidity('kept'); f.reset(); test('reset preserves custom error', field.validationMessage === 'kept'); field.setCustomValidity('');
+document.getElementById('results').textContent = out.join('\n');
+</script>

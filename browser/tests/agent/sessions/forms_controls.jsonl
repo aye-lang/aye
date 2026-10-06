@@ -1,0 +1,11 @@
+{"id":1,"cmd":"navigate","url":"browser/tests/agent/forms_html5.html"}
+{"id":2,"cmd":"type","ref":"e1","text":"2"}
+{"id":3,"cmd":"press","key":"ArrowUp"}
+{"id":4,"cmd":"click","ref":"e2"}
+{"id":5,"cmd":"press","key":"ArrowRight"}
+{"id":6,"cmd":"type","ref":"e3","text":"2023-02-29"}
+{"id":7,"cmd":"click","ref":"e14"}
+{"id":8,"cmd":"type","ref":"e3","text":"2024-02-29"}
+{"id":9,"cmd":"type","ref":"e9","text":"/tmp/file.txt"}
+{"id":10,"cmd":"snapshot","format":"json"}
+{"id":11,"cmd":"click","ref":"e15"}

@@ -1,0 +1,81 @@
+// Replaced HTML5 widgets; hit testing uses the same content boxes.
+import css
+import dom
+import layout
+import std.math
+import std.mem.AllocError
+import std.text
+
+fn widget(b: *mut Builder, el: dom.NodeId, kind: layout.ControlKind, x: f64, y: f64, w: f64, h: f64) AllocError!void {
+    if kind == layout.ControlKind.Color {
+        let s = dom.valueOf(b.t.doc, el)
+        let r = hexPair(s, 1)
+        let g = hexPair(s, 3)
+        let blue = hexPair(s, 5)
+        try b.fill(x, y, w, h, CONTROL_EDGE)
+        try b.fill(x + 2.0, y + 2.0, math.max(0.0, w - 4.0), math.max(0.0, h - 4.0), Rgba { r: r, g: g, b: blue, a: 255 })
+        return
+    }
+    var min = 0.0
+    var max = 1.0
+    var value = text.parseFloat(dom.valueOf(b.t.doc, el)) catch 0.0
+    if kind == layout.ControlKind.Range {
+        min = dom.rangeMin(b.t.doc, el)
+        max = dom.rangeMax(b.t.doc, el)
+    } else {
+        min = text.parseFloat(b.t.doc.attr(el, "min") orelse "0") catch 0.0
+        if kind == layout.ControlKind.Progress {
+            min = 0.0
+        }
+        max = text.parseFloat(b.t.doc.attr(el, "max") orelse "1") catch 1.0
+        if max <= min {
+            max = min + 1.0
+        }
+    }
+    var ratio = 0.0
+    if max > min {
+        ratio = math.max(0.0, math.min(1.0, (value - min) / (max - min)))
+    }
+    var accent = ACCENT
+    if dom.isDisabled(b.t.doc, el) {
+        accent = DISABLED_EDGE
+    }
+    if kind == layout.ControlKind.Range {
+        let track = math.max(0.0, w - 12.0)
+        try b.fill(x + 6.0, y + h / 2.0 - 2.0, track, 4.0, DISABLED_EDGE)
+        try b.fill(x + 6.0, y + h / 2.0 - 2.0, track * ratio, 4.0, accent)
+        try b.fill(x + track * ratio, y + h / 2.0 - 7.0, 12.0, 14.0, accent)
+    } else {
+        try b.fill(x, y, w, h, CONTROL_EDGE)
+        try b.fill(x + 1.0, y + 1.0, math.max(0.0, w - 2.0), math.max(0.0, h - 2.0), WHITE)
+        if kind == layout.ControlKind.Progress && b.t.doc.attr(el, "value") == null {
+            ratio = 0.3
+        }
+        if kind == layout.ControlKind.Meter {
+            accent = Rgba { r: 40, g: 150, b: 70, a: 255 }
+            let low = text.parseFloat(b.t.doc.attr(el, "low") orelse "") catch min
+            let high = text.parseFloat(b.t.doc.attr(el, "high") orelse "") catch max
+            if value < low || value > high {
+                accent = Rgba { r: 210, g: 150, b: 30, a: 255 }
+            }
+        }
+        try b.fill(x + 1.0, y + 1.0, math.max(0.0, w - 2.0) * ratio, math.max(0.0, h - 2.0), accent)
+    }
+}
+
+fn hexPair(s: []u8, at: usize) u8 {
+    if !dom.validColor(s) {
+        return 0
+    }
+    return hexDigit(s[at]) * 16 + hexDigit(s[at + 1])
+}
+
+fn hexDigit(c: u8) u8 {
+    if c >= '0' && c <= '9' {
+        return c - '0'
+    }
+    if c >= 'A' && c <= 'F' {
+        return c - 'A' + 10
+    }
+    return c - 'a' + 10
+}

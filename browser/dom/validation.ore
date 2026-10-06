@@ -1,0 +1,529 @@
+// HTML constraint validation, shared by CSS, scripts and both front ends.
+// Calendar inputs are text controls: no platform picker is involved.
+import std.math
+import std.text
+import std.mem.AllocError
+
+pub struct Validity {
+    valueMissing: bool
+    typeMismatch: bool
+    patternMismatch: bool
+    tooLong: bool
+    tooShort: bool
+    rangeUnderflow: bool
+    rangeOverflow: bool
+    stepMismatch: bool
+    badInput: bool
+    customError: bool
+
+    pub fn valid(self: Self) bool {
+        return !(self.valueMissing || self.typeMismatch || self.patternMismatch || self.tooLong || self.tooShort || self.rangeUnderflow || self.rangeOverflow || self.stepMismatch || self.badInput || self.customError)
+    }
+}
+
+pub fn willValidate(doc: *Document, el: NodeId) bool {
+    if isDisabled(doc, el) || (isTextField(doc, el) && doc.attr(el, "readonly") != null) {
+        return false
+    }
+    var cur = doc.parent(el)
+    while cur |c| {
+        if doc.isElement(c, "datalist") {
+            return false
+        }
+        cur = doc.parent(c)
+    }
+    if doc.isElement(el, "select") || doc.isElement(el, "textarea") {
+        return true
+    }
+    if doc.isElement(el, "button") {
+        return text.eql(buttonType(doc, el), "submit")
+    }
+    if !doc.isElement(el, "input") {
+        return false
+    }
+    let t = inputType(doc, el)
+    return !text.eql(t, "hidden") && !text.eql(t, "button") && !text.eql(t, "reset")
+}
+
+pub fn supportsRequired(doc: *Document, el: NodeId) bool {
+    if doc.isElement(el, "select") || doc.isElement(el, "textarea") {
+        return true
+    }
+    if !doc.isElement(el, "input") {
+        return false
+    }
+    let t = inputType(doc, el)
+    return !text.eql(t, "range") && !text.eql(t, "color") && !text.eql(t, "hidden") && !text.eql(t, "button") && !text.eql(t, "submit") && !text.eql(t, "reset") && !text.eql(t, "image")
+}
+
+pub fn isRequired(doc: *Document, el: NodeId) bool {
+    return supportsRequired(doc, el) && doc.attr(el, "required") != null
+}
+
+fn radioMissing(doc: *Document, el: NodeId) bool {
+    let name = doc.attr(el, "name") orelse ""
+    let owner = formOwner(doc, el)
+    var required = false
+    var checked = false
+    var cur: ?NodeId = doc.root
+    while cur |c| {
+        if isRadio(doc, c) && text.eql(doc.attr(c, "name") orelse "", name) && owner == formOwner(doc, c) && (name.len > 0 || c == el) {
+            required = required || isRequired(doc, c)
+            checked = checked || isChecked(doc, c)
+        }
+        cur = doc.following(c, doc.root)
+    }
+    return required && !checked
+}
+
+pub fn validityOf(doc: *Document, el: NodeId) Validity {
+    var v = Validity { valueMissing: false, typeMismatch: false, patternMismatch: false, tooLong: false, tooShort: false, rangeUnderflow: false, rangeOverflow: false, stepMismatch: false, badInput: false, customError: false }
+    if !willValidate(doc, el) {
+        return v
+    }
+    if doc.controls.get(el) |c| {
+        v.customError = c.custom.len > 0
+    }
+    let s = valueOf(doc, el)
+    var t: []u8 = "text"
+    if doc.isElement(el, "input") {
+        t = inputType(doc, el)
+    }
+    if isRadio(doc, el) {
+        v.valueMissing = radioMissing(doc, el)
+    } else if isRequired(doc, el) {
+        if isCheckable(doc, el) {
+            v.valueMissing = !isChecked(doc, el)
+        } else {
+            v.valueMissing = s.len == 0
+        }
+    }
+    if s.len == 0 || isCheckable(doc, el) || (doc.isElement(el, "input") && (text.eql(t, "range") || text.eql(t, "color"))) {
+        return v
+    }
+    if doc.isElement(el, "input") && text.eql(t, "email") {
+        if doc.attr(el, "multiple") != null {
+            var parts = text.split(s, ",")
+            while parts.next() |part| {
+                v.typeMismatch = v.typeMismatch || !emailValid(text.trim(part))
+            }
+        } else {
+            v.typeMismatch = !emailValid(s)
+        }
+    }
+    if doc.isElement(el, "input") && text.eql(t, "url") {
+        v.typeMismatch = !urlValid(s)
+    }
+    if isTextField(doc, el) && !numericType(t) {
+        let len = utf16Length(s)
+        if doc.attr(el, "minlength") |a| {
+            let min = text.parseInt(a) catch -1
+            v.tooShort = min >= 0 && len < min as usize
+        }
+        if doc.attr(el, "maxlength") |a| {
+            let max = text.parseInt(a) catch -1
+            v.tooLong = max >= 0 && len > max as usize
+        }
+        if doc.isElement(el, "input") {
+            if doc.attr(el, "pattern") |p| {
+                if doc.controls.pattern_match |matches| {
+                    v.patternMismatch = !matches(doc.alloc, p, s)
+                } else {
+                    v.patternMismatch = !patternMatches(p, s)
+                }
+            }
+        }
+    }
+    if doc.isElement(el, "input") && numericType(t) {
+        if scalar(t, s) |n| {
+            if attrScalar(doc, el, "min") |min| {
+                v.rangeUnderflow = n < min
+            }
+            if attrScalar(doc, el, "max") |max| {
+                v.rangeOverflow = n > max
+            }
+            if text.eql(t, "time") {
+                let min = attrScalar(doc, el, "min")
+                let max = attrScalar(doc, el, "max")
+                if min != null && max != null && min.? > max.? {
+                    let outside = n < min.? && n > max.?
+                    v.rangeUnderflow = outside
+                    v.rangeOverflow = outside
+                }
+            }
+            if !text.eql(doc.attr(el, "step") orelse "", "any") {
+                let step = stepSize(doc, el)
+                let base = attrScalar(doc, el, "min") orelse (scalar(t, doc.attr(el, "value") orelse "") orelse stepBase(t))
+                let q = (n - base) / step
+                v.stepMismatch = math.abs(q - math.floor(q + 0.5)) > 0.0000001
+            }
+        } else {
+            v.badInput = true
+        }
+    }
+    return v
+}
+
+fn utf16Length(s: []u8) usize {
+    var n: usize = 0
+    for c in s {
+        if (c & 0xC0) != 0x80 {
+            n += 1
+            if c >= 0xF0 {
+                n += 1
+            }
+        }
+    }
+    return n
+}
+
+fn emailValid(s: []u8) bool {
+    let at = text.indexOf(s, "@") orelse return false
+    if at == 0 || at + 1 == s.len || text.indexOf(s[at + 1..], "@") != null {
+        return false
+    }
+    for c in s[..at] {
+        if c <= 32 || c >= 127 || c == '(' || c == ')' || c == ',' || c == ':' || c == ';' || c == '<' || c == '>' || c == '[' || c == ']' || c == '\\' || c == '"' {
+            return false
+        }
+    }
+    var labels = text.split(s[at + 1..], ".")
+    while labels.next() |l| {
+        if l.len == 0 || l[0] == '-' || l[l.len - 1] == '-' {
+            return false
+        }
+        for c in l {
+            if !(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') && !(c >= '0' && c <= '9') && c != '-' {
+                return false
+            }
+        }
+    }
+    return true
+}
+
+fn urlValid(s: []u8) bool {
+    let colon = text.indexOf(s, ":") orelse return false
+    if colon == 0 || colon + 1 == s.len {
+        return false
+    }
+    for i, c in s[..colon] {
+        if !(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') && !(i > 0 && ((c >= '0' && c <= '9') || c == '+' || c == '-' || c == '.')) {
+            return false
+        }
+    }
+    for c in s {
+        if c <= 32 {
+            return false
+        }
+    }
+    if text.startsWith(s, "http:") || text.startsWith(s, "https:") || text.startsWith(s, "ftp:") {
+        if s.len <= colon + 3 || !text.startsWith(s[colon + 1..], "//") {
+            return false
+        }
+        let first = s[colon + 3]
+        return first != '/' && first != '?' && first != '#'
+    }
+    return true
+}
+
+pub fn setCustomValidity(doc: *mut Document, el: NodeId, message: []u8) AllocError!void {
+    let copy = try doc.controls.alloc.alloc(0 as u8, message.len)
+    for i, c in message {
+        copy[i] = c
+    }
+    let control = try doc.controls.ensure(el)
+    doc.controls.alloc.free(control.custom)
+    control.custom = copy
+}
+
+pub fn validationMessage(doc: *Document, el: NodeId) []u8 {
+    let v = validityOf(doc, el)
+    if v.customError {
+        return doc.controls.get(el).?.custom
+    }
+    if v.valueMissing {
+        return "Please fill out this field."
+    }
+    if v.badInput {
+        return "Please enter a valid value."
+    }
+    if v.typeMismatch {
+        return "Please enter a valid email address or URL."
+    }
+    if v.patternMismatch {
+        return "Please match the requested format."
+    }
+    if v.tooShort {
+        return "Please lengthen this text."
+    }
+    if v.tooLong {
+        return "Please shorten this text."
+    }
+    if v.rangeUnderflow {
+        return "Value is below the minimum."
+    }
+    if v.rangeOverflow {
+        return "Value is above the maximum."
+    }
+    if v.stepMismatch {
+        return "Please enter a valid step value."
+    }
+    return ""
+}
+
+pub fn numericType(t: []u8) bool {
+    return text.eql(t, "number") || text.eql(t, "range") || text.eql(t, "date") || text.eql(t, "time") || text.eql(t, "datetime-local") || text.eql(t, "month") || text.eql(t, "week")
+}
+
+pub fn attrScalar(doc: *Document, el: NodeId, name: []u8) ?f64 {
+    return scalar(inputType(doc, el), doc.attr(el, name) orelse "")
+}
+
+pub fn stepBase(t: []u8) f64 {
+    if text.eql(t, "week") {
+        return -3.0
+    }
+    return 0.0
+}
+
+pub fn stepSize(doc: *Document, el: NodeId) f64 {
+    let t = inputType(doc, el)
+    var scale = 1.0
+    var fallback = 1.0
+    if text.eql(t, "week") {
+        scale = 7.0
+    }
+    if text.eql(t, "time") || text.eql(t, "datetime-local") {
+        fallback = 60.0
+    }
+    let n = text.parseFloat(doc.attr(el, "step") orelse "") catch fallback
+    if n > 0.0 {
+        return n * scale
+    }
+    return fallback * scale
+}
+
+fn digits(s: []u8) ?i64 {
+    if s.len == 0 {
+        return null
+    }
+    for c in s {
+        if c < '0' || c > '9' {
+            return null
+        }
+    }
+    let n = text.parseInt(s) catch return null
+    return n
+}
+
+fn leap(y: i64) bool {
+    return y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)
+}
+
+// Days since 1970-01-01, proleptic Gregorian calendar.
+fn civil(y: i64, m: i64, d: i64) f64 {
+    var yr = y
+    if m <= 2 {
+        yr -= 1
+    }
+    let era = yr / 400
+    let yo = yr - era * 400
+    var mo = m - 3
+    if m <= 2 {
+        mo = m + 9
+    }
+    let day = (153 * mo + 2) / 5 + d - 1
+    return (era * 146097 + yo * 365 + yo / 4 - yo / 100 + day - 719468) as f64
+}
+
+fn dateScalar(s: []u8) ?f64 {
+    if s.len < 10 {
+        return null
+    }
+    let sep = s.len - 6
+    if s[sep] != '-' || s[sep + 3] != '-' {
+        return null
+    }
+    let y = digits(s[..sep]) orelse return null
+    let m = digits(s[sep + 1..sep + 3]) orelse return null
+    let d = digits(s[sep + 4..]) orelse return null
+    if y == 0 || y > 999999999 || m < 1 || m > 12 || d < 1 {
+        return null
+    }
+    let days = [12]i64{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
+    var max = days[(m - 1) as usize]
+    if m == 2 && leap(y) {
+        max += 1
+    }
+    if d > max {
+        return null
+    }
+    return civil(y, m, d)
+}
+
+fn timeScalar(s: []u8) ?f64 {
+    if s.len < 5 || s[2] != ':' {
+        return null
+    }
+    let h = digits(s[..2]) orelse return null
+    let m = digits(s[3..5]) orelse return null
+    if h > 23 || m > 59 {
+        return null
+    }
+    var sec = 0.0
+    if s.len > 5 {
+        if s.len < 8 || s[5] != ':' {
+            return null
+        }
+        let whole = digits(s[6..8]) orelse return null
+        if whole > 59 {
+            return null
+        }
+        sec = whole as f64
+        if s.len > 8 {
+            if s.len > 12 || s[8] != '.' || digits(s[9..]) == null {
+                return null
+            }
+            sec += text.parseFloat(s[8..]) catch return null
+        }
+    }
+    return (h * 3600 + m * 60) as f64 + sec
+}
+
+pub fn scalar(t: []u8, s: []u8) ?f64 {
+    if s.len == 0 {
+        return null
+    }
+    if text.eql(t, "number") || text.eql(t, "range") {
+        for c in s {
+            if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+                return null
+            }
+        }
+        let n = text.parseFloat(s) catch return null
+        if n != n || n > 1.7976931348623157e308 || n < -1.7976931348623157e308 {
+            return null
+        }
+        return n
+    }
+    if text.eql(t, "date") {
+        return dateScalar(s)
+    }
+    if text.eql(t, "time") {
+        return timeScalar(s)
+    }
+    if text.eql(t, "datetime-local") {
+        let sep = text.indexOf(s, "T") orelse (text.indexOf(s, " ") orelse return null)
+        let d = dateScalar(s[..sep]) orelse return null
+        let time = timeScalar(s[sep + 1..]) orelse return null
+        return d * 86400.0 + time
+    }
+    if text.eql(t, "month") {
+        if s.len < 7 {
+            return null
+        }
+        let sep = s.len - 3
+        if s[sep] != '-' {
+            return null
+        }
+        let y = digits(s[..sep]) orelse return null
+        let m = digits(s[sep + 1..]) orelse return null
+        if y == 0 || y > 999999999 || m < 1 || m > 12 {
+            return null
+        }
+        return ((y - 1970) * 12 + m - 1) as f64
+    }
+    if text.eql(t, "week") {
+        if s.len < 8 {
+            return null
+        }
+        let sep = s.len - 4
+        if s[sep] != '-' || s[sep + 1] != 'W' {
+            return null
+        }
+        let y = digits(s[..sep]) orelse return null
+        let w = digits(s[sep + 2..]) orelse return null
+        if y == 0 || y > 999999999 {
+            return null
+        }
+        let jan1 = civil(y, 1, 1) as i64
+        let weekday = ((jan1 + 3) % 7 + 7) % 7
+        var max: i64 = 52
+        if weekday == 3 || (weekday == 2 && leap(y)) {
+            max = 53
+        }
+        if y == 0 || w < 1 || w > max {
+            return null
+        }
+        let jan4 = civil(y, 1, 4) as i64
+        let offset = ((jan4 + 3) % 7 + 7) % 7
+        return (jan4 - offset + (w - 1) * 7) as f64
+    }
+    return null
+}
+
+pub fn rangeMin(doc: *Document, el: NodeId) f64 {
+    return attrScalar(doc, el, "min") orelse 0.0
+}
+
+pub fn rangeMax(doc: *Document, el: NodeId) f64 {
+    return math.max(rangeMin(doc, el), attrScalar(doc, el, "max") orelse 100.0)
+}
+
+pub fn rangeValue(doc: *Document, el: NodeId, value: f64) f64 {
+    let min = rangeMin(doc, el)
+    let max = rangeMax(doc, el)
+    let step = stepSize(doc, el)
+    var n = math.max(min, math.min(max, value))
+    if !text.eql(doc.attr(el, "step") orelse "", "any") {
+        let base = attrScalar(doc, el, "min") orelse (scalar("range", doc.attr(el, "value") orelse "") orelse 0.0)
+        n = base + math.floor((n - base) / step + 0.5) * step
+        if n > max {
+            n = base + math.floor((max - base) / step) * step
+        }
+        if n < min {
+            n = base + math.ceil((min - base) / step) * step
+        }
+        n = math.max(min, math.min(max, n))
+    }
+    return n
+}
+
+pub fn setRange(doc: *mut Document, el: NodeId, value: f64) AllocError!void {
+    var b = text.Builder.init(doc.alloc)
+    defer b.deinit()
+    try b.appendFloat(rangeValue(doc, el, value))
+    try setValue(doc, el, b.bytes())
+}
+
+pub fn stepValue(doc: *mut Document, el: NodeId, up: bool) AllocError!bool {
+    let t = inputType(doc, el)
+    if !doc.isElement(el, "input") || (!text.eql(t, "number") && !text.eql(t, "range")) || isDisabled(doc, el) || doc.attr(el, "readonly") != null {
+        return false
+    }
+    let step = stepSize(doc, el)
+    let min = attrScalar(doc, el, "min")
+    let max = attrScalar(doc, el, "max")
+    let base = min orelse (scalar(t, doc.attr(el, "value") orelse "") orelse 0.0)
+    let old = scalar(t, valueOf(doc, el)) orelse 0.0
+    let q = (old - base) / step
+    var n = base + (math.floor(q + 0.0000001) + 1.0) * step
+    if !up {
+        n = base + (math.ceil(q - 0.0000001) - 1.0) * step
+    }
+    if min |v| {
+        n = math.max(v, n)
+    }
+    if max |v| {
+        n = math.min(base + math.floor((v - base) / step) * step, n)
+    }
+    if text.eql(t, "range") {
+        try setRange(doc, el, n)
+    } else {
+        var b = text.Builder.init(doc.alloc)
+        defer b.deinit()
+        try b.appendFloat(n)
+        try setValue(doc, el, b.bytes())
+    }
+    return true
+}

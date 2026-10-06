@@ -1,0 +1,30 @@
+// Use the browser's RegExp implementation for page patterns, including
+// lookarounds, backreferences and Unicode classes, without coupling the
+// standalone DOM library to the script runtime. A small interpreter is
+// isolated from the page: validation never executes page code or getters.
+import js
+import std.mem.Allocator
+import std.text
+
+fn formPattern(alloc: Allocator, pattern: []u8, value: []u8) bool {
+    if pattern.len > 4096 || value.len > 65536 {
+        return false
+    }
+    var it = js.Interp.create(alloc) catch return true
+    defer it.deinit()
+    var source = text.Builder.init(alloc)
+    defer source.deinit()
+    source.append("^(?:") catch return true
+    source.append(pattern) catch return true
+    source.append(")$") catch return true
+    let p = it.intern(source.bytes()) catch return true
+    let flags = it.intern("u") catch return true
+    // Invalid regular expressions impose no constraint.
+    let re = js.newRegExp(&mut it, p, flags) catch return true
+    it.push(re) catch return true
+    let s = it.newString(value) catch return true
+    it.push(s) catch return true
+    let result = js.regexpSearch(&mut it, js.strOf(s), re) catch return false
+    let index = it.toNumber(result) catch return false
+    return index == 0.0
+}

@@ -1,0 +1,18 @@
+// maxlength is measured in UTF-16 units, but Ore edits UTF-8 byte
+// boundaries. Never keep half of a supplementary code point.
+fn byteOfUtf16(s: []u8, limit: usize) usize {
+    var units: usize = 0
+    for i, c in s {
+        if (c & 0xC0) != 0x80 {
+            var cost: usize = 1
+            if c >= 0xF0 {
+                cost = 2
+            }
+            if units + cost > limit {
+                return i
+            }
+            units += cost
+        }
+    }
+    return s.len
+}
