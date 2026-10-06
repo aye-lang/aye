@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<style>
+/* A stretched or flexed item's size is definite (CSS Flexbox 9.4, 9.8):
+   its content is laid out at that size. */
+body { margin: 0 }
+/* Row: the item is stretched to 200px; its column puts `b` at the end. */
+.row { display: flex; height: 200px }
+.col { width: 300px; display: flex; flex-direction: column; justify-content: space-between }
+.a, .b, .c { height: 20px }
+/* A percentage height against the stretched item. */
+.half { height: 50% }
+/* Column: the item grows to fill 200px and its child is 100% of that. */
+.outer { display: flex; flex-direction: column; height: 200px; margin-top: 10px }
+.grow { flex-grow: 1 }
+.full { height: 100% }
+</style>
+<div class="row">
+  <div class="col"><div class="a">a</div><div class="b">b</div></div>
+  <div class="box"><div class="half">half</div></div>
+</div>
+<div class="outer">
+  <div class="c">c</div>
+  <div class="grow"><div class="full">full</div></div>
+</div>
