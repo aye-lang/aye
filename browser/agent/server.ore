@@ -85,7 +85,7 @@ fn dumpViews(alloc: Allocator, args: [][]u8) !i32 {
         std.log.err("{}", DUMP_USAGE)
         return 2
     }
-    var s = newSession(alloc, width, 600.0)
+    var s = try newSession(alloc, width, 600.0)
     defer freeSession(&mut s)
     var arena = Arena.init(alloc)
     defer arena.deinit()
@@ -139,7 +139,10 @@ pub fn serveMain(alloc: Allocator, args: [][]u8, mcp: bool) i32 {
         std.log.err("{}", SERVE_USAGE)
         return 2
     }
-    var s = newSession(alloc, width, height)
+    var s = newSession(alloc, width, height) catch |e| {
+        std.log.err("out of memory")
+        return 1
+    }
     defer freeSession(&mut s)
     var lines = LineReader { alloc: alloc, pending: text.Builder.init(alloc), line: text.Builder.init(alloc), eof: false }
     defer lines.deinit()
@@ -385,6 +388,14 @@ fn argStr(doc: *mut Json, args: ?usize, name: []u8, why: *mut text.Builder) ?[]u
 }
 
 fn agentCommand(s: *mut Session, tmp: Allocator, doc: *mut Json, req: usize, cmd: []u8, w: *mut Writer) !void {
+    let why_not = refusal(s, cmd)
+    if why_not.len > 0 {
+        return failField(w, tmp, why_not)
+    }
+    if try windowRequest(s, tmp, doc, req, cmd, w) {
+        return
+    }
+    try announce(s, tmp, doc, req, cmd)
     if text.eql(cmd, "snapshot") {
         if s.tab.page == null {
             return failField(w, tmp, "no page: navigate first")
@@ -400,6 +411,11 @@ fn agentCommand(s: *mut Session, tmp: Allocator, doc: *mut Json, req: usize, cmd
         } else {
             try w.key("snapshot")
             try w.string(try snapshotText(s, tmp, boxes))
+        }
+        let focused = focusRef(s)
+        if focused > 0 {
+            try w.key("focused")
+            try w.string(try refName(tmp, focused))
         }
         return
     }
@@ -530,6 +546,11 @@ fn mcpMessage(s: *mut Session, tmp: Allocator, line: []u8, out: *mut text.Builde
         try w.key("listChanged")
         try w.boolean(false)
         try w.endObject()
+        if s.host != null {
+            try w.key("logging")
+            try w.beginObject()
+            try w.endObject()
+        }
         try w.endObject()
         try w.key("serverInfo")
         try w.beginObject()
@@ -541,11 +562,16 @@ fn mcpMessage(s: *mut Session, tmp: Allocator, line: []u8, out: *mut text.Builde
         try w.string("0.1.0")
         try w.endObject()
         try w.key("instructions")
+        if s.host != null {
+            try w.string(SHARED_INSTRUCTIONS)
+            try w.endObject()
+            return w.endObject()
+        }
         try w.string("A web browser without pixels. Start with browser_navigate; browser_snapshot lists the page as an accessibility tree whose interactive elements and headings carry refs like e12; act on them with browser_click, browser_type, browser_select. browser_read gives the main content as Markdown. Pages run their scripts: browser_eval runs JavaScript in the page, browser_wait lets timers run (page time, not real time).")
         try w.endObject()
         return w.endObject()
     }
-    if text.eql(method, "ping") {
+    if text.eql(method, "ping") || (text.eql(method, "logging/setLevel") && s.host != null) {
         try rpcStart(&mut w, id)
         try w.beginObject()
         try w.endObject()
@@ -555,7 +581,7 @@ fn mcpMessage(s: *mut Session, tmp: Allocator, line: []u8, out: *mut text.Builde
         try rpcStart(&mut w, id)
         try w.beginObject()
         try w.key("tools")
-        try toolList(&mut w)
+        try toolList(&mut w, s.host != null)
         try w.endObject()
         return w.endObject()
     }
@@ -566,7 +592,7 @@ fn mcpMessage(s: *mut Session, tmp: Allocator, line: []u8, out: *mut text.Builde
         let name = doc.getStr(pp, "name") orelse {
             return rpcError(&mut w, id, -32602, "tools/call needs params.name")
         }
-        if !isTool(name) {
+        if !isTool(name, s.host != null) {
             return rpcError(&mut w, id, -32602, try concat(tmp, "unknown tool: ", name, ""))
         }
         var args = doc.get(pp, "arguments")
@@ -576,7 +602,10 @@ fn mcpMessage(s: *mut Session, tmp: Allocator, line: []u8, out: *mut text.Builde
             }
         }
         var result = text.Builder.init(tmp)
-        let ok = try callTool(s, tmp, &mut doc, name[8..], args, &mut result)
+        let ok = try callTool(s, tmp, &mut doc, name[8..], args, id, &mut result)
+        if s.later {
+            return
+        }
         try rpcStart(&mut w, id)
         try w.beginObject()
         try w.key("content")
@@ -625,13 +654,26 @@ fn rpcError(w: *mut Writer, id: []u8, code: i64, message: []u8) AllocError!void 
 
 let TOOLS = "browser_navigate browser_back browser_forward browser_reload browser_snapshot browser_read browser_click browser_type browser_select browser_press browser_scroll browser_find browser_wait browser_eval"
 
-fn isTool(name: []u8) bool {
-    return text.startsWith(name, "browser_") && html.isIn(name, TOOLS)
+let WINDOW_TOOLS = "browser_tabs browser_tab_new browser_tab_select browser_tab_close browser_user_context"
+
+let SHARED_INSTRUCTIONS = "A web browser window that a person is using too: you act on the tab they see unless you open or select another (browser_tab_new, browser_tab_select), and they see what you do. Start with browser_snapshot (or browser_navigate): it lists the page as an accessibility tree whose interactive elements and headings carry refs like e12; act on them with browser_click, browser_type, browser_select. browser_user_context tells what the person selected, hovers, focused or pointed at. If they pause you, actions fail with \"paused by user\": wait for them. browser_wait waits in real time."
+
+fn isTool(name: []u8, shared: bool) bool {
+    return text.startsWith(name, "browser_") && (html.isIn(name, TOOLS) || (shared && html.isIn(name, WINDOW_TOOLS)))
 }
 
 /// Runs the tool `cmd` (its name without `browser_`); the text of the
 /// result goes to `out`. False for a failure.
-fn callTool(s: *mut Session, tmp: Allocator, doc: *mut Json, cmd: []u8, args: ?usize, out: *mut text.Builder) !bool {
+fn callTool(s: *mut Session, tmp: Allocator, doc: *mut Json, cmd: []u8, args: ?usize, id: []u8, out: *mut text.Builder) !bool {
+    let why_not = refusal(s, cmd)
+    if why_not.len > 0 {
+        try out.append(why_not)
+        return false
+    }
+    if try windowTool(s, tmp, doc, cmd, args, id, out) |ok| {
+        return ok
+    }
+    try announce(s, tmp, doc, args, cmd)
     if text.eql(cmd, "snapshot") || text.eql(cmd, "read") {
         if s.tab.page == null {
             try out.append("no page: navigate first")
@@ -651,6 +693,12 @@ fn callTool(s: *mut Session, tmp: Allocator, doc: *mut Json, cmd: []u8, args: ?u
                 boxes = doc.getBool(o, "boxes") orelse false
             }
             try out.append(try snapshotText(s, tmp, boxes))
+            let focused = focusRef(s)
+            if focused > 0 {
+                try out.append("\nFocused: ")
+                try out.append(try refName(tmp, focused))
+                try out.append(" (the focus is the user's too)\n")
+            }
         }
         return true
     }
@@ -706,7 +754,15 @@ fn pageHeader(s: *mut Session, tmp: Allocator, out: *mut text.Builder) AllocErro
 
 // ---- tool definitions
 
-fn toolList(w: *mut Writer) AllocError!void {
+// "e12" of ref number 12.
+fn refName(tmp: Allocator, r: u32) AllocError![]u8 {
+    var b = text.Builder.init(tmp)
+    try b.appendByte('e')
+    try b.appendUint(r as u64)
+    return b.bytes()
+}
+
+fn toolList(w: *mut Writer, shared: bool) AllocError!void {
     try w.beginArray()
     try toolStart(w, "browser_navigate", "Navigate", "Load a URL (absolute, relative to the current page, or a file path) and return the accessibility snapshot of the new page.")
     try toolProp(w, "url", "string", "The URL to load.")
@@ -752,7 +808,28 @@ fn toolList(w: *mut Writer) AllocError!void {
     try toolStart(w, "browser_eval", "Evaluate JavaScript", "Run JavaScript in the page and return the value of its last expression (strings as they are, other values as console.log shows them).")
     try toolProp(w, "expression", "string", "The script; its last expression statement is the result.")
     try toolEnd(w, "expression", false)
+    if shared {
+        try windowTools(w)
+    }
     try w.endArray()
+}
+
+// The tools of a window's agents (shared.ore, ui/agents.ore).
+fn windowTools(w: *mut Writer) AllocError!void {
+    try toolStart(w, "browser_tabs", "Tabs", "The window's tabs: id, URL, title, which one the user sees and which one you act on.")
+    try toolEnd(w, "", true)
+    try toolStart(w, "browser_tab_new", "New tab", "Open an empty tab and act on it from now on, without changing what the user sees (unless show is true). Then use browser_navigate.")
+    try toolProp(w, "show", "boolean", "Also show the tab to the user.")
+    try toolEnd(w, "", false)
+    try toolStart(w, "browser_tab_select", "Select tab", "Act on another tab from now on (an id from browser_tabs).")
+    try toolProp(w, "id", "number", "The id of the tab.")
+    try toolProp(w, "show", "boolean", "Also show the tab to the user.")
+    try toolEnd(w, "id", false)
+    try toolStart(w, "browser_tab_close", "Close tab", "Close a tab (by default the one you act on); the last tab cannot be closed.")
+    try toolProp(w, "id", "number", "The id of the tab.")
+    try toolEnd(w, "", false)
+    try toolStart(w, "browser_user_context", "User context", "What the user is doing in the window: the tab and URL they see, the scroll position, the selected text, the element under the mouse and the focused element (refs), and what they last pointed at with Cmd+Shift+K.")
+    try toolEnd(w, "", true)
 }
 
 fn toolStart(w: *mut Writer, name: []u8, title: []u8, description: []u8) AllocError!void {

@@ -14,6 +14,9 @@
 // - json.ore: a JSON parser and writer.
 // - server.ore: `anyknown agent` (JSON lines) and `anyknown mcp` (MCP over
 //   stdio), and `anyknown dump --a11y|--md`.
+// - shared.ore: the agents of a window (`anyknown --agent-socket`,
+//   ui/agents.ore): the same protocols on the window's tabs, and the
+//   commands only a window has (tabs, the user's context).
 
 import css
 import dom.NodeId
@@ -42,10 +45,13 @@ pub struct Rect {
 /// shows, and what the page's scripts would have seen (recorded events).
 pub struct Session {
     alloc: Allocator
-    tab: engine.Tab
+    // Owned (allocated by the session).
+    tab: *mut engine.Tab
     // Measures text for layouts: the fixed-metric font, so that boxes do
-    // not depend on the fonts of the system.
+    // not depend on the fonts of the system; in a window, the window's
+    // measurer (`measure`), so that the agent sees the human's layout.
     font: font.Fixed
+    measure: ?dyn font.Measurer
     media: css.Media
     // Node index to the border box of its boxes and fragments.
     rects: IntMap(u32, Rect)
@@ -59,13 +65,21 @@ pub struct Session {
     // Owned descriptions of clicks, key presses and submissions that
     // scripts will see once they run.
     events: List([]u8)
+    // In a window (shared.ore): what the window does for its agents, and
+    // the connection served now; `later` is set when the window answers
+    // the request afterwards (a `wait`).
+    host: ?dyn Host
+    conn: usize
+    later: bool
 }
 
-fn newSession(alloc: Allocator, width: f64, height: f64) Session {
+fn newSession(alloc: Allocator, width: f64, height: f64) AllocError!Session {
+    let tab = try alloc.create(engine.Tab.init(alloc))
     return Session {
         alloc: alloc,
-        tab: engine.Tab.init(alloc),
+        tab: tab,
         font: font.Fixed.init(),
+        measure: null,
         media: css.Media { width: width, height: height },
         rects: IntMap(u32, Rect).init(alloc),
         ref_base: 1,
@@ -73,11 +87,24 @@ fn newSession(alloc: Allocator, width: f64, height: f64) Session {
         ref_of: IntMap(u32, u32).init(alloc),
         next_ref: 1,
         events: List([]u8).init(alloc),
+        host: null,
+        conn: 0,
+        later: false,
     }
 }
 
-fn freeSession(s: *mut Session) {
+/// A session for a tab of a window: its layouts measure text with the
+/// window's `measure`, in a viewport of `width` x `height` px (the
+/// window updates `media` when it is resized).
+pub fn newWindowSession(alloc: Allocator, measure: dyn font.Measurer, width: f64, height: f64) AllocError!Session {
+    var s = try newSession(alloc, width, height)
+    s.measure = measure
+    return s
+}
+
+pub fn freeSession(s: *mut Session) {
     s.tab.deinit()
+    s.alloc.destroy(s.tab)
     s.rects.deinit()
     s.refs.deinit()
     s.ref_of.deinit()
@@ -111,7 +138,11 @@ fn newDocument(s: *mut Session) AllocError!void {
 fn relayout(s: *mut Session) AllocError!void {
     let p = s.tab.page.?
     try p.restyle()
-    try p.layoutPage(&mut s.font, s.media.width, s.media.height)
+    if s.measure |m| {
+        try p.layoutPage(m, s.media.width, s.media.height)
+    } else {
+        try p.layoutPage(&mut s.font, s.media.width, s.media.height)
+    }
     s.rects.deinit()
     s.rects = IntMap(u32, Rect).init(s.alloc)
     let t = p.tree.?
