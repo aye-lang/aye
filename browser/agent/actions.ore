@@ -1,13 +1,15 @@
 // Actions on a session: navigate, back, forward, reload, click, type,
-// select, press, scroll, wait, eval, and find. Each returns an
-// `Outcome`: a short message, whether a new document is shown, and for
-// actions that stay on the document, the lines of the snapshot that
-// changed.
+// select, press, scroll, wait, eval, and find. Each returns an `Outcome`: a
+// short message, whether a new document is shown, and for actions that
+// stay on the document, the lines of the snapshot that changed.
 //
-// Clicks, typing, key presses and selections fire their events at the
-// page's scripts first (scripts.ore); a canceled click skips the default
-// action. Without forms (B5), submissions are recorded in
-// `Session.events`, with the clicks and key presses.
+// Form controls keep their state where the window keeps it (the page's
+// `doc.controls`); a click on a submit button, or `type` with `submit`,
+// submits the form through the engine (engine/forms.ore) and loads the
+// response. Clicks, typing, key presses, selections and submissions fire
+// their events at the page's scripts first (scripts.ore); a canceled
+// click (or submit, or keydown) skips the default action. Clicks and key
+// presses are also recorded in `Session.events`.
 
 import dom
 import dom.Document
@@ -16,6 +18,7 @@ import dom.NodeId
 import engine
 import engine.Page
 import html
+import net
 import std
 import std.list.List
 import std.mem.AllocError
@@ -36,7 +39,7 @@ pub enum Action {
     // To the element `ref`, or by `dy` px when `ref` is empty.
     Scroll { ref: []u8, dy: f64 }
     // For an element matching `selector`, or `ms` of the page's time
-    // (0: until no timer is left).
+    // (neither: until no timer is left).
     Wait { selector: []u8, ms: f64 }
     Eval { src: []u8 }
 }
@@ -231,68 +234,11 @@ fn nodeName(p: *Page, el: NodeId) []u8 {
 }
 
 fn isTextInput(p: *Page, el: NodeId) bool {
-    if p.doc.isElement(el, "textarea") {
-        return true
-    }
-    if !p.doc.isElement(el, "input") {
-        return false
-    }
-    let t = inputType(p, el)
-    return !inSetIgnoreCase(t, "checkbox radio button submit reset image file range color hidden")
-}
-
-// Is `word` one of the space-separated words of `set`, ignoring ASCII
-// case?
-fn inSetIgnoreCase(word: []u8, set: []u8) bool {
-    var words = text.split(set, " ")
-    while words.next() |w| {
-        if text.eqlIgnoreCase(w, word) {
-            return true
-        }
-    }
-    return false
+    return dom.isTextField(&p.doc, el)
 }
 
 fn isCheckable(p: *Page, el: NodeId) bool {
-    if !p.doc.isElement(el, "input") {
-        return false
-    }
-    let t = inputType(p, el)
-    return text.eqlIgnoreCase(t, "checkbox") || text.eqlIgnoreCase(t, "radio")
-}
-
-/// The `form` of a control: its `form` attribute, else the nearest
-/// `form` around it.
-fn formOf(p: *Page, el: NodeId) ?NodeId {
-    if p.doc.attr(el, "form") |id| {
-        if p.doc.getElementById(id) |f| {
-            return f
-        }
-    }
-    var cur = p.doc.parent(el)
-    while cur |c| {
-        if p.doc.isElement(c, "form") {
-            return c
-        }
-        cur = p.doc.parent(c)
-    }
-    return null
-}
-
-/// Is `el` a submit button: `button` without a type or of type submit,
-/// `input type=submit|image`?
-fn isSubmitButton(p: *Page, el: NodeId) bool {
-    if p.doc.isElement(el, "button") {
-        if p.doc.attr(el, "type") |t| {
-            return text.eqlIgnoreCase(text.trim(t), "submit")
-        }
-        return true
-    }
-    if p.doc.isElement(el, "input") {
-        let t = inputType(p, el)
-        return text.eqlIgnoreCase(t, "submit") || text.eqlIgnoreCase(t, "image")
-    }
-    return false
+    return dom.isCheckable(&p.doc, el)
 }
 
 fn isFocusable(p: *Page, el: NodeId) bool {
@@ -350,9 +296,9 @@ fn clickNode(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId) AllocErr
         return failed(try concat(tmp, "cannot click ", who, ": it is disabled"))
     }
     if isFocusable(p, el) {
-        s.focused = el
+        engine.setFocus(p, el)
     }
-    if !(try fire(s, p, el, "click", "")) {
+    if !(try fire(p, el, "click", "")) {
         return done(try concat(tmp, "clicked ", who, "; a script canceled the default action"))
     }
     // A link, or an element inside one.
@@ -366,8 +312,9 @@ fn clickNode(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId) AllocErr
         }
         cur = p.doc.parent(c)
     }
-    if isCheckable(p, el) {
-        return toggle(s, tmp, p, el, who)
+    if dom.isCheckable(&p.doc, el) || dom.isSubmitButton(&p.doc, el) || dom.isResetButton(&p.doc, el) {
+        let act = try engine.activate(p, el)
+        return activated(s, tmp, p, el, who, act)
     }
     if p.doc.attr(el, "role") |r| {
         if html.isIn(text.trim(r), "checkbox switch menuitemcheckbox") {
@@ -396,33 +343,99 @@ fn clickNode(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId) AllocErr
         }
     }
     if p.doc.isElement(el, "label") {
-        if labelControl(p, el) |control| {
+        if engine.labelControl(&p.doc, el) |control| {
             return clickNode(s, tmp, p, control)
         }
     }
     if p.doc.isElement(el, "option") {
-        var sel = p.doc.parent(el)
-        while sel |c| {
-            if p.doc.isElement(c, "select") {
-                return chooseOption(s, tmp, p, c, el)
-            }
-            sel = p.doc.parent(c)
+        if dom.selectOf(&p.doc, el) |sel| {
+            return chooseOption(s, tmp, p, sel, el)
         }
     }
     if isTextInput(p, el) || p.doc.isElement(el, "select") {
+        try relayout(s)
         return done(try concat(tmp, "focused ", who, ""))
     }
-    if isSubmitButton(p, el) {
-        if formOf(p, el) |f| {
-            try recordOn(s, tmp, "submit of", f)
-            return done(try concat(tmp, "clicked ", who, "; submitting forms is not supported yet (recorded the submit event)"))
-        }
-    }
+    return clickedOnly(s, tmp, p, el, who)
+}
+
+// A click with no default action: the scripts had it.
+fn clickedOnly(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId, who: []u8) AllocError!Outcome {
     try recordOn(s, tmp, "click on", el)
     if engine.hasScripts(p) {
         return done(try concat(tmp, "clicked ", who, ""))
     }
     return done(try concat(tmp, "clicked ", who, "; nothing happens until scripts run (recorded the click event)"))
+}
+
+// The outcome of the default action of a checkbox, radio button, submit
+// or reset button.
+fn activated(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId, who: []u8, act: engine.Activation) AllocError!Outcome {
+    match act {
+        .Submit { form, submitter } => {
+            return submitForm(s, tmp, p, form, submitter, try concat(tmp, "clicked ", who, ""))
+        }
+        .Follow { target } => {
+            target.deinit(s.alloc)
+        }
+        .Changed => {
+            try relayout(s)
+            if dom.isCheckable(&p.doc, el) {
+                if dom.isChecked(&p.doc, el) {
+                    return done(try concat(tmp, "checked ", who, ""))
+                }
+                return done(try concat(tmp, "unchecked ", who, ""))
+            }
+            if dom.isResetButton(&p.doc, el) {
+                return done(try concat(tmp, "clicked ", who, "; the form was reset"))
+            }
+        }
+        _ => {}
+    }
+    // A button outside a form: only scripts would do something.
+    try relayout(s)
+    return clickedOnly(s, tmp, p, el, who)
+}
+
+/// Submits `form` (by `submitter`, or implicitly) and loads the
+/// response in a new history entry. `what` says what led to it.
+fn submitForm(s: *mut Session, tmp: Allocator, p: *mut Page, form: NodeId, submitter: ?NodeId, what: []u8) AllocError!Outcome {
+    try recordOn(s, tmp, "submit of", form)
+    if !(try fire(p, form, "submit", "")) {
+        try relayout(s)
+        return done(try concat(tmp, what, "; a script canceled the submission", ""))
+    }
+    return submitNow(s, tmp, p, form, submitter, what)
+}
+
+/// The submission itself (the submit event already fired).
+fn submitNow(s: *mut Session, tmp: Allocator, p: *mut Page, form: NodeId, submitter: ?NodeId, what: []u8) AllocError!Outcome {
+    let sub = (try engine.submitForm(p, form, submitter)) orelse {
+        return done(try concat(tmp, what, "; the form does not submit anywhere", ""))
+    }
+    defer sub.deinit(s.alloc)
+    var body = net.Body { content_type: sub.content_type, data: sub.body }
+    var post: ?*net.Body = null
+    if sub.post {
+        post = &body
+    }
+    let loaded = try engine.loadWith(s.alloc, &sub.target, post)
+    if loaded.failure.len > 0 {
+        return refused(tmp, loaded)
+    }
+    try s.tab.push(&sub.target, loaded)
+    let o = try opened(s, tmp)
+    var msg = text.Builder.init(tmp)
+    try msg.append(what)
+    if sub.post {
+        try msg.append("; submitted the form by POST to ")
+        try msg.append(sub.target.href)
+        try msg.append("; ")
+    } else {
+        try msg.append("; submitted the form: ")
+    }
+    try msg.append(o.message)
+    return Outcome { ok: true, message: msg.bytes(), navigated: true, diff: "" }
 }
 
 fn followLink(s: *mut Session, tmp: Allocator, p: *mut Page, a: NodeId, who: []u8) AllocError!Outcome {
@@ -446,56 +459,6 @@ fn followLink(s: *mut Session, tmp: Allocator, p: *mut Page, a: NodeId, who: []u
     return Outcome { ok: true, message: msg.bytes(), navigated: o.navigated, diff: "" }
 }
 
-fn labelControl(p: *Page, label: NodeId) ?NodeId {
-    if p.doc.attr(label, "for") |id| {
-        return p.doc.getElementById(id)
-    }
-    var cur = p.doc.following(label, label)
-    while cur |c| {
-        let n = p.doc.node(c)
-        if n.kind == Kind.Element && html.isIn(n.name, "input select textarea button") {
-            return c
-        }
-        cur = p.doc.following(c, label)
-    }
-    return null
-}
-
-/// Checks or unchecks a checkbox; checks a radio button and unchecks the
-/// others of its group.
-fn toggle(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId, who: []u8) AllocError!Outcome {
-    if text.eqlIgnoreCase(inputType(p, el), "radio") {
-        if p.doc.attr(el, "name") |group| {
-            let form = formOf(p, el)
-            var cur: ?NodeId = p.doc.root
-            while cur |h| {
-                if !(h == el) && isCheckable(p, h) && text.eqlIgnoreCase(inputType(p, h), "radio") {
-                    if p.doc.attr(h, "name") |g| {
-                        if text.eql(g, group) && formOf(p, h) == form {
-                            removeAttr(&mut p.doc, h, "checked")
-                        }
-                    }
-                }
-                cur = p.doc.following(h, p.doc.root)
-            }
-        }
-        try p.doc.setAttr(el, "checked", "")
-        try fireChange(s, p, el)
-        try relayout(s)
-        return done(try concat(tmp, "checked ", who, ""))
-    }
-    if p.doc.attr(el, "checked") != null {
-        removeAttr(&mut p.doc, el, "checked")
-        try fireChange(s, p, el)
-        try relayout(s)
-        return done(try concat(tmp, "unchecked ", who, ""))
-    }
-    try p.doc.setAttr(el, "checked", "")
-    try fireChange(s, p, el)
-    try relayout(s)
-    return done(try concat(tmp, "checked ", who, ""))
-}
-
 // ---- type and select
 
 fn typeInto(s: *mut Session, tmp: Allocator, ref: []u8, input: []u8, submit: bool) AllocError!Outcome {
@@ -511,9 +474,9 @@ fn typeInto(s: *mut Session, tmp: Allocator, ref: []u8, input: []u8, submit: boo
     if isDisabled(p, el) || p.doc.attr(el, "readonly") != null {
         return failed(try concat(tmp, "cannot type into ", who, ": it is disabled or read-only"))
     }
-    try setValue(p, el, input)
-    s.focused = el
-    try fireChange(s, p, el)
+    try dom.setValue(&mut p.doc, el, input)
+    engine.setFocus(p, el)
+    try fireChange(p, el)
     try relayout(s)
     var msg = text.Builder.init(tmp)
     try msg.append("typed ")
@@ -521,45 +484,24 @@ fn typeInto(s: *mut Session, tmp: Allocator, ref: []u8, input: []u8, submit: boo
     try msg.append(" into ")
     try msg.append(who)
     if submit {
-        try msg.append("; ")
-        try msg.append(try submitFrom(s, tmp, p, el))
+        return submitFrom(s, tmp, p, el, msg.bytes())
     }
     return done(msg.bytes())
 }
 
-/// Sets the value of a text field: the `value` attribute of an `input`,
-/// the text of a `textarea`.
-fn setValue(p: *mut Page, el: NodeId, v: []u8) AllocError!void {
-    if p.doc.isElement(el, "textarea") {
-        while p.doc.firstChild(el) |c| {
-            p.doc.detach(c)
+/// Enter in a text field: submits its form (implicit submission).
+fn submitFrom(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId, what: []u8) AllocError!Outcome {
+    let act = try engine.implicitSubmit(p, el)
+    match act {
+        .Submit { form, submitter } => {
+            return submitForm(s, tmp, p, form, submitter, what)
         }
-        try p.doc.appendText(el, v)
-        return
+        _ => {}
     }
-    try p.doc.setAttr(el, "value", v)
-}
-
-/// The current value of a text field.
-fn currentValue(p: *mut Page, tmp: Allocator, el: NodeId) AllocError![]u8 {
-    if p.doc.isElement(el, "textarea") {
-        var b = text.Builder.init(tmp)
-        try p.doc.textContent(el, &mut b)
-        return b.bytes()
+    if dom.formOwner(&p.doc, el) == null {
+        return done(try concat(tmp, what, "; it is not in a form: nothing to submit", ""))
     }
-    if p.doc.attr(el, "value") |v| {
-        return v
-    }
-    return ""
-}
-
-/// Enter in a text field: the form would be submitted.
-fn submitFrom(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId) AllocError![]u8 {
-    if formOf(p, el) |f| {
-        try recordOn(s, tmp, "submit of", f)
-        return "submitting forms is not supported yet (recorded the submit event)"
-    }
-    return "it is not in a form: nothing to submit"
+    return done(try concat(tmp, what, "; the form has no submit button to submit it with", ""))
 }
 
 fn selectOption(s: *mut Session, tmp: Allocator, ref: []u8, option: []u8) AllocError!Outcome {
@@ -621,18 +563,9 @@ fn chooseOption(s: *mut Session, tmp: Allocator, p: *mut Page, sel: NodeId, opt:
     if isDisabled(p, opt) {
         return failed("that option is disabled")
     }
-    if p.doc.attr(sel, "multiple") == null {
-        var cur = p.doc.following(sel, sel)
-        while cur |c| {
-            if p.doc.isElement(c, "option") {
-                removeAttr(&mut p.doc, c, "selected")
-            }
-            cur = p.doc.following(c, sel)
-        }
-    }
-    try p.doc.setAttr(opt, "selected", "")
-    s.focused = sel
-    try fireChange(s, p, sel)
+    try dom.selectOption(&mut p.doc, sel, opt)
+    engine.setFocus(p, sel)
+    try fireChange(p, sel)
     try relayout(s)
     var ax = try newAx(s, tmp)
     var msg = text.Builder.init(tmp)
@@ -657,40 +590,49 @@ fn press(s: *mut Session, tmp: Allocator, key: []u8) AllocError!Outcome {
         return failed("no key")
     }
     try recordEvent(s, try concat(tmp, "keydown ", key, ""))
-    if !(try fire(s, p, keyTarget(s, p), "keydown", domKey(key))) {
+    if !(try fire(p, keyTarget(p), "keydown", domKey(key))) {
         return done(try concat(tmp, "pressed ", key, "; a script canceled it"))
     }
     if text.eql(key, "Tab") || text.eql(key, "Shift+Tab") {
         return moveFocus(s, tmp, p, text.eql(key, "Tab"))
     }
-    if s.focused |f| {
+    if p.doc.controls.focus |f| {
         let who = try describeNode(s, tmp, f)
         if isTextInput(p, f) {
-            if text.eql(key, "Backspace") {
-                let v = try currentValue(p, tmp, f)
-                var end = v.len
-                if end > 0 {
-                    end -= 1
-                    while end > 0 && (v[end] & 0xC0) == 0x80 {
-                        end -= 1
-                    }
+            if text.eql(key, "Backspace") || text.eql(key, "Delete") {
+                if text.eql(key, "Backspace") {
+                    try dom.deleteBackward(&mut p.doc, f)
+                } else {
+                    try dom.deleteForward(&mut p.doc, f)
                 }
-                try setValue(p, f, v[..end])
-                try fire(s, p, f, "input", "")
+                try fire(p, f, "input", "")
                 try relayout(s)
                 return done(try concat(tmp, "deleted a character in ", who, ""))
             }
+            if text.eql(key, "ArrowLeft") || text.eql(key, "ArrowRight") || text.eql(key, "Home") || text.eql(key, "End") {
+                var m = dom.Motion.Left
+                if text.eql(key, "ArrowRight") {
+                    m = dom.Motion.Right
+                } else if text.eql(key, "Home") {
+                    m = dom.Motion.Home
+                } else if text.eql(key, "End") {
+                    m = dom.Motion.End
+                }
+                try dom.moveCaret(&mut p.doc, f, m, false)
+                return done(try concat(tmp, "moved the caret in ", who, ""))
+            }
             if text.eql(key, "Enter") {
                 if p.doc.isElement(f, "textarea") {
-                    try setValue(p, f, try concat(tmp, try currentValue(p, tmp, f), "\n", ""))
+                    try dom.insertText(&mut p.doc, f, "\n")
+                    try fire(p, f, "input", "")
                     try relayout(s)
                     return done(try concat(tmp, "new line in ", who, ""))
                 }
-                return done(try concat(tmp, "Enter in ", who, try concat(tmp, "; ", try submitFrom(s, tmp, p, f), "")))
+                return submitFrom(s, tmp, p, f, try concat(tmp, "Enter in ", who, ""))
             }
             if isCharacter(key) {
-                try setValue(p, f, try concat(tmp, try currentValue(p, tmp, f), key, ""))
-                try fire(s, p, f, "input", key)
+                try dom.insertText(&mut p.doc, f, key)
+                try fire(p, f, "input", key)
                 try relayout(s)
                 return done(try concat(tmp, "typed ", key, try concat(tmp, " into ", who, "")))
             }
@@ -702,7 +644,7 @@ fn press(s: *mut Session, tmp: Allocator, key: []u8) AllocError!Outcome {
             return clickNode(s, tmp, p, f)
         }
         if text.eql(key, "Escape") {
-            s.focused = null
+            engine.setFocus(p, null)
             return done(try concat(tmp, "left ", who, ""))
         }
     }
@@ -727,8 +669,8 @@ fn press(s: *mut Session, tmp: Allocator, key: []u8) AllocError!Outcome {
 
 // Where a key press goes: the focused element, else the body (else the
 // document).
-fn keyTarget(s: *mut Session, p: *mut Page) NodeId {
-    if s.focused |f| {
+fn keyTarget(p: *mut Page) NodeId {
+    if p.doc.controls.focus |f| {
         if p.doc.isLive(f) {
             return f
         }
@@ -768,7 +710,7 @@ fn moveFocus(s: *mut Session, tmp: Allocator, p: *mut Page, forward: bool) Alloc
     var at: ?usize = null
     while cur |h| {
         if isFocusable(p, h) {
-            if s.focused |f| {
+            if p.doc.controls.focus |f| {
                 if f == h {
                     at = all.len()
                 }
@@ -791,7 +733,7 @@ fn moveFocus(s: *mut Session, tmp: Allocator, p: *mut Page, forward: bool) Alloc
         next = all.len() - 1
     }
     let el = all.items()[next]
-    s.focused = el
+    engine.setFocus(p, el)
     try refFor(s, el)
     return done(try concat(tmp, "focused ", try describeNode(s, tmp, el), ""))
 }

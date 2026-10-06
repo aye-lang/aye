@@ -25,6 +25,7 @@ import css
 import dom
 import dom.Kind
 import dom.NodeId
+import engine
 import engine.Page
 import html
 import layout
@@ -179,7 +180,7 @@ fn walkNode(ax: *mut Ax, h: NodeId, parent: usize) AllocError!void {
         return
     }
     if text.eql(n.name, "label") && !(ax.page.doc.attr(h, "role") != null) {
-        if labelControl(ax.page, h) |control| {
+        if engine.labelControl(&ax.page.doc, h) |control| {
             if rendered(ax.page, control) {
                 sealText(ax, parent)
                 ax.mute += 1
@@ -218,7 +219,7 @@ fn walkNode(ax: *mut Ax, h: NodeId, parent: usize) AllocError!void {
     let level = headingLevel(ax.page, h, role)
     let value = try valueOf(ax, h, role)
     let href = linkUrl(ax.page, h, role)
-    let states = statesOf(ax.page, h, role, ax.session.focused)
+    let states = statesOf(ax.page, h, role, ax.page.doc.controls.focus)
     var ref: u32 = 0
     if html.isIn(role, INTERACTIVE) || text.eql(role, "heading") {
         ref = try refFor(ax.session, h)
@@ -861,23 +862,18 @@ fn valueOf(ax: *mut Ax, el: NodeId, role: []u8) AllocError![]u8 {
     let p = ax.page
     let name = p.doc.node(el).name
     if text.eql(name, "textarea") {
-        var b = text.Builder.init(ax.alloc)
-        try p.doc.textContent(el, &mut b)
-        let out = try b.toOwned()
-        return out
+        return dom.valueOf(&p.doc, el)
     }
     if text.eql(name, "input") && html.isIn(role, "textbox searchbox spinbutton slider") {
-        if p.doc.attr(el, "value") |v| {
-            if text.eqlIgnoreCase(inputType(p, el), "password") {
-                let masked = try ax.alloc.alloc('*' as u8, v.len)
-                return masked
-            }
-            return v
+        let v = dom.valueOf(&p.doc, el)
+        if text.eqlIgnoreCase(inputType(p, el), "password") {
+            let masked = try ax.alloc.alloc('*' as u8, v.len)
+            return masked
         }
-        return ""
+        return v
     }
     if text.eql(role, "combobox") && text.eql(name, "select") {
-        if selectedOption(p, el) |opt| {
+        if dom.selectedOption(&p.doc, el) |opt| {
             return optionLabel(ax, opt)
         }
         return ""
@@ -891,32 +887,6 @@ fn valueOf(ax: *mut Ax, el: NodeId, role: []u8) AllocError![]u8 {
         }
     }
     return ""
-}
-
-/// The selected option of a `select`: the last one with `selected`, else
-/// the first (for a single select).
-fn selectedOption(p: *Page, sel: NodeId) ?NodeId {
-    var found: ?NodeId = null
-    var first: ?NodeId = null
-    var cur = p.doc.following(sel, sel)
-    while cur |c| {
-        if p.doc.isElement(c, "option") {
-            if first == null {
-                first = c
-            }
-            if p.doc.attr(c, "selected") != null {
-                found = c
-            }
-        }
-        cur = p.doc.following(c, sel)
-    }
-    if found != null {
-        return found
-    }
-    if p.doc.attr(sel, "multiple") != null {
-        return null
-    }
-    return first
 }
 
 /// The label of an `option`: its `label` attribute, else its text.
@@ -933,7 +903,7 @@ fn statesOf(p: *Page, el: NodeId, role: []u8, focused: ?NodeId) u32 {
     var s: u32 = 0
     let name = p.doc.node(el).name
     if text.eql(name, "input") && (text.eql(role, "checkbox") || text.eql(role, "radio")) {
-        if p.doc.attr(el, "checked") != null {
+        if dom.isChecked(&p.doc, el) {
             s |= ST_CHECKED
         }
     } else if html.isIn(role, "checkbox radio switch menuitemcheckbox menuitemradio") {
@@ -944,7 +914,7 @@ fn statesOf(p: *Page, el: NodeId, role: []u8, focused: ?NodeId) u32 {
         }
     }
     if text.eql(name, "option") {
-        if isSelectedOption(p, el) {
+        if dom.isSelected(&p.doc, el) {
             s |= ST_SELECTED
         }
     } else if attrIs(p, el, "aria-selected", "true") {
@@ -982,47 +952,11 @@ fn statesOf(p: *Page, el: NodeId, role: []u8, focused: ?NodeId) u32 {
     return s
 }
 
-fn isSelectedOption(p: *Page, opt: NodeId) bool {
-    var cur = p.doc.parent(opt)
-    while cur |c| {
-        if p.doc.isElement(c, "select") {
-            if p.doc.attr(c, "multiple") != null {
-                return p.doc.attr(opt, "selected") != null
-            }
-            if selectedOption(p, c) |s| {
-                return s == opt
-            }
-            return false
-        }
-        cur = p.doc.parent(c)
-    }
-    return p.doc.attr(opt, "selected") != null
-}
-
-/// Is `el` disabled: its own `disabled` (form controls), a disabled
-/// `fieldset` around it, or `aria-disabled`?
+/// Is `el` disabled: `aria-disabled`, or a disabled form control
+/// (`dom.isDisabled`: its own `disabled`, a disabled `fieldset` or
+/// `optgroup` around it)?
 fn isDisabled(p: *Page, el: NodeId) bool {
-    if attrIs(p, el, "aria-disabled", "true") {
-        return true
-    }
-    let name = p.doc.node(el).name
-    if !html.isIn(name, "button input select textarea option optgroup fieldset") {
-        return false
-    }
-    if p.doc.attr(el, "disabled") != null {
-        return true
-    }
-    var cur = p.doc.parent(el)
-    while cur |c| {
-        if p.doc.isElement(c, "fieldset") && p.doc.attr(c, "disabled") != null {
-            return true
-        }
-        if html.isIn(name, "option") && p.doc.isElement(c, "optgroup") && p.doc.attr(c, "disabled") != null {
-            return true
-        }
-        cur = p.doc.parent(c)
-    }
-    return false
+    return attrIs(p, el, "aria-disabled", "true") || dom.isDisabled(&p.doc, el)
 }
 
 // ---- output

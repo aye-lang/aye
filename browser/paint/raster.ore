@@ -140,6 +140,67 @@ pub struct Canvas {
         }
     }
 
+    /// Draws an image of `w` x `h` RGBA pixels (straight alpha) scaled
+    /// into `dst` (inside the clip): copied when the sizes match, else
+    /// bilinear, with alpha blending.
+    pub fn drawImage(self: *mut Self, dst: IRect, w: usize, h: usize, pixels: []u8) {
+        let k = intersect(dst, self.clip)
+        if k.x1 <= k.x0 || k.y1 <= k.y0 || w == 0 || h == 0 || pixels.len < w * h * 4 {
+            return
+        }
+        let dw = (dst.x1 - dst.x0) as usize
+        let dh = (dst.y1 - dst.y0) as usize
+        if dw == w && dh == h {
+            for py in k.y0..k.y1 {
+                let sy = (py - dst.y0) as usize
+                var i = (py as usize * self.width + k.x0 as usize) * 4
+                for px in k.x0..k.x1 {
+                    let si = (sy * w + (px - dst.x0) as usize) * 4
+                    self.blendPremul(i, premul(pixels, si))
+                    i += 4
+                }
+            }
+            return
+        }
+        // Source positions in 1/256 px of each column and row: the
+        // centers of destination pixels mapped back.
+        for py in k.y0..k.y1 {
+            let fy = sampleAt((py - dst.y0) as usize, dh, h)
+            let y0 = fy / 256
+            var y1 = y0 + 1
+            if y1 >= h {
+                y1 = h - 1
+            }
+            let wy = (fy % 256) as u32
+            var i = (py as usize * self.width + k.x0 as usize) * 4
+            for px in k.x0..k.x1 {
+                let fx = sampleAt((px - dst.x0) as usize, dw, w)
+                let x0 = fx / 256
+                var x1 = x0 + 1
+                if x1 >= w {
+                    x1 = w - 1
+                }
+                let wx = (fx % 256) as u32
+                let top = mix(premul(pixels, (y0 * w + x0) * 4), premul(pixels, (y0 * w + x1) * 4), wx)
+                let bottom = mix(premul(pixels, (y1 * w + x0) * 4), premul(pixels, (y1 * w + x1) * 4), wx)
+                self.blendPremul(i, mix(top, bottom, wy))
+                i += 4
+            }
+        }
+    }
+
+    // Blends a premultiplied color into the pixel at byte `i`.
+    fn blendPremul(self: *mut Self, i: usize, c: Premul) {
+        if c.a == 0 {
+            return
+        }
+        let rest = 255 - c.a
+        self.pixels[i] = ((c.r * 255 + self.pixels[i] as u32 * rest + 127) / 255) as u8
+        self.pixels[i + 1] = ((c.g * 255 + self.pixels[i + 1] as u32 * rest + 127) / 255) as u8
+        self.pixels[i + 2] = ((c.b * 255 + self.pixels[i + 2] as u32 * rest + 127) / 255) as u8
+        self.pixels[i + 3] = (c.a + (self.pixels[i + 3] as u32 * rest + 127) / 255) as u8
+    }
+
     // Blends `c` with opacity `alpha` (0 to 255) into the pixel at byte
     // `i`.
     fn blend(self: *mut Self, i: usize, c: Rgba, alpha: u32) {
@@ -156,4 +217,54 @@ pub struct Canvas {
         self.pixels[i + 2] = ((c.b as u32 * alpha + self.pixels[i + 2] as u32 * rest + 127) / 255) as u8
         self.pixels[i + 3] = (alpha + (self.pixels[i + 3] as u32 * rest + 127) / 255) as u8
     }
+}
+
+// A color with premultiplied alpha, each channel 0 to 255.
+struct Premul {
+    r: u32
+    g: u32
+    b: u32
+    a: u32
+}
+
+fn premul(pixels: []u8, i: usize) Premul {
+    let a = pixels[i + 3] as u32
+    if a == 255 {
+        return Premul { r: pixels[i] as u32, g: pixels[i + 1] as u32, b: pixels[i + 2] as u32, a: 255 }
+    }
+    return Premul {
+        r: (pixels[i] as u32 * a + 127) / 255,
+        g: (pixels[i + 1] as u32 * a + 127) / 255,
+        b: (pixels[i + 2] as u32 * a + 127) / 255,
+        a: a,
+    }
+}
+
+// `a` and `b` mixed, `t` / 256 of `b`.
+fn mix(a: Premul, b: Premul, t: u32) Premul {
+    let s = 256 - t
+    return Premul {
+        r: (a.r * s + b.r * t + 128) / 256,
+        g: (a.g * s + b.g * t + 128) / 256,
+        b: (a.b * s + b.b * t + 128) / 256,
+        a: (a.a * s + b.a * t + 128) / 256,
+    }
+}
+
+// The source position, in 1/256 px from the center of the first source
+// pixel (clamped to the image), of destination pixel `d` of `dn` when
+// `sn` source pixels are scaled to `dn`.
+fn sampleAt(d: usize, dn: usize, sn: usize) usize {
+    // (d + 0.5) * sn / dn - 0.5, in 1/256.
+    let num = (2 * d + 1) * sn * 128
+    let pos = num / dn
+    if pos < 128 {
+        return 0
+    }
+    let v = pos - 128
+    let max = (sn - 1) * 256
+    if v > max {
+        return max
+    }
+    return v
 }

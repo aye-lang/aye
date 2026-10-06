@@ -1,0 +1,36 @@
+viewport 800x600
+  block <html> (0, 0) 800x328
+    block <body> (8, 16) 784x296
+      block <p> (8, 16) 784x53.2
+        line (8, 16) 784x53.2
+          text (8, 51.2) 64x16 "Natural "
+          replaced <img src="../paint/img/photo.png"> (72, 16) 64x48
+          text (136, 51.2) 40x16 " and "
+          replaced <img src="../paint/img/icon.gif" alt="icon"> (176, 48) 16x16
+          text (192, 51.2) 8x16 "."
+      block <p> (8, 85.2) 784x35.2
+        line (8, 85.2) 784x35.2
+          text (8, 102.4) 88x16 "Width only "
+          replaced <img src="../paint/img/photo.png" width="32"> (96, 91.2) 32x24
+          text (128, 102.4) 112x16 "; height only "
+          replaced <img class="tall" src="../paint/img/photo.jpg"> (240, 85.2) 40x30
+          text (280, 102.4) 56x16 "; both "
+          replaced <img src="../paint/img/photo.png" width="20" height="20"> (336, 95.2) 20x20
+          text (356, 102.4) 8x16 "."
+      block <div class="box"> (8, 136.4) 100x80.2
+        line (8, 136.4) 100x80.2
+          replaced <img src="../paint/img/photo.png"> (8, 136.4) 100x75
+      block <p> (8, 232.6) 784x39.2
+        line (8, 232.6) 784x39.2
+          replaced <img class="framed" src="../paint/img/badge.png"> (8, 232.6) 34x34
+          text (42, 253.8) 8x16 " "
+          replaced <img src="missing.png" width="50"> (50, 266.6) 50x0
+          text (100, 253.8) 8x16 " "
+          replaced <img src="missing.png" alt="none"> (108, 266.6) 0x0
+      block <p> (8, 287.8) 784x24.2
+        line (8, 287.8) 784x24.2
+          replaced <input type="checkbox"> (12, 290.8) 13x13
+          text (28, 294) 8x16 " "
+          replaced <input type="radio"> (40, 290.8) 13x13
+          text (56, 294) 8x16 " "
+          replaced <input type="image" src="../paint/img/icon.gif"> (64, 290.8) 16x16

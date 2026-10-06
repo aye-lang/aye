@@ -410,7 +410,7 @@ pub let PRELUDE =
     \\for (const n of ['title', 'lang', 'dir', 'name', 'placeholder', 'alt', 'rel', 'target', 'role', 'method', 'accessKey']) reflect(n, n.toLowerCase());
     \\reflect('htmlFor', 'for');
     \\reflect('defaultValue', 'value');
-    \\for (const n of ['hidden', 'disabled', 'required', 'multiple', 'autofocus', 'checked', 'selected', 'open']) reflectBool(n, n);
+    \\for (const n of ['hidden', 'disabled', 'required', 'multiple', 'autofocus', 'open']) reflectBool(n, n);
     \\reflectBool('readOnly', 'readonly');
     \\reflectBool('defaultChecked', 'checked');
     \\reflectBool('defaultSelected', 'selected');
@@ -426,48 +426,9 @@ pub let PRELUDE =
     \\  if (v !== null && /^\s*-?\d+\s*$/.test(v)) return parseInt(v, 10);
     \\  return /^(a|button|input|select|textarea)$/.test(this.localName) ? 0 : -1;
     \\}, function (v) { this.setAttribute('tabindex', String(v)); });
-    \\function options(sel) {
-    \\  return sel.querySelectorAll('option');
-    \\}
-    \\function selectedOption(sel) {
-    \\  const all = options(sel);
-    \\  for (const o of all) if (o.hasAttribute('selected')) return o;
-    \\  return all.length > 0 ? all[0] : null;
-    \\}
-    \\getter(HTMLP, 'value', function () {
-    \\  const t = this.localName;
-    \\  if (t === 'textarea') return this.textContent;
-    \\  if (t === 'select') {
-    \\    const o = selectedOption(this);
-    \\    return o ? o.value : '';
-    \\  }
-    \\  const v = this.getAttribute('value');
-    \\  if (v !== null) return v;
-    \\  if (t === 'option') return this.textContent.replace(/\s+/g, ' ').trim();
-    \\  if (t === 'input' && /^(checkbox|radio)$/.test(this.type)) return 'on';
-    \\  return '';
-    \\}, function (v) {
-    \\  v = v === null || v === undefined ? '' : String(v);
-    \\  const t = this.localName;
-    \\  if (t === 'textarea') this.textContent = v;
-    \\  else if (t === 'select') {
-    \\    for (const o of options(this)) {
-    \\      if (o.value === v) o.setAttribute('selected', '');
-    \\      else o.removeAttribute('selected');
-    \\    }
-    \\  } else this.setAttribute('value', v);
-    \\});
-    \\getter(HTMLP, 'options', function () { return options(this); });
-    \\getter(HTMLP, 'selectedIndex', function () {
-    \\  const all = options(this);
-    \\  const o = selectedOption(this);
-    \\  return o ? all.indexOf(o) : -1;
-    \\}, function (i) {
-    \\  options(this).forEach((o, j) => {
-    \\    if (j === i) o.setAttribute('selected', '');
-    \\    else o.removeAttribute('selected');
-    \\  });
-    \\});
+    \\// value, checked, selected and selectedIndex are natives over the
+    \\// page's form state (dom_api.ore).
+    \\getter(HTMLP, 'options', function () { return this.querySelectorAll('option'); });
     \\getter(HTMLP, 'form', function () { return this.closest('form'); });
     \\getter(HTMLP, 'text', function () { return this.textContent; }, function (v) { this.textContent = v; });
     \\getter(HTMLP, 'innerText', function () { return this.textContent; }, function (v) { this.textContent = v; });

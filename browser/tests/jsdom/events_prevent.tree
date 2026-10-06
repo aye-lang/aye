@@ -11,7 +11,7 @@
       "\n"
       <input id="box" type="checkbox">
       "\n"
-      <input id="box2" type="checkbox" checked="">
+      <input id="box2" type="checkbox">
       "\n"
       <pre id="out">
         "canceled true true\nnot cancelable false\ndispatch returned false true\nchange true\nchecked false true true\n"

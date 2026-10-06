@@ -8,18 +8,18 @@
     <body>
       <form id="f">
         "\n"
-        <input id="name" value="Ada">
+        <input id="name" value="initial">
         "\n"
-        <input id="agree" type="checkbox">
+        <input id="agree" type="checkbox" checked="">
         "\n"
         <select id="color">
           <option value="r">
             "Red"
-          <option value="g" selected="">
+          <option value="g">
             "Green"
         "\n"
         <textarea id="notes">
-          "new notes"
+          "old notes"
         "\n"
         <button id="send">
           "Send"

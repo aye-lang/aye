@@ -155,7 +155,7 @@ fn accessor(it: *mut Interp, o: u32, name: []u8, get: js.NativeFn, set: ?js.Nati
     it.pop()
 }
 
-fn method(it: *mut Interp, o: u32, name: []u8, length: u32, f: js.NativeFn) JsError!void {
+fn defMethod(it: *mut Interp, o: u32, name: []u8, length: u32, f: js.NativeFn) JsError!void {
     try it.defineNative(o, name, length, f)
 }
 
@@ -227,25 +227,25 @@ fn installDom(s: *mut Script) JsError!void {
     try accessor(it, node, "nodeValue", nodeValue, nodeSetValue)
     try accessor(it, node, "isConnected", nodeIsConnected, null)
     try accessor(it, node, "ownerDocument", nodeOwnerDocument, null)
-    try method(it, node, "appendChild", 1, nodeAppendChild)
-    try method(it, node, "insertBefore", 2, nodeInsertBefore)
-    try method(it, node, "removeChild", 1, nodeRemoveChild)
-    try method(it, node, "replaceChild", 2, nodeReplaceChild)
-    try method(it, node, "remove", 0, nodeRemove)
-    try method(it, node, "cloneNode", 0, nodeCloneNode)
-    try method(it, node, "contains", 1, nodeContains)
-    try method(it, node, "hasChildNodes", 0, nodeHasChildNodes)
-    try method(it, node, "isSameNode", 1, nodeIsSameNode)
-    try method(it, node, "getRootNode", 0, nodeGetRootNode)
+    try defMethod(it, node, "appendChild", 1, nodeAppendChild)
+    try defMethod(it, node, "insertBefore", 2, nodeInsertBefore)
+    try defMethod(it, node, "removeChild", 1, nodeRemoveChild)
+    try defMethod(it, node, "replaceChild", 2, nodeReplaceChild)
+    try defMethod(it, node, "remove", 0, nodeRemove)
+    try defMethod(it, node, "cloneNode", 0, nodeCloneNode)
+    try defMethod(it, node, "contains", 1, nodeContains)
+    try defMethod(it, node, "hasChildNodes", 0, nodeHasChildNodes)
+    try defMethod(it, node, "isSameNode", 1, nodeIsSameNode)
+    try defMethod(it, node, "getRootNode", 0, nodeGetRootNode)
     // Element and Document both have these (ParentNode).
     try accessor(it, node, "children", nodeChildren, null)
     try accessor(it, node, "firstElementChild", nodeFirstElementChild, null)
     try accessor(it, node, "lastElementChild", nodeLastElementChild, null)
     try accessor(it, node, "childElementCount", nodeChildElementCount, null)
-    try method(it, node, "querySelector", 1, nodeQuerySelector)
-    try method(it, node, "querySelectorAll", 1, nodeQuerySelectorAll)
-    try method(it, node, "getElementsByTagName", 1, nodeGetElementsByTagName)
-    try method(it, node, "getElementsByClassName", 1, nodeGetElementsByClassName)
+    try defMethod(it, node, "querySelector", 1, nodeQuerySelector)
+    try defMethod(it, node, "querySelectorAll", 1, nodeQuerySelectorAll)
+    try defMethod(it, node, "getElementsByTagName", 1, nodeGetElementsByTagName)
+    try defMethod(it, node, "getElementsByClassName", 1, nodeGetElementsByClassName)
 
     try accessor(it, element, "tagName", elementTagName, null)
     try accessor(it, element, "localName", elementLocalName, null)
@@ -257,14 +257,19 @@ fn installDom(s: *mut Script) JsError!void {
     try accessor(it, element, "previousElementSibling", elementPreviousElementSibling, null)
     try accessor(it, element, "style", elementStyle, elementSetStyle)
     try accessor(it, element, "dataset", elementDataset, null)
-    try method(it, element, "getAttribute", 1, elementGetAttribute)
-    try method(it, element, "setAttribute", 2, elementSetAttribute)
-    try method(it, element, "removeAttribute", 1, elementRemoveAttribute)
-    try method(it, element, "hasAttribute", 1, elementHasAttribute)
-    try method(it, element, "hasAttributes", 0, elementHasAttributes)
-    try method(it, element, "getAttributeNames", 0, elementGetAttributeNames)
-    try method(it, element, "matches", 1, elementMatches)
-    try method(it, element, "closest", 1, elementClosest)
+    try defMethod(it, element, "getAttribute", 1, elementGetAttribute)
+    try defMethod(it, element, "setAttribute", 2, elementSetAttribute)
+    try defMethod(it, element, "removeAttribute", 1, elementRemoveAttribute)
+    try defMethod(it, element, "hasAttribute", 1, elementHasAttribute)
+    try defMethod(it, element, "hasAttributes", 0, elementHasAttributes)
+    try defMethod(it, element, "getAttributeNames", 0, elementGetAttributeNames)
+    try defMethod(it, element, "matches", 1, elementMatches)
+    try defMethod(it, element, "closest", 1, elementClosest)
+    // Form controls: their state is the page's (doc.controls, B5).
+    try accessor(it, html, "value", controlValue, controlSetValue)
+    try accessor(it, html, "checked", controlChecked, controlSetChecked)
+    try accessor(it, html, "selected", controlSelected, controlSetSelected)
+    try accessor(it, html, "selectedIndex", controlSelectedIndex, controlSetSelectedIndex)
 
     try accessor(it, docp, "documentElement", documentElement, null)
     try accessor(it, docp, "body", documentBody, null)
@@ -274,10 +279,10 @@ fn installDom(s: *mut Script) JsError!void {
     try accessor(it, docp, "activeElement", documentActiveElement, null)
     try accessor(it, docp, "currentScript", documentCurrentScript, null)
     try accessor(it, docp, "doctype", documentDoctype, null)
-    try method(it, docp, "getElementById", 1, documentGetElementById)
-    try method(it, docp, "createElement", 1, documentCreateElement)
-    try method(it, docp, "createTextNode", 1, documentCreateTextNode)
-    try method(it, docp, "createComment", 1, documentCreateComment)
+    try defMethod(it, docp, "getElementById", 1, documentGetElementById)
+    try defMethod(it, docp, "createElement", 1, documentCreateElement)
+    try defMethod(it, docp, "createTextNode", 1, documentCreateTextNode)
+    try defMethod(it, docp, "createComment", 1, documentCreateComment)
 
     try accessor(it, chars, "data", nodeValue, nodeSetValue)
     try accessor(it, chars, "length", charsLength, null)
@@ -285,9 +290,9 @@ fn installDom(s: *mut Script) JsError!void {
 
     try accessor(it, s.style_proto, "cssText", styleCssText, styleSetCssText)
     try accessor(it, s.style_proto, "length", styleLength, null)
-    try method(it, s.style_proto, "getPropertyValue", 1, styleGetPropertyValue)
-    try method(it, s.style_proto, "setProperty", 2, styleSetProperty)
-    try method(it, s.style_proto, "removeProperty", 1, styleRemoveProperty)
+    try defMethod(it, s.style_proto, "getPropertyValue", 1, styleGetPropertyValue)
+    try defMethod(it, s.style_proto, "setProperty", 2, styleSetProperty)
+    try defMethod(it, s.style_proto, "removeProperty", 1, styleRemoveProperty)
 
     let d = try wrap(it, s.page.doc.root)
     try it.defineValue(it.global, "document", d)
@@ -1106,6 +1111,103 @@ fn elementSetOuterHtml(it: *mut Interp, a: Args) JsError!Value {
         docOf(it).insertBefore(parent, n, h)
     }
     docOf(it).detach(h)
+    changed(it)
+    return Value.Undefined
+}
+
+// ---- form controls
+
+fn controlValue(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let doc = docOf(it)
+    if dom.isControl(doc, h) || doc.isElement(h, "option") || doc.isElement(h, "textarea") {
+        return it.newString(dom.valueOf(doc, h))
+    }
+    return it.newString(doc.attr(h, "value") orelse "")
+}
+
+fn controlSetValue(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    if !js.isNullish(it.arg(a, 0)) {
+        try argText(it, a, 0, b)
+    }
+    let doc = docOf(it)
+    if dom.isTextField(doc, h) || doc.isElement(h, "select") || doc.isElement(h, "textarea") {
+        try dom.setValue(doc, h, b.bytes())
+    } else {
+        try doc.setAttr(h, "value", b.bytes())
+    }
+    changed(it)
+    return Value.Undefined
+}
+
+fn controlChecked(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    return js.boolVal(dom.isCheckable(docOf(it), h) && dom.isChecked(docOf(it), h))
+}
+
+fn controlSetChecked(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let doc = docOf(it)
+    if dom.isCheckable(doc, h) {
+        try dom.setChecked(doc, h, it.toBoolean(it.arg(a, 0)))
+        changed(it)
+    }
+    return Value.Undefined
+}
+
+fn controlSelected(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    return js.boolVal(docOf(it).isElement(h, "option") && dom.isSelected(docOf(it), h))
+}
+
+fn controlSetSelected(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let doc = docOf(it)
+    if doc.isElement(h, "option") {
+        let on = it.toBoolean(it.arg(a, 0))
+        if on {
+            if dom.selectOf(doc, h) |sel| {
+                if doc.attr(sel, "multiple") == null {
+                    try dom.selectOption(doc, sel, h)
+                    changed(it)
+                    return Value.Undefined
+                }
+            }
+        }
+        try dom.setSelected(doc, h, on)
+        changed(it)
+    }
+    return Value.Undefined
+}
+
+fn controlSelectedIndex(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    if !docOf(it).isElement(h, "select") {
+        return Value.Undefined
+    }
+    return js.numVal(try dom.selectedIndex(docOf(it), h) as f64)
+}
+
+fn controlSetSelectedIndex(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let doc = docOf(it)
+    if !doc.isElement(h, "select") {
+        return Value.Undefined
+    }
+    let n = try it.toNumber(it.arg(a, 0))
+    var opts = List(NodeId).init(it.alloc)
+    defer opts.deinit()
+    try dom.options(doc, h, &mut opts)
+    for i, o in opts.items() {
+        if i as f64 == n {
+            try dom.selectOption(doc, h, o)
+        } else if dom.isSelected(doc, o) {
+            try dom.setSelected(doc, o, false)
+        }
+    }
     changed(it)
     return Value.Undefined
 }

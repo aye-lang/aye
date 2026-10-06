@@ -23,36 +23,36 @@ fn installWindow(s: *mut Script) JsError!void {
     let it = &mut s.it
     let o = try it.newObject(it.object_proto)
     try it.defineValue(it.global, "__ak", js.objVal(o))
-    try method(it, o, "now", 0, akNow)
-    try method(it, o, "report", 1, akReport)
-    try method(it, o, "compile", 1, akCompile)
-    try method(it, o, "evalGlobal", 1, akEvalGlobal)
-    try method(it, o, "setTimer", 5, akSetTimer)
-    try method(it, o, "clearTimer", 1, akClearTimer)
-    try method(it, o, "queueMicrotask", 1, akQueueMicrotask)
-    try method(it, o, "activate", 1, akActivate)
-    try method(it, o, "submit", 1, akSubmit)
-    try method(it, o, "focused", 0, akFocused)
-    try method(it, o, "setFocus", 1, akSetFocus)
-    try method(it, o, "resolve", 1, akResolve)
-    try method(it, o, "url", 0, akUrl)
-    try method(it, o, "urlPart", 1, akUrlPart)
-    try method(it, o, "navigate", 1, akNavigate)
-    try method(it, o, "reload", 0, akReload)
-    try method(it, o, "historyGo", 1, akHistoryGo)
-    try method(it, o, "alert", 2, akAlert)
-    try method(it, o, "viewport", 1, akViewport)
-    try method(it, o, "storage", 3, akStorage)
-    try method(it, o, "fetch", 1, akFetch)
-    try method(it, o, "setDispatch", 1, akSetDispatch)
+    try defMethod(it, o, "now", 0, akNow)
+    try defMethod(it, o, "report", 1, akReport)
+    try defMethod(it, o, "compile", 1, akCompile)
+    try defMethod(it, o, "evalGlobal", 1, akEvalGlobal)
+    try defMethod(it, o, "setTimer", 5, akSetTimer)
+    try defMethod(it, o, "clearTimer", 1, akClearTimer)
+    try defMethod(it, o, "queueMicrotask", 1, akQueueMicrotask)
+    try defMethod(it, o, "activate", 1, akActivate)
+    try defMethod(it, o, "submit", 1, akSubmit)
+    try defMethod(it, o, "focused", 0, akFocused)
+    try defMethod(it, o, "setFocus", 1, akSetFocus)
+    try defMethod(it, o, "resolve", 1, akResolve)
+    try defMethod(it, o, "url", 0, akUrl)
+    try defMethod(it, o, "urlPart", 1, akUrlPart)
+    try defMethod(it, o, "navigate", 1, akNavigate)
+    try defMethod(it, o, "reload", 0, akReload)
+    try defMethod(it, o, "historyGo", 1, akHistoryGo)
+    try defMethod(it, o, "alert", 2, akAlert)
+    try defMethod(it, o, "viewport", 1, akViewport)
+    try defMethod(it, o, "storage", 3, akStorage)
+    try defMethod(it, o, "fetch", 1, akFetch)
+    try defMethod(it, o, "setDispatch", 1, akSetDispatch)
 
     let c = try it.newObject(it.object_proto)
     try it.defineValue(it.global, "console", js.objVal(c))
-    try method(it, c, "log", 0, consoleLog)
-    try method(it, c, "info", 0, consoleInfo)
-    try method(it, c, "debug", 0, consoleDebug)
-    try method(it, c, "warn", 0, consoleWarn)
-    try method(it, c, "error", 0, consoleError)
+    try defMethod(it, c, "log", 0, consoleLog)
+    try defMethod(it, c, "info", 0, consoleInfo)
+    try defMethod(it, c, "debug", 0, consoleDebug)
+    try defMethod(it, c, "warn", 0, consoleWarn)
+    try defMethod(it, c, "error", 0, consoleError)
 }
 
 // ---- console
@@ -170,18 +170,51 @@ fn akQueueMicrotask(it: *mut Interp, a: Args) JsError!Value {
 
 // ---- elements
 
+// The default action of el.click() (engine/forms.ore): navigations and
+// submissions wait until the script returns (takeNavigation).
 fn akActivate(it: *mut Interp, a: Args) JsError!Value {
-    if handleOf(it, it.arg(a, 0), TAG_NODE) |h| {
-        try activate(scriptOf(it).page, h)
+    let s = scriptOf(it)
+    let h = handleOf(it, it.arg(a, 0), TAG_NODE) orelse return Value.Undefined
+    let act = try activate(s.page, h)
+    match act {
+        .Follow { target } => {
+            defer target.deinit(s.alloc)
+            try setNavigation(s, target.href)
+        }
+        .Submit { form, submitter } => {
+            if try dispatchEvent(s.page, form, "submit", "") {
+                s.nav_kind = NavKind.Submit
+                s.nav_form = form
+                s.nav_submitter = submitter
+            }
+        }
+        .Changed => {
+            s.version += 1
+        }
+        _ => {}
     }
     return Value.Undefined
 }
 
+// form.submit(): no submit event.
 fn akSubmit(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
     if handleOf(it, it.arg(a, 0), TAG_NODE) |h| {
-        try submitForm(scriptOf(it).page, h)
+        if s.page.doc.isElement(h, "form") {
+            s.nav_kind = NavKind.Submit
+            s.nav_form = h
+            s.nav_submitter = null
+        }
     }
     return Value.Undefined
+}
+
+fn setNavigation(s: *mut Script, href: []u8) AllocError!void {
+    let copy = try s.alloc.alloc(0 as u8, href.len)
+    std.mem.copy(copy, href)
+    s.alloc.free(s.nav_href)
+    s.nav_href = copy
+    s.nav_kind = NavKind.To
 }
 
 fn akFocused(it: *mut Interp, a: Args) JsError!Value {
@@ -189,9 +222,7 @@ fn akFocused(it: *mut Interp, a: Args) JsError!Value {
 }
 
 fn akSetFocus(it: *mut Interp, a: Args) JsError!Value {
-    let s = scriptOf(it)
-    s.focus = handleOf(it, it.arg(a, 0), TAG_NODE)
-    s.focus_moved = true
+    setFocus(scriptOf(it).page, handleOf(it, it.arg(a, 0), TAG_NODE))
     return Value.Undefined
 }
 
@@ -270,11 +301,7 @@ fn akNavigate(it: *mut Interp, a: Args) JsError!Value {
         if text.eql(u.scheme, "javascript") {
             return Value.Undefined
         }
-        let copy = try s.alloc.alloc(0 as u8, u.href.len)
-        std.mem.copy(copy, u.href)
-        s.alloc.free(s.nav_href)
-        s.nav_href = copy
-        s.nav_kind = NavKind.To
+        try setNavigation(s, u.href)
     }
     return Value.Undefined
 }
@@ -371,15 +398,12 @@ fn setField(it: *mut Interp, o: u32, name: []u8, v: []u8) JsError!void {
 
 // ---- localStorage
 
-struct StoreItem {
-    origin: []mut u8
-    key: []mut u8
-    value: []mut u8
-}
-
+// The items, three strings each (origin, key, value), owned. Not a
+// List of a struct: stage0 allows at most 64 instances of `List` in a
+// program (browser/COMPILER_GAPS.md).
 struct Store {
     alloc: Allocator
-    items: List(StoreItem)
+    items: List([]mut u8)
 }
 
 var local_store: ?*mut Store = null
@@ -399,7 +423,7 @@ fn releaseStorage() {
     }
     if local_store |st| {
         for item in st.items.items() {
-            freeItem(st.alloc, item)
+            st.alloc.free(item)
         }
         st.items.deinit()
         st.alloc.destroy(st)
@@ -407,17 +431,18 @@ fn releaseStorage() {
     }
 }
 
-fn freeItem(alloc: Allocator, item: StoreItem) {
-    alloc.free(item.origin)
-    alloc.free(item.key)
-    alloc.free(item.value)
+// Removes item i (its three strings).
+fn removeItem(st: *mut Store, i: usize) {
+    for k in 0..3 {
+        st.alloc.free(st.items.orderedRemove(i * 3))
+    }
 }
 
 fn storeFor(alloc: Allocator) AllocError!*mut Store {
     if local_store |st| {
         return st
     }
-    let st = try alloc.create(Store { alloc: alloc, items: List(StoreItem).init(alloc) })
+    let st = try alloc.create(Store { alloc: alloc, items: List([]mut u8).init(alloc) })
     local_store = st
     return st
 }
@@ -446,22 +471,23 @@ fn akStorage(it: *mut Interp, a: Args) JsError!Value {
     let op = try it.toNumber(it.arg(a, 0))
     if op == 3.0 {
         var i: usize = 0
-        while i < st.items.len() {
-            if text.eql(st.items.items()[i].origin, origin.bytes()) {
-                freeItem(st.alloc, st.items.orderedRemove(i))
+        while i * 3 < st.items.len() {
+            if text.eql(st.items.items()[i * 3], origin.bytes()) {
+                removeItem(st, i)
             } else {
                 i += 1
             }
         }
         return Value.Undefined
     }
+    let count = st.items.len() / 3
     if op == 4.0 || op == 5.0 {
         let want = try it.toNumber(it.arg(a, 1))
         var n: usize = 0
-        for item in st.items.items() {
-            if text.eql(item.origin, origin.bytes()) {
+        for i in 0..count {
+            if text.eql(st.items.items()[i * 3], origin.bytes()) {
                 if op == 4.0 && n as f64 == want {
-                    return it.newString(item.key)
+                    return it.newString(st.items.items()[i * 3 + 1])
                 }
                 n += 1
             }
@@ -474,21 +500,22 @@ fn akStorage(it: *mut Interp, a: Args) JsError!Value {
     let key = try it.builder()
     defer it.release(key)
     try argText(it, a, 1, key)
-    for i, item in st.items.items() {
-        if text.eql(item.origin, origin.bytes()) && text.eql(item.key, key.bytes()) {
+    for i in 0..count {
+        let items = st.items.items()
+        if text.eql(items[i * 3], origin.bytes()) && text.eql(items[i * 3 + 1], key.bytes()) {
             if op == 0.0 {
-                return it.newString(item.value)
+                return it.newString(items[i * 3 + 2])
             }
             if op == 2.0 {
-                freeItem(st.alloc, st.items.orderedRemove(i))
+                removeItem(st, i)
                 return Value.Undefined
             }
             let v = try it.builder()
             defer it.release(v)
             try argText(it, a, 2, v)
             let copy = try ownedCopy(st.alloc, v.bytes())
-            st.alloc.free(item.value)
-            st.items.items()[i].value = copy
+            st.alloc.free(st.items.items()[i * 3 + 2])
+            st.items.items()[i * 3 + 2] = copy
             return Value.Undefined
         }
     }
@@ -496,11 +523,9 @@ fn akStorage(it: *mut Interp, a: Args) JsError!Value {
         let v = try it.builder()
         defer it.release(v)
         try argText(it, a, 2, v)
-        try st.items.append(StoreItem {
-            origin: try ownedCopy(st.alloc, origin.bytes()),
-            key: try ownedCopy(st.alloc, key.bytes()),
-            value: try ownedCopy(st.alloc, v.bytes()),
-        })
+        try st.items.append(try ownedCopy(st.alloc, origin.bytes()))
+        try st.items.append(try ownedCopy(st.alloc, key.bytes()))
+        try st.items.append(try ownedCopy(st.alloc, v.bytes()))
         return Value.Undefined
     }
     if op == 0.0 {

@@ -1,0 +1,338 @@
+// Text fields on a laid-out page: where the caret and the selection of
+// a field are (for the window to draw), which offset of the value a
+// point is at (a click), and the scroll offset that keeps the caret in
+// view. All in document px.
+//
+// A field's box holds one generated text box (layout/controls.ore) whose
+// text is the value as shown: the same bytes, except that a password
+// shows a bullet (3 bytes) per code point and an empty field shows its
+// placeholder (or a space), where the caret is at the start.
+
+import dom
+import dom.NodeId
+import layout
+import layout.BoxKind
+import layout.FragKind
+import layout.Tree
+import paint
+import std.list.List
+import std.math
+import std.mem.AllocError
+import std.text
+
+// The box of the control `el` and its generated text box.
+struct FieldBoxes {
+    box: usize
+    text_box: usize
+}
+
+fn fieldBoxes(t: *Tree, el: NodeId) ?FieldBoxes {
+    for i in 0..t.boxes.len() {
+        let b = t.bx(i)
+        if dom.isSame(b.node, el) && b.kind != BoxKind.Text && layout.hasInlineContent(t, i) {
+            for c in t.children(i) {
+                if t.bx(c).kind == BoxKind.Text && dom.isSame(t.bx(c).node, el) {
+                    return FieldBoxes { box: i, text_box: c }
+                }
+            }
+        }
+    }
+    return null
+}
+
+// Is the value shown as bullets?
+fn masked(doc: *dom.Document, el: NodeId) bool {
+    return doc.isElement(el, "input") && text.eql(dom.inputType(doc, el), "password")
+}
+
+// The offset in the shown text of offset `k` of the value.
+fn shownOffset(doc: *dom.Document, el: NodeId, k: usize) usize {
+    let v = dom.valueOf(doc, el)
+    if v.len == 0 {
+        return 0
+    }
+    if !masked(doc, el) {
+        return k
+    }
+    var n: usize = 0
+    for i in 0..minUsize(k, v.len) {
+        if (v[i] & 0xC0) != 0x80 {
+            n += 1
+        }
+    }
+    return n * 3
+}
+
+// The offset in the value of offset `d` of the shown text.
+fn valueOffset(doc: *dom.Document, el: NodeId, d: usize) usize {
+    let v = dom.valueOf(doc, el)
+    if v.len == 0 {
+        return 0
+    }
+    if !masked(doc, el) {
+        if d > v.len {
+            return v.len
+        }
+        return d
+    }
+    let want = d / 3
+    var seen: usize = 0
+    for i, c in v {
+        if (c & 0xC0) != 0x80 {
+            if seen == want {
+                return i
+            }
+            seen += 1
+        }
+    }
+    return v.len
+}
+
+/// The caret of the text field `el`: a rectangle 1 px wide, as high as
+/// the line; null when the field has no box.
+pub fn caretRect(page: *Page, el: NodeId) ?paint.Rect {
+    let t = page.tree orelse return null
+    let fb = fieldBoxes(t, el) orelse return null
+    let d = shownOffset(&page.doc, el, dom.caretOf(&page.doc, el).lo)
+    let b = t.bx(fb.box).*
+    let cx = b.ax + b.border[3] + b.padding[3]
+    let cy = b.ay + b.border[0] + b.padding[0]
+    let tb = t.bx(fb.text_box).*
+    let face = layout.fontOf(tb.style)
+    let m = layout.textMetrics(t, tb.style)
+    // Each line holds the text `lo..hi` (an empty line, a newline); the
+    // newline after `hi` belongs to it.
+    var next: usize = 0
+    var bottom = 0.0
+    for li in b.line_start..b.line_end {
+        let line = t.lines.items()[li]
+        var lo = next
+        var hi = next
+        var has = false
+        for fi in line.frag_start..line.frag_end {
+            let f = t.frags.items()[fi]
+            if f.kind == FragKind.Text && f.box == fb.text_box {
+                if !has {
+                    lo = f.start
+                    has = true
+                }
+                hi = f.end
+            }
+        }
+        let top = cy + line.y + line.baseline - m.ascent
+        if d >= lo && d <= hi {
+            if has {
+                for fi in line.frag_start..line.frag_end {
+                    let f = t.frags.items()[fi]
+                    if f.kind == FragKind.Text && f.box == fb.text_box && d >= f.start && d <= f.end {
+                        let x = cx + f.x + t.measure.width(face, tb.text[f.start..d])
+                        return paint.Rect { x: x, y: cy + f.y, w: 1.0, h: f.h }
+                    }
+                }
+            }
+            return paint.Rect { x: cx + line.x, y: top, w: 1.0, h: m.ascent + m.descent }
+        }
+        next = hi
+        if next < tb.text.len && tb.text[next] == '\n' {
+            next += 1
+        }
+        bottom = line.y + line.h
+    }
+    // After a newline that ends the text: the start of a line below.
+    return paint.Rect { x: cx, y: cy + bottom + (m.line_height - m.ascent - m.descent) / 2.0, w: 1.0, h: m.ascent + m.descent }
+}
+
+/// Appends to `out` the rectangles of the selected text of the field
+/// `el`, line by line.
+pub fn selectionRects(page: *Page, el: NodeId, out: *mut List(paint.Rect)) AllocError!void {
+    let t = page.tree orelse return
+    let fb = fieldBoxes(t, el) orelse return
+    let sel = dom.selectionOf(&page.doc, el)
+    if sel.lo >= sel.hi {
+        return
+    }
+    let lo = shownOffset(&page.doc, el, sel.lo)
+    let hi = shownOffset(&page.doc, el, sel.hi)
+    let b = t.bx(fb.box).*
+    let cx = b.ax + b.border[3] + b.padding[3]
+    let cy = b.ay + b.border[0] + b.padding[0]
+    let tb = t.bx(fb.text_box).*
+    let face = layout.fontOf(tb.style)
+    for li in b.line_start..b.line_end {
+        let line = t.lines.items()[li]
+        for fi in line.frag_start..line.frag_end {
+            let f = t.frags.items()[fi]
+            if f.kind != FragKind.Text || f.box != fb.text_box {
+                continue
+            }
+            let a = maxUsize(lo, f.start)
+            let z = minUsize(hi, f.end)
+            if a < z {
+                let x0 = t.measure.width(face, tb.text[f.start..a])
+                let w = t.measure.width(face, tb.text[a..z])
+                try out.append(paint.Rect { x: cx + f.x + x0, y: cy + f.y, w: w, h: f.h })
+            }
+        }
+    }
+}
+
+/// The offset in the value of the field `el` nearest to the point
+/// (`x`, `y`).
+pub fn offsetAt(page: *Page, el: NodeId, x: f64, y: f64) usize {
+    let t = page.tree orelse return 0
+    let fb = fieldBoxes(t, el) orelse return 0
+    if dom.valueOf(&page.doc, el).len == 0 {
+        return 0
+    }
+    let b = t.bx(fb.box).*
+    let cx = b.ax + b.border[3] + b.padding[3]
+    let cy = b.ay + b.border[0] + b.padding[0]
+    let tb = t.bx(fb.text_box).*
+    let face = layout.fontOf(tb.style)
+    // The line at `y` (the first or the last one beyond them).
+    var pick: usize = b.line_start
+    for li in b.line_start..b.line_end {
+        let line = t.lines.items()[li]
+        if y >= cy + line.y {
+            pick = li
+        }
+    }
+    if pick >= b.line_end {
+        return 0
+    }
+    let line = t.lines.items()[pick]
+    var best: usize = 0
+    var best_dist = -1.0
+    var any = false
+    for fi in line.frag_start..line.frag_end {
+        let f = t.frags.items()[fi]
+        if f.kind != FragKind.Text || f.box != fb.text_box {
+            continue
+        }
+        any = true
+        // Every code point boundary of the fragment.
+        var k = f.start
+        while true {
+            let px = cx + f.x + t.measure.width(face, tb.text[f.start..k])
+            let dist = math.abs(px - x)
+            if best_dist < 0.0 || dist < best_dist {
+                best_dist = dist
+                best = k
+            }
+            if k >= f.end {
+                break
+            }
+            k += 1
+            while k < f.end && (tb.text[k] & 0xC0) == 0x80 {
+                k += 1
+            }
+        }
+    }
+    if !any {
+        return 0
+    }
+    return valueOffset(&page.doc, el, best)
+}
+
+/// Sets the scroll offset of the field `el` so that its caret is inside
+/// its content box; true when it changed (lay the page out again).
+pub fn revealCaret(page: *mut Page, el: NodeId) bool {
+    let t = page.tree orelse return false
+    let fb = fieldBoxes(t, el) orelse return false
+    let caret = caretRect(page, el) orelse return false
+    let c = page.doc.controls.get(el) orelse return false
+    let b = t.bx(fb.box).*
+    let cx = b.ax + b.border[3] + b.padding[3]
+    let cy = b.ay + b.border[0] + b.padding[0]
+    let cw = b.w - b.border[1] - b.border[3] - b.padding[1] - b.padding[3]
+    let ch = b.h - b.border[0] - b.border[2] - b.padding[0] - b.padding[2]
+    let old = c.scroll
+    if page.doc.isElement(el, "textarea") {
+        // Rows, in content coordinates without the scroll.
+        let top = caret.y - cy + c.scroll
+        if top + caret.h > c.scroll + ch {
+            c.scroll = top + caret.h - ch
+        }
+        if top < c.scroll {
+            c.scroll = top
+        }
+    } else {
+        let at = caret.x - cx + c.scroll
+        if at + 1.0 > c.scroll + cw {
+            c.scroll = at + 1.0 - cw
+        }
+        if at < c.scroll {
+            c.scroll = at
+        }
+    }
+    if c.scroll < 0.0 {
+        c.scroll = 0.0
+    }
+    return c.scroll != old
+}
+
+/// The border box of the element `el` (of its first box), in document
+/// px; null when it has none.
+pub fn boxRect(page: *Page, el: NodeId) ?paint.Rect {
+    let t = page.tree orelse return null
+    for i in 0..t.boxes.len() {
+        let b = t.bx(i)
+        if dom.isSame(b.node, el) && b.kind != BoxKind.Text && b.kind != BoxKind.Inline {
+            return paint.Rect { x: b.ax, y: b.ay, w: b.w, h: b.h }
+        }
+    }
+    // An inline element (a link): the union of its fragments.
+    var found = false
+    var x0 = 0.0
+    var y0 = 0.0
+    var x1 = 0.0
+    var y1 = 0.0
+    for i in 0..t.boxes.len() {
+        if !layout.hasInlineContent(t, i) {
+            continue
+        }
+        let b = t.bx(i).*
+        let cx = b.ax + b.border[3] + b.padding[3]
+        let cy = b.ay + b.border[0] + b.padding[0]
+        for li in b.line_start..b.line_end {
+            let line = t.lines.items()[li]
+            for fi in line.frag_start..line.frag_end {
+                let f = t.frags.items()[fi]
+                if f.kind == FragKind.Inline && dom.isSame(t.bx(f.box).node, el) {
+                    if !found || cx + f.x < x0 {
+                        x0 = cx + f.x
+                    }
+                    if !found || cy + f.y < y0 {
+                        y0 = cy + f.y
+                    }
+                    if !found || cx + f.x + f.w > x1 {
+                        x1 = cx + f.x + f.w
+                    }
+                    if !found || cy + f.y + f.h > y1 {
+                        y1 = cy + f.y + f.h
+                    }
+                    found = true
+                }
+            }
+        }
+    }
+    if found {
+        return paint.Rect { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+    }
+    return null
+}
+
+// std.math is for f64 only.
+fn minUsize(a: usize, b: usize) usize {
+    if a < b {
+        return a
+    }
+    return b
+}
+
+fn maxUsize(a: usize, b: usize) usize {
+    if a > b {
+        return a
+    }
+    return b
+}

@@ -225,28 +225,22 @@ fn shrinkToFit(t: *mut Tree, i: usize, avail: f64) AllocError!void {
         t.bx(i).w = w
         return
     }
+    if controlContentWidth(t, i) |cw| {
+        t.bx(i).w = clampWidth(t, i, cw + hEdges(t.bx(i)), avail)
+        return
+    }
     let mm = try intrinsic(t, i)
     let b = t.bx(i)
     let room = avail - b.margin[1] - b.margin[3]
     t.bx(i).w = clampWidth(t, i, math.min(math.max(mm.min, room), mm.max), avail)
 }
 
-// The size of a replaced element: its `width`/`height`, else its
-// `width`/`height` attributes, else 0 (images are not decoded yet).
+// The size of a replaced element (`replacedDims`) within its min/max.
 fn replacedSize(t: *mut Tree, i: usize, cb_w: f64, cb_h: f64) {
     let b = t.bx(i)
-    var w = hEdges(b)
-    var h = vEdges(b)
-    if sizeOf(b.style, b.style[css.WIDTH], cb_w, hEdges(b)) |sw| {
-        w = sw
-    } else {
-        w += attrPx(t, i, "width")
-    }
-    if sizeOf(b.style, b.style[css.HEIGHT], cb_h, vEdges(b)) |sh| {
-        h = sh
-    } else {
-        h += attrPx(t, i, "height")
-    }
+    let dims = replacedDims(t, i, cb_w, cb_h, hEdges(b), vEdges(b))
+    let w = dims.w
+    let h = dims.h
     let cw = clampWidth(t, i, w, cb_w)
     let ch = clampHeight(t, i, h, cb_h)
     let bb = t.bx(i)
@@ -254,6 +248,44 @@ fn replacedSize(t: *mut Tree, i: usize, cb_w: f64, cb_h: f64) {
     bb.h = ch
     bb.first_baseline = -1.0
     bb.last_baseline = -1.0
+}
+
+/// The border-box size of a replaced element whose padding and borders
+/// are `he` (left and right) and `ve` (top and bottom): its
+/// `width`/`height`, else its `width`/`height` attributes; a missing one
+/// follows the other by the aspect ratio of its natural size (an
+/// image's); with neither, the natural size; else 0.
+fn replacedDims(t: *Tree, i: usize, cb_w: f64, cb_h: f64, he: f64, ve: f64) Size {
+    let style = t.bx(i).style
+    var w: ?f64 = sizeOf(style, style[css.WIDTH], cb_w, he)
+    if w == null {
+        let aw = attrPx(t, i, "width")
+        if aw > 0.0 {
+            w = aw + he
+        }
+    }
+    var h: ?f64 = sizeOf(style, style[css.HEIGHT], cb_h, ve)
+    if h == null {
+        let ah = attrPx(t, i, "height")
+        if ah > 0.0 {
+            h = ah + ve
+        }
+    }
+    if naturalSize(t, i) |n| {
+        if w |ww| {
+            if h == null && n.w > 0.0 {
+                h = (ww - he) * n.h / n.w + ve
+            }
+        } else if h |hh| {
+            if n.h > 0.0 {
+                w = (hh - ve) * n.w / n.h + he
+            }
+        } else {
+            w = n.w + he
+            h = n.h + ve
+        }
+    }
+    return Size { w: w orelse he, h: h orelse ve }
 }
 
 // The attribute `name` of the element of box `i` as px (a number, maybe
@@ -280,7 +312,12 @@ fn attrPx(t: *Tree, i: usize, name: []u8) f64 {
 fn layoutContents(t: *mut Tree, i: usize, cb_h: f64) AllocError!void {
     let b = t.bx(i)
     let cw = math.max(0.0, b.w - hEdges(b))
-    let ch = definiteContentHeight(t, i, cb_h)
+    var ch = definiteContentHeight(t, i, cb_h)
+    if ch < 0.0 {
+        if controlContentHeight(t, i) |control_h| {
+            ch = control_h
+        }
+    }
     let root = isFormattingRoot(t, i)
     let auto_height = ch < 0.0 && sizeOf(b.style, b.style[css.MIN_HEIGHT], cb_h, 0.0) == null
     let top_open = !root && b.border[0] == 0.0 && b.padding[0] == 0.0
@@ -296,6 +333,7 @@ fn layoutContents(t: *mut Tree, i: usize, cb_h: f64) AllocError!void {
     let kind = b.kind
     if hasInlineContent(t, i) {
         content_h = try layoutInline(t, i, cw)
+        scrollControl(t, i)
         let bb = t.bx(i)
         if bb.line_end > bb.line_start {
             empty = false

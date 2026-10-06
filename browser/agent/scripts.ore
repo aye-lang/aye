@@ -24,16 +24,14 @@ let MAX_SCRIPT_NAVIGATIONS: usize = 5
 
 /// Fires `kind` (an event the prelude knows: click, input, change,
 /// keydown with `key`...) at `el`; false when a listener canceled it.
-/// The agent's own focus is what scripts see as activeElement.
-fn fire(s: *mut Session, p: *mut Page, el: NodeId, kind: []u8, key: []u8) AllocError!bool {
-    engine.setScriptFocus(p, s.focused)
+fn fire(p: *mut Page, el: NodeId, kind: []u8, key: []u8) AllocError!bool {
     return engine.dispatchEvent(p, el, kind, key)
 }
 
 /// `input` then `change` at a control the agent changed.
-fn fireChange(s: *mut Session, p: *mut Page, el: NodeId) AllocError!void {
-    try fire(s, p, el, "input", "")
-    try fire(s, p, el, "change", "")
+fn fireChange(p: *mut Page, el: NodeId) AllocError!void {
+    try fire(p, el, "input", "")
+    try fire(p, el, "change", "")
 }
 
 /// After an action: runs the timers that are due, then does what the
@@ -46,9 +44,6 @@ fn settleScripts(s: *mut Session, tmp: Allocator, o: *mut Outcome) AllocError!vo
             return
         }
         try engine.runDueTimers(p)
-        if engine.scriptMovedFocus(p) {
-            s.focused = engine.scriptFocus(p)
-        }
         let nav = engine.takeNavigation(p)
         var step: i64 = 0
         match nav.kind {
@@ -68,6 +63,11 @@ fn settleScripts(s: *mut Session, tmp: Allocator, o: *mut Outcome) AllocError!vo
                 step = nav.step
             }
             .Reload => {}
+            .Submit => {
+                let r = try submitNow(s, tmp, p, nav.form.?, nav.submitter, "a script submitted the form")
+                try merge(tmp, o, r)
+                continue
+            }
         }
         let r = try moveInHistory(s, tmp, step)
         try merge(tmp, o, r)
@@ -86,7 +86,6 @@ fn merge(tmp: Allocator, o: *mut Outcome, r: Outcome) AllocError!void {
 fn evalScript(s: *mut Session, tmp: Allocator, src: []u8) AllocError!Outcome {
     let p = s.tab.page orelse return failed("no page: navigate first")
     var out = text.Builder.init(tmp)
-    engine.setScriptFocus(p, s.focused)
     if try engine.evalInPage(p, src, &mut out) {
         return done(out.bytes())
     }

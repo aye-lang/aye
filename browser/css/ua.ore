@@ -1,12 +1,13 @@
 // The user-agent style sheet: a subset of the rendering section of the
 // HTML standard (display types, margins of blocks, headings, lists,
-// links, phrasing elements, `pre`, tables, `hr`, hidden elements).
+// links, phrasing elements, `pre`, tables, `hr`, hidden elements, form
+// controls).
 // One rule per string (Ore strings are single-line); `uaSheet` parses
 // them in order.
 
 import std.mem.AllocError
 
-let UA_RULES = [50][]u8{
+let UA_RULES = [_][]u8{
     "html, address, blockquote, body, center, dialog, div, figure, figcaption, footer, form, header, hr, legend, listing, main, p, plaintext, pre, search, xmp { display: block }",
     "article, aside, h1, h2, h3, h4, h5, h6, hgroup, nav, section { display: block }",
     "dir, dd, dl, dt, menu, ol, ul, details, summary, fieldset, optgroup, address { display: block }",
@@ -23,7 +24,15 @@ let UA_RULES = [50][]u8{
     "tr { display: table-row }",
     "td, th { display: table-cell; padding: 1px }",
     "th { font-weight: bold; text-align: center }",
-    "input, select, button, textarea { display: inline-block }",
+    "input, select, button, textarea { display: inline-block; font-size: 13.333px; font-family: sans-serif; font-weight: normal; font-style: normal; color: black; line-height: normal; text-align: left; text-decoration: none; text-indent: 0 }",
+    "input, select, textarea { background-color: white; border: 1px solid #767676; padding: 1px 2px; overflow: hidden }",
+    "input, select { white-space: pre }",
+    "select { padding-right: 20px }",
+    "button, input[type=submit i], input[type=reset i], input[type=button i] { background-color: #efefef; border: 1px solid #767676; padding: 1px 6px; text-align: center }",
+    "input[type=checkbox i], input[type=radio i] { margin: 3px 3px 3px 4px; padding: 0; border-style: none; background-color: transparent }",
+    "input[type=image i] { padding: 0; border-style: none; background-color: transparent }",
+    "input[type=hidden i] { display: none }",
+    "input:disabled, select:disabled, textarea:disabled, button:disabled { color: #6d6d6d; border-color: #c4c4c4 }",
     "body { margin: 8px }",
     "p, dl, listing, pre, plaintext, xmp { margin-top: 1em; margin-bottom: 1em }",
     "blockquote, figure { margin: 1em 40px }",

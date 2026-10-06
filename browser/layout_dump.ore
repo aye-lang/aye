@@ -1,7 +1,8 @@
 // `anyknown dump --layout`: the styles of a document (as for `--style`),
 // its layout in the viewport, and a dump of the box tree
 // (layout/dump.ore). Text is measured with the fixed-metric test font,
-// or with the system's fonts (`--font system`).
+// or with the system's fonts (`--font system`). Images are fetched and
+// decoded, for their natural sizes.
 
 import css
 import dom.Document
@@ -23,19 +24,22 @@ fn dumpLayout(alloc: Allocator, doc: *Document, base: *Url, media: css.Media, sy
     var styles = try css.Styles.init(alloc)
     defer styles.deinit()
     try css.computeStyles(doc, &ua, &author, media, &mut styles)
+    var images = engine.ImageCache.init(alloc)
+    defer images.deinit()
+    try engine.fillImages(&mut images, doc, base)
     if system_font {
         var sys = font.System.init(alloc) catch |e| {
             std.log.err("no system font found ({})", e)
             return 1
         }
         defer sys.deinit()
-        var tree = try layout.layoutDocument(alloc, doc, &styles, &mut sys, media.width, media.height)
+        var tree = try layout.layoutDocumentWith(alloc, doc, &styles, &images.nodes, &mut sys, media.width, media.height)
         defer tree.deinit()
         try layout.dumpTree(&tree, out)
         return 0
     }
     var fixed = font.Fixed.init()
-    var tree = try layout.layoutDocument(alloc, doc, &styles, &mut fixed, media.width, media.height)
+    var tree = try layout.layoutDocumentWith(alloc, doc, &styles, &images.nodes, &mut fixed, media.width, media.height)
     defer tree.deinit()
     try layout.dumpTree(&tree, out)
     return 0

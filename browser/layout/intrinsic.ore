@@ -26,8 +26,14 @@ fn intrinsic(t: *mut Tree, i: usize) AllocError!MinMax {
     var r = MinMax { min: 0.0, max: 0.0 }
     let kind = t.bx(i).kind
     if kind == BoxKind.Image {
-        let w = attrPx(t, i, "width")
+        var vedges = 0.0
+        for side in [2]usize{0, 2} {
+            vedges += lengthOr0(style[css.PADDING_TOP + side], -1.0) + lengthOr0(style[css.BORDER_TOP_WIDTH + side], -1.0)
+        }
+        let w = replacedDims(t, i, -1.0, -1.0, edges, vedges).w - edges
         r = MinMax { min: w, max: w }
+    } else if controlContentWidth(t, i) |cw| {
+        r = MinMax { min: cw, max: cw }
     } else if kind == BoxKind.Table {
         r = try tableIntrinsic(t, i)
     } else if kind == BoxKind.Flex {

@@ -6,8 +6,11 @@
 // - sheets.ore: the author style sheet of a document.
 // - tab.ore: `Tab`: the current page, its scroll offset and history.
 // - hit.ore: what is at a point (links), find in page, fragments.
-// - script.ore (and dom_api, window_api, markup, prelude, activate): the
+// - script.ore (and dom_api, window_api, markup, prelude): the
 //   page's JavaScript and its event loop.
+// - images.ore: fetching and decoding the images of a page.
+// - forms.ore: default actions (links, buttons, checkboxes, labels),
+//   focus, form submission.
 //
 // A `Page` is allocated on the heap and never moves, because its layout
 // tree points at its document and styles.
@@ -56,6 +59,8 @@ pub struct Page {
     tree: ?*mut layout.Tree
     // The page's JavaScript (null when scripts are off).
     script: ?*mut Script
+    // The decoded images (images.ore), from the first layout on.
+    images: ?*mut ImageCache
 
     /// Frees the page and everything in it.
     pub fn destroy(self: *mut Self) {
@@ -65,6 +70,10 @@ pub struct Page {
         }
         self.dropTree()
         self.dropStyling()
+        if self.images |imgs| {
+            imgs.deinit()
+            alloc.destroy(imgs)
+        }
         self.doc.deinit()
         alloc.free(self.title)
         self.url.deinit(alloc)
@@ -105,8 +114,13 @@ pub struct Page {
             self.dropStyling()
             self.styling = try self.styleFor(css.Media { width: width, height: height })
         }
+        try updateImages(self)
         if self.styling |st| {
-            let tree = try layout.layoutDocument(self.alloc, &self.doc, &st.styles, measure, width, height)
+            var nodes: ?*layout.Images = null
+            if self.images |imgs| {
+                nodes = &imgs.nodes
+            }
+            let tree = try layout.layoutDocumentWith(self.alloc, &self.doc, &st.styles, nodes, measure, width, height)
             self.tree = self.alloc.create(tree) catch |e| {
                 var lost = tree
                 lost.deinit()
@@ -152,7 +166,12 @@ pub struct Page {
 /// Loads `target`: fetches it, decodes and parses the document. A fetch
 /// that fails gives an error page saying why. Free with `destroy`.
 pub fn load(alloc: Allocator, target: *Url) AllocError!*mut Page {
-    let res = net.fetch(alloc, target) catch |e| {
+    return loadWith(alloc, target, null)
+}
+
+/// `load`, by POST with `body` when there is one (a form submission).
+pub fn loadWith(alloc: Allocator, target: *Url, body: ?*net.Body) AllocError!*mut Page {
+    let res = net.fetchWith(alloc, target, body) catch |e| {
         match e {
             .OutOfMemory => {
                 return AllocError.OutOfMemory
@@ -203,6 +222,7 @@ fn newPage(alloc: Allocator, located: Url, status: i64, failure: []u8, doc: Docu
         styling: null,
         tree: null,
         script: null,
+        images: null,
     })
 }
 

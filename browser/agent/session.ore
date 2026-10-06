@@ -2,7 +2,9 @@
 //
 // - session.ore: a `Session`: a tab (engine.Tab: the page shown and its
 //   history) and what the agent keeps about the page: where its nodes
-//   are (laid out with the fixed-metric font), their refs, the focus.
+//   are (laid out with the fixed-metric font) and their refs. The focus
+//   and the state of form controls are the page's (`doc.controls`), as
+//   in the window.
 // - a11y.ore: the accessibility tree (`snapshot`) with refs `e1, e2, ...`.
 // - markdown.ore: the main content as Markdown (`read`).
 // - actions.ore: navigate, back, forward, reload, click, type, select,
@@ -54,9 +56,8 @@ pub struct Session {
     // The number of the next ref: refs are unique in a session, so a ref
     // of an old page is never taken for another node.
     next_ref: u32
-    focused: ?NodeId
     // Owned descriptions of clicks, key presses and submissions that
-    // forms and scripts will handle once they exist.
+    // scripts will see once they run.
     events: List([]u8)
 }
 
@@ -71,7 +72,6 @@ fn newSession(alloc: Allocator, width: f64, height: f64) Session {
         refs: List(NodeId).init(alloc),
         ref_of: IntMap(u32, u32).init(alloc),
         next_ref: 1,
-        focused: null,
         events: List([]u8).init(alloc),
     }
 }
@@ -95,14 +95,13 @@ fn recordEvent(s: *mut Session, what: []u8) AllocError!void {
 
 // ---- the page shown
 
-/// After the tab shows a new document: forgets the refs and the focus
-/// of the old one, lays it out and scrolls where the tab wants.
+/// After the tab shows a new document: forgets the refs of the old one,
+/// lays it out and scrolls where the tab wants.
 fn newDocument(s: *mut Session) AllocError!void {
     s.refs.clear()
     s.ref_of.deinit()
     s.ref_of = IntMap(u32, u32).init(s.alloc)
     s.ref_base = s.next_ref
-    s.focused = null
     try relayout(s)
     s.tab.settle(maxScroll(s))
 }

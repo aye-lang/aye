@@ -71,6 +71,8 @@ pub struct Document {
     // it hands out stays valid when the document is moved.
     strings: *mut Arena
     root: NodeId
+    // The state of form controls and the focus (controls.ore).
+    controls: Controls
 
     /// An empty document: only the `Document` node.
     pub fn init(alloc: Allocator) AllocError!Document {
@@ -80,10 +82,11 @@ pub struct Document {
             alloc.destroy(strings)
             return e
         }
-        return Document { alloc: alloc, nodes: nodes, strings: strings, root: root }
+        return Document { alloc: alloc, nodes: nodes, strings: strings, root: root, controls: Controls.init(alloc) }
     }
 
     pub fn deinit(self: *mut Self) {
+        self.controls.deinit()
         self.strings.deinit()
         self.alloc.destroy(self.strings)
         self.nodes.deinit()

@@ -110,6 +110,9 @@ pub enum NavKind {
     To
     History
     Reload
+    // Submit `form` (form.submit(), or a submit event no script
+    // canceled): engine.submitForm, without firing submit again.
+    Submit
 }
 
 pub struct Navigation {
@@ -119,6 +122,8 @@ pub struct Navigation {
     href: []u8
     // History: -1 back, 1 forward.
     step: i64
+    form: ?NodeId
+    submitter: ?NodeId
 }
 
 /// The JavaScript of a page. On the heap, never moved: the engine's host
@@ -153,14 +158,12 @@ pub struct Script {
     nav_kind: NavKind
     nav_href: []mut u8
     nav_step: i64
+    nav_form: ?NodeId
+    nav_submitter: ?NodeId
     // Counts changes to the document by scripts (styles and layout are
     // out of date when it moved).
     version: u64
     title_version: u64
-    focus: ?NodeId
-    // A script moved the focus (focus(), blur()) since the browser last
-    // asked (scriptMovedFocus).
-    focus_moved: bool
     // document.readyState: 0 loading, 1 interactive, 2 complete.
     ready: u8
     current: ?NodeId
@@ -270,10 +273,10 @@ fn createScript(p: *mut Page) AllocError!*mut Script {
         nav_kind: NavKind.None,
         nav_href: try alloc.alloc(0 as u8, 0),
         nav_step: 0,
+        nav_form: null,
+        nav_submitter: null,
         version: 0,
         title_version: 0,
-        focus: null,
-        focus_moved: false,
         ready: 0,
         current: null,
         width: 800.0,
@@ -821,41 +824,28 @@ pub fn evalInPage(p: *mut Page, src: []u8, out: *mut text.Builder) AllocError!bo
 /// location.reload()), once: the next call says None.
 pub fn takeNavigation(p: *mut Page) Navigation {
     if p.script |s| {
-        let n = Navigation { kind: s.nav_kind, href: s.nav_href, step: s.nav_step }
+        var n = Navigation { kind: s.nav_kind, href: s.nav_href, step: s.nav_step, form: s.nav_form, submitter: s.nav_submitter }
+        if n.kind == NavKind.Submit {
+            if n.form |f| {
+                if !p.doc.isLive(f) {
+                    n.kind = NavKind.None
+                }
+            }
+        }
         s.nav_kind = NavKind.None
         return n
     }
-    return Navigation { kind: NavKind.None, href: "", step: 0 }
+    return Navigation { kind: NavKind.None, href: "", step: 0, form: null, submitter: null }
 }
 
-/// The element scripts focused (focus()), if it is still there.
+/// The focused element (doc.controls.focus), if it is still there.
 pub fn scriptFocus(p: *mut Page) ?NodeId {
-    if p.script |s| {
-        if s.focus |f| {
-            if p.doc.isLive(f) {
-                return f
-            }
+    if p.doc.controls.focus |f| {
+        if p.doc.isLive(f) {
+            return f
         }
     }
     return null
-}
-
-/// Did a script move the focus (focus(), blur()) since the last call?
-/// Then `scriptFocus` is where it is now.
-pub fn scriptMovedFocus(p: *mut Page) bool {
-    if p.script |s| {
-        let moved = s.focus_moved
-        s.focus_moved = false
-        return moved
-    }
-    return false
-}
-
-/// Tells the scripts which element has the focus (document.activeElement).
-pub fn setScriptFocus(p: *mut Page, el: ?NodeId) {
-    if p.script |s| {
-        s.focus = el
-    }
 }
 
 /// Moves the console messages (oldest first) into `out`, as copies in

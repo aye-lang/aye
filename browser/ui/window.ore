@@ -5,6 +5,7 @@
 // - chrome.ore: the toolbar (back, forward, reload, address bar), the
 //   status line and the find bar.
 // - field.ore: one-line text fields.
+// - forms.ore: the page's forms: focus, editing, dropdowns, submission.
 // - script.ore: scripted input and state for headless tests.
 // - sdl.ore: SDL2 declarations.
 //
@@ -147,7 +148,8 @@ fn withFonts(alloc: Allocator, o: UiOptions, measure: dyn font.Measurer, system:
     defer first.deinit(alloc)
     engine.setScripting(o.js)
     engine.setRealClock(true)
-    engine.setConsoleEcho(true)
+    // The console goes to stderr, except in headless test runs (--frames).
+    engine.setConsoleEcho(o.frames == 0)
     if SDL_Init(SDL_INIT_VIDEO) != 0 {
         sdlError("cannot start SDL")
         return 1
@@ -248,6 +250,8 @@ pub struct Ui {
     // line; empty for none.
     hover: text.Builder
     hand: bool
+    // The options of a `select`, open over the page.
+    dropdown: ?Dropdown
     arrow_cursor: ?*mut SDL_Cursor
     hand_cursor: ?*mut SDL_Cursor
     ibeam_cursor: ?*mut SDL_Cursor
@@ -283,6 +287,7 @@ pub struct Ui {
             current: 0,
             hover: text.Builder.init(alloc),
             hand: false,
+            dropdown: null,
             arrow_cursor: SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW),
             hand_cursor: SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND),
             ibeam_cursor: SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM),
@@ -481,6 +486,7 @@ pub struct Ui {
     // After the tab moved: lay out a new page, scroll where the tab
     // wants, and show the URL and title.
     fn navigated(self: *mut Self, loaded: bool) AllocError!void {
+        self.dropdown = null
         if loaded {
             try self.relayout()
         }
@@ -521,20 +527,6 @@ pub struct Ui {
         defer target.deinit(self.alloc)
         self.focus = Focus.Page
         try self.go(&target)
-    }
-
-    // Follows the link `href` of the current page.
-    fn follow(self: *mut Self, href: []u8) AllocError!void {
-        if self.tab.page |p| {
-            let target = url.resolve(self.alloc, &p.url, text.trim(href)) catch |e| {
-                return
-            }
-            defer target.deinit(self.alloc)
-            if text.eql(target.scheme, "javascript") || text.eql(target.scheme, "mailto") {
-                return
-            }
-            try self.go(&target)
-        }
     }
 
     fn back(self: *mut Self) AllocError!void {
@@ -687,6 +679,20 @@ pub struct Ui {
         self.swallow = false
         let cmd = (mods & (KMOD_GUI | KMOD_CTRL)) != 0
         let shift = (mods & KMOD_SHIFT) != 0
+        if self.focus == Focus.Page && !cmd && self.dropdown == null {
+            // keydown goes to the page's scripts first; canceling it
+            // skips what the key would do (and its text).
+            if !(try self.keyScripts(sym, shift)) {
+                self.swallow = true
+                return self.afterScripts()
+            }
+            try self.afterScripts()
+        }
+        if self.focus == Focus.Page && !(cmd && sym == 'l') && !(cmd && sym == 'f') {
+            if try pageKey(self, sym, mods) {
+                return self.afterScripts()
+            }
+        }
         if cmd {
             self.swallow = true
             if sym == 'q' {
@@ -730,10 +736,6 @@ pub struct Ui {
             return
         }
         if self.focus == Focus.Page {
-            if !(try self.keyScripts(sym, shift)) {
-                return self.afterScripts()
-            }
-            try self.afterScripts()
             let view = self.viewHeight()
             if sym == SDLK_DOWN {
                 self.scrollBy(LINE_STEP)
@@ -794,7 +796,11 @@ pub struct Ui {
     }
 
     fn typed(self: *mut Self, s: []u8) AllocError!void {
-        if self.swallow || self.focus == Focus.Page || s.len == 0 {
+        if self.swallow || s.len == 0 {
+            return
+        }
+        if self.focus == Focus.Page {
+            try pageText(self, s)
             return
         }
         try self.field().insert(s)
@@ -825,7 +831,7 @@ pub struct Ui {
             }
             return self.setLink(link.href)
         }
-        try self.clearHover(false)
+        try self.clearHover(overTextField(self, x, y))
     }
 
     fn setLink(self: *mut Self, href: []u8) AllocError!void {
@@ -901,14 +907,7 @@ pub struct Ui {
         if !(try self.clickScripts(x, y)) {
             return self.afterScripts()
         }
-        if self.linkAt(x, y) |link| {
-            // The href is in the page's document, which `follow` may free.
-            var b = text.Builder.init(self.alloc)
-            defer b.deinit()
-            try b.append(link.href)
-            try self.follow(b.bytes())
-            return
-        }
+        try clickPage(self, x, y)
         try self.afterScripts()
     }
 
@@ -920,7 +919,7 @@ pub struct Ui {
     // the new layout.
     fn clickScripts(self: *mut Self, x: f64, y: f64) AllocError!bool {
         let p = self.tab.page orelse return true
-        if !engine.hasScripts(p) {
+        if !engine.hasScripts(p) || self.dropdown != null {
             return true
         }
         let t = p.tree orelse return true
@@ -980,10 +979,12 @@ pub struct Ui {
         let nav = engine.takeNavigation(p)
         match nav.kind {
             .To => {
-                var b = text.Builder.init(self.alloc)
-                defer b.deinit()
-                try b.append(nav.href)
-                return self.follow(b.bytes())
+                // The URL is the page's, which going elsewhere frees.
+                let target = url.parse(self.alloc, nav.href) catch |e| {
+                    return
+                }
+                defer target.deinit(self.alloc)
+                return self.go(&target)
             }
             .History => {
                 if nav.step < 0 {
@@ -993,6 +994,11 @@ pub struct Ui {
             }
             .Reload => {
                 return self.reload()
+            }
+            .Submit => {
+                if nav.form |f| {
+                    return submitNow(self, f, nav.submitter)
+                }
             }
             .None => {}
         }
@@ -1015,6 +1021,7 @@ pub struct Ui {
         if self.list |l| {
             self.canvas.fillRect(paint.deviceRect(content, flat), l.background)
             try paint.render(&l, &mut self.canvas, v, &mut self.painter)
+            try drawPageState(self, v)
         } else {
             self.canvas.fillRect(paint.deviceRect(content, flat), paint.Rgba { r: 255, g: 255, b: 255, a: 255 })
         }

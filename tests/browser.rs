@@ -189,7 +189,7 @@ fn layout_system_font() {
 
 #[test]
 fn ore_unit_tests() {
-    for module in ["browser", "browser/url", "browser/dom", "browser/encoding", "browser/font", "browser/js"] {
+    for module in ["browser", "browser/url", "browser/dom", "browser/encoding", "browser/font", "browser/js", "browser/image"] {
         let out = ore().arg("test").arg(module).output().unwrap();
         let stdout = text(&out.stdout);
         assert!(
@@ -489,8 +489,9 @@ fn window_events() {
         ("key:down wheel:-1", "url long.html\nscroll 80\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus \n"),
         ("key:end key:pageup key:space key:up", "url long.html\nscroll 920\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus \n"),
         ("key:end key:home wheel:3", "url long.html\nscroll 0\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus \n"),
-        // A link to a fragment scrolls to its element (y 958).
-        ("click:30,58", "url long.html#end\nscroll 958\nfocus page\naddress long.html#end\nhistory 2 of 2\nmatches 0\nstatus \n"),
+        // A link to a fragment scrolls to its element (y 958); the link
+        // keeps the focus.
+        ("click:30,58", "url long.html#end\nscroll 958\nfocus page\naddress long.html#end\nhistory 2 of 2\nmatches 0\nstatus \nelement a\n"),
         // Back and forward restore scroll offsets.
         ("key:pagedown key:home click:30,58 key:cmd+[ key:cmd+]", "url long.html#end\nscroll 958\nfocus page\naddress long.html#end\nhistory 2 of 2\nmatches 0\nstatus \n"),
         ("click:130,58 key:cmd+[", "url long.html\nscroll 0\nfocus page\naddress long.html\nhistory 1 of 2\nmatches 0\nstatus \n"),
@@ -512,6 +513,66 @@ fn window_events() {
     let mut failures = Vec::new();
     for (events, want) in cases {
         let out = run_window(&["browser/tests/ui/long.html", "--font", "fixed", "--width", "400", "--height", "340", "--frames", "1", "--state", "--events", events]);
+        let got = text(&out.stdout).replace(&ui, "");
+        if !out.status.success() || !out.stderr.is_empty() || got != *want {
+            failures.push(format!("--events {events:?}: {}\n{}--- expected\n{want}--- got\n{got}", out.status, text(&out.stderr)));
+        }
+    }
+    assert!(failures.is_empty(), "{} of {} scripts failed:\n\n{}", failures.len(), cases.len(), failures.join("\n"));
+}
+
+/// Forms in the window (`browser/tests/ui/form.html`, 400x340): clicks
+/// and Tab focus controls, typing edits a field, Enter submits (by GET
+/// to `result.html`), Space toggles a checkbox, a select opens a
+/// dropdown and takes arrow keys, labels and reset buttons work, the
+/// clipboard copies and pastes. `--state` shows the focused element and
+/// its value.
+#[test]
+fn window_forms() {
+    if !has_sdl() {
+        println!("skipped: no SDL2");
+        return;
+    }
+    let ui = format!("file://{}/browser/tests/ui/", root().display());
+    let state = |url: &str, rest: &str| format!("url {url}\nscroll 0\nfocus page\naddress {url}\nhistory {}\nmatches 0\nstatus \n{rest}", if url == "form.html" { "1 of 1" } else { "2 of 2" });
+    // The query field is at (60, 60), the Go button at (170, 60), the
+    // label "All" at (45, 95), the select at (40, 125), the textarea at
+    // (50, 165), the reset button at (30, 205), the link at (80, 205).
+    let cases: Vec<(&str, String)> = vec![
+        ("click:60,60 key:end text:_there key:return", state("result.html?q=hi+there&go=1&lang=en&note=&tags=b", "")),
+        ("click:60,60 text:!", state("form.html", "element input name=q\nvalue hi!\n")),
+        ("click:60,60 key:backspace key:left text:_ key:delete key:home text:o", state("form.html", "element input name=q\nvalue o \n")),
+        ("click:60,60 key:shift+home text:yo", state("form.html", "element input name=q\nvalue yo\n")),
+        (
+            "key:tab key:tab key:tab key:space key:tab key:down key:down key:tab text:a key:return text:b",
+            state("form.html", "element textarea name=note\nvalue a\nb\n"),
+        ),
+        (
+            "key:tab key:tab key:tab key:space key:tab key:down key:down key:tab text:a key:return text:b click:170,60",
+            state("result.html?q=hi&go=1&all=yes&lang=ja&note=a%0D%0Ab&tags=b", ""),
+        ),
+        ("click:45,95 click:170,60", state("result.html?q=hi&go=1&all=yes&lang=en&note=&tags=b", "")),
+        ("click:40,125 click:40,170", state("form.html", "element select name=lang\nvalue fr\n")),
+        // The disabled option is skipped by Enter (it stays on English)...
+        ("click:40,125 key:down key:down key:return", state("form.html", "element select name=lang\nvalue en\n")),
+        ("click:40,125 key:down key:down key:down key:return", state("form.html", "element select name=lang\nvalue ja\n")),
+        // ...and by the arrow keys on the closed select.
+        ("click:40,125 key:escape key:down key:down", state("form.html", "element select name=lang\nvalue ja\n")),
+        ("click:40,125 key:escape click:170,60", state("result.html?q=hi&go=1&lang=en&note=&tags=b", "")),
+        ("click:60,60 text:xyz click:30,205 click:170,60", state("result.html?q=hi&go=1&lang=en&note=&tags=b", "")),
+        ("click:60,60 key:cmd+a key:cmd+c key:end key:cmd+v", state("form.html", "element input name=q\nvalue hihi\n")),
+        ("click:60,60 key:left key:shift+left key:cmd+x key:end key:cmd+v", state("form.html", "element input name=q\nvalue ih\n")),
+        ("click:60,60 key:escape", state("form.html", "")),
+        ("click:60,60 click:300,300", state("form.html", "")),
+        ("key:shift+tab key:shift+tab key:return", state("other.html", "")),
+        // The list box (rows a, b, c at y 240, 257, 273): a click toggles
+        // an option of a `multiple` select.
+        ("click:20,273 click:20,240 click:170,60", state("result.html?q=hi&go=1&lang=en&note=&tags=a&tags=b&tags=c", "")),
+        ("click:20,257 click:20,273", state("form.html", "element select name=tags\nvalue c\n")),
+    ];
+    let mut failures = Vec::new();
+    for (events, want) in &cases {
+        let out = run_window(&["browser/tests/ui/form.html", "--font", "fixed", "--width", "400", "--height", "340", "--frames", "1", "--state", "--events", events]);
         let got = text(&out.stdout).replace(&ui, "");
         if !out.status.success() || !out.stderr.is_empty() || got != *want {
             failures.push(format!("--events {events:?}: {}\n{}--- expected\n{want}--- got\n{got}", out.status, text(&out.stderr)));
@@ -659,6 +720,50 @@ fn agent_http() {
     assert!(lines[0].contains("\"title\":\"Site home\""), "{got}");
     assert!(lines[1].contains(&format!("\"url\":\"{base}/agent/site/docs.html\"")), "{got}");
     assert!(lines[1].contains("heading \\\"Documentation\\\" [level=1] [e10]"), "{got}");
+}
+
+/// Form submission over HTTP: `browser/tests/agent/http/X.jsonl` (with
+/// `$BASE` for the test server's address) fed to `anyknown agent` must
+/// print `X.out`. The forms in `browser/tests/forms/` submit to the
+/// server's `/echo`, whose page shows the request (method, path,
+/// Content-Type, fields, raw body).
+#[test]
+fn agent_forms_http() {
+    use std::io::Write;
+    let Some(srv) = server() else {
+        println!("skipped: cannot start python3 for the test server");
+        return;
+    };
+    let dir = root().join("browser").join("tests").join("agent").join("http");
+    let mut inputs: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        .collect();
+    inputs.sort();
+    assert!(inputs.len() >= 2, "expected at least 2 HTTP sessions, found {}", inputs.len());
+    let mut failures = Vec::new();
+    for input in &inputs {
+        let name = input.file_name().unwrap().to_string_lossy().into_owned();
+        let mut child = Command::new(anyknown())
+            .current_dir(root())
+            .arg("agent")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let requests = std::fs::read_to_string(input).unwrap().replace("$BASE", &srv.base);
+        child.stdin.take().unwrap().write_all(requests.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        if !out.status.success() || !out.stderr.is_empty() {
+            failures.push(format!("{name}: {}\n{}", out.status, text(&out.stderr)));
+            continue;
+        }
+        let got = rooted(&text(&out.stdout)).replace(&srv.base, "$BASE");
+        check_golden(&input.with_extension("out"), &got, &name, &mut failures);
+    }
+    assert!(failures.is_empty(), "{} of {} HTTP sessions failed:\n\n{}", failures.len(), inputs.len(), failures.join("\n"));
 }
 
 /// One JS conformance script: None when it passes, else what went wrong.

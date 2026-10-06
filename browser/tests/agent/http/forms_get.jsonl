@@ -1,0 +1,14 @@
+{"id":1,"cmd":"navigate","url":"$BASE/forms/get.html"}
+{"id":2,"cmd":"type","ref":"e1","text":"anyknown browser"}
+{"id":3,"cmd":"type","ref":"e2","text":"s3cr&t"}
+{"id":4,"cmd":"click","ref":"e3"}
+{"id":5,"cmd":"click","ref":"e4"}
+{"id":6,"cmd":"click","ref":"e6"}
+{"id":7,"cmd":"select","ref":"e7","option":"French"}
+{"id":8,"cmd":"select","ref":"e8","option":"b"}
+{"id":9,"cmd":"type","ref":"e9","text":"line 1\nline 2 é"}
+{"id":10,"cmd":"click","ref":"e13"}
+{"id":11,"cmd":"read"}
+{"id":12,"cmd":"back"}
+{"id":13,"cmd":"type","ref":"e16","text":"enter","submit":true}
+{"id":14,"cmd":"read"}

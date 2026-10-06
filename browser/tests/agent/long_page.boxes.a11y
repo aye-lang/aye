@@ -6,11 +6,11 @@
   - paragraph [box=8,482.88,784,200]: Filler two.
   - heading "Middle" [level=2] [e3] [box=8,702.8,784,30] [offscreen]
   - paragraph [box=8,752.72,784,200]
-    - button "Below the fold" [e4] [box=8,752.72,112,20] [offscreen]
+    - button "Below the fold" [e4] [box=8,753.19,107.33,20.67] [offscreen]
   - paragraph [box=8,952.72,784,200]: Filler three, with the word needle.
   - paragraph [box=8,1152.72,784,200]: Filler four.
   - heading "Bottom" [level=2] [e5] [box=8,1372.64,784,30] [offscreen]
   - paragraph [box=8,1422.56,784,200]
     - link "Back to top" [e6] -> #top [box=8,1424.56,88,16] [offscreen]
-    - textbox "Last field" [e7] [box=104,1437.36,0,0] [offscreen]
+    - textbox "Last field" [e7] [box=104,1423.03,139.33,20.67] [offscreen]
     - text: One more needle.
