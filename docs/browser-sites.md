@@ -47,6 +47,7 @@ page's content is not available.
 | ZOL (GBK) | https://www.zol.com.cn/ | ⚠️ | 16-20 s | 0 | GBK decoded: Chinese text, images, logos and the product grid render. The right edge is cut off (search box, nav, a column past 1024 px). Slowest site by far (16.3 s and 20.2 s in two runs). |
 | YouTube | https://www.youtube.com/ | ❌ | 5.0 s | 0 | Only the grey loading skeleton; Markdown is empty. No script error is logged any more, but the app still does not render its feed. |
 | react.dev | https://react.dev/ | ✅ | 3.6 s | 0 | Renders well: logo, search box, hero, buttons. Markdown code blocks keep their line breaks. |
+| Mistral blog (Tailwind 4, Astro) | https://mistral.ai/news/mistral-large-4/ | ⚠️ | 13 s | 2 | Added 2026-10-07 at `ddaada2`. Looks like Chrome in its light scheme: Inter text, nav with the black Login button, a viewport-high dark hero with white "Back to Blog"/"Share this post" pills and "14 MIN READ", the article with its sticky model card. The hero title stays hidden (its three.js scene needs WebGL; both errors are the expected `getContext('webgl')` null). The embedded widgets (iframes) are broken: the CTF chart's rows overlap and the frames stay short (layout queries return 0), and the visual-intelligence viewers log 9 `setTransform` errors in a long `dump` (no 2D canvas). Markdown is complete. Load time varies with the network (6.5-16 s). |
 
 **Totals:** 14 ✅, 3 ⚠️, 3 ❌ (20 sites). Previous run (2026-10-06,
 `d1c8800`): 8 ✅, 7 ⚠️, 5 ❌. No crash and no timeout; the slowest run
@@ -55,6 +56,13 @@ was 20 s (ZOL), the others under 6 s. No site logs a JS error.
 Changes: ⚠️ to ✅ (MDN, go.dev, Google, Wikipedia ja, react.dev); ❌ to
 ✅ (阿部寛); ❌ to ⚠️ (ZOL). All other sites keep their status (GitHub and
 BBC stay ⚠️; Reddit, Stack Overflow and YouTube stay ❌).
+
+The Mistral blog was added after this run (the totals above do not count
+it). Before its fixes it logged `getAnimations`, `addEventListener` and
+`URL` errors and drew a serif, unstyled page: Tailwind 4's theme
+(`:root,:host`), its `oklch()` palette, `100dvh` heroes and
+`text-transform` were not supported, and stretched flex items were not
+laid out at their stretched height.
 
 ## Top failure causes
 
