@@ -164,7 +164,7 @@ fn arrayFrom(it: *mut Interp, a: Args) JsError!Value {
     let out = try it.newArray(0)
     try it.push(objVal(out))
     var items = NONE
-    if isStr(src) || it.hasClass(src, Class.Iterator) || it.hasClass(src, Class.Array) || it.hasClass(src, Class.Arguments) || it.hasClass(src, Class.Map) || it.hasClass(src, Class.Set) {
+    if try it.isIterable(src) {
         items = try it.iterToArray(src)
         try it.push(objVal(items))
     } else {

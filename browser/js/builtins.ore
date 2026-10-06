@@ -39,6 +39,8 @@ pub fn installBuiltins(it: *mut Interp) JsError!void {
 
     try installObject(it)
     try installFunction(it)
+    try installSymbol(it)
+    try installGlobalExtras(it)
     try installBoolean(it)
     try installErrors(it)
     try installConsole(it)
@@ -49,6 +51,8 @@ pub fn installBuiltins(it: *mut Interp) JsError!void {
     try installJson(it)
     try installMisc(it)
     try it.defineNative(it.iterator_proto, "next", 0, iteratorNext)
+    try installIteratorMethods(it)
+    try it.runScript(LIB)
 }
 
 /// Turns a new array into an iterator over its elements.
@@ -760,10 +764,6 @@ fn installFunction(it: *mut Interp) JsError!void {
     try it.defineNative(p, "apply", 2, functionApply)
     try it.defineNative(p, "bind", 1, functionBind)
     try it.defineNative(p, "toString", 0, functionToString)
-}
-
-fn functionCtor(it: *mut Interp, a: Args) JsError!Value {
-    return it.throwError(it.eval_error_proto, "Code generation from strings is not supported")
 }
 
 fn functionCall(it: *mut Interp, a: Args) JsError!Value {

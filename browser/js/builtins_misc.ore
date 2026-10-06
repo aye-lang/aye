@@ -45,6 +45,7 @@ fn installMisc(it: *mut Interp) JsError!void {
     try it.defineNative(dp, "getMilliseconds", 0, dateGetMilliseconds)
     try it.defineNative(dp, "getUTCMilliseconds", 0, dateGetMilliseconds)
     try it.defineNative(dp, "getTimezoneOffset", 0, dateGetTimezoneOffset)
+    try it.defineNative(dp, "setTime", 1, dateSetTime)
 
     let mc = try makeConstructor(it, "Map", 0, mapCtor, it.map_proto)
     let mp = it.map_proto
@@ -464,6 +465,19 @@ fn dateGetSeconds(it: *mut Interp, a: Args) JsError!Value {
 
 fn dateGetMilliseconds(it: *mut Interp, a: Args) JsError!Value {
     return dateField(it, a, 7)
+}
+
+// setTime(t); the other setters are JavaScript (lib.ore).
+fn dateSetTime(it: *mut Interp, a: Args) JsError!Value {
+    try thisTime(it, a)
+    var t = try it.toNumber(it.arg(a, 0))
+    if t != t || t > 8.64e15 || t < -8.64e15 {
+        t = 0.0 / 0.0
+    } else {
+        t = trunc(t)
+    }
+    it.heap.obj(objectOf(a.this)).data = ObjData.Prim { v: numVal(t) }
+    return numVal(t)
 }
 
 fn dateGetTimezoneOffset(it: *mut Interp, a: Args) JsError!Value {

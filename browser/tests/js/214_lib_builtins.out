@@ -1,0 +1,30 @@
+1 false true
+TypeError Invalid value used as weak map key
+true
+2 true 3
+5
+[ 4, 5, 3, 4, 5 ] [ 1, 1, 2, 3, 5 ]
+a1b2c
+2020-03-02T10:20:30.000Z
+2021-06-15T10:20:30.000Z
+2021-06-15T23:59:30.000Z
+2021-05-31T23:59:30.000Z
+Mon, 31 May 2021 23:59:30 GMT | Mon May 31 2021
+3 1 0 255 true 1
+[ 0, 0, 0 ]
+a%20b%26c%2F%C3%A9 http://x.y/a%20b?q=1&r=%C3%A9#h € x %23 
+URIError URI malformed
+a%20b+%E9 é 
+42 5 3 42
+function
+2
+42 false true
+héllo false true
+true false true true
+1,234,567.891 25%
+1,234.5 one a, b, and c
+{
+  a: { value: 1, writable: true, enumerable: true, configurable: true }
+}
+[ 1 ] string
+true 100002

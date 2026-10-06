@@ -66,6 +66,9 @@ pub fn objectTypeName(c: Class) []u8 {
     if c == Class.Function {
         return "function"
     }
+    if c == Class.Symbol {
+        return "symbol"
+    }
     return "object"
 }
 

@@ -163,6 +163,16 @@ pub struct Interp {
     deadline_ms: u64
     budget_ms: u64
     terminated: bool
+    // Symbols (symbol.ore): by key atom, and Symbol.for's by key.
+    symbol_proto: u32
+    symbol_count: u32
+    symbols: IntMap(u32, u32)
+    symbol_registry: IntMap(u32, u32)
+    sym_iterator: u32
+    sym_async_iterator: u32
+    sym_has_instance: u32
+    sym_to_primitive: u32
+    sym_to_string_tag: u32
 
     pub fn create(alloc: Allocator) JsError!Interp {
         var it = Interp {
@@ -225,6 +235,15 @@ pub struct Interp {
             deadline_ms: 0,
             budget_ms: 0,
             terminated: false,
+            symbol_proto: NONE,
+            symbol_count: 0,
+            symbols: IntMap(u32, u32).init(alloc),
+            symbol_registry: IntMap(u32, u32).init(alloc),
+            sym_iterator: NONE,
+            sym_async_iterator: NONE,
+            sym_has_instance: NONE,
+            sym_to_primitive: NONE,
+            sym_to_string_tag: NONE,
         }
         return it
     }
@@ -262,6 +281,8 @@ pub struct Interp {
         self.key_lists.deinit()
         self.free_key_lists.deinit()
         self.units.deinit()
+        self.symbols.deinit()
+        self.symbol_registry.deinit()
     }
 
     /// An empty scratch builder; give it back with `release`.
@@ -487,6 +508,8 @@ pub struct Interp {
             .Obj { o: oid } => {
                 if self.isCallable(v) {
                     try b.append("function")
+                } else if self.heap.obj(oid).class == Class.Symbol {
+                    try appendSymbolText(self, b, oid)
                 } else if self.heap.obj(oid).class == Class.Array {
                     try b.append("object")
                 } else {
@@ -803,13 +826,17 @@ pub struct Interp {
                 try formatNumber(&mut self.msg, n)
                 return self.intern(self.msg.bytes())
             }
-            _ => {
-                let b = try self.builder()
-                defer self.release(b)
-                try self.appendString(b, k)
-                return self.intern(b.bytes())
+            .Obj { o: oid } => {
+                if self.heap.obj(oid).class == Class.Symbol {
+                    return symbolAtom(self, oid)
+                }
             }
+            _ => {}
         }
+        let b = try self.builder()
+        defer self.release(b)
+        try self.appendString(b, k)
+        return self.intern(b.bytes())
     }
 
     /// v[key] = value.
@@ -1068,10 +1095,21 @@ pub struct Interp {
             if (p.flags & F_ENUM) == 0 && !all {
                 continue
             }
-            if self.heap.atoms.indexOf(p.key) != NONE {
+            if self.heap.atoms.indexOf(p.key) != NONE || isSymbolAtom(self, p.key) {
                 continue
             }
             try out.append(p.key)
+        }
+    }
+
+    /// Appends the symbol keys of o's own properties (as atoms).
+    pub fn ownSymbolKeys(self: *mut Self, o: u32, out: *mut List(u32)) JsError!void {
+        let np = self.heap.obj(o).nprops
+        for i in 0..np {
+            let k = self.heap.obj(o).props[i].key
+            if isSymbolAtom(self, k) {
+                try out.append(k)
+            }
         }
     }
 
@@ -1120,6 +1158,9 @@ pub struct Interp {
         let o = objectOf(v)
         if o == NONE {
             return v
+        }
+        if self.heap.obj(o).class == Class.Symbol {
+            return self.typeError("Cannot convert a Symbol value to a string")
         }
         var first = A_VALUEOF
         var second = A_TOSTRING
@@ -2397,8 +2438,98 @@ pub struct Interp {
             }
             _ => {}
         }
+        if isObject(v) {
+            let base = self.stack.len()
+            defer self.truncate(base)
+            try self.push(v)
+            if try self.openIterator(v) {
+                let a = try self.newArray(0)
+                try self.push(objVal(a))
+                while try self.stepIterator(base + 1) {
+                    try self.heap.pushElem(a, self.slot(self.stack.len() - 1))
+                    self.pop()
+                }
+                return a
+            }
+        }
         try self.notA(v, "iterable")
         return NONE
+    }
+
+    /// Is v an object of a class the engine iterates itself (arrays,
+    /// arguments, Map, Set, the built-in iterators, String objects)?
+    pub fn nativeIterable(self: *Self, v: Value) bool {
+        let o = objectOf(v)
+        if o == NONE {
+            return isStr(v)
+        }
+        let c = self.heap.obj(o).class
+        return c == Class.Array || c == Class.Arguments || c == Class.Map || c == Class.Set || c == Class.Iterator || c == Class.String
+    }
+
+    /// Can v be iterated (a native iterable, or an object with a
+    /// `Symbol.iterator` method)?
+    pub fn isIterable(self: *mut Self, v: Value) JsError!bool {
+        if self.nativeIterable(v) {
+            return true
+        }
+        if !isObject(v) {
+            return false
+        }
+        return self.isCallable(try self.getProp(v, self.sym_iterator))
+    }
+
+    /// Pushes the iterator of v (`v[Symbol.iterator]()`) and its `next`
+    /// method; false (nothing pushed) when v has no iterator method.
+    pub fn openIterator(self: *mut Self, v: Value) JsError!bool {
+        let f = try self.getProp(v, self.sym_iterator)
+        if !self.isCallable(f) {
+            return false
+        }
+        let iter = try self.call0(f, v)
+        if !isObject(iter) {
+            try self.typeError("Result of the Symbol.iterator method is not an object")
+        }
+        try self.push(iter)
+        let next = try self.getProp(iter, A_NEXT)
+        try self.push(next)
+        return true
+    }
+
+    /// The next value of the iterator at stack[at] (its `next` at
+    /// stack[at + 1]): pushes it and returns true, or false when done.
+    pub fn stepIterator(self: *mut Self, at: usize) JsError!bool {
+        let r = try self.call0(self.slot(at + 1), self.slot(at))
+        if !isObject(r) {
+            try self.notA(r, "an iterator result object")
+        }
+        try self.push(r)
+        let done = try self.getProp(r, A_DONE)
+        if self.toBoolean(done) {
+            self.pop()
+            return false
+        }
+        let v = try self.getProp(r, A_VALUE)
+        self.pop()
+        try self.push(v)
+        return true
+    }
+
+    /// Calls `return()` of the iterator at stack[at] (a loop left early);
+    /// a pending exception survives it.
+    pub fn closeIterator(self: *mut Self, at: usize) JsError!void {
+        let ex = self.exception
+        try self.push(ex)
+        let rf = try self.getProp(self.slot(at), try self.intern("return"))
+        if self.isCallable(rf) {
+            if self.call0(rf, self.slot(at)) |r| {
+            } else |e| {
+                if e != JsError.Thrown {
+                    return e
+                }
+            }
+        }
+        self.exception = self.pop()
     }
 
     fn evalTemplate(self: *mut Self, list: u32, n: u32) JsError!Value {
@@ -3128,6 +3259,9 @@ pub struct Interp {
         defer self.env = saved
         let rv = try self.eval(right)
         try self.push(rv)
+        if isOf && isObject(rv) && !self.nativeIterable(rv) {
+            return self.forOfIterator(left, rv, body, nslots, saved, myLabel)
+        }
         if isOf {
             var arr = objectOf(rv)
             if arr == NONE || self.heap.obj(arr).class != Class.Array {
@@ -3192,6 +3326,41 @@ pub struct Interp {
             }
         }
         return Flow.Normal
+    }
+
+    // for-of over an object with a Symbol.iterator method: one `next()`
+    // per iteration; `return()` when the loop ends early.
+    fn forOfIterator(self: *mut Self, left: u32, rv: Value, body: u32, nslots: u32, saved: u32, myLabel: u32) JsError!Flow {
+        let at = self.stack.len()
+        if !try self.openIterator(rv) {
+            try self.notA(rv, "iterable")
+        }
+        while try self.stepIterator(at) {
+            let v = self.pop()
+            try self.push(v)
+            let flow = self.forOfBody(left, v, body, nslots, saved) catch |e| {
+                if e == JsError.Thrown {
+                    try self.closeIterator(at)
+                }
+                return e
+            }
+            self.pop()
+            let c = self.loopControl(flow, myLabel)
+            if c == 1 {
+                try self.closeIterator(at)
+                break
+            }
+            if c == 2 {
+                try self.closeIterator(at)
+                return flow
+            }
+        }
+        return Flow.Normal
+    }
+
+    fn forOfBody(self: *mut Self, left: u32, v: Value, body: u32, nslots: u32, saved: u32) JsError!Flow {
+        try self.bindIteration(left, v, nslots, saved)
+        return self.exec(body)
     }
 
     fn execSwitch(self: *mut Self, disc: u32, list: u32, n: u32, scope: u32) JsError!Flow {

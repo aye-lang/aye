@@ -299,6 +299,9 @@ struct Inspector {
 
     fn object(self: *mut Self, b: *mut text.Builder, o: u32, rtIn: u32) JsError!void {
         let it = self.it
+        if it.heap.obj(o).class == Class.Symbol {
+            return appendSymbolText(it, b, o)
+        }
         for s in self.seen.items() {
             if s == o {
                 self.circular = true

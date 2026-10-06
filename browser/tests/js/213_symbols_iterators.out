@@ -1,0 +1,13 @@
+symbol Symbol(foo) Symbol(foo) foo undefined
+[ 'a' ] 1 {"a":2} true
+true k false
+symbol Symbol(Symbol.iterator)
+[ 0, 1, 2 ] [ 0, 1 ]
+x 0
+x 1
+closed
+3
+{ value: 1, done: false } [ 'a', 'b' ]
+[ 1, 2 ]
+TypeError Cannot convert a Symbol value to a string
+[ 'a' ]

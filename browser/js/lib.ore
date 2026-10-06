@@ -1,0 +1,501 @@
+// js/lib: built-ins written in JavaScript, run by installBuiltins after
+// the native ones: WeakMap and WeakSet (holding their keys strongly),
+// WeakRef, Reflect, typed arrays (arrays of converted numbers; a view of
+// an ArrayBuffer is a copy), DataView, an English-only Intl, Date
+// setters and formats, String.raw, escape/unescape and smaller methods.
+//
+// The source is kept in a multi-line string (no @embedFile, see
+// browser/COMPILER_GAPS.md).
+
+pub let LIB =
+    \\(function () {
+    \\'use strict';
+    \\const G = globalThis;
+    \\function hidden(o, k, v) {
+    \\  Object.defineProperty(o, k, { value: v, writable: true, configurable: true });
+    \\}
+    \\function methods(o, table) {
+    \\  for (const k of Object.keys(table)) hidden(o, k, table[k]);
+    \\}
+    \\
+    \\// ---- weak collections (they hold their keys strongly)
+    \\
+    \\function needObject(k, what) {
+    \\  if (k === null || (typeof k !== 'object' && typeof k !== 'function')) throw new TypeError('Invalid value used ' + what);
+    \\}
+    \\class WeakMap {
+    \\  constructor(entries) {
+    \\    hidden(this, '_m', new Map());
+    \\    if (entries !== undefined && entries !== null) for (const [k, v] of entries) this.set(k, v);
+    \\  }
+    \\  get(k) { return this._m.get(k); }
+    \\  set(k, v) { needObject(k, 'as weak map key'); this._m.set(k, v); return this; }
+    \\  has(k) { return this._m.has(k); }
+    \\  delete(k) { return this._m.delete(k); }
+    \\}
+    \\class WeakSet {
+    \\  constructor(values) {
+    \\    hidden(this, '_s', new Set());
+    \\    if (values !== undefined && values !== null) for (const v of values) this.add(v);
+    \\  }
+    \\  add(v) { needObject(v, 'in weak set'); this._s.add(v); return this; }
+    \\  has(v) { return this._s.has(v); }
+    \\  delete(v) { return this._s.delete(v); }
+    \\}
+    \\class WeakRef {
+    \\  constructor(t) { needObject(t, 'as WeakRef target'); hidden(this, '_t', t); }
+    \\  deref() { return this._t; }
+    \\}
+    \\class FinalizationRegistry {
+    \\  constructor(cb) { if (typeof cb !== 'function') throw new TypeError('FinalizationRegistry: cleanup must be callable'); }
+    \\  register() {}
+    \\  unregister() { return false; }
+    \\}
+    \\for (const c of [WeakMap, WeakSet, WeakRef, FinalizationRegistry]) {
+    \\  hidden(G, c.name, c);
+    \\  Object.defineProperty(c.prototype, Symbol.toStringTag, { value: c.name, configurable: true });
+    \\}
+    \\
+    \\// ---- Object, Array, String, Error additions
+    \\
+    \\methods(Object, {
+    \\  getOwnPropertyDescriptors(o) {
+    \\    const out = {};
+    \\    for (const k of Object.getOwnPropertyNames(o)) out[k] = Object.getOwnPropertyDescriptor(o, k);
+    \\    for (const s of Object.getOwnPropertySymbols(o)) out[s] = Object.getOwnPropertyDescriptor(o, s);
+    \\    return out;
+    \\  },
+    \\  groupBy(items, f) {
+    \\    const out = Object.create(null);
+    \\    let i = 0;
+    \\    for (const x of items) {
+    \\      const k = f(x, i++);
+    \\      (out[k] || (out[k] = [])).push(x);
+    \\    }
+    \\    return out;
+    \\  },
+    \\});
+    \\methods(Map, {
+    \\  groupBy(items, f) {
+    \\    const out = new Map();
+    \\    let i = 0;
+    \\    for (const x of items) {
+    \\      const k = f(x, i++);
+    \\      if (!out.has(k)) out.set(k, []);
+    \\      out.get(k).push(x);
+    \\    }
+    \\    return out;
+    \\  },
+    \\});
+    \\methods(Array.prototype, {
+    \\  copyWithin(target, start, end) {
+    \\    const len = this.length >>> 0;
+    \\    const rel = (x, d) => {
+    \\      x = x === undefined ? d : Math.trunc(Number(x)) || 0;
+    \\      return x < 0 ? Math.max(len + x, 0) : Math.min(x, len);
+    \\    };
+    \\    let to = rel(target, 0), from = rel(start, 0);
+    \\    const last = rel(end, len);
+    \\    let count = Math.min(last - from, len - to);
+    \\    if (from < to && to < from + count) {
+    \\      for (let i = count - 1; i >= 0; i--) {
+    \\        if (from + i in this) this[to + i] = this[from + i];
+    \\        else delete this[to + i];
+    \\      }
+    \\    } else {
+    \\      for (let i = 0; i < count; i++) {
+    \\        if (from + i in this) this[to + i] = this[from + i];
+    \\        else delete this[to + i];
+    \\      }
+    \\    }
+    \\    return this;
+    \\  },
+    \\  toSpliced(...args) {
+    \\    const copy = this.slice();
+    \\    copy.splice(...args);
+    \\    return copy;
+    \\  },
+    \\});
+    \\methods(String, {
+    \\  raw(strings, ...subs) {
+    \\    const raw = Object(strings).raw;
+    \\    if (raw === undefined || raw === null) throw new TypeError('Cannot convert undefined or null to object');
+    \\    const n = raw.length >>> 0;
+    \\    let out = '';
+    \\    for (let i = 0; i < n; i++) {
+    \\      out += String(raw[i]);
+    \\      if (i + 1 < n && i < subs.length) out += String(subs[i]);
+    \\    }
+    \\    return out;
+    \\  },
+    \\});
+    \\methods(String.prototype, {
+    \\  isWellFormed() { return !/[\uD800-\uDFFF]/.test(this); },
+    \\  toWellFormed() { return String(this); },
+    \\  anchor(n) { return '<a name="' + n + '">' + this + '</a>'; },
+    \\});
+    \\methods(Error, {
+    \\  captureStackTrace(o) {
+    \\    if (o !== null && typeof o === 'object') hidden(o, 'stack', String(o.name || 'Error') + ': ' + String(o.message || '') + '\n    at <anonymous>');
+    \\  },
+    \\});
+    \\Error.stackTraceLimit = 10;
+    \\Object.defineProperty(Error.prototype, 'stack', {
+    \\  get() { return String(this.name) + ': ' + String(this.message) + '\n    at <anonymous>'; },
+    \\  set(v) { hidden(this, 'stack', v); },
+    \\  configurable: true,
+    \\});
+    \\class AggregateError extends Error {
+    \\  constructor(errors, message) {
+    \\    super(message === undefined ? '' : message);
+    \\    hidden(this, 'errors', Array.from(errors));
+    \\  }
+    \\}
+    \\hidden(AggregateError.prototype, 'name', 'AggregateError');
+    \\hidden(G, 'AggregateError', AggregateError);
+    \\
+    \\// ---- legacy escape / unescape
+    \\
+    \\hidden(G, 'escape', function escape(s) {
+    \\  s = String(s);
+    \\  let out = '';
+    \\  for (let i = 0; i < s.length; i++) {
+    \\    const c = s.charCodeAt(i);
+    \\    if (/[A-Za-z0-9@*_+\-./]/.test(s[i])) out += s[i];
+    \\    else if (c < 256) out += '%' + (c < 16 ? '0' : '') + c.toString(16).toUpperCase();
+    \\    else out += '%u' + ('000' + c.toString(16).toUpperCase()).slice(-4);
+    \\  }
+    \\  return out;
+    \\});
+    \\hidden(G, 'unescape', function unescape(s) {
+    \\  return String(s).replace(/%u([0-9a-fA-F]{4})|%([0-9a-fA-F]{2})/g, (m, u, b) => String.fromCharCode(parseInt(u || b, 16)));
+    \\});
+    \\
+    \\// ---- Date: setters and more formats (local time is UTC)
+    \\
+    \\const DP = Date.prototype;
+    \\function dateParts(d) {
+    \\  return [d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds(), d.getUTCMilliseconds()];
+    \\}
+    \\function setter(first, count) {
+    \\  return function (...args) {
+    \\    const p = dateParts(this);
+    \\    for (let i = 0; i < count && i < args.length; i++) p[first + i] = Number(args[i]);
+    \\    if (args.length === 0) p[first] = NaN;
+    \\    return this.setTime(Date.UTC(p[0], p[1], p[2], p[3], p[4], p[5], p[6]));
+    \\  };
+    \\}
+    \\const setters = { FullYear: [0, 3], Month: [1, 2], Date: [2, 1], Hours: [3, 4], Minutes: [4, 3], Seconds: [5, 2], Milliseconds: [6, 1] };
+    \\for (const k of Object.keys(setters)) {
+    \\  const f = setter(setters[k][0], setters[k][1]);
+    \\  hidden(DP, 'set' + k, f);
+    \\  hidden(DP, 'setUTC' + k, f);
+    \\}
+    \\const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    \\const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    \\const LONG_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    \\const pad = (n, w) => String(n).padStart(w || 2, '0');
+    \\methods(DP, {
+    \\  getYear() { return this.getFullYear() - 1900; },
+    \\  setYear(y) { return this.setFullYear(y < 100 && y >= 0 ? 1900 + y : y); },
+    \\  toDateString() {
+    \\    if (isNaN(this.getTime())) return 'Invalid Date';
+    \\    return DAYS[this.getDay()] + ' ' + MONTHS[this.getMonth()] + ' ' + pad(this.getDate()) + ' ' + pad(this.getFullYear(), 4);
+    \\  },
+    \\  toTimeString() {
+    \\    if (isNaN(this.getTime())) return 'Invalid Date';
+    \\    return pad(this.getHours()) + ':' + pad(this.getMinutes()) + ':' + pad(this.getSeconds()) + ' GMT+0000 (Coordinated Universal Time)';
+    \\  },
+    \\  toUTCString() {
+    \\    if (isNaN(this.getTime())) return 'Invalid Date';
+    \\    return DAYS[this.getDay()] + ', ' + pad(this.getDate()) + ' ' + MONTHS[this.getMonth()] + ' ' + pad(this.getFullYear(), 4) + ' ' + pad(this.getHours()) + ':' + pad(this.getMinutes()) + ':' + pad(this.getSeconds()) + ' GMT';
+    \\  },
+    \\  toLocaleDateString(locale, opts) {
+    \\    if (isNaN(this.getTime())) return 'Invalid Date';
+    \\    if (opts && (opts.month === 'long' || opts.month === 'short')) {
+    \\      const m = opts.month === 'long' ? LONG_MONTHS[this.getMonth()] : MONTHS[this.getMonth()];
+    \\      return m + ' ' + this.getDate() + ', ' + this.getFullYear();
+    \\    }
+    \\    return (this.getMonth() + 1) + '/' + this.getDate() + '/' + this.getFullYear();
+    \\  },
+    \\  toLocaleTimeString() {
+    \\    if (isNaN(this.getTime())) return 'Invalid Date';
+    \\    const h = this.getHours();
+    \\    return ((h + 11) % 12 + 1) + ':' + pad(this.getMinutes()) + ':' + pad(this.getSeconds()) + (h < 12 ? ' AM' : ' PM');
+    \\  },
+    \\  toLocaleString() {
+    \\    if (isNaN(this.getTime())) return 'Invalid Date';
+    \\    return this.toLocaleDateString() + ', ' + this.toLocaleTimeString();
+    \\  },
+    \\});
+    \\hidden(DP, 'toGMTString', DP.toUTCString);
+    \\hidden(DP, Symbol.toPrimitive, function (hint) {
+    \\  return hint === 'number' ? this.getTime() : this.toString();
+    \\});
+    \\
+    \\// ---- Reflect
+    \\
+    \\const Reflect = {
+    \\  apply(f, t, args) { return Function.prototype.apply.call(f, t, args); },
+    \\  construct(C, args, NT) {
+    \\    if (NT !== undefined && NT !== C) {
+    \\      const o = Object.create(NT.prototype);
+    \\      const r = C.apply(o, args);
+    \\      return r !== null && typeof r === 'object' ? r : o;
+    \\    }
+    \\    return new C(...args);
+    \\  },
+    \\  defineProperty(o, k, d) {
+    \\    try { Object.defineProperty(o, k, d); return true; } catch (e) { return false; }
+    \\  },
+    \\  deleteProperty(o, k) { return delete o[k]; },
+    \\  get(o, k, r) {
+    \\    if (r === undefined || r === o) return o[k];
+    \\    const d = findDescriptor(o, k);
+    \\    if (d && d.get) return d.get.call(r);
+    \\    return o[k];
+    \\  },
+    \\  set(o, k, v, r) {
+    \\    if (r === undefined || r === o) { o[k] = v; return true; }
+    \\    const d = findDescriptor(o, k);
+    \\    if (d && d.set) { d.set.call(r, v); return true; }
+    \\    r[k] = v;
+    \\    return true;
+    \\  },
+    \\  has(o, k) { return k in o; },
+    \\  ownKeys(o) { return [...Object.getOwnPropertyNames(o), ...Object.getOwnPropertySymbols(o)]; },
+    \\  getPrototypeOf(o) { return Object.getPrototypeOf(o); },
+    \\  setPrototypeOf(o, p) {
+    \\    try { Object.setPrototypeOf(o, p); return true; } catch (e) { return false; }
+    \\  },
+    \\  getOwnPropertyDescriptor(o, k) { return Object.getOwnPropertyDescriptor(o, k); },
+    \\  isExtensible(o) { return Object.isExtensible(o); },
+    \\  preventExtensions(o) { Object.preventExtensions(o); return true; },
+    \\};
+    \\function findDescriptor(o, k) {
+    \\  for (let p = o; p !== null && p !== undefined; p = Object.getPrototypeOf(p)) {
+    \\    const d = Object.getOwnPropertyDescriptor(p, k);
+    \\    if (d) return d;
+    \\  }
+    \\  return undefined;
+    \\}
+    \\Object.defineProperty(Reflect, Symbol.toStringTag, { value: 'Reflect', configurable: true });
+    \\hidden(G, 'Reflect', Reflect);
+    \\
+    \\// ---- typed arrays: arrays of numbers converted on creation and `set`
+    \\// (a plain index assignment does not convert); a view over an
+    \\// ArrayBuffer is a copy of its bytes.
+    \\
+    \\class ArrayBuffer {
+    \\  constructor(n) {
+    \\    n = Math.max(0, Math.trunc(Number(n)) || 0);
+    \\    hidden(this, '_bytes', new Array(n).fill(0));
+    \\  }
+    \\  get byteLength() { return this._bytes.length; }
+    \\  slice(b, e) {
+    \\    const r = new ArrayBuffer(0);
+    \\    r._bytes = this._bytes.slice(b, e);
+    \\    return r;
+    \\  }
+    \\  static isView(v) { return v instanceof TypedArray || v instanceof DataView; }
+    \\}
+    \\hidden(G, 'ArrayBuffer', ArrayBuffer);
+    \\const conv = {
+    \\  Int8: x => (x << 24) >> 24,
+    \\  Uint8: x => x & 255,
+    \\  Uint8Clamped: x => { x = Math.round(Number(x)) || 0; return x < 0 ? 0 : x > 255 ? 255 : x; },
+    \\  Int16: x => (x << 16) >> 16,
+    \\  Uint16: x => x & 65535,
+    \\  Int32: x => x | 0,
+    \\  Uint32: x => x >>> 0,
+    \\  Float32: x => Math.fround(Number(x)),
+    \\  Float64: x => Number(x),
+    \\  BigInt64: x => Number(x),
+    \\  BigUint64: x => Number(x),
+    \\};
+    \\const SIZES = { Int8: 1, Uint8: 1, Uint8Clamped: 1, Int16: 2, Uint16: 2, Int32: 4, Uint32: 4, Float32: 4, Float64: 8, BigInt64: 8, BigUint64: 8 };
+    \\class TypedArray extends Array {
+    \\  get buffer() {
+    \\    const b = new ArrayBuffer(0);
+    \\    b._bytes = Array.from(this, x => x & 255);
+    \\    return b;
+    \\  }
+    \\  get byteLength() { return this.length * this.constructor.BYTES_PER_ELEMENT; }
+    \\  get byteOffset() { return 0; }
+    \\  set(src, offset) {
+    \\    offset = offset || 0;
+    \\    const f = this.constructor._conv;
+    \\    for (let i = 0; i < src.length; i++) this[offset + i] = f(src[i]);
+    \\  }
+    \\  subarray(b, e) { return this.slice(b, e); }
+    \\  slice(b, e) { return new this.constructor(Array.prototype.slice.call(this, b, e)); }
+    \\  map(f, t) { return new this.constructor(Array.prototype.map.call(Array.from(this), f, t)); }
+    \\  filter(f, t) { return new this.constructor(Array.prototype.filter.call(Array.from(this), f, t)); }
+    \\  static from(src, f, t) {
+    \\    const a = Array.from(src, f, t);
+    \\    return new this(a);
+    \\  }
+    \\  static of(...xs) { return new this(xs); }
+    \\}
+    \\for (const name of Object.keys(conv)) {
+    \\  const f = conv[name];
+    \\  const C = {
+    \\    [name + 'Array']: class extends TypedArray {
+    \\      constructor(arg, offset, length) {
+    \\        super();
+    \\        let src = null;
+    \\        if (arg instanceof ArrayBuffer) {
+    \\          src = arg._bytes.slice(offset || 0, length === undefined ? undefined : (offset || 0) + length * SIZES[name]);
+    \\        } else if (arg !== null && typeof arg === 'object') {
+    \\          src = Array.from(arg);
+    \\        } else {
+    \\          const n = Math.max(0, Math.trunc(Number(arg)) || 0);
+    \\          for (let i = 0; i < n; i++) this.push(0);
+    \\        }
+    \\        if (src) for (const x of src) this.push(f(x));
+    \\      }
+    \\    },
+    \\  }[name + 'Array'];
+    \\  Object.defineProperty(C, 'name', { value: name + 'Array', configurable: true });
+    \\  hidden(C, '_conv', f);
+    \\  hidden(C, 'BYTES_PER_ELEMENT', SIZES[name]);
+    \\  hidden(C.prototype, 'BYTES_PER_ELEMENT', SIZES[name]);
+    \\  hidden(G, name + 'Array', C);
+    \\}
+    \\class DataView {
+    \\  constructor(buffer, offset, length) {
+    \\    hidden(this, 'buffer', buffer);
+    \\    hidden(this, 'byteOffset', offset || 0);
+    \\    hidden(this, 'byteLength', length === undefined ? buffer.byteLength - (offset || 0) : length);
+    \\  }
+    \\  getUint8(i) { return this.buffer._bytes[this.byteOffset + i]; }
+    \\  setUint8(i, v) { this.buffer._bytes[this.byteOffset + i] = v & 255; }
+    \\  getInt8(i) { return (this.getUint8(i) << 24) >> 24; }
+    \\  setInt8(i, v) { this.setUint8(i, v); }
+    \\  getUint16(i, le) { const a = this.getUint8(i), b = this.getUint8(i + 1); return le ? a | (b << 8) : (a << 8) | b; }
+    \\  setUint16(i, v, le) { if (le) { this.setUint8(i, v); this.setUint8(i + 1, v >> 8); } else { this.setUint8(i, v >> 8); this.setUint8(i + 1, v); } }
+    \\  getUint32(i, le) {
+    \\    const b = [0, 1, 2, 3].map(k => this.getUint8(i + k));
+    \\    if (le) b.reverse();
+    \\    return ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
+    \\  }
+    \\  setUint32(i, v, le) {
+    \\    const b = [v >>> 24, v >>> 16, v >>> 8, v].map(x => x & 255);
+    \\    if (le) b.reverse();
+    \\    b.forEach((x, k) => this.setUint8(i + k, x));
+    \\  }
+    \\  getInt32(i, le) { return this.getUint32(i, le) | 0; }
+    \\  setInt32(i, v, le) { this.setUint32(i, v >>> 0, le); }
+    \\}
+    \\hidden(G, 'DataView', DataView);
+    \\
+    \\// ---- Intl: English formats only
+    \\
+    \\function numberFormat(n, o) {
+    \\  o = o || {};
+    \\  if (typeof n !== 'number') n = Number(n);
+    \\  if (!isFinite(n)) return String(n);
+    \\  let max = o.maximumFractionDigits !== undefined ? o.maximumFractionDigits : (o.style === 'percent' ? 0 : 3);
+    \\  let min = o.minimumFractionDigits || 0;
+    \\  if (o.style === 'currency' && o.minimumFractionDigits === undefined) { min = 2; max = Math.max(max, 2); }
+    \\  if (o.style === 'percent') n *= 100;
+    \\  let s = n.toFixed(Math.max(min, max));
+    \\  if (s.indexOf('.') >= 0) {
+    \\    while (s.endsWith('0') && s.length - s.indexOf('.') - 1 > min) s = s.slice(0, -1);
+    \\    if (s.endsWith('.')) s = s.slice(0, -1);
+    \\  }
+    \\  if (o.useGrouping !== false) {
+    \\    const neg = s[0] === '-';
+    \\    if (neg) s = s.slice(1);
+    \\    const dot = s.indexOf('.');
+    \\    let int = dot < 0 ? s : s.slice(0, dot);
+    \\    const frac = dot < 0 ? '' : s.slice(dot);
+    \\    int = int.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    \\    s = (neg ? '-' : '') + int + frac;
+    \\  }
+    \\  if (o.notation === 'compact' && Math.abs(n) >= 1000) {
+    \\    const units = [[1e12, 'T'], [1e9, 'B'], [1e6, 'M'], [1e3, 'K']];
+    \\    for (const [v, u] of units) if (Math.abs(n) >= v) return numberFormat(Math.round(n / v * 10) / 10, { maximumFractionDigits: 1 }) + u;
+    \\  }
+    \\  if (o.style === 'percent') return s + '%';
+    \\  if (o.style === 'currency') return (o.currency === 'EUR' ? '€' : o.currency === 'GBP' ? '£' : o.currency === 'JPY' ? '¥' : '$') + s;
+    \\  return s;
+    \\}
+    \\function dateFormat(d, o) {
+    \\  d = d === undefined ? new Date() : new Date(d);
+    \\  o = o || {};
+    \\  if (o.dateStyle === 'long' || o.month === 'long') return LONG_MONTHS[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear();
+    \\  if (o.month === 'short' || o.dateStyle === 'medium') return MONTHS[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear();
+    \\  if (o.hour !== undefined && o.year === undefined) return d.toLocaleTimeString();
+    \\  return d.toLocaleDateString();
+    \\}
+    \\const Intl = {
+    \\  NumberFormat: class NumberFormat {
+    \\    constructor(locale, o) { hidden(this, '_o', o || {}); }
+    \\    format(n) { return numberFormat(n, this._o); }
+    \\    formatToParts(n) { return [{ type: 'integer', value: this.format(n) }]; }
+    \\    resolvedOptions() { return Object.assign({ locale: 'en-US', numberingSystem: 'latn' }, this._o); }
+    \\    static supportedLocalesOf(l) { return [].concat(l || []); }
+    \\  },
+    \\  DateTimeFormat: class DateTimeFormat {
+    \\    constructor(locale, o) { hidden(this, '_o', o || {}); }
+    \\    format(d) { return dateFormat(d, this._o); }
+    \\    formatToParts(d) { return [{ type: 'literal', value: this.format(d) }]; }
+    \\    formatRange(a, b) { return this.format(a) + ' – ' + this.format(b); }
+    \\    resolvedOptions() { return Object.assign({ locale: 'en-US', calendar: 'gregory', numberingSystem: 'latn', timeZone: 'UTC' }, this._o); }
+    \\    static supportedLocalesOf(l) { return [].concat(l || []); }
+    \\  },
+    \\  Collator: class Collator {
+    \\    constructor(locale, o) { hidden(this, '_o', o || {}); }
+    \\    compare(a, b) {
+    \\      a = String(a); b = String(b);
+    \\      if (this._o.sensitivity === 'base' || this._o.sensitivity === 'accent') { a = a.toLowerCase(); b = b.toLowerCase(); }
+    \\      return a < b ? -1 : a > b ? 1 : 0;
+    \\    }
+    \\    resolvedOptions() { return { locale: 'en-US' }; }
+    \\  },
+    \\  PluralRules: class PluralRules {
+    \\    constructor(locale, o) { hidden(this, '_o', o || {}); }
+    \\    select(n) {
+    \\      if (this._o.type === 'ordinal') {
+    \\        const t = n % 10, h = n % 100;
+    \\        return t === 1 && h !== 11 ? 'one' : t === 2 && h !== 12 ? 'two' : t === 3 && h !== 13 ? 'few' : 'other';
+    \\      }
+    \\      return n === 1 ? 'one' : 'other';
+    \\    }
+    \\    resolvedOptions() { return { locale: 'en-US' }; }
+    \\  },
+    \\  RelativeTimeFormat: class RelativeTimeFormat {
+    \\    constructor(locale, o) { hidden(this, '_o', o || {}); }
+    \\    format(v, unit) {
+    \\      unit = String(unit).replace(/s$/, '');
+    \\      const n = Math.abs(v);
+    \\      if (this._o.numeric === 'auto' && n === 1 && unit === 'day') return v < 0 ? 'yesterday' : 'tomorrow';
+    \\      const u = n === 1 ? unit : unit + 's';
+    \\      return v < 0 || Object.is(v, -0) ? n + ' ' + u + ' ago' : 'in ' + n + ' ' + u;
+    \\    }
+    \\  },
+    \\  ListFormat: class ListFormat {
+    \\    constructor(locale, o) { hidden(this, '_o', o || {}); }
+    \\    format(list) {
+    \\      const a = Array.from(list, String);
+    \\      const w = this._o.type === 'disjunction' ? 'or' : 'and';
+    \\      if (a.length < 3) return a.join(' ' + w + ' ');
+    \\      return a.slice(0, -1).join(', ') + ', ' + w + ' ' + a[a.length - 1];
+    \\    }
+    \\  },
+    \\  Segmenter: class Segmenter {
+    \\    constructor(locale, o) { hidden(this, '_o', o || {}); }
+    \\    segment(s) {
+    \\      s = String(s);
+    \\      const parts = this._o.granularity === 'word' ? s.split(/(\s+)/).filter(Boolean) : Array.from(s);
+    \\      let i = 0;
+    \\      return parts.map(p => { const r = { segment: p, index: i, input: s, isWordLike: /\w/.test(p) }; i += p.length; return r; });
+    \\    }
+    \\  },
+    \\  getCanonicalLocales(l) { return [].concat(l || []); },
+    \\  supportedValuesOf() { return []; },
+    \\};
+    \\hidden(G, 'Intl', Intl);
+    \\hidden(Number.prototype, 'toLocaleString', function (locale, o) { return numberFormat(Number(this), o); });
+    \\})();

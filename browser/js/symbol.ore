@@ -1,0 +1,237 @@
+// js/symbol: Symbol values. A symbol is an object of class Symbol (so
+// the Value enum stays as it is) whose primitive is its key: an atom of
+// its own, "\x01@<n>" then ":" and the description when it has one,
+// which no property name of a script spells. `typeof` says "symbol",
+// property keys use the atom, and the own-key lists (Object.keys,
+// for-in, JSON) leave symbol keys out. Symbols live as long as the
+// engine (each is a root): there are few of them.
+
+import std.text
+
+/// Is atom `a` the key of a symbol?
+pub fn isSymbolAtom(it: *Interp, a: u32) bool {
+    let n = it.heap.atoms.name(a)
+    return n.len >= 2 && n[0] == 1 && n[1] == '@'
+}
+
+/// The key atom of the symbol object o.
+pub fn symbolAtom(it: *Interp, o: u32) u32 {
+    return match it.heap.obj(o).data {
+        .Prim { v } => match v {
+            .Num { n } => n as u32
+            _ => NONE
+        }
+        _ => NONE
+    }
+}
+
+/// Is v a symbol?
+pub fn isSymbol(it: *Interp, v: Value) bool {
+    return it.hasClass(v, Class.Symbol)
+}
+
+// The description of the symbol with key `a`, if it has one.
+fn symbolDescription(it: *Interp, a: u32) ?[]u8 {
+    let n = it.heap.atoms.name(a)
+    for i in 2..n.len {
+        if n[i] == ':' {
+            return n[i + 1..]
+        }
+    }
+    return null
+}
+
+/// A new symbol (with `desc` as its description, unless null).
+pub fn newSymbol(it: *mut Interp, desc: ?[]u8) JsError!Value {
+    it.symbol_count += 1
+    let b = try it.builder()
+    defer it.release(b)
+    try b.appendByte(1)
+    try b.appendByte('@')
+    try b.appendUint(it.symbol_count as u64)
+    if desc |d| {
+        try b.appendByte(':')
+        try b.append(d)
+    }
+    let key = try it.intern(b.bytes())
+    let o = try it.newObjectOf(Class.Symbol, it.symbol_proto, ObjData.Prim { v: numVal(key as f64) })
+    it.heap.obj(o).extensible = false
+    try it.addRoot(objVal(o))
+    try it.symbols.put(key, o)
+    return objVal(o)
+}
+
+/// The symbol whose key is atom `a`.
+pub fn symbolOfAtom(it: *Interp, a: u32) Value {
+    if it.symbols.get(a) |o| {
+        return objVal(o)
+    }
+    return Value.Undefined
+}
+
+/// Appends "Symbol(description)".
+pub fn appendSymbolText(it: *mut Interp, b: *mut text.Builder, o: u32) JsError!void {
+    try b.append("Symbol(")
+    if symbolDescription(it, symbolAtom(it, o)) |d| {
+        try b.append(d)
+    }
+    try b.appendByte(')')
+}
+
+fn thisSymbol(it: *mut Interp, a: Args) JsError!u32 {
+    if isSymbol(it, a.this) {
+        return objectOf(a.this)
+    }
+    try it.typeError("Symbol.prototype method called on incompatible receiver")
+    return NONE
+}
+
+fn symbolCtor(it: *mut Interp, a: Args) JsError!Value {
+    if a.new_target != NONE {
+        return it.typeError("Symbol is not a constructor")
+    }
+    let d = it.arg(a, 0)
+    if isUndef(d) {
+        return newSymbol(it, null)
+    }
+    let s = try it.toStringValue(d)
+    try it.push(s)
+    let b = try it.builder()
+    defer it.release(b)
+    try b.append(it.heap.bytes(strOf(s)))
+    let r = try newSymbol(it, b.bytes())
+    it.pop()
+    return r
+}
+
+// Symbol.for(key): one symbol per key, for the whole engine.
+fn symbolFor(it: *mut Interp, a: Args) JsError!Value {
+    let s = try it.toStringValue(it.arg(a, 0))
+    try it.push(s)
+    let key = try it.toKey(s)
+    it.pop()
+    if it.symbol_registry.get(key) |o| {
+        return objVal(o)
+    }
+    let b = try it.builder()
+    defer it.release(b)
+    try b.append(it.heap.atoms.name(key))
+    let sym = try newSymbol(it, b.bytes())
+    try it.symbol_registry.put(key, objectOf(sym))
+    return sym
+}
+
+fn symbolKeyFor(it: *mut Interp, a: Args) JsError!Value {
+    let v = it.arg(a, 0)
+    if !isSymbol(it, v) {
+        try it.notA(v, "a symbol")
+    }
+    let o = objectOf(v)
+    var all = it.symbol_registry.iterator()
+    while all.next() |e| {
+        if e.value.* == o {
+            return it.atomValue(e.key)
+        }
+    }
+    return Value.Undefined
+}
+
+fn symbolToString(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisSymbol(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    try appendSymbolText(it, b, o)
+    return it.newString(b.bytes())
+}
+
+fn symbolValueOf(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisSymbol(it, a)
+    return objVal(o)
+}
+
+fn symbolDescriptionGet(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisSymbol(it, a)
+    if symbolDescription(it, symbolAtom(it, o)) |d| {
+        return it.newString(d)
+    }
+    return Value.Undefined
+}
+
+// A well-known symbol `Symbol.<name>`; returns its key atom.
+fn wellKnown(it: *mut Interp, ctor: u32, name: []u8) JsError!u32 {
+    let b = try it.builder()
+    defer it.release(b)
+    try b.append("Symbol.")
+    try b.append(name)
+    let sym = try newSymbol(it, b.bytes())
+    try it.heap.addProp(ctor, try it.intern(name), sym, Value.Undefined, 0)
+    return symbolAtom(it, objectOf(sym))
+}
+
+fn installSymbol(it: *mut Interp) JsError!void {
+    it.symbol_proto = try it.newObject(it.object_proto)
+    try it.addRoot(objVal(it.symbol_proto))
+    let c = try makeConstructor(it, "Symbol", 0, symbolCtor, it.symbol_proto)
+    try it.defineNative(c, "for", 1, symbolFor)
+    try it.defineNative(c, "keyFor", 1, symbolKeyFor)
+    try it.defineNative(it.symbol_proto, "toString", 0, symbolToString)
+    try it.defineNative(it.symbol_proto, "valueOf", 0, symbolValueOf)
+    let g = try it.newNative("get description", 0, symbolDescriptionGet)
+    try it.defineAccessor(it.symbol_proto, try it.intern("description"), objVal(g), Value.Undefined, F_CONFIG)
+    it.sym_iterator = try wellKnown(it, c, "iterator")
+    it.sym_async_iterator = try wellKnown(it, c, "asyncIterator")
+    it.sym_has_instance = try wellKnown(it, c, "hasInstance")
+    it.sym_to_primitive = try wellKnown(it, c, "toPrimitive")
+    it.sym_to_string_tag = try wellKnown(it, c, "toStringTag")
+    let others = [8][]u8{"species", "isConcatSpreadable", "unscopables", "match", "matchAll", "replace", "search", "split"}
+    for n in others {
+        try wellKnown(it, c, n)
+    }
+    let oc = objectOf(try it.getProp(objVal(it.global), try it.intern("Object")))
+    try it.defineNative(oc, "getOwnPropertySymbols", 1, objectGetOwnPropertySymbols)
+    let tag = try it.newString("Symbol")
+    try it.heap.addProp(it.symbol_proto, it.sym_to_string_tag, tag, Value.Undefined, F_CONFIG)
+}
+
+// `[Symbol.iterator]` of the built-in iterables: what for-of and spread
+// do natively, for scripts that call it themselves.
+fn installIteratorMethods(it: *mut Interp) JsError!void {
+    try aliasMethod(it, it.array_proto, "values")
+    try aliasMethod(it, it.map_proto, "entries")
+    try aliasMethod(it, it.set_proto, "values")
+    let si = try it.newNative("[Symbol.iterator]", 0, stringIterator)
+    try it.heap.addProp(it.string_proto, it.sym_iterator, objVal(si), Value.Undefined, F_HIDDEN)
+    let ii = try it.newNative("[Symbol.iterator]", 0, returnThis)
+    try it.heap.addProp(it.iterator_proto, it.sym_iterator, objVal(ii), Value.Undefined, F_HIDDEN)
+}
+
+fn aliasMethod(it: *mut Interp, proto: u32, name: []u8) JsError!void {
+    let f = try it.getProp(objVal(proto), try it.intern(name))
+    try it.heap.addProp(proto, it.sym_iterator, f, Value.Undefined, F_HIDDEN)
+}
+
+fn stringIterator(it: *mut Interp, a: Args) JsError!Value {
+    let s = try it.toStringValue(a.this)
+    try it.push(s)
+    let arr = try it.iterToArray(s)
+    it.pop()
+    return makeIterator(it, arr)
+}
+
+fn returnThis(it: *mut Interp, a: Args) JsError!Value {
+    return a.this
+}
+
+fn objectGetOwnPropertySymbols(it: *mut Interp, a: Args) JsError!Value {
+    let o = try it.toObject(it.arg(a, 0))
+    try it.push(objVal(o))
+    let keys = try it.keyList()
+    defer it.releaseKeys(keys)
+    try it.ownSymbolKeys(o, keys)
+    let arr = try it.newArray(0)
+    for k in keys.items() {
+        try it.heap.pushElem(arr, symbolOfAtom(it, k))
+    }
+    it.pop()
+    return objVal(arr)
+}

@@ -50,6 +50,12 @@ fn installString(it: *mut Interp) JsError!void {
 
 fn stringCtor(it: *mut Interp, a: Args) JsError!Value {
     var s = try it.atomValue(A_EMPTY)
+    if a.argc > 0 && isSymbol(it, it.arg(a, 0)) && a.new_target == NONE {
+        let b = try it.builder()
+        defer it.release(b)
+        try appendSymbolText(it, b, objectOf(it.arg(a, 0)))
+        return it.newString(b.bytes())
+    }
     if a.argc > 0 {
         s = try it.toStringValue(it.arg(a, 0))
     }
