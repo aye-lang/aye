@@ -94,7 +94,9 @@
         display: block
         color: rgb(0, 0, 128)
         margin-top: 16px
+        margin-right: auto
         margin-bottom: 16px
+        margin-left: auto
         text-align: center
       <table width="200">
         display: table

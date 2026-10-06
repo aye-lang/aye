@@ -1,0 +1,39 @@
+viewport 800x600
+  block <html> (0, 0) 800x100
+    block <body> (0, 0) 800x100
+      block <center> (0, 0) 800x20
+        table <table cellpadding="0" cellspacing="0"> (0, 0) 800x20
+          row-group <tbody> (0, 0) 800x20
+            row <tr> (0, 0) 800x20
+              cell <td width="25%"> (0, 0) 200x20
+                line (0, 0) 200x20
+                  text (96, 2) 8x16 " "
+              cell <td align="center" nowrap=""> (200, 0) 400x20
+                block <div class="box"> (200, 0) 400x20
+              cell <td width="25%"> (600, 0) 200x20
+                line (600, 0) 200x20
+                  text (696, 2) 8x16 "x"
+      block <center> (0, 20) 800x60
+        table <table cellpadding="0" cellspacing="0"> (200, 20) 400x20
+          row-group <tbody> (200, 20) 400x20
+            row <tr> (200, 20) 400x20
+              cell <td> (200, 20) 400x20
+                block <div class="box"> (200, 20) 400x20
+        block <div style="max-width: 200px"> (300, 40) 200x20
+          line (300, 40) 200x20
+            text (364, 42) 72x16 "max-width"
+        block <div> (0, 60) 800x20
+          line (0, 60) 800x20
+            text (260, 62) 280x16 "an auto-width block keeps its width"
+      table <table style="width: 600px" cellpadding="0" cellspacing="0"> (0, 80) 600x20
+        row-group <tbody> (0, 80) 600x20
+          row <tr> (0, 80) 600x20
+            cell <td width="50%"> (0, 80) 300x20
+              line (0, 80) 300x20
+                text (0, 82) 32x16 "half"
+            cell <td> (300, 80) 240x20
+              line (300, 80) 240x20
+                text (300, 82) 32x16 "rest"
+            cell <td width="10%"> (540, 80) 60x20
+              line (540, 80) 60x20
+                text (540, 82) 8x16 "a"

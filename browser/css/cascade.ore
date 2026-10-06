@@ -15,9 +15,9 @@
 //
 // Presentational hints (hints.ore) come before the author sheets at
 // specificity zero, and in quirks mode the quirks rules of the UA sheet
-// apply. A block child of `<center>` (or of an element with
-// `align=center`) that has a width gets auto side margins, as the
-// `-webkit-center` alignment of browsers does.
+// apply. A block-level child in flow of `<center>` (or of an element
+// with `align=center`) gets auto side margins, as the `-webkit-center`
+// alignment of browsers does.
 
 import dom
 import dom.Document
@@ -378,16 +378,18 @@ struct Computer {
         try self.out.map.put(el.index, values)
     }
 
-    // `<center>` and `align=center`: a block child with a width gets auto
-    // side margins (unless it has margins of its own), and the alignment
-    // passes on to descendants until something sets another alignment.
+    // `<center>` and `align=center`: a block-level child in flow gets auto
+    // side margins (unless it has margins of its own): a table or a box
+    // narrower than the line (`width`, `max-width`) is centered, an
+    // auto-width block keeps its full width. The alignment passes on to
+    // descendants until something sets another alignment.
     fn alignCenter(self: *mut Self, el: NodeId, values: []mut Value) AllocError!void {
         var parent_centers = false
         if parentElement(self.doc, el) |p| {
             parent_centers = self.centered.contains(p.index)
         }
         let display = keywordText(values[DISPLAY])
-        if parent_centers && (text.eql(display, "block") || text.eql(display, "table")) && !isAutoKeyword(values[WIDTH]) && isZeroPx(values[MARGIN_TOP + 1]) && isZeroPx(values[MARGIN_TOP + 3]) {
+        if parent_centers && (text.eql(display, "block") || text.eql(display, "table")) && text.eql(keywordText(values[FLOAT]), "none") && !text.eql(keywordText(values[POSITION]), "absolute") && !text.eql(keywordText(values[POSITION]), "fixed") && isZeroPx(values[MARGIN_TOP + 1]) && isZeroPx(values[MARGIN_TOP + 3]) {
             values[MARGIN_TOP + 1] = Value.Keyword { k: "auto" }
             values[MARGIN_TOP + 3] = Value.Keyword { k: "auto" }
         }
@@ -446,10 +448,6 @@ fn keywordText(v: Value) []u8 {
         .Keyword { k } => k
         _ => ""
     }
-}
-
-fn isAutoKeyword(v: Value) bool {
-    return text.eql(keywordText(v), "auto")
 }
 
 fn isZeroPx(v: Value) bool {
