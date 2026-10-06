@@ -5,6 +5,7 @@
 // - chrome.ore: the toolbar (back, forward, reload, address bar), the
 //   status line and the find bar.
 // - field.ore: one-line text fields.
+// - forms.ore: the page's forms: focus, editing, dropdowns, submission.
 // - script.ore: scripted input and state for headless tests.
 // - sdl.ore: SDL2 declarations.
 //
@@ -222,6 +223,8 @@ pub struct Ui {
     // line; empty for none.
     hover: text.Builder
     hand: bool
+    // The options of a `select`, open over the page.
+    dropdown: ?Dropdown
     arrow_cursor: ?*mut SDL_Cursor
     hand_cursor: ?*mut SDL_Cursor
     ibeam_cursor: ?*mut SDL_Cursor
@@ -255,6 +258,7 @@ pub struct Ui {
             current: 0,
             hover: text.Builder.init(alloc),
             hand: false,
+            dropdown: null,
             arrow_cursor: SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW),
             hand_cursor: SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND),
             ibeam_cursor: SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM),
@@ -439,6 +443,7 @@ pub struct Ui {
     // After the tab moved: lay out a new page, scroll where the tab
     // wants, and show the URL and title.
     fn navigated(self: *mut Self, loaded: bool) AllocError!void {
+        self.dropdown = null
         if loaded {
             try self.relayout()
         }
@@ -479,20 +484,6 @@ pub struct Ui {
         defer target.deinit(self.alloc)
         self.focus = Focus.Page
         try self.go(&target)
-    }
-
-    // Follows the link `href` of the current page.
-    fn follow(self: *mut Self, href: []u8) AllocError!void {
-        if self.tab.page |p| {
-            let target = url.resolve(self.alloc, &p.url, text.trim(href)) catch |e| {
-                return
-            }
-            defer target.deinit(self.alloc)
-            if text.eql(target.scheme, "javascript") || text.eql(target.scheme, "mailto") {
-                return
-            }
-            try self.go(&target)
-        }
     }
 
     fn back(self: *mut Self) AllocError!void {
@@ -645,6 +636,11 @@ pub struct Ui {
         self.swallow = false
         let cmd = (mods & (KMOD_GUI | KMOD_CTRL)) != 0
         let shift = (mods & KMOD_SHIFT) != 0
+        if self.focus == Focus.Page && !(cmd && sym == 'l') && !(cmd && sym == 'f') {
+            if try pageKey(self, sym, mods) {
+                return
+            }
+        }
         if cmd {
             self.swallow = true
             if sym == 'q' {
@@ -748,7 +744,11 @@ pub struct Ui {
     }
 
     fn typed(self: *mut Self, s: []u8) AllocError!void {
-        if self.swallow || self.focus == Focus.Page || s.len == 0 {
+        if self.swallow || s.len == 0 {
+            return
+        }
+        if self.focus == Focus.Page {
+            try pageText(self, s)
             return
         }
         try self.field().insert(s)
@@ -779,7 +779,7 @@ pub struct Ui {
             }
             return self.setLink(link.href)
         }
-        try self.clearHover(false)
+        try self.clearHover(overTextField(self, x, y))
     }
 
     fn setLink(self: *mut Self, href: []u8) AllocError!void {
@@ -852,13 +852,7 @@ pub struct Ui {
             self.focus = Focus.Page
             self.dirty = true
         }
-        if self.linkAt(x, y) |link| {
-            // The href is in the page's document, which `follow` may free.
-            var b = text.Builder.init(self.alloc)
-            defer b.deinit()
-            try b.append(link.href)
-            try self.follow(b.bytes())
-        }
+        try clickPage(self, x, y)
     }
 
     // ---- drawing
@@ -874,6 +868,7 @@ pub struct Ui {
         if self.list |l| {
             self.canvas.fillRect(paint.deviceRect(content, flat), l.background)
             try paint.render(&l, &mut self.canvas, v, &mut self.painter)
+            try drawPageState(self, v)
         } else {
             self.canvas.fillRect(paint.deviceRect(content, flat), paint.Rgba { r: 255, g: 255, b: 255, a: 255 })
         }

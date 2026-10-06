@@ -4,8 +4,8 @@
 //
 //     key:NAME        a key, NAME a letter or return, escape, backspace,
 //                     delete, left, right, up, down, home, end, pageup,
-//                     pagedown, space, [ or ]; prefixed by cmd+ and/or
-//                     shift+ for modifiers ("key:cmd+f")
+//                     pagedown, space, tab, [ or ]; prefixed by cmd+
+//                     and/or shift+ for modifiers ("key:cmd+f")
 //     text:STRING     typed text ("_" stands for a space)
 //     click:X,Y       a left click at a window point
 //     move:X,Y        the mouse moves there
@@ -101,8 +101,8 @@ fn keySym(name: []u8) ?i32 {
     if name.len == 1 {
         return name[0] as i32
     }
-    let names = [14][]u8{"return", "escape", "backspace", "delete", "left", "right", "up", "down", "home", "end", "pageup", "pagedown", "space", "enter"}
-    let syms = [14]i32{SDLK_RETURN, SDLK_ESCAPE, SDLK_BACKSPACE, SDLK_DELETE, SDLK_LEFT, SDLK_RIGHT, SDLK_UP, SDLK_DOWN, SDLK_HOME, SDLK_END, SDLK_PAGEUP, SDLK_PAGEDOWN, SDLK_SPACE, SDLK_KP_ENTER}
+    let names = [15][]u8{"return", "escape", "backspace", "delete", "left", "right", "up", "down", "home", "end", "pageup", "pagedown", "space", "enter", "tab"}
+    let syms = [15]i32{SDLK_RETURN, SDLK_ESCAPE, SDLK_BACKSPACE, SDLK_DELETE, SDLK_LEFT, SDLK_RIGHT, SDLK_UP, SDLK_DOWN, SDLK_HOME, SDLK_END, SDLK_PAGEUP, SDLK_PAGEDOWN, SDLK_SPACE, SDLK_KP_ENTER, SDLK_TAB}
     for i, n in names {
         if text.eql(n, name) {
             return syms[i]
@@ -123,7 +123,8 @@ fn validScript(script: []u8) bool {
 }
 
 /// The tab's state, for `--state`: the URL, the scroll offset, the
-/// focus, the address bar, the find matches and the status line.
+/// focus, the address bar, the find matches and the status line; and
+/// when an element of the page has the focus, its name and value.
 fn writeState(ui: *mut Ui, out: *mut text.Builder) AllocError!void {
     try out.append("url ")
     try out.append(ui.tab.href())
@@ -146,6 +147,7 @@ fn writeState(ui: *mut Ui, out: *mut text.Builder) AllocError!void {
     try out.append("\nstatus ")
     try out.append(ui.hover.bytes())
     try out.append("\n")
+    try writeFocus(ui, out)
 }
 
 /// Writes the canvas as a PNG.
