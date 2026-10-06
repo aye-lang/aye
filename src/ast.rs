@@ -394,6 +394,8 @@ pub enum ExprKind {
     /// `[N]T{a, b, c}`; `ty` is the array type. Also the empty slice
     /// `[]T{}`, where `ty` is a slice type.
     ArrayLit { ty: TypeExpr, elems: Vec<Expr> },
+    /// `[N]T{value, ..}`: every element is `value` (evaluated once).
+    ArrayRepeat { ty: TypeExpr, value: Box<Expr> },
     Paren(Box<Expr>),
     /// `struct { ... }`: the value of a type function. The name is empty.
     StructType(StructDecl),

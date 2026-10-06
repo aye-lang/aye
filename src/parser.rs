@@ -1247,7 +1247,10 @@ impl Parser {
                 if !self.at(&Tok::LBrace) {
                     return Err(inferred_length(span));
                 }
-                let elems = self.array_elems()?;
+                let (elems, repeat) = self.array_elems()?;
+                if let Some(at) = repeat {
+                    return Err(Error::new(E0045, at, "a repeat literal states its length: `[N]T{value, ..}`"));
+                }
                 let ty = TypeExpr { kind: TypeExprKind::Array(ArrayLen::Lit(elems.len() as u64), Box::new(elem)), span };
                 ExprKind::ArrayLit { ty, elems }
             }
@@ -1259,7 +1262,18 @@ impl Parser {
                 if !matches!(ty.kind, TypeExprKind::Array(..) | TypeExprKind::Slice(..)) {
                     return Err(Error::new(E0007, span, "only array literals (`[N]T{...}`, `[_]T{...}`) and the empty slice (`[]T{}`) are supported"));
                 }
-                ExprKind::ArrayLit { ty, elems: self.array_elems()? }
+                match self.array_elems()? {
+                    (_, Some(at)) if matches!(ty.kind, TypeExprKind::Slice(..)) => {
+                        return Err(Error::new(E0045, at, "a slice literal must be empty (`[]T{}`); a repeat literal makes an array: `[N]T{value, ..}`"));
+                    }
+                    (mut elems, Some(at)) => {
+                        if elems.len() != 1 {
+                            return Err(Error::new(E0045, at, "a repeat literal has one value before `..`: `[N]T{value, ..}`"));
+                        }
+                        ExprKind::ArrayRepeat { ty, value: Box::new(elems.remove(0)) }
+                    }
+                    (elems, None) => ExprKind::ArrayLit { ty, elems },
+                }
             }
             Tok::Kw(Kw::Match) => {
                 self.bump();
@@ -1298,14 +1312,21 @@ impl Parser {
         Ok(Expr { kind, span })
     }
 
-    /// `{a, b, c}` of an array literal.
-    fn array_elems(&mut self) -> Result<Vec<Expr>> {
+    /// `{a, b, c}` of an array literal, or `{value, ..}` of a repeat
+    /// literal (the position of the `..`).
+    fn array_elems(&mut self) -> Result<(Vec<Expr>, Option<Span>)> {
         self.expect(&Tok::LBrace)?;
         let saved = self.enter_nested();
         let mut elems = Vec::new();
+        let mut repeat = None;
         while !self.at(&Tok::RBrace) {
             elems.push(self.expr()?);
             if !self.eat(&Tok::Comma) {
+                break;
+            }
+            if self.at(&Tok::DotDot) {
+                repeat = Some(self.bump().span);
+                self.eat(&Tok::Comma);
                 break;
             }
         }
@@ -1314,7 +1335,7 @@ impl Parser {
         }
         self.bump();
         self.leave_nested(saved);
-        Ok(elems)
+        Ok((elems, repeat))
     }
 
     /// `pattern => body`, where the pattern is `_`, variant patterns

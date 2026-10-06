@@ -498,6 +498,8 @@ pub enum TExprKind {
     /// Arms in source order. The type is `void` for a `match` statement.
     Match { scrutinee: Box<TExpr>, arms: Vec<TArm> },
     ArrayLit(Vec<TExpr>),
+    /// `[N]T{value, ..}`: `value`, evaluated once, in every element.
+    ArrayRepeat(Box<TExpr>),
     /// An error value (see `Program::errors`).
     ErrorValue(u16),
     /// `try x`; the type is the payload of `x`'s error union.
@@ -1538,6 +1540,11 @@ impl<'a> Checker<'a> {
                 }
             }
             TExprKind::ArrayLit(elems) => ConstVal::Agg(elems.iter().map(|x| self.fold(x)).collect::<Result<_>>()?),
+            TExprKind::ArrayRepeat(x) => match (&e.ty, self.fold(x)?) {
+                (_, ConstVal::Zeroed) => ConstVal::Zeroed,
+                (Type::Array(_, n), v) => ConstVal::Agg(vec![v; *n as usize]),
+                _ => unreachable!(),
+            },
             TExprKind::Field { base, index } => match self.fold(base)? {
                 ConstVal::Agg(mut fields) => fields.swap_remove(*index),
                 ConstVal::Zeroed => zero_of(&e.ty),
@@ -3745,6 +3752,12 @@ impl<'a> Checker<'a> {
                 }
                 let inits = self.field_inits(&v.fields, fields, &format!("variant `{lit}`"), &lit, None, span)?;
                 (TExprKind::Variant { index, fields: inits }, Type::Enum(enum_name.clone()))
+            }
+            ExprKind::ArrayRepeat { ty, value } => {
+                let aty = self.resolve_type(ty)?;
+                let Type::Array(el, _) = &aty else { unreachable!() };
+                let v = self.expect(value, el)?;
+                (TExprKind::ArrayRepeat(Box::new(v)), aty)
             }
             ExprKind::ArrayLit { ty, elems } => {
                 let aty = self.resolve_type(ty)?;

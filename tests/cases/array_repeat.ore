@@ -1,0 +1,34 @@
+// M9.7: `[N]T{value, ..}` makes an array whose elements are all `value`,
+// evaluated once.
+import std.heap.General
+import std.list.List
+
+let ZEROS = [64]u8{0, ..}
+let GRID = [3][4]i64{[4]i64{7, ..}, ..}
+
+var calls: i64 = 0
+
+fn next() i64 {
+    calls += 1
+    return calls * 10
+}
+
+pub fn main() !void {
+    var flags = [64]bool{false, ..}
+    flags[5] = true
+    @println(flags[5])
+    @println(flags[6])
+    @println(ZEROS[63])
+    @println(GRID[2][3])
+    let tens = [5]i64{next(), ..}
+    @println(tens[4])
+    @println(calls)
+    var gpa = General.init()
+    defer gpa.deinit()
+    var lists = [13]List(u8){List(u8).init(gpa.allocator()), ..}
+    try lists[12].append(9)
+    @println(lists[12].len() + lists[0].len())
+    for i in 0..lists.len {
+        lists[i].deinit()
+    }
+}

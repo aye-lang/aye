@@ -1326,6 +1326,11 @@ impl Gen {
                 let p = self.place(f, place);
                 if is_ptr_optional(ty) { format!("({p} != 0)") } else { format!("{p}.has") }
             }
+            Rvalue::ArrayRepeat { ty, val } => {
+                let Type::Array(_, n) = ty else { unreachable!() };
+                let t = c_type(ty);
+                format!("({{ {t} r_; for (size_t i_ = 0; i_ < {n}; i_++) r_.a[i_] = {}; r_; }})", self.operand(f, val))
+            }
             Rvalue::ArrayLit { ty, elems } => {
                 let es: Vec<String> = elems.iter().map(|o| self.operand(f, o)).collect();
                 format!("(({}){{{{{}}}}})", c_type(ty), es.join(", "))

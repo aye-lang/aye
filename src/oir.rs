@@ -199,6 +199,8 @@ pub enum Rvalue {
     /// Is the optional at `place` (of type `ty`) non-null?
     IsSome { place: Place, ty: Type },
     ArrayLit { ty: Type, elems: Vec<Operand> },
+    /// The array `ty` with `val` in every element.
+    ArrayRepeat { ty: Type, val: Operand },
     /// `base[lo..hi]`, producing a slice. `hi = None` means the full length.
     Slice { base: Place, len: Len, elem: Type, lo: Operand, hi: Option<Operand>, span: Span },
     /// Does the error union at `place` hold an error?
@@ -388,6 +390,7 @@ fn has_call(e: &TExpr) -> bool {
         }
         TExprKind::StructLit(fs) | TExprKind::Variant { fields: fs, .. } => fs.iter().any(|(_, e)| has_call(e)),
         TExprKind::ArrayLit(es) => es.iter().any(has_call),
+        TExprKind::ArrayRepeat(x) => has_call(x),
     }
 }
 
@@ -1296,6 +1299,7 @@ impl<'a> Lower<'a> {
                     fields: ops.into_iter().map(|(_, o)| o).collect(),
                 }
             }
+            TExprKind::ArrayRepeat(x) => Rvalue::ArrayRepeat { ty: e.ty.clone(), val: self.operand(x, out) },
             TExprKind::ArrayLit(elems) => {
                 let elems = elems.iter().map(|x| self.operand(x, out)).collect();
                 Rvalue::ArrayLit { ty: e.ty.clone(), elems }

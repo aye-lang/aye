@@ -721,6 +721,8 @@ pub fn main() {
 
 - An array literal states its length, `[3]u8{1, 2, 3}`, or takes it from
   the elements, `[_]u8{1, 2, 3}` (only in a literal: a type needs `[3]u8`).
+  `[64]bool{false, ..}` repeats one value (evaluated once) in every element:
+  `[13]List(u8){List(u8).init(a), ..}`.
   A length is a constant integer: a literal, a top-level `let` constant
   (`[N]T`, `[css.N]T` for a `pub` one of another module) or arithmetic on
   them (`[N * 2]T`); never a local, a `var` or a call (E0099).

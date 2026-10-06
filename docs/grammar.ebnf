@@ -245,6 +245,8 @@ primary     = int_lit | float_lit | string_lit | char_lit
                                                               Pair(i64) { ... }; the args are types *)
             | "[" ( expr | "_" ) "]" type "{" [ args ] "}"   (* array literal; [_]: length from
                                                               the elements, only here *)
+            | "[" expr "]" type "{" expr "," ".." [ "," ] "}"   (* repeat: every element is the
+                                                              value, evaluated once *)
             | "[" "]" [ "mut" ] type "{" "}"               (* the empty slice []T{} *)
             | struct_type                                  (* only after `return` in a type function *)
             | "(" expr ")" ;

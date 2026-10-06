@@ -975,6 +975,10 @@ impl Loader<'_> {
                 }
                 self.arm_body(body);
             }
+            ExprKind::ArrayRepeat { ty, value } => {
+                self.ty(ty);
+                self.expr(value);
+            }
             ExprKind::ArrayLit { ty, elems } => {
                 self.ty(ty);
                 self.args(elems);
