@@ -1,0 +1,141 @@
+// M8 acceptance: word frequencies. Reads the file named by the first
+// argument (or stdin), counts its words in a `StrMap`, sorts them by count
+// (then alphabetically) and prints the top 10 as "count word" lines.
+// A word is a run of ASCII letters, digits or `'`, compared in lower case.
+
+import std
+import std.list.List
+import std.map.StrMap
+import std.mem.Allocator
+import std.text
+
+struct Count {
+    word: []u8
+    n: i64
+}
+
+fn isWordByte(c: u8) bool {
+    return match c {
+        'a'..='z', '0'..='9', '\'' => true
+        _ => false
+    }
+}
+
+// Byte order of `a` and `b`: negative, zero or positive.
+fn compare(a: []u8, b: []u8) i64 {
+    var i: usize = 0
+    while i < a.len && i < b.len {
+        if a[i] != b[i] {
+            return a[i] as i64 - b[i] as i64
+        }
+        i += 1
+    }
+    return a.len as i64 - b.len as i64
+}
+
+// Does `a` come before `b` in the output?
+fn before(a: Count, b: Count) bool {
+    if a.n != b.n {
+        return a.n > b.n
+    }
+    return compare(a.word, b.word) < 0
+}
+
+// Heap sort, so that a large file does not take quadratic time.
+fn sort(xs: []mut Count) {
+    var start = xs.len / 2
+    while start > 0 {
+        start -= 1
+        siftDown(xs, start, xs.len)
+    }
+    var end = xs.len
+    while end > 1 {
+        end -= 1
+        let first = xs[0]
+        xs[0] = xs[end]
+        xs[end] = first
+        siftDown(xs, 0, end)
+    }
+}
+
+// A max-heap where "max" is the element that comes last.
+fn siftDown(xs: []mut Count, from: usize, end: usize) {
+    var root = from
+    while root * 2 + 1 < end {
+        var child = root * 2 + 1
+        if child + 1 < end && before(xs[child], xs[child + 1]) {
+            child += 1
+        }
+        if !before(xs[root], xs[child]) {
+            return
+        }
+        let t = xs[root]
+        xs[root] = xs[child]
+        xs[child] = t
+        root = child
+    }
+}
+
+fn readInput(alloc: Allocator, args: [][]u8) ![]mut u8 {
+    if args.len > 1 {
+        return std.fs.readFile(alloc, args[1])
+    }
+    return std.fs.stdin().readAll(alloc)
+}
+
+pub fn main() !void {
+    var gpa = std.heap.General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    let args = try std.os.args(alloc)
+    defer alloc.free(args)
+    let input = readInput(alloc, args) catch |e| {
+        std.log.err("cannot read the input: {}", e)
+        return e
+    }
+    defer alloc.free(input)
+
+    // Words become the runs between spaces.
+    text.toLower(input)
+    for i, c in input {
+        if !isWordByte(c) {
+            input[i] = ' '
+        }
+    }
+    var counts = StrMap(i64).init(alloc)
+    defer counts.deinit()
+    var words = text.split(input, " ")
+    while words.next() |w| {
+        if w.len == 0 {
+            continue
+        }
+        if counts.getPtr(w) |n| {
+            n.* += 1
+        } else {
+            try counts.put(w, 1)
+        }
+    }
+
+    var list = List(Count).init(alloc)
+    defer list.deinit()
+    var it = counts.iterator()
+    while it.next() |e| {
+        try list.append(Count { word: e.key, n: e.value.* })
+    }
+    sort(list.items())
+
+    var out = text.Builder.init(alloc)
+    defer out.deinit()
+    for i, c in list.items() {
+        if i == 10 {
+            break
+        }
+        try out.appendInt(c.n)
+        try out.appendByte(' ')
+        try out.append(c.word)
+        try out.appendByte('\n')
+    }
+    try out.appendUint(counts.len() as u64)
+    try out.append(" different words\n")
+    try std.fs.stdout().write(out.bytes())
+}
