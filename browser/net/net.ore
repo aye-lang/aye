@@ -1,0 +1,120 @@
+// net: fetching a URL. B1 fetches `file:` and `data:` URLs; `http:` and
+// `https:` go through `fetchHttp` (http.ore), which will call libcurl
+// once Ore can (M7) and until then reports `Unsupported`.
+
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+import url
+import url.Url
+
+pub error FetchError {
+    NotFound
+    AccessDenied
+    OpenFailed
+    ReadFailed
+    OutOfMemory
+    Invalid
+    Unsupported
+}
+
+/// What a fetch returns. Every slice is owned by the response: free them
+/// with `deinit`.
+pub struct Response {
+    // The MIME type in lower case, without parameters: "text/html".
+    mime: []mut u8
+    // The `charset` parameter of the content type, or empty.
+    charset: []mut u8
+    body: []mut u8
+
+    pub fn deinit(self: *Self, alloc: Allocator) {
+        alloc.free(self.mime)
+        alloc.free(self.charset)
+        alloc.free(self.body)
+    }
+}
+
+/// Fetches `target`.
+pub fn fetch(alloc: Allocator, target: *Url) FetchError!Response {
+    if text.eql(target.scheme, "file") {
+        return fetchFile(alloc, target)
+    }
+    if text.eql(target.scheme, "data") {
+        return fetchData(alloc, target)
+    }
+    if text.eql(target.scheme, "http") || text.eql(target.scheme, "https") {
+        return fetchHttp(alloc, target)
+    }
+    return FetchError.Unsupported
+}
+
+/// A message for a fetch error, for the command line.
+pub fn describe(e: FetchError) []u8 {
+    return match e {
+        .NotFound => "not found"
+        .AccessDenied => "access denied"
+        .OpenFailed => "cannot open"
+        .ReadFailed => "cannot read"
+        .OutOfMemory => "out of memory"
+        .Invalid => "invalid data: URL"
+        .Unsupported => "this kind of URL is not supported yet"
+    }
+}
+
+// A response with a copy of the type parts of `content_type` ("text/html;
+// charset=utf-8") and `body` (taken over).
+fn respond(alloc: Allocator, content_type: []u8, body: []mut u8) AllocError!Response {
+    let ct = parseContentType(content_type)
+    let mime = alloc.alloc(0 as u8, ct.mime.len) catch |e| {
+        alloc.free(body)
+        return e
+    }
+    for i, c in ct.mime {
+        mime[i] = lowerByte(c)
+    }
+    let charset = alloc.alloc(0 as u8, ct.charset.len) catch |e| {
+        alloc.free(mime)
+        alloc.free(body)
+        return e
+    }
+    for i, c in ct.charset {
+        charset[i] = c
+    }
+    return Response { mime: mime, charset: charset, body: body }
+}
+
+/// A content type split into its MIME type and `charset` parameter.
+pub struct ContentType {
+    mime: []u8
+    charset: []u8
+}
+
+/// Splits "text/html; charset=UTF-8" into "text/html" and "UTF-8" (the
+/// MIME type keeps its case; quotes around the charset go).
+pub fn parseContentType(s: []u8) ContentType {
+    var parts = text.split(s, ";")
+    var mime: []u8 = ""
+    var charset: []u8 = ""
+    var first = true
+    while parts.next() |part| {
+        let p = text.trim(part)
+        if first {
+            mime = p
+            first = false
+        } else if p.len > 8 && text.eqlIgnoreCase(p[..8], "charset=") {
+            var v = text.trim(p[8..])
+            if v.len >= 2 && v[0] == '"' && v[v.len - 1] == '"' {
+                v = v[1..v.len - 1]
+            }
+            charset = v
+        }
+    }
+    return ContentType { mime: mime, charset: charset }
+}
+
+fn lowerByte(c: u8) u8 {
+    if c >= 'A' && c <= 'Z' {
+        return c + 32
+    }
+    return c
+}

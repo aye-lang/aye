@@ -1,0 +1,733 @@
+// url: URL parsing and relative resolution, a WHATWG subset.
+//
+// Supported: schemes, the special schemes (http, https, ws, wss, ftp,
+// file) with their default ports and `\` as `/`, user info, ASCII hosts
+// (lower-cased; no IDNA and no IP address checks), ports, paths with `.`
+// and `..` segments removed, queries, fragments, opaque paths (`data:`,
+// `mailto:`), and percent-encoding of the bytes that need it. Windows
+// drive letters in file URLs are not treated specially.
+
+import std.list.List
+import std.mem
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+pub error UrlError { Invalid, OutOfMemory }
+
+/// A parsed URL. `href` is the serialized URL, owned by the `Url` (free it
+/// with `deinit`); the other slices are parts of it.
+pub struct Url {
+    href: []u8
+    // Lower case, without the `:`.
+    scheme: []u8
+    username: []u8
+    password: []u8
+    // Lower case; empty when there is none (or for `file:///`).
+    host: []u8
+    // Digits; empty for none or for the scheme's default port.
+    port: []u8
+    // Starts with `/` for special URLs; anything for an opaque path.
+    path: []u8
+    // Without the `?` and `#`.
+    query: []u8
+    fragment: []u8
+    has_query: bool
+    has_fragment: bool
+    // An opaque path (`data:...`, `mailto:...`): cannot be a base URL
+    // except for a fragment.
+    opaque: bool
+
+    pub fn deinit(self: *Self, alloc: Allocator) {
+        alloc.free(self.href)
+    }
+
+    /// Does the URL have one of the special schemes?
+    pub fn isSpecial(self: *Self) bool {
+        return isSpecialScheme(self.scheme)
+    }
+
+    /// `href` without the fragment.
+    pub fn withoutFragment(self: *Self) []u8 {
+        if self.has_fragment {
+            return self.href[..self.href.len - self.fragment.len - 1]
+        }
+        return self.href
+    }
+}
+
+/// Parses an absolute URL.
+pub fn parse(alloc: Allocator, input: []u8) UrlError!Url {
+    return parseWith(alloc, null, input)
+}
+
+/// Resolves `input` (absolute or relative) against `base`.
+pub fn resolve(alloc: Allocator, base: *Url, input: []u8) UrlError!Url {
+    return parseWith(alloc, base, input)
+}
+
+// The parts of a URL before serialization: slices of the input or the
+// base, and the path as segments.
+struct Parts {
+    scheme: []u8
+    authority: bool
+    username: []u8
+    password: []u8
+    host: []u8
+    port: []u8
+    opaque: bool
+    // The opaque path, when `opaque`.
+    opaque_path: []u8
+    query: []u8
+    fragment: []u8
+    has_query: bool
+    has_fragment: bool
+}
+
+fn parseWith(alloc: Allocator, base: ?*Url, raw: []u8) UrlError!Url {
+    // Leading and trailing controls and spaces go; tabs and newlines
+    // anywhere are removed.
+    var clean = text.Builder.init(alloc)
+    defer clean.deinit()
+    var lo: usize = 0
+    var hi = raw.len
+    while lo < hi && raw[lo] <= ' ' {
+        lo += 1
+    }
+    while hi > lo && raw[hi - 1] <= ' ' {
+        hi -= 1
+    }
+    for c in raw[lo..hi] {
+        if c != '\t' && c != '\n' && c != '\r' {
+            try clean.appendByte(c)
+        }
+    }
+    let s = clean.bytes()
+
+    var segments = List([]u8).init(alloc)
+    defer segments.deinit()
+    var p = Parts {
+        scheme: "",
+        authority: false,
+        username: "",
+        password: "",
+        host: "",
+        port: "",
+        opaque: false,
+        opaque_path: "",
+        query: "",
+        fragment: "",
+        has_query: false,
+        has_fragment: false,
+    }
+
+    let scheme_len = schemeLength(s)
+    var rest = s
+    var relative = true
+    if scheme_len > 0 {
+        p.scheme = s[..scheme_len]
+        rest = s[scheme_len + 1..]
+        relative = false
+        // "http:foo" against an http base is relative.
+        if base |b| {
+            if isSpecialScheme(p.scheme) && text.eqlIgnoreCase(b.scheme, p.scheme) && !startsWithSlash(rest, true) {
+                relative = true
+            }
+        }
+    }
+
+    if !relative {
+        return absolute(alloc, &mut p, &mut segments, rest)
+    }
+    if base |b| {
+        return relativeTo(alloc, b, &mut p, &mut segments, rest)
+    }
+    return UrlError.Invalid
+}
+
+// A URL with a scheme; `rest` follows the `:`.
+fn absolute(alloc: Allocator, p: *mut Parts, segments: *mut List([]u8), after_scheme: []u8) UrlError!Url {
+    var rest = after_scheme
+    let special = isSpecialScheme(p.scheme)
+    let file = text.eqlIgnoreCase(p.scheme, "file")
+    if special && !file {
+        // Any number of slashes, then the authority.
+        var i: usize = 0
+        while i < rest.len && (rest[i] == '/' || rest[i] == '\\') {
+            i += 1
+        }
+        rest = try authority(p, rest[i..], true)
+    } else if text.startsWith(rest, "//") || (file && text.startsWith(rest, "\\\\")) {
+        rest = try authority(p, rest[2..], special)
+    } else if file {
+        p.authority = true
+    } else if !text.startsWith(rest, "/") {
+        p.opaque = true
+    }
+    rest = try splitPath(p, segments, rest, special, "")
+    return build(alloc, p, segments.items())
+}
+
+// A URL without a scheme (or "http:path" against an http base).
+fn relativeTo(alloc: Allocator, b: *Url, p: *mut Parts, segments: *mut List([]u8), input: []u8) UrlError!Url {
+    var rest = input
+    let special = b.isSpecial()
+    if b.opaque {
+        if !text.startsWith(rest, "#") {
+            return UrlError.Invalid
+        }
+        copyBase(p, b)
+        p.opaque = true
+        p.opaque_path = b.path
+        p.has_query = b.has_query
+        p.query = b.query
+        p.has_fragment = true
+        p.fragment = rest[1..]
+        return build(alloc, p, segments.items())
+    }
+    copyBase(p, b)
+    if startsWithSlash(rest, special) && rest.len > 1 && (rest[1] == '/' || (special && rest[1] == '\\')) {
+        // Scheme-relative: "//host/path".
+        p.username = ""
+        p.password = ""
+        p.port = ""
+        rest = try authority(p, rest[2..], special)
+        rest = try splitPath(p, segments, rest, special, "")
+    } else if startsWithSlash(rest, special) {
+        rest = try splitPath(p, segments, rest, special, "")
+    } else if text.startsWith(rest, "?") || rest.len == 0 {
+        // Same path; a new query (or none at all for the empty string,
+        // which only drops the fragment).
+        rest = try splitPath(p, segments, rest, special, b.path)
+        if !p.has_query && rest.len == 0 && !p.has_fragment {
+            p.has_query = b.has_query
+            p.query = b.query
+        }
+    } else if text.startsWith(rest, "#") {
+        try addSegments(segments, b.path, special)
+        p.has_query = b.has_query
+        p.query = b.query
+        p.has_fragment = true
+        p.fragment = rest[1..]
+    } else {
+        // A relative path: after the last `/` of the base path.
+        var dir = b.path
+        if lastIndexOf(dir, '/') |i| {
+            dir = dir[..i + 1]
+        } else {
+            dir = ""
+        }
+        rest = try splitPath(p, segments, rest, special, dir)
+    }
+    return build(alloc, p, segments.items())
+}
+
+// The base's scheme and authority.
+fn copyBase(p: *mut Parts, b: *Url) {
+    p.scheme = b.scheme
+    p.authority = b.isSpecial() || b.host.len > 0 || text.startsWith(b.href[b.scheme.len + 1..], "//")
+    p.username = b.username
+    p.password = b.password
+    p.host = b.host
+    p.port = b.port
+}
+
+// Reads `[user[:pass]@]host[:port]` from the start of `s` and returns the
+// rest (from the path on).
+fn authority(p: *mut Parts, s: []u8, special: bool) UrlError![]u8 {
+    p.authority = true
+    var end: usize = 0
+    while end < s.len && s[end] != '/' && s[end] != '?' && s[end] != '#' && !(special && s[end] == '\\') {
+        end += 1
+    }
+    var auth = s[..end]
+    if lastIndexOf(auth, '@') |at| {
+        let info = auth[..at]
+        if mem.indexOf(info, ':') |colon| {
+            p.username = info[..colon]
+            p.password = info[colon + 1..]
+        } else {
+            p.username = info
+        }
+        auth = auth[at + 1..]
+    }
+    var host = auth
+    // A `:` after the last `]` starts the port.
+    var search_from: usize = 0
+    if lastIndexOf(auth, ']') |rb| {
+        search_from = rb
+    }
+    if mem.indexOf(auth[search_from..], ':') |c| {
+        let colon = search_from + c
+        host = auth[..colon]
+        let port = auth[colon + 1..]
+        for d in port {
+            if d < '0' || d > '9' {
+                return UrlError.Invalid
+            }
+        }
+        if port.len > 5 {
+            return UrlError.Invalid
+        }
+        if port.len > 0 {
+            let n = text.parseInt(port) catch 0
+            if n > 65535 {
+                return UrlError.Invalid
+            }
+        }
+        p.port = port
+    }
+    if special && !text.eqlIgnoreCase(p.scheme, "file") && host.len == 0 {
+        return UrlError.Invalid
+    }
+    if text.eqlIgnoreCase(p.scheme, "file") && text.eqlIgnoreCase(host, "localhost") {
+        host = ""
+    }
+    if mem.indexOf(host, ' ') != null {
+        return UrlError.Invalid
+    }
+    p.host = host
+    return s[end..]
+}
+
+// Splits `s` into path, query and fragment. The path's segments go into
+// `segments`, after those of `dir` (the base's directory, or "").
+// Returns what is left (always empty).
+fn splitPath(p: *mut Parts, segments: *mut List([]u8), s: []u8, special: bool, dir: []u8) UrlError![]u8 {
+    var end: usize = 0
+    while end < s.len && s[end] != '?' && s[end] != '#' {
+        end += 1
+    }
+    let path = s[..end]
+    var rest = s[end..]
+    if p.opaque {
+        p.opaque_path = path
+    } else {
+        try addSegments(segments, dir, special)
+        try addSegments(segments, path, special)
+    }
+    if text.startsWith(rest, "?") {
+        var q = rest[1..]
+        var qe: usize = 0
+        while qe < q.len && q[qe] != '#' {
+            qe += 1
+        }
+        p.has_query = true
+        p.query = q[..qe]
+        rest = q[qe..]
+    }
+    if text.startsWith(rest, "#") {
+        p.has_fragment = true
+        p.fragment = rest[1..]
+        rest = rest[rest.len..]
+    }
+    return rest
+}
+
+// Appends the segments of `path` to `segments`, applying `.` and `..`.
+// `path` "/a/b/" has the segments "a", "b", "". In special URLs `\` is a
+// separator too.
+fn addSegments(segments: *mut List([]u8), path: []u8, special: bool) AllocError!void {
+    if path.len == 0 {
+        return
+    }
+    var i: usize = 0
+    if path[0] == '/' || (special && path[0] == '\\') {
+        i = 1
+        // An absolute path replaces what came before.
+        segments.clear()
+    } else if segments.len() > 0 {
+        // A relative path replaces the last segment (the base's file).
+        segments.pop()
+    }
+    while true {
+        var j = i
+        while j < path.len && path[j] != '/' && !(special && path[j] == '\\') {
+            j += 1
+        }
+        let seg = path[i..j]
+        let last = j >= path.len
+        if isDot(seg) {
+            if last {
+                try segments.append("")
+            }
+        } else if isDotDot(seg) {
+            segments.pop()
+            if last {
+                try segments.append("")
+            }
+        } else {
+            try segments.append(seg)
+        }
+        if last {
+            return
+        }
+        i = j + 1
+    }
+}
+
+fn isDot(seg: []u8) bool {
+    return text.eql(seg, ".") || text.eqlIgnoreCase(seg, "%2e")
+}
+
+fn isDotDot(seg: []u8) bool {
+    if seg.len == 2 {
+        return text.eql(seg, "..")
+    }
+    if seg.len == 4 {
+        return text.eqlIgnoreCase(seg, ".%2e") || text.eqlIgnoreCase(seg, "%2e.")
+    }
+    if seg.len == 6 {
+        return text.eqlIgnoreCase(seg, "%2e%2e")
+    }
+    return false
+}
+
+// Serializes the parts into a new `Url`.
+fn build(alloc: Allocator, p: *Parts, segments: [][]u8) UrlError!Url {
+    let special = isSpecialScheme(p.scheme)
+    var out = text.Builder.init(alloc)
+    errdefer out.deinit()
+    for c in p.scheme {
+        try out.appendByte(lowerByte(c))
+    }
+    try out.appendByte(':')
+    let scheme_hi = out.len() - 1
+    var user_lo = out.len()
+    var user_hi = user_lo
+    var pass_lo = user_lo
+    var pass_hi = user_lo
+    var host_lo = user_lo
+    var host_hi = user_lo
+    var port_lo = user_lo
+    var port_hi = user_lo
+    if p.authority {
+        try out.append("//")
+        if p.username.len > 0 || p.password.len > 0 {
+            user_lo = out.len()
+            try out.append(p.username)
+            user_hi = out.len()
+            if p.password.len > 0 {
+                try out.appendByte(':')
+                pass_lo = out.len()
+                try out.append(p.password)
+                pass_hi = out.len()
+            }
+            try out.appendByte('@')
+        }
+        host_lo = out.len()
+        for c in p.host {
+            try out.appendByte(lowerByte(c))
+        }
+        host_hi = out.len()
+        port_lo = host_hi
+        port_hi = host_hi
+        if p.port.len > 0 && !isDefaultPort(p.scheme, p.port) {
+            try out.appendByte(':')
+            port_lo = out.len()
+            // Leading zeros go: "080" is port 80.
+            var k: usize = 0
+            while k + 1 < p.port.len && p.port[k] == '0' {
+                k += 1
+            }
+            try out.append(p.port[k..])
+            port_hi = out.len()
+        }
+    }
+    let path_lo = out.len()
+    if p.opaque {
+        try encode(&mut out, p.opaque_path, Set.Control, special)
+    } else if p.authority || segments.len > 0 {
+        if segments.len == 0 && (special || p.authority) {
+            try out.appendByte('/')
+        }
+        for seg in segments {
+            try out.appendByte('/')
+            try encode(&mut out, seg, Set.Path, special)
+        }
+    }
+    let path_hi = out.len()
+    var query_lo = path_hi
+    var query_hi = path_hi
+    if p.has_query {
+        try out.appendByte('?')
+        query_lo = out.len()
+        try encode(&mut out, p.query, Set.Query, special)
+        query_hi = out.len()
+    }
+    var frag_lo = out.len()
+    var frag_hi = frag_lo
+    if p.has_fragment {
+        try out.appendByte('#')
+        frag_lo = out.len()
+        try encode(&mut out, p.fragment, Set.Fragment, special)
+        frag_hi = out.len()
+    }
+    let href = try out.toOwned()
+    return Url {
+        href: href,
+        scheme: href[..scheme_hi],
+        username: href[user_lo..user_hi],
+        password: href[pass_lo..pass_hi],
+        host: href[host_lo..host_hi],
+        port: href[port_lo..port_hi],
+        path: href[path_lo..path_hi],
+        query: href[query_lo..query_hi],
+        fragment: href[frag_lo..frag_hi],
+        has_query: p.has_query,
+        has_fragment: p.has_fragment,
+        opaque: p.opaque,
+    }
+}
+
+// The percent-encode sets of the URL standard.
+enum Set {
+    Control
+    Fragment
+    Query
+    Path
+}
+
+// Appends `s`, percent-encoding the bytes of `set` (`%` itself is kept).
+fn encode(out: *mut text.Builder, s: []u8, set: Set, special: bool) AllocError!void {
+    for c in s {
+        if needsEncoding(c, set, special) {
+            try out.appendByte('%')
+            try out.appendByte(HEX[(c >> 4) as usize])
+            try out.appendByte(HEX[(c & 15) as usize])
+        } else {
+            try out.appendByte(c)
+        }
+    }
+}
+
+let HEX = "0123456789ABCDEF"
+
+fn needsEncoding(c: u8, set: Set, special: bool) bool {
+    if c < 0x20 || c > 0x7E {
+        return true
+    }
+    return match set {
+        .Control => false
+        .Fragment => c == ' ' || c == '"' || c == '<' || c == '>' || c == '`'
+        .Query => c == ' ' || c == '"' || c == '#' || c == '<' || c == '>' || (special && c == '\'')
+        .Path => c == ' ' || c == '"' || c == '#' || c == '<' || c == '>' || c == '?' || c == '^' || c == '`' || c == '{' || c == '}'
+    }
+}
+
+// The length of the scheme at the start of `s` when a `:` follows it; 0
+// when `s` does not start with a scheme.
+fn schemeLength(s: []u8) usize {
+    if s.len == 0 || !isAlpha(s[0]) {
+        return 0
+    }
+    var i: usize = 1
+    while i < s.len {
+        let c = s[i]
+        if c == ':' {
+            return i
+        }
+        if !(isAlpha(c) || (c >= '0' && c <= '9') || c == '+' || c == '-' || c == '.') {
+            return 0
+        }
+        i += 1
+    }
+    return 0
+}
+
+pub fn isSpecialScheme(scheme: []u8) bool {
+    var words = text.split("http https ws wss ftp file", " ")
+    while words.next() |w| {
+        if text.eqlIgnoreCase(scheme, w) {
+            return true
+        }
+    }
+    return false
+}
+
+fn isDefaultPort(scheme: []u8, port: []u8) bool {
+    let n = text.parseInt(port) catch -1
+    if text.eqlIgnoreCase(scheme, "http") || text.eqlIgnoreCase(scheme, "ws") {
+        return n == 80
+    }
+    if text.eqlIgnoreCase(scheme, "https") || text.eqlIgnoreCase(scheme, "wss") {
+        return n == 443
+    }
+    if text.eqlIgnoreCase(scheme, "ftp") {
+        return n == 21
+    }
+    return false
+}
+
+fn startsWithSlash(s: []u8, special: bool) bool {
+    return s.len > 0 && (s[0] == '/' || (special && s[0] == '\\'))
+}
+
+fn isAlpha(c: u8) bool {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+fn lowerByte(c: u8) u8 {
+    if c >= 'A' && c <= 'Z' {
+        return c + 32
+    }
+    return c
+}
+
+fn lastIndexOf(s: []u8, b: u8) ?usize {
+    var i = s.len
+    while i > 0 {
+        i -= 1
+        if s[i] == b {
+            return i
+        }
+    }
+    return null
+}
+
+/// Decodes `%XX` escapes of `s` into new memory from `alloc`; a `%` that
+/// is not followed by two hex digits stays as it is.
+pub fn percentDecode(alloc: Allocator, s: []u8) AllocError![]mut u8 {
+    var out = text.Builder.init(alloc)
+    errdefer out.deinit()
+    var i: usize = 0
+    while i < s.len {
+        if s[i] == '%' && i + 2 < s.len && hexValue(s[i + 1]) >= 0 && hexValue(s[i + 2]) >= 0 {
+            try out.appendByte((hexValue(s[i + 1]) * 16 + hexValue(s[i + 2])) as u8)
+            i += 3
+        } else {
+            try out.appendByte(s[i])
+            i += 1
+        }
+    }
+    return out.toOwned()
+}
+
+fn hexValue(c: u8) i64 {
+    if c >= '0' && c <= '9' {
+        return (c - '0') as i64
+    }
+    if c >= 'a' && c <= 'f' {
+        return (c - 'a') as i64 + 10
+    }
+    if c >= 'A' && c <= 'F' {
+        return (c - 'A') as i64 + 10
+    }
+    return -1
+}
+
+// ---- tests
+
+fn expectParse(a: Allocator, input: []u8, want: []u8) !void {
+    let u = try parse(a, input)
+    defer u.deinit(a)
+    @expectEqual(want, u.href)
+}
+
+fn expectResolve(a: Allocator, base: []u8, input: []u8, want: []u8) !void {
+    let b = try parse(a, base)
+    defer b.deinit(a)
+    let u = try resolve(a, &b, input)
+    defer u.deinit(a)
+    @expectEqual(want, u.href)
+}
+
+test "absolute URLs" {
+    let a = @testAllocator()
+    try expectParse(a, "http://Example.COM", "http://example.com/")
+    try expectParse(a, "  https://example.com:443/a/./b/../c?x=1 y#frag ", "https://example.com/a/c?x=1%20y#frag")
+    try expectParse(a, "HTTP://user:pw@host:8080/p", "http://user:pw@host:8080/p")
+    try expectParse(a, "http:\\\\host\\a\\b", "http://host/a/b")
+    try expectParse(a, "http://host:0080/", "http://host/")
+    try expectParse(a, "file:///tmp/a b.html", "file:///tmp/a%20b.html")
+    try expectParse(a, "file://localhost/etc/hosts", "file:///etc/hosts")
+    try expectParse(a, "data:text/html,<p>Hi</p>", "data:text/html,<p>Hi</p>")
+    try expectParse(a, "mailto:someone@example.com", "mailto:someone@example.com")
+    try expectParse(a, "http://h/%2e%2E/a/%2e/b", "http://h/a/b")
+    try expectParse(a, "http://h/caf\xC3\xA9", "http://h/caf%C3%A9")
+}
+
+// Does resolving `input` (against `base` unless it is empty) fail?
+fn fails(a: Allocator, base: []u8, input: []u8) !bool {
+    if base.len == 0 {
+        let u = parse(a, input) catch |e| {
+            return true
+        }
+        u.deinit(a)
+        return false
+    }
+    let b = try parse(a, base)
+    defer b.deinit(a)
+    let u = resolve(a, &b, input) catch |e| {
+        return true
+    }
+    u.deinit(a)
+    return false
+}
+
+test "invalid URLs" {
+    let a = @testAllocator()
+    @expect(try fails(a, "", "no scheme"))
+    @expect(try fails(a, "", "http://"))
+    @expect(try fails(a, "", "http://h:99999/"))
+    @expect(try fails(a, "", "http://h:8x/"))
+    @expect(try fails(a, "data:text/html,x", "y"))
+}
+
+test "relative resolution (RFC 3986 examples)" {
+    let a = @testAllocator()
+    let base = "http://a/b/c/d;p?q"
+    try expectResolve(a, base, "g", "http://a/b/c/g")
+    try expectResolve(a, base, "./g", "http://a/b/c/g")
+    try expectResolve(a, base, "g/", "http://a/b/c/g/")
+    try expectResolve(a, base, "/g", "http://a/g")
+    try expectResolve(a, base, "//g", "http://g/")
+    try expectResolve(a, base, "?y", "http://a/b/c/d;p?y")
+    try expectResolve(a, base, "g?y", "http://a/b/c/g?y")
+    try expectResolve(a, base, "#s", "http://a/b/c/d;p?q#s")
+    try expectResolve(a, base, "g#s", "http://a/b/c/g#s")
+    try expectResolve(a, base, ";x", "http://a/b/c/;x")
+    try expectResolve(a, base, "", "http://a/b/c/d;p?q")
+    try expectResolve(a, base, ".", "http://a/b/c/")
+    try expectResolve(a, base, "./", "http://a/b/c/")
+    try expectResolve(a, base, "..", "http://a/b/")
+    try expectResolve(a, base, "../g", "http://a/b/g")
+    try expectResolve(a, base, "../..", "http://a/")
+    try expectResolve(a, base, "../../g", "http://a/g")
+    try expectResolve(a, base, "../../../g", "http://a/g")
+    try expectResolve(a, base, "/./g", "http://a/g")
+    try expectResolve(a, base, "g.", "http://a/b/c/g.")
+    try expectResolve(a, base, "g;x=1/../y", "http://a/b/c/y")
+    try expectResolve(a, base, "http:g", "http://a/b/c/g")
+    try expectResolve(a, base, "https://other/x", "https://other/x")
+}
+
+test "resolution against file and opaque bases" {
+    let a = @testAllocator()
+    try expectResolve(a, "file:///home/u/site/index.html", "img/a.png", "file:///home/u/site/img/a.png")
+    try expectResolve(a, "file:///home/u/site/index.html", "../b.html#top", "file:///home/u/b.html#top")
+    try expectResolve(a, "data:text/html,x", "#f", "data:text/html,x#f")
+    try expectResolve(a, "http://h/a/b", "\\c", "http://h/c")
+}
+
+test "parts" {
+    let a = @testAllocator()
+    let u = try parse(a, "https://me:pw@Host.example:8443/p/q?a=b#c")
+    defer u.deinit(a)
+    @expectEqual("https", u.scheme)
+    @expectEqual("me", u.username)
+    @expectEqual("pw", u.password)
+    @expectEqual("host.example", u.host)
+    @expectEqual("8443", u.port)
+    @expectEqual("/p/q", u.path)
+    @expectEqual("a=b", u.query)
+    @expectEqual("c", u.fragment)
+    @expectEqual("https://me:pw@host.example:8443/p/q?a=b", u.withoutFragment())
+}
+
+test "percent decoding" {
+    let a = @testAllocator()
+    let s = try percentDecode(a, "a%20b%zz%4")
+    defer a.free(s)
+    @expectEqual("a b%zz%4", s)
+}

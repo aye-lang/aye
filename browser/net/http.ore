@@ -1,0 +1,14 @@
+// `http:` and `https:` URLs. B1 cannot fetch them yet: Ore's C interop
+// (M7) does not reach libcurl's variadic `curl_easy_setopt` and its
+// structs. Once it does, this file gets the libcurl easy handle: follow
+// redirects (`CURLOPT_FOLLOWLOCATION`, at most 20), collect the body
+// through a write callback into a `text.Builder`, read `Content-Type` for
+// `respond`, and map curl's errors onto `FetchError`. The rest of the
+// browser only sees `fetch` and `Response`.
+
+import std.mem.Allocator
+import url.Url
+
+fn fetchHttp(alloc: Allocator, target: *Url) FetchError!Response {
+    return FetchError.Unsupported
+}
