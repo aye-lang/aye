@@ -1,15 +1,17 @@
-// jpeg: the baseline JPEG decoder (sequential DCT, Huffman coding, 8-bit
-// samples; SOF0 and SOF1). Grayscale and 3-component images (YCbCr, or
-// RGB when an Adobe marker or the component ids say so), any sampling
-// factors from 1 to 4, restart intervals, and both interleaved and
-// one-component scans. Progressive, lossless, arithmetic-coded, 12-bit
-// and CMYK files are `Unsupported`.
+// jpeg: the JPEG decoder: sequential (SOF0, SOF1) and progressive
+// (SOF2) DCT with Huffman coding and 8-bit samples. Grayscale,
+// 3-component (YCbCr, or RGB when an Adobe marker or the component ids
+// say so) and 4-component images (CMYK, or YCCK by the Adobe marker),
+// any sampling factors from 1 to 4, restart intervals, interleaved and
+// one-component scans; the EXIF orientation is applied. Lossless,
+// hierarchical, arithmetic-coded and 12-bit files are `Unsupported`.
 //
 // The output follows libjpeg's default choices where they are visible:
 // the "fancy" (triangle filter) chroma upsampling for 2x1, 1x2 and 2x2
 // subsampling, and its fixed-point YCbCr to RGB conversion. The IDCT is
 // the float AAN one (libjpeg's jidctflt.c), within a step of libjpeg's
-// default integer IDCT.
+// default integer IDCT. CMYK becomes RGB as Pillow converts it (Adobe
+// files store inverted samples): R = (255 - C) * (255 - K) / 255.
 
 import std
 import std.mem.Allocator
@@ -44,7 +46,8 @@ struct JpegHuff {
 
 // One component of the frame. Its samples go to `plane` of the decoder
 // at `offset`, `stride` bytes per row: whole blocks, padded to whole
-// MCUs.
+// MCUs. A progressive file first gathers the coefficients of its `bw`
+// blocks per row in `coefs` from block `first` (64 each, zigzag order).
 struct JpegComp {
     id: u8
     h: usize
@@ -60,13 +63,15 @@ struct JpegComp {
     // Size of the component in samples (before upsampling).
     width: usize
     height: usize
+    first: usize
+    bw: usize
 }
 
 struct JpegDecoder {
     width: usize
     height: usize
     ncomp: usize
-    comps: [3]JpegComp
+    comps: [4]JpegComp
     hmax: usize
     vmax: usize
     mcus_x: usize
@@ -79,11 +84,19 @@ struct JpegDecoder {
     dc: [4]JpegHuff
     ac: [4]JpegHuff
     restart: usize
-    // Adobe APP14 transform: -1 when there is no APP14, 0 for RGB.
+    // Adobe APP14 transform: -1 when there is no APP14, 0 for RGB (or
+    // CMYK), 1 for YCbCr, 2 for YCCK.
     adobe: i32
     plane: []mut u8
     has_frame: bool
     scans: usize
+    progressive: bool
+    coefs: []mut i16
+    // The blocks left in the current end-of-band run (progressive AC
+    // scans).
+    eobrun: u32
+    // EXIF orientation, 1 (as stored) to 8.
+    orientation: u8
 }
 
 // Entropy-coded data: bytes with 0xFF 0x00 meaning 0xFF, read most
@@ -164,7 +177,7 @@ pub fn decodeJpeg(alloc: Allocator, data: []u8) ImageError!Bitmap {
         width: 0,
         height: 0,
         ncomp: 0,
-        comps: [3]JpegComp{jpegEmptyComp(), jpegEmptyComp(), jpegEmptyComp()},
+        comps: [4]JpegComp{jpegEmptyComp(), jpegEmptyComp(), jpegEmptyComp(), jpegEmptyComp()},
         hmax: 1,
         vmax: 1,
         mcus_x: 0,
@@ -179,9 +192,16 @@ pub fn decodeJpeg(alloc: Allocator, data: []u8) ImageError!Bitmap {
         plane: []mut u8{},
         has_frame: false,
         scans: 0,
+        progressive: false,
+        coefs: []mut i16{},
+        eobrun: 0,
+        orientation: 1,
     }
     defer if dec.has_frame {
         alloc.free(dec.plane)
+        if dec.progressive {
+            alloc.free(dec.coefs)
+        }
     }
     var pos: usize = 2
     while pos < data.len {
@@ -214,10 +234,10 @@ pub fn decodeJpeg(alloc: Allocator, data: []u8) ImageError!Bitmap {
         }
         let body = data[pos + 2..pos + seg]
         pos += seg
-        if m == 0xC0 || m == 0xC1 {
-            try jpegFrame(&mut dec, alloc, body)
-        } else if m >= 0xC2 && m <= 0xCF && m != 0xC4 && m != 0xC8 && m != 0xCC {
-            // Progressive, lossless, hierarchical, arithmetic coding.
+        if m == 0xC0 || m == 0xC1 || m == 0xC2 {
+            try jpegFrame(&mut dec, alloc, body, m == 0xC2)
+        } else if m >= 0xC3 && m <= 0xCF && m != 0xC4 && m != 0xC8 && m != 0xCC {
+            // Lossless, hierarchical, arithmetic coding.
             return ImageError.Unsupported
         } else if m == 0xC4 {
             try jpegTables(&mut dec, body)
@@ -232,6 +252,10 @@ pub fn decodeJpeg(alloc: Allocator, data: []u8) ImageError!Bitmap {
             if body.len >= 12 && std.mem.eql(body[0..5], "Adobe") {
                 dec.adobe = body[11] as i32
             }
+        } else if m == 0xE1 {
+            if dec.orientation == 1 {
+                dec.orientation = jpegExifOrientation(body)
+            }
         } else if m == 0xDA {
             pos = try jpegScan(&mut dec, data, body, pos)
         }
@@ -239,7 +263,15 @@ pub fn decodeJpeg(alloc: Allocator, data: []u8) ImageError!Bitmap {
     if dec.scans == 0 {
         return ImageError.Invalid
     }
-    return jpegOutput(&dec, alloc)
+    if dec.progressive {
+        jpegFinish(&mut dec)
+    }
+    let bmp = try jpegOutput(&dec, alloc)
+    if dec.orientation == 1 {
+        return bmp
+    }
+    defer bmp.deinit(alloc)
+    return jpegOrient(alloc, &bmp, dec.orientation)
 }
 
 fn jpegEmptyComp() JpegComp {
@@ -255,6 +287,8 @@ fn jpegEmptyComp() JpegComp {
         stride: 0,
         width: 0,
         height: 0,
+        first: 0,
+        bw: 0,
     }
 }
 
@@ -269,9 +303,10 @@ fn jpegEmptyHuff() JpegHuff {
     }
 }
 
-// SOF0/SOF1: sizes, components and their sampling factors. Allocates
-// the sample planes.
-fn jpegFrame(dec: *mut JpegDecoder, alloc: Allocator, body: []u8) ImageError!void {
+// SOF0/SOF1/SOF2: sizes, components and their sampling factors.
+// Allocates the sample planes (and the coefficients of a progressive
+// file).
+fn jpegFrame(dec: *mut JpegDecoder, alloc: Allocator, body: []u8, progressive: bool) ImageError!void {
     if dec.has_frame || body.len < 6 {
         return ImageError.Invalid
     }
@@ -281,10 +316,10 @@ fn jpegFrame(dec: *mut JpegDecoder, alloc: Allocator, body: []u8) ImageError!voi
     let height = (body[1] as usize << 8) | body[2] as usize
     let width = (body[3] as usize << 8) | body[4] as usize
     let n = body[5] as usize
-    if n == 4 || n == 2 {
+    if n == 2 {
         return ImageError.Unsupported
     }
-    if n != 1 && n != 3 {
+    if n != 1 && n != 3 && n != 4 {
         return ImageError.Invalid
     }
     if height == 0 {
@@ -319,15 +354,26 @@ fn jpegFrame(dec: *mut JpegDecoder, alloc: Allocator, body: []u8) ImageError!voi
     dec.mcus_x = (width + 8 * dec.hmax - 1) / (8 * dec.hmax)
     dec.mcus_y = (height + 8 * dec.vmax - 1) / (8 * dec.vmax)
     var total: usize = 0
+    var blocks: usize = 0
     for i in 0..n {
         let c = &mut dec.comps[i]
         c.offset = total
         c.stride = dec.mcus_x * c.h * 8
         c.width = (width * c.h + dec.hmax - 1) / dec.hmax
         c.height = (height * c.v + dec.vmax - 1) / dec.vmax
+        c.first = blocks
+        c.bw = dec.mcus_x * c.h
         total += c.stride * dec.mcus_y * c.v * 8
+        blocks += c.bw * dec.mcus_y * c.v
     }
     dec.plane = try alloc.alloc(0 as u8, total)
+    if progressive {
+        dec.coefs = alloc.alloc(0 as i16, blocks * 64) catch |e| {
+            alloc.free(dec.plane)
+            return e
+        }
+    }
+    dec.progressive = progressive
     dec.has_frame = true
 }
 
@@ -420,6 +466,17 @@ fn jpegQuant(dec: *mut JpegDecoder, body: []u8) ImageError!void {
     }
 }
 
+// What a scan codes: the spectral band `ss` to `se` (zigzag positions)
+// and the successive approximation bits (`ah`, the bit position of the
+// previous pass, 0 for a first pass; `al`, the point transform). A
+// sequential scan is the whole band at full precision.
+struct JpegBand {
+    ss: usize
+    se: usize
+    ah: u8
+    al: u8
+}
+
 // SOS: the scan header in `body`, then the entropy-coded data from
 // `pos`. Returns the position after the data (at the next marker).
 fn jpegScan(dec: *mut JpegDecoder, data: []u8, body: []u8, pos: usize) ImageError!usize {
@@ -430,7 +487,17 @@ fn jpegScan(dec: *mut JpegDecoder, data: []u8, body: []u8, pos: usize) ImageErro
     if ns < 1 || ns > dec.ncomp || body.len < 1 + ns * 2 + 3 {
         return ImageError.Invalid
     }
-    var members = [3]usize{0, 0, 0}
+    let tail = body[1 + ns * 2..]
+    let band = JpegBand { ss: tail[0] as usize, se: tail[1] as usize, ah: tail[2] >> 4, al: tail[2] & 15 }
+    if dec.progressive {
+        // DC scans may interleave components; AC scans have one.
+        let dc_ok = band.ss == 0 && band.se == 0
+        let ac_ok = band.ss > 0 && band.se >= band.ss && band.se <= 63 && ns == 1
+        if (!dc_ok && !ac_ok) || band.ah > 13 || band.al > 13 {
+            return ImageError.Invalid
+        }
+    }
+    var members = [4]usize{0, 0, 0, 0}
     for i in 0..ns {
         let id = body[1 + i * 2]
         let tables = body[2 + i * 2]
@@ -447,11 +514,18 @@ fn jpegScan(dec: *mut JpegDecoder, data: []u8, body: []u8, pos: usize) ImageErro
         let c = &mut dec.comps[members[i]]
         c.td = (tables >> 4) as usize
         c.ta = (tables & 15) as usize
-        if c.td > 3 || c.ta > 3 || !dec.dc[c.td].defined || !dec.ac[c.ta].defined || !dec.quant_defined[c.tq] {
+        if c.td > 3 || c.ta > 3 || !dec.quant_defined[c.tq] {
+            return ImageError.Invalid
+        }
+        // The tables the scan uses: a DC refinement pass uses none.
+        let needs_dc = !dec.progressive || (band.ss == 0 && band.ah == 0)
+        let needs_ac = !dec.progressive || band.ss > 0
+        if (needs_dc && !dec.dc[c.td].defined) || (needs_ac && !dec.ac[c.ta].defined) {
             return ImageError.Invalid
         }
         c.pred = 0
     }
+    dec.eobrun = 0
     var br = JpegBits { src: data, pos: pos, buf: 0, count: 0, over: 0, at_marker: false }
     var block = @zeroed([64]f32)
     let coef = block[..]
@@ -465,8 +539,7 @@ fn jpegScan(dec: *mut JpegDecoder, data: []u8, body: []u8, pos: usize) ImageErro
         for by in 0..bh {
             for bx in 0..bw {
                 jpegRestart(dec, &mut br, n)
-                try jpegBlock(dec, &mut br, ci, coef)
-                jpegStore(dec, ci, coef, bx, by)
+                try jpegUnit(dec, &mut br, ci, coef, bx, by, &band)
                 n += 1
             }
         }
@@ -480,8 +553,7 @@ fn jpegScan(dec: *mut JpegDecoder, data: []u8, body: []u8, pos: usize) ImageErro
                     let v = dec.comps[ci].v
                     for y in 0..v {
                         for x in 0..h {
-                            try jpegBlock(dec, &mut br, ci, coef)
-                            jpegStore(dec, ci, coef, mx * h + x, my * v + y)
+                            try jpegUnit(dec, &mut br, ci, coef, mx * h + x, my * v + y, &band)
                         }
                     }
                 }
@@ -493,8 +565,35 @@ fn jpegScan(dec: *mut JpegDecoder, data: []u8, body: []u8, pos: usize) ImageErro
     return br.pos
 }
 
+// Block (bx, by) of component `ci` in a scan: a sequential scan decodes
+// and stores its samples at once (`coef` is scratch space); a
+// progressive one adds the scan's part to its coefficients.
+fn jpegUnit(dec: *mut JpegDecoder, br: *mut JpegBits, ci: usize, coef: []mut f32, bx: usize, by: usize, band: *JpegBand) ImageError!void {
+    if !dec.progressive {
+        try jpegBlock(dec, br, ci, coef)
+        jpegStore(dec, ci, coef, bx, by)
+        return
+    }
+    let c = &dec.comps[ci]
+    let at = (c.first + by * c.bw + bx) * 64
+    let blk = dec.coefs[at..at + 64]
+    if band.ss == 0 {
+        if band.ah == 0 {
+            try jpegDcFirst(dec, br, ci, blk, band.al)
+        } else {
+            if try jpegBit(br) {
+                blk[0] = jpegI16(blk[0] as i32 | ((1 as i32) << band.al as i32))
+            }
+        }
+    } else if band.ah == 0 {
+        try jpegAcFirst(dec, br, ci, blk, band)
+    } else {
+        try jpegAcRefine(dec, br, ci, blk, band)
+    }
+}
+
 // Before MCU `n`: at a restart interval, the bit reader starts over at
-// a byte and the DC predictions go back to 0.
+// a byte, and the DC predictions and the end-of-band run go back to 0.
 fn jpegRestart(dec: *mut JpegDecoder, br: *mut JpegBits, n: usize) {
     if dec.restart == 0 || n == 0 || n % dec.restart != 0 {
         return
@@ -502,6 +601,189 @@ fn jpegRestart(dec: *mut JpegDecoder, br: *mut JpegBits, n: usize) {
     br.restartAt()
     for i in 0..dec.ncomp {
         dec.comps[i].pred = 0
+    }
+    dec.eobrun = 0
+}
+
+// A coefficient kept in 16 bits (a corrupt file may ask for more).
+fn jpegI16(v: i32) i16 {
+    if v < -32768 {
+        return -32768
+    }
+    if v > 32767 {
+        return 32767
+    }
+    return v as i16
+}
+
+fn jpegBit(br: *mut JpegBits) ImageError!bool {
+    br.refill()
+    let b = br.peek(1)
+    try br.consume(1)
+    return b == 1
+}
+
+// `n` (0 to 16) more bits as an unsigned number.
+fn jpegBits(br: *mut JpegBits, n: u64) ImageError!u32 {
+    if n == 0 {
+        return 0
+    }
+    br.refill()
+    let v = br.peek(n) as u32
+    try br.consume(n)
+    return v
+}
+
+// The first pass of a block's DC term: a difference from the previous
+// block, scaled by the point transform.
+fn jpegDcFirst(dec: *mut JpegDecoder, br: *mut JpegBits, ci: usize, blk: []mut i16, al: u8) ImageError!void {
+    let c = &mut dec.comps[ci]
+    let s = try jpegDecodeHuff(br, &dec.dc[c.td])
+    if s > 15 {
+        return ImageError.Invalid
+    }
+    var diff: i32 = 0
+    if s > 0 {
+        diff = try jpegReceive(br, s as u64)
+    }
+    c.pred = c.pred +% diff
+    blk[0] = jpegI16(c.pred *% ((1 as i32) << al as i32))
+}
+
+// The first pass of a band of AC terms: run/size pairs as in a
+// sequential scan, plus end-of-band runs that skip the band of the next
+// blocks too (EOBn: 2^n blocks plus n more bits).
+fn jpegAcFirst(dec: *mut JpegDecoder, br: *mut JpegBits, ci: usize, blk: []mut i16, band: *JpegBand) ImageError!void {
+    if dec.eobrun > 0 {
+        dec.eobrun -= 1
+        return
+    }
+    let h = &dec.ac[dec.comps[ci].ta]
+    var k = band.ss
+    while k <= band.se {
+        let rs = try jpegDecodeHuff(br, h)
+        let run = (rs >> 4) as usize
+        let size = (rs & 15) as u64
+        if size == 0 {
+            if run < 15 {
+                dec.eobrun = ((1 as u32) << run as u32) - 1
+                if run > 0 {
+                    dec.eobrun += try jpegBits(br, run as u64)
+                }
+                return
+            }
+            k += 16
+            continue
+        }
+        k += run
+        if k > 63 {
+            return ImageError.Invalid
+        }
+        let value = try jpegReceive(br, size)
+        blk[k] = jpegI16(value *% ((1 as i32) << band.al as i32))
+        k += 1
+    }
+}
+
+// A refinement pass of a band of AC terms (libjpeg's
+// decode_mcu_AC_refine): one more bit of every coefficient already
+// nonzero, and new coefficients of magnitude 1 << al, each after a run
+// of zero ones (the nonzero ones in between take their bit and do not
+// count).
+fn jpegAcRefine(dec: *mut JpegDecoder, br: *mut JpegBits, ci: usize, blk: []mut i16, band: *JpegBand) ImageError!void {
+    let p1 = (1 as i32) << band.al as i32
+    let h = &dec.ac[dec.comps[ci].ta]
+    var k = band.ss
+    if dec.eobrun == 0 {
+        while k <= band.se {
+            let rs = try jpegDecodeHuff(br, h)
+            var run = (rs >> 4) as i32
+            let size = rs & 15
+            var value: i32 = 0
+            if size == 0 {
+                if run < 15 {
+                    dec.eobrun = (1 as u32) << run as u32
+                    if run > 0 {
+                        dec.eobrun += try jpegBits(br, run as u64)
+                    }
+                    break
+                }
+            } else {
+                // Sizes other than 1 are an encoder error that libjpeg
+                // reads as 1.
+                value = -p1
+                if try jpegBit(br) {
+                    value = p1
+                }
+            }
+            while k <= band.se {
+                if blk[k] != 0 {
+                    try jpegRefineBit(br, blk, k, p1)
+                } else {
+                    run -= 1
+                    if run < 0 {
+                        break
+                    }
+                }
+                k += 1
+            }
+            if value != 0 {
+                if k > 63 {
+                    return ImageError.Invalid
+                }
+                blk[k] = jpegI16(value)
+            }
+            k += 1
+        }
+    }
+    if dec.eobrun > 0 {
+        // The rest of the band is in an end-of-band run: only the
+        // refinement bits of the nonzero terms.
+        while k <= band.se {
+            if blk[k] != 0 {
+                try jpegRefineBit(br, blk, k, p1)
+            }
+            k += 1
+        }
+        dec.eobrun -= 1
+    }
+}
+
+// The next bit of the nonzero coefficient blk[k]: a 1 adds `p1` to its
+// magnitude (unless that bit is set already).
+fn jpegRefineBit(br: *mut JpegBits, blk: []mut i16, k: usize, p1: i32) ImageError!void {
+    if !(try jpegBit(br)) {
+        return
+    }
+    let v = blk[k] as i32
+    if v & p1 != 0 {
+        return
+    }
+    if v >= 0 {
+        blk[k] = jpegI16(v + p1)
+    } else {
+        blk[k] = jpegI16(v - p1)
+    }
+}
+
+// After the last scan of a progressive file: every block's
+// coefficients, dequantized, through the IDCT into the planes.
+fn jpegFinish(dec: *mut JpegDecoder) {
+    var block = @zeroed([64]f32)
+    let coef = block[..]
+    for ci in 0..dec.ncomp {
+        let c = dec.comps[ci]
+        let q = c.tq * 64
+        let bh = dec.mcus_y * c.v
+        for by in 0..bh {
+            for bx in 0..c.bw {
+                let at = (c.first + by * c.bw + bx) * 64
+                for k in 0..64 {
+                    coef[JPEG_ZIGZAG[k]] = dec.coefs[at + k] as f32 * dec.quant[q + k]
+                }
+                jpegStore(dec, ci, coef, bx, by)
+            }
+        }
     }
 }
 
@@ -685,15 +967,24 @@ fn jpegOutput(dec: *JpegDecoder, alloc: Allocator) ImageError!Bitmap {
         return bmp
     }
     let cbs = full[n..2 * n]
-    let crs = full[2 * n..]
+    let crs = full[2 * n..3 * n]
+    // The first three components are used as they are (RGB, CMY) or
+    // converted from YCbCr (YCbCr, YCCK).
     let ids_rgb = dec.comps[0].id == 'R' && dec.comps[1].id == 'G' && dec.comps[2].id == 'B'
-    if dec.adobe == 0 || (dec.adobe < 0 && ids_rgb) {
+    var raw = dec.adobe == 0 || (dec.adobe < 0 && ids_rgb)
+    if dec.ncomp == 4 {
+        raw = dec.adobe != 2
+    }
+    if raw {
         for i in 0..n {
             px[o] = full[i]
             px[o + 1] = cbs[i]
             px[o + 2] = crs[i]
             px[o + 3] = 255
             o += 4
+        }
+        if dec.ncomp == 4 {
+            jpegCmyk(px, full[3 * n..], false, dec.adobe >= 0)
         }
         return bmp
     }
@@ -720,7 +1011,131 @@ fn jpegOutput(dec: *JpegDecoder, alloc: Allocator) ImageError!Bitmap {
         px[o + 3] = 255
         o += 4
     }
+    if dec.ncomp == 4 {
+        jpegCmyk(px, full[3 * n..], true, true)
+    }
     return bmp
+}
+
+// CMY (in the RGB places of `px`) and K to RGB, as Pillow converts them:
+// R = (255 - C) * (255 - K) / 255, and so on. Adobe files (`inverted`)
+// store 255 - C and 255 - K; YCCK ones store YCbCr for 255 - C, 255 - M,
+// 255 - Y (and 255 - K), converted to RGB already (`ycck`).
+fn jpegCmyk(px: []mut u8, ks: []u8, ycck: bool, inverted: bool) {
+    for i in 0..ks.len {
+        // nk: 255 - K.
+        var nk = ks[i] as u32
+        if !inverted {
+            nk = 255 - nk
+        }
+        for ch in 0..3 {
+            // c: the C (M, Y) sample.
+            var c = px[i * 4 + ch] as u32
+            if inverted && !ycck {
+                c = 255 - c
+            }
+            let t = c * nk + 128
+            px[i * 4 + ch] = (nk - (((t >> 8) + t) >> 8)) as u8
+        }
+    }
+}
+
+// The orientation in an APP1 Exif segment, 1 when there is none: after
+// "Exif" and two zero bytes, a TIFF header (II or MM for the byte order,
+// 42, the offset of IFD0) and IFD0's 12-byte entries (tag, type, count,
+// value). Tag 0x0112, a SHORT, is the orientation.
+fn jpegExifOrientation(body: []u8) u8 {
+    if body.len < 14 || !std.mem.eql(body[0..4], "Exif") || body[4] != 0 || body[5] != 0 {
+        return 1
+    }
+    let t = body[6..]
+    let le = t[0] == 'I' && t[1] == 'I'
+    if !le && !(t[0] == 'M' && t[1] == 'M') {
+        return 1
+    }
+    if jpegTiff16(t, 2, le) != 42 {
+        return 1
+    }
+    let ifd = jpegTiff32(t, 4, le) as usize
+    if ifd > t.len - 2 {
+        return 1
+    }
+    let count = jpegTiff16(t, ifd, le) as usize
+    for i in 0..count {
+        let e = ifd + 2 + i * 12
+        if e + 12 > t.len {
+            return 1
+        }
+        if jpegTiff16(t, e, le) == 0x0112 {
+            let v = jpegTiff16(t, e + 8, le)
+            if jpegTiff16(t, e + 2, le) != 3 || v < 1 || v > 8 {
+                return 1
+            }
+            return v as u8
+        }
+    }
+    return 1
+}
+
+fn jpegTiff16(t: []u8, at: usize, le: bool) u32 {
+    if le {
+        return t[at] as u32 | (t[at + 1] as u32 << 8)
+    }
+    return (t[at] as u32 << 8) | t[at + 1] as u32
+}
+
+fn jpegTiff32(t: []u8, at: usize, le: bool) u32 {
+    if le {
+        return jpegTiff16(t, at, le) | (jpegTiff16(t, at + 2, le) << 16)
+    }
+    return (jpegTiff16(t, at, le) << 16) | jpegTiff16(t, at + 2, le)
+}
+
+// `src` turned upright by EXIF orientation `o` (2 to 8): mirrored (2),
+// turned half way (3), flipped (4), transposed (5), turned a quarter
+// clockwise (6), transposed the other way (7), turned a quarter
+// counterclockwise (8).
+fn jpegOrient(alloc: Allocator, src: *Bitmap, o: u8) ImageError!Bitmap {
+    let w = src.width
+    let h = src.height
+    var ow = w
+    var oh = h
+    if o >= 5 {
+        ow = h
+        oh = w
+    }
+    let out = try newBitmap(alloc, ow, oh)
+    for y in 0..oh {
+        for x in 0..ow {
+            // The source pixel of (x, y).
+            var sx = x
+            var sy = y
+            if o == 2 {
+                sx = w - 1 - x
+            } else if o == 3 {
+                sx = w - 1 - x
+                sy = h - 1 - y
+            } else if o == 4 {
+                sy = h - 1 - y
+            } else if o == 5 {
+                sx = y
+                sy = x
+            } else if o == 6 {
+                sx = y
+                sy = h - 1 - x
+            } else if o == 7 {
+                sx = w - 1 - y
+                sy = h - 1 - x
+            } else if o == 8 {
+                sx = w - 1 - y
+                sy = x
+            }
+            let from = (sy * w + sx) * 4
+            let to = (y * ow + x) * 4
+            std.mem.copy(out.pixels[to..to + 4], src.pixels[from..from + 4])
+        }
+    }
+    return out
 }
 
 fn jpegClamp(v: i32) u8 {

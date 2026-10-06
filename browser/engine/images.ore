@@ -1,5 +1,5 @@
 // The images of a page: every `img` (and `input type=image`) with a
-// `src` is fetched (relative to the page's base URL, with the page's URL
+// `src` or a `srcset` (sources.ore picks one) is fetched (relative to the page's base URL, with the page's URL
 // as the Referer; `data:` URLs too) and decoded once per URL (an SVG
 // image becomes an `svg.Picture` and a bitmap with its natural size and
 // no pixels), and the elements are mapped to their bitmaps for layout
@@ -198,8 +198,9 @@ fn pixelsOf(v: f64) usize {
 }
 
 /// Fetches the images of the page's elements and style sheets that have
-/// none yet, and maps the elements (and URLs) to their bitmaps.
-pub fn updateImages(page: *mut Page) AllocError!void {
+/// none yet, and maps the elements (and URLs) to their bitmaps. `media`
+/// (the viewport) picks among `srcset` candidates and `picture` sources.
+pub fn updateImages(page: *mut Page, media: css.Media) AllocError!void {
     if page.images == null {
         page.images = try page.alloc.create(ImageCache.init(page.alloc))
     }
@@ -207,19 +208,19 @@ pub fn updateImages(page: *mut Page) AllocError!void {
     if page.styling |st| {
         styles = &st.styles
     }
-    return fillImagesWith(page.images.?, &page.doc, &page.url, styles)
+    return fillImagesWith(page.images.?, &page.doc, &page.url, styles, media)
 }
 
 /// Fetches the images of the elements of `doc` (whose URL is
 /// `address`) that `cache` has no bitmap for, resolving their URLs
 /// against the document's base URL.
-pub fn fillImages(cache: *mut ImageCache, doc: *Document, address: *Url) AllocError!void {
-    return fillImagesWith(cache, doc, address, null)
+pub fn fillImages(cache: *mut ImageCache, doc: *Document, address: *Url, media: css.Media) AllocError!void {
+    return fillImagesWith(cache, doc, address, null, media)
 }
 
 // `fillImages`, and the images of the style sheets when there are
 // `styles`.
-fn fillImagesWith(cache: *mut ImageCache, doc: *Document, address: *Url, styles: ?*css.Styles) AllocError!void {
+fn fillImagesWith(cache: *mut ImageCache, doc: *Document, address: *Url, styles: ?*css.Styles, media: css.Media) AllocError!void {
     if cache.referrer.len == 0 {
         try cache.setReferrer(address.href)
     }
@@ -231,7 +232,7 @@ fn fillImagesWith(cache: *mut ImageCache, doc: *Document, address: *Url, styles:
     if styles |st| {
         try styleUrls(arena.allocator(), doc, st, &cache.nodes, &mut keys)
     }
-    try prefetchImages(cache, doc, &base, keys.items())
+    try prefetchImages(cache, doc, &base, keys.items(), media)
     for key in keys.items() {
         if cache.nodes.hasUrl(key) {
             continue
@@ -256,11 +257,8 @@ fn fillImagesWith(cache: *mut ImageCache, doc: *Document, address: *Url, styles:
         if !isImageElement(doc, h) || cache.nodes.get(h) != null {
             continue
         }
-        let src = text.trim(doc.attr(h, "src") orelse "")
-        if src.len == 0 {
-            continue
-        }
-        let target = url.resolve(cache.alloc, &base, src) catch |e| {
+        let choice = (try chooseImage(cache.alloc, doc, h, media)) orelse continue
+        let target = url.resolve(cache.alloc, &base, choice.url) catch |e| {
             continue
         }
         defer target.deinit(cache.alloc)
@@ -268,7 +266,7 @@ fn fillImagesWith(cache: *mut ImageCache, doc: *Document, address: *Url, styles:
             if cache.pictureOf(target.withoutFragment()) |pic| {
                 try cache.nodes.putPicture(h, bmp, pic)
             } else {
-                try cache.nodes.put(h, bmp)
+                try cache.nodes.putScaled(h, bmp, choice.density)
             }
         }
     }
@@ -277,7 +275,7 @@ fn fillImagesWith(cache: *mut ImageCache, doc: *Document, address: *Url, styles:
 // Fetches the new images of `doc` (and the URLs `extra` of its style
 // sheets) concurrently into the session's cache (net.prefetch), before
 // `fillImages` takes them one by one.
-fn prefetchImages(cache: *mut ImageCache, doc: *Document, base: *Url, extra: [][]u8) AllocError!void {
+fn prefetchImages(cache: *mut ImageCache, doc: *Document, base: *Url, extra: [][]u8, media: css.Media) AllocError!void {
     var hrefs = text.Builder.init(cache.alloc)
     defer hrefs.deinit()
     for key in extra {
@@ -299,11 +297,8 @@ fn prefetchImages(cache: *mut ImageCache, doc: *Document, base: *Url, extra: [][
         if !isImageElement(doc, h) || cache.nodes.get(h) != null {
             continue
         }
-        let src = text.trim(doc.attr(h, "src") orelse "")
-        if src.len == 0 {
-            continue
-        }
-        let target = url.resolve(cache.alloc, base, src) catch |e| {
+        let choice = (try chooseImage(cache.alloc, doc, h, media)) orelse continue
+        let target = url.resolve(cache.alloc, base, choice.url) catch |e| {
             continue
         }
         defer target.deinit(cache.alloc)

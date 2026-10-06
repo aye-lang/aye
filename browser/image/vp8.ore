@@ -1,0 +1,1761 @@
+// vp8: the WebP lossy decoder: VP8 key frames (RFC 6386), decoded the
+// way libwebp does it, so that the pixels match its output: the boolean
+// decoder, the frame header (segments, loop filter, token partitions,
+// quantizers, coefficient probabilities), per macroblock the intra
+// modes, the coefficient tokens, the inverse WHT and DCT and the intra
+// predictions, then the loop filter (simple or normal) over the whole
+// frame, and YUV 4:2:0 to RGB with libwebp's "fancy" upsampling and its
+// fixed-point conversion.
+//
+// Intra prediction reads the unfiltered neighbors (libwebp filters a row
+// after reconstructing it, from saved copies), so the frame is
+// reconstructed whole and filtered afterwards in macroblock order.
+
+import std
+import std.mem.Allocator
+
+// Coefficient k of a 4x4 block (zigzag order) is at VP8_ZIGZAG[k].
+let VP8_ZIGZAG = [16]usize{0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15}
+
+// The probability band of each coefficient position (the 17th is for
+// the position after the last).
+let VP8_BANDS = [17]usize{0, 1, 2, 3, 6, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7, 0}
+
+// The probabilities of the extra bits of large coefficients (categories
+// 3 to 6), one table after the other.
+let VP8_CAT_PROBA = [23]u8{173, 148, 140, 176, 155, 140, 135, 180, 157, 141, 134, 130, 254, 254, 243, 230, 196, 177, 153, 140, 133, 130, 129}
+let VP8_CAT_START = [4]usize{0, 3, 7, 12}
+let VP8_CAT_LEN = [4]usize{3, 4, 5, 11}
+
+// Prediction modes: the 16x16 and chroma ones are the first four.
+let VP8_DC_PRED: u8 = 0
+let VP8_TM_PRED: u8 = 1
+let VP8_VE_PRED: u8 = 2
+let VP8_HE_PRED: u8 = 3
+let VP8_RD_PRED: u8 = 4
+let VP8_VR_PRED: u8 = 5
+let VP8_LD_PRED: u8 = 6
+let VP8_VL_PRED: u8 = 7
+let VP8_HD_PRED: u8 = 8
+let VP8_HU_PRED: u8 = 9
+
+// The boolean decoder of one partition, as libwebp's VP8BitReader:
+// `value` holds `bits` + 8 unread bits, `range` is the range minus 1.
+// Reading past the end yields zero bits and sets `eof` (the frame is
+// then cut short: an error).
+struct Vp8Bits {
+    data: []u8
+    pos: usize
+    value: u64
+    bits: i32
+    range: u32
+    eof: bool
+
+    fn load(self: *mut Self) {
+        if self.data.len - self.pos >= 8 {
+            var v: u64 = 0
+            for k in 0..7 {
+                v = (v << 8) | self.data[self.pos + k] as u64
+            }
+            self.pos += 7
+            self.value = (self.value << 56) | v
+            self.bits += 56
+        } else if self.pos < self.data.len {
+            self.value = (self.value << 8) | self.data[self.pos] as u64
+            self.pos += 1
+            self.bits += 8
+        } else if !self.eof {
+            self.value = self.value << 8
+            self.bits += 8
+            self.eof = true
+        } else {
+            self.bits = 0
+        }
+    }
+
+    // One bit whose probability of being 0 is `prob` / 256.
+    fn bit(self: *mut Self, prob: u32) u32 {
+        if self.bits < 0 {
+            self.load()
+        }
+        let pos = self.bits as u64
+        var range = self.range
+        let split = (range * prob) >> 8
+        var b: u32 = 0
+        if (self.value >> pos) > split as u64 {
+            range -= split
+            self.value -= (split as u64 + 1) << pos
+            b = 1
+        } else {
+            range = split + 1
+        }
+        while range < 128 {
+            range = range << 1
+            self.bits -= 1
+        }
+        self.range = range - 1
+        return b
+    }
+
+    // `n` bits of probability 1/2, most significant first.
+    fn literal(self: *mut Self, n: u32) i32 {
+        var v: i32 = 0
+        for i in 0..n {
+            v = (v << 1) | self.bit(128) as i32
+        }
+        return v
+    }
+
+    // `n` bits and a sign bit.
+    fn signed(self: *mut Self, n: u32) i32 {
+        let v = self.literal(n)
+        if self.bit(128) == 1 {
+            return -v
+        }
+        return v
+    }
+
+    // A flag: a bit of probability 1/2.
+    fn flag(self: *mut Self) bool {
+        return self.bit(128) == 1
+    }
+}
+
+fn vp8NewBits(data: []u8) Vp8Bits {
+    var br = Vp8Bits { data: data, pos: 0, value: 0, bits: -8, range: 254, eof: false }
+    br.load()
+    return br
+}
+
+// What the header and the macroblocks decoded so far say.
+struct Vp8Dec {
+    width: usize
+    height: usize
+    mb_w: usize
+    mb_h: usize
+    // Segments: their quantizer and filter level (absolute values, or
+    // deltas from the frame's), and the probabilities of the segment map.
+    use_segment: bool
+    update_map: bool
+    absolute_delta: bool
+    seg_quant: [4]i32
+    seg_filter: [4]i32
+    seg_proba: [3]u32
+    // The loop filter: 0 none, 1 simple, 2 normal.
+    filter_type: u32
+    level: i32
+    sharpness: i32
+    use_lf_delta: bool
+    ref_lf_delta: [4]i32
+    mode_lf_delta: [4]i32
+    // Per segment: the DC and AC steps of Y1, Y2 and UV (6 values).
+    dq: [24]i32
+    // The coefficient probabilities [type][band][context][11].
+    proba: [1056]u8
+    use_skip: bool
+    skip_p: u32
+    // Per segment and per 16x16 / 4x4 macroblock: the filter limit
+    // (0: no filtering), the interior limit and the hev threshold.
+    f_limit: [8]i32
+    f_ilevel: [8]i32
+    f_hev: [8]i32
+    // The planes, padded to whole macroblocks.
+    y: []mut u8
+    u: []mut u8
+    v: []mut u8
+    ystride: usize
+    uvstride: usize
+    // Per macroblock: the filter limit, interior limit, hev threshold
+    // and whether the inner edges are filtered (4 bytes).
+    finfo: []mut u8
+    // The subblock modes along the bottom of the row above (4 per
+    // macroblock) and at the right of the previous macroblock.
+    intra_t: []mut u8
+    intra_l: [4]u8
+    // Non-zero flags along the bottom of the row above (9 per
+    // macroblock: 4 Y, 2 U, 2 V, Y2) and at the right of the previous
+    // macroblock.
+    nz_t: []mut u8
+    nz_l: [9]u8
+    // The coefficients of the current macroblock: 16 Y, 4 U, 4 V blocks.
+    coeffs: []mut i32
+    // The modes of the current macroblock.
+    segment: usize
+    skip: bool
+    is_i4x4: bool
+    imodes: [16]u8
+    uvmode: u8
+}
+
+/// Decodes the body of a `VP8 ` chunk (a VP8 key frame) to an opaque
+/// RGBA bitmap.
+pub fn vp8Decode(alloc: Allocator, data: []u8) ImageError!Bitmap {
+    // The frame tag: key frame (bit 0 clear), version, shown, and the
+    // size of the first partition; then a start code and the sizes.
+    if data.len < 10 {
+        return ImageError.Invalid
+    }
+    let tag = data[0] as u32 | (data[1] as u32 << 8) | (data[2] as u32 << 16)
+    if tag & 1 != 0 || (tag >> 1) & 7 > 3 || (tag >> 4) & 1 == 0 {
+        return ImageError.Invalid
+    }
+    let part0 = (tag >> 5) as usize
+    if data[3] != 0x9D || data[4] != 0x01 || data[5] != 0x2A {
+        return ImageError.Invalid
+    }
+    let width = (data[6] as usize | (data[7] as usize << 8)) & 0x3FFF
+    let height = (data[8] as usize | (data[9] as usize << 8)) & 0x3FFF
+    try checkSize(width, height)
+    let rest = data[10..]
+    if part0 > rest.len {
+        return ImageError.Invalid
+    }
+    var br = vp8NewBits(rest[..part0])
+    let mb_w = (width + 15) / 16
+    let mb_h = (height + 15) / 16
+    var d = Vp8Dec {
+        width: width,
+        height: height,
+        mb_w: mb_w,
+        mb_h: mb_h,
+        use_segment: false,
+        update_map: false,
+        absolute_delta: true,
+        seg_quant: [4]i32{0, 0, 0, 0},
+        seg_filter: [4]i32{0, 0, 0, 0},
+        seg_proba: [3]u32{255, 255, 255},
+        filter_type: 0,
+        level: 0,
+        sharpness: 0,
+        use_lf_delta: false,
+        ref_lf_delta: [4]i32{0, 0, 0, 0},
+        mode_lf_delta: [4]i32{0, 0, 0, 0},
+        dq: @zeroed([24]i32),
+        proba: VP8_COEFF_PROBA0,
+        use_skip: false,
+        skip_p: 0,
+        f_limit: @zeroed([8]i32),
+        f_ilevel: @zeroed([8]i32),
+        f_hev: @zeroed([8]i32),
+        y: []mut u8{},
+        u: []mut u8{},
+        v: []mut u8{},
+        ystride: mb_w * 16,
+        uvstride: mb_w * 8,
+        finfo: []mut u8{},
+        intra_t: []mut u8{},
+        intra_l: [4]u8{0, 0, 0, 0},
+        nz_t: []mut u8{},
+        nz_l: @zeroed([9]u8),
+        coeffs: []mut i32{},
+        segment: 0,
+        skip: false,
+        is_i4x4: false,
+        imodes: @zeroed([16]u8),
+        uvmode: 0,
+    }
+    // Color space and clamping type: nothing to do with either.
+    br.flag()
+    br.flag()
+    vp8SegmentHeader(&mut d, &mut br)
+    vp8FilterHeader(&mut d, &mut br)
+    if br.eof {
+        return ImageError.Invalid
+    }
+    // The token partitions: their sizes (3 bytes each but the last's)
+    // follow the first partition.
+    let nparts = (1 as usize) << br.literal(2) as usize
+    let after = rest[part0..]
+    if after.len < 3 * (nparts - 1) {
+        return ImageError.Invalid
+    }
+    var parts = [8]Vp8Bits{vp8NewBits(""), vp8NewBits(""), vp8NewBits(""), vp8NewBits(""), vp8NewBits(""), vp8NewBits(""), vp8NewBits(""), vp8NewBits("")}
+    var start = 3 * (nparts - 1)
+    for p in 0..nparts - 1 {
+        var size = after[p * 3] as usize | (after[p * 3 + 1] as usize << 8) | (after[p * 3 + 2] as usize << 16)
+        if size > after.len - start {
+            size = after.len - start
+        }
+        parts[p] = vp8NewBits(after[start..start + size])
+        start += size
+    }
+    if start >= after.len {
+        return ImageError.Invalid
+    }
+    parts[nparts - 1] = vp8NewBits(after[start..])
+    vp8Quant(&mut d, &mut br)
+    // Whether to keep the probabilities: there is only one frame.
+    br.flag()
+    for i in 0..1056 {
+        if br.bit(VP8_COEFF_UPDATE_PROBA[i] as u32) == 1 {
+            d.proba[i] = br.literal(8) as u8
+        }
+    }
+    d.use_skip = br.flag()
+    if d.use_skip {
+        d.skip_p = br.literal(8) as u32
+    }
+    if br.eof {
+        return ImageError.Invalid
+    }
+    vp8FilterStrengths(&mut d)
+
+    d.y = try alloc.alloc(0 as u8, d.ystride * mb_h * 16)
+    defer alloc.free(d.y)
+    d.u = try alloc.alloc(0 as u8, d.uvstride * mb_h * 8)
+    defer alloc.free(d.u)
+    d.v = try alloc.alloc(0 as u8, d.uvstride * mb_h * 8)
+    defer alloc.free(d.v)
+    d.finfo = try alloc.alloc(0 as u8, mb_w * mb_h * 4)
+    defer alloc.free(d.finfo)
+    d.intra_t = try alloc.alloc(0 as u8, mb_w * 4)
+    defer alloc.free(d.intra_t)
+    d.nz_t = try alloc.alloc(0 as u8, mb_w * 9)
+    defer alloc.free(d.nz_t)
+    d.coeffs = try alloc.alloc(0 as i32, 384)
+    defer alloc.free(d.coeffs)
+
+    for mby in 0..mb_h {
+        let tokens = &mut parts[mby & (nparts - 1)]
+        d.intra_l = [4]u8{0, 0, 0, 0}
+        d.nz_l = @zeroed([9]u8)
+        for mbx in 0..mb_w {
+            vp8IntraMode(&mut d, &mut br, mbx)
+            if br.eof {
+                return ImageError.Invalid
+            }
+            var coded = false
+            if !d.skip {
+                coded = vp8Residuals(&mut d, tokens, mbx)
+            } else {
+                for k in 0..8 {
+                    d.nz_t[mbx * 9 + k] = 0
+                    d.nz_l[k] = 0
+                }
+                if !d.is_i4x4 {
+                    d.nz_t[mbx * 9 + 8] = 0
+                    d.nz_l[8] = 0
+                }
+                for k in 0..384 {
+                    d.coeffs[k] = 0
+                }
+            }
+            if tokens.eof {
+                return ImageError.Invalid
+            }
+            vp8Reconstruct(&mut d, mbx, mby)
+            let fi = (mby * mb_w + mbx) * 4
+            var k = d.segment * 2
+            if d.is_i4x4 {
+                k += 1
+            }
+            d.finfo[fi] = d.f_limit[k] as u8
+            d.finfo[fi + 1] = d.f_ilevel[k] as u8
+            d.finfo[fi + 2] = d.f_hev[k] as u8
+            d.finfo[fi + 3] = 0
+            if d.is_i4x4 || coded {
+                d.finfo[fi + 3] = 1
+            }
+        }
+    }
+    if d.filter_type > 0 {
+        for mby in 0..mb_h {
+            for mbx in 0..mb_w {
+                vp8FilterMb(&d, mbx, mby)
+            }
+        }
+    }
+    var bmp = try newBitmap(alloc, width, height)
+    vp8ToRgba(&d, bmp.pixels)
+    return bmp
+}
+
+// The segment header: whether macroblocks have segments, the segments'
+// quantizers and filter levels, and the probabilities of the map.
+fn vp8SegmentHeader(d: *mut Vp8Dec, br: *mut Vp8Bits) {
+    d.use_segment = br.flag()
+    if !d.use_segment {
+        return
+    }
+    d.update_map = br.flag()
+    if br.flag() {
+        d.absolute_delta = br.flag()
+        for s in 0..4 {
+            d.seg_quant[s] = 0
+            if br.flag() {
+                d.seg_quant[s] = br.signed(7)
+            }
+        }
+        for s in 0..4 {
+            d.seg_filter[s] = 0
+            if br.flag() {
+                d.seg_filter[s] = br.signed(6)
+            }
+        }
+    }
+    if d.update_map {
+        for s in 0..3 {
+            d.seg_proba[s] = 255
+            if br.flag() {
+                d.seg_proba[s] = br.literal(8) as u32
+            }
+        }
+    }
+}
+
+// The loop filter header: its type, level and sharpness, and the level
+// deltas by reference frame and mode (only the first of each applies to
+// a key frame).
+fn vp8FilterHeader(d: *mut Vp8Dec, br: *mut Vp8Bits) {
+    let simple = br.flag()
+    d.level = br.literal(6)
+    d.sharpness = br.literal(3)
+    d.use_lf_delta = br.flag()
+    if d.use_lf_delta && br.flag() {
+        for i in 0..4 {
+            if br.flag() {
+                d.ref_lf_delta[i] = br.signed(6)
+            }
+        }
+        for i in 0..4 {
+            if br.flag() {
+                d.mode_lf_delta[i] = br.signed(6)
+            }
+        }
+    }
+    if d.level == 0 {
+        d.filter_type = 0
+    } else if simple {
+        d.filter_type = 1
+    } else {
+        d.filter_type = 2
+    }
+}
+
+// The quantizer indices (a base and five deltas) and each segment's
+// steps, with libwebp's clamps.
+fn vp8Quant(d: *mut Vp8Dec, br: *mut Vp8Bits) {
+    let base = br.literal(7)
+    var deltas = [5]i32{0, 0, 0, 0, 0}
+    for i in 0..5 {
+        if br.flag() {
+            deltas[i] = br.signed(4)
+        }
+    }
+    for s in 0..4 {
+        var q = base
+        if d.use_segment {
+            q = d.seg_quant[s]
+            if !d.absolute_delta {
+                q += base
+            }
+        } else if s > 0 {
+            for k in 0..6 {
+                d.dq[s * 6 + k] = d.dq[k]
+            }
+            continue
+        }
+        let m = s * 6
+        d.dq[m] = VP8_DC_TABLE[vp8ClipIndex(q + deltas[0], 127)]
+        d.dq[m + 1] = VP8_AC_TABLE[vp8ClipIndex(q, 127)]
+        d.dq[m + 2] = VP8_DC_TABLE[vp8ClipIndex(q + deltas[1], 127)] * 2
+        d.dq[m + 3] = (VP8_AC_TABLE[vp8ClipIndex(q + deltas[2], 127)] * 101581) >> 16
+        if d.dq[m + 3] < 8 {
+            d.dq[m + 3] = 8
+        }
+        d.dq[m + 4] = VP8_DC_TABLE[vp8ClipIndex(q + deltas[3], 117)]
+        d.dq[m + 5] = VP8_AC_TABLE[vp8ClipIndex(q + deltas[4], 127)]
+    }
+}
+
+fn vp8ClipIndex(v: i32, max: i32) usize {
+    if v < 0 {
+        return 0
+    }
+    if v > max {
+        return max as usize
+    }
+    return v as usize
+}
+
+// The filter limits of each segment, for 16x16 and 4x4 macroblocks.
+fn vp8FilterStrengths(d: *mut Vp8Dec) {
+    if d.filter_type == 0 {
+        return
+    }
+    for s in 0..4 {
+        var base = d.level
+        if d.use_segment {
+            base = d.seg_filter[s]
+            if !d.absolute_delta {
+                base += d.level
+            }
+        }
+        for i4x4 in 0..2 {
+            let k = s * 2 + i4x4
+            var level = base
+            if d.use_lf_delta {
+                level += d.ref_lf_delta[0]
+                if i4x4 == 1 {
+                    level += d.mode_lf_delta[0]
+                }
+            }
+            if level < 0 {
+                level = 0
+            }
+            if level > 63 {
+                level = 63
+            }
+            if level == 0 {
+                d.f_limit[k] = 0
+                continue
+            }
+            var ilevel = level
+            if d.sharpness > 0 {
+                if d.sharpness > 4 {
+                    ilevel = ilevel >> 2
+                } else {
+                    ilevel = ilevel >> 1
+                }
+                if ilevel > 9 - d.sharpness {
+                    ilevel = 9 - d.sharpness
+                }
+            }
+            if ilevel < 1 {
+                ilevel = 1
+            }
+            d.f_ilevel[k] = ilevel
+            d.f_limit[k] = 2 * level + ilevel
+            d.f_hev[k] = 0
+            if level >= 40 {
+                d.f_hev[k] = 2
+            } else if level >= 15 {
+                d.f_hev[k] = 1
+            }
+        }
+    }
+}
+
+// The segment, skip flag and prediction modes of macroblock `mbx` of
+// the row, from the first partition. Subblock modes are coded with
+// probabilities that depend on the modes above and to the left.
+fn vp8IntraMode(d: *mut Vp8Dec, br: *mut Vp8Bits, mbx: usize) {
+    d.segment = 0
+    if d.update_map {
+        if br.bit(d.seg_proba[0]) == 0 {
+            d.segment = br.bit(d.seg_proba[1]) as usize
+        } else {
+            d.segment = br.bit(d.seg_proba[2]) as usize + 2
+        }
+    }
+    d.skip = false
+    if d.use_skip {
+        d.skip = br.bit(d.skip_p) == 1
+    }
+    let top = mbx * 4
+    d.is_i4x4 = br.bit(145) == 0
+    if !d.is_i4x4 {
+        var ymode = VP8_DC_PRED
+        if br.bit(156) == 1 {
+            if br.bit(128) == 1 {
+                ymode = VP8_TM_PRED
+            } else {
+                ymode = VP8_HE_PRED
+            }
+        } else if br.bit(163) == 1 {
+            ymode = VP8_VE_PRED
+        }
+        d.imodes[0] = ymode
+        for i in 0..4 {
+            d.intra_t[top + i] = ymode
+            d.intra_l[i] = ymode
+        }
+    } else {
+        for y in 0..4 {
+            var ymode = d.intra_l[y]
+            for x in 0..4 {
+                let p = (d.intra_t[top + x] as usize * 10 + ymode as usize) * 9
+                ymode = vp8SubblockMode(br, p)
+                d.intra_t[top + x] = ymode
+                d.imodes[y * 4 + x] = ymode
+            }
+            d.intra_l[y] = ymode
+        }
+    }
+    if br.bit(142) == 0 {
+        d.uvmode = VP8_DC_PRED
+    } else if br.bit(114) == 0 {
+        d.uvmode = VP8_VE_PRED
+    } else if br.bit(183) == 1 {
+        d.uvmode = VP8_TM_PRED
+    } else {
+        d.uvmode = VP8_HE_PRED
+    }
+}
+
+// A subblock mode, with the 9 probabilities at VP8_BMODES_PROBA[p..].
+fn vp8SubblockMode(br: *mut Vp8Bits, p: usize) u8 {
+    let pr = VP8_BMODES_PROBA[p..p + 9]
+    if br.bit(pr[0] as u32) == 0 {
+        return VP8_DC_PRED
+    }
+    if br.bit(pr[1] as u32) == 0 {
+        return VP8_TM_PRED
+    }
+    if br.bit(pr[2] as u32) == 0 {
+        return VP8_VE_PRED
+    }
+    if br.bit(pr[3] as u32) == 0 {
+        if br.bit(pr[4] as u32) == 0 {
+            return VP8_HE_PRED
+        }
+        if br.bit(pr[5] as u32) == 0 {
+            return VP8_RD_PRED
+        }
+        return VP8_VR_PRED
+    }
+    if br.bit(pr[6] as u32) == 0 {
+        return VP8_LD_PRED
+    }
+    if br.bit(pr[7] as u32) == 0 {
+        return VP8_VL_PRED
+    }
+    if br.bit(pr[8] as u32) == 0 {
+        return VP8_HD_PRED
+    }
+    return VP8_HU_PRED
+}
+
+// The coefficients of the current macroblock into `d.coeffs`
+// (dequantized; the Y2 block's inverse WHT gives the Y blocks' DC
+// terms), updating the non-zero contexts. Returns whether any block has
+// coefficients (as libwebp counts them: a DC term or more than one).
+fn vp8Residuals(d: *mut Vp8Dec, br: *mut Vp8Bits, mbx: usize) bool {
+    let c = d.coeffs
+    for k in 0..384 {
+        c[k] = 0
+    }
+    let q = d.segment * 6
+    let t = mbx * 9
+    var coded = false
+    var first: usize = 0
+    var ytype: usize = 3
+    if !d.is_i4x4 {
+        var dc = @zeroed([16]i32)
+        let ctx = (d.nz_t[t + 8] + d.nz_l[8]) as usize
+        let nz = vp8Coeffs(br, &d.proba, 1, ctx, d.dq[q + 2], d.dq[q + 3], 0, dc[..])
+        var flag: u8 = 0
+        if nz > 0 {
+            flag = 1
+        }
+        d.nz_t[t + 8] = flag
+        d.nz_l[8] = flag
+        if nz > 1 {
+            vp8Wht(dc[..], c)
+        } else {
+            let dc0 = vp8Wrap16((dc[0] + 3) >> 3)
+            for i in 0..16 {
+                c[i * 16] = dc0
+            }
+        }
+        first = 1
+        ytype = 0
+    }
+    for y in 0..4 {
+        var l = d.nz_l[y]
+        for x in 0..4 {
+            let at = (y * 4 + x) * 16
+            let ctx = (l + d.nz_t[t + x]) as usize
+            let nz = vp8Coeffs(br, &d.proba, ytype, ctx, d.dq[q], d.dq[q + 1], first, c[at..at + 16])
+            l = 0
+            if nz > first {
+                l = 1
+            }
+            d.nz_t[t + x] = l
+            if nz > 1 || c[at] != 0 {
+                coded = true
+            }
+        }
+        d.nz_l[y] = l
+    }
+    for ch in 0..2 {
+        let base = 4 + ch * 2
+        for y in 0..2 {
+            var l = d.nz_l[base + y]
+            for x in 0..2 {
+                let at = (16 + ch * 4 + y * 2 + x) * 16
+                let ctx = (l + d.nz_t[t + base + x]) as usize
+                let nz = vp8Coeffs(br, &d.proba, 2, ctx, d.dq[q + 4], d.dq[q + 5], 0, c[at..at + 16])
+                l = 0
+                if nz > 0 {
+                    l = 1
+                }
+                d.nz_t[t + base + x] = l
+                if nz > 1 || c[at] != 0 {
+                    coded = true
+                }
+            }
+            d.nz_l[base + y] = l
+        }
+    }
+    return coded
+}
+
+// The tokens of one block of type `t` (0 Y after Y2, 1 Y2, 2 chroma, 3
+// Y with DC) from position `n` into `out` (natural order, dequantized
+// by `dcq` and `acq`, kept to 16 bits as libwebp does). Returns the
+// position after the last non-zero coefficient (or where it started).
+fn vp8Coeffs(br: *mut Vp8Bits, proba: *[1056]u8, t: usize, ctx: usize, dcq: i32, acq: i32, start: usize, out: []mut i32) usize {
+    var n = start
+    var p = ((t * 8 + VP8_BANDS[n]) * 3 + ctx) * 11
+    while n < 16 {
+        if br.bit(proba[p] as u32) == 0 {
+            return n
+        }
+        while br.bit(proba[p + 1] as u32) == 0 {
+            n += 1
+            if n == 16 {
+                return 16
+            }
+            p = (t * 8 + VP8_BANDS[n]) * 33
+        }
+        let next = (t * 8 + VP8_BANDS[n + 1]) * 33
+        var v: i32 = 1
+        if br.bit(proba[p + 2] as u32) == 0 {
+            p = next + 11
+        } else {
+            v = vp8LargeValue(br, proba, p)
+            p = next + 22
+        }
+        if br.bit(128) == 1 {
+            v = -v
+        }
+        var step = acq
+        if n == 0 {
+            step = dcq
+        }
+        out[VP8_ZIGZAG[n]] = vp8Wrap16(v * step)
+        n += 1
+    }
+    return 16
+}
+
+// A coefficient of 2 or more: its size category, then extra bits.
+fn vp8LargeValue(br: *mut Vp8Bits, proba: *[1056]u8, p: usize) i32 {
+    if br.bit(proba[p + 3] as u32) == 0 {
+        if br.bit(proba[p + 4] as u32) == 0 {
+            return 2
+        }
+        return 3 + br.bit(proba[p + 5] as u32) as i32
+    }
+    if br.bit(proba[p + 6] as u32) == 0 {
+        if br.bit(proba[p + 7] as u32) == 0 {
+            return 5 + br.bit(159) as i32
+        }
+        var v = 7 + 2 * br.bit(165) as i32
+        return v + br.bit(145) as i32
+    }
+    let bit1 = br.bit(proba[p + 8] as u32) as usize
+    let bit0 = br.bit(proba[p + 9 + bit1] as u32) as usize
+    let cat = 2 * bit1 + bit0
+    var v: i32 = 0
+    let s = VP8_CAT_START[cat]
+    for i in 0..VP8_CAT_LEN[cat] {
+        v = v + v + br.bit(VP8_CAT_PROBA[s + i] as u32) as i32
+    }
+    return v + 3 + ((8 as i32) << cat as i32)
+}
+
+// A value kept to 16 bits, as libwebp's int16_t coefficients.
+fn vp8Wrap16(v: i32) i32 {
+    return ((v +% 32768) & 0xFFFF) - 32768
+}
+
+// The inverse Walsh-Hadamard transform of the Y2 block: the DC terms of
+// the 16 Y blocks.
+fn vp8Wht(input: []i32, out: []mut i32) {
+    var tmp = @zeroed([16]i32)
+    for i in 0..4 {
+        let a0 = input[i] + input[12 + i]
+        let a1 = input[4 + i] + input[8 + i]
+        let a2 = input[4 + i] - input[8 + i]
+        let a3 = input[i] - input[12 + i]
+        tmp[i] = a0 + a1
+        tmp[8 + i] = a0 - a1
+        tmp[4 + i] = a3 + a2
+        tmp[12 + i] = a3 - a2
+    }
+    for i in 0..4 {
+        let dc = tmp[i * 4] + 3
+        let a0 = dc + tmp[3 + i * 4]
+        let a1 = tmp[1 + i * 4] + tmp[2 + i * 4]
+        let a2 = tmp[1 + i * 4] - tmp[2 + i * 4]
+        let a3 = dc - tmp[3 + i * 4]
+        let o = i * 64
+        out[o] = vp8Wrap16((a0 + a1) >> 3)
+        out[o + 16] = vp8Wrap16((a3 + a2) >> 3)
+        out[o + 32] = vp8Wrap16((a0 - a1) >> 3)
+        out[o + 48] = vp8Wrap16((a3 - a2) >> 3)
+    }
+}
+
+fn vp8Mul1(a: i32) i32 {
+    return ((a *% 20091) >> 16) +% a
+}
+
+fn vp8Mul2(a: i32) i32 {
+    return (a *% 35468) >> 16
+}
+
+// Adds the inverse DCT of the 16 coefficients `c` to the 4x4 pixels at
+// `at` of `plane` (libwebp's TransformOne, exact integer arithmetic; a
+// block with only a DC term adds a constant).
+fn vp8Idct(c: []i32, plane: []mut u8, at: usize, stride: usize) {
+    var only_dc = true
+    for i in 1..16 {
+        if c[i] != 0 {
+            only_dc = false
+        }
+    }
+    if only_dc {
+        if c[0] == 0 {
+            return
+        }
+        let dc = (c[0] + 4) >> 3
+        for y in 0..4 {
+            let row = at + y * stride
+            for x in 0..4 {
+                plane[row + x] = vp8Clip8(plane[row + x] as i32 + dc)
+            }
+        }
+        return
+    }
+    var tmp = @zeroed([16]i32)
+    for i in 0..4 {
+        let a = c[i] + c[8 + i]
+        let b = c[i] - c[8 + i]
+        let cc = vp8Mul2(c[4 + i]) - vp8Mul1(c[12 + i])
+        let dd = vp8Mul1(c[4 + i]) + vp8Mul2(c[12 + i])
+        tmp[i * 4] = a + dd
+        tmp[i * 4 + 1] = b + cc
+        tmp[i * 4 + 2] = b - cc
+        tmp[i * 4 + 3] = a - dd
+    }
+    for i in 0..4 {
+        let dc = tmp[i] + 4
+        let a = dc +% tmp[8 + i]
+        let b = dc -% tmp[8 + i]
+        let cc = vp8Mul2(tmp[4 + i]) -% vp8Mul1(tmp[12 + i])
+        let dd = vp8Mul1(tmp[4 + i]) +% vp8Mul2(tmp[12 + i])
+        let row = at + i * stride
+        plane[row] = vp8Clip8(plane[row] as i32 + ((a +% dd) >> 3))
+        plane[row + 1] = vp8Clip8(plane[row + 1] as i32 + ((b +% cc) >> 3))
+        plane[row + 2] = vp8Clip8(plane[row + 2] as i32 + ((b -% cc) >> 3))
+        plane[row + 3] = vp8Clip8(plane[row + 3] as i32 + ((a -% dd) >> 3))
+    }
+}
+
+fn vp8Clip8(v: i32) u8 {
+    if v < 0 {
+        return 0
+    }
+    if v > 255 {
+        return 255
+    }
+    return v as u8
+}
+
+// Predicts the current macroblock (mbx, mby) and adds its residuals.
+// Outside the frame, the row above is 127 and the column to the left
+// 129 (the corner is 127 on the first row).
+fn vp8Reconstruct(d: *mut Vp8Dec, mbx: usize, mby: usize) {
+    let ys = d.ystride
+    let x0 = mbx * 16
+    let y0 = mby * 16
+    let c = d.coeffs
+    if !d.is_i4x4 {
+        vp8PredBlock(d.y, ys, x0, y0, 16, d.imodes[0], mby > 0, mbx > 0)
+        for n in 0..16 {
+            vp8Idct(c[n * 16..n * 16 + 16], d.y, (y0 + (n / 4) * 4) * ys + x0 + (n % 4) * 4, ys)
+        }
+    } else {
+        // The 4 pixels above and to the right of the macroblock, which
+        // the subblocks of the right column all use.
+        var right = [4]i32{127, 127, 127, 127}
+        if mby > 0 {
+            let above = (y0 - 1) * ys
+            for i in 0..4 {
+                if mbx + 1 < d.mb_w {
+                    right[i] = d.y[above + x0 + 16 + i] as i32
+                } else {
+                    right[i] = d.y[above + x0 + 15] as i32
+                }
+            }
+        }
+        for n in 0..16 {
+            let bx = n % 4
+            let by = n / 4
+            let px = x0 + bx * 4
+            let py = y0 + by * 4
+            var top = [8]i32{127, 127, 127, 127, 127, 127, 127, 127}
+            if py > 0 {
+                let above = (py - 1) * ys
+                for i in 0..4 {
+                    top[i] = d.y[above + px + i] as i32
+                }
+                if bx < 3 {
+                    for i in 0..4 {
+                        top[4 + i] = d.y[above + px + 4 + i] as i32
+                    }
+                }
+            }
+            if bx == 3 {
+                for i in 0..4 {
+                    top[4 + i] = right[i]
+                }
+            }
+            var left = [4]i32{129, 129, 129, 129}
+            if px > 0 {
+                for i in 0..4 {
+                    left[i] = d.y[(py + i) * ys + px - 1] as i32
+                }
+            }
+            var corner: i32 = 127
+            if py > 0 {
+                corner = 129
+                if px > 0 {
+                    corner = d.y[(py - 1) * ys + px - 1] as i32
+                }
+            }
+            vp8Pred4(d.imodes[n], &top, &left, corner, d.y, py * ys + px, ys)
+            vp8Idct(c[n * 16..n * 16 + 16], d.y, py * ys + px, ys)
+        }
+    }
+    let us = d.uvstride
+    vp8PredBlock(d.u, us, mbx * 8, mby * 8, 8, d.uvmode, mby > 0, mbx > 0)
+    vp8PredBlock(d.v, us, mbx * 8, mby * 8, 8, d.uvmode, mby > 0, mbx > 0)
+    for n in 0..4 {
+        let at = (mby * 8 + (n / 2) * 4) * us + mbx * 8 + (n % 2) * 4
+        vp8Idct(c[(16 + n) * 16..(17 + n) * 16], d.u, at, us)
+        vp8Idct(c[(20 + n) * 16..(21 + n) * 16], d.v, at, us)
+    }
+}
+
+// A 16x16 luma or 8x8 chroma prediction (DC, TM, V or H) of the block
+// at (x0, y0). DC averages the neighbors that are in the frame (128
+// when none are).
+fn vp8PredBlock(plane: []mut u8, stride: usize, x0: usize, y0: usize, size: usize, mode: u8, has_top: bool, has_left: bool) {
+    var top = [16]i32{127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127}
+    var left = [16]i32{129, 129, 129, 129, 129, 129, 129, 129, 129, 129, 129, 129, 129, 129, 129, 129}
+    var corner: i32 = 127
+    if has_top {
+        let above = (y0 - 1) * stride + x0
+        for i in 0..size {
+            top[i] = plane[above + i] as i32
+        }
+        corner = 129
+        if has_left {
+            corner = plane[above - 1] as i32
+        }
+    }
+    if has_left {
+        for j in 0..size {
+            left[j] = plane[(y0 + j) * stride + x0 - 1] as i32
+        }
+    }
+    var shift: i32 = 3
+    if size == 16 {
+        shift = 4
+    }
+    if mode == VP8_DC_PRED {
+        var dc: i32 = 128
+        var sum: i32 = 0
+        if has_top && has_left {
+            for i in 0..size {
+                sum += top[i] + left[i]
+            }
+            dc = (sum + size as i32) >> (shift + 1)
+        } else if has_top {
+            for i in 0..size {
+                sum += top[i]
+            }
+            dc = (sum + (size / 2) as i32) >> shift
+        } else if has_left {
+            for i in 0..size {
+                sum += left[i]
+            }
+            dc = (sum + (size / 2) as i32) >> shift
+        }
+        for y in 0..size {
+            let row = (y0 + y) * stride + x0
+            for x in 0..size {
+                plane[row + x] = dc as u8
+            }
+        }
+        return
+    }
+    for y in 0..size {
+        let row = (y0 + y) * stride + x0
+        for x in 0..size {
+            var p: i32 = 0
+            if mode == VP8_TM_PRED {
+                p = top[x] + left[y] - corner
+            } else if mode == VP8_VE_PRED {
+                p = top[x]
+            } else {
+                p = left[y]
+            }
+            plane[row + x] = vp8Clip8(p)
+        }
+    }
+}
+
+fn vp8Avg3(a: i32, b: i32, c: i32) u8 {
+    return ((a + 2 * b + c + 2) >> 2) as u8
+}
+
+fn vp8Avg2(a: i32, b: i32) u8 {
+    return ((a + b + 1) >> 1) as u8
+}
+
+// A 4x4 subblock prediction from the 8 pixels above (4 of them above
+// and to the right), the 4 to the left and the corner, into `plane` at
+// `at`.
+fn vp8Pred4(mode: u8, t: *[8]i32, l: *[4]i32, x: i32, plane: []mut u8, at: usize, stride: usize) {
+    var o = @zeroed([16]u8)
+    let a = t[0]
+    let b = t[1]
+    let c = t[2]
+    let dd = t[3]
+    let e = t[4]
+    let f = t[5]
+    let g = t[6]
+    let h = t[7]
+    let i = l[0]
+    let j = l[1]
+    let k = l[2]
+    let ll = l[3]
+    if mode == VP8_DC_PRED {
+        var sum: i32 = 4
+        for n in 0..4 {
+            sum += t[n] + l[n]
+        }
+        for n in 0..16 {
+            o[n] = (sum >> 3) as u8
+        }
+    } else if mode == VP8_TM_PRED {
+        for y in 0..4 {
+            for xx in 0..4 {
+                o[y * 4 + xx] = vp8Clip8(t[xx] + l[y] - x)
+            }
+        }
+    } else if mode == VP8_VE_PRED {
+        let v0 = vp8Avg3(x, a, b)
+        let v1 = vp8Avg3(a, b, c)
+        let v2 = vp8Avg3(b, c, dd)
+        let v3 = vp8Avg3(c, dd, e)
+        for y in 0..4 {
+            o[y * 4] = v0
+            o[y * 4 + 1] = v1
+            o[y * 4 + 2] = v2
+            o[y * 4 + 3] = v3
+        }
+    } else if mode == VP8_HE_PRED {
+        let r = [4]u8{vp8Avg3(x, i, j), vp8Avg3(i, j, k), vp8Avg3(j, k, ll), vp8Avg3(k, ll, ll)}
+        for y in 0..4 {
+            for xx in 0..4 {
+                o[y * 4 + xx] = r[y]
+            }
+        }
+    } else if mode == VP8_RD_PRED {
+        vp8Put(&mut o, 0, 3, vp8Avg3(j, k, ll))
+        let ijk = vp8Avg3(i, j, k)
+        vp8Put(&mut o, 1, 3, ijk)
+        vp8Put(&mut o, 0, 2, ijk)
+        let xij = vp8Avg3(x, i, j)
+        vp8Put(&mut o, 2, 3, xij)
+        vp8Put(&mut o, 1, 2, xij)
+        vp8Put(&mut o, 0, 1, xij)
+        let axi = vp8Avg3(a, x, i)
+        vp8Put(&mut o, 3, 3, axi)
+        vp8Put(&mut o, 2, 2, axi)
+        vp8Put(&mut o, 1, 1, axi)
+        vp8Put(&mut o, 0, 0, axi)
+        let bax = vp8Avg3(b, a, x)
+        vp8Put(&mut o, 3, 2, bax)
+        vp8Put(&mut o, 2, 1, bax)
+        vp8Put(&mut o, 1, 0, bax)
+        let cba = vp8Avg3(c, b, a)
+        vp8Put(&mut o, 3, 1, cba)
+        vp8Put(&mut o, 2, 0, cba)
+        vp8Put(&mut o, 3, 0, vp8Avg3(dd, c, b))
+    } else if mode == VP8_LD_PRED {
+        vp8Put(&mut o, 0, 0, vp8Avg3(a, b, c))
+        let bcd = vp8Avg3(b, c, dd)
+        vp8Put(&mut o, 1, 0, bcd)
+        vp8Put(&mut o, 0, 1, bcd)
+        let cde = vp8Avg3(c, dd, e)
+        vp8Put(&mut o, 2, 0, cde)
+        vp8Put(&mut o, 1, 1, cde)
+        vp8Put(&mut o, 0, 2, cde)
+        let def = vp8Avg3(dd, e, f)
+        vp8Put(&mut o, 3, 0, def)
+        vp8Put(&mut o, 2, 1, def)
+        vp8Put(&mut o, 1, 2, def)
+        vp8Put(&mut o, 0, 3, def)
+        let efg = vp8Avg3(e, f, g)
+        vp8Put(&mut o, 3, 1, efg)
+        vp8Put(&mut o, 2, 2, efg)
+        vp8Put(&mut o, 1, 3, efg)
+        let fgh = vp8Avg3(f, g, h)
+        vp8Put(&mut o, 3, 2, fgh)
+        vp8Put(&mut o, 2, 3, fgh)
+        vp8Put(&mut o, 3, 3, vp8Avg3(g, h, h))
+    } else if mode == VP8_VR_PRED {
+        let xa = vp8Avg2(x, a)
+        vp8Put(&mut o, 0, 0, xa)
+        vp8Put(&mut o, 1, 2, xa)
+        let ab = vp8Avg2(a, b)
+        vp8Put(&mut o, 1, 0, ab)
+        vp8Put(&mut o, 2, 2, ab)
+        let bc = vp8Avg2(b, c)
+        vp8Put(&mut o, 2, 0, bc)
+        vp8Put(&mut o, 3, 2, bc)
+        vp8Put(&mut o, 3, 0, vp8Avg2(c, dd))
+        vp8Put(&mut o, 0, 3, vp8Avg3(k, j, i))
+        vp8Put(&mut o, 0, 2, vp8Avg3(j, i, x))
+        let ixa = vp8Avg3(i, x, a)
+        vp8Put(&mut o, 0, 1, ixa)
+        vp8Put(&mut o, 1, 3, ixa)
+        let xab = vp8Avg3(x, a, b)
+        vp8Put(&mut o, 1, 1, xab)
+        vp8Put(&mut o, 2, 3, xab)
+        let abc = vp8Avg3(a, b, c)
+        vp8Put(&mut o, 2, 1, abc)
+        vp8Put(&mut o, 3, 3, abc)
+        vp8Put(&mut o, 3, 1, vp8Avg3(b, c, dd))
+    } else if mode == VP8_VL_PRED {
+        vp8Put(&mut o, 0, 0, vp8Avg2(a, b))
+        let bc = vp8Avg2(b, c)
+        vp8Put(&mut o, 1, 0, bc)
+        vp8Put(&mut o, 0, 2, bc)
+        let cd = vp8Avg2(c, dd)
+        vp8Put(&mut o, 2, 0, cd)
+        vp8Put(&mut o, 1, 2, cd)
+        let de = vp8Avg2(dd, e)
+        vp8Put(&mut o, 3, 0, de)
+        vp8Put(&mut o, 2, 2, de)
+        vp8Put(&mut o, 0, 1, vp8Avg3(a, b, c))
+        let bcd = vp8Avg3(b, c, dd)
+        vp8Put(&mut o, 1, 1, bcd)
+        vp8Put(&mut o, 0, 3, bcd)
+        let cde = vp8Avg3(c, dd, e)
+        vp8Put(&mut o, 2, 1, cde)
+        vp8Put(&mut o, 1, 3, cde)
+        let def = vp8Avg3(dd, e, f)
+        vp8Put(&mut o, 3, 1, def)
+        vp8Put(&mut o, 2, 3, def)
+        vp8Put(&mut o, 3, 2, vp8Avg3(e, f, g))
+        vp8Put(&mut o, 3, 3, vp8Avg3(f, g, h))
+    } else if mode == VP8_HU_PRED {
+        vp8Put(&mut o, 0, 0, vp8Avg2(i, j))
+        let jk = vp8Avg2(j, k)
+        vp8Put(&mut o, 2, 0, jk)
+        vp8Put(&mut o, 0, 1, jk)
+        let kl = vp8Avg2(k, ll)
+        vp8Put(&mut o, 2, 1, kl)
+        vp8Put(&mut o, 0, 2, kl)
+        vp8Put(&mut o, 1, 0, vp8Avg3(i, j, k))
+        let jkl = vp8Avg3(j, k, ll)
+        vp8Put(&mut o, 3, 0, jkl)
+        vp8Put(&mut o, 1, 1, jkl)
+        let kll = vp8Avg3(k, ll, ll)
+        vp8Put(&mut o, 3, 1, kll)
+        vp8Put(&mut o, 1, 2, kll)
+        let lv = ll as u8
+        vp8Put(&mut o, 3, 2, lv)
+        vp8Put(&mut o, 2, 2, lv)
+        vp8Put(&mut o, 0, 3, lv)
+        vp8Put(&mut o, 1, 3, lv)
+        vp8Put(&mut o, 2, 3, lv)
+        vp8Put(&mut o, 3, 3, lv)
+    } else {
+        // HD
+        let ix = vp8Avg2(i, x)
+        vp8Put(&mut o, 0, 0, ix)
+        vp8Put(&mut o, 2, 1, ix)
+        let ji = vp8Avg2(j, i)
+        vp8Put(&mut o, 0, 1, ji)
+        vp8Put(&mut o, 2, 2, ji)
+        let kj = vp8Avg2(k, j)
+        vp8Put(&mut o, 0, 2, kj)
+        vp8Put(&mut o, 2, 3, kj)
+        vp8Put(&mut o, 0, 3, vp8Avg2(ll, k))
+        vp8Put(&mut o, 3, 0, vp8Avg3(a, b, c))
+        vp8Put(&mut o, 2, 0, vp8Avg3(x, a, b))
+        let ixa = vp8Avg3(i, x, a)
+        vp8Put(&mut o, 1, 0, ixa)
+        vp8Put(&mut o, 3, 1, ixa)
+        let jix = vp8Avg3(j, i, x)
+        vp8Put(&mut o, 1, 1, jix)
+        vp8Put(&mut o, 3, 2, jix)
+        let kji = vp8Avg3(k, j, i)
+        vp8Put(&mut o, 1, 2, kji)
+        vp8Put(&mut o, 3, 3, kji)
+        vp8Put(&mut o, 1, 3, vp8Avg3(ll, k, j))
+    }
+    for y in 0..4 {
+        for xx in 0..4 {
+            plane[at + y * stride + xx] = o[y * 4 + xx]
+        }
+    }
+}
+
+fn vp8Put(o: *mut [16]u8, x: usize, y: usize, v: u8) {
+    o[y * 4 + x] = v
+}
+
+// The loop filter of macroblock (mbx, mby): its left edge, inner
+// vertical edges, top edge and inner horizontal edges, luma only for
+// the simple filter.
+fn vp8FilterMb(d: *Vp8Dec, mbx: usize, mby: usize) {
+    let fi = (mby * d.mb_w + mbx) * 4
+    let limit = d.finfo[fi] as i32
+    if limit == 0 {
+        return
+    }
+    let ilevel = d.finfo[fi + 1] as i32
+    let hev = d.finfo[fi + 2] as i32
+    let inner = d.finfo[fi + 3] == 1
+    let ys = d.ystride
+    let yat = mby * 16 * ys + mbx * 16
+    if d.filter_type == 1 {
+        if mbx > 0 {
+            vp8SimpleEdge(d.y, yat, 1, ys, limit + 4)
+        }
+        if inner {
+            for k in 1..4 {
+                vp8SimpleEdge(d.y, yat + k * 4, 1, ys, limit)
+            }
+        }
+        if mby > 0 {
+            vp8SimpleEdge(d.y, yat, ys, 1, limit + 4)
+        }
+        if inner {
+            for k in 1..4 {
+                vp8SimpleEdge(d.y, yat + k * 4 * ys, ys, 1, limit)
+            }
+        }
+        return
+    }
+    let us = d.uvstride
+    let uvat = mby * 8 * us + mbx * 8
+    if mbx > 0 {
+        vp8Edge(d.y, yat, 1, ys, 16, limit + 4, ilevel, hev, true)
+        vp8Edge(d.u, uvat, 1, us, 8, limit + 4, ilevel, hev, true)
+        vp8Edge(d.v, uvat, 1, us, 8, limit + 4, ilevel, hev, true)
+    }
+    if inner {
+        for k in 1..4 {
+            vp8Edge(d.y, yat + k * 4, 1, ys, 16, limit, ilevel, hev, false)
+        }
+        vp8Edge(d.u, uvat + 4, 1, us, 8, limit, ilevel, hev, false)
+        vp8Edge(d.v, uvat + 4, 1, us, 8, limit, ilevel, hev, false)
+    }
+    if mby > 0 {
+        vp8Edge(d.y, yat, ys, 1, 16, limit + 4, ilevel, hev, true)
+        vp8Edge(d.u, uvat, us, 1, 8, limit + 4, ilevel, hev, true)
+        vp8Edge(d.v, uvat, us, 1, 8, limit + 4, ilevel, hev, true)
+    }
+    if inner {
+        for k in 1..4 {
+            vp8Edge(d.y, yat + k * 4 * ys, ys, 1, 16, limit, ilevel, hev, false)
+        }
+        vp8Edge(d.u, uvat + 4 * us, us, 1, 8, limit, ilevel, hev, false)
+        vp8Edge(d.v, uvat + 4 * us, us, 1, 8, limit, ilevel, hev, false)
+    }
+}
+
+fn vp8Abs(v: i32) i32 {
+    if v < 0 {
+        return -v
+    }
+    return v
+}
+
+fn vp8Sclip(v: i32, lo: i32, hi: i32) i32 {
+    if v < lo {
+        return lo
+    }
+    if v > hi {
+        return hi
+    }
+    return v
+}
+
+// The simple filter across the edge before `at`: `step` crosses the
+// edge, `along` moves along it (16 pixels).
+fn vp8SimpleEdge(p: []mut u8, at: usize, step: usize, along: usize, thresh: i32) {
+    let t2 = 2 * thresh + 1
+    for n in 0..16 {
+        let q = at + n * along
+        let p1 = p[q - 2 * step] as i32
+        let p0 = p[q - step] as i32
+        let q0 = p[q] as i32
+        let q1 = p[q + step] as i32
+        if 4 * vp8Abs(p0 - q0) + vp8Abs(p1 - q1) <= t2 {
+            vp8Filter2(p, q, step)
+        }
+    }
+}
+
+// The normal filter across the edge before `at`, for `size` pixels: a
+// macroblock edge changes up to 3 pixels on each side, an inner edge 2.
+fn vp8Edge(p: []mut u8, at: usize, step: usize, along: usize, size: usize, thresh: i32, ithresh: i32, hev: i32, mb_edge: bool) {
+    let t2 = 2 * thresh + 1
+    for n in 0..size {
+        let q = at + n * along
+        let p3 = p[q - 4 * step] as i32
+        let p2 = p[q - 3 * step] as i32
+        let p1 = p[q - 2 * step] as i32
+        let p0 = p[q - step] as i32
+        let q0 = p[q] as i32
+        let q1 = p[q + step] as i32
+        let q2 = p[q + 2 * step] as i32
+        let q3 = p[q + 3 * step] as i32
+        if 4 * vp8Abs(p0 - q0) + vp8Abs(p1 - q1) > t2 {
+            continue
+        }
+        if vp8Abs(p3 - p2) > ithresh || vp8Abs(p2 - p1) > ithresh || vp8Abs(p1 - p0) > ithresh ||
+            vp8Abs(q3 - q2) > ithresh || vp8Abs(q2 - q1) > ithresh || vp8Abs(q1 - q0) > ithresh {
+            continue
+        }
+        if vp8Abs(p1 - p0) > hev || vp8Abs(q1 - q0) > hev {
+            vp8Filter2(p, q, step)
+        } else if mb_edge {
+            let a = vp8Sclip(3 * (q0 - p0) + vp8Sclip(p1 - q1, -128, 127), -128, 127)
+            let a1 = (27 * a + 63) >> 7
+            let a2 = (18 * a + 63) >> 7
+            let a3 = (9 * a + 63) >> 7
+            p[q - 3 * step] = vp8Clip8(p2 + a3)
+            p[q - 2 * step] = vp8Clip8(p1 + a2)
+            p[q - step] = vp8Clip8(p0 + a1)
+            p[q] = vp8Clip8(q0 - a1)
+            p[q + step] = vp8Clip8(q1 - a2)
+            p[q + 2 * step] = vp8Clip8(q2 - a3)
+        } else {
+            let a = 3 * (q0 - p0)
+            let a1 = vp8Sclip((a + 4) >> 3, -16, 15)
+            let a2 = vp8Sclip((a + 3) >> 3, -16, 15)
+            let a3 = (a1 + 1) >> 1
+            p[q - 2 * step] = vp8Clip8(p1 + a3)
+            p[q - step] = vp8Clip8(p0 + a2)
+            p[q] = vp8Clip8(q0 - a1)
+            p[q + step] = vp8Clip8(q1 - a3)
+        }
+    }
+}
+
+// Changes the pixel on each side of the edge at `q`.
+fn vp8Filter2(p: []mut u8, q: usize, step: usize) {
+    let p1 = p[q - 2 * step] as i32
+    let p0 = p[q - step] as i32
+    let q0 = p[q] as i32
+    let q1 = p[q + step] as i32
+    let a = 3 * (q0 - p0) + vp8Sclip(p1 - q1, -128, 127)
+    let a1 = vp8Sclip((a + 4) >> 3, -16, 15)
+    let a2 = vp8Sclip((a + 3) >> 3, -16, 15)
+    p[q - step] = vp8Clip8(p0 + a2)
+    p[q] = vp8Clip8(q0 - a1)
+}
+
+// The frame as RGBA: each output row mixes its nearer chroma row 3:1
+// with the other one (the first and an even-sized last row repeat
+// theirs), and along the row in the same way (UpsampleRgbaLinePair).
+fn vp8ToRgba(d: *Vp8Dec, out: []mut u8) {
+    let w = d.width
+    let h = d.height
+    let uvh = (h + 1) / 2
+    for y in 0..h {
+        let near = y / 2
+        var far = near
+        if y % 2 == 1 {
+            if near + 1 < uvh {
+                far = near + 1
+            }
+        } else if y > 0 {
+            far = near - 1
+        }
+        vp8UpsampleRow(d, y, near, far, out[y * w * 4..(y + 1) * w * 4])
+    }
+}
+
+fn vp8UpsampleRow(d: *Vp8Dec, y: usize, near: usize, far: usize, out: []mut u8) {
+    let w = d.width
+    let yr = d.y[y * d.ystride..]
+    let nu = d.u[near * d.uvstride..]
+    let nv = d.v[near * d.uvstride..]
+    let fu = d.u[far * d.uvstride..]
+    let fv = d.v[far * d.uvstride..]
+    vp8Rgba(yr[0] as i32, (3 * nu[0] as i32 + fu[0] as i32 + 2) >> 2, (3 * nv[0] as i32 + fv[0] as i32 + 2) >> 2, out, 0)
+    let last = (w - 1) / 2
+    for x in 1..last + 1 {
+        let au = nu[x - 1] as i32 + nu[x] as i32 + fu[x - 1] as i32 + fu[x] as i32 + 8
+        let av = nv[x - 1] as i32 + nv[x] as i32 + fv[x - 1] as i32 + fv[x] as i32 + 8
+        let u12 = (au + 2 * (nu[x] as i32 + fu[x - 1] as i32)) >> 3
+        let v12 = (av + 2 * (nv[x] as i32 + fv[x - 1] as i32)) >> 3
+        let u03 = (au + 2 * (nu[x - 1] as i32 + fu[x] as i32)) >> 3
+        let v03 = (av + 2 * (nv[x - 1] as i32 + fv[x] as i32)) >> 3
+        vp8Rgba(yr[2 * x - 1] as i32, (u12 + nu[x - 1] as i32) >> 1, (v12 + nv[x - 1] as i32) >> 1, out, (2 * x - 1) * 4)
+        vp8Rgba(yr[2 * x] as i32, (u03 + nu[x] as i32) >> 1, (v03 + nv[x] as i32) >> 1, out, 2 * x * 4)
+    }
+    if w % 2 == 0 {
+        vp8Rgba(yr[w - 1] as i32, (3 * nu[last] as i32 + fu[last] as i32 + 2) >> 2, (3 * nv[last] as i32 + fv[last] as i32 + 2) >> 2, out, (w - 1) * 4)
+    }
+}
+
+// libwebp's fixed-point YUV to RGB (14-bit constants, 6 bits kept).
+fn vp8Rgba(y: i32, u: i32, v: i32, out: []mut u8, at: usize) {
+    let yy = (y * 19077) >> 8
+    out[at] = vp8ClipRgb(yy + ((v * 26149) >> 8) - 14234)
+    out[at + 1] = vp8ClipRgb(yy - ((u * 6419) >> 8) - ((v * 13320) >> 8) + 8708)
+    out[at + 2] = vp8ClipRgb(yy + ((u * 33050) >> 8) - 17685)
+    out[at + 3] = 255
+}
+
+fn vp8ClipRgb(v: i32) u8 {
+    if v < 0 {
+        return 0
+    }
+    if v >= 16384 {
+        return 255
+    }
+    return (v >> 6) as u8
+}
+
+// The quantizer steps of the DC and AC coefficients by index.
+let VP8_DC_TABLE = [128]i32{
+    4, 5, 6, 7, 8, 9, 10, 10, 11, 12, 13, 14, 15, 16, 17, 17,
+    18, 19, 20, 20, 21, 21, 22, 22, 23, 23, 24, 25, 25, 26, 27, 28,
+    29, 30, 31, 32, 33, 34, 35, 36, 37, 37, 38, 39, 40, 41, 42, 43,
+    44, 45, 46, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58,
+    59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74,
+    75, 76, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89,
+    91, 93, 95, 96, 98, 100, 101, 102, 104, 106, 108, 110, 112, 114, 116, 118,
+    122, 124, 126, 128, 130, 132, 134, 136, 138, 140, 143, 145, 148, 151, 154, 157,
+}
+
+let VP8_AC_TABLE = [128]i32{
+    4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+    20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35,
+    36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51,
+    52, 53, 54, 55, 56, 57, 58, 60, 62, 64, 66, 68, 70, 72, 74, 76,
+    78, 80, 82, 84, 86, 88, 90, 92, 94, 96, 98, 100, 102, 104, 106, 108,
+    110, 112, 114, 116, 119, 122, 125, 128, 131, 134, 137, 140, 143, 146, 149, 152,
+    155, 158, 161, 164, 167, 170, 173, 177, 181, 185, 189, 193, 197, 201, 205, 209,
+    213, 217, 221, 225, 229, 234, 239, 245, 249, 254, 259, 264, 269, 274, 279, 284,
+}
+
+// The default coefficient probabilities [type][band][context][11].
+let VP8_COEFF_PROBA0 = [1056]u8{
+    128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+    128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+    128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+    253, 136, 254, 255, 228, 219, 128, 128, 128, 128, 128,
+    189, 129, 242, 255, 227, 213, 255, 219, 128, 128, 128,
+    106, 126, 227, 252, 214, 209, 255, 255, 128, 128, 128,
+    1, 98, 248, 255, 236, 226, 255, 255, 128, 128, 128,
+    181, 133, 238, 254, 221, 234, 255, 154, 128, 128, 128,
+    78, 134, 202, 247, 198, 180, 255, 219, 128, 128, 128,
+    1, 185, 249, 255, 243, 255, 128, 128, 128, 128, 128,
+    184, 150, 247, 255, 236, 224, 128, 128, 128, 128, 128,
+    77, 110, 216, 255, 236, 230, 128, 128, 128, 128, 128,
+    1, 101, 251, 255, 241, 255, 128, 128, 128, 128, 128,
+    170, 139, 241, 252, 236, 209, 255, 255, 128, 128, 128,
+    37, 116, 196, 243, 228, 255, 255, 255, 128, 128, 128,
+    1, 204, 254, 255, 245, 255, 128, 128, 128, 128, 128,
+    207, 160, 250, 255, 238, 128, 128, 128, 128, 128, 128,
+    102, 103, 231, 255, 211, 171, 128, 128, 128, 128, 128,
+    1, 152, 252, 255, 240, 255, 128, 128, 128, 128, 128,
+    177, 135, 243, 255, 234, 225, 128, 128, 128, 128, 128,
+    80, 129, 211, 255, 194, 224, 128, 128, 128, 128, 128,
+    1, 1, 255, 128, 128, 128, 128, 128, 128, 128, 128,
+    246, 1, 255, 128, 128, 128, 128, 128, 128, 128, 128,
+    255, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+    198, 35, 237, 223, 193, 187, 162, 160, 145, 155, 62,
+    131, 45, 198, 221, 172, 176, 220, 157, 252, 221, 1,
+    68, 47, 146, 208, 149, 167, 221, 162, 255, 223, 128,
+    1, 149, 241, 255, 221, 224, 255, 255, 128, 128, 128,
+    184, 141, 234, 253, 222, 220, 255, 199, 128, 128, 128,
+    81, 99, 181, 242, 176, 190, 249, 202, 255, 255, 128,
+    1, 129, 232, 253, 214, 197, 242, 196, 255, 255, 128,
+    99, 121, 210, 250, 201, 198, 255, 202, 128, 128, 128,
+    23, 91, 163, 242, 170, 187, 247, 210, 255, 255, 128,
+    1, 200, 246, 255, 234, 255, 128, 128, 128, 128, 128,
+    109, 178, 241, 255, 231, 245, 255, 255, 128, 128, 128,
+    44, 130, 201, 253, 205, 192, 255, 255, 128, 128, 128,
+    1, 132, 239, 251, 219, 209, 255, 165, 128, 128, 128,
+    94, 136, 225, 251, 218, 190, 255, 255, 128, 128, 128,
+    22, 100, 174, 245, 186, 161, 255, 199, 128, 128, 128,
+    1, 182, 249, 255, 232, 235, 128, 128, 128, 128, 128,
+    124, 143, 241, 255, 227, 234, 128, 128, 128, 128, 128,
+    35, 77, 181, 251, 193, 211, 255, 205, 128, 128, 128,
+    1, 157, 247, 255, 236, 231, 255, 255, 128, 128, 128,
+    121, 141, 235, 255, 225, 227, 255, 255, 128, 128, 128,
+    45, 99, 188, 251, 195, 217, 255, 224, 128, 128, 128,
+    1, 1, 251, 255, 213, 255, 128, 128, 128, 128, 128,
+    203, 1, 248, 255, 255, 128, 128, 128, 128, 128, 128,
+    137, 1, 177, 255, 224, 255, 128, 128, 128, 128, 128,
+    253, 9, 248, 251, 207, 208, 255, 192, 128, 128, 128,
+    175, 13, 224, 243, 193, 185, 249, 198, 255, 255, 128,
+    73, 17, 171, 221, 161, 179, 236, 167, 255, 234, 128,
+    1, 95, 247, 253, 212, 183, 255, 255, 128, 128, 128,
+    239, 90, 244, 250, 211, 209, 255, 255, 128, 128, 128,
+    155, 77, 195, 248, 188, 195, 255, 255, 128, 128, 128,
+    1, 24, 239, 251, 218, 219, 255, 205, 128, 128, 128,
+    201, 51, 219, 255, 196, 186, 128, 128, 128, 128, 128,
+    69, 46, 190, 239, 201, 218, 255, 228, 128, 128, 128,
+    1, 191, 251, 255, 255, 128, 128, 128, 128, 128, 128,
+    223, 165, 249, 255, 213, 255, 128, 128, 128, 128, 128,
+    141, 124, 248, 255, 255, 128, 128, 128, 128, 128, 128,
+    1, 16, 248, 255, 255, 128, 128, 128, 128, 128, 128,
+    190, 36, 230, 255, 236, 255, 128, 128, 128, 128, 128,
+    149, 1, 255, 128, 128, 128, 128, 128, 128, 128, 128,
+    1, 226, 255, 128, 128, 128, 128, 128, 128, 128, 128,
+    247, 192, 255, 128, 128, 128, 128, 128, 128, 128, 128,
+    240, 128, 255, 128, 128, 128, 128, 128, 128, 128, 128,
+    1, 134, 252, 255, 255, 128, 128, 128, 128, 128, 128,
+    213, 62, 250, 255, 255, 128, 128, 128, 128, 128, 128,
+    55, 93, 255, 128, 128, 128, 128, 128, 128, 128, 128,
+    128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+    128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+    128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+    202, 24, 213, 235, 186, 191, 220, 160, 240, 175, 255,
+    126, 38, 182, 232, 169, 184, 228, 174, 255, 187, 128,
+    61, 46, 138, 219, 151, 178, 240, 170, 255, 216, 128,
+    1, 112, 230, 250, 199, 191, 247, 159, 255, 255, 128,
+    166, 109, 228, 252, 211, 215, 255, 174, 128, 128, 128,
+    39, 77, 162, 232, 172, 180, 245, 178, 255, 255, 128,
+    1, 52, 220, 246, 198, 199, 249, 220, 255, 255, 128,
+    124, 74, 191, 243, 183, 193, 250, 221, 255, 255, 128,
+    24, 71, 130, 219, 154, 170, 243, 182, 255, 255, 128,
+    1, 182, 225, 249, 219, 240, 255, 224, 128, 128, 128,
+    149, 150, 226, 252, 216, 205, 255, 171, 128, 128, 128,
+    28, 108, 170, 242, 183, 194, 254, 223, 255, 255, 128,
+    1, 81, 230, 252, 204, 203, 255, 192, 128, 128, 128,
+    123, 102, 209, 247, 188, 196, 255, 233, 128, 128, 128,
+    20, 95, 153, 243, 164, 173, 255, 203, 128, 128, 128,
+    1, 222, 248, 255, 216, 213, 128, 128, 128, 128, 128,
+    168, 175, 246, 252, 235, 205, 255, 255, 128, 128, 128,
+    47, 116, 215, 255, 211, 212, 255, 255, 128, 128, 128,
+    1, 121, 236, 253, 212, 214, 255, 255, 128, 128, 128,
+    141, 84, 213, 252, 201, 202, 255, 219, 128, 128, 128,
+    42, 80, 160, 240, 162, 185, 255, 205, 128, 128, 128,
+    1, 1, 255, 128, 128, 128, 128, 128, 128, 128, 128,
+    244, 1, 255, 128, 128, 128, 128, 128, 128, 128, 128,
+    238, 1, 255, 128, 128, 128, 128, 128, 128, 128, 128,
+}
+
+// The probabilities that a coefficient probability is updated.
+let VP8_COEFF_UPDATE_PROBA = [1056]u8{
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    176, 246, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    223, 241, 252, 255, 255, 255, 255, 255, 255, 255, 255,
+    249, 253, 253, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 244, 252, 255, 255, 255, 255, 255, 255, 255, 255,
+    234, 254, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    253, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 246, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    239, 253, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    254, 255, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 248, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    251, 255, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 253, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    251, 254, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    254, 255, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 254, 253, 255, 254, 255, 255, 255, 255, 255, 255,
+    250, 255, 254, 255, 254, 255, 255, 255, 255, 255, 255,
+    254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    217, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    225, 252, 241, 253, 255, 255, 254, 255, 255, 255, 255,
+    234, 250, 241, 250, 253, 255, 253, 254, 255, 255, 255,
+    255, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    223, 254, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    238, 253, 254, 254, 255, 255, 255, 255, 255, 255, 255,
+    255, 248, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    249, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 253, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    247, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 253, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    252, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 254, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    253, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 254, 253, 255, 255, 255, 255, 255, 255, 255, 255,
+    250, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    186, 251, 250, 255, 255, 255, 255, 255, 255, 255, 255,
+    234, 251, 244, 254, 255, 255, 255, 255, 255, 255, 255,
+    251, 251, 243, 253, 254, 255, 254, 255, 255, 255, 255,
+    255, 253, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    236, 253, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    251, 253, 253, 254, 254, 255, 255, 255, 255, 255, 255,
+    255, 254, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    254, 254, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    254, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    248, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    250, 254, 252, 254, 255, 255, 255, 255, 255, 255, 255,
+    248, 254, 249, 253, 255, 255, 255, 255, 255, 255, 255,
+    255, 253, 253, 255, 255, 255, 255, 255, 255, 255, 255,
+    246, 253, 253, 255, 255, 255, 255, 255, 255, 255, 255,
+    252, 254, 251, 254, 254, 255, 255, 255, 255, 255, 255,
+    255, 254, 252, 255, 255, 255, 255, 255, 255, 255, 255,
+    248, 254, 253, 255, 255, 255, 255, 255, 255, 255, 255,
+    253, 255, 254, 254, 255, 255, 255, 255, 255, 255, 255,
+    255, 251, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    245, 251, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    253, 253, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 251, 253, 255, 255, 255, 255, 255, 255, 255, 255,
+    252, 253, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 252, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    249, 255, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 253, 255, 255, 255, 255, 255, 255, 255, 255,
+    250, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+}
+
+// The key-frame subblock mode probabilities [above][left][9].
+let VP8_BMODES_PROBA = [900]u8{
+    231, 120, 48, 89, 115, 113, 120, 152, 112,
+    152, 179, 64, 126, 170, 118, 46, 70, 95,
+    175, 69, 143, 80, 85, 82, 72, 155, 103,
+    56, 58, 10, 171, 218, 189, 17, 13, 152,
+    114, 26, 17, 163, 44, 195, 21, 10, 173,
+    121, 24, 80, 195, 26, 62, 44, 64, 85,
+    144, 71, 10, 38, 171, 213, 144, 34, 26,
+    170, 46, 55, 19, 136, 160, 33, 206, 71,
+    63, 20, 8, 114, 114, 208, 12, 9, 226,
+    81, 40, 11, 96, 182, 84, 29, 16, 36,
+    134, 183, 89, 137, 98, 101, 106, 165, 148,
+    72, 187, 100, 130, 157, 111, 32, 75, 80,
+    66, 102, 167, 99, 74, 62, 40, 234, 128,
+    41, 53, 9, 178, 241, 141, 26, 8, 107,
+    74, 43, 26, 146, 73, 166, 49, 23, 157,
+    65, 38, 105, 160, 51, 52, 31, 115, 128,
+    104, 79, 12, 27, 217, 255, 87, 17, 7,
+    87, 68, 71, 44, 114, 51, 15, 186, 23,
+    47, 41, 14, 110, 182, 183, 21, 17, 194,
+    66, 45, 25, 102, 197, 189, 23, 18, 22,
+    88, 88, 147, 150, 42, 46, 45, 196, 205,
+    43, 97, 183, 117, 85, 38, 35, 179, 61,
+    39, 53, 200, 87, 26, 21, 43, 232, 171,
+    56, 34, 51, 104, 114, 102, 29, 93, 77,
+    39, 28, 85, 171, 58, 165, 90, 98, 64,
+    34, 22, 116, 206, 23, 34, 43, 166, 73,
+    107, 54, 32, 26, 51, 1, 81, 43, 31,
+    68, 25, 106, 22, 64, 171, 36, 225, 114,
+    34, 19, 21, 102, 132, 188, 16, 76, 124,
+    62, 18, 78, 95, 85, 57, 50, 48, 51,
+    193, 101, 35, 159, 215, 111, 89, 46, 111,
+    60, 148, 31, 172, 219, 228, 21, 18, 111,
+    112, 113, 77, 85, 179, 255, 38, 120, 114,
+    40, 42, 1, 196, 245, 209, 10, 25, 109,
+    88, 43, 29, 140, 166, 213, 37, 43, 154,
+    61, 63, 30, 155, 67, 45, 68, 1, 209,
+    100, 80, 8, 43, 154, 1, 51, 26, 71,
+    142, 78, 78, 16, 255, 128, 34, 197, 171,
+    41, 40, 5, 102, 211, 183, 4, 1, 221,
+    51, 50, 17, 168, 209, 192, 23, 25, 82,
+    138, 31, 36, 171, 27, 166, 38, 44, 229,
+    67, 87, 58, 169, 82, 115, 26, 59, 179,
+    63, 59, 90, 180, 59, 166, 93, 73, 154,
+    40, 40, 21, 116, 143, 209, 34, 39, 175,
+    47, 15, 16, 183, 34, 223, 49, 45, 183,
+    46, 17, 33, 183, 6, 98, 15, 32, 183,
+    57, 46, 22, 24, 128, 1, 54, 17, 37,
+    65, 32, 73, 115, 28, 128, 23, 128, 205,
+    40, 3, 9, 115, 51, 192, 18, 6, 223,
+    87, 37, 9, 115, 59, 77, 64, 21, 47,
+    104, 55, 44, 218, 9, 54, 53, 130, 226,
+    64, 90, 70, 205, 40, 41, 23, 26, 57,
+    54, 57, 112, 184, 5, 41, 38, 166, 213,
+    30, 34, 26, 133, 152, 116, 10, 32, 134,
+    39, 19, 53, 221, 26, 114, 32, 73, 255,
+    31, 9, 65, 234, 2, 15, 1, 118, 73,
+    75, 32, 12, 51, 192, 255, 160, 43, 51,
+    88, 31, 35, 67, 102, 85, 55, 186, 85,
+    56, 21, 23, 111, 59, 205, 45, 37, 192,
+    55, 38, 70, 124, 73, 102, 1, 34, 98,
+    125, 98, 42, 88, 104, 85, 117, 175, 82,
+    95, 84, 53, 89, 128, 100, 113, 101, 45,
+    75, 79, 123, 47, 51, 128, 81, 171, 1,
+    57, 17, 5, 71, 102, 57, 53, 41, 49,
+    38, 33, 13, 121, 57, 73, 26, 1, 85,
+    41, 10, 67, 138, 77, 110, 90, 47, 114,
+    115, 21, 2, 10, 102, 255, 166, 23, 6,
+    101, 29, 16, 10, 85, 128, 101, 196, 26,
+    57, 18, 10, 102, 102, 213, 34, 20, 43,
+    117, 20, 15, 36, 163, 128, 68, 1, 26,
+    102, 61, 71, 37, 34, 53, 31, 243, 192,
+    69, 60, 71, 38, 73, 119, 28, 222, 37,
+    68, 45, 128, 34, 1, 47, 11, 245, 171,
+    62, 17, 19, 70, 146, 85, 55, 62, 70,
+    37, 43, 37, 154, 100, 163, 85, 160, 1,
+    63, 9, 92, 136, 28, 64, 32, 201, 85,
+    75, 15, 9, 9, 64, 255, 184, 119, 16,
+    86, 6, 28, 5, 64, 255, 25, 248, 1,
+    56, 8, 17, 132, 137, 255, 55, 116, 128,
+    58, 15, 20, 82, 135, 57, 26, 121, 40,
+    164, 50, 31, 137, 154, 133, 25, 35, 218,
+    51, 103, 44, 131, 131, 123, 31, 6, 158,
+    86, 40, 64, 135, 148, 224, 45, 183, 128,
+    22, 26, 17, 131, 240, 154, 14, 1, 209,
+    45, 16, 21, 91, 64, 222, 7, 1, 197,
+    56, 21, 39, 155, 60, 138, 23, 102, 213,
+    83, 12, 13, 54, 192, 255, 68, 47, 28,
+    85, 26, 85, 85, 128, 128, 32, 146, 171,
+    18, 11, 7, 63, 144, 171, 4, 4, 246,
+    35, 27, 10, 146, 174, 171, 12, 26, 128,
+    190, 80, 35, 99, 180, 80, 126, 54, 45,
+    85, 126, 47, 87, 176, 51, 41, 20, 32,
+    101, 75, 128, 139, 118, 146, 116, 128, 85,
+    56, 41, 15, 176, 236, 85, 37, 9, 62,
+    71, 30, 17, 119, 118, 255, 17, 18, 138,
+    101, 38, 60, 138, 55, 70, 43, 26, 142,
+    146, 36, 19, 30, 171, 255, 97, 27, 20,
+    138, 45, 61, 62, 219, 1, 81, 188, 64,
+    32, 41, 20, 117, 151, 142, 20, 21, 163,
+    112, 19, 12, 61, 195, 128, 48, 4, 24,
+}

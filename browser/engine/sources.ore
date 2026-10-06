@@ -1,0 +1,299 @@
+// Which URL an image element shows (HTML's "selecting an image source",
+// simplified): for an `img` in a `picture`, the first `source` before it
+// whose `type` is one we decode and whose `media` matches gives its
+// `srcset`; otherwise the `img`'s own `srcset` and `src`. From a srcset
+// the candidate with the smallest density of at least 1 is taken (the
+// largest when none reaches 1); `w` descriptors are densities through
+// `sizes` (its first entry whose media condition matches, 100vw by
+// default). The density then divides the natural size.
+
+import css
+import dom
+import dom.Document
+import dom.NodeId
+import std
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+/// A chosen image URL (a slice of an attribute) and its density: image
+/// pixels per CSS px.
+pub struct ImageChoice {
+    url: []u8
+    density: f64
+}
+
+// The image types `image.decode` and the SVG renderer read.
+let DECODED_TYPES = [7][]u8{"image/png", "image/apng", "image/gif", "image/jpeg", "image/jpg", "image/webp", "image/svg+xml"}
+
+/// Can we show images of MIME type `mime` (a `type` attribute, with
+/// parameters)?
+pub fn decodesType(mime: []u8) bool {
+    var essence = text.trim(mime)
+    if text.indexOf(essence, ";") |semi| {
+        essence = text.trim(essence[..semi])
+    }
+    for t in DECODED_TYPES {
+        if text.eqlIgnoreCase(essence, t) {
+            return true
+        }
+    }
+    return false
+}
+
+/// The URL `el` (an `img` or `input type=image`) shows; null when it has
+/// none.
+pub fn chooseImage(alloc: Allocator, doc: *Document, el: NodeId, media: css.Media) AllocError!?ImageChoice {
+    if doc.isElement(el, "img") {
+        if doc.parent(el) |p| {
+            if doc.isElement(p, "picture") {
+                var cur = doc.firstChild(p)
+                while cur |c| {
+                    if c.index == el.index && c.generation == el.generation {
+                        break
+                    }
+                    cur = doc.nextSibling(c)
+                    if !doc.isElement(c, "source") || !(try sourceApplies(alloc, doc, c, media)) {
+                        continue
+                    }
+                    if try fromSrcset(alloc, doc, c, media) |choice| {
+                        return choice
+                    }
+                }
+            }
+        }
+        if try fromSrcset(alloc, doc, el, media) |choice| {
+            return choice
+        }
+    }
+    let src = text.trim(doc.attr(el, "src") orelse "")
+    if src.len == 0 {
+        return null
+    }
+    return ImageChoice { url: src, density: 1.0 }
+}
+
+// Does a `source` element's `type` say a format we decode, and its
+// `media` match?
+fn sourceApplies(alloc: Allocator, doc: *Document, source: NodeId, media: css.Media) AllocError!bool {
+    if doc.attr(source, "type") |t| {
+        if text.trim(t).len > 0 && !decodesType(t) {
+            return false
+        }
+    }
+    if doc.attr(source, "media") |q| {
+        return matchesMedia(alloc, q, media)
+    }
+    return true
+}
+
+fn matchesMedia(alloc: Allocator, query: []u8, media: css.Media) AllocError!bool {
+    var sheet = try css.Sheet.init(alloc)
+    defer sheet.deinit()
+    return css.mediaMatches(&mut sheet, query, media)
+}
+
+// The candidate of the `srcset` of `el` to use; null when it has none.
+fn fromSrcset(alloc: Allocator, doc: *Document, el: NodeId, media: css.Media) AllocError!?ImageChoice {
+    let set = doc.attr(el, "srcset") orelse return null
+    var slot: f64 = -1.0
+    var best: ?ImageChoice = null
+    var p = SrcsetParser { s: set, pos: 0 }
+    while p.next() |cand| {
+        var density = cand.x
+        if cand.w > 0.0 {
+            if slot < 0.0 {
+                slot = try slotWidth(alloc, doc.attr(el, "sizes") orelse "", media)
+            }
+            density = cand.w / slot
+        }
+        if density <= 0.0 {
+            continue
+        }
+        let choice = ImageChoice { url: cand.url, density: density }
+        if best |b| {
+            // The smallest density >= 1, else the largest.
+            let better = (density >= 1.0 && (b.density < 1.0 || density < b.density)) ||
+                (density < 1.0 && b.density < 1.0 && density > b.density)
+            if better {
+                best = choice
+            }
+        } else {
+            best = choice
+        }
+    }
+    return best
+}
+
+// One srcset candidate: a URL and its descriptor (`x` 1 when it has
+// none; `w` 0 unless it is a width descriptor).
+struct Candidate {
+    url: []u8
+    x: f64
+    w: f64
+}
+
+// The candidates of a srcset: URLs are runs without spaces (so data:
+// URLs keep their commas); a URL ending in commas has no descriptors;
+// otherwise descriptors run to the next comma outside parentheses. A
+// candidate with a malformed descriptor is dropped.
+struct SrcsetParser {
+    s: []u8
+    pos: usize
+
+    fn next(self: *mut Self) ?Candidate {
+        while true {
+            while self.pos < self.s.len && (isSpace(self.s[self.pos]) || self.s[self.pos] == ',') {
+                self.pos += 1
+            }
+            if self.pos >= self.s.len {
+                return null
+            }
+            let start = self.pos
+            while self.pos < self.s.len && !isSpace(self.s[self.pos]) {
+                self.pos += 1
+            }
+            var url = self.s[start..self.pos]
+            var cand = Candidate { url: url, x: 1.0, w: 0.0 }
+            if url[url.len - 1] == ',' {
+                while url.len > 0 && url[url.len - 1] == ',' {
+                    url = url[..url.len - 1]
+                }
+                cand.url = url
+                if url.len > 0 {
+                    return cand
+                }
+                continue
+            }
+            let dstart = self.pos
+            var depth: usize = 0
+            while self.pos < self.s.len && (self.s[self.pos] != ',' || depth > 0) {
+                if self.s[self.pos] == '(' {
+                    depth += 1
+                } else if self.s[self.pos] == ')' && depth > 0 {
+                    depth -= 1
+                }
+                self.pos += 1
+            }
+            if descriptor(text.trim(self.s[dstart..self.pos]), &mut cand) {
+                return cand
+            }
+        }
+        return null
+    }
+}
+
+// Reads a candidate's descriptor (`2x`, `640w`, nothing, or a height
+// `h` that is ignored) into `cand`; false when it is malformed.
+fn descriptor(d: []u8, cand: *mut Candidate) bool {
+    if d.len == 0 {
+        return true
+    }
+    var parts = text.split(d, " ")
+    var seen = false
+    while parts.next() |part| {
+        let t = text.trim(part)
+        if t.len < 2 {
+            if t.len == 0 {
+                continue
+            }
+            return false
+        }
+        let unit = t[t.len - 1]
+        let v = text.parseFloat(t[..t.len - 1]) catch -1.0
+        if v <= 0.0 {
+            return false
+        }
+        if unit == 'x' && !seen {
+            cand.x = v
+            seen = true
+        } else if unit == 'w' && !seen {
+            cand.w = v
+            seen = true
+        } else if unit != 'h' {
+            return false
+        }
+    }
+    return true
+}
+
+// The width in CSS px of the slot `sizes` gives the image: the length
+// of its first entry whose media condition matches (an entry without
+// one always does); 100vw when none does.
+fn slotWidth(alloc: Allocator, sizes: []u8, media: css.Media) AllocError!f64 {
+    var depth: usize = 0
+    var start: usize = 0
+    for i in 0..sizes.len + 1 {
+        if i < sizes.len {
+            let c = sizes[i]
+            if c == '(' {
+                depth += 1
+            } else if c == ')' && depth > 0 {
+                depth -= 1
+            }
+            if c != ',' || depth > 0 {
+                continue
+            }
+        }
+        let entry = text.trim(sizes[start..i])
+        start = i + 1
+        // The length is the last part outside parentheses.
+        var cut = entry.len
+        var d: usize = 0
+        var k = entry.len
+        while k > 0 {
+            k -= 1
+            let c = entry[k]
+            if c == ')' {
+                d += 1
+            } else if c == '(' && d > 0 {
+                d -= 1
+            } else if d == 0 && isSpace(c) {
+                cut = k
+                break
+            }
+        }
+        var condition = ""
+        var length = entry
+        if cut < entry.len {
+            condition = text.trim(entry[..cut])
+            length = entry[cut + 1..]
+        }
+        let px = lengthPx(length, media)
+        if px < 0.0 {
+            continue
+        }
+        if condition.len == 0 || (try matchesMedia(alloc, condition, media)) {
+            return px
+        }
+    }
+    return media.width
+}
+
+// A `sizes` length in px (px, vw, vh, em and rem at 16px; `calc` and
+// the rest are not read): -1 when it is not one of those.
+fn lengthPx(s: []u8, media: css.Media) f64 {
+    let units = [5][]u8{"px", "vw", "vh", "rem", "em"}
+    for u in units {
+        if text.endsWith(s, u) {
+            let v = text.parseFloat(s[..s.len - u.len]) catch -1.0
+            if v < 0.0 {
+                return -1.0
+            }
+            if text.eql(u, "vw") {
+                return v * media.width / 100.0
+            }
+            if text.eql(u, "vh") {
+                return v * media.height / 100.0
+            }
+            if text.eql(u, "px") {
+                return v
+            }
+            return v * 16.0
+        }
+    }
+    if text.eql(s, "0") {
+        return 0.0
+    }
+    return -1.0
+}
