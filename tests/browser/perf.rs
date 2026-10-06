@@ -3,6 +3,14 @@ use super::{anyknown, root, scratch, server, text};
 use std::process::Command;
 
 #[test]
+fn live_frame_index_follows_mutations() {
+    let page = "data:text/html,<p id=out></p><script>let r=[window.length];let a=document.createElement('iframe');a.setAttribute('name','a');document.body.appendChild(a);r.push(window.length);let b=document.createElement('iframe');b.setAttribute('name','b');document.body.appendChild(b);r.push(window.length);document.body.insertBefore(b,a);r.push(window.frames[0]===b.contentWindow,window.frames[1]===a.contentWindow);b.remove();r.push(window.length);a.remove();r.push(window.length);document.getElementById('out').textContent=r.join(',');</script>";
+    let out = Command::new(anyknown()).current_dir(root()).args(["dump", "--text", "--js", page]).output().unwrap();
+    assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "0,1,2,true,true,1,0\n");
+}
+
+#[test]
 fn timing_preserves_output() {
     let args = ["dump", "--md", "--js", "browser/tests/agent/noscript.html"];
     let plain = Command::new(anyknown()).current_dir(root()).args(args).output().unwrap();

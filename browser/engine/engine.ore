@@ -73,6 +73,8 @@ pub struct Page {
     images: ?*mut ImageCache
     // The documents of its `frame` and `iframe` elements (frames.ore).
     frames: List(Frame)
+    // Live frame-element lookups, invalidated by domVersion.
+    frame_elements: FrameElementIndex
     // Unique among the pages of the process (`findPage`).
     id: u32
     // The page whose frame shows this one (null for a tab's page), and
@@ -109,6 +111,7 @@ pub struct Page {
             f.page.destroy()
         }
         self.frames.deinit()
+        self.frame_elements.nodes.deinit()
         self.doc.deinit()
         alloc.free(self.title)
         self.url.deinit(alloc)
@@ -333,6 +336,7 @@ fn newPage(alloc: Allocator, located: Url, status: i64, failure: []u8, doc: Docu
         script: null,
         images: null,
         frames: List(Frame).init(alloc),
+        frame_elements: FrameElementIndex.init(alloc),
         id: newPageId(),
         parent: null,
         depth: 0,
