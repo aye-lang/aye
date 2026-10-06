@@ -21,8 +21,34 @@ pub struct Parser {
     tmp: List(u32)
     message: *mut text.Builder
     line: u32
+    // Inside an async function (`await` is an operator) and inside a
+    // generator (`yield` is one).
+    in_async: bool
+    in_gen: bool
+    // The lowest stack address the recursion may reach (0: no limit).
+    floor: u64
 
     // ---- tokens
+
+    fn tokAt(self: *Self, k: usize) Token {
+        let toks = self.lx.toks.items()
+        if self.pos + k < toks.len {
+            return toks[self.pos + k]
+        }
+        return toks[toks.len - 1]
+    }
+
+    // Is the current token `async` starting an async function or method
+    // (followed, on the same line, by `function`, a name or `*`)?
+    fn asyncAhead(self: *Self) bool {
+        if !self.isWord("async") || self.tokAt(1).nl {
+            return false
+        }
+        let k = self.kindAt(1)
+        return k != Tok.LParen && k != Tok.Comma && k != Tok.Colon && k != Tok.RBrace &&
+            k != Tok.Assign && k != Tok.Semi && k != Tok.Eof && k != Tok.Dot && k != Tok.QuestionDot &&
+            k != Tok.LBracket && k != Tok.Arrow
+    }
 
     fn tok(self: *Self) Token {
         return self.lx.toks.items()[self.pos]
@@ -76,6 +102,14 @@ pub struct Parser {
     }
 
     // ---- errors
+
+    // Is the recursion too deep for the stack (a script nested too
+    // deeply)?
+    fn tooDeep(self: *mut Self) SyntaxErr!void {
+        if self.floor != 0 && stackAddress() < self.floor {
+            try self.fail("Maximum call stack size exceeded")
+        }
+    }
 
     fn fail(self: *mut Self, msg: []u8) SyntaxErr!u32 {
         if self.message.len() == 0 {
@@ -199,6 +233,7 @@ pub struct Parser {
     }
 
     fn statement(self: *mut Self) SyntaxErr!u32 {
+        try self.tooDeep()
         let start = self.pos
         let k = self.kind()
         if k == Tok.LBrace {
@@ -210,7 +245,11 @@ pub struct Parser {
             return d
         }
         if k == Tok.KwFunction {
-            return self.functionDecl()
+            return self.functionDecl(false)
+        }
+        if k == Tok.Ident && self.isWord("async") && self.kindAt(1) == Tok.KwFunction && !self.tokAt(1).nl {
+            self.pos += 1
+            return self.functionDecl(true)
         }
         if k == Tok.KwClass {
             self.pos += 1
@@ -222,6 +261,9 @@ pub struct Parser {
             self.pos += 1
             let target = try self.ident(name, nameTok)
             let c = try self.classTail(name, start)
+            // The class body sees its own name (bound before static
+            // fields and blocks run).
+            self.ast.classes.items()[c].scope = try self.newScope()
             return self.mk(Node.ClassDecl { c: c, target: target }, start)
         }
         if k == Tok.KwIf {
@@ -385,9 +427,10 @@ pub struct Parser {
         }
     }
 
-    fn functionDecl(self: *mut Self) SyntaxErr!u32 {
+    fn functionDecl(self: *mut Self, isAsync: bool) SyntaxErr!u32 {
         let start = self.pos
         self.pos += 1
+        let isGen = self.eat(Tok.Star)
         if !self.at(Tok.Ident) {
             return self.unexpected()
         }
@@ -395,13 +438,18 @@ pub struct Parser {
         let name = try self.intern(self.tokText(self.tok()))
         self.pos += 1
         let target = try self.ident(name, nameTok)
-        let f = try self.functionRest(name, start, false)
+        let f = try self.functionRestFlags(name, start, false, isAsync, isGen)
         return self.mk(Node.FuncDecl { f: f, target: target }, start)
     }
 
     fn forStatement(self: *mut Self) SyntaxErr!u32 {
         let start = self.pos
         self.pos += 1
+        var wait = false
+        if self.in_async && self.isWord("await") {
+            self.pos += 1
+            wait = true
+        }
         try self.expect(Tok.LParen)
         let scope = try self.newScope()
         var init: u32 = 0
@@ -432,7 +480,7 @@ pub struct Parser {
             }
             try self.expect(Tok.RParen)
             let body = try self.statement()
-            return self.mk(Node.ForIn { left: left, right: right, body: body, scope: scope, of: isOf }, start)
+            return self.mk(Node.ForIn { left: left, right: right, body: body, scope: scope, of: isOf, wait: wait }, start)
         }
         try self.expect(Tok.Semi)
         var cond: u32 = 0
@@ -511,6 +559,7 @@ pub struct Parser {
 
     // A name, `[...]` or `{...}` being declared.
     fn bindingTarget(self: *mut Self) SyntaxErr!u32 {
+        try self.tooDeep()
         let start = self.pos
         if self.at(Tok.Ident) {
             let name = try self.intern(self.tokText(self.tok()))
@@ -696,9 +745,13 @@ pub struct Parser {
 
     // Does the `(` here start the parameters of an arrow function?
     fn arrowAhead(self: *Self) bool {
+        return self.arrowAheadAt(self.pos)
+    }
+
+    fn arrowAheadAt(self: *Self, from: usize) bool {
         let toks = self.lx.toks.items()
         var depth: usize = 0
-        var i = self.pos
+        var i = from
         while i < toks.len {
             let k = toks[i].kind
             if k == Tok.LParen || k == Tok.LBracket || k == Tok.LBrace {
@@ -717,15 +770,26 @@ pub struct Parser {
     }
 
     fn assign(self: *mut Self, noIn: bool) SyntaxErr!u32 {
+        try self.tooDeep()
         let start = self.pos
-        if self.at(Tok.Ident) && self.kindAt(1) == Tok.Arrow {
-            return self.arrow(noIn)
+        if self.in_gen && self.isWord("yield") {
+            return self.yieldExpr(noIn)
         }
-        if self.isWord("async") && (self.kindAt(1) == Tok.KwFunction || self.kindAt(1) == Tok.Ident) {
-            return self.fail("async functions are not supported")
+        if self.at(Tok.Ident) && self.kindAt(1) == Tok.Arrow {
+            return self.arrow(noIn, false)
+        }
+        if self.isWord("async") && !self.tokAt(1).nl {
+            if self.kindAt(1) == Tok.Ident && self.kindAt(2) == Tok.Arrow {
+                self.pos += 1
+                return self.arrow(noIn, true)
+            }
+            if self.kindAt(1) == Tok.LParen && self.arrowAheadAt(self.pos + 1) {
+                self.pos += 1
+                return self.arrow(noIn, true)
+            }
         }
         if self.at(Tok.LParen) && self.arrowAhead() {
-            return self.arrow(noIn)
+            return self.arrow(noIn, false)
         }
         let left = try self.conditional(noIn)
         let op = assignOp(self.kind())
@@ -753,8 +817,19 @@ pub struct Parser {
         return self.mk(Node.Assign { op: op, target: target, value: value }, start)
     }
 
-    fn arrow(self: *mut Self, noIn: bool) SyntaxErr!u32 {
-        let start = self.pos
+    fn arrow(self: *mut Self, noIn: bool, isAsync: bool) SyntaxErr!u32 {
+        var start = self.pos
+        if isAsync {
+            start -= 1
+        }
+        let savedAsync = self.in_async
+        let savedGen = self.in_gen
+        self.in_async = isAsync
+        self.in_gen = false
+        defer {
+            self.in_async = savedAsync
+            self.in_gen = savedGen
+        }
         let m = self.mark()
         if self.at(Tok.Ident) {
             let name = try self.intern(self.tokText(self.tok()))
@@ -766,6 +841,7 @@ pub struct Parser {
         try self.expect(Tok.Arrow)
         let f = try self.newFunc(A_EMPTY, m)
         self.ast.funcs.items()[f].arrow = true
+        self.ast.funcs.items()[f].is_async = isAsync
         if self.at(Tok.LBrace) {
             try self.functionBody(f)
         } else {
@@ -774,6 +850,26 @@ pub struct Parser {
         }
         self.finishFunc(f, start)
         return self.mk(Node.Func { f: f }, start)
+    }
+
+    // `yield [arg]` or `yield* arg` (at `yield`).
+    fn yieldExpr(self: *mut Self, noIn: bool) SyntaxErr!u32 {
+        let start = self.pos
+        self.pos += 1
+        var delegate = false
+        if self.at(Tok.Star) && !self.tok().nl {
+            delegate = true
+            self.pos += 1
+        }
+        var arg: u32 = 0
+        let t = self.tok()
+        let k = t.kind
+        let ends = t.nl || k == Tok.RParen || k == Tok.RBracket || k == Tok.RBrace || k == Tok.Comma ||
+            k == Tok.Semi || k == Tok.Colon || k == Tok.Eof || k == Tok.KwIn || k == Tok.Question
+        if delegate || !ends {
+            arg = try self.assign(noIn)
+        }
+        return self.mk(Node.Yield { arg: arg, delegate: delegate }, start)
     }
 
     fn conditional(self: *mut Self, noIn: bool) SyntaxErr!u32 {
@@ -815,6 +911,7 @@ pub struct Parser {
     }
 
     fn unary(self: *mut Self) SyntaxErr!u32 {
+        try self.tooDeep()
         let start = self.pos
         let k = self.kind()
         var op = Op.None
@@ -837,6 +934,11 @@ pub struct Parser {
             self.pos += 1
             let arg = try self.unary()
             return self.mk(Node.Unary { op: op, arg: arg }, start)
+        }
+        if self.in_async && self.isWord("await") {
+            self.pos += 1
+            let arg = try self.unary()
+            return self.mk(Node.Await { arg: arg }, start)
         }
         if k == Tok.PlusPlus || k == Tok.MinusMinus {
             self.pos += 1
@@ -934,7 +1036,17 @@ pub struct Parser {
                 let l = try self.list(m)
                 e = try self.mk(Node.Call { callee: e, list: l, n: n, optional: false }, start)
             } else if k == Tok.Template || k == Tok.TemplateHead {
-                return self.fail("tagged templates are not supported")
+                if chain {
+                    return self.fail("Invalid tagged template on optional chain")
+                }
+                var raws = List(u32).init(self.alloc)
+                defer raws.deinit()
+                let quasi = try self.templateRaw(&mut raws)
+                let rl = self.ast.lists.len() as u32
+                for r in raws.items() {
+                    try self.ast.lists.append(r)
+                }
+                e = try self.mk(Node.TaggedTemplate { tag: e, quasi: quasi, raw: rl }, start)
             } else {
                 break
             }
@@ -949,7 +1061,12 @@ pub struct Parser {
         let start = self.pos
         self.pos += 1
         if self.at(Tok.Dot) {
-            return self.fail("new.target is not supported")
+            self.pos += 1
+            if !self.isWord("target") {
+                return self.unexpected()
+            }
+            self.pos += 1
+            return self.mk(Node.NewTarget, start)
         }
         var callee: u32 = 0
         if self.at(Tok.KwNew) {
@@ -1007,9 +1124,22 @@ pub struct Parser {
             let flags = try self.intern(all[plen..])
             return self.mk(Node.Regex { pattern: pattern, flags: flags }, start)
         }
-        if k == Tok.Ident {
+        if k == Tok.Ident && self.isWord("async") && self.kindAt(1) == Tok.KwFunction && !self.tokAt(1).nl {
             self.pos += 1
-            let name = try self.intern(self.tokText(t))
+            return self.functionExpr(start, true)
+        }
+        if k == Tok.Ident {
+            let txt = self.tokText(t)
+            if txt[0] == '#' {
+                // `#x in obj`: the private name as a key.
+                if self.kindAt(1) != Tok.KwIn {
+                    return self.unexpected()
+                }
+                self.pos += 1
+                return self.mk(Node.Str { atom: try self.intern(txt) }, start)
+            }
+            self.pos += 1
+            let name = try self.intern(txt)
             return self.ident(name, start)
         }
         if k == Tok.KwThis {
@@ -1041,17 +1171,7 @@ pub struct Parser {
             return self.objectLiteral()
         }
         if k == Tok.KwFunction {
-            self.pos += 1
-            var name = A_EMPTY
-            if self.at(Tok.Ident) {
-                name = try self.intern(self.tokText(self.tok()))
-                self.pos += 1
-            }
-            let f = try self.functionRest(name, start, false)
-            if name != A_EMPTY {
-                self.ast.funcs.items()[f].own_name = true
-            }
-            return self.mk(Node.Func { f: f }, start)
+            return self.functionExpr(start, false)
         }
         if k == Tok.KwClass {
             self.pos += 1
@@ -1091,6 +1211,61 @@ pub struct Parser {
             return self.fail("'super' keyword unexpected here")
         }
         return self.unexpected()
+    }
+
+    // `function [*] [name] (...) {...}` at `function` (`async` before it
+    // when isAsync).
+    fn functionExpr(self: *mut Self, start: usize, isAsync: bool) SyntaxErr!u32 {
+        self.pos += 1
+        let isGen = self.eat(Tok.Star)
+        var name = A_EMPTY
+        if self.at(Tok.Ident) {
+            name = try self.intern(self.tokText(self.tok()))
+            self.pos += 1
+        }
+        let f = try self.functionRestFlags(name, start, false, isAsync, isGen)
+        if name != A_EMPTY {
+            self.ast.funcs.items()[f].own_name = true
+        }
+        return self.mk(Node.Func { f: f }, start)
+    }
+
+    // The raw text (between the delimiters) of a template token.
+    fn rawOf(self: *Self, t: Token) []u8 {
+        var s = t.start as usize + 1
+        var e = t.end as usize
+        if t.kind == Tok.Template || t.kind == Tok.TemplateTail {
+            e -= 1
+        } else {
+            e -= 2
+        }
+        if e < s {
+            e = s
+        }
+        return self.src[s..e]
+    }
+
+    // A template, also collecting the raw strings (atoms) into raws.
+    fn templateRaw(self: *mut Self, raws: *mut List(u32)) SyntaxErr!u32 {
+        let save = self.pos
+        try raws.append(try self.intern(self.rawOf(self.tok())))
+        let t = try self.template()
+        // The quasis after the first: the Template* tokens at depth 0 of
+        // this template.
+        var i = save + 1
+        var depth: usize = 0
+        while i < self.pos {
+            let tk = self.lx.toks.items()[i]
+            if tk.kind == Tok.TemplateHead {
+                depth += 1
+            } else if (tk.kind == Tok.TemplateMiddle || tk.kind == Tok.TemplateTail) && depth == 0 {
+                try raws.append(try self.intern(self.rawOf(tk)))
+            } else if tk.kind == Tok.TemplateTail {
+                depth -= 1
+            }
+            i += 1
+        }
+        return t
     }
 
     fn template(self: *mut Self) SyntaxErr!u32 {
@@ -1190,7 +1365,13 @@ pub struct Parser {
                 try self.push(try self.mk(Node.Prop { kind: PROP_SPREAD, key: 0, computed: false, value: arg }, pstart))
             } else {
                 var kind = PROP_INIT
-                if (self.isWord("get") || self.isWord("set")) && self.kindAt(1) != Tok.LParen &&
+                var isAsync = false
+                if self.asyncAhead() {
+                    isAsync = true
+                    self.pos += 1
+                }
+                let isGen = self.eat(Tok.Star)
+                if !isAsync && !isGen && (self.isWord("get") || self.isWord("set")) && self.kindAt(1) != Tok.LParen &&
                     self.kindAt(1) != Tok.Comma && self.kindAt(1) != Tok.Colon &&
                     self.kindAt(1) != Tok.RBrace && self.kindAt(1) != Tok.Assign {
                     if self.isWord("get") {
@@ -1205,12 +1386,12 @@ pub struct Parser {
                 let shorthandOk = self.at(Tok.Ident)
                 let key = try self.propertyKey()
                 var value: u32 = 0
-                if kind != PROP_INIT || self.at(Tok.LParen) {
+                if kind != PROP_INIT || self.at(Tok.LParen) || isAsync || isGen {
                     var fname = A_EMPTY
                     if !computed {
                         fname = key
                     }
-                    let f = try self.functionRest(fname, pstart, true)
+                    let f = try self.functionRestFlags(fname, pstart, true, isAsync, isGen)
                     value = try self.mk(Node.Func { f: f }, pstart)
                     if kind == PROP_INIT {
                         kind = PROP_METHOD
@@ -1297,6 +1478,8 @@ pub struct Parser {
             expr: 0,
             arrow: false,
             method: false,
+            generator: false,
+            is_async: false,
             ctor: false,
             derived: false,
             default_ctor: false,
@@ -1339,11 +1522,21 @@ pub struct Parser {
     }
 
     // Parameters and body of a function whose name (if any) was read.
-    fn functionRest(self: *mut Self, name: u32, startTok: usize, method: bool) SyntaxErr!u32 {
+    fn functionRestFlags(self: *mut Self, name: u32, startTok: usize, method: bool, isAsync: bool, isGen: bool) SyntaxErr!u32 {
+        let savedAsync = self.in_async
+        let savedGen = self.in_gen
+        self.in_async = isAsync
+        self.in_gen = isGen
+        defer {
+            self.in_async = savedAsync
+            self.in_gen = savedGen
+        }
         let m = self.mark()
         try self.params(m)
         let f = try self.newFunc(name, m)
         self.ast.funcs.items()[f].method = method
+        self.ast.funcs.items()[f].is_async = isAsync
+        self.ast.funcs.items()[f].generator = isGen
         try self.functionBody(f)
         self.finishFunc(f, startTok)
         return f
@@ -1370,8 +1563,35 @@ pub struct Parser {
                 isStatic = true
                 self.pos += 1
             }
+            if isStatic && self.at(Tok.LBrace) {
+                // static { ... }: a body run with the class as `this`.
+                let bm = self.mark()
+                let bf = try self.newFunc(A_EMPTY, bm)
+                self.ast.funcs.items()[bf].method = true
+                let savedAsync = self.in_async
+                let savedGen = self.in_gen
+                self.in_async = false
+                self.in_gen = false
+                self.functionBody(bf) catch |e| {
+                    self.in_async = savedAsync
+                    self.in_gen = savedGen
+                    return e
+                }
+                self.in_async = savedAsync
+                self.in_gen = savedGen
+                self.finishFunc(bf, mstart)
+                let bv = try self.mk(Node.Func { f: bf }, mstart)
+                try self.push(try self.mk(Node.ClassElem { kind: PROP_STATIC_BLOCK, is_static: true, key: A_EMPTY, computed: false, value: bv }, mstart))
+                continue
+            }
+            var isAsync = false
+            if self.asyncAhead() && self.kindAt(1) != Tok.Semi {
+                isAsync = true
+                self.pos += 1
+            }
+            let isGen = self.eat(Tok.Star)
             var kind = PROP_METHOD
-            if (self.isWord("get") || self.isWord("set")) && self.kindAt(1) != Tok.LParen &&
+            if !isAsync && !isGen && (self.isWord("get") || self.isWord("set")) && self.kindAt(1) != Tok.LParen &&
                 self.kindAt(1) != Tok.Assign && self.kindAt(1) != Tok.Semi && self.kindAt(1) != Tok.RBrace {
                 if self.isWord("get") {
                     kind = PROP_GET
@@ -1391,7 +1611,7 @@ pub struct Parser {
                 if isCtor {
                     fname = name
                 }
-                let f = try self.functionRest(fname, mstart, !isCtor)
+                let f = try self.functionRestFlags(fname, mstart, !isCtor, isAsync, isGen)
                 if isCtor {
                     let fi = &mut self.ast.funcs.items()[f]
                     fi.ctor = true

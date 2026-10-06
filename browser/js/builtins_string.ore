@@ -50,6 +50,12 @@ fn installString(it: *mut Interp) JsError!void {
 
 fn stringCtor(it: *mut Interp, a: Args) JsError!Value {
     var s = try it.atomValue(A_EMPTY)
+    if a.argc > 0 && isSymbol(it, it.arg(a, 0)) && a.new_target == NONE {
+        let b = try it.builder()
+        defer it.release(b)
+        try appendSymbolText(it, b, objectOf(it.arg(a, 0)))
+        return it.newString(b.bytes())
+    }
     if a.argc > 0 {
         s = try it.toStringValue(it.arg(a, 0))
     }
@@ -510,8 +516,10 @@ fn stringSplit(it: *mut Interp, a: Args) JsError!Value {
 }
 
 /// Appends the replacement text of a match with $-patterns: $$ $& $`
-/// $' and $1..$99 (groups from `groups`, an array or NONE).
-pub fn appendReplacement(it: *mut Interp, b: *mut text.Builder, repl: []u8, subject: []u8, mstart: usize, mend: usize, groups: u32) JsError!void {
+/// $', $1..$99 (groups from `groups`, an array or NONE) and $<name>
+/// (from `named`, the groups object of a regexp with named groups, or
+/// undefined).
+pub fn appendReplacement(it: *mut Interp, b: *mut text.Builder, repl: []u8, subject: []u8, mstart: usize, mend: usize, groups: u32, named: Value) JsError!void {
     var i: usize = 0
     while i < repl.len {
         let c = repl[i]
@@ -536,6 +544,20 @@ pub fn appendReplacement(it: *mut Interp, b: *mut text.Builder, repl: []u8, subj
                 try b.append(subject[mend..])
                 i += 2
                 continue
+            }
+            if d == '<' && isObject(named) {
+                var j = i + 2
+                while j < repl.len && repl[j] != '>' {
+                    j += 1
+                }
+                if j < repl.len {
+                    let gv = try it.getProp(named, try it.intern(repl[i + 2..j]))
+                    if !isUndef(gv) {
+                        try it.appendString(b, gv)
+                    }
+                    i = j + 1
+                    continue
+                }
             }
             if d >= '0' && d <= '9' && groups != NONE {
                 var g = (d - '0') as u32
@@ -591,7 +613,7 @@ fn replaceCommon(it: *mut Interp, a: Args, all: bool) JsError!Value {
                 let r = try it.call3(rv, Value.Undefined, m, numVal(unitOf(it, s, at) as f64), strVal(s))
                 try it.appendString(b, r)
             } else {
-                try appendReplacement(it, b, it.heap.bytes(strOf(replS)), it.heap.bytes(s), at, at + plen, NONE)
+                try appendReplacement(it, b, it.heap.bytes(strOf(replS)), it.heap.bytes(s), at, at + plen, NONE, Value.Undefined)
             }
             last = at + plen
             from = last

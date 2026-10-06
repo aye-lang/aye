@@ -60,6 +60,8 @@ pub struct GlobalNames {
 }
 
 pub struct Resolver {
+    // The lowest stack address the recursion may reach (0: no limit).
+    floor: u64
     alloc: Allocator
     ast: *mut Ast
     atoms: *mut Atoms
@@ -346,6 +348,9 @@ pub struct Resolver {
     }
 
     fn stmt(self: *mut Self, st: u32) SyntaxErr!void {
+        if self.floor != 0 && stackAddress() < self.floor {
+            return self.fail("Maximum call stack size exceeded", NONE)
+        }
         if st == 0 {
             return
         }
@@ -480,6 +485,9 @@ pub struct Resolver {
 
     // A pattern used as a target: resolve its names, defaults and keys.
     fn pattern(self: *mut Self, p: u32) SyntaxErr!void {
+        if self.floor != 0 && stackAddress() < self.floor {
+            return self.fail("Maximum call stack size exceeded", NONE)
+        }
         match self.ast.node(p) {
             .ArrayPat { list, n } => {
                 for k in 0..n {
@@ -513,6 +521,9 @@ pub struct Resolver {
     }
 
     fn expr(self: *mut Self, e: u32) SyntaxErr!void {
+        if self.floor != 0 && stackAddress() < self.floor {
+            return self.fail("Maximum call stack size exceeded", NONE)
+        }
         if e == 0 {
             return
         }
@@ -569,6 +580,12 @@ pub struct Resolver {
                 try self.exprs(list, n)
             }
             .SuperMember { this_node, .. } => try self.expr(this_node)
+            .Yield { arg, .. } => try self.expr(arg)
+            .Await { arg } => try self.expr(arg)
+            .TaggedTemplate { tag, quasi, .. } => {
+                try self.expr(tag)
+                try self.expr(quasi)
+            }
             .SuperIndex { key, this_node } => {
                 try self.expr(key)
                 try self.expr(this_node)

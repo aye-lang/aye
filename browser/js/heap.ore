@@ -42,6 +42,11 @@ pub enum Class {
     // the next index is the primitive.
     Iterator
     Host
+    // A symbol (symbol.ore): the primitive is its key atom.
+    Symbol
+    // A generator object (coroutine.ore): the primitive is the index of
+    // its coroutine.
+    Generator
 }
 
 pub enum ObjData {

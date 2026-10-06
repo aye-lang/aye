@@ -68,7 +68,7 @@ agent sessions load pages through `engine.load` and keep history in a
 
 - **B6 leftovers:** scripts that run while the document is parsed
   (`document.write`, an inline script seeing only the DOM before it),
-  modules, unhandled-rejection reports, `getComputedStyle` and layout
+  modules, `getComputedStyle` and layout
   queries (`getBoundingClientRect` is all zeros), live NodeLists,
   interrupting a script that never returns.
 - **B7:** `screenshot` and `tabs` commands, and the shared window
@@ -265,13 +265,20 @@ output as goldens.
   integers, and `Interp.host: ?dyn Host` gets `finalize(tag, index,
   generation)` when the collector frees one (the `js_refs` decrement).
   `addRoot`/`removeRoot` keep values (event listeners) alive.
-- *Not yet:* generators, async/await (Promise is the page prelude's,
-  below), Symbol, BigInt, Proxy, typed arrays, tagged templates,
-  `new.target`, time zones (local time is UTC), full Unicode case
-  mapping and normalization, `Function`/`eval` of strings (the browser
-  compiles inline handlers with `Interp.evalScript`).
-  A plain function call gets `this === undefined` (strict-mode rule), and
-  top-level `var`/`function` are properties of the global object.
+- *Generators and async functions* (B8, `js/coroutine.ore`): a call
+  that can stop in the middle of the tree walk runs on a thread of its
+  own (a coroutine with its own value stack and frames); two channels
+  pass control so only one thread runs JavaScript at a time. Promise
+  and the job queue are the engine's (`js/lib.ore`, `Interp.queueJob`);
+  `await` hands the value to a driver written in JavaScript that resumes
+  the coroutine when the promise settles; `for await` and async
+  generators go through the same driver.
+- *Not yet:* BigInt, Proxy, typed arrays, time zones (local time is
+  UTC), full Unicode case mapping and normalization.
+  A plain function call gets `this === undefined` (strict-mode rule);
+  a script's top-level `this` is the global object, and top-level
+  `var`/`function` are properties of it. HTML-like comments (`<!--`,
+  and `-->` first on a line) are comments, as in classic scripts.
 
 **Pages (done).** `engine/script.ore` gives every page an engine
 (`Page.script`) when scripting is on: the window and the agent turn it
@@ -282,7 +289,9 @@ on (`--no-js` turns it off), `dump` with `--js`.
   `defer` and `async` scripts run after the others (async as defer);
   `type=module` and data types are skipped; then DOMContentLoaded
   (`readyState` "interactive") and load ("complete"). An uncaught
-  exception is a console message and the next script runs. With
+  exception is a console message and the next script runs; so is a
+  promise still rejected with no handler at the end of a microtask
+  checkpoint ("Uncaught (in promise) ..."). With
   scripts on, `noscript` is `display: none` (a UA rule).
 - *Bindings:* a node's wrapper is a host object holding its
   `Handle(Node)`, one per node (`Script.wrappers`), each counting in
@@ -319,8 +328,20 @@ on (`--no-js` turns it off), `dump` with `--js`.
   (setting it navigates after the script returns), `history`,
   `localStorage` (in memory, per origin, while a page is open) and
   `sessionStorage`, `alert`/`confirm`/`prompt` (console messages, never
-  blocking), a Promise with microtasks, and `fetch` (GET, synchronous
-  underneath, settling in a microtask; `text()`, `json()`).
+  blocking), microtasks (the engine's job queue, which Promise uses),
+  and `fetch` (GET, synchronous underneath, settling in a microtask;
+  `text()`, `json()`, an aborted `signal`).
+- *More web APIs* (B8, prelude): `URL` and `URLSearchParams` (parsed
+  by `url/`), `atob`/`btoa`, `TextEncoder`/`TextDecoder` (UTF-8),
+  `EventTarget` as a constructor, `AbortController`/`AbortSignal`,
+  `matchMedia` (the CSS media queries against the viewport),
+  `XMLHttpRequest` (GET, on the same fetch), `crypto.getRandomValues`
+  and `randomUUID` (from `Math.random`), `requestIdleCallback`,
+  `reportError`, `Image`, `Option`, `origin`, and `customElements`
+  (definitions kept, elements never upgraded). The observers are
+  stand-ins: `IntersectionObserver` reports each target visible once
+  (lazy loading proceeds), `ResizeObserver` reports each target once,
+  and `MutationObserver` never reports.
 - *Event loop:* timers (ordered by due time, then by scheduling) and
   microtasks after every task. Time is virtual for `dump` and the agent
   (the loop jumps to the next timer; `dump --js` runs until no timer is
@@ -334,8 +355,12 @@ on (`--no-js` turns it off), `dump` with `--js`.
 - *Console:* messages ("[log] ...", "[error] Uncaught ...") go to
   stderr for `dump --js` and the window, and with the agent's
   responses (`console`).
-- *Stack:* page scripts run on the main thread, so calls nest at most
-  400 deep (a RangeError beyond).
+- *Stack:* page scripts run on the main thread, so a task may use 5 MB
+  of its stack and nest 3000 calls (a RangeError beyond).
+- *Budget:* a task (a script, a timer callback, an event, the
+  microtasks of a checkpoint) that uses more than 2 s of processor time
+  or 100M steps
+  ends with a console error, which no `catch` or `finally` sees.
 
 ### B7: Agent interface
 

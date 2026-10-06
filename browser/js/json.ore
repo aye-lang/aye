@@ -59,6 +59,9 @@ struct JsonParser {
     }
 
     fn value(self: *mut Self) JsError!Value {
+        if self.it.stackExhausted() {
+            return self.it.rangeError("Maximum call stack size exceeded")
+        }
         self.ws()
         if self.pos >= self.s.len {
             return self.fail()
@@ -391,6 +394,9 @@ struct Stringifier {
     // value is not serializable (undefined, a function).
     fn property(self: *mut Self, b: *mut text.Builder, holder: Value, key: u32, vIn: Value) JsError!bool {
         let it = self.it
+        if it.stackExhausted() {
+            try it.rangeError("Maximum call stack size exceeded")
+        }
         let base = it.stack.len()
         defer it.truncate(base)
         var v = vIn

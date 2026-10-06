@@ -1,0 +1,640 @@
+// js/coroutine: generators and async functions. The interpreter walks
+// the syntax tree on the C stack, so a function that can stop in the
+// middle (`yield`, `await`) runs on a thread of its own: a coroutine.
+// Only one thread runs JavaScript at a time; control passes between the
+// one that resumes a coroutine and the coroutine through two channels,
+// so the engine is never used by two threads at once.
+//
+// A coroutine has its own value stack and frames (absolute indices into
+// the stack stay valid while it is suspended): `resume` swaps them into
+// the interpreter and saves the resumer's (`co_saved`, which the
+// collector marks), and swaps them back when the coroutine yields or
+// ends.
+//
+// - A generator object (class Generator) names its coroutine; `next`,
+//   `throw` and `return` resume it. `return(v)` throws a value no
+//   `catch` sees (`gen_return`) so that `finally` blocks run.
+// - An async function is a coroutine whose `await` yields the awaited
+//   value to a driver written in JavaScript (lib.ore), which resumes it
+//   when the promise settles; the call returns the driver's promise.
+// - A coroutine whose generator object was collected is ended (resumed
+//   with KILL: its `yield` returns JsError.Terminated, no `finally`
+//   runs) the next time a coroutine is made, and when the engine is
+//   freed.
+
+import std.list.List
+import std.mem.AllocError
+import std.sync.Channel
+import std.thread
+
+// Coroutines run on threads with this much stack (reserved, not taken).
+let CO_STACK: usize = 256 << 20
+// What a coroutine's code may use of it (see Interp.markStackBase).
+let CO_ROOM: u64 = 200 << 20
+// Live coroutines at most (each is a thread).
+let MAX_COROUTINES: usize = 4000
+
+// Coroutine.state
+let CO_NEW: u8 = 0
+let CO_SUSPENDED: u8 = 1
+let CO_RUNNING: u8 = 2
+let CO_DONE: u8 = 3
+
+// Coroutine.mode: how it is resumed.
+let RESUME_NEXT: u8 = 0
+let RESUME_THROW: u8 = 1
+let RESUME_RETURN: u8 = 2
+let RESUME_KILL: u8 = 3
+
+// Coroutine.outcome: why it stopped.
+let OUT_YIELD: u8 = 0
+let OUT_RETURN: u8 = 1
+let OUT_THROW: u8 = 2
+let OUT_TERMINATED: u8 = 3
+let OUT_OOM: u8 = 4
+
+pub struct Coroutine {
+    it: *mut Interp
+    id: u32
+    // The function to run and how it was called (until it starts).
+    func: u32
+    env: u32
+    fobj: u32
+    this_v: Value
+    args: u32
+    // Its stack, frames and environment while it is not running.
+    stack: List(Value)
+    frames: List(Frame)
+    cenv: u32
+    // The bottom of its thread's stack (Interp.stack_base) while it is
+    // suspended.
+    cbase: u64
+    state: u8
+    mode: u8
+    outcome: u8
+    // The value passed in (resume) or out (yield, return).
+    transfer: Value
+    // The value of `return(v)`, until the generator ends.
+    ret_value: Value
+    // What the last stop was: 0 a yield, 1 an await.
+    kind: u8
+    is_async: bool
+    thread: ?thread.Thread
+    inbox: Channel(u8)
+    outbox: Channel(u8)
+    // The generator object (NONE once collected).
+    obj: u32
+}
+
+/// The context of the code that resumed a coroutine, while it runs.
+pub struct SavedCtx {
+    stack: List(Value)
+    frames: List(Frame)
+    env: u32
+    co: ?*mut Coroutine
+    completion_base: usize
+    derived_this: u32
+    ret: Value
+    label: u32
+    stack_base: u64
+    stack_room: u64
+}
+
+fn coroutineOf(it: *mut Interp, v: Value) ?*mut Coroutine {
+    let o = objectOf(v)
+    if o == NONE || it.heap.obj(o).class != Class.Generator {
+        return null
+    }
+    return match it.heap.obj(o).data {
+        .Prim { v: pv } => match pv {
+            .Num { n } => it.coroutines.items()[n as usize]
+            _ => null
+        }
+        _ => null
+    }
+}
+
+// Makes a coroutine for a call of `func` (the arguments are
+// stack[argBase..argBase + argc]) and its generator object, with
+// prototype `proto`.
+fn newCoroutine(it: *mut Interp, func: u32, env: u32, fobj: u32, thisv: Value, argBase: usize, argc: usize, proto: u32, isAsync: bool) JsError!Value {
+    reapCoroutines(it)
+    var live: usize = 0
+    var slot: ?usize = null
+    for i, c in it.coroutines.items() {
+        if c != null {
+            live += 1
+        } else if slot == null {
+            slot = i
+        }
+    }
+    if live >= MAX_COROUTINES {
+        return it.rangeError("Too many generators and async functions running")
+    }
+    let args = try it.newArray(0)
+    try it.push(objVal(args))
+    for i in 0..argc {
+        try it.heap.pushElem(args, it.slot(argBase + i))
+    }
+    var id = it.coroutines.len()
+    if slot |s| {
+        id = s
+    } else {
+        try it.coroutines.append(null)
+    }
+    let g = try it.newObjectOf(Class.Generator, proto, ObjData.Prim { v: numVal(id as f64) })
+    it.pop()
+    var inbox = try Channel(u8).init(it.alloc, 1)
+    var outbox = Channel(u8).init(it.alloc, 1) catch |e| {
+        inbox.deinit()
+        return e
+    }
+    let co = it.alloc.create(Coroutine {
+        it: it,
+        id: id as u32,
+        func: func,
+        env: env,
+        fobj: fobj,
+        this_v: thisv,
+        args: args,
+        stack: List(Value).init(it.alloc),
+        frames: List(Frame).init(it.alloc),
+        cenv: NONE,
+        cbase: 0,
+        state: CO_NEW,
+        mode: RESUME_NEXT,
+        outcome: OUT_YIELD,
+        transfer: Value.Undefined,
+        ret_value: Value.Undefined,
+        kind: 0,
+        is_async: isAsync,
+        thread: null,
+        inbox: inbox,
+        outbox: outbox,
+        obj: g,
+    }) catch |e| {
+        inbox.deinit()
+        outbox.deinit()
+        return e
+    }
+    it.coroutines.items()[id] = co
+    return objVal(g)
+}
+
+// The thread of a coroutine: waits to be resumed, runs the function,
+// reports how it ended.
+fn coMain(co: *mut Coroutine) {
+    co.inbox.recv()
+    let it = co.it
+    it.markStackBase(CO_ROOM)
+    if co.mode == RESUME_KILL {
+        co.outcome = OUT_TERMINATED
+        co.outbox.send(1) catch |e| {}
+        return
+    }
+    if co.mode != RESUME_NEXT {
+        // throw() or return() before the first next(): it ends at once.
+        if co.mode == RESUME_THROW {
+            it.exception = co.transfer
+            co.outcome = OUT_THROW
+        } else {
+            co.outcome = OUT_RETURN
+        }
+        co.outbox.send(1) catch |e| {}
+        return
+    }
+    let base = it.stack.len()
+    var ok = true
+    let n = it.heap.obj(co.args).nelems
+    for i in 0..n {
+        it.push(it.heap.obj(co.args).elems[i]) catch |e| {
+            ok = false
+        }
+    }
+    co.args = NONE
+    if !ok {
+        co.outcome = OUT_OOM
+        co.outbox.send(1) catch |e| {}
+        return
+    }
+    if it.invoke(co.func, co.env, co.fobj, co.this_v, base, n as usize, NONE) |r| {
+        co.transfer = r
+        co.outcome = OUT_RETURN
+    } else |e| {
+        match e {
+            .Thrown => {
+                if it.isGenReturn() {
+                    it.exception = Value.Undefined
+                    co.transfer = co.ret_value
+                    co.outcome = OUT_RETURN
+                } else {
+                    co.outcome = OUT_THROW
+                }
+            }
+            .Terminated => {
+                co.outcome = OUT_TERMINATED
+            }
+            .OutOfMemory => {
+                co.outcome = OUT_OOM
+            }
+            .ShortCircuit => {
+                co.outcome = OUT_RETURN
+            }
+        }
+    }
+    it.truncate(base)
+    co.outbox.send(1) catch |e| {}
+}
+
+// Resumes co (mode, with `value`) until it yields or ends; the outcome
+// is co.outcome, the value co.transfer (an exception: it.exception).
+fn resume(it: *mut Interp, co: *mut Coroutine, mode: u8, value: Value) JsError!void {
+    if co.state == CO_RUNNING {
+        try it.typeError("Generator is already running")
+    }
+    try it.co_saved.append(SavedCtx {
+        stack: it.stack,
+        frames: it.frames,
+        env: it.env,
+        co: it.current_co,
+        completion_base: it.completion_base,
+        derived_this: it.derived_this,
+        ret: it.ret,
+        label: it.label,
+        stack_base: it.stack_base,
+        stack_room: it.stack_room,
+    })
+    it.stack = co.stack
+    it.frames = co.frames
+    it.env = co.cenv
+    it.stack_base = co.cbase
+    it.stack_room = CO_ROOM
+    it.current_co = co
+    it.completion_base = 0xFFFFFFFFFFFFFFFF
+    it.derived_this = NONE
+    co.mode = mode
+    co.transfer = value
+    var failed = false
+    if co.state == CO_NEW {
+        if thread.spawnWithStack(Coroutine, coMain, co, CO_STACK) |t| {
+            co.thread = t
+        } else |e| {
+            failed = true
+        }
+    }
+    if !failed {
+        co.state = CO_RUNNING
+        co.inbox.send(1) catch |e| {}
+        co.outbox.recv()
+    }
+    co.stack = it.stack
+    co.frames = it.frames
+    co.cenv = it.env
+    if it.co_saved.pop() |s| {
+        it.stack = s.stack
+        it.frames = s.frames
+        it.env = s.env
+        it.current_co = s.co
+        it.completion_base = s.completion_base
+        it.derived_this = s.derived_this
+        it.ret = s.ret
+        it.label = s.label
+        it.stack_base = s.stack_base
+        it.stack_room = s.stack_room
+    }
+    if failed {
+        co.state = CO_DONE
+        try it.rangeError("Cannot start a generator: no thread available")
+    }
+    if co.outcome == OUT_YIELD {
+        co.state = CO_SUSPENDED
+        return
+    }
+    finish(co)
+    if co.outcome == OUT_THROW {
+        return JsError.Thrown
+    }
+    if co.outcome == OUT_TERMINATED {
+        return JsError.Terminated
+    }
+    if co.outcome == OUT_OOM {
+        return JsError.OutOfMemory
+    }
+}
+
+// A coroutine that ended: its thread is joined and its stack freed.
+fn finish(co: *mut Coroutine) {
+    co.state = CO_DONE
+    if co.thread |t| {
+        t.join()
+        co.thread = null
+    }
+    co.stack.clear()
+    co.frames.clear()
+    co.cenv = NONE
+    co.args = NONE
+}
+
+// Frees a coroutine that is not running (ending it first).
+fn destroyCoroutine(it: *mut Interp, co: *mut Coroutine) {
+    if co.state == CO_SUSPENDED {
+        let ex = it.exception
+        resume(it, co, RESUME_KILL, Value.Undefined) catch |e| {}
+        it.exception = ex
+    }
+    if co.state != CO_DONE {
+        finish(co)
+    }
+    co.stack.deinit()
+    co.frames.deinit()
+    co.inbox.deinit()
+    co.outbox.deinit()
+    it.coroutines.items()[co.id] = null
+    it.alloc.destroy(co)
+}
+
+/// Ends and frees the coroutines whose generator objects were collected.
+pub fn reapCoroutines(it: *mut Interp) {
+    if !it.orphans {
+        return
+    }
+    it.orphans = false
+    for i in 0..it.coroutines.len() {
+        if it.coroutines.items()[i] |co| {
+            if co.obj == NONE && co.state != CO_RUNNING {
+                destroyCoroutine(it, co)
+            }
+        }
+    }
+}
+
+/// Ends and frees every coroutine (the engine is being freed).
+pub fn destroyCoroutines(it: *mut Interp) {
+    for i in 0..it.coroutines.len() {
+        if it.coroutines.items()[i] |co| {
+            if co.state != CO_RUNNING {
+                destroyCoroutine(it, co)
+            }
+        }
+    }
+}
+
+/// The collector found the generator object of coroutine `id` unused.
+pub fn coroutineCollected(it: *mut Interp, id: u32) {
+    if it.coroutines.items()[id] |co| {
+        co.obj = NONE
+        it.orphans = true
+    }
+}
+
+/// Marks what the coroutines and the saved contexts hold.
+fn markCoroutines(it: *mut Interp) {
+    for c in it.coroutines.items() {
+        if c |co| {
+            markValue(it, co.this_v)
+            markValue(it, co.transfer)
+            markValue(it, co.ret_value)
+            markObj(it, co.fobj)
+            markObj(it, co.args)
+            markEnv(it, co.env)
+            if co.state != CO_RUNNING {
+                for v in co.stack.items() {
+                    markValue(it, v)
+                }
+                for f in co.frames.items() {
+                    markObj(it, f.func)
+                    markObj(it, f.this_obj)
+                    markObj(it, f.new_target)
+                    markEnv(it, f.env)
+                }
+                markEnv(it, co.cenv)
+            }
+        }
+    }
+    for s in it.co_saved.items() {
+        for v in s.stack.items() {
+            markValue(it, v)
+        }
+        for f in s.frames.items() {
+            markObj(it, f.func)
+            markObj(it, f.this_obj)
+            markObj(it, f.new_target)
+            markEnv(it, f.env)
+        }
+        markEnv(it, s.env)
+        markValue(it, s.ret)
+    }
+}
+
+// ---- inside a coroutine: yield and await
+
+/// Stops the running coroutine, handing `v` to its resumer (`kind` 0 for
+/// a yield, 1 for an await); returns the value it is resumed with.
+pub fn coYield(it: *mut Interp, v: Value, kind: u8) JsError!Value {
+    let co = it.current_co orelse {
+        return it.typeError("yield or await outside a generator or async function")
+    }
+    if kind == 1 && !co.is_async {
+        return it.typeError("await is only valid in async functions")
+    }
+    co.transfer = v
+    co.kind = kind
+    co.outcome = OUT_YIELD
+    co.cbase = it.stack_base
+    co.outbox.send(1) catch |e| {}
+    co.inbox.recv()
+    if co.mode == RESUME_NEXT {
+        return co.transfer
+    }
+    if co.mode == RESUME_THROW {
+        it.exception = co.transfer
+        return JsError.Thrown
+    }
+    if co.mode == RESUME_RETURN {
+        co.ret_value = co.transfer
+        it.exception = objVal(it.gen_return)
+        return JsError.Thrown
+    }
+    return JsError.Terminated
+}
+
+// `yield* iterable`: yields what the iterable gives; its value is the
+// iterable's return value.
+fn yieldDelegate(it: *mut Interp, iterable: Value) JsError!Value {
+    let at = it.stack.len()
+    defer it.truncate(at)
+    try it.push(iterable)
+    let iter = try it.getIteratorObject(iterable)
+    it.truncate(at)
+    try it.push(iter)
+    let next = try it.getProp(iter, A_NEXT)
+    try it.push(next)
+    var sent = Value.Undefined
+    var r = try it.call1(next, iter, sent)
+    while true {
+        if !isObject(r) {
+            try it.notA(r, "an iterator result object")
+        }
+        try it.push(r)
+        let done = try it.getProp(r, A_DONE)
+        let value = try it.getProp(r, A_VALUE)
+        it.pop()
+        if it.toBoolean(done) {
+            return value
+        }
+        if coYield(it, value, 0) |got| {
+            sent = got
+            r = try it.call1(it.slot(at + 1), it.slot(at), sent)
+        } else |e| {
+            if e != JsError.Thrown {
+                return e
+            }
+            let ex = it.exception
+            try it.push(ex)
+            if it.isGenReturn() {
+                let rf = try it.getProp(it.slot(at), try it.intern("return"))
+                if it.isCallable(rf) {
+                    try it.call1(rf, it.slot(at), coReturnValue(it))
+                }
+                it.exception = ex
+                return JsError.Thrown
+            }
+            let tf = try it.getProp(it.slot(at), try it.intern("throw"))
+            if !it.isCallable(tf) {
+                try it.closeIterator(at)
+                it.exception = ex
+                return JsError.Thrown
+            }
+            r = try it.call1(tf, it.slot(at), ex)
+            it.pop()
+        }
+    }
+    return Value.Undefined
+}
+
+fn coReturnValue(it: *mut Interp) Value {
+    if it.current_co |co| {
+        return co.ret_value
+    }
+    return Value.Undefined
+}
+
+// ---- generator objects
+
+fn thisCoroutine(it: *mut Interp, a: Args) JsError!*mut Coroutine {
+    if coroutineOf(it, a.this) |co| {
+        return co
+    }
+    try it.typeError("next method called on incompatible receiver")
+    unreachable
+}
+
+// { value, done }
+fn iterResult(it: *mut Interp, v: Value, done: bool) JsError!Value {
+    try it.push(v)
+    let r = try it.newObject(it.object_proto)
+    try it.push(objVal(r))
+    try it.defineOwn(r, A_VALUE, v, F_DEFAULT)
+    try it.defineOwn(r, A_DONE, boolVal(done), F_DEFAULT)
+    let out = it.pop()
+    it.pop()
+    return out
+}
+
+fn generatorResume(it: *mut Interp, a: Args, mode: u8) JsError!Value {
+    let co = try thisCoroutine(it, a)
+    let v = it.arg(a, 0)
+    if co.state == CO_DONE {
+        if mode == RESUME_THROW {
+            return it.throwValue(v)
+        }
+        if mode == RESUME_RETURN {
+            return iterResult(it, v, true)
+        }
+        return iterResult(it, Value.Undefined, true)
+    }
+    if co.state == CO_NEW && mode == RESUME_RETURN {
+        finish(co)
+        return iterResult(it, v, true)
+    }
+    try resume(it, co, mode, v)
+    let out = co.transfer
+    co.transfer = Value.Undefined
+    if co.state == CO_DONE {
+        return iterResult(it, out, true)
+    }
+    return iterResult(it, out, false)
+}
+
+fn generatorNext(it: *mut Interp, a: Args) JsError!Value {
+    return generatorResume(it, a, RESUME_NEXT)
+}
+
+fn generatorThrow(it: *mut Interp, a: Args) JsError!Value {
+    return generatorResume(it, a, RESUME_THROW)
+}
+
+fn generatorReturn(it: *mut Interp, a: Args) JsError!Value {
+    return generatorResume(it, a, RESUME_RETURN)
+}
+
+// For the async drivers (lib.ore): 1 when the coroutine's last stop was
+// an await, 0 for a yield.
+fn engineKindOf(it: *mut Interp, a: Args) JsError!Value {
+    if coroutineOf(it, it.arg(a, 0)) |co| {
+        return numVal(co.kind as f64)
+    }
+    return numVal(0.0)
+}
+
+fn engineSetDrivers(it: *mut Interp, a: Args) JsError!Value {
+    it.async_driver = try it.addRoot(it.arg(a, 0))
+    it.async_gen_driver = try it.addRoot(it.arg(a, 1))
+    it.unhandled_fn = try it.addRoot(it.arg(a, 2))
+    return Value.Undefined
+}
+
+fn installGenerators(it: *mut Interp) JsError!void {
+    it.gen_proto = try it.newObject(it.iterator_proto)
+    try it.addRoot(objVal(it.gen_proto))
+    try it.defineNative(it.gen_proto, "next", 1, generatorNext)
+    try it.defineNative(it.gen_proto, "throw", 1, generatorThrow)
+    try it.defineNative(it.gen_proto, "return", 1, generatorReturn)
+    let tag = try it.newString("Generator")
+    try it.heap.addProp(it.gen_proto, it.sym_to_string_tag, tag, Value.Undefined, F_CONFIG)
+    it.gen_return = try it.newObject(it.object_proto)
+    try it.addRoot(objVal(it.gen_return))
+    let e = try it.newObject(it.object_proto)
+    try it.defineValue(it.global, "__engine", objVal(e))
+    try it.defineNative(e, "kindOf", 1, engineKindOf)
+    try it.defineNative(e, "setDrivers", 3, engineSetDrivers)
+}
+
+// ---- calls
+
+// A call of a generator or async function: makes its coroutine; an
+// async function starts at once (through the driver), a generator on
+// its first next().
+fn callCoroutine(it: *mut Interp, func: u32, env: u32, fobj: u32, thisv: Value, argBase: usize, argc: usize) JsError!Value {
+    let fi = it.ast.func(func)
+    if fi.generator {
+        var proto = it.gen_proto
+        let pv = try it.getProp(objVal(fobj), A_PROTOTYPE)
+        if isObject(pv) {
+            proto = objectOf(pv)
+        }
+        let g = try newCoroutine(it, func, env, fobj, thisv, argBase, argc, proto, fi.is_async)
+        if !fi.is_async {
+            return g
+        }
+        try it.push(g)
+        let r = try it.call1(it.roots.items()[it.async_gen_driver], Value.Undefined, g)
+        it.pop()
+        return r
+    }
+    let g = try newCoroutine(it, func, env, fobj, thisv, argBase, argc, it.gen_proto, true)
+    try it.push(g)
+    let r = try it.call1(it.roots.items()[it.async_driver], Value.Undefined, g)
+    it.pop()
+    return r
+}

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<title>Web APIs</title>
+<div id="box"><img id="lazy" data-src="a.png"></div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+// The same results as Node: URL, URLSearchParams, atob/btoa, TextEncoder,
+// AbortController, EventTarget.
+const u = new URL('../b/c?x=1&y=two+words#frag', 'https://user:pw@Example.com:8080/a/index.html');
+log(u.href, u.origin, u.protocol, u.username, u.password, u.host, u.hostname, u.port, u.pathname, u.search, u.hash);
+u.searchParams.append('z', 'a b&c');
+u.hash = 'top';
+u.pathname = 'new/path';
+log(u.href, u.searchParams.get('y'), u.searchParams.has('x'), [...u.searchParams.keys()].join(','));
+u.search = '?q=1';
+log(u.toString(), u.searchParams.get('q'), JSON.stringify({ u }), String(new URL('http://example.com')), new URL('HTTP://EXAMPLE.COM:80/./a/../b').href);
+let bad = '';
+try { new URL('not a url'); } catch (e) { bad = e.name; }
+log(bad, URL.canParse('/x'), URL.canParse('/x', 'http://h/'), new URL('mailto:a@b.c').origin);
+const p = new URLSearchParams({ b: '2', a: '1 ' });
+p.append('a', "!'()~*");
+p.sort();
+log(p.toString(), p.getAll('a').length, p.size, new URLSearchParams('?k=%41%zz&e=&k=2').getAll('k').join('|'), new URLSearchParams([['x', 'y']]).toString());
+p.set('a', 'only');
+p.delete('b');
+const seen = [];
+p.forEach((v, k) => seen.push(k + '=' + v));
+log(seen.join(';'), [...p].length);
+log(btoa('hello, world'), atob('aGVsbG8sIHdvcmxk'), btoa(''), atob(' aGk= '), btoa('\xff\xfe'));
+let e1 = '', e2 = '';
+try { btoa('Ā'); } catch (e) { e1 = e.name; }
+try { atob('a'); } catch (e) { e2 = e.name; }
+log(e1, e2);
+const bytes = new TextEncoder().encode('aé€😀');
+log(bytes.length, Array.from(bytes).join(','), new TextDecoder().decode(bytes), new TextDecoder().decode(new Uint8Array([0xff, 0x61, 0xe2, 0x82])), new TextEncoder().encoding);
+const ac = new AbortController();
+let fired = 0;
+ac.signal.addEventListener('abort', () => fired++);
+ac.signal.onabort = () => fired++;
+log(ac.signal.aborted);
+ac.abort();
+ac.abort();
+log(ac.signal.aborted, ac.signal.reason.name, fired, AbortSignal.abort('why').reason);
+let thrown = '';
+try { ac.signal.throwIfAborted(); } catch (e) { thrown = e.name; }
+log(thrown, typeof crypto.randomUUID(), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(crypto.randomUUID()), crypto.getRandomValues(new Uint8Array(4)).length);
+class Emitter extends EventTarget { constructor() { super(); this.n = 0; } }
+const em = new Emitter();
+em.addEventListener('ping', ev => { em.n++; log('ping', ev.type, ev.target === em); });
+em.dispatchEvent(new Event('ping'));
+log(em.n, em instanceof EventTarget);
+// Page-only APIs.
+log('media', matchMedia('(min-width: 600px)').matches, matchMedia('(max-width: 600px)').matches, matchMedia('print').matches, matchMedia('screen').media);
+const lazy = document.getElementById('lazy');
+const io = new IntersectionObserver((entries, obs) => {
+  for (const e of entries) {
+    log('visible', e.target.id, e.isIntersecting, obs === io);
+    e.target.src = e.target.dataset.src;
+    obs.unobserve(e.target);
+  }
+});
+io.observe(lazy);
+new ResizeObserver(entries => log('resized', entries.length, entries[0].target.id)).observe(document.getElementById('box'));
+const mo = new MutationObserver(() => log('mutations are not reported'));
+mo.observe(document.body, { childList: true });
+document.body.appendChild(document.createElement('hr'));
+log('records', mo.takeRecords().length);
+const xhr = new XMLHttpRequest();
+const states = [];
+xhr.onreadystatechange = () => states.push(xhr.readyState);
+xhr.addEventListener('load', () => log('xhr load', xhr.status, xhr.response.length, xhr.getResponseHeader('content-type'), states.join(',')));
+xhr.responseType = 'json';
+xhr.open('GET', 'scripts/items.json');
+xhr.send();
+log('xhr sent', xhr.readyState);
+const sync = new XMLHttpRequest();
+sync.open('GET', 'scripts/items.json', false);
+sync.send();
+log('sync xhr', sync.readyState, sync.status, JSON.parse(sync.responseText).length);
+const failed = new XMLHttpRequest();
+failed.onerror = () => log('xhr error', failed.readyState, failed.status);
+failed.open('POST', 'scripts/items.json');
+failed.send();
+fetch('scripts/items.json', { signal: AbortSignal.abort() }).catch(e => log('fetch aborted', e.name));
+requestIdleCallback(deadline => log('idle', deadline.didTimeout, deadline.timeRemaining() >= 0));
+customElements.whenDefined('x-y').then(c => log('defined', c.name));
+customElements.define('x-y', class XY extends HTMLElement {});
+log('custom', typeof customElements.get('x-y'), customElements.get('x-z'));
+const img = new Image(10, 20);
+const opt = new Option('Label', 'v', true);
+log('image', img.tagName, img.getAttribute('width'), opt.tagName, opt.textContent, opt.getAttribute('value'), opt.hasAttribute('selected'));
+log('origin', origin, isSecureContext, typeof reportError);
+reportError(new Error('reported'));
+</script>

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<title>Budget</title>
+<pre id="out"></pre>
+<script>
+function log(s) { document.getElementById('out').textContent += s + '\n'; }
+log('first script');
+try {
+  while (true) {}
+} catch (e) {
+  log('no catch sees the end of a script');
+} finally {
+  log('no finally runs');
+}
+</script>
+<script>
+log('the next script runs');
+document.addEventListener('DOMContentLoaded', () => log('DOMContentLoaded'));
+setTimeout(() => { for (;;) {} }, 10);
+setTimeout(() => log('the next timer runs'), 20);
+function deep() { return deep() + 1; }
+try {
+  deep();
+} catch (e) {
+  log(e.name + ': ' + e.message);
+}
+</script>

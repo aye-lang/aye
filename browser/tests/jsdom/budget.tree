@@ -1,0 +1,17 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Budget"
+      "\n"
+    <body>
+      <pre id="out">
+        "first script\nthe next script runs\nRangeError: Maximum call stack size exceeded\nDOMContentLoaded\nthe next timer runs\n"
+      "\n"
+      <script>
+        "\nfunction log(s) { document.getElementById('out').textContent += s + '\\n'; }\nlog('first script');\ntry {\n  while (true) {}\n} catch (e) {\n  log('no catch sees the end of a script');\n} finally {\n  log('no finally runs');\n}\n"
+      "\n"
+      <script>
+        "\nlog('the next script runs');\ndocument.addEventListener('DOMContentLoaded', () => log('DOMContentLoaded'));\nsetTimeout(() => { for (;;) {} }, 10);\nsetTimeout(() => log('the next timer runs'), 20);\nfunction deep() { return deep() + 1; }\ntry {\n  deep();\n} catch (e) {\n  log(e.name + ': ' + e.message);\n}\n"
+      "\n"

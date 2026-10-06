@@ -164,7 +164,7 @@ fn arrayFrom(it: *mut Interp, a: Args) JsError!Value {
     let out = try it.newArray(0)
     try it.push(objVal(out))
     var items = NONE
-    if isStr(src) || it.hasClass(src, Class.Iterator) || it.hasClass(src, Class.Array) || it.hasClass(src, Class.Arguments) || it.hasClass(src, Class.Map) || it.hasClass(src, Class.Set) {
+    if try it.isIterable(src) {
         items = try it.iterToArray(src)
         try it.push(objVal(items))
     } else {
@@ -327,6 +327,14 @@ fn arrayConcat(it: *mut Interp, a: Args) JsError!Value {
 
 /// Appends the elements of array o joined by sep (Array.prototype.join).
 pub fn joinInto(it: *mut Interp, b: *mut text.Builder, o: u32, sep: []u8) JsError!void {
+    // An array that contains itself joins as "" there (as engines do).
+    for j in it.joining.items() {
+        if j == o {
+            return
+        }
+    }
+    try it.joining.append(o)
+    defer it.joining.pop()
     var i: u32 = 0
     while i < alen(it, o) {
         if i > 0 {

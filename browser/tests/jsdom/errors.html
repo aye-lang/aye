@@ -15,6 +15,8 @@ document.body.click();
 setTimeout(() => { null.x; }, 0);
 setTimeout(() => log('later timers run'), 1);
 Promise.reject(42).then(() => log('not reached'));
+(async () => { throw new Error('async failure'); })();
+Promise.reject(new Error('handled in time')).catch(e => log(e.message));
 console.log('console.log goes to stderr', { a: 1 }, [1, 2]);
 console.warn('a warning');
 alert('an alert never blocks');

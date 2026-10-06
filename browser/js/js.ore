@@ -28,6 +28,8 @@ pub fn runFile(alloc: Allocator, path: []u8) i32 {
 // The interpreter recurses on the C stack (several KB per JS call in
 // debug builds), so scripts run on a thread with a large stack.
 let STACK_BYTES: usize = 1 << 30
+// What scripts may use of it (Interp.markStackBase).
+let RUNNER_ROOM: u64 = 900 << 20
 
 struct Job {
     alloc: Allocator
@@ -79,11 +81,34 @@ pub fn runSource(alloc: Allocator, src: []u8) i32 {
     if gcStressRequested() {
         it.heap.threshold = 1
     }
+    it.markStackBase(RUNNER_ROOM)
     it.runScript(src) catch |e| {
-        reportUncaught(&mut it)
-        return 1
+        return uncaughtStatus(&mut it, e)
+    }
+    // The microtasks (promise reactions), as Node runs them after the
+    // script.
+    while it.takeJob() |f| {
+        let base = it.stack.len()
+        it.push(f) catch |e| {
+            return 1
+        }
+        it.push(Value.Undefined) catch |e| {
+            return 1
+        }
+        it.callAt(base, 0) catch |e| {
+            return uncaughtStatus(&mut it, e)
+        }
     }
     return 0
+}
+
+fn uncaughtStatus(it: *mut Interp, e: JsError) i32 {
+    if e == JsError.Terminated {
+        std.fs.stderr().write("Uncaught: the script ran out of time\n") catch |err| {}
+        return 1
+    }
+    reportUncaught(it)
+    return 1
 }
 
 /// Writes "Uncaught <error>" for the pending exception to stderr.
@@ -96,9 +121,14 @@ pub fn reportUncaught(it: *mut Interp) {
 }
 
 pub fn describeException(it: *mut Interp, b: *mut text.Builder) JsError!void {
+    return describeThrown(it, b, "Uncaught ")
+}
+
+/// describeException with another prefix ("Uncaught (in promise) ").
+pub fn describeThrown(it: *mut Interp, b: *mut text.Builder, prefix: []u8) JsError!void {
     let ex = it.exception
     try it.push(ex)
-    try b.append("Uncaught ")
+    try b.append(prefix)
     if it.classOf(ex) |c| {
         if c == Class.Error {
             try appendErrorText(it, b, ex)
