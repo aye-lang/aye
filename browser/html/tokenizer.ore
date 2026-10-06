@@ -1,0 +1,562 @@
+// The HTML tokenizer: a WHATWG subset. It turns the input into tags,
+// text, comments and doctypes, and never fails: whatever is not markup is
+// text. Character references are decoded in text and attribute values.
+//
+// After the start tag of `script`, `style` and the like the input up to
+// the matching end tag is raw text; after `title` and `textarea` it is
+// RCDATA (raw, but with character references). The tokenizer switches
+// these modes itself (WHATWG lets the tree builder do it; for the HTML
+// that B1 handles the result is the same).
+
+import dom.Attr
+import encoding
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+pub enum Token {
+    Doctype { name: []u8 }
+    StartTag { name: []u8, attrs: []Attr, self_closing: bool }
+    EndTag { name: []u8 }
+    Comment { data: []u8 }
+    Text { data: []u8 }
+    Eof
+}
+
+// Where an attribute's name and value are in the token buffer.
+struct Span {
+    name_lo: usize
+    name_hi: usize
+    value_lo: usize
+    value_hi: usize
+}
+
+// Elements whose content is raw text, and those whose content is RCDATA.
+let RAW_TEXT = "script style xmp iframe noembed noframes"
+let RCDATA = "title textarea"
+
+/// Reads tokens from `src` (UTF-8, newlines already normalized). The
+/// slices of a token are valid until the next call of `next`.
+pub struct Tokenizer {
+    src: []u8
+    pos: usize
+    // The bytes of the current token: names, values and text.
+    buf: text.Builder
+    spans: List(Span)
+    attrs: List(Attr)
+    // In raw text or RCDATA: the name of the element that ends it.
+    raw_end: []u8
+    rcdata: bool
+    plaintext: bool
+
+    pub fn init(alloc: Allocator, src: []u8) Tokenizer {
+        return Tokenizer {
+            src: src,
+            pos: 0,
+            buf: text.Builder.init(alloc),
+            spans: List(Span).init(alloc),
+            attrs: List(Attr).init(alloc),
+            raw_end: "",
+            rcdata: false,
+            plaintext: false,
+        }
+    }
+
+    pub fn deinit(self: *mut Self) {
+        self.buf.deinit()
+        self.spans.deinit()
+        self.attrs.deinit()
+    }
+
+    /// The next token; `Token.Eof` at the end (and after it).
+    pub fn next(self: *mut Self) AllocError!Token {
+        while true {
+            self.buf.clear()
+            self.spans.clear()
+            self.attrs.clear()
+            if self.pos >= self.src.len {
+                return Token.Eof
+            }
+            if self.plaintext {
+                try self.buf.append(self.src[self.pos..])
+                self.pos = self.src.len
+                return Token.Text { data: self.buf.bytes() }
+            }
+            if self.raw_end.len > 0 {
+                try self.rawText()
+                if self.buf.len() > 0 {
+                    return Token.Text { data: self.buf.bytes() }
+                }
+                // Right at the end tag: read it as a tag below.
+            }
+            if self.src[self.pos] == '<' {
+                if self.markup() |kind| {
+                    if kind == Markup.Ignored {
+                        self.pos += 3
+                        continue
+                    }
+                    if kind == Markup.Tag {
+                        let tok = try self.tag()
+                        if tok |t| {
+                            return t
+                        }
+                        // The input ended inside the tag: it is dropped.
+                        continue
+                    }
+                    return self.comment(kind)
+                }
+            }
+            try self.readText()
+            return Token.Text { data: self.buf.bytes() }
+        }
+        return Token.Eof
+    }
+
+    // ---- what follows a `<`
+
+    // What the `<` at `pos` starts; null when it is just a `<` of text.
+    fn markup(self: *Self) ?Markup {
+        let rest = self.src[self.pos + 1..]
+        if rest.len == 0 {
+            return null
+        }
+        let c = rest[0]
+        if isAlpha(c) {
+            return Markup.Tag
+        }
+        if c == '!' {
+            return Markup.Bang
+        }
+        if c == '?' {
+            return Markup.Bogus
+        }
+        if c == '/' {
+            if rest.len == 1 {
+                return null
+            }
+            if isAlpha(rest[1]) {
+                return Markup.Tag
+            }
+            if rest[1] == '>' {
+                return Markup.Ignored
+            }
+            return Markup.Bogus
+        }
+        return null
+    }
+
+    // A start or end tag at `pos`; null if the input ends inside it.
+    fn tag(self: *mut Self) AllocError!?Token {
+        var p = self.pos + 1
+        let end = self.src[p] == '/'
+        if end {
+            p += 1
+        }
+        while p < self.src.len && !isSpace(self.src[p]) && self.src[p] != '/' && self.src[p] != '>' {
+            try self.buf.appendByte(lower(self.src[p]))
+            p += 1
+        }
+        let name_hi = self.buf.len()
+        self.pos = p
+        var self_closing = false
+        while true {
+            self.skipSpace()
+            if self.pos >= self.src.len {
+                return null
+            }
+            let c = self.src[self.pos]
+            if c == '>' {
+                self.pos += 1
+                break
+            }
+            if c == '/' {
+                self.pos += 1
+                if self.pos < self.src.len && self.src[self.pos] == '>' {
+                    self_closing = true
+                    self.pos += 1
+                    break
+                }
+                continue
+            }
+            if !try self.attribute() {
+                return null
+            }
+        }
+        let bytes = self.buf.bytes()
+        let name = bytes[..name_hi]
+        if end {
+            return Token.EndTag { name: name }
+        }
+        // Later duplicates of an attribute are dropped.
+        for s in self.spans.items() {
+            let an = bytes[s.name_lo..s.name_hi]
+            var seen = false
+            for a in self.attrs.items() {
+                if text.eql(a.name, an) {
+                    seen = true
+                }
+            }
+            if !seen {
+                try self.attrs.append(Attr { name: an, value: bytes[s.value_lo..s.value_hi] })
+            }
+        }
+        self.enterRawMode(name)
+        return Token.StartTag { name: name, attrs: self.attrs.items(), self_closing: self_closing }
+    }
+
+    // One attribute at `pos` (not a space, `/` or `>`). False if the input
+    // ends inside its value.
+    fn attribute(self: *mut Self) AllocError!bool {
+        let name_lo = self.buf.len()
+        // The first byte may be `=`; after that `=` ends the name.
+        try self.buf.appendByte(lower(self.src[self.pos]))
+        self.pos += 1
+        while self.pos < self.src.len {
+            let c = self.src[self.pos]
+            if isSpace(c) || c == '/' || c == '>' || c == '=' {
+                break
+            }
+            try self.buf.appendByte(lower(c))
+            self.pos += 1
+        }
+        let name_hi = self.buf.len()
+        self.skipSpace()
+        if self.pos >= self.src.len || self.src[self.pos] != '=' {
+            try self.spans.append(Span { name_lo: name_lo, name_hi: name_hi, value_lo: name_hi, value_hi: name_hi })
+            return true
+        }
+        self.pos += 1
+        self.skipSpace()
+        let value_lo = self.buf.len()
+        if self.pos >= self.src.len {
+            return false
+        }
+        let q = self.src[self.pos]
+        if q == '"' || q == '\'' {
+            self.pos += 1
+            while true {
+                if self.pos >= self.src.len {
+                    return false
+                }
+                let c = self.src[self.pos]
+                if c == q {
+                    self.pos += 1
+                    break
+                }
+                if c == '&' {
+                    try self.charRef(true)
+                } else {
+                    try self.buf.appendByte(c)
+                    self.pos += 1
+                }
+            }
+        } else {
+            while self.pos < self.src.len {
+                let c = self.src[self.pos]
+                if isSpace(c) || c == '>' {
+                    break
+                }
+                if c == '&' {
+                    try self.charRef(true)
+                } else {
+                    try self.buf.appendByte(c)
+                    self.pos += 1
+                }
+            }
+        }
+        try self.spans.append(Span { name_lo: name_lo, name_hi: name_hi, value_lo: value_lo, value_hi: self.buf.len() })
+        return true
+    }
+
+    // After the start tag `name`: switch to raw text, RCDATA or plain text
+    // if `name` asks for it.
+    fn enterRawMode(self: *mut Self, name: []u8) {
+        if text.eql(name, "plaintext") {
+            self.plaintext = true
+            return
+        }
+        var raw = text.split(RAW_TEXT, " ")
+        while raw.next() |w| {
+            if text.eql(w, name) {
+                self.raw_end = w
+                self.rcdata = false
+                return
+            }
+        }
+        var rc = text.split(RCDATA, " ")
+        while rc.next() |w| {
+            if text.eql(w, name) {
+                self.raw_end = w
+                self.rcdata = true
+                return
+            }
+        }
+    }
+
+    // The raw text (or RCDATA) up to `</raw_end` followed by a space, `/`
+    // or `>`, or to the end of the input. Leaves raw mode when it finds
+    // the end tag.
+    fn rawText(self: *mut Self) AllocError!void {
+        while self.pos < self.src.len {
+            if self.atRawEnd() {
+                self.raw_end = ""
+                return
+            }
+            let c = self.src[self.pos]
+            if c == '&' && self.rcdata {
+                try self.charRef(false)
+            } else {
+                try self.buf.appendByte(c)
+                self.pos += 1
+            }
+        }
+    }
+
+    fn atRawEnd(self: *Self) bool {
+        let rest = self.src[self.pos..]
+        let n = self.raw_end.len
+        if rest.len < n + 3 || rest[0] != '<' || rest[1] != '/' {
+            return false
+        }
+        if !text.eqlIgnoreCase(rest[2..n + 2], self.raw_end) {
+            return false
+        }
+        let c = rest[n + 2]
+        return isSpace(c) || c == '/' || c == '>'
+    }
+
+    // ---- comments and doctypes
+
+    // A comment, doctype or bogus comment at `pos` (`<!` or `<?` or `</`
+    // followed by a non-letter).
+    fn comment(self: *mut Self, kind: Markup) AllocError!Token {
+        let rest = self.src[self.pos..]
+        if kind == Markup.Bang {
+            if text.startsWith(rest, "<!--") {
+                return self.realComment()
+            }
+            if rest.len >= 9 && text.eqlIgnoreCase(rest[2..9], "doctype") {
+                return self.doctype()
+            }
+        }
+        // A bogus comment: up to the next `>`. `<?` keeps its `?`.
+        var lo = self.pos + 2
+        if kind == Markup.Bogus && rest[1] == '?' {
+            lo = self.pos + 1
+        }
+        var hi = lo
+        while hi < self.src.len && self.src[hi] != '>' {
+            hi += 1
+        }
+        try self.buf.append(self.src[lo..hi])
+        self.pos = hi + 1
+        if hi == self.src.len {
+            self.pos = hi
+        }
+        return Token.Comment { data: self.buf.bytes() }
+    }
+
+    // `<!--` ... `-->`. `<!-->` and `<!--->` are empty comments, `--!>`
+    // also ends a comment, and the end of the input ends it too.
+    fn realComment(self: *mut Self) AllocError!Token {
+        let lo = self.pos + 4
+        let body = self.src[lo..]
+        if text.startsWith(body, ">") {
+            self.pos = lo + 1
+            return Token.Comment { data: "" }
+        }
+        if text.startsWith(body, "->") {
+            self.pos = lo + 2
+            return Token.Comment { data: "" }
+        }
+        var i: usize = 0
+        while i < body.len {
+            if text.startsWith(body[i..], "-->") {
+                try self.buf.append(body[..i])
+                self.pos = lo + i + 3
+                return Token.Comment { data: self.buf.bytes() }
+            }
+            if text.startsWith(body[i..], "--!>") {
+                try self.buf.append(body[..i])
+                self.pos = lo + i + 4
+                return Token.Comment { data: self.buf.bytes() }
+            }
+            i += 1
+        }
+        try self.buf.append(body)
+        self.pos = self.src.len
+        return Token.Comment { data: self.buf.bytes() }
+    }
+
+    // `<!DOCTYPE name ...>`: the name in lower case; public and system
+    // identifiers are skipped.
+    fn doctype(self: *mut Self) AllocError!Token {
+        self.pos += 9
+        self.skipSpace()
+        while self.pos < self.src.len && !isSpace(self.src[self.pos]) && self.src[self.pos] != '>' {
+            try self.buf.appendByte(lower(self.src[self.pos]))
+            self.pos += 1
+        }
+        while self.pos < self.src.len && self.src[self.pos] != '>' {
+            self.pos += 1
+        }
+        if self.pos < self.src.len {
+            self.pos += 1
+        }
+        return Token.Doctype { name: self.buf.bytes() }
+    }
+
+    // ---- text and character references
+
+    // Text from `pos` up to the next markup or the end.
+    fn readText(self: *mut Self) AllocError!void {
+        // The `<` at `pos`, if any, is not markup.
+        if self.src[self.pos] == '<' {
+            try self.buf.appendByte('<')
+            self.pos += 1
+        }
+        while self.pos < self.src.len {
+            let c = self.src[self.pos]
+            if c == '<' && self.markup() != null {
+                return
+            }
+            if c == '&' {
+                try self.charRef(false)
+            } else {
+                try self.buf.appendByte(c)
+                self.pos += 1
+            }
+        }
+    }
+
+    // The character reference at `pos` (an `&`), decoded into the buffer;
+    // just the `&` when it is not one. In an attribute value a legacy name
+    // without `;` followed by a letter, digit or `=` is not decoded
+    // (`href="?a=1&copy=2"`).
+    fn charRef(self: *mut Self, in_attr: bool) AllocError!void {
+        let rest = self.src[self.pos + 1..]
+        if rest.len > 0 && rest[0] == '#' {
+            return self.numericRef(rest)
+        }
+        var n: usize = 0
+        while n < rest.len && isAlnum(rest[n]) {
+            n += 1
+        }
+        if n < rest.len && rest[n] == ';' {
+            if findEntity(rest[..n]) |e| {
+                try self.buf.appendChar(e.code)
+                self.pos += n + 2
+                return
+            }
+        }
+        // The longest legacy name that starts the run.
+        var k = n
+        while k > 1 {
+            if findEntity(rest[..k]) |e| {
+                if e.legacy {
+                    let after_ok = k == rest.len || !(isAlnum(rest[k]) || rest[k] == '=')
+                    if in_attr && !after_ok {
+                        break
+                    }
+                    try self.buf.appendChar(e.code)
+                    self.pos += k + 1
+                    return
+                }
+            }
+            k -= 1
+        }
+        try self.buf.appendByte('&')
+        self.pos += 1
+    }
+
+    // `&#123;` or `&#x7B;` (`rest` starts at the `#`). Zero, surrogates and
+    // values above U+10FFFF become U+FFFD; 0x80 to 0x9F are read as
+    // Windows-1252, as browsers do.
+    fn numericRef(self: *mut Self, rest: []u8) AllocError!void {
+        var i: usize = 1
+        var hex = false
+        if i < rest.len && (rest[i] == 'x' || rest[i] == 'X') {
+            hex = true
+            i += 1
+        }
+        let digits_lo = i
+        var v: u32 = 0
+        while i < rest.len {
+            let d = digitValue(rest[i], hex)
+            if d < 0 {
+                break
+            }
+            if v < 0x110000 {
+                if hex {
+                    v = v * 16 + d as u32
+                } else {
+                    v = v * 10 + d as u32
+                }
+            }
+            i += 1
+        }
+        if i == digits_lo {
+            try self.buf.appendByte('&')
+            self.pos += 1
+            return
+        }
+        if i < rest.len && rest[i] == ';' {
+            i += 1
+        }
+        self.pos += i + 1
+        if v == 0 || v > 0x10FFFF || (v >= 0xD800 && v <= 0xDFFF) {
+            return self.buf.appendChar(0xFFFD)
+        }
+        if v >= 0x80 && v <= 0x9F {
+            return self.buf.appendChar(encoding.windows1252(v as u8))
+        }
+        return self.buf.appendChar(v)
+    }
+
+    fn skipSpace(self: *mut Self) {
+        while self.pos < self.src.len && isSpace(self.src[self.pos]) {
+            self.pos += 1
+        }
+    }
+}
+
+enum Markup {
+    Tag
+    Bang
+    Bogus
+    Ignored
+}
+
+fn isSpace(c: u8) bool {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\x0C' || c == '\r'
+}
+
+fn isAlpha(c: u8) bool {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+fn isAlnum(c: u8) bool {
+    return isAlpha(c) || (c >= '0' && c <= '9')
+}
+
+fn lower(c: u8) u8 {
+    if c >= 'A' && c <= 'Z' {
+        return c + 32
+    }
+    return c
+}
+
+// The value of the digit `c` (hexadecimal if `hex`); -1 if it is not one.
+fn digitValue(c: u8, hex: bool) i64 {
+    if c >= '0' && c <= '9' {
+        return (c - '0') as i64
+    }
+    if hex && c >= 'a' && c <= 'f' {
+        return (c - 'a') as i64 + 10
+    }
+    if hex && c >= 'A' && c <= 'F' {
+        return (c - 'A') as i64 + 10
+    }
+    return -1
+}
