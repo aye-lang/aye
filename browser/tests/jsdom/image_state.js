@@ -16,7 +16,7 @@ async function run() {
   const created = document.createElement('img');
   check('createElement initial', created.complete && created.width === 0 && created.height === 0);
   const converted = new Image(-1, 3.8);
-  check('constructor unsigned dimensions', converted.width === 4294967295 && converted.height === 3);
+  check('constructor unsigned dimensions', converted.width === 0 && converted.getAttribute('width') === '0' && converted.height === 3);
   check('decode without source', await fails(created.decode()));
   await parsed.decode();
   await task();

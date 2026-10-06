@@ -47,7 +47,6 @@ fn installCanvas(it: *mut Interp, o: u32) JsError!void {
     try defMethod(it, o, "canvasHit", 4, akCanvasHit)
     try defMethod(it, o, "canvasText", 4, akCanvasText)
     try defMethod(it, o, "canvasPath", 2, akCanvasPath)
-    try defMethod(it, o, "canvasImageSize", 2, akCanvasImageSize)
 }
 
 pub fn canvasDimension(doc: *dom.Document, h: NodeId, key: []u8, fallback: usize) usize {
@@ -270,19 +269,9 @@ fn canvasSource(it: *mut Interp, source: Value) JsError!?*mut image.Bitmap {
             it.alloc.free(bmp.pixels)
             bmp.pixels = px
         }
-        try cache.nodes.putPicture(h, bmp, drawing)
-    } else {
-        try cache.nodes.put(h, bmp)
     }
+    // loadElementImage mapped the element (with its srcset density).
     return bmp
-}
-
-fn akCanvasImageSize(it: *mut Interp, a: Args) JsError!Value {
-    let bmp = (try canvasSource(it, it.arg(a, 0))) orelse return js.numVal(0.0)
-    if it.toBoolean(it.arg(a, 1)) {
-        return js.numVal(bmp.height as f64)
-    }
-    return js.numVal(bmp.width as f64)
 }
 
 fn canvasTarget(b: *image.Bitmap, px: []mut u8) svg.Target {

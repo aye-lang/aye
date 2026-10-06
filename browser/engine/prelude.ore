@@ -2071,8 +2071,12 @@ pub let PRELUDE =
     \\    // fallback until rendered content-box dimensions are exposed to scripts.
     \\    const attr = this.getAttribute(key);
     \\    const n = /^\s*\+?\d+/.test(attr || '') ? parseInt(attr, 10) : NaN;
-    \\    return n >= 0 && n <= 4294967295 ? n : imageState(this)[key];
-    \\  }, function (v) { this.setAttribute(key, String(Number(v) >>> 0)); });
+    \\    return n >= 0 && n <= 2147483647 ? n : imageState(this)[key];
+    \\  }, function (v) {
+    \\    // Reflected unsigned long: values above 2^31 - 1 set the default.
+    \\    const n = Number(v) >>> 0;
+    \\    this.setAttribute(key, String(n <= 2147483647 ? n : 0));
+    \\  });
     \\}
     \\for (const n of ['srcset', 'sizes', 'useMap']) reflect(n, n.toLowerCase(), ImageP);
     \\reflectBool('isMap', 'ismap', ImageP);
