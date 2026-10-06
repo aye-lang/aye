@@ -317,6 +317,8 @@ pub fn cc(c_src: &str, out: &Path, mode: Mode) -> Result<(), String> {
         .args(mode.clang_flags())
         .args(["-x", "c", "-", "-o"])
         .arg(out)
+        // std.math calls libm.
+        .arg("-lm")
         .stdin(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| format!("failed to run clang: {e}"))?;
     child.stdin.take().unwrap().write_all(c_src.as_bytes()).map_err(|e| e.to_string())?;

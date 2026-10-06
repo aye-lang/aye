@@ -1,6 +1,7 @@
 import std.heap.General
 import std.mem.AllocError
 import std.mem.Allocator
+import std.testing
 
 struct Node {
     value: i64
@@ -8,6 +9,7 @@ struct Node {
 
 fn make(alloc: Allocator) AllocError!*mut Node {
     let a = @testAllocator()
+    let b = testing.allocator()
     return alloc.create(Node)
 }
 
@@ -18,6 +20,8 @@ pub fn main() !void {
     let p = try g2.allocator().create(Node { value: 1 })
     g2.allocator().destroy(p.*)
     g2.allocator().resize(p)
+    let s = try g2.allocator().resize(p, 2, 0)
+    g2.allocator().resize([]mut u8{}, 2, 0)
     g2.allocator().create(Node { value: 2 })
     let q = General.create()
     @expectEqual(1, true)

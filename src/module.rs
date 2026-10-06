@@ -41,6 +41,7 @@ const STD_FILES: &[(&str, &str, &str)] = &[
     ("std.log", "std/log/log.ore", include_str!("../std/log/log.ore")),
     ("std.mem", "std/mem/mem.ore", include_str!("../std/mem/mem.ore")),
     ("std.os", "std/os/os.ore", include_str!("../std/os/os.ore")),
+    ("std.testing", "std/testing/testing.ore", include_str!("../std/testing/testing.ore")),
 ];
 
 /// Items of std that the compiler provides (their declarations would need
@@ -52,6 +53,7 @@ const BUILTINS: &[(&str, &str)] = &[
     ("std.heap", "Arena"),
     ("std.log", "err"),
     ("std.log", "info"),
+    ("std.testing", "allocator"),
 ];
 
 /// The methods of the builtin types, for `std_api`.
@@ -66,6 +68,7 @@ const BUILTIN_METHODS: &[&str] = &[
     "Allocator.destroy",
     "Allocator.alloc",
     "Allocator.free",
+    "Allocator.resize",
 ];
 
 /// The canonical name of the item `name` of the module `module` (`""` is
@@ -82,7 +85,15 @@ pub fn std_api() -> Vec<String> {
         let file = parser::parse(lexer::lex(src).unwrap()).unwrap_or_else(|e| panic!("{module}: {e:?}"));
         for item in &file.items {
             match item {
-                AstItem::Fn(f) if f.is_pub => out.push(format!("{module}.{}", f.name)),
+                AstItem::Fn(f) if f.is_pub => {
+                    out.push(format!("{module}.{}", f.name));
+                    // A type function's methods: `List.append`.
+                    if let Some(ast::Stmt { kind: StmtKind::Return(Some(e)), .. }) = f.body.as_ref().and_then(|b| b.stmts.first())
+                        && let ExprKind::StructType(s) = &e.kind
+                    {
+                        out.extend(s.methods.iter().filter(|m| m.is_pub).map(|m| format!("{}.{}", f.name, m.name)));
+                    }
+                }
                 AstItem::Struct(s) if s.is_pub => {
                     out.extend(s.methods.iter().filter(|m| m.is_pub).map(|m| format!("{}.{}", s.name, m.name)))
                 }
@@ -98,7 +109,7 @@ pub fn std_api() -> Vec<String> {
 /// The std module of the builtin `name` when a module uses it without an
 /// import (`Allocator` is `std.mem.Allocator`).
 fn std_home(name: &str) -> Option<&'static str> {
-    BUILTINS.iter().find(|(m, n)| *n == name && *m != "std.log").map(|(m, _)| *m)
+    BUILTINS.iter().find(|(_, n)| *n == name && n.starts_with(char::is_uppercase)).map(|(m, _)| *m)
 }
 
 /// What `mod.Name { ... }` is: a struct literal when `Name` is a struct or

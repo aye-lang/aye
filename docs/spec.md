@@ -782,6 +782,10 @@ pub fn main() !void {
   (pass the whole slice from `alloc`, not a sub-slice that starts later).
   Memory is always initialized, so you pass a value, not a type:
   `alloc.create(Node { ... })`, `alloc.alloc(0 as u8, n)`.
+- `alloc.resize(s, n, fill)` returns a slice of `n` elements: the first
+  `min(s.len, n)` are copied from `s`, the rest are `fill`. On success `s`
+  is freed (do not use it again); on `OutOfMemory` it is unchanged. It may
+  move the elements: write `s = try alloc.resize(s, n, fill)`.
 - `AllocError` is `error AllocError { OutOfMemory }`.
 - Use-after-free is not detected. Prefer arenas for data with one lifetime.
 - std has no growable list yet. To grow a buffer, `alloc` a larger slice,
@@ -960,8 +964,9 @@ test "allocations are checked" {
 - `@expect(cond)` and `@expectEqual(expected, actual)` (integers, floats,
   `bool`, `[]u8`) fail the test with `file:line:col: assertion failed:
   expected X, found Y`.
-- `@testAllocator()` is a leak-checked `Allocator`, usable only in a test
-  block. A leak, panic, failed assertion or returned error fails the test.
+- `@testAllocator()`, also written `std.testing.allocator()`, is a
+  leak-checked `Allocator`, usable only in a test block. A leak, panic,
+  failed assertion or returned error fails the test.
 
 Output: `test "name" ... ok` or `... FAILED` followed by the test's indented
 stdout and stderr, then `N passed; M failed`. `--filter text` runs tests
@@ -993,6 +998,7 @@ Allocator.create(value) AllocError!*mut T
 Allocator.destroy(p: *T)
 Allocator.alloc(value, n: usize) AllocError![]mut T
 Allocator.free(s: []T)
+Allocator.resize(s: []T, n: usize, fill: T) AllocError![]mut T   n elements: s's first, then fill; frees s
 error AllocError { OutOfMemory }
 std.mem.eql(a: []u8, b: []u8) bool         same length and bytes
 std.mem.copy(dst: []mut u8, src: []u8)      copy src to the start of dst (panics if dst is shorter)
@@ -1026,6 +1032,12 @@ std.fs.stderr() File
 File.readAll(self: Self, alloc: Allocator) ReadError![]mut u8   read to the end (empty file: empty slice); free with alloc.free
 File.write(self: Self, bytes: []u8) WriteError!void              write everything (flushes @print output first)
 File.close(self: Self)
+```
+
+### std.testing
+
+```
+std.testing.allocator() Allocator          the test's leak-checked allocator (as @testAllocator()); test blocks only
 ```
 
 ### std.log

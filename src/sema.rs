@@ -115,6 +115,8 @@ pub const ALLOC_ERROR: &str = "std::mem::AllocError";
 /// `std.log.err` and `std.log.info`.
 const LOG_ERR: &str = "std::log::err";
 const LOG_INFO: &str = "std::log::info";
+/// `std.testing.allocator()`, the allocator of `@testAllocator()`.
+const TESTING_ALLOCATOR: &str = "std::testing::allocator";
 pub const OUT_OF_MEMORY: u16 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -437,8 +439,9 @@ pub enum TExprKind {
     /// `alloc.create(value)`: type `AllocError!*mut T`.
     Create { alloc: Box<TExpr>, value: Box<TExpr> },
     /// `alloc.alloc(value, len)`: type `AllocError![]mut T`, every element
-    /// set to `value`.
-    AllocSlice { alloc: Box<TExpr>, value: Box<TExpr>, len: Box<TExpr> },
+    /// set to `value`. With `old`, `alloc.resize(old, len, value)`: the
+    /// elements of `old` are copied first, and `old` is freed on success.
+    AllocSlice { alloc: Box<TExpr>, value: Box<TExpr>, len: Box<TExpr>, old: Option<Box<TExpr>> },
     /// `[]T{}`: the empty slice.
     EmptySlice,
     /// `std.log.err(format, args...)` (`error` is true) or `std.log.info`:
@@ -2291,7 +2294,8 @@ impl<'a> Checker<'a> {
             let what = match &t.kind {
                 TExprKind::Call { name, .. } | TExprKind::DynCall { method: name, .. } => format!("`{name}` returns"),
                 TExprKind::Create { .. } => "`create` returns".to_string(),
-                TExprKind::AllocSlice { .. } => "`alloc` returns".to_string(),
+                TExprKind::AllocSlice { old: None, .. } => "`alloc` returns".to_string(),
+                TExprKind::AllocSlice { .. } => "`resize` returns".to_string(),
                 _ => "this expression has type".to_string(),
             };
             return err(E0061, t.span, format!("unhandled error: {what} `{}` (handle the error with `try` or `catch`)", t.ty));
@@ -2692,6 +2696,16 @@ impl<'a> Checker<'a> {
                 }
             },
             ExprKind::Call { name, args } if name == LOG_ERR || name == LOG_INFO => return self.log(name == LOG_ERR, args, span),
+            ExprKind::Call { name, args } if name == TESTING_ALLOCATOR => {
+                if !args.is_empty() {
+                    return err(E0029, span, format!("function `std.testing.allocator` takes 0 argument(s) but {} were given", args.len()));
+                }
+                if !self.in_test {
+                    return err(E0075, span, "`std.testing.allocator()` can only be used in a `test` block (pass the allocator to other functions)");
+                }
+                let kind = TExprKind::Intrinsic { op: Intrinsic::TestAllocator, args: vec![] };
+                return Ok(TExpr { kind, ty: Type::Builtin(BuiltinTy::Allocator), span });
+            }
             ExprKind::Call { name, args } => {
                 if let Some(&f) = self.generics.get(name) {
                     if is_type_fn(f) {
@@ -3425,11 +3439,12 @@ impl<'a> Checker<'a> {
     fn builtin_method(&mut self, b: BuiltinTy, recv: TExpr, name: &str, args: &[ast::Expr], span: Span) -> Result<TExpr> {
         let n = match (b, name) {
             (BuiltinTy::Allocator, "alloc") => 2,
+            (BuiltinTy::Allocator, "resize") => 3,
             (BuiltinTy::Allocator, _) => 1,
             _ => 0,
         };
         let known = match b {
-            BuiltinTy::Allocator => matches!(name, "create" | "destroy" | "alloc" | "free"),
+            BuiltinTy::Allocator => matches!(name, "create" | "destroy" | "alloc" | "free" | "resize"),
             _ => matches!(name, "allocator" | "deinit" | "init"),
         };
         if !known {
@@ -3487,7 +3502,23 @@ impl<'a> Checker<'a> {
                 return err(E0044, len.span, format!("the length must be an unsigned integer, found `{}`", len.ty));
             }
             let ty = Type::ErrorUnion(ALLOC_ERROR.to_string(), Box::new(Type::Slice(Box::new(value.ty.clone()), true)));
-            let kind = TExprKind::AllocSlice { alloc: Box::new(alloc), value: Box::new(value), len: Box::new(len) };
+            let kind = TExprKind::AllocSlice { alloc: Box::new(alloc), value: Box::new(value), len: Box::new(len), old: None };
+            return Ok(TExpr { kind, ty, span });
+        }
+        if name == "resize" {
+            let old = self.value(&args[0], None)?;
+            let Type::Slice(elem, _) = &old.ty else {
+                return err(E0023, old.span, format!("mismatched types: `resize` needs a slice from `alloc`, found `{}`", old.ty));
+            };
+            let elem = (**elem).clone();
+            let len = self.value(&args[1], Some(&USIZE))?;
+            if !is_unsigned(&len.ty) {
+                return err(E0044, len.span, format!("the length must be an unsigned integer, found `{}`", len.ty));
+            }
+            let value = self.expect(&args[2], &elem)?;
+            let ty = Type::ErrorUnion(ALLOC_ERROR.to_string(), Box::new(Type::Slice(Box::new(elem), true)));
+            let kind =
+                TExprKind::AllocSlice { alloc: Box::new(alloc), value: Box::new(value), len: Box::new(len), old: Some(Box::new(old)) };
             return Ok(TExpr { kind, ty, span });
         }
         if name == "free" {

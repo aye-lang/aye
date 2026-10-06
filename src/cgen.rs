@@ -38,6 +38,8 @@ extern void *ore_rt_malloc(size_t) __asm__(ORE_SYM("malloc"));
 extern void ore_rt_free(void *) __asm__(ORE_SYM("free"));
 extern int ore_rt_memcmp(const void *, const void *, size_t) __asm__(ORE_SYM("memcmp"));
 extern int ore_rt_open(const char *, int, ...) __asm__(ORE_SYM("open"));
+extern int ore_rt_access(const char *, int) __asm__(ORE_SYM("access"));
+extern int ore_rt_clock_gettime(int, int64_t *) __asm__(ORE_SYM("clock_gettime"));
 #define ORE_FILE(l) ore_files[(l) >> 20]
 #define ORE_LINE(l) ((l) & 0xfffff)
 
@@ -344,8 +346,11 @@ ORE_RT void ore_log_f(double v) { ore_rt_dprintf(2, "%g", v); }
 ORE_RT void ore_log_b(bool v) { ore_rt_dprintf(2, "%s", v ? "true" : "false"); }
 ORE_RT void ore_log_e(uint16_t e) { ore_rt_dprintf(2, "%s", ore_error_names[e]); }
 
-/* Hooks that std calls through `extern fn`: the program's arguments, and
-   `open` with a path that is not NUL-terminated (the fd, or -errno). */
+/* Hooks that std calls through `extern fn`: the program's arguments;
+   `open` for reading or `create` (write, create, truncate) with a path that
+   is not NUL-terminated (the fd, or -errno); `exists`; and the monotonic
+   clock in nanoseconds. Flag and clock values differ between macOS and
+   Linux. */
 static int ore_argc;
 static char **ore_argv;
 ORE_RT int32_t ore_std_argc(void) { return ore_argc; }
@@ -355,15 +360,41 @@ extern int *ore_rt_errno_loc(void) __asm__(ORE_SYM("__error"));
 #else
 extern int *ore_rt_errno_loc(void) __asm__(ORE_SYM("__errno_location"));
 #endif
-ORE_RT int32_t ore_std_open(uint8_t *path, size_t len) {
+#ifdef __APPLE__
+#define ORE_O_CREATE 0x601 /* O_WRONLY | O_CREAT | O_TRUNC */
+#define ORE_CLOCK_MONOTONIC 6
+#else
+#define ORE_O_CREATE 01101
+#define ORE_CLOCK_MONOTONIC 1
+#endif
+static __attribute__((unused)) char *ore_c_path(uint8_t *path, size_t len) {
     char *p = ore_rt_malloc(len + 1);
-    if (!p) return -12;
+    if (!p) return 0;
     for (size_t i = 0; i < len; i++) p[i] = (char)path[i];
     p[len] = 0;
-    int fd = ore_rt_open(p, 0);
+    return p;
+}
+static __attribute__((unused)) int32_t ore_std_open_flags(uint8_t *path, size_t len, int flags) {
+    char *p = ore_c_path(path, len);
+    if (!p) return -12;
+    int fd = ore_rt_open(p, flags, 0644);
     int err = fd < 0 ? *ore_rt_errno_loc() : 0;
     ore_rt_free(p);
     return fd < 0 ? -err : fd;
+}
+ORE_RT int32_t ore_std_open(uint8_t *path, size_t len) { return ore_std_open_flags(path, len, 0); }
+ORE_RT int32_t ore_std_create(uint8_t *path, size_t len) { return ore_std_open_flags(path, len, ORE_O_CREATE); }
+ORE_RT bool ore_std_exists(uint8_t *path, size_t len) {
+    char *p = ore_c_path(path, len);
+    if (!p) return false;
+    int r = ore_rt_access(p, 0);
+    ore_rt_free(p);
+    return r == 0;
+}
+ORE_RT uint64_t ore_std_monotonic_ns(void) {
+    int64_t ts[2] = {0, 0};
+    ore_rt_clock_gettime(ORE_CLOCK_MONOTONIC, ts);
+    return (uint64_t)ts[0] * 1000000000u + (uint64_t)ts[1];
 }
 "#;
 
@@ -1011,15 +1042,22 @@ impl Gen {
                 format!("(({t} *)ore_alloc({}, sizeof({t}), _Alignof({t}), {}))", self.operand(f, alloc), line_col(*span))
             }
             // A statement expression: allocate, then fill every element.
-            Rvalue::AllocSlice { alloc, value, elem, len, span } => {
-                let (t, v) = (c_type(elem), self.operand(f, value));
+            // `resize` (with `old`) copies the old elements first and frees
+            // the old slice.
+            Rvalue::AllocSlice { alloc, value, elem, len, old, span } => {
+                let (t, v, a, lc) = (c_type(elem), self.operand(f, value), self.operand(f, alloc), line_col(*span));
                 let opt = c_type(&Type::Optional(Box::new(Type::Slice(Box::new(elem.clone()), true))));
+                let (copy, free) = match old {
+                    Some(o) => (
+                        format!("__typeof__({0}) o_ = {0}; for (; i_ < n_ && i_ < o_.len; i_++) p_[i_] = o_.ptr[i_]; ", self.operand(f, o)),
+                        format!("ore_free_n({a}, (void *)o_.ptr, o_.len, {lc}); "),
+                    ),
+                    None => (String::new(), String::new()),
+                };
                 format!(
-                    "({{ {opt} r_ = {{0}}; size_t n_ = (size_t){}; {t} *p_ = n_ ? ({t} *)ore_alloc_n({}, n_, sizeof({t}), _Alignof({t}), {}) : 0; \
-                     if (p_ || !n_) {{ for (size_t i_ = 0; i_ < n_; i_++) p_[i_] = {v}; r_.has = 1; r_.val.ptr = p_; r_.val.len = n_; }} r_; }})",
+                    "({{ {opt} r_ = {{0}}; size_t n_ = (size_t){}; {t} *p_ = n_ ? ({t} *)ore_alloc_n({a}, n_, sizeof({t}), _Alignof({t}), {lc}) : 0; \
+                     if (p_ || !n_) {{ size_t i_ = 0; {copy}for (; i_ < n_; i_++) p_[i_] = {v}; {free}r_.has = 1; r_.val.ptr = p_; r_.val.len = n_; }} r_; }})",
                     self.operand(f, len),
-                    self.operand(f, alloc),
-                    line_col(*span)
                 )
             }
             Rvalue::EmptySlice(ty) => format!("(({}){{0, 0}})", c_type(ty)),
