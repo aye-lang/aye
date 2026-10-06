@@ -1,0 +1,71 @@
+// M12: ten thousand coroutines alive at once (each with a stack and a
+// guard region of its own), resumed in rounds until they finish, then
+// freed; then ten thousand more made and freed one after another.
+import std.coro
+import std.heap.General
+import std.list.List
+
+struct Counter {
+    id: u64
+    left: u64
+    total: u64
+}
+
+fn count(c: *mut Counter) {
+    while c.left > 0 {
+        c.total += c.id
+        c.left -= 1
+        coro.yield()
+    }
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    let n: usize = 10000
+    var counters = try alloc.alloc(Counter { id: 0, left: 0, total: 0 }, n)
+    defer alloc.free(counters)
+    var cos = List(coro.Coroutine).init(alloc)
+    defer cos.deinit()
+    for i in 0..n {
+        counters[i] = Counter { id: i as u64, left: (i % 4) as u64, total: 0 }
+        try cos.append(try coro.create(Counter, alloc, 64 << 10, count, &mut counters[i]))
+    }
+    var rounds: u64 = 0
+    var running = n
+    while running > 0 {
+        running = 0
+        for co in cos.items() {
+            if !co.isDone() {
+                co.resume()
+                if !co.isDone() {
+                    running += 1
+                }
+            }
+        }
+        rounds += 1
+    }
+    var sum: u64 = 0
+    for c in counters {
+        sum += c.total
+    }
+    for co in cos.items() {
+        co.deinit()
+    }
+    @println(rounds)
+    @println(sum)
+    var again: u64 = 0
+    for i in 0..n {
+        var c = Counter { id: 1, left: 2, total: 0 }
+        let co = try coro.create(Counter, alloc, 64 << 10, count, &mut c)
+        co.resume()
+        co.resume()
+        co.resume()
+        if co.isDone() {
+            again += c.total
+        }
+        co.deinit()
+    }
+    @println(again)
+}

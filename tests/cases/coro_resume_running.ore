@@ -1,0 +1,23 @@
+// M12: a coroutine that resumes itself (it is running) panics in debug
+// and safe mode.
+import std.coro
+import std.heap.General
+
+struct Loop {
+    co: ?coro.Coroutine
+}
+
+fn again(s: *mut Loop) {
+    @println("running")
+    s.co.?.resume()
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var s = Loop { co: null }
+    let co = try coro.create(Loop, gpa.allocator(), 64 << 10, again, &mut s)
+    defer co.deinit()
+    s.co = co
+    co.resume()
+}

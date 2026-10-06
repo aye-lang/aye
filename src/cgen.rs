@@ -88,13 +88,17 @@ ORE_RT uint64_t ore_hash_f64(double d) {
 }
 
 #define ORE_TRACE_MAX 64
-/* Each thread has its own error return trace. */
-static _Thread_local __attribute__((unused)) struct { int line, col; } ore_trace[ORE_TRACE_MAX];
+/* Each thread has its own error return trace, and so does each coroutine
+   (`ore_trace_buf` is the running coroutine's; null for the thread's). */
+typedef struct ore_trace_ent { int line, col; } ore_trace_ent;
+static _Thread_local __attribute__((unused)) ore_trace_ent ore_trace[ORE_TRACE_MAX];
+static _Thread_local __attribute__((unused)) ore_trace_ent *ore_trace_buf;
 static _Thread_local __attribute__((unused)) uint32_t ore_trace_len;
 ORE_RT void ore_trace_push(int line, int col) {
     if (ore_trace_len < ORE_TRACE_MAX) {
-        ore_trace[ore_trace_len].line = line;
-        ore_trace[ore_trace_len].col = col;
+        ore_trace_ent *t = ore_trace_buf ? ore_trace_buf : ore_trace;
+        t[ore_trace_len].line = line;
+        t[ore_trace_len].col = col;
     }
     ore_trace_len++;
 }
@@ -430,6 +434,30 @@ extern int ore_rt_getrlimit(int, uint64_t *) __asm__(ORE_SYM("getrlimit"));
 extern long ore_rt_write(int, const void *, size_t) __asm__(ORE_SYM("write"));
 static _Thread_local __attribute__((unused)) uintptr_t ore_stack_top, ore_stack_size;
 static _Thread_local __attribute__((unused)) void *ore_altstack;
+/* std.coro: a coroutine (see `ore_coro_init` below). While one runs,
+   `ore_stack_top` and `ore_stack_size` are its stack's, so a fault in the
+   guard region below its stack is reported as a stack overflow too. */
+#define ORE_CORO_GUARD ((size_t)1 << 20)
+#define ORE_CORO_MAGIC 0x4f5245434f524f21ull
+enum { ORE_CORO_SUSPENDED = 1, ORE_CORO_RUNNING, ORE_CORO_DONE };
+typedef struct ore_coro {
+    uint64_t magic;
+    void *sp;                /* the coroutine's stack pointer while it is suspended */
+    void *back;              /* the resumer's while the coroutine runs */
+    struct ore_coro *parent; /* the coroutine that resumed it; null: the thread */
+    uint8_t *map;            /* the mapping: the guard region, then the stack */
+    size_t map_size;
+    void (*f)(uint8_t *);
+    uint8_t *arg;
+    const void *thread;      /* the thread that made it */
+    uintptr_t saved_top, saved_size;
+    ore_trace_ent *saved_trace;
+    uint32_t saved_trace_len, trace_len;
+    int state;
+    ore_trace_ent trace[ORE_TRACE ? ORE_TRACE_MAX : 1];
+} ore_coro;
+static _Thread_local __attribute__((unused)) ore_coro *ore_coro_current;
+static _Thread_local __attribute__((unused)) char ore_coro_thread; /* its address names the thread */
 static void ore_on_fault(int sig, void *info, void *ctx) {
     (void)ctx;
     uintptr_t addr = *(uintptr_t *)((char *)info + ORE_SI_ADDR);
@@ -438,8 +466,11 @@ static void ore_on_fault(int sig, void *info, void *ctx) {
     if (ore_stack_top && addr < ore_stack_top && addr + near >= lo && addr < lo + near) {
         static const char msg[] =
             "panic: stack overflow (deep recursion: run it on a thread with a larger stack, std.thread.spawnWithStack)\n";
+        static const char coro_msg[] =
+            "panic: stack overflow (deep recursion in a coroutine: create it with a larger stack, std.coro.create)\n";
         ore_rt_fflush(0);
-        ore_rt_write(2, msg, sizeof msg - 1);
+        if (ore_coro_current) ore_rt_write(2, coro_msg, sizeof coro_msg - 1);
+        else ore_rt_write(2, msg, sizeof msg - 1);
         ore_rt_abort();
     }
     ore_sigaction_t dfl = {0};
@@ -556,6 +587,222 @@ ORE_RT void ore_cond_broadcast(uint8_t *c) { ore_rt_pthread_cond_broadcast(c); }
 ORE_RT void ore_cond_free(uint8_t *c) {
     ore_rt_pthread_cond_destroy(c);
     ore_rt_free(c);
+}
+
+/* std.coro: stackful coroutines. A coroutine's stack is an mmap'd region
+   with ORE_CORO_GUARD bytes of PROT_NONE at its low end (only the pages
+   that are used are taken). `ore_coro_switch(save, to)`, assembly per
+   target, pushes the callee-saved registers (x19-x28, fp, lr and d8-d15 on
+   aarch64; rbx, rbp, r12-r15, MXCSR and the x87 control word on x86_64),
+   stores the stack pointer in `*save`, loads `to` and pops them. A new
+   coroutine's stack holds such a frame whose return address is
+   `ore_coro_start`, which calls `ore_coro_entry(c)` with c and the entry
+   point taken from two of the restored registers. The control block is
+   allocated by std.coro with the program's allocator. A coroutine runs
+   only on the thread that made it: the running coroutine, the stack bounds
+   of the overflow check and the error return trace are thread-locals
+   switched with it, and the C compiler may keep a thread-local's address
+   in a frame across a switch. */
+#if defined(__aarch64__)
+__asm__(".text\n"
+        ".p2align 4\n"
+        ORE_SYM("ore_coro_switch") ":\n"
+        "    sub sp, sp, #160\n"
+        "    stp x19, x20, [sp, #0]\n"
+        "    stp x21, x22, [sp, #16]\n"
+        "    stp x23, x24, [sp, #32]\n"
+        "    stp x25, x26, [sp, #48]\n"
+        "    stp x27, x28, [sp, #64]\n"
+        "    stp x29, x30, [sp, #80]\n"
+        "    stp d8, d9, [sp, #96]\n"
+        "    stp d10, d11, [sp, #112]\n"
+        "    stp d12, d13, [sp, #128]\n"
+        "    stp d14, d15, [sp, #144]\n"
+        "    mov x9, sp\n"
+        "    str x9, [x0]\n"
+        "    mov sp, x1\n"
+        "    ldp x19, x20, [sp, #0]\n"
+        "    ldp x21, x22, [sp, #16]\n"
+        "    ldp x23, x24, [sp, #32]\n"
+        "    ldp x25, x26, [sp, #48]\n"
+        "    ldp x27, x28, [sp, #64]\n"
+        "    ldp x29, x30, [sp, #80]\n"
+        "    ldp d8, d9, [sp, #96]\n"
+        "    ldp d10, d11, [sp, #112]\n"
+        "    ldp d12, d13, [sp, #128]\n"
+        "    ldp d14, d15, [sp, #144]\n"
+        "    add sp, sp, #160\n"
+        "    ret\n"
+        ".p2align 4\n"
+        ORE_SYM("ore_coro_start") ":\n"
+        "    mov x0, x19\n"
+        "    blr x20\n"
+        "    brk #0\n");
+#define ORE_CORO_FRAME 160
+#define ORE_CORO_SLOT_ARG 0   /* x19 */
+#define ORE_CORO_SLOT_ENTRY 1 /* x20 */
+#define ORE_CORO_SLOT_RET 11  /* x30 */
+#define ORE_CORO_OK 1
+#elif defined(__x86_64__)
+__asm__(".text\n"
+        ".p2align 4\n"
+        ORE_SYM("ore_coro_switch") ":\n"
+        "    pushq %rbp\n"
+        "    pushq %rbx\n"
+        "    pushq %r12\n"
+        "    pushq %r13\n"
+        "    pushq %r14\n"
+        "    pushq %r15\n"
+        "    subq $8, %rsp\n"
+        "    stmxcsr (%rsp)\n"
+        "    fnstcw 4(%rsp)\n"
+        "    movq %rsp, (%rdi)\n"
+        "    movq %rsi, %rsp\n"
+        "    ldmxcsr (%rsp)\n"
+        "    fldcw 4(%rsp)\n"
+        "    addq $8, %rsp\n"
+        "    popq %r15\n"
+        "    popq %r14\n"
+        "    popq %r13\n"
+        "    popq %r12\n"
+        "    popq %rbx\n"
+        "    popq %rbp\n"
+        "    ret\n"
+        ".p2align 4\n"
+        ORE_SYM("ore_coro_start") ":\n"
+        "    movq %r12, %rdi\n"
+        "    callq *%r13\n"
+        "    ud2\n");
+#define ORE_CORO_FRAME 64
+#define ORE_CORO_SLOT_ARG 4   /* r12 */
+#define ORE_CORO_SLOT_ENTRY 3 /* r13 */
+#define ORE_CORO_SLOT_RET 7   /* the return address */
+#define ORE_CORO_OK 1
+#else
+#define ORE_CORO_OK 0
+#endif
+#if ORE_CORO_OK
+extern void ore_coro_switch(void **save, void *to) __asm__(ORE_SYM("ore_coro_switch"));
+extern void ore_coro_start(void) __asm__(ORE_SYM("ore_coro_start"));
+#endif
+extern void *ore_rt_mmap(void *, size_t, int, int, int, int64_t) __asm__(ORE_SYM("mmap"));
+extern int ore_rt_munmap(void *, size_t) __asm__(ORE_SYM("munmap"));
+extern int ore_rt_mprotect(void *, size_t, int) __asm__(ORE_SYM("mprotect"));
+#ifdef __APPLE__
+#define ORE_MAP_STACK 0x1002 /* MAP_PRIVATE | MAP_ANON */
+#else
+#define ORE_MAP_STACK 0x4022 /* MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE */
+#endif
+ORE_RT __attribute__((noreturn, cold)) void ore_coro_panic(const char *msg) {
+    ore_rt_fflush(0);
+    ore_rt_dprintf(2, "panic: std.coro: %s\n", msg);
+    ore_rt_abort();
+}
+ORE_RT size_t ore_coro_words(void) { return (sizeof(ore_coro) + 7) / 8; }
+/* Back to the code that resumed `c`. */
+ORE_RT void ore_coro_leave(ore_coro *c) {
+#if ORE_CORO_OK
+    ore_coro_current = c->parent;
+    if (ORE_CHECKS) {
+        ore_stack_top = c->saved_top;
+        ore_stack_size = c->saved_size;
+    }
+    if (ORE_TRACE) {
+        c->trace_len = ore_trace_len;
+        ore_trace_buf = c->saved_trace;
+        ore_trace_len = c->saved_trace_len;
+    }
+    ore_coro_switch(&c->sp, c->back);
+#endif
+}
+static __attribute__((noreturn, unused)) void ore_coro_entry(ore_coro *c) {
+    c->f(c->arg);
+    c->state = ORE_CORO_DONE;
+    ore_coro_leave(c);
+    __builtin_trap();
+}
+/* A coroutine in `block` (ore_coro_words() words) that runs `f(arg)` on a
+   stack of at least `stack` bytes; false when there is no memory for it. */
+ORE_RT bool ore_coro_init(uint64_t *block, size_t stack, void (*f)(uint8_t *), uint8_t *arg) {
+#if ORE_CORO_OK
+    ore_coro *c = (ore_coro *)block;
+    if (stack > SIZE_MAX - ORE_CORO_GUARD - 0xffff) return false;
+    stack = stack < ((size_t)64 << 10) ? (size_t)64 << 10 : (stack + 0xffff) & ~(size_t)0xffff;
+    size_t size = ORE_CORO_GUARD + stack;
+    uint8_t *m = ore_rt_mmap(0, size, 3 /* PROT_READ | PROT_WRITE */, ORE_MAP_STACK, -1, 0);
+    if (m == (uint8_t *)-1) return false;
+    if (ore_rt_mprotect(m, ORE_CORO_GUARD, 0 /* PROT_NONE */) != 0) {
+        ore_rt_munmap(m, size);
+        return false;
+    }
+    __builtin_memset(c, 0, sizeof *c);
+    c->magic = ORE_CORO_MAGIC;
+    c->map = m;
+    c->map_size = size;
+    c->f = f;
+    c->arg = arg;
+    c->thread = &ore_coro_thread;
+    c->state = ORE_CORO_SUSPENDED;
+    void **frame = (void **)(m + size - ORE_CORO_FRAME);
+    __builtin_memset(frame, 0, ORE_CORO_FRAME);
+#if defined(__x86_64__)
+    ((uint32_t *)frame)[0] = 0x1f80; /* MXCSR: all exceptions masked, round to nearest */
+    ((uint16_t *)frame)[2] = 0x037f; /* x87: the same */
+#endif
+    frame[ORE_CORO_SLOT_ARG] = c;
+    frame[ORE_CORO_SLOT_ENTRY] = (void *)ore_coro_entry;
+    frame[ORE_CORO_SLOT_RET] = (void *)ore_coro_start;
+    c->sp = frame;
+    return true;
+#else
+    (void)block, (void)stack, (void)f, (void)arg;
+    ore_coro_panic("coroutines are not supported on this target");
+#endif
+}
+ORE_RT void ore_coro_resume(uint64_t *block) {
+#if ORE_CORO_OK
+    ore_coro *c = (ore_coro *)block;
+    if (ORE_CHECKS) {
+        if (c->magic != ORE_CORO_MAGIC) ore_coro_panic("resume of a coroutine that was freed");
+        if (c->state == ORE_CORO_DONE) ore_coro_panic("resume of a coroutine that has finished");
+        if (c->state == ORE_CORO_RUNNING) ore_coro_panic("resume of a coroutine that is running");
+        if (c->thread != &ore_coro_thread) ore_coro_panic("resume of a coroutine on another thread than the one that made it");
+        c->saved_top = ore_stack_top;
+        c->saved_size = ore_stack_size;
+        ore_stack_top = (uintptr_t)(c->map + c->map_size);
+        ore_stack_size = c->map_size - ORE_CORO_GUARD;
+    }
+    if (ORE_TRACE) {
+        c->saved_trace = ore_trace_buf;
+        c->saved_trace_len = ore_trace_len;
+        ore_trace_buf = c->trace;
+        ore_trace_len = c->trace_len;
+    }
+    c->parent = ore_coro_current;
+    c->state = ORE_CORO_RUNNING;
+    ore_coro_current = c;
+    ore_coro_switch(&c->back, c->sp);
+#endif
+}
+ORE_RT void ore_coro_yield(void) {
+    ore_coro *c = ore_coro_current;
+    if (ORE_CHECKS && !c) ore_coro_panic("yield outside a coroutine");
+    c->state = ORE_CORO_SUSPENDED;
+    ore_coro_leave(c);
+}
+ORE_RT bool ore_coro_done(uint64_t *block) {
+    ore_coro *c = (ore_coro *)block;
+    if (ORE_CHECKS && c->magic != ORE_CORO_MAGIC) ore_coro_panic("isDone of a coroutine that was freed");
+    return c->state == ORE_CORO_DONE;
+}
+ORE_RT void ore_coro_free(uint64_t *block) {
+    ore_coro *c = (ore_coro *)block;
+    if (ORE_CHECKS) {
+        if (c->magic != ORE_CORO_MAGIC) ore_coro_panic("deinit of a coroutine that was freed");
+        if (c->state == ORE_CORO_RUNNING) ore_coro_panic("deinit of a coroutine that is running");
+    }
+    c->magic = 0;
+    ore_rt_munmap(c->map, c->map_size);
 }
 "#;
 
