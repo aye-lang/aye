@@ -176,7 +176,7 @@ pub struct Parser {
 
     fn newScope(self: *mut Self) AllocError!u32 {
         let id = self.ast.scopes.len() as u32
-        try self.ast.scopes.append(ScopeInfo { nslots: 0, funcs: 0, nfuncs: 0 })
+        try self.ast.scopes.append(ScopeInfo { nslots: 0, closures: false, funcs: 0, nfuncs: 0 })
         return id
     }
 

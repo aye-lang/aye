@@ -1,0 +1,791 @@
+// js/builtins_misc: Date, Map and Set.
+//
+// Date keeps its time value (ms since 1970, UTC) as the object's
+// primitive; local time is UTC (the engine has no time zones yet). Map
+// and Set keep their entries in insertion order in `elems` (a Map as
+// key, value, key, value, ...); a deleted entry becomes Empty. Lookup is
+// a linear scan with SameValueZero.
+
+import std.list.List
+import std.math
+import std.text
+
+extern struct Timeval {
+    tv_sec: i64
+    tv_usec: i32
+}
+
+extern fn gettimeofday(tv: *mut Timeval, tz: ?[*]u8) i32
+
+fn installMisc(it: *mut Interp) JsError!void {
+    let dc = try makeConstructor(it, "Date", 7, dateCtor, it.date_proto)
+    try it.defineNative(dc, "now", 0, dateNow)
+    try it.defineNative(dc, "UTC", 7, dateUTC)
+    try it.defineNative(dc, "parse", 1, dateParse)
+    let dp = it.date_proto
+    try it.defineNative(dp, "getTime", 0, dateGetTime)
+    try it.defineNative(dp, "valueOf", 0, dateGetTime)
+    try it.defineNative(dp, "toISOString", 0, dateToISOString)
+    try it.defineNative(dp, "toJSON", 1, dateToISOString)
+    try it.defineNative(dp, "toString", 0, dateToString)
+    try it.defineNative(dp, "getFullYear", 0, dateGetFullYear)
+    try it.defineNative(dp, "getUTCFullYear", 0, dateGetFullYear)
+    try it.defineNative(dp, "getMonth", 0, dateGetMonth)
+    try it.defineNative(dp, "getUTCMonth", 0, dateGetMonth)
+    try it.defineNative(dp, "getDate", 0, dateGetDate)
+    try it.defineNative(dp, "getUTCDate", 0, dateGetDate)
+    try it.defineNative(dp, "getDay", 0, dateGetDay)
+    try it.defineNative(dp, "getUTCDay", 0, dateGetDay)
+    try it.defineNative(dp, "getHours", 0, dateGetHours)
+    try it.defineNative(dp, "getUTCHours", 0, dateGetHours)
+    try it.defineNative(dp, "getMinutes", 0, dateGetMinutes)
+    try it.defineNative(dp, "getUTCMinutes", 0, dateGetMinutes)
+    try it.defineNative(dp, "getSeconds", 0, dateGetSeconds)
+    try it.defineNative(dp, "getUTCSeconds", 0, dateGetSeconds)
+    try it.defineNative(dp, "getMilliseconds", 0, dateGetMilliseconds)
+    try it.defineNative(dp, "getUTCMilliseconds", 0, dateGetMilliseconds)
+    try it.defineNative(dp, "getTimezoneOffset", 0, dateGetTimezoneOffset)
+
+    let mc = try makeConstructor(it, "Map", 0, mapCtor, it.map_proto)
+    let mp = it.map_proto
+    try it.defineNative(mp, "get", 1, mapGet)
+    try it.defineNative(mp, "set", 2, mapSet)
+    try it.defineNative(mp, "has", 1, mapHas)
+    try it.defineNative(mp, "delete", 1, mapDelete)
+    try it.defineNative(mp, "clear", 0, mapClear)
+    try it.defineNative(mp, "forEach", 1, mapForEach)
+    try it.defineNative(mp, "keys", 0, mapKeys)
+    try it.defineNative(mp, "values", 0, mapValues)
+    try it.defineNative(mp, "entries", 0, mapEntriesMethod)
+    let msize = try it.newNative("get size", 0, collectionSize)
+    try it.defineAccessor(mp, try it.intern("size"), objVal(msize), Value.Undefined, F_CONFIG)
+
+    let sc = try makeConstructor(it, "Set", 0, setCtor, it.set_proto)
+    let sp = it.set_proto
+    try it.defineNative(sp, "add", 1, setAdd)
+    try it.defineNative(sp, "has", 1, mapHas)
+    try it.defineNative(sp, "delete", 1, mapDelete)
+    try it.defineNative(sp, "clear", 0, mapClear)
+    try it.defineNative(sp, "forEach", 1, setForEach)
+    try it.defineNative(sp, "values", 0, setValues)
+    try it.defineNative(sp, "keys", 0, setValues)
+    try it.defineNative(sp, "entries", 0, setEntries)
+    let ssize = try it.newNative("get size", 0, collectionSize)
+    try it.defineAccessor(sp, try it.intern("size"), objVal(ssize), Value.Undefined, F_CONFIG)
+
+    try installRegExp(it)
+}
+
+// ---- Date
+
+fn nowMs() f64 {
+    var tv = Timeval { tv_sec: 0, tv_usec: 0 }
+    gettimeofday(&mut tv, null)
+    return tv.tv_sec as f64 * 1000.0 + (tv.tv_usec / 1000) as f64
+}
+
+// Days from 1970-01-01 to y-m-d (m 1..12), proleptic Gregorian.
+fn daysFromCivil(y0: f64, m: f64, d: f64) f64 {
+    var y = y0
+    if m <= 2.0 {
+        y -= 1.0
+    }
+    var era = y
+    if era < 0.0 {
+        era -= 399.0
+    }
+    era = trunc(era / 400.0)
+    let yoe = y - era * 400.0
+    var mp = m + 9.0
+    if m > 2.0 {
+        mp = m - 3.0
+    }
+    let doy = trunc((153.0 * mp + 2.0) / 5.0) + d - 1.0
+    let doe = yoe * 365.0 + trunc(yoe / 4.0) - trunc(yoe / 100.0) + doy
+    return era * 146097.0 + doe - 719468.0
+}
+
+/// The UTC time value of a date with month 0..11 (MakeDate of the spec).
+pub fn makeTime(year: f64, month: f64, day: f64, h: f64, mi: f64, s: f64, ms: f64) f64 {
+    let ym = year + math.floor(month / 12.0)
+    var mn = month - math.floor(month / 12.0) * 12.0
+    let days = daysFromCivil(ym, mn + 1.0, 1.0) + day - 1.0
+    return days * 86400000.0 + h * 3600000.0 + mi * 60000.0 + s * 1000.0 + ms
+}
+
+struct Civil {
+    year: f64
+    month: f64
+    day: f64
+    weekday: f64
+    hour: f64
+    minute: f64
+    second: f64
+    ms: f64
+}
+
+fn civilOf(t: f64) Civil {
+    let days = math.floor(t / 86400000.0)
+    let msInDay = t - days * 86400000.0
+    let z = days + 719468.0
+    var era = z
+    if era < 0.0 {
+        era -= 146096.0
+    }
+    era = trunc(era / 146097.0)
+    let doe = z - era * 146097.0
+    let yoe = trunc((doe - trunc(doe / 1460.0) + trunc(doe / 36524.0) - trunc(doe / 146096.0)) / 365.0)
+    let y = yoe + era * 400.0
+    let doy = doe - (365.0 * yoe + trunc(yoe / 4.0) - trunc(yoe / 100.0))
+    let mp = trunc((5.0 * doy + 2.0) / 153.0)
+    let d = doy - trunc((153.0 * mp + 2.0) / 5.0) + 1.0
+    var m = mp + 3.0
+    if mp >= 10.0 {
+        m = mp - 9.0
+    }
+    var year = y
+    if m <= 2.0 {
+        year += 1.0
+    }
+    var wd = (days + 4.0) - math.floor((days + 4.0) / 7.0) * 7.0
+    return Civil {
+        year: year,
+        month: m - 1.0,
+        day: d,
+        weekday: wd,
+        hour: math.floor(msInDay / 3600000.0),
+        minute: math.floor(msInDay / 60000.0) - math.floor(msInDay / 3600000.0) * 60.0,
+        second: math.floor(msInDay / 1000.0) - math.floor(msInDay / 60000.0) * 60.0,
+        ms: msInDay - math.floor(msInDay / 1000.0) * 1000.0,
+    }
+}
+
+fn pad2(b: *mut text.Builder, v: f64, width: usize) JsError!void {
+    var digits = @zeroed([8]u8)
+    var x = v as u64
+    var n: usize = 0
+    while n < width || x > 0 {
+        digits[7 - n] = '0' + (x % 10) as u8
+        x /= 10
+        n += 1
+        if n == 8 {
+            break
+        }
+    }
+    try b.append(digits[8 - n..])
+}
+
+/// Appends Date.prototype.toISOString of time value t.
+pub fn appendIsoDate(b: *mut text.Builder, t: f64) JsError!void {
+    if t != t {
+        return b.append("Invalid Date")
+    }
+    let c = civilOf(t)
+    if c.year < 0.0 {
+        try b.append("-")
+        try pad2(b, -c.year, 6)
+    } else if c.year > 9999.0 {
+        try b.append("+")
+        try pad2(b, c.year, 6)
+    } else {
+        try pad2(b, c.year, 4)
+    }
+    try b.appendByte('-')
+    try pad2(b, c.month + 1.0, 2)
+    try b.appendByte('-')
+    try pad2(b, c.day, 2)
+    try b.appendByte('T')
+    try pad2(b, c.hour, 2)
+    try b.appendByte(':')
+    try pad2(b, c.minute, 2)
+    try b.appendByte(':')
+    try pad2(b, c.second, 2)
+    try b.appendByte('.')
+    try pad2(b, c.ms, 3)
+    try b.appendByte('Z')
+}
+
+fn timeClip(t: f64) f64 {
+    if !isFinite(t) || math.abs(t) > 8.64e15 {
+        return 0.0 / 0.0
+    }
+    return trunc(t) + 0.0
+}
+
+// Parses "YYYY", "YYYY-MM", "YYYY-MM-DD" with an optional
+// "THH:MM[:SS[.sss]]" and "Z" or "+hh:mm"; NaN otherwise.
+fn parseIsoDate(s: []u8) f64 {
+    var p: usize = 0
+    var f = @zeroed([7]f64)
+    f[1] = 1.0
+    f[2] = 1.0
+    let widths = [7]usize{4, 2, 2, 2, 2, 2, 3}
+    let seps = [7]u8{0, '-', '-', 'T', ':', ':', '.'}
+    var k: usize = 0
+    var sign = 1.0
+    if s.len > 0 && (s[0] == '+' || s[0] == '-') {
+        if s[0] == '-' {
+            sign = -1.0
+        }
+        p = 1
+    }
+    while k < 7 && p <= s.len {
+        if k > 0 {
+            if p >= s.len {
+                break
+            }
+            let sc = s[p]
+            if sc != seps[k] && !(k == 3 && sc == ' ') {
+                break
+            }
+            p += 1
+        }
+        var w = widths[k]
+        if k == 0 && p > 0 && (s[0] == '+' || s[0] == '-') {
+            w = 6
+        }
+        var v = 0.0
+        var digits: usize = 0
+        while p < s.len && digits < w && s[p] >= '0' && s[p] <= '9' {
+            v = v * 10.0 + (s[p] - '0') as f64
+            p += 1
+            digits += 1
+        }
+        if digits != w && !(k == 6 && digits > 0) {
+            return 0.0 / 0.0
+        }
+        f[k] = v
+        k += 1
+        if k == 3 && p < s.len && s[p] != 'T' && s[p] != ' ' {
+            break
+        }
+    }
+    var offset = 0.0
+    if p < s.len {
+        if s[p] == 'Z' {
+            p += 1
+        } else if (s[p] == '+' || s[p] == '-') && p + 6 <= s.len {
+            let hh = (s[p + 1] - '0') as f64 * 10.0 + (s[p + 2] - '0') as f64
+            let mm = (s[p + 4] - '0') as f64 * 10.0 + (s[p + 5] - '0') as f64
+            offset = (hh * 60.0 + mm) * 60000.0
+            if s[p] == '+' {
+                offset = -offset
+            }
+            p += 6
+        }
+    }
+    if p != s.len || k == 0 {
+        return 0.0 / 0.0
+    }
+    return makeTime(sign * f[0], f[1] - 1.0, f[2], f[3], f[4], f[5], f[6]) + offset
+}
+
+fn thisTime(it: *mut Interp, a: Args) JsError!f64 {
+    let o = objectOf(a.this)
+    if o != NONE && it.heap.obj(o).class == Class.Date {
+        match it.heap.obj(o).data {
+            .Prim { v } => {
+                match v {
+                    .Num { n } => {
+                        return n
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    try it.typeError("this is not a Date object.")
+    return 0.0
+}
+
+fn dateCtor(it: *mut Interp, a: Args) JsError!Value {
+    var t = 0.0
+    if a.argc == 0 {
+        t = nowMs()
+    } else if a.argc == 1 {
+        let v = it.arg(a, 0)
+        if it.hasClass(v, Class.Date) {
+            t = try thisTime(it, Args { this: v, base: 0, argc: 0, callee: NONE, new_target: NONE })
+        } else {
+            let p = try it.toPrimitive(v, false)
+            if isStr(p) {
+                t = parseIsoDate(it.heap.bytes(strOf(p)))
+            } else {
+                t = try it.toNumber(p)
+            }
+        }
+    } else {
+        var f = @zeroed([7]f64)
+        f[2] = 1.0
+        for i in 0..7 {
+            if i < a.argc {
+                f[i] = try it.toNumber(it.arg(a, i))
+            }
+        }
+        if f[0] >= 0.0 && f[0] <= 99.0 && trunc(f[0]) == f[0] {
+            f[0] += 1900.0
+        }
+        t = makeTime(f[0], f[1], f[2], f[3], f[4], f[5], f[6])
+    }
+    t = timeClip(t)
+    if a.new_target == NONE {
+        let b = try it.builder()
+        defer it.release(b)
+        try appendDateString(b, nowMs())
+        return it.takeString(b)
+    }
+    let o = try it.newObjectOf(Class.Date, it.date_proto, ObjData.Prim { v: numVal(t) })
+    return objVal(o)
+}
+
+fn dateNow(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(nowMs())
+}
+
+fn dateUTC(it: *mut Interp, a: Args) JsError!Value {
+    var f = @zeroed([7]f64)
+    f[2] = 1.0
+    for i in 0..7 {
+        if i < a.argc {
+            f[i] = try it.toNumber(it.arg(a, i))
+        }
+    }
+    return numVal(timeClip(makeTime(f[0], f[1], f[2], f[3], f[4], f[5], f[6])))
+}
+
+fn dateParse(it: *mut Interp, a: Args) JsError!Value {
+    let s = try argString(it, a, 0)
+    return numVal(parseIsoDate(it.heap.bytes(strOf(s))))
+}
+
+fn dateGetTime(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(try thisTime(it, a))
+}
+
+fn dateToISOString(it: *mut Interp, a: Args) JsError!Value {
+    let t = try thisTime(it, a)
+    if t != t {
+        return it.rangeError("Invalid time value")
+    }
+    let b = try it.builder()
+    defer it.release(b)
+    try appendIsoDate(b, t)
+    return it.takeString(b)
+}
+
+let DAY_NAMES = "SunMonTueWedThuFriSat"
+let MONTH_NAMES = "JanFebMarAprMayJunJulAugSepOctNovDec"
+
+fn appendDateString(b: *mut text.Builder, t: f64) JsError!void {
+    if t != t {
+        return b.append("Invalid Date")
+    }
+    let c = civilOf(t)
+    let wd = c.weekday as usize * 3
+    try b.append(DAY_NAMES[wd..wd + 3])
+    try b.appendByte(' ')
+    let mo = c.month as usize * 3
+    try b.append(MONTH_NAMES[mo..mo + 3])
+    try b.appendByte(' ')
+    try pad2(b, c.day, 2)
+    try b.appendByte(' ')
+    try pad2(b, c.year, 4)
+    try b.appendByte(' ')
+    try pad2(b, c.hour, 2)
+    try b.appendByte(':')
+    try pad2(b, c.minute, 2)
+    try b.appendByte(':')
+    try pad2(b, c.second, 2)
+    try b.append(" GMT+0000 (Coordinated Universal Time)")
+}
+
+fn dateToString(it: *mut Interp, a: Args) JsError!Value {
+    let t = try thisTime(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    try appendDateString(b, t)
+    return it.takeString(b)
+}
+
+fn dateField(it: *mut Interp, a: Args, which: u32) JsError!Value {
+    let t = try thisTime(it, a)
+    if t != t {
+        return numVal(t)
+    }
+    let c = civilOf(t)
+    return numVal(match which {
+        0 => c.year
+        1 => c.month
+        2 => c.day
+        3 => c.weekday
+        4 => c.hour
+        5 => c.minute
+        6 => c.second
+        _ => c.ms
+    })
+}
+
+fn dateGetFullYear(it: *mut Interp, a: Args) JsError!Value {
+    return dateField(it, a, 0)
+}
+
+fn dateGetMonth(it: *mut Interp, a: Args) JsError!Value {
+    return dateField(it, a, 1)
+}
+
+fn dateGetDate(it: *mut Interp, a: Args) JsError!Value {
+    return dateField(it, a, 2)
+}
+
+fn dateGetDay(it: *mut Interp, a: Args) JsError!Value {
+    return dateField(it, a, 3)
+}
+
+fn dateGetHours(it: *mut Interp, a: Args) JsError!Value {
+    return dateField(it, a, 4)
+}
+
+fn dateGetMinutes(it: *mut Interp, a: Args) JsError!Value {
+    return dateField(it, a, 5)
+}
+
+fn dateGetSeconds(it: *mut Interp, a: Args) JsError!Value {
+    return dateField(it, a, 6)
+}
+
+fn dateGetMilliseconds(it: *mut Interp, a: Args) JsError!Value {
+    return dateField(it, a, 7)
+}
+
+fn dateGetTimezoneOffset(it: *mut Interp, a: Args) JsError!Value {
+    try thisTime(it, a)
+    return numVal(0.0)
+}
+
+// ---- Map and Set
+
+fn thisCollection(it: *mut Interp, a: Args, cls: Class) JsError!u32 {
+    let o = objectOf(a.this)
+    if o != NONE && it.heap.obj(o).class == cls {
+        return o
+    }
+    try it.typeError("Method called on incompatible receiver")
+    return NONE
+}
+
+fn anyCollection(it: *mut Interp, a: Args) JsError!u32 {
+    let o = objectOf(a.this)
+    if o != NONE && (it.heap.obj(o).class == Class.Map || it.heap.obj(o).class == Class.Set) {
+        return o
+    }
+    try it.typeError("Method called on incompatible receiver")
+    return NONE
+}
+
+fn stride(it: *mut Interp, o: u32) u32 {
+    if it.heap.obj(o).class == Class.Map {
+        return 2
+    }
+    return 1
+}
+
+// The element index of key k, or NONE.
+fn findKey(it: *mut Interp, o: u32, k: Value) u32 {
+    let st = stride(it, o)
+    let n = it.heap.obj(o).nelems
+    var i: u32 = 0
+    while i < n {
+        let e = it.heap.obj(o).elems[i]
+        match e {
+            .Empty => {}
+            _ => {
+                if it.sameValueZero(e, k) {
+                    return i
+                }
+            }
+        }
+        i += st
+    }
+    return NONE
+}
+
+/// The number of entries of a Map or Set.
+pub fn mapSize(it: *mut Interp, o: u32) u32 {
+    let st = stride(it, o)
+    let n = it.heap.obj(o).nelems
+    var count: u32 = 0
+    var i: u32 = 0
+    while i < n {
+        match it.heap.obj(o).elems[i] {
+            .Empty => {}
+            _ => {
+                count += 1
+            }
+        }
+        i += st
+    }
+    return count
+}
+
+// Drops deleted entries when they are many.
+fn compact(it: *mut Interp, o: u32) {
+    let st = stride(it, o)
+    let n = it.heap.obj(o).nelems
+    if n < 32 || mapSize(it, o) * st * 2 > n {
+        return
+    }
+    let ob = it.heap.obj(o)
+    var w: u32 = 0
+    var i: u32 = 0
+    while i < n {
+        match ob.elems[i] {
+            .Empty => {}
+            _ => {
+                for k in 0..st {
+                    ob.elems[w + k] = ob.elems[i + k]
+                }
+                w += st
+            }
+        }
+        i += st
+    }
+    ob.nelems = w
+}
+
+// Normalizes -0 to +0 (Map and Set keys).
+fn keyOf(v: Value) Value {
+    match v {
+        .Num { n } => {
+            if n == 0.0 {
+                return numVal(0.0)
+            }
+        }
+        _ => {}
+    }
+    return v
+}
+
+fn mapCtor(it: *mut Interp, a: Args) JsError!Value {
+    if a.new_target == NONE {
+        return it.typeError("Constructor Map requires 'new'")
+    }
+    let o = try it.newObjectOf(Class.Map, it.map_proto, ObjData.None)
+    try it.push(objVal(o))
+    let src = it.arg(a, 0)
+    if !isNullish(src) {
+        let arr = try it.iterToArray(src)
+        try it.push(objVal(arr))
+        var i: u32 = 0
+        while i < it.heap.obj(arr).nelems {
+            let e = holeToUndef(it.heap.obj(arr).elems[i])
+            let k = try it.getIndex(e, numVal(0.0))
+            try it.push(k)
+            let v = try it.getIndex(e, numVal(1.0))
+            try it.push(v)
+            try mapPut(it, o, k, v)
+            it.pop()
+            it.pop()
+            i += 1
+        }
+        it.pop()
+    }
+    return it.pop()
+}
+
+fn mapPut(it: *mut Interp, o: u32, k: Value, v: Value) JsError!void {
+    let i = findKey(it, o, k)
+    if i != NONE {
+        it.heap.obj(o).elems[i + 1] = v
+        return
+    }
+    try it.heap.pushElem(o, keyOf(k))
+    try it.heap.pushElem(o, v)
+}
+
+fn mapGet(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisCollection(it, a, Class.Map)
+    let i = findKey(it, o, it.arg(a, 0))
+    if i == NONE {
+        return Value.Undefined
+    }
+    return it.heap.obj(o).elems[i + 1]
+}
+
+fn mapSet(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisCollection(it, a, Class.Map)
+    try mapPut(it, o, it.arg(a, 0), it.arg(a, 1))
+    return a.this
+}
+
+fn mapHas(it: *mut Interp, a: Args) JsError!Value {
+    let o = try anyCollection(it, a)
+    return boolVal(findKey(it, o, it.arg(a, 0)) != NONE)
+}
+
+fn mapDelete(it: *mut Interp, a: Args) JsError!Value {
+    let o = try anyCollection(it, a)
+    let i = findKey(it, o, it.arg(a, 0))
+    if i == NONE {
+        return boolVal(false)
+    }
+    let st = stride(it, o)
+    for k in 0..st {
+        it.heap.obj(o).elems[i + k] = Value.Empty
+    }
+    compact(it, o)
+    return boolVal(true)
+}
+
+fn mapClear(it: *mut Interp, a: Args) JsError!Value {
+    let o = try anyCollection(it, a)
+    it.heap.obj(o).nelems = 0
+    return Value.Undefined
+}
+
+fn collectionSize(it: *mut Interp, a: Args) JsError!Value {
+    let o = try anyCollection(it, a)
+    return numVal(mapSize(it, o) as f64)
+}
+
+fn mapForEach(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisCollection(it, a, Class.Map)
+    let f = try callableArg(it, a, 0)
+    var i: u32 = 0
+    while i < it.heap.obj(o).nelems {
+        let k = it.heap.obj(o).elems[i]
+        match k {
+            .Empty => {}
+            _ => {
+                try it.call3(f, it.arg(a, 1), it.heap.obj(o).elems[i + 1], k, a.this)
+            }
+        }
+        i += 2
+    }
+    return Value.Undefined
+}
+
+/// The entries of Map o as an array of [key, value] arrays.
+pub fn mapEntries(it: *mut Interp, o: u32) JsError!u32 {
+    let out = try it.newArray(0)
+    try it.push(objVal(out))
+    var i: u32 = 0
+    while i < it.heap.obj(o).nelems {
+        let k = it.heap.obj(o).elems[i]
+        match k {
+            .Empty => {}
+            _ => {
+                let pair = try it.newArray(0)
+                try it.heap.pushElem(pair, k)
+                try it.heap.pushElem(pair, it.heap.obj(o).elems[i + 1])
+                try it.heap.pushElem(out, objVal(pair))
+            }
+        }
+        i += 2
+    }
+    it.pop()
+    return out
+}
+
+// Keys (part 0) or values (part 1) of a Map as an array.
+fn mapPart(it: *mut Interp, a: Args, part: u32) JsError!Value {
+    let o = try thisCollection(it, a, Class.Map)
+    let out = try it.newArray(0)
+    var i: u32 = 0
+    while i < it.heap.obj(o).nelems {
+        match it.heap.obj(o).elems[i] {
+            .Empty => {}
+            _ => try it.heap.pushElem(out, it.heap.obj(o).elems[i + part])
+        }
+        i += 2
+    }
+    return objVal(out)
+}
+
+fn mapKeys(it: *mut Interp, a: Args) JsError!Value {
+    return mapPart(it, a, 0)
+}
+
+fn mapValues(it: *mut Interp, a: Args) JsError!Value {
+    return mapPart(it, a, 1)
+}
+
+fn mapEntriesMethod(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisCollection(it, a, Class.Map)
+    return objVal(try mapEntries(it, o))
+}
+
+fn setCtor(it: *mut Interp, a: Args) JsError!Value {
+    if a.new_target == NONE {
+        return it.typeError("Constructor Set requires 'new'")
+    }
+    let o = try it.newObjectOf(Class.Set, it.set_proto, ObjData.None)
+    try it.push(objVal(o))
+    let src = it.arg(a, 0)
+    if !isNullish(src) {
+        let arr = try it.iterToArray(src)
+        try it.push(objVal(arr))
+        var i: u32 = 0
+        while i < it.heap.obj(arr).nelems {
+            let e = holeToUndef(it.heap.obj(arr).elems[i])
+            if findKey(it, o, e) == NONE {
+                try it.heap.pushElem(o, keyOf(e))
+            }
+            i += 1
+        }
+        it.pop()
+    }
+    return it.pop()
+}
+
+fn setAdd(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisCollection(it, a, Class.Set)
+    let v = it.arg(a, 0)
+    if findKey(it, o, v) == NONE {
+        try it.heap.pushElem(o, keyOf(v))
+    }
+    return a.this
+}
+
+fn setForEach(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisCollection(it, a, Class.Set)
+    let f = try callableArg(it, a, 0)
+    var i: u32 = 0
+    while i < it.heap.obj(o).nelems {
+        let k = it.heap.obj(o).elems[i]
+        match k {
+            .Empty => {}
+            _ => {
+                try it.call3(f, it.arg(a, 1), k, k, a.this)
+            }
+        }
+        i += 1
+    }
+    return Value.Undefined
+}
+
+fn setValues(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisCollection(it, a, Class.Set)
+    return objVal(try it.iterToArray(objVal(o)))
+}
+
+fn setEntries(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisCollection(it, a, Class.Set)
+    let out = try it.newArray(0)
+    try it.push(objVal(out))
+    var i: u32 = 0
+    while i < it.heap.obj(o).nelems {
+        let k = it.heap.obj(o).elems[i]
+        match k {
+            .Empty => {}
+            _ => {
+                let pair = try it.newArray(0)
+                try it.heap.pushElem(pair, k)
+                try it.heap.pushElem(pair, k)
+                try it.heap.pushElem(out, objVal(pair))
+            }
+        }
+        i += 1
+    }
+    return it.pop()
+}

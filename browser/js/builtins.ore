@@ -1,0 +1,987 @@
+// js/builtins: the global object and the core built-ins: Object,
+// Function, Boolean, the Error types, the global functions and console.
+// Array, String, Number and Math, JSON, and Date/Map/Set/RegExp have files
+// of their own.
+
+import std
+import std.list.List
+import std.text
+
+/// Creates the global object and every built-in.
+pub fn installBuiltins(it: *mut Interp) JsError!void {
+    let h = &mut it.heap
+    it.object_proto = try h.newObj(Class.Object, NONE, ObjData.None)
+    // Function.prototype is a function that does nothing.
+    try it.natives.append(NativeEntry { f: nativeNoop, name: A_EMPTY, length: 0 })
+    it.function_proto = try h.newObj(Class.Function, it.object_proto, ObjData.Native { id: 0 })
+    it.global = try h.newObj(Class.Object, it.object_proto, ObjData.None)
+    it.glex = try h.newEnv(0, NONE)
+    it.array_proto = try h.newObj(Class.Array, it.object_proto, ObjData.None)
+    it.string_proto = try h.newObj(Class.String, it.object_proto, ObjData.Prim { v: try it.atomValue(A_EMPTY) })
+    it.number_proto = try h.newObj(Class.Number, it.object_proto, ObjData.Prim { v: numVal(0.0) })
+    it.boolean_proto = try h.newObj(Class.Boolean, it.object_proto, ObjData.Prim { v: boolVal(false) })
+    it.error_proto = try h.newObj(Class.Object, it.object_proto, ObjData.None)
+    it.date_proto = try h.newObj(Class.Object, it.object_proto, ObjData.None)
+    it.regexp_proto = try h.newObj(Class.Object, it.object_proto, ObjData.None)
+    it.map_proto = try h.newObj(Class.Object, it.object_proto, ObjData.None)
+    it.set_proto = try h.newObj(Class.Object, it.object_proto, ObjData.None)
+
+    let g = it.global
+    try it.defineValue(g, "globalThis", objVal(g))
+    try it.heap.addProp(g, A_UNDEFINED, Value.Undefined, Value.Undefined, 0)
+    try it.heap.addProp(g, A_NAN, numVal(0.0 / 0.0), Value.Undefined, 0)
+    try it.heap.addProp(g, A_INFINITY, numVal(1.0 / 0.0), Value.Undefined, 0)
+    try it.defineNative(g, "parseInt", 2, globalParseInt)
+    try it.defineNative(g, "parseFloat", 1, globalParseFloat)
+    try it.defineNative(g, "isNaN", 1, globalIsNaN)
+    try it.defineNative(g, "isFinite", 1, globalIsFinite)
+
+    try installObject(it)
+    try installFunction(it)
+    try installBoolean(it)
+    try installErrors(it)
+    try installConsole(it)
+    try installArray(it)
+    try installString(it)
+    try installNumber(it)
+    try installMath(it)
+    try installJson(it)
+    try installMisc(it)
+}
+
+/// A constructor `name` on the global object with prototype object proto.
+pub fn makeConstructor(it: *mut Interp, name: []u8, length: u32, f: NativeFn, proto: u32) JsError!u32 {
+    let c = try it.newNative(name, length, f)
+    try it.heap.addProp(c, A_PROTOTYPE, objVal(proto), Value.Undefined, 0)
+    try it.heap.addProp(proto, A_CONSTRUCTOR, objVal(c), Value.Undefined, F_HIDDEN)
+    try it.defineValue(it.global, name, objVal(c))
+    return c
+}
+
+fn nativeNoop(it: *mut Interp, a: Args) JsError!Value {
+    return Value.Undefined
+}
+
+// ---- helpers for natives
+
+/// ToIntegerOrInfinity of argument i (def when missing or undefined).
+pub fn argInteger(it: *mut Interp, a: Args, i: usize, def: f64) JsError!f64 {
+    let v = it.arg(a, i)
+    if isUndef(v) {
+        return def
+    }
+    let x = try it.toNumber(v)
+    if x != x {
+        return 0.0
+    }
+    return trunc(x)
+}
+
+/// A relative index (negative counts from the end) clamped to [0, len].
+pub fn relativeIndex(x: f64, len: u32) u32 {
+    if x < 0.0 {
+        let r = len as f64 + x
+        if r < 0.0 {
+            return 0
+        }
+        return r as u32
+    }
+    if x > len as f64 {
+        return len
+    }
+    return x as u32
+}
+
+/// The string of argument i (ToString).
+pub fn argString(it: *mut Interp, a: Args, i: usize) JsError!Value {
+    return it.toStringValue(it.arg(a, i))
+}
+
+pub fn callableArg(it: *mut Interp, a: Args, i: usize) JsError!Value {
+    let f = it.arg(a, i)
+    if !it.isCallable(f) {
+        try it.notA(f, "a function")
+    }
+    return f
+}
+
+// ---- global functions
+
+fn globalParseInt(it: *mut Interp, a: Args) JsError!Value {
+    let s = try argString(it, a, 0)
+    try it.push(s)
+    var radix: u32 = 0
+    let r = try it.toNumber(it.arg(a, 1))
+    if r == r && r != 0.0 {
+        let ri = toInt32(r)
+        if ri < 2 || ri > 36 {
+            it.pop()
+            return numVal(0.0 / 0.0)
+        }
+        radix = ri as u32
+    }
+    let v = parseIntPrefix(it.heap.bytes(strOf(s)), radix)
+    it.pop()
+    return numVal(v)
+}
+
+fn globalParseFloat(it: *mut Interp, a: Args) JsError!Value {
+    let s = try argString(it, a, 0)
+    return numVal(parseFloatPrefix(it.heap.bytes(strOf(s))))
+}
+
+fn globalIsNaN(it: *mut Interp, a: Args) JsError!Value {
+    let x = try it.toNumber(it.arg(a, 0))
+    return boolVal(x != x)
+}
+
+fn globalIsFinite(it: *mut Interp, a: Args) JsError!Value {
+    let x = try it.toNumber(it.arg(a, 0))
+    return boolVal(isFinite(x))
+}
+
+// ---- Object
+
+fn installObject(it: *mut Interp) JsError!void {
+    let c = try makeConstructor(it, "Object", 1, objectCtor, it.object_proto)
+    try it.defineNative(c, "keys", 1, objectKeys)
+    try it.defineNative(c, "values", 1, objectValues)
+    try it.defineNative(c, "entries", 1, objectEntries)
+    try it.defineNative(c, "assign", 2, objectAssign)
+    try it.defineNative(c, "create", 2, objectCreate)
+    try it.defineNative(c, "defineProperty", 3, objectDefineProperty)
+    try it.defineNative(c, "defineProperties", 2, objectDefineProperties)
+    try it.defineNative(c, "getOwnPropertyNames", 1, objectGetOwnPropertyNames)
+    try it.defineNative(c, "getOwnPropertyDescriptor", 2, objectGetOwnPropertyDescriptor)
+    try it.defineNative(c, "getPrototypeOf", 1, objectGetPrototypeOf)
+    try it.defineNative(c, "setPrototypeOf", 2, objectSetPrototypeOf)
+    try it.defineNative(c, "freeze", 1, objectFreeze)
+    try it.defineNative(c, "isFrozen", 1, objectIsFrozen)
+    try it.defineNative(c, "seal", 1, objectSeal)
+    try it.defineNative(c, "preventExtensions", 1, objectSeal)
+    try it.defineNative(c, "isExtensible", 1, objectIsExtensible)
+    try it.defineNative(c, "fromEntries", 1, objectFromEntries)
+    try it.defineNative(c, "is", 2, objectIs)
+    try it.defineNative(c, "hasOwn", 2, objectHasOwn)
+    let p = it.object_proto
+    try it.defineNative(p, "hasOwnProperty", 1, objectProtoHasOwnProperty)
+    try it.defineNative(p, "isPrototypeOf", 1, objectProtoIsPrototypeOf)
+    try it.defineNative(p, "propertyIsEnumerable", 1, objectProtoPropertyIsEnumerable)
+    try it.defineNative(p, "toString", 0, objectProtoToString)
+    try it.defineNative(p, "toLocaleString", 0, objectProtoToString)
+    try it.defineNative(p, "valueOf", 0, objectProtoValueOf)
+}
+
+fn objectCtor(it: *mut Interp, a: Args) JsError!Value {
+    let v = it.arg(a, 0)
+    if isNullish(v) {
+        return objVal(try it.newObject(it.object_proto))
+    }
+    return objVal(try it.toObject(v))
+}
+
+// The own enumerable keys of argument 0 (as an object).
+fn keysOf(it: *mut Interp, a: Args, keys: *mut List(u32)) JsError!u32 {
+    let o = try it.toObject(it.arg(a, 0))
+    try it.push(objVal(o))
+    try it.ownKeys(o, keys, false)
+    return o
+}
+
+fn objectKeys(it: *mut Interp, a: Args) JsError!Value {
+    let keys = try it.keyList()
+    defer it.releaseKeys(keys)
+    try keysOf(it, a, keys)
+    let arr = try it.newArray(0)
+    try it.push(objVal(arr))
+    for k in keys.items() {
+        try it.heap.pushElem(arr, try it.atomValue(k))
+    }
+    let r = it.pop()
+    it.pop()
+    return r
+}
+
+fn objectValues(it: *mut Interp, a: Args) JsError!Value {
+    let keys = try it.keyList()
+    defer it.releaseKeys(keys)
+    let o = try keysOf(it, a, keys)
+    let arr = try it.newArray(0)
+    try it.push(objVal(arr))
+    for k in keys.items() {
+        let v = try it.getProp(objVal(o), k)
+        try it.heap.pushElem(arr, v)
+    }
+    let r = it.pop()
+    it.pop()
+    return r
+}
+
+fn objectEntries(it: *mut Interp, a: Args) JsError!Value {
+    let keys = try it.keyList()
+    defer it.releaseKeys(keys)
+    let o = try keysOf(it, a, keys)
+    let arr = try it.newArray(0)
+    try it.push(objVal(arr))
+    for k in keys.items() {
+        let v = try it.getProp(objVal(o), k)
+        try it.push(v)
+        let pair = try it.newArray(0)
+        try it.heap.pushElem(pair, try it.atomValue(k))
+        try it.heap.pushElem(pair, it.pop())
+        try it.heap.pushElem(arr, objVal(pair))
+    }
+    let r = it.pop()
+    it.pop()
+    return r
+}
+
+fn objectAssign(it: *mut Interp, a: Args) JsError!Value {
+    let t = try it.toObject(it.arg(a, 0))
+    try it.push(objVal(t))
+    for i in 1..a.argc {
+        try it.copyDataProps(t, it.arg(a, i))
+    }
+    return it.pop()
+}
+
+fn objectCreate(it: *mut Interp, a: Args) JsError!Value {
+    let p = it.arg(a, 0)
+    var proto = NONE
+    match p {
+        .Obj { o } => {
+            proto = o
+        }
+        .Null => {}
+        _ => {
+            return it.typeError("Object prototype may only be an Object or null")
+        }
+    }
+    let o = try it.newObject(proto)
+    if !isUndef(it.arg(a, 1)) {
+        try it.push(objVal(o))
+        try defineFromDescriptors(it, o, it.arg(a, 1))
+        it.pop()
+    }
+    return objVal(o)
+}
+
+fn descFlag(it: *mut Interp, desc: Value, key: []u8, flag: u8, old: u8) JsError!u8 {
+    let atom = try it.intern(key)
+    if !it.hasProperty(objectOf(desc), atom) {
+        return old & flag
+    }
+    let v = try it.getProp(desc, atom)
+    if it.toBoolean(v) {
+        return flag
+    }
+    return 0
+}
+
+/// Object.defineProperty(o, key, desc) on object o.
+pub fn definePropertyFrom(it: *mut Interp, o: u32, key: u32, desc: Value) JsError!void {
+    if !isObject(desc) {
+        try it.typeError("Property description must be an object")
+    }
+    var old: u8 = 0
+    var exists = false
+    if it.heap.findProp(o, key) |i| {
+        old = it.heap.obj(o).props[i].flags
+        exists = true
+    }
+    var flags = try descFlag(it, desc, "enumerable", F_ENUM, old)
+    flags |= try descFlag(it, desc, "configurable", F_CONFIG, old)
+    let ga = try it.intern("get")
+    let sa = try it.intern("set")
+    let hasGet = it.hasProperty(objectOf(desc), ga)
+    let hasSet = it.hasProperty(objectOf(desc), sa)
+    if hasGet || hasSet {
+        let getter = try it.getProp(desc, ga)
+        try it.push(getter)
+        let setter = try it.getProp(desc, sa)
+        try it.push(setter)
+        if exists && (old & F_ACCESSOR) == 0 {
+            if it.heap.findProp(o, key) |i| {
+                try it.heap.removeProp(o, i)
+            }
+        }
+        try it.defineAccessor(o, key, getter, setter, flags)
+        it.pop()
+        it.pop()
+        return
+    }
+    flags |= try descFlag(it, desc, "writable", F_WRITE, old)
+    var v = Value.Undefined
+    if it.hasProperty(objectOf(desc), A_VALUE) {
+        v = try it.getProp(desc, A_VALUE)
+    } else if exists {
+        if it.heap.findProp(o, key) |i| {
+            v = it.heap.obj(o).props[i].value
+        }
+    }
+    try it.defineOwn(o, key, v, flags)
+}
+
+fn objectDefineProperty(it: *mut Interp, a: Args) JsError!Value {
+    let ov = it.arg(a, 0)
+    if !isObject(ov) {
+        return it.typeError("Object.defineProperty called on non-object")
+    }
+    let key = try it.toKey(it.arg(a, 1))
+    try definePropertyFrom(it, objectOf(ov), key, it.arg(a, 2))
+    return ov
+}
+
+fn defineFromDescriptors(it: *mut Interp, o: u32, descs: Value) JsError!void {
+    let keys = try it.keyList()
+    defer it.releaseKeys(keys)
+    let d = try it.toObject(descs)
+    try it.push(objVal(d))
+    try it.ownKeys(d, keys, false)
+    for k in keys.items() {
+        let desc = try it.getProp(objVal(d), k)
+        try it.push(desc)
+        try definePropertyFrom(it, o, k, desc)
+        it.pop()
+    }
+    it.pop()
+}
+
+fn objectDefineProperties(it: *mut Interp, a: Args) JsError!Value {
+    let ov = it.arg(a, 0)
+    if !isObject(ov) {
+        return it.typeError("Object.defineProperties called on non-object")
+    }
+    try defineFromDescriptors(it, objectOf(ov), it.arg(a, 1))
+    return ov
+}
+
+fn objectGetOwnPropertyNames(it: *mut Interp, a: Args) JsError!Value {
+    let keys = try it.keyList()
+    defer it.releaseKeys(keys)
+    let o = try it.toObject(it.arg(a, 0))
+    try it.push(objVal(o))
+    try it.ownKeys(o, keys, true)
+    let cls = it.heap.obj(o).class
+    if cls == Class.Array || cls == Class.String || cls == Class.Arguments {
+        try keys.append(A_LENGTH)
+    }
+    let arr = try it.newArray(0)
+    try it.push(objVal(arr))
+    for k in keys.items() {
+        try it.heap.pushElem(arr, try it.atomValue(k))
+    }
+    let r = it.pop()
+    it.pop()
+    return r
+}
+
+fn objectGetOwnPropertyDescriptor(it: *mut Interp, a: Args) JsError!Value {
+    let o = try it.toObject(it.arg(a, 0))
+    try it.push(objVal(o))
+    let key = try it.toKey(it.arg(a, 1))
+    if !it.hasOwn(o, key) {
+        it.pop()
+        return Value.Undefined
+    }
+    let d = try it.newObject(it.object_proto)
+    try it.push(objVal(d))
+    if it.heap.findProp(o, key) |i| {
+        let p = it.heap.obj(o).props[i]
+        if (p.flags & F_ACCESSOR) != 0 {
+            try it.defineOwn(d, try it.intern("get"), p.value, F_DEFAULT)
+            try it.defineOwn(d, try it.intern("set"), p.setter, F_DEFAULT)
+        } else {
+            try it.defineOwn(d, A_VALUE, p.value, F_DEFAULT)
+            try it.defineOwn(d, A_WRITABLE, boolVal((p.flags & F_WRITE) != 0), F_DEFAULT)
+        }
+        try it.defineOwn(d, A_ENUMERABLE, boolVal((p.flags & F_ENUM) != 0), F_DEFAULT)
+        try it.defineOwn(d, A_CONFIGURABLE, boolVal((p.flags & F_CONFIG) != 0), F_DEFAULT)
+    } else {
+        let v = try it.getProp(objVal(o), key)
+        let isLength = key == A_LENGTH
+        try it.defineOwn(d, A_VALUE, v, F_DEFAULT)
+        try it.defineOwn(d, A_WRITABLE, boolVal(!it.heap.obj(o).frozen), F_DEFAULT)
+        try it.defineOwn(d, A_ENUMERABLE, boolVal(!isLength), F_DEFAULT)
+        try it.defineOwn(d, A_CONFIGURABLE, boolVal(!isLength && !it.heap.obj(o).frozen), F_DEFAULT)
+    }
+    let r = it.pop()
+    it.pop()
+    return r
+}
+
+fn objectGetPrototypeOf(it: *mut Interp, a: Args) JsError!Value {
+    let o = try it.toObject(it.arg(a, 0))
+    let p = it.heap.obj(o).proto
+    if p == NONE {
+        return Value.Null
+    }
+    return objVal(p)
+}
+
+fn objectSetPrototypeOf(it: *mut Interp, a: Args) JsError!Value {
+    let ov = it.arg(a, 0)
+    if isObject(ov) {
+        match it.arg(a, 1) {
+            .Obj { o } => {
+                it.heap.obj(objectOf(ov)).proto = o
+            }
+            .Null => {
+                it.heap.obj(objectOf(ov)).proto = NONE
+            }
+            _ => {
+                return it.typeError("Object prototype may only be an Object or null")
+            }
+        }
+    }
+    return ov
+}
+
+fn objectFreeze(it: *mut Interp, a: Args) JsError!Value {
+    let ov = it.arg(a, 0)
+    let o = objectOf(ov)
+    if o != NONE {
+        let ob = it.heap.obj(o)
+        ob.frozen = true
+        ob.extensible = false
+        for i in 0..ob.nprops {
+            if (ob.props[i].flags & F_ACCESSOR) == 0 {
+                ob.props[i].flags &= F_ENUM
+            } else {
+                ob.props[i].flags &= F_ENUM | F_ACCESSOR
+            }
+        }
+    }
+    return ov
+}
+
+fn objectIsFrozen(it: *mut Interp, a: Args) JsError!Value {
+    let o = objectOf(it.arg(a, 0))
+    if o == NONE {
+        return boolVal(true)
+    }
+    let ob = it.heap.obj(o)
+    if ob.frozen {
+        return boolVal(true)
+    }
+    if ob.extensible || ob.nelems > 0 {
+        return boolVal(false)
+    }
+    for i in 0..ob.nprops {
+        if (ob.props[i].flags & (F_WRITE | F_CONFIG)) != 0 {
+            return boolVal(false)
+        }
+    }
+    return boolVal(true)
+}
+
+fn objectSeal(it: *mut Interp, a: Args) JsError!Value {
+    let ov = it.arg(a, 0)
+    let o = objectOf(ov)
+    if o != NONE {
+        it.heap.obj(o).extensible = false
+    }
+    return ov
+}
+
+fn objectIsExtensible(it: *mut Interp, a: Args) JsError!Value {
+    let o = objectOf(it.arg(a, 0))
+    if o == NONE {
+        return boolVal(false)
+    }
+    return boolVal(it.heap.obj(o).extensible)
+}
+
+fn objectFromEntries(it: *mut Interp, a: Args) JsError!Value {
+    let src = it.arg(a, 0)
+    let arr = try it.iterToArray(src)
+    try it.push(objVal(arr))
+    let o = try it.newObject(it.object_proto)
+    try it.push(objVal(o))
+    var i: u32 = 0
+    while i < it.heap.obj(arr).nelems {
+        let e = holeToUndef(it.heap.obj(arr).elems[i])
+        let k = try it.getIndex(e, numVal(0.0))
+        try it.push(k)
+        let v = try it.getIndex(e, numVal(1.0))
+        try it.push(v)
+        let key = try it.toKey(k)
+        try it.defineOwn(o, key, v, F_DEFAULT)
+        it.pop()
+        it.pop()
+        i += 1
+    }
+    let r = it.pop()
+    it.pop()
+    return r
+}
+
+/// SameValue (Object.is).
+pub fn sameValue(it: *mut Interp, x: Value, y: Value) bool {
+    match x {
+        .Num { n: p } => {
+            match y {
+                .Num { n: q } => {
+                    if p != p && q != q {
+                        return true
+                    }
+                    return p == q && isNegZero(p) == isNegZero(q)
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+    return it.strictEquals(x, y)
+}
+
+fn objectIs(it: *mut Interp, a: Args) JsError!Value {
+    return boolVal(sameValue(it, it.arg(a, 0), it.arg(a, 1)))
+}
+
+fn objectHasOwn(it: *mut Interp, a: Args) JsError!Value {
+    let o = try it.toObject(it.arg(a, 0))
+    try it.push(objVal(o))
+    let key = try it.toKey(it.arg(a, 1))
+    it.pop()
+    return boolVal(it.hasOwn(o, key))
+}
+
+fn objectProtoHasOwnProperty(it: *mut Interp, a: Args) JsError!Value {
+    let key = try it.toKey(it.arg(a, 0))
+    let o = try it.toObject(a.this)
+    return boolVal(it.hasOwn(o, key))
+}
+
+fn objectProtoIsPrototypeOf(it: *mut Interp, a: Args) JsError!Value {
+    let v = objectOf(it.arg(a, 0))
+    let me = objectOf(a.this)
+    if v == NONE || me == NONE {
+        return boolVal(false)
+    }
+    var cur = it.heap.obj(v).proto
+    while cur != NONE {
+        if cur == me {
+            return boolVal(true)
+        }
+        cur = it.heap.obj(cur).proto
+    }
+    return boolVal(false)
+}
+
+fn objectProtoPropertyIsEnumerable(it: *mut Interp, a: Args) JsError!Value {
+    let key = try it.toKey(it.arg(a, 0))
+    let o = try it.toObject(a.this)
+    if it.heap.findProp(o, key) |i| {
+        return boolVal((it.heap.obj(o).props[i].flags & F_ENUM) != 0)
+    }
+    let cls = it.heap.obj(o).class
+    return boolVal((cls == Class.Array || cls == Class.Arguments) && key != A_LENGTH && it.hasOwn(o, key))
+}
+
+fn objectProtoToString(it: *mut Interp, a: Args) JsError!Value {
+    var tag: []u8 = "Object"
+    match a.this {
+        .Undefined => {
+            tag = "Undefined"
+        }
+        .Null => {
+            tag = "Null"
+        }
+        .Num { .. } => {
+            tag = "Number"
+        }
+        .Str { .. } => {
+            tag = "String"
+        }
+        .Bool { .. } => {
+            tag = "Boolean"
+        }
+        .Obj { o } => {
+            tag = match it.heap.obj(o).class {
+                .Array => "Array"
+                .Function => "Function"
+                .Error => "Error"
+                .Boolean => "Boolean"
+                .Number => "Number"
+                .String => "String"
+                .Date => "Date"
+                .Arguments => "Arguments"
+                .RegExp => "RegExp"
+                .Map => "Map"
+                .Set => "Set"
+                _ => "Object"
+            }
+        }
+        _ => {}
+    }
+    let b = try it.builder()
+    defer it.release(b)
+    try b.append("[object ")
+    try b.append(tag)
+    try b.append("]")
+    return it.takeString(b)
+}
+
+fn objectProtoValueOf(it: *mut Interp, a: Args) JsError!Value {
+    return objVal(try it.toObject(a.this))
+}
+
+// ---- Function
+
+fn installFunction(it: *mut Interp) JsError!void {
+    let c = try makeConstructor(it, "Function", 1, functionCtor, it.function_proto)
+    let p = it.function_proto
+    try it.defineNative(p, "call", 1, functionCall)
+    try it.defineNative(p, "apply", 2, functionApply)
+    try it.defineNative(p, "bind", 1, functionBind)
+    try it.defineNative(p, "toString", 0, functionToString)
+}
+
+fn functionCtor(it: *mut Interp, a: Args) JsError!Value {
+    return it.throwError(it.eval_error_proto, "Code generation from strings is not supported")
+}
+
+fn functionCall(it: *mut Interp, a: Args) JsError!Value {
+    let base = it.stack.len()
+    try it.push(a.this)
+    try it.push(it.arg(a, 0))
+    var n: usize = 0
+    var i: usize = 1
+    while i < a.argc {
+        try it.push(it.arg(a, i))
+        i += 1
+        n += 1
+    }
+    return it.callAt(base, n)
+}
+
+/// Pushes the elements of an array-like value; returns their count.
+pub fn pushArrayLike(it: *mut Interp, v: Value) JsError!usize {
+    if isNullish(v) {
+        return 0
+    }
+    let o = objectOf(v)
+    if o == NONE {
+        try it.typeError("CreateListFromArrayLike called on non-object")
+    }
+    let cls = it.heap.obj(o).class
+    if cls == Class.Array || cls == Class.Arguments {
+        let n = it.heap.obj(o).nelems
+        for i in 0..n {
+            try it.push(holeToUndef(it.heap.obj(o).elems[i]))
+        }
+        return n as usize
+    }
+    try it.push(v)
+    let at = it.stack.len() - 1
+    let lenv = try it.getProp(v, A_LENGTH)
+    let len = toUint32(try it.toNumber(lenv))
+    for i in 0..len {
+        let e = try it.getIndex(v, numVal(i as f64))
+        try it.push(e)
+    }
+    // Drop the copy of v under the elements.
+    for i in 0..len as usize {
+        it.setSlot(at + i, it.slot(at + i + 1))
+    }
+    it.pop()
+    return len as usize
+}
+
+fn functionApply(it: *mut Interp, a: Args) JsError!Value {
+    let base = it.stack.len()
+    try it.push(a.this)
+    try it.push(it.arg(a, 0))
+    let n = try pushArrayLike(it, it.arg(a, 1))
+    return it.callAt(base, n)
+}
+
+fn functionBind(it: *mut Interp, a: Args) JsError!Value {
+    if !it.isCallable(a.this) {
+        return it.typeError("Bind must be called on a function")
+    }
+    let b = try it.newObjectOf(Class.Function, it.function_proto, ObjData.Bound { target: objectOf(a.this), this_v: it.arg(a, 0) })
+    var i: usize = 1
+    while i < a.argc {
+        try it.heap.pushElem(b, it.arg(a, i))
+        i += 1
+    }
+    return objVal(b)
+}
+
+fn functionToString(it: *mut Interp, a: Args) JsError!Value {
+    let f = objectOf(a.this)
+    if f == NONE || it.heap.obj(f).class != Class.Function {
+        return it.typeError("Function.prototype.toString requires that 'this' be a Function")
+    }
+    match it.heap.obj(f).data {
+        .Closure { func, .. } => {
+            let fi = it.ast.func(func)
+            return it.newString(it.ast.source.bytes()[fi.start as usize..fi.end as usize])
+        }
+        _ => {}
+    }
+    let b = try it.builder()
+    defer it.release(b)
+    try b.append("function ")
+    try b.append(functionName(it, f))
+    try b.append("() { [native code] }")
+    return it.takeString(b)
+}
+
+// ---- Boolean
+
+fn installBoolean(it: *mut Interp) JsError!void {
+    try makeConstructor(it, "Boolean", 1, booleanCtor, it.boolean_proto)
+    try it.defineNative(it.boolean_proto, "toString", 0, booleanToString)
+    try it.defineNative(it.boolean_proto, "valueOf", 0, booleanValueOf)
+}
+
+fn booleanCtor(it: *mut Interp, a: Args) JsError!Value {
+    let b = boolVal(it.toBoolean(it.arg(a, 0)))
+    if a.new_target != NONE {
+        return objVal(try it.newObjectOf(Class.Boolean, it.boolean_proto, ObjData.Prim { v: b }))
+    }
+    return b
+}
+
+// The primitive of `this` for methods of wrapper prototypes.
+pub fn thisPrimitive(it: *mut Interp, a: Args, cls: Class) JsError!Value {
+    match a.this {
+        .Obj { o } => {
+            if it.heap.obj(o).class == cls {
+                match it.heap.obj(o).data {
+                    .Prim { v } => {
+                        return v
+                    }
+                    _ => {}
+                }
+            }
+        }
+        _ => {
+            return a.this
+        }
+    }
+    return it.typeError("receiver has the wrong type")
+}
+
+fn booleanToString(it: *mut Interp, a: Args) JsError!Value {
+    let v = try thisPrimitive(it, a, Class.Boolean)
+    return it.toStringValue(v)
+}
+
+fn booleanValueOf(it: *mut Interp, a: Args) JsError!Value {
+    return thisPrimitive(it, a, Class.Boolean)
+}
+
+// ---- Errors
+
+fn installErrors(it: *mut Interp) JsError!void {
+    let e = try makeConstructor(it, "Error", 1, errorCtor, it.error_proto)
+    try it.defineValue(it.error_proto, "name", try it.newString("Error"))
+    try it.defineValue(it.error_proto, "message", try it.atomValue(A_EMPTY))
+    try it.defineNative(it.error_proto, "toString", 0, errorToString)
+    it.type_error_proto = try errorType(it, "TypeError", typeErrorCtor, e)
+    it.range_error_proto = try errorType(it, "RangeError", rangeErrorCtor, e)
+    it.syntax_error_proto = try errorType(it, "SyntaxError", syntaxErrorCtor, e)
+    it.reference_error_proto = try errorType(it, "ReferenceError", referenceErrorCtor, e)
+    it.eval_error_proto = try errorType(it, "EvalError", evalErrorCtor, e)
+    it.uri_error_proto = try errorType(it, "URIError", uriErrorCtor, e)
+}
+
+fn errorType(it: *mut Interp, name: []u8, f: NativeFn, base: u32) JsError!u32 {
+    let p = try it.heap.newObj(Class.Object, it.error_proto, ObjData.None)
+    let c = try makeConstructor(it, name, 1, f, p)
+    it.heap.obj(c).proto = base
+    try it.defineValue(p, "name", try it.newString(name))
+    try it.defineValue(p, "message", try it.atomValue(A_EMPTY))
+    return p
+}
+
+// new XError(message, options): `proto` is XError.prototype.
+fn errorConstruct(it: *mut Interp, a: Args, proto: u32) JsError!Value {
+    var o = NONE
+    if a.new_target != NONE && isObject(a.this) {
+        // super(message) from a subclass: `this` exists already.
+        o = objectOf(a.this)
+        it.heap.obj(o).class = Class.Error
+    } else {
+        var p = proto
+        if a.new_target != NONE {
+            let pv = try it.getProp(objVal(a.new_target), A_PROTOTYPE)
+            if isObject(pv) {
+                p = objectOf(pv)
+            }
+        }
+        o = try it.newObjectOf(Class.Error, p, ObjData.None)
+    }
+    try it.push(objVal(o))
+    let m = it.arg(a, 0)
+    if !isUndef(m) {
+        let s = try it.toStringValue(m)
+        try it.defineOwn(o, A_MESSAGE, s, F_HIDDEN)
+    }
+    let opts = it.arg(a, 1)
+    if isObject(opts) && it.hasProperty(objectOf(opts), A_CAUSE) {
+        let cause = try it.getProp(opts, A_CAUSE)
+        try it.defineOwn(o, A_CAUSE, cause, F_HIDDEN)
+    }
+    return it.pop()
+}
+
+fn errorCtor(it: *mut Interp, a: Args) JsError!Value {
+    return errorConstruct(it, a, it.error_proto)
+}
+
+fn typeErrorCtor(it: *mut Interp, a: Args) JsError!Value {
+    return errorConstruct(it, a, it.type_error_proto)
+}
+
+fn rangeErrorCtor(it: *mut Interp, a: Args) JsError!Value {
+    return errorConstruct(it, a, it.range_error_proto)
+}
+
+fn syntaxErrorCtor(it: *mut Interp, a: Args) JsError!Value {
+    return errorConstruct(it, a, it.syntax_error_proto)
+}
+
+fn referenceErrorCtor(it: *mut Interp, a: Args) JsError!Value {
+    return errorConstruct(it, a, it.reference_error_proto)
+}
+
+fn evalErrorCtor(it: *mut Interp, a: Args) JsError!Value {
+    return errorConstruct(it, a, it.eval_error_proto)
+}
+
+fn uriErrorCtor(it: *mut Interp, a: Args) JsError!Value {
+    return errorConstruct(it, a, it.uri_error_proto)
+}
+
+/// Appends "Name: message" of an error-like value (Error.prototype.toString).
+pub fn appendErrorText(it: *mut Interp, b: *mut text.Builder, v: Value) JsError!void {
+    let nv = try it.getProp(v, A_NAME)
+    try it.push(nv)
+    let mv = try it.getProp(v, A_MESSAGE)
+    try it.push(mv)
+    let nb = try it.builder()
+    defer it.release(nb)
+    if isUndef(nv) {
+        try nb.append("Error")
+    } else {
+        try it.appendString(nb, nv)
+    }
+    let mb = try it.builder()
+    defer it.release(mb)
+    if !isUndef(mv) {
+        try it.appendString(mb, mv)
+    }
+    it.pop()
+    it.pop()
+    try b.append(nb.bytes())
+    if nb.len() > 0 && mb.len() > 0 {
+        try b.append(": ")
+    }
+    try b.append(mb.bytes())
+}
+
+fn errorToString(it: *mut Interp, a: Args) JsError!Value {
+    if !isObject(a.this) {
+        return it.typeError("Error.prototype.toString called on non-object")
+    }
+    let b = try it.builder()
+    defer it.release(b)
+    try appendErrorText(it, b, a.this)
+    return it.takeString(b)
+}
+
+// ---- console
+
+fn installConsole(it: *mut Interp) JsError!void {
+    let c = try it.newObject(it.object_proto)
+    try it.defineValue(it.global, "console", objVal(c))
+    try it.defineNative(c, "log", 0, consoleLog)
+    try it.defineNative(c, "info", 0, consoleLog)
+    try it.defineNative(c, "debug", 0, consoleLog)
+    try it.defineNative(c, "error", 0, consoleError)
+    try it.defineNative(c, "warn", 0, consoleError)
+}
+
+// The text of console.log's arguments (with printf-like %s %d %i %f %o
+// %O %j %% in a first string argument).
+fn formatLog(it: *mut Interp, a: Args, b: *mut text.Builder) JsError!void {
+    var next: usize = 0
+    if a.argc > 0 && isStr(it.arg(a, 0)) {
+        let fmtv = it.arg(a, 0)
+        next = 1
+        let f = it.heap.bytes(strOf(fmtv))
+        var i: usize = 0
+        while i < f.len {
+            let c = f[i]
+            if c == '%' && i + 1 < f.len {
+                let d = f[i + 1]
+                if d == '%' {
+                    try b.appendByte('%')
+                    i += 2
+                    continue
+                }
+                if (d == 's' || d == 'd' || d == 'i' || d == 'f' || d == 'o' || d == 'O' || d == 'j') && next < a.argc {
+                    let v = it.arg(a, next)
+                    next += 1
+                    if d == 's' {
+                        if isStr(v) {
+                            try b.append(it.heap.bytes(strOf(v)))
+                        } else {
+                            try inspectNested(it, b, v)
+                        }
+                    } else if d == 'd' || d == 'i' {
+                        if isObject(v) {
+                            try b.append("NaN")
+                        } else {
+                            var x = try it.toNumber(v)
+                            if d == 'i' {
+                                x = trunc(x)
+                            }
+                            try formatNumber(b, x)
+                        }
+                    } else if d == 'f' {
+                        try formatNumber(b, try it.toNumber(v))
+                    } else if d == 'j' {
+                        try jsonStringifyInto(it, b, v)
+                    } else {
+                        try inspectNested(it, b, v)
+                    }
+                    i += 2
+                    continue
+                }
+            }
+            try b.appendByte(c)
+            i += 1
+        }
+    }
+    while next < a.argc {
+        if b.len() > 0 || next > 0 {
+            try b.appendByte(' ')
+        }
+        try inspectTop(it, b, it.arg(a, next))
+        next += 1
+    }
+}
+
+fn consoleLog(it: *mut Interp, a: Args) JsError!Value {
+    let b = try it.builder()
+    defer it.release(b)
+    try formatLog(it, a, b)
+    try b.appendByte('\n')
+    @print(b.bytes())
+    return Value.Undefined
+}
+
+fn consoleError(it: *mut Interp, a: Args) JsError!Value {
+    let b = try it.builder()
+    defer it.release(b)
+    try formatLog(it, a, b)
+    try b.appendByte('\n')
+    std.fs.stderr().write(b.bytes()) catch |e| {}
+    return Value.Undefined
+}

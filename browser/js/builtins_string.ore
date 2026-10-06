@@ -1,0 +1,716 @@
+// js/builtins_string: String and String.prototype. Positions are UTF-16
+// code unit indices (see wtf8.ore); searching works on the WTF-8 bytes,
+// which line up with characters, and converts positions at the edges.
+
+import std.list.List
+import std.math
+import std.text
+
+fn installString(it: *mut Interp) JsError!void {
+    let c = try makeConstructor(it, "String", 1, stringCtor, it.string_proto)
+    try it.defineNative(c, "fromCharCode", 1, stringFromCharCode)
+    try it.defineNative(c, "fromCodePoint", 1, stringFromCodePoint)
+    let p = it.string_proto
+    try it.defineNative(p, "charAt", 1, stringCharAt)
+    try it.defineNative(p, "charCodeAt", 1, stringCharCodeAt)
+    try it.defineNative(p, "codePointAt", 1, stringCodePointAt)
+    try it.defineNative(p, "indexOf", 1, stringIndexOf)
+    try it.defineNative(p, "lastIndexOf", 1, stringLastIndexOf)
+    try it.defineNative(p, "includes", 1, stringIncludes)
+    try it.defineNative(p, "startsWith", 1, stringStartsWith)
+    try it.defineNative(p, "endsWith", 1, stringEndsWith)
+    try it.defineNative(p, "slice", 2, stringSlice)
+    try it.defineNative(p, "substring", 2, stringSubstring)
+    try it.defineNative(p, "substr", 2, stringSubstr)
+    try it.defineNative(p, "toUpperCase", 0, stringToUpperCase)
+    try it.defineNative(p, "toLowerCase", 0, stringToLowerCase)
+    try it.defineNative(p, "toLocaleUpperCase", 0, stringToUpperCase)
+    try it.defineNative(p, "toLocaleLowerCase", 0, stringToLowerCase)
+    try it.defineNative(p, "trim", 0, stringTrim)
+    try it.defineNative(p, "trimStart", 0, stringTrimStart)
+    try it.defineNative(p, "trimEnd", 0, stringTrimEnd)
+    try it.defineNative(p, "trimLeft", 0, stringTrimStart)
+    try it.defineNative(p, "trimRight", 0, stringTrimEnd)
+    try it.defineNative(p, "split", 2, stringSplit)
+    try it.defineNative(p, "replace", 2, stringReplace)
+    try it.defineNative(p, "replaceAll", 2, stringReplaceAll)
+    try it.defineNative(p, "repeat", 1, stringRepeat)
+    try it.defineNative(p, "padStart", 2, stringPadStart)
+    try it.defineNative(p, "padEnd", 2, stringPadEnd)
+    try it.defineNative(p, "concat", 1, stringConcat)
+    try it.defineNative(p, "at", 1, stringAt)
+    try it.defineNative(p, "toString", 0, stringValueOf)
+    try it.defineNative(p, "valueOf", 0, stringValueOf)
+    try it.defineNative(p, "localeCompare", 1, stringLocaleCompare)
+    try it.defineNative(p, "normalize", 0, stringValueOf)
+    try it.defineNative(p, "match", 1, stringMatch)
+    try it.defineNative(p, "matchAll", 1, stringMatchAll)
+    try it.defineNative(p, "search", 1, stringSearch)
+}
+
+fn stringCtor(it: *mut Interp, a: Args) JsError!Value {
+    var s = try it.atomValue(A_EMPTY)
+    if a.argc > 0 {
+        s = try it.toStringValue(it.arg(a, 0))
+    }
+    if a.new_target != NONE {
+        try it.push(s)
+        let o = try it.newObjectOf(Class.String, it.string_proto, ObjData.Prim { v: s })
+        it.pop()
+        return objVal(o)
+    }
+    return s
+}
+
+// The string `this` (converted); kept on the stack by the caller's frame
+// when it is new (pushes it).
+fn thisStr(it: *mut Interp, a: Args) JsError!u32 {
+    match a.this {
+        .Str { s } => {
+            return s
+        }
+        .Obj { o } => {
+            if it.heap.obj(o).class == Class.String {
+                match it.heap.obj(o).data {
+                    .Prim { v } => {
+                        return strOf(v)
+                    }
+                    _ => {}
+                }
+            }
+        }
+        .Undefined => {
+            try it.typeError("String.prototype method called on null or undefined")
+        }
+        .Null => {
+            try it.typeError("String.prototype method called on null or undefined")
+        }
+        _ => {}
+    }
+    let v = try it.toStringValue(a.this)
+    try it.push(v)
+    return strOf(v)
+}
+
+fn units16(it: *mut Interp, s: u32) u32 {
+    return it.heap.str(s).len16
+}
+
+// A new string of units [from, to) of s.
+fn substringOf(it: *mut Interp, s: u32, from: u32, to: u32) JsError!Value {
+    if from >= to {
+        return it.atomValue(A_EMPTY)
+    }
+    if from == 0 && to == units16(it, s) {
+        return strVal(s)
+    }
+    let b = try it.builder()
+    defer it.release(b)
+    let c = it.heap.str(s)
+    try appendSlice(&mut it.units, b, c.bytes, c.ascii, from, to)
+    return it.takeString(b)
+}
+
+fn stringFromCharCode(it: *mut Interp, a: Args) JsError!Value {
+    var units = List(u16).init(it.alloc)
+    defer units.deinit()
+    for i in 0..a.argc {
+        let x = try it.toNumber(it.arg(a, i))
+        try units.append((toUint32(x) & 0xFFFF) as u16)
+    }
+    let b = try it.builder()
+    defer it.release(b)
+    try appendUnits(b, units.items())
+    return it.takeString(b)
+}
+
+fn stringFromCodePoint(it: *mut Interp, a: Args) JsError!Value {
+    let b = try it.builder()
+    defer it.release(b)
+    for i in 0..a.argc {
+        let x = try it.toNumber(it.arg(a, i))
+        if x != x || x < 0.0 || x > 1114111.0 || trunc(x) != x {
+            return it.rangeError("Invalid code point")
+        }
+        try appendWtf8(b, x as u32)
+    }
+    return it.takeString(b)
+}
+
+fn stringCharAt(it: *mut Interp, a: Args) JsError!Value {
+    let s = try thisStr(it, a)
+    let k = try argInteger(it, a, 0, 0.0)
+    if k < 0.0 || k >= units16(it, s) as f64 {
+        return it.atomValue(A_EMPTY)
+    }
+    return it.charAtIndex(s, k as u32)
+}
+
+fn codeUnit(it: *mut Interp, s: u32, i: u32) u32 {
+    let c = it.heap.str(s)
+    if c.ascii {
+        return c.bytes[i] as u32
+    }
+    return unitAt(c.bytes, i)
+}
+
+fn stringCharCodeAt(it: *mut Interp, a: Args) JsError!Value {
+    let s = try thisStr(it, a)
+    let k = try argInteger(it, a, 0, 0.0)
+    if k < 0.0 || k >= units16(it, s) as f64 {
+        return numVal(0.0 / 0.0)
+    }
+    return numVal(codeUnit(it, s, k as u32) as f64)
+}
+
+fn stringCodePointAt(it: *mut Interp, a: Args) JsError!Value {
+    let s = try thisStr(it, a)
+    let k = try argInteger(it, a, 0, 0.0)
+    let n = units16(it, s)
+    if k < 0.0 || k >= n as f64 {
+        return Value.Undefined
+    }
+    let i = k as u32
+    let u = codeUnit(it, s, i)
+    if u >= 0xD800 && u <= 0xDBFF && i + 1 < n {
+        let lo = codeUnit(it, s, i + 1)
+        if lo >= 0xDC00 && lo <= 0xDFFF {
+            return numVal((0x10000 + ((u - 0xD800) << 10) + (lo - 0xDC00)) as f64)
+        }
+    }
+    return numVal(u as f64)
+}
+
+// The first byte offset >= from where needle occurs in hay.
+fn findBytes(hay: []u8, needle: []u8, from: usize) ?usize {
+    if needle.len == 0 {
+        if from <= hay.len {
+            return from
+        }
+        return hay.len
+    }
+    if needle.len > hay.len {
+        return null
+    }
+    var i = from
+    while i + needle.len <= hay.len {
+        if hay[i] == needle[0] && text.eql(hay[i..i + needle.len], needle) {
+            return i
+        }
+        i += 1
+    }
+    return null
+}
+
+// The last byte offset <= from where needle occurs.
+fn rfindBytes(hay: []u8, needle: []u8, from: usize) ?usize {
+    if needle.len > hay.len {
+        return null
+    }
+    var i = hay.len - needle.len
+    if from < i {
+        i = from
+    }
+    while true {
+        if text.eql(hay[i..i + needle.len], needle) {
+            return i
+        }
+        if i == 0 {
+            break
+        }
+        i -= 1
+    }
+    return null
+}
+
+// Byte offset of unit index u in s.
+fn byteAt(it: *mut Interp, s: u32, u: u32) usize {
+    let c = it.heap.str(s)
+    if c.ascii {
+        return u as usize
+    }
+    return byteOffset(c.bytes, u)
+}
+
+fn unitOf(it: *mut Interp, s: u32, b: usize) u32 {
+    let c = it.heap.str(s)
+    if c.ascii {
+        return b as u32
+    }
+    return unitOffset(c.bytes, b)
+}
+
+// The search string (argument 0) of indexOf and friends.
+fn searchArg(it: *mut Interp, a: Args) JsError!u32 {
+    let v = try argString(it, a, 0)
+    try it.push(v)
+    return strOf(v)
+}
+
+fn stringIndexOf(it: *mut Interp, a: Args) JsError!Value {
+    let s = try thisStr(it, a)
+    let n = try searchArg(it, a)
+    let from = relativeIndex(trunc(math.max(try argInteger(it, a, 1, 0.0), 0.0)), units16(it, s))
+    if findBytes(it.heap.bytes(s), it.heap.bytes(n), byteAt(it, s, from)) |i| {
+        return numVal(unitOf(it, s, i) as f64)
+    }
+    return numVal(-1.0)
+}
+
+fn stringLastIndexOf(it: *mut Interp, a: Args) JsError!Value {
+    let s = try thisStr(it, a)
+    let n = try searchArg(it, a)
+    var from = units16(it, s)
+    let fv = try it.toNumber(it.arg(a, 1))
+    if fv == fv {
+        from = relativeIndex(math.max(trunc(fv), 0.0), units16(it, s))
+    }
+    if rfindBytes(it.heap.bytes(s), it.heap.bytes(n), byteAt(it, s, from)) |i| {
+        return numVal(unitOf(it, s, i) as f64)
+    }
+    return numVal(-1.0)
+}
+
+fn stringIncludes(it: *mut Interp, a: Args) JsError!Value {
+    let s = try thisStr(it, a)
+    if it.hasClass(it.arg(a, 0), Class.RegExp) {
+        return it.typeError("First argument to String.prototype.includes must not be a regular expression")
+    }
+    let n = try searchArg(it, a)
+    let from = relativeIndex(try argInteger(it, a, 1, 0.0), units16(it, s))
+    return boolVal(findBytes(it.heap.bytes(s), it.heap.bytes(n), byteAt(it, s, from)) != null)
+}
+
+fn stringStartsWith(it: *mut Interp, a: Args) JsError!Value {
+    let s = try thisStr(it, a)
+    let n = try searchArg(it, a)
+    let from = relativeIndex(try argInteger(it, a, 1, 0.0), units16(it, s))
+    return boolVal(text.startsWith(it.heap.bytes(s)[byteAt(it, s, from)..], it.heap.bytes(n)))
+}
+
+fn stringEndsWith(it: *mut Interp, a: Args) JsError!Value {
+    let s = try thisStr(it, a)
+    let n = try searchArg(it, a)
+    let end = relativeIndex(try argInteger(it, a, 1, units16(it, s) as f64), units16(it, s))
+    return boolVal(text.endsWith(it.heap.bytes(s)[..byteAt(it, s, end)], it.heap.bytes(n)))
+}
+
+fn stringSlice(it: *mut Interp, a: Args) JsError!Value {
+    let s = try thisStr(it, a)
+    let n = units16(it, s)
+    let from = relativeIndex(try argInteger(it, a, 0, 0.0), n)
+    let to = relativeIndex(try argInteger(it, a, 1, n as f64), n)
+    return substringOf(it, s, from, to)
+}
+
+fn clampIndex(x: f64, n: u32) u32 {
+    if x <= 0.0 {
+        return 0
+    }
+    if x >= n as f64 {
+        return n
+    }
+    return x as u32
+}
+
+fn stringSubstring(it: *mut Interp, a: Args) JsError!Value {
+    let s = try thisStr(it, a)
+    let n = units16(it, s)
+    var from = clampIndex(try argInteger(it, a, 0, 0.0), n)
+    var to = clampIndex(try argInteger(it, a, 1, n as f64), n)
+    if from > to {
+        let t = from
+        from = to
+        to = t
+    }
+    return substringOf(it, s, from, to)
+}
+
+fn stringSubstr(it: *mut Interp, a: Args) JsError!Value {
+    let s = try thisStr(it, a)
+    let n = units16(it, s)
+    let from = relativeIndex(try argInteger(it, a, 0, 0.0), n)
+    let count = try argInteger(it, a, 1, n as f64)
+    var to = n
+    if count < (n - from) as f64 {
+        to = from + clampIndex(count, n)
+    }
+    return substringOf(it, s, from, to)
+}
+
+// Upper or lower case of a code point (ASCII, Latin-1, Greek, Cyrillic).
+fn caseMap(cp: u32, upper: bool) u32 {
+    if upper {
+        if (cp >= 'a' && cp <= 'z') || (cp >= 0xE0 && cp <= 0xFE && cp != 0xF7) || (cp >= 0x3B1 && cp <= 0x3C9 && cp != 0x3C2) || (cp >= 0x430 && cp <= 0x44F) {
+            return cp - 32
+        }
+        if cp >= 0x450 && cp <= 0x45F {
+            return cp - 80
+        }
+        if cp == 0xFF {
+            return 0x178
+        }
+        return cp
+    }
+    if (cp >= 'A' && cp <= 'Z') || (cp >= 0xC0 && cp <= 0xDE && cp != 0xD7) || (cp >= 0x391 && cp <= 0x3A9) || (cp >= 0x410 && cp <= 0x42F) {
+        return cp + 32
+    }
+    if cp >= 0x400 && cp <= 0x40F {
+        return cp + 80
+    }
+    return cp
+}
+
+fn changeCase(it: *mut Interp, a: Args, upper: bool) JsError!Value {
+    let s = try thisStr(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    let bytes = it.heap.bytes(s)
+    var i: usize = 0
+    while i < bytes.len {
+        let d = decodeAt(bytes, i)
+        if upper && d.cp == 0xDF {
+            try b.append("SS")
+        } else {
+            try appendWtf8(b, caseMap(d.cp, upper))
+        }
+        i += d.len
+    }
+    return it.takeString(b)
+}
+
+fn stringToUpperCase(it: *mut Interp, a: Args) JsError!Value {
+    return changeCase(it, a, true)
+}
+
+fn stringToLowerCase(it: *mut Interp, a: Args) JsError!Value {
+    return changeCase(it, a, false)
+}
+
+fn trimSides(it: *mut Interp, a: Args, start: bool, end: bool) JsError!Value {
+    let s = try thisStr(it, a)
+    let bytes = it.heap.bytes(s)
+    var lead: usize = 0
+    while lead < bytes.len {
+        let w = spaceAt(bytes, lead)
+        if w == 0 {
+            break
+        }
+        lead += w
+    }
+    let kept = trimJs(bytes[lead..]).len
+    var from: usize = 0
+    var to = bytes.len
+    if start {
+        from = lead
+    }
+    if end {
+        to = lead + kept
+    }
+    if from == 0 && to == bytes.len {
+        return strVal(s)
+    }
+    if from >= to {
+        return it.atomValue(A_EMPTY)
+    }
+    return it.newString(bytes[from..to])
+}
+
+fn stringTrim(it: *mut Interp, a: Args) JsError!Value {
+    return trimSides(it, a, true, true)
+}
+
+fn stringTrimStart(it: *mut Interp, a: Args) JsError!Value {
+    return trimSides(it, a, true, false)
+}
+
+fn stringTrimEnd(it: *mut Interp, a: Args) JsError!Value {
+    return trimSides(it, a, false, true)
+}
+
+fn stringSplit(it: *mut Interp, a: Args) JsError!Value {
+    let s = try thisStr(it, a)
+    let sepv = it.arg(a, 0)
+    if it.hasClass(sepv, Class.RegExp) {
+        return regexpSplit(it, s, sepv, it.arg(a, 1))
+    }
+    var limit: u32 = 0xFFFFFFFF
+    if !isUndef(it.arg(a, 1)) {
+        limit = toUint32(try it.toNumber(it.arg(a, 1)))
+    }
+    let out = try it.newArray(0)
+    try it.push(objVal(out))
+    if limit == 0 {
+        return it.pop()
+    }
+    if isUndef(sepv) {
+        try it.heap.pushElem(out, strVal(s))
+        return it.pop()
+    }
+    let sepS = try it.toStringValue(sepv)
+    try it.push(sepS)
+    let sep = strOf(sepS)
+    let n = units16(it, s)
+    if it.heap.bytes(sep).len == 0 {
+        var i: u32 = 0
+        while i < n && alen(it, out) < limit {
+            let piece = try substringOf(it, s, i, i + 1)
+            try it.heap.pushElem(out, piece)
+            i += 1
+        }
+        it.pop()
+        return it.pop()
+    }
+    var from: usize = 0
+    while alen(it, out) < limit {
+        let hay = it.heap.bytes(s)
+        if findBytes(hay, it.heap.bytes(sep), from) |at| {
+            let piece = try it.newString(it.heap.bytes(s)[from..at])
+            try it.heap.pushElem(out, piece)
+            from = at + it.heap.bytes(sep).len
+        } else {
+            let piece = try it.newString(it.heap.bytes(s)[from..])
+            try it.heap.pushElem(out, piece)
+            break
+        }
+    }
+    it.pop()
+    return it.pop()
+}
+
+/// Appends the replacement text of a match with $-patterns: $$ $& $`
+/// $' and $1..$99 (groups from `groups`, an array or NONE).
+pub fn appendReplacement(it: *mut Interp, b: *mut text.Builder, repl: []u8, subject: []u8, mstart: usize, mend: usize, groups: u32) JsError!void {
+    var i: usize = 0
+    while i < repl.len {
+        let c = repl[i]
+        if c == '$' && i + 1 < repl.len {
+            let d = repl[i + 1]
+            if d == '$' {
+                try b.appendByte('$')
+                i += 2
+                continue
+            }
+            if d == '&' {
+                try b.append(subject[mstart..mend])
+                i += 2
+                continue
+            }
+            if d == '`' {
+                try b.append(subject[..mstart])
+                i += 2
+                continue
+            }
+            if d == '\'' {
+                try b.append(subject[mend..])
+                i += 2
+                continue
+            }
+            if d >= '0' && d <= '9' && groups != NONE {
+                var g = (d - '0') as u32
+                var used: usize = 2
+                if i + 2 < repl.len && repl[i + 2] >= '0' && repl[i + 2] <= '9' {
+                    let g2 = g * 10 + (repl[i + 2] - '0') as u32
+                    if g2 < alen(it, groups) {
+                        g = g2
+                        used = 3
+                    }
+                }
+                if g >= 1 && g < alen(it, groups) {
+                    let gv = it.heap.obj(groups).elems[g]
+                    if isStr(gv) {
+                        try b.append(it.heap.bytes(strOf(gv)))
+                    }
+                    i += used
+                    continue
+                }
+            }
+        }
+        try b.appendByte(c)
+        i += 1
+    }
+}
+
+fn replaceCommon(it: *mut Interp, a: Args, all: bool) JsError!Value {
+    let s = try thisStr(it, a)
+    let pv = it.arg(a, 0)
+    if it.hasClass(pv, Class.RegExp) {
+        return regexpReplace(it, s, pv, it.arg(a, 1), all)
+    }
+    let ps = try it.toStringValue(pv)
+    try it.push(ps)
+    let rv = it.arg(a, 1)
+    let fnRepl = it.isCallable(rv)
+    var replS = Value.Undefined
+    if !fnRepl {
+        replS = try it.toStringValue(rv)
+        try it.push(replS)
+    }
+    let b = try it.builder()
+    defer it.release(b)
+    var from: usize = 0
+    var last: usize = 0
+    let plen = it.heap.bytes(strOf(ps)).len
+    while true {
+        let hit = findBytes(it.heap.bytes(s), it.heap.bytes(strOf(ps)), from)
+        if hit |at| {
+            try b.append(it.heap.bytes(s)[last..at])
+            if fnRepl {
+                let m = try it.newString(it.heap.bytes(s)[at..at + plen])
+                let r = try it.call3(rv, Value.Undefined, m, numVal(unitOf(it, s, at) as f64), strVal(s))
+                try it.appendString(b, r)
+            } else {
+                try appendReplacement(it, b, it.heap.bytes(strOf(replS)), it.heap.bytes(s), at, at + plen, NONE)
+            }
+            last = at + plen
+            from = last
+            if plen == 0 {
+                if from < it.heap.bytes(s).len {
+                    let d = decodeAt(it.heap.bytes(s), from)
+                    try b.append(it.heap.bytes(s)[from..from + d.len])
+                    from += d.len
+                    last = from
+                } else {
+                    break
+                }
+            }
+            if !all {
+                break
+            }
+        } else {
+            break
+        }
+    }
+    if last <= it.heap.bytes(s).len {
+        try b.append(it.heap.bytes(s)[last..])
+    }
+    return it.takeString(b)
+}
+
+fn stringReplace(it: *mut Interp, a: Args) JsError!Value {
+    return replaceCommon(it, a, false)
+}
+
+fn stringReplaceAll(it: *mut Interp, a: Args) JsError!Value {
+    return replaceCommon(it, a, true)
+}
+
+fn stringRepeat(it: *mut Interp, a: Args) JsError!Value {
+    let s = try thisStr(it, a)
+    let n = try argInteger(it, a, 0, 0.0)
+    if n < 0.0 || n - n != 0.0 {
+        return it.rangeError("Invalid count value")
+    }
+    let bytes = it.heap.bytes(s)
+    if n * bytes.len as f64 > 536870888.0 {
+        return it.rangeError("Invalid string length")
+    }
+    let b = try it.builder()
+    defer it.release(b)
+    for i in 0..n as usize {
+        try b.append(it.heap.bytes(s))
+    }
+    return it.takeString(b)
+}
+
+fn pad(it: *mut Interp, a: Args, atStart: bool) JsError!Value {
+    let s = try thisStr(it, a)
+    let target = try argInteger(it, a, 0, 0.0)
+    let n = units16(it, s)
+    if target <= n as f64 {
+        return strVal(s)
+    }
+    var fill = strVal(try it.heap.atomStr(try it.intern(" ")))
+    if !isUndef(it.arg(a, 1)) {
+        fill = try it.toStringValue(it.arg(a, 1))
+    }
+    try it.push(fill)
+    let f = strOf(fill)
+    let flen = units16(it, f)
+    if flen == 0 {
+        return strVal(s)
+    }
+    let need = target as u32 - n
+    let b = try it.builder()
+    defer it.release(b)
+    if !atStart {
+        try b.append(it.heap.bytes(s))
+    }
+    var done: u32 = 0
+    while done < need {
+        var take = flen
+        if need - done < take {
+            take = need - done
+        }
+        let fc = it.heap.str(f)
+        try appendSlice(&mut it.units, b, fc.bytes, fc.ascii, 0, take)
+        done += take
+    }
+    if atStart {
+        try b.append(it.heap.bytes(s))
+    }
+    return it.takeString(b)
+}
+
+fn stringPadStart(it: *mut Interp, a: Args) JsError!Value {
+    return pad(it, a, true)
+}
+
+fn stringPadEnd(it: *mut Interp, a: Args) JsError!Value {
+    return pad(it, a, false)
+}
+
+fn stringConcat(it: *mut Interp, a: Args) JsError!Value {
+    let s = try thisStr(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    try b.append(it.heap.bytes(s))
+    for i in 0..a.argc {
+        try it.appendString(b, it.arg(a, i))
+    }
+    return it.takeString(b)
+}
+
+fn stringAt(it: *mut Interp, a: Args) JsError!Value {
+    let s = try thisStr(it, a)
+    let n = units16(it, s)
+    var k = try argInteger(it, a, 0, 0.0)
+    if k < 0.0 {
+        k += n as f64
+    }
+    if k < 0.0 || k >= n as f64 {
+        return Value.Undefined
+    }
+    return it.charAtIndex(s, k as u32)
+}
+
+fn stringValueOf(it: *mut Interp, a: Args) JsError!Value {
+    match a.this {
+        .Str { .. } => {
+            return a.this
+        }
+        _ => {}
+    }
+    return thisPrimitive(it, a, Class.String)
+}
+
+fn stringLocaleCompare(it: *mut Interp, a: Args) JsError!Value {
+    let s = try thisStr(it, a)
+    let o = try searchArg(it, a)
+    return numVal(compareBytes(it.heap.bytes(s), it.heap.bytes(o)) as f64)
+}
+
+fn stringMatch(it: *mut Interp, a: Args) JsError!Value {
+    let s = try thisStr(it, a)
+    return regexpMatch(it, s, it.arg(a, 0), false)
+}
+
+fn stringMatchAll(it: *mut Interp, a: Args) JsError!Value {
+    let s = try thisStr(it, a)
+    return regexpMatch(it, s, it.arg(a, 0), true)
+}
+
+fn stringSearch(it: *mut Interp, a: Args) JsError!Value {
+    let s = try thisStr(it, a)
+    return regexpSearch(it, s, it.arg(a, 0))
+}

@@ -3,6 +3,7 @@
 //
 //     anyknown dump --tree [--id ID | --tag NAME] FILE|URL
 //     anyknown dump --text [--id ID | --tag NAME] FILE|URL
+//     anyknown js FILE
 //
 // FILE is a path; URL is a `file:` or `data:` URL (`http:` and `https:`
 // come with libcurl). `--id` and `--tag` dump only the element with that
@@ -12,6 +13,7 @@ import dom
 import dom.NodeId
 import encoding
 import html
+import js
 import net
 import std
 import std.list.List
@@ -35,6 +37,9 @@ fn run(alloc: Allocator) i32 {
         return 1
     }
     defer alloc.free(args)
+    if args.len == 3 && text.eql(args[1], "js") {
+        return js.runFile(alloc, args[2])
+    }
     if args.len < 2 || !text.eql(args[1], "dump") {
         std.log.err("{}", USAGE)
         return 2

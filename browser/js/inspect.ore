@@ -1,0 +1,739 @@
+// js/inspect: console.log's text for values, as Node's util.inspect
+// prints them with its defaults (depth 2, breakLength 80, compact 3):
+// strings quoted in single quotes inside containers, short containers on
+// one line, long ones one entry per line, arrays of more than six short
+// entries in aligned columns. Inspection only reads the heap (getters are
+// shown as [Getter], not run), so it never runs script code.
+
+import std.list.List
+import std.math
+import std.text
+
+let BREAK_LENGTH: usize = 80
+let SHOWN_DEPTH: u32 = 2
+let MAX_ITEMS: u32 = 100
+
+/// Appends console.log's text for v (strings as they are at the top).
+pub fn inspectTop(it: *mut Interp, b: *mut text.Builder, v: Value) JsError!void {
+    match v {
+        .Str { s } => {
+            return b.append(it.heap.bytes(s))
+        }
+        _ => {}
+    }
+    return inspectNested(it, b, v)
+}
+
+/// Appends the inspect text of v (strings quoted).
+pub fn inspectNested(it: *mut Interp, b: *mut text.Builder, v: Value) JsError!void {
+    var ins = Inspector { it: it, indent: 0, current_depth: 0, seen: List(u32).init(it.alloc), circular: false }
+    defer ins.seen.deinit()
+    let body = try it.builder()
+    defer it.release(body)
+    try ins.value(body, v, 0)
+    if ins.circular {
+        try b.append("<ref *1> ")
+    }
+    return b.append(body.bytes())
+}
+
+fn isIdentName(s: []u8) bool {
+    if s.len == 0 {
+        return false
+    }
+    for i, c in s {
+        let alpha = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
+        if !alpha && !(i > 0 && c >= '0' && c <= '9') {
+            return false
+        }
+    }
+    return true
+}
+
+let HEX = "0123456789ABCDEF"
+
+/// Appends s quoted as Node quotes strings: single quotes, or double
+/// quotes when s has single quotes only, or backquotes when it has both.
+pub fn appendQuoted(b: *mut text.Builder, s: []u8) JsError!void {
+    var q: u8 = '\''
+    var hasSingle = false
+    var hasDouble = false
+    var hasBack = false
+    for c in s {
+        if c == '\'' {
+            hasSingle = true
+        } else if c == '"' {
+            hasDouble = true
+        } else if c == '`' {
+            hasBack = true
+        }
+    }
+    if hasSingle {
+        if !hasDouble {
+            q = '"'
+        } else if !hasBack {
+            q = '`'
+        }
+    }
+    try b.appendByte(q)
+    for c in s {
+        if c == q || c == '\\' {
+            try b.appendByte('\\')
+            try b.appendByte(c)
+        } else if c == '\n' {
+            try b.append("\\n")
+        } else if c == '\t' {
+            try b.append("\\t")
+        } else if c == '\r' {
+            try b.append("\\r")
+        } else if c == 0x08 {
+            try b.append("\\b")
+        } else if c == 0x0C {
+            try b.append("\\f")
+        } else if c == 0x0B {
+            try b.append("\\v")
+        } else if c < 0x20 || c == 0x7F {
+            try b.append("\\x")
+            try b.appendByte(HEX[(c >> 4) as usize])
+            try b.appendByte(HEX[(c & 15) as usize])
+        } else {
+            try b.appendByte(c)
+        }
+    }
+    try b.appendByte(q)
+}
+
+/// The name of function object f ("" when anonymous).
+pub fn functionName(it: *mut Interp, f: u32) []u8 {
+    if it.heap.findProp(f, A_NAME) |i| {
+        match it.heap.obj(f).props[i].value {
+            .Str { s } => {
+                return it.heap.bytes(s)
+            }
+            _ => {}
+        }
+    }
+    return match it.heap.obj(f).data {
+        .Closure { func, .. } => it.heap.atoms.name(it.ast.func(func).name)
+        .Native { id } => it.heap.atoms.name(it.natives.items()[id].name)
+        _ => ""
+    }
+}
+
+// The name of the constructor of o's prototype chain, "" for none, or
+// NONE-like "\0" for a null prototype.
+fn constructorName(it: *mut Interp, o: u32) []u8 {
+    var cur = it.heap.obj(o).proto
+    if cur == NONE {
+        return "\x00"
+    }
+    while cur != NONE {
+        if it.heap.findProp(cur, A_CONSTRUCTOR) |i| {
+            let p = it.heap.obj(cur).props[i]
+            if (p.flags & F_ACCESSOR) == 0 {
+                let f = objectOf(p.value)
+                if f != NONE && it.heap.obj(f).class == Class.Function {
+                    return functionName(it, f)
+                }
+            }
+        }
+        cur = it.heap.obj(cur).proto
+    }
+    return ""
+}
+
+struct Inspector {
+    it: *mut Interp
+    indent: usize
+    current_depth: u32
+    seen: List(u32)
+    circular: bool
+
+    fn value(self: *mut Self, b: *mut text.Builder, v: Value, rt: u32) JsError!void {
+        match v {
+            .Undefined => try b.append("undefined")
+            .Empty => try b.append("undefined")
+            .Null => try b.append("null")
+            .Bool { b: flag } => {
+                if flag {
+                    try b.append("true")
+                } else {
+                    try b.append("false")
+                }
+            }
+            .Num { n } => {
+                if isNegZero(n) {
+                    try b.append("-0")
+                } else {
+                    try formatNumber(b, n)
+                }
+            }
+            .Str { s } => try appendQuoted(b, self.it.heap.bytes(s))
+            .Obj { o } => try self.object(b, o, rt)
+        }
+    }
+
+    // A child value, indented two more columns, into its own string.
+    fn child(self: *mut Self, out: *mut List([]mut u8), prefix: []u8, v: Value, rt: u32) JsError!void {
+        let cb = try self.it.builder()
+        defer self.it.release(cb)
+        try cb.append(prefix)
+        self.indent += 2
+        try self.value(cb, v, rt)
+        self.indent -= 2
+        try out.append(try cb.toOwned())
+    }
+
+    fn piece(self: *mut Self, out: *mut List([]mut u8), s: []u8) JsError!void {
+        let cb = try self.it.builder()
+        defer self.it.release(cb)
+        try cb.append(s)
+        try out.append(try cb.toOwned())
+    }
+
+    // The "key: " text of a property.
+    fn keyText(self: *mut Self, kb: *mut text.Builder, key: u32) JsError!void {
+        let name = self.it.heap.atoms.name(key)
+        if isIdentName(name) {
+            try kb.append(name)
+        } else {
+            try appendQuoted(kb, name)
+        }
+        try kb.append(": ")
+    }
+
+    // Appends "key: value" entries for the own enumerable properties
+    // (skipping array indices when `skipIndices`).
+    fn props(self: *mut Self, out: *mut List([]mut u8), o: u32, rt: u32, skipIndices: bool) JsError!void {
+        let it = self.it
+        let np = it.heap.obj(o).nprops
+        let keys = try it.keyList()
+        defer it.releaseKeys(keys)
+        for i in 0..np {
+            let p = it.heap.obj(o).props[i]
+            if (p.flags & F_ENUM) != 0 {
+                if !(skipIndices && it.heap.atoms.indexOf(p.key) != NONE) {
+                    try keys.append(p.key)
+                }
+            }
+        }
+        // Integer keys first, ascending.
+        let sorted = try it.keyList()
+        defer it.releaseKeys(sorted)
+        for k in keys.items() {
+            if it.heap.atoms.indexOf(k) != NONE {
+                try sorted.append(k)
+                var j = sorted.len() - 1
+                while j > 0 && it.heap.atoms.indexOf(sorted.items()[j - 1]) > it.heap.atoms.indexOf(k) {
+                    sorted.items()[j] = sorted.items()[j - 1]
+                    j -= 1
+                }
+                sorted.items()[j] = k
+            }
+        }
+        for k in keys.items() {
+            if it.heap.atoms.indexOf(k) == NONE {
+                try sorted.append(k)
+            }
+        }
+        for key in sorted.items() {
+            if it.heap.findProp(o, key) |i| {
+                let p = it.heap.obj(o).props[i]
+                let kb = try it.builder()
+                defer it.release(kb)
+                try self.keyText(kb, key)
+                if (p.flags & F_ACCESSOR) != 0 {
+                    if !isNullish(p.value) && !isNullish(p.setter) {
+                        try kb.append("[Getter/Setter]")
+                    } else if !isNullish(p.value) {
+                        try kb.append("[Getter]")
+                    } else {
+                        try kb.append("[Setter]")
+                    }
+                    try out.append(try kb.toOwned())
+                } else {
+                    try self.child(out, kb.bytes(), p.value, rt)
+                }
+            }
+        }
+    }
+
+    fn object(self: *mut Self, b: *mut text.Builder, o: u32, rtIn: u32) JsError!void {
+        let it = self.it
+        for s in self.seen.items() {
+            if s == o {
+                self.circular = true
+                return b.append("[Circular *1]")
+            }
+        }
+        let ob = it.heap.obj(o)
+        let cls = ob.class
+        let base = try it.builder()
+        defer it.release(base)
+        var braceOpen = "{"
+        var braceClose = "}"
+        var isArray = false
+        let prefix = try it.builder()
+        defer it.release(prefix)
+        if cls == Class.Function {
+            try self.functionBase(base, o)
+        } else if cls == Class.Array || cls == Class.Arguments {
+            isArray = true
+            braceOpen = "["
+            braceClose = "]"
+            if cls == Class.Arguments {
+                try prefix.append("[Arguments] ")
+            } else {
+                let cn = constructorName(it, o)
+                if !text.eql(cn, "Array") && cn.len > 0 && cn[0] != 0 {
+                    try prefix.append(cn)
+                    try prefix.append("(")
+                    try prefix.appendUint(ob.nelems as u64)
+                    try prefix.append(") ")
+                }
+            }
+        } else if cls == Class.Error {
+            try self.errorBase(base, o)
+        } else if cls == Class.Boolean || cls == Class.Number || cls == Class.String {
+            match ob.data {
+                .Prim { v } => {
+                    try base.append("[")
+                    if cls == Class.Boolean {
+                        try base.append("Boolean: ")
+                    } else if cls == Class.Number {
+                        try base.append("Number: ")
+                    } else {
+                        try base.append("String: ")
+                    }
+                    try self.value(base, v, rtIn)
+                    try base.append("]")
+                }
+                _ => {}
+            }
+        } else if cls == Class.Date {
+            match ob.data {
+                .Prim { v } => {
+                    match v {
+                        .Num { n } => try appendIsoDate(base, n)
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        } else if cls == Class.RegExp {
+            try appendRegExpText(it, base, o)
+        } else if cls == Class.Map || cls == Class.Set {
+            if cls == Class.Map {
+                try prefix.append("Map(")
+                try prefix.appendUint(mapSize(it, o) as u64)
+            } else {
+                try prefix.append("Set(")
+                try prefix.appendUint(mapSize(it, o) as u64)
+            }
+            try prefix.append(") ")
+        } else {
+            let cn = constructorName(it, o)
+            if cn.len > 0 && cn[0] == 0 {
+                try prefix.append("[Object: null prototype] ")
+            } else if cn.len > 0 && !text.eql(cn, "Object") {
+                try prefix.append(cn)
+                try prefix.appendByte(' ')
+            }
+        }
+
+        // Entries.
+        var out = List([]mut u8).init(it.alloc)
+        defer {
+            for p in out.items() {
+                it.alloc.free(p)
+            }
+            out.deinit()
+        }
+        let hasEntries = isArray && it.heap.obj(o).nelems > 0
+        let hasMapEntries = (cls == Class.Map || cls == Class.Set) && mapSize(it, o) > 0
+        var anyProps = false
+        let np = it.heap.obj(o).nprops
+        for i in 0..np {
+            let p = it.heap.obj(o).props[i]
+            if (p.flags & F_ENUM) != 0 && !(isArray && it.heap.atoms.indexOf(p.key) != NONE) {
+                anyProps = true
+            }
+        }
+        if !hasEntries && !hasMapEntries && !anyProps {
+            if base.len() > 0 {
+                return b.append(base.bytes())
+            }
+            try b.append(prefix.bytes())
+            try b.append(braceOpen)
+            return b.append(braceClose)
+        }
+        if rtIn > SHOWN_DEPTH {
+            if base.len() > 0 && cls == Class.Function {
+                return b.append(base.bytes())
+            }
+            try b.append("[")
+            if isArray {
+                try b.append("Array")
+            } else {
+                let cn = constructorName(it, o)
+                if cn.len == 0 || cn[0] == 0 {
+                    try b.append("Object")
+                } else {
+                    try b.append(cn)
+                }
+            }
+            return b.append("]")
+        }
+        let rt = rtIn + 1
+        self.current_depth = rt
+        try self.seen.append(o)
+        var allNumbers = true
+        if isArray {
+            var holes: u32 = 0
+            let n = it.heap.obj(o).nelems
+            var shown: u32 = 0
+            var i: u32 = 0
+            while i < n && shown < MAX_ITEMS {
+                let e = it.heap.obj(o).elems[i]
+                match e {
+                    .Empty => {
+                        holes += 1
+                        allNumbers = false
+                    }
+                    _ => {
+                        if holes > 0 {
+                            try self.holes(&mut out, holes)
+                            shown += 1
+                            holes = 0
+                        }
+                        match e {
+                            .Num { .. } => {}
+                            _ => {
+                                allNumbers = false
+                            }
+                        }
+                        try self.child(&mut out, "", e, rt)
+                        shown += 1
+                    }
+                }
+                i += 1
+            }
+            if holes > 0 {
+                try self.holes(&mut out, holes)
+            }
+            if i < n {
+                let mb = try it.builder()
+                defer it.release(mb)
+                try mb.append("... ")
+                try mb.appendUint((n - i) as u64)
+                try mb.append(" more item")
+                if n - i > 1 {
+                    try mb.append("s")
+                }
+                try self.piece(&mut out, mb.bytes())
+            }
+        }
+        if cls == Class.Map || cls == Class.Set {
+            try self.mapEntries(&mut out, o, cls == Class.Map, rt)
+        }
+        let entries = out.len()
+        try self.props(&mut out, o, rt, isArray)
+        self.seen.pop()
+        if base.len() > 0 {
+            try base.appendByte(' ')
+        }
+        try base.append(prefix.bytes())
+        try self.reduce(b, &mut out, base.bytes(), braceOpen, braceClose, isArray && entries == out.len(), rt, allNumbers)
+    }
+
+    fn holes(self: *mut Self, out: *mut List([]mut u8), n: u32) JsError!void {
+        let hb = try self.it.builder()
+        defer self.it.release(hb)
+        try hb.append("<")
+        try hb.appendUint(n as u64)
+        try hb.append(" empty item")
+        if n > 1 {
+            try hb.append("s")
+        }
+        try hb.append(">")
+        try self.piece(out, hb.bytes())
+    }
+
+    fn mapEntries(self: *mut Self, out: *mut List([]mut u8), o: u32, isMap: bool, rt: u32) JsError!void {
+        let it = self.it
+        let n = it.heap.obj(o).nelems
+        var i: u32 = 0
+        while i < n {
+            let k = it.heap.obj(o).elems[i]
+            var live = true
+            match k {
+                .Empty => {
+                    live = false
+                }
+                _ => {}
+            }
+            if isMap {
+                if live {
+                    let kb = try it.builder()
+                    defer it.release(kb)
+                    self.indent += 2
+                    try self.value(kb, k, rt)
+                    self.indent -= 2
+                    try kb.append(" => ")
+                    try self.child(out, kb.bytes(), it.heap.obj(o).elems[i + 1], rt)
+                }
+                i += 2
+            } else {
+                if live {
+                    try self.child(out, "", k, rt)
+                }
+                i += 1
+            }
+        }
+    }
+
+    fn functionBase(self: *mut Self, b: *mut text.Builder, f: u32) JsError!void {
+        let it = self.it
+        let name = functionName(it, f)
+        var isClass = false
+        match it.heap.obj(f).data {
+            .Closure { func, .. } => {
+                isClass = it.ast.func(func).ctor
+            }
+            _ => {}
+        }
+        if isClass {
+            try b.append("[class ")
+            if name.len > 0 {
+                try b.append(name)
+            } else {
+                try b.append("(anonymous)")
+            }
+            let parent = it.heap.obj(f).proto
+            if parent != NONE && parent != it.function_proto {
+                try b.append(" extends ")
+                try b.append(functionName(it, parent))
+            }
+            return b.append("]")
+        }
+        if name.len > 0 {
+            try b.append("[Function: ")
+            try b.append(name)
+            return b.append("]")
+        }
+        return b.append("[Function (anonymous)]")
+    }
+
+    fn errorBase(self: *mut Self, b: *mut text.Builder, o: u32) JsError!void {
+        let it = self.it
+        var name: []u8 = "Error"
+        var message: []u8 = ""
+        var cur = o
+        var foundName = false
+        var foundMessage = false
+        while cur != NONE {
+            if !foundName {
+                if it.heap.findProp(cur, A_NAME) |i| {
+                    match it.heap.obj(cur).props[i].value {
+                        .Str { s } => {
+                            name = it.heap.bytes(s)
+                        }
+                        _ => {}
+                    }
+                    foundName = true
+                }
+            }
+            if !foundMessage {
+                if it.heap.findProp(cur, A_MESSAGE) |i| {
+                    match it.heap.obj(cur).props[i].value {
+                        .Str { s } => {
+                            message = it.heap.bytes(s)
+                        }
+                        _ => {}
+                    }
+                    foundMessage = true
+                }
+            }
+            cur = it.heap.obj(cur).proto
+        }
+        let nested = self.indent > 0
+        if nested {
+            try b.append("[")
+        }
+        try b.append(name)
+        if message.len > 0 {
+            try b.append(": ")
+            try b.append(message)
+        }
+        if nested {
+            try b.append("]")
+        }
+    }
+
+    // Node's reduceToSingleString: one line when it fits, else one entry
+    // per line (arrays of more than six entries first in columns).
+    fn reduce(self: *mut Self, b: *mut text.Builder, out: *mut List([]mut u8), base: []u8, open: []u8, close: []u8, groupable: bool, rt: u32, allNumbers: bool) JsError!void {
+        let entries = out.len()
+        var grouped = false
+        if groupable && entries > 6 {
+            grouped = try self.group(out, allNumbers)
+        }
+        if !grouped && self.current_depth < rt + 3 {
+            let start = out.len() + self.indent + open.len + base.len + 10
+            if self.belowBreak(out, start) {
+                var anyNl = false
+                for p in out.items() {
+                    for c in p {
+                        if c == '\n' {
+                            anyNl = true
+                        }
+                    }
+                }
+                if !anyNl {
+                    try b.append(base)
+                    try b.append(open)
+                    try b.appendByte(' ')
+                    for i, p in out.items() {
+                        if i > 0 {
+                            try b.append(", ")
+                        }
+                        try b.append(p)
+                    }
+                    try b.appendByte(' ')
+                    return b.append(close)
+                }
+            }
+        }
+        try b.append(base)
+        try b.append(open)
+        for i, p in out.items() {
+            if i > 0 {
+                try b.appendByte(',')
+            }
+            try b.appendByte('\n')
+            for k in 0..self.indent + 2 {
+                try b.appendByte(' ')
+            }
+            try b.append(p)
+        }
+        try b.appendByte('\n')
+        for k in 0..self.indent {
+            try b.appendByte(' ')
+        }
+        try b.append(close)
+    }
+
+    fn belowBreak(self: *Self, out: *mut List([]mut u8), start: usize) bool {
+        var total = out.len() + start
+        if total + out.len() > BREAK_LENGTH {
+            return false
+        }
+        for p in out.items() {
+            total += p.len
+            if total > BREAK_LENGTH {
+                return false
+            }
+        }
+        return true
+    }
+
+    // Node's groupArrayElements; returns whether it grouped.
+    fn group(self: *mut Self, out: *mut List([]mut u8), allNumbers: bool) JsError!bool {
+        let items = out.items()
+        var outputLength = items.len
+        var more = false
+        if outputLength > 0 && text.startsWith(items[outputLength - 1], "... ") {
+            outputLength -= 1
+            more = true
+        }
+        var totalLength: usize = 0
+        var maxLength: usize = 0
+        for i in 0..outputLength {
+            let len = items[i].len
+            totalLength += len + 2
+            if len > maxLength {
+                maxLength = len
+            }
+        }
+        let actualMax = maxLength + 2
+        if !(actualMax * 3 + self.indent < BREAK_LENGTH && (totalLength as f64 / actualMax as f64 > 5.0 || maxLength <= 6)) {
+            return false
+        }
+        let averageBias = math.sqrt(actualMax as f64 - totalLength as f64 / items.len as f64)
+        let biasedMax = math.max(actualMax as f64 - 3.0 - averageBias, 1.0)
+        var columns = math.round(math.sqrt(2.5 * biasedMax * outputLength as f64) / biasedMax)
+        columns = math.min(columns, math.floor((BREAK_LENGTH - self.indent) as f64 / actualMax as f64))
+        columns = math.min(columns, 12.0)
+        columns = math.min(columns, 15.0)
+        if columns <= 1.0 {
+            return false
+        }
+        let cols = columns as usize
+        var maxLine = List(usize).init(self.it.alloc)
+        defer maxLine.deinit()
+        for i in 0..cols {
+            var lineLength: usize = 0
+            var j = i
+            while j < outputLength {
+                if items[j].len > lineLength {
+                    lineLength = items[j].len
+                }
+                j += cols
+            }
+            try maxLine.append(lineLength + 2)
+        }
+        var rows = List([]mut u8).init(self.it.alloc)
+        defer rows.deinit()
+        var i: usize = 0
+        while i < outputLength {
+            var max = i + cols
+            if max > outputLength {
+                max = outputLength
+            }
+            let rb = try self.it.builder()
+            defer self.it.release(rb)
+            var j = i
+            while j < max - 1 {
+                let width = maxLine.items()[j - i]
+                let cell = items[j].len + 2
+                if allNumbers {
+                    for k in cell..width {
+                        try rb.appendByte(' ')
+                    }
+                    try rb.append(items[j])
+                    try rb.append(", ")
+                } else {
+                    try rb.append(items[j])
+                    try rb.append(", ")
+                    for k in cell..width {
+                        try rb.appendByte(' ')
+                    }
+                }
+                j += 1
+            }
+            if allNumbers {
+                let width = maxLine.items()[j - i] - 2
+                for k in items[j].len..width {
+                    try rb.appendByte(' ')
+                }
+            }
+            try rb.append(items[j])
+            try rows.append(try rb.toOwned())
+            i += cols
+        }
+        if more {
+            let mb = try self.it.builder()
+            defer self.it.release(mb)
+            try mb.append(items[outputLength])
+            try rows.append(try mb.toOwned())
+        }
+        for p in out.items() {
+            self.it.alloc.free(p)
+        }
+        out.clear()
+        for r in rows.items() {
+            try out.append(r)
+        }
+        return true
+    }
+}

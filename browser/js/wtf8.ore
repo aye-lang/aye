@@ -150,15 +150,15 @@ pub fn unitAt(s: []u8, ui: u32) u32 {
 }
 
 /// Appends the code units [from, to) of s as WTF-8.
-pub fn appendSlice(alloc: Allocator, b: *mut text.Builder, s: []u8, ascii: bool, from: u32, to: u32) AllocError!void {
+/// (`units` is scratch space.)
+pub fn appendSlice(units: *mut List(u16), b: *mut text.Builder, s: []u8, ascii: bool, from: u32, to: u32) AllocError!void {
     if from >= to {
         return
     }
     if ascii {
         return b.append(s[from as usize..to as usize])
     }
-    var units = List(u16).init(alloc)
-    defer units.deinit()
-    try toUnits(s, &mut units)
+    units.clear()
+    try toUnits(s, units)
     return appendUnits(b, units.items()[from as usize..to as usize])
 }

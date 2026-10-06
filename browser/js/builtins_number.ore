@@ -1,0 +1,492 @@
+// js/builtins_number: Number, Number.prototype and Math.
+
+import std.math
+import std.text
+
+extern fn sin(x: f64) f64
+extern fn cos(x: f64) f64
+extern fn tan(x: f64) f64
+extern fn asin(x: f64) f64
+extern fn acos(x: f64) f64
+extern fn atan(x: f64) f64
+extern fn atan2(y: f64, x: f64) f64
+extern fn exp(x: f64) f64
+extern fn log(x: f64) f64
+extern fn log2(x: f64) f64
+extern fn log10(x: f64) f64
+extern fn log1p(x: f64) f64
+extern fn expm1(x: f64) f64
+extern fn cbrt(x: f64) f64
+extern fn sinh(x: f64) f64
+extern fn cosh(x: f64) f64
+extern fn tanh(x: f64) f64
+extern fn arc4random() u32
+
+fn installNumber(it: *mut Interp) JsError!void {
+    let c = try makeConstructor(it, "Number", 1, numberCtor, it.number_proto)
+    try it.defineNative(c, "isNaN", 1, numberIsNaN)
+    try it.defineNative(c, "isFinite", 1, numberIsFinite)
+    try it.defineNative(c, "isInteger", 1, numberIsInteger)
+    try it.defineNative(c, "isSafeInteger", 1, numberIsSafeInteger)
+    try it.defineNative(c, "parseFloat", 1, globalParseFloat)
+    try it.defineNative(c, "parseInt", 2, globalParseInt)
+    try it.defineValue(c, "MAX_SAFE_INTEGER", numVal(9007199254740991.0))
+    try it.defineValue(c, "MIN_SAFE_INTEGER", numVal(-9007199254740991.0))
+    try it.defineValue(c, "EPSILON", numVal(2.220446049250313e-16))
+    try it.defineValue(c, "MAX_VALUE", numVal(1.7976931348623157e308))
+    try it.defineValue(c, "MIN_VALUE", numVal(5e-324))
+    try it.defineValue(c, "POSITIVE_INFINITY", numVal(1.0 / 0.0))
+    try it.defineValue(c, "NEGATIVE_INFINITY", numVal(-1.0 / 0.0))
+    try it.defineValue(c, "NaN", numVal(0.0 / 0.0))
+    let p = it.number_proto
+    try it.defineNative(p, "toString", 1, numberToString)
+    try it.defineNative(p, "toFixed", 1, numberToFixed)
+    try it.defineNative(p, "toPrecision", 1, numberToPrecision)
+    try it.defineNative(p, "toExponential", 1, numberToExponential)
+    try it.defineNative(p, "toLocaleString", 0, numberToLocaleString)
+    try it.defineNative(p, "valueOf", 0, numberValueOf)
+}
+
+fn numberCtor(it: *mut Interp, a: Args) JsError!Value {
+    var n = 0.0
+    if a.argc > 0 {
+        n = try it.toNumber(it.arg(a, 0))
+    }
+    if a.new_target != NONE {
+        return objVal(try it.newObjectOf(Class.Number, it.number_proto, ObjData.Prim { v: numVal(n) }))
+    }
+    return numVal(n)
+}
+
+// The number argument 0 without conversion (null for other types).
+fn numArg(it: *mut Interp, a: Args) ?f64 {
+    return match it.arg(a, 0) {
+        .Num { n } => n
+        _ => null
+    }
+}
+
+fn numberIsNaN(it: *mut Interp, a: Args) JsError!Value {
+    if numArg(it, a) |n| {
+        return boolVal(n != n)
+    }
+    return boolVal(false)
+}
+
+fn numberIsFinite(it: *mut Interp, a: Args) JsError!Value {
+    if numArg(it, a) |n| {
+        return boolVal(isFinite(n))
+    }
+    return boolVal(false)
+}
+
+fn numberIsInteger(it: *mut Interp, a: Args) JsError!Value {
+    if numArg(it, a) |n| {
+        return boolVal(isFinite(n) && trunc(n) == n)
+    }
+    return boolVal(false)
+}
+
+fn numberIsSafeInteger(it: *mut Interp, a: Args) JsError!Value {
+    if numArg(it, a) |n| {
+        return boolVal(isFinite(n) && trunc(n) == n && math.abs(n) <= 9007199254740991.0)
+    }
+    return boolVal(false)
+}
+
+fn thisNumber(it: *mut Interp, a: Args) JsError!f64 {
+    let v = try thisPrimitive(it, a, Class.Number)
+    return match v {
+        .Num { n } => n
+        _ => try badNumber(it)
+    }
+}
+
+fn badNumber(it: *mut Interp) JsError!f64 {
+    try it.typeError("Number.prototype method called on incompatible receiver")
+    return 0.0
+}
+
+fn numberValueOf(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(try thisNumber(it, a))
+}
+
+fn numberToString(it: *mut Interp, a: Args) JsError!Value {
+    let x = try thisNumber(it, a)
+    var radix = 10.0
+    if !isUndef(it.arg(a, 0)) {
+        radix = try argInteger(it, a, 0, 10.0)
+    }
+    if radix < 2.0 || radix > 36.0 {
+        return it.rangeError("toString() radix must be between 2 and 36")
+    }
+    let b = try it.builder()
+    defer it.release(b)
+    if radix == 10.0 {
+        try formatNumber(b, x)
+    } else {
+        try formatRadix(b, x, radix as u32)
+    }
+    return it.takeString(b)
+}
+
+fn numberToFixed(it: *mut Interp, a: Args) JsError!Value {
+    let x = try thisNumber(it, a)
+    let d = try argInteger(it, a, 0, 0.0)
+    if d < 0.0 || d > 100.0 {
+        return it.rangeError("toFixed() digits argument must be between 0 and 100")
+    }
+    let b = try it.builder()
+    defer it.release(b)
+    try formatFixed(b, x, d as u32)
+    return it.takeString(b)
+}
+
+fn numberToPrecision(it: *mut Interp, a: Args) JsError!Value {
+    let x = try thisNumber(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    if isUndef(it.arg(a, 0)) {
+        try formatNumber(b, x)
+        return it.takeString(b)
+    }
+    let p = try argInteger(it, a, 0, 0.0)
+    if !isFinite(x) {
+        try formatNumber(b, x)
+        return it.takeString(b)
+    }
+    if p < 1.0 || p > 100.0 {
+        return it.rangeError("toPrecision() argument must be between 1 and 100")
+    }
+    try formatPrecision(b, x, p as u32)
+    return it.takeString(b)
+}
+
+fn numberToExponential(it: *mut Interp, a: Args) JsError!Value {
+    let x = try thisNumber(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    if !isFinite(x) {
+        try formatNumber(b, x)
+        return it.takeString(b)
+    }
+    var d: i32 = -1
+    if !isUndef(it.arg(a, 0)) {
+        let dv = try argInteger(it, a, 0, 0.0)
+        if dv < 0.0 || dv > 100.0 {
+            return it.rangeError("toExponential() argument must be between 0 and 100")
+        }
+        d = dv as i32
+    }
+    try formatExponential(b, x, d)
+    return it.takeString(b)
+}
+
+// 1234567.891 as "1,234,567.891" (en-US, at most three fraction digits).
+fn numberToLocaleString(it: *mut Interp, a: Args) JsError!Value {
+    let x = try thisNumber(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    if !isFinite(x) {
+        try formatNumber(b, x)
+        return it.takeString(b)
+    }
+    let digits = try it.builder()
+    defer it.release(digits)
+    try formatFixed(digits, math.abs(x), 3)
+    var t = digits.bytes()
+    // Drop zeros (and the point) at the end of the fraction.
+    var end = t.len
+    while end > 0 && t[end - 1] == '0' {
+        end -= 1
+    }
+    if end > 0 && t[end - 1] == '.' {
+        end -= 1
+    }
+    t = t[..end]
+    var point = t.len
+    for i, c in t {
+        if c == '.' {
+            point = i
+        }
+    }
+    if x < 0.0 && !(t.len == 1 && t[0] == '0') {
+        try b.appendByte('-')
+    }
+    for i in 0..point {
+        if i > 0 && (point - i) % 3 == 0 {
+            try b.appendByte(',')
+        }
+        try b.appendByte(t[i])
+    }
+    try b.append(t[point..])
+    return it.takeString(b)
+}
+
+// ---- Math
+
+fn installMath(it: *mut Interp) JsError!void {
+    let m = try it.newObject(it.object_proto)
+    try it.defineValue(it.global, "Math", objVal(m))
+    try it.defineValue(m, "PI", numVal(3.141592653589793))
+    try it.defineValue(m, "E", numVal(2.718281828459045))
+    try it.defineValue(m, "LN2", numVal(0.6931471805599453))
+    try it.defineValue(m, "LN10", numVal(2.302585092994046))
+    try it.defineValue(m, "LOG2E", numVal(1.4426950408889634))
+    try it.defineValue(m, "LOG10E", numVal(0.4342944819032518))
+    try it.defineValue(m, "SQRT2", numVal(1.4142135623730951))
+    try it.defineValue(m, "SQRT1_2", numVal(0.7071067811865476))
+    try it.defineNative(m, "abs", 1, mathAbs)
+    try it.defineNative(m, "floor", 1, mathFloor)
+    try it.defineNative(m, "ceil", 1, mathCeil)
+    try it.defineNative(m, "round", 1, mathRound)
+    try it.defineNative(m, "trunc", 1, mathTrunc)
+    try it.defineNative(m, "sign", 1, mathSign)
+    try it.defineNative(m, "sqrt", 1, mathSqrt)
+    try it.defineNative(m, "cbrt", 1, mathCbrt)
+    try it.defineNative(m, "pow", 2, mathPow)
+    try it.defineNative(m, "min", 2, mathMin)
+    try it.defineNative(m, "max", 2, mathMax)
+    try it.defineNative(m, "random", 0, mathRandom)
+    try it.defineNative(m, "sin", 1, mathSin)
+    try it.defineNative(m, "cos", 1, mathCos)
+    try it.defineNative(m, "tan", 1, mathTan)
+    try it.defineNative(m, "asin", 1, mathAsin)
+    try it.defineNative(m, "acos", 1, mathAcos)
+    try it.defineNative(m, "atan", 1, mathAtan)
+    try it.defineNative(m, "atan2", 2, mathAtan2)
+    try it.defineNative(m, "exp", 1, mathExp)
+    try it.defineNative(m, "expm1", 1, mathExpm1)
+    try it.defineNative(m, "log", 1, mathLog)
+    try it.defineNative(m, "log2", 1, mathLog2)
+    try it.defineNative(m, "log10", 1, mathLog10)
+    try it.defineNative(m, "log1p", 1, mathLog1p)
+    try it.defineNative(m, "sinh", 1, mathSinh)
+    try it.defineNative(m, "cosh", 1, mathCosh)
+    try it.defineNative(m, "tanh", 1, mathTanh)
+    try it.defineNative(m, "hypot", 2, mathHypot)
+    try it.defineNative(m, "fround", 1, mathFround)
+    try it.defineNative(m, "clz32", 1, mathClz32)
+    try it.defineNative(m, "imul", 2, mathImul)
+}
+
+fn num0(it: *mut Interp, a: Args) JsError!f64 {
+    return it.toNumber(it.arg(a, 0))
+}
+
+fn mathAbs(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(math.abs(try num0(it, a)))
+}
+
+fn mathFloor(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(math.floor(try num0(it, a)))
+}
+
+fn mathCeil(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(math.ceil(try num0(it, a)))
+}
+
+fn mathRound(it: *mut Interp, a: Args) JsError!Value {
+    let x = try num0(it, a)
+    if !isFinite(x) || x == 0.0 {
+        return numVal(x)
+    }
+    if x > 0.0 && x < 0.5 {
+        return numVal(0.0)
+    }
+    if x < 0.0 && x >= -0.5 {
+        return numVal(-0.0)
+    }
+    let r = math.floor(x)
+    if x - r >= 0.5 {
+        return numVal(r + 1.0)
+    }
+    return numVal(r)
+}
+
+fn mathTrunc(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(trunc(try num0(it, a)))
+}
+
+fn mathSign(it: *mut Interp, a: Args) JsError!Value {
+    let x = try num0(it, a)
+    if x > 0.0 {
+        return numVal(1.0)
+    }
+    if x < 0.0 {
+        return numVal(-1.0)
+    }
+    return numVal(x)
+}
+
+fn mathSqrt(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(math.sqrt(try num0(it, a)))
+}
+
+fn mathCbrt(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(cbrt(try num0(it, a)))
+}
+
+fn mathPow(it: *mut Interp, a: Args) JsError!Value {
+    let x = try num0(it, a)
+    let y = try it.toNumber(it.arg(a, 1))
+    return numVal(arith(Op.Exp, x, y))
+}
+
+fn minMax(it: *mut Interp, a: Args, isMax: bool) JsError!Value {
+    var r = 1.0 / 0.0
+    if isMax {
+        r = -1.0 / 0.0
+    }
+    var nan = false
+    for i in 0..a.argc {
+        let x = try it.toNumber(it.arg(a, i))
+        if x != x {
+            nan = true
+        } else if isMax {
+            if x > r || (x == 0.0 && r == 0.0 && !isNegZero(x)) {
+                r = x
+            }
+        } else {
+            if x < r || (x == 0.0 && r == 0.0 && isNegZero(x)) {
+                r = x
+            }
+        }
+    }
+    if nan {
+        return numVal(0.0 / 0.0)
+    }
+    return numVal(r)
+}
+
+fn mathMin(it: *mut Interp, a: Args) JsError!Value {
+    return minMax(it, a, false)
+}
+
+fn mathMax(it: *mut Interp, a: Args) JsError!Value {
+    return minMax(it, a, true)
+}
+
+fn mathRandom(it: *mut Interp, a: Args) JsError!Value {
+    let hi = (arc4random() >> 5) as f64
+    let lo = (arc4random() >> 6) as f64
+    return numVal((hi * 67108864.0 + lo) / 9007199254740992.0)
+}
+
+fn mathSin(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(sin(try num0(it, a)))
+}
+
+fn mathCos(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(cos(try num0(it, a)))
+}
+
+fn mathTan(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(tan(try num0(it, a)))
+}
+
+fn mathAsin(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(asin(try num0(it, a)))
+}
+
+fn mathAcos(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(acos(try num0(it, a)))
+}
+
+fn mathAtan(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(atan(try num0(it, a)))
+}
+
+fn mathAtan2(it: *mut Interp, a: Args) JsError!Value {
+    let y = try num0(it, a)
+    let x = try it.toNumber(it.arg(a, 1))
+    return numVal(atan2(y, x))
+}
+
+fn mathExp(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(exp(try num0(it, a)))
+}
+
+fn mathExpm1(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(expm1(try num0(it, a)))
+}
+
+fn mathLog(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(log(try num0(it, a)))
+}
+
+fn mathLog2(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(log2(try num0(it, a)))
+}
+
+fn mathLog10(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(log10(try num0(it, a)))
+}
+
+fn mathLog1p(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(log1p(try num0(it, a)))
+}
+
+fn mathSinh(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(sinh(try num0(it, a)))
+}
+
+fn mathCosh(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(cosh(try num0(it, a)))
+}
+
+fn mathTanh(it: *mut Interp, a: Args) JsError!Value {
+    return numVal(tanh(try num0(it, a)))
+}
+
+fn mathHypot(it: *mut Interp, a: Args) JsError!Value {
+    var sum = 0.0
+    var inf = false
+    var nan = false
+    for i in 0..a.argc {
+        let x = try it.toNumber(it.arg(a, i))
+        if x - x != 0.0 && x == x {
+            inf = true
+        }
+        if x != x {
+            nan = true
+        }
+        sum += x * x
+    }
+    if inf {
+        return numVal(1.0 / 0.0)
+    }
+    if nan {
+        return numVal(0.0 / 0.0)
+    }
+    return numVal(math.sqrt(sum))
+}
+
+fn mathFround(it: *mut Interp, a: Args) JsError!Value {
+    let x = try num0(it, a)
+    return numVal((x as f32) as f64)
+}
+
+fn mathClz32(it: *mut Interp, a: Args) JsError!Value {
+    var x = toUint32(try num0(it, a))
+    var n: u32 = 0
+    if x == 0 {
+        return numVal(32.0)
+    }
+    while (x & 0x80000000) == 0 {
+        x = x << 1
+        n += 1
+    }
+    return numVal(n as f64)
+}
+
+fn mathImul(it: *mut Interp, a: Args) JsError!Value {
+    let x = toInt32(try num0(it, a)) as i64
+    let y = toInt32(try it.toNumber(it.arg(a, 1))) as i64
+    let p = (x * y) & 0xFFFFFFFF
+    var r = p
+    if p >= 0x80000000 {
+        r = p - 0x100000000
+    }
+    return numVal(r as f64)
+}

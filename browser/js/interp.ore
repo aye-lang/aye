@@ -1,0 +1,3158 @@
+// js/interp: the interpreter. It walks the syntax tree; expressions give
+// a `Value`, statements a `Flow`. Exceptions are the Ore error
+// `JsError.Thrown`, with the thrown value in `Interp.exception`, so they
+// pass through native functions with `try`.
+//
+// Garbage collection may run at any allocation, and it only sees the
+// roots: the global object and intrinsics, the environments of running
+// code, the `stack`, the frames, the pending exception and return value,
+// and the host's roots. So a value held in an Ore local must be on the
+// stack before the next allocation (or call). Calls take their callee,
+// `this` and arguments from the stack: [f, this, a0, a1, ...].
+
+import std
+import std.list.List
+import std.map.IntMap
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+pub error JsError { Thrown, OutOfMemory, ShortCircuit }
+
+pub enum Flow {
+    Normal
+    Return
+    Break
+    Continue
+    // An exception was thrown (try statements only).
+    Caught
+}
+
+/// A native function: `it.arg(a, i)` reads argument i.
+pub let NativeFn = fn(*mut Interp, Args) JsError!Value
+
+pub struct Args {
+    this: Value
+    // The arguments are it.stack[base..base + argc].
+    base: usize
+    argc: usize
+    callee: u32
+    // The constructor `new` was applied to (NONE for a call). With an
+    // object `this` too: a `super(...)` call from a subclass, which
+    // initializes `this` instead of creating an object.
+    new_target: u32
+}
+
+pub struct NativeEntry {
+    f: NativeFn
+    name: u32
+    length: u32
+}
+
+pub struct Frame {
+    // The function running (NONE for class field initializers).
+    func: u32
+    // The environment of the caller, restored on return.
+    env: u32
+}
+
+/// What the host (the DOM) learns from the engine: a host object was
+/// collected (design.md's `js_refs` finalizer).
+pub interface Host {
+    fn finalize(self: *mut Self, tag: u32, index: u32, generation: u32)
+}
+
+let MAX_DEPTH: usize = 1200
+
+pub struct Interp {
+    alloc: Allocator
+    heap: Heap
+    ast: Ast
+    globals: GlobalNames
+    natives: List(NativeEntry)
+    stack: List(Value)
+    frames: List(Frame)
+    gray_objs: List(u32)
+    gray_envs: List(u32)
+    // The running code's environment (NONE at the top level).
+    env: u32
+    // The global lexical environment (top-level let/const/class).
+    glex: u32
+    global: u32
+    object_proto: u32
+    function_proto: u32
+    array_proto: u32
+    string_proto: u32
+    number_proto: u32
+    boolean_proto: u32
+    error_proto: u32
+    type_error_proto: u32
+    range_error_proto: u32
+    syntax_error_proto: u32
+    reference_error_proto: u32
+    eval_error_proto: u32
+    uri_error_proto: u32
+    date_proto: u32
+    regexp_proto: u32
+    map_proto: u32
+    set_proto: u32
+    exception: Value
+    ret: Value
+    // The label of a pending break or continue (0: none).
+    label: u32
+    // Values the host keeps alive.
+    roots: List(Value)
+    host: ?dyn Host
+    msg: text.Builder
+    out: text.Builder
+    gc_count: u32
+    // Compiled regular expressions, by (pattern atom << 32 | flags atom).
+    regexes: List(*mut RegexProg)
+    regex_cache: IntMap(u64, u32)
+    // Scratch builders and key lists, reused (see slabs.ore for why).
+    builders: List(*mut text.Builder)
+    free_builders: List(*mut text.Builder)
+    key_lists: List(*mut List(u32))
+    free_key_lists: List(*mut List(u32))
+    units: List(u16)
+
+    pub fn create(alloc: Allocator) JsError!Interp {
+        var it = Interp {
+            alloc: alloc,
+            heap: try Heap.init(alloc),
+            ast: try Ast.init(alloc),
+            globals: GlobalNames.init(alloc),
+            natives: List(NativeEntry).init(alloc),
+            stack: List(Value).init(alloc),
+            frames: List(Frame).init(alloc),
+            gray_objs: List(u32).init(alloc),
+            gray_envs: List(u32).init(alloc),
+            env: NONE,
+            glex: NONE,
+            global: NONE,
+            object_proto: NONE,
+            function_proto: NONE,
+            array_proto: NONE,
+            string_proto: NONE,
+            number_proto: NONE,
+            boolean_proto: NONE,
+            error_proto: NONE,
+            type_error_proto: NONE,
+            range_error_proto: NONE,
+            syntax_error_proto: NONE,
+            reference_error_proto: NONE,
+            eval_error_proto: NONE,
+            uri_error_proto: NONE,
+            date_proto: NONE,
+            regexp_proto: NONE,
+            map_proto: NONE,
+            set_proto: NONE,
+            exception: Value.Undefined,
+            ret: Value.Undefined,
+            label: 0,
+            roots: List(Value).init(alloc),
+            host: null,
+            msg: text.Builder.init(alloc),
+            out: text.Builder.init(alloc),
+            gc_count: 0,
+            regexes: List(*mut RegexProg).init(alloc),
+            regex_cache: IntMap(u64, u32).init(alloc),
+            builders: List(*mut text.Builder).init(alloc),
+            free_builders: List(*mut text.Builder).init(alloc),
+            key_lists: List(*mut List(u32)).init(alloc),
+            free_key_lists: List(*mut List(u32)).init(alloc),
+            units: List(u16).init(alloc),
+        }
+        return it
+    }
+
+    pub fn deinit(self: *mut Self) {
+        self.heap.deinit()
+        self.ast.deinit()
+        self.globals.deinit()
+        self.natives.deinit()
+        self.stack.deinit()
+        self.frames.deinit()
+        self.gray_objs.deinit()
+        self.gray_envs.deinit()
+        self.roots.deinit()
+        self.msg.deinit()
+        self.out.deinit()
+        for r in self.regexes.items() {
+            r.deinit()
+            self.alloc.destroy(r)
+        }
+        self.regexes.deinit()
+        self.regex_cache.deinit()
+        for b in self.builders.items() {
+            b.deinit()
+            self.alloc.destroy(b)
+        }
+        self.builders.deinit()
+        self.free_builders.deinit()
+        for l in self.key_lists.items() {
+            l.deinit()
+            self.alloc.destroy(l)
+        }
+        self.key_lists.deinit()
+        self.free_key_lists.deinit()
+        self.units.deinit()
+    }
+
+    /// An empty scratch builder; give it back with `release`.
+    pub fn builder(self: *mut Self) JsError!*mut text.Builder {
+        if self.free_builders.pop() |b| {
+            b.clear()
+            return b
+        }
+        let b = try self.alloc.create(text.Builder.init(self.alloc))
+        try self.builders.append(b)
+        return b
+    }
+
+    pub fn release(self: *mut Self, b: *mut text.Builder) {
+        b.clear()
+        self.free_builders.append(b) catch |e| {}
+    }
+
+    /// An empty scratch list of atoms; give it back with `releaseKeys`.
+    pub fn keyList(self: *mut Self) JsError!*mut List(u32) {
+        if self.free_key_lists.pop() |l| {
+            l.clear()
+            return l
+        }
+        let l = try self.alloc.create(List(u32).init(self.alloc))
+        try self.key_lists.append(l)
+        return l
+    }
+
+    pub fn releaseKeys(self: *mut Self, l: *mut List(u32)) {
+        l.clear()
+        self.free_key_lists.append(l) catch |e| {}
+    }
+
+    // ---- allocation (may collect garbage first)
+
+    fn maybeGc(self: *mut Self) {
+        if self.heap.since_gc >= self.heap.threshold {
+            collectGarbage(self)
+        }
+    }
+
+    pub fn newObject(self: *mut Self, proto: u32) JsError!u32 {
+        self.maybeGc()
+        return self.heap.newObj(Class.Object, proto, ObjData.None)
+    }
+
+    pub fn newObjectOf(self: *mut Self, class: Class, proto: u32, data: ObjData) JsError!u32 {
+        self.maybeGc()
+        return self.heap.newObj(class, proto, data)
+    }
+
+    pub fn newArray(self: *mut Self, n: u32) JsError!u32 {
+        self.maybeGc()
+        let a = try self.heap.newObj(Class.Array, self.array_proto, ObjData.None)
+        if n > 0 {
+            try self.heap.setLength(a, n, Value.Undefined)
+        }
+        return a
+    }
+
+    pub fn newString(self: *mut Self, b: []u8) JsError!Value {
+        if b.len == 0 {
+            return self.atomValue(A_EMPTY)
+        }
+        self.maybeGc()
+        return strVal(try self.heap.newStr(b))
+    }
+
+    /// The string of a builder's bytes; the builder is empty after.
+    pub fn takeString(self: *mut Self, b: *mut text.Builder) JsError!Value {
+        let v = try self.newString(b.bytes())
+        b.clear()
+        return v
+    }
+
+    pub fn atomValue(self: *mut Self, a: u32) JsError!Value {
+        return strVal(try self.heap.atomStr(a))
+    }
+
+    pub fn intern(self: *mut Self, s: []u8) JsError!u32 {
+        return self.heap.atoms.intern(s)
+    }
+
+    fn newEnv(self: *mut Self, n: u32, parent: u32) JsError!u32 {
+        self.maybeGc()
+        return self.heap.newEnv(n, parent)
+    }
+
+    // ---- the value stack
+
+    pub fn push(self: *mut Self, v: Value) JsError!void {
+        return self.stack.append(v)
+    }
+
+    pub fn pop(self: *mut Self) Value {
+        if self.stack.pop() |v| {
+            return v
+        }
+        return Value.Undefined
+    }
+
+    pub fn truncate(self: *mut Self, h: usize) {
+        while self.stack.len() > h {
+            self.stack.pop()
+        }
+    }
+
+    pub fn slot(self: *Self, i: usize) Value {
+        return self.stack.items()[i]
+    }
+
+    pub fn setSlot(self: *mut Self, i: usize, v: Value) {
+        self.stack.items()[i] = v
+    }
+
+    /// Argument i of a native call (undefined when missing).
+    pub fn arg(self: *Self, a: Args, i: usize) Value {
+        if i < a.argc {
+            return self.stack.items()[a.base + i]
+        }
+        return Value.Undefined
+    }
+
+    // ---- exceptions
+
+    pub fn throwValue(self: *mut Self, v: Value) JsError!Value {
+        self.exception = v
+        return JsError.Thrown
+    }
+
+    /// A new error object with prototype `proto` and message `m`.
+    pub fn makeError(self: *mut Self, proto: u32, m: []u8) JsError!Value {
+        let o = try self.newObjectOf(Class.Error, proto, ObjData.None)
+        try self.push(objVal(o))
+        let s = try self.newString(m)
+        try self.heap.addProp(o, A_MESSAGE, s, Value.Undefined, F_HIDDEN)
+        return self.pop()
+    }
+
+    pub fn throwError(self: *mut Self, proto: u32, m: []u8) JsError!Value {
+        let e = try self.makeError(proto, m)
+        return self.throwValue(e)
+    }
+
+    pub fn typeError(self: *mut Self, m: []u8) JsError!Value {
+        return self.throwError(self.type_error_proto, m)
+    }
+
+    pub fn rangeError(self: *mut Self, m: []u8) JsError!Value {
+        return self.throwError(self.range_error_proto, m)
+    }
+
+    /// Throws a TypeError whose message is `a`, the text of `v` and `b`
+    /// (e.g. "x is not a function").
+    pub fn typeErrorAbout(self: *mut Self, a: []u8, about: []u8, b: []u8) JsError!Value {
+        self.msg.clear()
+        try self.msg.append(a)
+        try self.msg.append(about)
+        try self.msg.append(b)
+        let e = try self.makeError(self.type_error_proto, self.msg.bytes())
+        return self.throwValue(e)
+    }
+
+    /// Throws TypeError "<what> is not <kind>", naming a value.
+    pub fn notA(self: *mut Self, v: Value, kind: []u8) JsError!Value {
+        self.msg.clear()
+        try self.describe(&mut self.msg, v)
+        try self.msg.append(" is not ")
+        try self.msg.append(kind)
+        let e = try self.makeError(self.type_error_proto, self.msg.bytes())
+        return self.throwValue(e)
+    }
+
+    // A short text for a value in error messages.
+    fn describe(self: *mut Self, b: *mut text.Builder, v: Value) JsError!void {
+        match v {
+            .Str { s } => {
+                try b.appendByte('"')
+                try b.append(self.heap.bytes(s))
+                try b.appendByte('"')
+            }
+            .Obj { o: oid } => {
+                if self.isCallable(v) {
+                    try b.append("function")
+                } else if self.heap.obj(oid).class == Class.Array {
+                    try b.append("object")
+                } else {
+                    try b.append("#<Object>")
+                }
+            }
+            _ => try self.appendString(b, v)
+        }
+    }
+
+    // ---- objects and properties
+
+    pub fn isCallable(self: *Self, v: Value) bool {
+        return match v {
+            .Obj { o: oid } => self.heap.obj(oid).class == Class.Function
+            _ => false
+        }
+    }
+
+    pub fn hasClass(self: *Self, v: Value, c: Class) bool {
+        return match v {
+            .Obj { o: oid } => self.heap.obj(oid).class == c
+            _ => false
+        }
+    }
+
+    pub fn classOf(self: *Self, v: Value) ?Class {
+        return match v {
+            .Obj { o: oid } => self.heap.obj(oid).class
+            _ => null
+        }
+    }
+
+    /// Defines (or redefines) an own data property.
+    pub fn defineOwn(self: *mut Self, o: u32, key: u32, v: Value, flags: u8) JsError!void {
+        let ob = self.heap.obj(o)
+        if ob.class == Class.Array || ob.class == Class.Arguments {
+            let idx = self.heap.atoms.indexOf(key)
+            if idx != NONE {
+                return self.setElem(o, idx, v)
+            }
+        }
+        if self.heap.findProp(o, key) |i| {
+            let p = &mut self.heap.obj(o).props[i]
+            p.value = v
+            p.setter = Value.Undefined
+            p.flags = flags
+            return
+        }
+        return self.heap.addProp(o, key, v, Value.Undefined, flags)
+    }
+
+    /// Defines a getter or a setter (keeping the other half).
+    pub fn defineAccessor(self: *mut Self, o: u32, key: u32, getter: Value, setter: Value, flags: u8) JsError!void {
+        if self.heap.findProp(o, key) |i| {
+            let p = &mut self.heap.obj(o).props[i]
+            if (p.flags & F_ACCESSOR) != 0 {
+                if !isNullish(getter) {
+                    p.value = getter
+                }
+                if !isNullish(setter) {
+                    p.setter = setter
+                }
+            } else {
+                p.value = getter
+                p.setter = setter
+            }
+            p.flags = flags | F_ACCESSOR
+            return
+        }
+        return self.heap.addProp(o, key, getter, setter, flags | F_ACCESSOR)
+    }
+
+    pub fn setElem(self: *mut Self, o: u32, idx: u32, v: Value) JsError!void {
+        let ob = self.heap.obj(o)
+        if ob.frozen {
+            return
+        }
+        if idx < ob.nelems {
+            ob.elems[idx] = v
+            return
+        }
+        if idx == ob.nelems {
+            return self.heap.pushElem(o, v)
+        }
+        if idx - ob.nelems > 50000000 {
+            return
+        }
+        try self.heap.setLength(o, idx + 1, Value.Empty)
+        self.heap.obj(o).elems[idx] = v
+    }
+
+    // The array index a number names, or NONE.
+    fn numIndex(self: *Self, n: f64) u32 {
+        if n >= 0.0 && n < 4294967295.0 {
+            let i = n as u32
+            if i as f64 == n {
+                return i
+            }
+        }
+        return NONE
+    }
+
+    /// The value of property `key` of `v` (getters run with `v` as this).
+    pub fn getProp(self: *mut Self, v: Value, key: u32) JsError!Value {
+        match v {
+            .Obj { o: oid } => {
+                return self.getFrom(oid, key, v)
+            }
+            .Str { s } => {
+                let c = self.heap.str(s)
+                if key == A_LENGTH {
+                    return numVal(c.len16 as f64)
+                }
+                let idx = self.heap.atoms.indexOf(key)
+                if idx != NONE && idx < c.len16 {
+                    return self.charAtIndex(s, idx)
+                }
+                return self.getFrom(self.string_proto, key, v)
+            }
+            .Num { .. } => {
+                return self.getFrom(self.number_proto, key, v)
+            }
+            .Bool { .. } => {
+                return self.getFrom(self.boolean_proto, key, v)
+            }
+            _ => {
+                self.msg.clear()
+                try self.msg.append("Cannot read properties of ")
+                try self.appendString(&mut self.msg, v)
+                try self.msg.append(" (reading '")
+                try self.msg.append(self.heap.atoms.name(key))
+                try self.msg.append("')")
+                let e = try self.makeError(self.type_error_proto, self.msg.bytes())
+                return self.throwValue(e)
+            }
+        }
+    }
+
+    /// The one-unit string at UTF-16 index idx of string s.
+    pub fn charAtIndex(self: *mut Self, s: u32, idx: u32) JsError!Value {
+        let c = self.heap.str(s)
+        if c.ascii {
+            let b = c.bytes[idx as usize..idx as usize + 1]
+            let a = try self.intern(b)
+            return self.atomValue(a)
+        }
+        let u = unitAt(c.bytes, idx)
+        let b = try self.builder()
+        defer self.release(b)
+        try appendWtf8(b, u)
+        let a = try self.intern(b.bytes())
+        return self.atomValue(a)
+    }
+
+    // Searches the prototype chain from object o.
+    fn getFrom(self: *mut Self, o: u32, key: u32, receiver: Value) JsError!Value {
+        var cur = o
+        while cur != NONE {
+            let ob = self.heap.obj(cur)
+            let cls = ob.class
+            if cls == Class.Array || cls == Class.Arguments {
+                if key == A_LENGTH {
+                    return numVal(ob.nelems as f64)
+                }
+                let idx = self.heap.atoms.indexOf(key)
+                if idx != NONE && idx < ob.nelems {
+                    let e = ob.elems[idx]
+                    match e {
+                        .Empty => {}
+                        _ => {
+                            return e
+                        }
+                    }
+                }
+            } else if cls == Class.String {
+                match ob.data {
+                    .Prim { v: pv } => {
+                        match pv {
+                            .Str { s } => {
+                                if key == A_LENGTH {
+                                    return numVal(self.heap.str(s).len16 as f64)
+                                }
+                                let idx = self.heap.atoms.indexOf(key)
+                                if idx != NONE && idx < self.heap.str(s).len16 {
+                                    return self.charAtIndex(s, idx)
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if self.heap.findProp(cur, key) |i| {
+                let p = self.heap.obj(cur).props[i]
+                if (p.flags & F_ACCESSOR) != 0 {
+                    if isNullish(p.value) {
+                        return Value.Undefined
+                    }
+                    return self.call0(p.value, receiver)
+                }
+                return p.value
+            }
+            if cls == Class.Function && (key == A_NAME || key == A_LENGTH) {
+                return self.functionNameOrLength(cur, key)
+            }
+            cur = self.heap.obj(cur).proto
+        }
+        return Value.Undefined
+    }
+
+    // The `name` and `length` of a function without own ones.
+    fn functionNameOrLength(self: *mut Self, f: u32, key: u32) JsError!Value {
+        match self.heap.obj(f).data {
+            .Closure { func, .. } => {
+                let fi = self.ast.func(func)
+                if key == A_LENGTH {
+                    return numVal(fi.length as f64)
+                }
+                return self.atomValue(fi.name)
+            }
+            .Native { id } => {
+                let ne = self.natives.items()[id]
+                if key == A_LENGTH {
+                    return numVal(ne.length as f64)
+                }
+                return self.atomValue(ne.name)
+            }
+            .Bound { target, .. } => {
+                if key == A_LENGTH {
+                    return numVal(0.0)
+                }
+                let tn = try self.getProp(objVal(target), A_NAME)
+                try self.push(tn)
+                self.msg.clear()
+                try self.msg.append("bound ")
+                try self.appendString(&mut self.msg, tn)
+                let r = try self.newString(self.msg.bytes())
+                self.pop()
+                return r
+            }
+            _ => {
+                if key == A_LENGTH {
+                    return numVal(0.0)
+                }
+                return self.atomValue(A_EMPTY)
+            }
+        }
+    }
+
+    /// v[k] for any key value.
+    pub fn getIndex(self: *mut Self, v: Value, k: Value) JsError!Value {
+        match k {
+            .Num { n } => {
+                let idx = self.numIndex(n)
+                if idx != NONE {
+                    match v {
+                        .Obj { o: oid } => {
+                            let ob = self.heap.obj(oid)
+                            if (ob.class == Class.Array || ob.class == Class.Arguments) && idx < ob.nelems {
+                                let e = ob.elems[idx]
+                                match e {
+                                    .Empty => {}
+                                    _ => {
+                                        return e
+                                    }
+                                }
+                            }
+                        }
+                        .Str { s } => {
+                            if idx < self.heap.str(s).len16 {
+                                return self.charAtIndex(s, idx)
+                            }
+                            return Value.Undefined
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+        if isNullish(v) {
+            let key = try self.toKey(k)
+            return self.getProp(v, key)
+        }
+        let key = try self.toKey(k)
+        return self.getProp(v, key)
+    }
+
+    /// The atom of a property key value.
+    pub fn toKey(self: *mut Self, k: Value) JsError!u32 {
+        match k {
+            .Str { s } => {
+                return self.heap.strAtom(s)
+            }
+            .Num { n } => {
+                self.msg.clear()
+                try formatNumber(&mut self.msg, n)
+                return self.intern(self.msg.bytes())
+            }
+            _ => {
+                let b = try self.builder()
+                defer self.release(b)
+                try self.appendString(b, k)
+                return self.intern(b.bytes())
+            }
+        }
+    }
+
+    /// v[key] = value.
+    pub fn setProp(self: *mut Self, v: Value, key: u32, value: Value) JsError!void {
+        match v {
+            .Obj { o: oid } => {
+                return self.setOn(oid, key, value, v)
+            }
+            .Undefined => {}
+            .Null => {}
+            _ => {
+                return
+            }
+        }
+        self.msg.clear()
+        try self.msg.append("Cannot set properties of ")
+        try self.appendString(&mut self.msg, v)
+        try self.msg.append(" (setting '")
+        try self.msg.append(self.heap.atoms.name(key))
+        try self.msg.append("')")
+        let e = try self.makeError(self.type_error_proto, self.msg.bytes())
+        try self.throwValue(e)
+    }
+
+    pub fn setIndex(self: *mut Self, v: Value, k: Value, value: Value) JsError!void {
+        match k {
+            .Num { n } => {
+                let idx = self.numIndex(n)
+                if idx != NONE {
+                    match v {
+                        .Obj { o: oid } => {
+                            let cls = self.heap.obj(oid).class
+                            if cls == Class.Array || cls == Class.Arguments {
+                                return self.setElem(oid, idx, value)
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+        let key = try self.toKey(k)
+        return self.setProp(v, key, value)
+    }
+
+    fn setOn(self: *mut Self, o: u32, key: u32, value: Value, receiver: Value) JsError!void {
+        let ob = self.heap.obj(o)
+        let cls = ob.class
+        if cls == Class.Array || cls == Class.Arguments {
+            let idx = self.heap.atoms.indexOf(key)
+            if idx != NONE {
+                return self.setElem(o, idx, value)
+            }
+            if key == A_LENGTH && cls == Class.Array {
+                let n = try self.toNumber(value)
+                let len = self.numIndex(n)
+                if len == NONE {
+                    try self.rangeError("Invalid array length")
+                }
+                if len < self.heap.obj(o).nelems {
+                    self.heap.obj(o).nelems = len
+                    return
+                }
+                return self.heap.setLength(o, len, Value.Empty)
+            }
+        }
+        if self.heap.obj(o).frozen {
+            return
+        }
+        if self.heap.findProp(o, key) |i| {
+            let p = self.heap.obj(o).props[i]
+            if (p.flags & F_ACCESSOR) != 0 {
+                if !isNullish(p.setter) {
+                    try self.call1(p.setter, receiver, value)
+                }
+                return
+            }
+            if (p.flags & F_WRITE) != 0 {
+                self.heap.obj(o).props[i].value = value
+            }
+            return
+        }
+        // A setter or a read-only property up the chain?
+        var cur = self.heap.obj(o).proto
+        while cur != NONE {
+            if self.heap.findProp(cur, key) |i| {
+                let p = self.heap.obj(cur).props[i]
+                if (p.flags & F_ACCESSOR) != 0 {
+                    if !isNullish(p.setter) {
+                        try self.call1(p.setter, receiver, value)
+                    }
+                    return
+                }
+                if (p.flags & F_WRITE) == 0 {
+                    return
+                }
+                break
+            }
+            cur = self.heap.obj(cur).proto
+        }
+        if !self.heap.obj(o).extensible {
+            return
+        }
+        return self.heap.addProp(o, key, value, Value.Undefined, F_DEFAULT)
+    }
+
+    /// Does object o or its prototypes have `key`?
+    pub fn hasProperty(self: *mut Self, o: u32, key: u32) bool {
+        var cur = o
+        while cur != NONE {
+            if self.hasOwn(cur, key) {
+                return true
+            }
+            cur = self.heap.obj(cur).proto
+        }
+        return false
+    }
+
+    pub fn hasOwn(self: *mut Self, o: u32, key: u32) bool {
+        let ob = self.heap.obj(o)
+        if ob.class == Class.Array || ob.class == Class.Arguments {
+            if key == A_LENGTH {
+                return true
+            }
+            let idx = self.heap.atoms.indexOf(key)
+            if idx != NONE {
+                if idx < ob.nelems {
+                    return match ob.elems[idx] {
+                        .Empty => false
+                        _ => true
+                    }
+                }
+                return false
+            }
+        }
+        if ob.class == Class.String && key == A_LENGTH {
+            return true
+        }
+        return self.heap.findProp(o, key) != null
+    }
+
+    /// delete v[key]; false when the property cannot be deleted.
+    pub fn deleteProp(self: *mut Self, o: u32, key: u32) JsError!bool {
+        let ob = self.heap.obj(o)
+        if ob.frozen {
+            return false
+        }
+        if ob.class == Class.Array || ob.class == Class.Arguments {
+            let idx = self.heap.atoms.indexOf(key)
+            if idx != NONE {
+                if idx < ob.nelems {
+                    ob.elems[idx] = Value.Empty
+                }
+                return true
+            }
+            if key == A_LENGTH {
+                return false
+            }
+        }
+        if self.heap.findProp(o, key) |i| {
+            if (self.heap.obj(o).props[i].flags & F_CONFIG) == 0 {
+                return false
+            }
+            try self.heap.removeProp(o, i)
+        }
+        return true
+    }
+
+    /// Appends the own string keys of o (as atoms) in property order:
+    /// elements and integer keys ascending, then the others in order of
+    /// creation. `all`: also the non-enumerable ones.
+    pub fn ownKeys(self: *mut Self, o: u32, out: *mut List(u32), all: bool) JsError!void {
+        let cls = self.heap.obj(o).class
+        if cls == Class.Array || cls == Class.Arguments {
+            let n = self.heap.obj(o).nelems
+            for i in 0..n {
+                let e = self.heap.obj(o).elems[i]
+                match e {
+                    .Empty => {}
+                    _ => {
+                        self.msg.clear()
+                        try self.msg.appendUint(i as u64)
+                        try out.append(try self.intern(self.msg.bytes()))
+                    }
+                }
+            }
+        } else if cls == Class.String {
+            match self.heap.obj(o).data {
+                .Prim { v: pv } => {
+                    match pv {
+                        .Str { s } => {
+                            let n = self.heap.str(s).len16
+                            for i in 0..n {
+                                self.msg.clear()
+                                try self.msg.appendUint(i as u64)
+                                try out.append(try self.intern(self.msg.bytes()))
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Integer keys first, ascending (insertion sort of a few).
+        let start = out.len()
+        let np = self.heap.obj(o).nprops
+        for i in 0..np {
+            let p = self.heap.obj(o).props[i]
+            if (p.flags & F_ENUM) == 0 && !all {
+                continue
+            }
+            let idx = self.heap.atoms.indexOf(p.key)
+            if idx == NONE {
+                continue
+            }
+            try out.append(p.key)
+            var j = out.len() - 1
+            while j > start && self.heap.atoms.indexOf(out.items()[j - 1]) > idx {
+                let t = out.items()[j - 1]
+                out.items()[j - 1] = out.items()[j]
+                out.items()[j] = t
+                j -= 1
+            }
+        }
+        for i in 0..np {
+            let p = self.heap.obj(o).props[i]
+            if (p.flags & F_ENUM) == 0 && !all {
+                continue
+            }
+            if self.heap.atoms.indexOf(p.key) != NONE {
+                continue
+            }
+            try out.append(p.key)
+        }
+    }
+
+    // ---- conversions
+
+    pub fn toBoolean(self: *Self, v: Value) bool {
+        return match v {
+            .Undefined => false
+            .Null => false
+            .Empty => false
+            .Bool { b } => b
+            .Num { n } => n == n && n != 0.0
+            .Str { s } => self.heap.str(s).bytes.len > 0
+            .Obj { .. } => true
+        }
+    }
+
+    pub fn toNumber(self: *mut Self, v: Value) JsError!f64 {
+        return match v {
+            .Undefined => 0.0 / 0.0
+            .Empty => 0.0 / 0.0
+            .Null => 0.0
+            .Bool { b } => boolNumber(b)
+            .Num { n } => n
+            .Str { s } => stringToNumber(self.heap.bytes(s))
+            .Obj { .. } => try self.objectToNumber(v)
+        }
+    }
+
+    fn objectToNumber(self: *mut Self, v: Value) JsError!f64 {
+        let p = try self.toPrimitive(v, false)
+        return self.toNumber(p)
+    }
+
+    /// ToPrimitive: `preferString` for the string hint (else number).
+    pub fn toPrimitive(self: *mut Self, v: Value, preferString: bool) JsError!Value {
+        let o = objectOf(v)
+        if o == NONE {
+            return v
+        }
+        var first = A_VALUEOF
+        var second = A_TOSTRING
+        if preferString || self.heap.obj(o).class == Class.Date {
+            first = A_TOSTRING
+            second = A_VALUEOF
+        }
+        try self.push(v)
+        defer self.pop()
+        let f1 = try self.getProp(v, first)
+        if self.isCallable(f1) {
+            let r = try self.call0(f1, v)
+            if !isObject(r) {
+                return r
+            }
+        }
+        let f2 = try self.getProp(v, second)
+        if self.isCallable(f2) {
+            let r = try self.call0(f2, v)
+            if !isObject(r) {
+                return r
+            }
+        }
+        return self.typeError("Cannot convert object to primitive value")
+    }
+
+    /// Appends ToString(v).
+    pub fn appendString(self: *mut Self, b: *mut text.Builder, v: Value) JsError!void {
+        match v {
+            .Undefined => try b.append("undefined")
+            .Empty => try b.append("undefined")
+            .Null => try b.append("null")
+            .Bool { b: flag } => {
+                if flag {
+                    try b.append("true")
+                } else {
+                    try b.append("false")
+                }
+            }
+            .Num { n } => try formatNumber(b, n)
+            .Str { s } => try appendJoined(b, self.heap.bytes(s))
+            .Obj { .. } => {
+                let p = try self.toPrimitive(v, true)
+                try self.appendString(b, p)
+            }
+        }
+    }
+
+    /// ToString(v) as a string value.
+    pub fn toStringValue(self: *mut Self, v: Value) JsError!Value {
+        match v {
+            .Str { .. } => {
+                return v
+            }
+            .Undefined => {
+                return self.atomValue(A_UNDEFINED)
+            }
+            _ => {}
+        }
+        let b = try self.builder()
+        defer self.release(b)
+        try self.appendString(b, v)
+        return self.takeString(b)
+    }
+
+    pub fn toObject(self: *mut Self, v: Value) JsError!u32 {
+        match v {
+            .Obj { o: oid } => {
+                return oid
+            }
+            .Str { .. } => {
+                return self.newObjectOf(Class.String, self.string_proto, ObjData.Prim { v: v })
+            }
+            .Num { .. } => {
+                return self.newObjectOf(Class.Number, self.number_proto, ObjData.Prim { v: v })
+            }
+            .Bool { .. } => {
+                return self.newObjectOf(Class.Boolean, self.boolean_proto, ObjData.Prim { v: v })
+            }
+            _ => {
+                try self.typeError("Cannot convert undefined or null to object")
+                return NONE
+            }
+        }
+    }
+
+    // ---- operators
+
+    pub fn strictEquals(self: *Self, a: Value, b: Value) bool {
+        return match a {
+            .Undefined => isUndef(b)
+            .Empty => isUndef(b)
+            .Null => match b {
+                .Null => true
+                _ => false
+            }
+            .Bool { b: x } => match b {
+                .Bool { b: y } => x == y
+                _ => false
+            }
+            .Num { n: x } => match b {
+                .Num { n: y } => x == y
+                _ => false
+            }
+            .Str { s: x } => match b {
+                .Str { s: y } => x == y || text.eql(self.heap.bytes(x), self.heap.bytes(y))
+                _ => false
+            }
+            .Obj { o: x } => match b {
+                .Obj { o: y } => x == y
+                _ => false
+            }
+        }
+    }
+
+    /// SameValueZero (Array.prototype.includes, Map and Set keys).
+    pub fn sameValueZero(self: *Self, a: Value, b: Value) bool {
+        match a {
+            .Num { n: x } => {
+                match b {
+                    .Num { n: y } => {
+                        return x == y || (x != x && y != y)
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        return self.strictEquals(a, b)
+    }
+
+    pub fn looseEquals(self: *mut Self, a: Value, b: Value) JsError!bool {
+        if isNullish(a) || isNullish(b) {
+            return isNullish(a) && isNullish(b)
+        }
+        match a {
+            .Num { n: x } => {
+                match b {
+                    .Str { .. } => {
+                        return x == try self.toNumber(b)
+                    }
+                    _ => {}
+                }
+            }
+            .Str { .. } => {
+                match b {
+                    .Num { n: y } => {
+                        return try self.toNumber(a) == y
+                    }
+                    _ => {}
+                }
+            }
+            .Bool { .. } => {
+                let x = try self.toNumber(a)
+                return self.looseEquals(numVal(x), b)
+            }
+            _ => {}
+        }
+        match b {
+            .Bool { .. } => {
+                let y = try self.toNumber(b)
+                return self.looseEquals(a, numVal(y))
+            }
+            _ => {}
+        }
+        if isObject(a) && !isObject(b) {
+            let pa = try self.toPrimitive(a, false)
+            return self.looseEquals(pa, b)
+        }
+        if isObject(b) && !isObject(a) {
+            let pb = try self.toPrimitive(b, false)
+            return self.looseEquals(a, pb)
+        }
+        return self.strictEquals(a, b)
+    }
+
+    /// typeof v, as an atom.
+    pub fn typeOf(self: *Self, v: Value) []u8 {
+        return match v {
+            .Undefined => "undefined"
+            .Empty => "undefined"
+            .Null => "object"
+            .Bool { .. } => "boolean"
+            .Num { .. } => "number"
+            .Str { .. } => "string"
+            .Obj { o: oid } => objectTypeName(self.heap.obj(oid).class)
+        }
+    }
+
+    // a + b, with a and b on the stack (rooted).
+    pub fn add(self: *mut Self, a: Value, b: Value) JsError!Value {
+        match a {
+            .Num { n: x } => {
+                match b {
+                    .Num { n: y } => {
+                        return numVal(x + y)
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        let pa = try self.toPrimitive(a, false)
+        try self.push(pa)
+        let pb = try self.toPrimitive(b, false)
+        try self.push(pb)
+        defer self.truncate(self.stack.len() - 2)
+        if isStr(pa) || isStr(pb) {
+            let sb = try self.builder()
+            defer self.release(sb)
+            try self.appendString(sb, pa)
+            try self.appendString(sb, pb)
+            return self.takeString(sb)
+        }
+        let x = try self.toNumber(pa)
+        let y = try self.toNumber(pb)
+        return numVal(x + y)
+    }
+
+    // a < b (or b < a with `swap`); undefined (NaN) is false.
+    pub fn lessThan(self: *mut Self, a: Value, b: Value, swap: bool, orEqual: bool) JsError!bool {
+        var pa = a
+        var pb = b
+        if isObject(a) || isObject(b) {
+            pa = try self.toPrimitive(a, false)
+            try self.push(pa)
+            pb = try self.toPrimitive(b, false)
+            self.pop()
+        }
+        if swap {
+            let t = pa
+            pa = pb
+            pb = t
+        }
+        if isStr(pa) && isStr(pb) {
+            let c = compareBytes(self.heap.bytes(strOf(pa)), self.heap.bytes(strOf(pb)))
+            if orEqual {
+                return c <= 0
+            }
+            return c < 0
+        }
+        let x = try self.toNumber(pa)
+        let y = try self.toNumber(pb)
+        if orEqual {
+            return x <= y
+        }
+        return x < y
+    }
+
+    pub fn instanceOf(self: *mut Self, v: Value, c: Value) JsError!bool {
+        if !self.isCallable(c) {
+            try self.typeError("Right-hand side of 'instanceof' is not callable")
+        }
+        var ctor = c
+        match self.heap.obj(objectOf(c)).data {
+            .Bound { target, .. } => {
+                ctor = objVal(target)
+            }
+            _ => {}
+        }
+        let o = objectOf(v)
+        if o == NONE {
+            return false
+        }
+        let pv = try self.getProp(ctor, A_PROTOTYPE)
+        let proto = objectOf(pv)
+        if proto == NONE {
+            try self.typeError("Function has non-object prototype in instanceof check")
+        }
+        var cur = self.heap.obj(o).proto
+        while cur != NONE {
+            if cur == proto {
+                return true
+            }
+            cur = self.heap.obj(cur).proto
+        }
+        return false
+    }
+
+    // The arithmetic and bitwise operators on two values.
+    pub fn binary(self: *mut Self, op: Op, a: Value, b: Value) JsError!Value {
+        if op == Op.Add {
+            return self.add(a, b)
+        }
+        if op == Op.StrictEq {
+            return boolVal(self.strictEquals(a, b))
+        }
+        if op == Op.StrictNotEq {
+            return boolVal(!self.strictEquals(a, b))
+        }
+        if op == Op.Eq {
+            return boolVal(try self.looseEquals(a, b))
+        }
+        if op == Op.NotEq {
+            return boolVal(!try self.looseEquals(a, b))
+        }
+        if op == Op.Lt {
+            return boolVal(try self.lessThan(a, b, false, false))
+        }
+        if op == Op.Gt {
+            return boolVal(try self.lessThan(a, b, true, false))
+        }
+        if op == Op.Le {
+            return boolVal(try self.lessThan(a, b, false, true))
+        }
+        if op == Op.Ge {
+            return boolVal(try self.lessThan(a, b, true, true))
+        }
+        if op == Op.Instanceof {
+            return boolVal(try self.instanceOf(a, b))
+        }
+        if op == Op.In {
+            let o = objectOf(b)
+            if o == NONE {
+                let kb = try self.builder()
+                defer self.release(kb)
+                try self.appendString(kb, a)
+                return self.typeErrorAbout("Cannot use 'in' operator to search for '", kb.bytes(), "' in non-object")
+            }
+            let key = try self.toKey(a)
+            return boolVal(self.hasProperty(o, key))
+        }
+        let x = try self.toNumber(a)
+        let y = try self.toNumber(b)
+        return numVal(arith(op, x, y))
+    }
+
+    // ---- calls
+
+    pub fn call0(self: *mut Self, f: Value, thisv: Value) JsError!Value {
+        let base = self.stack.len()
+        try self.push(f)
+        try self.push(thisv)
+        return self.callAt(base, 0)
+    }
+
+    pub fn call1(self: *mut Self, f: Value, thisv: Value, a: Value) JsError!Value {
+        let base = self.stack.len()
+        try self.push(f)
+        try self.push(thisv)
+        try self.push(a)
+        return self.callAt(base, 1)
+    }
+
+    pub fn call2(self: *mut Self, f: Value, thisv: Value, a: Value, b: Value) JsError!Value {
+        let base = self.stack.len()
+        try self.push(f)
+        try self.push(thisv)
+        try self.push(a)
+        try self.push(b)
+        return self.callAt(base, 2)
+    }
+
+    pub fn call3(self: *mut Self, f: Value, thisv: Value, a: Value, b: Value, c: Value) JsError!Value {
+        let base = self.stack.len()
+        try self.push(f)
+        try self.push(thisv)
+        try self.push(a)
+        try self.push(b)
+        try self.push(c)
+        return self.callAt(base, 3)
+    }
+
+    /// Calls stack[base] with `this` stack[base + 1] and the argc values
+    /// after it, and pops them all.
+    pub fn callAt(self: *mut Self, base: usize, argc: usize) JsError!Value {
+        defer self.truncate(base)
+        let f = self.stack.items()[base]
+        let o = objectOf(f)
+        if o == NONE || self.heap.obj(o).class != Class.Function {
+            return self.notA(f, "a function")
+        }
+        match self.heap.obj(o).data {
+            .Closure { func, env, .. } => {
+                return self.invoke(func, env, o, self.slot(base + 1), base + 2, argc, NONE)
+            }
+            .Native { id } => {
+                let ne = self.natives.items()[id]
+                let a = Args { this: self.slot(base + 1), base: base + 2, argc: argc, callee: o, new_target: NONE }
+                return ne.f(self, a)
+            }
+            .Bound { .. } => {
+                return self.callBound(o, base, argc, NONE)
+            }
+            _ => {
+                return self.notA(f, "a function")
+            }
+        }
+    }
+
+    /// `new` stack[base](args...); pops the call's values.
+    pub fn constructAt(self: *mut Self, base: usize, argc: usize, newTarget: u32) JsError!Value {
+        defer self.truncate(base)
+        let f = self.stack.items()[base]
+        let o = objectOf(f)
+        if o == NONE || self.heap.obj(o).class != Class.Function {
+            return self.notA(f, "a constructor")
+        }
+        match self.heap.obj(o).data {
+            .Closure { func, env, .. } => {
+                let fi = self.ast.func(func)
+                if fi.arrow || fi.method {
+                    return self.notA(f, "a constructor")
+                }
+                let pv = try self.getProp(objVal(newTarget), A_PROTOTYPE)
+                var proto = objectOf(pv)
+                if proto == NONE {
+                    proto = self.object_proto
+                }
+                let thisObj = try self.newObject(proto)
+                self.setSlot(base + 1, objVal(thisObj))
+                if fi.ctor && !fi.derived {
+                    try self.initFields(o, thisObj)
+                }
+                let r = try self.invoke(func, env, o, objVal(thisObj), base + 2, argc, newTarget)
+                if isObject(r) {
+                    return r
+                }
+                return self.slot(base + 1)
+            }
+            .Native { id } => {
+                let ne = self.natives.items()[id]
+                let a = Args { this: Value.Undefined, base: base + 2, argc: argc, callee: o, new_target: newTarget }
+                return ne.f(self, a)
+            }
+            .Bound { target, .. } => {
+                var nt = newTarget
+                if nt == o {
+                    nt = target
+                }
+                return self.callBound(o, base, argc, nt)
+            }
+            _ => {
+                return self.notA(f, "a constructor")
+            }
+        }
+    }
+
+    // Calls (or constructs, newTarget != NONE) a bound function.
+    fn callBound(self: *mut Self, o: u32, base: usize, argc: usize, newTarget: u32) JsError!Value {
+        var target = NONE
+        var thisv = Value.Undefined
+        match self.heap.obj(o).data {
+            .Bound { target: t, this_v } => {
+                target = t
+                thisv = this_v
+            }
+            _ => {}
+        }
+        let nb = self.stack.len()
+        try self.push(objVal(target))
+        try self.push(thisv)
+        let nbound = self.heap.obj(o).nelems
+        for i in 0..nbound {
+            try self.push(self.heap.obj(o).elems[i])
+        }
+        for i in 0..argc {
+            try self.push(self.slot(base + 2 + i))
+        }
+        let n = nbound as usize + argc
+        if newTarget != NONE {
+            return self.constructAt(nb, n, newTarget)
+        }
+        return self.callAt(nb, n)
+    }
+
+    // Runs function `func` of the AST in a new environment under `penv`.
+    // The arguments are stack[argBase..argBase + argc].
+    fn invoke(self: *mut Self, func: u32, penv: u32, fobj: u32, thisv: Value, argBase: usize, argc: usize, newTarget: u32) JsError!Value {
+        let fi = self.ast.func(func)
+        if fi.ctor && newTarget == NONE {
+            return self.typeErrorAbout("Class constructor ", self.heap.atoms.name(fi.name), " cannot be invoked without 'new'")
+        }
+        if self.frames.len() >= MAX_DEPTH {
+            return self.rangeError("Maximum call stack size exceeded")
+        }
+        let nslots = self.ast.scopes.items()[fi.scope].nslots
+        let e = try self.newEnv(nslots, penv)
+        try self.frames.append(Frame { func: fobj, env: self.env })
+        let saved = self.env
+        self.env = e
+        defer {
+            self.env = saved
+            self.frames.pop()
+        }
+        if fi.this_slot != NONE {
+            self.heap.env(e).slots[fi.this_slot] = thisv
+        }
+        if fi.args_slot != NONE {
+            let ao = try self.newObjectOf(Class.Arguments, self.object_proto, ObjData.None)
+            self.heap.env(e).slots[fi.args_slot] = objVal(ao)
+            for i in 0..argc {
+                try self.heap.pushElem(ao, self.slot(argBase + i))
+            }
+        }
+        if fi.self_slot != NONE {
+            self.heap.env(e).slots[fi.self_slot] = objVal(fobj)
+        }
+        if fi.simple {
+            var k: u32 = 0
+            while k < fi.nparams && (k as usize) < argc {
+                self.heap.env(e).slots[fi.first_param + k] = self.slot(argBase + k as usize)
+                k += 1
+            }
+        } else {
+            try self.bindParams(fi, argBase, argc)
+        }
+        try self.hoist(fi.scope)
+        if fi.default_ctor {
+            if fi.derived {
+                let base = self.stack.len()
+                try self.push(objVal(self.heap.obj(fobj).proto))
+                try self.push(thisv)
+                for i in 0..argc {
+                    try self.push(self.slot(argBase + i))
+                }
+                try self.superConstruct(fobj, base, argc)
+            }
+            return Value.Undefined
+        }
+        if fi.expr != 0 {
+            return self.eval(fi.expr)
+        }
+        let flow = try self.execList(fi.body, fi.nbody)
+        if flow == Flow.Return {
+            let r = self.ret
+            self.ret = Value.Undefined
+            return r
+        }
+        return Value.Undefined
+    }
+
+    fn bindParams(self: *mut Self, fi: FuncInfo, argBase: usize, argc: usize) JsError!void {
+        for k in 0..fi.nparams {
+            let p = self.ast.item(fi.params, k)
+            match self.ast.node(p) {
+                .Rest { target } => {
+                    let a = try self.newArray(0)
+                    try self.push(objVal(a))
+                    var i = k as usize
+                    while i < argc {
+                        try self.heap.pushElem(a, self.slot(argBase + i))
+                        i += 1
+                    }
+                    try self.bindPattern(target, objVal(a), true)
+                    self.pop()
+                }
+                _ => {
+                    var v = Value.Undefined
+                    if (k as usize) < argc {
+                        v = self.slot(argBase + k as usize)
+                    }
+                    try self.bindPattern(p, v, true)
+                }
+            }
+        }
+    }
+
+    // Creates the functions declared in a scope that was just entered.
+    fn hoist(self: *mut Self, scope: u32) JsError!void {
+        let sc = self.ast.scopes.items()[scope]
+        for k in 0..sc.nfuncs {
+            match self.ast.node(self.ast.item(sc.funcs, k)) {
+                .FuncDecl { f, target } => {
+                    let v = try self.makeClosure(f)
+                    try self.push(v)
+                    try self.assignIdent(target, v, true)
+                    self.pop()
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // The non-arrow function whose code runs (for `super`), or NONE.
+    fn currentFunction(self: *Self) u32 {
+        let n = self.frames.len()
+        if n == 0 {
+            return NONE
+        }
+        let f = self.frames.items()[n - 1].func
+        if f == NONE {
+            return NONE
+        }
+        match self.heap.obj(f).data {
+            .Closure { func, outer, .. } => {
+                if self.ast.func(func).arrow {
+                    return outer
+                }
+            }
+            _ => {}
+        }
+        return f
+    }
+
+    pub fn makeClosure(self: *mut Self, f: u32) JsError!Value {
+        let fi = self.ast.func(f)
+        var outer = NONE
+        if fi.arrow {
+            outer = self.currentFunction()
+        }
+        let o = try self.newObjectOf(Class.Function, self.function_proto, ObjData.Closure { func: f, env: self.env, home: NONE, outer: outer })
+        if !fi.arrow && !fi.method && !fi.ctor {
+            try self.push(objVal(o))
+            let p = try self.newObject(self.object_proto)
+            try self.heap.addProp(p, A_CONSTRUCTOR, objVal(o), Value.Undefined, F_HIDDEN)
+            try self.heap.addProp(o, A_PROTOTYPE, objVal(p), Value.Undefined, F_WRITE)
+            self.pop()
+        }
+        return objVal(o)
+    }
+
+    fn setHome(self: *mut Self, m: u32, home: u32) {
+        match self.heap.obj(m).data {
+            .Closure { func, env, outer, .. } => {
+                self.heap.obj(m).data = ObjData.Closure { func: func, env: env, home: home, outer: outer }
+            }
+            _ => {}
+        }
+    }
+
+    fn homeOf(self: *Self, f: u32) u32 {
+        if f == NONE {
+            return NONE
+        }
+        return match self.heap.obj(f).data {
+            .Closure { home, .. } => home
+            _ => NONE
+        }
+    }
+
+    // Runs the instance field initializers of class constructor `ctor`
+    // on `thisObj` (which the caller keeps on the stack).
+    fn initFields(self: *mut Self, ctor: u32, thisObj: u32) JsError!void {
+        var func = NONE
+        var env = NONE
+        match self.heap.obj(ctor).data {
+            .Closure { func: fx, env: ex, .. } => {
+                func = fx
+                env = ex
+            }
+            _ => {
+                return
+            }
+        }
+        let fi = self.ast.func(func)
+        if fi.class_id == NONE {
+            return
+        }
+        let ci = self.ast.classes.items()[fi.class_id]
+        for k in 0..ci.n {
+            match self.ast.node(self.ast.item(ci.members, k)) {
+                .ClassElem { kind, is_static, key, value, .. } => {
+                    if kind == PROP_FIELD && !is_static {
+                        let v = try self.runField(value, env, objVal(thisObj))
+                        try self.defineOwn(thisObj, key, v, F_DEFAULT)
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn runField(self: *mut Self, value: u32, env: u32, thisv: Value) JsError!Value {
+        return match self.ast.node(value) {
+            .Func { f } => try self.invoke(f, env, NONE, thisv, self.stack.len(), 0, NONE)
+            _ => Value.Undefined
+        }
+    }
+
+    // super(...) of the derived constructor `fn`: stack[base] is the
+    // parent constructor, stack[base + 1] `this`.
+    fn superConstruct(self: *mut Self, fnObj: u32, base: usize, argc: usize) JsError!void {
+        defer self.truncate(base)
+        let pv = self.slot(base)
+        let thisv = self.slot(base + 1)
+        let p = objectOf(pv)
+        if p == NONE || self.heap.obj(p).class != Class.Function {
+            try self.typeError("Super constructor is not a constructor")
+        }
+        match self.heap.obj(p).data {
+            .Closure { func, env, .. } => {
+                let pfi = self.ast.func(func)
+                if pfi.ctor && !pfi.derived {
+                    try self.initFields(p, objectOf(thisv))
+                }
+                try self.invoke(func, env, p, thisv, base + 2, argc, p)
+            }
+            .Native { id } => {
+                let ne = self.natives.items()[id]
+                let a = Args { this: thisv, base: base + 2, argc: argc, callee: p, new_target: p }
+                try ne.f(self, a)
+            }
+            _ => {
+                try self.typeError("Super constructor is not a constructor")
+            }
+        }
+        try self.initFields(fnObj, objectOf(thisv))
+    }
+
+    fn evalClass(self: *mut Self, c: u32) JsError!Value {
+        let ci = self.ast.classes.items()[c]
+        let base = self.stack.len()
+        defer self.truncate(base)
+        var protoParent = self.object_proto
+        var ctorParent = self.function_proto
+        if ci.heritage != 0 {
+            let hv = try self.eval(ci.heritage)
+            try self.push(hv)
+            match hv {
+                .Null => {
+                    protoParent = NONE
+                }
+                _ => {
+                    if !self.isCallable(hv) {
+                        return self.typeErrorAbout("Class extends value ", self.ast.srcText(ci.heritage), " is not a constructor or null")
+                    }
+                    let pp = try self.getProp(hv, A_PROTOTYPE)
+                    protoParent = objectOf(pp)
+                    match pp {
+                        .Null => {}
+                        _ => {
+                            if protoParent == NONE {
+                                return self.typeError("Class extends value does not have valid prototype property")
+                            }
+                        }
+                    }
+                    ctorParent = objectOf(hv)
+                }
+            }
+        }
+        let proto = try self.newObject(protoParent)
+        try self.push(objVal(proto))
+        let ctor = try self.newObjectOf(Class.Function, ctorParent, ObjData.Closure { func: ci.ctor, env: self.env, home: proto, outer: NONE })
+        try self.push(objVal(ctor))
+        try self.heap.addProp(ctor, A_PROTOTYPE, objVal(proto), Value.Undefined, 0)
+        try self.heap.addProp(proto, A_CONSTRUCTOR, objVal(ctor), Value.Undefined, F_HIDDEN)
+        for k in 0..ci.n {
+            match self.ast.node(self.ast.item(ci.members, k)) {
+                .ClassElem { kind, is_static, key, computed, value } => {
+                    var target = proto
+                    if is_static {
+                        target = ctor
+                    }
+                    var atom = key
+                    if computed {
+                        let kv = try self.eval(key)
+                        atom = try self.toKey(kv)
+                    }
+                    if kind == PROP_FIELD {
+                        if is_static {
+                            let fv = try self.runField(value, self.env, objVal(ctor))
+                            try self.defineOwn(ctor, atom, fv, F_DEFAULT)
+                        }
+                        continue
+                    }
+                    let m = try self.eval(value)
+                    self.setHome(objectOf(m), target)
+                    try self.push(m)
+                    if kind == PROP_GET {
+                        try self.defineAccessor(target, atom, m, Value.Undefined, F_CONFIG)
+                    } else if kind == PROP_SET {
+                        try self.defineAccessor(target, atom, Value.Undefined, m, F_CONFIG)
+                    } else {
+                        try self.defineOwn(target, atom, m, F_HIDDEN)
+                    }
+                    self.pop()
+                }
+                _ => {}
+            }
+        }
+        return objVal(ctor)
+    }
+
+    // ---- identifiers
+
+    fn envAt(self: *Self, depth: u32) u32 {
+        var e = self.env
+        var d = depth
+        while d > 0 {
+            e = self.heap.envs.items()[e].parent
+            d -= 1
+        }
+        return e
+    }
+
+    fn readIdent(self: *mut Self, name: u32, depth: u32, slot: u32) JsError!Value {
+        if depth < DEPTH_GLOBAL_LEX {
+            let e = self.envAt(depth)
+            return self.heap.envs.items()[e].slots[slot]
+        }
+        if depth == DEPTH_GLOBAL_LEX {
+            return self.heap.envs.items()[self.glex].slots[slot]
+        }
+        if name == A_THIS || name == A_UNDEFINED {
+            return Value.Undefined
+        }
+        if !self.hasProperty(self.global, name) {
+            return self.typeErrorRef(name)
+        }
+        return self.getFrom(self.global, name, objVal(self.global))
+    }
+
+    fn typeErrorRef(self: *mut Self, name: u32) JsError!Value {
+        self.msg.clear()
+        try self.msg.append(self.heap.atoms.name(name))
+        try self.msg.append(" is not defined")
+        let e = try self.makeError(self.reference_error_proto, self.msg.bytes())
+        return self.throwValue(e)
+    }
+
+    // Assigns to the variable of Ident node `id`; `init` for declarations
+    // (a const may be initialized).
+    pub fn assignIdent(self: *mut Self, id: u32, v: Value, init: bool) JsError!void {
+        match self.ast.node(id) {
+            .Ident { name, depth, slot, flags } => {
+                if !init && (flags & IDENT_CONST) != 0 {
+                    try self.typeError("Assignment to constant variable.")
+                }
+                if depth < DEPTH_GLOBAL_LEX {
+                    let e = self.envAt(depth)
+                    self.heap.envs.items()[e].slots[slot] = v
+                } else if depth == DEPTH_GLOBAL_LEX {
+                    self.heap.envs.items()[self.glex].slots[slot] = v
+                } else {
+                    try self.setOn(self.global, name, v, objVal(self.global))
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // ---- expressions
+
+    pub fn eval(self: *mut Self, id: u32) JsError!Value {
+        match self.ast.nodes.items()[id] {
+            .Ident { name, depth, slot, .. } => {
+                return self.readIdent(name, depth, slot)
+            }
+            .Num { v } => {
+                return numVal(v)
+            }
+            .Str { atom } => {
+                return self.atomValue(atom)
+            }
+            .Null => {
+                return Value.Null
+            }
+            .True => {
+                return boolVal(true)
+            }
+            .False => {
+                return boolVal(false)
+            }
+            .Template { list, n } => {
+                return self.evalTemplate(list, n)
+            }
+            .Regex { pattern, flags } => {
+                return newRegExp(self, pattern, flags)
+            }
+            .ArrayLit { list, n } => {
+                return self.evalArray(list, n)
+            }
+            .ObjectLit { list, n } => {
+                return self.evalObject(list, n)
+            }
+            .Func { f } => {
+                return self.makeClosure(f)
+            }
+            .Class { c } => {
+                return self.evalClass(c)
+            }
+            .Unary { op, arg } => {
+                return self.evalUnary(op, arg)
+            }
+            .Update { inc, prefix, arg } => {
+                return self.evalUpdate(inc, prefix, arg)
+            }
+            .Binary { op, l, r } => {
+                let base = self.stack.len()
+                let a = try self.eval(l)
+                try self.push(a)
+                let b = try self.eval(r)
+                match a {
+                    .Num { n: x } => {
+                        match b {
+                            .Num { n: y } => {
+                                if fastNumeric(op, x, y) |fv| {
+                                    self.truncate(base)
+                                    return fv
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+                try self.push(b)
+                let res = try self.binary(op, a, b)
+                self.truncate(base)
+                return res
+            }
+            .Logical { op, l, r } => {
+                let a = try self.eval(l)
+                if op == Op.And {
+                    if !self.toBoolean(a) {
+                        return a
+                    }
+                } else if op == Op.Or {
+                    if self.toBoolean(a) {
+                        return a
+                    }
+                } else if !isNullish(a) {
+                    return a
+                }
+                return self.eval(r)
+            }
+            .Assign { op, target, value } => {
+                return self.evalAssign(op, target, value)
+            }
+            .Cond { cond, cons, alt } => {
+                let t = try self.eval(cond)
+                if self.toBoolean(t) {
+                    return self.eval(cons)
+                }
+                return self.eval(alt)
+            }
+            .Call { callee, list, n, optional } => {
+                let base = self.stack.len()
+                try self.evalCallee(callee)
+                if optional && isNullish(self.slot(base)) {
+                    self.truncate(base)
+                    return JsError.ShortCircuit
+                }
+                let argc = try self.pushArgs(list, n)
+                if !self.isCallable(self.slot(base)) {
+                    self.truncate(base)
+                    return self.typeErrorAbout("", self.ast.srcText(callee), " is not a function")
+                }
+                return self.callAt(base, argc)
+            }
+            .New { callee, list, n } => {
+                let base = self.stack.len()
+                let f = try self.eval(callee)
+                try self.push(f)
+                try self.push(Value.Undefined)
+                let argc = try self.pushArgs(list, n)
+                if !self.isCallable(f) {
+                    self.truncate(base)
+                    return self.typeErrorAbout("", self.ast.srcText(callee), " is not a constructor")
+                }
+                return self.constructAt(base, argc, objectOf(f))
+            }
+            .Member { obj, name, optional } => {
+                let o = try self.eval(obj)
+                if optional && isNullish(o) {
+                    return JsError.ShortCircuit
+                }
+                return self.getProp(o, name)
+            }
+            .Index { obj, key, optional } => {
+                let base = self.stack.len()
+                let o = try self.eval(obj)
+                if optional && isNullish(o) {
+                    return JsError.ShortCircuit
+                }
+                try self.push(o)
+                let k = try self.eval(key)
+                try self.push(k)
+                let r = try self.getIndex(o, k)
+                self.truncate(base)
+                return r
+            }
+            .OptChain { e } => {
+                let base = self.stack.len()
+                return self.eval(e) catch |err| try self.shortCircuit(err, base)
+            }
+            .Seq { list, n } => {
+                var last = Value.Undefined
+                for k in 0..n {
+                    last = try self.eval(self.ast.item(list, k))
+                }
+                return last
+            }
+            .SuperCall { list, n, this_node } => {
+                let thisv = try self.eval(this_node)
+                let fnObj = self.currentFunction()
+                if fnObj == NONE {
+                    return self.typeError("'super' keyword unexpected here")
+                }
+                let base = self.stack.len()
+                let parent = self.heap.obj(fnObj).proto
+                if parent == NONE {
+                    try self.push(Value.Null)
+                } else {
+                    try self.push(objVal(parent))
+                }
+                try self.push(thisv)
+                let argc = try self.pushArgs(list, n)
+                try self.superConstruct(fnObj, base, argc)
+                return Value.Undefined
+            }
+            .SuperMember { name, this_node } => {
+                let thisv = try self.eval(this_node)
+                return self.superGet(name, thisv)
+            }
+            .SuperIndex { key, this_node } => {
+                let base = self.stack.len()
+                let thisv = try self.eval(this_node)
+                try self.push(thisv)
+                let k = try self.eval(key)
+                let atom = try self.toKey(k)
+                self.truncate(base)
+                return self.superGet(atom, thisv)
+            }
+            .Hole => {
+                return Value.Undefined
+            }
+            _ => {
+                return self.typeError("unsupported expression")
+            }
+        }
+    }
+
+    fn shortCircuit(self: *mut Self, err: JsError, base: usize) JsError!Value {
+        match err {
+            .ShortCircuit => {
+                self.truncate(base)
+                return Value.Undefined
+            }
+            .Thrown => {
+                return JsError.Thrown
+            }
+            .OutOfMemory => {
+                return JsError.OutOfMemory
+            }
+        }
+    }
+
+    fn superGet(self: *mut Self, name: u32, thisv: Value) JsError!Value {
+        let home = self.homeOf(self.currentFunction())
+        if home == NONE {
+            return self.typeError("'super' keyword unexpected here")
+        }
+        let proto = self.heap.obj(home).proto
+        if proto == NONE {
+            return Value.Undefined
+        }
+        return self.getFrom(proto, name, thisv)
+    }
+
+    // Pushes the function and `this` of a call.
+    fn evalCallee(self: *mut Self, callee: u32) JsError!void {
+        let base = self.stack.len()
+        match self.ast.node(callee) {
+            .Member { obj, name, optional } => {
+                let o = try self.eval(obj)
+                if optional && isNullish(o) {
+                    return JsError.ShortCircuit
+                }
+                try self.push(Value.Undefined)
+                try self.push(o)
+                let f = try self.getProp(o, name)
+                self.setSlot(base, f)
+            }
+            .Index { obj, key, optional } => {
+                let o = try self.eval(obj)
+                if optional && isNullish(o) {
+                    return JsError.ShortCircuit
+                }
+                try self.push(Value.Undefined)
+                try self.push(o)
+                let k = try self.eval(key)
+                try self.push(k)
+                let f = try self.getIndex(o, k)
+                self.pop()
+                self.setSlot(base, f)
+            }
+            .SuperMember { name, this_node } => {
+                let thisv = try self.eval(this_node)
+                try self.push(Value.Undefined)
+                try self.push(thisv)
+                let f = try self.superGet(name, thisv)
+                self.setSlot(base, f)
+            }
+            _ => {
+                let f = try self.eval(callee)
+                try self.push(f)
+                try self.push(Value.Undefined)
+            }
+        }
+    }
+
+    // Pushes the values of an argument list (spreading `...x`); returns
+    // their count.
+    fn pushArgs(self: *mut Self, list: u32, n: u32) JsError!usize {
+        let start = self.stack.len()
+        for k in 0..n {
+            let a = self.ast.item(list, k)
+            match self.ast.node(a) {
+                .Spread { arg } => {
+                    let v = try self.eval(arg)
+                    try self.push(v)
+                    let arr = try self.iterToArray(v)
+                    let at = self.stack.len() - 1
+                    let cnt = self.heap.obj(arr).nelems
+                    // Replace the spread value by its elements.
+                    self.pop()
+                    try self.push(objVal(arr))
+                    for i in 0..cnt {
+                        try self.push(holeToUndef(self.heap.obj(arr).elems[i]))
+                    }
+                    // Move the elements down over the array.
+                    for i in 0..cnt as usize {
+                        self.setSlot(at + i, self.slot(at + 1 + i))
+                    }
+                    self.pop()
+                }
+                _ => {
+                    let v = try self.eval(a)
+                    try self.push(v)
+                }
+            }
+        }
+        return self.stack.len() - start
+    }
+
+    /// The values of an iterable (arrays, strings, arguments, Map, Set) as
+    /// an array (an array itself is returned as it is).
+    pub fn iterToArray(self: *mut Self, v: Value) JsError!u32 {
+        match v {
+            .Obj { o: oid } => {
+                let cls = self.heap.obj(oid).class
+                if cls == Class.Array {
+                    return oid
+                }
+                if cls == Class.Arguments || cls == Class.Set {
+                    try self.push(v)
+                    let a = try self.newArray(0)
+                    let cnt = self.heap.obj(oid).nelems
+                    for i in 0..cnt {
+                        let e = self.heap.obj(oid).elems[i]
+                        match e {
+                            .Empty => {
+                                if cls == Class.Arguments {
+                                    try self.heap.pushElem(a, Value.Undefined)
+                                }
+                            }
+                            _ => try self.heap.pushElem(a, e)
+                        }
+                    }
+                    self.pop()
+                    return a
+                }
+                if cls == Class.Map {
+                    return mapEntries(self, oid)
+                }
+            }
+            .Str { s } => {
+                try self.push(v)
+                let a = try self.newArray(0)
+                try self.push(objVal(a))
+                var i: usize = 0
+                while i < self.heap.bytes(s).len {
+                    let d = decodeAt(self.heap.bytes(s), i)
+                    let a2 = try self.intern(self.heap.bytes(s)[i..i + d.len])
+                    let cs = try self.atomValue(a2)
+                    try self.heap.pushElem(a, cs)
+                    i += d.len
+                }
+                self.pop()
+                self.pop()
+                return a
+            }
+            _ => {}
+        }
+        try self.notA(v, "iterable")
+        return NONE
+    }
+
+    fn evalTemplate(self: *mut Self, list: u32, n: u32) JsError!Value {
+        let b = try self.builder()
+        defer self.release(b)
+        for k in 0..n + 1 {
+            try appendJoined(b, self.heap.atoms.name(self.ast.item(list, k)))
+            if k < n {
+                let v = try self.eval(self.ast.item(list, n + 1 + k))
+                try self.appendString(b, v)
+            }
+        }
+        return self.takeString(b)
+    }
+
+    fn evalArray(self: *mut Self, list: u32, n: u32) JsError!Value {
+        let a = try self.newArray(0)
+        try self.push(objVal(a))
+        for k in 0..n {
+            let el = self.ast.item(list, k)
+            match self.ast.node(el) {
+                .Hole => try self.heap.pushElem(a, Value.Empty)
+                .Spread { arg } => {
+                    let v = try self.eval(arg)
+                    try self.push(v)
+                    let src = try self.iterToArray(v)
+                    let cnt = self.heap.obj(src).nelems
+                    for i in 0..cnt {
+                        try self.heap.pushElem(a, holeToUndef(self.heap.obj(src).elems[i]))
+                    }
+                    self.pop()
+                }
+                _ => {
+                    let v = try self.eval(el)
+                    try self.heap.pushElem(a, v)
+                }
+            }
+        }
+        return self.pop()
+    }
+
+    fn evalObject(self: *mut Self, list: u32, n: u32) JsError!Value {
+        let o = try self.newObject(self.object_proto)
+        try self.push(objVal(o))
+        for k in 0..n {
+            match self.ast.node(self.ast.item(list, k)) {
+                .Prop { kind, key, computed, value } => {
+                    if kind == PROP_SPREAD {
+                        let v = try self.eval(value)
+                        try self.push(v)
+                        try self.copyDataProps(o, v)
+                        self.pop()
+                        continue
+                    }
+                    var atom = key
+                    if computed {
+                        let kv = try self.eval(key)
+                        atom = try self.toKey(kv)
+                    }
+                    let v = try self.eval(value)
+                    if kind != PROP_INIT {
+                        self.setHome(objectOf(v), o)
+                    }
+                    if kind == PROP_GET {
+                        try self.defineAccessor(o, atom, v, Value.Undefined, F_ENUM | F_CONFIG)
+                    } else if kind == PROP_SET {
+                        try self.defineAccessor(o, atom, Value.Undefined, v, F_ENUM | F_CONFIG)
+                    } else if kind == PROP_INIT && !computed && atom == A_PROTO {
+                        match v {
+                            .Obj { o: p } => {
+                                self.heap.obj(o).proto = p
+                            }
+                            .Null => {
+                                self.heap.obj(o).proto = NONE
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        try self.defineOwn(o, atom, v, F_DEFAULT)
+                    }
+                }
+                _ => {}
+            }
+        }
+        return self.pop()
+    }
+
+    /// Copies the own enumerable properties of v to object `to` (object
+    /// spread, Object.assign).
+    pub fn copyDataProps(self: *mut Self, to: u32, v: Value) JsError!void {
+        if isNullish(v) {
+            return
+        }
+        let keys = try self.keyList()
+        defer self.releaseKeys(keys)
+        let base = self.stack.len()
+        defer self.truncate(base)
+        match v {
+            .Str { s } => {
+                let wrapper = try self.toObject(v)
+                try self.push(objVal(wrapper))
+                try self.ownKeys(wrapper, keys, false)
+            }
+            .Obj { o: from } => {
+                try self.ownKeys(from, keys, false)
+            }
+            _ => {
+                return
+            }
+        }
+        for key in keys.items() {
+            let pv = try self.getProp(v, key)
+            try self.defineOwn(to, key, pv, F_DEFAULT)
+        }
+    }
+
+    fn evalUnary(self: *mut Self, op: Op, arg: u32) JsError!Value {
+        if op == Op.Typeof {
+            match self.ast.node(arg) {
+                .Ident { name, depth, .. } => {
+                    if depth == DEPTH_GLOBAL && name != A_THIS && !self.hasProperty(self.global, name) {
+                        return self.atomValue(A_UNDEFINED)
+                    }
+                }
+                _ => {}
+            }
+            let v = try self.eval(arg)
+            let a = try self.intern(self.typeOf(v))
+            return self.atomValue(a)
+        }
+        if op == Op.Delete {
+            match self.ast.node(arg) {
+                .Member { obj, name, .. } => {
+                    let o = try self.eval(obj)
+                    if !isObject(o) {
+                        return boolVal(true)
+                    }
+                    return boolVal(try self.deleteProp(objectOf(o), name))
+                }
+                .Index { obj, key, .. } => {
+                    let base = self.stack.len()
+                    let o = try self.eval(obj)
+                    try self.push(o)
+                    let k = try self.eval(key)
+                    let atom = try self.toKey(k)
+                    self.truncate(base)
+                    if !isObject(o) {
+                        return boolVal(true)
+                    }
+                    return boolVal(try self.deleteProp(objectOf(o), atom))
+                }
+                .Ident { .. } => {
+                    return boolVal(false)
+                }
+                _ => {
+                    try self.eval(arg)
+                    return boolVal(true)
+                }
+            }
+        }
+        let v = try self.eval(arg)
+        if op == Op.Void {
+            return Value.Undefined
+        }
+        if op == Op.Not {
+            return boolVal(!self.toBoolean(v))
+        }
+        let x = try self.toNumber(v)
+        if op == Op.Neg {
+            return numVal(-x)
+        }
+        if op == Op.BitNot {
+            return numVal((~toInt32(x)) as f64)
+        }
+        return numVal(x)
+    }
+
+    fn evalUpdate(self: *mut Self, inc: bool, prefix: bool, arg: u32) JsError!Value {
+        var delta = 1.0
+        if !inc {
+            delta = -1.0
+        }
+        let base = self.stack.len()
+        defer self.truncate(base)
+        match self.ast.node(arg) {
+            .Ident { name, depth, slot, .. } => {
+                let old = try self.toNumber(try self.readIdent(name, depth, slot))
+                try self.assignIdent(arg, numVal(old + delta), false)
+                if prefix {
+                    return numVal(old + delta)
+                }
+                return numVal(old)
+            }
+            .Member { obj, name, .. } => {
+                let o = try self.eval(obj)
+                try self.push(o)
+                let old = try self.toNumber(try self.getProp(o, name))
+                try self.setProp(o, name, numVal(old + delta))
+                if prefix {
+                    return numVal(old + delta)
+                }
+                return numVal(old)
+            }
+            .Index { obj, key, .. } => {
+                let o = try self.eval(obj)
+                try self.push(o)
+                let k = try self.eval(key)
+                try self.push(k)
+                let old = try self.toNumber(try self.getIndex(o, k))
+                try self.setIndex(o, k, numVal(old + delta))
+                if prefix {
+                    return numVal(old + delta)
+                }
+                return numVal(old)
+            }
+            _ => {
+                return self.typeError("Invalid left-hand side expression in postfix operation")
+            }
+        }
+    }
+
+    // For `a op= b`: is a's value final (logical assignment short-circuits)?
+    fn logicalDone(self: *Self, op: Op, cur: Value) bool {
+        if op == Op.And {
+            return !self.toBoolean(cur)
+        }
+        if op == Op.Or {
+            return self.toBoolean(cur)
+        }
+        if op == Op.Nullish {
+            return !isNullish(cur)
+        }
+        return false
+    }
+
+    fn isLogicalOp(op: Op) bool {
+        return op == Op.And || op == Op.Or || op == Op.Nullish
+    }
+
+    fn evalAssign(self: *mut Self, op: Op, target: u32, value: u32) JsError!Value {
+        let base = self.stack.len()
+        defer self.truncate(base)
+        match self.ast.node(target) {
+            .Ident { name, depth, slot, .. } => {
+                if op == Op.None {
+                    let v = try self.eval(value)
+                    try self.assignIdent(target, v, false)
+                    return v
+                }
+                let cur = try self.readIdent(name, depth, slot)
+                if self.logicalDone(op, cur) {
+                    return cur
+                }
+                try self.push(cur)
+                let rhs = try self.eval(value)
+                var r = rhs
+                if !Interp.isLogicalOp(op) {
+                    try self.push(rhs)
+                    r = try self.binary(op, cur, rhs)
+                }
+                try self.assignIdent(target, r, false)
+                return r
+            }
+            .Member { obj, name, .. } => {
+                let o = try self.eval(obj)
+                try self.push(o)
+                if op == Op.None {
+                    let v = try self.eval(value)
+                    try self.push(v)
+                    try self.setProp(o, name, v)
+                    return v
+                }
+                let cur = try self.getProp(o, name)
+                if self.logicalDone(op, cur) {
+                    return cur
+                }
+                try self.push(cur)
+                let rhs = try self.eval(value)
+                try self.push(rhs)
+                var r = rhs
+                if !Interp.isLogicalOp(op) {
+                    r = try self.binary(op, cur, rhs)
+                    try self.push(r)
+                }
+                try self.setProp(o, name, r)
+                return r
+            }
+            .Index { obj, key, .. } => {
+                let o = try self.eval(obj)
+                try self.push(o)
+                let k = try self.eval(key)
+                try self.push(k)
+                if op == Op.None {
+                    let v = try self.eval(value)
+                    try self.push(v)
+                    try self.setIndex(o, k, v)
+                    return v
+                }
+                let cur = try self.getIndex(o, k)
+                if self.logicalDone(op, cur) {
+                    return cur
+                }
+                try self.push(cur)
+                let rhs = try self.eval(value)
+                try self.push(rhs)
+                var r = rhs
+                if !Interp.isLogicalOp(op) {
+                    r = try self.binary(op, cur, rhs)
+                    try self.push(r)
+                }
+                try self.setIndex(o, k, r)
+                return r
+            }
+            _ => {
+                let v = try self.eval(value)
+                try self.push(v)
+                try self.bindPattern(target, v, false)
+                return v
+            }
+        }
+    }
+
+    // ---- patterns
+
+    /// Binds (init) or assigns the target pattern p to v; the caller keeps
+    /// v reachable (on the stack or in an object).
+    pub fn bindPattern(self: *mut Self, p: u32, v: Value, init: bool) JsError!void {
+        match self.ast.node(p) {
+            .Ident { .. } => {
+                return self.assignIdent(p, v, init)
+            }
+            .Member { obj, name, .. } => {
+                try self.push(v)
+                let o = try self.eval(obj)
+                try self.push(o)
+                try self.setProp(o, name, v)
+                self.pop()
+                self.pop()
+            }
+            .Index { obj, key, .. } => {
+                let base = self.stack.len()
+                try self.push(v)
+                let o = try self.eval(obj)
+                try self.push(o)
+                let k = try self.eval(key)
+                try self.push(k)
+                try self.setIndex(o, k, v)
+                self.truncate(base)
+            }
+            .Default { target, init: d } => {
+                if isUndef(v) {
+                    let dv = try self.eval(d)
+                    try self.push(dv)
+                    try self.bindPattern(target, dv, init)
+                    self.pop()
+                    return
+                }
+                return self.bindPattern(target, v, init)
+            }
+            .ArrayPat { list, n } => {
+                if isNullish(v) {
+                    try self.notA(v, "iterable")
+                }
+                let base = self.stack.len()
+                defer self.truncate(base)
+                try self.push(v)
+                let arr = try self.iterToArray(v)
+                try self.push(objVal(arr))
+                for k in 0..n {
+                    let el = self.ast.item(list, k)
+                    match self.ast.node(el) {
+                        .Hole => {}
+                        .Rest { target } => {
+                            let rest = try self.newArray(0)
+                            try self.push(objVal(rest))
+                            var i = k
+                            while i < self.heap.obj(arr).nelems {
+                                try self.heap.pushElem(rest, holeToUndef(self.heap.obj(arr).elems[i]))
+                                i += 1
+                            }
+                            try self.bindPattern(target, objVal(rest), init)
+                            self.pop()
+                        }
+                        _ => {
+                            var ev = Value.Undefined
+                            if k < self.heap.obj(arr).nelems {
+                                ev = holeToUndef(self.heap.obj(arr).elems[k])
+                            }
+                            try self.push(ev)
+                            try self.bindPattern(el, ev, init)
+                            self.pop()
+                        }
+                    }
+                }
+            }
+            .ObjectPat { list, n } => {
+                if isNullish(v) {
+                    self.msg.clear()
+                    try self.msg.append("Cannot destructure '")
+                    try self.appendString(&mut self.msg, v)
+                    try self.msg.append("' as it is ")
+                    try self.appendString(&mut self.msg, v)
+                    try self.msg.append(".")
+                    let e = try self.makeError(self.type_error_proto, self.msg.bytes())
+                    try self.throwValue(e)
+                }
+                let used = try self.keyList()
+                defer self.releaseKeys(used)
+                let base = self.stack.len()
+                defer self.truncate(base)
+                try self.push(v)
+                for k in 0..n {
+                    match self.ast.node(self.ast.item(list, k)) {
+                        .PatProp { key, computed, value } => {
+                            var atom = key
+                            if computed {
+                                let kv = try self.eval(key)
+                                atom = try self.toKey(kv)
+                            }
+                            try used.append(atom)
+                            let pv = try self.getProp(v, atom)
+                            try self.push(pv)
+                            try self.bindPattern(value, pv, init)
+                            self.pop()
+                        }
+                        .Rest { target } => {
+                            let o = try self.newObject(self.object_proto)
+                            try self.push(objVal(o))
+                            let keys = try self.keyList()
+                            defer self.releaseKeys(keys)
+                            let src = try self.toObject(v)
+                            try self.push(objVal(src))
+                            try self.ownKeys(src, keys, false)
+                            for key in keys.items() {
+                                var skip = false
+                                for u in used.items() {
+                                    if u == key {
+                                        skip = true
+                                    }
+                                }
+                                if !skip {
+                                    let pv = try self.getProp(v, key)
+                                    try self.defineOwn(o, key, pv, F_DEFAULT)
+                                }
+                            }
+                            self.pop()
+                            try self.bindPattern(target, objVal(o), init)
+                            self.pop()
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {
+                try self.typeError("Invalid destructuring assignment target")
+            }
+        }
+    }
+
+    // ---- statements
+
+    pub fn execList(self: *mut Self, list: u32, n: u32) JsError!Flow {
+        for k in 0..n {
+            let flow = try self.exec(self.ast.item(list, k))
+            if flow != Flow.Normal {
+                return flow
+            }
+        }
+        return Flow.Normal
+    }
+
+    pub fn exec(self: *mut Self, id: u32) JsError!Flow {
+        match self.ast.nodes.items()[id] {
+            .ExprStmt { e } => {
+                try self.eval(e)
+                return Flow.Normal
+            }
+            .VarDecl { kind, list, n } => {
+                for k in 0..n {
+                    match self.ast.node(self.ast.item(list, k)) {
+                        .Declarator { target, init } => {
+                            if init != 0 {
+                                let v = try self.eval(init)
+                                try self.push(v)
+                                try self.bindPattern(target, v, kind != DECL_VAR)
+                                self.pop()
+                            } else if kind != DECL_VAR {
+                                try self.bindPattern(target, Value.Undefined, true)
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                return Flow.Normal
+            }
+            .ClassDecl { c, target } => {
+                let v = try self.evalClass(c)
+                try self.push(v)
+                try self.assignIdent(target, v, true)
+                self.pop()
+                return Flow.Normal
+            }
+            .Return { arg } => {
+                if arg == 0 {
+                    self.ret = Value.Undefined
+                } else {
+                    self.ret = try self.eval(arg)
+                }
+                return Flow.Return
+            }
+            .If { cond, cons, alt } => {
+                let t = try self.eval(cond)
+                if self.toBoolean(t) {
+                    return self.exec(cons)
+                }
+                if alt != 0 {
+                    return self.exec(alt)
+                }
+                return Flow.Normal
+            }
+            .Block { list, n, scope } => {
+                return self.execBlock(list, n, scope)
+            }
+            .For { init, cond, update, body, scope } => {
+                return self.execFor(init, cond, update, body, scope, 0)
+            }
+            .ForIn { left, right, body, scope, of } => {
+                return self.execForIn(left, right, body, scope, of, 0)
+            }
+            .While { cond, body } => {
+                return self.execWhile(cond, body, false, 0)
+            }
+            .DoWhile { body, cond } => {
+                return self.execWhile(cond, body, true, 0)
+            }
+            .Break { label } => {
+                self.label = label
+                return Flow.Break
+            }
+            .Continue { label } => {
+                self.label = label
+                return Flow.Continue
+            }
+            .Throw { arg } => {
+                let v = try self.eval(arg)
+                self.exception = v
+                return JsError.Thrown
+            }
+            .Try { block, param, handler, finalizer, scope } => {
+                return self.execTry(block, param, handler, finalizer, scope)
+            }
+            .Switch { disc, list, n, scope } => {
+                return self.execSwitch(disc, list, n, scope)
+            }
+            .Labeled { label, body } => {
+                return self.execLabeled(label, body)
+            }
+            _ => {
+                return Flow.Normal
+            }
+        }
+    }
+
+    fn execLabeled(self: *mut Self, label: u32, body: u32) JsError!Flow {
+        var flow = Flow.Normal
+        match self.ast.node(body) {
+            .For { init, cond, update, body: b, scope } => {
+                flow = try self.execFor(init, cond, update, b, scope, label)
+            }
+            .ForIn { left, right, body: b, scope, of } => {
+                flow = try self.execForIn(left, right, b, scope, of, label)
+            }
+            .While { cond, body: b } => {
+                flow = try self.execWhile(cond, b, false, label)
+            }
+            .DoWhile { body: b, cond } => {
+                flow = try self.execWhile(cond, b, true, label)
+            }
+            _ => {
+                flow = try self.exec(body)
+            }
+        }
+        if flow == Flow.Break && self.label == label {
+            self.label = 0
+            return Flow.Normal
+        }
+        return flow
+    }
+
+    // What a loop does after its body: 0 go on, 1 leave the loop, 2 leave
+    // with `flow`.
+    fn loopControl(self: *mut Self, flow: Flow, myLabel: u32) u32 {
+        if flow == Flow.Normal {
+            return 0
+        }
+        if flow == Flow.Break {
+            if self.label == 0 || self.label == myLabel {
+                self.label = 0
+                return 1
+            }
+            return 2
+        }
+        if flow == Flow.Continue {
+            if self.label == 0 || self.label == myLabel {
+                self.label = 0
+                return 0
+            }
+            return 2
+        }
+        return 2
+    }
+
+    fn execBlock(self: *mut Self, list: u32, n: u32, scope: u32) JsError!Flow {
+        let sc = self.ast.scopes.items()[scope]
+        if sc.nslots == 0 {
+            if sc.nfuncs > 0 {
+                try self.hoist(scope)
+            }
+            return self.execList(list, n)
+        }
+        let e = try self.newEnv(sc.nslots, self.env)
+        let saved = self.env
+        self.env = e
+        defer self.env = saved
+        try self.hoist(scope)
+        return self.execList(list, n)
+    }
+
+    fn execWhile(self: *mut Self, cond: u32, body: u32, doFirst: bool, myLabel: u32) JsError!Flow {
+        var first = doFirst
+        while true {
+            if !first {
+                let t = try self.eval(cond)
+                if !self.toBoolean(t) {
+                    break
+                }
+            }
+            first = false
+            let flow = try self.exec(body)
+            let c = self.loopControl(flow, myLabel)
+            if c == 1 {
+                break
+            }
+            if c == 2 {
+                return flow
+            }
+        }
+        return Flow.Normal
+    }
+
+    fn execFor(self: *mut Self, init: u32, cond: u32, update: u32, body: u32, scope: u32, myLabel: u32) JsError!Flow {
+        let nslots = self.ast.scopes.items()[scope].nslots
+        let copies = self.ast.scopes.items()[scope].closures
+        let saved = self.env
+        defer self.env = saved
+        if nslots > 0 {
+            self.env = try self.newEnv(nslots, saved)
+        }
+        if init != 0 {
+            match self.ast.node(init) {
+                .VarDecl { .. } => {
+                    try self.exec(init)
+                }
+                _ => {
+                    try self.eval(init)
+                }
+            }
+        }
+        while true {
+            if cond != 0 {
+                let t = try self.eval(cond)
+                if !self.toBoolean(t) {
+                    break
+                }
+            }
+            let flow = try self.exec(body)
+            let c = self.loopControl(flow, myLabel)
+            if c == 1 {
+                break
+            }
+            if c == 2 {
+                return flow
+            }
+            if nslots > 0 && copies {
+                // A fresh copy of the loop variables for each iteration,
+                // so closures see the value of their own iteration.
+                let ne = try self.newEnv(nslots, saved)
+                for i in 0..nslots {
+                    self.heap.envs.items()[ne].slots[i] = self.heap.envs.items()[self.env].slots[i]
+                }
+                self.env = ne
+            }
+            if update != 0 {
+                try self.eval(update)
+            }
+        }
+        return Flow.Normal
+    }
+
+    // Binds the loop variable of a for-in/of iteration in a fresh scope.
+    fn bindIteration(self: *mut Self, left: u32, v: Value, nslots: u32, saved: u32) JsError!void {
+        if nslots > 0 {
+            try self.push(v)
+            self.env = try self.newEnv(nslots, saved)
+            self.pop()
+        }
+        match self.ast.node(left) {
+            .VarDecl { kind, list, .. } => {
+                match self.ast.node(self.ast.item(list, 0)) {
+                    .Declarator { target, .. } => try self.bindPattern(target, v, kind != DECL_VAR)
+                    _ => {}
+                }
+            }
+            _ => try self.bindPattern(left, v, false)
+        }
+    }
+
+    fn execForIn(self: *mut Self, left: u32, right: u32, body: u32, scope: u32, isOf: bool, myLabel: u32) JsError!Flow {
+        let nslots = self.ast.scopes.items()[scope].nslots
+        let base = self.stack.len()
+        defer self.truncate(base)
+        let saved = self.env
+        defer self.env = saved
+        let rv = try self.eval(right)
+        try self.push(rv)
+        if isOf {
+            var arr = objectOf(rv)
+            if arr == NONE || self.heap.obj(arr).class != Class.Array {
+                arr = try self.iterToArray(rv)
+                try self.push(objVal(arr))
+            }
+            var i: u32 = 0
+            while i < self.heap.obj(arr).nelems {
+                let v = holeToUndef(self.heap.obj(arr).elems[i])
+                try self.bindIteration(left, v, nslots, saved)
+                let flow = try self.exec(body)
+                let c = self.loopControl(flow, myLabel)
+                if c == 1 {
+                    break
+                }
+                if c == 2 {
+                    return flow
+                }
+                i += 1
+            }
+            return Flow.Normal
+        }
+        if isNullish(rv) {
+            return Flow.Normal
+        }
+        let o = try self.toObject(rv)
+        try self.push(objVal(o))
+        let keys = try self.keyList()
+        defer self.releaseKeys(keys)
+        var cur = o
+        while cur != NONE {
+            let own = try self.keyList()
+            defer self.releaseKeys(own)
+            try self.ownKeys(cur, own, false)
+            for key in own.items() {
+                var dup = false
+                for k2 in keys.items() {
+                    if k2 == key {
+                        dup = true
+                        break
+                    }
+                }
+                if !dup {
+                    try keys.append(key)
+                }
+            }
+            cur = self.heap.obj(cur).proto
+        }
+        for key in keys.items() {
+            if !self.hasProperty(o, key) {
+                continue
+            }
+            let kv = try self.atomValue(key)
+            try self.bindIteration(left, kv, nslots, saved)
+            let flow = try self.exec(body)
+            let c = self.loopControl(flow, myLabel)
+            if c == 1 {
+                break
+            }
+            if c == 2 {
+                return flow
+            }
+        }
+        return Flow.Normal
+    }
+
+    fn execSwitch(self: *mut Self, disc: u32, list: u32, n: u32, scope: u32) JsError!Flow {
+        let base = self.stack.len()
+        defer self.truncate(base)
+        let dv = try self.eval(disc)
+        try self.push(dv)
+        let sc = self.ast.scopes.items()[scope]
+        let saved = self.env
+        defer self.env = saved
+        if sc.nslots > 0 {
+            self.env = try self.newEnv(sc.nslots, saved)
+        }
+        try self.hoist(scope)
+        var start = n
+        var dflt = n
+        for k in 0..n {
+            match self.ast.node(self.ast.item(list, k)) {
+                .Case { cond, .. } => {
+                    if cond == 0 {
+                        dflt = k
+                    } else {
+                        let cv = try self.eval(cond)
+                        if self.strictEquals(dv, cv) {
+                            start = k
+                            break
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if start == n {
+            start = dflt
+        }
+        var k = start
+        while k < n {
+            match self.ast.node(self.ast.item(list, k)) {
+                .Case { list: cl, n: cn, .. } => {
+                    let flow = try self.execList(cl, cn)
+                    if flow == Flow.Break && self.label == 0 {
+                        return Flow.Normal
+                    }
+                    if flow != Flow.Normal {
+                        return flow
+                    }
+                }
+                _ => {}
+            }
+            k += 1
+        }
+        return Flow.Normal
+    }
+
+    // A thrown exception becomes Flow.Caught; other errors pass.
+    fn caught(self: *mut Self, err: JsError, base: usize) JsError!Flow {
+        match err {
+            .Thrown => {
+                self.truncate(base)
+                return Flow.Caught
+            }
+            .OutOfMemory => {
+                return JsError.OutOfMemory
+            }
+            .ShortCircuit => {
+                return JsError.ShortCircuit
+            }
+        }
+    }
+
+    fn execTry(self: *mut Self, block: u32, param: u32, handler: u32, finalizer: u32, scope: u32) JsError!Flow {
+        let base = self.stack.len()
+        var flow = self.exec(block) catch |e| try self.caught(e, base)
+        if flow == Flow.Caught && handler != 0 {
+            let ex = self.exception
+            self.exception = Value.Undefined
+            flow = self.execCatch(param, handler, scope, ex) catch |e| try self.caught(e, base)
+            self.truncate(base)
+        }
+        if finalizer != 0 {
+            let savedRet = self.ret
+            let savedLabel = self.label
+            let savedExc = self.exception
+            try self.push(savedRet)
+            try self.push(savedExc)
+            let ff = try self.exec(finalizer)
+            self.truncate(base)
+            if ff != Flow.Normal {
+                return ff
+            }
+            self.ret = savedRet
+            self.label = savedLabel
+            self.exception = savedExc
+        }
+        if flow == Flow.Caught {
+            return JsError.Thrown
+        }
+        return flow
+    }
+
+    fn execCatch(self: *mut Self, param: u32, handler: u32, scope: u32, ex: Value) JsError!Flow {
+        try self.push(ex)
+        let nslots = self.ast.scopes.items()[scope].nslots
+        let saved = self.env
+        defer self.env = saved
+        if nslots > 0 {
+            self.env = try self.newEnv(nslots, saved)
+        }
+        if param != 0 {
+            try self.bindPattern(param, ex, true)
+        }
+        return self.exec(handler)
+    }
+
+    // ---- scripts
+
+    /// Parses and runs a script. A syntax error throws a SyntaxError.
+    pub fn runScript(self: *mut Self, src: []u8) JsError!Value {
+        var lx = Lexed.init(self.alloc)
+        defer lx.deinit()
+        let base = self.ast.source.len() as u32
+        try self.ast.source.append(src)
+        let message = try self.builder()
+        defer self.release(message)
+        tokenize(self.alloc, src, &mut lx) catch |e| {
+            return self.syntaxError(lx.message.bytes())
+        }
+        var p = Parser {
+            alloc: self.alloc,
+            ast: &mut self.ast,
+            atoms: &mut self.heap.atoms,
+            lx: &mut lx,
+            src: src,
+            pos: 0,
+            base: base,
+            tmp: List(u32).init(self.alloc),
+            message: message,
+            line: 0,
+        }
+        defer p.tmp.deinit()
+        let root = p.program() catch |e| {
+            return self.syntaxError(message.bytes())
+        }
+        var r = Resolver {
+            alloc: self.alloc,
+            ast: &mut self.ast,
+            atoms: &mut self.heap.atoms,
+            globals: &mut self.globals,
+            scopes: List(RScope).init(self.alloc),
+            top_vars: List(u32).init(self.alloc),
+            message: message,
+        }
+        defer r.cleanup()
+        r.script(root) catch |e| {
+            return self.syntaxError(message.bytes())
+        }
+        try self.heap.growEnv(self.glex, self.globals.count)
+        for name in r.top_vars.items() {
+            if !self.hasOwn(self.global, name) {
+                try self.heap.addProp(self.global, name, Value.Undefined, Value.Undefined, F_ENUM | F_WRITE)
+            }
+        }
+        let savedEnv = self.env
+        self.env = NONE
+        defer self.env = savedEnv
+        try self.exec(root)
+        return Value.Undefined
+    }
+
+    fn syntaxError(self: *mut Self, m: []u8) JsError!Value {
+        if m.len == 0 {
+            return self.throwError(self.syntax_error_proto, "Invalid or unexpected token")
+        }
+        return self.throwError(self.syntax_error_proto, m)
+    }
+
+    // ---- natives
+
+    /// Registers a native function; returns its function object.
+    pub fn newNative(self: *mut Self, name: []u8, length: u32, f: NativeFn) JsError!u32 {
+        let atom = try self.intern(name)
+        let id = self.natives.len() as u32
+        try self.natives.append(NativeEntry { f: f, name: atom, length: length })
+        return self.newObjectOf(Class.Function, self.function_proto, ObjData.Native { id: id })
+    }
+
+    /// Defines a method `name` (non-enumerable) on object o.
+    pub fn defineNative(self: *mut Self, o: u32, name: []u8, length: u32, f: NativeFn) JsError!u32 {
+        let fo = try self.newNative(name, length, f)
+        let atom = try self.intern(name)
+        try self.heap.addProp(o, atom, objVal(fo), Value.Undefined, F_HIDDEN)
+        return fo
+    }
+
+    /// Defines a non-enumerable data property `name` on object o.
+    pub fn defineValue(self: *mut Self, o: u32, name: []u8, v: Value) JsError!void {
+        let atom = try self.intern(name)
+        return self.defineOwn(o, atom, v, F_HIDDEN)
+    }
+
+    /// Keeps v alive until removeRoot(the returned index).
+    pub fn addRoot(self: *mut Self, v: Value) JsError!u32 {
+        for i, r in self.roots.items() {
+            match r {
+                .Empty => {
+                    self.roots.items()[i] = v
+                    return i as u32
+                }
+                _ => {}
+            }
+        }
+        try self.roots.append(v)
+        return (self.roots.len() - 1) as u32
+    }
+
+    pub fn removeRoot(self: *mut Self, i: u32) {
+        self.roots.items()[i] = Value.Empty
+    }
+
+    /// A host object (a DOM node wrapper) with prototype `proto`.
+    pub fn newHostObject(self: *mut Self, proto: u32, tag: u32, index: u32, generation: u32) JsError!u32 {
+        return self.newObjectOf(Class.Host, proto, ObjData.Host { tag: tag, index: index, generation: generation })
+    }
+}
+

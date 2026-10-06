@@ -1,0 +1,630 @@
+// js/json: JSON.parse and JSON.stringify.
+
+import std.list.List
+import std.text
+
+fn installJson(it: *mut Interp) JsError!void {
+    let j = try it.newObject(it.object_proto)
+    try it.defineValue(it.global, "JSON", objVal(j))
+    try it.defineNative(j, "parse", 2, jsonParse)
+    try it.defineNative(j, "stringify", 3, jsonStringify)
+}
+
+// ---- parse
+
+struct JsonParser {
+    it: *mut Interp
+    s: []u8
+    pos: usize
+
+    fn ws(self: *mut Self) {
+        while self.pos < self.s.len {
+            let c = self.s[self.pos]
+            if c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+                return
+            }
+            self.pos += 1
+        }
+    }
+
+    fn fail(self: *mut Self) JsError!Value {
+        let it = self.it
+        it.msg.clear()
+        if self.pos >= self.s.len {
+            try it.msg.append("Unexpected end of JSON input")
+        } else {
+            try it.msg.append("Unexpected token '")
+            let d = decodeAt(self.s, self.pos)
+            try it.msg.append(self.s[self.pos..self.pos + d.len])
+            try it.msg.append("', \"")
+            if self.s.len <= 40 {
+                try it.msg.append(self.s)
+            } else {
+                try it.msg.append(self.s[..40])
+                try it.msg.append("...")
+            }
+            try it.msg.append("\" is not valid JSON")
+        }
+        let e = try it.makeError(it.syntax_error_proto, it.msg.bytes())
+        return it.throwValue(e)
+    }
+
+    fn lit(self: *mut Self, word: []u8, v: Value) JsError!Value {
+        if text.startsWith(self.s[self.pos..], word) {
+            self.pos += word.len
+            return v
+        }
+        return self.fail()
+    }
+
+    fn value(self: *mut Self) JsError!Value {
+        self.ws()
+        if self.pos >= self.s.len {
+            return self.fail()
+        }
+        let c = self.s[self.pos]
+        if c == '{' {
+            return self.object()
+        }
+        if c == '[' {
+            return self.array()
+        }
+        if c == '"' {
+            return self.string()
+        }
+        if c == 't' {
+            return self.lit("true", boolVal(true))
+        }
+        if c == 'f' {
+            return self.lit("false", boolVal(false))
+        }
+        if c == 'n' {
+            return self.lit("null", Value.Null)
+        }
+        if c == '-' || (c >= '0' && c <= '9') {
+            return self.number()
+        }
+        return self.fail()
+    }
+
+    fn number(self: *mut Self) JsError!Value {
+        let start = self.pos
+        if self.s[self.pos] == '-' {
+            self.pos += 1
+        }
+        let intStart = self.pos
+        while self.pos < self.s.len && self.s[self.pos] >= '0' && self.s[self.pos] <= '9' {
+            self.pos += 1
+        }
+        if self.pos == intStart || (self.s[intStart] == '0' && self.pos - intStart > 1) {
+            return self.fail()
+        }
+        if self.pos < self.s.len && self.s[self.pos] == '.' {
+            self.pos += 1
+            let f = self.pos
+            while self.pos < self.s.len && self.s[self.pos] >= '0' && self.s[self.pos] <= '9' {
+                self.pos += 1
+            }
+            if self.pos == f {
+                return self.fail()
+            }
+        }
+        if self.pos < self.s.len && (self.s[self.pos] == 'e' || self.s[self.pos] == 'E') {
+            self.pos += 1
+            if self.pos < self.s.len && (self.s[self.pos] == '+' || self.s[self.pos] == '-') {
+                self.pos += 1
+            }
+            let e = self.pos
+            while self.pos < self.s.len && self.s[self.pos] >= '0' && self.s[self.pos] <= '9' {
+                self.pos += 1
+            }
+            if self.pos == e {
+                return self.fail()
+            }
+        }
+        return numVal(strtodCopy(self.s[start..self.pos]))
+    }
+
+    // The cooked bytes of a string at pos (after the quote check).
+    fn stringBytes(self: *mut Self, b: *mut text.Builder) JsError!bool {
+        self.pos += 1
+        while true {
+            if self.pos >= self.s.len {
+                return false
+            }
+            let c = self.s[self.pos]
+            if c == '"' {
+                self.pos += 1
+                return true
+            }
+            if c < 0x20 {
+                return false
+            }
+            if c != '\\' {
+                try b.appendByte(c)
+                self.pos += 1
+                continue
+            }
+            self.pos += 1
+            if self.pos >= self.s.len {
+                return false
+            }
+            let e = self.s[self.pos]
+            self.pos += 1
+            if e == '"' || e == '\\' || e == '/' {
+                try b.appendByte(e)
+            } else if e == 'b' {
+                try b.appendByte(0x08)
+            } else if e == 'f' {
+                try b.appendByte(0x0C)
+            } else if e == 'n' {
+                try b.appendByte('\n')
+            } else if e == 'r' {
+                try b.appendByte('\r')
+            } else if e == 't' {
+                try b.appendByte('\t')
+            } else if e == 'u' {
+                var cp = self.hex4()
+                if cp < 0 {
+                    return false
+                }
+                if cp >= 0xD800 && cp <= 0xDBFF && self.pos + 1 < self.s.len && self.s[self.pos] == '\\' && self.s[self.pos + 1] == 'u' {
+                    let save = self.pos
+                    self.pos += 2
+                    let lo = self.hex4()
+                    if lo >= 0xDC00 && lo <= 0xDFFF {
+                        cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00)
+                    } else {
+                        self.pos = save
+                    }
+                }
+                try appendWtf8(b, cp as u32)
+            } else {
+                self.pos -= 1
+                return false
+            }
+        }
+        return false
+    }
+
+    fn hex4(self: *mut Self) i64 {
+        if self.pos + 4 > self.s.len {
+            return -1
+        }
+        var v: i64 = 0
+        for k in 0..4 {
+            let h = hexVal(self.s[self.pos + k])
+            if h < 0 {
+                return -1
+            }
+            v = v * 16 + h as i64
+        }
+        self.pos += 4
+        return v
+    }
+
+    fn string(self: *mut Self) JsError!Value {
+        let b = try self.it.builder()
+        defer self.it.release(b)
+        if !try self.stringBytes(b) {
+            return self.fail()
+        }
+        return self.it.takeString(b)
+    }
+
+    fn array(self: *mut Self) JsError!Value {
+        let it = self.it
+        self.pos += 1
+        let arr = try it.newArray(0)
+        try it.push(objVal(arr))
+        self.ws()
+        if self.pos < self.s.len && self.s[self.pos] == ']' {
+            self.pos += 1
+            return it.pop()
+        }
+        while true {
+            let v = try self.value()
+            try it.heap.pushElem(arr, v)
+            self.ws()
+            if self.pos < self.s.len && self.s[self.pos] == ',' {
+                self.pos += 1
+                continue
+            }
+            if self.pos < self.s.len && self.s[self.pos] == ']' {
+                self.pos += 1
+                return it.pop()
+            }
+            return self.fail()
+        }
+        return self.fail()
+    }
+
+    fn object(self: *mut Self) JsError!Value {
+        let it = self.it
+        self.pos += 1
+        let o = try it.newObject(it.object_proto)
+        try it.push(objVal(o))
+        self.ws()
+        if self.pos < self.s.len && self.s[self.pos] == '}' {
+            self.pos += 1
+            return it.pop()
+        }
+        while true {
+            self.ws()
+            if self.pos >= self.s.len || self.s[self.pos] != '"' {
+                return self.fail()
+            }
+            let kb = try it.builder()
+            defer it.release(kb)
+            if !try self.stringBytes(kb) {
+                return self.fail()
+            }
+            let key = try it.intern(kb.bytes())
+            self.ws()
+            if self.pos >= self.s.len || self.s[self.pos] != ':' {
+                return self.fail()
+            }
+            self.pos += 1
+            let v = try self.value()
+            if key == A_PROTO {
+                try it.heap.addProp(o, key, v, Value.Undefined, F_DEFAULT)
+            } else {
+                try it.defineOwn(o, key, v, F_DEFAULT)
+            }
+            self.ws()
+            if self.pos < self.s.len && self.s[self.pos] == ',' {
+                self.pos += 1
+                continue
+            }
+            if self.pos < self.s.len && self.s[self.pos] == '}' {
+                self.pos += 1
+                return it.pop()
+            }
+            return self.fail()
+        }
+        return self.fail()
+    }
+}
+
+fn jsonParse(it: *mut Interp, a: Args) JsError!Value {
+    let sv = try argString(it, a, 0)
+    try it.push(sv)
+    var p = JsonParser { it: it, s: it.heap.bytes(strOf(sv)), pos: 0 }
+    let v = try p.value()
+    p.ws()
+    if p.pos < p.s.len {
+        return p.fail()
+    }
+    let reviver = it.arg(a, 1)
+    if !it.isCallable(reviver) {
+        it.pop()
+        return v
+    }
+    try it.push(v)
+    let root = try it.newObject(it.object_proto)
+    try it.push(objVal(root))
+    try it.defineOwn(root, A_EMPTY, v, F_DEFAULT)
+    let r = try revive(it, reviver, objVal(root), A_EMPTY)
+    it.truncate(it.stack.len() - 3)
+    return r
+}
+
+// The internalize step of JSON.parse with a reviver.
+fn revive(it: *mut Interp, reviver: Value, holder: Value, key: u32) JsError!Value {
+    let base = it.stack.len()
+    defer it.truncate(base)
+    let v = try it.getProp(holder, key)
+    try it.push(v)
+    let o = objectOf(v)
+    if o != NONE {
+        let keys = try it.keyList()
+        defer it.releaseKeys(keys)
+        try it.ownKeys(o, keys, false)
+        for k in keys.items() {
+            let nv = try revive(it, reviver, v, k)
+            if isUndef(nv) {
+                try it.deleteProp(o, k)
+            } else {
+                try it.defineOwn(o, k, nv, F_DEFAULT)
+            }
+        }
+    }
+    let kv = try it.atomValue(key)
+    return it.call2(reviver, holder, kv, v)
+}
+
+// ---- stringify
+
+struct Stringifier {
+    it: *mut Interp
+    replacer: Value
+    // Allowed keys (an array replacer), or empty for all.
+    allow: List(u32)
+    use_allow: bool
+    gap: []u8
+    indent: text.Builder
+    stack: List(u32)
+
+    fn quote(self: *mut Self, b: *mut text.Builder, s: []u8) JsError!void {
+        try b.appendByte('"')
+        var i: usize = 0
+        while i < s.len {
+            let c = s[i]
+            if c == '"' {
+                try b.append("\\\"")
+            } else if c == '\\' {
+                try b.append("\\\\")
+            } else if c == '\n' {
+                try b.append("\\n")
+            } else if c == '\r' {
+                try b.append("\\r")
+            } else if c == '\t' {
+                try b.append("\\t")
+            } else if c == 0x08 {
+                try b.append("\\b")
+            } else if c == 0x0C {
+                try b.append("\\f")
+            } else if c < 0x20 {
+                try b.append("\\u00")
+                try b.appendByte(HEXL[(c >> 4) as usize])
+                try b.appendByte(HEXL[(c & 15) as usize])
+            } else if c == 0xED && i + 2 < s.len && s[i + 1] >= 0xA0 {
+                // A lone surrogate: \udxxx.
+                let cp = decodeAt(s, i).cp
+                try b.append("\\u")
+                try b.appendByte(HEXL[((cp >> 12) & 15) as usize])
+                try b.appendByte(HEXL[((cp >> 8) & 15) as usize])
+                try b.appendByte(HEXL[((cp >> 4) & 15) as usize])
+                try b.appendByte(HEXL[(cp & 15) as usize])
+                i += 3
+                continue
+            } else {
+                try b.appendByte(c)
+            }
+            i += 1
+        }
+        try b.appendByte('"')
+    }
+
+    // Serializes holder[key] (value v already read); false when the
+    // value is not serializable (undefined, a function).
+    fn property(self: *mut Self, b: *mut text.Builder, holder: Value, key: u32, vIn: Value) JsError!bool {
+        let it = self.it
+        let base = it.stack.len()
+        defer it.truncate(base)
+        var v = vIn
+        try it.push(v)
+        if isObject(v) {
+            let tj = try it.getProp(v, A_TOJSON)
+            if it.isCallable(tj) {
+                let kv = try it.atomValue(key)
+                v = try it.call1(tj, v, kv)
+                try it.push(v)
+            }
+        }
+        if it.isCallable(self.replacer) {
+            let kv = try it.atomValue(key)
+            v = try it.call2(self.replacer, holder, kv, v)
+            try it.push(v)
+        }
+        match v {
+            .Obj { o } => {
+                let cls = it.heap.obj(o).class
+                if cls == Class.Number {
+                    v = numVal(try it.toNumber(v))
+                } else if cls == Class.String {
+                    v = try it.toStringValue(v)
+                    try it.push(v)
+                } else if cls == Class.Boolean {
+                    v = try thisPrimitive(it, Args { this: v, base: 0, argc: 0, callee: NONE, new_target: NONE }, Class.Boolean)
+                }
+            }
+            _ => {}
+        }
+        match v {
+            .Null => try b.append("null")
+            .Bool { b: flag } => {
+                if flag {
+                    try b.append("true")
+                } else {
+                    try b.append("false")
+                }
+            }
+            .Num { n } => {
+                if isFinite(n) {
+                    try formatNumber(b, n)
+                } else {
+                    try b.append("null")
+                }
+            }
+            .Str { s } => try self.quote(b, it.heap.bytes(s))
+            .Obj { o } => {
+                if it.isCallable(v) {
+                    return false
+                }
+                for seen in self.stack.items() {
+                    if seen == o {
+                        try it.typeError("Converting circular structure to JSON")
+                    }
+                }
+                try self.stack.append(o)
+                if it.heap.obj(o).class == Class.Array {
+                    try self.array(b, o)
+                } else {
+                    try self.object(b, o)
+                }
+                self.stack.pop()
+            }
+            _ => {
+                return false
+            }
+        }
+        return true
+    }
+
+    fn newline(self: *mut Self, b: *mut text.Builder) JsError!void {
+        if self.gap.len > 0 {
+            try b.appendByte('\n')
+            try b.append(self.indent.bytes())
+        }
+    }
+
+    fn array(self: *mut Self, b: *mut text.Builder, o: u32) JsError!void {
+        let it = self.it
+        let outer = self.indent.len()
+        try self.indent.append(self.gap)
+        try b.appendByte('[')
+        let n = it.heap.obj(o).nelems
+        for i in 0..n {
+            if i > 0 {
+                try b.appendByte(',')
+            }
+            try self.newline(b)
+            let e = holeToUndef(it.heap.obj(o).elems[i])
+            let key = try it.toKey(numVal(i as f64))
+            if !try self.property(b, objVal(o), key, e) {
+                try b.append("null")
+            }
+        }
+        self.indent.count = outer
+        if n > 0 {
+            try self.newline(b)
+        }
+        try b.appendByte(']')
+    }
+
+    fn object(self: *mut Self, b: *mut text.Builder, o: u32) JsError!void {
+        let it = self.it
+        let keys = try it.keyList()
+        defer it.releaseKeys(keys)
+        if self.use_allow {
+            for k in self.allow.items() {
+                try keys.append(k)
+            }
+        } else {
+            try it.ownKeys(o, keys, false)
+        }
+        let outer = self.indent.len()
+        try self.indent.append(self.gap)
+        try b.appendByte('{')
+        var any = false
+        for key in keys.items() {
+            let v = try it.getProp(objVal(o), key)
+            let mark = b.len()
+            if any {
+                try b.appendByte(',')
+            }
+            try self.newline(b)
+            try self.quote(b, it.heap.atoms.name(key))
+            try b.appendByte(':')
+            if self.gap.len > 0 {
+                try b.appendByte(' ')
+            }
+            if try self.property(b, objVal(o), key, v) {
+                any = true
+            } else {
+                b.count = mark
+            }
+        }
+        self.indent.count = outer
+        if any {
+            try self.newline(b)
+        }
+        try b.appendByte('}')
+    }
+}
+
+let HEXL = "0123456789abcdef"
+
+/// Appends JSON.stringify(v) (without replacer and indentation);
+/// "undefined" when v is not serializable.
+pub fn jsonStringifyInto(it: *mut Interp, b: *mut text.Builder, v: Value) JsError!void {
+    var st = Stringifier {
+        it: it,
+        replacer: Value.Undefined,
+        allow: List(u32).init(it.alloc),
+        use_allow: false,
+        gap: "",
+        indent: text.Builder.init(it.alloc),
+        stack: List(u32).init(it.alloc),
+    }
+    defer {
+        st.allow.deinit()
+        st.indent.deinit()
+        st.stack.deinit()
+    }
+    let holder = try it.newObject(it.object_proto)
+    try it.push(objVal(holder))
+    defer it.pop()
+    if !try st.property(b, objVal(holder), A_EMPTY, v) {
+        try b.append("undefined")
+    }
+}
+
+fn jsonStringify(it: *mut Interp, a: Args) JsError!Value {
+    let gapb = try it.builder()
+    defer it.release(gapb)
+    let space = it.arg(a, 2)
+    match space {
+        .Num { n } => {
+            var k = n
+            if k > 10.0 {
+                k = 10.0
+            }
+            var i = 0.0
+            while i < k {
+                try gapb.appendByte(' ')
+                i += 1.0
+            }
+        }
+        .Str { s } => {
+            let bytes = it.heap.bytes(s)
+            if bytes.len > 10 {
+                try gapb.append(bytes[..10])
+            } else {
+                try gapb.append(bytes)
+            }
+        }
+        _ => {}
+    }
+    var st = Stringifier {
+        it: it,
+        replacer: Value.Undefined,
+        allow: List(u32).init(it.alloc),
+        use_allow: false,
+        gap: gapb.bytes(),
+        indent: text.Builder.init(it.alloc),
+        stack: List(u32).init(it.alloc),
+    }
+    defer {
+        st.allow.deinit()
+        st.indent.deinit()
+        st.stack.deinit()
+    }
+    let r = it.arg(a, 1)
+    if it.isCallable(r) {
+        st.replacer = r
+    } else if it.hasClass(r, Class.Array) {
+        st.use_allow = true
+        let ro = objectOf(r)
+        for i in 0..it.heap.obj(ro).nelems {
+            let e = it.heap.obj(ro).elems[i]
+            match e {
+                .Str { .. } => try st.allow.append(try it.toKey(e))
+                .Num { .. } => try st.allow.append(try it.toKey(e))
+                _ => {}
+            }
+        }
+    }
+    let holder = try it.newObject(it.object_proto)
+    try it.push(objVal(holder))
+    try it.defineOwn(holder, A_EMPTY, it.arg(a, 0), F_DEFAULT)
+    let b = try it.builder()
+    defer it.release(b)
+    let ok = try st.property(b, objVal(holder), A_EMPTY, it.arg(a, 0))
+    it.pop()
+    if !ok {
+        return Value.Undefined
+    }
+    return it.takeString(b)
+}

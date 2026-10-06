@@ -1,0 +1,801 @@
+// js/builtins_array: Array and Array.prototype. Arrays keep their
+// elements in `Obj.elems` (holes are `Value.Empty`). Methods work on
+// arrays and `arguments` objects; callbacks may change the array, so
+// every step reads it again.
+
+import std.list.List
+import std.text
+
+fn installArray(it: *mut Interp) JsError!void {
+    let c = try makeConstructor(it, "Array", 1, arrayCtor, it.array_proto)
+    try it.defineNative(c, "isArray", 1, arrayIsArray)
+    try it.defineNative(c, "from", 1, arrayFrom)
+    try it.defineNative(c, "of", 0, arrayOf)
+    let p = it.array_proto
+    try it.defineNative(p, "push", 1, arrayPush)
+    try it.defineNative(p, "pop", 0, arrayPop)
+    try it.defineNative(p, "shift", 0, arrayShift)
+    try it.defineNative(p, "unshift", 1, arrayUnshift)
+    try it.defineNative(p, "slice", 2, arraySlice)
+    try it.defineNative(p, "splice", 2, arraySplice)
+    try it.defineNative(p, "concat", 1, arrayConcat)
+    try it.defineNative(p, "join", 1, arrayJoin)
+    try it.defineNative(p, "reverse", 0, arrayReverse)
+    try it.defineNative(p, "indexOf", 1, arrayIndexOf)
+    try it.defineNative(p, "lastIndexOf", 1, arrayLastIndexOf)
+    try it.defineNative(p, "includes", 1, arrayIncludes)
+    try it.defineNative(p, "map", 1, arrayMap)
+    try it.defineNative(p, "filter", 1, arrayFilter)
+    try it.defineNative(p, "forEach", 1, arrayForEach)
+    try it.defineNative(p, "some", 1, arraySome)
+    try it.defineNative(p, "every", 1, arrayEvery)
+    try it.defineNative(p, "find", 1, arrayFind)
+    try it.defineNative(p, "findIndex", 1, arrayFindIndex)
+    try it.defineNative(p, "findLast", 1, arrayFindLast)
+    try it.defineNative(p, "findLastIndex", 1, arrayFindLastIndex)
+    try it.defineNative(p, "reduce", 1, arrayReduce)
+    try it.defineNative(p, "reduceRight", 1, arrayReduceRight)
+    try it.defineNative(p, "sort", 1, arraySort)
+    try it.defineNative(p, "fill", 1, arrayFill)
+    try it.defineNative(p, "at", 1, arrayAt)
+    try it.defineNative(p, "flat", 0, arrayFlat)
+    try it.defineNative(p, "flatMap", 1, arrayFlatMap)
+    try it.defineNative(p, "keys", 0, arrayKeys)
+    try it.defineNative(p, "values", 0, arrayValues)
+    try it.defineNative(p, "entries", 0, arrayEntries)
+    try it.defineNative(p, "toString", 0, arrayToString)
+    try it.defineNative(p, "toLocaleString", 0, arrayToString)
+}
+
+// The array (or arguments object) `this`.
+fn thisArray(it: *mut Interp, a: Args) JsError!u32 {
+    let o = objectOf(a.this)
+    if o != NONE {
+        let cls = it.heap.obj(o).class
+        if cls == Class.Array || cls == Class.Arguments {
+            return o
+        }
+    }
+    try it.typeError("Array.prototype method called on a value that is not an array")
+    return NONE
+}
+
+fn alen(it: *mut Interp, o: u32) u32 {
+    return it.heap.obj(o).nelems
+}
+
+fn elemAt(it: *mut Interp, o: u32, i: u32) Value {
+    if i < it.heap.obj(o).nelems {
+        return holeToUndef(it.heap.obj(o).elems[i])
+    }
+    return Value.Undefined
+}
+
+fn isHole(it: *mut Interp, o: u32, i: u32) bool {
+    if i >= it.heap.obj(o).nelems {
+        return true
+    }
+    return match it.heap.obj(o).elems[i] {
+        .Empty => true
+        _ => false
+    }
+}
+
+fn arrayCtor(it: *mut Interp, a: Args) JsError!Value {
+    if a.argc == 1 {
+        match it.arg(a, 0) {
+            .Num { n } => {
+                let k = toUint32(n)
+                if k as f64 != n {
+                    return it.rangeError("Invalid array length")
+                }
+                let arr = try it.newArray(0)
+                try it.heap.setLength(arr, k, Value.Empty)
+                return objVal(arr)
+            }
+            _ => {}
+        }
+    }
+    let arr = try it.newArray(0)
+    for i in 0..a.argc {
+        try it.heap.pushElem(arr, it.arg(a, i))
+    }
+    return objVal(arr)
+}
+
+fn arrayIsArray(it: *mut Interp, a: Args) JsError!Value {
+    if it.classOf(it.arg(a, 0)) |c| {
+        return boolVal(c == Class.Array)
+    }
+    return boolVal(false)
+}
+
+fn arrayOf(it: *mut Interp, a: Args) JsError!Value {
+    let arr = try it.newArray(0)
+    for i in 0..a.argc {
+        try it.heap.pushElem(arr, it.arg(a, i))
+    }
+    return objVal(arr)
+}
+
+fn arrayFrom(it: *mut Interp, a: Args) JsError!Value {
+    let src = it.arg(a, 0)
+    let f = it.arg(a, 1)
+    if isNullish(src) {
+        return it.typeError("undefined is not iterable")
+    }
+    let base = it.stack.len()
+    defer it.truncate(base)
+    let out = try it.newArray(0)
+    try it.push(objVal(out))
+    var items = NONE
+    if isStr(src) || it.hasClass(src, Class.Array) || it.hasClass(src, Class.Arguments) || it.hasClass(src, Class.Map) || it.hasClass(src, Class.Set) {
+        items = try it.iterToArray(src)
+        try it.push(objVal(items))
+    } else {
+        // An array-like: { length: n, 0: ..., }.
+        let n = try pushArrayLike(it, src)
+        items = try it.newArray(0)
+        for i in 0..n {
+            try it.heap.pushElem(items, it.slot(it.stack.len() - n + i))
+        }
+        it.truncate(it.stack.len() - n)
+        try it.push(objVal(items))
+    }
+    var i: u32 = 0
+    while i < alen(it, items) {
+        var v = elemAt(it, items, i)
+        if it.isCallable(f) {
+            v = try it.call2(f, it.arg(a, 2), v, numVal(i as f64))
+        }
+        try it.heap.pushElem(out, v)
+        i += 1
+    }
+    return objVal(out)
+}
+
+fn arrayPush(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    if it.heap.obj(o).frozen {
+        return it.typeError("Cannot add property, object is not extensible")
+    }
+    for i in 0..a.argc {
+        try it.heap.pushElem(o, it.arg(a, i))
+    }
+    return numVal(alen(it, o) as f64)
+}
+
+fn arrayPop(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let n = alen(it, o)
+    if n == 0 {
+        return Value.Undefined
+    }
+    let v = elemAt(it, o, n - 1)
+    it.heap.obj(o).nelems = n - 1
+    return v
+}
+
+fn arrayShift(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let n = alen(it, o)
+    if n == 0 {
+        return Value.Undefined
+    }
+    let v = elemAt(it, o, 0)
+    let ob = it.heap.obj(o)
+    for i in 1..n {
+        ob.elems[i - 1] = ob.elems[i]
+    }
+    ob.nelems = n - 1
+    return v
+}
+
+fn arrayUnshift(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let n = alen(it, o)
+    let k = a.argc as u32
+    try it.heap.setLength(o, n + k, Value.Undefined)
+    let ob = it.heap.obj(o)
+    var i = n
+    while i > 0 {
+        i -= 1
+        ob.elems[i + k] = ob.elems[i]
+    }
+    for j in 0..a.argc {
+        ob.elems[j] = it.arg(a, j)
+    }
+    return numVal((n + k) as f64)
+}
+
+fn arraySlice(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let n = alen(it, o)
+    let start = relativeIndex(try argInteger(it, a, 0, 0.0), n)
+    let end = relativeIndex(try argInteger(it, a, 1, n as f64), n)
+    let out = try it.newArray(0)
+    var i = start
+    while i < end && i < alen(it, o) {
+        try it.heap.pushElem(out, it.heap.obj(o).elems[i])
+        i += 1
+    }
+    return objVal(out)
+}
+
+fn arraySplice(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let n = alen(it, o)
+    let start = relativeIndex(try argInteger(it, a, 0, 0.0), n)
+    var del: u32 = 0
+    if a.argc == 1 {
+        del = n - start
+    } else if a.argc > 1 {
+        let d = try argInteger(it, a, 1, 0.0)
+        if d > 0.0 {
+            del = relativeIndex(d, n - start)
+        }
+    }
+    let removed = try it.newArray(0)
+    try it.push(objVal(removed))
+    for i in 0..del {
+        try it.heap.pushElem(removed, it.heap.obj(o).elems[start + i])
+    }
+    var ins: u32 = 0
+    if a.argc > 2 {
+        ins = (a.argc - 2) as u32
+    }
+    let newLen = n - del + ins
+    if ins > del {
+        try it.heap.setLength(o, newLen, Value.Undefined)
+        let ob = it.heap.obj(o)
+        var i = n
+        while i > start + del {
+            i -= 1
+            ob.elems[i + ins - del] = ob.elems[i]
+        }
+    } else if ins < del {
+        let ob = it.heap.obj(o)
+        var i = start + del
+        while i < n {
+            ob.elems[i - (del - ins)] = ob.elems[i]
+            i += 1
+        }
+        ob.nelems = newLen
+    }
+    for j in 0..ins {
+        it.heap.obj(o).elems[start + j] = it.arg(a, 2 + j as usize)
+    }
+    return it.pop()
+}
+
+fn arrayConcat(it: *mut Interp, a: Args) JsError!Value {
+    let out = try it.newArray(0)
+    try it.push(objVal(out))
+    for i in 0..a.argc + 1 {
+        var v = a.this
+        if i > 0 {
+            v = it.arg(a, i - 1)
+        }
+        if it.hasClass(v, Class.Array) {
+            let src = objectOf(v)
+            var j: u32 = 0
+            while j < alen(it, src) {
+                try it.heap.pushElem(out, it.heap.obj(src).elems[j])
+                j += 1
+            }
+        } else {
+            try it.heap.pushElem(out, v)
+        }
+    }
+    return it.pop()
+}
+
+/// Appends the elements of array o joined by sep (Array.prototype.join).
+pub fn joinInto(it: *mut Interp, b: *mut text.Builder, o: u32, sep: []u8) JsError!void {
+    var i: u32 = 0
+    while i < alen(it, o) {
+        if i > 0 {
+            try b.append(sep)
+        }
+        let v = elemAt(it, o, i)
+        if !isNullish(v) {
+            try it.appendString(b, v)
+        }
+        i += 1
+    }
+}
+
+fn arrayJoin(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    let sepb = try it.builder()
+    defer it.release(sepb)
+    let sv = it.arg(a, 0)
+    if isUndef(sv) {
+        try sepb.append(",")
+    } else {
+        try it.appendString(sepb, sv)
+    }
+    try joinInto(it, b, o, sepb.bytes())
+    return it.takeString(b)
+}
+
+fn arrayToString(it: *mut Interp, a: Args) JsError!Value {
+    let o = objectOf(a.this)
+    if o == NONE || it.heap.obj(o).class != Class.Array {
+        return it.atomValue(try it.intern("[object Object]"))
+    }
+    let b = try it.builder()
+    defer it.release(b)
+    try joinInto(it, b, o, ",")
+    return it.takeString(b)
+}
+
+fn arrayReverse(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let ob = it.heap.obj(o)
+    var i: u32 = 0
+    var j = ob.nelems
+    while i + 1 < j {
+        j -= 1
+        let t = ob.elems[i]
+        ob.elems[i] = ob.elems[j]
+        ob.elems[j] = t
+        i += 1
+    }
+    return a.this
+}
+
+fn arrayIndexOf(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let n = alen(it, o)
+    let x = it.arg(a, 0)
+    var i = relativeIndex(try argInteger(it, a, 1, 0.0), n)
+    while i < n {
+        if !isHole(it, o, i) && it.strictEquals(it.heap.obj(o).elems[i], x) {
+            return numVal(i as f64)
+        }
+        i += 1
+    }
+    return numVal(-1.0)
+}
+
+fn arrayLastIndexOf(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let n = alen(it, o)
+    if n == 0 {
+        return numVal(-1.0)
+    }
+    let x = it.arg(a, 0)
+    let from = try argInteger(it, a, 1, n as f64 - 1.0)
+    var i: i64 = 0
+    if from < 0.0 {
+        i = n as i64 + from as i64
+    } else if from >= n as f64 {
+        i = n as i64 - 1
+    } else {
+        i = from as i64
+    }
+    while i >= 0 {
+        let k = i as u32
+        if !isHole(it, o, k) && it.strictEquals(it.heap.obj(o).elems[k], x) {
+            return numVal(i as f64)
+        }
+        i -= 1
+    }
+    return numVal(-1.0)
+}
+
+fn arrayIncludes(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let n = alen(it, o)
+    let x = it.arg(a, 0)
+    var i = relativeIndex(try argInteger(it, a, 1, 0.0), n)
+    while i < n {
+        if it.sameValueZero(elemAt(it, o, i), x) {
+            return boolVal(true)
+        }
+        i += 1
+    }
+    return boolVal(false)
+}
+
+// callback(element, index, array) with thisArg argument 1.
+fn callback(it: *mut Interp, a: Args, f: Value, o: u32, i: u32) JsError!Value {
+    return it.call3(f, it.arg(a, 1), elemAt(it, o, i), numVal(i as f64), objVal(o))
+}
+
+fn arrayMap(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let f = try callableArg(it, a, 0)
+    let n = alen(it, o)
+    let out = try it.newArray(0)
+    try it.heap.setLength(out, n, Value.Empty)
+    try it.push(objVal(out))
+    var i: u32 = 0
+    while i < n && i < alen(it, o) {
+        if !isHole(it, o, i) {
+            let v = try callback(it, a, f, o, i)
+            it.heap.obj(out).elems[i] = v
+        }
+        i += 1
+    }
+    return it.pop()
+}
+
+fn arrayFilter(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let f = try callableArg(it, a, 0)
+    let n = alen(it, o)
+    let out = try it.newArray(0)
+    try it.push(objVal(out))
+    var i: u32 = 0
+    while i < n && i < alen(it, o) {
+        if !isHole(it, o, i) {
+            let e = elemAt(it, o, i)
+            try it.push(e)
+            let keep = try callback(it, a, f, o, i)
+            if it.toBoolean(keep) {
+                try it.heap.pushElem(out, e)
+            }
+            it.pop()
+        }
+        i += 1
+    }
+    return it.pop()
+}
+
+fn arrayForEach(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let f = try callableArg(it, a, 0)
+    let n = alen(it, o)
+    var i: u32 = 0
+    while i < n && i < alen(it, o) {
+        if !isHole(it, o, i) {
+            try callback(it, a, f, o, i)
+        }
+        i += 1
+    }
+    return Value.Undefined
+}
+
+fn arraySome(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let f = try callableArg(it, a, 0)
+    let n = alen(it, o)
+    var i: u32 = 0
+    while i < n && i < alen(it, o) {
+        if !isHole(it, o, i) {
+            if it.toBoolean(try callback(it, a, f, o, i)) {
+                return boolVal(true)
+            }
+        }
+        i += 1
+    }
+    return boolVal(false)
+}
+
+fn arrayEvery(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let f = try callableArg(it, a, 0)
+    let n = alen(it, o)
+    var i: u32 = 0
+    while i < n && i < alen(it, o) {
+        if !isHole(it, o, i) {
+            if !it.toBoolean(try callback(it, a, f, o, i)) {
+                return boolVal(false)
+            }
+        }
+        i += 1
+    }
+    return boolVal(true)
+}
+
+// find, findIndex, findLast, findLastIndex: the first match from the
+// front (or back); the element or its index.
+fn findCommon(it: *mut Interp, a: Args, fromEnd: bool, wantIndex: bool) JsError!Value {
+    let o = try thisArray(it, a)
+    let f = try callableArg(it, a, 0)
+    let n = alen(it, o)
+    var k: u32 = 0
+    while k < n {
+        var i = k
+        if fromEnd {
+            i = n - 1 - k
+        }
+        let e = elemAt(it, o, i)
+        try it.push(e)
+        let hit = try callback(it, a, f, o, i)
+        it.pop()
+        if it.toBoolean(hit) {
+            if wantIndex {
+                return numVal(i as f64)
+            }
+            return e
+        }
+        k += 1
+    }
+    if wantIndex {
+        return numVal(-1.0)
+    }
+    return Value.Undefined
+}
+
+fn arrayFind(it: *mut Interp, a: Args) JsError!Value {
+    return findCommon(it, a, false, false)
+}
+
+fn arrayFindIndex(it: *mut Interp, a: Args) JsError!Value {
+    return findCommon(it, a, false, true)
+}
+
+fn arrayFindLast(it: *mut Interp, a: Args) JsError!Value {
+    return findCommon(it, a, true, false)
+}
+
+fn arrayFindLastIndex(it: *mut Interp, a: Args) JsError!Value {
+    return findCommon(it, a, true, true)
+}
+
+fn reduceCommon(it: *mut Interp, a: Args, fromEnd: bool) JsError!Value {
+    let o = try thisArray(it, a)
+    let f = try callableArg(it, a, 0)
+    let n = alen(it, o)
+    var k: u32 = 0
+    var acc = Value.Undefined
+    if a.argc >= 2 {
+        acc = it.arg(a, 1)
+    } else {
+        var found = false
+        while k < n {
+            var i = k
+            if fromEnd {
+                i = n - 1 - k
+            }
+            k += 1
+            if !isHole(it, o, i) {
+                acc = elemAt(it, o, i)
+                found = true
+                break
+            }
+        }
+        if !found {
+            return it.typeError("Reduce of empty array with no initial value")
+        }
+    }
+    let at = it.stack.len()
+    try it.push(acc)
+    while k < n {
+        var i = k
+        if fromEnd {
+            i = n - 1 - k
+        }
+        if !isHole(it, o, i) {
+            let base = it.stack.len()
+            try it.push(f)
+            try it.push(Value.Undefined)
+            try it.push(it.slot(at))
+            try it.push(elemAt(it, o, i))
+            try it.push(numVal(i as f64))
+            try it.push(objVal(o))
+            let r = try it.callAt(base, 4)
+            it.setSlot(at, r)
+        }
+        k += 1
+    }
+    return it.pop()
+}
+
+fn arrayReduce(it: *mut Interp, a: Args) JsError!Value {
+    return reduceCommon(it, a, false)
+}
+
+fn arrayReduceRight(it: *mut Interp, a: Args) JsError!Value {
+    return reduceCommon(it, a, true)
+}
+
+// Is x before y in the sort? (negative comparator result, or by
+// strings without a comparator; undefined sorts last).
+fn sortLess(it: *mut Interp, f: Value, x: Value, y: Value) JsError!bool {
+    if isUndef(x) {
+        return false
+    }
+    if isUndef(y) {
+        return true
+    }
+    if !isUndef(f) {
+        let r = try it.call2(f, Value.Undefined, x, y)
+        let d = try it.toNumber(r)
+        return d < 0.0
+    }
+    match x {
+        .Str { s: sx } => {
+            match y {
+                .Str { s: sy } => {
+                    return compareBytes(it.heap.bytes(sx), it.heap.bytes(sy)) < 0
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+    let xs = try it.toStringValue(x)
+    try it.push(xs)
+    let ys = try it.toStringValue(y)
+    it.pop()
+    return compareBytes(it.heap.bytes(strOf(xs)), it.heap.bytes(strOf(ys))) < 0
+}
+
+fn arraySort(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let f = it.arg(a, 0)
+    if !isUndef(f) && !it.isCallable(f) {
+        return it.typeError("The comparison function must be either a function or undefined")
+    }
+    // Merge sort (stable) of a copy without holes, then copy back.
+    let n = alen(it, o)
+    let work = try it.newArray(0)
+    try it.push(objVal(work))
+    var holes: u32 = 0
+    for i in 0..n {
+        let e = it.heap.obj(o).elems[i]
+        match e {
+            .Empty => {
+                holes += 1
+            }
+            _ => try it.heap.pushElem(work, e)
+        }
+    }
+    let tmp = try it.newArray(alen(it, work))
+    try it.push(objVal(tmp))
+    let m = alen(it, work)
+    var width: u32 = 1
+    while width < m {
+        var lo: u32 = 0
+        while lo < m {
+            var mid = lo + width
+            if mid > m {
+                mid = m
+            }
+            var hi = lo + 2 * width
+            if hi > m {
+                hi = m
+            }
+            var i = lo
+            var j = mid
+            var k = lo
+            while i < mid && j < hi {
+                let x = it.heap.obj(work).elems[i]
+                let y = it.heap.obj(work).elems[j]
+                if try sortLess(it, f, y, x) {
+                    it.heap.obj(tmp).elems[k] = y
+                    j += 1
+                } else {
+                    it.heap.obj(tmp).elems[k] = x
+                    i += 1
+                }
+                k += 1
+            }
+            while i < mid {
+                it.heap.obj(tmp).elems[k] = it.heap.obj(work).elems[i]
+                i += 1
+                k += 1
+            }
+            while j < hi {
+                it.heap.obj(tmp).elems[k] = it.heap.obj(work).elems[j]
+                j += 1
+                k += 1
+            }
+            lo += 2 * width
+        }
+        for i in 0..m {
+            it.heap.obj(work).elems[i] = it.heap.obj(tmp).elems[i]
+        }
+        width *= 2
+    }
+    try it.heap.setLength(o, m + holes, Value.Empty)
+    for i in 0..m {
+        it.heap.obj(o).elems[i] = it.heap.obj(work).elems[i]
+    }
+    for i in m..m + holes {
+        it.heap.obj(o).elems[i] = Value.Empty
+    }
+    it.pop()
+    it.pop()
+    return a.this
+}
+
+fn arrayFill(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let n = alen(it, o)
+    let start = relativeIndex(try argInteger(it, a, 1, 0.0), n)
+    let end = relativeIndex(try argInteger(it, a, 2, n as f64), n)
+    var i = start
+    while i < end {
+        it.heap.obj(o).elems[i] = it.arg(a, 0)
+        i += 1
+    }
+    return a.this
+}
+
+fn arrayAt(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let n = alen(it, o)
+    var k = try argInteger(it, a, 0, 0.0)
+    if k < 0.0 {
+        k += n as f64
+    }
+    if k < 0.0 || k >= n as f64 {
+        return Value.Undefined
+    }
+    return elemAt(it, o, k as u32)
+}
+
+fn flatInto(it: *mut Interp, out: u32, src: u32, depth: f64) JsError!void {
+    var i: u32 = 0
+    while i < alen(it, src) {
+        if !isHole(it, src, i) {
+            let e = it.heap.obj(src).elems[i]
+            if depth >= 1.0 && it.hasClass(e, Class.Array) {
+                try flatInto(it, out, objectOf(e), depth - 1.0)
+            } else {
+                try it.heap.pushElem(out, e)
+            }
+        }
+        i += 1
+    }
+}
+
+fn arrayFlat(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let depth = try argInteger(it, a, 0, 1.0)
+    let out = try it.newArray(0)
+    try it.push(objVal(out))
+    try flatInto(it, out, o, depth)
+    return it.pop()
+}
+
+fn arrayFlatMap(it: *mut Interp, a: Args) JsError!Value {
+    let mapped = try arrayMap(it, a)
+    try it.push(mapped)
+    let out = try it.newArray(0)
+    try it.push(objVal(out))
+    try flatInto(it, out, objectOf(mapped), 1.0)
+    let r = it.pop()
+    it.pop()
+    return r
+}
+
+// keys(), values() and entries() give arrays (iterated by for-of and
+// spread like the iterators they stand for).
+fn arrayKeys(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let out = try it.newArray(0)
+    for i in 0..alen(it, o) {
+        try it.heap.pushElem(out, numVal(i as f64))
+    }
+    return objVal(out)
+}
+
+fn arrayValues(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let out = try it.newArray(0)
+    for i in 0..alen(it, o) {
+        try it.heap.pushElem(out, elemAt(it, o, i))
+    }
+    return objVal(out)
+}
+
+fn arrayEntries(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisArray(it, a)
+    let out = try it.newArray(0)
+    try it.push(objVal(out))
+    for i in 0..alen(it, o) {
+        let pair = try it.newArray(0)
+        try it.heap.pushElem(pair, numVal(i as f64))
+        try it.heap.pushElem(pair, elemAt(it, o, i))
+        try it.heap.pushElem(out, objVal(pair))
+    }
+    return it.pop()
+}

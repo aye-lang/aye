@@ -171,6 +171,9 @@ pub struct FuncInfo {
 
 pub struct ScopeInfo {
     nslots: u32
+    // A function or class is created inside (a `for` loop then gives each
+    // iteration its own copy of the loop variables).
+    closures: bool
     // FuncDecl nodes created when the scope is entered.
     funcs: u32
     nfuncs: u32

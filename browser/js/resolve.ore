@@ -37,6 +37,7 @@ struct RScope {
     nslots: u32
     // FuncDecl nodes hoisted into this scope.
     funcs: List(u32)
+    closures: bool
 
     fn hasEnv(self: *Self) bool {
         return !self.top && (self.is_func || self.nslots > 0)
@@ -101,6 +102,7 @@ pub struct Resolver {
             bindings: List(Binding).init(self.alloc),
             nslots: 0,
             funcs: List(u32).init(self.alloc),
+            closures: false,
         })
     }
 
@@ -114,6 +116,7 @@ pub struct Resolver {
         }
         let info = &mut self.ast.scopes.items()[s.scope_id]
         info.nslots = s.nslots
+        info.closures = s.closures
         info.funcs = start
         info.nfuncs = s.funcs.len() as u32
         if s.is_func && s.func != NONE {
@@ -381,7 +384,6 @@ pub struct Resolver {
             }
             .For { init, cond, update, body, scope } => {
                 try self.pushScope(false, false, false, NONE, scope)
-                try self.declareLexical(st, 0)
                 match self.ast.node(init) {
                     .VarDecl { .. } => {
                         try self.declareFor(init)
@@ -579,7 +581,15 @@ pub struct Resolver {
         }
     }
 
+    // Marks every open scope as containing a closure.
+    fn markClosures(self: *mut Self) {
+        for i in 0..self.scopes.len() {
+            self.scopes.items()[i].closures = true
+        }
+    }
+
     fn function(self: *mut Self, f: u32) SyntaxErr!void {
+        self.markClosures()
         let fi = self.ast.func(f)
         try self.pushScope(true, fi.arrow, false, f, fi.scope)
         let s = self.current()
@@ -620,6 +630,7 @@ pub struct Resolver {
     }
 
     fn class(self: *mut Self, c: u32) SyntaxErr!void {
+        self.markClosures()
         let ci = self.ast.classes.items()[c]
         try self.expr(ci.heritage)
         try self.function(ci.ctor)

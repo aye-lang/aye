@@ -12,7 +12,7 @@ import std.mem.Allocator
 pub let NONE: u32 = 0xFFFFFFFF
 
 pub struct AtomInfo {
-    bytes: []u8
+    bytes: []mut u8
     // The string cell of the atom's text (NONE until needed).
     str: u32
     // The array index the atom spells, or NONE.
@@ -23,19 +23,46 @@ pub struct Atoms {
     alloc: Allocator
     map: StrMap(u32)
     list: List(AtomInfo)
+    // The bytes of the atoms, packed in chunks (atoms are never freed).
+    chunks: List([]mut u8)
+    cur: []mut u8
+    used: usize
 
     pub fn init(alloc: Allocator) Atoms {
-        return Atoms { alloc: alloc, map: StrMap(u32).init(alloc), list: List(AtomInfo).init(alloc) }
+        return Atoms {
+            alloc: alloc,
+            map: StrMap(u32).init(alloc),
+            list: List(AtomInfo).init(alloc),
+            chunks: List([]mut u8).init(alloc),
+            cur: []mut u8{},
+            used: 0,
+        }
     }
 
     pub fn deinit(self: *mut Self) {
-        for a in self.list.items() {
-            if a.bytes.len > 0 {
-                self.alloc.free(a.bytes)
-            }
+        for c in self.chunks.items() {
+            self.alloc.free(c)
         }
+        self.chunks.deinit()
         self.list.deinit()
         self.map.deinit()
+    }
+
+    // Room for n bytes that live as long as the table.
+    fn store(self: *mut Self, n: usize) AllocError![]mut u8 {
+        if self.used + n > self.cur.len {
+            var size: usize = 16384
+            if n > size {
+                size = n
+            }
+            let c = try self.alloc.alloc(0 as u8, size)
+            try self.chunks.append(c)
+            self.cur = c
+            self.used = 0
+        }
+        let s = self.cur[self.used..self.used + n]
+        self.used += n
+        return s
     }
 
     /// The atom of `s` (a copy of `s` is kept).
@@ -43,13 +70,12 @@ pub struct Atoms {
         if self.map.get(s) |a| {
             return a
         }
-        var copy: []u8 = ""
+        var copy = []mut u8{}
         if s.len > 0 {
-            let buf = try self.alloc.alloc(0 as u8, s.len)
+            copy = try self.store(s.len)
             for i, c in s {
-                buf[i] = c
+                copy[i] = c
             }
-            copy = buf
         }
         let id = self.list.len() as u32
         try self.list.append(AtomInfo { bytes: copy, str: NONE, index: arrayIndex(s) })

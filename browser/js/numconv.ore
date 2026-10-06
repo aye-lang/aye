@@ -223,58 +223,39 @@ pub fn formatFixed(b: *mut text.Builder, v: f64, digits: u32) AllocError!void {
 }
 
 fn fixedDigits(b: *mut text.Builder, neg: bool, x: f64, digits: u32) AllocError!void {
-    var tb = text.Builder.init(b.alloc)
-    defer tb.deinit()
     var buf = @zeroed([160]u8)
     let len = snprintf(buf[..].ptr, buf.len, "%.*f".ptr, (digits + 30) as i32, x) as usize
-    let s = buf[..len]
-    // digits we keep: everything up to the point plus `digits` after it.
+    // Keep everything up to the point plus `digits` after it.
     var point = len
-    for i, c in s {
-        if c == '.' {
+    for i in 0..len {
+        if buf[i] == '.' {
             point = i
             break
         }
     }
     var keep = point
+    var next = point + 1
     if digits > 0 {
         keep = point + 1 + digits as usize
+        next = keep
     }
-    try tb.append(s[..keep])
-    var roundUp = false
-    var next = keep
-    if digits == 0 {
-        next = point + 1
-    }
-    if next < len && s[next] >= '5' {
-        roundUp = true
-    }
-    let t = tb.buf[..tb.count]
-    if roundUp {
-        var i = t.len
-        var carry = true
-        while carry && i > 0 {
-            i -= 1
-            if t[i] == '.' {
-                continue
-            }
-            if t[i] == '9' {
-                t[i] = '0'
-            } else {
-                t[i] += 1
-                carry = false
-            }
+    let t = buf[..keep]
+    var carry = next < len && buf[next] >= '5'
+    var i = keep
+    while carry && i > 0 {
+        i -= 1
+        if t[i] == '.' {
+            continue
         }
-        if carry {
-            if neg {
-                try b.appendByte('-')
-            }
-            try b.appendByte('1')
-            return b.append(tb.bytes())
+        if t[i] == '9' {
+            t[i] = '0'
+        } else {
+            t[i] += 1
+            carry = false
         }
     }
-    var allZero = true
-    for c in tb.bytes() {
+    var allZero = !carry
+    for c in t {
         if c != '0' && c != '.' {
             allZero = false
         }
@@ -282,7 +263,10 @@ fn fixedDigits(b: *mut text.Builder, neg: bool, x: f64, digits: u32) AllocError!
     if neg && !allZero {
         try b.appendByte('-')
     }
-    return b.append(tb.bytes())
+    if carry {
+        try b.appendByte('1')
+    }
+    return b.append(t)
 }
 
 /// Number.prototype.toPrecision(p), 1 <= p <= 100.
@@ -302,12 +286,13 @@ pub fn formatPrecision(b: *mut text.Builder, v: f64, p: u32) AllocError!void {
 
 // `e` is C's "%.*e" text of a non-negative number with p digits.
 fn precisionLayout(b: *mut text.Builder, e: []u8, p: u32) AllocError!void {
-    var dbuf = text.Builder.init(b.alloc)
-    defer dbuf.deinit()
+    var dbuf = @zeroed([128]u8)
+    var n: usize = 0
     var i: usize = 0
     while i < e.len && e[i] != 'e' {
-        if e[i] != '.' {
-            try dbuf.appendByte(e[i])
+        if e[i] != '.' && n < 128 {
+            dbuf[n] = e[i]
+            n += 1
         }
         i += 1
     }
@@ -325,7 +310,7 @@ fn precisionLayout(b: *mut text.Builder, e: []u8, p: u32) AllocError!void {
     if neg {
         ex = -ex
     }
-    let d = dbuf.bytes()
+    let d = dbuf[..n]
     if ex < -6 || ex >= p as i64 {
         try b.appendByte(d[0])
         if d.len > 1 {
