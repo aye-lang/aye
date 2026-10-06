@@ -5,8 +5,8 @@ Run it from anywhere: python3 browser/tests/image/make_fixtures.py
 (needs Pillow with WebP; cjpeg and cwebp are used for a few files when they
 are there). The tests themselves only read the files it writes:
 
-- NAME.png / .gif / .jpg / .webp: an image, and NAME.rgba its expected pixels (raw
-  RGBA8, rows top to bottom, no header).
+- NAME.png / .gif / .jpg / .webp: an image, and NAME.rgba its expected
+  pixels (raw RGBA8, rows top to bottom, no header).
 - manifest.txt: one line per image, "FILE WIDTH HEIGHT CHECK", where CHECK
   is `exact` (the decoder must match NAME.rgba byte for byte), `jpeg` (a
   tolerance, see browser/image/tests.ore) or the error the decoder must

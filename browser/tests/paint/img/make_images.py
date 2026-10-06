@@ -1,5 +1,6 @@
 # Makes the images of the paint and layout fixtures (decoded.html,
-# layout/images.html). Needs Pillow; run from anywhere:
+# formats.html, layout/images.html). Needs Pillow (with WebP); run from
+# anywhere:
 #
 #     python3 browser/tests/paint/img/make_images.py
 #
@@ -58,3 +59,14 @@ photo(64, 48).save(os.path.join(HERE, "photo.png"))
 photo(64, 48).save(os.path.join(HERE, "photo.jpg"), quality=92, subsampling=2)
 badge(24).save(os.path.join(HERE, "badge.png"))
 icon().save(os.path.join(HERE, "icon.gif"), transparency=0)
+
+# The other formats of formats.html: WebP (lossy; lossless with alpha),
+# progressive and CMYK JPEG, and a JPEG stored on its side with an EXIF
+# orientation (6: turn a quarter clockwise) that shows it upright.
+photo(64, 48).save(os.path.join(HERE, "photo.webp"), quality=80)
+badge(24).save(os.path.join(HERE, "badge.webp"), lossless=True)
+photo(64, 48).save(os.path.join(HERE, "photo_prog.jpg"), quality=85, progressive=True)
+photo(64, 48).convert("CMYK").save(os.path.join(HERE, "photo_cmyk.jpg"), quality=90)
+exif = Image.Exif()
+exif[0x0112] = 6
+photo(64, 48).transpose(Image.ROTATE_90).save(os.path.join(HERE, "photo_exif6.jpg"), quality=92, exif=exif.tobytes())

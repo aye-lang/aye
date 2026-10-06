@@ -152,8 +152,6 @@ fn checkFixture(a: Allocator, name: []u8, w: usize, h: usize, check: []u8) !bool
 // 0.01 to 0.03 and maxima of 1 to 3 on every fixture. Replicating
 // chroma instead of libjpeg's triangle filter gives means of 2.4 to 5.0
 // and maxima of 38 to 57, so these bounds still catch a wrong decoder.
-// Lossy WebP fixtures (`lossy`) get the same bounds against libwebp's
-// decoding.
 let JPEG_MEAN_TOLERANCE: u64 = 25
 let JPEG_MAX_TOLERANCE: u64 = 8
 
