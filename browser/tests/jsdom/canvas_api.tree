@@ -8,6 +8,6 @@
       <canvas id="canvas" aria-label="Canvas tests" width="20" height="20">
         "A test drawing"
       <pre id="results">
-        "59 canvas API checks passed"
+        "62 canvas API checks passed"
       <script src="../canvas/api.js">
       "\n"

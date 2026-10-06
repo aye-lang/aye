@@ -604,7 +604,7 @@ pub let CANVAS_PRELUDE =
     \\        if ((key === 'lineWidth' || key === 'miterLimit') && v <= 0) return;
     \\        if (key === 'shadowBlur' && v < 0) return;
     \\      }
-    \\      if (key === 'font' && !/\d+(\.\d+)?(px|pt|em)\s/.test(String(v))) return;
+    \\      if (key === 'font' && !/(\d|\.\d)(px|pt|em)[\s\/]/.test(String(v))) return;
     \\      this._state[key] = typeof defaults[key] === 'string' ? String(v) : typeof defaults[key] === 'boolean' ? !!v : v;
     \\    }
     \\  });
