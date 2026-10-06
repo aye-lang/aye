@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<style>
+x-card::part(label) { color: red }
+x-card.special::part(label) { font-weight: 700 }
+::part(label) { text-align: right }
+x-card { display: block }
+:host { color: lime }
+x-card :host { color: lime }
+.light { margin-left: 2px }
+:defined { margin-top: 1px }
+x-card:not(:defined) { margin-bottom: 3px }
+</style>
+<section class="theme">
+<x-card class="dark special"><template shadowrootmode="open">
+<style>
+:host(.dark) { background-color: black }
+:host(.dark) p { color: white }
+:host(.light) p { color: gray }
+:host-context(.theme) h3 { font-style: italic }
+:host-context(.nothing) h3 { font-weight: 100 }
+:host-context(section) { padding-left: 4px }
+::slotted(*) { margin-left: 30px; margin-right: 31px }
+slot[name=title]::slotted(span) { color: navy }
+::slotted(.light) { padding-top: 2px }
+[part~=label] { text-decoration: underline; color: maroon; text-align: left }
+:host > header { padding-bottom: 5px }
+x-card header { padding-top: 6px }
+:host::after { content: "!" }
+</style>
+<header><h3 part="label">Label</h3><slot name="title"></slot></header>
+<p>Paragraph</p>
+<slot></slot>
+</template><span slot="title">Title span</span><b class="light">Default slot</b></x-card>
+</section>
+<x-card class="light"><template shadowrootmode="open"><style>:host(.dark) p { color: white } :host(.light) p { color: gray }</style><p>Light card</p></template></x-card>

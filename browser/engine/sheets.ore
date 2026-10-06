@@ -1,13 +1,16 @@
 // The author style sheet of a document: its `<style>` elements and
 // `<link rel=stylesheet>` sheets (fetched relative to the document's
 // base URL, with the document's URL as the Referer; the session's cache
-// keeps them), in document order, for the media that match. A sheet's
-// `@import` rules are fetched relative to the sheet (its URL the Referer)
-// and come before its rules (at most `MAX_IMPORT_DEPTH` sheets deep). The
-// `url()`s of a fetched sheet are made absolute against its URL as it is
-// parsed.
+// keeps them), in document order, for the media that match, then the
+// sheets scripts adopted for the document. Each shadow tree in the
+// document gets a sheet of its own the same way (`css.Sheet.scoped`).
+// A sheet's `@import` rules are fetched relative to the sheet (its URL
+// the Referer) and come before its rules (at most `MAX_IMPORT_DEPTH`
+// sheets deep). The `url()`s of a fetched sheet are made absolute
+// against its URL as it is parsed.
 
 import css
+import dom
 import dom.Document
 import dom.NodeId
 import encoding
@@ -25,19 +28,37 @@ pub fn authorSheets(alloc: Allocator, doc: *Document, address: *Url, media: css.
     var base = try documentBase(alloc, doc, address)
     defer base.deinit(alloc)
     try prefetchSheets(alloc, doc, &base, address, media, sheet)
-    var cur: ?NodeId = doc.root
+    try treeSheets(alloc, doc, doc.root, &base, address, media, sheet)
+    for root in doc.shadows.items() {
+        if doc.isLive(root) && doc.isConnected(root) {
+            let scoped = try sheet.addScoped(root)
+            try treeSheets(alloc, doc, root, &base, address, media, scoped)
+        }
+    }
+}
+
+// The sheets of the tree of `root` (the document node or a shadow root):
+// its `style` and `link` elements in tree order, then the sheets scripts
+// adopted for it.
+fn treeSheets(alloc: Allocator, doc: *Document, root: NodeId, base: *Url, address: *Url, media: css.Media, sheet: *mut css.Sheet) AllocError!void {
+    var cur: ?NodeId = root
     while cur |h| {
         if doc.isElement(h, "style") && (try mediaOk(doc, h, media, sheet)) {
             var src = text.Builder.init(alloc)
             defer src.deinit()
             try doc.textContent(h, &mut src)
-            try parseWithImports(alloc, &base, address, src.bytes(), media, sheet, false)
+            try parseWithImports(alloc, base, address, src.bytes(), media, sheet, false)
         } else if doc.isElement(h, "link") && isStylesheetLink(doc, h) && (try mediaOk(doc, h, media, sheet)) {
             if doc.attr(h, "href") |href| {
-                try linkedSheet(alloc, &base, address, href, media, sheet)
+                try linkedSheet(alloc, base, address, href, media, sheet)
             }
         }
-        cur = doc.following(h, doc.root)
+        cur = doc.following(h, root)
+    }
+    for ad in doc.adopted.items() {
+        if dom.same(ad.root, root) {
+            try css.parseSheet(sheet, ad.css, media)
+        }
     }
 }
 

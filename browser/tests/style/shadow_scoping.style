@@ -1,0 +1,75 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <x-box id="one">
+      color: rgb(0, 128, 0)
+      margin-right: 7px
+      margin-left: 4px
+      padding-top: 3px
+      #shadow-root (open)
+        <style>
+          display: none
+          color: rgb(0, 128, 0)
+        <p>
+          display: block
+          color: rgb(0, 0, 255)
+          margin-top: 16px
+          margin-bottom: 16px
+          ::before
+            display: inline
+            margin-top: 0px
+            margin-bottom: 0px
+            content: "> "
+        <div>
+          display: block
+          color: rgb(0, 128, 0)
+          margin-top: 9px
+          <slot>
+            display: contents
+            color: rgb(128, 0, 128)
+      <span class="light">
+        color: rgb(128, 0, 128)
+        font-weight: 700
+        font-style: italic
+      <p>
+        display: block
+        color: rgb(255, 0, 0)
+        margin-top: 16px
+        margin-bottom: 16px
+    <div style="padding-top: 1px" id="two">
+      display: block
+      padding-top: 5px
+      padding-bottom: 6px
+      #shadow-root (open)
+        <style>
+          display: none
+        <b>
+          font-weight: 700
+      <div>
+        display: block
+    <x-plain>
+      #shadow-root (open)
+        <p>
+          display: block
+          margin-top: 16px
+          margin-bottom: 16px
+          <x-inner>
+            #shadow-root (open)
+              <style>
+                display: none
+              <i>
+                color: rgb(128, 128, 0)
+                font-style: italic
+              <slot>
+                display: contents
+            <i>
+              font-style: italic

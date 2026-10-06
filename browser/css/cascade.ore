@@ -23,6 +23,17 @@
 // of their own (`Styles.pseudo`) from the rules that select them (no
 // `style` attribute), inheriting from the element, when their `content`
 // is not `normal` or `none`.
+//
+// Shadow trees (CSS Scoping): the elements of every shadow tree in the
+// document get styles too, a shadow tree's before its host's children,
+// and an element inherits from its parent in the flat tree (a slotted
+// one from its slot). The author sheet applies to the document's tree,
+// the sheet of a shadow tree (`Sheet.scoped`) to that tree; besides, a
+// host gets the `:host` rules of its shadow tree's sheet, a slotted
+// element the `::slotted()` rules of its slot's, and an element with a
+// `part` the `::part()` rules of its host's tree. Normal declarations of
+// an inner tree lose to those of the outer one, important ones win
+// (the `L_*` levels).
 
 import dom
 import dom.Document
@@ -150,8 +161,50 @@ struct CustomWin {
 
 let NO_DECL = Decl { prop: 0, value: Value.Initial, important: false, raw: []Token{}, name: "" }
 
+// The levels of normal declarations, lowest first: the UA sheet, the
+// `:host` rules of an element's shadow tree, the `::slotted()` rules of
+// its slot's, hints and the sheet of its own tree, the `::part()` rules
+// of its host's tree, its `style` attribute. Important declarations are
+// above them in the reverse order (`declLevel`).
+let L_UA: u8 = 1
+let L_HOST: u8 = 2
+let L_SLOTTED: u8 = 3
+let L_AUTHOR: u8 = 4
+let L_PART: u8 = 5
+let L_STYLE: u8 = 6
+
+// The level of a declaration of a sheet at the level `level`.
+fn declLevel(level: u8, important: bool) u8 {
+    if !important {
+        return level
+    }
+    if level == L_UA {
+        return 12
+    }
+    if level == L_STYLE {
+        return 11
+    }
+    // From 7 (::part) to 10 (:host).
+    return 12 - level
+}
+
+// What `Computer.consider` matches the rules against: the element, its
+// slot (`::slotted()`), or its host (`::part()`).
+let MATCH_ELEMENT: u8 = 0
+let MATCH_SLOTTED: u8 = 1
+let MATCH_PART: u8 = 2
+
+// The sheet of a tree (the document's or a shadow tree's) and its rules
+// with a selector of `::before` or `::after`.
+struct Scope {
+    root: NodeId
+    sheet: *Sheet
+    pseudo: List(usize)
+}
+
 /// Computes the style of every element of `doc` from the user-agent
-/// sheet `ua` and the author sheet `author` (and `style` attributes).
+/// sheet `ua` and the author sheet `author` (with the sheets of its
+/// shadow trees) and `style` attributes.
 pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, out: *mut Styles) AllocError!void {
     let a = out.arena.allocator()
     let wins = try a.alloc(Win { set: false, level: 0, spec: 0, d: NO_DECL }, NPROPS)
@@ -165,38 +218,73 @@ pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, o
         custom_wins: List(CustomWin).init(out.alloc),
         custom_index: StrMap(usize).init(out.alloc),
         level: null,
+        scopes: List(Scope).init(out.alloc),
+        part_host: doc.root,
     }
     defer c.deinit()
+    try c.addScopes(author)
     var hints = text.Builder.init(out.alloc)
     defer hints.deinit()
     // The rules that select pseudo-elements.
     var ua_pseudo = List(usize).init(out.alloc)
     defer ua_pseudo.deinit()
-    var author_pseudo = List(usize).init(out.alloc)
-    defer author_pseudo.deinit()
     try pseudoRules(ua, &mut ua_pseudo)
-    try pseudoRules(author, &mut author_pseudo)
+    defer setShadowHost(null)
+    // Shadow-including order: a host, its shadow tree, its children.
     var cur: ?NodeId = doc.root
     while cur |h| {
         if doc.node(h).kind == Kind.Element {
             try styleElement(&mut c, ua, author, &mut hints, h)
-            if ua_pseudo.len() + author_pseudo.len() > 0 {
-                for which in 1..3 {
-                    for i in 0..wins.len {
-                        wins[i].set = false
-                    }
-                    c.clearCustoms()
-                    var any = try c.considerPseudo(ua, ua_pseudo.items(), h, false, which as u8)
-                    if try c.considerPseudo(author, author_pseudo.items(), h, true, which as u8) {
-                        any = true
-                    }
-                    if any {
-                        try c.computePseudo(h, which as u8)
-                    }
-                }
+            try stylePseudos(&mut c, ua, ua_pseudo.items(), h)
+        }
+        cur = dom.shadowIncludingFollowing(doc, h, doc.root)
+    }
+}
+
+// The styles of the `::before` and `::after` of the element `h`.
+fn stylePseudos(c: *mut Computer, ua: *Sheet, ua_pseudo: []usize, h: NodeId) AllocError!void {
+    let doc = c.doc
+    let root = doc.treeRoot(h)
+    let own = c.scopeOf(root)
+    var host_scope: ?usize = null
+    if doc.node(h).shadow |sr| {
+        host_scope = c.scopeOf(sr)
+    }
+    var n = ua_pseudo.len
+    if own |i| {
+        n += c.scopes.items()[i].pseudo.len()
+    }
+    if host_scope |i| {
+        n += c.scopes.items()[i].pseudo.len()
+    }
+    if n == 0 {
+        return
+    }
+    for which in 1..3 {
+        for i in 0..c.wins.len {
+            c.wins[i].set = false
+        }
+        c.clearCustoms()
+        setShadowHost(null)
+        var any = try c.considerPseudo(ua, ua_pseudo, h, L_UA, which as u8)
+        if host_scope |i| {
+            let sc = c.scopes.items()[i]
+            setShadowHost(h)
+            if try c.considerPseudo(sc.sheet, sc.pseudo.items(), h, L_HOST, which as u8) {
+                any = true
             }
         }
-        cur = doc.following(h, doc.root)
+        if own |i| {
+            let sc = c.scopes.items()[i]
+            setShadowHost(dom.hostOf(doc, root))
+            if try c.considerPseudo(sc.sheet, sc.pseudo.items(), h, L_AUTHOR, which as u8) {
+                any = true
+            }
+        }
+        setShadowHost(null)
+        if any {
+            try c.computePseudo(h, which as u8)
+        }
     }
 }
 
@@ -218,8 +306,12 @@ pub fn computeStylesOf(doc: *Document, ua: *Sheet, author: *Sheet, media: Media,
         custom_wins: List(CustomWin).init(out.alloc),
         custom_index: StrMap(usize).init(out.alloc),
         level: null,
+        scopes: List(Scope).init(out.alloc),
+        part_host: doc.root,
     }
     defer c.deinit()
+    try c.addScopes(author)
+    defer setShadowHost(null)
     var hints = text.Builder.init(out.alloc)
     defer hints.deinit()
     // From the root down, so that each element inherits from its parent.
@@ -229,14 +321,32 @@ pub fn computeStylesOf(doc: *Document, ua: *Sheet, author: *Sheet, media: Media,
     while cur |h| {
         if doc.node(h).kind == Kind.Element {
             try chain.append(h)
+            cur = styleParent(doc, h)
+        } else {
+            cur = doc.node(h).parent
         }
-        cur = doc.node(h).parent
     }
     var i = chain.len()
     while i > 0 {
         i -= 1
         try styleElement(&mut c, ua, author, &mut hints, chain.items()[i])
     }
+}
+
+// The element whose style `el` inherits: its parent in the flat tree
+// (null at the root), or its parent element when it is a child of a
+// host that no slot takes.
+fn styleParent(doc: *Document, el: NodeId) ?NodeId {
+    if doc.shadows.len() == 0 {
+        return parentElement(doc, el)
+    }
+    if dom.flatParent(doc, el) |p| {
+        if doc.node(p).kind == Kind.Element {
+            return p
+        }
+        return null
+    }
+    return parentElement(doc, el)
 }
 
 // The cascade for one element whose parent has its style.
@@ -247,40 +357,48 @@ fn styleElement(c: *mut Computer, ua: *Sheet, author: *Sheet, hints: *mut text.B
         c.wins[i].set = false
     }
     c.clearCustoms()
-    try c.consider(ua, h, false)
+    setShadowHost(null)
+    try c.consider(ua, h, L_UA, MATCH_ELEMENT)
     if doc.quirks {
-        try c.consider(&out.quirks, h, false)
+        try c.consider(&out.quirks, h, L_UA, MATCH_ELEMENT)
+    }
+    if doc.shadows.len() > 0 {
+        try c.considerShadowRules(h)
     }
     hints.clear()
     try writeHints(doc, h, hints)
     if hints.len() > 0 {
         let range = try parseInline(&mut out.inline, hints.bytes())
         for k in range.start..range.end {
-            try c.offer(out.inline.decls.items()[k], 2, 0)
+            try c.offer(out.inline.decls.items()[k], L_AUTHOR, 0)
         }
     }
-    try c.consider(author, h, true)
+    let root = doc.treeRoot(h)
+    if dom.same(root, doc.root) {
+        try c.consider(author, h, L_AUTHOR, MATCH_ELEMENT)
+    } else if c.scopeOf(root) |i| {
+        setShadowHost(dom.hostOf(doc, root))
+        try c.consider(c.scopes.items()[i].sheet, h, L_AUTHOR, MATCH_ELEMENT)
+        try c.considerParts(h, root)
+        setShadowHost(null)
+    }
     if doc.attr(h, "style") |src| {
         let range = try parseInline(&mut out.inline, src)
         for k in range.start..range.end {
             let d = out.inline.decls.items()[k]
-            var level: u8 = 3
-            if d.important {
-                level = 5
-            }
-            try c.offer(d, level, 0)
+            try c.offer(d, declLevel(L_STYLE, d.important), 0)
         }
     }
     try c.compute(h)
 }
 
-// The indices of the rules of `sheet` with a selector of a
-// pseudo-element.
+// The indices of the rules of `sheet` with a selector of `::before` or
+// `::after`.
 fn pseudoRules(sheet: *Sheet, out: *mut List(usize)) AllocError!void {
     let complexes = sheet.complexes.items()
     for ri, r in sheet.rules.items() {
         for k in r.sel_start..r.sel_end {
-            if complexes[k].pseudo != 0 {
+            if complexes[k].pseudo == 1 || complexes[k].pseudo == 2 {
                 try out.append(ri)
                 break
             }
@@ -303,11 +421,97 @@ struct Computer {
     custom_index: StrMap(usize)
     // The custom properties the element sees.
     level: ?*mut CustomLevel
+    // The sheets of the document's tree and of its shadow trees.
+    scopes: List(Scope)
+    // The host whose `::part()` rules `consider` matches.
+    part_host: NodeId
 
     fn deinit(self: *mut Self) {
         self.centered.deinit()
         self.custom_wins.deinit()
         self.custom_index.deinit()
+        for i in 0..self.scopes.len() {
+            self.scopes.items()[i].pseudo.deinit()
+        }
+        self.scopes.deinit()
+    }
+
+    // The scopes of the author sheet `author` and of the sheets of the
+    // shadow trees it has.
+    fn addScopes(self: *mut Self, author: *Sheet) AllocError!void {
+        try self.addScope(self.doc.root, author)
+        for sc in author.scoped.items() {
+            try self.addScope(sc.root, sc.sheet)
+        }
+    }
+
+    fn addScope(self: *mut Self, root: NodeId, sheet: *Sheet) AllocError!void {
+        var pseudo = List(usize).init(self.out.alloc)
+        pseudoRules(sheet, &mut pseudo) catch |e| {
+            pseudo.deinit()
+            return e
+        }
+        self.scopes.append(Scope { root: root, sheet: sheet, pseudo: pseudo }) catch |e| {
+            pseudo.deinit()
+            return e
+        }
+    }
+
+    // The scope of the tree whose root is `root` (null for a tree out of
+    // the document).
+    fn scopeOf(self: *Self, root: NodeId) ?usize {
+        for i, sc in self.scopes.items() {
+            if dom.same(sc.root, root) {
+                return i
+            }
+        }
+        return null
+    }
+
+    // The `:host` rules of the shadow tree of `h` (a host), and the
+    // `::slotted()` rules of the shadow tree of the slot it is assigned
+    // to.
+    fn considerShadowRules(self: *mut Self, h: NodeId) AllocError!void {
+        let n = self.doc.node(h)
+        if n.shadow |sr| {
+            if self.scopeOf(sr) |i| {
+                setShadowHost(h)
+                try self.consider(self.scopes.items()[i].sheet, h, L_HOST, MATCH_ELEMENT)
+            }
+        }
+        if n.slot |slot| {
+            let sr = self.doc.treeRoot(slot)
+            if self.scopeOf(sr) |i| {
+                setShadowHost(dom.hostOf(self.doc, sr))
+                try self.consider(self.scopes.items()[i].sheet, h, L_SLOTTED, MATCH_SLOTTED)
+            }
+        }
+        setShadowHost(null)
+    }
+
+    // The `::part()` rules of the tree of the host of `root` (the shadow
+    // root of the tree `h` is in), when `h` has a `part`.
+    fn considerParts(self: *mut Self, h: NodeId, root: NodeId) AllocError!void {
+        if self.doc.attr(h, "part") == null {
+            return
+        }
+        let host = dom.hostOf(self.doc, root) orelse return
+        let outer = self.doc.treeRoot(host)
+        let i = self.scopeOf(outer) orelse return
+        setShadowHost(dom.hostOf(self.doc, outer))
+        self.part_host = host
+        try self.consider(self.scopes.items()[i].sheet, h, L_PART, MATCH_PART)
+    }
+
+    // Does the selector `cx` of `sheet` match `el` (`how`: MATCH_*)?
+    fn ruleMatches(self: *Self, sheet: *Sheet, cx: Complex, el: NodeId, how: u8) bool {
+        if how == MATCH_SLOTTED {
+            return matchesSlotted(sheet, self.doc, cx, el)
+        }
+        if how == MATCH_PART {
+            return matchesPart(sheet, self.doc, cx, el, self.part_host)
+        }
+        return matchesComplex(sheet, self.doc, cx, el)
     }
 
     fn clearCustoms(self: *mut Self) {
@@ -318,8 +522,9 @@ struct Computer {
         }
     }
 
-    // Offers the declarations of every rule of `sheet` that matches `el`.
-    fn consider(self: *mut Self, sheet: *Sheet, el: NodeId, author: bool) AllocError!void {
+    // Offers the declarations of every rule of `sheet` (at the level
+    // `level`) that matches `el` (`how`: MATCH_*).
+    fn consider(self: *mut Self, sheet: *Sheet, el: NodeId, level: u8, how: u8) AllocError!void {
         let complexes = sheet.complexes.items()
         let decls = sheet.decls.items()
         for r in sheet.rules.items() {
@@ -327,7 +532,7 @@ struct Computer {
             var spec: u32 = 0
             for k in r.sel_start..r.sel_end {
                 let cx = complexes[k]
-                if (!matched || cx.spec > spec) && matchesComplex(sheet, self.doc, cx, el) {
+                if (!matched || cx.spec > spec) && self.ruleMatches(sheet, cx, el, how) {
                     matched = true
                     if cx.spec > spec {
                         spec = cx.spec
@@ -339,22 +544,15 @@ struct Computer {
             }
             for k in r.decl_start..r.decl_end {
                 let d = decls[k]
-                var level: u8 = 1
-                if author && d.important {
-                    level = 4
-                } else if author {
-                    level = 2
-                } else if d.important {
-                    level = 6
-                }
-                try self.offer(d, level, spec)
+                try self.offer(d, declLevel(level, d.important), spec)
             }
         }
     }
 
-    // Offers the declarations of the rules `rules` of `sheet` that select
-    // the pseudo-element `pseudo` of `el`; whether one did.
-    fn considerPseudo(self: *mut Self, sheet: *Sheet, rules: []usize, el: NodeId, author: bool, pseudo: u8) AllocError!bool {
+    // Offers the declarations of the rules `rules` of `sheet` (at the
+    // level `level`) that select the pseudo-element `pseudo` of `el`;
+    // whether one did.
+    fn considerPseudo(self: *mut Self, sheet: *Sheet, rules: []usize, el: NodeId, level: u8, pseudo: u8) AllocError!bool {
         let complexes = sheet.complexes.items()
         let decls = sheet.decls.items()
         var any = false
@@ -377,15 +575,7 @@ struct Computer {
             any = true
             for k in r.decl_start..r.decl_end {
                 let d = decls[k]
-                var level: u8 = 1
-                if author && d.important {
-                    level = 4
-                } else if author {
-                    level = 2
-                } else if d.important {
-                    level = 6
-                }
-                try self.offer(d, level, spec)
+                try self.offer(d, declLevel(level, d.important), spec)
             }
         }
         return any
@@ -453,7 +643,7 @@ struct Computer {
         var parent = self.out.initial
         var is_root = true
         var inherited: ?*mut CustomLevel = null
-        if parentElement(self.doc, el) |p| {
+        if styleParent(self.doc, el) |p| {
             if self.out.map.get(p.index) |pv| {
                 parent = pv
                 is_root = false
@@ -553,7 +743,7 @@ struct Computer {
     // descendants until something sets another alignment.
     fn alignCenter(self: *mut Self, el: NodeId, values: []mut Value) AllocError!void {
         var parent_centers = false
-        if parentElement(self.doc, el) |p| {
+        if styleParent(self.doc, el) |p| {
             parent_centers = self.centered.contains(p.index)
         }
         let display = keywordText(values[DISPLAY])
