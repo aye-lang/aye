@@ -151,6 +151,9 @@ and a local test server), so CI needs no network and no display.
 - **Acceptance:** scripted agent sessions over fixtures (fill and submit
   a form, follow a link by ref, read a JS-rendered list) with golden
   transcripts; an MCP handshake and `tools/list` golden.
+- The protocol is in `docs/agent-protocol.md`. Done so far: snapshot,
+  read, navigation, click, type, select, press, scroll, find and wait
+  (forms and scripts record events), `dump --a11y` and `dump --md`.
 
 ### B8: The real web
 

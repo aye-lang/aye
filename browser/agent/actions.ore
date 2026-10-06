@@ -1,0 +1,1061 @@
+// Actions on a session: navigate, back, forward, reload, click, type,
+// select, press, scroll, wait, and find. Each returns an `Outcome`: a
+// short message, whether a new document is shown, and for actions that
+// stay on the document, the lines of the snapshot that changed.
+//
+// Without forms and scripts (B5, B6), what they would do is recorded in
+// `Session.events`: clicks on buttons, submissions, key presses.
+
+import dom
+import dom.Document
+import dom.Kind
+import dom.NodeId
+import html
+import std
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+import url
+import url.Url
+
+pub enum Action {
+    Navigate { target: []u8 }
+    Back
+    Forward
+    Reload
+    Click { ref: []u8 }
+    Type { ref: []u8, input: []u8, submit: bool }
+    Select { ref: []u8, option: []u8 }
+    Press { key: []u8 }
+    // To the element `ref`, or by `dy` px when `ref` is empty.
+    Scroll { ref: []u8, dy: f64 }
+    Wait
+}
+
+pub struct Outcome {
+    ok: bool
+    // What happened, or why not.
+    message: []u8
+    // A new document is shown.
+    navigated: bool
+    // The snapshot lines that changed ("- old" and "+ new"), for actions
+    // that stayed on the document.
+    diff: []u8
+}
+
+fn done(message: []u8) Outcome {
+    return Outcome { ok: true, message: message, navigated: false, diff: "" }
+}
+
+fn failed(message: []u8) Outcome {
+    return Outcome { ok: false, message: message, navigated: false, diff: "" }
+}
+
+/// Runs `act`; for an action that stays on the document, also the
+/// snapshot diff. Everything returned is in `tmp`.
+fn perform(s: *mut Session, tmp: Allocator, act: Action) AllocError!Outcome {
+    let before_page = s.page
+    var before: []u8 = ""
+    if s.page |p| {
+        before = try snapshotText(p, tmp, false)
+    }
+    var o = try applyAction(s, tmp, act)
+    if o.ok && !o.navigated && before_page != null && s.page == before_page {
+        let after = try snapshotText(s.page.?, tmp, false)
+        o.diff = try diffLines(tmp, before, after)
+    }
+    return o
+}
+
+fn snapshotText(p: *mut Page, tmp: Allocator, boxes: bool) AllocError![]u8 {
+    let ax = try buildAx(p, tmp)
+    var out = text.Builder.init(tmp)
+    try writeAxText(&ax, &mut out, boxes)
+    return out.bytes()
+}
+
+fn applyAction(s: *mut Session, tmp: Allocator, act: Action) AllocError!Outcome {
+    return match act {
+        .Navigate { target } => try navigate(s, tmp, target)
+        .Back => try moveInHistory(s, tmp, -1)
+        .Forward => try moveInHistory(s, tmp, 1)
+        .Reload => try moveInHistory(s, tmp, 0)
+        .Click { ref } => try click(s, tmp, ref)
+        .Type { ref, input, submit } => try typeInto(s, tmp, ref, input, submit)
+        .Select { ref, option } => try selectOption(s, tmp, ref, option)
+        .Press { key } => try press(s, tmp, key)
+        .Scroll { ref, dy } => try scroll(s, tmp, ref, dy)
+        .Wait => try waitFor(s)
+    }
+}
+
+fn waitFor(s: *mut Session) AllocError!Outcome {
+    if s.page == null {
+        return failed("no page: navigate first")
+    }
+    return done("nothing to wait for: the page is loaded and scripts do not run yet")
+}
+
+// ---- navigation
+
+fn navigate(s: *mut Session, tmp: Allocator, target: []u8) AllocError!Outcome {
+    let dest = try targetUrl(s, tmp, target)
+    if dest |w| {
+        return goTo(s, tmp, &w, true)
+    }
+    return failed(try concat(tmp, "not a URL: ", target, ""))
+}
+
+/// Shows `target`: in the document when only the fragment differs, else
+/// by loading it. `push` adds a history entry (navigate, links); else
+/// the current entry is replaced (back, forward, reload).
+fn goTo(s: *mut Session, tmp: Allocator, target: *Url, push: bool) AllocError!Outcome {
+    if s.page |p| {
+        if push && target.has_fragment && text.eql(target.withoutFragment(), p.location.withoutFragment()) {
+            let moved = url.parse(s.alloc, target.href) catch |e| {
+                return AllocError.OutOfMemory
+            }
+            p.location.deinit(s.alloc)
+            p.location = moved
+            try pushHistory(s, moved.href)
+            scrollToFragment(p, target.fragment)
+            return done(try concat(tmp, "scrolled to #", target.fragment, ""))
+        }
+    }
+    var why = text.Builder.init(tmp)
+    var base = s.next_ref
+    if s.page |old| {
+        base = old.ref_base + old.refs.len() as u32
+    }
+    let opened = try openPage(s.alloc, target, s.media, base, &mut why)
+    let p = opened orelse {
+        return failed(why.bytes())
+    }
+    if s.page |old| {
+        freePage(old)
+    }
+    s.page = p
+    s.next_ref = base
+    // Refs in document order, before anyone asks.
+    try buildAx(p, tmp)
+    s.next_ref = p.ref_base + p.refs.len() as u32
+    if p.location.has_fragment {
+        scrollToFragment(p, p.location.fragment)
+    }
+    if push {
+        try pushHistory(s, p.location.href)
+    } else if s.history.len() > 0 {
+        s.alloc.free(s.history.items()[s.index])
+        s.history.items()[s.index] = try dupOwned(s.alloc, p.location.href)
+    }
+    var msg = text.Builder.init(tmp)
+    try msg.append("loaded ")
+    try msg.append(p.location.href)
+    if p.status != 200 {
+        try msg.append(" (status ")
+        try msg.appendInt(p.status)
+        try msg.appendByte(')')
+    }
+    return Outcome { ok: true, message: msg.bytes(), navigated: true, diff: "" }
+}
+
+fn pushHistory(s: *mut Session, href: []u8) AllocError!void {
+    while s.history.len() > 0 && s.history.len() > s.index + 1 {
+        if s.history.pop() |h| {
+            s.alloc.free(h)
+        }
+    }
+    try s.history.append(try dupOwned(s.alloc, href))
+    s.index = s.history.len() - 1
+}
+
+fn dupOwned(alloc: Allocator, b: []u8) AllocError![]u8 {
+    let copy = try alloc.alloc(0 as u8, b.len)
+    std.mem.copy(copy, b)
+    return copy
+}
+
+/// Back (`step` -1), forward (1) or reload (0).
+fn moveInHistory(s: *mut Session, tmp: Allocator, step: i64) AllocError!Outcome {
+    if s.history.len() == 0 {
+        return failed("no page: navigate first")
+    }
+    if step < 0 && s.index == 0 {
+        return failed("no previous page in the history")
+    }
+    if step > 0 && s.index + 1 >= s.history.len() {
+        return failed("no next page in the history")
+    }
+    let old_index = s.index
+    if step < 0 {
+        s.index -= 1
+    } else if step > 0 {
+        s.index += 1
+    }
+    let href = s.history.items()[s.index]
+    let target = url.parse(tmp, href) catch |e| {
+        s.index = old_index
+        return failed(try concat(tmp, "not a URL: ", href, ""))
+    }
+    let o = try goTo(s, tmp, &target, false)
+    if !o.ok {
+        s.index = old_index
+    }
+    return o
+}
+
+/// Scrolls to the element with id `frag` (or an `a name=frag`).
+fn scrollToFragment(p: *mut Page, frag: []u8) {
+    var el = p.doc.getElementById(frag)
+    if el == null {
+        var cur: ?NodeId = p.doc.root
+        while cur |h| {
+            if p.doc.isElement(h, "a") {
+                if p.doc.attr(h, "name") |n| {
+                    if text.eql(n, frag) {
+                        el = h
+                        break
+                    }
+                }
+            }
+            cur = p.doc.following(h, p.doc.root)
+        }
+    }
+    if el |e| {
+        if rectOf(p, e) |r| {
+            p.scroll_y = clampScroll(p, r.y)
+        }
+    } else if frag.len == 0 || text.eqlIgnoreCase(frag, "top") {
+        p.scroll_y = 0.0
+    }
+}
+
+fn clampScroll(p: *Page, y: f64) f64 {
+    return std.math.clamp(y, 0.0, maxScroll(p))
+}
+
+// ---- elements
+
+/// `a`, `b` and `c` joined, in `tmp`.
+fn concat(tmp: Allocator, a: []u8, b: []u8, c: []u8) AllocError![]u8 {
+    var out = text.Builder.init(tmp)
+    try out.append(a)
+    try out.append(b)
+    try out.append(c)
+    return out.bytes()
+}
+
+/// The page and the node of `ref`, or why there is none.
+struct Target {
+    page: ?*mut Page
+    node: ?NodeId
+    why: []u8
+}
+
+fn findTarget(s: *mut Session, tmp: Allocator, ref: []u8) AllocError!Target {
+    if s.page |p| {
+        if nodeOfRef(p, ref) |n| {
+            return Target { page: p, node: n, why: "" }
+        }
+        let why = try concat(tmp, "unknown ref ", ref, ": take a new snapshot (refs belong to one document)")
+        return Target { page: null, node: null, why: why }
+    }
+    return Target { page: null, node: null, why: "no page: navigate first" }
+}
+
+/// `role "name" [eN]` of `el`.
+fn describeNode(p: *mut Page, tmp: Allocator, el: NodeId) AllocError![]u8 {
+    var ax = try newAx(p, tmp)
+    var out = text.Builder.init(tmp)
+    var role = roleOf(&ax, el)
+    if role.len == 0 || text.eql(role, "skip") || text.eql(role, "generic-clickable") {
+        role = "generic"
+    }
+    try out.append(role)
+    let name = try nameOf(&mut ax, el, role)
+    if name.len > 0 {
+        try out.appendByte(' ')
+        try quoteText(&mut out, name)
+    }
+    if p.ref_of.get(el.index) |r| {
+        try out.append(" [e")
+        try out.appendUint(r as u64)
+        try out.appendByte(']')
+    }
+    return out.bytes()
+}
+
+fn nodeName(p: *Page, el: NodeId) []u8 {
+    return p.doc.node(el).name
+}
+
+fn isTextInput(p: *Page, el: NodeId) bool {
+    if p.doc.isElement(el, "textarea") {
+        return true
+    }
+    if !p.doc.isElement(el, "input") {
+        return false
+    }
+    let t = inputType(p, el)
+    return !inSetIgnoreCase(t, "checkbox radio button submit reset image file range color hidden")
+}
+
+// Is `word` one of the space-separated words of `set`, ignoring ASCII
+// case?
+fn inSetIgnoreCase(word: []u8, set: []u8) bool {
+    var words = text.split(set, " ")
+    while words.next() |w| {
+        if text.eqlIgnoreCase(w, word) {
+            return true
+        }
+    }
+    return false
+}
+
+fn isCheckable(p: *Page, el: NodeId) bool {
+    if !p.doc.isElement(el, "input") {
+        return false
+    }
+    let t = inputType(p, el)
+    return text.eqlIgnoreCase(t, "checkbox") || text.eqlIgnoreCase(t, "radio")
+}
+
+/// The `form` of a control: its `form` attribute, else the nearest
+/// `form` around it.
+fn formOf(p: *Page, el: NodeId) ?NodeId {
+    if p.doc.attr(el, "form") |id| {
+        if p.doc.getElementById(id) |f| {
+            return f
+        }
+    }
+    var cur = p.doc.parent(el)
+    while cur |c| {
+        if p.doc.isElement(c, "form") {
+            return c
+        }
+        cur = p.doc.parent(c)
+    }
+    return null
+}
+
+/// Is `el` a submit button: `button` without a type or of type submit,
+/// `input type=submit|image`?
+fn isSubmitButton(p: *Page, el: NodeId) bool {
+    if p.doc.isElement(el, "button") {
+        if p.doc.attr(el, "type") |t| {
+            return text.eqlIgnoreCase(text.trim(t), "submit")
+        }
+        return true
+    }
+    if p.doc.isElement(el, "input") {
+        let t = inputType(p, el)
+        return text.eqlIgnoreCase(t, "submit") || text.eqlIgnoreCase(t, "image")
+    }
+    return false
+}
+
+fn isFocusable(p: *Page, el: NodeId) bool {
+    let n = p.doc.node(el)
+    if n.kind != Kind.Element {
+        return false
+    }
+    if !rendered(p, el) || styleHidden(p, el) || isDisabled(p, el) {
+        return false
+    }
+    if p.doc.attr(el, "tabindex") |v| {
+        let i = text.parseInt(text.trim(v)) catch 0
+        return i >= 0
+    }
+    if text.eql(n.name, "a") || text.eql(n.name, "area") {
+        return p.doc.attr(el, "href") != null
+    }
+    return html.isIn(n.name, "button input select textarea summary")
+}
+
+fn removeAttr(doc: *mut Document, el: NodeId, name: []u8) {
+    let n = doc.node(el)
+    var k: usize = 0
+    for i in 0..n.attrs.len {
+        let at = n.attrs[i]
+        if !text.eql(at.name, name) {
+            n.attrs[k] = at
+            k += 1
+        }
+    }
+    n.attrs = n.attrs[0..k]
+}
+
+/// Records an event that forms or scripts will handle, and says so.
+fn recordOn(s: *mut Session, tmp: Allocator, what: []u8, el: NodeId) AllocError![]u8 {
+    let p = s.page.?
+    let who = try describeNode(p, tmp, el)
+    let ev = try concat(tmp, what, " ", who)
+    try recordEvent(s, ev)
+    return ev
+}
+
+// ---- click
+
+fn click(s: *mut Session, tmp: Allocator, ref: []u8) AllocError!Outcome {
+    let t = try findTarget(s, tmp, ref)
+    let p = t.page orelse {
+        return failed(t.why)
+    }
+    return clickNode(s, tmp, p, t.node.?)
+}
+
+fn clickNode(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId) AllocError!Outcome {
+    let who = try describeNode(p, tmp, el)
+    if isDisabled(p, el) {
+        return failed(try concat(tmp, "cannot click ", who, ": it is disabled"))
+    }
+    if isFocusable(p, el) {
+        p.focused = el
+    }
+    // A link, or an element inside one.
+    var cur: ?NodeId = el
+    while cur |c| {
+        if (p.doc.isElement(c, "a") || p.doc.isElement(c, "area")) && p.doc.attr(c, "href") != null {
+            return followLink(s, tmp, p, c, who)
+        }
+        if p.doc.isElement(c, "button") || p.doc.isElement(c, "label") {
+            break
+        }
+        cur = p.doc.parent(c)
+    }
+    if isCheckable(p, el) {
+        return toggle(p, tmp, el, who)
+    }
+    if p.doc.attr(el, "role") |r| {
+        if html.isIn(text.trim(r), "checkbox switch menuitemcheckbox") {
+            if attrIs(p, el, "aria-checked", "true") {
+                try p.doc.setAttr(el, "aria-checked", "false")
+            } else {
+                try p.doc.setAttr(el, "aria-checked", "true")
+            }
+            try relayout(p)
+            try recordOn(s, tmp, "click on", el)
+            return done(try concat(tmp, "toggled ", who, ""))
+        }
+    }
+    if p.doc.isElement(el, "summary") {
+        if p.doc.parent(el) |d| {
+            if p.doc.isElement(d, "details") {
+                if p.doc.attr(d, "open") != null {
+                    removeAttr(&mut p.doc, d, "open")
+                    try relayout(p)
+                    return done(try concat(tmp, "collapsed ", who, ""))
+                }
+                try p.doc.setAttr(d, "open", "")
+                try relayout(p)
+                return done(try concat(tmp, "expanded ", who, ""))
+            }
+        }
+    }
+    if p.doc.isElement(el, "label") {
+        if labelControl(p, el) |control| {
+            return clickNode(s, tmp, p, control)
+        }
+    }
+    if p.doc.isElement(el, "option") {
+        var sel = p.doc.parent(el)
+        while sel |c| {
+            if p.doc.isElement(c, "select") {
+                return chooseOption(p, tmp, c, el)
+            }
+            sel = p.doc.parent(c)
+        }
+    }
+    if isTextInput(p, el) || p.doc.isElement(el, "select") {
+        return done(try concat(tmp, "focused ", who, ""))
+    }
+    if isSubmitButton(p, el) {
+        if formOf(p, el) |f| {
+            try recordOn(s, tmp, "submit of", f)
+            return done(try concat(tmp, "clicked ", who, "; submitting forms is not supported yet (recorded the submit event)"))
+        }
+    }
+    try recordOn(s, tmp, "click on", el)
+    return done(try concat(tmp, "clicked ", who, "; nothing happens until scripts run (recorded the click event)"))
+}
+
+fn followLink(s: *mut Session, tmp: Allocator, p: *mut Page, a: NodeId, who: []u8) AllocError!Outcome {
+    let href = text.trim(p.doc.attr(a, "href").?)
+    if text.startsWith(href, "javascript:") {
+        try recordOn(s, tmp, "click on", a)
+        return done(try concat(tmp, "clicked ", who, "; it runs a script, which is not supported yet"))
+    }
+    let target = url.resolve(tmp, &p.location, href) catch |e| {
+        return failed(try concat(tmp, "cannot follow ", who, ": not a URL"))
+    }
+    let o = try goTo(s, tmp, &target, true)
+    if !o.ok {
+        return o
+    }
+    var msg = text.Builder.init(tmp)
+    try msg.append("clicked ")
+    try msg.append(who)
+    try msg.append("; ")
+    try msg.append(o.message)
+    return Outcome { ok: true, message: msg.bytes(), navigated: o.navigated, diff: "" }
+}
+
+fn labelControl(p: *Page, label: NodeId) ?NodeId {
+    if p.doc.attr(label, "for") |id| {
+        return p.doc.getElementById(id)
+    }
+    var cur = p.doc.following(label, label)
+    while cur |c| {
+        let n = p.doc.node(c)
+        if n.kind == Kind.Element && html.isIn(n.name, "input select textarea button") {
+            return c
+        }
+        cur = p.doc.following(c, label)
+    }
+    return null
+}
+
+/// Checks or unchecks a checkbox; checks a radio button and unchecks the
+/// others of its group.
+fn toggle(p: *mut Page, tmp: Allocator, el: NodeId, who: []u8) AllocError!Outcome {
+    if text.eqlIgnoreCase(inputType(p, el), "radio") {
+        if p.doc.attr(el, "name") |group| {
+            let form = formOf(p, el)
+            var cur: ?NodeId = p.doc.root
+            while cur |h| {
+                if !(h == el) && isCheckable(p, h) && text.eqlIgnoreCase(inputType(p, h), "radio") {
+                    if p.doc.attr(h, "name") |g| {
+                        if text.eql(g, group) && formOf(p, h) == form {
+                            removeAttr(&mut p.doc, h, "checked")
+                        }
+                    }
+                }
+                cur = p.doc.following(h, p.doc.root)
+            }
+        }
+        try p.doc.setAttr(el, "checked", "")
+        try relayout(p)
+        return done(try concat(tmp, "checked ", who, ""))
+    }
+    if p.doc.attr(el, "checked") != null {
+        removeAttr(&mut p.doc, el, "checked")
+        try relayout(p)
+        return done(try concat(tmp, "unchecked ", who, ""))
+    }
+    try p.doc.setAttr(el, "checked", "")
+    try relayout(p)
+    return done(try concat(tmp, "checked ", who, ""))
+}
+
+// ---- type and select
+
+fn typeInto(s: *mut Session, tmp: Allocator, ref: []u8, input: []u8, submit: bool) AllocError!Outcome {
+    let t = try findTarget(s, tmp, ref)
+    let p = t.page orelse {
+        return failed(t.why)
+    }
+    let el = t.node.?
+    let who = try describeNode(p, tmp, el)
+    if !isTextInput(p, el) {
+        return failed(try concat(tmp, "cannot type into ", who, ": it is not a text field"))
+    }
+    if isDisabled(p, el) || p.doc.attr(el, "readonly") != null {
+        return failed(try concat(tmp, "cannot type into ", who, ": it is disabled or read-only"))
+    }
+    try setValue(p, el, input)
+    p.focused = el
+    try relayout(p)
+    var msg = text.Builder.init(tmp)
+    try msg.append("typed ")
+    try quoteText(&mut msg, input)
+    try msg.append(" into ")
+    try msg.append(who)
+    if submit {
+        try msg.append("; ")
+        try msg.append(try submitFrom(s, tmp, p, el))
+    }
+    return done(msg.bytes())
+}
+
+/// Sets the value of a text field: the `value` attribute of an `input`,
+/// the text of a `textarea`.
+fn setValue(p: *mut Page, el: NodeId, v: []u8) AllocError!void {
+    if p.doc.isElement(el, "textarea") {
+        while p.doc.firstChild(el) |c| {
+            p.doc.detach(c)
+        }
+        try p.doc.appendText(el, v)
+        return
+    }
+    try p.doc.setAttr(el, "value", v)
+}
+
+/// The current value of a text field.
+fn currentValue(p: *mut Page, tmp: Allocator, el: NodeId) AllocError![]u8 {
+    if p.doc.isElement(el, "textarea") {
+        var b = text.Builder.init(tmp)
+        try p.doc.textContent(el, &mut b)
+        return b.bytes()
+    }
+    if p.doc.attr(el, "value") |v| {
+        return v
+    }
+    return ""
+}
+
+/// Enter in a text field: the form would be submitted.
+fn submitFrom(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId) AllocError![]u8 {
+    if formOf(p, el) |f| {
+        try recordOn(s, tmp, "submit of", f)
+        return "submitting forms is not supported yet (recorded the submit event)"
+    }
+    return "it is not in a form: nothing to submit"
+}
+
+fn selectOption(s: *mut Session, tmp: Allocator, ref: []u8, option: []u8) AllocError!Outcome {
+    let t = try findTarget(s, tmp, ref)
+    let p = t.page orelse {
+        return failed(t.why)
+    }
+    let sel = t.node.?
+    let who = try describeNode(p, tmp, sel)
+    if !p.doc.isElement(sel, "select") {
+        return failed(try concat(tmp, "cannot select in ", who, ": it is not a select"))
+    }
+    if isDisabled(p, sel) {
+        return failed(try concat(tmp, "cannot select in ", who, ": it is disabled"))
+    }
+    var ax = try newAx(p, tmp)
+    let want = text.trim(option)
+    var found: ?NodeId = null
+    var names = text.Builder.init(tmp)
+    // By value or label, exactly first, then ignoring case.
+    for pass in 0..2 {
+        var cur = p.doc.following(sel, sel)
+        while cur |c| {
+            if p.doc.isElement(c, "option") && found == null {
+                let label = try optionLabel(&mut ax, c)
+                var value = label
+                if p.doc.attr(c, "value") |v| {
+                    value = v
+                }
+                if pass == 0 {
+                    if names.len() > 0 {
+                        try names.append(", ")
+                    }
+                    try quoteText(&mut names, label)
+                    if text.eql(label, want) || text.eql(value, want) {
+                        found = c
+                    }
+                } else if text.eqlIgnoreCase(label, want) || text.eqlIgnoreCase(value, want) {
+                    found = c
+                }
+            }
+            cur = p.doc.following(c, sel)
+        }
+    }
+    let opt = found orelse {
+        var msg = text.Builder.init(tmp)
+        try msg.append("no option ")
+        try quoteText(&mut msg, want)
+        try msg.append(" in ")
+        try msg.append(who)
+        try msg.append("; the options are ")
+        try msg.append(names.bytes())
+        return failed(msg.bytes())
+    }
+    return chooseOption(p, tmp, sel, opt)
+}
+
+fn chooseOption(p: *mut Page, tmp: Allocator, sel: NodeId, opt: NodeId) AllocError!Outcome {
+    if isDisabled(p, opt) {
+        return failed("that option is disabled")
+    }
+    if p.doc.attr(sel, "multiple") == null {
+        var cur = p.doc.following(sel, sel)
+        while cur |c| {
+            if p.doc.isElement(c, "option") {
+                removeAttr(&mut p.doc, c, "selected")
+            }
+            cur = p.doc.following(c, sel)
+        }
+    }
+    try p.doc.setAttr(opt, "selected", "")
+    p.focused = sel
+    try relayout(p)
+    var ax = try newAx(p, tmp)
+    var msg = text.Builder.init(tmp)
+    try msg.append("selected ")
+    try quoteText(&mut msg, try optionLabel(&mut ax, opt))
+    try msg.append(" in ")
+    try msg.append(try describeNode(p, tmp, sel))
+    return done(msg.bytes())
+}
+
+// ---- keys
+
+/// A key press on the focused element: printable characters and
+/// Backspace edit a text field, Enter follows a link, clicks a button
+/// or submits; Space toggles; Tab and Shift+Tab move the focus;
+/// PageDown, PageUp, Home, End, ArrowDown and ArrowUp scroll.
+fn press(s: *mut Session, tmp: Allocator, key: []u8) AllocError!Outcome {
+    let p = s.page orelse {
+        return failed("no page: navigate first")
+    }
+    if key.len == 0 {
+        return failed("no key")
+    }
+    try recordEvent(s, try concat(tmp, "keydown ", key, ""))
+    if text.eql(key, "Tab") || text.eql(key, "Shift+Tab") {
+        return moveFocus(p, tmp, text.eql(key, "Tab"))
+    }
+    if p.focused |f| {
+        let who = try describeNode(p, tmp, f)
+        if isTextInput(p, f) {
+            if text.eql(key, "Backspace") {
+                let v = try currentValue(p, tmp, f)
+                var end = v.len
+                if end > 0 {
+                    end -= 1
+                    while end > 0 && (v[end] & 0xC0) == 0x80 {
+                        end -= 1
+                    }
+                }
+                try setValue(p, f, v[..end])
+                try relayout(p)
+                return done(try concat(tmp, "deleted a character in ", who, ""))
+            }
+            if text.eql(key, "Enter") {
+                if p.doc.isElement(f, "textarea") {
+                    try setValue(p, f, try concat(tmp, try currentValue(p, tmp, f), "\n", ""))
+                    try relayout(p)
+                    return done(try concat(tmp, "new line in ", who, ""))
+                }
+                return done(try concat(tmp, "Enter in ", who, try concat(tmp, "; ", try submitFrom(s, tmp, p, f), "")))
+            }
+            if isCharacter(key) {
+                try setValue(p, f, try concat(tmp, try currentValue(p, tmp, f), key, ""))
+                try relayout(p)
+                return done(try concat(tmp, "typed ", key, try concat(tmp, " into ", who, "")))
+            }
+        }
+        if text.eql(key, "Enter") && !isCheckable(p, f) {
+            return clickNode(s, tmp, p, f)
+        }
+        if (text.eql(key, " ") || text.eql(key, "Space")) && !p.doc.isElement(f, "a") {
+            return clickNode(s, tmp, p, f)
+        }
+        if text.eql(key, "Escape") {
+            p.focused = null
+            return done(try concat(tmp, "left ", who, ""))
+        }
+    }
+    var dy = 0.0
+    if text.eql(key, "PageDown") || text.eql(key, " ") || text.eql(key, "Space") {
+        dy = p.media.height * 0.875
+    } else if text.eql(key, "PageUp") {
+        dy = -p.media.height * 0.875
+    } else if text.eql(key, "ArrowDown") {
+        dy = 40.0
+    } else if text.eql(key, "ArrowUp") {
+        dy = -40.0
+    } else if text.eql(key, "Home") {
+        dy = -p.scroll_y
+    } else if text.eql(key, "End") {
+        dy = maxScroll(p) - p.scroll_y
+    } else {
+        return done(try concat(tmp, "pressed ", key, "; nothing to do (recorded the key event)"))
+    }
+    return scrollBy(p, tmp, dy)
+}
+
+// A key that types itself: one UTF-8 character.
+fn isCharacter(key: []u8) bool {
+    let d = text.decode(key)
+    return d.len == key.len && d.code >= 0x20 && d.code != 0x7F
+}
+
+fn moveFocus(p: *mut Page, tmp: Allocator, forward: bool) AllocError!Outcome {
+    var all = List(NodeId).init(tmp)
+    var cur: ?NodeId = p.doc.root
+    var at: ?usize = null
+    while cur |h| {
+        if isFocusable(p, h) {
+            if p.focused |f| {
+                if f == h {
+                    at = all.len()
+                }
+            }
+            try all.append(h)
+        }
+        cur = p.doc.following(h, p.doc.root)
+    }
+    if all.len() == 0 {
+        return done("nothing on the page takes the focus")
+    }
+    var next: usize = 0
+    if at |i| {
+        if forward {
+            next = (i + 1) % all.len()
+        } else {
+            next = (i + all.len() - 1) % all.len()
+        }
+    } else if !forward {
+        next = all.len() - 1
+    }
+    let el = all.items()[next]
+    p.focused = el
+    try refFor(p, el)
+    return done(try concat(tmp, "focused ", try describeNode(p, tmp, el), ""))
+}
+
+// ---- scroll
+
+fn scroll(s: *mut Session, tmp: Allocator, ref: []u8, dy: f64) AllocError!Outcome {
+    if ref.len == 0 {
+        let p = s.page orelse {
+            return failed("no page: navigate first")
+        }
+        return scrollBy(p, tmp, dy)
+    }
+    let t = try findTarget(s, tmp, ref)
+    let p = t.page orelse {
+        return failed(t.why)
+    }
+    let el = t.node.?
+    let who = try describeNode(p, tmp, el)
+    let r = rectOf(p, el) orelse {
+        return failed(try concat(tmp, "cannot scroll to ", who, ": it has no box"))
+    }
+    p.scroll_y = clampScroll(p, r.y)
+    return done(try scrollMessage(p, tmp, try concat(tmp, "scrolled to ", who, "")))
+}
+
+fn scrollBy(p: *mut Page, tmp: Allocator, dy: f64) AllocError!Outcome {
+    p.scroll_y = clampScroll(p, p.scroll_y + dy)
+    return done(try scrollMessage(p, tmp, "scrolled"))
+}
+
+fn scrollMessage(p: *Page, tmp: Allocator, what: []u8) AllocError![]u8 {
+    var b = text.Builder.init(tmp)
+    try b.append(what)
+    try b.append("; the viewport shows y ")
+    try writeNumberTo(&mut b, p.scroll_y)
+    try b.append(" to ")
+    try writeNumberTo(&mut b, p.scroll_y + p.media.height)
+    try b.append(" of ")
+    try writeNumberTo(&mut b, maxF(docHeight(p), p.media.height))
+    return b.bytes()
+}
+
+fn writeNumberTo(b: *mut text.Builder, v: f64) AllocError!void {
+    try b.appendInt(std.math.round(v) as i64)
+}
+
+// ---- find
+
+/// The places of `needle` in the visible text (ignoring ASCII case),
+/// with the nearest element that has a ref; at most 20.
+fn findText(s: *mut Session, tmp: Allocator, needle: []u8) AllocError!Outcome {
+    let p = s.page orelse {
+        return failed("no page: navigate first")
+    }
+    let want = text.trim(needle)
+    if want.len == 0 {
+        return failed("nothing to find")
+    }
+    // Make sure every element that should have a ref has one.
+    try buildAx(p, tmp)
+    var out = text.Builder.init(tmp)
+    var count: usize = 0
+    var cur: ?NodeId = p.doc.root
+    while cur |h| {
+        let n = p.doc.node(h).*
+        if n.kind == Kind.Element && (!rendered(p, h) || html.isIn(n.name, "script style template")) {
+            cur = p.doc.followingSkip(h, p.doc.root)
+            continue
+        }
+        if n.kind == Kind.Text && textVisible(p, h) {
+            let flat = try collapse(tmp, n.data)
+            var from: usize = 0
+            while from < flat.len {
+                let at = indexIgnoreCase(flat[from..], want) orelse break
+                count += 1
+                if count <= 20 {
+                    try findLine(p, tmp, h, flat, from + at, want.len, count, &mut out)
+                }
+                from = from + at + want.len
+            }
+        }
+        cur = p.doc.following(h, p.doc.root)
+    }
+    var msg = text.Builder.init(tmp)
+    if count == 0 {
+        try msg.append("no match for ")
+        try quoteText(&mut msg, want)
+        return done(msg.bytes())
+    }
+    try msg.appendUint(count as u64)
+    if count == 1 {
+        try msg.append(" match for ")
+    } else {
+        try msg.append(" matches for ")
+    }
+    try quoteText(&mut msg, want)
+    if count > 20 {
+        try msg.append(" (the first 20)")
+    }
+    try msg.appendByte('\n')
+    try msg.append(out.bytes())
+    return done(msg.bytes())
+}
+
+fn findLine(p: *mut Page, tmp: Allocator, t: NodeId, flat: []u8, at: usize, len: usize, count: usize, out: *mut text.Builder) AllocError!void {
+    var lo = at
+    var k: usize = 0
+    while lo > 0 && k < 30 {
+        lo -= 1
+        k += 1
+    }
+    while lo > 0 && (flat[lo] & 0xC0) == 0x80 {
+        lo -= 1
+    }
+    var hi = at + len
+    k = 0
+    while hi < flat.len && k < 30 {
+        hi += 1
+        k += 1
+    }
+    while hi < flat.len && (flat[hi] & 0xC0) == 0x80 {
+        hi += 1
+    }
+    try out.appendUint(count as u64)
+    try out.append(". \"")
+    if lo > 0 {
+        try out.append("…")
+    }
+    try out.append(flat[lo..hi])
+    if hi < flat.len {
+        try out.append("…")
+    }
+    try out.appendByte('"')
+    // The nearest element around it that has a ref.
+    var cur = p.doc.parent(t)
+    while cur |c| {
+        if p.ref_of.get(c.index) |r| {
+            try out.append(" in ")
+            try out.append(try describeNode(p, tmp, c))
+            break
+        }
+        cur = p.doc.parent(c)
+    }
+    if rectOf(p, t) |r| {
+        if offscreen(p, r) {
+            try out.append(" [offscreen]")
+        }
+    }
+    try out.appendByte('\n')
+}
+
+fn indexIgnoreCase(hay: []u8, needle: []u8) ?usize {
+    if needle.len > hay.len {
+        return null
+    }
+    for i in 0..hay.len - needle.len + 1 {
+        if text.eqlIgnoreCase(hay[i..i + needle.len], needle) {
+            return i
+        }
+    }
+    return null
+}
+
+// ---- diffs
+
+/// The lines of `after` that differ from `before`, in order: removed
+/// lines as "- old", added ones as "+ new" (a longest common subsequence
+/// of lines stays out). Empty when nothing changed.
+fn diffLines(tmp: Allocator, before: []u8, after: []u8) AllocError![]u8 {
+    var a = List([]u8).init(tmp)
+    var b = List([]u8).init(tmp)
+    try splitLines(before, &mut a)
+    try splitLines(after, &mut b)
+    let x = a.items()
+    let y = b.items()
+    var head: usize = 0
+    while head < x.len && head < y.len && text.eql(x[head], y[head]) {
+        head += 1
+    }
+    var tail: usize = 0
+    while tail < x.len - head && tail < y.len - head && text.eql(x[x.len - 1 - tail], y[y.len - 1 - tail]) {
+        tail += 1
+    }
+    let xs = x[head..x.len - tail]
+    let ys = y[head..y.len - tail]
+    var out = text.Builder.init(tmp)
+    let n = xs.len
+    let m = ys.len
+    if n * m > 4000000 {
+        // Too big for the table: everything in between changed.
+        for line in xs {
+            try diffLine(&mut out, "- ", line)
+        }
+        for line in ys {
+            try diffLine(&mut out, "+ ", line)
+        }
+        return out.bytes()
+    }
+    // lcs[i * (m + 1) + j]: the length of a longest common subsequence
+    // of xs[i..] and ys[j..].
+    let w = m + 1
+    let lcs = try tmp.alloc(0 as u32, (n + 1) * w)
+    var i = n
+    while i > 0 {
+        i -= 1
+        var j = m
+        while j > 0 {
+            j -= 1
+            if text.eql(xs[i], ys[j]) {
+                lcs[i * w + j] = lcs[(i + 1) * w + j + 1] + 1
+            } else if lcs[(i + 1) * w + j] >= lcs[i * w + j + 1] {
+                lcs[i * w + j] = lcs[(i + 1) * w + j]
+            } else {
+                lcs[i * w + j] = lcs[i * w + j + 1]
+            }
+        }
+    }
+    var p: usize = 0
+    var q: usize = 0
+    while p < n || q < m {
+        if p < n && q < m && text.eql(xs[p], ys[q]) {
+            p += 1
+            q += 1
+        } else if p < n && (q == m || lcs[(p + 1) * w + q] >= lcs[p * w + q + 1]) {
+            try diffLine(&mut out, "- ", xs[p])
+            p += 1
+        } else {
+            try diffLine(&mut out, "+ ", ys[q])
+            q += 1
+        }
+    }
+    return out.bytes()
+}
+
+fn diffLine(out: *mut text.Builder, mark: []u8, line: []u8) AllocError!void {
+    try out.append(mark)
+    try out.append(line)
+    try out.appendByte('\n')
+}
+
+fn splitLines(s: []u8, out: *mut List([]u8)) AllocError!void {
+    var start: usize = 0
+    for i in 0..s.len {
+        if s[i] == '\n' {
+            try out.append(s[start..i])
+            start = i + 1
+        }
+    }
+    if start < s.len {
+        try out.append(s[start..])
+    }
+}

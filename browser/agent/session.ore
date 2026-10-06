@@ -1,0 +1,483 @@
+// agent: the browser without pixels, for AI agents (docs/browser.md, B7).
+//
+// - session.ore: a `Session` (the current `Page`, history, refs) and
+//   loading pages: fetch, parse, style, layout with the fixed-metric font.
+// - a11y.ore: the accessibility tree (`snapshot`) with refs `e1, e2, ...`.
+// - markdown.ore: the main content as Markdown (`read`).
+// - actions.ore: navigate, back, forward, reload, click, type, select,
+//   press, scroll, find, wait; snapshot diffs.
+// - json.ore: a JSON parser and writer.
+// - server.ore: `anyknown agent` (JSON lines) and `anyknown mcp` (MCP over
+//   stdio), and `anyknown dump --a11y|--md`.
+//
+// The session is the agent's own page abstraction for now (url, document,
+// styles, layout, history); the window's tabs will share it later.
+
+import css
+import dom
+import dom.Document
+import dom.Kind
+import dom.NodeId
+import encoding
+import font
+import html
+import layout
+import net
+import std
+import std.list.List
+import std.map.IntMap
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+import url
+import url.Url
+
+/// A rectangle in document coordinates (px).
+pub struct Rect {
+    x: f64
+    y: f64
+    w: f64
+    h: f64
+}
+
+/// A loaded document with its style sheets, computed styles and layout.
+/// Always on the heap: the layout points to the document, the styles and
+/// the font.
+pub struct Page {
+    alloc: Allocator
+    // The URL of the document (after redirects).
+    location: Url
+    // The HTTP status (200 for `file:` and `data:`).
+    status: i64
+    doc: Document
+    ua: css.Sheet
+    author: css.Sheet
+    styles: css.Styles
+    font: font.Fixed
+    tree: ?layout.Tree
+    media: css.Media
+    // Node index to the border box of its boxes and fragments.
+    rects: IntMap(u32, Rect)
+    // Refs: `refs[i]` is the node of ref number `ref_base + i`.
+    ref_base: u32
+    refs: List(NodeId)
+    ref_of: IntMap(u32, u32)
+    scroll_y: f64
+    focused: ?NodeId
+}
+
+/// The state of one agent: the page shown, the history of URLs, and
+/// what the page's scripts would have seen (recorded events).
+pub struct Session {
+    alloc: Allocator
+    page: ?*mut Page
+    // Owned hrefs; `index` is the current entry.
+    history: List([]u8)
+    index: usize
+    // The number of the next ref of the next page: refs are unique in a
+    // session, so a ref of an old page is never taken for another node.
+    next_ref: u32
+    media: css.Media
+    // Owned descriptions of clicks, key presses and submissions that
+    // forms and scripts will handle once they exist.
+    events: List([]u8)
+}
+
+fn newSession(alloc: Allocator, width: f64, height: f64) Session {
+    return Session {
+        alloc: alloc,
+        page: null,
+        history: List([]u8).init(alloc),
+        index: 0,
+        next_ref: 1,
+        media: css.Media { width: width, height: height },
+        events: List([]u8).init(alloc),
+    }
+}
+
+fn freeSession(s: *mut Session) {
+    if s.page |p| {
+        freePage(p)
+    }
+    s.page = null
+    for h in s.history.items() {
+        s.alloc.free(h)
+    }
+    s.history.deinit()
+    for e in s.events.items() {
+        s.alloc.free(e)
+    }
+    s.events.deinit()
+}
+
+fn recordEvent(s: *mut Session, what: []u8) AllocError!void {
+    let copy = try s.alloc.alloc(0 as u8, what.len)
+    std.mem.copy(copy, what)
+    try s.events.append(copy)
+}
+
+// ---- loading
+
+/// Fetches `target` and makes a page of it; null when it cannot be
+/// fetched (`why` says why).
+fn openPage(alloc: Allocator, target: *Url, media: css.Media, ref_base: u32, why: *mut text.Builder) AllocError!?*mut Page {
+    let res = net.fetch(alloc, target) catch |e| {
+        if fetchOutOfMemory(e) {
+            return AllocError.OutOfMemory
+        }
+        try why.append("cannot fetch ")
+        try why.append(target.href)
+        try why.append(": ")
+        try why.append(net.describe(e))
+        return null
+    }
+    defer res.deinit(alloc)
+    let src = try encoding.toUtf8(alloc, res.body, encoding.sniff(res.body, res.charset))
+    defer alloc.free(src)
+    var href = target.href
+    if res.url.len > 0 {
+        href = res.url
+    }
+    let location = url.parse(alloc, href) catch |e| {
+        return AllocError.OutOfMemory
+    }
+    let doc = try parseDocument(alloc, res.mime, src)
+    let p = try alloc.create(Page {
+        alloc: alloc,
+        location: location,
+        status: res.status,
+        doc: doc,
+        ua: try css.Sheet.init(alloc),
+        author: try css.Sheet.init(alloc),
+        styles: try css.Styles.init(alloc),
+        font: font.Fixed.init(),
+        tree: null,
+        media: media,
+        rects: IntMap(u32, Rect).init(alloc),
+        ref_base: ref_base,
+        refs: List(NodeId).init(alloc),
+        ref_of: IntMap(u32, u32).init(alloc),
+        scroll_y: 0.0,
+        focused: null,
+    })
+    try css.uaSheet(&mut p.ua, media)
+    try agentSheets(alloc, &p.doc, &p.location, media, &mut p.author)
+    try relayout(p)
+    return p
+}
+
+fn fetchOutOfMemory(e: net.FetchError) bool {
+    return match e {
+        .OutOfMemory => true
+        _ => false
+    }
+}
+
+fn freePage(p: *mut Page) {
+    let alloc = p.alloc
+    if p.tree != null {
+        p.tree.?.deinit()
+    }
+    p.styles.deinit()
+    p.author.deinit()
+    p.ua.deinit()
+    p.doc.deinit()
+    p.rects.deinit()
+    p.refs.deinit()
+    p.ref_of.deinit()
+    p.location.deinit(alloc)
+    alloc.destroy(p)
+}
+
+// The document of a response: HTML is parsed; plain text becomes the
+// content of a `pre` (as in main.ore).
+fn parseDocument(alloc: Allocator, mime: []u8, src: []u8) AllocError!Document {
+    if !text.eql(mime, "text/plain") {
+        return html.parse(alloc, src)
+    }
+    var doc = try html.parse(alloc, "<pre>")
+    errdefer doc.deinit()
+    var pres = List(NodeId).init(alloc)
+    defer pres.deinit()
+    try doc.getElementsByTagName("pre", &mut pres)
+    try doc.appendText(pres.items()[0], src)
+    return doc
+}
+
+/// Computes the styles and the layout of `p` again (after the DOM
+/// changed), and the rectangles of its nodes.
+fn relayout(p: *mut Page) AllocError!void {
+    if p.tree != null {
+        p.tree.?.deinit()
+        p.tree = null
+    }
+    p.styles.deinit()
+    p.styles = try css.Styles.init(p.alloc)
+    try css.computeStyles(&p.doc, &p.ua, &p.author, p.media, &mut p.styles)
+    p.tree = try layout.layoutDocument(p.alloc, &p.doc, &p.styles, &mut p.font, p.media.width, p.media.height)
+    p.rects.deinit()
+    p.rects = IntMap(u32, Rect).init(p.alloc)
+    let t = &p.tree.?
+    for i in 0..t.boxes.len() {
+        let b = t.bx(i).*
+        if b.node |n| {
+            if b.kind != layout.BoxKind.Inline && b.kind != layout.BoxKind.Text && b.kind != layout.BoxKind.LineBreak {
+                try addRect(p, n, Rect { x: b.ax, y: b.ay, w: b.w, h: b.h })
+            }
+        }
+        if layout.hasInlineContent(t, i) {
+            let cx = b.ax + b.border[3] + b.padding[3]
+            let cy = b.ay + b.border[0] + b.padding[0]
+            for li in b.line_start..b.line_end {
+                let line = t.lines.items()[li]
+                for fi in line.frag_start..line.frag_end {
+                    let f = t.frags.items()[fi]
+                    if f.kind != layout.FragKind.Atomic {
+                        if t.bx(f.box).node |fn_node| {
+                            try addRect(p, fn_node, Rect { x: cx + f.x, y: cy + f.y, w: f.w, h: f.h })
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn addRect(p: *mut Page, n: NodeId, r: Rect) AllocError!void {
+    if p.rects.getPtr(n.index) |old| {
+        let x0 = minF(old.x, r.x)
+        let y0 = minF(old.y, r.y)
+        let x1 = maxF(old.x + old.w, r.x + r.w)
+        let y1 = maxF(old.y + old.h, r.y + r.h)
+        old.* = Rect { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+        return
+    }
+    try p.rects.put(n.index, r)
+}
+
+fn minF(a: f64, b: f64) f64 {
+    if a < b {
+        return a
+    }
+    return b
+}
+
+fn maxF(a: f64, b: f64) f64 {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+/// The rectangle of `n`: of its own boxes, else of its nearest ancestor
+/// that has one.
+fn rectOf(p: *Page, n: NodeId) ?Rect {
+    var cur: ?NodeId = n
+    while cur |c| {
+        if p.rects.get(c.index) |r| {
+            return r
+        }
+        cur = p.doc.parent(c)
+    }
+    return null
+}
+
+/// The height of the document's content.
+fn docHeight(p: *Page) f64 {
+    if p.tree |t| {
+        if t.root |r| {
+            let b = t.boxes.items()[r]
+            return b.ay + b.h + b.margin[2]
+        }
+    }
+    return 0.0
+}
+
+fn maxScroll(p: *Page) f64 {
+    return maxF(0.0, docHeight(p) - p.media.height)
+}
+
+/// Is `r` outside the viewport (scrolled to `scroll_y`)?
+fn offscreen(p: *Page, r: Rect) bool {
+    return r.y + r.h <= p.scroll_y || r.y >= p.scroll_y + p.media.height
+}
+
+/// The title of the document: the text of its first `title`, collapsed.
+fn pageTitle(p: *mut Page, alloc: Allocator) AllocError![]u8 {
+    var titles = List(NodeId).init(alloc)
+    defer titles.deinit()
+    try p.doc.getElementsByTagName("title", &mut titles)
+    if titles.len() == 0 {
+        return ""
+    }
+    var raw = text.Builder.init(alloc)
+    defer raw.deinit()
+    try p.doc.textContent(titles.items()[0], &mut raw)
+    return collapse(alloc, raw.bytes())
+}
+
+/// `s` with runs of ASCII whitespace as one space, trimmed.
+fn collapse(alloc: Allocator, s: []u8) AllocError![]u8 {
+    var b = text.Builder.init(alloc)
+    defer b.deinit()
+    var space = false
+    for c in s {
+        if layout.isWhite(c) {
+            space = b.len() > 0
+        } else {
+            if space {
+                try b.appendByte(' ')
+                space = false
+            }
+            try b.appendByte(c)
+        }
+    }
+    let out = try b.toOwned()
+    return out
+}
+
+// ---- refs
+
+/// The ref number of `n` on `p`, given one if it has none.
+fn refFor(p: *mut Page, n: NodeId) AllocError!u32 {
+    if p.ref_of.get(n.index) |r| {
+        return r
+    }
+    let r = p.ref_base + p.refs.len() as u32
+    try p.refs.append(n)
+    try p.ref_of.put(n.index, r)
+    return r
+}
+
+/// The node of the ref `name` ("e12" or "12") on `p`.
+fn nodeOfRef(p: *Page, name: []u8) ?NodeId {
+    var digits = text.trim(name)
+    if digits.len > 0 && (digits[0] == 'e' || digits[0] == 'E') {
+        digits = digits[1..]
+    }
+    let n = text.parseInt(digits) catch |e| {
+        return null
+    }
+    if n < p.ref_base as i64 {
+        return null
+    }
+    let i = (n - p.ref_base as i64) as usize
+    if i >= p.refs.len() {
+        return null
+    }
+    return p.refs.items()[i]
+}
+
+// ---- URLs
+
+/// The URL an agent means by `target`: an absolute URL; else relative to
+/// the current page; else a file path (relative to the working
+/// directory).
+fn targetUrl(s: *Session, alloc: Allocator, target: []u8) AllocError!?Url {
+    let t = text.trim(target)
+    if t.len == 0 {
+        return null
+    }
+    let direct = url.parse(alloc, t) catch |e| {
+        return relativeUrl(s, alloc, t)
+    }
+    if direct.scheme.len > 1 {
+        return direct
+    }
+    direct.deinit(alloc)
+    return relativeUrl(s, alloc, t)
+}
+
+fn relativeUrl(s: *Session, alloc: Allocator, t: []u8) AllocError!?Url {
+    if s.page |p| {
+        let r = url.resolve(alloc, &p.location, t) catch |e| {
+            return null
+        }
+        return r
+    }
+    var b = text.Builder.init(alloc)
+    defer b.deinit()
+    try b.append("file://")
+    if !text.startsWith(t, "/") {
+        let buf = try alloc.alloc(0 as u8, 4096)
+        defer alloc.free(buf)
+        let cwd = getcwd(buf.ptr, buf.len)
+        try b.append(buf[..strlen(buf.ptr)])
+        try b.appendByte('/')
+    }
+    try b.append(t)
+    let r = url.parse(alloc, b.bytes()) catch |e| {
+        return null
+    }
+    return r
+}
+
+extern fn getcwd(buf: [*]u8, size: usize) [*]u8
+extern fn strlen(s: [*]u8) usize
+
+/// `href` resolved against the page, or `href` itself when it does not
+/// resolve.
+fn absoluteHref(p: *Page, alloc: Allocator, href: []u8) AllocError![]u8 {
+    let t = text.trim(href)
+    let r = url.resolve(alloc, &p.location, t) catch |e| {
+        return t
+    }
+    return r.href
+}
+
+// ---- style sheets (as style.ore in the root module, which modules
+// cannot import)
+
+fn agentSheets(alloc: Allocator, doc: *Document, base: *Url, media: css.Media, sheet: *mut css.Sheet) AllocError!void {
+    var cur: ?NodeId = doc.root
+    while cur |h| {
+        if doc.isElement(h, "style") && (try sheetMediaOk(doc, h, media, sheet)) {
+            var src = text.Builder.init(alloc)
+            defer src.deinit()
+            try doc.textContent(h, &mut src)
+            try css.parseSheet(sheet, src.bytes(), media)
+        } else if doc.isElement(h, "link") && relHasStylesheet(doc, h) && (try sheetMediaOk(doc, h, media, sheet)) {
+            if doc.attr(h, "href") |href| {
+                try fetchSheet(alloc, base, href, media, sheet)
+            }
+        }
+        cur = doc.following(h, doc.root)
+    }
+}
+
+fn sheetMediaOk(doc: *Document, el: NodeId, media: css.Media, sheet: *mut css.Sheet) AllocError!bool {
+    if doc.attr(el, "media") |q| {
+        return css.mediaMatches(sheet, q, media)
+    }
+    return true
+}
+
+fn relHasStylesheet(doc: *Document, el: NodeId) bool {
+    var found = false
+    if doc.attr(el, "rel") |rel| {
+        var words = text.split(rel, " ")
+        while words.next() |w| {
+            if text.eqlIgnoreCase(w, "alternate") {
+                return false
+            }
+            if text.eqlIgnoreCase(w, "stylesheet") {
+                found = true
+            }
+        }
+    }
+    return found
+}
+
+fn fetchSheet(alloc: Allocator, base: *Url, href: []u8, media: css.Media, sheet: *mut css.Sheet) AllocError!void {
+    let target = url.resolve(alloc, base, text.trim(href)) catch |e| {
+        return
+    }
+    defer target.deinit(alloc)
+    let res = net.fetch(alloc, &target) catch |e| {
+        return
+    }
+    defer res.deinit(alloc)
+    let src = try encoding.toUtf8(alloc, res.body, encoding.sniff(res.body, res.charset))
+    defer alloc.free(src)
+    try css.parseSheet(sheet, src, media)
+}

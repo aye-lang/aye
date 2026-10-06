@@ -1,0 +1,1211 @@
+// The accessibility tree of a page (`snapshot`): the DOM without what is
+// not rendered (`display: none`, `visibility: hidden`, `aria-hidden`),
+// with ARIA roles (from the element or its `role` attribute), accessible
+// names, values and states. Elements without a role (`div`, `span`, ...)
+// are left out and their content goes to their parent; runs of text
+// become `text` nodes.
+//
+// Interactive elements and headings get refs (`e1`, `e2`, ...): a node
+// keeps its ref for the life of its document (see `refFor`).
+//
+// The text form, one node per line, children indented by two spaces:
+//
+//     - navigation "Main"
+//       - link "Docs" [e2] -> /docs
+//     - heading "Welcome" [level=1] [e3]
+//     - paragraph: Some text.
+//     - textbox "Email" [e4] [required] value="me@example.com"
+//     - checkbox "Subscribe" [e5] [checked]
+//
+// The JSON form (`--json`) is an array of nodes {role, name, ref, level,
+// states, value, url, box, offscreen, text, children}, without the empty
+// fields.
+
+import css
+import dom
+import dom.Kind
+import dom.NodeId
+import html
+import layout
+import std
+import std.list.List
+import std.map.StrMap
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+// States, in the order they are written.
+let ST_CHECKED: u32 = 1
+let ST_MIXED: u32 = 2
+let ST_SELECTED: u32 = 4
+let ST_EXPANDED: u32 = 8
+let ST_COLLAPSED: u32 = 16
+let ST_DISABLED: u32 = 32
+let ST_REQUIRED: u32 = 64
+let ST_READONLY: u32 = 128
+let ST_FOCUSED: u32 = 256
+let STATE_NAMES = [9][]u8{"checked", "mixed", "selected", "expanded", "collapsed", "disabled", "required", "readonly", "focused"}
+
+// Roles whose name comes from their content; their text is not repeated
+// as children.
+let NAME_FROM_CONTENT = "link button heading cell columnheader rowheader option tab menuitem menuitemcheckbox menuitemradio treeitem tooltip switch checkbox radio generic-clickable term"
+// Roles with refs (besides `heading`).
+let INTERACTIVE = "link button textbox searchbox spinbutton checkbox radio combobox listbox slider switch tab menuitem menuitemcheckbox menuitemradio treeitem option-clickable generic-clickable"
+// Roles whose children are not listed.
+let LEAF_ROLES = "textbox searchbox spinbutton img slider progressbar meter separator"
+// Roles kept even when they have no name and no content.
+let KEEP_EMPTY = "img separator cell columnheader rowheader progressbar meter"
+
+let MAX_NAME: usize = 150
+
+pub struct AxNode {
+    // "text" for a run of text (its text is `name`); "document" for the
+    // root.
+    role: []u8
+    name: []u8
+    node: ?NodeId
+    level: u32
+    // 0: none.
+    ref: u32
+    url: []u8
+    value: []u8
+    states: u32
+    // The text of a node whose only content is text ("paragraph: ...").
+    inline: []u8
+    // Text: a block boundary came after it, so text that follows is a
+    // new node.
+    closed: bool
+    children: List(usize)
+}
+
+/// An accessibility tree; everything is in `alloc` (an arena).
+pub struct Ax {
+    alloc: Allocator
+    page: *mut Page
+    nodes: List(AxNode)
+    // `label for=ID` elements by ID.
+    labels: StrMap(NodeId)
+    // Inside a label of a control: its text is the control's name, so
+    // it is not repeated.
+    mute: u32
+}
+
+/// Builds the accessibility tree of `p` in `alloc` (an arena), giving refs
+/// to the nodes that need one.
+fn buildAx(p: *mut Page, alloc: Allocator) AllocError!Ax {
+    var ax = try newAx(p, alloc)
+    let root = try addAx(&mut ax, null, "document", null)
+    try walkChildren(&mut ax, p.doc.root, root)
+    try finishAx(&mut ax, root)
+    return ax
+}
+
+/// An empty tree of `p`, ready to compute roles and names.
+fn newAx(p: *mut Page, alloc: Allocator) AllocError!Ax {
+    var ax = Ax {
+        alloc: alloc,
+        page: p,
+        nodes: List(AxNode).init(alloc),
+        labels: StrMap(NodeId).init(alloc),
+        mute: 0,
+    }
+    var cur: ?NodeId = p.doc.root
+    while cur |h| {
+        if p.doc.isElement(h, "label") {
+            if p.doc.attr(h, "for") |id| {
+                if !ax.labels.contains(id) {
+                    try ax.labels.put(id, h)
+                }
+            }
+        }
+        cur = p.doc.following(h, p.doc.root)
+    }
+    return ax
+}
+
+fn addAx(ax: *mut Ax, parent: ?usize, role: []u8, node: ?NodeId) AllocError!usize {
+    try ax.nodes.append(AxNode {
+        role: role,
+        name: "",
+        node: node,
+        level: 0,
+        ref: 0,
+        url: "",
+        value: "",
+        states: 0,
+        inline: "",
+        closed: false,
+        children: List(usize).init(ax.alloc),
+    })
+    let i = ax.nodes.len() - 1
+    if parent |pi| {
+        try ax.nodes.items()[pi].children.append(i)
+    }
+    return i
+}
+
+fn axAt(ax: *Ax, i: usize) *mut AxNode {
+    return &mut ax.nodes.items()[i]
+}
+
+fn walkChildren(ax: *mut Ax, h: NodeId, parent: usize) AllocError!void {
+    var cur = ax.page.doc.firstChild(h)
+    while cur |c| {
+        try walkNode(ax, c, parent)
+        cur = ax.page.doc.nextSibling(c)
+    }
+}
+
+fn walkNode(ax: *mut Ax, h: NodeId, parent: usize) AllocError!void {
+    let n = ax.page.doc.node(h).*
+    if n.kind == Kind.Text {
+        if ax.mute == 0 && textVisible(ax.page, h) {
+            try addText(ax, parent, n.data)
+        }
+        return
+    }
+    if n.kind != Kind.Element {
+        return
+    }
+    if !rendered(ax.page, h) {
+        return
+    }
+    if text.eql(n.name, "br") {
+        sealText(ax, parent)
+        return
+    }
+    if text.eql(n.name, "label") && !(ax.page.doc.attr(h, "role") != null) {
+        if labelControl(ax.page, h) |control| {
+            if rendered(ax.page, control) {
+                sealText(ax, parent)
+                ax.mute += 1
+                try walkChildren(ax, h, parent)
+                ax.mute -= 1
+                sealText(ax, parent)
+                return
+            }
+        }
+    }
+    let role = roleOf(ax, h)
+    if role.len == 0 || styleHidden(ax.page, h) {
+        // No node of its own: the content goes to the parent.
+        let block = isBlockLevel(ax.page, h)
+        if block {
+            sealText(ax, parent)
+        }
+        if !text.eql(role, "skip") {
+            try walkChildren(ax, h, parent)
+        }
+        if block {
+            sealText(ax, parent)
+        }
+        return
+    }
+    if text.eql(role, "skip") {
+        return
+    }
+    sealText(ax, parent)
+    var shown = role
+    if text.eql(role, "generic-clickable") {
+        shown = "generic"
+    }
+    let me = try addAx(ax, parent, shown, h)
+    let name = try nameOf(ax, h, role)
+    let level = headingLevel(ax.page, h, role)
+    let value = try valueOf(ax, h, role)
+    let href = linkUrl(ax.page, h, role)
+    let states = statesOf(ax.page, h, role)
+    var ref: u32 = 0
+    if html.isIn(role, INTERACTIVE) || text.eql(role, "heading") {
+        ref = try refFor(ax.page, h)
+    }
+    let a = axAt(ax, me)
+    a.name = name
+    a.level = level
+    a.value = value
+    a.url = href
+    a.states = states
+    a.ref = ref
+    if !html.isIn(role, LEAF_ROLES) {
+        try walkChildren(ax, h, me)
+    }
+    sealText(ax, parent)
+}
+
+fn addText(ax: *mut Ax, parent: usize, s: []u8) AllocError!void {
+    let kids = axAt(ax, parent).children.items()
+    if kids.len > 0 {
+        let last = axAt(ax, kids[kids.len - 1])
+        if text.eql(last.role, "text") && !last.closed {
+            let joined = try ax.alloc.alloc(0 as u8, last.name.len + s.len)
+            std.mem.copy(joined, last.name)
+            std.mem.copy(joined[last.name.len..], s)
+            axAt(ax, kids[kids.len - 1]).name = joined
+            return
+        }
+    }
+    if isBlank(s) {
+        return
+    }
+    let t = try addAx(ax, parent, "text", null)
+    axAt(ax, t).name = s
+}
+
+fn sealText(ax: *mut Ax, parent: usize) {
+    let kids = axAt(ax, parent).children.items()
+    if kids.len > 0 {
+        axAt(ax, kids[kids.len - 1]).closed = true
+    }
+}
+
+fn isBlank(s: []u8) bool {
+    for c in s {
+        if !layout.isWhite(c) {
+            return false
+        }
+    }
+    return true
+}
+
+/// Cleans the subtree of `i` (children first): collapses text, drops
+/// text that the name already says, folds a single text child into its
+/// parent's line, and drops empty nodes.
+fn finishAx(ax: *mut Ax, i: usize) AllocError!void {
+    let role = axAt(ax, i).role
+    let from_content = html.isIn(role, NAME_FROM_CONTENT) || text.eql(role, "generic")
+    var kept = List(usize).init(ax.alloc)
+    let kids = axAt(ax, i).children.items()
+    for k in 0..kids.len {
+        let c = axAt(ax, i).children.items()[k]
+        if text.eql(axAt(ax, c).role, "text") {
+            let t = try collapse(ax.alloc, axAt(ax, c).name)
+            axAt(ax, c).name = t
+            if t.len == 0 || from_content {
+                continue
+            }
+            try kept.append(c)
+            continue
+        }
+        try finishAx(ax, c)
+        if !emptyAx(ax, c) {
+            try kept.append(c)
+        }
+    }
+    let a = axAt(ax, i)
+    a.children = kept
+    if a.name.len == 0 && a.children.len() == 1 && i != 0 {
+        let only = a.children.items()[0]
+        if text.eql(axAt(ax, only).role, "text") {
+            let t = axAt(ax, only).name
+            let b = axAt(ax, i)
+            b.inline = t
+            b.children.clear()
+        }
+    }
+}
+
+fn emptyAx(ax: *Ax, i: usize) bool {
+    let a = axAt(ax, i)
+    return a.ref == 0 && a.name.len == 0 && a.inline.len == 0 && a.value.len == 0 && a.children.len() == 0 && !html.isIn(a.role, KEEP_EMPTY)
+}
+
+// ---- visibility
+
+/// Is the element `el` rendered: it has a computed style without
+/// `display: none` and is not `aria-hidden`?
+fn rendered(p: *Page, el: NodeId) bool {
+    if p.styles.get(el) |style| {
+        if layout.isKeyword(style[css.DISPLAY], "none") {
+            return false
+        }
+    } else {
+        return false
+    }
+    if p.doc.attr(el, "aria-hidden") |v| {
+        if text.eqlIgnoreCase(text.trim(v), "true") {
+            return false
+        }
+    }
+    if p.doc.isElement(el, "input") {
+        if p.doc.attr(el, "type") |t| {
+            if text.eqlIgnoreCase(text.trim(t), "hidden") {
+                return false
+            }
+        }
+    }
+    return true
+}
+
+/// Does `el` have `visibility: hidden` (or `collapse`)?
+fn styleHidden(p: *Page, el: NodeId) bool {
+    if p.styles.get(el) |style| {
+        return !layout.isKeyword(style[css.VISIBILITY], "visible")
+    }
+    return false
+}
+
+fn textVisible(p: *Page, t: NodeId) bool {
+    if p.doc.parent(t) |el| {
+        if p.doc.node(el).kind == Kind.Element {
+            return !styleHidden(p, el)
+        }
+    }
+    return true
+}
+
+/// Does `el` start a new block (not an inline-level display)?
+fn isBlockLevel(p: *Page, el: NodeId) bool {
+    if p.styles.get(el) |style| {
+        let d = layout.keywordOf(style[css.DISPLAY])
+        return !html.isIn(d, "inline inline-block inline-table inline-flex inline-grid contents")
+    }
+    return false
+}
+
+// ---- roles
+
+fn attrIs(p: *Page, el: NodeId, name: []u8, value: []u8) bool {
+    if p.doc.attr(el, name) |v| {
+        return text.eqlIgnoreCase(text.trim(v), value)
+    }
+    return false
+}
+
+fn inputType(p: *Page, el: NodeId) []u8 {
+    if p.doc.attr(el, "type") |t| {
+        let v = text.trim(t)
+        if v.len > 0 {
+            return v
+        }
+    }
+    return "text"
+}
+
+fn isButtonInput(p: *Page, el: NodeId) bool {
+    let t = inputType(p, el)
+    return text.eqlIgnoreCase(t, "button") || text.eqlIgnoreCase(t, "submit") || text.eqlIgnoreCase(t, "reset") || text.eqlIgnoreCase(t, "image")
+}
+
+/// The role of `el`: an ARIA role; "" for none (its content goes to the
+/// parent); "skip" for an element left out with its content;
+/// "generic-clickable" for an element without a role that takes clicks
+/// or focus.
+fn roleOf(ax: *Ax, el: NodeId) []u8 {
+    let p = ax.page
+    if p.doc.attr(el, "role") |r| {
+        var words = text.split(text.trim(r), " ")
+        while words.next() |w| {
+            if w.len == 0 {
+                continue
+            }
+            if text.eqlIgnoreCase(w, "none") || text.eqlIgnoreCase(w, "presentation") || text.eqlIgnoreCase(w, "generic") {
+                return ""
+            }
+            return w
+        }
+    }
+    let role = nativeRole(ax, el)
+    if role.len == 0 && (p.doc.attr(el, "onclick") != null || tabbable(p, el)) {
+        return "generic-clickable"
+    }
+    return role
+}
+
+fn tabbable(p: *Page, el: NodeId) bool {
+    if p.doc.attr(el, "tabindex") |v| {
+        let n = text.parseInt(text.trim(v)) catch |e| {
+            return false
+        }
+        return n >= 0
+    }
+    return false
+}
+
+fn nativeRole(ax: *Ax, el: NodeId) []u8 {
+    let p = ax.page
+    let name = p.doc.node(el).name
+    if text.eql(name, "a") || text.eql(name, "area") {
+        if p.doc.attr(el, "href") != null {
+            return "link"
+        }
+        return ""
+    }
+    if text.eql(name, "button") || text.eql(name, "summary") {
+        return "button"
+    }
+    if text.eql(name, "input") {
+        let t = inputType(p, el)
+        if text.eqlIgnoreCase(t, "checkbox") {
+            return "checkbox"
+        }
+        if text.eqlIgnoreCase(t, "radio") {
+            return "radio"
+        }
+        if isButtonInput(p, el) || text.eqlIgnoreCase(t, "file") {
+            return "button"
+        }
+        if text.eqlIgnoreCase(t, "range") {
+            return "slider"
+        }
+        if text.eqlIgnoreCase(t, "number") {
+            return "spinbutton"
+        }
+        if text.eqlIgnoreCase(t, "search") {
+            return "searchbox"
+        }
+        return "textbox"
+    }
+    if text.eql(name, "textarea") {
+        return "textbox"
+    }
+    if text.eql(name, "select") {
+        if p.doc.attr(el, "multiple") != null {
+            return "listbox"
+        }
+        if p.doc.attr(el, "size") |sz| {
+            let n = text.parseInt(text.trim(sz)) catch 0
+            if n > 1 {
+                return "listbox"
+            }
+        }
+        return "combobox"
+    }
+    if text.eql(name, "option") {
+        return "option"
+    }
+    if text.eql(name, "optgroup") || text.eql(name, "fieldset") || text.eql(name, "details") {
+        return "group"
+    }
+    if html.isIn(name, "h1 h2 h3 h4 h5 h6") {
+        return "heading"
+    }
+    if html.isIn(name, "ul ol menu") {
+        return "list"
+    }
+    if text.eql(name, "li") {
+        return "listitem"
+    }
+    if text.eql(name, "img") {
+        if p.doc.attr(el, "alt") |alt| {
+            if alt.len == 0 {
+                return "skip"
+            }
+        }
+        return "img"
+    }
+    if text.eql(name, "svg") {
+        if p.doc.attr(el, "aria-label") != null || p.doc.attr(el, "aria-labelledby") != null {
+            return "img"
+        }
+        return "skip"
+    }
+    if text.eql(name, "table") {
+        return "table"
+    }
+    if html.isIn(name, "tr td th") && inPresentationTable(p, el) {
+        return ""
+    }
+    if text.eql(name, "tr") {
+        return "row"
+    }
+    if text.eql(name, "td") {
+        return "cell"
+    }
+    if text.eql(name, "th") {
+        if attrIs(p, el, "scope", "row") {
+            return "rowheader"
+        }
+        return "columnheader"
+    }
+    if text.eql(name, "caption") || text.eql(name, "legend") || text.eql(name, "figcaption") {
+        // Already the name of the table, group or figure.
+        return "skip"
+    }
+    if text.eql(name, "nav") {
+        return "navigation"
+    }
+    if text.eql(name, "main") {
+        return "main"
+    }
+    if text.eql(name, "aside") {
+        return "complementary"
+    }
+    if text.eql(name, "header") || text.eql(name, "footer") {
+        if inSectioning(p, el) {
+            return ""
+        }
+        if text.eql(name, "header") {
+            return "banner"
+        }
+        return "contentinfo"
+    }
+    if text.eql(name, "form") {
+        return "form"
+    }
+    if text.eql(name, "search") {
+        return "search"
+    }
+    if text.eql(name, "section") {
+        if p.doc.attr(el, "aria-label") != null || p.doc.attr(el, "aria-labelledby") != null {
+            return "region"
+        }
+        return ""
+    }
+    if text.eql(name, "article") {
+        return "article"
+    }
+    if text.eql(name, "p") {
+        return "paragraph"
+    }
+    if text.eql(name, "blockquote") {
+        return "blockquote"
+    }
+    if text.eql(name, "hr") {
+        return "separator"
+    }
+    if text.eql(name, "dialog") {
+        return "dialog"
+    }
+    if text.eql(name, "figure") {
+        return "figure"
+    }
+    if text.eql(name, "dt") {
+        return "term"
+    }
+    if text.eql(name, "dd") {
+        return "definition"
+    }
+    if text.eql(name, "progress") {
+        return "progressbar"
+    }
+    if text.eql(name, "meter") {
+        return "meter"
+    }
+    if html.isIn(name, "iframe video audio canvas object embed noscript template") {
+        return "skip"
+    }
+    return ""
+}
+
+// Is the table around `el` presentational (a layout table)?
+fn inPresentationTable(p: *Page, el: NodeId) bool {
+    var cur = p.doc.parent(el)
+    while cur |c| {
+        if p.doc.isElement(c, "table") {
+            return attrIs(p, c, "role", "presentation") || attrIs(p, c, "role", "none")
+        }
+        cur = p.doc.parent(c)
+    }
+    return false
+}
+
+// Is `el` inside an element that scopes `header` and `footer`?
+fn inSectioning(p: *Page, el: NodeId) bool {
+    var cur = p.doc.parent(el)
+    while cur |c| {
+        let n = p.doc.node(c)
+        if n.kind == Kind.Element && html.isIn(n.name, "article aside main nav section") {
+            return true
+        }
+        cur = n.parent
+    }
+    return false
+}
+
+fn headingLevel(p: *Page, el: NodeId, role: []u8) u32 {
+    if !text.eql(role, "heading") {
+        return 0
+    }
+    if p.doc.attr(el, "aria-level") |v| {
+        let n = text.parseInt(text.trim(v)) catch 0
+        if n > 0 && n < 100 {
+            return n as u32
+        }
+    }
+    let name = p.doc.node(el).name
+    if name.len == 2 && name[0] == 'h' && name[1] >= '1' && name[1] <= '6' {
+        return (name[1] - '0') as u32
+    }
+    return 2
+}
+
+fn linkUrl(p: *Page, el: NodeId, role: []u8) []u8 {
+    if text.eql(role, "link") {
+        if p.doc.attr(el, "href") |h| {
+            return text.trim(h)
+        }
+    }
+    return ""
+}
+
+// ---- names
+
+/// The accessible name of `el` (a simplified accname): aria-labelledby,
+/// aria-label, the native label (label elements, alt, caption, legend,
+/// the value of buttons), the content for roles named by their content,
+/// then title and placeholder.
+fn nameOf(ax: *mut Ax, el: NodeId, role: []u8) AllocError![]u8 {
+    let p = ax.page
+    var b = text.Builder.init(ax.alloc)
+    if p.doc.attr(el, "aria-labelledby") |ids| {
+        var words = text.split(ids, " ")
+        while words.next() |id| {
+            if id.len > 0 {
+                if p.doc.getElementById(id) |target| {
+                    try b.appendByte(' ')
+                    try contentText(ax, target, &mut b, true)
+                }
+            }
+        }
+        let got = try finalName(ax, b.bytes())
+        if got.len > 0 {
+            return got
+        }
+    }
+    if p.doc.attr(el, "aria-label") |v| {
+        let got = try finalName(ax, v)
+        if got.len > 0 {
+            return got
+        }
+    }
+    b.clear()
+    try nativeName(ax, el, &mut b)
+    var got = try finalName(ax, b.bytes())
+    if got.len > 0 {
+        return got
+    }
+    if html.isIn(role, NAME_FROM_CONTENT) {
+        b.clear()
+        try contentText(ax, el, &mut b, true)
+        got = try finalName(ax, b.bytes())
+        if got.len > 0 {
+            return got
+        }
+    }
+    if p.doc.attr(el, "title") |v| {
+        got = try finalName(ax, v)
+        if got.len > 0 {
+            return got
+        }
+    }
+    if p.doc.attr(el, "placeholder") |v| {
+        return finalName(ax, v)
+    }
+    return ""
+}
+
+// `s` collapsed, and cut after `MAX_NAME` bytes (at a character
+// boundary) with an ellipsis.
+fn finalName(ax: *mut Ax, s: []u8) AllocError![]u8 {
+    let c = try collapse(ax.alloc, s)
+    if c.len <= MAX_NAME {
+        return c
+    }
+    var end = MAX_NAME
+    while end > 0 && (c[end] & 0xC0) == 0x80 {
+        end -= 1
+    }
+    var b = text.Builder.init(ax.alloc)
+    try b.append(c[..end])
+    try b.append("…")
+    let out = try b.toOwned()
+    return out
+}
+
+fn nativeName(ax: *mut Ax, el: NodeId, b: *mut text.Builder) AllocError!void {
+    let p = ax.page
+    let name = p.doc.node(el).name
+    if text.eql(name, "input") && isButtonInput(p, el) {
+        if p.doc.attr(el, "value") |v| {
+            try b.append(v)
+            return
+        }
+        let t = inputType(p, el)
+        if text.eqlIgnoreCase(t, "image") {
+            if p.doc.attr(el, "alt") |alt| {
+                try b.append(alt)
+                return
+            }
+        }
+        if text.eqlIgnoreCase(t, "submit") || text.eqlIgnoreCase(t, "image") {
+            try b.append("Submit")
+        } else if text.eqlIgnoreCase(t, "reset") {
+            try b.append("Reset")
+        }
+        return
+    }
+    if html.isIn(name, "input textarea select meter progress") {
+        if p.doc.attr(el, "id") |id| {
+            if ax.labels.get(id) |label| {
+                try contentText(ax, label, b, true)
+            }
+        }
+        if isBlank(b.bytes()) {
+            var cur = p.doc.parent(el)
+            while cur |c| {
+                if p.doc.isElement(c, "label") {
+                    try contentText(ax, c, b, true)
+                    break
+                }
+                cur = p.doc.parent(c)
+            }
+        }
+        return
+    }
+    if text.eql(name, "img") || text.eql(name, "area") {
+        if p.doc.attr(el, "alt") |alt| {
+            try b.append(alt)
+        }
+        return
+    }
+    if text.eql(name, "table") {
+        try childText(ax, el, "caption", b)
+        return
+    }
+    if text.eql(name, "fieldset") {
+        try childText(ax, el, "legend", b)
+        return
+    }
+    if text.eql(name, "figure") {
+        try childText(ax, el, "figcaption", b)
+        return
+    }
+    if text.eql(name, "optgroup") {
+        if p.doc.attr(el, "label") |v| {
+            try b.append(v)
+        }
+        return
+    }
+    if text.eql(name, "option") {
+        if p.doc.attr(el, "label") |v| {
+            try b.append(v)
+        }
+    }
+}
+
+// The content of the first child element of `el` named `child`.
+fn childText(ax: *mut Ax, el: NodeId, child: []u8, b: *mut text.Builder) AllocError!void {
+    var cur = ax.page.doc.firstChild(el)
+    while cur |c| {
+        if ax.page.doc.isElement(c, child) {
+            try contentText(ax, c, b, true)
+            return
+        }
+        cur = ax.page.doc.nextSibling(c)
+    }
+}
+
+/// Appends the text of `h` as a name: visible text, `alt` of images,
+/// `aria-label` of descendants; form controls inside are left out.
+fn contentText(ax: *mut Ax, h: NodeId, b: *mut text.Builder, top: bool) AllocError!void {
+    let p = ax.page
+    let n = p.doc.node(h).*
+    if n.kind == Kind.Text {
+        if textVisible(p, h) {
+            try b.append(n.data)
+        }
+        return
+    }
+    if n.kind != Kind.Element {
+        return
+    }
+    if !rendered(p, h) && !top {
+        return
+    }
+    if !top {
+        if html.isIn(n.name, "input select textarea script style") {
+            return
+        }
+        if p.doc.attr(h, "aria-label") |v| {
+            try b.appendByte(' ')
+            try b.append(v)
+            try b.appendByte(' ')
+            return
+        }
+    }
+    if text.eql(n.name, "img") {
+        if p.doc.attr(h, "alt") |alt| {
+            try b.appendByte(' ')
+            try b.append(alt)
+            try b.appendByte(' ')
+        }
+        return
+    }
+    if text.eql(n.name, "br") {
+        try b.appendByte(' ')
+        return
+    }
+    let block = isBlockLevel(p, h)
+    if block {
+        try b.appendByte(' ')
+    }
+    var cur = n.first_child
+    while cur |c| {
+        try contentText(ax, c, b, false)
+        cur = p.doc.nextSibling(c)
+    }
+    if block {
+        try b.appendByte(' ')
+    }
+}
+
+// ---- values and states
+
+/// The value of a control: the text of a text field (masked for
+/// passwords), the selected option of a combobox, the value of a slider.
+fn valueOf(ax: *mut Ax, el: NodeId, role: []u8) AllocError![]u8 {
+    let p = ax.page
+    let name = p.doc.node(el).name
+    if text.eql(name, "textarea") {
+        var b = text.Builder.init(ax.alloc)
+        try p.doc.textContent(el, &mut b)
+        let out = try b.toOwned()
+        return out
+    }
+    if text.eql(name, "input") && html.isIn(role, "textbox searchbox spinbutton slider") {
+        if p.doc.attr(el, "value") |v| {
+            if text.eqlIgnoreCase(inputType(p, el), "password") {
+                let masked = try ax.alloc.alloc('*' as u8, v.len)
+                return masked
+            }
+            return v
+        }
+        return ""
+    }
+    if text.eql(role, "combobox") && text.eql(name, "select") {
+        if selectedOption(p, el) |opt| {
+            return optionLabel(ax, opt)
+        }
+        return ""
+    }
+    if html.isIn(role, "progressbar meter slider spinbutton") {
+        if p.doc.attr(el, "aria-valuenow") |v| {
+            return v
+        }
+        if p.doc.attr(el, "value") |v| {
+            return v
+        }
+    }
+    return ""
+}
+
+/// The selected option of a `select`: the last one with `selected`, else
+/// the first (for a single select).
+fn selectedOption(p: *Page, sel: NodeId) ?NodeId {
+    var found: ?NodeId = null
+    var first: ?NodeId = null
+    var cur = p.doc.following(sel, sel)
+    while cur |c| {
+        if p.doc.isElement(c, "option") {
+            if first == null {
+                first = c
+            }
+            if p.doc.attr(c, "selected") != null {
+                found = c
+            }
+        }
+        cur = p.doc.following(c, sel)
+    }
+    if found != null {
+        return found
+    }
+    if p.doc.attr(sel, "multiple") != null {
+        return null
+    }
+    return first
+}
+
+/// The label of an `option`: its `label` attribute, else its text.
+fn optionLabel(ax: *mut Ax, opt: NodeId) AllocError![]u8 {
+    if ax.page.doc.attr(opt, "label") |v| {
+        return collapse(ax.alloc, v)
+    }
+    var b = text.Builder.init(ax.alloc)
+    try ax.page.doc.textContent(opt, &mut b)
+    return collapse(ax.alloc, b.bytes())
+}
+
+fn statesOf(p: *Page, el: NodeId, role: []u8) u32 {
+    var s: u32 = 0
+    let name = p.doc.node(el).name
+    if text.eql(name, "input") && (text.eql(role, "checkbox") || text.eql(role, "radio")) {
+        if p.doc.attr(el, "checked") != null {
+            s |= ST_CHECKED
+        }
+    } else if html.isIn(role, "checkbox radio switch menuitemcheckbox menuitemradio") {
+        if attrIs(p, el, "aria-checked", "true") {
+            s |= ST_CHECKED
+        } else if attrIs(p, el, "aria-checked", "mixed") {
+            s |= ST_MIXED
+        }
+    }
+    if text.eql(name, "option") {
+        if isSelectedOption(p, el) {
+            s |= ST_SELECTED
+        }
+    } else if attrIs(p, el, "aria-selected", "true") {
+        s |= ST_SELECTED
+    }
+    if attrIs(p, el, "aria-expanded", "true") {
+        s |= ST_EXPANDED
+    } else if attrIs(p, el, "aria-expanded", "false") {
+        s |= ST_COLLAPSED
+    } else if text.eql(name, "summary") {
+        if p.doc.parent(el) |d| {
+            if p.doc.isElement(d, "details") {
+                if p.doc.attr(d, "open") != null {
+                    s |= ST_EXPANDED
+                } else {
+                    s |= ST_COLLAPSED
+                }
+            }
+        }
+    }
+    if isDisabled(p, el) {
+        s |= ST_DISABLED
+    }
+    if p.doc.attr(el, "required") != null || attrIs(p, el, "aria-required", "true") {
+        s |= ST_REQUIRED
+    }
+    if html.isIn(name, "input textarea") && p.doc.attr(el, "readonly") != null {
+        s |= ST_READONLY
+    }
+    if p.focused |f| {
+        if f == el {
+            s |= ST_FOCUSED
+        }
+    }
+    return s
+}
+
+fn isSelectedOption(p: *Page, opt: NodeId) bool {
+    var cur = p.doc.parent(opt)
+    while cur |c| {
+        if p.doc.isElement(c, "select") {
+            if p.doc.attr(c, "multiple") != null {
+                return p.doc.attr(opt, "selected") != null
+            }
+            if selectedOption(p, c) |s| {
+                return s == opt
+            }
+            return false
+        }
+        cur = p.doc.parent(c)
+    }
+    return p.doc.attr(opt, "selected") != null
+}
+
+/// Is `el` disabled: its own `disabled` (form controls), a disabled
+/// `fieldset` around it, or `aria-disabled`?
+fn isDisabled(p: *Page, el: NodeId) bool {
+    if attrIs(p, el, "aria-disabled", "true") {
+        return true
+    }
+    let name = p.doc.node(el).name
+    if !html.isIn(name, "button input select textarea option optgroup fieldset") {
+        return false
+    }
+    if p.doc.attr(el, "disabled") != null {
+        return true
+    }
+    var cur = p.doc.parent(el)
+    while cur |c| {
+        if p.doc.isElement(c, "fieldset") && p.doc.attr(c, "disabled") != null {
+            return true
+        }
+        if html.isIn(name, "option") && p.doc.isElement(c, "optgroup") && p.doc.attr(c, "disabled") != null {
+            return true
+        }
+        cur = p.doc.parent(c)
+    }
+    return false
+}
+
+// ---- output
+
+/// Writes the tree as text; with `boxes`, each node with a layout box
+/// gets `[box=x,y,w,h]`.
+fn writeAxText(ax: *Ax, out: *mut text.Builder, boxes: bool) AllocError!void {
+    for c in axAt(ax, 0).children.items() {
+        try axLine(ax, c, 0, out, boxes)
+    }
+}
+
+fn axLine(ax: *Ax, i: usize, depth: usize, out: *mut text.Builder, boxes: bool) AllocError!void {
+    let a = axAt(ax, i).*
+    for k in 0..depth {
+        try out.append("  ")
+    }
+    try out.append("- ")
+    try out.append(a.role)
+    if text.eql(a.role, "text") {
+        try out.append(": ")
+        try out.append(a.name)
+        try out.appendByte('\n')
+        return
+    }
+    if a.name.len > 0 {
+        try out.appendByte(' ')
+        try quoteText(out, a.name)
+    }
+    if a.level > 0 {
+        try out.append(" [level=")
+        try out.appendUint(a.level as u64)
+        try out.appendByte(']')
+    }
+    if a.ref > 0 {
+        try out.append(" [e")
+        try out.appendUint(a.ref as u64)
+        try out.appendByte(']')
+    }
+    for k, st in STATE_NAMES {
+        if (a.states & ((1 as u32) << (k as u32))) != 0 {
+            try out.append(" [")
+            try out.append(st)
+            try out.appendByte(']')
+        }
+    }
+    if a.value.len > 0 {
+        try out.append(" value=")
+        try quoteText(out, a.value)
+    }
+    if a.url.len > 0 {
+        try out.append(" -> ")
+        try out.append(a.url)
+    }
+    if a.node |n| {
+        if ax.page.rects.get(n.index) |r| {
+            if boxes {
+                try out.append(" [box=")
+                try writeRect(out, r)
+                try out.appendByte(']')
+            }
+            if a.ref > 0 && offscreen(ax.page, r) {
+                try out.append(" [offscreen]")
+            }
+        }
+    }
+    if a.inline.len > 0 {
+        try out.append(": ")
+        try out.append(a.inline)
+    }
+    try out.appendByte('\n')
+    for c in a.children.items() {
+        try axLine(ax, c, depth + 1, out, boxes)
+    }
+}
+
+fn writeRect(out: *mut text.Builder, r: Rect) AllocError!void {
+    try css.writeNumber(r.x, out)
+    try out.appendByte(',')
+    try css.writeNumber(r.y, out)
+    try out.appendByte(',')
+    try css.writeNumber(r.w, out)
+    try out.appendByte(',')
+    try css.writeNumber(r.h, out)
+}
+
+// `s` in double quotes, with `"`, `\` and newlines escaped.
+fn quoteText(out: *mut text.Builder, s: []u8) AllocError!void {
+    try out.appendByte('"')
+    for c in s {
+        if c == '"' || c == '\\' {
+            try out.appendByte('\\')
+            try out.appendByte(c)
+        } else if c == '\n' {
+            try out.append("\\n")
+        } else {
+            try out.appendByte(c)
+        }
+    }
+    try out.appendByte('"')
+}
+
+/// Writes the tree as a JSON array of the root's children.
+fn writeAxJson(ax: *Ax, w: *mut Writer, boxes: bool) AllocError!void {
+    try w.beginArray()
+    for c in axAt(ax, 0).children.items() {
+        try axJson(ax, c, w, boxes)
+    }
+    try w.endArray()
+}
+
+fn axJson(ax: *Ax, i: usize, w: *mut Writer, boxes: bool) AllocError!void {
+    let a = axAt(ax, i).*
+    try w.beginObject()
+    try w.key("role")
+    try w.string(a.role)
+    if text.eql(a.role, "text") {
+        try w.key("text")
+        try w.string(a.name)
+        try w.endObject()
+        return
+    }
+    if a.name.len > 0 {
+        try w.key("name")
+        try w.string(a.name)
+    }
+    if a.ref > 0 {
+        var b = text.Builder.init(ax.alloc)
+        try b.appendByte('e')
+        try b.appendUint(a.ref as u64)
+        try w.key("ref")
+        try w.string(b.bytes())
+    }
+    if a.level > 0 {
+        try w.key("level")
+        try w.int(a.level as i64)
+    }
+    if a.states != 0 {
+        try w.key("states")
+        try w.beginArray()
+        for k, st in STATE_NAMES {
+            if (a.states & ((1 as u32) << (k as u32))) != 0 {
+                try w.string(st)
+            }
+        }
+        try w.endArray()
+    }
+    if a.value.len > 0 {
+        try w.key("value")
+        try w.string(a.value)
+    }
+    if a.url.len > 0 {
+        try w.key("url")
+        try w.string(a.url)
+    }
+    if a.node |n| {
+        if ax.page.rects.get(n.index) |r| {
+            if boxes {
+                try w.key("box")
+                try w.beginObject()
+                try w.key("x")
+                try w.number(r.x)
+                try w.key("y")
+                try w.number(r.y)
+                try w.key("w")
+                try w.number(r.w)
+                try w.key("h")
+                try w.number(r.h)
+                try w.endObject()
+            }
+            if a.ref > 0 && offscreen(ax.page, r) {
+                try w.key("offscreen")
+                try w.boolean(true)
+            }
+        }
+    }
+    if a.inline.len > 0 {
+        try w.key("text")
+        try w.string(a.inline)
+    }
+    if a.children.len() > 0 {
+        try w.key("children")
+        try w.beginArray()
+        for c in a.children.items() {
+            try axJson(ax, c, w, boxes)
+        }
+        try w.endArray()
+    }
+    try w.endObject()
+}
