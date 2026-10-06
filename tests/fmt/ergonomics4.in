@@ -1,0 +1,17 @@
+struct P{
+pos:simd[4]f32
+mask : simd[ 8 ]bool
+}
+fn f(v:simd[4]f32)f32{
+@setSafety( false )
+let w=v*@splat(simd[4]f32,2.0)+simd[4]f32{1.0,2.0,3.0,4.0}
+let z=simd[16]u8{ 0 , .. }
+if tok is .Eof||!(n is .Done){
+}
+let h=@hash( key )
+return @reduceAdd(@select(w>v,w,v))
+}
+/// ```ore
+/// @expectEqual(1, one())
+/// ```
+fn one()i64{return 1}

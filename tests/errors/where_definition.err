@@ -1,5 +1,5 @@
 where_definition.ore:9:14: error[E0078]: `T` has no method `show`: a `comptime` type has only the methods of its `where` constraints (add `where T: SomeInterface`)
 where_definition.ore:17:31: error[E0078]: `T` has no method `show`: a `comptime` type has only the methods of its `where` constraints (add `where T: SomeInterface`)
 where_definition.ore:23:14: error[E0078]: `T` has no method `size`: its constraints (`Show`) do not declare it
-where_definition.ore:27:14: error[E0025]: operator `+` cannot be applied to `T`
+where_definition.ore:27:14: error[E0025]: operator `+` cannot be applied to `T` (`T` is a `comptime` type: add `where T: Integer` for the integer operators)
 where_definition.ore:31:14: error[E0078]: `T` is a `comptime` type: its fields are not known (use the methods of a `where` constraint)

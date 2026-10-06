@@ -528,6 +528,23 @@ fn cli_check() -> Result<(), String> {
     Ok(())
 }
 
+/// A compile error in a doc comment's example is reported where it is in
+/// the comment; `ore run` and `ore check` ignore the examples.
+fn cli_doc_example_error(work: &Path) -> Result<(), String> {
+    let src = "struct S {\n    x: i64\n\n    /// ```ore\n    /// let y: bool = S.one()\n    /// ```\n    pub fn one() i64 {\n        return 1\n    }\n}\n\npub fn main() {}\n";
+    std::fs::write(work.join("doc_error.ore"), src).map_err(|e| e.to_string())?;
+    let want = "doc_error.ore:5:25: error[E0023]: mismatched types: expected `bool`, found `i64`\n";
+    let (out, err, code) = ore(work, &["test", "doc_error.ore"])?;
+    if !out.is_empty() || err != want || code != Some(1) {
+        return Err(format!("`ore test doc_error.ore`: {code:?}\n--- expected stderr\n{want}--- got\n{out}{err}"));
+    }
+    let (out, err, code) = ore(work, &["check", "doc_error.ore"])?;
+    if !out.is_empty() || !err.is_empty() || code != Some(0) {
+        return Err(format!("`ore check doc_error.ore`: {code:?}\n{out}{err}"));
+    }
+    Ok(())
+}
+
 /// `ore explain <code>`: known code (exit 0), unknown code (exit 2).
 fn cli_explain() -> Result<(), String> {
     let run = |code: &str| Command::new(env!("CARGO_BIN_EXE_ore")).args(["explain", code]).output();
@@ -584,6 +601,7 @@ fn main() {
         handles.push(("cli/ore check".to_string(), s.spawn(cli_check)));
         handles.push(("cli/ore build --cflags -fsanitize=thread".to_string(), s.spawn(move || cli_tsan(w))));
         handles.push(("cli/ore explain".to_string(), s.spawn(cli_explain)));
+        handles.push(("cli/ore test: an error in a doc example".to_string(), s.spawn(move || cli_doc_example_error(w))));
         handles.push(("perf/General in debug mode".to_string(), s.spawn(move || perf_general(w))));
         handles.push(("cli/ore test --filter".to_string(), s.spawn(cli_test_filter)));
         handles.push(("cli/ore test --module".to_string(), s.spawn(cli_test_module)));

@@ -1,0 +1,10 @@
+// A lane index is checked like an array index.
+fn lane(v: simd[4]i32, i: usize) i32 {
+    return v[i]
+}
+
+pub fn main() {
+    let v = simd[4]i32{1, 2, 3, 4}
+    @println(lane(v, 3))
+    @println(lane(v, 4))
+}

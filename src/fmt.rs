@@ -206,12 +206,16 @@ fn classify(items: &mut [Item]) {
                 for_header = true;
                 Role::Keyword
             }
+            // `simd[N]T`: the `[N]` is a type's, as in `[N]T`.
+            Tok::Ident(n) if n == "simd" && tok_at(1) == Some(&Tok::LBracket) => Role::Prefix,
             Tok::Ident(_) | Tok::Builtin(_) | Tok::Int(_) | Tok::Float(_) | Tok::Str(_) | Tok::LineStr(_) | Tok::Char(_) => {
                 Role::Operand
             }
             Tok::Kw(_) => Role::Keyword,
             Tok::Comma => Role::Comma,
             Tok::Colon => Role::Colon,
+            // `x is .V`: the `.` starts the pattern.
+            Tok::Dot if prev_tok == Some(&Tok::Kw(Kw::Is)) => Role::Prefix,
             Tok::Dot | Tok::DotDot | Tok::DotDotEq | Tok::Ellipsis => Role::Tight,
             Tok::DotStar | Tok::DotQuestion => Role::Postfix,
             Tok::Minus | Tok::Amp | Tok::Star if operand => Role::Binary,

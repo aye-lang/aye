@@ -1,0 +1,15 @@
+// A `where T: Integer` generic is checked again for each integer type.
+fn negate(comptime T: type, x: T) T where T: Integer {
+    return -x
+}
+
+fn hundreds(comptime T: type) T where T: Integer {
+    return 300
+}
+
+pub fn main() {
+    @println(negate(i32, 5))
+    @println(negate(u8, 5))
+    @println(hundreds(u16))
+    @println(hundreds(u8))
+}

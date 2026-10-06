@@ -1,0 +1,2 @@
+integer_instance.ore:3:12: error[E0025]: cannot negate a value of type `u8` (in the instance `negate(u8)` made at 12:14)
+integer_instance.ore:7:12: error[E0024]: integer literal `300` does not fit in `u8` (in the instance `hundreds(u8)` made at 14:14)

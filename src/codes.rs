@@ -624,7 +624,7 @@ E0036 = 36 {
 }
 E0037 = 37 {
     "invalid cast",
-    "`as` converts only between numeric types. Other conversions are written out, for example with `if`. In a generic, a `T` converts with `as` only with `where T: Integer`, and nothing converts to `T`.",
+    "`as` converts only between numeric types. Other conversions are written out, for example with `if`. In a generic, a `T` converts with `as` (to and from numeric types) only with `where T: Integer`.",
     r#"pub fn main() {
     let flag = true
     let n = flag as i32
@@ -1577,7 +1577,7 @@ pub fn main() {
 }
 E0080 = 80 {
     "invalid type arguments",
-    "A type function names a type only with its arguments, `Box(i64)`, and only a type function takes type arguments. The argument of a `comptime` parameter must be a type, and the number of arguments must match the parameters.",
+    "A type function names a type only with its arguments, `Box(i64)`, and only a type function takes type arguments. The argument of a `comptime` parameter must be a type, and the number of arguments must match the parameters. A generic that instantiates itself with larger and larger type arguments (`Nest(?T)` inside `Nest(T)`) would never end: instances nested more than 32 deep are an error.",
     r#"fn Box(comptime T: type) type {
     return struct {
         value: T
@@ -2253,6 +2253,108 @@ fn use(a: Allocator) {
 pub fn main() {
     var c = Counter { count: 0 }
     use(&mut c)
+}
+"#,
+}
+E0106 = 106 {
+    "`is` on a value that is not an enum",
+    "`x is .V` tests whether the enum value `x` (or the enum that the pointer `x` points to) holds the variant `V`, without binding its fields: it is a `bool`. Only enums have variants; compare other values with `==` (error values too). To use the fields of the variant, `match` on it.",
+    r#"error ParseError { Empty, Bad }
+
+fn parse(s: []u8) ParseError!i64 {
+    return ParseError.Empty
+}
+
+pub fn main() {
+    let r = parse("") catch |e| {
+        if e is .Empty {
+            @println("empty")
+        }
+        return
+    }
+    @println(r)
+}
+"#,
+    r#"error ParseError { Empty, Bad }
+
+fn parse(s: []u8) ParseError!i64 {
+    return ParseError.Empty
+}
+
+pub fn main() {
+    let r = parse("") catch |e| {
+        if e == ParseError.Empty {
+            @println("empty")
+        }
+        return
+    }
+    @println(r)
+}
+"#,
+}
+E0107 = 107 {
+    "a value that `@hash` cannot hash",
+    "`@hash(x)` hashes exactly the values that `==` compares, so that equal values hash the same: integers, floats (`0.0` and `-0.0` alike), `bool`, pointers (by address), error values, enums without fields, optionals of those, and structs whose fields all hash. A slice, an array, a union or an enum with fields does not hash; for `[]u8` keys use `std.map.StrMap`, and for other keys hash a struct of the fields that identify the value. In a generic, `where T: Hash` gives `T` `==` and `@hash`.",
+    r#"struct Name {
+    text: []u8
+}
+
+pub fn main() {
+    @println(@hash(Name { text: "a" }))
+}
+"#,
+    r#"struct Name {
+    id: u32
+}
+
+pub fn main() {
+    @println(@hash(Name { id: 1 }) == @hash(Name { id: 1 }))
+}
+"#,
+}
+E0108 = 108 {
+    "misplaced `@setSafety`",
+    "`@setSafety(false)` turns off the runtime checks (overflow, bounds, division, shift, cast, `unreachable`) of the block it starts, and of the blocks inside it, as in `fast` mode; `@setSafety(true)` turns them back on in an inner block. It must be the first statement of a block, so that it covers the whole block, and its argument is `true` or `false` written out. It does not change the functions the block calls.",
+    r#"fn sum(xs: []u8) u8 {
+    var s: u8 = 0
+    @setSafety(false)
+    for x in xs {
+        s +%= x
+    }
+    return s
+}
+
+pub fn main() {
+    var xs = [2]u8{1, 2}
+    @println(sum(xs[..]))
+}
+"#,
+    r#"fn sum(xs: []u8) u8 {
+    @setSafety(false)
+    var s: u8 = 0
+    for x in xs {
+        s +%= x
+    }
+    return s
+}
+
+pub fn main() {
+    var xs = [2]u8{1, 2}
+    @println(sum(xs[..]))
+}
+"#,
+}
+E0109 = 109 {
+    "invalid `simd` type or use",
+    "`simd[N]T` is a vector of `N` lanes, where `N` is 2, 4, 8, 16, 32 or 64 and `T` is a number or `bool` (a mask). Its operators work lane by lane on two vectors of the same type: `+ - *` (integers wrap), `/` on float lanes, and comparisons, which give a mask `simd[N]bool`. Make a vector with a literal (`simd[4]f32{1.0, 2.0, 3.0, 4.0}`) or `@splat(simd[4]f32, x)`, read and write a lane with `v[i]`, and combine lanes with `@reduceAdd`, `@reduceMin`, `@reduceMax`, `@all`, `@any` and `@select`. A lane has no address: copy it out (`let x = v[i]`).",
+    r#"pub fn main() {
+    let v = simd[3]f32{1.0, 2.0, 3.0}
+    @println(@reduceAdd(v))
+}
+"#,
+    r#"pub fn main() {
+    let v = simd[4]f32{1.0, 2.0, 3.0, 0.0}
+    @println(@reduceAdd(v))
 }
 "#,
 }

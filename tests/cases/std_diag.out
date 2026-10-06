@@ -1,0 +1,7 @@
+ok: 3
+invalid:
+2:1: E1: not a number
+4:1: E2: `300` does not fit in a byte
+6:1: E2: `-4` does not fit in a byte
+2
+3

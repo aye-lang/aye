@@ -185,6 +185,8 @@ pub enum TypeExprKind {
     Array(ArrayLen, Box<TypeExpr>),
     /// `[]T` (mutable = false) or `[]mut T` (mutable = true).
     Slice(Box<TypeExpr>, bool),
+    /// `simd[N]T`: a vector of `N` lanes.
+    Simd(ArrayLen, Box<TypeExpr>),
     /// `[*]T`
     CPtr(Box<TypeExpr>),
     /// `*T` (mutable = false) or `*mut T` (mutable = true).
@@ -391,6 +393,9 @@ pub enum ExprKind {
     Unwrap(Box<Expr>),
     /// `unreachable`: a panic; its type is the one expected there.
     Unreachable,
+    /// `x is .V`: does the enum value `x` hold the variant `V`? The span
+    /// of the variant name.
+    Is { expr: Box<Expr>, variant: String, variant_span: Span },
     /// `[N]T{a, b, c}`; `ty` is the array type. Also the empty slice
     /// `[]T{}`, where `ty` is a slice type.
     ArrayLit { ty: TypeExpr, elems: Vec<Expr> },

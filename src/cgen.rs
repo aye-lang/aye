@@ -8,8 +8,13 @@
 //! every struct is), so the C layout is what the Ore declaration says; it
 //! must match the library's. A function type is a `typedef` of a C function
 //! pointer, and a `pub extern fn` is defined under its own name, not
-//! `static`. Overflow, bounds and cast checks are emitted as calls to small
-//! inline helpers; `ORE_CHECKS` turns their checks off in `fast` mode.
+//! `static`. Overflow, bounds, shift, division and cast checks are emitted
+//! inline, as an `if` before the statement that needs them (OIR operands are
+//! locals and constants, so a check can read them again), and overflow of
+//! `+ - *` as `__builtin_add_overflow` into the destination: no function call
+//! at `-O0`, and the `#line` of the statement. `fast` mode and
+//! `@setSafety(false)` blocks leave them out (`ORE_CHECKS` is 0 in `fast`
+//! mode, for the runtime's own checks).
 //! `ORE_TRACE` (debug mode) keeps the error return trace that is printed when
 //! `main` returns an error, and turns on the leak, double-free and
 //! use-after-free checks of `General`.
@@ -65,85 +70,22 @@ ORE_RT __attribute__((noreturn, cold)) void ore_panic_slice(int line, int col, s
                    ORE_LINE(line), col, (unsigned long long)lo, (unsigned long long)hi, (unsigned long long)len);
     ore_rt_abort();
 }
-ORE_RT inline size_t ore_idx(size_t i, size_t len, int line, int col) {
-    if (ORE_CHECKS && i >= len) ore_panic_index(line, col, i, len);
-    return i;
-}
-ORE_RT inline size_t ore_slice(size_t lo, size_t hi, size_t len, int line, int col) {
-    if (ORE_CHECKS && (lo > hi || hi > len)) ore_panic_slice(line, col, lo, hi, len);
-    return lo;
-}
-ORE_RT inline int64_t ore_cast_ss(int64_t v, int64_t lo, int64_t hi, int line, int col) {
-    if (ORE_CHECKS && (v < lo || v > hi)) ore_panic(line, col, "integer cast out of range");
-    return v;
-}
-ORE_RT inline int64_t ore_cast_su(int64_t v, uint64_t hi, int line, int col) {
-    if (ORE_CHECKS && (v < 0 || (uint64_t)v > hi)) ore_panic(line, col, "integer cast out of range");
-    return v;
-}
-ORE_RT inline uint64_t ore_cast_u(uint64_t v, uint64_t hi, int line, int col) {
-    if (ORE_CHECKS && v > hi) ore_panic(line, col, "integer cast out of range");
-    return v;
-}
-ORE_RT inline double ore_cast_fi(double v, double lo, double hi, int line, int col) {
-    if (ORE_CHECKS && !(v > lo && v < hi)) ore_panic(line, col, "float to integer cast out of range");
-    return v;
-}
+#define ORE_UNLIKELY(c) __builtin_expect(!!(c), 0)
 
-#define ORE_INT_OPS(N, T, UT, BITS, SIGNED, MIN)                                               \
-    ORE_RT inline T ore_add_##N(T a, T b, int l, int c) {                                      \
-        T r;                                                                                   \
-        if (__builtin_add_overflow(a, b, &r) && ORE_CHECKS) ore_panic(l, c, "integer overflow"); \
-        return r;                                                                              \
-    }                                                                                          \
-    ORE_RT inline T ore_sub_##N(T a, T b, int l, int c) {                                      \
-        T r;                                                                                   \
-        if (__builtin_sub_overflow(a, b, &r) && ORE_CHECKS) ore_panic(l, c, "integer overflow"); \
-        return r;                                                                              \
-    }                                                                                          \
-    ORE_RT inline T ore_mul_##N(T a, T b, int l, int c) {                                      \
-        T r;                                                                                   \
-        if (__builtin_mul_overflow(a, b, &r) && ORE_CHECKS) ore_panic(l, c, "integer overflow"); \
-        return r;                                                                              \
-    }                                                                                          \
-    ORE_RT inline T ore_div_##N(T a, T b, int l, int c) {                                      \
-        if (ORE_CHECKS && b == 0) ore_panic(l, c, "division by zero");                         \
-        if (ORE_CHECKS && SIGNED && a == MIN && b == (T)-1) ore_panic(l, c, "integer overflow"); \
-        return (T)(a / b);                                                                     \
-    }                                                                                          \
-    ORE_RT inline T ore_rem_##N(T a, T b, int l, int c) {                                      \
-        if (ORE_CHECKS && b == 0) ore_panic(l, c, "division by zero");                         \
-        if (ORE_CHECKS && SIGNED && a == MIN && b == (T)-1) ore_panic(l, c, "integer overflow"); \
-        return (T)(a % b);                                                                     \
-    }                                                                                          \
-    ORE_RT inline T ore_neg_##N(T a, int l, int c) {                                           \
-        if (ORE_CHECKS && SIGNED && a == MIN) ore_panic(l, c, "integer overflow");             \
-        return (T)-a;                                                                          \
-    }                                                                                          \
-    ORE_RT inline T ore_wadd_##N(T a, T b) { T r; __builtin_add_overflow(a, b, &r); return r; } \
-    ORE_RT inline T ore_wsub_##N(T a, T b) { T r; __builtin_sub_overflow(a, b, &r); return r; } \
-    ORE_RT inline T ore_wmul_##N(T a, T b) { T r; __builtin_mul_overflow(a, b, &r); return r; } \
-    /* Shifts: the amount is masked when checks are off. A left shift is   \
-       done unsigned and drops the bits shifted out; `>>` of a signed       \
-       value is arithmetic. */                                              \
-    ORE_RT inline T ore_shl_##N(T a, T b, int l, int c) {                                      \
-        if (ORE_CHECKS && (uint64_t)b >= BITS) ore_panic(l, c, "shift amount out of range");   \
-        return (T)((UT)a << ((UT)b & (BITS - 1)));                                             \
-    }                                                                                          \
-    ORE_RT inline T ore_shr_##N(T a, T b, int l, int c) {                                      \
-        if (ORE_CHECKS && (uint64_t)b >= BITS) ore_panic(l, c, "shift amount out of range");   \
-        return (T)(a >> ((UT)b & (BITS - 1)));                                                 \
-    }
-ORE_INT_OPS(i8, int8_t, uint8_t, 8, 1, INT8_MIN)
-ORE_INT_OPS(i16, int16_t, uint16_t, 16, 1, INT16_MIN)
-ORE_INT_OPS(i32, int32_t, uint32_t, 32, 1, INT32_MIN)
-ORE_INT_OPS(i64, int64_t, uint64_t, 64, 1, INT64_MIN)
-ORE_INT_OPS(isize, intptr_t, uintptr_t, 64, 1, INTPTR_MIN)
-ORE_INT_OPS(u8, uint8_t, uint8_t, 8, 0, 0)
-ORE_INT_OPS(u16, uint16_t, uint16_t, 16, 0, 0)
-ORE_INT_OPS(u32, uint32_t, uint32_t, 32, 0, 0)
-ORE_INT_OPS(u64, uint64_t, uint64_t, 64, 0, 0)
-ORE_INT_OPS(usize, size_t, size_t, 64, 0, 0)
+/* `@hash`: each scalar is mixed in with SplitMix64's finalizer. A float
+   hashes its bits, with -0.0 as 0.0 (they are `==`). */
+ORE_RT uint64_t ore_hash_mix(uint64_t h, uint64_t v) {
+    uint64_t x = h ^ (v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
+}
+ORE_RT uint64_t ore_hash_f64(double d) {
+    uint64_t b;
+    if (d == 0) d = 0;
+    __builtin_memcpy(&b, &d, sizeof b);
+    return b;
+}
 
 #define ORE_TRACE_MAX 64
 /* Each thread has its own error return trace. */
@@ -623,7 +565,7 @@ ORE_RT void ore_cond_free(uint8_t *c) {
 /// mode). With `tests`, `main` runs one test instead of `ore_f_main`.
 pub fn emit(p: &Program, files: &[String], checks: bool, trace: bool, tests: bool) -> String {
     let files = files.iter().map(|f| c_str(f.as_bytes())).collect();
-    let mut g = Gen { out: String::new(), files, trace, loops: Vec::new(), next_label: 0 };
+    let mut g = Gen { out: String::new(), files, trace, checks, mode_checks: checks, loops: Vec::new(), next_label: 0 };
     g.program(p, checks, tests);
     g.out
 }
@@ -684,6 +626,11 @@ struct Gen {
     /// The source file names as C string literals.
     files: Vec<String>,
     trace: bool,
+    /// Emit runtime checks: not in `fast` mode, nor in a `@setSafety(false)`
+    /// block.
+    checks: bool,
+    /// The build mode has runtime checks (not `fast`).
+    mode_checks: bool,
     /// For each enclosing loop: the label `continue` jumps to, if any.
     loops: Vec<Option<String>>,
     next_label: usize,
@@ -759,6 +706,7 @@ fn mangle(t: &Type) -> String {
         Type::Bool => "bool".into(),
         Type::Void => "void".into(),
         Type::Array(e, n) => format!("A{n}_{}", mangle(e)),
+        Type::Simd(e, n) => format!("V{n}_{}", mangle(e)),
         // `[]T` and `[]mut T` share one C type.
         Type::Slice(e, _) => format!("S_{}", mangle(e)),
         Type::CPtr(e) => format!("P_{}", mangle(e)),
@@ -795,6 +743,7 @@ fn c_type(t: &Type) -> String {
         Type::CPtr(e) | Type::Ptr(e, _) => format!("{}*", c_type(e)),
         Type::Optional(e) if is_ptr_optional(t) => c_type(e),
         Type::Array(..)
+        | Type::Simd(..)
         | Type::Slice(..)
         | Type::Struct(_)
         | Type::Enum(_)
@@ -818,6 +767,34 @@ fn is_composite(t: &Type) -> bool {
         Type::Array(..) | Type::Slice(..) | Type::Struct(_) | Type::Enum(_) | Type::ErrorUnion(..) | Type::Dyn(_) => true,
         Type::Optional(_) => !is_ptr_optional(t),
         _ => false,
+    }
+}
+
+/// The size in bytes of a lane of a `simd` (a number).
+fn lane_size(t: &Type) -> usize {
+    match t {
+        Type::Int(it) => it.bits() as usize / 8,
+        Type::Float(FloatTy::F32) => 4,
+        _ => 8,
+    }
+}
+
+/// The unsigned C type of the width of `it`.
+fn uint_c(it: IntTy) -> &'static str {
+    match it.bits() {
+        8 => "uint8_t",
+        16 => "uint16_t",
+        32 => "uint32_t",
+        _ => "uint64_t",
+    }
+}
+
+/// `add`, `sub` or `mul`: the name of the `__builtin_*_overflow` of `op`.
+fn overflow_builtin(op: BinOp) -> &'static str {
+    match op {
+        BinOp::Add => "add",
+        BinOp::Sub => "sub",
+        _ => "mul",
     }
 }
 
@@ -1025,6 +1002,17 @@ impl Gen {
             let kind = if is_union(p, t) { "union" } else { "struct" };
             let _ = writeln!(self.out, "typedef {kind} {n} {n};");
         }
+        // `simd[N]T`: a C vector (of `int8_t` for a mask), at most 16-byte
+        // aligned, as allocators align.
+        let mut vecs = HashSet::new();
+        for t in all.iter().filter(|t| matches!(t, Type::Simd(..))) {
+            let Type::Simd(e, n) = t else { unreachable!() };
+            let n = *n as usize;
+            let (lane, size) = if **e == Type::Bool { ("int8_t".to_string(), n) } else { (c_type(e), n * lane_size(e)) };
+            if vecs.insert(c_type(t)) {
+                let _ = writeln!(self.out, "typedef {lane} {} __attribute__((vector_size({size}), aligned({})));", c_type(t), size.min(16));
+            }
+        }
         // Function pointer types, after the types they name (`all` lists a
         // type after its parts) and before the structs that hold them.
         let mut fns = HashSet::new();
@@ -1150,16 +1138,40 @@ impl Gen {
         let _ = writeln!(self.out, "#line {} {}", s.span.line, self.files[s.span.file as usize]);
         match &s.kind {
             StmtKind::Assign(place, rv) => {
-                let line = format!("{} = {};", self.place(f, place), self.rvalue(f, rv));
-                self.line(ind, &line);
-            }
-            // A value dropped with `_ = x` is cast to `void` (no warning).
-            StmtKind::Eval(rv @ (Rvalue::Use(_) | Rvalue::Load(_))) => {
-                let line = format!("(void){};", self.rvalue(f, rv));
+                let mut checks = Vec::new();
+                self.place_checks(f, place, &mut checks);
+                self.rvalue_checks(f, rv, &mut checks);
+                for c in &checks {
+                    self.line(ind, c);
+                }
+                let p = self.place(f, place);
+                let line = match rv {
+                    // Overflow is checked as the result is stored.
+                    Rvalue::Binary { op: op @ (BinOp::Add | BinOp::Sub | BinOp::Mul), lhs, rhs, ty: Type::Int(_), span }
+                        if self.checks =>
+                    {
+                        let (a, b) = (self.operand(f, lhs), self.operand(f, rhs));
+                        format!(
+                            "if (ORE_UNLIKELY(__builtin_{}_overflow({a}, {b}, &{p}))) ore_panic({}, \"integer overflow\");",
+                            overflow_builtin(*op),
+                            line_col(*span)
+                        )
+                    }
+                    _ => format!("{p} = {};", self.rvalue(f, rv)),
+                };
                 self.line(ind, &line);
             }
             StmtKind::Eval(rv) => {
-                let line = format!("{};", self.rvalue(f, rv));
+                let mut checks = Vec::new();
+                self.rvalue_checks(f, rv, &mut checks);
+                for c in &checks {
+                    self.line(ind, c);
+                }
+                // A value dropped with `_ = x` is cast to `void` (no warning).
+                let line = match rv {
+                    Rvalue::Use(_) | Rvalue::Load(_) => format!("(void){};", self.rvalue(f, rv)),
+                    _ => format!("{};", self.rvalue(f, rv)),
+                };
                 self.line(ind, &line);
             }
             StmtKind::If { cond, then, els } => {
@@ -1216,12 +1228,23 @@ impl Gen {
             }
             StmtKind::TracePush(_) | StmtKind::TraceRestore(_) => {}
             StmtKind::Check { cond: Some(c), msg, span } => {
-                let line = format!("if (ORE_CHECKS && !{}) ore_panic({}, \"{msg}\");", self.operand(f, c), line_col(*span));
-                self.line(ind, &line);
+                if self.checks {
+                    let line = format!("if (ORE_UNLIKELY(!{})) ore_panic({}, \"{msg}\");", self.operand(f, c), line_col(*span));
+                    self.line(ind, &line);
+                }
+            }
+            StmtKind::Safety { on, body } => {
+                let saved = self.checks;
+                self.checks = *on && self.mode_checks;
+                self.block(f, body, ind);
+                self.checks = saved;
             }
             StmtKind::Check { cond: None, msg, span } => {
-                self.line(ind, &format!("if (ORE_CHECKS) ore_panic({}, \"{msg}\");", line_col(*span)));
-                self.line(ind, "__builtin_unreachable();");
+                if self.checks {
+                    self.line(ind, &format!("ore_panic({}, \"{msg}\");", line_col(*span)));
+                } else {
+                    self.line(ind, "__builtin_unreachable();");
+                }
             }
         }
     }
@@ -1238,61 +1261,168 @@ impl Gen {
         }
     }
 
+    /// The place `p` as a C lvalue; its bounds checks are `place_checks`.
     fn place(&self, f: &Func, p: &Place) -> String {
         let mut s = Self::local_name(f, p.local);
         for proj in &p.proj {
-            match proj {
-                Proj::Field(name) => {
-                    s.push('.');
-                    s.push_str(&c_field(name));
-                }
-                Proj::Index { index, len: Len::Array(n), span } => {
-                    s = format!("{s}.a[ore_idx({}, {n}, {})]", self.operand(f, index), line_col(*span));
-                }
-                Proj::Index { index, len: Len::Slice, span } => {
-                    s = format!("{s}.ptr[ore_idx({}, {s}.len, {})]", self.operand(f, index), line_col(*span));
-                }
-                Proj::Index { index, len: Len::Unchecked, .. } => s = format!("{s}[{}]", self.operand(f, index)),
-                Proj::Deref => s = format!("(*{s})"),
-            }
+            s = self.project(f, s, proj);
         }
         s
+    }
+
+    fn project(&self, f: &Func, s: String, proj: &Proj) -> String {
+        match proj {
+            Proj::Field(name) => format!("{s}.{}", c_field(name)),
+            Proj::Index { index, len: Len::Array(_), .. } => format!("{s}.a[{}]", self.operand(f, index)),
+            Proj::Index { index, len: Len::Lanes(_), .. } => format!("{s}[{}]", self.operand(f, index)),
+            Proj::Index { index, len: Len::Slice, .. } => format!("{s}.ptr[{}]", self.operand(f, index)),
+            Proj::Index { index, len: Len::Unchecked, .. } => format!("{s}[{}]", self.operand(f, index)),
+            Proj::Deref => format!("(*{s})"),
+        }
+    }
+
+    /// The bounds checks of the place `p`, in order (a later length can be
+    /// read through an earlier index).
+    fn place_checks(&self, f: &Func, p: &Place, out: &mut Vec<String>) {
+        if !self.checks {
+            return;
+        }
+        let mut s = Self::local_name(f, p.local);
+        for proj in &p.proj {
+            if let Proj::Index { index, len, span } = proj {
+                let n = match len {
+                    Len::Array(n) | Len::Lanes(n) if matches!(index, Operand::Int(v, _) if (*v as u64) < *n) => None,
+                    Len::Array(n) | Len::Lanes(n) => Some(n.to_string()),
+                    Len::Slice => Some(format!("{s}.len")),
+                    Len::Unchecked => None,
+                };
+                if let Some(n) = n {
+                    let i = self.operand(f, index);
+                    out.push(format!("if (ORE_UNLIKELY((size_t){i} >= {n})) ore_panic_index({}, {i}, {n});", line_col(*span)));
+                }
+            }
+            s = self.project(f, s, proj);
+        }
+    }
+
+    /// The checks of the rvalue `rv` other than overflow of `+ - *`: its
+    /// places' bounds, slice bounds, division by zero, shift amounts,
+    /// negation and casts.
+    fn rvalue_checks(&self, f: &Func, rv: &Rvalue, out: &mut Vec<String>) {
+        if !self.checks {
+            return;
+        }
+        let panic = |cond: String, span: Span, msg: &str| format!("if (ORE_UNLIKELY({cond})) ore_panic({}, \"{msg}\");", line_col(span));
+        match rv {
+            Rvalue::Load(p) | Rvalue::AddrOf(p) | Rvalue::IsSome { place: p, .. } | Rvalue::IsErr(p) => self.place_checks(f, p, out),
+            Rvalue::Slice { base, len, lo, hi, span, .. } => {
+                self.place_checks(f, base, out);
+                let b = self.place(f, base);
+                let n = match len {
+                    Len::Array(n) | Len::Lanes(n) => n.to_string(),
+                    Len::Slice => format!("{b}.len"),
+                    // No length: only `lo <= hi` is checked.
+                    Len::Unchecked => self.operand(f, hi.as_ref().unwrap()),
+                };
+                let lo = self.operand(f, lo);
+                let hi = hi.as_ref().map(|h| self.operand(f, h)).unwrap_or_else(|| n.clone());
+                out.push(format!(
+                    "if (ORE_UNLIKELY((size_t){lo} > (size_t){hi} || (size_t){hi} > {n})) ore_panic_slice({}, {lo}, {hi}, {n});",
+                    line_col(*span)
+                ));
+            }
+            // A constant divisor other than 0 and -1 needs no check.
+            Rvalue::Binary { op: BinOp::Div | BinOp::Rem, lhs, rhs, ty: Type::Int(it), span } => {
+                if matches!(rhs, Operand::Int(v, _) if *v != 0 && *v != -1) {
+                    return;
+                }
+                let (a, b) = (self.operand(f, lhs), self.operand(f, rhs));
+                out.push(panic(format!("{b} == 0"), *span, "division by zero"));
+                if it.signed() {
+                    out.push(panic(format!("{a} == {} && {b} == -1", c_int_of(it.min(), *it)), *span, "integer overflow"));
+                }
+            }
+            Rvalue::Binary { op: BinOp::Shl | BinOp::Shr, rhs, ty: Type::Int(it), span, .. } => {
+                if !matches!(rhs, Operand::Int(v, _) if *v >= 0 && *v < it.bits() as i128) {
+                    let cond = format!("(uint64_t){} >= {}", self.operand(f, rhs), it.bits());
+                    out.push(panic(cond, *span, "shift amount out of range"));
+                }
+            }
+            Rvalue::Neg { val, ty: Type::Int(it), span } if it.signed() => {
+                out.push(panic(format!("{} == {}", self.operand(f, val), c_int_of(it.min(), *it)), *span, "integer overflow"));
+            }
+            Rvalue::Cast { val, from, to, span } => {
+                let v = self.operand(f, val);
+                match (from, to) {
+                    (Type::Int(fi), Type::Int(ti)) => {
+                        let mut conds = Vec::new();
+                        if fi.min() < ti.min() {
+                            conds.push(format!("(int64_t){v} < {}", c_int(ti.min())));
+                        }
+                        if fi.max() > ti.max() {
+                            let cast = if fi.signed() { "int64_t" } else { "uint64_t" };
+                            conds.push(format!("({cast}){v} > {}", c_int(ti.max())));
+                        }
+                        if !conds.is_empty() {
+                            out.push(panic(conds.join(" || "), *span, "integer cast out of range"));
+                        }
+                    }
+                    (Type::Float(_), Type::Int(ti)) => {
+                        let lo = if ti.signed() { ti.min() as f64 - 1.0 } else { -1.0 };
+                        let hi = ti.max() as f64 + 1.0;
+                        let cond = format!("!((double){v} > {} && (double){v} < {})", c_float(lo), c_float(hi));
+                        out.push(panic(cond, *span, "float to integer cast out of range"));
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
     }
 
     fn rvalue(&self, f: &Func, rv: &Rvalue) -> String {
         match rv {
             Rvalue::Use(op) => self.operand(f, op),
             Rvalue::Load(p) => self.place(f, p),
+            // Integer arithmetic wraps (`-fwrapv`): the checks come before
+            // the statement, and overflow of `+ - *` is checked as the
+            // result is stored (a statement expression elsewhere).
             Rvalue::Binary { op, lhs, rhs, ty, span } => {
                 let (a, b) = (self.operand(f, lhs), self.operand(f, rhs));
-                let helper = match op {
-                    BinOp::Add => "add",
-                    BinOp::Sub => "sub",
-                    BinOp::Mul => "mul",
-                    BinOp::Div => "div",
-                    BinOp::Rem => "rem",
-                    BinOp::AddWrap => "wadd",
-                    BinOp::SubWrap => "wsub",
-                    BinOp::MulWrap => "wmul",
-                    BinOp::Shl => "shl",
-                    BinOp::Shr => "shr",
-                    BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => {
-                        return format!("(({})({a} {} {b}))", c_type(ty), op.as_str());
+                match (op, ty) {
+                    (BinOp::Add | BinOp::Sub | BinOp::Mul, Type::Int(it)) if self.checks => format!(
+                        "({{ {} r_; if (ORE_UNLIKELY(__builtin_{}_overflow({a}, {b}, &r_))) ore_panic({}, \"integer overflow\"); r_; }})",
+                        int_c(*it),
+                        overflow_builtin(*op),
+                        line_col(*span)
+                    ),
+                    (BinOp::Add | BinOp::AddWrap, Type::Int(it)) => format!("(({})({a} + {b}))", int_c(*it)),
+                    (BinOp::Sub | BinOp::SubWrap, Type::Int(it)) => format!("(({})({a} - {b}))", int_c(*it)),
+                    (BinOp::Mul | BinOp::MulWrap, Type::Int(it)) => format!("(({})({a} * {b}))", int_c(*it)),
+                    (BinOp::Div | BinOp::Rem, Type::Int(it)) => format!("(({})({a} {} {b}))", int_c(*it), op.as_str()),
+                    // The amount is masked: a left shift drops the bits
+                    // shifted out, and `>>` of a signed value is arithmetic.
+                    (BinOp::Shl, Type::Int(it)) => {
+                        let ut = uint_c(*it);
+                        format!("(({})(({ut}){a} << (({ut}){b} & {}u)))", int_c(*it), it.bits() - 1)
                     }
+                    (BinOp::Shr, Type::Int(it)) => {
+                        format!("(({})({a} >> (({}){b} & {}u)))", int_c(*it), uint_c(*it), it.bits() - 1)
+                    }
+                    (BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor, _) => format!("(({})({a} {} {b}))", c_type(ty), op.as_str()),
                     // Enums without payloads compare by tag.
-                    _ if matches!(ty, Type::Enum(_)) => return format!("({a}.tag {} {b}.tag)", op.as_str()),
-                    _ => return format!("({a} {} {b})", op.as_str()),
-                };
-                match ty {
-                    Type::Int(it) if helper.starts_with('w') => format!("ore_{helper}_{}({a}, {b})", it.name()),
-                    Type::Int(it) => format!("ore_{helper}_{}({a}, {b}, {})", it.name(), line_col(*span)),
+                    (_, Type::Enum(_)) => format!("({a}.tag {} {b}.tag)", op.as_str()),
+                    // A lane comparison gives -1 or 0 per lane, as a mask.
+                    (BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge, Type::Simd(_, n)) => {
+                        format!("__builtin_convertvector(({a} {} {b}), {})", op.as_str(), c_type(&Type::Simd(Box::new(Type::Bool), *n)))
+                    }
                     _ => format!("({a} {} {b})", op.as_str()),
                 }
             }
-            Rvalue::Neg { val, ty, span } => {
+            Rvalue::Neg { val, ty, .. } => {
                 let v = self.operand(f, val);
                 match ty {
-                    Type::Int(it) => format!("ore_neg_{}({v}, {})", it.name(), line_col(*span)),
+                    Type::Int(it) => format!("(({})-{v})", int_c(*it)),
                     _ => format!("(-{v})"),
                 }
             }
@@ -1315,7 +1445,7 @@ impl Gen {
                     .collect();
                 format!("({})", tests.join(" || "))
             }
-            Rvalue::Cast { val, from, to, span } => self.cast(&self.operand(f, val), from, to, *span),
+            Rvalue::Cast { val, to, .. } => format!("(({}){})", c_type(to), self.operand(f, val)),
             Rvalue::Call { name, is_extern, args } => {
                 let args: Vec<String> = args.iter().map(|a| self.operand(f, a)).collect();
                 let name = if *is_extern { extern_symbol(name).to_string() } else { fn_name(name) };
@@ -1435,6 +1565,14 @@ impl Gen {
                 let p = self.place(f, place);
                 if is_ptr_optional(ty) { format!("({p} != 0)") } else { format!("{p}.has") }
             }
+            Rvalue::ArrayRepeat { ty: ty @ Type::Simd(_, n), val } => {
+                let v = self.operand(f, val);
+                format!("(({}){{{}}})", c_type(ty), vec![v; *n as usize].join(", "))
+            }
+            Rvalue::ArrayLit { ty: ty @ Type::Simd(..), elems } => {
+                let es: Vec<String> = elems.iter().map(|o| self.operand(f, o)).collect();
+                format!("(({}){{{}}})", c_type(ty), es.join(", "))
+            }
             Rvalue::ArrayRepeat { ty, val } => {
                 let Type::Array(_, n) = ty else { unreachable!() };
                 let t = c_type(ty);
@@ -1449,20 +1587,18 @@ impl Gen {
             Rvalue::Ok { val: Some(v), ty } => format!("(({}){{0, {}}})", c_type(ty), self.operand(f, v)),
             Rvalue::Err { err, ty } => format!("(({}){{.err = {}}})", c_type(ty), self.operand(f, err)),
             Rvalue::TraceLen => if self.trace { "ore_trace_len" } else { "0" }.to_string(),
-            Rvalue::Slice { base, len, elem, lo, hi, span } => {
+            Rvalue::Slice { base, len, elem, lo, hi, .. } => {
                 let b = self.place(f, base);
                 let (ptr, n) = match len {
-                    Len::Array(n) => (format!("{b}.a"), n.to_string()),
+                    Len::Array(n) | Len::Lanes(n) => (format!("{b}.a"), n.to_string()),
                     Len::Slice => (format!("{b}.ptr"), format!("{b}.len")),
-                    // No length: only `lo <= hi` is checked.
                     Len::Unchecked => (b.clone(), self.operand(f, hi.as_ref().unwrap())),
                 };
                 let lo = self.operand(f, lo);
-                let hi = hi.as_ref().map(|h| self.operand(f, h)).unwrap_or_else(|| n.clone());
+                let hi = hi.as_ref().map(|h| self.operand(f, h)).unwrap_or(n);
                 format!(
-                    "(({}){{{ptr} + ore_slice({lo}, {hi}, {n}, {}), (size_t){hi} - (size_t){lo}}})",
-                    c_type(&Type::Slice(Box::new(elem.clone()), false)),
-                    line_col(*span)
+                    "(({}){{{ptr} + (size_t){lo}, (size_t){hi} - (size_t){lo}}})",
+                    c_type(&Type::Slice(Box::new(elem.clone()), false))
                 )
             }
         }
@@ -1489,6 +1625,47 @@ impl Gen {
                 Type::Bool => format!("ore_expect_eq_b({}, {}, {lc})", a[0], a[1]),
                 _ => format!("ore_expect_eq_s(({0}).ptr, ({0}).len, ({1}).ptr, ({1}).len, {lc})", a[0], a[1]),
             },
+            Intrinsic::Hash => unreachable!("lowered to HashMix"),
+            // A loop over the lanes: clang vectorizes it at `-O2`.
+            Intrinsic::ReduceAdd | Intrinsic::ReduceMin | Intrinsic::ReduceMax => {
+                let Type::Simd(e, n) = &args[0].1 else { unreachable!() };
+                let step = match op {
+                    Intrinsic::ReduceAdd => "r_ = r_ + v_[i_]",
+                    Intrinsic::ReduceMin => "r_ = v_[i_] < r_ ? v_[i_] : r_",
+                    _ => "r_ = v_[i_] > r_ ? v_[i_] : r_",
+                };
+                format!(
+                    "({{ {} v_ = {}; {} r_ = v_[0]; for (int i_ = 1; i_ < {n}; i_++) {step}; r_; }})",
+                    c_type(&args[0].1),
+                    a[0],
+                    c_type(e)
+                )
+            }
+            Intrinsic::All | Intrinsic::Any => {
+                let Type::Simd(_, n) = &args[0].1 else { unreachable!() };
+                let (init, step) = if op == Intrinsic::All { ("1", "r_ = r_ && v_[i_]") } else { ("0", "r_ = r_ || v_[i_]") };
+                format!("({{ {} v_ = {}; bool r_ = {init}; for (int i_ = 0; i_ < {n}; i_++) {step}; r_; }})", c_type(&args[0].1), a[0])
+            }
+            Intrinsic::Select => {
+                let Type::Simd(_, n) = &args[1].1 else { unreachable!() };
+                let t = c_type(&args[1].1);
+                format!(
+                    "({{ {} m_ = {}; {t} a_ = {}, b_ = {}, r_; for (int i_ = 0; i_ < {n}; i_++) r_[i_] = m_[i_] ? a_[i_] : b_[i_]; r_; }})",
+                    c_type(&args[0].1),
+                    a[0],
+                    a[1],
+                    a[2]
+                )
+            }
+            Intrinsic::HashMix => {
+                let bits = match &args[1].1 {
+                    Type::Float(_) => format!("ore_hash_f64({})", a[1]),
+                    Type::Enum(_) => format!("(uint64_t)({}).tag", a[1]),
+                    Type::Int(_) | Type::Bool | Type::ErrorSet(_) => format!("(uint64_t){}", a[1]),
+                    _ => format!("(uint64_t)(uintptr_t){}", a[1]),
+                };
+                format!("ore_hash_mix({}, {bits})", a[0])
+            }
             Intrinsic::AtomicLoad => format!("__atomic_load_n({}, __ATOMIC_SEQ_CST)", a[0]),
             Intrinsic::AtomicStore => format!("__atomic_store_n({}, {}, __ATOMIC_SEQ_CST)", a[0], a[1]),
             Intrinsic::AtomicAdd => format!("__atomic_fetch_add({}, {}, __ATOMIC_SEQ_CST)", a[0], a[1]),
@@ -1500,30 +1677,6 @@ impl Gen {
                 a[0],
                 a[2]
             ),
-        }
-    }
-
-    fn cast(&self, v: &str, from: &Type, to: &Type, span: Span) -> String {
-        let to_c = c_type(to);
-        let lc = line_col(span);
-        match (from, to) {
-            (Type::Int(fi), Type::Int(ti)) => {
-                if fi.min() >= ti.min() && fi.max() <= ti.max() {
-                    format!("(({to_c}){v})")
-                } else if fi.signed() && ti.signed() {
-                    format!("(({to_c})ore_cast_ss((int64_t){v}, {}, {}, {lc}))", c_int(ti.min()), c_int(ti.max()))
-                } else if fi.signed() {
-                    format!("(({to_c})ore_cast_su((int64_t){v}, {}, {lc}))", c_int(ti.max()))
-                } else {
-                    format!("(({to_c})ore_cast_u((uint64_t){v}, {}, {lc}))", c_int(ti.max()))
-                }
-            }
-            (Type::Float(_), Type::Int(ti)) => {
-                let lo = if ti.signed() { ti.min() as f64 - 1.0 } else { -1.0 };
-                let hi = ti.max() as f64 + 1.0;
-                format!("(({to_c})ore_cast_fi((double){v}, {}, {}, {lc}))", c_float(lo), c_float(hi))
-            }
-            _ => format!("(({to_c}){v})"),
         }
     }
 }
@@ -1546,6 +1699,7 @@ fn const_init(p: &Program, v: &ConstVal, ty: &Type) -> String {
         (ConstVal::Null, _) | (ConstVal::Zeroed, _) => "{0}".to_string(),
         (ConstVal::Some(x), Type::Optional(inner)) => format!("{{true, {}}}", const_init(p, x, inner)),
         (ConstVal::Agg(elems), Type::Array(el, _)) => format!("{{{{{}}}}}", list(elems, &vec![&**el; elems.len()])),
+        (ConstVal::Agg(elems), Type::Simd(el, _)) => format!("{{{}}}", list(elems, &vec![&**el; elems.len()])),
         (ConstVal::Agg(fields), Type::Struct(name)) => {
             let def = p.structs.iter().find(|s| s.name == *name).unwrap();
             format!("{{{}}}", list(fields, &def.fields.iter().map(|(_, t)| t).collect::<Vec<_>>()))
@@ -1575,6 +1729,7 @@ fn sizeof_types(b: &Block, out: &mut Vec<Type>) {
                 sizeof_types(a, out);
                 sizeof_types(b, out);
             }
+            StmtKind::Safety { body, .. } => sizeof_types(body, out),
             _ => {}
         }
     }
@@ -1586,6 +1741,7 @@ fn collect_type(t: &Type, seen: &mut HashSet<Type>, all: &mut Vec<Type>) {
     }
     match t {
         Type::Array(e, _)
+        | Type::Simd(e, _)
         | Type::Slice(e, _)
         | Type::CPtr(e)
         | Type::Ptr(e, _)

@@ -1,0 +1,53 @@
+// std.math: libm functions, `sign`, and `minOf`/`maxOf`/`absOf`/`clampOf`
+// on any integer type; integer operators on a `where T: Integer` type.
+import std
+import std.math
+
+fn sumSquares(comptime T: type, xs: []T) T where T: Integer {
+    var s: T = 0
+    for x in xs {
+        s += x * x
+    }
+    return s
+}
+
+fn lowBits(comptime T: type, x: T, n: T) T where T: Integer {
+    return x & ((1 << n) - 1)
+}
+
+fn negate(comptime T: type, x: T) T where T: Integer {
+    return -x
+}
+
+pub fn main() {
+    @println(math.sin(math.pi / 2.0))
+    @println(math.cos(0.0))
+    @println(math.tan(0.0))
+    @println(math.asin(1.0) * 2.0)
+    @println(math.acos(-1.0))
+    @println(math.atan(1.0) * 4.0)
+    @println(math.atan2(1.0, -1.0))
+    @println(math.exp(1.0))
+    @println(math.log(math.exp(2.0)))
+    @println(math.log2(1024.0))
+    @println(math.log10(0.001))
+    @println(math.hypot(3.0, 4.0))
+    @println(math.fmod(7.5, 2.0))
+    @println(math.fmod(-7.5, 2.0))
+    @println(math.trunc(-2.7))
+    @println(math.sign(-3.5))
+    @println(math.sign(0.0))
+    @println(math.sign(8.0))
+    @println(math.isNan(math.sign(math.nan())))
+
+    @println(math.minOf(i32, 3, -4))
+    @println(math.maxOf(u8, 3, 250))
+    @println(math.absOf(i64, -9))
+    @println(math.absOf(u16, 9))
+    @println(math.clampOf(isize, -20, -5, 5))
+    @println(math.clampOf(usize, 7, 0, 10))
+    var xs = [3]u16{1, 2, 3}
+    @println(sumSquares(u16, xs[..]))
+    @println(lowBits(u32, 0xff, 4))
+    @println(negate(i8, 5))
+}

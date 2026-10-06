@@ -91,11 +91,11 @@ context; `ore doc --signatures std` prints all of std.
   There are no block comments. `///` lines right above a declaration or
   member are its doc comment (`ore doc` shows them).
 - Identifiers: a letter or `_`, then letters, digits or `_` (ASCII only).
-- Keywords (30): `fn let var pub import struct enum error interface dyn
+- Keywords (31): `fn let var pub import struct enum error interface dyn
   match if else for while break continue return defer errdefer try catch
-  orelse unreachable comptime where as test mut extern`.
+  orelse unreachable comptime where as test mut extern is`.
 - Predeclared names (not keywords, cannot be declared again): `true false
-  null Self type Integer` and the primitive types `i8 i16 i32 i64 isize u8 u16 u32
+  null Self type simd Integer Hash` and the primitive types `i8 i16 i32 i64 isize u8 u16 u32
   u64 usize f32 f64 bool` and C's integer types `c_short c_ushort c_int
   c_uint c_long c_ulong c_longlong c_ulonglong`. `in` is special only in a
   `for` header, `union` only after `extern`.
@@ -133,7 +133,8 @@ pub fn main() {
 - Builtins start with `@`: `@print`, `@println`, `@expect`, `@expectEqual`,
   `@testAllocator`, `@sizeOf`, `@zeroed`, `@ptrCast`, `@link`,
   `@linkOptional`, `@hasLink`, `@atomicLoad`, `@atomicStore`, `@atomicAdd`,
-  `@atomicSub`, `@atomicCas`.
+  `@atomicSub`, `@atomicCas`, `@hash`, `@setSafety`, `@splat`,
+  `@reduceAdd`, `@reduceMin`, `@reduceMax`, `@all`, `@any`, `@select`.
 
 **Newlines end statements** (Go's rule). A newline is a statement
 terminator when the last token on the line is an identifier, a literal,
@@ -519,6 +520,7 @@ array of them (`@zeroed([64]bool)`, `@zeroed([4][4]u8)`), and a constant
 | `f32 f64` | floats |
 | `bool` | `true`, `false` |
 | `[N]T` | array of N elements, a value (copied on assignment) |
+| `simd[N]T` | vector of N lanes (2 to 64, a power of two) of a number or `bool`; operators work per lane |
 | `[]T` | slice: pointer + length; elements read-only |
 | `[]mut T` | slice whose elements can be assigned |
 | `*T`, `*mut T` | non-null pointer, read-only or writable |
@@ -532,6 +534,35 @@ array of them (`@zeroed([64]bool)`, `@zeroed([4][4]u8)`), and a constant
 
 There is no string type: text is `[]u8`. There is no `void` type except as
 the payload of an error union (`!void`).
+
+### simd
+
+`simd[N]T` is the only type besides numbers with arithmetic operators (a C
+vector). Two vectors of the same type combine lane by lane with `+ - *`
+(integer lanes wrap, unchecked), `/` on float lanes, and unary `-`.
+Comparisons give a mask `simd[N]bool`, which has no operators: test it
+with `@all(m)`, `@any(m)` or `m[i]`, or use it in `@select(m, a, b)` (lane
+`i` of `a` where `m[i]`, else of `b`). `v[i]` reads or writes a lane
+(bounds checked; a lane has no address). `@splat(simd[N]T, x)` sets every
+lane; `@reduceAdd(v)`, `@reduceMin(v)`, `@reduceMax(v)` combine the lanes.
+A number is not a vector (`v * 2.0` is an error: `v * @splat(simd[4]f32,
+2.0)`), and `==` cannot compare whole vectors (`@all(a == b)` does). Errors:
+E0109.
+
+```ore
+fn dot(a: simd[4]f32, b: simd[4]f32) f32 {
+    return @reduceAdd(a * b)
+}
+
+pub fn main() {
+    var v = simd[4]f32{1.0, 2.0, 3.0, 4.0}
+    v[0] = 5.0
+    let big = v > @splat(simd[4]f32, 2.5)
+    @println(dot(v, v))
+    @println(@any(big))
+    @println(@reduceMax(@select(big, v, simd[4]f32{0.0, ..})))
+}
+```
 
 ### Conversions
 
@@ -742,6 +773,7 @@ pub fn main() {
 `&x` makes a `*T`, `&mut x` a `*mut T` (`x` must be a `var` or reached
 through a `*mut`). `p.*` dereferences. Field access and method calls go
 through one pointer level automatically: `p.x`, `p.x = 1` for `p: *mut S`.
+So does indexing a pointer to an array: `a[i]`, `a[i] = 1` for `a: *mut [N]T`.
 `p == q` is true when both point to the same place. There is no pointer
 arithmetic and no null pointer: use `?*T`. A temporary cannot be borrowed
 (`&f()` is an error), but a method that takes `*Self` or `*mut Self` can
@@ -819,6 +851,10 @@ Arms are separated by newlines or `,`.
 - As an expression, each arm is an expression (not a block), and all arms
   have the same type.
 - As a statement, each arm is a block or a call.
+- `x is .V` is `true` when the enum value `x` (or the enum that the
+  pointer `x` points to) holds the variant `V`. It binds no fields (use
+  `match` for them) and sits with the comparisons: `(x is .V) == b`,
+  `!(x is .V)`.
 
 ```ore
 enum Cmd {
@@ -848,6 +884,8 @@ pub fn main() {
     run(Cmd.Move { dx: 1, dy: 2 })
     run(Cmd.Say { text: "hi" })
     @println(isQuit(Cmd.Quit))
+    let c = Cmd.Say { text: "x" }
+    @println(c is .Say)
 }
 ```
 
@@ -957,7 +995,8 @@ pub fn main() !void {
   in debug mode followed by `error return trace:` and one `file:line:col`
   per `return`/`try` the error passed through (where it started first), and
   exits with status 1.
-- Errors carry no payload. Report details through a parameter or `std.log`.
+- Errors carry no payload. Report details through a `diags: *mut
+  Diagnostics` parameter (`std.diag`, section 15) or `std.log`.
 
 ```ore
 import std
@@ -1205,14 +1244,21 @@ pub fn main() {
   and `.f(...)`: `Pair(i64) { ... }`, `Pool(Node).init(a)`.
 - A generic is checked once where it is defined. A value of type `T` can be
   copied, moved, pointed to, stored in arrays, slices and optionals, and
-  allocated; it has no fields, operators or methods except the methods of
-  its `where` constraints. `where T: A, T: B` (no `+`) follows the return
+  allocated; it has no fields, operators or methods except those of its
+  `where` constraints. `where T: A, T: B` (no `+`) follows the return
   type. A type argument that does not satisfy a constraint is an error at
   the instantiation.
-- `where T: Integer` is built in: only integer types satisfy it, and a `T`
-  value converts with `as` to any numeric type (`x as u64`, which panics if
-  the value does not fit, as for any integer). That is all: no operators or
-  literals on `T`, and nothing converts to `T`.
+- `where T: Integer` is built in: only integer types satisfy it. A `T`
+  then has the integer operators (arithmetic, bitwise, shifts,
+  comparisons), integer literals take type `T`, and `as` converts between
+  `T` and any numeric type (panicking if the value does not fit). Each
+  instance is checked again with its type: `-x` or the literal `300` with
+  `T = u8` is an error that names the instance.
+- `where T: Hash` is built in: the types that `==` compares satisfy it
+  (section 7), and a `T` then has `==`, `!=` and `@hash`. `@hash(x)` is a
+  `u64` from any such value, equal for equal values (`0.0` and `-0.0`
+  too); otherwise E0107. A slice, array, union or enum with fields does
+  not hash.
 
 ```ore
 fn total(comptime T: type, xs: []T) i64 where T: Integer {
@@ -1223,9 +1269,20 @@ fn total(comptime T: type, xs: []T) i64 where T: Integer {
     return s
 }
 
+fn countAbove(comptime T: type, xs: []T, limit: T) T where T: Integer {
+    var n: T = 0
+    for x in xs {
+        if x > limit {
+            n += 1
+        }
+    }
+    return n
+}
+
 pub fn main() {
     var b = [2]u8{200, 100}
     @println(total(u8, b[..]))
+    @println(countAbove(u8, b[..], 150))
 }
 ```
 - Generic functions and methods of a type function's struct must spell out
@@ -1306,6 +1363,11 @@ test "allocations are checked" {
   the module's: imports start there. `ore build`/`ore run` leave tests
   out. A root module with tests needs no `main` for `ore check` and `ore
   test`.
+- A ```` ```ore ```` block in a `///` doc comment (outside std) is a test
+  too, for `ore test` only: its lines are the body of a test of that file,
+  named `doc: square (line 4)` after the declaration below the comment and
+  the line of the opening fence. Errors and failures point into the
+  comment. Other fences (```` ```text ````) do not run.
 - `@expect(cond)` and `@expectEqual(expected, actual)` (integers, floats,
   `bool`, `[]u8`) fail the test with `file:line:col: assertion failed:
   expected X, found Y`.
@@ -1332,6 +1394,10 @@ failure is `{"kind":"assertion"|"panic"|"leak","line":L,"col":C,"message":M}`,
   section 15 (std.sync).
 - `@sizeOf(T)`, `@zeroed(T)`, `@ptrCast(T, p)`, `@link("lib")`,
   `@linkOptional("lib")`, `@hasLink("lib")`: section 4.
+- `@hash(x)`: section 11 (`where T: Hash`).
+- `@splat`, `@reduceAdd`, `@reduceMin`, `@reduceMax`, `@all`, `@any`,
+  `@select`: section 5 (simd).
+- `@setSafety(false)`, `@setSafety(true)`: section 16.
 
 ## 15. std
 
@@ -1464,9 +1530,23 @@ IntMap.iterator(self: *Self) IntMapIterator(K, V)
 std.map.IntMapIterator(K, V)
 IntMapIterator.next(self: *mut Self) ?IntEntry(K, V)
 std.map.IntEntry(K, V) { key: K, value: *mut V }
+std.map.HashMap(K, V) where K: Hash        any key `==` compares: structs, enums, optionals
+HashMap.init(alloc: Allocator) HashMap(K, V)
+HashMap.deinit(self: *mut Self)
+HashMap.len(self: *Self) usize
+HashMap.put(self: *mut Self, key: K, value: V) AllocError!void
+HashMap.get(self: *Self, key: K) ?V
+HashMap.getPtr(self: *Self, key: K) ?*mut V
+HashMap.contains(self: *Self, key: K) bool
+HashMap.remove(self: *mut Self, key: K) bool
+HashMap.iterator(self: *Self) HashMapIterator(K, V)
+std.map.HashMapIterator(K, V)
+HashMapIterator.next(self: *mut Self) ?HashEntry(K, V)
+std.map.HashEntry(K, V) { key: K, value: *mut V }
 ```
 
-A struct (a node id) is not a key: use its integer field.
+`HashMap` finds a key by `@hash` and `==`: a struct key (a node handle)
+is compared field by field.
 
 ```ore
 import std.heap.General
@@ -1547,9 +1627,29 @@ std.math.inf() f64                         positive infinity; -inf() is negative
 std.math.nan() f64                         a NaN (not equal to itself)
 std.math.isNan(x: f64) bool
 std.math.isInf(x: f64) bool                either sign
+std.math.trunc(x: f64) f64                 toward zero; also libm:
+std.math.fmod(x: f64, y: f64) f64          remainder with the sign of x
+std.math.sin(x: f64) f64                   radians, as cos, tan
+std.math.cos(x: f64) f64
+std.math.tan(x: f64) f64
+std.math.asin(x: f64) f64                  NaN outside -1..=1, as acos
+std.math.acos(x: f64) f64
+std.math.atan(x: f64) f64
+std.math.atan2(y: f64, x: f64) f64         angle of (x, y), -pi..=pi
+std.math.exp(x: f64) f64
+std.math.log(x: f64) f64                   natural; as log2, log10
+std.math.log2(x: f64) f64
+std.math.log10(x: f64) f64
+std.math.hypot(x: f64, y: f64) f64         sqrt(x*x + y*y) without overflow
+std.math.sign(x: f64) f64                  -1, 0 or 1; NaN for NaN
+std.math.minOf(comptime T: type, a: T, b: T) T where T: Integer
+std.math.maxOf(comptime T: type, a: T, b: T) T where T: Integer
+std.math.absOf(comptime T: type, x: T) T where T: Integer        panics on the minimum of a signed T
+std.math.clampOf(comptime T: type, x: T, lo: T, hi: T) T where T: Integer
 ```
 
-Only `f64`: Ore has no generic arithmetic. Convert with `as`.
+The float functions take `f64` (convert an `f32` with `as`); the integer
+ones any integer type: `std.math.minOf(i32, a, b)`.
 
 ### std.sort
 
@@ -1695,6 +1795,65 @@ the next argument: an integer, float, `bool`, `[]u8`, or an error value
 characters, including lone braces, are written as they are. Pending `@print`
 output is flushed first.
 
+### std.diag
+
+```
+std.diag.Diagnostic { code: u32, start: usize, end: usize, message: []u8 }   start..end: bytes of the input
+std.diag.Diagnostics
+Diagnostics.init(alloc: Allocator) Diagnostics
+Diagnostics.deinit(self: *mut Self)                 frees the messages too
+Diagnostics.add(self: *mut Self, code: u32, start: usize, end: usize, message: []u8) AllocError!void   copies message
+Diagnostics.len(self: *Self) usize
+Diagnostics.items(self: *Self) []Diagnostic         in order; valid until the next add/clear
+Diagnostics.clear(self: *mut Self)
+std.diag.LineCol { line: usize, col: usize }        from 1; col counts bytes
+std.diag.lineCol(text: []u8, offset: usize) LineCol
+```
+
+The convention for detailed errors: the function takes `diags: *mut
+Diagnostics`, adds one per problem (it may go on after one), and returns
+its error; the caller reads `diags.items()` in the `catch` block.
+
+```ore
+import std
+import std.diag
+import std.diag.Diagnostics
+import std.heap.General
+
+error ParseError { Invalid }
+
+fn parse(src: []u8, diags: *mut Diagnostics) !u32 {
+    var n: u32 = 0
+    for i, c in src {
+        if c < '0' || c > '9' {
+            try diags.add(1, i, i + 1, "not a digit")
+            continue
+        }
+        n = n * 10 + (c - '0') as u32
+    }
+    if diags.len() > 0 {
+        return ParseError.Invalid
+    }
+    return n
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var diags = Diagnostics.init(gpa.allocator())
+    defer diags.deinit()
+    let src = "4x2"
+    let n = parse(src, &mut diags) catch |e| {
+        for d in diags.items() {
+            let at = diag.lineCol(src, d.start)
+            std.log.err("{}:{}: {}", at.line, at.col, d.message)
+        }
+        return e
+    }
+    @println(n)
+}
+```
+
 ### std.os
 
 ```
@@ -1792,6 +1951,11 @@ pub fn main() !void {
   asks for more.
 - `fast` mode removes the checks: overflow wraps, out-of-bounds access is
   undefined behavior.
+- `@setSafety(false)`, as the first statement of a block (a function body
+  too), removes the checks of that block and the blocks in it, as `fast`
+  mode does; `@setSafety(true)` in an inner block brings back the build
+  mode's checks. The argument is `true` or `false` written out (E0108).
+  Functions called from the block keep their checks.
 - Struct fields, arrays and slices are laid out by the compiler; only an
   `extern struct` promises C layout.
 

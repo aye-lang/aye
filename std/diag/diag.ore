@@ -1,0 +1,87 @@
+// std.diag: detailed errors without error payloads. An error value is only
+// a name; a function that needs to say more (where, and what exactly)
+// takes `diags: *mut Diagnostics`, adds a `Diagnostic` for each problem,
+// and returns its error. A parser can add several and still return a
+// result. The caller reads them after `catch` and turns each byte offset
+// into a line and column with `lineCol`.
+
+import std.list.List
+import std.mem
+import std.mem.AllocError
+import std.mem.Allocator
+
+/// One problem: a code that the caller defines, the bytes
+/// `start..end` of the input that it is about, and a message (a copy
+/// owned by the `Diagnostics`).
+pub struct Diagnostic {
+    code: u32
+    start: usize
+    end: usize
+    message: []u8
+}
+
+/// A position in a text: line and column, both from 1 (the column counts
+/// bytes).
+pub struct LineCol {
+    line: usize
+    col: usize
+}
+
+/// The diagnostics of an operation, in the order they were added.
+pub struct Diagnostics {
+    list: List(Diagnostic)
+    alloc: Allocator
+
+    /// No diagnostics; nothing is allocated until the first `add`.
+    pub fn init(alloc: Allocator) Diagnostics {
+        return Diagnostics { list: List(Diagnostic).init(alloc), alloc: alloc }
+    }
+
+    /// Frees the diagnostics and their messages.
+    pub fn deinit(self: *mut Self) {
+        self.clear()
+        self.list.deinit()
+    }
+
+    /// Adds a diagnostic; `message` is copied.
+    pub fn add(self: *mut Self, code: u32, start: usize, end: usize, message: []u8) AllocError!void {
+        let copy = try self.alloc.alloc(0 as u8, message.len)
+        mem.copy(copy, message)
+        self.list.append(Diagnostic { code: code, start: start, end: end, message: copy }) catch |e| {
+            self.alloc.free(copy)
+            return e
+        }
+    }
+
+    /// The number of diagnostics.
+    pub fn len(self: *Self) usize {
+        return self.list.len()
+    }
+
+    /// The diagnostics, in order; valid until the next `add` or `clear`.
+    pub fn items(self: *Self) []Diagnostic {
+        return self.list.items()
+    }
+
+    /// Removes every diagnostic (and frees its message).
+    pub fn clear(self: *mut Self) {
+        for d in self.list.items() {
+            self.alloc.free(d.message)
+        }
+        self.list.clear()
+    }
+}
+
+/// The line and column of the byte at `offset` in `text` (`offset` may be
+/// `text.len`, the end).
+pub fn lineCol(text: []u8, offset: usize) LineCol {
+    var line: usize = 1
+    var start: usize = 0
+    for i, c in text[..offset] {
+        if c == '\n' {
+            line += 1
+            start = i + 1
+        }
+    }
+    return LineCol { line: line, col: offset - start + 1 }
+}

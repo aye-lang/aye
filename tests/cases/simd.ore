@@ -1,0 +1,63 @@
+// `simd[N]T`: vectors with element-wise `+ - * /`, comparisons that give a
+// mask (`simd[N]bool`), indexing, `@splat`, `@select` and reductions.
+struct Particle {
+    pos: simd[4]f32
+    vel: simd[4]f32
+}
+
+let ONES = simd[4]f32{1.0, ..}
+
+fn dot(a: simd[4]f32, b: simd[4]f32) f32 {
+    return @reduceAdd(a * b)
+}
+
+fn positives(m: simd[4]bool) usize {
+    var n: usize = 0
+    for i in (0 as usize)..4 {
+        if m[i] {
+            n += 1
+        }
+    }
+    return n
+}
+
+pub fn main() {
+    let a = simd[4]f32{1.0, 2.0, 3.0, 4.0}
+    let b = @splat(simd[4]f32, 0.5)
+    let c = a * b + a - b / @splat(simd[4]f32, 2.0)
+    @println(c[0])
+    @println(c[3])
+    @println(dot(a, a))
+    @println(dot(a, ONES))
+
+    var v = simd[8]i32{1, 2, 3, 4, 5, 6, 7, 8}
+    v[7] = 100
+    let w = v * @splat(simd[8]i32, 3) - v
+    @println(@reduceAdd(w))
+    @println(@reduceMin(w))
+    @println(@reduceMax(w))
+
+    let m = a > @splat(simd[4]f32, 2.5)
+    @println(m[0])
+    @println(m[2])
+    @println(@any(m))
+    @println(@all(m))
+    @println(@all(a == a))
+    @println(positives(m))
+    @println(@reduceAdd(@select(m, a, @splat(simd[4]f32, 0.0))))
+
+    var p = Particle { pos: @splat(simd[4]f32, 0.0), vel: simd[4]f32{1.0, -1.0, 0.5, 0.0} }
+    for step in 0..10 {
+        p.pos = p.pos + p.vel
+    }
+    @println(p.pos[0])
+    @println(p.pos[1])
+    @println(p.pos[2])
+    let neg = -a
+    @println(neg[3])
+
+    // Integer lanes wrap.
+    var bytes = simd[16]u8{250, ..}
+    bytes = bytes + @splat(simd[16]u8, 10)
+    @println(bytes[15])
+}

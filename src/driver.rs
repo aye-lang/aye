@@ -44,6 +44,8 @@ const MAX_DIAGS: usize = 50;
 pub struct Root {
     pub files: Vec<SourceFile>,
     pub base: PathBuf,
+    /// The examples of doc comments are tests (`ore test`).
+    pub doc_tests: bool,
 }
 
 impl Root {
@@ -71,13 +73,13 @@ impl Root {
             let text = std::fs::read_to_string(&f).map_err(|e| format!("cannot read {name}: {e}"))?;
             files.push(SourceFile { name, text, std: false });
         }
-        Ok(Root { files, base: p.to_path_buf() })
+        Ok(Root { files, base: p.to_path_buf(), doc_tests: false })
     }
 
     /// A root module of one file, `name`, with the text `src`.
     pub fn single(name: &str, src: &str) -> Root {
         let base = Path::new(name).parent().unwrap_or(Path::new("")).to_path_buf();
-        Root { files: vec![SourceFile { name: name.to_string(), text: src.to_string(), std: false }], base }
+        Root { files: vec![SourceFile { name: name.to_string(), text: src.to_string(), std: false }], base, doc_tests: false }
     }
 }
 
@@ -102,7 +104,7 @@ pub fn check(file_name: &str, src: &str) -> Result<sema::Program, Vec<Diag>> {
 /// file and position. A stage runs only if the previous one had no errors,
 /// so a syntax error never causes follow-up type errors.
 pub fn front_end(root: Root, need_main: Option<bool>) -> Checked {
-    let (files, ast) = module::load(root.files, &root.base);
+    let (files, ast) = module::load(root.files, &root.base, root.doc_tests);
     let names: Vec<String> = files.iter().map(|f| f.name.clone()).collect();
     let diags = |errs: Vec<Error>| {
         let mut d: Vec<Diag> = errs.into_iter().map(|e| e.with_file(&names)).collect();
@@ -218,7 +220,7 @@ fn file_names(files: &[SourceFile]) -> Vec<String> {
 /// Like `compile_root`, for a test executable: its argument is the index
 /// of the test to run. Also returns the tests and the file names.
 pub fn compile_tests_to_c(root: Root, mode: Mode) -> Result<(CProgram, Vec<sema::TestDef>, Vec<String>), Vec<Diag>> {
-    let checked = front_end(root, Some(false));
+    let checked = front_end(Root { doc_tests: true, ..root }, Some(false));
     let typed = checked.result?;
     let links = linked(&typed);
     let ir = oir::lower(&typed, &links);

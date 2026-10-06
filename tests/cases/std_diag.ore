@@ -1,0 +1,76 @@
+// std.diag: a parser reports every problem through `*mut Diagnostics` and
+// returns an error; the caller prints them with lines and columns.
+import std.diag
+import std.diag.Diagnostics
+import std.heap.General
+import std.list.List
+import std.mem.Allocator
+import std.text
+import std.text.Builder
+
+error ConfigError { Invalid }
+
+let BAD_NUMBER: u32 = 1
+let TOO_BIG: u32 = 2
+
+// Bytes, one per line ("12"); every bad line is reported.
+fn parseBytes(alloc: Allocator, src: []u8, out: *mut List(u8), diags: *mut Diagnostics) !void {
+    let before = diags.len()
+    var start: usize = 0
+    var lines = text.split(src, "\n")
+    while lines.next() |line| {
+        if line.len > 0 {
+            if text.parseInt(line) |v| {
+                if v >= 0 && v <= 255 {
+                    try out.append(v as u8)
+                } else {
+                    var b = Builder.init(alloc)
+                    defer b.deinit()
+                    try b.append("`")
+                    try b.append(line)
+                    try b.append("` does not fit in a byte")
+                    try diags.add(TOO_BIG, start, start + line.len, b.bytes())
+                }
+            } else |e| {
+                try diags.add(BAD_NUMBER, start, start + line.len, "not a number")
+            }
+        }
+        start += line.len + 1
+    }
+    if diags.len() > before {
+        return ConfigError.Invalid
+    }
+}
+
+fn run(alloc: Allocator, src: []u8) !void {
+    var diags = Diagnostics.init(alloc)
+    defer diags.deinit()
+    var out = List(u8).init(alloc)
+    defer out.deinit()
+    parseBytes(alloc, src, &mut out, &mut diags) catch |e| {
+        @println("invalid:")
+        for d in diags.items() {
+            let at = diag.lineCol(src, d.start)
+            @print(at.line)
+            @print(":")
+            @print(at.col)
+            @print(": E")
+            @print(d.code)
+            @print(": ")
+            @println(d.message)
+        }
+        return
+    }
+    @print("ok: ")
+    @println(out.len())
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    try run(gpa.allocator(), "1\n2\n3\n")
+    try run(gpa.allocator(), "12\nx1\n\n300\n7\n-4")
+    let at = diag.lineCol("ab\ncd", 5)
+    @println(at.line)
+    @println(at.col)
+}

@@ -1,0 +1,1 @@
+ptr_readonly_index.ore:2:5: error[E0033]: cannot assign to data behind a read-only pointer `*[4]u8` (use `*mut [4]u8`)

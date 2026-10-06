@@ -15,11 +15,11 @@ fn widen(comptime T: type, x: T) u64 {
     return x as u64
 }
 
-fn add(comptime T: type, a: T, b: T) T where T: Integer {
+fn add(comptime T: type, a: T, b: T) T {
     return a + b
 }
 
-fn narrow(comptime T: type, x: i64) T where T: Integer {
+fn narrow(comptime T: type, x: i64) T {
     return x as T
 }
 

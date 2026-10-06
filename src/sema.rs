@@ -133,6 +133,9 @@ pub enum Type {
     /// Result type of functions without a return type. Not nameable.
     Void,
     Array(Box<Type>, u64),
+    /// `simd[N]T`: `N` lanes (a power of two, 2 to 64) of a number or
+    /// `bool` (a mask, from a comparison), a C vector.
+    Simd(Box<Type>, u64),
     /// `[]T` (mutable = false) or `[]mut T` (mutable = true): a pointer and
     /// a length. Only `[]mut T` elements can be assigned.
     Slice(Box<Type>, bool),
@@ -167,11 +170,36 @@ pub enum Type {
     Error,
 }
 
-/// The most instances of one generic.
-const MAX_INSTANCES: usize = 64;
+/// The deepest nesting of a type alias chain.
+const MAX_ALIAS_DEPTH: usize = 64;
+
+/// The deepest nesting of generic instances in a type argument: a generic
+/// that instantiates itself with a larger type (`Nest(?T)` in `Nest(T)`)
+/// would never end. There is no limit on the number of instances.
+const MAX_INSTANCE_DEPTH: usize = 32;
 
 /// The built-in `where` constraint that only integer types satisfy.
 const INTEGER: &str = "Integer";
+
+/// The built-in `where` constraint that the types `==` compares satisfy:
+/// a `T` with it has `==`, `!=` and `@hash`.
+const HASH: &str = "Hash";
+
+/// The number of lanes of a `simd` type.
+fn v_lanes(t: &Type) -> u64 {
+    match t {
+        Type::Simd(_, n) => *n,
+        _ => 0,
+    }
+}
+
+/// The hint for a number written where a `simd` is expected.
+fn splat_hint(t: &Type) -> String {
+    match t {
+        Type::Simd(..) => format!(" (make a vector of it with `@splat({t}, x)`)"),
+        _ => String::new(),
+    }
+}
 
 /// Name prefix of the inferred error set of a `!T` function.
 const INFERRED: &str = "error set of ";
@@ -231,6 +259,7 @@ impl fmt::Display for Type {
             Type::Bool => f.write_str("bool"),
             Type::Void => f.write_str("void"),
             Type::Array(t, n) => write!(f, "[{n}]{t}"),
+            Type::Simd(t, n) => write!(f, "simd[{n}]{t}"),
             Type::Slice(t, false) => write!(f, "[]{t}"),
             Type::Slice(t, true) => write!(f, "[]mut {t}"),
             Type::CPtr(t) => write!(f, "[*]{t}"),
@@ -438,6 +467,9 @@ pub enum TStmtKind {
     ErrDefer(Vec<TStmt>),
     Block(Vec<TStmt>),
     Expr(TExpr),
+    /// `@setSafety(on)`, the first statement of a block: the runtime checks
+    /// of the rest of the block are on (as the build mode has them) or off.
+    SetSafety(bool),
 }
 
 #[derive(Debug, Clone)]
@@ -515,6 +547,8 @@ pub enum TExprKind {
     Unwrap(Box<TExpr>),
     /// `unreachable`: a panic (in `fast` mode, undefined behavior).
     Unreachable,
+    /// `x is .V`: does the enum value `x` hold variant `index`?
+    IsVariant { expr: Box<TExpr>, index: usize },
     /// A call through the vtable of a `dyn` value.
     DynCall { recv: Box<TExpr>, method: String, args: Vec<TExpr> },
     /// A `*T` or `*mut T` (T is the struct `strukt`) converted to `dyn I`.
@@ -566,6 +600,21 @@ pub enum Intrinsic {
     AtomicAdd,
     AtomicSub,
     AtomicCas,
+    /// `@hash(v)`: a `u64` from the value, the same for values that `==`
+    /// finds equal. Lowered to `HashMix` steps.
+    Hash,
+    /// The hash `args[0]` (a `u64`) mixed with the scalar `args[1]`.
+    HashMix,
+    /// `@reduceAdd(v)`, `@reduceMin(v)`, `@reduceMax(v)`: the sum (wrapping
+    /// for integers), least or greatest lane of a `simd`.
+    ReduceAdd,
+    ReduceMin,
+    ReduceMax,
+    /// `@all(m)`, `@any(m)` of a mask.
+    All,
+    Any,
+    /// `@select(m, a, b)`.
+    Select,
 }
 
 #[derive(Debug, Clone)]
@@ -697,6 +746,15 @@ struct Checker<'a> {
     instances: HashMap<(String, Vec<Type>), String>,
     /// Instance structs in order of creation.
     instance_structs: Vec<String>,
+    /// Where each instance for concrete types was first made: errors in
+    /// its body (a literal that does not fit its integer type) name it.
+    instance_sites: HashMap<String, Span>,
+    /// The instance whose body is being checked, and its site.
+    in_instance: Option<(String, Span)>,
+    /// The names of every instance (`instances`' values).
+    instance_names: HashSet<String>,
+    /// The nesting depth of each instance struct (see `type_depth`).
+    instance_depth: HashMap<String, usize>,
     /// Instance structs whose type arguments mention a type parameter.
     abstract_structs: HashSet<String>,
     /// The `where` constraints of each type parameter: interface names.
@@ -780,6 +838,10 @@ pub fn check(file: &ast::File, require_main: bool, files: &[String]) -> std::res
         generics: HashMap::new(),
         instances: HashMap::new(),
         instance_structs: Vec::new(),
+        instance_depth: HashMap::new(),
+        instance_names: HashSet::new(),
+        instance_sites: HashMap::new(),
+        in_instance: None,
         abstract_structs: HashSet::new(),
         bounds: HashMap::new(),
         defined: HashSet::new(),
@@ -825,7 +887,11 @@ fn silent() -> Error {
 }
 
 fn mismatch(span: Span, expected: &Type, found: &Type) -> Error {
-    Error::new(E0023, span, format!("mismatched types: expected `{expected}`, found `{found}`"))
+    let hint = match (expected, found) {
+        (Type::Bool, Type::Simd(..)) => " (a comparison of `simd` values is a mask: use `@all(m)` or `@any(m)`)",
+        _ => "",
+    };
+    Error::new(E0023, span, format!("mismatched types: expected `{expected}`, found `{found}`{hint}"))
 }
 
 /// Is this expression an untyped numeric literal (whose type comes from context)?
@@ -1090,6 +1156,9 @@ impl<'a> Checker<'a> {
                 let digits = e.msg[i + 2..].chars().take_while(char::is_ascii_digit).count();
                 e.msg.replace_range(i + 1..i + 2 + digits, "");
             }
+            if let Some((name, site)) = self.in_instance.as_ref().filter(|_| e.code != E0080) {
+                e.msg = format!("{} (in the instance `{name}` made at {})", e.msg, self.place(*site, e.span));
+            }
             // Canonical names of other modules are shown as paths.
             e.msg = e.msg.replace("::", ".");
             self.errors.push(e);
@@ -1126,7 +1195,7 @@ impl<'a> Checker<'a> {
                 }
             };
             let bare = name.rsplit("::").next().unwrap();
-            if Type::from_name(bare).is_some() || matches!(bare, "true" | "false" | "null" | "Self" | "type" | INTEGER) {
+            if Type::from_name(bare).is_some() || matches!(bare, "true" | "false" | "null" | "Self" | "type" | "simd" | INTEGER | HASH) {
                 self.report(Error::new(E0014, span, format!("`{name}` is a builtin name and cannot be redefined")));
                 continue;
             }
@@ -1436,7 +1505,7 @@ impl<'a> Checker<'a> {
     /// so that it is a type alias? Its value has the shape of a type, and
     /// its name is a type, a type function or another alias.
     fn is_alias(&self, g: &ast::GlobalDecl, depth: usize) -> bool {
-        if g.mutable || g.ty.is_some() || depth > MAX_INSTANCES {
+        if g.mutable || g.ty.is_some() || depth > MAX_ALIAS_DEPTH {
             return false;
         }
         match &g.init.kind {
@@ -1551,7 +1620,7 @@ impl<'a> Checker<'a> {
             TExprKind::ArrayLit(elems) => ConstVal::Agg(elems.iter().map(|x| self.fold(x)).collect::<Result<_>>()?),
             TExprKind::ArrayRepeat(x) => match (&e.ty, self.fold(x)?) {
                 (_, ConstVal::Zeroed) => ConstVal::Zeroed,
-                (Type::Array(_, n), v) => ConstVal::Agg(vec![v; *n as usize]),
+                (Type::Array(_, n) | Type::Simd(_, n), v) => ConstVal::Agg(vec![v; *n as usize]),
                 _ => unreachable!(),
             },
             TExprKind::Field { base, index } => match self.fold(base)? {
@@ -1754,7 +1823,7 @@ impl<'a> Checker<'a> {
         for b in &f.bounds {
             if !f.params.iter().any(|p| p.comptime && p.name == b.param) {
                 self.report(Error::new(E0076, b.span, format!("`{}` is not a `comptime` parameter of `{g}`", b.param)));
-            } else if b.iface != INTEGER && !self.ifaces.contains_key(&b.iface) {
+            } else if b.iface != INTEGER && b.iface != HASH && !self.ifaces.contains_key(&b.iface) {
                 self.report(Error::new(E0076, b.iface_span, format!(
                     "`{}` is not an interface (a `where` constraint names an interface)",
                     b.iface
@@ -1782,11 +1851,25 @@ impl<'a> Checker<'a> {
         matches!(t, Type::Param(g, p) if self.bounds.get(&(g.clone(), p.clone())).is_some_and(|v| v.iter().any(|i| i == INTEGER)))
     }
 
-    /// The hint for an operator applied to a type parameter with `where T: Integer`.
+    /// Is `t` a type parameter with `where T: Hash` (or `Integer`, whose
+    /// types all compare)?
+    fn hash_param(&self, t: &Type) -> bool {
+        matches!(t, Type::Param(g, p) if self.bounds.get(&(g.clone(), p.clone())).is_some_and(|v| v.iter().any(|i| i == HASH || i == INTEGER)))
+    }
+
+    /// Is `t` an integer type, or a type parameter with `where T: Integer`
+    /// (which has the integer operators and literals; each instance is
+    /// checked again with its integer type)?
+    fn int_like(&self, t: &Type) -> bool {
+        t.is_int() || self.integer_param(t)
+    }
+
+    /// The hint for an operator applied to a type parameter without
+    /// `where T: Integer`.
     fn integer_hint(&self, t: &Type) -> String {
         match t {
-            Type::Param(_, p) if self.integer_param(t) => {
-                format!(" (`where {p}: Integer` allows only `as`: convert first, e.g. `x as i64`)")
+            Type::Param(_, p) if !self.integer_param(t) => {
+                format!(" (`{p}` is a `comptime` type: add `where {p}: Integer` for the integer operators)")
             }
             _ => String::new(),
         }
@@ -1818,18 +1901,33 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Stop a generic that instantiates itself with larger and larger type
-    /// arguments (`Nest(?T)` in `Nest(T)`), which would never end.
-    fn check_instance_count(&self, g: &str, span: Span) -> Result<()> {
-        if self.instances.keys().filter(|(n, _)| n == g).count() >= MAX_INSTANCES {
+    /// How deeply `t` nests generic instances and other types: 1 for a
+    /// type without parts.
+    fn type_depth(&self, t: &Type) -> usize {
+        match t {
+            Type::Array(e, _) | Type::Slice(e, _) | Type::CPtr(e) | Type::Ptr(e, _) | Type::Optional(e) | Type::ErrorUnion(_, e) => {
+                1 + self.type_depth(e)
+            }
+            Type::Fn(params, ret) => 1 + params.iter().chain([&**ret]).map(|t| self.type_depth(t)).max().unwrap_or(0),
+            Type::Struct(n) => self.instance_depth.get(n).copied().unwrap_or(1),
+            _ => 1,
+        }
+    }
+
+    /// The depth of a new instance of `g` for `args`. Stop a generic that
+    /// instantiates itself with larger and larger type arguments (`Nest(?T)`
+    /// in `Nest(T)`), which would never end.
+    fn instance_depth(&self, g: &str, args: &[Type], span: Span) -> Result<usize> {
+        let depth = 1 + args.iter().map(|t| self.type_depth(t)).max().unwrap_or(0);
+        if depth > MAX_INSTANCE_DEPTH {
             if self.failed.contains(g) {
                 return Err(silent());
             }
             return err(E0080, span, format!(
-                "more than {MAX_INSTANCES} instances of `{g}`: it instantiates itself with larger and larger type arguments"
+                "`{g}` instantiates itself with larger and larger type arguments (instances nested more than {MAX_INSTANCE_DEPTH} deep), which would never end"
             ));
         }
-        Ok(())
+        Ok(depth)
     }
 
     /// The name of a new instance: `Pool(Node)`. Instances for type
@@ -1839,7 +1937,7 @@ impl<'a> Checker<'a> {
         let base = format!("{g}({})", args.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", "));
         let mut name = base.clone();
         let mut n = 1;
-        while self.instances.values().any(|v| *v == name) {
+        while self.instance_names.contains(&name) {
             n += 1;
             name = format!("{base}#{n}");
         }
@@ -1859,19 +1957,27 @@ impl<'a> Checker<'a> {
         for b in &decl.bounds {
             let Some(i) = params.iter().position(|p| p.name == b.param) else { continue };
             let integer = b.iface == INTEGER;
-            if i >= args.len() || !integer && !self.ifaces.contains_key(&b.iface) {
+            let hash = b.iface == HASH;
+            if i >= args.len() || !integer && !hash && !self.ifaces.contains_key(&b.iface) {
                 continue;
             }
             let (p, iface) = (&b.param, &b.iface);
             let need = format!("`where {p}: {iface}` of `{g}` at {}", self.place(b.span, span));
             match &args[i] {
                 t if integer && t.is_int() => {}
+                t @ Type::Param(..) if hash && self.hash_param(t) => {}
                 Type::Param(pg, pn) => {
                     if !self.bounds.get(&(pg.clone(), pn.clone())).is_some_and(|v| v.contains(iface)) {
                         return err(E0079, span, format!("`{pn}` does not satisfy {need} (add `where {pn}: {iface}`)"));
                     }
                 }
                 t if integer => return err(E0079, span, format!("`{t}` does not satisfy {need}: it is not an integer type")),
+                t if hash => {
+                    if let Some(why) = self.why_not_comparable(t) {
+                        let why = if why.is_empty() { "`==` cannot compare it".to_string() } else { why };
+                        return err(E0079, span, format!("`{t}` does not satisfy {need}: {why}"));
+                    }
+                }
                 Type::Struct(s) => {
                     if let Some(why) = self.why_not(s, iface) {
                         return err(E0079, span, format!("`{s}` does not satisfy {need}: {why}"));
@@ -1902,10 +2008,15 @@ impl<'a> Checker<'a> {
         if let Some(n) = self.instances.get(&key) {
             return Ok(Type::Struct(n.clone()));
         }
-        self.check_instance_count(g, span)?;
+        let depth = self.instance_depth(g, &key.1, span)?;
         let name = self.instance_name(g, &key.1);
+        self.instance_names.insert(name.clone());
+        if !key.1.iter().any(|t| self.has_param(t)) {
+            self.instance_sites.insert(name.clone(), span);
+        }
         self.instances.insert(key.clone(), name.clone());
         self.instance_structs.push(name.clone());
+        self.instance_depth.insert(name.clone(), depth);
         self.structs.insert(name.clone(), StructDef { name: name.clone(), fields: vec![], is_union: false });
         let identity = key.1 == self.own_params(decl);
         let is_abstract = key.1.iter().any(|t| self.has_param(t));
@@ -1965,8 +2076,12 @@ impl<'a> Checker<'a> {
             return Ok(k.clone());
         }
         let decl = self.generics[g];
-        self.check_instance_count(g, span)?;
+        self.instance_depth(g, &key.1, span)?;
         let name = self.instance_name(g, &key.1);
+        self.instance_names.insert(name.clone());
+        if !key.1.iter().any(|t| self.has_param(t)) {
+            self.instance_sites.insert(name.clone(), span);
+        }
         self.instances.insert(key.clone(), name.clone());
         let identity = key.1 == self.own_params(decl);
         let is_abstract = key.1.iter().any(|t| self.has_param(t));
@@ -2279,6 +2394,20 @@ impl<'a> Checker<'a> {
                 };
                 Type::Array(Box::new(self.resolve_type(elem)?), n)
             }
+            TypeExprKind::Simd(len, elem) => {
+                let n = match len {
+                    ast::ArrayLen::Lit(n) => *n,
+                    ast::ArrayLen::Const(e) => self.array_len(e)?,
+                };
+                let elem = self.resolve_type(elem)?;
+                if !(elem.is_numeric() || elem == Type::Bool) {
+                    return err(E0109, t.span, format!("`simd[{n}]{elem}`: the lanes of a `simd` are numbers or `bool`"));
+                }
+                if !n.is_power_of_two() || !(2..=64).contains(&n) {
+                    return err(E0109, t.span, format!("`simd[{n}]{elem}`: a `simd` has 2, 4, 8, 16, 32 or 64 lanes"));
+                }
+                Type::Simd(Box::new(elem), n)
+            }
             TypeExprKind::Slice(elem, mutable) => Type::Slice(Box::new(self.resolve_type(elem)?), *mutable),
             TypeExprKind::CPtr(elem) => Type::CPtr(Box::new(self.resolve_type(elem)?)),
             TypeExprKind::Ptr(elem, mutable) => Type::Ptr(Box::new(self.resolve_type(elem)?), *mutable),
@@ -2457,6 +2586,8 @@ impl<'a> Checker<'a> {
         self.self_ty = owner;
         self.env = env;
         self.in_test = is_test(name);
+        let owner_site = self.self_ty.as_ref().and_then(|s| self.instance_sites.get(s).map(|&at| (s.clone(), at)));
+        self.in_instance = self.instance_sites.get(name).map(|&at| (name.to_string(), at)).or(owner_site);
         self.vars.clear();
         self.scopes = vec![HashMap::new()];
         self.ret = sig.ret.clone();
@@ -2475,6 +2606,7 @@ impl<'a> Checker<'a> {
                 format!("function `{name}` must return a value of type `{}` on every path", sig.ret),
             ));
         }
+        self.in_instance = None;
         FnDef {
             name: name.to_string(),
             params,
@@ -2490,7 +2622,17 @@ impl<'a> Checker<'a> {
     fn block(&mut self, b: &ast::Block) -> Vec<TStmt> {
         self.scopes.push(HashMap::new());
         let mut out = Vec::new();
-        for s in &b.stmts {
+        for (i, s) in b.stmts.iter().enumerate() {
+            if i == 0
+                && let StmtKind::Expr(ast::Expr { kind: ExprKind::Builtin { name, args }, span }) = &s.kind
+                && name == "setSafety"
+            {
+                match args.as_slice() {
+                    [ast::Expr { kind: ExprKind::Bool(on), .. }] => out.push(TStmt { kind: TStmtKind::SetSafety(*on), span: s.span }),
+                    _ => self.report(Error::new(E0108, *span, "`@setSafety` takes `true` or `false`, written out")),
+                }
+                continue;
+            }
             match self.stmt(s) {
                 Ok(t) => out.push(t),
                 Err(e) => self.report(e),
@@ -2885,10 +3027,10 @@ impl<'a> Checker<'a> {
     fn condition(&mut self, e: &ast::Expr, what: &str) -> Result<TExpr> {
         let c = self.value(e, Some(&Type::Bool))?;
         if c.ty != Type::Bool {
-            let hint = if matches!(c.ty, Type::Optional(_)) {
-                " (unwrap it with `if x |v| { }` or compare it with `null`)"
-            } else {
-                ""
+            let hint = match c.ty {
+                Type::Optional(_) => " (unwrap it with `if x |v| { }` or compare it with `null`)",
+                Type::Simd(..) => " (a comparison of `simd` values is a mask: use `@all(m)` or `@any(m)`)",
+                _ => "",
             };
             return err(E0026, c.span, format!("`{what}` condition must be `bool`, found `{}`{hint}", c.ty));
         }
@@ -3190,6 +3332,11 @@ impl<'a> Checker<'a> {
                 Some("it has variants with fields (use `match`)".to_string())
             }
             Type::Enum(_) => None,
+            Type::Simd(..) => Some("`==` on a `simd` compares lane by lane (a mask): use `@all(a == b)`".to_string()),
+            t @ Type::Param(_, p) if !self.hash_param(t) => {
+                Some(format!("it is a `comptime` type (add `where {p}: Hash` to compare it)"))
+            }
+            Type::Param(..) => None,
             Type::Struct(n) if self.structs[n].is_union => Some("it is a union".to_string()),
             Type::Struct(n) => self.structs[n].fields.iter().find(|(_, ft)| self.why_not_comparable(ft).is_some()).map(|(f, ft)| {
                 format!("its field `{f}` has type `{ft}`, which `==` cannot compare")
@@ -3223,7 +3370,11 @@ impl<'a> Checker<'a> {
                 return Ok(TExpr { kind: TExprKind::Float(v as f64), ty: expected.unwrap().clone(), span });
             }
             Some(t @ Type::Int(_)) => t.clone(),
-            Some(t) => return err(E0023, span, format!("mismatched types: expected `{t}`, found integer literal")),
+            // Checked again with the integer type of each instance.
+            Some(t @ Type::Param(..)) if self.integer_param(t) => {
+                return Ok(TExpr { kind: TExprKind::Int(v), ty: t.clone(), span });
+            }
+            Some(t) => return err(E0023, span, format!("mismatched types: expected `{t}`, found integer literal{}", splat_hint(t))),
             None => I64,
         };
         let Type::Int(it) = ty else { unreachable!() };
@@ -3236,15 +3387,27 @@ impl<'a> Checker<'a> {
     fn float_lit(&self, v: f64, span: Span, expected: Option<&Type>) -> Result<TExpr> {
         let ty = match expected {
             Some(t @ Type::Float(_)) => t.clone(),
-            Some(t) => return err(E0023, span, format!("mismatched types: expected `{t}`, found float literal")),
+            Some(t) => return err(E0023, span, format!("mismatched types: expected `{t}`, found float literal{}", splat_hint(t))),
             None => Type::Float(FloatTy::F64),
         };
         Ok(TExpr { kind: TExprKind::Float(v), ty, span })
     }
 
     fn arith_operand_ok(&self, op: BinOp, ty: &Type, span: Span) -> Result<()> {
+        if let Type::Simd(el, _) = ty {
+            let ok = match op {
+                BinOp::Add | BinOp::Sub | BinOp::Mul => el.is_numeric(),
+                BinOp::Div => matches!(**el, Type::Float(_)),
+                _ => false,
+            };
+            if !ok {
+                let what = if **el == Type::Bool { "a mask has no operators (test it with `@all`, `@any` or `m[i]`)" } else { "a `simd` has `+ - *`, `/` on float lanes, and comparisons" };
+                return err(E0025, span, format!("operator `{}` cannot be applied to `{ty}`: {what}", op.as_str()));
+            }
+            return Ok(());
+        }
         let ok = match op {
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => ty.is_numeric(),
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => ty.is_numeric() || self.integer_param(ty),
             BinOp::Rem
             | BinOp::AddWrap
             | BinOp::SubWrap
@@ -3253,7 +3416,7 @@ impl<'a> Checker<'a> {
             | BinOp::BitOr
             | BinOp::BitXor
             | BinOp::Shl
-            | BinOp::Shr => ty.is_int(),
+            | BinOp::Shr => self.int_like(ty),
             _ => unreachable!(),
         };
         if !ok {
@@ -3401,6 +3564,29 @@ impl<'a> Checker<'a> {
                 }
             }
             ExprKind::Builtin { name, args } if name.starts_with("atomic") => return self.atomic(name, args, span),
+            ExprKind::Builtin { name, .. } if name == "setSafety" => {
+                return err(E0108, span, "`@setSafety` must be the first statement of a block (it applies to the whole block)");
+            }
+            ExprKind::Builtin { name, args }
+                if matches!(name.as_str(), "splat" | "reduceAdd" | "reduceMin" | "reduceMax" | "all" | "any" | "select") =>
+            {
+                return self.simd_builtin(name, args, span);
+            }
+            ExprKind::Builtin { name, args } if name == "hash" => {
+                let [a] = args.as_slice() else {
+                    return err(E0022, span, "`@hash` takes one argument, the value to hash");
+                };
+                let v = self.value(a, None)?;
+                if let Some(why) = self.why_not_comparable(&v.ty) {
+                    let why = match &v.ty {
+                        Type::Slice(..) => "`==` cannot compare it (for `[]u8` keys, use `std.map.StrMap`)".to_string(),
+                        _ if why.is_empty() => "`==` cannot compare it".to_string(),
+                        _ => why,
+                    };
+                    return err(E0107, v.span, format!("`@hash` cannot hash a `{}`: {why}", v.ty));
+                }
+                (TExprKind::Intrinsic { op: Intrinsic::Hash, args: vec![v] }, Type::Int(IntTy::U64))
+            }
             ExprKind::Builtin { name, args } if name == "hasLink" => {
                 let lib = match args.as_slice() {
                     [ast::Expr { kind: ExprKind::Str(s), .. }] => String::from_utf8_lossy(s).into_owned(),
@@ -3461,7 +3647,7 @@ impl<'a> Checker<'a> {
                     let r = self.expect(rhs, &Type::Bool)?;
                     (TExprKind::Binary { op, lhs: Box::new(l), rhs: Box::new(r) }, Type::Bool)
                 } else {
-                    let hint = if op.is_arith() { expected.filter(|t| t.is_numeric()) } else { None };
+                    let hint = if op.is_arith() { expected.filter(|t| t.is_numeric() || self.integer_param(t)) } else { None };
                     let eq = matches!(op, BinOp::Eq | BinOp::Ne);
                     let (mut l, mut r) = if eq { self.eq_operands(lhs, rhs)? } else { self.operand_pair(lhs, rhs, hint)? };
                     // `?T == T`: the `T` is wrapped, and two `?T` compare.
@@ -3486,13 +3672,22 @@ impl<'a> Checker<'a> {
                     let ty = if op.is_arith() {
                         self.arith_operand_ok(op, &l.ty, span)?;
                         l.ty.clone()
+                    } else if let Type::Simd(el, n) = &l.ty {
+                        if **el == Type::Bool {
+                            return err(E0025, span, format!(
+                                "operator `{}` cannot be applied to `{}`: a mask has no operators (test it with `@all`, `@any` or `m[i]`)",
+                                op.as_str(),
+                                l.ty
+                            ));
+                        }
+                        Type::Simd(Box::new(Type::Bool), *n)
                     } else {
                         let ok = match self.why_not_comparable(&l.ty) {
                             Some(why) if eq && !why.is_empty() => {
                                 return err(E0025, span, format!("operator `{}` cannot be applied to `{}`: {why}", op.as_str(), l.ty));
                             }
                             None if eq => true,
-                            _ => l.ty.is_numeric(),
+                            _ => l.ty.is_numeric() || self.integer_param(&l.ty),
                         };
                         if !ok {
                             return err(E0025, span, format!(
@@ -3511,11 +3706,12 @@ impl<'a> Checker<'a> {
                 ExprKind::Int(v) => return self.int_lit(-(*v as i128), span, expected),
                 ExprKind::Float(v) => return self.float_lit(-*v, span, expected),
                 _ => {
-                    let t = self.value(expr, expected.filter(|t| t.is_numeric()))?;
+                    let t = self.value(expr, expected.filter(|t| t.is_numeric() || self.integer_param(t)))?;
                     let ok = match &t.ty {
                         Type::Int(i) => i.signed(),
                         Type::Float(_) => true,
-                        _ => false,
+                        Type::Simd(el, _) => matches!(**el, Type::Float(_)) || matches!(**el, Type::Int(i) if i.signed()),
+                        t => self.integer_param(t),
                     };
                     if !ok {
                         return err(E0025, span, format!("cannot negate a value of type `{}`", t.ty));
@@ -3525,8 +3721,8 @@ impl<'a> Checker<'a> {
                 }
             },
             ExprKind::Unary { op: UnOp::BitNot, expr } => {
-                let t = self.value(expr, expected.filter(|t| t.is_int()))?;
-                if !t.ty.is_int() {
+                let t = self.value(expr, expected.filter(|t| self.int_like(t)))?;
+                if !self.int_like(&t.ty) {
                     return err(E0025, span, format!("operator `~` requires an integer, found `{}`", t.ty));
                 }
                 let ty = t.ty.clone();
@@ -3543,6 +3739,11 @@ impl<'a> Checker<'a> {
                 let t = self.value(expr, None)?;
                 if !Self::is_lvalue(&t) {
                     return err(E0035, span, "cannot take the address of a temporary value (store it in a variable first)");
+                }
+                if let TExprKind::Index { base, .. } = &t.kind
+                    && let Type::Simd(..) = base.ty
+                {
+                    return err(E0109, span, format!("a lane of a `{}` has no address: copy it out (`let x = v[i]`)", base.ty));
                 }
                 if *mutable {
                     self.check_mutable(&t, true)?;
@@ -3562,10 +3763,10 @@ impl<'a> Checker<'a> {
                 let to = self.resolve_type(ty)?;
                 let t = self.value(expr, None)?;
                 // A `T` with `where T: Integer` converts like an integer.
-                if !(t.ty.is_numeric() || self.integer_param(&t.ty)) || !to.is_numeric() {
+                if !(t.ty.is_numeric() || self.integer_param(&t.ty)) || !(to.is_numeric() || self.integer_param(&to)) {
                     let hint = match (&t.ty, &to) {
                         (Type::Param(_, p), _) if to.is_numeric() => format!(" (add `where {p}: Integer` to convert it like an integer)"),
-                        (_, Type::Param(_, p)) => format!(" (nothing converts to the `comptime` type `{p}`)"),
+                        (_, Type::Param(_, p)) => format!(" (add `where {p}: Integer` to convert numbers to it)"),
                         _ => " (only numeric casts are supported)".to_string(),
                     };
                     return err(E0037, span, format!("cannot cast `{}` to `{to}`{hint}", t.ty));
@@ -3617,6 +3818,27 @@ impl<'a> Checker<'a> {
                 (TExprKind::Catch { expr: Box::new(t), capture, body: Box::new(body?) }, payload)
             }
             ExprKind::Unreachable => (TExprKind::Unreachable, expected.cloned().unwrap_or(Type::Void)),
+            ExprKind::Is { expr, variant, variant_span } => {
+                let mut t = self.value(expr, None)?;
+                // A pointer to an enum is tested through the pointer.
+                if let Type::Ptr(pointee, _) = &t.ty {
+                    let (ty, span) = ((**pointee).clone(), t.span);
+                    t = TExpr { kind: TExprKind::Deref(Box::new(t)), ty, span };
+                }
+                let Type::Enum(ename) = &t.ty else {
+                    return err(E0106, span, format!(
+                        "`is` tests the variant of an enum value, found `{}`{}",
+                        t.ty,
+                        if matches!(t.ty, Type::ErrorSet(_)) { " (compare error values with `==`)" } else { "" }
+                    ));
+                };
+                let def = &self.enums[ename];
+                let Some(index) = def.variants.iter().position(|v| v.name == *variant) else {
+                    let e = Error::new(E0041, *variant_span, format!("enum `{ename}` has no variant `{variant}`"));
+                    return Err(suggest(e, variant, *variant_span, def.variants.iter().map(|v| v.name.as_str())));
+                };
+                (TExprKind::IsVariant { expr: Box::new(t), index }, Type::Bool)
+            }
             ExprKind::Unwrap(inner) => {
                 let t = self.value(inner, None)?;
                 let Type::Optional(v) = &t.ty else {
@@ -3725,10 +3947,17 @@ impl<'a> Checker<'a> {
                 }
             }
             ExprKind::Index { base, index } => {
-                let b = self.value(base, None)?;
+                let mut b = self.value(base, None)?;
+                // Like field access, indexing dereferences a pointer to an array.
+                if let Type::Ptr(pointee, _) = &b.ty
+                    && let Type::Array(..) = **pointee
+                {
+                    let (ty, span) = ((**pointee).clone(), b.span);
+                    b = TExpr { kind: TExprKind::Deref(Box::new(b)), ty, span };
+                }
                 // A C pointer is indexed without a check.
                 let elem = match &b.ty {
-                    Type::Array(el, _) | Type::Slice(el, _) | Type::CPtr(el) => (**el).clone(),
+                    Type::Array(el, _) | Type::Slice(el, _) | Type::CPtr(el) | Type::Simd(el, _) => (**el).clone(),
                     t => return err(E0043, span, format!("cannot index into a value of type `{t}`")),
                 };
                 let i = self.value(index, Some(&USIZE))?;
@@ -3812,7 +4041,7 @@ impl<'a> Checker<'a> {
             }
             ExprKind::ArrayRepeat { ty, value } => {
                 let aty = self.resolve_type(ty)?;
-                let Type::Array(el, _) = &aty else { unreachable!() };
+                let (Type::Array(el, _) | Type::Simd(el, _)) = &aty else { unreachable!() };
                 let v = self.expect(value, el)?;
                 (TExprKind::ArrayRepeat(Box::new(v)), aty)
             }
@@ -3824,9 +4053,10 @@ impl<'a> Checker<'a> {
                     }
                     return Ok(TExpr { kind: TExprKind::EmptySlice, ty: aty, span });
                 }
-                let Type::Array(el, n) = &aty else { unreachable!() };
+                let (Type::Array(el, n) | Type::Simd(el, n)) = &aty else { unreachable!() };
                 if elems.len() as u64 != *n {
-                    return err(E0045, span, format!("array literal has {} element(s) but type `{aty}` needs {n}", elems.len()));
+                    let what = if matches!(aty, Type::Simd(..)) { "`simd` literal" } else { "array literal" };
+                    return err(E0045, span, format!("{what} has {} element(s) but type `{aty}` needs {n}", elems.len()));
                 }
                 let elems = elems.iter().map(|x| self.expect(x, el)).collect::<Result<_>>()?;
                 (TExprKind::ArrayLit(elems), aty)
@@ -4247,6 +4477,68 @@ impl<'a> Checker<'a> {
             _ => elem,
         };
         Ok(TExpr { kind: TExprKind::Intrinsic { op, args: targs }, ty, span })
+    }
+
+    /// `@splat(simd[N]T, x)` (every lane `x`), `@reduceAdd(v)`,
+    /// `@reduceMin(v)`, `@reduceMax(v)` (a lane type), `@all(m)`, `@any(m)`
+    /// (a `bool` from a mask) and `@select(m, a, b)` (lane `i` from `a` where
+    /// `m[i]`, else from `b`).
+    fn simd_builtin(&mut self, name: &str, args: &[ast::Expr], span: Span) -> Result<TExpr> {
+        let want = match name {
+            "splat" => "two arguments: a `simd` type and the value of every lane",
+            "select" => "three arguments: a mask and two vectors of the same type",
+            "all" | "any" => "one argument, a mask (`simd[N]bool`)",
+            _ => "one argument, a `simd` of numbers",
+        };
+        let n = match name {
+            "splat" => 2,
+            "select" => 3,
+            _ => 1,
+        };
+        if args.len() != n {
+            return err(E0022, span, format!("`@{name}` takes {want}"));
+        }
+        if name == "splat" {
+            let local = matches!(&args[0].kind, ExprKind::Ident(n) if self.lookup(n).is_some());
+            let ty = match expr_type(&args[0]) {
+                Some(t) if !local => self.resolve_type(&t)?,
+                _ => return err(E0022, args[0].span, "the first argument of `@splat` must be a `simd` type, such as `simd[4]f32`"),
+            };
+            let Type::Simd(el, _) = &ty else {
+                return err(E0022, args[0].span, format!("`@splat` makes a `simd`, not a `{ty}`"));
+            };
+            let v = self.expect(&args[1], &el.clone())?;
+            return Ok(TExpr { kind: TExprKind::ArrayRepeat(Box::new(v)), ty, span });
+        }
+        let v = self.value(&args[0], None)?;
+        let el = match &v.ty {
+            Type::Simd(el, _) => (**el).clone(),
+            t => return err(E0022, v.span, format!("`@{name}` takes {want}, found `{t}`")),
+        };
+        let mask = el == Type::Bool;
+        if matches!(name, "all" | "any" | "select") != mask {
+            return err(E0022, v.span, format!("`@{name}` takes {want}, found `{}`", v.ty));
+        }
+        let (op, ty, args) = match name {
+            "all" => (Intrinsic::All, Type::Bool, vec![v]),
+            "any" => (Intrinsic::Any, Type::Bool, vec![v]),
+            "select" => {
+                let (a, b) = self.operand_pair(&args[1], &args[2], None)?;
+                if a.ty != b.ty {
+                    return Err(mismatch(b.span, &a.ty, &b.ty));
+                }
+                match &a.ty {
+                    Type::Simd(_, n) if Type::Simd(Box::new(Type::Bool), *n) == v.ty => {}
+                    t => return err(E0022, a.span, format!("`@select` with a `{}` chooses between two `simd[{}]T`, found `{t}`", v.ty, v_lanes(&v.ty))),
+                }
+                let ty = a.ty.clone();
+                (Intrinsic::Select, ty, vec![v, a, b])
+            }
+            "reduceAdd" => (Intrinsic::ReduceAdd, el, vec![v]),
+            "reduceMin" => (Intrinsic::ReduceMin, el, vec![v]),
+            _ => (Intrinsic::ReduceMax, el, vec![v]),
+        };
+        Ok(TExpr { kind: TExprKind::Intrinsic { op, args }, ty, span })
     }
 
     /// `@sizeOf(T)`, `@zeroed(T)` and `@ptrCast(T, p)`. `@link` belongs at

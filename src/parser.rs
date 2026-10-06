@@ -616,6 +616,18 @@ impl Parser {
     fn type_expr(&mut self) -> Result<TypeExpr> {
         let span = self.span();
         let kind = match self.peek().clone() {
+            Tok::Ident(n) if n == "simd" && self.toks.get(self.pos + 1).map(|t| &t.tok) == Some(&Tok::LBracket) => {
+                self.pos += 2;
+                let saved = self.enter_nested();
+                let len = self.expr()?;
+                self.leave_nested(saved);
+                self.expect(&Tok::RBracket)?;
+                let len = match len.kind {
+                    ExprKind::Int(n) => ArrayLen::Lit(n),
+                    _ => ArrayLen::Const(Box::new(len)),
+                };
+                TypeExprKind::Simd(len, Box::new(self.type_expr()?))
+            }
             Tok::Ident(_) => {
                 let (name, _) = self.path()?;
                 if self.eat(&Tok::Bang) {
@@ -992,6 +1004,17 @@ impl Parser {
                 lhs = Expr { kind: ExprKind::OrElse { expr: Box::new(lhs), body }, span };
                 continue;
             }
+            // `x is .V`, at the level of the comparisons.
+            if self.at(&Tok::Kw(Kw::Is)) && 3 >= min_prec {
+                let span = self.bump().span;
+                self.expect(&Tok::Dot)?;
+                let (variant, variant_span) = self.ident()?;
+                lhs = Expr { kind: ExprKind::Is { expr: Box::new(lhs), variant, variant_span }, span };
+                if self.at(&Tok::Kw(Kw::Is)) || self.binop().is_some_and(|(o, _)| o.is_comparison()) {
+                    return Err(Error::new(E0009, self.span(), "comparison operators cannot be chained"));
+                }
+                continue;
+            }
             let Some((op, prec)) = self.binop() else { break };
             if prec < min_prec {
                 break;
@@ -999,7 +1022,7 @@ impl Parser {
             let span = self.bump().span;
             let rhs = self.binary(prec + 1)?;
             lhs = Expr { kind: ExprKind::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) }, span };
-            if op.is_comparison() && self.binop().is_some_and(|(o, _)| o.is_comparison()) {
+            if op.is_comparison() && (self.at(&Tok::Kw(Kw::Is)) || self.binop().is_some_and(|(o, _)| o.is_comparison())) {
                 return Err(Error::new(E0009, self.span(), "comparison operators cannot be chained"));
             }
             if let Some((next, _)) = self.binop()
@@ -1210,6 +1233,22 @@ impl Parser {
             Tok::Char(c) => {
                 self.bump();
                 ExprKind::Char(c)
+            }
+            // `simd[N]T{...}`, `simd[N]T{value, ..}`, or the type itself.
+            Tok::Ident(name) if name == "simd" && self.toks.get(self.pos + 1).map(|t| &t.tok) == Some(&Tok::LBracket) => {
+                let ty = self.type_expr()?;
+                if !self.at(&Tok::LBrace) {
+                    return Ok(Expr { kind: ExprKind::Type(ty), span });
+                }
+                match self.array_elems()? {
+                    (mut elems, Some(at)) => {
+                        if elems.len() != 1 {
+                            return Err(Error::new(E0045, at, "a repeat literal has one value before `..`: `simd[N]T{value, ..}`"));
+                        }
+                        ExprKind::ArrayRepeat { ty, value: Box::new(elems.remove(0)) }
+                    }
+                    (elems, None) => ExprKind::ArrayLit { ty, elems },
+                }
             }
             Tok::Ident(name) => {
                 self.bump();

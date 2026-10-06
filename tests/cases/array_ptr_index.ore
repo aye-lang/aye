@@ -1,0 +1,26 @@
+// Indexing dereferences a pointer to an array, like field access.
+fn fill(a: *mut [4]u8, v: u8) {
+    for i in 0..a.len {
+        a[i] = v + i as u8
+    }
+    a[3] += 10
+}
+
+fn sum(a: *[4]u8) u32 {
+    var s: u32 = 0
+    for i in 0..a.len {
+        s += a[i] as u32
+    }
+    return s
+}
+
+pub fn main() {
+    var buf = [4]u8{0, 0, 0, 0}
+    fill(&mut buf, 7)
+    @println(buf[0])
+    @println(buf[3])
+    @println(sum(&buf))
+    let grid = [2][2]i32{[2]i32{1, 2}, [2]i32{3, 4}}
+    let g = &grid
+    @println(g[1][0])
+}

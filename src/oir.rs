@@ -97,6 +97,9 @@ pub enum StmtKind {
     /// always (`unreachable`). In `fast` mode the check is left out, and
     /// reaching an unconditional one is undefined behavior.
     Check { cond: Option<Operand>, msg: &'static str, span: Span },
+    /// A block of `@setSafety(on)`: its runtime checks are those of the
+    /// build mode (`on`) or none.
+    Safety { on: bool, body: Block },
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +142,8 @@ pub fn is_ptr_optional(t: &Type) -> bool {
 pub enum Len {
     /// Fixed array `[N]T`.
     Array(u64),
+    /// The lanes of a `simd[N]T` (a C vector, indexed directly).
+    Lanes(u64),
     /// Slice `[]T`, length read at runtime.
     Slice,
     /// C pointer `[*]T`: no length to check against (slicing needs both
@@ -343,7 +348,10 @@ fn field(mut p: Place, name: &str) -> Place {
 }
 
 fn is_terminator(s: Option<&Stmt>) -> bool {
-    matches!(s.map(|s| &s.kind), Some(StmtKind::Break | StmtKind::Continue | StmtKind::Return(_)))
+    match s.map(|s| &s.kind) {
+        Some(StmtKind::Safety { body, .. }) => is_terminator(body.last()),
+        k => matches!(k, Some(StmtKind::Break | StmtKind::Continue | StmtKind::Return(_))),
+    }
 }
 
 fn has_call(e: &TExpr) -> bool {
@@ -389,6 +397,7 @@ fn has_call(e: &TExpr) -> bool {
         | TExprKind::OkWrap(expr)
         | TExprKind::ErrWrap(expr)
         | TExprKind::PtrCast(expr)
+        | TExprKind::IsVariant { expr, .. }
         | TExprKind::ToDyn { ptr: expr, .. }
         | TExprKind::ToAllocator { ptr: expr, .. } => has_call(expr),
         TExprKind::Slice { base, lo, hi } => {
@@ -464,6 +473,12 @@ impl<'a> Lower<'a> {
     }
 
     fn scoped(&mut self, stmts: &'a [TStmt], scope: Scope<'a>, out: &mut Block) {
+        if let Some(TStmt { kind: TStmtKind::SetSafety(on), span }) = stmts.first() {
+            let mut body = Vec::new();
+            self.scoped(&stmts[1..], scope, &mut body);
+            out.push(Stmt { kind: StmtKind::Safety { on: *on, body }, span: *span });
+            return;
+        }
         self.scopes.push(scope);
         for s in stmts {
             self.stmt(s, out);
@@ -754,6 +769,8 @@ impl<'a> Lower<'a> {
             }
             TStmtKind::Block(b) => self.block(b, false, out),
             TStmtKind::Expr(e) => self.eval(e, out),
+            // Handled by `scoped`, as the first statement of a block.
+            TStmtKind::SetSafety(_) => {}
         }
     }
 
@@ -1014,6 +1031,37 @@ impl<'a> Lower<'a> {
         Operand::Local(r)
     }
 
+    /// Mix the value of type `ty` at `p` into the `u64` hash in the local
+    /// `h`, part by part as `equal` compares it: a struct field by field,
+    /// an optional by `has` and then its value.
+    fn hash(&mut self, p: Place, ty: &Type, h: LocalId, out: &mut Block) {
+        let u64t = Type::Int(IntTy::U64);
+        let mix = |this: &mut Self, val: Operand, vty: Type, out: &mut Block| {
+            let args = vec![(Operand::Local(h), u64t.clone()), (val, vty)];
+            let rv = Rvalue::Intrinsic { op: Intrinsic::HashMix, args, span: this.span };
+            this.push(out, StmtKind::Assign(local(h), rv));
+        };
+        match ty {
+            Type::Struct(name) => {
+                for (f, ft) in self.structs[name.as_str()].fields.clone() {
+                    self.hash(field(p.clone(), &f), &ft, h, out);
+                }
+            }
+            Type::Optional(inner) if !is_ptr_optional(ty) => {
+                let has = self.temp(Type::Bool);
+                self.push(out, StmtKind::Assign(local(has), Rvalue::IsSome { place: p.clone(), ty: ty.clone() }));
+                mix(self, Operand::Local(has), Type::Bool, out);
+                let mut then = Vec::new();
+                self.hash(field(p, "val"), inner, h, &mut then);
+                self.push(out, StmtKind::If { cond: Operand::Local(has), then, els: vec![] });
+            }
+            _ => {
+                let v = self.load(p, ty, out);
+                mix(self, v, ty.clone(), out);
+            }
+        }
+    }
+
     fn operand(&mut self, e: &'a TExpr, out: &mut Block) -> Operand {
         match self.rvalue(e, out) {
             Rvalue::Use(op) => op,
@@ -1058,6 +1106,7 @@ impl<'a> Lower<'a> {
             TExprKind::Index { base, index } => {
                 let len = match &base.ty {
                     Type::Array(_, n) => Len::Array(*n),
+                    Type::Simd(_, n) => Len::Lanes(*n),
                     Type::CPtr(_) => Len::Unchecked,
                     _ => Len::Slice,
                 };
@@ -1156,6 +1205,14 @@ impl<'a> Lower<'a> {
                 self.refs.push(Ref::Fn(format!("{strukt}.alloc")));
                 self.refs.push(Ref::Fn(format!("{strukt}.free")));
                 Rvalue::ToAllocator { ptr: self.operand(ptr, out), strukt: strukt.clone() }
+            }
+            TExprKind::Intrinsic { op: Intrinsic::Hash, args } => {
+                let v = self.operand(&args[0], out);
+                let p = self.spill(v, &args[0].ty, out);
+                let h = self.temp(Type::Int(IntTy::U64));
+                self.push(out, StmtKind::Assign(local(h), Rvalue::Use(Operand::Int(0x9e37_79b9_7f4a_7c15, IntTy::U64))));
+                self.hash(p, &args[0].ty, h, out);
+                Rvalue::Use(Operand::Local(h))
             }
             TExprKind::Intrinsic { op, args } => {
                 let args = args.iter().map(|a| (self.operand(a, out), a.ty.clone())).collect();
@@ -1311,6 +1368,13 @@ impl<'a> Lower<'a> {
                 }
             }
             TExprKind::ArrayRepeat(x) => Rvalue::ArrayRepeat { ty: e.ty.clone(), val: self.operand(x, out) },
+            TExprKind::IsVariant { expr, index } => {
+                let p = self.place(expr, out);
+                let tag = self.temp(Type::Int(IntTy::U32));
+                self.push(out, StmtKind::Assign(local(tag), Rvalue::Load(field(p, "tag"))));
+                let rhs = Operand::Int(*index as i128, IntTy::U32);
+                Rvalue::Binary { op: BinOp::Eq, lhs: Operand::Local(tag), rhs, ty: Type::Int(IntTy::U32), span: e.span }
+            }
             TExprKind::ArrayLit(elems) => {
                 let elems = elems.iter().map(|x| self.operand(x, out)).collect();
                 Rvalue::ArrayLit { ty: e.ty.clone(), elems }

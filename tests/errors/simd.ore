@@ -1,0 +1,25 @@
+// `simd[N]T` takes 2 to 64 lanes (a power of two) of a number or `bool`;
+// its operators work lane by lane on two vectors of the same type.
+fn three(v: simd[3]f32) {}
+
+fn strings(v: simd[4][]u8) {}
+
+pub fn main() {
+    let a = simd[4]f32{1.0, 2.0, 3.0, 4.0}
+    let i = simd[4]i32{1, 2, 3, 4}
+    let x = a + i
+    let y = a * 2.0
+    let q = i / i
+    let r = a % a
+    if a == a {
+    }
+    let s = @reduceAdd(a > a)
+    let t = @all(a)
+    let u = simd[4]f32{1.0, 2.0}
+    let z = @splat(simd[4]f32, true)
+}
+
+fn lanePtr() {
+    var v = simd[4]i32{1, 2, 3, 4}
+    let p = &mut v[0]
+}

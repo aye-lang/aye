@@ -1,0 +1,31 @@
+// `@hash` and `where T: Hash` take what `==` compares.
+enum Shape {
+    Circle { r: f64 }
+    Dot
+}
+
+struct Named {
+    name: []u8
+}
+
+fn same(comptime T: type, a: T, b: T) bool {
+    return a == b
+}
+
+fn find(comptime T: type, xs: []T, x: T) bool where T: Hash {
+    for y in xs {
+        if y == x {
+            return true
+        }
+    }
+    return false
+}
+
+pub fn main() {
+    @println(@hash("text"))
+    @println(@hash(Named { name: "a" }))
+    @println(@hash(Shape.Dot))
+    @println(@hash(1, 2))
+    let xs = [1]Shape{Shape.Dot}
+    @println(find(Shape, xs[..], Shape.Dot))
+}

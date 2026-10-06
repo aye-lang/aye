@@ -1,0 +1,17 @@
+// `@setSafety` takes `true` or `false` and comes first in its block.
+fn f(on: bool) {
+    @setSafety(on)
+}
+
+fn g() {
+    let x = 1
+    @setSafety(false)
+}
+
+fn h() i64 {
+    return @setSafety(false)
+}
+
+pub fn main() {
+    @setSafety()
+}

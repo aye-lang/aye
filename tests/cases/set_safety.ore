@@ -1,0 +1,33 @@
+// `@setSafety(false)` as the first statement of a block leaves out the
+// runtime checks of that block (and the blocks in it): `+` wraps and `as`
+// truncates, as in `fast` mode. `@setSafety(true)` brings them back in a
+// block inside it.
+fn sum(xs: []u8) u8 {
+    @setSafety(false)
+    var s: u8 = 0
+    for x in xs {
+        s += x
+    }
+    return s
+}
+
+fn checkedAgain(x: i8) i8 {
+    @setSafety(false)
+    let wrapped = x + 1
+    {
+        @setSafety(true)
+        return wrapped - 1
+    }
+}
+
+pub fn main() {
+    var xs = [3]u8{200, 100, 1}
+    @println(sum(xs[..]))
+    let big: i64 = 300
+    if big > 0 {
+        @setSafety(false)
+        @println(big as u8)
+    }
+    @println(checkedAgain(5))
+    @println(checkedAgain(127))
+}
