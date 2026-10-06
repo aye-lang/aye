@@ -74,6 +74,9 @@ pub fn objectTypeName(c: Class) []u8 {
 
 /// ToInt32.
 pub fn toInt32(x: f64) i32 {
+    if x >= -2147483648.0 && x < 2147483648.0 {
+        return x as i32
+    }
     if x != x || x - x != 0.0 {
         return 0
     }
@@ -93,6 +96,9 @@ pub fn toInt32(x: f64) i32 {
 
 /// ToUint32.
 pub fn toUint32(x: f64) u32 {
+    if x >= 0.0 && x < 4294967296.0 {
+        return x as u32
+    }
     if x != x || x - x != 0.0 {
         return 0
     }
@@ -139,6 +145,17 @@ fn jsMod(x: f64, y: f64) f64 {
     }
     if y - y != 0.0 {
         return x
+    }
+    if x > -2147483648.0 && x < 2147483648.0 && y > -2147483648.0 && y < 2147483648.0 {
+        let a = x as i32
+        let b = y as i32
+        if a as f64 == x && b as f64 == y {
+            let r = a % b
+            if r == 0 {
+                return x * 0.0
+            }
+            return r as f64
+        }
     }
     return fmod(x, y)
 }

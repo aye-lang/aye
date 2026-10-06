@@ -112,6 +112,19 @@ pub fn formatNumber(b: *mut text.Builder, v: f64) AllocError!void {
         try b.appendByte('-')
         x = -x
     }
+    // Small exact binary fractions have an exact short decimal. Below
+    // 1e12 the spacing is far smaller than .001, so none of these digits
+    // can be dropped and still read back to the same double.
+    if x < 1000000000000.0 {
+        let scaled = x * 8.0
+        let q = scaled as u64
+        if q as f64 == scaled {
+            try b.appendUint(q / 8)
+            try b.appendByte('.')
+            let tails = [8][]u8{"", "125", "25", "375", "5", "625", "75", "875"}
+            return b.append(tails[(q & 7) as usize])
+        }
+    }
     var digits = @zeroed([24]u8)
     let s = shortest(x, digits[..])
     let k = s.k
