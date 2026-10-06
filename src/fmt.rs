@@ -206,6 +206,8 @@ fn classify(items: &mut [Item]) {
                 for_header = true;
                 Role::Keyword
             }
+            // `simd[N]T`: the `[N]` is a type's, as in `[N]T`.
+            Tok::Ident(n) if n == "simd" && tok_at(1) == Some(&Tok::LBracket) => Role::Prefix,
             Tok::Ident(_) | Tok::Builtin(_) | Tok::Int(_) | Tok::Float(_) | Tok::Str(_) | Tok::LineStr(_) | Tok::Char(_) => {
                 Role::Operand
             }

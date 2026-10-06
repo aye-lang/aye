@@ -133,6 +133,9 @@ pub enum Type {
     /// Result type of functions without a return type. Not nameable.
     Void,
     Array(Box<Type>, u64),
+    /// `simd[N]T`: `N` lanes (a power of two, 2 to 64) of a number or
+    /// `bool` (a mask, from a comparison), a C vector.
+    Simd(Box<Type>, u64),
     /// `[]T` (mutable = false) or `[]mut T` (mutable = true): a pointer and
     /// a length. Only `[]mut T` elements can be assigned.
     Slice(Box<Type>, bool),
@@ -181,6 +184,22 @@ const INTEGER: &str = "Integer";
 /// The built-in `where` constraint that the types `==` compares satisfy:
 /// a `T` with it has `==`, `!=` and `@hash`.
 const HASH: &str = "Hash";
+
+/// The number of lanes of a `simd` type.
+fn v_lanes(t: &Type) -> u64 {
+    match t {
+        Type::Simd(_, n) => *n,
+        _ => 0,
+    }
+}
+
+/// The hint for a number written where a `simd` is expected.
+fn splat_hint(t: &Type) -> String {
+    match t {
+        Type::Simd(..) => format!(" (make a vector of it with `@splat({t}, x)`)"),
+        _ => String::new(),
+    }
+}
 
 /// Name prefix of the inferred error set of a `!T` function.
 const INFERRED: &str = "error set of ";
@@ -240,6 +259,7 @@ impl fmt::Display for Type {
             Type::Bool => f.write_str("bool"),
             Type::Void => f.write_str("void"),
             Type::Array(t, n) => write!(f, "[{n}]{t}"),
+            Type::Simd(t, n) => write!(f, "simd[{n}]{t}"),
             Type::Slice(t, false) => write!(f, "[]{t}"),
             Type::Slice(t, true) => write!(f, "[]mut {t}"),
             Type::CPtr(t) => write!(f, "[*]{t}"),
@@ -585,6 +605,16 @@ pub enum Intrinsic {
     Hash,
     /// The hash `args[0]` (a `u64`) mixed with the scalar `args[1]`.
     HashMix,
+    /// `@reduceAdd(v)`, `@reduceMin(v)`, `@reduceMax(v)`: the sum (wrapping
+    /// for integers), least or greatest lane of a `simd`.
+    ReduceAdd,
+    ReduceMin,
+    ReduceMax,
+    /// `@all(m)`, `@any(m)` of a mask.
+    All,
+    Any,
+    /// `@select(m, a, b)`.
+    Select,
 }
 
 #[derive(Debug, Clone)]
@@ -857,7 +887,11 @@ fn silent() -> Error {
 }
 
 fn mismatch(span: Span, expected: &Type, found: &Type) -> Error {
-    Error::new(E0023, span, format!("mismatched types: expected `{expected}`, found `{found}`"))
+    let hint = match (expected, found) {
+        (Type::Bool, Type::Simd(..)) => " (a comparison of `simd` values is a mask: use `@all(m)` or `@any(m)`)",
+        _ => "",
+    };
+    Error::new(E0023, span, format!("mismatched types: expected `{expected}`, found `{found}`{hint}"))
 }
 
 /// Is this expression an untyped numeric literal (whose type comes from context)?
@@ -1161,7 +1195,7 @@ impl<'a> Checker<'a> {
                 }
             };
             let bare = name.rsplit("::").next().unwrap();
-            if Type::from_name(bare).is_some() || matches!(bare, "true" | "false" | "null" | "Self" | "type" | INTEGER | HASH) {
+            if Type::from_name(bare).is_some() || matches!(bare, "true" | "false" | "null" | "Self" | "type" | "simd" | INTEGER | HASH) {
                 self.report(Error::new(E0014, span, format!("`{name}` is a builtin name and cannot be redefined")));
                 continue;
             }
@@ -1586,7 +1620,7 @@ impl<'a> Checker<'a> {
             TExprKind::ArrayLit(elems) => ConstVal::Agg(elems.iter().map(|x| self.fold(x)).collect::<Result<_>>()?),
             TExprKind::ArrayRepeat(x) => match (&e.ty, self.fold(x)?) {
                 (_, ConstVal::Zeroed) => ConstVal::Zeroed,
-                (Type::Array(_, n), v) => ConstVal::Agg(vec![v; *n as usize]),
+                (Type::Array(_, n) | Type::Simd(_, n), v) => ConstVal::Agg(vec![v; *n as usize]),
                 _ => unreachable!(),
             },
             TExprKind::Field { base, index } => match self.fold(base)? {
@@ -2360,6 +2394,20 @@ impl<'a> Checker<'a> {
                 };
                 Type::Array(Box::new(self.resolve_type(elem)?), n)
             }
+            TypeExprKind::Simd(len, elem) => {
+                let n = match len {
+                    ast::ArrayLen::Lit(n) => *n,
+                    ast::ArrayLen::Const(e) => self.array_len(e)?,
+                };
+                let elem = self.resolve_type(elem)?;
+                if !(elem.is_numeric() || elem == Type::Bool) {
+                    return err(E0109, t.span, format!("`simd[{n}]{elem}`: the lanes of a `simd` are numbers or `bool`"));
+                }
+                if !n.is_power_of_two() || !(2..=64).contains(&n) {
+                    return err(E0109, t.span, format!("`simd[{n}]{elem}`: a `simd` has 2, 4, 8, 16, 32 or 64 lanes"));
+                }
+                Type::Simd(Box::new(elem), n)
+            }
             TypeExprKind::Slice(elem, mutable) => Type::Slice(Box::new(self.resolve_type(elem)?), *mutable),
             TypeExprKind::CPtr(elem) => Type::CPtr(Box::new(self.resolve_type(elem)?)),
             TypeExprKind::Ptr(elem, mutable) => Type::Ptr(Box::new(self.resolve_type(elem)?), *mutable),
@@ -2979,10 +3027,10 @@ impl<'a> Checker<'a> {
     fn condition(&mut self, e: &ast::Expr, what: &str) -> Result<TExpr> {
         let c = self.value(e, Some(&Type::Bool))?;
         if c.ty != Type::Bool {
-            let hint = if matches!(c.ty, Type::Optional(_)) {
-                " (unwrap it with `if x |v| { }` or compare it with `null`)"
-            } else {
-                ""
+            let hint = match c.ty {
+                Type::Optional(_) => " (unwrap it with `if x |v| { }` or compare it with `null`)",
+                Type::Simd(..) => " (a comparison of `simd` values is a mask: use `@all(m)` or `@any(m)`)",
+                _ => "",
             };
             return err(E0026, c.span, format!("`{what}` condition must be `bool`, found `{}`{hint}", c.ty));
         }
@@ -3284,6 +3332,7 @@ impl<'a> Checker<'a> {
                 Some("it has variants with fields (use `match`)".to_string())
             }
             Type::Enum(_) => None,
+            Type::Simd(..) => Some("`==` on a `simd` compares lane by lane (a mask): use `@all(a == b)`".to_string()),
             t @ Type::Param(_, p) if !self.hash_param(t) => {
                 Some(format!("it is a `comptime` type (add `where {p}: Hash` to compare it)"))
             }
@@ -3325,7 +3374,7 @@ impl<'a> Checker<'a> {
             Some(t @ Type::Param(..)) if self.integer_param(t) => {
                 return Ok(TExpr { kind: TExprKind::Int(v), ty: t.clone(), span });
             }
-            Some(t) => return err(E0023, span, format!("mismatched types: expected `{t}`, found integer literal")),
+            Some(t) => return err(E0023, span, format!("mismatched types: expected `{t}`, found integer literal{}", splat_hint(t))),
             None => I64,
         };
         let Type::Int(it) = ty else { unreachable!() };
@@ -3338,13 +3387,25 @@ impl<'a> Checker<'a> {
     fn float_lit(&self, v: f64, span: Span, expected: Option<&Type>) -> Result<TExpr> {
         let ty = match expected {
             Some(t @ Type::Float(_)) => t.clone(),
-            Some(t) => return err(E0023, span, format!("mismatched types: expected `{t}`, found float literal")),
+            Some(t) => return err(E0023, span, format!("mismatched types: expected `{t}`, found float literal{}", splat_hint(t))),
             None => Type::Float(FloatTy::F64),
         };
         Ok(TExpr { kind: TExprKind::Float(v), ty, span })
     }
 
     fn arith_operand_ok(&self, op: BinOp, ty: &Type, span: Span) -> Result<()> {
+        if let Type::Simd(el, _) = ty {
+            let ok = match op {
+                BinOp::Add | BinOp::Sub | BinOp::Mul => el.is_numeric(),
+                BinOp::Div => matches!(**el, Type::Float(_)),
+                _ => false,
+            };
+            if !ok {
+                let what = if **el == Type::Bool { "a mask has no operators (test it with `@all`, `@any` or `m[i]`)" } else { "a `simd` has `+ - *`, `/` on float lanes, and comparisons" };
+                return err(E0025, span, format!("operator `{}` cannot be applied to `{ty}`: {what}", op.as_str()));
+            }
+            return Ok(());
+        }
         let ok = match op {
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => ty.is_numeric() || self.integer_param(ty),
             BinOp::Rem
@@ -3506,6 +3567,11 @@ impl<'a> Checker<'a> {
             ExprKind::Builtin { name, .. } if name == "setSafety" => {
                 return err(E0108, span, "`@setSafety` must be the first statement of a block (it applies to the whole block)");
             }
+            ExprKind::Builtin { name, args }
+                if matches!(name.as_str(), "splat" | "reduceAdd" | "reduceMin" | "reduceMax" | "all" | "any" | "select") =>
+            {
+                return self.simd_builtin(name, args, span);
+            }
             ExprKind::Builtin { name, args } if name == "hash" => {
                 let [a] = args.as_slice() else {
                     return err(E0022, span, "`@hash` takes one argument, the value to hash");
@@ -3606,6 +3672,15 @@ impl<'a> Checker<'a> {
                     let ty = if op.is_arith() {
                         self.arith_operand_ok(op, &l.ty, span)?;
                         l.ty.clone()
+                    } else if let Type::Simd(el, n) = &l.ty {
+                        if **el == Type::Bool {
+                            return err(E0025, span, format!(
+                                "operator `{}` cannot be applied to `{}`: a mask has no operators (test it with `@all`, `@any` or `m[i]`)",
+                                op.as_str(),
+                                l.ty
+                            ));
+                        }
+                        Type::Simd(Box::new(Type::Bool), *n)
                     } else {
                         let ok = match self.why_not_comparable(&l.ty) {
                             Some(why) if eq && !why.is_empty() => {
@@ -3635,6 +3710,7 @@ impl<'a> Checker<'a> {
                     let ok = match &t.ty {
                         Type::Int(i) => i.signed(),
                         Type::Float(_) => true,
+                        Type::Simd(el, _) => matches!(**el, Type::Float(_)) || matches!(**el, Type::Int(i) if i.signed()),
                         t => self.integer_param(t),
                     };
                     if !ok {
@@ -3663,6 +3739,11 @@ impl<'a> Checker<'a> {
                 let t = self.value(expr, None)?;
                 if !Self::is_lvalue(&t) {
                     return err(E0035, span, "cannot take the address of a temporary value (store it in a variable first)");
+                }
+                if let TExprKind::Index { base, .. } = &t.kind
+                    && let Type::Simd(..) = base.ty
+                {
+                    return err(E0109, span, format!("a lane of a `{}` has no address: copy it out (`let x = v[i]`)", base.ty));
                 }
                 if *mutable {
                     self.check_mutable(&t, true)?;
@@ -3869,7 +3950,7 @@ impl<'a> Checker<'a> {
                 let b = self.value(base, None)?;
                 // A C pointer is indexed without a check.
                 let elem = match &b.ty {
-                    Type::Array(el, _) | Type::Slice(el, _) | Type::CPtr(el) => (**el).clone(),
+                    Type::Array(el, _) | Type::Slice(el, _) | Type::CPtr(el) | Type::Simd(el, _) => (**el).clone(),
                     t => return err(E0043, span, format!("cannot index into a value of type `{t}`")),
                 };
                 let i = self.value(index, Some(&USIZE))?;
@@ -3953,7 +4034,7 @@ impl<'a> Checker<'a> {
             }
             ExprKind::ArrayRepeat { ty, value } => {
                 let aty = self.resolve_type(ty)?;
-                let Type::Array(el, _) = &aty else { unreachable!() };
+                let (Type::Array(el, _) | Type::Simd(el, _)) = &aty else { unreachable!() };
                 let v = self.expect(value, el)?;
                 (TExprKind::ArrayRepeat(Box::new(v)), aty)
             }
@@ -3965,9 +4046,10 @@ impl<'a> Checker<'a> {
                     }
                     return Ok(TExpr { kind: TExprKind::EmptySlice, ty: aty, span });
                 }
-                let Type::Array(el, n) = &aty else { unreachable!() };
+                let (Type::Array(el, n) | Type::Simd(el, n)) = &aty else { unreachable!() };
                 if elems.len() as u64 != *n {
-                    return err(E0045, span, format!("array literal has {} element(s) but type `{aty}` needs {n}", elems.len()));
+                    let what = if matches!(aty, Type::Simd(..)) { "`simd` literal" } else { "array literal" };
+                    return err(E0045, span, format!("{what} has {} element(s) but type `{aty}` needs {n}", elems.len()));
                 }
                 let elems = elems.iter().map(|x| self.expect(x, el)).collect::<Result<_>>()?;
                 (TExprKind::ArrayLit(elems), aty)
@@ -4388,6 +4470,68 @@ impl<'a> Checker<'a> {
             _ => elem,
         };
         Ok(TExpr { kind: TExprKind::Intrinsic { op, args: targs }, ty, span })
+    }
+
+    /// `@splat(simd[N]T, x)` (every lane `x`), `@reduceAdd(v)`,
+    /// `@reduceMin(v)`, `@reduceMax(v)` (a lane type), `@all(m)`, `@any(m)`
+    /// (a `bool` from a mask) and `@select(m, a, b)` (lane `i` from `a` where
+    /// `m[i]`, else from `b`).
+    fn simd_builtin(&mut self, name: &str, args: &[ast::Expr], span: Span) -> Result<TExpr> {
+        let want = match name {
+            "splat" => "two arguments: a `simd` type and the value of every lane",
+            "select" => "three arguments: a mask and two vectors of the same type",
+            "all" | "any" => "one argument, a mask (`simd[N]bool`)",
+            _ => "one argument, a `simd` of numbers",
+        };
+        let n = match name {
+            "splat" => 2,
+            "select" => 3,
+            _ => 1,
+        };
+        if args.len() != n {
+            return err(E0022, span, format!("`@{name}` takes {want}"));
+        }
+        if name == "splat" {
+            let local = matches!(&args[0].kind, ExprKind::Ident(n) if self.lookup(n).is_some());
+            let ty = match expr_type(&args[0]) {
+                Some(t) if !local => self.resolve_type(&t)?,
+                _ => return err(E0022, args[0].span, "the first argument of `@splat` must be a `simd` type, such as `simd[4]f32`"),
+            };
+            let Type::Simd(el, _) = &ty else {
+                return err(E0022, args[0].span, format!("`@splat` makes a `simd`, not a `{ty}`"));
+            };
+            let v = self.expect(&args[1], &el.clone())?;
+            return Ok(TExpr { kind: TExprKind::ArrayRepeat(Box::new(v)), ty, span });
+        }
+        let v = self.value(&args[0], None)?;
+        let el = match &v.ty {
+            Type::Simd(el, _) => (**el).clone(),
+            t => return err(E0022, v.span, format!("`@{name}` takes {want}, found `{t}`")),
+        };
+        let mask = el == Type::Bool;
+        if matches!(name, "all" | "any" | "select") != mask {
+            return err(E0022, v.span, format!("`@{name}` takes {want}, found `{}`", v.ty));
+        }
+        let (op, ty, args) = match name {
+            "all" => (Intrinsic::All, Type::Bool, vec![v]),
+            "any" => (Intrinsic::Any, Type::Bool, vec![v]),
+            "select" => {
+                let (a, b) = self.operand_pair(&args[1], &args[2], None)?;
+                if a.ty != b.ty {
+                    return Err(mismatch(b.span, &a.ty, &b.ty));
+                }
+                match &a.ty {
+                    Type::Simd(_, n) if Type::Simd(Box::new(Type::Bool), *n) == v.ty => {}
+                    t => return err(E0022, a.span, format!("`@select` with a `{}` chooses between two `simd[{}]T`, found `{t}`", v.ty, v_lanes(&v.ty))),
+                }
+                let ty = a.ty.clone();
+                (Intrinsic::Select, ty, vec![v, a, b])
+            }
+            "reduceAdd" => (Intrinsic::ReduceAdd, el, vec![v]),
+            "reduceMin" => (Intrinsic::ReduceMin, el, vec![v]),
+            _ => (Intrinsic::ReduceMax, el, vec![v]),
+        };
+        Ok(TExpr { kind: TExprKind::Intrinsic { op, args }, ty, span })
     }
 
     /// `@sizeOf(T)`, `@zeroed(T)` and `@ptrCast(T, p)`. `@link` belongs at

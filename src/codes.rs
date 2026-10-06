@@ -2344,6 +2344,20 @@ pub fn main() {
 }
 "#,
 }
+E0109 = 109 {
+    "invalid `simd` type or use",
+    "`simd[N]T` is a vector of `N` lanes, where `N` is 2, 4, 8, 16, 32 or 64 and `T` is a number or `bool` (a mask). Its operators work lane by lane on two vectors of the same type: `+ - *` (integers wrap), `/` on float lanes, and comparisons, which give a mask `simd[N]bool`. Make a vector with a literal (`simd[4]f32{1.0, 2.0, 3.0, 4.0}`) or `@splat(simd[4]f32, x)`, read and write a lane with `v[i]`, and combine lanes with `@reduceAdd`, `@reduceMin`, `@reduceMax`, `@all`, `@any` and `@select`. A lane has no address: copy it out (`let x = v[i]`).",
+    r#"pub fn main() {
+    let v = simd[3]f32{1.0, 2.0, 3.0}
+    @println(@reduceAdd(v))
+}
+"#,
+    r#"pub fn main() {
+    let v = simd[4]f32{1.0, 2.0, 3.0, 0.0}
+    @println(@reduceAdd(v))
+}
+"#,
+}
 }
 
 #[cfg(test)]

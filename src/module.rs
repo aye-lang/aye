@@ -836,7 +836,7 @@ impl Loader<'_> {
                 }
                 self.ty(payload);
             }
-            TypeExprKind::Array(len, e) => {
+            TypeExprKind::Array(len, e) | TypeExprKind::Simd(len, e) => {
                 if let ast::ArrayLen::Const(x) = len {
                     self.expr(x);
                 }

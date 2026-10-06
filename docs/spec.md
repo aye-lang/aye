@@ -95,7 +95,7 @@ context; `ore doc --signatures std` prints all of std.
   match if else for while break continue return defer errdefer try catch
   orelse unreachable comptime where as test mut extern is`.
 - Predeclared names (not keywords, cannot be declared again): `true false
-  null Self type Integer Hash` and the primitive types `i8 i16 i32 i64 isize u8 u16 u32
+  null Self type simd Integer Hash` and the primitive types `i8 i16 i32 i64 isize u8 u16 u32
   u64 usize f32 f64 bool` and C's integer types `c_short c_ushort c_int
   c_uint c_long c_ulong c_longlong c_ulonglong`. `in` is special only in a
   `for` header, `union` only after `extern`.
@@ -133,7 +133,8 @@ pub fn main() {
 - Builtins start with `@`: `@print`, `@println`, `@expect`, `@expectEqual`,
   `@testAllocator`, `@sizeOf`, `@zeroed`, `@ptrCast`, `@link`,
   `@linkOptional`, `@hasLink`, `@atomicLoad`, `@atomicStore`, `@atomicAdd`,
-  `@atomicSub`, `@atomicCas`, `@hash`, `@setSafety`.
+  `@atomicSub`, `@atomicCas`, `@hash`, `@setSafety`, `@splat`,
+  `@reduceAdd`, `@reduceMin`, `@reduceMax`, `@all`, `@any`, `@select`.
 
 **Newlines end statements** (Go's rule). A newline is a statement
 terminator when the last token on the line is an identifier, a literal,
@@ -519,6 +520,7 @@ array of them (`@zeroed([64]bool)`, `@zeroed([4][4]u8)`), and a constant
 | `f32 f64` | floats |
 | `bool` | `true`, `false` |
 | `[N]T` | array of N elements, a value (copied on assignment) |
+| `simd[N]T` | vector of N lanes (2 to 64, a power of two) of a number or `bool`; operators work per lane |
 | `[]T` | slice: pointer + length; elements read-only |
 | `[]mut T` | slice whose elements can be assigned |
 | `*T`, `*mut T` | non-null pointer, read-only or writable |
@@ -532,6 +534,35 @@ array of them (`@zeroed([64]bool)`, `@zeroed([4][4]u8)`), and a constant
 
 There is no string type: text is `[]u8`. There is no `void` type except as
 the payload of an error union (`!void`).
+
+### simd
+
+`simd[N]T` is the only type besides numbers with arithmetic operators (a C
+vector). Two vectors of the same type combine lane by lane with `+ - *`
+(integer lanes wrap, unchecked), `/` on float lanes, and unary `-`.
+Comparisons give a mask `simd[N]bool`, which has no operators: test it
+with `@all(m)`, `@any(m)` or `m[i]`, or use it in `@select(m, a, b)` (lane
+`i` of `a` where `m[i]`, else of `b`). `v[i]` reads or writes a lane
+(bounds checked; a lane has no address). `@splat(simd[N]T, x)` sets every
+lane; `@reduceAdd(v)`, `@reduceMin(v)`, `@reduceMax(v)` combine the lanes.
+A number is not a vector (`v * 2.0` is an error: `v * @splat(simd[4]f32,
+2.0)`), and `==` cannot compare whole vectors (`@all(a == b)` does). Errors:
+E0109.
+
+```ore
+fn dot(a: simd[4]f32, b: simd[4]f32) f32 {
+    return @reduceAdd(a * b)
+}
+
+pub fn main() {
+    var v = simd[4]f32{1.0, 2.0, 3.0, 4.0}
+    v[0] = 5.0
+    let big = v > @splat(simd[4]f32, 2.5)
+    @println(dot(v, v))
+    @println(@any(big))
+    @println(@reduceMax(@select(big, v, simd[4]f32{0.0, ..})))
+}
+```
 
 ### Conversions
 
@@ -1362,6 +1393,8 @@ failure is `{"kind":"assertion"|"panic"|"leak","line":L,"col":C,"message":M}`,
 - `@sizeOf(T)`, `@zeroed(T)`, `@ptrCast(T, p)`, `@link("lib")`,
   `@linkOptional("lib")`, `@hasLink("lib")`: section 4.
 - `@hash(x)`: section 11 (`where T: Hash`).
+- `@splat`, `@reduceAdd`, `@reduceMin`, `@reduceMax`, `@all`, `@any`,
+  `@select`: section 5 (simd).
 - `@setSafety(false)`, `@setSafety(true)`: section 16.
 
 ## 15. std

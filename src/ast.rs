@@ -185,6 +185,8 @@ pub enum TypeExprKind {
     Array(ArrayLen, Box<TypeExpr>),
     /// `[]T` (mutable = false) or `[]mut T` (mutable = true).
     Slice(Box<TypeExpr>, bool),
+    /// `simd[N]T`: a vector of `N` lanes.
+    Simd(ArrayLen, Box<TypeExpr>),
     /// `[*]T`
     CPtr(Box<TypeExpr>),
     /// `*T` (mutable = false) or `*mut T` (mutable = true).

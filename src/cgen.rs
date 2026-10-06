@@ -706,6 +706,7 @@ fn mangle(t: &Type) -> String {
         Type::Bool => "bool".into(),
         Type::Void => "void".into(),
         Type::Array(e, n) => format!("A{n}_{}", mangle(e)),
+        Type::Simd(e, n) => format!("V{n}_{}", mangle(e)),
         // `[]T` and `[]mut T` share one C type.
         Type::Slice(e, _) => format!("S_{}", mangle(e)),
         Type::CPtr(e) => format!("P_{}", mangle(e)),
@@ -742,6 +743,7 @@ fn c_type(t: &Type) -> String {
         Type::CPtr(e) | Type::Ptr(e, _) => format!("{}*", c_type(e)),
         Type::Optional(e) if is_ptr_optional(t) => c_type(e),
         Type::Array(..)
+        | Type::Simd(..)
         | Type::Slice(..)
         | Type::Struct(_)
         | Type::Enum(_)
@@ -765,6 +767,15 @@ fn is_composite(t: &Type) -> bool {
         Type::Array(..) | Type::Slice(..) | Type::Struct(_) | Type::Enum(_) | Type::ErrorUnion(..) | Type::Dyn(_) => true,
         Type::Optional(_) => !is_ptr_optional(t),
         _ => false,
+    }
+}
+
+/// The size in bytes of a lane of a `simd` (a number).
+fn lane_size(t: &Type) -> usize {
+    match t {
+        Type::Int(it) => it.bits() as usize / 8,
+        Type::Float(FloatTy::F32) => 4,
+        _ => 8,
     }
 }
 
@@ -990,6 +1001,17 @@ impl Gen {
             let n = c_type(t);
             let kind = if is_union(p, t) { "union" } else { "struct" };
             let _ = writeln!(self.out, "typedef {kind} {n} {n};");
+        }
+        // `simd[N]T`: a C vector (of `int8_t` for a mask), at most 16-byte
+        // aligned, as allocators align.
+        let mut vecs = HashSet::new();
+        for t in all.iter().filter(|t| matches!(t, Type::Simd(..))) {
+            let Type::Simd(e, n) = t else { unreachable!() };
+            let n = *n as usize;
+            let (lane, size) = if **e == Type::Bool { ("int8_t".to_string(), n) } else { (c_type(e), n * lane_size(e)) };
+            if vecs.insert(c_type(t)) {
+                let _ = writeln!(self.out, "typedef {lane} {} __attribute__((vector_size({size}), aligned({})));", c_type(t), size.min(16));
+            }
         }
         // Function pointer types, after the types they name (`all` lists a
         // type after its parts) and before the structs that hold them.
@@ -1252,6 +1274,7 @@ impl Gen {
         match proj {
             Proj::Field(name) => format!("{s}.{}", c_field(name)),
             Proj::Index { index, len: Len::Array(_), .. } => format!("{s}.a[{}]", self.operand(f, index)),
+            Proj::Index { index, len: Len::Lanes(_), .. } => format!("{s}[{}]", self.operand(f, index)),
             Proj::Index { index, len: Len::Slice, .. } => format!("{s}.ptr[{}]", self.operand(f, index)),
             Proj::Index { index, len: Len::Unchecked, .. } => format!("{s}[{}]", self.operand(f, index)),
             Proj::Deref => format!("(*{s})"),
@@ -1268,8 +1291,8 @@ impl Gen {
         for proj in &p.proj {
             if let Proj::Index { index, len, span } = proj {
                 let n = match len {
-                    Len::Array(n) if matches!(index, Operand::Int(v, _) if (*v as u64) < *n) => None,
-                    Len::Array(n) => Some(n.to_string()),
+                    Len::Array(n) | Len::Lanes(n) if matches!(index, Operand::Int(v, _) if (*v as u64) < *n) => None,
+                    Len::Array(n) | Len::Lanes(n) => Some(n.to_string()),
                     Len::Slice => Some(format!("{s}.len")),
                     Len::Unchecked => None,
                 };
@@ -1296,7 +1319,7 @@ impl Gen {
                 self.place_checks(f, base, out);
                 let b = self.place(f, base);
                 let n = match len {
-                    Len::Array(n) => n.to_string(),
+                    Len::Array(n) | Len::Lanes(n) => n.to_string(),
                     Len::Slice => format!("{b}.len"),
                     // No length: only `lo <= hi` is checked.
                     Len::Unchecked => self.operand(f, hi.as_ref().unwrap()),
@@ -1389,6 +1412,10 @@ impl Gen {
                     (BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor, _) => format!("(({})({a} {} {b}))", c_type(ty), op.as_str()),
                     // Enums without payloads compare by tag.
                     (_, Type::Enum(_)) => format!("({a}.tag {} {b}.tag)", op.as_str()),
+                    // A lane comparison gives -1 or 0 per lane, as a mask.
+                    (BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge, Type::Simd(_, n)) => {
+                        format!("__builtin_convertvector(({a} {} {b}), {})", op.as_str(), c_type(&Type::Simd(Box::new(Type::Bool), *n)))
+                    }
                     _ => format!("({a} {} {b})", op.as_str()),
                 }
             }
@@ -1538,6 +1565,14 @@ impl Gen {
                 let p = self.place(f, place);
                 if is_ptr_optional(ty) { format!("({p} != 0)") } else { format!("{p}.has") }
             }
+            Rvalue::ArrayRepeat { ty: ty @ Type::Simd(_, n), val } => {
+                let v = self.operand(f, val);
+                format!("(({}){{{}}})", c_type(ty), vec![v; *n as usize].join(", "))
+            }
+            Rvalue::ArrayLit { ty: ty @ Type::Simd(..), elems } => {
+                let es: Vec<String> = elems.iter().map(|o| self.operand(f, o)).collect();
+                format!("(({}){{{}}})", c_type(ty), es.join(", "))
+            }
             Rvalue::ArrayRepeat { ty, val } => {
                 let Type::Array(_, n) = ty else { unreachable!() };
                 let t = c_type(ty);
@@ -1555,7 +1590,7 @@ impl Gen {
             Rvalue::Slice { base, len, elem, lo, hi, .. } => {
                 let b = self.place(f, base);
                 let (ptr, n) = match len {
-                    Len::Array(n) => (format!("{b}.a"), n.to_string()),
+                    Len::Array(n) | Len::Lanes(n) => (format!("{b}.a"), n.to_string()),
                     Len::Slice => (format!("{b}.ptr"), format!("{b}.len")),
                     Len::Unchecked => (b.clone(), self.operand(f, hi.as_ref().unwrap())),
                 };
@@ -1591,6 +1626,37 @@ impl Gen {
                 _ => format!("ore_expect_eq_s(({0}).ptr, ({0}).len, ({1}).ptr, ({1}).len, {lc})", a[0], a[1]),
             },
             Intrinsic::Hash => unreachable!("lowered to HashMix"),
+            // A loop over the lanes: clang vectorizes it at `-O2`.
+            Intrinsic::ReduceAdd | Intrinsic::ReduceMin | Intrinsic::ReduceMax => {
+                let Type::Simd(e, n) = &args[0].1 else { unreachable!() };
+                let step = match op {
+                    Intrinsic::ReduceAdd => "r_ = r_ + v_[i_]",
+                    Intrinsic::ReduceMin => "r_ = v_[i_] < r_ ? v_[i_] : r_",
+                    _ => "r_ = v_[i_] > r_ ? v_[i_] : r_",
+                };
+                format!(
+                    "({{ {} v_ = {}; {} r_ = v_[0]; for (int i_ = 1; i_ < {n}; i_++) {step}; r_; }})",
+                    c_type(&args[0].1),
+                    a[0],
+                    c_type(e)
+                )
+            }
+            Intrinsic::All | Intrinsic::Any => {
+                let Type::Simd(_, n) = &args[0].1 else { unreachable!() };
+                let (init, step) = if op == Intrinsic::All { ("1", "r_ = r_ && v_[i_]") } else { ("0", "r_ = r_ || v_[i_]") };
+                format!("({{ {} v_ = {}; bool r_ = {init}; for (int i_ = 0; i_ < {n}; i_++) {step}; r_; }})", c_type(&args[0].1), a[0])
+            }
+            Intrinsic::Select => {
+                let Type::Simd(_, n) = &args[1].1 else { unreachable!() };
+                let t = c_type(&args[1].1);
+                format!(
+                    "({{ {} m_ = {}; {t} a_ = {}, b_ = {}, r_; for (int i_ = 0; i_ < {n}; i_++) r_[i_] = m_[i_] ? a_[i_] : b_[i_]; r_; }})",
+                    c_type(&args[0].1),
+                    a[0],
+                    a[1],
+                    a[2]
+                )
+            }
             Intrinsic::HashMix => {
                 let bits = match &args[1].1 {
                     Type::Float(_) => format!("ore_hash_f64({})", a[1]),
@@ -1633,6 +1699,7 @@ fn const_init(p: &Program, v: &ConstVal, ty: &Type) -> String {
         (ConstVal::Null, _) | (ConstVal::Zeroed, _) => "{0}".to_string(),
         (ConstVal::Some(x), Type::Optional(inner)) => format!("{{true, {}}}", const_init(p, x, inner)),
         (ConstVal::Agg(elems), Type::Array(el, _)) => format!("{{{{{}}}}}", list(elems, &vec![&**el; elems.len()])),
+        (ConstVal::Agg(elems), Type::Simd(el, _)) => format!("{{{}}}", list(elems, &vec![&**el; elems.len()])),
         (ConstVal::Agg(fields), Type::Struct(name)) => {
             let def = p.structs.iter().find(|s| s.name == *name).unwrap();
             format!("{{{}}}", list(fields, &def.fields.iter().map(|(_, t)| t).collect::<Vec<_>>()))
@@ -1674,6 +1741,7 @@ fn collect_type(t: &Type, seen: &mut HashSet<Type>, all: &mut Vec<Type>) {
     }
     match t {
         Type::Array(e, _)
+        | Type::Simd(e, _)
         | Type::Slice(e, _)
         | Type::CPtr(e)
         | Type::Ptr(e, _)

@@ -142,6 +142,8 @@ pub fn is_ptr_optional(t: &Type) -> bool {
 pub enum Len {
     /// Fixed array `[N]T`.
     Array(u64),
+    /// The lanes of a `simd[N]T` (a C vector, indexed directly).
+    Lanes(u64),
     /// Slice `[]T`, length read at runtime.
     Slice,
     /// C pointer `[*]T`: no length to check against (slicing needs both
@@ -1104,6 +1106,7 @@ impl<'a> Lower<'a> {
             TExprKind::Index { base, index } => {
                 let len = match &base.ty {
                     Type::Array(_, n) => Len::Array(*n),
+                    Type::Simd(_, n) => Len::Lanes(*n),
                     Type::CPtr(_) => Len::Unchecked,
                     _ => Len::Slice,
                 };

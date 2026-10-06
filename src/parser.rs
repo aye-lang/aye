@@ -616,6 +616,18 @@ impl Parser {
     fn type_expr(&mut self) -> Result<TypeExpr> {
         let span = self.span();
         let kind = match self.peek().clone() {
+            Tok::Ident(n) if n == "simd" && self.toks.get(self.pos + 1).map(|t| &t.tok) == Some(&Tok::LBracket) => {
+                self.pos += 2;
+                let saved = self.enter_nested();
+                let len = self.expr()?;
+                self.leave_nested(saved);
+                self.expect(&Tok::RBracket)?;
+                let len = match len.kind {
+                    ExprKind::Int(n) => ArrayLen::Lit(n),
+                    _ => ArrayLen::Const(Box::new(len)),
+                };
+                TypeExprKind::Simd(len, Box::new(self.type_expr()?))
+            }
             Tok::Ident(_) => {
                 let (name, _) = self.path()?;
                 if self.eat(&Tok::Bang) {
@@ -1221,6 +1233,22 @@ impl Parser {
             Tok::Char(c) => {
                 self.bump();
                 ExprKind::Char(c)
+            }
+            // `simd[N]T{...}`, `simd[N]T{value, ..}`, or the type itself.
+            Tok::Ident(name) if name == "simd" && self.toks.get(self.pos + 1).map(|t| &t.tok) == Some(&Tok::LBracket) => {
+                let ty = self.type_expr()?;
+                if !self.at(&Tok::LBrace) {
+                    return Ok(Expr { kind: ExprKind::Type(ty), span });
+                }
+                match self.array_elems()? {
+                    (mut elems, Some(at)) => {
+                        if elems.len() != 1 {
+                            return Err(Error::new(E0045, at, "a repeat literal has one value before `..`: `simd[N]T{value, ..}`"));
+                        }
+                        ExprKind::ArrayRepeat { ty, value: Box::new(elems.remove(0)) }
+                    }
+                    (elems, None) => ExprKind::ArrayLit { ty, elems },
+                }
             }
             Tok::Ident(name) => {
                 self.bump();
