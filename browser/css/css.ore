@@ -1,7 +1,8 @@
 // css: style sheets and computed style.
 //
 // - tokenizer.ore: CSS Syntax tokens.
-// - parser.ore: style sheets (rules, declarations, `@media`; other
+// - parser.ore: style sheets (rules, declarations, nesting, `@media`,
+//   `@supports`, `@layer`, `@container`, `@scope`, `@property`; other
 //   at-rules are skipped) into a `Sheet`, with error recovery.
 // - selector.ore: selectors (parsing, specificity, matching).
 // - values.ore: property values (lengths, colors, keywords, shorthands).
