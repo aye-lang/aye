@@ -77,8 +77,10 @@ A line is `- role "name" [level=N] [eN] [states] value="..." -> href
   complementary, `form`, `section` with a name region, `article`, `p`
   paragraph, `blockquote`, `hr` separator, `details` group, `summary`
   button, `fieldset` group, `dialog`, `figure`, `progress` progressbar),
-  or the first word of its `role` attribute. `text` is a run of text.
-  Elements without a role (`div`, `span`, ...) are left out and their
+  or the first word of its `role` attribute. `text` is a run of text;
+  preformatted text (`pre`, `white-space: pre-line` ...) keeps its line
+  breaks: each line is a `text` node of its own (empty lines are left
+  out). Elements without a role (`div`, `span`, ...) are left out and their
   content joins their parent; `role=none` and `role=presentation` do the
   same. An element without a role that takes clicks or the focus
   (`onclick`, `tabindex`) is `generic`.

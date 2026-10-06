@@ -10,5 +10,6 @@
   - paragraph: Lines without a br, and a hidden copy button:
   - text: a { color: red }
   - text: b { color: blue }
-  - text: one two
+  - text: one
+  - text: two
   - text: three

@@ -10,4 +10,5 @@
   - paragraph: 生年月日 1964年6月22日
 - frame "Bottom" -> file://$ROOT/browser/tests/frames/bottom.html
   - paragraph: English page in the bottom frame.
-  - text: line one line two
+  - text: line one
+  - text: line two

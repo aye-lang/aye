@@ -183,7 +183,20 @@ fn walkNode(ax: *mut Ax, h: NodeId, parent: usize) AllocError!void {
     let n = ax.page.doc.node(h).*
     if n.kind == Kind.Text {
         if ax.mute == 0 && textVisible(ax.page, h) {
-            try addText(ax, parent, n.data)
+            if keepsNewlines(ax.page, h) {
+                // `pre` text: each line is a text node of its own.
+                var lines = text.split(n.data, "\n")
+                var first = true
+                while lines.next() |line| {
+                    if !first {
+                        sealText(ax, parent)
+                    }
+                    first = false
+                    try addText(ax, parent, line)
+                }
+            } else {
+                try addText(ax, parent, n.data)
+            }
         }
         return
     }
@@ -401,6 +414,17 @@ fn textVisible(p: *Page, t: NodeId) bool {
         }
     }
     return true
+}
+
+/// Does the text node `t` keep its newlines (`white-space: pre`,
+/// `pre-wrap`, `pre-line`, `break-spaces`, as in `pre`)?
+fn keepsNewlines(p: *Page, t: NodeId) bool {
+    if p.doc.parent(t) |el| {
+        if p.styling.?.styles.get(el) |style| {
+            return layout.whiteSpaceOf(style).newlines
+        }
+    }
+    return false
 }
 
 /// Does `el` start a new block (not an inline-level display)?

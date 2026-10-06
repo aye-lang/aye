@@ -26,7 +26,9 @@
       - listitem: No hidden allocation.
     - blockquote
       - paragraph: Simple things should be simple.
-    - text: fn main() { @println("hi") }
+    - text: fn main() {
+    - text: @println("hi")
+    - text: }
     - figure "Figure 1: a figure."
       - img "A figure"
     - paragraph
