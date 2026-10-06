@@ -52,8 +52,11 @@ let TAG_STYLE: u32 = 0x102
 let TAG_DATASET: u32 = 0x103
 
 // Nested calls in page scripts: the main thread's C stack is 8 MB and a
-// call of the tree-walking interpreter takes several KB of it.
-let PAGE_DEPTH: usize = 400
+// call of the tree-walking interpreter takes several KB of it (more in
+// debug builds), so calls stop (a RangeError) when a task has used
+// PAGE_ROOM of the stack, or at PAGE_DEPTH calls.
+let PAGE_DEPTH: usize = 3000
+let PAGE_ROOM: u64 = 5 << 20
 let MAX_CONSOLE: usize = 1000
 let MAX_MICROTASKS: usize = 100000
 // Timer callbacks one call of the event loop runs at most.
@@ -154,8 +157,6 @@ pub struct Script {
     timers: List(Timer)
     next_timer: u32
     seq: u64
-    // Roots of the callbacks queued by queueMicrotask, in order.
-    microtasks: List(u32)
     // Milliseconds since the page started (see setRealClock).
     now: f64
     start_ms: u64
@@ -272,7 +273,6 @@ fn createScript(p: *mut Page) AllocError!*mut Script {
         timers: List(Timer).init(alloc),
         next_timer: 1,
         seq: 0,
-        microtasks: List(u32).init(alloc),
         now: 0.0,
         start_ms: time.monotonicMs(),
         real: real_clock,
@@ -329,7 +329,6 @@ pub fn destroyScript(s: *mut Script) {
     s.it.deinit()
     s.wrappers.deinit()
     s.timers.deinit()
-    s.microtasks.deinit()
     for line in s.console.items() {
         s.alloc.free(line)
     }
@@ -468,6 +467,7 @@ fn fireLoadEvent(s: *mut Script, at: ?NodeId, name: []u8) AllocError!void {
 // budget (nested calls share it).
 fn enter(s: *mut Script) {
     if s.depth == 0 {
+        s.it.markStackBase(PAGE_ROOM)
         if js.gcStressRequested() {
             s.it.startBudget(0, STRESS_STEPS)
         } else {
@@ -569,11 +569,8 @@ fn runMicrotasks(s: *mut Script) AllocError!void {
     var head: usize = 0
     let started = time.monotonicMs()
     var late = false
-    while head < s.microtasks.len() {
-        let r = s.microtasks.items()[head]
+    while s.it.takeJob() |f| {
         head += 1
-        let f = s.it.roots.items()[r]
-        s.it.removeRoot(r)
         if head > MAX_MICROTASKS || late {
             continue
         }
@@ -590,7 +587,6 @@ fn runMicrotasks(s: *mut Script) AllocError!void {
     if head > MAX_MICROTASKS {
         try addConsole(s, "[error] ", "too many microtasks: the rest were dropped")
     }
-    s.microtasks.clear()
 }
 
 fn tick(s: *mut Script) {

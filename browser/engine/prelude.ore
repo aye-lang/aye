@@ -3,9 +3,8 @@
 // `onclick` properties and attributes), the parts of Node and Element
 // that are easier in JavaScript (append, classList, reflected
 // attributes, `value`), the window (timers, location, history,
-// localStorage, alert), and a Promise with fetch, which the engine
-// lacks. It calls the native functions of the `ak` object
-// (window_api.ore) and hands `hostEvent` to the browser.
+// localStorage, alert), and fetch. It calls the native functions of the
+// `ak` object (window_api.ore) and hands `hostEvent` to the browser.
 //
 // Ore has no way to embed a file (browser/COMPILER_GAPS.md), so the
 // source is a multi-line string.
@@ -648,155 +647,7 @@ pub let PRELUDE =
     \\hidden(G, 'localStorage', new Storage(true));
     \\hidden(G, 'sessionStorage', new Storage(false));
     \\
-    \\// ---- Promise (the engine has none) and fetch
-    \\
-    \\class Promise {
-    \\  constructor(executor) {
-    \\    if (typeof executor !== 'function') throw new TypeError('Promise resolver ' + executor + ' is not a function');
-    \\    hidden(this, '_state', 0);
-    \\    hidden(this, '_value', undefined);
-    \\    hidden(this, '_reactions', []);
-    \\    const [resolve, reject] = resolvers(this);
-    \\    try {
-    \\      executor(resolve, reject);
-    \\    } catch (e) {
-    \\      reject(e);
-    \\    }
-    \\  }
-    \\  then(onFulfilled, onRejected) {
-    \\    let resolve, reject;
-    \\    const next = new Promise((res, rej) => {
-    \\      resolve = res;
-    \\      reject = rej;
-    \\    });
-    \\    const r = { onFulfilled, onRejected, resolve, reject };
-    \\    if (this._state === 0) this._reactions.push(r);
-    \\    else react(this, r);
-    \\    return next;
-    \\  }
-    \\  catch(onRejected) { return this.then(undefined, onRejected); }
-    \\  finally(f) {
-    \\    if (typeof f !== 'function') return this.then(f, f);
-    \\    return this.then(
-    \\      v => Promise.resolve(f()).then(() => v),
-    \\      e => Promise.resolve(f()).then(() => { throw e; }),
-    \\    );
-    \\  }
-    \\  static resolve(v) {
-    \\    if (v instanceof Promise) return v;
-    \\    return new Promise(res => res(v));
-    \\  }
-    \\  static reject(e) { return new Promise((res, rej) => rej(e)); }
-    \\  static all(items) {
-    \\    return new Promise((resolve, reject) => {
-    \\      const list = Array.from(items);
-    \\      const out = new Array(list.length);
-    \\      let left = list.length;
-    \\      if (left === 0) resolve(out);
-    \\      list.forEach((p, i) => {
-    \\        Promise.resolve(p).then(v => {
-    \\          out[i] = v;
-    \\          if (--left === 0) resolve(out);
-    \\        }, reject);
-    \\      });
-    \\    });
-    \\  }
-    \\  static allSettled(items) {
-    \\    return new Promise(resolve => {
-    \\      const list = Array.from(items);
-    \\      const out = new Array(list.length);
-    \\      let left = list.length;
-    \\      if (left === 0) resolve(out);
-    \\      list.forEach((p, i) => {
-    \\        const done = r => {
-    \\          out[i] = r;
-    \\          if (--left === 0) resolve(out);
-    \\        };
-    \\        Promise.resolve(p).then(value => done({ status: 'fulfilled', value }), reason => done({ status: 'rejected', reason }));
-    \\      });
-    \\    });
-    \\  }
-    \\  static race(items) {
-    \\    return new Promise((resolve, reject) => {
-    \\      for (const p of items) Promise.resolve(p).then(resolve, reject);
-    \\    });
-    \\  }
-    \\  static any(items) {
-    \\    return new Promise((resolve, reject) => {
-    \\      const list = Array.from(items);
-    \\      let left = list.length;
-    \\      if (left === 0) reject(new Error('All promises were rejected'));
-    \\      for (const p of list) Promise.resolve(p).then(resolve, () => {
-    \\        if (--left === 0) reject(new Error('All promises were rejected'));
-    \\      });
-    \\    });
-    \\  }
-    \\}
-    \\// The resolve and reject functions of a promise: the first call wins.
-    \\function resolvers(p) {
-    \\  let done = false;
-    \\  const resolve = v => {
-    \\    if (done) return;
-    \\    done = true;
-    \\    resolveWith(p, v);
-    \\  };
-    \\  const reject = e => {
-    \\    if (done) return;
-    \\    done = true;
-    \\    settle(p, 2, e);
-    \\  };
-    \\  return [resolve, reject];
-    \\}
-    \\function resolveWith(p, v) {
-    \\  if (v === p) return settle(p, 2, new TypeError('Chaining cycle detected for promise #<Promise>'));
-    \\  if (v !== null && (typeof v === 'object' || typeof v === 'function')) {
-    \\    let then;
-    \\    try {
-    \\      then = v.then;
-    \\    } catch (e) {
-    \\      return settle(p, 2, e);
-    \\    }
-    \\    if (typeof then === 'function') {
-    \\      ak.queueMicrotask(() => {
-    \\        const [res, rej] = resolvers(p);
-    \\        try {
-    \\          then.call(v, res, rej);
-    \\        } catch (e) {
-    \\          rej(e);
-    \\        }
-    \\      });
-    \\      return;
-    \\    }
-    \\  }
-    \\  settle(p, 1, v);
-    \\}
-    \\function settle(p, state, v) {
-    \\  if (p._state !== 0) return;
-    \\  p._state = state;
-    \\  p._value = v;
-    \\  const rs = p._reactions;
-    \\  p._reactions = [];
-    \\  for (const r of rs) react(p, r);
-    \\}
-    \\function react(p, r) {
-    \\  ak.queueMicrotask(() => {
-    \\    const f = p._state === 1 ? r.onFulfilled : r.onRejected;
-    \\    if (typeof f !== 'function') {
-    \\      if (p._state === 1) r.resolve(p._value);
-    \\      else r.reject(p._value);
-    \\      return;
-    \\    }
-    \\    let out;
-    \\    try {
-    \\      out = f(p._value);
-    \\    } catch (e) {
-    \\      r.reject(e);
-    \\      return;
-    \\    }
-    \\    r.resolve(out);
-    \\  });
-    \\}
-    \\hidden(G, 'Promise', Promise);
+    \\// ---- fetch (Promise is the engine's: js/lib.ore)
     \\
     \\class Headers {
     \\  constructor(type) { hidden(this, '_type', type); }

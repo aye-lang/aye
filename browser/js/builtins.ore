@@ -52,6 +52,8 @@ pub fn installBuiltins(it: *mut Interp) JsError!void {
     try installMisc(it)
     try it.defineNative(it.iterator_proto, "next", 0, iteratorNext)
     try installIteratorMethods(it)
+    try installGenerators(it)
+    try it.defineNative(g, "queueMicrotask", 1, globalQueueMicrotask)
     try it.runScript(LIB)
 }
 
@@ -726,6 +728,17 @@ fn objectProtoToString(it: *mut Interp, a: Args) JsError!Value {
             if o == it.json_obj {
                 return it.newString("[object JSON]")
             }
+            let st = try it.getProp(a.this, it.sym_to_string_tag)
+            if isStr(st) {
+                try it.push(st)
+                let sb = try it.builder()
+                defer it.release(sb)
+                try sb.append("[object ")
+                try sb.append(it.heap.bytes(strOf(st)))
+                try sb.append("]")
+                it.pop()
+                return it.newString(sb.bytes())
+            }
             tag = match it.heap.obj(o).class {
                 .Array => "Array"
                 .Function => "Function"
@@ -1107,5 +1120,11 @@ fn consoleError(it: *mut Interp, a: Args) JsError!Value {
     try formatLog(it, a, b)
     try b.appendByte('\n')
     std.fs.stderr().write(b.bytes()) catch |e| {}
+    return Value.Undefined
+}
+
+fn globalQueueMicrotask(it: *mut Interp, a: Args) JsError!Value {
+    let f = try callableArg(it, a, 0)
+    try it.queueJob(f)
     return Value.Undefined
 }

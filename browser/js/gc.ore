@@ -127,6 +127,7 @@ pub fn collectGarbage(it: *mut Interp) {
     for f in it.frames.items() {
         markObj(it, f.func)
         markObj(it, f.this_obj)
+        markObj(it, f.new_target)
         markEnv(it, f.env)
     }
     markValue(it, it.exception)
@@ -135,6 +136,10 @@ pub fn collectGarbage(it: *mut Interp) {
     for v in it.roots.items() {
         markValue(it, v)
     }
+    for k in it.jobs_head..it.jobs.len() {
+        markValue(it, it.jobs.items()[k])
+    }
+    markCoroutines(it)
     // Trace, then let the host keep more alive, until nothing changes.
     drain(it)
     if it.host |h| {
@@ -191,6 +196,14 @@ fn sweep(it: *mut Interp) {
             .Host { tag, index, generation } => {
                 if it.host |h| {
                     h.finalize(tag, index, generation)
+                }
+            }
+            .Prim { v } => {
+                if ob.class == Class.Generator {
+                    match v {
+                        .Num { n } => coroutineCollected(it, n as u32)
+                        _ => {}
+                    }
                 }
             }
             _ => {}

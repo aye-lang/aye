@@ -64,6 +64,7 @@ struct CSet {
 }
 
 let INF: u32 = 0xFFFFFFFF
+let MAX_NESTING: u32 = 500
 
 pub struct RegexProg {
     alloc: Allocator
@@ -102,6 +103,9 @@ struct RParser {
     p: []u8
     pos: usize
     tmp: List(u32)
+    // Open groups (a pattern nested deeper than MAX_NESTING is refused:
+    // parsing and compiling recurse on the C stack).
+    nesting: u32
 
     fn node(self: *mut Self, n: RNode) AllocError!u32 {
         let id = self.prog.nodes.len() as u32
@@ -235,6 +239,11 @@ struct RParser {
     fn atom(self: *mut Self) SyntaxErr!u32 {
         let c = self.p[self.pos]
         if c == '(' {
+            self.nesting += 1
+            defer self.nesting -= 1
+            if self.nesting > MAX_NESTING {
+                return SyntaxErr.Syntax
+            }
             self.pos += 1
             if self.peek() == '?' {
                 self.pos += 1
@@ -749,7 +758,7 @@ fn compileRegex(it: *mut Interp, pattern: u32, flags: u32) JsError!?u32 {
             ok = false
         }
     }
-    var rp = RParser { prog: prog, atoms: &mut it.heap.atoms, p: it.heap.atoms.name(pattern), pos: 0, tmp: List(u32).init(it.alloc) }
+    var rp = RParser { prog: prog, atoms: &mut it.heap.atoms, p: it.heap.atoms.name(pattern), pos: 0, tmp: List(u32).init(it.alloc), nesting: 0 }
     defer rp.tmp.deinit()
     if ok {
         let root = rp.alt() catch |e| NONE

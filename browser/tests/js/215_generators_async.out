@@ -1,0 +1,31 @@
+got hello
+cleanup
+{ value: 2, done: false } { value: 2, done: false } { value: 9, done: true } { value: undefined, done: true }
+got undefined
+cleanup
+[ 11, 2 ]
+v 0
+v 1
+v 2
+v 3
+got undefined
+cleanup
+delegate result 3
+[ 6, 2, 'end' ]
+thrown out boom
+[object Generator] function true
+[ 1, 2 ]
+[ 'm' ]
+sync end
+o1
+o2
+1 1 2 true false [] true
+a|b\n|c:1,2 x\ty
+true
+true false
+o3
+caught async fail
+handled rej
+async result 9
+for await [ 1, 2 ]
+[ 1, 2, 'a', 'b' ]

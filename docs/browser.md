@@ -265,11 +265,16 @@ output as goldens.
   integers, and `Interp.host: ?dyn Host` gets `finalize(tag, index,
   generation)` when the collector frees one (the `js_refs` decrement).
   `addRoot`/`removeRoot` keep values (event listeners) alive.
-- *Not yet:* generators, async/await (Promise is the page prelude's,
-  below), Symbol, BigInt, Proxy, typed arrays, tagged templates,
-  `new.target`, time zones (local time is UTC), full Unicode case
-  mapping and normalization, `Function`/`eval` of strings (the browser
-  compiles inline handlers with `Interp.evalScript`).
+- *Generators and async functions* (B8, `js/coroutine.ore`): a call
+  that can stop in the middle of the tree walk runs on a thread of its
+  own (a coroutine with its own value stack and frames); two channels
+  pass control so only one thread runs JavaScript at a time. Promise
+  and the job queue are the engine's (`js/lib.ore`, `Interp.queueJob`);
+  `await` hands the value to a driver written in JavaScript that resumes
+  the coroutine when the promise settles; `for await` and async
+  generators go through the same driver.
+- *Not yet:* BigInt, Proxy, typed arrays, time zones (local time is
+  UTC), full Unicode case mapping and normalization.
   A plain function call gets `this === undefined` (strict-mode rule), and
   top-level `var`/`function` are properties of the global object.
 
@@ -319,8 +324,9 @@ on (`--no-js` turns it off), `dump` with `--js`.
   (setting it navigates after the script returns), `history`,
   `localStorage` (in memory, per origin, while a page is open) and
   `sessionStorage`, `alert`/`confirm`/`prompt` (console messages, never
-  blocking), a Promise with microtasks, and `fetch` (GET, synchronous
-  underneath, settling in a microtask; `text()`, `json()`).
+  blocking), microtasks (the engine's job queue, which Promise uses),
+  and `fetch` (GET, synchronous underneath, settling in a microtask;
+  `text()`, `json()`).
 - *Event loop:* timers (ordered by due time, then by scheduling) and
   microtasks after every task. Time is virtual for `dump` and the agent
   (the loop jumps to the next timer; `dump --js` runs until no timer is

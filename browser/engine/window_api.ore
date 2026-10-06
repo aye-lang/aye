@@ -163,8 +163,7 @@ fn akClearTimer(it: *mut Interp, a: Args) JsError!Value {
 
 fn akQueueMicrotask(it: *mut Interp, a: Args) JsError!Value {
     let f = try js.callableArg(it, a, 0)
-    let r = try it.addRoot(f)
-    try scriptOf(it).microtasks.append(r)
+    try it.queueJob(f)
     return Value.Undefined
 }
 

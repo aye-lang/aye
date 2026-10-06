@@ -87,12 +87,22 @@ there and can now be simplified.
   a 1 GB stack through C interop (`@link("pthread")`,
   `pthread_attr_setstacksize`, an Ore function as the start routine, the
   job passed as `@ptrCast([*]u8, &mut job)`); the engine throws a
-  RangeError at 10000 frames, like Node.
+  RangeError at 10000 frames, like Node. Since B8 the engine also
+  measures the C stack it has used (`Interp.markStackBase`: the address
+  of a local at the start of a task, compared with one at each call) and
+  throws the RangeError before the end of the room it was given. With
+  no second stack to switch to (no coroutines or fibers), a generator or
+  async function that stops in the middle of the tree walk runs on a
+  thread of its own (`js/coroutine.ore`, `std.thread.spawnWithStack`
+  with 256 MB reserved), and two `std.sync.Channel`s hand control back
+  and forth so only one thread runs JavaScript at a time: a thread per
+  live generator, 4000 at most.
 - **Suggestion:** a guard page and a handler that panics with a message;
-  `std.thread` with a stack size.
-- **Hit by:** js (B6).
-- **Status:** open. `std.thread` is planned for M10 (not in this tree
-  yet); no overflow check is planned.
+  `std.thread` with a stack size; stackful coroutines (a stack switch)
+  in std.
+- **Hit by:** js (B6, B8).
+- **Status:** open. `std.thread` (with `spawnWithStack`) and
+  `std.sync.Channel` exist now; no overflow check is planned.
 
 #### 3. Pointers into a growing `List` or `Pool` dangle, undetected
 

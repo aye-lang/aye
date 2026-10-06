@@ -1,8 +1,10 @@
 // js/lib: built-ins written in JavaScript, run by installBuiltins after
-// the native ones: WeakMap and WeakSet (holding their keys strongly),
-// WeakRef, Reflect, typed arrays (arrays of converted numbers; a view of
-// an ArrayBuffer is a copy), DataView, an English-only Intl, Date
-// setters and formats, String.raw, escape/unescape and smaller methods.
+// the native ones: Promise and the drivers of async functions and async
+// generators (coroutine.ore), WeakMap and WeakSet (holding their keys
+// strongly), WeakRef, Reflect, typed arrays (arrays of converted numbers;
+// a view of an ArrayBuffer is a copy), DataView, an English-only Intl,
+// Date setters and formats, String.raw, escape/unescape and smaller
+// methods.
 //
 // The source is kept in a multi-line string (no @embedFile, see
 // browser/COMPILER_GAPS.md).
@@ -153,6 +155,235 @@ pub let LIB =
     \\}
     \\hidden(AggregateError.prototype, 'name', 'AggregateError');
     \\hidden(G, 'AggregateError', AggregateError);
+    \\
+    \\// ---- Promise, and the drivers of async functions and async generators
+    \\// (the engine runs the microtasks they queue: queueMicrotask)
+    \\
+    \\const enqueue = G.queueMicrotask;
+    \\class Promise {
+    \\  constructor(executor) {
+    \\    if (typeof executor !== 'function') throw new TypeError('Promise resolver ' + executor + ' is not a function');
+    \\    hidden(this, '_state', 0);
+    \\    hidden(this, '_value', undefined);
+    \\    hidden(this, '_reactions', []);
+    \\    const [resolve, reject] = resolvers(this);
+    \\    try {
+    \\      executor(resolve, reject);
+    \\    } catch (e) {
+    \\      reject(e);
+    \\    }
+    \\  }
+    \\  then(onFulfilled, onRejected) {
+    \\    let resolve, reject;
+    \\    const next = new Promise((res, rej) => {
+    \\      resolve = res;
+    \\      reject = rej;
+    \\    });
+    \\    const r = { onFulfilled, onRejected, resolve, reject };
+    \\    if (this._state === 0) this._reactions.push(r);
+    \\    else react(this, r);
+    \\    return next;
+    \\  }
+    \\  catch(onRejected) { return this.then(undefined, onRejected); }
+    \\  finally(f) {
+    \\    if (typeof f !== 'function') return this.then(f, f);
+    \\    return this.then(
+    \\      v => Promise.resolve(f()).then(() => v),
+    \\      e => Promise.resolve(f()).then(() => { throw e; }),
+    \\    );
+    \\  }
+    \\  static resolve(v) {
+    \\    if (v instanceof Promise) return v;
+    \\    return new Promise(res => res(v));
+    \\  }
+    \\  static reject(e) { return new Promise((res, rej) => rej(e)); }
+    \\  static withResolvers() {
+    \\    let resolve, reject;
+    \\    const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+    \\    return { promise, resolve, reject };
+    \\  }
+    \\  static all(items) {
+    \\    return new Promise((resolve, reject) => {
+    \\      const list = Array.from(items);
+    \\      const out = new Array(list.length);
+    \\      let left = list.length;
+    \\      if (left === 0) resolve(out);
+    \\      list.forEach((p, i) => {
+    \\        Promise.resolve(p).then(v => {
+    \\          out[i] = v;
+    \\          if (--left === 0) resolve(out);
+    \\        }, reject);
+    \\      });
+    \\    });
+    \\  }
+    \\  static allSettled(items) {
+    \\    return new Promise(resolve => {
+    \\      const list = Array.from(items);
+    \\      const out = new Array(list.length);
+    \\      let left = list.length;
+    \\      if (left === 0) resolve(out);
+    \\      list.forEach((p, i) => {
+    \\        const done = r => {
+    \\          out[i] = r;
+    \\          if (--left === 0) resolve(out);
+    \\        };
+    \\        Promise.resolve(p).then(value => done({ status: 'fulfilled', value }), reason => done({ status: 'rejected', reason }));
+    \\      });
+    \\    });
+    \\  }
+    \\  static race(items) {
+    \\    return new Promise((resolve, reject) => {
+    \\      for (const p of items) Promise.resolve(p).then(resolve, reject);
+    \\    });
+    \\  }
+    \\  static any(items) {
+    \\    return new Promise((resolve, reject) => {
+    \\      const list = Array.from(items);
+    \\      let left = list.length;
+    \\      const errors = new Array(left);
+    \\      if (left === 0) reject(new AggregateError([], 'All promises were rejected'));
+    \\      list.forEach((p, i) => Promise.resolve(p).then(resolve, e => {
+    \\        errors[i] = e;
+    \\        if (--left === 0) reject(new AggregateError(errors, 'All promises were rejected'));
+    \\      }));
+    \\    });
+    \\  }
+    \\}
+    \\Object.defineProperty(Promise.prototype, Symbol.toStringTag, { value: 'Promise', configurable: true });
+    \\// The resolve and reject functions of a promise: the first call wins.
+    \\function resolvers(p) {
+    \\  let done = false;
+    \\  const resolve = v => {
+    \\    if (done) return;
+    \\    done = true;
+    \\    resolveWith(p, v);
+    \\  };
+    \\  const reject = e => {
+    \\    if (done) return;
+    \\    done = true;
+    \\    settle(p, 2, e);
+    \\  };
+    \\  return [resolve, reject];
+    \\}
+    \\function resolveWith(p, v) {
+    \\  if (v === p) return settle(p, 2, new TypeError('Chaining cycle detected for promise #<Promise>'));
+    \\  if (v !== null && (typeof v === 'object' || typeof v === 'function')) {
+    \\    let then;
+    \\    try {
+    \\      then = v.then;
+    \\    } catch (e) {
+    \\      return settle(p, 2, e);
+    \\    }
+    \\    if (typeof then === 'function') {
+    \\      enqueue(() => {
+    \\        const [res, rej] = resolvers(p);
+    \\        try {
+    \\          then.call(v, res, rej);
+    \\        } catch (e) {
+    \\          rej(e);
+    \\        }
+    \\      });
+    \\      return;
+    \\    }
+    \\  }
+    \\  settle(p, 1, v);
+    \\}
+    \\function settle(p, state, v) {
+    \\  if (p._state !== 0) return;
+    \\  p._state = state;
+    \\  p._value = v;
+    \\  const rs = p._reactions;
+    \\  p._reactions = [];
+    \\  for (const r of rs) react(p, r);
+    \\}
+    \\function react(p, r) {
+    \\  enqueue(() => {
+    \\    const f = p._state === 1 ? r.onFulfilled : r.onRejected;
+    \\    if (typeof f !== 'function') {
+    \\      if (p._state === 1) r.resolve(p._value);
+    \\      else r.reject(p._value);
+    \\      return;
+    \\    }
+    \\    let out;
+    \\    try {
+    \\      out = f(p._value);
+    \\    } catch (e) {
+    \\      r.reject(e);
+    \\      return;
+    \\    }
+    \\    r.resolve(out);
+    \\  });
+    \\}
+    \\hidden(G, 'Promise', Promise);
+    \\
+    \\// An async function's call: `g` runs its body; each `await` stops it with
+    \\// the awaited value, and it goes on when that settles.
+    \\function asyncDriver(g) {
+    \\  return new Promise((resolve, reject) => {
+    \\    function step(thrown, v) {
+    \\      let r;
+    \\      try {
+    \\        r = thrown ? g.throw(v) : g.next(v);
+    \\      } catch (e) {
+    \\        reject(e);
+    \\        return;
+    \\      }
+    \\      if (r.done) resolve(r.value);
+    \\      else Promise.resolve(r.value).then(x => step(false, x), e => step(true, e));
+    \\    }
+    \\    step(false, undefined);
+    \\  });
+    \\}
+    \\// An async generator's object: next/throw/return give promises, served
+    \\// in order; inside, `await` and `yield` both stop `g` (kindOf tells
+    \\// which).
+    \\const kindOf = G.__engine.kindOf;
+    \\function asyncGenDriver(g) {
+    \\  const queue = [];
+    \\  let running = false;
+    \\  function pump() {
+    \\    if (queue.length === 0) {
+    \\      running = false;
+    \\      return;
+    \\    }
+    \\    running = true;
+    \\    const req = queue[0];
+    \\    const finish = (ok, v) => {
+    \\      queue.shift();
+    \\      if (ok) req.resolve(v);
+    \\      else req.reject(v);
+    \\      pump();
+    \\    };
+    \\    function step(mode, v) {
+    \\      let r;
+    \\      try {
+    \\        r = mode === 0 ? g.next(v) : mode === 1 ? g.throw(v) : g.return(v);
+    \\      } catch (e) {
+    \\        finish(false, e);
+    \\        return;
+    \\      }
+    \\      if (r.done) finish(true, { value: r.value, done: true });
+    \\      else if (kindOf(g) === 1) Promise.resolve(r.value).then(x => step(0, x), e => step(1, e));
+    \\      else Promise.resolve(r.value).then(x => finish(true, { value: x, done: false }), e => step(1, e));
+    \\    }
+    \\    step(req.mode, req.value);
+    \\  }
+    \\  function request(mode, value) {
+    \\    return new Promise((resolve, reject) => {
+    \\      queue.push({ mode, value, resolve, reject });
+    \\      if (!running) pump();
+    \\    });
+    \\  }
+    \\  return {
+    \\    next(v) { return request(0, v); },
+    \\    throw(e) { return request(1, e); },
+    \\    return(v) { return request(2, v); },
+    \\    [Symbol.asyncIterator]() { return this; },
+    \\    [Symbol.toStringTag]: 'AsyncGenerator',
+    \\  };
+    \\}
+    \\G.__engine.setDrivers(asyncDriver, asyncGenDriver);
+    \\delete G.__engine;
     \\
     \\// ---- legacy escape / unescape
     \\

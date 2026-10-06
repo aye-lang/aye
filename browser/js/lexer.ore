@@ -282,6 +282,20 @@ struct Lexer {
             }
             return self.emit(keyword(self.src[start..self.pos]), start, 0.0, 0, 0)
         }
+        if c == '#' && isIdStart(self.peekAt(1)) {
+            // A private name `#x`: an identifier whose text keeps the `#`.
+            self.pos += 1
+            while self.pos < self.src.len && isIdPart(self.src[self.pos]) {
+                self.pos += 1
+            }
+            return self.emit(Tok.Ident, start, 0.0, 0, 0)
+        }
+        if c == '#' && self.peekAt(1) == '!' && start == 0 {
+            while self.pos < self.src.len && self.src[self.pos] != '\n' {
+                self.pos += 1
+            }
+            return
+        }
         if isDigit(c) || (c == '.' && isDigit(self.peekAt(1))) {
             return self.number()
         }
@@ -384,6 +398,10 @@ struct Lexer {
             }
             buf[n] = 0
             value = strtod(buf[..].ptr, null)
+        }
+        // A BigInt literal `10n` is read as a Number (there is no BigInt).
+        if self.pos < self.src.len && self.src[self.pos] == 'n' {
+            self.pos += 1
         }
         if self.pos < self.src.len && isIdStart(self.src[self.pos]) {
             return self.fail("Invalid or unexpected token")

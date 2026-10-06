@@ -59,6 +59,8 @@ pub struct Frame {
     env: u32
     // A derived constructor: the object `this` becomes after super().
     this_obj: u32
+    // The `new.target` of the call (NONE for a plain call).
+    new_target: u32
 }
 
 /// What the host (the DOM) learns from the engine, and what it adds:
@@ -85,6 +87,19 @@ pub interface Host {
 pub let HOST_NAMED: u32 = 0x100
 
 let MAX_DEPTH: usize = 10000
+
+// An address as an integer: the stack check compares the address of a
+// local with the one at the start of the task.
+extern union StackAddr {
+    p: ?[*]u8
+    n: u64
+}
+
+pub fn stackAddress() u64 {
+    var marker: u8 = 0
+    let a = StackAddr { p: @ptrCast([*]u8, &mut marker) }
+    return a.n
+}
 
 pub struct Interp {
     alloc: Allocator
@@ -163,6 +178,10 @@ pub struct Interp {
     deadline_ms: u64
     budget_ms: u64
     terminated: bool
+    // The C stack (see markStackBase): the address at the start of the
+    // task and the bytes it may use below it (0: no check).
+    stack_base: u64
+    stack_room: u64
     // Symbols (symbol.ore): by key atom, and Symbol.for's by key.
     symbol_proto: u32
     symbol_count: u32
@@ -173,6 +192,24 @@ pub struct Interp {
     sym_has_instance: u32
     sym_to_primitive: u32
     sym_to_string_tag: u32
+    // Generators and async functions (coroutine.ore).
+    coroutines: List(?*mut Coroutine)
+    current_co: ?*mut Coroutine
+    co_saved: List(SavedCtx)
+    orphans: bool
+    gen_proto: u32
+    gen_return: u32
+    // Roots of the drivers of async functions and async generators.
+    async_driver: u32
+    async_gen_driver: u32
+    // Microtasks (queueMicrotask, promise reactions), in order from
+    // jobs_head; the host runs them (takeJob).
+    jobs: List(Value)
+    jobs_head: usize
+    // Tagged template call sites (node) to the root of their strings.
+    tagged: IntMap(u32, u32)
+    // The arrays being joined (Array.prototype.join of a cycle).
+    joining: List(u32)
 
     pub fn create(alloc: Allocator) JsError!Interp {
         var it = Interp {
@@ -235,6 +272,8 @@ pub struct Interp {
             deadline_ms: 0,
             budget_ms: 0,
             terminated: false,
+            stack_base: 0,
+            stack_room: 0,
             symbol_proto: NONE,
             symbol_count: 0,
             symbols: IntMap(u32, u32).init(alloc),
@@ -244,11 +283,29 @@ pub struct Interp {
             sym_has_instance: NONE,
             sym_to_primitive: NONE,
             sym_to_string_tag: NONE,
+            coroutines: List(?*mut Coroutine).init(alloc),
+            current_co: null,
+            co_saved: List(SavedCtx).init(alloc),
+            orphans: false,
+            gen_proto: NONE,
+            gen_return: NONE,
+            async_driver: NONE,
+            async_gen_driver: NONE,
+            jobs: List(Value).init(alloc),
+            jobs_head: 0,
+            tagged: IntMap(u32, u32).init(alloc),
+            joining: List(u32).init(alloc),
         }
         return it
     }
 
     pub fn deinit(self: *mut Self) {
+        destroyCoroutines(self)
+        self.coroutines.deinit()
+        self.co_saved.deinit()
+        self.jobs.deinit()
+        self.tagged.deinit()
+        self.joining.deinit()
         self.heap.deinit()
         self.ast.deinit()
         self.globals.deinit()
@@ -334,9 +391,103 @@ pub struct Interp {
         self.terminated = false
     }
 
+    /// From here on, the code of this thread may use `room` bytes of C
+    /// stack below the caller's frame: calls deeper than that throw a
+    /// RangeError instead of overflowing the stack (a crash).
+    pub fn markStackBase(self: *mut Self, room: u64) {
+        self.stack_base = stackAddress()
+        self.stack_room = room
+    }
+
+    /// Has the running code used up its C stack (see markStackBase)?
+    pub fn stackExhausted(self: *Self) bool {
+        if self.stack_room == 0 {
+            return false
+        }
+        let here = stackAddress()
+        return here < self.stack_base && self.stack_base - here > self.stack_room
+    }
+
+    /// The lowest stack address the running code may reach (0: no
+    /// limit), for the parser and the resolver.
+    pub fn stackFloor(self: *Self) u64 {
+        if self.stack_room == 0 || self.stack_room >= self.stack_base {
+            return 0
+        }
+        return self.stack_base - self.stack_room
+    }
+
+    /// The C stack still free for the running code (a large number when
+    /// it is not measured).
+    pub fn stackLeft(self: *Self) u64 {
+        if self.stack_room == 0 {
+            return 1 << 40
+        }
+        let here = stackAddress()
+        if here >= self.stack_base {
+            return self.stack_room
+        }
+        let used = self.stack_base - here
+        if used >= self.stack_room {
+            return 0
+        }
+        return self.stack_room - used
+    }
+
     /// No limit until the next startBudget.
     pub fn clearBudget(self: *mut Self) {
         self.startBudget(0, 0)
+    }
+
+    // ---- microtasks
+
+    /// Queues a microtask (a function called with no arguments).
+    pub fn queueJob(self: *mut Self, f: Value) JsError!void {
+        return self.jobs.append(f)
+    }
+
+    /// The next microtask, if there is one (it is taken off the queue).
+    pub fn takeJob(self: *mut Self) ?Value {
+        if self.jobs_head >= self.jobs.len() {
+            return null
+        }
+        let f = self.jobs.items()[self.jobs_head]
+        self.jobs_head += 1
+        if self.jobs_head == self.jobs.len() {
+            self.jobs.clear()
+            self.jobs_head = 0
+        }
+        return f
+    }
+
+    pub fn hasJobs(self: *Self) bool {
+        return self.jobs_head < self.jobs.len()
+    }
+
+    /// Is the pending exception the one `return()` of a generator throws
+    /// (no `catch` sees it)?
+    pub fn isGenReturn(self: *Self) bool {
+        return match self.exception {
+            .Obj { o } => o == self.gen_return
+            _ => false
+        }
+    }
+
+    /// The iterator of v: `v[Symbol.iterator]()`, or one over the values
+    /// of a native iterable without that method (arguments).
+    pub fn getIteratorObject(self: *mut Self, v: Value) JsError!Value {
+        if isObject(v) || isStr(v) {
+            let f = try self.getProp(v, self.sym_iterator)
+            if self.isCallable(f) {
+                let r = try self.call0(f, v)
+                if !isObject(r) {
+                    try self.typeError("Result of the Symbol.iterator method is not an object")
+                }
+                return r
+            }
+        }
+        let arr = try self.iterToArray(v)
+        return makeIterator(self, arr)
     }
 
     fn tick(self: *mut Self) JsError!void {
@@ -1549,14 +1700,24 @@ pub struct Interp {
         }
         match self.heap.obj(o).data {
             .Closure { func, env, .. } => {
+                let fp = &self.ast.funcs.items()[func]
+                if fp.generator || fp.is_async {
+                    return callCoroutine(self, func, env, o, self.slot(base + 1), base + 2, argc)
+                }
                 return self.invoke(func, env, o, self.slot(base + 1), base + 2, argc, NONE)
             }
             .Native { id } => {
+                if self.stackExhausted() {
+                    return self.rangeError("Maximum call stack size exceeded")
+                }
                 let ne = self.natives.items()[id]
                 let a = Args { this: self.slot(base + 1), base: base + 2, argc: argc, callee: o, new_target: NONE }
                 return ne.f(self, a)
             }
             .Bound { .. } => {
+                if self.stackExhausted() {
+                    return self.rangeError("Maximum call stack size exceeded")
+                }
                 return self.callBound(o, base, argc, NONE)
             }
             _ => {
@@ -1576,7 +1737,7 @@ pub struct Interp {
         match self.heap.obj(o).data {
             .Closure { func, env, .. } => {
                 let fi = self.ast.func(func)
-                if fi.arrow || fi.method {
+                if fi.arrow || fi.method || fi.generator || fi.is_async {
                     return self.notA(f, "a constructor")
                 }
                 let pv = try self.getProp(objVal(newTarget), A_PROTOTYPE)
@@ -1654,14 +1815,14 @@ pub struct Interp {
         if fi.ctor && newTarget == NONE {
             return self.typeErrorAbout("Class constructor ", self.heap.atoms.name(fi.name), " cannot be invoked without 'new'")
         }
-        if self.frames.len() >= self.max_depth {
+        if self.frames.len() >= self.max_depth || self.stackExhausted() {
             return self.rangeError("Maximum call stack size exceeded")
         }
         try self.tick()
         let nslots = self.ast.scopes.items()[fi.scope].nslots
         self.maybeGc()
         let e = try self.heap.newEnv(nslots, penv, Value.Undefined)
-        try self.frames.append(Frame { func: fobj, env: self.env, this_obj: self.derived_this })
+        try self.frames.append(Frame { func: fobj, env: self.env, this_obj: self.derived_this, new_target: newTarget })
         self.derived_this = NONE
         let saved = self.env
         self.env = e
@@ -1786,7 +1947,14 @@ pub struct Interp {
             outer = self.currentFunction()
         }
         let o = try self.newObjectOf(Class.Function, self.function_proto, ObjData.Closure { func: f, env: self.env, home: NONE, outer: outer })
-        if !fi.arrow && !fi.method && !fi.ctor {
+        if fi.generator {
+            try self.push(objVal(o))
+            let gp = try self.newObject(self.gen_proto)
+            try self.heap.addProp(o, A_PROTOTYPE, objVal(gp), Value.Undefined, F_WRITE)
+            self.pop()
+            return objVal(o)
+        }
+        if !fi.arrow && !fi.method && !fi.ctor && !fi.is_async {
             try self.push(objVal(o))
             let p = try self.newObject(self.object_proto)
             try self.heap.addProp(p, A_CONSTRUCTOR, objVal(o), Value.Undefined, F_HIDDEN)
@@ -1850,12 +2018,21 @@ pub struct Interp {
                             atom = try self.toKey(kv)
                         }
                         let v = try self.runField(value, env, objVal(thisObj))
-                        try self.defineOwn(thisObj, atom, v, F_DEFAULT)
+                        try self.defineOwn(thisObj, atom, v, self.fieldFlags(atom))
                     }
                 }
                 _ => {}
             }
         }
+    }
+
+    // A field `#x` (private) is not enumerable; the others are.
+    fn fieldFlags(self: *Self, atom: u32) u8 {
+        let n = self.heap.atoms.name(atom)
+        if n.len > 0 && n[0] == '#' {
+            return F_HIDDEN
+        }
+        return F_DEFAULT
     }
 
     fn runField(self: *mut Self, value: u32, env: u32, thisv: Value) JsError!Value {
@@ -1963,8 +2140,12 @@ pub struct Interp {
                     if kind == PROP_FIELD {
                         if is_static {
                             let fv = try self.runField(value, self.env, objVal(ctor))
-                            try self.defineOwn(ctor, atom, fv, F_DEFAULT)
+                            try self.defineOwn(ctor, atom, fv, self.fieldFlags(atom))
                         }
+                        continue
+                    }
+                    if kind == PROP_STATIC_BLOCK {
+                        try self.runField(value, self.env, objVal(ctor))
                         continue
                     }
                     let m = try self.eval(value)
@@ -2078,6 +2259,9 @@ pub struct Interp {
     // ---- expressions
 
     pub fn eval(self: *mut Self, id: u32) JsError!Value {
+        if self.stackExhausted() {
+            return self.rangeError("Maximum call stack size exceeded")
+        }
         match self.ast.nodes.items()[id] {
             .Ident { name, depth, slot, .. } => {
                 return self.readIdent(name, depth, slot)
@@ -2274,10 +2458,105 @@ pub struct Interp {
             .Hole => {
                 return Value.Undefined
             }
+            // (Rare nodes call functions of their own: every local of an
+            // arm takes room in eval's frame, on every level of a deep
+            // recursion.)
+            .Yield { arg, delegate } => {
+                return self.evalYield(arg, delegate)
+            }
+            .Await { arg } => {
+                return self.evalAwait(arg)
+            }
+            .NewTarget => {
+                return self.evalNewTarget()
+            }
+            .TaggedTemplate { tag, quasi, raw } => {
+                return self.evalTagged(id, tag, quasi, raw)
+            }
             _ => {
                 return self.typeError("unsupported expression")
             }
         }
+    }
+
+    fn evalYield(self: *mut Self, arg: u32, delegate: bool) JsError!Value {
+        var v = Value.Undefined
+        if arg != 0 {
+            v = try self.eval(arg)
+        }
+        if delegate {
+            return yieldDelegate(self, v)
+        }
+        return coYield(self, v, 0)
+    }
+
+    fn evalAwait(self: *mut Self, arg: u32) JsError!Value {
+        let v = try self.eval(arg)
+        return coYield(self, v, 1)
+    }
+
+    fn evalNewTarget(self: *mut Self) JsError!Value {
+        let f = self.currentFunction()
+        var fr = self.frames.len()
+        while fr > 0 {
+            fr -= 1
+            if self.frames.items()[fr].func == f {
+                let nt = self.frames.items()[fr].new_target
+                if nt == NONE {
+                    return Value.Undefined
+                }
+                return objVal(nt)
+            }
+        }
+        return Value.Undefined
+    }
+
+    // tag`a${x}b`: tag(strings, x), the strings array (with `raw`) made
+    // once per call site.
+    fn evalTagged(self: *mut Self, id: u32, tag: u32, quasi: u32, raw: u32) JsError!Value {
+        let base = self.stack.len()
+        try self.evalCallee(tag)
+        var list: u32 = 0
+        var n: u32 = 0
+        match self.ast.node(quasi) {
+            .Template { list: l, n: k } => {
+                list = l
+                n = k
+            }
+            _ => {}
+        }
+        var strings = Value.Undefined
+        if self.tagged.get(id) |r| {
+            strings = self.roots.items()[r]
+        } else {
+            let arr = try self.newArray(0)
+            try self.push(objVal(arr))
+            let rawArr = try self.newArray(0)
+            try self.push(objVal(rawArr))
+            for k in 0..n + 1 {
+                let cooked = try self.atomValue(self.ast.item(list, k))
+                try self.heap.pushElem(arr, cooked)
+                let r = try self.atomValue(self.ast.item(raw, k))
+                try self.heap.pushElem(rawArr, r)
+            }
+            try self.defineOwn(arr, try self.intern("raw"), objVal(rawArr), 0)
+            self.heap.obj(rawArr).frozen = true
+            self.heap.obj(arr).frozen = true
+            self.pop()
+            self.pop()
+            strings = objVal(arr)
+            try self.tagged.put(id, try self.addRoot(strings))
+        }
+        try self.push(strings)
+        for k in 0..n {
+            let v = try self.eval(self.ast.item(list, n + 1 + k))
+            try self.push(v)
+        }
+        if !self.isCallable(self.slot(base)) {
+            self.truncate(base)
+            return self.typeErrorAbout("", self.ast.srcText(tag), " is not a function")
+        }
+        return self.callAt(base, n as usize + 1)
     }
 
     fn shortCircuit(self: *mut Self, err: JsError, base: usize) JsError!Value {
@@ -3003,6 +3282,9 @@ pub struct Interp {
 
     pub fn exec(self: *mut Self, id: u32) JsError!Flow {
         try self.tick()
+        if self.stackExhausted() {
+            try self.rangeError("Maximum call stack size exceeded")
+        }
         match self.ast.nodes.items()[id] {
             .ExprStmt { e } => {
                 let v = try self.eval(e)
@@ -3060,8 +3342,8 @@ pub struct Interp {
             .For { init, cond, update, body, scope } => {
                 return self.execFor(init, cond, update, body, scope, 0)
             }
-            .ForIn { left, right, body, scope, of } => {
-                return self.execForIn(left, right, body, scope, of, 0)
+            .ForIn { left, right, body, scope, of, wait } => {
+                return self.execForIn(left, right, body, scope, of, wait, 0)
             }
             .While { cond, body } => {
                 return self.execWhile(cond, body, false, 0)
@@ -3103,8 +3385,8 @@ pub struct Interp {
             .For { init, cond, update, body: b, scope } => {
                 flow = try self.execFor(init, cond, update, b, scope, label)
             }
-            .ForIn { left, right, body: b, scope, of } => {
-                flow = try self.execForIn(left, right, b, scope, of, label)
+            .ForIn { left, right, body: b, scope, of, wait } => {
+                flow = try self.execForIn(left, right, b, scope, of, wait, label)
             }
             .While { cond, body: b } => {
                 flow = try self.execWhile(cond, b, false, label)
@@ -3251,7 +3533,7 @@ pub struct Interp {
         }
     }
 
-    fn execForIn(self: *mut Self, left: u32, right: u32, body: u32, scope: u32, isOf: bool, myLabel: u32) JsError!Flow {
+    fn execForIn(self: *mut Self, left: u32, right: u32, body: u32, scope: u32, isOf: bool, wait: bool, myLabel: u32) JsError!Flow {
         let nslots = self.ast.scopes.items()[scope].nslots
         let base = self.stack.len()
         defer self.truncate(base)
@@ -3259,6 +3541,9 @@ pub struct Interp {
         defer self.env = saved
         let rv = try self.eval(right)
         try self.push(rv)
+        if wait {
+            return self.forAwait(left, rv, body, nslots, saved, myLabel)
+        }
         if isOf && isObject(rv) && !self.nativeIterable(rv) {
             return self.forOfIterator(left, rv, body, nslots, saved, myLabel)
         }
@@ -3358,6 +3643,68 @@ pub struct Interp {
         return Flow.Normal
     }
 
+    // for await (x of y), in an async function: y's async iterator (each
+    // result awaited), else its iterator (each value awaited).
+    fn forAwait(self: *mut Self, left: u32, rv: Value, body: u32, nslots: u32, saved: u32, myLabel: u32) JsError!Flow {
+        let at = self.stack.len()
+        var isAsync = false
+        if isObject(rv) {
+            let af = try self.getProp(rv, self.sym_async_iterator)
+            if self.isCallable(af) {
+                let iter = try self.call0(af, rv)
+                try self.push(iter)
+                try self.push(try self.getProp(iter, A_NEXT))
+                isAsync = true
+            }
+        }
+        if !isAsync {
+            let iter = try self.getIteratorObject(rv)
+            try self.push(iter)
+            try self.push(try self.getProp(iter, A_NEXT))
+        }
+        while true {
+            var r = try self.call0(self.slot(at + 1), self.slot(at))
+            if isAsync {
+                try self.push(r)
+                r = try coYield(self, r, 1)
+                self.pop()
+            }
+            if !isObject(r) {
+                try self.notA(r, "an iterator result object")
+            }
+            try self.push(r)
+            let done = try self.getProp(r, A_DONE)
+            if self.toBoolean(done) {
+                break
+            }
+            var v = try self.getProp(r, A_VALUE)
+            if !isAsync {
+                try self.push(v)
+                v = try coYield(self, v, 1)
+                self.pop()
+            }
+            self.pop()
+            try self.push(v)
+            let flow = self.forOfBody(left, v, body, nslots, saved) catch |e| {
+                if e == JsError.Thrown && !self.isGenReturn() {
+                    try self.closeIterator(at)
+                }
+                return e
+            }
+            self.pop()
+            let c = self.loopControl(flow, myLabel)
+            if c == 1 {
+                try self.closeIterator(at)
+                break
+            }
+            if c == 2 {
+                try self.closeIterator(at)
+                return flow
+            }
+        }
+        return Flow.Normal
+    }
+
     fn forOfBody(self: *mut Self, left: u32, v: Value, body: u32, nslots: u32, saved: u32) JsError!Flow {
         try self.bindIteration(left, v, nslots, saved)
         return self.exec(body)
@@ -3437,7 +3784,7 @@ pub struct Interp {
     fn execTry(self: *mut Self, block: u32, param: u32, handler: u32, finalizer: u32, scope: u32) JsError!Flow {
         let base = self.stack.len()
         var flow = self.exec(block) catch |e| try self.caught(e, base)
-        if flow == Flow.Caught && handler != 0 {
+        if flow == Flow.Caught && handler != 0 && !self.isGenReturn() {
             let ex = self.exception
             self.exception = Value.Undefined
             flow = self.execCatch(param, handler, scope, ex) catch |e| try self.caught(e, base)
@@ -3502,6 +3849,9 @@ pub struct Interp {
             tmp: List(u32).init(self.alloc),
             message: message,
             line: 0,
+            in_async: false,
+            in_gen: false,
+            floor: self.stackFloor(),
         }
         defer p.tmp.deinit()
         let root = p.program() catch |e| {
@@ -3515,6 +3865,7 @@ pub struct Interp {
             scopes: List(RScope).init(self.alloc),
             top_vars: List(u32).init(self.alloc),
             message: message,
+            floor: self.stackFloor(),
         }
         defer r.cleanup()
         r.script(root) catch |e| {
