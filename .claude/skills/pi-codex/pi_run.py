@@ -32,6 +32,9 @@ You run unattended inside a watchdog. Nobody can answer questions.
   them when done.
 - Commit your work in small logical commits as you go, so nothing is
   lost if the run is stopped.
+- Before coding, read docs/practices/ (README.md and the file for your
+  area). When you learn a lesson that will come up again, add an entry
+  there in the same commit as the fix.
 - End with a final report (at most 300 words): commits (hash + one line),
   test results, what remains.
 """
