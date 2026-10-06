@@ -1,0 +1,30 @@
+{"id":1,"ok":false,"error":"no page: navigate first"}
+{"id":2,"ok":true,"result":"loaded file://$ROOT/browser/tests/agent/site/form.html","url":"file://$ROOT/browser/tests/agent/site/form.html","title":"Sign up","snapshot":"- main\n  - heading \"Sign up\" [level=1] [e1]\n  - form\n    - paragraph\n      - textbox \"Name\" [e2] [required]\n    - paragraph\n      - textbox \"About you\" [e3]\n    - paragraph\n      - checkbox \"Send me news\" [e4]\n    - paragraph\n      - text: Plan:\n      - radio \"Free\" [e5] [checked]\n      - radio \"Pro\" [e6]\n    - paragraph\n      - combobox \"Favorite color\" [e7] value=\"Red\"\n        - option \"Red\" [selected]\n        - option \"Blue\"\n        - option \"Green\"\n    - paragraph\n      - button \"Create account\" [e8]\n"}
+{"id":3,"ok":true,"result":"typed \"Ada\" into textbox \"Name\" [e2]","url":"file://$ROOT/browser/tests/agent/site/form.html","title":"Sign up","diff":"-       - textbox \"Name\" [e2] [required]\n+       - textbox \"Name\" [e2] [required] [focused] value=\"Ada\"\n"}
+{"id":4,"ok":true,"result":"checked checkbox \"Send me news\" [e4]","url":"file://$ROOT/browser/tests/agent/site/form.html","title":"Sign up","diff":"-       - textbox \"Name\" [e2] [required] [focused] value=\"Ada\"\n+       - textbox \"Name\" [e2] [required] value=\"Ada\"\n-       - checkbox \"Send me news\" [e4]\n+       - checkbox \"Send me news\" [e4] [checked] [focused]\n"}
+{"id":5,"ok":true,"url":"file://$ROOT/browser/tests/agent/site/form.html","title":"Sign up","snapshot":"- main\n  - heading \"Sign up\" [level=1] [e1]\n  - form\n    - paragraph\n      - textbox \"Name\" [e2] [required] value=\"Ada\"\n    - paragraph\n      - textbox \"About you\" [e3]\n    - paragraph\n      - checkbox \"Send me news\" [e4] [checked] [focused]\n    - paragraph\n      - text: Plan:\n      - radio \"Free\" [e5] [checked]\n      - radio \"Pro\" [e6]\n    - paragraph\n      - combobox \"Favorite color\" [e7] value=\"Red\"\n        - option \"Red\" [selected]\n        - option \"Blue\"\n        - option \"Green\"\n    - paragraph\n      - button \"Create account\" [e8]\n","focused":"e4"}
+{"event":"user_pointed","tab":1,"url":"file://$ROOT/browser/tests/agent/site/form.html","ref":"e1","text":"Sign up","element":"heading \"Sign up\" [e1]"}
+{"id":6,"ok":true,"result":"the user's context","tab":1,"url":"file://$ROOT/browser/tests/agent/site/form.html","title":"Sign up","scroll":0,"selection":"","hovered":{"ref":"e1","element":"heading \"Sign up\" [e1]","text":"Sign up"},"focused":{"ref":"e4","element":"checkbox \"Send me news\" [e4]","text":""},"pointed":{"tab":1,"url":"file://$ROOT/browser/tests/agent/site/form.html","ref":"e1","text":"Sign up","element":"heading \"Sign up\" [e1]"}}
+{"id":7,"ok":true,"result":"1 tab","tabs":[{"id":1,"url":"file://$ROOT/browser/tests/agent/site/form.html","title":"Sign up","shown":true,"agent":true}]}
+{"id":8,"ok":true,"result":"opened tab 2","tab":2}
+{"id":9,"ok":true,"result":"loaded file://$ROOT/browser/tests/agent/site/index.html","url":"file://$ROOT/browser/tests/agent/site/index.html","title":"Site home","snapshot":"- navigation\n  - link \"Docs\" [e1] -> docs.html\n  - link \"Sign up\" [e2] -> form.html\n  - link \"Broken link\" [e3] -> missing.html\n- main\n  - heading \"Welcome\" [level=1] [e4]\n  - paragraph\n    - text: Start with the\n    - link \"installation guide\" [e5] -> docs.html#install\n    - text: .\n  - paragraph\n    - button \"Subscribe\" [e6]\n  - heading \"Bottom\" [level=2] [e7] [offscreen]\n  - paragraph\n    - link \"Jump to the bottom\" [e8] -> #bottom [offscreen]\n"}
+{"id":10,"ok":true,"result":"clicked button \"Subscribe\" [e6]","url":"file://$ROOT/browser/tests/agent/site/index.html","title":"Site home","diff":"-     - button \"Subscribe\" [e6]\n+     - button \"Subscribe\" [e6] [focused]\n"}
+{"id":11,"ok":true,"result":"2 tabs","tabs":[{"id":1,"url":"file://$ROOT/browser/tests/agent/site/form.html","title":"Sign up","shown":true,"agent":false},{"id":2,"url":"file://$ROOT/browser/tests/agent/site/index.html","title":"Site home","shown":false,"agent":true}]}
+{"id":12,"ok":true,"result":"acting on tab 1","tab":1}
+{"id":13,"ok":true,"result":"checked radio \"Pro\" [e6]","url":"file://$ROOT/browser/tests/agent/site/form.html","title":"Sign up","diff":"-       - checkbox \"Send me news\" [e4] [checked] [focused]\n+       - checkbox \"Send me news\" [e4] [checked]\n-       - radio \"Free\" [e5] [checked]\n-       - radio \"Pro\" [e6]\n+       - radio \"Free\" [e5]\n+       - radio \"Pro\" [e6] [checked] [focused]\n"}
+{"id":14,"ok":true,"result":"closed tab 2"}
+{"id":15,"ok":false,"error":"cannot close the last tab"}
+{"id":16,"ok":false,"error":"missing argument \"tab\" (a tab's id, a number)"}
+{"id":17,"ok":true,"result":"opened tab 3, shown to the user","tab":3}
+{"id":18,"ok":true,"result":"loaded file://$ROOT/browser/tests/agent/site/docs.html","url":"file://$ROOT/browser/tests/agent/site/docs.html","title":"Docs","snapshot":"- navigation\n  - link \"Home\" [e1] -> index.html\n- main\n  - heading \"Documentation\" [level=1] [e2]\n  - paragraph: Everything about the site.\n  - heading \"Installation\" [level=2] [e3] [offscreen]\n  - paragraph: Run the installer.\n"}
+--- window
+url file://$ROOT/browser/tests/agent/site/docs.html
+scroll 0
+focus page
+address file://$ROOT/browser/tests/agent/site/docs.html
+history 1 of 1
+matches 0
+status 
+tabs 2, showing 2
+agents active
+activity agent: navigate browser/tests/agent/site/docs.html
