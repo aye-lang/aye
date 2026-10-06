@@ -550,7 +550,7 @@ pub let PRELUDE =
     \\hidden(G, 'scroll', function () {});
     \\hidden(G, 'focus', function () {});
     \\hidden(G, 'blur', function () {});
-    \\hidden(G, 'navigator', { userAgent: 'Mozilla/5.0 (anyknown)', language: 'en-US', languages: ['en-US', 'en'], onLine: true, cookieEnabled: true, platform: '', vendor: '' });
+    \\hidden(G, 'navigator', { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) anyknown/0.1', language: 'en-US', languages: ['en-US', 'en'], onLine: true, cookieEnabled: true, platform: '', vendor: '' });
     \\hidden(G, 'screen', { width: 1280, height: 800, availWidth: 1280, availHeight: 800, colorDepth: 24, pixelDepth: 24 });
     \\hidden(G, 'performance', { now: () => ak.now(), timeOrigin: Date.now() });
     \\
