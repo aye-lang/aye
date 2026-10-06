@@ -10,9 +10,9 @@
 
 ## Without a header
 
-| a | b |
-| --- | --- |
-| c |  |
+a b
+
+c
 
 ## Row headers
 
@@ -20,5 +20,4 @@
 | --- | --- |
 | Weight | 75 kg |
 
-| Layout cell one | Layout cell two |
-| --- | --- |
+Layout cell one Layout cell two

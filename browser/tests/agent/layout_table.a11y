@@ -1,0 +1,41 @@
+- link [e1] -> /
+  - img
+- link "Hacker News" [e2] -> news
+- link "new" [e3] -> newest
+- text: |
+- link "ask" [e4] -> ask
+- link "login" [e5] -> login
+- text: 1.
+- link [e6] -> vote?id=1
+- link "First story" [e7] -> https://example.com/a
+- text: (
+- link "example.com" [e8] -> from?site=example.com
+- text: )
+- text: 179 points by
+- link "ann" [e9] -> user?id=ann
+- text: |
+- link "47 comments" [e10] -> item?id=1
+- text: 2.
+- link [e11] -> vote?id=2
+- link "Second story" [e12] -> https://example.org/b
+- text: 12 points by
+- link "bob" [e13] -> user?id=bob
+- link "More" [e14] -> news?p=2
+- link "Guidelines" [e15] -> guidelines
+- text: |
+- link "FAQ" [e16] -> faq
+- form
+  - text: Search:
+  - textbox [e17]
+- heading "One column" [level=2] [e18]
+- text: Only header
+- text: first
+- text: second
+- heading "Data" [level=2] [e19]
+- table
+  - row
+    - columnheader "Name"
+    - columnheader "Points"
+  - row
+    - cell "ann"
+    - cell "179"

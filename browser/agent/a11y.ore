@@ -609,10 +609,11 @@ fn inPresentationTable(p: *Page, el: NodeId) bool {
 
 /// Is `table` used for layout rather than data (a simplified form of the
 /// browsers' heuristic)? `role=presentation` or `none` says so, a table
-/// role says not; else a table with a table inside is for layout, and
-/// one with a caption, a `thead`, a header cell, a `summary` or a border
-/// holds data. Real sites (Hacker News, DuckDuckGo Lite, old sites) lay
-/// out whole pages with tables, which read better as rows of text.
+/// role says not; else a table with a table inside is for layout, one
+/// with a single column too, and one with a caption, a `thead`, a header
+/// cell, a `summary` or a border holds data. Real sites (Hacker News,
+/// DuckDuckGo Lite, old sites) lay out whole pages with tables, which
+/// read better as rows of text.
 fn isLayoutTable(p: *Page, table: NodeId) bool {
     if attrIs(p, table, "role", "presentation") || attrIs(p, table, "role", "none") {
         return true
@@ -625,6 +626,7 @@ fn isLayoutTable(p: *Page, table: NodeId) bool {
         let width = text.parseInt(text.trim(b)) catch 1
         data = data || width > 0
     }
+    var columns: usize = 0
     var cur = p.doc.following(table, table)
     while cur |c| {
         let n = p.doc.node(c)
@@ -635,10 +637,23 @@ fn isLayoutTable(p: *Page, table: NodeId) bool {
             if html.isIn(n.name, "caption thead th") {
                 data = true
             }
+            if text.eql(n.name, "tr") {
+                var cells: usize = 0
+                var k = n.first_child
+                while k |cell| {
+                    if p.doc.isElement(cell, "td") || p.doc.isElement(cell, "th") {
+                        cells += 1
+                    }
+                    k = p.doc.nextSibling(cell)
+                }
+                if cells > columns {
+                    columns = cells
+                }
+            }
         }
         cur = p.doc.following(c, table)
     }
-    return !data
+    return !data || columns < 2
 }
 
 // Is `el` inside an element that scopes `header` and `footer`?

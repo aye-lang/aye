@@ -1,0 +1,39 @@
+<!doctype html>
+<title>Menus</title>
+<!-- Shaped like Wikipedia's menus: list items whose content does not
+     show (an icon without text, a label hidden by CSS, a collapsed
+     dropdown with visibility: hidden, aria-hidden, the hidden
+     attribute) are left out of the Markdown and the snapshot. -->
+<style>
+.vector-icon { display: inline-block; width: 20px; height: 20px }
+.collapsible .label { display: none }
+.dropdown-content { visibility: hidden }
+</style>
+<main>
+<h1>Web browser</h1>
+<nav aria-label="Personal tools">
+<ul>
+  <li class="collapsible"><a href="/donate"><span class="vector-icon"></span><span class="label">Donate</span></a></li>
+  <li class="collapsible"><a href="/create"><span class="vector-icon"></span><span class="label">Create account</span></a></li>
+  <li><a href="/login"><span>Log in</span></a></li>
+</ul>
+</nav>
+<div class="dropdown">
+  <span>Tools</span>
+  <div class="dropdown-content">
+    <ul>
+      <li><a href="/links">What links here</a></li>
+      <li><a href="/changes">Related changes</a></li>
+    </ul>
+  </div>
+</div>
+<ol>
+  <li aria-hidden="true"><a href="/skip">Skipped</a></li>
+  <li hidden>Hidden</li>
+  <li><span aria-hidden="true">★</span></li>
+  <li>Visible first</li>
+  <li><img src="logo.png" alt="Logo"></li>
+  <li>Visible last</li>
+</ol>
+<p>A web browser is an application for accessing websites.</p>
+</main>
