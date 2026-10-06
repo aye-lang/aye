@@ -12,7 +12,8 @@
 //! `std::fs::open` or `util::Thing` (sema shows `::` as `.`). Names of the
 //! root module stay as they are written. The result is one AST for sema:
 //! the root module's items first, then the other modules' items. The
-//! `test` blocks of every module but std's are kept.
+//! `test` blocks of every module but std's are kept. For `ore test`, each
+//! ```ore block of a `///` doc comment outside std is a `test` too.
 //!
 //! Imports are per file: `import std.fs` binds `fs` in its file only. A
 //! path such as `std.fs.open` is resolved one name at a time: a module's
@@ -208,6 +209,8 @@ fn rebuild(first: String, span: Span, rest: &[(String, Span)]) -> ast::Expr {
 struct Loader<'a> {
     /// The root module's directory: `import a.b` is `base/a/b`.
     base: &'a Path,
+    /// Add the doc comments' examples as tests (`ore test`).
+    doc_tests: bool,
     files: Vec<SourceFile>,
     /// Each file's syntax tree; `None` after a syntax error.
     asts: Vec<Option<ast::File>>,
@@ -229,9 +232,10 @@ struct Loader<'a> {
 /// Load the root module (`root`, in the directory `base`) and every module
 /// it uses, and resolve names. Returns every file of the program, indexed
 /// by `Span::file`, and the program's AST or the errors.
-pub fn load(root: Vec<SourceFile>, base: &Path) -> (Vec<SourceFile>, Result<ast::File, Vec<Error>>) {
+pub fn load(root: Vec<SourceFile>, base: &Path, doc_tests: bool) -> (Vec<SourceFile>, Result<ast::File, Vec<Error>>) {
     let mut l = Loader {
         base,
+        doc_tests,
         files: Vec::new(),
         asts: Vec::new(),
         modules: Vec::new(),
@@ -260,6 +264,93 @@ pub fn load(root: Vec<SourceFile>, base: &Path) -> (Vec<SourceFile>, Result<ast:
     (l.files, Ok(ast))
 }
 
+/// A ```ore block of a `///` doc comment: the test's name, the line of
+/// the opening fence, and each line of code with its line number and the
+/// number of characters before the code (the comment's `/// `).
+struct DocExample {
+    name: String,
+    fence: u32,
+    lines: Vec<(u32, u32, String)>,
+}
+
+/// The ```ore blocks of the `///` doc comments of `text`, each named
+/// after the declaration that the comment documents.
+fn doc_examples(text: &str) -> Vec<DocExample> {
+    let mut out: Vec<DocExample> = Vec::new();
+    let mut open: Option<DocExample> = None;
+    // The examples whose declaration has not been seen yet.
+    let mut unnamed = 0;
+    for (i, line) in text.lines().enumerate() {
+        let n = i as u32 + 1;
+        let doc = line.trim_start().strip_prefix("///").filter(|r| !r.starts_with('/'));
+        let Some(rest) = doc else {
+            open = None;
+            if unnamed > 0 && !line.trim().is_empty() {
+                let name = decl_name(line);
+                let len = out.len();
+                for e in &mut out[len - unnamed..] {
+                    e.name = format!("doc: {name} (line {})", e.fence);
+                }
+                unnamed = 0;
+            }
+            continue;
+        };
+        let code = rest.strip_prefix(' ').unwrap_or(rest);
+        let indent = (line.chars().count() - code.chars().count()) as u32;
+        match open.as_mut() {
+            Some(_) if code.trim() == "```" => {
+                out.push(open.take().unwrap());
+                unnamed += 1;
+            }
+            Some(e) => e.lines.push((n, indent, code.to_string())),
+            None if code.trim() == "```ore" => {
+                open = Some(DocExample { name: format!("doc: line {n}"), fence: n, lines: Vec::new() });
+            }
+            None => {}
+        }
+    }
+    out
+}
+
+/// The name declared on `line` (`pub fn square(...)` is `square`).
+fn decl_name(line: &str) -> String {
+    let mut words = line.split_whitespace().skip_while(|w| matches!(*w, "pub" | "extern"));
+    let kw = words.next().unwrap_or("");
+    let rest = if matches!(kw, "fn" | "struct" | "enum" | "interface" | "error" | "let" | "var" | "union") { words.next().unwrap_or("") } else { kw };
+    let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+    if name.is_empty() { "example".to_string() } else { name }
+}
+
+/// `toks` (the tokens of `text`) followed by a `test` block for each
+/// example of the doc comments of `text`. The example's tokens keep their
+/// place in the comment; the rest of the `test` is at the opening fence.
+fn with_doc_tests(text: &str, mut toks: Vec<lexer::Token>) -> std::result::Result<Vec<lexer::Token>, Vec<Error>> {
+    let Some(eof) = toks.pop() else { return Ok(toks) };
+    for ex in doc_examples(text) {
+        let code: Vec<&str> = ex.lines.iter().map(|(_, _, c)| c.as_str()).collect();
+        let src = format!("test \"{}\" {{\n{}\n}}\n", ex.name, code.join("\n"));
+        let place = |s: &mut Span| match ex.lines.get((s.line as usize).wrapping_sub(2)) {
+            Some(&(line, indent, _)) => *s = Span { line, col: s.col + indent, file: s.file },
+            None => *s = Span { line: ex.fence, col: 1, file: s.file },
+        };
+        let mut more = lexer::lex(&src).map_err(|errs| {
+            errs.into_iter().map(|mut e| {
+                place(&mut e.span);
+                e.fix = None;
+                e
+            }).collect::<Vec<_>>()
+        })?;
+        more.pop();
+        for t in &mut more {
+            place(&mut t.span);
+            place(&mut t.end);
+        }
+        toks.extend(more);
+    }
+    toks.push(eof);
+    Ok(toks)
+}
+
 impl Loader<'_> {
     fn report(&mut self, e: Error) {
         if !e.msg.is_empty() {
@@ -274,7 +365,9 @@ impl Loader<'_> {
         for f in files {
             let id = self.files.len();
             let set = |s: &mut Span| s.file = id as u16;
+            let doc_tests = self.doc_tests && !f.std;
             let parsed = lexer::lex(&f.text)
+                .and_then(|toks| if doc_tests { with_doc_tests(&f.text, toks) } else { Ok(toks) })
                 .and_then(|mut toks| {
                     for t in &mut toks {
                         set(&mut t.span);

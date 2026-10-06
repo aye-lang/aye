@@ -1330,6 +1330,11 @@ test "allocations are checked" {
   the module's: imports start there. `ore build`/`ore run` leave tests
   out. A root module with tests needs no `main` for `ore check` and `ore
   test`.
+- A ```` ```ore ```` block in a `///` doc comment (outside std) is a test
+  too, for `ore test` only: its lines are the body of a test of that file,
+  named `doc: square (line 4)` after the declaration below the comment and
+  the line of the opening fence. Errors and failures point into the
+  comment. Other fences (```` ```text ````) do not run.
 - `@expect(cond)` and `@expectEqual(expected, actual)` (integers, floats,
   `bool`, `[]u8`) fail the test with `file:line:col: assertion failed:
   expected X, found Y`.

@@ -156,6 +156,9 @@ test "leaks a node" ... FAILED
 0 passed; 1 failed
 ```
 
+A ```` ```ore ```` block in a `///` doc comment is a test body too (`test
+"doc: square (line 4)"`), so the examples in the documentation keep working.
+
 A failed test's stdout and then its stderr follow its line, indented. The
 reasons on stderr are `file:L:C: assertion failed: expected 4, found 5` (or
 `condition is false`), `file:L:C: panic: <reason>`, `file:L:C: leak: ...`,
