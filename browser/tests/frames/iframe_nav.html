@@ -1,0 +1,8 @@
+<!DOCTYPE html>
+<!-- agent/sessions/frame_scripts.jsonl: scripts navigate, add and remove iframes. -->
+<title>Nav</title>
+<iframe id=f srcdoc="<p>first</p><script>setTimeout(() => { location.href = 'iframe_result.html?user=timer' }, 10)</script>"></iframe>
+<button onclick="document.getElementById('f').src = 'iframe_result.html?user=src'; document.getElementById('f').removeAttribute('srcdoc')">Change</button>
+<button onclick="frames[0].location.href = 'iframe_result.html?user=remote'">Remote</button>
+<button onclick="var i = document.createElement('iframe'); i.src = 'iframe_result.html?user=new'; document.body.appendChild(i)">Add</button>
+<button onclick="document.getElementById('f').remove()">Remove</button>

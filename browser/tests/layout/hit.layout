@@ -15,4 +15,4 @@ viewport 800x600
         block <a href="clipped.html"> (0, 190) 100x60
           line (0, 190) 100x20
             text (0, 192) 56x16 "clipped"
-      replaced <iframe src="frame.html"> (300, 0) 80x50 absolute
+      replaced <iframe srcdoc="<body style='margin: 0'><a href='frame.html' style='display: block; height: 50px'>frame</a>"> (300, 0) 84x54 absolute

@@ -1,7 +1,10 @@
 - main
   - heading "Code samples" [level=1] [e1]
-  - text: plain preformatted indented line
+  - text: plain preformatted
+  - text: indented line
   - text: let x = 1;
-  - text: ``` fenced inside ```
+  - text: ```
+  - text: fenced inside
+  - text: ```
   - paragraph: Inline let y = 2 code.
   - text: blank lines before are kept, after are dropped

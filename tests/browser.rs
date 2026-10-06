@@ -703,6 +703,93 @@ fn agent_errors() {
     expect(&["dump", "--md", "data:text/html,<h2>Hi</h2><p>a <b>b</b>"], 0, "## Hi\n\na **b**\n", "");
 }
 
+fn base64_decode(s: &str) -> Vec<u8> {
+    let digit = |c: u8| match c {
+        b'A'..=b'Z' => c - b'A',
+        b'a'..=b'z' => c - b'a' + 26,
+        b'0'..=b'9' => c - b'0' + 52,
+        b'+' => 62,
+        b'/' => 63,
+        _ => panic!("not base64: {:?}", c as char),
+    };
+    let (mut out, mut acc, mut bits) = (Vec::new(), 0u32, 0);
+    for &c in s.as_bytes().iter().filter(|&&c| c != b'=') {
+        acc = acc << 6 | digit(c) as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    out
+}
+
+/// The string value of `"key":"..."` in one JSON line (no escapes in it).
+fn json_str<'a>(line: &'a str, key: &str) -> &'a str {
+    let k = format!("\"{key}\":\"");
+    let at = line.find(&k).unwrap_or_else(|| panic!("no {key} in {line}")) + k.len();
+    &line[at..at + line[at..].find('"').unwrap()]
+}
+
+/// `screenshot` in `anyknown agent` and `browser_screenshot` in `anyknown
+/// mcp`: PNGs (base64) of the viewport, the whole page and one element.
+#[test]
+fn agent_screenshot() {
+    use std::io::Write;
+    let session = |mode: &str, input: &str| -> Vec<String> {
+        let mut child = Command::new(anyknown())
+            .current_dir(root())
+            .args([mode, "--width", "400", "--height", "300"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+        text(&out.stdout).lines().map(String::from).collect()
+    };
+    let png_size = |b64: &str, name: &str| {
+        let path = scratch().join(name);
+        std::fs::write(&path, base64_decode(b64)).unwrap();
+        check_png(&path)
+    };
+    let lines = session("agent", concat!(
+        "{\"id\":1,\"cmd\":\"screenshot\"}\n",
+        "{\"id\":2,\"cmd\":\"navigate\",\"url\":\"browser/tests/agent/form_login.html\"}\n",
+        "{\"id\":3,\"cmd\":\"screenshot\",\"ref\":\"e2\"}\n",
+        "{\"id\":4,\"cmd\":\"screenshot\",\"ref\":\"e99\"}\n",
+        "{\"id\":5,\"cmd\":\"snapshot\"}\n",
+        "{\"id\":6,\"cmd\":\"navigate\",\"url\":\"browser/tests/paint/full.html\"}\n",
+        "{\"id\":7,\"cmd\":\"screenshot\"}\n",
+        "{\"id\":8,\"cmd\":\"screenshot\",\"full\":true}\n",
+    ));
+    assert_eq!(lines.len(), 8);
+    assert_eq!(lines[0], "{\"id\":1,\"ok\":false,\"error\":\"no page: navigate first\"}");
+    let (w, h) = png_size(json_str(&lines[2], "png"), "agent_ref.png");
+    assert!(w < 400 && h < 300, "element {w}x{h}");
+    assert!(lines[2].contains("\"result\":\"screenshot of textbox \\\"Email address\\\" [e2]"), "{}", lines[2]);
+    assert!(lines[3].contains("\"ok\":false,\"error\":\"unknown ref e99"), "{}", lines[3]);
+    // The page is laid out as before the screenshots: refs keep working.
+    assert!(lines[4].contains("textbox \\\"Email address\\\" [e2]"), "{}", lines[4]);
+    assert!(lines[6].contains("\"result\":\"screenshot of the viewport, 400x300 px"), "{}", lines[6]);
+    assert_eq!(png_size(json_str(&lines[6], "png"), "agent_viewport.png"), (400, 300));
+    let (w, h) = png_size(json_str(&lines[7], "png"), "agent_full.png");
+    assert!(w == 400 && h > 300, "whole page {w}x{h}");
+    assert!(json_str(&lines[7], "result").starts_with(&format!("screenshot of the whole page, 400x{h} px")), "{}", lines[7]);
+
+    let lines = session("mcp", concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"browser_screenshot\",\"arguments\":{}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"browser_navigate\",\"arguments\":{\"url\":\"browser/tests/agent/links.html\"}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"browser_screenshot\",\"arguments\":{}}}\n",
+    ));
+    assert_eq!(lines.len(), 3);
+    assert!(lines[0].contains("\"isError\":true") && !lines[0].contains("\"image\""), "{}", lines[0]);
+    assert!(lines[2].contains("\"type\":\"image\"") && lines[2].contains("\"mimeType\":\"image/png\"") && lines[2].contains("\"isError\":false"), "{}", &lines[2][..200.min(lines[2].len())]);
+    assert_eq!(png_size(json_str(&lines[2], "data"), "mcp_viewport.png"), (400, 300));
+}
+
 /// A window shared by its user and agents (`--agent-socket`,
 /// ui/agents.ore): `browser/tests/agent/window/X.jsonl` is sent over the
 /// window's Unix socket (from this test, or through `anyknown connect
@@ -1178,8 +1265,8 @@ fn noscript_with_scripts() {
 /// Hit testing follows the painting order (`browser/tests/layout/hit.html`
 /// in a 400x340 window, the page 40 px down): the topmost positioned box
 /// wins, a positioned box hides the link under it, content clipped by
-/// `overflow` is not hit outside the clip, and a frame links to its
-/// address. The hovered link shows in the status line.
+/// `overflow` is not hit outside the clip, and a link in an iframe's
+/// document is hit there. The hovered link shows in the status line.
 #[test]
 fn window_hit_layers() {
     if !has_sdl() {
@@ -1252,8 +1339,9 @@ fn window_scroll_positions() {
 /// A frameset in the window (`browser/tests/ui/frames.html`, 400x340: a
 /// 100 px menu frame, `long.html` in the rest): the wheel scrolls the
 /// frame under the mouse (up to its document's end), the status line
-/// shows a frame's link resolved in the frame, and clicking it loads it
-/// in the tab.
+/// shows a frame's link resolved in the frame, and clicking a link loads
+/// it in its own frame, in the frame its target names, or (`_top`) in
+/// the tab.
 #[test]
 fn window_framesets() {
     if !has_sdl() {
@@ -1262,12 +1350,15 @@ fn window_framesets() {
     }
     let ui = format!("file://{}/browser/tests/ui/", root().display());
     let page = "url frames.html\nscroll 0\nfocus page\naddress frames.html\nhistory 1 of 1\nmatches 0\n";
+    let urls = "frame_urls frame_menu.html long.html\n";
     let cases: &[(&str, String)] = &[
-        ("move:20,58", format!("{page}status other.html\nframes 0 0\n")),
-        ("move:200,100 wheel:-2", format!("{page}status \nframes 0 80\n")),
-        ("move:200,100 wheel:-100", format!("{page}status \nframes 0 960\n")),
-        ("move:200,100 wheel:-2 move:20,100 wheel:-2 key:down", format!("{page}status \nframes 0 80\n")),
-        ("click:20,58", "url other.html\nscroll 0\nfocus page\naddress other.html\nhistory 2 of 2\nmatches 0\nstatus \n".to_string()),
+        ("move:20,58", format!("{page}status other.html\nframes 0 0\n{urls}")),
+        ("move:200,100 wheel:-2", format!("{page}status \nframes 0 80\n{urls}")),
+        ("move:200,100 wheel:-100", format!("{page}status \nframes 0 960\n{urls}")),
+        ("move:200,100 wheel:-2 move:20,200 wheel:-2 key:down", format!("{page}status \nframes 0 80\n{urls}")),
+        ("click:20,58", format!("{page}status \nframes 0 0\nframe_urls other.html long.html\n")),
+        ("click:20,95", format!("{page}status \nframes 0 0\nframe_urls frame_menu.html other.html\n")),
+        ("click:20,131", "url other.html\nscroll 0\nfocus page\naddress other.html\nhistory 2 of 2\nmatches 0\nstatus \n".to_string()),
     ];
     let mut failures = Vec::new();
     for (events, want) in cases {

@@ -1,0 +1,177 @@
+// `screenshot`: the page as a PNG image, of the viewport (scrolled where
+// the session is), of the whole document (`full`), or of one element
+// (`ref`: its border box). Text is drawn with the system's fonts when
+// there are any: the page is laid out with them for the picture, then
+// again with the session's measurer (so refs and boxes do not change);
+// without them, text shows as the fixed-metric font's boxes.
+
+import font
+import paint
+import std
+import std.math
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+// The tallest picture of a whole document, in px.
+let MAX_SHOT_HEIGHT: f64 = 16384.0
+
+/// A screenshot, or why there is none (`ok` false, `message`).
+pub struct Shot {
+    ok: bool
+    message: []u8
+    // The PNG file, base64-encoded (in `tmp`).
+    png: []u8
+    width: usize
+    height: usize
+}
+
+fn shotFailed(message: []u8) Shot {
+    return Shot { ok: false, message: message, png: "", width: 0, height: 0 }
+}
+
+/// Takes a screenshot of the page shown: of the element `ref` when it is
+/// not empty, else of the whole document when `full`, else of the
+/// viewport.
+fn takeScreenshot(s: *mut Session, tmp: Allocator, ref: []u8, full: bool) AllocError!Shot {
+    if s.tab.page == null {
+        return shotFailed("no page: navigate first")
+    }
+    var node: ?Target = null
+    if ref.len > 0 {
+        let t = try findTarget(s, tmp, ref)
+        if t.page == null {
+            return shotFailed(t.why)
+        }
+        node = t
+    }
+    openSystemFonts(s)
+    let saved = s.measure
+    if s.measure == null {
+        if s.system |sys| {
+            s.measure = sys
+            try relayout(s)
+        }
+    }
+    let shot = shoot(s, tmp, node, full) catch |e| {
+        s.measure = saved
+        return e
+    }
+    if saved == null && s.measure != null {
+        s.measure = null
+        try relayout(s)
+    }
+    return shot
+}
+
+// Opens the system's fonts once, for a session without a window's.
+fn openSystemFonts(s: *mut Session) {
+    if s.tried_system {
+        return
+    }
+    s.tried_system = true
+    let sys = font.System.init(s.alloc) catch |e| {
+        return
+    }
+    if s.alloc.create(sys) |owned| {
+        s.system = owned
+        s.own_system = true
+    } else |e| {
+        var lost = sys
+        lost.deinit()
+    }
+}
+
+fn shoot(s: *mut Session, tmp: Allocator, node: ?Target, full: bool) AllocError!Shot {
+    let p = s.tab.page.?
+    let t = p.tree orelse {
+        return shotFailed("the page is not laid out")
+    }
+    var list = try paint.build(tmp, t)
+    defer list.deinit()
+    var x = 0.0
+    var y = s.tab.scroll
+    var w = s.media.width
+    var h = s.media.height
+    var what = text.Builder.init(tmp)
+    if node |target| {
+        let el = target.node.?
+        let who = try describeNode(s, tmp, target.page.?, el)
+        let r = rectOf(s, target.page.?, el) orelse {
+            return shotFailed(try concat(tmp, "cannot take a screenshot of ", who, ": it has no box"))
+        }
+        // The element's box, within the document.
+        let x0 = math.max(0.0, math.floor(r.x))
+        let y0 = math.max(0.0, math.floor(r.y))
+        let x1 = math.min(math.max(list.width, s.media.width), math.ceil(r.x + r.w))
+        let y1 = math.min(math.max(list.height, s.media.height), math.ceil(r.y + r.h))
+        if x1 - x0 < 1.0 || y1 - y0 < 1.0 {
+            return shotFailed(try concat(tmp, "cannot take a screenshot of ", who, ": its box is empty"))
+        }
+        x = x0
+        y = y0
+        w = x1 - x0
+        h = math.min(y1 - y0, MAX_SHOT_HEIGHT)
+        try what.append("screenshot of ")
+        try what.append(who)
+    } else if full {
+        y = 0.0
+        h = math.min(math.max(h, math.ceil(list.height)), MAX_SHOT_HEIGHT)
+        try what.append("screenshot of the whole page")
+    } else {
+        try what.append("screenshot of the viewport")
+    }
+    w = math.floor(w)
+    h = math.floor(h)
+    var canvas = try paint.Canvas.init(tmp, w as usize, h as usize)
+    defer canvas.deinit()
+    canvas.clear(list.background)
+    var painter = paint.TextPainter.init(tmp, s.system)
+    defer painter.deinit()
+    try paint.render(&list, &mut canvas, paint.View { scale: 1.0, dx: -x, dy: -y }, &mut painter)
+    let png = try paint.encodePng(tmp, canvas.width, canvas.height, canvas.pixels)
+    try what.append(", ")
+    try what.appendUint(canvas.width as u64)
+    try what.appendByte('x')
+    try what.appendUint(canvas.height as u64)
+    try what.append(" px")
+    if s.system == null {
+        try what.append(" (no system fonts: text is drawn as boxes)")
+    }
+    return Shot { ok: true, message: what.bytes(), png: try base64(tmp, png), width: canvas.width, height: canvas.height }
+}
+
+let BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+/// `data` in base64, with padding.
+fn base64(tmp: Allocator, data: []u8) AllocError![]u8 {
+    var b = text.Builder.init(tmp)
+    var i: usize = 0
+    while i < data.len {
+        var n = data.len - i
+        if n > 3 {
+            n = 3
+        }
+        var v: u32 = (data[i] as u32) << 16
+        if n > 1 {
+            v = v | ((data[i + 1] as u32) << 8)
+        }
+        if n > 2 {
+            v = v | (data[i + 2] as u32)
+        }
+        try b.appendByte(BASE64[((v >> 18) & 63) as usize])
+        try b.appendByte(BASE64[((v >> 12) & 63) as usize])
+        if n > 1 {
+            try b.appendByte(BASE64[((v >> 6) & 63) as usize])
+        } else {
+            try b.appendByte('=')
+        }
+        if n > 2 {
+            try b.appendByte(BASE64[(v & 63) as usize])
+        } else {
+            try b.appendByte('=')
+        }
+        i += 3
+    }
+    return b.bytes()
+}

@@ -12,6 +12,7 @@ import dom.NodeId
 import engine
 import font
 import layout
+import net
 import paint
 import paint.Rgba
 import std
@@ -177,20 +178,62 @@ fn blur(ui: *mut Ui) AllocError!void {
     }
 }
 
-/// Does what an activation asks: follow a link, submit a form, open a
-/// dropdown, or show the changed page.
-// A click in a frame's document: a link there loads in the tab (in
-// place of the frameset); other clicks do nothing.
+// A click in a frame's document: its scripts get the click; a link
+// there loads in the frame its target names (without one, in its own
+// frame; `_top`: in the tab), a checkbox or radio button toggles, a
+// submit button submits the form there.
 fn clickFrame(ui: *mut Ui, fp: engine.FramePoint) AllocError!void {
     let ft = fp.page.tree orelse return
-    let link = engine.linkAt(ft, fp.x, fp.y) orelse return
-    let target = fp.page.follow(ui.alloc, link.href) catch |e| {
-        return
+    let node = engine.nodeAt(ft, fp.x, fp.y) orelse return
+    if !(try engine.dispatchEvent(fp.page, node, "click", "")) {
+        return ui.relayout()
     }
-    defer target.deinit(ui.alloc)
-    return ui.go(&target)
+    if engine.linkAt(ft, fp.x, fp.y) |link| {
+        let target = fp.page.follow(ui.alloc, link.href) catch |e| {
+            return
+        }
+        defer target.deinit(ui.alloc)
+        if engine.targetFrame(fp.page, engine.linkTarget(fp.page, link.el)) |slot| {
+            try engine.navigateFrame(slot, &target, null)
+            return ui.relayout()
+        }
+        return ui.go(&target)
+    }
+    let act = try engine.activate(fp.page, node)
+    match act {
+        .Follow { target } => {
+            target.deinit(ui.alloc)
+        }
+        .Submit { form, submitter } => {
+            if try engine.dispatchEvent(fp.page, form, "submit", "") {
+                return submitInFrame(ui, fp.page, form, submitter)
+            }
+        }
+        _ => {}
+    }
+    return ui.relayout()
 }
 
+// Submits `form` of the frame page `p`: the response loads in the frame
+// its target names (without one, in its own frame), or in the tab.
+fn submitInFrame(ui: *mut Ui, p: *mut engine.Page, form: NodeId, submitter: ?NodeId) AllocError!void {
+    let sub = (try engine.submitForm(p, form, submitter)) orelse return ui.relayout()
+    defer sub.deinit(ui.alloc)
+    if engine.targetFrame(p, engine.linkTarget(p, form)) |slot| {
+        var body = net.Body { content_type: sub.content_type, data: sub.body }
+        var post: ?*net.Body = null
+        if sub.post {
+            post = &body
+        }
+        try engine.navigateFrame(slot, &sub.target, post)
+        return ui.relayout()
+    }
+    let loaded = try engine.navigateTo(ui.tab, &sub)
+    return ui.navigated(loaded)
+}
+
+/// Does what an activation asks: follow a link, submit a form, open a
+/// dropdown, or show the changed page.
 fn runActivation(ui: *mut Ui, act: engine.Activation) AllocError!void {
     match act {
         .Nothing => {

@@ -93,6 +93,13 @@ pub fn writeHints(doc: *Document, el: NodeId, out: *mut text.Builder) AllocError
             try dimensionHint(out, "height", v)
         }
     }
+    if text.eql(name, "iframe") {
+        if doc.attr(el, "frameborder") |v| {
+            if text.eql(text.trim(v), "0") || text.eqlIgnoreCase(text.trim(v), "no") {
+                try hintDecl(out, "border-style", "none")
+            }
+        }
+    }
     if text.eql(name, "table") {
         if doc.attr(el, "border") |v| {
             let w = borderWidth(v)

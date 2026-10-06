@@ -32,10 +32,15 @@ fn newList(it: *mut Interp, kind: u8, root: NodeId, arg: []u8) JsError!Value {
     let s = scriptOf(it)
     let copy = try s.alloc.alloc(0 as u8, arg.len)
     std.mem.copy(copy, arg)
+    var page_id: u32 = 0
+    if s.active != s.page {
+        page_id = s.active.id
+    }
     var l = LiveList {
         used: true,
         generation: 0,
         kind: kind,
+        page_id: page_id,
         root: root,
         arg: copy,
         items: List(NodeId).init(s.alloc),
@@ -55,7 +60,7 @@ fn newList(it: *mut Interp, kind: u8, root: NodeId, arg: []u8) JsError!Value {
         }
     }
     let generation = l.generation
-    s.page.doc.node(root).js_refs += 1
+    s.active.doc.node(root).js_refs += 1
     var proto = s.collection_proto
     if kind == LIST_CHILD_NODES || kind == LIST_NAME {
         proto = s.nodelist_proto
@@ -64,15 +69,22 @@ fn newList(it: *mut Interp, kind: u8, root: NodeId, arg: []u8) JsError!Value {
     }
     let o = it.newHostObject(proto, TAG_LIST, slot, generation) catch |e| {
         if releaseList(s, slot, generation) |r| {
-            s.unref(r)
+            s.unrefIn(r.page_id, r.node)
         }
         return e
     }
     return js.objVal(o)
 }
 
+/// The root of a list: a node of the document of page `page_id` (0: the
+/// page's own).
+struct ListRoot {
+    page_id: u32
+    node: NodeId
+}
+
 /// Frees the slot of a collected list; its root, to unref.
-fn releaseList(s: *mut Script, index: u32, generation: u32) ?NodeId {
+fn releaseList(s: *mut Script, index: u32, generation: u32) ?ListRoot {
     if index as usize >= s.lists.len() {
         return null
     }
@@ -84,7 +96,7 @@ fn releaseList(s: *mut Script, index: u32, generation: u32) ?NodeId {
     s.alloc.free(l.arg)
     l.items.deinit()
     s.free_lists.append(index) catch |e| {}
-    return l.root
+    return ListRoot { page_id: l.page_id, node: l.root }
 }
 
 // The slot of the list object `o`, or null.
@@ -104,16 +116,25 @@ fn listSlot(s: *mut Script, o: u32) ?u32 {
 }
 
 /// The nodes of the list in `slot`, walked again when the document
-/// changed since the last time.
+/// changed since the last time (always for another page's document);
+/// that document becomes the active one.
 fn listNodes(s: *mut Script, slot: u32) AllocError![]NodeId {
     let l = &mut s.lists.items()[slot]
-    if l.fresh && l.version == s.version {
+    var page = s.page
+    if l.page_id != 0 {
+        page = findPage(s.page, l.page_id) orelse {
+            l.items.clear()
+            return l.items.items()
+        }
+    }
+    s.active = page
+    if l.fresh && l.version == s.version && l.page_id == 0 {
         return l.items.items()
     }
     l.items.clear()
     l.fresh = true
     l.version = s.version
-    let doc = &mut s.page.doc
+    let doc = &mut page.doc
     let root = l.root
     if !doc.isLive(root) {
         return l.items.items()
@@ -224,7 +245,7 @@ fn listGet(s: *mut Script, o: u32, key: u32) JsError!Value {
     let name = it.heap.atoms.name(key)
     let nodes = try listNodes(s, slot)
     for h in nodes {
-        let doc = &s.page.doc
+        let doc = &s.active.doc
         if doc.node(h).kind == Kind.Element {
             if text.eql(doc.attr(h, "id") orelse "", name) || text.eql(doc.attr(h, "name") orelse "", name) {
                 return wrap(it, h)

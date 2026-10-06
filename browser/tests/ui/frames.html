@@ -1,8 +1,9 @@
 <!DOCTYPE html>
 <title>Frames</title>
 <!-- A frameset in the window: the wheel scrolls the frame under the
-     mouse, a link in a frame shows and loads its own address. -->
+     mouse, a link in a frame shows its own address and loads where its
+     target says. -->
 <frameset cols="100,*">
-  <frame src="frame_menu.html">
-  <frame src="long.html">
+  <frame src="frame_menu.html" name="menu">
+  <frame src="long.html" name="main">
 </frameset>

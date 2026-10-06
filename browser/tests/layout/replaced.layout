@@ -1,6 +1,6 @@
 viewport 800x600
-  block <html> (0, 0) 800x683.2
-    block <body> (0, 16) 800x651.2
+  block <html> (0, 0) 800x687.2
+    block <body> (0, 16) 800x655.2
       block <p> (0, 16) 800x29.2
         line (0, 16) 800x29.2
           text (0, 27.2) 48x16 "icons "
@@ -15,17 +15,17 @@ viewport 800x600
       block (anonymous) (0, 116.4) 800x155.2
         line (0, 116.4) 800x155.2
           replaced <svg> (0, 116.4) 300x150
-      block <p> (0, 287.6) 800x155.2
-        line (0, 287.6) 800x155.2
-          replaced <iframe src="frame.html"> (0, 287.6) 300x150
-          text (300, 424.8) 8x16 " "
-          replaced <iframe src="b.html" width="200" height="50"> (308, 387.6) 200x50
-      block (anonymous) (0, 458.8) 800x155.2
-        line (0, 458.8) 800x155.2
-          replaced <embed src="movie.swf" width="100"> (0, 458.8) 100x150
-          replaced <object data="doc.pdf" height="40"> (100, 568.8) 300x40
-      block <p> (0, 630) 800x37.2
-        line (0, 630) 800x37.2
-          replaced <img src="pic.svg" width="64" height="32" alt="svg picture"> (0, 630) 64x32
-          text (64, 649.2) 8x16 " "
-          replaced <img src="nothing.png" style="width: 20px; height: 10px"> (72, 652) 20x10
+      block <p> (0, 287.6) 800x159.2
+        line (0, 287.6) 800x159.2
+          replaced <iframe src="frame.html"> (0, 287.6) 304x154
+          text (304, 428.8) 8x16 " "
+          replaced <iframe src="b.html" width="200" height="50"> (312, 387.6) 204x54
+      block (anonymous) (0, 462.8) 800x155.2
+        line (0, 462.8) 800x155.2
+          replaced <embed src="movie.swf" width="100"> (0, 462.8) 100x150
+          replaced <object data="doc.pdf" height="40"> (100, 572.8) 300x40
+      block <p> (0, 634) 800x37.2
+        line (0, 634) 800x37.2
+          replaced <img src="pic.svg" width="64" height="32" alt="svg picture"> (0, 634) 64x32
+          text (64, 653.2) 8x16 " "
+          replaced <img src="nothing.png" style="width: 20px; height: 10px"> (72, 656) 20x10

@@ -33,6 +33,24 @@ import std.text
 import url
 import url.Url
 
+/// A node of a document of the tab: of the page shown, or of the page
+/// of one of its frames.
+pub struct RefNode {
+    page: *mut Page
+    node: NodeId
+}
+
+// A ref: the id of the page of its node, and the node.
+struct RefEntry {
+    page_id: u32
+    node: NodeId
+}
+
+// The key of node `n` of page `p` in `Session.rects` and `ref_of`.
+fn nodeKey(p: *Page, n: NodeId) u64 {
+    return ((p.id as u64) << 32) | (n.index as u64)
+}
+
 /// A rectangle in document coordinates (px).
 pub struct Rect {
     x: f64
@@ -52,13 +70,23 @@ pub struct Session {
     // measurer (`measure`), so that the agent sees the human's layout.
     font: font.Fixed
     measure: ?dyn font.Measurer
+    // The system's fonts, to draw text in screenshots (screenshot.ore):
+    // the window's, or opened at the first screenshot (`own_system`);
+    // null when there are none.
+    system: ?*mut font.System
+    own_system: bool
+    tried_system: bool
     media: css.Media
-    // Node index to the border box of its boxes and fragments.
-    rects: IntMap(u32, Rect)
+    // Node (`nodeKey`) to the border box of its boxes and fragments, in
+    // the coordinates of the document shown (a frame's nodes too).
+    rects: IntMap(u64, Rect)
     // Refs: `refs[i]` is the node of ref number `ref_base + i`.
     ref_base: u32
-    refs: List(NodeId)
-    ref_of: IntMap(u32, u32)
+    refs: List(RefEntry)
+    ref_of: IntMap(u64, u32)
+    // The id of the page whose element the agent focused last (a frame's
+    // for a field in a frame); `press` acts there.
+    focus_page: u32
     // The number of the next ref: refs are unique in a session, so a ref
     // of an old page is never taken for another node.
     next_ref: u32
@@ -82,11 +110,15 @@ fn newSession(alloc: Allocator, width: f64, height: f64) AllocError!Session {
         tab: tab,
         font: font.Fixed.init(),
         measure: null,
+        system: null,
+        own_system: false,
+        tried_system: false,
         media: css.Media { width: width, height: height },
-        rects: IntMap(u32, Rect).init(alloc),
+        rects: IntMap(u64, Rect).init(alloc),
         ref_base: 1,
-        refs: List(NodeId).init(alloc),
-        ref_of: IntMap(u32, u32).init(alloc),
+        refs: List(RefEntry).init(alloc),
+        ref_of: IntMap(u64, u32).init(alloc),
+        focus_page: 0,
         next_ref: 1,
         events: List([]u8).init(alloc),
         host: null,
@@ -98,10 +130,13 @@ fn newSession(alloc: Allocator, width: f64, height: f64) AllocError!Session {
 
 /// A session for a tab of a window: its layouts measure text with the
 /// window's `measure`, in a viewport of `width` x `height` px (the
-/// window updates `media` when it is resized).
-pub fn newWindowSession(alloc: Allocator, measure: dyn font.Measurer, width: f64, height: f64) AllocError!Session {
+/// window updates `media` when it is resized); screenshots draw text with
+/// the window's `system` fonts.
+pub fn newWindowSession(alloc: Allocator, measure: dyn font.Measurer, system: ?*mut font.System, width: f64, height: f64) AllocError!Session {
     var s = try newSession(alloc, width, height)
     s.measure = measure
+    s.system = system
+    s.tried_system = true
     return s
 }
 
@@ -115,6 +150,12 @@ pub fn freeSession(s: *mut Session) {
         s.alloc.free(e)
     }
     s.events.deinit()
+    if s.own_system {
+        if s.system |sys| {
+            sys.deinit()
+            s.alloc.destroy(sys)
+        }
+    }
 }
 
 fn recordEvent(s: *mut Session, what: []u8) AllocError!void {
@@ -130,7 +171,8 @@ fn recordEvent(s: *mut Session, what: []u8) AllocError!void {
 fn newDocument(s: *mut Session) AllocError!void {
     s.refs.clear()
     s.ref_of.deinit()
-    s.ref_of = IntMap(u32, u32).init(s.alloc)
+    s.ref_of = IntMap(u64, u32).init(s.alloc)
+    s.focus_page = 0
     s.ref_base = s.next_ref
     s.loads += 1
     try relayout(s)
@@ -148,35 +190,47 @@ fn relayout(s: *mut Session) AllocError!void {
         try p.layoutPage(&mut s.font, s.media.width, s.media.height)
     }
     s.rects.deinit()
-    s.rects = IntMap(u32, Rect).init(s.alloc)
-    let t = p.tree.?
+    s.rects = IntMap(u64, Rect).init(s.alloc)
+    try addRects(s, p, 0.0, 0.0)
+}
+
+// The rectangles of the nodes of `p`, whose document starts at (`ox`,
+// `oy`) of the document shown; then those of its frames.
+fn addRects(s: *mut Session, p: *mut Page, ox: f64, oy: f64) AllocError!void {
+    let t = p.tree orelse return
     for i in 0..t.boxes.len() {
         let b = t.bx(i).*
         if b.node |n| {
             if b.kind != layout.BoxKind.Inline && b.kind != layout.BoxKind.Text && b.kind != layout.BoxKind.LineBreak {
-                try addRect(s, n, Rect { x: b.ax, y: b.ay, w: b.w, h: b.h })
+                try addRect(s, p, n, Rect { x: ox + b.ax, y: oy + b.ay, w: b.w, h: b.h })
             }
         }
         if layout.hasInlineContent(t, i) {
-            let cx = b.ax + b.border[3] + b.padding[3]
-            let cy = b.ay + b.border[0] + b.padding[0]
+            let cx = ox + b.ax + b.border[3] + b.padding[3]
+            let cy = oy + b.ay + b.border[0] + b.padding[0]
             for li in b.line_start..b.line_end {
                 let line = t.lines.items()[li]
                 for fi in line.frag_start..line.frag_end {
                     let f = t.frags.items()[fi]
                     if f.kind != layout.FragKind.Atomic {
                         if t.bx(f.box).node |fn_node| {
-                            try addRect(s, fn_node, Rect { x: cx + f.x, y: cy + f.y, w: f.w, h: f.h })
+                            try addRect(s, p, fn_node, Rect { x: cx + f.x, y: cy + f.y, w: f.w, h: f.h })
                         }
                     }
                 }
             }
         }
     }
+    for k in 0..p.frames.len() {
+        let r = engine.frameRect(p, k) orelse continue
+        let f = p.frames.items()[k]
+        try addRects(s, f.page, ox + r.x, oy + r.y - f.scroll)
+    }
 }
 
-fn addRect(s: *mut Session, n: NodeId, r: Rect) AllocError!void {
-    if s.rects.getPtr(n.index) |old| {
+fn addRect(s: *mut Session, p: *Page, n: NodeId, r: Rect) AllocError!void {
+    let key = nodeKey(p, n)
+    if s.rects.getPtr(key) |old| {
         let x0 = minF(old.x, r.x)
         let y0 = minF(old.y, r.y)
         let x1 = maxF(old.x + old.w, r.x + r.w)
@@ -184,7 +238,7 @@ fn addRect(s: *mut Session, n: NodeId, r: Rect) AllocError!void {
         old.* = Rect { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
         return
     }
-    try s.rects.put(n.index, r)
+    try s.rects.put(key, r)
 }
 
 fn minF(a: f64, b: f64) f64 {
@@ -201,13 +255,13 @@ fn maxF(a: f64, b: f64) f64 {
     return b
 }
 
-/// The rectangle of `n`: of its own boxes, else of its nearest ancestor
-/// that has one.
-fn rectOf(s: *Session, n: NodeId) ?Rect {
-    let p = s.tab.page.?
+/// The rectangle of node `n` of page `p` (in the coordinates of the
+/// document shown): of its own boxes, else of its nearest ancestor that
+/// has one.
+fn rectOf(s: *Session, p: *Page, n: NodeId) ?Rect {
     var cur: ?NodeId = n
     while cur |c| {
-        if s.rects.get(c.index) |r| {
+        if s.rects.get(nodeKey(p, c)) |r| {
             return r
         }
         cur = p.doc.parent(c)
@@ -259,20 +313,27 @@ fn collapse(alloc: Allocator, s: []u8) AllocError![]u8 {
 
 // ---- refs
 
-/// The ref number of `n`, given one if it has none.
-fn refFor(s: *mut Session, n: NodeId) AllocError!u32 {
-    if s.ref_of.get(n.index) |r| {
+/// The ref number of node `n` of page `p`, given one if it has none.
+fn refFor(s: *mut Session, p: *Page, n: NodeId) AllocError!u32 {
+    let key = nodeKey(p, n)
+    if s.ref_of.get(key) |r| {
         return r
     }
     let r = s.next_ref
-    try s.refs.append(n)
-    try s.ref_of.put(n.index, r)
+    try s.refs.append(RefEntry { page_id: p.id, node: n })
+    try s.ref_of.put(key, r)
     s.next_ref += 1
     return r
 }
 
-/// The node of the ref `name` ("e12" or "12") on the page shown.
-fn nodeOfRef(s: *Session, name: []u8) ?NodeId {
+/// The ref number of node `n` of page `p`, if it has one.
+fn refOf(s: *Session, p: *Page, n: NodeId) ?u32 {
+    return s.ref_of.get(nodeKey(p, n))
+}
+
+/// The node of the ref `name` ("e12" or "12") on the page shown or in
+/// one of its frames.
+fn nodeOfRef(s: *Session, name: []u8) ?RefNode {
     var digits = text.trim(name)
     if digits.len > 0 && (digits[0] == 'e' || digits[0] == 'E') {
         digits = digits[1..]
@@ -287,14 +348,15 @@ fn nodeOfRef(s: *Session, name: []u8) ?NodeId {
     if i >= s.refs.len() {
         return null
     }
-    let h = s.refs.items()[i]
+    let e = s.refs.items()[i]
+    let top = s.tab.page orelse return null
+    // The frame may show another document now.
+    let p = engine.findPage(top, e.page_id) orelse return null
     // Scripts may have removed (and freed) the node.
-    if s.tab.page |p| {
-        if !p.doc.isLive(h) {
-            return null
-        }
+    if !p.doc.isLive(e.node) {
+        return null
     }
-    return h
+    return RefNode { page: p, node: e.node }
 }
 
 // ---- URLs

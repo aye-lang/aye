@@ -9,6 +9,10 @@
 // - script.ore (and dom_api, window_api, markup, prelude): the
 //   page's JavaScript and its event loop.
 // - images.ore: fetching and decoding the images of a page.
+// - frames.ore: the documents of `frame` and `iframe` elements, and
+//   where a link with a target loads.
+// - windows.ore: what the scripts of a page see of the other pages of
+//   its tab (window.parent, frames, contentDocument, postMessage).
 // - forms.ore: default actions (links, buttons, checkboxes, labels),
 //   focus, form submission.
 //
@@ -26,7 +30,6 @@ import layout
 import net
 import std
 import std.list.List
-import std.math
 import std.mem.AllocError
 import std.mem.Allocator
 import std.text
@@ -67,13 +70,29 @@ pub struct Page {
     script: ?*mut Script
     // The decoded images (images.ore), from the first layout on.
     images: ?*mut ImageCache
-    // The documents of its `frame` elements (loaded with the page).
+    // The documents of its `frame` and `iframe` elements (frames.ore).
     frames: List(Frame)
+    // Unique among the pages of the process (`findPage`).
+    id: u32
+    // The page whose frame shows this one (null for a tab's page), and
+    // how many frames deep it is.
+    parent: ?*mut Page
+    depth: usize
+    // A plain text document: no scripts, no frames.
+    plain: bool
+    // A sandboxed frame: no scripts (without `allow-scripts`), and an
+    // origin of its own (without `allow-same-origin`).
+    no_scripts: bool
+    opaque: bool
+    // Changes the scripts of other pages made to the document (through
+    // contentDocument; `domVersion` counts them).
+    mutations: u64
 
     /// Frees the page and everything in it.
     pub fn destroy(self: *mut Self) {
         let alloc = self.alloc
         if self.script |s| {
+            self.script = null
             destroyScript(s)
         }
         self.dropTree()
@@ -82,7 +101,10 @@ pub struct Page {
             imgs.deinit()
             alloc.destroy(imgs)
         }
-        for f in self.frames.items() {
+        // Out of the list before it goes: the scripts of the frames
+        // still walk the tab's pages (`findPage`) while they are freed.
+        while self.frames.pop() |f| {
+            alloc.free(f.source)
             f.page.destroy()
         }
         self.frames.deinit()
@@ -143,6 +165,7 @@ pub struct Page {
     /// scripts changed the document (they may have changed the sheets).
     pub fn layoutPage(self: *mut Self, measure: dyn font.Measurer, width: f64, height: f64) AllocError!void {
         self.dropTree()
+        try syncFrames(self)
         setViewport(self, width, height)
         var same = false
         if self.styling |st| {
@@ -213,13 +236,16 @@ pub fn load(alloc: Allocator, target: *Url) AllocError!*mut Page {
 
 /// `load`, by POST with `body` when there is one (a form submission).
 pub fn loadWith(alloc: Allocator, target: *Url, body: ?*net.Body) AllocError!*mut Page {
-    frames_left = MAX_FRAMES
-    return loadDocument(alloc, target, body, 0, encoding.Encoding.Windows1252)
+    let p = try fetchPage(alloc, target, body, encoding.Encoding.Windows1252)
+    errdefer p.destroy()
+    try runDocument(p, scriptingEnabled())
+    return p
 }
 
-// `loadWith` for a document `depth` frames deep, whose bytes are in
-// `fallback` when they do not say (a frame's: its parent's encoding).
-fn loadDocument(alloc: Allocator, target: *Url, body: ?*net.Body, depth: usize, fallback: encoding.Encoding) AllocError!*mut Page {
+// Fetches `target` (by POST with `body`) and parses the document, whose
+// bytes are in `fallback` when they do not say (a frame's: its parent's
+// encoding). Its scripts have not run (`runDocument`).
+fn fetchPage(alloc: Allocator, target: *Url, body: ?*net.Body, fallback: encoding.Encoding) AllocError!*mut Page {
     let res = net.fetchWith(alloc, target, body) catch |e| {
         match e {
             .OutOfMemory => {
@@ -241,181 +267,24 @@ fn loadDocument(alloc: Allocator, target: *Url, body: ?*net.Body, depth: usize, 
     errdefer doc.deinit()
     let p = try newPage(alloc, located, res.status, "", doc)
     p.encoding = enc
-    if scriptingEnabled() && !text.eql(res.mime, "text/plain") {
-        runPageScripts(p) catch |e| {
-            p.destroy()
-            return e
-        }
-    }
-    loadFrames(p, depth) catch |e| {
-        p.destroy()
-        return e
-    }
+    p.plain = text.eql(res.mime, "text/plain")
     return p
 }
 
-/// The document of a `frame` element of a page.
-pub struct Frame {
-    el: NodeId
-    page: *mut Page
-    // How far the document is scrolled in the frame, in px.
-    scroll: f64
-}
-
-// Frames inside frames go this deep, and a page loads at most this many
-// frames in all (`frames_left` of them are left in the current load).
-let MAX_FRAME_DEPTH: usize = 3
-let MAX_FRAMES: usize = 16
-var frames_left: usize = 0
-
-// Loads the documents of the `frame` elements of `p` (`depth` frames
-// deep), in tree order; a frame without a `src` stays empty.
-fn loadFrames(p: *mut Page, depth: usize) AllocError!void {
-    if depth >= MAX_FRAME_DEPTH {
-        return
+// After a page was fetched and given its place (`parent`): runs its
+// scripts (when `scripts`) up to DOMContentLoaded, loads its frames,
+// then fires their load events and the window's.
+fn runDocument(p: *mut Page, scripts: bool) AllocError!void {
+    if scripts && !p.plain && !p.no_scripts {
+        try startPageScripts(p)
     }
-    var cur: ?NodeId = p.doc.root
-    while cur |h| {
-        cur = p.doc.following(h, p.doc.root)
-        if !p.doc.isElement(h, "frame") || frames_left == 0 {
-            continue
-        }
-        let src = text.trim(p.doc.attr(h, "src") orelse "")
-        if src.len == 0 {
-            continue
-        }
-        var target = p.resolve(p.alloc, src) catch |e| {
-            match e {
-                .OutOfMemory => {
-                    return AllocError.OutOfMemory
-                }
-                _ => {}
-            }
-            continue
-        }
-        defer target.deinit(p.alloc)
-        frames_left -= 1
-        try net.noteNavigation(target.href, p.url.href)
-        let child = try loadDocument(p.alloc, &target, null, depth + 1, p.encoding)
-        p.frames.append(Frame { el: h, page: child, scroll: 0.0 }) catch |e| {
-            child.destroy()
-            return e
-        }
+    if !p.plain {
+        try loadFrames(p)
     }
-}
-
-/// The document of the `frame` element `el` of `p`; null when it has
-/// none.
-pub fn framePage(p: *Page, el: NodeId) ?*mut Page {
-    for f in p.frames.items() {
-        if dom.same(f.el, el) {
-            return f.page
-        }
+    if p.script != null {
+        try fireFrameLoads(p)
+        try finishPageScripts(p)
     }
-    return null
-}
-
-// Lays out the document of each frame of `p` in its frame's box, and
-// adds it to `p`'s tree for paint.
-fn layoutFrames(p: *mut Page, measure: dyn font.Measurer) AllocError!void {
-    let t = p.tree orelse {
-        return
-    }
-    for k in 0..p.frames.len() {
-        let f = p.frames.items()[k]
-        if frameBox(t, f.el) |bi| {
-            let b = t.bx(bi).*
-            if b.w > 0.0 && b.h > 0.0 {
-                try f.page.layoutPage(measure, b.w, b.h)
-                if f.page.tree |sub| {
-                    let scroll = math.min(f.scroll, maxFrameScroll(sub, b.h))
-                    p.frames.items()[k].scroll = scroll
-                    try t.frames.append(layout.FrameView { node: f.el, tree: sub, scroll: scroll })
-                }
-            }
-        }
-    }
-}
-
-// The box of the frame element `el` in `t`.
-fn frameBox(t: *layout.Tree, el: NodeId) ?usize {
-    for bi in 0..t.boxes.len() {
-        if t.bx(bi).node |n| {
-            if dom.same(n, el) {
-                return bi
-            }
-        }
-    }
-    return null
-}
-
-// How far a frame `h` px high can scroll the document laid out in `sub`.
-fn maxFrameScroll(sub: *layout.Tree, h: f64) f64 {
-    if sub.root |r| {
-        let b = sub.bx(r)
-        return math.max(0.0, b.h + b.margin[0] + b.margin[2] - h)
-    }
-    return 0.0
-}
-
-/// A point in the document of a frame: the frame's page and the point
-/// in its document's coordinates.
-pub struct FramePoint {
-    page: *mut Page
-    x: f64
-    y: f64
-}
-
-/// The innermost frame at (`x`, `y`) (document px) of `p` and the point
-/// in its document; null when the point is in no frame.
-pub fn frameAt(p: *mut Page, x: f64, y: f64) ?FramePoint {
-    let t = p.tree orelse {
-        return null
-    }
-    for f in p.frames.items() {
-        if frameBox(t, f.el) |bi| {
-            let b = t.bx(bi).*
-            if x >= b.ax && x < b.ax + b.w && y >= b.ay && y < b.ay + b.h && f.page.tree != null {
-                let fx = x - b.ax
-                let fy = y - b.ay + f.scroll
-                if frameAt(f.page, fx, fy) |inner| {
-                    return inner
-                }
-                return FramePoint { page: f.page, x: fx, y: fy }
-            }
-        }
-    }
-    return null
-}
-
-/// Scrolls the innermost frame at (`x`, `y`) (document px) of `p` by
-/// `dy` px; false when the point is in no frame. Build the display list
-/// again after it.
-pub fn scrollFrameAt(p: *mut Page, x: f64, y: f64, dy: f64) bool {
-    let t = p.tree orelse {
-        return false
-    }
-    for k in 0..p.frames.len() {
-        let f = p.frames.items()[k]
-        let bi = frameBox(t, f.el) orelse continue
-        let b = t.bx(bi).*
-        let sub = f.page.tree orelse continue
-        if !(x >= b.ax && x < b.ax + b.w && y >= b.ay && y < b.ay + b.h) {
-            continue
-        }
-        if scrollFrameAt(f.page, x - b.ax, y - b.ay + f.scroll, dy) {
-            return true
-        }
-        let scroll = math.max(0.0, math.min(f.scroll + dy, maxFrameScroll(sub, b.h)))
-        p.frames.items()[k].scroll = scroll
-        for v in 0..t.frames.len() {
-            if dom.same(t.frames.items()[v].node, f.el) {
-                t.frames.items()[v].scroll = scroll
-            }
-        }
-        return true
-    }
-    return false
 }
 
 // The URL after redirects (`moved`, when not empty), else a copy of
@@ -447,6 +316,13 @@ fn newPage(alloc: Allocator, located: Url, status: i64, failure: []u8, doc: Docu
         script: null,
         images: null,
         frames: List(Frame).init(alloc),
+        id: newPageId(),
+        parent: null,
+        depth: 0,
+        plain: false,
+        no_scripts: false,
+        opaque: false,
+        mutations: 0,
     })
 }
 

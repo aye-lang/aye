@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<title>Iframes</title>
+<iframe id="a" name="first" src="../frames/iframe_child.html"></iframe>
+<iframe id="b" srcdoc="<p>Inline <b>srcdoc</b></p><script>console.log('srcdoc:', location.href, '| parent title', parent.document.title)</script>"></iframe>
+<iframe id="c" sandbox srcdoc="<script>console.log('sandboxed: ran')</script><p>sandboxed</p>"></iframe>
+<iframe id="d" sandbox="allow-scripts" srcdoc="<script>try { parent.document } catch (e) { console.log('opaque:', e.name) } parent.postMessage('hi from opaque', '*')</script>"></iframe>
+<iframe id="e"></iframe>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const a = document.getElementById('a');
+log('length', window.length, '| frames[0] is a', frames[0] === a.contentWindow, '| window[1] is b', window[1] === document.getElementById('b').contentWindow);
+log('top is window', top === window, '| parent is window', parent === window, '| frameElement', frameElement);
+log('c document', document.getElementById('c').contentDocument, '| e document', document.getElementById('e').contentDocument.URL);
+log('b text', document.getElementById('b').contentDocument.body.textContent);
+log('a name', frames.first === undefined, a.contentWindow.location.href.endsWith('iframe_child.html'));
+const made = document.createElement('iframe');
+made.srcdoc = '<p id=x>made by a script</p>';
+document.body.appendChild(made);
+log('made', made.contentDocument.getElementById('x').textContent, '| length', window.length);
+a.addEventListener('load', () => {
+  log('a load:', a.contentDocument.getElementById('msg').textContent);
+  a.contentDocument.getElementById('msg').textContent = 'Changed by the parent';
+  a.contentWindow.postMessage({ n: 1 }, '*');
+});
+addEventListener('message', e => log('message', JSON.stringify(e.data), '| from a', e.source === a.contentWindow, '| origin', e.origin, '|', e instanceof MessageEvent));
+addEventListener('load', () => log('parent load'));
+</script>

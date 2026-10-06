@@ -1,0 +1,638 @@
+// The documents of `frame` and `iframe` elements: each is a `Page` of
+// its own (its scripts, its global, its layout), a child of the page
+// whose element shows it (`Page.parent`). They load with the page, in
+// tree order, 3 deep and 16 in a tab's pages at most; an iframe shows
+// `srcdoc`, else `src`, else an empty document (about:blank), and
+// `loading=lazy` loads at once. A `sandbox` attribute stops scripts
+// (unless it allows them) and gives the frame an origin of its own
+// (unless it allows the same origin). An iframe that scripts add, or
+// whose `src` they change, loads at the next layout (`syncFrames`), or
+// at once when a script asks for its contentWindow.
+//
+// A link or form with a `target` (or the document's `<base target>`)
+// loads in the frame of that name, in its own frame (`_self`, no
+// target), in the parent's (`_parent`), or in the tab (`_top`,
+// `_blank`, a name no frame has): `targetFrame` and `navigateFrame`.
+
+import dom
+import dom.NodeId
+import font
+import html
+import layout
+import net
+import std.list.List
+import std.math
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+import url
+import url.Url
+
+/// The document of a `frame` or `iframe` element of a page.
+pub struct Frame {
+    el: NodeId
+    page: *mut Page
+    // How far the document is scrolled in the frame, in px.
+    scroll: f64
+    // What the element asked for when it was loaded (`sourceKey`,
+    // owned): a script that changes it loads the frame again.
+    source: []mut u8
+    // The load event at `el` is still to be fired.
+    pending_load: bool
+}
+
+// Frames inside frames go this deep, and the pages of a tab have at most
+// this many frames in all.
+let MAX_FRAME_DEPTH: usize = 3
+let MAX_FRAMES: usize = 16
+
+var next_page_id: u32 = 1
+
+fn newPageId() u32 {
+    let id = next_page_id
+    next_page_id += 1
+    return id
+}
+
+/// Is `h` a `frame` or an `iframe`?
+pub fn isFrameElement(doc: *dom.Document, h: NodeId) bool {
+    return doc.isElement(h, "frame") || doc.isElement(h, "iframe")
+}
+
+/// The page of the tab that `p` is in (`p` when it is no frame).
+pub fn rootPage(p: *mut Page) *mut Page {
+    var cur = p
+    while cur.parent |up| {
+        cur = up
+    }
+    return cur
+}
+
+/// The page with `id` among the pages of `p`'s tab; null when it is gone.
+pub fn findPage(p: *mut Page, id: u32) ?*mut Page {
+    return findBelow(rootPage(p), id)
+}
+
+fn findBelow(p: *mut Page, id: u32) ?*mut Page {
+    if p.id == id {
+        return p
+    }
+    for f in p.frames.items() {
+        if findBelow(f.page, id) |found| {
+            return found
+        }
+    }
+    return null
+}
+
+// The frames of `p` and of its frames, all the way down.
+fn countFrames(p: *Page) usize {
+    var n: usize = 0
+    for f in p.frames.items() {
+        n += 1 + countFrames(f.page)
+    }
+    return n
+}
+
+// May `p` load one more frame?
+fn mayLoadFrame(p: *mut Page) bool {
+    return p.depth < MAX_FRAME_DEPTH && countFrames(rootPage(p)) < MAX_FRAMES
+}
+
+/// The frame elements of `p`'s document, in tree order: how many there
+/// are (`n` null), or the `n`th.
+pub struct FrameElements {
+    count: usize
+    el: ?NodeId
+}
+
+pub fn frameElements(p: *Page, n: ?usize) FrameElements {
+    var count: usize = 0
+    if p.plain {
+        return FrameElements { count: 0, el: null }
+    }
+    var cur: ?NodeId = p.doc.root
+    while cur |h| {
+        if isFrameElement(&p.doc, h) {
+            if n |want| {
+                if want == count {
+                    return FrameElements { count: count + 1, el: h }
+                }
+            }
+            count += 1
+        }
+        cur = p.doc.following(h, p.doc.root)
+    }
+    return FrameElements { count: count, el: null }
+}
+
+/// The index in `p.frames` of the frame of element `el`.
+pub fn frameIndex(p: *Page, el: NodeId) ?usize {
+    for k, f in p.frames.items() {
+        if dom.same(f.el, el) {
+            return k
+        }
+    }
+    return null
+}
+
+/// The document of the frame element `el` of `p`; null when it has none.
+pub fn framePage(p: *Page, el: NodeId) ?*mut Page {
+    if frameIndex(p, el) |k| {
+        return p.frames.items()[k].page
+    }
+    return null
+}
+
+// What `el` asks to show: "doc " and its srcdoc (an iframe), else "src "
+// and its src.
+fn sourceKey(alloc: Allocator, doc: *dom.Document, el: NodeId) AllocError![]mut u8 {
+    var b = text.Builder.init(alloc)
+    defer b.deinit()
+    if doc.isElement(el, "iframe") {
+        if doc.attr(el, "srcdoc") |src| {
+            try b.append("doc ")
+            try b.append(src)
+            return b.toOwned()
+        }
+    }
+    try b.append("src ")
+    try b.append(text.trim(doc.attr(el, "src") orelse ""))
+    return b.toOwned()
+}
+
+// Do the tokens of the `sandbox` attribute `v` include `token`?
+fn sandboxAllows(v: []u8, token: []u8) bool {
+    var parts = text.split(v, " ")
+    while parts.next() |part| {
+        if text.eqlIgnoreCase(text.trim(part), token) {
+            return true
+        }
+    }
+    return false
+}
+
+// Loads the documents of the frame elements of `p`, in tree order (the
+// ones a script already asked for are there).
+fn loadFrames(p: *mut Page) AllocError!void {
+    var cur: ?NodeId = p.doc.root
+    while cur |h| {
+        cur = p.doc.following(h, p.doc.root)
+        if !isFrameElement(&p.doc, h) || frameIndex(p, h) != null {
+            continue
+        }
+        if !mayLoadFrame(p) {
+            return
+        }
+        try loadFrame(p, h)
+    }
+}
+
+// Loads the document of the frame element `el` of `p` (nothing for a
+// `frame` without a `src`): fetched, added to `p.frames`, its scripts
+// run and its own frames loaded. Its load event at `el` is pending.
+fn loadFrame(p: *mut Page, el: NodeId) AllocError!?*mut Page {
+    let key = try sourceKey(p.alloc, &p.doc, el)
+    let child = (try framedDocument(p, el, key)) orelse {
+        p.alloc.free(key)
+        return null
+    }
+    p.frames.append(Frame { el: el, page: child, scroll: 0.0, source: key, pending_load: true }) catch |e| {
+        p.alloc.free(key)
+        child.destroy()
+        return e
+    }
+    try runDocument(child, scriptingEnabled())
+    return child
+}
+
+// The page that the frame element `el` of `p` shows (what `key` says),
+// fetched and parsed, its place set; its scripts have not run.
+fn framedDocument(p: *mut Page, el: NodeId, key: []u8) AllocError!?*mut Page {
+    let iframe = p.doc.isElement(el, "iframe")
+    var child: ?*mut Page = null
+    if text.startsWith(key, "doc ") {
+        child = try sourcePage(p, "about:srcdoc", key[4..])
+    } else {
+        let src = key[4..]
+        if src.len == 0 || text.eqlIgnoreCase(src, "about:blank") || text.startsWith(src, "javascript:") {
+            if !iframe {
+                return null
+            }
+            child = try sourcePage(p, "about:blank", "")
+        } else if p.resolve(p.alloc, src) |target| {
+            defer target.deinit(p.alloc)
+            try net.noteNavigation(target.href, p.url.href)
+            child = try fetchPage(p.alloc, &target, null, p.encoding)
+        } else |e| {
+            match e {
+                .OutOfMemory => {
+                    return AllocError.OutOfMemory
+                }
+                _ => {}
+            }
+            if !iframe {
+                return null
+            }
+            child = try sourcePage(p, "about:blank", "")
+        }
+    }
+    let c = child.?
+    placeFrame(p, el, c)
+    return c
+}
+
+// Gives the page `c`, shown by the frame element `el` of `p`, its place:
+// its parent, its depth, and the sandbox of the element and of `p`.
+fn placeFrame(p: *mut Page, el: NodeId, c: *mut Page) {
+    c.parent = p
+    c.depth = p.depth + 1
+    c.no_scripts = p.no_scripts
+    c.opaque = p.opaque
+    if p.doc.isElement(el, "iframe") {
+        if p.doc.attr(el, "sandbox") |v| {
+            if !sandboxAllows(v, "allow-scripts") {
+                c.no_scripts = true
+            }
+            if !sandboxAllows(v, "allow-same-origin") {
+                c.opaque = true
+            }
+        }
+    }
+}
+
+// A page made from `src` (an iframe's srcdoc, or nothing), at `address`
+// (about:srcdoc or about:blank); relative URLs in it resolve against the
+// base URL of `p`.
+fn sourcePage(p: *mut Page, address: []u8, src: []u8) AllocError!*mut Page {
+    var doc = try html.parse(p.alloc, src)
+    errdefer doc.deinit()
+    var located = url.parse(p.alloc, address) catch |e| {
+        return AllocError.OutOfMemory
+    }
+    errdefer located.deinit(p.alloc)
+    let c = try newPage(p.alloc, located, 200, "", doc)
+    c.encoding = p.encoding
+    if text.eql(c.base.href, address) {
+        let base = url.parse(p.alloc, p.base.href) catch |e| {
+            c.destroy()
+            return AllocError.OutOfMemory
+        }
+        c.base.deinit(p.alloc)
+        c.base = base
+    }
+    return c
+}
+
+// Fires the pending load events at the frame elements of `p`.
+fn fireFrameLoads(p: *mut Page) AllocError!void {
+    var k: usize = 0
+    while k < p.frames.len() {
+        let f = p.frames.items()[k]
+        k += 1
+        if !f.pending_load {
+            continue
+        }
+        p.frames.items()[k - 1].pending_load = false
+        if p.script != null && p.doc.isLive(f.el) {
+            try dispatchEvent(p, f.el, "load", "")
+        }
+    }
+}
+
+/// The frame of the frame element `el` of `p`, loaded now if it has
+/// none yet (a script asks for its contentWindow); null when it cannot
+/// have one.
+pub fn ensureFrame(p: *mut Page, el: NodeId) AllocError!?*mut Page {
+    if framePage(p, el) |c| {
+        return c
+    }
+    if !isFrameElement(&p.doc, el) || !p.doc.isConnected(el) || p.plain || !mayLoadFrame(p) {
+        return null
+    }
+    return loadFrame(p, el)
+}
+
+// Before a layout: frames whose element left the document go, frames
+// whose element asks for another document load it again, frames whose
+// scripts asked for a navigation follow it, new frame elements load,
+// and pending load events fire. The tree of `p` must be dropped: the
+// pages of frames may go.
+fn syncFrames(p: *mut Page) AllocError!void {
+    if p.plain {
+        return
+    }
+    var k: usize = 0
+    while k < p.frames.len() {
+        let f = p.frames.items()[k]
+        if !p.doc.isLive(f.el) || !p.doc.isConnected(f.el) || !isFrameElement(&p.doc, f.el) {
+            let gone = p.frames.orderedRemove(k)
+            p.alloc.free(gone.source)
+            gone.page.destroy()
+            continue
+        }
+        let key = try sourceKey(p.alloc, &p.doc, f.el)
+        if !text.eql(key, f.source) {
+            p.alloc.free(p.frames.items()[k].source)
+            p.frames.items()[k].source = key
+            try reloadFrame(p, k, key)
+        } else {
+            p.alloc.free(key)
+            try followFrameNavigation(p, k)
+        }
+        k += 1
+    }
+    try loadFrames(p)
+    try fireFrameLoads(p)
+}
+
+// The element of frame `k` of `p` asks for another document (`key`).
+fn reloadFrame(p: *mut Page, k: usize, key: []u8) AllocError!void {
+    let el = p.frames.items()[k].el
+    let child = (try framedDocument(p, el, key)) orelse {
+        // A `frame` whose src went: an empty frame.
+        let gone = p.frames.orderedRemove(k)
+        p.alloc.free(gone.source)
+        gone.page.destroy()
+        return
+    }
+    return replaceFrame(p, k, child)
+}
+
+// Frame `k` of `p` shows `child` now (its scripts not run yet): the old
+// page goes; the scripts run, and the load event is pending.
+fn replaceFrame(p: *mut Page, k: usize, child: *mut Page) AllocError!void {
+    let old = p.frames.items()[k].page
+    p.frames.items()[k].page = child
+    p.frames.items()[k].scroll = 0.0
+    p.frames.items()[k].pending_load = true
+    old.destroy()
+    p.mutations += 1
+    try runDocument(child, scriptingEnabled())
+}
+
+// The navigation that the scripts of frame `k` of `p` asked for
+// (location.href = ..., a link or form they activated), in the frame.
+fn followFrameNavigation(p: *mut Page, k: usize) AllocError!void {
+    let c = p.frames.items()[k].page
+    let nav = takeNavigation(c)
+    match nav.kind {
+        .To => {
+            let target = url.parse(p.alloc, nav.href) catch |e| {
+                return
+            }
+            defer target.deinit(p.alloc)
+            return navigateFrame(FrameSlot { parent: p, index: k }, &target, null)
+        }
+        .Reload => {
+            let target = url.parse(p.alloc, c.url.href) catch |e| {
+                return
+            }
+            defer target.deinit(p.alloc)
+            return navigateFrame(FrameSlot { parent: p, index: k }, &target, null)
+        }
+        .Submit => {
+            let sub = (try submitForm(c, nav.form.?, nav.submitter)) orelse return
+            defer sub.deinit(p.alloc)
+            var body = net.Body { content_type: sub.content_type, data: sub.body }
+            var post: ?*net.Body = null
+            if sub.post {
+                post = &body
+            }
+            return navigateFrame(FrameSlot { parent: p, index: k }, &sub.target, post)
+        }
+        _ => {}
+    }
+}
+
+/// A frame: its parent page and its index in `parent.frames`.
+pub struct FrameSlot {
+    parent: *mut Page
+    index: usize
+}
+
+/// The frame that shows `p`; null for a tab's page.
+pub fn slotOf(p: *mut Page) ?FrameSlot {
+    let up = p.parent orelse return null
+    for k, f in up.frames.items() {
+        if f.page == p {
+            return FrameSlot { parent: up, index: k }
+        }
+    }
+    return null
+}
+
+/// The page that frame `slot` shows.
+pub fn slotPage(slot: FrameSlot) *mut Page {
+    return slot.parent.frames.items()[slot.index].page
+}
+
+/// Loads `target` (by POST with `body`) in the frame `slot`, in place of
+/// its document: its scripts run and its load event fires. The layout
+/// trees of its page and of the pages above are dropped (they showed
+/// the old document): lay the tab's page out again.
+pub fn navigateFrame(slot: FrameSlot, target: *Url, body: ?*net.Body) AllocError!void {
+    let p = slot.parent
+    let el = p.frames.items()[slot.index].el
+    let child = try fetchPage(p.alloc, target, body, p.encoding)
+    placeFrame(p, el, child)
+    var up: ?*mut Page = p
+    while up |q| {
+        q.dropTree()
+        up = q.parent
+    }
+    try replaceFrame(p, slot.index, child)
+    return fireFrameLoads(p)
+}
+
+/// The target of a link or form element `el` of `p`: its `target`
+/// attribute, else the document's `<base target>`.
+pub fn linkTarget(p: *Page, el: NodeId) []u8 {
+    if p.doc.attr(el, "target") |t| {
+        return text.trim(t)
+    }
+    var cur: ?NodeId = p.doc.root
+    while cur |h| {
+        if p.doc.isElement(h, "base") {
+            if p.doc.attr(h, "target") |t| {
+                return text.trim(t)
+            }
+        }
+        cur = p.doc.following(h, p.doc.root)
+    }
+    return ""
+}
+
+/// Where a link of `from` (a page of the tab) with the target `name`
+/// loads: a frame, or null for the whole tab (`_top`, `_blank`, a frame
+/// of a tab's page without a target, a name no frame has).
+pub fn targetFrame(from: *mut Page, name: []u8) ?FrameSlot {
+    let t = text.trim(name)
+    if t.len == 0 || text.eqlIgnoreCase(t, "_self") {
+        return slotOf(from)
+    }
+    if text.eqlIgnoreCase(t, "_parent") {
+        if from.parent |up| {
+            return slotOf(up)
+        }
+        return null
+    }
+    if text.eqlIgnoreCase(t, "_top") || text.eqlIgnoreCase(t, "_blank") {
+        return null
+    }
+    return namedFrame(rootPage(from), t)
+}
+
+// The frame named `name` among the frames of `p` and theirs.
+fn namedFrame(p: *mut Page, name: []u8) ?FrameSlot {
+    for k, f in p.frames.items() {
+        if p.doc.attr(f.el, "name") |n| {
+            if text.eql(n, name) {
+                return FrameSlot { parent: p, index: k }
+            }
+        }
+    }
+    for f in p.frames.items() {
+        if namedFrame(f.page, name) |slot| {
+            return slot
+        }
+    }
+    return null
+}
+
+// ---- layout and hit testing
+
+// Lays out the document of each frame of `p` in its frame's content box,
+// and adds it to `p`'s tree for paint.
+fn layoutFrames(p: *mut Page, measure: dyn font.Measurer) AllocError!void {
+    let t = p.tree orelse {
+        return
+    }
+    for k in 0..p.frames.len() {
+        let f = p.frames.items()[k]
+        if frameBox(t, f.el) |bi| {
+            let r = contentRect(t, bi)
+            if r.w > 0.0 && r.h > 0.0 {
+                try f.page.layoutPage(measure, r.w, r.h)
+                if f.page.tree |sub| {
+                    let scroll = math.min(f.scroll, maxFrameScroll(sub, r.h))
+                    p.frames.items()[k].scroll = scroll
+                    try t.frames.append(layout.FrameView { node: f.el, tree: sub, scroll: scroll })
+                }
+            }
+        }
+    }
+}
+
+// The box of the frame element `el` in `t`.
+fn frameBox(t: *layout.Tree, el: NodeId) ?usize {
+    for bi in 0..t.boxes.len() {
+        if t.bx(bi).node |n| {
+            if dom.same(n, el) {
+                return bi
+            }
+        }
+    }
+    return null
+}
+
+/// Where a frame shows its document, in the coordinates of the document
+/// of its element.
+pub struct FrameRect {
+    x: f64
+    y: f64
+    w: f64
+    h: f64
+}
+
+// The content box of box `bi`.
+fn contentRect(t: *layout.Tree, bi: usize) FrameRect {
+    let b = t.bx(bi).*
+    return FrameRect {
+        x: b.ax + b.border[3] + b.padding[3],
+        y: b.ay + b.border[0] + b.padding[0],
+        w: b.w - b.border[1] - b.border[3] - b.padding[1] - b.padding[3],
+        h: b.h - b.border[0] - b.border[2] - b.padding[0] - b.padding[2],
+    }
+}
+
+/// Where frame `k` of `p` shows its document (in `p`'s document), and
+/// how far it is scrolled; null when it is not laid out.
+pub fn frameRect(p: *mut Page, k: usize) ?FrameRect {
+    let t = p.tree orelse return null
+    let f = p.frames.items()[k]
+    if f.page.tree == null {
+        return null
+    }
+    let bi = frameBox(t, f.el) orelse return null
+    return contentRect(t, bi)
+}
+
+// How far a frame `h` px high can scroll the document laid out in `sub`.
+fn maxFrameScroll(sub: *layout.Tree, h: f64) f64 {
+    if sub.root |r| {
+        let b = sub.bx(r)
+        return math.max(0.0, b.h + b.margin[0] + b.margin[2] - h)
+    }
+    return 0.0
+}
+
+/// A point in the document of a frame: the frame's page and the point
+/// in its document's coordinates.
+pub struct FramePoint {
+    page: *mut Page
+    x: f64
+    y: f64
+}
+
+/// The innermost frame at (`x`, `y`) (document px) of `p` and the point
+/// in its document; null when the point is in no frame.
+pub fn frameAt(p: *mut Page, x: f64, y: f64) ?FramePoint {
+    for k in 0..p.frames.len() {
+        let r = frameRect(p, k) orelse continue
+        let f = p.frames.items()[k]
+        if x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h {
+            let fx = x - r.x
+            let fy = y - r.y + f.scroll
+            if frameAt(f.page, fx, fy) |inner| {
+                return inner
+            }
+            return FramePoint { page: f.page, x: fx, y: fy }
+        }
+    }
+    return null
+}
+
+/// Scrolls the innermost frame at (`x`, `y`) (document px) of `p` by
+/// `dy` px; false when the point is in no frame. Build the display list
+/// again after it.
+pub fn scrollFrameAt(p: *mut Page, x: f64, y: f64, dy: f64) bool {
+    for k in 0..p.frames.len() {
+        let r = frameRect(p, k) orelse continue
+        let f = p.frames.items()[k]
+        if !(x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) {
+            continue
+        }
+        if scrollFrameAt(f.page, x - r.x, y - r.y + f.scroll, dy) {
+            return true
+        }
+        return scrollFrame(p, k, f.scroll + dy)
+    }
+    return false
+}
+
+/// Scrolls frame `k` of `p` to `y` (kept within its document); false
+/// when it is not laid out. Build the display list again after it.
+pub fn scrollFrame(p: *mut Page, k: usize, y: f64) bool {
+    let r = frameRect(p, k) orelse return false
+    let t = p.tree.?
+    let f = p.frames.items()[k]
+    let scroll = math.max(0.0, math.min(y, maxFrameScroll(f.page.tree.?, r.h)))
+    p.frames.items()[k].scroll = scroll
+    for v in 0..t.frames.len() {
+        if dom.same(t.frames.items()[v].node, f.el) {
+            t.frames.items()[v].scroll = scroll
+        }
+    }
+    return true
+}
