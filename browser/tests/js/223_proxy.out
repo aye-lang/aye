@@ -1,0 +1,17 @@
+1 none true true false
+30 true false
+get a, get zz, set c, delete b
+4 4 true [1,2,3,4] object
+x,y x,y {"x":1,"y":2} {"x":1,"y":2} 2
+called 5 function called 2 add 2
+10 true true 7
+true true
+true
+v 9 true boo true
+1
+TypeError: Cannot perform 'get' on a proxy that has been revoked
+TypeError,TypeError,trap,has
+1 from proxy other
+yes true
+true function true
+[object Object] true

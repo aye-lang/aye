@@ -3,8 +3,11 @@
 // is a host object holding its handle (TAG_NODE); a stale or foreign
 // handle is a TypeError, never a use after free.
 //
-// Lists (childNodes, children, querySelectorAll, getElementsBy*) are
-// arrays made at the call, not live NodeLists.
+// A wrapper's prototype is its interface's: HTMLDivElement.prototype and
+// the others by tag name (HTML_INTERFACES), SVGElement or MathMLElement
+// by namespace, DocumentFragment for a fragment (a Document node that is
+// not the document). childNodes, children and getElementsBy* are live
+// lists (lists.ore); querySelectorAll gives an array made at the call.
 
 import css
 import dom
@@ -31,12 +34,31 @@ fn docOf(it: *mut Interp) *mut Document {
 
 // Records that a script changed the document.
 fn changed(it: *mut Interp) {
-    scriptOf(it).version += 1
+    let s = scriptOf(it)
+    s.version += 1
+    s.style_version += 1
 }
 
+// Records that a script changed the attribute `name`: styles are not out
+// of date for the attributes of images and the like that no selector
+// looks at in practice (a lazy loader sets `src` in a loop and asks for
+// styles each time).
+fn changedAttr(it: *mut Interp, name: []u8) {
+    let s = scriptOf(it)
+    s.version += 1
+    if !hasClass(STYLE_NEUTRAL_ATTRS, name) {
+        s.style_version += 1
+    }
+}
+
+let STYLE_NEUTRAL_ATTRS = "src srcset sizes alt title loading decoding fetchpriority referrerpolicy crossorigin integrity nonce autocomplete"
+
 fn protoFor(s: *mut Script, h: NodeId) u32 {
+    if s.page.doc.isFragment(h) {
+        return s.fragment_proto
+    }
     return match s.page.doc.node(h).kind {
-        .Element => s.element_proto
+        .Element => elementProto(s, h)
         .Text => s.text_proto
         .Comment => s.comment_proto
         .Document => s.document_proto
@@ -176,6 +198,65 @@ fn illegalConstructor(it: *mut Interp, a: Args) JsError!Value {
     return it.typeError("Illegal constructor")
 }
 
+// The interfaces of HTML elements, each with its tag names: "Interface
+// tag tag;...". Other HTML elements are HTMLElement.
+let HTML_INTERFACES = "HTMLAnchorElement a;HTMLAreaElement area;HTMLBaseElement base;HTMLBodyElement body;HTMLBRElement br;HTMLButtonElement button;HTMLCanvasElement canvas;HTMLDataElement data;HTMLDataListElement datalist;HTMLDetailsElement details;HTMLDialogElement dialog;HTMLDivElement div;HTMLDListElement dl;HTMLEmbedElement embed;HTMLFieldSetElement fieldset;HTMLFormElement form;HTMLFrameSetElement frameset;HTMLHeadingElement h1 h2 h3 h4 h5 h6;HTMLHeadElement head;HTMLHRElement hr;HTMLHtmlElement html;HTMLIFrameElement iframe;HTMLImageElement img;HTMLInputElement input;HTMLLabelElement label;HTMLLegendElement legend;HTMLLIElement li;HTMLLinkElement link;HTMLMapElement map;HTMLMenuElement menu;HTMLMetaElement meta;HTMLMeterElement meter;HTMLModElement ins del;HTMLObjectElement object;HTMLOListElement ol;HTMLOptGroupElement optgroup;HTMLOptionElement option;HTMLOutputElement output;HTMLParagraphElement p;HTMLPictureElement picture;HTMLPreElement pre listing xmp;HTMLProgressElement progress;HTMLQuoteElement q blockquote;HTMLScriptElement script;HTMLSelectElement select;HTMLSlotElement slot;HTMLSourceElement source;HTMLSpanElement span;HTMLStyleElement style;HTMLTableCaptionElement caption;HTMLTableCellElement td th;HTMLTableColElement col colgroup;HTMLTableElement table;HTMLTableRowElement tr;HTMLTableSectionElement thead tbody tfoot;HTMLTemplateElement template;HTMLTextAreaElement textarea;HTMLTimeElement time;HTMLTitleElement title;HTMLTrackElement track;HTMLUListElement ul;HTMLUnknownElement"
+// The media elements, under HTMLMediaElement.
+let MEDIA_INTERFACES = "HTMLAudioElement audio;HTMLVideoElement video"
+
+// Makes the interface objects of `table` ("Interface tag tag;...") with
+// prototypes under `parent`, and maps their tags to them.
+fn defineInterfaces(s: *mut Script, table: []u8, parent: u32) JsError!void {
+    let it = &mut s.it
+    var entries = text.split(table, ";")
+    while entries.next() |entry| {
+        var words = text.split(entry, " ")
+        let name = words.next() orelse continue
+        let proto = try newProto(it, parent)
+        try interfaceObject(it, name, proto)
+        while words.next() |tag| {
+            try s.tag_protos.put(tag, proto)
+        }
+    }
+}
+
+// The interfaces of elements: HTMLDivElement and the others under
+// HTMLElement (`html`), SVGElement and MathMLElement under Element.
+fn installElementInterfaces(s: *mut Script, html: u32, element: u32) JsError!void {
+    let it = &mut s.it
+    try defineInterfaces(s, HTML_INTERFACES, html)
+    let media = try newProto(it, html)
+    try interfaceObject(it, "HTMLMediaElement", media)
+    try defineInterfaces(s, MEDIA_INTERFACES, media)
+    s.svg_proto = try newProto(it, element)
+    try interfaceObject(it, "SVGElement", s.svg_proto)
+    let graphics = try newProto(it, s.svg_proto)
+    try interfaceObject(it, "SVGGraphicsElement", graphics)
+    s.svg_svg_proto = try newProto(it, graphics)
+    try interfaceObject(it, "SVGSVGElement", s.svg_svg_proto)
+    s.mathml_proto = try newProto(it, element)
+    try interfaceObject(it, "MathMLElement", s.mathml_proto)
+}
+
+// The prototype of the wrapper of the element `h`: its interface's.
+fn elementProto(s: *mut Script, h: NodeId) u32 {
+    let doc = &s.page.doc
+    let ns = doc.namespaceOf(h)
+    if ns == dom.NS_SVG {
+        if text.eql(doc.node(h).name, "svg") {
+            return s.svg_svg_proto
+        }
+        return s.svg_proto
+    }
+    if ns == dom.NS_MATHML {
+        return s.mathml_proto
+    }
+    if ns != dom.NS_HTML {
+        return s.plain_element_proto
+    }
+    return s.tag_protos.get(doc.node(h).name) orelse s.element_proto
+}
+
 fn installDom(s: *mut Script) JsError!void {
     let it = &mut s.it
     let et = try newProto(it, it.object_proto)
@@ -183,30 +264,48 @@ fn installDom(s: *mut Script) JsError!void {
     let element = try newProto(it, node)
     let html = try newProto(it, element)
     let docp = try newProto(it, node)
+    let htmldoc = try newProto(it, docp)
     let chars = try newProto(it, node)
     let textp = try newProto(it, chars)
     let comment = try newProto(it, chars)
     let doctype = try newProto(it, node)
+    let fragment = try newProto(it, node)
     s.node_proto = node
     s.element_proto = html
-    s.document_proto = docp
+    s.plain_element_proto = element
+    s.document_proto = htmldoc
     s.text_proto = textp
     s.comment_proto = comment
     s.doctype_proto = doctype
+    s.fragment_proto = fragment
     s.style_proto = try newProto(it, it.object_proto)
     s.dataset_proto = try newProto(it, it.object_proto)
+    s.nodelist_proto = try newProto(it, it.object_proto)
+    s.collection_proto = try newProto(it, it.object_proto)
+    s.options_proto = try newProto(it, s.collection_proto)
     try interfaceObject(it, "EventTarget", et)
     try interfaceObject(it, "Node", node)
     try interfaceObject(it, "Element", element)
     try interfaceObject(it, "HTMLElement", html)
     try interfaceObject(it, "Document", docp)
-    try interfaceObject(it, "HTMLDocument", docp)
+    try interfaceObject(it, "HTMLDocument", htmldoc)
     try interfaceObject(it, "CharacterData", chars)
     try interfaceObject(it, "Text", textp)
     try interfaceObject(it, "Comment", comment)
     try interfaceObject(it, "DocumentType", doctype)
+    try interfaceObject(it, "DocumentFragment", fragment)
     try interfaceObject(it, "CSSStyleDeclaration", s.style_proto)
     try interfaceObject(it, "DOMStringMap", s.dataset_proto)
+    try interfaceObject(it, "NodeList", s.nodelist_proto)
+    try interfaceObject(it, "HTMLCollection", s.collection_proto)
+    try interfaceObject(it, "HTMLOptionsCollection", s.options_proto)
+    // Interfaces no node of a page has, which polyfills patch.
+    try interfaceObject(it, "CDATASection", try newProto(it, textp))
+    try interfaceObject(it, "ProcessingInstruction", try newProto(it, chars))
+    try interfaceObject(it, "XMLDocument", try newProto(it, docp))
+    try interfaceObject(it, "HTMLFormControlsCollection", try newProto(it, s.collection_proto))
+    try interfaceObject(it, "RadioNodeList", try newProto(it, s.nodelist_proto))
+    try installElementInterfaces(s, html, element)
     let consts = [6][]u8{"ELEMENT_NODE", "TEXT_NODE", "COMMENT_NODE", "DOCUMENT_NODE", "DOCUMENT_TYPE_NODE", "DOCUMENT_FRAGMENT_NODE"}
     let values = [6]f64{1.0, 3.0, 8.0, 9.0, 10.0, 11.0}
     let nodeCtor = js.objectOf(try it.getProp(js.objVal(it.global), try it.intern("Node")))
@@ -250,6 +349,7 @@ fn installDom(s: *mut Script) JsError!void {
 
     try accessor(it, element, "tagName", elementTagName, null)
     try accessor(it, element, "localName", elementLocalName, null)
+    try accessor(it, element, "namespaceURI", elementNamespaceUri, null)
     try accessor(it, element, "id", elementId, elementSetId)
     try accessor(it, element, "className", elementClassName, elementSetClassName)
     try accessor(it, element, "innerHTML", elementInnerHtml, elementSetInnerHtml)
@@ -287,6 +387,25 @@ fn installDom(s: *mut Script) JsError!void {
     try defMethod(it, docp, "createElement", 1, documentCreateElement)
     try defMethod(it, docp, "createTextNode", 1, documentCreateTextNode)
     try defMethod(it, docp, "createComment", 1, documentCreateComment)
+    try defMethod(it, docp, "createElementNS", 2, documentCreateElementNs)
+    try defMethod(it, docp, "createDocumentFragment", 0, documentCreateFragment)
+    try defMethod(it, docp, "getElementsByName", 1, documentGetElementsByName)
+    try defMethod(it, docp, "write", 0, documentWrite)
+    try defMethod(it, docp, "writeln", 0, documentWriteln)
+
+    try accessor(it, s.nodelist_proto, "length", listLength, null)
+    try defMethod(it, s.nodelist_proto, "item", 1, listItem)
+    try accessor(it, s.collection_proto, "length", listLength, null)
+    try defMethod(it, s.collection_proto, "item", 1, listItem)
+    if s.tag_protos.get("template") |tp| {
+        try accessor(it, tp, "content", templateContent, null)
+    }
+    if s.tag_protos.get("select") |sp| {
+        try accessor(it, sp, "options", selectOptions, null)
+    }
+    if s.tag_protos.get("datalist") |dp| {
+        try accessor(it, dp, "options", selectOptions, null)
+    }
 
     try accessor(it, chars, "data", nodeValue, nodeSetValue)
     try accessor(it, chars, "length", charsLength, null)
@@ -306,6 +425,9 @@ fn installDom(s: *mut Script) JsError!void {
 
 fn nodeType(it: *mut Interp, a: Args) JsError!Value {
     let h = try thisNode(it, a)
+    if docOf(it).isFragment(h) {
+        return js.numVal(11.0)
+    }
     return js.numVal(match docOf(it).node(h).kind {
         .Element => 1.0
         .Text => 3.0
@@ -320,7 +442,7 @@ fn nodeName(it: *mut Interp, a: Args) JsError!Value {
     let n = docOf(it).node(h)
     match n.kind {
         .Element => {
-            return upperName(it, n.name)
+            return tagNameOf(it, h)
         }
         .Text => {
             return it.newString("#text")
@@ -329,12 +451,25 @@ fn nodeName(it: *mut Interp, a: Args) JsError!Value {
             return it.newString("#comment")
         }
         .Document => {
+            if docOf(it).isFragment(h) {
+                return it.newString("#document-fragment")
+            }
             return it.newString("#document")
         }
         .Doctype => {
             return it.newString(n.name)
         }
     }
+}
+
+// The tagName of the element `h`: upper case for HTML elements, as it is
+// for the others.
+fn tagNameOf(it: *mut Interp, h: NodeId) JsError!Value {
+    let doc = docOf(it)
+    if doc.namespaceOf(h) == dom.NS_HTML {
+        return upperName(it, doc.node(h).name)
+    }
+    return it.newString(doc.node(h).name)
 }
 
 // The name in upper case (tagName, nodeName of an element).
@@ -391,22 +526,6 @@ fn childList(it: *mut Interp, h: NodeId, elements: bool, out: *mut List(NodeId))
         }
         cur = doc.nextSibling(c)
     }
-}
-
-fn nodeChildNodes(it: *mut Interp, a: Args) JsError!Value {
-    let h = try thisNode(it, a)
-    var kids = List(NodeId).init(it.alloc)
-    defer kids.deinit()
-    try childList(it, h, false, &mut kids)
-    return wrapAll(it, kids.items())
-}
-
-fn nodeChildren(it: *mut Interp, a: Args) JsError!Value {
-    let h = try thisNode(it, a)
-    var kids = List(NodeId).init(it.alloc)
-    defer kids.deinit()
-    try childList(it, h, true, &mut kids)
-    return wrapAll(it, kids.items())
 }
 
 fn nodeFirstElementChild(it: *mut Interp, a: Args) JsError!Value {
@@ -476,7 +595,7 @@ fn nodeTextContent(it: *mut Interp, a: Args) JsError!Value {
     if n.kind == Kind.Text || n.kind == Kind.Comment {
         return it.newString(n.data)
     }
-    if n.kind != Kind.Element {
+    if n.kind != Kind.Element && !doc.isFragment(h) {
         return Value.Null
     }
     let b = try it.builder()
@@ -499,7 +618,7 @@ fn nodeSetTextContent(it: *mut Interp, a: Args) JsError!Value {
         changed(it)
         return Value.Undefined
     }
-    if kind != Kind.Element {
+    if kind != Kind.Element && !doc.isFragment(h) {
         return Value.Undefined
     }
     removeChildren(doc, h)
@@ -581,9 +700,21 @@ fn checkInsert(it: *mut Interp, parent: NodeId, child: NodeId) JsError!void {
     let doc = docOf(it)
     let pk = doc.node(parent).kind
     let ck = doc.node(child).kind
-    if (pk != Kind.Element && pk != Kind.Document) || ck == Kind.Document || isInclusiveAncestor(doc, child, parent) {
+    if (pk != Kind.Element && pk != Kind.Document) || (ck == Kind.Document && !doc.isFragment(child)) || isInclusiveAncestor(doc, child, parent) {
         try domError(it, "HierarchyRequestError", "Failed to execute 'appendChild' on 'Node': The new child element contains the parent.")
     }
+}
+
+// Puts `child` into `parent` before `before` (last when null): the
+// children of a fragment instead of the fragment, which ends up empty.
+fn insertNode(doc: *mut Document, parent: NodeId, child: NodeId, before: ?NodeId) {
+    if doc.isFragment(child) {
+        while doc.firstChild(child) |c| {
+            doc.insertBefore(parent, c, before)
+        }
+        return
+    }
+    doc.insertBefore(parent, child, before)
 }
 
 // Detaches `child` from where it was and frees nothing (the caller puts
@@ -592,7 +723,7 @@ fn nodeAppendChild(it: *mut Interp, a: Args) JsError!Value {
     let parent = try thisNode(it, a)
     let child = try argNode(it, a, 0, "appendChild")
     try checkInsert(it, parent, child)
-    docOf(it).appendChild(parent, child)
+    insertNode(docOf(it), parent, child, null)
     changed(it)
     return it.arg(a, 0)
 }
@@ -603,14 +734,14 @@ fn nodeInsertBefore(it: *mut Interp, a: Args) JsError!Value {
     try checkInsert(it, parent, child)
     let doc = docOf(it)
     if js.isNullish(it.arg(a, 1)) {
-        doc.appendChild(parent, child)
+        insertNode(doc, parent, child, null)
     } else {
         let before = try argNode(it, a, 1, "insertBefore")
         if !dom.isSame(doc.parent(before), parent) {
             return domError(it, "NotFoundError", "Failed to execute 'insertBefore' on 'Node': The node before which the new node is to be inserted is not a child of this node.")
         }
         if !dom.same(before, child) {
-            doc.insertBefore(parent, child, before)
+            insertNode(doc, parent, child, before)
         }
     }
     changed(it)
@@ -639,7 +770,7 @@ fn nodeReplaceChild(it: *mut Interp, a: Args) JsError!Value {
     }
     try checkInsert(it, parent, fresh)
     if !dom.same(fresh, old) {
-        doc.insertBefore(parent, fresh, old)
+        insertNode(doc, parent, fresh, old)
         doc.detach(old)
     }
     changed(it)
@@ -674,6 +805,7 @@ fn copyNode(doc: *mut Document, h: NodeId, deep: bool) AllocError!NodeId {
     match n.kind {
         .Element => {
             copy = try doc.createElement(n.name, n.attrs)
+            doc.node(copy).ns = n.ns
         }
         .Text => {
             copy = try doc.createText(n.data)
@@ -685,7 +817,10 @@ fn copyNode(doc: *mut Document, h: NodeId, deep: bool) AllocError!NodeId {
             copy = try doc.createDoctype(n.name)
         }
         .Document => {
-            return doc.root
+            if !doc.isFragment(h) {
+                return doc.root
+            }
+            copy = try doc.createFragment()
         }
     }
     if deep {
@@ -750,6 +885,11 @@ fn argSelector(it: *mut Interp, a: Args, name: []u8) JsError!Selector {
 // order; at most `limit`.
 fn selectAll(it: *mut Interp, top: NodeId, sel: *Selector, limit: usize, out: *mut List(NodeId)) JsError!void {
     let doc = docOf(it)
+    // `:scope` is `top` (the root element when `top` is the document).
+    if doc.node(top).kind == Kind.Element {
+        css.setSelectorScope(top)
+    }
+    defer css.setSelectorScope(null)
     var cur = doc.following(top, top)
     while cur |h| {
         if doc.node(h).kind == Kind.Element && selectorMatches(sel, doc, h) {
@@ -785,26 +925,6 @@ fn nodeQuerySelectorAll(it: *mut Interp, a: Args) JsError!Value {
     return wrapAll(it, found.items())
 }
 
-fn nodeGetElementsByTagName(it: *mut Interp, a: Args) JsError!Value {
-    let h = try thisNode(it, a)
-    let b = try it.builder()
-    defer it.release(b)
-    try argText(it, a, 0, b)
-    let doc = docOf(it)
-    let all = text.eql(b.bytes(), "*")
-    var found = List(NodeId).init(it.alloc)
-    defer found.deinit()
-    var cur = doc.following(h, h)
-    while cur |c| {
-        let n = doc.node(c)
-        if n.kind == Kind.Element && (all || text.eqlIgnoreCase(n.name, b.bytes())) {
-            try found.append(c)
-        }
-        cur = doc.following(c, h)
-    }
-    return wrapAll(it, found.items())
-}
-
 // Does the class attribute `classes` have the word `name`?
 fn hasClass(classes: []u8, name: []u8) bool {
     var i: usize = 0
@@ -828,56 +948,12 @@ fn isSpace(c: u8) bool {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\x0C'
 }
 
-fn nodeGetElementsByClassName(it: *mut Interp, a: Args) JsError!Value {
-    let h = try thisNode(it, a)
-    let b = try it.builder()
-    defer it.release(b)
-    try argText(it, a, 0, b)
-    let doc = docOf(it)
-    var wanted = List([]u8).init(it.alloc)
-    defer wanted.deinit()
-    var i: usize = 0
-    let names = b.bytes()
-    while i < names.len {
-        while i < names.len && isSpace(names[i]) {
-            i += 1
-        }
-        var j = i
-        while j < names.len && !isSpace(names[j]) {
-            j += 1
-        }
-        if j > i {
-            try wanted.append(names[i..j])
-        }
-        i = j
-    }
-    var found = List(NodeId).init(it.alloc)
-    defer found.deinit()
-    if wanted.len() > 0 {
-        var cur = doc.following(h, h)
-        while cur |c| {
-            if doc.node(c).kind == Kind.Element {
-                let classes = doc.attr(c, "class") orelse ""
-                var every = true
-                for w in wanted.items() {
-                    if !hasClass(classes, w) {
-                        every = false
-                    }
-                }
-                if every {
-                    try found.append(c)
-                }
-            }
-            cur = doc.following(c, h)
-        }
-    }
-    return wrapAll(it, found.items())
-}
-
 fn elementMatches(it: *mut Interp, a: Args) JsError!Value {
     let h = try thisElement(it, a)
     var sel = try argSelector(it, a, "matches")
     defer sel.sheet.deinit()
+    css.setSelectorScope(h)
+    defer css.setSelectorScope(null)
     return js.boolVal(selectorMatches(&sel, docOf(it), h))
 }
 
@@ -885,6 +961,8 @@ fn elementClosest(it: *mut Interp, a: Args) JsError!Value {
     let h = try thisElement(it, a)
     var sel = try argSelector(it, a, "closest")
     defer sel.sheet.deinit()
+    css.setSelectorScope(h)
+    defer css.setSelectorScope(null)
     let doc = docOf(it)
     var cur: ?NodeId = h
     while cur |c| {
@@ -939,8 +1017,27 @@ fn selectorMatches(sel: *Selector, doc: *Document, el: NodeId) bool {
 
 fn elementTagName(it: *mut Interp, a: Args) JsError!Value {
     let h = try thisElement(it, a)
-    return upperName(it, docOf(it).node(h).name)
+    return tagNameOf(it, h)
 }
+
+fn elementNamespaceUri(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let ns = docOf(it).namespaceOf(h)
+    if ns == dom.NS_SVG {
+        return it.newString(SVG_NS)
+    }
+    if ns == dom.NS_MATHML {
+        return it.newString(MATHML_NS)
+    }
+    if ns == dom.NS_OTHER {
+        return Value.Null
+    }
+    return it.newString(HTML_NS)
+}
+
+let HTML_NS = "http://www.w3.org/1999/xhtml"
+let SVG_NS = "http://www.w3.org/2000/svg"
+let MATHML_NS = "http://www.w3.org/1998/Math/MathML"
 
 fn elementLocalName(it: *mut Interp, a: Args) JsError!Value {
     let h = try thisElement(it, a)
@@ -1017,7 +1114,7 @@ fn elementSetAttribute(it: *mut Interp, a: Args) JsError!Value {
     defer it.release(v)
     try argText(it, a, 1, v)
     try docOf(it).setAttr(h, name.bytes(), v.bytes())
-    changed(it)
+    changedAttr(it, name.bytes())
     return Value.Undefined
 }
 
@@ -1029,7 +1126,7 @@ fn elementRemoveAttribute(it: *mut Interp, a: Args) JsError!Value {
     let doc = docOf(it)
     if doc.attr(h, b.bytes()) != null {
         doc.removeAttr(h, b.bytes())
-        changed(it)
+        changedAttr(it, b.bytes())
     }
     return Value.Undefined
 }
@@ -1293,6 +1390,9 @@ fn kebab(name: []u8, prefix: []u8, b: *mut text.Builder) AllocError!void {
 /// Host.getNamed: a style declaration or a data attribute.
 fn namedGet(s: *mut Script, o: u32, key: u32) JsError!Value {
     let it = &mut s.it
+    if hostTag(it, o) == TAG_LIST {
+        return listGet(s, o, key)
+    }
     let proto = it.heap.obj(o).proto
     if it.hasProperty(proto, key) {
         return Value.Empty
@@ -1321,6 +1421,9 @@ fn namedGet(s: *mut Script, o: u32, key: u32) JsError!Value {
 /// Host.setNamed.
 fn namedSet(s: *mut Script, o: u32, key: u32, value: Value) JsError!bool {
     let it = &mut s.it
+    if hostTag(it, o) == TAG_LIST {
+        return listSet(s, o, key)
+    }
     let proto = it.heap.obj(o).proto
     if it.hasProperty(proto, key) {
         return false
@@ -1346,7 +1449,36 @@ fn namedSet(s: *mut Script, o: u32, key: u32, value: Value) JsError!bool {
         try setStyleDecl(s, h, b.bytes(), v.bytes())
     }
     s.version += 1
+    s.style_version += 1
     return true
+}
+
+/// Host.hasNamed: the indices of a list, the `data-*` attributes of a
+/// dataset.
+fn namedHas(s: *mut Script, o: u32, key: u32) bool {
+    let it = &mut s.it
+    let tag = hostTag(it, o)
+    if tag == TAG_LIST {
+        return listHas(s, o, key)
+    }
+    if tag != TAG_DATASET || it.hasProperty(it.heap.obj(o).proto, key) {
+        return false
+    }
+    let h = sideNode(it, o) orelse return false
+    var b = text.Builder.init(s.alloc)
+    defer b.deinit()
+    kebab(it.heap.atoms.name(key), "data-", &mut b) catch |e| {
+        return false
+    }
+    return s.page.doc.attr(h, b.bytes()) != null
+}
+
+// The tag of the host object `o` (0 for other objects).
+fn hostTag(it: *mut Interp, o: u32) u32 {
+    return match it.heap.obj(o).data {
+        .Host { tag, .. } => tag
+        _ => 0
+    }
 }
 
 // The value of property `prop` in the declarations `decls` ("a: b; c: d").
@@ -1630,4 +1762,85 @@ fn documentCreateComment(it: *mut Interp, a: Args) JsError!Value {
     try argText(it, a, 0, b)
     let t = try docOf(it).createComment(b.bytes())
     return wrap(it, t)
+}
+
+// createElementNS(namespace, qualifiedName): the local name in lower
+// case, like the parser's; the namespace in `Node.ns`.
+fn documentCreateElementNs(it: *mut Interp, a: Args) JsError!Value {
+    try thisDocument(it, a)
+    var ns = dom.NS_OTHER
+    let nsv = it.arg(a, 0)
+    if !js.isNullish(nsv) {
+        let b = try it.builder()
+        defer it.release(b)
+        try argText(it, a, 0, b)
+        if text.eql(b.bytes(), HTML_NS) {
+            ns = dom.NS_HTML
+        } else if text.eql(b.bytes(), SVG_NS) {
+            ns = dom.NS_SVG
+        } else if text.eql(b.bytes(), MATHML_NS) {
+            ns = dom.NS_MATHML
+        }
+    }
+    let name = try it.builder()
+    defer it.release(name)
+    try argAttrName(it, a, 1, name)
+    var local = name.bytes()
+    if std.mem.indexOf(local, ':') |colon| {
+        local = local[colon + 1..]
+    }
+    if local.len == 0 {
+        return domError(it, "InvalidCharacterError", "Failed to execute 'createElementNS' on 'Document': The qualified name provided is empty.")
+    }
+    let doc = docOf(it)
+    let el = try doc.createElement(local, []Attr{})
+    doc.node(el).ns = ns
+    return wrap(it, el)
+}
+
+fn documentCreateFragment(it: *mut Interp, a: Args) JsError!Value {
+    try thisDocument(it, a)
+    let f = try docOf(it).createFragment()
+    return wrap(it, f)
+}
+
+// The contents of a template: the fragment the parser made, or a new one
+// for a template a script made.
+fn templateContent(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let doc = docOf(it)
+    if doc.templateContent(h) |f| {
+        return wrap(it, f)
+    }
+    let f = try doc.createTemplateContent(h)
+    return wrap(it, f)
+}
+
+// document.write: while a script of the parser runs (not a deferred or
+// asynchronous one, not a timer or an event), the markup is kept and
+// inserted after the script when it returns (insertWritten); otherwise
+// it is ignored, as browsers do for asynchronous scripts.
+fn documentWrite(it: *mut Interp, a: Args) JsError!Value {
+    return writeArgs(it, a, false)
+}
+
+fn documentWriteln(it: *mut Interp, a: Args) JsError!Value {
+    return writeArgs(it, a, true)
+}
+
+fn writeArgs(it: *mut Interp, a: Args, line: bool) JsError!Value {
+    try thisDocument(it, a)
+    let s = scriptOf(it)
+    let b = try it.builder()
+    defer it.release(b)
+    for i in 0..a.argc {
+        try argText(it, a, i, b)
+    }
+    if line {
+        try b.appendByte('\n')
+    }
+    if s.current != null && s.ready == 0 {
+        try s.written.append(b.bytes())
+    }
+    return Value.Undefined
 }

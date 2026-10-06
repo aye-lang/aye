@@ -88,6 +88,10 @@ fn traceObj(it: *mut Interp, o: u32) {
             markValue(it, this_v)
         }
         .Prim { v } => markValue(it, v)
+        .Proxy { target, handler } => {
+            markObj(it, target)
+            markObj(it, handler)
+        }
         _ => {}
     }
 }

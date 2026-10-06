@@ -6,9 +6,10 @@
 //   (timers, microtasks) and what the front ends call: events from the
 //   user, `eval`, pending navigations, the console.
 // - dom_api.ore: Node, Element, Document and the style and dataset
-//   objects (natives over `Handle(Node)` wrappers).
+//   objects (natives over `Handle(Node)` wrappers), the interface objects.
+// - lists.ore: live NodeLists and HTMLCollections.
 // - window_api.ore: the natives the prelude uses for the window (timers,
-//   location, storage, fetch, console).
+//   location, storage, fetch, console, getComputedStyle).
 // - markup.ore: innerHTML (serializing, and parsing a fragment).
 // - prelude.ore: the JavaScript part of the bindings.
 // - activate.ore: default actions (links, checkboxes, submit events).
@@ -21,7 +22,8 @@
 // listeners and expando properties last as long as their nodes.
 //
 // Simplifications: scripts run after the whole document is parsed (an
-// inline script sees the complete DOM, `document.write` is missing);
+// inline script sees the complete DOM; what `document.write` writes is
+// inserted after the script once it returns);
 // `async` scripts run like `defer` ones; modules are skipped; a script
 // that never returns hangs the browser. Time is virtual for `dump` and
 // the agent (the event loop jumps to the next timer) and real for the
@@ -39,6 +41,7 @@ import net
 import std
 import std.list.List
 import std.map.IntMap
+import std.map.StrMap
 import std.mem.AllocError
 import std.mem.Allocator
 import std.text
@@ -50,6 +53,9 @@ let TAG_NODE: u32 = 1
 // `style` attribute, and the `data-*` attributes.
 let TAG_STYLE: u32 = 0x102
 let TAG_DATASET: u32 = 0x103
+// HOST_NAMED | 4: a live NodeList or HTMLCollection; the index is its
+// slot in `Script.lists`, the generation the slot's.
+let TAG_LIST: u32 = 0x104
 
 // Nested calls in page scripts: the main thread's C stack is 8 MB and a
 // call of the tree-walking interpreter takes several KB of it (more in
@@ -99,6 +105,22 @@ pub fn setConsoleEcho(on: bool) {
 struct Wrapper {
     generation: u32
     obj: u32
+}
+
+/// A live list (dom_api.ore): what it lists, under which node, and the
+/// nodes it had when the document was at `version`.
+struct LiveList {
+    used: bool
+    generation: u32
+    kind: u8
+    // Held: counts in its js_refs while the list is used.
+    root: NodeId
+    // The tag name, class names or name the list is about (owned).
+    arg: []mut u8
+    items: List(NodeId)
+    // `Script.version` of `items`; `fresh` false before the first walk.
+    version: u64
+    fresh: bool
 }
 
 struct Timer {
@@ -151,8 +173,27 @@ pub struct Script {
     text_proto: u32
     comment_proto: u32
     doctype_proto: u32
+    fragment_proto: u32
     style_proto: u32
     dataset_proto: u32
+    // Elements: the prototype of their interface by tag name
+    // (HTMLDivElement...); others are HTMLElement (`element_proto`).
+    tag_protos: StrMap(u32)
+    svg_proto: u32
+    svg_svg_proto: u32
+    mathml_proto: u32
+    plain_element_proto: u32
+    nodelist_proto: u32
+    collection_proto: u32
+    options_proto: u32
+    // Live lists (TAG_LIST objects) by slot; `free_lists` are unused slots.
+    lists: List(LiveList)
+    free_lists: List(u32)
+    // Markup that `document.write` gave while a script of the parser ran,
+    // inserted after it when it returns.
+    written: text.Builder
+    // The styles getComputedStyle uses when the page's are out of date.
+    computed: ?*mut Styling
     // The root of the prelude's `hostEvent` (NONE before it ran).
     dispatcher: u32
     timers: List(Timer)
@@ -172,6 +213,11 @@ pub struct Script {
     // Counts changes to the document by scripts (styles and layout are
     // out of date when it moved).
     version: u64
+    // Counts the changes that may change computed styles: all but those
+    // of attributes no selector looks at in practice (`src`, `alt`...).
+    style_version: u64
+    // The style sheets `computed` has: their elements (sheetsKey).
+    computed_sheets: u64
     title_version: u64
     // document.readyState: 0 loading, 1 interactive, 2 complete.
     ready: u8
@@ -185,7 +231,12 @@ pub struct Script {
     // ---- js.Host
 
     fn finalize(self: *mut Self, tag: u32, index: u32, generation: u32) {
-        let h = NodeId { index: index, generation: generation }
+        if tag == TAG_LIST {
+            if releaseList(self, index, generation) |root| {
+                self.unref(root)
+            }
+            return
+        }
         if tag == TAG_NODE {
             if self.wrappers.get(index) |w| {
                 if w.generation == generation {
@@ -193,6 +244,12 @@ pub struct Script {
                 }
             }
         }
+        self.unref(NodeId { index: index, generation: generation })
+    }
+
+    // An object that held `h` (a wrapper, a style, dataset or list
+    // object) is gone: one js_ref less.
+    fn unref(self: *mut Self, h: NodeId) {
         let doc = &mut self.page.doc
         if !doc.isLive(h) {
             return
@@ -243,6 +300,10 @@ pub struct Script {
     fn setNamed(self: *mut Self, it: *mut Interp, o: u32, key: u32, v: Value) JsError!bool {
         return namedSet(self, o, key, v)
     }
+
+    fn hasNamed(self: *mut Self, it: *mut Interp, o: u32, key: u32) bool {
+        return namedHas(self, o, key)
+    }
 }
 
 /// The script of the native function's engine.
@@ -268,6 +329,19 @@ fn createScript(p: *mut Page) AllocError!*mut Script {
         doctype_proto: js.NONE,
         style_proto: js.NONE,
         dataset_proto: js.NONE,
+        fragment_proto: js.NONE,
+        tag_protos: StrMap(u32).init(alloc),
+        svg_proto: js.NONE,
+        svg_svg_proto: js.NONE,
+        mathml_proto: js.NONE,
+        plain_element_proto: js.NONE,
+        nodelist_proto: js.NONE,
+        collection_proto: js.NONE,
+        options_proto: js.NONE,
+        lists: List(LiveList).init(alloc),
+        free_lists: List(u32).init(alloc),
+        written: text.Builder.init(alloc),
+        computed: null,
         dispatcher: js.NONE,
         timers: List(Timer).init(alloc),
         next_timer: 1,
@@ -282,6 +356,8 @@ fn createScript(p: *mut Page) AllocError!*mut Script {
         nav_form: null,
         nav_submitter: null,
         version: 0,
+        style_version: 0,
+        computed_sheets: 0,
         title_version: 0,
         ready: 0,
         current: null,
@@ -326,6 +402,18 @@ pub fn destroyScript(s: *mut Script) {
     s.it.host = null
     s.it.deinit()
     s.wrappers.deinit()
+    for i in 0..s.lists.len() {
+        let l = &mut s.lists.items()[i]
+        if l.used {
+            s.alloc.free(l.arg)
+            l.items.deinit()
+        }
+    }
+    s.lists.deinit()
+    s.free_lists.deinit()
+    s.tag_protos.deinit()
+    s.written.deinit()
+    dropComputed(s)
     s.timers.deinit()
     for line in s.console.items() {
         s.alloc.free(line)
@@ -446,16 +534,69 @@ fn runScriptElement(s: *mut Script, el: NodeId) AllocError!void {
 
 fn runSourceOf(s: *mut Script, el: NodeId, code: []u8) AllocError!void {
     s.current = el
+    s.written.clear()
     enter(s)
     s.it.runScript(code) catch |e| {
         leave(s)
         s.current = null
         try uncaught(s, e)
-        return runMicrotasks(s)
+        try runMicrotasks(s)
+        return insertWritten(s, el)
     }
     leave(s)
     s.current = null
     try runMicrotasks(s)
+    try insertWritten(s, el)
+}
+
+// Scripts that document.write wrote, nested at most this deep.
+let MAX_WRITE_NESTING: usize = 16
+var write_nesting: usize = 0
+
+// Inserts the markup that the script `el` wrote with document.write
+// right after it, as if the parser had found it there, and runs the
+// scripts in it. (Scripts run after the whole document is parsed, so
+// the markup is parsed on its own, in the context of the script's
+// parent.)
+fn insertWritten(s: *mut Script, el: NodeId) AllocError!void {
+    if s.written.len() == 0 {
+        return
+    }
+    let src = try s.written.toOwned()
+    defer s.alloc.free(src)
+    s.written.clear()
+    let p = s.page
+    if !p.doc.isLive(el) || write_nesting >= MAX_WRITE_NESTING {
+        return
+    }
+    let parent = p.doc.parent(el) orelse return
+    var context: []u8 = "body"
+    if p.doc.node(parent).kind == Kind.Element {
+        context = p.doc.node(parent).name
+    }
+    var nodes = List(NodeId).init(s.alloc)
+    defer nodes.deinit()
+    try parseFragment(p, context, src, &mut nodes)
+    let next = p.doc.nextSibling(el)
+    var scripts = List(NodeId).init(s.alloc)
+    defer scripts.deinit()
+    for n in nodes.items() {
+        p.doc.insertBefore(parent, n, next)
+        var cur: ?NodeId = n
+        while cur |h| {
+            if p.doc.isElement(h, "script") && isClassicScript(p, h) {
+                try scripts.append(h)
+            }
+            cur = p.doc.following(h, n)
+        }
+    }
+    s.version += 1
+    s.style_version += 1
+    write_nesting += 1
+    defer write_nesting -= 1
+    for sc in scripts.items() {
+        try runScriptElement(s, sc)
+    }
 }
 
 // Fires DOMContentLoaded on the document, or load on the window (`at`

@@ -1,0 +1,39 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Fragments and namespaces"
+      "\n"
+    <body>
+      <ul id="list">
+        <em>
+        <hr>
+        <li id="first">
+          "first"
+        <li>
+          "a"
+        <li>
+          "b"
+        <li>
+          "c"
+      "\n"
+      <template id="tpl">
+        #document-fragment
+          <p class="t">
+            "from "
+            <b>
+              "template"
+      "\n"
+      <div id="box">
+        <p class="t">
+          "from "
+          <b>
+            "template"
+      "\n"
+      <pre id="out">
+        "11 #document-fragment 3 a 3 abc \ntrue 0 4 c\n3 x HR \nEM 6\n0\ntrue true 0 1\n11 t from <b>template</b> false\n<p class=\"t\">from <b>template</b></p> 1\n0 11\nSPAN \n1 3\nhttp://www.w3.org/2000/svg svg svg http://www.w3.org/2000/svg true true false\nhttp://www.w3.org/1999/xhtml DIV true\n thing false true\nhttp://www.w3.org/2000/svg http://www.w3.org/2000/svg\nM0 0 #icon #icon false\nfalse\nxlink:title title xlink http://www.w3.org/1999/xlink true tip\n2 data-x 1 z 2 \nchanged data-x=1 id=changed\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst list = document.getElementById('list');\n// A fragment's children move into the parent; the fragment ends up empty.\nconst f = document.createDocumentFragment();\nfor (const t of ['a', 'b', 'c']) {\n  const li = document.createElement('li');\n  li.textContent = t;\n  f.appendChild(li);\n}\nlog(f.nodeType, f.nodeName, f.childNodes.length, f.firstChild.textContent, f.querySelectorAll('li').length, f.textContent, f.parentNode);\nconst returned = list.appendChild(f);\nlog(returned === f, f.childNodes.length, list.children.length, list.lastChild.textContent);\nconst g = new DocumentFragment();\ng.append('x', document.createElement('hr'));\nlist.insertBefore(g, document.getElementById('first'));\nlog(list.firstChild.nodeType, list.firstChild.data, list.childNodes[1].tagName, g.firstChild);\nconst h = document.createDocumentFragment();\nh.appendChild(document.createElement('em'));\nlist.replaceChild(h, list.firstChild);\nlog(list.firstChild.tagName, list.childNodes.length);\ndocument.getElementById('box').append(new DocumentFragment());\nlog(document.getElementById('box').childNodes.length);\n// Templates: content is a fragment; importNode or cloneNode copies it.\nconst tpl = document.getElementById('tpl');\nlog(tpl.content instanceof DocumentFragment, tpl.content === tpl.content, tpl.childNodes.length, tpl.content.childNodes.length);\nconst copy = document.importNode(tpl.content, true);\nlog(copy.nodeType, copy.firstChild.className, copy.firstChild.innerHTML, copy === tpl.content);\ndocument.getElementById('box').appendChild(copy);\nlog(document.getElementById('box').innerHTML, tpl.content.childNodes.length);\nconst empty = document.createElement('template');\nlog(empty.content.childNodes.length, empty.content.nodeType);\n// The frag's own getElementById, textContent.\nconst k = document.createDocumentFragment();\nk.appendChild(document.createElement('span')).id = 'inner';\nlog(k.getElementById('inner').tagName, k.getElementById('none'));\nk.textContent = 'replaced';\nlog(k.childNodes.length, k.firstChild.nodeType);\n// createElementNS\nconst SVG = 'http://www.w3.org/2000/svg';\nconst svg = document.createElementNS(SVG, 'svg');\nconst path = document.createElementNS(SVG, 'path');\nsvg.appendChild(path);\nlog(svg.namespaceURI, svg.tagName, svg.localName, path.namespaceURI, path instanceof SVGElement, svg instanceof SVGSVGElement, path instanceof HTMLElement);\nconst div = document.createElementNS('http://www.w3.org/1999/xhtml', 'div');\nlog(div.namespaceURI, div.tagName, div instanceof HTMLDivElement);\nconst other = document.createElementNS(null, 'thing');\nlog(other.namespaceURI, other.tagName, other instanceof HTMLElement, other instanceof Element);\nlog(svg.cloneNode(true).namespaceURI, svg.cloneNode(true).firstChild.namespaceURI);\n// Attributes with namespaces, Attr objects and `attributes`.\npath.setAttributeNS(null, 'd', 'M0 0');\nconst use = document.createElementNS(SVG, 'use');\nuse.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', '#icon');\nlog(path.getAttribute('d'), use.getAttribute('xlink:href'), use.getAttributeNS('http://www.w3.org/1999/xlink', 'href'), use.hasAttributeNS(null, 'href'));\nuse.removeAttributeNS('http://www.w3.org/1999/xlink', 'href');\nlog(use.hasAttribute('xlink:href'));\nconst attr = document.createAttributeNS('http://www.w3.org/1999/xlink', 'xlink:title');\nattr.value = 'tip';\nuse.setAttributeNode(attr);\nlog(attr.name, attr.localName, attr.prefix, attr.namespaceURI, attr.ownerElement === use, use.getAttribute('xlink:title'));\nconst plain = document.createAttribute('Data-X');\nplain.value = '1';\ndiv.setAttributeNode(plain);\ndiv.setAttribute('id', 'z');\nconst attrs = div.attributes;\nlog(attrs.length, attrs[0].name, attrs[0].value, attrs.getNamedItem('id').value, attrs.id.nodeType, attrs.item(5));\ndiv.getAttributeNode('id').value = 'changed';\nlog(div.id, Array.from(div.attributes, a => a.name + '=' + a.value).join(' '));\n"
+      "\n"

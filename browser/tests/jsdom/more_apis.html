@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<title>More web APIs</title>
+<style>p { color: red }</style>
+<form id="f"><input name="q" value="text"><input type="checkbox" name="c" checked><input type="checkbox" name="d"><select name="s"><option>x</option><option selected>y</option></select><textarea name="t">area</textarea><button name="b">go</button></form>
+<p id="p">para<b>bold</b></p>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+// Event interfaces.
+const me = new MessageEvent('message', { data: 42, origin: 'https://x' });
+const pe = new PointerEvent('pointerdown', { pointerId: 3, clientX: 5, bubbles: true });
+log(me.data, me.origin, me instanceof Event, pe.pointerId, pe.clientX, pe instanceof MouseEvent, new ErrorEvent('error', { message: 'm' }).message, new PopStateEvent('popstate', { state: 1 }).state);
+log(new ProgressEvent('load', { loaded: 5, total: 9 }).loaded, new WheelEvent('wheel', { deltaY: 3 }).deltaY, new HashChangeEvent('hashchange').newURL === '', new SubmitEvent('submit').submitter);
+// Blob, File, FileReader.
+const blob = new Blob(['hé', new Uint8Array([33])], { type: 'Text/Plain' });
+log(blob.size, blob.type, blob.slice(0, 1).size, blob instanceof Blob);
+const file = new File(['abc'], 'a.txt', { type: 'text/plain', lastModified: 7 });
+log(file.name, file.size, file.lastModified, file instanceof Blob);
+blob.text().then(t => log('text', t));
+const fr = new FileReader();
+fr.onload = () => log('reader', fr.readyState, fr.result);
+fr.readAsDataURL(file);
+// FormData from a form.
+const fd = new FormData(document.getElementById('f'));
+log([...fd].map(([k, v]) => k + '=' + v).join('&'));
+fd.append('q', 'more');
+fd.set('t', 'set');
+fd.delete('c');
+log(fd.getAll('q').join(','), fd.get('t'), fd.has('c'), fd.get('none'), [...fd.keys()].join(','));
+// Messages.
+const mc = new MessageChannel();
+mc.port2.onmessage = e => log('port', e.data, e instanceof MessageEvent);
+mc.port1.postMessage({ n: 1 }.n);
+window.addEventListener('message', e => log('window', e.data, e.source === window));
+window.postMessage('posted', '*');
+// Range, Selection, DOMRect.
+const p = document.getElementById('p');
+const r = document.createRange();
+r.selectNodeContents(p);
+log(r.startContainer === p, r.endOffset, r.collapsed, r.commonAncestorContainer === p);
+r.collapse(true);
+log(r.collapsed, r.endOffset);
+const frag = r.createContextualFragment('<i>x</i>y');
+log(frag.nodeType, frag.childNodes.length, frag.firstChild.tagName);
+const t = p.firstChild;
+const r2 = document.createRange();
+r2.setStart(t, 1);
+r2.setEnd(t, 3);
+log(r2.toString(), getSelection().rangeCount, typeof getSelection().removeAllRanges);
+const rect = p.getBoundingClientRect();
+log(rect instanceof DOMRect, rect.width, new DOMRect(1, 2, 3, 4).right, new DOMRect(1, 2, 3, 4).bottom);
+// DOMParser, XMLSerializer.
+const doc = new DOMParser().parseFromString('<html><head><title>T</title></head><body><p class="n">parsed</p></body></html>', 'text/html');
+log(doc.title, doc.body.firstChild.className, doc.querySelector('p').textContent, document.querySelectorAll('.n').length);
+log(new XMLSerializer().serializeToString(p));
+// Style sheets and CSS.
+log(document.styleSheets.length, document.styleSheets[0].ownerNode.tagName, document.querySelector('style').sheet === document.styleSheets[0]);
+const sheet = new CSSStyleSheet();
+sheet.insertRule('a { color: blue }');
+sheet.replaceSync('b { x: y } c { z: w }');
+log(sheet.cssRules.length, Array.isArray(document.adoptedStyleSheets));
+log(CSS.supports('display', 'grid'), CSS.supports('display', 'bogus'), CSS.supports('(color: red) and (display: block)'), CSS.escape('a b#1'), CSS.escape('1x'));
+</script>

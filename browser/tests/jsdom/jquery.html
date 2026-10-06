@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<title>jQuery</title>
+<style>.gone { display: none }</style>
+<div id="app" data-role="main">
+  <ul class="items"><li class="item">one</li><li class="item special">two</li><li class="item">three</li></ul>
+  <button id="btn">click</button>
+  <select id="sel"><option value="a">A</option><option value="b">B</option></select>
+  <p id="hide-me">visible</p>
+</div>
+<pre id="out"></pre>
+<!-- jQuery 3.7.1, minified, as https://code.jquery.com/jquery-3.7.1.min.js serves it -->
+<script src="scripts/jquery-3.7.1.min.js"></script>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+log(typeof jQuery, $ === jQuery, $.fn.jquery, $('li').length, $('#app').data('role'));
+// Selection, traversal, text and attributes.
+log($('.item').map((i, el) => $(el).text()).get().join(','), $('.special').index(), $('li:first-child').text(), $('li').eq(2).text());
+log($('.special').closest('ul').attr('class'), $('.special').parents('#app').length, $('#app').find('li').filter('.special').length, $('li').not('.special').length);
+$('.items').append('<li class="item added">four</li>').prepend($('<li>', { class: 'item', text: 'zero' }));
+log($('.items li').length, $('.items li').first().text(), $('.added').text(), $('.items').children().last().hasClass('added'));
+$('li').addClass('x').removeClass('item');
+log($('.x').length, $('.item').length, $('li.x').eq(0).attr('class'));
+$('#app').attr('title', 'App').css('color', 'red');
+log($('#app').attr('title'), document.getElementById('app').style.color, $('#app').css('color'));
+// Events: on, trigger, off, delegation.
+let clicks = 0;
+$('#btn').on('click', function (e) { clicks++; log('clicked', this.id, e.type, e.target.id); });
+$('#btn').trigger('click');
+document.getElementById('btn').click();
+$('.items').on('click', 'li', function () { log('delegated', $(this).text()); });
+$('.added').trigger('click');
+$('#btn').off('click');
+$('#btn').trigger('click');
+log('clicks', clicks);
+// Utilities.
+log(JSON.stringify($.extend({}, { a: 1 }, { b: 2 })), JSON.stringify($.extend(true, { o: { x: 1 } }, { o: { y: 2 } })), $.isPlainObject({}), $.inArray(2, [1, 2]), $.trim ? $.trim('  t ') : 'no trim');
+const seen = [];
+$.each({ k: 'v', n: 2 }, (k, v) => seen.push(k + '=' + v));
+log(seen.join('&'), $.map([1, 2, 3], x => x * 2).join(','), $.type ? 'type' : 'no type', typeof $.Deferred);
+// Forms, html, visibility.
+$('#sel').val('b');
+log($('#sel').val(), $('#sel option:selected').text(), document.getElementById('sel').selectedIndex);
+$('#hide-me').hide();
+log($('#hide-me').css('display'), $('#hide-me').is(':hidden'));
+$('#hide-me').show().html('<em>shown</em> again');
+log($('#hide-me').css('display'), $('#hide-me').html(), $('#hide-me em').length);
+// Data, ready, Deferred.
+$('#app').data('k', { deep: true });
+log($('#app').data('k').deep, $('#app').data('role'));
+$(function () { log('ready', document.readyState !== 'loading'); });
+$.Deferred().resolve(7).then(v => log('deferred', v));
+$(document).on('custom', (e, a, b) => log('custom', a, b));
+$(document).trigger('custom', ['x', 'y']);
+</script>

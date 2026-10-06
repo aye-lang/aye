@@ -1,0 +1,38 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Interfaces"
+      "\n"
+    <body>
+      <div id="d">
+        <a id="a" href="#x">
+          "link"
+        <img id="i" alt="">
+        <span>
+          "s"
+        <x-widget id="w">
+      "\n"
+      <link id="l" rel="stylesheet" href="data:text/css,">
+      "\n"
+      <select id="sel">
+        <option>
+          "o"
+      "\n"
+      <input id="in">
+      <script id="sc">
+        "/* */"
+      "\n"
+      <svg id="svg">
+        <path id="p">
+        <foreignobject>
+          <b id="fb">
+            "x"
+      "\n"
+      <pre id="out">
+        "true true true true true true true true\ntrue true true true false\n[object HTMLAnchorElement] [object HTMLBodyElement] [object HTMLSpanElement]\ntrue true true\ntrue true true true true\nDIV! A! anchor  path undefined\ntrue true true false true\nhttp://www.w3.org/2000/svg path http://www.w3.org/1999/xhtml http://www.w3.org/1999/xhtml\nTypeError number 11 HTMLElement function\n3 made true 8 note 11 true true\nTypeError\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst $ = id => document.getElementById(id);\n// Each element's wrapper has the prototype of its interface.\nconst checks = [['d', HTMLDivElement], ['a', HTMLAnchorElement], ['i', HTMLImageElement], ['l', HTMLLinkElement],\n  ['sel', HTMLSelectElement], ['in', HTMLInputElement], ['sc', HTMLScriptElement], ['out', HTMLPreElement]];\nlog(checks.map(([id, C]) => $(id) instanceof C).join(' '));\nlog($('d') instanceof HTMLElement, $('d') instanceof Element, $('d') instanceof Node, $('d') instanceof EventTarget, $('d') instanceof HTMLSpanElement);\nlog(Object.prototype.toString.call($('a')), Object.prototype.toString.call(document.body), String(document.querySelector('span')));\nlog(Object.getPrototypeOf($('w')) === HTMLElement.prototype, document.createElement('h3') instanceof HTMLHeadingElement, document.createElement('video') instanceof HTMLMediaElement);\nlog(document instanceof Document, document instanceof HTMLDocument, $('a').firstChild instanceof Text, window instanceof Window, window instanceof EventTarget);\n// Prototype patching reaches every element of the interface.\nHTMLElement.prototype.shout = function () { return this.tagName + '!'; };\nElement.prototype.whisper = function () { return this.localName; };\nHTMLAnchorElement.prototype.kind = 'anchor';\nlog($('d').shout(), $('a').shout(), $('a').kind, $('d').kind, $('p').whisper(), typeof $('p').shout);\n// SVG and MathML elements, by where the parser put them.\nlog($('svg') instanceof SVGSVGElement, $('svg') instanceof SVGElement, $('p') instanceof SVGElement, $('p') instanceof HTMLElement, $('fb') instanceof HTMLElement);\nlog($('svg').namespaceURI, $('p').tagName, $('fb').namespaceURI, $('d').namespaceURI);\n// Interface objects are not constructors, except a few.\nlet err = '';\ntry { new HTMLDivElement(); } catch (e) { err = e.name; }\nlog(err, typeof Node.ELEMENT_NODE, Node.DOCUMENT_FRAGMENT_NODE, HTMLElement.name, typeof HTMLLinkElement);\nconst t = new Text('made');\nconst c = new Comment('note');\nconst f = new DocumentFragment();\nlog(t.nodeType, t.data, t instanceof Text, c.nodeType, c.data, f.nodeType, f instanceof DocumentFragment, f.constructor === DocumentFragment);\nlet called = '';\ntry { Text('x'); } catch (e) { called = e.name; }\nlog(called);\n"
+      "\n"

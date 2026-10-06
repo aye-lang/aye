@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<title>Traversal objects</title>
+<div id="root">a<p id="p1">b<i id="i1">c</i></p><!--x--><p id="p2" class="skip">d<em id="e1">e</em></p>f</div>
+<canvas id="cv" width="40"></canvas>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const $ = id => document.getElementById(id);
+const root = $('root');
+const name = n => n ? (n.id || n.nodeName) : 'null';
+// compareDocumentPosition
+log(root.compareDocumentPosition($('i1')), $('i1').compareDocumentPosition(root), $('p1').compareDocumentPosition($('p2')), $('p2').compareDocumentPosition($('p1')), root.compareDocumentPosition(root));
+const loose = document.createElement('b');
+log(root.compareDocumentPosition(loose) & Node.DOCUMENT_POSITION_DISCONNECTED, Node.DOCUMENT_POSITION_CONTAINED_BY, document.DOCUMENT_POSITION_FOLLOWING);
+// isEqualNode, normalize
+const c1 = $('p1').cloneNode(true);
+log($('p1').isEqualNode(c1), $('p1').isEqualNode($('p2')), c1.isEqualNode(null));
+c1.setAttribute('title', 't');
+log($('p1').isEqualNode(c1));
+const n = document.createElement('div');
+n.append('x', '', 'y', document.createElement('br'), 'z');
+n.normalize();
+log(n.childNodes.length, n.firstChild.data, n.lastChild.data);
+// TreeWalker: elements, with a filter that skips .skip (its children stay).
+const w = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, { acceptNode: el => el.classList.contains('skip') ? NodeFilter.FILTER_SKIP : NodeFilter.FILTER_ACCEPT });
+const order = [];
+while (w.nextNode()) order.push(name(w.currentNode));
+log(order.join(','), name(w.currentNode));
+const back = [];
+while (w.previousNode()) back.push(name(w.currentNode));
+log(back.join(','), name(w.currentNode));
+w.currentNode = root;
+log(name(w.firstChild()), name(w.nextSibling()), name(w.firstChild()), name(w.parentNode()), name(w.lastChild()), name(w.previousSibling()));
+// Text nodes, rejecting a subtree with a function filter.
+const t = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, n => n.id === 'p1' ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT);
+const texts = [];
+for (let x = t.nextNode(); x; x = t.nextNode()) texts.push(x.nodeType === 3 ? x.data : x.id);
+log(texts.join(','), t.root === root, t.whatToShow, typeof t.filter);
+// NodeIterator over comments and text.
+const it = document.createNodeIterator(root, NodeFilter.SHOW_COMMENT | NodeFilter.SHOW_TEXT);
+const seen = [];
+for (let x = it.nextNode(); x; x = it.nextNode()) seen.push(x.data);
+log(seen.join(''), it.previousNode().data, it.previousNode().data, it.nextNode().data, it.pointerBeforeReferenceNode, it.referenceNode.data);
+const all = document.createNodeIterator(root);
+log(name(all.nextNode()), name(all.nextNode()), name(all.previousNode()), name(all.previousNode()), name(all.previousNode()));
+// canvas: no 2d context (yet).
+const cv = $('cv');
+log(cv.width, cv.height, cv.getContext('2d'), typeof cv.toDataURL());
+log(performance.measure('m', 'navigationStart').startTime);
+</script>

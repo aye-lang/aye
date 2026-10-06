@@ -50,6 +50,7 @@ pub fn installBuiltins(it: *mut Interp) JsError!void {
     try installMath(it)
     try installJson(it)
     try installMisc(it)
+    try installProxy(it)
     try it.defineNative(it.iterator_proto, "next", 0, iteratorNext)
     try installIteratorMethods(it)
     try installGenerators(it)
@@ -360,6 +361,9 @@ pub fn definePropertyFrom(it: *mut Interp, o: u32, key: u32, desc: Value) JsErro
     if !isObject(desc) {
         try it.typeError("Property description must be an object")
     }
+    if it.heap.obj(o).class == Class.Proxy {
+        return proxyDefine(it, o, key, desc)
+    }
     var old: u8 = 0
     var exists = false
     if it.heap.findProp(o, key) |i| {
@@ -471,10 +475,20 @@ fn objectGetOwnPropertyDescriptor(it: *mut Interp, a: Args) JsError!Value {
     let o = try it.toObject(it.arg(a, 0))
     try it.push(objVal(o))
     let key = try it.toKey(it.arg(a, 1))
+    let r = try ownDescriptor(it, o, key)
+    it.pop()
+    return r
+}
+
+/// The descriptor of own property `key` of o, or Undefined.
+pub fn ownDescriptor(it: *mut Interp, o: u32, key: u32) JsError!Value {
+    if it.heap.obj(o).class == Class.Proxy {
+        return proxyOwnDescriptor(it, o, key)
+    }
     if !it.hasOwn(o, key) {
-        it.pop()
         return Value.Undefined
     }
+    try it.push(objVal(o))
     let d = try it.newObject(it.object_proto)
     try it.push(objVal(d))
     if it.heap.findProp(o, key) |i| {
@@ -503,7 +517,7 @@ fn objectGetOwnPropertyDescriptor(it: *mut Interp, a: Args) JsError!Value {
 
 fn objectGetPrototypeOf(it: *mut Interp, a: Args) JsError!Value {
     let o = try it.toObject(it.arg(a, 0))
-    let p = it.heap.obj(o).proto
+    let p = try prototypeOf(it, o)
     if p == NONE {
         return Value.Null
     }
@@ -512,6 +526,10 @@ fn objectGetPrototypeOf(it: *mut Interp, a: Args) JsError!Value {
 
 fn objectSetPrototypeOf(it: *mut Interp, a: Args) JsError!Value {
     let ov = it.arg(a, 0)
+    if isObject(ov) && it.heap.obj(objectOf(ov)).class == Class.Proxy {
+        try proxySetPrototype(it, objectOf(ov), it.arg(a, 1))
+        return ov
+    }
     if isObject(ov) {
         match it.arg(a, 1) {
             .Obj { o } => {
@@ -668,13 +686,13 @@ fn objectHasOwn(it: *mut Interp, a: Args) JsError!Value {
     try it.push(objVal(o))
     let key = try it.toKey(it.arg(a, 1))
     it.pop()
-    return boolVal(it.hasOwn(o, key))
+    return boolVal(try it.hasOwnJs(o, key))
 }
 
 fn objectProtoHasOwnProperty(it: *mut Interp, a: Args) JsError!Value {
     let key = try it.toKey(it.arg(a, 0))
     let o = try it.toObject(a.this)
-    return boolVal(it.hasOwn(o, key))
+    return boolVal(try it.hasOwnJs(o, key))
 }
 
 fn objectProtoIsPrototypeOf(it: *mut Interp, a: Args) JsError!Value {
@@ -849,6 +867,9 @@ fn functionBind(it: *mut Interp, a: Args) JsError!Value {
 
 fn functionToString(it: *mut Interp, a: Args) JsError!Value {
     let f = objectOf(a.this)
+    if f != NONE && it.heap.obj(f).class == Class.Proxy && it.isCallable(a.this) {
+        return it.newString("function () { [native code] }")
+    }
     if f == NONE || it.heap.obj(f).class != Class.Function {
         return it.typeError("Function.prototype.toString requires that 'this' be a Function")
     }

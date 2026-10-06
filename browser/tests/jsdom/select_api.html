@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<title>select</title>
+<select id="s"><option value="a">A</option><option value="b" selected>B</option></select>
+<select id="m" multiple><option>x</option><option selected>y</option><option selected>z</option></select>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const s = document.getElementById('s');
+const opts = s.options;
+log(s.type, s.length, opts.length, opts instanceof HTMLOptionsCollection, opts instanceof HTMLCollection, opts === s.options, s.selectedIndex, opts.selectedIndex, s.value);
+// add: at the end, before an option, before an index.
+s.add(new Option('C', 'c'));
+s.add(new Option('First', 'first'), s.options[0]);
+s.add(new Option('Second', 'second'), 1);
+log(opts.length, Array.from(opts, o => o.value).join(','), s.selectedIndex, s.value);
+opts.add(new Option('Z', 'z'));
+log(s.length, s.item(5).value, s.namedItem('nope'), s.options[5].text);
+// remove(i) takes an option out; remove() takes the select out.
+s.remove(0);
+opts.remove(0);
+log(s.length, Array.from(s.options, o => o.value).join(','), s.selectedIndex);
+s.selectedIndex = 2;
+log(s.value, opts[2].selected, opts.selectedIndex);
+opts.selectedIndex = 0;
+log(s.value);
+s.length = 2;
+log(s.length, Array.from(s.options, o => o.value).join(','));
+s.length = 3;
+log(s.length, JSON.stringify(s.options[2].value));
+const m = document.getElementById('m');
+log(m.type, m.selectedOptions.length, m.selectedIndex, Array.from(m.selectedOptions, o => o.text).join(''));
+// An optgroup's options count too.
+const g = document.createElement('optgroup');
+g.appendChild(new Option('in group'));
+m.appendChild(g);
+log(m.options.length, m.options[3].text);
+s.remove();
+log(document.getElementById('s'));
+</script>

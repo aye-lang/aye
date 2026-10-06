@@ -1,0 +1,6 @@
+token token 1 1
+5 number
+bar,q 2 q
+42 fn
+m
+SyntaxError

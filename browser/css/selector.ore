@@ -2,8 +2,9 @@
 // (`[a]`, `[a=v]`, `[a~=v]`, `[a|=v]`, `[a^=v]`, `[a$=v]`, `[a*=v]`, with
 // an `i` flag), the combinators ` `, `>`, `+` and `~`, the pseudo-classes
 // `:first-child`, `:last-child`, `:only-child`, `:first-of-type`,
-// `:last-of-type`, `:root`, `:empty`, `:link`, `:any-link`, `:hover`
-// (nothing is hovered yet), the states of form controls (`:checked`,
+// `:last-of-type`, `:root`, `:scope` (the element a query is on), `:empty`,
+// `:link`, `:any-link`, `:hover` (nothing is hovered yet), the states of
+// form controls (`:checked`,
 // `:disabled`, `:enabled`, `:focus`, from `dom.controls`),
 // `:not(list)`, `:is(list)` and `:where(list)` (also `:matches()` and
 // `:-webkit-any()`; forgiving: invalid selectors in the list are
@@ -38,6 +39,7 @@ pub enum SelKind {
     FirstOfType
     LastOfType
     Root
+    Scope
     Empty
     Hover
     Link
@@ -395,6 +397,9 @@ fn pseudoClass(name: []u8) ?SelKind {
     if text.eqlIgnoreCase(name, "root") {
         return SelKind.Root
     }
+    if text.eqlIgnoreCase(name, "scope") {
+        return SelKind.Scope
+    }
     if text.eqlIgnoreCase(name, "empty") {
         return SelKind.Empty
     }
@@ -493,6 +498,20 @@ fn lowered(sheet: *mut Sheet, s: []u8) AllocError![]u8 {
 }
 
 // ---- matching
+
+// The element `:scope` matches (querySelector, matches and closest set
+// it); null: the root element, as in style sheets.
+var scope_element: ?NodeId = null
+
+/// Sets the element that `:scope` matches until the next call (null:
+/// the root element).
+pub fn setSelectorScope(el: ?NodeId) {
+    scope_element = el
+}
+
+fn isRoot(doc: *Document, el: NodeId) bool {
+    return dom.isSame(doc.node(el).parent, doc.root)
+}
 
 /// Does the selector `cx` of `sheet` match the element `el`?
 pub fn matchesComplex(sheet: *Sheet, doc: *Document, cx: Complex, el: NodeId) bool {
@@ -611,10 +630,13 @@ fn matchSimple(sheet: *Sheet, doc: *Document, s: Simple, el: NodeId) bool {
             return true
         }
         .Root => {
-            if n.parent |p| {
-                return doc.node(p).kind == Kind.Document
+            return isRoot(doc, el)
+        }
+        .Scope => {
+            if scope_element |sc| {
+                return dom.same(sc, el)
             }
-            return false
+            return isRoot(doc, el)
         }
         .Empty => {
             var cur = n.first_child

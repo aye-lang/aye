@@ -1,0 +1,50 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "jQuery"
+      "\n"
+      <style>
+        ".gone { display: none }"
+      "\n"
+    <body>
+      <div id="app" data-role="main" title="App" style="color: red;">
+        "\n  "
+        <ul class="items">
+          <li class="x">
+            "zero"
+          <li class="x">
+            "one"
+          <li class="special x">
+            "two"
+          <li class="x">
+            "three"
+          <li class="added x">
+            "four"
+        "\n  "
+        <button id="btn">
+          "click"
+        "\n  "
+        <select id="sel">
+          <option value="a">
+            "A"
+          <option value="b">
+            "B"
+        "\n  "
+        <p id="hide-me" style="">
+          <em>
+            "shown"
+          " again"
+        "\n"
+      "\n"
+      <pre id="out">
+        "function true 3.7.1 3 main\none,two,three 1 one three\nitems 1 1 2\n5 zero four true\n5 0 x\nApp red rgb(255, 0, 0)\nclicked btn click btn\nclicked btn click btn\ndelegated four\nclicks 2\n{\"a\":1,\"b\":2} {\"o\":{\"x\":1,\"y\":2}} true 1 t\nk=v&n=2 2,4,6 type function\nb B 1\nnone true\nblock <em>shown</em> again 1\ntrue main\ncustom x y\ndeferred 7\nready true\n"
+      "\n"
+      <!--  jQuery 3.7.1, minified, as https://code.jquery.com/jquery-3.7.1.min.js serves it  -->
+      "\n"
+      <script src="scripts/jquery-3.7.1.min.js">
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nlog(typeof jQuery, $ === jQuery, $.fn.jquery, $('li').length, $('#app').data('role'));\n// Selection, traversal, text and attributes.\nlog($('.item').map((i, el) => $(el).text()).get().join(','), $('.special').index(), $('li:first-child').text(), $('li').eq(2).text());\nlog($('.special').closest('ul').attr('class'), $('.special').parents('#app').length, $('#app').find('li').filter('.special').length, $('li').not('.special').length);\n$('.items').append('<li class=\"item added\">four</li>').prepend($('<li>', { class: 'item', text: 'zero' }));\nlog($('.items li').length, $('.items li').first().text(), $('.added').text(), $('.items').children().last().hasClass('added'));\n$('li').addClass('x').removeClass('item');\nlog($('.x').length, $('.item').length, $('li.x').eq(0).attr('class'));\n$('#app').attr('title', 'App').css('color', 'red');\nlog($('#app').attr('title'), document.getElementById('app').style.color, $('#app').css('color'));\n// Events: on, trigger, off, delegation.\nlet clicks = 0;\n$('#btn').on('click', function (e) { clicks++; log('clicked', this.id, e.type, e.target.id); });\n$('#btn').trigger('click');\ndocument.getElementById('btn').click();\n$('.items').on('click', 'li', function () { log('delegated', $(this).text()); });\n$('.added').trigger('click');\n$('#btn').off('click');\n$('#btn').trigger('click');\nlog('clicks', clicks);\n// Utilities.\nlog(JSON.stringify($.extend({}, { a: 1 }, { b: 2 })), JSON.stringify($.extend(true, { o: { x: 1 } }, { o: { y: 2 } })), $.isPlainObject({}), $.inArray(2, [1, 2]), $.trim ? $.trim('  t ') : 'no trim');\nconst seen = [];\n$.each({ k: 'v', n: 2 }, (k, v) => seen.push(k + '=' + v));\nlog(seen.join('&'), $.map([1, 2, 3], x => x * 2).join(','), $.type ? 'type' : 'no type', typeof $.Deferred);\n// Forms, html, visibility.\n$('#sel').val('b');\nlog($('#sel').val(), $('#sel option:selected').text(), document.getElementById('sel').selectedIndex);\n$('#hide-me').hide();\nlog($('#hide-me').css('display'), $('#hide-me').is(':hidden'));\n$('#hide-me').show().html('<em>shown</em> again');\nlog($('#hide-me').css('display'), $('#hide-me').html(), $('#hide-me em').length);\n// Data, ready, Deferred.\n$('#app').data('k', { deep: true });\nlog($('#app').data('k').deep, $('#app').data('role'));\n$(function () { log('ready', document.readyState !== 'loading'); });\n$.Deferred().resolve(7).then(v => log('deferred', v));\n$(document).on('custom', (e, a, b) => log('custom', a, b));\n$(document).trigger('custom', ['x', 'y']);\n"
+      "\n"

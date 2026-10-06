@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<title>Live lists</title>
+<div id="box" class="c">text<p class="a b">1</p><p class="a">2</p><!-- note --><span class="b">3</span></div>
+<form><input name="q" value="1"><input name="q" value="2"><input name="r"></form>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const box = document.getElementById('box');
+const kids = box.childNodes;
+const elems = box.children;
+const ps = box.getElementsByTagName('p');
+const all = document.getElementsByTagName('*');
+const ab = document.getElementsByClassName('a b');
+const qs = document.getElementsByName('q');
+const before = all.length;
+log(kids.length, elems.length, ps.length, ab.length, qs.length, kids === box.childNodes, elems === box.children);
+log(kids instanceof NodeList, elems instanceof HTMLCollection, ps instanceof HTMLCollection, qs instanceof NodeList, Array.isArray(kids));
+log(Object.prototype.toString.call(kids), Object.prototype.toString.call(elems));
+// They follow the document.
+const p3 = document.createElement('p');
+p3.className = 'a b';
+p3.id = 'third';
+box.appendChild(p3);
+log(kids.length, elems.length, ps.length, ab.length, all.length - before, ps[2] === p3, ps.item(2) === p3);
+box.removeChild(box.firstChild);
+ps[0].remove();
+log(kids.length, elems.length, ps.length, ab.length, kids[0].nodeName);
+// Indices, `in`, item(), named items, iteration.
+log(0 in ps, 1 in ps, 5 in ps, ps[5], ps.item(5), ps.item(-1), ps.length in ps);
+log(elems.third === p3, elems.namedItem('third') === p3, elems.namedItem('none'), qs.item(1).value);
+log([...ps].map(p => p.textContent).join(','), Array.from(elems, e => e.tagName).join(','));
+const seen = [];
+kids.forEach((n, i) => seen.push(i + ':' + n.nodeName));
+log(seen.join(' '), [...kids.keys()].join(''));
+for (const p of ps) p.setAttribute('data-seen', '');
+log(document.querySelectorAll('[data-seen]').length);
+// An array-like test as libraries write it.
+function isArrayLike(o) { const n = o.length; return typeof n === 'number' && (n === 0 || (n > 0 && (n - 1) in o)); }
+log(isArrayLike(ps), isArrayLike(kids), isArrayLike(document.getElementsByTagName('nothing')));
+ps[0] = null;
+log(ps[0].tagName);
+// A list under an element out of the document lives on with it.
+const detached = document.createElement('div');
+detached.innerHTML = '<i></i><i></i>';
+const is = detached.getElementsByTagName('i');
+detached.firstChild.remove();
+log(is.length, detached.children.length);
+</script>

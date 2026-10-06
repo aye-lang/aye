@@ -1,0 +1,14 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "performance"
+      "\n"
+    <body>
+      <pre id="out">
+        "number true true true true\ntrue true 0 0 number\n1 navigation navigate 0 number 0 0\n0 0 0\nmark start go measure true 1 2\n0 true 1 0\n5 true\nSyntaxError\nend\n1 navigation\ntrue true true true\nfunction true 0\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst t0 = performance.now();\nlog(typeof t0, t0 >= 0, performance.now() >= t0, performance.timeOrigin > 1.5e12, performance instanceof EventTarget);\n// Navigation timing, both ways.\nconst t = performance.timing;\nlog(t.navigationStart > 0, t.responseStart >= t.navigationStart, t.domContentLoadedEventStart, t.loadEventEnd, typeof t.toJSON().fetchStart);\nconst nav = performance.getEntriesByType('navigation');\nlog(nav.length, nav[0].entryType, nav[0].type, nav[0].startTime, typeof nav[0].responseStart, nav[0].domContentLoadedEventStart, nav[0].loadEventEnd);\nlog(performance.navigation.type, performance.getEntriesByType('paint').length, performance.getEntriesByType('resource').length);\n// Marks and measures.\nconst m1 = performance.mark('start', { detail: 'go' });\nsetTimeout(() => {\n  performance.mark('end');\n  const m = performance.measure('span', 'start', 'end');\n  log(m1.entryType, m1.name, m1.detail, m.entryType, m.duration >= 50, performance.getEntriesByName('start').length, performance.getEntriesByType('mark').length);\n  const all = performance.measure('all');\n  log(all.startTime, all.duration > 0, performance.getEntriesByName('span', 'measure').length, performance.getEntriesByName('span', 'mark').length);\n  const opts = performance.measure('opts', { start: 'start', duration: 5 });\n  log(opts.duration, opts.startTime === m1.startTime);\n  let bad = '';\n  try { performance.measure('x', 'nope'); } catch (e) { bad = e.name; }\n  log(bad);\n  performance.clearMarks('start');\n  log(performance.getEntriesByType('mark').map(e => e.name).join(','));\n  performance.clearMarks();\n  performance.clearMeasures();\n  log(performance.getEntries().length, performance.getEntries()[0].entryType);\n  // After the load: the moments are there.\n  const n = performance.getEntriesByType('navigation')[0];\n  log(t.domContentLoadedEventStart > 0, t.loadEventEnd >= t.domContentLoadedEventStart, n.domContentLoadedEventEnd >= n.domContentLoadedEventStart, n.loadEventEnd >= n.loadEventStart);\n  log(typeof PerformanceObserver, PerformanceObserver.supportedEntryTypes.includes('mark'), new PerformanceObserver(() => {}).takeRecords().length);\n}, 50);\n"
+      "\n"
