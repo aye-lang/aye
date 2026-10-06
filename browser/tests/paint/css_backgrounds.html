@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<title>CSS backgrounds</title>
+<style>
+body { margin: 4px }
+div { display: inline-block; width: 56px; height: 36px; margin: 2px; vertical-align: top }
+/* Gradients: sides, angles, corners, stops with positions, radial, repeating, conic. */
+.lin { background: linear-gradient(to right, red, blue) }
+.ang { background: linear-gradient(45deg, yellow 0%, green 50%, transparent 100%) }
+.corner { background-image: linear-gradient(to bottom right, white, black) }
+.rad { background: radial-gradient(circle at 30% 40%, #fff, #f80 60%, #840) }
+.ell { background: radial-gradient(closest-side, red, blue) }
+.rep { background: repeating-linear-gradient(90deg, #000 0 4px, #fff 4px 8px) }
+.conic { background: conic-gradient(red, yellow, green, blue, red) }
+/* Images: repeat, no-repeat with an edge offset, repeat-x, space, round, cover, contain. */
+.tile { background: url(img/badge.png) }
+.norep { background: #ddd url(img/badge.png) no-repeat right 4px bottom 2px }
+.rx { background: url(img/icon.gif) repeat-x center }
+.space { background: url(img/icon.gif) space }
+.round { background: url(img/icon.gif) round }
+.cover { background: url(img/photo.png) center / cover }
+.contain { background: #eee url(img/photo.png) no-repeat center / contain }
+/* Layers, origin and clip, an SVG image (Hacker News's vote arrow). */
+.multi { background: url(img/icon.gif) no-repeat 4px 4px, linear-gradient(red, blue) }
+.origin { padding: 6px; border: 4px dashed #888; width: 32px; height: 12px; background: url(img/icon.gif) no-repeat content-box, #cfc padding-box }
+.vote { width: 10px; height: 10px; margin: 3px 2px 6px; background: url("img/triangle.svg"), linear-gradient(transparent, transparent) no-repeat; background-size: 10px }
+/* Rounded corners, shadows, masks. */
+.rounded { border-radius: 10px; background: #48f }
+.ring { border: 3px solid #333; border-radius: 50%; background: linear-gradient(red, yellow) }
+.shadow { box-shadow: 3px 3px 4px rgba(0, 0, 0, 0.6); background: white }
+.inset { box-shadow: inset 0 0 6px 2px #08f; background: white }
+.mask { background-color: #c00; mask-image: url(img/icon.svg); mask-size: 24px; mask-repeat: no-repeat; mask-position: center }
+.wmask { background-color: green; -webkit-mask: url(img/icon.svg) center / contain no-repeat }
+/* A checkbox with opacity 0 over an icon button (Wikipedia's menus) is not painted. */
+.button { position: relative; width: 24px; height: 24px; background: #555; mask: url(img/icon.svg) no-repeat }
+.button input { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; opacity: 0 }
+</style>
+<div class="lin"></div><div class="ang"></div><div class="corner"></div><div class="rad"></div><div class="ell"></div><div class="rep"></div>
+<div class="conic"></div><div class="tile"></div><div class="norep"></div><div class="rx"></div><div class="space"></div><div class="round"></div>
+<div class="cover"></div><div class="contain"></div><div class="multi"></div><div class="origin"></div><div class="vote"></div>
+<div class="rounded"></div><div class="ring"></div><div class="shadow"></div><div class="inset"></div><div class="mask"></div><div class="wmask"></div><div class="button"><input type="checkbox"></div>

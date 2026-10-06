@@ -49,7 +49,20 @@ pub fn translate(tx: f64, ty: f64) Matrix {
     return Matrix { a: 1.0, b: 0.0, c: 0.0, d: 1.0, e: tx, f: ty }
 }
 
-fn scaling(sx: f64, sy: f64) Matrix {
+/// The transform that undoes `m`; null when it flattens the plane.
+pub fn invert(m: Matrix) ?Matrix {
+    let det = m.a * m.d - m.b * m.c
+    if math.abs(det) < 0.000000000001 || math.isNan(det) {
+        return null
+    }
+    let a = m.d / det
+    let b = -m.b / det
+    let c = -m.c / det
+    let d = m.a / det
+    return Matrix { a: a, b: b, c: c, d: d, e: -(a * m.e + c * m.f), f: -(b * m.e + d * m.f) }
+}
+
+pub fn scaling(sx: f64, sy: f64) Matrix {
     return Matrix { a: sx, b: 0.0, c: 0.0, d: sy, e: 0.0, f: 0.0 }
 }
 
@@ -643,6 +656,31 @@ pub fn rectPath(pen: *mut Pen, x: f64, y: f64, w: f64, h: f64, rx: f64, ry: f64)
     try pen.cubicTo(x + rx - k * rx, y + h, x, y + h - ry + k * ry, x, y + h - ry)
     try pen.lineTo(x, y + ry)
     try pen.cubicTo(x, y + ry - k * ry, x + rx - k * rx, y, x + rx, y)
+    return pen.close()
+}
+
+/// A rectangle with each corner rounded by its own radii: `r` holds the
+/// horizontal and vertical radius of the top-left, top-right,
+/// bottom-right and bottom-left corners (already fitted), clockwise.
+pub fn roundRectPath(pen: *mut Pen, x: f64, y: f64, w: f64, h: f64, r: [8]f64) AllocError!void {
+    let k = 0.5522847498
+    try pen.moveTo(x + r[0], y)
+    try pen.lineTo(x + w - r[2], y)
+    if r[2] > 0.0 && r[3] > 0.0 {
+        try pen.cubicTo(x + w - r[2] + k * r[2], y, x + w, y + r[3] - k * r[3], x + w, y + r[3])
+    }
+    try pen.lineTo(x + w, y + h - r[5])
+    if r[4] > 0.0 && r[5] > 0.0 {
+        try pen.cubicTo(x + w, y + h - r[5] + k * r[5], x + w - r[4] + k * r[4], y + h, x + w - r[4], y + h)
+    }
+    try pen.lineTo(x + r[6], y + h)
+    if r[6] > 0.0 && r[7] > 0.0 {
+        try pen.cubicTo(x + r[6] - k * r[6], y + h, x, y + h - r[7] + k * r[7], x, y + h - r[7])
+    }
+    try pen.lineTo(x, y + r[1])
+    if r[0] > 0.0 && r[1] > 0.0 {
+        try pen.cubicTo(x, y + r[1] - k * r[1], x + r[0] - k * r[0], y, x + r[0], y)
+    }
     return pen.close()
 }
 

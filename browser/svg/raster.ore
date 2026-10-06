@@ -6,6 +6,10 @@
 // scanlines: 16 sub-scanlines per row of pixels, each with the spans
 // between its crossings that the fill rule puts inside, whose exact
 // horizontal extent adds up as the coverage of the pixels (antialiasing).
+// A dashed stroke's polylines are cut into dashes first. The shapes of a
+// group are drawn into a transparent layer (premultiplied alpha), blended
+// below at its end with the group's opacity and through its clip path's
+// coverage.
 
 import std.list.List
 import std.math
@@ -13,15 +17,23 @@ import std.mem.AllocError
 import std.mem.Allocator
 import std.sort
 
-/// Pixels to draw into: RGBA rows of `width` pixels; drawing is limited
-/// to columns `x0..x1` and rows `y0..y1` (inside the buffer).
+/// Pixels to draw into: RGBA rows of `width` pixels, the first one at
+/// (`ox`, `oy`); drawing is limited to columns `x0..x1` and rows `y0..y1`
+/// (inside the buffer).
 pub struct Target {
     pixels: []mut u8
     width: usize
+    ox: i64
+    oy: i64
     x0: i64
     y0: i64
     x1: i64
     y1: i64
+
+    /// The byte of pixel (`x`, `y`).
+    pub fn index(self: Self, x: i64, y: i64) usize {
+        return ((y - self.oy) as usize * self.width + (x - self.ox) as usize) * 4
+    }
 }
 
 /// Draws `pic` into the box at (`x`, `y`), `w` x `h` (device px, a CSS
@@ -56,17 +68,106 @@ pub fn render(alloc: Allocator, pic: *Picture, t: Target, x: f64, y: f64, w: f64
         poly: List(f64).init(alloc),
     }
     defer r.deinit()
+    // The targets below the groups being drawn.
+    var below = List(Target).init(alloc)
+    defer below.deinit()
+    var cur = clip
+    // After an error inside groups: their layers.
+    defer if below.len() > 0 {
+        alloc.free(cur.pixels)
+        var n = below.len()
+        while n > 1 {
+            n -= 1
+            alloc.free(below.items()[n].pixels)
+        }
+    }
     for s in pic.shapes.items() {
+        if s.group == 1 {
+            let lw = (cur.x1 - cur.x0) as usize
+            let lh = (cur.y1 - cur.y0) as usize
+            let px_layer = try alloc.alloc(0 as u8, lw * lh * 4)
+            below.append(cur) catch |e| {
+                alloc.free(px_layer)
+                return e
+            }
+            cur = Target { pixels: px_layer, width: lw, ox: cur.x0, oy: cur.y0, x0: cur.x0, y0: cur.y0, x1: cur.x1, y1: cur.y1 }
+            continue
+        }
+        if s.group == 2 {
+            let under = below.pop() orelse continue
+            var cover: ?[]mut u8 = null
+            if s.clip > 0 && s.clip <= pic.clips.len() {
+                cover = r.coverage(pic, pic.clips.items()[s.clip - 1], m, cur) catch |e| {
+                    alloc.free(cur.pixels)
+                    cur = under
+                    return e
+                }
+            }
+            composite(cur, under, s.opacity, cover)
+            if cover |c| {
+                alloc.free(c)
+            }
+            alloc.free(cur.pixels)
+            cur = under
+            continue
+        }
+        r.t = cur
         try r.flatten(pic, s, m)
         if s.fill.a > 0 {
             r.edges.clear()
             try r.fillEdges()
-            try r.scan(s.evenodd, s.fill)
+            try r.scan(s.evenodd, s.fill, gradPaint(pic, s.fill_grad, m))
         }
         if s.stroke.a > 0 {
+            if s.dash_end > s.dash_start {
+                try r.dash(pic.dashes.items()[s.dash_start..s.dash_end], k, s.dash_offset * k)
+            }
             r.edges.clear()
             try r.strokeEdges(s.stroke_width * k / 2.0, s.cap, s.join, s.miter_limit)
-            try r.scan(false, s.stroke)
+            try r.scan(false, s.stroke, gradPaint(pic, s.stroke_grad, m))
+        }
+    }
+}
+
+// A gradient paint of a picture: the gradient (`k` is its index plus 1)
+// and the map from device px to its space.
+struct GradPaint {
+    g: *Gradient
+    inv: Matrix
+}
+
+fn gradPaint(pic: *Picture, k: usize, m: Matrix) ?GradPaint {
+    if k == 0 || k > pic.gradients.len() {
+        return null
+    }
+    let g = &pic.gradients.items()[k - 1]
+    let inv = invert(mul(m, g.m)) orelse return null
+    return GradPaint { g: g, inv: inv }
+}
+
+// Blends the layer `src` (premultiplied) into `dst` with `opacity`,
+// through the alpha of `cover` (a layer of the same size) when there is
+// one.
+fn composite(src: Target, dst: Target, opacity: f64, cover: ?[]mut u8) {
+    let f = math.floor(math.clamp(opacity, 0.0, 1.0) * 256.0 + 0.5) as u32
+    for y in src.y0..src.y1 {
+        var i = src.index(src.x0, y)
+        var j = dst.index(src.x0, y)
+        for x in src.x0..src.x1 {
+            var k = f
+            if cover |c| {
+                k = (k * c[i + 3] as u32 + 127) / 255
+            }
+            let a = (src.pixels[i + 3] as u32 * k + 128) / 256
+            if a > 0 {
+                let rest = 255 - a
+                dst.pixels[j] = (((src.pixels[i] as u32 * k + 128) / 256 * 255 + dst.pixels[j] as u32 * rest + 127) / 255) as u8
+                dst.pixels[j + 1] = (((src.pixels[i + 1] as u32 * k + 128) / 256 * 255 + dst.pixels[j + 1] as u32 * rest + 127) / 255) as u8
+                dst.pixels[j + 2] = (((src.pixels[i + 2] as u32 * k + 128) / 256 * 255 + dst.pixels[j + 2] as u32 * rest + 127) / 255) as u8
+                dst.pixels[j + 3] = (a + (dst.pixels[j + 3] as u32 * rest + 127) / 255) as u8
+            }
+            i += 4
+            j += 4
         }
     }
 }
@@ -448,8 +549,9 @@ struct Rasterizer {
 
     // ---- scanlines
 
-    // Fills `edges` with `c`, by the nonzero or the even-odd rule.
-    fn scan(self: *mut Self, evenodd: bool, c: Color) AllocError!void {
+    // Fills `edges` with `c` (or with the gradient `paint`), by the
+    // nonzero or the even-odd rule.
+    fn scan(self: *mut Self, evenodd: bool, c: Color, paint: ?GradPaint) AllocError!void {
         let edges = self.edges.items()
         if edges.len == 0 {
             return
@@ -554,16 +656,146 @@ struct Rasterizer {
                 continue
             }
             var run = 0.0
-            var i = (row as usize * t.width + bx0 as usize) * 4
+            var i = t.index(bx0, row)
+            let py = row as f64 + 0.5
             for k2 in 0..bw {
                 run += acc[k2]
                 let a = math.min(1.0, cov[k2] + run)
                 if a > 0.002 {
-                    blend(t.pixels, i, c, (a * c.a as f64 + 0.5) as u32)
+                    if paint |gp| {
+                        let px = (bx0 + k2 as i64) as f64 + 0.5
+                        let gc = gp.g.at(gp.inv.mapX(px, py), gp.inv.mapY(px, py))
+                        blend(t.pixels, i, gc, (a * gc.a as f64 + 0.5) as u32)
+                    } else {
+                        blend(t.pixels, i, c, (a * c.a as f64 + 0.5) as u32)
+                    }
                 }
                 i += 4
             }
         }
+    }
+
+    // ---- dashes and clip paths
+
+    // Cuts the polylines in `pts` and `subs` into dashes: `pattern` (in
+    // the picture's coordinates, `k` device px each; an even number of
+    // lengths, dash then gap), starting `offset` device px into it at
+    // each polyline.
+    fn dash(self: *mut Self, pattern: []f64, k: f64, offset: f64) AllocError!void {
+        var total = 0.0
+        for d in pattern {
+            total += d * k
+        }
+        if total <= 0.0 || pattern.len == 0 || !finite(total) {
+            return
+        }
+        var pts = List(f64).init(self.alloc)
+        defer pts.deinit()
+        var subs = List(Sub).init(self.alloc)
+        defer subs.deinit()
+        let n = pattern.len
+        let ns = self.subs.len()
+        for si in 0..ns {
+            let sub = self.subs.items()[si]
+            if sub.end - sub.start < 2 {
+                continue
+            }
+            // Where in the pattern the polyline starts.
+            var idx: usize = 0
+            var rem = pattern[0] * k
+            var off = offset - math.floor(offset / total) * total
+            while off > 0.0 {
+                if off >= rem {
+                    off -= rem
+                    idx = (idx + 1) % n
+                    rem = pattern[idx] * k
+                } else {
+                    rem -= off
+                    off = 0.0
+                }
+            }
+            var start = pts.len() / 2
+            if idx % 2 == 0 {
+                try pts.append(self.px(sub.start))
+                try pts.append(self.py(sub.start))
+            }
+            var count = sub.end - sub.start
+            if sub.closed {
+                count += 1
+            }
+            for j in 1..count {
+                var b = sub.start + j
+                if b == sub.end {
+                    b = sub.start
+                }
+                let ax = self.px(sub.start + j - 1)
+                let ay = self.py(sub.start + j - 1)
+                let bx = self.px(b)
+                let by = self.py(b)
+                let len = math.hypot(bx - ax, by - ay)
+                var pos = 0.0
+                // At most as many dashes as fit, so that a tiny pattern
+                // cannot run forever.
+                var guard: usize = 0
+                while len - pos > rem && guard < 100000 {
+                    guard += 1
+                    pos += rem
+                    let f = pos / len
+                    try pts.append(ax + (bx - ax) * f)
+                    try pts.append(ay + (by - ay) * f)
+                    if idx % 2 == 0 {
+                        try subs.append(Sub { start: start, end: pts.len() / 2, closed: false })
+                    } else {
+                        start = pts.len() / 2 - 1
+                    }
+                    idx = (idx + 1) % n
+                    rem = pattern[idx] * k
+                }
+                rem -= len - pos
+                if idx % 2 == 0 {
+                    try pts.append(bx)
+                    try pts.append(by)
+                }
+            }
+            if idx % 2 == 0 && pts.len() / 2 > start {
+                try subs.append(Sub { start: start, end: pts.len() / 2, closed: false })
+            }
+        }
+        self.pts.clear()
+        for v in pts.items() {
+            try self.pts.append(v)
+        }
+        self.subs.clear()
+        for v in subs.items() {
+            try self.subs.append(v)
+        }
+    }
+
+    // The coverage of the clip path `cp` in a buffer laid out like
+    // `like` (its alpha bytes; the caller frees it).
+    fn coverage(self: *mut Self, pic: *Picture, cp: ClipPath, m: Matrix, like: Target) AllocError![]mut u8 {
+        let buf = try self.alloc.alloc(0 as u8, like.pixels.len)
+        let saved = self.t
+        self.t = like
+        self.t.pixels = buf
+        defer self.t = saved
+        for i in cp.start..cp.end {
+            let s = pic.clip_shapes.items()[i]
+            self.flatten(pic, s, m) catch |e| {
+                self.alloc.free(buf)
+                return e
+            }
+            self.edges.clear()
+            self.fillEdges() catch |e| {
+                self.alloc.free(buf)
+                return e
+            }
+            self.scan(s.evenodd, s.fill, null) catch |e| {
+                self.alloc.free(buf)
+                return e
+            }
+        }
+        return buf
     }
 }
 

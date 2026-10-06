@@ -182,6 +182,58 @@ test "css cascade" {
     @expectEqual("rgb(255, 0, 0) 20px 2px block", out.bytes())
 }
 
+// The value that the last declaration of `prop` in `sheet` gives.
+fn declValue(sheet: *css.Sheet, prop: usize) css.Value {
+    var v = css.Value.Unset
+    for d in sheet.decls.items() {
+        if d.prop == prop {
+            v = d.value
+        }
+    }
+    return v
+}
+
+fn keywordText(v: css.Value) []u8 {
+    return match v {
+        .Keyword { k } => k
+        _ => ""
+    }
+}
+
+test "css layered values" {
+    let a = @testAllocator()
+    var sheet = try css.Sheet.init(a)
+    defer sheet.deinit()
+    // A fetched sheet's URLs are absolute (not fragments or data: URLs).
+    sheet.base = "http://example.test/css/site.css"
+    let src = "p { background: url(../img/a.png) no-repeat right 10px top / 20px, linear-gradient(to right, red, blue 50%) #eee; -webkit-mask-image: url('#m'); border-radius: 4px 50% / 2px; box-shadow: inset 0 1px 2px rgb(0 0 0 / 50%) }"
+    try css.parseSheet(&mut sheet, src, css.Media { width: 800.0, height: 600.0 })
+    sheet.base = ""
+    @expectEqual("url(\"http://example.test/img/a.png\"), linear-gradient(to right, red, blue 50%)", keywordText(declValue(&sheet, css.BACKGROUND_IMAGE)))
+    @expectEqual("no-repeat, repeat", keywordText(declValue(&sheet, css.BACKGROUND_REPEAT)))
+    @expectEqual("url(\"#m\")", keywordText(declValue(&sheet, css.MASK_IMAGE)))
+    @expectEqual("50% 2px", keywordText(declValue(&sheet, css.BORDER_TOP_LEFT_RADIUS + 1)))
+    // Read back for paint.
+    var arena = Arena.init(a)
+    defer arena.deinit()
+    let aa = arena.allocator()
+    var layers = List([]css.Comp).init(aa)
+    try css.readLayers(aa, declValue(&sheet, css.BACKGROUND_POSITION), &mut layers)
+    @expectEqual(2, layers.len())
+    let pos = css.readPosition(layers.items()[0])
+    @expect(pos.x.pct == 100.0 && pos.x.px == -10.0 && pos.y.pct == 0.0)
+    layers.clear()
+    try css.readLayers(aa, declValue(&sheet, css.BACKGROUND_IMAGE), &mut layers)
+    @expectEqual("http://example.test/img/a.png", css.imageUrl(layers.items()[0][0]).?)
+    let g = (try css.readGradient(aa, layers.items()[1][0])).?
+    @expect(g.kind == 0 && g.angle == 90.0 && g.stops.len() == 2)
+    @expect(g.stops.items()[0].pos == null && g.stops.items()[1].pos.?.pct == 50.0)
+    layers.clear()
+    try css.readLayers(aa, declValue(&sheet, css.BOX_SHADOW), &mut layers)
+    let sh = css.readShadow(layers.items()[0]).?
+    @expect(sh.inset && sh.y == 1.0 && sh.blur == 2.0)
+}
+
 // Runs `src` in the page; its result as text.
 fn evalText(p: *mut engine.Page, src: []u8, out: *mut text.Builder) !bool {
     out.clear()

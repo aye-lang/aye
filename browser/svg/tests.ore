@@ -92,7 +92,7 @@ test "path data" {
 
 // A transparent `w` x `h` buffer as a target.
 fn buffer(pixels: []mut u8, w: usize, h: usize) Target {
-    return Target { pixels: pixels, width: w, x0: 0, y0: 0, x1: w as i64, y1: h as i64 }
+    return Target { pixels: pixels, width: w, ox: 0, oy: 0, x0: 0, y0: 0, x1: w as i64, y1: h as i64 }
 }
 
 fn alphaAt(pixels: []u8, w: usize, x: usize, y: usize) u8 {
@@ -110,6 +110,10 @@ fn picture(a: Allocator, d: []u8, fill: Color, stroke: Color, width: f64, evenod
         shapes: List(Shape).init(a),
         verbs: List(u8).init(a),
         coords: List(f64).init(a),
+        gradients: List(Gradient).init(a),
+        dashes: List(f64).init(a),
+        clips: List(ClipPath).init(a),
+        clip_shapes: List(Shape).init(a),
     }
     var pen = Pen { m: IDENTITY, verbs: &mut pic.verbs, coords: &mut pic.coords }
     try parsePath(&mut pen, d)
@@ -124,6 +128,14 @@ fn picture(a: Allocator, d: []u8, fill: Color, stroke: Color, width: f64, evenod
         cap: 0,
         join: 0,
         miter_limit: 4.0,
+        fill_grad: 0,
+        stroke_grad: 0,
+        dash_start: 0,
+        dash_end: 0,
+        dash_offset: 0.0,
+        group: 0,
+        opacity: 1.0,
+        clip: 0,
     })
     return pic
 }
@@ -202,19 +214,104 @@ test "pictures from documents" {
     let pic = try built(a, src)
     defer a.destroy(pic)
     defer pic.deinit()
-    @expectEqual(3, pic.shapes.len())
+    // The rect, the group of the `g` (start, path, end), the circle.
+    @expectEqual(5, pic.shapes.len())
     let s = pic.shapes.items()
     @expectEqual(255, s[0].fill.b)
     @expectEqual(0, s[0].stroke.a)
-    // The `use`d path inherits the green of `currentColor`, half opaque,
-    // moved by `x`.
-    @expectEqual(128, s[1].fill.g)
-    @expectEqual(128, s[1].fill.a)
-    @expect(close(10.0, pic.coords.items()[s[1].coord_start]))
-    // The gradient's middle, and a stroke scaled with its shape.
-    @expectEqual(128, s[2].fill.r)
-    @expectEqual(255, s[2].stroke.r)
-    @expect(close(4.0, s[2].stroke_width))
+    // The `use`d path inherits the green of `currentColor`, moved by `x`;
+    // the group is half opaque.
+    @expectEqual(1, s[1].group)
+    @expectEqual(128, s[2].fill.g)
+    @expectEqual(255, s[2].fill.a)
+    @expect(close(10.0, pic.coords.items()[s[2].coord_start]))
+    @expectEqual(2, s[3].group)
+    @expect(close(0.5, s[3].opacity))
+    // A gradient (its middle is gray), and a stroke scaled with its shape.
+    @expectEqual(1, s[4].fill_grad)
+    @expectEqual(128, pic.gradients.items()[0].colorAt(0.5).r)
+    @expectEqual(255, s[4].stroke.r)
+    @expect(close(4.0, s[4].stroke_width))
     let n = pic.naturalSize()
     @expect(close(20.0, n.w) && close(10.0, n.h))
+}
+
+fn redAt(pixels: []u8, w: usize, x: usize, y: usize) u8 {
+    return pixels[(y * w + x) * 4]
+}
+
+fn blueAt(pixels: []u8, w: usize, x: usize, y: usize) u8 {
+    return pixels[(y * w + x) * 4 + 2]
+}
+
+test "gradients" {
+    let a = @testAllocator()
+    let src =
+        \\<svg width='20' height='20'>
+        \\<linearGradient id='base' x2='0' y2='1'><stop offset='0' stop-color='red'/><stop offset='100%' stop-color='blue'/></linearGradient>
+        \\<linearGradient id='h' href='#base' x2='1' y2='0'/>
+        \\<linearGradient id='u' href='#base' gradientUnits='userSpaceOnUse' x1='0' y1='0' x2='10' y2='0' spreadMethod='reflect'/>
+        \\<radialGradient id='r'><stop offset='0' stop-color='#fff'/><stop offset='1' stop-color='#000' stop-opacity='0'/></radialGradient>
+        \\<rect width='10' height='10' fill='url(#base)'/>
+        \\<rect x='10' width='10' height='10' fill='url(#h)'/>
+        \\<rect y='10' width='20' height='10' fill='url(#u)'/>
+        \\<circle cx='15' cy='15' r='5' fill='url(#r)' fill-opacity='0.5'/>
+        \\<rect width='5' height='5' fill='url(#missing) currentColor' color='green'/>
+        \\</svg>
+
+    let pic = try built(a, src)
+    defer a.destroy(pic)
+    defer pic.deinit()
+    let g = pic.gradients.items()
+    @expectEqual(4, g.len)
+    // Down the first box (bounding box units), across the second (its
+    // stops from `href`).
+    @expectEqual(255, g[0].at(0.5, 0.0).r)
+    @expectEqual(255, g[0].at(0.0, 1.0).b)
+    @expectEqual(255, g[1].at(1.0, 0.0).b)
+    // User space, reflected after x 10.
+    @expectEqual(255, g[2].at(10.0, 0.0).b)
+    @expectEqual(255, g[2].at(20.0, 0.0).r)
+    // Radial: white in the middle, half opaque by the fill's opacity.
+    @expectEqual(255, g[3].at(0.5, 0.5).r)
+    @expectEqual(128, g[3].at(0.5, 0.5).a)
+    @expectEqual(0, g[3].at(1.0, 0.5).a)
+    // A missing gradient falls back to `currentColor`.
+    @expectEqual(128, pic.shapes.items()[4].fill.g)
+    let px = try a.alloc(0 as u8, 20 * 20 * 4)
+    defer a.free(px)
+    try render(a, pic, buffer(px, 20, 20), 0.0, 0.0, 20.0, 20.0, 1.0)
+    @expect(redAt(px, 20, 7, 0) > 200)
+    @expect(blueAt(px, 20, 7, 9) > 200)
+    @expect(redAt(px, 20, 10, 2) > 200)
+    @expect(blueAt(px, 20, 19, 2) > 200)
+}
+
+test "group opacity, dashes and clip paths" {
+    let a = @testAllocator()
+    let src =
+        \\<svg width='30' height='10'>
+        \\<clipPath id='c'><rect x='22' width='4' height='10'/></clipPath>
+        \\<g opacity='0.5'><rect width='6' height='10' fill='red'/><rect x='3' width='6' height='10' fill='red'/></g>
+        \\<path d='M10 5H20' stroke='blue' stroke-width='2' stroke-dasharray='2'/>
+        \\<rect x='20' width='10' height='10' fill='black' clip-path='url(#c)'/>
+        \\</svg>
+
+    let pic = try built(a, src)
+    defer a.destroy(pic)
+    defer pic.deinit()
+    let px = try a.alloc(0 as u8, 30 * 10 * 4)
+    defer a.free(px)
+    try render(a, pic, buffer(px, 30, 10), 0.0, 0.0, 30.0, 10.0, 1.0)
+    // The overlap of the two rectangles is as opaque as the rest.
+    @expectEqual(128, alphaAt(px, 30, 1, 5))
+    @expectEqual(128, alphaAt(px, 30, 4, 5))
+    // Dashes 2 px long, gaps 2 px.
+    @expectEqual(255, alphaAt(px, 30, 10, 5))
+    @expectEqual(0, alphaAt(px, 30, 12, 5))
+    @expectEqual(255, alphaAt(px, 30, 14, 5))
+    // Clipped to x 22..26.
+    @expectEqual(0, alphaAt(px, 30, 21, 5))
+    @expectEqual(255, alphaAt(px, 30, 23, 5))
+    @expectEqual(0, alphaAt(px, 30, 27, 5))
 }

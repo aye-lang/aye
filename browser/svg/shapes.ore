@@ -1,0 +1,58 @@
+// Pictures that paint makes itself (rounded boxes and borders): shapes
+// in CSS px, without a viewBox.
+
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+
+/// An empty picture in CSS px; free it with `deinit` and `alloc.destroy`
+/// (or let an arena drop it).
+pub fn newPicture(alloc: Allocator) AllocError!*mut Picture {
+    return alloc.create(Picture {
+        alloc: alloc,
+        view: null,
+        aspect: DEFAULT_ASPECT,
+        width: 0.0,
+        height: 0.0,
+        shapes: List(Shape).init(alloc),
+        verbs: List(u8).init(alloc),
+        coords: List(f64).init(alloc),
+        gradients: List(Gradient).init(alloc),
+        dashes: List(f64).init(alloc),
+        clips: List(ClipPath).init(alloc),
+        clip_shapes: List(Shape).init(alloc),
+    })
+}
+
+/// Adds a box at (`x`, `y`), `w` x `h` with corners rounded by `r` (see
+/// `roundRectPath`), filled with `c`; with a `hole` (a second box inside
+/// it, `hx`, `hy`, `hw` x `hh`, corners `hr`) left out: a border.
+pub fn addRoundBox(pic: *mut Picture, x: f64, y: f64, w: f64, h: f64, r: [8]f64, c: Color, hole: bool, hx: f64, hy: f64, hw: f64, hh: f64, hr: [8]f64) AllocError!void {
+    let start = pic.verbs.len()
+    let coord_start = pic.coords.len()
+    var pen = Pen { m: IDENTITY, verbs: &mut pic.verbs, coords: &mut pic.coords }
+    try roundRectPath(&mut pen, x, y, w, h, r)
+    if hole && hw > 0.0 && hh > 0.0 {
+        try roundRectPath(&mut pen, hx, hy, hw, hh, hr)
+    }
+    try pic.shapes.append(Shape {
+        verb_start: start,
+        verb_end: pic.verbs.len(),
+        coord_start: coord_start,
+        fill: c,
+        stroke: NO_COLOR,
+        stroke_width: 0.0,
+        evenodd: hole,
+        cap: 0,
+        join: 0,
+        miter_limit: 4.0,
+        fill_grad: 0,
+        stroke_grad: 0,
+        dash_start: 0,
+        dash_end: 0,
+        dash_offset: 0.0,
+        group: 0,
+        opacity: 1.0,
+        clip: 0,
+    })
+}

@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<style>
+:root { font-size: 10px }
+/* The shorthand: layers, a position with offsets and a size, the color of the last layer. */
+.a { background: url(img/a.png) no-repeat right 10px top / 20px auto, linear-gradient(to right, red, rgb(0 0 255) 2em) #eee }
+/* Longhands; relative lengths and math functions become px; corner radii. */
+.b { background-image: url("../b.svg"); background-position: center; background-size: cover; border-radius: 4px 1em / 2px; mask-size: calc(1rem + 4px) }
+.c { --s: 2em; background-size: var(--s) 50%; box-shadow: 0 1px 2px rgba(0, 0, 0, .3), inset 0 0 0 1px red; border-top-left-radius: 50% }
+/* -webkit- aliases, the mask shorthand. */
+.d { -webkit-mask-image: url(data:image/svg+xml;utf8,<svg/>); -webkit-box-shadow: 1px 1px gray }
+.e { mask: url(m.svg) center / contain no-repeat alpha; -webkit-border-radius: 3px }
+/* Invalid: an unknown image, a color in a layer that is not the last, a size without a position. */
+.f { background-image: -moz-thing(1); background: red url(a.png), url(b.png); background: url(a.png) / 10px }
+/* SVG dashes. */
+.g { stroke-dasharray: 4, 2 1; stroke-dashoffset: 3 }
+</style>
+<p class=a>a<p class=b>b<p class=c>c<p class=d>d<p class=e>e<p class=f>f<p class=g>g
