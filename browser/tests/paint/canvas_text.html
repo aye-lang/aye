@@ -1,0 +1,26 @@
+<!doctype html><style>body { margin: 10px; background: #fafafa; }</style><canvas id="c" width="360" height="240"></canvas><script>
+const x = document.getElementById('c').getContext('2d');
+x.font = '24px sans-serif';
+x.fillStyle = '#466ddd';
+x.fillText('Canvas text', 15, 35);
+x.font = 'bold 30px serif';
+x.fillStyle = '#38ad88';
+x.textAlign = 'center';
+x.fillText('Centered', 180, 85);
+x.font = '24px monospace';
+x.strokeStyle = '#d96b8d';
+x.lineWidth = 1;
+x.textAlign = 'left';
+x.strokeText('Outline', 15, 125);
+x.fillStyle = '#333';
+x.fillText('Compressed long text', 15, 165, 180);
+x.save();
+x.translate(260, 145);
+x.rotate(-Math.PI/6);
+x.fillStyle = '#466ddd';
+x.fillText('Rotate', 0, 0);
+x.restore();
+x.font = '18px sans-serif';
+x.textBaseline = 'top';
+x.fillText('Top baseline', 15, 195);
+</script>

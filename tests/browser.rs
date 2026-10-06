@@ -369,6 +369,53 @@ fn screenshot_fixtures() {
     assert!(failures.is_empty(), "{} of {} screenshots failed:\n\n{}", failures.len(), runs.len(), failures.join("\n"));
 }
 
+/// A bitmap mutation from requestAnimationFrame must reach the window's
+/// display list. Compare the animated final frame to an immediate draw
+/// of the identical page, including chrome and CSS bitmap placement.
+#[test]
+fn canvas_animation() {
+    if !has_sdl() {
+        println!("skipped: no SDL2");
+        return;
+    }
+    let animated = scratch().join("canvas-animated.png");
+    let immediate = scratch().join("canvas-immediate.png");
+    let page = "browser/tests/ui/canvas_animate.html";
+    let out = run_window(&[page, "--frames", "60", "--font", "fixed", "--text", "--save", animated.to_str().unwrap()]);
+    assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
+    assert!(text(&out.stdout).contains("three frames drawn"), "{}", text(&out.stdout));
+    // A different fragment would also change the address bar. Use an
+    // event-loop dump to verify pixels separately rather than treating
+    // that expected chrome difference as a bitmap difference.
+    let static_page = format!("{page}#static");
+    let out = run_window(&[&static_page, "--frames", "1", "--font", "fixed", "--text", "--save", immediate.to_str().unwrap()]);
+    assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
+    assert!(text(&out.stdout).contains("three frames drawn"), "{}", text(&out.stdout));
+    assert_eq!(check_png(&animated), check_png(&immediate));
+    // The PNG encoder uses filter 0, so compare the decoded page area.
+    let script = r#"
+import struct, sys, zlib
+def pixels(path):
+    data = open(path, 'rb').read()
+    w, h = struct.unpack('>II', data[16:24])
+    chunks = []
+    offset = 8
+    while offset < len(data):
+        n = int.from_bytes(data[offset:offset+4], 'big')
+        if data[offset+4:offset+8] == b'IDAT':
+            chunks.append(data[offset+8:offset+8+n])
+        offset += n + 12
+    raw = zlib.decompress(b''.join(chunks))
+    stride = w*4+1
+    assert all(raw[y*stride] == 0 for y in range(h))
+    return b''.join(raw[y*stride+1:(y+1)*stride] for y in range(40, h))
+assert pixels(sys.argv[1]) == pixels(sys.argv[2]), 'canvas repaint did not match immediate drawing'
+"#;
+    if let Ok(out) = Command::new("python3").args(["-c", script, animated.to_str().unwrap(), immediate.to_str().unwrap()]).output() {
+        assert!(out.status.success(), "{}", text(&out.stderr));
+    }
+}
+
 fn crc32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
     for &b in data {

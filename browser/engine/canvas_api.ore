@@ -46,6 +46,7 @@ fn installCanvas(it: *mut Interp, o: u32) JsError!void {
     try defMethod(it, o, "canvasHit", 4, akCanvasHit)
     try defMethod(it, o, "canvasText", 3, akCanvasText)
     try defMethod(it, o, "canvasPath", 2, akCanvasPath)
+    try defMethod(it, o, "canvasImageSize", 2, akCanvasImageSize)
 }
 
 fn canvasDimension(doc: *dom.Document, h: NodeId, key: []u8, fallback: usize) usize {
@@ -199,6 +200,65 @@ fn akCanvasColor(it: *mut Interp, a: Args) JsError!Value {
     return js.objVal(arr)
 }
 
+// Images made by new Image() need not be in the document. Fetch them
+// through the ordinary URL cache, then rasterize SVG sources on demand.
+fn canvasSource(it: *mut Interp, source: Value) JsError!?*mut image.Bitmap {
+    let h = handleOf(it, source, TAG_NODE) orelse return null
+    let p = scriptOf(it).active
+    if p.doc.isElement(h, "canvas") {
+        return (try canvasBitmap(it, source)).bmp
+    }
+    if !p.doc.isElement(h, "img") {
+        return null
+    }
+    if p.images == null {
+        p.images = try p.alloc.create(ImageCache.init(p.alloc))
+    }
+    let cache = p.images.?
+    if cache.referrer.len == 0 {
+        try cache.setReferrer(p.url.href)
+    }
+    // A changed src must not reuse the previous element mapping.
+    let src = p.doc.attr(h, "src") orelse return null
+    let target = p.resolve(it.alloc, src) catch |e| {
+        return null
+    }
+    defer target.deinit(it.alloc)
+    let bmp = (try cache.bitmapOf(target.withoutFragment())) orelse return null
+    let pic = cache.pictureOf(target.withoutFragment())
+    if pic |drawing| {
+        if bmp.pixels.len == 0 && bmp.width <= CANVAS_SIDE && bmp.height <= CANVAS_SIDE && bmp.width * bmp.height <= CANVAS_PIXELS {
+            let px = try it.alloc.alloc(0 as u8, bmp.width * bmp.height * 4)
+            errdefer it.alloc.free(px)
+            try svg.render(it.alloc, drawing, canvasTarget(bmp, px), 0.0, 0.0, bmp.width as f64, bmp.height as f64, 1.0)
+            var i: usize = 0
+            while i < px.len {
+                let alpha = px[i + 3] as u32
+                if alpha > 0 {
+                    for k in 0..3 {
+                        px[i + k] = math.minOf(u32, 255, (px[i + k] as u32 * 255 + alpha / 2) / alpha) as u8
+                    }
+                }
+                i += 4
+            }
+            it.alloc.free(bmp.pixels)
+            bmp.pixels = px
+        }
+        try cache.nodes.putPicture(h, bmp, drawing)
+    } else {
+        try cache.nodes.put(h, bmp)
+    }
+    return bmp
+}
+
+fn akCanvasImageSize(it: *mut Interp, a: Args) JsError!Value {
+    let bmp = (try canvasSource(it, it.arg(a, 0))) orelse return js.numVal(0.0)
+    if it.toBoolean(it.arg(a, 1)) {
+        return js.numVal(bmp.height as f64)
+    }
+    return js.numVal(bmp.width as f64)
+}
+
 fn canvasTarget(b: *image.Bitmap, px: []mut u8) svg.Target {
     return svg.Target { pixels: px, width: b.width, ox: 0, oy: 0, x0: 0, y0: 0, x1: b.width as i64, y1: b.height as i64 }
 }
@@ -208,8 +268,8 @@ fn canvasSvg(it: *mut Interp, v: Value, bmp: *image.Bitmap, px: []mut u8) JsErro
     try it.push(sv)
     defer it.pop()
     let pic = (try svg.parseImage(it.alloc, it.heap.bytes(js.strOf(sv)))) orelse return
-    defer pic.deinit()
     defer it.alloc.destroy(pic)
+    defer pic.deinit()
     try svg.render(it.alloc, pic, canvasTarget(bmp, px), 0.0, 0.0, bmp.width as f64, bmp.height as f64, 1.0)
 }
 
@@ -223,7 +283,7 @@ fn canvasComposite(dst: []mut u8, src: []u8, clip: ?[]u8, alpha: f64, mode: []u8
         if clip |c| {
             cover = c[i + 3] as f64 / 255.0
         }
-        let sa = src[i + 3] as f64 / 255.0 * alpha
+        let sa = math.floor(src[i + 3] as f64 * alpha + 0.5) / 255.0
         let da = dst[i + 3] as f64 / 255.0
         var fs = 1.0
         var fd = 1.0 - sa
@@ -240,7 +300,7 @@ fn canvasComposite(dst: []mut u8, src: []u8, clip: ?[]u8, alpha: f64, mode: []u8
         let oa = math.min(1.0, sa * fs + da * fd)
         let outa = oa * cover + da * (1.0 - cover)
         for k in 0..3 {
-            let sc = src[i + k] as f64 / 255.0 * alpha
+            let sc = math.floor(src[i + k] as f64 * alpha + 0.5) / 255.0
             let dc = dst[i + k] as f64 / 255.0 * da
             var out = sc * fs + dc * fd
             if text.eql(mode, "multiply") {
@@ -281,15 +341,7 @@ fn canvasPaint(it: *mut Interp, style: Value, bmp: *image.Bitmap, px: []mut u8) 
     let inv = svg.invert(matrix) orelse return
     if kind == 4.0 {
         let source = try canvasProp(it, style, "image")
-        let h = handleOf(it, source, TAG_NODE) orelse return
-        let page = scriptOf(it).active
-        if page.doc.isElement(h, "canvas") {
-            let ignored = try canvasBitmap(it, source)
-        } else {
-            try updateImages(page, css.Media { width: 800.0, height: 600.0 })
-        }
-        let cache = page.images orelse return
-        let img = cache.nodes.get(h) orelse return
+        let img = (try canvasSource(it, source)) orelse return
         if img.width == 0 || img.height == 0 || img.pixels.len == 0 {
             for i in 0..px.len {
                 px[i] = 0
@@ -532,8 +584,8 @@ fn akCanvasHit(it: *mut Interp, a: Args) JsError!Value {
     defer it.release(b)
     try argText(it, a, 0, b)
     let pic = (try svg.parseImage(it.alloc, b.bytes())) orelse return js.boolVal(false)
-    defer pic.deinit()
     defer it.alloc.destroy(pic)
+    defer pic.deinit()
     return js.boolVal(try svg.contains(it.alloc, pic, x, y, it.toBoolean(it.arg(a, 3))))
 }
 
@@ -565,8 +617,8 @@ fn akCanvasPath(it: *mut Interp, a: Args) JsError!Value {
     }
     try b.append("\"/></svg>")
     let pic = (try svg.parseImage(it.alloc, b.bytes())) orelse return it.newString("")
-    defer pic.deinit()
     defer it.alloc.destroy(pic)
+    defer pic.deinit()
     let m = try canvasMatrix(it, it.arg(a, 1))
     b.clear()
     for shape in pic.shapes.items() {

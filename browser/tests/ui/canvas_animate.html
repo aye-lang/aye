@@ -1,0 +1,18 @@
+<!doctype html><canvas id="c" width="120" height="80"></canvas><p id="result">before</p><script>
+const x = document.getElementById('c').getContext('2d');
+let frames = 0;
+x.fillStyle = 'red';
+x.fillRect(0, 0, 120, 80);
+function draw() {
+  frames++;
+  x.clearRect(0, 0, 120, 80);
+  x.fillStyle = frames === 3 ? 'blue' : 'green';
+  x.fillRect(0, 0, 120, 80);
+  if (frames < 3) requestAnimationFrame(draw);
+  else document.getElementById('result').textContent = 'three frames drawn';
+}
+if (location.hash === '#static') {
+  frames = 2;
+  draw();
+} else requestAnimationFrame(draw);
+</script>

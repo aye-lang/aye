@@ -73,7 +73,7 @@ pub struct Gradient {
             a = a - math.floor(a / turn) * turn
             return self.colorAt(a / turn)
         }
-        if self.r <= 0.0 {
+        if self.r <= 0.0 && self.r0 <= 0.0 {
             return self.last()
         }
         // The circle through the point among those from the focal point
@@ -96,7 +96,21 @@ pub struct Gradient {
         if disc < 0.0 {
             return self.colorAt(0.0)
         }
-        return self.colorAt((b - math.sqrt(disc)) / a)
+        let root = math.sqrt(disc)
+        let first = (b - root) / a
+        let second = (b + root) / a
+        let firstValid = self.r0 + first * dr >= 0.0
+        let secondValid = self.r0 + second * dr >= 0.0
+        if firstValid && secondValid {
+            return self.colorAt(math.max(first, second))
+        }
+        if firstValid {
+            return self.colorAt(first)
+        }
+        if secondValid {
+            return self.colorAt(second)
+        }
+        return Color { r: 0, g: 0, b: 0, a: 0 }
     }
 
     fn last(self: *Self) Color {

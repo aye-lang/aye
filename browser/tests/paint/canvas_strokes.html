@@ -1,0 +1,33 @@
+<!doctype html><style>body { margin: 10px; background: #fafafa; }</style><canvas id="c" width="360" height="240"></canvas><script>
+const x = document.getElementById('c').getContext('2d');
+x.lineWidth = 12;
+for (let i = 0; i < 3; i++) {
+  x.lineJoin = ['miter', 'round', 'bevel'][i];
+  x.strokeStyle = ['#466ddd', '#38ad88', '#d96b8d'][i];
+  x.beginPath();
+  x.moveTo(15+i*115, 65);
+  x.lineTo(55+i*115, 15);
+  x.lineTo(95+i*115, 65);
+  x.stroke();
+}
+for (let i = 0; i < 3; i++) {
+  x.lineCap = ['butt', 'round', 'square'][i];
+  x.strokeStyle = ['#466ddd', '#38ad88', '#d96b8d'][i];
+  x.beginPath();
+  x.moveTo(20+i*115, 100);
+  x.lineTo(90+i*115, 100);
+  x.stroke();
+}
+x.lineWidth = 5;
+x.lineCap = 'round';
+x.lineJoin = 'round';
+x.setLineDash([12, 8]);
+x.strokeStyle = '#333';
+x.beginPath();
+x.moveTo(20, 145);
+x.bezierCurveTo(90, 100, 260, 200, 335, 145);
+x.stroke();
+x.lineDashOffset = 8;
+x.strokeStyle = '#466ddd';
+x.strokeRect(20, 180, 315, 35);
+</script>

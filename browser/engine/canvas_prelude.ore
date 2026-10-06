@@ -335,7 +335,7 @@ pub let CANVAS_PRELUDE =
     \\  _shape(d, stroke, rule) {
     \\    const s = this._state;
     \\    const k = Math.sqrt(Math.abs(this._matrix[0]*this._matrix[3]-this._matrix[1]*this._matrix[2]));
-    \\    return '<path d="'+escape(d)+'" fill="'+(stroke ? 'none' : 'white')+'" fill-rule="'+(rule === 'evenodd' ? 'evenodd' : 'nonzero')+'" stroke="'+(stroke ? 'white' : 'none')+'" stroke-width="'+s.lineWidth*k+'" stroke-linecap="'+s.lineCap+'" stroke-linejoin="'+s.lineJoin+'" stroke-miterlimit="'+s.miterLimit+'" stroke-dasharray="'+this._dash.map(v => v*k).join(' ')+'" stroke-dashoffset="'+s.lineDashOffset*k+'"/>';
+    \\    return '<path d="'+escape(d)+'" fill="'+(stroke ? 'none' : 'white')+'" fill-rule="'+(rule === 'evenodd' ? 'evenodd' : 'nonzero')+'" clip-rule="'+(rule === 'evenodd' ? 'evenodd' : 'nonzero')+'" stroke="'+(stroke ? 'white' : 'none')+'" stroke-width="'+s.lineWidth*k+'" stroke-linecap="'+s.lineCap+'" stroke-linejoin="'+s.lineJoin+'" stroke-miterlimit="'+s.miterLimit+'" stroke-dasharray="'+this._dash.map(v => v*k).join(' ')+'" stroke-dashoffset="'+s.lineDashOffset*k+'"/>';
     \\  }
     \\  _svg(content, clips) {
     \\    let defs = '', open = '', close = '';
@@ -347,6 +347,7 @@ pub let CANVAS_PRELUDE =
     \\    return '<svg width="'+this._node.width+'" height="'+this._node.height+'"><defs>'+defs+'</defs>'+open+content+close+'</svg>';
     \\  }
     \\  _paint(v) {
+    \\    if (v instanceof CanvasPattern) return Object.assign({}, v, {matrix: mul(this._matrix, v.matrix)});
     \\    return typeof v === 'string' ? {kind: 0, color: ak.canvasColor(v)} : v;
     \\  }
     \\  _draw(d, stroke, rule, style, mode) {
@@ -426,7 +427,7 @@ pub let CANVAS_PRELUDE =
     \\    if (!['repeat', 'repeat-x', 'repeat-y', 'no-repeat'].includes(repeat)) throw new DOMException('Invalid repetition', 'SyntaxError');
     \\    image = sourceNode(image);
     \\    if (!image) return null;
-    \\    return new CanvasPattern(image, repeat, this._matrix);
+    \\    return new CanvasPattern(image, repeat, identity());
     \\  }
     \\  drawImage(image) {
     \\    this._sync();
@@ -586,6 +587,25 @@ pub let CANVAS_PRELUDE =
     \\      if (key === 'font' && !/\d+(\.\d+)?(px|pt|em)\s/.test(String(v))) return;
     \\      this._state[key] = typeof defaults[key] === 'string' ? String(v) : typeof defaults[key] === 'boolean' ? !!v : v;
     \\    }
+    \\  });
+    \\}
+    \\// Natural image dimensions use the ordinary image cache, even for a
+    \\// detached Image element. Attribute dimensions do not alter drawImage's
+    \\// source bitmap.
+    \\for (const key of ['width', 'height', 'naturalWidth', 'naturalHeight']) {
+    \\  Object.defineProperty(HTMLImageElement.prototype, key, {
+    \\    configurable: true,
+    \\    get: function () {
+    \\      const height = key === 'height' || key === 'naturalHeight';
+    \\      if (key === 'width' || key === 'height') {
+    \\        const attr = this.getAttribute(key);
+    \\        if (attr !== null && Number(attr) >= 0) return Math.trunc(Number(attr));
+    \\      }
+    \\      return ak.canvasImageSize(this, height);
+    \\    },
+    \\    set: key === 'width' || key === 'height' ? function (v) {
+    \\      this.setAttribute(key, String(Number(v) >>> 0));
+    \\    } : undefined
     \\  });
     \\}
     \\const contexts = new WeakMap();
