@@ -146,6 +146,32 @@ struct Condition {
     }
 }
 
+// The value at `i`: the token, or a math function evaluated into a
+// `Dimension` in px; `next` gets the index after it.
+fn valueToken(toks: []Token, i: usize, m: Media, next: *mut usize) Token {
+    let t = toks[i]
+    if !isMathFunction(t) {
+        next.* = i + 1
+        return t
+    }
+    let end = skipComponent(toks, i)
+    next.* = end
+    // Relative units in media queries are the initial font size.
+    setCalcContext(16.0, 16.0, m.width / 100.0, m.height / 100.0, -1.0)
+    if calcValue(toks[i..end]) |v| {
+        match v {
+            .Px { v: px } => {
+                return Token { kind: Tok.Dimension, text: "px", num: px, delim: 0, flag: false }
+            }
+            .Number { v: n } => {
+                return Token { kind: Tok.Number, text: "", num: n, delim: 0, flag: false }
+            }
+            _ => {}
+        }
+    }
+    return Token { kind: Tok.BadUrl, text: "", num: 0.0, delim: 0, flag: false }
+}
+
 // The comparison operator at `i` (`=`, `<`, `<=`, `>`, `>=`) and the
 // index after it; ":" at `i` when there is none.
 fn operatorAt(toks: []Token, i: usize, op: *mut []u8) usize {
@@ -221,9 +247,10 @@ fn featureMatches(toks: []Token, m: Media) bool {
     }
     if toks[i].kind != Tok.Ident {
         // A range with the value first.
-        let first = toks[i]
+        var after = i + 1
+        let first = valueToken(toks, i, m, &mut after)
         var op1: []u8 = ""
-        i = skipWhitespace(toks, operatorAt(toks, skipWhitespace(toks, i + 1), &mut op1))
+        i = skipWhitespace(toks, operatorAt(toks, skipWhitespace(toks, after), &mut op1))
         if op1.len == 0 || i >= toks.len || toks[i].kind != Tok.Ident {
             return false
         }
@@ -239,10 +266,15 @@ fn featureMatches(toks: []Token, m: Media) bool {
         }
         var op2: []u8 = ""
         i = skipWhitespace(toks, operatorAt(toks, i, &mut op2))
-        if op2.len == 0 || i >= toks.len || skipWhitespace(toks, i + 1) < toks.len {
+        if op2.len == 0 || i >= toks.len {
             return false
         }
-        let high = valueOf(feature, toks[i]) orelse return false
+        var past = i + 1
+        let last = valueToken(toks, i, m, &mut past)
+        if skipWhitespace(toks, past) < toks.len {
+            return false
+        }
+        let high = valueOf(feature, last) orelse return false
         return compare(actual, op2, high)
     }
     let feature = toks[i].text
@@ -265,8 +297,8 @@ fn featureMatches(toks: []Token, m: Media) bool {
         return false
     }
     // `aspect-ratio: 16/9` has three tokens; other values one.
-    let v = toks[i]
     var ratio_end = i + 1
+    let v = valueToken(toks, i, m, &mut ratio_end)
     var ratio = -1.0
     if v.kind == Tok.Number {
         let slash = skipWhitespace(toks, i + 1)
