@@ -128,7 +128,7 @@ session goes on after an error.
 
 | `cmd` | arguments | response fields |
 | --- | --- | --- |
-| `navigate` | `url`: absolute, relative to the current page, or a file path | `result`, `url`, `title`, `snapshot` |
+| `navigate` | `url`: absolute, relative to the current page, a file path, or a host name (`example.com` becomes `https://example.com`) | `result`, `url`, `title`, `snapshot` |
 | `back`, `forward`, `reload` | | as `navigate` |
 | `snapshot` | `boxes` (bool), `format`: `"text"` (default) or `"json"` | `url`, `title`, `snapshot` (text) or `tree` (JSON) |
 | `read` | `refs` (bool, default true) | `url`, `title`, `markdown` |

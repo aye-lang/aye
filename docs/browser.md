@@ -45,6 +45,38 @@ Same rules as `milestones.md`: tests first; a milestone is done when its
 acceptance tests pass. Tests run headless and offline (`file:` fixtures
 and a local test server), so CI needs no network and no display.
 
+**Status.** B1–B4 are done, and so are the cores of B6 and B7:
+
+| | State | Tests (`cargo test --test browser`) |
+|---|---|---|
+| B1 fetch, HTML, DOM | done | 31 `dump --tree`/`--text` fixtures, `data:`, `http:` (local server) |
+| B2 CSS and style | done | 25 `dump --style` fixtures |
+| B3 layout | done | 31 `dump --layout` fixtures (fixed font), system-font check |
+| B4 paint and window | done | 13 golden PNGs, PNG checks, headless window tests |
+| B5 forms and images | not started | |
+| B6 JavaScript | engine core done | 212 conformance scripts (`anyknown js`) |
+| B7 agent interface | core done | 17 snapshot/Markdown fixtures, 4 session and MCP transcripts |
+| B8 the real web | not started | |
+
+All the front ends share `engine/`: the window, `screenshot` and the
+agent sessions load pages through `engine.load` and keep history in a
+`Tab`. What remains:
+
+- **B5:** form controls that can be edited and submitted (the agent's
+  `type`/`select` only record events today), and decoded images (PNG,
+  GIF) instead of placeholder boxes.
+- **B6:** DOM bindings (`document`, wrappers holding `Handle(Node)`),
+  events and an event loop (`setTimeout`, `addEventListener`), running
+  page scripts during load; then the DOM fixtures and the to-do app.
+- **B7:** actions that reach the page through JS and forms (`eval`,
+  real input and submission), `screenshot` and `tabs` commands, and the
+  shared window (`--agent-socket`) where a human and an agent drive one
+  page.
+- **B8:** the real web (cookies, gzip, `<base>`, a list of public sites).
+
+The compiler gaps the browser met, and which of them M9.5/M9.6 fixed,
+are in `browser/COMPILER_GAPS.md`.
+
 ### B1: Fetch, HTML, DOM, text
 
 - URL parsing and relative resolution; fetch for `file:`, `data:`,
