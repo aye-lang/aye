@@ -77,8 +77,9 @@ agent sessions load pages through `engine.load` and keep history in a
   observers are stand-ins (below); no `getComputedStyle` or
   `getBoundingClientRect`; no Shift_JIS, GBK or Big5 (only UTF-8 and
   windows-1252) and no public suffix list for cookies (a bare top-level
-  name is refused, `co.uk` is not); the list of public sites in
-  `docs/browser-sites.md` is not written yet.
+  name is refused, `co.uk` is not). The list of public sites is in
+  [`docs/browser-sites.md`](browser-sites.md) (20 sites, 2026-10-06:
+  8 ✅, 7 ⚠️, 5 ❌, with the failure causes ranked).
 
 The compiler gaps the browser met, and which of them M9.5/M9.6 fixed,
 are in `browser/COMPILER_GAPS.md`.
@@ -406,7 +407,7 @@ on (`--no-js` turns it off), `dump` with `--js`.
 - HTTPS sites render readably and agents can operate them: a fixed list
   of public pages (example.com, a Wikipedia article, Hacker News, a
   documentation site) checked manually and recorded in
-  `docs/browser-sites.md`; cookies, gzip, `<meta charset>`, `<base>`,
+  [`docs/browser-sites.md`](browser-sites.md); cookies, gzip, `<meta charset>`, `<base>`,
   `<noscript>`.
 - Done so far:
   - *Net* (`net/session.ore`, `net/cookies.ore`, `net/http.ore`): one
