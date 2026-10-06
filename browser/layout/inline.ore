@@ -135,6 +135,10 @@ struct Piece {
     // The relative offsets of those inline boxes (Open: with its own).
     rel_x: f64
     rel_y: f64
+    // Word: its bidi class (`BIDI_L`...), then the resolved one; the
+    // embedding level (bidi.ore).
+    bidi: u8 = 0
+    level: u8 = 0
 }
 
 fn piece(kind: PieceKind, box: usize, depth: usize) Piece {
@@ -272,6 +276,7 @@ struct Collector {
                 p.collapsible = ws.collapse
             } else {
                 var prev: u32 = 0
+                var strong: u32 = 0
                 while k < s.len && s[k] != ' ' && s[k] != '\n' {
                     // A line may break between East Asian characters
                     // (linebreak.ore).
@@ -279,6 +284,13 @@ struct Collector {
                     if ws.wrap && k > p.start && breaksBetween(prev, d.code) {
                         p.soft = true
                         break
+                    }
+                    // Right-to-left text is a piece of its own (bidi.ore).
+                    if splitsBidi(strong, d.code) {
+                        break
+                    }
+                    if !bidiTransparent(d.code) {
+                        strong = d.code
                     }
                     // A line may break after a hyphen between two
                     // other characters.
@@ -292,8 +304,13 @@ struct Collector {
                 }
             }
             p.end = k
+            if p.kind == PieceKind.Word {
+                p.bidi = bidiClassOf(s[p.start..p.end])
+            }
             if p.kind != PieceKind.Break {
-                p.w = self.t.measure.width(f, s[p.start..p.end])
+                var pf = f
+                pf.rtl = p.bidi == BIDI_R
+                p.w = self.t.measure.width(pf, s[p.start..p.end])
             }
             try self.out.append(p)
         }
@@ -418,6 +435,8 @@ fn layoutInline(t: *mut Tree, i: usize, avail: f64) AllocError!f64 {
     var pieces = List(Piece).init(t.backing)
     defer pieces.deinit()
     try collectPieces(t, i, avail, &mut pieces)
+    let rtl = isRtl(t.bx(i).style)
+    resolveLevels(pieces.items(), rtl)
     let ps = pieces.items()
     // The inline boxes open at the end of the previous line.
     var open = List(usize).init(t.backing)
@@ -432,6 +451,7 @@ fn layoutInline(t: *mut Tree, i: usize, avail: f64) AllocError!f64 {
         avail: avail,
         strut: textMetrics(t, t.bx(i).style),
         align: keywordOf(t.bx(i).style[css.TEXT_ALIGN]),
+        rtl: rtl,
         y: 0.0,
         open: &mut open,
     }
@@ -535,6 +555,8 @@ struct LineBuilder {
     avail: f64
     strut: TextMetrics
     align: []u8
+    // The paragraph is right to left: `start` aligns right.
+    rtl: bool
     // The top of the next line.
     y: f64
     open: *mut List(usize)
@@ -596,7 +618,8 @@ struct LineBuilder {
         var extra = 0.0
         let free = self.avail - used
         if free > 0.0 {
-            if text.eql(self.align, "right") || text.eql(self.align, "end") {
+            let start = text.eql(self.align, "start") || text.eql(self.align, "justify")
+            if text.eql(self.align, "right") || (text.eql(self.align, "end") && !self.rtl) || (start && self.rtl && (!text.eql(self.align, "justify") || forced || last || spaces == 0)) {
                 offset = free
             } else if text.eql(self.align, "center") {
                 offset = free / 2.0
@@ -635,6 +658,12 @@ struct LineBuilder {
             frag_start: self.t.frags.len(),
             frag_end: 0,
         })
+        // A line with right-to-left text has its own order (bidi.ore).
+        if try bidiLine(self, kp, self.left + offset, extra, baseline) {
+            self.t.lines.items()[line_index].frag_end = self.t.frags.len()
+            self.y += above + below
+            return
+        }
         // Fragments: the inline boxes still open from the last line
         // first, then the pieces.
         var stack = List(OpenFrag).init(self.t.backing)

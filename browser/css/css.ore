@@ -93,7 +93,7 @@ pub struct Property {
     initial: Value
 }
 
-pub let NPROPS: usize = 67
+pub let NPROPS: usize = 68
 
 pub let DISPLAY: usize = 0
 pub let POSITION: usize = 1
@@ -145,6 +145,7 @@ pub let GRID_TEMPLATE_AREAS: usize = 62
 // `grid-column-start`, `grid-column-end`, `grid-row-start`,
 // `grid-row-end` in this order.
 pub let GRID_COLUMN_START: usize = 63
+pub let DIRECTION: usize = 67
 
 let DISPLAYS = "inline block list-item inline-block table inline-table table-row-group table-header-group table-footer-group table-row table-cell table-column-group table-column table-caption flex inline-flex grid inline-grid flow-root contents none"
 let BORDER_STYLES = "none hidden dotted dashed solid double groove ridge inset outset"
@@ -154,7 +155,7 @@ let ALIGNS = "normal stretch flex-start flex-end start end self-start self-end c
 let BLACK = Color { r: 0, g: 0, b: 0, a: 1.0 }
 let TRANSPARENT = Color { r: 0, g: 0, b: 0, a: 0.0 }
 
-pub let PROPERTIES = [67]Property{
+pub let PROPERTIES = [68]Property{
     Property { name: "display", inherited: false, kind: PKind.Keywords, keywords: DISPLAYS, initial: Value.Keyword { k: "inline" } },
     Property { name: "position", inherited: false, kind: PKind.Keywords, keywords: "static relative absolute fixed sticky", initial: Value.Keyword { k: "static" } },
     Property { name: "color", inherited: true, kind: PKind.Color, keywords: "", initial: Value.Rgba { c: BLACK } },
@@ -222,6 +223,7 @@ pub let PROPERTIES = [67]Property{
     Property { name: "grid-column-end", inherited: false, kind: PKind.Raw, keywords: "auto", initial: Value.Keyword { k: "auto" } },
     Property { name: "grid-row-start", inherited: false, kind: PKind.Raw, keywords: "auto", initial: Value.Keyword { k: "auto" } },
     Property { name: "grid-row-end", inherited: false, kind: PKind.Raw, keywords: "auto", initial: Value.Keyword { k: "auto" } },
+    Property { name: "direction", inherited: true, kind: PKind.Keywords, keywords: "ltr rtl", initial: Value.Keyword { k: "ltr" } },
 }
 
 /// The index of the longhand property `name` (lower case).
