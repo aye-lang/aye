@@ -115,11 +115,18 @@ fn trackLength(s: []u8, base: f64, u: Units) ?f64 {
     if text.eqlIgnoreCase(unit, "ex") || text.eqlIgnoreCase(unit, "ch") {
         return n * u.font * 0.5
     }
-    if text.eqlIgnoreCase(unit, "vw") {
+    let axis = css.viewportAxis(unit)
+    if axis == 'w' {
         return n * u.vw / 100.0
     }
-    if text.eqlIgnoreCase(unit, "vh") {
+    if axis == 'h' {
         return n * u.vh / 100.0
+    }
+    if axis == '<' {
+        return n * math.min(u.vw, u.vh) / 100.0
+    }
+    if axis == '>' {
+        return n * math.max(u.vw, u.vh) / 100.0
     }
     return css.absoluteLength(n, unit)
 }

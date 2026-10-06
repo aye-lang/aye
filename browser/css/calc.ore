@@ -284,16 +284,17 @@ fn unitPx(n: f64, unit: []u8) ?f64 {
     if text.eqlIgnoreCase(unit, "ex") || text.eqlIgnoreCase(unit, "ch") {
         return n * calc_ctx.em * 0.5
     }
-    if text.eqlIgnoreCase(unit, "vw") {
+    let axis = viewportAxis(unit)
+    if axis == 'w' {
         return n * calc_ctx.vw
     }
-    if text.eqlIgnoreCase(unit, "vh") {
+    if axis == 'h' {
         return n * calc_ctx.vh
     }
-    if text.eqlIgnoreCase(unit, "vmin") {
+    if axis == '<' {
         return n * math.min(calc_ctx.vw, calc_ctx.vh)
     }
-    if text.eqlIgnoreCase(unit, "vmax") {
+    if axis == '>' {
         return n * math.max(calc_ctx.vw, calc_ctx.vh)
     }
     return absoluteLength(n, unit)

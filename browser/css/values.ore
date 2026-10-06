@@ -101,12 +101,18 @@ fn dupText(sheet: *mut Sheet, s: []u8) AllocError![]u8 {
     return copy
 }
 
-/// Does a value use `var()` or a math function, so that it can only be
-/// parsed at computed-value time?
+/// Does a value use `var()`, a math function or `vmin`/`vmax`, so that it
+/// can only be parsed at computed-value time?
 pub fn needsComputing(toks: []Token) bool {
     for t in toks {
         if t.kind == Tok.Function && (text.eqlIgnoreCase(t.text, "var") || isMathFunction(t)) {
             return true
+        }
+        if t.kind == Tok.Dimension {
+            let axis = viewportAxis(t.text)
+            if axis == '<' || axis == '>' {
+                return true
+            }
         }
     }
     return false
@@ -1138,11 +1144,18 @@ fn lengthValue(c: Comp, percent: bool, nonneg: bool) ?Value {
     if text.eqlIgnoreCase(u, "ex") || text.eqlIgnoreCase(u, "ch") {
         return Value.Em { v: t.num * 0.5 }
     }
-    if text.eqlIgnoreCase(u, "vw") {
+    let axis = viewportAxis(u)
+    if axis == 'w' {
         return Value.Vw { v: t.num }
     }
-    if text.eqlIgnoreCase(u, "vh") {
+    if axis == 'h' {
         return Value.Vh { v: t.num }
+    }
+    if axis != 0 {
+        // `vmin`, `vmax`: in px of this cascade's viewport, as calc() does.
+        if unitPx(t.num, u) |px| {
+            return Value.Px { v: px }
+        }
     }
     if absoluteLength(t.num, u) |px| {
         return Value.Px { v: px }
@@ -1207,6 +1220,34 @@ fn mathNumber(c: Comp) ?f64 {
 }
 
 /// `n` of the absolute unit `unit` in px; null for other units.
+/// The axis of a viewport-percentage unit: 'w' (`vw`), 'h' (`vh`), '<'
+/// (`vmin`), '>' (`vmax`), or 0 for other units. The small, large and
+/// dynamic viewports (`svh`, `lvh`, `dvh`, ...) are the window: it has
+/// no toolbars that come and go. `vi` and `vb` follow horizontal
+/// writing.
+pub fn viewportAxis(unit: []u8) u8 {
+    var u = unit
+    if u.len >= 3 && (u[1] | 0x20) == 'v' {
+        let c = u[0] | 0x20
+        if c == 's' || c == 'l' || c == 'd' {
+            u = u[1..]
+        }
+    }
+    if text.eqlIgnoreCase(u, "vw") || text.eqlIgnoreCase(u, "vi") {
+        return 'w'
+    }
+    if text.eqlIgnoreCase(u, "vh") || text.eqlIgnoreCase(u, "vb") {
+        return 'h'
+    }
+    if text.eqlIgnoreCase(u, "vmin") {
+        return '<'
+    }
+    if text.eqlIgnoreCase(u, "vmax") {
+        return '>'
+    }
+    return 0
+}
+
 pub fn absoluteLength(n: f64, unit: []u8) ?f64 {
     if text.eqlIgnoreCase(unit, "px") {
         return n
