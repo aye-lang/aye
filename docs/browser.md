@@ -68,7 +68,7 @@ agent sessions load pages through `engine.load` and keep history in a
 
 - **B6 leftovers:** scripts that run while the document is parsed
   (`document.write`, an inline script seeing only the DOM before it),
-  modules, unhandled-rejection reports, `getComputedStyle` and layout
+  modules, `getComputedStyle` and layout
   queries (`getBoundingClientRect` is all zeros), live NodeLists,
   interrupting a script that never returns.
 - **B7:** `screenshot` and `tabs` commands, and the shared window
@@ -287,7 +287,9 @@ on (`--no-js` turns it off), `dump` with `--js`.
   `defer` and `async` scripts run after the others (async as defer);
   `type=module` and data types are skipped; then DOMContentLoaded
   (`readyState` "interactive") and load ("complete"). An uncaught
-  exception is a console message and the next script runs. With
+  exception is a console message and the next script runs; so is a
+  promise still rejected with no handler at the end of a microtask
+  checkpoint ("Uncaught (in promise) ..."). With
   scripts on, `noscript` is `display: none` (a UA rule).
 - *Bindings:* a node's wrapper is a host object holding its
   `Handle(Node)`, one per node (`Script.wrappers`), each counting in
@@ -340,8 +342,11 @@ on (`--no-js` turns it off), `dump` with `--js`.
 - *Console:* messages ("[log] ...", "[error] Uncaught ...") go to
   stderr for `dump --js` and the window, and with the agent's
   responses (`console`).
-- *Stack:* page scripts run on the main thread, so calls nest at most
-  400 deep (a RangeError beyond).
+- *Stack:* page scripts run on the main thread, so a task may use 5 MB
+  of its stack and nest 3000 calls (a RangeError beyond).
+- *Budget:* a task (a script, a timer callback, an event, the
+  microtasks of a checkpoint) that runs longer than 2 s or 100M steps
+  ends with a console error, which no `catch` or `finally` sees.
 
 ### B7: Agent interface
 

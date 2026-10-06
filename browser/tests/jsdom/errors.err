@@ -3,5 +3,7 @@
 [log] console.log goes to stderr { a: 1 } [ 1, 2 ]
 [warn] a warning
 [alert] an alert never blocks
+[error] Uncaught (in promise) Error: async failure
+[error] Uncaught (in promise) 42
 [error] Uncaught SyntaxError: Unexpected identifier 'error'
 [error] Uncaught TypeError: Cannot read properties of null (reading 'x')

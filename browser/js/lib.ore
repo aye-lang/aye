@@ -166,6 +166,7 @@ pub let LIB =
     \\    hidden(this, '_state', 0);
     \\    hidden(this, '_value', undefined);
     \\    hidden(this, '_reactions', []);
+    \\    hidden(this, '_handled', false);
     \\    const [resolve, reject] = resolvers(this);
     \\    try {
     \\      executor(resolve, reject);
@@ -180,6 +181,7 @@ pub let LIB =
     \\      reject = rej;
     \\    });
     \\    const r = { onFulfilled, onRejected, resolve, reject };
+    \\    this._handled = true;
     \\    if (this._state === 0) this._reactions.push(r);
     \\    else react(this, r);
     \\    return next;
@@ -294,7 +296,16 @@ pub let LIB =
     \\  p._value = v;
     \\  const rs = p._reactions;
     \\  p._reactions = [];
+    \\  if (state === 2 && !p._handled) unhandled.push(p);
     \\  for (const r of rs) react(p, r);
+    \\}
+    \\// Promises rejected with no handler: the host asks for their reasons
+    \\// after each microtask checkpoint (takeUnhandled) and reports them.
+    \\const unhandled = [];
+    \\function takeUnhandled() {
+    \\  const out = [];
+    \\  for (const p of unhandled.splice(0)) if (!p._handled) out.push(p._value);
+    \\  return out;
     \\}
     \\function react(p, r) {
     \\  enqueue(() => {
@@ -382,7 +393,7 @@ pub let LIB =
     \\    [Symbol.toStringTag]: 'AsyncGenerator',
     \\  };
     \\}
-    \\G.__engine.setDrivers(asyncDriver, asyncGenDriver);
+    \\G.__engine.setDrivers(asyncDriver, asyncGenDriver, takeUnhandled);
     \\delete G.__engine;
     \\
     \\// ---- legacy escape / unescape

@@ -587,6 +587,36 @@ fn runMicrotasks(s: *mut Script) AllocError!void {
     if head > MAX_MICROTASKS {
         try addConsole(s, "[error] ", "too many microtasks: the rest were dropped")
     }
+    try reportRejections(s)
+}
+
+// Logs the promises rejected with no handler by the end of a microtask
+// checkpoint: "[error] Uncaught (in promise) ...".
+fn reportRejections(s: *mut Script) AllocError!void {
+    let base = s.it.stack.len()
+    defer s.it.truncate(base)
+    enter(s)
+    let list = s.it.takeUnhandled() catch |e| {
+        leave(s)
+        return uncaught(s, e)
+    }
+    leave(s)
+    if !js.isObject(list) {
+        return
+    }
+    try jsPush(s, list)
+    let o = js.objectOf(list)
+    var b = text.Builder.init(s.alloc)
+    defer b.deinit()
+    for i in 0..s.it.heap.obj(o).nelems {
+        s.it.exception = s.it.heap.obj(o).elems[i]
+        b.clear()
+        js.describeThrown(&mut s.it, &mut b, "Uncaught (in promise) ") catch |e| {
+            return AllocError.OutOfMemory
+        }
+        s.it.exception = Value.Undefined
+        try addConsole(s, "[error] ", b.bytes())
+    }
 }
 
 fn tick(s: *mut Script) {

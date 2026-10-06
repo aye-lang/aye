@@ -121,9 +121,14 @@ pub fn reportUncaught(it: *mut Interp) {
 }
 
 pub fn describeException(it: *mut Interp, b: *mut text.Builder) JsError!void {
+    return describeThrown(it, b, "Uncaught ")
+}
+
+/// describeException with another prefix ("Uncaught (in promise) ").
+pub fn describeThrown(it: *mut Interp, b: *mut text.Builder, prefix: []u8) JsError!void {
     let ex = it.exception
     try it.push(ex)
-    try b.append("Uncaught ")
+    try b.append(prefix)
     if it.classOf(ex) |c| {
         if c == Class.Error {
             try appendErrorText(it, b, ex)

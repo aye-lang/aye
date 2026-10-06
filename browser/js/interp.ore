@@ -202,6 +202,8 @@ pub struct Interp {
     // Roots of the drivers of async functions and async generators.
     async_driver: u32
     async_gen_driver: u32
+    // Root of lib.ore's takeUnhandled (see Interp.takeUnhandled).
+    unhandled_fn: u32
     // Microtasks (queueMicrotask, promise reactions), in order from
     // jobs_head; the host runs them (takeJob).
     jobs: List(Value)
@@ -291,6 +293,7 @@ pub struct Interp {
             gen_return: NONE,
             async_driver: NONE,
             async_gen_driver: NONE,
+            unhandled_fn: NONE,
             jobs: List(Value).init(alloc),
             jobs_head: 0,
             tagged: IntMap(u32, u32).init(alloc),
@@ -444,6 +447,16 @@ pub struct Interp {
     /// Queues a microtask (a function called with no arguments).
     pub fn queueJob(self: *mut Self, f: Value) JsError!void {
         return self.jobs.append(f)
+    }
+
+    /// The reasons of the promises rejected with no handler since the last
+    /// call (an array), for the host to report after a microtask
+    /// checkpoint.
+    pub fn takeUnhandled(self: *mut Self) JsError!Value {
+        if self.unhandled_fn == NONE {
+            return Value.Undefined
+        }
+        return self.call1(self.roots.items()[self.unhandled_fn], Value.Undefined, Value.Undefined)
     }
 
     /// The next microtask, if there is one (it is taken off the queue).
