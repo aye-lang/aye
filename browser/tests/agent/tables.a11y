@@ -18,12 +18,9 @@
       - cell "Did not finish"
       - cell "-"
   - heading "Without a header" [level=2] [e3]
-  - table
-    - row
-      - cell "a"
-      - cell "b"
-    - row
-      - cell "c"
+  - text: a
+  - text: b
+  - text: c
   - heading "Row headers" [level=2] [e4]
   - table
     - row
