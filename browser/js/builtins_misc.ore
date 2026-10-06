@@ -26,7 +26,7 @@ fn installMisc(it: *mut Interp) JsError!void {
     try it.defineNative(dp, "getTime", 0, dateGetTime)
     try it.defineNative(dp, "valueOf", 0, dateGetTime)
     try it.defineNative(dp, "toISOString", 0, dateToISOString)
-    try it.defineNative(dp, "toJSON", 1, dateToISOString)
+    try it.defineNative(dp, "toJSON", 1, dateToJSON)
     try it.defineNative(dp, "toString", 0, dateToString)
     try it.defineNative(dp, "getFullYear", 0, dateGetFullYear)
     try it.defineNative(dp, "getUTCFullYear", 0, dateGetFullYear)
@@ -308,7 +308,7 @@ fn dateCtor(it: *mut Interp, a: Args) JsError!Value {
         if it.hasClass(v, Class.Date) {
             t = try thisTime(it, Args { this: v, base: 0, argc: 0, callee: NONE, new_target: NONE })
         } else {
-            let p = try it.toPrimitive(v, false)
+            let p = try it.toPrimitiveHint(v, 0)
             if isStr(p) {
                 t = parseIsoDate(it.heap.bytes(strOf(p)))
             } else {
@@ -361,6 +361,14 @@ fn dateParse(it: *mut Interp, a: Args) JsError!Value {
 
 fn dateGetTime(it: *mut Interp, a: Args) JsError!Value {
     return numVal(try thisTime(it, a))
+}
+
+fn dateToJSON(it: *mut Interp, a: Args) JsError!Value {
+    let t = try thisTime(it, a)
+    if t != t {
+        return Value.Null
+    }
+    return dateToISOString(it, a)
 }
 
 fn dateToISOString(it: *mut Interp, a: Args) JsError!Value {
@@ -570,7 +578,7 @@ fn mapCtor(it: *mut Interp, a: Args) JsError!Value {
     if a.new_target == NONE {
         return it.typeError("Constructor Map requires 'new'")
     }
-    let o = try it.newObjectOf(Class.Map, it.map_proto, ObjData.None)
+    let o = try ctorTarget(it, a, Class.Map)
     try it.push(objVal(o))
     let src = it.arg(a, 0)
     if !isNullish(src) {
@@ -703,23 +711,23 @@ fn mapPart(it: *mut Interp, a: Args, part: u32) JsError!Value {
 }
 
 fn mapKeys(it: *mut Interp, a: Args) JsError!Value {
-    return mapPart(it, a, 0)
+    return makeIterator(it, objectOf(try mapPart(it, a, 0)))
 }
 
 fn mapValues(it: *mut Interp, a: Args) JsError!Value {
-    return mapPart(it, a, 1)
+    return makeIterator(it, objectOf(try mapPart(it, a, 1)))
 }
 
 fn mapEntriesMethod(it: *mut Interp, a: Args) JsError!Value {
     let o = try thisCollection(it, a, Class.Map)
-    return objVal(try mapEntries(it, o))
+    return makeIterator(it, try mapEntries(it, o))
 }
 
 fn setCtor(it: *mut Interp, a: Args) JsError!Value {
     if a.new_target == NONE {
         return it.typeError("Constructor Set requires 'new'")
     }
-    let o = try it.newObjectOf(Class.Set, it.set_proto, ObjData.None)
+    let o = try ctorTarget(it, a, Class.Set)
     try it.push(objVal(o))
     let src = it.arg(a, 0)
     if !isNullish(src) {
@@ -766,7 +774,7 @@ fn setForEach(it: *mut Interp, a: Args) JsError!Value {
 
 fn setValues(it: *mut Interp, a: Args) JsError!Value {
     let o = try thisCollection(it, a, Class.Set)
-    return objVal(try it.iterToArray(objVal(o)))
+    return makeIterator(it, try it.iterToArray(objVal(o)))
 }
 
 fn setEntries(it: *mut Interp, a: Args) JsError!Value {
@@ -787,5 +795,5 @@ fn setEntries(it: *mut Interp, a: Args) JsError!Value {
         }
         i += 1
     }
-    return it.pop()
+    return makeIterator(it, objectOf(it.pop()))
 }

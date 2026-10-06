@@ -70,12 +70,14 @@ pub fn runSource(alloc: Allocator, src: []u8) i32 {
         return 1
     }
     defer it.deinit()
-    if gcStressRequested() {
-        it.heap.threshold = 1
-    }
+    // Built-ins are made before any collection can run (they are roots
+    // only once installed).
     installBuiltins(&mut it) catch |e| {
         std.log.err("out of memory")
         return 1
+    }
+    if gcStressRequested() {
+        it.heap.threshold = 1
     }
     it.runScript(src) catch |e| {
         reportUncaught(&mut it)

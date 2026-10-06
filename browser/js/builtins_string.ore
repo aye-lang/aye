@@ -106,21 +106,27 @@ fn substringOf(it: *mut Interp, s: u32, from: u32, to: u32) JsError!Value {
     }
     let b = try it.builder()
     defer it.release(b)
-    let c = it.heap.str(s)
-    try appendSlice(&mut it.units, b, c.bytes, c.ascii, from, to)
+    let bytes = it.heap.bytes(s)
+    try appendSlice(&mut it.units, b, bytes, it.heap.str(s).ascii, from, to)
     return it.takeString(b)
 }
 
 fn stringFromCharCode(it: *mut Interp, a: Args) JsError!Value {
-    var units = List(u16).init(it.alloc)
-    defer units.deinit()
+    // Convert every argument first (valueOf may run script code), then
+    // use the shared scratch units.
+    let codes = try it.keyList()
+    defer it.releaseKeys(codes)
     for i in 0..a.argc {
         let x = try it.toNumber(it.arg(a, i))
-        try units.append((toUint32(x) & 0xFFFF) as u16)
+        try codes.append(toUint32(x) & 0xFFFF)
+    }
+    it.units.clear()
+    for c in codes.items() {
+        try it.units.append(c as u16)
     }
     let b = try it.builder()
     defer it.release(b)
-    try appendUnits(b, units.items())
+    try appendUnits(b, it.units.items())
     return it.takeString(b)
 }
 
@@ -149,9 +155,9 @@ fn stringCharAt(it: *mut Interp, a: Args) JsError!Value {
 fn codeUnit(it: *mut Interp, s: u32, i: u32) u32 {
     let c = it.heap.str(s)
     if c.ascii {
-        return c.bytes[i] as u32
+        return it.heap.bytes(s)[i] as u32
     }
-    return unitAt(c.bytes, i)
+    return unitAt(it.heap.bytes(s), i)
 }
 
 fn stringCharCodeAt(it: *mut Interp, a: Args) JsError!Value {
@@ -229,7 +235,7 @@ fn byteAt(it: *mut Interp, s: u32, u: u32) usize {
     if c.ascii {
         return u as usize
     }
-    return byteOffset(c.bytes, u)
+    return byteOffset(it.heap.bytes(s), u)
 }
 
 fn unitOf(it: *mut Interp, s: u32, b: usize) u32 {
@@ -237,7 +243,7 @@ fn unitOf(it: *mut Interp, s: u32, b: usize) u32 {
     if c.ascii {
         return b as u32
     }
-    return unitOffset(c.bytes, b)
+    return unitOffset(it.heap.bytes(s), b)
 }
 
 // The search string (argument 0) of indexOf and friends.
@@ -338,8 +344,31 @@ fn stringSubstr(it: *mut Interp, a: Args) JsError!Value {
     return substringOf(it, s, from, to)
 }
 
-// Upper or lower case of a code point (ASCII, Latin-1, Greek, Cyrillic).
+// Upper or lower case of a code point (ASCII, Latin-1, Latin
+// Extended-A, the DŽ/LJ/NJ digraphs, Greek, Cyrillic).
 fn caseMap(cp: u32, upper: bool) u32 {
+    if cp >= 0x1C4 && cp <= 0x1CC {
+        let base = 0x1C4 + ((cp - 0x1C4) / 3) * 3
+        if upper {
+            return base
+        }
+        return base + 2
+    }
+    if (cp >= 0x100 && cp <= 0x137) || (cp >= 0x14A && cp <= 0x177) {
+        if upper {
+            return cp & ~(1 as u32)
+        }
+        return cp | 1
+    }
+    if (cp >= 0x139 && cp <= 0x148) || (cp >= 0x179 && cp <= 0x17E) {
+        if upper && (cp & 1) == 0 {
+            return cp - 1
+        }
+        if !upper && (cp & 1) == 1 {
+            return cp + 1
+        }
+        return cp
+    }
     if upper {
         if (cp >= 'a' && cp <= 'z') || (cp >= 0xE0 && cp <= 0xFE && cp != 0xF7) || (cp >= 0x3B1 && cp <= 0x3C9 && cp != 0x3C2) || (cp >= 0x430 && cp <= 0x44F) {
             return cp - 32
@@ -371,6 +400,8 @@ fn changeCase(it: *mut Interp, a: Args, upper: bool) JsError!Value {
         let d = decodeAt(bytes, i)
         if upper && d.cp == 0xDF {
             try b.append("SS")
+        } else if !upper && d.cp == 0x130 {
+            try b.append("i\xCC\x87")
         } else {
             try appendWtf8(b, caseMap(d.cp, upper))
         }
@@ -599,7 +630,10 @@ fn stringRepeat(it: *mut Interp, a: Args) JsError!Value {
     let s = try thisStr(it, a)
     let n = try argInteger(it, a, 0, 0.0)
     if n < 0.0 || n - n != 0.0 {
-        return it.rangeError("Invalid count value")
+        it.msg.clear()
+        try it.msg.append("Invalid count value: ")
+        try formatNumber(&mut it.msg, n)
+        return it.rangeError(it.msg.bytes())
     }
     let bytes = it.heap.bytes(s)
     if n * bytes.len as f64 > 536870888.0 {
@@ -642,8 +676,8 @@ fn pad(it: *mut Interp, a: Args, atStart: bool) JsError!Value {
         if need - done < take {
             take = need - done
         }
-        let fc = it.heap.str(f)
-        try appendSlice(&mut it.units, b, fc.bytes, fc.ascii, 0, take)
+        let fbytes = it.heap.bytes(f)
+        try appendSlice(&mut it.units, b, fbytes, it.heap.str(f).ascii, 0, take)
         done += take
     }
     if atStart {

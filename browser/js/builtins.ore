@@ -15,7 +15,7 @@ pub fn installBuiltins(it: *mut Interp) JsError!void {
     try it.natives.append(NativeEntry { f: nativeNoop, name: A_EMPTY, length: 0 })
     it.function_proto = try h.newObj(Class.Function, it.object_proto, ObjData.Native { id: 0 })
     it.global = try h.newObj(Class.Object, it.object_proto, ObjData.None)
-    it.glex = try h.newEnv(0, NONE)
+    it.glex = try h.newEnv(0, NONE, Value.Empty)
     it.array_proto = try h.newObj(Class.Array, it.object_proto, ObjData.None)
     it.string_proto = try h.newObj(Class.String, it.object_proto, ObjData.Prim { v: try it.atomValue(A_EMPTY) })
     it.number_proto = try h.newObj(Class.Number, it.object_proto, ObjData.Prim { v: numVal(0.0) })
@@ -25,6 +25,7 @@ pub fn installBuiltins(it: *mut Interp) JsError!void {
     it.regexp_proto = try h.newObj(Class.Object, it.object_proto, ObjData.None)
     it.map_proto = try h.newObj(Class.Object, it.object_proto, ObjData.None)
     it.set_proto = try h.newObj(Class.Object, it.object_proto, ObjData.None)
+    it.iterator_proto = try h.newObj(Class.Object, it.object_proto, ObjData.None)
 
     let g = it.global
     try it.defineValue(g, "globalThis", objVal(g))
@@ -47,6 +48,59 @@ pub fn installBuiltins(it: *mut Interp) JsError!void {
     try installMath(it)
     try installJson(it)
     try installMisc(it)
+    try it.defineNative(it.iterator_proto, "next", 0, iteratorNext)
+}
+
+/// Turns a new array into an iterator over its elements.
+pub fn makeIterator(it: *mut Interp, arr: u32) Value {
+    let ob = it.heap.obj(arr)
+    ob.class = Class.Iterator
+    ob.proto = it.iterator_proto
+    ob.data = ObjData.Prim { v: numVal(0.0) }
+    return objVal(arr)
+}
+
+fn iteratorIndex(it: *mut Interp, o: u32) u32 {
+    return match it.heap.obj(o).data {
+        .Prim { v } => match v {
+            .Num { n } => n as u32
+            _ => 0
+        }
+        _ => 0
+    }
+}
+
+/// The values an iterator has not given yet, as an array (it is used up).
+pub fn iteratorRest(it: *mut Interp, o: u32) JsError!u32 {
+    let start = iteratorIndex(it, o)
+    let out = try it.newArray(0)
+    let n = it.heap.obj(o).nelems
+    var i = start
+    while i < n {
+        try it.heap.pushElem(out, it.heap.obj(o).elems[i])
+        i += 1
+    }
+    it.heap.obj(o).data = ObjData.Prim { v: numVal(n as f64) }
+    return out
+}
+
+fn iteratorNext(it: *mut Interp, a: Args) JsError!Value {
+    let o = objectOf(a.this)
+    if o == NONE || it.heap.obj(o).class != Class.Iterator {
+        return it.typeError("next method called on incompatible receiver")
+    }
+    let i = iteratorIndex(it, o)
+    let r = try it.newObject(it.object_proto)
+    try it.push(objVal(r))
+    if i < it.heap.obj(o).nelems {
+        try it.defineOwn(r, A_VALUE, it.heap.obj(o).elems[i], F_DEFAULT)
+        try it.defineOwn(r, A_DONE, boolVal(false), F_DEFAULT)
+        it.heap.obj(o).data = ObjData.Prim { v: numVal((i + 1) as f64) }
+    } else {
+        try it.defineOwn(r, A_VALUE, Value.Undefined, F_DEFAULT)
+        try it.defineOwn(r, A_DONE, boolVal(true), F_DEFAULT)
+    }
+    return it.pop()
 }
 
 /// A constructor `name` on the global object with prototype object proto.
@@ -158,8 +212,9 @@ fn installObject(it: *mut Interp) JsError!void {
     try it.defineNative(c, "freeze", 1, objectFreeze)
     try it.defineNative(c, "isFrozen", 1, objectIsFrozen)
     try it.defineNative(c, "seal", 1, objectSeal)
-    try it.defineNative(c, "preventExtensions", 1, objectSeal)
+    try it.defineNative(c, "preventExtensions", 1, objectPreventExtensions)
     try it.defineNative(c, "isExtensible", 1, objectIsExtensible)
+    try it.defineNative(c, "isSealed", 1, objectIsSealed)
     try it.defineNative(c, "fromEntries", 1, objectFromEntries)
     try it.defineNative(c, "is", 2, objectIs)
     try it.defineNative(c, "hasOwn", 2, objectHasOwn)
@@ -236,11 +291,27 @@ fn objectEntries(it: *mut Interp, a: Args) JsError!Value {
     return r
 }
 
+// Object.assign sets (setters run), unlike spread, which defines.
 fn objectAssign(it: *mut Interp, a: Args) JsError!Value {
     let t = try it.toObject(it.arg(a, 0))
     try it.push(objVal(t))
     for i in 1..a.argc {
-        try it.copyDataProps(t, it.arg(a, i))
+        let src = it.arg(a, i)
+        if isNullish(src) {
+            continue
+        }
+        let o = try it.toObject(src)
+        try it.push(objVal(o))
+        let keys = try it.keyList()
+        defer it.releaseKeys(keys)
+        try it.ownKeys(o, keys, false)
+        for k in keys.items() {
+            let v = try it.getProp(objVal(o), k)
+            try it.push(v)
+            try it.setProp(objVal(t), k, v)
+            it.pop()
+        }
+        it.pop()
     }
     return it.pop()
 }
@@ -288,6 +359,20 @@ pub fn definePropertyFrom(it: *mut Interp, o: u32, key: u32, desc: Value) JsErro
     if it.heap.findProp(o, key) |i| {
         old = it.heap.obj(o).props[i].flags
         exists = true
+        if (old & F_CONFIG) == 0 {
+            // A non-configurable property may only keep its value (or get
+            // a new one when writable).
+            var same = (old & F_ACCESSOR) == 0
+            if same && it.hasProperty(objectOf(desc), A_VALUE) && (old & F_WRITE) == 0 {
+                let nv = try it.getProp(desc, A_VALUE)
+                same = sameValue(it, nv, it.heap.obj(o).props[i].value)
+            }
+            if !same {
+                try it.typeErrorAbout("Cannot redefine property: ", it.heap.atoms.name(key), "")
+            }
+        }
+    } else if !it.heap.obj(o).extensible {
+        try it.typeErrorAbout("Cannot define property ", it.heap.atoms.name(key), ", object is not extensible")
     }
     var flags = try descFlag(it, desc, "enumerable", F_ENUM, old)
     flags |= try descFlag(it, desc, "configurable", F_CONFIG, old)
@@ -479,9 +564,42 @@ fn objectSeal(it: *mut Interp, a: Args) JsError!Value {
     let ov = it.arg(a, 0)
     let o = objectOf(ov)
     if o != NONE {
+        let ob = it.heap.obj(o)
+        ob.extensible = false
+        for i in 0..ob.nprops {
+            ob.props[i].flags &= ~F_CONFIG
+        }
+    }
+    return ov
+}
+
+fn objectPreventExtensions(it: *mut Interp, a: Args) JsError!Value {
+    let ov = it.arg(a, 0)
+    let o = objectOf(ov)
+    if o != NONE {
         it.heap.obj(o).extensible = false
     }
     return ov
+}
+
+fn objectIsSealed(it: *mut Interp, a: Args) JsError!Value {
+    let o = objectOf(it.arg(a, 0))
+    if o == NONE {
+        return boolVal(true)
+    }
+    let ob = it.heap.obj(o)
+    if ob.extensible {
+        return boolVal(false)
+    }
+    if ob.frozen {
+        return boolVal(true)
+    }
+    for i in 0..ob.nprops {
+        if (ob.props[i].flags & F_CONFIG) != 0 {
+            return boolVal(false)
+        }
+    }
+    return boolVal(ob.nelems == 0)
 }
 
 fn objectIsExtensible(it: *mut Interp, a: Args) JsError!Value {
@@ -598,6 +716,12 @@ fn objectProtoToString(it: *mut Interp, a: Args) JsError!Value {
             tag = "Boolean"
         }
         .Obj { o } => {
+            if o == it.math_obj {
+                return it.newString("[object Math]")
+            }
+            if o == it.json_obj {
+                return it.newString("[object JSON]")
+            }
             tag = match it.heap.obj(o).class {
                 .Array => "Array"
                 .Function => "Function"

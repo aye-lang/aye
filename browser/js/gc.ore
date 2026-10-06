@@ -19,11 +19,22 @@ pub fn gcStressRequested() bool {
 
 fn markValue(it: *mut Interp, v: Value) {
     match v {
-        .Str { s } => {
-            it.heap.strs.items()[s].mark = true
-        }
+        .Str { s } => markStr(it, s)
         .Obj { o } => markObj(it, o)
         _ => {}
+    }
+}
+
+fn markStr(it: *mut Interp, s: u32) {
+    let c = &mut it.heap.strs.items()[s]
+    if c.mark {
+        return
+    }
+    c.mark = true
+    if c.left != NONE {
+        it.gray_strs.append(s) catch |e| {
+            return
+        }
     }
 }
 
@@ -94,7 +105,8 @@ pub fn collectGarbage(it: *mut Interp) {
     it.gc_count += 1
     // Roots.
     markObj(it, it.global)
-    let protos = [17]u32{
+    let protos = [20]u32{
+        it.iterator_proto, it.math_obj, it.json_obj,
         it.object_proto, it.function_proto, it.array_proto, it.string_proto,
         it.number_proto, it.boolean_proto, it.error_proto, it.type_error_proto,
         it.range_error_proto, it.syntax_error_proto, it.reference_error_proto,
@@ -111,6 +123,7 @@ pub fn collectGarbage(it: *mut Interp) {
     }
     for f in it.frames.items() {
         markObj(it, f.func)
+        markObj(it, f.this_obj)
         markEnv(it, f.env)
     }
     markValue(it, it.exception)
@@ -122,6 +135,12 @@ pub fn collectGarbage(it: *mut Interp) {
     while true {
         if it.gray_objs.pop() |o| {
             traceObj(it, o)
+        } else if it.gray_strs.pop() |s| {
+            let c = it.heap.strs.items()[s]
+            if c.left != NONE {
+                markStr(it, c.left)
+                markStr(it, c.right)
+            }
         } else if it.gray_envs.pop() |e| {
             traceEnv(it, e)
         } else {

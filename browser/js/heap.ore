@@ -38,6 +38,9 @@ pub enum Class {
     RegExp
     Map
     Set
+    // Array, Map and Set iterators: the values to give are the elements,
+    // the next index is the primitive.
+    Iterator
     Host
 }
 
@@ -93,7 +96,13 @@ pub struct Obj {
 }
 
 pub struct StrCell {
+    // Empty for a rope until it is flattened.
     bytes: []mut u8
+    // A rope (a concatenation not yet copied): its halves, and its length
+    // in bytes. NONE for a flat string.
+    left: u32
+    right: u32
+    rope_len: usize
     len16: u32
     ascii: bool
     // The atom with these bytes, once interned (NONE before).
@@ -126,6 +135,7 @@ pub struct Heap {
     val_mem: Slabs(Value)
     byte_mem: Slabs(u8)
     int_mem: Slabs(i64)
+    rope_stack: List(u32)
     // Allocations since the last collection, and the count that starts
     // the next one.
     since_gc: usize
@@ -145,6 +155,7 @@ pub struct Heap {
             val_mem: Slabs(Value).init(alloc),
             byte_mem: Slabs(u8).init(alloc),
             int_mem: Slabs(i64).init(alloc),
+            rope_stack: List(u32).init(alloc),
             since_gc: 0,
             threshold: 20000,
         }
@@ -179,6 +190,7 @@ pub struct Heap {
         self.val_mem.deinit()
         self.byte_mem.deinit()
         self.int_mem.deinit()
+        self.rope_stack.deinit()
     }
 
     // ---- objects
@@ -336,8 +348,85 @@ pub struct Heap {
         return &mut self.strs.items()[s]
     }
 
-    pub fn bytes(self: *Self, s: u32) []u8 {
+    /// The bytes of string s (a rope is flattened first).
+    pub fn bytes(self: *mut Self, s: u32) []u8 {
+        if self.strs.items()[s].left != NONE {
+            self.flatten(s)
+        }
         return self.strs.items()[s].bytes
+    }
+
+    /// The length in bytes of string s.
+    pub fn byteLen(self: *Self, s: u32) usize {
+        let c = self.strs.items()[s]
+        if c.left != NONE {
+            return c.rope_len
+        }
+        return c.bytes.len
+    }
+
+    /// A rope for the concatenation of a and b (no bytes are copied).
+    pub fn concat(self: *mut Self, a: u32, b: u32) AllocError!u32 {
+        self.since_gc += 1
+        let ca = self.strs.items()[a]
+        let cb = self.strs.items()[b]
+        let c = StrCell {
+            bytes: []mut u8{},
+            left: a,
+            right: b,
+            rope_len: self.byteLen(a) + self.byteLen(b),
+            len16: ca.len16 + cb.len16,
+            ascii: ca.ascii && cb.ascii,
+            atom: NONE,
+            owned: false,
+            perm: false,
+            mark: false,
+            live: true,
+        }
+        if self.free_strs.pop() |k| {
+            self.strs.items()[k] = c
+            return k
+        }
+        let k = self.strs.len() as u32
+        try self.strs.append(c)
+        return k
+    }
+
+    // Copies the leaves of rope s into one buffer (from the right end,
+    // with a small explicit stack: ropes can be very deep).
+    fn flatten(self: *mut Self, s: u32) {
+        let total = self.strs.items()[s].rope_len
+        let buf = self.byte_mem.get(total, 0) catch |e| {
+            return
+        }
+        var pos = total
+        self.rope_stack.clear()
+        self.rope_stack.append(s) catch |e| {
+            return
+        }
+        while self.rope_stack.pop() |x| {
+            let c = self.strs.items()[x]
+            if c.left == NONE {
+                let n = c.bytes.len
+                for i in 0..n {
+                    buf[pos - n + i] = c.bytes[i]
+                }
+                pos -= n
+            } else {
+                self.rope_stack.append(c.left) catch |e| {
+                    return
+                }
+                self.rope_stack.append(c.right) catch |e| {
+                    return
+                }
+            }
+        }
+        let cell = &mut self.strs.items()[s]
+        cell.bytes = buf
+        cell.owned = true
+        cell.left = NONE
+        cell.right = NONE
+        cell.rope_len = 0
     }
 
     // A cell for `b`; `owned`: the cell gives `b` back to byte_mem.
@@ -370,6 +459,9 @@ pub struct Heap {
         }
         let c = StrCell {
             bytes: b,
+            left: NONE,
+            right: NONE,
+            rope_len: 0,
             len16: units,
             ascii: ascii,
             atom: NONE,
@@ -429,16 +521,20 @@ pub struct Heap {
             self.byte_mem.put(c.bytes)
         }
         c.bytes = []mut u8{}
+        c.left = NONE
+        c.right = NONE
         c.live = false
     }
 
     // ---- environments
 
-    pub fn newEnv(self: *mut Self, n: u32, parent: u32) AllocError!u32 {
+    /// An environment of n slots, each `fill` (Empty for let/const not
+    /// yet initialized).
+    pub fn newEnv(self: *mut Self, n: u32, parent: u32, fill: Value) AllocError!u32 {
         self.since_gc += 1
         var slots = []mut Value{}
         if n > 0 {
-            slots = try self.val_mem.get(n as usize, Value.Undefined)
+            slots = try self.val_mem.get(n as usize, fill)
         }
         let e = Env { slots: slots, parent: parent, mark: false, live: true }
         if self.free_envs.pop() |i| {
@@ -458,7 +554,7 @@ pub struct Heap {
     pub fn growEnv(self: *mut Self, e: u32, n: u32) AllocError!void {
         let ev = self.env(e)
         if ev.slots.len < n as usize {
-            ev.slots = try self.val_mem.grow(ev.slots, n as usize, Value.Undefined)
+            ev.slots = try self.val_mem.grow(ev.slots, n as usize, Value.Empty)
         }
     }
 

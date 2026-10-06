@@ -43,21 +43,35 @@ fn installArray(it: *mut Interp) JsError!void {
     try it.defineNative(p, "keys", 0, arrayKeys)
     try it.defineNative(p, "values", 0, arrayValues)
     try it.defineNative(p, "entries", 0, arrayEntries)
+    try it.defineNative(p, "toSorted", 1, arrayToSorted)
+    try it.defineNative(p, "toReversed", 0, arrayToReversed)
+    try it.defineNative(p, "with", 2, arrayWith)
     try it.defineNative(p, "toString", 0, arrayToString)
     try it.defineNative(p, "toLocaleString", 0, arrayToString)
 }
 
-// The array (or arguments object) `this`.
+// The array (or arguments object) `this`. Another array-like `this`
+// ({length: 2, 0: 'a', 1: 'b'}, a string) is copied to a new array, so
+// methods that change it change the copy.
 fn thisArray(it: *mut Interp, a: Args) JsError!u32 {
-    let o = objectOf(a.this)
-    if o != NONE {
-        let cls = it.heap.obj(o).class
-        if cls == Class.Array || cls == Class.Arguments {
-            return o
-        }
+    if isNullish(a.this) {
+        try it.typeError("Array.prototype method called on null or undefined")
     }
-    try it.typeError("Array.prototype method called on a value that is not an array")
-    return NONE
+    let o = try it.toObject(a.this)
+    let cls = it.heap.obj(o).class
+    if cls == Class.Array || cls == Class.Arguments {
+        return o
+    }
+    try it.push(objVal(o))
+    let n = try pushArrayLike(it, objVal(o))
+    let arr = try it.newArray(0)
+    let first = it.stack.len() - n
+    for i in 0..n {
+        try it.heap.pushElem(arr, it.slot(first + i))
+    }
+    it.truncate(first)
+    try it.push(objVal(arr))
+    return arr
 }
 
 fn alen(it: *mut Interp, o: u32) u32 {
@@ -81,6 +95,23 @@ fn isHole(it: *mut Interp, o: u32, i: u32) bool {
     }
 }
 
+// The array a constructor call fills: a new one, or `this` of a
+// subclass's super(...).
+fn ctorTarget(it: *mut Interp, a: Args, cls: Class) JsError!u32 {
+    if a.new_target != NONE && isObject(a.this) {
+        let o = objectOf(a.this)
+        it.heap.obj(o).class = cls
+        return o
+    }
+    if cls == Class.Array {
+        return it.newArray(0)
+    }
+    if cls == Class.Map {
+        return it.newObjectOf(Class.Map, it.map_proto, ObjData.None)
+    }
+    return it.newObjectOf(Class.Set, it.set_proto, ObjData.None)
+}
+
 fn arrayCtor(it: *mut Interp, a: Args) JsError!Value {
     if a.argc == 1 {
         match it.arg(a, 0) {
@@ -89,14 +120,14 @@ fn arrayCtor(it: *mut Interp, a: Args) JsError!Value {
                 if k as f64 != n {
                     return it.rangeError("Invalid array length")
                 }
-                let arr = try it.newArray(0)
+                let arr = try ctorTarget(it, a, Class.Array)
                 try it.heap.setLength(arr, k, Value.Empty)
                 return objVal(arr)
             }
             _ => {}
         }
     }
-    let arr = try it.newArray(0)
+    let arr = try ctorTarget(it, a, Class.Array)
     for i in 0..a.argc {
         try it.heap.pushElem(arr, it.arg(a, i))
     }
@@ -119,17 +150,21 @@ fn arrayOf(it: *mut Interp, a: Args) JsError!Value {
 }
 
 fn arrayFrom(it: *mut Interp, a: Args) JsError!Value {
-    let src = it.arg(a, 0)
+    var src = it.arg(a, 0)
     let f = it.arg(a, 1)
     if isNullish(src) {
         return it.typeError("undefined is not iterable")
+    }
+    if !isObject(src) && !isStr(src) {
+        src = objVal(try it.toObject(src))
+        try it.push(src)
     }
     let base = it.stack.len()
     defer it.truncate(base)
     let out = try it.newArray(0)
     try it.push(objVal(out))
     var items = NONE
-    if isStr(src) || it.hasClass(src, Class.Array) || it.hasClass(src, Class.Arguments) || it.hasClass(src, Class.Map) || it.hasClass(src, Class.Set) {
+    if isStr(src) || it.hasClass(src, Class.Iterator) || it.hasClass(src, Class.Array) || it.hasClass(src, Class.Arguments) || it.hasClass(src, Class.Map) || it.hasClass(src, Class.Set) {
         items = try it.iterToArray(src)
         try it.push(objVal(items))
     } else {
@@ -775,7 +810,7 @@ fn arrayKeys(it: *mut Interp, a: Args) JsError!Value {
     for i in 0..alen(it, o) {
         try it.heap.pushElem(out, numVal(i as f64))
     }
-    return objVal(out)
+    return makeIterator(it, out)
 }
 
 fn arrayValues(it: *mut Interp, a: Args) JsError!Value {
@@ -784,7 +819,7 @@ fn arrayValues(it: *mut Interp, a: Args) JsError!Value {
     for i in 0..alen(it, o) {
         try it.heap.pushElem(out, elemAt(it, o, i))
     }
-    return objVal(out)
+    return makeIterator(it, out)
 }
 
 fn arrayEntries(it: *mut Interp, a: Args) JsError!Value {
@@ -797,5 +832,41 @@ fn arrayEntries(it: *mut Interp, a: Args) JsError!Value {
         try it.heap.pushElem(pair, elemAt(it, o, i))
         try it.heap.pushElem(out, objVal(pair))
     }
-    return it.pop()
+    return makeIterator(it, objectOf(it.pop()))
+}
+
+// toSorted, toReversed and with: the copying versions.
+fn copyArgs(it: *mut Interp, a: Args) JsError!Args {
+    let o = try thisArray(it, a)
+    let copy = try it.newArray(0)
+    try it.push(objVal(copy))
+    for i in 0..alen(it, o) {
+        try it.heap.pushElem(copy, elemAt(it, o, i))
+    }
+    return Args { this: objVal(copy), base: a.base, argc: a.argc, callee: a.callee, new_target: NONE }
+}
+
+fn arrayToSorted(it: *mut Interp, a: Args) JsError!Value {
+    let c = try copyArgs(it, a)
+    return arraySort(it, c)
+}
+
+fn arrayToReversed(it: *mut Interp, a: Args) JsError!Value {
+    let c = try copyArgs(it, a)
+    return arrayReverse(it, c)
+}
+
+fn arrayWith(it: *mut Interp, a: Args) JsError!Value {
+    let c = try copyArgs(it, a)
+    let o = objectOf(c.this)
+    let n = alen(it, o)
+    var k = try argInteger(it, a, 0, 0.0)
+    if k < 0.0 {
+        k += n as f64
+    }
+    if k < 0.0 || k >= n as f64 {
+        return it.rangeError("Invalid index")
+    }
+    it.heap.obj(o).elems[k as u32] = it.arg(a, 1)
+    return c.this
 }

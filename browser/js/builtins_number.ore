@@ -28,8 +28,8 @@ fn installNumber(it: *mut Interp) JsError!void {
     try it.defineNative(c, "isFinite", 1, numberIsFinite)
     try it.defineNative(c, "isInteger", 1, numberIsInteger)
     try it.defineNative(c, "isSafeInteger", 1, numberIsSafeInteger)
-    try it.defineNative(c, "parseFloat", 1, globalParseFloat)
-    try it.defineNative(c, "parseInt", 2, globalParseInt)
+    try it.defineValue(c, "parseFloat", try it.getProp(objVal(it.global), try it.intern("parseFloat")))
+    try it.defineValue(c, "parseInt", try it.getProp(objVal(it.global), try it.intern("parseInt")))
     try it.defineValue(c, "MAX_SAFE_INTEGER", numVal(9007199254740991.0))
     try it.defineValue(c, "MIN_SAFE_INTEGER", numVal(-9007199254740991.0))
     try it.defineValue(c, "EPSILON", numVal(2.220446049250313e-16))
@@ -227,6 +227,7 @@ fn numberToLocaleString(it: *mut Interp, a: Args) JsError!Value {
 
 fn installMath(it: *mut Interp) JsError!void {
     let m = try it.newObject(it.object_proto)
+    it.math_obj = m
     try it.defineValue(it.global, "Math", objVal(m))
     try it.defineValue(m, "PI", numVal(3.141592653589793))
     try it.defineValue(m, "E", numVal(2.718281828459045))
@@ -275,7 +276,7 @@ fn num0(it: *mut Interp, a: Args) JsError!f64 {
 }
 
 fn mathAbs(it: *mut Interp, a: Args) JsError!Value {
-    return numVal(math.abs(try num0(it, a)))
+    return numVal(fabs(try num0(it, a)))
 }
 
 fn mathFloor(it: *mut Interp, a: Args) JsError!Value {

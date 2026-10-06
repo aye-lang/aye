@@ -52,6 +52,45 @@ fn isIdentName(s: []u8) bool {
 
 let HEX = "0123456789ABCDEF"
 
+/// The width of s in a terminal, as Node's getStringWidth counts it:
+/// combining marks 0, East Asian wide characters and emoji 2.
+pub fn displayWidth(s: []u8) usize {
+    var w: usize = 0
+    var i: usize = 0
+    while i < s.len {
+        let d = decodeAt(s, i)
+        let c = d.cp
+        i += d.len
+        if (c >= 0x300 && c <= 0x36F) || c == 0x200B || c == 0x200D || (c >= 0xFE00 && c <= 0xFE0F) {
+            continue
+        }
+        if (c >= 0x1100 && c <= 0x115F) || (c >= 0x2E80 && c <= 0xA4CF) || (c >= 0xAC00 && c <= 0xD7A3) ||
+            (c >= 0xF900 && c <= 0xFAFF) || (c >= 0xFE30 && c <= 0xFE4F) || (c >= 0xFF00 && c <= 0xFF60) ||
+            (c >= 0xFFE0 && c <= 0xFFE6) || (c >= 0x1F300 && c <= 0x1F64F) || (c >= 0x1F900 && c <= 0x1F9FF) ||
+            (c >= 0x20000 && c <= 0x3FFFD) {
+            w += 2
+        } else {
+            w += 1
+        }
+    }
+    return w
+}
+
+// The length of s in UTF-16 code units (JavaScript's .length).
+fn utf16Length(s: []u8) usize {
+    var n: usize = 0
+    var i: usize = 0
+    while i < s.len {
+        let d = decodeAt(s, i)
+        n += 1
+        if d.cp >= 0x10000 {
+            n += 1
+        }
+        i += d.len
+    }
+    return n
+}
+
 /// Appends s quoted as Node quotes strings: single quotes, or double
 /// quotes when s has single quotes only, or backquotes when it has both.
 pub fn appendQuoted(b: *mut text.Builder, s: []u8) JsError!void {
@@ -629,7 +668,7 @@ struct Inspector {
             return false
         }
         for p in out.items() {
-            total += p.len
+            total += utf16Length(p)
             if total > BREAK_LENGTH {
                 return false
             }
@@ -648,8 +687,11 @@ struct Inspector {
         }
         var totalLength: usize = 0
         var maxLength: usize = 0
+        var widths = List(usize).init(self.it.alloc)
+        defer widths.deinit()
         for i in 0..outputLength {
-            let len = items[i].len
+            let len = displayWidth(items[i])
+            try widths.append(len)
             totalLength += len + 2
             if len > maxLength {
                 maxLength = len
@@ -675,8 +717,8 @@ struct Inspector {
             var lineLength: usize = 0
             var j = i
             while j < outputLength {
-                if items[j].len > lineLength {
-                    lineLength = items[j].len
+                if widths.items()[j] > lineLength {
+                    lineLength = widths.items()[j]
                 }
                 j += cols
             }
@@ -695,7 +737,7 @@ struct Inspector {
             var j = i
             while j < max - 1 {
                 let width = maxLine.items()[j - i]
-                let cell = items[j].len + 2
+                let cell = widths.items()[j] + 2
                 if allNumbers {
                     for k in cell..width {
                         try rb.appendByte(' ')
@@ -713,7 +755,7 @@ struct Inspector {
             }
             if allNumbers {
                 let width = maxLine.items()[j - i] - 2
-                for k in items[j].len..width {
+                for k in widths.items()[j]..width {
                     try rb.appendByte(' ')
                 }
             }

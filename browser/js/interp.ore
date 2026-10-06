@@ -54,6 +54,8 @@ pub struct Frame {
     func: u32
     // The environment of the caller, restored on return.
     env: u32
+    // A derived constructor: the object `this` becomes after super().
+    this_obj: u32
 }
 
 /// What the host (the DOM) learns from the engine: a host object was
@@ -74,6 +76,7 @@ pub struct Interp {
     frames: List(Frame)
     gray_objs: List(u32)
     gray_envs: List(u32)
+    gray_strs: List(u32)
     // The running code's environment (NONE at the top level).
     env: u32
     // The global lexical environment (top-level let/const/class).
@@ -106,6 +109,11 @@ pub struct Interp {
     msg: text.Builder
     out: text.Builder
     gc_count: u32
+    // The object for the next derived-constructor frame (see Frame).
+    derived_this: u32
+    iterator_proto: u32
+    math_obj: u32
+    json_obj: u32
     // Compiled regular expressions, by (pattern atom << 32 | flags atom).
     regexes: List(*mut RegexProg)
     regex_cache: IntMap(u64, u32)
@@ -127,6 +135,7 @@ pub struct Interp {
             frames: List(Frame).init(alloc),
             gray_objs: List(u32).init(alloc),
             gray_envs: List(u32).init(alloc),
+            gray_strs: List(u32).init(alloc),
             env: NONE,
             glex: NONE,
             global: NONE,
@@ -155,6 +164,10 @@ pub struct Interp {
             msg: text.Builder.init(alloc),
             out: text.Builder.init(alloc),
             gc_count: 0,
+            derived_this: NONE,
+            iterator_proto: NONE,
+            math_obj: NONE,
+            json_obj: NONE,
             regexes: List(*mut RegexProg).init(alloc),
             regex_cache: IntMap(u64, u32).init(alloc),
             builders: List(*mut text.Builder).init(alloc),
@@ -175,6 +188,7 @@ pub struct Interp {
         self.frames.deinit()
         self.gray_objs.deinit()
         self.gray_envs.deinit()
+        self.gray_strs.deinit()
         self.roots.deinit()
         self.msg.deinit()
         self.out.deinit()
@@ -281,9 +295,10 @@ pub struct Interp {
         return self.heap.atoms.intern(s)
     }
 
+    // Lexical scopes start with Empty slots (the temporal dead zone).
     fn newEnv(self: *mut Self, n: u32, parent: u32) JsError!u32 {
         self.maybeGc()
-        return self.heap.newEnv(n, parent)
+        return self.heap.newEnv(n, parent, Value.Empty)
     }
 
     // ---- the value stack
@@ -523,13 +538,14 @@ pub struct Interp {
 
     /// The one-unit string at UTF-16 index idx of string s.
     pub fn charAtIndex(self: *mut Self, s: u32, idx: u32) JsError!Value {
+        let bytes = self.heap.bytes(s)
         let c = self.heap.str(s)
         if c.ascii {
-            let b = c.bytes[idx as usize..idx as usize + 1]
+            let b = bytes[idx as usize..idx as usize + 1]
             let a = try self.intern(b)
             return self.atomValue(a)
         }
-        let u = unitAt(c.bytes, idx)
+        let u = unitAt(bytes, idx)
         let b = try self.builder()
         defer self.release(b)
         try appendWtf8(b, u)
@@ -613,6 +629,11 @@ pub struct Interp {
             }
             .Bound { target, .. } => {
                 if key == A_LENGTH {
+                    let tl = try self.toNumber(try self.getProp(objVal(target), A_LENGTH))
+                    let nb = self.heap.obj(f).nelems as f64
+                    if tl > nb {
+                        return numVal(tl - nb)
+                    }
                     return numVal(0.0)
                 }
                 let tn = try self.getProp(objVal(target), A_NAME)
@@ -826,8 +847,19 @@ pub struct Interp {
                 return false
             }
         }
-        if ob.class == Class.String && key == A_LENGTH {
-            return true
+        if ob.class == Class.String {
+            if key == A_LENGTH {
+                return true
+            }
+            let idx = self.heap.atoms.indexOf(key)
+            match ob.data {
+                .Prim { v } => {
+                    if idx != NONE && idx < self.heap.str(strOf(v)).len16 {
+                        return true
+                    }
+                }
+                _ => {}
+            }
         }
         return self.heap.findProp(o, key) != null
     }
@@ -937,7 +969,7 @@ pub struct Interp {
             .Empty => false
             .Bool { b } => b
             .Num { n } => n == n && n != 0.0
-            .Str { s } => self.heap.str(s).bytes.len > 0
+            .Str { s } => self.heap.str(s).len16 > 0
             .Obj { .. } => true
         }
     }
@@ -955,19 +987,28 @@ pub struct Interp {
     }
 
     fn objectToNumber(self: *mut Self, v: Value) JsError!f64 {
-        let p = try self.toPrimitive(v, false)
+        let p = try self.toPrimitiveHint(v, 1)
         return self.toNumber(p)
     }
 
-    /// ToPrimitive: `preferString` for the string hint (else number).
+    /// ToPrimitive: `preferString` for the string hint, else the default
+    /// hint (which is "string" for dates).
     pub fn toPrimitive(self: *mut Self, v: Value, preferString: bool) JsError!Value {
+        if preferString {
+            return self.toPrimitiveHint(v, 2)
+        }
+        return self.toPrimitiveHint(v, 0)
+    }
+
+    /// ToPrimitive with hint 0 default, 1 number, 2 string.
+    pub fn toPrimitiveHint(self: *mut Self, v: Value, hint: u32) JsError!Value {
         let o = objectOf(v)
         if o == NONE {
             return v
         }
         var first = A_VALUEOF
         var second = A_TOSTRING
-        if preferString || self.heap.obj(o).class == Class.Date {
+        if hint == 2 || (hint == 0 && self.heap.obj(o).class == Class.Date) {
             first = A_TOSTRING
             second = A_VALUEOF
         }
@@ -1052,7 +1093,7 @@ pub struct Interp {
 
     // ---- operators
 
-    pub fn strictEquals(self: *Self, a: Value, b: Value) bool {
+    pub fn strictEquals(self: *mut Self, a: Value, b: Value) bool {
         return match a {
             .Undefined => isUndef(b)
             .Empty => isUndef(b)
@@ -1080,7 +1121,7 @@ pub struct Interp {
     }
 
     /// SameValueZero (Array.prototype.includes, Map and Set keys).
-    pub fn sameValueZero(self: *Self, a: Value, b: Value) bool {
+    pub fn sameValueZero(self: *mut Self, a: Value, b: Value) bool {
         match a {
             .Num { n: x } => {
                 match b {
@@ -1171,6 +1212,10 @@ pub struct Interp {
         let pb = try self.toPrimitive(b, false)
         try self.push(pb)
         defer self.truncate(self.stack.len() - 2)
+        if isStr(pa) && isStr(pb) && self.heap.byteLen(strOf(pa)) + self.heap.byteLen(strOf(pb)) >= 64 && !self.surrogateSeam(strOf(pa), strOf(pb)) {
+            self.maybeGc()
+            return strVal(try self.heap.concat(strOf(pa), strOf(pb)))
+        }
         if isStr(pa) || isStr(pb) {
             let sb = try self.builder()
             defer self.release(sb)
@@ -1183,14 +1228,24 @@ pub struct Interp {
         return numVal(x + y)
     }
 
+    // Would a + b join a lone high and low surrogate into one character?
+    fn surrogateSeam(self: *mut Self, a: u32, b: u32) bool {
+        if self.heap.str(a).ascii || self.heap.str(b).ascii {
+            return false
+        }
+        let x = self.heap.bytes(a)
+        let y = self.heap.bytes(b)
+        return x.len >= 3 && y.len >= 3 && x[x.len - 3] == 0xED && x[x.len - 2] >= 0xA0 && x[x.len - 2] <= 0xAF && y[0] == 0xED && y[1] >= 0xB0
+    }
+
     // a < b (or b < a with `swap`); undefined (NaN) is false.
     pub fn lessThan(self: *mut Self, a: Value, b: Value, swap: bool, orEqual: bool) JsError!bool {
         var pa = a
         var pb = b
         if isObject(a) || isObject(b) {
-            pa = try self.toPrimitive(a, false)
+            pa = try self.toPrimitiveHint(a, 1)
             try self.push(pa)
-            pb = try self.toPrimitive(b, false)
+            pb = try self.toPrimitiveHint(b, 1)
             self.pop()
         }
         if swap {
@@ -1375,10 +1430,16 @@ pub struct Interp {
                 }
                 let thisObj = try self.newObject(proto)
                 self.setSlot(base + 1, objVal(thisObj))
+                var thisv = objVal(thisObj)
                 if fi.ctor && !fi.derived {
                     try self.initFields(o, thisObj)
                 }
-                let r = try self.invoke(func, env, o, objVal(thisObj), base + 2, argc, newTarget)
+                if fi.derived {
+                    // `this` is in its dead zone until super() returns.
+                    thisv = Value.Empty
+                    self.derived_this = thisObj
+                }
+                let r = try self.invoke(func, env, o, thisv, base + 2, argc, newTarget)
                 if isObject(r) {
                     return r
                 }
@@ -1441,8 +1502,10 @@ pub struct Interp {
             return self.rangeError("Maximum call stack size exceeded")
         }
         let nslots = self.ast.scopes.items()[fi.scope].nslots
-        let e = try self.newEnv(nslots, penv)
-        try self.frames.append(Frame { func: fobj, env: self.env })
+        self.maybeGc()
+        let e = try self.heap.newEnv(nslots, penv, Value.Undefined)
+        try self.frames.append(Frame { func: fobj, env: self.env, this_obj: self.derived_this })
+        self.derived_this = NONE
         let saved = self.env
         self.env = e
         defer {
@@ -1476,7 +1539,7 @@ pub struct Interp {
             if fi.derived {
                 let base = self.stack.len()
                 try self.push(objVal(self.heap.obj(fobj).proto))
-                try self.push(thisv)
+                try self.push(objVal(self.frames.items()[self.frames.len() - 1].this_obj))
                 for i in 0..argc {
                     try self.push(self.slot(argBase + i))
                 }
@@ -1616,10 +1679,21 @@ pub struct Interp {
         let ci = self.ast.classes.items()[fi.class_id]
         for k in 0..ci.n {
             match self.ast.node(self.ast.item(ci.members, k)) {
-                .ClassElem { kind, is_static, key, value, .. } => {
+                .ClassElem { kind, is_static, key, computed, value } => {
                     if kind == PROP_FIELD && !is_static {
+                        var atom = key
+                        if computed {
+                            let saved = self.env
+                            self.env = env
+                            let kv = self.eval(key) catch |e| {
+                                self.env = saved
+                                return e
+                            }
+                            self.env = saved
+                            atom = try self.toKey(kv)
+                        }
                         let v = try self.runField(value, env, objVal(thisObj))
-                        try self.defineOwn(thisObj, key, v, F_DEFAULT)
+                        try self.defineOwn(thisObj, atom, v, F_DEFAULT)
                     }
                 }
                 _ => {}
@@ -1647,10 +1721,15 @@ pub struct Interp {
         match self.heap.obj(p).data {
             .Closure { func, env, .. } => {
                 let pfi = self.ast.func(func)
+                var pthis = thisv
                 if pfi.ctor && !pfi.derived {
                     try self.initFields(p, objectOf(thisv))
                 }
-                try self.invoke(func, env, p, thisv, base + 2, argc, p)
+                if pfi.derived {
+                    pthis = Value.Empty
+                    self.derived_this = objectOf(thisv)
+                }
+                try self.invoke(func, env, p, pthis, base + 2, argc, p)
             }
             .Native { id } => {
                 let ne = self.natives.items()[id]
@@ -1668,6 +1747,14 @@ pub struct Interp {
         let ci = self.ast.classes.items()[c]
         let base = self.stack.len()
         defer self.truncate(base)
+        // A named class expression sees its own name.
+        let saved = self.env
+        defer self.env = saved
+        var inner = NONE
+        if ci.scope != NONE && self.ast.scopes.items()[ci.scope].nslots > 0 {
+            inner = try self.newEnv(self.ast.scopes.items()[ci.scope].nslots, saved)
+            self.env = inner
+        }
         var protoParent = self.object_proto
         var ctorParent = self.function_proto
         if ci.heritage != 0 {
@@ -1699,6 +1786,9 @@ pub struct Interp {
         try self.push(objVal(proto))
         let ctor = try self.newObjectOf(Class.Function, ctorParent, ObjData.Closure { func: ci.ctor, env: self.env, home: proto, outer: NONE })
         try self.push(objVal(ctor))
+        if inner != NONE {
+            self.heap.env(inner).slots[0] = objVal(ctor)
+        }
         try self.heap.addProp(ctor, A_PROTOTYPE, objVal(proto), Value.Undefined, 0)
         try self.heap.addProp(proto, A_CONSTRUCTOR, objVal(ctor), Value.Undefined, F_HIDDEN)
         for k in 0..ci.n {
@@ -1751,12 +1841,21 @@ pub struct Interp {
     }
 
     fn readIdent(self: *mut Self, name: u32, depth: u32, slot: u32) JsError!Value {
-        if depth < DEPTH_GLOBAL_LEX {
-            let e = self.envAt(depth)
-            return self.heap.envs.items()[e].slots[slot]
-        }
-        if depth == DEPTH_GLOBAL_LEX {
-            return self.heap.envs.items()[self.glex].slots[slot]
+        if depth <= DEPTH_GLOBAL_LEX {
+            var v = Value.Undefined
+            if depth == DEPTH_GLOBAL_LEX {
+                v = self.heap.envs.items()[self.glex].slots[slot]
+            } else {
+                v = self.heap.envs.items()[self.envAt(depth)].slots[slot]
+            }
+            match v {
+                .Empty => {
+                    return self.uninitialized(name)
+                }
+                _ => {
+                    return v
+                }
+            }
         }
         if name == A_THIS || name == A_UNDEFINED {
             return Value.Undefined
@@ -1765,6 +1864,20 @@ pub struct Interp {
             return self.typeErrorRef(name)
         }
         return self.getFrom(self.global, name, objVal(self.global))
+    }
+
+    // A let/const/class read before its declaration ran.
+    fn uninitialized(self: *mut Self, name: u32) JsError!Value {
+        self.msg.clear()
+        if name == A_THIS {
+            try self.msg.append("Must call super constructor in derived class before accessing 'this' or returning from derived constructor")
+        } else {
+            try self.msg.append("Cannot access '")
+            try self.msg.append(self.heap.atoms.name(name))
+            try self.msg.append("' before initialization")
+        }
+        let e = try self.makeError(self.reference_error_proto, self.msg.bytes())
+        return self.throwValue(e)
     }
 
     fn typeErrorRef(self: *mut Self, name: u32) JsError!Value {
@@ -1783,11 +1896,20 @@ pub struct Interp {
                 if !init && (flags & IDENT_CONST) != 0 {
                     try self.typeError("Assignment to constant variable.")
                 }
-                if depth < DEPTH_GLOBAL_LEX {
-                    let e = self.envAt(depth)
+                if depth <= DEPTH_GLOBAL_LEX {
+                    var e = self.glex
+                    if depth < DEPTH_GLOBAL_LEX {
+                        e = self.envAt(depth)
+                    }
+                    if !init {
+                        match self.heap.envs.items()[e].slots[slot] {
+                            .Empty => {
+                                try self.uninitialized(name)
+                            }
+                            _ => {}
+                        }
+                    }
                     self.heap.envs.items()[e].slots[slot] = v
-                } else if depth == DEPTH_GLOBAL_LEX {
-                    self.heap.envs.items()[self.glex].slots[slot] = v
                 } else {
                     try self.setOn(self.global, name, v, objVal(self.global))
                 }
@@ -1949,10 +2071,22 @@ pub struct Interp {
                 return last
             }
             .SuperCall { list, n, this_node } => {
-                let thisv = try self.eval(this_node)
                 let fnObj = self.currentFunction()
                 if fnObj == NONE {
                     return self.typeError("'super' keyword unexpected here")
+                }
+                var thisObj = NONE
+                var fr = self.frames.len()
+                while fr > 0 {
+                    fr -= 1
+                    if self.frames.items()[fr].func == fnObj {
+                        thisObj = self.frames.items()[fr].this_obj
+                        break
+                    }
+                }
+                var thisv = objVal(thisObj)
+                if thisObj == NONE {
+                    thisv = try self.eval(this_node)
                 }
                 let base = self.stack.len()
                 let parent = self.heap.obj(fnObj).proto
@@ -1964,6 +2098,7 @@ pub struct Interp {
                 try self.push(thisv)
                 let argc = try self.pushArgs(list, n)
                 try self.superConstruct(fnObj, base, argc)
+                try self.assignIdent(this_node, thisv, true)
                 return Value.Undefined
             }
             .SuperMember { name, this_node } => {
@@ -2120,6 +2255,9 @@ pub struct Interp {
                 }
                 if cls == Class.Map {
                     return mapEntries(self, oid)
+                }
+                if cls == Class.Iterator {
+                    return iteratorRest(self, oid)
                 }
             }
             .Str { s } => {

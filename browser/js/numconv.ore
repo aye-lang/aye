@@ -10,6 +10,7 @@
 import std.mem.AllocError
 import std.text
 
+extern fn fabs(x: f64) f64
 extern fn snprintf(buf: [*]u8, size: usize, format: [*]u8, ...) i32
 extern fn fmod(x: f64, y: f64) f64
 extern fn trunc(x: f64) f64
@@ -213,17 +214,14 @@ pub fn formatFixed(b: *mut text.Builder, v: f64, digits: u32) AllocError!void {
     if !isFinite(v) || v >= 1e21 || v <= -1e21 {
         return formatNumber(b, v)
     }
-    var x = v
-    if x < 0.0 {
-        x = -x
-    }
+    let x = fabs(v)
     // Print 30 extra digits and round half up by hand (C rounds exact
     // ties to even; the spec picks the larger).
     return fixedDigits(b, v < 0.0, x, digits)
 }
 
 fn fixedDigits(b: *mut text.Builder, neg: bool, x: f64, digits: u32) AllocError!void {
-    var buf = @zeroed([160]u8)
+    var buf = @zeroed([180]u8)
     let len = snprintf(buf[..].ptr, buf.len, "%.*f".ptr, (digits + 30) as i32, x) as usize
     // Keep everything up to the point plus `digits` after it.
     var point = len
@@ -263,6 +261,62 @@ fn fixedDigits(b: *mut text.Builder, neg: bool, x: f64, digits: u32) AllocError!
     return b.append(t)
 }
 
+// The first p significant digits of x > 0, rounded half up (C rounds
+// exact ties to even), into out; returns the decimal exponent of the
+// first digit.
+fn roundedDigits(x: f64, p: usize, out: []mut u8) i64 {
+    var buf = @zeroed([160]u8)
+    let len = snprintf(buf[..].ptr, buf.len, "%.*e".ptr, (p + 24) as i32, x) as usize
+    var all = @zeroed([140]u8)
+    var n: usize = 0
+    var i: usize = 0
+    while i < len && buf[i] != 'e' {
+        if buf[i] != '.' {
+            all[n] = buf[i]
+            n += 1
+        }
+        i += 1
+    }
+    i += 1
+    var neg = false
+    if buf[i] == '-' {
+        neg = true
+    }
+    i += 1
+    var e: i64 = 0
+    while i < len {
+        e = e * 10 + (buf[i] - '0') as i64
+        i += 1
+    }
+    if neg {
+        e = -e
+    }
+    for k in 0..p {
+        out[k] = all[k]
+    }
+    if all[p] >= '5' {
+        var k = p
+        var carry = true
+        while carry && k > 0 {
+            k -= 1
+            if out[k] == '9' {
+                out[k] = '0'
+            } else {
+                out[k] += 1
+                carry = false
+            }
+        }
+        if carry {
+            out[0] = '1'
+            for m in 1..p {
+                out[m] = '0'
+            }
+            e += 1
+        }
+    }
+    return e
+}
+
 /// Number.prototype.toPrecision(p), 1 <= p <= 100.
 pub fn formatPrecision(b: *mut text.Builder, v: f64, p: u32) AllocError!void {
     if !isFinite(v) {
@@ -273,38 +327,20 @@ pub fn formatPrecision(b: *mut text.Builder, v: f64, p: u32) AllocError!void {
         try b.appendByte('-')
         x = -x
     }
-    var buf = @zeroed([160]u8)
-    let len = snprintf(buf[..].ptr, buf.len, "%.*e".ptr, (p - 1) as i32, x) as usize
-    return precisionLayout(b, buf[..len], p)
+    var digits = @zeroed([128]u8)
+    var e: i64 = 0
+    if x == 0.0 {
+        for k in 0..p as usize {
+            digits[k] = '0'
+        }
+    } else {
+        e = roundedDigits(x, p as usize, digits[..])
+    }
+    return precisionDigits(b, digits[..p as usize], e, p)
 }
 
-// `e` is C's "%.*e" text of a non-negative number with p digits.
-fn precisionLayout(b: *mut text.Builder, e: []u8, p: u32) AllocError!void {
-    var dbuf = @zeroed([128]u8)
-    var n: usize = 0
-    var i: usize = 0
-    while i < e.len && e[i] != 'e' {
-        if e[i] != '.' && n < 128 {
-            dbuf[n] = e[i]
-            n += 1
-        }
-        i += 1
-    }
-    i += 1
-    var neg = false
-    if e[i] == '-' {
-        neg = true
-    }
-    i += 1
-    var ex: i64 = 0
-    while i < e.len {
-        ex = ex * 10 + (e[i] - '0') as i64
-        i += 1
-    }
-    if neg {
-        ex = -ex
-    }
-    let d = dbuf[..n]
+// Lays out p digits d with exponent ex as toPrecision does.
+fn precisionDigits(b: *mut text.Builder, d: []u8, ex: i64, p: u32) AllocError!void {
     if ex < -6 || ex >= p as i64 {
         try b.appendByte(d[0])
         if d.len > 1 {
@@ -591,29 +627,8 @@ pub fn formatExponential(b: *mut text.Builder, v: f64, d: i32) AllocError!void {
         k = s.k
         e = s.n - 1
     } else {
-        var buf = @zeroed([160]u8)
-        let len = snprintf(buf[..].ptr, buf.len, "%.*e".ptr, d, x) as usize
-        var i: usize = 0
-        while i < len && buf[i] != 'e' {
-            if buf[i] != '.' {
-                digits[k] = buf[i]
-                k += 1
-            }
-            i += 1
-        }
-        i += 1
-        var neg = false
-        if buf[i] == '-' {
-            neg = true
-        }
-        i += 1
-        while i < len {
-            e = e * 10 + (buf[i] - '0') as i64
-            i += 1
-        }
-        if neg {
-            e = -e
-        }
+        k = d as usize + 1
+        e = roundedDigits(x, k, digits[..])
     }
     try b.appendByte(digits[0])
     if k > 1 {

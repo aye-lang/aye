@@ -141,7 +141,9 @@ output as goldens.
   ASCII strings index their bytes; others are decoded when an operation
   needs positions. String comparison is by bytes (code point order,
   which differs from UTF-16 order only between astral characters and
-  U+E000..U+FFFF).
+  U+E000..U+FFFF). A concatenation of 64 bytes or more makes a rope that
+  is copied flat only when its bytes are needed, so `s += x` in a loop
+  is linear.
 - *Heap and GC:* objects, strings and environments are `u32` indices into
   three lists with free lists; mark and sweep from the roots (global
   object, intrinsics, environments, the value stack, frames, pending
@@ -156,7 +158,8 @@ output as goldens.
   generation)` when the collector frees one (the `js_refs` decrement).
   `addRoot`/`removeRoot` keep values (event listeners) alive.
 - *Not yet:* generators, async/Promise, Symbol, BigInt, Proxy, typed
-  arrays, tagged templates, `new.target`, time zones (local time is UTC).
+  arrays, tagged templates, `new.target`, time zones (local time is UTC),
+  full Unicode case mapping and normalization.
   A plain function call gets `this === undefined` (strict-mode rule), and
   top-level `var`/`function` are properties of the global object.
 

@@ -1061,6 +1061,9 @@ pub struct Parser {
                 self.pos += 1
             }
             let c = try self.classTail(name, start)
+            if name != A_EMPTY {
+                self.ast.classes.items()[c].scope = try self.newScope()
+            }
             return self.mk(Node.Class { c: c }, start)
         }
         if k == Tok.KwSuper {
@@ -1353,7 +1356,7 @@ pub struct Parser {
             heritage = try self.lhs()
         }
         let cid = self.ast.classes.len() as u32
-        try self.ast.classes.append(ClassInfo { name: name, heritage: heritage, ctor: NONE, members: 0, n: 0 })
+        try self.ast.classes.append(ClassInfo { name: name, scope: NONE, heritage: heritage, ctor: NONE, members: 0, n: 0 })
         try self.expect(Tok.LBrace)
         var ctor = NONE
         let m = self.mark()
@@ -1401,7 +1404,7 @@ pub struct Parser {
                 try self.push(try self.mk(Node.ClassElem { kind: kind, is_static: isStatic, key: key, computed: computed, value: value }, mstart))
                 continue
             }
-            if kind != PROP_METHOD || computed {
+            if kind != PROP_METHOD {
                 return self.unexpected()
             }
             // A field: its initializer becomes the body of a method.
@@ -1411,12 +1414,14 @@ pub struct Parser {
             if self.eat(Tok.Assign) {
                 let init = try self.assign(false)
                 self.ast.funcs.items()[f].expr = init
-                try self.nameValue(init, key)
+                if !computed {
+                    try self.nameValue(init, key)
+                }
             }
             self.finishFunc(f, mstart)
             try self.semi()
             let value = try self.mk(Node.Func { f: f }, mstart)
-            try self.push(try self.mk(Node.ClassElem { kind: PROP_FIELD, is_static: isStatic, key: key, computed: false, value: value }, mstart))
+            try self.push(try self.mk(Node.ClassElem { kind: PROP_FIELD, is_static: isStatic, key: key, computed: computed, value: value }, mstart))
         }
         if ctor == NONE {
             let em = self.mark()

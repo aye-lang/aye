@@ -181,6 +181,8 @@ pub struct ScopeInfo {
 
 pub struct ClassInfo {
     name: u32
+    // A named class expression: the scope that binds its name (else NONE).
+    scope: u32
     heritage: u32
     ctor: u32
     members: u32

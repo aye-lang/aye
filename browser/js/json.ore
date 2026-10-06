@@ -5,6 +5,7 @@ import std.text
 
 fn installJson(it: *mut Interp) JsError!void {
     let j = try it.newObject(it.object_proto)
+    it.json_obj = j
     try it.defineValue(it.global, "JSON", objVal(j))
     try it.defineNative(j, "parse", 2, jsonParse)
     try it.defineNative(j, "stringify", 3, jsonStringify)
@@ -343,7 +344,7 @@ struct Stringifier {
     use_allow: bool
     gap: []u8
     indent: text.Builder
-    stack: List(u32)
+    stack: *mut List(u32)
 
     fn quote(self: *mut Self, b: *mut text.Builder, s: []u8) JsError!void {
         try b.appendByte('"')
@@ -546,12 +547,12 @@ pub fn jsonStringifyInto(it: *mut Interp, b: *mut text.Builder, v: Value) JsErro
         use_allow: false,
         gap: "",
         indent: text.Builder.init(it.alloc),
-        stack: List(u32).init(it.alloc),
+        stack: try it.keyList(),
     }
     defer {
         st.allow.deinit()
         st.indent.deinit()
-        st.stack.deinit()
+        it.releaseKeys(st.stack)
     }
     let holder = try it.newObject(it.object_proto)
     try it.push(objVal(holder))
@@ -594,12 +595,12 @@ fn jsonStringify(it: *mut Interp, a: Args) JsError!Value {
         use_allow: false,
         gap: gapb.bytes(),
         indent: text.Builder.init(it.alloc),
-        stack: List(u32).init(it.alloc),
+        stack: try it.keyList(),
     }
     defer {
         st.allow.deinit()
         st.indent.deinit()
-        st.stack.deinit()
+        it.releaseKeys(st.stack)
     }
     let r = it.arg(a, 1)
     if it.isCallable(r) {
