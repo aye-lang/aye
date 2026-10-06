@@ -744,3 +744,26 @@ fn akWindowScroll(it: *mut Interp, a: Args) JsError!Value {
     }
     return js.numVal(s.scroll_y)
 }
+
+/// The window scroll offset a script asked for (`window.scrollTo`...)
+/// since the last call, if it asked for one: the front end scrolls there.
+pub fn takeScriptScroll(p: *mut Page) ?f64 {
+    let s = p.script orelse return null
+    if !s.scroll_moved {
+        return null
+    }
+    s.scroll_moved = false
+    return s.scroll_y
+}
+
+/// The front end scrolled the page to `y`: what scripts see as
+/// `scrollY` from now on (and what the observers check against).
+pub fn setScriptScroll(p: *mut Page, y: f64) AllocError!void {
+    let s = p.script orelse return
+    if s.scroll_y == y {
+        return
+    }
+    s.scroll_y = y
+    s.geometry_changes += 1
+    try runLayoutHook(s)
+}

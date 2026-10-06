@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<body style="margin: 0">
+<p id="o">start</p>
+<div style="height: 3000px"></div>
+<script>
+// ?script: the page scrolls itself; the window follows. Either way the
+// text shows the offset the scripts see.
+if (location.search === '?script') setTimeout(() => scrollTo(0, 500), 10);
+setInterval(() => { document.getElementById('o').textContent = 'y=' + scrollY; }, 50);
+</script>

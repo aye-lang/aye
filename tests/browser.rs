@@ -1119,6 +1119,30 @@ fn window_scripts() {
     }
 }
 
+/// The window and the scripts agree on the scroll offset: a script's
+/// `scrollTo` scrolls the window, and the wheel moves `scrollY`.
+#[test]
+fn window_scroll_follows_scripts() {
+    if !has_sdl() {
+        println!("skipped: no SDL2");
+        return;
+    }
+    let page = root().join("browser/tests/ui/scroll_sync.html");
+    let script = format!("file://{}?script", page.display());
+    let cases: &[(&str, &[&str], &str, &str)] = &[
+        (&script, &[], "scroll 500\n", "y=500\n"),
+        ("browser/tests/ui/scroll_sync.html", &["--events", "wheel:-3"], "scroll 120\n", "y=120\n"),
+    ];
+    for (target, extra, state, text_line) in cases {
+        let mut args = vec![*target, "--font", "fixed", "--width", "400", "--height", "300", "--frames", "30", "--state", "--text"];
+        args.extend_from_slice(extra);
+        let out = run_window(&args);
+        let got = text(&out.stdout);
+        assert!(out.status.success() && out.stderr.is_empty(), "{args:?}: {}\n{}", out.status, text(&out.stderr));
+        assert!(got.contains(state) && got.contains(text_line), "{args:?}: expected {state:?} and {text_line:?} in:\n{got}");
+    }
+}
+
 /// One run of a DOM fixture: `args` then the page; stdout must be
 /// `golden`, and stderr (console messages, uncaught exceptions) must be
 /// `err_golden`, or empty when there is no such file.
