@@ -8,6 +8,10 @@
 // Interactive elements and headings get refs (`e1`, `e2`, ...): a node
 // keeps its ref for the life of its document (see `refFor`).
 //
+// The document of a `frame` is a `frame` node (named by its title, with
+// its address) over the frame's content; that content has no refs and
+// no boxes (actions work on the top document).
+//
 // The text form, one node per line, children indented by two spaces:
 //
 //     - navigation "Main"
@@ -56,7 +60,7 @@ let INTERACTIVE = "link button textbox searchbox spinbutton checkbox radio combo
 // Roles whose children are not listed.
 let LEAF_ROLES = "textbox searchbox spinbutton img slider progressbar meter separator"
 // Roles kept even when they have no name and no content.
-let KEEP_EMPTY = "img separator cell columnheader rowheader progressbar meter"
+let KEEP_EMPTY = "img separator cell columnheader rowheader progressbar meter frame"
 
 let MAX_NAME: usize = 150
 
@@ -91,6 +95,8 @@ pub struct Ax {
     // Inside a label of a control: its text is the control's name, so
     // it is not repeated.
     mute: u32
+    // How many frames deep the walk is (`page` is then the frame's).
+    frames: u32
 }
 
 /// Builds the accessibility tree of the page shown in `alloc` (an
@@ -111,28 +117,40 @@ fn newAx(s: *mut Session, alloc: Allocator) AllocError!Ax {
         session: s,
         page: p,
         nodes: List(AxNode).init(alloc),
-        labels: StrMap(NodeId).init(alloc),
+        labels: try labelsOf(alloc, p),
         mute: 0,
+        frames: 0,
     }
+    return ax
+}
+
+// The `label for=ID` elements of `p` by ID (the first for each).
+fn labelsOf(alloc: Allocator, p: *Page) AllocError!StrMap(NodeId) {
+    var labels = StrMap(NodeId).init(alloc)
     var cur: ?NodeId = p.doc.root
     while cur |h| {
         if p.doc.isElement(h, "label") {
             if p.doc.attr(h, "for") |id| {
-                if !ax.labels.contains(id) {
-                    try ax.labels.put(id, h)
+                if !labels.contains(id) {
+                    try labels.put(id, h)
                 }
             }
         }
         cur = p.doc.following(h, p.doc.root)
     }
-    return ax
+    return labels
 }
 
 fn addAx(ax: *mut Ax, parent: ?usize, role: []u8, node: ?NodeId) AllocError!usize {
+    // The nodes of a frame's document are not the top document's.
+    var top_node = node
+    if ax.frames > 0 {
+        top_node = null
+    }
     try ax.nodes.append(AxNode {
         role: role,
         name: "",
-        node: node,
+        node: top_node,
         level: 0,
         ref: 0,
         url: "",
@@ -179,6 +197,9 @@ fn walkNode(ax: *mut Ax, h: NodeId, parent: usize) AllocError!void {
         sealText(ax, parent)
         return
     }
+    if text.eql(n.name, "frame") {
+        return walkFrame(ax, h, parent)
+    }
     if text.eql(n.name, "label") && !(ax.page.doc.attr(h, "role") != null) {
         if engine.labelControl(&ax.page.doc, h) |control| {
             if rendered(ax.page, control) {
@@ -221,7 +242,7 @@ fn walkNode(ax: *mut Ax, h: NodeId, parent: usize) AllocError!void {
     let href = linkUrl(ax.page, h, role)
     let states = statesOf(ax.page, h, role, ax.page.doc.controls.focus)
     var ref: u32 = 0
-    if html.isIn(role, INTERACTIVE) || text.eql(role, "heading") {
+    if (html.isIn(role, INTERACTIVE) || text.eql(role, "heading")) && ax.frames == 0 {
         ref = try refFor(ax.session, h)
     }
     let a = axAt(ax, me)
@@ -235,6 +256,30 @@ fn walkNode(ax: *mut Ax, h: NodeId, parent: usize) AllocError!void {
         try walkChildren(ax, h, me)
     }
     sealText(ax, parent)
+}
+
+// The document of the `frame` element `h`, if it was loaded and laid
+// out: a `frame` node and the document's content under it.
+fn walkFrame(ax: *mut Ax, h: NodeId, parent: usize) AllocError!void {
+    let child = engine.framePage(ax.page, h) orelse {
+        return
+    }
+    if child.styling == null {
+        return
+    }
+    sealText(ax, parent)
+    let me = try addAx(ax, parent, "frame", null)
+    axAt(ax, me).name = child.title
+    axAt(ax, me).url = child.url.href
+    let page = ax.page
+    let labels = ax.labels
+    ax.page = child
+    ax.labels = try labelsOf(ax.alloc, child)
+    ax.frames += 1
+    try walkChildren(ax, child.doc.root, me)
+    ax.frames -= 1
+    ax.page = page
+    ax.labels = labels
 }
 
 fn addText(ax: *mut Ax, parent: usize, s: []u8) AllocError!void {
@@ -609,10 +654,11 @@ fn inPresentationTable(p: *Page, el: NodeId) bool {
 
 /// Is `table` used for layout rather than data (a simplified form of the
 /// browsers' heuristic)? `role=presentation` or `none` says so, a table
-/// role says not; else a table with a table inside is for layout, and
-/// one with a caption, a `thead`, a header cell, a `summary` or a border
-/// holds data. Real sites (Hacker News, DuckDuckGo Lite, old sites) lay
-/// out whole pages with tables, which read better as rows of text.
+/// role says not; else a table with a table inside is for layout, one
+/// with a single column too, and one with a caption, a `thead`, a header
+/// cell, a `summary` or a border holds data. Real sites (Hacker News,
+/// DuckDuckGo Lite, old sites) lay out whole pages with tables, which
+/// read better as rows of text.
 fn isLayoutTable(p: *Page, table: NodeId) bool {
     if attrIs(p, table, "role", "presentation") || attrIs(p, table, "role", "none") {
         return true
@@ -625,6 +671,7 @@ fn isLayoutTable(p: *Page, table: NodeId) bool {
         let width = text.parseInt(text.trim(b)) catch 1
         data = data || width > 0
     }
+    var columns: usize = 0
     var cur = p.doc.following(table, table)
     while cur |c| {
         let n = p.doc.node(c)
@@ -635,10 +682,23 @@ fn isLayoutTable(p: *Page, table: NodeId) bool {
             if html.isIn(n.name, "caption thead th") {
                 data = true
             }
+            if text.eql(n.name, "tr") {
+                var cells: usize = 0
+                var k = n.first_child
+                while k |cell| {
+                    if p.doc.isElement(cell, "td") || p.doc.isElement(cell, "th") {
+                        cells += 1
+                    }
+                    k = p.doc.nextSibling(cell)
+                }
+                if cells > columns {
+                    columns = cells
+                }
+            }
         }
         cur = p.doc.following(c, table)
     }
-    return !data
+    return !data || columns < 2
 }
 
 // Is `el` inside an element that scopes `header` and `footer`?

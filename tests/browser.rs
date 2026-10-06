@@ -294,6 +294,7 @@ fn http() {
     expect(&["dump", "--style", &format!("{base}/redirect-style")], 0, &link_style, "");
     // The charset of the Content-Type header decodes the body.
     expect(&["dump", "--text", &format!("{base}/latin1")], 0, "Café à la crème\n", "");
+    expect(&["dump", "--text", &format!("{base}/gbk")], 0, "中文网页\n", "");
     // An error status still has a page.
     let out = run(&["dump", "--text", &format!("{base}/missing.html")]);
     assert_eq!(out.status.code(), Some(0));
@@ -1233,6 +1234,37 @@ fn window_scroll_positions() {
         let want_line = format!("status {want}");
         if !out.status.success() || !out.stderr.is_empty() || status != want_line {
             failures.push(format!("--events {events:?}: {}\n{}--- expected\n{want_line}\n--- got\n{got}", out.status, text(&out.stderr)));
+        }
+    }
+    assert!(failures.is_empty(), "{} of {} cases failed:\n\n{}", failures.len(), cases.len(), failures.join("\n"));
+}
+
+/// A frameset in the window (`browser/tests/ui/frames.html`, 400x340: a
+/// 100 px menu frame, `long.html` in the rest): the wheel scrolls the
+/// frame under the mouse (up to its document's end), the status line
+/// shows a frame's link resolved in the frame, and clicking it loads it
+/// in the tab.
+#[test]
+fn window_framesets() {
+    if !has_sdl() {
+        println!("skipped: no SDL2");
+        return;
+    }
+    let ui = format!("file://{}/browser/tests/ui/", root().display());
+    let page = "url frames.html\nscroll 0\nfocus page\naddress frames.html\nhistory 1 of 1\nmatches 0\n";
+    let cases: &[(&str, String)] = &[
+        ("move:20,58", format!("{page}status other.html\nframes 0 0\n")),
+        ("move:200,100 wheel:-2", format!("{page}status \nframes 0 80\n")),
+        ("move:200,100 wheel:-100", format!("{page}status \nframes 0 960\n")),
+        ("move:200,100 wheel:-2 move:20,100 wheel:-2 key:down", format!("{page}status \nframes 0 80\n")),
+        ("click:20,58", "url other.html\nscroll 0\nfocus page\naddress other.html\nhistory 2 of 2\nmatches 0\nstatus \n".to_string()),
+    ];
+    let mut failures = Vec::new();
+    for (events, want) in cases {
+        let out = run_window(&["browser/tests/ui/frames.html", "--font", "fixed", "--width", "400", "--height", "340", "--frames", "1", "--state", "--events", events]);
+        let got = text(&out.stdout).replace(&ui, "");
+        if !out.status.success() || !out.stderr.is_empty() || got != *want {
+            failures.push(format!("--events {events:?}: {}\n{}--- expected\n{want}--- got\n{got}", out.status, text(&out.stderr)));
         }
     }
     assert!(failures.is_empty(), "{} of {} cases failed:\n\n{}", failures.len(), cases.len(), failures.join("\n"));

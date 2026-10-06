@@ -1,0 +1,32 @@
+<!doctype html>
+<title>Layout table</title>
+<!-- Shaped like Hacker News: the whole page is a table, its header a
+     table inside a cell, each story two rows (rank, vote arrow, title;
+     then the subtext) and a spacer row. A layout table reads as rows of
+     text, not as a Markdown table. -->
+<center><table id="hnmain" border="0" cellpadding="0" cellspacing="0" width="85%">
+<tr><td bgcolor="#ff6600"><table border="0" cellpadding="0" cellspacing="0" width="100%"><tr>
+  <td><a href="/"><img src="y18.svg" width="18" height="18"></a></td>
+  <td><span class="pagetop"><b><a href="news">Hacker News</a></b><a href="newest">new</a> | <a href="ask">ask</a></span></td>
+  <td style="text-align:right"><a href="login">login</a></td>
+</tr></table></td></tr>
+<tr style="height:10px"></tr>
+<tr><td><table border="0" cellpadding="0" cellspacing="0">
+  <tr class="athing"><td align="right" class="title"><span class="rank">1.</span></td>
+    <td class="votelinks"><center><a href="vote?id=1"><div class="votearrow" title="upvote"></div></a></center></td>
+    <td class="title"><span class="titleline"><a href="https://example.com/a">First story</a><span class="sitebit"> (<a href="from?site=example.com">example.com</a>)</span></span></td></tr>
+  <tr><td colspan="2"></td><td class="subtext"><span class="score">179 points</span> by <a href="user?id=ann">ann</a> | <a href="item?id=1">47&nbsp;comments</a></td></tr>
+  <tr class="spacer" style="height:5px"></tr>
+  <tr class="athing"><td align="right" class="title"><span class="rank">2.</span></td>
+    <td class="votelinks"><center><a href="vote?id=2"><div class="votearrow" title="upvote"></div></a></center></td>
+    <td class="title"><span class="titleline"><a href="https://example.org/b">Second story</a></span></td></tr>
+  <tr><td colspan="2"></td><td class="subtext">12 points by <a href="user?id=bob">bob</a></td></tr>
+  <tr><td colspan="2"></td><td class="title"><a href="news?p=2">More</a></td></tr>
+</table></td></tr>
+<tr><td><center><span class="yclinks"><a href="guidelines">Guidelines</a> | <a href="faq">FAQ</a></span>
+  <form method="get" action="search">Search: <input type="text" name="q"></form></center></td></tr>
+</table></center>
+<h2>One column</h2>
+<table><tr><th>Only header</th></tr><tr><td>first</td></tr><tr><td>second</td></tr></table>
+<h2>Data</h2>
+<table><tr><th>Name</th><th>Points</th></tr><tr><td>ann</td><td>179</td></tr></table>

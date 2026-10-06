@@ -1,0 +1,14 @@
+- frame -> file://$ROOT/browser/tests/agent/frames_self.html
+  - frame -> file://$ROOT/browser/tests/agent/frames_self.html
+    - frame -> file://$ROOT/browser/tests/agent/frames_self.html
+    - frame -> file://$ROOT/browser/tests/agent/frames_self.html
+  - frame -> file://$ROOT/browser/tests/agent/frames_self.html
+    - frame -> file://$ROOT/browser/tests/agent/frames_self.html
+    - frame -> file://$ROOT/browser/tests/agent/frames_self.html
+- frame -> file://$ROOT/browser/tests/agent/frames_self.html
+  - frame -> file://$ROOT/browser/tests/agent/frames_self.html
+    - frame -> file://$ROOT/browser/tests/agent/frames_self.html
+    - frame -> file://$ROOT/browser/tests/agent/frames_self.html
+  - frame -> file://$ROOT/browser/tests/agent/frames_self.html
+    - frame -> file://$ROOT/browser/tests/agent/frames_self.html
+    - frame -> file://$ROOT/browser/tests/agent/frames_self.html

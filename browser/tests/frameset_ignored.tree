@@ -1,0 +1,16 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Frameset ignored"
+      "\n"
+      <!--  After content in the body (or an explicit body tag), a frameset start\n     tag is ignored, and so are frames.  -->
+      "\n"
+    <body>
+      <p>
+        "Content first."
+      "\n\n"
+      <p>
+        "Content after."
+      "\n"

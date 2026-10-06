@@ -1,0 +1,21 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      "\n"
+      <meta charset="GB18030">
+      "\n"
+      <title>
+        "简体中文 gb18030"
+      "\n"
+    "\n"
+    <body>
+      "\n"
+      <!--  A page in gb18030, declared by its meta element.  -->
+      "\n"
+      <h1>
+        "简体中文 gb18030"
+      "\n"
+      <p>
+        "四字节：😀 é ẞ，两字节：汉字。"
+      "\n\n\n"

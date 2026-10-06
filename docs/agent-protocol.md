@@ -109,7 +109,24 @@ A line is `- role "name" [level=N] [eN] [states] value="..." -> href
 Left out: `display: none`, `visibility: hidden` (but visible children
 stay), `aria-hidden=true`, `input type=hidden`, `script`, `style`,
 `template`, `noscript`, media and `svg` without a label. The text of a
-`label` that names a control is not repeated.
+`label` that names a control is not repeated. A layout table (one with
+`role=presentation`, a table inside, a single column, or no caption,
+header cell or border) is not a `table`: its rows and cells are left
+out and their content joins the parent.
+
+A page made of frames (`<frameset>`) shows each frame's document as a
+`frame` node, named by the document's title and followed by its
+address, with the document's content under it:
+
+```
+- frame "Menu" -> http://example.com/menu.htm
+  - link "Top" -> top.htm
+- frame "Home" -> http://example.com/top.htm
+  - heading "Welcome" [level=1]
+```
+
+The content of a frame has no refs and no boxes: actions work on the
+top document only (`navigate` to a frame's address to act in it).
 
 The JSON form (`--json`, `"format":"json"`) is an array of nodes
 `{"role", "name", "ref", "level", "states": [...], "value", "url",
@@ -124,11 +141,16 @@ navigation, headers, footers and sidebars are dropped when the page says
 where its content is. Headings `#`, paragraphs, lists (nested, with the
 `start` of `ol`), links `[text](absolute URL)` followed by ` [eN]` when
 refs are asked for, `*em*`, `**strong**`, `~~del~~`, `` `code` ``,
-fenced `pre` blocks (with the `language-x` of a `code` inside), `>`
-quotes, GFM tables (the first row is the header; `|` escaped), images
-`![alt](absolute URL)` and `---` rules. Whitespace collapses as in HTML;
-`<br>` is a hard break (`\` at the end of the line). Form controls are
-left out.
+fenced `pre` blocks (their line breaks kept, also those of `<br>` and
+of blocks inside; the `language-x` of the `pre` or of a `code` inside),
+`>` quotes, GFM tables (the first row is the header; `|` escaped),
+images `![alt](absolute URL)` and `---` rules. A layout table (see the
+snapshot) is read row by row: the cells of a row that are one paragraph
+each make one paragraph, joined by spaces. List items with nothing
+visible in them are left out. Whitespace collapses as in HTML; `<br>` is
+a hard break (`\` at the end of the line). Form controls are left out.
+Each frame of a frameset page comes after a heading `## Frame: URL`,
+without refs.
 
 ## JSON lines
 

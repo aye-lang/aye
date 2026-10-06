@@ -12,6 +12,7 @@ import dom.Attr
 import dom.Document
 import dom.Kind
 import dom.NodeId
+import encoding
 import js
 import js.Args
 import js.Interp
@@ -276,6 +277,9 @@ fn installDom(s: *mut Script) JsError!void {
     try accessor(it, docp, "head", documentHead, null)
     try accessor(it, docp, "title", documentTitle, documentSetTitle)
     try accessor(it, docp, "readyState", documentReadyState, null)
+    try accessor(it, docp, "characterSet", documentCharacterSet, null)
+    try accessor(it, docp, "charset", documentCharacterSet, null)
+    try accessor(it, docp, "inputEncoding", documentCharacterSet, null)
     try accessor(it, docp, "activeElement", documentActiveElement, null)
     try accessor(it, docp, "currentScript", documentCurrentScript, null)
     try accessor(it, docp, "doctype", documentDoctype, null)
@@ -1552,6 +1556,12 @@ fn documentReadyState(it: *mut Interp, a: Args) JsError!Value {
         1 => "interactive"
         _ => "complete"
     })
+}
+
+// The encoding the document was decoded from ("UTF-8", "Shift_JIS").
+fn documentCharacterSet(it: *mut Interp, a: Args) JsError!Value {
+    try thisDocument(it, a)
+    return it.newString(encoding.nameOf(scriptOf(it).page.encoding))
 }
 
 fn documentActiveElement(it: *mut Interp, a: Args) JsError!Value {

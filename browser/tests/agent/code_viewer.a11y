@@ -1,0 +1,14 @@
+- main
+  - heading "Components" [level=1] [e1]
+  - text: function Video({ video }) {
+  - text: return (
+  - text: <div>
+  - text: <Thumbnail video={video} />
+  - text: </div>
+  - text: );
+  - text: }
+  - paragraph: Lines without a br, and a hidden copy button:
+  - text: a { color: red }
+  - text: b { color: blue }
+  - text: one two
+  - text: three

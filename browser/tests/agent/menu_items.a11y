@@ -1,0 +1,17 @@
+- main
+  - heading "Web browser" [level=1] [e1]
+  - navigation "Personal tools"
+    - list
+      - listitem
+        - link [e2] -> /donate
+      - listitem
+        - link [e3] -> /create
+      - listitem
+        - link "Log in" [e4] -> /login
+  - text: Tools
+  - list
+    - listitem: Visible first
+    - listitem
+      - img "Logo"
+    - listitem: Visible last
+  - paragraph: A web browser is an application for accessing websites.

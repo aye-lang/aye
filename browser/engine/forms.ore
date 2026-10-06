@@ -23,6 +23,7 @@ import dom
 import dom.Document
 import dom.Kind
 import dom.NodeId
+import encoding
 import layout
 import net
 import std
@@ -443,6 +444,7 @@ pub fn submitForm(page: *mut Page, form: NodeId, submitter: ?NodeId) AllocError!
     var entries = List(FormEntry).init(alloc)
     defer freeEntries(alloc, &mut entries)
     try formEntries(page, form, submitter, &mut entries)
+    try encodeEntries(alloc, entries.items(), formEncoding(page, form))
     var body = text.Builder.init(alloc)
     defer body.deinit()
     var ctype = text.Builder.init(alloc)
@@ -502,6 +504,36 @@ fn queryUrl(alloc: Allocator, target: *Url, query: []u8) AllocError!Url {
         return AllocError.OutOfMemory
     }
     return u
+}
+
+/// The encoding of a submission of `form`: the first label of its
+/// `accept-charset` that names one, else the document's encoding.
+fn formEncoding(page: *Page, form: NodeId) encoding.Encoding {
+    if page.doc.attr(form, "accept-charset") |labels| {
+        var words = text.split(labels, " ")
+        while words.next() |w| {
+            if encoding.fromLabel(w) |e| {
+                return e
+            }
+        }
+    }
+    return page.encoding
+}
+
+// The names and values of `entries` in `enc` (what `enc` cannot write
+// as `&#N;`).
+fn encodeEntries(alloc: Allocator, entries: []mut FormEntry, enc: encoding.Encoding) AllocError!void {
+    if enc == encoding.Encoding.Utf8 {
+        return
+    }
+    for k in 0..entries.len {
+        let n = try encoding.fromUtf8(alloc, entries[k].name, enc)
+        alloc.free(entries[k].name)
+        entries[k].name = n
+        let v = try encoding.fromUtf8(alloc, entries[k].value, enc)
+        alloc.free(entries[k].value)
+        entries[k].value = v
+    }
 }
 
 /// One name and value of a form's data (owned).
