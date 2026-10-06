@@ -62,7 +62,7 @@ pub interface Host {
     fn finalize(self: *mut Self, tag: u32, index: u32, generation: u32)
 }
 
-let MAX_DEPTH: usize = 1200
+let MAX_DEPTH: usize = 10000
 
 pub struct Interp {
     alloc: Allocator

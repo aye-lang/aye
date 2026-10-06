@@ -11,6 +11,8 @@ import std
 import std.mem.Allocator
 import std.text
 
+@link("pthread")
+
 /// Runs the script in file `path`: console output goes to stdout, an
 /// uncaught exception prints `Uncaught <Name>: <message>` to stderr and
 /// gives status 1.
@@ -20,8 +22,46 @@ pub fn runFile(alloc: Allocator, path: []u8) i32 {
         return 1
     }
     defer alloc.free(src)
-    return runSource(alloc, src)
+    return runOnBigStack(alloc, src)
 }
+
+// The interpreter recurses on the C stack (several KB per JS call in
+// debug builds), so scripts run on a thread with a large stack.
+let STACK_BYTES: usize = 1 << 30
+
+struct Job {
+    alloc: Allocator
+    src: []u8
+    status: i32
+}
+
+fn jobMain(arg: ?[*]u8) ?[*]u8 {
+    if arg |p| {
+        let job = @ptrCast(*mut Job, p)
+        job.status = runSource(job.alloc, job.src)
+    }
+    return null
+}
+
+/// runSource on a thread with a 1 GB stack (reserved, not committed).
+pub fn runOnBigStack(alloc: Allocator, src: []u8) i32 {
+    var job = Job { alloc: alloc, src: src, status: 1 }
+    var attr = @zeroed([128]u8)
+    var thread = @zeroed([1]u64)
+    if pthread_attr_init(attr[..].ptr) != 0 || pthread_attr_setstacksize(attr[..].ptr, STACK_BYTES) != 0 {
+        return runSource(alloc, src)
+    }
+    if pthread_create(thread[..].ptr, attr[..].ptr, jobMain, @ptrCast([*]u8, &mut job)) != 0 {
+        return runSource(alloc, src)
+    }
+    pthread_join(thread[0], null)
+    return job.status
+}
+
+extern fn pthread_attr_init(attr: [*]u8) i32
+extern fn pthread_attr_setstacksize(attr: [*]u8, size: usize) i32
+extern fn pthread_create(t: [*]u64, attr: [*]u8, f: fn(?[*]u8) ?[*]u8, arg: ?[*]u8) i32
+extern fn pthread_join(t: u64, ret: ?[*]u8) i32
 
 /// Runs a script's source in a new engine; returns the exit status.
 pub fn runSource(alloc: Allocator, src: []u8) i32 {

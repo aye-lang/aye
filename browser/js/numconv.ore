@@ -254,13 +254,7 @@ fn fixedDigits(b: *mut text.Builder, neg: bool, x: f64, digits: u32) AllocError!
             carry = false
         }
     }
-    var allZero = !carry
-    for c in t {
-        if c != '0' && c != '.' {
-            allZero = false
-        }
-    }
-    if neg && !allZero {
+    if neg {
         try b.appendByte('-')
     }
     if carry {

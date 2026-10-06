@@ -1,6 +1,116 @@
 // Unit tests of the JS engine's pieces (`ore test browser/js`). The
 // conformance scripts in browser/tests/js/ test the engine as a whole.
 
+import std.mem.Allocator
+import std.text
+
+fn numberText(a: Allocator, v: f64) []mut u8 {
+    var b = text.Builder.init(a)
+    formatNumber(&mut b, v) catch |e| {}
+    let out = b.toOwned() catch |e| {
+        return []mut u8{}
+    }
+    return out
+}
+
+fn expectNumber(a: Allocator, want: []u8, v: f64) {
+    let got = numberText(a, v)
+    defer a.free(got)
+    @expectEqual(want, got)
+}
+
+test "Number::toString is the shortest round trip" {
+    let a = @testAllocator()
+    expectNumber(a, "0.30000000000000004", 0.1 + 0.2)
+    expectNumber(a, "0.1", 0.1)
+    expectNumber(a, "1e+21", 1e21)
+    expectNumber(a, "123456789012345680000", 123456789012345680000.0)
+    expectNumber(a, "1e-7", 1e-7)
+    expectNumber(a, "0.000001", 0.000001)
+    expectNumber(a, "5e-324", 5e-324)
+    expectNumber(a, "1.7976931348623157e+308", 1.7976931348623157e308)
+    expectNumber(a, "-1.5", -1.5)
+    expectNumber(a, "0", -0.0)
+    expectNumber(a, "NaN", 0.0 / 0.0)
+    expectNumber(a, "-Infinity", -1.0 / 0.0)
+    expectNumber(a, "9007199254740992", 9007199254740992.0)
+}
+
+test "toFixed rounds ties up" {
+    let a = @testAllocator()
+    var b = text.Builder.init(a)
+    defer b.deinit()
+    try formatFixed(&mut b, 2.5, 0)
+    try b.append(" ")
+    try formatFixed(&mut b, 1.005, 2)
+    try b.append(" ")
+    try formatFixed(&mut b, -0.0001, 2)
+    try b.append(" ")
+    try formatFixed(&mut b, 999.995, 2)
+    @expectEqual("3 1.00 -0.00 1000.00", b.bytes())
+}
+
+test "strings to numbers" {
+    @expect(stringToNumber("  12  ") == 12.0)
+    @expect(stringToNumber("0x1f") == 31.0)
+    @expect(stringToNumber("") == 0.0)
+    @expect(stringToNumber("1e3") == 1000.0)
+    @expect(isNaN(stringToNumber("12px")))
+    @expect(parseIntPrefix("12px", 0) == 12.0)
+    @expect(parseIntPrefix("-ff", 16) == -255.0)
+    @expect(parseFloatPrefix(".5e1x") == 5.0)
+}
+
+// A host that counts finalized wrappers (as the DOM decrements js_refs).
+struct CountingHost {
+    finalized: u32
+    last_index: u32
+
+    fn finalize(self: *mut Self, tag: u32, index: u32, generation: u32) {
+        self.finalized += 1
+        self.last_index = index
+    }
+}
+
+test "collected host objects are reported to the host" {
+    var it = try Interp.create(@testAllocator())
+    defer it.deinit()
+    try installBuiltins(&mut it)
+    var h = CountingHost { finalized: 0, last_index: 0 }
+    let d: dyn Host = &mut h
+    it.host = d
+    let kept = try it.newHostObject(it.object_proto, 1, 7, 0)
+    let root = try it.addRoot(objVal(kept))
+    for i in 0..10 {
+        try it.newHostObject(it.object_proto, 1, 100 + i as u32, 3)
+    }
+    collectGarbage(&mut it)
+    @expectEqual(10, h.finalized)
+    it.removeRoot(root)
+    collectGarbage(&mut it)
+    @expectEqual(11, h.finalized)
+    @expectEqual(7, h.last_index)
+}
+
+test "scripts run and throw" {
+    var it = try Interp.create(@testAllocator())
+    defer it.deinit()
+    try installBuiltins(&mut it)
+    try it.runScript("var x = [1, 2, 3].map(n => n * 2).join('-')")
+    let x = try it.getProp(objVal(it.global), try it.intern("x"))
+    @expectEqual("2-4-6", it.heap.bytes(strOf(x)))
+    let r = it.runScript("let y = 1; y.z.w") catch Value.Null
+    @expect(isNullish(r) && !isUndef(r))
+    @expect(it.hasClass(it.exception, Class.Error))
+}
+
+test "array indices" {
+    @expectEqual(0, arrayIndex("0"))
+    @expectEqual(4294967294, arrayIndex("4294967294"))
+    @expect(arrayIndex("4294967295") == NONE)
+    @expect(arrayIndex("01") == NONE)
+}
+
 test "tokens" {
     let a = @testAllocator()
     var lx = Lexed.init(a)
