@@ -1,5 +1,5 @@
-// encoding: turning fetched bytes into UTF-8. B1 knows UTF-8 and
-// Windows-1252 (which browsers use for the labels "latin1" and
+// encoding: turning fetched bytes into UTF-8. It knows UTF-8 and
+// Windows-1252 (which browsers use for the labels "latin1", "ascii" and
 // "iso-8859-1" too).
 
 import std.mem.AllocError
@@ -15,13 +15,13 @@ pub enum Encoding {
 /// for a label B1 does not know.
 pub fn fromLabel(label: []u8) ?Encoding {
     let l = text.trim(label)
-    var words = text.split("utf-8 utf8 unicode-1-1-utf-8", " ")
+    var words = text.split("utf-8 utf8 unicode-1-1-utf-8 unicode11utf8 unicode20utf8 x-unicode20utf8", " ")
     while words.next() |w| {
         if text.eqlIgnoreCase(l, w) {
             return Encoding.Utf8
         }
     }
-    var latin = text.split("windows-1252 cp1252 latin1 l1 iso-8859-1 iso8859-1 iso_8859-1 ascii us-ascii x-cp1252", " ")
+    var latin = text.split("windows-1252 cp1252 x-cp1252 latin1 l1 iso-8859-1 iso8859-1 iso88591 iso_8859-1 iso_8859-1:1987 iso-ir-100 ibm819 cp819 csisolatin1 ascii us-ascii ansi_x3.4-1968", " ")
     while latin.next() |w| {
         if text.eqlIgnoreCase(l, w) {
             return Encoding.Windows1252
@@ -56,37 +56,158 @@ pub fn sniff(bytes: []u8, content_charset: []u8) Encoding {
     return Encoding.Windows1252
 }
 
-/// The value after the first `charset=` inside a `<meta` tag of `head`
-/// (quotes and the rest of the tag left out). A simple prescan.
+/// The encoding label declared by a `meta` element in `head` (the first
+/// 1024 bytes), as WHATWG's prescan finds it, simplified: comments and
+/// other tags are skipped; a `meta` declares with `charset=` or with
+/// `http-equiv=content-type` and a `content` that has `charset=`.
+/// A UTF-16 label means UTF-8 there (the bytes were read as ASCII).
 pub fn metaCharset(head: []u8) ?[]u8 {
     var i: usize = 0
-    while i + 5 < head.len {
-        if head[i] == '<' && text.eqlIgnoreCase(head[i + 1..i + 5], "meta") {
-            var end = i + 5
-            while end < head.len && head[end] != '>' {
-                end += 1
-            }
-            let tag = head[i..end]
-            var k: usize = 0
-            while k + 8 <= tag.len {
-                if text.eqlIgnoreCase(tag[k..k + 8], "charset=") {
-                    var lo = k + 8
-                    while lo < tag.len && (tag[lo] == '"' || tag[lo] == '\'' || tag[lo] == ' ') {
-                        lo += 1
-                    }
-                    var hi = lo
-                    while hi < tag.len && isLabelByte(tag[hi]) {
-                        hi += 1
-                    }
-                    return tag[lo..hi]
-                }
-                k += 1
-            }
-            i = end
+    while i < head.len {
+        if head[i] != '<' {
+            i += 1
+            continue
         }
+        let rest = head[i..]
+        if text.startsWith(rest, "<!--") {
+            i += 4
+            while i < head.len && !text.startsWith(head[i..], "-->") {
+                i += 1
+            }
+            i += 3
+            continue
+        }
+        if rest.len > 5 && text.eqlIgnoreCase(rest[1..5], "meta") && (isSpace(rest[5]) || rest[5] == '/') {
+            var tag = Tag { src: head, at: i + 5 }
+            var pragma = false
+            var declared: ?[]u8 = null
+            var from_content: ?[]u8 = null
+            while tag.next() |attr| {
+                if text.eqlIgnoreCase(attr.name, "charset") {
+                    if declared == null {
+                        declared = text.trim(attr.value)
+                    }
+                } else if text.eqlIgnoreCase(attr.name, "http-equiv") {
+                    pragma = pragma || text.eqlIgnoreCase(text.trim(attr.value), "content-type")
+                } else if text.eqlIgnoreCase(attr.name, "content") {
+                    from_content = charsetIn(attr.value)
+                }
+            }
+            if declared |label| {
+                return forMeta(label)
+            }
+            if pragma {
+                if from_content |label| {
+                    return forMeta(label)
+                }
+            }
+            i = tag.at
+            continue
+        }
+        // Another tag, `</...>`, `<!...>` or `<?...>`: skipped whole.
         i += 1
+        while i < head.len && head[i] != '>' {
+            i += 1
+        }
     }
     return null
+}
+
+fn forMeta(label: []u8) []u8 {
+    if label.len >= 6 && text.eqlIgnoreCase(label[..6], "utf-16") {
+        return "utf-8"
+    }
+    return label
+}
+
+// The value of `charset=` in a `content` attribute ("text/html;
+// charset=ISO-8859-1"), quotes left out.
+fn charsetIn(content: []u8) ?[]u8 {
+    var k: usize = 0
+    while k + 7 <= content.len {
+        if text.eqlIgnoreCase(content[k..k + 7], "charset") {
+            var lo = k + 7
+            while lo < content.len && isSpace(content[lo]) {
+                lo += 1
+            }
+            if lo < content.len && content[lo] == '=' {
+                lo += 1
+                while lo < content.len && (isSpace(content[lo]) || content[lo] == '"' || content[lo] == '\'') {
+                    lo += 1
+                }
+                var hi = lo
+                while hi < content.len && isLabelByte(content[hi]) {
+                    hi += 1
+                }
+                if hi > lo {
+                    return content[lo..hi]
+                }
+                return null
+            }
+        }
+        k += 1
+    }
+    return null
+}
+
+fn isSpace(c: u8) bool {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == 0x0C
+}
+
+struct Attr {
+    name: []u8
+    value: []u8
+}
+
+// The attributes of a tag in `src` from `at` (after the tag name) to
+// its `>`; `at` ends after the `>`.
+struct Tag {
+    src: []u8
+    at: usize
+
+    fn next(self: *mut Self) ?Attr {
+        let s = self.src
+        while self.at < s.len && (isSpace(s[self.at]) || s[self.at] == '/') {
+            self.at += 1
+        }
+        if self.at >= s.len || s[self.at] == '>' {
+            self.at += 1
+            return null
+        }
+        let start = self.at
+        while self.at < s.len && s[self.at] != '=' && s[self.at] != '>' && !isSpace(s[self.at]) && !(s[self.at] == '/' && self.at > start) {
+            self.at += 1
+        }
+        let name = s[start..self.at]
+        while self.at < s.len && isSpace(s[self.at]) {
+            self.at += 1
+        }
+        if self.at >= s.len || s[self.at] != '=' {
+            return Attr { name: name, value: "" }
+        }
+        self.at += 1
+        while self.at < s.len && isSpace(s[self.at]) {
+            self.at += 1
+        }
+        if self.at < s.len && (s[self.at] == '"' || s[self.at] == '\'') {
+            let quote = s[self.at]
+            self.at += 1
+            let lo = self.at
+            while self.at < s.len && s[self.at] != quote {
+                self.at += 1
+            }
+            let value = s[lo..self.at]
+            if self.at < s.len {
+                self.at += 1
+            }
+            return Attr { name: name, value: value }
+        }
+        let lo = self.at
+        while self.at < s.len && !isSpace(s[self.at]) && s[self.at] != '>' {
+            self.at += 1
+        }
+        return Attr { name: name, value: s[lo..self.at] }
+    }
 }
 
 /// Is `s` valid UTF-8?
@@ -170,6 +291,16 @@ test "labels" {
     @expect(labelIs("UTF-8", Encoding.Utf8))
     @expect(labelIs(" iso-8859-1 ", Encoding.Windows1252))
     @expect(fromLabel("koi8-r") == null)
+}
+
+test "prescan" {
+    @expect(sniff("<!-- <meta charset=latin1> --><meta charset=utf-8>caf\xE9", "") == Encoding.Utf8)
+    @expect(sniff("<meta name=description content=\"charset=latin1\">caf\xC3\xA9", "") == Encoding.Utf8)
+    @expect(sniff("<meta content='text/html; charset=windows-1252' http-equiv='Content-Type'>\xC3\xA9", "") == Encoding.Windows1252)
+    @expect(sniff("<metadata charset=latin1>caf\xC3\xA9", "") == Encoding.Utf8)
+    @expect(sniff("<meta charset=\"UTF-16LE\">caf\xE9", "") == Encoding.Utf8)
+    @expect(sniff("<title>x > y</title><META CHARSET=ISO-8859-1>", "") == Encoding.Windows1252)
+    @expect(labelIs("ISO_8859-1:1987", Encoding.Windows1252))
 }
 
 test "sniffing" {
