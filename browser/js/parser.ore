@@ -78,7 +78,11 @@ pub struct Parser {
         return false
     }
 
+    // The text of a token; the name of an identifier written with escapes.
     fn tokText(self: *Self, t: Token) []u8 {
+        if t.kind == Tok.Ident && t.len > 0 {
+            return self.lx.cookedOf(t)
+        }
         return self.src[t.start as usize..t.end as usize]
     }
 

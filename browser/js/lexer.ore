@@ -285,11 +285,31 @@ struct Lexer {
         let start = self.pos
         let c = self.src[self.pos]
         if isIdStart(c) || c == '\\' {
-            while self.pos < self.src.len && isIdPart(self.src[self.pos]) {
-                self.pos += 1
+            // An identifier with `\uXXXX` escapes (`a.ɵprov`) is an
+            // identifier (never a keyword) whose name is cooked.
+            let off = self.out.cooked.len()
+            var escaped = false
+            var plain = start
+            while self.pos < self.src.len {
+                let ch = self.src[self.pos]
+                if isIdPart(ch) {
+                    self.pos += 1
+                } else if ch == '\\' && self.peekAt(1) == 'u' {
+                    try self.out.cooked.append(self.src[plain..self.pos])
+                    self.pos += 2
+                    try appendWtf8(&mut self.out.cooked, try self.unicodeEscape())
+                    escaped = true
+                    plain = self.pos
+                } else {
+                    break
+                }
             }
             if self.pos == start {
                 return self.fail("Invalid or unexpected token")
+            }
+            if escaped {
+                try self.out.cooked.append(self.src[plain..self.pos])
+                return self.emit(Tok.Ident, start, 0.0, off, self.out.cooked.len() - off)
             }
             return self.emit(keyword(self.src[start..self.pos]), start, 0.0, 0, 0)
         }
