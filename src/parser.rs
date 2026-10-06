@@ -275,7 +275,13 @@ impl Parser {
             Tok::Kw(Kw::Error) => Ok(Item::ErrorSet(self.error_decl(is_pub)?)),
             Tok::Kw(Kw::Interface) => Ok(Item::Interface(self.interface_decl(is_pub)?)),
             Tok::Kw(Kw::Test) if !is_pub => Ok(Item::Test(self.test_decl()?)),
-            Tok::Kw(Kw::Let) | Tok::Kw(Kw::Var) => Ok(Item::Global(self.global_decl(is_pub)?)),
+            Tok::Kw(Kw::Let) | Tok::Kw(Kw::Var) => {
+                let g = self.global_decl(is_pub)?;
+                match &g.init.kind {
+                    ExprKind::Builtin { name, .. } if name == "cimport" => Ok(Item::CImport(cimport_decl(g)?)),
+                    _ => Ok(Item::Global(g)),
+                }
+            }
             Tok::Kw(k) if is_unsupported_kw(k) => Err(not_supported(k, self.span())),
             Tok::Ident(n) if n == "union" && matches!(self.toks.get(self.pos + 1).map(|t| &t.tok), Some(Tok::Ident(_))) => {
                 Err(Error::new(E0006, self.span(), "a union is declared `extern union Name { ... }` (a C union); a tagged union is an `enum`"))
@@ -1605,4 +1611,37 @@ mod tests {
         let e = parse_src("fn f() {\n let b = 1 < 2 < 3\n}").unwrap_err();
         assert_eq!(e.msg, "comparison operators cannot be chained");
     }
+}
+
+/// `let name = @cimport("header.h", "-Idir", ...)`: a top-level `let`
+/// (not `pub`, no type) whose arguments are string literals.
+fn cimport_decl(g: GlobalDecl) -> Result<CImportDecl> {
+    let ExprKind::Builtin { args, .. } = g.init.kind else { unreachable!() };
+    let call_span = g.init.span;
+    if g.is_pub {
+        return Err(Error::new(E0112, g.kw_span, "a `@cimport` cannot be `pub`: export Ore functions that wrap the C ones instead"));
+    }
+    if g.mutable {
+        return Err(Error::new(E0112, g.kw_span, format!("a `@cimport` is named with `let`: `let {} = @cimport(...)`", g.name)));
+    }
+    if let Some(t) = &g.ty {
+        return Err(Error::new(E0112, t.span, format!("a `@cimport` has no type: `let {} = @cimport(...)`", g.name)));
+    }
+    let mut strs = Vec::new();
+    for a in &args {
+        let ExprKind::Str(bytes) = &a.kind else {
+            return Err(Error::new(E0112, a.span, "`@cimport` takes string literals: the header, then flags (`@cimport(\"zlib.h\", \"-DZ_PREFIX\")`)"));
+        };
+        strs.push((String::from_utf8_lossy(bytes).into_owned(), a.span));
+    }
+    let Some(((header, header_span), flags)) = strs.split_first() else {
+        return Err(Error::new(E0112, call_span, "`@cimport` needs a header: `@cimport(\"zlib.h\")`"));
+    };
+    if header.is_empty() || header.starts_with('-') {
+        return Err(Error::new(E0112, *header_span, "the first argument of `@cimport` is the header, such as `\"zlib.h\"`"));
+    }
+    for (f, span) in flags {
+        crate::cimport::check_flag(f).map_err(|e| Error::new(E0112, *span, e))?;
+    }
+    Ok(CImportDecl { name: g.name, span: g.span, header: header.clone(), call_span, flags: flags.iter().map(|(f, _)| f.clone()).collect() })
 }

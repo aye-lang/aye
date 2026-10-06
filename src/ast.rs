@@ -27,6 +27,20 @@ pub enum Item {
     Global(GlobalDecl),
     /// `@link("name")`: a C library to link with.
     Link(LinkDecl),
+    /// `let c = @cimport("header.h", ...)`: a C header's declarations.
+    CImport(CImportDecl),
+}
+
+/// `let name = @cimport("header.h", "-Idir", ...)` at the top level: the
+/// module loader binds `name` to a module generated from the header.
+#[derive(Debug, Clone)]
+pub struct CImportDecl {
+    pub name: String,
+    pub span: Span,
+    pub header: String,
+    /// The `@cimport` call.
+    pub call_span: Span,
+    pub flags: Vec<String>,
 }
 
 /// `@link("name")` at the top level: `name` is a `pkg-config` package, a

@@ -1,0 +1,1 @@
+cimport_value.ore:4:13: error[E0112]: `@cimport` is a declaration at the top level of a file, not a value: `let c = @cimport("zlib.h")`, then `c.name`

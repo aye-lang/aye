@@ -18,6 +18,10 @@ Requirements: Rust (cargo), and `clang` on `PATH`. Developed on macOS arm64
 with Apple clang 17. Programs that `@link` a C library find it through
 `pkg-config` when it knows the name; the tests in `tests/ffi` use libcurl and
 SDL2 (`brew install sdl2`) and are skipped when `pkg-config` lacks them.
+`@cimport` reads C headers with libclang, which the compiler loads only
+when it needs it (it comes with the Command Line Tools on macOS; on Linux,
+the clang or `libclang` packages); the tests in `tests/cimport` are skipped
+without it.
 
 ```sh
 cargo build --release
@@ -36,6 +40,7 @@ ore fix <path>                                        # apply the fix-its of `or
 ore test <path> [--filter <text>] [--module <m>] [--json] [--mode debug|safe|fast]   # run the `test` blocks of every module
 ore fmt [--check] <path>                              # format in place (a directory: every .ore file under it)
 ore doc --signatures <path>                           # every pub declaration with its /// comment (also `std`, `std.text`)
+ore cimport <header> [-Idir] [-DNAME[=value]] [--link lib]   # print the Ore declarations `@cimport` makes of a C header
 ore explain <code>                                    # explain an error code, with a wrong and a fixed example
 ore spec                                              # print the language reference (docs/spec.md)
 ```
@@ -379,7 +384,10 @@ pub fn main() {
   `?[*]T`, `@ptrCast(T, p)`, `@sizeOf(T)`, `@zeroed(T)`, and `@link("name")`
   (`pkg-config` flags, `-lname` or `framework:Name`) for `ore build`, `run`
   and `test`; `@linkOptional("name")` with `@hasLink("name")` for a library
-  the program can do without.
+  the program can do without; `let c = @cimport("zlib.h")` declares a C
+  header's functions, structs, unions, enum constants, typedefs and
+  `#define`d constants, read with libclang and cached in
+  `~/.cache/ore/cimport`.
 - Types: `i8..i64 u8..u64 isize usize f32 f64 bool` (and `c_int`,
   `c_long`, ... for C), structs, enums, error
   sets, `[N]T` (`N` a constant), `simd[N]T` (vectors), `[]T`, `[]mut T` (writable elements), `*T`, `*mut T`, `?T`,

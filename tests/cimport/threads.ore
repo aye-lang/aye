@@ -1,0 +1,41 @@
+// POSIX threads through `pthread.h`. `pthread_t` and `pthread_attr_t` are
+// typedefs of other headers (`sys/_pthread/` on macOS,
+// `bits/pthreadtypes.h` on Linux) that the functions use, so `@cimport`
+// declares them too, with the fields of the records they name: an
+// attribute lives on the stack with the size C gives it.
+
+@link("pthread")
+
+let pt = @cimport("pthread.h")
+
+struct Job {
+    n: i64
+    sum: i64
+}
+
+fn work(arg: ?[*]u8) ?[*]u8 {
+    if arg |p| {
+        let job = @ptrCast(*mut Job, p)
+        var i: i64 = 1
+        while i <= job.n {
+            job.sum += i
+            i += 1
+        }
+    }
+    return null
+}
+
+pub fn main() {
+    var job = Job { n: 100, sum: 0 }
+    var attr = @zeroed(pt.pthread_attr_t)
+    @println(pt.pthread_attr_init(&mut attr) == 0)
+    @println(pt.pthread_attr_setstacksize(&mut attr, 1 << 20) == 0)
+    var size: usize = 0
+    @println(pt.pthread_attr_getstacksize(&attr, &mut size) == 0)
+    @println(size)
+    var thread = @zeroed(pt.pthread_t)
+    @println(pt.pthread_create(&mut thread, &attr, work, @ptrCast([*]u8, &mut job)) == 0)
+    @println(pt.pthread_join(thread, null) == 0)
+    @println(job.sum)
+    @println(pt.pthread_attr_destroy(&mut attr) == 0)
+}

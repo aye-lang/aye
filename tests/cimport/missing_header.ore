@@ -1,0 +1,7 @@
+// A header that is not found anywhere.
+
+let c = @cimport("no/such_header.h")
+
+pub fn main() {
+    c.nothing()
+}

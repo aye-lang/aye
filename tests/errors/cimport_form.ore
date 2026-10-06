@@ -1,0 +1,13 @@
+// `@cimport` is the whole value of a top-level `let`, with string literals.
+
+let HEADER = "zlib.h"
+
+pub let a = @cimport("zlib.h")
+var b = @cimport("zlib.h")
+let c: i32 = @cimport("zlib.h")
+let d = @cimport()
+let e = @cimport(HEADER)
+let f = @cimport("zlib.h", "-O2")
+let g = @cimport("-DX=1")
+
+pub fn main() {}

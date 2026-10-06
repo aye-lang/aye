@@ -9,7 +9,9 @@ agent protocol is in `docs/agent-protocol.md`.
 From the repository root, with SDL2, FreeType and libcurl installed
 (`pkg-config` must find them); HarfBuzz (text shaping: Arabic, Indic
 scripts, icon font ligatures) and libbrotlidec (WOFF 2 web fonts) are
-used when they are installed:
+used when they are installed. The first build also needs libclang, for the
+`@cimport` of `pthread.h` in `js/js.ore` (macOS has it with the Command
+Line Tools; later builds read the declarations from `~/.cache/ore`):
 
 ```
 cargo build --release

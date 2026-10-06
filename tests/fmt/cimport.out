@@ -1,0 +1,10 @@
+@link("zlib")
+let z = @cimport("zlib.h", "-DZ_SOLO",
+    "-Iinclude",
+)
+let m = @cimport("math.h")
+
+pub fn main() {
+    @println(m.sqrt(2.0) * 2.0)
+    @println(z.Z_OK)
+}
