@@ -1,0 +1,187 @@
+// Conservative candidate selection, not a selector matcher. A complex
+// selector is indexed by one *required* simple selector in its rightmost
+// compound: id, else class, else type. :is()/:where() alternatives are
+// indexed recursively; attribute-only, negative and universal selectors
+// stay in the fallback bucket. Selector lists index
+// every alternative; candidates are deduplicated and restored to source
+// order before the existing cascade (including maximum specificity).
+import dom.Document
+import dom.NodeId
+import std.list.List
+import std.map.StrMap
+import std.mem.AllocError
+import std.mem.Allocator
+import std.sort
+import std.text
+
+struct RuleLink {
+    rule: usize
+    next: ?usize
+}
+
+pub struct RuleIndex {
+    alloc: Allocator
+    ids: StrMap(usize)
+    classes: StrMap(usize)
+    tags: StrMap(usize)
+    links: List(RuleLink)
+    fallback: List(usize)
+    selected: List(usize)
+    rules: usize
+    ready: bool
+
+    pub fn init(alloc: Allocator) RuleIndex {
+        return RuleIndex {
+            alloc: alloc,
+            ids: StrMap(usize).init(alloc),
+            classes: StrMap(usize).init(alloc),
+            tags: StrMap(usize).init(alloc),
+            links: List(RuleLink).init(alloc),
+            fallback: List(usize).init(alloc),
+            selected: List(usize).init(alloc),
+            rules: 0,
+            ready: false,
+        }
+    }
+
+    pub fn deinit(self: *mut Self) {
+        self.ids.deinit()
+        self.classes.deinit()
+        self.tags.deinit()
+        self.links.deinit()
+        self.fallback.deinit()
+        self.selected.deinit()
+    }
+
+    fn build(self: *mut Self, sheet: *Sheet) AllocError!void {
+        if self.ready && self.rules == sheet.rules.len() {
+            return
+        }
+        // Sheet sources are immutable for the lifetime of Styles. A
+        // caller appending rules is supported too, by rebuilding.
+        let alloc = self.alloc
+        self.deinit()
+        self.* = RuleIndex.init(alloc)
+        for ri, r in sheet.rules.items() {
+            var fallback = false
+            for k in r.sel_start..r.sel_end {
+                if !(try self.addComplex(sheet, ri, sheet.complexes.items()[k], 0)) {
+                    fallback = true
+                }
+            }
+            if fallback {
+                try self.fallback.append(ri)
+            }
+        }
+        self.rules = sheet.rules.len()
+        self.ready = true
+    }
+
+    // True when every way this selector can match has a required key.
+    // Partial indexing is harmless when false: the rule also goes in
+    // fallback. Depth limits only reduce filtering, never correctness.
+    fn addComplex(self: *mut Self, sheet: *Sheet, ri: usize, cx: Complex, depth: usize) AllocError!bool {
+        if cx.end <= cx.start || depth >= 16 {
+            return false
+        }
+        let right = sheet.compounds.items()[cx.end - 1]
+        var key: ?Simple = null
+        var alternatives: ?Simple = null
+        for si in right.start..right.end {
+            let s = sheet.simples.items()[si]
+            if s.kind == SelKind.Id {
+                key = s
+                break
+            }
+            if s.kind == SelKind.Class {
+                key = s
+            } else if s.kind == SelKind.Type && key == null {
+                key = s
+            } else if s.kind == SelKind.Is && alternatives == null {
+                alternatives = s
+            }
+        }
+        if key |s| {
+            var map = &mut self.tags
+            if s.kind == SelKind.Id {
+                map = &mut self.ids
+            } else if s.kind == SelKind.Class {
+                map = &mut self.classes
+            }
+            let at = self.links.len()
+            try self.links.append(RuleLink { rule: ri, next: map.get(s.name) })
+            try map.put(s.name, at)
+            return true
+        }
+        if alternatives |s| {
+            var all = s.sub_end > s.sub_start
+            for k in s.sub_start..s.sub_end {
+                if !(try self.addComplex(sheet, ri, sheet.complexes.items()[k], depth + 1)) {
+                    all = false
+                }
+            }
+            return all
+        }
+        return false
+    }
+
+    fn bucket(self: *mut Self, first: ?usize) AllocError!void {
+        var cur = first
+        while cur |i| {
+            let link = self.links.items()[i]
+            try self.selected.append(link.rule)
+            cur = link.next
+        }
+    }
+
+    pub fn candidates(self: *mut Self, sheet: *Sheet, doc: *Document, el: NodeId) AllocError![]usize {
+        try self.build(sheet)
+        self.selected.clear()
+        for ri in self.fallback.items() {
+            try self.selected.append(ri)
+        }
+        if doc.attr(el, "id") |id| {
+            try self.bucket(self.ids.get(id))
+        }
+        if doc.attr(el, "class") |classes| {
+            var i: usize = 0
+            while i < classes.len {
+                while i < classes.len && isSpaceByte(classes[i]) {
+                    i += 1
+                }
+                let start = i
+                while i < classes.len && !isSpaceByte(classes[i]) {
+                    i += 1
+                }
+                if i > start {
+                    try self.bucket(self.classes.get(classes[start..i]))
+                }
+            }
+        }
+        let tag = doc.node(el).name
+        var upper = false
+        for b in tag {
+            if b >= 'A' && b <= 'Z' {
+                upper = true
+            }
+        }
+        if upper {
+            // The matcher compares type names ignoring ASCII case, even
+            // for a programmatically created mixed-case element.
+            var it = self.tags.iterator()
+            while it.next() |entry| {
+                if text.eqlIgnoreCase(entry.key, tag) {
+                    try self.bucket(entry.value.*)
+                }
+            }
+        } else {
+            try self.bucket(self.tags.get(tag))
+        }
+        sort.sort(usize, self.selected.items(), ruleBefore)
+        return self.selected.items()
+    }
+}
+
+fn ruleBefore(a: usize, b: usize) bool {
+    return a < b
+}

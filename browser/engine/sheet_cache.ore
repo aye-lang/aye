@@ -1,0 +1,89 @@
+// The inputs to authorSheets, not every DOM mutation. In particular,
+// preload links and empty style elements do not affect the cascade.
+// Include media and the base URL too: changing either must reparse.
+import css
+import dom
+import dom.Document
+import dom.Kind
+import dom.NodeId
+import std.mem.AllocError
+import std.text
+
+fn sheetSourceKey(doc: *Document) u64 {
+    var key: u64 = 1469598103934665603
+    var base_seen = false
+    var cur: ?NodeId = doc.root
+    while cur |h| {
+        let n = doc.node(h)
+        if n.kind == Kind.Element {
+            if text.eql(n.name, "base") && !base_seen {
+                if doc.attr(h, "href") |href| {
+                    key = sheetMix(key, 1)
+                    key = sheetTextKey(key, href)
+                    base_seen = true
+                }
+            } else if text.eql(n.name, "style") && styleHasText(doc, h) {
+                key = sheetMix(key, 2)
+                key = sheetMix(key, h.index as u64)
+                key = sheetTextKey(key, doc.attr(h, "media") orelse "")
+                var t = doc.following(h, h)
+                while t |c| {
+                    if doc.node(c).kind == Kind.Text {
+                        key = sheetTextKey(key, doc.node(c).data)
+                    }
+                    t = doc.following(c, h)
+                }
+            } else if text.eql(n.name, "link") && isStylesheetLink(doc, h) {
+                key = sheetMix(key, 3)
+                key = sheetMix(key, h.index as u64)
+                key = sheetTextKey(key, doc.attr(h, "href") orelse "")
+                key = sheetTextKey(key, doc.attr(h, "rel") orelse "")
+                key = sheetTextKey(key, doc.attr(h, "media") orelse "")
+            }
+        }
+        cur = doc.following(h, doc.root)
+    }
+    return key
+}
+
+fn styleHasText(doc: *Document, el: NodeId) bool {
+    var cur = doc.following(el, el)
+    while cur |h| {
+        if doc.node(h).kind == Kind.Text && doc.node(h).data.len > 0 {
+            return true
+        }
+        cur = doc.following(h, el)
+    }
+    return false
+}
+
+fn sheetTextKey(key: u64, value: []u8) u64 {
+    var next = sheetMix(key, value.len as u64)
+    for b in value {
+        next = sheetMix(next, b as u64)
+    }
+    return next
+}
+
+fn sheetMix(key: u64, value: u64) u64 {
+    return (key ^ value) *% 1099511628211
+}
+
+// getComputedStyle parsed these sheets already. Transfer their ownership
+// to the page's full styling when the viewport and sources still agree;
+// compute fresh values (the reader cache covered only queried ancestors).
+fn takeReaderStyling(p: *mut Page, media: css.Media) AllocError!?*mut Styling {
+    let s = p.script orelse return null
+    let c = s.computed orelse return null
+    if c.media.width != media.width || c.media.height != media.height || s.computed_sheets != sheetSourceKey(&p.doc) {
+        return null
+    }
+    var styles = try css.Styles.init(p.alloc)
+    errdefer styles.deinit()
+    try css.computeStyles(&p.doc, &c.ua, &c.author, media, &mut styles)
+    c.styles.deinit()
+    c.styles = styles
+    c.version = domVersion(p)
+    s.computed = null
+    return c
+}

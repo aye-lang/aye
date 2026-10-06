@@ -11,6 +11,7 @@
 // declaration is dropped up to the next `;`. Blocks are matched by their
 // bracket kind, so a stray `}` or `)` inside a value cannot end a rule.
 
+import perf
 import std.list.List
 import std.mem
 import std.mem.Allocator
@@ -26,6 +27,8 @@ pub struct DeclRange {
 
 /// Parses the style sheet `src` and appends its rules to `sheet`.
 pub fn parseSheet(sheet: *mut Sheet, src: []u8, media: Media) AllocError!void {
+    let began = perf.start()
+    defer perf.end("css_parse", began, sheet.base)
     let toks = try tokens(sheet, src)
     var p = Parser { sheet: sheet, toks: toks, media: media, styled: false }
     try p.rules(0, toks.len, true)

@@ -1,0 +1,134 @@
+// A disk archive of the requests actually made by a page load. Recording
+// preserves original URLs (no HTML/CSS/JS rewriting); replay never falls
+// through to HTTP. The runner creates the directory and keeps it private:
+// responses may contain personalized content. This is a benchmark tool,
+// not an HTTP cache (no expiry, validation, or cookie/header replay).
+import std
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+import url.Url
+
+fn archiveDir(name: []u8) ?[]u8 {
+    if getenv(name.ptr) |p| {
+        return p[0..strlen(p)]
+    }
+    return null
+}
+
+pub fn archiveReplay() bool {
+    return archiveDir("ANYKNOWN_REPLAY") != null
+}
+
+fn archivePath(alloc: Allocator, dir: []u8, target: *Url, req: Request) AllocError![]mut u8 {
+    var hash: u64 = 0xcbf29ce484222325
+    for b in target.withoutFragment() {
+        hash = (hash ^ b as u64) *% 0x100000001b3
+    }
+    if req.body |body| {
+        for b in body.content_type {
+            hash = (hash ^ b as u64) *% 0x100000001b3
+        }
+        for b in body.data {
+            hash = (hash ^ b as u64) *% 0x100000001b3
+        }
+    }
+    var path = text.Builder.init(alloc)
+    defer path.deinit()
+    try path.append(dir)
+    try path.appendByte('/')
+    try path.appendUint(hash)
+    try path.append(".response")
+    return path.toOwned()
+}
+
+// Header: original URL, status (0 for error), MIME, charset, final URL,
+// error description, each on one line, then the unmodified body.
+pub fn archiveRead(alloc: Allocator, target: *Url, req: Request) FetchError!?Response {
+    let dir = archiveDir("ANYKNOWN_REPLAY") orelse return null
+    let path = try archivePath(alloc, dir, target, req)
+    defer alloc.free(path)
+    let bytes = std.fs.readFile(alloc, path) catch |e| {
+        std.log.err("archive miss: {}", target.withoutFragment())
+        return FetchError.NotFound
+    }
+    defer alloc.free(bytes)
+    var fields = [6][]u8{"", "", "", "", "", ""}
+    var at: usize = 0
+    for i in 0..fields.len {
+        let n = text.indexOf(bytes[at..], "\n") orelse return FetchError.ReadFailed
+        fields[i] = bytes[at..at + n]
+        at += n + 1
+    }
+    if !text.eql(fields[0], target.withoutFragment()) {
+        return FetchError.ReadFailed
+    }
+    let status = text.parseInt(fields[1]) catch |e| { return FetchError.ReadFailed }
+    if status == 0 {
+        return archivedError(fields[5])
+    }
+    let mime = try dup(alloc, fields[2])
+    errdefer release(alloc, mime)
+    let charset = try dup(alloc, fields[3])
+    errdefer release(alloc, charset)
+    let moved = try dup(alloc, fields[4])
+    errdefer release(alloc, moved)
+    let body = try dup(alloc, bytes[at..])
+    return Response { mime: mime, charset: charset, body: body, status: status, url: moved }
+}
+
+fn archivedError(why: []u8) FetchError {
+    let errors = [14]FetchError{FetchError.NotFound, FetchError.AccessDenied, FetchError.OpenFailed, FetchError.ReadFailed, FetchError.Invalid, FetchError.Unsupported, FetchError.CannotResolve, FetchError.CannotConnect, FetchError.Timeout, FetchError.TooManyRedirects, FetchError.TooLarge, FetchError.Tls, FetchError.Network, FetchError.OutOfMemory}
+    for e in errors {
+        if text.eql(why, describe(e)) {
+            return e
+        }
+    }
+    return FetchError.ReadFailed
+}
+
+pub fn archiveWrite(alloc: Allocator, target: *Url, req: Request, res: ?*Response, failure: []u8) {
+    let dir = archiveDir("ANYKNOWN_RECORD") orelse return
+    saveArchive(alloc, dir, target, req, res, failure) catch |e| {
+        std.log.err("cannot record archive: {}", target.withoutFragment())
+    }
+}
+
+fn saveArchive(alloc: Allocator, dir: []u8, target: *Url, req: Request, res: ?*Response, failure: []u8) !void {
+    let path = try archivePath(alloc, dir, target, req)
+    defer alloc.free(path)
+    // A snapshot is immutable: repeated fetches replay its first response.
+    if std.fs.exists(path) {
+        return
+    }
+    var header = text.Builder.init(alloc)
+    defer header.deinit()
+    try header.append(target.withoutFragment())
+    try header.appendByte('\n')
+    var status: i64 = 0
+    var mime: []u8 = ""
+    var charset: []u8 = ""
+    var moved: []u8 = ""
+    var body: []u8 = ""
+    if res |r| {
+        status = r.status
+        mime = r.mime
+        charset = r.charset
+        moved = r.url
+        body = r.body
+    }
+    try header.appendInt(status)
+    try header.appendByte('\n')
+    try header.append(mime)
+    try header.appendByte('\n')
+    try header.append(charset)
+    try header.appendByte('\n')
+    try header.append(moved)
+    try header.appendByte('\n')
+    try header.append(failure)
+    try header.appendByte('\n')
+    let file = try std.fs.create(path)
+    defer file.close()
+    try file.write(header.bytes())
+    try file.write(body)
+}

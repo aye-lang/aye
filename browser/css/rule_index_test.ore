@@ -1,0 +1,96 @@
+// The index must never reject a selector the full matcher accepts.
+import dom
+import std.text
+
+test "rule index conservatively selects alternatives and pseudos" {
+    let a = @testAllocator()
+    var doc = try dom.Document.init(a)
+    defer doc.deinit()
+    let parent = try doc.createElement("section", []dom.Attr{})
+    doc.appendChild(doc.root, parent)
+    let attrs = [3]dom.Attr{
+        dom.Attr { name: "id", value: "target" },
+        dom.Attr { name: "class", value: "active\tother\nactive\x0cshared" },
+        dom.Attr { name: "data-test", value: "yes" },
+    }
+    let el = try doc.createElement("DiV", attrs[..])
+    doc.appendChild(parent, el)
+    var sheet = try Sheet.init(a)
+    defer sheet.deinit()
+    let media = Media { width: 800.0, height: 600.0 }
+    try parseSheet(&mut sheet,
+        "* { color: red } #target, .active { color: green } .other.active { color: blue } section > div { color: red } section div.shared { color: green } :is(#target, .missing) { color: blue } :where(.active) { color: red } :is(:where(.active), :is(section div)) { color: blue } :is(.absent, *) { color: blue } :not(.missing) { color: green } [data-test=yes] { color: blue } .missing, #target::before { content: 'before' } div::after, .absent { content: 'after' } .absent > span { color: red }", media)
+    var index = RuleIndex.init(a)
+    defer index.deinit()
+    let candidates = try index.candidates(&sheet, &doc, el)
+    expectCandidates(&sheet, &doc, el, candidates)
+    // A parse appending to a used sheet rebuilds the index.
+    try parseSheet(&mut sheet, "#target { color: blue }", media)
+    expectCandidates(&sheet, &doc, el, try index.candidates(&sheet, &doc, el))
+    // It uses current id/class attributes, never the previous element's.
+    try doc.setAttr(el, "id", "changed")
+    try doc.setAttr(el, "class", "missing")
+    expectCandidates(&sheet, &doc, el, try index.candidates(&sheet, &doc, el))
+}
+
+fn expectCandidates(sheet: *Sheet, doc: *dom.Document, el: dom.NodeId, candidates: []usize) {
+    for i in 1..candidates.len {
+        @expect(candidates[i - 1] <= candidates[i])
+    }
+    for ri, r in sheet.rules.items() {
+        var matched = false
+        for k in r.sel_start..r.sel_end {
+            let cx = sheet.complexes.items()[k]
+            if matchesComplex(sheet, doc, cx, el) || matchesPseudo(sheet, doc, cx, el, 1) || matchesPseudo(sheet, doc, cx, el, 2) {
+                matched = true
+            }
+        }
+        if matched {
+            var found = false
+            for c in candidates {
+                if c == ri {
+                    found = true
+                }
+            }
+            @expect(found)
+        }
+    }
+}
+
+test "rule index skips unrelated classes and keeps cascade order" {
+    let a = @testAllocator()
+    var doc = try dom.Document.init(a)
+    defer doc.deinit()
+    let attrs = [2]dom.Attr{
+        dom.Attr { name: "id", value: "target" },
+        dom.Attr { name: "class", value: "active other" },
+    }
+    let el = try doc.createElement("div", attrs[..])
+    doc.appendChild(doc.root, el)
+    var sheet = try Sheet.init(a)
+    defer sheet.deinit()
+    var src = text.Builder.init(a)
+    defer src.deinit()
+    for i in 0..2000 {
+        try src.append(".unrelated")
+        try src.appendUint(i as u64)
+        try src.append(" { color: red }\n")
+    }
+    try src.append("#target, .active { color: green } .other { color: red } #target { color: blue }")
+    let media = Media { width: 800.0, height: 600.0 }
+    try parseSheet(&mut sheet, src.bytes(), media)
+    var index = RuleIndex.init(a)
+    defer index.deinit()
+    let candidates = try index.candidates(&sheet, &doc, el)
+    @expect(candidates.len <= 4)
+    expectCandidates(&sheet, &doc, el, candidates)
+    var ua = try Sheet.init(a)
+    defer ua.deinit()
+    var styles = try Styles.init(a)
+    defer styles.deinit()
+    try computeStyles(&doc, &ua, &sheet, media, &mut styles)
+    var value = text.Builder.init(a)
+    defer value.deinit()
+    try writeValue(styles.get(el).?[COLOR], &mut value)
+    @expect(text.eql(value.bytes(), "rgb(0, 0, 255)"))
+}

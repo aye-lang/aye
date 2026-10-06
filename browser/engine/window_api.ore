@@ -637,36 +637,7 @@ fn computedStyling(s: *mut Script) AllocError!*mut Styling {
 // What the author style sheets come from: the style elements (their text)
 // and the stylesheet links (their href and rel), hashed into a number.
 fn sheetsKey(doc: *Document) u64 {
-    var key: u64 = 1469598103934665603
-    var cur: ?NodeId = doc.root
-    while cur |h| {
-        let n = doc.node(h)
-        if n.kind == Kind.Element && (text.eql(n.name, "style") || text.eql(n.name, "link")) {
-            key = mix(key, h.index as u64)
-            if text.eql(n.name, "style") {
-                var t = n.first_child
-                while t |c| {
-                    for b in doc.node(c).data {
-                        key = mix(key, b as u64)
-                    }
-                    t = doc.node(c).next
-                }
-            } else {
-                for b in doc.attr(h, "href") orelse "" {
-                    key = mix(key, b as u64)
-                }
-                for b in doc.attr(h, "rel") orelse "" {
-                    key = mix(key, b as u64)
-                }
-            }
-        }
-        cur = doc.following(h, doc.root)
-    }
-    return key
-}
-
-fn mix(key: u64, v: u64) u64 {
-    return (key ^ v) *% 1099511628211
+    return sheetSourceKey(doc)
 }
 
 fn dropComputed(s: *mut Script) {

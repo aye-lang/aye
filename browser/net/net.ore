@@ -3,6 +3,7 @@
 // (cookies.ore) and the cache (cache.ore) of the process's session
 // (session.ore).
 
+import perf
 import std.mem.AllocError
 import std.mem.Allocator
 import std.text
@@ -92,6 +93,20 @@ pub fn fetchWith(alloc: Allocator, target: *Url, body: ?*Body) FetchError!Respon
 
 /// Fetches `target` for `req`.
 pub fn request(alloc: Allocator, target: *Url, req: Request) FetchError!Response {
+    let began = perf.start()
+    defer perf.end("requests", began, target.href)
+    if try archiveRead(alloc, target, req) |res| {
+        return res
+    }
+    let res = requestLive(alloc, target, req) catch |e| {
+        archiveWrite(alloc, target, req, null, describe(e))
+        return e
+    }
+    archiveWrite(alloc, target, req, &res, "")
+    return res
+}
+
+fn requestLive(alloc: Allocator, target: *Url, req: Request) FetchError!Response {
     if text.eql(target.scheme, "file") {
         return fetchFile(alloc, target)
     }
