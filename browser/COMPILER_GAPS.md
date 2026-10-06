@@ -8,8 +8,8 @@ browser (performance, correctness, code); then the ones declined by
 design; then the fixed ones. Each entry: **Need**, **Repro**,
 **Workaround** (what `browser/` does today), **Hit by** (component and
 branch: B1 url/net/html/dom/encoding and the CLI, B2 css, B3
-font/layout, B4 paint/engine/ui, B5 forms and images, B6 js, B7 agent)
-and **Status**.
+font/layout, B4 paint/engine/ui, B5 forms and images, B6 js, B7 agent,
+B8 the real web) and **Status**.
 
 Fixed entries were checked against `target/release/ore` at the M9.6
 head with the repro or the milestone's feature form (`ore run`, `ore
@@ -401,9 +401,12 @@ there and can now be simplified.
 - **Workaround:** `FT_Long`, `FT_Pos` and `FT_Fixed` are C `long` (64
   bits on macOS and Linux, 32 on Windows); `font/freetype.ore`
   hard-codes `i64` (LP64) in the prefix of `FT_FaceRec` and in the
-  signatures of `FT_New_Face`/`FT_Get_Advance`.
+  signatures of `FT_New_Face`/`FT_Get_Advance`. C `clock()` returns a
+  `clock_t` (`unsigned long` on macOS, `long` on Linux);
+  `js/interp.ore` declares it returning `u64` for the script time
+  budget.
 - **Suggestion:** `c_long`/`c_ulong` that follow the target.
-- **Hit by:** font (B3).
+- **Hit by:** font (B3), js (B8).
 - **Status:** open.
 
 #### 16. No `extern union`
@@ -724,3 +727,18 @@ the milestone's feature form.
   `Writer` keeps its per-level "a value was written" flags in a `u64`
   bitmask (at most 64 levels of nesting). `@zeroed` of a plain struct
   stays open (entry 5).
+
+#### 47. A pointer to an array could not be indexed
+
+- **Need:** fill a C struct held as a byte array (a `sockaddr_un`, a
+  `[110]u8` local) in a helper.
+- **Repro:** `fn set(a: *mut [4]u8) { a[0] = 7 }` was E0043 ("cannot
+  index into a value of type `*mut [4]u8`"); Zig and Rust index through
+  the pointer.
+- **Hit by:** ui (B7). **Status:** fixed (319aa97): indexing
+  dereferences one pointer level when the pointee is an array, like
+  field access (`a[i]`, `a[i] = v`, bounds-checked; writing through a
+  `*[N]T` is E0033). Browser still uses the workaround: `ui/socket.ore`
+  passes a slice (`addr: []mut u8`, called with `addr[..]`). No other
+  code in `browser/` works around it (helpers that take `x[..]` take a
+  slice by design).

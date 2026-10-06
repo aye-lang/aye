@@ -49,7 +49,7 @@ Same rules as `milestones.md`: tests first; a milestone is done when its
 acceptance tests pass. Tests run headless and offline (`file:` fixtures
 and a local test server), so CI needs no network and no display.
 
-**Status.** B1–B6 are done, and so is the core of B7:
+**Status.** B1–B6 are done, and so is the core of B7; B8 is under way:
 
 | | State | Tests (`cargo test --test browser`) |
 |---|---|---|
@@ -60,7 +60,7 @@ and a local test server), so CI needs no network and no display.
 | B5 forms and images | done | form sessions over HTTP, window form scripts, image decoder unit tests, form and image screenshots |
 | B6 JavaScript | done | 212 conformance scripts (`anyknown js`), 30 DOM fixtures (`dump --tree --js`, also under GC stress), a to-do app session, window script test, GC unit tests |
 | B7 agent interface | core done | 17 snapshot/Markdown fixtures, session and MCP transcripts (with `eval` and `wait`) |
-| B8 the real web | not started | |
+| B8 the real web | in progress | net over the local server (`net_http`, the `net_cookies` and `base` agent sessions), HTML/CSS fixtures (templates, quirks, hints, `var()`/`calc()`, at-rules, `@import`), layout fixtures of site shapes (floats, positioned boxes, grid, `details`), hit testing by layer (`window_hit_layers`), JS conformance scripts for generators, async, Symbol and the web APIs |
 
 All the front ends share `engine/`: the window, `screenshot` and the
 agent sessions load pages through `engine.load` and keep history in a
@@ -69,11 +69,16 @@ agent sessions load pages through `engine.load` and keep history in a
 - **B6 leftovers:** scripts that run while the document is parsed
   (`document.write`, an inline script seeing only the DOM before it),
   modules, `getComputedStyle` and layout
-  queries (`getBoundingClientRect` is all zeros), live NodeLists,
-  interrupting a script that never returns.
+  queries (`getBoundingClientRect` is all zeros), live NodeLists.
 - **B7:** `screenshot` and `tabs` commands, and the shared window
   (`--agent-socket`) where a human and an agent drive one page.
-- **B8:** the real web (cookies, gzip, `<base>`, a list of public sites).
+- **B8:** `fixed` boxes scroll away with the page (they are placed once
+  in the initial containing block) and `sticky` is `relative`; the
+  observers are stand-ins (below); no `getComputedStyle` or
+  `getBoundingClientRect`; no Shift_JIS, GBK or Big5 (only UTF-8 and
+  windows-1252) and no public suffix list for cookies (a bare top-level
+  name is refused, `co.uk` is not); the list of public sites in
+  `docs/browser-sites.md` is not written yet.
 
 The compiler gaps the browser met, and which of them M9.5/M9.6 fixed,
 are in `browser/COMPILER_GAPS.md`.
@@ -102,7 +107,8 @@ are in `browser/COMPILER_GAPS.md`.
   `:not()`, `:hover`, `:link`, lists.
 - Cascade with specificity, `!important`, inline `style`, a UA
   stylesheet, inheritance, `inherit`/`initial`.
-- Computed values: display, position (static/relative), color,
+- Computed values: display, position (static, relative, absolute,
+  fixed; sticky as relative), float, clear, z-index, color,
   background-color, font-size/weight/style/family, line-height,
   margin/padding/border (widths, colors, styles), width/height/min/max,
   text-align, text-decoration, white-space, list-style-type, visibility,
@@ -137,8 +143,10 @@ are in `browser/COMPILER_GAPS.md`.
   byte), PNG checks, and headless window tests (SDL's dummy driver,
   `--frames N` with scripted `--events`, `--state`, `--save`; see
   `browser/ui/script.ore`). The interactive checks are in
-  `docs/browser-manual-checklist.md`. Simplifications: painting follows
-  tree order (no z-index or stacking contexts), clips are rectangles,
+  `docs/browser-manual-checklist.md`. Simplifications: positioned boxes
+  are painted after the rest of their layer in z-index order (negative
+  ones first) and hit testing searches in the reverse order, but there
+  are no other stacking contexts (opacity, transforms), clips are rectangles,
   the 3-D border styles are solid, and the style sheets are parsed again
   when the window is resized.
 
@@ -387,3 +395,38 @@ on (`--no-js` turns it off), `dump` with `--js`.
   documentation site) checked manually and recorded in
   `docs/browser-sites.md`; cookies, gzip, `<meta charset>`, `<base>`,
   `<noscript>`.
+- Done so far:
+  - *Net* (`net/session.ore`, `net/cookies.ore`, `net/http.ore`): one
+    session per process with one libcurl handle (connections, TLS
+    sessions and DNS kept), gzip/deflate/br, a cookie jar (Domain, Path,
+    Expires, Max-Age, Secure, HttpOnly, `__Secure-`/`__Host-`;
+    `ANYKNOWN_COOKIE_FILE` keeps persistent cookies between runs,
+    `document.cookie` reads and writes it), a subresource cache,
+    redirects followed by hand (each hop stores its cookies), Accept by
+    kind, Accept-Language, Referer (strict-origin-when-cross-origin), a
+    User-Agent with "anyknown" (also `navigator.userAgent`), 32 MB / 16
+    MB size limits, TLS errors. `<base href>` for links, forms, images,
+    sheets, scripts, `fetch` and `location`. A page's images, sheets and
+    scripts are fetched concurrently (libcurl multi, 6 connections per
+    host). The `<meta charset>` prescan follows WHATWG's (all the labels
+    of windows-1252 and UTF-8).
+  - *HTML and CSS:* `template` contents in an inert fragment, foster
+    parenting, quirks mode from the doctype, `noscript` following
+    scripting in the dumps, svg/math text kept out of them;
+    presentational hints (`bgcolor`, `font`, `align`, `width`, table
+    `border`, `cellpadding`, ...) and legacy color parsing; custom
+    properties and `var()`, `calc()`/`min()`/`max()`/`clamp()` (also in
+    media queries); `@supports`, `@layer` (as plain rules), `@import`
+    (relative to the importing sheet, at most 4 deep), media queries
+    level 4, `hsl()`, `light-dark()`, system colors; `font-family`
+    names map to sans, serif or monospace faces, serif by default.
+  - *Layout and paint:* floats and `clear`; `position: absolute` and
+    `fixed` (out of flow, laid out last in the containing block);
+    `display: grid` (track lists with `fr`, `minmax`, `repeat`, areas,
+    line placement, auto-placement); replaced boxes (svg, iframe,
+    embed, object, video, canvas) sized 300x150 by default; z-index
+    layers in paint and hit testing; frames shown as links; a closed
+    `details` shows only its `summary`.
+  - *JavaScript:* generators and async functions, Symbol and the
+    iterator protocol, `Function` and `eval` of strings, the web APIs
+    above, a processor-time budget per task (B6, above).
