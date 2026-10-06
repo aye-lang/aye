@@ -596,6 +596,15 @@ pub struct Ui {
             try self.relayout()
         }
         self.tab.settle(self.maxScroll())
+        // Where a script of the page scrolled while it loaded, else where
+        // the tab is; the scripts see the offset either way.
+        var y = self.tab.scroll
+        if self.tab.page |p| {
+            if engine.takeScriptScroll(p) |want| {
+                y = want
+            }
+        }
+        self.scrollTo(y)
         try self.address.set(self.tab.href())
         if self.focus == Focus.Address {
             self.focus = Focus.Page
@@ -664,6 +673,11 @@ pub struct Ui {
         if self.tab.scroll != before {
             self.dirty = true
             self.followScroll()
+        }
+        if self.tab.page |p| {
+            // Out of memory: the scripts see the old offset.
+            engine.setScriptScroll(p, self.tab.scroll) catch |e| {
+            }
         }
     }
 
@@ -1215,6 +1229,9 @@ pub struct Ui {
         if engine.treeVersion(p) != self.laid_version {
             try self.relayout()
             try self.setTitle()
+        }
+        if engine.takeScriptScroll(p) |y| {
+            self.scrollTo(y)
         }
     }
 

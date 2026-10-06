@@ -56,10 +56,10 @@ fn installWindow(s: *mut Script) JsError!void {
     try defMethod(it, o, "setCookie", 1, akSetCookie)
     try defMethod(it, o, "setDispatch", 1, akSetDispatch)
     try defMethod(it, o, "computedStyle", 2, akComputedStyle)
-    try defMethod(it, o, "displayed", 1, akDisplayed)
     try defMethod(it, o, "cssNames", 0, akCssNames)
     try defMethod(it, o, "supports", 1, akSupports)
     try installFrames(s, o)
+    try installGeometry(s, o)
     try installCssom(s, o)
     try installComponents(s, o)
     try installCanvas(it, o)
@@ -564,36 +564,6 @@ fn akCssNames(it: *mut Interp, a: Args) JsError!Value {
         try it.heap.pushElem(arr, v)
     }
     return it.pop()
-}
-
-// Is the element argument 0 rendered: in the document, and neither it nor
-// an ancestor `display: none`? (getClientRects: libraries tell visible
-// elements by their boxes.)
-fn akDisplayed(it: *mut Interp, a: Args) JsError!Value {
-    let h = ownHandle(it, it.arg(a, 0)) orelse return js.boolVal(false)
-    let s = scriptOf(it)
-    if !s.page.doc.isConnected(h) {
-        return js.boolVal(false)
-    }
-    if (try computedValues(s, h)) == null {
-        return js.boolVal(false)
-    }
-    let st = try computedStyling(s)
-    var cur: ?NodeId = h
-    while cur |c| {
-        if st.styles.get(c) |values| {
-            match values[css.DISPLAY] {
-                .Keyword { k } => {
-                    if text.eql(k, "none") {
-                        return js.boolVal(false)
-                    }
-                }
-                _ => {}
-            }
-        }
-        cur = dom.flatParent(&s.page.doc, c)
-    }
-    return js.boolVal(true)
 }
 
 // The computed values of the element `h` (in the document): the page's

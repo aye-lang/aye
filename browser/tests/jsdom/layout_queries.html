@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<title>Layout queries</title>
+<style>
+body { margin: 8px }
+#box { width: 100px; height: 50px; padding: 5px; border: 2px solid; margin: 10px 0 }
+#outer { position: relative; padding: 4px; border: 1px solid }
+#inner { margin-left: 20px; width: 30px; height: 10px; border-top: 3px solid }
+#line { width: 160px }
+#s { padding: 0 4px }
+#hidden { display: none }
+td { padding: 0 }
+</style>
+<div id="box">x</div>
+<div id="outer"><div id="inner"></div></div>
+<p id="line">Some <span id="s">inline text that wraps</span> end</p>
+<div id="hidden"><i id="hi">gone</i></div>
+<table id="t"><tr><td id="cell"><b id="b">x</b></td></tr></table>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+function rect(r) { return [r.x, r.y, r.width, r.height].join(','); }
+const $ = id => document.getElementById(id);
+// A block: its border box, relative to the viewport.
+const box = $('box');
+log('block', rect(box.getBoundingClientRect()), box.getClientRects().length, box.getClientRects()[0] instanceof DOMRect);
+log('offset', box.offsetTop, box.offsetLeft, box.offsetWidth, box.offsetHeight, box.offsetParent === document.body);
+log('client', box.clientTop, box.clientLeft, box.clientWidth, box.clientHeight, box.scrollWidth, box.scrollHeight);
+// Nested: offsets are from the padding edge of the positioned ancestor.
+const inner = $('inner');
+log('nested', rect(inner.getBoundingClientRect()), inner.offsetParent.id, inner.offsetTop, inner.offsetLeft, inner.clientTop, inner.clientHeight);
+// Inline: one rectangle per line; the bounding rectangle holds them all.
+const s = $('s');
+const rects = s.getClientRects();
+log('inline', rects.length, rects instanceof DOMRectList, [...rects].map(rect).join(' '), rect(rects.item(1)), rects.item(9));
+log('inline bounds', rect(s.getBoundingClientRect()), s.offsetWidth, s.offsetHeight, s.clientWidth, s.clientHeight);
+// Table cells are the offsetParent of what they hold.
+log('table', $('b').offsetParent.id, $('cell').offsetParent.id, $('t').offsetParent.tagName);
+// Not rendered: display none (also inside it) and detached elements.
+const loose = document.createElement('div');
+loose.style.width = '50px';
+for (const el of [$('hidden'), $('hi'), loose]) {
+  log('none', rect(el.getBoundingClientRect()), el.getClientRects().length, el.offsetWidth, el.offsetHeight, el.offsetTop, el.offsetParent, el.clientWidth, el.scrollHeight);
+}
+// The root and the viewport.
+const root = document.documentElement;
+log('root', root.clientWidth, root.clientHeight, innerWidth, innerHeight, root.scrollWidth, root.offsetParent, document.body.offsetParent, document.body.offsetTop);
+// Changes between two queries are seen by the second one.
+box.style.width = '200px';
+log('restyled', rect(box.getBoundingClientRect()), box.offsetWidth, box.clientWidth);
+box.style.borderWidth = '0';
+box.style.padding = '0';
+log('restyled', rect(box.getBoundingClientRect()), box.clientTop, box.clientWidth);
+document.body.insertBefore(document.createElement('hr'), box);
+log('moved', rect(box.getBoundingClientRect()), box.offsetTop);
+$('hidden').style.display = 'block';
+log('shown', rect($('hi').getBoundingClientRect()).split(',').map(Number).every(n => n >= 0), $('hi').getClientRects().length, $('hidden').offsetHeight);
+document.body.appendChild(loose);
+log('attached', loose.offsetWidth, loose.getBoundingClientRect().width);
+loose.remove();
+log('removed', loose.offsetWidth, loose.getClientRects().length);
+// DOMRect.
+const r = DOMRect.fromRect({ x: 1, y: 2, width: -3, height: 4 });
+log('DOMRect', r.left, r.right, r.top, r.bottom, JSON.stringify(new DOMRectReadOnly(1, 2, 3, 4)));
+</script>

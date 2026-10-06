@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<title>Scrolling from scripts</title>
+<style>
+body { margin: 0 }
+#list { height: 100px; overflow: auto; border: 5px solid; padding: 10px }
+.item { height: 40px }
+#plain { height: 20px }
+#tall { height: 2000px }
+#fixed { position: fixed; top: 10px; left: 0; width: 50px; height: 10px }
+</style>
+<div id="list"><div class="item" id="i0"></div><div class="item"></div><div class="item"></div><div class="item" id="i3"></div><div class="item"></div><div class="item" id="last"></div></div>
+<div id="plain"><div style="height: 50px"></div></div>
+<div id="fixed"></div>
+<div id="tall"></div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const $ = id => document.getElementById(id);
+const list = $('list');
+const events = [];
+list.addEventListener('scroll', e => events.push('list ' + list.scrollTop));
+window.addEventListener('scroll', e => events.push('window ' + scrollY + ' ' + (e.target === document)));
+// A scroll container: its scrolling area is its padding box and the
+// content that overflows it.
+log('area', list.clientWidth, list.clientHeight, list.scrollWidth, list.scrollHeight, list.scrollTop);
+const top0 = $('i3').getBoundingClientRect().top;
+list.scrollTop = 50;
+log('scrolled', list.scrollTop, $('i3').getBoundingClientRect().top, top0 - 50, $('i3').offsetTop, list.getBoundingClientRect().top);
+// Offsets stay within the scrolling area.
+list.scrollTop = 1e6;
+log('clamped', list.scrollTop, list.scrollHeight - list.clientHeight);
+list.scrollTo(0, -5);
+log('scrollTo', list.scrollTop);
+list.scrollBy({ top: 30 });
+list.scrollBy(0, 12);
+log('scrollBy', list.scrollTop);
+list.scroll({ top: 7, left: 99 });
+log('scroll', list.scrollTop, list.scrollLeft);
+// Only scroll containers scroll.
+$('plain').scrollTop = 20;
+log('plain', $('plain').scrollTop, $('plain').scrollHeight, $('plain').clientHeight);
+// The window: the document is the scrolling area.
+log('document', document.documentElement.scrollHeight > 2000, scrollX, scrollY, pageYOffset);
+const tallTop = $('tall').getBoundingClientRect().top;
+window.scrollTo(0, 300);
+log('window', scrollY, pageYOffset, document.documentElement.scrollTop, $('tall').getBoundingClientRect().top === tallTop - 300, $('tall').offsetTop);
+log('fixed', $('fixed').getBoundingClientRect().top, $('fixed').offsetTop);
+window.scrollBy(0, -100);
+document.documentElement.scrollTop += 1;
+log('window', scrollY, document.scrollingElement.scrollTop);
+scrollTo({ top: 1e7 });
+log('window max', scrollY === document.documentElement.scrollHeight - innerHeight);
+// scrollIntoView: the list, then the window.
+scrollTo(0, 0);
+$('last').scrollIntoView();
+log('into view', list.scrollTop, scrollY, $('last').getBoundingClientRect().top);
+$('i0').scrollIntoView({ block: 'end' });
+log('into view end', list.scrollTop, scrollY);
+$('i0').scrollIntoView({ block: 'nearest' });
+log('into view nearest', list.scrollTop);
+// A list that changed size keeps its offset within the new area.
+list.scrollTop = 100;
+list.removeChild($('last'));
+log('shrunk', list.scrollTop, list.scrollHeight);
+setTimeout(() => log('events', events.join(', ')), 10);
+</script>

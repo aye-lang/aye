@@ -444,12 +444,6 @@ pub let PRELUDE =
     \\  hostEvent(this, 'blur');
     \\  hostEvent(this, 'focusout');
     \\});
-    \\hidden(ElementP, 'scrollIntoView', function () {});
-    \\// No geometry yet: a box for an element that is rendered (in the
-    \\// document, no `display: none` on the way up), none for the others.
-    \\hidden(ElementP, 'getClientRects', function () {
-    \\  return ak.displayed(this) ? [this.getBoundingClientRect()] : [];
-    \\});
     \\
     \\// Attributes reflected as properties.
     \\function reflect(name, attr, proto = HTMLP) {
@@ -1119,13 +1113,6 @@ pub let PRELUDE =
     \\getter(G, 'innerHeight', function () { return ak.viewport(1); });
     \\getter(G, 'outerWidth', function () { return ak.viewport(0); });
     \\getter(G, 'outerHeight', function () { return ak.viewport(1); });
-    \\hidden(G, 'scrollX', 0);
-    \\hidden(G, 'scrollY', 0);
-    \\hidden(G, 'pageXOffset', 0);
-    \\hidden(G, 'pageYOffset', 0);
-    \\hidden(G, 'scrollTo', function () {});
-    \\hidden(G, 'scrollBy', function () {});
-    \\hidden(G, 'scroll', function () {});
     \\hidden(G, 'focus', function () {});
     \\hidden(G, 'blur', function () {});
     \\class Navigator {
@@ -1812,31 +1799,116 @@ pub let PRELUDE =
     \\hidden(G, 'AbortSignal', AbortSignal);
     \\hidden(G, 'AbortController', AbortController);
     \\
-    \\// Observers: IntersectionObserver reports every target visible once (so
-    \\// lazy loading goes on), ResizeObserver reports each target once
-    \\// (MutationObserver is with the web components below).
+    \\// Observers: IntersectionObserver from the layout (engine/geometry.ore),
+    \\// ResizeObserver reports each target once (MutationObserver is with the
+    \\// web components below).
+    \\//
+    \\// IntersectionObserver: the browser calls the layout hook after a task
+    \\// that changed the document, a scroll offset or the viewport; the
+    \\// observers check their targets at the next animation frame, and report
+    \\// those whose threshold index or isIntersecting changed (all of them the
+    \\// first time).
+    \\const intersectionObservers = new Set();
+    \\let intersectionCheck = 0;
+    \\function checkIntersectionsSoon() {
+    \\  if (intersectionCheck) return;
+    \\  intersectionCheck = requestAnimationFrame(() => {
+    \\    intersectionCheck = 0;
+    \\    for (const o of [...intersectionObservers]) o._check();
+    \\  });
+    \\}
+    \\// A rootMargin: top, right, bottom, left in px (percentages of the root's
+    \\// width or height).
+    \\function rootMargins(text, w, h) {
+    \\  const [t = '0px', r = t, b = t, l = r] = String(text).trim().split(/\s+/).filter(Boolean);
+    \\  return [t, r, b, l].map((p, i) => {
+    \\    const n = parseFloat(p) || 0;
+    \\    return p.endsWith('%') ? n / 100 * (i % 2 ? w : h) : n;
+    \\  });
+    \\}
+    \\function cutRect(a, b) {
+    \\  const x0 = Math.max(a[0], b[0]), y0 = Math.max(a[1], b[1]);
+    \\  const x1 = Math.min(a[0] + a[2], b[0] + b[2]), y1 = Math.min(a[1] + a[3], b[1] + b[3]);
+    \\  return x1 >= x0 && y1 >= y0 ? [x0, y0, x1 - x0, y1 - y0] : null;
+    \\}
+    \\function paddingBox(el) {
+    \\  const r = el.getBoundingClientRect();
+    \\  return [r.x + el.clientLeft, r.y + el.clientTop, el.clientWidth, el.clientHeight];
+    \\}
     \\class IntersectionObserver {
     \\  constructor(callback, options) {
     \\    if (typeof callback !== 'function') throw new TypeError("Failed to construct 'IntersectionObserver': parameter 1 is not of type 'Function'.");
     \\    hidden(this, '_callback', callback);
     \\    hidden(this, '_targets', []);
+    \\    hidden(this, '_seen', new Map());
+    \\    hidden(this, '_records', []);
     \\    this.root = (options && options.root) || null;
     \\    this.rootMargin = (options && options.rootMargin) || '0px';
-    \\    this.thresholds = [].concat((options && options.threshold) || 0);
+    \\    this.thresholds = [].concat((options && options.threshold) || 0).map(Number).sort((a, b) => a - b);
     \\  }
     \\  observe(target) {
     \\    if (this._targets.includes(target)) return;
     \\    this._targets.push(target);
-    \\    setTimeout(() => {
-    \\      if (!this._targets.includes(target)) return;
-    \\      const rect = target.getBoundingClientRect();
-    \\      const entry = { target, isIntersecting: true, intersectionRatio: 1, boundingClientRect: rect, intersectionRect: rect, rootBounds: null, time: performance.now() };
-    \\      this._callback([entry], this);
-    \\    }, 0);
+    \\    intersectionObservers.add(this);
+    \\    ak.setLayoutHook(checkIntersectionsSoon);
+    \\    checkIntersectionsSoon();
     \\  }
-    \\  unobserve(target) { this._targets = this._targets.filter(t => t !== target); }
-    \\  disconnect() { this._targets = []; }
-    \\  takeRecords() { return []; }
+    \\  unobserve(target) {
+    \\    this._targets = this._targets.filter(t => t !== target);
+    \\    this._seen.delete(target);
+    \\  }
+    \\  disconnect() {
+    \\    this._targets = [];
+    \\    this._seen.clear();
+    \\    intersectionObservers.delete(this);
+    \\  }
+    \\  takeRecords() {
+    \\    const r = this._records;
+    \\    this._records = [];
+    \\    return r;
+    \\  }
+    \\  _entry(target) {
+    \\    const root = this.root;
+    \\    let bounds = root ? paddingBox(root) : [0, 0, innerWidth, innerHeight];
+    \\    const m = rootMargins(this.rootMargin, bounds[2], bounds[3]);
+    \\    bounds = [bounds[0] - m[3], bounds[1] - m[0], bounds[2] + m[1] + m[3], bounds[3] + m[0] + m[2]];
+    \\    const box = target.getBoundingClientRect();
+    \\    const rendered = target.getClientRects().length > 0 && (!root || (root !== target && root.contains(target)));
+    \\    let cut = rendered ? cutRect([box.x, box.y, box.width, box.height], bounds) : null;
+    \\    // The scroll containers between the target and the root clip it.
+    \\    for (let c = target.parentElement; cut && c && c !== root && c !== document.documentElement; c = c.parentElement) {
+    \\      if (ak.metric(c, 12)) cut = cutRect(cut, paddingBox(c));
+    \\    }
+    \\    const area = box.width * box.height;
+    \\    const ratio = !cut ? 0 : area > 0 ? Math.min(1, cut[2] * cut[3] / area) : 1;
+    \\    let index = this.thresholds.findIndex(t => t > ratio);
+    \\    if (index < 0) index = this.thresholds.length;
+    \\    if (!rendered) index = -1;
+    \\    return {
+    \\      index,
+    \\      entry: {
+    \\        target,
+    \\        time: performance.now(),
+    \\        isIntersecting: !!cut,
+    \\        intersectionRatio: ratio,
+    \\        boundingClientRect: box,
+    \\        intersectionRect: cut ? new DOMRect(cut[0], cut[1], cut[2], cut[3]) : new DOMRect(0, 0, 0, 0),
+    \\        rootBounds: new DOMRect(bounds[0], bounds[1], bounds[2], bounds[3]),
+    \\      },
+    \\    };
+    \\  }
+    \\  _check() {
+    \\    for (const target of this._targets) {
+    \\      const { index, entry } = this._entry(target);
+    \\      const seen = this._seen.get(target);
+    \\      if (seen && seen[0] === index && seen[1] === entry.isIntersecting) continue;
+    \\      this._seen.set(target, [index, entry.isIntersecting]);
+    \\      this._records.push(entry);
+    \\    }
+    \\    const records = this.takeRecords();
+    \\    if (records.length === 0) return;
+    \\    try { this._callback(records, this); } catch (e) { report(e); }
+    \\  }
     \\}
     \\class ResizeObserver {
     \\  constructor(callback) {
@@ -2338,7 +2410,7 @@ pub let PRELUDE =
     \\});
     \\getter(G, 'onmessage', function () { return handlerOf(G, 'message'); }, function (v) { setHandler(G, 'message', v); });
     \\
-    \\// DOMRect, Range and Selection: no geometry yet.
+    \\// DOMRect, Range and Selection (ranges have no geometry yet).
     \\class DOMRectReadOnly {
     \\  constructor(x, y, width, height) {
     \\    hidden(this, '_r', [Number(x) || 0, Number(y) || 0, Number(width) || 0, Number(height) || 0]);
@@ -2363,9 +2435,135 @@ pub let PRELUDE =
     \\  get width() { return this._r[2]; }
     \\  get height() { return this._r[3]; }
     \\}
+    \\DOMRectReadOnly.fromRect = function (r) { r = r || {}; return new this(r.x, r.y, r.width, r.height); };
+    \\DOMRect.fromRect = DOMRectReadOnly.fromRect;
+    \\class DOMRectList {
+    \\  constructor(rects) {
+    \\    hidden(this, '_rects', rects);
+    \\    for (let i = 0; i < rects.length; i++) Object.defineProperty(this, i, { value: rects[i], enumerable: true });
+    \\  }
+    \\  get length() { return this._rects.length; }
+    \\  item(i) { return this._rects[i >>> 0] || null; }
+    \\}
+    \\hidden(DOMRectList.prototype, Symbol.iterator, ArrayP.values);
     \\hidden(G, 'DOMRectReadOnly', DOMRectReadOnly);
     \\hidden(G, 'DOMRect', DOMRect);
-    \\hidden(ElementP, 'getBoundingClientRect', function () { return new DOMRect(0, 0, 0, 0); });
+    \\hidden(G, 'DOMRectList', DOMRectList);
+    \\
+    \\// Geometry (engine/geometry.ore): a layout of the document made when a
+    \\// script asks after a change, reused until the next one. Elements that
+    \\// are not rendered have no boxes: no rectangles, zero sizes.
+    \\function clientRects(el) {
+    \\  const q = ak.rects(el), out = [];
+    \\  for (let i = 0; i < q.length; i += 4) out.push(new DOMRect(q[i], q[i + 1], q[i + 2], q[i + 3]));
+    \\  return out;
+    \\}
+    \\hidden(ElementP, 'getClientRects', function () { return new DOMRectList(clientRects(this)); });
+    \\hidden(ElementP, 'getBoundingClientRect', function () {
+    \\  const rects = clientRects(this);
+    \\  const sized = rects.filter(r => r.width !== 0 && r.height !== 0);
+    \\  if (sized.length === 0) return rects.length ? rects[0] : new DOMRect(0, 0, 0, 0);
+    \\  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    \\  for (const r of sized) {
+    \\    x0 = Math.min(x0, r.x);
+    \\    y0 = Math.min(y0, r.y);
+    \\    x1 = Math.max(x1, r.x + r.width);
+    \\    y1 = Math.max(y1, r.y + r.height);
+    \\  }
+    \\  return new DOMRect(x0, y0, x1 - x0, y1 - y0);
+    \\});
+    \\['offsetTop', 'offsetLeft', 'offsetWidth', 'offsetHeight'].forEach((name, k) => {
+    \\  getter(HTMLP, name, function () { return ak.metric(this, k); });
+    \\});
+    \\getter(HTMLP, 'offsetParent', function () { return ak.offsetParent(this); });
+    \\['clientTop', 'clientLeft', 'clientWidth', 'clientHeight'].forEach((name, k) => {
+    \\  getter(ElementP, name, function () { return ak.metric(this, 4 + k); });
+    \\});
+    \\getter(ElementP, 'scrollWidth', function () { return ak.metric(this, 10); });
+    \\getter(ElementP, 'scrollHeight', function () { return ak.metric(this, 11); });
+    \\// A scroll that moved fires `scroll` (at the element, or at the document
+    \\// for the window) as a task, once for the scrolls of a target until then.
+    \\const scrollPending = new Set();
+    \\function scrolled(target) {
+    \\  if (scrollPending.has(target)) return;
+    \\  scrollPending.add(target);
+    \\  setTimeout(() => {
+    \\    scrollPending.delete(target);
+    \\    if (target === G) dispatch(document, new Event('scroll', { bubbles: true }));
+    \\    else dispatch(target, new Event('scroll'));
+    \\  }, 0);
+    \\}
+    \\function scrollTarget(el, left, top) {
+    \\  if (ak.setScroll(el, left, top)) scrolled(el === null || el === document.documentElement ? G : el);
+    \\}
+    \\getter(ElementP, 'scrollTop', function () { return ak.metric(this, 8); }, function (v) { scrollTarget(this, NaN, Number(v) || 0); });
+    \\getter(ElementP, 'scrollLeft', function () { return ak.metric(this, 9); }, function (v) { scrollTarget(this, Number(v) || 0, NaN); });
+    \\// scrollTo(x, y) or scrollTo({ left, top }); scrollBy adds to where it is.
+    \\function scrollArgs(args, x0, y0, by) {
+    \\  let left = NaN, top = NaN;
+    \\  const o = args[0];
+    \\  if (args.length >= 2) {
+    \\    left = Number(args[0]) || 0;
+    \\    top = Number(args[1]) || 0;
+    \\  } else if (o && typeof o === 'object') {
+    \\    if (o.left !== undefined) left = Number(o.left) || 0;
+    \\    if (o.top !== undefined) top = Number(o.top) || 0;
+    \\  }
+    \\  if (by) {
+    \\    left = isNaN(left) ? NaN : x0 + left;
+    \\    top = isNaN(top) ? NaN : y0 + top;
+    \\  }
+    \\  return [left, top];
+    \\}
+    \\function elementScroll(by) {
+    \\  return function (...args) {
+    \\    const [left, top] = scrollArgs(args, this.scrollLeft, this.scrollTop, by);
+    \\    scrollTarget(this, left, top);
+    \\  };
+    \\}
+    \\hidden(ElementP, 'scrollTo', elementScroll(false));
+    \\hidden(ElementP, 'scroll', elementScroll(false));
+    \\hidden(ElementP, 'scrollBy', elementScroll(true));
+    \\function windowScroll(by) {
+    \\  return function (...args) {
+    \\    const [left, top] = scrollArgs(args, ak.windowScroll(0), ak.windowScroll(1), by);
+    \\    scrollTarget(null, left, top);
+    \\  };
+    \\}
+    \\hidden(G, 'scrollTo', windowScroll(false));
+    \\hidden(G, 'scroll', windowScroll(false));
+    \\hidden(G, 'scrollBy', windowScroll(true));
+    \\getter(G, 'scrollX', function () { return ak.windowScroll(0); });
+    \\getter(G, 'scrollY', function () { return ak.windowScroll(1); });
+    \\getter(G, 'pageXOffset', function () { return ak.windowScroll(0); });
+    \\getter(G, 'pageYOffset', function () { return ak.windowScroll(1); });
+    \\// scrollIntoView: the scroll containers around the element (innermost
+    \\// first), then the window, scroll vertically so that it shows at the
+    \\// `block` position (`start` by default; `false` is `end`).
+    \\function alignBy(top, height, view, block) {
+    \\  if (block === 'end') return top + height - view;
+    \\  if (block === 'center') return top + height / 2 - view / 2;
+    \\  if (block === 'nearest') {
+    \\    if (top < 0) return top;
+    \\    if (top + height > view) return Math.min(top, top + height - view);
+    \\    return 0;
+    \\  }
+    \\  return top;
+    \\}
+    \\hidden(ElementP, 'scrollIntoView', function (arg) {
+    \\  let block = 'start';
+    \\  if (arg === false) block = 'end';
+    \\  else if (arg && typeof arg === 'object' && arg.block) block = String(arg.block);
+    \\  for (let c = this.parentElement; c && c !== document.documentElement; c = c.parentElement) {
+    \\    if (!ak.metric(c, 12)) continue;
+    \\    const r = this.getBoundingClientRect(), cr = c.getBoundingClientRect();
+    \\    const delta = alignBy(r.top - (cr.top + c.clientTop), r.height, c.clientHeight, block);
+    \\    if (delta) scrollTarget(c, NaN, c.scrollTop + delta);
+    \\  }
+    \\  const r = this.getBoundingClientRect();
+    \\  const delta = alignBy(r.top, r.height, ak.viewport(1), block);
+    \\  if (delta) scrollTarget(null, NaN, ak.windowScroll(1) + delta);
+    \\});
     \\class Range {
     \\  constructor() {
     \\    this.startContainer = document;

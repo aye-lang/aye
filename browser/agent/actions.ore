@@ -899,6 +899,11 @@ fn scrollBy(s: *mut Session, tmp: Allocator, dy: f64) AllocError!Outcome {
 fn scrollTo(s: *mut Session, y: f64) {
     s.tab.scroll = y
     s.tab.clampScroll(maxScroll(s))
+    if s.tab.page |p| {
+        // Out of memory: the scripts see the old offset.
+        engine.setScriptScroll(p, s.tab.scroll) catch |e| {
+        }
+    }
 }
 
 fn scrollMessage(s: *Session, tmp: Allocator, what: []u8) AllocError![]u8 {

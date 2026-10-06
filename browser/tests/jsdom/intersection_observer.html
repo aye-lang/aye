@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<title>IntersectionObserver from the layout</title>
+<style>
+body { margin: 0 }
+.tile { height: 100px }
+#below { margin-top: 1000px; height: 100px }
+#list { height: 50px; overflow: auto }
+#list div { height: 40px }
+#none { display: none }
+</style>
+<div class="tile" id="top"></div>
+<div id="half" style="height: 100px; margin-top: 450px"></div>
+<div id="list"><div id="first"></div><div id="hiddenInList"></div></div>
+<div id="none"></div>
+<div id="below"></div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const $ = id => document.getElementById(id);
+function show(e) {
+  const r = e.intersectionRect;
+  return [e.target.id, e.isIntersecting, e.intersectionRatio, r.y, r.height, e.boundingClientRect.y, e.rootBounds.height].join(' ');
+}
+// Every target is reported once at first, intersecting or not.
+const io = new IntersectionObserver(entries => {
+  for (const e of entries) log('io', show(e));
+}, { threshold: [0, 0.5, 1] });
+for (const id of ['top', 'half', 'first', 'hiddenInList', 'none', 'below']) io.observe($(id));
+// rootMargin grows the root's box.
+const near = new IntersectionObserver(entries => {
+  for (const e of entries) log('near', show(e));
+}, { rootMargin: '0px 0px 500px 0px' });
+near.observe($('below'));
+// A root element: its padding box.
+const inList = new IntersectionObserver(entries => {
+  for (const e of entries) log('list', show(e));
+}, { root: $('list') });
+inList.observe($('hiddenInList'));
+// After a scroll or a change, only the targets whose state changed.
+setTimeout(() => {
+  log('-- scroll');
+  scrollTo(0, 900);
+  setTimeout(() => {
+    log('-- list');
+    $('list').scrollTop = 30;
+    setTimeout(() => {
+      log('-- shown');
+      $('none').style.display = 'block';
+      $('none').style.height = '10px';
+      $('none').style.marginTop = '900px';
+      setTimeout(() => {
+        log('-- unchanged');
+        $('top').title = 'x';
+        setTimeout(() => log('-- done'), 50);
+      }, 50);
+    }, 50);
+  }, 50);
+}, 50);
+</script>
