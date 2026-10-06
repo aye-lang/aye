@@ -260,7 +260,8 @@ fn replacedSize(t: *mut Tree, i: usize, cb_w: f64, cb_h: f64) {
 /// follows the other by the aspect ratio of its natural size (an
 /// image's); with neither, the natural size; else, for `svg` (its
 /// `viewBox` gives the ratio), `iframe`, `embed`, `object`, `video` and
-/// `canvas`, 300 x 150; else 0.
+/// `canvas`, 300 x 150 (an `svg` with only a ratio is as wide as its
+/// containing block); else 0.
 fn replacedDims(t: *Tree, i: usize, cb_w: f64, cb_h: f64, he: f64, ve: f64) Size {
     let style = t.bx(i).style
     var w: ?f64 = sizeOf(style, style[css.WIDTH], cb_w, he)
@@ -294,6 +295,11 @@ fn replacedDims(t: *Tree, i: usize, cb_w: f64, cb_h: f64, he: f64, ve: f64) Size
                 } else {
                     w = 300.0 + he
                 }
+            } else if ratio > 0.0 && cb_w > he && isSvg(t, i) {
+                // Only a ratio (an `svg` with a `viewBox`): as wide as
+                // the containing block.
+                w = cb_w
+                h = (cb_w - he) / ratio + ve
             } else {
                 w = 300.0 + he
                 h = 150.0 + ve
@@ -344,6 +350,13 @@ fn attrPx(t: *Tree, i: usize, name: []u8, base: f64) f64 {
         }
     }
     return 0.0
+}
+
+fn isSvg(t: *Tree, i: usize) bool {
+    if t.bx(i).node |el| {
+        return t.doc.isElement(el, "svg")
+    }
+    return false
 }
 
 // For replaced elements that are 300 x 150 when nothing sizes them:

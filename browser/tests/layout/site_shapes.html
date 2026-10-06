@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<!-- Shapes of real sites: a fixed site header whose menu is absolutely
+positioned and hidden (GitHub: before B8 the menu filled the first
+screen), an infobox table and a thumbnail floated right with the
+article text beside them (Wikipedia), a grid with named areas whose
+main element is display: contents (MDN). -->
+<style>
+body { margin: 0; width: 500px }
+header { position: fixed; top: 0; left: 0; right: 0; height: 40px }
+.menu { position: absolute; top: 0; width: 100%; padding-top: 40px; visibility: hidden; display: flex; flex-direction: column }
+.menu a { display: block; height: 40px }
+.page { padding-top: 40px }
+.infobox { float: right; clear: right; width: 150px; margin: 0 0 8px 8px; border: 1px solid }
+figure { float: right; clear: right; margin: 0 0 8px 8px; width: 100px }
+p { margin: 0 0 8px }
+.layout { display: grid; grid-template-areas: "side main"; grid-template-columns: 120px minmax(0, 1fr); column-gap: 10px }
+.layout > main { display: contents }
+.side { grid-area: side }
+.body { grid-area: main }
+</style>
+<header><a href="/">Logo</a><div class="menu"><a>Platform</a><a>Solutions</a><a>Resources</a><a>Open Source</a><a>Pricing</a></div></header>
+<div class="page">
+<table class="infobox"><tr><th>Infobox</th></tr><tr><td>Developer: someone</td></tr></table>
+<figure><div style="height: 50px"></div><figcaption>A thumb</figcaption></figure>
+<p>The article text wraps beside the infobox and the thumbnail and goes on below them.</p>
+<p>A second paragraph also flows around the floats on the right side of the page.</p>
+<div class="layout"><main><div class="body">main body text</div></main><nav class="side">sidebar</nav></div>
+</div>

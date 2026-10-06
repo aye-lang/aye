@@ -1,0 +1,56 @@
+viewport 800x600
+  block <html> (0, 0) 800x172
+    block <body> (0, 0) 500x156
+      block <header> (0, 0) 800x40 fixed
+        line (0, 0) 800x20
+          inline <a href="/"> (0, 2) 32x16
+            text (0, 2) 32x16 "Logo"
+        flex <div class="menu"> (32, 0) 800x240 absolute
+          block <a> (32, 40) 800x40
+            line (32, 40) 800x20
+              text (32, 42) 64x16 "Platform"
+          block <a> (32, 80) 800x40
+            line (32, 80) 800x20
+              text (32, 82) 72x16 "Solutions"
+          block <a> (32, 120) 800x40
+            line (32, 120) 800x20
+              text (32, 122) 72x16 "Resources"
+          block <a> (32, 160) 800x40
+            line (32, 160) 800x20
+              text (32, 162) 88x16 "Open Source"
+          block <a> (32, 200) 800x40
+            line (32, 200) 800x20
+              text (32, 202) 56x16 "Pricing"
+      block <div class="page"> (0, 0) 500x156
+        table <table class="infobox"> (348, 40) 152x46 float right
+          row-group <tbody> (349, 41) 150x44
+            row <tr> (349, 41) 150x22
+              cell <th> (349, 41) 150x22
+                line (350, 42) 148x20
+                  text (396, 44) 56x16 "Infobox"
+            row <tr> (349, 63) 150x22
+              cell <td> (349, 63) 150x22
+                line (350, 64) 148x20
+                  text (350, 66) 144x16 "Developer: someone"
+        block <figure> (400, 94) 100x70 float right
+          block <div style="height: 50px"> (400, 94) 100x50
+          block <figcaption> (400, 144) 100x20
+            line (400, 144) 100x20
+              text (400, 146) 56x16 "A thumb"
+        block <p> (0, 40) 500x40
+          line (0, 40) 340x20
+            text (0, 42) 328x16 "The article text wraps beside the infobox"
+          line (0, 60) 340x20
+            text (0, 62) 328x16 "and the thumbnail and goes on below them."
+        block <p> (0, 88) 500x40
+          line (0, 88) 340x20
+            text (0, 90) 320x16 "A second paragraph also flows around the"
+          line (0, 108) 392x20
+            text (0, 110) 296x16 "floats on the right side of the page."
+        grid <div class="layout"> (0, 136) 392x20
+          block <div class="body"> (130, 136) 262x20
+            line (130, 136) 262x20
+              text (130, 138) 112x16 "main body text"
+          block <nav class="side"> (0, 136) 120x20
+            line (0, 136) 120x20
+              text (0, 138) 56x16 "sidebar"

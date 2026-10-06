@@ -1,6 +1,6 @@
 viewport 800x600
-  block <html> (0, 0) 800x628
-    block <body> (0, 16) 800x596
+  block <html> (0, 0) 800x683.2
+    block <body> (0, 16) 800x651.2
       block <p> (0, 16) 800x29.2
         line (0, 16) 800x29.2
           text (0, 27.2) 48x16 "icons "
@@ -9,20 +9,23 @@ viewport 800x600
           replaced <svg class="icon"> (80, 24) 16x16
           text (96, 27.2) 8x16 " "
           replaced <svg viewbox="0 0 20 10" width="40"> (104, 20) 40x20
-      block (anonymous) (0, 61.2) 800x155.2
-        line (0, 61.2) 800x155.2
-          replaced <svg> (0, 61.2) 300x150
-      block <p> (0, 232.4) 800x155.2
-        line (0, 232.4) 800x155.2
-          replaced <iframe src="frame.html"> (0, 232.4) 300x150
-          text (300, 369.6) 8x16 " "
-          replaced <iframe src="b.html" width="200" height="50"> (308, 332.4) 200x50
-      block (anonymous) (0, 403.6) 800x155.2
-        line (0, 403.6) 800x155.2
-          replaced <embed src="movie.swf" width="100"> (0, 403.6) 100x150
-          replaced <object data="doc.pdf" height="40"> (100, 513.6) 300x40
-      block <p> (0, 574.8) 800x37.2
-        line (0, 574.8) 800x37.2
-          replaced <img src="pic.svg" width="64" height="32" alt="svg picture"> (0, 574.8) 64x32
-          text (64, 594) 8x16 " "
-          replaced <img src="nothing.png" style="width: 20px; height: 10px"> (72, 596.8) 20x10
+      block <div style="width: 200px"> (0, 61.2) 200x55.2
+        line (0, 61.2) 200x55.2
+          replaced <svg viewbox="0 0 4 1"> (0, 61.2) 200x50
+      block (anonymous) (0, 116.4) 800x155.2
+        line (0, 116.4) 800x155.2
+          replaced <svg> (0, 116.4) 300x150
+      block <p> (0, 287.6) 800x155.2
+        line (0, 287.6) 800x155.2
+          replaced <iframe src="frame.html"> (0, 287.6) 300x150
+          text (300, 424.8) 8x16 " "
+          replaced <iframe src="b.html" width="200" height="50"> (308, 387.6) 200x50
+      block (anonymous) (0, 458.8) 800x155.2
+        line (0, 458.8) 800x155.2
+          replaced <embed src="movie.swf" width="100"> (0, 458.8) 100x150
+          replaced <object data="doc.pdf" height="40"> (100, 568.8) 300x40
+      block <p> (0, 630) 800x37.2
+        line (0, 630) 800x37.2
+          replaced <img src="pic.svg" width="64" height="32" alt="svg picture"> (0, 630) 64x32
+          text (64, 649.2) 8x16 " "
+          replaced <img src="nothing.png" style="width: 20px; height: 10px"> (72, 652) 20x10

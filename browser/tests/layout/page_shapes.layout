@@ -1,0 +1,32 @@
+viewport 800x600
+  block <html> (0, 0) 800x244
+    block <body> (0, 0) 800x244
+      block <div class="wrap"> (250, 0) 300x40
+        line (260, 0) 280x20
+          text (260, 2) 240x16 "centered by max-width and auto"
+        line (260, 20) 280x20
+          text (260, 22) 56x16 "margins"
+      block <div class="bb"> (0, 40) 200x90
+        line (25, 65) 150x20
+          text (25, 67) 120x16 "border-box: 200"
+        line (25, 85) 150x20
+          text (25, 87) 32x16 "wide"
+      block <div> (0, 146) 800x56
+        block <p> (0, 146) 800x20
+          line (0, 146) 800x20
+            text (0, 148) 136x16 "child of contents"
+        block (anonymous) (0, 182) 800x20
+          line (0, 182) 800x20
+            inline <span> (0, 184) 96x16
+              text (0, 184) 96x16 "inline child"
+      table <div class="table"> (0, 202) 300x22
+        row <div class="row"> (0, 202) 300x22
+          cell <div class="cell"> (0, 202) 150x22
+            line (1, 203) 148x20
+              text (1, 205) 8x16 "a"
+          cell <div class="cell"> (150, 202) 150x22
+            line (151, 203) 148x20
+              text (151, 205) 8x16 "b"
+      block <div style="transform: translate(10px); filter: blur(2px)"> (0, 224) 800x20
+        line (0, 224) 800x20
+          text (0, 226) 272x16 "transforms and filters are ignored"
