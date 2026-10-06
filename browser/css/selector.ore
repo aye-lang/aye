@@ -34,6 +34,7 @@ import dom.Document
 import dom.Kind
 import dom.NodeId
 import std.list.List
+import std.map.IntMap
 import std.mem.AllocError
 import std.text
 
@@ -1379,11 +1380,37 @@ fn nthMatches(sheet: *Sheet, doc: *Document, s: Simple, el: NodeId) bool {
 // The element `:has()` is being tested on (what `HasAnchor` matches).
 var has_anchor: ?NodeId = null
 
+// While the cascade styles a document (which does not change meanwhile):
+// the results of `:has()` by argument and element, so that a `:has()`
+// tested again (through `&` of nested rules, or on ancestors for
+// descendant combinators) does not search the subtree again.
+var has_cache: ?*mut IntMap(u64, bool) = null
+
+/// Sets (or, with null, ends) the cache of `:has()` results.
+pub fn setHasCache(cache: ?*mut IntMap(u64, bool)) {
+    has_cache = cache
+}
+
 // Does one of the relative selectors of `s` (a `Has`) match an element
 // relative to `el`? Descendants are searched (only as deep as a chain
 // of `>` reaches), or the following siblings (and their descendants)
 // when the selector starts with `+` or `~`.
 fn hasMatches(sheet: *Sheet, doc: *Document, s: Simple, el: NodeId) bool {
+    let key = ((s.sub_start as u64) << 32) | el.index as u64
+    if has_cache |c| {
+        if c.get(key) |known| {
+            return known
+        }
+    }
+    let found = hasSearch(sheet, doc, s, el)
+    if has_cache |c| {
+        c.put(key, found) catch |e| {
+        }
+    }
+    return found
+}
+
+fn hasSearch(sheet: *Sheet, doc: *Document, s: Simple, el: NodeId) bool {
     let saved = has_anchor
     has_anchor = el
     var found = false

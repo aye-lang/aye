@@ -255,6 +255,10 @@ pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, o
     defer author_pseudo.deinit()
     try pseudoRules(ua, &mut ua_pseudo)
     try pseudoRules(author, &mut author_pseudo)
+    var has_results = IntMap(u64, bool).init(out.alloc)
+    defer has_results.deinit()
+    setHasCache(&mut has_results)
+    defer setHasCache(null)
     var cur: ?NodeId = doc.root
     while cur |h| {
         if doc.node(h).kind == Kind.Element {
