@@ -1,0 +1,32 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Resource reflections"
+    <body>
+      <pre id="results">
+        "style defaults: PASS\n"
+        "style setters: PASS\n"
+        "style attribute: PASS\n"
+        "link defaults: PASS\n"
+        "link setters: PASS\n"
+        "live relList: PASS\n"
+        "rel attribute: PASS\n"
+        "relList forwarding: PASS\n"
+        "link credentials: PASS\n"
+        "link anonymous: PASS\n"
+        "link null: PASS\n"
+        "script credentials: PASS\n"
+        "script anonymous: PASS\n"
+        "script null: PASS\n"
+        "dynamic script async: PASS\n"
+        "script setters: PASS\n"
+        "script boolean presence: PASS\n"
+        "anchor parts: PASS\n"
+        "anchor setters: PASS\n"
+        "anchor host: PASS\n"
+        "anchor absent href: PASS\n"
+      <script>
+        "\nconst out = document.getElementById('results');\nfunction check(name, value) { out.append(name + ': ' + (value ? 'PASS' : 'FAIL') + '\\n'); }\nconst style = document.createElement('style');\ncheck('style defaults', style.media === '' && style.type === '');\nstyle.media = 'screen'; style.type = 'text/css';\ncheck('style setters', style.getAttribute('media') === 'screen' && style.getAttribute('type') === 'text/css');\nstyle.setAttribute('media', 'print');\ncheck('style attribute', style.media === 'print');\nconst link = document.createElement('link');\ncheck('link defaults', link.media === '' && link.type === '' && link.rel === '' && link.as === '' && link.crossOrigin === null);\nlink.media = 'screen'; link.type = 'text/css'; link.rel = 'stylesheet stylesheet'; link.as = 'STYLE';\ncheck('link setters', link.getAttribute('media') === 'screen' && link.type === 'text/css' && link.relList.length === 1 && link.as === 'style');\nconst list = link.relList;\nlist.add('preload'); list.remove('stylesheet');\ncheck('live relList', list === link.relList && link.rel === 'preload');\nlink.setAttribute('rel', 'stylesheet alternate');\ncheck('rel attribute', list.contains('stylesheet') && list.item(1) === 'alternate');\nlink.relList = 'preload'; link.as = 'bogus';\ncheck('relList forwarding', list.value === 'preload' && link.as === '');\nfor (const el of [link, document.createElement('script')]) {\n  el.crossOrigin = 'USE-CREDENTIALS';\n  check(el.localName + ' credentials', el.crossOrigin === 'use-credentials');\n  el.crossOrigin = 'bogus';\n  check(el.localName + ' anonymous', el.crossOrigin === 'anonymous');\n  el.crossOrigin = null;\n  check(el.localName + ' null', el.crossOrigin === null && !el.hasAttribute('crossorigin'));\n}\nconst script = document.createElement('script');\ncheck('dynamic script async', script.async === true && !script.hasAttribute('async'));\nscript.async = false; script.defer = true; script.noModule = true; script.type = 'module'; script.integrity = 'sha256-test';\ncheck('script setters', !script.async && script.hasAttribute('defer') && script.hasAttribute('nomodule') && script.getAttribute('type') === 'module' && script.getAttribute('integrity') === 'sha256-test');\nscript.setAttribute('async', 'false'); script.removeAttribute('defer'); script.removeAttribute('nomodule');\ncheck('script boolean presence', script.async && !script.defer && !script.noModule);\nconst a = document.createElement('a');\na.href = 'https://example.com:8443/a/b?q=1#top';\ncheck('anchor parts', a.protocol === 'https:' && a.host === 'example.com:8443' && a.hostname === 'example.com' && a.port === '8443' && a.pathname === '/a/b' && a.search === '?q=1' && a.hash === '#top' && a.origin === 'https://example.com:8443');\na.protocol = 'http:'; a.hostname = 'other.test'; a.port = '8080'; a.pathname = '/next'; a.search = '?x=2'; a.hash = '#end';\ncheck('anchor setters', a.href === 'http://other.test:8080/next?x=2#end');\na.host = 'final.test:9090';\ncheck('anchor host', a.href === 'http://final.test:9090/next?x=2#end' && a.getAttribute('href') === a.href);\na.removeAttribute('href');\ncheck('anchor absent href', a.href === '' && a.hostname === '' && a.pathname === '');\n"
+      "\n"

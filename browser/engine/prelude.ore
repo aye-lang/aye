@@ -452,14 +452,14 @@ pub let PRELUDE =
     \\});
     \\
     \\// Attributes reflected as properties.
-    \\function reflect(name, attr) {
-    \\  getter(HTMLP, name, function () {
+    \\function reflect(name, attr, proto = HTMLP) {
+    \\  getter(proto, name, function () {
     \\    const v = this.getAttribute(attr);
     \\    return v === null ? '' : v;
     \\  }, function (v) { this.setAttribute(attr, String(v)); });
     \\}
-    \\function reflectBool(name, attr) {
-    \\  getter(HTMLP, name, function () { return this.hasAttribute(attr); }, function (v) {
+    \\function reflectBool(name, attr, proto = HTMLP) {
+    \\  getter(proto, name, function () { return this.hasAttribute(attr); }, function (v) {
     \\    if (v) this.setAttribute(attr, '');
     \\    else this.removeAttribute(attr);
     \\  });
@@ -471,6 +471,30 @@ pub let PRELUDE =
     \\  }, function (v) { this.setAttribute(name, String(v)); });
     \\}
     \\for (const n of ['title', 'lang', 'dir', 'name', 'placeholder', 'alt', 'rel', 'target', 'role', 'method', 'accessKey', 'srcdoc']) reflect(n, n.toLowerCase());
+    \\// Shared reflection tables for resource elements.
+    \\for (const P of [HTMLStyleElement.prototype, HTMLLinkElement.prototype]) reflect('media', 'media', P);
+    \\function reflectCrossOrigin(proto) {
+    \\  getter(proto, 'crossOrigin', function () {
+    \\    const v = this.getAttribute('crossorigin');
+    \\    return v === null ? null : v.toLowerCase() === 'use-credentials' ? 'use-credentials' : 'anonymous';
+    \\  }, function (v) { if (v === null) this.removeAttribute('crossorigin'); else this.setAttribute('crossorigin', String(v)); });
+    \\}
+    \\for (const P of [HTMLLinkElement.prototype, HTMLScriptElement.prototype]) reflectCrossOrigin(P);
+    \\function reflectEnum(proto, name, values, fallback) {
+    \\  getter(proto, name, function () {
+    \\    const v = (this.getAttribute(name.toLowerCase()) || '').toLowerCase();
+    \\    return values.includes(v) ? v : fallback;
+    \\  }, function (v) { this.setAttribute(name.toLowerCase(), String(v)); });
+    \\}
+    \\reflectEnum(HTMLLinkElement.prototype, 'as', ['audio', 'audioworklet', 'document', 'embed', 'fetch', 'font', 'image', 'json', 'object', 'paintworklet', 'script', 'style', 'track', 'video', 'worker'], '');
+    \\for (const n of ['defer', 'noModule']) reflectBool(n, n.toLowerCase(), HTMLScriptElement.prototype);
+    \\reflect('integrity', 'integrity', HTMLScriptElement.prototype);
+    \\getter(HTMLScriptElement.prototype, 'async', function () {
+    \\  return !!this.__forceAsync || this.hasAttribute('async');
+    \\}, function (v) {
+    \\  hidden(this, '__forceAsync', false);
+    \\  if (v) this.setAttribute('async', ''); else this.removeAttribute('async');
+    \\});
     \\reflect('htmlFor', 'for');
     \\reflect('defaultValue', 'value');
     \\for (const n of ['hidden', 'disabled', 'required', 'multiple', 'autofocus', 'open']) reflectBool(n, n);
@@ -504,14 +528,14 @@ pub let PRELUDE =
     \\
     \\// classList
     \\class DOMTokenList {
-    \\  constructor(el) { hidden(this, '_el', el); }
+    \\  constructor(el, attr = 'class') { hidden(this, '_el', el); hidden(this, '_attr', attr); }
     \\  _get() {
-    \\    const c = this._el.getAttribute('class');
-    \\    return c ? c.split(/[ \t\n\f\r]+/).filter(Boolean) : [];
+    \\    const c = this._el.getAttribute(this._attr);
+    \\    return c ? c.split(/[ \t\n\f\r]+/).filter((t, i, a) => t && a.indexOf(t) === i) : [];
     \\  }
     \\  _set(list) {
-    \\    if (list.length === 0 && !this._el.hasAttribute('class')) return;
-    \\    this._el.setAttribute('class', list.join(' '));
+    \\    if (list.length === 0 && !this._el.hasAttribute(this._attr)) return;
+    \\    this._el.setAttribute(this._attr, list.join(' '));
     \\  }
     \\  _check(t) {
     \\    t = String(t);
@@ -520,8 +544,8 @@ pub let PRELUDE =
     \\    return t;
     \\  }
     \\  get length() { return this._get().length; }
-    \\  get value() { return this._el.getAttribute('class') || ''; }
-    \\  set value(v) { this._el.setAttribute('class', String(v)); }
+    \\  get value() { return this._el.getAttribute(this._attr) || ''; }
+    \\  set value(v) { this._el.setAttribute(this._attr, String(v)); }
     \\  item(i) {
     \\    const l = this._get();
     \\    return i >= 0 && i < l.length ? l[i] : null;
@@ -563,6 +587,12 @@ pub let PRELUDE =
     \\  toString() { return this.value; }
     \\}
     \\hidden(G, 'DOMTokenList', DOMTokenList);
+    \\for (const P of [HTMLLinkElement.prototype, HTMLAnchorElement.prototype, HTMLAreaElement.prototype]) {
+    \\  getter(P, 'relList', function () {
+    \\    if (!this.__relList) hidden(this, '__relList', new DOMTokenList(this, 'rel'));
+    \\    return this.__relList;
+    \\  }, function (v) { this.setAttribute('rel', String(v)); });
+    \\}
     \\getter(ElementP, 'classList', function () {
     \\  let l = this.__classList;
     \\  if (!l) {
@@ -2991,6 +3021,7 @@ pub let PRELUDE =
     \\// exists; clones are upgraded.
     \\hidden(Document.prototype, 'createElement', function (name, options) {
     \\  const el = nativeCreateElement.call(this, name);
+    \\  if (el.localName === 'script') hidden(el, '__forceAsync', true);
     \\  if (ceDefs.size > 0) {
     \\    const is = typeof options === 'string' ? options : options && options.is;
     \\    if (is !== undefined && is !== null) el.setAttribute('is', String(is));
@@ -3001,6 +3032,7 @@ pub let PRELUDE =
     \\const nativeCreateElementNS = Document.prototype.createElementNS;
     \\hidden(Document.prototype, 'createElementNS', function (ns, name, options) {
     \\  const el = nativeCreateElementNS.call(this, ns, name);
+    \\  if (el instanceof HTMLScriptElement) hidden(el, '__forceAsync', true);
     \\  if (ceDefs.size > 0 && el.namespaceURI === 'http://www.w3.org/1999/xhtml') {
     \\    const is = typeof options === 'string' ? options : options && options.is;
     \\    if (is !== undefined && is !== null) el.setAttribute('is', String(is));
