@@ -212,6 +212,51 @@ test "webp bad fixtures" {
     @expectEqual(0, try checkFixtures(@testAllocator(), "webp_bad"))
 }
 
+// Does the VP8L-compressed ALPH chunk of fixture `name` (a VP8X file)
+// decode to the alpha of its expected pixels?
+fn alphaMatches(a: Allocator, name: []u8) !bool {
+    let data = try readFixture(a, name)
+    defer a.free(data)
+    let x = try webpChunk(data[12..], 0)
+    let w = webpLe24(x.body, 4) + 1
+    let h = webpLe24(x.body, 7) + 1
+    var pos = x.next
+    while pos < data.len - 12 {
+        let c = try webpChunk(data[12..], pos)
+        pos = c.next
+        if !std.mem.eql(c.kind, "ALPH") {
+            continue
+        }
+        if c.body[0] & 3 != 1 {
+            return false
+        }
+        let alpha = try a.alloc(0 as u8, w * h)
+        defer a.free(alpha)
+        try vp8lDecodeAlpha(a, c.body[1..], w, h, alpha)
+        webpUnfilter(alpha, w, h, (c.body[0] >> 2) & 3)
+        var rgba = std.text.Builder.init(a)
+        defer rgba.deinit()
+        try rgba.append(name[..name.len - 5])
+        try rgba.append(".rgba")
+        let want = try readFixture(a, rgba.bytes())
+        defer a.free(want)
+        for i in 0..w * h {
+            if want[i * 4 + 3] != alpha[i] {
+                return false
+            }
+        }
+        return true
+    }
+    return false
+}
+
+test "webp: VP8L-compressed alpha" {
+    let a = @testAllocator()
+    @expect(try alphaMatches(a, "webp_alpha_filter_fast.webp"))
+    @expect(try alphaMatches(a, "webp_alpha_filter_best.webp"))
+    @expect(try alphaMatches(a, "webp_lossy_alpha.webp"))
+}
+
 test "empty input" {
     @expectEqual(0, try checkFixtures(@testAllocator(), "empty"))
 }

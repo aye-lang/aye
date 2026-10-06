@@ -1,16 +1,874 @@
-// vp8l: the WebP lossless decoder (VP8L).
+// vp8l: the WebP lossless decoder (VP8L, RFC 9649). An image stream is
+// a list of transforms (predictor, cross-color, subtract-green, color
+// indexing), each with a sub-image of its own, then the entropy-coded
+// ARGB pixels: prefix codes (one group of five per tile of the meta
+// prefix image), LZ77 backward references and a color cache. Pixels
+// are decoded whole, then the transforms are undone in reverse order.
 
 import std
 import std.mem.Allocator
 
+// The order of the code length code lengths.
+let VP8L_CODE_LENGTH_ORDER = [19]usize{17, 18, 0, 1, 2, 3, 4, 5, 16, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+
+// Distance codes 1 to 120 are 2-D offsets near the current pixel:
+// `y << 4 | (8 - x)` for an offset of x pixels left and y rows up.
+let VP8L_CODE_TO_PLANE = [120]u8{
+    0x18, 0x07, 0x17, 0x19, 0x28, 0x06, 0x27, 0x29, 0x16, 0x1A,
+    0x26, 0x2A, 0x38, 0x05, 0x37, 0x39, 0x15, 0x1B, 0x36, 0x3A,
+    0x25, 0x2B, 0x48, 0x04, 0x47, 0x49, 0x14, 0x1C, 0x35, 0x3B,
+    0x46, 0x4A, 0x24, 0x2C, 0x58, 0x45, 0x4B, 0x34, 0x3C, 0x03,
+    0x57, 0x59, 0x13, 0x1D, 0x56, 0x5A, 0x23, 0x2D, 0x44, 0x4C,
+    0x55, 0x5B, 0x33, 0x3D, 0x68, 0x02, 0x67, 0x69, 0x12, 0x1E,
+    0x66, 0x6A, 0x22, 0x2E, 0x54, 0x5C, 0x43, 0x4D, 0x65, 0x6B,
+    0x32, 0x3E, 0x78, 0x01, 0x77, 0x79, 0x53, 0x5D, 0x11, 0x1F,
+    0x64, 0x6C, 0x42, 0x4E, 0x76, 0x7A, 0x21, 0x2F, 0x75, 0x7B,
+    0x31, 0x3F, 0x63, 0x6D, 0x52, 0x5E, 0x00, 0x74, 0x7C, 0x41,
+    0x4F, 0x10, 0x20, 0x62, 0x6E, 0x30, 0x73, 0x7D, 0x51, 0x5F,
+    0x40, 0x72, 0x7E, 0x61, 0x6F, 0x50, 0x71, 0x7F, 0x60, 0x70,
+}
+
+// Prefix code tables: a root table indexed by the next 8 bits, and
+// second-level tables for longer codes (libwebp's layout). An entry is
+// `bits << 16 | value`: a symbol and its code length, or in the root,
+// for longer codes, the second-level table's size in bits (plus 8) and
+// its offset from the entry.
+let VP8L_ROOT_SIZE: usize = 256
+// The largest table: the root and 256 second-level tables of 7 bits.
+let VP8L_MAX_TABLE: usize = 256 + 256 * 128
+// The largest alphabet: 256 literals, 24 lengths, 2048 cache entries.
+let VP8L_MAX_ALPHABET: usize = 256 + 24 + 2048
+
+// Transform kinds.
+let VP8L_PREDICTOR: u32 = 0
+let VP8L_CROSS_COLOR: u32 = 1
+let VP8L_SUBTRACT_GREEN: u32 = 2
+let VP8L_COLOR_INDEXING: u32 = 3
+
+// Bits read least significant first. Past the end of the data the
+// reader yields zero bytes, counted in `over` (in bits); consuming them
+// is an error (the stream was cut short).
+struct Vp8lBits {
+    src: []u8
+    pos: usize
+    buf: u64
+    nbits: u64
+    over: u64
+
+    fn fill(self: *mut Self) {
+        while self.nbits <= 56 {
+            var b: u64 = 0
+            if self.pos < self.src.len {
+                b = self.src[self.pos] as u64
+                self.pos += 1
+            } else {
+                self.over += 8
+            }
+            self.buf = self.buf | (b << self.nbits)
+            self.nbits += 8
+        }
+    }
+
+    // The next `n` bits (0 to 32).
+    fn read(self: *mut Self, n: u64) ImageError!u32 {
+        if self.nbits < n {
+            self.fill()
+        }
+        if n + self.over > self.nbits {
+            return ImageError.Invalid
+        }
+        let v = self.buf & (((1 as u64) << n) - 1)
+        self.buf = self.buf >> n
+        self.nbits -= n
+        return v as u32
+    }
+}
+
+// The five prefix codes of a group (offsets of their tables): green,
+// length and cache index; red; blue; alpha; distance.
+struct Vp8lGroup {
+    t: [5]usize
+}
+
+// One transform read from the stream: `xsize` is the width it works on
+// (for color indexing, the width of its output), `data` its sub-image
+// (the palette, 256 entries, for color indexing).
+struct Vp8lTransform {
+    kind: u32
+    bits: usize
+    xsize: usize
+    data: []mut u32
+}
+
+struct Vp8lDecoder {
+    alloc: Allocator
+    br: Vp8lBits
+    // Every table of the image stream being read, `used` entries.
+    tables: []mut u32
+    used: usize
+    // Room to build one table, code lengths and sorted symbols.
+    scratch: []mut u32
+    lengths: []mut u8
+    sorted: []mut u16
+
+    fn deinit(self: *mut Self) {
+        self.alloc.free(self.tables)
+        self.alloc.free(self.scratch)
+        self.alloc.free(self.lengths)
+        self.alloc.free(self.sorted)
+    }
+}
+
 /// Decodes the body of a `VP8L` chunk (from its 0x2F signature byte).
 pub fn vp8lDecode(alloc: Allocator, data: []u8) ImageError!Bitmap {
-    return ImageError.Unsupported
+    if data.len < 5 || data[0] != 0x2F {
+        return ImageError.Invalid
+    }
+    var dec = try vp8lNewDecoder(alloc, data[1..])
+    defer dec.deinit()
+    let w = (try dec.br.read(14)) as usize + 1
+    let h = (try dec.br.read(14)) as usize + 1
+    // The alpha hint is not needed: the pixels have their alpha.
+    let alpha_hint = try dec.br.read(1)
+    if try dec.br.read(3) != 0 {
+        return ImageError.Invalid
+    }
+    var bmp = try newBitmap(alloc, w, h)
+    errdefer bmp.deinit(alloc)
+    let argb = try vp8lMainImage(&mut dec, w, h)
+    defer alloc.free(argb)
+    let px = bmp.pixels
+    for i in 0..w * h {
+        let p = argb[i]
+        px[i * 4] = ((p >> 16) & 255) as u8
+        px[i * 4 + 1] = ((p >> 8) & 255) as u8
+        px[i * 4 + 2] = (p & 255) as u8
+        px[i * 4 + 3] = (p >> 24) as u8
+    }
+    return bmp
 }
 
 /// Decodes the alpha of an `ALPH` chunk compressed with VP8L: an image
 /// stream of `width` x `height` without the VP8L header, whose green
 /// values are the alpha values, written to `out` (width * height).
 pub fn vp8lDecodeAlpha(alloc: Allocator, data: []u8, width: usize, height: usize, out: []mut u8) ImageError!void {
-    return ImageError.Unsupported
+    try checkSize(width, height)
+    if out.len < width * height {
+        return ImageError.Invalid
+    }
+    var dec = try vp8lNewDecoder(alloc, data)
+    defer dec.deinit()
+    let argb = try vp8lMainImage(&mut dec, width, height)
+    defer alloc.free(argb)
+    for i in 0..width * height {
+        out[i] = ((argb[i] >> 8) & 255) as u8
+    }
+}
+
+fn vp8lNewDecoder(alloc: Allocator, data: []u8) ImageError!Vp8lDecoder {
+    let tables = try alloc.alloc(0 as u32, 4096)
+    errdefer alloc.free(tables)
+    let scratch = try alloc.alloc(0 as u32, VP8L_MAX_TABLE)
+    errdefer alloc.free(scratch)
+    let lengths = try alloc.alloc(0 as u8, VP8L_MAX_ALPHABET)
+    errdefer alloc.free(lengths)
+    let sorted = try alloc.alloc(0 as u16, VP8L_MAX_ALPHABET)
+    return Vp8lDecoder {
+        alloc: alloc,
+        br: Vp8lBits { src: data, pos: 0, buf: 0, nbits: 0, over: 0 },
+        tables: tables,
+        used: 0,
+        scratch: scratch,
+        lengths: lengths,
+        sorted: sorted,
+    }
+}
+
+// `size` divided by 2^bits, rounded up.
+fn vp8lDiv(size: usize, bits: usize) usize {
+    return (size + ((1 as usize) << bits) - 1) >> bits
+}
+
+// The main image stream: its transforms, its pixels (xsize x ysize
+// once the transforms are undone), ARGB. Free the result.
+fn vp8lMainImage(dec: *mut Vp8lDecoder, xsize: usize, ysize: usize) ImageError![]mut u32 {
+    let alloc = dec.alloc
+    var tr = [4]Vp8lTransform{
+        Vp8lTransform { kind: 0, bits: 0, xsize: 0, data: []mut u32{} },
+        Vp8lTransform { kind: 0, bits: 0, xsize: 0, data: []mut u32{} },
+        Vp8lTransform { kind: 0, bits: 0, xsize: 0, data: []mut u32{} },
+        Vp8lTransform { kind: 0, bits: 0, xsize: 0, data: []mut u32{} },
+    }
+    var ntr: usize = 0
+    defer vp8lFreeTransforms(alloc, tr[..], &ntr)
+    var seen: u32 = 0
+    var w = xsize
+    while try dec.br.read(1) == 1 {
+        let kind = try dec.br.read(2)
+        if seen & ((1 as u32) << kind) != 0 {
+            return ImageError.Invalid
+        }
+        seen = seen | ((1 as u32) << kind)
+        var t = Vp8lTransform { kind: kind, bits: 0, xsize: w, data: []mut u32{} }
+        if kind == VP8L_PREDICTOR || kind == VP8L_CROSS_COLOR {
+            t.bits = (try dec.br.read(3)) as usize + 2
+            t.data = try vp8lImage(dec, vp8lDiv(w, t.bits), vp8lDiv(ysize, t.bits), false)
+        } else if kind == VP8L_COLOR_INDEXING {
+            let n = (try dec.br.read(8)) as usize + 1
+            t.bits = 0
+            if n <= 2 {
+                t.bits = 3
+            } else if n <= 4 {
+                t.bits = 2
+            } else if n <= 16 {
+                t.bits = 1
+            }
+            let colors = try vp8lImage(dec, n, 1, false)
+            defer alloc.free(colors)
+            // Unused indices are transparent black.
+            t.data = try alloc.alloc(0 as u32, 256)
+            t.data[0] = colors[0]
+            for i in 1..n {
+                t.data[i] = vp8lAdd(colors[i], t.data[i - 1])
+            }
+            w = vp8lDiv(w, t.bits)
+        }
+        tr[ntr] = t
+        ntr += 1
+    }
+    var px = try vp8lImage(dec, w, ysize, true)
+    errdefer alloc.free(px)
+    var i = ntr
+    while i > 0 {
+        i -= 1
+        let t = &tr[i]
+        if t.kind == VP8L_PREDICTOR {
+            vp8lUnpredict(px, t.xsize, ysize, t.data, t.bits)
+        } else if t.kind == VP8L_CROSS_COLOR {
+            vp8lUncrossColor(px, t.xsize, ysize, t.data, t.bits)
+        } else if t.kind == VP8L_SUBTRACT_GREEN {
+            vp8lAddGreen(px)
+        } else {
+            let wide = try alloc.alloc(0 as u32, t.xsize * ysize)
+            vp8lUnindex(px, wide, t.xsize, ysize, t.data, t.bits)
+            alloc.free(px)
+            px = wide
+        }
+    }
+    return px
+}
+
+fn vp8lFreeTransforms(alloc: Allocator, tr: []mut Vp8lTransform, n: *usize) {
+    for i in 0..n.* {
+        if tr[i].data.len > 0 {
+            alloc.free(tr[i].data)
+        }
+    }
+}
+
+// The entropy-coded image of xsize x ysize: a color cache size, for the
+// main image the meta prefix image, the prefix code groups, then the
+// pixels. Free the result.
+fn vp8lImage(dec: *mut Vp8lDecoder, xsize: usize, ysize: usize, main: bool) ImageError![]mut u32 {
+    let alloc = dec.alloc
+    // Tables of this image go after `mark` and are dropped at the end.
+    let mark = dec.used
+    defer dec.used = mark
+    var cache_bits: u64 = 0
+    if try dec.br.read(1) == 1 {
+        cache_bits = (try dec.br.read(4)) as u64
+        if cache_bits < 1 || cache_bits > 11 {
+            return ImageError.Invalid
+        }
+    }
+    // The meta prefix image: a group index per tile of 2^hbits pixels,
+    // renumbered densely in the order of first use (the stream may name
+    // groups no tile uses; their codes are read and dropped).
+    var hbits: usize = 0
+    var hxsize: usize = 0
+    var himage: []mut u32 = []mut u32{}
+    defer if himage.len > 0 {
+        alloc.free(himage)
+    }
+    var ngroups: usize = 1
+    var nread: usize = 1
+    var mapping: []mut i32 = []mut i32{}
+    defer if mapping.len > 0 {
+        alloc.free(mapping)
+    }
+    if main && try dec.br.read(1) == 1 {
+        hbits = (try dec.br.read(3)) as usize + 2
+        hxsize = vp8lDiv(xsize, hbits)
+        himage = try vp8lImage(dec, hxsize, vp8lDiv(ysize, hbits), false)
+        var max: usize = 0
+        for k in 0..himage.len {
+            let g = ((himage[k] >> 8) & 0xFFFF) as usize
+            himage[k] = g as u32
+            if g > max {
+                max = g
+            }
+        }
+        nread = max + 1
+        mapping = try alloc.alloc(-1 as i32, nread)
+        ngroups = 0
+        for k in 0..himage.len {
+            let g = himage[k] as usize
+            if mapping[g] < 0 {
+                mapping[g] = ngroups as i32
+                ngroups += 1
+            }
+            himage[k] = mapping[g] as u32
+        }
+    }
+    let groups = try alloc.alloc(Vp8lGroup { t: [5]usize{0, 0, 0, 0, 0} }, ngroups)
+    defer alloc.free(groups)
+    var green_size: usize = 280
+    if cache_bits > 0 {
+        green_size += (1 as usize) << cache_bits as usize
+    }
+    for g in 0..nread {
+        let before = dec.used
+        var into: usize = 0
+        var keep = true
+        if mapping.len > 0 {
+            keep = mapping[g] >= 0
+            if keep {
+                into = mapping[g] as usize
+            }
+        }
+        var codes = [5]usize{0, 0, 0, 0, 0}
+        codes[0] = try vp8lReadCode(dec, green_size)
+        codes[1] = try vp8lReadCode(dec, 256)
+        codes[2] = try vp8lReadCode(dec, 256)
+        codes[3] = try vp8lReadCode(dec, 256)
+        codes[4] = try vp8lReadCode(dec, 40)
+        if keep {
+            groups[into].t = codes
+        } else {
+            dec.used = before
+        }
+    }
+    let total = xsize * ysize
+    let out = try alloc.alloc(0 as u32, total)
+    errdefer alloc.free(out)
+    var cache: []mut u32 = []mut u32{}
+    if cache_bits > 0 {
+        cache = try alloc.alloc(0 as u32, (1 as usize) << cache_bits as usize)
+    }
+    defer if cache.len > 0 {
+        alloc.free(cache)
+    }
+    try vp8lPixels(dec, out, xsize, groups, himage, hbits, hxsize, cache, cache_bits)
+    return out
+}
+
+// The entropy-coded pixels of an image `xsize` wide into `out`.
+fn vp8lPixels(dec: *mut Vp8lDecoder, out: []mut u32, xsize: usize, groups: []Vp8lGroup, himage: []u32, hbits: usize, hxsize: usize, cache: []mut u32, cache_bits: u64) ImageError!void {
+    let t = dec.tables[..dec.used]
+    let br = &mut dec.br
+    let total = out.len
+    let tiled = himage.len > 0
+    let mask = ((1 as usize) << hbits) - 1
+    let shift = 32 - cache_bits
+    var g = groups[0].t
+    var i: usize = 0
+    var x: usize = 0
+    var y: usize = 0
+    while i < total {
+        if tiled && x & mask == 0 {
+            g = groups[himage[(y >> hbits) * hxsize + (x >> hbits)] as usize].t
+        }
+        let code = try vp8lSymbol(br, t, g[0])
+        if code < 256 {
+            let r = try vp8lSymbol(br, t, g[1])
+            let b = try vp8lSymbol(br, t, g[2])
+            let a = try vp8lSymbol(br, t, g[3])
+            let p = (a << 24) | (r << 16) | (code << 8) | b
+            out[i] = p
+            if cache_bits > 0 {
+                cache[((p *% 0x1E35A7BD) >> shift as u32) as usize] = p
+            }
+            i += 1
+            x += 1
+            if x == xsize {
+                x = 0
+                y += 1
+            }
+        } else if code < 280 {
+            let length = try vp8lPrefixValue(br, code - 256)
+            let dsym = try vp8lSymbol(br, t, g[4])
+            let dcode = try vp8lPrefixValue(br, dsym)
+            let dist = vp8lPlaneDistance(xsize, dcode)
+            if dist > i || length > total - i {
+                return ImageError.Invalid
+            }
+            for k in i..i + length {
+                let p = out[k - dist]
+                out[k] = p
+                if cache_bits > 0 {
+                    cache[((p *% 0x1E35A7BD) >> shift as u32) as usize] = p
+                }
+            }
+            i += length
+            x += length
+            while x >= xsize {
+                x -= xsize
+                y += 1
+            }
+            if tiled && x & mask != 0 && i < total {
+                g = groups[himage[(y >> hbits) * hxsize + (x >> hbits)] as usize].t
+            }
+        } else {
+            let key = (code - 280) as usize
+            if key >= cache.len {
+                return ImageError.Invalid
+            }
+            let p = cache[key]
+            out[i] = p
+            cache[((p *% 0x1E35A7BD) >> shift as u32) as usize] = p
+            i += 1
+            x += 1
+            if x == xsize {
+                x = 0
+                y += 1
+            }
+        }
+    }
+}
+
+// A length or distance from its prefix symbol: symbols 0 to 3 are 1 to
+// 4, larger ones take extra bits.
+fn vp8lPrefixValue(br: *mut Vp8lBits, sym: u32) ImageError!usize {
+    if sym < 4 {
+        return sym as usize + 1
+    }
+    let extra = ((sym - 2) >> 1) as u64
+    let offset = ((2 + (sym & 1)) as usize) << extra as usize
+    return offset + (try br.read(extra)) as usize + 1
+}
+
+// The distance in pixels of distance code `code` (1-based) in an image
+// `xsize` wide.
+fn vp8lPlaneDistance(xsize: usize, code: usize) usize {
+    if code > 120 {
+        return code - 120
+    }
+    let d = VP8L_CODE_TO_PLANE[code - 1] as usize
+    let dist = (d >> 4) * xsize + 8
+    if dist < (d & 15) + 1 {
+        return 1
+    }
+    return dist - (d & 15)
+}
+
+// One symbol of the code whose table starts at `at`.
+fn vp8lSymbol(br: *mut Vp8lBits, t: []u32, at: usize) ImageError!u32 {
+    if br.nbits < 15 {
+        br.fill()
+    }
+    let root = at + (br.buf & 255) as usize
+    var e = t[root]
+    var n = (e >> 16) as u64
+    if n > 8 {
+        let sub = root + (e & 0xFFFF) as usize
+        e = t[sub + ((br.buf >> 8) & (((1 as u64) << (n - 8)) - 1)) as usize]
+        n = 8 + (e >> 16) as u64
+    }
+    if n + br.over > br.nbits {
+        return ImageError.Invalid
+    }
+    br.buf = br.buf >> n
+    br.nbits -= n
+    return e & 0xFFFF
+}
+
+// Reads a prefix code for an alphabet of `size` symbols and adds its
+// table to `dec.tables`; returns the table's offset. A simple code
+// names one or two symbols (of 1 or 8 bits); a normal one gives code
+// lengths, themselves prefix coded (16 repeats the previous nonzero
+// length, 17 and 18 write runs of zeros).
+fn vp8lReadCode(dec: *mut Vp8lDecoder, size: usize) ImageError!usize {
+    let br = &mut dec.br
+    let lengths = dec.lengths[..size]
+    for i in 0..size {
+        lengths[i] = 0
+    }
+    if try br.read(1) == 1 {
+        let two = try br.read(1)
+        var first_bits: u64 = 1
+        if try br.read(1) == 1 {
+            first_bits = 8
+        }
+        let s0 = (try br.read(first_bits)) as usize
+        if s0 < size {
+            lengths[s0] = 1
+        }
+        if two == 1 {
+            let s1 = (try br.read(8)) as usize
+            if s1 < size {
+                lengths[s1] = 1
+            }
+        }
+    } else {
+        var cl = @zeroed([19]u8)
+        let n = (try br.read(4)) as usize + 4
+        for i in 0..n {
+            cl[VP8L_CODE_LENGTH_ORDER[i]] = (try br.read(3)) as u8
+        }
+        var cltable = @zeroed([256]u32)
+        let ct = cltable[..]
+        let ignored = try vp8lBuild(ct, cl[..], dec.sorted)
+        var max_symbol = size
+        if try br.read(1) == 1 {
+            let nbits = 2 + 2 * (try br.read(3)) as u64
+            max_symbol = 2 + (try br.read(nbits)) as usize
+            if max_symbol > size {
+                return ImageError.Invalid
+            }
+        }
+        var prev: u8 = 8
+        var s: usize = 0
+        while s < size {
+            if max_symbol == 0 {
+                break
+            }
+            max_symbol -= 1
+            let c = try vp8lSymbol(br, ct, 0)
+            if c < 16 {
+                lengths[s] = c as u8
+                s += 1
+                if c != 0 {
+                    prev = c as u8
+                }
+            } else {
+                var extra: u64 = 2
+                var repeat: usize = 3
+                var v: u8 = 0
+                if c == 16 {
+                    v = prev
+                } else if c == 17 {
+                    extra = 3
+                } else {
+                    extra = 7
+                    repeat = 11
+                }
+                repeat += (try br.read(extra)) as usize
+                if repeat > size - s {
+                    return ImageError.Invalid
+                }
+                for k in s..s + repeat {
+                    lengths[k] = v
+                }
+                s += repeat
+            }
+        }
+    }
+    let n = try vp8lBuild(dec.scratch, lengths, dec.sorted)
+    if dec.used + n > dec.tables.len {
+        var grown = dec.tables.len * 2
+        while grown < dec.used + n {
+            grown *= 2
+        }
+        dec.tables = try dec.alloc.resize(dec.tables, grown, 0 as u32)
+    }
+    let at = dec.used
+    for i in 0..n {
+        dec.tables[at + i] = dec.scratch[i]
+    }
+    dec.used += n
+    return at
+}
+
+// Builds the table of the prefix code with these code lengths (0: an
+// unused symbol, at most 15) into `out`; returns its size. A code with
+// one symbol takes no bits; any other must be complete.
+fn vp8lBuild(out: []mut u32, lengths: []u8, sorted: []mut u16) ImageError!usize {
+    var count = @zeroed([16]usize)
+    for l in lengths {
+        count[l as usize] += 1
+    }
+    var offset = @zeroed([17]usize)
+    for len in 1..16 {
+        offset[len + 1] = offset[len] + count[len]
+    }
+    var total: usize = 0
+    for s in 0..lengths.len {
+        let l = lengths[s] as usize
+        if l > 0 {
+            sorted[offset[l]] = s as u16
+            offset[l] += 1
+            total += 1
+        }
+    }
+    if total == 0 {
+        return ImageError.Invalid
+    }
+    if total == 1 {
+        for i in 0..VP8L_ROOT_SIZE {
+            out[i] = sorted[0] as u32
+        }
+        return VP8L_ROOT_SIZE
+    }
+    var key: usize = 0
+    var open: i64 = 1
+    var symbol: usize = 0
+    var step: usize = 2
+    for len in 1..9 {
+        open = open * 2 - count[len] as i64
+        if open < 0 {
+            return ImageError.Invalid
+        }
+        for k in 0..count[len] {
+            vp8lReplicate(out, key, step, VP8L_ROOT_SIZE, ((len as u32) << 16) | sorted[symbol] as u32)
+            symbol += 1
+            key = vp8lNextKey(key, len)
+        }
+        step = step << 1
+    }
+    // Second-level tables: one per 8-bit prefix of the longer codes,
+    // as large as the codes under that prefix need.
+    let mask = VP8L_ROOT_SIZE - 1
+    var low: usize = VP8L_ROOT_SIZE
+    var table_at: usize = 0
+    var table_size = VP8L_ROOT_SIZE
+    var total_size = VP8L_ROOT_SIZE
+    step = 2
+    for len in 9..16 {
+        open = open * 2 - count[len] as i64
+        if open < 0 {
+            return ImageError.Invalid
+        }
+        while count[len] > 0 {
+            if key & mask != low {
+                table_at += table_size
+                let table_bits = vp8lNextTableBits(count[..], len)
+                table_size = (1 as usize) << table_bits
+                total_size += table_size
+                low = key & mask
+                out[low] = (((table_bits + 8) as u32) << 16) | (table_at - low) as u32
+            }
+            vp8lReplicate(out, table_at + (key >> 8), step, table_size, (((len - 8) as u32) << 16) | sorted[symbol] as u32)
+            symbol += 1
+            key = vp8lNextKey(key, len)
+            count[len] -= 1
+        }
+        step = step << 1
+    }
+    if open != 0 {
+        return ImageError.Invalid
+    }
+    return total_size
+}
+
+// Writes `entry` at `at`, `at + step`, ... below `at + end`.
+fn vp8lReplicate(out: []mut u32, at: usize, step: usize, end: usize, entry: u32) {
+    var e = end
+    while e > 0 {
+        e -= step
+        out[at + e] = entry
+    }
+}
+
+// The next code of `len` bits after `key`, both bit-reversed (the
+// stream sends codes from their most significant bit, read as the
+// least significant bits of the buffer).
+fn vp8lNextKey(key: usize, len: usize) usize {
+    var step = (1 as usize) << (len - 1)
+    while key & step != 0 {
+        step = step >> 1
+    }
+    if step == 0 {
+        return key
+    }
+    return (key & (step - 1)) + step
+}
+
+// The size in bits of the second-level table for the codes from length
+// `len` on (count holds the codes not placed yet).
+fn vp8lNextTableBits(count: []usize, from: usize) usize {
+    var len = from
+    var left: i64 = (1 as i64) << (len - 8) as i64
+    while len < 15 {
+        left -= count[len] as i64
+        if left <= 0 {
+            break
+        }
+        len += 1
+        left = left * 2
+    }
+    return len - 8
+}
+
+// The sum of two ARGB pixels, channel by channel, modulo 256.
+fn vp8lAdd(a: u32, b: u32) u32 {
+    let ag = ((a & 0xFF00FF00) +% (b & 0xFF00FF00)) & 0xFF00FF00
+    let rb = ((a & 0x00FF00FF) +% (b & 0x00FF00FF)) & 0x00FF00FF
+    return ag | rb
+}
+
+// The channel-wise average of two pixels, rounded down.
+fn vp8lAverage(a: u32, b: u32) u32 {
+    return (((a ^ b) & 0xFEFEFEFE) >> 1) + (a & b)
+}
+
+fn vp8lClampByte(v: i32) u32 {
+    if v < 0 {
+        return 0
+    }
+    if v > 255 {
+        return 255
+    }
+    return v as u32
+}
+
+// Predictor 11: whichever of L and T is closer to the gradient L + T -
+// TL (summed over the channels); T on a tie.
+fn vp8lSelect(l: u32, t: u32, tl: u32) u32 {
+    var d: i32 = 0
+    var s: u32 = 0
+    while s < 32 {
+        let lc = ((l >> s) & 255) as i32
+        let tc = ((t >> s) & 255) as i32
+        let tlc = ((tl >> s) & 255) as i32
+        d += std.math.absOf(i32, lc - tlc) - std.math.absOf(i32, tc - tlc)
+        s += 8
+    }
+    if d <= 0 {
+        return t
+    }
+    return l
+}
+
+// Predictor 12: L + T - TL per channel, clamped.
+fn vp8lClampFull(l: u32, t: u32, tl: u32) u32 {
+    var out: u32 = 0
+    var s: u32 = 0
+    while s < 32 {
+        let v = ((l >> s) & 255) as i32 + ((t >> s) & 255) as i32 - ((tl >> s) & 255) as i32
+        out = out | (vp8lClampByte(v) << s)
+        s += 8
+    }
+    return out
+}
+
+// Predictor 13: a + (a - TL) / 2 per channel with a the average of L
+// and T, clamped.
+fn vp8lClampHalf(a: u32, tl: u32) u32 {
+    var out: u32 = 0
+    var s: u32 = 0
+    while s < 32 {
+        let ac = ((a >> s) & 255) as i32
+        let v = ac + (ac - ((tl >> s) & 255) as i32) / 2
+        out = out | (vp8lClampByte(v) << s)
+        s += 8
+    }
+    return out
+}
+
+// The prediction of mode `mode` from the left, top, top-right and
+// top-left pixels.
+fn vp8lPredict(mode: u32, l: u32, t: u32, tr: u32, tl: u32) u32 {
+    return match mode {
+        0 => 0xFF000000
+        1 => l
+        2 => t
+        3 => tr
+        4 => tl
+        5 => vp8lAverage(vp8lAverage(l, tr), t)
+        6 => vp8lAverage(l, tl)
+        7 => vp8lAverage(l, t)
+        8 => vp8lAverage(tl, t)
+        9 => vp8lAverage(t, tr)
+        10 => vp8lAverage(vp8lAverage(l, tl), vp8lAverage(t, tr))
+        11 => vp8lSelect(l, t, tl)
+        12 => vp8lClampFull(l, t, tl)
+        13 => vp8lClampHalf(vp8lAverage(l, t), tl)
+        _ => 0xFF000000
+    }
+}
+
+// Undoes the predictor transform in place: the first pixel is predicted
+// by opaque black, the rest of the first row by L, the first column by
+// T, the others by the mode of their tile (the green of `data`). The
+// top-right pixel of the last column is the first of the current row.
+fn vp8lUnpredict(px: []mut u32, w: usize, h: usize, data: []u32, bits: usize) {
+    px[0] = vp8lAdd(px[0], 0xFF000000)
+    for x in 1..w {
+        px[x] = vp8lAdd(px[x], px[x - 1])
+    }
+    let tiles = vp8lDiv(w, bits)
+    let tile = (1 as usize) << bits
+    for y in 1..h {
+        let row = y * w
+        px[row] = vp8lAdd(px[row], px[row - w])
+        let modes = (y >> bits) * tiles
+        var x: usize = 1
+        while x < w {
+            let mode = (data[modes + (x >> bits)] >> 8) & 15
+            var end = (x >> bits) * tile + tile
+            if end > w {
+                end = w
+            }
+            while x < end {
+                let i = row + x
+                let p = vp8lPredict(mode, px[i - 1], px[i - w], px[i - w + 1], px[i - w - 1])
+                px[i] = vp8lAdd(px[i], p)
+                x += 1
+            }
+        }
+    }
+}
+
+// `(m * c) >> 5` with both as signed bytes.
+fn vp8lColorDelta(m: u32, c: u32) i32 {
+    let ms = (m & 255) as i32 - (((m & 128) as i32) << 1)
+    let cs = (c & 255) as i32 - (((c & 128) as i32) << 1)
+    return (ms * cs) >> 5
+}
+
+// Undoes the cross-color transform: red gets green times green_to_red,
+// blue gets green times green_to_blue and the new red times
+// red_to_blue (the multipliers are the bytes of the tile's pixel).
+fn vp8lUncrossColor(px: []mut u32, w: usize, h: usize, data: []u32, bits: usize) {
+    let tiles = vp8lDiv(w, bits)
+    for y in 0..h {
+        let row = y * w
+        let mults = (y >> bits) * tiles
+        for x in 0..w {
+            let m = data[mults + (x >> bits)]
+            let p = px[row + x]
+            let green = (p >> 8) & 255
+            let red = ((((p >> 16) & 255) as i32 + vp8lColorDelta(m, green)) & 255) as u32
+            var blue = (p & 255) as i32 + vp8lColorDelta(m >> 8, green)
+            blue = blue + vp8lColorDelta(m >> 16, red)
+            px[row + x] = (p & 0xFF00FF00) | (red << 16) | ((blue & 255) as u32)
+        }
+    }
+}
+
+// Undoes the subtract-green transform: green is added to red and blue.
+fn vp8lAddGreen(px: []mut u32) {
+    for i in 0..px.len {
+        let p = px[i]
+        let g = (p >> 8) & 255
+        let rb = ((p & 0x00FF00FF) +% ((g << 16) | g)) & 0x00FF00FF
+        px[i] = (p & 0xFF00FF00) | rb
+    }
+}
+
+// Undoes color indexing: the green of each packed pixel holds 2^bits
+// indices (of 8 >> bits bits, the first in the low bits) into the
+// palette; `out` is w x h.
+fn vp8lUnindex(packed: []u32, out: []mut u32, w: usize, h: usize, palette: []u32, bits: usize) {
+    let pw = vp8lDiv(w, bits)
+    let bpp = (8 as u32) >> bits as u32
+    let per = ((1 as usize) << bits) - 1
+    let imask = ((1 as u32) << bpp) - 1
+    for y in 0..h {
+        for x in 0..w {
+            let g = (packed[y * pw + (x >> bits)] >> 8) & 255
+            let idx = (g >> ((x & per) as u32 * bpp)) & imask
+            out[y * w + x] = palette[idx as usize]
+        }
+    }
 }
