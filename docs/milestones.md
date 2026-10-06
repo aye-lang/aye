@@ -221,6 +221,35 @@ The browser's second list (`browser/COMPILER_GAPS.md`, entries 10 to 15).
 - **Acceptance:** golden and error tests for each item, `ore explain`
   texts for the new codes, and `ore fmt` idempotent on the new syntax.
 
+## M9.7: Ergonomics and runtime, round 3
+
+The browser's third list (`browser/COMPILER_GAPS.md`: the JavaScript
+engine, B6 and B7).
+
+- **Runtime:** debug-mode `General` allocates and frees in constant time
+  (a header per block, a list of live blocks, a 32 MiB quarantine of
+  poisoned freed blocks), keeps its leak and double-free reports, and
+  reports a write after free; a stack overflow panics (`panic: stack
+  overflow`) in debug and safe mode.
+- **Language:** `if f() |v| { } else |e| { }` on an error union (E0102);
+  `return match` whose arms are error unions, errors or values; struct
+  field defaults (`w: f64 = 100.0`, E0103); `orelse` chains through
+  optionals; `==` on error values; `_ = x`; the repeat literal
+  `[N]T{value, ..}`.
+- **C interop:** `extern union` (E0104); `c_int`, `c_long`, `c_ulong` and
+  the other C integer names; `@zeroed` as a constant (globals, defaults).
+- **std:** `std.thread.spawnWithStack` (and an 8 MiB stack for `spawn`);
+  `File.reader` and `Reader.readLine`, `File.read`; `std.math.inf`, `nan`,
+  `isNan`, `isInf`; a struct with `alloc` and `free` methods is an
+  `Allocator` (E0105; `free` gets the allocated size).
+- **Modules:** importing the root module is E0083 with the structure to
+  use instead (a module of its own for shared code).
+- **Acceptance:** golden and error tests for each item, `ore explain`
+  texts for the new codes, `ore fmt` on the new syntax, and a debug build
+  that does a million allocation and free pairs plus an allocating
+  `fib(25)` within 10 s (before: 963 s and 55 s; after: 0.07 s and
+  0.02 s).
+
 ## M10: Threads
 
 - **std:** `std.thread` (`spawn`, `join`), `std.sync` (`Mutex`,

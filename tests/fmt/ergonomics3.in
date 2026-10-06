@@ -1,0 +1,25 @@
+extern union  Event{
+key : KeyEvent
+padding:[56]u8
+}
+struct Box{
+x:f32=0.0
+w :f32 =  100.0
+flags:[64]bool=[64]bool{false,..}
+}
+fn f(a:c_long)!i64{
+if parse(s)|u|{
+url=u
+}else|e|{
+_=e==UrlError.Empty
+}
+if check(){
+}else |e|{
+}
+let t=alt(x)orelse title(x)orelse ""
+let grid=[3][4]i64{ [4]i64{ 7 , .. } , .. }
+return match a{
+.A=>back(n)
+.B=>UrlError.Bad
+}
+}

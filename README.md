@@ -237,15 +237,18 @@ it). `import a.b` loads the module in the directory `a/b` under the root
 module's directory, and binds `b` in the importing file; `import a.b.Name`
 imports one item. `std` is embedded in the compiler (sources in
 [`std/`](std)): `std.fs` (`open`, `create`, `exists`, `readFile`,
-`stdin`/`stdout`/`stderr`, `File.readAll`/`write`/`close`), `std.mem`
+`stdin`/`stdout`/`stderr`, `File.readAll`/`read`/`write`/`close`,
+`File.reader` and `Reader.readLine`), `std.mem`
 (`Allocator`, `AllocError`, `eql`, `copy`, `set`, `indexOf`), `std.heap`
 (`General`, `Arena`), `std.list` (`List(T)`), `std.map` (`StrMap(V)`,
 `IntMap(K, V)`), `std.text` (`Builder`, search, `split`, parsing, UTF-8),
 `std.math`, `std.sort` (`sort(T, items, less)`), `std.pool` (`Pool(T)`,
-`Handle(T)`), `std.time`, `std.thread` (`spawn`, `Thread.join`), `std.sync`
+`Handle(T)`), `std.time`, `std.thread` (`spawn`, `spawnWithStack`,
+`Thread.join`), `std.sync`
 (`Mutex`, `Channel(T)`, `Atomic(T)`),
 `std.testing`, `std.log` (`err`, `info`) and `std.os` (`args`, `exit`).
-`ore spec` lists every function. Cyclic imports are an error.
+`ore spec` lists every function. Cyclic imports are an error, so no module
+imports the root module: code that both need goes into a module of its own.
 
 ```ore
 import std
@@ -299,7 +302,8 @@ pub fn main() {
 ## Supported subset
 
 - Top level: `fn`, `pub fn`, `extern fn` (C functions), `struct Name { ... }`,
-  `extern struct Name { ... }` (C layout), `pub extern fn` with a body
+  fields with default values (`w: f64 = 100.0`),
+  `extern struct Name { ... }` (C layout), `extern union Name { ... }`, `pub extern fn` with a body
   (exported to C), `@link("lib")`,
   `enum Name { A, B { field: T } }` (tagged union, with methods), `error Name { A, B }` and
   `error All = A || B` (error sets), `interface Name { ... }`, `test "name" { }`,
@@ -316,11 +320,12 @@ pub fn main() {
   `if`/`else`, `while`, `for i in lo..hi`, `for x in seq`, `for i, x in seq`,
   `break`, `continue`, `return`, `defer`, `errdefer` (of a call, assignment,
   `if` or block), nested blocks, call
-  statements, `if x |v| { }` and `while x |v| { }` (unwrap a `?T`), `match` statements.
+  statements, `if x |v| { }` and `while x |v| { }` (unwrap a `?T`), `if f() |v| { } else |e| { }`
+  (branch on an error union), `_ = x`, `match` statements.
 - Expressions: integer/float/bool/string/char literals, multi-line strings
   (`\\` lines), `+ - * / %` (checked),
   `+% -% *%` (wrapping), bitwise `& | ^ ~` and shifts `<< >>` (checked shift
-  amount), comparisons (also of pointers and payload-less enums), `&& || !`, unary `-`, calls, struct
+  amount), comparisons (also of pointers, payload-less enums and error values), `&& || !`, unary `-`, calls, struct
   literals, field access, `as` numeric casts, arrays `[3]i32{1, 2, 3}`,
   bounds-checked indexing, slicing `a[lo..hi]` (also `p[lo..hi]` of a `[*]T`,
   unchecked), `.len`, `.ptr`, `&x`, `&mut x`,
@@ -331,15 +336,18 @@ pub fn main() {
   error values `ParseError.Empty`, `try f()`, `f() catch |e| { ... }` and
   `f() catch value`, and exhaustive `match e` on errors, method calls
   `x.m(...)` and `Type.f(...)`, struct literals of a type function's
-  struct `Pair(i64) { ... }`, the empty slice `[]T{}`, function values
+  struct `Pair(i64) { ... }`, the empty slice `[]T{}`, the repeat literal
+  `[64]bool{false, ..}`, `x orelse y` (chaining through optionals), function values
   (`let f: fn(i64) i64 = twice`, `f(1)`, `s.callback(x)`).
 - Methods: `fn` or `pub fn` in a struct or enum body, with `Self` and a receiver
   `self: Self`, `self: *Self` or `self: *mut Self`.
 - Interfaces: `interface Name { fn m(self: *Self, ...) T }`, implemented by
   any struct that has the methods; `dyn Name` values made from `&x` or
   `&mut x`, called through a vtable.
-- Memory: `var gpa = std.heap.General.init()` (libc; leak and double-free
-  reports in debug mode), `std.heap.Arena.init(backing)`, `x.allocator()`,
+- Memory: `var gpa = std.heap.General.init()` (libc; leak, double-free and
+  use-after-free-write reports in debug mode, constant time per call),
+  `std.heap.Arena.init(backing)`, a struct with `alloc` and `free` methods
+  (`&mut slab` is an `Allocator`), `x.allocator()`,
   `x.deinit()`; on a `std.mem.Allocator`: `try alloc.create(value)` (`AllocError!*mut T`),
   `alloc.destroy(p)`, `try alloc.alloc(value, n)` (`AllocError![]mut T`,
   every element set to `value`) and `alloc.free(slice)`.
@@ -352,7 +360,8 @@ pub fn main() {
   (`pkg-config` flags, `-lname` or `framework:Name`) for `ore build`, `run`
   and `test`; `@linkOptional("name")` with `@hasLink("name")` for a library
   the program can do without.
-- Types: `i8..i64 u8..u64 isize usize f32 f64 bool`, structs, enums, error
+- Types: `i8..i64 u8..u64 isize usize f32 f64 bool` (and `c_int`,
+  `c_long`, ... for C), structs, enums, error
   sets, `[N]T` (`N` a constant), `[]T`, `[]mut T` (writable elements), `*T`, `*mut T`, `?T`,
   `[*]T` (FFI pointer), `fn(A, B) R`, `dyn I`, `std.mem.Allocator`, `std.heap.General`,
   `std.heap.Arena`, instances
