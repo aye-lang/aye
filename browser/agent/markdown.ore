@@ -295,8 +295,13 @@ fn mdList(md: *mut Md, el: NodeId, ordered: bool, bl: *mut Blocks) AllocError!vo
             try pad.appendByte(' ')
         }
         let body = try prefixLines(md.alloc, item.out.bytes(), pad.bytes(), "")
-        // The first line goes after the marker.
-        try out.append(body[pad.len()..])
+        // The first line goes after the marker (an empty item, or one
+        // whose first line is empty, has no padding to drop).
+        if text.startsWith(body, pad.bytes()) {
+            try out.append(body[pad.len()..])
+        } else {
+            try out.append(body)
+        }
     }
     try emitBlock(bl, out.bytes())
 }
