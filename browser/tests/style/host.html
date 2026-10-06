@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<style>
+/* Tailwind 4 puts its theme on `:root,:host`: the root must still match. */
+:root,:host { --brand: green }
+html,:host { line-height: 2 }
+p { color: var(--brand) }
+:host(.x) p, :host-context(body) p { color: red }
+:host .y { color: red }
+</style>
+<p>green</p>
+<p class="y">green too</p>
