@@ -385,7 +385,7 @@ fn refusalOf(ui: *mut Ui) []u8 {
 
 /// An agent is about to do `what` on `node` of `s`'s page: the status
 /// bar tells it, and the node's box is outlined when its tab is shown.
-fn showAgentAction(ui: *mut Ui, s: *mut agent.Session, what: []u8, node: ?NodeId) AllocError!void {
+fn showAgentAction(ui: *mut Ui, s: *mut agent.Session, what: []u8, node: ?agent.RefNode) AllocError!void {
     let a = ui.agents orelse return
     a.activity.clear()
     try a.activity.append("agent: ")
@@ -772,7 +772,7 @@ fn pointAt(ui: *mut Ui) AllocError!void {
         ref = try agent.refAt(s, tmp, n)
     }
     var name: []u8 = ""
-    var target: ?NodeId = null
+    var target: ?agent.RefNode = null
     if ref > 0 {
         name = try refText(tmp, ref)
         target = agent.nodeOfRefIn(s, name)
@@ -917,7 +917,7 @@ fn checkWait(ui: *mut Ui, conn: usize) AllocError!void {
                 try syncSlot(ui, slot)
                 var m = text.Builder.init(tmp)
                 try m.append("found ")
-                try m.append(try agent.describe(&mut slot.session, tmp, el))
+                try m.append(try agent.describe(&mut slot.session, tmp, agent.RefNode { page: p, node: el }))
                 try m.append(" after ")
                 try m.appendUint(elapsed)
                 try m.append(" ms")

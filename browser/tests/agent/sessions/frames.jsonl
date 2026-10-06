@@ -1,0 +1,15 @@
+{"id":1,"cmd":"navigate","url":"browser/tests/agent/frames.html"}
+{"id":2,"cmd":"click","ref":"e2"}
+{"id":3,"cmd":"snapshot"}
+{"id":4,"cmd":"navigate","url":"iframes.html"}
+{"id":5,"cmd":"type","ref":"e6","text":"ada"}
+{"id":6,"cmd":"click","ref":"e7"}
+{"id":7,"cmd":"click","ref":"e9"}
+{"id":8,"cmd":"read"}
+{"id":9,"cmd":"click","ref":"e10"}
+{"id":10,"cmd":"back"}
+{"id":11,"cmd":"click","ref":"e26"}
+{"id":12,"cmd":"type","ref":"e24","text":"cy","submit":true}
+{"id":13,"cmd":"press","key":"End"}
+{"id":14,"cmd":"find","text":"signed in"}
+{"id":15,"cmd":"click","ref":"e27"}

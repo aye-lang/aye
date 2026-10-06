@@ -30,7 +30,7 @@ pub interface Host {
     fn windowCommand(self: *mut Self, conn: usize, tmp: Allocator, cmd: []u8, doc: *mut Json, args: ?usize, id: []u8, reply: *mut Reply) AllocError!bool
     /// An agent is about to act (`what`, e.g. `click button "OK" [e3]`)
     /// on `node` of the page of `s` (null for none).
-    fn agentActs(self: *mut Self, conn: usize, s: *mut Session, tmp: Allocator, what: []u8, node: ?NodeId) AllocError!void
+    fn agentActs(self: *mut Self, conn: usize, s: *mut Session, tmp: Allocator, what: []u8, node: ?RefNode) AllocError!void
 }
 
 /// The answer to a command of the window.
@@ -252,13 +252,13 @@ fn announce(s: *mut Session, tmp: Allocator, doc: *mut Json, args: ?usize, cmd: 
     let h = s.host orelse return
     var what = text.Builder.init(tmp)
     try what.append(cmd)
-    var node: ?NodeId = null
+    var node: ?RefNode = null
     if args |o| {
         if doc.getStr(o, "ref") |r| {
             try what.appendByte(' ')
             node = nodeOfRef(s, r)
             if node |n| {
-                try what.append(try describeNode(s, tmp, n))
+                try what.append(try describeNode(s, tmp, n.page, n.node))
             } else {
                 try what.append(r)
             }
@@ -289,7 +289,7 @@ fn focusRef(s: *mut Session) u32 {
     }
     let p = s.tab.page orelse return 0
     let f = p.doc.controls.focus orelse return 0
-    return s.ref_of.get(f.index) orelse 0
+    return refOf(s, p, f) orelse 0
 }
 
 // ---- for the window (ui/agents.ore)
@@ -309,15 +309,21 @@ pub fn syncSession(s: *mut Session, width: f64, height: f64, fresh: bool) AllocE
     return relayout(s)
 }
 
-/// `role "name" [eN]` of `el` on the page of `s`.
-pub fn describe(s: *mut Session, tmp: Allocator, el: NodeId) AllocError![]u8 {
-    return describeNode(s, tmp, el)
+/// `role "name" [eN]` of `el` (of the page of `s`, or of a frame's).
+pub fn describe(s: *mut Session, tmp: Allocator, el: RefNode) AllocError![]u8 {
+    return describeNode(s, tmp, el.page, el.node)
 }
 
-/// The border box of `el` (document px), or of its nearest ancestor
-/// that has one.
-pub fn rectOfNode(s: *Session, el: NodeId) ?Rect {
-    return rectOf(s, el)
+/// The border box of `el` (px of the document shown), or of its nearest
+/// ancestor that has one.
+pub fn rectOfNode(s: *Session, el: RefNode) ?Rect {
+    return rectOf(s, el.page, el.node)
+}
+
+/// Node `el` of the page shown in the tab of `s`.
+pub fn shownNode(s: *Session, el: NodeId) ?RefNode {
+    let p = s.tab.page orelse return null
+    return RefNode { page: p, node: el }
 }
 
 /// The ref the user means by `node` (under the mouse, or focused): its
@@ -328,7 +334,7 @@ pub fn refAt(s: *mut Session, tmp: Allocator, node: NodeId) AllocError!u32 {
     try buildAx(s, tmp)
     var cur: ?NodeId = node
     while cur |c| {
-        if s.ref_of.get(c.index) |r| {
+        if refOf(s, p, c) |r| {
             return r
         }
         cur = p.doc.parent(c)
@@ -337,15 +343,14 @@ pub fn refAt(s: *mut Session, tmp: Allocator, node: NodeId) AllocError!u32 {
     if p.doc.node(el).kind != dom.Kind.Element {
         el = p.doc.parent(el) orelse return 0
     }
-    return refFor(s, el)
+    return refFor(s, p, el)
 }
 
 /// The text of `el`, whitespace collapsed, cut at `max` bytes (at a
 /// character boundary, with `…`).
-pub fn textOf(s: *mut Session, tmp: Allocator, el: NodeId, max: usize) AllocError![]u8 {
-    let p = s.tab.page orelse return ""
+pub fn textOf(s: *mut Session, tmp: Allocator, el: RefNode, max: usize) AllocError![]u8 {
     var b = text.Builder.init(tmp)
-    try p.doc.textContent(el, &mut b)
+    try el.page.doc.textContent(el.node, &mut b)
     return cut(tmp, try collapse(tmp, b.bytes()), max)
 }
 
@@ -361,8 +366,8 @@ pub fn cut(tmp: Allocator, t: []u8, max: usize) AllocError![]u8 {
     return concat(tmp, t[..end], "…", "")
 }
 
-/// The node of ref `name` ("e7") on the page of `s`.
-pub fn nodeOfRefIn(s: *Session, name: []u8) ?NodeId {
+/// The node of ref `name` ("e7") on the page of `s` or in its frames.
+pub fn nodeOfRefIn(s: *Session, name: []u8) ?RefNode {
     return nodeOfRef(s, name)
 }
 

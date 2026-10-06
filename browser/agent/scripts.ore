@@ -111,7 +111,7 @@ fn waitFor(s: *mut Session, tmp: Allocator, selector: []u8, ms: f64) AllocError!
                 try relayout(s)
                 var msg = text.Builder.init(tmp)
                 try msg.append("found ")
-                try msg.append(try describeNode(s, tmp, el))
+                try msg.append(try describeNode(s, tmp, p, el))
                 try msg.append(" after ")
                 try writeNumberTo(&mut msg, engine.pageClock(p) - start)
                 try msg.append(" ms")

@@ -96,8 +96,8 @@ fn shoot(s: *mut Session, tmp: Allocator, node: ?Target, full: bool) AllocError!
     var what = text.Builder.init(tmp)
     if node |target| {
         let el = target.node.?
-        let who = try describeNode(s, tmp, el)
-        let r = rectOf(s, el) orelse {
+        let who = try describeNode(s, tmp, target.page.?, el)
+        let r = rectOf(s, target.page.?, el) orelse {
             return shotFailed(try concat(tmp, "cannot take a screenshot of ", who, ": it has no box"))
         }
         // The element's box, within the document.

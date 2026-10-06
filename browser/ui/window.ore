@@ -1188,7 +1188,7 @@ pub struct Ui {
         return windowCommandOf(self, conn, tmp, cmd, doc, args, id, reply)
     }
 
-    pub fn agentActs(self: *mut Self, conn: usize, s: *mut agent.Session, tmp: Allocator, what: []u8, node: ?NodeId) AllocError!void {
+    pub fn agentActs(self: *mut Self, conn: usize, s: *mut agent.Session, tmp: Allocator, what: []u8, node: ?agent.RefNode) AllocError!void {
         return showAgentAction(self, s, what, node)
     }
 

@@ -8,8 +8,8 @@
 // blocks, block quotes, tables as GFM tables, images `![alt](src)` and
 // rules. URLs are absolute. Whitespace collapses as in HTML; form
 // controls, scripts and what is not rendered are left out. Text is not
-// escaped, except `|` in table cells. The document of a `frame` follows
-// a heading `## Frame: URL` (links in it without refs).
+// escaped, except `|` in table cells. The document of a `frame` or an
+// `iframe` follows a heading `## Frame: URL` (its links have refs too).
 
 import css
 import dom
@@ -101,8 +101,12 @@ fn contentRoot(p: *mut Page) NodeId {
     return p.doc.root
 }
 
-// Is `el` laid out as a block (or a list item, a table part, ...)?
+// Is `el` laid out as a block (or a list item, a table part, ...)? An
+// iframe that shows a document is one here.
 fn mdBlock(md: *Md, el: NodeId) bool {
+    if md.page.doc.isElement(el, "iframe") && engine.framePage(md.page, el) != null {
+        return true
+    }
     return isBlockLevel(md.page, el)
 }
 
@@ -206,7 +210,7 @@ fn mdBlockElement(md: *mut Md, el: NodeId, bl: *mut Blocks) AllocError!void {
     if text.eql(name, "pre") {
         return mdPre(md, el, bl)
     }
-    if text.eql(name, "frame") {
+    if text.eql(name, "frame") || text.eql(name, "iframe") {
         return mdFrame(md, el, bl)
     }
     if text.eql(name, "blockquote") {
@@ -231,20 +235,21 @@ fn mdBlockElement(md: *mut Md, el: NodeId, bl: *mut Blocks) AllocError!void {
     try mdContainer(md, el, bl)
 }
 
-/// The document of the `frame` element `el` (if it was loaded and laid
-/// out): a heading with its address, then its main content.
+/// The document of the `frame` or `iframe` element `el` (if it was
+/// loaded and laid out): a heading with its address, then its main
+/// content.
 fn mdFrame(md: *mut Md, el: NodeId, bl: *mut Blocks) AllocError!void {
     let child = engine.framePage(md.page, el) orelse {
         return
     }
-    if child.styling == null {
+    if child.styling == null || styleHidden(md.page, el) {
         return
     }
     var head = text.Builder.init(md.alloc)
     try head.append("## Frame: ")
     try head.append(child.url.href)
     try emitBlock(bl, head.bytes())
-    var sub = Md { alloc: md.alloc, session: md.session, page: child, refs: false }
+    var sub = Md { alloc: md.alloc, session: md.session, page: child, refs: md.refs }
     try mdContainer(&mut sub, contentRoot(child), bl)
 }
 
@@ -671,7 +676,7 @@ fn mdInline(md: *mut Md, el: NodeId, inl: *mut text.Builder) AllocError!void {
                 try close.append(try absoluteHref(md.page, md.alloc, h))
                 try close.appendByte(')')
                 if md.refs {
-                    let r = try refFor(md.session, el)
+                    let r = try refFor(md.session, md.page, el)
                     try close.append(" [e")
                     try close.appendUint(r as u64)
                     try close.appendByte(']')

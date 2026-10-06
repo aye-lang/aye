@@ -116,19 +116,28 @@ stay), `aria-hidden=true`, `input type=hidden`, `script`, `style`,
 header cell or border) is not a `table`: its rows and cells are left
 out and their content joins the parent.
 
-A page made of frames (`<frameset>`) shows each frame's document as a
-`frame` node, named by the document's title and followed by its
-address, with the document's content under it:
+The document of a frame (of a `<frameset>`, or an `iframe`) is a
+`frame` node, named by the iframe's `title`, else the document's title,
+and followed by its address, with the document's content under it:
 
 ```
 - frame "Menu" -> http://example.com/menu.htm
-  - link "Top" -> top.htm
+  - link "Top" [e1] -> top.htm
 - frame "Home" -> http://example.com/top.htm
-  - heading "Welcome" [level=1]
+  - heading "Welcome" [level=1] [e2]
 ```
 
-The content of a frame has no refs and no boxes: actions work on the
-top document only (`navigate` to a frame's address to act in it).
+The elements in a frame have refs and boxes (in the coordinates of the
+page) like the page's own, and actions on them work in the frame's
+document: its scripts get the events, a form submits from there. A link
+(or form) with a `target` loads in the frame of that name, `_parent` in
+the parent's frame, `_top` and `_blank` in the whole tab; without a
+target, a link in a frame loads in that frame. A document loaded in a
+frame keeps the page (the response has a `diff`, not a new `snapshot`),
+and the refs of the frame's old document no longer work. `press` acts
+in the frame of the element the agent focused last; `find` also
+searches the frames; `scroll` to an element in a frame scrolls the frame
+too.
 
 The JSON form (`--json`, `"format":"json"`) is an array of nodes
 `{"role", "name", "ref", "level", "states": [...], "value", "url",
@@ -151,8 +160,8 @@ snapshot) is read row by row: the cells of a row that are one paragraph
 each make one paragraph, joined by spaces. List items with nothing
 visible in them are left out. Whitespace collapses as in HTML; `<br>` is
 a hard break (`\` at the end of the line). Form controls are left out.
-Each frame of a frameset page comes after a heading `## Frame: URL`,
-without refs.
+The document of each frame (of a frameset, or an iframe) comes after a
+heading `## Frame: URL`.
 
 ## JSON lines
 

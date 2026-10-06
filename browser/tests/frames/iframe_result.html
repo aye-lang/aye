@@ -1,0 +1,8 @@
+<!DOCTYPE html>
+<!-- What the iframes of agent/iframes.html load. -->
+<title>Result</title>
+<p id="said">Signed in.</p>
+<script>
+const q = new URLSearchParams(location.search).get('user');
+if (q) document.getElementById('said').textContent = 'Signed in as ' + q + '.';
+</script>

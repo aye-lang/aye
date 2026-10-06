@@ -8,9 +8,10 @@
 // Interactive elements and headings get refs (`e1`, `e2`, ...): a node
 // keeps its ref for the life of its document (see `refFor`).
 //
-// The document of a `frame` is a `frame` node (named by its title, with
-// its address) over the frame's content; that content has no refs and
-// no boxes (actions work on the top document).
+// The document of a `frame` or `iframe` is a `frame` node (named by the
+// iframe's `title`, else the document's title, with its address) over
+// the frame's content, whose elements get refs too (actions work in the
+// frame's document).
 //
 // The text form, one node per line, children indented by two spaces:
 //
@@ -70,6 +71,8 @@ pub struct AxNode {
     role: []u8
     name: []u8
     node: ?NodeId
+    // The page of `node`'s document.
+    page: *mut Page
     level: u32
     // 0: none.
     ref: u32
@@ -111,7 +114,11 @@ fn buildAx(s: *mut Session, alloc: Allocator) AllocError!Ax {
 
 /// An empty tree of the page shown, ready to compute roles and names.
 fn newAx(s: *mut Session, alloc: Allocator) AllocError!Ax {
-    let p = s.tab.page.?
+    return newAxIn(s, alloc, s.tab.page.?)
+}
+
+/// `newAx` for the document of page `p` (the page shown or a frame's).
+fn newAxIn(s: *mut Session, alloc: Allocator, p: *mut Page) AllocError!Ax {
     var ax = Ax {
         alloc: alloc,
         session: s,
@@ -142,15 +149,11 @@ fn labelsOf(alloc: Allocator, p: *Page) AllocError!StrMap(NodeId) {
 }
 
 fn addAx(ax: *mut Ax, parent: ?usize, role: []u8, node: ?NodeId) AllocError!usize {
-    // The nodes of a frame's document are not the top document's.
-    var top_node = node
-    if ax.frames > 0 {
-        top_node = null
-    }
     try ax.nodes.append(AxNode {
         role: role,
         name: "",
-        node: top_node,
+        node: node,
+        page: ax.page,
         level: 0,
         ref: 0,
         url: "",
@@ -210,7 +213,7 @@ fn walkNode(ax: *mut Ax, h: NodeId, parent: usize) AllocError!void {
         sealText(ax, parent)
         return
     }
-    if text.eql(n.name, "frame") {
+    if text.eql(n.name, "frame") || text.eql(n.name, "iframe") {
         return walkFrame(ax, h, parent)
     }
     if text.eql(n.name, "label") && !(ax.page.doc.attr(h, "role") != null) {
@@ -255,8 +258,8 @@ fn walkNode(ax: *mut Ax, h: NodeId, parent: usize) AllocError!void {
     let href = linkUrl(ax.page, h, role)
     let states = statesOf(ax.page, h, role, ax.page.doc.controls.focus)
     var ref: u32 = 0
-    if (html.isIn(role, INTERACTIVE) || text.eql(role, "heading")) && ax.frames == 0 {
-        ref = try refFor(ax.session, h)
+    if html.isIn(role, INTERACTIVE) || text.eql(role, "heading") {
+        ref = try refFor(ax.session, ax.page, h)
     }
     let a = axAt(ax, me)
     a.name = name
@@ -271,18 +274,24 @@ fn walkNode(ax: *mut Ax, h: NodeId, parent: usize) AllocError!void {
     sealText(ax, parent)
 }
 
-// The document of the `frame` element `h`, if it was loaded and laid
-// out: a `frame` node and the document's content under it.
+// The document of the `frame` or `iframe` element `h`, if it was loaded
+// and laid out: a `frame` node and the document's content under it.
 fn walkFrame(ax: *mut Ax, h: NodeId, parent: usize) AllocError!void {
     let child = engine.framePage(ax.page, h) orelse {
         return
     }
-    if child.styling == null {
+    if child.styling == null || styleHidden(ax.page, h) {
         return
     }
     sealText(ax, parent)
-    let me = try addAx(ax, parent, "frame", null)
-    axAt(ax, me).name = child.title
+    let me = try addAx(ax, parent, "frame", h)
+    var name = child.title
+    if ax.page.doc.attr(h, "title") |t| {
+        if text.trim(t).len > 0 {
+            name = try collapse(ax.alloc, t)
+        }
+    }
+    axAt(ax, me).name = name
     axAt(ax, me).url = child.url.href
     let page = ax.page
     let labels = ax.labels
@@ -1133,7 +1142,7 @@ fn axLine(ax: *Ax, i: usize, depth: usize, out: *mut text.Builder, boxes: bool) 
         try out.append(a.url)
     }
     if a.node |n| {
-        if ax.session.rects.get(n.index) |r| {
+        if ax.session.rects.get(nodeKey(a.page, n)) |r| {
             if boxes {
                 try out.append(" [box=")
                 try writeRect(out, r)
@@ -1234,7 +1243,7 @@ fn axJson(ax: *Ax, i: usize, w: *mut Writer, boxes: bool) AllocError!void {
         try w.string(a.url)
     }
     if a.node |n| {
-        if ax.session.rects.get(n.index) |r| {
+        if ax.session.rects.get(nodeKey(a.page, n)) |r| {
             if boxes {
                 try w.key("box")
                 try w.beginObject()
