@@ -57,6 +57,10 @@ pub struct Styles {
     // The computed initial values (what an element without any rule and
     // without a parent gets).
     initial: []mut Value
+    // Candidate rule indices, shared with lazy getComputedStyle reads.
+    ua_index: RuleIndex
+    author_index: RuleIndex
+    quirks_index: RuleIndex
 
     pub fn init(alloc: Allocator) AllocError!Styles {
         let arena = try alloc.create(Arena.init(alloc))
@@ -96,10 +100,16 @@ pub struct Styles {
             quirks: quirks,
             customs: IntMap(u32, *mut CustomLevel).init(alloc),
             initial: initial,
+            ua_index: RuleIndex.init(alloc),
+            author_index: RuleIndex.init(alloc),
+            quirks_index: RuleIndex.init(alloc),
         }
     }
 
     pub fn deinit(self: *mut Self) {
+        self.ua_index.deinit()
+        self.author_index.deinit()
+        self.quirks_index.deinit()
         self.map.deinit()
         self.before.deinit()
         self.after.deinit()
@@ -189,8 +199,8 @@ pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, o
                         wins[i].set = false
                     }
                     c.clearCustoms()
-                    var any = try c.considerPseudo(ua, ua_pseudo.items(), h, false, which as u8)
-                    if try c.considerPseudo(author, author_pseudo.items(), h, true, which as u8) {
+                    var any = try c.considerPseudo(ua, h, false, which as u8)
+                    if try c.considerPseudo(author, h, true, which as u8) {
                         any = true
                     }
                     if any {
@@ -327,7 +337,20 @@ struct Computer {
     fn consider(self: *mut Self, sheet: *Sheet, el: NodeId, author: bool) AllocError!void {
         let complexes = sheet.complexes.items()
         let decls = sheet.decls.items()
-        for r in sheet.rules.items() {
+        var index = &mut self.out.ua_index
+        if author {
+            index = &mut self.out.author_index
+        } else if sheet == &self.out.quirks {
+            index = &mut self.out.quirks_index
+        }
+        let candidates = try index.candidates(sheet, self.doc, el)
+        var previous: ?usize = null
+        for ri in candidates {
+            if previous == ri {
+                continue
+            }
+            previous = ri
+            let r = sheet.rules.items()[ri]
             var matched = false
             var spec: u32 = 0
             for k in r.sel_start..r.sel_end {
@@ -357,13 +380,23 @@ struct Computer {
         }
     }
 
-    // Offers the declarations of the rules `rules` of `sheet` that select
+    // Offers the declarations of the rules of `sheet` that select
     // the pseudo-element `pseudo` of `el`; whether one did.
-    fn considerPseudo(self: *mut Self, sheet: *Sheet, rules: []usize, el: NodeId, author: bool, pseudo: u8) AllocError!bool {
+    fn considerPseudo(self: *mut Self, sheet: *Sheet, el: NodeId, author: bool, pseudo: u8) AllocError!bool {
         let complexes = sheet.complexes.items()
         let decls = sheet.decls.items()
         var any = false
-        for ri in rules {
+        var index = &mut self.out.ua_index
+        if author {
+            index = &mut self.out.author_index
+        }
+        let candidates = try index.candidates(sheet, self.doc, el)
+        var previous: ?usize = null
+        for ri in candidates {
+            if previous == ri {
+                continue
+            }
+            previous = ri
             let r = sheet.rules.items()[ri]
             var matched = false
             var spec: u32 = 0
