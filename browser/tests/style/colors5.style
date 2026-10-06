@@ -1,0 +1,102 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <p class="a">
+      display: block
+      color: rgb(228, 228, 231)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="b">
+      display: block
+      color: rgb(24, 24, 27)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="c">
+      display: block
+      color: rgb(255, 0, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="d">
+      display: block
+      color: rgba(64, 177, 183, 0.5)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="e">
+      display: block
+      color: rgb(129, 69, 154)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="f">
+      display: block
+      color: rgb(99, 40, 123)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="g">
+      display: block
+      color: rgb(171, 90, 154)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="h">
+      display: block
+      color: rgb(125, 35, 41)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="i">
+      display: block
+      color: rgb(198, 93, 6)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="j">
+      display: block
+      color: rgb(119, 119, 119)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="k">
+      display: block
+      color: rgb(51, 179, 51)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="l">
+      display: block
+      color: rgb(128, 128, 128)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="m">
+      display: block
+      color: rgb(255, 255, 255)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="n">
+      display: block
+      color: rgb(0, 175, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="bad1">
+      display: block
+      color: rgb(0, 128, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="bad2">
+      display: block
+      color: rgb(0, 128, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="bad3">
+      display: block
+      color: rgb(0, 128, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="v">
+      display: block
+      background-color: rgb(228, 228, 231)
+      margin-top: 16px
+      margin-bottom: 16px

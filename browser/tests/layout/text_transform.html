@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0 }
+p { margin: 0 0 4px }
+.u { text-transform: uppercase }
+.l { text-transform: lowercase }
+.c { text-transform: capitalize }
+.n { text-transform: none }
+.w { width: 64px }
+.b::before { content: "before "; text-transform: uppercase }
+</style>
+<p>straße <span class="u">straße</span></p>
+<p class="u w">große maße</p>
+<p class="u">àéî ÿ αβγ абв ё <span class="n">kept</span></p>
+<p class="l">ÀÉÎ ΑΒΓ АБВ Ё MIXED</p>
+<p class="c">hello wORLD (quoted) don't 3rd é-ver</p>
+<p class="c">foo<span>bar</span> <span>baz</span> qux<br>after break</p>
+<p class="b">text</p>

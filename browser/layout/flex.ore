@@ -145,8 +145,11 @@ fn layoutFlex(t: *mut Tree, i: usize, cw: f64, ch: f64) AllocError!f64 {
                 let cb = t.bx(it.box)
                 line_cross = math.max(line_cross, cb.h + cb.margin[0] + cb.margin[2])
             } else {
+                let content_h = b.h
                 b.h = it.target
-                line_cross = math.max(line_cross, b.w + b.margin[1] + b.margin[3])
+                try relayoutAt(t, it.box, content_h, cw, ch)
+                let cb = t.bx(it.box)
+                line_cross = math.max(line_cross, cb.w + cb.margin[1] + cb.margin[3])
             }
         }
         if lines.len == 1 {
@@ -209,7 +212,7 @@ fn layoutFlex(t: *mut Tree, i: usize, cw: f64, ch: f64) AllocError!f64 {
             if reverse {
                 main_at = line_main - pos - it.target
             }
-            let cross_at = alignCross(t, it.box, row, line_cross, cw, ch)
+            let cross_at = try alignCross(t, it.box, row, line_cross, cw, ch)
             let b = t.bx(it.box)
             if row {
                 b.x = main_at
@@ -359,7 +362,7 @@ fn alignOf(t: *Tree, c: usize) []u8 {
 
 // Aligns item `c` in a line `line_cross` px across: stretches it when it
 // should; returns the offset of its border box.
-fn alignCross(t: *mut Tree, c: usize, row: bool, line_cross: f64, cw: f64, ch: f64) f64 {
+fn alignCross(t: *mut Tree, c: usize, row: bool, line_cross: f64, cw: f64, ch: f64) AllocError!f64 {
     let align = alignOf(t, c)
     let b = t.bx(c)
     var before = b.margin[3]
@@ -370,7 +373,9 @@ fn alignCross(t: *mut Tree, c: usize, row: bool, line_cross: f64, cw: f64, ch: f
     }
     if row && (text.eql(align, "stretch") || text.eql(align, "normal")) && isKeyword(b.style[css.HEIGHT], "auto") {
         let h = clampHeight(t, c, line_cross - b.margin[0] - b.margin[2], ch)
+        let content_h = b.h
         t.bx(c).h = h
+        try relayoutAt(t, c, content_h, cw, ch)
         return before
     }
     if text.eql(align, "flex-end") || text.eql(align, "end") || text.eql(align, "self-end") {
@@ -380,6 +385,47 @@ fn alignCross(t: *mut Tree, c: usize, row: bool, line_cross: f64, cw: f64, ch: f
         return (line_cross - size) / 2.0 + before
     }
     return before
+}
+
+// Item `c` was laid out `laid_h` px high and its container then set its
+// height (stretched, or flexed in a column): that height is definite
+// (CSS Flexbox 9.4, 9.8), so its content is laid out again at it when it
+// differs and the content can depend on it (a flex or grid container, or
+// a child with a percentage height).
+fn relayoutAt(t: *mut Tree, c: usize, laid_h: f64, cw: f64, ch: f64) AllocError!void {
+    let h = t.bx(c).h
+    if math.abs(h - laid_h) < 0.01 || !heightDependent(t, c) {
+        return
+    }
+    t.bx(c).forced_h = h
+    try itemContents(t, c, cw, ch)
+    t.bx(c).forced_h = -1.0
+    t.bx(c).h = h
+}
+
+fn heightDependent(t: *Tree, c: usize) bool {
+    let kind = t.bx(c).kind
+    if kind == BoxKind.Flex || kind == BoxKind.Grid {
+        return true
+    }
+    if kind != BoxKind.Block && kind != BoxKind.InlineBlock {
+        return false
+    }
+    for k in t.children(c) {
+        let s = t.bx(k).style
+        if hasPercent(s[css.HEIGHT]) || hasPercent(s[css.MIN_HEIGHT]) || hasPercent(s[css.MAX_HEIGHT]) {
+            return true
+        }
+    }
+    return false
+}
+
+fn hasPercent(v: css.Value) bool {
+    return match v {
+        .Percent { v: _ } => true
+        .Calc { pct, px: _ } => pct != 0.0
+        _ => false
+    }
 }
 
 // Resolves the flexible lengths of `line` in `avail` px (CSS Flexbox

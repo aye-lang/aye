@@ -1,0 +1,23 @@
+viewport 800x600
+  block <html> (0, 0) 800x410
+    block <body> (0, 0) 800x410
+      flex <div class="row"> (0, 0) 800x200
+        flex <div class="col"> (0, 0) 300x200
+          block <div class="a"> (0, 0) 300x20
+            line (0, 0) 300x20
+              text (0, 2) 8x16 "a"
+          block <div class="b"> (0, 180) 300x20
+            line (0, 180) 300x20
+              text (0, 182) 8x16 "b"
+        block <div class="box"> (300, 0) 32x200
+          block <div class="half"> (300, 0) 32x100
+            line (300, 0) 32x20
+              text (300, 2) 32x16 "half"
+      flex <div class="outer"> (0, 210) 800x200
+        block <div class="c"> (0, 210) 800x20
+          line (0, 210) 800x20
+            text (0, 212) 8x16 "c"
+        block <div class="grow"> (0, 230) 800x180
+          block <div class="full"> (0, 230) 800x180
+            line (0, 230) 800x20
+              text (0, 232) 32x16 "full"

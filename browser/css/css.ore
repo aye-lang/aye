@@ -105,7 +105,7 @@ pub struct Property {
     initial: Value
 }
 
-pub let NPROPS: usize = 110
+pub let NPROPS: usize = 111
 
 pub let DISPLAY: usize = 0
 pub let POSITION: usize = 1
@@ -212,6 +212,8 @@ pub let TEXT_INDENT: usize = 107
 // How grid items sit across their area (layout/grid.ore).
 pub let JUSTIFY_ITEMS: usize = 108
 pub let JUSTIFY_SELF: usize = 109
+// `text-transform` (layout/inline.ore).
+pub let TEXT_TRANSFORM: usize = 110
 
 let DISPLAYS = "inline block list-item inline-block table inline-table table-row-group table-header-group table-footer-group table-row table-cell table-column-group table-column table-caption flex inline-flex grid inline-grid flow-root contents none"
 let BORDER_STYLES = "none hidden dotted dashed solid double groove ridge inset outset"
@@ -222,7 +224,7 @@ let ALIGNS = "normal stretch flex-start flex-end start end self-start self-end c
 let BLACK = Color { r: 0, g: 0, b: 0, a: 1.0 }
 let TRANSPARENT = Color { r: 0, g: 0, b: 0, a: 0.0 }
 
-pub let PROPERTIES = [110]Property{
+pub let PROPERTIES = [111]Property{
     Property { name: "display", inherited: false, kind: PKind.Keywords, keywords: DISPLAYS, initial: Value.Keyword { k: "inline" } },
     Property { name: "position", inherited: false, kind: PKind.Keywords, keywords: "static relative absolute fixed sticky", initial: Value.Keyword { k: "static" } },
     Property { name: "color", inherited: true, kind: PKind.Color, keywords: "", initial: Value.Rgba { c: BLACK } },
@@ -334,6 +336,8 @@ pub let PROPERTIES = [110]Property{
     Property { name: "text-indent", inherited: true, kind: PKind.Length, keywords: "", initial: Value.Px { v: 0.0 } },
     Property { name: "justify-items", inherited: false, kind: PKind.Keywords, keywords: "normal stretch start end center left right flex-start flex-end self-start self-end baseline legacy", initial: Value.Keyword { k: "normal" } },
     Property { name: "justify-self", inherited: false, kind: PKind.Keywords, keywords: "auto normal stretch start end center left right flex-start flex-end self-start self-end baseline", initial: Value.Keyword { k: "auto" } },
+    // `full-width` and `full-size-kana` are accepted and lay out as `none`.
+    Property { name: "text-transform", inherited: true, kind: PKind.Keywords, keywords: "none uppercase lowercase capitalize full-width full-size-kana", initial: Value.Keyword { k: "none" } },
 }
 
 /// The index of the longhand property `name` (lower case).

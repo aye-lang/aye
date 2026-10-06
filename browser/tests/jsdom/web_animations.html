@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<title>Web Animations</title>
+<div id="box" style="color: red"></div>
+<div id="other"></div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.map(String).join(' ') + '\n'; }
+const box = document.getElementById('box');
+const other = document.getElementById('other');
+const ids = list => '[' + list.map(a => a.id).join(',') + ']';
+
+log('interfaces', typeof Animation, typeof KeyframeEffect, typeof AnimationEffect, typeof DocumentTimeline, typeof AnimationTimeline, typeof AnimationPlaybackEvent);
+log('timeline', document.timeline instanceof DocumentTimeline, document.timeline instanceof AnimationTimeline, typeof document.timeline.currentTime);
+log('before', ids(box.getAnimations()), ids(document.getAnimations()));
+
+// Numeric options, array keyframes.
+const a = box.animate([{ opacity: 0 }, { opacity: 1 }], 100);
+a.id = 'a';
+log('a', a instanceof Animation, a instanceof EventTarget, a.effect instanceof KeyframeEffect, a.effect instanceof AnimationEffect, a.effect.target === box, a.timeline === document.timeline);
+log('a state', a.playState, a.pending, a.currentTime, a.startTime !== null, a.playbackRate);
+log('a timing', JSON.stringify(a.effect.getTiming()));
+log('a keyframes', JSON.stringify(a.effect.getKeyframes()));
+
+// Property-indexed keyframes, fill forwards, an id from the options.
+const b = other.animate({ opacity: [0, 0.5, 1], backgroundColor: ['red', 'blue'] }, { duration: 200, fill: 'forwards', id: 'b' });
+log('b keyframes', JSON.stringify(b.effect.getKeyframes().map(k => [k.computedOffset, k.opacity, k.backgroundColor])));
+log('after animate', ids(box.getAnimations()), ids(other.getAnimations()), ids(document.getAnimations()), ids(document.body.getAnimations({ subtree: true })));
+
+// Cancel: finished rejects with an AbortError, a cancel event, the list loses it.
+const c = box.animate(null, { duration: 1000, id: 'c' });
+const cFinished = c.finished;
+cFinished.then(() => log('c finished?!'), e => log('c rejected', e instanceof DOMException, e.name));
+c.oncancel = e => log('c oncancel', e instanceof AnimationPlaybackEvent, e.currentTime);
+c.addEventListener('cancel', () => log('c cancel listener'));
+log('c listed', ids(box.getAnimations()));
+c.cancel();
+log('c after cancel', c.playState, c.currentTime, c.startTime, c.finished !== cFinished, ids(box.getAnimations()));
+
+// Finish order: the finished promise, then onfinish, then listeners.
+a.finished.then(x => log('a finished resolves', x === a, a.playState));
+a.onfinish = e => log('a onfinish', e.type, e.currentTime);
+a.addEventListener('finish', () => log('a finish listener'));
+
+// Pause and play.
+const d = box.animate({ transform: ['none', 'translateX(10px)'] }, { duration: 50, id: 'd' });
+d.pause();
+log('d paused', d.playState, d.currentTime, d.startTime);
+setTimeout(() => {
+  log('d still paused', d.playState, d.currentTime);
+  d.play();
+  log('d play', d.playState);
+  d.finished.then(() => log('d finished', d.playState, d.currentTime));
+}, 80);
+
+// finish() jumps to the end; play() again restarts.
+const e = box.animate({ color: 'green' }, { duration: 5000, fill: 'both', id: 'e' });
+log('e running', e.playState, box.style.color);
+e.finish();
+log('e finish()', e.playState, e.currentTime, box.style.color, ids(box.getAnimations()));
+e.cancel();
+log('e cancel', e.playState, box.style.color, ids(box.getAnimations()));
+
+// Infinite iterations never finish.
+const f = box.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 10, iterations: Infinity, id: 'f' });
+try { f.finish(); } catch (err) { log('f finish throws', err.name); }
+
+// commitStyles writes the end into the inline style, which stays after cancel.
+const g = other.animate([{ width: '1px' }, { width: '30px' }], { duration: 20, fill: 'forwards', id: 'g' });
+
+(async () => {
+  await a.finished;
+  log('awaited a', a.playState, ids(box.getAnimations()));
+  await b.finished;
+  log('b finished', b.playState, b.currentTime, ids(other.getAnimations()));
+  log('b fill', other.style.opacity, other.style.backgroundColor);
+  log('g', g.playState, other.style.width);
+  g.commitStyles();
+  g.cancel();
+  log('g committed', other.style.width);
+  b.cancel();
+  log('b cancel', b.playState, JSON.stringify(other.style.opacity), JSON.stringify(other.style.backgroundColor), ids(other.getAnimations()));
+  f.cancel();
+  c.play();
+  c.finish();
+  const settled = await Promise.allSettled([a.finished, c.finished, cFinished]);
+  log('settled', settled.map(r => r.status).join(','), ids(document.getAnimations()));
+  log('box style', box.getAttribute('style'));
+})();
+</script>

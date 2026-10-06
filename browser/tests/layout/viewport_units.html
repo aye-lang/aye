@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<style>
+/* The small, large and dynamic viewport units are the window's (800x600). */
+body { margin: 0 }
+.hero { height: 50dvh; width: 25dvw }
+.s { height: 10svh; width: 10lvw }
+.c { height: calc(10lvh + 1px); width: 10dvmin }
+.m { height: 5svmax; width: 10vi }
+.g { display: grid; grid-template-columns: 10dvw 1fr; grid-template-rows: 5dvh }
+</style>
+<div class="hero"></div>
+<div class="s"></div>
+<div class="c"></div>
+<div class="m"></div>
+<div class="g"><div></div><div></div></div>

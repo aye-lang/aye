@@ -6,7 +6,7 @@
 // or patch, the window (timers, location, history, localStorage, alert,
 // getComputedStyle, performance), fetch, and more web APIs (URL, atob,
 // TextEncoder, AbortController, the observers, matchMedia,
-// XMLHttpRequest...). It
+// XMLHttpRequest, Web Animations...). It
 // calls the native functions of the `ak` object (window_api.ore) and
 // hands `hostEvent` to the browser.
 //
@@ -991,6 +991,7 @@ pub let PRELUDE =
     \\getter(Document.prototype, 'location', function () { return location; }, function (v) { location.href = v; });
     \\getter(Document.prototype, 'URL', function () { return ak.documentUrl(this); });
     \\getter(Document.prototype, 'documentURI', function () { return ak.documentUrl(this); });
+    \\getter(Node.prototype, 'baseURI', function () { return ak.documentBase(this); });
     \\getter(Document.prototype, 'visibilityState', function () { return 'visible'; });
     \\getter(Document.prototype, 'hidden', function () { return false; });
     \\getter(Document.prototype, 'cookie', function () { return ak.cookie(); }, function (v) { ak.setCookie(String(v)); });
@@ -1865,6 +1866,12 @@ pub let PRELUDE =
     \\  if (width !== undefined) img.setAttribute('width', String(width));
     \\  if (height !== undefined) img.setAttribute('height', String(height));
     \\  return img;
+    \\});
+    \\// The engine fetches images for rendering, not for scripts: decode()
+    \\// settles at once, fulfilled when the image has a source.
+    \\hidden(HTMLImageElement.prototype, 'decode', function () {
+    \\  if (this.getAttribute('src')) return Promise.resolve();
+    \\  return Promise.reject(new DOMException('The source image cannot be decoded.', 'EncodingError'));
     \\});
     \\// Media elements play nothing: play() fails as for an unsupported source.
     \\const MediaP = HTMLMediaElement.prototype;
@@ -3016,5 +3023,543 @@ pub let PRELUDE =
     \\  return i;
     \\});
     \\
+    \\
+    \\// Web Animations: Element.animate, Animation, KeyframeEffect and the
+    \\// document timeline. Nothing moves in between: no frame is
+    \\// interpolated, the animation only keeps time (a timer at the end of
+    \\// its delay, of its active interval and of its end delay). Outside its
+    \\// active interval, a fill (`forwards`, `backwards`, `both`) applies the
+    \\// keyframe the effect stops on, written into the element's inline style;
+    \\// cancelling restores the inline values from before (a value a script
+    \\// set meanwhile on the same property is lost then). CSS animations and
+    \\// transitions make no Animation objects, so getAnimations() lists only
+    \\// those of scripts.
+    \\const EPS = 1e-6;
+    \\const animationsAll = [];
+    \\let animationSeq = 0;
+    \\function cssName(p) {
+    \\  if (p === 'cssFloat') return 'float';
+    \\  if (p === 'cssOffset') return 'offset';
+    \\  return p.startsWith('--') ? p : p.replace(/[A-Z]/g, c => '-' + c.toLowerCase());
+    \\}
+    \\// Missing offsets: the first 0, the last 1, the others evenly between.
+    \\function computeOffsets(frames) {
+    \\  const n = frames.length;
+    \\  const c = frames.map(f => f.offset);
+    \\  if (n > 1 && c[0] === null) c[0] = 0;
+    \\  if (n > 0 && c[n - 1] === null) c[n - 1] = 1;
+    \\  for (let i = 0; i < n; i++) {
+    \\    if (c[i] !== null) continue;
+    \\    let j = i;
+    \\    while (c[j] === null) j++;
+    \\    for (let k = i; k < j; k++) c[k] = c[i - 1] + (c[j] - c[i - 1]) * (k - i + 1) / (j - i + 1);
+    \\    i = j;
+    \\  }
+    \\  frames.forEach((f, i) => { f.computed = c[i]; });
+    \\  return frames;
+    \\}
+    \\// Keyframes as [{ offset, easing, composite, props }], props by IDL name.
+    \\function keyframesOf(k) {
+    \\  if (k === null || k === undefined) return [];
+    \\  if (typeof k !== 'object') throw new TypeError("Failed to execute 'animate' on 'Element': parameter 1 is not of type 'object'.");
+    \\  const skip = ['offset', 'easing', 'composite'];
+    \\  const frame = (offset, easing, composite) => ({
+    \\    offset: offset === null || offset === undefined ? null : Number(offset),
+    \\    easing: easing === undefined ? 'linear' : String(easing),
+    \\    composite: composite === undefined ? 'auto' : String(composite),
+    \\    props: {},
+    \\  });
+    \\  if (typeof k[Symbol.iterator] === 'function') {
+    \\    return computeOffsets(Array.from(k, f => {
+    \\      f = f || {};
+    \\      const r = frame(f.offset, f.easing, f.composite);
+    \\      for (const p of Object.keys(f)) if (!skip.includes(p)) r.props[p] = String(f[p]);
+    \\      return r;
+    \\    }));
+    \\  }
+    \\  // Property-indexed: each property's values spread evenly over [0, 1].
+    \\  const byOffset = new Map();
+    \\  for (const p of Object.keys(k)) {
+    \\    if (skip.includes(p)) continue;
+    \\    const vals = Array.isArray(k[p]) ? k[p] : [k[p]];
+    \\    vals.forEach((v, i) => {
+    \\      const off = vals.length === 1 ? 1 : i / (vals.length - 1);
+    \\      if (!byOffset.has(off)) byOffset.set(off, frame(null, undefined, undefined));
+    \\      byOffset.get(off).props[p] = String(v);
+    \\    });
+    \\  }
+    \\  const offs = Array.from(byOffset.keys()).sort((a, b) => a - b);
+    \\  const frames = offs.map(o => byOffset.get(o));
+    \\  const list = (v, i) => Array.isArray(v) ? v[i] : (v === undefined || i > 0 ? undefined : v);
+    \\  frames.forEach((f, i) => {
+    \\    if (list(k.offset, i) != null) f.offset = Number(list(k.offset, i));
+    \\    const e = Array.isArray(k.easing) ? k.easing[i % k.easing.length] : k.easing;
+    \\    if (e !== undefined) f.easing = String(e);
+    \\  });
+    \\  computeOffsets(frames);
+    \\  frames.forEach((f, i) => { f.computed = offs[i]; });
+    \\  return frames;
+    \\}
+    \\const TIMING_DEFAULTS = { delay: 0, endDelay: 0, fill: 'auto', iterationStart: 0, iterations: 1, duration: 'auto', direction: 'normal', easing: 'linear' };
+    \\function timingOf(o, base, what) {
+    \\  const t = Object.assign({}, base || TIMING_DEFAULTS);
+    \\  if (typeof o === 'number') o = { duration: o };
+    \\  if (!o || typeof o !== 'object') return t;
+    \\  for (const k of Object.keys(TIMING_DEFAULTS)) {
+    \\    const v = o[k];
+    \\    if (v === undefined) continue;
+    \\    if (k === 'duration') t.duration = v === 'auto' ? 'auto' : Number(v);
+    \\    else t[k] = typeof TIMING_DEFAULTS[k] === 'number' ? Number(v) : String(v);
+    \\  }
+    \\  if (t.duration !== 'auto' && !(t.duration >= 0)) throw new TypeError("Failed to execute '" + what + "': duration must be non-negative or auto.");
+    \\  if (!(t.iterations >= 0)) throw new TypeError("Failed to execute '" + what + "': iterations must be non-negative.");
+    \\  if (!isFinite(t.delay) || !isFinite(t.endDelay)) throw new TypeError("Failed to execute '" + what + "': delay and endDelay must be finite.");
+    \\  return t;
+    \\}
+    \\
+    \\class AnimationEffect {
+    \\  constructor() {
+    \\    if (new.target === AnimationEffect) throw new TypeError('Illegal constructor');
+    \\    hidden(this, '_timing', timingOf());
+    \\    hidden(this, '_anim', null);
+    \\  }
+    \\  getTiming() { return Object.assign({}, this._timing); }
+    \\  updateTiming(t) {
+    \\    this._timing = timingOf(t, this._timing, "updateTiming' on 'AnimationEffect");
+    \\    if (this._anim) this._anim._update();
+    \\  }
+    \\  _times() {
+    \\    const t = this._timing;
+    \\    const dur = t.duration === 'auto' ? 0 : t.duration;
+    \\    const active = dur === 0 ? 0 : dur * t.iterations;
+    \\    return { dur, active, end: Math.max(t.delay + active + t.endDelay, 0) };
+    \\  }
+    \\  // The phase at local time `lt` and the progress in the iteration (0..1,
+    \\  // after `direction`); progress null when no fill applies.
+    \\  _progress(lt, rate) {
+    \\    if (lt === null) return null;
+    \\    const t = this._timing, { dur, active, end } = this._times();
+    \\    const beforeEnd = Math.max(Math.min(t.delay, end), 0);
+    \\    const activeEnd = Math.max(Math.min(t.delay + active, end), 0);
+    \\    let phase = 'active';
+    \\    if (lt < beforeEnd || (rate < 0 && lt === beforeEnd)) phase = 'before';
+    \\    else if (lt > activeEnd || (rate >= 0 && lt === activeEnd)) phase = 'after';
+    \\    let overall;
+    \\    if (phase === 'before') {
+    \\      if (t.fill !== 'backwards' && t.fill !== 'both') return { phase, progress: null };
+    \\      overall = 0;
+    \\    } else if (phase === 'after') {
+    \\      if (t.fill !== 'forwards' && t.fill !== 'both') return { phase, progress: null };
+    \\      overall = dur === 0 ? t.iterations : Math.max(Math.min(lt - t.delay, active), 0) / dur;
+    \\    } else {
+    \\      overall = (lt - t.delay) / dur;
+    \\    }
+    \\    if (!isFinite(overall)) overall = 1;
+    \\    let iteration = Math.floor(overall), simple = overall - iteration;
+    \\    if (simple === 0 && phase === 'after' && overall !== 0) {
+    \\      simple = 1;
+    \\      iteration -= 1;
+    \\    }
+    \\    const d = t.direction;
+    \\    const forwards = d === 'normal' || (d === 'alternate' && iteration % 2 === 0) || (d === 'alternate-reverse' && iteration % 2 !== 0);
+    \\    return { phase, progress: forwards ? simple : 1 - simple, iteration };
+    \\  }
+    \\  getComputedTiming() {
+    \\    const r = this.getTiming(), { dur, active, end } = this._times();
+    \\    const lt = this._anim ? this._anim.currentTime : null;
+    \\    const p = this._progress(lt, this._anim ? this._anim._rate : 1);
+    \\    r.duration = dur;
+    \\    r.endTime = end;
+    \\    r.activeDuration = active;
+    \\    r.localTime = lt;
+    \\    r.progress = p ? p.progress : null;
+    \\    r.currentIteration = p && p.progress !== null ? (p.iteration || 0) : null;
+    \\    return r;
+    \\  }
+    \\}
+    \\class KeyframeEffect extends AnimationEffect {
+    \\  constructor(target, keyframes, options) {
+    \\    super();
+    \\    if (target instanceof KeyframeEffect) {
+    \\      const src = target;
+    \\      this.target = src.target;
+    \\      this._timing = src.getTiming();
+    \\      hidden(this, '_frames', src._frames.map(f => Object.assign({}, f, { props: Object.assign({}, f.props) })));
+    \\      this.composite = src.composite;
+    \\      this.pseudoElement = src.pseudoElement;
+    \\      return;
+    \\    }
+    \\    this.target = target === undefined ? null : target;
+    \\    this._timing = timingOf(options, null, "construct 'KeyframeEffect");
+    \\    hidden(this, '_frames', keyframesOf(keyframes));
+    \\    this.composite = options && typeof options === 'object' && options.composite ? String(options.composite) : 'replace';
+    \\    this.pseudoElement = options && typeof options === 'object' && options.pseudoElement ? String(options.pseudoElement) : null;
+    \\  }
+    \\  getKeyframes() {
+    \\    return this._frames.map(f => Object.assign({ offset: f.offset, easing: f.easing, composite: f.composite, computedOffset: f.computed }, f.props));
+    \\  }
+    \\  setKeyframes(k) {
+    \\    this._frames = keyframesOf(k);
+    \\    if (this._anim) this._anim._update();
+    \\  }
+    \\  // CSS property -> value at `progress`: for each property, the last
+    \\  // keyframe at or before it (no interpolation), else its first one.
+    \\  _valuesAt(progress) {
+    \\    const out = {};
+    \\    for (const f of this._frames) {
+    \\      for (const p of Object.keys(f.props)) {
+    \\        const name = cssName(p);
+    \\        if (!(name in out) || f.computed <= progress + EPS) out[name] = f.props[p];
+    \\      }
+    \\    }
+    \\    return out;
+    \\  }
+    \\}
+    \\
+    \\// What fills write into inline styles: element -> CSS property ->
+    \\// { base: the inline value before, layers: [{ anim, value }] }.
+    \\const fills = new WeakMap();
+    \\function stylable(el) {
+    \\  return el && typeof el === 'object' && el.style && typeof el.style.setProperty === 'function';
+    \\}
+    \\function writeTop(el, prop, rec) {
+    \\  if (rec.layers.length === 0) {
+    \\    if (rec.base === '') el.style.removeProperty(prop);
+    \\    else el.style.setProperty(prop, rec.base);
+    \\  } else {
+    \\    el.style.setProperty(prop, rec.layers[rec.layers.length - 1].value);
+    \\  }
+    \\}
+    \\function fillSet(el, anim, values) {
+    \\  let m = fills.get(el);
+    \\  if (!m) fills.set(el, m = new Map());
+    \\  for (const prop of Object.keys(values)) {
+    \\    let rec = m.get(prop);
+    \\    if (!rec) m.set(prop, rec = { base: el.style.getPropertyValue(prop), layers: [] });
+    \\    rec.layers = rec.layers.filter(l => l.anim !== anim);
+    \\    rec.layers.push({ anim, value: values[prop] });
+    \\    rec.layers.sort((a, b) => a.anim._seq - b.anim._seq);
+    \\    writeTop(el, prop, rec);
+    \\  }
+    \\}
+    \\function fillClear(el, anim, values) {
+    \\  const m = fills.get(el);
+    \\  if (!m) return;
+    \\  for (const prop of Object.keys(values)) {
+    \\    const rec = m.get(prop);
+    \\    if (!rec) continue;
+    \\    rec.layers = rec.layers.filter(l => l.anim !== anim);
+    \\    writeTop(el, prop, rec);
+    \\    if (rec.layers.length === 0) m.delete(prop);
+    \\  }
+    \\}
+    \\function sameValues(a, b) {
+    \\  const ka = Object.keys(a), kb = Object.keys(b);
+    \\  return ka.length === kb.length && ka.every(k => a[k] === b[k]);
+    \\}
+    \\function finishedPromise() {
+    \\  const r = { done: false };
+    \\  r.promise = new Promise((resolve, reject) => { r.resolve = resolve; r.reject = reject; });
+    \\  return r;
+    \\}
+    \\
+    \\class AnimationTimeline {
+    \\  constructor() { if (new.target === AnimationTimeline) throw new TypeError('Illegal constructor'); }
+    \\}
+    \\class DocumentTimeline extends AnimationTimeline {
+    \\  constructor(options) {
+    \\    super();
+    \\    hidden(this, '_origin', options && options.originTime !== undefined ? Number(options.originTime) : 0);
+    \\  }
+    \\  get currentTime() { return performance.now() - this._origin; }
+    \\}
+    \\const documentTimeline = new DocumentTimeline();
+    \\getter(Document.prototype, 'timeline', function () { return documentTimeline; });
+    \\
+    \\class AnimationPlaybackEvent extends Event {
+    \\  constructor(type, init) {
+    \\    super(type, init);
+    \\    this.currentTime = init && init.currentTime !== undefined ? init.currentTime : null;
+    \\    this.timelineCurrentTime = init && init.timelineCurrentTime !== undefined ? init.timelineCurrentTime : null;
+    \\  }
+    \\}
+    \\
+    \\class Animation extends EventTarget {
+    \\  constructor(effect, timeline) {
+    \\    super();
+    \\    hidden(this, '_seq', ++animationSeq);
+    \\    hidden(this, '_effect', null);
+    \\    hidden(this, '_timeline', arguments.length < 2 || timeline === undefined ? documentTimeline : timeline);
+    \\    hidden(this, '_rate', 1);
+    \\    hidden(this, '_start', null);
+    \\    hidden(this, '_hold', null);
+    \\    hidden(this, '_paused', false);
+    \\    hidden(this, '_timer', 0);
+    \\    hidden(this, '_fin', finishedPromise());
+    \\    hidden(this, '_ready', Promise.resolve(this));
+    \\    hidden(this, '_filled', null);
+    \\    hidden(this, '_replace', 'active');
+    \\    this.id = '';
+    \\    this.effect = effect === undefined ? null : effect;
+    \\  }
+    \\  get effect() { return this._effect; }
+    \\  set effect(e) {
+    \\    if (e === this._effect) return;
+    \\    if (e && e._anim) e._anim.effect = null;
+    \\    if (this._effect) this._effect._anim = null;
+    \\    this._clearFill();
+    \\    this._effect = e || null;
+    \\    if (e) e._anim = this;
+    \\    this._update();
+    \\  }
+    \\  get timeline() { return this._timeline; }
+    \\  set timeline(t) { this._timeline = t; this._update(); }
+    \\  get playbackRate() { return this._rate; }
+    \\  set playbackRate(r) {
+    \\    const ct = this.currentTime;
+    \\    this._rate = Number(r);
+    \\    if (ct !== null) this.currentTime = ct;
+    \\    else this._update();
+    \\  }
+    \\  get pending() { return false; }
+    \\  get ready() { return this._ready; }
+    \\  get finished() { return this._fin.promise; }
+    \\  get replaceState() { return this._replace; }
+    \\  get startTime() { return this._start; }
+    \\  set startTime(v) {
+    \\    if (v === null || v === undefined) {
+    \\      const ct = this.currentTime;
+    \\      this._start = null;
+    \\      this._hold = ct;
+    \\      this._paused = ct !== null;
+    \\    } else {
+    \\      this._start = Number(v);
+    \\      this._hold = null;
+    \\      this._paused = false;
+    \\    }
+    \\    this._update();
+    \\  }
+    \\  get currentTime() {
+    \\    if (this._hold !== null) return this._hold;
+    \\    const now = this._now();
+    \\    if (this._start === null || now === null) return null;
+    \\    return (now - this._start) * this._rate;
+    \\  }
+    \\  set currentTime(v) {
+    \\    if (v === null || v === undefined) {
+    \\      if (this.currentTime !== null) throw new TypeError("Failed to set the 'currentTime' property on 'Animation': currentTime may not be changed from resolved to unresolved");
+    \\      return;
+    \\    }
+    \\    v = Number(v);
+    \\    const now = this._now();
+    \\    if (this._paused || this._start === null || this._rate === 0 || now === null) this._hold = v;
+    \\    else {
+    \\      this._start = now - v / this._rate;
+    \\      this._hold = null;
+    \\    }
+    \\    this._update();
+    \\  }
+    \\  get playState() {
+    \\    const ct = this.currentTime;
+    \\    if (ct === null && this._start === null) return 'idle';
+    \\    if (this._paused) return 'paused';
+    \\    if (ct !== null && ((this._rate > 0 && ct >= this._end()) || (this._rate < 0 && ct <= 0))) return 'finished';
+    \\    return 'running';
+    \\  }
+    \\  _now() {
+    \\    const t = this._timeline;
+    \\    return t && typeof t.currentTime === 'number' ? t.currentTime : null;
+    \\  }
+    \\  _end() { return this._effect ? this._effect._times().end : 0; }
+    \\  play() {
+    \\    const ct = this.currentTime, end = this._end();
+    \\    if (this._rate > 0 && (ct === null || ct < 0 || ct >= end)) this._hold = 0;
+    \\    else if (this._rate < 0 && (ct === null || ct <= 0 || ct > end)) {
+    \\      if (end === Infinity) throw new DOMException("Failed to execute 'play' on 'Animation': Cannot play reversed Animation with infinite target effect end.", 'InvalidStateError');
+    \\      this._hold = end;
+    \\    } else if (this._rate === 0 && ct === null) this._hold = 0;
+    \\    this._paused = false;
+    \\    const now = this._now();
+    \\    if (this._hold !== null && this._rate !== 0 && now !== null) {
+    \\      this._start = now - this._hold / this._rate;
+    \\      this._hold = null;
+    \\    } else if (this._start === null && now !== null) this._start = now;
+    \\    this._update();
+    \\  }
+    \\  pause() {
+    \\    if (this._paused) return;
+    \\    const ct = this.currentTime;
+    \\    if (ct === null) {
+    \\      if (this._rate < 0 && this._end() === Infinity) throw new DOMException("Failed to execute 'pause' on 'Animation': Cannot pause, Animation has infinite target effect end.", 'InvalidStateError');
+    \\      this._hold = this._rate >= 0 ? 0 : this._end();
+    \\    } else this._hold = ct;
+    \\    this._start = null;
+    \\    this._paused = true;
+    \\    this._update();
+    \\  }
+    \\  finish() {
+    \\    const end = this._end();
+    \\    if (this._rate === 0 || (this._rate > 0 && end === Infinity)) throw new DOMException("Failed to execute 'finish' on 'Animation': Cannot finish Animation with " + (this._rate === 0 ? 'a playbackRate of 0.' : 'an infinite target effect end.'), 'InvalidStateError');
+    \\    const limit = this._rate > 0 ? end : 0;
+    \\    const now = this._now();
+    \\    this._paused = false;
+    \\    if (now !== null) this._start = now - limit / this._rate;
+    \\    this._hold = limit;
+    \\    this._update();
+    \\  }
+    \\  cancel() {
+    \\    if (this.playState !== 'idle') {
+    \\      this._clearFill();
+    \\      this._fin.reject(new DOMException('The user aborted a request.', 'AbortError'));
+    \\      this._fin.promise.catch(() => {});
+    \\      this._fin = finishedPromise();
+    \\      const now = this._now();
+    \\      setTimeout(() => this.dispatchEvent(new AnimationPlaybackEvent('cancel', { currentTime: null, timelineCurrentTime: now })), 0);
+    \\    }
+    \\    this._start = null;
+    \\    this._hold = null;
+    \\    this._paused = false;
+    \\    this._update();
+    \\  }
+    \\  reverse() {
+    \\    const rate = this._rate;
+    \\    this._rate = -rate;
+    \\    try {
+    \\      const ct = this.currentTime;
+    \\      if (ct !== null && this._start !== null && this._hold === null) this._start = this._now() - ct / this._rate;
+    \\      this.play();
+    \\    } catch (e) {
+    \\      this._rate = rate;
+    \\      throw e;
+    \\    }
+    \\  }
+    \\  updatePlaybackRate(r) { this.playbackRate = r; }
+    \\  persist() {
+    \\    this._replace = 'persisted';
+    \\    this._update();
+    \\  }
+    \\  commitStyles() {
+    \\    const e = this._effect;
+    \\    if (!e || !stylable(e.target)) return;
+    \\    const p = e._progress(this.currentTime, this._rate);
+    \\    if (!p || p.progress === null) return;
+    \\    const values = e._valuesAt(p.progress);
+    \\    const m = fills.get(e.target);
+    \\    for (const prop of Object.keys(values)) {
+    \\      const rec = m && m.get(prop);
+    \\      if (rec) rec.base = values[prop];
+    \\      else e.target.style.setProperty(prop, values[prop]);
+    \\    }
+    \\  }
+    \\  _clearFill() {
+    \\    if (this._filled) {
+    \\      fillClear(this._filled.el, this, this._filled.values);
+    \\      this._filled = null;
+    \\    }
+    \\  }
+    \\  // The fill this animation applies now (outside the active interval).
+    \\  _applyFill() {
+    \\    const e = this._effect;
+    \\    let values = null;
+    \\    if (e && stylable(e.target) && this._replace !== 'removed' && this.playState !== 'idle') {
+    \\      const p = e._progress(this.currentTime, this._rate);
+    \\      if (p && p.phase !== 'active' && p.progress !== null) values = e._valuesAt(p.progress);
+    \\    }
+    \\    const f = this._filled;
+    \\    if (f && values && f.el === e.target && sameValues(f.values, values)) return;
+    \\    this._clearFill();
+    \\    if (values && Object.keys(values).length > 0) {
+    \\      fillSet(e.target, this, values);
+    \\      this._filled = { el: e.target, values };
+    \\    }
+    \\  }
+    \\  // Called after every change: holds the time at the end when finished,
+    \\  // settles `finished`, sets the next timer, applies the fill.
+    \\  _update() {
+    \\    if (this._timer) {
+    \\      clearTimeout(this._timer);
+    \\      this._timer = 0;
+    \\    }
+    \\    const now = this._now(), end = this._end();
+    \\    if (!this._paused && this._start !== null && now !== null && this._rate !== 0) {
+    \\      const ct = this._hold !== null ? this._hold : (now - this._start) * this._rate;
+    \\      if (this._rate > 0 && ct >= end - EPS) {
+    \\        if (this._hold === null || this._hold < end) this._hold = end;
+    \\      } else if (this._rate < 0 && ct <= EPS) {
+    \\        if (this._hold === null || this._hold > 0) this._hold = 0;
+    \\      } else if (this._hold !== null) {
+    \\        this._start = now - this._hold / this._rate;
+    \\        this._hold = null;
+    \\      }
+    \\    }
+    \\    const state = this.playState;
+    \\    if (state === 'finished') {
+    \\      if (!this._fin.done) {
+    \\        this._fin.done = true;
+    \\        this._fin.resolve(this);
+    \\        const ct = this.currentTime;
+    \\        setTimeout(() => this.dispatchEvent(new AnimationPlaybackEvent('finish', { currentTime: ct, timelineCurrentTime: now })), 0);
+    \\      }
+    \\    } else if (this._fin.done) this._fin = finishedPromise();
+    \\    if (state === 'running' && this._effect) {
+    \\      const ct = this.currentTime, t = this._effect._timing, times = this._effect._times();
+    \\      let wait = Infinity;
+    \\      for (const mark of [0, t.delay, t.delay + times.active, times.end]) {
+    \\        const w = (mark - ct) / this._rate;
+    \\        if (w > EPS && w < wait) wait = w;
+    \\      }
+    \\      if (wait < Infinity) this._timer = setTimeout(() => { this._timer = 0; this._update(); }, Math.ceil(wait));
+    \\    } else if (state === 'running') this._timer = setTimeout(() => { this._timer = 0; this._update(); }, 0);
+    \\    this._applyFill();
+    \\    if (this._relevant() && !animationsAll.includes(this)) {
+    \\      animationsAll.push(this);
+    \\      animationsAll.sort((a, b) => a._seq - b._seq);
+    \\    }
+    \\    if (this._filled && this._replace === 'active') this._replaceOlder();
+    \\  }
+    \\  // Running, paused, or finished with a fill: what getAnimations lists.
+    \\  _relevant() {
+    \\    const s = this.playState;
+    \\    if (s === 'idle' || this._replace === 'removed' || !this._effect) return false;
+    \\    if (s !== 'finished') return true;
+    \\    const f = this._effect._timing.fill;
+    \\    return f === 'forwards' || f === 'both' || (f === 'backwards' && this._rate < 0);
+    \\  }
+    \\  // A finished filling animation whose properties a later filling one on
+    \\  // the same element all sets is removed (unless persisted).
+    \\  _replaceOlder() {
+    \\    const el = this._filled.el, mine = this._filled.values;
+    \\    for (const a of animationsAll.slice()) {
+    \\      if (a === this || a._seq > this._seq || a._replace !== 'active' || !a._filled || a._filled.el !== el || a.playState !== 'finished') continue;
+    \\      if (!Object.keys(a._filled.values).every(p => p in mine)) continue;
+    \\      a._replace = 'removed';
+    \\      a._clearFill();
+    \\      animationsAll.splice(animationsAll.indexOf(a), 1);
+    \\      setTimeout(() => a.dispatchEvent(new AnimationPlaybackEvent('remove', { currentTime: a.currentTime, timelineCurrentTime: a._now() })), 0);
+    \\    }
+    \\  }
+    \\}
+    \\for (const type of ['finish', 'cancel', 'remove']) {
+    \\  getter(Animation.prototype, 'on' + type, function () { return handlerOf(this, type); }, function (v) { setHandler(this, type, v); });
+    \\}
+    \\function animationsWhere(keep) {
+    \\  for (let i = animationsAll.length - 1; i >= 0; i--) if (!animationsAll[i]._relevant()) animationsAll.splice(i, 1);
+    \\  return animationsAll.filter(a => a._effect && keep(a._effect.target));
+    \\}
+    \\hidden(ElementP, 'animate', function animate(keyframes, options) {
+    \\  const effect = new KeyframeEffect(this, keyframes, options);
+    \\  const a = new Animation(effect, documentTimeline);
+    \\  if (options && typeof options === 'object' && options.id !== undefined) a.id = String(options.id);
+    \\  a.play();
+    \\  return a;
+    \\});
+    \\hidden(ElementP, 'getAnimations', function getAnimations(options) {
+    \\  const subtree = !!(options && options.subtree);
+    \\  return animationsWhere(t => t === this || (subtree && t instanceof Node && this.contains(t)));
+    \\});
+    \\hidden(Document.prototype, 'getAnimations', function getAnimations() {
+    \\  return animationsWhere(t => t instanceof Node && t.isConnected && t.ownerDocument === this);
+    \\});
+    \\for (const c of [AnimationEffect, KeyframeEffect, AnimationTimeline, DocumentTimeline, AnimationPlaybackEvent, Animation]) hidden(G, c.name, c);
     \\ak.setDispatch(hostEvent);
     \\})(__ak);

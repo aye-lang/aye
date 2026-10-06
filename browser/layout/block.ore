@@ -94,6 +94,9 @@ fn specifiedWidth(t: *Tree, i: usize, cb_w: f64) ?f64 {
 // -1 when not.
 fn definiteContentHeight(t: *Tree, i: usize, cb_h: f64) f64 {
     let b = t.bx(i)
+    if b.forced_h >= 0.0 {
+        return math.max(0.0, b.forced_h - vEdges(b))
+    }
     if sizeOf(b.style, b.style[css.HEIGHT], cb_h, vEdges(b)) |h| {
         return clampHeight(t, i, h, cb_h) - vEdges(b)
     }
