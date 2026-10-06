@@ -2591,6 +2591,10 @@ pub let PRELUDE =
     \\    }
     \\  }
     \\}
+    \\// The tree's own answer: pages override `isConnected` (ShadyDOM makes a
+    \\// fragment its shadow root, connected when the host is).
+    \\const nativeIsConnected = Object.getOwnPropertyDescriptor(NodeP, 'isConnected').get;
+    \\function isConnected(n) { return nativeIsConnected.call(n); }
     \\function onMutations(recs) {
     \\  if (registered.size > 0) queueRecords(recs);
     \\  if (ceDefs.size > 0) {
@@ -2598,10 +2602,10 @@ pub let PRELUDE =
     \\      const kind = recs[i], target = recs[i + 1], node = recs[i + 2];
     \\      if (target === null) continue;
     \\      if (kind === 1) ceAttributeChanged(target, recs[i + 5], recs[i + 6]);
-    \\      else if (kind === 3 && node && node.isConnected) ceConnected(node);
+    \\      else if (kind === 3 && node && isConnected(node)) ceConnected(node);
     \\      // Removed from a connected parent: disconnected, even when the same
     \\      // method inserted it again (a move connects it after).
-    \\      else if (kind === 0 && node && target.isConnected) ceDisconnected(node);
+    \\      else if (kind === 0 && node && isConnected(target)) ceDisconnected(node);
     \\    }
     \\  }
     \\  if (ak.shadowCount() > 0) {
@@ -2731,7 +2735,7 @@ pub let PRELUDE =
     \\      if (def.observed.has(a.name)) ceCall(def.attributeChangedCallback, el, [a.name, null, a.value, null]);
     \\    }
     \\  }
-    \\  if (def.connectedCallback && el.isConnected) ceCall(def.connectedCallback, el, []);
+    \\  if (def.connectedCallback && isConnected(el)) ceCall(def.connectedCallback, el, []);
     \\}
     \\function ceTryUpgrade(el) {
     \\  if (ak.ceState(el) !== 0) return;

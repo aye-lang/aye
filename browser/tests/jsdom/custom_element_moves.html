@@ -26,6 +26,16 @@ log('-- fragment into a');
 a.appendChild(f);
 log('-- remove');
 x.remove();
+// Reactions follow the tree, not an overridden isConnected (ShadyDOM
+// turns a fragment into a shadow root that is connected with its host).
+const fake = document.createDocumentFragment();
+Object.defineProperty(fake, 'isConnected', { get: () => true });
+const y = document.createElement('x-logged');
+y.id = 'y';
+log('-- into a fragment that says it is connected');
+fake.appendChild(y);
+log('-- from it into b');
+b.appendChild(fake);
 
 // A parent whose connectedCallback moves a child that is not upgraded
 // yet: the child is upgraded and connected once.
