@@ -92,6 +92,19 @@ fn canvasBitmap(it: *mut Interp, v: Value) JsError!*mut CanvasBitmap {
             return c
         }
     }
+    // Detached canvases (temporary, offscreen, ImageBitmap) are freed with
+    // their nodes once no script holds them; drop their bitmaps too.
+    var i: usize = 0
+    while i < cache.canvases.len() {
+        let old = cache.canvases.items()[i]
+        if p.doc.isLive(old.node) {
+            i += 1
+        } else {
+            old.bmp.deinit(p.alloc)
+            p.alloc.destroy(old.bmp)
+            cache.canvases.swapRemove(i)
+        }
+    }
     let w = canvasDimension(&p.doc, h, "width", 300)
     let ht = canvasDimension(&p.doc, h, "height", 150)
     var size: usize = 0
@@ -99,6 +112,9 @@ fn canvasBitmap(it: *mut Interp, v: Value) JsError!*mut CanvasBitmap {
         size = w * ht * 4
     }
     let px = try p.alloc.alloc(0 as u8, size)
+    // The collector counts heap cells, not bitmap bytes: count each KiB as
+    // a cell so that discarded canvases are collected.
+    it.heap.since_gc += size / 1024
     let bmp = p.alloc.create(image.Bitmap { width: w, height: ht, pixels: px }) catch |e| {
         p.alloc.free(px)
         return e

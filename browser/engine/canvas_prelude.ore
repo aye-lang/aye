@@ -628,16 +628,15 @@ pub let CANVAS_PRELUDE =
     \\    } : undefined
     \\  });
     \\}
-    \\const contexts = new WeakMap();
+    \\// WeakMap holds its keys strongly, so the context lives on the wrapper:
+    \\// a detached canvas, its context and its bitmap can then be freed.
     \\const P = HTMLCanvasElement.prototype;
     \\P.getContext = function (kind) {
     \\  if (String(kind) !== '2d') return null;
-    \\  let ctx = contexts.get(this);
-    \\  if (!ctx) {
-    \\    ctx = new CanvasRenderingContext2D(this);
-    \\    contexts.set(this, ctx);
+    \\  if (!Object.prototype.hasOwnProperty.call(this, '__context2d')) {
+    \\    Object.defineProperty(this, '__context2d', {value: new CanvasRenderingContext2D(this)});
     \\  }
-    \\  return ctx;
+    \\  return this.__context2d;
     \\};
     \\P.toDataURL = function () {
     \\  return ak.canvasPng(this);
