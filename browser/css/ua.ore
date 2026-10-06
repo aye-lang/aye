@@ -11,6 +11,7 @@ let UA_RULES = [_][]u8{
     "html, address, blockquote, body, center, dialog, div, figure, figcaption, footer, form, header, hr, legend, listing, main, p, plaintext, pre, search, xmp { display: block }",
     "article, aside, h1, h2, h3, h4, h5, h6, hgroup, nav, section { display: block }",
     "frameset, frame { display: block }",
+    "iframe { border: 2px inset }",
     "dir, dd, dl, dt, menu, ol, ul, details, summary, fieldset, optgroup, address { display: block }",
     "area, base, basefont, datalist, head, link, meta, noembed, noframes, param, rp, script, style, template, title { display: none }",
     "[hidden] { display: none }",

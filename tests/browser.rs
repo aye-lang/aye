@@ -1255,8 +1255,8 @@ fn noscript_with_scripts() {
 /// Hit testing follows the painting order (`browser/tests/layout/hit.html`
 /// in a 400x340 window, the page 40 px down): the topmost positioned box
 /// wins, a positioned box hides the link under it, content clipped by
-/// `overflow` is not hit outside the clip, and a frame links to its
-/// address. The hovered link shows in the status line.
+/// `overflow` is not hit outside the clip, and a link in an iframe's
+/// document is hit there. The hovered link shows in the status line.
 #[test]
 fn window_hit_layers() {
     if !has_sdl() {

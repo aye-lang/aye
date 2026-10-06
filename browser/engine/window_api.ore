@@ -50,6 +50,7 @@ fn installWindow(s: *mut Script) JsError!void {
     try defMethod(it, o, "cookie", 0, akCookie)
     try defMethod(it, o, "setCookie", 1, akSetCookie)
     try defMethod(it, o, "setDispatch", 1, akSetDispatch)
+    try installFrames(s, o)
 
     let c = try it.newObject(it.object_proto)
     try it.defineValue(it.global, "console", js.objVal(c))
@@ -178,7 +179,7 @@ fn akQueueMicrotask(it: *mut Interp, a: Args) JsError!Value {
 // submissions wait until the script returns (takeNavigation).
 fn akActivate(it: *mut Interp, a: Args) JsError!Value {
     let s = scriptOf(it)
-    let h = handleOf(it, it.arg(a, 0), TAG_NODE) orelse return Value.Undefined
+    let h = ownHandle(it, it.arg(a, 0)) orelse return Value.Undefined
     let act = try activate(s.page, h)
     match act {
         .Follow { target } => {
@@ -203,7 +204,7 @@ fn akActivate(it: *mut Interp, a: Args) JsError!Value {
 // form.submit(): no submit event.
 fn akSubmit(it: *mut Interp, a: Args) JsError!Value {
     let s = scriptOf(it)
-    if handleOf(it, it.arg(a, 0), TAG_NODE) |h| {
+    if ownHandle(it, it.arg(a, 0)) |h| {
         if s.page.doc.isElement(h, "form") {
             s.nav_kind = NavKind.Submit
             s.nav_form = h
@@ -222,11 +223,17 @@ fn setNavigation(s: *mut Script, href: []u8) AllocError!void {
 }
 
 fn akFocused(it: *mut Interp, a: Args) JsError!Value {
-    return wrapOpt(it, scriptFocus(scriptOf(it).page))
+    let s = scriptOf(it)
+    s.active = s.page
+    return wrapOpt(it, scriptFocus(s.page))
 }
 
 fn akSetFocus(it: *mut Interp, a: Args) JsError!Value {
-    setFocus(scriptOf(it).page, handleOf(it, it.arg(a, 0), TAG_NODE))
+    let v = it.arg(a, 0)
+    let h = ownHandle(it, v)
+    if h != null || js.isNullish(v) {
+        setFocus(scriptOf(it).page, h)
+    }
     return Value.Undefined
 }
 

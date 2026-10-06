@@ -1,0 +1,7 @@
+[log] child: parent === top true | window === top false | name first
+[log] child: frameElement a | parent title Iframes | parent.frames[0] === window true
+[log] child: load
+[log] srcdoc: about:srcdoc | parent title Iframes
+[log] opaque: SecurityError
+[log] child: message {"n":1} | from parent true | origin null
+[log] child: later the text is Changed by the parent
