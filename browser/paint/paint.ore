@@ -815,6 +815,9 @@ fn transformed(it: Item, m: layout.Affine, t: *mut Tree) Item {
         .Image { r, w, h, pixels } => {
             return Item.Image { r: mapRect(r, m), w: w, h: h, pixels: pixels }
         }
+        .Svg { r, pic } => {
+            return Item.Svg { r: mapRect(r, m), pic: pic }
+        }
         .Clip { r } => {
             return Item.Clip { r: mapRect(r, m) }
         }
