@@ -1,0 +1,54 @@
+// M8: std.fs.create, File.write, exists and readFile, on a file in /tmp
+// named after the process id.
+
+import std
+import std.heap.General
+import std.text.Builder
+
+extern fn getpid() i32
+extern fn unlink(path: [*]u8) i32
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+
+    var b = Builder.init(alloc)
+    defer b.deinit()
+    try b.append("/tmp/ore-std-fs-")
+    try b.appendInt(getpid() as i64)
+    try b.appendByte(0)
+    // `cpath` ends with a NUL byte, for `unlink`; `path` is without it.
+    let cpath = b.bytes()
+    let path = cpath[..cpath.len - 1]
+
+    @println(std.fs.exists(path))
+    let f = try std.fs.create(path)
+    try f.write("hello\n")
+    try f.write("world\n")
+    f.close()
+    @println(std.fs.exists(path))
+    let text = try std.fs.readFile(alloc, path)
+    @print(text)
+    @println(text.len)
+    alloc.free(text)
+
+    // `create` empties an existing file.
+    let g = try std.fs.create(path)
+    try g.write("x")
+    g.close()
+    let again = try std.fs.readFile(alloc, path)
+    @println(again)
+    alloc.free(again)
+
+    let r = unlink(cpath.ptr)
+    @println(std.fs.exists(path))
+    let missing = std.fs.readFile(alloc, path) catch |e| {
+        @println(match e {
+            .NotFound => "not found"
+            _ => "other error"
+        })
+        return
+    }
+    alloc.free(missing)
+}

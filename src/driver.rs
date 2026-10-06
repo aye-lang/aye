@@ -346,6 +346,8 @@ pub fn cc(p: &CProgram, out: &Path, mode: Mode) -> Result<(), String> {
         .args(mode.clang_flags())
         .args(["-x", "c", "-", "-o"])
         .arg(out)
+        // std.math calls libm.
+        .arg("-lm")
         .stdin(Stdio::piped());
     // `-x none` ends `-x c`, so that a library file among the link flags is
     // not read as C (clang warns that it is unused when there is none).

@@ -867,11 +867,13 @@ pub fn main() !void {
   (pass the whole slice from `alloc`, not a sub-slice that starts later).
   Memory is always initialized, so you pass a value, not a type:
   `alloc.create(Node { ... })`, `alloc.alloc(0 as u8, n)`.
+- `alloc.resize(s, n, fill)` returns a slice of `n` elements: the first
+  `min(s.len, n)` are copied from `s`, the rest are `fill`. On success `s`
+  is freed (do not use it again); on `OutOfMemory` it is unchanged. It may
+  move the elements: write `s = try alloc.resize(s, n, fill)`.
 - `AllocError` is `error AllocError { OutOfMemory }`.
 - Use-after-free is not detected. Prefer arenas for data with one lifetime.
-- std has no growable list yet. To grow a buffer, `alloc` a larger slice,
-  copy the elements (`std.mem.copy` for `[]u8`, a loop otherwise) and `free`
-  the old one; keep the length used in a separate variable.
+- For a growable array use `std.list.List(T)`; for text, `std.text.Builder`.
 
 ## 10. Interfaces and dyn
 
@@ -1045,8 +1047,9 @@ test "allocations are checked" {
 - `@expect(cond)` and `@expectEqual(expected, actual)` (integers, floats,
   `bool`, `[]u8`) fail the test with `file:line:col: assertion failed:
   expected X, found Y`.
-- `@testAllocator()` is a leak-checked `Allocator`, usable only in a test
-  block. A leak, panic, failed assertion or returned error fails the test.
+- `@testAllocator()`, also written `std.testing.allocator()`, is a
+  leak-checked `Allocator`, usable only in a test block. A leak, panic,
+  failed assertion or returned error fails the test.
 
 Output: `test "name" ... ok` or `... FAILED` followed by the test's indented
 stdout and stderr, then `N passed; M failed`. `--filter text` runs tests
@@ -1079,9 +1082,12 @@ Allocator.create(value) AllocError!*mut T
 Allocator.destroy(p: *T)
 Allocator.alloc(value, n: usize) AllocError![]mut T
 Allocator.free(s: []T)
+Allocator.resize(s: []T, n: usize, fill: T) AllocError![]mut T   n elements: s's first, then fill; frees s
 error AllocError { OutOfMemory }
 std.mem.eql(a: []u8, b: []u8) bool         same length and bytes
-std.mem.copy(dst: []mut u8, src: []u8)      copy src to the start of dst (panics if dst is shorter)
+std.mem.copy(dst: []mut u8, src: []u8)      copy src to the start of dst (panics if dst is shorter); may overlap
+std.mem.set(dst: []mut u8, b: u8)           every byte of dst becomes b
+std.mem.indexOf(s: []u8, b: u8) ?usize      the first index of the byte b
 ```
 
 ### std.heap
@@ -1104,14 +1110,184 @@ after `import std.heap.General`.
 error OpenError { NotFound, AccessDenied, OpenFailed }
 error ReadError { ReadFailed, OutOfMemory }
 error WriteError { WriteFailed }
+error ReadFileError = OpenError || ReadError
 struct File { fd: i32 }
 std.fs.open(path: []u8) OpenError!File      open a file for reading
+std.fs.create(path: []u8) OpenError!File    create (or empty) a file for writing
+std.fs.exists(path: []u8) bool              is there a file or directory at path?
+std.fs.readFile(alloc: Allocator, path: []u8) ReadFileError![]mut u8   the whole file; free with alloc.free
 std.fs.stdin() File
 std.fs.stdout() File
 std.fs.stderr() File
 File.readAll(self: Self, alloc: Allocator) ReadError![]mut u8   read to the end (empty file: empty slice); free with alloc.free
 File.write(self: Self, bytes: []u8) WriteError!void              write everything (flushes @print output first)
 File.close(self: Self)
+```
+
+### std.list
+
+```
+std.list.List(T)                           a growable array (do not use its fields)
+List.init(alloc: Allocator) List(T)        empty; allocates on the first append
+List.deinit(self: *mut Self)
+List.len(self: *Self) usize
+List.items(self: *Self) []mut T            the elements; valid until the next append/insert
+List.append(self: *mut Self, value: T) AllocError!void
+List.pop(self: *mut Self) ?T               remove the last; null when empty
+List.insert(self: *mut Self, i: usize, value: T) AllocError!void   i <= len()
+List.orderedRemove(self: *mut Self, i: usize) T                    shifts the rest down
+List.swapRemove(self: *mut Self, i: usize) T                       moves the last into i
+List.clear(self: *mut Self)                keeps the memory
+```
+
+Index errors panic (bounds checks). The list grows by doubling, through
+`Allocator.resize`.
+
+### std.map
+
+```
+std.map.StrMap(V)                          []u8 keys, NOT copied: they must outlive the map unchanged
+StrMap.init(alloc: Allocator) StrMap(V)
+StrMap.deinit(self: *mut Self)
+StrMap.len(self: *Self) usize
+StrMap.put(self: *mut Self, key: []u8, value: V) AllocError!void   add or replace
+StrMap.get(self: *Self, key: []u8) ?V
+StrMap.getPtr(self: *Self, key: []u8) ?*mut V                      valid until the next put/remove
+StrMap.contains(self: *Self, key: []u8) bool
+StrMap.remove(self: *mut Self, key: []u8) bool                     false when absent
+StrMap.iterator(self: *Self) StrMapIterator(V)
+std.map.StrMapIterator(V)
+StrMapIterator.next(self: *mut Self) ?StrEntry(V)                  any order
+std.map.StrEntry(V) { key: []u8, value: *mut V }
+interface Key { fn key(self: *Self) u64 }
+std.map.IntMap(K, V) where K: Key          keys identified by the integer k.key()
+IntMap.init(alloc: Allocator) IntMap(K, V)
+IntMap.deinit(self: *mut Self)
+IntMap.len(self: *Self) usize
+IntMap.put(self: *mut Self, key: K, value: V) AllocError!void
+IntMap.get(self: *Self, key: K) ?V
+IntMap.getPtr(self: *Self, key: K) ?*mut V
+IntMap.contains(self: *Self, key: K) bool
+IntMap.remove(self: *mut Self, key: K) bool
+IntMap.iterator(self: *Self) IntMapIterator(K, V)
+std.map.IntMapIterator(K, V)
+IntMapIterator.next(self: *mut Self) ?IntEntry(K, V)
+std.map.IntEntry(K, V) { key: K, value: *mut V }
+```
+
+A type parameter has no operators and integers have no methods, so an
+`IntMap` key is a struct with a `key()` method (a node id, a handle):
+
+```ore
+import std.heap.General
+import std.map.IntMap
+import std.map.StrMap
+
+struct NodeId {
+    v: u32
+
+    fn key(self: *Self) u64 {
+        return self.v as u64
+    }
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var ages = StrMap(i64).init(gpa.allocator())
+    defer ages.deinit()
+    try ages.put("ann", 31)
+    if ages.getPtr("ann") |p| {
+        p.* += 1
+    }
+    var it = ages.iterator()
+    while it.next() |e| {
+        @println(e.key)
+        @println(e.value.*)
+    }
+    var names = IntMap(NodeId, []u8).init(gpa.allocator())
+    defer names.deinit()
+    try names.put(NodeId { v: 7 }, "seven")
+    @println(names.contains(NodeId { v: 7 }))
+}
+```
+
+### std.text
+
+```
+error ParseError { Invalid, Overflow }
+std.text.eql(a: []u8, b: []u8) bool
+std.text.eqlIgnoreCase(a: []u8, b: []u8) bool      ASCII letters only
+std.text.startsWith(s: []u8, prefix: []u8) bool
+std.text.endsWith(s: []u8, suffix: []u8) bool
+std.text.indexOf(s: []u8, needle: []u8) ?usize     first match; an empty needle is at 0
+std.text.trim(s: []u8) []u8                        without ASCII whitespace at both ends
+std.text.toLower(s: []mut u8)                      ASCII, in place
+std.text.split(s: []u8, sep: []u8) Split           "a,,b" by "," gives "a", "", "b"
+Split.next(self: *mut Self) ?[]u8
+std.text.parseInt(s: []u8) ParseError!i64          decimal, optional + or -
+std.text.parseFloat(s: []u8) ParseError!f64        [+-]digits[.digits][e[+-]digits], at most 63 bytes
+struct Decoded { code: u32, len: usize }
+std.text.decode(s: []u8) Decoded                   first UTF-8 code point; invalid: U+FFFD, len 1; empty: len 0
+std.text.encode(code: u32, out: []mut u8) usize    UTF-8 into out (needs up to 4 bytes); invalid code: U+FFFD
+struct Builder                                     bytes in memory from one allocator
+Builder.init(alloc: Allocator) Builder
+Builder.deinit(self: *mut Self)
+Builder.bytes(self: *Self) []u8                    valid until the next append
+Builder.len(self: *Self) usize
+Builder.clear(self: *mut Self)
+Builder.append(self: *mut Self, s: []u8) AllocError!void
+Builder.appendByte(self: *mut Self, b: u8) AllocError!void
+Builder.appendChar(self: *mut Self, code: u32) AllocError!void    UTF-8 encoded
+Builder.appendInt(self: *mut Self, v: i64) AllocError!void
+Builder.appendUint(self: *mut Self, v: u64) AllocError!void
+Builder.appendFloat(self: *mut Self, v: f64) AllocError!void      the text of @print (%g)
+Builder.toOwned(self: *mut Self) AllocError![]mut u8              exact-size copy; free with alloc.free; builder empty after
+```
+
+Iterate split pieces with `while it.next() |piece| { }` (`it` a `var`).
+Iterate code points with `decode(s[i..])` and `i += d.len`.
+
+### std.math
+
+```
+std.math.pi                                f64 constant
+std.math.sqrt(x: f64) f64                  libm, as floor, ceil, round (half away from zero) and pow
+std.math.floor(x: f64) f64
+std.math.ceil(x: f64) f64
+std.math.round(x: f64) f64
+std.math.pow(x: f64, y: f64) f64
+std.math.min(a: f64, b: f64) f64
+std.math.max(a: f64, b: f64) f64
+std.math.abs(x: f64) f64
+std.math.clamp(x: f64, lo: f64, hi: f64) f64
+```
+
+Only `f64`: Ore has no generic arithmetic. Convert with `as`.
+
+### std.pool
+
+```
+std.pool.Pool(T)                           values in reusable slots
+std.pool.Handle(T) { index: u32, generation: u32 }   names a value; stale after remove
+Pool.init(alloc: Allocator, capacity: u32) Pool(T)   capacity: slots of the first allocation
+Pool.deinit(self: *mut Self)
+Pool.insert(self: *mut Self, value: T) AllocError!Handle(T)
+Pool.get(self: *Self, h: Handle(T)) ?*mut T          null for a stale handle
+Pool.remove(self: *mut Self, h: Handle(T))           a stale handle does nothing
+```
+
+### std.time
+
+```
+std.time.monotonicMs() u64                 milliseconds on a clock that never goes back
+std.time.sleep(ms: u64)                    wait at least ms milliseconds
+```
+
+### std.testing
+
+```
+std.testing.allocator() Allocator          the test's leak-checked allocator (as @testAllocator()); test blocks only
 ```
 
 ### std.log
@@ -1265,9 +1441,9 @@ end. The edits of one diagnostic are applied together.
   `int`); write `(0 as i64)..4` for a signed counter.
 - `for x in xs` and `for i, x in xs` (index first, as in Go) give copies
   of the elements. No `for (xs) |x|`, no C-style `for`.
-- String literals are `[]u8` and read-only; there is no `+` on strings, no
-  string formatting into memory, and `==` does not compare slices
-  (`std.mem.eql`).
+- String literals are `[]u8` and read-only; there is no `+` on strings
+  (build text with `std.text.Builder`), and `==` does not compare slices
+  (`std.text.eql`).
 - Char literals are integers: `'a'` compares with a `u8` directly, and
   `@print` of a `u8` writes its number (print a one-byte slice instead).
 - `match` is for enums, errors and integers (characters too); no

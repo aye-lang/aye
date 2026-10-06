@@ -1,0 +1,8 @@
+// std.testing: helpers for `test` blocks. `allocator` is built into the
+// compiler, because it is the allocator of the running test:
+//
+//     std.testing.allocator() Allocator
+//
+// It is the leak-checked debug allocator that `@testAllocator()` also
+// gives: a leak or a double free fails the test. Like `@testAllocator()`,
+// it can be used only in a `test` block; pass it to other functions.

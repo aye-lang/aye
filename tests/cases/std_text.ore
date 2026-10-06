@@ -1,0 +1,169 @@
+// M8: std.text: comparisons, search, split, trim, case, parsing, UTF-8 and
+// Builder. `Builder.appendFloat` writes what `@print` writes.
+
+import std.heap.General
+import std.mem.Allocator
+import std.text
+
+fn floats(alloc: Allocator) !void {
+    var b = text.Builder.init(alloc)
+    defer b.deinit()
+    var vals = [16]f64{
+        0.0, -0.0, 1.0, -2.5, 3.14159265, 100000.0, 999999.0, 999999.5,
+        1000000.0, 1234567.0, 0.0001, 0.00012345678, 0.00001, 1e300, 1e-300, 123.456,
+    }
+    for v in vals {
+        b.clear()
+        try b.appendFloat(v)
+        @print(b.bytes())
+        @print(" ")
+        @println(v)
+    }
+    b.clear()
+    try b.appendFloat(1e308 * 10.0)
+    try b.appendByte(' ')
+    try b.appendFloat(-1e308 * 10.0)
+    try b.appendByte(' ')
+    let inf = 1e308 * 10.0
+    try b.appendFloat(inf - inf)
+    @println(b.bytes())
+}
+
+fn builder(alloc: Allocator) !void {
+    var b = text.Builder.init(alloc)
+    defer b.deinit()
+    try b.append("n=")
+    try b.appendInt(-9223372036854775807 - 1)
+    try b.appendByte(',')
+    try b.appendUint(18446744073709551615)
+    try b.appendByte(',')
+    try b.appendInt(0)
+    try b.appendByte(' ')
+    try b.appendChar('é')
+    try b.appendChar(0x4E16)
+    try b.appendChar(0x1F600)
+    try b.appendChar(0xD800)
+    @println(b.bytes())
+    @println(b.len())
+    // Past the first 16 bytes: the buffer grows.
+    for i in 0..10 {
+        try b.append("0123456789")
+    }
+    @println(b.len())
+    let owned = try b.toOwned()
+    defer alloc.free(owned)
+    @println(owned.len)
+    @println(b.len())
+    try b.append("again")
+    @println(b.bytes())
+}
+
+fn utf8() {
+    let s = "aé世😀"
+    var i: usize = 0
+    while i < s.len {
+        let d = text.decode(s[i..])
+        @print(d.code)
+        @print(":")
+        @print(d.len)
+        @print(" ")
+        i += d.len
+    }
+    @println()
+    var bad = [4]u8{0xC3, 0x28, 0xFF, 0xE4}
+    let d1 = text.decode(bad[..])
+    let d2 = text.decode(bad[2..])
+    let d3 = text.decode(bad[3..])
+    let d4 = text.decode(bad[4..])
+    @println(d1.code == 0xFFFD && d1.len == 1 && d2.len == 1 && d3.len == 1 && d4.len == 0)
+    // Overlong and surrogate encodings are invalid.
+    var overlong = [2]u8{0xC0, 0x80}
+    var surrogate = [3]u8{0xED, 0xA0, 0x80}
+    @println(text.decode(overlong[..]).len)
+    @println(text.decode(surrogate[..]).code)
+    var out = [4]u8{0, 0, 0, 0}
+    let n = text.encode(0x20AC, out[..])
+    @println(out[..n])
+    @println(text.encode(0x110000, out[..]))
+}
+
+fn parsing() {
+    var ints = [9][]u8{"0", "42", "-17", "+8", "9223372036854775807", "-9223372036854775808", "9223372036854775808", "", "12a"}
+    for s in ints {
+        let n = text.parseInt(s) catch |e| {
+            @print(s)
+            @print(" -> ")
+            @println(match e {
+                .Invalid => "invalid"
+                .Overflow => "overflow"
+            })
+            continue
+        }
+        @println(n)
+    }
+    var reals = [10][]u8{"1.5", "-0.25", ".5", "3.", "1e3", "2.5E-3", "1e999", ".", "1e", "nan"}
+    for s in reals {
+        let f = text.parseFloat(s) catch |e| {
+            @print(s)
+            @print(" -> ")
+            @println(match e {
+                .Invalid => "invalid"
+                .Overflow => "overflow"
+            })
+            continue
+        }
+        @println(f)
+    }
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+
+    @println(text.eql("abc", "abc"))
+    @println(text.eql("abc", "abd"))
+    @println(text.eqlIgnoreCase("Hello", "hELLO"))
+    @println(text.eqlIgnoreCase("Hello", "Help!"))
+    @println(text.startsWith("hello", "he"))
+    @println(text.startsWith("he", "hello"))
+    @println(text.endsWith("hello", "llo"))
+    @println(text.endsWith("hello", "xlo"))
+    if text.indexOf("hello world", "o w") |i| {
+        @println(i)
+    }
+    @println(text.indexOf("hello", "z") == null)
+    @println(text.indexOf("hi", "") != null)
+    @print("[")
+    @print(text.trim("  \t padded \r\n"))
+    @println("]")
+    @println(text.trim(" \n ").len)
+
+    var it = text.split("a,b,,c", ",")
+    while it.next() |piece| {
+        @print("<")
+        @print(piece)
+        @print(">")
+    }
+    @println()
+    var it2 = text.split("one--two--", "--")
+    while it2.next() |piece| {
+        @print("<")
+        @print(piece)
+        @print(">")
+    }
+    @println()
+    var it3 = text.split("whole", "")
+    while it3.next() |piece| {
+        @println(piece)
+    }
+
+    var word = [5]u8{'M', 'i', 'X', 'e', 'D'}
+    text.toLower(word[..])
+    @println(word[..])
+
+    parsing()
+    utf8()
+    try builder(alloc)
+    try floats(alloc)
+}

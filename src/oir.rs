@@ -171,7 +171,9 @@ pub enum Rvalue {
     Alloc { alloc: Operand, ty: Type, span: Span },
     /// Allocate `len` elements of type `elem`, each set to `value`: a
     /// `?[]mut elem`, null when out of memory. No elements allocate nothing.
-    AllocSlice { alloc: Operand, value: Operand, elem: Type, len: Operand, span: Span },
+    /// With `old` (a slice), its elements are copied first and it is freed
+    /// on success (`resize`).
+    AllocSlice { alloc: Operand, value: Operand, elem: Type, len: Operand, old: Option<Operand>, span: Span },
     /// The empty slice of type `ty`.
     EmptySlice(Type),
     /// An allocator method or test builtin, with the operand types.
@@ -916,14 +918,21 @@ impl<'a> Lower<'a> {
             }
             // `r = alloc(n elements)`: if `r` is not null, the result is
             // its slice, else the error `OutOfMemory`.
-            TExprKind::AllocSlice { alloc, value, len } => {
+            // `resize` evaluates its arguments (old, len, value) in order.
+            TExprKind::AllocSlice { alloc, value, len, old } => {
                 let a = self.operand(alloc, out);
-                let v = self.operand(value, out);
-                let n = self.operand(len, out);
+                let o = old.as_ref().map(|o| self.operand(o, out));
+                let (v, n) = if o.is_some() {
+                    let n = self.operand(len, out);
+                    (self.operand(value, out), n)
+                } else {
+                    let v = self.operand(value, out);
+                    (v, self.operand(len, out))
+                };
                 let Type::ErrorUnion(_, slice) = &e.ty else { unreachable!() };
                 let opt = Type::Optional(slice.clone());
                 let r = self.temp(opt.clone());
-                let rv = Rvalue::AllocSlice { alloc: a, value: v, elem: value.ty.clone(), len: n, span: e.span };
+                let rv = Rvalue::AllocSlice { alloc: a, value: v, elem: value.ty.clone(), len: n, old: o, span: e.span };
                 self.push(out, StmtKind::Assign(local(r), rv));
                 let has = self.temp(Type::Bool);
                 self.push(out, StmtKind::Assign(local(has), Rvalue::IsSome { place: local(r), ty: opt }));

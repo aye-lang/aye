@@ -1,0 +1,15 @@
+// M8: std.time.monotonicMs and sleep.
+
+import std.time
+
+pub fn main() {
+    let start = time.monotonicMs()
+    time.sleep(30)
+    let mid = time.monotonicMs()
+    time.sleep(0)
+    let end = time.monotonicMs()
+    @println(mid - start >= 30)
+    // Generous, for a busy machine.
+    @println(mid - start < 5000)
+    @println(end >= mid)
+}

@@ -1,0 +1,65 @@
+// M8: std.pool.Pool(T) and Handle(T), the program of `pool.ore` with the
+// std types instead of its own.
+
+import std.heap.General
+import std.pool.Handle
+import std.pool.Pool
+
+struct Node {
+    id: i64
+    dirty: bool
+}
+
+let NodePool = Pool(Node)
+
+fn countDirty(nodes: *NodePool, handles: []Handle(Node)) i64 {
+    var n: i64 = 0
+    for h in handles {
+        if nodes.get(h) |node| {
+            if node.dirty {
+                n += 1
+            }
+        }
+    }
+    return n
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var nodes = NodePool.init(gpa.allocator(), 2)
+    defer nodes.deinit()
+
+    let first = try nodes.insert(Node { id: 1, dirty: false })
+    let target = try nodes.insert(Node { id: 2, dirty: false })
+    // The third node moves the slots to a larger allocation.
+    let third = try nodes.insert(Node { id: 3, dirty: false })
+
+    if nodes.get(target) |node| {
+        node.dirty = true
+    }
+    var handles = [3]Handle(Node){first, target, third}
+    @println(countDirty(&nodes, handles[..]))
+
+    // A stale handle: `target`'s slot is freed, then reused by a new node.
+    nodes.remove(target)
+    @println(nodes.get(target) == null)
+    let fresh = try nodes.insert(Node { id: 4, dirty: false })
+    @println(fresh.index == target.index)
+    @println(nodes.get(target) == null)
+    if nodes.get(fresh) |node| {
+        @println(node.id)
+        @println(node.dirty)
+    }
+    nodes.remove(target)
+    @println(countDirty(&nodes, handles[..]))
+    for i in (0 as i64)..100 {
+        let h = try nodes.insert(Node { id: i, dirty: i % 2 == 0 })
+        if i % 3 == 0 {
+            nodes.remove(h)
+        }
+    }
+    if nodes.get(third) |node| {
+        @println(node.id)
+    }
+}
