@@ -178,6 +178,10 @@ const MAX_INSTANCE_DEPTH: usize = 32;
 /// The built-in `where` constraint that only integer types satisfy.
 const INTEGER: &str = "Integer";
 
+/// The built-in `where` constraint that the types `==` compares satisfy:
+/// a `T` with it has `==`, `!=` and `@hash`.
+const HASH: &str = "Hash";
+
 /// Name prefix of the inferred error set of a `!T` function.
 const INFERRED: &str = "error set of ";
 
@@ -573,6 +577,11 @@ pub enum Intrinsic {
     AtomicAdd,
     AtomicSub,
     AtomicCas,
+    /// `@hash(v)`: a `u64` from the value, the same for values that `==`
+    /// finds equal. Lowered to `HashMix` steps.
+    Hash,
+    /// The hash `args[0]` (a `u64`) mixed with the scalar `args[1]`.
+    HashMix,
 }
 
 #[derive(Debug, Clone)]
@@ -1149,7 +1158,7 @@ impl<'a> Checker<'a> {
                 }
             };
             let bare = name.rsplit("::").next().unwrap();
-            if Type::from_name(bare).is_some() || matches!(bare, "true" | "false" | "null" | "Self" | "type" | INTEGER) {
+            if Type::from_name(bare).is_some() || matches!(bare, "true" | "false" | "null" | "Self" | "type" | INTEGER | HASH) {
                 self.report(Error::new(E0014, span, format!("`{name}` is a builtin name and cannot be redefined")));
                 continue;
             }
@@ -1777,7 +1786,7 @@ impl<'a> Checker<'a> {
         for b in &f.bounds {
             if !f.params.iter().any(|p| p.comptime && p.name == b.param) {
                 self.report(Error::new(E0076, b.span, format!("`{}` is not a `comptime` parameter of `{g}`", b.param)));
-            } else if b.iface != INTEGER && !self.ifaces.contains_key(&b.iface) {
+            } else if b.iface != INTEGER && b.iface != HASH && !self.ifaces.contains_key(&b.iface) {
                 self.report(Error::new(E0076, b.iface_span, format!(
                     "`{}` is not an interface (a `where` constraint names an interface)",
                     b.iface
@@ -1803,6 +1812,12 @@ impl<'a> Checker<'a> {
     /// Is `t` a type parameter with `where T: Integer`?
     fn integer_param(&self, t: &Type) -> bool {
         matches!(t, Type::Param(g, p) if self.bounds.get(&(g.clone(), p.clone())).is_some_and(|v| v.iter().any(|i| i == INTEGER)))
+    }
+
+    /// Is `t` a type parameter with `where T: Hash` (or `Integer`, whose
+    /// types all compare)?
+    fn hash_param(&self, t: &Type) -> bool {
+        matches!(t, Type::Param(g, p) if self.bounds.get(&(g.clone(), p.clone())).is_some_and(|v| v.iter().any(|i| i == HASH || i == INTEGER)))
     }
 
     /// Is `t` an integer type, or a type parameter with `where T: Integer`
@@ -1905,19 +1920,27 @@ impl<'a> Checker<'a> {
         for b in &decl.bounds {
             let Some(i) = params.iter().position(|p| p.name == b.param) else { continue };
             let integer = b.iface == INTEGER;
-            if i >= args.len() || !integer && !self.ifaces.contains_key(&b.iface) {
+            let hash = b.iface == HASH;
+            if i >= args.len() || !integer && !hash && !self.ifaces.contains_key(&b.iface) {
                 continue;
             }
             let (p, iface) = (&b.param, &b.iface);
             let need = format!("`where {p}: {iface}` of `{g}` at {}", self.place(b.span, span));
             match &args[i] {
                 t if integer && t.is_int() => {}
+                t @ Type::Param(..) if hash && self.hash_param(t) => {}
                 Type::Param(pg, pn) => {
                     if !self.bounds.get(&(pg.clone(), pn.clone())).is_some_and(|v| v.contains(iface)) {
                         return err(E0079, span, format!("`{pn}` does not satisfy {need} (add `where {pn}: {iface}`)"));
                     }
                 }
                 t if integer => return err(E0079, span, format!("`{t}` does not satisfy {need}: it is not an integer type")),
+                t if hash => {
+                    if let Some(why) = self.why_not_comparable(t) {
+                        let why = if why.is_empty() { "`==` cannot compare it".to_string() } else { why };
+                        return err(E0079, span, format!("`{t}` does not satisfy {need}: {why}"));
+                    }
+                }
                 Type::Struct(s) => {
                     if let Some(why) = self.why_not(s, iface) {
                         return err(E0079, span, format!("`{s}` does not satisfy {need}: {why}"));
@@ -3248,6 +3271,10 @@ impl<'a> Checker<'a> {
                 Some("it has variants with fields (use `match`)".to_string())
             }
             Type::Enum(_) => None,
+            t @ Type::Param(_, p) if !self.hash_param(t) => {
+                Some(format!("it is a `comptime` type (add `where {p}: Hash` to compare it)"))
+            }
+            Type::Param(..) => None,
             Type::Struct(n) if self.structs[n].is_union => Some("it is a union".to_string()),
             Type::Struct(n) => self.structs[n].fields.iter().find(|(_, ft)| self.why_not_comparable(ft).is_some()).map(|(f, ft)| {
                 format!("its field `{f}` has type `{ft}`, which `==` cannot compare")
@@ -3463,6 +3490,21 @@ impl<'a> Checker<'a> {
                 }
             }
             ExprKind::Builtin { name, args } if name.starts_with("atomic") => return self.atomic(name, args, span),
+            ExprKind::Builtin { name, args } if name == "hash" => {
+                let [a] = args.as_slice() else {
+                    return err(E0022, span, "`@hash` takes one argument, the value to hash");
+                };
+                let v = self.value(a, None)?;
+                if let Some(why) = self.why_not_comparable(&v.ty) {
+                    let why = match &v.ty {
+                        Type::Slice(..) => "`==` cannot compare it (for `[]u8` keys, use `std.map.StrMap`)".to_string(),
+                        _ if why.is_empty() => "`==` cannot compare it".to_string(),
+                        _ => why,
+                    };
+                    return err(E0107, v.span, format!("`@hash` cannot hash a `{}`: {why}", v.ty));
+                }
+                (TExprKind::Intrinsic { op: Intrinsic::Hash, args: vec![v] }, Type::Int(IntTy::U64))
+            }
             ExprKind::Builtin { name, args } if name == "hasLink" => {
                 let lib = match args.as_slice() {
                     [ast::Expr { kind: ExprKind::Str(s), .. }] => String::from_utf8_lossy(s).into_owned(),

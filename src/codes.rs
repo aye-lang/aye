@@ -2292,6 +2292,26 @@ pub fn main() {
 }
 "#,
 }
+E0107 = 107 {
+    "a value that `@hash` cannot hash",
+    "`@hash(x)` hashes exactly the values that `==` compares, so that equal values hash the same: integers, floats (`0.0` and `-0.0` alike), `bool`, pointers (by address), error values, enums without fields, optionals of those, and structs whose fields all hash. A slice, an array, a union or an enum with fields does not hash; for `[]u8` keys use `std.map.StrMap`, and for other keys hash a struct of the fields that identify the value. In a generic, `where T: Hash` gives `T` `==` and `@hash`.",
+    r#"struct Name {
+    text: []u8
+}
+
+pub fn main() {
+    @println(@hash(Name { text: "a" }))
+}
+"#,
+    r#"struct Name {
+    id: u32
+}
+
+pub fn main() {
+    @println(@hash(Name { id: 1 }) == @hash(Name { id: 1 }))
+}
+"#,
+}
 }
 
 #[cfg(test)]

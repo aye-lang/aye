@@ -72,6 +72,21 @@ ORE_RT __attribute__((noreturn, cold)) void ore_panic_slice(int line, int col, s
 }
 #define ORE_UNLIKELY(c) __builtin_expect(!!(c), 0)
 
+/* `@hash`: each scalar is mixed in with SplitMix64's finalizer. A float
+   hashes its bits, with -0.0 as 0.0 (they are `==`). */
+ORE_RT uint64_t ore_hash_mix(uint64_t h, uint64_t v) {
+    uint64_t x = h ^ (v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
+}
+ORE_RT uint64_t ore_hash_f64(double d) {
+    uint64_t b;
+    if (d == 0) d = 0;
+    __builtin_memcpy(&b, &d, sizeof b);
+    return b;
+}
+
 #define ORE_TRACE_MAX 64
 /* Each thread has its own error return trace. */
 static _Thread_local __attribute__((unused)) struct { int line, col; } ore_trace[ORE_TRACE_MAX];
@@ -1567,6 +1582,16 @@ impl Gen {
                 Type::Bool => format!("ore_expect_eq_b({}, {}, {lc})", a[0], a[1]),
                 _ => format!("ore_expect_eq_s(({0}).ptr, ({0}).len, ({1}).ptr, ({1}).len, {lc})", a[0], a[1]),
             },
+            Intrinsic::Hash => unreachable!("lowered to HashMix"),
+            Intrinsic::HashMix => {
+                let bits = match &args[1].1 {
+                    Type::Float(_) => format!("ore_hash_f64({})", a[1]),
+                    Type::Enum(_) => format!("(uint64_t)({}).tag", a[1]),
+                    Type::Int(_) | Type::Bool | Type::ErrorSet(_) => format!("(uint64_t){}", a[1]),
+                    _ => format!("(uint64_t)(uintptr_t){}", a[1]),
+                };
+                format!("ore_hash_mix({}, {bits})", a[0])
+            }
             Intrinsic::AtomicLoad => format!("__atomic_load_n({}, __ATOMIC_SEQ_CST)", a[0]),
             Intrinsic::AtomicStore => format!("__atomic_store_n({}, {}, __ATOMIC_SEQ_CST)", a[0], a[1]),
             Intrinsic::AtomicAdd => format!("__atomic_fetch_add({}, {}, __ATOMIC_SEQ_CST)", a[0], a[1]),

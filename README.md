@@ -241,7 +241,7 @@ imports one item. `std` is embedded in the compiler (sources in
 `File.reader` and `Reader.readLine`), `std.mem`
 (`Allocator`, `AllocError`, `eql`, `copy`, `set`, `indexOf`), `std.heap`
 (`General`, `Arena`), `std.list` (`List(T)`), `std.map` (`StrMap(V)`,
-`IntMap(K, V)`), `std.text` (`Builder`, search, `split`, parsing, UTF-8),
+`IntMap(K, V)`, `HashMap(K, V)`), `std.text` (`Builder`, search, `split`, parsing, UTF-8),
 `std.math`, `std.sort` (`sort(T, items, less)`), `std.pool` (`Pool(T)`,
 `Handle(T)`), `std.time`, `std.thread` (`spawn`, `spawnWithStack`,
 `Thread.join`), `std.sync`

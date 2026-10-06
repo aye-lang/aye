@@ -95,7 +95,7 @@ context; `ore doc --signatures std` prints all of std.
   match if else for while break continue return defer errdefer try catch
   orelse unreachable comptime where as test mut extern is`.
 - Predeclared names (not keywords, cannot be declared again): `true false
-  null Self type Integer` and the primitive types `i8 i16 i32 i64 isize u8 u16 u32
+  null Self type Integer Hash` and the primitive types `i8 i16 i32 i64 isize u8 u16 u32
   u64 usize f32 f64 bool` and C's integer types `c_short c_ushort c_int
   c_uint c_long c_ulong c_longlong c_ulonglong`. `in` is special only in a
   `for` header, `union` only after `extern`.
@@ -133,7 +133,7 @@ pub fn main() {
 - Builtins start with `@`: `@print`, `@println`, `@expect`, `@expectEqual`,
   `@testAllocator`, `@sizeOf`, `@zeroed`, `@ptrCast`, `@link`,
   `@linkOptional`, `@hasLink`, `@atomicLoad`, `@atomicStore`, `@atomicAdd`,
-  `@atomicSub`, `@atomicCas`.
+  `@atomicSub`, `@atomicCas`, `@hash`.
 
 **Newlines end statements** (Go's rule). A newline is a statement
 terminator when the last token on the line is an identifier, a literal,
@@ -1221,6 +1221,11 @@ pub fn main() {
   `T` and any numeric type (panicking if the value does not fit). Each
   instance is checked again with its type: `-x` or the literal `300` with
   `T = u8` is an error that names the instance.
+- `where T: Hash` is built in: the types that `==` compares satisfy it
+  (section 7), and a `T` then has `==`, `!=` and `@hash`. `@hash(x)` is a
+  `u64` from any such value, equal for equal values (`0.0` and `-0.0`
+  too); otherwise E0107. A slice, array, union or enum with fields does
+  not hash.
 
 ```ore
 fn total(comptime T: type, xs: []T) i64 where T: Integer {
@@ -1351,6 +1356,7 @@ failure is `{"kind":"assertion"|"panic"|"leak","line":L,"col":C,"message":M}`,
   section 15 (std.sync).
 - `@sizeOf(T)`, `@zeroed(T)`, `@ptrCast(T, p)`, `@link("lib")`,
   `@linkOptional("lib")`, `@hasLink("lib")`: section 4.
+- `@hash(x)`: section 11 (`where T: Hash`).
 
 ## 15. std
 
@@ -1483,9 +1489,23 @@ IntMap.iterator(self: *Self) IntMapIterator(K, V)
 std.map.IntMapIterator(K, V)
 IntMapIterator.next(self: *mut Self) ?IntEntry(K, V)
 std.map.IntEntry(K, V) { key: K, value: *mut V }
+std.map.HashMap(K, V) where K: Hash        any key `==` compares: structs, enums, optionals
+HashMap.init(alloc: Allocator) HashMap(K, V)
+HashMap.deinit(self: *mut Self)
+HashMap.len(self: *Self) usize
+HashMap.put(self: *mut Self, key: K, value: V) AllocError!void
+HashMap.get(self: *Self, key: K) ?V
+HashMap.getPtr(self: *Self, key: K) ?*mut V
+HashMap.contains(self: *Self, key: K) bool
+HashMap.remove(self: *mut Self, key: K) bool
+HashMap.iterator(self: *Self) HashMapIterator(K, V)
+std.map.HashMapIterator(K, V)
+HashMapIterator.next(self: *mut Self) ?HashEntry(K, V)
+std.map.HashEntry(K, V) { key: K, value: *mut V }
 ```
 
-A struct (a node id) is not a key: use its integer field.
+`HashMap` finds a key by `@hash` and `==`: a struct key (a node handle)
+is compared field by field.
 
 ```ore
 import std.heap.General

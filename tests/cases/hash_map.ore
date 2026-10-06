@@ -1,0 +1,118 @@
+// `@hash(x)` hashes any value that `==` compares, consistently with `==`;
+// `std.map.HashMap(K, V)` takes any such key (`where K: Hash`), here a
+// struct handle, an enum and an optional.
+import std.heap.General
+import std.map.HashMap
+import std.mem.Allocator
+
+struct Handle {
+    index: u32
+    generation: u16
+}
+
+enum Color {
+    Red
+    Green
+    Blue
+}
+
+struct Key {
+    color: Color
+    at: ?Handle
+    weight: f64
+}
+
+// `where T: Hash` gives a `comptime` type `==` and `@hash`.
+fn countEqual(comptime T: type, xs: []T, x: T) usize where T: Hash {
+    var n: usize = 0
+    for y in xs {
+        if y == x && @hash(y) == @hash(x) {
+            n += 1
+        }
+    }
+    return n
+}
+
+fn handles(alloc: Allocator) !void {
+    var m = HashMap(Handle, []u8).init(alloc)
+    defer m.deinit()
+    try m.put(Handle { index: 1, generation: 0 }, "one")
+    try m.put(Handle { index: 2, generation: 0 }, "two")
+    try m.put(Handle { index: 1, generation: 1 }, "one again")
+    try m.put(Handle { index: 2, generation: 0 }, "TWO")
+    @println(m.len())
+    if m.get(Handle { index: 2, generation: 0 }) |s| {
+        @println(s)
+    }
+    if m.get(Handle { index: 1, generation: 1 }) |s| {
+        @println(s)
+    }
+    @println(m.contains(Handle { index: 3, generation: 0 }))
+    for i in (0 as u32)..2000 {
+        try m.put(Handle { index: i, generation: 7 }, "x")
+    }
+    @println(m.len())
+    var removed: usize = 0
+    for i in (0 as u32)..4000 {
+        if i % 2 == 0 && m.remove(Handle { index: i, generation: 7 }) {
+            removed += 1
+        }
+    }
+    @println(removed)
+    var ok = true
+    for i in (0 as u32)..4000 {
+        ok = ok && m.contains(Handle { index: i, generation: 7 }) == (i < 2000 && i % 2 == 1)
+    }
+    @println(ok)
+    var count: usize = 0
+    var it = m.iterator()
+    while it.next() |e| {
+        if e.key.generation == 7 {
+            count += 1
+        }
+    }
+    @println(count)
+}
+
+fn keys(alloc: Allocator) !void {
+    var m = HashMap(Key, i64).init(alloc)
+    defer m.deinit()
+    try m.put(Key { color: Color.Red, at: null, weight: 0.0 }, 1)
+    try m.put(Key { color: Color.Red, at: Handle { index: 0, generation: 0 }, weight: 0.0 }, 2)
+    try m.put(Key { color: Color.Blue, at: null, weight: 1.5 }, 3)
+    // -0.0 == 0.0, so it is the same key.
+    try m.put(Key { color: Color.Red, at: null, weight: -0.0 }, 4)
+    @println(m.len())
+    if m.getPtr(Key { color: Color.Red, at: null, weight: 0.0 }) |p| {
+        p.* += 10
+    }
+    if m.get(Key { color: Color.Red, at: null, weight: 0.0 }) |v| {
+        @println(v)
+    }
+    @println(m.get(Key { color: Color.Green, at: null, weight: 1.5 }) == null)
+
+    var colors = HashMap(Color, u32).init(alloc)
+    defer colors.deinit()
+    try colors.put(Color.Green, 5)
+    @println(colors.get(Color.Green) == 5)
+    @println(colors.get(Color.Red) == null)
+}
+
+pub fn main() !void {
+    @println(@hash(Handle { index: 1, generation: 2 }) == @hash(Handle { index: 1, generation: 2 }))
+    @println(@hash(Handle { index: 1, generation: 2 }) != @hash(Handle { index: 2, generation: 1 }))
+    @println(@hash(0.0) == @hash(-0.0))
+    @println(@hash(42 as u8) == @hash(42 as u8))
+    let none: ?i32 = null
+    let zero: ?i32 = 0
+    @println(@hash(none) != @hash(zero))
+    let hs = [3]Handle{Handle { index: 1, generation: 0 }, Handle { index: 2, generation: 0 }, Handle { index: 1, generation: 0 }}
+    @println(countEqual(Handle, hs[..], Handle { index: 1, generation: 0 }))
+    var cs = [2]Color{Color.Red, Color.Blue}
+    @println(countEqual(Color, cs[..], Color.Blue))
+
+    var gpa = General.init()
+    defer gpa.deinit()
+    try handles(gpa.allocator())
+    try keys(gpa.allocator())
+}

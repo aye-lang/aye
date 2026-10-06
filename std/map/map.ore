@@ -1,5 +1,6 @@
-// std.map: hash maps with byte-string keys (`StrMap(V)`) and with keys
-// that are integers (`IntMap(K, V)`).
+// std.map: hash maps with byte-string keys (`StrMap(V)`), with keys
+// that are integers (`IntMap(K, V)`), and with any key that `==` compares
+// (`HashMap(K, V)`: structs, enums, optionals, ...).
 //
 // Both use open addressing with linear probing in a power-of-two table
 // that is at most 3/4 full, and remove by shifting later entries back (no
@@ -333,6 +334,171 @@ pub fn IntMap(comptime K: type, comptime V: type) type where K: Integer {
             }
             let old = self.slots
             self.slots = try self.alloc.alloc(IntSlot(K, V) { key: key, id: 0, value: fill, used: false }, n)
+            for s in old {
+                if s.used {
+                    self.place(s)
+                }
+            }
+            self.alloc.free(old)
+        }
+    }
+}
+
+fn HashSlot(comptime K: type, comptime V: type) type {
+    return struct {
+        key: K
+        hash: u64
+        value: V
+        used: bool
+    }
+}
+
+/// An entry of a `HashMap`, from its iterator.
+pub fn HashEntry(comptime K: type, comptime V: type) type {
+    return struct {
+        key: K
+        value: *mut V
+    }
+}
+
+/// Walks the entries of a `HashMap` in no particular order.
+pub fn HashMapIterator(comptime K: type, comptime V: type) type {
+    return struct {
+        slots: []mut HashSlot(K, V)
+        next_slot: usize
+
+        pub fn next(self: *mut Self) ?HashEntry(K, V) {
+            while self.next_slot < self.slots.len {
+                let i = self.next_slot
+                self.next_slot += 1
+                if self.slots[i].used {
+                    return HashEntry(K, V) { key: self.slots[i].key, value: &mut self.slots[i].value }
+                }
+            }
+            return null
+        }
+    }
+}
+
+/// A map from keys `K` to `V` values, for any `K` that `==` compares:
+/// keys are found by `@hash(key)` and `==` (a struct field by field).
+pub fn HashMap(comptime K: type, comptime V: type) type where K: Hash {
+    return struct {
+        slots: []mut HashSlot(K, V)
+        count: usize
+        alloc: Allocator
+
+        /// An empty map; nothing is allocated until the first `put`.
+        pub fn init(alloc: Allocator) Self {
+            return Self { slots: []mut HashSlot(K, V){}, count: 0, alloc: alloc }
+        }
+
+        pub fn deinit(self: *mut Self) {
+            self.alloc.free(self.slots)
+            self.slots = []mut HashSlot(K, V){}
+            self.count = 0
+        }
+
+        /// The number of entries.
+        pub fn len(self: *Self) usize {
+            return self.count
+        }
+
+        /// Sets the value of `key`, adding the entry if it is new.
+        pub fn put(self: *mut Self, key: K, value: V) AllocError!void {
+            let h = @hash(key)
+            if self.find(key, h) |i| {
+                self.slots[i].value = value
+                return
+            }
+            if (self.count + 1) * 4 > self.slots.len * 3 {
+                try self.grow(key, value)
+            }
+            self.place(HashSlot(K, V) { key: key, hash: h, value: value, used: true })
+            self.count += 1
+        }
+
+        pub fn get(self: *Self, key: K) ?V {
+            if self.find(key, @hash(key)) |i| {
+                return self.slots[i].value
+            }
+            return null
+        }
+
+        pub fn getPtr(self: *Self, key: K) ?*mut V {
+            if self.find(key, @hash(key)) |i| {
+                return &mut self.slots[i].value
+            }
+            return null
+        }
+
+        pub fn contains(self: *Self, key: K) bool {
+            return self.find(key, @hash(key)) != null
+        }
+
+        /// Removes the entry of `key`; false when there was none.
+        pub fn remove(self: *mut Self, key: K) bool {
+            if self.find(key, @hash(key)) |found| {
+                let mask = self.slots.len - 1
+                var hole = found
+                var j = found
+                while true {
+                    j = (j + 1) & mask
+                    if !self.slots[j].used {
+                        break
+                    }
+                    let home = self.slots[j].hash as usize & mask
+                    var stays = home > hole && home <= j
+                    if j < hole {
+                        stays = home > hole || home <= j
+                    }
+                    if !stays {
+                        self.slots[hole] = self.slots[j]
+                        hole = j
+                    }
+                }
+                self.slots[hole].used = false
+                self.count -= 1
+                return true
+            }
+            return false
+        }
+
+        pub fn iterator(self: *Self) HashMapIterator(K, V) {
+            return HashMapIterator(K, V) { slots: self.slots, next_slot: 0 }
+        }
+
+        fn find(self: *Self, key: K, h: u64) ?usize {
+            if self.slots.len == 0 {
+                return null
+            }
+            let mask = self.slots.len - 1
+            var i = h as usize & mask
+            while self.slots[i].used {
+                if self.slots[i].hash == h && self.slots[i].key == key {
+                    return i
+                }
+                i = (i + 1) & mask
+            }
+            return null
+        }
+
+        fn place(self: *mut Self, slot: HashSlot(K, V)) {
+            let mask = self.slots.len - 1
+            var i = slot.hash as usize & mask
+            while self.slots[i].used {
+                i = (i + 1) & mask
+            }
+            self.slots[i] = slot
+        }
+
+        fn grow(self: *mut Self, key: K, fill: V) AllocError!void {
+            var n: usize = 8
+            if self.slots.len > 0 {
+                n = self.slots.len * 2
+            }
+            let old = self.slots
+            self.slots = try self.alloc.alloc(HashSlot(K, V) { key: key, hash: 0, value: fill, used: false }, n)
             for s in old {
                 if s.used {
                     self.place(s)

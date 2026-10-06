@@ -1,0 +1,6 @@
+hash.ore:12:14: error[E0025]: operator `==` cannot be applied to `T`: it is a `comptime` type (add `where T: Hash` to compare it)
+hash.ore:25:20: error[E0107]: `@hash` cannot hash a `[]u8`: `==` cannot compare it (for `[]u8` keys, use `std.map.StrMap`)
+hash.ore:26:20: error[E0107]: `@hash` cannot hash a `Named`: its field `name` has type `[]u8`, which `==` cannot compare
+hash.ore:27:26: error[E0107]: `@hash` cannot hash a `Shape`: it has variants with fields (use `match`)
+hash.ore:28:14: error[E0022]: `@hash` takes one argument, the value to hash
+hash.ore:30:14: error[E0079]: `Shape` does not satisfy `where T: Hash` of `find` at 15:53: it has variants with fields (use `match`)
