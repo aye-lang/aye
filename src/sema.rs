@@ -467,6 +467,9 @@ pub enum TStmtKind {
     ErrDefer(Vec<TStmt>),
     Block(Vec<TStmt>),
     Expr(TExpr),
+    /// The last statement of a `catch` or `orelse` block that gives the
+    /// block's value: the value, computed before the block's `defer`s run.
+    Value(TExpr),
     /// `@setSafety(on)`, the first statement of a block: the runtime checks
     /// of the rest of the block are on (as the build mode has them) or off.
     SetSafety(bool),
@@ -1079,6 +1082,11 @@ fn block_returns(stmts: &[TStmt], or_jumps: bool) -> bool {
         }),
         _ => false,
     })
+}
+
+/// Does a `catch` or `orelse` block end with its value?
+fn gives_value(stmts: &[TStmt]) -> bool {
+    matches!(stmts.last(), Some(TStmt { kind: TStmtKind::Value(_), .. }))
 }
 
 /// Is `got` the type `want` with `mut` dropped: `*mut T` for `*T`, `[]mut T`
@@ -2620,6 +2628,18 @@ impl<'a> Checker<'a> {
 
     /// Statements with errors are reported and left out.
     fn block(&mut self, b: &ast::Block) -> Vec<TStmt> {
+        self.block_with(b, None)
+    }
+
+    /// The block of a `catch` or `orelse` whose value is a `want`: its last
+    /// statement may be an expression that gives the value
+    /// (`TStmtKind::Value`). A `void` expression there (a call), a `match`
+    /// with block arms and `unreachable` stay statements.
+    fn value_block(&mut self, b: &ast::Block, want: &Type) -> Vec<TStmt> {
+        self.block_with(b, Some(want))
+    }
+
+    fn block_with(&mut self, b: &ast::Block, value: Option<&Type>) -> Vec<TStmt> {
         self.scopes.push(HashMap::new());
         let mut out = Vec::new();
         for (i, s) in b.stmts.iter().enumerate() {
@@ -2633,6 +2653,16 @@ impl<'a> Checker<'a> {
                 }
                 continue;
             }
+            if let (Some(want), StmtKind::Expr(e), true) = (value, &s.kind, i + 1 == b.stmts.len())
+                && !matches!(&strip_parens(e).kind, ExprKind::Unreachable)
+                && !matches!(&strip_parens(e).kind, ExprKind::Match { arms, .. } if arms.iter().any(|a| matches!(a.body, ArmBody::Block(_))))
+            {
+                match self.tail_value(e, want) {
+                    Ok(kind) => out.push(TStmt { kind, span: s.span }),
+                    Err(e) => self.report(e),
+                }
+                continue;
+            }
             match self.stmt(s) {
                 Ok(t) => out.push(t),
                 Err(e) => self.report(e),
@@ -2640,6 +2670,19 @@ impl<'a> Checker<'a> {
         }
         self.scopes.pop();
         out
+    }
+
+    /// The last expression `e` of a value block (see `value_block`).
+    fn tail_value(&mut self, e: &ast::Expr, want: &Type) -> Result<TStmtKind> {
+        let t = self.expr(e, Some(Self::hint(e, want)))?;
+        match t.ty {
+            Type::Error => Err(silent()),
+            Type::Void => Ok(TStmtKind::Expr(t)),
+            _ => {
+                let t = self.handled(t)?;
+                Ok(TStmtKind::Value(self.coerce(t, want)?))
+            }
+        }
     }
 
     fn stmt(&mut self, s: &ast::Stmt) -> Result<TStmt> {
@@ -3798,10 +3841,10 @@ impl<'a> Checker<'a> {
                 let failures = self.failures;
                 let body = match &**body {
                     ArmBody::Block(b) => {
-                        let stmts = self.block(b);
-                        if payload != Type::Void && self.failures == failures && !block_returns(&stmts, true) {
+                        let stmts = if payload == Type::Void { self.block(b) } else { self.value_block(b, &payload) };
+                        if payload != Type::Void && self.failures == failures && !block_returns(&stmts, true) && !gives_value(&stmts) {
                             Err(Error::new(E0067, span, format!(
-                                "this `catch` block must end with `return`, `break` or `continue`; to give a `{payload}` instead, write `catch <expression>`"
+                                "this `catch` block must end with a `{payload}` value or leave with `return`, `break` or `continue`"
                             )))
                         } else {
                             Ok(TArmBody::Block(stmts))
@@ -3863,10 +3906,10 @@ impl<'a> Checker<'a> {
                 let mut ty = payload.clone();
                 let body = match &**body {
                     ArmBody::Block(b) => {
-                        let stmts = self.block(b);
-                        if self.failures == failures && !block_returns(&stmts, true) {
+                        let stmts = self.value_block(b, &payload);
+                        if self.failures == failures && !block_returns(&stmts, true) && !gives_value(&stmts) {
                             Err(Error::new(E0067, span, format!(
-                                "this `orelse` block must end with `return`, `break`, `continue` or `unreachable`; to give a `{payload}` instead, write `orelse <expression>`"
+                                "this `orelse` block must end with a `{payload}` value or leave with `return`, `break`, `continue` or `unreachable`"
                             )))
                         } else {
                             Ok(TArmBody::Block(stmts))

@@ -1227,7 +1227,7 @@ pub fn main() {
 }
 E0067 = 67 {
     "`catch` or `orelse` block without a value",
-    "When the call returns a value (`E!T` with T not `void`), a `catch` block must leave with `return`, `break` or `continue` (or end in `unreachable`). To give a replacement value instead, write `catch <expression>`, for example `catch 0` or `catch |e| match e { ... }`. The same holds for an `orelse` block: `x orelse { ... return }`, or `x orelse 0`.",
+    "When the call returns a value (`E!T` with T not `void`), a `catch` block gives the replacement value as its last line (`catch |e| { report(e); 0 }`), or leaves with `return`, `break` or `continue` (or ends in `unreachable`). A block that ends with a statement, such as a call that returns nothing, does neither. A replacement value without statements is `catch <expression>`, for example `catch 0` or `catch |e| match e { ... }`. The same holds for an `orelse` block: `x orelse { log(); 0 }`, `x orelse { ... return }`, or `x orelse 0`.",
     r#"error E { Failed }
 
 fn f() E!u32 {
@@ -1249,8 +1249,9 @@ fn f() E!u32 {
 pub fn main() {
     let x = f() catch |e| {
         @println("failed")
-        return
+        0
     }
+    @println(x)
 }
 "#,
 }

@@ -827,7 +827,9 @@ optional type (`var m: ?i64 = null`).
 
 - `x orelse d` is the value of `x`, or `d` (a `T`, evaluated only when `x`
   is `null`). Instead of `d`: `return [value]`, `break`, `continue`, or a
-  block that ends with one of them or `unreachable`. `catch` takes the same.
+  block that ends with one of them, `unreachable` or a value (`x orelse {
+  log(); d }`: the last line, computed before the block's `defer`s run).
+  `catch` takes the same.
   When `d` is a `?T` itself, the result is a `?T`, so `orelse` chains:
   `alt(i) orelse title(i) orelse ""` is a `[]u8`.
 - `x.?` is the value of `x`; a `null` panics (`unwrap of null`). It is a
@@ -979,8 +981,9 @@ pub fn main() !void {
   function (which must return an error union whose set has the error).
 - `f() catch value` gives `value` on error; `f() catch |e| expr` can use
   the error. `f() catch |e| { ... }` runs the block on error; when the
-  payload is not `void` the block must end with `return`, `break` or
-  `continue`. A `return` there returns from the enclosing function. `catch` binds looser than `+` and tighter than `==`.
+  payload is not `void` the block must end with the replacement value (an
+  expression as its last line: `catch |e| { report(e); old }`) or leave
+  with `return`, `break` or `continue`. A `return` there returns from the enclosing function. `catch` binds looser than `+` and tighter than `==`.
 - `if f() |v| { A } else |e| { B }` branches on an error union without
   leaving the function: `A` gets the payload `v`, `B` the error `e` (for
   `E!void`: `if f() { A } else |e| { B }`). The `else |e|` is required
