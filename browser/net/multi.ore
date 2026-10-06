@@ -7,6 +7,7 @@
 // cached (an error status, `no-store`) is kept for one use. Cookies are
 // sent and stored as for any request.
 
+import perf
 import std
 import std.list.List
 import std.mem.Allocator
@@ -51,6 +52,8 @@ struct Job {
 /// failures are left to the fetch that follows. Does nothing without a
 /// session.
 pub fn prefetch(alloc: Allocator, hrefs: []u8, kind: Kind, referrer: []u8) {
+    let began = perf.start()
+    defer perf.end("prefetch", began, referrer)
     if archiveReplay() {
         return
     }

@@ -258,6 +258,7 @@ pub fn loadWith(alloc: Allocator, target: *Url, body: ?*net.Body) AllocError!*mu
 fn fetchPage(alloc: Allocator, target: *Url, body: ?*net.Body, fallback: encoding.Encoding) AllocError!*mut Page {
     let fetch_began = perf.start()
     let res = net.fetchWith(alloc, target, body) catch |e| {
+        perf.end("fetch", fetch_began, target.href)
         match e {
             .OutOfMemory => {
                 return AllocError.OutOfMemory
@@ -300,8 +301,8 @@ fn runDocument(p: *mut Page, scripts: bool) AllocError!void {
         try loadFrames(p)
     }
     if p.script != null {
-        try fireFrameLoads(p)
         let scripts_began = perf.start()
+        try fireFrameLoads(p)
         try finishPageScripts(p)
         perf.end("scripts", scripts_began, p.url.href)
     }

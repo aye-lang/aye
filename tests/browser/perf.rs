@@ -23,6 +23,25 @@ fn timing_preserves_output() {
         assert!(trace.contains(&format!("ANYKNOWN_TIMING\t{phase}\t")), "missing {phase}: {trace}");
     }
     assert!(!trace.contains("leak"), "{trace}");
+    assert_eq!(trace.matches("ANYKNOWN_TIMING\tcascade\t").count(), 1, "{trace}");
+}
+
+#[test]
+fn timing_preserves_paint() {
+    let plain = scratch().join("perf-plain.png");
+    let timed = scratch().join("perf-timed.png");
+    let args = ["screenshot", "browser/tests/paint/text.html", "--font", "fixed", "-o"];
+    let first = Command::new(anyknown()).current_dir(root()).args(args).arg(&plain).output().unwrap();
+    let second = Command::new(anyknown()).current_dir(root()).env("ANYKNOWN_TIMING", "1").args(args).arg(&timed).output().unwrap();
+    assert!(first.status.success() && first.stderr.is_empty(), "{}", text(&first.stderr));
+    assert!(second.status.success(), "{}", text(&second.stderr));
+    assert_eq!(first.stdout, second.stdout);
+    assert_eq!(std::fs::read(plain).unwrap(), std::fs::read(timed).unwrap());
+    let trace = text(&second.stderr);
+    for phase in ["paint_build", "paint"] {
+        assert!(trace.contains(&format!("ANYKNOWN_TIMING\t{phase}\t")), "{trace}");
+    }
+    assert!(!trace.contains("leak"), "{trace}");
 }
 
 #[test]
@@ -38,6 +57,12 @@ fn response_archive_replays_without_server() {
     let recorded = Command::new(anyknown()).current_dir(root()).env("ANYKNOWN_RECORD", &dir).args(args).output().unwrap();
     assert!(recorded.status.success() && recorded.stderr.is_empty(), "{}", text(&recorded.stderr));
     assert!(std::fs::read_dir(&dir).unwrap().count() >= 4);
+    let failure_url = "http://127.0.0.1:1/unavailable";
+    let recorded_failure = Command::new(anyknown()).current_dir(root()).env("ANYKNOWN_RECORD", &dir).args(["dump", "--md", "--js", failure_url]).output().unwrap();
+    assert!(!recorded_failure.status.success());
+    let replayed_failure = Command::new(anyknown()).current_dir(root()).env("ANYKNOWN_REPLAY", &dir).args(["dump", "--md", "--js", failure_url]).output().unwrap();
+    assert_eq!(recorded_failure.stdout, replayed_failure.stdout);
+    assert_eq!(recorded_failure.stderr, replayed_failure.stderr);
     let redirect = format!("{}/redirect", srv.base);
     let recorded_redirect = Command::new(anyknown()).current_dir(root()).env("ANYKNOWN_RECORD", &dir).args(["dump", "--md", "--js", &redirect]).output().unwrap();
     assert!(recorded_redirect.status.success() && recorded_redirect.stderr.is_empty(), "{}", text(&recorded_redirect.stderr));
