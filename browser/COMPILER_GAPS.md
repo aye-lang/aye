@@ -1,551 +1,561 @@
 # Compiler and language gaps met by the browser
 
 Things the browser needed that Ore (stage0) or its std does not do, or
-does in a way that hurt. Each entry: what was needed, a minimal repro,
-and the workaround in `browser/`. Newest last.
-
-## B1
-
-### 1. Sub-modules that import siblings cannot be tested on their own
-
-Needed: unit tests next to the code of `html/` and `net/`.
-
-`import dom` in `browser/html/parser.ore` resolves against the root
-module's directory, so `ore test browser/html` fails before any test runs:
-
-```
-browser/html/parser.ore:9:8: error[E0081]: cannot find module `dom` (no directory `browser/html/dom`)
-```
-
-and `test` blocks of non-root modules are never compiled, so tests in
-`html/` or `net/` can never run. Workaround: those tests live in the root
-module (`browser/unit_tests.ore`, run by `ore test browser`) and only call
-`pub` functions; modules without sibling imports (`url`, `dom`,
-`encoding`) keep their own tests. Suggestion: `ore test browser
---module html` (compile the program, run one module's tests), or resolve
-imports from a project root marker.
-
-### 2. A `match` arm cannot list several enum variants
-
-```ore
-enum E { A, B, C }
-
-fn f(e: E) i64 {
-    return match e {
-        .A, .B => 1
-        .C => 2
-    }
-}
-```
-
-`error[E0006]: expected `=>`, found `,`` — integer patterns allow
-`' ', '\t' =>`, enum patterns do not. Workaround: duplicate arms
-(`.Doctype => {}` / `.Comment => {}` in `dump.ore`), a helper method
-(`textNearHead` in `html/parser.ore`), or `_`.
-
-### 3. `?T == T` does not compile, and the hint is wrong
-
-```ore
-enum E { A, B }
-
-fn f() ?E {
-    return E.A
-}
-
-pub fn main() {
-    @println(f() == E.A)
-}
-```
-
-`error[E0023]: mismatched types in `==`: `?E` and `E` (use `as` to
-convert)` — `as` cannot convert an optional. Since `T` converts to `?T`
-implicitly elsewhere, `opt == value` would be natural. Workaround:
-`if f() |e| { return e == E.A }` (`labelIs` in `encoding.ore`).
-
-### 4. No `orelse`, `.?` or `unreachable`
-
-Needed: "this optional is known to be set" and "this cannot happen".
-`Pool(T).get` returns `?*mut T`, but a `Document` never removes nodes, so
-every handle is valid. With no `.?`, no `orelse` and no `@panic` /
-`unreachable`, `Document.node` needs a dead fallback path:
-
-```ore
-pub fn node(self: *Self, h: NodeId) *mut Node {
-    if self.nodes.get(h) |n| {
-        return n
-    }
-    return &mut self.nodes.slots[h.index].value   // reads Pool's private fields
-}
-```
-
-The same shape shows up for "take the value or leave the function", e.g.
-the adoption agency algorithm:
-
-```ore
-var fi: usize = 0
-if self.lastActive(subject) |i| {
-    fi = i
-} else {
-    self.anyOtherEnd(subject)
-    return
-}
-```
-
-(a local needs a dummy initializer because `var x: T` without `= value`
-is an error). An `orelse return` / `orelse unreachable` would make each
-of these one line.
-
-### 5. Structs have no `==`; `Handle(T)` has no `eql`
-
-```ore
-struct P { x: i64 }
-
-pub fn main() {
-    let a = P { x: 1 }
-    let b = P { x: 1 }
-    @println(a == b)
-}
-```
-
-`error[E0025]: operator `==` cannot be applied to `P``. Comparing two
-`Handle(Node)` is the most common operation of the DOM. Workaround:
-`dom.same(a, b)` and `dom.isSame(?a, b)`. Suggestion: `==` on structs
-whose fields are all integers/bools, or `Handle.eql` in std.pool.
-
-### 6. Array literals must spell their length
-
-```ore
-let NAMES = [_][]u8{"a", "b"}
-```
-
-`error[E0006]: expected array length (integer literal), `]` or `*`, found
-identifier `_``. The entity table (`html/entities.ore`, 328 entries) is
-generated and its length counted by hand; a wrong count is an error, so
-it is safe, just tedious. For the many tag-name sets of the tree builder
-this was bad enough that they are space-separated strings searched with
-`text.split` (`isIn(name, "dd dt li ...")`) instead of `[N][]u8` arrays.
-
-### 7. `return f()` of a void call in an `E!void` function
-
-```ore
-fn g() {
-}
-
-fn f() !void {
-    return g()
-}
-```
-
-`error[E0030]: this expression does not produce a value` — while
-`return h()` for `h() E!void` is fine and common. Confusing when a helper
-changes from `!void` to plain void. Workaround: `g()` then `return`.
-
-### 8. Pointers into a `Pool` or `List` dangle after it grows
-
-Not a missing feature but a trap the compiler cannot see: `doc.node(h)`
-returns `*mut Node` into the pool's slots, and the next `insert` may move
-them. `cloneElement` in `html/parser.ore` copies `name` and `attrs` into
-locals before calling `createElement` for this reason. Use-after-free is
-documented as undetected (spec §9); a debug-mode check (generation of the
-allocation) would catch it.
-
-### 9. Smaller things
-
-- `std.log.err(USAGE)` with `let USAGE = "..."`: `error[E0086]: the
-  format of `std.log.err` must be a string literal`. A constant string
-  could be accepted. Workaround: `std.log.err("{}", USAGE)`.
-- An import name blocks the same local name everywhere in the file:
-  with `import url`, `let url = ...` is `E0016` (plus a second, cascading
-  `E0085` on its use). The CLI calls its URL `location`.
-- `text.split(s, "=").next()` is `E0035` (cannot call a `*mut Self`
-  method on a temporary); clear message, one more `var` line.
-- `@testAllocator()` only inside `test` blocks: shared test helpers take
-  an `Allocator` parameter (clear message; by design).
-
-## B2
-
-### 10. Two implicit adjustments do not chain
-
-```ore
-fn get(s: []mut u8) ?[]u8 {
-    return s
-}
-```
-
-`error[E0023]: mismatched types: expected `?[]u8`, found `[]mut u8``,
-although `[]mut T` to `[]T` and `T` to `?T` are each implicit. The same
-for an error union's payload:
-
-```ore
-fn copy(a: Allocator) AllocError![]mut u8 {
-    return a.alloc(0 as u8, 4)
-}
-
-fn get(a: Allocator) AllocError![]u8 {
-    return copy(a)
-}
-```
-
-`expected `std.mem.AllocError![]u8`, found `std.mem.AllocError![]mut u8``
-— this one hits every `return builder.toOwned()` from a function that
-returns read-only bytes. Workaround: a typed local
-(`let values: []Value = v` in `Styles.get`, `let owned = try
-b.toOwned()` in `css/tokenizer.ore`).
-
-### 11. No multi-line string literals
-
-```ore
-pub fn main() {
-    let s = "a
-b"
-}
-```
-
-`error[E0004]: unterminated string literal`. The user-agent style sheet
-(`css/ua.ore`, 50 rules) is an array with one rule per string, its length
-counted by hand (gap 6), and parsed string by string, so no rule may span
-two strings. A raw multi-line literal (Zig's `\\` lines) would let it be
-plain CSS; so would `@embedFile("ua.css")`.
-
-### 12. An array length cannot be a constant
-
-```ore
-let N: usize = 3
-let XS = [N]u8{1, 2, 3}
-```
-
-`error[E0006]: expected array length (integer literal), `]` or `*`, found
-identifier `N``. The property table `css.PROPERTIES` is `[42]Property`
-and `css.NPROPS` repeats the 42; they must be changed together.
-
-### 13. A name declared in one file of a module blocks locals in the others, and the error does not say where
-
-With `fn px(v: f64) f64` in `app/a.ore`:
-
-```ore
-// app/main.ore
-fn half(v: f64) f64 {
-    let px = v / 2.0
-    return px
-}
-```
-
-`app/main.ore:2:5: error[E0016]: `px` is already declared at 1:4
-(shadowing is not allowed)` — `1:4` is in `a.ore`, but the message reads
-as `main.ore:1:4`. In `css/` (eight files, one namespace) a helper `px` in
-`cascade.ore` broke locals in `media.ore` and `values.ore`. The no-
-shadowing rule is by design (spec §6); the missing file name is the bug.
-Workaround: distinctive names for top-level helpers (`numberOr`).
-
-### 14. No way to make a C library optional
-
-`@link("libcurl")` in `net/http.ore` links libcurl into every build of the
-browser, and there is no conditional compilation, so the browser (and all
-its tests, not just the HTTP ones) cannot be built where libcurl is
-missing. Workaround: none; libcurl is a hard requirement (docs/browser.md
-lists it as a platform library anyway). Something like
-`@link("libcurl", optional)` with `@hasLibrary("libcurl")`, or build
-tags, would let `net/http.ore` fall back to `FetchError.Unsupported`.
-
-### 15. Smaller things
-
-- `defer if cond { ... }` is `error[E0006]: expected expression, found
-  `if``; `defer { if cond { ... } }` works (spec: a call, an assignment
-  or a block). A bare `if` statement could be accepted.
-- Methods live in the struct body, so a struct's methods cannot be split
-  across the files of its module: the parser, selector and cascade code
-  for `css.Sheet` are free functions taking `*mut Sheet`
-  (`css.parseSheet(&mut sheet, src, media)`, not `sheet.parse(src)`).
-
-## B3
-
-### 16. FreeType is now a hard requirement too
-
-Same root as gap 14: `browser/font/freetype.ore` has
-`@link("freetype2")`, so the browser no longer builds where FreeType is
-missing, although the layout tests only need the fixed-metric font.
-`tests/browser.rs` can only skip the `--font system` smoke test when no
-font *file* is found (`System.init` returns `FontError.NoFont`), not when
-the library is absent. Workaround: none (docs/browser.md lists FreeType as
-a platform library). An optional link plus `@hasLibrary("freetype2")`
-would let `font.System` fail at run time instead.
-
-### 17. No C `long`
-
-```ore
-extern struct FTFaceRec {
-    num_faces: i64   // FT_Long is C `long`
-}
-```
-
-`FT_Long`, `FT_Pos` and `FT_Fixed` are C `long`, which is 64 bits on
-macOS and Linux but 32 on Windows; Ore has `i32` for `int` and `usize` for
-`size_t` but nothing for `long`, so the prefix of `FT_FaceRec` and the
-signatures of `FT_New_Face`/`FT_Get_Advance` hard-code `i64` (LP64).
-Suggestion: `c_long`/`c_ulong` aliases that follow the target.
-
-### 18. Smaller things
-
-- Struct literals list every field (spec: no default values). The layout
-  `Box` has 35 fields, mostly results that start at 0; `Tree.newBox` is
-  the only literal, and a new field means one more line there. Per-field
-  defaults (`x: f64 = 0.0`) would remove the helper (`inline.piece` is
-  another).
-- No tuples or multiple results: small structs carry pairs out of
-  functions (`MinMax`, `Flow`, `OpenFrag`, `KindOf`). Fine, a bit verbose.
-- Gap 8 again: `Tree.bx(i)` returns `*mut Box` into `List(Box)`; it must
-  be fetched again after anything that may append a box (only the tree
-  builder does), so layout code re-reads `t.bx(i)` after every call
-  instead of keeping a pointer across calls.
-
-## B4
-
-### 19. SDL2 is now a hard requirement too
-
-Same root as gaps 14 and 16: `browser/ui/sdl.ore` has `@link("sdl2")`,
-so every build of the browser, including `dump` and `screenshot` and
-all their tests, needs SDL2 installed. `tests/browser.rs` skips the
-window tests when `pkg-config --exists sdl2` fails, but by then the
-build has already failed. Workaround: none. Optional linking plus
-`@hasLibrary` (or a build tag) would keep the headless commands
-buildable without SDL2 and FreeType.
-
-### 20. No way to branch on an error union without leaving the function
-
-Needed: "use the URL after redirects if it parses, else keep the one
-we asked for". `if url.parse(a, s) |u| { ... } else |e| { ... }` does
-not exist, and a `catch |e| { ... }` block must end with `return`,
-`break` or `continue` when the payload is not void, so it cannot fall
-through to "keep the old value". Workaround: a helper that picks its
-input before parsing (`finalUrl` in `engine/engine.ore`), or returning
-from inside the `catch` (`mouseMoved` in `ui/window.ore`). Zig's
-`if (x) |v| {} else |e| {}` would do.
-
-### 21. A struct value cannot be "not yet initialized"
-
-`engine.Page` gets its style sheets and computed styles only when it is
-first laid out. `@zeroed` works only for numbers, optional pointers and
-extern structs, and there are no default field values (gap 18), so
-`Page` keeps `styling: ?*mut Styling` and `tree: ?*mut layout.Tree`,
-each allocated on its own. That also keeps the tree's pointers into the
-page stable, so it is not bad, but it is forced.
-
-### 22. Unions through `@ptrCast`
-
-`SDL_Event` is a C union. Ore has no `extern union`, so `ui/sdl.ore`
-declares `SDL_Event` as 56 bytes with the common `kind` field and casts
-`*SDL_Event` to a pointer to each event's extern struct
-(`@ptrCast(*SDL_KeyboardEvent, ev)`). It works; the size and alignment
-of the union are written by hand, and nothing checks that an event
-struct fits in it. An `extern union`, or a compile-time assertion on
-`@sizeOf`, would.
-
-### 23. Smaller things
-
-- Gap 13 again, still confusing: `fn screen(...)` in `ui/chrome.ore`
-  made `let screen = ...` in `ui/window.ore` an error reported as
-  `browser/ui/window.ore:826:9: ... already declared at 71:4`: line 71
-  of `chrome.ore`, not of `window.ore`.
-- Gap 15 again: the chrome is drawn by free functions taking `*mut Ui`
-  (`drawToolbar(ui)`) because `Ui`'s methods must all be in
-  `window.ore`.
-- One C function, one signature in every module: `engine` wanted
-  `getcwd` to return `?[*]u8` (C returns NULL on failure), but `main.ore`
-  already declares it returning `[*]u8`, so both use that.
-- `where` is a keyword (generic constraints), so it cannot name a local;
-  the message (`expected identifier, found `where``) is clear.
-
-
-## B7
-
-### 19. Error values have no `==`
-
-```ore
-error E { A, B }
-
-fn f() E!i64 {
-    return E.A
-}
-
-pub fn main() {
-    let v = f() catch |e| {
-        if e == E.A {
-            return
-        }
-        return
-
-## B6 (JavaScript engine, `browser/js/`)
-
-### 10. Debug-mode `General` makes a garbage-collected heap quadratic
-
-Needed: a heap that allocates and frees millions of small slices
-(property tables, elements, environments, strings) over a run.
-
-In debug mode `std.heap.General` keeps a record per allocation for the
-whole run, never reuses freed memory, and `free` scans the records from
-the oldest, so each `free` costs O(allocations so far):
-
-```ore
-import std
-
-pub fn main() {
-    var gpa = std.heap.General.init()
-    defer gpa.deinit()
-    let a = gpa.allocator()
-    for i in 0..200000 {
-        let s = a.alloc(0 as u8, 16) catch |e| {
-            return
-        }
-        a.free(s)
-    }
-}
-```
-
-`error[E0025]: operator `==` cannot be applied to `E``. Needed: "is this
-fetch error OutOfMemory (pass it on) or something to report?" in
-`agent/session.ore`. Workaround: a helper with a `match` and `_`
-(`fetchOutOfMemory`). Enums without payloads have `==`; error values
-could too.
-
-### 20. `orelse` does not chain through optionals
-
-```ore
-fn a() ?[]u8 {
-    return null
-}
-
-pub fn main() {
-    let s = a() orelse a() orelse "none"
-    @println(s)
-}
-```
-
-`error[E0023]: mismatched types: expected `[]u8`, found `?[]u8``: the
-left `orelse` wants a `[]u8` on its right. "The alt, else the title, else
-nothing" for images in `agent/markdown.ore` is written `x orelse (y
-orelse "")`. Right associativity (or `?T orelse ?T` giving `?T`) would
-read naturally.
-
-### 21. No line-by-line reading of stdin
-
-`std.fs` reads a whole file or stream (`readAll`), which never returns
-for an interactive stdin, but the agent servers answer one JSON line at
-a time. Workaround: `LineReader` in `agent/server.ore` over `extern fn
-read(fd: i32, ...)` (the same signature std's `fs.ore` uses) with a
-`Builder` of pending bytes. A `File.read(buf) ReadError!usize` and a
-buffered `readLine` in std would replace it.
-
-### 22. The root module cannot be imported
-
-`browser/agent` needs what `browser/main.ore` and `browser/style.ore`
-already do (a file path or URL to a `Url`, a response to a document, the
-author style sheets of a document), but those live in the root module,
-and a module cannot import the root. They are copied into
-`agent/session.ore` (`relativeUrl`, `parseDocument`, `agentSheets`).
-Moving them into a module (`page/`) is the real fix and is left for the
-unification with the window's tabs.
-
-### 23. Smaller things
-
-- A `match` arm cannot produce an error union for the enclosing
-  `return`: `return match act { .Back => back(s) ... }` is `E0061`
-  (unhandled error) until every arm says `try back(s)`.
-- The actions call each other (`clickNode` follows a label to its
-  control, `press` clicks), so their error set cannot be inferred
-  (`E0069`); they all spell `AllocError!Outcome`. Clear message, as
-  documented.
-- std.math has no infinity, NaN, `isNan` or `isInf`: the JSON number
-  writer tests `v != v || v - v != 0.0`, and an overflowing number gets
-  infinity from `1.7976931348623157e308 * 10.0` at run time.
-- `@zeroed` covers numbers, pointers and arrays of them, not `[64]bool`:
-  the JSON `Writer` keeps its per-level "a value was written" flags in a
-  `u64` bitmask (so at most 64 levels of nesting).
-- `layout.Tree` points to its document, styles and font, so a page that
-  owns all four must stay on the heap (`alloc.create(Page { ... })`) and
-  build the tree after it is there; with no uninitialized fields, the
-  tree is a `?layout.Tree` filled in a second step and read with
-  `p.tree.?`.
-
-takes about 30 s, quadratic (50000 iterations take 2 s), and keeps all
-200000 blocks and records until `deinit`; `--mode fast` takes
-milliseconds. `fib(22)` in the first engine took 40 s, almost all of
-it in `ore_general_free`. Ore code cannot implement `Allocator` itself
-(decisions.md), so a pooling allocator cannot be handed to the code that
-allocates. Workaround: `js/slabs.ore`, size-class free lists cut from
-16K-element chunks for the heap's slices; atoms packed in chunks; pooled
-scratch `text.Builder`s and key lists on the interpreter. The leak check
-still works (chunks are freed at `deinit`). Suggestion: a hash of live
-records (or an intrusive header) for `free`, and freeing (or poisoning
-and reusing) memory after N frees; or an `Allocator` that Ore code can
-implement.
-
-### 11. `*mut S` does not convert to `?dyn I`
-
-```ore
-interface Host {
-    fn finalize(self: *mut Self, tag: u32)
-}
-
-struct DomHost {
-    n: i64
-
-    fn finalize(self: *mut Self, tag: u32) {
-        self.n += 1
-    }
-}
-
-struct Engine {
-    host: ?dyn Host
-}
-
-pub fn main() {
-    var h = DomHost { n: 0 }
-    var e = Engine { host: null }
-    e.host = &mut h
-}
-```
-
-`error[E0023]: mismatched types: expected ?dyn Host, found *mut DomHost`.
-`*mut S -> dyn I` and `T -> ?T` both convert, but not in one step.
-Workaround: `let d: dyn Host = &mut h` then `e.host = d`.
-
-### 12. One struct's methods must all be in one file
-
-The interpreter is a struct with ~150 methods; Ore has no `impl` blocks in
-other files, so `interp.ore` is 3000 lines. Built-ins are free functions
-`fn arrayPush(it: *mut Interp, a: Args)` instead. With the no-shadowing
-rule every such top-level name is then reserved in the whole module: a
-helper `fn len(it, o)` in `builtins_array.ore` made every local `len` in
-the module an error (`numconv.ore` has several). Workaround: methods for
-the core, distinctive names (`alen`, `appendWtf8`) for module-level
-helpers. Suggestion: allow methods of a struct in any file of its module
-(the module is the namespace anyway), or exempt locals from clashing with
-functions of other files.
-
-### 13. The C stack is the only stack
-
-The tree-walking interpreter recurses on the C stack; a debug build uses
-about 7 KB of stack per JavaScript call, so 1100 nested calls overflowed
-the 8 MB main thread (segfault, no Ore diagnostic). Ore has no threads in
-std and no way to ask for a larger stack. Workaround: `js.runOnBigStack`
-starts the script on a pthread with a 1 GB stack (C interop:
-`pthread_attr_setstacksize`, an Ore function as the start routine, the
-job passed through `@ptrCast([*]u8, &mut job)`), and the engine throws a
-RangeError at 10000 frames, like Node. Suggestion: a stack-overflow check
-that panics with a message (guard page + handler), and `std.thread`.
-
-### 14. Smaller things
-
-- `test` is a keyword, so an AST node cannot have a field `test`
-  (JavaScript's `if`/`for` nodes call it `cond`).
-- No discard: `_ = f()` is `undefined variable _`; a dropped result is
-  fine as a statement (`try self.intern(s)`), so this only surprised.
-- `?Class == Class` (entry 3) again: `it.classOf(v) == Class.Array`;
-  workaround `it.hasClass(v, Class.Array)`.
-- An array of 13 `List`s needs 13 written-out initializers
-  (`[13]List([]mut T){List(...).init(alloc), ...}`); a repeat form
-  (`[13]T{x} ** 13`, Zig's `**`) would do.
-- No `unreachable`/`@panic` (entry 4): natives that always throw end in
-  `try it.typeError(...)` followed by a dead `return NONE`.
-- Enum match arms that list several variants (entry 2): the parser's
-  precedence table repeats `=> 7` four times for `== != === !==`.
+does in a way that hurt: the input for the compiler's ergonomics
+milestones (M9.5 and M9.6 came from this list). One numbered list,
+grouped by theme. Open gaps come first, ordered by what they cost the
+browser (performance, correctness, code); then the ones declined by
+design; then the fixed ones. Each entry: **Need**, **Repro**,
+**Workaround** (what `browser/` does today), **Hit by** (component and
+branch: B1 url/net/html/dom/encoding and the CLI, B2 css, B3
+font/layout, B4 paint/engine/ui, B6 js, B7 agent) and **Status**.
+
+Fixed entries were checked against `target/release/ore` at the M9.6
+head with the repro or the milestone's feature form (`ore run`, `ore
+test`). "Browser still uses the workaround" means the old code is still
+there and can now be simplified.
+
+## Open
+
+### Allocator and runtime
+
+#### 1. Debug-mode `General` makes many small allocations quadratic; Ore code cannot implement `Allocator`
+
+- **Need:** a garbage-collected heap that allocates and frees millions of
+  small slices (property tables, elements, environments, strings).
+- **Repro:**
+
+  ```ore
+  import std
+
+  pub fn main() {
+      var gpa = std.heap.General.init()
+      defer gpa.deinit()
+      let a = gpa.allocator()
+      for i in 0..50000 {
+          let s = a.alloc(0 as u8, 16) catch |e| {
+              return
+          }
+          a.free(s)
+      }
+  }
+  ```
+
+  In debug mode `General` keeps a record per allocation for the whole
+  run, never reuses freed memory, and `free` scans the records from the
+  oldest, so each `free` costs O(allocations so far). Re-measured at
+  HEAD: 2.2 s in debug, under 10 ms with `--mode fast` (B6 measured
+  200000 iterations at about 30 s). `fib(22)` in the first JS engine
+  took 40 s, almost all in `ore_general_free`. A pooling allocator
+  cannot be handed to the code that allocates, because Ore code cannot
+  implement `Allocator` (decisions.md).
+- **Workaround:** `js/slabs.ore`: size-class free lists cut from
+  16K-element chunks for the heap's slices; atoms packed in chunks;
+  pooled scratch `text.Builder`s and key lists on the interpreter. The
+  leak check still works (chunks are freed at `deinit`).
+- **Suggestion:** a hash of live records (or an intrusive header) for
+  `free`, and reuse (or poison and reuse) memory after N frees; or an
+  `Allocator` that Ore code can implement.
+- **Hit by:** js (B6).
+- **Status:** open.
+
+#### 2. A stack overflow is a silent segfault; the C stack is the only stack
+
+- **Need:** deep recursion. The tree-walking interpreter uses about 7 KB
+  of C stack per JavaScript call in a debug build, so 1100 nested calls
+  overflowed the 8 MB main thread.
+- **Repro:**
+
+  ```ore
+  fn rec(n: i64) i64 {
+      var buf = @zeroed([1024]u8)
+      buf[0] = 1
+      if n == 0 {
+          return 0
+      }
+      return rec(n - 1) + (buf[0] as i64)
+  }
+
+  pub fn main() {
+      @println(rec(100000000))
+  }
+  ```
+
+  Exit status 139 (SIGSEGV), no Ore diagnostic.
+- **Workaround:** `js.runOnBigStack` starts the script on a pthread with
+  a 1 GB stack through C interop (`@link("pthread")`,
+  `pthread_attr_setstacksize`, an Ore function as the start routine, the
+  job passed as `@ptrCast([*]u8, &mut job)`); the engine throws a
+  RangeError at 10000 frames, like Node.
+- **Suggestion:** a guard page and a handler that panics with a message;
+  `std.thread` with a stack size.
+- **Hit by:** js (B6).
+- **Status:** open. `std.thread` is planned for M10 (not in this tree
+  yet); no overflow check is planned.
+
+#### 3. Pointers into a growing `List` or `Pool` dangle, undetected
+
+- **Need:** keep a `*mut Node` or `*mut Box` across a call that may add
+  to the container.
+- **Repro:**
+
+  ```ore
+  var xs = List(i64).init(alloc)
+  try xs.append(1)
+  let items = xs.items()
+  for i in 0..100 {
+      try xs.append(i)    // may move the elements
+  }
+  items[0] = 5            // writes freed memory; nothing detects it
+  ```
+
+- **Workaround:** copy fields out before growing (`cloneElement` in
+  `html/parser.ore` copies `name` and `attrs` before `createElement`);
+  fetch the pointer again after any call that may grow (layout code
+  re-reads `t.bx(i)` after every call, since `Tree.bx(i)` points into a
+  `List(Box)`).
+- **Suggestion:** a debug-mode check (a generation per allocation).
+- **Hit by:** dom, html (B1), layout (B3).
+- **Status:** open. M9.5 documented the trap in the spec's pitfalls; the
+  check is not done.
+
+### Structs and initialization
+
+#### 4. No default field values; a struct or local cannot start uninitialized
+
+- **Need:** a 35-field layout `Box` that is mostly results starting at
+  0; an `engine.Page` that gets its style sheets, computed styles and
+  layout tree only when first laid out; locals set in branches.
+- **Repro:**
+
+  ```ore
+  struct B { x: f64 = 0.0, y: f64 = 0.0 }   // E0006: expected `,`, newline or `}`
+
+  struct S { a: i64, b: ?*S }
+
+  pub fn main() {
+      var x: i64                            // E0013: `var x` needs an initializer
+      let s = @zeroed(S)                    // E0093: only an `extern struct` has a defined all-zero value
+  }
+  ```
+
+- **Workaround:** `Tree.newBox` is the only `Box` literal and lists all
+  35 fields (`inline.piece` is another such helper); `engine.Page` keeps
+  `styling: ?*mut Styling` and `tree: ?*mut layout.Tree`, each allocated
+  on its own (this also keeps the tree's pointers into the page stable);
+  the agent's page lives on the heap (`alloc.create(Page { ... })`)
+  because `layout.Tree` points to its document, styles and font, and
+  its tree is a `?layout.Tree` filled in a second step and read with
+  `p.tree.?`; dummy initializers such as `var fi: usize = 0` in the
+  adoption agency algorithm (`html/parser.ore`).
+- **Hit by:** html (B1), layout (B3), engine (B4), agent (B7).
+- **Status:** open (no default values by spec).
+
+### Error handling
+
+#### 5. No way to branch on an error union and fall through
+
+- **Need:** "use the URL after redirects if it parses, else keep the one
+  we asked for", and "report the error, then go on with a fallback".
+- **Repro:**
+
+  ```ore
+  if parse("x") |u| {          // E0006: expected `if` or `{` after `else`, found `|`
+      @println(u)
+  } else |e| {
+      @println("err")
+  }
+
+  let u = parse("x") catch |e| {
+      @println("report")
+      old                      // E0031: expression value is not used; the block
+  }                            // must end with return, break or continue
+  ```
+
+- **Workaround:** a helper that picks its input before parsing
+  (`finalUrl` in `engine/engine.ore`), or returning from inside the
+  `catch` (`mouseMoved` in `ui/window.ore`).
+- **Hit by:** engine, ui (B4).
+- **Status:** partly open. Works at HEAD (verified): `parse(s) catch old`
+  and `parse(s) catch |e| match e { .Bad => old ... }` give a value
+  without leaving the function. Missing: Zig's `if x |v| {} else |e| {}`,
+  or a `catch` block that runs statements and then yields a value.
+
+#### 6. Error values have no `==`
+
+- **Need:** "is this fetch error OutOfMemory (pass it on) or something to
+  report?"
+- **Repro:**
+
+  ```ore
+  error E { A, B }
+
+  fn f() E!i64 {
+      return E.A
+  }
+
+  pub fn main() {
+      let v = f() catch |e| {
+          if e == E.A {        // E0025: operator `==` cannot be applied to `E`
+              return
+          }
+          return
+      }
+  }
+  ```
+
+- **Workaround:** a helper with a `match` and `_` (`fetchOutOfMemory` in
+  `agent/session.ore`, gone since ef319a6 moved sessions onto
+  `engine.Page`). Enums without payloads have `==`; error values
+  could too.
+- **Hit by:** agent (B7).
+- **Status:** open.
+
+#### 7. A `match` arm cannot produce the error union of an enclosing `return`
+
+- **Repro:**
+
+  ```ore
+  fn run(a: Act, n: i64) E!i64 {
+      return match a {
+          .Back => back(n)     // E0061: unhandled error: `back` returns `E!i64`
+          .Fwd => fwd(n)
+      }
+  }
+  ```
+
+- **Workaround:** `try` in every arm (`try back(s)`) in the agent's
+  action dispatch.
+- **Hit by:** agent (B7).
+- **Status:** open.
+
+### Optionals
+
+#### 8. `orelse` does not chain
+
+- **Repro:**
+
+  ```ore
+  fn a() ?[]u8 {
+      return null
+  }
+
+  pub fn main() {
+      let s = a() orelse a() orelse "none"   // E0023: expected `[]u8`, found `?[]u8`
+      @println(s)
+  }
+  ```
+
+- **Workaround:** parentheses: "the alt, else the title, else nothing"
+  for images in `agent/markdown.ore` is `x orelse (y orelse "")`. Right
+  associativity (or `?T orelse ?T` giving `?T`) would read naturally.
+- **Hit by:** agent (B7).
+- **Status:** open.
+
+### std and C interop
+
+#### 9. No reading of a stream piece by piece (stdin lines)
+
+- **Need:** the agent servers answer one JSON line at a time on stdin;
+  `std.fs` only reads a whole file or stream (`readAll`), which never
+  returns on an interactive stdin.
+- **Repro:** `std.fs.stdin().read(buf)` is E0071 (`std.fs.File` has no
+  method `read`).
+- **Workaround:** `LineReader` in `agent/server.ore` over `extern fn
+  read(fd: i32, ...)` (the signature std's `fs.ore` uses) with a
+  `Builder` of pending bytes.
+- **Suggestion:** `File.read(buf) ReadError!usize` and a buffered
+  `readLine`.
+- **Hit by:** agent (B7).
+- **Status:** open.
+
+#### 10. No C `long`
+
+- **Repro:** `extern fn labs(x: c_long) c_long` is E0017 (unknown type).
+- **Workaround:** `FT_Long`, `FT_Pos` and `FT_Fixed` are C `long` (64
+  bits on macOS and Linux, 32 on Windows); `font/freetype.ore`
+  hard-codes `i64` (LP64) in the prefix of `FT_FaceRec` and in the
+  signatures of `FT_New_Face`/`FT_Get_Advance`.
+- **Suggestion:** `c_long`/`c_ulong` that follow the target.
+- **Hit by:** font (B3).
+- **Status:** open.
+
+#### 11. No `extern union`
+
+- **Repro:** `extern union U { a: i32, b: i64 }` is E0006 (expected `fn`
+  or `struct` after `extern`).
+- **Workaround:** `ui/sdl.ore` declares the C union `SDL_Event` as 56
+  bytes with the common `kind` field and casts `*SDL_Event` to each
+  event's extern struct (`@ptrCast(*SDL_KeyboardEvent, ev)`). The size
+  and alignment are written by hand; nothing checks that an event
+  struct fits.
+- **Suggestion:** `extern union`, or a compile-time assertion on
+  `@sizeOf`.
+- **Hit by:** ui (B4).
+- **Status:** open.
+
+#### 12. `std.math` has no infinity or NaN
+
+- **Repro:** `std.math.inf`, `std.math.nan`, `std.math.isNan` are E0081
+  (module `std.math` has no ...).
+- **Workaround:** the JSON number writer tests `v != v || v - v != 0.0`
+  and makes an overflowing number infinite with
+  `1.7976931348623157e308 * 10.0` at run time; the JS engine writes
+  `1.0 / 0.0` and `0.0 / 0.0` (`js/builtins_number.ore`).
+- **Hit by:** agent (B7), js (B6).
+- **Status:** open.
+
+### Modules
+
+#### 13. The root module cannot be imported
+
+- **Need:** share code of the root module (`browser/*.ore`: `main.ore`,
+  `style.ore`, `dump.ore`, ...) with a sub-module.
+- **Repro:** a directory program `ri/` whose `ri/agent/agent.ore` says
+  `import ri`: `error[E0081]: cannot find module `ri` (no directory
+  `ri/ri`; ...)`. Imports resolve below the root directory, and the root
+  has no name.
+- **Workaround:** none needed in practice: put shared code in a
+  sub-module. `engine/` is one, and `agent/` can import it. At the B7
+  merge, `agent/session.ore` copied `parseDocument`, `relativeUrl` and
+  `agentSheets`, although `engine` already had `documentOf`,
+  `urlOfInput` and `authorSheets`; ef319a6 replaced the copies with
+  `import engine`. The root's own `load`/`toUrl`/`fileUrl` in
+  `main.ore` still repeat `engine.documentOf`/`fileUrl`; the root can
+  import `engine`, so that is browser cleanup, not a compiler gap.
+- **Hit by:** agent (B7).
+- **Status:** open (verified still impossible), low impact.
+
+### Smaller things
+
+#### 14. No repeat form for array initializers
+
+- **Repro:** `[4]i64{7} ** 4` is E0006 (expected expression, found `*`).
+- **Workaround:** an array of 13 `List`s (`free: [13]List([]mut T)` in
+  `js/slabs.ore`) has 13 written-out initializers. A repeat form (Zig's
+  `**`) would do.
+- **Hit by:** js (B6).
+- **Status:** open.
+
+#### 15. No tuples or multiple results
+
+- **Workaround:** small structs carry pairs out of functions (`MinMax`,
+  `Flow`, `OpenFrag`, `KindOf` in layout). Fine, a bit verbose.
+- **Hit by:** layout (B3).
+- **Status:** open.
+
+#### 16. No `@embedFile`
+
+- **Need:** the user-agent style sheet as a plain `.css` file. Line
+  strings (entry 33) now cover most of this need.
+- **Hit by:** css (B2).
+- **Status:** open.
+
+#### 17. No discard `_ = f()`
+
+- **Repro:** `_ = f()` is E0018 (`undefined variable _`).
+- **Workaround:** a dropped result is fine as a statement
+  (`try self.intern(s)`), so this only surprised.
+- **Hit by:** js (B6).
+- **Status:** open.
+
+## Declined by design
+
+#### 18. A struct's methods must all be in its body (one file)
+
+- **Need:** split a large type's code across the files of its module.
+- **Workaround:** free functions taking `*mut S`: the parser, selector
+  and cascade code of `css.Sheet` (`css.parseSheet(&mut sheet, src,
+  media)`, not `sheet.parse(src)`); the chrome's `drawToolbar(ui)`
+  because `Ui`'s methods are all in `ui/window.ore`; JS built-ins such
+  as `fn arrayPush(it: *mut Interp, a: Args)`. `js/interp.ore` is still
+  about 3300 lines with ~150 methods.
+- **Hit by:** css (B2), ui (B4), js (B6).
+- **Status:** declined: decisions.md ("A struct's methods stay in its
+  body"), documented in M9.6. Of the declined items this one costs the
+  most code.
+
+#### 19. A top-level name in one file blocks locals in every file of the module
+
+- **Repro:** with `fn px(v: f64) f64` in `app/a.ore`, `let px = v / 2.0`
+  in `app/main.ore` is E0016 (no shadowing, spec §6).
+- **Workaround:** distinctive names for module-level helpers
+  (`numberOr` in css, `alen`, `appendWtf8` in js). Cases: `px` in
+  `css/cascade.ore` broke locals in `media.ore` and `values.ore`; `fn
+  screen` in `ui/chrome.ore` broke `let screen` in `ui/window.ore`; `fn
+  len` in `js/builtins_array.ore` broke locals in `numconv.ore`.
+- **Suggestion (B6):** exempt locals from clashing with functions of
+  other files.
+- **Hit by:** css (B2), ui (B4), js (B6).
+- **Status:** the rule is by design; the message that did not name the
+  other file is fixed (entry 38).
+
+#### 20. An import name blocks the same local name
+
+- **Repro:** `import url` then `let url = ...` is E0016.
+- **Workaround:** the CLI calls its URL `location` (`main.ore`).
+- **Hit by:** CLI (B1).
+- **Status:** by design (spec §12). M9.5 fixed the message (verified:
+  one error, "`std` is already the name of the import at 1:8 (shadowing
+  is not allowed: rename the local)", no cascading E0085).
+
+#### 21. Other declined items (clear messages, by design)
+
+- `test` and `where` are keywords, so they cannot name a field or a
+  local: the JS AST's `if`/`for` nodes call the condition `cond` (js,
+  B6); a local cannot be called `where` (B4).
+- `@testAllocator()` works only inside `test` blocks, so shared test
+  helpers take an `Allocator` parameter (B1).
+- Functions that call each other cannot have an inferred error set
+  (E0069): the agent's actions (`clickNode` follows a label to its
+  control, `press` clicks) all spell `AllocError!Outcome` (agent, B7).
+
+## Fixed
+
+Verified at HEAD with `target/release/ore`; repros in the entry text or
+the milestone's feature form.
+
+#### 22. Sub-modules that import siblings could not be tested
+
+- **Hit by:** url, net, html (B1). **Status:** fixed in M9.5. Verified:
+  a program `mt/` with `html` importing `dom`, tests in both: `ore test
+  mt` runs `html: html parse` (which calls a private function) and `dom:
+  dom node`; `ore test mt --module html` runs one module. `ore test
+  mt/html` still fails (imports start at the directory given to `ore`;
+  by design), and the message now says to pass `mt --module html`.
+  Browser still uses the workaround: `browser/unit_tests.ore` holds the
+  `html`/`net` tests in the root module, calling only `pub` functions.
+
+#### 23. A `match` arm could not list several enum variants
+
+- **Hit by:** html, CLI (B1), js (B6). **Status:** fixed in M9.5.
+  Verified: `.A, .B => 1` / `.C => 2` prints 1 1 2. Browser still uses
+  the workaround: duplicate `.Doctype => {}` / `.Comment => {}` arms in
+  `dump.ore`; `=> 7` four times in the precedence table of
+  `js/parser.ore`.
+
+#### 24. `?T == T` did not compile, and the hint said to use `as`
+
+- **Hit by:** encoding (B1), js (B6). **Status:** fixed in M9.5 (`?T ==
+  T`, `?T == ?T`; the `as` hint only where `as` converts). Verified: `f()
+  == E.A`, `f() == E.B`, `null == E.A`, `f() == f()`, `null == null`
+  print true false false true true. Browser still uses the workaround:
+  `labelIs` in `encoding.ore`, `Interp.hasClass` in js.
+
+#### 25. No `orelse`, `.?` or `unreachable`
+
+- **Hit by:** dom, html (B1), js (B6). **Status:** fixed in M9.5.
+  Verified: `find(xs, w) orelse return 99`, `orelse unreachable`, `orelse
+  { other(); return }` and `m.? + 1` all compile and run as expected.
+  Browser still uses the workaround: `Document.node` keeps its dead
+  fallback that reads `Pool`'s private fields (`dom/dom.ore`); the
+  adoption agency's `var fi: usize = 0` / `if ... else { ...; return }`;
+  JS natives that always throw end in `try it.typeError(...)` and a dead
+  `return NONE`.
+
+#### 26. Structs had no `==`; `Handle(T)` had no `eql`
+
+- **Hit by:** dom, html (B1). **Status:** fixed in M9.5 (`==` on structs
+  whose fields all compare). Verified: `P { x: 1, ok: true } == P { x: 1,
+  ok: true }` is true, `!=` works, and two `Pool(i64)` handles compare
+  (`h1 == h1` true, `h1 == h2` false). Browser still uses the
+  workaround: `dom.same(a, b)` / `dom.isSame(?a, b)` (19 uses).
+
+#### 27. Array literals had to spell their length
+
+- **Hit by:** html (B1), css (B2). **Status:** fixed in M9.5 (`[_]T{...}`).
+  Verified: `[_][]u8{"a", "b", "c"}` has `.len` 3. Browser still uses
+  the workaround: hand-counted `[328]Entity` in `html/entities.ore` and
+  `[50][]u8` in `css/ua.ore`; the tree builder's tag-name sets are
+  space-separated strings searched with `isIn(name, "dd dt li ...")`
+  (70 uses) instead of arrays.
+
+#### 28. `return f()` of a void call in a `void` or `E!void` function
+
+- **Hit by:** html (B1). **Status:** fixed in M9.5. Verified: `return
+  g()` with `fn g()` in both an `E!void` and a `void` function.
+
+#### 29. `std.log.err` needed a string literal as the format
+
+- **Hit by:** CLI (B1). **Status:** fixed in M9.5. Verified:
+  `std.log.err(USAGE)` with `let USAGE = "usage: x"` prints `error:
+  usage: x`. Browser still uses the workaround: `std.log.err("{}",
+  SHOT_USAGE)` in `shot.ore`, `std.log.err("{}", UI_USAGE)` in
+  `ui/window.ore`.
+
+#### 30. A `*mut Self` method could not be called on a temporary
+
+- **Hit by:** CLI (B1). **Status:** fixed in M9.5. Verified:
+  `std.text.split("k=v", "=").next() orelse "none"` gives `k`.
+
+#### 31. Two implicit adjustments did not chain (`[]mut T` to `?[]T`, `E![]mut T` to `E![]T`)
+
+- **Hit by:** css (B2). **Status:** fixed in M9.6. Verified: `fn get(s:
+  []mut u8) ?[]u8 { return s }`, and an `AllocError![]u8` function
+  returning an `AllocError![]mut u8` call. Browser still uses the
+  workaround: `let values: []Value = v` in `css/cascade.ore`, `let owned
+  = try b.toOwned()` in `css/tokenizer.ore`.
+
+#### 32. `*mut S` did not convert to `?dyn I`
+
+- **Hit by:** js (B6). **Status:** fixed in M9.6. Verified: `e.host =
+  &mut h` with `host: ?dyn Host`, then `if e.host |d| { d.finalize(1) }`
+  updates `h`. Browser still uses the workaround: `let d: dyn Host =
+  &mut h` in `js/unit_tests.ore`.
+
+#### 33. Multi-line string literals
+
+- **Hit by:** css (B2). **Status:** fixed in M9.6 (`\\` line strings).
+  Verified: a two-line `\\` constant prints both lines. Browser still
+  uses the workaround: `css/ua.ore` is a `[50][]u8` with one rule per
+  string. `@embedFile` stays open (entry 16).
+
+#### 34. An array length could not be a constant
+
+- **Hit by:** css (B2). **Status:** fixed in M9.6. Verified: `let N:
+  usize = 3`, `[N]u8{1, 2, 3}` and `[N * 2]u8{...}` have lengths 3 and 6.
+  Browser still uses the workaround: `css.PROPERTIES` is `[57]Property`
+  and `css.NPROPS` repeats the 57.
+
+#### 35. `defer if`
+
+- **Hit by:** css (B2). **Status:** fixed in M9.6. Verified: `defer if
+  open { ... }` runs at the end of the scope.
+
+#### 36. A C library could not be optional (libcurl, FreeType, SDL2)
+
+- **Need:** build the browser, and its headless commands and tests,
+  where libcurl, FreeType or SDL2 is missing.
+- **Hit by:** net (B2), font (B3), ui (B4). **Status:** fixed in M9.6
+  (`@linkOptional("name")`, `@hasLink("name")`). Verified: a program
+  with `@linkOptional("orenosuchlib")` builds and takes the `else`
+  branch of `if @hasLink(...)` (the function calling the missing library
+  is left out); the same with `libcurl` calls `curl_global_init` and
+  prints `true`. Browser still uses the workaround: `@link("libcurl")`
+  in `net/http.ore`, `@link("freetype2")` in `font/freetype.ore`,
+  `@link("sdl2")` in `ui/sdl.ore`, so every build still needs all three
+  (`net` could fall back to `FetchError.Unsupported`, `font.System` fail
+  at run time).
+
+#### 37. One C function had to have one signature in every module
+
+- **Hit by:** engine (B4). **Status:** works at HEAD (no milestone
+  lists it). Verified: `getcwd` declared returning `[*]u8` in the root
+  and `?[*]u8` in a sub-module; both build and run. Browser still uses
+  the workaround: `engine/engine.ore` declares `getcwd` returning
+  `[*]u8` like `main.ore`.
+
+#### 38. E0016 did not name the file of a declaration in another file
+
+- **Hit by:** css (B2), ui (B4), js (B6). **Status:** fixed in M9.6.
+  Verified: `already declared at sh/a.ore:1:4` (was `at 1:4`, which read
+  as a line of the current file). The rule itself stays (entry 19).
+
+#### 39. `@zeroed` of an array of `bool`
+
+- **Hit by:** agent (B7). **Status:** works at HEAD (no milestone
+  lists it). Verified: `@zeroed([64]bool)` compiles and
+  `flags[3]` is `false`. Browser still uses the workaround: the JSON
+  `Writer` keeps its per-level "a value was written" flags in a `u64`
+  bitmask (at most 64 levels of nesting). `@zeroed` of a plain struct
+  stays open (entry 4).
