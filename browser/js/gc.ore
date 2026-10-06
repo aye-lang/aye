@@ -118,6 +118,9 @@ pub fn collectGarbage(it: *mut Interp) {
     }
     markEnv(it, it.glex)
     markEnv(it, it.env)
+    for e in it.outer_envs.items() {
+        markEnv(it, e)
+    }
     for v in it.stack.items() {
         markValue(it, v)
     }

@@ -94,6 +94,9 @@ pub struct Interp {
     gray_objs: List(u32)
     gray_envs: List(u32)
     gray_strs: List(u32)
+    // The environments of the code that a nested runScript interrupted
+    // (a script run from a native function): roots.
+    outer_envs: List(u32)
     // The running code's environment (NONE at the top level).
     env: u32
     // The global lexical environment (top-level let/const/class).
@@ -163,6 +166,7 @@ pub struct Interp {
             gray_objs: List(u32).init(alloc),
             gray_envs: List(u32).init(alloc),
             gray_strs: List(u32).init(alloc),
+            outer_envs: List(u32).init(alloc),
             env: NONE,
             glex: NONE,
             global: NONE,
@@ -220,6 +224,7 @@ pub struct Interp {
         self.gray_objs.deinit()
         self.gray_envs.deinit()
         self.gray_strs.deinit()
+        self.outer_envs.deinit()
         self.roots.deinit()
         self.msg.deinit()
         self.out.deinit()
@@ -3291,8 +3296,10 @@ pub struct Interp {
             }
         }
         let savedEnv = self.env
+        try self.outer_envs.append(savedEnv)
         self.env = NONE
         defer self.env = savedEnv
+        defer self.outer_envs.pop()
         try self.exec(root)
         return Value.Undefined
     }
