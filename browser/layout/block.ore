@@ -433,7 +433,11 @@ fn layoutContents(t: *mut Tree, i: usize, cb_h: f64) AllocError!void {
     var content_h = 0.0
     var empty = true
     let kind = b.kind
-    if hasInlineContent(t, i) {
+    if isFrameset(t, i) {
+        // The outermost frameset fills the viewport.
+        content_h = try layoutFrameset(t, i, cw, t.viewport_h)
+        empty = false
+    } else if hasInlineContent(t, i) {
         content_h = try layoutInline(t, i, cw)
         scrollControl(t, i)
         let bb = t.bx(i)

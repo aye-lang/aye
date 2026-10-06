@@ -13,6 +13,7 @@
 // - grid.ore: grid (track lists, areas, line placement, auto-placement).
 // - float.ore: floats, clearance, lines and boxes beside floats.
 // - absolute.ore: absolutely positioned boxes, laid out last.
+// - frameset.ore: framesets (a grid of frames filling the viewport).
 // - markers.ore: list item markers.
 // - controls.ore: form controls (generated content, sizes) and images.
 // - dump.ore: the box tree as text (`anyknown dump --layout`).
@@ -242,6 +243,8 @@ pub struct Tree {
     // Absolutely positioned boxes, in tree order, laid out after the
     // rest.
     absolutes: List(usize)
+    // The documents of the frames, laid out by the engine afterwards.
+    frames: List(FrameView)
 
     pub fn deinit(self: *mut Self) {
         self.arena.deinit()
@@ -338,6 +341,7 @@ pub fn layoutDocumentWith(alloc: Allocator, doc: *Document, styles: *css.Styles,
         fy: 0.0,
         hint_y: 0.0,
         absolutes: List(usize).init(a),
+        frames: List(FrameView).init(a),
     }
     errdefer t.deinit()
     if doc.documentElement() |el| {
@@ -373,7 +377,7 @@ fn kindOf(name: []u8, display: []u8) ?KindOf {
         return null
     }
     let inl = text.eql(display, "inline") || text.eql(display, "inline-block") || text.eql(display, "inline-table") || text.eql(display, "inline-flex") || text.eql(display, "inline-grid")
-    if text.eql(name, "img") || text.eql(name, "video") || text.eql(name, "canvas") || text.eql(name, "iframe") || text.eql(name, "embed") || text.eql(name, "object") || text.eql(name, "svg") {
+    if text.eql(name, "img") || text.eql(name, "video") || text.eql(name, "canvas") || text.eql(name, "iframe") || text.eql(name, "embed") || text.eql(name, "object") || text.eql(name, "svg") || text.eql(name, "frame") {
         return KindOf { kind: BoxKind.Image, inline_level: inl }
     }
     if text.eql(name, "br") {
@@ -415,7 +419,8 @@ fn buildChildren(t: *mut Tree, parent: usize, el: NodeId) AllocError!void {
     while cur |c| {
         let n = t.doc.node(c)
         if n.kind == Kind.Text {
-            if n.data.len > 0 {
+            // A frameset has only frames and framesets.
+            if n.data.len > 0 && !t.doc.isElement(el, "frameset") {
                 if t.styles.get(el) |style| {
                     let b = try t.newBox(BoxKind.Text, c, style, parent)
                     t.bx(b).inline_level = true

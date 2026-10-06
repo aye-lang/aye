@@ -1,0 +1,17 @@
+viewport 800x600
+  block <html> (0, 0) 800x600
+    block <frameset rows="100,25%,*,2*"> (0, 0) 800x600
+      block <frameset cols="18,82"> (0, 0) 800x100
+        replaced <frame src="a.html"> (0, 0) 144x100
+        replaced <frame src="b.html"> (144, 0) 656x100
+      block <frameset cols="25%,25%"> (0, 100) 800x150
+        replaced <frame src="c.html"> (0, 100) 400x150
+        replaced <frame src="d.html"> (400, 100) 400x150
+      block <frameset cols="1000,1000"> (0, 250) 800x117
+        replaced <frame src="e.html"> (0, 250) 400x117
+        replaced <frame src="f.html"> (400, 250) 400x117
+      block <frameset cols="200,*,3*"> (0, 367) 800x233
+        replaced <frame src="g.html"> (0, 367) 200x233
+        replaced <frame src="h.html"> (200, 367) 150x233
+        replaced <frame src="i.html"> (350, 367) 450x233
+      replaced <frame src="extra.html"> (0, 0) 0x0

@@ -25,8 +25,10 @@
 // solid), color, text-decoration-line (underline, overline,
 // line-through; propagated from ancestors, not into atomic inlines),
 // list markers, images (decoded ones scaled into their content box,
-// else a frame with their `alt` text), frames (`iframe`, `embed`,
-// `object`: a frame with their address as a link), inline `svg` (its
+// else a frame with their `alt` text), the documents of `frame`
+// elements (their display lists, clipped to the frame), other frames
+// (`iframe`, `embed`, `object`, a `frame` without a document: a frame
+// with their address as a link), inline `svg` (its
 // box only, nothing drawn), form controls (checkboxes and
 // radio buttons drawn, a `select`'s arrow, a list box's selected
 // options), visibility, and overflow other than `visible` as a clip to
@@ -542,6 +544,11 @@ struct Builder {
     // a placeholder.
     fn replaced(self: *mut Self, i: usize, x: f64, y: f64, w: f64, h: f64) AllocError!void {
         if self.t.bx(i).node |el| {
+            for fv in self.t.frames.items() {
+                if dom.same(fv.node, el) {
+                    return self.subframe(fv.tree, x, y, w, h)
+                }
+            }
             if self.t.images |imgs| {
                 if imgs.get(el) |bmp| {
                     if w > 0.0 && h > 0.0 {
@@ -564,6 +571,23 @@ struct Builder {
             }
         }
         return self.placeholder(i, x, y, w, h)
+    }
+
+    // The display list of a frame's document `sub`, moved to (`x`, `y`)
+    // and clipped to `w` x `h` on its canvas color.
+    fn subframe(self: *mut Self, sub: *mut Tree, x: f64, y: f64, w: f64, h: f64) AllocError!void {
+        if w <= 0.0 || h <= 0.0 {
+            return
+        }
+        var inner = try build(self.t.backing, sub)
+        defer inner.deinit()
+        let r = Rect { x: x, y: y, w: w, h: h }
+        try self.add(Item.Clip { r: r })
+        try self.add(Item.Fill { r: r, c: inner.background })
+        for it in inner.items.items() {
+            try self.add(moved(it, x, y))
+        }
+        try self.add(Item.Unclip)
     }
 
     fn checkbox(self: *mut Self, el: dom.NodeId, x: f64, y: f64, w: f64, h: f64) AllocError!void {
@@ -719,10 +743,21 @@ struct Builder {
     }
 }
 
-/// The address an `iframe`, `embed` (`src`) or `object` (`data`)
-/// shows; null for other elements.
+// `it` moved by (`dx`, `dy`).
+fn moved(it: Item, dx: f64, dy: f64) Item {
+    return match it {
+        .Fill { r, c } => Item.Fill { r: Rect { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h }, c: c }
+        .Text { x, y, s, face, c } => Item.Text { x: x + dx, y: y + dy, s: s, face: face, c: c }
+        .Image { r, w, h, pixels } => Item.Image { r: Rect { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h }, w: w, h: h, pixels: pixels }
+        .Clip { r } => Item.Clip { r: Rect { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h } }
+        .Unclip => Item.Unclip
+    }
+}
+
+/// The address a `frame`, `iframe`, `embed` (`src`) or `object`
+/// (`data`) shows; null for other elements.
 pub fn frameSource(doc: *dom.Document, el: dom.NodeId) ?[]u8 {
-    if doc.isElement(el, "iframe") || doc.isElement(el, "embed") {
+    if doc.isElement(el, "iframe") || doc.isElement(el, "embed") || doc.isElement(el, "frame") {
         return doc.attr(el, "src") orelse ""
     }
     if doc.isElement(el, "object") {
