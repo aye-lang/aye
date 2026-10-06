@@ -1277,6 +1277,49 @@ fn akCanvasPath(it: *mut Interp, a: Args) JsError!Value {
 // Affinely placed glyph coverage. The glyphs themselves are shaped and
 // rasterized by TextPainter, exactly as in the display list. strokeText
 // approximates an outline by dilating and eroding the coverage mask.
+// Text masks stay native: canvasText returns an id that canvasDraw
+// takes as the mask's `data`. The last few are kept (a fillText draws
+// its shadow and then its text from one).
+struct CanvasTextMask {
+    id: u64
+    mask: []mut u8
+}
+
+let CANVAS_MASKS: usize = 4
+// The glyph cache of canvas text starts over beyond this many bytes.
+let CANVAS_GLYPH_BYTES: usize = 8388608
+
+fn canvasPainter(cache: *mut ImageCache, sys: ?*mut font.System) AllocError!*mut paint.TextPainter {
+    if cache.canvas_painter |tp| {
+        if tp.system == sys && tp.cached() <= CANVAS_GLYPH_BYTES {
+            return tp
+        }
+        tp.deinit()
+        cache.alloc.destroy(tp)
+        cache.canvas_painter = null
+    }
+    let tp = try cache.alloc.create(paint.TextPainter.init(cache.alloc, sys))
+    cache.canvas_painter = tp
+    return tp
+}
+
+// Keeps the alpha of `n` RGBA pixels; returns the mask's id.
+fn keepTextMask(cache: *mut ImageCache, rgba: []u8, n: usize) AllocError!u64 {
+    let mask = try cache.alloc.alloc(0 as u8, n)
+    for i in 0..n {
+        mask[i] = rgba[i * 4 + 3]
+    }
+    if cache.canvas_masks.len() >= CANVAS_MASKS {
+        cache.alloc.free(cache.canvas_masks.orderedRemove(0).mask)
+    }
+    cache.canvas_mask_id += 1
+    cache.canvas_masks.append(CanvasTextMask { id: cache.canvas_mask_id, mask: mask }) catch |e| {
+        cache.alloc.free(mask)
+        return e
+    }
+    return cache.canvas_mask_id
+}
+
 struct CanvasMask {
     // Glyph coverage, `w` x `h`, empty when there is nothing to draw.
     mask: []mut u8
@@ -1296,12 +1339,18 @@ fn readTextMask(it: *mut Interp, v: Value) JsError!CanvasMask {
     }
     let sw = w as usize
     let sh = h as usize
-    let data = try canvasProp(it, v, "data")
+    let id = try canvasNum(it, v, "data")
+    let cache = scriptOf(it).page.images orelse return out
+    var kept: ?[]mut u8 = null
+    for m in cache.canvas_masks.items() {
+        if m.id as f64 == id && m.mask.len == sw * sh {
+            kept = m.mask
+        }
+    }
+    let src = kept orelse return out
     let mask = try it.alloc.alloc(0 as u8, sw * sh)
     errdefer it.alloc.free(mask)
-    for i in 0..mask.len {
-        mask[i] = (try it.toNumber(try canvasIndex(it, data, i * 4 + 3))) as u8
-    }
+    std.mem.copy(mask, src)
     let m = try canvasMatrix(it, try canvasProp(it, v, "matrix"))
     let inv = svg.invert(m) orelse {
         it.alloc.free(mask)
@@ -1405,14 +1454,24 @@ struct CanvasTextBounds {
     }
 }
 
-fn canvasTextBounds(alloc: std.mem.Allocator, system: ?*mut font.System, f: font.Font, s: []u8) AllocError!CanvasTextBounds {
+// Glyph boxes come from the painter's glyph cache (rendered once);
+// color glyphs, scaled from their strike, are rendered here.
+fn canvasTextBounds(alloc: std.mem.Allocator, system: ?*mut font.System, painter: *mut paint.TextPainter, f: font.Font, s: []u8) AllocError!CanvasTextBounds {
     var bounds = CanvasTextBounds { x0: 0.0, y0: 0.0, x1: 0.0, y1: 0.0, ink: false }
     if system |sys| {
         var placed = std.list.List(font.Placed).init(alloc)
         defer placed.deinit()
         let width = try sys.shapeText(f, s, &mut placed)
+        let size64 = math.floor(f.size * 64.0 + 0.5) as i64
         for p in placed.items() {
-            if sys.render(p.face, math.floor(f.size * 64.0 + 0.5) as i64, p.glyph) |bm| {
+            let gb = (try painter.glyphBox(sys, p.face, size64, p.glyph)) orelse continue
+            if !gb.color {
+                let x0 = p.x + gb.left as f64
+                let y0 = -p.y - gb.top as f64
+                bounds.include(x0, y0, x0 + gb.w as f64, y0 + gb.h as f64)
+                continue
+            }
+            if sys.render(p.face, size64, p.glyph) |bm| {
                 if bm.width == 0 || bm.rows == 0 {
                     continue
                 }
@@ -1537,7 +1596,8 @@ fn akCanvasText(it: *mut Interp, a: Args) JsError!Value {
     if !canvas_fixed {
         sys = cache.canvas_fonts
     }
-    let bounds = try canvasTextBounds(it.alloc, sys, f, textBytes)
+    let painter = try canvasPainter(cache, sys)
+    let bounds = try canvasTextBounds(it.alloc, sys, painter, f, textBytes)
     let arr = try it.newArray(0)
     try it.push(js.objVal(arr))
     defer it.pop()
@@ -1565,16 +1625,9 @@ fn akCanvasText(it: *mut Interp, a: Args) JsError!Value {
     var mask = try paint.Canvas.init(it.alloc, w, h)
     defer mask.deinit()
     mask.clear(paint.Rgba { r: 0, g: 0, b: 0, a: 0 })
-    var painter = paint.TextPainter.init(it.alloc, sys)
-    defer painter.deinit()
     try painter.draw(&mut mask, -maskX, -maskY, textBytes, f, 1.0, paint.Rgba { r: 255, g: 255, b: 255, a: 255 })
-    let data = try it.newArray(0)
-    try it.push(js.objVal(data))
-    for px in mask.pixels {
-        try it.heap.pushElem(data, js.numVal(px as f64))
-    }
-    try it.heap.pushElem(arr, js.objVal(data))
-    it.pop()
+    let id = try keepTextMask(cache, mask.pixels, w * h)
+    try it.heap.pushElem(arr, js.numVal(id as f64))
     try it.heap.pushElem(arr, js.numVal(w as f64))
     try it.heap.pushElem(arr, js.numVal(h as f64))
     try appendCanvasBounds(it, arr, bounds)

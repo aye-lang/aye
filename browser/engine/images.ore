@@ -17,6 +17,7 @@ import image
 import font
 import layout
 import net
+import paint
 import perf
 import std
 import std.heap.Arena
@@ -44,15 +45,19 @@ pub struct ImageCache {
     nodes: layout.Images
     canvases: List(CanvasBitmap)
     canvas_fonts: ?*mut font.System
-    // Canvas stroke attributes as SVG reads them (canvas_api.ore).
+    // Canvas stroke attributes as SVG reads them, the glyph cache of
+    // canvas text and the last text masks (canvas_api.ore).
     canvas_strokes: List(CanvasStroke)
+    canvas_painter: ?*mut paint.TextPainter
+    canvas_masks: List(CanvasTextMask)
+    canvas_mask_id: u64
     // The URL of the page, sent as the Referer (owned).
     referrer: []mut u8
     // The keys of `nodes.urls` (owned).
     keys: List([]mut u8)
 
     pub fn init(alloc: Allocator) ImageCache {
-        return ImageCache { alloc: alloc, entries: List(CachedImage).init(alloc), nodes: layout.Images.init(alloc), canvases: List(CanvasBitmap).init(alloc), canvas_fonts: null, canvas_strokes: List(CanvasStroke).init(alloc), referrer: alloc.alloc(0 as u8, 0) catch unreachable, keys: List([]mut u8).init(alloc) }
+        return ImageCache { alloc: alloc, entries: List(CachedImage).init(alloc), nodes: layout.Images.init(alloc), canvases: List(CanvasBitmap).init(alloc), canvas_fonts: null, canvas_strokes: List(CanvasStroke).init(alloc), canvas_painter: null, canvas_masks: List(CanvasTextMask).init(alloc), canvas_mask_id: 0, referrer: alloc.alloc(0 as u8, 0) catch unreachable, keys: List([]mut u8).init(alloc) }
     }
 
     pub fn deinit(self: *mut Self) {
@@ -81,6 +86,14 @@ pub struct ImageCache {
             st.deinit(self.alloc)
         }
         self.canvas_strokes.deinit()
+        if self.canvas_painter |tp| {
+            tp.deinit()
+            self.alloc.destroy(tp)
+        }
+        for m in self.canvas_masks.items() {
+            self.alloc.free(m.mask)
+        }
+        self.canvas_masks.deinit()
         self.nodes.deinit()
         self.alloc.free(self.referrer)
         for k in self.keys.items() {
