@@ -1,0 +1,46 @@
+viewport 800x600
+  block <html> (0, 0) 800x425
+    block <body> (0, 0) 800x425
+      flex <div class="c" style="gap: 5px"> (0, 0) 200x45
+        block <div> (0, 0) 200x20
+          line (0, 0) 200x20
+            text (0, 2) 72x16 "stretched"
+        block <div style="width: 100px"> (0, 25) 100x20
+          line (0, 25) 100x20
+            text (0, 27) 88x16 "fixed width"
+      flex <div class="c" style="align-items: center"> (0, 49) 200x40
+        block <div> (68, 49) 64x20
+          line (68, 49) 64x20
+            text (68, 51) 64x16 "centered"
+        block <div> (48, 69) 104x20
+          line (48, 69) 104x20
+            text (48, 71) 104x16 "also centered"
+      flex <div class="c" style="align-items: flex-end"> (0, 93) 200x20
+        block <div> (120, 93) 80x20
+          line (120, 93) 80x20
+            text (120, 95) 80x16 "at the end"
+      flex <div class="c" style="height: 100px"> (0, 117) 200x100
+        block <div style="flex: 1"> (0, 117) 200x80
+          line (0, 117) 200x20
+            text (0, 119) 80x16 "grows down"
+        block <div> (0, 197) 200x20
+          line (0, 197) 200x20
+            text (0, 199) 40x16 "stays"
+      flex <div class="c" style="height: 100px; justify-content: flex-end"> (0, 221) 200x100
+        block <div> (0, 301) 200x20
+          line (0, 301) 200x20
+            text (0, 303) 48x16 "bottom"
+      flex <div style="display: flex; height: 60px; align-items: center"> (0, 325) 800x60
+        block <div> (0, 345) 48x20
+          line (0, 345) 48x20
+            text (0, 347) 48x16 "middle"
+        block <div style="align-self: flex-end"> (48, 365) 24x20
+          line (48, 365) 24x20
+            text (48, 367) 24x16 "end"
+        block <div> (72, 345) 96x20
+          line (72, 345) 96x20
+            text (72, 347) 96x16 "centered too"
+      flex <div style="display: flex; height: 40px"> (0, 385) 800x40
+        block <div> (0, 385) 120x40
+          line (0, 385) 120x20
+            text (0, 387) 120x16 "stretched to 40"

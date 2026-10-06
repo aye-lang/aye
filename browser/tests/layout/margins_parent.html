@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0 }
+section { margin: 10px 0; background: yellow }
+.first { margin-top: 30px }
+.last { margin-bottom: 40px }
+.bordered { border-top: 1px solid; border-bottom: 1px solid }
+.empty { margin: 12px 0 }
+p { margin: 0 }
+</style>
+<section>
+  <p class="first">The first child's 30px top margin leaves through the section.</p>
+  <p class="last">The last child's 40px bottom margin too.</p>
+</section>
+<section class="bordered">
+  <p class="first">Inside a border the margins stay inside.</p>
+  <p class="last">Bottom as well.</p>
+</section>
+<div class="empty"></div>
+<div class="empty"></div>
+<section><div class="empty"></div><p>After empty boxes: margins collapse through them.</p></section>

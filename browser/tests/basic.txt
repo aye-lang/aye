@@ -1,0 +1,5 @@
+Welcome
+
+This is a small page with a link.
+
+Second paragraph.

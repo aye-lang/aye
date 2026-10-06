@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0 }
+.f { display: flex; width: 400px; gap: 10px; margin-bottom: 4px; border: 1px solid }
+.f div { width: 50px; height: 20px }
+</style>
+<div class="f"><div>a</div><div>b</div><div>c</div></div>
+<div class="f" style="justify-content: center"><div>a</div><div>b</div><div>c</div></div>
+<div class="f" style="justify-content: flex-end"><div>a</div><div>b</div><div>c</div></div>
+<div class="f" style="justify-content: space-between"><div>a</div><div>b</div><div>c</div></div>
+<div class="f" style="justify-content: space-around; gap: 0"><div>a</div><div>b</div></div>
+<div class="f" style="justify-content: space-evenly; gap: 0"><div>a</div><div>b</div></div>
+<div class="f" style="flex-direction: row-reverse"><div>a</div><div>b</div></div>
+<div class="f"><div>a</div><div style="margin-left: auto">auto</div></div>

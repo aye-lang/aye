@@ -1,0 +1,11 @@
+The first newline is dropped.
+  Indented   line
+
+    Code   block
+
+
+Two newlines: one stays.
+
+After pre: collapsed text.
+
+listing too

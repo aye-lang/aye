@@ -1,0 +1,24 @@
+viewport 800x600
+  block <html> (0, 0) 800x259
+    block <body> (0, 0) 800x257
+      block <div style="max-width: 300px"> (0, 0) 310x30
+        line (5, 5) 300x20
+          text (5, 7) 224x16 "max-width caps an auto width"
+      block <div style="width: 100px; min-width: 200px"> (0, 32) 210x30
+        line (5, 37) 200x20
+          text (5, 39) 168x16 "min-width beats width"
+      block <div style="width: 400px; max-width: 25%"> (0, 64) 210x30
+        line (5, 69) 200x20
+          text (5, 71) 160x16 "max-width 25% of 800"
+      block <div style="height: 10px; min-height: 40px"> (0, 96) 800x50
+        line (5, 101) 790x20
+          text (5, 103) 80x16 "min-height"
+      block <div style="max-height: 15px"> (0, 148) 800x25
+        line (5, 153) 790x20
+          text (5, 155) 304x16 "max-height clips the box, not the text"
+      block <div style="box-sizing: border-box; width: 200px; height: 50px"> (0, 175) 200x50
+        line (5, 180) 190x20
+          text (5, 182) 136x16 "border-box sizing"
+      block <div style="box-sizing: border-box; width: 4px"> (0, 227) 10x30
+        line (5, 232) 0x20
+          text (5, 234) 32x16 "tiny"

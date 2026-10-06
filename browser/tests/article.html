@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang=en>
+<head>
+<meta charset=utf-8>
+<meta name=viewport content="width=device-width, initial-scale=1">
+<title>Notes on Ore &ndash; anyknown</title>
+<script src="/analytics.js" async></script>
+</head>
+<body class="post">
+<header>
+  <nav><a href="/">anyknown</a> &middot; <a href="/blog/">Blog</a></nav>
+</header>
+<main>
+<article>
+  <h1>Notes on Ore</h1>
+  <p class=byline>By <a href="/me">someone</a>, <time datetime=2026-10-06>October 6</time>
+  <p>Ore is a systems language <em>without</em> garbage collection.
+  Memory comes from explicit <code>Allocator</code> values.
+  <h2>Why another language?</h2>
+  <ol>
+    <li>Errors are values.
+    <li>Enums are tagged unions.
+    <li>No hidden allocation.
+  </ol>
+  <blockquote><p>Simple things should be simple.</blockquote>
+  <pre><code>fn main() {
+    @println("hi")
+}</code></pre>
+  <figure><img src=fig.png alt="A figure"><figcaption>Figure 1: a figure.</figcaption></figure>
+</article>
+</main>
+<footer><p>&copy; 2026 anyknown. <a href=/about>About</a></footer>
+</body>
+</html>

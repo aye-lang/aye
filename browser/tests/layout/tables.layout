@@ -1,0 +1,40 @@
+viewport 800x600
+  block <html> (0, 0) 800x130
+    block <body> (0, 0) 800x130
+      table <table> (0, 0) 124x86
+        block <caption> (0, 0) 124x20
+          line (0, 0) 124x20
+            text (34, 2) 56x16 "Caption"
+        row-group <thead> (0, 20) 124x22
+          row <tr> (0, 20) 124x22
+            cell <th> (0, 20) 82x22
+              line (1, 21) 80x20
+                text (25, 23) 32x16 "Name"
+            cell <th> (82, 20) 42x22
+              line (83, 21) 40x20
+                text (83, 23) 40x16 "Value"
+        row-group <tbody> (0, 42) 124x44
+          row <tr> (0, 42) 124x22
+            cell <td> (0, 42) 82x22
+              line (1, 43) 80x20
+                text (1, 45) 40x16 "alpha"
+            cell <td> (82, 42) 42x22
+              line (83, 43) 40x20
+                text (83, 45) 8x16 "1"
+          row <tr> (0, 64) 124x22
+            cell <td> (0, 64) 82x22
+              line (1, 65) 80x20
+                text (1, 67) 80x16 "beta gamma"
+            cell <td> (82, 64) 42x22
+              line (83, 65) 40x20
+                text (83, 67) 16x16 "22"
+      table <table> (0, 86) 130x44
+        row-group <tbody> (0, 86) 130x44
+          row <tr> (0, 86) 130x22
+            cell <td> (0, 86) 130x22
+              line (1, 87) 128x20
+                text (1, 89) 104x16 "implied tbody"
+          row <tr> (0, 108) 130x22
+            cell <td> (0, 108) 130x22
+              line (1, 109) 128x20
+                text (1, 111) 128x16 "cell without row"

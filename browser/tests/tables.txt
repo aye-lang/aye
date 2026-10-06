@@ -1,0 +1,17 @@
+Prices
+Item | Price
+Apple | 1.00
+Pear | 2.00
+
+Head
+Body 1
+Body 2
+Foot
+
+Cell without a row | Second
+
+Nested
+
+After nested
+
+Stray cell

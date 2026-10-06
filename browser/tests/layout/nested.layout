@@ -1,0 +1,64 @@
+viewport 800x600
+  block <html> (0, 0) 800x376.36
+    block <body> (0, 0) 800x376.36
+      block <header> (0, 0) 800x50
+        block <h1> (20, 10) 760x30
+          line (20, 10) 760x30
+            text (20, 15) 130x20 "The Ore Times"
+      flex <nav> (0, 50) 800x29
+        block <a href="/"> (20, 54) 28x21
+          line (20, 54) 28x21
+            text (20, 57.5) 28x14 "Home"
+        block <a href="/news"> (60, 54) 28x21
+          line (60, 54) 28x21
+            text (60, 57.5) 28x14 "News"
+        block <a href="/about"> (100, 54) 56x21
+          line (100, 54) 56x21
+            text (100, 57.5) 56x14 "About us"
+      block <main> (130, 96.43) 540x245.93
+        block <article> (150, 96.43) 500x245.93
+          block <h2> (150, 96.43) 500x31.5
+            line (150, 96.43) 500x31.5
+              text (150, 101.68) 304.5x21 "Layout in a few hundred lines"
+          block <p> (150, 145.36) 500x42
+            line (150, 145.36) 500x21
+              text (150, 148.86) 105x14 "Boxes stack in "
+              inline <em> (255, 148.86) 70x14
+                text (255, 148.86) 70x14 "block flow"
+              text (325, 148.86) 91x14 ", words fill "
+              inline <strong> (416, 148.86) 35x14
+                text (416, 148.86) 35x14 "lines"
+              text (451, 148.86) 147x14 ", and tables and flex"
+            line (150, 166.36) 500x21
+              text (150, 169.86) 308x14 "containers share space among their children."
+          block <aside> (150, 203.36) 500x21
+            line (162, 203.36) 488x21
+              text (162, 206.86) 245x14 "An aside with a border on the left."
+          block <ul> (150, 240.36) 500x42
+            list-item <li> (190, 240.36) 460x21
+              marker (176, 243.86) 14x14 "• "
+              line (190, 240.36) 460x21
+                text (190, 243.86) 126x14 "Lists have markers"
+            list-item <li> (190, 261.36) 460x21
+              marker (176, 264.86) 14x14 "• "
+              line (190, 261.36) 460x21
+                text (190, 264.86) 112x14 "Margins collapse"
+          table <table> (150, 296.36) 74x46
+            row-group <tbody> (150, 296.36) 74x46
+              row <tr> (150, 296.36) 74x23
+                cell <th> (150, 296.36) 37x23
+                  line (151, 297.36) 35x21
+                    text (154.5, 300.86) 28x14 "Part"
+                cell <th> (187, 296.36) 37x23
+                  line (188, 297.36) 35x21
+                    text (188, 300.86) 35x14 "Lines"
+              row <tr> (150, 319.36) 74x23
+                cell <td> (150, 319.36) 37x23
+                  line (151, 320.36) 35x21
+                    text (151, 323.86) 35x14 "block"
+                cell <td> (187, 319.36) 37x23
+                  line (188, 320.36) 35x21
+                    text (188, 323.86) 21x14 "400"
+      block <footer> (0, 342.36) 800x34
+        line (8, 350.36) 784x18
+          text (358, 353.36) 84x12 "Written in Ore"

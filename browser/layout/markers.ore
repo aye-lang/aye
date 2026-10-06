@@ -1,0 +1,148 @@
+// List item markers, outside the content box: "• " (disc), "◦ "
+// (circle), "▪ " (square), or the item's number in its style followed by
+// ". " (decimal, decimal-leading-zero, lower/upper-roman, lower/upper-
+// alpha and -latin, lower-greek; others are decimal). The number is
+// counted among the list items of the parent element, from its `start`
+// attribute (an `ol`), and set by a `value` attribute.
+
+import css
+import dom
+import dom.Kind
+import dom.NodeId
+import std.mem.AllocError
+import std.text
+
+fn listMarker(t: *mut Tree, b: usize, el: NodeId) AllocError!void {
+    let kind = keywordOf(t.bx(b).style[css.LIST_STYLE_TYPE])
+    if text.eql(kind, "none") || kind.len == 0 {
+        return
+    }
+    if text.eql(kind, "disc") {
+        t.bx(b).marker = "\xE2\x80\xA2 "
+        return
+    }
+    if text.eql(kind, "circle") {
+        t.bx(b).marker = "\xE2\x97\xA6 "
+        return
+    }
+    if text.eql(kind, "square") {
+        t.bx(b).marker = "\xE2\x96\xAA "
+        return
+    }
+    let n = ordinal(t, el)
+    var out = text.Builder.init(t.alloc)
+    if text.eql(kind, "lower-roman") || text.eql(kind, "upper-roman") {
+        try roman(n, text.eql(kind, "upper-roman"), &mut out)
+    } else if text.eql(kind, "lower-alpha") || text.eql(kind, "lower-latin") {
+        try alphabetic(n, 'a', &mut out)
+    } else if text.eql(kind, "upper-alpha") || text.eql(kind, "upper-latin") {
+        try alphabetic(n, 'A', &mut out)
+    } else if text.eql(kind, "lower-greek") && n >= 1 && n <= 24 {
+        // α (U+03B1) to ω, without the final sigma (U+03C2).
+        var code = 0x3B0 + n as u32
+        if n >= 18 {
+            code += 1
+        }
+        try out.appendChar(code)
+    } else {
+        if text.eql(kind, "decimal-leading-zero") && n >= 0 && n < 10 {
+            try out.appendByte('0')
+        }
+        try out.appendInt(n)
+    }
+    try out.append(". ")
+    t.bx(b).marker = try out.toOwned()
+}
+
+// The number of the list item `el`.
+fn ordinal(t: *Tree, el: NodeId) i64 {
+    var n: i64 = 0
+    var start: ?NodeId = null
+    if t.doc.parent(el) |p| {
+        if t.doc.isElement(p, "ol") {
+            if t.doc.attr(p, "start") |v| {
+                n = (text.parseInt(text.trim(v)) catch 1) - 1
+            }
+        }
+        start = t.doc.firstChild(p)
+    }
+    var cur = start
+    while cur |c| {
+        if t.doc.node(c).kind == Kind.Element && isListItem(t, c) {
+            if t.doc.attr(c, "value") |v| {
+                n = text.parseInt(text.trim(v)) catch n + 1
+            } else {
+                n += 1
+            }
+        }
+        if dom.same(c, el) {
+            break
+        }
+        cur = t.doc.nextSibling(c)
+    }
+    return n
+}
+
+fn isListItem(t: *Tree, el: NodeId) bool {
+    if t.styles.get(el) |style| {
+        return isKeyword(style[css.DISPLAY], "list-item")
+    }
+    return false
+}
+
+fn roman(n: i64, upper: bool, out: *mut text.Builder) AllocError!void {
+    if n < 1 || n > 3999 {
+        return out.appendInt(n)
+    }
+    let values = [13]i64{1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1}
+    let lower = [13][]u8{"m", "cm", "d", "cd", "c", "xc", "l", "xl", "x", "ix", "v", "iv", "i"}
+    let capital = [13][]u8{"M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I"}
+    var rest = n
+    for k, v in values {
+        while rest >= v {
+            if upper {
+                try out.append(capital[k])
+            } else {
+                try out.append(lower[k])
+            }
+            rest -= v
+        }
+    }
+}
+
+// a, b, ..., z, aa, ab, ...
+fn alphabetic(n: i64, first: u8, out: *mut text.Builder) AllocError!void {
+    if n < 1 {
+        return out.appendInt(n)
+    }
+    var digits = @zeroed([16]u8)
+    var len: usize = 0
+    var rest = n
+    while rest > 0 {
+        rest -= 1
+        digits[len] = first + (rest % 26) as u8
+        len += 1
+        rest /= 26
+    }
+    while len > 0 {
+        len -= 1
+        try out.appendByte(digits[len])
+    }
+}
+
+// Places the marker of list item `i` left of its content box, on the
+// baseline of its first line.
+fn placeMarker(t: *mut Tree, i: usize) {
+    let m = textMetrics(t, t.bx(i).style)
+    let b = t.bx(i)
+    let w = t.measure.width(m.font, b.marker)
+    var baseline = (m.line_height - m.ascent - m.descent) / 2.0 + m.ascent
+    if b.first_baseline >= 0.0 {
+        baseline = b.first_baseline - b.border[0] - b.padding[0]
+    }
+    let bb = t.bx(i)
+    bb.marker_w = w
+    bb.marker_x = -w
+    bb.marker_y = baseline - m.ascent
+    bb.marker_h = m.ascent + m.descent
+}

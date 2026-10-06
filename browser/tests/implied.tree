@@ -1,0 +1,11 @@
+#document
+  <html>
+    <head>
+      <title>
+        "No html, head or body tags"
+      "\n"
+    <body>
+      <p>
+        "The parser adds them.\n"
+      <p>
+        "And closes paragraphs.\n"

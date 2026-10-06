@@ -1,0 +1,237 @@
+// Tables with automatic column widths (CSS 2.1 17.5.2.2, simplified):
+// each column gets the min-content and max-content widths of its cells
+// (cells spanning columns spread theirs evenly); the table is as wide as
+// its columns' max-content widths when that fits, else the available
+// width (but at least the min-content widths), or its own `width`; the
+// space between min and max is shared in proportion. A row is as high as
+// its highest cell, and every cell is stretched to it. Captions go above
+// the rows. No border spacing, no rows spans.
+
+import css
+import std.list.List
+import std.math
+import std.mem.AllocError
+
+// The rows of table `i` in order, inside row groups or not.
+fn tableRows(t: *Tree, i: usize, out: *mut List(usize)) AllocError!void {
+    for c in t.children(i) {
+        let kind = t.bx(c).kind
+        if kind == BoxKind.Row {
+            try out.append(c)
+        } else if kind == BoxKind.RowGroup {
+            for r in t.children(c) {
+                try out.append(r)
+            }
+        }
+    }
+}
+
+// The min-content and max-content widths of the columns of table `i`,
+// and whether a cell gives the column a fixed `width`.
+fn columnWidths(t: *mut Tree, i: usize, mins: *mut List(f64), maxs: *mut List(f64), fixed: *mut List(bool)) AllocError!void {
+    var rows = List(usize).init(t.backing)
+    defer rows.deinit()
+    try tableRows(t, i, &mut rows)
+    // Cells spanning one column first, then the others.
+    for pass in 0..2 {
+        for r in rows.items() {
+            var col: usize = 0
+            let n = t.children(r).len
+            for k in 0..n {
+                let cell = t.children(r)[k]
+                let span = t.bx(cell).span
+                while mins.len() < col + span {
+                    try mins.append(0.0)
+                    try maxs.append(0.0)
+                    try fixed.append(false)
+                }
+                if span == 1 && lengthOf(t.bx(cell).style[css.WIDTH], -1.0) != null {
+                    fixed.items()[col] = true
+                }
+                if (pass == 0) == (span == 1) {
+                    let mm = try outerIntrinsic(t, cell)
+                    var have_min = 0.0
+                    var have_max = 0.0
+                    for c in col..col + span {
+                        have_min += mins.items()[c]
+                        have_max += maxs.items()[c]
+                    }
+                    let add_min = math.max(0.0, mm.min - have_min) / span as f64
+                    let add_max = math.max(0.0, mm.max - have_max) / span as f64
+                    for c in col..col + span {
+                        mins.items()[c] += add_min
+                        maxs.items()[c] = math.max(maxs.items()[c] + add_max, mins.items()[c])
+                    }
+                }
+                col += span
+            }
+        }
+    }
+}
+
+fn sumOf(xs: []f64) f64 {
+    var s = 0.0
+    for x in xs {
+        s += x
+    }
+    return s
+}
+
+/// The border-box min-content and max-content widths of table `i`
+/// (without its edges, which `intrinsic` adds).
+fn tableIntrinsic(t: *mut Tree, i: usize) AllocError!MinMax {
+    var mins = List(f64).init(t.backing)
+    defer mins.deinit()
+    var maxs = List(f64).init(t.backing)
+    defer maxs.deinit()
+    var fixed = List(bool).init(t.backing)
+    defer fixed.deinit()
+    try columnWidths(t, i, &mut mins, &mut maxs, &mut fixed)
+    var r = MinMax { min: sumOf(mins.items()), max: sumOf(maxs.items()) }
+    for c in t.children(i) {
+        if isCaption(t, c) {
+            let o = try outerIntrinsic(t, c)
+            r.min = math.max(r.min, o.min)
+        }
+    }
+    return r
+}
+
+/// Lays out table `i` (edges and vertical margins resolved) in a
+/// containing block `cb_w` wide.
+fn layoutTable(t: *mut Tree, i: usize, cb_w: f64) AllocError!void {
+    var mins = List(f64).init(t.backing)
+    defer mins.deinit()
+    var maxs = List(f64).init(t.backing)
+    defer maxs.deinit()
+    var fixed = List(bool).init(t.backing)
+    defer fixed.deinit()
+    try columnWidths(t, i, &mut mins, &mut maxs, &mut fixed)
+    let sum_min = sumOf(mins.items())
+    let sum_max = sumOf(maxs.items())
+    let b = t.bx(i)
+    let edges = hEdges(b)
+    let margins = lengthOr0(b.style[css.MARGIN_TOP + 1], cb_w) + lengthOr0(b.style[css.MARGIN_TOP + 3], cb_w)
+    var inner = 0.0
+    if specifiedWidth(t, i, cb_w) |w| {
+        inner = math.max(w - edges, sum_min)
+    } else {
+        inner = math.max(sum_min, math.min(sum_max, cb_w - margins - edges))
+    }
+    // Column widths.
+    let widths = mins.items()
+    let n = widths.len
+    if inner >= sum_max {
+        // The extra space goes to the columns without a fixed width (to
+        // all when every column has one), in proportion to their widths.
+        var flexible = 0.0
+        var count: usize = 0
+        for c in 0..n {
+            if !fixed.items()[c] {
+                flexible += maxs.items()[c]
+                count += 1
+            }
+        }
+        let all = count == 0
+        if all {
+            flexible = sum_max
+            count = n
+        }
+        for c in 0..n {
+            widths[c] = maxs.items()[c]
+            if all || !fixed.items()[c] {
+                if flexible > 0.0 {
+                    widths[c] += (inner - sum_max) * maxs.items()[c] / flexible
+                } else {
+                    widths[c] += (inner - sum_max) / count as f64
+                }
+            }
+        }
+    } else if sum_max > sum_min {
+        let k = (inner - sum_min) / (sum_max - sum_min)
+        for c in 0..n {
+            widths[c] = widths[c] + (maxs.items()[c] - widths[c]) * k
+        }
+    }
+    t.bx(i).w = inner + edges
+    // Captions and rows, top to bottom.
+    var y = 0.0
+    let kids = t.children(i).len
+    for k in 0..kids {
+        let c = t.children(i)[k]
+        let kind = t.bx(c).kind
+        if kind == BoxKind.Row {
+            y += try layoutRow(t, c, widths, inner, y)
+        } else if kind == BoxKind.RowGroup {
+            let top = y
+            let rows = t.children(c).len
+            var gy = 0.0
+            for j in 0..rows {
+                gy += try layoutRow(t, t.children(c)[j], widths, inner, gy)
+            }
+            let g = t.bx(c)
+            g.x = 0.0
+            g.y = top
+            g.w = inner
+            g.h = gy
+            childBaselines(t, c)
+            y += gy
+        } else {
+            // A caption.
+            try layoutBlockLevel(t, c, inner, -1.0)
+            let cb = t.bx(c)
+            cb.x = cb.margin[3]
+            cb.y = y + cb.margin[0]
+            y += cb.margin[0] + cb.h + cb.margin[2]
+        }
+    }
+    let tb = t.bx(i)
+    var h = y + vEdges(tb)
+    if sizeOf(tb.style, tb.style[css.HEIGHT], -1.0, vEdges(tb)) |sh| {
+        h = math.max(h, sh)
+    }
+    tb.h = h
+    childBaselines(t, i)
+}
+
+// Lays out row `r` at `y` with the column `widths`; returns its height.
+fn layoutRow(t: *mut Tree, r: usize, widths: []f64, inner: f64, y: f64) AllocError!f64 {
+    var x = 0.0
+    var col: usize = 0
+    var h = 0.0
+    let rs = t.bx(r).style
+    if lengthOf(rs[css.HEIGHT], -1.0) |rh| {
+        h = rh
+    }
+    let n = t.children(r).len
+    for k in 0..n {
+        let cell = t.children(r)[k]
+        let span = t.bx(cell).span
+        var w = 0.0
+        for c in col..col + span {
+            if c < widths.len {
+                w += widths[c]
+            }
+        }
+        resolveEdges(t, cell, inner)
+        let cb = t.bx(cell)
+        cb.margin = [4]f64{0.0, 0.0, 0.0, 0.0}
+        cb.w = w
+        cb.x = x
+        cb.y = 0.0
+        try layoutContents(t, cell, -1.0)
+        h = math.max(h, t.bx(cell).h)
+        x += w
+        col += span
+    }
+    for k in 0..n {
+        t.bx(t.children(r)[k]).h = h
+    }
+    let rb = t.bx(r)
+    rb.x = 0.0
+    rb.y = y
+    rb.w = inner
+    rb.h = h
+    childBaselines(t, r)
+    return h
+}

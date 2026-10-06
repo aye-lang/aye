@@ -1,0 +1,21 @@
+viewport 800x600
+  block <html> (0, 0) 800x200
+    block <body> (0, 0) 800x200
+      block <div class="a"> (0, 0) 800x20
+        line (0, 0) 800x20
+          text (0, 2) 8x16 "a"
+      block <div class="b"> (0, 50) 800x20
+        line (0, 50) 800x20
+          text (0, 52) 192x16 "b (20 collapses into 30)"
+      block <div class="c"> (0, 95) 800x20
+        line (0, 95) 800x20
+          text (0, 97) 152x16 "c (25 wins over 10)"
+      block <div class="neg"> (0, 105) 800x20
+        line (0, 105) 800x20
+          text (0, 107) 128x16 "neg (-10 with 0)"
+      block <div class="both"> (0, 140) 800x20
+        line (0, 140) 800x20
+          text (0, 142) 32x16 "both"
+      block <div class="c"> (0, 180) 800x20
+        line (0, 180) 800x20
+          text (0, 182) 136x16 "c after -5 and 25"

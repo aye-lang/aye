@@ -1,0 +1,482 @@
+// The CSS tokenizer (CSS Syntax 3, section 4): comments are dropped, the
+// rest becomes a list of tokens. Names and strings with escapes are
+// decoded into the sheet's arena; other names are slices of the source.
+// It never fails (bad strings and URLs are tokens of their own).
+
+import std.list.List
+import std.math
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+pub enum Tok {
+    Ident
+    Function
+    AtKeyword
+    Hash
+    String
+    BadString
+    Url
+    BadUrl
+    Delim
+    Number
+    Percentage
+    Dimension
+    Whitespace
+    Cdo
+    Cdc
+    Colon
+    Semicolon
+    Comma
+    LBracket
+    RBracket
+    LParen
+    RParen
+    LBrace
+    RBrace
+}
+
+pub struct Token {
+    kind: Tok
+    // Ident, Function (without `(`), AtKeyword (without `@`), Hash
+    // (without `#`), String, Url: the value. Dimension: the unit.
+    text: []u8
+    // Number, Percentage, Dimension: the value.
+    num: f64
+    // Delim: the code point.
+    delim: u32
+    // Hash: the name is an identifier (an "id" hash). Number and
+    // Dimension: written as an integer.
+    flag: bool
+}
+
+fn token(kind: Tok) Token {
+    return Token { kind: kind, text: "", num: 0.0, delim: 0, flag: false }
+}
+
+/// Tokenizes `src` into `out`; decoded strings are allocated from `alloc`
+/// (an arena: they are never freed one by one).
+pub fn tokenize(alloc: Allocator, src: []u8, out: *mut List(Token)) AllocError!void {
+    var t = Tokenizer { alloc: alloc, src: src, pos: 0 }
+    while t.pos < src.len {
+        if t.startsComment() {
+            t.skipComment()
+            continue
+        }
+        try out.append(try t.next())
+    }
+}
+
+struct Tokenizer {
+    alloc: Allocator
+    src: []u8
+    pos: usize
+
+    fn at(self: *Self, i: usize) u8 {
+        if i < self.src.len {
+            return self.src[i]
+        }
+        return 0
+    }
+
+    fn startsComment(self: *Self) bool {
+        return self.at(self.pos) == '/' && self.at(self.pos + 1) == '*'
+    }
+
+    fn skipComment(self: *mut Self) {
+        self.pos += 2
+        while self.pos < self.src.len {
+            if self.src[self.pos] == '*' && self.at(self.pos + 1) == '/' {
+                self.pos += 2
+                return
+            }
+            self.pos += 1
+        }
+    }
+
+    fn next(self: *mut Self) AllocError!Token {
+        let c = self.src[self.pos]
+        if isWhitespace(c) {
+            while self.pos < self.src.len && isWhitespace(self.src[self.pos]) {
+                self.pos += 1
+            }
+            return token(Tok.Whitespace)
+        }
+        if c == '"' || c == '\'' {
+            self.pos += 1
+            return self.stringToken(c)
+        }
+        if c == '#' {
+            if isNameChar(self.at(self.pos + 1)) || self.validEscape(self.pos + 1) {
+                self.pos += 1
+                var t = token(Tok.Hash)
+                t.flag = self.startsIdent(self.pos)
+                t.text = try self.name()
+                return t
+            }
+            return self.delimToken()
+        }
+        if c == '+' || c == '.' {
+            if self.startsNumber(self.pos) {
+                return self.numeric()
+            }
+            return self.delimToken()
+        }
+        if c == '-' {
+            if self.startsNumber(self.pos) {
+                return self.numeric()
+            }
+            if self.at(self.pos + 1) == '-' && self.at(self.pos + 2) == '>' {
+                self.pos += 3
+                return token(Tok.Cdc)
+            }
+            if self.startsIdent(self.pos) {
+                return self.identLike()
+            }
+            return self.delimToken()
+        }
+        if c >= '0' && c <= '9' {
+            return self.numeric()
+        }
+        if c == '<' && self.at(self.pos + 1) == '!' && self.at(self.pos + 2) == '-' && self.at(self.pos + 3) == '-' {
+            self.pos += 4
+            return token(Tok.Cdo)
+        }
+        if c == '@' {
+            if self.startsIdent(self.pos + 1) {
+                self.pos += 1
+                var t = token(Tok.AtKeyword)
+                t.text = try self.name()
+                return t
+            }
+            return self.delimToken()
+        }
+        if c == '\\' {
+            if self.validEscape(self.pos) {
+                return self.identLike()
+            }
+            return self.delimToken()
+        }
+        if isNameStart(c) {
+            return self.identLike()
+        }
+        let kind = match c {
+            '(' => Tok.LParen
+            ')' => Tok.RParen
+            '[' => Tok.LBracket
+            ']' => Tok.RBracket
+            '{' => Tok.LBrace
+            '}' => Tok.RBrace
+            ',' => Tok.Comma
+            ':' => Tok.Colon
+            ';' => Tok.Semicolon
+            _ => Tok.Delim
+        }
+        if kind == Tok.Delim {
+            return self.delimToken()
+        }
+        self.pos += 1
+        return token(kind)
+    }
+
+    fn delimToken(self: *mut Self) Token {
+        let d = text.decode(self.src[self.pos..])
+        self.pos += d.len
+        var t = token(Tok.Delim)
+        t.delim = d.code
+        return t
+    }
+
+    // Is there a `\` at `i` that starts an escape (not before a newline)?
+    fn validEscape(self: *Self, i: usize) bool {
+        return self.at(i) == '\\' && i + 1 < self.src.len && self.src[i + 1] != '\n'
+    }
+
+    // Would an identifier start at `i`?
+    fn startsIdent(self: *Self, i: usize) bool {
+        let c = self.at(i)
+        if c == '-' {
+            let d = self.at(i + 1)
+            return isNameStart(d) || d == '-' || self.validEscape(i + 1)
+        }
+        if c == '\\' {
+            return self.validEscape(i)
+        }
+        return i < self.src.len && isNameStart(c)
+    }
+
+    // Would a number start at `i`?
+    fn startsNumber(self: *Self, i: usize) bool {
+        var j = i
+        let c = self.at(j)
+        if c == '+' || c == '-' {
+            j += 1
+        }
+        if isDigit(self.at(j)) {
+            return true
+        }
+        return self.at(j) == '.' && isDigit(self.at(j + 1))
+    }
+
+    // A name (identifier characters and escapes), decoded.
+    fn name(self: *mut Self) AllocError![]u8 {
+        let start = self.pos
+        while self.pos < self.src.len && isNameChar(self.src[self.pos]) {
+            self.pos += 1
+        }
+        if !self.validEscape(self.pos) {
+            return self.src[start..self.pos]
+        }
+        var b = text.Builder.init(self.alloc)
+        defer b.deinit()
+        try b.append(self.src[start..self.pos])
+        while self.pos < self.src.len {
+            let c = self.src[self.pos]
+            if isNameChar(c) {
+                try b.appendByte(c)
+                self.pos += 1
+            } else if self.validEscape(self.pos) {
+                self.pos += 1
+                try b.appendChar(self.escape())
+            } else {
+                break
+            }
+        }
+        let owned = try b.toOwned()
+        return owned
+    }
+
+    // The code point of an escape; `pos` is just after the `\`.
+    fn escape(self: *mut Self) u32 {
+        if !isHex(self.at(self.pos)) {
+            let d = text.decode(self.src[self.pos..])
+            self.pos += d.len
+            return d.code
+        }
+        var code: u32 = 0
+        var n: usize = 0
+        while n < 6 && isHex(self.at(self.pos)) {
+            code = code * 16 + hexDigit(self.src[self.pos])
+            self.pos += 1
+            n += 1
+        }
+        if isWhitespace(self.at(self.pos)) {
+            self.pos += 1
+        }
+        if code == 0 || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF) {
+            return 0xFFFD
+        }
+        return code
+    }
+
+    fn identLike(self: *mut Self) AllocError!Token {
+        let n = try self.name()
+        if self.at(self.pos) != '(' {
+            var t = token(Tok.Ident)
+            t.text = n
+            return t
+        }
+        self.pos += 1
+        if text.eqlIgnoreCase(n, "url") {
+            var j = self.pos
+            while isWhitespace(self.at(j)) {
+                j += 1
+            }
+            if self.at(j) != '"' && self.at(j) != '\'' {
+                self.pos = j
+                return self.urlToken()
+            }
+        }
+        var t = token(Tok.Function)
+        t.text = n
+        return t
+    }
+
+    // An unquoted `url(...)`; `pos` is after the `(` and its whitespace.
+    fn urlToken(self: *mut Self) AllocError!Token {
+        var b = text.Builder.init(self.alloc)
+        defer b.deinit()
+        while self.pos < self.src.len {
+            let c = self.src[self.pos]
+            if c == ')' {
+                self.pos += 1
+                break
+            }
+            if isWhitespace(c) {
+                while isWhitespace(self.at(self.pos)) {
+                    self.pos += 1
+                }
+                if self.pos >= self.src.len {
+                    break
+                }
+                if self.src[self.pos] == ')' {
+                    self.pos += 1
+                    break
+                }
+                return self.badUrl()
+            }
+            if c == '"' || c == '\'' || c == '(' || c < 0x20 || c == 0x7F {
+                return self.badUrl()
+            }
+            if c == '\\' {
+                if !self.validEscape(self.pos) {
+                    return self.badUrl()
+                }
+                self.pos += 1
+                try b.appendChar(self.escape())
+            } else {
+                try b.appendByte(c)
+                self.pos += 1
+            }
+        }
+        var t = token(Tok.Url)
+        t.text = try b.toOwned()
+        return t
+    }
+
+    // Skips the rest of a bad URL, up to and including its `)`.
+    fn badUrl(self: *mut Self) Token {
+        while self.pos < self.src.len {
+            let c = self.src[self.pos]
+            if c == ')' {
+                self.pos += 1
+                break
+            }
+            if self.validEscape(self.pos) {
+                self.pos += 2
+            } else {
+                self.pos += 1
+            }
+        }
+        return token(Tok.BadUrl)
+    }
+
+    // A string; `pos` is after the opening `quote`.
+    fn stringToken(self: *mut Self, quote: u8) AllocError!Token {
+        var b = text.Builder.init(self.alloc)
+        defer b.deinit()
+        while self.pos < self.src.len {
+            let c = self.src[self.pos]
+            if c == quote {
+                self.pos += 1
+                break
+            }
+            if c == '\n' {
+                return token(Tok.BadString)
+            }
+            if c == '\\' {
+                if self.pos + 1 >= self.src.len {
+                    self.pos += 1
+                } else if self.src[self.pos + 1] == '\n' {
+                    self.pos += 2
+                } else {
+                    self.pos += 1
+                    try b.appendChar(self.escape())
+                }
+            } else {
+                try b.appendByte(c)
+                self.pos += 1
+            }
+        }
+        var t = token(Tok.String)
+        t.text = try b.toOwned()
+        return t
+    }
+
+    // A number, percentage or dimension.
+    fn numeric(self: *mut Self) AllocError!Token {
+        var negative = false
+        if self.src[self.pos] == '+' || self.src[self.pos] == '-' {
+            negative = self.src[self.pos] == '-'
+            self.pos += 1
+        }
+        var integer = true
+        var v = 0.0
+        while isDigit(self.at(self.pos)) {
+            v = v * 10.0 + (self.src[self.pos] - '0') as f64
+            self.pos += 1
+        }
+        if self.at(self.pos) == '.' && isDigit(self.at(self.pos + 1)) {
+            integer = false
+            self.pos += 1
+            var scale = 0.1
+            while isDigit(self.at(self.pos)) {
+                v += (self.src[self.pos] - '0') as f64 * scale
+                scale /= 10.0
+                self.pos += 1
+            }
+        }
+        let e = self.at(self.pos)
+        if e == 'e' || e == 'E' {
+            var j = self.pos + 1
+            var exp_negative = false
+            if self.at(j) == '+' || self.at(j) == '-' {
+                exp_negative = self.at(j) == '-'
+                j += 1
+            }
+            if isDigit(self.at(j)) {
+                integer = false
+                var exp = 0.0
+                while isDigit(self.at(j)) {
+                    exp = exp * 10.0 + (self.src[j] - '0') as f64
+                    j += 1
+                }
+                if exp_negative {
+                    exp = -exp
+                }
+                v *= math.pow(10.0, exp)
+                self.pos = j
+            }
+        }
+        if negative {
+            v = -v
+        }
+        if self.startsIdent(self.pos) {
+            var t = token(Tok.Dimension)
+            t.num = v
+            t.flag = integer
+            t.text = try self.name()
+            return t
+        }
+        if self.at(self.pos) == '%' {
+            self.pos += 1
+            var t = token(Tok.Percentage)
+            t.num = v
+            return t
+        }
+        var t = token(Tok.Number)
+        t.num = v
+        t.flag = integer
+        return t
+    }
+}
+
+fn isWhitespace(c: u8) bool {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\x0C'
+}
+
+fn isDigit(c: u8) bool {
+    return c >= '0' && c <= '9'
+}
+
+fn isHex(c: u8) bool {
+    return isDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+fn hexDigit(c: u8) u32 {
+    if isDigit(c) {
+        return (c - '0') as u32
+    }
+    if c >= 'a' && c <= 'f' {
+        return (c - 'a') as u32 + 10
+    }
+    return (c - 'A') as u32 + 10
+}
+
+fn isNameStart(c: u8) bool {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c >= 0x80
+}
+
+fn isNameChar(c: u8) bool {
+    return isNameStart(c) || isDigit(c) || c == '-'
+}

@@ -1,0 +1,14 @@
+Line one
+Line two
+Line three
+Line four
+
+An image: [Alt text] and an input
+
+---
+
+Self-closing on non-void elements is ignored:
+
+inside the divand the span
+
+words [image becomes img]

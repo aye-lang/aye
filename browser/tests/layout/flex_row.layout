@@ -1,0 +1,71 @@
+viewport 800x600
+  block <html> (0, 0) 800x208
+    block <body> (0, 0) 800x204
+      flex <div class="f"> (0, 0) 402x22
+        block <div> (1, 1) 50x20
+          line (1, 1) 50x20
+            text (1, 3) 8x16 "a"
+        block <div> (61, 1) 50x20
+          line (61, 1) 50x20
+            text (61, 3) 8x16 "b"
+        block <div> (121, 1) 50x20
+          line (121, 1) 50x20
+            text (121, 3) 8x16 "c"
+      flex <div class="f" style="justify-content: center"> (0, 26) 402x22
+        block <div> (116, 27) 50x20
+          line (116, 27) 50x20
+            text (116, 29) 8x16 "a"
+        block <div> (176, 27) 50x20
+          line (176, 27) 50x20
+            text (176, 29) 8x16 "b"
+        block <div> (236, 27) 50x20
+          line (236, 27) 50x20
+            text (236, 29) 8x16 "c"
+      flex <div class="f" style="justify-content: flex-end"> (0, 52) 402x22
+        block <div> (231, 53) 50x20
+          line (231, 53) 50x20
+            text (231, 55) 8x16 "a"
+        block <div> (291, 53) 50x20
+          line (291, 53) 50x20
+            text (291, 55) 8x16 "b"
+        block <div> (351, 53) 50x20
+          line (351, 53) 50x20
+            text (351, 55) 8x16 "c"
+      flex <div class="f" style="justify-content: space-between"> (0, 78) 402x22
+        block <div> (1, 79) 50x20
+          line (1, 79) 50x20
+            text (1, 81) 8x16 "a"
+        block <div> (176, 79) 50x20
+          line (176, 79) 50x20
+            text (176, 81) 8x16 "b"
+        block <div> (351, 79) 50x20
+          line (351, 79) 50x20
+            text (351, 81) 8x16 "c"
+      flex <div class="f" style="justify-content: space-around; gap: 0"> (0, 104) 402x22
+        block <div> (76, 105) 50x20
+          line (76, 105) 50x20
+            text (76, 107) 8x16 "a"
+        block <div> (276, 105) 50x20
+          line (276, 105) 50x20
+            text (276, 107) 8x16 "b"
+      flex <div class="f" style="justify-content: space-evenly; gap: 0"> (0, 130) 402x22
+        block <div> (101, 131) 50x20
+          line (101, 131) 50x20
+            text (101, 133) 8x16 "a"
+        block <div> (251, 131) 50x20
+          line (251, 131) 50x20
+            text (251, 133) 8x16 "b"
+      flex <div class="f" style="flex-direction: row-reverse"> (0, 156) 402x22
+        block <div> (351, 157) 50x20
+          line (351, 157) 50x20
+            text (351, 159) 8x16 "a"
+        block <div> (291, 157) 50x20
+          line (291, 157) 50x20
+            text (291, 159) 8x16 "b"
+      flex <div class="f"> (0, 182) 402x22
+        block <div> (1, 183) 50x20
+          line (1, 183) 50x20
+            text (1, 185) 8x16 "a"
+        block <div style="margin-left: auto"> (351, 183) 50x20
+          line (351, 183) 50x20
+            text (351, 185) 32x16 "auto"

@@ -1,0 +1,16 @@
+#document
+  <html>
+    <head>
+    <body>
+      <p>
+        "Named: & < > \" '  |© é … — €"
+      "\n"
+      <p>
+        "Numeric: A B C � � � € Ÿ ©"
+      "\n"
+      <p>
+        "Without semicolon: & <5 ©2024 éx ¬it; ∉ ¬"
+      "\n"
+      <p>
+        "Not references: & &; &# &#x; &unknown; & &Amp;"
+      "\n"

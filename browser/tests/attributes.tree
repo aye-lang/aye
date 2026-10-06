@@ -1,0 +1,19 @@
+#document
+  <html>
+    <head>
+    <body>
+      <div id="unquoted" class="single" title="double" data-x="spaced" hidden="">
+      "\n"
+      <p id="upper" class="x">
+        "attributes"
+      "\n"
+      <a href="?a=1&copy=2&b=3<" title="\"quoted\" © ©">
+        "entities in values"
+      "\n"
+      <input value="a&b" disabled="" checked="checked">
+      "\n"
+      <img src="x.png" alt="An image">
+      "\n"
+      <span =weird="" a"b="c" d="" e="">
+        "odd names"
+      "\n"
