@@ -43,7 +43,11 @@ keyword     = "fn" | "let" | "var" | "pub" | "import" | "struct" | "enum"
 
 file        = { NEWLINE } , { ( import | item ) , ( NEWLINE | EOF ) , { NEWLINE } } ;
 item        = fn_decl | extern_fn | struct_decl | enum_decl | error_decl
-            | interface_decl | test_decl | global_decl ;
+            | interface_decl | test_decl | global_decl | link_decl ;
+
+link_decl   = "@link" "(" string_lit ")" ;
+               (* a C library: a pkg-config package, -lname, or
+                  "framework:Name" (macOS); `@link` only at the top level *)
 
 global_decl = [ "pub" ] ( "let" | "var" ) ident [ ":" type ] "=" arg ;
                (* a constant (let) or global variable (var) whose value is
@@ -58,7 +62,11 @@ path        = ident { "." ident } ;
                (* a name, or an item of a module: std.fs.File *)
 
 fn_decl     = [ "pub" ] "fn" ident "(" [ params ] ")" [ ret_type ] [ where ] block ;
-extern_fn   = [ "pub" ] "extern" "fn" ident "(" [ params ] ")" [ type ] ;
+extern_fn   = [ "pub" ] "extern" "fn" ident "(" [ params [ "," "..." ] ] ")" [ type ]
+            | "pub" "extern" "fn" ident "(" [ params ] ")" [ type ] block ;
+               (* without a body: a C function, variadic with "..." after at
+                  least one parameter; with a body: an Ore function exported
+                  to C under its own name *)
 ret_type    = type
             | [ path ] "!" ( type | "void" ) ;   (* error union E!T; !T infers the set
                                                      (not allowed on a `pub fn` other than main,
@@ -72,12 +80,13 @@ where       = "where" ident ":" path { "," ident ":" path } ;
    `type` is a type function: it has only comptime parameters, and its body
    is exactly  "{" "return" struct_type "}"  (with newlines). *)
 
-struct_decl = [ "pub" ] "struct" ident "{" { NEWLINE }
+struct_decl = [ "pub" ] [ "extern" ] "struct" ident "{" { NEWLINE }
               [ member { ( "," | NEWLINE ) { NEWLINE } member } [ "," ] { NEWLINE } ] "}" ;
 member      = field | fn_decl ;          (* a method, followed by a newline; fields and
                                             methods come in any order *)
                (* in a method, `Self` is the struct; a first parameter of type
-                  Self, *Self or *mut Self makes it callable as x.method() *)
+                  Self, *Self or *mut Self makes it callable as x.method().
+                  An extern struct has C layout and C-compatible fields. *)
 struct_type = "struct" "{" { NEWLINE }
               [ member { ( "," | NEWLINE ) { NEWLINE } member } [ "," ] { NEWLINE } ] "}" ;
                (* anonymous struct: only as the value a type function returns *)
@@ -112,7 +121,10 @@ type        = path                     (* i8 i16 i32 i64 isize u8 u16 u32 u64
             | "[" "*" "]" type         (* C pointer (FFI)  [*]T *)
             | "*" [ "mut" ] type       (* pointer          *T, *mut T *)
             | "?" type                 (* optional         ?T   *)
-            | "dyn" path ;             (* interface value  dyn I *)
+            | "dyn" path               (* interface value  dyn I *)
+            | "fn" "(" [ type { "," type } [ "," ] ] ")" [ ret_type ] ;
+                                       (* function         fn(A, B) R; the result
+                                          type is there when a type starts *)
 (* an ident can also name an error set; its values are written Set.Name *)
 
 (* -------------------------------------------------------- statements *)
@@ -152,6 +164,7 @@ cond_expr   = header_expr ;
    std.fs.open(p) calls the function open of module std.fs, and
    std.heap.General.init() calls init of the type std.heap.General.
    Slicing a C pointer [*]T needs both bounds: p[0..n].
+   x.f(args) calls a method, or the function value in the field f.
 
    Precedence, lowest to highest; binary operators are left-associative
    except comparisons, which do not chain (`a < b < c` is an error), and
@@ -185,6 +198,8 @@ unary       = ( "-" | "!" | "~" | "&" [ "mut" ] | "try" ) unary | postfix ;
 postfix     = primary { "." ident
                       | "." ident "(" [ args ] ")"             (* method call; Type.f(...) *)
                       | ".*"                                   (* dereference *)
+                      | "(" [ args ] ")"                       (* call of a function value
+                                                                  that is not a name: f()(x) *)
                       | "[" expr "]"
                       | "[" [ expr ] ".." [ expr ] "]" } ;
 primary     = int_lit | float_lit | string_lit | char_lit
@@ -195,10 +210,11 @@ primary     = int_lit | float_lit | string_lit | char_lit
                                                            (* variant literal, or a struct literal
                                                               mod.Name { ... } of another module *)
             | match_expr
-            | ident "(" [ args ] ")"                       (* call; also F(T) naming a type,
+            | ident "(" [ args ] ")"                       (* call of a function or of a function
+                                                              value; also F(T) naming a type,
                                                               as in F(T).init() *)
-            | builtin "(" [ args ] ")"                     (* @print @println @expect
-                                                              @expectEqual @testAllocator *)
+            | builtin "(" [ args ] ")"                     (* @print @println @expect @expectEqual
+                                                              @testAllocator @sizeOf @zeroed @ptrCast *)
             | ident "{" [ field_init { "," field_init } [ "," ] ] "}"   (* struct literal *)
             | path "(" [ args ] ")" "{" [ field_init { "," field_init } [ "," ] ] "}"
                                                            (* literal of a type function's struct:
@@ -209,8 +225,9 @@ primary     = int_lit | float_lit | string_lit | char_lit
             | "(" expr ")" ;
 args        = arg { "," arg } [ "," ] ;
 arg         = expr
-            | ( "*" | "?" | "dyn" ) type ;   (* a type for a comptime parameter;
-                                                 [N]T and []T also parse as primary *)
+            | ( "*" | "?" | "dyn" | "fn" ) type ;   (* a type for a comptime parameter or a
+                                                        builtin; [N]T, []T and [*]T also parse
+                                                        as primary *)
 field_init  = ident ":" expr ;
 
 match_expr  = "match" header_expr "{" { NEWLINE }

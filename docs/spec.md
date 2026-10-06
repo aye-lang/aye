@@ -92,7 +92,7 @@ panic.
   read-only), and are followed in memory by a NUL byte that `.len` does not
   count. Escapes: `\n \t \r \0 \\ \" \' \xHH`.
 - Builtins start with `@`: `@print`, `@println`, `@expect`, `@expectEqual`,
-  `@testAllocator`.
+  `@testAllocator`, `@sizeOf`, `@zeroed`, `@ptrCast`, `@link`.
 
 **Newlines end statements** (Go's rule). A newline is a statement
 terminator when the last token on the line is an identifier, a literal,
@@ -141,8 +141,8 @@ pub fn main() {
 ## 4. Declarations
 
 Only declarations appear at the top level of a file, in any order: `fn`,
-`extern fn`, `struct`, `enum`, `error`, `interface`, `let`, `var`, `test`
-and `import`. Every declaration starts with its keyword and name, so `fn
+`extern fn`, `struct`, `extern struct`, `enum`, `error`, `interface`, `let`,
+`var`, `test`, `import` and `@link`. Every declaration starts with its keyword and name, so `fn
 name` finds a function's definition. `pub` makes a declaration visible to
 other modules.
 
@@ -176,9 +176,38 @@ pub fn main() {
 - Parameters are `name: Type` and immutable. The return type follows `)`;
   none means the function returns nothing. A function with a return type
   must `return` a value on every path.
-- No overloading, default arguments, variadic functions, closures or
-  function values. A function name is only called: `f(x)`.
+- No overloading, default arguments, variadic Ore functions or closures.
 - Functions may call each other in any order, and recurse.
+- A top-level function that is not generic is a value of type `fn(A, B) R`
+  (`fn(A)` without a result). Store it in a variable, field, array, global
+  or optional (`?fn(A) R`, nullable), pass it, return it and call it:
+  `f(x)`, `s.field(x)` (when `s` has no method of that name), `get()(x)`.
+  Methods and generic functions are not values.
+
+```ore
+struct Button {
+    label: []u8
+    onClick: fn(i64) i64
+}
+
+fn twice(x: i64) i64 {
+    return x * 2
+}
+
+fn apply(f: fn(i64) i64, x: i64) i64 {
+    return f(x)
+}
+
+pub fn main() {
+    let b = Button { label: "ok", onClick: twice }
+    @println(b.onClick(4))
+    var g: ?fn(i64) i64 = null
+    g = twice
+    if g |h| {
+        @println(apply(h, 5))
+    }
+}
+```
 
 ### Constants, globals and type aliases
 
@@ -310,20 +339,75 @@ sets. See section 8.
 
 `interface Name { fn m(self: *Self, ...) T }`: see section 10.
 
-### extern fn (C functions)
+### C functions and types
 
 ```ore
+@link("m")
+
+extern struct Vec2 {
+    x: f64
+    y: f64
+}
+
 extern fn puts(s: [*]u8) i32
+extern fn snprintf(buf: [*]u8, size: usize, format: [*]u8, ...) i32
+extern fn qsort(base: [*]i32, n: usize, size: usize, cmp: fn([*]i32, [*]i32) i32)
+extern fn hypot(x: f64, y: f64) f64
+
+fn byValue(a: [*]i32, b: [*]i32) i32 {
+    return a[0] - b[0]
+}
+
+pub extern fn ore_length(v: *Vec2) f64 {
+    return hypot(v.x, v.y)
+}
 
 pub fn main() {
-    let r = puts("from C".ptr)
+    puts("from C".ptr)
+    var xs = [3]i32{3, 1, 2}
+    qsort(xs[..].ptr, xs.len, @sizeOf(i32), byValue)
+    var buf = @zeroed([32]u8)
+    let v = Vec2 { x: 3.0, y: 4.0 }
+    let n = snprintf(buf[..].ptr, buf.len, "%d %.1f".ptr, xs[0], ore_length(&v))
+    @println(buf[0..n as usize])
 }
 ```
 
-`extern fn name(params) Ret` declares a C function; calls go to the C
-symbol of the same name. Parameter and return types may only be integers,
-floats, `bool` and C pointers `[*]T`. Variadic C functions cannot be
-declared. A string literal's `.ptr` is a NUL-terminated `[*]u8`.
+- `extern fn name(params) Ret` declares a C function; calls go to the C
+  symbol `name`. Ore emits the declaration from this signature (no C
+  headers), so it must match the library's. Modules that declare one C
+  function give it the same signature.
+- C-compatible types, the only ones allowed in an `extern fn`: integers
+  (`i32` is C `int`, `usize` is `size_t`), floats, `bool`, pointers to
+  C-compatible types (`*T`, `*mut T`, `[*]T`), optional pointers (`?*T`,
+  `?[*]T`, `?fn(...)`: C pointers that may be null), `extern struct`s by
+  value, and `fn(A) R` of C-compatible types (a callback). C's `void *` is
+  `?[*]u8`. A slice is passed as `s.ptr` and `s.len`; a string literal's
+  `.ptr` is NUL-terminated.
+- `...` ends the parameters of a variadic C function. The arguments after
+  it must be C-compatible; C promotes them (`f32` to `double`, small
+  integers to `int`), and an untyped integer literal is an `i32`, so an
+  `i64` needs `%lld` and a `usize` `%zu`.
+- `extern struct Name { fields }` has C layout: fields in order, with C
+  alignment and padding. Fields are C-compatible types, or arrays of them.
+  Declare the fields the C header has (a prefix is enough when C owns the
+  value and Ore reads it through a pointer); an `extern struct` with no
+  fields is an opaque C type, used behind pointers.
+- `pub extern fn` with a body exports an Ore function to C under its own
+  name (C-compatible signature). Without `pub`, a body is an error.
+- `@link("name")` at the top level links a C library: the flags of
+  `pkg-config --cflags --libs name` when it knows `name`, else `-lname`;
+  `@link("framework:Cocoa")` on macOS. `ore build`, `run` and `test` link
+  the libraries of every module.
+
+`[*]T` is an unchecked C pointer: `p[i]` reads and writes without a bounds
+check, `p[lo..hi]` (both bounds) gives a `[]mut T`, and it does not track
+read-only data. `?[*]T` compares with `null` and unwraps with `if p |q|`.
+`@ptrCast(T, p)` converts between pointer types (`*T`, `*mut T`, `[*]T`, `?`
+of one), for example `@ptrCast([*]u8, &mut state)` for a C `void *` and
+back; it cannot make a `*T` writable or an optional non-optional.
+`@sizeOf(T)` is a `usize`; `@zeroed(T)` is the all-zero value of a number,
+optional pointer, `extern struct` or array of them.
 
 ## 5. Types
 
@@ -338,7 +422,8 @@ declared. A string literal's `.ptr` is a NUL-terminated `[*]u8`.
 | `[]mut T` | slice whose elements can be assigned |
 | `*T`, `*mut T` | non-null pointer, read-only or writable |
 | `?T` | optional: a `T` or `null` |
-| `[*]T` | unchecked C pointer, for `extern fn` only |
+| `[*]T` | unchecked C pointer (index, slice with both bounds) |
+| `fn(A, B) R` | function value (a C function pointer) |
 | `E!T`, `!T` | error union, only as a function's return type |
 | `dyn I` | pointer to a value implementing interface `I`, plus vtable |
 | struct, enum, error set names | declared types |
@@ -978,6 +1063,7 @@ failure is `{"kind":"assertion"|"panic"|"leak","line":L,"col":C,"message":M}`,
   `bool` or `[]u8` to stdout (buffered C stdio). A `u8` is an integer:
   `@print(s[i])` writes `104`; write one character with `@print(s[i..i + 1])`.
 - `@expect`, `@expectEqual`, `@testAllocator`: section 13.
+- `@sizeOf(T)`, `@zeroed(T)`, `@ptrCast(T, p)`, `@link("lib")`: section 4.
 
 ## 15. std
 
@@ -1133,8 +1219,8 @@ pub fn main() !void {
   `double free ...`.
 - `fast` mode removes the checks: overflow wraps, out-of-bounds access is
   undefined behavior.
-- Struct fields, arrays and slices are laid out by the compiler; there is
-  no `extern struct` yet.
+- Struct fields, arrays and slices are laid out by the compiler; only an
+  `extern struct` promises C layout.
 
 ## 17. Diagnostics
 
@@ -1203,8 +1289,11 @@ end. The edits of one diagnostic are applied together.
 - Pointers are never null; optional pointers are `?*T`. Dereference is
   `p.*` (Zig), not `*p`.
 - `dyn I` is made from `&x`, never from a value; it does not box.
-- No `@import`, no `const` (a top-level `let` is a constant), no closures,
-  no function pointers, no `orelse`, no `defer` with `return` inside.
+- No `@import`, no `const` (a top-level `let` is a constant), no closures
+  (a function value cannot capture locals), no `orelse`, no `defer` with
+  `return` inside.
+- C's `void *` is `?[*]u8`; pass `&mut x` where C wants a pointer, and
+  `@ptrCast` it when C wants a `void *`.
 - Output to stdout is `@print`/`@println` or `std.fs.stdout().write(bytes)`;
   `std.log` writes to stderr.
 - `main` is `pub fn main()` or `pub fn main() !void`; arguments come from

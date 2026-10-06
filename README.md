@@ -15,7 +15,9 @@ builds it with clang. It implements a first slice of the language (see
 ## Build and run
 
 Requirements: Rust (cargo), and `clang` on `PATH`. Developed on macOS arm64
-with Apple clang 17.
+with Apple clang 17. Programs that `@link` a C library find it through
+`pkg-config` when it knows the name; the tests in `tests/ffi` use libcurl and
+SDL2 (`brew install sdl2`) and are skipped when `pkg-config` lacks them.
 
 ```sh
 cargo build --release
@@ -269,6 +271,8 @@ pub fn main() {
 ## Supported subset
 
 - Top level: `fn`, `pub fn`, `extern fn` (C functions), `struct Name { ... }`,
+  `extern struct Name { ... }` (C layout), `pub extern fn` with a body
+  (exported to C), `@link("lib")`,
   `enum Name { A, B { field: T } }` (tagged union, with methods), `error Name { A, B }` and
   `error All = A || B` (error sets), `interface Name { ... }`, `test "name" { }`,
   `import a.b` and `import a.b.Name`, constants `let NAME = value` and globals
@@ -297,7 +301,8 @@ pub fn main() {
   error values `ParseError.Empty`, `try f()`, `f() catch |e| { ... }` and
   `f() catch value`, and exhaustive `match e` on errors, method calls
   `x.m(...)` and `Type.f(...)`, struct literals of a type function's
-  struct `Pair(i64) { ... }`, the empty slice `[]T{}`.
+  struct `Pair(i64) { ... }`, the empty slice `[]T{}`, function values
+  (`let f: fn(i64) i64 = twice`, `f(1)`, `s.callback(x)`).
 - Methods: `fn` or `pub fn` in a struct or enum body, with `Self` and a receiver
   `self: Self`, `self: *Self` or `self: *mut Self`.
 - Interfaces: `interface Name { fn m(self: *Self, ...) T }`, implemented by
@@ -310,9 +315,15 @@ pub fn main() {
   every element set to `value`) and `alloc.free(slice)`.
 - Tests: `test "name" { }`, `@expect(cond)`, `@expectEqual(expected, actual)`,
   `@testAllocator()`.
+- C interop: `extern fn` with C-compatible types (also `extern struct`s by
+  value, pointers to them, function types as callbacks, and `...` for
+  variadic functions such as `snprintf`), `[*]T` indexing and slicing,
+  `?[*]T`, `@ptrCast(T, p)`, `@sizeOf(T)`, `@zeroed(T)`, and `@link("name")`
+  (`pkg-config` flags, `-lname` or `framework:Name`) for `ore build`, `run`
+  and `test`.
 - Types: `i8..i64 u8..u64 isize usize f32 f64 bool`, structs, enums, error
   sets, `[N]T`, `[]T`, `[]mut T` (writable elements), `*T`, `*mut T`, `?T`,
-  `[*]T` (FFI pointer), `dyn I`, `std.mem.Allocator`, `std.heap.General`,
+  `[*]T` (FFI pointer), `fn(A, B) R`, `dyn I`, `std.mem.Allocator`, `std.heap.General`,
   `std.heap.Arena`, instances
   of type functions (`Pool(Node)`), and, as a
   function's return type only, error unions `E!T` and `!T` (inferred set; not
@@ -325,7 +336,7 @@ pub fn main() {
 Not yet supported (reported as errors): `comptime` values other than types
 and compile-time execution beyond type functions, error payloads, error
 unions outside return types, `match` on strings, pointer arithmetic, enums
-as `dyn` values, `extern struct`, `build.ore` and package dependencies,
+as `dyn` values, closures, C unions and bit fields, `build.ore` and package dependencies,
 renaming imports, `ore fmt` and `ore doc`. std is minimal: no `Pool`/`Handle` (written in the
 program, as in `tests/cases/pool.ore`), no growable list, no string
 formatting into memory.
@@ -353,7 +364,9 @@ mode, runs it and compares stdout with `*.out`; when a `*.panic` file exists
 the program must abort with exactly that stderr (debug and safe only). When a
 `*.stderr` file exists, `main` must return an error: exit status 1, and stderr
 equal to the file in debug mode, or to its first line (no trace) in safe and
-fast mode. Every `tests/errors/*.ore` must fail to compile with exactly the
+fast mode. `tests/ffi/*.ore` are run the same way, with `SDL_VIDEODRIVER=dummy`,
+and skipped when `pkg-config` does not know a package of `*.needs`. Every
+`tests/errors/*.ore` must fail to compile with exactly the
 diagnostics in `*.err`, one per line. For every `tests/tests/*.ore`,
 `ore test` must print exactly `*.out` (and `ore test --json` exactly `*.json`,
 if it exists), with exit status 1 when a test failed. For every
