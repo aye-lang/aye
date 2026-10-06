@@ -76,3 +76,114 @@ pass.
     then writes a small CLI in Ore, such as `wc` or a JSON tokenizer, using
     `ore check` feedback alone. Record how many check rounds it took and which
     errors were hardest to fix. Feed the findings back into `design.md`.
+
+# Stage0 milestones, part 2: enough language for the browser
+
+M1 to M5 made Ore usable for small CLIs. M6 to M10 add what the anyknown
+browser (`docs/browser.md`) needs: bit operations for hashing and decoding,
+constants, integer `match` for tokenizers, real C interop for SDL2,
+FreeType and libcurl, and a std with lists, maps and text. The same rules
+apply: acceptance tests first, a milestone is done when they pass, and
+`docs/spec.md` documents every user-visible addition (the spec budget is
+raised to about 30k tokens for this).
+
+## M6: Operators, constants and control flow
+
+- **Language:**
+  - Bitwise `& | ^` (binary), `~` (prefix), shifts `<< >>`, and the
+    compound forms `&= |= ^= <<= >>=`. Integers only, both operands the
+    same type. They bind tighter than comparisons and looser than `+ -`
+    (shifts tighter than `& | ^`); mixing `&`, `|` and `^` without
+    parentheses is a compile error. A shift by the bit width or more
+    panics in debug and safe mode. In an `if`/`while` header and after
+    `catch`, a `|` at the top level starts a capture, so a bitwise or
+    there needs parentheses.
+  - Top-level `let NAME = expr` constants (literals, arithmetic on
+    constants, arrays and struct literals of constants) and top-level
+    `var` globals with constant initializers. `let Name = TypeExpr` is a
+    type alias (`let NodePool = Pool(Node)`).
+  - `match` on integers and chars: literal patterns, several patterns per
+    arm (`'a', 'b' =>`), inclusive ranges (`'a'..='z' =>`), and `_`, which
+    is required unless the arms cover every value.
+  - `while opt |v| { }`.
+  - Methods on enums (`fn` in an enum body, with `Self`).
+  - `==` and `!=` on pointers (identity), `[*]T`, and enums whose
+    variants have no payload.
+  - `for x in slice { }` and `for i, x in slice { }`.
+- **Toolchain:** none beyond diagnostics with codes for every new error.
+- **Acceptance:**
+  - A golden program that computes FNV-1a and CRC-32 of a string and
+    decodes UTF-8 to code points with `match` on byte ranges.
+  - A golden program with a global constant table, a global counter, a
+    type alias and an enum method.
+  - Error tests: mixing `&` and `|` without parentheses; a non-exhaustive
+    integer `match` without `_`.
+
+## M7: C interop for real libraries
+
+- **Language:**
+  - `extern struct Name { ... }` with C layout; fields are C-compatible
+    types (integers, floats, `bool`, `[*]T`, `?[*]T`, arrays, other extern
+    structs, function pointers).
+  - `extern fn` may take and return extern structs by value, `*T`,
+    `*mut T` and `?*T` to them, and `...` (variadic) for functions like
+    `snprintf`.
+  - Function types `fn(A, B) R`: a top-level non-generic function is a
+    value of that type, can be stored and called, and can be passed to C
+    when all its parameter and return types are C-compatible
+    (`pub extern fn` exports one under its own name).
+  - `[*]T`: unchecked indexing `p[i]`, slicing `p[0..n]` to `[]mut T`,
+    comparison with `null` when the type is `?[*]T`, and `@ptrCast(T, p)`
+    between C pointer types. `s.ptr` on any slice.
+  - `@sizeOf(T)` and `@zeroed(T)` (all-zero value of an extern struct or
+    a numeric type).
+  - `@link("name")` at the top level of a module: if `pkg-config` knows
+    `name`, its cflags and libs are used, otherwise `-lname`. Also
+    `@link("framework:Cocoa")` on macOS.
+- **Toolchain:** `ore build` and `ore run` pass the collected link flags
+  to clang; `ore build -o PATH`.
+- **Acceptance:**
+  - A golden program that calls `qsort` with an Ore comparator and
+    `snprintf` with a float.
+  - A program (not run in CI if SDL2 is missing) that opens an SDL2
+    window, fills a pixel buffer from Ore and exits after one frame.
+  - A golden program that fetches `file://` through libcurl into a buffer
+    with an Ore write callback.
+
+## M8: std for real programs
+
+- **std:**
+  - `std.list.List(T)`: `init(alloc)`, `deinit`, `append`, `pop`,
+    `insert`, `orderedRemove`, `swapRemove`, `clear`, `items` (a
+    `[]mut T`), `len`.
+  - `std.map`: a hash map with `[]u8` keys and one with integer keys
+    (`StrMap(V)`, `IntMap(K, V)`): `put`, `get`, `getPtr`, `remove`,
+    `contains`, iteration.
+  - `std.text`: `Builder` (append bytes, chars, ints, floats; `toOwned`),
+    `eql`, `startsWith`, `endsWith`, `indexOf`, `split` iterator, `trim`,
+    `toLower`, `parseInt`, `parseFloat`, `eqlIgnoreCase`, and UTF-8
+    `decode`/`encode`.
+  - `std.math`: `pi`, `sqrt`, `floor`, `ceil`, `round`, `pow`, `min`,
+    `max`, `abs`, `clamp`.
+  - `std.fs`: `create`, write to files, `exists`, `readFile(alloc, path)`.
+  - `std.pool`: `Pool(T)` and `Handle(T)` from design.md Example 3.
+  - `std.time`: monotonic milliseconds and `sleep`.
+  - `Allocator.resize`; `std.mem.copy`, `set`, `indexOf`.
+  - `std.testing` with the debug allocator.
+- **Acceptance:** golden programs for each module, and a word-frequency
+  CLI (read a file, split, count in a `StrMap`, sort, print the top 10).
+
+## M9: Formatter and docs
+
+- **Toolchain:** `ore fmt [--check] PATH` (idempotent, keeps comments) and
+  `ore doc --signatures PATH` (every `pub` declaration with its doc
+  comment, for AI context).
+- **Acceptance:** `ore fmt` is idempotent on every `.ore` file in the repo
+  and the golden tests still pass after formatting all of them.
+
+## M10: Threads
+
+- **std:** `std.thread` (`spawn`, `join`), `std.sync` (`Mutex`,
+  `Channel(T)`, `Atomic(T)`).
+- **Acceptance:** a golden program that fans work out to four threads
+  through a `Channel` and joins them; CI runs it under ThreadSanitizer.
