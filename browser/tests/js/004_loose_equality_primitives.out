@@ -1,0 +1,10 @@
+null: T T . . . . . .
+undefined: T T . . . . . .
+0: . . T T T T . .
+'': . . T T . T . .
+'0': . . T . T T . .
+false: . . T T T T . .
+'false': . . . . . . T .
+NaN: . . . . . . . .
+true true false true true true
+false false false true

@@ -1,0 +1,10 @@
+const obj = { a: 1, b: 'secret', c: { a: 2, d: [1, 2] } };
+console.log(JSON.stringify(obj, ['a', 'c']));
+console.log(JSON.stringify(obj, (k, v) => (k === 'b' ? undefined : v)));
+console.log(JSON.stringify(obj, (k, v) => (typeof v === 'number' ? v * 100 : v)));
+const keys = [];
+JSON.stringify({ x: { y: [1] } }, (k, v) => { keys.push(k === '' ? '(root)' : k); return v; });
+console.log(keys);
+console.log(JSON.stringify([1, 2, 3], (k, v) => (v === 2 ? undefined : v)));
+console.log(JSON.stringify({ a: 1, b: 2 }, ['b', 'a', 'zz'], 1));
+console.log(JSON.stringify({ when: 5 }, function (k, v) { return k === 'when' ? `${v}!` : v; }));

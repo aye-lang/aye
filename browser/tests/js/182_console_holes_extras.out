@@ -1,0 +1,4 @@
+[ 1, <1 empty item>, 3 ] [ <3 empty items> ] [ <3 empty items> ]
+[ 1, 2, label: 'extra' ]
+[ undefined, <1 empty item>, null ]
+[ <4 empty items>, 'x' ] 5

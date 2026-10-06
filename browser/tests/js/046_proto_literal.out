@@ -1,0 +1,4 @@
+hello from base base [ 'own' ] true
+null false
+hello from base 1 true
+[ '__proto__' ] true

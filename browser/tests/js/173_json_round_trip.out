@@ -1,0 +1,5 @@
+{"s":"text \"quoted\" é 😀","n":1.5,"neg":-3,"big":1e+21,"small":1e-7,"arr":[true,false,null],"nested":{"deep":{"deeper":[1,{"x":"y"}]}}}
+true y
+true
+{ d: '1970-01-01T00:00:00.000Z', nan: null }
+{"a":"\u0000\u001f"}

@@ -1,0 +1,8 @@
+{ a: { b: { c: [Object] } } }
+[ [ [ [Array] ] ] ] [ [ [] ] ] [ {} ]
+{ list: [ 1, 2, { deep: [Array] } ] }
+{ empty: {}, arr: [], nested: { e: [] } }
+{
+  name: 'root',
+  children: [ { name: 'a', children: [] }, { name: 'b', children: [Array] } ]
+}

@@ -1,0 +1,10 @@
+0      == []
+1      == '1' true [1] obj1
+'1'    == 1 true [1] obj1
+true   == 1 '1' [1] obj1
+[]     == 0
+[1]    == 1 '1' true
+null   == undef
+undef  == null
+'x'    == -
+obj1   == 1 '1' true

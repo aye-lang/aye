@@ -1,0 +1,10 @@
+console.log((25).toString().length, Number('3') + Number('4'), (3).valueOf());
+console.log(Number.parseFloat('1.5') * 2, +(0.1 + 0.2).toFixed(2), Math.round(2.345 * 100) / 100);
+const n = 1234567.891;
+const withCommas = n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+console.log(withCommas);
+console.log((5).toString(2).padStart(8, '0'), parseInt('00000101', 2));
+console.log(typeof NaN, NaN + 1, Infinity - Infinity, Infinity * 0, -Infinity + Infinity, Infinity / Infinity);
+console.log(0 / 0, 1 / Infinity, -1 / Infinity, Infinity + 1);
+const n2 = new Number(42);
+console.log(typeof n2, n2 + 1, n2 == 42, n2 === 42);

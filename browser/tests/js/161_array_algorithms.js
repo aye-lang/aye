@@ -1,0 +1,14 @@
+const uniq = (a) => [...new Set(a)];
+console.log(uniq([3, 1, 3, 2, 1]));
+const chunk = (a, n) => Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
+console.log(chunk([1, 2, 3, 4, 5, 6, 7], 3));
+const zip = (a, b) => a.map((x, i) => [x, b[i]]);
+console.log(zip([1, 2, 3], ['a', 'b', 'c']));
+const range = (s, e, st = 1) => Array.from({ length: Math.ceil((e - s) / st) }, (_, i) => s + i * st);
+console.log(range(0, 5), range(1, 10, 3), range(5, 0, -2));
+const groupBy = (a, f) => a.reduce((g, x) => ((g[f(x)] ||= []).push(x), g), {});
+console.log(groupBy(['one', 'two', 'three', 'four'], (w) => w.length));
+const partition = (a, p) => [a.filter(p), a.filter((x) => !p(x))];
+console.log(partition([1, 2, 3, 4, 5], (x) => x % 2));
+const bsearch = (a, t) => { let lo = 0, hi = a.length - 1; while (lo <= hi) { const m = (lo + hi) >> 1; if (a[m] === t) return m; if (a[m] < t) lo = m + 1; else hi = m - 1; } return -1; };
+console.log(bsearch([1, 3, 5, 7, 9, 11], 7), bsearch([1, 3, 5], 4));

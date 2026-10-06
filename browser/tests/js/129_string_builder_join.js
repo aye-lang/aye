@@ -1,0 +1,10 @@
+const parts = [];
+for (let i = 0; i < 10; i++) parts.push(i % 3 === 0 ? 'fizz' : String(i));
+console.log(parts.join(''), parts.join(', '));
+let html = '<ul>';
+for (const li of ['a', 'b']) html += `<li>${li}</li>`;
+html += '</ul>';
+console.log(html);
+console.log([1, 2, 3].join(' + ') + ' = ' + 6);
+console.log(Array(4).join('ab'), [, , ,].join('-'));
+console.log([[1, 2], [3]].join(';'), [{}].join());

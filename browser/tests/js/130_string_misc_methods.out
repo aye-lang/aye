@@ -1,0 +1,8 @@
+c [ 'a', 'b', 'c', 'd' ]
+true true false
+37 25
+d null
+AbC
+[ 3, 4, 5 ]
+[ '', 'a', 'b', '' ] [ 'a', 'b', 'c' ]
+true true
