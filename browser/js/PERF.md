@@ -197,3 +197,22 @@ and did not reliably improve the suite. Do not count their transient
 numbers or change workload sizes to meet the target. Preserve both fast
 and debug conformance, GC stress, and DOM/host coverage during further
 work.
+
+## Final validation
+
+- `cargo build --release` and `browser/build.sh`: passed (fast binary).
+- `target/release/ore check browser`: passed.
+- All 228 conformance scripts match stdout/stderr/exit-status goldens in
+  fast mode, and all 228 pass with `ANYKNOWN_JS_GC=stress`.
+- All eight benchmark checksums agree with Node v22.22.2.
+- `cargo test --test browser`: 34 passed (including debug JS conformance,
+  DOM GC stress, browser/Ore unit tests, and host/UI fixtures).
+- Full `cargo test`: passed — 31 unit tests, 34 browser tests, 4 formatter
+  tests, 242 golden cases, and 5 spec tests; no failures. The existing
+  ThreadSanitizer CLI runtime case was skipped because clang's TSan
+  cannot run on this host.
+
+No compiler, std, DOM binding, or `docs/browser.md` edits were needed.
+The encountered boolean-to-number cast limitation and workaround are
+recorded as entry 48 at the end of the open list in
+`browser/COMPILER_GAPS.md`.
