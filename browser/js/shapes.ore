@@ -1,0 +1,229 @@
+// js/shapes: immutable, shared own-property layouts. A transition is
+// (parent shape, atom) -> shape; its slot is the object's insertion-order
+// position in props. Descriptors stay in the slots, so changing flags or
+// an accessor never needs cache invalidation: hits read them again.
+// Deletion switches an object to dictionary mode (NONE). Shapes and
+// caches hold no JS values and are not GC roots.
+
+import std.list.List
+import std.map.IntMap
+import std.mem.AllocError
+
+struct Shape {
+    parent: u32
+    key: u32
+    slot: u32
+    // Large layouts share this index instead of building one per object.
+    index: ?*mut IntMap(u32, u32)
+}
+
+// Bound persistent metadata even for scripts with unbounded dynamic keys.
+let MAX_SHAPES: usize = 16384
+// Avoid quadratic shared-index metadata for one ever-growing object.
+let MAX_SHAPE_PROPS: u32 = 128
+
+fn shapeTransition(h: *mut Heap, parent: u32, key: u32, slot: u32) AllocError!u32 {
+    if slot >= MAX_SHAPE_PROPS {
+        return NONE
+    }
+    let transition = (parent as u64) << 32 | key as u64
+    if h.transitions.get(transition) |s| {
+        return s
+    }
+    if h.shapes.len() >= MAX_SHAPES {
+        return NONE
+    }
+    var index: ?*mut IntMap(u32, u32) = null
+    if slot + 1 > INDEX_AT {
+        let ix = try h.alloc.create(IntMap(u32, u32).init(h.alloc))
+        var cur = parent
+        while cur != 0 {
+            let s = h.shapes.items()[cur]
+            ix.put(s.key, s.slot) catch |e| {
+                ix.deinit()
+                h.alloc.destroy(ix)
+                return e
+            }
+            cur = s.parent
+        }
+        ix.put(key, slot) catch |e| {
+            ix.deinit()
+            h.alloc.destroy(ix)
+            return e
+        }
+        index = ix
+    }
+    let id = h.shapes.len() as u32
+    h.shapes.append(Shape { parent: parent, key: key, slot: slot, index: index }) catch |e| {
+        if index |ix| {
+            ix.deinit()
+            h.alloc.destroy(ix)
+        }
+        return e
+    }
+    try h.transitions.put(transition, id)
+    return id
+}
+
+// One entry per AST node. A hit is either an own slot or a slot in the
+// immediate prototype (including a class's shared methods). The latter
+// checks the live link and both layouts, not a cached object/value.
+struct PropCache {
+    shape: u32
+    proto_shape: u32
+    slot: u32
+}
+
+fn emptyPropCache() PropCache {
+    return PropCache { shape: NONE, proto_shape: NONE, slot: 0 }
+}
+
+// Static data-only literals reserve their final slot array once and fill
+// it directly. Duplicate keys, methods/accessors, spread, computed keys
+// and __proto__ retain the general builder. slot == 1 means examined.
+fn literalShape(it: *mut Interp, id: u32, list: u32, n: u32) AllocError!u32 {
+    let cache = it.prop_caches.items()[id]
+    if cache.slot == 1 {
+        return cache.shape
+    }
+    it.prop_caches.items()[id].slot = 1
+    for k in 0..n {
+        match it.ast.node(it.ast.item(list, k)) {
+            .Prop { kind, key, computed, .. } => {
+                if kind != PROP_INIT || computed || key == A_PROTO {
+                    return NONE
+                }
+                for j in 0..k {
+                    match it.ast.node(it.ast.item(list, j)) {
+                        .Prop { key: other, .. } => {
+                            if key == other {
+                                return NONE
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {
+                return NONE
+            }
+        }
+    }
+    var shape: u32 = 0
+    for k in 0..n {
+        match it.ast.node(it.ast.item(list, k)) {
+            .Prop { key, .. } => {
+                shape = try shapeTransition(&mut it.heap, shape, key, k)
+                if shape == NONE {
+                    return NONE
+                }
+            }
+            _ => {}
+        }
+    }
+    it.prop_caches.items()[id].shape = shape
+    return shape
+}
+
+// Only ordinary own-property semantics: arrays' length/indices, string
+// wrappers, proxies and host hooks must go through getProp/setProp.
+fn cacheable(it: *Interp, o: u32, key: u32) bool {
+    let ob = it.heap.obj(o)
+    if ob.shape == NONE || ob.class == Class.Proxy || ob.class == Class.Host || ob.class == Class.String {
+        return false
+    }
+    if ob.class == Class.Array || ob.class == Class.Arguments {
+        return key != A_LENGTH && it.heap.atoms.indexOf(key) == NONE
+    }
+    return true
+}
+
+// Returns the holder of a hit, else NONE. Shape ids are never reused;
+// dictionary layouts are never cached. Prototype values are loaded from
+// the current chain, so collection/reuse or replacement cannot stale them.
+fn cacheHolder(it: *Interp, o: u32, c: PropCache, key: u32) u32 {
+    if c.shape == NONE || it.heap.obj(o).shape != c.shape {
+        return NONE
+    }
+    if c.proto_shape == NONE {
+        return o
+    }
+    let p = it.heap.obj(o).proto
+    if p != NONE && it.heap.obj(p).shape == c.proto_shape && cacheable(it, p, key) {
+        return p
+    }
+    return NONE
+}
+
+fn fillPropCache(it: *mut Interp, id: u32, o: u32, key: u32) {
+    if it.heap.findProp(o, key) |slot| {
+        it.prop_caches.items()[id] = PropCache { shape: it.heap.obj(o).shape, proto_shape: NONE, slot: slot }
+        return
+    }
+    let p = it.heap.obj(o).proto
+    if p != NONE && cacheable(it, p, key) {
+        if it.heap.findProp(p, key) |slot| {
+            it.prop_caches.items()[id] = PropCache { shape: it.heap.obj(o).shape, proto_shape: it.heap.obj(p).shape, slot: slot }
+        }
+    }
+}
+
+fn getCachedProp(it: *mut Interp, id: u32, v: Value, key: u32) JsError!Value {
+    let o = objectOf(v)
+    if o != NONE && cacheable(it, o, key) {
+        var holder = cacheHolder(it, o, it.prop_caches.items()[id], key)
+        if holder == NONE {
+            fillPropCache(it, id, o, key)
+            holder = cacheHolder(it, o, it.prop_caches.items()[id], key)
+        }
+        if holder != NONE {
+            let p = it.heap.obj(holder).props[it.prop_caches.items()[id].slot]
+            if (p.flags & F_ACCESSOR) == 0 {
+                if key == A_PROTOTYPE && it.heap.obj(holder).class == Class.Function {
+                    match p.value {
+                        .Empty => {
+                            return it.materializePrototype(holder, it.prop_caches.items()[id].slot)
+                        }
+                        _ => {}
+                    }
+                }
+                return p.value
+            }
+            if isNullish(p.value) {
+                return Value.Undefined
+            }
+            return it.call0(p.value, v)
+        }
+    }
+    return it.getProp(v, key)
+}
+
+fn setCachedProp(it: *mut Interp, id: u32, v: Value, key: u32, value: Value) JsError!void {
+    let o = objectOf(v)
+    if o != NONE && cacheable(it, o, key) {
+        var holder = cacheHolder(it, o, it.prop_caches.items()[id], key)
+        if holder == NONE {
+            fillPropCache(it, id, o, key)
+            holder = cacheHolder(it, o, it.prop_caches.items()[id], key)
+        }
+        if holder == o {
+            let ob = it.heap.obj(o)
+            let slot = it.prop_caches.items()[id].slot
+            let p = ob.props[slot]
+            if ob.frozen {
+                return
+            }
+            if (p.flags & F_ACCESSOR) == 0 {
+                if (p.flags & F_WRITE) != 0 {
+                    ob.props[slot].value = value
+                }
+                return
+            }
+            if !isNullish(p.setter) {
+                try it.call1(p.setter, v, value)
+            }
+            return
+        }
+    }
+    return it.setProp(v, key, value)
+}

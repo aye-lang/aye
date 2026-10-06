@@ -13,6 +13,43 @@ fn installJson(it: *mut Interp) JsError!void {
 
 // ---- parse
 
+// At most 15 decimal digits and no exponent: both the numerator and
+// power-of-ten denominator are exact doubles. One division gives the
+// correctly rounded result, including -0, without libc's general parser.
+fn smallJsonNumber(s: []u8) ?f64 {
+    if s.len > 17 {
+        return null
+    }
+    var whole: u64 = 0
+    var scale: u64 = 1
+    var fraction = false
+    var neg = false
+    var digits: u32 = 0
+    for i, c in s {
+        if i == 0 && c == '-' {
+            neg = true
+        } else if c == '.' {
+            fraction = true
+        } else if c >= '0' && c <= '9' {
+            digits += 1
+            if digits > 15 {
+                return null
+            }
+            whole = whole * 10 + (c - '0') as u64
+            if fraction {
+                scale *= 10
+            }
+        } else {
+            return null
+        }
+    }
+    var v = whole as f64 / scale as f64
+    if neg {
+        v = -v
+    }
+    return v
+}
+
 struct JsonParser {
     it: *mut Interp
     s: []u8
@@ -126,6 +163,9 @@ struct JsonParser {
                 return self.fail()
             }
         }
+        if smallJsonNumber(self.s[start..self.pos]) |v| {
+            return numVal(v)
+        }
         return numVal(strtodCopy(self.s[start..self.pos]))
     }
 
@@ -207,7 +247,29 @@ struct JsonParser {
         return v
     }
 
+    // A no-escape string can use its source bytes directly; on failure
+    // leave pos unchanged for the escape decoder and its diagnostics.
+    fn plainString(self: *mut Self) ?[]u8 {
+        let start = self.pos + 1
+        var i = start
+        while i < self.s.len {
+            let c = self.s[i]
+            if c == '"' {
+                self.pos = i + 1
+                return self.s[start..i]
+            }
+            if c == '\\' || c < 0x20 {
+                return null
+            }
+            i += 1
+        }
+        return null
+    }
+
     fn string(self: *mut Self) JsError!Value {
+        if self.plainString() |bytes| {
+            return self.it.newString(bytes)
+        }
         let b = try self.it.builder()
         defer self.it.release(b)
         if !try self.stringBytes(b) {
@@ -258,12 +320,17 @@ struct JsonParser {
             if self.pos >= self.s.len || self.s[self.pos] != '"' {
                 return self.fail()
             }
-            let kb = try it.builder()
-            defer it.release(kb)
-            if !try self.stringBytes(kb) {
-                return self.fail()
+            var key: u32 = 0
+            if self.plainString() |bytes| {
+                key = try it.intern(bytes)
+            } else {
+                let kb = try it.builder()
+                defer it.release(kb)
+                if !try self.stringBytes(kb) {
+                    return self.fail()
+                }
+                key = try it.intern(kb.bytes())
             }
-            let key = try it.intern(kb.bytes())
             self.ws()
             if self.pos >= self.s.len || self.s[self.pos] != ':' {
                 return self.fail()
@@ -353,6 +420,22 @@ struct Stringifier {
         try b.appendByte('"')
         var i: usize = 0
         while i < s.len {
+            // Copy ordinary spans in bulk, rather than growing/checking
+            // the builder for each byte. Surrogate escapes stay below.
+            let start = i
+            while i < s.len {
+                let c = s[i]
+                if c < 0x20 || c == '"' || c == '\\' || (c == 0xED && i + 2 < s.len && s[i + 1] >= 0xA0) {
+                    break
+                }
+                i += 1
+            }
+            if i > start {
+                try b.append(s[start..i])
+            }
+            if i == s.len {
+                break
+            }
             let c = s[i]
             if c == '"' {
                 try b.append("\\\"")
