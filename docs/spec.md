@@ -131,7 +131,7 @@ pub fn main() {
 ```
 
 - Builtins start with `@`: `@print`, `@println`, `@expect`, `@expectEqual`,
-  `@testAllocator`, `@sizeOf`, `@zeroed`, `@ptrCast`, `@link`,
+  `@testAllocator`, `@sizeOf`, `@zeroed`, `@ptrCast`, `@downcast`, `@link`,
   `@linkOptional`, `@hasLink`, `@atomicLoad`, `@atomicStore`, `@atomicAdd`,
   `@atomicSub`, `@atomicCas`, `@hash`, `@setSafety`, `@splat`,
   `@reduceAdd`, `@reduceMin`, `@reduceMax`, `@all`, `@any`, `@select`.
@@ -1186,6 +1186,13 @@ pub fn main() {
   the `dyn` to be made from `&mut x`.
 - `dyn I` is made only from a pointer, `&x` or `&mut x`, where a `dyn I` is
   expected. It does not allocate. Calls go through a vtable.
+- `@downcast(*S, d)` turns the `dyn I` value `d` back into a pointer to its
+  struct: a `?*S` that is `null` when `d` was made from another type (it
+  compares `d`'s vtable with `S`'s for `I`). `S` must implement `I`, and
+  `@downcast(*mut S, d)` needs one of `S`'s methods for `I` to take `self:
+  *mut Self`, so that the `dyn` was made from `&mut x` (E0110). A library
+  that keeps only a `dyn Host` lets the host get its own struct back:
+  `@downcast(*mut Page, it.host.?)`.
 
 ## 11. Generics
 
@@ -1398,6 +1405,7 @@ failure is `{"kind":"assertion"|"panic"|"leak","line":L,"col":C,"message":M}`,
 - `@sizeOf(T)`, `@zeroed(T)`, `@ptrCast(T, p)`, `@link("lib")`,
   `@linkOptional("lib")`, `@hasLink("lib")`: section 4.
 - `@hash(x)`: section 11 (`where T: Hash`).
+- `@downcast(*S, d)`: section 10.
 - `@splat`, `@reduceAdd`, `@reduceMin`, `@reduceMax`, `@all`, `@any`,
   `@select`: section 5 (simd).
 - `@setSafety(false)`, `@setSafety(true)`: section 16.

@@ -177,6 +177,9 @@ pub enum Rvalue {
     DynCall { recv: Operand, method: String, args: Vec<Operand> },
     /// The pointer `ptr` to struct `strukt` as a `dyn iface`.
     ToDyn { ptr: Operand, iface: String, strukt: String },
+    /// The data pointer of the `dyn iface` value `val` as the optional
+    /// pointer type `ty` when its vtable is `strukt`'s, else `null`.
+    Downcast { val: Operand, iface: String, strukt: String, ty: Type },
     /// The pointer `ptr` to struct `strukt` as an `Allocator`.
     ToAllocator { ptr: Operand, strukt: String },
     /// Allocate a `ty` with the allocator `alloc`: a `?*mut ty`, null when
@@ -402,6 +405,7 @@ fn has_call(e: &TExpr) -> bool {
         | TExprKind::PtrCast(expr)
         | TExprKind::IsVariant { expr, .. }
         | TExprKind::ToDyn { ptr: expr, .. }
+        | TExprKind::Downcast { value: expr, .. }
         | TExprKind::ToAllocator { ptr: expr, .. } => has_call(expr),
         TExprKind::Slice { base, lo, hi } => {
             has_call(base) || lo.as_deref().is_some_and(has_call) || hi.as_deref().is_some_and(has_call)
@@ -1208,6 +1212,11 @@ impl<'a> Lower<'a> {
             TExprKind::SizeOf(t) => Rvalue::SizeOf(t.clone()),
             TExprKind::Zeroed => Rvalue::Zeroed(e.ty.clone()),
             TExprKind::PtrCast(x) => Rvalue::PtrCast { val: self.operand(x, out), ty: e.ty.clone() },
+            TExprKind::Downcast { value, iface, strukt } => {
+                self.refs.push(Ref::Vtable(iface.clone(), strukt.clone()));
+                let val = self.operand(value, out);
+                Rvalue::Downcast { val, iface: iface.clone(), strukt: strukt.clone(), ty: e.ty.clone() }
+            }
             TExprKind::DynCall { recv, method, args } => {
                 let recv = self.operand(recv, out);
                 let args = args.iter().map(|a| self.operand(a, out)).collect();

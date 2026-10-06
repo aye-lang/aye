@@ -556,6 +556,9 @@ pub enum TExprKind {
     DynCall { recv: Box<TExpr>, method: String, args: Vec<TExpr> },
     /// A `*T` or `*mut T` (T is the struct `strukt`) converted to `dyn I`.
     ToDyn { ptr: Box<TExpr>, strukt: String },
+    /// `@downcast(*S, d)`: the data pointer of the `dyn iface` value `d` when
+    /// it was made from a `strukt`, else `null`.
+    Downcast { value: Box<TExpr>, iface: String, strukt: String },
     /// A `*mut S` converted to `Allocator`: calls go to `S.alloc` and
     /// `S.free`.
     ToAllocator { ptr: Box<TExpr>, strukt: String },
@@ -3645,6 +3648,7 @@ impl<'a> Checker<'a> {
             ExprKind::Builtin { name, args } if matches!(name.as_str(), "sizeOf" | "zeroed" | "ptrCast" | "link" | "linkOptional") => {
                 return self.c_builtin(name, args, span);
             }
+            ExprKind::Builtin { name, args } if name == "downcast" => return self.downcast(args, span),
             ExprKind::Builtin { name, args } => {
                 let newline = match name.as_str() {
                     "print" => false,
@@ -4634,6 +4638,55 @@ impl<'a> Checker<'a> {
             Type::Ptr(..) | Type::CPtr(_) | Type::Fn(..) => Some(format!("it cannot be null (use `?{t}`)")),
             _ => Some("it makes numbers, `bool`, optional pointers, `extern struct`s and arrays of them".to_string()),
         }
+    }
+
+    /// `@downcast(*S, d)` or `@downcast(*mut S, d)`: the `dyn I` value `d`
+    /// as a `?*S` (`?*mut S`), `null` unless `d` was made from a pointer to
+    /// an `S`. `*mut S` needs one of `S`'s methods for `I` to take `self:
+    /// *mut Self`, which proves the `dyn` was made from `&mut`.
+    fn downcast(&mut self, args: &[ast::Expr], span: Span) -> Result<TExpr> {
+        let [to, arg] = args else {
+            return err(E0022, span, "`@downcast` takes two arguments: the pointer type and the `dyn` value");
+        };
+        let local = matches!(&to.kind, ExprKind::Ident(n) if self.lookup(n).is_some());
+        let ty = match expr_type(to) {
+            Some(t) if !local => self.resolve_type(&t)?,
+            _ => return err(E0110, to.span, "the first argument of `@downcast` must be a pointer type, such as `*mut S`"),
+        };
+        let (s, mutable) = match &ty {
+            Type::Ptr(inner, m) if matches!(&**inner, Type::Struct(_)) => {
+                let Type::Struct(s) = &**inner else { unreachable!() };
+                (s.clone(), *m)
+            }
+            _ => return err(E0110, to.span, format!("`@downcast` makes a pointer to a struct (`*S` or `*mut S`), not `{ty}`")),
+        };
+        let d = self.value(arg, None)?;
+        let iface = match &d.ty {
+            Type::Dyn(i) => i.clone(),
+            Type::Optional(inner) if matches!(&**inner, Type::Dyn(_)) => {
+                return err(E0110, d.span, format!(
+                    "`@downcast` takes a `dyn` value, found `{}` (unwrap it first: `opt.?`, or `if opt |d| {{ ... }}`)",
+                    d.ty
+                ));
+            }
+            t => return err(E0110, d.span, format!("`@downcast` takes a `dyn` value, found `{t}`")),
+        };
+        if let Some(why) = self.why_not(&s, &iface) {
+            return err(E0110, span, format!("`@downcast({ty}, ...)` of a `dyn {iface}` is always `null`: `{s}` does not implement `{iface}` ({why})"));
+        }
+        if mutable
+            && !self.ifaces[&iface].methods.iter().any(|m| self.recvs.get(&format!("{s}.{}", m.name)) == Some(&Recv::Ptr(true)))
+        {
+            return err(E0110, span, format!(
+                "`@downcast({ty}, ...)` of a `dyn {iface}`: the `dyn` may have been made from a read-only `&x`, since none of `{s}`'s `{iface}` methods takes `self: *mut Self` (downcast to `*{s}`)"
+            ));
+        }
+        let pair = (iface.clone(), s.clone());
+        if !self.vtables.contains(&pair) {
+            self.vtables.push(pair);
+        }
+        let ty = Type::Optional(Box::new(ty));
+        Ok(TExpr { kind: TExprKind::Downcast { value: Box::new(d), iface, strukt: s }, ty, span })
     }
 
     /// `@ptrCast(T, p)`: the pointer `p` (`*T`, `*mut T`, `[*]T` or `?` of

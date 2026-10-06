@@ -2359,6 +2359,47 @@ E0109 = 109 {
 }
 "#,
 }
+E0110 = 110 {
+    "invalid `@downcast`",
+    "`@downcast(*S, d)` turns the `dyn I` value `d` back into a pointer to its struct: a `?*S`, or `null` when `d` was made from another type. The first argument is `*S` or `*mut S` for a struct `S` that implements `I` (otherwise the result would always be `null`); the second is a `dyn`, not a `?dyn` (unwrap it first). `*mut S` needs one of `S`'s methods for `I` to take `self: *mut Self`: only then was the `dyn` surely made from `&mut x`, since a `dyn` of read-only methods can point to a `let` value. Use it where a library keeps only the `dyn` of the code that uses it (a host, a callback's context) and that code needs its own struct back.",
+    r#"interface Host {
+    fn finalize(self: *mut Self)
+}
+
+struct Page {
+    title: []u8
+}
+
+pub fn main() {
+    var p = Page { title: "home" }
+}
+
+fn pageOf(h: dyn Host) ?*mut Page {
+    return @downcast(*mut Page, h)
+}
+"#,
+    r#"interface Host {
+    fn finalize(self: *mut Self)
+}
+
+struct Page {
+    title: []u8
+
+    fn finalize(self: *mut Self) {}
+}
+
+pub fn main() {
+    var p = Page { title: "home" }
+    let h: dyn Host = &mut p
+    let back = pageOf(h) orelse return
+    @println(back.title)
+}
+
+fn pageOf(h: dyn Host) ?*mut Page {
+    return @downcast(*mut Page, h)
+}
+"#,
+}
 }
 
 #[cfg(test)]

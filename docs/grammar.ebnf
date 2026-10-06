@@ -243,6 +243,7 @@ primary     = int_lit | float_lit | string_lit | char_lit
                                                               as in F(T).init() *)
             | builtin "(" [ args ] ")"                     (* @print @println @expect @expectEqual
                                                               @testAllocator @sizeOf @zeroed @ptrCast
+                                                              @downcast
                                                               @hash @splat @reduceAdd @reduceMin
                                                               @reduceMax @all @any @select;
                                                               @setSafety(true|false) only as the
