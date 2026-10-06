@@ -577,7 +577,7 @@ pub let CANVAS_PRELUDE =
     \\    return Path2D.prototype[k].apply(this._path, arguments);
     \\  };
     \\}
-    \\const enums = {globalCompositeOperation: ['source-over', 'copy', 'destination-out', 'source-in', 'lighter', 'multiply'], lineCap: ['butt', 'round', 'square'], lineJoin: ['miter', 'round', 'bevel'], textAlign: ['start', 'end', 'left', 'right', 'center'], textBaseline: ['top', 'hanging', 'middle', 'alphabetic', 'ideographic', 'bottom'], direction: ['ltr', 'rtl', 'inherit'], imageSmoothingQuality: ['low', 'medium', 'high']};
+    \\const enums = {globalCompositeOperation: ['source-over', 'source-in', 'source-out', 'source-atop', 'destination-over', 'destination-in', 'destination-out', 'destination-atop', 'copy', 'xor', 'lighter', 'multiply'], lineCap: ['butt', 'round', 'square'], lineJoin: ['miter', 'round', 'bevel'], textAlign: ['start', 'end', 'left', 'right', 'center'], textBaseline: ['top', 'hanging', 'middle', 'alphabetic', 'ideographic', 'bottom'], direction: ['ltr', 'rtl', 'inherit'], imageSmoothingQuality: ['low', 'medium', 'high']};
     \\for (const key of Object.keys(defaults)) {
     \\  Object.defineProperty(CanvasRenderingContext2D.prototype, key, {
     \\    configurable: true,

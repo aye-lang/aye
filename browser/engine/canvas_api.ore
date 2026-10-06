@@ -307,6 +307,22 @@ fn canvasComposite(dst: []mut u8, src: []u8, clip: ?[]u8, alpha: f64, mode: []u8
             fd = 0.0
         } else if text.eql(mode, "lighter") {
             fd = 1.0
+        } else if text.eql(mode, "source-atop") {
+            fs = da
+        } else if text.eql(mode, "source-out") {
+            fs = 1.0 - da
+            fd = 0.0
+        } else if text.eql(mode, "destination-over") {
+            fs = 1.0 - da
+            fd = 1.0
+        } else if text.eql(mode, "destination-in") {
+            fs = 0.0
+            fd = sa
+        } else if text.eql(mode, "destination-atop") {
+            fs = 1.0 - da
+            fd = sa
+        } else if text.eql(mode, "xor") {
+            fs = 1.0 - da
         }
         let oa = math.min(1.0, sa * fs + da * fd)
         let outa = oa * cover + da * (1.0 - cover)

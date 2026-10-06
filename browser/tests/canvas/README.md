@@ -9,7 +9,7 @@ fallback and glyph coverage. There is no separate canvas rasterizer.
 
 ## Offline coverage
 
-- `jsdom/canvas_api.html` runs `api.js`: 53 explicit assertions on context
+- `jsdom/canvas_api.html` runs `api.js`: 58 explicit assertions on context
   identity, resets, validated state, compositing pixels, transforms, dash
   state, Path2D, winding rules and hit tests, clipping, ImageData, text
   metrics, image/canvas/ImageBitmap sources, patterns, gradients, PNG
@@ -43,9 +43,9 @@ having no drawable backing store. Pixel reads are transparent there;
 PNG serialization returns `data:,`. Width/height writes reset pixels,
 paths and drawing state, including writes of the existing value.
 
-Six composite operations are supported: source-over, copy,
-destination-out, source-in, lighter and multiply. Other operations are
-ignored by the property setter. Shadow blur uses the paint module's box
+The Porter-Duff composite operations (source-over/in/out/atop,
+destination-over/in/out/atop, copy, xor), lighter and multiply are
+supported. Other blend modes are ignored by the property setter. Shadow blur uses the paint module's box
 blur. Shadows are separate draws, so their interaction with non-default
 compositing is not fully conformant, and image shadows use the destination
 rectangle rather than the source's alpha. strokeText uses a dilated/eroded
