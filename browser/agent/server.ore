@@ -439,7 +439,8 @@ fn agentCommand(s: *mut Session, tmp: Allocator, doc: *mut Json, req: usize, cmd
 
 fn outcomeFields(s: *mut Session, tmp: Allocator, o: Outcome, w: *mut Writer) !void {
     if !o.ok {
-        return failField(w, tmp, o.message)
+        try failField(w, tmp, o.message)
+        return consoleField(s, tmp, w)
     }
     try w.key("ok")
     try w.boolean(true)
@@ -453,6 +454,11 @@ fn outcomeFields(s: *mut Session, tmp: Allocator, o: Outcome, w: *mut Writer) !v
         try w.key("diff")
         try w.string(o.diff)
     }
+    return consoleField(s, tmp, w)
+}
+
+// The page's console messages since the last response, if any.
+fn consoleField(s: *mut Session, tmp: Allocator, w: *mut Writer) AllocError!void {
     let lines = try consoleLines(s, tmp)
     if lines.len > 0 {
         try w.key("console")

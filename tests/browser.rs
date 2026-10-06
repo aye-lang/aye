@@ -828,6 +828,31 @@ fn js_command_line() {
 
 // ---- page scripts and the DOM bindings (browser/engine/script.ore)
 
+/// The window, headless: a click and a key reach the page's listeners,
+/// which change the text (`--text` prints the document's text at the
+/// end); with `--no-js` nothing changes.
+#[test]
+fn window_scripts() {
+    if !has_sdl() {
+        println!("skipped: no SDL2");
+        return;
+    }
+    let cases: &[(&[&str], &str)] = &[
+        (&["--events", "click:50,65"], "\nclicked\n"),
+        (&["--events", "key:x"], "\nkey x\n"),
+        (&["--events", "click:50,200"], "\nbefore\n"),
+        (&["--events", "click:50,65", "--no-js"], "\nbefore\n"),
+    ];
+    for (extra, want) in cases {
+        let mut args = vec!["browser/tests/ui/script.html", "--font", "fixed", "--width", "400", "--height", "300", "--frames", "1", "--text"];
+        args.extend_from_slice(extra);
+        let out = run_window(&args);
+        let got = text(&out.stdout);
+        assert!(out.status.success() && out.stderr.is_empty(), "{args:?}: {}\n{}", out.status, text(&out.stderr));
+        assert!(got.contains(want), "{args:?}: expected {want:?} in the text:\n{got}");
+    }
+}
+
 /// One run of a DOM fixture: `args` then the page; stdout must be
 /// `golden`, and stderr (console messages, uncaught exceptions) must be
 /// `err_golden`, or empty when there is no such file.

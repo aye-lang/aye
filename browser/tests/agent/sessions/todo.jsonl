@@ -1,0 +1,15 @@
+{"id":1,"cmd":"navigate","url":"browser/tests/agent/site/todo.html"}
+{"id":2,"cmd":"type","ref":"e2","text":"Buy milk"}
+{"id":3,"cmd":"click","ref":"e3"}
+{"id":4,"cmd":"snapshot"}
+{"id":5,"cmd":"type","ref":"e2","text":"Walk the dog","submit":true}
+{"id":6,"cmd":"wait","selector":"#saved:not(.hidden)"}
+{"id":7,"cmd":"snapshot"}
+{"id":8,"cmd":"click","ref":"e6"}
+{"id":9,"cmd":"eval","expression":"document.getElementById('summary').textContent + ' / ' + document.querySelectorAll('li.done').length"}
+{"id":10,"cmd":"snapshot"}
+{"id":11,"cmd":"click","ref":"e13"}
+{"id":12,"cmd":"eval","expression":"JSON.parse(localStorage.getItem('todo')).map(i => i.text + (i.done ? ' (done)' : ''))"}
+{"id":13,"cmd":"reload"}
+{"id":14,"cmd":"eval","expression":"console.log('items after reload:', document.querySelectorAll('li').length); undefinedThing"}
+{"id":15,"cmd":"wait","ms":1000}

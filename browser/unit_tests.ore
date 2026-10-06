@@ -6,7 +6,9 @@
 import css
 import dom
 import dom.NodeId
+import engine
 import html
+import js
 import net
 import std.heap.Arena
 import std.list.List
@@ -178,4 +180,62 @@ test "css cascade" {
         }
     }
     @expectEqual("rgb(255, 0, 0) 20px 2px block", out.bytes())
+}
+
+// Runs `src` in the page; its result as text.
+fn evalText(p: *mut engine.Page, src: []u8, out: *mut text.Builder) !bool {
+    out.clear()
+    return engine.evalInPage(p, src, out)
+}
+
+test "a node taken out of the document lives while a script holds it" {
+    let a = @testAllocator()
+    engine.setScripting(true)
+    let u = try url.parse(a, "data:text/html,<div id=box><p id=kept>kept <b>x</b></p><p id=gone>gone</p></div>")
+    defer u.deinit(a)
+    let p = try engine.load(a, &u)
+    defer p.destroy()
+    let kept = p.doc.getElementById("kept").?
+    let bold = p.doc.firstChild(kept).?
+    let gone = p.doc.getElementById("gone").?
+    var out = text.Builder.init(a)
+    defer out.deinit()
+    // Both are removed; a global holds one.
+    @expect(try evalText(p, "const box = document.getElementById('box'); window.held = box.removeChild(document.getElementById('kept')); box.removeChild(document.getElementById('gone')); 0", &mut out))
+    @expect(p.doc.isLive(kept) && p.doc.isLive(gone))
+    js.collectGarbage(&mut p.script.?.it)
+    // The held tree (and the node in it) stays; the other one is freed.
+    @expect(p.doc.isLive(kept))
+    @expect(p.doc.isLive(bold))
+    @expect(!p.doc.isLive(gone))
+    @expect(p.doc.node(kept).js_refs > 0)
+    @expect(try evalText(p, "held.textContent", &mut out))
+    @expectEqual("kept x", out.bytes())
+    // A wrapper of a node inside the held tree keeps the whole tree.
+    @expect(try evalText(p, "window.inner = held.firstElementChild; held = null; 0", &mut out))
+    js.collectGarbage(&mut p.script.?.it)
+    @expect(p.doc.isLive(kept) && p.doc.isLive(bold))
+    @expect(try evalText(p, "inner.parentNode.id", &mut out))
+    @expectEqual("kept", out.bytes())
+    // Once no wrapper is left, the tree is freed.
+    @expect(try evalText(p, "inner = null; 0", &mut out))
+    js.collectGarbage(&mut p.script.?.it)
+    @expect(!p.doc.isLive(kept))
+    @expect(!p.doc.isLive(bold))
+    @expect(p.doc.isLive(p.doc.getElementById("box").?))
+}
+
+test "wrappers of nodes in the document keep their properties" {
+    let a = @testAllocator()
+    engine.setScripting(true)
+    let u = try url.parse(a, "data:text/html,<p id=p>x</p>")
+    defer u.deinit(a)
+    let p = try engine.load(a, &u)
+    defer p.destroy()
+    var out = text.Builder.init(a)
+    defer out.deinit()
+    @expect(try evalText(p, "document.getElementById('p').note = 'kept'; 0", &mut out))
+    js.collectGarbage(&mut p.script.?.it)
+    @expect(try evalText(p, "document.getElementById('p').note", &mut out))
+    @expectEqual("kept", out.bytes())
 }
