@@ -5,6 +5,17 @@ pub let CANVAS_PRELUDE =
     \\const ak = globalThis.__canvasHost;
     \\delete globalThis.__canvasHost;
     \\const identity = () => [1, 0, 0, 1, 0, 0];
+    \\// Parsed colors by their text; the arrays are only read.
+    \\const colors = new Map();
+    \\function color(s) {
+    \\  let c = colors.get(s);
+    \\  if (c === undefined) {
+    \\    c = ak.canvasColor(s);
+    \\    if (colors.size >= 256) colors.clear();
+    \\    colors.set(s, c);
+    \\  }
+    \\  return c;
+    \\}
     \\const finite = a => a.every(v => Number.isFinite(Number(v)) && Math.abs(Number(v)) <= 1e8);
     \\const point = (m, x, y) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
     \\function mul(m, n) {
@@ -384,7 +395,7 @@ pub let CANVAS_PRELUDE =
     \\  }
     \\  _paint(v) {
     \\    if (v instanceof CanvasPattern || v instanceof CanvasGradient) return Object.assign({}, v, {matrix: mul(this._matrix, v.matrix)});
-    \\    return typeof v === 'string' ? {kind: 0, color: ak.canvasColor(v)} : v;
+    \\    return typeof v === 'string' ? {kind: 0, color: color(v)} : v;
     \\  }
     \\  // The path `d` (path data or segments) is drawn as SVG would draw
     \\  // <path d=...> with these stroke attributes and fill rule; clips
@@ -394,7 +405,7 @@ pub let CANVAS_PRELUDE =
     \\    const evenodd = rule === 'evenodd';
     \\    const clip = this._clips.length ? this._clips : null;
     \\    const s = this._state;
-    \\    const shadow = ak.canvasColor(s.shadowColor);
+    \\    const shadow = color(s.shadowColor);
     \\    if (!mode && shadow && shadow[3]) {
     \\      ak.canvasDraw(this._node, d, {kind: 0, color: shadow, blur: s.shadowBlur}, s.globalAlpha, s.globalCompositeOperation, clip, key, evenodd, s.shadowOffsetX, s.shadowOffsetY);
     \\    }
@@ -591,7 +602,7 @@ pub let CANVAS_PRELUDE =
     \\    y += this._baselineOffset(a);
     \\    const mask = {data: a[3], width: a[4], height: a[5], matrix: mul(this._matrix, [k, 0, 0, 1, x+a[10]*k, y+a[11]]), stroke: stroke ? this.lineWidth : 0};
     \\    const clip = this._clips.length ? this._clips : null;
-    \\    const shadow = ak.canvasColor(this.shadowColor);
+    \\    const shadow = color(this.shadowColor);
     \\    if (shadow && shadow[3]) {
     \\      const shifted = Object.assign({}, mask, {matrix: mask.matrix.slice()});
     \\      shifted.matrix[4] += this.shadowOffsetX;
@@ -633,10 +644,10 @@ pub let CANVAS_PRELUDE =
     \\      this._sync();
     \\      if (key === 'fillStyle' || key === 'strokeStyle') {
     \\        if (v instanceof CanvasGradient || v instanceof CanvasPattern) this._state[key] = v;
-    \\        else if (ak.canvasColor(String(v))) this._state[key] = String(v);
+    \\        else if (color(String(v))) this._state[key] = String(v);
     \\        return;
     \\      }
-    \\      if (key === 'shadowColor' && !ak.canvasColor(String(v))) return;
+    \\      if (key === 'shadowColor' && !color(String(v))) return;
     \\      if (enums[key] && !enums[key].includes(String(v))) return;
     \\      if (typeof defaults[key] === 'number') {
     \\        v = Number(v);

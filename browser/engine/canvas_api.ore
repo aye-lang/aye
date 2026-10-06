@@ -718,10 +718,19 @@ fn modeOf(mode: []u8) u8 {
 // are.
 fn canvasComposite(dst: []mut u8, dst_width: usize, area: CanvasArea, src: []u8, clip: ?[]u8, alpha: f64, mode_name: []u8) {
     let mode = modeOf(mode_name)
+    // A transparent source pixel leaves the destination as it is: a
+    // round trip through these formulas gives back its bytes (a
+    // transparent destination pixel is 0,0,0,0 already).
+    let bounded = !unboundedMode(mode_name)
     for y in 0..area.h {
         var i = y * area.w * 4
         var j = ((area.y as usize + y) * dst_width + area.x as usize) * 4
         for x in 0..area.w {
+            if bounded && src[i] == 0 && src[i + 1] == 0 && src[i + 2] == 0 && src[i + 3] == 0 {
+                i += 4
+                j += 4
+                continue
+            }
             var cover = 1.0
             if clip |c| {
                 cover = c[i + 3] as f64 / 255.0
