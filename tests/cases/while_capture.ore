@@ -1,0 +1,45 @@
+// `while x |v| { }` runs while the optional has a value.
+
+struct Countdown {
+    n: u32
+
+    fn next(self: *mut Self) ?u32 {
+        if self.n == 0 {
+            return null
+        }
+        self.n -= 1
+        return self.n
+    }
+}
+
+struct Node {
+    value: i64
+    next: ?*Node
+}
+
+pub fn main() {
+    var c = Countdown { n: 3 }
+    while c.next() |v| {
+        @println(v)
+    }
+    let c3 = Node { value: 3, next: null }
+    let c2 = Node { value: 2, next: &c3 }
+    let c1 = Node { value: 1, next: &c2 }
+    var cur: ?*Node = &c1
+    var total: i64 = 0
+    while cur |n| {
+        total += n.value
+        cur = n.next
+    }
+    @println(total)
+    var k = Countdown { n: 10 }
+    while k.next() |v| {
+        if v == 7 {
+            continue
+        }
+        if v < 5 {
+            break
+        }
+        @println(v)
+    }
+}

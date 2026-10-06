@@ -1,0 +1,20 @@
+struct P { x: i64 }
+
+enum Shape {
+    Circle { r: f64 }
+    Empty
+}
+
+fn f(a: f64, b: bool, c: u32, d: u64, s: Shape, p: P, q: P) {
+    let x = a & 1.0
+    let y = ~b
+    let z = c << d
+    let w = s == Shape.Empty
+    let v = p == q
+    var m: f64 = 1.0
+    m |= 2.0
+    let u = "a" == "b"
+}
+
+pub fn main() {
+}

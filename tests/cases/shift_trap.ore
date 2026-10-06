@@ -1,0 +1,8 @@
+fn shift(x: u32, n: u32) u32 {
+    return x << n
+}
+
+pub fn main() {
+    @println(shift(1, 31))
+    @println(shift(1, 32))
+}

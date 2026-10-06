@@ -1,0 +1,58 @@
+// Methods on enums: `fn` in the enum body, `Self`, receivers and call sugar.
+
+enum Token {
+    Num { value: i64 }
+    Plus
+    Minus
+    End
+
+    fn num(v: i64) Self {
+        return Self.Num { value: v }
+    }
+
+    fn isOp(self: Self) bool {
+        return match self {
+            .Plus => true
+            .Minus => true
+            _ => false
+        }
+    }
+
+    fn negate(self: *mut Self) {
+        match self.* {
+            .Num { value } => {
+                self.* = Token.Num { value: -value }
+            }
+            .Plus => {
+                self.* = Self.Minus
+            }
+            .Minus => {
+                self.* = Token.Plus
+            }
+            .End => {}
+        }
+    }
+
+    fn show(self: *Self) {
+        match self.* {
+            .Num { value } => @println(value)
+            .Plus => @println("+")
+            .Minus => @println("-")
+            .End => @println("end")
+        }
+    }
+}
+
+pub fn main() {
+    var toks = [4]Token{Token.num(5), Token.Plus, Token.Minus, Token.End}
+    for i in 0..toks.len {
+        toks[i].negate()
+        toks[i].show()
+        @println(toks[i].isOp())
+    }
+    var t = Token.num(1)
+    let p = &mut t
+    p.negate()
+    t.show()
+    @println(Token.isOp(Token.Plus))
+}

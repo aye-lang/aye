@@ -1,0 +1,102 @@
+// M6 acceptance: a global constant table, a global counter, a type alias
+// and an enum method.
+
+struct Point { x: i64, y: i64 }
+
+fn Pair(comptime T: type) type {
+    return struct {
+        a: T
+        b: T
+
+        fn first(self: Self) T {
+            return self.a
+        }
+    }
+}
+
+enum Color {
+    Red
+    Green
+    Blue
+
+    fn name(self: Self) []u8 {
+        return match self {
+            .Red => "red"
+            .Green => "green"
+            .Blue => "blue"
+        }
+    }
+
+    fn next(self: Self) Self {
+        return match self {
+            .Red => Color.Green
+            .Green => Color.Blue
+            .Blue => Color.Red
+        }
+    }
+
+    fn all() [3]Color {
+        return [3]Color{Color.Red, Color.Green, Color.Blue}
+    }
+}
+
+// Constants: literals, arithmetic on constants, arrays and struct literals.
+let PRIMES = [5]u32{2, 3, 5, 7, 11}
+let COUNT: usize = 5
+let LIMIT: i64 = 10 * 10 + 1
+let MASK: u32 = (1 << 8) - 1
+let HALF = LIMIT / 2
+let ORIGIN = Point { x: -1, y: LIMIT }
+let GREETING = "hello"
+let FAVORITE = Color.Green
+let SCALE = 2.5
+
+// Type aliases.
+let IntPair = Pair(i64)
+let Bytes = []u8
+
+// A global counter.
+var calls: i64 = 0
+var last: Color = Color.Red
+
+fn bump() i64 {
+    calls += 1
+    return calls
+}
+
+fn shout(s: Bytes) {
+    @println(s)
+}
+
+pub fn main() {
+    var sum: u32 = 0
+    for i in 0..COUNT {
+        sum += PRIMES[i]
+    }
+    @println(sum)
+    @println(PRIMES.len)
+    @println(LIMIT)
+    @println(MASK)
+    @println(HALF)
+    @println(ORIGIN.x + ORIGIN.y)
+    shout(GREETING)
+    @println(SCALE * 2.0)
+    bump()
+    bump()
+    @println(bump())
+    @println(calls)
+    let p = IntPair { a: 20, b: 22 }
+    @println(p.first() + p.b)
+    let c = FAVORITE
+    @println(c.name())
+    @println(c.next().name())
+    @println(Color.name(Color.Blue))
+    for col in Color.all() {
+        last = col.next()
+        @print(last.name())
+        @print(" ")
+    }
+    @println()
+    @println(last == Color.Red)
+    @println(FAVORITE != Color.Green)
+}

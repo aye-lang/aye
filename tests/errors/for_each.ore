@@ -1,0 +1,9 @@
+pub fn main() {
+    let n: i64 = 5
+    for x in n {
+        @println(x)
+    }
+    let flag = true
+    while flag |v| {
+    }
+}

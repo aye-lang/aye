@@ -101,6 +101,8 @@ fn std_home(name: &str) -> Option<&'static str> {
     BUILTINS.iter().find(|(m, n)| *n == name && *m != "std.log").map(|(m, _)| *m)
 }
 
+/// What `mod.Name { ... }` is: a struct literal when `Name` is a struct or
+/// a top-level `let` (an alias of a struct), else a variant literal.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
     Struct,
@@ -275,6 +277,7 @@ impl Loader<'_> {
                             AstItem::Enum(e) => (&e.name, e.span, e.is_pub, Kind::Other),
                             AstItem::ErrorSet(e) => (&e.name, e.span, e.is_pub, Kind::Other),
                             AstItem::Interface(i) => (&i.name, i.span, i.is_pub, Kind::Other),
+                            AstItem::Global(g) => (&g.name, g.span, g.is_pub, Kind::Struct),
                             AstItem::Test(_) => continue,
                         };
                         module.items.entry(name.clone()).or_insert(Decl { is_pub, kind, span });
@@ -559,6 +562,15 @@ impl Loader<'_> {
                         self.ty(&mut f.ty);
                     }
                 }
+                for m in &mut e.methods {
+                    self.func(m);
+                }
+            }
+            AstItem::Global(g) => {
+                if let Some(t) = &mut g.ty {
+                    self.ty(t);
+                }
+                self.expr(&mut g.init);
             }
             AstItem::ErrorSet(e) => {
                 if let ast::ErrorSetKind::Merge(parts) = &mut e.kind {
@@ -669,8 +681,18 @@ impl Loader<'_> {
                     self.stmt(e);
                 }
             }
-            StmtKind::While { cond, body } => {
+            StmtKind::While { cond, capture, body } => {
                 self.expr(cond);
+                if let Some((n, sp)) = capture {
+                    self.bind(n, *sp);
+                }
+                self.block(body);
+            }
+            StmtKind::ForEach { index, elem, seq, body } => {
+                self.expr(seq);
+                for (n, sp) in index.iter().chain([&*elem]) {
+                    self.bind(n, *sp);
+                }
                 self.block(body);
             }
             StmtKind::For { var, var_span, lo, hi, body } => {
@@ -898,6 +920,7 @@ impl Loader<'_> {
                         AstItem::Enum(x) => x.name = canonical(&path, &x.name),
                         AstItem::ErrorSet(x) => x.name = canonical(&path, &x.name),
                         AstItem::Interface(x) => x.name = canonical(&path, &x.name),
+                        AstItem::Global(x) => x.name = canonical(&path, &x.name),
                     }
                     items.push(item);
                 }

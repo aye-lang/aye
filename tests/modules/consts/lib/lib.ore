@@ -1,0 +1,23 @@
+pub let MAX: u32 = BASE * 2
+let BASE: u32 = 21
+pub let TABLE = [3]u8{'a', 'b', 'c'}
+pub var hits: i64 = 0
+pub let Word = []u8
+
+pub enum Level {
+    Low
+    High
+
+    pub fn rank(self: Self) i64 {
+        return match self {
+            .Low => 1
+            .High => 2
+        }
+    }
+}
+
+pub let DEFAULT = Level.Low
+
+pub fn record() {
+    hits += 10
+}

@@ -129,7 +129,7 @@ E0006 = 6 {
 }
 E0007 = 7 {
     "not yet supported",
-    "The feature is part of Ore but not of the stage0 compiler yet (for example `extern struct` or global variables), or the keyword is used where stage0 does not support it (`comptime` only marks a type parameter, `comptime T: type`). Write the program without it.",
+    "The feature is part of Ore but not of the stage0 compiler yet (for example `extern struct`), or the keyword is used where stage0 does not support it (`comptime` only marks a type parameter, `comptime T: type`). Write the program without it.",
     r#"extern struct Point {
     x: i32
 }
@@ -914,17 +914,17 @@ pub fn main() {
 }
 E0055 = 55 {
     "`match` on an unsupported type",
-    "`match` works on enum values and error values. Use `if` for other types.",
+    "`match` works on enum values, error values and integers (also characters). Use `if` for other types.",
     r#"pub fn main() {
-    let x = 5
+    let x = 0.5
     match x {
         _ => @println(x)
     }
 }
 "#,
     r#"pub fn main() {
-    let x = 5
-    if x == 5 {
+    let x = 0.5
+    if x == 0.5 {
         @println(x)
     }
 }
@@ -932,7 +932,7 @@ E0055 = 55 {
 }
 E0056 = 56 {
     "non-exhaustive `match`",
-    "A `match` must handle every variant of the enum, or every error of the error set. Add an arm for each missing one (the message lists them), or a `_` arm.",
+    "A `match` must handle every variant of the enum, every error of the error set, or every value of the integer type. Add an arm for each missing one (the message lists them), or a `_` arm.",
     r#"enum Color { Red, Green }
 
 fn name(c: Color) []u8 {
@@ -959,7 +959,7 @@ pub fn main() {
 }
 E0057 = 57 {
     "unreachable `match` arm",
-    "An arm can never run: its variant or error is already matched by an earlier arm, or it comes after `_`. Remove it.",
+    "An arm can never run: its variant, error or value is already matched by an earlier arm, or it comes after `_`. Remove it, or remove the value from the earlier arm.",
     r#"enum Color { Red, Green }
 
 pub fn main() {
@@ -1751,6 +1751,82 @@ pub fn main() {
 
 pub fn main() {
     std.log.info("{} of {}", 3, 4)
+}
+"#,
+}
+E0087 = 87 {
+    "bitwise operators mixed without parentheses",
+    "`&`, `|` and `^` have the same precedence and cannot be mixed in one expression without parentheses, so that `a & b | c` is never misread. Add parentheses to say which operator applies first. Shifts (`<< >>`) bind tighter than `& | ^` and need none.",
+    r#"fn f(a: u32, b: u32, c: u32) u32 {
+    return a & b | c
+}
+
+pub fn main() {
+}
+"#,
+    r#"fn f(a: u32, b: u32, c: u32) u32 {
+    return (a & b) | c
+}
+
+pub fn main() {
+}
+"#,
+}
+E0088 = 88 {
+    "pattern does not fit the `match`",
+    "A `match` on an enum or an error takes `.Name` patterns, and a `match` on an integer takes integer and character patterns (`1`, `'a'`, `'a'..='z'`). A range pattern must not be empty: its start is not larger than its end.",
+    r#"pub fn main() {
+    let c: u8 = 'x'
+    match c {
+        'z'..='a' => @println("letter")
+        _ => @println("other")
+    }
+}
+"#,
+    r#"pub fn main() {
+    let c: u8 = 'x'
+    match c {
+        'a'..='z' => @println("letter")
+        _ => @println("other")
+    }
+}
+"#,
+}
+E0089 = 89 {
+    "global initializer is not a constant",
+    "A top-level `let` or `var` is initialized when the program is compiled, so its value is built from literals, other `let` constants, operators, `as` casts, and array, struct and enum literals. Calls and `var` globals cannot be used, the arithmetic must not overflow, and a constant cannot be defined in terms of itself. Set other values at run time, in a function.",
+    r#"fn start() i64 {
+    return 10
+}
+
+var counter: i64 = start()
+
+pub fn main() {
+    @println(counter)
+}
+"#,
+    r#"var counter: i64 = 10
+
+pub fn main() {
+    @println(counter)
+}
+"#,
+}
+E0090 = 90 {
+    "`for` over a value that is not a sequence",
+    "`for x in seq` walks an array or a slice; `for i in lo..hi` counts. Write a range to count to a number.",
+    r#"pub fn main() {
+    let n: usize = 3
+    for i in n {
+        @println(i)
+    }
+}
+"#,
+    r#"pub fn main() {
+    let n: usize = 3
+    for i in 0..n {
+        @println(i)
+    }
 }
 "#,
 }

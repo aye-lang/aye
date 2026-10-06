@@ -101,14 +101,20 @@ pub enum Tok {
     Colon,
     Dot,
     DotDot,
+    /// `..=`, an inclusive range in a `match` pattern.
+    DotDotEq,
     /// `.*`, pointer dereference.
     DotStar,
     /// `=>` in a `match` arm.
     FatArrow,
-    /// `&`, address-of.
+    /// `&`, address-of or bitwise and.
     Amp,
-    /// `|`, around an `if x |v|` capture.
+    /// `|`, bitwise or, or around an `if x |v|` capture.
     Pipe,
+    Caret,
+    Tilde,
+    Shl,
+    Shr,
     Question,
     Bang,
     Assign,
@@ -120,6 +126,11 @@ pub enum Tok {
     PlusPctEq,
     MinusPctEq,
     StarPctEq,
+    AmpEq,
+    PipeEq,
+    CaretEq,
+    ShlEq,
+    ShrEq,
     Plus,
     Minus,
     Star,
@@ -163,10 +174,15 @@ impl fmt::Display for Tok {
             Tok::Colon => "`:`",
             Tok::Dot => "`.`",
             Tok::DotDot => "`..`",
+            Tok::DotDotEq => "`..=`",
             Tok::DotStar => "`.*`",
             Tok::FatArrow => "`=>`",
             Tok::Amp => "`&`",
             Tok::Pipe => "`|`",
+            Tok::Caret => "`^`",
+            Tok::Tilde => "`~`",
+            Tok::Shl => "`<<`",
+            Tok::Shr => "`>>`",
             Tok::Question => "`?`",
             Tok::Bang => "`!`",
             Tok::Assign => "`=`",
@@ -178,6 +194,11 @@ impl fmt::Display for Tok {
             Tok::PlusPctEq => "`+%=`",
             Tok::MinusPctEq => "`-%=`",
             Tok::StarPctEq => "`*%=`",
+            Tok::AmpEq => "`&=`",
+            Tok::PipeEq => "`|=`",
+            Tok::CaretEq => "`^=`",
+            Tok::ShlEq => "`<<=`",
+            Tok::ShrEq => "`>>=`",
             Tok::Plus => "`+`",
             Tok::Minus => "`-`",
             Tok::Star => "`*`",
@@ -523,7 +544,10 @@ impl Lexer {
             (',', _) => Tok::Comma,
             (':', _) => Tok::Colon,
             ('?', _) => Tok::Question,
-            ('.', Some('.')) => take(self, Tok::DotDot),
+            ('.', Some('.')) => {
+                self.bump();
+                if self.peek() == Some('=') { take(self, Tok::DotDotEq) } else { Tok::DotDot }
+            }
             ('.', Some('*')) => take(self, Tok::DotStar),
             ('.', _) => Tok::Dot,
             ('=', Some('=')) => take(self, Tok::EqEq),
@@ -531,14 +555,29 @@ impl Lexer {
             ('=', _) => Tok::Assign,
             ('!', Some('=')) => take(self, Tok::NotEq),
             ('!', _) => Tok::Bang,
+            ('<' | '>', Some(n)) if n == c => {
+                self.bump();
+                let eq = self.peek() == Some('=');
+                match (c, eq) {
+                    ('<', false) => Tok::Shl,
+                    ('>', false) => Tok::Shr,
+                    ('<', true) => take(self, Tok::ShlEq),
+                    _ => take(self, Tok::ShrEq),
+                }
+            }
             ('<', Some('=')) => take(self, Tok::Le),
             ('<', _) => Tok::Lt,
             ('>', Some('=')) => take(self, Tok::Ge),
             ('>', _) => Tok::Gt,
             ('&', Some('&')) => take(self, Tok::AndAnd),
+            ('&', Some('=')) => take(self, Tok::AmpEq),
             ('&', _) => Tok::Amp,
             ('|', Some('|')) => take(self, Tok::OrOr),
+            ('|', Some('=')) => take(self, Tok::PipeEq),
             ('|', _) => Tok::Pipe,
+            ('^', Some('=')) => take(self, Tok::CaretEq),
+            ('^', _) => Tok::Caret,
+            ('~', _) => Tok::Tilde,
             ('+' | '-' | '*', Some('%')) => {
                 self.bump();
                 let eq = self.peek() == Some('=');
@@ -648,6 +687,31 @@ mod tests {
                 Tok::Ident("b".into()),
                 Tok::StarPctEq,
                 Tok::Str(b"hi\n".to_vec()),
+                Tok::Semi,
+                Tok::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn bitwise_and_shift_ops() {
+        assert_eq!(
+            toks("a << b >>= c &= ~d ^ e |= f ..= g"),
+            vec![
+                Tok::Ident("a".into()),
+                Tok::Shl,
+                Tok::Ident("b".into()),
+                Tok::ShrEq,
+                Tok::Ident("c".into()),
+                Tok::AmpEq,
+                Tok::Tilde,
+                Tok::Ident("d".into()),
+                Tok::Caret,
+                Tok::Ident("e".into()),
+                Tok::PipeEq,
+                Tok::Ident("f".into()),
+                Tok::DotDotEq,
+                Tok::Ident("g".into()),
                 Tok::Semi,
                 Tok::Eof,
             ]

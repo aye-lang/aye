@@ -1,0 +1,5 @@
+pub fn main() {
+    for i, x in 0..10 {
+        @println(i)
+    }
+}

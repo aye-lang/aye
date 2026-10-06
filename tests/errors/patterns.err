@@ -1,0 +1,5 @@
+patterns.ore:6:9: error[E0057]: pattern `120` matches values that an earlier pattern already matches
+patterns.ore:10:9: error[E0024]: pattern value `300` does not fit in `u8`
+patterns.ore:14:9: error[E0088]: the range `9..=3` is empty: its start is larger than its end
+patterns.ore:18:9: error[E0088]: a `match` on `u8` takes integer and character patterns, not `.Red`
+patterns.ore:22:9: error[E0088]: a `match` on `Color` takes `.Name` patterns, not integers

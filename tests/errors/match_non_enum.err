@@ -1,1 +1,1 @@
-match_non_enum.ore:3:11: error[E0055]: `match` needs an enum or error value, found `i64`
+match_non_enum.ore:3:11: error[E0055]: `match` needs an enum, error or integer value, found `f64`

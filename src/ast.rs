@@ -24,6 +24,22 @@ pub enum Item {
     ErrorSet(ErrorSetDecl),
     Interface(InterfaceDecl),
     Test(TestDecl),
+    Global(GlobalDecl),
+}
+
+/// A top-level `let NAME = value` constant, `var name = value` global, or
+/// `let Name = Type` type alias (sema tells them apart by the value).
+#[derive(Debug, Clone)]
+pub struct GlobalDecl {
+    pub name: String,
+    pub span: Span,
+    pub is_pub: bool,
+    /// `var` (true) or `let`.
+    pub mutable: bool,
+    /// The `let` or `var` keyword.
+    pub kw_span: Span,
+    pub ty: Option<TypeExpr>,
+    pub init: Expr,
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +108,8 @@ pub struct EnumDecl {
     pub span: Span,
     pub is_pub: bool,
     pub variants: Vec<VariantDecl>,
+    /// Functions declared in the enum body.
+    pub methods: Vec<FnDecl>,
 }
 
 /// `error Name { A, B }` or `error Name = X || Y`.
@@ -174,9 +192,12 @@ pub enum StmtKind {
     Assign { target: Expr, op: AssignOp, value: Expr },
     /// `capture` is the `v` of `if x |v| { }`.
     If { cond: Expr, capture: Option<(String, Span)>, then: Block, els: Option<Box<Stmt>> },
-    While { cond: Expr, body: Block },
+    /// `capture` is the `v` of `while x |v| { }`.
+    While { cond: Expr, capture: Option<(String, Span)>, body: Block },
     /// `for var in lo..hi { body }`
     For { var: String, var_span: Span, lo: Expr, hi: Expr, body: Block },
+    /// `for elem in seq { body }` or `for index, elem in seq { body }`.
+    ForEach { index: Option<(String, Span)>, elem: (String, Span), seq: Expr, body: Block },
     Break,
     Continue,
     Return(Option<Expr>),
@@ -211,6 +232,11 @@ pub enum BinOp {
     Ge,
     And,
     Or,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
 }
 
 impl BinOp {
@@ -232,6 +258,11 @@ impl BinOp {
             BinOp::Ge => ">=",
             BinOp::And => "&&",
             BinOp::Or => "||",
+            BinOp::BitAnd => "&",
+            BinOp::BitOr => "|",
+            BinOp::BitXor => "^",
+            BinOp::Shl => "<<",
+            BinOp::Shr => ">>",
         }
     }
 
@@ -239,6 +270,8 @@ impl BinOp {
         matches!(self, BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge)
     }
 
+    /// Arithmetic, bitwise and shift operators: both operands and the
+    /// result have one numeric type.
     pub fn is_arith(self) -> bool {
         matches!(
             self,
@@ -250,7 +283,13 @@ impl BinOp {
                 | BinOp::AddWrap
                 | BinOp::SubWrap
                 | BinOp::MulWrap
-        )
+        ) || self.is_bitwise()
+            || matches!(self, BinOp::Shl | BinOp::Shr)
+    }
+
+    /// `&`, `|` and `^`, which cannot be mixed without parentheses.
+    pub fn is_bitwise(self) -> bool {
+        matches!(self, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor)
     }
 }
 
@@ -258,6 +297,8 @@ impl BinOp {
 pub enum UnOp {
     Neg,
     Not,
+    /// `~x`
+    BitNot,
 }
 
 #[derive(Debug, Clone)]
@@ -321,13 +362,25 @@ pub struct FieldInit {
 
 #[derive(Debug, Clone)]
 pub struct MatchArm {
-    /// `None` for the `_` pattern.
+    /// `None` for the `_` pattern and for integer patterns.
     pub variant: Option<String>,
+    /// Integer and character patterns (`'a'`, `-1`, `'a'..='z'`), several
+    /// per arm; empty for `_` and variant patterns.
+    pub values: Vec<IntPat>,
     /// `.V { a, b: c, .. }`: the field patterns; `None` for `.V` and `_`.
     pub fields: Option<Vec<FieldPat>>,
     /// The pattern ends with `..`.
     pub rest: bool,
     pub body: ArmBody,
+    pub span: Span,
+}
+
+/// An integer or character pattern: the inclusive range `lo..=hi`, or a
+/// single value (`lo == hi`).
+#[derive(Debug, Clone)]
+pub struct IntPat {
+    pub lo: i128,
+    pub hi: i128,
     pub span: Span,
 }
 

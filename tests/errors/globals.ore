@@ -1,0 +1,18 @@
+fn seven() i64 {
+    return 7
+}
+
+let A: i64 = seven()
+let B = C + 1
+let C = B * 2
+var counter: i64 = 0
+let D = counter + 1
+let E: u8 = 200 + 100
+let F: i32 = 1 << 40
+let LIMIT: i64 = 10
+
+pub fn main() {
+    LIMIT = 11
+    counter += LIMIT
+    let LIMIT = 3
+}

@@ -17,7 +17,7 @@
 use crate::ast::BinOp;
 use crate::diag::Span;
 use crate::oir::*;
-use crate::sema::{FloatTy, Intrinsic, IntTy, Type};
+use crate::sema::{ConstVal, FloatTy, Intrinsic, IntTy, Type};
 use std::collections::HashSet;
 use std::fmt::Write;
 
@@ -83,7 +83,7 @@ ORE_RT inline double ore_cast_fi(double v, double lo, double hi, int line, int c
     return v;
 }
 
-#define ORE_INT_OPS(N, T, SIGNED, MIN)                                                         \
+#define ORE_INT_OPS(N, T, UT, BITS, SIGNED, MIN)                                               \
     ORE_RT inline T ore_add_##N(T a, T b, int l, int c) {                                      \
         T r;                                                                                   \
         if (__builtin_add_overflow(a, b, &r) && ORE_CHECKS) ore_panic(l, c, "integer overflow"); \
@@ -115,17 +115,28 @@ ORE_RT inline double ore_cast_fi(double v, double lo, double hi, int line, int c
     }                                                                                          \
     ORE_RT inline T ore_wadd_##N(T a, T b) { T r; __builtin_add_overflow(a, b, &r); return r; } \
     ORE_RT inline T ore_wsub_##N(T a, T b) { T r; __builtin_sub_overflow(a, b, &r); return r; } \
-    ORE_RT inline T ore_wmul_##N(T a, T b) { T r; __builtin_mul_overflow(a, b, &r); return r; }
-ORE_INT_OPS(i8, int8_t, 1, INT8_MIN)
-ORE_INT_OPS(i16, int16_t, 1, INT16_MIN)
-ORE_INT_OPS(i32, int32_t, 1, INT32_MIN)
-ORE_INT_OPS(i64, int64_t, 1, INT64_MIN)
-ORE_INT_OPS(isize, intptr_t, 1, INTPTR_MIN)
-ORE_INT_OPS(u8, uint8_t, 0, 0)
-ORE_INT_OPS(u16, uint16_t, 0, 0)
-ORE_INT_OPS(u32, uint32_t, 0, 0)
-ORE_INT_OPS(u64, uint64_t, 0, 0)
-ORE_INT_OPS(usize, size_t, 0, 0)
+    ORE_RT inline T ore_wmul_##N(T a, T b) { T r; __builtin_mul_overflow(a, b, &r); return r; } \
+    /* Shifts: the amount is masked when checks are off. A left shift is   \
+       done unsigned and drops the bits shifted out; `>>` of a signed       \
+       value is arithmetic. */                                              \
+    ORE_RT inline T ore_shl_##N(T a, T b, int l, int c) {                                      \
+        if (ORE_CHECKS && (uint64_t)b >= BITS) ore_panic(l, c, "shift amount out of range");   \
+        return (T)((UT)a << ((UT)b & (BITS - 1)));                                             \
+    }                                                                                          \
+    ORE_RT inline T ore_shr_##N(T a, T b, int l, int c) {                                      \
+        if (ORE_CHECKS && (uint64_t)b >= BITS) ore_panic(l, c, "shift amount out of range");   \
+        return (T)(a >> ((UT)b & (BITS - 1)));                                                 \
+    }
+ORE_INT_OPS(i8, int8_t, uint8_t, 8, 1, INT8_MIN)
+ORE_INT_OPS(i16, int16_t, uint16_t, 16, 1, INT16_MIN)
+ORE_INT_OPS(i32, int32_t, uint32_t, 32, 1, INT32_MIN)
+ORE_INT_OPS(i64, int64_t, uint64_t, 64, 1, INT64_MIN)
+ORE_INT_OPS(isize, intptr_t, uintptr_t, 64, 1, INTPTR_MIN)
+ORE_INT_OPS(u8, uint8_t, uint8_t, 8, 0, 0)
+ORE_INT_OPS(u16, uint16_t, uint16_t, 16, 0, 0)
+ORE_INT_OPS(u32, uint32_t, uint32_t, 32, 0, 0)
+ORE_INT_OPS(u64, uint64_t, uint64_t, 64, 0, 0)
+ORE_INT_OPS(usize, size_t, size_t, 64, 0, 0)
 
 #define ORE_TRACE_MAX 64
 static __attribute__((unused)) struct { int line, col; } ore_trace[ORE_TRACE_MAX];
@@ -546,6 +557,28 @@ fn is_composite(t: &Type) -> bool {
     }
 }
 
+/// An integer constant of type `it`.
+fn c_int_of(v: i128, it: IntTy) -> String {
+    if (-(1i128 << 31) < v) && (v < (1i128 << 31)) {
+        format!("(({}){v})", int_c(it))
+    } else {
+        format!("(({}){})", int_c(it), c_int(v))
+    }
+}
+
+/// A float constant of type `ft`.
+fn c_float_of(v: f64, ft: FloatTy) -> String {
+    match ft {
+        FloatTy::F32 => format!("((float){})", c_float(v)),
+        FloatTy::F64 => c_float(v),
+    }
+}
+
+/// The C name of the global `name`.
+fn global_name(name: &str) -> String {
+    format!("ore_g_{}", c_name(name))
+}
+
 /// A position for the runtime: the line with the file index in its upper
 /// bits, and the column.
 fn line_col(span: Span) -> String {
@@ -592,6 +625,10 @@ impl Gen {
             if declared.insert(decl.clone()) {
                 self.line(0, &decl);
             }
+        }
+        for g in &p.globals {
+            let init = const_init(p, &g.value, &g.ty);
+            let _ = writeln!(self.out, "static __attribute__((unused)) {} {} = {init};", c_type(&g.ty), global_name(&g.name));
         }
         for f in &p.funcs {
             let sig = self.signature(f);
@@ -673,6 +710,9 @@ impl Gen {
             for t in e.params.iter().chain(std::iter::once(&e.ret)) {
                 add(t, &mut all);
             }
+        }
+        for g in &p.globals {
+            add(&g.ty, &mut all);
         }
         for f in &p.funcs {
             add(&f.ret, &mut all);
@@ -767,6 +807,7 @@ impl Gen {
 
     fn local_name(f: &Func, id: LocalId) -> String {
         match &f.locals[id].name {
+            Some(n) if f.locals[id].global => global_name(n),
             Some(n) => format!("{n}_{id}"),
             None => format!("t{id}"),
         }
@@ -783,7 +824,7 @@ impl Gen {
         let sig = self.signature(f);
         let _ = writeln!(self.out, "\n{sig} {{");
         for (id, l) in f.locals.iter().enumerate() {
-            if !f.params.contains(&id) {
+            if !f.params.contains(&id) && !l.global {
                 let s = format!("{} {};", c_type(&l.ty), Self::local_name(f, id));
                 self.line(1, &s);
             }
@@ -868,15 +909,8 @@ impl Gen {
     fn operand(&self, f: &Func, op: &Operand) -> String {
         match op {
             Operand::Local(id) => Self::local_name(f, *id),
-            Operand::Int(v, it) => {
-                if (-(1i128 << 31) < *v) && (*v < (1i128 << 31)) {
-                    format!("(({}){v})", int_c(*it))
-                } else {
-                    format!("(({}){})", int_c(*it), c_int(*v))
-                }
-            }
-            Operand::Float(v, FloatTy::F32) => format!("((float){})", c_float(*v)),
-            Operand::Float(v, FloatTy::F64) => c_float(*v),
+            Operand::Int(v, it) => c_int_of(*v, *it),
+            Operand::Float(v, ft) => c_float_of(*v, *ft),
             Operand::Bool(b) => b.to_string(),
             Operand::Str(s) => format!("((ore_S_u8){{(uint8_t*){}, {}}})", c_str(s), s.len()),
         }
@@ -917,6 +951,13 @@ impl Gen {
                     BinOp::AddWrap => "wadd",
                     BinOp::SubWrap => "wsub",
                     BinOp::MulWrap => "wmul",
+                    BinOp::Shl => "shl",
+                    BinOp::Shr => "shr",
+                    BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => {
+                        return format!("(({})({a} {} {b}))", c_type(ty), op.as_str());
+                    }
+                    // Enums without payloads compare by tag.
+                    _ if matches!(ty, Type::Enum(_)) => return format!("({a}.tag {} {b}.tag)", op.as_str()),
                     _ => return format!("({a} {} {b})", op.as_str()),
                 };
                 match ty {
@@ -933,6 +974,24 @@ impl Gen {
                 }
             }
             Rvalue::Not(op) => format!("(!{})", self.operand(f, op)),
+            Rvalue::BitNot { val, ty } => format!("(({})~{})", c_type(ty), self.operand(f, val)),
+            Rvalue::InRanges { val, ranges, ty } => {
+                let v = self.operand(f, val);
+                let tests: Vec<String> = ranges
+                    .iter()
+                    .map(|&(lo, hi)| {
+                        let (l, h) = (c_int_of(lo, *ty), c_int_of(hi, *ty));
+                        match (lo == hi, lo == ty.min(), hi == ty.max()) {
+                            (true, ..) => format!("{v} == {l}"),
+                            (_, true, true) => "1".to_string(),
+                            (_, true, _) => format!("{v} <= {h}"),
+                            (_, _, true) => format!("{v} >= {l}"),
+                            _ => format!("({v} >= {l} && {v} <= {h})"),
+                        }
+                    })
+                    .collect();
+                format!("({})", tests.join(" || "))
+            }
             Rvalue::Cast { val, from, to, span } => self.cast(&self.operand(f, val), from, to, *span),
             Rvalue::Call { name, is_extern, args } => {
                 let args: Vec<String> = args.iter().map(|a| self.operand(f, a)).collect();
@@ -1103,6 +1162,38 @@ impl Gen {
             }
             _ => format!("(({to_c}){v})"),
         }
+    }
+}
+
+/// The C initializer of a global of type `ty` with the value `v`.
+fn const_init(p: &Program, v: &ConstVal, ty: &Type) -> String {
+    let list = |vals: &[ConstVal], tys: &[&Type]| -> String {
+        vals.iter().zip(tys).map(|(v, t)| const_init(p, v, t)).collect::<Vec<_>>().join(", ")
+    };
+    match (v, ty) {
+        (ConstVal::Int(n), Type::Int(it)) => c_int_of(*n, *it),
+        (ConstVal::Float(x), Type::Float(ft)) => c_float_of(*x, *ft),
+        (ConstVal::Bool(b), _) => b.to_string(),
+        (ConstVal::Str(s), _) => format!("{{(uint8_t*){}, {}}}", c_str(s), s.len()),
+        (ConstVal::EmptySlice, _) => "{0, 0}".to_string(),
+        (ConstVal::Error(e), _) => e.to_string(),
+        (ConstVal::Null, t) if is_ptr_optional(t) => "0".to_string(),
+        (ConstVal::Null, _) => "{0}".to_string(),
+        (ConstVal::Some(x), Type::Optional(inner)) => format!("{{true, {}}}", const_init(p, x, inner)),
+        (ConstVal::Agg(elems), Type::Array(el, _)) => format!("{{{{{}}}}}", list(elems, &vec![&**el; elems.len()])),
+        (ConstVal::Agg(fields), Type::Struct(name)) => {
+            let def = p.structs.iter().find(|s| s.name == *name).unwrap();
+            format!("{{{}}}", list(fields, &def.fields.iter().map(|(_, t)| t).collect::<Vec<_>>()))
+        }
+        (ConstVal::Variant(tag, fields), Type::Enum(name)) => {
+            let v = &p.enums.iter().find(|e| e.name == *name).unwrap().variants[*tag];
+            if fields.is_empty() {
+                return format!("{{.tag = {tag}}}");
+            }
+            let tys: Vec<&Type> = v.fields.iter().map(|(_, t)| t).collect();
+            format!("{{.tag = {tag}, .u.{} = {{{}}}}}", c_field(&v.name), list(fields, &tys))
+        }
+        _ => unreachable!("constant {v:?} of type {ty}"),
     }
 }
 

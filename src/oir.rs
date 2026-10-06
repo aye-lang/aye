@@ -12,7 +12,9 @@
 //!   records error return trace entries (`TracePush`, `TraceRestore`);
 //! - makes runtime checks explicit: checked arithmetic carries its source
 //!   span, and indexing carries the length to check against;
-//! - lowers `match` to an `if` chain on the enum tag;
+//! - lowers `match` to an `if` chain on the enum tag, the error value or
+//!   the integer;
+//! - reads globals in place: a global is a local slot that names it;
 //! - lowers `alloc.create(v)` and `alloc.alloc(v, n)` to an allocation, a
 //!   null test and the error union.
 
@@ -36,6 +38,8 @@ pub struct Program {
     pub vtables: Vec<(String, String)>,
     /// Test names; test `i` is the function `test#i`.
     pub tests: Vec<String>,
+    /// Globals and their values.
+    pub globals: Vec<sema::GlobalDef>,
 }
 
 #[derive(Debug, Clone)]
@@ -49,10 +53,13 @@ pub struct Func {
 }
 
 /// A function-wide local slot: a user variable (`name` set) or a temporary.
+/// With `global`, the slot is the global `name` itself: it is not declared
+/// in the function.
 #[derive(Debug, Clone)]
 pub struct Local {
     pub name: Option<String>,
     pub ty: Type,
+    pub global: bool,
 }
 
 pub type Block = Vec<Stmt>;
@@ -136,6 +143,10 @@ pub enum Rvalue {
     Binary { op: BinOp, lhs: Operand, rhs: Operand, ty: Type, span: Span },
     Neg { val: Operand, ty: Type, span: Span },
     Not(Operand),
+    /// `~val`
+    BitNot { val: Operand, ty: Type },
+    /// Is the integer `val` in one of the inclusive ranges?
+    InRanges { val: Operand, ranges: Vec<(i128, i128)>, ty: IntTy },
     Cast { val: Operand, from: Type, to: Type, span: Span },
     Call { name: String, is_extern: bool, args: Vec<Operand> },
     /// Call method `method` through the vtable of the `dyn` value `recv`.
@@ -192,6 +203,7 @@ pub fn lower(p: &sema::Program) -> Program {
         ifaces: p.ifaces.clone(),
         vtables: p.vtables.clone(),
         tests: p.tests.clone(),
+        globals: p.globals.clone(),
     }
 }
 
@@ -213,6 +225,8 @@ struct Lower<'a> {
     span: Span,
     /// The function's return type.
     ret: Type,
+    /// The local slot of each global the function uses.
+    globals: HashMap<String, LocalId>,
 }
 
 fn local(id: LocalId) -> Place {
@@ -245,6 +259,7 @@ fn has_call(e: &TExpr) -> bool {
         | TExprKind::Bool(_)
         | TExprKind::Str(_)
         | TExprKind::Var(_)
+        | TExprKind::Global(_)
         | TExprKind::Null
         | TExprKind::EmptySlice
         | TExprKind::ErrorValue(_) => false,
@@ -277,8 +292,16 @@ impl<'a> Lower<'a> {
         enums: &'a HashMap<&'a str, &'a sema::EnumDef>,
     ) -> Func {
         // Sema variables keep their ids as OIR locals; temporaries follow.
-        let locals = f.vars.iter().map(|v| Local { name: Some(v.name.clone()), ty: v.ty.clone() }).collect();
-        let mut l = Lower { structs, enums, locals, scopes: Vec::new(), span: Span::default(), ret: f.ret.clone() };
+        let locals = f.vars.iter().map(|v| Local { name: Some(v.name.clone()), ty: v.ty.clone(), global: false }).collect();
+        let mut l = Lower {
+            structs,
+            enums,
+            locals,
+            scopes: Vec::new(),
+            span: Span::default(),
+            ret: f.ret.clone(),
+            globals: HashMap::new(),
+        };
         let mut body = Vec::new();
         l.block(&f.body, false, &mut body);
         // Falling off the end of a `!void` function returns "no error".
@@ -297,8 +320,19 @@ impl<'a> Lower<'a> {
     }
 
     fn temp(&mut self, ty: Type) -> LocalId {
-        self.locals.push(Local { name: None, ty });
+        self.locals.push(Local { name: None, ty, global: false });
         self.locals.len() - 1
+    }
+
+    /// The local slot that names the global `name`.
+    fn global(&mut self, name: &str, ty: &Type) -> LocalId {
+        if let Some(&id) = self.globals.get(name) {
+            return id;
+        }
+        self.locals.push(Local { name: Some(name.to_string()), ty: ty.clone(), global: true });
+        let id = self.locals.len() - 1;
+        self.globals.insert(name.to_string(), id);
+        id
     }
 
     fn push(&self, out: &mut Block, kind: StmtKind) {
@@ -409,13 +443,74 @@ impl<'a> Lower<'a> {
                 self.span = s.span;
                 self.push(out, StmtKind::If { cond: c, then: t, els: e });
             }
-            TStmtKind::While { cond, body } => {
+            TStmtKind::While { cond, capture, body } => {
                 let mut b = Vec::new();
-                let c = self.operand(cond, &mut b);
+                let (c, val) = match capture {
+                    None => (self.operand(cond, &mut b), None),
+                    // `while x |v|`: test `x` and unwrap it into `v` on each iteration.
+                    Some(v) => {
+                        let p = self.place(cond, &mut b);
+                        let has = self.temp(Type::Bool);
+                        let rv = Rvalue::IsSome { place: p.clone(), ty: cond.ty.clone() };
+                        self.push(&mut b, StmtKind::Assign(local(has), rv));
+                        (Operand::Local(has), Some((*v, Self::unwrap_place(p, &cond.ty))))
+                    }
+                };
                 self.push(&mut b, StmtKind::If { cond: c, then: vec![], els: vec![Stmt { kind: StmtKind::Break, span: s.span }] });
+                if let Some((v, p)) = val {
+                    self.push(&mut b, StmtKind::Assign(local(v), Rvalue::Load(p)));
+                }
                 self.block(body, true, &mut b);
                 self.span = s.span;
                 self.push(out, StmtKind::Loop { body: b, cont: vec![] });
+            }
+            TStmtKind::ForEach { index, elem, seq, body } => {
+                let usize_ty = Type::Int(IntTy::Usize);
+                // The sequence is evaluated once: a slice is copied, and an
+                // array is read in place.
+                let (base, len) = match &seq.ty {
+                    Type::Array(_, n) => (self.place(seq, out), Len::Array(*n)),
+                    _ => {
+                        let rv = self.rvalue(seq, out);
+                        let t = self.temp(seq.ty.clone());
+                        self.push(out, StmtKind::Assign(local(t), rv));
+                        (local(t), Len::Slice)
+                    }
+                };
+                let end = self.temp(usize_ty.clone());
+                let n = match len {
+                    Len::Array(n) => Rvalue::Use(Operand::Int(n as i128, IntTy::Usize)),
+                    _ => Rvalue::Load(field(base.clone(), "len")),
+                };
+                self.push(out, StmtKind::Assign(local(end), n));
+                let i = index.unwrap_or_else(|| self.temp(usize_ty.clone()));
+                self.push(out, StmtKind::Assign(local(i), Rvalue::Use(Operand::Int(0, IntTy::Usize))));
+                let mut b = Vec::new();
+                let c = self.temp(Type::Bool);
+                let cmp = Rvalue::Binary {
+                    op: BinOp::Lt,
+                    lhs: Operand::Local(i),
+                    rhs: Operand::Local(end),
+                    ty: usize_ty.clone(),
+                    span: s.span,
+                };
+                self.push(&mut b, StmtKind::Assign(local(c), cmp));
+                self.push(&mut b, StmtKind::If { cond: Operand::Local(c), then: vec![], els: vec![Stmt { kind: StmtKind::Break, span: s.span }] });
+                let mut p = base;
+                p.proj.push(Proj::Index { index: Operand::Local(i), len, span: s.span });
+                self.push(&mut b, StmtKind::Assign(local(*elem), Rvalue::Load(p)));
+                self.block(body, true, &mut b);
+                self.span = s.span;
+                // `i < end` held, so `i + 1` cannot overflow.
+                let step = Rvalue::Binary {
+                    op: BinOp::AddWrap,
+                    lhs: Operand::Local(i),
+                    rhs: Operand::Int(1, IntTy::Usize),
+                    ty: usize_ty,
+                    span: s.span,
+                };
+                let cont = vec![Stmt { kind: StmtKind::Assign(local(i), step), span: s.span }];
+                self.push(out, StmtKind::Loop { body: b, cont });
             }
             TStmtKind::For { var, lo, hi, body } => {
                 let Type::Int(it) = lo.ty else { unreachable!() };
@@ -595,7 +690,8 @@ impl<'a> Lower<'a> {
     /// `match`: bind the pattern variables and run the arm whose variant
     /// equals the tag. The last arm needs no test (the match is exhaustive).
     /// The value of an expression arm goes to `result`.
-    /// A `match` on errors tests the error value instead of the tag.
+    /// A `match` on errors tests the error value instead of the tag, and a
+    /// `match` on an integer tests the arms' ranges.
     fn lower_match(&mut self, e: &'a TExpr, result: Option<LocalId>, out: &mut Block) {
         let TExprKind::Match { scrutinee, arms } = &e.kind else { unreachable!() };
         let def = match &scrutinee.ty {
@@ -604,7 +700,11 @@ impl<'a> Lower<'a> {
         };
         let span = self.span;
         let place = self.place(scrutinee, out);
-        let tag_ty = if def.is_some() { IntTy::U32 } else { IntTy::U16 };
+        let tag_ty = match &scrutinee.ty {
+            Type::Enum(_) => IntTy::U32,
+            Type::Int(it) => *it,
+            _ => IntTy::U16,
+        };
         let tag = self.temp(Type::Int(tag_ty));
         let tag_place = if def.is_some() { field(place.clone(), "tag") } else { place.clone() };
         self.push(out, StmtKind::Assign(local(tag), Rvalue::Load(tag_place)));
@@ -635,14 +735,17 @@ impl<'a> Lower<'a> {
         let mut chain: Option<Block> = None;
         for (arm, body) in arms.iter().zip(bodies).rev() {
             chain = Some(match (chain, arm.variant) {
-                (Some(rest), Some(vi)) => {
+                (Some(rest), _) if arm.variant.is_some() || !arm.ranges.is_empty() => {
                     let c = self.temp(Type::Bool);
-                    let cmp = Rvalue::Binary {
-                        op: BinOp::Eq,
-                        lhs: Operand::Local(tag),
-                        rhs: Operand::Int(vi as i128, tag_ty),
-                        ty: Type::Int(tag_ty),
-                        span,
+                    let cmp = match arm.variant {
+                        Some(vi) => Rvalue::Binary {
+                            op: BinOp::Eq,
+                            lhs: Operand::Local(tag),
+                            rhs: Operand::Int(vi as i128, tag_ty),
+                            ty: Type::Int(tag_ty),
+                            span,
+                        },
+                        None => Rvalue::InRanges { val: Operand::Local(tag), ranges: arm.ranges.clone(), ty: tag_ty },
                     };
                     vec![
                         Stmt { kind: StmtKind::Assign(Place { local: c, proj: vec![] }, cmp), span },
@@ -669,6 +772,7 @@ impl<'a> Lower<'a> {
     fn place(&mut self, e: &'a TExpr, out: &mut Block) -> Place {
         match &e.kind {
             TExprKind::Var(id) => Place { local: *id, proj: vec![] },
+            TExprKind::Global(name) => local(self.global(name, &e.ty)),
             TExprKind::Deref(ptr) => {
                 let mut p = self.place(ptr, out);
                 p.proj.push(Proj::Deref);
@@ -734,6 +838,8 @@ impl<'a> Lower<'a> {
                 Rvalue::Use(Operand::Local(t))
             }
             TExprKind::Var(id) => Rvalue::Use(Operand::Local(*id)),
+            // A copy: a call later in the expression may change a `var` global.
+            TExprKind::Global(_) => Rvalue::Load(self.place(e, out)),
             TExprKind::ErrorValue(v) => Rvalue::Use(Operand::Int(*v as i128, IntTy::U16)),
             TExprKind::OkWrap(x) => Rvalue::Ok { val: Some(self.operand(x, out)), ty: e.ty.clone() },
             TExprKind::ErrWrap(x) => Rvalue::Err { err: self.operand(x, out), ty: e.ty.clone() },
@@ -833,6 +939,7 @@ impl<'a> Lower<'a> {
                 Rvalue::Neg { val, ty: e.ty.clone(), span: e.span }
             }
             TExprKind::Unary { op: UnOp::Not, expr } => Rvalue::Not(self.operand(expr, out)),
+            TExprKind::Unary { op: UnOp::BitNot, expr } => Rvalue::BitNot { val: self.operand(expr, out), ty: e.ty.clone() },
             TExprKind::Cast(inner) => {
                 let val = self.operand(inner, out);
                 Rvalue::Cast { val, from: inner.ty.clone(), to: e.ty.clone(), span: e.span }

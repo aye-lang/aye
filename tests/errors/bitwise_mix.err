@@ -1,0 +1,2 @@
+bitwise_mix.ore:2:18: error[E0087]: `&` and `|` cannot be mixed without parentheses: write `(a & b) | c` or `a & (b | c)`
+bitwise_mix.ore:6:18: error[E0087]: `^` and `&` cannot be mixed without parentheses: write `(a ^ b) & c` or `a ^ (b & c)`

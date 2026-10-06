@@ -1,0 +1,2 @@
+for_each.ore:3:14: error[E0090]: cannot iterate over an integer `i64`: count with a range, `for x in 0..n`
+for_each.ore:7:11: error[E0027]: `while` with `|v|` needs an optional (`?T`) value, found `bool`

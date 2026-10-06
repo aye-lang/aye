@@ -1,0 +1,49 @@
+// `for x in seq { }` and `for i, x in seq { }` over arrays and slices.
+
+fn sum(xs: []i64) i64 {
+    var t: i64 = 0
+    for x in xs {
+        t += x
+    }
+    return t
+}
+
+fn double(xs: []mut i64) {
+    for i, x in xs {
+        xs[i] = x * 2
+    }
+}
+
+pub fn main() {
+    var arr = [4]i64{1, 2, 3, 4}
+    @println(sum(arr[..]))
+    double(arr[..])
+    for i, x in arr {
+        @print(i)
+        @print(":")
+        @println(x)
+    }
+    // The sequence is evaluated once; an array is read in place.
+    for x in arr {
+        if x == 4 {
+            continue
+        }
+        if x > 6 {
+            break
+        }
+        defer @println("next")
+        @println(x)
+    }
+    let empty = []i64{}
+    for x in empty {
+        @println(x)
+    }
+    let words = [3][]u8{"a", "bc", "def"}
+    var n: usize = 0
+    for w in words {
+        for c in w {
+            n += 1
+        }
+    }
+    @println(n)
+}

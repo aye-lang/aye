@@ -1,0 +1,1 @@
+match_int_exhaustive.ore:2:12: error[E0056]: `match` on `u8` is not exhaustive: missing `0..=47`, `58..=96`, `103..=255` (add a `_` arm)

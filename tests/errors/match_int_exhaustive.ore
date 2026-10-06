@@ -1,0 +1,10 @@
+fn digit(c: u8) u8 {
+    return match c {
+        '0'..='9' => c - '0'
+        'a'..='f' => c - 'a' + 10
+    }
+}
+
+pub fn main() {
+    @println(digit('7'))
+}

@@ -11,7 +11,7 @@ use crate::diag::{Error, Result, Span};
 use crate::lexer::{Kw, Tok, Token};
 
 pub fn parse(tokens: Vec<Token>) -> std::result::Result<File, Vec<Error>> {
-    let mut p = Parser { toks: tokens, pos: 0, no_struct_lit: false, errors: Vec::new(), tests: 0 };
+    let mut p = Parser { toks: tokens, pos: 0, no_struct_lit: false, no_pipe: false, errors: Vec::new(), tests: 0 };
     let f = p.file();
     if p.errors.is_empty() { Ok(f) } else { Err(p.errors) }
 }
@@ -22,6 +22,9 @@ struct Parser {
     /// Set while parsing `if`/`while`/`for`/`match` headers, where `Name {`
     /// starts the body rather than a struct literal (same rule as Go).
     no_struct_lit: bool,
+    /// Set while parsing `if`/`while` headers, where a `|` at the top level
+    /// starts a capture (`if x |v|`) rather than a bitwise or.
+    no_pipe: bool,
     errors: Vec<Error>,
     /// Number of `test` blocks so far.
     tests: usize,
@@ -36,7 +39,7 @@ fn not_supported(kw: Kw, span: Span) -> Error {
     Error::new(E0007, span, what)
 }
 
-/// Binding strength of `catch`: looser than `+`, tighter than comparisons.
+/// Binding strength of `catch`: looser than `& | ^`, tighter than comparisons.
 const CATCH_PREC: u8 = 4;
 
 fn is_unsupported_kw(kw: Kw) -> bool {
@@ -118,6 +121,17 @@ impl Parser {
         }
     }
 
+    /// Enter brackets, parentheses or braces inside a header: struct
+    /// literals and `|` mean what they mean outside headers again. Returns
+    /// the flags for `leave_nested`.
+    fn enter_nested(&mut self) -> (bool, bool) {
+        (std::mem::replace(&mut self.no_struct_lit, false), std::mem::replace(&mut self.no_pipe, false))
+    }
+
+    fn leave_nested(&mut self, saved: (bool, bool)) {
+        (self.no_struct_lit, self.no_pipe) = saved;
+    }
+
     fn skip_semis(&mut self) {
         while self.eat(&Tok::Semi) {}
     }
@@ -174,16 +188,19 @@ impl Parser {
     }
 
     /// Skip a failed declaration: up to the next line that starts with a
-    /// declaration keyword, or end of file.
+    /// declaration keyword, or end of file. `let` and `var` start a
+    /// declaration only in the first column (else they are statements of a
+    /// function body).
     fn sync_item(&mut self) {
         loop {
             match self.peek() {
                 Tok::Eof => return,
                 Tok::Semi => {
                     self.bump();
-                    if matches!(
-                        self.peek(),
-                        Tok::Kw(
+                    let decl = match self.peek() {
+                        Tok::Kw(Kw::Let | Kw::Var) => self.span().col == 1,
+                        Tok::Kw(k) => matches!(
+                            k,
                             Kw::Fn
                                 | Kw::Pub
                                 | Kw::Extern
@@ -193,8 +210,10 @@ impl Parser {
                                 | Kw::Interface
                                 | Kw::Test
                                 | Kw::Import
-                        )
-                    ) {
+                        ),
+                        _ => false,
+                    };
+                    if decl {
                         return;
                     }
                 }
@@ -222,7 +241,7 @@ impl Parser {
             let r = r.and_then(|_| self.end_of_stmt());
             if let Err(e) = r {
                 self.errors.push(e);
-                self.no_struct_lit = false;
+                self.leave_nested((false, false));
                 self.sync_item();
             }
         }
@@ -247,12 +266,29 @@ impl Parser {
             Tok::Kw(Kw::Error) => Ok(Item::ErrorSet(self.error_decl(is_pub)?)),
             Tok::Kw(Kw::Interface) => Ok(Item::Interface(self.interface_decl(is_pub)?)),
             Tok::Kw(Kw::Test) if !is_pub => Ok(Item::Test(self.test_decl()?)),
-            Tok::Kw(Kw::Let) | Tok::Kw(Kw::Var) => {
-                Err(Error::new(E0007, self.span(), "global variables are not yet supported"))
-            }
+            Tok::Kw(Kw::Let) | Tok::Kw(Kw::Var) => Ok(Item::Global(self.global_decl(is_pub)?)),
             Tok::Kw(k) if is_unsupported_kw(k) => Err(not_supported(k, self.span())),
-            _ => Err(self.unexpected("declaration (`fn`, `extern fn`, `struct`, `enum`, `error`, `interface` or `test`)")),
+            _ => Err(self.unexpected(
+                "declaration (`fn`, `extern fn`, `struct`, `enum`, `error`, `interface`, `let`, `var` or `test`)",
+            )),
         }
+    }
+
+    /// `let NAME = value`, `var name = value` or `let Name = Type` at the
+    /// top level. The value can be a type that does not read as an
+    /// expression (`let P = *Node`).
+    fn global_decl(&mut self, is_pub: bool) -> Result<GlobalDecl> {
+        let kw_span = self.span();
+        let mutable = self.bump().tok == Tok::Kw(Kw::Var);
+        let (name, span) = self.ident()?;
+        let ty = if self.eat(&Tok::Colon) { Some(self.type_expr()?) } else { None };
+        if !self.at(&Tok::Assign) {
+            let kw = if mutable { "var" } else { "let" };
+            return Err(Error::new(E0013, self.span(), format!("`{kw} {name}` needs an initializer (`= value`)")));
+        }
+        self.bump();
+        let init = self.arg()?;
+        Ok(GlobalDecl { name, span, is_pub, mutable, kw_span, ty, init })
     }
 
     /// `import a.b.c`
@@ -418,11 +454,19 @@ impl Parser {
         self.expect(&Tok::Kw(Kw::Enum))?;
         let (name, span) = self.ident()?;
         self.expect(&Tok::LBrace)?;
-        let mut variants = Vec::new();
+        let (mut variants, mut methods) = (Vec::new(), Vec::new());
         loop {
             self.skip_semis();
             if self.eat(&Tok::RBrace) {
                 break;
+            }
+            if self.at(&Tok::Kw(Kw::Fn)) || self.at(&Tok::Kw(Kw::Pub)) {
+                let is_pub = self.eat(&Tok::Kw(Kw::Pub));
+                methods.push(self.fn_decl(is_pub, false)?);
+                if !self.at(&Tok::RBrace) {
+                    self.expect(&Tok::Semi)?;
+                }
+                continue;
             }
             let (vname, vspan) = self.ident()?;
             let fields = if self.at(&Tok::LBrace) {
@@ -443,7 +487,7 @@ impl Parser {
                 _ => return Err(self.unexpected("`,`, newline or `}` after enum variant")),
             }
         }
-        Ok(EnumDecl { name, span, is_pub, variants })
+        Ok(EnumDecl { name, span, is_pub, variants, methods })
     }
 
     /// `error Name { A, B }` (names separated by `,` or newlines) or
@@ -575,7 +619,7 @@ impl Parser {
 
     fn block(&mut self) -> Result<Block> {
         let span = self.expect(&Tok::LBrace)?;
-        let saved = std::mem::replace(&mut self.no_struct_lit, false);
+        let saved = self.enter_nested();
         let mut stmts = Vec::new();
         loop {
             self.skip_semis();
@@ -595,11 +639,11 @@ impl Parser {
             };
             if let Err(e) = r {
                 self.errors.push(e);
-                self.no_struct_lit = false;
+                self.leave_nested((false, false));
                 self.sync_stmt(start);
             }
         }
-        self.no_struct_lit = saved;
+        self.leave_nested(saved);
         Ok(Block { stmts, span })
     }
 
@@ -646,13 +690,19 @@ impl Parser {
             Tok::Kw(Kw::If) => return self.if_stmt(),
             Tok::Kw(Kw::While) => {
                 self.bump();
-                let cond = self.header_expr()?;
+                let cond = self.cond_header()?;
+                let capture = self.capture()?;
                 let body = self.block()?;
-                StmtKind::While { cond, body }
+                StmtKind::While { cond, capture, body }
             }
             Tok::Kw(Kw::For) => {
                 self.bump();
-                let (var, var_span) = self.ident()?;
+                let (mut var, mut var_span) = self.ident()?;
+                let mut index = None;
+                if self.eat(&Tok::Comma) {
+                    index = Some((var, var_span));
+                    (var, var_span) = self.ident()?;
+                }
                 match self.peek() {
                     Tok::Ident(w) if w == "in" => {
                         self.bump();
@@ -660,7 +710,14 @@ impl Parser {
                     _ => return Err(self.unexpected("`in`")),
                 }
                 let lo = self.header_expr()?;
-                self.expect(&Tok::DotDot)?;
+                if !self.at(&Tok::DotDot) {
+                    let body = self.block()?;
+                    return Ok(Stmt { kind: StmtKind::ForEach { index, elem: (var, var_span), seq: lo, body }, span });
+                }
+                if let Some((_, index_span)) = index {
+                    return Err(Error::new(E0006, index_span, "a `for` over a range has one variable: `for i in lo..hi`"));
+                }
+                self.bump();
                 let hi = self.header_expr()?;
                 let body = self.block()?;
                 StmtKind::For { var, var_span, lo, hi, body }
@@ -704,16 +761,25 @@ impl Parser {
         Ok(Stmt { kind, span })
     }
 
+    /// `|v|` after an `if` or `while` header. A `|` there always starts a
+    /// capture, so a bitwise or in the header needs parentheses.
+    fn capture(&mut self) -> Result<Option<(String, Span)>> {
+        if !self.eat(&Tok::Pipe) {
+            return Ok(None);
+        }
+        let hint = |e: Error| Error {
+            msg: format!("{} (a `|` after an `if` or `while` condition starts a capture `|v|`; put a bitwise or in parentheses: `(a | b)`)", e.msg),
+            ..e
+        };
+        let c = self.ident().map_err(hint)?;
+        self.expect(&Tok::Pipe).map_err(hint)?;
+        Ok(Some(c))
+    }
+
     fn if_stmt(&mut self) -> Result<Stmt> {
         let span = self.expect(&Tok::Kw(Kw::If))?;
-        let cond = self.header_expr()?;
-        let capture = if self.eat(&Tok::Pipe) {
-            let c = self.ident()?;
-            self.expect(&Tok::Pipe)?;
-            Some(c)
-        } else {
-            None
-        };
+        let cond = self.cond_header()?;
+        let capture = self.capture()?;
         let then = self.block()?;
         let els = if self.eat(&Tok::Kw(Kw::Else)) {
             let else_span = self.span();
@@ -744,6 +810,11 @@ impl Parser {
             Tok::PlusPctEq => AssignOp::Op(BinOp::AddWrap),
             Tok::MinusPctEq => AssignOp::Op(BinOp::SubWrap),
             Tok::StarPctEq => AssignOp::Op(BinOp::MulWrap),
+            Tok::AmpEq => AssignOp::Op(BinOp::BitAnd),
+            Tok::PipeEq => AssignOp::Op(BinOp::BitOr),
+            Tok::CaretEq => AssignOp::Op(BinOp::BitXor),
+            Tok::ShlEq => AssignOp::Op(BinOp::Shl),
+            Tok::ShrEq => AssignOp::Op(BinOp::Shr),
             _ => return Ok(Stmt { kind: StmtKind::Expr(target), span }),
         };
         let op_span = self.bump().span;
@@ -753,11 +824,20 @@ impl Parser {
 
     // ---------------------------------------------------------- expressions
 
-    /// Expression in an `if`/`while`/`for` header: no bare struct literals.
+    /// Expression in an `if`/`while`/`for`/`match` header: no bare struct literals.
     fn header_expr(&mut self) -> Result<Expr> {
         let saved = std::mem::replace(&mut self.no_struct_lit, true);
         let e = self.expr();
         self.no_struct_lit = saved;
+        e
+    }
+
+    /// The condition of an `if` or `while`: a header expression in which a
+    /// top-level `|` starts a capture.
+    fn cond_header(&mut self) -> Result<Expr> {
+        let saved = (std::mem::replace(&mut self.no_struct_lit, true), std::mem::replace(&mut self.no_pipe, true));
+        let e = self.expr();
+        self.leave_nested(saved);
         e
     }
 
@@ -775,21 +855,26 @@ impl Parser {
             Tok::Le => (BinOp::Le, 3),
             Tok::Gt => (BinOp::Gt, 3),
             Tok::Ge => (BinOp::Ge, 3),
-            Tok::Plus => (BinOp::Add, 5),
-            Tok::Minus => (BinOp::Sub, 5),
-            Tok::PlusPct => (BinOp::AddWrap, 5),
-            Tok::MinusPct => (BinOp::SubWrap, 5),
-            Tok::Star => (BinOp::Mul, 6),
-            Tok::Slash => (BinOp::Div, 6),
-            Tok::Percent => (BinOp::Rem, 6),
-            Tok::StarPct => (BinOp::MulWrap, 6),
+            Tok::Amp => (BinOp::BitAnd, 5),
+            Tok::Pipe if !self.no_pipe => (BinOp::BitOr, 5),
+            Tok::Caret => (BinOp::BitXor, 5),
+            Tok::Shl => (BinOp::Shl, 6),
+            Tok::Shr => (BinOp::Shr, 6),
+            Tok::Plus => (BinOp::Add, 7),
+            Tok::Minus => (BinOp::Sub, 7),
+            Tok::PlusPct => (BinOp::AddWrap, 7),
+            Tok::MinusPct => (BinOp::SubWrap, 7),
+            Tok::Star => (BinOp::Mul, 8),
+            Tok::Slash => (BinOp::Div, 8),
+            Tok::Percent => (BinOp::Rem, 8),
+            Tok::StarPct => (BinOp::MulWrap, 8),
             _ => return None,
         })
     }
 
     /// Precedence climbing; all binary operators are left-associative except
     /// comparisons, which do not chain. `catch` sits between the comparisons
-    /// and `+`, as in Zig.
+    /// and `& | ^`, which do not mix: `a & b | c` needs parentheses.
     fn binary(&mut self, min_prec: u8) -> Result<Expr> {
         let mut lhs = self.cast()?;
         loop {
@@ -806,6 +891,16 @@ impl Parser {
             lhs = Expr { kind: ExprKind::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) }, span };
             if op.is_comparison() && self.binop().is_some_and(|(o, _)| o.is_comparison()) {
                 return Err(Error::new(E0009, self.span(), "comparison operators cannot be chained"));
+            }
+            if let Some((next, _)) = self.binop()
+                && op.is_bitwise()
+                && next.is_bitwise()
+                && next != op
+            {
+                let (a, b) = (op.as_str(), next.as_str());
+                return Err(Error::new(E0087, self.span(), format!(
+                    "`{a}` and `{b}` cannot be mixed without parentheses: write `(a {a} b) {b} c` or `a {a} (b {b} c)`"
+                )));
             }
         }
         Ok(lhs)
@@ -855,6 +950,7 @@ impl Parser {
         let op = match self.peek() {
             Tok::Minus => UnOp::Neg,
             Tok::Bang => UnOp::Not,
+            Tok::Tilde => UnOp::BitNot,
             _ => return self.postfix(),
         };
         let span = self.bump().span;
@@ -898,7 +994,7 @@ impl Parser {
                 }
                 Tok::LBracket => {
                     let span = self.bump().span;
-                    let saved = std::mem::replace(&mut self.no_struct_lit, false);
+                    let saved = self.enter_nested();
                     let lo = if self.at(&Tok::DotDot) { None } else { Some(Box::new(self.expr()?)) };
                     if self.eat(&Tok::DotDot) {
                         let hi =
@@ -910,7 +1006,7 @@ impl Parser {
                         let index = lo.unwrap();
                         e = Expr { kind: ExprKind::Index { base: Box::new(e), index }, span };
                     }
-                    self.no_struct_lit = saved;
+                    self.leave_nested(saved);
                 }
                 _ => return Ok(e),
             }
@@ -919,7 +1015,7 @@ impl Parser {
 
     fn args(&mut self) -> Result<Vec<Expr>> {
         self.expect(&Tok::LParen)?;
-        let saved = std::mem::replace(&mut self.no_struct_lit, false);
+        let saved = self.enter_nested();
         let mut args = Vec::new();
         while !self.at(&Tok::RParen) {
             args.push(self.arg()?);
@@ -931,7 +1027,7 @@ impl Parser {
             return Err(self.missing_comma(&Tok::RParen, "`,` or `)`"));
         }
         self.bump();
-        self.no_struct_lit = saved;
+        self.leave_nested(saved);
         Ok(args)
     }
 
@@ -984,9 +1080,9 @@ impl Parser {
             }
             Tok::LParen => {
                 self.bump();
-                let saved = std::mem::replace(&mut self.no_struct_lit, false);
+                let saved = self.enter_nested();
                 let inner = self.expr()?;
-                self.no_struct_lit = saved;
+                self.leave_nested(saved);
                 self.expect(&Tok::RParen)?;
                 ExprKind::Paren(Box::new(inner))
             }
@@ -999,7 +1095,7 @@ impl Parser {
                     return Err(Error::new(E0007, span, "only array literals (`[N]T{...}`) and the empty slice (`[]T{}`) are supported"));
                 }
                 self.expect(&Tok::LBrace)?;
-                let saved = std::mem::replace(&mut self.no_struct_lit, false);
+                let saved = self.enter_nested();
                 let mut elems = Vec::new();
                 while !self.at(&Tok::RBrace) {
                     elems.push(self.expr()?);
@@ -1011,14 +1107,14 @@ impl Parser {
                     return Err(self.missing_comma(&Tok::RBrace, "`,` or `}` (multi-line literals need a trailing comma)"));
                 }
                 self.bump();
-                self.no_struct_lit = saved;
+                self.leave_nested(saved);
                 ExprKind::ArrayLit { ty, elems }
             }
             Tok::Kw(Kw::Match) => {
                 self.bump();
                 let scrutinee = Box::new(self.header_expr()?);
                 self.expect(&Tok::LBrace)?;
-                let saved = std::mem::replace(&mut self.no_struct_lit, false);
+                let saved = self.enter_nested();
                 let mut arms = Vec::new();
                 loop {
                     self.skip_semis();
@@ -1034,7 +1130,7 @@ impl Parser {
                         _ => return Err(self.unexpected("`,`, newline or `}` after match arm")),
                     }
                 }
-                self.no_struct_lit = saved;
+                self.leave_nested(saved);
                 ExprKind::Match { scrutinee, arms }
             }
             Tok::Kw(Kw::Struct) => {
@@ -1047,12 +1143,19 @@ impl Parser {
         Ok(Expr { kind, span })
     }
 
-    /// `pattern => body`, where the pattern is `_`, `.V` or `.V { a, b: c, .. }`
-    /// and the body is a block or an expression.
+    /// `pattern => body`, where the pattern is `_`, `.V`, `.V { a, b: c, .. }`
+    /// or integer patterns separated by `,` (`'a'..='z', '_'`), and the body
+    /// is a block or an expression.
     fn match_arm(&mut self) -> Result<MatchArm> {
         let span = self.span();
-        let (mut variant, mut fields, mut rest) = (None, None, false);
+        let (mut variant, mut fields, mut rest, mut values) = (None, None, false, Vec::new());
         match self.peek() {
+            Tok::Int(_) | Tok::Char(_) | Tok::Minus => loop {
+                values.push(self.int_pat()?);
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            },
             Tok::Ident(n) if n == "_" => {
                 self.bump();
             }
@@ -1078,11 +1181,37 @@ impl Parser {
                     fields = Some(pats);
                 }
             }
-            _ => return Err(self.unexpected("pattern (`.Variant` or `_`)")),
+            _ => return Err(self.unexpected("pattern (`.Variant`, an integer or character, or `_`)")),
         }
         self.expect(&Tok::FatArrow)?;
         let body = if self.at(&Tok::LBrace) { ArmBody::Block(self.block()?) } else { ArmBody::Expr(self.expr()?) };
-        Ok(MatchArm { variant, fields, rest, body, span })
+        Ok(MatchArm { variant, values, fields, rest, body, span })
+    }
+
+    /// `1`, `-1`, `'a'` or the inclusive range `'a'..='z'`.
+    fn int_pat(&mut self) -> Result<IntPat> {
+        let span = self.span();
+        let lo = self.int_lit()?;
+        let hi = if self.eat(&Tok::DotDotEq) {
+            self.int_lit()?
+        } else if self.at(&Tok::DotDot) {
+            return Err(Error::new(E0006, self.span(), "a range pattern includes its end: write `lo..=hi`"));
+        } else {
+            lo
+        };
+        Ok(IntPat { lo, hi, span })
+    }
+
+    /// An integer or character literal, or `-` and an integer literal.
+    fn int_lit(&mut self) -> Result<i128> {
+        let neg = self.eat(&Tok::Minus);
+        let v = match self.peek() {
+            Tok::Int(v) => *v as i128,
+            Tok::Char(c) if !neg => *c as i128,
+            _ => return Err(self.unexpected("integer or character literal")),
+        };
+        self.bump();
+        Ok(if neg { -v } else { v })
     }
 
     /// `{ name: value, ... }` of a struct or variant literal.
@@ -1185,6 +1314,34 @@ mod tests {
         let ExprKind::Binary { op: BinOp::Eq, lhs, .. } = &init.kind else { panic!("{init:?}") };
         let ExprKind::Catch { body, .. } = &lhs.kind else { panic!("{lhs:?}") };
         assert!(matches!(&**body, ArmBody::Expr(Expr { kind: ExprKind::Binary { op: BinOp::Add, .. }, .. })));
+    }
+
+    /// `& | ^` bind tighter than `==` and looser than `+`; shifts bind
+    /// tighter than `&`.
+    #[test]
+    fn bitwise_precedence() {
+        let f = parse_src("fn f() {\n let b = a & 1 << 2 + 3 == 4\n}").unwrap();
+        let Item::Fn(f) = &f.items[0] else { panic!() };
+        let StmtKind::Let { init, .. } = &f.body.as_ref().unwrap().stmts[0].kind else { panic!() };
+        let ExprKind::Binary { op: BinOp::Eq, lhs, .. } = &init.kind else { panic!("{init:?}") };
+        let ExprKind::Binary { op: BinOp::BitAnd, rhs, .. } = &lhs.kind else { panic!("{lhs:?}") };
+        let ExprKind::Binary { op: BinOp::Shl, rhs, .. } = &rhs.kind else { panic!("{rhs:?}") };
+        assert!(matches!(rhs.kind, ExprKind::Binary { op: BinOp::Add, .. }));
+    }
+
+    #[test]
+    fn bitwise_ops_do_not_mix() {
+        let e = parse_src("fn f() {\n let b = a | b ^ c\n}").unwrap_err();
+        assert_eq!(e.code, E0087);
+        assert!(parse_src("fn f() {\n let b = a | b | (c ^ d)\n}").is_ok());
+    }
+
+    /// In an `if` header, `|` starts the capture.
+    #[test]
+    fn pipe_in_if_header_is_a_capture() {
+        assert!(parse_src("fn f() {\n if x |v| {\n }\n while (a | b) != 0 {\n }\n}").is_ok());
+        let e = parse_src("fn f() {\n if a | b == 0 {\n }\n}").unwrap_err();
+        assert!(e.msg.contains("starts a capture"), "{}", e.msg);
     }
 
     #[test]

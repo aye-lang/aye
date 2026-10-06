@@ -1,0 +1,31 @@
+// `==` and `!=` on pointers (identity), C pointers and enums without
+// payloads.
+
+enum Dir { North, East, South, West }
+
+struct Cell { v: i64 }
+
+extern fn strchr(s: [*]u8, c: i32) [*]u8
+
+pub fn main() {
+    var a = Cell { v: 1 }
+    var b = Cell { v: 1 }
+    let pa: *Cell = &a
+    let pa2 = &a
+    let pm = &mut a
+    @println(pa == pa2)
+    @println(pa == &b)
+    @println(pa != &b)
+    @println(pm == pa)
+    let s = "hello"
+    let p = s.ptr
+    @println(p == s.ptr)
+    @println(strchr(p, 'l') == strchr(p, 'l'))
+    @println(strchr(p, 'h') == p)
+    let d = Dir.South
+    @println(d == Dir.South)
+    @println(d != Dir.North)
+    var dirs = [2]Dir{Dir.East, Dir.East}
+    @println(dirs[0] == dirs[1])
+    b.v = 2
+}

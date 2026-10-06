@@ -1,0 +1,62 @@
+// `match` on integers and characters: literal patterns, several patterns
+// per arm, inclusive ranges and `_`.
+
+fn classify(c: u8) []u8 {
+    return match c {
+        'a'..='z', 'A'..='Z', '_' => "word"
+        '0'..='9' => "digit"
+        ' ', '\t', '\n' => "space"
+        _ => "other"
+    }
+}
+
+fn sign(x: i32) i32 {
+    return match x {
+        -2147483648..=-1 => -1
+        0 => 0
+        _ => 1
+    }
+}
+
+// The arms cover every `u8` value, so no `_` is needed.
+fn half(x: u8) u8 {
+    return match x {
+        0..=127 => 0
+        128..=255 => 1
+    }
+}
+
+fn describe(n: u32) {
+    match n {
+        0 => @println("zero")
+        1, 2, 3 => {
+            @print("small ")
+            @println(n)
+        }
+        100..=199 => @println("hundreds")
+        _ => {}
+    }
+}
+
+pub fn main() {
+    let text = "a1 _Z\t?"
+    for c in text {
+        @println(classify(c))
+    }
+    @println(sign(-7))
+    @println(sign(0))
+    @println(sign(9))
+    @println(half(127))
+    @println(half(200))
+    describe(0)
+    describe(2)
+    describe(150)
+    describe(1000)
+    let code: u32 = 0x1F600
+    let plane = match code >> 16 {
+        0 => "BMP"
+        1 => "SMP"
+        _ => "other"
+    }
+    @println(plane)
+}

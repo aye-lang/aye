@@ -1,0 +1,16 @@
+// Constants, globals, a type alias and an enum method of another module.
+
+import lib
+import lib.Level
+
+pub fn main() {
+    @println(lib.MAX)
+    @println(lib.TABLE[2])
+    lib.hits += 1
+    lib.record()
+    @println(lib.hits)
+    let w: lib.Word = "word"
+    @println(w)
+    @println(Level.High.rank())
+    @println(lib.DEFAULT.rank())
+}

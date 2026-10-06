@@ -1,0 +1,33 @@
+enum Color { Red, Green }
+
+fn f(c: u8, col: Color) {
+    match c {
+        'a'..='z' => {}
+        'x' => {}
+        _ => {}
+    }
+    match c {
+        300 => {}
+        _ => {}
+    }
+    match c {
+        9..=3 => {}
+        _ => {}
+    }
+    match c {
+        .Red => {}
+        _ => {}
+    }
+    match col {
+        1 => {}
+        _ => {}
+    }
+    match c {
+        0..=255 => {}
+        _ => {}
+    }
+}
+
+pub fn main() {
+    f(1, Color.Red)
+}

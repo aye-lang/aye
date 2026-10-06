@@ -1,0 +1,93 @@
+// M6 acceptance: FNV-1a and CRC-32 of a string, and UTF-8 decoding with
+// `match` on byte ranges.
+
+let FNV_OFFSET: u32 = 2166136261
+let FNV_PRIME: u32 = 16777619
+let CRC_POLY: u32 = 0xEDB88320
+
+fn fnv1a(s: []u8) u32 {
+    var h = FNV_OFFSET
+    for b in s {
+        h ^= b as u32
+        h *%= FNV_PRIME
+    }
+    return h
+}
+
+fn crc32(s: []u8) u32 {
+    var crc: u32 = 0xFFFFFFFF
+    for b in s {
+        crc ^= b as u32
+        for k in 0..8 {
+            if crc & 1 == 1 {
+                crc = (crc >> 1) ^ CRC_POLY
+            } else {
+                crc >>= 1
+            }
+        }
+    }
+    return ~crc
+}
+
+// The number of bytes of the sequence that starts with `b`; 0 if `b`
+// cannot start one.
+fn seqLen(b: u8) usize {
+    return match b {
+        0x00..=0x7F => 1
+        0xC0..=0xDF => 2
+        0xE0..=0xEF => 3
+        0xF0..=0xF7 => 4
+        _ => 0
+    }
+}
+
+// Print the code points of `s`, one per line.
+fn decode(s: []u8) {
+    var i: usize = 0
+    while i < s.len {
+        let b = s[i]
+        let n = seqLen(b)
+        if n == 0 || i + n > s.len {
+            @println("invalid")
+            i += 1
+            continue
+        }
+        var cp: u32 = match n {
+            1 => b as u32
+            2 => (b & 0x1F) as u32
+            3 => (b & 0x0F) as u32
+            _ => (b & 0x07) as u32
+        }
+        for k in 1..n {
+            cp = (cp << 6) | ((s[i + k] & 0x3F) as u32)
+        }
+        @println(cp)
+        i += n
+    }
+}
+
+// Every byte value has an arm: no `_` needed.
+fn kind(b: u8) []u8 {
+    return match b {
+        0..=0x7F => "ascii"
+        0x80..=0xBF => "continuation"
+        0xC0..=0xFF => "lead"
+    }
+}
+
+pub fn main() {
+    let texts = [4][]u8{"", "hello", "The quick brown fox jumps over the lazy dog", "héllo, 世界 🦀"}
+    for t in texts {
+        @print(fnv1a(t))
+        @print(" ")
+        @println(crc32(t))
+    }
+    decode("héllo, 世界 🦀")
+    decode("a\xFFb")
+    let s = "é"
+    for i, b in s {
+        @print(i)
+        @print(" ")
+        @println(kind(b))
+    }
+}

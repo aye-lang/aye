@@ -1,0 +1,69 @@
+// Bitwise and shift operators, their compound forms, and precedence.
+
+fn popcount(x: u64) u64 {
+    var n: u64 = 0
+    var v = x
+    while v != 0 {
+        n += v & 1
+        v >>= 1
+    }
+    return n
+}
+
+error Zero { IsZero }
+
+fn mayFail(x: u32) !u32 {
+    if x == 0 {
+        return Zero.IsZero
+    }
+    return x
+}
+
+pub fn main() {
+    let a: u8 = 0b1100_1010
+    let b: u8 = 0x0F
+    @println(a & b)
+    @println(a | b)
+    @println(a ^ b)
+    @println(~a)
+    @println(a << 1)
+    @println(a >> 3)
+    let s: i32 = -16
+    @println(s >> 2)
+    @println(s << 3)
+    @println(~s)
+    @println(~0)
+    // Bitwise operators bind tighter than comparisons and looser than `+`.
+    @println(a & b == 10)
+    @println(1 + 2 << 3)
+    @println(1 << 2 + 1)
+    @println(1 | 2 << 3)
+    @println((6 & 3) | 8)
+    // Compound forms.
+    var x: u32 = 0xFF00
+    x &= 0x0FF0
+    @println(x)
+    x |= 1
+    @println(x)
+    x ^= 0xFFFF
+    @println(x)
+    x <<= 4
+    @println(x)
+    x >>= 8
+    @println(x)
+    @println(popcount(0xFFFF_FFFF_FFFF_FFFF))
+    @println(popcount(1 << 63))
+    // In an `if` or `while` header a top-level `|` starts a capture, so a
+    // bitwise or is written in parentheses.
+    if (a | b) != 0 {
+        @println("nonzero")
+    }
+    let m: ?u8 = a | 1
+    if m |v| {
+        @println(v)
+    }
+    let r = mayFail(0) catch |e| 3 | 4
+    @println(r)
+    let big: u64 = 1 << 40
+    @println(big)
+}

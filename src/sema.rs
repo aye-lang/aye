@@ -252,6 +252,36 @@ pub struct Program {
     pub vtables: Vec<(String, String)>,
     /// Test names: test `i` is the function `test#i`.
     pub tests: Vec<String>,
+    /// Top-level `let` constants and `var` globals, with their values.
+    pub globals: Vec<GlobalDef>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GlobalDef {
+    pub name: String,
+    pub ty: Type,
+    pub value: ConstVal,
+}
+
+/// The value of a global, computed when the program is compiled.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConstVal {
+    Int(i128),
+    Float(f64),
+    Bool(bool),
+    Str(Vec<u8>),
+    /// `null` of an optional type.
+    Null,
+    /// A value wrapped into an optional type.
+    Some(Box<ConstVal>),
+    /// An array's elements, or a struct's fields in declaration order.
+    Agg(Vec<ConstVal>),
+    /// An enum value: the variant's index and its fields in declaration order.
+    Variant(usize, Vec<ConstVal>),
+    /// An error value (see `Program::errors`).
+    Error(u16),
+    /// `[]T{}`
+    EmptySlice,
 }
 
 #[derive(Debug, Clone)]
@@ -334,8 +364,11 @@ pub enum TStmtKind {
     Assign { target: TExpr, op: Option<BinOp>, value: TExpr },
     /// With `capture`, `cond` is a `?T` and the variable gets its value.
     If { cond: TExpr, capture: Option<VarId>, then: Vec<TStmt>, els: Vec<TStmt> },
-    While { cond: TExpr, body: Vec<TStmt> },
+    /// With `capture`, `cond` is a `?T`: the loop runs while it has a value.
+    While { cond: TExpr, capture: Option<VarId>, body: Vec<TStmt> },
     For { var: VarId, lo: TExpr, hi: TExpr, body: Vec<TStmt> },
+    /// `for index, elem in seq`; `seq` is an array or a slice.
+    ForEach { index: Option<VarId>, elem: VarId, seq: TExpr, body: Vec<TStmt> },
     Break,
     Continue,
     Return(Option<TExpr>),
@@ -369,6 +402,8 @@ pub enum TExprKind {
     /// `p.*`, also inserted for field access through a pointer.
     Deref(Box<TExpr>),
     Var(VarId),
+    /// A top-level `let` constant or `var` global.
+    Global(String),
     Call { name: String, is_extern: bool, args: Vec<TExpr> },
     /// `@print(x)` / `@println(x)` / `@println()`.
     Print { arg: Option<Box<TExpr>>, newline: bool },
@@ -440,6 +475,9 @@ pub enum Intrinsic {
 pub struct TArm {
     /// Variant index, or the error value in a `match` on errors; `None` for `_`.
     pub variant: Option<usize>,
+    /// In a `match` on an integer: the inclusive ranges the arm matches;
+    /// empty for `_`.
+    pub ranges: Vec<(i128, i128)>,
     /// Pattern variables and the payload field each one is bound to.
     pub bindings: Vec<(VarId, usize)>,
     pub body: TArmBody,
@@ -458,6 +496,19 @@ struct FnSig {
     params: Vec<Type>,
     ret: Type,
     is_extern: bool,
+}
+
+/// The pattern of a `match` arm: the variant index or error value (`None`
+/// for `_` and integer patterns) and the integer ranges.
+type ArmPat = (Option<usize>, Vec<(i128, i128)>);
+
+/// A checked global.
+struct GlobalInfo {
+    ty: Type,
+    mutable: bool,
+    /// The `let` keyword of a constant, for the fix-it to `var`.
+    kw_span: Span,
+    value: Option<ConstVal>,
 }
 
 /// How a method takes its receiver, from the type of its first parameter.
@@ -538,6 +589,17 @@ struct Checker<'a> {
     pending_recursive: Vec<(String, Span)>,
     /// Function bodies to check, in order. Instances add their functions.
     queue: Vec<String>,
+    /// Top-level `let` constants and `var` globals, in declaration order;
+    /// each one's type, mutability and value once its initializer is
+    /// checked (`None`: it has an error), and those being checked.
+    global_decls: Vec<&'a ast::GlobalDecl>,
+    globals: HashMap<String, GlobalInfo>,
+    globals_active: Vec<String>,
+    /// Type aliases (`let Name = Type`), and the types they name once
+    /// resolved, and those being resolved.
+    alias_decls: HashMap<String, &'a ast::GlobalDecl>,
+    aliases: HashMap<String, Type>,
+    aliases_active: Vec<String>,
     // Per-function state.
     vars: Vec<VarInfo>,
     scopes: Vec<HashMap<String, (VarId, Span)>>,
@@ -583,6 +645,12 @@ pub fn check(file: &ast::File, require_main: bool) -> std::result::Result<Progra
         pending_bounds: Vec::new(),
         pending_recursive: Vec::new(),
         queue: Vec::new(),
+        global_decls: Vec::new(),
+        globals: HashMap::new(),
+        globals_active: Vec::new(),
+        alias_decls: HashMap::new(),
+        aliases: HashMap::new(),
+        aliases_active: Vec::new(),
         vars: Vec::new(),
         scopes: Vec::new(),
         ret: Type::Void,
@@ -615,7 +683,7 @@ fn is_untyped(e: &ast::Expr) -> bool {
     match &e.kind {
         ExprKind::Int(_) | ExprKind::Char(_) | ExprKind::Float(_) => true,
         ExprKind::Paren(inner) => is_untyped(inner),
-        ExprKind::Unary { op: UnOp::Neg, expr } => is_untyped(expr),
+        ExprKind::Unary { op: UnOp::Neg | UnOp::BitNot, expr } => is_untyped(expr),
         ExprKind::Binary { op, lhs, rhs } if op.is_arith() => is_untyped(lhs) && is_untyped(rhs),
         _ => false,
     }
@@ -677,6 +745,52 @@ const TYPE_NAMES: &[&str] = &["i8", "i16", "i32", "i64", "isize", "u8", "u16", "
 /// for the root module).
 fn module_of(name: &str) -> &str {
     name.rsplit_once("::").map_or("", |(m, _)| m)
+}
+
+/// `v` as a value of `it`, or an overflow error in a constant at `span`.
+fn fits(v: i128, it: IntTy, span: Span) -> Result<i128> {
+    if v < it.min() || v > it.max() {
+        return err(E0089, span, format!("integer overflow in a constant: `{v}` does not fit in `{}`", it.name()));
+    }
+    Ok(v)
+}
+
+/// `v` wrapped around to a value of `it`.
+fn wrap(v: i128, it: IntTy) -> i128 {
+    let bits = it.bits();
+    let m = v & ((1i128 << bits) - 1);
+    if it.signed() && m >= 1i128 << (bits - 1) { m - (1i128 << bits) } else { m }
+}
+
+/// A float value of type `t`: rounded to `f32` precision for `f32`.
+fn round_float(v: f64, t: &Type) -> f64 {
+    if *t == Type::Float(FloatTy::F32) { v as f32 as f64 } else { v }
+}
+
+/// `a op b` on integers of type `it` in a constant, with the checks that
+/// the program makes at run time.
+fn fold_int(op: BinOp, a: i128, b: i128, it: IntTy, span: Span) -> Result<i128> {
+    let bits = it.bits() as i128;
+    match op {
+        BinOp::Add => fits(a + b, it, span),
+        BinOp::Sub => fits(a - b, it, span),
+        BinOp::Mul => fits(a.checked_mul(b).unwrap_or(i128::MAX), it, span),
+        BinOp::Div | BinOp::Rem if b == 0 => err(E0089, span, "division by zero in a constant"),
+        BinOp::Div => fits(a / b, it, span),
+        // `MIN % -1` overflows like `MIN / -1`.
+        BinOp::Rem => fits(a / b, it, span).map(|_| a % b),
+        BinOp::AddWrap => Ok(wrap(a + b, it)),
+        BinOp::SubWrap => Ok(wrap(a - b, it)),
+        BinOp::MulWrap => Ok(wrap(a.wrapping_mul(b), it)),
+        BinOp::BitAnd => Ok(a & b),
+        BinOp::BitOr => Ok(a | b),
+        BinOp::BitXor => Ok(a ^ b),
+        BinOp::Shl | BinOp::Shr if b < 0 || b >= bits => {
+            err(E0089, span, format!("shift amount `{b}` is out of range for `{}` (0 to {})", it.name(), bits - 1))
+        }
+        BinOp::Shl => Ok(wrap(a << b, it)),
+        _ => Ok(a >> b),
+    }
 }
 
 /// Are `a` and `b` one edit apart: one character inserted, deleted or
@@ -786,6 +900,7 @@ impl<'a> Checker<'a> {
                 ast::Item::ErrorSet(e) => (&e.name, e.span),
                 ast::Item::Fn(f) => (&f.name, f.span),
                 ast::Item::Interface(i) => (&i.name, i.span),
+                ast::Item::Global(g) => (&g.name, g.span),
                 ast::Item::Test(t) => {
                     if tests.iter().any(|x| x.name == t.name) {
                         self.report(Error::new(E0015, t.func.span, format!("test \"{}\" is defined more than once", t.name)));
@@ -822,10 +937,16 @@ impl<'a> Checker<'a> {
                 ast::Item::Fn(f) if is_generic(f) => {
                     self.generics.insert(f.name.clone(), f);
                 }
+                ast::Item::Global(g) => self.global_decls.push(g),
                 ast::Item::Fn(_) | ast::Item::Test(_) => {}
             }
             items.push(item);
         }
+        // A top-level `let` whose value names a type is a type alias.
+        let (aliases, globals): (Vec<_>, Vec<_>) = self.global_decls.clone().into_iter().partition(|g| self.is_alias(g, 0));
+        self.global_decls = globals;
+        let alias_names: Vec<(String, Span)> = aliases.iter().map(|g| (g.name.clone(), g.span)).collect();
+        self.alias_decls = aliases.into_iter().map(|g| (g.name.clone(), g)).collect();
         self.error_sets(&items);
         // Generics: each one's declaration, and its instance for its own
         // parameters, through which its definition is checked with the
@@ -839,6 +960,9 @@ impl<'a> Checker<'a> {
             .collect();
         for f in generics {
             self.define_generic(&f.name);
+        }
+        for (name, span) in &alias_names {
+            let _ = self.alias(name, *span);
         }
         // 2. Struct fields, enum variants and interface methods.
         for item in &items {
@@ -866,7 +990,7 @@ impl<'a> Checker<'a> {
                     let methods = self.iface_methods(i);
                     self.ifaces.get_mut(&i.name).unwrap().methods = methods;
                 }
-                ast::Item::ErrorSet(_) | ast::Item::Fn(_) | ast::Item::Test(_) => {}
+                ast::Item::ErrorSet(_) | ast::Item::Fn(_) | ast::Item::Test(_) | ast::Item::Global(_) => {}
             }
         }
         for item in &items {
@@ -898,6 +1022,20 @@ impl<'a> Checker<'a> {
                             continue;
                         }
                         decls.push((key, m, Some(s.name.clone())));
+                    }
+                }
+                ast::Item::Enum(e) => {
+                    for m in &e.methods {
+                        if e.variants.iter().any(|v| v.name == m.name) {
+                            self.report(Error::new(E0015, m.span, format!("`{}` is both a variant and a method of enum `{}`", m.name, e.name)));
+                            continue;
+                        }
+                        let key = format!("{}.{}", e.name, m.name);
+                        if decls.iter().any(|(k, ..)| *k == key) {
+                            self.report(Error::new(E0015, m.span, format!("duplicate method `{}` in enum `{}`", m.name, e.name)));
+                            continue;
+                        }
+                        decls.push((key, m, Some(e.name.clone())));
                     }
                 }
                 ast::Item::Test(t) => decls.push((t.func.name.clone(), &t.func, None)),
@@ -948,6 +1086,10 @@ impl<'a> Checker<'a> {
                 self.report(e);
             }
         }
+        // Globals, before the bodies that use them.
+        for g in self.global_decls.clone() {
+            let _ = self.global(&g.name, g.span);
+        }
         // 4. Bodies: the generics' own instances first, so that a generic
         // with errors is known before its other instances are checked (they
         // are checked quietly); then the functions, then each instance as it
@@ -979,9 +1121,17 @@ impl<'a> Checker<'a> {
                 ast::Item::Struct(s) => structs.push(self.structs[&s.name].clone()),
                 ast::Item::Enum(e) => enums.push(self.enums[&e.name].clone()),
                 ast::Item::Interface(i) => ifaces.push(self.ifaces[&i.name].clone()),
-                ast::Item::ErrorSet(_) | ast::Item::Fn(_) | ast::Item::Test(_) => {}
+                ast::Item::ErrorSet(_) | ast::Item::Fn(_) | ast::Item::Test(_) | ast::Item::Global(_) => {}
             }
         }
+        let globals = self
+            .global_decls
+            .iter()
+            .filter_map(|g| {
+                let info = &self.globals[&g.name];
+                Some(GlobalDef { name: g.name.clone(), ty: info.ty.clone(), value: info.value.clone()? })
+            })
+            .collect();
         for n in &self.instance_structs {
             if !self.abstract_structs.contains(n) {
                 structs.push(self.structs[n].clone());
@@ -997,7 +1147,198 @@ impl<'a> Checker<'a> {
             ifaces,
             vtables,
             tests: tests.iter().map(|t| t.name.clone()).collect(),
+            globals,
         }
+    }
+
+    /// Does the top-level `let` `g` name a type (`let NodePool = Pool(Node)`),
+    /// so that it is a type alias? Its value has the shape of a type, and
+    /// its name is a type, a type function or another alias.
+    fn is_alias(&self, g: &ast::GlobalDecl, depth: usize) -> bool {
+        if g.mutable || g.ty.is_some() || depth > MAX_INSTANCES {
+            return false;
+        }
+        match &g.init.kind {
+            ExprKind::Type(_) => true,
+            ExprKind::Call { name, .. } => self.generics.get(name).is_some_and(|f| is_type_fn(f)),
+            ExprKind::Ident(n) => {
+                self.is_type_name(n)
+                    || self.global_decls.iter().find(|x| x.name == *n).is_some_and(|x| self.is_alias(x, depth + 1))
+            }
+            _ => false,
+        }
+    }
+
+    /// The type that the alias `name` names, resolved the first time.
+    fn alias(&mut self, name: &str, span: Span) -> Result<Type> {
+        if let Some(t) = self.aliases.get(name) {
+            return Ok(t.clone());
+        }
+        if self.aliases_active.iter().any(|a| a == name) {
+            return err(E0053, span, format!("type alias `{name}` is defined in terms of itself"));
+        }
+        let decl = self.alias_decls[name];
+        self.aliases_active.push(name.to_string());
+        let saved = (std::mem::take(&mut self.env), self.self_ty.take());
+        let r = self.resolve_type(&expr_type(&decl.init).unwrap());
+        (self.env, self.self_ty) = saved;
+        self.aliases_active.pop();
+        let ty = r.unwrap_or_else(|e| {
+            self.report(e);
+            Type::Error
+        });
+        self.aliases.insert(name.to_string(), ty.clone());
+        Ok(ty)
+    }
+
+    /// The type and mutability of the global `name`. Its initializer is
+    /// checked and computed the first time (`span` is the use).
+    fn global(&mut self, name: &str, span: Span) -> Result<(Type, bool)> {
+        if let Some(g) = self.globals.get(name) {
+            return Ok((g.ty.clone(), g.mutable));
+        }
+        if self.globals_active.iter().any(|a| a == name) {
+            return err(E0089, span, format!("`{name}` is defined in terms of itself"));
+        }
+        let decl = *self.global_decls.iter().find(|g| g.name == name).unwrap();
+        self.globals_active.push(name.to_string());
+        let saved = (
+            std::mem::take(&mut self.vars),
+            std::mem::replace(&mut self.scopes, vec![HashMap::new()]),
+            std::mem::replace(&mut self.ret, Type::Void),
+            std::mem::take(&mut self.loop_depth),
+            std::mem::take(&mut self.in_defer),
+            self.self_ty.take(),
+            std::mem::take(&mut self.in_test),
+            std::mem::take(&mut self.env),
+            std::mem::replace(&mut self.module, module_of(name).to_string()),
+        );
+        let r = match &decl.ty {
+            Some(t) => self.resolve_type(t).and_then(|ty| self.expect(&decl.init, &ty)),
+            None => self.value(&decl.init, None),
+        }
+        .and_then(|t| Ok((self.fold(&t)?, t.ty)));
+        (self.vars, self.scopes, self.ret, self.loop_depth, self.in_defer, self.self_ty, self.in_test, self.env, self.module) =
+            saved;
+        self.globals_active.pop();
+        let (value, ty) = match r {
+            Ok((v, ty)) => (Some(v), ty),
+            Err(e) => {
+                self.report(e);
+                (None, Type::Error)
+            }
+        };
+        let info = GlobalInfo { ty: ty.clone(), mutable: decl.mutable, kw_span: decl.kw_span, value };
+        self.globals.insert(name.to_string(), info);
+        Ok((ty, decl.mutable))
+    }
+
+    /// The value of `e`, a global's initializer, computed now.
+    fn fold(&self, e: &TExpr) -> Result<ConstVal> {
+        let span = e.span;
+        Ok(match &e.kind {
+            TExprKind::Int(v) => ConstVal::Int(*v),
+            TExprKind::Float(v) => ConstVal::Float(round_float(*v, &e.ty)),
+            TExprKind::Bool(b) => ConstVal::Bool(*b),
+            TExprKind::Str(s) => ConstVal::Str(s.clone()),
+            TExprKind::Null => ConstVal::Null,
+            TExprKind::EmptySlice => ConstVal::EmptySlice,
+            TExprKind::ErrorValue(v) => ConstVal::Error(*v),
+            TExprKind::Some(x) => ConstVal::Some(Box::new(self.fold(x)?)),
+            TExprKind::Global(n) => match self.globals.get(n) {
+                Some(g) if g.mutable => {
+                    return err(E0089, span, format!("`{n}` is a `var`: a global's initializer can use only `let` constants"));
+                }
+                Some(g) => g.value.clone().ok_or_else(silent)?,
+                None => return Err(silent()),
+            },
+            TExprKind::StructLit(inits) | TExprKind::Variant { fields: inits, .. } => {
+                let mut vals = inits.iter().map(|(i, x)| Ok((*i, self.fold(x)?))).collect::<Result<Vec<_>>>()?;
+                vals.sort_by_key(|(i, _)| *i);
+                let vals = vals.into_iter().map(|(_, v)| v).collect();
+                match &e.kind {
+                    TExprKind::Variant { index, .. } => ConstVal::Variant(*index, vals),
+                    _ => ConstVal::Agg(vals),
+                }
+            }
+            TExprKind::ArrayLit(elems) => ConstVal::Agg(elems.iter().map(|x| self.fold(x)).collect::<Result<_>>()?),
+            TExprKind::Field { base, index } => match self.fold(base)? {
+                ConstVal::Agg(mut fields) => fields.swap_remove(*index),
+                _ => unreachable!(),
+            },
+            TExprKind::ArrayLen(base) => match base.ty {
+                Type::Array(_, n) => ConstVal::Int(n as i128),
+                _ => unreachable!(),
+            },
+            TExprKind::Index { base, index } if matches!(base.ty, Type::Array(..)) => {
+                let (ConstVal::Agg(mut elems), ConstVal::Int(i)) = (self.fold(base)?, self.fold(index)?) else { unreachable!() };
+                if i >= elems.len() as i128 {
+                    return err(E0089, span, format!("index {i} is out of bounds for length {}", elems.len()));
+                }
+                elems.swap_remove(i as usize)
+            }
+            TExprKind::Unary { op, expr } => match (op, self.fold(expr)?, &e.ty) {
+                (UnOp::Not, ConstVal::Bool(b), _) => ConstVal::Bool(!b),
+                (UnOp::Neg, ConstVal::Float(f), _) => ConstVal::Float(-f),
+                (UnOp::Neg, ConstVal::Int(v), Type::Int(it)) => ConstVal::Int(fits(-v, *it, span)?),
+                (UnOp::BitNot, ConstVal::Int(v), Type::Int(it)) => ConstVal::Int(wrap(!v, *it)),
+                _ => unreachable!(),
+            },
+            TExprKind::Binary { op, lhs, rhs } => {
+                let (l, r) = (self.fold(lhs)?, self.fold(rhs)?);
+                let op = *op;
+                let cmp = |o: std::cmp::Ordering| match op {
+                    BinOp::Eq => o.is_eq(),
+                    BinOp::Ne => o.is_ne(),
+                    BinOp::Lt => o.is_lt(),
+                    BinOp::Le => o.is_le(),
+                    BinOp::Gt => o.is_gt(),
+                    _ => o.is_ge(),
+                };
+                match (l, r, &lhs.ty) {
+                    (ConstVal::Int(a), ConstVal::Int(b), _) if op.is_comparison() => ConstVal::Bool(cmp(a.cmp(&b))),
+                    (ConstVal::Int(a), ConstVal::Int(b), Type::Int(it)) => ConstVal::Int(fold_int(op, a, b, *it, span)?),
+                    (ConstVal::Float(a), ConstVal::Float(b), _) if op.is_comparison() => {
+                        ConstVal::Bool(a.partial_cmp(&b).is_some_and(cmp) || (op == BinOp::Ne && a.is_nan()))
+                    }
+                    (ConstVal::Float(a), ConstVal::Float(b), t) => {
+                        let v = match op {
+                            BinOp::Add => a + b,
+                            BinOp::Sub => a - b,
+                            BinOp::Mul => a * b,
+                            _ => a / b,
+                        };
+                        if !v.is_finite() {
+                            return err(E0089, span, "the result of this float operation in a constant is not finite");
+                        }
+                        ConstVal::Float(round_float(v, t))
+                    }
+                    (ConstVal::Bool(a), ConstVal::Bool(b), _) => ConstVal::Bool(match op {
+                        BinOp::And => a && b,
+                        BinOp::Or => a || b,
+                        BinOp::Eq => a == b,
+                        _ => a != b,
+                    }),
+                    (ConstVal::Variant(a, _), ConstVal::Variant(b, _), _) => ConstVal::Bool((a == b) == (op == BinOp::Eq)),
+                    _ => return err(E0089, span, "this comparison cannot be computed when the program is compiled"),
+                }
+            }
+            TExprKind::Cast(x) => match (self.fold(x)?, &e.ty) {
+                (ConstVal::Int(v), Type::Int(it)) => ConstVal::Int(fits(v, *it, span)?),
+                (ConstVal::Int(v), t) => ConstVal::Float(round_float(v as f64, t)),
+                (ConstVal::Float(f), Type::Int(it)) => {
+                    if !(f > it.min() as f64 - 1.0 && f < it.max() as f64 + 1.0) {
+                        return err(E0089, span, format!("`{f}` does not fit in `{}`", it.name()));
+                    }
+                    ConstVal::Int(f.trunc() as i128)
+                }
+                (ConstVal::Float(f), t) => ConstVal::Float(round_float(f, t)),
+                _ => unreachable!(),
+            },
+            _ => {
+                return err(E0089, span, "a global's initializer must be a constant: literals, `let` constants, operators, `as` casts, and array, struct and enum literals (no calls)");
+            }
+        })
     }
 
     /// Check the generic `g` (once): its declaration, and its instance for
@@ -1294,9 +1635,10 @@ impl<'a> Checker<'a> {
         };
         self.self_ty = saved;
         if let Some(s) = &owner {
+            let is_owner = |t: &Type| matches!(t, Type::Struct(n) | Type::Enum(n) if n == s);
             let recv = match params.first() {
-                Some(Type::Struct(n)) if n == s => Recv::Value,
-                Some(Type::Ptr(t, m)) if matches!(&**t, Type::Struct(n) if n == s) => Recv::Ptr(*m),
+                Some(t) if is_owner(t) => Recv::Value,
+                Some(Type::Ptr(t, m)) if is_owner(t) => Recv::Ptr(*m),
                 _ => Recv::Static,
             };
             self.recvs.insert(key.to_string(), recv);
@@ -1520,12 +1862,13 @@ impl<'a> Checker<'a> {
             TypeExprKind::Named(n) => match Type::from_name(n) {
                 Some(ty) => ty,
                 None if let Some((_, ty, _)) = self.env.iter().find(|(p, ..)| p == n) => ty.clone(),
+                None if self.alias_decls.contains_key(n) => self.alias(n, t.span)?,
                 None if self.structs.contains_key(n) => Type::Struct(n.clone()),
                 None if self.enums.contains_key(n) => Type::Enum(n.clone()),
                 None if self.sets.contains_key(n) => Type::ErrorSet(n.clone()),
                 None if n == "Self" => match &self.self_ty {
-                    Some(s) => Type::Struct(s.clone()),
-                    None => return err(E0017, t.span, "`Self` can only be used inside a struct (and as `*Self` or `*mut Self` in an interface method's `self` parameter)"),
+                    Some(s) => self.named(s),
+                    None => return err(E0017, t.span, "`Self` can only be used inside a struct or enum (and as `*Self` or `*mut Self` in an interface method's `self` parameter)"),
                 },
                 None if self.ifaces.contains_key(n) => {
                     return err(E0017, t.span, format!("`{n}` is an interface, not a type: write `dyn {n}`"));
@@ -1569,9 +1912,25 @@ impl<'a> Checker<'a> {
         })
     }
 
+    /// The struct or enum `name`.
+    fn named(&self, name: &str) -> Type {
+        if self.enums.contains_key(name) { Type::Enum(name.to_string()) } else { Type::Struct(name.to_string()) }
+    }
+
+    /// The enum that the name `n` stands for: the enum, `Self` in a method
+    /// of an enum, or an alias of an enum.
+    fn enum_name(&self, n: &str) -> Option<String> {
+        let n = if n == "Self" { self.self_ty.as_deref()? } else { n };
+        match self.aliases.get(n) {
+            Some(Type::Enum(e)) => Some(e.clone()),
+            _ => self.enums.contains_key(n).then(|| n.to_string()),
+        }
+    }
+
     /// Names that can be written as a type here, for spelling suggestions.
     fn type_names(&self) -> Vec<&str> {
-        let named = self.structs.keys().chain(self.enums.keys()).chain(self.sets.keys()).filter(|n| !n.contains(['(', ' ']));
+        let named = self.structs.keys().chain(self.enums.keys()).chain(self.sets.keys()).chain(self.alias_decls.keys());
+        let named = named.filter(|n| !n.contains(['(', ' ']));
         TYPE_NAMES.iter().copied().chain(named.map(String::as_str)).chain(self.env.iter().map(|(n, ..)| n.as_str())).collect()
     }
 
@@ -1770,14 +2129,7 @@ impl<'a> Checker<'a> {
                 let (cond, capture, then) = match capture {
                     None => (self.condition(cond, "if"), None, self.block(then)),
                     Some((name, name_span)) => {
-                        let c = self.value(cond, None).and_then(|c| match &c.ty {
-                            Type::Optional(_) => Ok(c),
-                            t => err(E0027, c.span, format!("`if` with `|{name}|` needs an optional (`?T`) value, found `{t}`")),
-                        });
-                        let inner = match &c {
-                            Ok(TExpr { ty: Type::Optional(t), .. }) => (**t).clone(),
-                            _ => Type::Error,
-                        };
+                        let (c, inner) = self.optional_cond(cond, "if", name);
                         self.scopes.push(HashMap::new());
                         let v = self.declare_or_report(name, inner, false, *name_span);
                         let then = self.block(then);
@@ -1799,12 +2151,45 @@ impl<'a> Checker<'a> {
                 };
                 TStmtKind::If { cond, capture, then, els }
             }
-            StmtKind::While { cond, body } => {
+            StmtKind::While { cond, capture: None, body } => {
                 let cond = self.condition(cond, "while");
                 self.loop_depth += 1;
                 let body = self.block(body);
                 self.loop_depth -= 1;
-                TStmtKind::While { cond: cond?, body }
+                TStmtKind::While { cond: cond?, capture: None, body }
+            }
+            StmtKind::While { cond, capture: Some((name, name_span)), body } => {
+                let (cond, inner) = self.optional_cond(cond, "while", name);
+                self.scopes.push(HashMap::new());
+                let v = self.declare_or_report(name, inner, false, *name_span);
+                self.loop_depth += 1;
+                let body = self.block(body);
+                self.loop_depth -= 1;
+                self.scopes.pop();
+                TStmtKind::While { cond: cond?, capture: Some(v.ok_or_else(silent)?), body }
+            }
+            StmtKind::ForEach { index, elem: (elem, elem_span), seq, body } => {
+                let seq = self.value(seq, None).and_then(|t| match &t.ty {
+                    Type::Array(..) | Type::Slice(..) => Ok(t),
+                    Type::Int(_) => err(E0090, t.span, format!(
+                        "cannot iterate over an integer `{}`: count with a range, `for {elem} in 0..n`",
+                        t.ty
+                    )),
+                    ty => err(E0090, t.span, format!("`for` needs an array or a slice to iterate over, found `{ty}`")),
+                });
+                let elem_ty = match &seq {
+                    Ok(TExpr { ty: Type::Array(el, _) | Type::Slice(el, _), .. }) => (**el).clone(),
+                    _ => Type::Error,
+                };
+                self.scopes.push(HashMap::new());
+                let index = index.as_ref().map(|(n, sp)| self.declare_or_report(n, USIZE, false, *sp));
+                let elem = self.declare_or_report(elem, elem_ty, false, *elem_span);
+                self.loop_depth += 1;
+                let body = self.block(body);
+                self.loop_depth -= 1;
+                self.scopes.pop();
+                let index = index.map(|v| v.ok_or_else(silent)).transpose()?;
+                TStmtKind::ForEach { index, elem: elem.ok_or_else(silent)?, seq: seq?, body }
             }
             StmtKind::For { var, var_span, lo, hi, body } => {
                 // A range of two integer literals is `usize`: loop counters are mostly indices.
@@ -1991,6 +2376,20 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// The optional that `if x |name|` or `while x |name|` (`what`) unwraps,
+    /// and the type of its value.
+    fn optional_cond(&mut self, e: &ast::Expr, what: &str, name: &str) -> (Result<TExpr>, Type) {
+        let c = self.value(e, None).and_then(|c| match &c.ty {
+            Type::Optional(_) => Ok(c),
+            t => err(E0027, c.span, format!("`{what}` with `|{name}|` needs an optional (`?T`) value, found `{t}`")),
+        });
+        let inner = match &c {
+            Ok(TExpr { ty: Type::Optional(t), .. }) => (**t).clone(),
+            _ => Type::Error,
+        };
+        (c, inner)
+    }
+
     fn condition(&mut self, e: &ast::Expr, what: &str) -> Result<TExpr> {
         let c = self.value(e, Some(&Type::Bool))?;
         if c.ty != Type::Bool {
@@ -2017,6 +2416,15 @@ impl<'a> Checker<'a> {
                         Some(s) => e.fix(format!("declare `{}` with `var`", v.name), s, s.right(3), "var"),
                         None => e,
                     });
+                }
+                Ok(())
+            }
+            TExprKind::Global(name) => {
+                let g = &self.globals[name];
+                if !g.mutable {
+                    let e = Error::new(E0032, t.span, format!("cannot {what} `{name}`: it is a constant (declare it with `var`)"));
+                    let s = g.kw_span;
+                    return Err(e.fix(format!("declare `{name}` with `var`"), s, s.right(3), "var"));
                 }
                 Ok(())
             }
@@ -2047,7 +2455,7 @@ impl<'a> Checker<'a> {
     /// Can we take the address of this expression (`&x`, or slicing an array)?
     fn is_lvalue(t: &TExpr) -> bool {
         match &t.kind {
-            TExprKind::Var(_) | TExprKind::Deref(_) => true,
+            TExprKind::Var(_) | TExprKind::Global(_) | TExprKind::Deref(_) => true,
             TExprKind::Field { base, .. } => Self::is_lvalue(base),
             TExprKind::Index { base, .. } => matches!(base.ty, Type::Slice(..)) || Self::is_lvalue(base),
             _ => false,
@@ -2227,7 +2635,15 @@ impl<'a> Checker<'a> {
     fn arith_operand_ok(&self, op: BinOp, ty: &Type, span: Span) -> Result<()> {
         let ok = match op {
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => ty.is_numeric(),
-            BinOp::Rem | BinOp::AddWrap | BinOp::SubWrap | BinOp::MulWrap => ty.is_int(),
+            BinOp::Rem
+            | BinOp::AddWrap
+            | BinOp::SubWrap
+            | BinOp::MulWrap
+            | BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::BitXor
+            | BinOp::Shl
+            | BinOp::Shr => ty.is_int(),
             _ => unreachable!(),
         };
         if !ok {
@@ -2259,6 +2675,10 @@ impl<'a> Checker<'a> {
             ExprKind::Paren(inner) => return self.expr(inner, expected),
             ExprKind::Ident(name) => match self.lookup(name) {
                 Some(id) => (TExprKind::Var(id), self.vars[id].ty.clone()),
+                None if self.global_decls.iter().any(|g| g.name == *name) => {
+                    let (ty, _) = self.global(name, span)?;
+                    (TExprKind::Global(name.clone()), ty)
+                }
                 None if self.generics.get(name).is_some_and(|f| is_type_fn(f)) => {
                     return err(E0080, span, format!("`{name}` is a type function: write `{name}(T)`"));
                 }
@@ -2383,7 +2803,9 @@ impl<'a> Checker<'a> {
                 } else {
                     let hint = if op.is_arith() { expected.filter(|t| t.is_numeric()) } else { None };
                     let (l, r) = self.operand_pair(lhs, rhs, hint)?;
-                    if l.ty != r.ty {
+                    // `*mut T` and `*T` compare as pointers.
+                    let same_ptr = matches!((&l.ty, &r.ty), (Type::Ptr(a, _), Type::Ptr(b, _)) if a == b);
+                    if l.ty != r.ty && !(same_ptr && matches!(op, BinOp::Eq | BinOp::Ne)) {
                         return err(E0023, span, format!(
                             "mismatched types in `{}`: `{}` and `{}` (use `as` to convert)",
                             op.as_str(),
@@ -2395,9 +2817,16 @@ impl<'a> Checker<'a> {
                         self.arith_operand_ok(op, &l.ty, span)?;
                         l.ty.clone()
                     } else {
-                        let ok = match op {
-                            BinOp::Eq | BinOp::Ne => {
-                                matches!(l.ty, Type::Int(_) | Type::Float(_) | Type::Bool)
+                        let ok = match (op, &l.ty) {
+                            (BinOp::Eq | BinOp::Ne, Type::Int(_) | Type::Float(_) | Type::Bool | Type::Ptr(..) | Type::CPtr(_)) => true,
+                            (BinOp::Eq | BinOp::Ne, Type::Enum(n)) => {
+                                if self.enums[n].variants.iter().any(|v| !v.fields.is_empty()) {
+                                    return err(E0025, span, format!(
+                                        "operator `{}` cannot be applied to `{n}`: it has variants with fields (use `match`)",
+                                        op.as_str()
+                                    ));
+                                }
+                                true
                             }
                             _ => l.ty.is_numeric(),
                         };
@@ -2426,6 +2855,14 @@ impl<'a> Checker<'a> {
                     (TExprKind::Unary { op: UnOp::Neg, expr: Box::new(t) }, ty)
                 }
             },
+            ExprKind::Unary { op: UnOp::BitNot, expr } => {
+                let t = self.value(expr, expected.filter(|t| t.is_int()))?;
+                if !t.ty.is_int() {
+                    return err(E0025, span, format!("operator `~` requires an integer, found `{}`", t.ty));
+                }
+                let ty = t.ty.clone();
+                (TExprKind::Unary { op: UnOp::BitNot, expr: Box::new(t) }, ty)
+            }
             ExprKind::Unary { op: UnOp::Not, expr } => {
                 let t = self.value(expr, Some(&Type::Bool))?;
                 if t.ty != Type::Bool {
@@ -2514,8 +2951,12 @@ impl<'a> Checker<'a> {
                 (TExprKind::ErrorValue(v as u16), Type::ErrorSet(set.clone()))
             }
             // `Enum.Variant` without payload.
-            ExprKind::Field { base, name } if matches!(&base.kind, ExprKind::Ident(n) if self.enums.contains_key(n)) => {
-                let ExprKind::Ident(ename) = &base.kind else { unreachable!() };
+            ExprKind::Field { base, name }
+                if let ExprKind::Ident(n) = &base.kind
+                    && self.lookup(n).is_none()
+                    && let Some(ename) = self.enum_name(n) =>
+            {
+                let ename = &ename;
                 let def = &self.enums[ename];
                 let Some(index) = def.variants.iter().position(|v| v.name == *name) else {
                     return err(E0041, span, format!("enum `{ename}` has no variant `{name}`"));
@@ -2611,13 +3052,16 @@ impl<'a> Checker<'a> {
             ExprKind::StructLit { ty, fields } => {
                 let name = &match (&ty.kind, &self.self_ty) {
                     (TypeExprKind::Named(n), Some(s)) if n == "Self" => s.clone(),
-                    (TypeExprKind::Named(n), _) => n.clone(),
+                    (TypeExprKind::Named(n), _) if !self.alias_decls.contains_key(n) => n.clone(),
                     _ => match self.resolve_type(ty)? {
                         Type::Struct(n) => n,
                         t => return err(E0017, span, format!("`{t}` is not a struct")),
                     },
                 };
                 let Some(def) = self.structs.get(name).cloned() else {
+                    if self.global_decls.iter().any(|g| g.name == *name) {
+                        return err(E0017, span, format!("`{name}` is a constant, not a struct"));
+                    }
                     let e = Error::new(E0017, span, format!("unknown struct `{name}`"));
                     let structs = self.structs.keys().filter(|n| !n.contains(['(', ' '])).map(String::as_str);
                     return Err(suggest(e, name, span, structs));
@@ -2626,9 +3070,10 @@ impl<'a> Checker<'a> {
                 (TExprKind::StructLit(inits), Type::Struct(name.clone()))
             }
             ExprKind::VariantLit { enum_name, variant, fields } => {
-                let Some(def) = self.enums.get(enum_name).cloned() else {
+                let Some(def) = self.enum_name(enum_name).map(|n| self.enums[&n].clone()) else {
                     return err(E0017, span, format!("unknown enum `{enum_name}`"));
                 };
+                let enum_name = &def.name;
                 let Some(index) = def.variants.iter().position(|v| v.name == *variant) else {
                     return err(E0041, span, format!("enum `{enum_name}` has no variant `{variant}`"));
                 };
@@ -2712,6 +3157,7 @@ impl<'a> Checker<'a> {
         Type::from_name(name).is_some()
             || name == "Self"
             || self.env.iter().any(|(n, ..)| n == name)
+            || self.alias_decls.contains_key(name)
             || self.structs.contains_key(name)
             || self.enums.contains_key(name)
             || self.sets.contains_key(name)
@@ -2770,8 +3216,15 @@ impl<'a> Checker<'a> {
                 }
                 match (self.env.iter().find(|(n, ..)| n == tn), tn.as_str(), &self.self_ty) {
                     (Some((_, t, _)), ..) => Some(t.clone()),
-                    (None, "Self", Some(s)) => Some(Type::Struct(s.clone())),
-                    _ => Some(Type::Struct(tn.clone())),
+                    (None, "Self", Some(s)) => Some(self.named(s)),
+                    _ if self.alias_decls.contains_key(tn) => {
+                        let t = self.alias(tn, base.span)?;
+                        if let Type::Builtin(b) = t {
+                            return self.builtin_static(b, name, args, span);
+                        }
+                        Some(t)
+                    }
+                    _ => Some(self.named(tn)),
                 }
             }
             ExprKind::Call { name: g, .. } if self.generics.get(g).is_some_and(|f| is_type_fn(f)) => {
@@ -2785,11 +3238,18 @@ impl<'a> Checker<'a> {
                     "`{t}` is a `comptime` type: it has only the methods of its `where` constraints, called on a value (`x.{name}()`)"
                 ));
             }
-            let tn = t.to_string();
+            let tn = match &t {
+                Type::Struct(n) | Type::Enum(n) => n.clone(),
+                t => t.to_string(),
+            };
             let key = format!("{tn}.{name}");
-            if !self.structs.contains_key(&tn) || !self.fns.contains_key(&key) {
-                let what = if self.structs.contains_key(&tn) { "struct" } else { "type" };
-                return err(E0071, span, format!("{what} `{tn}` has no method `{name}`"));
+            let what = match t {
+                Type::Struct(_) if self.structs.contains_key(&tn) => "struct",
+                Type::Enum(_) => "enum",
+                _ => "type",
+            };
+            if what == "type" || !self.fns.contains_key(&key) {
+                return err(E0071, span, format!("{what} `{}` has no method `{name}`", t));
             }
             return self.call(&key, None, args, span);
         }
@@ -2806,10 +3266,13 @@ impl<'a> Checker<'a> {
             _ => r,
         };
         match inner {
-            Type::Struct(s) => {
+            Type::Struct(s) | Type::Enum(s) => {
                 let key = format!("{s}.{name}");
                 let Some(&r) = self.recvs.get(&key) else {
-                    let hint = if self.structs[&s].fields.iter().any(|(f, _)| f == name) { " (it has a field of that name)" } else { "" };
+                    let Some(def) = self.structs.get(&s) else {
+                        return err(E0071, span, format!("enum `{s}` has no method `{name}`"));
+                    };
+                    let hint = if def.fields.iter().any(|(f, _)| f == name) { " (it has a field of that name)" } else { "" };
                     return err(E0071, span, format!("struct `{s}` has no method `{name}`{hint}"));
                 };
                 let recv = match r {
@@ -3071,8 +3534,9 @@ impl<'a> Checker<'a> {
         Ok(inits)
     }
 
-    /// `match` on an enum or an error value. As a statement (`is_stmt`) the
-    /// arms produce no value; otherwise all arms must have the same type.
+    /// `match` on an enum, an error value or an integer. As a statement
+    /// (`is_stmt`) the arms produce no value; otherwise all arms must have
+    /// the same type.
     fn match_expr(&mut self, e: &ast::Expr, expected: Option<&Type>, is_stmt: bool) -> Result<TExpr> {
         let ExprKind::Match { scrutinee, arms } = &e.kind else { unreachable!() };
         let s = self.value(scrutinee, None)?;
@@ -3084,7 +3548,11 @@ impl<'a> Checker<'a> {
                 (Some(def), None, cases)
             }
             Type::ErrorSet(set) => (None, Some(set.clone()), self.sets[set].clone()),
-            t => return err(E0055, s.span, format!("`match` needs an enum or error value, found `{t}`")),
+            Type::Int(it) => {
+                let pats = Self::int_patterns(arms, *it, e.span)?.into_iter().map(|r| (None, r)).collect();
+                return self.match_arms(e, s, None, pats, expected, is_stmt);
+            }
+            t => return err(E0055, s.span, format!("`match` needs an enum, error or integer value, found `{t}`")),
         };
         let kind = if def.is_some() { "variant" } else { "error" };
         let show = |n: &str| match (&def, &set) {
@@ -3098,6 +3566,9 @@ impl<'a> Checker<'a> {
         for arm in arms {
             if wildcard {
                 return err(E0057, arm.span, "unreachable arm: the `_` arm above already matches everything");
+            }
+            if let Some(p) = arm.values.first() {
+                return err(E0088, p.span, format!("a `match` on `{}` takes `.Name` patterns, not integers", s.ty));
             }
             match &arm.variant {
                 None => {
@@ -3126,6 +3597,90 @@ impl<'a> Checker<'a> {
                 return err(E0056, e.span, format!("`match` is not exhaustive: missing {kind}{s} {}", missing.join(", ")));
             }
         }
+        // A `match` on errors tests the error value.
+        if set.is_some() {
+            for v in &mut variants {
+                *v = v.map(|c| self.error_names.iter().position(|n| *n == cases[c]).unwrap() + 1);
+            }
+        }
+        let pats = variants.into_iter().map(|v| (v, Vec::new())).collect();
+        self.match_arms(e, s, def, pats, expected, is_stmt)
+    }
+
+    /// The ranges of values that each arm of a `match` on the integer type
+    /// `it` matches (empty for `_`). No value may be matched twice, and
+    /// without `_` the arms must cover every value of `it`.
+    fn int_patterns(arms: &[ast::MatchArm], it: IntTy, span: Span) -> Result<Vec<Vec<(i128, i128)>>> {
+        let ty = Type::Int(it);
+        let mut seen: Vec<(i128, i128)> = Vec::new();
+        let mut out = Vec::new();
+        let mut wildcard = false;
+        for arm in arms {
+            if wildcard {
+                return err(E0057, arm.span, "unreachable arm: the `_` arm above already matches everything");
+            }
+            if let Some(v) = &arm.variant {
+                return err(E0088, arm.span, format!("a `match` on `{ty}` takes integer and character patterns, not `.{v}`"));
+            }
+            if arm.values.is_empty() {
+                wildcard = true;
+                out.push(Vec::new());
+                continue;
+            }
+            let mut ranges = Vec::new();
+            for p in &arm.values {
+                let shown = if p.lo == p.hi { format!("`{}`", p.lo) } else { format!("`{}..={}`", p.lo, p.hi) };
+                if p.lo > p.hi {
+                    return err(E0088, p.span, format!("the range {shown} is empty: its start is larger than its end"));
+                }
+                if p.lo < it.min() || p.hi > it.max() {
+                    let v = if p.lo < it.min() { p.lo } else { p.hi };
+                    return err(E0024, p.span, format!("pattern value `{v}` does not fit in `{ty}`"));
+                }
+                if seen.iter().any(|&(a, b)| p.lo <= b && a <= p.hi) {
+                    return err(E0057, p.span, format!("pattern {shown} matches values that an earlier pattern already matches"));
+                }
+                seen.push((p.lo, p.hi));
+                ranges.push((p.lo, p.hi));
+            }
+            out.push(ranges);
+        }
+        if !wildcard {
+            seen.sort();
+            let mut gaps = Vec::new();
+            let mut next = it.min();
+            for (a, b) in seen {
+                if a > next {
+                    gaps.push((next, a - 1));
+                }
+                next = next.max(b + 1);
+            }
+            if next <= it.max() {
+                gaps.push((next, it.max()));
+            }
+            if !gaps.is_empty() {
+                let shown: Vec<String> =
+                    gaps.iter().take(3).map(|&(a, b)| if a == b { format!("`{a}`") } else { format!("`{a}..={b}`") }).collect();
+                let more = if gaps.len() > 3 { ", ..." } else { "" };
+                return err(E0056, span, format!("`match` on `{ty}` is not exhaustive: missing {}{more} (add a `_` arm)", shown.join(", ")));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Check the arms of the `match` `e` on `s`, whose patterns are checked:
+    /// `pats` has each arm's variant (`def` is the enum) or error value, and
+    /// its integer ranges.
+    fn match_arms(
+        &mut self,
+        e: &ast::Expr,
+        s: TExpr,
+        def: Option<EnumDef>,
+        pats: Vec<ArmPat>,
+        expected: Option<&Type>,
+        is_stmt: bool,
+    ) -> Result<TExpr> {
+        let ExprKind::Match { arms, .. } = &e.kind else { unreachable!() };
         // Without an expected type, the first arm that is not an untyped
         // literal or `null` decides the type of the `match`.
         let mut want = if is_stmt { None } else { expected.cloned() };
@@ -3140,13 +3695,10 @@ impl<'a> Checker<'a> {
         let mut checked: Vec<Option<TArm>> = vec![None; arms.len()];
         for i in order {
             self.scopes.push(HashMap::new());
-            let arm = self.match_arm(def.as_ref(), &arms[i], variants[i], want.as_ref(), is_stmt);
+            let arm = self.match_arm(def.as_ref(), &arms[i], pats[i].0, want.as_ref(), is_stmt);
             self.scopes.pop();
             let mut arm = arm?;
-            if set.is_some() {
-                // A `match` on errors tests the error value.
-                arm.variant = variants[i].map(|c| self.error_names.iter().position(|n| *n == cases[c]).unwrap() + 1);
-            }
+            arm.ranges = pats[i].1.clone();
             if let (false, None, TArmBody::Expr(x)) = (is_stmt, &want, &arm.body) {
                 want = Some(x.ty.clone());
             }
@@ -3158,8 +3710,8 @@ impl<'a> Checker<'a> {
     }
 
     /// One arm: declare the pattern variables, then check the body.
-    /// `def` is `None` in a `match` on errors, where `variant` is the index
-    /// of the error in the set.
+    /// `def` is `None` in a `match` on errors, where `variant` is the error
+    /// value, and on integers.
     fn match_arm(
         &mut self,
         def: Option<&EnumDef>,
@@ -3216,6 +3768,6 @@ impl<'a> Checker<'a> {
                 None => self.value(x, None)?,
             }),
         };
-        Ok(TArm { variant, bindings, body })
+        Ok(TArm { variant, ranges: Vec::new(), bindings, body })
     }
 }
