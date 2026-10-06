@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<style>
+body { margin: 8px }
+.box { width: 60px; height: 30px; background-color: steelblue }
+.unslotted { width: 300px; height: 100px; background-color: red }
+</style>
+<x-panel><template shadowrootmode="open"><style>
+:host { display: block; width: 200px; padding: 8px; background-color: gold }
+.frame { border: 4px solid green; padding: 4px }
+::slotted(.box) { background-color: navy }
+.before { width: 40px; height: 20px; background-color: tomato }
+</style><div class="before"></div><div class="frame"><slot name="main"></slot></div><slot></slot></template><div class="unslotted" slot="nowhere"></div><div class="box" slot="main"></div><div class="box" style="background-color: orchid"></div></x-panel>
+<div><template shadowrootmode="closed"><div style="width: 120px; height: 20px; background-color: teal"></div></template><div class="unslotted"></div></div>

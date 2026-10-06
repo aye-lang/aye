@@ -54,17 +54,18 @@ fn listMarker(t: *mut Tree, b: usize, el: NodeId) AllocError!void {
     t.bx(b).marker = try out.toOwned()
 }
 
-// The number of the list item `el`.
+// The number of the list item `el` (among its siblings in the flat
+// tree).
 fn ordinal(t: *Tree, el: NodeId) i64 {
     var n: i64 = 0
     var start: ?NodeId = null
-    if t.doc.parent(el) |p| {
+    if dom.flatParent(t.doc, el) |p| {
         if t.doc.isElement(p, "ol") {
             if t.doc.attr(p, "start") |v| {
                 n = (text.parseInt(text.trim(v)) catch 1) - 1
             }
         }
-        start = t.doc.firstChild(p)
+        start = dom.flatFirstChild(t.doc, p)
     }
     var cur = start
     while cur |c| {
@@ -78,7 +79,7 @@ fn ordinal(t: *Tree, el: NodeId) i64 {
         if dom.same(c, el) {
             break
         }
-        cur = t.doc.nextSibling(c)
+        cur = dom.flatNextSibling(t.doc, c)
     }
     return n
 }
