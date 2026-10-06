@@ -1786,6 +1786,10 @@ pub fn main() !void {
   out of range`, `integer cast out of range`, `shift amount out of range`,
   `unwrap of null`, `reached unreachable code`, `double free ...`, `use
   after free ...`.
+- Running out of stack (deep recursion) panics with `panic: stack
+  overflow` (no position) in debug and safe mode, on any thread; in `fast`
+  mode it is a crash. A thread's stack is 8 MiB unless `spawnWithStack`
+  asks for more.
 - `fast` mode removes the checks: overflow wraps, out-of-bounds access is
   undefined behavior.
 - Struct fields, arrays and slices are laid out by the compiler; only an

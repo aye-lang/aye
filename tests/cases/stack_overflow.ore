@@ -1,0 +1,12 @@
+// M9.7: in debug and safe mode, running out of stack panics with a message
+// instead of a bare segmentation fault.
+fn down(n: u64) u64 {
+    var pad = [16]u64{n, ..}
+    pad[n % 16] = down(n + 1)
+    return pad[n % 16] + 1
+}
+
+pub fn main() {
+    @println("start")
+    @println(down(0))
+}

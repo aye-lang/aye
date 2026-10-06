@@ -1,0 +1,30 @@
+// M9.7: a thread that runs out of its stack panics with a message too.
+import std.thread
+
+struct Job {
+    depth: u64
+}
+
+fn down(n: u64) u64 {
+    var pad = [16]u64{n, ..}
+    if n == 0 {
+        return 0
+    }
+    pad[n % 16] = down(n - 1)
+    return pad[n % 16] + 1
+}
+
+fn run(job: *mut Job) {
+    job.depth = down(job.depth)
+}
+
+pub fn main() !void {
+    var ok = Job { depth: 1000 }
+    let t = try thread.spawnWithStack(Job, run, &mut ok, 1 << 20)
+    t.join()
+    @println(ok.depth)
+    var deep = Job { depth: 100000000 }
+    let u = try thread.spawnWithStack(Job, run, &mut deep, 256 << 10)
+    u.join()
+    @println(deep.depth)
+}

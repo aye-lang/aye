@@ -458,6 +458,88 @@ ORE_RT uint64_t ore_std_monotonic_ns(void) {
     return (uint64_t)ts[0] * 1000000000u + (uint64_t)ts[1];
 }
 
+/* Stack overflow (debug and safe mode): a SIGSEGV/SIGBUS handler, running
+   on an alternate signal stack, reports a fault within 1 MiB of the end of
+   the thread's stack as `panic: stack overflow`; any other fault crashes
+   as it would without the handler. Each thread records the top of its
+   stack (an address in its first frame) and its size: the main thread's
+   from `getrlimit`, another thread's from `ore_thread_spawn`. The C
+   structures differ between macOS and Linux and are written out here. */
+#ifdef __APPLE__
+#define ORE_SIGBUS 10
+#define ORE_SA_FLAGS 0x0041 /* SA_ONSTACK | SA_SIGINFO */
+#define ORE_SS_DISABLE 4
+#define ORE_SI_ADDR 24
+typedef struct { void *sp; size_t size; int flags; } ore_stack_t;
+typedef struct { void *action; uint32_t mask; int flags; } ore_sigaction_t;
+#else
+#define ORE_SIGBUS 7
+#define ORE_SA_FLAGS 0x08000004 /* SA_ONSTACK | SA_SIGINFO */
+#define ORE_SS_DISABLE 2
+#define ORE_SI_ADDR 16
+typedef struct { void *sp; int flags; size_t size; } ore_stack_t;
+typedef struct { void *action; uint64_t mask[16]; int flags; void *restorer; } ore_sigaction_t;
+#endif
+#define ORE_SIGSEGV 11
+#define ORE_ALTSTACK ((size_t)128 << 10)
+extern int ore_rt_sigaltstack(const ore_stack_t *, ore_stack_t *) __asm__(ORE_SYM("sigaltstack"));
+extern int ore_rt_sigaction(int, const ore_sigaction_t *, ore_sigaction_t *) __asm__(ORE_SYM("sigaction"));
+extern int ore_rt_getrlimit(int, uint64_t *) __asm__(ORE_SYM("getrlimit"));
+extern long ore_rt_write(int, const void *, size_t) __asm__(ORE_SYM("write"));
+static _Thread_local __attribute__((unused)) uintptr_t ore_stack_top, ore_stack_size;
+static _Thread_local __attribute__((unused)) void *ore_altstack;
+static void ore_on_fault(int sig, void *info, void *ctx) {
+    (void)ctx;
+    uintptr_t addr = *(uintptr_t *)((char *)info + ORE_SI_ADDR);
+    uintptr_t near = (uintptr_t)1 << 20;
+    uintptr_t lo = ore_stack_top > ore_stack_size ? ore_stack_top - ore_stack_size : 0;
+    if (ore_stack_top && addr < ore_stack_top && addr + near >= lo && addr < lo + near) {
+        static const char msg[] =
+            "panic: stack overflow (deep recursion: run it on a thread with a larger stack, std.thread.spawnWithStack)\n";
+        ore_rt_fflush(0);
+        ore_rt_write(2, msg, sizeof msg - 1);
+        ore_rt_abort();
+    }
+    ore_sigaction_t dfl = {0};
+    ore_rt_sigaction(sig, &dfl, 0);
+}
+/* The current thread's stack has `size` bytes, starting at the caller's
+   frame: give it an alternate signal stack for the handler. */
+ORE_RT __attribute__((noinline)) void ore_stack_guard(size_t size) {
+    if (!ORE_CHECKS) return;
+    char here;
+    ore_stack_top = (uintptr_t)&here;
+    ore_stack_size = size;
+    ore_altstack = ore_rt_malloc(ORE_ALTSTACK);
+    if (!ore_altstack) return;
+    ore_stack_t ss = {0};
+    ss.sp = ore_altstack;
+    ss.size = ORE_ALTSTACK;
+    ore_rt_sigaltstack(&ss, 0);
+}
+ORE_RT void ore_stack_unguard(void) {
+    if (!ore_altstack) return;
+    ore_stack_t ss = {0};
+    ss.flags = ORE_SS_DISABLE;
+    ore_rt_sigaltstack(&ss, 0);
+    ore_rt_free(ore_altstack);
+    ore_altstack = 0;
+}
+/* At the start of `main`: the handler, and the main thread's guard. An
+   unlimited stack (Linux) is taken as 8 MiB. */
+ORE_RT void ore_stack_guard_main(void) {
+    if (!ORE_CHECKS) return;
+    ore_sigaction_t sa = {0};
+    sa.action = (void *)ore_on_fault;
+    sa.flags = ORE_SA_FLAGS;
+    ore_rt_sigaction(ORE_SIGSEGV, &sa, 0);
+    ore_rt_sigaction(ORE_SIGBUS, &sa, 0);
+    uint64_t lim[2] = {0, 0};
+    size_t size = (size_t)8 << 20;
+    if (ore_rt_getrlimit(3, lim) == 0 && lim[0] < ((uint64_t)1 << 40)) size = (size_t)lim[0];
+    ore_stack_guard(size);
+}
+
 /* std.thread and std.sync: pthreads. A `pthread_t` is 8 bytes on macOS and
    Linux; a mutex or condition variable lives on the C heap (128 bytes holds
    either on both), so an Ore value that refers to it can be copied. */
@@ -475,11 +557,13 @@ extern int ore_rt_pthread_cond_destroy(void *) __asm__(ORE_SYM("pthread_cond_des
 extern int ore_rt_pthread_attr_init(void *) __asm__(ORE_SYM("pthread_attr_init"));
 extern int ore_rt_pthread_attr_setstacksize(void *, size_t) __asm__(ORE_SYM("pthread_attr_setstacksize"));
 extern int ore_rt_pthread_attr_destroy(void *) __asm__(ORE_SYM("pthread_attr_destroy"));
-struct ore_thread_start { void (*f)(uint8_t *); uint8_t *arg; };
+struct ore_thread_start { void (*f)(uint8_t *); uint8_t *arg; size_t stack; };
 static void *ore_thread_main(void *p) {
     struct ore_thread_start s = *(struct ore_thread_start *)p;
     ore_rt_free(p);
+    ore_stack_guard(s.stack);
     s.f(s.arg);
+    ore_stack_unguard();
     return 0;
 }
 /* Start `f(arg)` on a thread with a stack of at least `stack` bytes: a
@@ -492,6 +576,7 @@ ORE_RT bool ore_thread_spawn(void (*f)(uint8_t *), uint8_t *arg, size_t stack, u
     if (!s) return false;
     s->f = f;
     s->arg = arg;
+    s->stack = stack;
     _Alignas(16) unsigned char attr[128];
     ore_rt_pthread_attr_init(attr);
     bool ok = ore_rt_pthread_attr_setstacksize(attr, stack) == 0 && ore_rt_pthread_create(out, attr, ore_thread_main, s) == 0;
@@ -842,7 +927,7 @@ impl Gen {
             self.func(f);
         }
         if tests {
-            self.out.push_str("\nint main(int argc, char **argv) {\n    int n = 0;\n    ore_argc = argc;\n    ore_argv = argv;\n    if (argc != 2) return 2;\n");
+            self.out.push_str("\nint main(int argc, char **argv) {\n    int n = 0;\n    ore_argc = argc;\n    ore_argv = argv;\n    ore_stack_guard_main();\n    if (argc != 2) return 2;\n");
             self.out.push_str("    for (const char *s = argv[1]; *s; s++) n = n * 10 + (*s - '0');\n    switch (n) {\n");
             for i in 0..p.tests.len() {
                 let _ = writeln!(self.out, "    case {i}: return ore_test_end(ore_t_{i}().err);");
@@ -854,11 +939,11 @@ impl Gen {
         if let Type::ErrorUnion(..) = main.ret {
             let _ = write!(
                 self.out,
-                "\nint main(int argc, char **argv) {{\n    ore_argc = argc;\n    ore_argv = argv;\n    {} r = ore_f_main();\n    return r.err ? ore_main_error(r.err) : 0;\n}}\n",
+                "\nint main(int argc, char **argv) {{\n    ore_argc = argc;\n    ore_argv = argv;\n    ore_stack_guard_main();\n    {} r = ore_f_main();\n    return r.err ? ore_main_error(r.err) : 0;\n}}\n",
                 c_type(&main.ret)
             );
         } else {
-            self.out.push_str("\nint main(int argc, char **argv) {\n    ore_argc = argc;\n    ore_argv = argv;\n    ore_f_main();\n    return 0;\n}\n");
+            self.out.push_str("\nint main(int argc, char **argv) {\n    ore_argc = argc;\n    ore_argv = argv;\n    ore_stack_guard_main();\n    ore_f_main();\n    return 0;\n}\n");
         }
     }
 
