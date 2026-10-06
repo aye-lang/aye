@@ -7,7 +7,7 @@
 <script>
 function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
 const parsed = document.getElementById('parsed');
-log('before define', parsed instanceof HTMLElement, parsed.constructor.name, typeof parsed.greet);
+log('before define', parsed instanceof HTMLElement, parsed.constructor.name, typeof parsed.greet, parsed.matches(':defined'), document.querySelectorAll(':not(:defined)').length);
 customElements.whenDefined('x-greet').then(c => log('whenDefined', c.name));
 
 class Greet extends HTMLElement {
@@ -24,7 +24,7 @@ class Greet extends HTMLElement {
 }
 // Defining upgrades the elements already in the document.
 customElements.define('x-greet', Greet);
-log('after define', parsed instanceof Greet, parsed.greet(), parsed.count, customElements.get('x-greet') === Greet, customElements.getName(Greet));
+log('after define', parsed instanceof Greet, parsed.greet(), parsed.count, customElements.get('x-greet') === Greet, customElements.getName(Greet), parsed.matches(':defined'));
 parsed.setAttribute('name', 'Grace');
 parsed.setAttribute('title', 'not observed');
 
