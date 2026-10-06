@@ -1,0 +1,32 @@
+// M9.7: `std.thread.spawnWithStack` runs deep recursion on a thread with a
+// large stack (here 256 MiB; the 8 MiB of the main thread is too small).
+import std.thread
+
+struct Job {
+    depth: u64
+    result: u64
+}
+
+fn down(n: u64) u64 {
+    var pad = [32]u64{n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n}
+    if n == 0 {
+        return pad[7]
+    }
+    pad[n % 32] = down(n - 1)
+    return pad[n % 32] + 1
+}
+
+fn run(job: *mut Job) {
+    job.result = down(job.depth)
+}
+
+pub fn main() !void {
+    var job = Job { depth: 200000, result: 0 }
+    let t = try thread.spawnWithStack(Job, run, &mut job, 256 << 20)
+    t.join()
+    @println(job.result)
+    var small = Job { depth: 1000, result: 0 }
+    let u = try thread.spawn(Job, run, &mut small)
+    u.join()
+    @println(small.result)
+}

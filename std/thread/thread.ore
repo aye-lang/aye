@@ -16,18 +16,27 @@ pub struct Thread {
     }
 }
 
-/// Starts a thread that runs `f(arg)`. `arg` must stay valid until the
-/// thread is joined, and what the thread shares with others is guarded by
-/// a `std.sync.Mutex`, sent through a `std.sync.Channel` or an
+/// Starts a thread that runs `f(arg)`, with a stack of 8 MiB (as the main
+/// thread has on macOS and Linux). `arg` must stay valid until the thread
+/// is joined, and what the thread shares with others is guarded by a
+/// `std.sync.Mutex`, sent through a `std.sync.Channel` or an
 /// `std.sync.Atomic` (an allocator is not shared: give each thread its
 /// own).
 pub fn spawn(comptime T: type, f: fn(*mut T), arg: *mut T) SpawnError!Thread {
+    return spawnWithStack(T, f, arg, 8 << 20)
+}
+
+/// `spawn` with a stack of at least `stack` bytes (rounded up to a multiple
+/// of 64 KiB, at least 256 KiB), for deep recursion: a tree-walking
+/// interpreter can ask for 1 GiB (`1 << 30`); the memory is reserved, and
+/// only the part that is used is taken.
+pub fn spawnWithStack(comptime T: type, f: fn(*mut T), arg: *mut T, stack: usize) SpawnError!Thread {
     var handle: u64 = 0
-    if !ore_thread_spawn(@ptrCast(fn([*]u8), f), @ptrCast([*]u8, arg), &mut handle) {
+    if !ore_thread_spawn(@ptrCast(fn([*]u8), f), @ptrCast([*]u8, arg), stack, &mut handle) {
         return SpawnError.SystemResources
     }
     return Thread { handle: handle }
 }
 
-extern fn ore_thread_spawn(f: fn([*]u8), arg: [*]u8, out: *mut u64) bool
+extern fn ore_thread_spawn(f: fn([*]u8), arg: [*]u8, stack: usize, out: *mut u64) bool
 extern fn ore_thread_join(t: u64)

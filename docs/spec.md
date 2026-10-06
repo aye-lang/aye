@@ -1446,7 +1446,8 @@ std.time.sleep(ms: u64)                    wait at least ms milliseconds
 ### std.thread
 
 ```
-std.thread.spawn(comptime T: type, f: fn(*mut T), arg: *mut T) SpawnError!Thread   run f(arg) in a new thread
+std.thread.spawn(comptime T: type, f: fn(*mut T), arg: *mut T) SpawnError!Thread   run f(arg) in a new thread (8 MiB stack)
+std.thread.spawnWithStack(comptime T: type, f: fn(*mut T), arg: *mut T, stack: usize) SpawnError!Thread   a stack of at least `stack` bytes
 Thread.join(self: Self)                    wait until the thread's function returns; join every thread once
 std.thread.SpawnError { SystemResources }
 ```
@@ -1454,7 +1455,11 @@ std.thread.SpawnError { SystemResources }
 `arg` must stay valid until the thread is joined. What threads share goes
 through `std.sync`; an allocator (`General`, `Arena`) is not thread-safe:
 give each thread its own. A panic in any thread ends the program; each
-thread has its own error return trace.
+thread has its own error return trace. The main thread's stack is 8 MiB
+(the system's); for deep recursion (a tree-walking interpreter) run the
+work on a thread with a large stack, `spawnWithStack(Job, run, &mut job,
+1 << 30)`, and `join` it: the memory is reserved, and only what is used is
+taken.
 
 ### std.sync
 

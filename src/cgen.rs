@@ -467,6 +467,9 @@ extern int ore_rt_pthread_cond_wait(void *, void *) __asm__(ORE_SYM("pthread_con
 extern int ore_rt_pthread_cond_signal(void *) __asm__(ORE_SYM("pthread_cond_signal"));
 extern int ore_rt_pthread_cond_broadcast(void *) __asm__(ORE_SYM("pthread_cond_broadcast"));
 extern int ore_rt_pthread_cond_destroy(void *) __asm__(ORE_SYM("pthread_cond_destroy"));
+extern int ore_rt_pthread_attr_init(void *) __asm__(ORE_SYM("pthread_attr_init"));
+extern int ore_rt_pthread_attr_setstacksize(void *, size_t) __asm__(ORE_SYM("pthread_attr_setstacksize"));
+extern int ore_rt_pthread_attr_destroy(void *) __asm__(ORE_SYM("pthread_attr_destroy"));
 struct ore_thread_start { void (*f)(uint8_t *); uint8_t *arg; };
 static void *ore_thread_main(void *p) {
     struct ore_thread_start s = *(struct ore_thread_start *)p;
@@ -474,16 +477,22 @@ static void *ore_thread_main(void *p) {
     s.f(s.arg);
     return 0;
 }
-ORE_RT bool ore_thread_spawn(void (*f)(uint8_t *), uint8_t *arg, uint64_t *out) {
+/* Start `f(arg)` on a thread with a stack of at least `stack` bytes: a
+   multiple of 64 KiB (macOS wants a multiple of the page size), and at
+   least 256 KiB. A `pthread_attr_t` fits in 128 bytes on macOS and Linux. */
+ORE_RT bool ore_thread_spawn(void (*f)(uint8_t *), uint8_t *arg, size_t stack, uint64_t *out) {
+    if (stack > SIZE_MAX - 0xffff) return false;
+    stack = stack < ((size_t)256 << 10) ? (size_t)256 << 10 : (stack + 0xffff) & ~(size_t)0xffff;
     struct ore_thread_start *s = ore_rt_malloc(sizeof *s);
     if (!s) return false;
     s->f = f;
     s->arg = arg;
-    if (ore_rt_pthread_create(out, 0, ore_thread_main, s) != 0) {
-        ore_rt_free(s);
-        return false;
-    }
-    return true;
+    _Alignas(16) unsigned char attr[128];
+    ore_rt_pthread_attr_init(attr);
+    bool ok = ore_rt_pthread_attr_setstacksize(attr, stack) == 0 && ore_rt_pthread_create(out, attr, ore_thread_main, s) == 0;
+    ore_rt_pthread_attr_destroy(attr);
+    if (!ok) ore_rt_free(s);
+    return ok;
 }
 ORE_RT void ore_thread_join(uint64_t t) { ore_rt_pthread_join(t, 0); }
 ORE_RT __attribute__((noreturn, cold)) void ore_sync_oom(void) {
