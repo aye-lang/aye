@@ -974,3 +974,20 @@ fn jsdom_gc_stress() {
     });
     assert!(failures.is_empty(), "{} DOM fixtures failed under GC stress:\n\n{}", failures.len(), failures.join("\n\n"));
 }
+
+// ---- B8: HTML and CSS
+
+/// `noscript` follows scripting: the dumps without `--js` show it (the
+/// agent fixture `noscript`), with `--js` they leave it out.
+#[test]
+fn noscript_with_scripts() {
+    let page = "browser/tests/agent/noscript.html";
+    expect(&["dump", "--text", "--js", page], 0, "Scripts\n\nAlways here.\n\nAn icon and a formula .\n", "");
+    expect(&["dump", "--md", "--js", page], 0, "# Scripts\n\nAlways here.\n\nAn icon and a formula .\n", "");
+    expect(
+        &["dump", "--a11y", "--js", page],
+        0,
+        "- heading \"Scripts\" [level=1] [e1]\n- paragraph: Always here.\n- paragraph: An icon and a formula .\n",
+        "",
+    );
+}

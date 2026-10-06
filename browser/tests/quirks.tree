@@ -1,0 +1,12 @@
+#document
+  <html>
+    <head>
+    <body>
+      <p>
+        "Without a doctype the document is in quirks mode, where\n"
+        <table>
+          <tbody>
+            <tr>
+              <td>
+                "a table stays inside the paragraph"
+        "\n"

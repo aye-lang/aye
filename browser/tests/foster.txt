@@ -1,0 +1,17 @@
+Text and elements misplaced in a table go before it.
+
+text before
+misplaced div
+bold
+
+cell
+c2
+c3
+
+inner
+
+a
+
+second table
+
+After

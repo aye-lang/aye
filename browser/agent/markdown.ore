@@ -211,7 +211,7 @@ fn mdBlockElement(md: *mut Md, el: NodeId, bl: *mut Blocks) AllocError!void {
         try mdInline(md, el, &mut inl)
         return emitBlock(bl, inl.bytes())
     }
-    if html.isIn(name, "input select textarea button script style template iframe video audio canvas svg object embed noscript") {
+    if html.isIn(name, "input select textarea button script style template iframe video audio canvas svg math object embed") {
         return
     }
     try mdContainer(md, el, bl)
@@ -495,7 +495,7 @@ fn mdInline(md: *mut Md, el: NodeId, inl: *mut text.Builder) AllocError!void {
         try inl.appendByte(')')
         return
     }
-    if html.isIn(name, "input select textarea button script style template iframe video audio canvas svg object embed noscript") {
+    if html.isIn(name, "input select textarea button script style template iframe video audio canvas svg math object embed") {
         return
     }
     var sub = text.Builder.init(md.alloc)

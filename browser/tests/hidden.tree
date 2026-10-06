@@ -15,8 +15,9 @@
         "Hidden by the attribute"
       "\n"
       <template>
-        <p>
-          "Template content"
+        #document-fragment
+          <p>
+            "Template content"
       "\n"
       <noscript>
         <p>

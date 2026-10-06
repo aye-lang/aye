@@ -1,0 +1,57 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <template id="h">
+        #document-fragment
+          <meta name="x">
+          <p>
+            "In the head"
+      <title>
+        "Templates"
+    "\n"
+    <body>
+      "\n"
+      <p>
+        "Before"
+      "\n"
+      <template id="row">
+        #document-fragment
+          <tr>
+            <td class="name">
+              "Name"
+            <td>
+              "Value"
+      "\n"
+      <template>
+        #document-fragment
+          <div>
+            "Div "
+            <b>
+              "bold"
+            " "
+            <template>
+              #document-fragment
+                <span>
+                  "nested"
+      "\n"
+      <table>
+        <tbody>
+          <tr>
+            <td>
+              <template>
+                #document-fragment
+                  <li>
+                    "in a cell"
+              "cell"
+      "\n"
+      <p>
+        "After "
+        <b>
+          "bold "
+          <template>
+            #document-fragment
+              <i>
+                "t"
+          "still bold"
+      "\n"

@@ -586,7 +586,7 @@ fn nativeRole(ax: *Ax, el: NodeId) []u8 {
     if text.eql(name, "meter") {
         return "meter"
     }
-    if html.isIn(name, "iframe video audio canvas object embed noscript template") {
+    if html.isIn(name, "iframe video audio canvas object embed template math") {
         return "skip"
     }
     return ""

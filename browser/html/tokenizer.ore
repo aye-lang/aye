@@ -16,7 +16,8 @@ import std.mem.Allocator
 import std.text
 
 pub enum Token {
-    Doctype { name: []u8 }
+    // `quirks`: the doctype puts the document in quirks mode.
+    Doctype { name: []u8, quirks: bool }
     StartTag { name: []u8, attrs: []Attr, self_closing: bool }
     EndTag { name: []u8 }
     Comment { data: []u8 }
@@ -389,8 +390,9 @@ pub struct Tokenizer {
         return Token.Comment { data: self.buf.bytes() }
     }
 
-    // `<!DOCTYPE name ...>`: the name in lower case; public and system
-    // identifiers are skipped.
+    // `<!DOCTYPE name [PUBLIC "id" ["system"] | SYSTEM "system"]>`: the
+    // name in lower case, and whether the identifiers ask for quirks mode
+    // (WHATWG 13.2.6.4.1, without the limited-quirks distinction).
     fn doctype(self: *mut Self) AllocError!Token {
         self.pos += 9
         self.skipSpace()
@@ -398,13 +400,77 @@ pub struct Tokenizer {
             try self.buf.appendByte(lower(self.src[self.pos]))
             self.pos += 1
         }
+        let name_len = self.buf.len()
+        self.skipSpace()
+        // Where the identifiers are in the token buffer (lo == hi: absent).
+        var pub_lo: usize = 0
+        var pub_hi: usize = 0
+        var sys_lo: usize = 0
+        var sys_hi: usize = 0
+        var has_public = false
+        var has_system = false
+        var bogus = false
+        if self.keyword("public") {
+            pub_lo = self.buf.len()
+            has_public = try self.quoted()
+            pub_hi = self.buf.len()
+            bogus = !has_public
+            self.skipSpace()
+            sys_lo = self.buf.len()
+            has_system = try self.quoted()
+            sys_hi = self.buf.len()
+        } else if self.keyword("system") {
+            sys_lo = self.buf.len()
+            has_system = try self.quoted()
+            sys_hi = self.buf.len()
+            bogus = !has_system
+        }
         while self.pos < self.src.len && self.src[self.pos] != '>' {
             self.pos += 1
         }
         if self.pos < self.src.len {
             self.pos += 1
         }
-        return Token.Doctype { name: self.buf.bytes() }
+        let all = self.buf.bytes()
+        var public: ?[]u8 = null
+        if has_public {
+            public = all[pub_lo..pub_hi]
+        }
+        var system: ?[]u8 = null
+        if has_system {
+            system = all[sys_lo..sys_hi]
+        }
+        let name = all[..name_len]
+        return Token.Doctype { name: name, quirks: bogus || quirksDoctype(name, public, system) }
+    }
+
+    // Skips the keyword `word` (any case) at `pos` and the space after it.
+    fn keyword(self: *mut Self, word: []u8) bool {
+        let rest = self.src[self.pos..]
+        if rest.len < word.len || !text.eqlIgnoreCase(rest[..word.len], word) {
+            return false
+        }
+        self.pos += word.len
+        self.skipSpace()
+        return true
+    }
+
+    // A quoted identifier at `pos`, lower-cased onto the end of the token
+    // buffer; false when there is none.
+    fn quoted(self: *mut Self) AllocError!bool {
+        if self.pos >= self.src.len || (self.src[self.pos] != '"' && self.src[self.pos] != '\'') {
+            return false
+        }
+        let q = self.src[self.pos]
+        self.pos += 1
+        while self.pos < self.src.len && self.src[self.pos] != q && self.src[self.pos] != '>' {
+            try self.buf.appendByte(lower(self.src[self.pos]))
+            self.pos += 1
+        }
+        if self.pos < self.src.len && self.src[self.pos] == q {
+            self.pos += 1
+        }
+        return true
     }
 
     // ---- text and character references
@@ -519,6 +585,56 @@ pub struct Tokenizer {
             self.pos += 1
         }
     }
+}
+
+// Public identifiers (prefixes, lower case) of the legacy doctypes that
+// mean quirks mode.
+let QUIRKS_PUBLIC = [_][]u8{
+    "+//silmaril//",
+    "-//as//",
+    "-//advasoft ltd//",
+    "-//ietf//",
+    "-//metrius//",
+    "-//microsoft//",
+    "-//netscape comm. corp.//",
+    "-//o'reilly and associates//",
+    "-//sq//",
+    "-//softquad",
+    "-//spyglass//",
+    "-//sun microsystems corp.//",
+    "-//w3c//dtd html 3",
+    "-//w3c//dtd html 4.0 frameset//",
+    "-//w3c//dtd html 4.0 transitional//",
+    "-//w3c//dtd html experimental",
+    "-//w3c//dtd w3 html//",
+    "-//w3o//dtd w3 html",
+    "-//webtechs//",
+}
+
+// Does a doctype with this name and these identifiers (lower case) ask
+// for quirks mode?
+fn quirksDoctype(name: []u8, public: ?[]u8, system: ?[]u8) bool {
+    if !text.eql(name, "html") {
+        return true
+    }
+    if system |sys| {
+        if text.eql(sys, "http://www.ibm.com/data/dtd/v11/ibmxhtml1-transitional.dtd") {
+            return true
+        }
+    }
+    let id = public orelse return false
+    if text.eql(id, "html") || text.eql(id, "-/w3c/dtd html 4.0 transitional/en") {
+        return true
+    }
+    for prefix in QUIRKS_PUBLIC {
+        if text.startsWith(id, prefix) {
+            return true
+        }
+    }
+    if system == null {
+        return text.startsWith(id, "-//w3c//dtd html 4.01 frameset//") || text.startsWith(id, "-//w3c//dtd html 4.01 transitional//")
+    }
+    return false
 }
 
 enum Markup {

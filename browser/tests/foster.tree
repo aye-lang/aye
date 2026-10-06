@@ -1,0 +1,52 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+    <body>
+      <p>
+        "Text and elements misplaced in a table go before it."
+      "\ntext before "
+      <div>
+        "misplaced div"
+      <b>
+        "bold"
+      <input name="v">
+      <table id="t">
+        <tbody>
+          <tr>
+            <td>
+              "cell"
+          " "
+          <tr>
+            <td>
+              "c2"
+          "\n"
+          <input type="hidden" name="h" value="1">
+          <script>
+            "var x;"
+          "\n"
+          <tr>
+            "\n"
+            <td>
+              "c3"
+              <table>
+                <tbody>
+                  <tr>
+                    <td>
+                      "inner"
+              "\n"
+      "\n"
+      <table>
+        <tbody>
+          <tr>
+            <td>
+              "a"
+      <table>
+        <tbody>
+          <tr>
+            <td>
+              "second table"
+      "\n"
+      <p>
+        "After"
+      "\n"

@@ -5,6 +5,7 @@ import dom
 import dom.Document
 import dom.Kind
 import dom.NodeId
+import engine
 import html
 import std.mem.AllocError
 import std.mem.Allocator
@@ -22,9 +23,15 @@ import std.text
 ///         <body class="x">
 ///           "text\n"
 ///           <!-- comment -->
+///
+/// A `template` element's contents follow it as a `#document-fragment`.
 pub fn dumpTree(doc: *Document, top: NodeId, out: *mut text.Builder) AllocError!void {
+    return dumpTreeAt(doc, top, 0, out)
+}
+
+fn dumpTreeAt(doc: *Document, top: NodeId, base: usize, out: *mut text.Builder) AllocError!void {
     var cur: ?NodeId = top
-    var depth: usize = 0
+    var depth = base
     while cur |h| {
         for i in 0..depth {
             try out.append("  ")
@@ -32,7 +39,11 @@ pub fn dumpTree(doc: *Document, top: NodeId, out: *mut text.Builder) AllocError!
         let n = doc.node(h)
         match n.kind {
             .Document => {
-                try out.append("#document")
+                if n.name.len > 0 {
+                    try out.append(n.name)
+                } else {
+                    try out.append("#document")
+                }
             }
             .Doctype => {
                 try out.append("<!DOCTYPE ")
@@ -60,6 +71,11 @@ pub fn dumpTree(doc: *Document, top: NodeId, out: *mut text.Builder) AllocError!
             }
         }
         try out.appendByte('\n')
+        if n.kind == Kind.Element {
+            if doc.templateContent(h) |frag| {
+                try dumpTreeAt(doc, frag, depth + 1, out)
+            }
+        }
         // Next in document order, tracking the depth.
         if n.first_child |c| {
             depth += 1
@@ -117,7 +133,7 @@ let HEX = "0123456789abcdef"
 // ---- readable text
 
 // Elements whose content is not shown.
-let HIDDEN = "head script style template title noembed noframes select datalist iframe object"
+let HIDDEN = "head script style template title noembed noframes select datalist iframe object svg math"
 // Blocks that stand apart by an empty line.
 let PARAGRAPHS = "p h1 h2 h3 h4 h5 h6 pre blockquote ul ol dl table figure hr form"
 // Blocks that start and end a line.
@@ -201,6 +217,10 @@ struct TextWriter {
     fn element(self: *mut Self, h: NodeId) AllocError!void {
         let name = self.doc.node(h).name
         if html.isIn(name, HIDDEN) || self.doc.attr(h, "hidden") != null {
+            return
+        }
+        // `noscript` is shown only when scripts do not run.
+        if text.eql(name, "noscript") && engine.scriptingEnabled() {
             return
         }
         if text.eql(name, "br") {
