@@ -16,7 +16,6 @@ import std.map.IntMap
 import std.mem.AllocError
 import std.mem.Allocator
 import std.text
-import std.time
 
 // Terminated: the script ran out of its budget (see startBudget); no
 // `catch` or `finally` runs, the host reports it.
@@ -99,6 +98,20 @@ pub fn stackAddress() u64 {
     var marker: u8 = 0
     let a = StackAddr { p: @ptrCast([*]u8, &mut marker) }
     return a.n
+}
+
+// C `clock`: the processor time of the process (all threads), in units
+// of CLOCKS_PER_SEC, which POSIX fixes at 1000000.
+extern fn clock() u64
+
+/// The processor time the process has used, in ms. A task's budget is
+/// counted in it, so a busy machine does not end tasks early.
+pub fn cpuMs() u64 {
+    let c = clock()
+    if c == 0xFFFFFFFFFFFFFFFF {
+        return 0
+    }
+    return c / 1000
 }
 
 pub struct Interp {
@@ -380,8 +393,8 @@ pub struct Interp {
     // ---- the budget of a task
 
     /// Starts the budget of a task (a script, a timer callback, an
-    /// event): `ms` of wall time and `steps` statements and calls (0: no
-    /// limit). Running out of either ends the task with
+    /// event): `ms` of processor time (cpuMs) and `steps` statements and
+    /// calls (0: no limit). Running out of either ends the task with
     /// JsError.Terminated, which no `catch` or `finally` sees.
     pub fn startBudget(self: *mut Self, ms: u64, steps: u64) {
         self.steps = 0
@@ -389,7 +402,7 @@ pub struct Interp {
         self.budget_ms = ms
         self.deadline_ms = 0
         if ms > 0 {
-            self.deadline_ms = time.monotonicMs() + ms
+            self.deadline_ms = cpuMs() + ms
         }
         self.terminated = false
     }
@@ -514,7 +527,7 @@ pub struct Interp {
         if self.terminated {
             return JsError.Terminated
         }
-        if (self.step_limit > 0 && self.steps > self.step_limit) || (self.deadline_ms > 0 && time.monotonicMs() > self.deadline_ms) {
+        if (self.step_limit > 0 && self.steps > self.step_limit) || (self.deadline_ms > 0 && cpuMs() > self.deadline_ms) {
             self.terminated = true
             return JsError.Terminated
         }

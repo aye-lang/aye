@@ -345,7 +345,8 @@ on (`--no-js` turns it off), `dump` with `--js`.
 - *Stack:* page scripts run on the main thread, so a task may use 5 MB
   of its stack and nest 3000 calls (a RangeError beyond).
 - *Budget:* a task (a script, a timer callback, an event, the
-  microtasks of a checkpoint) that runs longer than 2 s or 100M steps
+  microtasks of a checkpoint) that uses more than 2 s of processor time
+  or 100M steps
   ends with a console error, which no `catch` or `finally` sees.
 
 ### B7: Agent interface

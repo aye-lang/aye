@@ -63,7 +63,8 @@ let MAX_MICROTASKS: usize = 100000
 let MAX_TASKS: usize = 10000
 // The budget of one task (a script, a timer callback, an event, a
 // microtask), and of all the microtasks of one checkpoint: beyond it the
-// task ends (a console error) and the page goes on.
+// task ends (a console error) and the page goes on. Time is processor
+// time (js.cpuMs).
 pub let TASK_MS: u64 = 2000
 pub let TASK_STEPS: u64 = 100000000
 // Under GC stress (tests), only steps count, and fewer.
@@ -567,14 +568,14 @@ fn runMicrotasks(s: *mut Script) AllocError!void {
         return
     }
     var head: usize = 0
-    let started = time.monotonicMs()
+    let started = js.cpuMs()
     var late = false
     while s.it.takeJob() |f| {
         head += 1
         if head > MAX_MICROTASKS || late {
             continue
         }
-        if !js.gcStressRequested() && time.monotonicMs() - started > TASK_MS {
+        if !js.gcStressRequested() && js.cpuMs() - started > TASK_MS {
             late = true
             try addConsole(s, "[error] ", "microtasks ran too long: the rest were dropped")
             continue
