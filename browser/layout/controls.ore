@@ -1,0 +1,357 @@
+// Form controls and images in the box tree.
+//
+// - A text field (`input` of a text type, `textarea`), a `select` and an
+//   `input` button are inline-blocks whose content is generated: one
+//   text box with the value (bullets for a password), the placeholder
+//   (in gray) when the value is empty, the button's label, or the label
+//   of the selected option. The text box's node is the control. A
+//   `select` with `multiple` or a `size` above 1 is a list box: one line
+//   per option. A `button` element lays out its own content.
+// - Checkboxes and radio buttons are replaced boxes of 13 x 13 px that
+//   paint draws; `input type=image` is an image.
+// - Without a `width`, a text field is `size` characters wide (20 by
+//   default; a character is the width of "0"), a `textarea` `cols`
+//   characters (20) and `rows` lines (2) high, a `select` as wide as its
+//   widest option.
+// - The content of a text field moves by its scroll offset (kept in
+//   `dom.controls`, set by the window so that the caret shows).
+// - Images: `Images` maps elements to decoded bitmaps; a replaced box
+//   takes its natural size and aspect ratio from there.
+
+import css
+import css.Value
+import dom
+import dom.NodeId
+import image
+import std.list.List
+import std.map.IntMap
+import std.math
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+/// The decoded images of a document, by element. The bitmaps belong to
+/// whoever filled the map (the page's image cache).
+pub struct Images {
+    map: IntMap(u32, ImageRef)
+
+    pub fn init(alloc: Allocator) Images {
+        return Images { map: IntMap(u32, ImageRef).init(alloc) }
+    }
+
+    pub fn deinit(self: *mut Self) {
+        self.map.deinit()
+    }
+
+    pub fn put(self: *mut Self, el: NodeId, bmp: *image.Bitmap) AllocError!void {
+        try self.map.put(el.index, ImageRef { generation: el.generation, bmp: bmp })
+    }
+
+    /// The bitmap of `el`; null when it has none (not an image, not
+    /// loaded, or broken).
+    pub fn get(self: *Self, el: NodeId) ?*image.Bitmap {
+        if self.map.get(el.index) |r| {
+            if r.generation == el.generation {
+                return r.bmp
+            }
+        }
+        return null
+    }
+}
+
+struct ImageRef {
+    generation: u32
+    bmp: *image.Bitmap
+}
+
+/// What kind of form control an element is, for layout and paint.
+pub enum ControlKind {
+    None
+    // An `input` of a text type.
+    Field
+    Area
+    // An `input` of type submit, reset, button or file.
+    InputButton
+    Select
+    ListBox
+    Checkbox
+    Radio
+}
+
+pub fn controlKind(doc: *dom.Document, el: NodeId) ControlKind {
+    let n = doc.node(el)
+    if n.kind != dom.Kind.Element {
+        return ControlKind.None
+    }
+    if text.eql(n.name, "textarea") {
+        return ControlKind.Area
+    }
+    if text.eql(n.name, "select") {
+        if isListBox(doc, el) {
+            return ControlKind.ListBox
+        }
+        return ControlKind.Select
+    }
+    if !text.eql(n.name, "input") {
+        return ControlKind.None
+    }
+    let t = dom.inputType(doc, el)
+    if text.eql(t, "checkbox") {
+        return ControlKind.Checkbox
+    }
+    if text.eql(t, "radio") {
+        return ControlKind.Radio
+    }
+    if text.eql(t, "submit") || text.eql(t, "reset") || text.eql(t, "button") || text.eql(t, "file") {
+        return ControlKind.InputButton
+    }
+    if text.eql(t, "image") || text.eql(t, "hidden") {
+        return ControlKind.None
+    }
+    return ControlKind.Field
+}
+
+/// Is the `select` a list box: `multiple`, or a `size` above 1?
+pub fn isListBox(doc: *dom.Document, sel: NodeId) bool {
+    if doc.attr(sel, "multiple") != null {
+        return true
+    }
+    return attrInt(doc, sel, "size", 1) > 1
+}
+
+/// The number of rows of a list box: `size`, else 4.
+fn listRows(doc: *dom.Document, sel: NodeId) i64 {
+    let n = attrInt(doc, sel, "size", 0)
+    if n > 1 {
+        return n
+    }
+    return 4
+}
+
+// The attribute `name` of `el` as a positive integer, else `fallback`.
+fn attrInt(doc: *dom.Document, el: NodeId, name: []u8, fallback: i64) i64 {
+    if doc.attr(el, name) |v| {
+        let n = text.parseInt(text.trim(v)) catch -1
+        if n > 0 && n < 100000 {
+            return n
+        }
+    }
+    return fallback
+}
+
+/// Is the element a replaced box of its own (beyond `img` and the other
+/// embedded elements): a checkbox, a radio button, an image input?
+fn isReplacedInput(doc: *dom.Document, el: NodeId) bool {
+    if !doc.isElement(el, "input") {
+        return false
+    }
+    let t = dom.inputType(doc, el)
+    return text.eql(t, "checkbox") || text.eql(t, "radio") || text.eql(t, "image")
+}
+
+/// The label of an input button: its `value`, else the default.
+pub fn buttonLabel(doc: *dom.Document, el: NodeId) []u8 {
+    let t = dom.inputType(doc, el)
+    if text.eql(t, "file") {
+        return "Choose File"
+    }
+    if doc.attr(el, "value") |v| {
+        return v
+    }
+    if text.eql(t, "submit") {
+        return "Submit"
+    }
+    if text.eql(t, "reset") {
+        return "Reset"
+    }
+    return ""
+}
+
+let PLACEHOLDER = css.Color { r: 117, g: 117, b: 117, a: 1.0 }
+
+// Builds the generated content of the control `el` (box `b`); false
+// when it lays out its own children (a `button`, anything else).
+fn controlContent(t: *mut Tree, b: usize, el: NodeId) AllocError!bool {
+    let kind = controlKind(t.doc, el)
+    var shown = text.Builder.init(t.alloc)
+    var gray = false
+    match kind {
+        .None, .Checkbox, .Radio => {
+            return false
+        }
+        .Field, .Area => {
+            let v = dom.valueOf(t.doc, el)
+            if v.len == 0 {
+                if t.doc.attr(el, "placeholder") |ph| {
+                    for c in ph {
+                        if c != '\n' && c != '\r' {
+                            try shown.appendByte(c)
+                        }
+                    }
+                    gray = true
+                }
+            } else if text.eql(dom.inputType(t.doc, el), "password") && kind == ControlKind.Field {
+                var i: usize = 0
+                while i < v.len {
+                    let d = text.decode(v[i..])
+                    try shown.append("\xE2\x80\xA2")
+                    i += d.len
+                }
+            } else {
+                try shown.append(v)
+            }
+        }
+        .InputButton => {
+            try shown.append(buttonLabel(t.doc, el))
+        }
+        .Select => {
+            if dom.selectedOption(t.doc, el) |opt| {
+                try dom.optionLabel(t.doc, opt, &mut shown)
+            }
+        }
+        .ListBox => {
+            var opts = List(NodeId).init(t.backing)
+            defer opts.deinit()
+            try dom.options(t.doc, el, &mut opts)
+            for i, o in opts.items() {
+                if i > 0 {
+                    try shown.appendByte('\n')
+                }
+                try dom.optionLabel(t.doc, o, &mut shown)
+            }
+        }
+    }
+    // An empty control still has a line (its height and baseline).
+    if shown.len() == 0 {
+        try shown.appendByte(' ')
+    }
+    var style = t.bx(b).style
+    if gray {
+        let copy = try t.alloc.alloc(Value.Initial, style.len)
+        for p, v in style {
+            copy[p] = v
+        }
+        copy[css.COLOR] = Value.Rgba { c: PLACEHOLDER }
+        style = copy
+    }
+    let tb = try t.newBox(BoxKind.Text, el, style, b)
+    t.bx(tb).inline_level = true
+    t.bx(tb).text = shown.bytes()
+    try t.appendChild(b, tb)
+    return true
+}
+
+/// The content-box width of a control whose `width` is auto; null for
+/// other boxes.
+fn controlContentWidth(t: *mut Tree, i: usize) ?f64 {
+    let el = t.bx(i).node orelse return null
+    if t.bx(i).kind != BoxKind.InlineBlock && t.bx(i).kind != BoxKind.Block {
+        return null
+    }
+    let f = fontOf(t.bx(i).style)
+    let zero = t.measure.width(f, "0")
+    return match controlKind(t.doc, el) {
+        .Field => zero * attrInt(t.doc, el, "size", 20) as f64
+        .Area => zero * attrInt(t.doc, el, "cols", 20) as f64
+        .Select, .ListBox => widestOption(t, i, el)
+        _ => null
+    }
+}
+
+// The width of the widest line of the generated text of box `i`.
+fn widestOption(t: *mut Tree, i: usize, el: NodeId) f64 {
+    var w = 0.0
+    let f = fontOf(t.bx(i).style)
+    var opts = List(NodeId).init(t.backing)
+    defer opts.deinit()
+    dom.options(t.doc, el, &mut opts) catch |e| {
+        return 0.0
+    }
+    var label = text.Builder.init(t.backing)
+    defer label.deinit()
+    for o in opts.items() {
+        label.clear()
+        dom.optionLabel(t.doc, o, &mut label) catch |e| {
+            return w
+        }
+        w = math.max(w, t.measure.width(f, label.bytes()))
+    }
+    return w
+}
+
+/// The content height of a control whose `height` is auto (a
+/// `textarea`'s rows, a list box's); null for other boxes.
+fn controlContentHeight(t: *mut Tree, i: usize) ?f64 {
+    let el = t.bx(i).node orelse return null
+    let kind = controlKind(t.doc, el)
+    if kind != ControlKind.Area && kind != ControlKind.ListBox {
+        return null
+    }
+    if t.bx(i).kind != BoxKind.InlineBlock && t.bx(i).kind != BoxKind.Block {
+        return null
+    }
+    let lh = textMetrics(t, t.bx(i).style).line_height
+    if kind == ControlKind.Area {
+        return lh * attrInt(t.doc, el, "rows", 2) as f64
+    }
+    return lh * listRows(t.doc, el) as f64
+}
+
+/// Moves the lines of a text field by its scroll offset: left for an
+/// `input`, up for a `textarea` and a list box.
+fn scrollControl(t: *mut Tree, i: usize) {
+    let el = t.bx(i).node orelse return
+    let kind = controlKind(t.doc, el)
+    if kind != ControlKind.Field && kind != ControlKind.Area && kind != ControlKind.ListBox {
+        return
+    }
+    let c = t.doc.controls.get(el) orelse return
+    let by = c.scroll
+    if by == 0.0 {
+        return
+    }
+    let b = t.bx(i).*
+    for li in b.line_start..b.line_end {
+        let line = t.lines.items()[li]
+        for fi in line.frag_start..line.frag_end {
+            if kind == ControlKind.Field {
+                t.frags.items()[fi].x -= by
+            } else {
+                t.frags.items()[fi].y -= by
+            }
+        }
+    }
+}
+
+/// Does box `i` show some of many lines (a `textarea`, a list box)? Its
+/// baseline is then its bottom margin edge, as for an inline-block whose
+/// `overflow` is not `visible`.
+fn scrollsLines(t: *Tree, i: usize) bool {
+    let el = t.bx(i).node orelse return false
+    let kind = controlKind(t.doc, el)
+    return kind == ControlKind.Area || kind == ControlKind.ListBox
+}
+
+// ---- replaced sizes
+
+/// The natural size of a replaced box: its image's, 13 x 13 for a
+/// checkbox or radio button; null for none.
+fn naturalSize(t: *Tree, i: usize) ?Size {
+    let el = t.bx(i).node orelse return null
+    if t.images |imgs| {
+        if imgs.get(el) |bmp| {
+            return Size { w: bmp.width as f64, h: bmp.height as f64 }
+        }
+    }
+    let kind = controlKind(t.doc, el)
+    if kind == ControlKind.Checkbox || kind == ControlKind.Radio {
+        return Size { w: 13.0, h: 13.0 }
+    }
+    return null
+}
+
+/// A width and a height in px.
+pub struct Size {
+    w: f64
+    h: f64
+}

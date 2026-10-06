@@ -18,12 +18,15 @@
 // the canvas), borders (solid, dashed, dotted, double; the 3-D styles are
 // solid), color, text-decoration-line (underline, overline,
 // line-through; propagated from ancestors, not into atomic inlines),
-// list markers, replaced elements as a frame with their `alt` text,
-// visibility, and overflow other than `visible` as a clip to the padding
-// box.
+// list markers, images (decoded ones scaled into their content box,
+// else a frame with their `alt` text), form controls (checkboxes and
+// radio buttons drawn, a `select`'s arrow, a list box's selected
+// options), visibility, and overflow other than `visible` as a clip to
+// the padding box.
 
 import css
 import css.Value
+import dom
 import font
 import layout
 import layout.BoxKind
@@ -47,6 +50,8 @@ pub enum Item {
     Fill { r: Rect, c: Rgba }
     // `s` in the font `face`, its baseline starting at (`x`, `y`).
     Text { x: f64, y: f64, s: []u8, face: font.Font, c: Rgba }
+    // An image of `w` x `h` RGBA pixels (the page's), scaled into `r`.
+    Image { r: Rect, w: usize, h: usize, pixels: []u8 }
     // Drawing is limited to `r` until the matching `Unclip`.
     Clip { r: Rect }
     Unclip
@@ -75,6 +80,12 @@ pub struct View {
 
 let WHITE = Rgba { r: 255, g: 255, b: 255, a: 255 }
 let BLACK = Rgba { r: 0, g: 0, b: 0, a: 255 }
+// Form controls: the edge of a checkbox or radio button, the accent of a
+// checked one, a disabled one, a selected option in a list box.
+let CONTROL_EDGE = Rgba { r: 118, g: 118, b: 118, a: 255 }
+let ACCENT = Rgba { r: 0, g: 117, b: 255, a: 255 }
+let DISABLED_EDGE = Rgba { r: 196, g: 196, b: 196, a: 255 }
+let SELECTED = Rgba { r: 206, g: 206, b: 206, a: 255 }
 
 /// The display list of a laid-out tree.
 pub fn build(alloc: Allocator, t: *mut Tree) AllocError!DisplayList {
@@ -184,9 +195,14 @@ struct Builder {
         let ch = b.h - b.border[0] - b.border[2] - b.padding[0] - b.padding[2]
         if b.kind == BoxKind.Image {
             if visible {
-                try self.placeholder(i, cx, cy, cw, ch)
+                try self.replaced(i, cx, cy, cw, ch)
             }
             return
+        }
+        if visible {
+            if b.node |el| {
+                try self.controlParts(i, el, cx, cy, cw, ch)
+            }
         }
         if b.marker.len > 0 && visible {
             let m = layout.textMetrics(self.t, b.style)
@@ -396,6 +412,146 @@ struct Builder {
         }
     }
 
+    // A replaced element: its image, a checkbox, a radio button, or else
+    // a placeholder.
+    fn replaced(self: *mut Self, i: usize, x: f64, y: f64, w: f64, h: f64) AllocError!void {
+        if self.t.bx(i).node |el| {
+            if self.t.images |imgs| {
+                if imgs.get(el) |bmp| {
+                    if w > 0.0 && h > 0.0 {
+                        self.extend(x + w, y + h)
+                        try self.add(Item.Image { r: Rect { x: x, y: y, w: w, h: h }, w: bmp.width, h: bmp.height, pixels: bmp.pixels })
+                    }
+                    return
+                }
+            }
+            let kind = layout.controlKind(self.t.doc, el)
+            if kind == layout.ControlKind.Checkbox {
+                return self.checkbox(el, x, y, w, h)
+            }
+            if kind == layout.ControlKind.Radio {
+                return self.radio(el, x, y, w, h)
+            }
+        }
+        return self.placeholder(i, x, y, w, h)
+    }
+
+    fn checkbox(self: *mut Self, el: dom.NodeId, x: f64, y: f64, w: f64, h: f64) AllocError!void {
+        let size = math.floor(math.min(w, h))
+        if size < 3.0 {
+            return
+        }
+        let ox = x + math.floor((w - size) / 2.0)
+        let oy = y + math.floor((h - size) / 2.0)
+        let on = dom.isChecked(self.t.doc, el)
+        let off = dom.isDisabled(self.t.doc, el)
+        var edge = CONTROL_EDGE
+        var inside = WHITE
+        if on {
+            edge = ACCENT
+            inside = ACCENT
+        }
+        if off {
+            edge = DISABLED_EDGE
+            if on {
+                inside = DISABLED_EDGE
+            }
+        }
+        try self.fill(ox, oy, size, size, edge)
+        try self.fill(ox + 1.0, oy + 1.0, size - 2.0, size - 2.0, inside)
+        if on {
+            // A check mark: two strokes of squares, from the left middle
+            // down to the bottom third, then up to the top right.
+            let u = size / 13.0
+            let pen = math.max(1.0, math.floor(2.0 * u + 0.5))
+            var k = 0.0
+            while k <= 1.0 {
+                try self.fill(ox + (3.0 + 2.0 * k) * u, oy + (6.5 + 2.5 * k) * u - pen / 2.0, pen, pen, WHITE)
+                try self.fill(ox + (5.0 + 5.0 * k) * u, oy + (9.0 - 6.0 * k) * u - pen / 2.0, pen, pen, WHITE)
+                k += 0.125
+            }
+        }
+    }
+
+    fn radio(self: *mut Self, el: dom.NodeId, x: f64, y: f64, w: f64, h: f64) AllocError!void {
+        let size = math.floor(math.min(w, h))
+        if size < 3.0 {
+            return
+        }
+        let cx = x + w / 2.0
+        let cy = y + h / 2.0
+        let r = size / 2.0
+        let on = dom.isChecked(self.t.doc, el)
+        var edge = CONTROL_EDGE
+        if on {
+            edge = ACCENT
+        }
+        if dom.isDisabled(self.t.doc, el) {
+            edge = DISABLED_EDGE
+        }
+        try self.disc(cx, cy, r, edge)
+        try self.disc(cx, cy, r - 1.0, WHITE)
+        if on {
+            try self.disc(cx, cy, r - 3.0, edge)
+        }
+    }
+
+    // A disc of radius `r` around (`cx`, `cy`), one fill per row of
+    // pixels.
+    fn disc(self: *mut Self, cx: f64, cy: f64, r: f64, c: Rgba) AllocError!void {
+        if r <= 0.0 {
+            return
+        }
+        var row = math.floor(cy - r)
+        while row < cy + r {
+            let dy = row + 0.5 - cy
+            let half = r * r - dy * dy
+            if half > 0.0 {
+                let hw = math.sqrt(half)
+                let x0 = math.floor(cx - hw + 0.5)
+                let x1 = math.floor(cx + hw + 0.5)
+                try self.fill(x0, row, x1 - x0, 1.0, c)
+            }
+            row += 1.0
+        }
+    }
+
+    // The parts of a form control that its text does not show: the
+    // arrow of a `select`, the selected options of a list box.
+    fn controlParts(self: *mut Self, i: usize, el: dom.NodeId, cx: f64, cy: f64, cw: f64, ch: f64) AllocError!void {
+        let kind = layout.controlKind(self.t.doc, el)
+        let b = self.t.bx(i).*
+        if kind == layout.ControlKind.Select {
+            // A small triangle pointing down, in the right padding.
+            let ink = colorOf(b.style[css.COLOR], BLACK)
+            let mid_x = cx + cw + b.padding[1] / 2.0
+            let mid_y = math.floor(cy + ch / 2.0)
+            for k in 0..4 {
+                let half = 4.0 - k as f64
+                try self.fill(math.floor(mid_x - half), mid_y - 2.0 + k as f64, 2.0 * half, 1.0, ink)
+            }
+            return
+        }
+        if kind != layout.ControlKind.ListBox {
+            return
+        }
+        var opts = List(dom.NodeId).init(self.t.backing)
+        defer opts.deinit()
+        try dom.options(self.t.doc, el, &mut opts)
+        var scroll = 0.0
+        if self.t.doc.controls.get(el) |c| {
+            scroll = c.scroll
+        }
+        var k: usize = 0
+        for li in b.line_start..b.line_end {
+            if k < opts.len() && dom.isSelected(self.t.doc, opts.items()[k]) {
+                let line = self.t.lines.items()[li]
+                try self.fill(cx, cy + line.y - scroll, cw, line.h, SELECTED)
+            }
+            k += 1
+        }
+    }
+
     // A replaced element (an image that is not loaded): a gray frame
     // inside its content box and its `alt` text.
     fn placeholder(self: *mut Self, i: usize, x: f64, y: f64, w: f64, h: f64) AllocError!void {
@@ -457,6 +613,7 @@ pub fn render(list: *DisplayList, canvas: *mut Canvas, v: View, painter: *mut Te
                     try painter.draw(canvas, x * v.scale + v.dx, base, s, face, v.scale, c)
                 }
             }
+            .Image { r, w, h, pixels } => canvas.drawImage(deviceRect(r, v), w, h, pixels)
             .Clip { r } => {
                 try canvas.pushClip(deviceRect(r, v))
             }

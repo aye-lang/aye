@@ -684,7 +684,7 @@ struct OpenFrag {
 // bottom margin edge.
 fn atomicAscent(t: *Tree, i: usize) f64 {
     let b = t.bx(i)
-    if b.last_baseline >= 0.0 && b.kind == BoxKind.InlineBlock {
+    if b.last_baseline >= 0.0 && b.kind == BoxKind.InlineBlock && !scrollsLines(t, i) {
         return b.margin[0] + b.last_baseline
     }
     if b.first_baseline >= 0.0 && (b.kind == BoxKind.Flex || b.kind == BoxKind.Table) {

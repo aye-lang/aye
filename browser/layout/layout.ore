@@ -11,6 +11,7 @@
 // - table.ore: tables with automatic column widths.
 // - flex.ore: flexbox (row and column, wrap, grow and shrink).
 // - markers.ore: list item markers.
+// - controls.ore: form controls (generated content, sizes) and images.
 // - dump.ore: the box tree as text (`anyknown dump --layout`).
 //
 // Boxes live in `Tree.boxes` and name each other by index. Geometry is
@@ -198,6 +199,8 @@ pub struct Tree {
     doc: *Document
     styles: *css.Styles
     measure: dyn font.Measurer
+    // The decoded images of the document, when it has any.
+    images: ?*Images
     viewport_w: f64
     viewport_h: f64
     boxes: List(Box)
@@ -271,6 +274,12 @@ pub struct Tree {
 /// viewport `width` x `height` px, measuring text with `measure`. Free
 /// the result with `deinit`; it refers to `doc` and `styles`.
 pub fn layoutDocument(alloc: Allocator, doc: *Document, styles: *css.Styles, measure: dyn font.Measurer, width: f64, height: f64) AllocError!Tree {
+    return layoutDocumentWith(alloc, doc, styles, null, measure, width, height)
+}
+
+/// `layoutDocument` with the decoded images of the document (natural
+/// sizes for layout, pixels for paint); `images` must outlive the tree.
+pub fn layoutDocumentWith(alloc: Allocator, doc: *Document, styles: *css.Styles, images: ?*Images, measure: dyn font.Measurer, width: f64, height: f64) AllocError!Tree {
     let arena = try alloc.create(Arena.init(alloc))
     let a = arena.allocator()
     var t = Tree {
@@ -280,6 +289,7 @@ pub fn layoutDocument(alloc: Allocator, doc: *Document, styles: *css.Styles, mea
         doc: doc,
         styles: styles,
         measure: measure,
+        images: images,
         viewport_w: width,
         viewport_h: height,
         boxes: List(Box).init(a),
@@ -381,7 +391,11 @@ fn buildElement(t: *mut Tree, parent: usize, el: NodeId) AllocError!void {
             return buildChildren(t, parent, el)
         }
         let name = t.doc.node(el).name
-        if kindOf(name, display) |k| {
+        if kindOf(name, display) |kind_of| {
+            var k = kind_of
+            if isReplacedInput(t.doc, el) {
+                k.kind = BoxKind.Image
+            }
             let b = try t.newBox(k.kind, el, style, parent)
             t.bx(b).inline_level = k.inline_level
             try t.appendChild(parent, b)
@@ -397,7 +411,9 @@ fn buildElement(t: *mut Tree, parent: usize, el: NodeId) AllocError!void {
                 try listMarker(t, b, el)
             }
             if k.kind != BoxKind.Image && k.kind != BoxKind.LineBreak {
-                try buildChildren(t, b, el)
+                if !(try controlContent(t, b, el)) {
+                    try buildChildren(t, b, el)
+                }
             }
         }
     }
