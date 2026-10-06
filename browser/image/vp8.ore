@@ -1,0 +1,10 @@
+// vp8: the WebP lossy decoder (VP8 key frames).
+
+import std
+import std.mem.Allocator
+
+/// Decodes the body of a `VP8 ` chunk (a VP8 key frame) to an opaque
+/// RGBA bitmap.
+pub fn vp8Decode(alloc: Allocator, data: []u8) ImageError!Bitmap {
+    return ImageError.Unsupported
+}

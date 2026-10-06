@@ -152,6 +152,8 @@ fn checkFixture(a: Allocator, name: []u8, w: usize, h: usize, check: []u8) !bool
 // 0.01 to 0.03 and maxima of 1 to 3 on every fixture. Replicating
 // chroma instead of libjpeg's triangle filter gives means of 2.4 to 5.0
 // and maxima of 38 to 57, so these bounds still catch a wrong decoder.
+// Lossy WebP fixtures (`lossy`) get the same bounds against libwebp's
+// decoding.
 let JPEG_MEAN_TOLERANCE: u64 = 25
 let JPEG_MAX_TOLERANCE: u64 = 8
 
@@ -194,6 +196,22 @@ test "jpeg fixtures" {
     @expectEqual(0, try checkFixtures(@testAllocator(), "jpeg_"))
 }
 
+test "webp lossless fixtures" {
+    @expectEqual(0, try checkFixtures(@testAllocator(), "webp_lossless"))
+}
+
+test "webp lossy fixtures" {
+    @expectEqual(0, try checkFixtures(@testAllocator(), "webp_lossy"))
+}
+
+test "webp alpha fixtures" {
+    @expectEqual(0, try checkFixtures(@testAllocator(), "webp_alpha"))
+}
+
+test "webp bad fixtures" {
+    @expectEqual(0, try checkFixtures(@testAllocator(), "webp_bad"))
+}
+
 test "empty input" {
     @expectEqual(0, try checkFixtures(@testAllocator(), "empty"))
 }
@@ -205,6 +223,8 @@ test "sniff" {
     @expect(sniff("GIF88a") == Format.Unknown)
     @expect(sniff("\xFF\xD8\xFF\xE0") == Format.Jpeg)
     @expect(sniff("\xFF\xD8") == Format.Unknown)
+    @expect(sniff("RIFF\x00\x00\x00\x00WEBP") == Format.Webp)
+    @expect(sniff("RIFF\x00\x00\x00\x00WAVE") == Format.Unknown)
     @expect(sniff("") == Format.Unknown)
 }
 

@@ -2,22 +2,23 @@
 """Writes the image fixtures of browser/image's tests into this directory.
 
 Run it from anywhere: python3 browser/tests/image/make_fixtures.py
-(needs Pillow; /opt/homebrew/bin/cjpeg is used for a few JPEGs when it is
-there). The tests themselves only read the files it writes:
+(needs Pillow with WebP; cjpeg and cwebp are used for a few files when they
+are there). The tests themselves only read the files it writes:
 
-- NAME.png / .gif / .jpg: an image, and NAME.rgba its expected pixels (raw
+- NAME.png / .gif / .jpg / .webp: an image, and NAME.rgba its expected pixels (raw
   RGBA8, rows top to bottom, no header).
 - manifest.txt: one line per image, "FILE WIDTH HEIGHT CHECK", where CHECK
-  is `exact` (the decoder must match NAME.rgba byte for byte), `jpeg` (a
-  tolerance, see browser/image/tests.ore) or the error the decoder must
+  is `exact` (the decoder must match NAME.rgba byte for byte), `jpeg` or
+  `lossy` (a tolerance, see browser/image/tests.ore) or the error the decoder must
   return (`invalid`, `unsupported`; WIDTH and HEIGHT are 0 then).
 
 PNGs are encoded here (chunks and zlib written by hand) so that every color
 type, bit depth, filter, interlacing and compression mode is covered and the
 expected pixels follow from the samples. GIFs come from Pillow and from an
 LZW encoder here (code size growth, a full table, offsets, interlacing).
-JPEGs come from Pillow (libjpeg-turbo); their expected pixels are Pillow's
-own decoding.
+JPEGs come from Pillow (libjpeg-turbo) and cjpeg, WebPs from Pillow and
+cwebp (libwebp); their expected pixels are Pillow's own decoding. A YCCK
+JPEG and WebPs with filtered raw alpha are written here.
 """
 
 import io
@@ -601,21 +602,25 @@ def make_jpegs():
             save(name + ".jpg", data, odd.size[0], odd.size[1], "jpeg", dec.tobytes())
         os.remove(scans)
 
+    make_progressive_jpegs(photo, cjpeg)
+    make_cmyk_jpegs(photo, odd)
+    make_exif_jpegs()
+
     buf = io.BytesIO()
     photo.save(buf, "JPEG", quality=80)
     good = buf.getvalue()
     save("jpeg_bad_truncated.jpg", good[:len(good) * 2 // 3], 0, 0, "invalid")
-    buf = io.BytesIO()
-    photo.save(buf, "JPEG", progressive=True)
-    save("jpeg_bad_progressive.jpg", buf.getvalue(), 0, 0, "unsupported")
-    buf = io.BytesIO()
-    photo.convert("CMYK").save(buf, "JPEG")
-    save("jpeg_bad_cmyk.jpg", buf.getvalue(), 0, 0, "unsupported")
-    # A 3-component frame header claiming 4 components.
+    if os.path.exists(cjpeg):
+        ppm = io.BytesIO()
+        photo.save(ppm, "PPM")
+        data = subprocess.run([cjpeg, "-arithmetic"], input=ppm.getvalue(), capture_output=True, check=True).stdout
+        assert b"\xFF\xC9" in data
+        save("jpeg_bad_arithmetic.jpg", data, 0, 0, "unsupported")
+    # A 3-component frame header claiming 4 components (cut short).
     four = bytearray(good)
     sof = four.index(b"\xFF\xC0")
     four[sof + 9] = 4
-    save("jpeg_bad_four_components.jpg", bytes(four), 0, 0, "unsupported")
+    save("jpeg_bad_four_components.jpg", bytes(four), 0, 0, "invalid")
     zero = bytearray(good)
     zero[sof + 7:sof + 9] = b"\x00\x00"
     save("jpeg_bad_zero_width.jpg", bytes(zero), 0, 0, "invalid")
@@ -636,13 +641,325 @@ def make_jpegs():
     save("jpeg_bad_no_tables.jpg", bytes(nodht), 0, 0, "invalid")
 
 
+def jpeg_case(name, im, opts):
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", **opts)
+    data = buf.getvalue()
+    dec = Image.open(io.BytesIO(data)).convert("RGBA")
+    save(name + ".jpg", data, im.size[0], im.size[1], "jpeg", dec.tobytes())
+    return data
+
+
+def make_progressive_jpegs(photo, cjpeg):
+    """Progressive JPEGs: spectral selection and successive approximation
+    (libjpeg's default script), EOB runs, restarts, one-component scans."""
+    odd = photo_image(33, 17, seed=8)
+    big = photo_image(96, 64, seed=11)
+    for name, im, opts in [
+        ("jpeg_prog_420", photo, dict(quality=80, subsampling=2)),
+        ("jpeg_prog_444_odd", odd, dict(quality=90, subsampling=0)),
+        ("jpeg_prog_422_odd", odd, dict(quality=60, subsampling=1)),
+        ("jpeg_prog_gray", photo.convert("L"), dict(quality=85)),
+        ("jpeg_prog_big", big, dict(quality=70, subsampling=2)),
+        ("jpeg_prog_restart", big, dict(quality=75, subsampling=2, restart_marker_blocks=3)),
+    ]:
+        data = jpeg_case(name, im, dict(opts, progressive=True))
+        assert b"\xFF\xC2" in data, name
+        if "restart" in name:
+            assert b"\xFF\xDD" in data
+    if not os.path.exists(cjpeg):
+        return
+    ppm = io.BytesIO()
+    big.save(ppm, "PPM")
+    scans = os.path.join(HERE, "scans.tmp")
+    runs = [
+        # Spectral selection only, the DC scans not interleaved.
+        ("jpeg_prog_spectral", "0: 0 0 0 0;\n1: 0 0 0 0;\n2: 0 0 0 0;\n0: 1 9 0 0;\n0: 10 63 0 0;\n"
+                               "1: 1 63 0 0;\n2: 1 63 0 0;\n", ["-sample", "2x1"]),
+        # Several refinement passes of DC and AC.
+        ("jpeg_prog_refine", "0 1 2: 0 0 0 2;\n0: 1 63 0 3;\n1: 1 63 0 1;\n2: 1 63 0 1;\n"
+                             "0 1 2: 0 0 2 1;\n0: 1 63 3 2;\n0: 1 63 2 1;\n0 1 2: 0 0 1 0;\n"
+                             "0: 1 63 1 0;\n1: 1 63 1 0;\n2: 1 63 1 0;\n", ["-sample", "2x2"]),
+    ]
+    for name, script, args in runs:
+        with open(scans, "w") as f:
+            f.write(script)
+        data = subprocess.run([cjpeg, "-quality", "80", "-scans", scans] + args, input=ppm.getvalue(),
+                              capture_output=True, check=True).stdout
+        assert b"\xFF\xC2" in data, name
+        dec = Image.open(io.BytesIO(data)).convert("RGBA")
+        save(name + ".jpg", data, big.size[0], big.size[1], "jpeg", dec.tobytes())
+    os.remove(scans)
+
+
+def huffman_codes(counts, values):
+    """The codes (value -> (code, length)) of a JPEG Huffman table."""
+    codes = {}
+    code = 0
+    k = 0
+    for length in range(1, 17):
+        for _ in range(counts[length - 1]):
+            codes[values[k]] = (code, length)
+            code += 1
+            k += 1
+        code <<= 1
+    return codes
+
+
+def ycck_jpeg(blocks_x, blocks_y, seed):
+    """A baseline YCCK JPEG (Adobe transform 2) of flat 8x8 blocks, encoded
+    here: libjpeg's tools cannot write one. Only DC terms: a quantizer of 8
+    makes the DC value the sample minus 128, so the file is exact."""
+    rnd = random.Random(seed)
+    dc_counts = [0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+    dc_values = list(range(12))
+    dc = huffman_codes(dc_counts, dc_values)
+    out = bytearray(b"\xFF\xD8")
+
+    def segment(marker, body):
+        out.extend(struct.pack(">BBH", 0xFF, marker, len(body) + 2) + body)
+
+    segment(0xEE, b"Adobe" + struct.pack(">HHHB", 100, 0, 0, 2))
+    segment(0xDB, b"\x00" + bytes([8] * 64))
+    segment(0xC0, struct.pack(">BHHB", 8, blocks_y * 8, blocks_x * 8, 4) +
+            b"".join(bytes([i + 1, 0x11, 0]) for i in range(4)))
+    segment(0xC4, b"\x00" + bytes(dc_counts) + bytes(dc_values) +
+            b"\x10" + bytes([1] + [0] * 15) + b"\x00")
+    segment(0xDA, b"\x04" + b"".join(bytes([i + 1, 0x00]) for i in range(4)) + b"\x00\x3F\x00")
+    bits = []
+
+    def put(code, length):
+        bits.extend((code >> (length - 1 - i)) & 1 for i in range(length))
+
+    pred = [0, 0, 0, 0]
+    for _ in range(blocks_x * blocks_y):
+        for c in range(4):
+            v = rnd.randint(0, 255) - 128
+            diff = v - pred[c]
+            pred[c] = v
+            size = abs(diff).bit_length()
+            put(*dc[size])
+            if size:
+                put(diff if diff > 0 else diff + (1 << size) - 1, size)
+            put(0, 1)  # EOB
+    bits.extend([1] * (-len(bits) % 8))
+    for i in range(0, len(bits), 8):
+        b = int("".join(map(str, bits[i:i + 8])), 2)
+        out.append(b)
+        if b == 0xFF:
+            out.append(0)
+    out.extend(b"\xFF\xD9")
+    return bytes(out)
+
+
+def make_cmyk_jpegs(photo, odd):
+    """CMYK (Adobe, inverted samples) and YCCK; Pillow converts them to RGB
+    as R = (255 - C) * (255 - K) / 255 on the uninverted samples."""
+    for name, im, opts in [
+        ("jpeg_cmyk", photo.convert("CMYK"), dict(quality=90)),
+        ("jpeg_cmyk_odd_prog", odd.convert("CMYK"), dict(quality=70, progressive=True)),
+    ]:
+        data = jpeg_case(name, im, opts)
+        assert b"Adobe" in data
+    data = ycck_jpeg(4, 3, seed=21)
+    im = Image.open(io.BytesIO(data))
+    assert im.mode == "CMYK"
+    save("jpeg_ycck.jpg", data, 32, 24, "jpeg", im.convert("RGBA").tobytes())
+
+
+def exif_segment(orientation, big_endian):
+    """An APP1 Exif segment whose IFD0 has only the Orientation tag."""
+    e = ">" if big_endian else "<"
+    tiff = (b"MM" if big_endian else b"II") + struct.pack(e + "HI", 42, 8)
+    tiff += struct.pack(e + "H", 1) + struct.pack(e + "HHI", 0x0112, 3, 1)
+    tiff += struct.pack(e + "H", orientation) + b"\x00\x00" + struct.pack(e + "I", 0)
+    body = b"Exif\x00\x00" + tiff
+    return struct.pack(">BBH", 0xFF, 0xE1, len(body) + 2) + body
+
+
+def make_exif_jpegs():
+    """The 8 EXIF orientations (little- and big-endian TIFF), on an 11x6
+    image: the expected pixels are Pillow's exif_transpose of its decoding."""
+    from PIL import ImageOps
+    im = photo_image(11, 6, seed=13)
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=95, subsampling=0)
+    plain = buf.getvalue()
+    for o in range(1, 9):
+        data = plain[:2] + exif_segment(o, o % 2 == 0) + plain[2:]
+        dec = ImageOps.exif_transpose(Image.open(io.BytesIO(data))).convert("RGBA")
+        save("jpeg_exif_%d.jpg" % o, data, dec.size[0], dec.size[1], "jpeg", dec.tobytes())
+
+
+# ---------------------------------------------------------------- WebP
+
+
+def save_webp(name, data, check):
+    """A WebP file; the expected pixels are Pillow's (libwebp's) decoding of
+    its first frame."""
+    assert data[:4] == b"RIFF" and data[8:12] == b"WEBP", name
+    im = Image.open(io.BytesIO(data))
+    im.seek(0)
+    dec = im.convert("RGBA")
+    save(name + ".webp", data, dec.size[0], dec.size[1], check, dec.tobytes())
+
+
+def with_alpha_shape(im, shape):
+    """Alpha that the ALPH filters predict well: rows ("rows", the vertical
+    filter) or a smooth ramp in both directions ("ramp", the gradient one)."""
+    out = im.convert("RGBA")
+    px = out.load()
+    w, h = im.size
+    rnd = random.Random(w * h)
+    for y in range(h):
+        for x in range(w):
+            r, g, b, _ = px[x, y]
+            if shape == "rows":
+                a = [0, 255, 90, 180, 30][(x * 7 // w) % 5]
+            else:
+                a = min(255, x * 2 + y * 3 + rnd.randint(0, 1))
+            px[x, y] = (r, g, b, a)
+    return out
+
+
+def riff_chunk(kind, body):
+    return kind + struct.pack("<I", len(body)) + body + b"\x00" * (len(body) & 1)
+
+
+def raw_alpha_webp(im, method):
+    """A lossy WebP with an uncompressed ALPH chunk filtered by `method` (2
+    vertical, 3 gradient), written here: cwebp only picks a filter when it
+    compresses the alpha."""
+    w, h = im.size
+    rgb = pil_webp(im.convert("RGB"), quality=60)
+    assert rgb[12:16] == b"VP8 "
+    vp8 = rgb[20:20 + struct.unpack("<I", rgb[16:20])[0]]
+    alpha = [im.getpixel((x, y))[3] for y in range(h) for x in range(w)]
+
+    def at(x, y):
+        return alpha[y * w + x]
+
+    filtered = bytearray()
+    for y in range(h):
+        for x in range(w):
+            if x == 0 and y == 0:
+                pred = 0
+            elif y == 0:
+                pred = at(x - 1, 0)
+            elif x == 0:
+                pred = at(0, y - 1)
+            elif method == 2:
+                pred = at(x, y - 1)
+            else:
+                pred = max(0, min(255, at(x - 1, y) + at(x, y - 1) - at(x - 1, y - 1)))
+            filtered.append((at(x, y) - pred) & 255)
+    vp8x = struct.pack("<I", 0x10) + struct.pack("<I", w - 1)[:3] + struct.pack("<I", h - 1)[:3]
+    body = b"WEBP" + riff_chunk(b"VP8X", vp8x) + riff_chunk(b"ALPH", bytes([method << 2]) + bytes(filtered)) + \
+        riff_chunk(b"VP8 ", vp8)
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
+def palette_image(w, h, colors, seed):
+    rnd = random.Random(seed)
+    pal = make_palette(colors, seed)
+    im = Image.new("RGB", (w, h))
+    px = im.load()
+    for y in range(h):
+        for x in range(w):
+            px[x, y] = pal[(x // 3 + y // 2 + rnd.randint(0, 1)) % colors]
+    return im
+
+
+def cwebp(im, args):
+    src = os.path.join(HERE, "cwebp_in.tmp.png")
+    out = os.path.join(HERE, "cwebp_out.tmp.webp")
+    im.save(src, "PNG")
+    subprocess.run(["cwebp", "-quiet"] + args + [src, "-o", out], check=True)
+    with open(out, "rb") as f:
+        data = f.read()
+    os.remove(src)
+    os.remove(out)
+    return data
+
+
+def pil_webp(im, **opts):
+    buf = io.BytesIO()
+    im.save(buf, "WEBP", **opts)
+    return buf.getvalue()
+
+
+def make_webps():
+    photo = photo_image(40, 30)
+    odd = photo_image(33, 17, seed=8)
+    big = photo_image(128, 96, seed=4)
+    # Lossless (VP8L): must match libwebp exactly.
+    save_webp("webp_lossless_photo", pil_webp(photo, lossless=True), "exact")
+    save_webp("webp_lossless_odd_alpha", pil_webp(with_alpha(odd), lossless=True, exact=True), "exact")
+    save_webp("webp_lossless_1x1", pil_webp(Image.new("RGBA", (1, 1), (10, 200, 30, 128)), lossless=True), "exact")
+    for colors in (2, 3, 11, 200):
+        im = palette_image(33, 17, colors, seed=colors)
+        save_webp("webp_lossless_palette_%d" % colors, pil_webp(im, lossless=True), "exact")
+    exif = b"Exif\x00\x00II*\x00\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    data = pil_webp(with_alpha(photo), lossless=True, exif=exif)
+    assert data[12:16] == b"VP8X"
+    save_webp("webp_lossless_vp8x", data, "exact")
+    if shutil.which("cwebp"):
+        for z in (0, 3, 9):
+            save_webp("webp_lossless_big_z%d" % z, cwebp(big, ["-z", str(z)]), "exact")
+        save_webp("webp_lossless_near", cwebp(odd, ["-near_lossless", "40"]), "exact")
+    # Lossy (VP8): close to libwebp (see browser/image/tests.ore).
+    save_webp("webp_lossy_q80", pil_webp(photo, quality=80), "lossy")
+    save_webp("webp_lossy_odd_q30", pil_webp(odd, quality=30), "lossy")
+    save_webp("webp_lossy_big_q95", pil_webp(big, quality=95), "lossy")
+    save_webp("webp_lossy_alpha", pil_webp(with_alpha(odd), quality=70), "lossy")
+    save_webp("webp_lossy_gray", pil_webp(photo.convert("L"), quality=60), "lossy")
+    if shutil.which("cwebp"):
+        for name, im, args in [
+            ("webp_lossy_simple_filter", big, ["-q", "50", "-nostrong", "-f", "60"]),
+            ("webp_lossy_sharpness", odd, ["-q", "40", "-sharpness", "6", "-f", "80"]),
+            ("webp_lossy_no_filter", odd, ["-q", "70", "-f", "0"]),
+            ("webp_lossy_one_segment", odd, ["-q", "20", "-segments", "1", "-sns", "0"]),
+            ("webp_lossy_big_q10", big, ["-q", "10", "-f", "100"]),
+            ("webp_alpha_raw", with_alpha_shape(big, "rows"), ["-q", "60", "-alpha_method", "0", "-alpha_filter", "best"]),
+            ("webp_alpha_filter_fast", with_alpha(big), ["-q", "60", "-alpha_filter", "fast", "-alpha_q", "50", "-exact"]),
+            ("webp_alpha_filter_best", with_alpha_shape(big, "ramp"), ["-q", "60", "-alpha_filter", "best"]),
+        ]:
+            save_webp(name, cwebp(im, args), "lossy")
+    save_webp("webp_alpha_vertical", raw_alpha_webp(with_alpha_shape(odd, "rows"), 2), "lossy")
+    save_webp("webp_alpha_gradient", raw_alpha_webp(with_alpha_shape(odd, "ramp"), 3), "lossy")
+    # Animations: the first frame only.
+    frames = [photo, photo.transpose(Image.FLIP_LEFT_RIGHT)]
+    for name, opts in [("webp_lossless_animated", dict(lossless=True)), ("webp_lossy_animated", dict(quality=75))]:
+        buf = io.BytesIO()
+        frames[0].save(buf, "WEBP", save_all=True, append_images=frames[1:], duration=100, **opts)
+        data = buf.getvalue()
+        assert b"ANMF" in data
+        save_webp(name, data, "exact" if "lossless" in name else "lossy")
+
+    good = pil_webp(photo, quality=80)
+    save("webp_bad_truncated.webp", good[:len(good) // 2], 0, 0, "invalid")
+    bad = bytearray(good)
+    bad[12:16] = b"VP9 "
+    save("webp_bad_chunk.webp", bytes(bad), 0, 0, "invalid")
+    good = pil_webp(photo, lossless=True)
+    save("webp_bad_lossless_truncated.webp", good[:len(good) * 2 // 3], 0, 0, "invalid")
+    # Bitstreams cut short inside chunks whose sizes say so.
+    for name, opts in [("webp_bad_vp8_cut", dict(quality=80)), ("webp_bad_vp8l_cut", dict(lossless=True))]:
+        good = pil_webp(photo, **opts)
+        size = struct.unpack("<I", good[16:20])[0] // 2 * 2
+        cut = good[20:20 + size // 2]
+        body = b"WEBP" + riff_chunk(good[12:16], cut)
+        save(name + ".webp", b"RIFF" + struct.pack("<I", len(body)) + body, 0, 0, "invalid")
+
+
 def main():
     for f in os.listdir(HERE):
-        if f.endswith((".png", ".gif", ".jpg", ".rgba", ".bin")) or f == "manifest.txt":
+        if f.endswith((".png", ".gif", ".jpg", ".webp", ".rgba", ".bin")) or f == "manifest.txt":
             os.remove(os.path.join(HERE, f))
     make_pngs()
     make_gifs()
     make_jpegs()
+    make_webps()
     save("empty.bin", b"", 0, 0, "unsupported")
     with open(os.path.join(HERE, "manifest.txt"), "w") as f:
         f.write("\n".join(manifest) + "\n")

@@ -1,0 +1,16 @@
+// vp8l: the WebP lossless decoder (VP8L).
+
+import std
+import std.mem.Allocator
+
+/// Decodes the body of a `VP8L` chunk (from its 0x2F signature byte).
+pub fn vp8lDecode(alloc: Allocator, data: []u8) ImageError!Bitmap {
+    return ImageError.Unsupported
+}
+
+/// Decodes the alpha of an `ALPH` chunk compressed with VP8L: an image
+/// stream of `width` x `height` without the VP8L header, whose green
+/// values are the alpha values, written to `out` (width * height).
+pub fn vp8lDecodeAlpha(alloc: Allocator, data: []u8, width: usize, height: usize, out: []mut u8) ImageError!void {
+    return ImageError.Unsupported
+}
