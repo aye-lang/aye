@@ -1734,7 +1734,7 @@ pub let PRELUDE =
     \\// customElements: definitions are kept, elements are not upgraded
     \\const definitions = new Map();
     \\const waiting = new Map();
-    \\hidden(G, 'customElements', {
+    \\class CustomElementRegistry {
     \\  define(name, ctor) {
     \\    name = String(name);
     \\    if (definitions.has(name)) throw new DOMException("Failed to execute 'define' on 'CustomElementRegistry': the name \"" + name + "\" has already been used with this registry", 'NotSupportedError');
@@ -1743,8 +1743,8 @@ pub let PRELUDE =
     \\      waiting.get(name)(ctor);
     \\      waiting.delete(name);
     \\    }
-    \\  },
-    \\  get(name) { return definitions.get(String(name)); },
+    \\  }
+    \\  get(name) { return definitions.get(String(name)); }
     \\  whenDefined(name) {
     \\    name = String(name);
     \\    if (definitions.has(name)) return Promise.resolve(definitions.get(name));
@@ -1752,9 +1752,11 @@ pub let PRELUDE =
     \\      const prev = waiting.get(name);
     \\      waiting.set(name, prev ? c => { prev(c); resolve(c); } : resolve);
     \\    });
-    \\  },
-    \\  upgrade() {},
-    \\});
+    \\  }
+    \\  upgrade() {}
+    \\}
+    \\hidden(G, 'CustomElementRegistry', CustomElementRegistry);
+    \\hidden(G, 'customElements', new CustomElementRegistry());
     \\
     \\// XMLHttpRequest: GET only, on the browser's fetch (synchronous
     \\// underneath); an asynchronous request completes in a task of its own.

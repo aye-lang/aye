@@ -282,6 +282,12 @@ fn installDom(s: *mut Script) JsError!void {
     try interfaceObject(it, "NodeList", s.nodelist_proto)
     try interfaceObject(it, "HTMLCollection", s.collection_proto)
     try interfaceObject(it, "HTMLOptionsCollection", s.options_proto)
+    // Interfaces no node of a page has, which polyfills patch.
+    try interfaceObject(it, "CDATASection", try newProto(it, textp))
+    try interfaceObject(it, "ProcessingInstruction", try newProto(it, chars))
+    try interfaceObject(it, "XMLDocument", try newProto(it, docp))
+    try interfaceObject(it, "HTMLFormControlsCollection", try newProto(it, s.collection_proto))
+    try interfaceObject(it, "RadioNodeList", try newProto(it, s.nodelist_proto))
     try installElementInterfaces(s, html, element)
     let consts = [6][]u8{"ELEMENT_NODE", "TEXT_NODE", "COMMENT_NODE", "DOCUMENT_NODE", "DOCUMENT_TYPE_NODE", "DOCUMENT_FRAGMENT_NODE"}
     let values = [6]f64{1.0, 3.0, 8.0, 9.0, 10.0, 11.0}
