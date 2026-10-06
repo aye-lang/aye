@@ -210,6 +210,7 @@ pub fn load(alloc: Allocator, target: *Url) AllocError!*mut Page {
 
 /// `load`, by POST with `body` when there is one (a form submission).
 pub fn loadWith(alloc: Allocator, target: *Url, body: ?*net.Body) AllocError!*mut Page {
+    frames_left = MAX_FRAMES
     return loadDocument(alloc, target, body, 0, encoding.Encoding.Windows1252)
 }
 
@@ -258,9 +259,11 @@ pub struct Frame {
     scroll: f64
 }
 
-// Frames inside frames go this deep, and a page has at most this many.
+// Frames inside frames go this deep, and a page loads at most this many
+// frames in all (`frames_left` of them are left in the current load).
 let MAX_FRAME_DEPTH: usize = 3
 let MAX_FRAMES: usize = 16
+var frames_left: usize = 0
 
 // Loads the documents of the `frame` elements of `p` (`depth` frames
 // deep), in tree order; a frame without a `src` stays empty.
@@ -271,7 +274,7 @@ fn loadFrames(p: *mut Page, depth: usize) AllocError!void {
     var cur: ?NodeId = p.doc.root
     while cur |h| {
         cur = p.doc.following(h, p.doc.root)
-        if !p.doc.isElement(h, "frame") || p.frames.len() >= MAX_FRAMES {
+        if !p.doc.isElement(h, "frame") || frames_left == 0 {
             continue
         }
         let src = text.trim(p.doc.attr(h, "src") orelse "")
@@ -288,6 +291,7 @@ fn loadFrames(p: *mut Page, depth: usize) AllocError!void {
             continue
         }
         defer target.deinit(p.alloc)
+        frames_left -= 1
         try net.noteNavigation(target.href, p.url.href)
         let child = try loadDocument(p.alloc, &target, null, depth + 1, p.encoding)
         p.frames.append(Frame { el: h, page: child, scroll: 0.0 }) catch |e| {

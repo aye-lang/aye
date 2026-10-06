@@ -60,7 +60,7 @@ let INTERACTIVE = "link button textbox searchbox spinbutton checkbox radio combo
 // Roles whose children are not listed.
 let LEAF_ROLES = "textbox searchbox spinbutton img slider progressbar meter separator"
 // Roles kept even when they have no name and no content.
-let KEEP_EMPTY = "img separator cell columnheader rowheader progressbar meter"
+let KEEP_EMPTY = "img separator cell columnheader rowheader progressbar meter frame"
 
 let MAX_NAME: usize = 150
 
