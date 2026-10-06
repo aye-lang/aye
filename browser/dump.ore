@@ -24,7 +24,9 @@ import std.text
 ///           "text\n"
 ///           <!-- comment -->
 ///
-/// A `template` element's contents follow it as a `#document-fragment`.
+/// A `template` element's contents follow it as a `#document-fragment`,
+/// and a shadow host's shadow root as its first child
+/// `#shadow-root (open)` (or `(closed)`), with the shadow tree under it.
 pub fn dumpTree(doc: *Document, top: NodeId, out: *mut text.Builder) AllocError!void {
     return dumpTreeAt(doc, top, 0, out)
 }
@@ -39,7 +41,11 @@ fn dumpTreeAt(doc: *Document, top: NodeId, base: usize, out: *mut text.Builder) 
         let n = doc.node(h)
         match n.kind {
             .Document => {
-                if n.name.len > 0 {
+                if dom.isShadowRoot(doc, h) {
+                    try out.append("#shadow-root (")
+                    try out.append(n.data)
+                    try out.append(")")
+                } else if n.name.len > 0 {
                     try out.append(n.name)
                 } else {
                     try out.append("#document")
@@ -74,6 +80,9 @@ fn dumpTreeAt(doc: *Document, top: NodeId, base: usize, out: *mut text.Builder) 
         if n.kind == Kind.Element {
             if doc.templateContent(h) |frag| {
                 try dumpTreeAt(doc, frag, depth + 1, out)
+            }
+            if n.shadow |root| {
+                try dumpTreeAt(doc, root, depth + 1, out)
             }
         }
         // Next in document order, tracking the depth.
@@ -205,11 +214,13 @@ struct TextWriter {
         }
     }
 
+    // The children of `h` in the flat tree: a shadow host's are its
+    // shadow tree's, a slot's the nodes assigned to it.
     fn children(self: *mut Self, h: NodeId) AllocError!void {
-        var cur = self.doc.firstChild(h)
+        var cur = dom.flatFirstChild(self.doc, h)
         while cur |c| {
             try self.node(c)
-            cur = self.doc.nextSibling(c)
+            cur = dom.flatNextSibling(self.doc, c)
         }
     }
 
