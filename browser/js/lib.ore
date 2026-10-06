@@ -89,6 +89,67 @@ pub let LIB =
     \\    return out;
     \\  },
     \\});
+    \\// Set methods of ES2025: `o` is set-like (size, has, keys)
+    \\function setLike(o) {
+    \\  if (o === null || typeof o !== 'object' || typeof o.has !== 'function' || typeof o.keys !== 'function') throw new TypeError('The argument must be set-like');
+    \\  return o;
+    \\}
+    \\methods(Set.prototype, {
+    \\  union(o) {
+    \\    const out = new Set(this);
+    \\    for (const x of setLike(o).keys()) out.add(x);
+    \\    return out;
+    \\  },
+    \\  intersection(o) {
+    \\    const out = new Set();
+    \\    if (this.size <= setLike(o).size) {
+    \\      for (const x of this) if (o.has(x)) out.add(x);
+    \\    } else {
+    \\      for (const x of o.keys()) if (this.has(x)) out.add(x);
+    \\    }
+    \\    return out;
+    \\  },
+    \\  difference(o) {
+    \\    setLike(o);
+    \\    const out = new Set();
+    \\    for (const x of this) if (!o.has(x)) out.add(x);
+    \\    return out;
+    \\  },
+    \\  symmetricDifference(o) {
+    \\    const out = new Set(this);
+    \\    for (const x of setLike(o).keys()) {
+    \\      if (this.has(x)) out.delete(x);
+    \\      else out.add(x);
+    \\    }
+    \\    return out;
+    \\  },
+    \\  isSubsetOf(o) {
+    \\    setLike(o);
+    \\    for (const x of this) if (!o.has(x)) return false;
+    \\    return true;
+    \\  },
+    \\  isSupersetOf(o) {
+    \\    for (const x of setLike(o).keys()) if (!this.has(x)) return false;
+    \\    return true;
+    \\  },
+    \\  isDisjointFrom(o) {
+    \\    setLike(o);
+    \\    for (const x of this) if (o.has(x)) return false;
+    \\    return true;
+    \\  },
+    \\});
+    \\methods(Array, {
+    \\  async fromAsync(items, f, thisArg) {
+    \\    const out = [];
+    \\    let i = 0;
+    \\    if (items[Symbol.asyncIterator] || items[Symbol.iterator]) {
+    \\      for await (const x of items) out.push(f ? await f.call(thisArg, x, i++) : x);
+    \\    } else {
+    \\      for (const n = items.length >>> 0; i < n; i++) out.push(f ? await f.call(thisArg, await items[i], i) : await items[i]);
+    \\    }
+    \\    return out;
+    \\  },
+    \\});
     \\methods(Array.prototype, {
     \\  copyWithin(target, start, end) {
     \\    const len = this.length >>> 0;

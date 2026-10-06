@@ -1,0 +1,20 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Old and library scripts"
+      "\n"
+    <body>
+      <pre id="out">
+        "this is the window: true true\nUMD global: 1.0\na script wrapped in an HTML comment runs\nso does one with the comment on its own lines\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nlog('this is the window:', this === window, (() => this)() === window);\n// A UMD wrapper, as libraries ship them.\n(function (root, factory) {\n  if (typeof define === 'function' && define.amd) define([], factory);\n  else if (typeof module === 'object' && module.exports) module.exports = factory();\n  else root.Lib = factory();\n})(this, function () { return { version: '1.0' }; });\nlog('UMD global:', Lib.version);\n"
+      "\n"
+      <script>
+        "<!--\nlog('a script wrapped in an HTML comment runs');\n//-->"
+      "\n"
+      <script>
+        "\n<!--\nlog('so does one with the comment on its own lines');\n-->\n"
+      "\n"

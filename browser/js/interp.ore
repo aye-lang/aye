@@ -2221,7 +2221,11 @@ pub struct Interp {
                 }
             }
         }
-        if name == A_THIS || name == A_UNDEFINED {
+        if name == A_THIS {
+            // A script's `this`: the global object (the window).
+            return objVal(self.global)
+        }
+        if name == A_UNDEFINED {
             return Value.Undefined
         }
         if !self.hasProperty(self.global, name) {

@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<title>Old and library scripts</title>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+log('this is the window:', this === window, (() => this)() === window);
+// A UMD wrapper, as libraries ship them.
+(function (root, factory) {
+  if (typeof define === 'function' && define.amd) define([], factory);
+  else if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.Lib = factory();
+})(this, function () { return { version: '1.0' }; });
+log('UMD global:', Lib.version);
+</script>
+<script><!--
+log('a script wrapped in an HTML comment runs');
+//--></script>
+<script>
+<!--
+log('so does one with the comment on its own lines');
+-->
+</script>

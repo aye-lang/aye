@@ -275,8 +275,10 @@ output as goldens.
   generators go through the same driver.
 - *Not yet:* BigInt, Proxy, typed arrays, time zones (local time is
   UTC), full Unicode case mapping and normalization.
-  A plain function call gets `this === undefined` (strict-mode rule), and
-  top-level `var`/`function` are properties of the global object.
+  A plain function call gets `this === undefined` (strict-mode rule);
+  a script's top-level `this` is the global object, and top-level
+  `var`/`function` are properties of it. HTML-like comments (`<!--`,
+  and `-->` first on a line) are comments, as in classic scripts.
 
 **Pages (done).** `engine/script.ore` gives every page an engine
 (`Page.script`) when scripting is on: the window and the agent turn it
