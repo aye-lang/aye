@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<style>
+li:first-child { color: red }
+li:last-child { color: blue }
+li:only-child { font-weight: 700 }
+p:first-of-type { font-style: italic }
+p:last-of-type { text-align: right }
+:root { background-color: silver }
+div:empty { visibility: hidden }
+a:link { color: green }
+a:hover { color: orange }
+a:visited { color: purple }
+p::first-line { color: red }
+p:before { color: red }
+</style>
+<ul><li>first</li><li>middle</li><li>last</li></ul>
+<ol><li>only</li></ol>
+<section><h3>h</h3><p>first p</p><span>s</span><p>second p</p><p>last p</p></section>
+<div></div>
+<div><!-- a comment --></div>
+<div> </div>
+<a href="/x">link</a>
+<a name="anchor">not a link</a>

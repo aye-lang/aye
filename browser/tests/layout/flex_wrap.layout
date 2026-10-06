@@ -1,0 +1,35 @@
+viewport 800x600
+  block <html> (0, 0) 800x98
+    block <body> (0, 0) 800x98
+      flex <div class="w"> (0, 0) 250x78
+        block <div> (0, 0) 70x20
+          line (0, 0) 70x20
+            text (0, 2) 8x16 "1"
+        block <div> (80, 0) 70x20
+          line (80, 0) 70x20
+            text (80, 2) 8x16 "2"
+        block <div> (160, 0) 70x20
+          line (160, 0) 70x20
+            text (160, 2) 8x16 "3"
+        block <div> (0, 24) 70x20
+          line (0, 24) 70x20
+            text (0, 26) 8x16 "4"
+        block <div style="height: 30px"> (80, 24) 70x30
+          line (80, 24) 70x20
+            text (80, 26) 8x16 "5"
+        block <div> (160, 24) 70x20
+          line (160, 24) 70x20
+            text (160, 26) 8x16 "6"
+        block <div> (0, 58) 70x20
+          line (0, 58) 70x20
+            text (0, 60) 8x16 "7"
+      block (anonymous) (0, 78) 800x20
+        line (0, 78) 800x20
+          inline-flex <div style="display: inline-flex; gap: 6px"> (0, 78) 86x20
+            block <span> (0, 78) 48x20
+              line (0, 78) 48x20
+                text (0, 80) 48x16 "inline"
+            block <span> (54, 78) 32x20
+              line (54, 78) 32x20
+                text (54, 80) 32x16 "flex"
+          text (86, 80) 48x16 " after"

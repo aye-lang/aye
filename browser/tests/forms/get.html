@@ -1,0 +1,20 @@
+<!doctype html>
+<title>Search</title>
+<form action="/echo?ignored=1#results">
+  <p><label>Query <input name="q" value="ore"></label>
+  <p><label>Password <input type="password" name="pw"></label>
+  <p><label><input type="checkbox" name="exact" value="yes"> Exact</label>
+     <label><input type="checkbox" name="safe" checked> Safe</label>
+  <p><label><input type="radio" name="sort" value="new" checked> Newest</label>
+     <label><input type="radio" name="sort" value="top"> Top</label>
+  <p><label>Language <select name="lang"><option value="en">English<option value="fr">French<option value="ja">Japanese</select></label>
+  <p><label>Tags <select name="tag" multiple><option selected>a<option>b<option selected>c</select></label>
+  <p><label>Note <textarea name="note">first
+second</textarea></label>
+  <input type="hidden" name="token" value="t 1&2">
+  <p><label>Off <input name="off" value="x" disabled></label>
+  <fieldset disabled><input name="inside" value="y"></fieldset>
+  <p><button name="go" value="search">Search</button>
+     <button name="go" value="lucky">Lucky</button>
+     <input type="reset" value="Clear">
+</form>

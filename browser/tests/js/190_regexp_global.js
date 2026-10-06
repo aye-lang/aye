@@ -1,0 +1,10 @@
+const s = 'one 1 two 22 three 333';
+console.log(s.match(/\d+/g), s.match(/[a-z]+/g).length, 'xyz'.match(/\d/g));
+const re = /o/g;
+console.log(re.test('foo'), re.lastIndex, re.test('foo'), re.lastIndex, re.test('foo'), re.lastIndex);
+const words = /(\w)(\w*)/g;
+let m;
+const out = [];
+while ((m = words.exec('hello big world')) !== null) out.push(m[1].toUpperCase() + m[2] + '@' + m.index);
+console.log(out);
+console.log([...'a1b2c3'.matchAll(/[a-z](\d)/g)].map((x) => x[1] + ':' + x.index));

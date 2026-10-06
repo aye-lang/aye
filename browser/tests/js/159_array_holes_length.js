@@ -1,0 +1,18 @@
+const h = [1, , 3];
+console.log(h, h.length, 1 in h, h[1]);
+const big = [];
+big[5] = 'x';
+console.log(big, big.length);
+const arr = [1, 2, 3, 4, 5];
+arr.length = 2;
+console.log(arr, arr[3]);
+arr.length = 4;
+console.log(arr, 3 in arr);
+const empty = new Array(3);
+console.log(empty, empty.map((x) => 1), Array.from(empty, () => 1));
+console.log([, , ,].length, [1, , ].length);
+const a2 = [];
+a2[2] = 'c';
+a2[0] = 'a';
+console.log(a2, Object.keys(a2));
+console.log([undefined, , null]);

@@ -1,0 +1,7 @@
+TypeError Cannot read properties of undefined (reading 'x')
+Cannot read properties of null (reading 'y')
+Cannot read properties of undefined (reading 'deep')
+Cannot read properties of undefined (reading 'key')
+Cannot set properties of undefined (setting 'x')
+Cannot read properties of undefined (reading 'length')
+undefined undefined

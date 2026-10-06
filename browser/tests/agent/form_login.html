@@ -1,0 +1,18 @@
+<!doctype html>
+<title>Sign in</title>
+<main>
+<h1>Sign in</h1>
+<form action="/login" method=post aria-label="Sign in">
+  <p><label for=user>Email address</label>
+     <input id=user name=user type=email required autocomplete=username>
+  <p><label>Password <input type=password name=pass value="hunter2" required></label>
+  <p><label><input type=checkbox name=remember checked> Remember me</label>
+  <p><input type=text name=code placeholder="One-time code">
+  <p><input type=text name=nick title="Nickname">
+  <p><button type=submit>Sign in</button>
+     <button type=button disabled>Use a passkey</button>
+     <input type=reset>
+     <input type=submit value="Sign in later">
+  <p><a href="/forgot">Forgot your password?</a>
+</form>
+</main>

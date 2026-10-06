@@ -1,0 +1,17 @@
+[
+  'plain',
+  "it's",
+  'say "hi"',
+  `both ' and "`,
+  'new\nline',
+  'tab\there'
+]
+{
+  '42': 'num',
+  'key with space': 1,
+  'dash-key': 2,
+  valid_id: 3,
+  '$dollar': 4
+}
+top-level strings are not quoted it's
+[ 'été', '中文', 'emoji 😀' ]

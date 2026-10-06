@@ -1,0 +1,16 @@
+#document
+  <html>
+    <head>
+    <body>
+      <pre>
+        "The first newline is dropped.\n  Indented   line\n\n    Code   block"
+      "\n"
+      <pre>
+        "\nTwo newlines: one stays."
+      "\n"
+      <p>
+        "After   pre:\n   collapsed     text."
+      "\n"
+      <listing>
+        "listing too"
+      "\n"

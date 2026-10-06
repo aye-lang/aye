@@ -1,0 +1,9 @@
+#document
+  <html>
+    <head>
+    <body>
+      <p>
+        "Less than: a < b and a <= b, < p>, <3, <>."
+      "\n"
+      <p>
+        "A tag broken by the end of the file: "

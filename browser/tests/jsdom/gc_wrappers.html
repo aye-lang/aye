@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<title>Wrappers and the collector</title>
+<div id="box"><p id="kept">kept <b>bold</b></p><p id="dropped">dropped</p></div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const box = document.getElementById('box');
+const kept = document.getElementById('kept');
+kept.note = 'expando survives';
+kept.addEventListener('click', () => log('listener survives'));
+box.firstChild.firstElementChild.custom = 'deep expando';
+box.removeChild(kept);
+document.getElementById('dropped').marker = 'attached expando';
+box.innerHTML = '<p>replaced</p>';
+// Allocate enough for several collections.
+let junk = [];
+for (let i = 0; i < 60000; i++) { junk.push({ i, s: 'x' + i }); if (junk.length > 1000) junk = []; }
+document.getElementById('out').other = 1;
+box.appendChild(kept);
+log(kept.note, kept.querySelector('b').custom, kept.textContent);
+kept.click();
+const fresh = document.createElement('span');
+fresh.id = 'fresh';
+fresh.flag = 'set';
+document.body.appendChild(fresh);
+for (let i = 0; i < 60000; i++) { junk.push({ i }); if (junk.length > 1000) junk = []; }
+log(document.getElementById('fresh').flag, document.getElementById('out').other);
+</script>

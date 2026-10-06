@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<title>cloneNode</title>
+<div id="orig" class="c"><p>para <b>bold</b></p></div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const orig = document.getElementById('orig');
+const shallow = orig.cloneNode();
+const deep = orig.cloneNode(true);
+log(shallow.childNodes.length, deep.childNodes.length, deep.isConnected, deep === orig, deep.id);
+deep.id = 'copy';
+deep.querySelector('b').textContent = 'changed';
+document.body.insertBefore(deep, document.getElementById('out'));
+log(orig.innerHTML, '|', deep.innerHTML, deep.isConnected);
+const t = document.createTextNode('t');
+log(t.cloneNode().data, orig.isSameNode(orig), orig.isSameNode(deep));
+</script>

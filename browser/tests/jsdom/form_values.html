@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<title>Form values</title>
+<form id="f">
+<input id="name" value="initial">
+<input id="agree" type="checkbox" checked>
+<select id="color"><option value="r">Red</option><option value="g">Green</option></select>
+<textarea id="notes">old notes</textarea>
+<button id="send">Send</button>
+</form>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const name = document.getElementById('name');
+log(name.value, name.type, name.form.id);
+name.value = 'Ada';
+const agree = document.getElementById('agree');
+log(agree.checked, agree.value);
+agree.checked = false;
+const color = document.getElementById('color');
+log(color.value, color.selectedIndex, color.options.length);
+color.value = 'g';
+log(color.value, color.selectedIndex);
+const notes = document.getElementById('notes');
+log(notes.value);
+notes.value = 'new notes';
+const f = document.getElementById('f');
+f.addEventListener('submit', e => { e.preventDefault(); log('submit', e.target.id, name.value); });
+document.getElementById('send').click();
+</script>

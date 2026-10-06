@@ -1,0 +1,18 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Document"
+      "\n"
+    <body>
+      <input id="field">
+      "\n"
+      <pre id="out">
+        "HTML HEAD BODY\n8 #comment made\n DIV div\ntrue\nBODY\nfocus event\ntrue\nBODY\nHierarchyRequestError\nNotFoundError\nTypeError\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nlog(document.documentElement.tagName, document.head.tagName, document.body.tagName);\nconst c = document.createComment('made');\ndocument.body.appendChild(c);\nlog(c.nodeType, c.nodeName, c.data);\nconst el = document.createElement('DIV');\nel.id = 'late';\nlog(document.getElementById('late'), el.tagName, el.localName);\ndocument.body.appendChild(el);\nlog(document.getElementById('late') === el);\nlog(document.activeElement.tagName);\nconst field = document.getElementById('field');\nfield.addEventListener('focus', () => log('focus event'));\nfield.focus();\nlog(document.activeElement === field);\nfield.blur();\nlog(document.activeElement.tagName);\ntry { document.body.appendChild(document.documentElement); } catch (e) { log(e.name); }\ntry { document.body.removeChild(document.head); } catch (e) { log(e.name); }\ntry { new HTMLElement(); } catch (e) { log(e.name); }\n"
+      "\n"
+      <!-- made -->
+      <div id="late">

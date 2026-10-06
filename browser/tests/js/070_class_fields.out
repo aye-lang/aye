@@ -1,0 +1,4 @@
+4 c2 1 Counter
+Counter { count: 4, step: 2, label: 'c2', inc: [Function: inc] }
+2 false
+WithInit { a: 1, b: undefined, computed: 'yes' }

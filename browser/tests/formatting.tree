@@ -1,0 +1,56 @@
+#document
+  <html>
+    <head>
+    <body>
+      <p>
+        <b>
+          "bold "
+          <i>
+            "bold italic"
+        <i>
+          " italic"
+        " plain"
+      "\n"
+      <p>
+        <b>
+          "1"
+      <p>
+        <b>
+          "2"
+        "3"
+      "\n"
+      <p>
+        <a href="/a">
+          "first "
+        <a href="/b">
+          "second"
+        " after"
+      "\n"
+      <div>
+        <em>
+          "emphasis "
+        <div>
+          <em>
+            "inside a block"
+          " still in the block"
+      "\n"
+      <p>
+        <b>
+          <i>
+            <u>
+              <s>
+                "deep"
+        <i>
+          <u>
+            <s>
+              " after"
+      <i>
+        <u>
+          <s>
+            "\n"
+            <p>
+              <strong>
+                "unclosed strong\n"
+            <p>
+              <strong>
+                "next paragraph\n"

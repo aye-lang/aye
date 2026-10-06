@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<style>
+body { margin: 8px }
+.box { width: 120px; height: 40px; border: 2px solid black; margin-bottom: 12px; background-color: #eee }
+.hidden { overflow: hidden }
+.inner { width: 200px; height: 60px; background-color: rgba(255, 0, 0, 0.5) }
+</style>
+<div class="box hidden"><div class="inner">Clipped content runs past the edge of its box</div></div>
+<div class="box"><div class="inner">Visible overflow runs past the box</div></div>
+<p>After the boxes.</p>

@@ -1,0 +1,63 @@
+#document
+  <html>
+    <head>
+    <body>
+      <table border="1">
+        "\n  "
+        <caption>
+          "Prices"
+        "\n  "
+        <tbody>
+          <tr>
+            <th>
+              "Item"
+            <th>
+              "Price\n  "
+          <tr>
+            <td>
+              "Apple"
+            <td>
+              "1.00\n  "
+          <tr>
+            <td>
+              "Pear"
+            <td>
+              "2.00"
+          "\n"
+      "\n"
+      <table>
+        "\n  "
+        <thead>
+          <tr>
+            <td>
+              "Head"
+          "\n  "
+        <tbody>
+          <tr>
+            <td>
+              "Body 1"
+          <tr>
+            <td>
+              "Body 2\n  "
+        <tfoot>
+          <tr>
+            <td>
+              "Foot\n"
+      "\n"
+      <table>
+        <tbody>
+          <tr>
+            <td>
+              "Cell without a row"
+            <td>
+              "Second\n  "
+          <tr>
+            <td>
+              <table>
+                <tbody>
+                  <tr>
+                    <td>
+                      "Nested"
+            <td>
+              "After nested\n"
+      "\nStray cell\n"

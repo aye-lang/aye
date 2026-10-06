@@ -1,0 +1,11 @@
+console.log(7 % 3, -7 % 3, 7 % -3, -7 % -3);
+console.log(5.5 % 2, -5.5 % 2, 0 % 5, 5 % 0, Infinity % 2, 2 % Infinity);
+console.log(Object.is(-0 % 5, -0), Object.is(-4 % 2, -0));
+console.log(2 ** 10, 2 ** -1, (-2) ** 3, 2 ** 3 ** 2, (2 ** 3) ** 2);
+console.log(4 ** 0.5, 0 ** 0, NaN ** 0, 1 ** Infinity);
+let x = 3;
+x **= 3;
+console.log(x);
+x %= 5;
+console.log(x);
+console.log(10 ** 21, 10 ** -7, 2 ** 64);

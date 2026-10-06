@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<title>style</title>
+<div id="d" style="color: blue; margin-top: 3px">styled</div>
+<div id="e">plain</div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const d = document.getElementById('d');
+log(d.style.color, d.style.marginTop, JSON.stringify(d.style.fontSize));
+d.style.color = 'red';
+d.style.backgroundColor = 'rgb(0, 128, 0)';
+d.style.marginTop = '';
+d.style.setProperty('padding-left', '5px');
+log(d.style.cssText, d.style.length, d.style.getPropertyValue('padding-left'));
+const e = document.getElementById('e');
+e.style.display = 'none';
+e.style.cssText = e.style.cssText + ' width: 50px;';
+log(e.getAttribute('style'), e.style.removeProperty('display'), e.style.display === '');
+e.style.display = 'flex';
+log(d.style === d.style);
+</script>

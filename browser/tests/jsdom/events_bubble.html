@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<title>Bubbling</title>
+<div id="outer"><div id="inner"><button id="btn">Go</button></div></div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const where = e => e.currentTarget === window ? 'window' : e.currentTarget === document ? 'document' : e.currentTarget.id || e.currentTarget.localName;
+for (const t of [window, document, document.body, document.getElementById('outer'), document.getElementById('inner'), document.getElementById('btn')]) {
+  t.addEventListener('click', e => log('bubble', where(e), 'phase', e.eventPhase, 'target', e.target.id));
+}
+document.getElementById('btn').click();
+const ev = new Event('ping');
+document.getElementById('inner').addEventListener('ping', e => log('ping at', where(e)));
+document.getElementById('outer').addEventListener('ping', e => log('ping must not bubble'));
+document.getElementById('inner').dispatchEvent(ev);
+const ev2 = new Event('pong', { bubbles: true });
+document.getElementById('outer').addEventListener('pong', e => log('pong bubbled to', where(e), 'from', e.target.id));
+document.getElementById('btn').dispatchEvent(ev2);
+log('done', ev2.eventPhase, ev2.currentTarget);
+</script>

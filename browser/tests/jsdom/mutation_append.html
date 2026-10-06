@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<title>Appending and removing</title>
+<ul id="list"><li id="a">a</li><li id="c">c</li></ul>
+<div id="spare"><span>moved</span></div>
+<script>
+const list = document.getElementById('list');
+const b = document.createElement('li');
+b.id = 'b';
+b.appendChild(document.createTextNode('b'));
+list.insertBefore(b, document.getElementById('c'));
+const d = document.createElement('li');
+d.textContent = 'd';
+list.appendChild(d);
+const first = document.createElement('li');
+first.textContent = 'first';
+list.insertBefore(first, list.firstChild);
+list.insertBefore(document.createElement('hr'), null);
+const spare = document.getElementById('spare');
+list.appendChild(spare.firstChild);
+list.removeChild(document.getElementById('a'));
+const z = document.createElement('li');
+z.textContent = 'replaced c';
+list.replaceChild(z, document.getElementById('c'));
+spare.remove();
+document.body.append('text and ', document.createElement('em'), '!');
+document.body.prepend(document.createComment(' prepended '));
+</script>

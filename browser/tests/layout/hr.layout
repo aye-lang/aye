@@ -1,0 +1,12 @@
+viewport 800x600
+  block <html> (0, 0) 800x126
+    block <body> (0, 16) 800x94
+      block <p> (0, 16) 800x20
+        line (0, 16) 800x20
+          text (0, 18) 40x16 "above"
+      block <hr> (0, 52) 800x2
+      block <hr style="width: 50%"> (199, 62) 402x2
+      block <hr style="width: 100px; margin-left: 0"> (0, 72) 102x2
+      block <p> (0, 90) 800x20
+        line (0, 90) 800x20
+          text (0, 92) 40x16 "below"

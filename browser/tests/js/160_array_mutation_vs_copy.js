@@ -1,0 +1,15 @@
+const orig = [3, 1, 2];
+console.log(orig.toSorted ? 'has toSorted' : 'no', orig);
+const sorted = [...orig].sort();
+const reversed = orig.slice().reverse();
+console.log(orig, sorted, reversed);
+const filtered = orig.filter((x) => x > 1);
+const mapped = orig.map((x) => x);
+console.log(filtered === orig, mapped === orig, mapped);
+const concatd = orig.concat();
+concatd.push(4);
+console.log(orig.length, concatd.length);
+const nested = [[1], [2]];
+const flat = nested.flat();
+flat[0] = 99;
+console.log(nested);

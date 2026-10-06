@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<style>
+div p { color: red }
+div > p { font-style: italic }
+h2 + p { font-weight: 700 }
+h2 ~ p { text-align: center }
+ul > li > em { color: green }
+section  >  div   span { white-space: pre }
+</style>
+<div>
+  <p>child of div</p>
+  <section><p>grandchild of div</p></section>
+</div>
+<h2>Heading</h2>
+<p>right after h2</p>
+<p>later sibling</p>
+<ul><li><em>in li</em></li><li><b><em>deeper</em></b></li></ul>
+<section><div><b><span>deep span</span></b></div></section>

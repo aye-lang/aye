@@ -1,0 +1,13 @@
+const a = [0, 1, 2, 3, 4, 5];
+console.log(a.slice(2), a.slice(1, 3), a.slice(-2), a.slice(-4, -1), a.slice(4, 1), a.slice());
+const b = [1, 2, 3, 4, 5];
+console.log(b.splice(1, 2), b);
+console.log(b.splice(1, 0, 'x', 'y'), b);
+console.log(b.splice(-1, 1, 'last'), b);
+console.log(b.splice(2), b);
+const c = [1, 2, 3];
+console.log(c.splice(0, 1, 'a', 'b', 'c'), c);
+const d = [1, 2, 3];
+console.log(d.splice(), d, d.splice(1, 100), d);
+const e = [1, 2, 3, 4];
+console.log(e.splice(-2), e, e.splice(0, -1), e);

@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<title>Custom events</title>
+<div id="d"></div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const d = document.getElementById('d');
+d.addEventListener('greet', e => log('detail', e.detail.name, e instanceof CustomEvent, e instanceof Event, e.type));
+d.dispatchEvent(new CustomEvent('greet', { detail: { name: 'Ada' } }));
+const handler = { count: 0, handleEvent(e) { this.count++; log('handleEvent', e.type, this.count); } };
+d.addEventListener('ping', handler);
+d.dispatchEvent(new Event('ping'));
+d.dispatchEvent(new Event('ping'));
+const k = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true });
+document.addEventListener('keydown', e => log('key', e.key, e.target.id, e.isTrusted));
+d.dispatchEvent(k);
+try { d.dispatchEvent({ type: 'fake' }); } catch (e) { log(e.name); }
+</script>

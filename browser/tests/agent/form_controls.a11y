@@ -1,0 +1,35 @@
+- main
+  - heading "Preferences" [level=1] [e1]
+  - form
+    - group "Delivery"
+      - radio "Slow" [e2]
+      - radio "Fast" [e3] [checked]
+      - radio "Drone" [e4] [disabled]
+    - combobox "Color" [e5] value="Green"
+      - option "Red"
+      - option "Green" [selected]
+      - group "Dark"
+        - option "Navy"
+        - option "Black" [disabled]
+    - listbox "Toppings" [e6]
+      - option "Cheese" [selected]
+      - option "Olives"
+      - option "Basil" [selected]
+    - combobox "Size" [e7] value="Small"
+      - option "Small" [selected]
+      - option "Large"
+    - paragraph: Notes for the courier
+    - textbox "Notes for the courier" [e8] value="Ring twice.\nLeave at the door."
+    - paragraph
+      - text: Quantity:
+      - spinbutton "Quantity" [e9] value="2"
+    - paragraph
+      - slider "Volume" [e10] value="7"
+    - paragraph
+      - textbox "Order id" [e11] [readonly] value="A-17"
+    - group "Gift options" [disabled]
+      - textbox "Gift message" [e12] [disabled]
+      - button "Wrap it" [e13] [disabled]
+    - button "Attachment" [e14]
+    - progressbar "Upload" value="40"
+    - button "Save" [e15]

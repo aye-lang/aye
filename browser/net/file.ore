@@ -1,0 +1,43 @@
+// `file:` URLs: the file at the URL's (percent-decoded) path, with a
+// type guessed from the file name's extension.
+
+import std.fs
+import std.mem.Allocator
+import std.text
+import url
+import url.Url
+
+fn fetchFile(alloc: Allocator, target: *Url) FetchError!Response {
+    let path = try url.percentDecode(alloc, target.path)
+    defer alloc.free(path)
+    let body = try fs.readFile(alloc, path)
+    return respond(alloc, typeOfPath(path), body)
+}
+
+/// The content type of a file named `path`, from its extension.
+pub fn typeOfPath(path: []u8) []u8 {
+    var ext: []u8 = ""
+    var i = path.len
+    while i > 0 {
+        i -= 1
+        if path[i] == '.' {
+            ext = path[i + 1..]
+            break
+        }
+        if path[i] == '/' {
+            break
+        }
+    }
+    var types = text.split(TYPES, " ")
+    while types.next() |pair| {
+        if text.indexOf(pair, "=") |eq| {
+            if text.eqlIgnoreCase(pair[..eq], ext) {
+                return pair[eq + 1..]
+            }
+        }
+    }
+    return "application/octet-stream"
+}
+
+// Extensions and their types, as `ext=type` pairs.
+let TYPES = "html=text/html htm=text/html xhtml=application/xhtml+xml txt=text/plain css=text/css js=text/javascript mjs=text/javascript json=application/json svg=image/svg+xml png=image/png gif=image/gif jpg=image/jpeg jpeg=image/jpeg webp=image/webp ico=image/x-icon"

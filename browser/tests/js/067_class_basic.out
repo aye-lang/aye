@@ -1,0 +1,6 @@
+4 6 (4, 6) (4, 6) (4, 6)
+Point { x: 4, y: 6 }
+function true true
+[ 'x', 'y' ] [ 'constructor', 'add', 'toString' ]
+TypeError
+Empty {} 0

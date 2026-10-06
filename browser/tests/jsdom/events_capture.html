@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<title>Capture</title>
+<div id="outer"><div id="inner"><span id="leaf">x</span></div></div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const order = [];
+const ids = ['outer', 'inner', 'leaf'];
+for (const id of ids) {
+  const el = document.getElementById(id);
+  el.addEventListener('click', () => order.push('capture ' + id), true);
+  el.addEventListener('click', () => order.push('bubble ' + id));
+}
+window.addEventListener('click', () => order.push('capture window'), { capture: true });
+document.addEventListener('click', () => order.push('bubble document'), false);
+document.getElementById('leaf').click();
+log(order.join('\n'));
+</script>

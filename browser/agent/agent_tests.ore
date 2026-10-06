@@ -1,0 +1,56 @@
+// Unit tests of the agent's text helpers. Snapshots, Markdown and the
+// protocols are tested end to end by goldens (tests/browser.rs).
+
+import std.heap.Arena
+import std.text
+
+test "diffLines keeps common lines out and orders removals first" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    let a = arena.allocator()
+    @expectEqual("", try diffLines(a, "x\ny\n", "x\ny\n"))
+    @expectEqual("- b\n+ B\n", try diffLines(a, "a\nb\nc\n", "a\nB\nc\n"))
+    @expectEqual("+ n\n", try diffLines(a, "a\nc", "a\nn\nc"))
+    @expectEqual("- 1\n- 2\n+ 3\n", try diffLines(a, "1\n2\nk\n", "3\nk\n"))
+}
+
+test "collapse trims and joins whitespace" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    let a = arena.allocator()
+    @expectEqual("a b c", try collapse(a, "  a \n\t b   c \n"))
+    @expectEqual("", try collapse(a, " \n "))
+}
+
+test "inline Markdown moves spaces out of emphasis" {
+    var b = text.Builder.init(@testAllocator())
+    defer b.deinit()
+    try appendCollapsed(&mut b, "see  ")
+    try wrapInline(&mut b, " this ", "**", "**")
+    try appendCollapsed(&mut b, " now")
+    @expectEqual("see **this** now", b.bytes())
+    b.clear()
+    try wrapInline(&mut b, "   ", "*", "*")
+    @expectEqual("", b.bytes())
+}
+
+test "hard breaks join trimmed lines" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    let a = arena.allocator()
+    @expectEqual("one\\\ntwo", try hardBreaks(a, "one \n two\n\n"))
+    @expectEqual("x", try hardBreaks(a, "x"))
+}
+
+test "prefixLines quotes every line" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    @expectEqual("> a\n>\n> b", try prefixLines(arena.allocator(), "a\n\nb", "> ", ">"))
+}
+
+test "a key that types itself is one character" {
+    @expect(isCharacter("a"))
+    @expect(isCharacter("é"))
+    @expect(!isCharacter("Enter"))
+    @expect(!isCharacter("\t"))
+}
