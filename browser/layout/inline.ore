@@ -7,7 +7,7 @@
 // `soft` (a space where lines wrap, a hyphen, around atomic inlines) and
 // must break after a forced break (`<br>`, a kept newline). Lines are
 // filled greedily, one unbreakable chunk at a time. Lines also break
-// around wide East Asian characters (without the finer rules of UAX 14).
+// between East Asian characters (linebreak.ore).
 
 import css
 import css.Value
@@ -271,14 +271,12 @@ struct Collector {
                 p.soft = ws.wrap
                 p.collapsible = ws.collapse
             } else {
+                var prev: u32 = 0
                 while k < s.len && s[k] != ' ' && s[k] != '\n' {
-                    // A line may break before and after a wide (East
-                    // Asian) character.
+                    // A line may break between East Asian characters
+                    // (linebreak.ore).
                     let d = text.decode(s[k..])
-                    if ws.wrap && font.columns(d.code) == 2 {
-                        if k == p.start {
-                            k += d.len
-                        }
+                    if ws.wrap && k > p.start && breaksBetween(prev, d.code) {
                         p.soft = true
                         break
                     }
@@ -290,6 +288,7 @@ struct Collector {
                         break
                     }
                     k += d.len
+                    prev = d.code
                 }
             }
             p.end = k
