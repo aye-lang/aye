@@ -1855,6 +1855,72 @@ pub fn main() !void {
 
 The order of the lines it prints varies from run to run.
 
+### std.coro
+
+```
+std.coro.create(comptime T: type, alloc: Allocator, stack: usize, f: fn(*mut T), arg: *mut T) AllocError!Coroutine   f(arg) on a stack of its own
+Coroutine.resume(self: Self)               run it until it yields or f returns
+Coroutine.isDone(self: Self) bool          has f returned?
+Coroutine.deinit(self: Self)               free it (once); a suspended one is freed where it stopped
+std.coro.yield()                           stop the running coroutine; its resume returns
+```
+
+A coroutine is a function that stops in the middle, at any depth of
+calls, and is continued later. `create` does not run `f`; each `resume`
+runs it from where it stopped until the next `yield` or until `f`
+returns. Values go in and out through `arg`. Copies of a `Coroutine` are
+the same coroutine. A coroutine may make and resume others; `yield` goes
+back to whoever resumed the running one. A generator:
+
+```ore
+import std.coro
+import std.heap.General
+
+struct Squares {
+    n: u64
+    value: u64
+}
+
+fn squares(s: *mut Squares) {
+    for i in 1..s.n + 1 {
+        s.value = i * i
+        coro.yield()
+    }
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var s = Squares { n: 4, value: 0 }
+    let co = try coro.create(Squares, gpa.allocator(), 64 << 10, squares, &mut s)
+    defer co.deinit()
+    while true {
+        co.resume()
+        if co.isDone() {
+            break
+        }
+        @println(s.value)
+    }
+}
+```
+
+- The stack has at least `stack` bytes (a multiple of 64 KiB, at least
+  64 KiB), reserved, not taken, with a 1 MiB guard region below it:
+  running out of it panics with `panic: stack overflow` in debug and safe
+  mode. `alloc` holds the coroutine's bookkeeping, so one never freed is a
+  leak in debug mode. OutOfMemory also when no address space is left.
+- A coroutine runs only on the thread that made it (each thread may run
+  its own). It and its resumer never run at the same time, so they share
+  data without `std.sync`. Each coroutine has its own error return trace.
+- `deinit` of a suspended coroutine does not run the `defer`s of its
+  function; to clean up, have it return (resume it with a flag in `arg`).
+- Debug and safe mode panic (no position) on `resume` of a finished,
+  running (itself or one that resumed it) or freed coroutine, on `resume`
+  on another thread, on `yield` outside a coroutine, and on `deinit` of a
+  running one; in `fast` mode these are undefined behavior.
+- Supported on aarch64 and x86_64, macOS and Linux; elsewhere `create`
+  panics.
+
 ### std.testing
 
 ```
@@ -2028,7 +2094,11 @@ pub fn main() !void {
 - Running out of stack (deep recursion) panics with `panic: stack
   overflow` (no position) in debug and safe mode, on any thread; in `fast`
   mode it is a crash. A thread's stack is 8 MiB unless `spawnWithStack`
-  asks for more.
+  asks for more; a coroutine's is what `std.coro.create` asks for.
+- Misuse of `std.coro` panics with `panic: std.coro: <reason>` (no
+  position) in debug and safe mode: `yield outside a coroutine`, `resume
+  of a coroutine that has finished` (or `is running`, `was freed`, `on
+  another thread than the one that made it`).
 - `fast` mode removes the checks: overflow wraps, out-of-bounds access is
   undefined behavior.
 - `@setSafety(false)`, as the first statement of a block (a function body

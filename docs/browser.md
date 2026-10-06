@@ -282,9 +282,9 @@ output as goldens.
   generation)` when the collector frees one (the `js_refs` decrement).
   `addRoot`/`removeRoot` keep values (event listeners) alive.
 - *Generators and async functions* (B8, `js/coroutine.ore`): a call
-  that can stop in the middle of the tree walk runs on a thread of its
-  own (a coroutine with its own value stack and frames); two channels
-  pass control so only one thread runs JavaScript at a time. Promise
+  that can stop in the middle of the tree walk runs on a `std.coro`
+  coroutine (a C stack of its own, M12; a thread and two channels
+  before), with its own value stack and frames, on the engine's thread. Promise
   and the job queue are the engine's (`js/lib.ore`, `Interp.queueJob`);
   `await` hands the value to a driver written in JavaScript that resumes
   the coroutine when the promise settles; `for await` and async

@@ -257,7 +257,8 @@ imports one item. `std` is embedded in the compiler (sources in
 `std.math`, `std.sort` (`sort(T, items, less)`), `std.pool` (`Pool(T)`,
 `Handle(T)`), `std.time`, `std.thread` (`spawn`, `spawnWithStack`,
 `Thread.join`), `std.sync`
-(`Mutex`, `Channel(T)`, `Atomic(T)`),
+(`Mutex`, `Channel(T)`, `Atomic(T)`), `std.coro` (stackful coroutines:
+`create`, `Coroutine.resume`, `yield`, `isDone`, `deinit`),
 `std.testing`, `std.log` (`err`, `info`), `std.diag` (`Diagnostics`, the
 `*mut Diagnostics` convention for detailed errors) and `std.os` (`args`,
 `exit`).

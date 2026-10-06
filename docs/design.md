@@ -254,6 +254,7 @@ if nodes.get(target) |node| {
 
 - `std.thread`：`spawn`、`join`、`Pool`（固定大小的 worker pool）。
 - `std.sync`：`Mutex`、`RwLock`、`Channel(T)`（有界、MPSC / MPMC）、`Atomic(T)`。
+- `std.coro`：stackful coroutine（`create`、`resume`、`yield`），每個 coroutine 有自己的 stack，只在建立它的 thread 上執行（M12）。
 - `std.event`：單執行緒 event loop，底層是 kqueue（macOS）、io\_uring / epoll（Linux）、IOCP（Windows）。
 
 **引擎的執行緒配置（建議）**：main thread 跑 event loop + DOM + JS + style + layout；compositor thread 負責捲動與合成；raster 用 `thread.Pool`；network 跑獨立的 event loop。執行緒之間只用 `Channel` 傳訊息，不共用 DOM。
@@ -318,4 +319,4 @@ P3 是關鍵：只有在真實引擎程式碼上驗證過記憶體模型與 JS �
 - [x] 數學型別（矩陣、色彩）是否開放有限度的 operator overloading：**不開放**，只有 `simd` 有運算子。`a * b` 的意思只看型別類別就能確定；矩陣與色彩運算寫成具名函式（`m.mul(n)`）。
 - [x] `where` 約束：**在泛型定義時就檢查**（類似 Rust），錯誤才會落在 AI 正在寫的那一行。M4 已照此實作。
 - [x] 只有字面值的 range（`0..4`）：**改成 `usize`**，跟 Zig 一樣。M5 閘門唯一的編譯錯誤就出在這裡，而迴圈變數最常拿來當索引。要有號的計數器時寫 `(0 as i64)..4`。不採用依迴圈變數用法推導，因為那要往回推導型別，違反「局部可推理」。
-- [ ] `async` / coroutine 是否列入 v2？刻意延後：等 P3 的 event loop 實戰經驗再決定，不擋 P0 閘門。
+- [x] `async` / coroutine 是否列入 v2：**coroutine 做成 std 函式庫（`std.coro`，stackful），語言層不做 `async`/`await`**。P3 的 JS 引擎是 tree-walking 直譯器，generator 與 async function 必須在多層 C 遞迴的中間停下來；stackless 的 `async` 做不到，除非整個直譯器的每個函式都改成 `async`（function coloring）。`std.coro` 用 C prelude 裡每個平台一小段組語切換 stack，stack 用 mmap 配置並加 guard page，不改語法、checker 與 codegen。M12 已實作，瀏覽器的 generator 從「一個 thread 加兩個 channel」改成 coroutine，理由見 `decisions.md`〈Coroutines (M12)〉。

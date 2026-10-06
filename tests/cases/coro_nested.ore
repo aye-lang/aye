@@ -1,0 +1,64 @@
+// M12: nested coroutines. The outer coroutine makes an inner one and
+// resumes it; the inner `yield` returns to the outer coroutine, the
+// outer `yield` to main. A coroutine whose function stopped in the middle
+// can be freed (its defers do not run).
+import std.coro
+import std.heap.General
+import std.mem.Allocator
+
+struct Inner {
+    name: []u8
+    step: u64
+}
+
+fn inner(s: *mut Inner) {
+    while true {
+        s.step += 1
+        @print("  inner ")
+        @print(s.name)
+        @print(" ")
+        @println(s.step)
+        coro.yield()
+    }
+}
+
+struct Outer {
+    alloc: Allocator
+    depth: u64
+}
+
+fn outer(s: *mut Outer) {
+    var x = Inner { name: "x", step: 0 }
+    let cx = coro.create(Inner, s.alloc, 64 << 10, inner, &mut x) catch |e| {
+        return
+    }
+    defer cx.deinit()
+    for i in 0..3 {
+        @print(" outer ")
+        @println(i)
+        cx.resume()
+        cx.resume()
+        coro.yield()
+    }
+    @println(" outer done")
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var o = Outer { alloc: gpa.allocator(), depth: 0 }
+    let co = try coro.create(Outer, gpa.allocator(), 256 << 10, outer, &mut o)
+    defer co.deinit()
+    var rounds: u64 = 0
+    while !co.isDone() {
+        @println("main")
+        co.resume()
+        rounds += 1
+    }
+    @println(rounds)
+    var y = Inner { name: "y", step: 10 }
+    let cy = try coro.create(Inner, gpa.allocator(), 64 << 10, inner, &mut y)
+    cy.resume()
+    @println(cy.isDone())
+    cy.deinit()
+}

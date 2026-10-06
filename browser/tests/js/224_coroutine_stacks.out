@@ -1,0 +1,12 @@
+count 199990000
+live 2000
+dropped
+nested 0,10,20,0,1
+tree 256
+deep 2000,true
+closed
+closed
+throw x true
+async 4000000
+all 10000
+for await 1225
