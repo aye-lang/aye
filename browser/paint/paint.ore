@@ -18,8 +18,9 @@
 // those inside the containing block of an absolutely positioned box,
 // none for a fixed one). A transformed box is a layer too, and the items
 // of its layer are mapped by the part of its transform that layout left
-// to paint (`layout/transform.ore`). Fixed boxes do not extend the
-// document. Borders become fills
+// to paint (`layout/transform.ore`); so is a box clipped by `clip` or
+// `clip-path: inset()`, its layer drawn inside the clip. Fixed boxes do
+// not extend the document. Borders become fills
 // (dashed and dotted ones a row of short fills). Text items refer to the
 // layout tree's text: keep the tree alive as long as the list.
 //
@@ -123,7 +124,7 @@ pub fn isLayer(t: *Tree, i: usize) bool {
     if b.kind == BoxKind.Inline || b.kind == BoxKind.Text || b.kind == BoxKind.LineBreak {
         return false
     }
-    return b.abs != 0 || layout.isPositioned(b.style) || layout.isTransformed(t, i)
+    return b.abs != 0 || layout.isPositioned(b.style) || layout.isTransformed(t, i) || layout.clipOf(t, i) != null
 }
 
 /// A layer inside another: its z-index (`auto` is 0) and tree order.
@@ -266,6 +267,10 @@ struct Builder {
         let outer = self.painting
         let outer_m = self.m
         self.m = self.m.then(layout.xformOf(self.t, i))
+        let clip = layout.clipOf(self.t, i)
+        if clip |c| {
+            try self.add(Item.Clip { r: Rect { x: c[0], y: c[1], w: c[2], h: c[3] } })
+        }
         self.painting = i
         try self.box(i)
         self.painting = outer
@@ -273,6 +278,9 @@ struct Builder {
             if l.z >= 0.0 {
                 try self.clippedLayer(l.box)
             }
+        }
+        if clip != null {
+            try self.add(Item.Unclip)
         }
         self.m = outer_m
     }

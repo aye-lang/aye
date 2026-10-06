@@ -14,6 +14,11 @@
 // skew) are not drawn. A transformed box is a containing block for its
 // absolutely positioned and fixed descendants and is painted as a
 // layer. An unparsable transform is ignored.
+//
+// Clipping of a box and its content (`clipOf`): `clip: rect(top, right,
+// bottom, left)` of an absolutely positioned box (`auto` edges are the
+// border box's), and `clip-path: inset(...)` (percentages of the border
+// box); other clip paths are not drawn. A clipped box is a layer.
 
 import css
 import std.math
@@ -478,4 +483,64 @@ fn originValue(s: []u8, size: f64, u: Units) ?f64 {
         return size / 2.0
     }
     return lengthArg(s, size, u)
+}
+
+// ---- clipping
+
+/// The rectangle box `i` and its content are clipped to (document
+/// coordinates: x, y, width, height), if any.
+pub fn clipOf(t: *Tree, i: usize) ?[4]f64 {
+    let b = t.bx(i)
+    if b.kind == BoxKind.Inline || b.kind == BoxKind.Text || b.kind == BoxKind.LineBreak {
+        return null
+    }
+    let u = unitsOf(t, i)
+    let clip = keywordOf(b.style[css.CLIP])
+    if b.abs != 0 && text.startsWith(clip, "rect(") && text.endsWith(clip, ")") {
+        var parts = [4][]u8{"", "", "", ""}
+        if splitArgs(clip[5..clip.len - 1], parts[..]) != 4 {
+            return null
+        }
+        var edges = [4]f64{0.0, b.w, b.h, 0.0}
+        for k in 0..4 {
+            if !text.eqlIgnoreCase(parts[k], "auto") {
+                edges[k] = trackLength(parts[k], -1.0, u) orelse return null
+            }
+        }
+        return [4]f64{b.ax + edges[3], b.ay + edges[0], math.max(0.0, edges[1] - edges[3]), math.max(0.0, edges[2] - edges[0])}
+    }
+    let path = keywordOf(b.style[css.CLIP_PATH])
+    if text.startsWith(path, "inset(") && text.endsWith(path, ")") {
+        var parts = [8][]u8{"", "", "", "", "", "", "", ""}
+        var n = splitArgs(path[6..path.len - 1], parts[..])
+        // Up to four lengths (`round` and its radii are left out).
+        for k in 0..n {
+            if k < 8 && text.eqlIgnoreCase(parts[k], "round") {
+                n = k
+                break
+            }
+        }
+        if n == 0 || n > 4 {
+            return null
+        }
+        var v = [4]f64{0.0, 0.0, 0.0, 0.0}
+        for k in 0..n {
+            var base = b.h
+            if k % 2 == 1 {
+                base = b.w
+            }
+            v[k] = lengthArg(parts[k], base, u) orelse return null
+        }
+        if n < 2 {
+            v[1] = lengthArg(parts[0], b.w, u) orelse return null
+        }
+        if n < 3 {
+            v[2] = v[0]
+        }
+        if n < 4 {
+            v[3] = v[1]
+        }
+        return [4]f64{b.ax + v[3], b.ay + v[0], math.max(0.0, b.w - v[1] - v[3]), math.max(0.0, b.h - v[0] - v[2])}
+    }
+    return null
 }

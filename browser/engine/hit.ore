@@ -48,6 +48,11 @@ fn hitLayer(t: *Tree, i: usize, x0: f64, y0: f64) AllocError!?NodeId {
         x = inv.x(x0, y0)
         y = inv.y(x0, y0)
     }
+    if layout.clipOf(t, i) |c| {
+        if !inside(x, y, c[0], c[1], c[2], c[3]) {
+            return null
+        }
+    }
     var ls = List(paint.LayerRef).init(t.backing)
     defer ls.deinit()
     try paint.layersOf(t, i, &mut ls)
