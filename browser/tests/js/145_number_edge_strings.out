@@ -1,0 +1,6 @@
+0.3333333333333333 0.6666666666666666 3e-7 1.23e-18
+0.1 false 3
+Infinity -Infinity 0
+0 0 true
+1e+21 true
+[ '1.5', '2.25', '-0.125' ] [ 'Infinity', '-Infinity' ]

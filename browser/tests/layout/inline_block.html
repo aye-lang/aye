@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0 }
+.ib { display: inline-block; border: 1px solid; padding: 2px }
+.fixed { width: 100px }
+</style>
+<p>before <span class="ib">shrink to fit</span> after</p>
+<p>before <span class="ib">two<br>lines</span> after: baseline of the last line</p>
+<p><span class="ib fixed">fixed width with text that wraps</span> next</p>
+<p><span class="ib" style="margin: 0 10px">margins</span><span class="ib">touching</span></p>
+<div style="width: 150px"><span class="ib">a long inline block that wraps</span></div>
+<p><span class="ib"></span> empty inline-block</p>

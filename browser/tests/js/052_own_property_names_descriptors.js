@@ -1,0 +1,12 @@
+const o = { a: 1 };
+Object.defineProperty(o, 'b', { value: 2, enumerable: false });
+console.log(Object.getOwnPropertyNames(o), Object.keys(o));
+console.log(Object.getOwnPropertyNames([1, 2]));
+console.log(Object.getOwnPropertyNames('hi'));
+console.log(Object.getOwnPropertyDescriptor(o, 'a'));
+console.log(Object.getOwnPropertyDescriptor(o, 'missing'));
+console.log(Object.getOwnPropertyDescriptor([1], 'length'));
+const g = { get x() { return 1; } };
+const d = Object.getOwnPropertyDescriptor(g, 'x');
+console.log(Object.keys(d).sort(), d.set);
+console.log(Object.getOwnPropertyNames(Object.getPrototypeOf({})).includes('hasOwnProperty'));

@@ -1,0 +1,6 @@
+[ 0, 1, 2 ] [ 'a', 'b', 'c' ] [ [ 0, 'a' ], [ 1, 'b' ], [ 2, 'c' ] ]
+{ value: 'a', done: false } { value: 'b', done: false } { value: 'c', done: false } { value: undefined, done: true }
+[ 'x', 'y' ] [ 1, 2 ] [ [ 'x', 1 ], [ 'y', 2 ] ]
+[ 'p', 'q' ] [ [ 'p', 'p' ], [ 'q', 'q' ] ]
+h-i
+1 b

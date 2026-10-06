@@ -1,0 +1,130 @@
+// Reading computed values for layout.
+
+import css
+import css.Value
+import font
+import std.text
+
+/// The keyword of `v` ("" when it is not a keyword).
+pub fn keywordOf(v: Value) []u8 {
+    return match v {
+        .Keyword { k } => k
+        _ => ""
+    }
+}
+
+pub fn isKeyword(v: Value, word: []u8) bool {
+    return text.eql(keywordOf(v), word)
+}
+
+/// A length in px: `Px`, or a percentage of `base` (null when `base` is
+/// negative, that is, unknown); null for keywords (`auto`, ...).
+pub fn lengthOf(v: Value, base: f64) ?f64 {
+    return match v {
+        .Px { v: n } => n
+        .Percent { v: n } => percentOf(n, base)
+        _ => null
+    }
+}
+
+fn percentOf(n: f64, base: f64) ?f64 {
+    if base < 0.0 {
+        return null
+    }
+    return base * n / 100.0
+}
+
+/// `lengthOf`, or 0.
+pub fn lengthOr0(v: Value, base: f64) f64 {
+    if lengthOf(v, base) |n| {
+        return n
+    }
+    return 0.0
+}
+
+/// The number of a `Number` (or `Px`) value, else `fallback`.
+pub fn numberOf(v: Value, fallback: f64) f64 {
+    return match v {
+        .Number { v: n } => n
+        .Px { v: n } => n
+        _ => fallback
+    }
+}
+
+/// The font of a style.
+pub fn fontOf(style: []Value) font.Font {
+    let size = numberOf(style[css.FONT_SIZE], 16.0)
+    let weight = numberOf(style[css.FONT_WEIGHT], 400.0)
+    let family = keywordOf(style[css.FONT_FAMILY])
+    let mono = containsWord(family, "monospace") || containsWord(family, "courier") || containsWord(family, "menlo") || containsWord(family, "monaco") || containsWord(family, "consolas")
+    return font.Font {
+        size: size,
+        bold: weight >= 600.0,
+        italic: !isKeyword(style[css.FONT_STYLE], "normal"),
+        mono: mono,
+    }
+}
+
+// Does `s` contain `word`, ignoring ASCII case?
+fn containsWord(s: []u8, word: []u8) bool {
+    if word.len > s.len {
+        return false
+    }
+    for i in 0..s.len - word.len + 1 {
+        if text.eqlIgnoreCase(s[i..i + word.len], word) {
+            return true
+        }
+    }
+    return false
+}
+
+/// Metrics of the font of `style` and its used line height.
+pub struct TextMetrics {
+    font: font.Font
+    ascent: f64
+    descent: f64
+    line_height: f64
+}
+
+pub fn textMetrics(t: *mut Tree, style: []Value) TextMetrics {
+    let f = fontOf(style)
+    let m = t.measure.metrics(f)
+    var lh = m.ascent + m.descent + m.line_gap
+    match style[css.LINE_HEIGHT] {
+        .Number { v } => {
+            lh = v * f.size
+        }
+        .Px { v } => {
+            lh = v
+        }
+        _ => {}
+    }
+    return TextMetrics { font: f, ascent: m.ascent, descent: m.descent, line_height: lh }
+}
+
+/// The white-space mode of a style.
+pub struct WhiteSpace {
+    // Spaces and tabs collapse.
+    collapse: bool
+    // Newlines are kept (as line breaks).
+    newlines: bool
+    // Lines wrap at spaces.
+    wrap: bool
+}
+
+pub fn whiteSpaceOf(style: []Value) WhiteSpace {
+    let ws = keywordOf(style[css.WHITE_SPACE])
+    if text.eql(ws, "pre") {
+        return WhiteSpace { collapse: false, newlines: true, wrap: false }
+    }
+    if text.eql(ws, "nowrap") {
+        return WhiteSpace { collapse: true, newlines: false, wrap: false }
+    }
+    if text.eql(ws, "pre-wrap") || text.eql(ws, "break-spaces") {
+        return WhiteSpace { collapse: false, newlines: true, wrap: true }
+    }
+    if text.eql(ws, "pre-line") {
+        return WhiteSpace { collapse: true, newlines: true, wrap: true }
+    }
+    return WhiteSpace { collapse: true, newlines: false, wrap: true }
+}

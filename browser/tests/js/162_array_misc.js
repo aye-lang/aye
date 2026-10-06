@@ -1,0 +1,14 @@
+const matrix = [[1, 2], [3, 4]];
+console.log(matrix.map((r) => r.map((x) => x * 2)));
+console.log([1, 2, 3].includes(2) && [1, 2, 3].indexOf(4) === -1);
+console.log(Array.prototype.slice.call({ length: 2, 0: 'a', 1: 'b' }));
+console.log([3, 2, 1].map(String).join('') + 1);
+const a = [1, 2, 3];
+a.foo = 'bar';
+console.log(a.length, a.foo, JSON.stringify(a));
+console.log([0, 1, 2].map((x) => [x, x]).flat().length);
+console.log(new Array(2, 3), new Array('2'), [,].length);
+console.log([1, 2, 3].lastIndexOf(3, -2), [10, 1, 5].sort().reverse());
+const stack = [];
+stack.push(1); stack.push(2);
+console.log(stack.pop() + stack.pop(), stack.length);

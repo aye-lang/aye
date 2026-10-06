@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<style>
+@media screen { .screen { color: red } }
+@media print { .print { color: red } }
+@media all and (min-width: 600px) { .wide { color: green } }
+@media (max-width: 599px) { .narrow { color: green } }
+@media screen and (min-width: 500px) and (max-width: 900px) { .mid { font-style: italic } }
+@media not print { .notprint { font-weight: 700 } }
+@media only screen and (orientation: landscape) { .land { text-align: center } }
+@media print, (width >= 700px) { .list { white-space: pre } }
+@media (min-width: 40em) { .em { visibility: hidden } }
+@media (prefers-color-scheme: dark) { .dark { color: white } }
+@media screen and (unknown-feature: 1) { .unknown { color: red } }
+@media screen and { .broken { color: red } }
+@media { .empty { color: blue } }
+</style>
+<style media="print">.p2 { color: red }</style>
+<style media="screen and (min-width: 100px)">.p3 { color: blue }</style>
+<p class="screen">screen</p>
+<p class="print">print</p>
+<p class="wide">wide</p>
+<p class="narrow">narrow</p>
+<p class="mid">mid</p>
+<p class="notprint">not print</p>
+<p class="land">landscape</p>
+<p class="list">query list</p>
+<p class="em">em width</p>
+<p class="dark">dark</p>
+<p class="unknown">unknown feature</p>
+<p class="broken">broken query</p>
+<p class="empty">empty query</p>
+<p class="p2 p3">style media</p>

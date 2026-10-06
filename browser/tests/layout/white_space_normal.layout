@@ -1,0 +1,22 @@
+viewport 800x600
+  block <html> (0, 0) 800x124
+    block <body> (0, 16) 800x92
+      block <p> (0, 16) 800x20
+        line (0, 16) 800x20
+          text (0, 18) 448x16 "Leading and trailing spaces, tabs and newlines collapse."
+      block <p> (0, 52) 800x20
+        line (0, 52) 800x20
+          text (0, 54) 56x16 "Across "
+          inline <b> (56, 54) 72x16
+            text (56, 54) 72x16 "elements "
+          text (128, 54) 56x16 "spaces "
+          inline <i> (184, 54) 72x16
+            text (184, 54) 72x16 "collapse "
+          text (256, 54) 32x16 "too."
+      block <div> (0, 88) 800x0
+      block <p> (0, 88) 800x20
+        line (0, 88) 800x20
+          text (0, 90) 8x16 "a"
+          inline <span> (8, 90) 8x16
+            text (8, 90) 8x16 " "
+          text (16, 90) 8x16 "b"

@@ -1,0 +1,11 @@
+const txt = '{"a":1,"b":{"c":2,"d":[3,4]},"date":"2020-01-02T03:04:05.000Z"}';
+const order = [];
+const r = JSON.parse(txt, function (k, v) { order.push(k === '' ? '(root)' : k); return v; });
+console.log(order);
+const doubled = JSON.parse(txt, (k, v) => (typeof v === 'number' ? v * 2 : v));
+console.log(doubled);
+const dropped = JSON.parse('{"keep":1,"drop":2}', (k, v) => (k === 'drop' ? undefined : v));
+console.log(dropped, 'drop' in dropped);
+const withDate = JSON.parse(txt, (k, v) => (k === 'date' ? new Date(v) : v));
+console.log(withDate.date.getUTCFullYear(), withDate.date.toISOString());
+console.log(JSON.parse('[1,2,3]', (k, v) => (Array.isArray(v) ? v.length : v)));

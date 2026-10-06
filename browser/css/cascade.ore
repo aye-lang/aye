@@ -1,0 +1,462 @@
+// The cascade and computed values. For each element, every declaration of
+// a matching rule competes per property: the higher level wins (UA
+// normal < author normal < `style` attribute < author !important <
+// `style` attribute !important < UA !important), then the higher
+// specificity, then the later declaration. A property without a winner
+// inherits (inherited properties) or takes its initial value. Computed
+// values are absolute where CSS says so: lengths in px (percentages stay,
+// except for font-size and line-height), font weights as numbers, colors
+// as RGBA (`currentcolor` stays, except for `color`).
+
+import dom
+import dom.Document
+import dom.Kind
+import dom.NodeId
+import std.heap.Arena
+import std.map.IntMap
+import std.math
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+/// The computed styles of the elements of a document: `NPROPS` values per
+/// element, indexed like `PROPERTIES`.
+pub struct Styles {
+    alloc: Allocator
+    arena: *mut Arena
+    // Node index to its values.
+    map: IntMap(u32, []mut Value)
+    // The `style` attributes, parsed.
+    inline: Sheet
+    // The computed initial values (what an element without any rule and
+    // without a parent gets).
+    initial: []mut Value
+
+    pub fn init(alloc: Allocator) AllocError!Styles {
+        let arena = try alloc.create(Arena.init(alloc))
+        var inline = Sheet.init(alloc) catch |e| {
+            alloc.destroy(arena)
+            return e
+        }
+        let initial = arena.allocator().alloc(Value.Initial, NPROPS) catch |e| {
+            inline.deinit()
+            arena.deinit()
+            alloc.destroy(arena)
+            return e
+        }
+        for i, p in PROPERTIES {
+            initial[i] = p.initial
+        }
+        fixBorderWidths(initial)
+        return Styles {
+            alloc: alloc,
+            arena: arena,
+            map: IntMap(u32, []mut Value).init(alloc),
+            inline: inline,
+            initial: initial,
+        }
+    }
+
+    pub fn deinit(self: *mut Self) {
+        self.map.deinit()
+        self.inline.deinit()
+        self.arena.deinit()
+        self.alloc.destroy(self.arena)
+    }
+
+    /// The computed values of the element `el` (null for other nodes).
+    pub fn get(self: *Self, el: NodeId) ?[]Value {
+        if self.map.get(el.index) |v| {
+            // `[]mut Value` does not convert to `?[]Value` in one step.
+            let values: []Value = v
+            return values
+        }
+        return null
+    }
+}
+
+// The best declaration so far for one property.
+struct Win {
+    set: bool
+    level: u8
+    spec: u32
+    value: Value
+}
+
+/// Computes the style of every element of `doc` from the user-agent
+/// sheet `ua` and the author sheet `author` (and `style` attributes).
+pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, out: *mut Styles) AllocError!void {
+    let a = out.arena.allocator()
+    let wins = try a.alloc(Win { set: false, level: 0, spec: 0, value: Value.Initial }, NPROPS)
+    var c = Computer { doc: doc, media: media, out: out, wins: wins, root_font: 16.0 }
+    var cur: ?NodeId = doc.root
+    while cur |h| {
+        if doc.node(h).kind == Kind.Element {
+            for i in 0..wins.len {
+                wins[i].set = false
+            }
+            c.consider(ua, h, false)
+            c.consider(author, h, true)
+            if doc.attr(h, "style") |src| {
+                let range = try parseInline(&mut out.inline, src)
+                for k in range.start..range.end {
+                    let d = out.inline.decls.items()[k]
+                    var level: u8 = 3
+                    if d.important {
+                        level = 5
+                    }
+                    c.offer(d, level, 0)
+                }
+            }
+            try c.compute(h)
+        }
+        cur = doc.following(h, doc.root)
+    }
+}
+
+struct Computer {
+    doc: *Document
+    media: Media
+    out: *mut Styles
+    wins: []mut Win
+    // The font size of the root element, for `rem`.
+    root_font: f64
+
+    // Offers the declarations of every rule of `sheet` that matches `el`.
+    fn consider(self: *mut Self, sheet: *Sheet, el: NodeId, author: bool) {
+        let complexes = sheet.complexes.items()
+        let decls = sheet.decls.items()
+        for r in sheet.rules.items() {
+            var matched = false
+            var spec: u32 = 0
+            for k in r.sel_start..r.sel_end {
+                let cx = complexes[k]
+                if (!matched || cx.spec > spec) && matchesComplex(sheet, self.doc, cx, el) {
+                    matched = true
+                    if cx.spec > spec {
+                        spec = cx.spec
+                    }
+                }
+            }
+            if !matched {
+                continue
+            }
+            for k in r.decl_start..r.decl_end {
+                let d = decls[k]
+                var level: u8 = 1
+                if author && d.important {
+                    level = 4
+                } else if author {
+                    level = 2
+                } else if d.important {
+                    level = 6
+                }
+                self.offer(d, level, spec)
+            }
+        }
+    }
+
+    // `d` wins its property unless an earlier declaration has a higher
+    // level, or the same level and a higher specificity.
+    fn offer(self: *mut Self, d: Decl, level: u8, spec: u32) {
+        let w = self.wins[d.prop]
+        if !w.set || level > w.level || (level == w.level && spec >= w.spec) {
+            self.wins[d.prop] = Win { set: true, level: level, spec: spec, value: d.value }
+        }
+    }
+
+    // The computed values of `el` from the winning declarations.
+    fn compute(self: *mut Self, el: NodeId) AllocError!void {
+        var parent = self.out.initial
+        var is_root = true
+        if parentElement(self.doc, el) |p| {
+            if self.out.map.get(p.index) |pv| {
+                parent = pv
+                is_root = false
+            }
+        }
+        let values = try self.out.arena.allocator().alloc(Value.Initial, NPROPS)
+        // font-size first: the other lengths are relative to it.
+        let parent_font = numberOr(parent[FONT_SIZE], 16.0)
+        var font = self.specified(FONT_SIZE, parent)
+        match font {
+            .Keyword { k } => {
+                if text.eql(k, "larger") {
+                    font = Value.Px { v: parent_font * 1.2 }
+                } else {
+                    font = Value.Px { v: parent_font / 1.2 }
+                }
+            }
+            .Percent { v } => {
+                font = Value.Px { v: parent_font * v / 100.0 }
+            }
+            _ => {}
+        }
+        if is_root {
+            // `rem` on the root element refers to the initial font size.
+            self.root_font = 16.0
+        }
+        values[FONT_SIZE] = self.absolute(font, parent_font)
+        let font_px = numberOr(values[FONT_SIZE], 16.0)
+        if is_root {
+            self.root_font = font_px
+        }
+        for p in 0..NPROPS {
+            if p == FONT_SIZE {
+                continue
+            }
+            var v = self.specified(p, parent)
+            if p == COLOR && isCurrentColor(v) {
+                v = parent[COLOR]
+            } else if p == FONT_WEIGHT {
+                v = relativeWeight(v, numberOr(parent[FONT_WEIGHT], 400.0))
+            } else if p == LINE_HEIGHT {
+                match v {
+                    .Percent { v: pct } => {
+                        v = Value.Px { v: font_px * pct / 100.0 }
+                    }
+                    _ => {}
+                }
+            }
+            values[p] = self.absolute(v, font_px)
+        }
+        fixBorderWidths(values)
+        try self.out.map.put(el.index, values)
+    }
+
+    // The winning value of `p`, with `inherit`, `initial` and `unset`
+    // resolved (to the parent's computed value or the initial value).
+    fn specified(self: *Self, p: usize, parent: []Value) Value {
+        var v = Value.Unset
+        if self.wins[p].set {
+            v = self.wins[p].value
+        }
+        let inherited = PROPERTIES[p].inherited
+        return match v {
+            .Inherit => parent[p]
+            .Initial => PROPERTIES[p].initial
+            .Unset => unsetValue(inherited, parent[p], PROPERTIES[p].initial)
+            _ => v
+        }
+    }
+
+    // `v` with relative lengths in px (`em` is `font` px).
+    fn absolute(self: *Self, v: Value, font: f64) Value {
+        return match v {
+            .Em { v: n } => Value.Px { v: n * font }
+            .Rem { v: n } => Value.Px { v: n * self.root_font }
+            .Vw { v: n } => Value.Px { v: n * self.media.width / 100.0 }
+            .Vh { v: n } => Value.Px { v: n * self.media.height / 100.0 }
+            _ => v
+        }
+    }
+}
+
+fn unsetValue(inherited: bool, from_parent: Value, initial: Value) Value {
+    if inherited {
+        return from_parent
+    }
+    return initial
+}
+
+fn isCurrentColor(v: Value) bool {
+    return match v {
+        .CurrentColor => true
+        _ => false
+    }
+}
+
+// The number of a `Px` or `Number` value, else `fallback`.
+fn numberOr(v: Value, fallback: f64) f64 {
+    return match v {
+        .Px { v: n } => n
+        .Number { v: n } => n
+        _ => fallback
+    }
+}
+
+// `bolder` and `lighter` from the parent's weight (CSS Fonts 4, 2.2).
+fn relativeWeight(v: Value, parent: f64) Value {
+    var k: []u8 = ""
+    match v {
+        .Keyword { k: word } => {
+            k = word
+        }
+        _ => {
+            return v
+        }
+    }
+    var w = parent
+    if text.eql(k, "bolder") {
+        if parent < 350.0 {
+            w = 400.0
+        } else if parent < 550.0 {
+            w = 700.0
+        } else {
+            w = 900.0
+        }
+    } else if parent < 100.0 {
+        w = parent
+    } else if parent < 550.0 {
+        w = 100.0
+    } else if parent < 750.0 {
+        w = 400.0
+    } else {
+        w = 700.0
+    }
+    return Value.Number { v: w }
+}
+
+// A border whose style is `none` or `hidden` has width 0.
+fn fixBorderWidths(values: []mut Value) {
+    for side in 0..4 {
+        match values[BORDER_TOP_STYLE + side] {
+            .Keyword { k } => {
+                if text.eql(k, "none") || text.eql(k, "hidden") {
+                    values[BORDER_TOP_WIDTH + side] = Value.Px { v: 0.0 }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+// ---- writing values
+
+/// Appends the CSS text of the computed value `v`: `12px`, `50%`, `700`,
+/// `rgb(255, 0, 0)`, `rgba(0, 0, 0, 0.5)`, a keyword.
+pub fn writeValue(v: Value, out: *mut text.Builder) AllocError!void {
+    match v {
+        .Keyword { k } => {
+            try out.append(k)
+        }
+        .Px { v: n } => {
+            try writeNumber(n, out)
+            try out.append("px")
+        }
+        .Em { v: n } => {
+            try writeNumber(n, out)
+            try out.append("em")
+        }
+        .Rem { v: n } => {
+            try writeNumber(n, out)
+            try out.append("rem")
+        }
+        .Vw { v: n } => {
+            try writeNumber(n, out)
+            try out.append("vw")
+        }
+        .Vh { v: n } => {
+            try writeNumber(n, out)
+            try out.append("vh")
+        }
+        .Percent { v: n } => {
+            try writeNumber(n, out)
+            try out.append("%")
+        }
+        .Number { v: n } => {
+            try writeNumber(n, out)
+        }
+        .Rgba { c } => {
+            if c.a >= 1.0 {
+                try out.append("rgb(")
+            } else {
+                try out.append("rgba(")
+            }
+            try out.appendUint(c.r as u64)
+            try out.append(", ")
+            try out.appendUint(c.g as u64)
+            try out.append(", ")
+            try out.appendUint(c.b as u64)
+            if c.a < 1.0 {
+                try out.append(", ")
+                try writeNumber(c.a, out)
+            }
+            try out.append(")")
+        }
+        .CurrentColor => {
+            try out.append("currentcolor")
+        }
+        .Inherit => {
+            try out.append("inherit")
+        }
+        .Initial => {
+            try out.append("initial")
+        }
+        .Unset => {
+            try out.append("unset")
+        }
+    }
+}
+
+/// Appends `n` rounded to two decimals, without trailing zeros.
+pub fn writeNumber(n: f64, out: *mut text.Builder) AllocError!void {
+    var hundredths = math.round(n * 100.0) as i64
+    if hundredths < 0 {
+        try out.appendByte('-')
+        hundredths = -hundredths
+    }
+    try out.appendInt(hundredths / 100)
+    let frac = hundredths % 100
+    if frac != 0 {
+        try out.appendByte('.')
+        try out.appendInt(frac / 10)
+        if frac % 10 != 0 {
+            try out.appendInt(frac % 10)
+        }
+    }
+}
+
+/// Are two computed values the same?
+pub fn sameValue(a: Value, b: Value) bool {
+    return tagOf(a) == tagOf(b) && numberOf(a) == numberOf(b) && text.eql(keywordOf(a), keywordOf(b)) && sameColor(colorOf(a), colorOf(b))
+}
+
+fn tagOf(v: Value) u8 {
+    return match v {
+        .Keyword { .. } => 1
+        .Px { .. } => 2
+        .Em { .. } => 3
+        .Rem { .. } => 4
+        .Vw { .. } => 5
+        .Vh { .. } => 6
+        .Percent { .. } => 7
+        .Number { .. } => 8
+        .Rgba { .. } => 9
+        .CurrentColor => 10
+        .Inherit => 11
+        .Initial => 12
+        .Unset => 13
+    }
+}
+
+fn numberOf(v: Value) f64 {
+    return match v {
+        .Px { v: n } => n
+        .Em { v: n } => n
+        .Rem { v: n } => n
+        .Vw { v: n } => n
+        .Vh { v: n } => n
+        .Percent { v: n } => n
+        .Number { v: n } => n
+        _ => 0.0
+    }
+}
+
+fn keywordOf(v: Value) []u8 {
+    return match v {
+        .Keyword { k } => k
+        _ => ""
+    }
+}
+
+fn colorOf(v: Value) Color {
+    return match v {
+        .Rgba { c } => c
+        _ => Color { r: 0, g: 0, b: 0, a: 0.0 }
+    }
+}
+
+fn sameColor(a: Color, b: Color) bool {
+    return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a
+}

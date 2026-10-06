@@ -29,6 +29,8 @@ browser/
   css/            tokenizer, parser, selectors, cascade, computed style
   layout/         block, inline (line breaking), lists, tables (simple),
                   flex (simple), text measurement
+  engine/         Page (load, style, layout), Tab (history, scroll),
+                  hit testing, find in page
   paint/          display list, software rasterizer, glyph cache, PNG
   js/             lexer, parser, interpreter, GC, builtins, DOM bindings
   agent/          snapshot (a11y tree with refs), Markdown, actions,
@@ -42,6 +44,38 @@ browser/
 Same rules as `milestones.md`: tests first; a milestone is done when its
 acceptance tests pass. Tests run headless and offline (`file:` fixtures
 and a local test server), so CI needs no network and no display.
+
+**Status.** B1–B4 are done, and so are the cores of B6 and B7:
+
+| | State | Tests (`cargo test --test browser`) |
+|---|---|---|
+| B1 fetch, HTML, DOM | done | 31 `dump --tree`/`--text` fixtures, `data:`, `http:` (local server) |
+| B2 CSS and style | done | 25 `dump --style` fixtures |
+| B3 layout | done | 31 `dump --layout` fixtures (fixed font), system-font check |
+| B4 paint and window | done | 13 golden PNGs, PNG checks, headless window tests |
+| B5 forms and images | not started | |
+| B6 JavaScript | engine core done | 212 conformance scripts (`anyknown js`) |
+| B7 agent interface | core done | 17 snapshot/Markdown fixtures, 4 session and MCP transcripts |
+| B8 the real web | not started | |
+
+All the front ends share `engine/`: the window, `screenshot` and the
+agent sessions load pages through `engine.load` and keep history in a
+`Tab`. What remains:
+
+- **B5:** form controls that can be edited and submitted (the agent's
+  `type`/`select` only record events today), and decoded images (PNG,
+  GIF) instead of placeholder boxes.
+- **B6:** DOM bindings (`document`, wrappers holding `Handle(Node)`),
+  events and an event loop (`setTimeout`, `addEventListener`), running
+  page scripts during load; then the DOM fixtures and the to-do app.
+- **B7:** actions that reach the page through JS and forms (`eval`,
+  real input and submission), `screenshot` and `tabs` commands, and the
+  shared window (`--agent-socket`) where a human and an agent drive one
+  page.
+- **B8:** the real web (cookies, gzip, `<base>`, a list of public sites).
+
+The compiler gaps the browser met, and which of them M9.5/M9.6 fixed,
+are in `browser/COMPILER_GAPS.md`.
 
 ### B1: Fetch, HTML, DOM, text
 
@@ -96,6 +130,16 @@ and a local test server), so CI needs no network and no display.
   Cmd+[ and Cmd+], find in page (Cmd+F).
 - **Acceptance:** screenshot golden tests compared by pixel hash; a
   manual checklist run once per milestone for the window.
+- Done: `anyknown screenshot FILE|URL -o out.png [--width W] [--height
+  H] [--font fixed|system] [--full]` and `anyknown [open] FILE|URL`.
+  Golden PNGs (`browser/tests/paint/`, fixed font, compared byte for
+  byte), PNG checks, and headless window tests (SDL's dummy driver,
+  `--frames N` with scripted `--events`, `--state`, `--save`; see
+  `browser/ui/script.ore`). The interactive checks are in
+  `docs/browser-manual-checklist.md`. Simplifications: painting follows
+  tree order (no z-index or stacking contexts), clips are rectangles,
+  the 3-D border styles are solid, and the style sheets are parsed again
+  when the window is resized.
 
 ### B5: Forms and images
 
@@ -126,6 +170,43 @@ and a local test server), so CI needs no network and no display.
   golden console output; DOM fixtures whose `dump --tree` after scripts
   matches goldens; a to-do app fixture that works in the window.
 
+**The engine core (done; DOM bindings next).** `anyknown js FILE` runs a
+script; `browser/tests/js/` holds the conformance scripts with Node's
+output as goldens.
+
+- *Pipeline:* tokens (all up front) → AST in one `List(Node)` per engine
+  → a resolver that gives every variable an environment slot (`depth`,
+  `slot`) → a tree-walking interpreter. Exceptions are the Ore error
+  `JsError.Thrown` (the value in `Interp.exception`), so they pass through
+  native functions with `try`.
+- *Strings:* WTF-8 bytes (UTF-8 that can hold lone surrogates) with the
+  UTF-16 length cached, as decided in design.md: the DOM and the engine
+  share UTF-8, and `length`, `charCodeAt` and indices follow UTF-16.
+  ASCII strings index their bytes; others are decoded when an operation
+  needs positions. String comparison is by bytes (code point order,
+  which differs from UTF-16 order only between astral characters and
+  U+E000..U+FFFF). A concatenation of 64 bytes or more makes a rope that
+  is copied flat only when its bytes are needed, so `s += x` in a loop
+  is linear.
+- *Heap and GC:* objects, strings and environments are `u32` indices into
+  three lists with free lists; mark and sweep from the roots (global
+  object, intrinsics, environments, the value stack, frames, pending
+  exception and return value, host roots), every 2× live allocations.
+  A value held across an allocation must be on the interpreter's stack
+  (calls take `[f, this, args...]` from it). `ANYKNOWN_JS_GC=stress`
+  collects at every allocation to check that discipline.
+- *Host interface:* native functions are a table of `fn(*mut Interp,
+  Args) JsError!Value`; `Interp.newHostObject(proto, tag, index,
+  generation)` makes a wrapper that holds a `Handle(Node)` as three
+  integers, and `Interp.host: ?dyn Host` gets `finalize(tag, index,
+  generation)` when the collector frees one (the `js_refs` decrement).
+  `addRoot`/`removeRoot` keep values (event listeners) alive.
+- *Not yet:* generators, async/Promise, Symbol, BigInt, Proxy, typed
+  arrays, tagged templates, `new.target`, time zones (local time is UTC),
+  full Unicode case mapping and normalization.
+  A plain function call gets `this === undefined` (strict-mode rule), and
+  top-level `var`/`function` are properties of the global object.
+
 ### B7: Agent interface
 
 - `anyknown agent`: JSON lines on stdio. Commands: `navigate`, `back`,
@@ -139,6 +220,9 @@ and a local test server), so CI needs no network and no display.
 - **Acceptance:** scripted agent sessions over fixtures (fill and submit
   a form, follow a link by ref, read a JS-rendered list) with golden
   transcripts; an MCP handshake and `tools/list` golden.
+- The protocol is in `docs/agent-protocol.md`. Done so far: snapshot,
+  read, navigation, click, type, select, press, scroll, find and wait
+  (forms and scripts record events), `dump --a11y` and `dump --md`.
 
 ### B8: The real web
 

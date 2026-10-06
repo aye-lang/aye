@@ -1,0 +1,22 @@
+viewport 800x600
+  block <html> (0, 0) 800x392
+    block <body> (0, 0) 800x392
+      block <div class="half"> (200, 0) 560x100
+        line (280, 40) 400x20
+          text (280, 42) 304x16 "half of 800, padding 5% and 10% of 800"
+      block <div class="wrap"> (0, 100) 800x200
+        block <div class="quarter"> (0, 100) 202x102
+          line (1, 101) 200x20
+            text (1, 103) 184x16 "a quarter, 50% of 200px"
+          line (1, 121) 200x20
+            text (1, 123) 32x16 "high"
+      block <div class="quarter"> (0, 300) 202x42
+        line (1, 301) 200x20
+          text (1, 303) 184x16 "auto parent height: 50%"
+        line (1, 321) 200x20
+          text (1, 323) 112x16 "height is auto"
+      block <div class="vw"> (0, 342) 80x30
+      block <div style="width: 50%"> (0, 372) 400x20
+        block <div style="width: 50%"> (0, 372) 200x20
+          line (0, 372) 200x20
+            text (0, 374) 104x16 "nested halves"

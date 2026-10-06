@@ -1,0 +1,28 @@
+- main
+  - heading "Lists" [level=1] [e1]
+  - list
+    - listitem
+      - text: Fruit
+      - list
+        - listitem
+          - text: Apples
+          - list
+            - listitem: Gala
+            - listitem: Fuji
+        - listitem: Pears
+    - listitem
+      - link "Vegetables" [e2] -> veg.html
+    - listitem
+      - paragraph: A paragraph in an item.
+      - paragraph: A second paragraph.
+  - list
+    - listitem: Four
+    - listitem: Five
+    - listitem: Six
+  - list
+    - listitem
+      - text: Item with bold and code
+      - list
+        - listitem: A list right inside a list
+  - term "Term"
+  - definition: Its definition.

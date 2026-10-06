@@ -1,0 +1,10 @@
+console.log([3, 1, 10, 2, 21].sort((a, b) => a - b), [3, 1, 10, 2].sort((a, b) => b - a));
+const people = [{ n: 'bob', a: 25 }, { n: 'al', a: 30 }, { n: 'cy', a: 25 }, { n: 'di', a: 30 }, { n: 'ed', a: 20 }];
+console.log(people.slice().sort((x, y) => x.a - y.a).map((p) => p.n).join(','));
+console.log(people.slice().sort((x, y) => y.a - x.a || x.n.localeCompare(y.n)).map((p) => p.n).join(','));
+const words = ['banana', 'Apple', 'cherry', 'apple'];
+console.log(words.slice().sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0));
+console.log(['aaa', 'b', 'cc'].sort((a, b) => a.length - b.length));
+console.log([5, 1, 4].sort(() => 0), [1, 2, 3].sort((a, b) => (a < b ? 1 : -1)));
+const nums = [1, -2, NaN, 3];
+console.log(nums.sort((a, b) => a - b).length);

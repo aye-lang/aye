@@ -1,0 +1,10 @@
+const f = (x) => x.toFixed(6);
+console.log(f(Math.sin(0)), f(Math.sin(Math.PI / 2)), f(Math.sin(Math.PI / 6)), f(Math.cos(0)), f(Math.cos(Math.PI)));
+console.log(f(Math.tan(Math.PI / 4)), f(Math.atan(1) * 4), f(Math.asin(1)), f(Math.acos(0)), f(Math.atan2(1, 1)));
+console.log(f(Math.atan2(-1, -1)), f(Math.atan2(0, -1)), f(Math.sinh(1)), f(Math.cosh(1)), f(Math.tanh(0.5)));
+console.log(Math.sin(0), Math.cos(0), Math.atan2(0, 0), Math.asin(2));
+const deg = (r) => (r * 180 / Math.PI).toFixed(2);
+console.log(deg(Math.PI), deg(Math.atan2(1, 0)), deg(Math.acos(0.5)));
+let s = 0;
+for (let i = 0; i < 360; i += 30) s += Math.sin(i * Math.PI / 180);
+console.log(Math.abs(s) < 1e-9);

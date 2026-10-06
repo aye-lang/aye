@@ -1,0 +1,10 @@
+console.log(1 + 2, 7 - 10, 6 * 7, 7 / 2, -7 / 2);
+console.log(2 + 3 * 4, (2 + 3) * 4, 10 - 2 - 3, 100 / 10 / 5);
+console.log(1 / 0, -1 / 0, 0 / 0);
+console.log('3' + 4, 3 + '4', '3' * '4', '10' / '2', '7' - 2);
+console.log(true + 1, false + false, null + 1, undefined + 1);
+console.log([] + [], [1, 2] + [3], {} + 'x');
+console.log(+'', +'  42  ', +'abc', +true, +null, +undefined, +[], +[5], +[1, 2]);
+console.log(-'5', -(-3), - -3);
+console.log(0.1 * 3, 1e300 * 1e10, -1e300 * 1e10);
+console.log(5 / 2 | 0, Math.floor(-5 / 2));

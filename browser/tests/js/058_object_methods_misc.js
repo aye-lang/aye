@@ -1,0 +1,11 @@
+const o = { a: 1, toString() { return 'O!'; } };
+console.log(String(o), `${o}`, o + '');
+const v = { valueOf() { return 7; } };
+console.log(v * 2, v + 1, String(v));
+console.log(Object.prototype.toString.call({}), Object.prototype.toString.call([]));
+console.log(Object.prototype.toString.call(new Date(0)), Object.prototype.toString.call(undefined));
+console.log(({}).constructor === Object, [].constructor === Array);
+console.log(Object.keys(Object), typeof Object.prototype.valueOf);
+const x = {};
+console.log(x.valueOf() === x);
+console.log(Object(1) instanceof Number, typeof Object('s'));

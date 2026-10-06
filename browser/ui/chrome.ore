@@ -1,0 +1,265 @@
+// The browser chrome, drawn into the window's canvas: the toolbar with
+// back, forward and reload buttons and the address bar, the status line
+// (the URL of the link under the mouse) and the find bar. Positions are
+// in CSS px (window points), scaled like the page.
+
+import font
+import paint
+import paint.Rgba
+import std.math
+import std.mem.AllocError
+import std.text
+
+let BUTTON: f64 = 28.0
+let BACK_X: f64 = 8.0
+let FORWARD_X: f64 = 40.0
+let RELOAD_X: f64 = 72.0
+let ADDRESS_X: f64 = 108.0
+let PAD: f64 = 8.0
+
+let BAR_BG = Rgba { r: 242, g: 242, b: 242, a: 255 }
+let LINE = Rgba { r: 200, g: 200, b: 200, a: 255 }
+let INK = Rgba { r: 40, g: 40, b: 40, a: 255 }
+let FADED = Rgba { r: 176, g: 176, b: 176, a: 255 }
+let PAPER = Rgba { r: 255, g: 255, b: 255, a: 255 }
+let FOCUS_RING = Rgba { r: 59, g: 130, b: 246, a: 255 }
+let SELECTION = Rgba { r: 179, g: 212, b: 252, a: 255 }
+
+pub enum Button {
+    Back
+    Forward
+    Reload
+    Address
+    None
+}
+
+fn uiFont(size: f64) font.Font {
+    return font.Font { size: size, bold: false, italic: false, mono: false }
+}
+
+pub fn addressRect(ui: *Ui) paint.Rect {
+    var w = ui.win_w as f64 - ADDRESS_X - PAD
+    if w < 20.0 {
+        w = 20.0
+    }
+    return paint.Rect { x: ADDRESS_X, y: 6.0, w: w, h: BUTTON }
+}
+
+/// What part of the toolbar is at (`x`, `y`).
+pub fn buttonAt(ui: *Ui, x: f64, y: f64) Button {
+    if y < 6.0 || y >= 6.0 + BUTTON {
+        return Button.None
+    }
+    if x >= BACK_X && x < BACK_X + BUTTON {
+        return Button.Back
+    }
+    if x >= FORWARD_X && x < FORWARD_X + BUTTON {
+        return Button.Forward
+    }
+    if x >= RELOAD_X && x < RELOAD_X + BUTTON {
+        return Button.Reload
+    }
+    let r = addressRect(ui)
+    if x >= r.x && x < r.x + r.w {
+        return Button.Address
+    }
+    return Button.None
+}
+
+// ---- drawing helpers (CSS px)
+
+fn screen(ui: *Ui) paint.View {
+    return paint.View { scale: ui.scale, dx: 0.0, dy: 0.0 }
+}
+
+fn fill(ui: *mut Ui, x: f64, y: f64, w: f64, h: f64, c: Rgba) {
+    ui.canvas.fillRect(paint.deviceRect(paint.Rect { x: x, y: y, w: w, h: h }, screen(ui)), c)
+}
+
+fn frame(ui: *mut Ui, r: paint.Rect, width: f64, c: Rgba) {
+    fill(ui, r.x, r.y, r.w, width, c)
+    fill(ui, r.x, r.y + r.h - width, r.w, width, c)
+    fill(ui, r.x, r.y + width, width, r.h - 2.0 * width, c)
+    fill(ui, r.x + r.w - width, r.y + width, width, r.h - 2.0 * width, c)
+}
+
+// Draws `s` with its baseline at (`x`, `y`).
+fn label(ui: *mut Ui, x: f64, y: f64, s: []u8, f: font.Font, c: Rgba) AllocError!void {
+    try ui.painter.draw(&mut ui.canvas, x * ui.scale, y * ui.scale, s, f, ui.scale, c)
+}
+
+// The baseline that centers a line of `f` in a box from `top`, `h` high.
+fn centered(ui: *mut Ui, top: f64, h: f64, f: font.Font) f64 {
+    let m = ui.measure.metrics(f)
+    return math.floor(top + (h + m.ascent - m.descent) / 2.0 + 0.5)
+}
+
+// A triangle `size` tall centered at (`cx`, `cy`), pointing left or
+// right, drawn row by row in device pixels.
+fn triangle(ui: *mut Ui, cx: f64, cy: f64, size: f64, left: bool, c: Rgba) {
+    let s = ui.scale
+    let half = size * s / 2.0
+    let mid = cy * s
+    let base_l = cx * s - half / 2.0
+    let base_r = cx * s + half / 2.0
+    let y0 = math.floor(mid - half) as i64
+    let y1 = math.ceil(mid + half) as i64
+    for row in y0..y1 {
+        let t = 1.0 - math.abs(row as f64 + 0.5 - mid) / half
+        if t <= 0.0 {
+            continue
+        }
+        let w = t * half
+        if left {
+            ui.canvas.fillRect(paint.IRect { x0: paint.roundPx(base_r - w), y0: row, x1: paint.roundPx(base_r), y1: row + 1 }, c)
+        } else {
+            ui.canvas.fillRect(paint.IRect { x0: paint.roundPx(base_l), y0: row, x1: paint.roundPx(base_l + w), y1: row + 1 }, c)
+        }
+    }
+}
+
+// A ring around (`cx`, `cy`) with a gap at the top right, and an arrow
+// head at the gap: the reload icon.
+fn reloadIcon(ui: *mut Ui, cx: f64, cy: f64, c: Rgba) {
+    let s = ui.scale
+    let outer = 7.0 * s
+    let inner = 5.0 * s
+    let ox = cx * s
+    let oy = cy * s
+    for py in math.floor(oy - outer) as i64..math.ceil(oy + outer) as i64 {
+        for px in math.floor(ox - outer) as i64..math.ceil(ox + outer) as i64 {
+            let dx = px as f64 + 0.5 - ox
+            let dy = py as f64 + 0.5 - oy
+            let d2 = dx * dx + dy * dy
+            if d2 >= inner * inner && d2 <= outer * outer && !(dx > 0.0 && dy < 0.0 && -dy > dx * 0.5) {
+                ui.canvas.fillRect(paint.IRect { x0: px, y0: py, x1: px + 1, y1: py + 1 }, c)
+            }
+        }
+    }
+    triangle(ui, cx + 1.5, cy - 6.0, 7.0, false, c)
+}
+
+// ---- the toolbar
+
+pub fn drawToolbar(ui: *mut Ui) AllocError!void {
+    fill(ui, 0.0, 0.0, ui.win_w as f64, TOOLBAR, BAR_BG)
+    fill(ui, 0.0, TOOLBAR - 1.0, ui.win_w as f64, 1.0, LINE)
+    let mid = 6.0 + BUTTON / 2.0
+    var c = FADED
+    if ui.tab.canGoBack() {
+        c = INK
+    }
+    triangle(ui, BACK_X + 11.0, mid, 12.0, true, c)
+    fill(ui, BACK_X + 11.0, mid - 1.0, 9.0, 2.0, c)
+    c = FADED
+    if ui.tab.canGoForward() {
+        c = INK
+    }
+    triangle(ui, FORWARD_X + 17.0, mid, 12.0, false, c)
+    fill(ui, FORWARD_X + 8.0, mid - 1.0, 9.0, 2.0, c)
+    reloadIcon(ui, RELOAD_X + BUTTON / 2.0, mid, INK)
+    try drawField(ui, &ui.address, addressRect(ui), ui.focus == Focus.Address, 14.0)
+}
+
+// How far the text of field `f` is shifted left so that its caret
+// shows in a box `r` wide; 0 when the field has no focus (the start of
+// the text shows).
+fn fieldShift(ui: *mut Ui, fd: *Field, r: paint.Rect, f: font.Font, focused: bool) f64 {
+    if !focused {
+        return 0.0
+    }
+    let caret_x = ui.measure.width(f, fd.bytes()[..fd.caret])
+    let room = r.w - 2.0 * PAD
+    if caret_x > room {
+        return caret_x - room
+    }
+    return 0.0
+}
+
+fn drawField(ui: *mut Ui, fd: *Field, r: paint.Rect, focused: bool, size: f64) AllocError!void {
+    let f = uiFont(size)
+    fill(ui, r.x, r.y, r.w, r.h, PAPER)
+    if focused {
+        frame(ui, r, 2.0, FOCUS_RING)
+    } else {
+        frame(ui, r, 1.0, LINE)
+    }
+    let inner = paint.Rect { x: r.x + 2.0, y: r.y + 2.0, w: r.w - 4.0, h: r.h - 4.0 }
+    try ui.canvas.pushClip(paint.deviceRect(inner, screen(ui)))
+    let shift = fieldShift(ui, fd, r, f, focused)
+    let x = r.x + PAD - shift
+    let base = centered(ui, r.y, r.h, f)
+    let s = fd.bytes()
+    if focused && fd.all && s.len > 0 {
+        fill(ui, x, r.y + 5.0, ui.measure.width(f, s), r.h - 10.0, SELECTION)
+    }
+    try label(ui, x, base, s, f, INK)
+    if focused && !fd.all {
+        fill(ui, x + ui.measure.width(f, s[..fd.caret]), r.y + 6.0, 1.0, r.h - 12.0, INK)
+    }
+    ui.canvas.popClip()
+}
+
+/// The caret offset in the address bar nearest to `x`.
+pub fn caretAt(ui: *mut Ui, x: f64) usize {
+    let f = uiFont(14.0)
+    let r = addressRect(ui)
+    let s = ui.address.bytes()
+    let rel = x - (r.x + PAD - fieldShift(ui, &ui.address, r, f, ui.focus == Focus.Address))
+    var best: usize = 0
+    var best_d = math.abs(rel)
+    var i: usize = 0
+    while i < s.len {
+        i += text.decode(s[i..]).len
+        let d = math.abs(rel - ui.measure.width(f, s[..i]))
+        if d < best_d {
+            best = i
+            best_d = d
+        }
+    }
+    return best
+}
+
+// ---- the status line and the find bar
+
+pub fn drawStatus(ui: *mut Ui, bottom: f64) AllocError!void {
+    let f = uiFont(12.0)
+    var y = bottom - 20.0
+    if ui.finding {
+        y -= FINDBAR
+    }
+    let s = ui.hover.bytes()
+    var w = ui.measure.width(f, s) + 2.0 * PAD
+    let most = ui.win_w as f64 * 0.7
+    if w > most {
+        w = most
+    }
+    let r = paint.Rect { x: 0.0, y: y, w: w, h: 20.0 }
+    fill(ui, r.x, r.y, r.w, r.h, BAR_BG)
+    frame(ui, r, 1.0, LINE)
+    try ui.canvas.pushClip(paint.deviceRect(paint.Rect { x: 1.0, y: y + 1.0, w: w - 2.0, h: 18.0 }, screen(ui)))
+    try label(ui, PAD, centered(ui, y, 20.0, f), s, f, INK)
+    ui.canvas.popClip()
+}
+
+pub fn drawFindBar(ui: *mut Ui, bottom: f64) AllocError!void {
+    let f = uiFont(13.0)
+    let y = bottom - FINDBAR
+    fill(ui, 0.0, y, ui.win_w as f64, FINDBAR, BAR_BG)
+    fill(ui, 0.0, y, ui.win_w as f64, 1.0, LINE)
+    try label(ui, PAD, centered(ui, y, FINDBAR, f), "Find:", f, INK)
+    let r = paint.Rect { x: 50.0, y: y + 5.0, w: 240.0, h: 22.0 }
+    try drawField(ui, &ui.find, r, ui.focus == Focus.Find, 13.0)
+    var b = text.Builder.init(ui.alloc)
+    defer b.deinit()
+    let n = ui.matches.len()
+    if n > 0 {
+        try b.appendUint((ui.current + 1) as u64)
+        try b.append(" of ")
+        try b.appendUint(n as u64)
+    } else if ui.find.bytes().len > 0 {
+        try b.append("No matches")
+    }
+    try b.append("    Enter: next, Shift+Enter: previous, Esc: close")
+    try label(ui, 302.0, centered(ui, y, FINDBAR, f), b.bytes(), f, INK)
+}

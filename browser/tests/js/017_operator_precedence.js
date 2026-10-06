@@ -1,0 +1,11 @@
+console.log(1 + 2 * 3 - 4 / 2, (1 + 2) * (3 - 4) / 2);
+console.log(2 ** -2, -(2 ** 2), !true === false, typeof 1 + 1);
+console.log(1 < 2 < 3, 3 > 2 > 1, 1 == 1 == 1);
+console.log(true || false && false, (true || false) && false);
+console.log(1 | 2 & 3, (1 | 2) & 3, 1 + 2 << 1, 1 << 2 + 1);
+console.log((null ?? 0) || 5, null ?? (0 || 5));
+let a = 1, b = 2;
+a = b = 7;
+console.log(a, b);
+console.log(void 0 ?? 'v', typeof void 0);
+console.log(!!'' + 1, -'3' * -'2', +'2' + +'3');

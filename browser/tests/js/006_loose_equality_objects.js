@@ -1,0 +1,10 @@
+const o1 = { valueOf() { return 42; } };
+const o2 = { toString() { return 'hello'; } };
+const o3 = { valueOf() { return 1; }, toString() { return 'two'; } };
+console.log(o1 == 42, o1 == '42', o2 == 'hello', o3 == 1, o3 == 'two');
+console.log([1] == 1, [1, 2] == '1,2', [] == '', [] == 0, [0] == false, [] == false);
+console.log(o1 + 1, o2 + '!', o3 + '', `${o3}`, String(o3));
+console.log(null == {}, undefined == [], ({}) == '[object Object]');
+const d = { valueOf() { return true; } };
+console.log(d == 1, d == true);
+console.log(new String('a') == 'a', new String('a') === 'a', new Number(5) == 5);

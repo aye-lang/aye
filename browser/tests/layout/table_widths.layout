@@ -1,0 +1,38 @@
+viewport 800x600
+  block <html> (0, 0) 800x144
+    block <body> (0, 0) 300x144
+      table <table> (0, 0) 300x92
+        row-group <tbody> (0, 0) 300x92
+          row <tr> (0, 0) 300x66
+            cell <td> (0, 0) 46x66
+              line (3, 3) 40x20
+                text (3, 5) 40x16 "short"
+            cell <td> (46, 0) 254x66
+              line (49, 3) 248x20
+                text (49, 5) 224x16 "this cell has quite a lot of"
+              line (49, 23) 248x20
+                text (49, 25) 240x16 "text that must wrap inside the"
+              line (49, 43) 248x20
+                text (49, 45) 40x16 "table"
+          row <tr> (0, 66) 300x26
+            cell <td colspan="2"> (0, 66) 300x26
+              line (3, 69) 294x20
+                text (3, 71) 224x16 "a cell spanning both columns"
+      table <table style="width: 100%"> (0, 92) 300x26
+        row-group <tbody> (0, 92) 300x26
+          row <tr> (0, 92) 300x26
+            cell <td> (0, 92) 75.44x26
+              line (3, 95) 69.44x20
+                text (3, 97) 8x16 "a"
+            cell <td> (75.44, 92) 118.56x26
+              line (78.44, 95) 112.56x20
+                text (78.44, 97) 16x16 "bb"
+            cell <td style="width: 100px"> (194, 92) 106x26
+              line (197, 95) 100x20
+                text (197, 97) 40x16 "fixed"
+      table <table style="margin: 0 auto"> (115, 118) 70x26
+        row-group <tbody> (115, 118) 70x26
+          row <tr> (115, 118) 70x26
+            cell <td> (115, 118) 70x26
+              line (118, 121) 64x20
+                text (118, 123) 64x16 "centered"
