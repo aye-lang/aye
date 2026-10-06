@@ -329,13 +329,26 @@ fn canvasComposite(dst: []mut u8, src: []u8, clip: ?[]u8, alpha: f64, mode: []u8
     }
 }
 
+fn canvasByte(n: f64) u8 {
+    if n != n {
+        return 0
+    }
+    return math.floor(math.clamp(n, 0.0, 255.0) + 0.5) as u8
+}
+
 fn canvasPaint(it: *mut Interp, style: Value, bmp: *image.Bitmap, px: []mut u8) JsError!void {
     let kind = try canvasNum(it, style, "kind")
+    if !(kind >= 0.0 && kind <= 4.0 && math.floor(kind) == kind) {
+        for i in 0..px.len {
+            px[i] = 0
+        }
+        return
+    }
     let cv = try canvasProp(it, style, "color")
     var color = [4]f64{0.0, 0.0, 0.0, 255.0}
     if kind == 0.0 {
         for k in 0..4 {
-            color[k] = try it.toNumber(try canvasIndex(it, cv, k))
+            color[k] = canvasByte(try it.toNumber(try canvasIndex(it, cv, k))) as f64
         }
         var i: usize = 0
         while i < px.len {
@@ -357,6 +370,10 @@ fn canvasPaint(it: *mut Interp, style: Value, bmp: *image.Bitmap, px: []mut u8) 
     }
     if kind == 4.0 {
         let source = try canvasProp(it, style, "image")
+        let smoothing = try canvasProp(it, style, "smoothing")
+        let smooth = js.isUndef(smoothing) || it.toBoolean(smoothing)
+        let repeatX = it.toBoolean(try canvasProp(it, style, "repeatX"))
+        let repeatY = it.toBoolean(try canvasProp(it, style, "repeatY"))
         let img = (try canvasSource(it, source)) orelse return
         if img.width == 0 || img.height == 0 || img.pixels.len == 0 {
             for i in 0..px.len {
@@ -364,10 +381,6 @@ fn canvasPaint(it: *mut Interp, style: Value, bmp: *image.Bitmap, px: []mut u8) 
             }
             return
         }
-        let smoothing = try canvasProp(it, style, "smoothing")
-        let smooth = js.isUndef(smoothing) || it.toBoolean(smoothing)
-        let repeatX = it.toBoolean(try canvasProp(it, style, "repeatX"))
-        let repeatY = it.toBoolean(try canvasProp(it, style, "repeatY"))
         for y in 0..bmp.height {
             for x in 0..bmp.width {
                 var sx = inv.mapX(x as f64 + 0.5, y as f64 + 0.5)
@@ -410,10 +423,16 @@ fn canvasPaint(it: *mut Interp, style: Value, bmp: *image.Bitmap, px: []mut u8) 
     for k in 0..ss.len {
         let stop = try canvasIndex(it, stops, k)
         ss[k].t = try it.toNumber(try canvasIndex(it, stop, 0))
+        if !(ss[k].t >= 0.0 && ss[k].t <= 1.0) {
+            for i in 0..px.len {
+                px[i] = 0
+            }
+            return
+        }
         let col = try canvasIndex(it, stop, 1)
         var cc = [4]u8{0, 0, 0, 0}
         for j in 0..4 {
-            cc[j] = (try it.toNumber(try canvasIndex(it, col, j))) as u8
+            cc[j] = canvasByte(try it.toNumber(try canvasIndex(it, col, j)))
         }
         ss[k].c = svg.Color { r: cc[0], g: cc[1], b: cc[2], a: cc[3] }
     }
@@ -471,26 +490,31 @@ fn akCanvasDraw(it: *mut Interp, a: Args) JsError!Value {
     if bmp.pixels.len == 0 {
         return Value.Undefined
     }
+    // JS paint/pixel descriptors can have getters that resize a canvas.
+    // Render against a size snapshot and discard a draw whose destination
+    // was reset during argument conversion.
+    var size = image.Bitmap { width: bmp.width, height: bmp.height, pixels: bmp.pixels }
+    let epoch = c.epoch
     let px = try it.alloc.alloc(0 as u8, bmp.pixels.len)
     defer it.alloc.free(px)
     if js.objectOf(it.arg(a, 1)) != js.NONE {
-        try canvasTextMask(it, it.arg(a, 1), bmp, px)
+        try canvasTextMask(it, it.arg(a, 1), &size, px)
     } else {
-        try canvasSvg(it, it.arg(a, 1), bmp, px)
+        try canvasSvg(it, it.arg(a, 1), &size, px)
     }
     let blur = try canvasNum(it, it.arg(a, 2), "blur")
     if blur > 0.0 && blur <= 1024.0 {
-        let cover = try it.alloc.alloc(0 as u8, bmp.width * bmp.height)
+        let cover = try it.alloc.alloc(0 as u8, size.width * size.height)
         defer it.alloc.free(cover)
         for i in 0..cover.len {
             cover[i] = px[i * 4 + 3]
         }
-        try paint.boxBlur3(it.alloc, cover, bmp.width, bmp.height, blur / 2.0)
+        try paint.boxBlur3(it.alloc, cover, size.width, size.height, blur / 2.0)
         for i in 0..cover.len {
             px[i * 4 + 3] = cover[i]
         }
     }
-    try canvasPaint(it, it.arg(a, 2), bmp, px)
+    try canvasPaint(it, it.arg(a, 2), &size, px)
     let tainted = try canvasPaintTainted(it, it.arg(a, 2))
     if tainted {
         for i in 0..page.images.?.canvases.len() {
@@ -506,15 +530,21 @@ fn akCanvasDraw(it: *mut Interp, a: Args) JsError!Value {
         it.alloc.free(cl)
     }
     if !js.isNullish(it.arg(a, 5)) {
-        clip = try it.alloc.alloc(0 as u8, bmp.pixels.len)
-        try canvasSvg(it, it.arg(a, 5), bmp, clip.?)
+        clip = try it.alloc.alloc(0 as u8, px.len)
+        try canvasSvg(it, it.arg(a, 5), &size, clip.?)
     }
     let mode = try it.toStringValue(it.arg(a, 4))
     try it.push(mode)
     defer it.pop()
     let alpha = try it.toNumber(it.arg(a, 3))
     if alpha == alpha && alpha >= 0.0 && alpha <= 1.0 {
+        for current in page.images.?.canvases.items() {
+            if current.bmp == bmp && current.epoch != epoch {
+                return Value.Undefined
+            }
+        }
         canvasComposite(bmp.pixels, px, clip, alpha, it.heap.bytes(js.strOf(mode)))
+        scriptOf(it).active = page
         canvasChanged(it)
     }
     return Value.Undefined
@@ -525,6 +555,7 @@ fn akCanvasDraw(it: *mut Interp, a: Args) JsError!Value {
 fn akCanvasPixels(it: *mut Interp, a: Args) JsError!Value {
     let c = try canvasBitmap(it, it.arg(a, 0))
     let bmp = c.bmp
+    let page = scriptOf(it).active
     var n = [4]f64{0.0, 0.0, 0.0, 0.0}
     for k in 0..4 {
         n[k] = try it.toNumber(it.arg(a, k + 1))
@@ -541,8 +572,27 @@ fn akCanvasPixels(it: *mut Interp, a: Args) JsError!Value {
     let h = n[3] as usize
     let data = it.arg(a, 5)
     let putting = !js.isNullish(data)
-    if !putting && c.tainted {
-        return domError(it, "SecurityError", "Canvas is not origin-clean")
+    if !putting {
+        for current in page.images.?.canvases.items() {
+            if current.bmp == bmp && current.tainted {
+                return domError(it, "SecurityError", "Canvas is not origin-clean")
+            }
+        }
+    }
+    var incoming: ?[]mut u8 = null
+    defer if incoming |bytes| {
+        it.alloc.free(bytes)
+    }
+    if putting {
+        incoming = try it.alloc.alloc(0 as u8, w * h * 4)
+        for i in 0..incoming.?.len {
+            let v = try it.toNumber(try canvasIndex(it, data, i))
+            var byte = 0.0
+            if v == v {
+                byte = math.clamp(v, 0.0, 255.0)
+            }
+            incoming.?[i] = math.floor(byte + 0.5) as u8
+        }
     }
     var arr: u32 = js.NONE
     if !putting {
@@ -563,13 +613,8 @@ fn akCanvasPixels(it: *mut Interp, a: Args) JsError!Value {
             }
             for k in 0..4 {
                 if putting {
-                    let v = try it.toNumber(try canvasIndex(it, data, (y * w + x) * 4 + k))
                     if inBitmap {
-                        var byte = 0.0
-                        if v == v {
-                            byte = math.clamp(v, 0.0, 255.0)
-                        }
-                        bmp.pixels[i + k] = math.floor(byte + 0.5) as u8
+                        bmp.pixels[i + k] = incoming.?[(y * w + x) * 4 + k]
                     }
                 } else {
                     var byte: u8 = 0
@@ -582,6 +627,7 @@ fn akCanvasPixels(it: *mut Interp, a: Args) JsError!Value {
         }
     }
     if putting {
+        scriptOf(it).active = page
         canvasChanged(it)
         return Value.Undefined
     }

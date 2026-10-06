@@ -5,8 +5,8 @@
       <title>
         "Damaged canvas input"
     <body>
-      <canvas id="canvas" width="-1" height="-1">
+      <canvas id="canvas" width="10" height="0">
       <pre id="results">
-        "117 damaged-input operations survived"
+        "119 damaged-input operations survived"
       <script src="../canvas/damaged.js">
       "\n"

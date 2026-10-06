@@ -53,4 +53,22 @@ canvas.setAttribute('width', '-1');
 canvas.setAttribute('height', '-1');
 if (canvas.width !== 300 || canvas.height !== 150) throw new Error('invalid attributes');
 attempt(() => ctx.fillRect(0, 0, 2, 2));
+const reentrant = new ImageData(1, 1);
+reentrant.data = {
+  get 0() {
+    canvas.width = 0;
+    return 255;
+  }
+};
+attempt(() => ctx.putImageData(reentrant, 0, 0));
+canvas.width = 10;
+const paint = ctx.createLinearGradient(0, 0, 10, 0);
+Object.defineProperty(paint, 'kind', {
+  get() {
+    canvas.height = 0;
+    return 1;
+  }
+});
+ctx.fillStyle = paint;
+attempt(() => ctx.fillRect(0, 0, 10, 10));
 document.getElementById('results').textContent = count + ' damaged-input operations survived';

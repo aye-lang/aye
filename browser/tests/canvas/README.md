@@ -14,9 +14,10 @@ fallback and glyph coverage. There is no separate canvas rasterizer.
   state, Path2D, winding rules and hit tests, clipping, ImageData, text
   metrics, image/canvas/ImageBitmap sources, patterns, gradients, PNG
   data URLs and asynchronous PNG blobs.
-- `jsdom/canvas_damaged.html` runs `damaged.js`: 117 operations with
+- `jsdom/canvas_damaged.html` runs `damaged.js`: 119 operations with
   non-finite and huge arguments, malformed SVG paths, negative radii and
-  rectangles, zero-sized and oversized canvases. Both fixtures also run
+  rectangles, zero-sized and oversized canvases, and getters that resize
+  the bitmap during argument conversion. Both fixtures also run
   under the browser harness's GC-stress mode.
 - `paint/canvas_*.html`: five inspected PNG goldens for shapes,
   gradients and transforms; joins, caps and dashes; text; scaled/cropped
