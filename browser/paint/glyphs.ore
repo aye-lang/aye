@@ -96,7 +96,7 @@ pub struct TextPainter {
     // The index in `glyphs` of glyph `g` of the face of `f` at `size64`,
     // rendering it on first use.
     fn glyph(self: *mut Self, sys: *mut font.System, f: font.Font, size64: i64, g: u32) AllocError!usize {
-        let key = (g as u64 << 32) | (size64 as u64 << 3) | font.faceSlot(f) as u64
+        let key = (g as u64 << 32) | (size64 as u64 << 4) | font.faceSlot(f) as u64
         if self.index.get(key) |gi| {
             return gi
         }

@@ -2,11 +2,15 @@
 // implied `html`, `head` and `body`, knows void elements, closes `p`,
 // `li`, `dd`/`dt`, `option` and table cells and rows when the next one
 // starts, and fixes misnested formatting tags (`<b><i></b></i>`) with the
-// adoption agency algorithm. Left out: foster parenting of text inside
-// tables, templates, frames, quirks mode (every document is parsed as
-// no-quirks: a `table` closes an open `p`), and the foreign-content rules
-// of SVG and MathML (except that `<x/>` inside `svg` or `math` closes
-// itself; names are lower-cased there too).
+// adoption agency algorithm. Text and elements misplaced in a table
+// (outside its cells) are foster-parented: they go before the table. The
+// contents of a `template` go into an inert fragment out of the document
+// (`Document.templateContent`), parsed like body content. The doctype
+// decides quirks mode (`Document.quirks`; there a `table` does not close
+// an open `p`). Left out: frames, the template insertion modes (table
+// parts in a template are inserted as they come), and the foreign-content
+// rules of SVG and MathML (except that `<x/>` inside `svg` or `math`
+// closes itself; names are lower-cased there too).
 
 import dom
 import dom.Attr
@@ -34,7 +38,7 @@ let IMPLIED_END = "dd dt li optgroup option p rb rp rt rtc"
 // The "special" category: an unmatched end tag does not close past them.
 let SPECIAL = "address applet area article aside base basefont bgsound blockquote body br button caption center col colgroup dd details dir div dl dt embed fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hgroup hr html iframe img input keygen li link listing main marquee menu meta nav noembed noframes noscript object ol p param plaintext pre script search section select source style summary table tbody td template textarea tfoot th thead title tr track ul wbr xmp"
 // Elements that put a marker on the list of active formatting elements.
-let MARKERS = "applet caption marquee object td th"
+let MARKERS = "applet caption marquee object td th template"
 let TABLE_SECTIONS = "tbody tfoot thead"
 let CELLS = "td th"
 
@@ -61,6 +65,8 @@ pub fn parse(alloc: Allocator, src: []u8) AllocError!Document {
     defer alloc.free(input)
     var doc = try Document.init(alloc)
     errdefer doc.deinit()
+    // No doctype means quirks mode.
+    doc.quirks = true
     var tb = TreeBuilder {
         doc: &mut doc,
         open: List(NodeId).init(alloc),
@@ -70,6 +76,7 @@ pub fn parse(alloc: Allocator, src: []u8) AllocError!Document {
         head: null,
         body: null,
         skip_newline: false,
+        templates: 0,
     }
     defer tb.deinit()
     var tokens = Tokenizer.init(alloc, input)
@@ -141,6 +148,9 @@ struct TreeBuilder {
     body: ?NodeId
     // A newline right after `<pre>`, `<listing>` or `<textarea>` is dropped.
     skip_newline: bool
+    // How many `template` elements are open: their content is parsed as
+    // body content whatever the mode.
+    templates: usize
 
     fn deinit(self: *mut Self) {
         self.open.deinit()
@@ -179,10 +189,11 @@ struct TreeBuilder {
             self.mode = Mode.InBody
         }
         match t {
-            .Doctype { name } => {
+            .Doctype { name, quirks } => {
                 if self.html == null {
                     let d = try self.doc.createDoctype(name)
                     self.doc.appendChild(self.doc.root, d)
+                    self.doc.quirks = quirks
                 }
             }
             .Comment { data } => {
@@ -214,7 +225,7 @@ struct TreeBuilder {
     // goes back to the body.
     fn afterBody(self: *mut Self, t: Token) AllocError!bool {
         match t {
-            .Doctype { name } => {
+            .Doctype { .. } => {
                 return true
             }
             .Comment { data } => {
@@ -263,6 +274,9 @@ struct TreeBuilder {
 
     fn characters(self: *mut Self, data: []u8) AllocError!void {
         var s = data
+        if self.templates > 0 {
+            return self.bodyText(s)
+        }
         while true {
             match self.mode {
                 .BeforeHtml => {
@@ -298,14 +312,30 @@ struct TreeBuilder {
                     }
                 }
                 _ => {
-                    if s.len == 0 {
-                        return
-                    }
-                    try self.reconstruct()
-                    return self.doc.appendText(self.current(), s)
+                    return self.bodyText(s)
                 }
             }
         }
+    }
+
+    // Text in the body: into the current node, or before the table when
+    // it is misplaced in one (only whitespace stays in the table).
+    fn bodyText(self: *mut Self, s: []u8) AllocError!void {
+        if s.len == 0 {
+            return
+        }
+        if self.inTablePart() {
+            if leadingSpace(s) == s.len {
+                return self.doc.appendText(self.current(), s)
+            }
+            try self.reconstruct()
+            if self.inTablePart() {
+                return self.fosterText(s)
+            }
+            return self.doc.appendText(self.current(), s)
+        }
+        try self.reconstruct()
+        return self.doc.appendText(self.current(), s)
     }
 
     // Text in or after the head: inside `title`, `style` or `script` it is
@@ -327,6 +357,9 @@ struct TreeBuilder {
     // ---- start tags
 
     fn startTag(self: *mut Self, name: []u8, attrs: []Attr, self_closing: bool) AllocError!void {
+        if self.templates > 0 {
+            return self.inBodyStart(name, attrs, self_closing)
+        }
         while true {
             match self.mode {
                 .BeforeHtml => {
@@ -396,6 +429,9 @@ struct TreeBuilder {
     }
 
     fn inBodyStart(self: *mut Self, name: []u8, attrs: []Attr, self_closing: bool) AllocError!void {
+        if self.templates > 0 && isIn(name, "html body head frameset") {
+            return
+        }
         if text.eql(name, "html") {
             return self.mergeAttrs(self.html, attrs)
         }
@@ -440,7 +476,17 @@ struct TreeBuilder {
             let el = try self.insert(name, attrs)
             return
         }
-        if text.eql(name, "plaintext") || text.eql(name, "xmp") || text.eql(name, "table") {
+        if text.eql(name, "table") {
+            if self.inTablePart() {
+                // A table in a table (outside a cell) ends the first one.
+                self.popUntil("table")
+            } else if !self.doc.quirks {
+                try self.closeP()
+            }
+            let el = try self.insert(name, attrs)
+            return
+        }
+        if text.eql(name, "plaintext") || text.eql(name, "xmp") {
             try self.closeP()
             try self.reconstruct()
             let el = try self.insert(name, attrs)
@@ -488,7 +534,9 @@ struct TreeBuilder {
             return
         }
         if isIn(name, VOID) {
-            try self.reconstruct()
+            if !(self.inTablePart() && staysInTable(name, attrs)) {
+                try self.reconstruct()
+            }
             let el = try self.insertVoid(name, attrs)
             return
         }
@@ -524,6 +572,17 @@ struct TreeBuilder {
     // missing `tbody` and `tr` elements are added.
     fn tablePartStart(self: *mut Self, name: []u8, attrs: []Attr) AllocError!void {
         if !self.hasInScope("table", TABLE_SCOPE) {
+            if self.templates > 0 && self.hasInScope("template", TABLE_SCOPE) {
+                // In a template, table parts are kept as they come.
+                if text.eql(name, "col") {
+                    let c = try self.insertVoid(name, attrs)
+                    return
+                }
+                let el = try self.insert(name, attrs)
+                if isIn(name, "caption td th") {
+                    try self.pushMarker()
+                }
+            }
             return
         }
         if text.eql(name, "caption") || text.eql(name, "colgroup") {
@@ -576,6 +635,12 @@ struct TreeBuilder {
     // ---- end tags
 
     fn endTag(self: *mut Self, name: []u8) AllocError!void {
+        if text.eql(name, "template") {
+            return self.endTemplate()
+        }
+        if self.templates > 0 {
+            return self.inBodyEnd(name)
+        }
         let ends_head = isIn(name, "head body html br")
         while true {
             match self.mode {
@@ -927,7 +992,10 @@ struct TreeBuilder {
         for k in i..n {
             let old = self.active.items()[k].el
             let el = try self.cloneElement(old)
-            self.doc.appendChild(self.current(), el)
+            let on = self.doc.node(old)
+            let name = on.name
+            let attrs = on.attrs
+            self.place(el, name, attrs)
             try self.open.append(el)
             self.active.items()[k] = Formatting { el: el, marker: false }
         }
@@ -1080,26 +1148,117 @@ struct TreeBuilder {
 
     // ---- inserting
 
-    // A new element appended to the current node and pushed.
+    // A new element appended to the current node (or foster-parented)
+    // and pushed.
     fn insert(self: *mut Self, name: []u8, attrs: []Attr) AllocError!NodeId {
         let el = try self.doc.createElement(name, attrs)
-        self.doc.appendChild(self.current(), el)
+        self.place(el, name, attrs)
         try self.open.append(el)
         return el
     }
 
-    // A new element appended to the current node, not pushed.
+    // A new element appended to the current node (or foster-parented),
+    // not pushed.
     fn insertVoid(self: *mut Self, name: []u8, attrs: []Attr) AllocError!NodeId {
         let el = try self.doc.createElement(name, attrs)
-        self.doc.appendChild(self.current(), el)
+        self.place(el, name, attrs)
         return el
     }
 
     fn insertMaybeVoid(self: *mut Self, name: []u8, attrs: []Attr) AllocError!NodeId {
+        if text.eql(name, "template") {
+            return self.startTemplate(attrs)
+        }
         if isIn(name, VOID) {
             return self.insertVoid(name, attrs)
         }
         return self.insert(name, attrs)
+    }
+
+    // ---- foster parenting (WHATWG 13.2.6.1)
+
+    // Is the current node a table, a table section or a row: where text
+    // and other elements do not belong?
+    fn inTablePart(self: *Self) bool {
+        return isIn(self.currentName(), "table tbody tfoot thead tr")
+    }
+
+    // Puts the new element `el` at the appropriate place: last in the
+    // current node, or before the table when it does not belong there.
+    fn place(self: *mut Self, el: NodeId, name: []u8, attrs: []Attr) {
+        if self.inTablePart() && !staysInTable(name, attrs) {
+            self.foster(el)
+            return
+        }
+        self.doc.appendChild(self.current(), el)
+    }
+
+    // Inserts `n` before the last open table (in its parent).
+    fn foster(self: *mut Self, n: NodeId) {
+        let t = self.lastOpenTable()
+        if self.doc.parent(t) |p| {
+            self.doc.insertBefore(p, n, t)
+        } else if self.stackIndex(t) |i| {
+            if i > 0 {
+                self.doc.appendChild(self.open.items()[i - 1], n)
+            }
+        }
+    }
+
+    // Text before the last open table, joined to a text node there.
+    fn fosterText(self: *mut Self, s: []u8) AllocError!void {
+        let t = self.lastOpenTable()
+        if self.doc.prevSibling(t) |prev| {
+            if self.doc.node(prev).kind == dom.Kind.Text {
+                let old = self.doc.node(prev).data
+                let a = self.doc.strings.allocator()
+                let joined = try a.alloc(0 as u8, old.len + s.len)
+                for i, c in old {
+                    joined[i] = c
+                }
+                for i, c in s {
+                    joined[old.len + i] = c
+                }
+                self.doc.node(prev).data = joined
+                return
+            }
+        }
+        let n = try self.doc.createText(s)
+        self.foster(n)
+    }
+
+    fn lastOpenTable(self: *Self) NodeId {
+        let items = self.open.items()
+        var i = items.len
+        while i > 0 {
+            i -= 1
+            if self.doc.isElement(items[i], "table") {
+                return items[i]
+            }
+        }
+        return self.current()
+    }
+
+    // ---- templates
+
+    // `<template>`: the element where it belongs, and its inert fragment
+    // as the current node, until `</template>`.
+    fn startTemplate(self: *mut Self, attrs: []Attr) AllocError!NodeId {
+        let t = try self.insert("template", attrs)
+        try self.pushMarker()
+        let frag = try self.doc.createTemplateContent(t)
+        try self.open.append(frag)
+        self.templates += 1
+        return t
+    }
+
+    fn endTemplate(self: *mut Self) AllocError!void {
+        if self.templates == 0 {
+            return
+        }
+        self.generateImpliedEnd("")
+        self.popUntil("template")
+        self.templates -= 1
     }
 
     // Adds the attributes of `attrs` that `target` does not have yet
@@ -1141,6 +1300,21 @@ struct TreeBuilder {
         self.body = try self.insert("body", []Attr{})
         self.mode = Mode.InBody
     }
+}
+
+// Elements that are inserted in a table where they are, not before it.
+fn staysInTable(name: []u8, attrs: []Attr) bool {
+    if isIn(name, "caption colgroup col tbody tfoot thead tr td th table script style template form") {
+        return true
+    }
+    if text.eql(name, "input") {
+        for a in attrs {
+            if text.eql(a.name, "type") && text.eqlIgnoreCase(text.trim(a.value), "hidden") {
+                return true
+            }
+        }
+    }
+    return false
 }
 
 // The number of HTML whitespace bytes at the start of `s`.

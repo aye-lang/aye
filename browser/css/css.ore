@@ -27,7 +27,8 @@ pub struct Color {
 }
 
 /// A property value. Specified values may be any variant; computed values
-/// are `Keyword`, `Px`, `Percent`, `Number`, `Rgba` or `CurrentColor`.
+/// are `Keyword`, `Px`, `Percent`, `Calc`, `Number`, `Rgba` or
+/// `CurrentColor`.
 pub enum Value {
     // A keyword, or a list of them ("underline overline"), or a font
     // family list.
@@ -40,6 +41,9 @@ pub enum Value {
     Percent { v: f64 }
     Number { v: f64 }
     Rgba { c: Color }
+    // A `calc()` length that mixes a percentage and pixels: `pct`% of the
+    // reference length plus `px` (layout resolves it).
+    Calc { pct: f64, px: f64 }
     CurrentColor
     Inherit
     Initial
@@ -220,11 +224,21 @@ fn eqlBytes(a: []u8, b: []u8) bool {
 
 // ---- style sheets
 
-/// A declaration of a longhand property.
+/// `Decl.prop` of a custom property (`--name`).
+pub let CUSTOM: usize = 100000
+
+/// A declaration of a longhand property (or of a custom property).
 pub struct Decl {
     prop: usize
     value: Value
     important: bool
+    // A value computed at computed-value time (one with `var()` or
+    // `calc()`): its tokens, and `value` is unused. Also the value of a
+    // custom property.
+    raw: []Token
+    // A custom property: its name. A longhand of a shorthand with `var()`:
+    // the shorthand, parsed again once `var()` is substituted.
+    name: []u8
 }
 
 /// A style rule: selectors `sel_start..sel_end` of `Sheet.complexes` and
@@ -247,6 +261,9 @@ pub struct Sheet {
     compounds: List(Compound)
     simples: List(Simple)
     decls: List(Decl)
+    // The URLs of the `@import` rules whose media match, as the parser
+    // met them (the loader fetches them: engine/sheets.ore).
+    imports: List([]u8)
 
     pub fn init(alloc: Allocator) AllocError!Sheet {
         let arena = try alloc.create(Arena.init(alloc))
@@ -259,11 +276,36 @@ pub struct Sheet {
             compounds: List(Compound).init(a),
             simples: List(Simple).init(a),
             decls: List(Decl).init(a),
+            imports: List([]u8).init(a),
         }
     }
 
     pub fn deinit(self: *mut Self) {
         self.arena.deinit()
         self.alloc.destroy(self.arena)
+    }
+
+    /// Moves the rules `mid..` (those of imported sheets, parsed last)
+    /// before the rules `from..mid`, so that they come first in the
+    /// cascade order as `@import` wants.
+    pub fn moveRulesFirst(self: *mut Self, from: usize, mid: usize) AllocError!void {
+        let rules = self.rules.items()
+        if mid <= from || mid >= rules.len {
+            return
+        }
+        let a = self.arena.allocator()
+        let copy = try a.alloc(rules[0], rules.len - from)
+        var n: usize = 0
+        for k in mid..rules.len {
+            copy[n] = rules[k]
+            n += 1
+        }
+        for k in from..mid {
+            copy[n] = rules[k]
+            n += 1
+        }
+        for k in 0..n {
+            rules[from + k] = copy[k]
+        }
     }
 }

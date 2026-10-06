@@ -18,6 +18,53 @@ pub struct Font {
     bold: bool
     italic: bool
     mono: bool
+    // A serif face (when `mono` is false).
+    serif: bool = false
+}
+
+/// The kinds of faces a CSS font family list maps to.
+pub enum Generic {
+    Sans
+    Serif
+    Mono
+}
+
+// Family names (lower case) of each kind; the generic names included.
+let SANS_NAMES = "sans-serif|ui-sans-serif|system-ui|-apple-system|blinkmacsystemfont|segoe ui|segoe ui variable|roboto|helvetica neue|helvetica|arial|verdana|geneva|tahoma|trebuchet ms|noto sans|liberation sans|dejavu sans|ubuntu|cantarell|open sans|lucida grande|lucida sans unicode|inter|mona sans|hubot sans|fira sans|source sans pro|arimo|sf pro text|sf pro display"
+let SERIF_NAMES = "serif|ui-serif|georgia|times|times new roman|cambria|palatino|palatino linotype|book antiqua|garamond|linux libertine|noto serif|dejavu serif|liberation serif|source serif pro|charter|iowan old style|tinos"
+let MONO_NAMES = "monospace|ui-monospace|menlo|monaco|consolas|courier|courier new|sfmono-regular|sf mono|liberation mono|dejavu sans mono|lucida console|andale mono|source code pro|fira code|fira mono|roboto mono|jetbrains mono|cascadia code|cascadia mono|ubuntu mono|noto sans mono|cousine"
+
+/// The kind of face for the CSS `font-family` list `families`: the first
+/// family that names a known font or a generic family decides; a list
+/// of only unknown families gets the default, serif.
+pub fn genericOf(families: []u8) Generic {
+    var parts = text.split(families, ",")
+    while parts.next() |part| {
+        var name = text.trim(part)
+        if name.len >= 2 && (name[0] == '"' || name[0] == '\'') {
+            name = text.trim(name[1..name.len - 1])
+        }
+        if inNames(name, MONO_NAMES) {
+            return Generic.Mono
+        }
+        if inNames(name, SANS_NAMES) {
+            return Generic.Sans
+        }
+        if inNames(name, SERIF_NAMES) {
+            return Generic.Serif
+        }
+    }
+    return Generic.Serif
+}
+
+fn inNames(name: []u8, names: []u8) bool {
+    var words = text.split(names, "|")
+    while words.next() |w| {
+        if text.eqlIgnoreCase(w, name) {
+            return true
+        }
+    }
+    return false
 }
 
 /// Vertical metrics of a font at a size, in px. The `normal` line height
@@ -69,6 +116,16 @@ pub fn columns(c: u32) u32 {
         return 2
     }
     return 1
+}
+
+test "font families" {
+    @expect(genericOf("Verdana, Geneva, sans-serif") == Generic.Sans)
+    @expect(genericOf("\"Mona Sans\", -apple-system, sans-serif") == Generic.Sans)
+    @expect(genericOf("ui-monospace, SFMono-Regular, \"SF Mono\", Menlo, monospace") == Generic.Mono)
+    @expect(genericOf("Georgia, \"Times New Roman\", serif") == Generic.Serif)
+    @expect(genericOf("serif") == Generic.Serif)
+    @expect(genericOf("SomeWebFont") == Generic.Serif)
+    @expect(genericOf("SomeWebFont, Arial") == Generic.Sans)
 }
 
 test "fixed metrics" {

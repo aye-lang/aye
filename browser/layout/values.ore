@@ -23,8 +23,17 @@ pub fn lengthOf(v: Value, base: f64) ?f64 {
     return match v {
         .Px { v: n } => n
         .Percent { v: n } => percentOf(n, base)
+        .Calc { pct, px } => calcOf(pct, px, base)
         _ => null
     }
+}
+
+// `calc(pct% + px)`; null when the base is unknown, as for a percentage.
+fn calcOf(pct: f64, px: f64, base: f64) ?f64 {
+    if base < 0.0 {
+        return null
+    }
+    return base * pct / 100.0 + px
 }
 
 fn percentOf(n: f64, base: f64) ?f64 {
@@ -55,27 +64,14 @@ pub fn numberOf(v: Value, fallback: f64) f64 {
 pub fn fontOf(style: []Value) font.Font {
     let size = numberOf(style[css.FONT_SIZE], 16.0)
     let weight = numberOf(style[css.FONT_WEIGHT], 400.0)
-    let family = keywordOf(style[css.FONT_FAMILY])
-    let mono = containsWord(family, "monospace") || containsWord(family, "courier") || containsWord(family, "menlo") || containsWord(family, "monaco") || containsWord(family, "consolas")
+    let generic = font.genericOf(keywordOf(style[css.FONT_FAMILY]))
     return font.Font {
         size: size,
         bold: weight >= 600.0,
         italic: !isKeyword(style[css.FONT_STYLE], "normal"),
-        mono: mono,
+        mono: generic == font.Generic.Mono,
+        serif: generic == font.Generic.Serif,
     }
-}
-
-// Does `s` contain `word`, ignoring ASCII case?
-fn containsWord(s: []u8, word: []u8) bool {
-    if word.len > s.len {
-        return false
-    }
-    for i in 0..s.len - word.len + 1 {
-        if text.eqlIgnoreCase(s[i..i + word.len], word) {
-            return true
-        }
-    }
-    return false
 }
 
 /// Metrics of the font of `style` and its used line height.

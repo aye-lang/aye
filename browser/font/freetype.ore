@@ -122,9 +122,9 @@ let FT_STYLE_FLAG_BOLD: i64 = 2
 
 pub error FontError { NoFreeType, NoFont }
 
-// Candidate files of each face, by `faceSlot` (monospace * 4 + bold * 2
-// + italic), separated by `|`. Collections (.ttc) are searched for the
-// face with the wanted style flags.
+// Candidate files of each face, by `faceSlot` (serif * 8 + monospace * 4
+// + bold * 2 + italic), separated by `|`. Collections (.ttc) are searched
+// for the face with the wanted style flags.
 let SANS = "/System/Library/Fonts/Supplemental/Arial.ttf|/System/Library/Fonts/Helvetica.ttc|/Library/Fonts/Arial Unicode.ttf|/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf|/usr/share/fonts/TTF/DejaVuSans.ttf|/usr/share/fonts/dejavu/DejaVuSans.ttf"
 let SANS_ITALIC = "/System/Library/Fonts/Supplemental/Arial Italic.ttf|/System/Library/Fonts/Helvetica.ttc|/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf|/usr/share/fonts/TTF/DejaVuSans-Oblique.ttf|/usr/share/fonts/dejavu/DejaVuSans-Oblique.ttf"
 let SANS_BOLD = "/System/Library/Fonts/Supplemental/Arial Bold.ttf|/System/Library/Fonts/Helvetica.ttc|/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf|/usr/share/fonts/TTF/DejaVuSans-Bold.ttf|/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf"
@@ -133,11 +133,15 @@ let MONO = "/System/Library/Fonts/Supplemental/Courier New.ttf|/System/Library/F
 let MONO_ITALIC = "/System/Library/Fonts/Supplemental/Courier New Italic.ttf|/System/Library/Fonts/Menlo.ttc|/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Oblique.ttf|/usr/share/fonts/TTF/DejaVuSansMono-Oblique.ttf|/usr/share/fonts/dejavu/DejaVuSansMono-Oblique.ttf"
 let MONO_BOLD = "/System/Library/Fonts/Supplemental/Courier New Bold.ttf|/System/Library/Fonts/Menlo.ttc|/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf|/usr/share/fonts/TTF/DejaVuSansMono-Bold.ttf|/usr/share/fonts/dejavu/DejaVuSansMono-Bold.ttf"
 let MONO_BOLD_ITALIC = "/System/Library/Fonts/Supplemental/Courier New Bold Italic.ttf|/System/Library/Fonts/Menlo.ttc|/usr/share/fonts/truetype/dejavu/DejaVuSansMono-BoldOblique.ttf|/usr/share/fonts/TTF/DejaVuSansMono-BoldOblique.ttf|/usr/share/fonts/dejavu/DejaVuSansMono-BoldOblique.ttf"
+let SERIF = "/System/Library/Fonts/Supplemental/Times New Roman.ttf|/System/Library/Fonts/Times.ttc|/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf|/usr/share/fonts/TTF/DejaVuSerif.ttf|/usr/share/fonts/dejavu/DejaVuSerif.ttf|/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf"
+let SERIF_ITALIC = "/System/Library/Fonts/Supplemental/Times New Roman Italic.ttf|/System/Library/Fonts/Times.ttc|/usr/share/fonts/truetype/dejavu/DejaVuSerif-Italic.ttf|/usr/share/fonts/TTF/DejaVuSerif-Italic.ttf|/usr/share/fonts/dejavu/DejaVuSerif-Italic.ttf|/usr/share/fonts/truetype/liberation/LiberationSerif-Italic.ttf"
+let SERIF_BOLD = "/System/Library/Fonts/Supplemental/Times New Roman Bold.ttf|/System/Library/Fonts/Times.ttc|/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf|/usr/share/fonts/TTF/DejaVuSerif-Bold.ttf|/usr/share/fonts/dejavu/DejaVuSerif-Bold.ttf|/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf"
+let SERIF_BOLD_ITALIC = "/System/Library/Fonts/Supplemental/Times New Roman Bold Italic.ttf|/System/Library/Fonts/Times.ttc|/usr/share/fonts/truetype/dejavu/DejaVuSerif-BoldItalic.ttf|/usr/share/fonts/TTF/DejaVuSerif-BoldItalic.ttf|/usr/share/fonts/dejavu/DejaVuSerif-BoldItalic.ttf|/usr/share/fonts/truetype/liberation/LiberationSerif-BoldItalic.ttf"
 
 pub struct System {
     library: *mut FTLibraryRec
     // By `faceSlot`; null when no file had that variant.
-    faces: [8]?*mut FTFaceRec
+    faces: [12]?*mut FTFaceRec
     // `faces[0]`, which every lookup falls back to.
     regular: *mut FTFaceRec
 
@@ -149,8 +153,8 @@ pub struct System {
             return FontError.NoFreeType
         }
         if lib |library| {
-            var faces = [8]?*mut FTFaceRec{null, null, null, null, null, null, null, null}
-            let lists = [8][]u8{SANS, SANS_ITALIC, SANS_BOLD, SANS_BOLD_ITALIC, MONO, MONO_ITALIC, MONO_BOLD, MONO_BOLD_ITALIC}
+            var faces = [12]?*mut FTFaceRec{null, ..}
+            let lists = [12][]u8{SANS, SANS_ITALIC, SANS_BOLD, SANS_BOLD_ITALIC, MONO, MONO_ITALIC, MONO_BOLD, MONO_BOLD_ITALIC, SERIF, SERIF_ITALIC, SERIF_BOLD, SERIF_BOLD_ITALIC}
             for slot, list in lists {
                 faces[slot] = findFace(alloc, library, list, (slot & 2) != 0, (slot & 1) != 0)
             }
@@ -177,13 +181,17 @@ pub struct System {
         FT_Done_FreeType(self.library)
     }
 
-    /// The FreeType face for `f`, with the fallbacks.
+    /// The FreeType face for `f`, with the fallbacks: the regular face
+    /// of its kind, then the sans-serif face with the same style.
     pub fn faceFor(self: *Self, f: Font) *mut FTFaceRec {
         let slot = faceSlot(f)
         if self.faces[slot] |face| {
             return face
         }
-        if self.faces[slot & 4] |face| {
+        if self.faces[slot & 12] |face| {
+            return face
+        }
+        if self.faces[slot & 3] |face| {
             return face
         }
         return self.regular
@@ -322,11 +330,14 @@ fn styleFlags(bold: bool, italic: bool) i64 {
     return flags
 }
 
-/// The variant of `f` as an index 0..8: monospace * 4 + bold * 2 + italic.
+/// The variant of `f` as an index 0..12: serif * 8 + monospace * 4 +
+/// bold * 2 + italic.
 pub fn faceSlot(f: Font) usize {
     var slot: usize = 0
     if f.mono {
         slot += 4
+    } else if f.serif {
+        slot += 8
     }
     if f.bold {
         slot += 2

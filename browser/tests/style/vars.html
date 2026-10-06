@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<style>
+:root { --fg: #123456; --gap: 10px; --m: 4px 8px; --border: 1px solid var(--fg); --a: var(--b); --b: var(--a); --Case: 3px }
+body { color: var(--fg); margin: var(--m) }
+.box { border: var(--border); padding: var( --gap ); --gap: 5px }
+.override { --fg: red; color: var(--fg); background-color: var(--nope, var(--fg)) }
+.cycle { color: var(--a, green) }
+.missing { color: var(--undefined); margin-top: var(--undefined, 7px) }
+.case { margin-left: var(--case, 1px); margin-right: var(--Case) }
+.important { color: var(--fg) !important }
+.later { color: blue }
+.font { font: italic bold var(--size, 20px)/1.5 Georgia, serif }
+.nested { --inner: var(--fg); border-left: 2px solid var(--inner) }
+.bad { width: var(--fg) }
+</style>
+<div class="box"><p class="override">override</p><p class="cycle">cycle</p></div>
+<p class="missing">missing</p><p class="case">case</p>
+<p class="important later">important</p><p class="font">font</p>
+<p class="nested">nested</p><p class="bad">bad</p>
+<p style="--fg: orange; color: var(--fg)">inline</p>

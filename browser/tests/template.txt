@@ -1,0 +1,5 @@
+Before
+
+cell
+
+After bold still bold

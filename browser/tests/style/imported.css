@@ -1,0 +1,3 @@
+@import "imported_nested.css";
+.i1 { color: green }
+.k { color: blue }

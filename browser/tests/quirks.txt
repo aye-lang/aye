@@ -1,0 +1,3 @@
+Without a doctype the document is in quirks mode, where
+
+a table stays inside the paragraph

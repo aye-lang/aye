@@ -73,6 +73,11 @@ pub struct Document {
     root: NodeId
     // The state of form controls and the focus (controls.ore).
     controls: Controls
+    // Quirks mode (no doctype, or a legacy one): set by the HTML parser.
+    quirks: bool
+    // The contents of `template` elements: pairs of a template and the
+    // root of its inert fragment (a tree out of the document).
+    templates: List(NodeId)
 
     /// An empty document: only the `Document` node.
     pub fn init(alloc: Allocator) AllocError!Document {
@@ -82,10 +87,19 @@ pub struct Document {
             alloc.destroy(strings)
             return e
         }
-        return Document { alloc: alloc, nodes: nodes, strings: strings, root: root, controls: Controls.init(alloc) }
+        return Document {
+            alloc: alloc,
+            nodes: nodes,
+            strings: strings,
+            root: root,
+            controls: Controls.init(alloc),
+            quirks: false,
+            templates: List(NodeId).init(alloc),
+        }
     }
 
     pub fn deinit(self: *mut Self) {
+        self.templates.deinit()
         self.controls.deinit()
         self.strings.deinit()
         self.alloc.destroy(self.strings)
@@ -143,6 +157,30 @@ pub struct Document {
 
     pub fn createDoctype(self: *mut Self, name: []u8) AllocError!NodeId {
         return self.nodes.insert(blank(Kind.Doctype, try self.dup(name), ""))
+    }
+
+    /// A new, empty fragment for the contents of the template `t`: a
+    /// tree of its own, out of the document, so that rendering, text and
+    /// queries never see it.
+    pub fn createTemplateContent(self: *mut Self, t: NodeId) AllocError!NodeId {
+        let frag = try self.nodes.insert(blank(Kind.Document, "#document-fragment", ""))
+        try self.templates.append(t)
+        try self.templates.append(frag)
+        return frag
+    }
+
+    /// The root of the contents of the template `t` (null when `t` is not
+    /// a parsed template).
+    pub fn templateContent(self: *Self, t: NodeId) ?NodeId {
+        let items = self.templates.items()
+        var i: usize = 0
+        while i + 1 < items.len {
+            if same(items[i], t) {
+                return items[i + 1]
+            }
+            i += 2
+        }
+        return null
     }
 
     // ---- changing the tree

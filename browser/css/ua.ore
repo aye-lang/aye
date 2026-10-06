@@ -68,6 +68,23 @@ let UA_RULES = [_][]u8{
     "legend { padding-left: 2px; padding-right: 2px }",
 }
 
+// In quirks mode only (HTML, "Rendering", 15.3.1): tables do not inherit
+// the font and text alignment of their surroundings.
+let QUIRKS_RULES = [_][]u8{
+    "table { font-weight: initial; font-style: initial; font-size: initial; line-height: initial; white-space: initial; text-align: initial }",
+    "form { margin-bottom: 1em }",
+    "img[align=left i] { margin-right: 3px }",
+    "img[align=right i] { margin-left: 3px }",
+}
+
+/// Parses the rules that the user-agent style sheet adds in quirks mode
+/// into `sheet`.
+pub fn quirksSheet(sheet: *mut Sheet) AllocError!void {
+    for rule in QUIRKS_RULES {
+        try parseSheet(sheet, rule, Media { width: 0.0, height: 0.0 })
+    }
+}
+
 /// Parses the user-agent style sheet into `sheet`.
 pub fn uaSheet(sheet: *mut Sheet, media: Media) AllocError!void {
     for rule in UA_RULES {

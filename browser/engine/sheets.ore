@@ -1,7 +1,9 @@
 // The author style sheet of a document: its `<style>` elements and
 // `<link rel=stylesheet>` sheets (fetched relative to the document's
 // base URL, with the document's URL as the Referer; the session's cache
-// keeps them), in document order, for the media that match.
+// keeps them), in document order, for the media that match. A sheet's
+// `@import` rules are fetched relative to the sheet (its URL the Referer)
+// and come before its rules (at most `MAX_IMPORT_DEPTH` sheets deep).
 
 import css
 import dom.Document
@@ -27,7 +29,7 @@ pub fn authorSheets(alloc: Allocator, doc: *Document, address: *Url, media: css.
             var src = text.Builder.init(alloc)
             defer src.deinit()
             try doc.textContent(h, &mut src)
-            try css.parseSheet(sheet, src.bytes(), media)
+            try parseWithImports(alloc, &base, address, src.bytes(), media, sheet)
         } else if doc.isElement(h, "link") && isStylesheetLink(doc, h) && (try mediaOk(doc, h, media, sheet)) {
             if doc.attr(h, "href") |href| {
                 try linkedSheet(alloc, &base, address, href, media, sheet)
@@ -94,5 +96,28 @@ fn linkedSheet(alloc: Allocator, base: *Url, address: *Url, href: []u8, media: c
     defer res.deinit(alloc)
     let src = try encoding.toUtf8(alloc, res.body, encoding.sniff(res.body, res.charset))
     defer alloc.free(src)
+    try parseWithImports(alloc, &target, &target, src, media, sheet)
+}
+
+let MAX_IMPORT_DEPTH: usize = 4
+var import_depth: usize = 0
+
+// Parses the sheet `src` (at `base`, fetched for `address`) into `sheet`,
+// with the sheets it imports before its rules.
+fn parseWithImports(alloc: Allocator, base: *Url, address: *Url, src: []u8, media: css.Media, sheet: *mut css.Sheet) AllocError!void {
+    let first_rule = sheet.rules.len()
+    let first_import = sheet.imports.len()
     try css.parseSheet(sheet, src, media)
+    let n = sheet.imports.len() - first_import
+    if n == 0 || import_depth >= MAX_IMPORT_DEPTH {
+        return
+    }
+    let mid = sheet.rules.len()
+    import_depth += 1
+    defer import_depth -= 1
+    for k in 0..n {
+        let href = sheet.imports.items()[first_import + k]
+        try linkedSheet(alloc, base, address, href, media, sheet)
+    }
+    try sheet.moveRulesFirst(first_rule, mid)
 }

@@ -1,0 +1,7 @@
+- heading "Scripts" [level=1] [e1]
+- paragraph
+  - text: This page works better with
+  - link "JavaScript" [e2] -> /js
+  - text: .
+- paragraph: Always here.
+- paragraph: An icon and a formula .
