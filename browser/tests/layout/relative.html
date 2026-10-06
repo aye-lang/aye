@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0 }
+.r { position: relative; top: 10px; left: 20px; height: 30px; background: #ccc }
+.rb { position: relative; bottom: 5px; right: 15px; height: 30px }
+</style>
+<div class="r">moved down 10 and right 20<div>child moves too</div></div>
+<div class="rb">moved up 5 and left 15</div>
+<div>stays in the flow where the boxes were</div>
+<p>text with <span style="position: relative; top: -4px; left: 2px">a raised <b>span</b></span> inside</p>
+<div style="position: relative; top: 10%">10% of an auto height: no offset</div>

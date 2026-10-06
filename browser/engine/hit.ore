@@ -1,0 +1,209 @@
+// Questions about a laid-out page, in document coordinates (CSS px from
+// the top-left of the document): what is at a point (`nodeAt`,
+// `linkAt`), where text occurs (`findText`), and where a fragment's
+// element is (`fragmentY`).
+
+import css
+import dom
+import dom.Kind
+import dom.NodeId
+import layout
+import layout.BoxKind
+import layout.FragKind
+import layout.Tree
+import paint
+import std.list.List
+import std.mem.AllocError
+import std.sort
+import std.text
+
+/// A link: the `a` element and its `href` (in the document).
+pub struct Link {
+    el: NodeId
+    href: []u8
+}
+
+fn inside(x: f64, y: f64, rx: f64, ry: f64, rw: f64, rh: f64) bool {
+    return x >= rx && x < rx + rw && y >= ry && y < ry + rh
+}
+
+/// The deepest node whose box (or line fragment) contains (`x`, `y`):
+/// a text node or an element; null for none.
+pub fn nodeAt(t: *Tree, x: f64, y: f64) ?NodeId {
+    if t.root |r| {
+        return hitBox(t, r, x, y)
+    }
+    return null
+}
+
+fn hitBox(t: *Tree, i: usize, x: f64, y: f64) ?NodeId {
+    let b = t.bx(i).*
+    if layout.hasInlineContent(t, i) {
+        let cx = b.ax + b.border[3] + b.padding[3]
+        let cy = b.ay + b.border[0] + b.padding[0]
+        var li = b.line_end
+        while li > b.line_start {
+            li -= 1
+            let line = t.lines.items()[li]
+            var fi = line.frag_end
+            while fi > line.frag_start {
+                fi -= 1
+                let f = t.frags.items()[fi]
+                if f.kind == FragKind.Atomic {
+                    if hitBox(t, f.box, x, y) |n| {
+                        return n
+                    }
+                } else if inside(x, y, cx + f.x, cy + f.y, f.w, f.h) {
+                    if t.bx(f.box).node |n| {
+                        return n
+                    }
+                }
+            }
+        }
+    } else {
+        let kids = t.children(i)
+        var k = kids.len
+        while k > 0 {
+            k -= 1
+            if hitBox(t, kids[k], x, y) |n| {
+                return n
+            }
+        }
+    }
+    if b.kind != BoxKind.Inline && b.kind != BoxKind.Text && inside(x, y, b.ax, b.ay, b.w, b.h) {
+        return b.node
+    }
+    return null
+}
+
+/// The link at (`x`, `y`): the nearest `a` element with an `href`
+/// around the node there.
+pub fn linkAt(t: *Tree, x: f64, y: f64) ?Link {
+    var cur = nodeAt(t, x, y)
+    while cur |n| {
+        if t.doc.isElement(n, "a") {
+            if t.doc.attr(n, "href") |href| {
+                return Link { el: n, href: href }
+            }
+        }
+        cur = t.doc.parent(n)
+    }
+    return null
+}
+
+/// Appends to `out` the rectangle of each occurrence of `query` (ASCII
+/// letters in any case) in the text of the page, top to bottom. Text
+/// that spans fragments (across lines or inline boxes) is not found.
+pub fn findText(t: *mut Tree, query: []u8, out: *mut List(paint.Rect)) AllocError!void {
+    if query.len == 0 {
+        return
+    }
+    let first = out.len()
+    for i in 0..t.boxes.len() {
+        if !layout.hasInlineContent(t, i) {
+            continue
+        }
+        let b = t.bx(i).*
+        let cx = b.ax + b.border[3] + b.padding[3]
+        let cy = b.ay + b.border[0] + b.padding[0]
+        for li in b.line_start..b.line_end {
+            let line = t.lines.items()[li]
+            for fi in line.frag_start..line.frag_end {
+                let f = t.frags.items()[fi]
+                if f.kind != FragKind.Text {
+                    continue
+                }
+                let tb = t.bx(f.box).*
+                if !layout.isKeyword(tb.style[css.VISIBILITY], "visible") {
+                    continue
+                }
+                let s = tb.text[f.start..f.end]
+                let face = layout.fontOf(tb.style)
+                var k: usize = 0
+                while k + query.len <= s.len {
+                    if text.eqlIgnoreCase(s[k..k + query.len], query) {
+                        let x0 = t.measure.width(face, s[..k])
+                        let w = t.measure.width(face, s[k..k + query.len])
+                        try out.append(paint.Rect { x: cx + f.x + x0, y: cy + f.y, w: w, h: f.h })
+                        k += query.len
+                    } else {
+                        k += 1
+                    }
+                }
+            }
+        }
+    }
+    sort.sort(paint.Rect, out.items()[first..], above)
+}
+
+fn above(a: paint.Rect, b: paint.Rect) bool {
+    if a.y != b.y {
+        return a.y < b.y
+    }
+    return a.x < b.x
+}
+
+/// The top of the element whose `id` (or, for an `a`, `name`) is
+/// `fragment`; null when there is none or it has no box.
+pub fn fragmentY(t: *Tree, fragment: []u8) ?f64 {
+    var target: ?NodeId = t.doc.getElementById(fragment)
+    if target == null {
+        var cur: ?NodeId = t.doc.root
+        while cur |n| {
+            if t.doc.isElement(n, "a") {
+                if t.doc.attr(n, "name") |name| {
+                    if text.eql(name, fragment) {
+                        target = n
+                        break
+                    }
+                }
+            }
+            cur = t.doc.following(n, t.doc.root)
+        }
+    }
+    if target |el| {
+        return topOf(t, el)
+    }
+    return null
+}
+
+// The top of the first box or fragment of `el`, or of the first one of
+// a node after it.
+fn topOf(t: *Tree, el: NodeId) ?f64 {
+    var cur: ?NodeId = el
+    while cur |n| {
+        for i in 0..t.boxes.len() {
+            let b = t.bx(i)
+            if dom.isSame(b.node, n) {
+                if b.kind != BoxKind.Inline && b.kind != BoxKind.Text {
+                    return b.ay
+                }
+                if fragTop(t, i) |y| {
+                    return y
+                }
+            }
+        }
+        cur = t.doc.following(n, t.doc.root)
+    }
+    return null
+}
+
+// The top of the first fragment of the inline or text box `i`.
+fn fragTop(t: *Tree, i: usize) ?f64 {
+    for c in 0..t.boxes.len() {
+        if !layout.hasInlineContent(t, c) {
+            continue
+        }
+        let b = t.bx(c).*
+        for li in b.line_start..b.line_end {
+            let line = t.lines.items()[li]
+            for fi in line.frag_start..line.frag_end {
+                let f = t.frags.items()[fi]
+                if f.box == i {
+                    return b.ay + b.border[0] + b.padding[0] + f.y
+                }
+            }
+        }
+    }
+    return null
+}

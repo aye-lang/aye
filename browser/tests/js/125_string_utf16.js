@@ -1,0 +1,12 @@
+const smile = '😀';
+console.log(smile.length, 'é'.length, '日本'.length, 'a😀b'.length);
+console.log(smile.charCodeAt(0).toString(16), smile.charCodeAt(1).toString(16));
+console.log(smile.codePointAt(0).toString(16), [...smile].length, Array.from('a😀b'));
+const s = 'naïve café 日本語';
+console.log(s.slice(0, 5), s.slice(6, 10), s.slice(-3), s.length);
+console.log(s.indexOf('café'), s.indexOf('日'), s.toUpperCase());
+console.log('😀😃'.slice(0, 2) === '😀', '😀😃'.slice(2), '😀😃'.split(''.padEnd(0)).length);
+console.log('abc😀'.split('').map((c) => c.charCodeAt(0)));
+console.log(smile.substring(0, 1).length, smile[0] === '\ud83d');
+const flag = '👍🏽';
+console.log(flag.length, [...flag].length);

@@ -1,0 +1,8 @@
+1 2 3 4
+1 default e-default
+1 { b: { c: 2, d: [ 3, 4 ] }, e: undefined }
+{ c: 2, d: [ 3, 4 ] }
+1 5
+5
+function
+TypeError

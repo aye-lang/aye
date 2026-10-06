@@ -1,0 +1,20 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "style"
+      "\n"
+    <body>
+      <div id="d" style="color: red; background-color: rgb(0, 128, 0); padding-left: 5px;">
+        "styled"
+      "\n"
+      <div id="e" style="width: 50px; display: flex;">
+        "plain"
+      "\n"
+      <pre id="out">
+        "blue 3px \"\"\ncolor: red; background-color: rgb(0, 128, 0); padding-left: 5px; 3 5px\ndisplay: none; width: 50px; none true\ntrue\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst d = document.getElementById('d');\nlog(d.style.color, d.style.marginTop, JSON.stringify(d.style.fontSize));\nd.style.color = 'red';\nd.style.backgroundColor = 'rgb(0, 128, 0)';\nd.style.marginTop = '';\nd.style.setProperty('padding-left', '5px');\nlog(d.style.cssText, d.style.length, d.style.getPropertyValue('padding-left'));\nconst e = document.getElementById('e');\ne.style.display = 'none';\ne.style.cssText = e.style.cssText + ' width: 50px;';\nlog(e.getAttribute('style'), e.style.removeProperty('display'), e.style.display === '');\ne.style.display = 'flex';\nlog(d.style === d.style);\n"
+      "\n"

@@ -1,0 +1,21 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Text"
+      "\n"
+    <body>
+      <p id="p">
+        "Goodbye "
+        <b>
+          "bold"
+        " moon"
+      "\n"
+      <p>
+      <pre id="out">
+        "textContent: Hello bold world\nnodeType 3 nodeName #text data \"Hello \" length 6\nafter: Goodbye bold moon\nq children 1 #text\nemptied 0 false\ndocument.textContent  element nodeValue \n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst p = document.getElementById('p');\nlog('textContent:', p.textContent);\nconst t = p.firstChild;\nlog('nodeType', t.nodeType, 'nodeName', t.nodeName, 'data', JSON.stringify(t.data), 'length', t.length);\nt.data = 'Goodbye ';\np.lastChild.nodeValue = ' moon';\nlog('after:', p.textContent);\nconst q = document.createElement('p');\nq.textContent = '<not markup> & stuff';\ndocument.body.insertBefore(q, document.getElementById('out'));\nlog('q children', q.childNodes.length, q.firstChild.nodeName);\nq.textContent = '';\nlog('emptied', q.childNodes.length, q.hasChildNodes());\nlog('document.textContent', document.textContent, 'element nodeValue', p.nodeValue);\n"
+      "\n"

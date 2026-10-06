@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<title>innerHTML</title>
+<div id="box"><p>old</p></div>
+<div id="second"></div>
+<script>
+const box = document.getElementById('box');
+box.innerHTML = '<h2 class="t">Title &amp; more</h2><ul><li>one<li>two</ul><img src="x.png" alt="pic"><!-- note -->tail';
+document.getElementById('second').innerHTML = 'plain &lt;text&gt; with <b>bold <i>nested</i></b>';
+const n = document.createElement('section');
+n.innerHTML = '<script>document.title = "ran"<\/script><p>after script</p>';
+box.appendChild(n);
+document.getElementById('second').insertAdjacentHTML('beforeend', '<span>end</span>');
+document.getElementById('second').insertAdjacentHTML('afterbegin', '<span>start</span>');
+document.getElementById('second').insertAdjacentHTML('afterend', '<hr>');
+</script>

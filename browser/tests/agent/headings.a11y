@@ -1,0 +1,12 @@
+- heading "Level one" [level=1] [e1]
+- heading "Level two link" [level=2] [e2]
+  - link "Level two link" [e3] -> #two
+- heading "Level three with spaces" [level=3] [e4]
+- heading "Level four" [level=4] [e5]
+- heading "Level five" [level=5] [e6]
+- heading "Level six" [level=6] [e7]
+- heading [level=2] [e8]
+- heading "Labelled heading" [level=2] [e9]
+- heading "Icon Heading with an image" [level=3] [e10]
+  - img "Icon"
+- paragraph: Target of the link.

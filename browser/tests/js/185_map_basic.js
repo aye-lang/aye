@@ -1,0 +1,11 @@
+const m = new Map();
+m.set('a', 1).set('b', 2).set('a', 3);
+console.log(m.size, m.get('a'), m.get('b'), m.get('zz'), m.has('b'), m.has('zz'));
+console.log(m.delete('a'), m.delete('a'), m.size);
+m.set(NaN, 'nan').set(0, 'zero');
+console.log(m.get(NaN), m.get(-0), m.has(+0));
+const key = {};
+m.set(key, 'obj');
+console.log(m.get(key), m.get({}));
+m.clear();
+console.log(m.size, [...m]);

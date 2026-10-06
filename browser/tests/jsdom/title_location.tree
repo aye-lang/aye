@@ -1,0 +1,15 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "  New   title "
+    "\n"
+    <body>
+      "\n"
+      <pre id="out">
+        "Old title\n\"New title\"   New   title \nfile: title_location.html true true\ntrue function 1 true\ntrue true true 800 600\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nlog(document.title);\ndocument.title = '  New   title ';\nlog(JSON.stringify(document.title), document.querySelector('title').textContent);\nlog(location.protocol, location.pathname.split('/').pop(), location.search === '', location.hash === '');\nlog(location.href === document.URL, typeof history.back, history.length, navigator.userAgent.includes('anyknown'));\nlog(window === globalThis, self === window, window.document === document, innerWidth, innerHeight);\n"
+      "\n\n"

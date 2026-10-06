@@ -1,0 +1,24 @@
+#document
+  <html>
+    <head>
+    <body>
+      <p>
+        "An icon: "
+        <svg viewbox="0 0 10 10">
+          <circle cx="5" cy="5" r="4">
+          <path d="M0 0L10 10">
+        " after"
+      "\n"
+      <math>
+        <mi>
+          "x"
+        <mo>
+          "="
+        <mn>
+          "1"
+      "\n"
+      <svg>
+      "\n"
+      <p>
+        "end"
+      "\n"

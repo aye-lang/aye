@@ -1,0 +1,17 @@
+viewport 800x600
+  block <html> (0, 0) 800x132
+    block <body> (0, 4) 800x128
+      block <pre> (0, 4) 800x60
+        line (0, 4) 800x20
+          text (0, 6) 64x16 "line one"
+        line (0, 24) 800x20
+          text (0, 26) 152x16 "    indented   line"
+        line (0, 44) 800x20
+          text (0, 46) 168x16 "        tab     stops"
+      block <pre> (0, 68) 800x40
+        line (0, 68) 800x20
+        line (0, 88) 800x20
+          text (0, 90) 136x16 "blank lines above"
+      block <div style="white-space: pre"> (0, 112) 800x20
+        line (0, 112) 800x20
+          text (0, 114) 128x16 "  pre in a div  "

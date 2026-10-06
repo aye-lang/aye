@@ -1,0 +1,23 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Errors"
+      "\n"
+    <body>
+      <pre id="out">
+        "before the error\nthe next script runs\nsecond listener runs\nafter a syntax error\nlater timers run\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nlog('before the error');\nundefinedFunction();\nlog('not reached');\n"
+      "\n"
+      <script>
+        "\nlog('the next script runs');\ndocument.body.addEventListener('click', () => { throw new TypeError('listener failed'); });\ndocument.body.addEventListener('click', () => log('second listener runs'));\ndocument.body.click();\nsetTimeout(() => { null.x; }, 0);\nsetTimeout(() => log('later timers run'), 1);\nPromise.reject(42).then(() => log('not reached'));\nconsole.log('console.log goes to stderr', { a: 1 }, [1, 2]);\nconsole.warn('a warning');\nalert('an alert never blocks');\n"
+      "\n"
+      <script>
+        "syntax error here ("
+      "\n"
+      <script>
+        "log('after a syntax error');"
+      "\n"

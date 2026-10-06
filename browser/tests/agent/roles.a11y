@@ -1,0 +1,32 @@
+- navigation "Breadcrumbs"
+  - link "Home" [e1] -> /
+  - text: ›
+  - link "Docs" [e2] -> /docs
+- main
+  - heading "A div heading" [level=3] [e3]
+  - button "Div button" [e4]
+  - checkbox "Accept terms" [e5] [checked]
+  - checkbox "Some selected" [e6] [mixed]
+  - switch "Dark mode" [e7]
+  - button "Menu" [e8] [collapsed]
+  - menu
+    - menuitem "Open" [e9]
+    - menuitem "Close" [e10]
+  - tablist
+    - tab "One" [e11] [selected]
+    - tab "Two" [e12]
+  - generic "Focusable div" [e13]
+  - generic "Clickable div" [e14]
+  - group
+    - button "More details" [e15] [collapsed]
+    - paragraph: Hidden until opened.
+  - group
+    - button "Open details" [e16] [expanded]
+    - paragraph: Shown because open.
+  - region "Comments"
+    - paragraph: No comments yet.
+  - paragraph: A section without a name.
+  - dialog "Notice"
+    - paragraph: Dialog text.
+  - text: Anchor without href
+  - link "Disabled link" [e17] [disabled] -> /disabled

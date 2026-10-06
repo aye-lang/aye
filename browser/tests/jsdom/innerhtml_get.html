@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<title>Serializing</title>
+<div id="src" data-x='say "hi"'><p class="a">x &lt; y &amp; z &gt; w</p><br><input type="text" value="v"><!--c--><style>p > b { }</style> </div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const src = document.getElementById('src');
+log(src.innerHTML);
+log(src.firstChild.outerHTML);
+const copy = document.createElement('div');
+copy.innerHTML = src.innerHTML;
+log(copy.innerHTML === src.innerHTML);
+src.firstChild.outerHTML = '<p id="new">replaced</p><p>and more</p>';
+log(src.innerHTML.slice(0, 40));
+</script>

@@ -1,0 +1,191 @@
+// encoding: turning fetched bytes into UTF-8. B1 knows UTF-8 and
+// Windows-1252 (which browsers use for the labels "latin1" and
+// "iso-8859-1" too).
+
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+pub enum Encoding {
+    Utf8
+    Windows1252
+}
+
+/// The encoding named by a label such as "utf-8" or "ISO-8859-1"; null
+/// for a label B1 does not know.
+pub fn fromLabel(label: []u8) ?Encoding {
+    let l = text.trim(label)
+    var words = text.split("utf-8 utf8 unicode-1-1-utf-8", " ")
+    while words.next() |w| {
+        if text.eqlIgnoreCase(l, w) {
+            return Encoding.Utf8
+        }
+    }
+    var latin = text.split("windows-1252 cp1252 latin1 l1 iso-8859-1 iso8859-1 iso_8859-1 ascii us-ascii x-cp1252", " ")
+    while latin.next() |w| {
+        if text.eqlIgnoreCase(l, w) {
+            return Encoding.Windows1252
+        }
+    }
+    return null
+}
+
+/// Picks the encoding of an HTML document: a byte order mark first, then
+/// the `charset` of the Content-Type, then a `<meta charset>` (or
+/// `content="...; charset=..."`) in the first 1024 bytes, and finally UTF-8
+/// if the bytes are valid UTF-8, else Windows-1252.
+pub fn sniff(bytes: []u8, content_charset: []u8) Encoding {
+    if text.startsWith(bytes, "\xEF\xBB\xBF") {
+        return Encoding.Utf8
+    }
+    if fromLabel(content_charset) |e| {
+        return e
+    }
+    var head = bytes
+    if head.len > 1024 {
+        head = head[..1024]
+    }
+    if metaCharset(head) |label| {
+        if fromLabel(label) |e| {
+            return e
+        }
+    }
+    if isUtf8(bytes) {
+        return Encoding.Utf8
+    }
+    return Encoding.Windows1252
+}
+
+/// The value after the first `charset=` inside a `<meta` tag of `head`
+/// (quotes and the rest of the tag left out). A simple prescan.
+pub fn metaCharset(head: []u8) ?[]u8 {
+    var i: usize = 0
+    while i + 5 < head.len {
+        if head[i] == '<' && text.eqlIgnoreCase(head[i + 1..i + 5], "meta") {
+            var end = i + 5
+            while end < head.len && head[end] != '>' {
+                end += 1
+            }
+            let tag = head[i..end]
+            var k: usize = 0
+            while k + 8 <= tag.len {
+                if text.eqlIgnoreCase(tag[k..k + 8], "charset=") {
+                    var lo = k + 8
+                    while lo < tag.len && (tag[lo] == '"' || tag[lo] == '\'' || tag[lo] == ' ') {
+                        lo += 1
+                    }
+                    var hi = lo
+                    while hi < tag.len && isLabelByte(tag[hi]) {
+                        hi += 1
+                    }
+                    return tag[lo..hi]
+                }
+                k += 1
+            }
+            i = end
+        }
+        i += 1
+    }
+    return null
+}
+
+/// Is `s` valid UTF-8?
+pub fn isUtf8(s: []u8) bool {
+    var i: usize = 0
+    while i < s.len {
+        let d = text.decode(s[i..])
+        if d.code == 0xFFFD && !text.startsWith(s[i..], "\xEF\xBF\xBD") {
+            return false
+        }
+        i += d.len
+    }
+    return true
+}
+
+/// `bytes` in `enc` as UTF-8, in new memory from `alloc`; a UTF-8 byte
+/// order mark is dropped and invalid UTF-8 becomes U+FFFD.
+pub fn toUtf8(alloc: Allocator, bytes: []u8, enc: Encoding) AllocError![]mut u8 {
+    var out = text.Builder.init(alloc)
+    errdefer out.deinit()
+    match enc {
+        .Utf8 => {
+            var i: usize = 0
+            if text.startsWith(bytes, "\xEF\xBB\xBF") {
+                i = 3
+            }
+            while i < bytes.len {
+                let d = text.decode(bytes[i..])
+                if d.len == 1 && d.code != 0xFFFD {
+                    try out.appendByte(bytes[i])
+                } else if d.code == 0xFFFD {
+                    try out.appendChar(0xFFFD)
+                } else {
+                    try out.append(bytes[i..i + d.len])
+                }
+                i += d.len
+            }
+        }
+        .Windows1252 => {
+            for b in bytes {
+                try out.appendChar(windows1252(b))
+            }
+        }
+    }
+    return out.toOwned()
+}
+
+/// The code point of the Windows-1252 byte `b`. The bytes 0x80 to 0x9F
+/// are not Latin-1's control characters but the table below (the five
+/// unassigned ones stay as they are).
+pub fn windows1252(b: u8) u32 {
+    if b < 0x80 || b > 0x9F {
+        return b as u32
+    }
+    return CP1252[(b - 0x80) as usize]
+}
+
+let CP1252 = [32]u32{
+    0x20AC, 0x81, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+    0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x8D, 0x017D, 0x8F,
+    0x90, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+    0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x9D, 0x017E, 0x0178,
+}
+
+fn isLabelByte(c: u8) bool {
+    return match c {
+        'a'..='z', 'A'..='Z', '0'..='9', '-', '_', ':', '.' => true
+        _ => false
+    }
+}
+
+// `?Encoding == Encoding` does not compile (see COMPILER_GAPS.md).
+fn labelIs(label: []u8, want: Encoding) bool {
+    if fromLabel(label) |e| {
+        return e == want
+    }
+    return false
+}
+
+test "labels" {
+    @expect(labelIs("UTF-8", Encoding.Utf8))
+    @expect(labelIs(" iso-8859-1 ", Encoding.Windows1252))
+    @expect(fromLabel("koi8-r") == null)
+}
+
+test "sniffing" {
+    @expect(sniff("<meta charset=\"latin1\">", "") == Encoding.Windows1252)
+    @expect(sniff("<meta charset=\"latin1\">", "utf-8") == Encoding.Utf8)
+    @expect(sniff("<meta http-equiv=content-type content=\"text/html; charset=ISO-8859-1\">", "") == Encoding.Windows1252)
+    @expect(sniff("caf\xC3\xA9", "") == Encoding.Utf8)
+    @expect(sniff("caf\xE9", "") == Encoding.Windows1252)
+}
+
+test "decoding" {
+    let a = @testAllocator()
+    let s = try toUtf8(a, "caf\xE9 \x80", Encoding.Windows1252)
+    defer a.free(s)
+    @expectEqual("caf\xC3\xA9 \xE2\x82\xAC", s)
+    let u = try toUtf8(a, "\xEF\xBB\xBFok\xFF", Encoding.Utf8)
+    defer a.free(u)
+    @expectEqual("ok\xEF\xBF\xBD", u)
+}

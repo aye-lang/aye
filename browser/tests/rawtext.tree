@@ -1,0 +1,29 @@
+#document
+  <html>
+    <head>
+      "\n"
+      <title>
+        "Title with <b>tags</b> & entities"
+      "\n"
+      <style>
+        "p > a { color: red } /* </p> */"
+      "\n"
+      <script>
+        "\n  if (a < b && c > d) { document.write(\"</div>\"); }\n  var s = \"</scriptx>\";\n"
+      "\n"
+    <body>
+      "\n"
+      <textarea>
+        "First newline dropped. <b>not bold</b> <ok>"
+      "\n"
+      <xmp>
+        "<b>xmp is raw</b> &amp;"
+      "\n"
+      <script>
+        "closed by upper case "
+      "\n"
+      <p>
+        "after"
+      "\n"
+      <style>
+        "unterminated style\n"

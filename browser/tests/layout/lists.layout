@@ -1,0 +1,42 @@
+viewport 800x600
+  block <html> (0, 0) 800x240
+    block <body> (0, 16) 800x208
+      block <ul> (0, 16) 800x100
+        list-item <li> (40, 16) 760x20
+          marker (24, 18) 16x16 "• "
+          line (40, 16) 760x20
+            text (40, 18) 72x16 "disc item"
+        list-item <li> (40, 36) 760x80
+          marker (24, 38) 16x16 "• "
+          block (anonymous) (40, 36) 760x20
+            line (40, 36) 760x20
+              text (40, 38) 48x16 "second"
+          block <ul> (40, 56) 760x60
+            list-item <li> (80, 56) 720x20
+              marker (64, 58) 16x16 "◦ "
+              line (80, 56) 720x20
+                text (80, 58) 104x16 "circle inside"
+            list-item <li> (80, 76) 720x40
+              marker (64, 78) 16x16 "◦ "
+              block (anonymous) (80, 76) 720x20
+                line (80, 76) 720x20
+                  text (80, 78) 56x16 "another"
+              block <ul> (80, 96) 720x20
+                list-item <li> (120, 96) 680x20
+                  marker (104, 98) 16x16 "▪ "
+                  line (120, 96) 680x20
+                    text (120, 98) 104x16 "square deeper"
+      block <ol> (0, 132) 800x92
+        list-item <li> (40, 132) 760x20
+          marker (16, 134) 24x16 "1. "
+          line (40, 132) 760x20
+            text (40, 134) 40x16 "first"
+        list-item <li> (40, 168) 760x20
+          marker (16, 170) 24x16 "2. "
+          block <p> (40, 168) 760x20
+            line (40, 168) 760x20
+              text (40, 170) 176x16 "a paragraph in an item"
+        list-item <li> (40, 204) 760x20
+          marker (16, 206) 24x16 "3. "
+          line (40, 204) 760x20
+            text (40, 206) 40x16 "third"

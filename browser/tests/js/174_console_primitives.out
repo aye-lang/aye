@@ -1,0 +1,7 @@
+1 two true null undefined -0 0 NaN Infinity -Infinity
+
+
+a  b
+1.5e+300 2e-300 0.000001 1e+21 123456789.123
+[ 1, 'two', true, null, undefined, -0 ]
+{ s: 'str', n: 1, b: false, u: undefined, z: null }

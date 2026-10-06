@@ -1,0 +1,13 @@
+const target = { a: 1 };
+const r = Object.assign(target, { b: 2 }, { a: 3, c: 4 });
+console.log(r, r === target);
+console.log(Object.assign({}, null, undefined, { x: 1 }));
+console.log(Object.assign({}, 'abc'));
+console.log(Object.assign([1, 2, 3], [9]));
+const src = { get g() { return 'got'; } };
+const copied = Object.assign({}, src);
+console.log(Object.getOwnPropertyDescriptor(copied, 'g'));
+const log = [];
+const t2 = { set s(v) { log.push(v); } };
+Object.assign(t2, { s: 'via setter' });
+console.log(log);

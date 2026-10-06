@@ -1,0 +1,5 @@
+Derived.describe extra=undefined
+base field derived field
+base field
+2 true true
+ReferenceError

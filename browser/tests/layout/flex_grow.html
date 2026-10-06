@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0 }
+.f { display: flex; width: 300px; margin-bottom: 4px }
+</style>
+<div class="f"><div style="flex: 1">one</div><div style="flex: 2">two</div></div>
+<div class="f"><div style="flex-grow: 1">grows</div><div>text</div></div>
+<div class="f"><div style="flex: 0 0 100px">100px</div><div style="flex: 1 1 0; min-width: 0">rest</div></div>
+<div class="f"><div style="width: 200px">200 shrinks</div><div style="width: 200px; flex-shrink: 3">200 shrinks 3x</div></div>
+<div class="f"><div style="flex: 1; max-width: 50px">max</div><div style="flex: 1">takes the rest</div></div>
+<div class="f">text in a flex container <span>and a span</span></div>

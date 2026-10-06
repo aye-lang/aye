@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<style>
+body { margin: 8px }
+.hidden { visibility: hidden; background-color: red; border: 2px solid red }
+.shown { visibility: visible; background-color: lime }
+div { padding: 4px; margin: 4px 0 }
+</style>
+<div>Visible before</div>
+<div class="hidden">Hidden text <span class="shown">but this span shows</span></div>
+<p>Inline <span class="hidden">hidden</span> gap</p>
+<div style="display: none; background-color: red">Not rendered</div>
+<div>Visible after</div>

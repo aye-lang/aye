@@ -1,0 +1,24 @@
+viewport 800x600
+  block <html> (0, 0) 800x264
+    block <body> (0, 30) 800x224
+      block <section> (0, 30) 800x40
+        block <p class="first"> (0, 30) 800x20
+          line (0, 30) 800x20
+            text (0, 32) 488x16 "The first child's 30px top margin leaves through the section."
+        block <p class="last"> (0, 50) 800x20
+          line (0, 50) 800x20
+            text (0, 52) 320x16 "The last child's 40px bottom margin too."
+      block <section class="bordered"> (0, 110) 800x112
+        block <p class="first"> (0, 141) 800x20
+          line (0, 141) 800x20
+            text (0, 143) 320x16 "Inside a border the margins stay inside."
+        block <p class="last"> (0, 161) 800x20
+          line (0, 161) 800x20
+            text (0, 163) 120x16 "Bottom as well."
+      block <div class="empty"> (0, 234) 800x0
+      block <div class="empty"> (0, 234) 800x0
+      block <section> (0, 234) 800x20
+        block <div class="empty"> (0, 234) 800x0
+        block <p> (0, 234) 800x20
+          line (0, 234) 800x20
+            text (0, 236) 392x16 "After empty boxes: margins collapse through them."

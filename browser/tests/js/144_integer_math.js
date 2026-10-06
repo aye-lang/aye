@@ -1,0 +1,11 @@
+const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+const lcm = (a, b) => a / gcd(a, b) * b;
+console.log(gcd(48, 18), lcm(4, 6), gcd(17, 5));
+const powMod = (b, e, m) => { let r = 1; b %= m; while (e > 0) { if (e & 1) r = r * b % m; b = b * b % m; e >>= 1; } return r; };
+console.log(powMod(2, 30, 1000007), powMod(3, 200, 13));
+const digits = (n) => String(n).split('').reduce((s, d) => s + +d, 0);
+console.log(digits(987654321), digits(2 ** 50));
+console.log(Math.floor(7 / 2), Math.trunc(-7 / 2), (-7 / 2) | 0, Math.floor(-7 / 2));
+const isPrime = (n) => { if (n < 2) return false; for (let i = 2; i * i <= n; i++) if (n % i === 0) return false; return true; };
+console.log([...Array(30).keys()].filter(isPrime));
+console.log(2 ** 31, 2 ** 31 - 1, -(2 ** 31), 2 ** 32 - 1);

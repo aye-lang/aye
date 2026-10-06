@@ -1,0 +1,14 @@
+- link "Index" [e1] -> index.html
+- text: /
+- link "Up" [e2] -> up.html
+- heading "A page without main" [level=1] [e3]
+- text: First block of text.
+- text: Second block, with a span inside it.
+- text: Loose inline text and more text.
+- paragraph
+  - text: Paragraph
+  - text: with a line break
+  - text: and another.
+- text: Deeply nested text.
+- separator
+- text: After the rule.

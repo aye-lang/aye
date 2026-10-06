@@ -1,0 +1,168 @@
+// js/ops: operators and conversions on numbers and plain values.
+
+import std.math
+
+
+pub fn boolNumber(b: bool) f64 {
+    if b {
+        return 1.0
+    }
+    return 0.0
+}
+
+pub fn isUndef(v: Value) bool {
+    return match v {
+        .Undefined => true
+        .Empty => true
+        _ => false
+    }
+}
+
+pub fn isStr(v: Value) bool {
+    return match v {
+        .Str { .. } => true
+        _ => false
+    }
+}
+
+pub fn strOf(v: Value) u32 {
+    return match v {
+        .Str { s } => s
+        _ => NONE
+    }
+}
+
+pub fn holeToUndef(v: Value) Value {
+    return match v {
+        .Empty => Value.Undefined
+        _ => v
+    }
+}
+
+/// -1, 0 or 1 as a < b, a == b, a > b by bytes.
+pub fn compareBytes(a: []u8, b: []u8) i32 {
+    var n = a.len
+    if b.len < n {
+        n = b.len
+    }
+    for i in 0..n {
+        if a[i] != b[i] {
+            if a[i] < b[i] {
+                return -1
+            }
+            return 1
+        }
+    }
+    if a.len < b.len {
+        return -1
+    }
+    if a.len > b.len {
+        return 1
+    }
+    return 0
+}
+
+pub fn objectTypeName(c: Class) []u8 {
+    if c == Class.Function {
+        return "function"
+    }
+    return "object"
+}
+
+/// ToInt32.
+pub fn toInt32(x: f64) i32 {
+    if x != x || x - x != 0.0 {
+        return 0
+    }
+    var t = trunc(x)
+    if t >= -2147483648.0 && t <= 2147483647.0 {
+        return t as i32
+    }
+    t = fmod(t, 4294967296.0)
+    if t < 0.0 {
+        t += 4294967296.0
+    }
+    if t >= 2147483648.0 {
+        t -= 4294967296.0
+    }
+    return t as i32
+}
+
+/// ToUint32.
+pub fn toUint32(x: f64) u32 {
+    if x != x || x - x != 0.0 {
+        return 0
+    }
+    var t = fmod(trunc(x), 4294967296.0)
+    if t < 0.0 {
+        t += 4294967296.0
+    }
+    return t as u32
+}
+
+// JavaScript's ** (pow differs for NaN exponents and |base| == 1).
+fn power(x: f64, y: f64) f64 {
+    if y != y {
+        return 0.0 / 0.0
+    }
+    if (x == 1.0 || x == -1.0) && y - y != 0.0 {
+        return 0.0 / 0.0
+    }
+    return math.pow(x, y)
+}
+
+/// A numeric binary operator on two numbers.
+pub fn arith(op: Op, x: f64, y: f64) f64 {
+    return match op {
+        .Sub => x - y
+        .Mul => x * y
+        .Div => x / y
+        .Mod => jsMod(x, y)
+        .Exp => power(x, y)
+        .Add => x + y
+        .Shl => (toInt32(x) << ((toUint32(y) & 31) as i32)) as f64
+        .Shr => (toInt32(x) >> ((toUint32(y) & 31) as i32)) as f64
+        .UShr => (toUint32(x) >> (toUint32(y) & 31)) as f64
+        .BitAnd => (toInt32(x) & toInt32(y)) as f64
+        .BitOr => (toInt32(x) | toInt32(y)) as f64
+        .BitXor => (toInt32(x) ^ toInt32(y)) as f64
+        _ => 0.0 / 0.0
+    }
+}
+
+fn jsMod(x: f64, y: f64) f64 {
+    if y == 0.0 || x != x || y != y || x - x != 0.0 {
+        return 0.0 / 0.0
+    }
+    if y - y != 0.0 {
+        return x
+    }
+    return fmod(x, y)
+}
+
+/// The result of op on two numbers when no conversion can run.
+pub fn fastNumeric(op: Op, x: f64, y: f64) ?Value {
+    return match op {
+        .Add => numVal(x + y)
+        .Sub => numVal(x - y)
+        .Mul => numVal(x * y)
+        .Div => numVal(x / y)
+        .Lt => boolVal(x < y)
+        .Gt => boolVal(x > y)
+        .Le => boolVal(x <= y)
+        .Ge => boolVal(x >= y)
+        .StrictEq => boolVal(x == y)
+        .Eq => boolVal(x == y)
+        .StrictNotEq => boolVal(x != y)
+        .NotEq => boolVal(x != y)
+        .Mod => numVal(jsMod(x, y))
+        .BitAnd => numVal(arith(op, x, y))
+        .BitOr => numVal(arith(op, x, y))
+        .BitXor => numVal(arith(op, x, y))
+        .Shl => numVal(arith(op, x, y))
+        .Shr => numVal(arith(op, x, y))
+        .UShr => numVal(arith(op, x, y))
+        .Exp => numVal(arith(op, x, y))
+        _ => null
+    }
+}

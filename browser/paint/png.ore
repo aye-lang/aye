@@ -1,0 +1,267 @@
+// The PNG encoder: 8-bit RGBA, no interlacing, filter type 0 on every
+// row, one IDAT chunk holding a zlib stream of one fixed-Huffman deflate
+// block. Matches are found with a hash of the next three bytes and a
+// short chain of earlier positions, which is enough for screenshots
+// (large areas of one color compress to almost nothing).
+
+import std
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+/// The PNG file of a `width` x `height` image whose pixels are `rgba`
+/// (4 bytes each, row after row). Free it with `alloc.free`.
+pub fn encodePng(alloc: Allocator, width: usize, height: usize, rgba: []u8) AllocError![]mut u8 {
+    var out = text.Builder.init(alloc)
+    defer out.deinit()
+    try out.append("\x89PNG\r\n\x1A\n")
+
+    var ihdr = text.Builder.init(alloc)
+    defer ihdr.deinit()
+    try be32(&mut ihdr, width as u32)
+    try be32(&mut ihdr, height as u32)
+    try ihdr.append("\x08\x06\x00\x00\x00")
+    try chunk(&mut out, "IHDR", ihdr.bytes())
+
+    // The rows, each after its filter byte (0: none).
+    let stride = width * 4
+    let raw = try alloc.alloc(0 as u8, height * (stride + 1))
+    defer alloc.free(raw)
+    for y in 0..height {
+        std.mem.copy(raw[y * (stride + 1) + 1..(y + 1) * (stride + 1)], rgba[y * stride..(y + 1) * stride])
+    }
+    var z = text.Builder.init(alloc)
+    defer z.deinit()
+    try zlib(alloc, raw, &mut z)
+    try chunk(&mut out, "IDAT", z.bytes())
+    try chunk(&mut out, "IEND", "")
+    return out.toOwned()
+}
+
+fn be32(out: *mut text.Builder, v: u32) AllocError!void {
+    try out.appendByte((v >> 24) as u8)
+    try out.appendByte(((v >> 16) & 0xFF) as u8)
+    try out.appendByte(((v >> 8) & 0xFF) as u8)
+    try out.appendByte((v & 0xFF) as u8)
+}
+
+// A chunk: length, type, data, and the CRC-32 of type and data.
+fn chunk(out: *mut text.Builder, kind: []u8, data: []u8) AllocError!void {
+    try be32(out, data.len as u32)
+    let start = out.len()
+    try out.append(kind)
+    try out.append(data)
+    let crc = crc32(out.bytes()[start..])
+    try be32(out, crc)
+}
+
+/// The CRC-32 (ISO-HDLC, as in PNG and zlib's `crc32`) of `data`.
+pub fn crc32(data: []u8) u32 {
+    var table = @zeroed([256]u32)
+    for n in 0..256 {
+        var c = n as u32
+        for k in 0..8 {
+            if (c & 1) != 0 {
+                c = 0xEDB88320 ^ (c >> 1)
+            } else {
+                c = c >> 1
+            }
+        }
+        table[n] = c
+    }
+    var crc: u32 = 0xFFFFFFFF
+    for b in data {
+        crc = table[((crc ^ b as u32) & 0xFF) as usize] ^ (crc >> 8)
+    }
+    return crc ^ 0xFFFFFFFF
+}
+
+/// The Adler-32 checksum of `data` (the zlib trailer).
+pub fn adler32(data: []u8) u32 {
+    var a: u32 = 1
+    var b: u32 = 0
+    var i: usize = 0
+    while i < data.len {
+        // 5552 bytes keep the sums below 2^32 before the modulo.
+        var end = i + 5552
+        if end > data.len {
+            end = data.len
+        }
+        for k in i..end {
+            a += data[k] as u32
+            b += a
+        }
+        a = a % 65521
+        b = b % 65521
+        i = end
+    }
+    return (b << 16) | a
+}
+
+// Bits written least significant first, as deflate wants.
+struct BitWriter {
+    out: *mut text.Builder
+    acc: u64
+    count: u64
+
+    fn put(self: *mut Self, value: u64, n: u64) AllocError!void {
+        self.acc = self.acc | (value << self.count)
+        self.count += n
+        while self.count >= 8 {
+            try self.out.appendByte((self.acc & 0xFF) as u8)
+            self.acc = self.acc >> 8
+            self.count -= 8
+        }
+    }
+
+    // A Huffman code: its bits go most significant first.
+    fn code(self: *mut Self, value: u64, n: u64) AllocError!void {
+        var rev: u64 = 0
+        for k in 0..n {
+            rev = (rev << 1) | ((value >> k) & 1)
+        }
+        try self.put(rev, n)
+    }
+
+    fn flush(self: *mut Self) AllocError!void {
+        if self.count > 0 {
+            try self.out.appendByte((self.acc & 0xFF) as u8)
+            self.acc = 0
+            self.count = 0
+        }
+    }
+
+    // A literal/length symbol of the fixed Huffman code.
+    fn symbol(self: *mut Self, sym: u64) AllocError!void {
+        if sym < 144 {
+            return self.code(0x30 + sym, 8)
+        }
+        if sym < 256 {
+            return self.code(0x190 + sym - 144, 9)
+        }
+        if sym < 280 {
+            return self.code(sym - 256, 7)
+        }
+        return self.code(0xC0 + sym - 280, 8)
+    }
+}
+
+let LEN_BASE = [29]u64{3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258}
+let LEN_EXTRA = [29]u64{0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0}
+let DIST_BASE = [30]u64{1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577}
+let DIST_EXTRA = [30]u64{0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13}
+
+let WINDOW: usize = 32768
+let HASH_SIZE: usize = 65536
+let MAX_CHAIN: usize = 16
+let MIN_MATCH: usize = 3
+let MAX_MATCH: usize = 258
+
+/// A zlib stream (RFC 1950) of `data`: one deflate block (RFC 1951)
+/// with the fixed Huffman code.
+pub fn zlib(alloc: Allocator, data: []u8, out: *mut text.Builder) AllocError!void {
+    // CM 8 (deflate), 32K window; no dictionary; FCHECK makes it a
+    // multiple of 31.
+    try out.append("\x78\x01")
+    var bits = BitWriter { out: out, acc: 0, count: 0 }
+    try bits.put(1, 1)
+    try bits.put(1, 2)
+    // Position + 1 of the latest occurrence of each hash, and of the
+    // occurrence before each position (in the window).
+    let head = try alloc.alloc(0 as usize, HASH_SIZE)
+    defer alloc.free(head)
+    let prev = try alloc.alloc(0 as usize, WINDOW)
+    defer alloc.free(prev)
+    var i: usize = 0
+    while i < data.len {
+        var best_len: usize = 0
+        var best_dist: usize = 0
+        if i + MIN_MATCH <= data.len {
+            let h = hash3(data, i)
+            var cand = head[h]
+            var tries: usize = 0
+            while cand > 0 && tries < MAX_CHAIN {
+                let p = cand - 1
+                if i - p > WINDOW - 1 {
+                    break
+                }
+                let n = matchLength(data, p, i)
+                if n > best_len {
+                    best_len = n
+                    best_dist = i - p
+                    if n == MAX_MATCH {
+                        break
+                    }
+                }
+                cand = prev[p % WINDOW]
+                tries += 1
+            }
+        }
+        if best_len >= MIN_MATCH {
+            try lengthCode(&mut bits, best_len as u64)
+            try distanceCode(&mut bits, best_dist as u64)
+            for k in i..i + best_len {
+                insert(data, k, head, prev)
+            }
+            i += best_len
+        } else {
+            try bits.symbol(data[i] as u64)
+            insert(data, i, head, prev)
+            i += 1
+        }
+    }
+    try bits.symbol(256)
+    try bits.flush()
+    let sum = adler32(data)
+    try be32(out, sum)
+}
+
+fn hash3(data: []u8, i: usize) usize {
+    let v = (data[i] as u32 << 16) | (data[i + 1] as u32 << 8) | data[i + 2] as u32
+    return ((v *% 2654435761) >> 16) as usize % HASH_SIZE
+}
+
+fn insert(data: []u8, i: usize, head: []mut usize, prev: []mut usize) {
+    if i + MIN_MATCH > data.len {
+        return
+    }
+    let h = hash3(data, i)
+    prev[i % WINDOW] = head[h]
+    head[h] = i + 1
+}
+
+// How many bytes from `p` equal those from `i` (`p < i`), at most 258.
+fn matchLength(data: []u8, p: usize, i: usize) usize {
+    var n: usize = 0
+    while n < MAX_MATCH && i + n < data.len && data[p + n] == data[i + n] {
+        n += 1
+    }
+    return n
+}
+
+fn lengthCode(bits: *mut BitWriter, len: u64) AllocError!void {
+    var k: usize = 28
+    while LEN_BASE[k] > len {
+        k -= 1
+    }
+    try bits.symbol(257 + k as u64)
+    if LEN_EXTRA[k] > 0 {
+        try bits.put(len - LEN_BASE[k], LEN_EXTRA[k])
+    }
+}
+
+fn distanceCode(bits: *mut BitWriter, dist: u64) AllocError!void {
+    var k: usize = 29
+    while DIST_BASE[k] > dist {
+        k -= 1
+    }
+    try bits.code(k as u64, 5)
+    if DIST_EXTRA[k] > 0 {
+        try bits.put(dist - DIST_BASE[k], DIST_EXTRA[k])
+    }
+}
+
+test "crc32 and adler32" {
+    @expectEqual(0xCBF43926, crc32("123456789"))
+    @expectEqual(0x11E60398, adler32("Wikipedia"))
+}

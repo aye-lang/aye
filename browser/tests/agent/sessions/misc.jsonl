@@ -1,0 +1,26 @@
+{"id":"first","cmd":"wait"}
+{"id":2,"cmd":"navigate","url":"browser/tests/agent/missing.html"}
+{"id":3,"cmd":"navigate"}
+
+not json
+[1,2]
+{"cmd":"wait"}
+{"id":null,"cmd":"fly"}
+{"id":{"nested":[1,2.5e3,"😀"]},"cmd":"eval"}
+{"id":4,"cmd":"navigate","url":"browser/tests/agent/long_page.html"}
+{"id":5,"cmd":"scroll","dy":500}
+{"id":6,"cmd":"scroll","dy":-10000}
+{"id":7,"cmd":"scroll","ref":"e7"}
+{"id":8,"cmd":"scroll"}
+{"id":9,"cmd":"find","text":"NEEDLE"}
+{"id":10,"cmd":"find","text":"nothing like this"}
+{"id":11,"cmd":"press","key":"Home"}
+{"id":12,"cmd":"press","key":"PageDown"}
+{"id":13,"cmd":"press","key":"F5"}
+{"id":14,"cmd":"click","ref":"e2"}
+{"id":15,"cmd":"click","ref":"e4"}
+{"id":16,"cmd":"click","ref":"e99"}
+{"id":17,"cmd":"snapshot","boxes":true}
+{"id":18,"cmd":"wait"}
+{"id":19,"cmd":"navigate","url":"data:text/html,<title>Data</title><p>Hello <a href=%23x>there</a>"}
+{"id":20,"cmd":"read","refs":false}

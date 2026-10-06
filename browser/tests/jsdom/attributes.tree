@@ -1,0 +1,17 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Attributes"
+      "\n"
+    <body>
+      <a id="renamed" href="page.html" title="New" data-user-id="8" target="_blank" class="one two" data-new-thing="yes" download="">
+        "link"
+      "\n"
+      <pre id="out">
+        "page.html page.html \ntrue false id,href,title,data-user-id,data-x\nNew _blank link true\ntrue true\n7 \n8 yes\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst a = document.getElementById('link');\nlog(a.getAttribute('href'), a.getAttribute('HREF'), a.getAttribute('missing'));\nlog(a.hasAttribute('title'), a.hasAttribute('nope'), a.getAttributeNames().join(','));\na.setAttribute('Title', 'New');\na.setAttribute('target', '_blank');\na.removeAttribute('data-x');\nlog(a.title, a.target, a.id, a.className === '');\na.id = 'renamed';\na.className = 'one two';\nlog(document.getElementById('renamed') === a, a.hasAttributes());\nlog(a.dataset.userId, a.dataset.missing);\na.dataset.userId = '8';\na.dataset.newThing = 'yes';\na.toggleAttribute('hidden');\na.toggleAttribute('hidden');\na.toggleAttribute('download', true);\nlog(a.getAttribute('data-user-id'), a.getAttribute('data-new-thing'));\n"
+      "\n"

@@ -1,0 +1,7 @@
+1
+[ 'fixed' ] h {"fixed":1}
+20 10
+{ value: 1, writable: false, enumerable: true, configurable: false }
+{ value: 'h', writable: false, enumerable: false, configurable: false }
+TypeError
+3 [ 'fixed', 'computed', 'p1', 'p2' ]

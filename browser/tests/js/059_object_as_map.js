@@ -1,0 +1,10 @@
+const counts = {};
+for (const w of 'the cat and the hat and the bat'.split(' ')) counts[w] = (counts[w] || 0) + 1;
+console.log(counts);
+const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
+console.log(sorted.map(([w, n]) => w + '=' + n).join(' '));
+const grouped = {};
+for (const n of [1, 2, 3, 4, 5, 6, 7]) (grouped[n % 3] ||= []).push(n);
+console.log(grouped);
+const inverted = Object.fromEntries(Object.entries({ a: 'x', b: 'y' }).map(([k, v]) => [v, k]));
+console.log(inverted);
