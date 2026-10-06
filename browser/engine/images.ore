@@ -317,7 +317,8 @@ fn prefetchImages(cache: *mut ImageCache, doc: *Document, base: *Url, extra: [][
 }
 
 // The URLs of the images of the style sheets (as their computed values
-// write them) that elements of `doc` that are displayed use, and that
+// write them) that elements of `doc` that are displayed (or their
+// `::before` and `::after`) use, and that
 // `nodes` has no image for, into `out` (allocated with `alloc`, an
 // arena).
 fn styleUrls(alloc: Allocator, doc: *Document, styles: *css.Styles, nodes: *layout.Images, out: *mut List([]u8)) AllocError!void {
@@ -328,6 +329,13 @@ fn styleUrls(alloc: Allocator, doc: *Document, styles: *css.Styles, nodes: *layo
         let start = out.len()
         try css.layerUrls(alloc, values[css.BACKGROUND_IMAGE], out)
         try css.layerUrls(alloc, values[css.MASK_IMAGE], out)
+        // Its `::before` and `::after` too.
+        for which in 1..3 {
+            if styles.pseudo(h, which as u8) |pv| {
+                try css.layerUrls(alloc, pv[css.BACKGROUND_IMAGE], out)
+                try css.layerUrls(alloc, pv[css.MASK_IMAGE], out)
+            }
+        }
         if out.len() == start {
             continue
         }
