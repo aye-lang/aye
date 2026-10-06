@@ -27,8 +27,8 @@
 // the canvas), borders (solid, dashed, dotted, double; the 3-D styles are
 // solid), color, text-decoration-line (underline, overline,
 // line-through; propagated from ancestors, not into atomic inlines),
-// list markers, images (decoded ones scaled into their content box,
-// else a frame with their `alt` text), frames (`iframe`, `embed`,
+// list markers, images (decoded ones scaled into their content box after
+// `object-fit`, else a frame with their `alt` text), frames (`iframe`, `embed`,
 // `object`: a frame with their address as a link), inline `svg` (its
 // box only, nothing drawn), form controls (checkboxes and
 // radio buttons drawn, a `select`'s arrow, a list box's selected
@@ -568,7 +568,16 @@ struct Builder {
                 if imgs.get(el) |bmp| {
                     if w > 0.0 && h > 0.0 {
                         self.extend(x + w, y + h)
-                        try self.add(Item.Image { r: Rect { x: x, y: y, w: w, h: h }, w: bmp.width, h: bmp.height, pixels: bmp.pixels })
+                        let box = Rect { x: x, y: y, w: w, h: h }
+                        let r = fitted(box, bmp.width as f64, bmp.height as f64, layout.keywordOf(self.t.bx(i).style[css.OBJECT_FIT]))
+                        let clip = r.w > w || r.h > h
+                        if clip {
+                            try self.add(Item.Clip { r: box })
+                        }
+                        try self.add(Item.Image { r: r, w: bmp.width, h: bmp.height, pixels: bmp.pixels })
+                        if clip {
+                            try self.add(Item.Unclip)
+                        }
                     }
                     return
                 }
@@ -739,6 +748,29 @@ struct Builder {
             }
         }
     }
+}
+
+// Where an image of `iw` x `ih` pixels goes in the content box `box`
+// after `object-fit` (centered): `fill` stretches it, `contain` and
+// `cover` keep its ratio inside or over the box (which clips it),
+// `none` keeps its size, `scale-down` is the smaller of those two.
+fn fitted(box: Rect, iw: f64, ih: f64, fit: []u8) Rect {
+    if iw <= 0.0 || ih <= 0.0 || text.eql(fit, "fill") || fit.len == 0 {
+        return box
+    }
+    var k = 1.0
+    let sx = box.w / iw
+    let sy = box.h / ih
+    if text.eql(fit, "contain") {
+        k = math.min(sx, sy)
+    } else if text.eql(fit, "cover") {
+        k = math.max(sx, sy)
+    } else if text.eql(fit, "scale-down") {
+        k = math.min(1.0, math.min(sx, sy))
+    }
+    let w = iw * k
+    let h = ih * k
+    return Rect { x: box.x + (box.w - w) / 2.0, y: box.y + (box.h - h) / 2.0, w: w, h: h }
 }
 
 // Item `it` mapped by `m` (scales, flips and quarter turns): rectangles

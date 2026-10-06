@@ -1,0 +1,20 @@
+viewport 800x600
+  block <html> (0, 0) 800x717.7
+    block <body> (0, 0) 800x717.7
+      block <div class="a"> (0, 0) 160x90
+      block <div class="b"> (0, 90) 100x50
+        line (10, 100) 80x20
+          text (10, 102) 48x16 "100x50"
+      block <div class="c"> (0, 140) 100x60
+        line (0, 140) 100x20
+          text (0, 142) 56x16 "content"
+        line (0, 160) 100x20
+          text (0, 162) 88x16 "taller than"
+        line (0, 180) 100x20
+          text (0, 182) 72x16 "the ratio"
+      block <div class="d"> (0, 200) 400x400
+      block (anonymous) (0, 600) 800x117.7
+        line (0, 600) 800x117.7
+          replaced <img src="missing.webp" alt=""> (0, 600) 200x112.5
+          text (200, 699.7) 8x16 " "
+          replaced <img class="e" src="missing.webp" alt=""> (208, 682.5) 60x30

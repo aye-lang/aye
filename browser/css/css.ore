@@ -93,7 +93,7 @@ pub struct Property {
     initial: Value
 }
 
-pub let NPROPS: usize = 69
+pub let NPROPS: usize = 71
 
 pub let DISPLAY: usize = 0
 pub let POSITION: usize = 1
@@ -148,6 +148,9 @@ pub let GRID_COLUMN_START: usize = 63
 // Kept as their text for layout to read (`layout/transform.ore`).
 pub let TRANSFORM: usize = 67
 pub let TRANSFORM_ORIGIN: usize = 68
+// `aspect-ratio` is kept as its text too.
+pub let ASPECT_RATIO: usize = 69
+pub let OBJECT_FIT: usize = 70
 
 let DISPLAYS = "inline block list-item inline-block table inline-table table-row-group table-header-group table-footer-group table-row table-cell table-column-group table-column table-caption flex inline-flex grid inline-grid flow-root contents none"
 let BORDER_STYLES = "none hidden dotted dashed solid double groove ridge inset outset"
@@ -157,7 +160,7 @@ let ALIGNS = "normal stretch flex-start flex-end start end self-start self-end c
 let BLACK = Color { r: 0, g: 0, b: 0, a: 1.0 }
 let TRANSPARENT = Color { r: 0, g: 0, b: 0, a: 0.0 }
 
-pub let PROPERTIES = [69]Property{
+pub let PROPERTIES = [71]Property{
     Property { name: "display", inherited: false, kind: PKind.Keywords, keywords: DISPLAYS, initial: Value.Keyword { k: "inline" } },
     Property { name: "position", inherited: false, kind: PKind.Keywords, keywords: "static relative absolute fixed sticky", initial: Value.Keyword { k: "static" } },
     Property { name: "color", inherited: true, kind: PKind.Color, keywords: "", initial: Value.Rgba { c: BLACK } },
@@ -227,6 +230,8 @@ pub let PROPERTIES = [69]Property{
     Property { name: "grid-row-end", inherited: false, kind: PKind.Raw, keywords: "auto", initial: Value.Keyword { k: "auto" } },
     Property { name: "transform", inherited: false, kind: PKind.Raw, keywords: "none", initial: Value.Keyword { k: "none" } },
     Property { name: "transform-origin", inherited: false, kind: PKind.Raw, keywords: "", initial: Value.Keyword { k: "50% 50%" } },
+    Property { name: "aspect-ratio", inherited: false, kind: PKind.Raw, keywords: "auto", initial: Value.Keyword { k: "auto" } },
+    Property { name: "object-fit", inherited: false, kind: PKind.Keywords, keywords: "fill contain cover none scale-down", initial: Value.Keyword { k: "fill" } },
 }
 
 /// The index of the longhand property `name` (lower case).
