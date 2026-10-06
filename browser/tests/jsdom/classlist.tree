@@ -1,0 +1,23 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "classList"
+      "\n"
+      <style>
+        ".big { font-size: 32px } .red { color: red } .gone { display: none } .bold { font-weight: bold }"
+      "\n"
+    <body>
+      <p id="p" class="big heavy red">
+        "text"
+      "\n"
+      <p id="q" class="gone">
+        "other"
+      "\n"
+      <pre id="out">
+        "true 3 red red big bold\nfalse true false\nfalse\nInvalidCharacterError\nbig heavy red\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst p = document.getElementById('p');\np.classList.add('big', 'bold');\np.classList.remove('gone');\nlog(p.classList.contains('red'), p.classList.length, p.classList.item(0), String(p.classList));\nlog(p.classList.toggle('red'), p.classList.toggle('red'), p.classList.toggle('x', false));\np.classList.replace('bold', 'heavy');\nconst q = document.getElementById('q');\nq.classList.remove('nothing');\nlog(q.hasAttribute('class'));\nq.classList.toggle('gone');\ntry { p.classList.add('has space'); } catch (e) { log(e.name); }\nlog(p.className);\n"
+      "\n"

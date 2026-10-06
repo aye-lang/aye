@@ -1,0 +1,6 @@
+[ 'a', 'b', 'c' ] [ undefined, undefined, undefined ] [ 0, 1, 4 ]
+[ 'x', 'y' ] [ 10, 20 ]
+[ 1, 2 ] [ [ 1, 'a' ] ] [ '😀', 'é' ]
+[ 7 ] [ 1, 2, 3 ] [] 3 [ 3, 4 ]
+true false false true
+[ undefined, undefined ] [] []

@@ -1,0 +1,40 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "innerHTML"
+      "\n"
+    <body>
+      <div id="box">
+        <h2 class="t">
+          "Title & more"
+        <ul>
+          <li>
+            "one"
+          <li>
+            "two"
+        <img src="x.png" alt="pic">
+        <!--  note  -->
+        "tail"
+        <section>
+          <script>
+            "document.title = \"ran\""
+          <p>
+            "after script"
+      "\n"
+      <div id="second">
+        <span>
+          "start"
+        "plain <text> with "
+        <b>
+          "bold "
+          <i>
+            "nested"
+        <span>
+          "end"
+      <hr>
+      "\n"
+      <script>
+        "\nconst box = document.getElementById('box');\nbox.innerHTML = '<h2 class=\"t\">Title &amp; more</h2><ul><li>one<li>two</ul><img src=\"x.png\" alt=\"pic\"><!-- note -->tail';\ndocument.getElementById('second').innerHTML = 'plain &lt;text&gt; with <b>bold <i>nested</i></b>';\nconst n = document.createElement('section');\nn.innerHTML = '<script>document.title = \"ran\"<\\/script><p>after script</p>';\nbox.appendChild(n);\ndocument.getElementById('second').insertAdjacentHTML('beforeend', '<span>end</span>');\ndocument.getElementById('second').insertAdjacentHTML('afterbegin', '<span>start</span>');\ndocument.getElementById('second').insertAdjacentHTML('afterend', '<hr>');\n"
+      "\n"

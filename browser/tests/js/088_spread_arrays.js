@@ -1,0 +1,15 @@
+const a = [1, 2], b = [3, 4];
+console.log([...a, ...b], [0, ...a, 2.5, ...b, 5]);
+const copy = [...a];
+copy.push(99);
+console.log(a, copy, copy === a);
+console.log([...'héllo'], [...'😀x'].length);
+console.log([...new Set([3, 1, 3, 2, 1])]);
+console.log([...new Map([['a', 1]])]);
+console.log([...[1, , 3]]);
+console.log([...[], ...[]].length);
+const nested = [[1], [2]];
+const shallow = [...nested];
+shallow[0].push('shared');
+console.log(nested);
+console.log([...[1, 2].keys()], [...[1, 2].entries()]);

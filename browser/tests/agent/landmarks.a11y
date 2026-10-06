@@ -1,0 +1,22 @@
+- banner
+  - paragraph: Site header
+- navigation
+  - link "Home" [e1] -> /
+- main
+  - article
+    - heading "Article title" [level=1] [e2]
+    - paragraph: Article body.
+    - paragraph: Article footer
+  - region "Named section"
+    - heading "Named section" [level=2] [e3]
+    - paragraph: Region content.
+  - search
+    - form
+      - searchbox "Query" [e4]
+  - form "Newsletter"
+    - textbox "you@example.com" [e5]
+    - button "Join" [e6]
+- complementary
+  - paragraph: Aside text.
+- contentinfo
+  - paragraph: Site footer

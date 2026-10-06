@@ -1,0 +1,13 @@
+- main
+  - heading "Images" [level=1] [e1]
+  - paragraph
+    - img "A cat"
+    - text: and spacer.
+  - img "A dog"
+  - img "Titled image"
+  - figure "Sales went up."
+    - img "Sales chart"
+  - paragraph
+    - link "Full size" [e2] -> full.jpg
+      - img "Full size"
+  - img "Logo"

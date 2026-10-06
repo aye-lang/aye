@@ -1,0 +1,6 @@
+Windows line endings
+
+first line dropped
+second
+
+NUL: [�]

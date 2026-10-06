@@ -1,0 +1,29 @@
+#document
+  <html>
+    <head>
+    <body>
+      <p>
+        <b>
+          "bold one"
+      <p>
+        <b>
+          "bold two\n"
+      <p>
+        <b>
+          "bold three"
+        " plain\n"
+      <p>
+        <i>
+          "italic "
+          <span>
+            "span"
+        " after span\n"
+      <ul>
+        <li>
+          <em>
+            "em"
+        <li>
+          <em>
+            "item two\n"
+      <em>
+        "\n"

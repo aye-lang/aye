@@ -1,0 +1,83 @@
+// Style for `anyknown dump --style`: the author style sheet of a document
+// (its `<style>` elements and `<link rel=stylesheet>` sheets, fetched
+// relative to the document's URL, in document order), the cascade, and a
+// dump of the computed values that differ from the initial ones:
+//
+//     <body>
+//       display: block
+//       margin-top: 8px
+//       <p class="note">
+//         display: block
+//         color: rgb(255, 0, 0)
+//
+// Text, comments and the doctype are left out.
+
+import css
+import dom
+import dom.Document
+import dom.Kind
+import dom.NodeId
+import engine
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+import url.Url
+
+/// Computes the styles of `doc` (loaded from `base`) and appends the
+/// dump of each of `roots` to `out`.
+fn dumpStyles(alloc: Allocator, doc: *Document, base: *Url, media: css.Media, roots: []NodeId, out: *mut text.Builder) !void {
+    var ua = try css.Sheet.init(alloc)
+    defer ua.deinit()
+    try css.uaSheet(&mut ua, media)
+    var author = try css.Sheet.init(alloc)
+    defer author.deinit()
+    try engine.authorSheets(alloc, doc, base, media, &mut author)
+    var styles = try css.Styles.init(alloc)
+    defer styles.deinit()
+    try css.computeStyles(doc, &ua, &author, media, &mut styles)
+    for r in roots {
+        try styleNode(doc, &styles, r, 0, out)
+    }
+}
+
+fn styleNode(doc: *Document, styles: *css.Styles, h: NodeId, depth: usize, out: *mut text.Builder) AllocError!void {
+    let n = doc.node(h)
+    var inner = depth
+    if n.kind == Kind.Element {
+        try indent(out, depth)
+        try out.appendByte('<')
+        try out.append(n.name)
+        for a in n.attrs {
+            try out.appendByte(' ')
+            try out.append(a.name)
+            try out.append("=")
+            try quoted(out, a.value)
+        }
+        try out.append(">\n")
+        if styles.get(h) |values| {
+            for i, p in css.PROPERTIES {
+                if !css.sameValue(styles.initial[i], values[i]) {
+                    try indent(out, depth + 1)
+                    try out.append(p.name)
+                    try out.append(": ")
+                    try css.writeValue(values[i], out)
+                    try out.appendByte('\n')
+                }
+            }
+        }
+        inner = depth + 1
+    } else if n.kind != Kind.Document {
+        return
+    }
+    var cur = n.first_child
+    while cur |c| {
+        try styleNode(doc, styles, c, inner, out)
+        cur = doc.node(c).next
+    }
+}
+
+fn indent(out: *mut text.Builder, depth: usize) AllocError!void {
+    for i in 0..depth {
+        try out.append("  ")
+    }
+}

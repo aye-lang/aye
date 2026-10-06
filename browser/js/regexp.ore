@@ -1,0 +1,1331 @@
+// js/regexp: regular expressions. A pattern is parsed to a small tree,
+// compiled to instructions for a backtracking matcher (as in
+// Thompson/Pike-style VMs, but depth first), and cached per (pattern,
+// flags). Supported: literals, `.`, classes with ranges and \d \w \s,
+// anchors, \b, groups (capturing, named, non-capturing), alternation,
+// greedy and lazy quantifiers ({n,m} too), backreferences and lookahead.
+// Flags g i m s y (u is accepted). Positions are byte offsets in the
+// WTF-8 subject; the API converts them to UTF-16 indices.
+
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+enum RNode {
+    Empty
+    Char { c: u32 }
+    Any
+    Set { cls: u32, neg: bool }
+    Bol
+    Eol
+    WordB { neg: bool }
+    BackRef { n: u32 }
+    Group { n: u32, body: u32 }
+    Look { neg: bool, body: u32 }
+    Concat { list: u32, count: u32 }
+    Alt { list: u32, count: u32 }
+    Repeat { body: u32, min: u32, max: u32, lazy: bool }
+}
+
+enum RInst {
+    Char { c: u32 }
+    Any
+    Set { cls: u32, neg: bool }
+    Split { x: u32, y: u32 }
+    Jmp { x: u32 }
+    Save { n: u32 }
+    Bol
+    Eol
+    WordB { neg: bool }
+    BackRef { n: u32 }
+    Look { neg: bool, end: u32 }
+    LookEnd
+    Mark { r: u32 }
+    Check { r: u32 }
+    Match
+}
+
+struct CRange {
+    lo: u32
+    hi: u32
+}
+
+struct CSet {
+    start: u32
+    count: u32
+}
+
+let INF: u32 = 0xFFFFFFFF
+
+pub struct RegexProg {
+    alloc: Allocator
+    insts: List(RInst)
+    ranges: List(CRange)
+    sets: List(CSet)
+    nodes: List(RNode)
+    lists: List(u32)
+    // Group names (atoms; A_EMPTY for unnamed), index 1.. per group.
+    names: List(u32)
+    ngroups: u32
+    nregs: u32
+    global: bool
+    icase: bool
+    multiline: bool
+    dotall: bool
+    sticky: bool
+    source: u32
+    flags: u32
+
+    fn deinit(self: *mut Self) {
+        self.insts.deinit()
+        self.ranges.deinit()
+        self.sets.deinit()
+        self.nodes.deinit()
+        self.lists.deinit()
+        self.names.deinit()
+    }
+}
+
+// ---- parsing the pattern
+
+struct RParser {
+    prog: *mut RegexProg
+    atoms: *mut Atoms
+    p: []u8
+    pos: usize
+    tmp: List(u32)
+
+    fn node(self: *mut Self, n: RNode) AllocError!u32 {
+        let id = self.prog.nodes.len() as u32
+        try self.prog.nodes.append(n)
+        return id
+    }
+
+    fn more(self: *Self) bool {
+        return self.pos < self.p.len
+    }
+
+    fn peek(self: *Self) u8 {
+        if self.pos < self.p.len {
+            return self.p[self.pos]
+        }
+        return 0
+    }
+
+    fn alt(self: *mut Self) SyntaxErr!u32 {
+        let m = self.tmp.len()
+        try self.tmp.append(try self.seq())
+        while self.peek() == '|' {
+            self.pos += 1
+            try self.tmp.append(try self.seq())
+        }
+        let count = (self.tmp.len() - m) as u32
+        if count == 1 {
+            let only = self.tmp.items()[m]
+            self.tmp.pop()
+            return only
+        }
+        let start = try self.flush(m)
+        return self.node(RNode.Alt { list: start, count: count })
+    }
+
+    fn flush(self: *mut Self, m: usize) AllocError!u32 {
+        let start = self.prog.lists.len() as u32
+        for i in m..self.tmp.len() {
+            try self.prog.lists.append(self.tmp.items()[i])
+        }
+        while self.tmp.len() > m {
+            self.tmp.pop()
+        }
+        return start
+    }
+
+    fn seq(self: *mut Self) SyntaxErr!u32 {
+        let m = self.tmp.len()
+        while self.more() && self.peek() != '|' && self.peek() != ')' {
+            let a = try self.atom()
+            let q = try self.quantified(a)
+            try self.tmp.append(q)
+        }
+        let count = (self.tmp.len() - m) as u32
+        if count == 0 {
+            return self.node(RNode.Empty)
+        }
+        if count == 1 {
+            let only = self.tmp.items()[m]
+            self.tmp.pop()
+            return only
+        }
+        let start = try self.flush(m)
+        return self.node(RNode.Concat { list: start, count: count })
+    }
+
+    fn number(self: *mut Self) ?u32 {
+        var v: u32 = 0
+        var any = false
+        while self.more() && self.peek() >= '0' && self.peek() <= '9' {
+            if v < 100000 {
+                v = v * 10 + (self.peek() - '0') as u32
+            }
+            self.pos += 1
+            any = true
+        }
+        if any {
+            return v
+        }
+        return null
+    }
+
+    fn quantified(self: *mut Self, a: u32) SyntaxErr!u32 {
+        let c = self.peek()
+        var min: u32 = 0
+        var max: u32 = INF
+        if c == '*' {
+            self.pos += 1
+        } else if c == '+' {
+            min = 1
+            self.pos += 1
+        } else if c == '?' {
+            max = 1
+            self.pos += 1
+        } else if c == '{' {
+            let save = self.pos
+            self.pos += 1
+            if self.number() |lo| {
+                min = lo
+                max = lo
+                if self.peek() == ',' {
+                    self.pos += 1
+                    max = INF
+                    if self.number() |hi| {
+                        max = hi
+                    }
+                }
+                if self.peek() != '}' {
+                    self.pos = save
+                    return a
+                }
+                self.pos += 1
+                if max < min {
+                    return SyntaxErr.Syntax
+                }
+            } else {
+                self.pos = save
+                return a
+            }
+        } else {
+            return a
+        }
+        var lazy = false
+        if self.peek() == '?' {
+            lazy = true
+            self.pos += 1
+        }
+        return self.node(RNode.Repeat { body: a, min: min, max: max, lazy: lazy })
+    }
+
+    fn atom(self: *mut Self) SyntaxErr!u32 {
+        let c = self.p[self.pos]
+        if c == '(' {
+            self.pos += 1
+            if self.peek() == '?' {
+                self.pos += 1
+                let k = self.peek()
+                self.pos += 1
+                if k == ':' {
+                    let body = try self.alt()
+                    try self.close()
+                    return body
+                }
+                if k == '=' || k == '!' {
+                    let body = try self.alt()
+                    try self.close()
+                    return self.node(RNode.Look { neg: k == '!', body: body })
+                }
+                if k == '<' && self.peek() != '=' && self.peek() != '!' {
+                    let start = self.pos
+                    while self.more() && self.peek() != '>' {
+                        self.pos += 1
+                    }
+                    if !self.more() {
+                        return SyntaxErr.Syntax
+                    }
+                    let name = try self.atoms.intern(self.p[start..self.pos])
+                    self.pos += 1
+                    self.prog.ngroups += 1
+                    let n = self.prog.ngroups
+                    try self.prog.names.append(name)
+                    let body = try self.alt()
+                    try self.close()
+                    return self.node(RNode.Group { n: n, body: body })
+                }
+                return SyntaxErr.Syntax
+            }
+            self.prog.ngroups += 1
+            let n = self.prog.ngroups
+            try self.prog.names.append(A_EMPTY)
+            let body = try self.alt()
+            try self.close()
+            return self.node(RNode.Group { n: n, body: body })
+        }
+        if c == '[' {
+            return self.class()
+        }
+        if c == '.' {
+            self.pos += 1
+            return self.node(RNode.Any)
+        }
+        if c == '^' {
+            self.pos += 1
+            return self.node(RNode.Bol)
+        }
+        if c == '$' {
+            self.pos += 1
+            return self.node(RNode.Eol)
+        }
+        if c == '*' || c == '+' || c == '?' {
+            return SyntaxErr.Syntax
+        }
+        if c == '\\' {
+            self.pos += 1
+            if !self.more() {
+                return SyntaxErr.Syntax
+            }
+            let e = self.peek()
+            if e == 'b' || e == 'B' {
+                self.pos += 1
+                return self.node(RNode.WordB { neg: e == 'B' })
+            }
+            if e >= '1' && e <= '9' {
+                if self.number() |n| {
+                    return self.node(RNode.BackRef { n: n })
+                }
+            }
+            if e == 'k' && self.pos + 1 < self.p.len && self.p[self.pos + 1] == '<' {
+                self.pos += 2
+                let start = self.pos
+                while self.more() && self.peek() != '>' {
+                    self.pos += 1
+                }
+                let name = try self.atoms.intern(self.p[start..self.pos])
+                self.pos += 1
+                for i, nm in self.prog.names.items() {
+                    if nm == name {
+                        return self.node(RNode.BackRef { n: i as u32 + 1 })
+                    }
+                }
+                return SyntaxErr.Syntax
+            }
+            let cls = try self.escapeClass()
+            if cls != NONE {
+                return self.node(RNode.Set { cls: cls, neg: false })
+            }
+            let ch = try self.escapeChar()
+            return self.node(RNode.Char { c: ch })
+        }
+        let d = decodeAt(self.p, self.pos)
+        self.pos += d.len
+        return self.node(RNode.Char { c: d.cp })
+    }
+
+    fn close(self: *mut Self) SyntaxErr!void {
+        if self.peek() != ')' {
+            return SyntaxErr.Syntax
+        }
+        self.pos += 1
+    }
+
+    fn addRange(self: *mut Self, lo: u32, hi: u32) AllocError!void {
+        try self.prog.ranges.append(CRange { lo: lo, hi: hi })
+    }
+
+    // After `\`: d D w W s S as a new set (its index), else NONE.
+    fn escapeClass(self: *mut Self) SyntaxErr!u32 {
+        let e = self.peek()
+        if e != 'd' && e != 'D' && e != 'w' && e != 'W' && e != 's' && e != 'S' {
+            return NONE
+        }
+        self.pos += 1
+        let start = self.prog.ranges.len() as u32
+        try self.classRanges(e | 0x20, e < 'a')
+        let id = self.prog.sets.len() as u32
+        try self.prog.sets.append(CSet { start: start, count: self.prog.ranges.len() as u32 - start })
+        return id
+    }
+
+    // Adds the ranges of \d, \w or \s (complemented for \D \W \S).
+    fn classRanges(self: *mut Self, kind: u8, neg: bool) AllocError!void {
+        var buf = @zeroed([24]u32)
+        var n: usize = 0
+        if kind == 'd' {
+            buf[0] = '0'
+            buf[1] = '9'
+            n = 2
+        } else if kind == 'w' {
+            let w = [8]u32{'0', '9', 'A', 'Z', '_', '_', 'a', 'z'}
+            for i, v in w {
+                buf[i] = v
+            }
+            n = 8
+        } else {
+            let sp = [24]u32{
+                0x09, 0x0D, 0x20, 0x20, 0xA0, 0xA0, 0x1680, 0x1680, 0x2000, 0x200A,
+                0x2028, 0x2029, 0x202F, 0x202F, 0x205F, 0x205F, 0x3000, 0x3000,
+                0xFEFF, 0xFEFF, 0, 0, 0, 0,
+            }
+            for i in 0..20 {
+                buf[i] = sp[i]
+            }
+            n = 20
+        }
+        if !neg {
+            var i: usize = 0
+            while i < n {
+                try self.addRange(buf[i], buf[i + 1])
+                i += 2
+            }
+            return
+        }
+        var lo: u32 = 0
+        var i: usize = 0
+        while i < n {
+            if buf[i] > lo {
+                try self.addRange(lo, buf[i] - 1)
+            }
+            lo = buf[i + 1] + 1
+            i += 2
+        }
+        try self.addRange(lo, 0x10FFFF)
+    }
+
+    // The character of an escape after `\` (at pos).
+    fn escapeChar(self: *mut Self) SyntaxErr!u32 {
+        let e = self.peek()
+        self.pos += 1
+        if e == 'n' {
+            return '\n'
+        }
+        if e == 't' {
+            return '\t'
+        }
+        if e == 'r' {
+            return '\r'
+        }
+        if e == 'f' {
+            return 0x0C
+        }
+        if e == 'v' {
+            return 0x0B
+        }
+        if e == '0' {
+            return 0
+        }
+        if e == 'x' && self.pos + 2 <= self.p.len {
+            let h1 = hexVal(self.p[self.pos])
+            let h2 = hexVal(self.p[self.pos + 1])
+            if h1 >= 0 && h2 >= 0 {
+                self.pos += 2
+                return (h1 * 16 + h2) as u32
+            }
+            return 'x'
+        }
+        if e == 'u' {
+            if self.peek() == '{' {
+                self.pos += 1
+                var v: u32 = 0
+                while self.more() && self.peek() != '}' {
+                    let h = hexVal(self.peek())
+                    if h < 0 {
+                        return SyntaxErr.Syntax
+                    }
+                    v = v * 16 + h as u32
+                    self.pos += 1
+                }
+                self.pos += 1
+                return v
+            }
+            if self.pos + 4 <= self.p.len {
+                var v: u32 = 0
+                for k in 0..4 {
+                    let h = hexVal(self.p[self.pos + k])
+                    if h < 0 {
+                        return 'u'
+                    }
+                    v = v * 16 + h as u32
+                }
+                self.pos += 4
+                return v
+            }
+            return 'u'
+        }
+        if e == 'c' && self.more() {
+            let l = self.peek()
+            self.pos += 1
+            return (l & 31) as u32
+        }
+        // An escaped character stands for itself (a UTF-8 sequence).
+        self.pos -= 1
+        let d = decodeAt(self.p, self.pos)
+        self.pos += d.len
+        return d.cp
+    }
+
+    fn class(self: *mut Self) SyntaxErr!u32 {
+        self.pos += 1
+        var neg = false
+        if self.peek() == '^' {
+            neg = true
+            self.pos += 1
+        }
+        let start = self.prog.ranges.len() as u32
+        var first = true
+        while self.more() && (self.peek() != ']' || false) {
+            if self.peek() == ']' && !first {
+                break
+            }
+            if self.peek() == ']' {
+                break
+            }
+            first = false
+            var lo: u32 = 0
+            if self.peek() == '\\' {
+                self.pos += 1
+                if !self.more() {
+                    return SyntaxErr.Syntax
+                }
+                let e = self.peek()
+                if e == 'd' || e == 'D' || e == 'w' || e == 'W' || e == 's' || e == 'S' {
+                    self.pos += 1
+                    try self.classRanges(e | 0x20, e < 'a')
+                    continue
+                }
+                if e == 'b' {
+                    self.pos += 1
+                    lo = 0x08
+                } else {
+                    lo = try self.escapeChar()
+                }
+            } else {
+                let d = decodeAt(self.p, self.pos)
+                self.pos += d.len
+                lo = d.cp
+            }
+            var hi = lo
+            if self.peek() == '-' && self.pos + 1 < self.p.len && self.p[self.pos + 1] != ']' {
+                self.pos += 1
+                if self.peek() == '\\' {
+                    self.pos += 1
+                    hi = try self.escapeChar()
+                } else {
+                    let d = decodeAt(self.p, self.pos)
+                    self.pos += d.len
+                    hi = d.cp
+                }
+                if hi < lo {
+                    return SyntaxErr.Syntax
+                }
+            }
+            try self.addRange(lo, hi)
+        }
+        if !self.more() {
+            return SyntaxErr.Syntax
+        }
+        self.pos += 1
+        let id = self.prog.sets.len() as u32
+        try self.prog.sets.append(CSet { start: start, count: self.prog.ranges.len() as u32 - start })
+        return self.node(RNode.Set { cls: id, neg: neg })
+    }
+}
+
+// ---- compiling
+
+fn emit(prog: *mut RegexProg, i: RInst) AllocError!u32 {
+    let at = prog.insts.len() as u32
+    try prog.insts.append(i)
+    return at
+}
+
+fn patch(prog: *mut RegexProg, at: u32, i: RInst) {
+    prog.insts.items()[at] = i
+}
+
+fn compileNode(prog: *mut RegexProg, n: u32) AllocError!void {
+    match prog.nodes.items()[n] {
+        .Empty => {}
+        .Char { c } => try emit(prog, RInst.Char { c: c })
+        .Any => try emit(prog, RInst.Any)
+        .Set { cls, neg } => try emit(prog, RInst.Set { cls: cls, neg: neg })
+        .Bol => try emit(prog, RInst.Bol)
+        .Eol => try emit(prog, RInst.Eol)
+        .WordB { neg } => try emit(prog, RInst.WordB { neg: neg })
+        .BackRef { n: g } => try emit(prog, RInst.BackRef { n: g })
+        .Group { n: g, body } => {
+            try emit(prog, RInst.Save { n: g * 2 })
+            try compileNode(prog, body)
+            try emit(prog, RInst.Save { n: g * 2 + 1 })
+        }
+        .Look { neg, body } => {
+            let at = try emit(prog, RInst.Look { neg: neg, end: 0 })
+            try compileNode(prog, body)
+            let end = try emit(prog, RInst.LookEnd)
+            patch(prog, at, RInst.Look { neg: neg, end: end })
+        }
+        .Concat { list, count } => {
+            for k in 0..count {
+                try compileNode(prog, prog.lists.items()[(list + k) as usize])
+            }
+        }
+        .Alt { list, count } => {
+            var jumps = List(u32).init(prog.alloc)
+            defer jumps.deinit()
+            for k in 0..count {
+                let alt = prog.lists.items()[(list + k) as usize]
+                if k + 1 < count {
+                    let split = try emit(prog, RInst.Jmp { x: 0 })
+                    try compileNode(prog, alt)
+                    try jumps.append(try emit(prog, RInst.Jmp { x: 0 }))
+                    patch(prog, split, RInst.Split { x: split + 1, y: prog.insts.len() as u32 })
+                } else {
+                    try compileNode(prog, alt)
+                }
+            }
+            let end = prog.insts.len() as u32
+            for j in jumps.items() {
+                patch(prog, j, RInst.Jmp { x: end })
+            }
+        }
+        .Repeat { body, min, max, lazy } => {
+            for k in 0..min {
+                try compileNode(prog, body)
+            }
+            if max == INF {
+                let r = prog.nregs
+                prog.nregs += 1
+                let loop = try emit(prog, RInst.Mark { r: r })
+                let split = try emit(prog, RInst.Jmp { x: 0 })
+                try compileNode(prog, body)
+                try emit(prog, RInst.Check { r: r })
+                try emit(prog, RInst.Jmp { x: loop })
+                let exit = prog.insts.len() as u32
+                if lazy {
+                    patch(prog, split, RInst.Split { x: exit, y: split + 1 })
+                } else {
+                    patch(prog, split, RInst.Split { x: split + 1, y: exit })
+                }
+                return
+            }
+            var splits = List(u32).init(prog.alloc)
+            defer splits.deinit()
+            var k = min
+            while k < max {
+                try splits.append(try emit(prog, RInst.Jmp { x: 0 }))
+                try compileNode(prog, body)
+                k += 1
+            }
+            let exit = prog.insts.len() as u32
+            for s in splits.items() {
+                if lazy {
+                    patch(prog, s, RInst.Split { x: exit, y: s + 1 })
+                } else {
+                    patch(prog, s, RInst.Split { x: s + 1, y: exit })
+                }
+            }
+        }
+    }
+}
+
+/// Compiles pattern/flags (atoms); null on a syntax error.
+fn compileRegex(it: *mut Interp, pattern: u32, flags: u32) JsError!?u32 {
+    let key = (pattern as u64 << 32) | flags as u64
+    if it.regex_cache.get(key) |id| {
+        return id
+    }
+    let prog = try it.alloc.create(RegexProg {
+        alloc: it.alloc,
+        insts: List(RInst).init(it.alloc),
+        ranges: List(CRange).init(it.alloc),
+        sets: List(CSet).init(it.alloc),
+        nodes: List(RNode).init(it.alloc),
+        lists: List(u32).init(it.alloc),
+        names: List(u32).init(it.alloc),
+        ngroups: 0,
+        nregs: 0,
+        global: false,
+        icase: false,
+        multiline: false,
+        dotall: false,
+        sticky: false,
+        source: pattern,
+        flags: flags,
+    })
+    var ok = true
+    for c in it.heap.atoms.name(flags) {
+        if c == 'g' {
+            prog.global = true
+        } else if c == 'i' {
+            prog.icase = true
+        } else if c == 'm' {
+            prog.multiline = true
+        } else if c == 's' {
+            prog.dotall = true
+        } else if c == 'y' {
+            prog.sticky = true
+        } else if c != 'u' && c != 'd' {
+            ok = false
+        }
+    }
+    var rp = RParser { prog: prog, atoms: &mut it.heap.atoms, p: it.heap.atoms.name(pattern), pos: 0, tmp: List(u32).init(it.alloc) }
+    defer rp.tmp.deinit()
+    if ok {
+        let root = rp.alt() catch |e| NONE
+        if root == NONE || rp.pos != rp.p.len {
+            ok = false
+        } else {
+            try emit(prog, RInst.Save { n: 0 })
+            try compileNode(prog, root)
+            try emit(prog, RInst.Save { n: 1 })
+            try emit(prog, RInst.Match)
+        }
+    }
+    if !ok {
+        prog.deinit()
+        it.alloc.destroy(prog)
+        return null
+    }
+    let id = it.regexes.len() as u32
+    try it.regexes.append(prog)
+    try it.regex_cache.put(key, id)
+    return id
+}
+
+// ---- matching
+
+fn fold(c: u32) u32 {
+    if c >= 'A' && c <= 'Z' {
+        return c + 32
+    }
+    if c >= 0xC0 && c <= 0xDE && c != 0xD7 {
+        return c + 32
+    }
+    return c
+}
+
+fn isWordChar(c: u8) bool {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
+}
+
+struct Matcher {
+    prog: *RegexProg
+    s: []u8
+    caps: []mut i64
+    regs: []mut i64
+    steps: u64
+
+    fn inSet(self: *Self, cls: u32, c: u32) bool {
+        let set = self.prog.sets.items()[cls]
+        for k in 0..set.count {
+            let r = self.prog.ranges.items()[(set.start + k) as usize]
+            if c >= r.lo && c <= r.hi {
+                return true
+            }
+            if self.prog.icase {
+                let f = fold(c)
+                if f >= r.lo && f <= r.hi {
+                    return true
+                }
+                if c >= 'a' && c <= 'z' && c - 32 >= r.lo && c - 32 <= r.hi {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    fn wordAt(self: *Self, i: i64) bool {
+        if i < 0 || i as usize >= self.s.len {
+            return false
+        }
+        return isWordChar(self.s[i as usize])
+    }
+
+    // Does the program match from instruction pc at byte sp? On success
+    // `caps` holds the groups.
+    fn run(self: *mut Self, pcIn: u32, spIn: usize) bool {
+        var pc = pcIn
+        var sp = spIn
+        while true {
+            self.steps += 1
+            if self.steps > 50000000 {
+                return false
+            }
+            match self.prog.insts.items()[pc] {
+                .Char { c } => {
+                    if sp >= self.s.len {
+                        return false
+                    }
+                    let d = decodeAt(self.s, sp)
+                    if d.cp != c && !(self.prog.icase && fold(d.cp) == fold(c)) {
+                        return false
+                    }
+                    sp += d.len
+                    pc += 1
+                }
+                .Any => {
+                    if sp >= self.s.len {
+                        return false
+                    }
+                    let d = decodeAt(self.s, sp)
+                    if !self.prog.dotall && (d.cp == '\n' || d.cp == '\r' || d.cp == 0x2028 || d.cp == 0x2029) {
+                        return false
+                    }
+                    sp += d.len
+                    pc += 1
+                }
+                .Set { cls, neg } => {
+                    if sp >= self.s.len {
+                        return false
+                    }
+                    let d = decodeAt(self.s, sp)
+                    if self.inSet(cls, d.cp) == neg {
+                        return false
+                    }
+                    sp += d.len
+                    pc += 1
+                }
+                .Split { x, y } => {
+                    if self.run(x, sp) {
+                        return true
+                    }
+                    pc = y
+                }
+                .Jmp { x } => {
+                    pc = x
+                }
+                .Save { n } => {
+                    let old = self.caps[n]
+                    self.caps[n] = sp as i64
+                    if self.run(pc + 1, sp) {
+                        return true
+                    }
+                    self.caps[n] = old
+                    return false
+                }
+                .Bol => {
+                    if !(sp == 0 || (self.prog.multiline && (self.s[sp - 1] == '\n' || self.s[sp - 1] == '\r'))) {
+                        return false
+                    }
+                    pc += 1
+                }
+                .Eol => {
+                    if !(sp == self.s.len || (self.prog.multiline && (self.s[sp] == '\n' || self.s[sp] == '\r'))) {
+                        return false
+                    }
+                    pc += 1
+                }
+                .WordB { neg } => {
+                    let at = self.wordAt(sp as i64 - 1) != self.wordAt(sp as i64)
+                    if at == neg {
+                        return false
+                    }
+                    pc += 1
+                }
+                .BackRef { n } => {
+                    let a = self.caps[n * 2]
+                    let b = self.caps[n * 2 + 1]
+                    if a >= 0 && b >= a {
+                        let sub = self.s[a as usize..b as usize]
+                        if sp + sub.len > self.s.len {
+                            return false
+                        }
+                        let here = self.s[sp..sp + sub.len]
+                        if self.prog.icase {
+                            for k in 0..sub.len {
+                                if fold(sub[k] as u32) != fold(here[k] as u32) {
+                                    return false
+                                }
+                            }
+                        } else if !text.eql(sub, here) {
+                            return false
+                        }
+                        sp += sub.len
+                    }
+                    pc += 1
+                }
+                .Look { neg, end } => {
+                    let matched = self.run(pc + 1, sp)
+                    if matched == neg {
+                        return false
+                    }
+                    pc = end + 1
+                }
+                .LookEnd => {
+                    return true
+                }
+                .Mark { r } => {
+                    let old = self.regs[r]
+                    self.regs[r] = sp as i64
+                    if self.run(pc + 1, sp) {
+                        return true
+                    }
+                    self.regs[r] = old
+                    return false
+                }
+                .Check { r } => {
+                    if self.regs[r] == sp as i64 {
+                        return false
+                    }
+                    pc += 1
+                }
+                .Match => {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+}
+
+// Searches subject s from byte `from`; on a match fills caps (byte
+// offsets, -1 for unmatched groups) and returns true.
+fn search(it: *mut Interp, prog: *RegexProg, s: []u8, from: usize, caps: []mut i64) AllocError!bool {
+    let regs = try it.heap.int_mem.get(prog.nregs as usize + 1, -1)
+    defer it.heap.int_mem.put(regs)
+    var m = Matcher { prog: prog, s: s, caps: caps, regs: regs, steps: 0 }
+    var start = from
+    while start <= s.len {
+        for i in 0..caps.len {
+            caps[i] = -1
+        }
+        if m.run(0, start) {
+            return true
+        }
+        if prog.sticky || start == s.len {
+            break
+        }
+        start += decodeAt(s, start).len
+    }
+    return false
+}
+
+// ---- the RegExp object
+
+fn installRegExp(it: *mut Interp) JsError!void {
+    let p = it.regexp_proto
+    try makeConstructor(it, "RegExp", 2, regexpCtor, p)
+    try it.defineNative(p, "exec", 1, regexpExec)
+    try it.defineNative(p, "test", 1, regexpTest)
+    try it.defineNative(p, "toString", 0, regexpToString)
+}
+
+/// A new RegExp object for pattern and flags (atoms).
+pub fn newRegExp(it: *mut Interp, pattern: u32, flags: u32) JsError!Value {
+    var id: u32 = NONE
+    if try compileRegex(it, pattern, flags) |k| {
+        id = k
+    } else {
+        it.msg.clear()
+        try it.msg.append("Invalid regular expression: /")
+        try it.msg.append(it.heap.atoms.name(pattern))
+        try it.msg.append("/")
+        try it.msg.append(it.heap.atoms.name(flags))
+        try it.msg.append(": Invalid pattern")
+        let e = try it.makeError(it.syntax_error_proto, it.msg.bytes())
+        return it.throwValue(e)
+    }
+    let o = try it.newObjectOf(Class.RegExp, it.regexp_proto, ObjData.Prim { v: numVal(id as f64) })
+    try it.push(objVal(o))
+    try it.heap.addProp(o, A_LASTINDEX, numVal(0.0), Value.Undefined, F_WRITE)
+    try it.heap.addProp(o, A_SOURCE, try it.atomValue(pattern), Value.Undefined, 0)
+    try it.heap.addProp(o, A_FLAGS, try it.atomValue(flags), Value.Undefined, 0)
+    let prog = it.regexes.items()[id]
+    try it.defineOwn(o, try it.intern("global"), boolVal(prog.global), 0)
+    try it.defineOwn(o, try it.intern("ignoreCase"), boolVal(prog.icase), 0)
+    try it.defineOwn(o, try it.intern("multiline"), boolVal(prog.multiline), 0)
+    try it.defineOwn(o, try it.intern("sticky"), boolVal(prog.sticky), 0)
+    return it.pop()
+}
+
+fn regexpCtor(it: *mut Interp, a: Args) JsError!Value {
+    let pv = it.arg(a, 0)
+    var pattern = A_EMPTY
+    var flags = A_EMPTY
+    if it.hasClass(pv, Class.RegExp) {
+        let prog = progOf(it, objectOf(pv))
+        pattern = prog.source
+        flags = prog.flags
+    } else if !isUndef(pv) {
+        let ps = try it.toStringValue(pv)
+        pattern = try it.toKey(ps)
+    }
+    if !isUndef(it.arg(a, 1)) {
+        let fs = try it.toStringValue(it.arg(a, 1))
+        flags = try it.toKey(fs)
+    }
+    return newRegExp(it, pattern, flags)
+}
+
+fn progOf(it: *mut Interp, o: u32) *RegexProg {
+    var id: u32 = 0
+    match it.heap.obj(o).data {
+        .Prim { v } => {
+            match v {
+                .Num { n } => {
+                    id = n as u32
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+    return it.regexes.items()[id]
+}
+
+fn thisRegExp(it: *mut Interp, v: Value) JsError!u32 {
+    if it.hasClass(v, Class.RegExp) {
+        return objectOf(v)
+    }
+    try it.typeError("RegExp method called on incompatible receiver")
+    return NONE
+}
+
+pub fn appendRegExpText(it: *mut Interp, b: *mut text.Builder, o: u32) JsError!void {
+    let prog = progOf(it, o)
+    try b.appendByte('/')
+    try b.append(it.heap.atoms.name(prog.source))
+    try b.appendByte('/')
+    try b.append(it.heap.atoms.name(prog.flags))
+}
+
+fn regexpToString(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisRegExp(it, a.this)
+    let b = try it.builder()
+    defer it.release(b)
+    try appendRegExpText(it, b, o)
+    return it.takeString(b)
+}
+
+// Runs regexp o on string s honoring lastIndex for g/y; caps gets the
+// groups (byte offsets). Updates lastIndex.
+fn execRaw(it: *mut Interp, o: u32, s: u32, caps: []mut i64) JsError!bool {
+    let prog = progOf(it, o)
+    var from: usize = 0
+    let useLast = prog.global || prog.sticky
+    if useLast {
+        let li = try it.getProp(objVal(o), A_LASTINDEX)
+        let x = try it.toNumber(li)
+        if x > it.heap.str(s).len16 as f64 {
+            try it.setProp(objVal(o), A_LASTINDEX, numVal(0.0))
+            return false
+        }
+        if x > 0.0 {
+            from = byteOffset(it.heap.bytes(s), x as u32)
+        }
+    }
+    let found = try search(it, prog, it.heap.bytes(s), from, caps)
+    if useLast {
+        var li = 0.0
+        if found {
+            li = unitOffset(it.heap.bytes(s), caps[1] as usize) as f64
+        }
+        try it.setProp(objVal(o), A_LASTINDEX, numVal(li))
+    }
+    return found
+}
+
+// The match array of exec: [match, groups...] with index, input, groups.
+fn matchArray(it: *mut Interp, o: u32, s: u32, caps: []i64) JsError!Value {
+    let prog = progOf(it, o)
+    let arr = try it.newArray(0)
+    try it.push(objVal(arr))
+    let bytes = it.heap.bytes(s)
+    for g in 0..prog.ngroups + 1 {
+        let a0 = caps[g * 2]
+        let b0 = caps[g * 2 + 1]
+        if a0 >= 0 && b0 >= a0 {
+            let v = try it.newString(it.heap.bytes(s)[a0 as usize..b0 as usize])
+            try it.heap.pushElem(arr, v)
+        } else {
+            try it.heap.pushElem(arr, Value.Undefined)
+        }
+    }
+    try it.defineOwn(arr, try it.intern("index"), numVal(unitOffset(bytes, caps[0] as usize) as f64), F_DEFAULT)
+    try it.defineOwn(arr, try it.intern("input"), strVal(s), F_DEFAULT)
+    var groups = Value.Undefined
+    var named = false
+    for nm in prog.names.items() {
+        if nm != A_EMPTY {
+            named = true
+        }
+    }
+    if named {
+        let go = try it.newObject(NONE)
+        groups = objVal(go)
+        try it.push(groups)
+        for i, nm in prog.names.items() {
+            if nm != A_EMPTY {
+                try it.defineOwn(go, nm, holeToUndef(it.heap.obj(arr).elems[i + 1]), F_DEFAULT)
+            }
+        }
+        it.pop()
+    }
+    try it.defineOwn(arr, try it.intern("groups"), groups, F_DEFAULT)
+    return it.pop()
+}
+
+fn capsFor(it: *mut Interp, o: u32) AllocError![]mut i64 {
+    return it.heap.int_mem.get((progOf(it, o).ngroups as usize + 1) * 2, -1)
+}
+
+fn regexpExec(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisRegExp(it, a.this)
+    let sv = try argString(it, a, 0)
+    try it.push(sv)
+    let caps = try capsFor(it, o)
+    defer it.heap.int_mem.put(caps)
+    if !try execRaw(it, o, strOf(sv), caps) {
+        it.pop()
+        return Value.Null
+    }
+    let r = try matchArray(it, o, strOf(sv), caps)
+    it.pop()
+    return r
+}
+
+fn regexpTest(it: *mut Interp, a: Args) JsError!Value {
+    let o = try thisRegExp(it, a.this)
+    let sv = try argString(it, a, 0)
+    try it.push(sv)
+    let caps = try capsFor(it, o)
+    defer it.heap.int_mem.put(caps)
+    let found = try execRaw(it, o, strOf(sv), caps)
+    it.pop()
+    return boolVal(found)
+}
+
+// The RegExp of a match/search argument (strings become patterns).
+fn toRegExp(it: *mut Interp, v: Value, flags: []u8) JsError!Value {
+    if it.hasClass(v, Class.RegExp) {
+        return v
+    }
+    var pattern = A_EMPTY
+    if !isUndef(v) {
+        let ps = try it.toStringValue(v)
+        pattern = try it.toKey(ps)
+    }
+    return newRegExp(it, pattern, try it.intern(flags))
+}
+
+pub fn regexpMatch(it: *mut Interp, s: u32, rv: Value, all: bool) JsError!Value {
+    var flags: []u8 = ""
+    if all {
+        flags = "g"
+    }
+    let re = try toRegExp(it, rv, flags)
+    try it.push(re)
+    let o = objectOf(re)
+    let prog = progOf(it, o)
+    let caps = try capsFor(it, o)
+    defer it.heap.int_mem.put(caps)
+    if !prog.global && !all {
+        if !try execRaw(it, o, s, caps) {
+            it.pop()
+            return Value.Null
+        }
+        let r = try matchArray(it, o, s, caps)
+        it.pop()
+        return r
+    }
+    if all && !prog.global {
+        return it.typeError("String.prototype.matchAll called with a non-global RegExp argument")
+    }
+    let out = try it.newArray(0)
+    try it.push(objVal(out))
+    try it.setProp(re, A_LASTINDEX, numVal(0.0))
+    var from: usize = 0
+    while from <= it.heap.bytes(s).len {
+        if !try search(it, prog, it.heap.bytes(s), from, caps) {
+            break
+        }
+        if all {
+            let m = try matchArray(it, o, s, caps)
+            try it.heap.pushElem(out, m)
+        } else {
+            let m = try it.newString(it.heap.bytes(s)[caps[0] as usize..caps[1] as usize])
+            try it.heap.pushElem(out, m)
+        }
+        from = caps[1] as usize
+        if caps[1] == caps[0] {
+            if from >= it.heap.bytes(s).len {
+                break
+            }
+            from += decodeAt(it.heap.bytes(s), from).len
+        }
+    }
+    let r = it.pop()
+    it.pop()
+    if !all && it.heap.obj(out).nelems == 0 {
+        return Value.Null
+    }
+    return r
+}
+
+pub fn regexpSearch(it: *mut Interp, s: u32, rv: Value) JsError!Value {
+    let re = try toRegExp(it, rv, "")
+    try it.push(re)
+    let o = objectOf(re)
+    let caps = try capsFor(it, o)
+    defer it.heap.int_mem.put(caps)
+    let found = try search(it, progOf(it, o), it.heap.bytes(s), 0, caps)
+    it.pop()
+    if !found {
+        return numVal(-1.0)
+    }
+    return numVal(unitOffset(it.heap.bytes(s), caps[0] as usize) as f64)
+}
+
+pub fn regexpReplace(it: *mut Interp, s: u32, re: Value, repl: Value, all: bool) JsError!Value {
+    let o = objectOf(re)
+    let prog = progOf(it, o)
+    if all && !prog.global {
+        return it.typeError("replaceAll must be called with a global RegExp")
+    }
+    let base = it.stack.len()
+    defer it.truncate(base)
+    let fnRepl = it.isCallable(repl)
+    var replS = Value.Undefined
+    if !fnRepl {
+        replS = try it.toStringValue(repl)
+        try it.push(replS)
+    }
+    let caps = try capsFor(it, o)
+    defer it.heap.int_mem.put(caps)
+    let b = try it.builder()
+    defer it.release(b)
+    var from: usize = 0
+    var last: usize = 0
+    let global = prog.global
+    if !global {
+        if prog.sticky {
+            let li = try it.toNumber(try it.getProp(re, A_LASTINDEX))
+            from = byteOffset(it.heap.bytes(s), li as u32)
+        }
+    } else {
+        try it.setProp(re, A_LASTINDEX, numVal(0.0))
+    }
+    while from <= it.heap.bytes(s).len {
+        if !try search(it, prog, it.heap.bytes(s), from, caps) {
+            break
+        }
+        let ms = caps[0] as usize
+        let me = caps[1] as usize
+        try b.append(it.heap.bytes(s)[last..ms])
+        let groups = try it.newArray(0)
+        try it.push(objVal(groups))
+        for g in 0..prog.ngroups + 1 {
+            let a0 = caps[g * 2]
+            let b0 = caps[g * 2 + 1]
+            if a0 >= 0 && b0 >= a0 {
+                let gv = try it.newString(it.heap.bytes(s)[a0 as usize..b0 as usize])
+                try it.heap.pushElem(groups, gv)
+            } else {
+                try it.heap.pushElem(groups, Value.Undefined)
+            }
+        }
+        if fnRepl {
+            let cb = it.stack.len()
+            try it.push(repl)
+            try it.push(Value.Undefined)
+            for g in 0..prog.ngroups + 1 {
+                try it.push(it.heap.obj(groups).elems[g])
+            }
+            try it.push(numVal(unitOffset(it.heap.bytes(s), ms) as f64))
+            try it.push(strVal(s))
+            let r = try it.callAt(cb, prog.ngroups as usize + 3)
+            try it.appendString(b, r)
+        } else {
+            try appendReplacement(it, b, it.heap.bytes(strOf(replS)), it.heap.bytes(s), ms, me, groups)
+        }
+        it.pop()
+        last = me
+        from = me
+        if me == ms {
+            if from >= it.heap.bytes(s).len {
+                break
+            }
+            let d = decodeAt(it.heap.bytes(s), from)
+            try b.append(it.heap.bytes(s)[from..from + d.len])
+            from += d.len
+            last = from
+        }
+        if !global {
+            break
+        }
+    }
+    if last <= it.heap.bytes(s).len {
+        try b.append(it.heap.bytes(s)[last..])
+    }
+    return it.takeString(b)
+}
+
+pub fn regexpSplit(it: *mut Interp, s: u32, re: Value, limitV: Value) JsError!Value {
+    let o = objectOf(re)
+    let prog = progOf(it, o)
+    var limit: u32 = 0xFFFFFFFF
+    if !isUndef(limitV) {
+        limit = toUint32(try it.toNumber(limitV))
+    }
+    let out = try it.newArray(0)
+    try it.push(objVal(out))
+    let caps = try capsFor(it, o)
+    defer it.heap.int_mem.put(caps)
+    let n = it.heap.bytes(s).len
+    if limit == 0 {
+        return it.pop()
+    }
+    if n == 0 {
+        if !try search(it, prog, it.heap.bytes(s), 0, caps) {
+            try it.heap.pushElem(out, strVal(s))
+        }
+        return it.pop()
+    }
+    var p: usize = 0
+    var q: usize = 0
+    while q < n {
+        if !try search(it, prog, it.heap.bytes(s), q, caps) {
+            break
+        }
+        let e = caps[1] as usize
+        let ms = caps[0] as usize
+        if ms >= n {
+            break
+        }
+        if e == p {
+            q = ms + decodeAt(it.heap.bytes(s), ms).len
+            continue
+        }
+        let piece = try it.newString(it.heap.bytes(s)[p..ms])
+        try it.heap.pushElem(out, piece)
+        if it.heap.obj(out).nelems >= limit {
+            return it.pop()
+        }
+        for g in 1..prog.ngroups + 1 {
+            let a0 = caps[g * 2]
+            let b0 = caps[g * 2 + 1]
+            if a0 >= 0 && b0 >= a0 {
+                let gv = try it.newString(it.heap.bytes(s)[a0 as usize..b0 as usize])
+                try it.heap.pushElem(out, gv)
+            } else {
+                try it.heap.pushElem(out, Value.Undefined)
+            }
+            if it.heap.obj(out).nelems >= limit {
+                return it.pop()
+            }
+        }
+        p = e
+        q = p
+    }
+    let rest = try it.newString(it.heap.bytes(s)[p..])
+    try it.heap.pushElem(out, rest)
+    return it.pop()
+}

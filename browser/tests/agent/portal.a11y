@@ -1,0 +1,36 @@
+- banner
+  - heading "Portal" [level=1] [e1]
+    - link "Portal" [e2] -> /
+  - search
+    - searchbox "Search the portal" [e3]
+    - button "Go" [e4]
+- navigation
+  - list
+    - listitem
+      - link "News" [e5] -> /news
+      - list
+        - listitem
+          - link "World" [e6] -> /news/world
+        - listitem
+          - link "Local" [e7] -> /news/local
+    - listitem
+      - link "Sport" [e8] -> /sport
+    - listitem
+      - link "Weather" [e9] -> /weather
+- complementary "Sidebar"
+  - heading "Trending" [level=2] [e10]
+  - list
+    - listitem
+      - link "First trend" [e11] -> /t/1
+    - listitem
+      - link "Second trend" [e12] -> /t/2
+- article
+  - heading "Weather today" [level=2] [e13]
+  - paragraph: Sunny, then rain in the evening.
+- article
+  - heading "Tomorrow" [level=2] [e14]
+  - paragraph: Clouds.
+- contentinfo
+  - link "Contact" [e15] -> /contact
+  - text: |
+  - link "Terms" [e16] -> /terms

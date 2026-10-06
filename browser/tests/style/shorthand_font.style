@@ -1,0 +1,87 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <p class="f1">
+      display: block
+      font-size: 12px
+      margin-top: 12px
+      margin-bottom: 12px
+    <p class="f2">
+      display: block
+      font-size: 20px
+      font-weight: 700
+      font-style: italic
+      font-family: "Times New Roman", Times, serif
+      line-height: 1.5
+      margin-top: 20px
+      margin-bottom: 20px
+    <p class="f3">
+      display: block
+      font-size: 24px
+      font-weight: 600
+      font-family: Arial
+      line-height: 30px
+      margin-top: 24px
+      margin-bottom: 24px
+    <p class="f4">
+      display: block
+      font-size: 14px
+      font-family: monospace
+      margin-top: 14px
+      margin-bottom: 14px
+    <p class="f5">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <div class="f6">
+      display: block
+      font-size: 32px
+      font-weight: 300
+      font-family: sans-serif
+      line-height: 48px
+      <span class="k">
+        font-size: 9px
+        font-weight: 300
+        font-family: sans-serif
+        line-height: 48px
+      <span class="k2">
+        font-size: 38.4px
+        font-weight: 300
+        font-family: sans-serif
+        line-height: 48px
+      <span class="k3">
+        font-size: 26.67px
+        font-weight: 300
+        font-family: sans-serif
+        line-height: 48px
+      <span class="k4">
+        font-size: 48px
+        font-weight: 300
+        font-family: sans-serif
+        line-height: 48px
+    <div class="b1">
+      display: block
+      font-weight: 100
+      <b>
+        <span class="b2">
+          font-weight: 700
+      <span class="b3">
+        font-weight: 950
+    <p class="fam">
+      display: block
+      font-family: "My Font", Helvetica Neue, sans-serif
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="famBad">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px

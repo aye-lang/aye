@@ -1,0 +1,36 @@
+<!doctype html>
+<title>Portal</title>
+<body>
+<header>
+  <h1><a href="/">Portal</a></h1>
+  <form role=search action=/search><input type=search name=q aria-label="Search the portal" placeholder="Search…"><button>Go</button></form>
+</header>
+<nav>
+  <ul>
+    <li><a href="/news">News</a>
+      <ul>
+        <li><a href="/news/world">World</a>
+        <li><a href="/news/local">Local</a>
+      </ul>
+    <li><a href="/sport">Sport</a>
+    <li><a href="/weather" aria-current=page>Weather</a>
+  </ul>
+</nav>
+<aside aria-label="Sidebar">
+  <h2>Trending</h2>
+  <ol><li><a href="/t/1">First trend</a><li><a href="/t/2">Second trend</a></ol>
+</aside>
+<div id=content>
+  <article>
+    <h2>Weather today</h2>
+    <p>Sunny, then <b>rain</b> in the evening.</p>
+  </article>
+  <article>
+    <h2>Tomorrow</h2>
+    <p>Clouds.</p>
+  </article>
+</div>
+<footer>
+  <a href="/contact">Contact</a> | <a href="/terms">Terms</a>
+</footer>
+</body>

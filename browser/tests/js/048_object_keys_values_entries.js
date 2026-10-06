@@ -1,0 +1,12 @@
+const o = { a: 1, b: 'two', c: [3] };
+console.log(Object.keys(o), Object.values(o), Object.entries(o));
+for (const [k, v] of Object.entries(o)) console.log(k, '=>', v);
+console.log(Object.keys([5, 6, 7]), Object.keys('ab'), Object.values('xy'));
+const inherited = Object.create({ p: 1 });
+inherited.q = 2;
+console.log(Object.keys(inherited));
+const nonEnum = {};
+Object.defineProperty(nonEnum, 'hidden', { value: 1, enumerable: false });
+nonEnum.shown = 2;
+console.log(Object.keys(nonEnum), Object.entries(nonEnum));
+console.log(Object.entries({}).length);

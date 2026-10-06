@@ -1,0 +1,18 @@
+{"id":1,"cmd":"navigate","url":"$BASE/forms/post.html"}
+{"id":2,"cmd":"type","ref":"e2","text":"Ada & Grace = 100%"}
+{"id":3,"cmd":"type","ref":"e3","text":"two\nlines"}
+{"id":4,"cmd":"click","ref":"e4"}
+{"id":5,"cmd":"read"}
+{"id":6,"cmd":"back"}
+{"id":7,"cmd":"type","ref":"e18","text":"Ada"}
+{"id":8,"cmd":"click","ref":"e21"}
+{"id":9,"cmd":"read"}
+{"id":10,"cmd":"back"}
+{"id":11,"cmd":"click","ref":"e41"}
+{"id":12,"cmd":"read"}
+{"id":13,"cmd":"back"}
+{"id":14,"cmd":"click","ref":"e60"}
+{"id":15,"cmd":"read"}
+{"id":16,"cmd":"back"}
+{"id":17,"cmd":"click","ref":"e79"}
+{"id":18,"cmd":"read"}

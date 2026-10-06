@@ -1,0 +1,13 @@
+const o = { b: 1, a: 2, 10: 'ten', 2: 'two', z: 3, '1': 'one', '-1': 'neg', '01': 'lead' };
+console.log(Object.keys(o));
+o.c = 4;
+o[5] = 'five';
+console.log(Object.keys(o).join(','));
+delete o.a;
+o.a = 'again';
+console.log(Object.keys(o).join(','));
+const arr = [];
+for (const k in { y: 1, 3: 1, x: 1, 1: 1 }) arr.push(k);
+console.log(arr);
+console.log(JSON.stringify({ z: 1, 5: 2, a: 3, 0: 4 }));
+console.log(Object.entries({ b: 1, 4294967294: 'maxidx', 4294967295: 'big', 1.5: 'f' }));

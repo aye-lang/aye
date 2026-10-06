@@ -1,0 +1,137 @@
+// The images of a page: every `img` (and `input type=image`) with a
+// `src` is fetched (relative to the page's URL; `data:` URLs too) and
+// decoded once per URL, and the elements are mapped to their bitmaps
+// for layout (natural sizes) and paint. `updateImages` runs before each
+// layout and only fetches what is new (elements added by scripts); a
+// URL that failed is not fetched again.
+
+import dom
+import dom.Document
+import dom.NodeId
+import image
+import layout
+import net
+import std
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+import url
+import url.Url
+
+/// One fetched URL and its bitmap (null when it could not be fetched
+/// or decoded).
+struct CachedImage {
+    href: []mut u8
+    bmp: ?*mut image.Bitmap
+}
+
+pub struct ImageCache {
+    alloc: Allocator
+    entries: List(CachedImage)
+    nodes: layout.Images
+
+    pub fn init(alloc: Allocator) ImageCache {
+        return ImageCache { alloc: alloc, entries: List(CachedImage).init(alloc), nodes: layout.Images.init(alloc) }
+    }
+
+    pub fn deinit(self: *mut Self) {
+        for e in self.entries.items() {
+            self.alloc.free(e.href)
+            if e.bmp |b| {
+                b.deinit(self.alloc)
+                self.alloc.destroy(b)
+            }
+        }
+        self.entries.deinit()
+        self.nodes.deinit()
+    }
+
+    /// The bitmap of `href`, fetched and decoded the first time.
+    fn bitmapOf(self: *mut Self, href: []u8) AllocError!?*mut image.Bitmap {
+        for e in self.entries.items() {
+            if text.eql(e.href, href) {
+                return e.bmp
+            }
+        }
+        let owned = try self.alloc.alloc(0 as u8, href.len)
+        std.mem.copy(owned, href)
+        var bmp: ?*mut image.Bitmap = null
+        let decoded = fetchImage(self.alloc, href)
+        if decoded |d| {
+            bmp = self.alloc.create(d) catch |e| {
+                var lost = d
+                lost.deinit(self.alloc)
+                self.alloc.free(owned)
+                return e
+            }
+        }
+        self.entries.append(CachedImage { href: owned, bmp: bmp }) catch |e| {
+            self.alloc.free(owned)
+            if bmp |b| {
+                b.deinit(self.alloc)
+                self.alloc.destroy(b)
+            }
+            return e
+        }
+        return bmp
+    }
+}
+
+// Fetches and decodes `href`; null when either fails.
+fn fetchImage(alloc: Allocator, href: []u8) ?image.Bitmap {
+    let target = url.parse(alloc, href) catch |e| {
+        return null
+    }
+    defer target.deinit(alloc)
+    let res = net.fetch(alloc, &target) catch |e| {
+        return null
+    }
+    defer res.deinit(alloc)
+    if res.status >= 400 {
+        return null
+    }
+    let bmp = image.decode(alloc, res.body) catch |e| {
+        return null
+    }
+    return bmp
+}
+
+/// Fetches the images of the page's elements that have none yet, and
+/// maps the elements to their bitmaps.
+pub fn updateImages(page: *mut Page) AllocError!void {
+    if page.images == null {
+        page.images = try page.alloc.create(ImageCache.init(page.alloc))
+    }
+    return fillImages(page.images.?, &page.doc, &page.url)
+}
+
+/// Fetches the images of the elements of `doc` that `cache` has no
+/// bitmap for, resolving their URLs against `base`.
+pub fn fillImages(cache: *mut ImageCache, doc: *Document, base: *Url) AllocError!void {
+    var cur: ?NodeId = doc.root
+    while cur |h| {
+        cur = doc.following(h, doc.root)
+        if !isImageElement(doc, h) || cache.nodes.get(h) != null {
+            continue
+        }
+        let src = text.trim(doc.attr(h, "src") orelse "")
+        if src.len == 0 {
+            continue
+        }
+        let target = url.resolve(cache.alloc, base, src) catch |e| {
+            continue
+        }
+        defer target.deinit(cache.alloc)
+        if try cache.bitmapOf(target.withoutFragment()) |bmp| {
+            try cache.nodes.put(h, bmp)
+        }
+    }
+}
+
+fn isImageElement(doc: *Document, el: NodeId) bool {
+    if doc.isElement(el, "img") {
+        return true
+    }
+    return doc.isElement(el, "input") && text.eql(dom.inputType(doc, el), "image")
+}

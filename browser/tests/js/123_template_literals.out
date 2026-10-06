@@ -1,0 +1,10 @@
+sum: 15, product: 50
+nested inner small 5
+multi
+line
+string
+items: <x><y>
+null undefined 1,2,3 [object Object] true
+escape ` backtick and ${not interpolated} and \
+n=1n=2 true
+5 3

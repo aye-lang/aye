@@ -1,0 +1,323 @@
+// gif: the GIF decoder (87a and 89a), first frame only. The frame is
+// drawn at its offset on a canvas of the logical screen size; pixels the
+// frame does not cover, and pixels of the Graphic Control Extension's
+// transparent index, are transparent black.
+//
+// A file whose structure is cut short is invalid. LZW data that ends
+// early or holds a bad code just stops the frame (the rest stays
+// transparent), as browsers show partial GIFs.
+
+import std
+import std.mem.Allocator
+
+// Interlaced rows come in four passes: every 8th row from 0, every 8th
+// from 4, every 4th from 2, every 2nd from 1.
+let GIF_PASS_START = [4]usize{0, 4, 2, 1}
+let GIF_PASS_STEP = [4]usize{8, 8, 4, 2}
+
+/// Decodes the first frame of a GIF file onto a canvas of its logical
+/// screen size. Free the result with `deinit`.
+pub fn decodeGif(alloc: Allocator, data: []u8) ImageError!Bitmap {
+    if data.len < 13 || sniff(data) != Format.Gif {
+        return ImageError.Invalid
+    }
+    let screen_w = gifLe16(data, 6)
+    let screen_h = gifLe16(data, 8)
+    try checkSize(screen_w, screen_h)
+    let flags = data[10]
+    var pos: usize = 13
+    var global = data[0..0]
+    if (flags & 0x80) != 0 {
+        let size = 3 * ((2 as usize) << (flags & 7) as usize)
+        if size > data.len - pos {
+            return ImageError.Invalid
+        }
+        global = data[pos..pos + size]
+        pos += size
+    }
+    var has_transparent = false
+    var transparent: usize = 0
+    while pos < data.len {
+        let block = data[pos]
+        pos += 1
+        if block == 0x21 {
+            // An extension: a label, then sub-blocks. Only the Graphic
+            // Control Extension matters (its first sub-block: flags,
+            // delay, transparent index).
+            if pos >= data.len {
+                return ImageError.Invalid
+            }
+            let label = data[pos]
+            pos += 1
+            if label == 0xF9 && pos + 5 <= data.len && data[pos] >= 4 {
+                has_transparent = (data[pos + 1] & 1) != 0
+                transparent = data[pos + 4] as usize
+            }
+            pos = try gifSkipBlocks(data, pos)
+        } else if block == 0x2C {
+            return gifFrame(alloc, data, pos, screen_w, screen_h, global, has_transparent, transparent)
+        } else {
+            // The trailer (0x3B) before any image, or garbage.
+            return ImageError.Invalid
+        }
+    }
+    return ImageError.Invalid
+}
+
+fn gifLe16(data: []u8, at: usize) usize {
+    return data[at] as usize | (data[at + 1] as usize << 8)
+}
+
+// The position after the sub-blocks starting at `pos` (each a length
+// byte and that many bytes; a zero length ends them).
+fn gifSkipBlocks(data: []u8, pos: usize) ImageError!usize {
+    var p = pos
+    while true {
+        if p >= data.len {
+            return ImageError.Invalid
+        }
+        let n = data[p] as usize
+        p += 1
+        if n == 0 {
+            return p
+        }
+        if n > data.len - p {
+            return ImageError.Invalid
+        }
+        p += n
+    }
+    return ImageError.Invalid
+}
+
+// The image descriptor at `pos` (after its 0x2C), its color table and
+// its LZW data.
+fn gifFrame(
+    alloc: Allocator,
+    data: []u8,
+    pos: usize,
+    screen_w: usize,
+    screen_h: usize,
+    global: []u8,
+    has_transparent: bool,
+    transparent: usize,
+) ImageError!Bitmap {
+    if data.len - pos < 10 {
+        return ImageError.Invalid
+    }
+    let left = gifLe16(data, pos)
+    let top = gifLe16(data, pos + 2)
+    let fw = gifLe16(data, pos + 4)
+    let fh = gifLe16(data, pos + 6)
+    let flags = data[pos + 8]
+    var p = pos + 9
+    var colors = global
+    if (flags & 0x80) != 0 {
+        let size = 3 * ((2 as usize) << (flags & 7) as usize)
+        if size > data.len - p {
+            return ImageError.Invalid
+        }
+        colors = data[p..p + size]
+        p += size
+    }
+    if p >= data.len {
+        return ImageError.Invalid
+    }
+    let min_size = data[p] as u32
+    p += 1
+    // Indices are bytes: more than 8 bits of them cannot be colors.
+    if min_size < 1 || min_size > 8 {
+        return ImageError.Invalid
+    }
+    // The LZW codes, out of their sub-blocks.
+    var codes = std.text.Builder.init(alloc)
+    defer codes.deinit()
+    while true {
+        if p >= data.len {
+            return ImageError.Invalid
+        }
+        let n = data[p] as usize
+        p += 1
+        if n == 0 {
+            break
+        }
+        if n > data.len - p {
+            return ImageError.Invalid
+        }
+        try codes.append(data[p..p + n])
+        p += n
+    }
+
+    var bmp = try newBitmap(alloc, screen_w, screen_h)
+    errdefer bmp.deinit(alloc)
+    var sink = GifSink {
+        pixels: bmp.pixels,
+        screen_w: screen_w,
+        screen_h: screen_h,
+        left: left,
+        top: top,
+        width: fw,
+        height: fh,
+        colors: colors,
+        has_transparent: has_transparent,
+        transparent: transparent,
+        interlaced: (flags & 0x40) != 0,
+        x: 0,
+        y: 0,
+        pass: 0,
+        done: fw == 0 || fh == 0,
+    }
+    gifLzw(codes.bytes(), min_size, &mut sink)
+    return bmp
+}
+
+// Places decoded color indices on the canvas, in the frame's row order.
+struct GifSink {
+    pixels: []mut u8
+    screen_w: usize
+    screen_h: usize
+    left: usize
+    top: usize
+    width: usize
+    height: usize
+    colors: []u8
+    has_transparent: bool
+    transparent: usize
+    interlaced: bool
+    // The frame pixel the next index is for.
+    x: usize
+    y: usize
+    pass: usize
+    // All rows are written: the rest of the data is ignored.
+    done: bool
+
+    fn put(self: *mut Self, index: u8) {
+        if self.done {
+            return
+        }
+        let i = index as usize
+        let cx = self.left + self.x
+        let cy = self.top + self.y
+        // Pixels off the canvas are dropped; indices past the color
+        // table are opaque black.
+        if cx < self.screen_w && cy < self.screen_h && !(self.has_transparent && i == self.transparent) {
+            let at = (cy * self.screen_w + cx) * 4
+            if i * 3 + 2 < self.colors.len {
+                self.pixels[at] = self.colors[i * 3]
+                self.pixels[at + 1] = self.colors[i * 3 + 1]
+                self.pixels[at + 2] = self.colors[i * 3 + 2]
+            } else {
+                self.pixels[at] = 0
+                self.pixels[at + 1] = 0
+                self.pixels[at + 2] = 0
+            }
+            self.pixels[at + 3] = 255
+        }
+        self.x += 1
+        if self.x < self.width {
+            return
+        }
+        self.x = 0
+        if !self.interlaced {
+            self.y += 1
+            self.done = self.y >= self.height
+            return
+        }
+        self.y += GIF_PASS_STEP[self.pass]
+        while self.y >= self.height {
+            self.pass += 1
+            if self.pass >= 4 {
+                self.done = true
+                return
+            }
+            self.y = GIF_PASS_START[self.pass]
+        }
+    }
+}
+
+// LZW with variable-width codes (least significant bit first), a clear
+// and an end code, and a table of at most 4096 strings. Each string is
+// stored as the code of its prefix plus a last byte; `firsts` and `lens`
+// let a string be written without a second walk.
+fn gifLzw(codes: []u8, min_size: u32, sink: *mut GifSink) {
+    let clear = (1 as u32) << min_size
+    let end = clear + 1
+    var prefix = @zeroed([4096]u16)
+    var suffix = @zeroed([4096]u8)
+    var firsts = @zeroed([4096]u8)
+    var lens = @zeroed([4096]u16)
+    for i in 0..clear as usize {
+        suffix[i] = i as u8
+        firsts[i] = i as u8
+        lens[i] = 1
+    }
+    var stack = @zeroed([4096]u8)
+    var size = min_size + 1
+    var next = clear + 2
+    var has_prev = false
+    var prev: u32 = 0
+    var acc: u32 = 0
+    var nbits: u32 = 0
+    var p: usize = 0
+    while !sink.done {
+        while nbits < size {
+            if p >= codes.len {
+                return
+            }
+            acc = acc | (codes[p] as u32 << nbits)
+            p += 1
+            nbits += 8
+        }
+        let code = acc & ((1 << size) - 1)
+        acc = acc >> size
+        nbits -= size
+        if code == clear {
+            size = min_size + 1
+            next = clear + 2
+            has_prev = false
+            continue
+        }
+        if code == end {
+            return
+        }
+        if has_prev {
+            if code > next || (code == next && next >= 4096) {
+                return
+            }
+            // A full table stays as it is until the next clear code.
+            if next < 4096 {
+                // The new string is the previous one plus the first byte
+                // of this one, which for the code being defined right
+                // now (the KwKwK case) is the previous one's first byte.
+                var k = firsts[prev as usize]
+                if code < next {
+                    k = firsts[code as usize]
+                }
+                let n = next as usize
+                prefix[n] = prev as u16
+                suffix[n] = k
+                firsts[n] = firsts[prev as usize]
+                lens[n] = lens[prev as usize] + 1
+                next += 1
+                if next == ((1 as u32) << size) && size < 12 {
+                    size += 1
+                }
+            }
+        } else if code >= clear {
+            return
+        }
+        // Write the string of `code`: walk its prefixes backwards.
+        let len = lens[code as usize] as usize
+        var c = code as usize
+        var i = len
+        while i > 0 {
+            i -= 1
+            stack[i] = suffix[c]
+            c = prefix[c] as usize
+        }
+        for j in 0..len {
+            sink.put(stack[j])
+        }
+        prev = code
+        has_prev = true
+    }
+}

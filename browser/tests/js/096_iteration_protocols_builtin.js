@@ -1,0 +1,10 @@
+const arr = ['a', 'b', 'c'];
+console.log([...arr.keys()], [...arr.values()], [...arr.entries()]);
+const it = arr.values();
+console.log(it.next(), it.next(), it.next(), it.next());
+const m = new Map([['x', 1], ['y', 2]]);
+console.log([...m.keys()], [...m.values()], [...m.entries()]);
+const s = new Set(['p', 'q']);
+console.log([...s.keys()], [...s.entries()]);
+console.log([...'hi'].join('-'));
+for (const [i, v] of arr.entries()) if (i === 1) console.log(i, v);

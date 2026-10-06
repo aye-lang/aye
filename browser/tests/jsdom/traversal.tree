@@ -1,0 +1,23 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Traversal"
+      "\n"
+    <body>
+      <div id="d">
+        "text"
+        <span id="s1">
+          "one"
+        <!-- c -->
+        <span id="s2">
+          "two"
+        "tail"
+      "\n"
+      <pre id="out">
+        "5 2 2\n#text,SPAN,#comment,SPAN,#text\n3 s1 s2 tail\n8 s2 text \ntrue DIV true \n9 #document DIV div true \nd true false true\ntrue TITLE html\ntrue true true true true\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst d = document.getElementById('d');\nlog(d.childNodes.length, d.children.length, d.childElementCount);\nlog(d.childNodes.map(n => n.nodeName).join(','));\nlog(d.firstChild.nodeType, d.firstElementChild.id, d.lastElementChild.id, d.lastChild.nodeValue);\nconst s1 = document.getElementById('s1');\nlog(s1.nextSibling.nodeType, s1.nextElementSibling.id, s1.previousSibling.data, s1.previousElementSibling);\nlog(s1.parentNode === d, s1.parentElement.tagName, document.documentElement.parentNode === document, document.documentElement.parentElement);\nlog(document.nodeType, document.nodeName, d.tagName, d.localName, d.ownerDocument === document, document.ownerDocument);\nlog(s1.firstChild.parentNode.parentNode.id, d.contains(s1.firstChild), s1.contains(d), d.contains(d));\nlog(document.body.firstElementChild === d, document.head.firstElementChild.tagName, document.doctype.name);\nlog(s1.getRootNode() === document, s1 instanceof HTMLElement, s1 instanceof Element, s1 instanceof Node, d.firstChild instanceof Text);\n"
+      "\n"

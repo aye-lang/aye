@@ -1,0 +1,169 @@
+// js/atoms: interned names. Every identifier, property name and string
+// literal of a script is an atom: a `u32` that names its bytes, so that
+// property lookup compares integers. Atoms live as long as the engine.
+// Each atom knows whether it is an array index ("0", "17", not "017"),
+// and has a permanent string cell once the program needs it as a value.
+
+import std.list.List
+import std.map.StrMap
+import std.mem.AllocError
+import std.mem.Allocator
+
+pub let NONE: u32 = 0xFFFFFFFF
+
+pub struct AtomInfo {
+    bytes: []mut u8
+    // The string cell of the atom's text (NONE until needed).
+    str: u32
+    // The array index the atom spells, or NONE.
+    index: u32
+}
+
+pub struct Atoms {
+    alloc: Allocator
+    map: StrMap(u32)
+    list: List(AtomInfo)
+    // The bytes of the atoms, packed in chunks (atoms are never freed).
+    chunks: List([]mut u8)
+    cur: []mut u8
+    used: usize
+
+    pub fn init(alloc: Allocator) Atoms {
+        return Atoms {
+            alloc: alloc,
+            map: StrMap(u32).init(alloc),
+            list: List(AtomInfo).init(alloc),
+            chunks: List([]mut u8).init(alloc),
+            cur: []mut u8{},
+            used: 0,
+        }
+    }
+
+    pub fn deinit(self: *mut Self) {
+        for c in self.chunks.items() {
+            self.alloc.free(c)
+        }
+        self.chunks.deinit()
+        self.list.deinit()
+        self.map.deinit()
+    }
+
+    // Room for n bytes that live as long as the table.
+    fn store(self: *mut Self, n: usize) AllocError![]mut u8 {
+        if self.used + n > self.cur.len {
+            var size: usize = 16384
+            if n > size {
+                size = n
+            }
+            let c = try self.alloc.alloc(0 as u8, size)
+            try self.chunks.append(c)
+            self.cur = c
+            self.used = 0
+        }
+        let s = self.cur[self.used..self.used + n]
+        self.used += n
+        return s
+    }
+
+    /// The atom of `s` (a copy of `s` is kept).
+    pub fn intern(self: *mut Self, s: []u8) AllocError!u32 {
+        if self.map.get(s) |a| {
+            return a
+        }
+        var copy = []mut u8{}
+        if s.len > 0 {
+            copy = try self.store(s.len)
+            for i, c in s {
+                copy[i] = c
+            }
+        }
+        let id = self.list.len() as u32
+        try self.list.append(AtomInfo { bytes: copy, str: NONE, index: arrayIndex(s) })
+        try self.map.put(copy, id)
+        return id
+    }
+
+    /// The atom of `s` if there is one.
+    pub fn find(self: *Self, s: []u8) ?u32 {
+        return self.map.get(s)
+    }
+
+    pub fn name(self: *Self, a: u32) []u8 {
+        return self.list.items()[a].bytes
+    }
+
+    pub fn indexOf(self: *Self, a: u32) u32 {
+        return self.list.items()[a].index
+    }
+
+    /// Interns the predefined atoms (`A_...`); the first call on a new
+    /// table.
+    pub fn predefine(self: *mut Self) AllocError!void {
+        for s in PREDEFINED {
+            try self.intern(s)
+        }
+    }
+}
+
+/// The array index spelled by `s` ("0" to "4294967294", no leading zeros),
+/// else NONE.
+pub fn arrayIndex(s: []u8) u32 {
+    if s.len == 0 || s.len > 10 || (s[0] == '0' && s.len > 1) {
+        return NONE
+    }
+    var v: u64 = 0
+    for c in s {
+        if c < '0' || c > '9' {
+            return NONE
+        }
+        v = v * 10 + (c - '0') as u64
+    }
+    if v >= 0xFFFFFFFF {
+        return NONE
+    }
+    return v as u32
+}
+
+pub let A_EMPTY: u32 = 0
+pub let A_LENGTH: u32 = 1
+pub let A_PROTOTYPE: u32 = 2
+pub let A_CONSTRUCTOR: u32 = 3
+pub let A_NAME: u32 = 4
+pub let A_MESSAGE: u32 = 5
+pub let A_TOSTRING: u32 = 6
+pub let A_VALUEOF: u32 = 7
+pub let A_THIS: u32 = 8
+pub let A_ARGUMENTS: u32 = 9
+pub let A_UNDEFINED: u32 = 10
+pub let A_GET: u32 = 11
+pub let A_SET: u32 = 12
+pub let A_STATIC: u32 = 13
+pub let A_OF: u32 = 14
+pub let A_VALUE: u32 = 15
+pub let A_WRITABLE: u32 = 16
+pub let A_ENUMERABLE: u32 = 17
+pub let A_CONFIGURABLE: u32 = 18
+pub let A_CALLEE: u32 = 19
+pub let A_STACK: u32 = 20
+pub let A_PROTO: u32 = 21
+pub let A_TOJSON: u32 = 22
+pub let A_NAN: u32 = 23
+pub let A_INFINITY: u32 = 24
+pub let A_CAUSE: u32 = 25
+pub let A_LASTINDEX: u32 = 26
+pub let A_SOURCE: u32 = 27
+pub let A_FLAGS: u32 = 28
+pub let A_DONE: u32 = 29
+pub let A_NEXT: u32 = 30
+pub let A_ASYNC: u32 = 31
+pub let A_GLOBALTHIS: u32 = 32
+pub let A_ERRORS: u32 = 33
+pub let A_TARGET: u32 = 34
+
+let PREDEFINED = [35][]u8{
+    "", "length", "prototype", "constructor", "name", "message", "toString",
+    "valueOf", "this", "arguments", "undefined", "get", "set", "static", "of",
+    "value", "writable", "enumerable", "configurable", "callee", "stack",
+    "__proto__", "toJSON", "NaN", "Infinity", "cause", "lastIndex", "source",
+    "flags", "done", "next", "async", "globalThis", "errors", "target",
+}

@@ -1,0 +1,4 @@
+hi x true false
+[ 'k' ] undefined true
+hi defined 42 [ 'n' ]
+yes

@@ -1,0 +1,13 @@
+const proto = { inherited: 1 };
+const o = Object.create(proto);
+o.own = 2;
+o.undef = undefined;
+console.log(o.hasOwnProperty('own'), o.hasOwnProperty('inherited'), o.hasOwnProperty('undef'), o.hasOwnProperty('nope'));
+console.log('inherited' in o, 'toString' in o, o.hasOwnProperty('toString'));
+console.log(Object.hasOwn(o, 'own'), Object.hasOwn(o, 'inherited'));
+const arr = [1, 2];
+console.log(arr.hasOwnProperty(0), arr.hasOwnProperty('length'), arr.hasOwnProperty(5));
+const nul = Object.create(null);
+nul.x = 1;
+console.log(Object.prototype.hasOwnProperty.call(nul, 'x'));
+console.log({ hasOwnProperty: () => 'shadowed' }.hasOwnProperty('x'));

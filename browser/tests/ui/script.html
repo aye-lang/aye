@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<title>Script</title>
+<style>body { margin: 0 } #b { display: block; width: 200px; height: 50px; margin: 0 }</style>
+<button id="b">Change</button>
+<p id="p">before</p>
+<script>
+document.getElementById('b').addEventListener('click', () => {
+  document.getElementById('p').textContent = 'clicked';
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'x') document.getElementById('p').textContent = 'key x';
+});
+setTimeout(() => { document.title = 'timer ran'; }, 0);
+</script>

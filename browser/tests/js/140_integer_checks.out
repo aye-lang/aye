@@ -1,0 +1,7 @@
+true true false false false
+true true false
+true false true false
+9007199254740991 -9007199254740991 9007199254740992
+2.220446049250313e-16 true true true
+Infinity -Infinity NaN
+true

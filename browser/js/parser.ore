@@ -1,0 +1,1536 @@
+// js/parser: tokens to the syntax tree (recursive descent; binary
+// operators by precedence climbing). Semicolons are inserted by the
+// standard rule: a statement may end before `}`, at the end of the input,
+// or before a token on a new line. Arrow functions are recognized by
+// scanning ahead to the `)` that closes their parameters.
+
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+pub struct Parser {
+    alloc: Allocator
+    ast: *mut Ast
+    atoms: *mut Atoms
+    lx: *mut Lexed
+    src: []u8
+    pos: usize
+    // Offset of this script's text in ast.source.
+    base: u32
+    tmp: List(u32)
+    message: *mut text.Builder
+    line: u32
+
+    // ---- tokens
+
+    fn tok(self: *Self) Token {
+        return self.lx.toks.items()[self.pos]
+    }
+
+    fn kind(self: *Self) Tok {
+        return self.lx.toks.items()[self.pos].kind
+    }
+
+    fn kindAt(self: *Self, k: usize) Tok {
+        let toks = self.lx.toks.items()
+        if self.pos + k < toks.len {
+            return toks[self.pos + k].kind
+        }
+        return Tok.Eof
+    }
+
+    fn at(self: *Self, k: Tok) bool {
+        return self.kind() == k
+    }
+
+    fn eat(self: *mut Self, k: Tok) bool {
+        if self.kind() == k {
+            self.pos += 1
+            return true
+        }
+        return false
+    }
+
+    fn tokText(self: *Self, t: Token) []u8 {
+        return self.src[t.start as usize..t.end as usize]
+    }
+
+    // Is the current token the identifier `w` (a contextual keyword)?
+    fn isWord(self: *Self, w: []u8) bool {
+        let t = self.tok()
+        return t.kind == Tok.Ident && text.eql(self.tokText(t), w)
+    }
+
+    // Can the current token be a property name (an identifier or keyword)?
+    fn isName(self: *Self) bool {
+        let t = self.tok()
+        if t.kind == Tok.Ident {
+            return true
+        }
+        if t.kind == Tok.Num || t.kind == Tok.Str || t.kind == Tok.Eof || t.end == t.start {
+            return false
+        }
+        let c = self.src[t.start as usize]
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+    }
+
+    // ---- errors
+
+    fn fail(self: *mut Self, msg: []u8) SyntaxErr!u32 {
+        if self.message.len() == 0 {
+            try self.message.append(msg)
+            self.line = self.tok().line
+        }
+        return SyntaxErr.Syntax
+    }
+
+    fn unexpected(self: *mut Self) SyntaxErr!u32 {
+        if self.message.len() > 0 {
+            return SyntaxErr.Syntax
+        }
+        let t = self.tok()
+        self.line = t.line
+        if t.kind == Tok.Eof {
+            try self.message.append("Unexpected end of input")
+        } else if t.kind == Tok.Ident {
+            try self.message.append("Unexpected identifier '")
+            try self.message.append(self.tokText(t))
+            try self.message.appendByte('\'')
+        } else if t.kind == Tok.Num {
+            try self.message.append("Unexpected number")
+        } else if t.kind == Tok.Str {
+            try self.message.append("Unexpected string")
+        } else {
+            try self.message.append("Unexpected token '")
+            try self.message.append(self.tokText(t))
+            try self.message.appendByte('\'')
+        }
+        return SyntaxErr.Syntax
+    }
+
+    fn expect(self: *mut Self, k: Tok) SyntaxErr!void {
+        if !self.eat(k) {
+            try self.unexpected()
+        }
+    }
+
+    fn semi(self: *mut Self) SyntaxErr!void {
+        if self.eat(Tok.Semi) {
+            return
+        }
+        let t = self.tok()
+        if t.kind == Tok.RBrace || t.kind == Tok.Eof || t.nl {
+            return
+        }
+        try self.unexpected()
+    }
+
+    // ---- building nodes
+
+    fn mk(self: *mut Self, n: Node, startTok: usize) AllocError!u32 {
+        let toks = self.lx.toks.items()
+        let s = toks[startTok].start
+        var e = s
+        if self.pos > startTok {
+            e = toks[self.pos - 1].end
+        }
+        let id = self.ast.nodes.len() as u32
+        try self.ast.nodes.append(n)
+        try self.ast.spans.append(Span { start: s + self.base, end: e + self.base })
+        return id
+    }
+
+    fn set(self: *mut Self, id: u32, n: Node) {
+        self.ast.nodes.items()[id] = n
+    }
+
+    fn mark(self: *Self) usize {
+        return self.tmp.len()
+    }
+
+    fn push(self: *mut Self, v: u32) AllocError!void {
+        return self.tmp.append(v)
+    }
+
+    // Moves tmp[m..] to a run of ast.lists; returns the run's start.
+    fn list(self: *mut Self, m: usize) AllocError!u32 {
+        let start = self.ast.lists.len() as u32
+        let n = self.tmp.len()
+        for i in m..n {
+            try self.ast.lists.append(self.tmp.items()[i])
+        }
+        while self.tmp.len() > m {
+            self.tmp.pop()
+        }
+        return start
+    }
+
+    fn count(self: *Self, m: usize) u32 {
+        return (self.tmp.len() - m) as u32
+    }
+
+    fn intern(self: *mut Self, s: []u8) AllocError!u32 {
+        return self.atoms.intern(s)
+    }
+
+    fn newScope(self: *mut Self) AllocError!u32 {
+        let id = self.ast.scopes.len() as u32
+        try self.ast.scopes.append(ScopeInfo { nslots: 0, closures: false, funcs: 0, nfuncs: 0 })
+        return id
+    }
+
+    fn ident(self: *mut Self, name: u32, startTok: usize) AllocError!u32 {
+        return self.mk(Node.Ident { name: name, depth: 0, slot: 0, flags: 0 }, startTok)
+    }
+
+    // ---- program and statements
+
+    /// Parses the whole script into a `Block` node.
+    pub fn program(self: *mut Self) SyntaxErr!u32 {
+        let m = self.mark()
+        while !self.at(Tok.Eof) {
+            try self.push(try self.statement())
+        }
+        let n = self.count(m)
+        let l = try self.list(m)
+        let scope = try self.newScope()
+        return self.mk(Node.Block { list: l, n: n, scope: scope }, 0)
+    }
+
+    fn statement(self: *mut Self) SyntaxErr!u32 {
+        let start = self.pos
+        let k = self.kind()
+        if k == Tok.LBrace {
+            return self.block()
+        }
+        if k == Tok.KwVar || k == Tok.KwLet || k == Tok.KwConst {
+            let d = try self.varDecl(false)
+            try self.semi()
+            return d
+        }
+        if k == Tok.KwFunction {
+            return self.functionDecl()
+        }
+        if k == Tok.KwClass {
+            self.pos += 1
+            if !self.at(Tok.Ident) {
+                return self.unexpected()
+            }
+            let nameTok = self.pos
+            let name = try self.intern(self.tokText(self.tok()))
+            self.pos += 1
+            let target = try self.ident(name, nameTok)
+            let c = try self.classTail(name, start)
+            return self.mk(Node.ClassDecl { c: c, target: target }, start)
+        }
+        if k == Tok.KwIf {
+            self.pos += 1
+            try self.expect(Tok.LParen)
+            let cond = try self.expression(false)
+            try self.expect(Tok.RParen)
+            let cons = try self.statement()
+            var alt: u32 = 0
+            if self.eat(Tok.KwElse) {
+                alt = try self.statement()
+            }
+            return self.mk(Node.If { cond: cond, cons: cons, alt: alt }, start)
+        }
+        if k == Tok.KwFor {
+            return self.forStatement()
+        }
+        if k == Tok.KwWhile {
+            self.pos += 1
+            try self.expect(Tok.LParen)
+            let cond = try self.expression(false)
+            try self.expect(Tok.RParen)
+            let body = try self.statement()
+            return self.mk(Node.While { cond: cond, body: body }, start)
+        }
+        if k == Tok.KwDo {
+            self.pos += 1
+            let body = try self.statement()
+            try self.expect(Tok.KwWhile)
+            try self.expect(Tok.LParen)
+            let cond = try self.expression(false)
+            try self.expect(Tok.RParen)
+            self.eat(Tok.Semi)
+            return self.mk(Node.DoWhile { body: body, cond: cond }, start)
+        }
+        if k == Tok.KwReturn {
+            self.pos += 1
+            var arg: u32 = 0
+            let t = self.tok()
+            if t.kind != Tok.Semi && t.kind != Tok.RBrace && t.kind != Tok.Eof && !t.nl {
+                arg = try self.expression(false)
+            }
+            try self.semi()
+            return self.mk(Node.Return { arg: arg }, start)
+        }
+        if k == Tok.KwBreak || k == Tok.KwContinue {
+            self.pos += 1
+            var label: u32 = 0
+            if self.at(Tok.Ident) && !self.tok().nl {
+                label = try self.intern(self.tokText(self.tok()))
+                self.pos += 1
+            }
+            try self.semi()
+            if k == Tok.KwBreak {
+                return self.mk(Node.Break { label: label }, start)
+            }
+            return self.mk(Node.Continue { label: label }, start)
+        }
+        if k == Tok.KwThrow {
+            self.pos += 1
+            if self.tok().nl {
+                return self.fail("Illegal newline after throw")
+            }
+            let arg = try self.expression(false)
+            try self.semi()
+            return self.mk(Node.Throw { arg: arg }, start)
+        }
+        if k == Tok.KwTry {
+            return self.tryStatement()
+        }
+        if k == Tok.KwSwitch {
+            return self.switchStatement()
+        }
+        if k == Tok.Semi || k == Tok.KwDebugger {
+            self.pos += 1
+            if k == Tok.KwDebugger {
+                try self.semi()
+            }
+            return self.mk(Node.Empty, start)
+        }
+        if k == Tok.Ident && self.kindAt(1) == Tok.Colon {
+            let label = try self.intern(self.tokText(self.tok()))
+            self.pos += 2
+            let body = try self.statement()
+            return self.mk(Node.Labeled { label: label, body: body }, start)
+        }
+        let e = try self.expression(false)
+        try self.semi()
+        return self.mk(Node.ExprStmt { e: e }, start)
+    }
+
+    fn block(self: *mut Self) SyntaxErr!u32 {
+        let start = self.pos
+        try self.expect(Tok.LBrace)
+        let m = self.mark()
+        while !self.at(Tok.RBrace) {
+            if self.at(Tok.Eof) {
+                return self.unexpected()
+            }
+            try self.push(try self.statement())
+        }
+        self.pos += 1
+        let n = self.count(m)
+        let l = try self.list(m)
+        let scope = try self.newScope()
+        return self.mk(Node.Block { list: l, n: n, scope: scope }, start)
+    }
+
+    fn varDecl(self: *mut Self, noIn: bool) SyntaxErr!u32 {
+        let start = self.pos
+        var kind = DECL_VAR
+        if self.at(Tok.KwLet) {
+            kind = DECL_LET
+        } else if self.at(Tok.KwConst) {
+            kind = DECL_CONST
+        }
+        self.pos += 1
+        let m = self.mark()
+        while true {
+            let dstart = self.pos
+            let target = try self.bindingTarget()
+            var init: u32 = 0
+            if self.eat(Tok.Assign) {
+                init = try self.assign(noIn)
+                try self.inferName(target, init)
+            }
+            try self.push(try self.mk(Node.Declarator { target: target, init: init }, dstart))
+            if !self.eat(Tok.Comma) {
+                break
+            }
+        }
+        let n = self.count(m)
+        let l = try self.list(m)
+        return self.mk(Node.VarDecl { kind: kind, list: l, n: n }, start)
+    }
+
+    // Gives an anonymous function or class the name of what it is
+    // assigned to.
+    fn inferName(self: *mut Self, target: u32, value: u32) AllocError!void {
+        match self.ast.node(target) {
+            .Ident { name, .. } => try self.nameValue(value, name)
+            _ => {}
+        }
+    }
+
+    fn nameValue(self: *mut Self, value: u32, name: u32) AllocError!void {
+        match self.ast.node(value) {
+            .Func { f } => {
+                if self.ast.funcs.items()[f].name == A_EMPTY {
+                    self.ast.funcs.items()[f].name = name
+                }
+            }
+            .Class { c } => {
+                if self.ast.classes.items()[c].name == A_EMPTY {
+                    self.ast.classes.items()[c].name = name
+                    let ctor = self.ast.classes.items()[c].ctor
+                    self.ast.funcs.items()[ctor].name = name
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn functionDecl(self: *mut Self) SyntaxErr!u32 {
+        let start = self.pos
+        self.pos += 1
+        if !self.at(Tok.Ident) {
+            return self.unexpected()
+        }
+        let nameTok = self.pos
+        let name = try self.intern(self.tokText(self.tok()))
+        self.pos += 1
+        let target = try self.ident(name, nameTok)
+        let f = try self.functionRest(name, start, false)
+        return self.mk(Node.FuncDecl { f: f, target: target }, start)
+    }
+
+    fn forStatement(self: *mut Self) SyntaxErr!u32 {
+        let start = self.pos
+        self.pos += 1
+        try self.expect(Tok.LParen)
+        let scope = try self.newScope()
+        var init: u32 = 0
+        if self.at(Tok.KwVar) || self.at(Tok.KwLet) || self.at(Tok.KwConst) {
+            init = try self.varDecl(true)
+        } else if !self.at(Tok.Semi) {
+            init = try self.expression(true)
+        }
+        let isOf = self.isWord("of")
+        if init != 0 && (self.at(Tok.KwIn) || isOf) {
+            self.pos += 1
+            var left = init
+            match self.ast.node(init) {
+                .VarDecl { n, .. } => {
+                    if n != 1 {
+                        return self.fail("Invalid left-hand side in for-in loop: Must have a single binding.")
+                    }
+                }
+                _ => {
+                    left = try self.toPattern(init)
+                }
+            }
+            var right: u32 = 0
+            if isOf {
+                right = try self.assign(false)
+            } else {
+                right = try self.expression(false)
+            }
+            try self.expect(Tok.RParen)
+            let body = try self.statement()
+            return self.mk(Node.ForIn { left: left, right: right, body: body, scope: scope, of: isOf }, start)
+        }
+        try self.expect(Tok.Semi)
+        var cond: u32 = 0
+        if !self.at(Tok.Semi) {
+            cond = try self.expression(false)
+        }
+        try self.expect(Tok.Semi)
+        var update: u32 = 0
+        if !self.at(Tok.RParen) {
+            update = try self.expression(false)
+        }
+        try self.expect(Tok.RParen)
+        let body = try self.statement()
+        return self.mk(Node.For { init: init, cond: cond, update: update, body: body, scope: scope }, start)
+    }
+
+    fn tryStatement(self: *mut Self) SyntaxErr!u32 {
+        let start = self.pos
+        self.pos += 1
+        let blk = try self.block()
+        var param: u32 = 0
+        var handler: u32 = 0
+        var finalizer: u32 = 0
+        let scope = try self.newScope()
+        if self.eat(Tok.KwCatch) {
+            if self.eat(Tok.LParen) {
+                param = try self.bindingTarget()
+                try self.expect(Tok.RParen)
+            }
+            handler = try self.block()
+        }
+        if self.eat(Tok.KwFinally) {
+            finalizer = try self.block()
+        }
+        if handler == 0 && finalizer == 0 {
+            return self.fail("Missing catch or finally after try")
+        }
+        return self.mk(Node.Try { block: blk, param: param, handler: handler, finalizer: finalizer, scope: scope }, start)
+    }
+
+    fn switchStatement(self: *mut Self) SyntaxErr!u32 {
+        let start = self.pos
+        self.pos += 1
+        try self.expect(Tok.LParen)
+        let disc = try self.expression(false)
+        try self.expect(Tok.RParen)
+        try self.expect(Tok.LBrace)
+        let m = self.mark()
+        while !self.eat(Tok.RBrace) {
+            let cstart = self.pos
+            var cond: u32 = 0
+            if self.eat(Tok.KwCase) {
+                cond = try self.expression(false)
+            } else if !self.eat(Tok.KwDefault) {
+                return self.unexpected()
+            }
+            try self.expect(Tok.Colon)
+            let cm = self.mark()
+            while !self.at(Tok.KwCase) && !self.at(Tok.KwDefault) && !self.at(Tok.RBrace) {
+                if self.at(Tok.Eof) {
+                    return self.unexpected()
+                }
+                try self.push(try self.statement())
+            }
+            let cn = self.count(cm)
+            let cl = try self.list(cm)
+            try self.push(try self.mk(Node.Case { cond: cond, list: cl, n: cn }, cstart))
+        }
+        let n = self.count(m)
+        let l = try self.list(m)
+        let scope = try self.newScope()
+        return self.mk(Node.Switch { disc: disc, list: l, n: n, scope: scope }, start)
+    }
+
+    // ---- patterns
+
+    // A name, `[...]` or `{...}` being declared.
+    fn bindingTarget(self: *mut Self) SyntaxErr!u32 {
+        let start = self.pos
+        if self.at(Tok.Ident) {
+            let name = try self.intern(self.tokText(self.tok()))
+            self.pos += 1
+            return self.ident(name, start)
+        }
+        if self.eat(Tok.LBracket) {
+            let m = self.mark()
+            while !self.eat(Tok.RBracket) {
+                if self.at(Tok.Comma) {
+                    self.pos += 1
+                    try self.push(try self.mk(Node.Hole, self.pos - 1))
+                    continue
+                }
+                try self.push(try self.bindingElement())
+                if !self.at(Tok.RBracket) {
+                    try self.expect(Tok.Comma)
+                }
+            }
+            let n = self.count(m)
+            let l = try self.list(m)
+            return self.mk(Node.ArrayPat { list: l, n: n }, start)
+        }
+        if self.eat(Tok.LBrace) {
+            let m = self.mark()
+            while !self.eat(Tok.RBrace) {
+                let pstart = self.pos
+                if self.eat(Tok.Ellipsis) {
+                    let t = try self.bindingTarget()
+                    try self.push(try self.mk(Node.Rest { target: t }, pstart))
+                } else {
+                    let shorthand = self.at(Tok.Ident) && self.kindAt(1) != Tok.Colon
+                    var computed = false
+                    var key: u32 = 0
+                    var value: u32 = 0
+                    if shorthand {
+                        key = try self.intern(self.tokText(self.tok()))
+                        value = try self.ident(key, self.pos)
+                        self.pos += 1
+                    } else {
+                        computed = self.at(Tok.LBracket)
+                        key = try self.propertyKey()
+                        try self.expect(Tok.Colon)
+                        value = try self.bindingTarget()
+                    }
+                    if self.eat(Tok.Assign) {
+                        let init = try self.assign(false)
+                        try self.inferName(value, init)
+                        value = try self.mk(Node.Default { target: value, init: init }, pstart)
+                    }
+                    try self.push(try self.mk(Node.PatProp { key: key, computed: computed, value: value }, pstart))
+                }
+                if !self.at(Tok.RBrace) {
+                    try self.expect(Tok.Comma)
+                }
+            }
+            let n = self.count(m)
+            let l = try self.list(m)
+            return self.mk(Node.ObjectPat { list: l, n: n }, start)
+        }
+        return self.unexpected()
+    }
+
+    // A target with an optional default, or `...target`.
+    fn bindingElement(self: *mut Self) SyntaxErr!u32 {
+        let start = self.pos
+        if self.eat(Tok.Ellipsis) {
+            let t = try self.bindingTarget()
+            return self.mk(Node.Rest { target: t }, start)
+        }
+        let t = try self.bindingTarget()
+        if self.eat(Tok.Assign) {
+            let init = try self.assign(false)
+            try self.inferName(t, init)
+            return self.mk(Node.Default { target: t, init: init }, start)
+        }
+        return t
+    }
+
+    // Turns an expression parsed before `=` (or `in`/`of`) into an
+    // assignment target.
+    fn toPattern(self: *mut Self, e: u32) SyntaxErr!u32 {
+        match self.ast.node(e) {
+            .Ident { .. } => {
+                return e
+            }
+            .Member { optional, .. } => {
+                if optional {
+                    return self.fail("Invalid left-hand side in assignment")
+                }
+                return e
+            }
+            .Index { optional, .. } => {
+                if optional {
+                    return self.fail("Invalid left-hand side in assignment")
+                }
+                return e
+            }
+            .ArrayLit { list, n } => {
+                for k in 0..n {
+                    let el = self.ast.item(list, k)
+                    var conv = el
+                    match self.ast.node(el) {
+                        .Hole => {}
+                        .Spread { arg } => {
+                            let t = try self.toPattern(arg)
+                            self.set(el, Node.Rest { target: t })
+                        }
+                        .Assign { op, target, value } => {
+                            if op != Op.None {
+                                return self.fail("Invalid destructuring assignment target")
+                            }
+                            let t = try self.toPattern(target)
+                            self.set(el, Node.Default { target: t, init: value })
+                        }
+                        _ => {
+                            conv = try self.toPattern(el)
+                        }
+                    }
+                    self.ast.lists.items()[(list + k) as usize] = conv
+                }
+                self.set(e, Node.ArrayPat { list: list, n: n })
+                return e
+            }
+            .ObjectLit { list, n } => {
+                for k in 0..n {
+                    let p = self.ast.item(list, k)
+                    match self.ast.node(p) {
+                        .Prop { kind, key, computed, value } => {
+                            if kind == PROP_SPREAD {
+                                let t = try self.toPattern(value)
+                                self.set(p, Node.Rest { target: t })
+                            } else if kind == PROP_INIT {
+                                var v = value
+                                match self.ast.node(value) {
+                                    .Assign { op, target, value: init } => {
+                                        if op != Op.None {
+                                            return self.fail("Invalid destructuring assignment target")
+                                        }
+                                        let t = try self.toPattern(target)
+                                        self.set(value, Node.Default { target: t, init: init })
+                                    }
+                                    _ => {
+                                        v = try self.toPattern(value)
+                                    }
+                                }
+                                self.set(p, Node.PatProp { key: key, computed: computed, value: v })
+                            } else {
+                                return self.fail("Invalid destructuring assignment target")
+                            }
+                        }
+                        _ => {
+                            return self.fail("Invalid destructuring assignment target")
+                        }
+                    }
+                }
+                self.set(e, Node.ObjectPat { list: list, n: n })
+                return e
+            }
+            _ => {
+                return self.fail("Invalid left-hand side in assignment")
+            }
+        }
+    }
+
+    // ---- expressions
+
+    pub fn expression(self: *mut Self, noIn: bool) SyntaxErr!u32 {
+        let start = self.pos
+        let first = try self.assign(noIn)
+        if !self.at(Tok.Comma) {
+            return first
+        }
+        let m = self.mark()
+        try self.push(first)
+        while self.eat(Tok.Comma) {
+            try self.push(try self.assign(noIn))
+        }
+        let n = self.count(m)
+        let l = try self.list(m)
+        return self.mk(Node.Seq { list: l, n: n }, start)
+    }
+
+    // Does the `(` here start the parameters of an arrow function?
+    fn arrowAhead(self: *Self) bool {
+        let toks = self.lx.toks.items()
+        var depth: usize = 0
+        var i = self.pos
+        while i < toks.len {
+            let k = toks[i].kind
+            if k == Tok.LParen || k == Tok.LBracket || k == Tok.LBrace {
+                depth += 1
+            } else if k == Tok.RParen || k == Tok.RBracket || k == Tok.RBrace {
+                depth -= 1
+                if depth == 0 {
+                    return k == Tok.RParen && i + 1 < toks.len && toks[i + 1].kind == Tok.Arrow && !toks[i + 1].nl
+                }
+            } else if k == Tok.Eof {
+                return false
+            }
+            i += 1
+        }
+        return false
+    }
+
+    fn assign(self: *mut Self, noIn: bool) SyntaxErr!u32 {
+        let start = self.pos
+        if self.at(Tok.Ident) && self.kindAt(1) == Tok.Arrow {
+            return self.arrow(noIn)
+        }
+        if self.isWord("async") && (self.kindAt(1) == Tok.KwFunction || self.kindAt(1) == Tok.Ident) {
+            return self.fail("async functions are not supported")
+        }
+        if self.at(Tok.LParen) && self.arrowAhead() {
+            return self.arrow(noIn)
+        }
+        let left = try self.conditional(noIn)
+        let op = assignOp(self.kind())
+        if op == Op.Nullish && !self.at(Tok.QQAssign) {
+            return left
+        }
+        self.pos += 1
+        var target = left
+        if op == Op.None {
+            target = try self.toPattern(left)
+        } else {
+            match self.ast.node(left) {
+                .Ident { .. } => {}
+                .Member { .. } => {}
+                .Index { .. } => {}
+                _ => {
+                    return self.fail("Invalid left-hand side in assignment")
+                }
+            }
+        }
+        let value = try self.assign(noIn)
+        if op == Op.None {
+            try self.inferName(target, value)
+        }
+        return self.mk(Node.Assign { op: op, target: target, value: value }, start)
+    }
+
+    fn arrow(self: *mut Self, noIn: bool) SyntaxErr!u32 {
+        let start = self.pos
+        let m = self.mark()
+        if self.at(Tok.Ident) {
+            let name = try self.intern(self.tokText(self.tok()))
+            try self.push(try self.ident(name, self.pos))
+            self.pos += 1
+        } else {
+            try self.params(m)
+        }
+        try self.expect(Tok.Arrow)
+        let f = try self.newFunc(A_EMPTY, m)
+        self.ast.funcs.items()[f].arrow = true
+        if self.at(Tok.LBrace) {
+            try self.functionBody(f)
+        } else {
+            let e = try self.assign(noIn)
+            self.ast.funcs.items()[f].expr = e
+        }
+        self.finishFunc(f, start)
+        return self.mk(Node.Func { f: f }, start)
+    }
+
+    fn conditional(self: *mut Self, noIn: bool) SyntaxErr!u32 {
+        let start = self.pos
+        let cond = try self.binary(0, noIn)
+        if !self.eat(Tok.Question) {
+            return cond
+        }
+        let cons = try self.assign(false)
+        try self.expect(Tok.Colon)
+        let alt = try self.assign(noIn)
+        return self.mk(Node.Cond { cond: cond, cons: cons, alt: alt }, start)
+    }
+
+    fn binary(self: *mut Self, minPrec: u32, noIn: bool) SyntaxErr!u32 {
+        let start = self.pos
+        var left = try self.unary()
+        while true {
+            let k = self.kind()
+            let prec = precedence(k, noIn)
+            if prec <= minPrec {
+                break
+            }
+            self.pos += 1
+            var right: u32 = 0
+            if k == Tok.StarStar {
+                right = try self.binary(prec - 1, noIn)
+            } else {
+                right = try self.binary(prec, noIn)
+            }
+            let op = binaryOp(k)
+            if op == Op.And || op == Op.Or || op == Op.Nullish {
+                left = try self.mk(Node.Logical { op: op, l: left, r: right }, start)
+            } else {
+                left = try self.mk(Node.Binary { op: op, l: left, r: right }, start)
+            }
+        }
+        return left
+    }
+
+    fn unary(self: *mut Self) SyntaxErr!u32 {
+        let start = self.pos
+        let k = self.kind()
+        var op = Op.None
+        if k == Tok.Minus {
+            op = Op.Neg
+        } else if k == Tok.Plus {
+            op = Op.Plus
+        } else if k == Tok.Bang {
+            op = Op.Not
+        } else if k == Tok.Tilde {
+            op = Op.BitNot
+        } else if k == Tok.KwTypeof {
+            op = Op.Typeof
+        } else if k == Tok.KwVoid {
+            op = Op.Void
+        } else if k == Tok.KwDelete {
+            op = Op.Delete
+        }
+        if op != Op.None {
+            self.pos += 1
+            let arg = try self.unary()
+            return self.mk(Node.Unary { op: op, arg: arg }, start)
+        }
+        if k == Tok.PlusPlus || k == Tok.MinusMinus {
+            self.pos += 1
+            let arg = try self.unary()
+            try self.checkUpdateTarget(arg)
+            return self.mk(Node.Update { inc: k == Tok.PlusPlus, prefix: true, arg: arg }, start)
+        }
+        let e = try self.lhs()
+        let t = self.tok()
+        if (t.kind == Tok.PlusPlus || t.kind == Tok.MinusMinus) && !t.nl {
+            self.pos += 1
+            try self.checkUpdateTarget(e)
+            return self.mk(Node.Update { inc: t.kind == Tok.PlusPlus, prefix: false, arg: e }, start)
+        }
+        return e
+    }
+
+    fn checkUpdateTarget(self: *mut Self, e: u32) SyntaxErr!void {
+        match self.ast.node(e) {
+            .Ident { .. } => {}
+            .Member { .. } => {}
+            .Index { .. } => {}
+            _ => {
+                try self.fail("Invalid left-hand side expression in postfix operation")
+            }
+        }
+    }
+
+    fn args(self: *mut Self) SyntaxErr!u32 {
+        try self.expect(Tok.LParen)
+        let m = self.mark()
+        while !self.eat(Tok.RParen) {
+            let start = self.pos
+            if self.eat(Tok.Ellipsis) {
+                let arg = try self.assign(false)
+                try self.push(try self.mk(Node.Spread { arg: arg }, start))
+            } else {
+                try self.push(try self.assign(false))
+            }
+            if !self.at(Tok.RParen) {
+                try self.expect(Tok.Comma)
+            }
+        }
+        return m as u32
+    }
+
+    // Calls, member accesses and `new`.
+    fn lhs(self: *mut Self) SyntaxErr!u32 {
+        let start = self.pos
+        var e: u32 = 0
+        if self.at(Tok.KwNew) {
+            e = try self.newExpr()
+        } else {
+            e = try self.primary()
+        }
+        var chain = false
+        while true {
+            let k = self.kind()
+            if k == Tok.Dot {
+                self.pos += 1
+                if !self.isName() {
+                    return self.unexpected()
+                }
+                let name = try self.intern(self.tokText(self.tok()))
+                self.pos += 1
+                e = try self.mk(Node.Member { obj: e, name: name, optional: false }, start)
+            } else if k == Tok.QuestionDot {
+                self.pos += 1
+                chain = true
+                if self.at(Tok.LParen) {
+                    let m = try self.args() as usize
+                    let n = self.count(m)
+                    let l = try self.list(m)
+                    e = try self.mk(Node.Call { callee: e, list: l, n: n, optional: true }, start)
+                } else if self.eat(Tok.LBracket) {
+                    let key = try self.expression(false)
+                    try self.expect(Tok.RBracket)
+                    e = try self.mk(Node.Index { obj: e, key: key, optional: true }, start)
+                } else {
+                    if !self.isName() {
+                        return self.unexpected()
+                    }
+                    let name = try self.intern(self.tokText(self.tok()))
+                    self.pos += 1
+                    e = try self.mk(Node.Member { obj: e, name: name, optional: true }, start)
+                }
+            } else if k == Tok.LBracket {
+                self.pos += 1
+                let key = try self.expression(false)
+                try self.expect(Tok.RBracket)
+                e = try self.mk(Node.Index { obj: e, key: key, optional: false }, start)
+            } else if k == Tok.LParen {
+                let m = try self.args() as usize
+                let n = self.count(m)
+                let l = try self.list(m)
+                e = try self.mk(Node.Call { callee: e, list: l, n: n, optional: false }, start)
+            } else if k == Tok.Template || k == Tok.TemplateHead {
+                return self.fail("tagged templates are not supported")
+            } else {
+                break
+            }
+        }
+        if chain {
+            return self.mk(Node.OptChain { e: e }, start)
+        }
+        return e
+    }
+
+    fn newExpr(self: *mut Self) SyntaxErr!u32 {
+        let start = self.pos
+        self.pos += 1
+        if self.at(Tok.Dot) {
+            return self.fail("new.target is not supported")
+        }
+        var callee: u32 = 0
+        if self.at(Tok.KwNew) {
+            callee = try self.newExpr()
+        } else {
+            callee = try self.primary()
+        }
+        while true {
+            if self.eat(Tok.Dot) {
+                if !self.isName() {
+                    return self.unexpected()
+                }
+                let name = try self.intern(self.tokText(self.tok()))
+                self.pos += 1
+                callee = try self.mk(Node.Member { obj: callee, name: name, optional: false }, start + 1)
+            } else if self.eat(Tok.LBracket) {
+                let key = try self.expression(false)
+                try self.expect(Tok.RBracket)
+                callee = try self.mk(Node.Index { obj: callee, key: key, optional: false }, start + 1)
+            } else {
+                break
+            }
+        }
+        var l: u32 = 0
+        var n: u32 = 0
+        if self.at(Tok.LParen) {
+            let m = try self.args() as usize
+            n = self.count(m)
+            l = try self.list(m)
+        }
+        return self.mk(Node.New { callee: callee, list: l, n: n }, start)
+    }
+
+    fn primary(self: *mut Self) SyntaxErr!u32 {
+        let start = self.pos
+        let t = self.tok()
+        let k = t.kind
+        if k == Tok.Num {
+            self.pos += 1
+            return self.mk(Node.Num { v: t.num }, start)
+        }
+        if k == Tok.Str {
+            self.pos += 1
+            let a = try self.intern(self.lx.cookedOf(t))
+            return self.mk(Node.Str { atom: a }, start)
+        }
+        if k == Tok.Template || k == Tok.TemplateHead {
+            return self.template()
+        }
+        if k == Tok.Regex {
+            self.pos += 1
+            let all = self.lx.cookedOf(t)
+            let plen = t.num as usize
+            let pattern = try self.intern(all[..plen])
+            let flags = try self.intern(all[plen..])
+            return self.mk(Node.Regex { pattern: pattern, flags: flags }, start)
+        }
+        if k == Tok.Ident {
+            self.pos += 1
+            let name = try self.intern(self.tokText(t))
+            return self.ident(name, start)
+        }
+        if k == Tok.KwThis {
+            self.pos += 1
+            return self.ident(A_THIS, start)
+        }
+        if k == Tok.KwNull {
+            self.pos += 1
+            return self.mk(Node.Null, start)
+        }
+        if k == Tok.KwTrue {
+            self.pos += 1
+            return self.mk(Node.True, start)
+        }
+        if k == Tok.KwFalse {
+            self.pos += 1
+            return self.mk(Node.False, start)
+        }
+        if k == Tok.LParen {
+            self.pos += 1
+            let e = try self.expression(false)
+            try self.expect(Tok.RParen)
+            return e
+        }
+        if k == Tok.LBracket {
+            return self.arrayLiteral()
+        }
+        if k == Tok.LBrace {
+            return self.objectLiteral()
+        }
+        if k == Tok.KwFunction {
+            self.pos += 1
+            var name = A_EMPTY
+            if self.at(Tok.Ident) {
+                name = try self.intern(self.tokText(self.tok()))
+                self.pos += 1
+            }
+            let f = try self.functionRest(name, start, false)
+            if name != A_EMPTY {
+                self.ast.funcs.items()[f].own_name = true
+            }
+            return self.mk(Node.Func { f: f }, start)
+        }
+        if k == Tok.KwClass {
+            self.pos += 1
+            var name = A_EMPTY
+            if self.at(Tok.Ident) {
+                name = try self.intern(self.tokText(self.tok()))
+                self.pos += 1
+            }
+            let c = try self.classTail(name, start)
+            if name != A_EMPTY {
+                self.ast.classes.items()[c].scope = try self.newScope()
+            }
+            return self.mk(Node.Class { c: c }, start)
+        }
+        if k == Tok.KwSuper {
+            self.pos += 1
+            let thisNode = try self.ident(A_THIS, start)
+            if self.at(Tok.LParen) {
+                let m = try self.args() as usize
+                let n = self.count(m)
+                let l = try self.list(m)
+                return self.mk(Node.SuperCall { list: l, n: n, this_node: thisNode }, start)
+            }
+            if self.eat(Tok.Dot) {
+                if !self.isName() {
+                    return self.unexpected()
+                }
+                let name = try self.intern(self.tokText(self.tok()))
+                self.pos += 1
+                return self.mk(Node.SuperMember { name: name, this_node: thisNode }, start)
+            }
+            if self.eat(Tok.LBracket) {
+                let key = try self.expression(false)
+                try self.expect(Tok.RBracket)
+                return self.mk(Node.SuperIndex { key: key, this_node: thisNode }, start)
+            }
+            return self.fail("'super' keyword unexpected here")
+        }
+        return self.unexpected()
+    }
+
+    fn template(self: *mut Self) SyntaxErr!u32 {
+        let start = self.pos
+        let m = self.mark()
+        let first = self.tok()
+        self.pos += 1
+        try self.push(try self.intern(self.lx.cookedOf(first)))
+        if first.kind == Tok.Template {
+            let l = try self.list(m)
+            return self.mk(Node.Template { list: l, n: 0 }, start)
+        }
+        // Quasis go first in the list, then the expressions: collect the
+        // expressions on a second mark.
+        var exprs = List(u32).init(self.alloc)
+        defer exprs.deinit()
+        while true {
+            try exprs.append(try self.expression(false))
+            let t = self.tok()
+            if t.kind != Tok.TemplateMiddle && t.kind != Tok.TemplateTail {
+                return self.unexpected()
+            }
+            self.pos += 1
+            try self.push(try self.intern(self.lx.cookedOf(t)))
+            if t.kind == Tok.TemplateTail {
+                break
+            }
+        }
+        for e in exprs.items() {
+            try self.push(e)
+        }
+        let l = try self.list(m)
+        return self.mk(Node.Template { list: l, n: exprs.len() as u32 }, start)
+    }
+
+    fn arrayLiteral(self: *mut Self) SyntaxErr!u32 {
+        let start = self.pos
+        self.pos += 1
+        let m = self.mark()
+        while !self.eat(Tok.RBracket) {
+            let estart = self.pos
+            if self.at(Tok.Comma) {
+                self.pos += 1
+                try self.push(try self.mk(Node.Hole, estart))
+                continue
+            }
+            if self.eat(Tok.Ellipsis) {
+                let arg = try self.assign(false)
+                try self.push(try self.mk(Node.Spread { arg: arg }, estart))
+            } else {
+                try self.push(try self.assign(false))
+            }
+            if !self.at(Tok.RBracket) {
+                try self.expect(Tok.Comma)
+            }
+        }
+        let n = self.count(m)
+        let l = try self.list(m)
+        return self.mk(Node.ArrayLit { list: l, n: n }, start)
+    }
+
+    // A property name: an atom, or the key expression of `[key]`.
+    fn propertyKey(self: *mut Self) SyntaxErr!u32 {
+        let t = self.tok()
+        if t.kind == Tok.LBracket {
+            self.pos += 1
+            let e = try self.assign(false)
+            try self.expect(Tok.RBracket)
+            return e
+        }
+        if t.kind == Tok.Str {
+            self.pos += 1
+            return self.intern(self.lx.cookedOf(t))
+        }
+        if t.kind == Tok.Num {
+            self.pos += 1
+            var b = text.Builder.init(self.alloc)
+            defer b.deinit()
+            try formatNumber(&mut b, t.num)
+            return self.intern(b.bytes())
+        }
+        if self.isName() {
+            self.pos += 1
+            return self.intern(self.tokText(t))
+        }
+        return self.unexpected()
+    }
+
+    fn objectLiteral(self: *mut Self) SyntaxErr!u32 {
+        let start = self.pos
+        self.pos += 1
+        let m = self.mark()
+        while !self.eat(Tok.RBrace) {
+            let pstart = self.pos
+            if self.eat(Tok.Ellipsis) {
+                let arg = try self.assign(false)
+                try self.push(try self.mk(Node.Prop { kind: PROP_SPREAD, key: 0, computed: false, value: arg }, pstart))
+            } else {
+                var kind = PROP_INIT
+                if (self.isWord("get") || self.isWord("set")) && self.kindAt(1) != Tok.LParen &&
+                    self.kindAt(1) != Tok.Comma && self.kindAt(1) != Tok.Colon &&
+                    self.kindAt(1) != Tok.RBrace && self.kindAt(1) != Tok.Assign {
+                    if self.isWord("get") {
+                        kind = PROP_GET
+                    } else {
+                        kind = PROP_SET
+                    }
+                    self.pos += 1
+                }
+                let computed = self.at(Tok.LBracket)
+                let keyTok = self.pos
+                let shorthandOk = self.at(Tok.Ident)
+                let key = try self.propertyKey()
+                var value: u32 = 0
+                if kind != PROP_INIT || self.at(Tok.LParen) {
+                    var fname = A_EMPTY
+                    if !computed {
+                        fname = key
+                    }
+                    let f = try self.functionRest(fname, pstart, true)
+                    value = try self.mk(Node.Func { f: f }, pstart)
+                    if kind == PROP_INIT {
+                        kind = PROP_METHOD
+                    }
+                } else if self.eat(Tok.Colon) {
+                    value = try self.assign(false)
+                    if !computed {
+                        try self.nameValue(value, key)
+                    }
+                } else if shorthandOk && !computed {
+                    value = try self.ident(key, keyTok)
+                    if self.at(Tok.Assign) {
+                        // `{a = 1}`: only valid as a pattern (see toPattern).
+                        self.pos += 1
+                        let init = try self.assign(false)
+                        value = try self.mk(Node.Assign { op: Op.None, target: value, value: init }, keyTok)
+                    }
+                } else {
+                    return self.unexpected()
+                }
+                try self.push(try self.mk(Node.Prop { kind: kind, key: key, computed: computed, value: value }, pstart))
+            }
+            if !self.at(Tok.RBrace) {
+                try self.expect(Tok.Comma)
+            }
+        }
+        let n = self.count(m)
+        let l = try self.list(m)
+        return self.mk(Node.ObjectLit { list: l, n: n }, start)
+    }
+
+    // ---- functions and classes
+
+    // `( params )` onto tmp (from mark m on).
+    fn params(self: *mut Self, m: usize) SyntaxErr!void {
+        try self.expect(Tok.LParen)
+        while !self.eat(Tok.RParen) {
+            try self.push(try self.bindingElement())
+            if !self.at(Tok.RParen) {
+                try self.expect(Tok.Comma)
+            }
+        }
+    }
+
+    // A new FuncInfo whose parameters are tmp[m..].
+    fn newFunc(self: *mut Self, name: u32, m: usize) SyntaxErr!u32 {
+        let n = self.count(m)
+        var simple = true
+        var length: u32 = 0
+        var counting = true
+        for p in self.tmp.items()[m..] {
+            match self.ast.node(p) {
+                .Ident { .. } => {
+                    if counting {
+                        length += 1
+                    }
+                }
+                .Default { .. } => {
+                    simple = false
+                    counting = false
+                }
+                .Rest { .. } => {
+                    simple = false
+                    counting = false
+                }
+                _ => {
+                    simple = false
+                    if counting {
+                        length += 1
+                    }
+                }
+            }
+        }
+        let l = try self.list(m)
+        let scope = try self.newScope()
+        let id = self.ast.funcs.len() as u32
+        try self.ast.funcs.append(FuncInfo {
+            name: name,
+            own_name: false,
+            params: l,
+            nparams: n,
+            body: 0,
+            nbody: 0,
+            expr: 0,
+            arrow: false,
+            method: false,
+            ctor: false,
+            derived: false,
+            default_ctor: false,
+            class_id: NONE,
+            scope: scope,
+            this_slot: NONE,
+            args_slot: NONE,
+            self_slot: NONE,
+            simple: simple,
+            first_param: 0,
+            length: length,
+            start: 0,
+            end: 0,
+        })
+        return id
+    }
+
+    fn finishFunc(self: *mut Self, f: u32, startTok: usize) {
+        let toks = self.lx.toks.items()
+        let fi = &mut self.ast.funcs.items()[f]
+        fi.start = toks[startTok].start + self.base
+        fi.end = toks[self.pos - 1].end + self.base
+    }
+
+    fn functionBody(self: *mut Self, f: u32) SyntaxErr!void {
+        try self.expect(Tok.LBrace)
+        let m = self.mark()
+        while !self.at(Tok.RBrace) {
+            if self.at(Tok.Eof) {
+                try self.unexpected()
+            }
+            try self.push(try self.statement())
+        }
+        self.pos += 1
+        let n = self.count(m)
+        let l = try self.list(m)
+        let fi = &mut self.ast.funcs.items()[f]
+        fi.body = l
+        fi.nbody = n
+    }
+
+    // Parameters and body of a function whose name (if any) was read.
+    fn functionRest(self: *mut Self, name: u32, startTok: usize, method: bool) SyntaxErr!u32 {
+        let m = self.mark()
+        try self.params(m)
+        let f = try self.newFunc(name, m)
+        self.ast.funcs.items()[f].method = method
+        try self.functionBody(f)
+        self.finishFunc(f, startTok)
+        return f
+    }
+
+    // `[extends X] { members }` of a class; returns its ClassInfo.
+    fn classTail(self: *mut Self, name: u32, startTok: usize) SyntaxErr!u32 {
+        var heritage: u32 = 0
+        if self.eat(Tok.KwExtends) {
+            heritage = try self.lhs()
+        }
+        let cid = self.ast.classes.len() as u32
+        try self.ast.classes.append(ClassInfo { name: name, scope: NONE, heritage: heritage, ctor: NONE, members: 0, n: 0 })
+        try self.expect(Tok.LBrace)
+        var ctor = NONE
+        let m = self.mark()
+        while !self.eat(Tok.RBrace) {
+            if self.eat(Tok.Semi) {
+                continue
+            }
+            let mstart = self.pos
+            var isStatic = false
+            if self.isWord("static") && self.kindAt(1) != Tok.LParen && self.kindAt(1) != Tok.Assign {
+                isStatic = true
+                self.pos += 1
+            }
+            var kind = PROP_METHOD
+            if (self.isWord("get") || self.isWord("set")) && self.kindAt(1) != Tok.LParen &&
+                self.kindAt(1) != Tok.Assign && self.kindAt(1) != Tok.Semi && self.kindAt(1) != Tok.RBrace {
+                if self.isWord("get") {
+                    kind = PROP_GET
+                } else {
+                    kind = PROP_SET
+                }
+                self.pos += 1
+            }
+            let computed = self.at(Tok.LBracket)
+            let key = try self.propertyKey()
+            if self.at(Tok.LParen) {
+                let isCtor = !isStatic && !computed && kind == PROP_METHOD && text.eql(self.atoms.name(key), "constructor")
+                var fname = key
+                if computed {
+                    fname = A_EMPTY
+                }
+                if isCtor {
+                    fname = name
+                }
+                let f = try self.functionRest(fname, mstart, !isCtor)
+                if isCtor {
+                    let fi = &mut self.ast.funcs.items()[f]
+                    fi.ctor = true
+                    fi.derived = heritage != 0
+                    fi.class_id = cid
+                    ctor = f
+                    continue
+                }
+                let value = try self.mk(Node.Func { f: f }, mstart)
+                try self.push(try self.mk(Node.ClassElem { kind: kind, is_static: isStatic, key: key, computed: computed, value: value }, mstart))
+                continue
+            }
+            if kind != PROP_METHOD {
+                return self.unexpected()
+            }
+            // A field: its initializer becomes the body of a method.
+            let fm = self.mark()
+            let f = try self.newFunc(A_EMPTY, fm)
+            self.ast.funcs.items()[f].method = true
+            if self.eat(Tok.Assign) {
+                let init = try self.assign(false)
+                self.ast.funcs.items()[f].expr = init
+                if !computed {
+                    try self.nameValue(init, key)
+                }
+            }
+            self.finishFunc(f, mstart)
+            try self.semi()
+            let value = try self.mk(Node.Func { f: f }, mstart)
+            try self.push(try self.mk(Node.ClassElem { kind: PROP_FIELD, is_static: isStatic, key: key, computed: computed, value: value }, mstart))
+        }
+        if ctor == NONE {
+            let em = self.mark()
+            ctor = try self.newFunc(name, em)
+            let fi = &mut self.ast.funcs.items()[ctor]
+            fi.ctor = true
+            fi.derived = heritage != 0
+            fi.default_ctor = true
+            fi.class_id = cid
+        }
+        self.finishFunc(ctor, startTok)
+        let n = self.count(m)
+        let l = try self.list(m)
+        let ci = &mut self.ast.classes.items()[cid]
+        ci.ctor = ctor
+        ci.members = l
+        ci.n = n
+        return cid
+    }
+}
+
+fn precedence(k: Tok, noIn: bool) u32 {
+    return match k {
+        .QuestionQuestion => 1
+        .OrOr => 2
+        .AndAnd => 3
+        .Pipe => 4
+        .Caret => 5
+        .Amp => 6
+        .EqEq => 7
+        .NotEq => 7
+        .EqEqEq => 7
+        .NotEqEq => 7
+        .Lt => 8
+        .Gt => 8
+        .Le => 8
+        .Ge => 8
+        .KwInstanceof => 8
+        .KwIn => inPrecedence(noIn)
+        .Shl => 9
+        .Shr => 9
+        .UShr => 9
+        .Plus => 10
+        .Minus => 10
+        .Star => 11
+        .Slash => 11
+        .Percent => 11
+        .StarStar => 12
+        _ => 0
+    }
+}
+
+fn inPrecedence(noIn: bool) u32 {
+    if noIn {
+        return 0
+    }
+    return 8
+}
+
+fn binaryOp(k: Tok) Op {
+    return match k {
+        .QuestionQuestion => Op.Nullish
+        .OrOr => Op.Or
+        .AndAnd => Op.And
+        .Pipe => Op.BitOr
+        .Caret => Op.BitXor
+        .Amp => Op.BitAnd
+        .EqEq => Op.Eq
+        .NotEq => Op.NotEq
+        .EqEqEq => Op.StrictEq
+        .NotEqEq => Op.StrictNotEq
+        .Lt => Op.Lt
+        .Gt => Op.Gt
+        .Le => Op.Le
+        .Ge => Op.Ge
+        .KwInstanceof => Op.Instanceof
+        .KwIn => Op.In
+        .Shl => Op.Shl
+        .Shr => Op.Shr
+        .UShr => Op.UShr
+        .Plus => Op.Add
+        .Minus => Op.Sub
+        .Star => Op.Mul
+        .Slash => Op.Div
+        .Percent => Op.Mod
+        .StarStar => Op.Exp
+        _ => Op.None
+    }
+}
+
+// The operator of an assignment token: None for `=`; Nullish (with
+// QQAssign) or for a token that is not an assignment.
+fn assignOp(k: Tok) Op {
+    return match k {
+        .Assign => Op.None
+        .PlusAssign => Op.Add
+        .MinusAssign => Op.Sub
+        .StarAssign => Op.Mul
+        .SlashAssign => Op.Div
+        .PercentAssign => Op.Mod
+        .StarStarAssign => Op.Exp
+        .ShlAssign => Op.Shl
+        .ShrAssign => Op.Shr
+        .UShrAssign => Op.UShr
+        .AmpAssign => Op.BitAnd
+        .PipeAssign => Op.BitOr
+        .CaretAssign => Op.BitXor
+        .AndAndAssign => Op.And
+        .OrOrAssign => Op.Or
+        _ => Op.Nullish
+    }
+}

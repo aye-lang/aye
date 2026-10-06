@@ -1,0 +1,21 @@
+#document
+  <html>
+    <head>
+    <body>
+      <h1>
+        "Title"
+      <h2>
+        "Sub heading closes h1"
+      "\n"
+      <h3>
+        "Third"
+      "\n"
+      <p>
+        "Text "
+      <h4>
+        "heading closes p"
+      "\n"
+      <h5>
+      <h6>
+        "Nested heading closes the outer one"
+      "\n"

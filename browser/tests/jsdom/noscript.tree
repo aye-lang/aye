@@ -1,0 +1,18 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "noscript"
+      "\n"
+    <body>
+      <noscript>
+        <p>
+          "Turn on JavaScript"
+      "\n"
+      <p id="p">
+        "Rendered by a script"
+      "\n"
+      <script>
+        "document.getElementById('p').textContent = 'Rendered by a script';"
+      "\n"

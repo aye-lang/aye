@@ -1,0 +1,10 @@
+- main
+  - paragraph: Plain, emphasis, italic, strong, bold, deleted, code, a `tick`, Ctrl.
+  - paragraph: spaced emphasis after, bold and italic.
+  - paragraph: Entities: <tag> & "quotes" © 😀
+  - paragraph: Lots of whitespace here.
+  - paragraph
+    - text: Line one
+    - text: Line two
+  - paragraph: Spanstouching small marked HTML.
+  - paragraph: Empty emphasis before.

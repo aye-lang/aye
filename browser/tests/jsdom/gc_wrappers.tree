@@ -1,0 +1,23 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Wrappers and the collector"
+      "\n"
+    <body>
+      <div id="box">
+        <p>
+          "replaced"
+        <p id="kept">
+          "kept "
+          <b>
+            "bold"
+      "\n"
+      <pre id="out">
+        "expando survives deep expando kept bold\nlistener survives\nset 1\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst box = document.getElementById('box');\nconst kept = document.getElementById('kept');\nkept.note = 'expando survives';\nkept.addEventListener('click', () => log('listener survives'));\nbox.firstChild.firstElementChild.custom = 'deep expando';\nbox.removeChild(kept);\ndocument.getElementById('dropped').marker = 'attached expando';\nbox.innerHTML = '<p>replaced</p>';\n// Allocate enough for several collections.\nlet junk = [];\nfor (let i = 0; i < 60000; i++) { junk.push({ i, s: 'x' + i }); if (junk.length > 1000) junk = []; }\ndocument.getElementById('out').other = 1;\nbox.appendChild(kept);\nlog(kept.note, kept.querySelector('b').custom, kept.textContent);\nkept.click();\nconst fresh = document.createElement('span');\nfresh.id = 'fresh';\nfresh.flag = 'set';\ndocument.body.appendChild(fresh);\nfor (let i = 0; i < 60000; i++) { junk.push({ i }); if (junk.length > 1000) junk = []; }\nlog(document.getElementById('fresh').flag, document.getElementById('out').other);\n"
+      "\n"
+      <span id="fresh">
