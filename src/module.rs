@@ -433,6 +433,10 @@ impl Loader<'_> {
     fn import_target(&mut self, path: &[(String, Span)]) -> Binding {
         let (first, span) = &path[0];
         let Some(mut q) = self.module(first, *span) else {
+            if let Some(msg) = self.root_import(first) {
+                self.report(Error::new(E0083, *span, msg));
+                return Binding::Bad;
+            }
             let dir = self.base.join(first);
             let msg = format!("cannot find module `{first}` (no directory `{}`{})", dir.display(), self.sibling_hint(first));
             self.report(Error::new(E0081, *span, msg));
@@ -467,6 +471,32 @@ impl Loader<'_> {
         }
         self.edge(q, *span);
         Binding::Module(q)
+    }
+
+    /// When `import first` names the root module (its directory, or its
+    /// file when it is one file): why that cannot be. Every other module is
+    /// imported by the root, directly or not, so it would be a cycle.
+    fn root_import(&self, first: &str) -> Option<String> {
+        let files = &self.modules[0].files;
+        let stem = |f: &usize| Path::new(&self.files[*f].name).file_stem().map(|s| s.to_string_lossy().into_owned());
+        let (shown, dir) = if files.len() == 1 && stem(&files[0]).as_deref() == Some(first) {
+            (self.files[files[0]].name.clone(), self.base.join("shared"))
+        } else {
+            let base = std::fs::canonicalize(self.base).ok()?;
+            if base.file_name()?.to_string_lossy() != first {
+                return None;
+            }
+            // A file of a directory with other `.ore` files is not that directory.
+            let ore_files = std::fs::read_dir(&base).ok()?.filter(|e| e.as_ref().is_ok_and(|e| e.path().extension().is_some_and(|x| x == "ore"))).count();
+            if ore_files != files.len() {
+                return None;
+            }
+            (self.base.display().to_string(), self.base.join("shared"))
+        };
+        Some(format!(
+            "`{first}` is the root module ({shown}), which cannot be imported: it imports every other module of the program, directly or not, so this would be an import cycle; move what both need into a module of its own (a directory such as `{}`) and import that from both",
+            dir.display()
+        ))
     }
 
     /// When the module `first` is not found, but a directory above the

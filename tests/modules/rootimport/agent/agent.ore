@@ -1,0 +1,5 @@
+import rootimport
+
+pub fn run() []u8 {
+    return rootimport.relativeUrl("x")
+}

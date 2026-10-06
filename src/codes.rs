@@ -1651,7 +1651,7 @@ pub fn twice(x: i64) i64 {
 }
 E0083 = 83 {
     "import cycle",
-    "Modules cannot import each other, directly or through other modules. Move what both modules need into a third module that both import.",
+    "Modules cannot import each other, directly or through other modules. Move what both modules need into a third module that both import. The root module (the directory or file given to `ore`) cannot be imported at all: it imports every other module, directly or not, so code that a module and the root both need goes into a module of its own.",
     r#"// file: main.ore
 import a
 

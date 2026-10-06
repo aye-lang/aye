@@ -1133,7 +1133,10 @@ pub fn main() {
   and enum variants are visible wherever their type is.
 - An import name cannot also be declared in the module, and locals cannot
   shadow it (`import url` and `let url = ...` is an error: rename the
-  local). Modules cannot import each other in a cycle.
+  local). Modules cannot import each other in a cycle, so no module can
+  import the root module (which imports all of them, directly or not):
+  put what the root and a module both need in a module of its own
+  (`app/shared/`) and import it from both (E0083).
 - The `test` blocks of every module are checked with the program (`ore
   check`, `ore build`) and run by `ore test` (section 13); std's are not.
 - Errors and types from other modules are shown with their path in

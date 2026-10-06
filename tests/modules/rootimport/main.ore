@@ -1,0 +1,11 @@
+// M9.7: a module cannot import the root module (it would be a cycle); the
+// error says to move the shared code into a module of its own.
+import agent
+
+pub fn relativeUrl(s: []u8) []u8 {
+    return s
+}
+
+pub fn main() {
+    @println(agent.run())
+}
