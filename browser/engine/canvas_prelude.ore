@@ -236,13 +236,18 @@ pub let CANVAS_PRELUDE =
     \\}
     \\// The interpreter's typed arrays are JS polyfills. Use the existing one
     \\// when installed, rather than installing a second typed-array subsystem.
+    \\// Its arrays are Arrays with its prototype: give a fresh array of bytes
+    \\// that prototype rather than copying it element by element.
+    \\function clamped(a) {
+    \\  return typeof Uint8ClampedArray === 'function' ? Object.setPrototypeOf(a, Uint8ClampedArray.prototype) : a;
+    \\}
     \\class ImageData {
     \\  constructor(data, width, height) {
     \\    if (typeof data === 'number') {
     \\      height = Math.abs(Math.trunc(width));
     \\      width = Math.abs(Math.trunc(data));
     \\      dimensions(width, height);
-    \\      data = typeof Uint8ClampedArray === 'function' ? new Uint8ClampedArray(width*height*4) : new Array(width*height*4).fill(0);
+    \\      data = clamped(new Array(width*height*4).fill(0));
     \\    } else {
     \\      width = Math.trunc(width);
     \\      height = height === undefined ? data.length/(width*4) : Math.trunc(height);
@@ -493,7 +498,7 @@ pub let CANVAS_PRELUDE =
     \\      h = -h;
     \\    }
     \\    const d = ak.canvasPixels(this._node, x, y, w, h, null);
-    \\    return new ImageData(typeof Uint8ClampedArray === 'function' ? new Uint8ClampedArray(d) : d, w, h);
+    \\    return new ImageData(clamped(d), w, h);
     \\  }
     \\  putImageData(data, x, y, dirtyX, dirtyY, dirtyW, dirtyH) {
     \\    this._sync();
