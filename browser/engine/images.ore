@@ -1,5 +1,5 @@
 // The images of a page: every `img` (and `input type=image`) with a
-// `src` is fetched (relative to the page's base URL, with the page's URL
+// `src` or a `srcset` (sources.ore picks one) is fetched (relative to the page's base URL, with the page's URL
 // as the Referer; `data:` URLs too) and decoded once per URL (an SVG
 // image becomes an `svg.Picture` and a bitmap with its natural size and
 // no pixels), and the elements are mapped to their bitmaps for layout
@@ -7,6 +7,7 @@
 // only fetches what is new (elements added by scripts); a URL that
 // failed is not fetched again.
 
+import css
 import dom
 import dom.Document
 import dom.NodeId
@@ -188,35 +189,33 @@ fn pixelsOf(v: f64) usize {
 }
 
 /// Fetches the images of the page's elements that have none yet, and
-/// maps the elements to their bitmaps.
-pub fn updateImages(page: *mut Page) AllocError!void {
+/// maps the elements to their bitmaps. `media` (the viewport) picks
+/// among `srcset` candidates and `picture` sources.
+pub fn updateImages(page: *mut Page, media: css.Media) AllocError!void {
     if page.images == null {
         page.images = try page.alloc.create(ImageCache.init(page.alloc))
     }
-    return fillImages(page.images.?, &page.doc, &page.url)
+    return fillImages(page.images.?, &page.doc, &page.url, media)
 }
 
 /// Fetches the images of the elements of `doc` (whose URL is
 /// `address`) that `cache` has no bitmap for, resolving their URLs
 /// against the document's base URL.
-pub fn fillImages(cache: *mut ImageCache, doc: *Document, address: *Url) AllocError!void {
+pub fn fillImages(cache: *mut ImageCache, doc: *Document, address: *Url, media: css.Media) AllocError!void {
     if cache.referrer.len == 0 {
         try cache.setReferrer(address.href)
     }
     var base = try documentBase(cache.alloc, doc, address)
     defer base.deinit(cache.alloc)
-    try prefetchImages(cache, doc, &base)
+    try prefetchImages(cache, doc, &base, media)
     var cur: ?NodeId = doc.root
     while cur |h| {
         cur = doc.following(h, doc.root)
         if !isImageElement(doc, h) || cache.nodes.get(h) != null {
             continue
         }
-        let src = text.trim(doc.attr(h, "src") orelse "")
-        if src.len == 0 {
-            continue
-        }
-        let target = url.resolve(cache.alloc, &base, src) catch |e| {
+        let choice = (try chooseImage(cache.alloc, doc, h, media)) orelse continue
+        let target = url.resolve(cache.alloc, &base, choice.url) catch |e| {
             continue
         }
         defer target.deinit(cache.alloc)
@@ -224,7 +223,7 @@ pub fn fillImages(cache: *mut ImageCache, doc: *Document, address: *Url) AllocEr
             if cache.pictureOf(target.withoutFragment()) |pic| {
                 try cache.nodes.putPicture(h, bmp, pic)
             } else {
-                try cache.nodes.put(h, bmp)
+                try cache.nodes.putScaled(h, bmp, choice.density)
             }
         }
     }
@@ -232,7 +231,7 @@ pub fn fillImages(cache: *mut ImageCache, doc: *Document, address: *Url) AllocEr
 
 // Fetches the new images of `doc` concurrently into the session's cache
 // (net.prefetch), before `fillImages` takes them one by one.
-fn prefetchImages(cache: *mut ImageCache, doc: *Document, base: *Url) AllocError!void {
+fn prefetchImages(cache: *mut ImageCache, doc: *Document, base: *Url, media: css.Media) AllocError!void {
     var hrefs = text.Builder.init(cache.alloc)
     defer hrefs.deinit()
     var cur: ?NodeId = doc.root
@@ -241,11 +240,8 @@ fn prefetchImages(cache: *mut ImageCache, doc: *Document, base: *Url) AllocError
         if !isImageElement(doc, h) || cache.nodes.get(h) != null {
             continue
         }
-        let src = text.trim(doc.attr(h, "src") orelse "")
-        if src.len == 0 {
-            continue
-        }
-        let target = url.resolve(cache.alloc, base, src) catch |e| {
+        let choice = (try chooseImage(cache.alloc, doc, h, media)) orelse continue
+        let target = url.resolve(cache.alloc, base, choice.url) catch |e| {
             continue
         }
         defer target.deinit(cache.alloc)

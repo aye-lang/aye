@@ -26,7 +26,7 @@ fn dumpLayout(alloc: Allocator, doc: *Document, base: *Url, media: css.Media, sy
     try css.computeStyles(doc, &ua, &author, media, &mut styles)
     var images = engine.ImageCache.init(alloc)
     defer images.deinit()
-    try engine.fillImages(&mut images, doc, base)
+    try engine.fillImages(&mut images, doc, base, media)
     if system_font {
         var sys = font.System.init(alloc) catch |e| {
             std.log.err("no system font found ({})", e)

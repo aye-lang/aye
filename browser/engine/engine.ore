@@ -142,7 +142,7 @@ pub struct Page {
             self.dropStyling()
             self.styling = try self.styleFor(css.Media { width: width, height: height })
         }
-        try updateImages(self)
+        try updateImages(self, css.Media { width: width, height: height })
         if self.styling |st| {
             var nodes: ?*layout.Images = null
             if self.images |imgs| {

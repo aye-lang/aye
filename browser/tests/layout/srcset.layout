@@ -1,0 +1,31 @@
+viewport 800x600
+  block <html> (0, 0) 800x240.8
+    block <body> (8, 8) 784x224.8
+      block <p> (8, 8) 784x29.2
+        line (8, 8) 784x29.2
+          text (8, 19.2) 24x16 "x: "
+          replaced <img src="../paint/img/icon.gif" srcset="../paint/img/photo.png 2x, ../paint/img/badge.png"> (32, 8) 24x24
+          text (56, 19.2) 8x16 " "
+          replaced <img srcset="../paint/img/photo.png 3x, ../paint/img/badge.png 0.5x"> (64, 16) 21.33x16
+      block <p> (8, 41.2) 784x125.2
+        line (8, 41.2) 784x125.2
+          text (8, 148.4) 24x16 "w: "
+          replaced <img srcset="../paint/img/photo.png 64w, ../paint/img/badge.png 24w" sizes="(max-width: 400px) 100vw, 32px"> (32, 137.2) 32x24
+          text (64, 148.4) 8x16 " "
+          replaced <img srcset="../paint/img/badge.png 24w, ../paint/img/photo.png 64w" sizes="20vw"> (72, 41.2) 160x120
+      block <p> (8, 170.4) 784x37.2
+        line (8, 170.4) 784x37.2
+          text (8, 189.6) 72x16 "picture: "
+          inline <picture> (80, 189.6) 32x16
+            inline <source type="image/avif" srcset="../paint/img/photo.png"> (80, 189.6) 0x16
+            inline <source srcset="../paint/img/badge.png" media="(max-width: 500px)"> (80, 189.6) 0x16
+            inline <source type="image/gif" srcset="../paint/img/icon.gif 0.5x"> (80, 189.6) 0x16
+            replaced <img src="../paint/img/photo.png"> (80, 170.4) 32x32
+          text (112, 189.6) 8x16 " "
+          inline <picture> (120, 189.6) 10x16
+            inline <source type="image/jxl" srcset="../paint/img/badge.png"> (120, 189.6) 0x16
+            replaced <img src="../paint/img/photo.png" width="10"> (120, 194.9) 10x7.5
+      block <p> (8, 211.6) 784x21.2
+        line (8, 211.6) 784x21.2
+          text (8, 214.8) 48x16 "data: "
+          replaced <img srcset="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAHUlEQVR4nGP8z8Dwn7GBAQ6YkDlgAVQuukDD/0YAv8EFCPiGbhIAAAAASUVORK5CYII= 0.25x"> (56, 211.6) 16x16
