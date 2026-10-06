@@ -5,7 +5,9 @@
 // write callback into a `text.Builder`; the status, the final URL and the
 // `Content-Type` come from `curl_easy_getinfo`. Responses of any status
 // are returned (a 404 page is still a page); curl's own failures become
-// `FetchError`s.
+// `FetchError`s. A POST sends its body with its `Content-Type`; a
+// redirect after it (301, 302, 303) continues with a GET, as browsers
+// do.
 
 @link("libcurl")
 
@@ -21,9 +23,15 @@ extern fn curl_easy_setopt(h: *mut Curl, option: i32, ...) i32
 extern fn curl_easy_perform(h: *mut Curl) i32
 extern fn curl_easy_getinfo(h: *mut Curl, info: i32, ...) i32
 extern fn curl_easy_cleanup(h: *mut Curl)
+extern struct CurlList {}
+extern fn curl_slist_append(list: ?*mut CurlList, s: [*]u8) ?*mut CurlList
+extern fn curl_slist_free_all(list: ?*mut CurlList)
 extern fn strlen(s: [*]u8) usize
 
 let CURLOPT_WRITEDATA: i32 = 10001
+let CURLOPT_POSTFIELDS: i32 = 10015
+let CURLOPT_HTTPHEADER: i32 = 10023
+let CURLOPT_POSTFIELDSIZE: i32 = 60
 let CURLOPT_URL: i32 = 10002
 let CURLOPT_USERAGENT: i32 = 10018
 let CURLOPT_FOLLOWLOCATION: i32 = 52
@@ -65,15 +73,15 @@ fn onBody(data: [*]u8, size: usize, n: usize, user: [*]u8) usize {
     return total
 }
 
-fn fetchHttp(alloc: Allocator, target: *Url) FetchError!Response {
+fn fetchHttp(alloc: Allocator, target: *Url, post: ?*Body) FetchError!Response {
     if curl_easy_init() |curl| {
         defer curl_easy_cleanup(curl)
-        return transfer(alloc, curl, target)
+        return transfer(alloc, curl, target, post)
     }
     return FetchError.Network
 }
 
-fn transfer(alloc: Allocator, curl: *mut Curl, target: *Url) FetchError!Response {
+fn transfer(alloc: Allocator, curl: *mut Curl, target: *Url, post: ?*Body) FetchError!Response {
     // libcurl wants a NUL-terminated URL, without the fragment.
     let href = target.withoutFragment()
     let address = alloc.alloc(0 as u8, href.len + 1) catch |e| {
@@ -97,6 +105,35 @@ fn transfer(alloc: Allocator, curl: *mut Curl, target: *Url) FetchError!Response
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1 as i64)
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, onBody)
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, @ptrCast([*]u8, &mut sink))
+    var headers: ?*mut CurlList = null
+    defer curl_slist_free_all(headers)
+    if post |b| {
+        var h = text.Builder.init(alloc)
+        defer h.deinit()
+        h.append("Content-Type: ") catch |e| {
+            return FetchError.OutOfMemory
+        }
+        h.append(b.content_type) catch |e| {
+            return FetchError.OutOfMemory
+        }
+        h.appendByte(0) catch |e| {
+            return FetchError.OutOfMemory
+        }
+        // libcurl sends application/x-www-form-urlencoded by itself, and
+        // drops it after a redirect to a GET; other types need a header
+        // (kept after a redirect).
+        if !text.eql(b.content_type, "application/x-www-form-urlencoded") {
+            headers = curl_slist_append(null, h.bytes().ptr)
+            if headers == null {
+                return FetchError.OutOfMemory
+            }
+            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers)
+        }
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, b.data.len as i64)
+        // An empty body still needs a pointer: libcurl would otherwise
+        // read the body from a callback.
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, b.data.ptr)
+    }
     let code = curl_easy_perform(curl)
     if sink.out_of_memory {
         return FetchError.OutOfMemory

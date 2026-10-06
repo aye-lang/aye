@@ -45,8 +45,22 @@ pub struct Response {
     }
 }
 
+/// The body of a POST request.
+pub struct Body {
+    // The `Content-Type` header: "application/x-www-form-urlencoded",
+    // "multipart/form-data; boundary=...", "text/plain".
+    content_type: []u8
+    data: []u8
+}
+
 /// Fetches `target`.
 pub fn fetch(alloc: Allocator, target: *Url) FetchError!Response {
+    return fetchWith(alloc, target, null)
+}
+
+/// Fetches `target`, by POST with `body` when there is one (for `http:`
+/// and `https:`; other URLs ignore it).
+pub fn fetchWith(alloc: Allocator, target: *Url, body: ?*Body) FetchError!Response {
     if text.eql(target.scheme, "file") {
         return fetchFile(alloc, target)
     }
@@ -54,7 +68,7 @@ pub fn fetch(alloc: Allocator, target: *Url) FetchError!Response {
         return fetchData(alloc, target)
     }
     if text.eql(target.scheme, "http") || text.eql(target.scheme, "https") {
-        return fetchHttp(alloc, target)
+        return fetchHttp(alloc, target, body)
     }
     return FetchError.Unsupported
 }
