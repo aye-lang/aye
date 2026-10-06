@@ -1577,7 +1577,7 @@ pub fn main() {
 }
 E0080 = 80 {
     "invalid type arguments",
-    "A type function names a type only with its arguments, `Box(i64)`, and only a type function takes type arguments. The argument of a `comptime` parameter must be a type, and the number of arguments must match the parameters.",
+    "A type function names a type only with its arguments, `Box(i64)`, and only a type function takes type arguments. The argument of a `comptime` parameter must be a type, and the number of arguments must match the parameters. A generic that instantiates itself with larger and larger type arguments (`Nest(?T)` inside `Nest(T)`) would never end: instances nested more than 32 deep are an error.",
     r#"fn Box(comptime T: type) type {
     return struct {
         value: T
