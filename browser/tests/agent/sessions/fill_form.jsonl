@@ -16,7 +16,9 @@
 {"id":16,"cmd":"press","key":"Tab"}
 {"id":17,"cmd":"press","key":"Shift+Tab"}
 {"id":18,"cmd":"press","key":"Enter"}
-{"id":19,"cmd":"click","ref":"e8"}
-{"id":20,"cmd":"type","ref":"e2","text":"Grace","submit":true}
-{"id":21,"cmd":"snapshot","format":"json"}
-{"id":22,"cmd":"read"}
+{"id":19,"cmd":"back"}
+{"id":20,"cmd":"click","ref":"e17"}
+{"id":21,"cmd":"back"}
+{"id":22,"cmd":"type","ref":"e20","text":"Grace","submit":true}
+{"id":23,"cmd":"snapshot","format":"json"}
+{"id":24,"cmd":"read"}

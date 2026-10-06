@@ -12,8 +12,10 @@ actions on refs. Two stdio servers carry it:
 Both keep one session: the page shown, the history, the refs. The
 viewport is 800x600 px unless given. Text is measured with the browser's
 fixed-metric font, so boxes are approximate but stable. JavaScript does
-not run yet (B6), and forms are not submitted yet (B5): clicks on buttons
-and submissions are recorded as events and said so in the result.
+not run yet (B6): clicks that only scripts would handle are recorded as
+events and said so in the result. Forms work (B5): the agent and the
+window share the state of the controls (values, checkedness, selected
+options, the focus), and submitting a form loads the response.
 
 For goldens and quick looks, the same views are on the command line:
 
@@ -155,20 +157,24 @@ What the actions do:
 - **click**: a link (or an element inside one) is followed; a link to
   a fragment of the same document scrolls to it and adds a history
   entry. Checkboxes toggle and radio buttons check (unchecking their
-  group) through the `checked` attribute; ARIA checkboxes toggle
-  `aria-checked`; `summary` opens or closes its `details`; a `label`
-  clicks its control; an `option` is selected. Buttons, submit buttons
-  and other elements record a `click on` or `submit of` event. The
-  clicked element takes the focus when it can.
-- **type**: replaces the value of a text field (the `value` attribute
-  of an `input`, the text of a `textarea`) and focuses it. Not for
-  disabled or read-only fields.
-- **select**: selects one option (`selected` attribute); in a single
-  select the others are unselected.
-- **press**: on a focused text field a character is appended, Backspace
-  deletes one, Enter submits (recorded; a new line in a `textarea`);
-  Enter on a link or button and Space on a button, checkbox or radio
-  button click it; Tab and
+  group); a submit button submits its form (GET or POST, as the form
+  says) and the response is loaded in a new history entry; a reset
+  button resets its form; ARIA checkboxes toggle `aria-checked`;
+  `summary` opens or closes its `details`; a `label` clicks its
+  control; an `option` is selected. Other buttons and elements record a
+  `click on` event. The clicked element takes the focus when it can.
+- **type**: replaces the value of a text field and focuses it (the
+  attributes keep the defaults that a reset goes back to); with
+  `submit`, then submits its form as Enter would. Not for disabled or
+  read-only fields.
+- **select**: selects one option; in a single select the others are
+  unselected.
+- **press**: on a focused text field a character is typed at the caret
+  (at the end after `type`), Backspace and Delete delete one,
+  ArrowLeft, ArrowRight, Home and End move the caret, Enter submits the
+  form with its first submit button (a new line in a `textarea`); Enter
+  on a link or button and Space on a button, checkbox or radio button
+  click it; Tab and
   Shift+Tab move the focus through focusable elements; Escape leaves
   the field; PageDown, PageUp, Space, ArrowDown, ArrowUp, Home and End
   scroll. Every key is recorded.

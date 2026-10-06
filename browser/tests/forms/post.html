@@ -1,0 +1,25 @@
+<!doctype html>
+<title>Post forms</title>
+<h2>urlencoded</h2>
+<form method="post" action="/echo">
+  <p><label>Name <input name="name"></label>
+  <p><label>Bio <textarea name="bio"></textarea></label>
+  <p><button>Send</button>
+     <button formaction="/echo?via=get" formmethod="get">Send by GET</button>
+</form>
+<h2>multipart</h2>
+<form method="POST" action="/echo" enctype="multipart/form-data">
+  <p><label>Title <input name="title" value="a &quot;quoted&quot; title"></label>
+  <p><label>File <input type="file" name="upload"></label>
+  <p><input type="submit" name="do" value="Upload">
+</form>
+<h2>plain</h2>
+<form method="post" action="/echo" enctype="text/plain">
+  <p><label>Line <input name="line" value="a=b c"></label>
+  <p><input type="submit" value="Plain">
+</form>
+<h2>redirect</h2>
+<form method="post" action="/echo-redirect">
+  <p><label>Then <input name="then" value="get"></label>
+  <p><input type="submit" value="Redirect">
+</form>
