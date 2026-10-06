@@ -377,10 +377,13 @@ pub let CANVAS_PRELUDE =
     \\  }
     \\  _rect(x, y, w, h, stroke, clear) {
     \\    this._sync();
-    \\    if (!finite([x, y, w, h]) || !w || !h) return;
+    \\    if (!finite([x, y, w, h]) || (stroke ? !w && !h : !w || !h)) return;
     \\    const p = new Path2D();
     \\    p._m = this._matrix;
-    \\    p.rect(Number(x), Number(y), Number(w), Number(h));
+    \\    if (!w || !h) {
+    \\      p.moveTo(x, y);
+    \\      p.lineTo(Number(x)+Number(w), Number(y)+Number(h));
+    \\    } else p.rect(Number(x), Number(y), Number(w), Number(h));
     \\    this._draw(p._d, stroke, undefined, clear ? {kind: 0, color: [0, 0, 0, 255]} : null, clear ? 'clear' : null);
     \\  }
     \\  fillRect(x, y, w, h) {
