@@ -201,8 +201,7 @@ struct TextWriter {
             .Element => {
                 try self.element(h)
             }
-            .Doctype => {}
-            .Comment => {}
+            .Doctype, .Comment => {}
         }
     }
 

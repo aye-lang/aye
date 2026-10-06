@@ -100,9 +100,7 @@ pub struct Styles {
     /// The computed values of the element `el` (null for other nodes).
     pub fn get(self: *Self, el: NodeId) ?[]Value {
         if self.map.get(el.index) |v| {
-            // `[]mut Value` does not convert to `?[]Value` in one step.
-            let values: []Value = v
-            return values
+            return v
         }
         return null
     }

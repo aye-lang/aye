@@ -55,7 +55,7 @@ fn shownOffset(doc: *dom.Document, el: NodeId, k: usize) usize {
         return k
     }
     var n: usize = 0
-    for i in 0..minUsize(k, v.len) {
+    for i in 0..math.minOf(usize, k, v.len) {
         if (v[i] & 0xC0) != 0x80 {
             n += 1
         }
@@ -165,8 +165,8 @@ pub fn selectionRects(page: *Page, el: NodeId, out: *mut List(paint.Rect)) Alloc
             if f.kind != FragKind.Text || f.box != fb.text_box {
                 continue
             }
-            let a = maxUsize(lo, f.start)
-            let z = minUsize(hi, f.end)
+            let a = math.maxOf(usize, lo, f.start)
+            let z = math.minOf(usize, hi, f.end)
             if a < z {
                 let x0 = t.measure.width(face, tb.text[f.start..a])
                 let w = t.measure.width(face, tb.text[a..z])
@@ -320,19 +320,4 @@ pub fn boxRect(page: *Page, el: NodeId) ?paint.Rect {
         return paint.Rect { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
     }
     return null
-}
-
-// std.math is for f64 only.
-fn minUsize(a: usize, b: usize) usize {
-    if a < b {
-        return a
-    }
-    return b
-}
-
-fn maxUsize(a: usize, b: usize) usize {
-    if a > b {
-        return a
-    }
-    return b
 }

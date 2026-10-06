@@ -69,7 +69,7 @@ fn run(alloc: Allocator) i32 {
     }
     defer alloc.free(args)
     if args.len < 2 {
-        std.log.err("{}", USAGE_ALL)
+        std.log.err(USAGE_ALL)
         return 2
     }
     if args.len >= 2 && text.eql(args[1], "js") {
@@ -98,7 +98,7 @@ fn run(alloc: Allocator) i32 {
         return ui.run(alloc, args[1..])
     }
     if args.len < 2 || !text.eql(args[1], "dump") {
-        std.log.err("{}", USAGE)
+        std.log.err(USAGE)
         return 2
     }
     return dump(alloc, args[2..]) catch |e| {
@@ -170,7 +170,7 @@ fn dump(alloc: Allocator, args: [][]u8) !i32 {
     if options(args) |parsed| {
         o = parsed
     } else {
-        std.log.err("{}", USAGE)
+        std.log.err(USAGE)
         return 2
     }
     let location = toUrl(alloc, o.target) catch |e| {

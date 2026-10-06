@@ -70,7 +70,7 @@ fn screenshot(alloc: Allocator, args: [][]u8) i32 {
     if shotOptions(args) |parsed| {
         o = parsed
     } else {
-        std.log.err("{}", SHOT_USAGE)
+        std.log.err(SHOT_USAGE)
         return 2
     }
     var sys = font.System.init(alloc) catch |e| {

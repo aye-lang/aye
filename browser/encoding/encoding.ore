@@ -279,17 +279,9 @@ fn isLabelByte(c: u8) bool {
     }
 }
 
-// `?Encoding == Encoding` does not compile (see COMPILER_GAPS.md).
-fn labelIs(label: []u8, want: Encoding) bool {
-    if fromLabel(label) |e| {
-        return e == want
-    }
-    return false
-}
-
 test "labels" {
-    @expect(labelIs("UTF-8", Encoding.Utf8))
-    @expect(labelIs(" iso-8859-1 ", Encoding.Windows1252))
+    @expect(fromLabel("UTF-8") == Encoding.Utf8)
+    @expect(fromLabel(" iso-8859-1 ") == Encoding.Windows1252)
     @expect(fromLabel("koi8-r") == null)
 }
 
@@ -300,7 +292,7 @@ test "prescan" {
     @expect(sniff("<metadata charset=latin1>caf\xC3\xA9", "") == Encoding.Utf8)
     @expect(sniff("<meta charset=\"UTF-16LE\">caf\xE9", "") == Encoding.Utf8)
     @expect(sniff("<title>x > y</title><META CHARSET=ISO-8859-1>", "") == Encoding.Windows1252)
-    @expect(labelIs("ISO_8859-1:1987", Encoding.Windows1252))
+    @expect(fromLabel("ISO_8859-1:1987") == Encoding.Windows1252)
 }
 
 test "sniffing" {
