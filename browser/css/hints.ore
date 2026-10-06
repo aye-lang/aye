@@ -4,6 +4,9 @@
 // count as author declarations with specificity zero, before the author
 // sheets: any author rule overrides them.
 //
+// SVG presentation attributes (`fill="red"`, `stroke-width="2"`, ...) are
+// hints of the same kind on SVG elements.
+//
 // Left out: `valign` (no `vertical-align` yet), `cellspacing` (no
 // `border-spacing`), `align=left|right` on tables and images (no floats
 // here), `background` images, `frame` and `rules`.
@@ -136,6 +139,28 @@ pub fn writeHints(doc: *Document, el: NodeId, out: *mut text.Builder) AllocError
             if listType(text.trim(v)) |t| {
                 try hintDecl(out, "list-style-type", t)
             }
+        }
+    }
+    if isOneOf(name, SVG_ELEMENTS) {
+        try svgHints(doc, el, out)
+    }
+}
+
+// The SVG elements that take presentation attributes, and those
+// attributes (`display` only as `none`).
+let SVG_ELEMENTS = "svg g path rect circle ellipse line polyline polygon use symbol defs stop lineargradient radialgradient switch marker pattern clippath mask text tspan"
+let SVG_PRESENTATION = "fill stroke stroke-width fill-opacity stroke-opacity fill-rule stroke-linecap stroke-linejoin stroke-miterlimit opacity stop-color stop-opacity color visibility"
+
+fn svgHints(doc: *Document, el: NodeId, out: *mut text.Builder) AllocError!void {
+    for at in doc.node(el).attrs {
+        let v = text.trim(at.value)
+        if v.len == 0 || text.indexOf(v, ";") != null || text.indexOf(v, "{") != null || text.indexOf(v, "}") != null {
+            continue
+        }
+        if isOneOf(at.name, SVG_PRESENTATION) {
+            try hintDecl(out, at.name, v)
+        } else if text.eql(at.name, "display") && text.eqlIgnoreCase(v, "none") {
+            try hintDecl(out, "display", "none")
         }
     }
 }
