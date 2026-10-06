@@ -2,8 +2,11 @@
 // is uploaded to an SDL texture each frame.
 //
 // - window.ore: the window, the event loop and navigation.
+// - tabs.ore: the window's tabs (Cmd+T, Cmd+W, Cmd+1..9, the tab strip).
+// - agents.ore: agents connected to the window (`--agent-socket`).
+// - socket.ore: Unix domain sockets, and `anyknown connect`.
 // - chrome.ore: the toolbar (back, forward, reload, address bar), the
-//   status line and the find bar.
+//   tab strip, the status line and the find bar.
 // - field.ore: one-line text fields.
 // - forms.ore: the page's forms: focus, editing, dropdowns, submission.
 // - script.ore: scripted input and state for headless tests.
@@ -21,7 +24,9 @@
 // the page is laid out again if they changed the document, and the
 // navigation they asked for happens.
 
+import agent
 import dom
+import dom.NodeId
 import engine
 import font
 import layout
@@ -33,10 +38,15 @@ import std.mem.Allocator
 import std.text
 import url
 
-let UI_USAGE = "usage: anyknown [open] FILE|URL [--width W] [--height H] [--font fixed|system] [--no-js] [--frames N [--events SCRIPT] [--state] [--text] [--save OUT.png]]"
+let UI_USAGE = "usage: anyknown [open] FILE|URL [--width W] [--height H] [--font fixed|system] [--no-js] [--agent-socket PATH [--exit-when-idle]] [--frames N [--events SCRIPT] [--state] [--text] [--save OUT.png]]"
 
 /// The toolbar height, in CSS px.
 pub let TOOLBAR: f64 = 40.0
+/// The tab strip under the toolbar, shown when the window has two tabs
+/// or more.
+pub let TABBAR: f64 = 28.0
+/// The most tabs a window has.
+pub let MAX_TABS: usize = 16
 /// The find bar height.
 pub let FINDBAR: f64 = 32.0
 /// Lines of a wheel notch and of the arrow keys, in CSS px.
@@ -63,10 +73,16 @@ struct UiOptions {
     // at the end (after --state).
     js: bool
     show_text: bool
+    // Agents connect to this Unix socket (agents.ore); the URL is then
+    // optional. Tests: the window closes when the last agent leaves, and
+    // `--events`, `--state`, `--text` and `--save` work without
+    // `--frames`.
+    socket: []u8
+    exit_when_idle: bool
 }
 
 fn uiOptions(args: [][]u8) ?UiOptions {
-    var o = UiOptions { target: "", width: 1024, height: 768, face: "", frames: 0, events: "", state: false, save: "", js: true, show_text: false }
+    var o = UiOptions { target: "", width: 1024, height: 768, face: "", frames: 0, events: "", state: false, save: "", js: true, show_text: false, socket: "", exit_when_idle: false }
     var i: usize = 0
     while i < args.len {
         let a = args[i]
@@ -92,6 +108,11 @@ fn uiOptions(args: [][]u8) ?UiOptions {
         } else if text.eql(a, "--events") && more && validScript(args[i + 1]) {
             o.events = args[i + 1]
             i += 1
+        } else if text.eql(a, "--agent-socket") && more {
+            o.socket = args[i + 1]
+            i += 1
+        } else if text.eql(a, "--exit-when-idle") {
+            o.exit_when_idle = true
         } else if text.eql(a, "--save") && more {
             o.save = args[i + 1]
             i += 1
@@ -108,7 +129,11 @@ fn uiOptions(args: [][]u8) ?UiOptions {
         }
         i += 1
     }
-    if o.target.len == 0 || (o.frames == 0 && (o.events.len > 0 || o.state || o.show_text || o.save.len > 0)) {
+    let headless = o.frames > 0 || o.exit_when_idle
+    if (o.target.len == 0 && o.socket.len == 0) || (!headless && (o.events.len > 0 || o.state || o.show_text || o.save.len > 0)) {
+        return null
+    }
+    if o.exit_when_idle && (o.socket.len == 0 || o.frames > 0) {
         return null
     }
     return o
@@ -117,7 +142,7 @@ fn uiOptions(args: [][]u8) ?UiOptions {
 /// `anyknown [open] FILE|URL ...`: opens a window on the page; returns
 /// the exit status.
 pub fn run(alloc: Allocator, args: [][]u8) i32 {
-    var o = UiOptions { target: "", width: 0, height: 0, face: "", frames: 0, events: "", state: false, save: "", js: true, show_text: false }
+    var o = UiOptions { target: "", width: 0, height: 0, face: "", frames: 0, events: "", state: false, save: "", js: true, show_text: false, socket: "", exit_when_idle: false }
     if uiOptions(args) |parsed| {
         o = parsed
     } else {
@@ -141,15 +166,22 @@ pub fn run(alloc: Allocator, args: [][]u8) i32 {
 }
 
 fn withFonts(alloc: Allocator, o: UiOptions, measure: dyn font.Measurer, system: ?*mut font.System) i32 {
-    let first = engine.urlOfInput(alloc, o.target) catch |e| {
-        std.log.err("not a URL or file: {}", o.target)
-        return 1
+    var first: ?url.Url = null
+    if o.target.len > 0 {
+        first = engine.urlOfInput(alloc, o.target) catch |e| {
+            std.log.err("not a URL or file: {}", o.target)
+            return 1
+        }
     }
-    defer first.deinit(alloc)
+    defer {
+        if first |f| {
+            f.deinit(alloc)
+        }
+    }
     engine.setScripting(o.js)
     engine.setRealClock(true)
-    // The console goes to stderr, except in headless test runs (--frames).
-    engine.setConsoleEcho(o.frames == 0)
+    // The console goes to stderr, except in headless test runs.
+    engine.setConsoleEcho(o.frames == 0 && !o.exit_when_idle)
     if SDL_Init(SDL_INIT_VIDEO) != 0 {
         sdlError("cannot start SDL")
         return 1
@@ -165,14 +197,31 @@ fn withFonts(alloc: Allocator, o: UiOptions, measure: dyn font.Measurer, system:
         }
         if r |renderer| {
             defer SDL_DestroyRenderer(renderer)
-            var ui = Ui.init(alloc, window, renderer, measure, system)
+            let first_tab = newSlot(alloc, measure, 1) catch |e| {
+                std.log.err("out of memory")
+                return 1
+            }
+            var ui = Ui.init(alloc, window, renderer, measure, system, first_tab)
             defer ui.deinit()
-            let status = ui.start(&first) catch |e| {
+            var target: ?*url.Url = null
+            if first |_| {
+                target = &first.?
+            }
+            let status = ui.start(target) catch |e| {
                 std.log.err("out of memory")
                 return 1
             }
             if status != 0 {
                 return status
+            }
+            if o.socket.len > 0 {
+                let listening = startAgents(&mut ui, o.socket, o.exit_when_idle) catch |e| {
+                    std.log.err("out of memory")
+                    return 1
+                }
+                if !listening {
+                    return 1
+                }
             }
             ui.script(o.events) catch |e| {
                 std.log.err("out of memory")
@@ -236,7 +285,13 @@ pub struct Ui {
     canvas: paint.Canvas
     painter: paint.TextPainter
     measure: dyn font.Measurer
-    tab: engine.Tab
+    // The tabs (tabs.ore): `slots[..count]`, `slots[active]` shown; `tab`
+    // is the shown tab's page and history.
+    slots: [16]?*mut TabSlot
+    count: usize
+    active: usize
+    next_tab: u32
+    tab: *mut engine.Tab
     list: ?paint.DisplayList
     focus: Focus
     address: Field
@@ -262,8 +317,18 @@ pub struct Ui {
     quit: bool
     // engine.domVersion of the page when it was last laid out.
     laid_version: u64
+    // The agents (agents.ore), when the window listens for them.
+    agents: ?*mut Agents
+    // The mouse, in window points, while it is over the window.
+    mouse_in: bool
+    mouse_x: f64
+    mouse_y: f64
+    // Scripted events not fed yet (script.ore): they wait for agents.
+    rest: text.Builder
 
-    fn init(alloc: Allocator, window: *mut SDL_Window, renderer: *mut SDL_Renderer, measure: dyn font.Measurer, system: ?*mut font.System) Ui {
+    fn init(alloc: Allocator, window: *mut SDL_Window, renderer: *mut SDL_Renderer, measure: dyn font.Measurer, system: ?*mut font.System, first: *mut TabSlot) Ui {
+        var slots = @zeroed([16]?*mut TabSlot)
+        slots[0] = first
         return Ui {
             alloc: alloc,
             window: window,
@@ -277,7 +342,11 @@ pub struct Ui {
             canvas: paint.Canvas.init(alloc, 0, 0) catch unreachable,
             painter: paint.TextPainter.init(alloc, system),
             measure: measure,
-            tab: engine.Tab.init(alloc),
+            slots: slots,
+            count: 1,
+            active: 0,
+            next_tab: 2,
+            tab: first.session.tab,
             list: null,
             focus: Focus.Page,
             address: Field.init(alloc),
@@ -296,6 +365,11 @@ pub struct Ui {
             dirty: true,
             quit: false,
             laid_version: 0,
+            agents: null,
+            mouse_in: false,
+            mouse_x: 0.0,
+            mouse_y: 0.0,
+            rest: text.Builder.init(alloc),
         }
     }
 
@@ -311,9 +385,13 @@ pub struct Ui {
                 SDL_FreeCursor(cursor)
             }
         }
+        stopAgents(self)
+        self.rest.deinit()
         self.canvas.deinit()
         self.painter.deinit()
-        self.tab.deinit()
+        for i in 0..self.count {
+            freeSlot(self.alloc, self.slots[i].?)
+        }
         self.address.deinit()
         self.find.deinit()
         self.matches.deinit()
@@ -328,28 +406,28 @@ pub struct Ui {
         self.list = null
     }
 
-    // Sizes the canvas to the window and opens the first page.
-    fn start(self: *mut Self, first: *url.Url) AllocError!i32 {
+    // Sizes the canvas to the window and opens the first page (or, with
+    // none, an empty tab with the focus in the address bar).
+    fn start(self: *mut Self, first: ?*url.Url) AllocError!i32 {
         if !(try self.resize()) {
             return 1
         }
         SDL_StartTextInput()
-        try self.go(first)
+        if first |f| {
+            try self.go(f)
+        } else {
+            self.focus = Focus.Address
+            try self.setTitle()
+        }
         return 0
     }
 
-    // Feeds the events of a test script (script.ore).
+    // Feeds the events of a test script (script.ore); the words after an
+    // `agents:N` wait until agents made N requests.
     fn script(self: *mut Self, events: []u8) AllocError!void {
-        var words = text.split(events, " ")
-        while words.next() |w| {
-            if scriptEvent(w) |ev| {
-                if ev.kind == SDL_TEXTINPUT {
-                    // Typed text comes after the key down of its key.
-                    self.swallow = false
-                }
-                try self.handle(&ev)
-            }
-        }
+        self.rest.clear()
+        try self.rest.append(events)
+        return resumeScript(self)
     }
 
     fn loop(self: *mut Self, frames: i64) AllocError!void {
@@ -367,6 +445,9 @@ pub struct Ui {
             var timeout: i32 = 1000
             if frames > 0 {
                 timeout = 10
+            }
+            if self.agents != null && timeout > POLL_MS {
+                timeout = POLL_MS
             }
             if self.tab.page |p| {
                 if engine.msUntilNextTimer(p) |ms| {
@@ -386,6 +467,7 @@ pub struct Ui {
                     try self.afterScripts()
                 }
             }
+            try pollAgents(self)
             if self.resized {
                 self.resized = false
                 if try self.resize() {
@@ -434,9 +516,27 @@ pub struct Ui {
         return true
     }
 
+    // The top of the page's viewport: under the toolbar and the tab
+    // strip.
+    fn top(self: *Self) f64 {
+        if self.count > 1 {
+            return TOOLBAR + TABBAR
+        }
+        return TOOLBAR
+    }
+
+    // The height of the page's layout viewport (without the find bar).
+    fn layoutHeight(self: *Self) f64 {
+        let h = self.win_h as f64 - self.top()
+        if h < 1.0 {
+            return 1.0
+        }
+        return h
+    }
+
     // The height of the page's viewport, in CSS px.
     fn viewHeight(self: *Self) f64 {
-        var h = self.win_h as f64 - TOOLBAR
+        var h = self.win_h as f64 - self.top()
         if self.finding {
             h -= FINDBAR
         }
@@ -461,11 +561,7 @@ pub struct Ui {
     fn relayout(self: *mut Self) AllocError!void {
         self.dropList()
         if self.tab.page |p| {
-            var lh = self.win_h as f64 - TOOLBAR
-            if lh < 1.0 {
-                lh = 1.0
-            }
-            try p.layoutPage(self.measure, self.win_w as f64, lh)
+            try p.layoutPage(self.measure, self.win_w as f64, self.layoutHeight())
             self.laid_version = engine.domVersion(p)
             if p.tree |t| {
                 self.list = try paint.build(self.alloc, t)
@@ -488,6 +584,8 @@ pub struct Ui {
     fn navigated(self: *mut Self, loaded: bool) AllocError!void {
         self.dropdown = null
         if loaded {
+            // The agents' refs are of the old document.
+            self.slots[self.active].?.shown += 1
             try self.relayout()
         }
         self.tab.settle(self.maxScroll())
@@ -509,6 +607,9 @@ pub struct Ui {
             } else {
                 try b.append(self.tab.href())
             }
+        }
+        if self.tab.page == null {
+            try b.append("New tab")
         }
         try b.append(" - anyknown")
         try b.appendByte(0)
@@ -642,6 +743,7 @@ pub struct Ui {
             } else if we.event == SDL_WINDOWEVENT_EXPOSED {
                 self.dirty = true
             } else if we.event == SDL_WINDOWEVENT_LEAVE {
+                self.mouse_in = false
                 try self.clearHover(false)
             }
         } else if kind == SDL_KEYDOWN {
@@ -679,6 +781,10 @@ pub struct Ui {
         self.swallow = false
         let cmd = (mods & (KMOD_GUI | KMOD_CTRL)) != 0
         let shift = (mods & KMOD_SHIFT) != 0
+        if cmd && try windowKey(self, sym, shift) {
+            self.swallow = true
+            return
+        }
         if self.focus == Focus.Page && !cmd && self.dropdown == null {
             // keydown goes to the page's scripts first; canceling it
             // skips what the key would do (and its text).
@@ -811,7 +917,10 @@ pub struct Ui {
     }
 
     fn mouseMoved(self: *mut Self, x: f64, y: f64) AllocError!void {
-        if y < TOOLBAR {
+        self.mouse_in = true
+        self.mouse_x = x
+        self.mouse_y = y
+        if y < self.top() {
             let r = addressRect(self)
             let over_field = x >= r.x && x < r.x + r.w
             try self.clearHover(over_field)
@@ -867,13 +976,16 @@ pub struct Ui {
     fn linkAt(self: *mut Self, x: f64, y: f64) ?engine.Link {
         if self.tab.page |p| {
             if p.tree |t| {
-                return engine.linkAt(t, x, y - TOOLBAR + self.tab.scroll)
+                return engine.linkAt(t, x, y - self.top() + self.tab.scroll)
             }
         }
         return null
     }
 
     fn click(self: *mut Self, x: f64, y: f64) AllocError!void {
+        if y >= TOOLBAR && y < self.top() {
+            return clickTabStrip(self, x)
+        }
         if y < TOOLBAR {
             match buttonAt(self, x, y) {
                 .Back => {
@@ -890,6 +1002,9 @@ pub struct Ui {
                     self.address.caret = caretAt(self, x)
                     self.address.all = false
                     self.dirty = true
+                }
+                .Pause => {
+                    togglePause(self)
                 }
                 .None => {}
             }
@@ -923,7 +1038,7 @@ pub struct Ui {
             return true
         }
         let t = p.tree orelse return true
-        var el = engine.nodeAt(t, x, y - TOOLBAR + self.tab.scroll) orelse return true
+        var el = engine.nodeAt(t, x, y - self.top() + self.tab.scroll) orelse return true
         if p.doc.node(el).kind != dom.Kind.Element {
             el = p.doc.parent(el) orelse return true
         }
@@ -1008,11 +1123,29 @@ pub struct Ui {
         }
     }
 
+    // ---- agent.Host (agents.ore)
+
+    pub fn agentSession(self: *mut Self, conn: usize) ?*mut agent.Session {
+        return sessionOf(self, conn)
+    }
+
+    pub fn agentRefusal(self: *mut Self) []u8 {
+        return refusalOf(self)
+    }
+
+    pub fn windowCommand(self: *mut Self, conn: usize, tmp: Allocator, cmd: []u8, doc: *mut agent.Json, args: ?usize, id: []u8, reply: *mut agent.Reply) AllocError!bool {
+        return windowCommandOf(self, conn, tmp, cmd, doc, args, id, reply)
+    }
+
+    pub fn agentActs(self: *mut Self, conn: usize, s: *mut agent.Session, tmp: Allocator, what: []u8, node: ?NodeId) AllocError!void {
+        return showAgentAction(self, s, what, node)
+    }
+
     // ---- drawing
 
     fn draw(self: *mut Self) AllocError!void {
         let s = self.scale
-        let top = TOOLBAR
+        let top = self.top()
         let bottom = self.win_h as f64
         let content = paint.Rect { x: 0.0, y: top, w: self.win_w as f64, h: self.viewHeight() }
         let v = paint.View { scale: s, dx: 0.0, dy: (top - self.tab.scroll) * s }
@@ -1022,6 +1155,7 @@ pub struct Ui {
             self.canvas.fillRect(paint.deviceRect(content, flat), l.background)
             try paint.render(&l, &mut self.canvas, v, &mut self.painter)
             try drawPageState(self, v)
+            try drawAgentFlash(self, v)
         } else {
             self.canvas.fillRect(paint.deviceRect(content, flat), paint.Rgba { r: 255, g: 255, b: 255, a: 255 })
         }
@@ -1034,8 +1168,13 @@ pub struct Ui {
         }
         self.canvas.popClip()
         try drawToolbar(self)
+        if self.count > 1 {
+            try drawTabStrip(self)
+        }
         if self.hover.len() > 0 {
-            try drawStatus(self, bottom)
+            try drawStatus(self, bottom, self.hover.bytes())
+        } else if agentStatus(self).len > 0 {
+            try drawStatus(self, bottom, agentStatus(self))
         }
         if self.finding {
             try drawFindBar(self, bottom)

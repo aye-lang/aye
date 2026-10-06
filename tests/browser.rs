@@ -233,7 +233,7 @@ fn queries() {
 #[test]
 fn errors() {
     let usage = "error: usage: anyknown dump --tree|--text|--style|--layout [--js] [--width PX] [--font fixed|system] [--id ID | --tag NAME] FILE|URL\n";
-    expect(&[], 2, "", "error: usage: anyknown [open] FILE|URL | dump --tree|--text|--style|--layout|--a11y|--md ... FILE|URL | screenshot FILE|URL -o OUT.png | js FILE | agent | mcp\n");
+    expect(&[], 2, "", "error: usage: anyknown [open] FILE|URL | dump --tree|--text|--style|--layout|--a11y|--md ... FILE|URL | screenshot FILE|URL -o OUT.png | js FILE | agent | mcp | connect SOCKET\n");
     expect(&["dump", "--tree"], 2, "", usage);
     expect(&["dump", "--layout", "--font", "serif", "browser/tests/basic.html"], 2, "", usage);
     expect(&["dump", "--tree", "browser/tests/missing.html"], 1, "", &format!(
@@ -445,6 +445,8 @@ fn screenshot_errors() {
     ));
 }
 
+const WINDOW_USAGE: &str = "usage: anyknown [open] FILE|URL [--width W] [--height H] [--font fixed|system] [--no-js] [--agent-socket PATH [--exit-when-idle]] [--frames N [--events SCRIPT] [--state] [--text] [--save OUT.png]]";
+
 fn has_sdl() -> bool {
     Command::new("pkg-config").args(["--exists", "sdl2"]).status().is_ok_and(|s| s.success())
 }
@@ -472,7 +474,7 @@ fn window_frames() {
     let out = run_window(&["browser/tests/paint/text.html", "--font", "fixed", "--width", "500", "--height", "300", "--frames", "1", "--save", png.to_str().unwrap()]);
     assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
     assert_eq!(check_png(&png), (500, 300));
-    expect(&["--frames", "1", "--bogus", "x.html"], 2, "", "error: usage: anyknown [open] FILE|URL [--width W] [--height H] [--font fixed|system] [--no-js] [--frames N [--events SCRIPT] [--state] [--text] [--save OUT.png]]\n");
+    expect(&["--frames", "1", "--bogus", "x.html"], 2, "", &format!("error: {WINDOW_USAGE}\n"));
 }
 
 /// Scripted input (`--events`, ui/script.ore) through the window's event
@@ -688,6 +690,135 @@ fn agent_errors() {
     expect(&["agent", "--color"], 2, "", "error: usage: anyknown agent|mcp [--width PX] [--height PX] [--no-js]\n");
     expect(&["dump", "--a11y", "data:text/html,<button>OK</button>"], 0, "- button \"OK\" [e1]\n", "");
     expect(&["dump", "--md", "data:text/html,<h2>Hi</h2><p>a <b>b</b>"], 0, "## Hi\n\na **b**\n", "");
+}
+
+/// A window shared by its user and agents (`--agent-socket`,
+/// ui/agents.ore): `browser/tests/agent/window/X.jsonl` is sent over the
+/// window's Unix socket (from this test, or through `anyknown connect
+/// --mcp` for `X.mcp.jsonl`) while the window runs headless with the
+/// scripted events of `X.events` (`agents:N` waits for N requests); the
+/// responses, then the window's `--state`, must be `X.out`.
+#[test]
+fn window_agents() {
+    if !has_sdl() {
+        println!("skipped: no SDL2");
+        return;
+    }
+    let dir = root().join("browser").join("tests").join("agent").join("window");
+    let mut inputs: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        .collect();
+    inputs.sort();
+    assert!(inputs.len() >= 3, "expected at least 3 window agent sessions, found {}", inputs.len());
+    let mut failures = Vec::new();
+    for (i, input) in inputs.iter().enumerate() {
+        let name = input.file_name().unwrap().to_string_lossy().into_owned();
+        match window_agent_session(input, i) {
+            Ok(got) => check_golden(&input.with_extension("out"), &rooted(&got), &name, &mut failures),
+            Err(e) => failures.push(format!("{name}: {e}")),
+        }
+    }
+    assert!(failures.is_empty(), "{} of {} window agent sessions failed:\n\n{}", failures.len(), inputs.len(), failures.join("\n"));
+}
+
+// Runs one session of `window_agents`: what the agent got, then
+// `--- window` and the window's state.
+fn window_agent_session(input: &Path, n: usize) -> Result<String, String> {
+    use std::io::{Read, Write};
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+    let name = input.file_name().unwrap().to_string_lossy().into_owned();
+    // A short relative path: sockets' paths are limited to ~100 bytes.
+    let sock = format!("target/agent-window-{}-{n}.sock", std::process::id());
+    let _ = std::fs::remove_file(root().join(&sock));
+    let mut args = vec!["--agent-socket".to_string(), sock.clone(), "--exit-when-idle".into(), "--font".into(), "fixed".into()];
+    args.extend(["--width", "800", "--height", "600", "--state"].map(String::from));
+    if let Ok(events) = std::fs::read_to_string(input.with_extension("events")) {
+        args.push("--events".into());
+        args.push(events.trim().to_string());
+    }
+    let mut window = Command::new(anyknown())
+        .current_dir(root())
+        .env("SDL_VIDEODRIVER", "dummy")
+        .args(&args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    while !root().join(&sock).exists() {
+        if start.elapsed() > Duration::from_secs(20) || window.try_wait().unwrap().is_some() {
+            let _ = window.kill();
+            let out = window.wait_with_output().unwrap();
+            return Err(format!("the window does not listen: {}", text(&out.stderr)));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let requests = std::fs::read(input).unwrap();
+    let mut got = String::new();
+    if name.ends_with(".mcp.jsonl") {
+        let mut connect = Command::new(anyknown())
+            .current_dir(root())
+            .args(["connect", &sock, "--mcp"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        connect.stdin.take().unwrap().write_all(&requests).unwrap();
+        let out = connect.wait_with_output().unwrap();
+        if !out.status.success() || !out.stderr.is_empty() {
+            let _ = window.kill();
+            return Err(format!("anyknown connect: {}\n{}", out.status, text(&out.stderr)));
+        }
+        got.push_str(&text(&out.stdout));
+    } else {
+        // Relative to the test's directory (the root), to keep it short.
+        let mut s = match std::os::unix::net::UnixStream::connect(&sock) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = window.kill();
+                return Err(format!("cannot connect to {sock}: {e}"));
+            }
+        };
+        s.write_all(&requests).unwrap();
+        s.shutdown(std::net::Shutdown::Write).unwrap();
+        s.read_to_string(&mut got).unwrap();
+    }
+    // The window leaves once its last agent did.
+    let start = Instant::now();
+    while window.try_wait().unwrap().is_none() {
+        if start.elapsed() > Duration::from_secs(20) {
+            let _ = window.kill();
+            return Err("the window did not exit after its agent left".into());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let out = window.wait_with_output().unwrap();
+    if !out.status.success() || !out.stderr.is_empty() {
+        return Err(format!("the window: {}\n{}", out.status, text(&out.stderr)));
+    }
+    if root().join(&sock).exists() {
+        return Err("the window left its socket file".into());
+    }
+    got.push_str("--- window\n");
+    got.push_str(&text(&out.stdout));
+    Ok(got)
+}
+
+/// `anyknown connect` and `--agent-socket` errors.
+#[test]
+fn window_agents_errors() {
+    expect(&["connect"], 2, "", "error: usage: anyknown connect SOCKET [--mcp]\n");
+    expect(&["connect", "target/no-such.sock"], 1, "", "error: cannot connect to target/no-such.sock: is a window listening (anyknown --agent-socket target/no-such.sock)?\n");
+    if has_sdl() {
+        let out = run_window(&["--agent-socket", "target/no-such-dir/x.sock", "--frames", "1"]);
+        assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
+        assert_eq!(text(&out.stderr), "error: cannot listen on target/no-such-dir/x.sock\n");
+    }
+    expect(&["--exit-when-idle", "browser/tests/basic.html"], 2, "", &format!("error: {}\n", WINDOW_USAGE));
 }
 
 /// The agent over HTTP: a link followed from a page served by the test

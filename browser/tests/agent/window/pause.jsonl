@@ -1,0 +1,4 @@
+{"id":1,"cmd":"navigate","url":"browser/tests/agent/site/index.html"}
+{"id":2,"cmd":"click","ref":"e6"}
+{"id":3,"cmd":"snapshot"}
+{"id":4,"cmd":"click","ref":"e6"}

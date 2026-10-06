@@ -1,7 +1,9 @@
 // The browser chrome, drawn into the window's canvas: the toolbar with
-// back, forward and reload buttons and the address bar, the status line
-// (the URL of the link under the mouse) and the find bar. Positions are
-// in CSS px (window points), scaled like the page.
+// back, forward and reload buttons and the address bar (and, while the
+// window listens for agents, the "AI" badge and the pause button), the
+// tab strip, the status line (the URL of the link under the mouse, or
+// what an agent did) and the find bar. Positions are in CSS px (window
+// points), scaled like the page.
 
 import font
 import paint
@@ -16,6 +18,12 @@ let FORWARD_X: f64 = 40.0
 let RELOAD_X: f64 = 72.0
 let ADDRESS_X: f64 = 108.0
 let PAD: f64 = 8.0
+// The right end of the toolbar while agents may connect: the badge and
+// the pause button.
+let AGENT_CHROME: f64 = 112.0
+// The close box at the right of a tab in the strip.
+let TAB_CLOSE: f64 = 22.0
+let TAB_MAX: f64 = 220.0
 
 let BAR_BG = Rgba { r: 242, g: 242, b: 242, a: 255 }
 let LINE = Rgba { r: 200, g: 200, b: 200, a: 255 }
@@ -30,6 +38,7 @@ pub enum Button {
     Forward
     Reload
     Address
+    Pause
     None
 }
 
@@ -39,6 +48,9 @@ fn uiFont(size: f64) font.Font {
 
 pub fn addressRect(ui: *Ui) paint.Rect {
     var w = ui.win_w as f64 - ADDRESS_X - PAD
+    if ui.agents != null {
+        w -= AGENT_CHROME
+    }
     if w < 20.0 {
         w = 20.0
     }
@@ -63,7 +75,18 @@ pub fn buttonAt(ui: *Ui, x: f64, y: f64) Button {
     if x >= r.x && x < r.x + r.w {
         return Button.Address
     }
+    if ui.agents != null {
+        let p = pauseRect(ui)
+        if x >= p.x && x < p.x + p.w {
+            return Button.Pause
+        }
+    }
     return Button.None
+}
+
+/// The pause button of the agents, at the right end of the toolbar.
+fn pauseRect(ui: *Ui) paint.Rect {
+    return paint.Rect { x: ui.win_w as f64 - AGENT_CHROME + 36.0, y: 6.0, w: AGENT_CHROME - 36.0 - PAD, h: BUTTON }
 }
 
 // ---- drawing helpers (CSS px)
@@ -159,6 +182,39 @@ pub fn drawToolbar(ui: *mut Ui) AllocError!void {
     fill(ui, FORWARD_X + 8.0, mid - 1.0, 9.0, 2.0, c)
     reloadIcon(ui, RELOAD_X + BUTTON / 2.0, mid, INK)
     try drawField(ui, &ui.address, addressRect(ui), ui.focus == Focus.Address, 14.0)
+    try drawAgentChrome(ui)
+}
+
+// ---- the tab strip
+
+/// The width of a tab in the strip.
+fn tabWidth(ui: *Ui) f64 {
+    var w = ui.win_w as f64 / ui.count as f64
+    if w > TAB_MAX {
+        w = TAB_MAX
+    }
+    return w
+}
+
+pub fn drawTabStrip(ui: *mut Ui) AllocError!void {
+    let f = uiFont(12.0)
+    let y = TOOLBAR
+    fill(ui, 0.0, y, ui.win_w as f64, TABBAR, BAR_BG)
+    fill(ui, 0.0, y + TABBAR - 1.0, ui.win_w as f64, 1.0, LINE)
+    let w = tabWidth(ui)
+    for i in 0..ui.count {
+        let slot = ui.slots[i].?
+        let x = i as f64 * w
+        if i == ui.active {
+            fill(ui, x, y, w, TABBAR, PAPER)
+        }
+        fill(ui, x + w - 1.0, y + 4.0, 1.0, TABBAR - 8.0, LINE)
+        let r = paint.Rect { x: x + PAD, y: y, w: w - PAD - TAB_CLOSE, h: TABBAR }
+        try ui.canvas.pushClip(paint.deviceRect(r, screen(ui)))
+        try label(ui, r.x, centered(ui, y, TABBAR, f), slotTitle(slot), f, INK)
+        ui.canvas.popClip()
+        try label(ui, x + w - TAB_CLOSE + 6.0, centered(ui, y, TABBAR, f), "x", f, FADED)
+    }
 }
 
 // How far the text of field `f` is shifted left so that its caret
@@ -222,13 +278,12 @@ pub fn caretAt(ui: *mut Ui, x: f64) usize {
 
 // ---- the status line and the find bar
 
-pub fn drawStatus(ui: *mut Ui, bottom: f64) AllocError!void {
+pub fn drawStatus(ui: *mut Ui, bottom: f64, s: []u8) AllocError!void {
     let f = uiFont(12.0)
     var y = bottom - 20.0
     if ui.finding {
         y -= FINDBAR
     }
-    let s = ui.hover.bytes()
     var w = ui.measure.width(f, s) + 2.0 * PAD
     let most = ui.win_w as f64 * 0.7
     if w > most {

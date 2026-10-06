@@ -21,7 +21,7 @@ JavaScript and the agent protocol are Ore.
 
 ```
 browser/
-  main.ore        CLI: window mode, `dump`, `agent`, `mcp`
+  main.ore        CLI: window mode, `dump`, `agent`, `mcp`, `connect`
   url/            URL parsing and resolution (WHATWG subset)
   net/            fetch: file:, data:, http(s) through libcurl, cache
   html/           tokenizer and tree builder (WHATWG subset), entities
@@ -38,8 +38,9 @@ browser/
   paint/          display list, software rasterizer, glyph cache, PNG
   js/             lexer, parser, interpreter, GC, builtins, host interface
   agent/          snapshot (a11y tree with refs), Markdown, actions,
-                  JSON-lines and MCP stdio servers
-  ui/             SDL2 window, chrome (address bar, tabs), input
+                  JSON-lines and MCP stdio servers, a window's agents
+  ui/             SDL2 window, chrome (address bar, tabs), input, the
+                  agent socket (`--agent-socket`, `connect`)
   tests/          fixtures (HTML/CSS/JS) and golden outputs
 ```
 
@@ -49,7 +50,7 @@ Same rules as `milestones.md`: tests first; a milestone is done when its
 acceptance tests pass. Tests run headless and offline (`file:` fixtures
 and a local test server), so CI needs no network and no display.
 
-**Status.** B1–B6 are done, and so is the core of B7; B8 is under way:
+**Status.** B1–B7 are done (B7 without the `screenshot` command); B8 is under way:
 
 | | State | Tests (`cargo test --test browser`) |
 |---|---|---|
@@ -59,7 +60,7 @@ and a local test server), so CI needs no network and no display.
 | B4 paint and window | done | 13 golden PNGs, PNG checks, headless window tests |
 | B5 forms and images | done | form sessions over HTTP, window form scripts, image decoder unit tests, form and image screenshots |
 | B6 JavaScript | done | 212 conformance scripts (`anyknown js`), 30 DOM fixtures (`dump --tree --js`, also under GC stress), a to-do app session, window script test, GC unit tests |
-| B7 agent interface | core done | 17 snapshot/Markdown fixtures, session and MCP transcripts (with `eval` and `wait`) |
+| B7 agent interface | done (no `screenshot`) | 17 snapshot/Markdown fixtures, session and MCP transcripts (with `eval` and `wait`), shared-window sessions over its socket (JSON lines, MCP through `anyknown connect`, pause, pointing, tabs) |
 | B8 the real web | in progress | net over the local server (`net_http`, the `net_cookies` and `base` agent sessions), HTML/CSS fixtures (templates, quirks, hints, `var()`/`calc()`, at-rules, `@import`), layout fixtures of site shapes (floats, positioned boxes, grid, `details`), hit testing by layer (`window_hit_layers`), JS conformance scripts for generators, async, Symbol and the web APIs |
 
 All the front ends share `engine/`: the window, `screenshot` and the
@@ -70,8 +71,7 @@ agent sessions load pages through `engine.load` and keep history in a
   (`document.write`, an inline script seeing only the DOM before it),
   modules, `getComputedStyle` and layout
   queries (`getBoundingClientRect` is all zeros), live NodeLists.
-- **B7:** `screenshot` and `tabs` commands, and the shared window
-  (`--agent-socket`) where a human and an agent drive one page.
+- **B7:** the `screenshot` command.
 - **B8:** `fixed` boxes scroll away with the page (they are placed once
   in the initial containing block) and `sticky` is `relative`; the
   observers are stand-ins (below); no `getComputedStyle` or
@@ -380,6 +380,8 @@ on (`--no-js` turns it off), `dump` with `--js`.
 - `anyknown mcp`: the same commands as MCP tools over stdio JSON-RPC.
 - `anyknown --agent-socket PATH` with the window: a human and an agent
   share the page; agent actions are highlighted in the window.
+  `anyknown connect PATH [--mcp]` bridges stdio to that socket, so an
+  MCP client can drive the window a person sees.
 - **Acceptance:** scripted agent sessions over fixtures (fill and submit
   a form, follow a link by ref, read a JS-rendered list) with golden
   transcripts; an MCP handshake and `tools/list` golden.
@@ -387,6 +389,17 @@ on (`--no-js` turns it off), `dump` with `--js`.
   read, navigation, click, type, select, press, scroll, find, `eval`
   and `wait` (scripts run; actions fire their events), `dump --a11y`
   and `dump --md` (`--js` to run scripts).
+- The shared window (`ui/agents.ore`, `ui/socket.ore`, `ui/tabs.ore`,
+  `agent/shared.ore`): the window polls a non-blocking Unix socket
+  between its events, so requests run on its thread; each tab is an
+  agent session laid out with the window's fonts. Tabs (Cmd+T, Cmd+W,
+  Cmd+1..9, a tab strip) and the commands `tabs`, `tab_new`,
+  `tab_select`, `tab_close` (an agent can work in a background tab);
+  visible activity (a fading outline with the ref, an `AI` badge, the
+  status line); pause (button, Cmd+Shift+P: actions fail with "paused
+  by user"); Cmd+Shift+K sends a `user_pointed` event, and
+  `user_context` returns the selection, the hovered and focused refs,
+  the scroll offset and the URL. `wait` takes real time there.
 
 ### B8: The real web
 

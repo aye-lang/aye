@@ -1,0 +1,16 @@
+{"id":1,"ok":true,"result":"loaded file://$ROOT/browser/tests/agent/site/index.html","url":"file://$ROOT/browser/tests/agent/site/index.html","title":"Site home","snapshot":"- navigation\n  - link \"Docs\" [e1] -> docs.html\n  - link \"Sign up\" [e2] -> form.html\n  - link \"Broken link\" [e3] -> missing.html\n- main\n  - heading \"Welcome\" [level=1] [e4]\n  - paragraph\n    - text: Start with the\n    - link \"installation guide\" [e5] -> docs.html#install\n    - text: .\n  - paragraph\n    - button \"Subscribe\" [e6]\n  - heading \"Bottom\" [level=2] [e7] [offscreen]\n  - paragraph\n    - link \"Jump to the bottom\" [e8] -> #bottom [offscreen]\n"}
+{"id":2,"ok":false,"error":"paused by user"}
+{"id":3,"ok":true,"url":"file://$ROOT/browser/tests/agent/site/index.html","title":"Site home","snapshot":"- navigation\n  - link \"Docs\" [e1] -> docs.html\n  - link \"Sign up\" [e2] -> form.html\n  - link \"Broken link\" [e3] -> missing.html\n- main\n  - heading \"Welcome\" [level=1] [e4]\n  - paragraph\n    - text: Start with the\n    - link \"installation guide\" [e5] -> docs.html#install\n    - text: .\n  - paragraph\n    - button \"Subscribe\" [e6]\n  - heading \"Bottom\" [level=2] [e7] [offscreen]\n  - paragraph\n    - link \"Jump to the bottom\" [e8] -> #bottom [offscreen]\n"}
+{"id":4,"ok":true,"result":"clicked button \"Subscribe\" [e6]","url":"file://$ROOT/browser/tests/agent/site/index.html","title":"Site home","diff":"-     - button \"Subscribe\" [e6]\n+     - button \"Subscribe\" [e6] [focused]\n"}
+--- window
+url file://$ROOT/browser/tests/agent/site/index.html
+scroll 0
+focus page
+address file://$ROOT/browser/tests/agent/site/index.html
+history 1 of 1
+matches 0
+status 
+tabs 1, showing 1
+agents active
+activity agent: click button "Subscribe" [e6]
+element button

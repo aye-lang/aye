@@ -69,7 +69,7 @@ fn afterEdit(ui: *mut Ui) AllocError!void {
 
 /// A click at the window point (`x`, `y`) of the page area.
 fn clickPage(ui: *mut Ui, x: f64, y: f64) AllocError!void {
-    let dy = y - TOOLBAR + ui.tab.scroll
+    let dy = y - ui.top() + ui.tab.scroll
     if ui.dropdown |dd| {
         ui.dropdown = null
         ui.dirty = true
@@ -215,7 +215,7 @@ fn submitNow(ui: *mut Ui, form: NodeId, submitter: ?NodeId) AllocError!void {
     let p = ui.tab.page orelse return
     let sub = (try engine.submitForm(p, form, submitter)) orelse return
     defer sub.deinit(ui.alloc)
-    let loaded = try engine.navigateTo(&mut ui.tab, &sub)
+    let loaded = try engine.navigateTo(ui.tab, &sub)
     try ui.navigated(loaded)
 }
 
@@ -567,7 +567,7 @@ fn drawDropdown(ui: *mut Ui, p: *mut engine.Page, dd: Dropdown, v: paint.View) A
 fn overTextField(ui: *mut Ui, x: f64, y: f64) bool {
     let p = ui.tab.page orelse return false
     let t = p.tree orelse return false
-    let n = engine.nodeAt(t, x, y - TOOLBAR + ui.tab.scroll) orelse return false
+    let n = engine.nodeAt(t, x, y - ui.top() + ui.tab.scroll) orelse return false
     return dom.isTextField(&p.doc, n)
 }
 
