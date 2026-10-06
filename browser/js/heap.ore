@@ -93,6 +93,8 @@ pub struct Obj {
     proto: u32
     props: []mut Prop
     nprops: u32
+    // Shared own-property layout; NONE after a deletion (dictionary).
+    shape: u32
     index: ?*mut IntMap(u32, u32)
     // Arrays and arguments: the elements; Map and Set: keys (and values).
     elems: []mut Value
@@ -140,6 +142,8 @@ pub struct Heap {
     envs: List(Env)
     free_envs: List(u32)
     atoms: Atoms
+    shapes: List(Shape)
+    transitions: IntMap(u64, u32)
     prop_mem: Slabs(Prop)
     val_mem: Slabs(Value)
     byte_mem: Slabs(u8)
@@ -160,6 +164,8 @@ pub struct Heap {
             envs: List(Env).init(alloc),
             free_envs: List(u32).init(alloc),
             atoms: Atoms.init(alloc),
+            shapes: List(Shape).init(alloc),
+            transitions: IntMap(u64, u32).init(alloc),
             prop_mem: Slabs(Prop).init(alloc),
             val_mem: Slabs(Value).init(alloc),
             byte_mem: Slabs(u8).init(alloc),
@@ -168,6 +174,7 @@ pub struct Heap {
             since_gc: 0,
             threshold: 20000,
         }
+        try h.shapes.append(Shape { parent: NONE, key: NONE, slot: 0, index: null })
         try h.atoms.predefine()
         return h
     }
@@ -195,6 +202,14 @@ pub struct Heap {
         self.envs.deinit()
         self.free_envs.deinit()
         self.atoms.deinit()
+        for s in self.shapes.items() {
+            if s.index |ix| {
+                ix.deinit()
+                self.alloc.destroy(ix)
+            }
+        }
+        self.shapes.deinit()
+        self.transitions.deinit()
         self.prop_mem.deinit()
         self.val_mem.deinit()
         self.byte_mem.deinit()
@@ -215,6 +230,7 @@ pub struct Heap {
             proto: proto,
             props: []mut Prop{},
             nprops: 0,
+            shape: 0,
             index: null,
             elems: []mut Value{},
             nelems: 0,
@@ -252,6 +268,11 @@ pub struct Heap {
     /// The index in `props` of the own property `key`.
     pub fn findProp(self: *Self, o: u32, key: u32) ?u32 {
         let ob = self.obj(o)
+        if ob.shape != NONE {
+            if self.shapes.items()[ob.shape].index |ix| {
+                return ix.get(key)
+            }
+        }
         if ob.index |ix| {
             return ix.get(key)
         }
@@ -277,6 +298,12 @@ pub struct Heap {
         }
         ob.props[n] = Prop { key: key, value: value, setter: setter, flags: flags }
         ob.nprops = n + 1
+        if ob.shape != NONE {
+            ob.shape = try shapeTransition(self, ob.shape, key, n)
+            if ob.shape != NONE {
+                return
+            }
+        }
         if ob.index |ix| {
             try ix.put(key, n)
         } else if n + 1 > INDEX_AT {
@@ -308,13 +335,14 @@ pub struct Heap {
     /// Removes own property number `i` (keeps the order of the others).
     pub fn removeProp(self: *mut Self, o: u32, i: u32) AllocError!void {
         let ob = self.obj(o)
+        ob.shape = NONE
         var j = i
         while j + 1 < ob.nprops {
             ob.props[j] = ob.props[j + 1]
             j += 1
         }
         ob.nprops -= 1
-        if ob.index != null {
+        if ob.nprops > INDEX_AT || ob.index != null {
             try self.buildIndex(o)
         }
     }

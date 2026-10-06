@@ -120,6 +120,7 @@ pub struct Interp {
     alloc: Allocator
     heap: Heap
     ast: Ast
+    prop_caches: List(PropCache)
     globals: GlobalNames
     natives: List(NativeEntry)
     stack: List(Value)
@@ -233,6 +234,7 @@ pub struct Interp {
             alloc: alloc,
             heap: try Heap.init(alloc),
             ast: try Ast.init(alloc),
+            prop_caches: List(PropCache).init(alloc),
             globals: GlobalNames.init(alloc),
             natives: List(NativeEntry).init(alloc),
             stack: List(Value).init(alloc),
@@ -326,6 +328,7 @@ pub struct Interp {
         self.joining.deinit()
         self.heap.deinit()
         self.ast.deinit()
+        self.prop_caches.deinit()
         self.globals.deinit()
         self.natives.deinit()
         self.stack.deinit()
@@ -2501,7 +2504,7 @@ pub struct Interp {
                 if optional && isNullish(o) {
                     return JsError.ShortCircuit
                 }
-                return self.getProp(o, name)
+                return getCachedProp(self, id, o, name)
             }
             .Index { obj, key, optional } => {
                 let base = self.stack.len()
@@ -2716,7 +2719,7 @@ pub struct Interp {
                 }
                 try self.push(Value.Undefined)
                 try self.push(o)
-                let f = try self.getProp(o, name)
+                let f = try getCachedProp(self, callee, o, name)
                 self.setSlot(base, f)
             }
             .Index { obj, key, optional } => {
@@ -3121,8 +3124,8 @@ pub struct Interp {
             .Member { obj, name, .. } => {
                 let o = try self.eval(obj)
                 try self.push(o)
-                let old = try self.toNumber(try self.getProp(o, name))
-                try self.setProp(o, name, numVal(old + delta))
+                let old = try self.toNumber(try getCachedProp(self, arg, o, name))
+                try setCachedProp(self, arg, o, name, numVal(old + delta))
                 if prefix {
                     return numVal(old + delta)
                 }
@@ -3194,10 +3197,10 @@ pub struct Interp {
                 if op == Op.None {
                     let v = try self.eval(value)
                     try self.push(v)
-                    try self.setProp(o, name, v)
+                    try setCachedProp(self, target, o, name, v)
                     return v
                 }
-                let cur = try self.getProp(o, name)
+                let cur = try getCachedProp(self, target, o, name)
                 if self.logicalDone(op, cur) {
                     return cur
                 }
@@ -3209,7 +3212,7 @@ pub struct Interp {
                     r = try self.binary(op, cur, rhs)
                     try self.push(r)
                 }
-                try self.setProp(o, name, r)
+                try setCachedProp(self, target, o, name, r)
                 return r
             }
             .Index { obj, key, .. } => {
@@ -3989,6 +3992,9 @@ pub struct Interp {
         defer r.cleanup()
         r.script(root) catch |e| {
             return self.syntaxError(message.bytes())
+        }
+        while self.prop_caches.len() < self.ast.nodes.len() {
+            try self.prop_caches.append(emptyPropCache())
         }
         try self.heap.growEnv(self.glex, self.globals.count)
         for name in r.top_vars.items() {
