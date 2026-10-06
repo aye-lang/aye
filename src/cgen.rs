@@ -458,6 +458,25 @@ typedef struct ore_coro {
 } ore_coro;
 static _Thread_local __attribute__((unused)) ore_coro *ore_coro_current;
 static _Thread_local __attribute__((unused)) char ore_coro_thread; /* its address names the thread */
+/* Each thread keeps up to ORE_CORO_CACHE freed stacks for the next
+   coroutines of the same size, with only their top ORE_CORO_HOT bytes
+   still taken (the rest is given back with madvise): making a coroutine
+   then needs no system call. */
+#define ORE_CORO_CACHE 16
+#define ORE_CORO_HOT ((size_t)256 << 10)
+extern void *ore_rt_mmap(void *, size_t, int, int, int, int64_t) __asm__(ORE_SYM("mmap"));
+extern int ore_rt_munmap(void *, size_t) __asm__(ORE_SYM("munmap"));
+extern int ore_rt_mprotect(void *, size_t, int) __asm__(ORE_SYM("mprotect"));
+extern int ore_rt_madvise(void *, size_t, int) __asm__(ORE_SYM("madvise"));
+static _Thread_local __attribute__((unused)) struct { uint8_t *map; size_t size; } ore_coro_cache[ORE_CORO_CACHE];
+static _Thread_local __attribute__((unused)) uint32_t ore_coro_cached;
+/* Unmap the stacks the thread keeps (it is ending). */
+ORE_RT void ore_coro_drain(void) {
+    while (ore_coro_cached) {
+        ore_coro_cached--;
+        ore_rt_munmap(ore_coro_cache[ore_coro_cached].map, ore_coro_cache[ore_coro_cached].size);
+    }
+}
 static void ore_on_fault(int sig, void *info, void *ctx) {
     (void)ctx;
     uintptr_t addr = *(uintptr_t *)((char *)info + ORE_SI_ADDR);
@@ -536,6 +555,7 @@ static void *ore_thread_main(void *p) {
     ore_rt_free(p);
     ore_stack_guard(s.stack);
     s.f(s.arg);
+    ore_coro_drain();
     ore_stack_unguard();
     return 0;
 }
@@ -685,13 +705,12 @@ __asm__(".text\n"
 extern void ore_coro_switch(void **save, void *to) __asm__(ORE_SYM("ore_coro_switch"));
 extern void ore_coro_start(void) __asm__(ORE_SYM("ore_coro_start"));
 #endif
-extern void *ore_rt_mmap(void *, size_t, int, int, int, int64_t) __asm__(ORE_SYM("mmap"));
-extern int ore_rt_munmap(void *, size_t) __asm__(ORE_SYM("munmap"));
-extern int ore_rt_mprotect(void *, size_t, int) __asm__(ORE_SYM("mprotect"));
 #ifdef __APPLE__
 #define ORE_MAP_STACK 0x1002 /* MAP_PRIVATE | MAP_ANON */
+#define ORE_MADV_FREE 5      /* MADV_FREE */
 #else
 #define ORE_MAP_STACK 0x4022 /* MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE */
+#define ORE_MADV_FREE 4      /* MADV_DONTNEED */
 #endif
 ORE_RT __attribute__((noreturn, cold)) void ore_coro_panic(const char *msg) {
     ore_rt_fflush(0);
@@ -729,11 +748,21 @@ ORE_RT bool ore_coro_init(uint64_t *block, size_t stack, void (*f)(uint8_t *), u
     if (stack > SIZE_MAX - ORE_CORO_GUARD - 0xffff) return false;
     stack = stack < ((size_t)64 << 10) ? (size_t)64 << 10 : (stack + 0xffff) & ~(size_t)0xffff;
     size_t size = ORE_CORO_GUARD + stack;
-    uint8_t *m = ore_rt_mmap(0, size, 3 /* PROT_READ | PROT_WRITE */, ORE_MAP_STACK, -1, 0);
-    if (m == (uint8_t *)-1) return false;
-    if (ore_rt_mprotect(m, ORE_CORO_GUARD, 0 /* PROT_NONE */) != 0) {
-        ore_rt_munmap(m, size);
-        return false;
+    uint8_t *m = 0;
+    for (uint32_t i = ore_coro_cached; i-- > 0;) {
+        if (ore_coro_cache[i].size == size) {
+            m = ore_coro_cache[i].map;
+            ore_coro_cache[i] = ore_coro_cache[--ore_coro_cached];
+            break;
+        }
+    }
+    if (!m) {
+        m = ore_rt_mmap(0, size, 3 /* PROT_READ | PROT_WRITE */, ORE_MAP_STACK, -1, 0);
+        if (m == (uint8_t *)-1) return false;
+        if (ore_rt_mprotect(m, ORE_CORO_GUARD, 0 /* PROT_NONE */) != 0) {
+            ore_rt_munmap(m, size);
+            return false;
+        }
     }
     __builtin_memset(c, 0, sizeof *c);
     c->magic = ORE_CORO_MAGIC;
@@ -802,7 +831,16 @@ ORE_RT void ore_coro_free(uint64_t *block) {
         if (c->state == ORE_CORO_RUNNING) ore_coro_panic("deinit of a coroutine that is running");
     }
     c->magic = 0;
-    ore_rt_munmap(c->map, c->map_size);
+    if (ore_coro_cached == ORE_CORO_CACHE) {
+        ore_rt_munmap(c->map, c->map_size);
+        return;
+    }
+    if (c->map_size - ORE_CORO_GUARD > ORE_CORO_HOT) {
+        ore_rt_madvise(c->map + ORE_CORO_GUARD, c->map_size - ORE_CORO_GUARD - ORE_CORO_HOT, ORE_MADV_FREE);
+    }
+    ore_coro_cache[ore_coro_cached].map = c->map;
+    ore_coro_cache[ore_coro_cached].size = c->map_size;
+    ore_coro_cached++;
 }
 "#;
 
