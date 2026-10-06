@@ -13,9 +13,14 @@
 // everything is painted at `scale` device pixels per CSS px. The page is
 // laid out in the window's width and its height under the toolbar.
 //
-// The loop waits for events (with a timeout) and redraws only after an
-// event changed something.
+// The loop waits for events (with a timeout, shorter when a timer of the
+// page's scripts is due) and redraws only after an event changed
+// something. Clicks and keys go to the page's scripts first (events);
+// a canceled one skips the browser's default action. After scripts ran,
+// the page is laid out again if they changed the document, and the
+// navigation they asked for happens.
 
+import dom
 import engine
 import font
 import layout
@@ -27,7 +32,7 @@ import std.mem.Allocator
 import std.text
 import url
 
-let UI_USAGE = "usage: anyknown [open] FILE|URL [--width W] [--height H] [--font fixed|system] [--frames N [--events SCRIPT] [--state] [--save OUT.png]]"
+let UI_USAGE = "usage: anyknown [open] FILE|URL [--width W] [--height H] [--font fixed|system] [--no-js] [--frames N [--events SCRIPT] [--state] [--text] [--save OUT.png]]"
 
 /// The toolbar height, in CSS px.
 pub let TOOLBAR: f64 = 40.0
@@ -53,10 +58,14 @@ struct UiOptions {
     events: []u8
     state: bool
     save: []u8
+    // Scripts run (not with --no-js); --text prints the document's text
+    // at the end (after --state).
+    js: bool
+    show_text: bool
 }
 
 fn uiOptions(args: [][]u8) ?UiOptions {
-    var o = UiOptions { target: "", width: 1024, height: 768, face: "", frames: 0, events: "", state: false, save: "" }
+    var o = UiOptions { target: "", width: 1024, height: 768, face: "", frames: 0, events: "", state: false, save: "", js: true, show_text: false }
     var i: usize = 0
     while i < args.len {
         let a = args[i]
@@ -87,6 +96,10 @@ fn uiOptions(args: [][]u8) ?UiOptions {
             i += 1
         } else if text.eql(a, "--state") {
             o.state = true
+        } else if text.eql(a, "--text") {
+            o.show_text = true
+        } else if text.eql(a, "--no-js") {
+            o.js = false
         } else if o.target.len == 0 && !text.startsWith(a, "-") {
             o.target = a
         } else {
@@ -94,7 +107,7 @@ fn uiOptions(args: [][]u8) ?UiOptions {
         }
         i += 1
     }
-    if o.target.len == 0 || (o.frames == 0 && (o.events.len > 0 || o.state || o.save.len > 0)) {
+    if o.target.len == 0 || (o.frames == 0 && (o.events.len > 0 || o.state || o.show_text || o.save.len > 0)) {
         return null
     }
     return o
@@ -103,7 +116,7 @@ fn uiOptions(args: [][]u8) ?UiOptions {
 /// `anyknown [open] FILE|URL ...`: opens a window on the page; returns
 /// the exit status.
 pub fn run(alloc: Allocator, args: [][]u8) i32 {
-    var o = UiOptions { target: "", width: 0, height: 0, face: "", frames: 0, events: "", state: false, save: "" }
+    var o = UiOptions { target: "", width: 0, height: 0, face: "", frames: 0, events: "", state: false, save: "", js: true, show_text: false }
     if uiOptions(args) |parsed| {
         o = parsed
     } else {
@@ -132,6 +145,9 @@ fn withFonts(alloc: Allocator, o: UiOptions, measure: dyn font.Measurer, system:
         return 1
     }
     defer first.deinit(alloc)
+    engine.setScripting(o.js)
+    engine.setRealClock(true)
+    engine.setConsoleEcho(true)
     if SDL_Init(SDL_INIT_VIDEO) != 0 {
         sdlError("cannot start SDL")
         return 1
@@ -175,6 +191,16 @@ fn withFonts(alloc: Allocator, o: UiOptions, measure: dyn font.Measurer, system:
                 defer b.deinit()
                 writeState(&mut ui, &mut b) catch |e| {
                     return 1
+                }
+                @print(b.bytes())
+            }
+            if o.show_text {
+                var b = text.Builder.init(alloc)
+                defer b.deinit()
+                if ui.tab.page |p| {
+                    p.doc.textContent(p.doc.root, &mut b) catch |e| {
+                        return 1
+                    }
                 }
                 @print(b.bytes())
             }
@@ -230,6 +256,8 @@ pub struct Ui {
     resized: bool
     dirty: bool
     quit: bool
+    // engine.domVersion of the page when it was last laid out.
+    laid_version: u64
 
     fn init(alloc: Allocator, window: *mut SDL_Window, renderer: *mut SDL_Renderer, measure: dyn font.Measurer, system: ?*mut font.System) Ui {
         return Ui {
@@ -262,6 +290,7 @@ pub struct Ui {
             resized: false,
             dirty: true,
             quit: false,
+            laid_version: 0,
         }
     }
 
@@ -334,10 +363,22 @@ pub struct Ui {
             if frames > 0 {
                 timeout = 10
             }
+            if self.tab.page |p| {
+                if engine.msUntilNextTimer(p) |ms| {
+                    if ms < timeout as f64 {
+                        timeout = ms as i32
+                    }
+                }
+            }
             if SDL_WaitEventTimeout(&mut ev, timeout) != 0 {
                 try self.handle(&ev)
                 while SDL_PollEvent(&mut ev) != 0 {
                     try self.handle(&ev)
+                }
+            }
+            if self.tab.page |p| {
+                if try engine.runDueTimers(p) {
+                    try self.afterScripts()
                 }
             }
             if self.resized {
@@ -420,6 +461,7 @@ pub struct Ui {
                 lh = 1.0
             }
             try p.layoutPage(self.measure, self.win_w as f64, lh)
+            self.laid_version = engine.domVersion(p)
             if p.tree |t| {
                 self.list = try paint.build(self.alloc, t)
             }
@@ -688,6 +730,10 @@ pub struct Ui {
             return
         }
         if self.focus == Focus.Page {
+            if !(try self.keyScripts(sym, shift)) {
+                return self.afterScripts()
+            }
+            try self.afterScripts()
             let view = self.viewHeight()
             if sym == SDLK_DOWN {
                 self.scrollBy(LINE_STEP)
@@ -852,12 +898,107 @@ pub struct Ui {
             self.focus = Focus.Page
             self.dirty = true
         }
+        if !(try self.clickScripts(x, y)) {
+            return self.afterScripts()
+        }
         if self.linkAt(x, y) |link| {
             // The href is in the page's document, which `follow` may free.
             var b = text.Builder.init(self.alloc)
             defer b.deinit()
             try b.append(link.href)
             try self.follow(b.bytes())
+            return
+        }
+        try self.afterScripts()
+    }
+
+    // ---- scripts
+
+    // Fires the click at the element under (x, y) (window points); false
+    // when a listener canceled it. When scripts changed the document,
+    // it is laid out again first, so that the default action looks at
+    // the new layout.
+    fn clickScripts(self: *mut Self, x: f64, y: f64) AllocError!bool {
+        let p = self.tab.page orelse return true
+        if !engine.hasScripts(p) {
+            return true
+        }
+        let t = p.tree orelse return true
+        var el = engine.nodeAt(t, x, y - TOOLBAR + self.tab.scroll) orelse return true
+        if p.doc.node(el).kind != dom.Kind.Element {
+            el = p.doc.parent(el) orelse return true
+        }
+        let go_on = try engine.dispatchEvent(p, el, "click", "")
+        if self.tab.page |now| {
+            if engine.domVersion(now) != self.laid_version {
+                try self.relayout()
+                try self.setTitle()
+            }
+        }
+        return go_on
+    }
+
+    // Fires keydown at the element scripts focused (else the body); false
+    // when a listener canceled it.
+    fn keyScripts(self: *mut Self, sym: i32, shift: bool) AllocError!bool {
+        let p = self.tab.page orelse return true
+        if !engine.hasScripts(p) {
+            return true
+        }
+        var target = engine.scriptFocus(p)
+        if target == null {
+            if p.doc.documentElement() |root| {
+                var cur = p.doc.firstChild(root)
+                while cur |c| {
+                    if p.doc.isElement(c, "body") {
+                        target = c
+                    }
+                    cur = p.doc.nextSibling(c)
+                }
+            }
+        }
+        let el = target orelse return true
+        var name = [1]u8{0}
+        var key: []u8 = keyName(sym)
+        if key.len == 0 && sym > 32 && sym < 127 {
+            name[0] = sym as u8
+            if shift && name[0] >= 'a' && name[0] <= 'z' {
+                name[0] -= 32
+            }
+            key = name[..]
+        }
+        if key.len == 0 {
+            return true
+        }
+        return engine.dispatchEvent(p, el, "keydown", key)
+    }
+
+    // After the page's scripts ran: the navigation they asked for, or
+    // the layout of what they changed.
+    fn afterScripts(self: *mut Self) AllocError!void {
+        let p = self.tab.page orelse return
+        let nav = engine.takeNavigation(p)
+        match nav.kind {
+            .To => {
+                var b = text.Builder.init(self.alloc)
+                defer b.deinit()
+                try b.append(nav.href)
+                return self.follow(b.bytes())
+            }
+            .History => {
+                if nav.step < 0 {
+                    return self.back()
+                }
+                return self.forward()
+            }
+            .Reload => {
+                return self.reload()
+            }
+            .None => {}
+        }
+        if engine.domVersion(p) != self.laid_version {
+            try self.relayout()
+            try self.setTitle()
         }
     }
 
@@ -899,4 +1040,20 @@ pub struct Ui {
             SDL_RenderPresent(self.renderer)
         }
     }
+}
+
+// The KeyboardEvent.key of a key that is not a character ("" for a
+// character or an unknown key).
+fn keyName(sym: i32) []u8 {
+    let syms = [13]i32{SDLK_RETURN, SDLK_ESCAPE, SDLK_BACKSPACE, SDLK_DELETE, SDLK_SPACE, SDLK_LEFT, SDLK_RIGHT, SDLK_UP, SDLK_DOWN, SDLK_HOME, SDLK_END, SDLK_PAGEUP, SDLK_PAGEDOWN}
+    let names = [13][]u8{"Enter", "Escape", "Backspace", "Delete", " ", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"}
+    for i, k in syms {
+        if k == sym {
+            return names[i]
+        }
+    }
+    if sym == SDLK_KP_ENTER {
+        return "Enter"
+    }
+    return ""
 }
