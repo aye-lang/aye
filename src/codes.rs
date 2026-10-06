@@ -815,7 +815,7 @@ E0048 = 48 {
 }
 E0049 = 49 {
     "wrong return value",
-    "`return` must give a value exactly when the function has a return type (for `E!T`, when T is not `void`). Add the return type, or add or remove the value.",
+    "`return` must give a value exactly when the function has a return type (for `E!T`, when T is not `void`). Add the return type, or add or remove the value. In a function without one (or with `E!void`), `return f()` is allowed when `f` returns nothing.",
     r#"fn f() {
     return 1
 }

@@ -1,0 +1,41 @@
+// `return f()` where `f` returns nothing, in a function that returns
+// nothing or `E!void`: the call runs, then the function returns.
+
+error E { Bad }
+
+fn say(msg: []u8) {
+    @println(msg)
+}
+
+fn mayFail(n: i64) E!void {
+    if n < 0 {
+        return E.Bad
+    }
+    @println("checked")
+}
+
+fn f(n: i64) !void {
+    defer @println("f done")
+    if n == 0 {
+        return say("zero")
+    }
+    if n == 1 {
+        return mayFail(-1)
+    }
+    return say("other")
+}
+
+fn g(n: i64) {
+    if n == 0 {
+        return say("g zero")
+    }
+    say("g other")
+}
+
+pub fn main() !void {
+    try f(0)
+    f(1) catch say("caught")
+    try f(2)
+    g(0)
+    g(1)
+}

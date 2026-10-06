@@ -187,7 +187,9 @@ pub fn main() {
 
 - Parameters are `name: Type` and immutable. The return type follows `)`;
   none means the function returns nothing. A function with a return type
-  must `return` a value on every path.
+  must `return` a value on every path. In a function that returns nothing
+  (or `E!void`), `return f()` of a call that returns nothing calls it and
+  returns.
 - No overloading, default arguments, variadic Ore functions or closures.
 - Functions may call each other in any order, and recurse.
 - A top-level function that is not generic is a value of type `fn(A, B) R`

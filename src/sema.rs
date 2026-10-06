@@ -2402,11 +2402,22 @@ impl<'a> Checker<'a> {
                 match (value, &ret) {
                     (None, t) if !needs_value(t) => TStmtKind::Return(None),
                     (None, t) => return err(E0049, s.span, format!("missing return value of type `{t}`")),
+                    // `return f()` of a call that returns nothing: the call,
+                    // then `return`.
                     (Some(e), Type::Void) => {
-                        return err(E0049, e.span, "function has no return type but a value was returned");
+                        let t = self.expr(e, None)?;
+                        if t.ty != Type::Void {
+                            return err(E0049, e.span, "function has no return type but a value was returned");
+                        }
+                        Self::void_return(t, s.span)
                     }
                     (Some(e), Type::ErrorUnion(set, payload)) => {
-                        TStmtKind::Return(Some(self.return_union(e, set, payload)?))
+                        let t = self.expr(e, (**payload != Type::Void).then(|| Self::hint(e, payload)))?;
+                        if t.ty == Type::Void && **payload == Type::Void {
+                            Self::void_return(t, s.span)
+                        } else {
+                            TStmtKind::Return(Some(self.return_union(t, set, payload)?))
+                        }
                     }
                     (Some(e), t) => TStmtKind::Return(Some(self.expect(e, t)?)),
                 }
@@ -2430,6 +2441,12 @@ impl<'a> Checker<'a> {
             StmtKind::Expr(e) => TStmtKind::Expr(self.expr_stmt(e)?),
         };
         Ok(TStmt { kind, span: s.span })
+    }
+
+    /// `t` (of type `void`) and then `return`.
+    fn void_return(t: TExpr, span: Span) -> TStmtKind {
+        let call = TStmt { kind: TStmtKind::Expr(t), span };
+        TStmtKind::Block(vec![call, TStmt { kind: TStmtKind::Return(None), span }])
     }
 
     /// An expression used as a statement: a call, `try`, `catch` or `match`.
@@ -2466,10 +2483,9 @@ impl<'a> Checker<'a> {
         Ok(t)
     }
 
-    /// `return e` in a function returning `set!payload`: an error, an error
+    /// `return t` in a function returning `set!payload`: an error, an error
     /// union passed on as is, or a payload value.
-    fn return_union(&mut self, e: &ast::Expr, set: &str, payload: &Type) -> Result<TExpr> {
-        let t = self.expr(e, (*payload != Type::Void).then(|| Self::hint(e, payload)))?;
+    fn return_union(&mut self, t: TExpr, set: &str, payload: &Type) -> Result<TExpr> {
         let span = t.span;
         match &t.ty {
             Type::Error => Err(silent()),
