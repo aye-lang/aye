@@ -1,0 +1,30 @@
+// Unit tests of the JS engine's pieces (`ore test browser/js`). The
+// conformance scripts in browser/tests/js/ test the engine as a whole.
+
+test "tokens" {
+    let a = @testAllocator()
+    var lx = Lexed.init(a)
+    defer lx.deinit()
+    try tokenize(a, "let x = a / 2 + /b[/]c/g.source; `t${1}u${x}v`", &mut lx)
+    let toks = lx.toks.items()
+    @expect(toks[0].kind == Tok.KwLet)
+    @expect(toks[4].kind == Tok.Slash)
+    @expect(toks[7].kind == Tok.Regex)
+    @expectEqual("b[/]cg", lx.cookedOf(toks[7]))
+    @expect(toks[11].kind == Tok.TemplateHead)
+    @expect(toks[13].kind == Tok.TemplateMiddle)
+    @expectEqual("u", lx.cookedOf(toks[13]))
+    @expect(toks[15].kind == Tok.TemplateTail)
+    @expect(toks[16].kind == Tok.Eof)
+}
+
+test "string escapes are WTF-8" {
+    let a = @testAllocator()
+    var lx = Lexed.init(a)
+    defer lx.deinit()
+    try tokenize(a, "'\\u00e9\\uD83D\\uDE00\\uD800\\x41'", &mut lx)
+    let s = lx.cookedOf(lx.toks.items()[0])
+    @expectEqual(2 + 4 + 3 + 1, s.len)
+    @expectEqual(0xF0, s[2])
+    @expectEqual(0xED, s[6])
+}

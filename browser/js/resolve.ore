@@ -1,0 +1,638 @@
+// js/resolve: static scope analysis. Every variable gets a slot in an
+// environment, and every identifier the number of environments to walk
+// up (`depth`) and the slot (see ast.Ident):
+//
+// - a function call makes one environment: `this` (not for arrows), the
+//   parameters, `var`s, the function's own name, `arguments` when used,
+//   and the declarations at the top of its body;
+// - a block, `for`, `switch` or `catch` with `let`/`const`/`class`/
+//   `function` declarations makes one more (none when it declares
+//   nothing);
+// - at the top level, `var` and `function` are properties of the global
+//   object, `let`/`const`/`class` slots of the global lexical
+//   environment, which every script of the engine shares.
+//
+// A name found nowhere is a property of the global object.
+
+import std.list.List
+import std.map.IntMap
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+struct Binding {
+    name: u32
+    slot: u32
+    flags: u32
+}
+
+struct RScope {
+    is_func: bool
+    arrow: bool
+    // The script's top level (bindings go to the global names).
+    top: bool
+    func: u32
+    scope_id: u32
+    bindings: List(Binding)
+    nslots: u32
+    // FuncDecl nodes hoisted into this scope.
+    funcs: List(u32)
+
+    fn hasEnv(self: *Self) bool {
+        return !self.top && (self.is_func || self.nslots > 0)
+    }
+}
+
+/// The global lexical names, shared by all scripts of an engine:
+/// atom -> slot * 2 + 1 if const.
+pub struct GlobalNames {
+    map: IntMap(u32, u32)
+    count: u32
+
+    pub fn init(alloc: Allocator) GlobalNames {
+        return GlobalNames { map: IntMap(u32, u32).init(alloc), count: 0 }
+    }
+
+    pub fn deinit(self: *mut Self) {
+        self.map.deinit()
+    }
+}
+
+pub struct Resolver {
+    alloc: Allocator
+    ast: *mut Ast
+    atoms: *mut Atoms
+    globals: *mut GlobalNames
+    scopes: List(RScope)
+    // Top-level `var` names (atoms), to create on the global object.
+    top_vars: List(u32)
+    message: *mut text.Builder
+
+    /// Frees the resolver's lists (also after an error).
+    pub fn cleanup(self: *mut Self) {
+        for i in 0..self.scopes.len() {
+            let s = &mut self.scopes.items()[i]
+            s.bindings.deinit()
+            s.funcs.deinit()
+        }
+        self.scopes.deinit()
+        self.top_vars.deinit()
+    }
+
+    fn fail(self: *mut Self, msg: []u8, name: u32) SyntaxErr!void {
+        if self.message.len() == 0 {
+            try self.message.append(msg)
+            if name != NONE {
+                try self.message.append(" '")
+                try self.message.append(self.atoms.name(name))
+                try self.message.append("' has already been declared")
+            }
+        }
+        return SyntaxErr.Syntax
+    }
+
+    fn pushScope(self: *mut Self, isFunc: bool, arrow: bool, top: bool, func: u32, scopeId: u32) AllocError!void {
+        try self.scopes.append(RScope {
+            is_func: isFunc,
+            arrow: arrow,
+            top: top,
+            func: func,
+            scope_id: scopeId,
+            bindings: List(Binding).init(self.alloc),
+            nslots: 0,
+            funcs: List(u32).init(self.alloc),
+        })
+    }
+
+    // Writes the scope's slot count and hoisted functions, and drops it.
+    fn popScope(self: *mut Self) AllocError!void {
+        let n = self.scopes.len()
+        let s = &mut self.scopes.items()[n - 1]
+        let start = self.ast.lists.len() as u32
+        for f in s.funcs.items() {
+            try self.ast.lists.append(f)
+        }
+        let info = &mut self.ast.scopes.items()[s.scope_id]
+        info.nslots = s.nslots
+        info.funcs = start
+        info.nfuncs = s.funcs.len() as u32
+        if s.is_func && s.func != NONE {
+            self.ast.funcs.items()[s.func].scope = s.scope_id
+        }
+        s.bindings.deinit()
+        s.funcs.deinit()
+        self.scopes.pop()
+    }
+
+    fn current(self: *Self) *mut RScope {
+        return &mut self.scopes.items()[self.scopes.len() - 1]
+    }
+
+    // The innermost function scope (or the top level).
+    fn varScope(self: *Self) *mut RScope {
+        var i = self.scopes.len()
+        while i > 0 {
+            i -= 1
+            let s = &mut self.scopes.items()[i]
+            if s.is_func || s.top {
+                return s
+            }
+        }
+        return &mut self.scopes.items()[0]
+    }
+
+    // Declares `name` in scope `s`; returns its slot. `lexical`
+    // declarations may not repeat a name of the same scope.
+    fn declareIn(self: *mut Self, s: *mut RScope, name: u32, flags: u32, lexical: bool) SyntaxErr!u32 {
+        if s.top {
+            if lexical {
+                if self.globals.map.contains(name) {
+                    try self.fail("Identifier", name)
+                }
+                let slot = self.globals.count
+                self.globals.count += 1
+                var v = slot * 2
+                if (flags & IDENT_CONST) != 0 {
+                    v += 1
+                }
+                try self.globals.map.put(name, v)
+                return slot
+            }
+            try self.top_vars.append(name)
+            return NONE
+        }
+        for b in s.bindings.items() {
+            if b.name == name {
+                if lexical {
+                    try self.fail("Identifier", name)
+                }
+                return b.slot
+            }
+        }
+        let slot = s.nslots
+        s.nslots += 1
+        try s.bindings.append(Binding { name: name, slot: slot, flags: flags })
+        return slot
+    }
+
+    // Declares every name bound by a pattern.
+    fn declarePattern(self: *mut Self, s: *mut RScope, p: u32, flags: u32, lexical: bool) SyntaxErr!void {
+        match self.ast.node(p) {
+            .Ident { name, .. } => {
+                try self.declareIn(s, name, flags, lexical)
+            }
+            .ArrayPat { list, n } => {
+                for k in 0..n {
+                    try self.declarePattern(s, self.ast.item(list, k), flags, lexical)
+                }
+            }
+            .ObjectPat { list, n } => {
+                for k in 0..n {
+                    try self.declarePattern(s, self.ast.item(list, k), flags, lexical)
+                }
+            }
+            .PatProp { value, .. } => try self.declarePattern(s, value, flags, lexical)
+            .Default { target, .. } => try self.declarePattern(s, target, flags, lexical)
+            .Rest { target } => try self.declarePattern(s, target, flags, lexical)
+            _ => {}
+        }
+    }
+
+    // ---- lookups
+
+    fn lookup(self: *mut Self, id: u32, name: u32) AllocError!void {
+        var depth: u32 = 0
+        var i = self.scopes.len()
+        while i > 0 {
+            i -= 1
+            let s = &mut self.scopes.items()[i]
+            for b in s.bindings.items() {
+                if b.name == name {
+                    self.ast.nodes.items()[id] = Node.Ident { name: name, depth: depth, slot: b.slot, flags: b.flags }
+                    return
+                }
+            }
+            if name == A_ARGUMENTS && s.is_func && !s.arrow && !s.top {
+                // First use of `arguments` in this function: give it a slot.
+                let slot = s.nslots
+                s.nslots += 1
+                try s.bindings.append(Binding { name: name, slot: slot, flags: 0 })
+                self.ast.funcs.items()[s.func].args_slot = slot
+                self.ast.nodes.items()[id] = Node.Ident { name: name, depth: depth, slot: slot, flags: 0 }
+                return
+            }
+            if s.hasEnv() {
+                depth += 1
+            }
+        }
+        if self.globals.map.get(name) |v| {
+            self.ast.nodes.items()[id] = Node.Ident { name: name, depth: DEPTH_GLOBAL_LEX, slot: v / 2, flags: v % 2 }
+            return
+        }
+        self.ast.nodes.items()[id] = Node.Ident { name: name, depth: DEPTH_GLOBAL, slot: 0, flags: 0 }
+    }
+
+    // ---- hoisting
+
+    // Declares the `var`s of a statement (not of nested functions) in the
+    // function scope s.
+    fn collectVars(self: *mut Self, s: *mut RScope, st: u32) SyntaxErr!void {
+        match self.ast.node(st) {
+            .VarDecl { kind, list, n } => {
+                if kind == DECL_VAR {
+                    for k in 0..n {
+                        match self.ast.node(self.ast.item(list, k)) {
+                            .Declarator { target, .. } => try self.declarePattern(s, target, 0, false)
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            .Block { list, n, .. } => try self.collectVarsList(s, list, n)
+            .If { cons, alt, .. } => {
+                try self.collectVars(s, cons)
+                try self.collectVars(s, alt)
+            }
+            .For { init, body, .. } => {
+                try self.collectVars(s, init)
+                try self.collectVars(s, body)
+            }
+            .ForIn { left, body, .. } => {
+                try self.collectVars(s, left)
+                try self.collectVars(s, body)
+            }
+            .While { body, .. } => try self.collectVars(s, body)
+            .DoWhile { body, .. } => try self.collectVars(s, body)
+            .Try { block, handler, finalizer, .. } => {
+                try self.collectVars(s, block)
+                try self.collectVars(s, handler)
+                try self.collectVars(s, finalizer)
+            }
+            .Switch { list, n, .. } => {
+                for k in 0..n {
+                    match self.ast.node(self.ast.item(list, k)) {
+                        .Case { list: cl, n: cn, .. } => try self.collectVarsList(s, cl, cn)
+                        _ => {}
+                    }
+                }
+            }
+            .Labeled { body, .. } => try self.collectVars(s, body)
+            _ => {}
+        }
+    }
+
+    fn collectVarsList(self: *mut Self, s: *mut RScope, list: u32, n: u32) SyntaxErr!void {
+        for k in 0..n {
+            try self.collectVars(s, self.ast.item(list, k))
+        }
+    }
+
+    // Declares the let/const/class/function declarations of a statement
+    // list in the current scope.
+    fn declareLexical(self: *mut Self, list: u32, n: u32) SyntaxErr!void {
+        for k in 0..n {
+            let st = self.ast.item(list, k)
+            match self.ast.node(st) {
+                .VarDecl { kind, list: dl, n: dn } => {
+                    if kind != DECL_VAR {
+                        var flags: u32 = 0
+                        if kind == DECL_CONST {
+                            flags = IDENT_CONST
+                        }
+                        for j in 0..dn {
+                            match self.ast.node(self.ast.item(dl, j)) {
+                                .Declarator { target, .. } => try self.declarePattern(self.current(), target, flags, true)
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                .ClassDecl { target, .. } => try self.declarePattern(self.current(), target, 0, true)
+                .FuncDecl { target, .. } => {
+                    let s = self.current()
+                    try self.declarePattern(s, target, 0, false)
+                    try s.funcs.append(st)
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // ---- the walk
+
+    /// Resolves a whole script (the Block from Parser.program).
+    pub fn script(self: *mut Self, root: u32) SyntaxErr!void {
+        match self.ast.node(root) {
+            .Block { list, n, scope } => {
+                try self.pushScope(false, false, true, NONE, scope)
+                try self.collectVarsList(self.current(), list, n)
+                try self.declareLexical(list, n)
+                for k in 0..n {
+                    try self.stmt(self.ast.item(list, k))
+                }
+                try self.popScope()
+            }
+            _ => {}
+        }
+    }
+
+    fn stmts(self: *mut Self, list: u32, n: u32) SyntaxErr!void {
+        for k in 0..n {
+            try self.stmt(self.ast.item(list, k))
+        }
+    }
+
+    fn stmt(self: *mut Self, st: u32) SyntaxErr!void {
+        if st == 0 {
+            return
+        }
+        match self.ast.node(st) {
+            .ExprStmt { e } => try self.expr(e)
+            .VarDecl { list, n, .. } => {
+                for k in 0..n {
+                    match self.ast.node(self.ast.item(list, k)) {
+                        .Declarator { target, init } => {
+                            try self.pattern(target)
+                            try self.expr(init)
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            .FuncDecl { f, target } => {
+                try self.expr(target)
+                try self.function(f)
+            }
+            .ClassDecl { c, target } => {
+                try self.expr(target)
+                try self.class(c)
+            }
+            .Return { arg } => try self.expr(arg)
+            .If { cond, cons, alt } => {
+                try self.expr(cond)
+                try self.stmt(cons)
+                try self.stmt(alt)
+            }
+            .Block { list, n, scope } => {
+                try self.pushScope(false, false, false, NONE, scope)
+                try self.declareLexical(list, n)
+                try self.stmts(list, n)
+                try self.popScope()
+            }
+            .For { init, cond, update, body, scope } => {
+                try self.pushScope(false, false, false, NONE, scope)
+                try self.declareLexical(st, 0)
+                match self.ast.node(init) {
+                    .VarDecl { .. } => {
+                        try self.declareFor(init)
+                    }
+                    _ => {}
+                }
+                try self.stmt(init)
+                try self.expr(cond)
+                try self.expr(update)
+                try self.stmt(body)
+                try self.popScope()
+            }
+            .ForIn { left, right, body, scope, .. } => {
+                // The object is evaluated outside the loop's scope.
+                try self.expr(right)
+                try self.pushScope(false, false, false, NONE, scope)
+                match self.ast.node(left) {
+                    .VarDecl { .. } => {
+                        try self.declareFor(left)
+                        try self.stmt(left)
+                    }
+                    _ => try self.pattern(left)
+                }
+                try self.stmt(body)
+                try self.popScope()
+            }
+            .While { cond, body } => {
+                try self.expr(cond)
+                try self.stmt(body)
+            }
+            .DoWhile { body, cond } => {
+                try self.stmt(body)
+                try self.expr(cond)
+            }
+            .Throw { arg } => try self.expr(arg)
+            .Try { block, param, handler, finalizer, scope } => {
+                try self.stmt(block)
+                if handler != 0 {
+                    try self.pushScope(false, false, false, NONE, scope)
+                    if param != 0 {
+                        try self.declarePattern(self.current(), param, 0, true)
+                        try self.pattern(param)
+                    }
+                    try self.stmt(handler)
+                    try self.popScope()
+                }
+                try self.stmt(finalizer)
+            }
+            .Switch { disc, list, n, scope } => {
+                try self.expr(disc)
+                try self.pushScope(false, false, false, NONE, scope)
+                for k in 0..n {
+                    match self.ast.node(self.ast.item(list, k)) {
+                        .Case { list: cl, n: cn, .. } => try self.declareLexical(cl, cn)
+                        _ => {}
+                    }
+                }
+                for k in 0..n {
+                    match self.ast.node(self.ast.item(list, k)) {
+                        .Case { cond, list: cl, n: cn } => {
+                            try self.expr(cond)
+                            try self.stmts(cl, cn)
+                        }
+                        _ => {}
+                    }
+                }
+                try self.popScope()
+            }
+            .Labeled { body, .. } => try self.stmt(body)
+            _ => {}
+        }
+    }
+
+    // let/const in a for header go to the loop's scope (var was hoisted).
+    fn declareFor(self: *mut Self, decl: u32) SyntaxErr!void {
+        match self.ast.node(decl) {
+            .VarDecl { kind, list, n } => {
+                if kind != DECL_VAR {
+                    var flags: u32 = 0
+                    if kind == DECL_CONST {
+                        flags = IDENT_CONST
+                    }
+                    for k in 0..n {
+                        match self.ast.node(self.ast.item(list, k)) {
+                            .Declarator { target, .. } => try self.declarePattern(self.current(), target, flags, true)
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // A pattern used as a target: resolve its names, defaults and keys.
+    fn pattern(self: *mut Self, p: u32) SyntaxErr!void {
+        match self.ast.node(p) {
+            .ArrayPat { list, n } => {
+                for k in 0..n {
+                    try self.pattern(self.ast.item(list, k))
+                }
+            }
+            .ObjectPat { list, n } => {
+                for k in 0..n {
+                    try self.pattern(self.ast.item(list, k))
+                }
+            }
+            .PatProp { key, computed, value } => {
+                if computed {
+                    try self.expr(key)
+                }
+                try self.pattern(value)
+            }
+            .Default { target, init } => {
+                try self.pattern(target)
+                try self.expr(init)
+            }
+            .Rest { target } => try self.pattern(target)
+            _ => try self.expr(p)
+        }
+    }
+
+    fn exprs(self: *mut Self, list: u32, n: u32) SyntaxErr!void {
+        for k in 0..n {
+            try self.expr(self.ast.item(list, k))
+        }
+    }
+
+    fn expr(self: *mut Self, e: u32) SyntaxErr!void {
+        if e == 0 {
+            return
+        }
+        match self.ast.node(e) {
+            .Ident { name, .. } => try self.lookup(e, name)
+            .Template { list, n } => try self.exprs(list + n + 1, n)
+            .ArrayLit { list, n } => try self.exprs(list, n)
+            .ObjectLit { list, n } => try self.exprs(list, n)
+            .Prop { key, computed, value, .. } => {
+                if computed {
+                    try self.expr(key)
+                }
+                try self.expr(value)
+            }
+            .Func { f } => try self.function(f)
+            .Class { c } => try self.class(c)
+            .Unary { arg, .. } => try self.expr(arg)
+            .Update { arg, .. } => try self.expr(arg)
+            .Binary { l, r, .. } => {
+                try self.expr(l)
+                try self.expr(r)
+            }
+            .Logical { l, r, .. } => {
+                try self.expr(l)
+                try self.expr(r)
+            }
+            .Assign { target, value, .. } => {
+                try self.pattern(target)
+                try self.expr(value)
+            }
+            .Cond { cond, cons, alt } => {
+                try self.expr(cond)
+                try self.expr(cons)
+                try self.expr(alt)
+            }
+            .Call { callee, list, n, .. } => {
+                try self.expr(callee)
+                try self.exprs(list, n)
+            }
+            .New { callee, list, n } => {
+                try self.expr(callee)
+                try self.exprs(list, n)
+            }
+            .Member { obj, .. } => try self.expr(obj)
+            .Index { obj, key, .. } => {
+                try self.expr(obj)
+                try self.expr(key)
+            }
+            .OptChain { e: inner } => try self.expr(inner)
+            .Seq { list, n } => try self.exprs(list, n)
+            .Spread { arg } => try self.expr(arg)
+            .SuperCall { list, n, this_node } => {
+                try self.expr(this_node)
+                try self.exprs(list, n)
+            }
+            .SuperMember { this_node, .. } => try self.expr(this_node)
+            .SuperIndex { key, this_node } => {
+                try self.expr(key)
+                try self.expr(this_node)
+            }
+            .ArrayPat { .. } => try self.pattern(e)
+            .ObjectPat { .. } => try self.pattern(e)
+            .Default { .. } => try self.pattern(e)
+            .Rest { .. } => try self.pattern(e)
+            _ => {}
+        }
+    }
+
+    fn function(self: *mut Self, f: u32) SyntaxErr!void {
+        let fi = self.ast.func(f)
+        try self.pushScope(true, fi.arrow, false, f, fi.scope)
+        let s = self.current()
+        if !fi.arrow {
+            let slot = try self.declareIn(s, A_THIS, 0, false)
+            self.ast.funcs.items()[f].this_slot = slot
+        }
+        for k in 0..fi.nparams {
+            try self.declarePattern(self.current(), self.ast.item(fi.params, k), 0, false)
+        }
+        if fi.simple && fi.nparams > 0 {
+            var first: u32 = 0
+            if !fi.arrow {
+                first = 1
+            }
+            self.ast.funcs.items()[f].first_param = first
+        }
+        try self.collectVarsList(self.current(), fi.body, fi.nbody)
+        try self.declareLexical(fi.body, fi.nbody)
+        if fi.own_name {
+            var taken = false
+            for b in self.current().bindings.items() {
+                if b.name == fi.name {
+                    taken = true
+                }
+            }
+            if !taken {
+                let slot = try self.declareIn(self.current(), fi.name, 0, false)
+                self.ast.funcs.items()[f].self_slot = slot
+            }
+        }
+        for k in 0..fi.nparams {
+            try self.pattern(self.ast.item(fi.params, k))
+        }
+        try self.stmts(fi.body, fi.nbody)
+        try self.expr(fi.expr)
+        try self.popScope()
+    }
+
+    fn class(self: *mut Self, c: u32) SyntaxErr!void {
+        let ci = self.ast.classes.items()[c]
+        try self.expr(ci.heritage)
+        try self.function(ci.ctor)
+        for k in 0..ci.n {
+            match self.ast.node(self.ast.item(ci.members, k)) {
+                .ClassElem { key, computed, value, .. } => {
+                    if computed {
+                        try self.expr(key)
+                    }
+                    try self.expr(value)
+                }
+                _ => {}
+            }
+        }
+    }
+}

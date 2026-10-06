@@ -1,0 +1,248 @@
+// js/ast: the syntax tree. Nodes live in one list and refer to each other
+// by index; node 0 is `Empty` and stands for "none" in optional children.
+// Variable-length children (statements of a block, arguments of a call)
+// are runs in `lists`: `list` is the first index, `n` the count. Every
+// script parsed by an engine goes into the same `Ast`, since functions
+// created by one script may run long after it.
+
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+pub enum Op {
+    None
+    Add
+    Sub
+    Mul
+    Div
+    Mod
+    Exp
+    Shl
+    Shr
+    UShr
+    BitAnd
+    BitOr
+    BitXor
+    Eq
+    NotEq
+    StrictEq
+    StrictNotEq
+    Lt
+    Gt
+    Le
+    Ge
+    In
+    Instanceof
+    And
+    Or
+    Nullish
+    Neg
+    Plus
+    Not
+    BitNot
+    Typeof
+    Void
+    Delete
+}
+
+// Prop.kind and ClassElem.kind
+pub let PROP_INIT: u32 = 0
+pub let PROP_GET: u32 = 1
+pub let PROP_SET: u32 = 2
+pub let PROP_SPREAD: u32 = 3
+pub let PROP_METHOD: u32 = 4
+pub let PROP_FIELD: u32 = 5
+
+// VarDecl.kind
+pub let DECL_VAR: u32 = 0
+pub let DECL_LET: u32 = 1
+pub let DECL_CONST: u32 = 2
+
+// Ident.depth: a variable of the global object, or of the global lexical
+// environment (`slot` is then its index there).
+pub let DEPTH_GLOBAL: u32 = 0xFFFFFFFF
+pub let DEPTH_GLOBAL_LEX: u32 = 0xFFFFFFFE
+
+// Ident.flags
+pub let IDENT_CONST: u32 = 1
+
+pub enum Node {
+    Empty
+    // ---- expressions
+    Num { v: f64 }
+    Str { atom: u32 }
+    // lists[list..list+n+1] are the cooked strings (atoms), then n expressions.
+    Template { list: u32, n: u32 }
+    Regex { pattern: u32, flags: u32 }
+    // `depth` environments up, slot `slot` (see DEPTH_*); set by the resolver.
+    Ident { name: u32, depth: u32, slot: u32, flags: u32 }
+    Null
+    True
+    False
+    ArrayLit { list: u32, n: u32 }
+    ObjectLit { list: u32, n: u32 }
+    // key: an atom, or the key expression when computed.
+    Prop { kind: u32, key: u32, computed: bool, value: u32 }
+    Func { f: u32 }
+    Class { c: u32 }
+    Unary { op: Op, arg: u32 }
+    Update { inc: bool, prefix: bool, arg: u32 }
+    Binary { op: Op, l: u32, r: u32 }
+    Logical { op: Op, l: u32, r: u32 }
+    // op: None for `=`, the operator of `+=` and the others.
+    Assign { op: Op, target: u32, value: u32 }
+    Cond { cond: u32, cons: u32, alt: u32 }
+    Call { callee: u32, list: u32, n: u32, optional: bool }
+    New { callee: u32, list: u32, n: u32 }
+    Member { obj: u32, name: u32, optional: bool }
+    Index { obj: u32, key: u32, optional: bool }
+    // A chain with `?.` links: a link on null or undefined ends it.
+    OptChain { e: u32 }
+    Seq { list: u32, n: u32 }
+    Spread { arg: u32 }
+    Hole
+    SuperCall { list: u32, n: u32, this_node: u32 }
+    SuperMember { name: u32, this_node: u32 }
+    SuperIndex { key: u32, this_node: u32 }
+    // ---- patterns (binding and assignment targets)
+    ArrayPat { list: u32, n: u32 }
+    ObjectPat { list: u32, n: u32 }
+    PatProp { key: u32, computed: bool, value: u32 }
+    Default { target: u32, init: u32 }
+    Rest { target: u32 }
+    // ---- class bodies: kind is PROP_METHOD/GET/SET/FIELD; a field's
+    // value is a Func node whose body computes the initial value.
+    ClassElem { kind: u32, is_static: bool, key: u32, computed: bool, value: u32 }
+    // ---- statements
+    ExprStmt { e: u32 }
+    VarDecl { kind: u32, list: u32, n: u32 }
+    Declarator { target: u32, init: u32 }
+    FuncDecl { f: u32, target: u32 }
+    ClassDecl { c: u32, target: u32 }
+    Return { arg: u32 }
+    If { cond: u32, cons: u32, alt: u32 }
+    Block { list: u32, n: u32, scope: u32 }
+    For { init: u32, cond: u32, update: u32, body: u32, scope: u32 }
+    ForIn { left: u32, right: u32, body: u32, scope: u32, of: bool }
+    While { cond: u32, body: u32 }
+    DoWhile { body: u32, cond: u32 }
+    Break { label: u32 }
+    Continue { label: u32 }
+    Throw { arg: u32 }
+    Try { block: u32, param: u32, handler: u32, finalizer: u32, scope: u32 }
+    Switch { disc: u32, list: u32, n: u32, scope: u32 }
+    // cond 0: `default`
+    Case { cond: u32, list: u32, n: u32 }
+    Labeled { label: u32, body: u32 }
+}
+
+pub struct FuncInfo {
+    // The function's name (also an inferred one: `let f = () => 1`).
+    name: u32
+    // A named function expression: its name is bound inside it.
+    own_name: bool
+    params: u32
+    nparams: u32
+    body: u32
+    nbody: u32
+    // Arrow functions with an expression body (and class fields): the body.
+    expr: u32
+    arrow: bool
+    // Methods, getters and setters cannot be called with `new`.
+    method: bool
+    // A class constructor: `new` only.
+    ctor: bool
+    derived: bool
+    // A class without a constructor gets an empty one.
+    default_ctor: bool
+    class_id: u32
+    scope: u32
+    this_slot: u32
+    args_slot: u32
+    self_slot: u32
+    // Every parameter is a plain name; parameter i is in slot first_param + i.
+    simple: bool
+    first_param: u32
+    length: u32
+    start: u32
+    end: u32
+}
+
+pub struct ScopeInfo {
+    nslots: u32
+    // FuncDecl nodes created when the scope is entered.
+    funcs: u32
+    nfuncs: u32
+}
+
+pub struct ClassInfo {
+    name: u32
+    heritage: u32
+    ctor: u32
+    members: u32
+    n: u32
+}
+
+pub struct Span {
+    start: u32
+    end: u32
+}
+
+pub struct Ast {
+    nodes: List(Node)
+    spans: List(Span)
+    lists: List(u32)
+    funcs: List(FuncInfo)
+    scopes: List(ScopeInfo)
+    classes: List(ClassInfo)
+    // The text of every script, one after the other (spans index it).
+    source: text.Builder
+
+    pub fn init(alloc: Allocator) AllocError!Ast {
+        var a = Ast {
+            nodes: List(Node).init(alloc),
+            spans: List(Span).init(alloc),
+            lists: List(u32).init(alloc),
+            funcs: List(FuncInfo).init(alloc),
+            scopes: List(ScopeInfo).init(alloc),
+            classes: List(ClassInfo).init(alloc),
+            source: text.Builder.init(alloc),
+        }
+        try a.nodes.append(Node.Empty)
+        try a.spans.append(Span { start: 0, end: 0 })
+        return a
+    }
+
+    pub fn deinit(self: *mut Self) {
+        self.nodes.deinit()
+        self.spans.deinit()
+        self.lists.deinit()
+        self.funcs.deinit()
+        self.scopes.deinit()
+        self.classes.deinit()
+        self.source.deinit()
+    }
+
+    pub fn node(self: *Self, i: u32) Node {
+        return self.nodes.items()[i]
+    }
+
+    pub fn item(self: *Self, list: u32, k: u32) u32 {
+        return self.lists.items()[(list + k) as usize]
+    }
+
+    pub fn func(self: *Self, f: u32) FuncInfo {
+        return self.funcs.items()[f]
+    }
+
+    /// The source text of node `i`.
+    pub fn srcText(self: *Self, i: u32) []u8 {
+        let s = self.spans.items()[i]
+        return self.source.bytes()[s.start as usize..s.end as usize]
+    }
+
+    pub fn isEmpty(self: *Self, i: u32) bool {
+        return i == 0
+    }
+}

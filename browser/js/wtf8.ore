@@ -1,0 +1,164 @@
+// js/wtf8: UTF-16 views of WTF-8 strings. JavaScript indexes strings by
+// UTF-16 code unit; the engine keeps WTF-8 bytes. ASCII strings index
+// their bytes; other strings are decoded to code units when an operation
+// needs positions (slower, but correct, also for lone surrogates).
+
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+pub struct CodePoint {
+    cp: u32
+    len: usize
+}
+
+/// The code point at s[i] (a surrogate for the 3-byte encoding of one);
+/// an invalid byte gives U+FFFD and length 1.
+pub fn decodeAt(s: []u8, i: usize) CodePoint {
+    let c = s[i] as u32
+    if c < 0x80 {
+        return CodePoint { cp: c, len: 1 }
+    }
+    if c >= 0xF0 && i + 3 < s.len {
+        let cp = ((c & 0x07) << 18) | ((s[i + 1] as u32 & 0x3F) << 12) | ((s[i + 2] as u32 & 0x3F) << 6) | (s[i + 3] as u32 & 0x3F)
+        return CodePoint { cp: cp, len: 4 }
+    }
+    if c >= 0xE0 && c < 0xF0 && i + 2 < s.len {
+        let cp = ((c & 0x0F) << 12) | ((s[i + 1] as u32 & 0x3F) << 6) | (s[i + 2] as u32 & 0x3F)
+        return CodePoint { cp: cp, len: 3 }
+    }
+    if c >= 0xC0 && c < 0xE0 && i + 1 < s.len {
+        let cp = ((c & 0x1F) << 6) | (s[i + 1] as u32 & 0x3F)
+        return CodePoint { cp: cp, len: 2 }
+    }
+    return CodePoint { cp: 0xFFFD, len: 1 }
+}
+
+/// Appends the UTF-16 code units of `s` to `out`.
+pub fn toUnits(s: []u8, out: *mut List(u16)) AllocError!void {
+    var i: usize = 0
+    while i < s.len {
+        let d = decodeAt(s, i)
+        if d.cp >= 0x10000 {
+            let v = d.cp - 0x10000
+            try out.append((0xD800 + (v >> 10)) as u16)
+            try out.append((0xDC00 + (v & 0x3FF)) as u16)
+        } else {
+            try out.append(d.cp as u16)
+        }
+        i += d.len
+    }
+}
+
+/// Appends code units as WTF-8 (a high and a low surrogate in a row make
+/// one code point).
+pub fn appendUnits(b: *mut text.Builder, units: []u16) AllocError!void {
+    var i: usize = 0
+    while i < units.len {
+        let u = units[i] as u32
+        if u >= 0xD800 && u <= 0xDBFF && i + 1 < units.len {
+            let lo = units[i + 1] as u32
+            if lo >= 0xDC00 && lo <= 0xDFFF {
+                try appendWtf8(b, 0x10000 + ((u - 0xD800) << 10) + (lo - 0xDC00))
+                i += 2
+                continue
+            }
+        }
+        try appendWtf8(b, u)
+        i += 1
+    }
+}
+
+/// Appends `s` to b, joining a lone high surrogate at the end of b with
+/// a lone low surrogate at the start of s (string concatenation).
+pub fn appendJoined(b: *mut text.Builder, s: []u8) AllocError!void {
+    let n = b.len()
+    if n >= 3 && s.len >= 3 {
+        let t = b.bytes()
+        if t[n - 3] == 0xED && t[n - 2] >= 0xA0 && t[n - 2] <= 0xAF && s[0] == 0xED && s[1] >= 0xB0 {
+            let hi = decodeAt(t, n - 3).cp
+            let lo = decodeAt(s, 0).cp
+            b.count -= 3
+            try appendWtf8(b, 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00))
+            return b.append(s[3..])
+        }
+    }
+    return b.append(s)
+}
+
+/// The byte offset of UTF-16 index `ui` in s (s.len at or past the end).
+/// An index inside a surrogate pair gives the pair's start.
+pub fn byteOffset(s: []u8, ui: u32) usize {
+    var i: usize = 0
+    var u: u32 = 0
+    while i < s.len && u < ui {
+        let d = decodeAt(s, i)
+        if d.cp >= 0x10000 {
+            u += 2
+            if u > ui {
+                return i
+            }
+        } else {
+            u += 1
+        }
+        i += d.len
+    }
+    return i
+}
+
+/// The UTF-16 index of byte offset `bi` (at a character boundary).
+pub fn unitOffset(s: []u8, bi: usize) u32 {
+    var i: usize = 0
+    var u: u32 = 0
+    while i < bi && i < s.len {
+        let d = decodeAt(s, i)
+        if d.cp >= 0x10000 {
+            u += 2
+        } else {
+            u += 1
+        }
+        i += d.len
+    }
+    return u
+}
+
+/// The code unit at UTF-16 index ui (< length).
+pub fn unitAt(s: []u8, ui: u32) u32 {
+    var i: usize = 0
+    var u: u32 = 0
+    while i < s.len {
+        let d = decodeAt(s, i)
+        if d.cp >= 0x10000 {
+            let v = d.cp - 0x10000
+            if u == ui {
+                return 0xD800 + (v >> 10)
+            }
+            if u + 1 == ui {
+                return 0xDC00 + (v & 0x3FF)
+            }
+            u += 2
+        } else {
+            if u == ui {
+                return d.cp
+            }
+            u += 1
+        }
+        i += d.len
+    }
+    return 0
+}
+
+/// Appends the code units [from, to) of s as WTF-8.
+pub fn appendSlice(alloc: Allocator, b: *mut text.Builder, s: []u8, ascii: bool, from: u32, to: u32) AllocError!void {
+    if from >= to {
+        return
+    }
+    if ascii {
+        return b.append(s[from as usize..to as usize])
+    }
+    var units = List(u16).init(alloc)
+    defer units.deinit()
+    try toUnits(s, &mut units)
+    return appendUnits(b, units.items()[from as usize..to as usize])
+}
