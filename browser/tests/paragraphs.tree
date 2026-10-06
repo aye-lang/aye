@@ -1,0 +1,35 @@
+#document
+  <html>
+    <head>
+    <body>
+      <p>
+        "One\n"
+      <p>
+        "Two "
+      <div>
+        "A div closes the paragraph"
+      "\n"
+      <p>
+        "Three "
+        <span>
+          "inline stays"
+        " inside\n"
+      <p>
+        "Four "
+      <ul>
+        <li>
+          "a list closes it"
+      "\n"
+      <p>
+      "\n"
+      <p>
+        "Five "
+      <table>
+        <tbody>
+          <tr>
+            <td>
+              "a table closes it"
+      "\n"
+      <p>
+      <p>
+        "Empty paragraph before\n"

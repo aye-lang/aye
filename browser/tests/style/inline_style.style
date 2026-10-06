@@ -1,0 +1,49 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <p id="a" style="color: blue">
+      display: block
+      color: rgb(0, 0, 255)
+      font-style: italic
+      margin-top: 1px
+      margin-right: 1px
+      margin-bottom: 1px
+      margin-left: 1px
+    <p style="margin-left: 20px; bogus: 1; padding: -3px; padding-top: 4px">
+      display: block
+      margin-top: 1px
+      margin-right: 1px
+      margin-bottom: 1px
+      margin-left: 20px
+      padding-top: 4px
+    <p style="color: green; color: purple">
+      display: block
+      color: rgb(128, 0, 128)
+      margin-top: 1px
+      margin-right: 1px
+      margin-bottom: 1px
+      margin-left: 1px
+    <p style="  ">
+      display: block
+      margin-top: 1px
+      margin-right: 1px
+      margin-bottom: 1px
+      margin-left: 1px
+    <p style="font-weight: bold; ] junk; color: red; text-align: center">
+      display: block
+      color: rgb(255, 0, 0)
+      font-weight: 700
+      margin-top: 1px
+      margin-right: 1px
+      margin-bottom: 1px
+      margin-left: 1px
+      text-align: center

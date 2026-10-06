@@ -1,0 +1,452 @@
+// Block formatting: widths (CSS 2.1 10.3.3: auto widths fill the
+// containing block, auto margins center, min/max widths, box-sizing),
+// heights (10.6.3: auto heights hold the content; percentages of a
+// definite containing block), vertical margin collapsing between
+// siblings, between a box and its first or last child, and through empty
+// boxes; replaced elements; relative positioning; absolute positions.
+
+import css
+import css.Value
+import std.list.List
+import std.math
+import std.mem.AllocError
+import std.text
+
+// ---- edges
+
+/// Sets the borders and paddings of box `i` (percentages of `cb_w`) and
+/// its vertical margins (auto margins are 0).
+fn resolveEdges(t: *mut Tree, i: usize, cb_w: f64) {
+    let b = t.bx(i)
+    let s = b.style
+    for side in 0..4 {
+        b.padding[side] = lengthOr0(s[css.PADDING_TOP + side], cb_w)
+        b.border[side] = lengthOr0(s[css.BORDER_TOP_WIDTH + side], cb_w)
+    }
+    b.margin[0] = lengthOr0(s[css.MARGIN_TOP], cb_w)
+    b.margin[2] = lengthOr0(s[css.MARGIN_TOP + 2], cb_w)
+}
+
+fn hEdges(b: *Box) f64 {
+    return b.padding[1] + b.padding[3] + b.border[1] + b.border[3]
+}
+
+fn vEdges(b: *Box) f64 {
+    return b.padding[0] + b.padding[2] + b.border[0] + b.border[2]
+}
+
+fn borderBoxSizing(style: []Value) bool {
+    return isKeyword(style[css.BOX_SIZING], "border-box")
+}
+
+// A border-box size from the value `v` of width/height/min/max (`edges`:
+// the box's padding and borders in that direction); null for `auto`,
+// `none` and percentages of an unknown base.
+fn sizeOf(style: []Value, v: Value, base: f64, edges: f64) ?f64 {
+    if lengthOf(v, base) |n| {
+        if borderBoxSizing(style) {
+            return math.max(n, edges)
+        }
+        return n + edges
+    }
+    return null
+}
+
+// `w` (a border-box width) within min-width and max-width.
+fn clampWidth(t: *Tree, i: usize, w: f64, cb_w: f64) f64 {
+    let b = t.bx(i)
+    let e = hEdges(b)
+    var r = w
+    if sizeOf(b.style, b.style[css.MAX_WIDTH], cb_w, e) |mx| {
+        r = math.min(r, mx)
+    }
+    if sizeOf(b.style, b.style[css.MIN_WIDTH], cb_w, e) |mn| {
+        r = math.max(r, mn)
+    }
+    return math.max(r, e)
+}
+
+fn clampHeight(t: *Tree, i: usize, h: f64, cb_h: f64) f64 {
+    let b = t.bx(i)
+    let e = vEdges(b)
+    var r = h
+    if sizeOf(b.style, b.style[css.MAX_HEIGHT], cb_h, e) |mx| {
+        r = math.min(r, mx)
+    }
+    if sizeOf(b.style, b.style[css.MIN_HEIGHT], cb_h, e) |mn| {
+        r = math.max(r, mn)
+    }
+    return math.max(r, e)
+}
+
+/// The border-box width of box `i` from its `width` property, within
+/// min/max; null for `auto`.
+fn specifiedWidth(t: *Tree, i: usize, cb_w: f64) ?f64 {
+    let b = t.bx(i)
+    if sizeOf(b.style, b.style[css.WIDTH], cb_w, hEdges(b)) |w| {
+        return clampWidth(t, i, w, cb_w)
+    }
+    return null
+}
+
+// The content height of box `i` when its `height` makes it definite;
+// -1 when not.
+fn definiteContentHeight(t: *Tree, i: usize, cb_h: f64) f64 {
+    let b = t.bx(i)
+    if sizeOf(b.style, b.style[css.HEIGHT], cb_h, vEdges(b)) |h| {
+        return clampHeight(t, i, h, cb_h) - vEdges(b)
+    }
+    return -1.0
+}
+
+// Sets the horizontal margins of box `i` (border box `w` wide) in a
+// containing block `cb_w` wide: auto margins share the free space.
+fn horizontalMargins(t: *mut Tree, i: usize, cb_w: f64) {
+    let b = t.bx(i)
+    let s = b.style
+    let left_auto = isKeyword(s[css.MARGIN_TOP + 3], "auto")
+    let right_auto = isKeyword(s[css.MARGIN_TOP + 1], "auto")
+    b.margin[3] = lengthOr0(s[css.MARGIN_TOP + 3], cb_w)
+    b.margin[1] = lengthOr0(s[css.MARGIN_TOP + 1], cb_w)
+    let free = cb_w - b.w - b.margin[1] - b.margin[3]
+    if left_auto && right_auto {
+        b.margin[3] = math.max(0.0, (cb_w - b.w) / 2.0)
+        b.margin[1] = b.margin[3]
+    } else if left_auto {
+        b.margin[3] = math.max(0.0, free)
+    } else if right_auto {
+        b.margin[1] = math.max(0.0, free)
+    }
+}
+
+/// The offsets of `position: relative` of box `i`.
+fn relOffsets(t: *mut Tree, i: usize, cb_w: f64, cb_h: f64) {
+    let b = t.bx(i)
+    let s = b.style
+    b.rel_x = 0.0
+    b.rel_y = 0.0
+    if !isKeyword(s[css.POSITION], "relative") {
+        return
+    }
+    if lengthOf(s[css.INSET_TOP + 3], cb_w) |left| {
+        b.rel_x = left
+    } else if lengthOf(s[css.INSET_TOP + 1], cb_w) |right| {
+        b.rel_x = -right
+    }
+    if lengthOf(s[css.INSET_TOP], cb_h) |top| {
+        b.rel_y = top
+    } else if lengthOf(s[css.INSET_TOP + 2], cb_h) |bottom| {
+        b.rel_y = -bottom
+    }
+}
+
+// ---- boxes
+
+fn layoutRoot(t: *mut Tree, r: usize) AllocError!void {
+    try layoutBlockLevel(t, r, t.viewport_w, t.viewport_h)
+    let b = t.bx(r)
+    b.x = b.margin[3]
+    b.y = b.margin[0]
+}
+
+// Does box `i` establish a block formatting context (so that its
+// margins do not collapse with its children's)?
+fn isFormattingRoot(t: *Tree, i: usize) bool {
+    let b = t.bx(i)
+    if b.parent |p| {
+        if t.bx(p).kind == BoxKind.Flex {
+            return true
+        }
+    } else {
+        return true
+    }
+    if b.kind != BoxKind.Block && b.kind != BoxKind.Anonymous {
+        return true
+    }
+    return !isKeyword(b.style[css.OVERFLOW_X], "visible") || !isKeyword(b.style[css.OVERFLOW_Y], "visible") || isKeyword(b.style[css.DISPLAY], "flow-root")
+}
+
+/// Lays out the block-level box `i` in a containing block `cb_w` wide
+/// (and `cb_h` high, or -1): its size, margins and content; its parent
+/// sets its position.
+fn layoutBlockLevel(t: *mut Tree, i: usize, cb_w: f64, cb_h: f64) AllocError!void {
+    let kind = t.bx(i).kind
+    resolveEdges(t, i, cb_w)
+    if kind == BoxKind.Table {
+        try layoutTable(t, i, cb_w)
+        horizontalMargins(t, i, cb_w)
+    } else if kind == BoxKind.Image {
+        replacedSize(t, i, cb_w, cb_h)
+        horizontalMargins(t, i, cb_w)
+    } else {
+        let b = t.bx(i)
+        b.margin[3] = lengthOr0(b.style[css.MARGIN_TOP + 3], cb_w)
+        b.margin[1] = lengthOr0(b.style[css.MARGIN_TOP + 1], cb_w)
+        if specifiedWidth(t, i, cb_w) |w| {
+            b.w = w
+        } else {
+            b.w = clampWidth(t, i, cb_w - b.margin[1] - b.margin[3], cb_w)
+        }
+        horizontalMargins(t, i, cb_w)
+        try layoutContents(t, i, cb_h)
+    }
+    let b = t.bx(i)
+    if kind == BoxKind.Table || kind == BoxKind.Image {
+        b.top_strut = Strut.of(b.margin[0])
+        b.bottom_strut = Strut.of(b.margin[2])
+        b.through = false
+    }
+    relOffsets(t, i, cb_w, cb_h)
+}
+
+/// Lays out an atomic inline (inline-block, image, inline table or
+/// flex) in a line `avail` px wide: shrink-to-fit width, auto margins 0.
+fn layoutAtomic(t: *mut Tree, i: usize, avail: f64) AllocError!void {
+    let kind = t.bx(i).kind
+    resolveEdges(t, i, avail)
+    let b = t.bx(i)
+    b.margin[3] = lengthOr0(b.style[css.MARGIN_TOP + 3], avail)
+    b.margin[1] = lengthOr0(b.style[css.MARGIN_TOP + 1], avail)
+    if kind == BoxKind.Image {
+        replacedSize(t, i, avail, -1.0)
+    } else if kind == BoxKind.Table {
+        try layoutTable(t, i, avail)
+    } else {
+        try shrinkToFit(t, i, avail)
+        try layoutContents(t, i, -1.0)
+    }
+    relOffsets(t, i, avail, -1.0)
+}
+
+// Sets the width of box `i` (margins and edges resolved) to its
+// specified width, or else to its shrink-to-fit width in `avail` px.
+fn shrinkToFit(t: *mut Tree, i: usize, avail: f64) AllocError!void {
+    if specifiedWidth(t, i, avail) |w| {
+        t.bx(i).w = w
+        return
+    }
+    let mm = try intrinsic(t, i)
+    let b = t.bx(i)
+    let room = avail - b.margin[1] - b.margin[3]
+    t.bx(i).w = clampWidth(t, i, math.min(math.max(mm.min, room), mm.max), avail)
+}
+
+// The size of a replaced element: its `width`/`height`, else its
+// `width`/`height` attributes, else 0 (images are not decoded yet).
+fn replacedSize(t: *mut Tree, i: usize, cb_w: f64, cb_h: f64) {
+    let b = t.bx(i)
+    var w = hEdges(b)
+    var h = vEdges(b)
+    if sizeOf(b.style, b.style[css.WIDTH], cb_w, hEdges(b)) |sw| {
+        w = sw
+    } else {
+        w += attrPx(t, i, "width")
+    }
+    if sizeOf(b.style, b.style[css.HEIGHT], cb_h, vEdges(b)) |sh| {
+        h = sh
+    } else {
+        h += attrPx(t, i, "height")
+    }
+    let cw = clampWidth(t, i, w, cb_w)
+    let ch = clampHeight(t, i, h, cb_h)
+    let bb = t.bx(i)
+    bb.w = cw
+    bb.h = ch
+    bb.first_baseline = -1.0
+    bb.last_baseline = -1.0
+}
+
+// The attribute `name` of the element of box `i` as px (a number, maybe
+// followed by "px"); 0 when missing or not a number.
+fn attrPx(t: *Tree, i: usize, name: []u8) f64 {
+    if t.bx(i).node |el| {
+        if t.doc.attr(el, name) |v| {
+            var s = text.trim(v)
+            if text.endsWith(s, "px") {
+                s = s[..s.len - 2]
+            }
+            let n = text.parseFloat(s) catch 0.0
+            if n > 0.0 {
+                return n
+            }
+        }
+    }
+    return 0.0
+}
+
+/// Lays out the content of the block container (or flex container) `i`
+/// whose width, edges and margins are set; sets its height, its
+/// collapsed margins and its baselines.
+fn layoutContents(t: *mut Tree, i: usize, cb_h: f64) AllocError!void {
+    let b = t.bx(i)
+    let cw = math.max(0.0, b.w - hEdges(b))
+    let ch = definiteContentHeight(t, i, cb_h)
+    let root = isFormattingRoot(t, i)
+    let auto_height = ch < 0.0 && sizeOf(b.style, b.style[css.MIN_HEIGHT], cb_h, 0.0) == null
+    let top_open = !root && b.border[0] == 0.0 && b.padding[0] == 0.0
+    let bottom_open = !root && b.border[2] == 0.0 && b.padding[2] == 0.0 && auto_height
+    b.top_strut = Strut.of(b.margin[0])
+    b.bottom_strut = Strut.of(b.margin[2])
+    b.first_baseline = -1.0
+    b.last_baseline = -1.0
+    b.line_start = 0
+    b.line_end = 0
+    var content_h = 0.0
+    var empty = true
+    let kind = b.kind
+    if hasInlineContent(t, i) {
+        content_h = try layoutInline(t, i, cw)
+        let bb = t.bx(i)
+        if bb.line_end > bb.line_start {
+            empty = false
+            let first = t.lines.items()[bb.line_start]
+            let last = t.lines.items()[bb.line_end - 1]
+            bb.first_baseline = bb.border[0] + bb.padding[0] + first.y + first.baseline
+            bb.last_baseline = bb.border[0] + bb.padding[0] + last.y + last.baseline
+        }
+    } else if kind == BoxKind.Flex {
+        content_h = try layoutFlex(t, i, cw, ch)
+        empty = t.children(i).len == 0
+        childBaselines(t, i)
+    } else {
+        let r = try flow(t, i, cw, ch, top_open, bottom_open)
+        content_h = r.height
+        empty = r.empty
+        childBaselines(t, i)
+    }
+    let bb = t.bx(i)
+    var h = content_h + vEdges(bb)
+    if ch >= 0.0 {
+        h = ch + vEdges(bb)
+    }
+    bb.h = clampHeight(t, i, h, cb_h)
+    bb.through = top_open && bottom_open && empty && bb.h == 0.0
+    if bb.through {
+        // An empty box: its margins and those of its children collapse
+        // into one.
+        var all = bb.top_strut
+        all.merge(bb.bottom_strut)
+        bb.top_strut = all
+        bb.bottom_strut = Strut { pos: 0.0, neg: 0.0 }
+    }
+    if bb.marker.len > 0 {
+        placeMarker(t, i)
+    }
+}
+
+// The first and last baselines of a box without lines of its own, from
+// its in-flow children.
+fn childBaselines(t: *mut Tree, i: usize) {
+    var first = -1.0
+    var last = -1.0
+    for c in t.children(i) {
+        let cb = t.bx(c)
+        if cb.first_baseline >= 0.0 && first < 0.0 {
+            first = cb.y + cb.first_baseline
+        }
+        if cb.last_baseline >= 0.0 {
+            last = cb.y + cb.last_baseline
+        }
+    }
+    let b = t.bx(i)
+    let top = b.border[0] + b.padding[0]
+    if first >= 0.0 {
+        b.first_baseline = top + first
+    }
+    if last >= 0.0 {
+        b.last_baseline = top + last
+    }
+}
+
+struct Flow {
+    height: f64
+    // No child had content (every one collapsed through).
+    empty: bool
+}
+
+// Block flow: stacks the block-level children of `p` (content box `cw`
+// wide, `ch` high or -1) with their collapsed margins. `top_open` and
+// `bottom_open`: the margins of the first and last child collapse with
+// `p`'s own.
+fn flow(t: *mut Tree, p: usize, cw: f64, ch: f64, top_open: bool, bottom_open: bool) AllocError!Flow {
+    var y = 0.0
+    var pending = Strut { pos: 0.0, neg: 0.0 }
+    var started = false
+    let n = t.children(p).len
+    for k in 0..n {
+        let c = t.children(p)[k]
+        try layoutBlockLevel(t, c, cw, ch)
+        let cb = t.bx(c)
+        cb.x = cb.margin[3]
+        if cb.through {
+            pending.merge(cb.top_strut)
+            if started || !top_open {
+                cb.y = y + pending.value()
+            } else {
+                cb.y = 0.0
+            }
+            continue
+        }
+        if !started && top_open {
+            var top = t.bx(p).top_strut
+            top.merge(pending)
+            top.merge(cb.top_strut)
+            t.bx(p).top_strut = top
+            cb.y = 0.0
+        } else {
+            var s = pending
+            s.merge(cb.top_strut)
+            cb.y = y + s.value()
+        }
+        started = true
+        y = cb.y + cb.h
+        pending = cb.bottom_strut
+    }
+    if !started {
+        if top_open {
+            var top = t.bx(p).top_strut
+            top.merge(pending)
+            t.bx(p).top_strut = top
+            return Flow { height: 0.0, empty: true }
+        }
+        return Flow { height: math.max(0.0, pending.value()), empty: true }
+    }
+    if bottom_open {
+        var bottom = t.bx(p).bottom_strut
+        bottom.merge(pending)
+        t.bx(p).bottom_strut = bottom
+        return Flow { height: y, empty: false }
+    }
+    return Flow { height: y + pending.value(), empty: false }
+}
+
+// ---- absolute positions
+
+/// Sets the absolute positions of box `i` and its subtree; `ox`, `oy`:
+/// the origin its `x`, `y` are relative to.
+fn place(t: *mut Tree, i: usize, ox: f64, oy: f64) {
+    let b = t.bx(i)
+    b.ax = ox + b.x + b.rel_x
+    b.ay = oy + b.y + b.rel_y
+    let cx = b.ax + b.border[3] + b.padding[3]
+    let cy = b.ay + b.border[0] + b.padding[0]
+    placeChildren(t, i, cx, cy)
+}
+
+fn placeChildren(t: *mut Tree, i: usize, cx: f64, cy: f64) {
+    let n = t.children(i).len
+    for k in 0..n {
+        let c = t.children(i)[k]
+        let kind = t.bx(c).kind
+        if kind == BoxKind.Inline || kind == BoxKind.Text || kind == BoxKind.LineBreak {
+            // Inside an inline formatting context: relative to the
+            // block container, like the lines.
+            let cb = t.bx(c)
+            cb.ax = cx
+            cb.ay = cy
+            placeChildren(t, c, cx, cy)
+        } else {
+            place(t, c, cx, cy)
+        }
+    }
+}

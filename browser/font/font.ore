@@ -1,0 +1,101 @@
+// font: text measurement for layout. A `Measurer` gives the metrics of a
+// font and the advance width of a run of text. Two implementations:
+//
+// - `Fixed` (this file): a font where every glyph is 0.5em wide (1em for
+//   wide East Asian characters), with ascent 0.8em, descent 0.2em and a
+//   line gap of 0.25em, so that layout goldens do not depend on the fonts
+//   of the machine.
+// - `System` (freetype.ore): the system's TrueType fonts through
+//   FreeType, for the window and screenshots.
+//
+// All lengths are in CSS px.
+
+import std.text
+
+/// What layout asks of a font: its size and the variant to use.
+pub struct Font {
+    size: f64
+    bold: bool
+    italic: bool
+    mono: bool
+}
+
+/// Vertical metrics of a font at a size, in px. The `normal` line height
+/// is `ascent + descent + line_gap`.
+pub struct Metrics {
+    ascent: f64
+    descent: f64
+    line_gap: f64
+}
+
+pub interface Measurer {
+    fn metrics(self: *mut Self, f: Font) Metrics
+    fn width(self: *mut Self, f: Font, s: []u8) f64
+}
+
+/// The fixed-metric font of the layout tests.
+pub struct Fixed {
+    // Advance of a narrow glyph, in em.
+    advance: f64
+
+    pub fn init() Fixed {
+        return Fixed { advance: 0.5 }
+    }
+
+    pub fn metrics(self: *mut Self, f: Font) Metrics {
+        return Metrics { ascent: f.size * 0.8, descent: f.size * 0.2, line_gap: f.size * 0.25 }
+    }
+
+    pub fn width(self: *mut Self, f: Font, s: []u8) f64 {
+        var ems = 0.0
+        var i: usize = 0
+        while i < s.len {
+            let d = text.decode(s[i..])
+            ems += self.advance * columns(d.code) as f64
+            i += d.len
+        }
+        return ems * f.size
+    }
+}
+
+/// How many narrow columns the code point `c` takes: 0 for combining
+/// marks and zero-width characters, 2 for wide East Asian characters
+/// and emoji, else 1.
+pub fn columns(c: u32) u32 {
+    if (c >= 0x300 && c <= 0x36F) || (c >= 0x200B && c <= 0x200F) || c == 0xFEFF {
+        return 0
+    }
+    if (c >= 0x1100 && c <= 0x115F) || (c >= 0x2E80 && c <= 0xA4CF) || (c >= 0xAC00 && c <= 0xD7A3) || (c >= 0xF900 && c <= 0xFAFF) || (c >= 0xFE30 && c <= 0xFE4F) || (c >= 0xFF00 && c <= 0xFF60) || (c >= 0xFFE0 && c <= 0xFFE6) || (c >= 0x1F300 && c <= 0x1F64F) || (c >= 0x1F900 && c <= 0x1F9FF) || (c >= 0x20000 && c <= 0x3FFFD) {
+        return 2
+    }
+    return 1
+}
+
+test "fixed metrics" {
+    var f = Fixed.init()
+    let m: dyn Measurer = &mut f
+    let big = Font { size: 20.0, bold: false, italic: false, mono: false }
+    @expectEqual(50.0, m.width(big, "abcde"))
+    @expectEqual(40.0, m.width(big, "日本"))
+    @expectEqual(10.0, m.width(big, "e\xCC\x81"))
+    let mm = m.metrics(big)
+    @expectEqual(16.0, mm.ascent)
+    @expectEqual(4.0, mm.descent)
+    @expectEqual(5.0, mm.line_gap)
+}
+
+test "system fonts, when there are any" {
+    var s = System.init(@testAllocator()) catch |e| {
+        return
+    }
+    defer s.deinit()
+    let m: dyn Measurer = &mut s
+    let f = Font { size: 16.0, bold: false, italic: false, mono: false }
+    let w = m.width(f, "Hello")
+    @expect(w > 20.0 && w < 60.0)
+    let mono = Font { size: 16.0, bold: true, italic: false, mono: true }
+    @expectEqual(m.width(mono, "iiii"), m.width(mono, "MMMM"))
+    let mm = m.metrics(f)
+    @expect(mm.ascent > 10.0 && mm.ascent < 18.0)
+    @expect(mm.descent > 1.0 && mm.descent < 6.0)
+}

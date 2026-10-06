@@ -1,0 +1,70 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <div>
+      display: block
+      <p>
+        display: block
+        color: rgb(255, 0, 0)
+        font-style: italic
+        margin-top: 16px
+        margin-bottom: 16px
+      <section>
+        display: block
+        <p>
+          display: block
+          color: rgb(255, 0, 0)
+          margin-top: 16px
+          margin-bottom: 16px
+    <h2>
+      display: block
+      font-size: 24px
+      font-weight: 700
+      margin-top: 19.92px
+      margin-bottom: 19.92px
+    <p>
+      display: block
+      font-weight: 700
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: center
+    <p>
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: center
+    <ul>
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      padding-left: 40px
+      <li>
+        display: list-item
+        <em>
+          color: rgb(0, 128, 0)
+          font-style: italic
+      <li>
+        display: list-item
+        <b>
+          font-weight: 700
+          <em>
+            font-weight: 700
+            font-style: italic
+    <section>
+      display: block
+      <div>
+        display: block
+        <b>
+          font-weight: 700
+          <span>
+            font-weight: 700
+            white-space: pre

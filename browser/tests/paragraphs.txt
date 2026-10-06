@@ -1,0 +1,17 @@
+One
+
+Two
+
+A div closes the paragraph
+
+Three inline stays inside
+
+Four
+
+- a list closes it
+
+Five
+
+a table closes it
+
+Empty paragraph before

@@ -1,0 +1,32 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+    <body>
+      <p>
+        "Text "
+        <!--  a comment  -->
+        " more text"
+      "\n"
+      <!--  -->
+      "\n"
+      <!--  -->
+      "\n"
+      <!--  -->
+      "\n"
+      <!--  ends with  -->
+      " after\n"
+      <!--  dashes -- inside  -->
+      "\n"
+      <!-- bogus comment -->
+      "\n"
+      <!-- ?xml version=\"1.0\"? -->
+      "\n"
+      <!--  bogus end tag -->
+      "\n"
+      <!-- [CDATA[ cdata is a comment in HTML ]] -->
+      "\n"
+      <p>
+        "last"
+      "\n"
+      <!--  unterminated comment runs to the end\n<p>not a paragraph</p>\n -->

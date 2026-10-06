@@ -1,0 +1,85 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <p class="a">
+      display: block
+      color: rgb(0, 128, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="b">
+      display: block
+      font-style: italic
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="c">
+      display: block
+      font-weight: 700
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="d">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: center
+    <p class="e">
+      display: block
+      color: rgb(0, 128, 0)
+      font-style: italic
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="f">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      padding-top: 4px
+      padding-right: 4px
+      padding-bottom: 4px
+      padding-left: 4px
+    <p class="g">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      height: 5px
+    <p class="h">
+      display: block
+      font-style: italic
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="i">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: right
+    <p class="j">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="k">
+      display: block
+      color: rgb(0, 0, 255)
+      font-weight: 700
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="l">
+      display: block
+      color: rgb(0, 128, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="m">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="n">
+      display: block
+      margin-top: 16px
+      margin-bottom: 16px
+      white-space: pre

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<style>
+[title] { font-style: italic }
+[lang=en] { color: red }
+[class~=warn] { font-weight: 700 }
+[lang|=fr] { color: blue }
+a[href^="https:"] { color: green }
+a[href$=".pdf"] { text-decoration: line-through }
+a[href*=example] { white-space: pre }
+[data-x="Yes" i] { text-align: right }
+[data-y=""] { visibility: hidden }
+[data-z^=""] { visibility: collapse }
+</style>
+<p title="t">title</p>
+<p lang="en">en</p>
+<p lang="en-US">en-US is not en</p>
+<p class="big warn">warn</p>
+<p class="warning">warning is not warn</p>
+<p lang="fr">fr</p>
+<p lang="fr-CA">fr-CA</p>
+<p lang="french">french</p>
+<a href="https://example.com/doc.pdf">all three</a>
+<a href="http://other.org/x.pdf">pdf</a>
+<p data-x="YES">case-insensitive</p>
+<p data-y="">empty value</p>
+<p data-z="z">empty prefix never matches</p>

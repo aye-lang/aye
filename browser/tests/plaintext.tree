@@ -1,0 +1,9 @@
+#document
+  <html>
+    <head>
+    <body>
+      <p>
+        "Before"
+      "\n"
+      <plaintext>
+        "Everything <b>after</b> is &amp; text </plaintext> <p>still text\n"

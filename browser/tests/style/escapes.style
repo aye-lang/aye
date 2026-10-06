@@ -1,0 +1,45 @@
+<html>
+  display: block
+  <head>
+    display: none
+    <style>
+      display: none
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <p class="a:b">
+      display: block
+      color: rgb(255, 0, 0)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p id="123">
+      display: block
+      color: rgb(0, 0, 255)
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="foo">
+      display: block
+      font-style: italic
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="x">
+      display: block
+      color: rgb(0, 128, 0)
+      font-weight: 700
+      margin-top: 16px
+      margin-bottom: 16px
+      text-align: center
+    <p class="y">
+      display: block
+      color: rgb(255, 0, 0)
+      font-style: italic
+      margin-top: 16px
+      margin-bottom: 16px
+    <p class="q">
+      display: block
+      font-family: "a\"b", "c d"
+      margin-top: 16px
+      margin-bottom: 16px

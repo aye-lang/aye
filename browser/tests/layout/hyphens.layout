@@ -1,0 +1,16 @@
+viewport 800x600
+  block <html> (0, 0) 800x112
+    block <body> (0, 0) 800x108
+      block <p> (0, 0) 100x60
+        line (0, 0) 100x20
+          text (0, 2) 72x16 "state-of-"
+        line (0, 20) 100x20
+          text (0, 22) 56x16 "the-art"
+        line (0, 40) 100x20
+          text (0, 42) 80x16 "well-known"
+      block <p> (0, 64) 100x20
+        line (0, 64) 100x20
+          text (0, 66) 56x16 "a--b x-"
+      block <p style="white-space: nowrap"> (0, 88) 100x20
+        line (0, 88) 100x20
+          text (0, 90) 160x16 "no-break-here-at-all"
