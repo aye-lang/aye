@@ -3907,6 +3907,8 @@ pub struct Interp {
             top_vars: List(u32).init(self.alloc),
             message: message,
             floor: self.stackFloor(),
+            strict: p.strict,
+            annex_pass: false,
         }
         defer r.cleanup()
         r.script(root) catch |e| {

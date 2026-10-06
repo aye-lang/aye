@@ -24,6 +24,8 @@ struct Binding {
     name: u32
     slot: u32
     flags: u32
+    // let, const, class (a block function's Annex B var skips the name).
+    lexical: bool
 }
 
 struct RScope {
@@ -38,6 +40,9 @@ struct RScope {
     // FuncDecl nodes hoisted into this scope.
     funcs: List(u32)
     closures: bool
+    // Function scope, sloppy code: the names of functions declared in
+    // blocks that are also `var`s here (Annex B.3.3).
+    annexb: List(u32)
 
     fn hasEnv(self: *Self) bool {
         return !self.top && (self.is_func || self.nslots > 0)
@@ -70,6 +75,12 @@ pub struct Resolver {
     // Top-level `var` names (atoms), to create on the global object.
     top_vars: List(u32)
     message: *mut text.Builder
+    // In strict mode code. In sloppy code a function declared in a block
+    // is a `var` of the enclosing function instead (Annex B.3.3, unless a
+    // let/const/class has the name): the block assigns it when entered.
+    strict: bool
+    // collectVars finds the functions declared in blocks instead of vars.
+    annex_pass: bool
 
     /// Frees the resolver's lists (also after an error).
     pub fn cleanup(self: *mut Self) {
@@ -77,6 +88,7 @@ pub struct Resolver {
             let s = &mut self.scopes.items()[i]
             s.bindings.deinit()
             s.funcs.deinit()
+            s.annexb.deinit()
         }
         self.scopes.deinit()
         self.top_vars.deinit()
@@ -105,6 +117,7 @@ pub struct Resolver {
             nslots: 0,
             funcs: List(u32).init(self.alloc),
             closures: false,
+            annexb: List(u32).init(self.alloc),
         })
     }
 
@@ -126,6 +139,7 @@ pub struct Resolver {
         }
         s.bindings.deinit()
         s.funcs.deinit()
+        s.annexb.deinit()
         self.scopes.pop()
     }
 
@@ -176,7 +190,7 @@ pub struct Resolver {
         }
         let slot = s.nslots
         s.nslots += 1
-        try s.bindings.append(Binding { name: name, slot: slot, flags: flags })
+        try s.bindings.append(Binding { name: name, slot: slot, flags: flags, lexical: lexical })
         return slot
     }
 
@@ -221,7 +235,7 @@ pub struct Resolver {
                 // First use of `arguments` in this function: give it a slot.
                 let slot = s.nslots
                 s.nslots += 1
-                try s.bindings.append(Binding { name: name, slot: slot, flags: 0 })
+                try s.bindings.append(Binding { name: name, slot: slot, flags: 0, lexical: false })
                 self.ast.funcs.items()[s.func].args_slot = slot
                 self.ast.nodes.items()[id] = Node.Ident { name: name, depth: depth, slot: slot, flags: 0 }
                 return
@@ -244,7 +258,7 @@ pub struct Resolver {
     fn collectVars(self: *mut Self, s: *mut RScope, st: u32) SyntaxErr!void {
         match self.ast.node(st) {
             .VarDecl { kind, list, n } => {
-                if kind == DECL_VAR {
+                if kind == DECL_VAR && !self.annex_pass {
                     for k in 0..n {
                         match self.ast.node(self.ast.item(list, k)) {
                             .Declarator { target, .. } => try self.declarePattern(s, target, 0, false)
@@ -254,6 +268,11 @@ pub struct Resolver {
                 }
             }
             .Block { list, n, .. } => try self.collectVarsList(s, list, n)
+            .FuncDecl { target, .. } => {
+                if self.annex_pass {
+                    try self.annexVar(s, target)
+                }
+            }
             .If { cons, alt, .. } => {
                 try self.collectVars(s, cons)
                 try self.collectVars(s, alt)
@@ -286,6 +305,57 @@ pub struct Resolver {
         }
     }
 
+    // Sloppy code: the functions declared in the blocks of a body become
+    // vars of the function scope s (or global vars), unless a lexical
+    // declaration of s has the name.
+    fn annexPass(self: *mut Self, s: *mut RScope, list: u32, n: u32) SyntaxErr!void {
+        if self.strict {
+            return
+        }
+        self.annex_pass = true
+        defer self.annex_pass = false
+        for k in 0..n {
+            let st = self.ast.item(list, k)
+            match self.ast.node(st) {
+                .FuncDecl { .. } => {}
+                _ => try self.collectVars(s, st)
+            }
+        }
+    }
+
+    fn annexVar(self: *mut Self, s: *mut RScope, target: u32) SyntaxErr!void {
+        let name = match self.ast.node(target) {
+            .Ident { name, .. } => name
+            _ => NONE
+        }
+        if name == NONE {
+            return
+        }
+        if s.top {
+            if self.globals.map.contains(name) {
+                return
+            }
+        } else {
+            for b in s.bindings.items() {
+                if b.name == name && b.lexical {
+                    return
+                }
+            }
+        }
+        try self.declareIn(s, name, 0, false)
+        try s.annexb.append(name)
+    }
+
+    // Is `name` a block function's Annex B var of the function scope?
+    fn isAnnexVar(self: *Self, name: u32) bool {
+        for n in self.varScope().annexb.items() {
+            if n == name {
+                return true
+            }
+        }
+        return false
+    }
+
     fn collectVarsList(self: *mut Self, s: *mut RScope, list: u32, n: u32) SyntaxErr!void {
         for k in 0..n {
             try self.collectVars(s, self.ast.item(list, k))
@@ -315,7 +385,20 @@ pub struct Resolver {
                 .ClassDecl { target, .. } => try self.declarePattern(self.current(), target, 0, true)
                 .FuncDecl { target, .. } => {
                     let s = self.current()
-                    try self.declarePattern(s, target, 0, false)
+                    // Sloppy code: in a block, the name may be the
+                    // function's var (annexPass).
+                    var blockVar = false
+                    if !self.strict && !s.is_func && !s.top {
+                        match self.ast.node(target) {
+                            .Ident { name, .. } => {
+                                blockVar = self.isAnnexVar(name)
+                            }
+                            _ => {}
+                        }
+                    }
+                    if !blockVar {
+                        try self.declarePattern(s, target, 0, false)
+                    }
                     try s.funcs.append(st)
                 }
                 _ => {}
@@ -332,6 +415,7 @@ pub struct Resolver {
                 try self.pushScope(false, false, true, NONE, scope)
                 try self.collectVarsList(self.current(), list, n)
                 try self.declareLexical(list, n)
+                try self.annexPass(self.current(), list, n)
                 for k in 0..n {
                     try self.stmt(self.ast.item(list, k))
                 }
@@ -609,6 +693,9 @@ pub struct Resolver {
     fn function(self: *mut Self, f: u32) SyntaxErr!void {
         self.markClosures()
         let fi = self.ast.func(f)
+        let outer = self.strict
+        self.strict = fi.strict
+        defer self.strict = outer
         try self.pushScope(true, fi.arrow, false, f, fi.scope)
         let s = self.current()
         if !fi.arrow {
@@ -627,6 +714,7 @@ pub struct Resolver {
         }
         try self.collectVarsList(self.current(), fi.body, fi.nbody)
         try self.declareLexical(fi.body, fi.nbody)
+        try self.annexPass(self.current(), fi.body, fi.nbody)
         if fi.own_name {
             var taken = false
             for b in self.current().bindings.items() {
