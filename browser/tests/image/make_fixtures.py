@@ -8,8 +8,8 @@ are there). The tests themselves only read the files it writes:
 - NAME.png / .gif / .jpg / .webp: an image, and NAME.rgba its expected pixels (raw
   RGBA8, rows top to bottom, no header).
 - manifest.txt: one line per image, "FILE WIDTH HEIGHT CHECK", where CHECK
-  is `exact` (the decoder must match NAME.rgba byte for byte), `jpeg` or
-  `lossy` (a tolerance, see browser/image/tests.ore) or the error the decoder must
+  is `exact` (the decoder must match NAME.rgba byte for byte), `jpeg` (a
+  tolerance, see browser/image/tests.ore) or the error the decoder must
   return (`invalid`, `unsupported`; WIDTH and HEIGHT are 0 then).
 
 PNGs are encoded here (chunks and zlib written by hand) so that every color
@@ -907,12 +907,12 @@ def make_webps():
         for z in (0, 3, 9):
             save_webp("webp_lossless_big_z%d" % z, cwebp(big, ["-z", str(z)]), "exact")
         save_webp("webp_lossless_near", cwebp(odd, ["-near_lossless", "40"]), "exact")
-    # Lossy (VP8): close to libwebp (see browser/image/tests.ore).
-    save_webp("webp_lossy_q80", pil_webp(photo, quality=80), "lossy")
-    save_webp("webp_lossy_odd_q30", pil_webp(odd, quality=30), "lossy")
-    save_webp("webp_lossy_big_q95", pil_webp(big, quality=95), "lossy")
-    save_webp("webp_lossy_alpha", pil_webp(with_alpha(odd), quality=70), "lossy")
-    save_webp("webp_lossy_gray", pil_webp(photo.convert("L"), quality=60), "lossy")
+    # Lossy (VP8): decoded the way libwebp does, so its pixels exactly too.
+    save_webp("webp_lossy_q80", pil_webp(photo, quality=80), "exact")
+    save_webp("webp_lossy_odd_q30", pil_webp(odd, quality=30), "exact")
+    save_webp("webp_lossy_big_q95", pil_webp(big, quality=95), "exact")
+    save_webp("webp_lossy_alpha", pil_webp(with_alpha(odd), quality=70), "exact")
+    save_webp("webp_lossy_gray", pil_webp(photo.convert("L"), quality=60), "exact")
     if shutil.which("cwebp"):
         for name, im, args in [
             ("webp_lossy_simple_filter", big, ["-q", "50", "-nostrong", "-f", "60"]),
@@ -924,9 +924,9 @@ def make_webps():
             ("webp_alpha_filter_fast", with_alpha(big), ["-q", "60", "-alpha_filter", "fast", "-alpha_q", "50", "-exact"]),
             ("webp_alpha_filter_best", with_alpha_shape(big, "ramp"), ["-q", "60", "-alpha_filter", "best"]),
         ]:
-            save_webp(name, cwebp(im, args), "lossy")
-    save_webp("webp_alpha_vertical", raw_alpha_webp(with_alpha_shape(odd, "rows"), 2), "lossy")
-    save_webp("webp_alpha_gradient", raw_alpha_webp(with_alpha_shape(odd, "ramp"), 3), "lossy")
+            save_webp(name, cwebp(im, args), "exact")
+    save_webp("webp_alpha_vertical", raw_alpha_webp(with_alpha_shape(odd, "rows"), 2), "exact")
+    save_webp("webp_alpha_gradient", raw_alpha_webp(with_alpha_shape(odd, "ramp"), 3), "exact")
     # Animations: the first frame only.
     frames = [photo, photo.transpose(Image.FLIP_LEFT_RIGHT)]
     for name, opts in [("webp_lossless_animated", dict(lossless=True)), ("webp_lossy_animated", dict(quality=75))]:
@@ -934,7 +934,7 @@ def make_webps():
         frames[0].save(buf, "WEBP", save_all=True, append_images=frames[1:], duration=100, **opts)
         data = buf.getvalue()
         assert b"ANMF" in data
-        save_webp(name, data, "exact" if "lossless" in name else "lossy")
+        save_webp(name, data, "exact")
 
     good = pil_webp(photo, quality=80)
     save("webp_bad_truncated.webp", good[:len(good) // 2], 0, 0, "invalid")
