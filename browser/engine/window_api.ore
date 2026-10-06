@@ -5,6 +5,7 @@
 // process is open (`local_store`).
 
 import css
+import dom
 import dom.Document
 import dom.Kind
 import dom.NodeId
@@ -56,6 +57,7 @@ fn installWindow(s: *mut Script) JsError!void {
     try defMethod(it, o, "displayed", 1, akDisplayed)
     try defMethod(it, o, "cssNames", 0, akCssNames)
     try defMethod(it, o, "supports", 1, akSupports)
+    try installFrames(s, o)
     try installComponents(s, o)
 
     let c = try it.newObject(it.object_proto)
@@ -185,7 +187,7 @@ fn akQueueMicrotask(it: *mut Interp, a: Args) JsError!Value {
 // submissions wait until the script returns (takeNavigation).
 fn akActivate(it: *mut Interp, a: Args) JsError!Value {
     let s = scriptOf(it)
-    let h = handleOf(it, it.arg(a, 0), TAG_NODE) orelse return Value.Undefined
+    let h = ownHandle(it, it.arg(a, 0)) orelse return Value.Undefined
     let act = try activate(s.page, h)
     match act {
         .Follow { target } => {
@@ -212,7 +214,7 @@ fn akActivate(it: *mut Interp, a: Args) JsError!Value {
 // form.submit(): no submit event.
 fn akSubmit(it: *mut Interp, a: Args) JsError!Value {
     let s = scriptOf(it)
-    if handleOf(it, it.arg(a, 0), TAG_NODE) |h| {
+    if ownHandle(it, it.arg(a, 0)) |h| {
         if s.page.doc.isElement(h, "form") {
             s.nav_kind = NavKind.Submit
             s.nav_form = h
@@ -231,11 +233,17 @@ fn setNavigation(s: *mut Script, href: []u8) AllocError!void {
 }
 
 fn akFocused(it: *mut Interp, a: Args) JsError!Value {
-    return wrapOpt(it, scriptFocus(scriptOf(it).page))
+    let s = scriptOf(it)
+    s.active = s.page
+    return wrapOpt(it, scriptFocus(s.page))
 }
 
 fn akSetFocus(it: *mut Interp, a: Args) JsError!Value {
-    setFocus(scriptOf(it).page, handleOf(it, it.arg(a, 0), TAG_NODE))
+    let v = it.arg(a, 0)
+    let h = ownHandle(it, v)
+    if h != null || js.isNullish(v) {
+        setFocus(scriptOf(it).page, h)
+    }
     return Value.Undefined
 }
 
@@ -491,7 +499,7 @@ fn akComputedStyle(it: *mut Interp, a: Args) JsError!Value {
     if one {
         none = try it.newString("")
     }
-    let h = handleOf(it, it.arg(a, 0), TAG_NODE) orelse return none
+    let h = ownHandle(it, it.arg(a, 0)) orelse return none
     let s = scriptOf(it)
     if s.page.doc.node(h).kind != Kind.Element || !s.page.doc.isConnected(h) {
         return none
@@ -546,7 +554,7 @@ fn akCssNames(it: *mut Interp, a: Args) JsError!Value {
 // an ancestor `display: none`? (getClientRects: libraries tell visible
 // elements by their boxes.)
 fn akDisplayed(it: *mut Interp, a: Args) JsError!Value {
-    let h = handleOf(it, it.arg(a, 0), TAG_NODE) orelse return js.boolVal(false)
+    let h = ownHandle(it, it.arg(a, 0)) orelse return js.boolVal(false)
     let s = scriptOf(it)
     if !s.page.doc.isConnected(h) {
         return js.boolVal(false)
@@ -567,7 +575,7 @@ fn akDisplayed(it: *mut Interp, a: Args) JsError!Value {
                 _ => {}
             }
         }
-        cur = s.page.doc.parent(c)
+        cur = dom.flatParent(&s.page.doc, c)
     }
     return js.boolVal(true)
 }
@@ -577,6 +585,7 @@ fn akDisplayed(it: *mut Interp, a: Args) JsError!Value {
 fn computedValues(s: *mut Script, h: NodeId) AllocError!?[]css.Value {
     let st = try computedStyling(s)
     if st.styles.get(h) == null {
+        try dom.assignSlots(&mut s.page.doc)
         try css.computeStylesOf(&s.page.doc, &st.ua, &st.author, st.media, h, &mut st.styles)
     }
     return st.styles.get(h)

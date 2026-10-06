@@ -446,9 +446,11 @@ fn kindOf(name: []u8, display: []u8) ?KindOf {
     return KindOf { kind: BoxKind.Block, inline_level: false }
 }
 
-// Adds the boxes of the children of the node `el` to the box `parent`.
+// Adds the boxes of the children of the node `el` in the flat tree (a
+// shadow host's shadow tree, a slot's assigned nodes) to the box
+// `parent`.
 fn buildChildren(t: *mut Tree, parent: usize, el: NodeId) AllocError!void {
-    var cur = t.doc.firstChild(el)
+    var cur = dom.flatFirstChild(t.doc, el)
     while cur |c| {
         let n = t.doc.node(c)
         if n.kind == Kind.Text {
@@ -464,7 +466,7 @@ fn buildChildren(t: *mut Tree, parent: usize, el: NodeId) AllocError!void {
         } else if n.kind == Kind.Element {
             try buildElement(t, parent, c)
         }
-        cur = t.doc.nextSibling(c)
+        cur = dom.flatNextSibling(t.doc, c)
     }
 }
 
@@ -590,12 +592,12 @@ fn appendText(out: *mut List(u8), s: []u8) AllocError!void {
 
 // The box of the first `summary` child of the `details` element `el`.
 fn buildSummary(t: *mut Tree, parent: usize, el: NodeId) AllocError!void {
-    var cur = t.doc.firstChild(el)
+    var cur = dom.flatFirstChild(t.doc, el)
     while cur |c| {
         if t.doc.isElement(c, "summary") {
             return buildElement(t, parent, c)
         }
-        cur = t.doc.nextSibling(c)
+        cur = dom.flatNextSibling(t.doc, c)
     }
 }
 

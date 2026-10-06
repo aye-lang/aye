@@ -197,7 +197,7 @@ fn withFonts(alloc: Allocator, o: UiOptions, measure: dyn font.Measurer, system:
         }
         if r |renderer| {
             defer SDL_DestroyRenderer(renderer)
-            let first_tab = newSlot(alloc, measure, 1) catch |e| {
+            let first_tab = newSlot(alloc, measure, system, 1) catch |e| {
                 std.log.err("out of memory")
                 return 1
             }
@@ -565,7 +565,7 @@ pub struct Ui {
         self.dropList()
         if self.tab.page |p| {
             try p.layoutPage(self.measure, self.win_w as f64, self.layoutHeight())
-            self.laid_version = engine.domVersion(p)
+            self.laid_version = engine.treeVersion(p)
             if p.tree |t| {
                 self.list = try paint.build(self.alloc, t)
             }
@@ -1095,7 +1095,7 @@ pub struct Ui {
         }
         let go_on = try engine.dispatchEvent(p, el, "click", "")
         if self.tab.page |now| {
-            if engine.domVersion(now) != self.laid_version {
+            if engine.treeVersion(now) != self.laid_version {
                 try self.relayout()
                 try self.setTitle()
             }
@@ -1168,7 +1168,7 @@ pub struct Ui {
             }
             .None => {}
         }
-        if engine.domVersion(p) != self.laid_version {
+        if engine.treeVersion(p) != self.laid_version {
             try self.relayout()
             try self.setTitle()
         }
@@ -1188,7 +1188,7 @@ pub struct Ui {
         return windowCommandOf(self, conn, tmp, cmd, doc, args, id, reply)
     }
 
-    pub fn agentActs(self: *mut Self, conn: usize, s: *mut agent.Session, tmp: Allocator, what: []u8, node: ?NodeId) AllocError!void {
+    pub fn agentActs(self: *mut Self, conn: usize, s: *mut agent.Session, tmp: Allocator, what: []u8, node: ?agent.RefNode) AllocError!void {
         return showAgentAction(self, s, what, node)
     }
 

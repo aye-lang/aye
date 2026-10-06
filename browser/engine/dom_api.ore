@@ -1,7 +1,9 @@
 // The DOM bindings: natives on the prototypes of Node, Element, Document
 // and CharacterData, and the style and dataset objects. A node's wrapper
 // is a host object holding its handle (TAG_NODE); a stale or foreign
-// handle is a TypeError, never a use after free.
+// handle is a TypeError, never a use after free. The nodes of another
+// page's document (contentDocument, windows.ore) have wrappers of their
+// own; a native called on one works on that document (`Script.active`).
 //
 // A wrapper's prototype is its interface's: HTMLDivElement.prototype and
 // the others by tag name (HTML_INTERFACES), SVGElement or MathMLElement
@@ -29,15 +31,19 @@ import std.text
 // ---- wrappers
 
 fn docOf(it: *mut Interp) *mut Document {
-    return &mut scriptOf(it).page.doc
+    return &mut scriptOf(it).active.doc
 }
 
 // Records that a script changed the document, and hands the changes the
 // document logged to the observers (components.ore).
 fn changed(it: *mut Interp) JsError!void {
     let s = scriptOf(it)
-    s.version += 1
-    s.style_version += 1
+    if s.active == s.page {
+        s.version += 1
+        s.style_version += 1
+    } else {
+        s.active.mutations += 1
+    }
     return flushMutations(it)
 }
 
@@ -47,6 +53,10 @@ fn changed(it: *mut Interp) JsError!void {
 // styles each time).
 fn changedAttr(it: *mut Interp, name: []u8) JsError!void {
     let s = scriptOf(it)
+    if s.active != s.page {
+        s.active.mutations += 1
+        return
+    }
     s.version += 1
     if !hasClass(STYLE_NEUTRAL_ATTRS, name) {
         s.style_version += 1
@@ -57,13 +67,13 @@ fn changedAttr(it: *mut Interp, name: []u8) JsError!void {
 let STYLE_NEUTRAL_ATTRS = "src srcset sizes alt title loading decoding fetchpriority referrerpolicy crossorigin integrity nonce autocomplete"
 
 fn protoFor(s: *mut Script, h: NodeId) u32 {
-    if dom.isShadowRoot(&s.page.doc, h) && s.shadow_proto != js.NONE {
+    if dom.isShadowRoot(&s.active.doc, h) && s.shadow_proto != js.NONE {
         return s.shadow_proto
     }
-    if s.page.doc.isFragment(h) {
+    if s.active.doc.isFragment(h) {
         return s.fragment_proto
     }
-    return match s.page.doc.node(h).kind {
+    return match s.active.doc.node(h).kind {
         .Element => elementProto(s, h)
         .Text => s.text_proto
         .Comment => s.comment_proto
@@ -72,9 +82,13 @@ fn protoFor(s: *mut Script, h: NodeId) u32 {
     }
 }
 
-/// The wrapper of the node `h`, made on first use (one per node).
+/// The wrapper of the node `h` of the active document, made on first use
+/// (one per node).
 fn wrap(it: *mut Interp, h: NodeId) JsError!Value {
     let s = scriptOf(it)
+    if s.active != s.page {
+        return wrapForeign(it, s, h)
+    }
     if s.wrappers.get(h.index) |w| {
         if w.generation == h.generation {
             return js.objVal(w.obj)
@@ -93,17 +107,20 @@ fn wrapOpt(it: *mut Interp, h: ?NodeId) JsError!Value {
     return Value.Null
 }
 
-// The node of a wrapper (or of the style or dataset object of `tag`).
-fn handleOf(it: *mut Interp, v: Value, want: u32) ?NodeId {
+// The node of a wrapper (or of the style or dataset object of `kind`),
+// whose document becomes the active one.
+fn handleOf(it: *mut Interp, v: Value, kind: u32) ?NodeId {
     let o = js.objectOf(v)
     if o == js.NONE {
         return null
     }
     match it.heap.obj(o).data {
         .Host { tag, index, generation } => {
-            if tag == want {
+            if tag & TAG_KIND == kind {
+                let page = pageOfTag(scriptOf(it), tag) orelse return null
                 let h = NodeId { index: index, generation: generation }
-                if docOf(it).isLive(h) {
+                if page.doc.isLive(h) {
+                    scriptOf(it).active = page
                     return h
                 }
             }
@@ -111,6 +128,36 @@ fn handleOf(it: *mut Interp, v: Value, want: u32) ?NodeId {
         _ => {}
     }
     return null
+}
+
+// The node of a wrapper of an argument: a node of the active document.
+fn argHandle(it: *mut Interp, v: Value) ?NodeId {
+    let o = js.objectOf(v)
+    if o == js.NONE {
+        return null
+    }
+    match it.heap.obj(o).data {
+        .Host { tag, index, generation } => {
+            if tag & TAG_KIND == TAG_NODE {
+                let s = scriptOf(it)
+                if pageOfTag(s, tag) |page| {
+                    let h = NodeId { index: index, generation: generation }
+                    if page == s.active && page.doc.isLive(h) {
+                        return h
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    return null
+}
+
+// A node of the page's own document (arguments of the `ak` natives).
+fn ownHandle(it: *mut Interp, v: Value) ?NodeId {
+    let s = scriptOf(it)
+    s.active = s.page
+    return argHandle(it, v)
 }
 
 fn thisNode(it: *mut Interp, a: Args) JsError!NodeId {
@@ -130,7 +177,7 @@ fn thisElement(it: *mut Interp, a: Args) JsError!NodeId {
 }
 
 fn argNode(it: *mut Interp, a: Args, i: usize, which: []u8) JsError!NodeId {
-    if handleOf(it, it.arg(a, i), TAG_NODE) |h| {
+    if argHandle(it, it.arg(a, i)) |h| {
         return h
     }
     let b = try it.builder()
@@ -246,7 +293,7 @@ fn installElementInterfaces(s: *mut Script, html: u32, element: u32) JsError!voi
 
 // The prototype of the wrapper of the element `h`: its interface's.
 fn elementProto(s: *mut Script, h: NodeId) u32 {
-    let doc = &s.page.doc
+    let doc = &s.active.doc
     let ns = doc.namespaceOf(h)
     if ns == dom.NS_SVG {
         if text.eql(doc.node(h).name, "svg") {
@@ -852,7 +899,7 @@ fn copyNode(doc: *mut Document, h: NodeId, deep: bool) AllocError!NodeId {
 
 fn nodeContains(it: *mut Interp, a: Args) JsError!Value {
     let h = try thisNode(it, a)
-    if handleOf(it, it.arg(a, 0), TAG_NODE) |other| {
+    if argHandle(it, it.arg(a, 0)) |other| {
         return js.boolVal(isInclusiveAncestor(docOf(it), h, other))
     }
     return js.boolVal(false)
@@ -865,7 +912,7 @@ fn nodeHasChildNodes(it: *mut Interp, a: Args) JsError!Value {
 
 fn nodeIsSameNode(it: *mut Interp, a: Args) JsError!Value {
     let h = try thisNode(it, a)
-    if handleOf(it, it.arg(a, 0), TAG_NODE) |other| {
+    if argHandle(it, it.arg(a, 0)) |other| {
         return js.boolVal(dom.same(h, other))
     }
     return js.boolVal(false)
@@ -1201,7 +1248,7 @@ fn elementSetInnerHtml(it: *mut Interp, a: Args) JsError!Value {
 fn replaceWithMarkup(it: *mut Interp, h: NodeId, context: []u8, src: []u8) JsError!void {
     var nodes = List(NodeId).init(it.alloc)
     defer nodes.deinit()
-    try parseFragment(scriptOf(it).page, context, src, &mut nodes)
+    try parseFragment(scriptOf(it).active, context, src, &mut nodes)
     let doc = docOf(it)
     var target = h
     if doc.isElement(h, "template") {
@@ -1237,7 +1284,7 @@ fn elementSetOuterHtml(it: *mut Interp, a: Args) JsError!Value {
     if doc.node(parent).kind == Kind.Element {
         context = doc.node(parent).name
     }
-    try parseFragment(scriptOf(it).page, context, b.bytes(), &mut nodes)
+    try parseFragment(scriptOf(it).active, context, b.bytes(), &mut nodes)
     for n in nodes.items() {
         docOf(it).insertBefore(parent, n, h)
     }
@@ -1359,7 +1406,7 @@ fn sideObject(it: *mut Interp, a: Args, tag: u32, key: []u8) JsError!Value {
     if tag == TAG_DATASET {
         proto = s.dataset_proto
     }
-    let o = try it.newHostObject(proto, tag, h.index, h.generation)
+    let o = try it.newHostObject(proto, tag | try slotTag(s, s.active), h.index, h.generation)
     docOf(it).node(h).js_refs += 1
     try it.defineOwn(wo, atom, js.objVal(o), js.F_WRITE | js.F_CONFIG)
     return js.objVal(o)
@@ -1377,25 +1424,18 @@ fn elementDataset(it: *mut Interp, a: Args) JsError!Value {
     return sideObject(it, a, TAG_DATASET, "__dataset")
 }
 
-// The node and tag of a style or dataset object.
+// The node of a style or dataset object, whose document becomes the
+// active one.
 fn sideNode(it: *mut Interp, o: u32) ?NodeId {
-    match it.heap.obj(o).data {
-        .Host { tag, index, generation } => {
-            if tag == TAG_STYLE || tag == TAG_DATASET {
-                let h = NodeId { index: index, generation: generation }
-                if docOf(it).isLive(h) {
-                    return h
-                }
-            }
-        }
-        _ => {}
+    if handleOf(it, js.objVal(o), TAG_STYLE) |h| {
+        return h
     }
-    return null
+    return handleOf(it, js.objVal(o), TAG_DATASET)
 }
 
 fn isDataset(it: *mut Interp, o: u32) bool {
     return match it.heap.obj(o).data {
-        .Host { tag, .. } => tag == TAG_DATASET
+        .Host { tag, .. } => tag & TAG_KIND == TAG_DATASET
         _ => false
     }
 }
@@ -1423,6 +1463,9 @@ fn namedGet(s: *mut Script, o: u32, key: u32) JsError!Value {
     if hostTag(it, o) == TAG_LIST {
         return listGet(s, o, key)
     }
+    if hostTag(it, o) == TAG_WINDOW {
+        return windowNamed(s, o, key)
+    }
     let proto = it.heap.obj(o).proto
     if it.hasProperty(proto, key) {
         return Value.Empty
@@ -1433,7 +1476,7 @@ fn namedGet(s: *mut Script, o: u32, key: u32) JsError!Value {
     defer it.release(b)
     if isDataset(it, o) {
         try kebab(name, "data-", b)
-        if s.page.doc.attr(h, b.bytes()) |v| {
+        if s.active.doc.attr(h, b.bytes()) |v| {
             return it.newString(v)
         }
         return Value.Undefined
@@ -1444,7 +1487,7 @@ fn namedGet(s: *mut Script, o: u32, key: u32) JsError!Value {
     try kebab(name, "", b)
     let v = try it.builder()
     defer it.release(v)
-    try styleValue(s.page.doc.attr(h, "style") orelse "", b.bytes(), v)
+    try styleValue(s.active.doc.attr(h, "style") orelse "", b.bytes(), v)
     return it.newString(v.bytes())
 }
 
@@ -1453,6 +1496,9 @@ fn namedSet(s: *mut Script, o: u32, key: u32, value: Value) JsError!bool {
     let it = &mut s.it
     if hostTag(it, o) == TAG_LIST {
         return listSet(s, o, key)
+    }
+    if hostTag(it, o) == TAG_WINDOW {
+        return false
     }
     let proto = it.heap.obj(o).proto
     if it.hasProperty(proto, key) {
@@ -1473,14 +1519,12 @@ fn namedSet(s: *mut Script, o: u32, key: u32, value: Value) JsError!bool {
     }
     if isDataset(it, o) {
         try kebab(name, "data-", b)
-        try s.page.doc.setAttr(h, b.bytes(), v.bytes())
+        try s.active.doc.setAttr(h, b.bytes(), v.bytes())
     } else {
         try kebab(name, "", b)
         try setStyleDecl(s, h, b.bytes(), v.bytes())
     }
-    s.version += 1
-    s.style_version += 1
-    try flushMutations(it)
+    try changed(it)
     return true
 }
 
@@ -1492,7 +1536,7 @@ fn namedHas(s: *mut Script, o: u32, key: u32) bool {
     if tag == TAG_LIST {
         return listHas(s, o, key)
     }
-    if tag != TAG_DATASET || it.hasProperty(it.heap.obj(o).proto, key) {
+    if tag & TAG_KIND != TAG_DATASET || it.hasProperty(it.heap.obj(o).proto, key) {
         return false
     }
     let h = sideNode(it, o) orelse return false
@@ -1501,7 +1545,7 @@ fn namedHas(s: *mut Script, o: u32, key: u32) bool {
     kebab(it.heap.atoms.name(key), "data-", &mut b) catch |e| {
         return false
     }
-    return s.page.doc.attr(h, b.bytes()) != null
+    return s.active.doc.attr(h, b.bytes()) != null
 }
 
 // The tag of the host object `o` (0 for other objects).
@@ -1527,7 +1571,7 @@ fn styleValue(decls: []u8, prop: []u8, out: *mut text.Builder) AllocError!void {
 // Sets (or, for an empty value, removes) the declaration of `prop` in
 // the style attribute of `el`.
 fn setStyleDecl(s: *mut Script, el: NodeId, prop: []u8, value: []u8) AllocError!void {
-    let doc = &mut s.page.doc
+    let doc = &mut s.active.doc
     let old = doc.attr(el, "style") orelse ""
     var b = text.Builder.init(s.alloc)
     defer b.deinit()
@@ -1714,7 +1758,11 @@ fn documentSetTitle(it: *mut Interp, a: Args) JsError!Value {
 
 fn documentReadyState(it: *mut Interp, a: Args) JsError!Value {
     try thisDocument(it, a)
-    return it.newString(match scriptOf(it).ready {
+    var ready: u8 = 2
+    if scriptOf(it).active.script |other| {
+        ready = other.ready
+    }
+    return it.newString(match ready {
         0 => "loading"
         1 => "interactive"
         _ => "complete"
@@ -1724,14 +1772,14 @@ fn documentReadyState(it: *mut Interp, a: Args) JsError!Value {
 // The encoding the document was decoded from ("UTF-8", "Shift_JIS").
 fn documentCharacterSet(it: *mut Interp, a: Args) JsError!Value {
     try thisDocument(it, a)
-    return it.newString(encoding.nameOf(scriptOf(it).page.encoding))
+    return it.newString(encoding.nameOf(scriptOf(it).active.encoding))
 }
 
 fn documentActiveElement(it: *mut Interp, a: Args) JsError!Value {
     try thisDocument(it, a)
     let s = scriptOf(it)
-    if scriptFocus(s.page) |f| {
-        if s.page.doc.isConnected(f) {
+    if scriptFocus(s.active) |f| {
+        if s.active.doc.isConnected(f) {
             return wrap(it, f)
         }
     }
@@ -1741,7 +1789,11 @@ fn documentActiveElement(it: *mut Interp, a: Args) JsError!Value {
 
 fn documentCurrentScript(it: *mut Interp, a: Args) JsError!Value {
     try thisDocument(it, a)
-    return wrapOpt(it, scriptOf(it).current)
+    let s = scriptOf(it)
+    if s.active != s.page {
+        return Value.Null
+    }
+    return wrapOpt(it, s.current)
 }
 
 fn documentDoctype(it: *mut Interp, a: Args) JsError!Value {

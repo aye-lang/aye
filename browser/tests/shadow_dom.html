@@ -1,0 +1,8 @@
+<!DOCTYPE html>
+<head><template shadowrootmode="open"><p>The head cannot host</p></template><title>Declarative shadow DOM</title></head>
+<x-card id=a><template shadowrootmode="open"><style>p { color: red }</style><header><slot name="title">No title</slot></header><slot></slot></template><h2 slot="title">Title</h2><p>Light text</p></x-card>
+<div id=b><template shadowrootmode="closed"><p>Closed <span>root</span></p></template>light, not shown</div>
+<section><template shadowrootmode="open"><x-inner><template shadowrootmode="open"><b>nested</b> <slot></slot></template><i>inner light</i></x-inner></template></section>
+<span><template shadowrootmode="open">first</template><template shadowrootmode="open">second stays a template</template></span>
+<a href="#"><template shadowrootmode="open">a link cannot host</template>link</a>
+<div><template shadowrootmode="bogus">not a mode</template><template>plain</template></div>

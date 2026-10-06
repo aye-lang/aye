@@ -1,0 +1,18 @@
+{"id":1,"ok":true,"result":"loaded file://$ROOT/browser/tests/agent/iframes.html","url":"file://$ROOT/browser/tests/agent/iframes.html","title":"Iframes","snapshot":"- heading \"Shop\" [level=1] [e1]\n- frame \"Login\" -> file://$ROOT/browser/tests/frames/iframe_form.html\n  - form\n    - textbox \"User\" [e2]\n    - button \"Sign in\" [e3]\n- frame \"Links\" -> file://$ROOT/browser/tests/frames/iframe_links.html\n  - list\n    - listitem\n      - link \"Here\" [e4] -> iframe_result.html\n    - listitem\n      - link \"In the login frame\" [e5] -> iframe_result.html?user=bob\n    - listitem\n      - link \"The whole tab\" [e6] -> ../agent/links.html\n- frame -> about:srcdoc\n  - paragraph: Inline srcdoc text.\n- paragraph: After the frames.\n"}
+{"id":2,"ok":true,"result":"typed \"ada\" into textbox \"User\" [e2]","url":"file://$ROOT/browser/tests/agent/iframes.html","title":"Iframes","diff":"-     - textbox \"User\" [e2]\n+     - textbox \"User\" [e2] [focused] value=\"ada\"\n"}
+{"id":3,"ok":true,"result":"clicked button \"Sign in\" [e3]; submitted the form: loaded file://$ROOT/browser/tests/frames/iframe_result.html?user=ada in the frame \"login\"","url":"file://$ROOT/browser/tests/agent/iframes.html","title":"Iframes","diff":"- - frame \"Login\" -> file://$ROOT/browser/tests/frames/iframe_form.html\n-   - form\n-     - textbox \"User\" [e2] [focused] value=\"ada\"\n-     - button \"Sign in\" [e3]\n+ - frame \"Login\" -> file://$ROOT/browser/tests/frames/iframe_result.html?user=ada\n+   - paragraph: Signed in as ada.\n"}
+{"id":4,"ok":true,"result":"clicked link \"In the login frame\" [e5]; loaded file://$ROOT/browser/tests/frames/iframe_result.html?user=bob in the frame \"login\"","url":"file://$ROOT/browser/tests/agent/iframes.html","title":"Iframes","diff":"- - frame \"Login\" -> file://$ROOT/browser/tests/frames/iframe_result.html?user=ada\n-   - paragraph: Signed in as ada.\n+ - frame \"Login\" -> file://$ROOT/browser/tests/frames/iframe_result.html?user=bob\n+   - paragraph: Signed in as bob.\n-       - link \"In the login frame\" [e5] -> iframe_result.html?user=bob\n+       - link \"In the login frame\" [e5] [focused] -> iframe_result.html?user=bob\n"}
+{"id":5,"ok":true,"url":"file://$ROOT/browser/tests/agent/iframes.html","title":"Iframes","snapshot":"- heading \"Shop\" [level=1] [e1]\n- frame \"Login\" -> file://$ROOT/browser/tests/frames/iframe_result.html?user=bob\n  - paragraph: Signed in as bob.\n- frame \"Links\" -> file://$ROOT/browser/tests/frames/iframe_links.html\n  - list\n    - listitem\n      - link \"Here\" [e4] -> iframe_result.html\n    - listitem\n      - link \"In the login frame\" [e5] [focused] -> iframe_result.html?user=bob\n    - listitem\n      - link \"The whole tab\" [e6] -> ../agent/links.html\n- frame -> about:srcdoc\n  - paragraph: Inline srcdoc text.\n- paragraph: After the frames.\n"}
+--- window
+url file://$ROOT/browser/tests/agent/iframes.html
+scroll 0
+focus page
+address file://$ROOT/browser/tests/agent/iframes.html
+history 1 of 1
+matches 0
+status 
+frames 0 0 0 0
+frame_urls file://$ROOT/browser/tests/frames/iframe_result.html?user=bob file://$ROOT/browser/tests/frames/iframe_links.html about:srcdoc about:srcdoc
+tabs 1, showing 1
+agents active
+activity agent: snapshot

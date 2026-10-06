@@ -60,7 +60,7 @@ fn installComponents(s: *mut Script, ak: u32) JsError!void {
 /// its previous and next sibling, the attribute's name and the old value.
 fn flushMutations(it: *mut Interp) JsError!void {
     let s = scriptOf(it)
-    let doc = &mut s.page.doc
+    let doc = docOf(it)
     if doc.log.len() == 0 {
         return
     }
@@ -69,7 +69,7 @@ fn flushMutations(it: *mut Interp) JsError!void {
     try doc.takeLog(&mut recs)
     defer {
         for m in recs.items() {
-            s.page.doc.releaseRecord(m)
+            docOf(it).releaseRecord(m)
         }
     }
     if s.mutation_hook == js.NONE {

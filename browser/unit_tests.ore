@@ -182,6 +182,51 @@ test "css cascade" {
     @expectEqual("rgb(255, 0, 0) 20px 2px block", out.bytes())
 }
 
+test "adopted sheets and shadow trees" {
+    let a = @testAllocator()
+    let src = "<x-a><template shadowrootmode=open><style>p { margin-top: 1px }</style><p>in</p><slot></slot></template><p>light</p></x-a>"
+    // Fragment parsing keeps the template.
+    var frag = try html.parseWith(a, src, false)
+    defer frag.deinit()
+    @expectEqual(0, frag.shadows.len())
+    var doc = try html.parse(a, src)
+    defer doc.deinit()
+    @expectEqual(1, doc.shadows.len())
+    let root = doc.shadows.items()[0]
+    let host = dom.hostOf(&doc, root).?
+    try doc.adopted.append(dom.Adopted { root: doc.root, css: "p { color: red }" })
+    try doc.adopted.append(dom.Adopted { root: root, css: "p { color: blue } :host { margin-left: 3px }" })
+    try dom.assignSlots(&mut doc)
+    let media = css.Media { width: 800.0, height: 600.0 }
+    var ua = try css.Sheet.init(a)
+    defer ua.deinit()
+    try css.uaSheet(&mut ua, media)
+    var author = try css.Sheet.init(a)
+    defer author.deinit()
+    let address = try url.parse(a, "about:blank")
+    defer address.deinit(a)
+    try engine.authorSheets(a, &doc, &address, media, &mut author)
+    @expectEqual(1, author.scoped.len())
+    var styles = try css.Styles.init(a)
+    defer styles.deinit()
+    try css.computeStyles(&doc, &ua, &author, media, &mut styles)
+    var out = text.Builder.init(a)
+    defer out.deinit()
+    var cur: ?NodeId = doc.root
+    while cur |h| {
+        if doc.isElement(h, "p") {
+            let v = styles.get(h).?
+            try css.writeValue(v[css.COLOR], &mut out)
+            try out.append(" ")
+            try css.writeValue(v[css.MARGIN_TOP], &mut out)
+            try out.append("; ")
+        }
+        cur = dom.shadowIncludingFollowing(&doc, h, doc.root)
+    }
+    try css.writeValue(styles.get(host).?[css.MARGIN_TOP + 3], &mut out)
+    @expectEqual("rgb(0, 0, 255) 1px; rgb(255, 0, 0) 16px; 3px", out.bytes())
+}
+
 // The value that the last declaration of `prop` in `sheet` gives.
 fn declValue(sheet: *css.Sheet, prop: usize) css.Value {
     var v = css.Value.Unset

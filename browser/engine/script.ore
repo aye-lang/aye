@@ -48,6 +48,9 @@ import std.text
 import std.time
 import url
 
+// A host object's tag is a kind (the low 12 bits) and, for a node of
+// another page's document (windows.ore), its slot in `Script.foreign`
+// plus one (above them).
 let TAG_NODE: u32 = 1
 // HOST_NAMED (0x100) | 2 and | 3: properties are the declarations of the
 // `style` attribute, and the `data-*` attributes.
@@ -56,6 +59,11 @@ let TAG_DATASET: u32 = 0x103
 // HOST_NAMED | 4: a live NodeList or HTMLCollection; the index is its
 // slot in `Script.lists`, the generation the slot's.
 let TAG_LIST: u32 = 0x104
+// HOST_NAMED | 5: the window of another page of the tab (its page id in
+// `index`); `w[0]` is its first frame.
+let TAG_WINDOW: u32 = 0x105
+let TAG_KIND: u32 = 0xFFF
+let TAG_SLOT_SHIFT: u32 = 12
 
 // Nested calls in page scripts: the main thread's C stack is 8 MB and a
 // call of the tree-walking interpreter takes several KB of it (more in
@@ -113,6 +121,8 @@ struct LiveList {
     used: bool
     generation: u32
     kind: u8
+    // The page of the document (windows.ore): 0 for the page's own.
+    page_id: u32
     // Held: counts in its js_refs while the list is used.
     root: NodeId
     // The tag name, class names or name the list is about (owned).
@@ -167,6 +177,17 @@ pub struct Script {
     it: Interp
     // Node index to its wrapper (a node has at most one).
     wrappers: IntMap(u32, Wrapper)
+    // The page whose document the DOM natives work on: `page`, or another
+    // page of the tab when `this` is one of its nodes (windows.ore).
+    active: *mut Page
+    // The documents of other pages that the scripts hold nodes of.
+    foreign: List(Foreign)
+    // Page id to the root of its window object.
+    windows: IntMap(u32, u32)
+    // The prototype of other pages' windows, and the roots of the
+    // prelude's `hostMessage` (js.NONE before the prelude ran).
+    window_proto: u32
+    on_message: u32
     node_proto: u32
     element_proto: u32
     document_proto: u32
@@ -236,11 +257,26 @@ pub struct Script {
     // ---- js.Host
 
     fn finalize(self: *mut Self, tag: u32, index: u32, generation: u32) {
+        if tag == TAG_WINDOW {
+            return
+        }
         if tag == TAG_LIST {
             if releaseList(self, index, generation) |root| {
-                self.unref(root)
+                self.unrefIn(root.page_id, root.node)
             }
             return
+        }
+        let slot = tag >> TAG_SLOT_SHIFT
+        if slot > 0 {
+            let f = &mut self.foreign.items()[slot - 1]
+            if tag & TAG_KIND == TAG_NODE {
+                if f.wrappers.get(index) |w| {
+                    if w.generation == generation {
+                        f.wrappers.remove(index)
+                    }
+                }
+            }
+            return self.unrefIn(f.page_id, NodeId { index: index, generation: generation })
         }
         if tag == TAG_NODE {
             if self.wrappers.get(index) |w| {
@@ -255,7 +291,17 @@ pub struct Script {
     // An object that held `h` (a wrapper, a style, dataset or list
     // object) is gone: one js_ref less.
     fn unref(self: *mut Self, h: NodeId) {
-        let doc = &mut self.page.doc
+        self.unrefIn(0, h)
+    }
+
+    // `unref` for a node of the document of page `page_id` (0: the
+    // page's own), if that page is still there.
+    fn unrefIn(self: *mut Self, page_id: u32, h: NodeId) {
+        var page = self.page
+        if page_id != 0 {
+            page = findPage(self.page, page_id) orelse return
+        }
+        let doc = &mut page.doc
         if !doc.isLive(h) {
             return
         }
@@ -326,6 +372,11 @@ fn createScript(p: *mut Page) AllocError!*mut Script {
         page: p,
         it: interp,
         wrappers: IntMap(u32, Wrapper).init(alloc),
+        active: p,
+        foreign: List(Foreign).init(alloc),
+        windows: IntMap(u32, u32).init(alloc),
+        window_proto: js.NONE,
+        on_message: js.NONE,
         node_proto: js.NONE,
         element_proto: js.NONE,
         document_proto: js.NONE,
@@ -377,6 +428,12 @@ fn createScript(p: *mut Page) AllocError!*mut Script {
     }
     s.it.host = s
     s.it.max_depth = PAGE_DEPTH
+    // The pages of a tab share one virtual clock.
+    if rootPage(p).script |top| {
+        if !s.real {
+            s.now = top.now
+        }
+    }
     useStorage(alloc)
     setUp(s) catch |e| {
         match e {
@@ -409,6 +466,12 @@ pub fn destroyScript(s: *mut Script) {
     s.it.host = null
     s.it.deinit()
     s.wrappers.deinit()
+    for f in s.foreign.items() {
+        var m = f.wrappers
+        m.deinit()
+    }
+    s.foreign.deinit()
+    s.windows.deinit()
     for i in 0..s.lists.len() {
         let l = &mut s.lists.items()[i]
         if l.used {
@@ -435,8 +498,9 @@ pub fn destroyScript(s: *mut Script) {
 
 /// Runs the scripts of a page that was just loaded, in document order
 /// (external ones with `defer` or `async` last), then fires
-/// DOMContentLoaded and load. Timers stay pending for the event loop.
-pub fn runPageScripts(p: *mut Page) AllocError!void {
+/// DOMContentLoaded; `finishPageScripts` fires load once the frames
+/// loaded. Timers stay pending for the event loop.
+fn startPageScripts(p: *mut Page) AllocError!void {
     let s = try createScript(p)
     p.script = s
     var all = List(NodeId).init(p.alloc)
@@ -464,6 +528,11 @@ pub fn runPageScripts(p: *mut Page) AllocError!void {
         try runScriptElement(s, el)
     }
     try fireLoadEvent(s, p.doc.root, "DOMContentLoaded")
+}
+
+/// The page and its frames loaded: the load event at the window.
+fn finishPageScripts(p: *mut Page) AllocError!void {
+    let s = p.script orelse return
     s.ready = 2
     try fireLoadEvent(s, null, "load")
     try afterTask(s)
@@ -654,6 +723,7 @@ fn jsPush(s: *mut Script, v: Value) AllocError!void {
 }
 
 fn wrapFor(s: *mut Script, h: NodeId) AllocError!Value {
+    s.active = s.page
     return wrap(&mut s.it, h) catch return AllocError.OutOfMemory
 }
 
@@ -871,33 +941,87 @@ fn afterTask(s: *mut Script) AllocError!void {
     p.title = t
 }
 
-/// Runs the timers that are due (and their microtasks); true if any
-/// ran.
+/// Runs the timers that are due (and their microtasks), of the page and
+/// of its frames; true if any ran.
 pub fn runDueTimers(p: *mut Page) AllocError!bool {
-    let s = p.script orelse return false
-    tick(s)
-    var ran: usize = 0
-    while earliest(s, s.now) |i| {
-        try runTimer(s, i)
-        ran += 1
-        if ran >= MAX_TASKS {
-            break
-        }
+    var ran = false
+    if p.script |s| {
         tick(s)
+        var n: usize = 0
+        while earliest(s, s.now) |i| {
+            try runTimer(s, i)
+            n += 1
+            if n >= MAX_TASKS {
+                break
+            }
+            tick(s)
+        }
+        try afterTask(s)
+        ran = n > 0
     }
-    try afterTask(s)
-    return ran > 0
+    var k: usize = 0
+    while k < p.frames.len() {
+        if try runDueTimers(p.frames.items()[k].page) {
+            ran = true
+        }
+        k += 1
+    }
+    return ran
 }
 
-/// Runs the first timer due before `deadline` (ms on the page's clock),
-/// moving the virtual clock to it. False when there is none.
+// The timer of the page `p` or of its frames that is due first, and in
+// how many ms (negative: late).
+struct NextTimer {
+    script: *mut Script
+    index: usize
+    wait: f64
+}
+
+fn nextTimer(p: *mut Page, limit: f64) ?NextTimer {
+    var best: ?NextTimer = null
+    if p.script |s| {
+        tick(s)
+        if earliest(s, s.now + limit) |i| {
+            best = NextTimer { script: s, index: i, wait: s.timers.items()[i].due - s.now }
+        }
+    }
+    for f in p.frames.items() {
+        if nextTimer(f.page, limit) |n| {
+            if best |b| {
+                if n.wait < b.wait {
+                    best = n
+                }
+            } else {
+                best = n
+            }
+        }
+    }
+    return best
+}
+
+/// Runs the first timer (of the page or of its frames) due before
+/// `deadline` (ms on the page's clock), moving the virtual clock to it.
+/// False when there is none.
 pub fn runNextTimer(p: *mut Page, deadline: f64) AllocError!bool {
-    let s = p.script orelse return false
-    tick(s)
-    let i = earliest(s, deadline) orelse return false
-    try runTimer(s, i)
-    try afterTask(s)
+    let n = nextTimer(p, deadline - pageClock(p)) orelse return false
+    try runTimer(n.script, n.index)
+    try afterTask(n.script)
+    if !n.script.real {
+        syncClock(p, n.script.now)
+    }
     return true
+}
+
+// Moves the virtual clocks of `p` and its frames forward to `t`.
+fn syncClock(p: *mut Page, t: f64) {
+    if p.script |s| {
+        if !s.real && t > s.now {
+            s.now = t
+        }
+    }
+    for f in p.frames.items() {
+        syncClock(f.page, t)
+    }
 }
 
 /// The page's clock, in ms since it started.
@@ -909,14 +1033,10 @@ pub fn pageClock(p: *mut Page) f64 {
     return 0.0
 }
 
-/// Moves the virtual clock forward to `t` (after the timers before it
-/// ran).
+/// Moves the virtual clock (of the page and its frames) forward to `t`
+/// (after the timers before it ran).
 pub fn setPageClock(p: *mut Page, t: f64) {
-    if p.script |s| {
-        if !s.real && t > s.now {
-            s.now = t
-        }
-    }
+    syncClock(p, t)
 }
 
 /// Advances the virtual clock by `ms`, running the timers due on the way.
@@ -942,14 +1062,11 @@ pub fn runUntilIdle(p: *mut Page, max_ms: f64) AllocError!void {
 /// Milliseconds until the next timer is due (0 when one is due); null
 /// when there is none.
 pub fn msUntilNextTimer(p: *mut Page) ?f64 {
-    let s = p.script orelse return null
-    tick(s)
-    let i = earliest(s, 1.0e300) orelse return null
-    let d = s.timers.items()[i].due - s.now
-    if d < 0.0 {
+    let n = nextTimer(p, 1.0e300) orelse return null
+    if n.wait < 0.0 {
         return 0.0
     }
-    return d
+    return n.wait
 }
 
 // ---- what the front ends call
@@ -963,9 +1080,25 @@ pub fn hasScripts(p: *Page) bool {
 /// the last layout, the page needs styling and layout again.
 pub fn domVersion(p: *Page) u64 {
     if p.script |s| {
-        return s.version
+        return s.version + p.mutations
     }
-    return 0
+    return p.mutations
+}
+
+/// `domVersion` of the page and of the pages of its frames: when it
+/// moved, something in the tab needs a layout again (also when a frame's
+/// scripts asked for a navigation, which the next layout follows).
+pub fn treeVersion(p: *Page) u64 {
+    var v = domVersion(p)
+    for f in p.frames.items() {
+        v += treeVersion(f.page)
+        if f.page.script |s| {
+            if s.nav_kind != NavKind.None {
+                v += 1
+            }
+        }
+    }
+    return v
 }
 
 /// The size of the viewport, for innerWidth and innerHeight.
@@ -1081,17 +1214,21 @@ pub fn scriptFocus(p: *mut Page) ?NodeId {
     return null
 }
 
-/// Moves the console messages (oldest first) into `out`, as copies in
-/// `tmp`.
+/// Moves the console messages (oldest first) of the page, then of its
+/// frames, into `out`, as copies in `tmp`.
 pub fn takeConsole(p: *mut Page, tmp: Allocator, out: *mut List([]u8)) AllocError!void {
-    let s = p.script orelse return
-    for line in s.console.items() {
-        let copy = try tmp.alloc(0 as u8, line.len)
-        std.mem.copy(copy, line)
-        try out.append(copy)
-        s.alloc.free(line)
+    if p.script |s| {
+        for line in s.console.items() {
+            let copy = try tmp.alloc(0 as u8, line.len)
+            std.mem.copy(copy, line)
+            try out.append(copy)
+            s.alloc.free(line)
+        }
+        s.console.clear()
     }
-    s.console.clear()
+    for f in p.frames.items() {
+        try takeConsole(f.page, tmp, out)
+    }
 }
 
 /// Is `sel` a valid CSS selector list?

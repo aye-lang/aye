@@ -77,8 +77,10 @@ A line is `- role "name" [level=N] [eN] [states] value="..." -> href
   complementary, `form`, `section` with a name region, `article`, `p`
   paragraph, `blockquote`, `hr` separator, `details` group, `summary`
   button, `fieldset` group, `dialog`, `figure`, `progress` progressbar),
-  or the first word of its `role` attribute. `text` is a run of text.
-  Elements without a role (`div`, `span`, ...) are left out and their
+  or the first word of its `role` attribute. `text` is a run of text;
+  preformatted text (`pre`, `white-space: pre-line` ...) keeps its line
+  breaks: each line is a `text` node of its own (empty lines are left
+  out). Elements without a role (`div`, `span`, ...) are left out and their
   content joins their parent; `role=none` and `role=presentation` do the
   same. An element without a role that takes clicks or the focus
   (`onclick`, `tabindex`) is `generic`.
@@ -114,19 +116,28 @@ stay), `aria-hidden=true`, `input type=hidden`, `script`, `style`,
 header cell or border) is not a `table`: its rows and cells are left
 out and their content joins the parent.
 
-A page made of frames (`<frameset>`) shows each frame's document as a
-`frame` node, named by the document's title and followed by its
-address, with the document's content under it:
+The document of a frame (of a `<frameset>`, or an `iframe`) is a
+`frame` node, named by the iframe's `title`, else the document's title,
+and followed by its address, with the document's content under it:
 
 ```
 - frame "Menu" -> http://example.com/menu.htm
-  - link "Top" -> top.htm
+  - link "Top" [e1] -> top.htm
 - frame "Home" -> http://example.com/top.htm
-  - heading "Welcome" [level=1]
+  - heading "Welcome" [level=1] [e2]
 ```
 
-The content of a frame has no refs and no boxes: actions work on the
-top document only (`navigate` to a frame's address to act in it).
+The elements in a frame have refs and boxes (in the coordinates of the
+page) like the page's own, and actions on them work in the frame's
+document: its scripts get the events, a form submits from there. A link
+(or form) with a `target` loads in the frame of that name, `_parent` in
+the parent's frame, `_top` and `_blank` in the whole tab; without a
+target, a link in a frame loads in that frame. A document loaded in a
+frame keeps the page (the response has a `diff`, not a new `snapshot`),
+and the refs of the frame's old document no longer work. `press` acts
+in the frame of the element the agent focused last; `find` also
+searches the frames; `scroll` to an element in a frame scrolls the frame
+too.
 
 The JSON form (`--json`, `"format":"json"`) is an array of nodes
 `{"role", "name", "ref", "level", "states": [...], "value", "url",
@@ -149,8 +160,8 @@ snapshot) is read row by row: the cells of a row that are one paragraph
 each make one paragraph, joined by spaces. List items with nothing
 visible in them are left out. Whitespace collapses as in HTML; `<br>` is
 a hard break (`\` at the end of the line). Form controls are left out.
-Each frame of a frameset page comes after a heading `## Frame: URL`,
-without refs.
+The document of each frame (of a frameset, or an iframe) comes after a
+heading `## Frame: URL`.
 
 ## JSON lines
 
@@ -183,7 +194,7 @@ session goes on after an error.
 | `wait` | `selector` (CSS; at most `ms`, 5000 by default), or `ms` alone, or neither (until no timer is left, at most 5 s of page time) | `result` ("found ... after N ms", or "waited N ms"); an error after the time without a match |
 | `eval` | `expression`: a script; its last expression statement is the result | `result`: a string as it is, anything else as `console.log` shows it; an uncaught exception is the error |
 | `tabs`, `tab_new`, `tab_select`, `tab_close`, `user_context` | | only in a window ([A shared window](#a-shared-window)) |
-| `screenshot` | | not supported yet |
+| `screenshot` | `ref` (the element's border box), or `full` (bool: the whole document, at most 16384 px tall); neither: the viewport as scrolled | `result` (what it shows and its size), `url`, `title`, `width`, `height`, `png` (the PNG file in base64) |
 
 Scripts in a session (`todo.jsonl` in `browser/tests/agent/sessions/`):
 
@@ -237,6 +248,9 @@ What the actions do:
   the viewport shows.
 - **find**: at most 20 matches, each with 30 characters of context, the
   nearest element around it that has a ref, and `[offscreen]`.
+- **screenshot**: paints the page as the window would, with the system's
+  fonts (a shared window's own); the session's layout, refs and boxes
+  do not change. Without system fonts, text shows as boxes.
 
 ## MCP
 
@@ -255,7 +269,9 @@ per line. It supports protocol versions `2025-11-25`, `2025-06-18`,
 - `tools/call` returns `{"content": [{"type": "text", "text": ...}],
   "isError": bool}`. A tool that fails (no page, unknown ref, missing
   argument) is a result with `isError: true`; an unknown tool is the
-  JSON-RPC error -32602.
+  JSON-RPC error -32602. `browser_screenshot` puts an image block
+  (`{"type": "image", "data": BASE64, "mimeType": "image/png"}`) before
+  the text.
 - Other methods are -32601; invalid JSON is -32700; a message that is
   not an object (batches included) is -32600.
 
@@ -273,6 +289,7 @@ per line. It supports protocol versions `2025-11-25`, `2025-06-18`,
 | `browser_find` | `text` | the matches |
 | `browser_wait` | `selector`, `ms` | as `wait` |
 | `browser_eval` | `expression` | the value, as `eval` |
+| `browser_screenshot` | `ref`, `full` | the image, then what it shows, `URL:`, `Title:` |
 
 A session:
 

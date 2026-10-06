@@ -438,7 +438,25 @@ fn agentCommand(s: *mut Session, tmp: Allocator, doc: *mut Json, req: usize, cmd
         let o = try findText(s, tmp, needle)
         return outcomeFields(s, tmp, o, w)
     }
-    if text.eql(cmd, "screenshot") || text.eql(cmd, "tabs") {
+    if text.eql(cmd, "screenshot") {
+        let shot = try screenshotOf(s, tmp, doc, req)
+        if !shot.ok {
+            return failField(w, tmp, shot.message)
+        }
+        try w.key("ok")
+        try w.boolean(true)
+        try w.key("result")
+        try w.string(shot.message)
+        try pageFields(s, tmp, w)
+        try w.key("width")
+        try w.int(shot.width as i64)
+        try w.key("height")
+        try w.int(shot.height as i64)
+        try w.key("png")
+        try w.string(shot.png)
+        return
+    }
+    if text.eql(cmd, "tabs") {
         return failField(w, tmp, try concat(tmp, "\"", cmd, "\" is not supported yet"))
     }
     var why = text.Builder.init(tmp)
@@ -451,6 +469,18 @@ fn agentCommand(s: *mut Session, tmp: Allocator, doc: *mut Json, req: usize, cmd
         return failField(w, tmp, why.bytes())
     }
     return failField(w, tmp, try concat(tmp, "unknown command \"", cmd, "\""))
+}
+
+// The screenshot a request (or tool call) with the arguments in object
+// `args` asks for: `ref`, `full`.
+fn screenshotOf(s: *mut Session, tmp: Allocator, doc: *mut Json, args: ?usize) AllocError!Shot {
+    var ref: []u8 = ""
+    var full = false
+    if args |o| {
+        ref = doc.getStr(o, "ref") orelse ""
+        full = doc.getBool(o, "full") orelse false
+    }
+    return takeScreenshot(s, tmp, ref, full)
 }
 
 fn outcomeFields(s: *mut Session, tmp: Allocator, o: Outcome, w: *mut Writer) !void {
@@ -601,6 +631,10 @@ fn mcpMessage(s: *mut Session, tmp: Allocator, line: []u8, out: *mut text.Builde
                 args = null
             }
         }
+        if text.eql(name, "browser_screenshot") && refusal(s, "screenshot").len == 0 {
+            try announce(s, tmp, &mut doc, args, "screenshot")
+            return screenshotResult(s, tmp, &mut doc, args, id, &mut w)
+        }
         var result = text.Builder.init(tmp)
         let ok = try callTool(s, tmp, &mut doc, name[8..], args, id, &mut result)
         if s.later {
@@ -623,6 +657,43 @@ fn mcpMessage(s: *mut Session, tmp: Allocator, line: []u8, out: *mut text.Builde
         return w.endObject()
     }
     return rpcError(&mut w, id, -32601, try concat(tmp, "method not found: ", method, ""))
+}
+
+// The result of `browser_screenshot`: an image content block (PNG) and
+// a text block saying what it shows, or the failure as text.
+fn screenshotResult(s: *mut Session, tmp: Allocator, doc: *mut Json, args: ?usize, id: []u8, w: *mut Writer) AllocError!void {
+    let shot = try screenshotOf(s, tmp, doc, args)
+    try rpcStart(w, id)
+    try w.beginObject()
+    try w.key("content")
+    try w.beginArray()
+    if shot.ok {
+        try w.beginObject()
+        try w.key("type")
+        try w.string("image")
+        try w.key("data")
+        try w.string(shot.png)
+        try w.key("mimeType")
+        try w.string("image/png")
+        try w.endObject()
+    }
+    var t = text.Builder.init(tmp)
+    try t.append(shot.message)
+    if shot.ok {
+        try t.append("\n\n")
+        try pageHeader(s, tmp, &mut t)
+    }
+    try w.beginObject()
+    try w.key("type")
+    try w.string("text")
+    try w.key("text")
+    try w.string(t.bytes())
+    try w.endObject()
+    try w.endArray()
+    try w.key("isError")
+    try w.boolean(!shot.ok)
+    try w.endObject()
+    return w.endObject()
 }
 
 // `{"jsonrpc":"2.0","id":ID,"result":` (the caller writes the result and
@@ -652,7 +723,7 @@ fn rpcError(w: *mut Writer, id: []u8, code: i64, message: []u8) AllocError!void 
     try w.endObject()
 }
 
-let TOOLS = "browser_navigate browser_back browser_forward browser_reload browser_snapshot browser_read browser_click browser_type browser_select browser_press browser_scroll browser_find browser_wait browser_eval"
+let TOOLS = "browser_navigate browser_back browser_forward browser_reload browser_snapshot browser_read browser_click browser_type browser_select browser_press browser_scroll browser_find browser_wait browser_eval browser_screenshot"
 
 let WINDOW_TOOLS = "browser_tabs browser_tab_new browser_tab_select browser_tab_close browser_user_context"
 
@@ -808,6 +879,10 @@ fn toolList(w: *mut Writer, shared: bool) AllocError!void {
     try toolStart(w, "browser_eval", "Evaluate JavaScript", "Run JavaScript in the page and return the value of its last expression (strings as they are, other values as console.log shows them).")
     try toolProp(w, "expression", "string", "The script; its last expression statement is the result.")
     try toolEnd(w, "expression", false)
+    try toolStart(w, "browser_screenshot", "Screenshot", "A PNG image of the page: the viewport as scrolled, the whole page (full), or one element (ref).")
+    try toolProp(w, "ref", "string", "The ref of an element: the image shows its box only.")
+    try toolProp(w, "full", "boolean", "The whole page instead of the viewport.")
+    try toolEnd(w, "", true)
     if shared {
         try windowTools(w)
     }

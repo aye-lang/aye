@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<!-- The iframe of jsdom/iframes.html: talks to its parent. -->
+<title>Child</title>
+<p id="msg">Child text</p>
+<script>
+console.log('child: parent === top', parent === top, '| window === top', window === top, '| name', window.name);
+console.log('child: frameElement', frameElement.id, '| parent title', parent.document.title, '| parent.frames[0] === window', parent.frames[0] === window);
+onmessage = e => {
+  console.log('child: message', JSON.stringify(e.data), '| from parent', e.source === parent, '| origin', e.origin);
+  e.source.postMessage({ reply: e.data.n + 1 }, '*');
+};
+addEventListener('load', () => console.log('child: load'));
+setTimeout(() => console.log('child: later the text is', document.getElementById('msg').textContent), 50);
+</script>

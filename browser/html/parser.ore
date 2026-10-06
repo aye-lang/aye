@@ -5,7 +5,10 @@
 // adoption agency algorithm. Text and elements misplaced in a table
 // (outside its cells) are foster-parented: they go before the table. The
 // contents of a `template` go into an inert fragment out of the document
-// (`Document.templateContent`), parsed like body content. The doctype
+// (`Document.templateContent`), parsed like body content; a document's
+// declarative shadow roots (`<template shadowrootmode=open|closed>`
+// right in an element that may host one) become the shadow root of that
+// element instead, without the template. The doctype
 // decides quirks mode (`Document.quirks`; there a `table` does not close
 // an open `p`). A `frameset` takes the place of the body (before the body
 // has content); inside it only `frameset`, `frame` and `noframes` count.
@@ -63,6 +66,12 @@ pub fn isIn(name: []u8, set: []u8) bool {
 
 /// Parses `src` (UTF-8) into a new document; free it with `deinit`.
 pub fn parse(alloc: Allocator, src: []u8) AllocError!Document {
+    return parseWith(alloc, src, true)
+}
+
+/// Like `parse`; without `shadow_roots`, declarative shadow roots stay
+/// ordinary templates (for parsing fragments: `innerHTML`).
+pub fn parseWith(alloc: Allocator, src: []u8, shadow_roots: bool) AllocError!Document {
     let input = try normalize(alloc, src)
     defer alloc.free(input)
     var doc = try Document.init(alloc)
@@ -80,6 +89,7 @@ pub fn parse(alloc: Allocator, src: []u8) AllocError!Document {
         skip_newline: false,
         templates: 0,
         frameset_ok: true,
+        shadow_roots: shadow_roots,
     }
     defer tb.deinit()
     var tokens = Tokenizer.init(alloc, input)
@@ -160,6 +170,8 @@ struct TreeBuilder {
     // A `frameset` may still replace the body: it has no text and none
     // of the elements that make it a page (WHATWG's "frameset-ok").
     frameset_ok: bool
+    // Declarative shadow roots attach (document parsing).
+    shadow_roots: bool
 
     fn deinit(self: *mut Self) {
         self.open.deinit()
@@ -1342,10 +1354,49 @@ struct TreeBuilder {
     // `<template>`: the element where it belongs, and its inert fragment
     // as the current node, until `</template>`.
     fn startTemplate(self: *mut Self, attrs: []Attr) AllocError!NodeId {
+        if self.shadowMode(attrs) |closed| {
+            return self.startShadowRoot(attrs, closed)
+        }
         let t = try self.insert("template", attrs)
         try self.pushMarker()
         let frag = try self.doc.createTemplateContent(t)
         try self.open.append(frag)
+        self.templates += 1
+        return t
+    }
+
+    // Is `<template attrs>` a declarative shadow root here: does it have
+    // a `shadowrootmode` (true for "closed") while the current node may
+    // host a shadow root and has none?
+    fn shadowMode(self: *Self, attrs: []Attr) ?bool {
+        if !self.shadow_roots {
+            return null
+        }
+        var closed = false
+        var found = false
+        for a in attrs {
+            if text.eql(a.name, "shadowrootmode") {
+                found = text.eqlIgnoreCase(a.value, "open") || text.eqlIgnoreCase(a.value, "closed")
+                closed = text.eqlIgnoreCase(a.value, "closed")
+            }
+        }
+        let host = self.current()
+        if !found || !dom.canHostShadow(self.doc, host) || self.doc.node(host).shadow != null {
+            return null
+        }
+        return closed
+    }
+
+    // A declarative shadow root: the template is only on the stack (not
+    // in the tree), and the new shadow root of the current node takes its
+    // contents, until `</template>`.
+    fn startShadowRoot(self: *mut Self, attrs: []Attr, closed: bool) AllocError!NodeId {
+        let host = self.current()
+        let t = try self.doc.createElement("template", attrs)
+        try self.open.append(t)
+        try self.pushMarker()
+        let root = try dom.attachShadow(self.doc, host, closed)
+        try self.open.append(root)
         self.templates += 1
         return t
     }

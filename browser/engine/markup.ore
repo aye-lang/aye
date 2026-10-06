@@ -137,7 +137,7 @@ fn parseFragment(p: *mut Page, context: []u8, src: []u8, out: *mut List(NodeId))
         try b.appendByte('>')
     }
     try b.append(src)
-    var tmp = try html.parse(p.alloc, b.bytes())
+    var tmp = try html.parseWith(p.alloc, b.bytes(), false)
     defer tmp.deinit()
     var box: ?NodeId = null
     if tmp.documentElement() |root| {

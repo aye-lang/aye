@@ -13,8 +13,9 @@
 //           content: "* "
 //
 // An element's `::before` and `::after` follow its own values (with the
-// values that differ from the element's). Text, comments and the
-// doctype are left out.
+// values that differ from the element's), and a shadow host's shadow
+// tree comes before its children, under a `#shadow-root (open)` line.
+// Text, comments and the doctype are left out.
 
 import css
 import dom
@@ -73,6 +74,13 @@ fn styleNode(doc: *Document, styles: *css.Styles, h: NodeId, depth: usize, out: 
             }
         }
         inner = depth + 1
+        if n.shadow |root| {
+            try indent(out, inner)
+            try out.append("#shadow-root (")
+            try out.append(doc.node(root).data)
+            try out.append(")\n")
+            try styleNode(doc, styles, root, inner + 1, out)
+        }
     } else if n.kind != Kind.Document {
         return
     }

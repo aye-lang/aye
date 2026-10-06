@@ -1,0 +1,16 @@
+- heading "Shop" [level=1] [e1]
+- frame "Login" -> file://$ROOT/browser/tests/frames/iframe_form.html
+  - form
+    - textbox "User" [e2]
+    - button "Sign in" [e3]
+- frame "Links" -> file://$ROOT/browser/tests/frames/iframe_links.html
+  - list
+    - listitem
+      - link "Here" [e4] -> iframe_result.html
+    - listitem
+      - link "In the login frame" [e5] -> iframe_result.html?user=bob
+    - listitem
+      - link "The whole tab" [e6] -> ../agent/links.html
+- frame -> about:srcdoc
+  - paragraph: Inline srcdoc text.
+- paragraph: After the frames.

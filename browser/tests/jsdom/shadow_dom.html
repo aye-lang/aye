@@ -63,4 +63,5 @@ document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
 sheet.insertRule('em { color: red }');
 log('adopted', root.adoptedStyleSheets.length, root.adoptedStyleSheets[0] === sheet, document.adoptedStyleSheets.length);
 try { root.adoptedStyleSheets = ['x']; } catch (e) { log('adopt error', e.name); }
+log('computed', getComputedStyle(root.querySelector('header')).color, getComputedStyle(document.querySelector('#host em')).color, getComputedStyle(document.getElementById('t')).color);
 </script>

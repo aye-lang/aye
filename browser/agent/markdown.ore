@@ -8,8 +8,8 @@
 // blocks, block quotes, tables as GFM tables, images `![alt](src)` and
 // rules. URLs are absolute. Whitespace collapses as in HTML; form
 // controls, scripts and what is not rendered are left out. Text is not
-// escaped, except `|` in table cells. The document of a `frame` follows
-// a heading `## Frame: URL` (links in it without refs).
+// escaped, except `|` in table cells. The document of a `frame` or an
+// `iframe` follows a heading `## Frame: URL` (its links have refs too).
 
 import css
 import dom
@@ -77,7 +77,7 @@ fn contentRoot(p: *mut Page) NodeId {
         let n = p.doc.node(h)
         if n.kind == Kind.Element {
             if !rendered(p, h) {
-                cur = p.doc.followingSkip(h, p.doc.root)
+                cur = dom.flatFollowingSkip(&p.doc, h, p.doc.root)
                 continue
             }
             if text.eql(n.name, "main") || attrIs(p, h, "role", "main") {
@@ -90,7 +90,7 @@ fn contentRoot(p: *mut Page) NodeId {
                 body = h
             }
         }
-        cur = p.doc.following(h, p.doc.root)
+        cur = dom.flatFollowing(&p.doc, h, p.doc.root)
     }
     if article |a| {
         return a
@@ -101,8 +101,12 @@ fn contentRoot(p: *mut Page) NodeId {
     return p.doc.root
 }
 
-// Is `el` laid out as a block (or a list item, a table part, ...)?
+// Is `el` laid out as a block (or a list item, a table part, ...)? An
+// iframe that shows a document is one here.
 fn mdBlock(md: *Md, el: NodeId) bool {
+    if md.page.doc.isElement(el, "iframe") && engine.framePage(md.page, el) != null {
+        return true
+    }
     return isBlockLevel(md.page, el)
 }
 
@@ -110,24 +114,40 @@ fn mdBlock(md: *Md, el: NodeId) bool {
 /// paragraphs, block children their own blocks.
 fn mdContainer(md: *mut Md, h: NodeId, bl: *mut Blocks) AllocError!void {
     var inl = text.Builder.init(md.alloc)
-    var cur = md.page.doc.firstChild(h)
+    try mdContainerChildren(md, h, &mut inl, bl)
+    try flushParagraph(md, &mut inl, bl)
+}
+
+// The children of `h` for `mdContainer`, with the inline content so far
+// in `inl`; those of a `display: contents` child (a slot) take its place.
+fn mdContainerChildren(md: *mut Md, h: NodeId, inl: *mut text.Builder, bl: *mut Blocks) AllocError!void {
+    var cur = dom.flatFirstChild(&md.page.doc, h)
     while cur |c| {
         let n = md.page.doc.node(c).*
         if n.kind == Kind.Text {
             if textVisible(md.page, c) {
-                try appendCollapsed(&mut inl, n.data)
+                try appendCollapsed(inl, n.data)
             }
         } else if n.kind == Kind.Element && rendered(md.page, c) {
-            if mdBlock(md, c) {
-                try flushParagraph(md, &mut inl, bl)
+            if isContents(md.page, c) {
+                try mdContainerChildren(md, c, inl, bl)
+            } else if mdBlock(md, c) {
+                try flushParagraph(md, inl, bl)
                 try mdBlockElement(md, c, bl)
             } else {
-                try mdInline(md, c, &mut inl)
+                try mdInline(md, c, inl)
             }
         }
-        cur = md.page.doc.nextSibling(c)
+        cur = dom.flatNextSibling(&md.page.doc, c)
     }
-    try flushParagraph(md, &mut inl, bl)
+}
+
+// Is `el` displayed as its children only (`display: contents`)?
+fn isContents(p: *Page, el: NodeId) bool {
+    if p.styling.?.styles.get(el) |style| {
+        return layout.isKeyword(style[css.DISPLAY], "contents")
+    }
+    return false
 }
 
 fn flushParagraph(md: *mut Md, inl: *mut text.Builder, bl: *mut Blocks) AllocError!void {
@@ -206,7 +226,7 @@ fn mdBlockElement(md: *mut Md, el: NodeId, bl: *mut Blocks) AllocError!void {
     if text.eql(name, "pre") {
         return mdPre(md, el, bl)
     }
-    if text.eql(name, "frame") {
+    if text.eql(name, "frame") || text.eql(name, "iframe") {
         return mdFrame(md, el, bl)
     }
     if text.eql(name, "blockquote") {
@@ -231,20 +251,21 @@ fn mdBlockElement(md: *mut Md, el: NodeId, bl: *mut Blocks) AllocError!void {
     try mdContainer(md, el, bl)
 }
 
-/// The document of the `frame` element `el` (if it was loaded and laid
-/// out): a heading with its address, then its main content.
+/// The document of the `frame` or `iframe` element `el` (if it was
+/// loaded and laid out): a heading with its address, then its main
+/// content.
 fn mdFrame(md: *mut Md, el: NodeId, bl: *mut Blocks) AllocError!void {
     let child = engine.framePage(md.page, el) orelse {
         return
     }
-    if child.styling == null {
+    if child.styling == null || styleHidden(md.page, el) {
         return
     }
     var head = text.Builder.init(md.alloc)
     try head.append("## Frame: ")
     try head.append(child.url.href)
     try emitBlock(bl, head.bytes())
-    var sub = Md { alloc: md.alloc, session: md.session, page: child, refs: false }
+    var sub = Md { alloc: md.alloc, session: md.session, page: child, refs: md.refs }
     try mdContainer(&mut sub, contentRoot(child), bl)
 }
 
@@ -289,10 +310,10 @@ fn mdList(md: *mut Md, el: NodeId, ordered: bool, bl: *mut Blocks) AllocError!vo
             number = text.parseInt(text.trim(v)) catch 1
         }
     }
-    var cur = md.page.doc.firstChild(el)
+    var cur = dom.flatFirstChild(&md.page.doc, el)
     while cur |c| {
         let n = md.page.doc.node(c).*
-        cur = md.page.doc.nextSibling(c)
+        cur = dom.flatNextSibling(&md.page.doc, c)
         if n.kind != Kind.Element || !rendered(md.page, c) {
             continue
         }
@@ -394,7 +415,7 @@ fn languageOf(md: *Md, el: NodeId) []u8 {
 /// for `<br>` and around a block inside (code viewers put each line in
 /// a `div`), what is not rendered left out.
 fn preText(md: *mut Md, h: NodeId, out: *mut text.Builder) AllocError!void {
-    var cur = md.page.doc.firstChild(h)
+    var cur = dom.flatFirstChild(&md.page.doc, h)
     while cur |c| {
         let n = md.page.doc.node(c).*
         if n.kind == Kind.Text {
@@ -412,7 +433,7 @@ fn preText(md: *mut Md, h: NodeId, out: *mut text.Builder) AllocError!void {
                 try preText(md, c, out)
             }
         }
-        cur = md.page.doc.nextSibling(c)
+        cur = dom.flatNextSibling(&md.page.doc, c)
     }
 }
 
@@ -431,19 +452,19 @@ fn mdTable(md: *mut Md, el: NodeId, bl: *mut Blocks) AllocError!void {
         return mdLayoutTable(md, el, bl)
     }
     var rows = List(NodeId).init(md.alloc)
-    var cur = md.page.doc.firstChild(el)
+    var cur = dom.flatFirstChild(&md.page.doc, el)
     while cur |c| {
         let n = md.page.doc.node(c)
         if n.kind == Kind.Element && rendered(md.page, c) {
             if text.eql(n.name, "tr") {
                 try rows.append(c)
             } else if html.isIn(n.name, "thead tbody tfoot") {
-                var r = n.first_child
+                var r = dom.flatFirstChild(&md.page.doc, c)
                 while r |row| {
                     if md.page.doc.isElement(row, "tr") && rendered(md.page, row) {
                         try rows.append(row)
                     }
-                    r = md.page.doc.nextSibling(row)
+                    r = dom.flatNextSibling(&md.page.doc, row)
                 }
             } else if text.eql(n.name, "caption") {
                 var inl = text.Builder.init(md.alloc)
@@ -458,7 +479,7 @@ fn mdTable(md: *mut Md, el: NodeId, bl: *mut Blocks) AllocError!void {
                 }
             }
         }
-        cur = md.page.doc.nextSibling(c)
+        cur = dom.flatNextSibling(&md.page.doc, c)
     }
     if rows.len() == 0 {
         return
@@ -468,7 +489,7 @@ fn mdTable(md: *mut Md, el: NodeId, bl: *mut Blocks) AllocError!void {
     var columns: usize = 0
     for row in rows.items() {
         var line = List([]u8).init(md.alloc)
-        var c = md.page.doc.firstChild(row)
+        var c = dom.flatFirstChild(&md.page.doc, row)
         while c |cell| {
             if (md.page.doc.isElement(cell, "td") || md.page.doc.isElement(cell, "th")) && rendered(md.page, cell) {
                 var inl = text.Builder.init(md.alloc)
@@ -484,7 +505,7 @@ fn mdTable(md: *mut Md, el: NodeId, bl: *mut Blocks) AllocError!void {
                     k += 1
                 }
             }
-            c = md.page.doc.nextSibling(cell)
+            c = dom.flatNextSibling(&md.page.doc, cell)
         }
         if line.len() > columns {
             columns = line.len()
@@ -523,29 +544,29 @@ fn mdTable(md: *mut Md, el: NodeId, bl: *mut Blocks) AllocError!void {
 /// paragraphs) gives them as they are.
 fn mdLayoutTable(md: *mut Md, el: NodeId, bl: *mut Blocks) AllocError!void {
     var rows = List(NodeId).init(md.alloc)
-    var cur = md.page.doc.firstChild(el)
+    var cur = dom.flatFirstChild(&md.page.doc, el)
     while cur |c| {
         let n = md.page.doc.node(c)
         if n.kind == Kind.Element && rendered(md.page, c) {
             if text.eql(n.name, "tr") {
                 try rows.append(c)
             } else if html.isIn(n.name, "thead tbody tfoot") {
-                var r = n.first_child
+                var r = dom.flatFirstChild(&md.page.doc, c)
                 while r |row| {
                     if md.page.doc.isElement(row, "tr") && rendered(md.page, row) {
                         try rows.append(row)
                     }
-                    r = md.page.doc.nextSibling(row)
+                    r = dom.flatNextSibling(&md.page.doc, row)
                 }
             } else if text.eql(n.name, "caption") {
                 try mdContainer(md, c, bl)
             }
         }
-        cur = md.page.doc.nextSibling(c)
+        cur = dom.flatNextSibling(&md.page.doc, c)
     }
     var line = text.Builder.init(md.alloc)
     for row in rows.items() {
-        var c = md.page.doc.firstChild(row)
+        var c = dom.flatFirstChild(&md.page.doc, row)
         while c |cell| {
             if (md.page.doc.isElement(cell, "td") || md.page.doc.isElement(cell, "th")) && rendered(md.page, cell) {
                 var inner = newBlocks(md.alloc, "\n\n")
@@ -553,7 +574,7 @@ fn mdLayoutTable(md: *mut Md, el: NodeId, bl: *mut Blocks) AllocError!void {
                 if inner.count == 1 && inner.paras == 1 {
                     if spacesOnly(inner.out.bytes()) {
                         // A spacer cell (`&nbsp;`, an ideographic space).
-                        c = md.page.doc.nextSibling(cell)
+                        c = dom.flatNextSibling(&md.page.doc, cell)
                         continue
                     }
                     if line.len() > 0 {
@@ -567,7 +588,7 @@ fn mdLayoutTable(md: *mut Md, el: NodeId, bl: *mut Blocks) AllocError!void {
                     bl.paras += inner.paras
                 }
             }
-            c = md.page.doc.nextSibling(cell)
+            c = dom.flatNextSibling(&md.page.doc, cell)
         }
         try emitParagraph(bl, &mut line)
     }
@@ -616,7 +637,7 @@ fn cellText(alloc: Allocator, s: []u8) AllocError![]u8 {
 // ---- inline content
 
 fn mdInlineChildren(md: *mut Md, el: NodeId, inl: *mut text.Builder) AllocError!void {
-    var cur = md.page.doc.firstChild(el)
+    var cur = dom.flatFirstChild(&md.page.doc, el)
     while cur |c| {
         let n = md.page.doc.node(c).*
         if n.kind == Kind.Text {
@@ -634,7 +655,7 @@ fn mdInlineChildren(md: *mut Md, el: NodeId, inl: *mut text.Builder) AllocError!
                 try mdInline(md, c, inl)
             }
         }
-        cur = md.page.doc.nextSibling(c)
+        cur = dom.flatNextSibling(&md.page.doc, c)
     }
 }
 
@@ -671,7 +692,7 @@ fn mdInline(md: *mut Md, el: NodeId, inl: *mut text.Builder) AllocError!void {
                 try close.append(try absoluteHref(md.page, md.alloc, h))
                 try close.appendByte(')')
                 if md.refs {
-                    let r = try refFor(md.session, el)
+                    let r = try refFor(md.session, md.page, el)
                     try close.append(" [e")
                     try close.appendUint(r as u64)
                     try close.appendByte(']')

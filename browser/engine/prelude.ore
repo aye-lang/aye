@@ -169,7 +169,7 @@ pub let PRELUDE =
     \\
     \\// Inline handlers: `onclick` properties, and `onclick` attributes compiled
     \\// when first needed (again when the attribute changes).
-    \\const HANDLERS = 'abort blur change click close contextmenu dblclick error focus input invalid keydown keypress keyup load mousedown mouseenter mouseleave mousemove mouseout mouseover mouseup reset resize scroll select submit toggle wheel'.split(' ');
+    \\const HANDLERS = 'abort blur change click close contextmenu dblclick error focus input invalid keydown keypress keyup load message mousedown mouseenter mouseleave mousemove mouseout mouseover mouseup reset resize scroll select submit toggle wheel'.split(' ');
     \\function handlerTable(t) {
     \\  let m = t.__handlers;
     \\  if (!m) {
@@ -468,7 +468,7 @@ pub let PRELUDE =
     \\    return v === null ? '' : ak.resolve(v);
     \\  }, function (v) { this.setAttribute(name, String(v)); });
     \\}
-    \\for (const n of ['title', 'lang', 'dir', 'name', 'placeholder', 'alt', 'rel', 'target', 'role', 'method', 'accessKey']) reflect(n, n.toLowerCase());
+    \\for (const n of ['title', 'lang', 'dir', 'name', 'placeholder', 'alt', 'rel', 'target', 'role', 'method', 'accessKey', 'srcdoc']) reflect(n, n.toLowerCase());
     \\reflect('htmlFor', 'for');
     \\reflect('defaultValue', 'value');
     \\for (const n of ['hidden', 'disabled', 'required', 'multiple', 'autofocus', 'open']) reflectBool(n, n);
@@ -985,10 +985,10 @@ pub let PRELUDE =
     \\
     \\// ---- the document
     \\
-    \\getter(Document.prototype, 'defaultView', function () { return G; });
+    \\getter(Document.prototype, 'defaultView', function () { return ak.documentWindow(this); });
     \\getter(Document.prototype, 'location', function () { return location; }, function (v) { location.href = v; });
-    \\getter(Document.prototype, 'URL', function () { return ak.url(); });
-    \\getter(Document.prototype, 'documentURI', function () { return ak.url(); });
+    \\getter(Document.prototype, 'URL', function () { return ak.documentUrl(this); });
+    \\getter(Document.prototype, 'documentURI', function () { return ak.documentUrl(this); });
     \\getter(Document.prototype, 'visibilityState', function () { return 'visible'; });
     \\getter(Document.prototype, 'hidden', function () { return false; });
     \\getter(Document.prototype, 'cookie', function () { return ak.cookie(); }, function (v) { ak.setCookie(String(v)); });
@@ -1069,10 +1069,7 @@ pub let PRELUDE =
     \\
     \\hidden(G, 'window', G);
     \\hidden(G, 'self', G);
-    \\hidden(G, 'top', G);
-    \\hidden(G, 'parent', G);
     \\hidden(G, 'frames', G);
-    \\hidden(G, 'name', '');
     \\hidden(G, 'closed', false);
     \\hidden(G, 'devicePixelRatio', 1);
     \\getter(G, 'innerWidth', function () { return ak.viewport(0); });
@@ -1267,6 +1264,65 @@ pub let PRELUDE =
     \\hidden(G, 'alert', function (m) { ak.alert('alert', messageOf(m)); });
     \\hidden(G, 'confirm', function (m) { ak.alert('confirm', messageOf(m)); return false; });
     \\hidden(G, 'prompt', function (m) { ak.alert('prompt', messageOf(m)); return null; });
+    \\
+    \\// ---- frames and the windows of other pages (engine/windows.ore)
+    \\
+    \\getter(G, 'parent', function () { return ak.parentWindow() || G; });
+    \\getter(G, 'top', function () { return ak.topWindow() || G; });
+    \\getter(G, 'length', function () { return ak.frameCount(); });
+    \\for (let i = 0; i < 16; i++) getter(G, String(i), function () { return ak.frameWindow(i); });
+    \\getter(G, 'frameElement', function () { return ak.frameElement(); });
+    \\hidden(G, 'name', ak.windowName());
+    \\function cloneData(data) {
+    \\  if (data === undefined) return undefined;
+    \\  try {
+    \\    return JSON.stringify(data);
+    \\  } catch (e) {
+    \\    throw new DOMException("Failed to execute 'postMessage' on 'Window': " + (e && e.message), 'DataCloneError');
+    \\  }
+    \\}
+    \\function targetOrigin(o) {
+    \\  if (o !== null && typeof o === 'object') o = o.targetOrigin;
+    \\  return o === undefined ? '/' : String(o);
+    \\}
+    \\// A message from another page of the tab (window.postMessage to this
+    \\// window itself is below, with MessageChannel).
+    \\ak.setMessageHandler(function hostMessage(json, origin, source) {
+    \\  let data;
+    \\  if (json !== undefined) {
+    \\    try {
+    \\      data = JSON.parse(json);
+    \\    } catch (e) {
+    \\      data = null;
+    \\    }
+    \\  }
+    \\  const ev = new G.MessageEvent('message', { data, origin, source });
+    \\  ev.isTrusted = true;
+    \\  dispatch(G, ev);
+    \\});
+    \\const WindowP = {};
+    \\getter(WindowP, 'document', function () { return ak.winDocument(this); });
+    \\hidden(WindowP, 'postMessage', function postMessage(message, origin) { ak.postMessage(this, cloneData(message), targetOrigin(origin)); });
+    \\getter(WindowP, 'parent', function () { return ak.winParent(this); });
+    \\getter(WindowP, 'top', function () { return ak.winTop(this); });
+    \\for (const k of ['window', 'self', 'frames']) getter(WindowP, k, function () { return this; });
+    \\getter(WindowP, 'length', function () { return ak.winLength(this); });
+    \\getter(WindowP, 'closed', function () { return ak.winClosed(this); });
+    \\getter(WindowP, 'location', function () {
+    \\  const w = this;
+    \\  return {
+    \\    get href() { return ak.winHref(w); },
+    \\    set href(v) { ak.winNavigate(w, String(v)); },
+    \\    assign(v) { ak.winNavigate(w, String(v)); },
+    \\    replace(v) { ak.winNavigate(w, String(v)); },
+    \\    reload() { ak.winNavigate(w, ak.winHref(w)); },
+    \\    toString() { return ak.winHref(w); },
+    \\  };
+    \\}, function (v) { ak.winNavigate(this, String(v)); });
+    \\for (const k of ['focus', 'blur', 'close']) hidden(WindowP, k, function () {});
+    \\ak.setWindowProto(WindowP);
+    \\getter(HTMLP, 'contentWindow', function () { return /^i?frame$/.test(this.localName) ? ak.contentWindow(this) : undefined; });
+    \\getter(HTMLP, 'contentDocument', function () { return /^i?frame$/.test(this.localName) ? ak.contentDocument(this) : undefined; });
     \\
     \\// Timers: the event loop runs them (engine/script.ore).
     \\function callableOf(fn) {
