@@ -13,6 +13,10 @@ import std.text
 
 @link("pthread")
 
+// The POSIX threads API, declared from the system's `pthread.h` (an
+// attribute and a thread handle have the platform's own types).
+let pthread = @cimport("pthread.h")
+
 /// Runs the script in file `path`: console output goes to stdout, an
 /// uncaught exception prints `Uncaught <Name>: <message>` to stderr and
 /// gives status 1.
@@ -48,22 +52,17 @@ fn jobMain(arg: ?[*]u8) ?[*]u8 {
 /// runSource on a thread with a 1 GB stack (reserved, not committed).
 pub fn runOnBigStack(alloc: Allocator, src: []u8) i32 {
     var job = Job { alloc: alloc, src: src, status: 1 }
-    var attr = @zeroed([128]u8)
-    var thread = @zeroed([1]u64)
-    if pthread_attr_init(attr[..].ptr) != 0 || pthread_attr_setstacksize(attr[..].ptr, STACK_BYTES) != 0 {
+    var attr = @zeroed(pthread.pthread_attr_t)
+    var thread = @zeroed(pthread.pthread_t)
+    if pthread.pthread_attr_init(&mut attr) != 0 || pthread.pthread_attr_setstacksize(&mut attr, STACK_BYTES) != 0 {
         return runSource(alloc, src)
     }
-    if pthread_create(thread[..].ptr, attr[..].ptr, jobMain, @ptrCast([*]u8, &mut job)) != 0 {
+    if pthread.pthread_create(&mut thread, &attr, jobMain, @ptrCast([*]u8, &mut job)) != 0 {
         return runSource(alloc, src)
     }
-    pthread_join(thread[0], null)
+    pthread.pthread_join(thread, null)
     return job.status
 }
-
-extern fn pthread_attr_init(attr: [*]u8) i32
-extern fn pthread_attr_setstacksize(attr: [*]u8, size: usize) i32
-extern fn pthread_create(t: [*]u64, attr: [*]u8, f: fn(?[*]u8) ?[*]u8, arg: ?[*]u8) i32
-extern fn pthread_join(t: u64, ret: ?[*]u8) i32
 
 /// Runs a script's source in a new engine; returns the exit status.
 pub fn runSource(alloc: Allocator, src: []u8) i32 {
