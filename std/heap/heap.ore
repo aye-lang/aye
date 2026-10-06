@@ -1,7 +1,8 @@
 // std.heap: allocators. `General` and `Arena` are built into the compiler:
 //
 //     General.init() General               libc malloc/free; debug mode
-//                                          reports leaks and double frees
+//                                          reports leaks, double frees and
+//                                          writes after free
 //     Arena.init(backing: Allocator) Arena
 //     x.allocator() Allocator              (x must be a `var`)
 //     x.deinit()

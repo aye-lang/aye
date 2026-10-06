@@ -966,9 +966,12 @@ pub fn main() !void {
 
 - `std.heap.General.init()` is a general allocator (libc malloc). In debug
   mode `deinit()` prints `file:line:col: leak: N bytes allocated here were
-  never freed` for every allocation not freed, and a second free panics
-  (`double free`). Leaks do not change the exit status of a program (they
-  fail a test).
+  never freed` for every allocation not freed. Leaks do not change the exit
+  status of a program (they fail a test). Freed memory is filled with
+  `0xDD` bytes and held back (the last 32 MiB freed) before it is reused: a
+  second free of it panics (`double free`), and a write to it panics (`use
+  after free`, at the free) when it is reused or at `deinit`. Allocation
+  and free take constant time.
 - `std.heap.Arena.init(backing)` allocates from `backing` and frees
   everything at once with `deinit()`; its `destroy`/`free` do nothing.
 - `x.allocator()` gives the `Allocator` of a `General` or `Arena`; it and
@@ -984,7 +987,8 @@ pub fn main() !void {
   is freed (do not use it again); on `OutOfMemory` it is unchanged. It may
   move the elements: write `s = try alloc.resize(s, n, fill)`.
 - `AllocError` is `error AllocError { OutOfMemory }`.
-- Use-after-free is not detected. Prefer arenas for data with one lifetime.
+- Reads after free are not detected (they see `0xDD` bytes in debug mode).
+  Prefer arenas for data with one lifetime.
 - For a growable array use `std.list.List(T)`; for text, `std.text.Builder`.
 
 ## 10. Interfaces and dyn
@@ -1233,7 +1237,7 @@ std.mem.indexOf(s: []u8, b: u8) ?usize      the first index of the byte b
 ### std.heap
 
 ```
-General.init() General                     libc allocator; leak and double-free reports in debug mode
+General.init() General                     libc allocator; leak, double-free and use-after-free reports in debug mode
 General.allocator(self: *mut Self) Allocator
 General.deinit(self: *mut Self)            reports leaks (debug), frees everything
 Arena.init(backing: Allocator) Arena
@@ -1623,7 +1627,8 @@ pub fn main() !void {
   <reason>` to stderr and aborts (status 134). Reasons: `integer overflow`,
   `division by zero`, `index out of bounds: index I, len N`, `slice bounds
   out of range`, `integer cast out of range`, `shift amount out of range`,
-  `unwrap of null`, `reached unreachable code`, `double free ...`.
+  `unwrap of null`, `reached unreachable code`, `double free ...`, `use
+  after free ...`.
 - `fast` mode removes the checks: overflow wraps, out-of-bounds access is
   undefined behavior.
 - Struct fields, arrays and slices are laid out by the compiler; only an

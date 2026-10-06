@@ -31,6 +31,8 @@
 //!   `app.toml`, or none); `ore test app` runs its tests.
 //! - `ore run`, `ore build -o`, `ore check`, `ore test --filter` and `ore
 //!   test --module` are also run through the built binary.
+//! - `perf`: the debug build of `tests/cases/general_churn.ore` finishes
+//!   within 10 s (`General` allocates and frees in constant time).
 //! - `ore build --cflags -fsanitize=thread`: the M10 fan-out program runs
 //!   under ThreadSanitizer without a report (skipped where ThreadSanitizer
 //!   does not run).
@@ -442,6 +444,26 @@ fn cli_tsan(work: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// M9.7: `General` in debug mode allocates and frees in constant time:
+/// `tests/cases/general_churn.ore` (a million allocation and free pairs,
+/// and a recursion that allocates per call), built in debug mode, finishes
+/// within 10 s. Before M9.7 each free scanned every allocation so far.
+fn perf_general(work: &Path) -> Result<(), String> {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cases/general_churn.ore");
+    let c = driver::compile_to_c(&name(&src), &read(&src).unwrap(), Mode::Debug).map_err(|d| join(&d))?;
+    let exe = work.join("general_churn_perf");
+    driver::cc(&c, &exe, Mode::Debug)?;
+    // The first run of a new executable can be slow (macOS scans it).
+    let _ = output_within(&mut Command::new(&exe), 60);
+    let start = std::time::Instant::now();
+    let out = output_within(&mut Command::new(&exe), 10).ok_or("the debug build did not finish within 10 s")?;
+    if !out.status.success() {
+        return Err(format!("the debug build failed: {}", String::from_utf8_lossy(&out.stderr)));
+    }
+    println!("perf/General: {} ms", start.elapsed().as_millis());
+    Ok(())
+}
+
 /// The `ore check` CLI: exit code, stdout and stderr, text and `--json`.
 fn cli_check() -> Result<(), String> {
     let ok = "tests/cases/hello.ore";
@@ -562,6 +584,7 @@ fn main() {
         handles.push(("cli/ore check".to_string(), s.spawn(cli_check)));
         handles.push(("cli/ore build --cflags -fsanitize=thread".to_string(), s.spawn(move || cli_tsan(w))));
         handles.push(("cli/ore explain".to_string(), s.spawn(cli_explain)));
+        handles.push(("perf/General in debug mode".to_string(), s.spawn(move || perf_general(w))));
         handles.push(("cli/ore test --filter".to_string(), s.spawn(cli_test_filter)));
         handles.push(("cli/ore test --module".to_string(), s.spawn(cli_test_module)));
         handles.into_iter().map(|(n, h)| (n, h.join().unwrap())).collect()

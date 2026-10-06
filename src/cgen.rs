@@ -11,8 +11,8 @@
 //! `static`. Overflow, bounds and cast checks are emitted as calls to small
 //! inline helpers; `ORE_CHECKS` turns their checks off in `fast` mode.
 //! `ORE_TRACE` (debug mode) keeps the error return trace that is printed when
-//! `main` returns an error, and turns on the leak and double-free tracking of
-//! `General`.
+//! `main` returns an error, and turns on the leak, double-free and
+//! use-after-free checks of `General`.
 //!
 //! In test mode the C `main` runs the test whose index is its argument.
 //!
@@ -193,30 +193,63 @@ ORE_RT void ore_free_n(ore_Allocator a, void *p, size_t n, int line, int col) {
 }
 
 /* General: libc malloc/free. With `track` (debug mode, and the test
-   allocator) every allocation gets a record with its site. Freed memory is
-   kept until `deinit`, so addresses are not reused and every double free is
-   caught. */
-typedef struct ore_alloc_rec {
-    struct ore_alloc_rec *next;
-    void *p;
+   allocator) each block has a header before it: its allocator, size,
+   state, and where it was allocated and freed. Live blocks are in a
+   doubly linked list, oldest first, for the leak report. A freed block is
+   filled with ORE_POISON and kept in a FIFO quarantine of at most
+   ORE_QUARANTINE bytes before libc gets it back, so its address is not
+   reused soon: a second free of it panics, and when it leaves the
+   quarantine (or at `deinit`) a byte that is no longer ORE_POISON means it
+   was written after it was freed. Allocation and free take constant time. */
+#define ORE_LIVE 0x4f52454c49564521ull
+#define ORE_FREED 0x4f52454652454544ull
+#define ORE_POISON 0xdd
+#define ORE_QUARANTINE ((size_t)32 << 20)
+typedef struct __attribute__((aligned(16))) ore_alloc_hdr {
+    struct ore_alloc_hdr *prev, *next; /* the live list, or (next) the quarantine */
+    void *owner;
     size_t size;
-    int line, col, free_line, free_col; /* free_line 0: not freed */
-} ore_alloc_rec;
-typedef struct ore_General { ore_alloc_rec *head, *tail; bool track; } ore_General;
+    int line, col, free_line, free_col;
+    uint64_t state; /* ORE_LIVE or ORE_FREED */
+} ore_alloc_hdr;
+typedef struct ore_General {
+    ore_alloc_hdr *head, *tail;   /* live blocks, oldest first */
+    ore_alloc_hdr *qhead, *qtail; /* freed blocks, oldest first */
+    size_t qbytes;
+    bool track;
+} ore_General;
 ORE_RT void *ore_general_alloc(void *self, size_t size, size_t align, int line, int col) {
     ore_General *g = self;
     (void)align;
-    void *p = ore_rt_malloc(size ? size : 1);
-    if (!p || !g->track) return p;
-    ore_alloc_rec *r = ore_rt_malloc(sizeof *r);
-    if (!r) {
-        ore_rt_free(p);
-        return 0;
+    if (!g->track) return ore_rt_malloc(size ? size : 1);
+    if (size > SIZE_MAX - sizeof(ore_alloc_hdr)) return 0;
+    ore_alloc_hdr *h = ore_rt_malloc(sizeof *h + size);
+    if (!h) return 0;
+    *h = (ore_alloc_hdr){g->tail, 0, g, size, line, col, 0, 0, ORE_LIVE};
+    if (g->tail) g->tail->next = h; else g->head = h;
+    g->tail = h;
+    return h + 1;
+}
+/* Give a quarantined block back to libc, after checking that nothing wrote
+   to it since it was freed. */
+ORE_RT void ore_general_release(ore_alloc_hdr *h) {
+    const unsigned char *b = (const unsigned char *)(h + 1);
+    size_t i = 0;
+    for (; i + 8 <= h->size; i += 8) {
+        uint64_t w;
+        __builtin_memcpy(&w, b + i, 8);
+        if (w != 0xddddddddddddddddull) break;
     }
-    *r = (ore_alloc_rec){0, p, size, line, col, 0, 0};
-    if (g->tail) g->tail->next = r; else g->head = r;
-    g->tail = r;
-    return p;
+    for (; i < h->size; i++) {
+        if (b[i] != ORE_POISON) {
+            ore_rt_fflush(0);
+            ore_rt_dprintf(2, "%s:%d:%d: panic: use after free: memory allocated at %s:%d:%d and freed here was written after it was freed\n",
+                           ORE_FILE(h->free_line), ORE_LINE(h->free_line), h->free_col, ORE_FILE(h->line), ORE_LINE(h->line), h->col);
+            ore_rt_abort();
+        }
+    }
+    h->state = 0;
+    ore_rt_free(h);
 }
 ORE_RT void ore_general_free(void *self, void *p, int line, int col) {
     ore_General *g = self;
@@ -224,40 +257,57 @@ ORE_RT void ore_general_free(void *self, void *p, int line, int col) {
         ore_rt_free(p);
         return;
     }
-    for (ore_alloc_rec *r = g->head; r; r = r->next) {
-        if (r->p != p) continue;
-        if (r->free_line) {
-            ore_rt_fflush(0);
-            ore_rt_dprintf(2, "%s:%d:%d: panic: double free of memory allocated at %s:%d:%d and already freed at %s:%d:%d\n",
-                           ORE_FILE(line), ORE_LINE(line), col, ORE_FILE(r->line), ORE_LINE(r->line), r->col,
-                           ORE_FILE(r->free_line), ORE_LINE(r->free_line), r->free_col);
-            ore_rt_abort();
-        }
-        r->free_line = line;
-        r->free_col = col;
-        return;
+    ore_alloc_hdr *h = (ore_alloc_hdr *)p - 1;
+    if ((uintptr_t)p % 16 || h->owner != g || (h->state != ORE_LIVE && h->state != ORE_FREED)) {
+        ore_panic(line, col, "free of memory that this allocator did not allocate");
     }
-    ore_panic(line, col, "free of memory that this allocator did not allocate");
+    if (h->state == ORE_FREED) {
+        ore_rt_fflush(0);
+        ore_rt_dprintf(2, "%s:%d:%d: panic: double free of memory allocated at %s:%d:%d and already freed at %s:%d:%d\n",
+                       ORE_FILE(line), ORE_LINE(line), col, ORE_FILE(h->line), ORE_LINE(h->line), h->col,
+                       ORE_FILE(h->free_line), ORE_LINE(h->free_line), h->free_col);
+        ore_rt_abort();
+    }
+    if (h->prev) h->prev->next = h->next; else g->head = h->next;
+    if (h->next) h->next->prev = h->prev; else g->tail = h->prev;
+    h->state = ORE_FREED;
+    h->free_line = line;
+    h->free_col = col;
+    __builtin_memset(h + 1, ORE_POISON, h->size);
+    h->prev = h->next = 0;
+    if (g->qtail) g->qtail->next = h; else g->qhead = h;
+    g->qtail = h;
+    g->qbytes += sizeof *h + h->size;
+    while (g->qbytes > ORE_QUARANTINE) {
+        ore_alloc_hdr *old = g->qhead;
+        g->qhead = old->next;
+        if (!g->qhead) g->qtail = 0;
+        g->qbytes -= sizeof *old + old->size;
+        ore_general_release(old);
+    }
 }
 static __attribute__((unused)) const ore_alloc_vt ore_general_vt = {ore_general_alloc, ore_general_free};
-ORE_RT ore_General ore_general_init(void) { return (ore_General){0, 0, ORE_TRACE}; }
+ORE_RT ore_General ore_general_init(void) { return (ore_General){.track = ORE_TRACE}; }
 ORE_RT ore_Allocator ore_general_allocator(ore_General *g) { return (ore_Allocator){g, &ore_general_vt}; }
 /* Report each allocation that was not freed, in allocation order, then
-   free all memory. Returns the number of leaks. */
+   free all memory (checking the quarantined blocks). Returns the number of
+   leaks. */
 ORE_RT size_t ore_general_deinit(ore_General *g) {
     size_t leaks = 0;
-    for (ore_alloc_rec *r = g->head, *next; r; r = next) {
-        next = r->next;
-        if (!r->free_line) {
-            if (!leaks) ore_rt_fflush(0);
-            ore_rt_dprintf(2, "%s:%d:%d: leak: %llu bytes allocated here were never freed\n", ORE_FILE(r->line),
-                           ORE_LINE(r->line), r->col, (unsigned long long)r->size);
-            leaks++;
-        }
-        ore_rt_free(r->p);
-        ore_rt_free(r);
+    for (ore_alloc_hdr *h = g->head, *next; h; h = next) {
+        next = h->next;
+        if (!leaks) ore_rt_fflush(0);
+        ore_rt_dprintf(2, "%s:%d:%d: leak: %llu bytes allocated here were never freed\n", ORE_FILE(h->line),
+                       ORE_LINE(h->line), h->col, (unsigned long long)h->size);
+        leaks++;
+        h->state = 0;
+        ore_rt_free(h);
     }
-    g->head = g->tail = 0;
+    for (ore_alloc_hdr *h = g->qhead, *next; h; h = next) {
+        next = h->next;
+        ore_general_release(h);
+    }
+    *g = (ore_General){.track = g->track};
     return leaks;
 }
 
@@ -300,7 +350,7 @@ ORE_RT void ore_arena_deinit(ore_Arena *a, int line, int col) {
 
 /* Tests: the leak-checked allocator, assertions, and the end of a test. A
    failed assertion ends the test process with status 1. */
-static __attribute__((unused)) ore_General ore_test_gpa = {0, 0, true};
+static __attribute__((unused)) ore_General ore_test_gpa = {.track = true};
 ORE_RT ore_Allocator ore_test_allocator(void) { return ore_general_allocator(&ore_test_gpa); }
 #define ORE_ASSERT_FAILED(line, col, fmt, ...)                                                                  \
     do {                                                                                                         \

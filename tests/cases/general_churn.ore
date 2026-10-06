@@ -1,0 +1,31 @@
+// M9.7: `General` allocates and frees in constant time in debug mode too
+// (the golden harness also requires this program, built in debug mode, to
+// finish within 10 s): a million allocation and free pairs, and a
+// recursion that allocates a frame per call.
+import std
+import std.mem.Allocator
+import std.mem.AllocError
+
+fn fib(a: Allocator, n: i64) AllocError!i64 {
+    let frame = try a.alloc(0 as i64, 4)
+    defer a.free(frame)
+    frame[0] = n
+    if n < 2 {
+        return n
+    }
+    return try fib(a, n - 1) + try fib(a, n - 2)
+}
+
+pub fn main() !void {
+    var gpa = std.heap.General.init()
+    defer gpa.deinit()
+    let a = gpa.allocator()
+    var sum: u64 = 0
+    for i in 0..1000000 {
+        let s = try a.alloc((i % 251) as u8, 16 + i % 32)
+        sum += s[0] as u64
+        a.free(s)
+    }
+    @println(sum)
+    @println(try fib(a, 25))
+}

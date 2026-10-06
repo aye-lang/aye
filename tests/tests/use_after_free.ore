@@ -1,0 +1,54 @@
+// M9.7: in debug mode `General` fills freed memory with 0xDD and keeps it
+// in a quarantine (the last 32 MiB freed) before libc gets it back. A
+// second free of a quarantined block panics, and a write to one is found
+// when it leaves the quarantine or at `deinit`.
+
+import std.heap.General
+
+test "freed memory reads as 0xDD" {
+    let alloc = @testAllocator()
+    let s = try alloc.alloc(7 as u8, 4)
+    alloc.free(s)
+    @expectEqual(0xDD, s[2])
+}
+
+test "a write after free is found at deinit" {
+    let alloc = @testAllocator()
+    let p = try alloc.create(7 as i64)
+    alloc.destroy(p)
+    p.* = 8
+}
+
+test "a double free is found after many other frees" {
+    let alloc = @testAllocator()
+    let p = try alloc.create(1 as i64)
+    alloc.destroy(p)
+    for i in 0..100000 {
+        let q = try alloc.create(i)
+        alloc.destroy(q)
+    }
+    alloc.destroy(p)
+}
+
+test "a write after free is found when the block leaves the quarantine" {
+    let alloc = @testAllocator()
+    let s = try alloc.alloc(0 as u8, 64)
+    alloc.free(s)
+    s[3] = 1
+    let big = try alloc.alloc(0 as u8, 40 << 20)
+    alloc.free(big)
+    @println("not reached")
+}
+
+test "freeing a sub-slice panics" {
+    let alloc = @testAllocator()
+    let s = try alloc.alloc(0 as u8, 64)
+    defer alloc.free(s)
+    alloc.free(s[16..])
+}
+
+test "memory of another allocator" {
+    var gpa = General.init()
+    let s = try gpa.allocator().alloc(0 as u8, 8)
+    @testAllocator().free(s)
+}
