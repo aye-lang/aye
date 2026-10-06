@@ -974,3 +974,39 @@ fn jsdom_gc_stress() {
     });
     assert!(failures.is_empty(), "{} DOM fixtures failed under GC stress:\n\n{}", failures.len(), failures.join("\n\n"));
 }
+
+// ---- B8: layout and paint
+
+/// Hit testing follows the painting order (`browser/tests/layout/hit.html`
+/// in a 400x340 window, the page 40 px down): the topmost positioned box
+/// wins, a positioned box hides the link under it, content clipped by
+/// `overflow` is not hit outside the clip, and a frame links to its
+/// address. The hovered link shows in the status line.
+#[test]
+fn window_hit_layers() {
+    if !has_sdl() {
+        println!("skipped: no SDL2");
+        return;
+    }
+    let dir = format!("file://{}/browser/tests/layout/", root().display());
+    let cases: &[(&str, &str)] = &[
+        ("move:60,70", "high.html"),
+        ("move:20,50", "low.html"),
+        ("move:20,150", ""),
+        ("move:20,175", "flow.html"),
+        ("move:20,240", "clipped.html"),
+        ("move:20,260", ""),
+        ("move:340,60", "frame.html"),
+    ];
+    let mut failures = Vec::new();
+    for (events, want) in cases {
+        let out = run_window(&["browser/tests/layout/hit.html", "--font", "fixed", "--width", "400", "--height", "340", "--frames", "1", "--state", "--events", events]);
+        let got = text(&out.stdout).replace(&dir, "");
+        let status = got.lines().find(|l| l.starts_with("status ")).unwrap_or("").to_string();
+        let want_line = format!("status {want}");
+        if !out.status.success() || !out.stderr.is_empty() || status != want_line {
+            failures.push(format!("--events {events:?}: {}\n{}--- expected\n{want_line}\n--- got\n{got}", out.status, text(&out.stderr)));
+        }
+    }
+    assert!(failures.is_empty(), "{} of {} cases failed:\n\n{}", failures.len(), cases.len(), failures.join("\n"));
+}

@@ -8,9 +8,15 @@
 //
 // The display list is in CSS px, in document coordinates; `render`
 // scales and translates it to device pixels with a `View`. Items, in
-// painting order (tree order, simplified from CSS's stacking):
-// backgrounds and borders of a box, its list marker, then its content
-// (lines and their fragments, or child boxes). Borders become fills
+// painting order (CSS's stacking, simplified): a positioned box
+// (`position` other than `static`) is a layer, painted after the
+// rest of its parent layer in z-index order (negative ones before it,
+// `auto` and 0 in tree order); in a layer, tree order: backgrounds and
+// borders of a box, its list marker, then its content (the floats
+// among its inline content, its lines and their fragments, or its child
+// boxes). A layer keeps the clips of the ancestors that clip it (not
+// those inside the containing block of an absolutely positioned box,
+// none for a fixed one). Borders become fills
 // (dashed and dotted ones a row of short fills). Text items refer to the
 // layout tree's text: keep the tree alive as long as the list.
 //
@@ -19,7 +25,9 @@
 // solid), color, text-decoration-line (underline, overline,
 // line-through; propagated from ancestors, not into atomic inlines),
 // list markers, images (decoded ones scaled into their content box,
-// else a frame with their `alt` text), form controls (checkboxes and
+// else a frame with their `alt` text), frames (`iframe`, `embed`,
+// `object`: a frame with their address as a link), inline `svg` (its
+// box only, nothing drawn), form controls (checkboxes and
 // radio buttons drawn, a `select`'s arrow, a list box's selected
 // options), visibility, and overflow other than `visible` as a clip to
 // the padding box.
@@ -36,6 +44,7 @@ import std.list.List
 import std.math
 import std.mem.AllocError
 import std.mem.Allocator
+import std.sort
 import std.text
 
 /// A rectangle in CSS px.
@@ -93,13 +102,55 @@ pub fn build(alloc: Allocator, t: *mut Tree) AllocError!DisplayList {
         t: t,
         list: DisplayList { items: List(Item).init(alloc), background: WHITE, width: t.viewport_w, height: t.viewport_h },
         skip_bg: null,
+        painting: null,
     }
     errdefer b.list.deinit()
     if t.root |r| {
         canvasBackground(&mut b, r)
-        try b.box(r)
+        try b.layer(r)
     }
     return b.list
+}
+
+/// Is box `i` painted in a layer of its own (positioned, not inline)?
+pub fn isLayer(t: *Tree, i: usize) bool {
+    let b = t.bx(i)
+    if b.kind == BoxKind.Inline || b.kind == BoxKind.Text || b.kind == BoxKind.LineBreak {
+        return false
+    }
+    return b.abs != 0 || layout.isPositioned(b.style)
+}
+
+/// A layer inside another: its z-index (`auto` is 0) and tree order.
+pub struct LayerRef {
+    z: f64
+    order: usize
+    box: usize
+}
+
+fn layerBefore(a: LayerRef, b: LayerRef) bool {
+    if a.z != b.z {
+        return a.z < b.z
+    }
+    return a.order < b.order
+}
+
+/// The layers directly inside layer `i` (not those inside them), in
+/// painting order.
+pub fn layersOf(t: *Tree, i: usize, out: *mut List(LayerRef)) AllocError!void {
+    try collectLayers(t, i, out)
+    sort.sort(LayerRef, out.items(), layerBefore)
+}
+
+fn collectLayers(t: *Tree, i: usize, out: *mut List(LayerRef)) AllocError!void {
+    for c in t.children(i) {
+        if isLayer(t, c) {
+            let z = layout.numberOf(t.bx(c).style[css.Z_INDEX], 0.0)
+            try out.append(LayerRef { z: z, order: out.len(), box: c })
+        } else {
+            try collectLayers(t, c, out)
+        }
+    }
 }
 
 // The canvas takes the root's background, or, when that is transparent,
@@ -155,6 +206,8 @@ struct Builder {
     list: DisplayList
     // The box whose background went to the canvas.
     skip_bg: ?usize
+    // The layer being painted (its descendant layers wait).
+    painting: ?usize
 
     fn add(self: *mut Self, it: Item) AllocError!void {
         try self.list.items.append(it)
@@ -177,9 +230,81 @@ struct Builder {
         }
     }
 
+    // Layer `i`: the layers below it, its own content, the layers above.
+    fn layer(self: *mut Self, i: usize) AllocError!void {
+        var ls = List(LayerRef).init(self.t.backing)
+        defer ls.deinit()
+        try layersOf(self.t, i, &mut ls)
+        for l in ls.items() {
+            if l.z < 0.0 {
+                try self.clippedLayer(l.box)
+            }
+        }
+        let outer = self.painting
+        self.painting = i
+        try self.box(i)
+        self.painting = outer
+        for l in ls.items() {
+            if l.z >= 0.0 {
+                try self.clippedLayer(l.box)
+            }
+        }
+    }
+
+    // Layer `i` inside the clips of the ancestors that clip it.
+    fn clippedLayer(self: *mut Self, i: usize) AllocError!void {
+        var pushed: usize = 0
+        let lb = self.t.bx(i)
+        var escaping = lb.abs != 0
+        var cur = lb.parent
+        if lb.abs == 2 {
+            cur = null
+        }
+        while cur |c| {
+            let cb = self.t.bx(c).*
+            if escaping && isLayer(self.t, c) {
+                // The containing block.
+                escaping = false
+            }
+            if !escaping && self.clips(c) {
+                try self.add(Item.Clip { r: Rect { x: cb.ax + cb.border[3], y: cb.ay + cb.border[0], w: cb.w - cb.border[1] - cb.border[3], h: cb.h - cb.border[0] - cb.border[2] } })
+                pushed += 1
+            }
+            if cb.abs == 2 {
+                break
+            }
+            if cb.abs == 1 {
+                escaping = true
+            }
+            cur = cb.parent
+        }
+        try self.layer(i)
+        for k in 0..pushed {
+            try self.add(Item.Unclip)
+        }
+    }
+
+    // The floats among the inline content of box `i` (through its
+    // inline boxes).
+    fn inlineFloats(self: *mut Self, i: usize) AllocError!void {
+        let n = self.t.children(i).len
+        for k in 0..n {
+            let c = self.t.children(i)[k]
+            let cb = self.t.bx(c)
+            if cb.float != 0 {
+                try self.box(c)
+            } else if cb.kind == BoxKind.Inline {
+                try self.inlineFloats(c)
+            }
+        }
+    }
+
     // A box that is not inside an inline formatting context (or an
-    // atomic inline), and its subtree.
+    // atomic inline), and its subtree; a layer waits for its turn.
     fn box(self: *mut Self, i: usize) AllocError!void {
+        if self.painting != i && isLayer(self.t, i) {
+            return
+        }
         let b = self.t.bx(i).*
         let visible = isVisible(b.style)
         self.extend(b.ax + b.w + b.margin[1], b.ay + b.h + b.margin[2])
@@ -221,6 +346,7 @@ struct Builder {
             try self.add(Item.Clip { r: Rect { x: px, y: py, w: b.w - b.border[1] - b.border[3], h: b.h - b.border[0] - b.border[2] } })
         }
         if layout.hasInlineContent(self.t, i) {
+            try self.inlineFloats(i)
             for li in b.line_start..b.line_end {
                 let line = self.t.lines.items()[li]
                 for fi in line.frag_start..line.frag_end {
@@ -425,6 +551,10 @@ struct Builder {
                     return
                 }
             }
+            if self.t.doc.isElement(el, "svg") {
+                // Its drawing is not rendered.
+                return
+            }
             let kind = layout.controlKind(self.t.doc, el)
             if kind == layout.ControlKind.Checkbox {
                 return self.checkbox(el, x, y, w, h)
@@ -552,8 +682,9 @@ struct Builder {
         }
     }
 
-    // A replaced element (an image that is not loaded): a gray frame
-    // inside its content box and its `alt` text.
+    // A replaced element (an image that is not loaded, a frame): a gray
+    // frame inside its content box and its `alt` text, or the address
+    // of a frame (`iframe`, `embed`: `src`; `object`: `data`) as a link.
     fn placeholder(self: *mut Self, i: usize, x: f64, y: f64, w: f64, h: f64) AllocError!void {
         let gray = Rgba { r: 160, g: 160, b: 160, a: 255 }
         if w >= 2.0 && h >= 2.0 {
@@ -564,6 +695,18 @@ struct Builder {
         }
         let b = self.t.bx(i).*
         if b.node |el| {
+            if frameSource(self.t.doc, el) |src| {
+                if src.len > 0 && w > 4.0 && h > 4.0 {
+                    let m = layout.textMetrics(self.t, b.style)
+                    let link = Rgba { r: 0, g: 0, b: 238, a: 255 }
+                    try self.add(Item.Clip { r: Rect { x: x + 1.0, y: y + 1.0, w: w - 2.0, h: h - 2.0 } })
+                    try self.add(Item.Text { x: x + 3.0, y: y + 2.0 + m.ascent, s: src, face: m.font, c: link })
+                    let uw = math.min(w - 6.0, self.t.measure.width(m.font, src))
+                    try self.fill(x + 3.0, y + 2.0 + m.ascent + 1.0, uw, 1.0, link)
+                    try self.add(Item.Unclip)
+                }
+                return
+            }
             if self.t.doc.attr(el, "alt") |alt| {
                 if alt.len > 0 && w > 4.0 && h > 4.0 {
                     let m = layout.textMetrics(self.t, b.style)
@@ -574,6 +717,18 @@ struct Builder {
             }
         }
     }
+}
+
+/// The address an `iframe`, `embed` (`src`) or `object` (`data`)
+/// shows; null for other elements.
+pub fn frameSource(doc: *dom.Document, el: dom.NodeId) ?[]u8 {
+    if doc.isElement(el, "iframe") || doc.isElement(el, "embed") {
+        return doc.attr(el, "src") orelse ""
+    }
+    if doc.isElement(el, "object") {
+        return doc.attr(el, "data") orelse ""
+    }
+    return null
 }
 
 // Is `word` one of the space-separated words of `list`?

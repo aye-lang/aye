@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0 }
+a { display: block; width: 100px; height: 40px }
+.low { position: absolute; top: 0; left: 0; z-index: 1 }
+.high { position: absolute; top: 20px; left: 50px; z-index: 2 }
+.flow { margin-top: 100px }
+.cover { position: absolute; top: 100px; left: 0; width: 200px; height: 30px }
+.clip { overflow: hidden; height: 20px; margin-top: 50px }
+.clip a { height: 60px }
+iframe { position: absolute; top: 0; left: 300px; width: 80px; height: 50px }
+</style>
+<a class="high" href="high.html">high</a>
+<a class="low" href="low.html">low</a>
+<a class="flow" href="flow.html">flow</a>
+<div class="cover"></div>
+<div class="clip"><a href="clipped.html">clipped</a></div>
+<iframe src="frame.html"></iframe>
