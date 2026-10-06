@@ -2935,5 +2935,47 @@ pub let PRELUDE =
     \\  return i;
     \\});
     \\
+    \\// The members of some kinds of elements, defined on HTMLElement above,
+    \\// move to their interfaces: a div has no `value` or `href`, and scripts
+    \\// test that with `in` (polymer-resin sanitizes the bindings of the
+    \\// properties an element has natively).
+    \\const LISTED = 'Button FieldSet Input Object Output Select TextArea';
+    \\const MEMBERS = {
+    \\  name: 'Anchor Button Embed FieldSet Form IFrame Image Input Map Meta Object Output Select Slot TextArea',
+    \\  placeholder: 'Input TextArea', alt: 'Area Image Input', rel: 'Anchor Area Link Form',
+    \\  target: 'Anchor Area Base Form', srcdoc: 'IFrame', htmlFor: 'Label Output',
+    \\  method: 'Form', enctype: 'Form', action: 'Form', noValidate: 'Form', submit: 'Form',
+    \\  requestSubmit: 'Form', reset: 'Form', _formEntries: 'Form',
+    \\  defaultValue: 'Input Output TextArea',
+    \\  disabled: 'Button FieldSet Input Link OptGroup Option Select Style TextArea',
+    \\  required: 'Input Select TextArea', multiple: 'Input Select', open: 'Details Dialog',
+    \\  readOnly: 'Input TextArea', formNoValidate: 'Button Input', formAction: 'Button Input',
+    \\  formMethod: 'Button Input', formEnctype: 'Button Input',
+    \\  min: 'Input Meter', max: 'Input Meter Progress', step: 'Input', pattern: 'Input',
+    \\  minLength: 'Input TextArea', maxLength: 'Input TextArea',
+    \\  defaultChecked: 'Input', defaultSelected: 'Option',
+    \\  href: 'Anchor Area Base Link', src: 'Embed IFrame Image Input Media Script Source Track',
+    \\  type: 'Anchor Button Embed FieldSet Input LI Link Object OList Output Script Select Source Style TextArea UList',
+    \\  text: 'Anchor Area Body Option Script Title', select: 'Input TextArea',
+    \\  value: 'Button Data Input LI Meter Option Output Progress Select TextArea',
+    \\  checked: 'Input', selected: 'Option', selectedIndex: 'Select',
+    \\  form: 'Button FieldSet Input Label Legend Object Option Output Select TextArea',
+    \\  _validity: LISTED, willValidate: LISTED, validationMessage: LISTED, setCustomValidity: LISTED,
+    \\  checkValidity: LISTED + ' Form', reportValidity: LISTED + ' Form',
+    \\  contentWindow: 'IFrame Object', contentDocument: 'IFrame Object',
+    \\};
+    \\function moveMembers(from, table) {
+    \\  for (const k of Object.keys(table)) {
+    \\    const d = Object.getOwnPropertyDescriptor(from, k);
+    \\    if (!d) continue;
+    \\    for (const n of table[k].split(' ')) {
+    \\      const I = G['HTML' + n + 'Element'];
+    \\      if (I && !Object.prototype.hasOwnProperty.call(I.prototype, k)) Object.defineProperty(I.prototype, k, d);
+    \\    }
+    \\    delete from[k];
+    \\  }
+    \\}
+    \\moveMembers(HTMLP, MEMBERS);
+    \\
     \\ak.setDispatch(hostEvent);
     \\})(__ak);
