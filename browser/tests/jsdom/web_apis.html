@@ -61,7 +61,7 @@ const io = new IntersectionObserver((entries, obs) => {
 });
 io.observe(lazy);
 new ResizeObserver(entries => log('resized', entries.length, entries[0].target.id)).observe(document.getElementById('box'));
-const mo = new MutationObserver(() => log('mutations are not reported'));
+const mo = new MutationObserver(() => log('not called: takeRecords took the record'));
 mo.observe(document.body, { childList: true });
 document.body.appendChild(document.createElement('hr'));
 log('records', mo.takeRecords().length);

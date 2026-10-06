@@ -1,0 +1,73 @@
+// M12: coroutines that allocate with the General allocator (in debug mode
+// it tracks every block, with a list of live ones and a quarantine of freed
+// ones): a list grown across yields, a block made in a coroutine and freed
+// by main, and a string built in one coroutine and read in another.
+import std.coro
+import std.heap.General
+import std.list.List
+import std.mem.Allocator
+
+struct Builder {
+    alloc: Allocator
+    items: List(u64)
+    gift: ?*mut [8]u64
+}
+
+fn build(b: *mut Builder) {
+    for i in 0..50 {
+        b.items.append(i as u64 * i as u64) catch |e| {
+            return
+        }
+        if i % 10 == 9 {
+            coro.yield()
+        }
+    }
+    let scratch = b.alloc.alloc(0 as u8, 4096) catch |e| {
+        return
+    }
+    scratch[4095] = 7
+    b.alloc.free(scratch)
+    if b.alloc.create([8]u64{3, ..}) |g| {
+        b.gift = g
+    } else |e| {}
+}
+
+struct Reader {
+    from: *mut Builder
+    seen: u64
+}
+
+fn read(r: *mut Reader) {
+    while true {
+        var s: u64 = 0
+        for v in r.from.items.items() {
+            s += v
+        }
+        r.seen = s
+        coro.yield()
+    }
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    var b = Builder { alloc: alloc, items: List(u64).init(alloc), gift: null }
+    defer b.items.deinit()
+    var r = Reader { from: &mut b, seen: 0 }
+    let cb = try coro.create(Builder, alloc, 64 << 10, build, &mut b)
+    defer cb.deinit()
+    let cr = try coro.create(Reader, alloc, 64 << 10, read, &mut r)
+    defer cr.deinit()
+    while !cb.isDone() {
+        cb.resume()
+        cr.resume()
+        @print(b.items.len())
+        @print(" ")
+        @println(r.seen)
+    }
+    if b.gift |g| {
+        @println(g[0] + g[7])
+        alloc.destroy(g)
+    }
+}

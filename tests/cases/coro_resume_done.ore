@@ -1,0 +1,25 @@
+// M12: resuming a coroutine whose function has returned panics (debug and
+// safe mode).
+import std.coro
+import std.heap.General
+
+struct Once {
+    n: u64
+}
+
+fn once(o: *mut Once) {
+    o.n += 1
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var o = Once { n: 0 }
+    let co = try coro.create(Once, gpa.allocator(), 64 << 10, once, &mut o)
+    defer co.deinit()
+    co.resume()
+    @println(o.n)
+    @println(co.isDone())
+    co.resume()
+    @println(o.n)
+}

@@ -68,7 +68,7 @@ pub let PRELUDE =
     \\  set returnValue(v) { if (!v) this.preventDefault(); }
     \\  get cancelBubble() { return this._stop; }
     \\  set cancelBubble(v) { if (v) this._stop = true; }
-    \\  composedPath() { return this._path ? this._path.slice() : []; }
+    \\  composedPath() { return this._path ? this._path.filter(n => !hiddenFrom(n, this.currentTarget)) : []; }
     \\}
     \\Event.NONE = 0;
     \\Event.CAPTURING_PHASE = 1;
@@ -231,30 +231,76 @@ pub let PRELUDE =
     \\    if (ev._stopNow) return;
     \\  }
     \\}
-    \\// Capture from the window down, the target (its capturing listeners
-    \\// first), then bubbling up.
+    \\// Shadow trees: an event's path goes from a slotted node to its slot and
+    \\// from a shadow root to its host (unless the event is not composed and
+    \\// started in that shadow tree); each listener sees the target retargeted
+    \\// to the node of its own tree (a host for nodes inside it).
+    \\function rootOf(n) {
+    \\  return n instanceof Node ? n.getRootNode() : null;
+    \\}
+    \\// Is `a` `b` or an ancestor of it, through shadow roots to their hosts?
+    \\function shadowIncludingAncestor(a, b) {
+    \\  for (let n = b; n; n = n instanceof ShadowRoot ? n.host : n.parentNode) {
+    \\    if (n === a) return true;
+    \\  }
+    \\  return false;
+    \\}
+    \\function retarget(t, at) {
+    \\  for (;;) {
+    \\    const r = rootOf(t);
+    \\    if (!(r instanceof ShadowRoot) || (at instanceof Node && shadowIncludingAncestor(r, at))) return t;
+    \\    t = r.host;
+    \\  }
+    \\}
+    \\function eventParent(n, ev, origin) {
+    \\  if (n === document) return G;
+    \\  if (!(n instanceof Node)) return null;
+    \\  const slot = ak.assignedSlot(n);
+    \\  if (slot) return slot;
+    \\  if (n instanceof ShadowRoot) return !ev.composed && n === origin ? null : n.host;
+    \\  return n.parentNode;
+    \\}
+    \\// Is `n` in a closed shadow tree that `at` is not in?
+    \\function hiddenFrom(n, at) {
+    \\  for (let r = rootOf(n); r instanceof ShadowRoot; r = rootOf(r.host)) {
+    \\    if (r.mode === 'closed' && !(at instanceof Node && shadowIncludingAncestor(r, at))) return true;
+    \\  }
+    \\  return false;
+    \\}
+    \\// Capture from the window down, then bubbling up; at the target (and at
+    \\// a host the target is retargeted to) the capturing listeners run in the
+    \\// capture pass and the others in the bubble pass, which other nodes take
+    \\// part in only for an event that bubbles.
     \\function dispatch(target, ev) {
     \\  ev.target = target;
     \\  ev.defaultPrevented = false;
     \\  ev._stop = false;
     \\  ev._stopNow = false;
     \\  const path = [];
-    \\  for (let n = target; n; n = n.parentNode) path.push(n);
-    \\  if (path[path.length - 1] === document) path.push(G);
+    \\  let seen = null;
+    \\  if (ak.shadowCount() > 0) {
+    \\    const origin = rootOf(target);
+    \\    for (let n = target; n; n = eventParent(n, ev, origin)) path.push(n);
+    \\    seen = path.map(n => retarget(target, n));
+    \\  } else {
+    \\    for (let n = target; n; n = n.parentNode) path.push(n);
+    \\    if (path[path.length - 1] === document) path.push(G);
+    \\  }
     \\  ev._path = path;
-    \\  for (let i = path.length - 1; i > 0 && !ev._stop; i--) {
-    \\    ev.eventPhase = 1;
+    \\  for (let i = path.length - 1; i >= 0 && !ev._stop; i--) {
+    \\    const t = seen ? seen[i] : target;
+    \\    ev.target = t;
+    \\    ev.eventPhase = t === path[i] ? 2 : 1;
     \\    invoke(path[i], ev, true);
     \\  }
-    \\  ev.eventPhase = 2;
-    \\  if (!ev._stop) invoke(target, ev, true);
-    \\  if (!ev._stop && !ev._stopNow) invoke(target, ev, false);
-    \\  if (ev.bubbles) {
-    \\    for (let i = 1; i < path.length && !ev._stop; i++) {
-    \\      ev.eventPhase = 3;
-    \\      invoke(path[i], ev, false);
-    \\    }
+    \\  for (let i = 0; i < path.length && !ev._stop; i++) {
+    \\    const t = seen ? seen[i] : target;
+    \\    if (t !== path[i] && !ev.bubbles) continue;
+    \\    ev.target = t;
+    \\    ev.eventPhase = t === path[i] ? 2 : 3;
+    \\    invoke(path[i], ev, false);
     \\  }
+    \\  ev.target = seen ? seen[seen.length - 1] : target;
     \\  ev.eventPhase = 0;
     \\  ev.currentTarget = null;
     \\  return !ev.defaultPrevented;
@@ -279,15 +325,17 @@ pub let PRELUDE =
     \\function hostEvent(target, type, key, x, y) {
     \\  let ev;
     \\  if (type === 'keydown' || type === 'keyup' || type === 'keypress') {
-    \\    ev = new KeyboardEvent(type, { bubbles: true, cancelable: true, key });
+    \\    ev = new KeyboardEvent(type, { bubbles: true, cancelable: true, composed: true, key });
     \\  } else if (type === 'click' || type === 'mousedown' || type === 'mouseup' || type === 'dblclick') {
-    \\    ev = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x || 0, clientY: y || 0, detail: 1 });
+    \\    ev = new MouseEvent(type, { bubbles: true, cancelable: true, composed: true, clientX: x || 0, clientY: y || 0, detail: 1 });
     \\  } else if (type === 'input') {
-    \\    ev = new InputEvent(type, { bubbles: true, data: key === undefined ? null : key, inputType: 'insertText' });
+    \\    ev = new InputEvent(type, { bubbles: true, composed: true, data: key === undefined ? null : key, inputType: 'insertText' });
     \\  } else if (type === 'focus' || type === 'blur') {
-    \\    ev = new FocusEvent(type, {});
+    \\    ev = new FocusEvent(type, { composed: true });
     \\  } else if (type === 'focusin' || type === 'focusout') {
-    \\    ev = new FocusEvent(type, { bubbles: true });
+    \\    ev = new FocusEvent(type, { bubbles: true, composed: true });
+    \\  } else if (type === 'invalid') {
+    \\    ev = new Event(type, { cancelable: true });
     \\  } else if (type === 'load') {
     \\    ev = new Event(type, {});
     \\  } else {
@@ -327,6 +375,11 @@ pub let PRELUDE =
     \\hidden(NodeP, 'replaceWith', function (...nodes) {
     \\  const p = this.parentNode;
     \\  if (!p) return;
+    \\  if (nodes.length === 1) {
+    \\    const n = toNode(nodes[0]);
+    \\    if (n !== this) p.replaceChild(n, this);
+    \\    return;
+    \\  }
     \\  const next = this.nextSibling;
     \\  p.removeChild(this);
     \\  for (const n of nodes) p.insertBefore(toNode(n), next);
@@ -422,6 +475,11 @@ pub let PRELUDE =
     \\reflect('defaultValue', 'value');
     \\for (const n of ['hidden', 'disabled', 'required', 'multiple', 'autofocus', 'open']) reflectBool(n, n);
     \\reflectBool('readOnly', 'readonly');
+    \\reflectBool('noValidate', 'novalidate');
+    \\reflectBool('formNoValidate', 'formnovalidate');
+    \\for (const n of ['min', 'max', 'step', 'pattern', 'enctype']) reflect(n, n);
+    \\for (const n of ['formAction', 'formMethod', 'formEnctype']) reflect(n, n.toLowerCase());
+    \\for (const n of ['minLength', 'maxLength']) getter(HTMLP, n, function () { const a = this.getAttribute(n.toLowerCase()); return a === null ? -1 : Number(a); }, function (v) { this.setAttribute(n.toLowerCase(), String(v)); });
     \\reflectBool('defaultChecked', 'checked');
     \\reflectBool('defaultSelected', 'selected');
     \\for (const n of ['href', 'src', 'action']) reflectUrl(n);
@@ -438,15 +496,10 @@ pub let PRELUDE =
     \\}, function (v) { this.setAttribute('tabindex', String(v)); });
     \\// value, checked, selected and selectedIndex are natives over the
     \\// page's form state (dom_api.ore).
-    \\getter(HTMLP, 'form', function () { return this.closest('form'); });
     \\getter(HTMLP, 'text', function () { return this.textContent; }, function (v) { this.textContent = v; });
     \\getter(HTMLP, 'innerText', function () { return this.textContent; }, function (v) { this.textContent = v; });
     \\getter(HTMLP, 'outerText', function () { return this.textContent; });
     \\hidden(HTMLP, 'submit', function () { ak.submit(this); });
-    \\hidden(HTMLP, 'requestSubmit', function () {
-    \\  if (hostEvent(this, 'submit')) ak.submit(this);
-    \\});
-    \\hidden(HTMLP, 'reset', function () { hostEvent(this, 'reset'); });
     \\hidden(HTMLP, 'select', function () {});
     \\
     \\// classList
@@ -523,7 +576,7 @@ pub let PRELUDE =
     \\// lists, attributes, select
     \\
     \\for (const name of Object.getOwnPropertyNames(G)) {
-    \\  if (!/^(Node|Element|Document|HTMLDocument|CharacterData|Text|Comment|DocumentType|DocumentFragment|NodeList|HTMLCollection|HTMLOptionsCollection|CSSStyleDeclaration|DOMStringMap|(HTML|SVG|MathML)\w*Element)$/.test(name)) continue;
+    \\  if (!/^(Node|Element|Document|HTMLDocument|CharacterData|Text|Comment|DocumentType|DocumentFragment|ShadowRoot|NodeList|HTMLCollection|HTMLOptionsCollection|CSSStyleDeclaration|DOMStringMap|(HTML|SVG|MathML)\w*Element)$/.test(name)) continue;
     \\  Object.defineProperty(G[name].prototype, Symbol.toStringTag, { value: name, configurable: true });
     \\}
     \\// DocumentFragment, Text and Comment can be made with `new`; their
@@ -1719,8 +1772,8 @@ pub let PRELUDE =
     \\hidden(G, 'AbortController', AbortController);
     \\
     \\// Observers: IntersectionObserver reports every target visible once (so
-    \\// lazy loading goes on), ResizeObserver reports each target once;
-    \\// MutationObserver never reports (the DOM keeps no mutation records).
+    \\// lazy loading goes on), ResizeObserver reports each target once
+    \\// (MutationObserver is with the web components below).
     \\class IntersectionObserver {
     \\  constructor(callback, options) {
     \\    if (typeof callback !== 'function') throw new TypeError("Failed to construct 'IntersectionObserver': parameter 1 is not of type 'Function'.");
@@ -1763,17 +1816,8 @@ pub let PRELUDE =
     \\  unobserve(target) { this._targets = this._targets.filter(t => t !== target); }
     \\  disconnect() { this._targets = []; }
     \\}
-    \\class MutationObserver {
-    \\  constructor(callback) {
-    \\    if (typeof callback !== 'function') throw new TypeError("Failed to construct 'MutationObserver': parameter 1 is not of type 'Function'.");
-    \\  }
-    \\  observe() {}
-    \\  disconnect() {}
-    \\  takeRecords() { return []; }
-    \\}
     \\hidden(G, 'IntersectionObserver', IntersectionObserver);
     \\hidden(G, 'ResizeObserver', ResizeObserver);
-    \\hidden(G, 'MutationObserver', MutationObserver);
     \\
     \\// matchMedia: the browser's media queries against the viewport
     \\class MediaQueryList extends EventTarget {
@@ -1822,6 +1866,21 @@ pub let PRELUDE =
     \\  if (height !== undefined) img.setAttribute('height', String(height));
     \\  return img;
     \\});
+    \\// Media elements play nothing: play() fails as for an unsupported source.
+    \\const MediaP = HTMLMediaElement.prototype;
+    \\hidden(MediaP, 'play', function () { return Promise.reject(new DOMException('The element has no supported sources.', 'NotSupportedError')); });
+    \\hidden(MediaP, 'pause', function () {});
+    \\hidden(MediaP, 'load', function () {});
+    \\hidden(MediaP, 'canPlayType', function () { return ''; });
+    \\for (const [k, v] of [['paused', true], ['currentTime', 0], ['duration', NaN], ['volume', 1], ['muted', false], ['readyState', 0], ['ended', false]]) {
+    \\  getter(MediaP, k, function () { return this['__' + k] === undefined ? v : this['__' + k]; }, function (x) { hidden(this, '__' + k, x); });
+    \\}
+    \\hidden(G, 'Audio', function Audio(src) {
+    \\  const a = document.createElement('audio');
+    \\  a.setAttribute('preload', 'auto');
+    \\  if (src !== undefined) a.setAttribute('src', String(src));
+    \\  return a;
+    \\});
     \\hidden(G, 'Option', function Option(text, value, defaultSelected, selected) {
     \\  const o = document.createElement('option');
     \\  if (text !== undefined) o.textContent = String(text);
@@ -1829,32 +1888,6 @@ pub let PRELUDE =
     \\  if (defaultSelected || selected) o.setAttribute('selected', '');
     \\  return o;
     \\});
-    \\// customElements: definitions are kept, elements are not upgraded
-    \\const definitions = new Map();
-    \\const waiting = new Map();
-    \\class CustomElementRegistry {
-    \\  define(name, ctor) {
-    \\    name = String(name);
-    \\    if (definitions.has(name)) throw new DOMException("Failed to execute 'define' on 'CustomElementRegistry': the name \"" + name + "\" has already been used with this registry", 'NotSupportedError');
-    \\    definitions.set(name, ctor);
-    \\    if (waiting.has(name)) {
-    \\      waiting.get(name)(ctor);
-    \\      waiting.delete(name);
-    \\    }
-    \\  }
-    \\  get(name) { return definitions.get(String(name)); }
-    \\  whenDefined(name) {
-    \\    name = String(name);
-    \\    if (definitions.has(name)) return Promise.resolve(definitions.get(name));
-    \\    return new Promise(resolve => {
-    \\      const prev = waiting.get(name);
-    \\      waiting.set(name, prev ? c => { prev(c); resolve(c); } : resolve);
-    \\    });
-    \\  }
-    \\  upgrade() {}
-    \\}
-    \\hidden(G, 'CustomElementRegistry', CustomElementRegistry);
-    \\hidden(G, 'customElements', new CustomElementRegistry());
     \\
     \\// XMLHttpRequest: GET only, on the browser's fetch (synchronous
     \\// underneath); an asynchronous request completes in a task of its own.
@@ -2069,35 +2102,37 @@ pub let PRELUDE =
     \\hidden(URL, 'createObjectURL', function (blob) { return 'blob:' + ak.urlPart('origin') + '/' + crypto.randomUUID(); });
     \\hidden(URL, 'revokeObjectURL', function () {});
     \\
-    \\// FormData: name/value pairs, from a form's controls when given one.
+    \\// FormData: name/value pairs, from a form's successful controls (the
+    \\// entries a submission sends, form_api.ore) when given one.
+    \\function formValue(v, filename) {
+    \\  if (!(v instanceof Blob)) return String(v);
+    \\  if (v instanceof File && filename === undefined) return v;
+    \\  return new File([v], filename === undefined ? 'blob' : String(filename), { type: v.type });
+    \\}
     \\class FormData {
-    \\  constructor(form) {
+    \\  constructor(form, submitter) {
     \\    hidden(this, '_list', []);
     \\    if (form === undefined) return;
-    \\    for (const el of form.querySelectorAll('input, select, textarea, button')) {
-    \\      const name = el.getAttribute('name');
-    \\      if (!name || el.disabled) continue;
-    \\      const type = el.type;
-    \\      if (el.localName === 'button' || type === 'submit' || type === 'button' || type === 'reset' || type === 'image' || type === 'file') continue;
-    \\      if ((type === 'checkbox' || type === 'radio') && !el.checked) continue;
-    \\      if (el.localName === 'select') {
-    \\        for (const o of el.options) if (o.selected) this._list.push([name, o.value]);
-    \\        continue;
-    \\      }
-    \\      this._list.push([name, (type === 'checkbox' || type === 'radio') && !el.hasAttribute('value') ? 'on' : el.value]);
+    \\    if (!form || form.localName !== 'form') throw new TypeError('Expected a form');
+    \\    if (submitter !== undefined && submitter !== null) {
+    \\      if (!((submitter.localName === 'button' && submitter.type === 'submit') || (submitter.localName === 'input' && /^(submit|image)$/.test(submitter.type)))) throw new TypeError('Expected a submit button');
+    \\      if (submitter.form !== form) throw new DOMException('Submitter belongs to another form', 'NotFoundError');
+    \\    }
+    \\    for (const e of form._formEntries(submitter)) {
+    \\      this._list.push([e[0], e[2] ? new File([], '', { type: 'application/octet-stream' }) : e[1]]);
     \\    }
     \\  }
-    \\  append(k, v) { this._list.push([String(k), v instanceof Blob ? v : String(v)]); }
+    \\  append(k, v, filename) { this._list.push([String(k), formValue(v, filename)]); }
     \\  delete(k) { k = String(k); this._list = this._list.filter(p => p[0] !== k); }
     \\  get(k) { k = String(k); const p = this._list.find(p => p[0] === k); return p ? p[1] : null; }
     \\  getAll(k) { k = String(k); return this._list.filter(p => p[0] === k).map(p => p[1]); }
     \\  has(k) { k = String(k); return this._list.some(p => p[0] === k); }
-    \\  set(k, v) {
+    \\  set(k, v, filename) {
     \\    k = String(k);
     \\    const i = this._list.findIndex(p => p[0] === k);
-    \\    if (i < 0) this.append(k, v);
+    \\    if (i < 0) this.append(k, v, filename);
     \\    else {
-    \\      this._list[i][1] = v instanceof Blob ? v : String(v);
+    \\      this._list[i][1] = formValue(v, filename);
     \\      this._list = this._list.filter((p, j) => j <= i || p[0] !== k);
     \\    }
     \\  }
@@ -2369,20 +2404,30 @@ pub let PRELUDE =
     \\    hidden(this, '_id', ++sheetIds);
     \\    hidden(this, '_handed', false);
     \\    hidden(this, '_disabled', !!(options && options.disabled));
+    \\    // A constructed sheet: the text replace() gave (null once rules
+    \\    // changed), and the documents and shadow roots that adopted it.
+    \\    hidden(this, '_text', null);
+    \\    hidden(this, '_adopters', new Set());
     \\    this.media = { mediaText: options && options.media ? String(options.media) : '', length: 0 };
     \\  }
     \\  get _rules() {
     \\    if (!this._list) this._list = this._owner && this._owner.localName === 'style' ? splitRules(this._source) : [];
     \\    return this._list;
     \\  }
-    \\  // The browser takes the rules over from the text (once).
+    \\  // The sheet of an element: the browser takes its rules over from the
+    \\  // text (once).
     \\  _hand() {
-    \\    if (this._handed) return;
+    \\    if (this._handed || !this._owner) return;
     \\    const rules = this._rules;
     \\    this._handed = true;
     \\    ak.sheetReset(this._id, this._owner, this._source);
     \\    for (let i = 0; i < rules.length; i++) ak.sheetInsert(this._id, i, rules[i]);
     \\    if (this._disabled) ak.sheetDisabled(this._id, true);
+    \\  }
+    \\  // A constructed sheet changed: its adopters get its text again.
+    \\  _changed(text) {
+    \\    this._text = text;
+    \\    for (const owner of this._adopters) pushAdopted(owner);
     \\  }
     \\  get cssRules() { return this._rules.map(t => ruleObject(this, t)); }
     \\  get rules() { return this.cssRules; }
@@ -2396,7 +2441,8 @@ pub let PRELUDE =
     \\    v = !!v;
     \\    if (v === this._disabled) return;
     \\    this._disabled = v;
-    \\    if (this._handed) ak.sheetDisabled(this._id, v);
+    \\    if (!this._owner) this._changed(this._text);
+    \\    else if (this._handed) ak.sheetDisabled(this._id, v);
     \\    else if (v) this._hand();
     \\  }
     \\  insertRule(rule, index) {
@@ -2405,6 +2451,11 @@ pub let PRELUDE =
     \\    if (index > rules.length) throw new DOMException("Failed to execute 'insertRule' on 'CSSStyleSheet': The index provided (" + index + ") is larger than the maximum index (" + rules.length + ").", 'IndexSizeError');
     \\    rule = String(rule).trim();
     \\    if (!/[{;]/.test(rule) && !/^@/.test(rule)) throw new DOMException("Failed to execute 'insertRule' on 'CSSStyleSheet': Failed to parse the rule '" + rule + "'.", 'SyntaxError');
+    \\    if (!this._owner) {
+    \\      rules.splice(index, 0, rule);
+    \\      this._changed(null);
+    \\      return index;
+    \\    }
     \\    this._hand();
     \\    rules.splice(index, 0, rule);
     \\    ak.sheetInsert(this._id, index, rule);
@@ -2414,6 +2465,11 @@ pub let PRELUDE =
     \\    const rules = this._rules;
     \\    index = index >>> 0;
     \\    if (index >= rules.length) throw new DOMException("Failed to execute 'deleteRule' on 'CSSStyleSheet': The index provided (" + index + ") is larger than the maximum index (" + (rules.length - 1) + ").", 'IndexSizeError');
+    \\    if (!this._owner) {
+    \\      rules.splice(index, 1);
+    \\      this._changed(null);
+    \\      return;
+    \\    }
     \\    this._hand();
     \\    rules.splice(index, 1);
     \\    ak.sheetDelete(this._id, index);
@@ -2422,6 +2478,7 @@ pub let PRELUDE =
     \\  removeRule(index) { this.deleteRule(index === undefined ? 0 : index); }
     \\  replaceSync(text) {
     \\    this._list = splitRules(String(text)).filter(r => !/^@import/i.test(r));
+    \\    if (!this._owner) return this._changed(null);
     \\    this._handed = false;
     \\    this._hand();
     \\  }
@@ -2454,12 +2511,6 @@ pub let PRELUDE =
     \\getter(HTMLLinkElement.prototype, 'sheet', function () {
     \\  return this.isConnected && /(^|\s)stylesheet(\s|$)/i.test(this.getAttribute('rel') || '') ? ownedSheet(this) : null;
     \\});
-    \\let adopted = [];
-    \\getter(Document.prototype, 'adoptedStyleSheets', function () { return adopted; }, function (v) {
-    \\  adopted = Array.from(v);
-    \\  for (const s of adopted) if (s._owner === null) s._hand();
-    \\  ak.sheetAdopt(adopted.filter(s => s._owner === null).map(s => s._id).join(','));
-    \\});
     \\hidden(G, 'CSS', {
     \\  supports(a, b) { return ak.supports(b === undefined ? String(a) : '(' + String(a) + ': ' + String(b) + ')'); },
     \\  escape(s) {
@@ -2476,5 +2527,494 @@ pub let PRELUDE =
     \\    return out;
     \\  },
     \\});
+    \\// ---- web components: shadow roots, mutation records, custom elements
+    \\
+    \\// ShadowRoot (host, mode and innerHTML are natives, components.ore).
+    \\getter(ShadowRoot.prototype, 'delegatesFocus', function () { return false; });
+    \\getter(ShadowRoot.prototype, 'slotAssignment', function () { return 'named'; });
+    \\getter(ShadowRoot.prototype, 'clonable', function () { return false; });
+    \\getter(ShadowRoot.prototype, 'serializable', function () { return false; });
+    \\getter(ShadowRoot.prototype, 'activeElement', function () { return null; });
+    \\hidden(ShadowRoot.prototype, 'getHTML', function () { return this.innerHTML; });
+    \\hidden(ShadowRoot.prototype, 'getElementById', function (id) {
+    \\  for (const el of this.querySelectorAll('[id]')) if (el.id === String(id)) return el;
+    \\  return null;
+    \\});
+    \\Object.defineProperty(ShadowRoot.prototype, Symbol.toStringTag, { value: 'ShadowRoot', configurable: true });
+    \\hidden(ElementP, 'getHTML', function () { return this.innerHTML; });
+    \\getter(ElementP, 'slot', function () {
+    \\  const v = this.getAttribute('slot');
+    \\  return v === null ? '' : v;
+    \\}, function (v) { this.setAttribute('slot', String(v)); });
+    \\
+    \\// Adopted style sheets: their text goes to the browser's cascade
+    \\// (ak.setAdopted) when the list or one of its sheets changes.
+    \\function sheetText(s) {
+    \\  return s._text !== null && s._text !== undefined ? s._text : s._rules.join('\n');
+    \\}
+    \\function adoptedOf(owner) {
+    \\  let list = owner.__adopted;
+    \\  if (!list) {
+    \\    list = [];
+    \\    hidden(owner, '__adopted', list);
+    \\  }
+    \\  return list;
+    \\}
+    \\function pushAdopted(owner) {
+    \\  ak.setAdopted(owner, adoptedOf(owner).filter(s => !s.disabled).map(sheetText).join('\n'));
+    \\}
+    \\function setAdopted(owner, v) {
+    \\  const list = Array.from(v);
+    \\  for (const s of list) {
+    \\    if (!(s instanceof CSSStyleSheet)) throw new TypeError("Failed to set the 'adoptedStyleSheets' property: Failed to convert value to 'CSSStyleSheet'.");
+    \\  }
+    \\  for (const s of adoptedOf(owner)) s._adopters.delete(owner);
+    \\  hidden(owner, '__adopted', list);
+    \\  for (const s of list) s._adopters.add(owner);
+    \\  pushAdopted(owner);
+    \\}
+    \\for (const P of [Document.prototype, ShadowRoot.prototype]) {
+    \\  getter(P, 'adoptedStyleSheets', function () { return adoptedOf(this); }, function (v) { setAdopted(this, v); });
+    \\}
+    \\
+    \\// ---- mutation records: MutationObserver, custom element reactions and
+    \\// slotchange. The browser hands the changes of the tree to onMutations
+    \\// at the end of each DOM method that made them (components.ore).
+    \\
+    \\class MutationRecord {
+    \\  constructor(type, target) {
+    \\    this.type = type;
+    \\    this.target = target;
+    \\    this.addedNodes = nodeArray([]);
+    \\    this.removedNodes = nodeArray([]);
+    \\    this.previousSibling = null;
+    \\    this.nextSibling = null;
+    \\    this.attributeName = null;
+    \\    this.attributeNamespace = null;
+    \\    this.oldValue = null;
+    \\  }
+    \\}
+    \\function nodeArray(a) {
+    \\  hidden(a, 'item', i => a[i] || null);
+    \\  return a;
+    \\}
+    \\hidden(G, 'MutationRecord', MutationRecord);
+    \\// The observers, in the order they were made.
+    \\const observers = [];
+    \\// Node -> its registrations { observer, options }.
+    \\const registered = new Map();
+    \\let deliveryQueued = false;
+    \\const signalSlots = [];
+    \\function queueDelivery() {
+    \\  if (deliveryQueued) return;
+    \\  deliveryQueued = true;
+    \\  ak.queueMicrotask(deliver);
+    \\}
+    \\// The mutation observer microtask: the observers' records, then the
+    \\// slotchange events.
+    \\function deliver() {
+    \\  deliveryQueued = false;
+    \\  for (const mo of observers.slice()) {
+    \\    const recs = mo._records;
+    \\    if (recs.length === 0) continue;
+    \\    mo._records = [];
+    \\    try {
+    \\      mo._callback.call(mo, recs, mo);
+    \\    } catch (e) {
+    \\      report(e);
+    \\    }
+    \\  }
+    \\  const slots = signalSlots.splice(0);
+    \\  for (const slot of slots) dispatch(slot, new Event('slotchange', { bubbles: true }));
+    \\}
+    \\// The observers interested in a change of kind `kind` (0/3 childList, 1
+    \\// attributes, 2 characterData) to `target`: observer -> whether it wants
+    \\// the old value.
+    \\function interested(kind, target, name) {
+    \\  const out = new Map();
+    \\  for (let n = target; n; n = n.parentNode) {
+    \\    const regs = registered.get(n);
+    \\    if (!regs) continue;
+    \\    for (const r of regs) {
+    \\      const o = r.options;
+    \\      if (n !== target && !o.subtree) continue;
+    \\      if (kind === 1 && (!o.attributes || (o.attributeFilter && !o.attributeFilter.includes(name)))) continue;
+    \\      if (kind === 2 && !o.characterData) continue;
+    \\      if ((kind === 0 || kind === 3) && !o.childList) continue;
+    \\      const old = kind === 1 ? o.attributeOldValue : kind === 2 ? o.characterDataOldValue : false;
+    \\      out.set(r.observer, old || !!out.get(r.observer));
+    \\    }
+    \\  }
+    \\  return out;
+    \\}
+    \\// Queues the records of one batch; the childList changes of one target
+    \\// in a batch make one record.
+    \\function queueRecords(recs) {
+    \\  const lists = new Map();
+    \\  for (let i = 0; i < recs.length; i += 7) {
+    \\    const kind = recs[i], target = recs[i + 1], node = recs[i + 2];
+    \\    if (target === null) continue;
+    \\    if (kind === 0 || kind === 3) {
+    \\      let rec = lists.get(target);
+    \\      if (rec === undefined) {
+    \\        rec = null;
+    \\        const who = interested(kind, target, null);
+    \\        if (who.size > 0) {
+    \\          rec = new MutationRecord('childList', target);
+    \\          rec.previousSibling = recs[i + 3];
+    \\          for (const mo of who.keys()) mo._records.push(rec);
+    \\          queueDelivery();
+    \\        }
+    \\        lists.set(target, rec);
+    \\      }
+    \\      if (rec === null || node === null) continue;
+    \\      (kind === 3 ? rec.addedNodes : rec.removedNodes).push(node);
+    \\      rec.nextSibling = recs[i + 4];
+    \\      continue;
+    \\    }
+    \\    const name = recs[i + 5];
+    \\    const who = interested(kind, target, name);
+    \\    for (const [mo, old] of who) {
+    \\      const rec = new MutationRecord(kind === 1 ? 'attributes' : 'characterData', target);
+    \\      if (kind === 1) rec.attributeName = name;
+    \\      if (old) rec.oldValue = recs[i + 6];
+    \\      mo._records.push(rec);
+    \\      queueDelivery();
+    \\    }
+    \\  }
+    \\}
+    \\function onMutations(recs) {
+    \\  if (registered.size > 0) queueRecords(recs);
+    \\  if (ceDefs.size > 0) {
+    \\    for (let i = 0; i < recs.length; i += 7) {
+    \\      const kind = recs[i], target = recs[i + 1], node = recs[i + 2];
+    \\      if (target === null) continue;
+    \\      if (kind === 1) ceAttributeChanged(target, recs[i + 5], recs[i + 6]);
+    \\      else if (kind === 3 && node && node.isConnected) ceConnected(node);
+    \\      else if (kind === 0 && node && !node.isConnected && target.isConnected) ceDisconnected(node);
+    \\    }
+    \\  }
+    \\  if (ak.shadowCount() > 0) {
+    \\    for (const slot of ak.slotChanges()) {
+    \\      if (!signalSlots.includes(slot)) signalSlots.push(slot);
+    \\      queueDelivery();
+    \\    }
+    \\  }
+    \\}
+    \\ak.setMutationHook(onMutations);
+    \\
+    \\class MutationObserver {
+    \\  constructor(callback) {
+    \\    if (typeof callback !== 'function') throw new TypeError("Failed to construct 'MutationObserver': parameter 1 is not of type 'Function'.");
+    \\    hidden(this, '_callback', callback);
+    \\    hidden(this, '_records', []);
+    \\    hidden(this, '_nodes', []);
+    \\    observers.push(this);
+    \\  }
+    \\  observe(target, options) {
+    \\    if (!(target instanceof Node)) throw new TypeError("Failed to execute 'observe' on 'MutationObserver': parameter 1 is not of type 'Node'.");
+    \\    options = options || {};
+    \\    let attributes = options.attributes, characterData = options.characterData;
+    \\    if ((options.attributeOldValue !== undefined || options.attributeFilter !== undefined) && attributes === undefined) attributes = true;
+    \\    if (options.characterDataOldValue !== undefined && characterData === undefined) characterData = true;
+    \\    const fail = m => new TypeError("Failed to execute 'observe' on 'MutationObserver': " + m);
+    \\    if (!options.childList && !attributes && !characterData) throw fail("The options object must set at least one of 'attributes', 'characterData', or 'childList' to true.");
+    \\    if (options.attributeOldValue && !attributes) throw fail("The options object may only set 'attributeOldValue' to true when 'attributes' is true or not present.");
+    \\    if (options.attributeFilter !== undefined && !attributes) throw fail("The options object may only set 'attributeFilter' when 'attributes' is true or not present.");
+    \\    if (options.characterDataOldValue && !characterData) throw fail("The options object may only set 'characterDataOldValue' to true when 'characterData' is true or not present.");
+    \\    const o = {
+    \\      childList: !!options.childList,
+    \\      attributes: !!attributes,
+    \\      characterData: !!characterData,
+    \\      subtree: !!options.subtree,
+    \\      attributeOldValue: !!options.attributeOldValue,
+    \\      characterDataOldValue: !!options.characterDataOldValue,
+    \\      attributeFilter: options.attributeFilter === undefined ? null : Array.from(options.attributeFilter, String),
+    \\    };
+    \\    let regs = registered.get(target);
+    \\    if (!regs) registered.set(target, regs = []);
+    \\    const found = regs.find(r => r.observer === this);
+    \\    if (found) found.options = o;
+    \\    else {
+    \\      regs.push({ observer: this, options: o });
+    \\      this._nodes.push(target);
+    \\    }
+    \\    ak.setRecording(true);
+    \\  }
+    \\  disconnect() {
+    \\    for (const n of this._nodes) {
+    \\      const regs = registered.get(n);
+    \\      if (!regs) continue;
+    \\      const rest = regs.filter(r => r.observer !== this);
+    \\      if (rest.length) registered.set(n, rest);
+    \\      else registered.delete(n);
+    \\    }
+    \\    this._nodes = [];
+    \\    this._records = [];
+    \\  }
+    \\  takeRecords() {
+    \\    const r = this._records;
+    \\    this._records = [];
+    \\    return r;
+    \\  }
+    \\}
+    \\hidden(G, 'MutationObserver', MutationObserver);
+    \\hidden(G, 'WebKitMutationObserver', MutationObserver);
+    \\
+    \\// ---- custom elements: definitions, upgrades and reactions. An element's
+    \\// state (ak.ceState) is 0 before its definition upgraded it (or when it
+    \\// has none), 1 custom, 2 failed; `:defined` reads it.
+    \\
+    \\const ceDefs = new Map();
+    \\const ceCtors = new Map();
+    \\const ceWaiting = new Map();
+    \\const ceBusy = new Set();
+    \\const ALREADY_CONSTRUCTED = {};
+    \\let ceDefining = false;
+    \\const RESERVED_NAMES = ['annotation-xml', 'color-profile', 'font-face', 'font-face-src', 'font-face-uri', 'font-face-format', 'font-face-name', 'missing-glyph'];
+    \\function validCustomName(n) {
+    \\  return /^[a-z][-.0-9_a-z·À-ÖØ-öø-ͽͿ-῿‌‍‿⁀⁰-↏Ⰰ-⿯、-퟿豈-﷏ﷰ-�]*$/.test(n) && n.includes('-') && !RESERVED_NAMES.includes(n);
+    \\}
+    \\// The definition of the element `el`: by its name, or by its `is`
+    \\// attribute for a customized built-in element.
+    \\function ceLookup(el) {
+    \\  if (el.namespaceURI !== 'http://www.w3.org/1999/xhtml') return null;
+    \\  const name = el.localName;
+    \\  const d = ceDefs.get(name);
+    \\  if (d && d.localName === name) return d;
+    \\  const is = el.getAttribute('is');
+    \\  if (is !== null) {
+    \\    const c = ceDefs.get(is);
+    \\    if (c && c.localName === name) return c;
+    \\  }
+    \\  return null;
+    \\}
+    \\function ceCall(fn, el, args) {
+    \\  try {
+    \\    fn.apply(el, args);
+    \\  } catch (e) {
+    \\    report(e);
+    \\  }
+    \\}
+    \\// Runs the constructor of `def` for the element `el` (which HTMLElement's
+    \\// constructor returns), then its reactions: attributeChangedCallback for
+    \\// its observed attributes, connectedCallback.
+    \\function ceUpgrade(el, def) {
+    \\  if (ak.ceState(el) !== 0 || ceBusy.has(el)) return;
+    \\  ceBusy.add(el);
+    \\  ak.setCeState(el, 2);
+    \\  def.stack.push(el);
+    \\  let ok = true;
+    \\  try {
+    \\    const r = new def.ctor();
+    \\    if (r !== el) throw new TypeError("Failed to construct 'CustomElement': The result must be the element being upgraded.");
+    \\  } catch (e) {
+    \\    ok = false;
+    \\    report(e);
+    \\  }
+    \\  def.stack.pop();
+    \\  ceBusy.delete(el);
+    \\  if (!ok) return;
+    \\  ak.setCeState(el, 1);
+    \\  if (def.attributeChangedCallback) {
+    \\    for (const a of Array.from(el.attributes)) {
+    \\      if (def.observed.has(a.name)) ceCall(def.attributeChangedCallback, el, [a.name, null, a.value, null]);
+    \\    }
+    \\  }
+    \\  if (def.connectedCallback && el.isConnected) ceCall(def.connectedCallback, el, []);
+    \\}
+    \\function ceTryUpgrade(el) {
+    \\  if (ak.ceState(el) !== 0) return;
+    \\  const d = ceLookup(el);
+    \\  if (d) ceUpgrade(el, d);
+    \\}
+    \\function ceConnected(node) {
+    \\  for (const el of ak.customIn(node)) {
+    \\    if (ak.ceState(el) === 1) {
+    \\      const d = ceLookup(el);
+    \\      if (d && d.connectedCallback) ceCall(d.connectedCallback, el, []);
+    \\    } else ceTryUpgrade(el);
+    \\  }
+    \\}
+    \\function ceDisconnected(node) {
+    \\  for (const el of ak.customIn(node)) {
+    \\    if (ak.ceState(el) !== 1) continue;
+    \\    const d = ceLookup(el);
+    \\    if (d && d.disconnectedCallback) ceCall(d.disconnectedCallback, el, []);
+    \\  }
+    \\}
+    \\function ceAttributeChanged(el, name, old) {
+    \\  if (ak.ceState(el) !== 1) return;
+    \\  const d = ceLookup(el);
+    \\  if (d && d.attributeChangedCallback && d.observed.has(name)) ceCall(d.attributeChangedCallback, el, [name, old, el.getAttribute(name), null]);
+    \\}
+    \\
+    \\// HTMLElement and the other HTML element interfaces can be extended: their
+    \\// constructor returns the element a definition is upgrading, or a new
+    \\// one for `new MyElement()`.
+    \\const nativeCreateElement = Document.prototype.createElement;
+    \\function htmlConstruct(nt, base) {
+    \\  if (nt === undefined) throw new TypeError("Failed to construct '" + base.name + "': Please use the 'new' operator, this DOM object constructor cannot be called as a function.");
+    \\  const def = ceCtors.get(nt);
+    \\  if (!def || nt === base) throw new TypeError("Failed to construct '" + base.name + "': Illegal constructor");
+    \\  if (def.stack.length === 0) {
+    \\    const el = nativeCreateElement.call(document, def.localName);
+    \\    Object.setPrototypeOf(el, nt.prototype);
+    \\    ak.setCeState(el, 1);
+    \\    return el;
+    \\  }
+    \\  const el = def.stack[def.stack.length - 1];
+    \\  if (el === ALREADY_CONSTRUCTED) throw new DOMException("Failed to construct 'CustomElement': This instance is already constructed", 'InvalidStateError');
+    \\  Object.setPrototypeOf(el, nt.prototype);
+    \\  def.stack[def.stack.length - 1] = ALREADY_CONSTRUCTED;
+    \\  return el;
+    \\}
+    \\const interfaces = new Map();
+    \\for (const name of Object.getOwnPropertyNames(G)) {
+    \\  if (!/^HTML\w*Element$/.test(name)) continue;
+    \\  const native = G[name];
+    \\  if (typeof native !== 'function' || !native.prototype) continue;
+    \\  const F = function () { return htmlConstruct(new.target, F); };
+    \\  Object.defineProperty(F, 'name', { value: name, configurable: true });
+    \\  Object.defineProperty(F, 'prototype', { value: native.prototype, writable: false });
+    \\  hidden(native.prototype, 'constructor', F);
+    \\  hidden(G, name, F);
+    \\  interfaces.set(native, F);
+    \\}
+    \\for (const [native, F] of interfaces) {
+    \\  const up = Object.getPrototypeOf(native);
+    \\  Object.setPrototypeOf(F, interfaces.get(up) || up);
+    \\}
+    \\
+    \\class CustomElementRegistry {
+    \\  define(name, ctor, options) {
+    \\    name = String(name);
+    \\    const fail = (m, kind) => new DOMException("Failed to execute 'define' on 'CustomElementRegistry': " + m, kind);
+    \\    if (typeof ctor !== 'function') throw new TypeError("Failed to execute 'define' on 'CustomElementRegistry': The provided callback is not a function.");
+    \\    if (!validCustomName(name)) throw fail('"' + name + '" is not a valid custom element name', 'SyntaxError');
+    \\    if (ceDefs.has(name)) throw fail('the name "' + name + '" has already been used with this registry', 'NotSupportedError');
+    \\    if (ceCtors.has(ctor)) throw fail('this constructor has already been used with this registry', 'NotSupportedError');
+    \\    let localName = name;
+    \\    const ext = options && options.extends !== undefined && options.extends !== null ? String(options.extends) : null;
+    \\    if (ext !== null) {
+    \\      if (validCustomName(ext)) throw fail('"' + ext + '" is a valid custom element name', 'NotSupportedError');
+    \\      localName = ext;
+    \\    }
+    \\    if (ceDefining) throw fail('this registry is already defining an element', 'NotSupportedError');
+    \\    ceDefining = true;
+    \\    const def = { name, localName, ctor, stack: [], observed: new Set() };
+    \\    try {
+    \\      const proto = ctor.prototype;
+    \\      if (proto === null || (typeof proto !== 'object' && typeof proto !== 'function')) throw new TypeError("Failed to execute 'define' on 'CustomElementRegistry': The prototype of the constructor is not an object.");
+    \\      for (const k of ['connectedCallback', 'disconnectedCallback', 'adoptedCallback', 'attributeChangedCallback']) {
+    \\        const f = proto[k];
+    \\        if (f !== undefined && typeof f !== 'function') throw new TypeError("Failed to execute 'define' on 'CustomElementRegistry': The '" + k + "' property of the prototype is not a function.");
+    \\        def[k] = f;
+    \\      }
+    \\      if (def.attributeChangedCallback) {
+    \\        const oa = ctor.observedAttributes;
+    \\        if (oa !== undefined && oa !== null) for (const a of Array.from(oa)) def.observed.add(String(a));
+    \\      }
+    \\    } finally {
+    \\      ceDefining = false;
+    \\    }
+    \\    ceDefs.set(name, def);
+    \\    ceCtors.set(ctor, def);
+    \\    ak.setRecording(true);
+    \\    for (const el of ak.customIn(document, name)) {
+    \\      if (ceLookup(el) === def) ceUpgrade(el, def);
+    \\    }
+    \\    const w = ceWaiting.get(name);
+    \\    if (w) {
+    \\      ceWaiting.delete(name);
+    \\      w.resolve(ctor);
+    \\    }
+    \\  }
+    \\  get(name) {
+    \\    const d = ceDefs.get(String(name));
+    \\    return d ? d.ctor : undefined;
+    \\  }
+    \\  getName(ctor) {
+    \\    const d = ceCtors.get(ctor);
+    \\    return d ? d.name : null;
+    \\  }
+    \\  whenDefined(name) {
+    \\    name = String(name);
+    \\    if (!validCustomName(name)) return Promise.reject(new DOMException("Failed to execute 'whenDefined' on 'CustomElementRegistry': \"" + name + "\" is not a valid custom element name", 'SyntaxError'));
+    \\    const d = ceDefs.get(name);
+    \\    if (d) return Promise.resolve(d.ctor);
+    \\    let w = ceWaiting.get(name);
+    \\    if (!w) {
+    \\      w = {};
+    \\      w.promise = new Promise(resolve => { w.resolve = resolve; });
+    \\      ceWaiting.set(name, w);
+    \\    }
+    \\    return w.promise;
+    \\  }
+    \\  upgrade(root) {
+    \\    if (!(root instanceof Node)) throw new TypeError("Failed to execute 'upgrade' on 'CustomElementRegistry': parameter 1 is not of type 'Node'.");
+    \\    for (const el of ak.customIn(root)) ceTryUpgrade(el);
+    \\  }
+    \\}
+    \\hidden(G, 'CustomElementRegistry', CustomElementRegistry);
+    \\hidden(G, 'customElements', new CustomElementRegistry());
+    \\
+    \\// Elements a script makes are constructed at once when their definition
+    \\// exists; clones are upgraded.
+    \\hidden(Document.prototype, 'createElement', function (name, options) {
+    \\  const el = nativeCreateElement.call(this, name);
+    \\  if (ceDefs.size > 0) {
+    \\    const is = typeof options === 'string' ? options : options && options.is;
+    \\    if (is !== undefined && is !== null) el.setAttribute('is', String(is));
+    \\    ceTryUpgrade(el);
+    \\  }
+    \\  return el;
+    \\});
+    \\const nativeCreateElementNS = Document.prototype.createElementNS;
+    \\hidden(Document.prototype, 'createElementNS', function (ns, name, options) {
+    \\  const el = nativeCreateElementNS.call(this, ns, name);
+    \\  if (ceDefs.size > 0 && el.namespaceURI === 'http://www.w3.org/1999/xhtml') {
+    \\    const is = typeof options === 'string' ? options : options && options.is;
+    \\    if (is !== undefined && is !== null) el.setAttribute('is', String(is));
+    \\    ceTryUpgrade(el);
+    \\  }
+    \\  return el;
+    \\});
+    \\const nativeCloneNode = NodeP.cloneNode;
+    \\hidden(NodeP, 'cloneNode', function (deep) {
+    \\  const c = nativeCloneNode.call(this, deep);
+    \\  if (ceDefs.size > 0) for (const el of ak.customIn(c)) ceTryUpgrade(el);
+    \\  return c;
+    \\});
+    \\
+    \\// ElementInternals: the state and ARIA properties are kept, forms are
+    \\// not told.
+    \\class ElementInternals {
+    \\  constructor(el) {
+    \\    hidden(this, '_el', el);
+    \\    this.states = new Set();
+    \\    this.form = null;
+    \\    this.labels = [];
+    \\    this.validity = { valid: true };
+    \\    this.validationMessage = '';
+    \\    this.willValidate = false;
+    \\  }
+    \\  get shadowRoot() {
+    \\    const r = ak.shadowRoot(this._el);
+    \\    return r;
+    \\  }
+    \\  setFormValue() {}
+    \\  setValidity() {}
+    \\  checkValidity() { return true; }
+    \\  reportValidity() { return true; }
+    \\}
+    \\hidden(G, 'ElementInternals', ElementInternals);
+    \\hidden(HTMLP, 'attachInternals', function () {
+    \\  if (this.__internals) throw new DOMException("Failed to execute 'attachInternals' on 'HTMLElement': ElementInternals for the specified element was already attached.", 'NotSupportedError');
+    \\  const i = new ElementInternals(this);
+    \\  hidden(this, '__internals', i);
+    \\  return i;
+    \\});
+    \\
     \\ak.setDispatch(hostEvent);
     \\})(__ak);

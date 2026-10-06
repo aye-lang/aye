@@ -17,6 +17,12 @@ let RAW_TEXT_ELEMENTS = "style script xmp iframe noembed noframes plaintext nosc
 /// Appends the HTML of the children of `h` to `out`.
 fn serializeChildren(doc: *Document, h: NodeId, out: *mut text.Builder) AllocError!void {
     var cur = doc.firstChild(h)
+    if doc.isElement(h, "template") {
+        // A template's contents.
+        if doc.templateContent(h) |f| {
+            cur = doc.firstChild(f)
+        }
+    }
     while cur |c| {
         try serializeNode(doc, c, out)
         cur = doc.nextSibling(c)
@@ -102,6 +108,10 @@ fn escapeMarkup(s: []u8, attribute: bool, out: *mut text.Builder) AllocError!voi
 /// the new top-level nodes to `out`, in order (in the page's document,
 /// not in the tree yet).
 fn parseFragment(p: *mut Page, context: []u8, src: []u8, out: *mut List(NodeId)) AllocError!void {
+    // Building the new nodes is no change of the tree for observers.
+    let was = p.doc.recording
+    p.doc.recording = false
+    defer p.doc.recording = was
     // Table parts and options need their context to be parsed at all.
     var path = [3][]u8{"", "", ""}
     var depth: usize = 0
@@ -127,7 +137,7 @@ fn parseFragment(p: *mut Page, context: []u8, src: []u8, out: *mut List(NodeId))
         try b.appendByte('>')
     }
     try b.append(src)
-    var tmp = try html.parse(p.alloc, b.bytes())
+    var tmp = try html.parseWith(p.alloc, b.bytes(), false)
     defer tmp.deinit()
     var box: ?NodeId = null
     if tmp.documentElement() |root| {
@@ -183,6 +193,15 @@ fn importNode(dst: *mut Document, src: *Document, h: NodeId) AllocError!NodeId {
         let k = try importNode(dst, src, c)
         dst.appendChild(copy, k)
         cur = src.nextSibling(c)
+    }
+    if src.templateContent(h) |from| {
+        let to = try dst.createTemplateContent(copy)
+        var each = src.firstChild(from)
+        while each |c| {
+            let k = try importNode(dst, src, c)
+            dst.appendChild(to, k)
+            each = src.nextSibling(c)
+        }
     }
     return copy
 }

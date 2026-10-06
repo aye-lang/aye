@@ -78,12 +78,15 @@ agent sessions load pages through `engine.load` and keep history in a
   all zeros), custom elements and Shadow DOM (in progress),
   `MutationObserver` reporting (in progress).
 - **B8:** event listeners on another frame's nodes, moving nodes
-  between documents, frame history entries; HTML5 form controls and validation (in
-  progress); rotations and skews other than quarter turns are not drawn;
-  sticky only against the viewport; no public suffix list for cookies (a
-  bare top-level name is refused, `co.uk` is not); no AVIF. The list of
-  public sites is in [`docs/browser-sites.md`](browser-sites.md) (20
-  sites; run of 2026-10-06: 8 ✅, 7 ⚠️, 5 ❌, before the work below).
+  between documents, frame history entries; calendar, color and file
+  pickers, `datalist`; rotations and skews other than quarter turns are
+  not drawn; sticky only against the viewport; no public suffix list for
+  cookies (a bare top-level name is refused, `co.uk` is not); no AVIF;
+  page loads are slow on big sites (in progress), and so is the JS
+  interpreter (in progress). The list of public sites is in
+  [`docs/browser-sites.md`](browser-sites.md) (20 sites; run of
+  2026-10-07: 14 ✅, 3 ⚠️, 3 ❌; the run of 2026-10-06, before the work
+  below, had 8 ✅, 7 ⚠️, 5 ❌).
 
 The compiler gaps the browser met, and which of them M9.5/M9.6 fixed,
 are in `browser/COMPILER_GAPS.md`.
@@ -279,9 +282,9 @@ output as goldens.
   generation)` when the collector frees one (the `js_refs` decrement).
   `addRoot`/`removeRoot` keep values (event listeners) alive.
 - *Generators and async functions* (B8, `js/coroutine.ore`): a call
-  that can stop in the middle of the tree walk runs on a thread of its
-  own (a coroutine with its own value stack and frames); two channels
-  pass control so only one thread runs JavaScript at a time. Promise
+  that can stop in the middle of the tree walk runs on a `std.coro`
+  coroutine (a C stack of its own, M12; a thread and two channels
+  before), with its own value stack and frames, on the engine's thread. Promise
   and the job queue are the engine's (`js/lib.ore`, `Interp.queueJob`);
   `await` hands the value to a driver written in JavaScript that resumes
   the coroutine when the promise settles; `for await` and async
@@ -530,3 +533,17 @@ on (`--no-js` turns it off), `dump` with `--js`.
     `target`. The snapshot and `read` give refs inside frames and agent
     actions work there; in the window, clicks reach the frame's
     document.
+  - *HTML5 forms* (by GPT-6.1-sol through pi): text-like and calendar
+    inputs (date, time, datetime-local, month, week), number controls,
+    draggable range sliders, color swatches, file placeholders,
+    `output`, `progress` and `meter`. Constraint validation (required,
+    pattern, lengths, numeric and calendar bounds and steps, email and
+    URL mismatches, custom errors) with live `ValidityState`,
+    `checkValidity`/`reportValidity`/`setCustomValidity`,
+    `requestSubmit`, `reset` and FormData from the form's entries.
+    Invalid submissions fire `invalid`, focus the first invalid control
+    and show a tooltip in the window or a message to the agent. Form
+    owners (`form=`), labels, disabled fieldsets, submitter overrides
+    (`formaction`, `formmethod`, `formenctype`, `formnovalidate`),
+    `multipart/form-data`, the state pseudo-classes, and the a11y roles
+    and states (spinbutton, slider, required, invalid).

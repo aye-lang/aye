@@ -98,9 +98,11 @@ A line is `- role "name" [level=N] [eN] [states] value="..." -> href
   ref") instead of hitting another element. Refs are given in document
   order when a page loads.
 - **states**: `checked`, `mixed`, `selected`, `expanded`, `collapsed`,
-  `disabled`, `required`, `readonly`, `focused`.
+  `disabled`, `required`, `readonly`, `focused`, `invalid`.
 - **value**: of text fields (passwords as `*`), the selected option of a
-  combobox, sliders, spin buttons and progress bars.
+  combobox, sliders, spin buttons, color swatches, progress bars and meters.
+  Numeric widgets also expose `min` and `max` when defined (sliders default
+  to 0 and 100); the JSON tree carries these as strings.
 - **href**: the `href` of a link as written.
 - `[box=x,y,w,h]`: with `--boxes` / `"boxes":true`, the element's border
   box in document px (inline elements: the union of their fragments).
@@ -231,13 +233,19 @@ What the actions do:
 - **type**: replaces the value of a text field and focuses it (the
   attributes keep the defaults that a reset goes back to); with
   `submit`, then submits its form as Enter would. Not for disabled or
-  read-only fields.
+  read-only fields. Number and calendar inputs accept text too; date,
+  time, datetime-local, month and week values are checked against their
+  HTML formats when validating. File inputs show "No file chosen"; agents
+  cannot upload files (neither `type` nor `eval` can select a local file).
+  They submit an empty file part in multipart forms.
 - **select**: selects one option; in a single select the others are
   unselected.
 - **press**: on a focused text field a character is typed at the caret
   (at the end after `type`), Backspace and Delete delete one,
   ArrowLeft, ArrowRight, Home and End move the caret, Enter submits the
-  form with its first submit button (a new line in a `textarea`); Enter
+  form with its first submit button (a new line in a `textarea`);
+  ArrowUp/ArrowDown step a number input, and all four arrow keys step a
+  focused range slider, respecting min/max/step. Enter
   on a link or button and Space on a button, checkbox or radio button
   click it; Tab and
   Shift+Tab move the focus through focusable elements; Escape leaves
@@ -251,6 +259,18 @@ What the actions do:
 - **screenshot**: paints the page as the window would, with the system's
   fonts (a shared window's own); the session's layout, refs and boxes
   do not change. Without system fonts, text shows as boxes.
+
+Form submissions validate before firing `submit`, unless the form has
+`novalidate` or the submitter has `formnovalidate`. An invalid submission
+stays on the page, focuses the first invalid control whose `invalid` event
+was not canceled, and reports `submission blocked: MESSAGE` in the action
+response. Snapshots expose invalid state even before submitting. Scripts
+can use the live `validity` state, `checkValidity()`, `reportValidity()`,
+`setCustomValidity()`, `requestSubmit()`, `reset()` and `new FormData(form)`.
+Patterns use the browser's Unicode (`u`) RegExp engine; Unicode `v`
+character-set operations are not implemented. Calendar inputs have no
+picker popup, color inputs are swatches, and datalist suggestions are
+ignored.
 
 ## MCP
 

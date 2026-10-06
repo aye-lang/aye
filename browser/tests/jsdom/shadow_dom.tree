@@ -1,0 +1,36 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Shadow DOM"
+      "\n"
+    <body>
+      <div id="host">
+        #shadow-root (open)
+          <header id="head">
+            <slot name="title" id="s1">
+              "No title"
+          <main>
+            #shadow-root (open)
+              <slot id="inner">
+            <slot id="s2">
+          <button id="btn">
+            "B"
+        <span id="t" slot="title">
+          "Title"
+        <p id="body">
+          "Body"
+        <!-- c -->
+        <em>
+      "\n"
+      <pre id="out">
+        "root true true 11 open true true [object ShadowRoot]\nscoped    \nroots true true true  #document-fragment\nassigned SPAN#t P#body P#body true true\ninnerHTML 130 <span id=\"t\" slot=\"title\">Title</span><p id=\"body\">Body</p><!--c-->\nflatten SLOT#s2 P#body\nappended em\nclick at BUTTON#btn target BUTTON#btn phase 2\nclick at #document-fragment target BUTTON#btn phase 3\nclick at DIV#host target DIV#host phase 2\nclick at BODY target DIV#host phase 3\nclick at #document target DIV#host phase 3\nclick at window target DIV#host phase 3\npath BUTTON#btn,#document-fragment\npath BUTTON#btn,#document-fragment,DIV#host,BODY,HTML,#document,window\nhost saw a non-composed event\nping path P#body,SLOT#s2,SLOT#inner,#document-fragment,MAIN,#document-fragment,DIV#host,BODY,HTML,#document,window\nclosed click DIV 5\nclick at BODY target DIV phase 3\nclick at #document target DIV phase 3\nclick at window target DIV phase 3\nclosed  closed true\nerrors NotSupportedError,NotSupportedError,TypeError,HierarchyRequestError\nadopted 1 true 1\nadopt error TypeError\ncomputed rgb(0, 128, 0) rgb(255, 0, 0) rgb(0, 128, 0)\nslotchange s2 P#body,EM\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nfunction names(list) { return Array.from(list, n => n === window ? 'window' : n.nodeName + (n.id ? '#' + n.id : '')).join(',') || '-'; }\nconst host = document.getElementById('host');\nconst root = host.attachShadow({ mode: 'open' });\nlog('root', root instanceof ShadowRoot, root instanceof DocumentFragment, root.nodeType, root.mode, root.host === host, host.shadowRoot === root, String(root));\nroot.innerHTML = '<header id=\"head\"><slot name=\"title\" id=\"s1\">No title</slot></header><main><slot id=\"s2\"></slot></main><button id=\"btn\">B</button>';\nconst s1 = root.getElementById('s1'), s2 = root.querySelector('#s2'), btn = root.querySelector('button');\nlog('scoped', document.getElementById('head'), root.querySelector('span'), document.querySelector('#s1'), host.querySelector('header'));\nlog('roots', btn.getRootNode() === root, btn.getRootNode({ composed: true }) === document, btn.isConnected, root.parentNode, btn.parentNode.nodeName);\nlog('assigned', names(s1.assignedNodes()), names(s2.assignedNodes()), names(s2.assignedElements()), document.getElementById('t').assignedSlot === s1, document.getElementById('body').assignedSlot === s2);\nlog('innerHTML', root.innerHTML.length, host.innerHTML);\n\n// Flattened slots: a slot in a nested shadow tree.\nconst inner = root.querySelector('main').attachShadow({ mode: 'open' });\ninner.innerHTML = '<slot id=\"inner\"></slot>';\nlog('flatten', names(inner.querySelector('slot').assignedNodes()), names(inner.querySelector('slot').assignedNodes({ flatten: true })));\n\n// slotchange, after the change, in a microtask.\ns2.addEventListener('slotchange', e => log('slotchange', e.target.id, names(s2.assignedNodes())));\nhost.appendChild(document.createElement('em'));\nlog('appended em');\n\n// Events: retargeting and the composed path.\nfor (const n of [btn, root, host, document.body, document, window]) {\n  n.addEventListener('click', e => log('click at', names([e.currentTarget]), 'target', names([e.target]), 'phase', e.eventPhase));\n}\nbtn.click();\nbtn.addEventListener('custom', e => log('path', names(e.composedPath())));\nhost.addEventListener('custom', () => log('host saw a non-composed event'));\nbtn.dispatchEvent(new CustomEvent('custom', { bubbles: true }));\nbtn.dispatchEvent(new CustomEvent('custom', { bubbles: true, composed: true }));\n// A slotted node's event goes through its slot.\ndocument.getElementById('body').addEventListener('ping', e => log('ping path', names(e.composedPath())));\ndocument.getElementById('body').dispatchEvent(new Event('ping', { bubbles: true }));\n\n// Closed roots.\nconst shut = document.createElement('div');\nconst closed = shut.attachShadow({ mode: 'closed' });\nclosed.innerHTML = '<i id=\"secret\">s</i>';\ndocument.body.appendChild(shut);\nshut.addEventListener('click', e => log('closed click', names([e.target]), names(e.composedPath()).split(',').length));\nclosed.querySelector('i').click();\nlog('closed', shut.shadowRoot, closed.mode, closed.host === shut);\n\n// Errors.\nconst errors = [];\ntry { host.attachShadow({ mode: 'open' }); } catch (e) { errors.push(e.name); }\ntry { document.createElement('a').attachShadow({ mode: 'open' }); } catch (e) { errors.push(e.name); }\ntry { document.createElement('div').attachShadow({ mode: 'sideways' }); } catch (e) { errors.push(e.name); }\ntry { document.body.appendChild(root); } catch (e) { errors.push(e.name); }\nlog('errors', errors.join(','));\n\n// Adopted style sheets.\nconst sheet = new CSSStyleSheet();\nsheet.replaceSync(':host { color: green } @media screen { p { margin: 0 } }');\nroot.adoptedStyleSheets = [sheet];\ndocument.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];\nsheet.insertRule('em { color: red }');\nlog('adopted', root.adoptedStyleSheets.length, root.adoptedStyleSheets[0] === sheet, document.adoptedStyleSheets.length);\ntry { root.adoptedStyleSheets = ['x']; } catch (e) { log('adopt error', e.name); }\nlog('computed', getComputedStyle(root.querySelector('header')).color, getComputedStyle(document.querySelector('#host em')).color, getComputedStyle(document.getElementById('t')).color);\n"
+      "\n"
+      <div>
+        #shadow-root (closed)
+          <i id="secret">
+            "s"

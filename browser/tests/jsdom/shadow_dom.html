@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<title>Shadow DOM</title>
+<div id="host"><span id="t" slot="title">Title</span><p id="body">Body</p><!--c--></div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+function names(list) { return Array.from(list, n => n === window ? 'window' : n.nodeName + (n.id ? '#' + n.id : '')).join(',') || '-'; }
+const host = document.getElementById('host');
+const root = host.attachShadow({ mode: 'open' });
+log('root', root instanceof ShadowRoot, root instanceof DocumentFragment, root.nodeType, root.mode, root.host === host, host.shadowRoot === root, String(root));
+root.innerHTML = '<header id="head"><slot name="title" id="s1">No title</slot></header><main><slot id="s2"></slot></main><button id="btn">B</button>';
+const s1 = root.getElementById('s1'), s2 = root.querySelector('#s2'), btn = root.querySelector('button');
+log('scoped', document.getElementById('head'), root.querySelector('span'), document.querySelector('#s1'), host.querySelector('header'));
+log('roots', btn.getRootNode() === root, btn.getRootNode({ composed: true }) === document, btn.isConnected, root.parentNode, btn.parentNode.nodeName);
+log('assigned', names(s1.assignedNodes()), names(s2.assignedNodes()), names(s2.assignedElements()), document.getElementById('t').assignedSlot === s1, document.getElementById('body').assignedSlot === s2);
+log('innerHTML', root.innerHTML.length, host.innerHTML);
+
+// Flattened slots: a slot in a nested shadow tree.
+const inner = root.querySelector('main').attachShadow({ mode: 'open' });
+inner.innerHTML = '<slot id="inner"></slot>';
+log('flatten', names(inner.querySelector('slot').assignedNodes()), names(inner.querySelector('slot').assignedNodes({ flatten: true })));
+
+// slotchange, after the change, in a microtask.
+s2.addEventListener('slotchange', e => log('slotchange', e.target.id, names(s2.assignedNodes())));
+host.appendChild(document.createElement('em'));
+log('appended em');
+
+// Events: retargeting and the composed path.
+for (const n of [btn, root, host, document.body, document, window]) {
+  n.addEventListener('click', e => log('click at', names([e.currentTarget]), 'target', names([e.target]), 'phase', e.eventPhase));
+}
+btn.click();
+btn.addEventListener('custom', e => log('path', names(e.composedPath())));
+host.addEventListener('custom', () => log('host saw a non-composed event'));
+btn.dispatchEvent(new CustomEvent('custom', { bubbles: true }));
+btn.dispatchEvent(new CustomEvent('custom', { bubbles: true, composed: true }));
+// A slotted node's event goes through its slot.
+document.getElementById('body').addEventListener('ping', e => log('ping path', names(e.composedPath())));
+document.getElementById('body').dispatchEvent(new Event('ping', { bubbles: true }));
+
+// Closed roots.
+const shut = document.createElement('div');
+const closed = shut.attachShadow({ mode: 'closed' });
+closed.innerHTML = '<i id="secret">s</i>';
+document.body.appendChild(shut);
+shut.addEventListener('click', e => log('closed click', names([e.target]), names(e.composedPath()).split(',').length));
+closed.querySelector('i').click();
+log('closed', shut.shadowRoot, closed.mode, closed.host === shut);
+
+// Errors.
+const errors = [];
+try { host.attachShadow({ mode: 'open' }); } catch (e) { errors.push(e.name); }
+try { document.createElement('a').attachShadow({ mode: 'open' }); } catch (e) { errors.push(e.name); }
+try { document.createElement('div').attachShadow({ mode: 'sideways' }); } catch (e) { errors.push(e.name); }
+try { document.body.appendChild(root); } catch (e) { errors.push(e.name); }
+log('errors', errors.join(','));
+
+// Adopted style sheets.
+const sheet = new CSSStyleSheet();
+sheet.replaceSync(':host { color: green } @media screen { p { margin: 0 } }');
+root.adoptedStyleSheets = [sheet];
+document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+sheet.insertRule('em { color: red }');
+log('adopted', root.adoptedStyleSheets.length, root.adoptedStyleSheets[0] === sheet, document.adoptedStyleSheets.length);
+try { root.adoptedStyleSheets = ['x']; } catch (e) { log('adopt error', e.name); }
+log('computed', getComputedStyle(root.querySelector('header')).color, getComputedStyle(document.querySelector('#host em')).color, getComputedStyle(document.getElementById('t')).color);
+</script>

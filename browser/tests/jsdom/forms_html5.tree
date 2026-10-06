@@ -1,0 +1,32 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "HTML5 forms"
+      "\n"
+    <body>
+      <form id="f">
+        <input id="n" name="n" type="number" min="2" max="10" step="2" required="">
+        <input id="email" type="email">
+        <input id="date" type="date">
+        <input id="p" pattern="[A-Z]{2}[0-9]+">
+        <input id="c" type="checkbox" required="">
+        <button id="send">
+          "Send"
+        <button type="reset">
+          "Reset"
+      "\n"
+      <input id="outside" form="f" name="external" value="yes">
+      "\n"
+      <fieldset disabled="">
+        <input id="off" required="">
+        <legend>
+          <input id="legend" value="enabled">
+      "\n"
+      <pre id="results">
+        "required\nstep\nmaximum\nminimum\nnumber valid\nemail mismatch\nemail valid\nleap day\nbad date\npattern valid\npattern mismatch\ncustom\nform valid\nowner\nfieldset\nselectors\nblocked submit\nrequest submit\nform data\ncanceled reset\nreset"
+      "\n"
+      <script>
+        "\nconst f = document.getElementById('f'), n = document.getElementById('n');\nconst email = document.getElementById('email'), date = document.getElementById('date'), p = document.getElementById('p'), c = document.getElementById('c');\nlet lines = [];\nfunction test(name, value) { if (!value) throw new Error(name); lines.push(name); }\ntest('required', n.validity.valueMissing && !f.checkValidity());\nn.value = '3'; test('step', n.validity.stepMismatch);\nn.value = '12'; test('maximum', n.validity.rangeOverflow);\nn.value = '0'; test('minimum', n.validity.rangeUnderflow);\nn.value = '4'; test('number valid', n.validity.valid);\nemail.value = 'broken'; test('email mismatch', email.validity.typeMismatch);\nemail.value = 'a@example.com'; test('email valid', email.checkValidity());\ndate.value = '2024-02-29'; test('leap day', date.checkValidity());\ndate.value = '2023-02-29'; test('bad date', !date.checkValidity());\ndate.value = ''; p.value = 'AB12'; test('pattern valid', p.checkValidity());\np.value = 'aB12'; test('pattern mismatch', p.validity.patternMismatch);\np.value = 'AB12'; c.checked = true;\nn.setCustomValidity('Choose another number'); test('custom', n.validationMessage === 'Choose another number' && n.validity.customError);\nn.setCustomValidity(''); test('form valid', f.checkValidity());\ntest('owner', document.getElementById('outside').form === f);\ntest('fieldset', !document.getElementById('off').willValidate && document.getElementById('legend').willValidate);\ntest('selectors', n.matches(':valid:required') && p.matches(':optional'));\nlet invalid = 0, submitted = 0;\nn.addEventListener('invalid', function () { invalid++; });\nf.addEventListener('submit', function (e) { submitted++; e.preventDefault(); });\nn.value = ''; f.requestSubmit(); test('blocked submit', invalid === 1 && submitted === 0);\nn.value = '4'; f.requestSubmit(); test('request submit', submitted === 1);\nconst data = new FormData(f); test('form data', data.get('n') === '4' && data.get('external') === 'yes');\nf.addEventListener('reset', function (e) { e.preventDefault(); }, { once: true });\nf.reset(); test('canceled reset', n.value === '4');\nf.reset(); test('reset', n.value === '' && !c.checked);\ndocument.getElementById('results').textContent = lines.join('\\n');\n"
+      "\n"

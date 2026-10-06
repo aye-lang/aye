@@ -1,0 +1,56 @@
+// M12: each coroutine has its own error return trace. The coroutine
+// stops in the middle of a call whose error it catches; main resumes it
+// from an `errdefer` while an error of its own is on the way out, and the
+// trace main prints is main's alone, whole.
+import std.coro
+import std.heap.General
+
+error E {
+    Bad
+}
+
+struct State {
+    v: u64
+}
+
+fn slowFail(n: u64) E!u64 {
+    coro.yield()
+    if n > 2 {
+        return E.Bad
+    }
+    return n
+}
+
+fn work(s: *mut State) {
+    s.v = slowFail(5) catch 99
+}
+
+fn fail(n: u64) E!u64 {
+    if n > 2 {
+        return E.Bad
+    }
+    return n
+}
+
+fn deep(n: u64) E!u64 {
+    let v = try fail(n)
+    return v
+}
+
+fn check(co: coro.Coroutine, s: *mut State) E!u64 {
+    errdefer @println(s.v)
+    errdefer co.resume()
+    let v = try deep(9)
+    return v
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var s = State { v: 0 }
+    let co = try coro.create(State, gpa.allocator(), 64 << 10, work, &mut s)
+    defer co.deinit()
+    co.resume()
+    @println(co.isDone())
+    _ = try check(co, &mut s)
+}

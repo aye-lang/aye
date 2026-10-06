@@ -1,0 +1,17 @@
+main
+ outer 0
+  inner x 1
+  inner x 2
+main
+ outer 1
+  inner x 3
+  inner x 4
+main
+ outer 2
+  inner x 5
+  inner x 6
+main
+ outer done
+4
+  inner y 11
+false

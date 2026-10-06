@@ -1,0 +1,16 @@
+// Script-level live ValidityState over the native `_validity`
+// (form_api.ore).
+pub let FORM_PRELUDE =
+    \\(function () {
+    \\const P = HTMLElement.prototype;
+    \\const fields = ['valueMissing', 'typeMismatch', 'patternMismatch', 'tooLong', 'tooShort', 'rangeUnderflow', 'rangeOverflow', 'stepMismatch', 'badInput', 'customError', 'valid'];
+    \\class ValidityState {
+    \\  constructor(el) { Object.defineProperty(this, '_el', {value: el}); }
+    \\}
+    \\for (const k of fields) Object.defineProperty(ValidityState.prototype, k, {get: function () { return this._el._validity[k]; }});
+    \\Object.defineProperty(P, 'validity', {get: function () {
+    \\  if (!this._validityState) Object.defineProperty(this, '_validityState', {value: new ValidityState(this)});
+    \\  return this._validityState;
+    \\}, configurable: true});
+    \\globalThis.ValidityState = ValidityState;
+    \\})();

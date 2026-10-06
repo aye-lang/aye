@@ -1,0 +1,47 @@
+// M12: a coroutine as a generator: it yields the Fibonacci numbers one at
+// a time, from a loop inside a helper function (a stackful coroutine can
+// stop at any depth of calls), and the caller iterates until it is done.
+import std.coro
+import std.heap.General
+
+struct Fib {
+    limit: u64
+    value: u64
+}
+
+fn emit(g: *mut Fib, v: u64) {
+    g.value = v
+    coro.yield()
+}
+
+fn fib(g: *mut Fib) {
+    var a: u64 = 0
+    var b: u64 = 1
+    while a <= g.limit {
+        emit(g, a)
+        let c = a + b
+        a = b
+        b = c
+    }
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var g = Fib { limit: 100, value: 0 }
+    let co = try coro.create(Fib, gpa.allocator(), 64 << 10, fib, &mut g)
+    defer co.deinit()
+    var n: u64 = 0
+    while true {
+        co.resume()
+        if co.isDone() {
+            break
+        }
+        @print(g.value)
+        @print(" ")
+        n += 1
+    }
+    @println()
+    @println(n)
+    @println(co.isDone())
+}

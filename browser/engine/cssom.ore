@@ -8,9 +8,7 @@ import js.Args
 import js.Interp
 import js.JsError
 import js.Value
-import std.list.List
 import std.mem.AllocError
-import std.text
 
 fn installCssom(s: *mut Script, o: u32) JsError!void {
     let it = &mut s.it
@@ -18,7 +16,6 @@ fn installCssom(s: *mut Script, o: u32) JsError!void {
     try defMethod(it, o, "sheetInsert", 3, akSheetInsert)
     try defMethod(it, o, "sheetDelete", 2, akSheetDelete)
     try defMethod(it, o, "sheetDisabled", 2, akSheetDisabled)
-    try defMethod(it, o, "sheetAdopt", 1, akSheetAdopt)
 }
 
 // The styles depend on the sheets: they are computed again.
@@ -79,32 +76,6 @@ fn akSheetDisabled(it: *mut Interp, a: Args) JsError!Value {
     let s = scriptOf(it)
     let id = (try argIndex(it, a, 0)) as u32
     s.page.doc.sheets.setDisabled(id, it.toBoolean(it.arg(a, 1)))
-    sheetsChanged(s)
-    return Value.Undefined
-}
-
-// sheetAdopt("id,id,..."): document.adoptedStyleSheets.
-fn akSheetAdopt(it: *mut Interp, a: Args) JsError!Value {
-    let s = scriptOf(it)
-    let b = try it.builder()
-    defer it.release(b)
-    try argText(it, a, 0, b)
-    var ids = List(u32).init(s.alloc)
-    defer ids.deinit()
-    var parts = text.split(b.bytes(), ",")
-    while parts.next() |p| {
-        if p.len == 0 {
-            continue
-        }
-        var v: u32 = 0
-        for c in p {
-            if c >= '0' && c <= '9' {
-                v = v * 10 + (c - '0') as u32
-            }
-        }
-        try ids.append(v)
-    }
-    try s.page.doc.sheets.adopt(ids.items())
     sheetsChanged(s)
     return Value.Undefined
 }

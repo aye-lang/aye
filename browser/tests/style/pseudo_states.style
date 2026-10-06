@@ -85,7 +85,7 @@
       display: block
       color: rgb(128, 0, 128)
     <x-widget>
-      font-weight: 700
+      display: none
     <a href="#">
       color: rgb(0, 0, 238)
       text-decoration-line: underline

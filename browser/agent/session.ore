@@ -19,6 +19,7 @@
 //   commands only a window has (tabs, the user's context).
 
 import css
+import dom
 import dom.NodeId
 import engine
 import engine.Page
@@ -256,15 +257,15 @@ fn maxF(a: f64, b: f64) f64 {
 }
 
 /// The rectangle of node `n` of page `p` (in the coordinates of the
-/// document shown): of its own boxes, else of its nearest ancestor that
-/// has one.
+/// document shown): of its own boxes, else of its nearest ancestor (in
+/// the flat tree) that has one.
 fn rectOf(s: *Session, p: *Page, n: NodeId) ?Rect {
     var cur: ?NodeId = n
     while cur |c| {
         if s.rects.get(nodeKey(p, c)) |r| {
             return r
         }
-        cur = p.doc.parent(c)
+        cur = dom.flatParent(&p.doc, c)
     }
     return null
 }

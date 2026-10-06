@@ -297,6 +297,7 @@ fn clickNode(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId) AllocErr
     }
     if isFocusable(p, el) {
         focusIn(s, p, el)
+        p.doc.controls.focus_visible = dom.isTextField(&p.doc, el)
     }
     if !(try fire(p, el, "click", "")) {
         return done(try concat(tmp, "clicked ", who, "; a script canceled the default action"))
@@ -310,7 +311,7 @@ fn clickNode(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId) AllocErr
         if p.doc.isElement(c, "button") || p.doc.isElement(c, "label") {
             break
         }
-        cur = p.doc.parent(c)
+        cur = dom.flatParent(&p.doc, c)
     }
     if dom.isCheckable(&p.doc, el) || dom.isSubmitButton(&p.doc, el) || dom.isResetButton(&p.doc, el) {
         let act = try engine.activate(p, el)
@@ -400,6 +401,15 @@ fn activated(s: *mut Session, tmp: Allocator, p: *mut Page, el: NodeId, who: []u
 /// Submits `form` (by `submitter`, or implicitly) and loads the
 /// response in a new history entry. `what` says what led to it.
 fn submitForm(s: *mut Session, tmp: Allocator, p: *mut Page, form: NodeId, submitter: ?NodeId, what: []u8) AllocError!Outcome {
+    if !(try engine.validateSubmission(p, form, submitter)) {
+        try relayout(s)
+        let invalid = p.doc.controls.validation
+        var message: []u8 = "The form is invalid."
+        if invalid |c| {
+            message = dom.validationMessage(&p.doc, c)
+        }
+        return done(try concat(tmp, what, "; submission blocked: ", message))
+    }
     try recordOn(s, tmp, p, "submit of", form)
     if !(try fire(p, form, "submit", "")) {
         try relayout(s)
@@ -569,6 +579,9 @@ fn typeInto(s: *mut Session, tmp: Allocator, ref: []u8, input: []u8, submit: boo
     }
     let el = t.node.?
     let who = try describeNode(s, tmp, p, el)
+    if p.doc.isElement(el, "input") && text.eql(dom.inputType(&p.doc, el), "file") {
+        return failed(try concat(tmp, "cannot type into ", who, ": file uploads are not supported"))
+    }
     if !isTextInput(p, el) {
         return failed(try concat(tmp, "cannot type into ", who, ": it is not a text field"))
     }
@@ -704,7 +717,17 @@ fn press(s: *mut Session, tmp: Allocator, key: []u8) AllocError!Outcome {
         return moveFocus(s, tmp, p, text.eql(key, "Tab"))
     }
     if p.doc.controls.focus |f| {
+        p.doc.controls.focus_visible = true
         let who = try describeNode(s, tmp, p, f)
+        let range = p.doc.isElement(f, "input") && text.eql(dom.inputType(&p.doc, f), "range")
+        if text.eql(key, "ArrowUp") || text.eql(key, "ArrowDown") || (range && (text.eql(key, "ArrowLeft") || text.eql(key, "ArrowRight"))) {
+            if try dom.stepValue(&mut p.doc, f, text.eql(key, "ArrowUp") || text.eql(key, "ArrowRight")) {
+                try fire(p, f, "input", "")
+                try fire(p, f, "change", "")
+                try relayout(s)
+                return done(try concat(tmp, "stepped ", who, ""))
+            }
+        }
         if isTextInput(p, f) {
             if text.eql(key, "Backspace") || text.eql(key, "Delete") {
                 if text.eql(key, "Backspace") {
@@ -824,7 +847,7 @@ fn moveFocus(s: *mut Session, tmp: Allocator, p: *mut Page, forward: bool) Alloc
             }
             try all.append(h)
         }
-        cur = p.doc.following(h, p.doc.root)
+        cur = dom.flatFollowing(&p.doc, h, p.doc.root)
     }
     if all.len() == 0 {
         return done("nothing on the page takes the focus")
@@ -940,7 +963,7 @@ fn findIn(s: *mut Session, tmp: Allocator, p: *mut Page, want: []u8, count: *mut
     while cur |h| {
         let n = p.doc.node(h).*
         if n.kind == Kind.Element && (!rendered(p, h) || html.isIn(n.name, "script style template")) {
-            cur = p.doc.followingSkip(h, p.doc.root)
+            cur = dom.flatFollowingSkip(&p.doc, h, p.doc.root)
             continue
         }
         if n.kind == Kind.Text && textVisible(p, h) {
@@ -955,7 +978,7 @@ fn findIn(s: *mut Session, tmp: Allocator, p: *mut Page, want: []u8, count: *mut
                 from = from + at + want.len
             }
         }
-        cur = p.doc.following(h, p.doc.root)
+        cur = dom.flatFollowing(&p.doc, h, p.doc.root)
     }
     for k in 0..p.frames.len() {
         let f = p.frames.items()[k]
@@ -995,14 +1018,14 @@ fn findLine(s: *mut Session, tmp: Allocator, p: *mut Page, t: NodeId, flat: []u8
     }
     try out.appendByte('"')
     // The nearest element around it that has a ref.
-    var cur = p.doc.parent(t)
+    var cur = dom.flatParent(&p.doc, t)
     while cur |c| {
         if refOf(s, p, c) |r| {
             try out.append(" in ")
             try out.append(try describeNode(s, tmp, p, c))
             break
         }
-        cur = p.doc.parent(c)
+        cur = dom.flatParent(&p.doc, c)
     }
     if rectOf(s, p, t) |r| {
         if offscreen(s, r) {

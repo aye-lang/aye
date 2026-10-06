@@ -186,8 +186,8 @@ fn nodeOf(t: *Tree, i: usize) ?NodeId {
 }
 
 /// The link at (`x`, `y`): the nearest `a` element with an `href`
-/// around the node there, or a frame (`iframe`, `embed`, `object`) and
-/// the address it shows.
+/// around the node there (in the flat tree), or a frame (`iframe`,
+/// `embed`, `object`) and the address it shows.
 pub fn linkAt(t: *Tree, x: f64, y: f64) ?Link {
     var cur = nodeAt(t, x, y)
     while cur |n| {
@@ -201,7 +201,7 @@ pub fn linkAt(t: *Tree, x: f64, y: f64) ?Link {
                 return Link { el: n, href: href }
             }
         }
-        cur = t.doc.parent(n)
+        cur = dom.flatParent(t.doc, n)
     }
     return null
 }

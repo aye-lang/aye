@@ -1,0 +1,77 @@
+<html>
+  display: block
+  margin-top: 1px
+  <head>
+    display: none
+    margin-top: 1px
+    <style>
+      display: none
+      margin-top: 1px
+  <body>
+    display: block
+    margin-top: 1px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    <section class="theme">
+      display: block
+      margin-top: 1px
+      <x-card class="dark special">
+        display: block
+        background-color: rgb(0, 0, 0)
+        margin-bottom: 3px
+        padding-left: 4px
+        ::after
+          display: inline
+          background-color: rgba(0, 0, 0, 0)
+          margin-bottom: 0px
+          padding-left: 0px
+          content: "!"
+        #shadow-root (open)
+          <style>
+            display: none
+          <header>
+            display: block
+            padding-bottom: 5px
+            <h3 part="label">
+              display: block
+              color: rgb(255, 0, 0)
+              font-size: 18.72px
+              font-weight: 700
+              font-style: italic
+              margin-top: 18.72px
+              margin-bottom: 18.72px
+              text-align: right
+              text-decoration-line: underline
+            <slot name="title">
+              display: contents
+          <p>
+            display: block
+            color: rgb(255, 255, 255)
+            margin-top: 16px
+            margin-bottom: 16px
+          <slot>
+            display: contents
+        <span slot="title">
+          color: rgb(0, 0, 128)
+          margin-top: 1px
+          margin-right: 31px
+          margin-left: 30px
+        <b class="light">
+          font-weight: 700
+          margin-top: 1px
+          margin-right: 31px
+          margin-left: 2px
+          padding-top: 2px
+    <x-card class="light">
+      display: block
+      margin-bottom: 3px
+      margin-left: 2px
+      #shadow-root (open)
+        <style>
+          display: none
+        <p>
+          display: block
+          color: rgb(128, 128, 128)
+          margin-top: 16px
+          margin-bottom: 16px

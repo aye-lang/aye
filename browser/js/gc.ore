@@ -17,6 +17,21 @@ pub fn gcStressRequested() bool {
     return false
 }
 
+var trace_mode: u8 = 0
+
+/// ANYKNOWN_JS_TRACE=1 adds to the message of every error the engine
+/// makes the start of the source of the functions running, innermost
+/// first (minified site scripts have no other way to tell where).
+pub fn traceRequested() bool {
+    if trace_mode == 0 {
+        trace_mode = 1
+        if getenv("ANYKNOWN_JS_TRACE".ptr) != null {
+            trace_mode = 2
+        }
+    }
+    return trace_mode == 2
+}
+
 fn markValue(it: *mut Interp, v: Value) {
     match v {
         .Str { s } => markStr(it, s)

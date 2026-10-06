@@ -9,6 +9,7 @@
 //     text:STRING     typed text ("_" stands for a space)
 //     click:X,Y       a left click at a window point
 //     move:X,Y        the mouse moves there
+//     release:X,Y     release the left button (after a slider drag)
 //     wheel:N         the wheel turns N notches (negative: down)
 //     agents:N        no event: the words after it wait until agents
 //                     made N requests (`--agent-socket`, agents.ore)
@@ -61,7 +62,7 @@ fn scriptEvent(word: []u8) ?SDL_Event {
         }
         return ev
     }
-    if text.startsWith(word, "click:") || text.startsWith(word, "move:") {
+    if text.startsWith(word, "click:") || text.startsWith(word, "move:") || text.startsWith(word, "release:") {
         let colon = std.mem.indexOf(word, ':') orelse return null
         var parts = text.split(word[colon + 1..], ",")
         let xs = parts.next() orelse return null
@@ -72,8 +73,11 @@ fn scriptEvent(word: []u8) ?SDL_Event {
         let y = text.parseInt(ys) catch |e| {
             return null
         }
-        if text.startsWith(word, "click:") {
+        if text.startsWith(word, "click:") || text.startsWith(word, "release:") {
             ev.kind = SDL_MOUSEBUTTONDOWN
+            if text.startsWith(word, "release:") {
+                ev.kind = SDL_MOUSEBUTTONUP
+            }
             let be = &mut ev.button
             be.button = SDL_BUTTON_LEFT
             be.x = x as i32

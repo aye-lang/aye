@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<style>
+body { margin: 8px; font: 16px monospace }
+input { position: absolute; left: 10px; top: 10px; width: 100px }
+input[type=range] { top: 50px; width: 160px }
+button { position: absolute; left: 10px; top: 90px }
+p { position: absolute; top: 150px }
+</style>
+<form action="result.html"><input name="n" type="number" min="2" max="10" step="2" required><input name="r" type="range" min="0" max="100" step="10" value="20"><button>Submit</button></form>
+<p id="events"></p>
+<script>
+const range = document.querySelector('input[type=range]');
+range.addEventListener('change', function () { document.getElementById('events').textContent = 'range changed: ' + range.value; });
+</script>

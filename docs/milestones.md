@@ -344,3 +344,40 @@ C headers read with libclang instead of declarations written by hand, as
   checker, `ore check --json` and the C generator are unchanged; see
   `docs/decisions.md`, "C headers (M11)", for the mapping, the cache and
   what happens without libclang.
+
+## M12: Coroutines
+
+The last open question of `design.md` (async or coroutines), decided with
+the browser's experience: its generators and async functions ran on a
+thread each, handing control back and forth through two channels.
+
+- **std:** `std.coro`: `create(T, alloc, stack, f, arg)` makes a stackful
+  coroutine that runs `f(arg)` on a stack of its own; `Coroutine.resume`,
+  `std.coro.yield`, `isDone` and `deinit`. No language change:
+  `async`/`await` stay out of the language.
+- **Runtime:** the stack switch is assembly per target in the C prelude
+  (aarch64 and x86_64, macOS and Linux; the callee-saved registers,
+  FP/SIMD ones too); stacks are mmap'd with a 1 MiB `PROT_NONE` guard
+  region, and each thread keeps up to 16 freed ones for reuse. Running
+  out of a coroutine's stack panics with `panic: stack overflow` (debug and
+  safe mode) as a thread does; each coroutine has its own error return
+  trace. Debug and safe mode panic on resuming a finished, running or freed
+  coroutine, on resuming it on another thread than the one that made it,
+  and on `yield` outside a coroutine.
+- **Browser:** `js/coroutine.ore` runs generators and async functions on
+  `std.coro` coroutines instead of threads, with the same interface to the
+  interpreter.
+- **Acceptance:** golden programs for a generator, ping-pong (integer and
+  floating-point values live across switches), nested coroutines, the
+  guard region (deep recursion in a coroutine panics), 10k coroutines alive
+  at once and 10k made and freed, `General` allocations in coroutines,
+  coroutines on threads, the error return trace, and each misuse panic;
+  the spec's `std.coro` section; a JavaScript conformance script of many
+  live and dropped generators, nested resumes, deep recursion and async
+  chains, also under `ANYKNOWN_JS_GC=stress`. Runs as x86_64 under
+  Rosetta; the generated C compiles for x86_64 and aarch64 Linux. No new
+  compile-time checks, so no new error codes.
+- **Done as:** see `docs/decisions.md`, "Coroutines (M12)". In the
+  browser, `fast` mode: iterating a generator 1e6 times took 4.7 to 7.7 s
+  and takes 0.31 s; 100k two-value generators 4.3 s, now 0.39 s; 100k
+  async chains of three functions 13 to 15 s, now 2.7 s.

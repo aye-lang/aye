@@ -1,0 +1,65 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <template shadowrootmode="open">
+        #document-fragment
+          <p>
+            "The head cannot host"
+      <title>
+        "Declarative shadow DOM"
+    "\n"
+    <body>
+      <x-card id="a">
+        #shadow-root (open)
+          <style>
+            "p { color: red }"
+          <header>
+            <slot name="title">
+              "No title"
+          <slot>
+        <h2 slot="title">
+          "Title"
+        <p>
+          "Light text"
+      "\n"
+      <div id="b">
+        #shadow-root (closed)
+          <p>
+            "Closed "
+            <span>
+              "root"
+        "light, not shown"
+      "\n"
+      <section>
+        #shadow-root (open)
+          <x-inner>
+            #shadow-root (open)
+              <b>
+                "nested"
+              " "
+              <slot>
+            <i>
+              "inner light"
+      "\n"
+      <span>
+        #shadow-root (open)
+          "first"
+        <template shadowrootmode="open">
+          #document-fragment
+            "second stays a template"
+      "\n"
+      <a href="#">
+        <template shadowrootmode="open">
+          #document-fragment
+            "a link cannot host"
+        "link"
+      "\n"
+      <div>
+        <template shadowrootmode="bogus">
+          #document-fragment
+            "not a mode"
+        <template>
+          #document-fragment
+            "plain"
+      "\n"

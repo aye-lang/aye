@@ -1,0 +1,69 @@
+// M12: two coroutines hand a ball back and forth through main, which
+// resumes them in turn. Integer and floating-point values live across
+// each switch in both the coroutines and main (the callee-saved
+// registers, FP/SIMD ones too, are saved by the switch).
+import std.coro
+import std.heap.General
+
+struct Table {
+    ball: u64
+    hits: [2]u64
+    log: f64
+}
+
+struct Player {
+    table: *mut Table
+    side: usize
+    rounds: u64
+}
+
+fn play(p: *mut Player) {
+    var power: f64 = 1.5
+    var mine: u64 = 0
+    for r in 0..p.rounds {
+        p.table.ball = p.table.ball * 3 + p.side as u64 + 1
+        p.table.hits[p.side] += 1
+        mine += r as u64
+        power = power * 1.25 + 0.5
+        p.table.log += power
+        coro.yield()
+    }
+    @print("side ")
+    @print(p.side)
+    @print(" sum ")
+    @print(mine)
+    @print(" power ")
+    @println(power)
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var t = Table { ball: 1, hits: [2]u64{0, 0}, log: 0.0 }
+    var ping = Player { table: &mut t, side: 0, rounds: 5 }
+    var pong = Player { table: &mut t, side: 1, rounds: 5 }
+    let a = try coro.create(Player, gpa.allocator(), 64 << 10, play, &mut ping)
+    defer a.deinit()
+    let b = try coro.create(Player, gpa.allocator(), 64 << 10, play, &mut pong)
+    defer b.deinit()
+    var scale: f64 = 0.5
+    var turns: u64 = 0
+    while !a.isDone() || !b.isDone() {
+        if !a.isDone() {
+            a.resume()
+            turns += 1
+        }
+        scale = scale * 2.0
+        if !b.isDone() {
+            b.resume()
+            turns += 1
+        }
+        @print(t.ball % 1000)
+        @print(" ")
+    }
+    @println()
+    @println(turns)
+    @println(t.hits[0] + t.hits[1])
+    @println(scale)
+    @println(t.log)
+}

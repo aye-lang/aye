@@ -34,8 +34,9 @@ fn docOf(it: *mut Interp) *mut Document {
     return &mut scriptOf(it).active.doc
 }
 
-// Records that a script changed the document.
-fn changed(it: *mut Interp) {
+// Records that a script changed the document, and hands the changes the
+// document logged to the observers (components.ore).
+fn changed(it: *mut Interp) JsError!void {
     let s = scriptOf(it)
     if s.active == s.page {
         s.version += 1
@@ -43,13 +44,14 @@ fn changed(it: *mut Interp) {
     } else {
         s.active.mutations += 1
     }
+    return flushMutations(it)
 }
 
 // Records that a script changed the attribute `name`: styles are not out
 // of date for the attributes of images and the like that no selector
 // looks at in practice (a lazy loader sets `src` in a loop and asks for
 // styles each time).
-fn changedAttr(it: *mut Interp, name: []u8) {
+fn changedAttr(it: *mut Interp, name: []u8) JsError!void {
     let s = scriptOf(it)
     if s.active != s.page {
         s.active.mutations += 1
@@ -59,11 +61,15 @@ fn changedAttr(it: *mut Interp, name: []u8) {
     if !hasClass(STYLE_NEUTRAL_ATTRS, name) {
         s.style_version += 1
     }
+    return flushMutations(it)
 }
 
 let STYLE_NEUTRAL_ATTRS = "src srcset sizes alt title loading decoding fetchpriority referrerpolicy crossorigin integrity nonce autocomplete"
 
 fn protoFor(s: *mut Script, h: NodeId) u32 {
+    if dom.isShadowRoot(&s.active.doc, h) && s.shadow_proto != js.NONE {
+        return s.shadow_proto
+    }
     if s.active.doc.isFragment(h) {
         return s.fragment_proto
     }
@@ -418,6 +424,7 @@ fn installDom(s: *mut Script) JsError!void {
     try accessor(it, html, "checked", controlChecked, controlSetChecked)
     try accessor(it, html, "selected", controlSelected, controlSetSelected)
     try accessor(it, html, "selectedIndex", controlSelectedIndex, controlSetSelectedIndex)
+    try installFormApi(it, html)
 
     try accessor(it, docp, "documentElement", documentElement, null)
     try accessor(it, docp, "body", documentBody, null)
@@ -661,8 +668,8 @@ fn nodeSetTextContent(it: *mut Interp, a: Args) JsError!Value {
     let doc = docOf(it)
     let kind = doc.node(h).kind
     if kind == Kind.Text || kind == Kind.Comment {
-        doc.node(h).data = try doc.dup(b.bytes())
-        changed(it)
+        try doc.setData(h, b.bytes())
+        try changed(it)
         return Value.Undefined
     }
     if kind != Kind.Element && !doc.isFragment(h) {
@@ -670,7 +677,7 @@ fn nodeSetTextContent(it: *mut Interp, a: Args) JsError!Value {
     }
     removeChildren(doc, h)
     try doc.appendText(h, b.bytes())
-    changed(it)
+    try changed(it)
     return Value.Undefined
 }
 
@@ -703,8 +710,8 @@ fn nodeSetValue(it: *mut Interp, a: Args) JsError!Value {
     if !js.isNullish(it.arg(a, 0)) {
         try argText(it, a, 0, b)
     }
-    doc.node(h).data = try doc.dup(b.bytes())
-    changed(it)
+    try doc.setData(h, b.bytes())
+    try changed(it)
     return Value.Undefined
 }
 
@@ -747,7 +754,7 @@ fn checkInsert(it: *mut Interp, parent: NodeId, child: NodeId) JsError!void {
     let doc = docOf(it)
     let pk = doc.node(parent).kind
     let ck = doc.node(child).kind
-    if (pk != Kind.Element && pk != Kind.Document) || (ck == Kind.Document && !doc.isFragment(child)) || isInclusiveAncestor(doc, child, parent) {
+    if (pk != Kind.Element && pk != Kind.Document) || (ck == Kind.Document && (!doc.isFragment(child) || dom.isShadowRoot(doc, child))) || isInclusiveAncestor(doc, child, parent) {
         try domError(it, "HierarchyRequestError", "Failed to execute 'appendChild' on 'Node': The new child element contains the parent.")
     }
 }
@@ -771,7 +778,7 @@ fn nodeAppendChild(it: *mut Interp, a: Args) JsError!Value {
     let child = try argNode(it, a, 0, "appendChild")
     try checkInsert(it, parent, child)
     insertNode(docOf(it), parent, child, null)
-    changed(it)
+    try changed(it)
     return it.arg(a, 0)
 }
 
@@ -791,7 +798,7 @@ fn nodeInsertBefore(it: *mut Interp, a: Args) JsError!Value {
             insertNode(doc, parent, child, before)
         }
     }
-    changed(it)
+    try changed(it)
     return it.arg(a, 0)
 }
 
@@ -803,7 +810,7 @@ fn nodeRemoveChild(it: *mut Interp, a: Args) JsError!Value {
         return domError(it, "NotFoundError", "Failed to execute 'removeChild' on 'Node': The node to be removed is not a child of this node.")
     }
     doc.detach(child)
-    changed(it)
+    try changed(it)
     return it.arg(a, 0)
 }
 
@@ -820,7 +827,7 @@ fn nodeReplaceChild(it: *mut Interp, a: Args) JsError!Value {
         insertNode(doc, parent, fresh, old)
         doc.detach(old)
     }
-    changed(it)
+    try changed(it)
     return it.arg(a, 1)
 }
 
@@ -829,7 +836,7 @@ fn nodeRemove(it: *mut Interp, a: Args) JsError!Value {
     let doc = docOf(it)
     if doc.parent(h) != null {
         doc.detach(h)
-        changed(it)
+        try changed(it)
     }
     return Value.Undefined
 }
@@ -877,6 +884,16 @@ fn copyNode(doc: *mut Document, h: NodeId, deep: bool) AllocError!NodeId {
             doc.appendChild(copy, k)
             cur = doc.nextSibling(c)
         }
+        if doc.templateContent(h) |from| {
+            // A template's contents are copied with it.
+            let to = try doc.createTemplateContent(copy)
+            var each = doc.firstChild(from)
+            while each |c| {
+                let k = try copyNode(doc, c, true)
+                doc.appendChild(to, k)
+                each = doc.nextSibling(c)
+            }
+        }
     }
     return copy
 }
@@ -904,6 +921,10 @@ fn nodeIsSameNode(it: *mut Interp, a: Args) JsError!Value {
 
 fn nodeGetRootNode(it: *mut Interp, a: Args) JsError!Value {
     let h = try thisNode(it, a)
+    let opts = it.arg(a, 0)
+    if js.isObject(opts) && it.toBoolean(try it.getProp(opts, try it.intern("composed"))) {
+        return wrap(it, docOf(it).shadowIncludingRoot(h))
+    }
     return wrap(it, docOf(it).treeRoot(h))
 }
 
@@ -1104,7 +1125,7 @@ fn setAttrFromArg(it: *mut Interp, a: Args, name: []u8) JsError!Value {
     defer it.release(b)
     try argText(it, a, 0, b)
     try docOf(it).setAttr(h, name, b.bytes())
-    changed(it)
+    try changed(it)
     return Value.Undefined
 }
 
@@ -1161,7 +1182,7 @@ fn elementSetAttribute(it: *mut Interp, a: Args) JsError!Value {
     defer it.release(v)
     try argText(it, a, 1, v)
     try docOf(it).setAttr(h, name.bytes(), v.bytes())
-    changedAttr(it, name.bytes())
+    try changedAttr(it, name.bytes())
     return Value.Undefined
 }
 
@@ -1173,7 +1194,7 @@ fn elementRemoveAttribute(it: *mut Interp, a: Args) JsError!Value {
     let doc = docOf(it)
     if doc.attr(h, b.bytes()) != null {
         doc.removeAttr(h, b.bytes())
-        changedAttr(it, b.bytes())
+        try changedAttr(it, b.bytes())
     }
     return Value.Undefined
 }
@@ -1218,17 +1239,27 @@ fn elementSetInnerHtml(it: *mut Interp, a: Args) JsError!Value {
     if !js.isNullish(it.arg(a, 0)) {
         try argText(it, a, 0, b)
     }
-    let s = scriptOf(it)
+    try replaceWithMarkup(it, h, docOf(it).node(h).name, b.bytes())
+    return Value.Undefined
+}
+
+// Replaces the children of `h` (a template's contents for a template)
+// with the nodes of `src` parsed as the content of an element named
+// `context`.
+fn replaceWithMarkup(it: *mut Interp, h: NodeId, context: []u8, src: []u8) JsError!void {
     var nodes = List(NodeId).init(it.alloc)
     defer nodes.deinit()
-    try parseFragment(s.active, docOf(it).node(h).name, b.bytes(), &mut nodes)
+    try parseFragment(scriptOf(it).active, context, src, &mut nodes)
     let doc = docOf(it)
-    removeChildren(doc, h)
-    for n in nodes.items() {
-        doc.appendChild(h, n)
+    var target = h
+    if doc.isElement(h, "template") {
+        target = doc.templateContent(h) orelse try doc.createTemplateContent(h)
     }
-    changed(it)
-    return Value.Undefined
+    removeChildren(doc, target)
+    for n in nodes.items() {
+        doc.appendChild(target, n)
+    }
+    try changed(it)
 }
 
 fn elementOuterHtml(it: *mut Interp, a: Args) JsError!Value {
@@ -1259,7 +1290,7 @@ fn elementSetOuterHtml(it: *mut Interp, a: Args) JsError!Value {
         docOf(it).insertBefore(parent, n, h)
     }
     docOf(it).detach(h)
-    changed(it)
+    try changed(it)
     return Value.Undefined
 }
 
@@ -1268,7 +1299,7 @@ fn elementSetOuterHtml(it: *mut Interp, a: Args) JsError!Value {
 fn controlValue(it: *mut Interp, a: Args) JsError!Value {
     let h = try thisElement(it, a)
     let doc = docOf(it)
-    if dom.isControl(doc, h) || doc.isElement(h, "option") || doc.isElement(h, "textarea") {
+    if dom.isControl(doc, h) || doc.isElement(h, "option") || doc.isElement(h, "textarea") || doc.isElement(h, "output") {
         return it.newString(dom.valueOf(doc, h))
     }
     return it.newString(doc.attr(h, "value") orelse "")
@@ -1282,12 +1313,12 @@ fn controlSetValue(it: *mut Interp, a: Args) JsError!Value {
         try argText(it, a, 0, b)
     }
     let doc = docOf(it)
-    if dom.isTextField(doc, h) || doc.isElement(h, "select") || doc.isElement(h, "textarea") {
+    if dom.isControl(doc, h) || doc.isElement(h, "output") {
         try dom.setValue(doc, h, b.bytes())
     } else {
         try doc.setAttr(h, "value", b.bytes())
     }
-    changed(it)
+    try changed(it)
     return Value.Undefined
 }
 
@@ -1301,7 +1332,7 @@ fn controlSetChecked(it: *mut Interp, a: Args) JsError!Value {
     let doc = docOf(it)
     if dom.isCheckable(doc, h) {
         try dom.setChecked(doc, h, it.toBoolean(it.arg(a, 0)))
-        changed(it)
+        try changed(it)
     }
     return Value.Undefined
 }
@@ -1320,13 +1351,13 @@ fn controlSetSelected(it: *mut Interp, a: Args) JsError!Value {
             if dom.selectOf(doc, h) |sel| {
                 if doc.attr(sel, "multiple") == null {
                     try dom.selectOption(doc, sel, h)
-                    changed(it)
+                    try changed(it)
                     return Value.Undefined
                 }
             }
         }
         try dom.setSelected(doc, h, on)
-        changed(it)
+        try changed(it)
     }
     return Value.Undefined
 }
@@ -1356,7 +1387,7 @@ fn controlSetSelectedIndex(it: *mut Interp, a: Args) JsError!Value {
             try dom.setSelected(doc, o, false)
         }
     }
-    changed(it)
+    try changed(it)
     return Value.Undefined
 }
 
@@ -1494,7 +1525,7 @@ fn namedSet(s: *mut Script, o: u32, key: u32, value: Value) JsError!bool {
         try kebab(name, "", b)
         try setStyleDecl(s, h, b.bytes(), v.bytes())
     }
-    changed(it)
+    try changed(it)
     return true
 }
 
@@ -1599,7 +1630,7 @@ fn styleSetCssText(it: *mut Interp, a: Args) JsError!Value {
     defer it.release(b)
     try argText(it, a, 0, b)
     try docOf(it).setAttr(h, "style", b.bytes())
-    changed(it)
+    try changed(it)
     return Value.Undefined
 }
 
@@ -1637,7 +1668,7 @@ fn styleSetProperty(it: *mut Interp, a: Args) JsError!Value {
         try argText(it, a, 1, v)
     }
     try setStyleDecl(scriptOf(it), h, b.bytes(), v.bytes())
-    changed(it)
+    try changed(it)
     return Value.Undefined
 }
 
@@ -1651,7 +1682,7 @@ fn styleRemoveProperty(it: *mut Interp, a: Args) JsError!Value {
     try styleValue(docOf(it).attr(h, "style") orelse "", b.bytes(), v)
     let old = try it.newString(v.bytes())
     try setStyleDecl(scriptOf(it), h, b.bytes(), "")
-    changed(it)
+    try changed(it)
     return old
 }
 
@@ -1722,7 +1753,7 @@ fn documentSetTitle(it: *mut Interp, a: Args) JsError!Value {
     }
     removeChildren(doc, t)
     try doc.appendText(t, b.bytes())
-    changed(it)
+    try changed(it)
     return Value.Undefined
 }
 

@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0 }
+.light { color: red }
+</style>
+<x-card><template shadowrootmode="open"><style>
+:host { display: block; border: 2px solid black }
+header { padding: 4px }
+</style><header><slot name="title">Default title</slot></header><div>Shadow text before <slot></slot> and after</div><slot name="none">Fallback shown</slot></template><b slot="title">Slotted title</b><span class="light">slotted inline</span><i slot="missing">not slotted: hidden</i></x-card>
+<div><template shadowrootmode="open"><p>Only the shadow tree shows</p></template><p>Light paragraph: hidden</p></div>
+<ol><template shadowrootmode="open"><slot></slot></template><li>one</li><li>two</li></ol>

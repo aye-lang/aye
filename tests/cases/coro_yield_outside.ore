@@ -1,0 +1,12 @@
+// M12: `std.coro.yield` outside a coroutine panics (debug and safe mode).
+import std.coro
+
+fn helper() {
+    coro.yield()
+}
+
+pub fn main() {
+    @println("before")
+    helper()
+    @println("after")
+}
