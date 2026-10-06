@@ -33,7 +33,13 @@ fn akImageLoad(it: *mut Interp, a: Args) JsError!Value {
     }
     let base = try documentBase(cache.alloc, &p.doc, &p.url)
     defer base.deinit(cache.alloc)
+    let mapped = cache.nodes.get(h)
     let loaded = try loadElementImage(cache, &p.doc, h, &base, css.Media { width: s.width, height: s.height })
+    // A new bitmap changes the element's natural size: the next geometry
+    // query must lay out again though the document did not change.
+    if cache.nodes.get(h) != mapped {
+        dropGeometry(s)
+    }
     defer {
         if loaded |l| {
             l.target.deinit(cache.alloc)

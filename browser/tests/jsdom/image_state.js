@@ -105,6 +105,21 @@ async function run() {
   check('picture source recovery', pictureImg.naturalHeight === 4);
   host.appendChild(pictureImg);
   check('moved out of picture', await fails(pictureImg.decode()) && pictureImg.currentSrc === BAD);
+  const rendered = id => document.getElementById(id);
+  for (const id of ['styled', 'attributes', 'ratio', 'unrendered']) await rendered(id).decode();
+  check('rendered content box', rendered('styled').width === 30 && rendered('styled').height === 12);
+  check('rendered attribute size', rendered('attributes').width === 6 && rendered('attributes').height === 9);
+  check('rendered natural ratio', rendered('ratio').width === 20 && rendered('ratio').height === 40);
+  check('unrendered fallback', rendered('unrendered').width === 7 && rendered('unrendered').height === 4);
+  const shown = new Image(50, 60);
+  shown.src = PNG;
+  await shown.decode();
+  shown.style.width = '15px';
+  check('detached fallback', shown.width === 50 && shown.height === 60);
+  document.body.append(shown);
+  check('inserted rendered size', shown.width === 15 && shown.height === 60);
+  rendered('styled').style.display = 'none';
+  check('display none fallback', rendered('styled').width === 100 && rendered('styled').height === 50);
   check('event state ordering', eventStates);
   check('final event counts', loads === 2 && errors === 3);
 }

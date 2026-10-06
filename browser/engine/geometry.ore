@@ -78,6 +78,7 @@ fn installGeometry(s: *mut Script, o: u32) JsError!void {
     try defMethod(it, o, "setScroll", 3, akSetScroll)
     try defMethod(it, o, "windowScroll", 1, akWindowScroll)
     try defMethod(it, o, "setLayoutHook", 1, akSetLayoutHook)
+    try defMethod(it, o, "renderedSize", 2, akRenderedSize)
 }
 
 fn akSetLayoutHook(it: *mut Interp, a: Args) JsError!Value {
@@ -582,6 +583,21 @@ fn metric(s: *mut Script, el: NodeId, k: i64) AllocError!f64 {
         return math.round(area.h)
     }
     return 0.0
+}
+
+// renderedSize(el, height): the width (height when `height`) of the
+// content box of `el`'s first box, rounded, in CSS px; -1 when `el` is
+// not being rendered (not connected, or no box). An img's width and
+// height properties fall back to its attributes and natural size then.
+fn akRenderedSize(it: *mut Interp, a: Args) JsError!Value {
+    let el = connectedElement(it, a, 0) orelse return js.numVal(-1.0)
+    let g = try geometry(scriptOf(it))
+    let i = firstBox(g, el) orelse return js.numVal(-1.0)
+    let b = g.tree.bx(i)
+    if it.toBoolean(it.arg(a, 1)) {
+        return js.numVal(math.round(b.h - b.border[0] - b.border[2] - b.padding[0] - b.padding[2]))
+    }
+    return js.numVal(math.round(b.w - b.border[1] - b.border[3] - b.padding[1] - b.padding[3]))
 }
 
 // offsetTop, offsetLeft, offsetWidth and offsetHeight (k 0 to 3), from

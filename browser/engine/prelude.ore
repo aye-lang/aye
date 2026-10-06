@@ -2067,8 +2067,10 @@ pub let PRELUDE =
     \\});
     \\for (const key of ['width', 'height']) {
     \\  getter(ImageP, key, function () {
-    \\    // Layout is not queried here: use the non-rendered attribute/natural
-    \\    // fallback until rendered content-box dimensions are exposed to scripts.
+    \\    // A rendered image's content box (a forced layout); otherwise the
+    \\    // width/height attribute, else the natural size.
+    \\    const rendered = ak.renderedSize(this, key === 'height');
+    \\    if (rendered >= 0) return rendered;
     \\    const attr = this.getAttribute(key);
     \\    const n = /^\s*\+?\d+/.test(attr || '') ? parseInt(attr, 10) : NaN;
     \\    return n >= 0 && n <= 2147483647 ? n : imageState(this)[key];
