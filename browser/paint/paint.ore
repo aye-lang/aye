@@ -453,7 +453,9 @@ struct Builder {
                 let base = cy + f.y + m.ascent
                 let color = colorOf(b.style[css.COLOR], BLACK)
                 self.extend(x + f.w, cy + f.y + f.h)
-                try self.add(Item.Text { x: x, y: base, s: b.text[f.start..f.end], face: m.font, c: color })
+                var face = m.font
+                face.rtl = f.rtl
+                try self.add(Item.Text { x: x, y: base, s: b.text[f.start..f.end], face: face, c: color })
                 try self.decorations(f.box, x, base, f.w, m, color)
             }
         }

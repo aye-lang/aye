@@ -225,6 +225,8 @@ pub struct Frag {
     y: f64
     w: f64
     h: f64
+    // Text at an odd bidi level: drawn right to left.
+    rtl: bool = false
 }
 
 pub struct Tree {

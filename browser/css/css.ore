@@ -96,7 +96,7 @@ pub struct Property {
     initial: Value
 }
 
-pub let NPROPS: usize = 87
+pub let NPROPS: usize = 88
 
 pub let DISPLAY: usize = 0
 pub let POSITION: usize = 1
@@ -175,6 +175,8 @@ pub let MASK_IMAGE: usize = 84
 // `clip` (of absolutely positioned boxes) and `clip-path`, as text.
 pub let CLIP: usize = 85
 pub let CLIP_PATH: usize = 86
+// `direction` (bidi).
+pub let DIRECTION: usize = 87
 
 let DISPLAYS = "inline block list-item inline-block table inline-table table-row-group table-header-group table-footer-group table-row table-cell table-column-group table-column table-caption flex inline-flex grid inline-grid flow-root contents none"
 let BORDER_STYLES = "none hidden dotted dashed solid double groove ridge inset outset"
@@ -184,7 +186,7 @@ let ALIGNS = "normal stretch flex-start flex-end start end self-start self-end c
 let BLACK = Color { r: 0, g: 0, b: 0, a: 1.0 }
 let TRANSPARENT = Color { r: 0, g: 0, b: 0, a: 0.0 }
 
-pub let PROPERTIES = [87]Property{
+pub let PROPERTIES = [88]Property{
     Property { name: "display", inherited: false, kind: PKind.Keywords, keywords: DISPLAYS, initial: Value.Keyword { k: "inline" } },
     Property { name: "position", inherited: false, kind: PKind.Keywords, keywords: "static relative absolute fixed sticky", initial: Value.Keyword { k: "static" } },
     Property { name: "color", inherited: true, kind: PKind.Color, keywords: "", initial: Value.Rgba { c: BLACK } },
@@ -273,6 +275,7 @@ pub let PROPERTIES = [87]Property{
     Property { name: "mask-image", inherited: false, kind: PKind.Raw, keywords: "none", initial: Value.Keyword { k: "none" } },
     Property { name: "clip", inherited: false, kind: PKind.Raw, keywords: "auto", initial: Value.Keyword { k: "auto" } },
     Property { name: "clip-path", inherited: false, kind: PKind.Raw, keywords: "none", initial: Value.Keyword { k: "none" } },
+    Property { name: "direction", inherited: true, kind: PKind.Keywords, keywords: "ltr rtl", initial: Value.Keyword { k: "ltr" } },
 }
 
 /// The index of the longhand property `name` (lower case).
@@ -339,6 +342,8 @@ pub struct Sheet {
     // The URLs of the `@import` rules whose media match, as the parser
     // met them (the loader fetches them: engine/sheets.ore).
     imports: List([]u8)
+    // The `@font-face` rules (fontface.ore).
+    font_faces: List(FontFace)
 
     pub fn init(alloc: Allocator) AllocError!Sheet {
         let arena = try alloc.create(Arena.init(alloc))
@@ -352,6 +357,7 @@ pub struct Sheet {
             simples: List(Simple).init(a),
             decls: List(Decl).init(a),
             imports: List([]u8).init(a),
+            font_faces: List(FontFace).init(a),
         }
     }
 
