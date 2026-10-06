@@ -92,6 +92,9 @@ pub struct Page {
     // Changes the scripts of other pages made to the document (through
     // contentDocument; `domVersion` counts them).
     mutations: u64
+    // The measurer of the last `layoutPage`, which the scripts' layout
+    // (geometry.ore) measures with too.
+    measure: ?dyn font.Measurer = null
 
     /// Frees the page and everything in it.
     pub fn destroy(self: *mut Self) {
@@ -171,6 +174,7 @@ pub struct Page {
     /// changed; ordinary DOM changes reuse the parsed sheets.
     pub fn layoutPage(self: *mut Self, measure: dyn font.Measurer, width: f64, height: f64) AllocError!void {
         self.dropTree()
+        self.measure = measure
         try syncFrames(self)
         setViewport(self, width, height)
         var same = false

@@ -33,6 +33,7 @@ import dom
 import dom.Kind
 import dom.NodeId
 import encoding
+import font
 import js
 import js.Interp
 import js.JsError
@@ -254,6 +255,25 @@ pub struct Script {
     // Calls from the browser into the page that have not returned
     // (microtasks run when it is back to 0).
     depth: u32
+    // The layout geometry questions read (geometry.ore), and the font it
+    // measures with when the page was never laid out.
+    geom: ?*mut Geometry
+    fixed: font.Fixed
+    // The scroll offsets scripts gave scroll containers, by node index.
+    scrolls: IntMap(u32, ScrollOffset)
+    // The window's scroll offset; `scroll_moved` when a script moved it
+    // since a front end took it (`takeScriptScroll`).
+    scroll_x: f64
+    scroll_y: f64
+    scroll_moved: bool
+    // Counts the changes to geometry that are not changes to the
+    // document: scroll offsets and the viewport.
+    geometry_changes: u64
+    // The prelude's rendering-update hook (IntersectionObserver; NONE
+    // until it set one), called after a task when the document or its
+    // geometry changed since the last call (`hook_stamp`).
+    layout_hook: u32
+    hook_stamp: u64
 
     // ---- js.Host
 
@@ -423,6 +443,15 @@ fn createScript(p: *mut Page) AllocError!*mut Script {
         width: 800.0,
         height: 600.0,
         depth: 0,
+        geom: null,
+        fixed: font.Fixed.init(),
+        scrolls: IntMap(u32, ScrollOffset).init(alloc),
+        scroll_x: 0.0,
+        scroll_y: 0.0,
+        scroll_moved: false,
+        geometry_changes: 0,
+        layout_hook: js.NONE,
+        hook_stamp: 0,
     }) catch |e| {
         interp.deinit()
         return e
@@ -490,6 +519,8 @@ pub fn destroyScript(s: *mut Script) {
     s.tag_protos.deinit()
     s.written.deinit()
     dropComputed(s)
+    dropGeometry(s)
+    s.scrolls.deinit()
     s.timers.deinit()
     for line in s.console.items() {
         s.alloc.free(line)
@@ -942,6 +973,7 @@ fn removeTimer(s: *mut Script, id: u32) {
 
 // After the browser ran scripts: the title follows the document.
 fn afterTask(s: *mut Script) AllocError!void {
+    try runLayoutHook(s)
     if s.title_version == s.version {
         return
     }
@@ -1115,6 +1147,9 @@ pub fn treeVersion(p: *Page) u64 {
 /// The size of the viewport, for innerWidth and innerHeight.
 pub fn setViewport(p: *mut Page, width: f64, height: f64) {
     if p.script |s| {
+        if s.width != width || s.height != height {
+            s.geometry_changes += 1
+        }
         s.width = width
         s.height = height
     }
