@@ -2599,7 +2599,9 @@ pub let PRELUDE =
     \\      if (target === null) continue;
     \\      if (kind === 1) ceAttributeChanged(target, recs[i + 5], recs[i + 6]);
     \\      else if (kind === 3 && node && node.isConnected) ceConnected(node);
-    \\      else if (kind === 0 && node && !node.isConnected && target.isConnected) ceDisconnected(node);
+    \\      // Removed from a connected parent: disconnected, even when the same
+    \\      // method inserted it again (a move connects it after).
+    \\      else if (kind === 0 && node && target.isConnected) ceDisconnected(node);
     \\    }
     \\  }
     \\  if (ak.shadowCount() > 0) {
@@ -2736,9 +2738,14 @@ pub let PRELUDE =
     \\  const d = ceLookup(el);
     \\  if (d) ceUpgrade(el, d);
     \\}
+    \\// The reaction of each element is chosen when it is inserted: an element
+    \\// that an earlier callback upgrades meanwhile is not connected twice.
     \\function ceConnected(node) {
-    \\  for (const el of ak.customIn(node)) {
-    \\    if (ak.ceState(el) === 1) {
+    \\  const els = ak.customIn(node);
+    \\  const custom = els.map(el => ak.ceState(el) === 1);
+    \\  for (let i = 0; i < els.length; i++) {
+    \\    const el = els[i];
+    \\    if (custom[i]) {
     \\      const d = ceLookup(el);
     \\      if (d && d.connectedCallback) ceCall(d.connectedCallback, el, []);
     \\    } else ceTryUpgrade(el);

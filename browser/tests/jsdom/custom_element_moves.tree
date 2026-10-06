@@ -1,0 +1,21 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Custom element reactions on moves"
+      "\n"
+    <body>
+      <pre id="out">
+        "-- insert\nconnected x\n-- move to b\ndisconnected x\nconnected x\n-- insertBefore in place\ndisconnected x\nconnected x\n-- into a fragment\ndisconnected x\n-- fragment into a\nconnected x\n-- remove\ndisconnected x\n-- connect parent\nconnected p\nconnected c1\nconnected c2\n"
+      "\n"
+      <div id="a">
+      <div id="b">
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nclass Logged extends HTMLElement {\n  connectedCallback() { log('connected', this.id); }\n  disconnectedCallback() { log('disconnected', this.id); }\n}\ncustomElements.define('x-logged', Logged);\nconst a = document.getElementById('a'), b = document.getElementById('b');\nconst x = document.createElement('x-logged');\nx.id = 'x';\nlog('-- insert');\na.appendChild(x);\n// A move between connected parents disconnects, then connects.\nlog('-- move to b');\nb.appendChild(x);\nlog('-- insertBefore in place');\nb.insertBefore(x, null);\nlog('-- into a fragment');\nconst f = document.createDocumentFragment();\nf.appendChild(x);\nlog('-- fragment into a');\na.appendChild(f);\nlog('-- remove');\nx.remove();\n\n// A parent whose connectedCallback moves a child that is not upgraded\n// yet: the child is upgraded and connected once.\nclass Parent extends HTMLElement {\n  connectedCallback() {\n    log('connected', this.id);\n    this.appendChild(this.firstElementChild);\n  }\n}\nconst holder = document.createElement('div');\nholder.innerHTML = '<x-parent id=\"p\"><x-child id=\"c1\"></x-child><x-child id=\"c2\"></x-child></x-parent>';\ncustomElements.define('x-parent', Parent);\ncustomElements.define('x-child', class extends Logged {});\nlog('-- connect parent');\ndocument.body.appendChild(holder);\n"
+      "\n"
+      <div>
+        <x-parent id="p">
+          <x-child id="c2">
+          <x-child id="c1">
