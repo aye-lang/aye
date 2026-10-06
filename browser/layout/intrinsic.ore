@@ -96,6 +96,19 @@ fn outerIntrinsic(t: *mut Tree, i: usize) AllocError!MinMax {
         r.min = math.max(r.min, mn)
         r.max = math.max(r.max, mn)
     }
+    if t.bx(i).kind == BoxKind.Image && (isPercentage(style[css.WIDTH]) || isPercentage(style[css.MAX_WIDTH])) {
+        // A replaced box sized by a percentage is compressible: it adds
+        // nothing to the min-content width (CSS Sizing 3, 5.2.2).
+        r.min = edges
+    }
     let margins = lengthOr0(style[css.MARGIN_TOP + 1], -1.0) + lengthOr0(style[css.MARGIN_TOP + 3], -1.0)
     return MinMax { min: r.min + margins, max: r.max + margins }
+}
+
+fn isPercentage(v: css.Value) bool {
+    return match v {
+        .Percent { .. } => true
+        .Calc { .. } => true
+        _ => false
+    }
 }
