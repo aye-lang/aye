@@ -7,6 +7,12 @@
 // values are absolute where CSS says so: lengths in px (percentages stay,
 // except for font-size and line-height), font weights as numbers, colors
 // as RGBA (`currentcolor` stays, except for `color`).
+//
+// Presentational hints (hints.ore) come before the author sheets at
+// specificity zero, and in quirks mode the quirks rules of the UA sheet
+// apply. A block child of `<center>` (or of an element with
+// `align=center`) that has a width gets auto side margins, as the
+// `-webkit-center` alignment of browsers does.
 
 import dom
 import dom.Document
@@ -26,8 +32,10 @@ pub struct Styles {
     arena: *mut Arena
     // Node index to its values.
     map: IntMap(u32, []mut Value)
-    // The `style` attributes, parsed.
+    // The `style` attributes and presentational hints, parsed.
     inline: Sheet
+    // The UA rules of quirks mode.
+    quirks: Sheet
     // The computed initial values (what an element without any rule and
     // without a parent gets).
     initial: []mut Value
@@ -38,7 +46,19 @@ pub struct Styles {
             alloc.destroy(arena)
             return e
         }
+        var quirks = Sheet.init(alloc) catch |e| {
+            inline.deinit()
+            alloc.destroy(arena)
+            return e
+        }
+        quirksSheet(&mut quirks) catch |e| {
+            quirks.deinit()
+            inline.deinit()
+            alloc.destroy(arena)
+            return e
+        }
         let initial = arena.allocator().alloc(Value.Initial, NPROPS) catch |e| {
+            quirks.deinit()
             inline.deinit()
             arena.deinit()
             alloc.destroy(arena)
@@ -53,12 +73,14 @@ pub struct Styles {
             arena: arena,
             map: IntMap(u32, []mut Value).init(alloc),
             inline: inline,
+            quirks: quirks,
             initial: initial,
         }
     }
 
     pub fn deinit(self: *mut Self) {
         self.map.deinit()
+        self.quirks.deinit()
         self.inline.deinit()
         self.arena.deinit()
         self.alloc.destroy(self.arena)
@@ -88,7 +110,17 @@ struct Win {
 pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, out: *mut Styles) AllocError!void {
     let a = out.arena.allocator()
     let wins = try a.alloc(Win { set: false, level: 0, spec: 0, value: Value.Initial }, NPROPS)
-    var c = Computer { doc: doc, media: media, out: out, wins: wins, root_font: 16.0 }
+    var c = Computer {
+        doc: doc,
+        media: media,
+        out: out,
+        wins: wins,
+        root_font: 16.0,
+        centered: IntMap(u32, bool).init(out.alloc),
+    }
+    defer c.centered.deinit()
+    var hints = text.Builder.init(out.alloc)
+    defer hints.deinit()
     var cur: ?NodeId = doc.root
     while cur |h| {
         if doc.node(h).kind == Kind.Element {
@@ -96,6 +128,17 @@ pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, o
                 wins[i].set = false
             }
             c.consider(ua, h, false)
+            if doc.quirks {
+                c.consider(&out.quirks, h, false)
+            }
+            hints.clear()
+            try writeHints(doc, h, &mut hints)
+            if hints.len() > 0 {
+                let range = try parseInline(&mut out.inline, hints.bytes())
+                for k in range.start..range.end {
+                    c.offer(out.inline.decls.items()[k], 2, 0)
+                }
+            }
             c.consider(author, h, true)
             if doc.attr(h, "style") |src| {
                 let range = try parseInline(&mut out.inline, src)
@@ -121,6 +164,8 @@ struct Computer {
     wins: []mut Win
     // The font size of the root element, for `rem`.
     root_font: f64
+    // The elements that align their block children to the center.
+    centered: IntMap(u32, bool)
 
     // Offers the declarations of every rule of `sheet` that matches `el`.
     fn consider(self: *mut Self, sheet: *Sheet, el: NodeId, author: bool) {
@@ -221,7 +266,38 @@ struct Computer {
             values[p] = self.absolute(v, font_px)
         }
         fixBorderWidths(values)
+        try self.alignCenter(el, values)
         try self.out.map.put(el.index, values)
+    }
+
+    // `<center>` and `align=center`: a block child with a width gets auto
+    // side margins (unless it has margins of its own), and the alignment
+    // passes on to descendants until something sets another alignment.
+    fn alignCenter(self: *mut Self, el: NodeId, values: []mut Value) AllocError!void {
+        var parent_centers = false
+        if parentElement(self.doc, el) |p| {
+            parent_centers = self.centered.contains(p.index)
+        }
+        let display = keywordText(values[DISPLAY])
+        if parent_centers && (text.eql(display, "block") || text.eql(display, "table")) && !isAutoKeyword(values[WIDTH]) && isZeroPx(values[MARGIN_TOP + 1]) && isZeroPx(values[MARGIN_TOP + 3]) {
+            values[MARGIN_TOP + 1] = Value.Keyword { k: "auto" }
+            values[MARGIN_TOP + 3] = Value.Keyword { k: "auto" }
+        }
+        let name = self.doc.node(el).name
+        var centers = false
+        if !text.eql(keywordText(values[TEXT_ALIGN]), "center") {
+            centers = false
+        } else if text.eql(name, "center") {
+            centers = true
+        } else if self.doc.attr(el, "align") |a| {
+            let v = text.trim(a)
+            centers = text.eqlIgnoreCase(v, "center") || text.eqlIgnoreCase(v, "middle")
+        } else {
+            centers = parent_centers
+        }
+        if centers {
+            try self.centered.put(el.index, true)
+        }
     }
 
     // The winning value of `p`, with `inherit`, `initial` and `unset`
@@ -249,6 +325,24 @@ struct Computer {
             .Vh { v: n } => Value.Px { v: n * self.media.height / 100.0 }
             _ => v
         }
+    }
+}
+
+fn keywordText(v: Value) []u8 {
+    return match v {
+        .Keyword { k } => k
+        _ => ""
+    }
+}
+
+fn isAutoKeyword(v: Value) bool {
+    return text.eql(keywordText(v), "auto")
+}
+
+fn isZeroPx(v: Value) bool {
+    return match v {
+        .Px { v: n } => n == 0.0
+        _ => false
     }
 }
 

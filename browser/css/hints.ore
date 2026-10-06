@@ -1,0 +1,466 @@
+// Presentational hints (HTML, "Rendering"): the old attributes that style
+// an element (`bgcolor`, `align`, `width`, `border`, `<font color>`, ...)
+// as CSS declarations, written as text for the cascade to parse. They
+// count as author declarations with specificity zero, before the author
+// sheets: any author rule overrides them.
+//
+// Left out: `valign` (no `vertical-align` yet), `cellspacing` (no
+// `border-spacing`), `align=left|right` on tables and images (no floats
+// here), `background` images, `frame` and `rules`.
+
+import dom.Document
+import dom.NodeId
+import std.mem.AllocError
+import std.text
+
+/// Appends to `out` the declarations of the presentational hints of `el`
+/// (`prop: value; ` each).
+pub fn writeHints(doc: *Document, el: NodeId, out: *mut text.Builder) AllocError!void {
+    let name = doc.node(el).name
+    if isOneOf(name, "body table thead tbody tfoot tr td th") {
+        if doc.attr(el, "bgcolor") |v| {
+            try colorHint(out, "background-color", v)
+        }
+    }
+    if text.eql(name, "body") {
+        if doc.attr(el, "text") |v| {
+            try colorHint(out, "color", v)
+        }
+        try marginHint(out, doc, el, "marginwidth", "margin-left")
+        try marginHint(out, doc, el, "marginwidth", "margin-right")
+        try marginHint(out, doc, el, "leftmargin", "margin-left")
+        try marginHint(out, doc, el, "rightmargin", "margin-right")
+        try marginHint(out, doc, el, "marginheight", "margin-top")
+        try marginHint(out, doc, el, "marginheight", "margin-bottom")
+        try marginHint(out, doc, el, "topmargin", "margin-top")
+        try marginHint(out, doc, el, "bottommargin", "margin-bottom")
+    }
+    if text.eql(name, "a") && doc.attr(el, "href") != null {
+        if bodyOf(doc, el) |body| {
+            if doc.attr(body, "link") |v| {
+                try colorHint(out, "color", v)
+            }
+        }
+    }
+    if text.eql(name, "font") {
+        if doc.attr(el, "color") |v| {
+            try colorHint(out, "color", v)
+        }
+        if doc.attr(el, "face") |v| {
+            if text.trim(v).len > 0 {
+                try decl(out, "font-family", text.trim(v))
+            }
+        }
+        if doc.attr(el, "size") |v| {
+            if fontSizeHint(v) |size| {
+                try decl(out, "font-size", size)
+            }
+        }
+    }
+    if doc.attr(el, "align") |v| {
+        let a = text.trim(v)
+        if text.eql(name, "table") {
+            if text.eqlIgnoreCase(a, "center") {
+                try decl(out, "margin-left", "auto")
+                try decl(out, "margin-right", "auto")
+            }
+        } else if isOneOf(name, "div p h1 h2 h3 h4 h5 h6 caption thead tbody tfoot tr td th legend") {
+            if text.eqlIgnoreCase(a, "center") || text.eqlIgnoreCase(a, "middle") || text.eqlIgnoreCase(a, "absmiddle") {
+                try decl(out, "text-align", "center")
+            } else if text.eqlIgnoreCase(a, "left") || text.eqlIgnoreCase(a, "right") || text.eqlIgnoreCase(a, "justify") {
+                try decl(out, "text-align", a)
+            }
+        } else if text.eql(name, "hr") {
+            if text.eqlIgnoreCase(a, "left") {
+                try decl(out, "margin-left", "0")
+                try decl(out, "margin-right", "auto")
+            } else if text.eqlIgnoreCase(a, "right") {
+                try decl(out, "margin-left", "auto")
+                try decl(out, "margin-right", "0")
+            }
+        }
+    }
+    if isOneOf(name, "table td th col colgroup hr iframe") {
+        if doc.attr(el, "width") |v| {
+            try dimensionHint(out, "width", v)
+        }
+    }
+    if isOneOf(name, "table td th tr iframe") {
+        if doc.attr(el, "height") |v| {
+            try dimensionHint(out, "height", v)
+        }
+    }
+    if text.eql(name, "table") {
+        if doc.attr(el, "border") |v| {
+            let w = borderWidth(v)
+            if w > 0 {
+                try out.append("border: ")
+                try out.appendUint(w)
+                try out.append("px outset gray; ")
+            }
+        }
+    }
+    if text.eql(name, "td") || text.eql(name, "th") {
+        if tableOf(doc, el) |t| {
+            if doc.attr(t, "border") |v| {
+                if borderWidth(v) > 0 {
+                    try out.append("border: 1px inset gray; ")
+                }
+            }
+            if doc.attr(t, "cellpadding") |v| {
+                if dimension(v) |d| {
+                    try out.append("padding: ")
+                    try writeDimension(out, d)
+                    try out.append("; ")
+                }
+            }
+        }
+        if doc.attr(el, "nowrap") != null {
+            try decl(out, "white-space", "nowrap")
+        }
+    }
+    if text.eql(name, "img") {
+        if doc.attr(el, "border") |v| {
+            let w = borderWidth(v)
+            try out.append("border: ")
+            try out.appendUint(w)
+            try out.append("px solid; ")
+        }
+        try marginHint(out, doc, el, "hspace", "margin-left")
+        try marginHint(out, doc, el, "hspace", "margin-right")
+        try marginHint(out, doc, el, "vspace", "margin-top")
+        try marginHint(out, doc, el, "vspace", "margin-bottom")
+    }
+    if isOneOf(name, "ol ul li") {
+        if doc.attr(el, "type") |v| {
+            if listType(text.trim(v)) |t| {
+                try decl(out, "list-style-type", t)
+            }
+        }
+    }
+}
+
+fn decl(out: *mut text.Builder, prop: []u8, value: []u8) AllocError!void {
+    try out.append(prop)
+    try out.append(": ")
+    try out.append(value)
+    try out.append("; ")
+}
+
+fn isOneOf(name: []u8, set: []u8) bool {
+    var words = text.split(set, " ")
+    while words.next() |w| {
+        if text.eql(w, name) {
+            return true
+        }
+    }
+    return false
+}
+
+// The nearest `table` ancestor of a cell.
+fn tableOf(doc: *Document, el: NodeId) ?NodeId {
+    var cur = doc.parent(el)
+    while cur |c| {
+        if doc.isElement(c, "table") {
+            return c
+        }
+        cur = doc.parent(c)
+    }
+    return null
+}
+
+fn bodyOf(doc: *Document, el: NodeId) ?NodeId {
+    var cur = doc.parent(el)
+    while cur |c| {
+        if doc.isElement(c, "body") {
+            return c
+        }
+        cur = doc.parent(c)
+    }
+    return null
+}
+
+// `prop: <legacy color>; `, when the value is a color.
+fn colorHint(out: *mut text.Builder, prop: []u8, value: []u8) AllocError!void {
+    if legacyColor(value) |c| {
+        try out.append(prop)
+        try out.append(": rgb(")
+        try out.appendUint(c.r as u64)
+        try out.append(", ")
+        try out.appendUint(c.g as u64)
+        try out.append(", ")
+        try out.appendUint(c.b as u64)
+        try out.append("); ")
+    }
+}
+
+// A margin from a pixel count attribute (`hspace`, `marginwidth`...).
+fn marginHint(out: *mut text.Builder, doc: *Document, el: NodeId, attr: []u8, prop: []u8) AllocError!void {
+    if doc.attr(el, attr) |v| {
+        if pixels(v) |n| {
+            try out.append(prop)
+            try out.append(": ")
+            try out.appendUint(n)
+            try out.append("px; ")
+        }
+    }
+}
+
+// `prop: <dimension>; ` for a non-zero dimension value.
+fn dimensionHint(out: *mut text.Builder, prop: []u8, value: []u8) AllocError!void {
+    if dimension(value) |d| {
+        if !d.zero {
+            try out.append(prop)
+            try out.append(": ")
+            try writeDimension(out, d)
+            try out.append("; ")
+        }
+    }
+}
+
+// A dimension value: a number and whether it is a percentage.
+struct Dimension {
+    number: []u8
+    percent: bool
+    zero: bool
+}
+
+fn writeDimension(out: *mut text.Builder, d: Dimension) AllocError!void {
+    try out.append(d.number)
+    if d.percent {
+        try out.appendByte('%')
+    } else {
+        try out.append("px")
+    }
+}
+
+// The HTML "rules for parsing dimension values": leading digits (with a
+// fraction), then `%` for a percentage, else pixels.
+fn dimension(value: []u8) ?Dimension {
+    let s = text.trim(value)
+    var i: usize = 0
+    var zero = true
+    while i < s.len && s[i] >= '0' && s[i] <= '9' {
+        if s[i] != '0' {
+            zero = false
+        }
+        i += 1
+    }
+    if i == 0 {
+        return null
+    }
+    var end = i
+    if end < s.len && s[end] == '.' {
+        var j = end + 1
+        while j < s.len && s[j] >= '0' && s[j] <= '9' {
+            if s[j] != '0' {
+                zero = false
+            }
+            j += 1
+        }
+        if j > end + 1 {
+            end = j
+        }
+    }
+    let percent = end < s.len && s[end] == '%'
+    return Dimension { number: s[..end], percent: percent, zero: zero }
+}
+
+// Pixel counts: the leading digits of `value` (non-negative integers).
+fn pixels(value: []u8) ?u64 {
+    let s = text.trim(value)
+    var n: u64 = 0
+    var digits: usize = 0
+    for c in s {
+        if c < '0' || c > '9' || digits >= 9 {
+            break
+        }
+        n = n * 10 + (c - '0') as u64
+        digits += 1
+    }
+    if digits == 0 {
+        return null
+    }
+    return n
+}
+
+// `border` of a table or image: pixels; an empty or invalid value is 1
+// (tables) as browsers do.
+fn borderWidth(value: []u8) u64 {
+    if text.trim(value).len == 0 {
+        return 1
+    }
+    return pixels(value) orelse 0
+}
+
+// `<font size>`: 1 to 7, or relative to 3 with `+`/`-`.
+fn fontSizeHint(value: []u8) ?[]u8 {
+    let s = text.trim(value)
+    if s.len == 0 {
+        return null
+    }
+    var rel: i64 = 0
+    var i: usize = 0
+    if s[0] == '+' {
+        rel = 1
+        i = 1
+    } else if s[0] == '-' {
+        rel = -1
+        i = 1
+    }
+    var n: i64 = 0
+    var digits: usize = 0
+    while i < s.len && s[i] >= '0' && s[i] <= '9' && digits < 6 {
+        n = n * 10 + (s[i] - '0') as i64
+        i += 1
+        digits += 1
+    }
+    if digits == 0 {
+        return null
+    }
+    var size = n
+    if rel != 0 {
+        size = 3 + rel * n
+    }
+    if size < 1 {
+        size = 1
+    }
+    if size > 7 {
+        size = 7
+    }
+    let names = [7][]u8{"x-small", "small", "medium", "large", "x-large", "xx-large", "xxx-large"}
+    return names[(size - 1) as usize]
+}
+
+// `type` of a list or list item.
+fn listType(t: []u8) ?[]u8 {
+    if text.eql(t, "1") {
+        return "decimal"
+    }
+    if text.eql(t, "a") {
+        return "lower-alpha"
+    }
+    if text.eql(t, "A") {
+        return "upper-alpha"
+    }
+    if text.eql(t, "i") {
+        return "lower-roman"
+    }
+    if text.eql(t, "I") {
+        return "upper-roman"
+    }
+    if text.eqlIgnoreCase(t, "disc") {
+        return "disc"
+    }
+    if text.eqlIgnoreCase(t, "circle") {
+        return "circle"
+    }
+    if text.eqlIgnoreCase(t, "square") {
+        return "square"
+    }
+    return null
+}
+
+/// The HTML "rules for parsing a legacy colour value": a named color,
+/// `#rgb`, or any text read as hex digits in three parts
+/// (`bgcolor="ff6600"`, `"#f6f6ef"`). Null for `transparent` and empty
+/// values.
+pub fn legacyColor(value: []u8) ?Color {
+    let s = text.trim(value)
+    if s.len == 0 || text.eqlIgnoreCase(s, "transparent") {
+        return null
+    }
+    if namedColor(s) |c| {
+        return c
+    }
+    if s.len == 4 && s[0] == '#' && legacyHex(s[1]) != null && legacyHex(s[2]) != null && legacyHex(s[3]) != null {
+        return Color {
+            r: (legacyHex(s[1]).? * 17) as u8,
+            g: (legacyHex(s[2]).? * 17) as u8,
+            b: (legacyHex(s[3]).? * 17) as u8,
+            a: 1.0,
+        }
+    }
+    // Every non-hex character is a 0; without the `#`; at most 128.
+    var buf = @zeroed([132]u8)
+    var n: usize = 0
+    var start: usize = 0
+    if s[0] == '#' {
+        start = 1
+    }
+    for c in s[start..] {
+        if n >= 128 {
+            break
+        }
+        if legacyHex(c) != null {
+            buf[n] = c
+        } else {
+            buf[n] = '0'
+        }
+        n += 1
+    }
+    while n == 0 || n % 3 != 0 {
+        buf[n] = '0'
+        n += 1
+    }
+    var len = n / 3
+    var off: usize = 0
+    if len > 8 {
+        off = len - 8
+        len = 8
+    }
+    // Leading zeros common to the three parts go, down to two digits.
+    while len > 2 && buf[off] == '0' && buf[n / 3 + off] == '0' && buf[2 * (n / 3) + off] == '0' {
+        off += 1
+        len -= 1
+    }
+    if len > 2 {
+        len = 2
+    }
+    var parts = [3]u32{0, 0, 0}
+    for k in 0..3 {
+        var v: u32 = 0
+        for i in 0..len {
+            v = v * 16 + legacyHex(buf[k * (n / 3) + off + i]).?
+        }
+        parts[k] = v
+    }
+    if len == 1 {
+        // One digit per part: it is the high nibble ("#abc" is longer).
+        for k in 0..3 {
+            parts[k] = parts[k] * 16
+        }
+    }
+    return Color { r: parts[0] as u8, g: parts[1] as u8, b: parts[2] as u8, a: 1.0 }
+}
+
+fn legacyHex(c: u8) ?u32 {
+    if c >= '0' && c <= '9' {
+        return (c - '0') as u32
+    }
+    if c >= 'a' && c <= 'f' {
+        return (c - 'a') as u32 + 10
+    }
+    if c >= 'A' && c <= 'F' {
+        return (c - 'A') as u32 + 10
+    }
+    return null
+}
+
+test "legacy colors" {
+    let c1 = legacyColor("#ff6600").?
+    @expectEqual(255, c1.r as i64)
+    @expectEqual(102, c1.g as i64)
+    @expectEqual(0, c1.b as i64)
+    let c2 = legacyColor("ff6600").?
+    @expectEqual(102, c2.g as i64)
+    let c3 = legacyColor(" Red ").?
+    @expectEqual(255, c3.r as i64)
+    let c4 = legacyColor("#abc").?
+    @expectEqual(0xbb, c4.g as i64)
+    @expect(legacyColor("transparent") == null)
+    // The famous one: "chucknorris" gives c00c 0000 0000, so c0 00 00.
+    let c5 = legacyColor("chucknorris").?
+    @expectEqual(0xc0, c5.r as i64)
+    @expectEqual(0, c5.g as i64)
+}
