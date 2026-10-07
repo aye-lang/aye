@@ -301,6 +301,8 @@ pub struct Script {
     // Where the document's tree changed since `geom` was laid out (the
     // nodes `noteLayoutChange` took), or `restyle_all` when anywhere.
     restyle: List(Change)
+    // The place in `restyle` of each change by `changeKey`.
+    restyle_seen: IntMap(u64, usize)
     restyle_all: bool
     fixed: font.Fixed
     // The scroll offsets scripts gave scroll containers, by node index.
@@ -535,6 +537,7 @@ fn createScript(p: *mut Page) AllocError!*mut Script {
         depth: 0,
         geom: null,
         restyle: List(Change).init(alloc),
+        restyle_seen: IntMap(u64, usize).init(alloc),
         restyle_all: false,
         fixed: font.Fixed.init(),
         scrolls: IntMap(u32, ScrollOffset).init(alloc),
@@ -615,6 +618,7 @@ pub fn destroyScript(s: *mut Script) {
     dropComputed(s)
     dropGeometry(s)
     s.restyle.deinit()
+    s.restyle_seen.deinit()
     s.scrolls.deinit()
     for t in s.timers.items() {
         if t.load != 0 {

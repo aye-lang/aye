@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<title>Layout after many changes</title>
+<style>
+body { margin: 0; font-size: 10px }
+.item { height: 2px; width: 20px }
+.item + .item { margin-top: 1px }
+.item.big ~ .item { width: 30px }
+.wide .item { height: 3px }
+.card:has(.flag) .label { width: 60px }
+.label { display: inline-block; width: 10px; height: 4px }
+</style>
+<div id="list"></div>
+<div class="card" id="card"><p><b id="b1">b</b></p><span class="label" id="l1">a</span></div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const $ = id => document.getElementById(id);
+const list = $('list');
+// More changes between two reads than the restyle keeps one by one
+// (geometry.ore MAX_RESTYLE), many of them the same change again.
+function sum() {
+  let w = 0, h = 0;
+  for (const e of list.children) { w += e.offsetWidth; h += e.offsetTop; }
+  return w + ',' + h + ' ' + $('l1').offsetWidth;
+}
+log('start', list.offsetHeight, sum());
+for (let i = 0; i < 700; i++) {
+  const d = document.createElement('div');
+  d.className = 'item';
+  list.append(d);
+}
+log('appended', list.offsetHeight, sum());
+for (let i = 0; i < 700; i += 7) list.children[i].classList.toggle('x');
+list.children[350].classList.add('big');
+log('big', list.offsetHeight, sum());
+for (let i = 0; i < 400; i++) list.setAttribute('data-n', String(i));
+list.classList.add('wide');
+$('b1').classList.add('flag');
+log('wide flag', list.offsetHeight, sum());
+for (let i = 0; i < 300; i++) list.lastElementChild.remove();
+list.children[100].classList.add('big');
+log('removed', list.offsetHeight, sum());
+</script>

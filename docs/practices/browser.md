@@ -540,6 +540,24 @@ value. Make the cascade itself cheap where it matters
 correct to force a layout, so its cost has to follow the size of the
 change, not of the document.
 
+### Count why a partial restyle gives up before raising its limits
+**Context:** a cache or partial update with a fallback to the full work
+(a cap, a "dirty everything" flag).
+**Bad:** `noteLayoutChange` kept at most 256 changes, then set
+`restyle_all`. YouTube's search results append children one by one to
+the same parent between two layout reads: 93 of the 100 full cascades
+of a replay came from that cap, while the changes held fewer than 256
+different ones.
+**Good:** probe each place that falls back, with its reason, on a real
+replay and count (`FULL restyle_all` 95, of them 93 the cap). Keep the
+same change once (`changeKey`, `browser/engine/geometry.ore`) and raise
+the cap to 4096: full cascades 100 → 16, with the same Markdown.
+`browser/tests/jsdom/layout_many_changes.html` makes more changes than
+the cap between reads, many of them the same, and checks the boxes
+against the full cascade's.
+**Why:** a fallback that looks rare in fixtures can be the common path
+on a real page; the counts show which one to fix.
+
 ### Keep styles by a fingerprint of their inputs, not by a version
 **Context:** skipping a restyle (or other cached work) when nothing it
 depends on changed.
