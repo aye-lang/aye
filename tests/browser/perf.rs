@@ -21,7 +21,7 @@ fn cached_sheets_follow_media_changes() {
 #[test]
 fn script_layout_is_reused_until_a_change() {
     let page = "data:text/html,<div id=d>x</div><p id=out></p><script>let d=document.getElementById('d');let r=[d.offsetWidth,d.offsetHeight,d.getBoundingClientRect().width,d.clientWidth];d.style.width='10px';r.push(d.offsetWidth,d.getBoundingClientRect().width);document.getElementById('out').textContent=r.join(',');</script>";
-    let out = Command::new(anyknown()).current_dir(root()).env("ANYKNOWN_TIMING", "1").args(["dump", "--text", "--js", page]).output().unwrap();
+    let out = Command::new(anyknown()).current_dir(root()).env("ANYKNOWN_TIMING", "1").args(["dump", "--text", "--js", "--no-scroll", page]).output().unwrap();
     assert!(out.status.success(), "{}", text(&out.stderr));
     assert_eq!(text(&out.stdout), "x\n\n784,20,784,784,10,10\n");
     let trace = text(&out.stderr);
@@ -35,7 +35,7 @@ fn script_layout_is_reused_until_a_change() {
 #[test]
 fn interleaved_writes_and_reads_restyle_partially() {
     let page = "data:text/html,<style>.on{height:5px}</style><div id=l></div><p id=out></p><script>let l=document.getElementById('l');for(let i=0;i<20;i++)l.append(document.createElement('div'));let loose=document.createElement('div'),sum=0;for(const c of l.children){c.className='on';loose.append(document.createElement('i'));sum+=l.offsetHeight;}document.getElementById('out').textContent=sum;</script>";
-    let out = Command::new(anyknown()).current_dir(root()).env("ANYKNOWN_TIMING", "1").args(["dump", "--text", "--js", page]).output().unwrap();
+    let out = Command::new(anyknown()).current_dir(root()).env("ANYKNOWN_TIMING", "1").args(["dump", "--text", "--js", "--no-scroll", page]).output().unwrap();
     assert!(out.status.success(), "{}", text(&out.stderr));
     assert_eq!(text(&out.stdout), "1050\n");
     let trace = text(&out.stderr);
@@ -46,7 +46,7 @@ fn interleaved_writes_and_reads_restyle_partially() {
 
 #[test]
 fn timing_preserves_output() {
-    let args = ["dump", "--md", "--js", "browser/tests/agent/noscript.html"];
+    let args = ["dump", "--md", "--js", "--no-scroll", "browser/tests/agent/noscript.html"];
     let plain = Command::new(anyknown()).current_dir(root()).args(args).output().unwrap();
     let timed = Command::new(anyknown()).current_dir(root()).env("ANYKNOWN_TIMING", "1").args(args).output().unwrap();
     assert!(plain.status.success() && plain.stderr.is_empty(), "{}", text(&plain.stderr));
