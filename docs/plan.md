@@ -123,7 +123,9 @@ step only finds and writes down the cause; the fix is the next step.
 | P3.17 | `fetch` sends only GET: support every method with `body` (string, URLSearchParams, FormData, Blob, ArrayBuffer), request headers and the `Content-Type` defaults; CORS-safe subset is enough | net fixture: POST/PUT/DELETE echo through the test server | P3.15 | P3.4–8 |
 | P3.18 | Body mixin: `arrayBuffer()`, `blob()`, `formData()` on Request and Response; `body` as a minimal `ReadableStream` (`getReader().read()`) | jsdom test vs Node 22 | P3.17 | P3.4–8 |
 | P3.19 | URL parser accepts `http://[` (invalid IPv6 host); follow WHATWG host parsing for IPv6 | URL test vs Node 22 | – | all |
-| P3.20 | Recapture the Reddit archive (`svc/events/preload-head` missing after P3.15) | `check --site reddit` no `skip` | – | all |
+| P3.20 | Recapture the Reddit and GitHub archives: after P3.15 (Request) Reddit fetches `svc/events/preload-head` and GitHub makes ~10 requests the old archives lack; reset their `sites.json` expectations | `check --site reddit,github` no archive misses | – | all |
+| P3.22 | GitHub: React logs "Illegal invocation" after P3.13/P3.15 (a host method called with the wrong `this`); diagnose, then fix | `check --site github` errors 0 | P3.20 | P3.4–8 |
+| P3.21 | Fetch guards: Response headers read-only (`immutable` guard), Request headers drop forbidden names, a Request's abort listener on its source signal is removed when the request settles | jsdom test vs Node 22 | P3.15 | P3.17 after it merges |
 
 ### P4: Load time
 
