@@ -205,19 +205,24 @@ fn proxyHasOwn(it: *mut Interp, o: u32, key: u32) JsError!bool {
     return !isUndef(try proxyOwnDescriptor(it, o, key))
 }
 
-fn proxyDefine(it: *mut Interp, o: u32, key: u32, desc: Value) JsError!void {
+/// [[DefineOwnProperty]] of proxy o (see defineOwnProperty).
+fn proxyDefine(it: *mut Interp, o: u32, key: u32, desc: Value, throwing: bool) JsError!bool {
     let f = try trap(it, o, "defineProperty")
     let t = proxyTarget(it, o)
     if isUndef(f) {
-        return definePropertyFrom(it, t, key, desc)
+        return defineOwnProperty(it, t, key, desc, throwing)
     }
     let base = try startTrap(it, o, f)
     try it.push(objVal(t))
     try it.push(try keyValue(it, key))
     try it.push(desc)
     if !it.toBoolean(try callTrap(it, base)) {
+        if !throwing {
+            return false
+        }
         try it.typeErrorAbout("'defineProperty' on proxy: trap returned falsish for property '", it.heap.atoms.name(key), "'")
     }
+    return true
 }
 
 /// Object.getPrototypeOf of object o (NONE for null).
