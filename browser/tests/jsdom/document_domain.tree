@@ -1,0 +1,14 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "document.domain"
+      "\n"
+    <body>
+      <p id="out">
+        "string true"
+      "\n"
+      <script>
+        "\ndocument.domain = 'example.com';\ndocument.getElementById('out').textContent =\n  typeof document.domain + ' ' + (document.domain === location.hostname);\n"
+      "\n"
