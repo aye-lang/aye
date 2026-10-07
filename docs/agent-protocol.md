@@ -38,9 +38,18 @@ with the next response, as a `console` array (JSON lines) or a
 For goldens and quick looks, the same views are on the command line:
 
 ```
-anyknown dump --a11y [--boxes] [--json] [--js] [--width PX] FILE|URL
-anyknown dump --md [--refs] [--js] [--width PX] FILE|URL
+anyknown dump --a11y [--boxes] [--json] [--js] [--width PX] [--no-scroll | --scroll-steps N] FILE|URL
+anyknown dump --md [--refs] [--js] [--width PX] [--no-scroll | --scroll-steps N] FILE|URL
 ```
+
+With `--js`, a dump runs the timers that are due after the load, then
+scrolls through the page a viewport at a time (500 ms of page time at
+each place, at most 20 steps or N, until the bottom shows and the page
+stopped growing) and back to the top, so that content the page loads
+when it comes into view (IntersectionObserver, infinite lists) is in
+the dump. A session does not do this by itself: `scroll` fires the
+page's `scroll` event and moves what its observers see, and `wait`
+gives the page the time to load.
 
 The code is in `browser/agent/`; the goldens in `browser/tests/agent/`.
 
@@ -252,8 +261,11 @@ What the actions do:
   the field; PageDown, PageUp, Space, ArrowDown, ArrowUp, Home and End
   scroll. Every key is recorded.
 - **scroll**: to put an element at the top of the viewport, or by `dy`;
-  clamped to the document. The result says which part of the document
-  the viewport shows.
+  clamped to the document. The page gets a `scroll` event at the
+  document; its IntersectionObservers check at the next animation frame
+  (16 ms of page time: `wait` to let them run). The result says which
+  part of the document the viewport shows. After any action, the
+  viewport follows a script's `window.scrollTo` (and the like).
 - **find**: at most 20 matches, each with 30 characters of context, the
   nearest element around it that has a ref, and `[offscreen]`.
 - **screenshot**: paints the page as the window would, with the system's

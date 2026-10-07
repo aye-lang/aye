@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<title>Endless page</title>
+<style>
+body { margin: 0 }
+div { height: 700px }
+</style>
+<h1>Endless page</h1>
+<main id="feed"></main>
+<script>
+// Every scroll adds a chunk taller than the viewport: the page never
+// stops growing, so a dump's scrolling must stop on its own.
+const feed = document.getElementById('feed');
+function add() {
+  const d = document.createElement('div');
+  d.textContent = 'Chunk ' + (feed.children.length + 1);
+  feed.append(d);
+}
+add();
+addEventListener('scroll', add);
+</script>

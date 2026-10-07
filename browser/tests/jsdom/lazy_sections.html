@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<title>Lazy sections</title>
+<style>
+body { margin: 0 }
+section { height: 500px }
+</style>
+<h1>Lazy sections</h1>
+<p>Sections fill in when they come into view.</p>
+<section data-text="First section, in view at load."></section>
+<section data-text="Second section, below the fold."></section>
+<section data-text="Third section, further down."></section>
+<section data-text="Fourth section, at the bottom."></section>
+<img id="lazy" loading="lazy" alt="A native lazy image" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAAECAYAAACk7+45AAAAEUlEQVR4nGP4z8DwH4QZcDMAHxMP8b9IbMkAAAAASUVORK5CYII=">
+<p id="log"></p>
+<script>
+// A section shows its text once it intersects the viewport; the log
+// counts the scroll events of the window and says when the native lazy
+// image loaded (at once: it does not wait to be in view).
+let scrolls = 0;
+const log = document.getElementById('log');
+function show(what) { log.textContent = 'scroll events: ' + scrolls + '; ' + what; }
+const img = document.getElementById('lazy');
+let loaded = 'image ' + (img.complete ? 'complete' : 'loading');
+img.onload = () => { loaded = 'image loaded at ' + Math.round(img.getBoundingClientRect().top + scrollY); show(loaded); };
+addEventListener('scroll', () => { scrolls++; show(loaded); });
+const io = new IntersectionObserver(entries => {
+  for (const e of entries) {
+    if (!e.isIntersecting) continue;
+    const p = document.createElement('p');
+    p.textContent = e.target.dataset.text;
+    e.target.append(p);
+    io.unobserve(e.target);
+  }
+});
+for (const s of document.querySelectorAll('section')) io.observe(s);
+show(loaded);
+</script>

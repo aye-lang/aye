@@ -1054,7 +1054,8 @@ pub fn takeScriptScroll(p: *mut Page) ?f64 {
 }
 
 /// The front end scrolled the page to `y`: what scripts see as
-/// `scrollY` from now on (and what the observers check against).
+/// `scrollY` from now on (and what the observers check against). A
+/// `scroll` event at the document follows as a task.
 pub fn setScriptScroll(p: *mut Page, y: f64) AllocError!void {
     let s = p.script orelse return
     if s.scroll_y == y {
@@ -1062,5 +1063,48 @@ pub fn setScriptScroll(p: *mut Page, y: f64) AllocError!void {
     }
     s.scroll_y = y
     s.geometry_changes += 1
+    // The prelude's hostEvent queues the event (as a script's scroll
+    // does) and runs the layout hook.
+    try dispatchEvent(p, p.doc.root, "scroll", "")
     try runLayoutHook(s)
+}
+
+// The page's time between two steps of `scrollThrough`, in ms: for the
+// observers' animation frame, a lazy loader's debounce and what it
+// fetches.
+let SCROLL_STEP_MS: f64 = 500.0
+
+/// Scrolls the window down through the document as a reader would, for
+/// a dump of a page whose scripts load content when it comes into view.
+/// The page's timers run for 500 ms of its time where it is (the
+/// observers check), then after each step of a viewport height down
+/// (which fires `scroll`), until the bottom of the document is shown
+/// and it did not grow, or after `max_steps` steps (a page that grows
+/// without end; 0: nothing happens). Then the window is back at the top,
+/// at once: the page does not get to react to that, so what it would
+/// drop out of view stays. The steps taken.
+pub fn scrollThrough(p: *mut Page, max_steps: usize) AllocError!usize {
+    let s = p.script orelse return 0
+    if max_steps == 0 {
+        return 0
+    }
+    var steps: usize = 0
+    while s.nav_kind == NavKind.None {
+        try advanceClock(p, SCROLL_STEP_MS)
+        if steps == max_steps || s.nav_kind != NavKind.None {
+            break
+        }
+        let g = try geometry(s)
+        let bottom = math.max(0.0, documentArea(s, g).h - s.height)
+        if s.scroll_y >= bottom {
+            break
+        }
+        try setScriptScroll(p, math.min(s.scroll_y + s.height, bottom))
+        steps += 1
+    }
+    s.scroll_x = 0.0
+    s.scroll_y = 0.0
+    s.scroll_moved = false
+    s.geometry_changes += 1
+    return steps
 }

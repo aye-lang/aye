@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<title>Scrolling</title>
+<style>
+body { margin: 0 }
+.tall { height: 1500px }
+</style>
+<h1>Top</h1>
+<p><button id="down" onclick="scrollTo(0, 1200)">Jump down</button></p>
+<div class="tall"></div>
+<h2>Bottom</h2>
+<p id="count">no scroll yet</p>
+<script>
+// The window's scroll events, from the agent's scrolls and the page's.
+let n = 0;
+addEventListener('scroll', e => {
+  n++;
+  document.getElementById('count').textContent = 'scroll events: ' + n + ', at ' + scrollY + ', target ' + (e.target === document ? 'document' : 'other');
+});
+</script>

@@ -17,15 +17,18 @@
 // with the system's fonts. `screenshot` paints the page into a PNG
 // (shot.ore). Without a subcommand (or with `open`), the page opens in a
 // window (ui/). `--js` runs the page's scripts first, and the event loop
-// until no timer is left (at most 30 s of the page's virtual time);
-// console messages go to stderr.
+// until no timer is left (at most 30 s of the page's virtual time), then
+// scrolls through the page a viewport at a time (at most 20 steps, or
+// `--scroll-steps N`; none with `--no-scroll`), so that what scripts load
+// when it comes into view is in the dump (engine.scrollThrough); console
+// messages go to stderr.
 //
 // For AI agents (browser/agent, docs/agent-protocol.md):
 //
 //     anyknown agent [--width PX] [--height PX]   JSON lines on stdio
 //     anyknown mcp [--width PX] [--height PX]     an MCP server on stdio
-//     anyknown dump --a11y [--boxes] [--json] FILE|URL
-//     anyknown dump --md [--refs] FILE|URL
+//     anyknown dump --a11y [--boxes] [--json] [--js] FILE|URL
+//     anyknown dump --md [--refs] [--js] FILE|URL
 //
 // A window that agents share with its user (docs/agent-protocol.md):
 //
@@ -49,7 +52,7 @@ import ui
 import url
 import url.Url
 
-let USAGE = "usage: anyknown dump --tree|--text|--style|--layout [--js] [--width PX] [--font fixed|system] [--id ID | --tag NAME] FILE|URL"
+let USAGE = "usage: anyknown dump --tree|--text|--style|--layout [--js [--no-scroll | --scroll-steps N]] [--width PX] [--font fixed|system] [--id ID | --tag NAME] FILE|URL"
 let USAGE_ALL = "usage: anyknown [open] FILE|URL | dump --tree|--text|--style|--layout|--a11y|--md ... FILE|URL | screenshot FILE|URL -o OUT.png | js FILE | agent | mcp | connect SOCKET"
 
 pub fn main() {
@@ -114,6 +117,8 @@ struct Options {
     layout: bool
     system_font: bool
     js: bool
+    // How many viewports `--js` scrolls through at most.
+    scroll_steps: usize
     width: f64
     id: []u8
     tag: []u8
@@ -121,7 +126,7 @@ struct Options {
 }
 
 fn options(args: [][]u8) ?Options {
-    var o = Options { tree: false, style: false, layout: false, system_font: false, js: false, width: 800.0, id: "", tag: "", target: "" }
+    var o = Options { tree: false, style: false, layout: false, system_font: false, js: false, scroll_steps: 20, width: 800.0, id: "", tag: "", target: "" }
     var mode = false
     var i: usize = 0
     while i < args.len {
@@ -137,6 +142,15 @@ fn options(args: [][]u8) ?Options {
             mode = true
         } else if text.eql(a, "--js") {
             o.js = true
+        } else if text.eql(a, "--no-scroll") {
+            o.scroll_steps = 0
+        } else if text.eql(a, "--scroll-steps") && i + 1 < args.len {
+            let n = text.parseInt(args[i + 1]) catch -1
+            if n < 0 {
+                return null
+            }
+            o.scroll_steps = n as usize
+            i += 1
         } else if text.eql(a, "--font") && i + 1 < args.len && (text.eql(args[i + 1], "fixed") || text.eql(args[i + 1], "system")) {
             o.system_font = text.eql(args[i + 1], "system")
             i += 1
@@ -166,7 +180,7 @@ fn options(args: [][]u8) ?Options {
 }
 
 fn dump(alloc: Allocator, args: [][]u8) !i32 {
-    var o = Options { tree: false, style: false, layout: false, system_font: false, js: false, width: 800.0, id: "", tag: "", target: "" }
+    var o = Options { tree: false, style: false, layout: false, system_font: false, js: false, scroll_steps: 20, width: 800.0, id: "", tag: "", target: "" }
     if options(args) |parsed| {
         o = parsed
     } else {
@@ -262,6 +276,7 @@ fn dumpScripted(alloc: Allocator, o: *Options, location: *Url) !i32 {
     }
     engine.setViewport(p, o.width, 600.0)
     try engine.runUntilIdle(p, 30000.0)
+    _ = try engine.scrollThrough(p, o.scroll_steps)
     try dom.assignSlots(&mut p.doc)
     var roots = List(NodeId).init(alloc)
     defer roots.deinit()
