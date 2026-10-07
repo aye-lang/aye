@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<title>Request</title>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+// Up to pageTests, the same output as Node 22 (absolute URLs only).
+const U = 'https://example.com/a/b?q=1#frag';
+function err(f) {
+  try { f(); return 'no error'; } catch (e) { return e.name; }
+}
+async function rejects(p) {
+  try { await p; return 'resolved'; } catch (e) { return e.name; }
+}
+async function requestTests() {
+  const r = new Request(U);
+  log('defaults', r.url, r.method, r.mode, r.credentials, r.cache, r.redirect, r.referrer, r.integrity, r.keepalive);
+  log('more', r.body, r.bodyUsed, r.signal instanceof AbortSignal, r.signal.aborted, r.headers instanceof Headers, [...r.headers].length);
+  log('types', r instanceof Request, typeof Request, Object.keys(r).length, Object.prototype.toString.call(r), Object.prototype.toString.call(r.headers), 'url' in Request.prototype, typeof Request.prototype.clone);
+  log('url object', new Request(new URL('https://example.com/x')).url);
+  log('methods', ['get', 'post', 'Put', 'delete', 'head', 'options', 'patch', 'Foo'].map(m => new Request(U, { method: m }).method).join(','));
+  log('bad methods', err(() => new Request(U, { method: 'CONNECT' })), err(() => new Request(U, { method: 'trace' })), err(() => new Request(U, { method: 'a b' })), err(() => new Request(U, { method: '' })));
+  log('get body', err(() => new Request(U, { body: 'x' })), err(() => new Request(U, { method: 'HEAD', body: 'x' })), err(() => new Request(U, { body: null })), err(() => new Request(U, { body: undefined })));
+  log('bad args', err(() => new Request()), err(() => Request(U)), err(() => new Request('http://a b/')), err(() => new Request('https://u:p@example.com/')));
+  log('bad init', err(() => new Request(U, { mode: 'navigate' })), err(() => new Request(U, { mode: 'bogus' })), err(() => new Request(U, { credentials: 'all' })), err(() => new Request(U, { cache: 'only-if-cached' })), err(() => new Request(U, { redirect: 'never' })));
+  const o = new Request(U, { method: 'POST', mode: 'same-origin', credentials: 'include', cache: 'no-store', redirect: 'manual', referrer: '', keepalive: true, integrity: 'sha256-x', headers: { 'X-One': ' 1 ', accept: 'text/html' }, body: 'hello' });
+  log('init', o.method, o.mode, o.credentials, o.cache, o.redirect, JSON.stringify(o.referrer), o.keepalive, o.integrity, o.body !== null, o.bodyUsed);
+  log('headers', o.headers.get('x-one'), o.headers.get('Accept'), o.headers.get('content-type'), o.headers.get('missing'), [...o.headers.keys()].join(','));
+  log('only-if-cached', new Request(U, { cache: 'only-if-cached', mode: 'same-origin' }).cache);
+  const c = o.clone();
+  log('clone', c instanceof Request, c !== o, c.url, c.method, c.headers !== o.headers, c.headers.get('x-one'), c.keepalive, c.bodyUsed);
+  log('text', await o.text(), o.bodyUsed, await rejects(o.text()), err(() => o.clone()), await c.text());
+  const j = new Request(U, { method: 'PUT', body: '{"a":[1,2]}', headers: [['Content-Type', 'application/json']] });
+  log('json', JSON.stringify(await j.json()), j.headers.get('content-type'), j.bodyUsed);
+  const p = new Request(U, { method: 'POST', body: new URLSearchParams({ a: '1', b: 'x y' }) });
+  log('params', p.headers.get('content-type'), await p.text());
+  log('empty text', JSON.stringify(await new Request(U).text()), new Request(U).bodyUsed);
+  const h = new Headers();
+  h.append('X-A', '1');
+  h.append('x-a', '2');
+  h.set('B', 'b');
+  log('from headers', new Request(U, { headers: h }).headers.get('x-a'), new Request(U, { headers: h }).headers !== h);
+  const base = new Request(U, { method: 'POST', body: 'abc', headers: { 'x-k': 'v' }, mode: 'no-cors' });
+  const copy = new Request(base);
+  log('copy', copy.url, copy.method, copy.mode, copy.headers.get('x-k'), copy.bodyUsed, base.bodyUsed, await copy.text());
+  const over = new Request(new Request(U, { headers: { 'x-k': 'v' } }), { method: 'patch', headers: { 'x-o': 'o' } });
+  log('override', over.method, over.headers.get('x-k'), over.headers.get('x-o'));
+  const used = new Request(U, { method: 'POST', body: 'z' });
+  await used.text();
+  log('from used', err(() => new Request(used)), err(() => new Request(used, { body: 'new' })));
+  const ac = new AbortController();
+  const s = new Request(U, { signal: ac.signal });
+  log('signal', s.signal !== ac.signal, s.signal.aborted);
+  ac.abort();
+  log('signal aborted', s.signal.aborted, s.signal.reason && s.signal.reason.name, new Request(U, { signal: AbortSignal.abort() }).signal.aborted);
+  log('null signal', new Request(U, { signal: null }).signal.aborted);
+  Request.prototype.extra = function () { return 'patched ' + this.method; };
+  log('patch', new Request(U).extra());
+  delete Request.prototype.extra;
+  const hh = new Headers({ b: '2', a: '1' });
+  hh.append('a', '3');
+  hh.delete('b');
+  log('headers api', hh.get('a'), hh.has('A'), hh.has('b'), JSON.stringify([...hh]), err(() => new Headers({ 'a b': '1' })), err(() => hh.set('x', 'a\nb')));
+  const seen = [];
+  new Headers([['z', '1'], ['y', '2']]).forEach((v, k) => seen.push(k + '=' + v));
+  log('forEach', seen.join(';'), JSON.stringify([...new Headers(new Headers({ k: 'v' })).entries()]), JSON.stringify([...new Headers({ c: '3', a: '1' }).values()]));
+}
+
+// What Node cannot show: URLs resolved against the document, and fetch.
+async function pageTests() {
+  const rel = new Request('scripts/items.json');
+  log('relative', rel.url === new URL('scripts/items.json', document.baseURI).href, rel.url.endsWith('/browser/tests/jsdom/scripts/items.json'));
+  const res = await fetch(new Request('scripts/items.json'));
+  log('fetch request', res.status, res.ok, res.headers.get('Content-Type'), res.bodyUsed, (await res.json()).length, res.bodyUsed, await rejects(res.text()));
+  const res2 = await fetch(new Request('scripts/nothing.json', { method: 'POST', body: 'x' }), { method: 'GET', body: null }).catch(e => e.name);
+  log('init over request', res2);
+  log('fetch post', await rejects(fetch(new Request('scripts/items.json', { method: 'POST', body: 'x' }))), await rejects(fetch(new Request('scripts/items.json'), { method: 'POST' })));
+  log('fetch errors', await rejects(fetch('http://a b/')), await rejects(fetch('scripts/items.json', { body: 'x' })), await rejects(fetch(new Request('scripts/items.json', { signal: AbortSignal.abort() }))));
+  log('referrer', new Request('x', { referrer: 'https://elsewhere.example/' }).referrer, new Request('x', { referrer: 'about:client' }).referrer);
+}
+requestTests().then(pageTests).catch(e => log('FAIL', e));
+</script>
