@@ -169,7 +169,7 @@ step only finds and writes down the cause; the fix is the next step.
 | P3.54 | `grid-template` with area strings and the `grid` shorthand (dropped today; no listed site needs them yet) | fixtures | P3.46 | all |
 | P3.55 | ICO decoder (`browser/image/ico.ore`, sniffed in `image.ore`): PNG entries → `decodePng`; BMP entries 4/8/32 bpp with the AND mask; pick the entry closest to the needed size | fixture; DuckDuckGo favicons on screens | P3.45 | all |
 | P3.56 | `<video poster>`: load it like an image (`isImageElement` in `browser/engine/images.ore`) and paint it in the video box; recapture wikipedia-en | fixture; Wikipedia en figure on screens | P3.45 | P3.55 |
-| P3.57 | `window_agents` failed once with "connection refused" on its socket under load (passed alone): the test connects before the window's socket listens; wait on readiness, not time | the test 30× under synthetic load | – | all |
+| P3.57 | `window_agents` "connection refused" under load. Done 2026-10-08: `listenAt` (`browser/ui/socket.ore`) bound before listening, so the socket file appeared before it accepted; now binds a temporary path, listens, renames. 0/30 failures under load after the fix; 2/30 in an earlier run stay unexplained (output not kept) — if it recurs, keep the logs | – | – | – |
 | P3.21 | Fetch guards: Response headers read-only (`immutable` guard), Request headers drop forbidden names, a Request's abort listener on its source signal is removed when the request settles | jsdom test vs Node 22 | P3.15 | P3.17 after it merges |
 
 ### P4: Load time
