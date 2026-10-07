@@ -141,6 +141,22 @@ again.
 against Node instead (`244`, `245` found two real bugs).
 **Why:** a report written mid-run goes stale as the run continues.
 
+### Build into your own worktree, not a shared scratch path
+**Context:** sub agents of one session share its scratchpad directory.
+**Bad:** on 2026-10-07 the pi-dynimport review agent built
+`ore build browser -o $SCRATCH/ak` at 03:25:47Z. At 03:25:55Z the
+async-image agent, in another worktree (865305f, before ES modules),
+built `-o $SCRATCH/ak` too and finished last. The next test run used the
+other branch's binary: every `import()` threw "import is not defined".
+A rebuild "fixed" it, and the plan logged a flaky build (P2.7). Builds
+are deterministic: 10 clean builds and 3 under load gave the same C and
+binary, and all 23x/24x JS tests passed.
+**Good:** `browser/build.sh` with no path (it writes `target/anyknown`
+in its own worktree), or a path named after the worktree:
+`-o $SCRATCH/ak-$(basename "$PWD")`.
+**Why:** a shared output path lets another agent replace your binary
+between your build and your test, with no sign of it.
+
 ## Compiler gaps
 
 ### Record a compiler limitation in browser/COMPILER_GAPS.md
