@@ -44,6 +44,14 @@ log('import', q4.ownerDocument === doc, document.importNode(q4, true).ownerDocum
 const q5 = document.createElement('s');
 doc.adoptNode(q5);
 log('adopted', q5.ownerDocument === doc, doc.createElement('s').ownerDocument === doc);
+const sub = doc.createElement('div');
+sub.innerHTML = '<section><span id="gc">x</span></section>';
+const gc = sub.querySelector('#gc');
+log('sub-before', gc.ownerDocument === doc);
+document.body.appendChild(sub);
+log('sub-in', gc.ownerDocument === document, sub.firstChild.ownerDocument === document);
+sub.remove();
+log('sub-out', gc.ownerDocument === document, sub.ownerDocument === document);
 log('doc', doc.ownerDocument, document.ownerDocument);
 fetch('scripts/items.json').then(async r => {
   const c = r.clone();

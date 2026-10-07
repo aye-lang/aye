@@ -3860,7 +3860,27 @@ pub let PRELUDE =
     \\hidden(inertDoc, 'getElementById', () => null);
     \\hidden(inertDoc, 'querySelector', () => null);
     \\hidden(inertDoc, 'querySelectorAll', () => document.createDocumentFragment().querySelectorAll('*'));
-    \\const nativeOwnerDocument = Object.getOwnPropertyDescriptor(NodeP, 'ownerDocument').get;
+    \\// Insertion adopts the whole inserted subtree into the parent's document.
+    \\for (const k of ['appendChild', 'insertBefore', 'replaceChild', 'append', 'prepend', 'before', 'after', 'replaceWith', 'replaceChildren', 'insertAdjacentElement']) {
+    \\  const orig = NodeP[k] || ElementP[k];
+    \\  const host = NodeP[k] ? NodeP : ElementP;
+    \\  if (typeof orig !== 'function') continue;
+    \\  hidden(host, k, function (...args) {
+    \\    if (parsedCount === 0) return orig.apply(this, args);
+    \\    const into = (k === 'before' || k === 'after' || k === 'replaceWith') ? this.parentNode : this;
+    \\    const dd = into ? into.ownerDocument : null;
+    \\    const list = [];
+    \\    for (const a of args) {
+    \\      if (a && typeof a === 'object' && a.nodeType) {
+    \\        if (a.nodeType === 11) list.push(...a.childNodes); else list.push(a);
+    \\      }
+    \\    }
+    \\    const r = orig.apply(this, args);
+    \\    if (dd && dd !== inertDoc) for (const n of list) setNodeDoc(n, dd === document ? null : dd);
+    \\    return r;
+    \\  });
+    \\}
+    \\const nativeOwnerDocument =Object.getOwnPropertyDescriptor(NodeP, 'ownerDocument').get;
     \\getter(NodeP, 'ownerDocument', function () {
     \\  const d = nativeOwnerDocument.call(this);
     \\  if (d === null) return null;
