@@ -25,7 +25,8 @@ pub fn installBuiltins(it: *mut Interp) JsError!void {
     it.regexp_proto = try h.newObj(Class.Object, it.object_proto, ObjData.None)
     it.map_proto = try h.newObj(Class.Object, it.object_proto, ObjData.None)
     it.set_proto = try h.newObj(Class.Object, it.object_proto, ObjData.None)
-    it.iterator_proto = try h.newObj(Class.Object, it.object_proto, ObjData.None)
+    it.iterator_base = try h.newObj(Class.Object, it.object_proto, ObjData.None)
+    it.iterator_proto = try h.newObj(Class.Object, it.iterator_base, ObjData.None)
 
     let g = it.global
     try it.defineValue(g, "globalThis", objVal(g))

@@ -191,6 +191,8 @@ pub struct Interp {
     // another object, as HTMLElement's does for custom elements).
     ctor_this: u32
     iterator_proto: u32
+    // %IteratorPrototype%: above iterator_proto and gen_proto.
+    iterator_base: u32 = NONE
     math_obj: u32
     json_obj: u32
     // Compiled regular expressions, by (pattern atom << 32 | flags atom).

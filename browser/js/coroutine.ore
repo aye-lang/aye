@@ -571,7 +571,7 @@ fn engineSetDrivers(it: *mut Interp, a: Args) JsError!Value {
 }
 
 fn installGenerators(it: *mut Interp) JsError!void {
-    it.gen_proto = try it.newObject(it.iterator_proto)
+    it.gen_proto = try it.newObject(it.iterator_base)
     try it.addRoot(objVal(it.gen_proto))
     try it.defineNative(it.gen_proto, "next", 1, generatorNext)
     try it.defineNative(it.gen_proto, "throw", 1, generatorThrow)

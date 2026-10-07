@@ -897,6 +897,18 @@ pub let LIB =
     \\G.__engine.setDrivers(asyncDriver, asyncGenDriver, takeUnhandled, moduleLoader);
     \\delete G.__engine;
     \\
+    \\// ---- Iterator: the abstract constructor of %IteratorPrototype%, which
+    \\// the built-in iterators and generators inherit from (polyfills of the
+    \\// iterator helpers add their methods there).
+    \\const IteratorPrototype = Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]()));
+    \\function Iterator() {
+    \\  if (new.target === undefined || new.target === Iterator) throw new TypeError('Abstract class Iterator not directly constructable');
+    \\}
+    \\Object.defineProperty(Iterator, 'prototype', { value: IteratorPrototype, writable: false, enumerable: false, configurable: false });
+    \\hidden(IteratorPrototype, 'constructor', Iterator);
+    \\Object.defineProperty(IteratorPrototype, Symbol.toStringTag, { value: 'Iterator', writable: true, configurable: true });
+    \\hidden(G, 'Iterator', Iterator);
+    \\
     \\// ---- legacy escape / unescape
     \\
     \\hidden(G, 'escape', function escape(s) {

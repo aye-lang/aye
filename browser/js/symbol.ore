@@ -202,7 +202,7 @@ fn installIteratorMethods(it: *mut Interp) JsError!void {
     let si = try it.newNative("[Symbol.iterator]", 0, stringIterator)
     try it.heap.addProp(it.string_proto, it.sym_iterator, objVal(si), Value.Undefined, F_HIDDEN)
     let ii = try it.newNative("[Symbol.iterator]", 0, returnThis)
-    try it.heap.addProp(it.iterator_proto, it.sym_iterator, objVal(ii), Value.Undefined, F_HIDDEN)
+    try it.heap.addProp(it.iterator_base, it.sym_iterator, objVal(ii), Value.Undefined, F_HIDDEN)
 }
 
 fn aliasMethod(it: *mut Interp, proto: u32, name: []u8) JsError!void {
