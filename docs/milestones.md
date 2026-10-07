@@ -76,6 +76,21 @@ pass.
     then writes a small CLI in Ore, such as `wc` or a JSON tokenizer, using
     `ore check` feedback alone. Record how many check rounds it took and which
     errors were hardest to fix. Feed the findings back into `design.md`.
+- **Gate rerun, 2026-10-08 (P2.5c):** a fresh agent with only `ore spec`
+  (~24.4k tokens cl100k, budget ~30k) wrote `wc` and a JSON tokenizer.
+  Each passed `ore check` in the first round; `wc` matched `/usr/bin/wc`
+  on 4 inputs, and the tokenizer rejected 11 invalid inputs with
+  positioned errors. It found four places where the spec was silent or
+  loose (the compiler was right in each). The spec text now covers them:
+  - §8: `return g()` cannot pass an `E!void` call up from an `E!bool`
+    function (E0023); write `try g()` and then `return true`.
+  - §8: `catch { ... }` without `|e|`; §6: `for _ in 0..3` discards the
+    loop variable.
+  - §7: a statement `match` arm is a block or an expression statement (a
+    call, `try`, `catch`, `match`, `unreachable`); `=> return 1` needs a
+    block.
+  - §8: an error passed on into a larger set keeps its name, so
+    `catch |e|` can compare it: `e == LexError.Invalid`.
 
 # Stage0 milestones, part 2: enough language for the browser
 
