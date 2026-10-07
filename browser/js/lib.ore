@@ -544,8 +544,19 @@ pub let LIB =
     \\  return out.sort(longestFirst);
     \\}
     \\// The records of everything root imports, transitively, a level of the
-    \\// graph at a time: the modules of a level are fetched concurrently.
+    \\// graph at a time: the modules of a level are fetched concurrently. A
+    \\// module has its deps only once its whole graph loaded: a failure
+    \\// takes back the deps this call gave.
     \\function loadGraph(root) {
+    \\  const given = [];
+    \\  try {
+    \\    loadLevels(root, given);
+    \\  } catch (e) {
+    \\    for (const m of given) m.deps = null;
+    \\    throw e;
+    \\  }
+    \\}
+    \\function loadLevels(root, given) {
     \\  let level = root.deps === null ? [root] : [];
     \\  while (level.length > 0) {
     \\    const urls = [];
@@ -564,6 +575,7 @@ pub let LIB =
     \\      const deps = [];
     \\      for (let i = 0; i < m.requests.length; i++) deps.push(getModule(m.urls[i], m.requests[i][1], m.url));
     \\      m.deps = deps;
+    \\      given.push(m);
     \\      for (const d of deps) {
     \\        if (d.deps === null && !next.includes(d) && !level.includes(d)) next.push(d);
     \\      }
