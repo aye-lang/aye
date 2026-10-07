@@ -158,7 +158,7 @@ step only finds and writes down the cause; the fix is the next step.
 | P3.43 | URL attributes reflected to JS (`img.src`, `a.href`, `link.href`, `script.src`, `form.action`, …) resolve against the load-time `Page.base`, not the current document base: a `<base>` inserted or changed by JS is ignored. Resolve with `documentBase` (cached since P4.19) | jsdom test vs Chrome semantics | P4.19 | P3.4–8 |
 | P3.44 | Right-edge overflow. Done 2026-10-08: GitHub (grid `1fr` column ignored `min-width:0; overflow:hidden` of its items) and YouTube search (`overflow-y:hidden` must compute `overflow-x` to `auto`, so the flex item has no automatic minimum) fixed; DuckDuckGo needs `text-overflow: ellipsis` (→ P3.52); ZOL is not a bug (its CSS sets `body{min-width:1400px}`, Chrome clips too) | – | – | – |
 | P3.45 | Diagnose missing images: YouTube-search thumbnails/Shorts/avatars, DuckDuckGo favicons, ZOL video thumbnails, Wikipedia en second figure (lazy loading, `srcset`/`sizes`, CSS backgrounds, `<picture>`, `loading=lazy` outside the scrolled region, archive gaps) | cause per site | – | P3.44 |
-| P3.46 | Wikipedia en/ja: text squeezed beside floats (en: ~90px column, one word per line) and the TOC column too wide — diagnose (float + BFC width, Vector-2022 grid columns, `min-width`) | cause with a fixture | – | P3.44 |
+| P3.46 | Wikipedia squeezed text. Done 2026-10-08: the page grid uses the `grid-template` shorthand, which we dropped (TOC column 577 px instead of 196, text column 383 instead of 752); `grid-template: none | rows / columns` supported | – | – | – |
 | P3.47 | Empty bands and duplicates: MDN grey band under the banner, a tiny empty search pill plus a second search box, "English (US)" twice, empty "Try it"; BBC ~280px band above NEWS — diagnose | cause per site | – | P3.44 |
 | P3.48 | Mistral shows a dark hero with no headline or body text (animation start state opacity 0? content behind a hydration step?); "Back to Blog" overlapped by a "0%" widget — diagnose | cause | – | P3.44 |
 | P3.49 | rustdoc: no search input (shows "Search / Settings / Help / Summary" as text) — diagnose (custom element `rustdoc-search`, form control rendering, script-inserted input) | cause | – | all |
@@ -166,6 +166,7 @@ step only finds and writes down the cause; the fix is the next step.
 | P3.51 | Form controls: buttons render default-beveled where sites style them (Google), GitHub commit-message rows misaligned — confirm against real renders, then diagnose | screenshot comparison | P3.44 | P3.45 |
 | P3.52 | `text-overflow: ellipsis` for single lines in boxes that clip their overflow (`browser/css/css.ore` property, `browser/layout/inline.ore`) | fixture; DuckDuckGo titles and YouTube-search descriptions end in "…" on screens | P3.44 | P3.45 |
 | P3.53 | Ellipsis and clamp follow-ups: right-to-left ellipsis, `-webkit-line-clamp` reaching into child blocks, unprefixed `line-clamp` | fixtures | P3.52 | all |
+| P3.54 | `grid-template` with area strings and the `grid` shorthand (dropped today; no listed site needs them yet) | fixtures | P3.46 | all |
 | P3.21 | Fetch guards: Response headers read-only (`immutable` guard), Request headers drop forbidden names, a Request's abort listener on its source signal is removed when the request settles | jsdom test vs Node 22 | P3.15 | P3.17 after it merges |
 
 ### P4: Load time
