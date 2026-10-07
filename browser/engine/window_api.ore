@@ -32,6 +32,7 @@ fn installWindow(s: *mut Script) JsError!void {
     try defMethod(it, o, "markHtmlDda", 1, akMarkHtmlDda)
     try defMethod(it, o, "report", 1, akReport)
     try defMethod(it, o, "compile", 1, akCompile)
+    try defMethod(it, o, "parseDocument", 1, akParseDocument)
     try defMethod(it, o, "evalGlobal", 1, akEvalGlobal)
     try defMethod(it, o, "setTimer", 5, akSetTimer)
     try defMethod(it, o, "clearTimer", 1, akClearTimer)
@@ -121,6 +122,15 @@ fn akMarkHtmlDda(it: *mut Interp, a: Args) JsError!Value {
         _ => {}
     }
     return Value.Undefined
+}
+
+// The root element of the HTML document `src` (DOMParser).
+fn akParseDocument(it: *mut Interp, a: Args) JsError!Value {
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 0, b)
+    let root = (try parseDocumentElement(scriptOf(it).active, b.bytes())) orelse return Value.Null
+    return wrap(it, root)
 }
 
 // Reports an exception a listener threw, and goes on.

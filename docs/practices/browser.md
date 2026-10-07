@@ -197,6 +197,22 @@ read the stand-in's `documentElement`, not its `childNodes` (it has none)
 **Why:** the page has one real document; every other one is a stand-in
 with only a few of Document's members.
 
+### A parsed document is another document to the page's scripts
+**Context:** a stand-in document (DOMParser, `createHTMLDocument`) that
+an SPA router fills from fetched HTML.
+**Bad:** P3.30: DOMParser cut `<head>`/`<body>` out with regexes, and
+the first `<body` on mistral.ai was in a script's comment; its nodes
+said `ownerDocument === document`, so Turbo (GitHub) never called
+`importNode`, its `<turbo-frame>` stayed un-upgraded and the frame
+counted as missing (`turbo:reload` "missing_frame").
+**Good:** parse with the HTML parser (`ak.parseDocument`,
+`parseDocumentElement` in `browser/engine/markup.ore`); a parsed node's
+`ownerDocument` is the stand-in until it is inserted elsewhere
+(`parsedDocs`, `browser/engine/prelude.ore`); test it in
+`browser/tests/jsdom/dom_parser.html`.
+**Why:** routers check where a node came from before they adopt it; a
+stand-in that claims the page's document skips their import path.
+
 ### Root native return values across mutation hooks
 **Context:** a DOM native creates a JS value, then changes the document.
 **Bad:** `styleRemoveProperty` kept its return string in an Ore local
@@ -420,6 +436,20 @@ prints the tab's state at the end, `--save` writes the last frame, and
 `--text` prints the document's text.
 **Why:** a scripted run can be repeated after each change and turned
 into a test in `tests/browser.rs`.
+
+### Trace a canceled click from the page's own listener lists
+**Context:** an agent `click` or `submit` says "a script canceled" it
+and the URL does not change (an SPA router).
+**Good:** in one `anyknown agent` session on the replay: `eval` a script
+that wraps each `l.fn` of `node.__listeners` on the target, its
+ancestors, `document` and `window` (log the call, and `defaultPrevented`
+after it) and wraps `fetch` and `History.prototype.pushState`; then
+`click`, then `eval` the log. Listen for the router's own events
+(`turbo:*`, `astro:*`), and keep the log in `localStorage` when the page
+may load a new document. P3.30 found the exception after the router's
+fetch on GitHub and mistral.ai this way.
+**Why:** the router cancels the click first and fails later in a promise;
+only the order of its steps shows where.
 
 ### Build in safe mode to find a crash
 **Context:** the browser crashes on a real site.

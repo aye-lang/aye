@@ -156,6 +156,18 @@ fn parseFragment(p: *mut Page, context: []u8, src: []u8, out: *mut List(NodeId))
     }
 }
 
+/// Parses `src` as a whole HTML document and returns a copy of its root
+/// element in the page's document (not in the tree), for DOMParser.
+fn parseDocumentElement(p: *mut Page, src: []u8) AllocError!?NodeId {
+    let was = p.doc.recording
+    p.doc.recording = false
+    defer p.doc.recording = was
+    var tmp = try html.parseWith(p.alloc, src, false)
+    defer tmp.deinit()
+    let root = tmp.documentElement() orelse return null
+    return try importNode(&mut p.doc, &tmp, root)
+}
+
 fn firstChildNamed(doc: *Document, parent: NodeId, name: []u8) ?NodeId {
     var cur = doc.firstChild(parent)
     while cur |c| {
