@@ -17,6 +17,11 @@ Stdout is unchanged. Disabled hooks allocate nothing and do not read the
 clock. `browser/perf/perf.ore` is shared by engine, CSS, net, Markdown
 and paint. The runner aggregates phases, lists the five slowest document
 scripts, and saves individual runs, medians and output hashes as JSON.
+Each run also records the browser's CPU time (user+sys) and the 1-minute
+load average; the `run` and `check` tables show median `wall`, `cpu` and
+`load` columns, and `--compare` reports the CPU improvement (wall in
+parentheses). A site whose CPU/wall is below 0.8 gets a warning: the
+machine was too busy for wall time to mean anything, so compare CPU.
 
 ```sh
 cargo build --release
