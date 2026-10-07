@@ -208,7 +208,7 @@ fn transfer(alloc: Allocator, curl: *mut Curl, target: *Url, req: Request, s: ?*
         var headers: ?*mut CurlList = null
         defer curl_slist_free_all(headers)
         headers = try prepare(alloc, curl, here.bytes().ptr, &at, req, post, s, &mut sink)
-        let code = curl_easy_perform(curl)
+        let code = performShared(curl)
         if sink.out_of_memory {
             return FetchError.OutOfMemory
         }

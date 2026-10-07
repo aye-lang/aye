@@ -1,0 +1,51 @@
+<!doctype html><title>Background image events</title>
+<style>#wide { display: block; width: 100%; }</style>
+<p>Images that load in the background: the page lays out again once an
+image's size is known, a failed load fires error, a handler set after
+src still sees the event, and the window's capturing listeners do not
+see the images' load events.</p>
+<img id="wide" src="/slow/paint/img/photo.png?wide">
+<p id="below">Below the wide image.</p>
+<img id="broken" src="/slow/broken.png"><img id="missing" src="/no-such-image.png">
+<pre id="log"></pre>
+<script>
+const lines = [];
+function note(s) {
+  lines.push(s);
+  document.getElementById('log').textContent = lines.join('\n');
+}
+const wide = document.getElementById('wide');
+const below = document.getElementById('below');
+// The gap between the image's box and the paragraph below it.
+const gap = () => below.getBoundingClientRect().top - wide.getBoundingClientRect().bottom;
+const gap0 = gap();
+note('before: wide complete=' + wide.complete + ' naturalWidth=' + wide.naturalWidth + ' height=' + wide.height + ' box height=' + wide.getBoundingClientRect().height);
+// The size is known only once the image arrived: the page lays out
+// again, the box gets the image's ratio and what is below moves down.
+wide.onload = () => {
+  const r = wide.getBoundingClientRect();
+  note('load wide: complete=' + wide.complete + ' natural=' + wide.naturalWidth + 'x' + wide.naturalHeight + ' box by ratio: ' + (r.height > 0 && r.height === r.width * 48 / 64 && wide.height === r.height) + ' below still under it: ' + (gap() === gap0));
+};
+// An observer sees the page's own layout: `below` leaves the viewport
+// when the image above it gets its height.
+new IntersectionObserver(entries => {
+  for (const e of entries) note('below visible: ' + e.isIntersecting);
+}).observe(below);
+for (const id of ['broken', 'missing']) {
+  const img = document.getElementById(id);
+  img.onload = () => note('load ' + id);
+  img.onerror = () => note('error ' + id + ': complete=' + img.complete + ' naturalWidth=' + img.naturalWidth);
+}
+// Handlers set after src, in the same script, see the request's event.
+const late = new Image();
+late.src = '/slow/paint/img/photo.png?late';
+late.onload = () => note('load late (onload set after src): ' + late.naturalWidth + 'x' + late.naturalHeight);
+late.addEventListener('load', () => note('load late (listener added after src)'));
+let windowSaw = 0, documentSaw = 0;
+addEventListener('load', e => { if (e.target instanceof HTMLImageElement) windowSaw++; }, true);
+document.addEventListener('load', e => { if (e.target instanceof HTMLImageElement) documentSaw++; }, true);
+addEventListener('load', () => {
+  note('window load: wide ' + wide.complete + '/' + wide.naturalWidth + ', late ' + late.complete + '/' + late.naturalWidth);
+  note('image loads captured by the window: ' + windowSaw + ', by the document: ' + documentSaw);
+});
+</script>

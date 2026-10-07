@@ -241,6 +241,20 @@ Canvas fixtures await `decode()` before reading dimensions or drawing.
 **Why:** a URL cache is not per-element request state. A replaced request
 must not publish dimensions or fire a stale load/error event.
 
+### A load event stops at the document
+**Context:** dispatching an event at a node (`dispatch` in
+`browser/engine/prelude.ore`), now that each image fires its own load
+event when its background load ends.
+**Bad:** the event path went from the document on to the window for
+every type, so `addEventListener('load', f, true)` on the window ran
+`f` for each image as well as for the page.
+**Good:** DOM's "get the parent" of a document is null for `load`
+(`eventParent` and the path without shadow roots, `56ac713`); the
+document's capturing listeners still see the images' loads
+(`net/bg_image_events.html`).
+**Why:** pages put capturing load listeners on the window to run once;
+an image's load reaching them runs page setup again.
+
 ## Code style
 
 ### Write blocks and comments like the surrounding code
@@ -386,10 +400,14 @@ real numbers.
 **Bad:** `c40a1ea` fetched each img's image in its own microtask, one at
 a time inside the scripts phase: lobste.rs's 25 avatars took 25 round
 trips (8 s instead of 2 s). A replay hides it: every request is 0 ms.
-**Good:** batch the requests of a turn into one `net.prefetch`
-(`ak.imagePrefetch`, `8ae98cd`), and check a live run's `requests` phase
-for serial runs of the same host as well as the replay. The test server's
-`/slow/` route counts concurrent requests (`http_images_concurrent`).
+**Good:** start a background load (`net.startLoad`,
+`browser/net/loader.ore`) and deliver the result in a task once it
+ended (`ak.imageTask`, `a018c5c`; `8ae98cd` batched a turn's requests
+into one `net.prefetch` before that). Check a live run's `requests`
+phase for serial runs of the same host as well as the replay. The test
+server's `/slow/` route counts concurrent requests
+(`http_images_concurrent`) and `/slow-now` the ones in flight
+(`http_images_background`).
 **Why:** a real browser loads in parallel and never blocks on it; a
 blocking fetch costs one round trip per request.
 

@@ -255,7 +255,7 @@ fn canvasSource(it: *mut Interp, source: Value) JsError!?CanvasSource {
     let base = try documentBase(cache.alloc, &p.doc, &p.url)
     defer base.deinit(cache.alloc)
     let s = scriptOf(it)
-    let loaded = (try loadElementImage(cache, &p.doc, h, &base, css.Media { width: s.width, height: s.height })) orelse return null
+    let loaded = (try loadElementImage(cache, &p.doc, h, &base, css.Media { width: s.width, height: s.height }, ImageFetch.Now, 0)) orelse return null
     defer loaded.target.deinit(cache.alloc)
     let bmp = loaded.bmp orelse return null
     let pic = cache.pictureOf(loaded.target.withoutFragment())

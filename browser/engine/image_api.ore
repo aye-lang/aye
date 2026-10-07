@@ -1,6 +1,9 @@
 // HTMLImageElement requests share rendering's source selection and URL
 // cache. The prelude owns the observable request state and queues events;
 // this bridge only fetches/decodes and returns the selected URL and size.
+// An http(s) image loads in the background (net.startLoad): the request
+// gets the load's id, and `imageTask` queues the task that decodes it
+// once the load ended ("update the image data").
 
 import css
 import js
@@ -8,13 +11,11 @@ import js.Args
 import js.Interp
 import js.JsError
 import js.Value
-import dom.NodeId
-import std.list.List
 import std.math
 
 fn installImages(it: *mut Interp, ak: u32) JsError!void {
-    try defMethod(it, ak, "imageLoad", 1, akImageLoad)
-    try defMethod(it, ak, "imagePrefetch", 1, akImagePrefetch)
+    try defMethod(it, ak, "imageLoad", 2, akImageLoad)
+    try defMethod(it, ak, "imageTask", 2, akImageTask)
 }
 
 // The page's image cache, made on first use.
@@ -29,37 +30,12 @@ fn scriptImages(p: *mut Page) JsError!*mut ImageCache {
     return cache
 }
 
-// Fetches the new images of the img elements of the array argument
-// concurrently, before the prelude's requests load them one by one.
-fn akImagePrefetch(it: *mut Interp, a: Args) JsError!Value {
-    let v = it.arg(a, 0)
-    if !it.hasClass(v, js.Class.Array) {
-        return Value.Undefined
-    }
-    let s = scriptOf(it)
-    let p = s.active
-    var els = List(NodeId).init(p.alloc)
-    defer els.deinit()
-    let o = js.objectOf(v)
-    for i in 0..it.heap.obj(o).nelems {
-        let h = handleOf(it, it.heap.obj(o).elems[i], TAG_NODE) orelse continue
-        if p.doc.isElement(h, "img") {
-            try els.append(h)
-        }
-    }
-    if els.len() < 2 {
-        return Value.Undefined
-    }
-    let cache = try scriptImages(p)
-    let base = try documentBase(cache.alloc, &p.doc, &p.url)
-    defer base.deinit(cache.alloc)
-    try prefetchElementImages(cache, &p.doc, els.items(), &base, css.Media { width: s.width, height: s.height })
-    return Value.Undefined
-}
-
-// [currentSrc, naturalWidth, naturalHeight]; -1 dimensions mean broken.
-// Empty source is broken for decode(), but the prelude distinguishes
-// missing src (no event) from an explicit empty src (an error event).
+// imageLoad(img, waited): [currentSrc, naturalWidth, naturalHeight]; -1
+// dimensions mean broken. Empty source is broken for decode(), but the
+// prelude distinguishes missing src (no event) from an explicit empty src
+// (an error event). A number instead: the id of the background load the
+// request waits for (`imageTask`). `waited`: the load that the request's
+// task waited for, decoded now.
 fn akImageLoad(it: *mut Interp, a: Args) JsError!Value {
     let h = handleOf(it, it.arg(a, 0), TAG_NODE) orelse return Value.Null
     let s = scriptOf(it)
@@ -70,17 +46,28 @@ fn akImageLoad(it: *mut Interp, a: Args) JsError!Value {
     let cache = try scriptImages(p)
     let base = try documentBase(cache.alloc, &p.doc, &p.url)
     defer base.deinit(cache.alloc)
+    var waited: u32 = 0
+    let asked = try it.toNumber(it.arg(a, 1))
+    if asked == asked && asked >= 1.0 && asked < 4294967295.0 {
+        waited = asked as u32
+    }
     let mapped = cache.nodes.get(h)
-    let loaded = try loadElementImage(cache, &p.doc, h, &base, css.Media { width: s.width, height: s.height })
+    let loaded = try loadElementImage(cache, &p.doc, h, &base, css.Media { width: s.width, height: s.height }, ImageFetch.Background, waited)
     // A new bitmap changes the element's natural size: the next geometry
     // query must lay out again though the document did not change (its
-    // styles stay).
+    // styles stay), and so must the page.
     if cache.nodes.get(h) != mapped {
         s.layout_version += 1
+        s.image_version += 1
     }
     defer {
         if loaded |l| {
             l.target.deinit(cache.alloc)
+        }
+    }
+    if loaded |l| {
+        if l.load != 0 {
+            return js.numVal(l.load as f64)
         }
     }
     let arr = try it.newArray(0)
@@ -99,4 +86,29 @@ fn akImageLoad(it: *mut Interp, a: Args) JsError!Value {
     try it.heap.pushElem(arr, js.numVal(w))
     try it.heap.pushElem(arr, js.numVal(ht))
     return it.pop()
+}
+
+// imageTask(callback, load): queues the task of an image request, a task
+// that delays the document's load event. With a load (an id from
+// imageLoad), it runs once the load ended; the timer holds the load
+// until it runs or is cleared. The timer's id.
+fn akImageTask(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    let cb = try js.callableArg(it, a, 0)
+    var waits: u32 = 0
+    let n = try it.toNumber(it.arg(a, 1))
+    if n == n && n >= 1.0 && n < 4294967295.0 {
+        waits = n as u32
+    }
+    let arr = try it.newArray(0)
+    try it.push(js.objVal(arr))
+    try it.heap.pushElem(arr, cb)
+    let root = try it.addRoot(js.objVal(arr))
+    it.pop()
+    tick(s)
+    let id = s.next_timer
+    s.next_timer += 1
+    try s.timers.append(Timer { id: id, due: s.now, interval: 0.0, repeat: false, raf: false, root: root, seq: s.seq, load: waits, delays_load: true })
+    s.seq += 1
+    return js.numVal(id as f64)
 }

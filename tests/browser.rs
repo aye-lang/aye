@@ -339,6 +339,178 @@ fn http_images_concurrent() {
     assert!(peak > 1, "the slow images were fetched one at a time");
 }
 
+/// The log of `browser/tests/net/bg_images.html` on the virtual clock of a
+/// dump: the load events in the order of the requests.
+const BG_IMAGES_LOG: &str = "first script: complete=false,false,false,false
+second script: complete=false,false,false,false naturalWidth=0
+images in flight during the second script: some
+DOMContentLoaded: complete=false,false,false,false
+load a a 64x48 complete=true readyState=interactive
+load b b 64x48 complete=true readyState=interactive
+load c c 64x48 complete=true readyState=interactive
+load d d 64x48 complete=true readyState=interactive
+load e e2 64x48 complete=true readyState=interactive
+window load: true/64 true/64 true/64 true/64 true/64
+animation frames before it: 0
+";
+
+/// Script-visible image requests load in the background: the scripts
+/// after them run while the server still holds them, each request's task
+/// fires its load event (in the order of the requests on the virtual
+/// clock) before the window's load event, which waits for them, and a
+/// request replaced while it loads never fires. The same under GC stress.
+#[test]
+fn http_images_background() {
+    let Some(srv) = server() else {
+        println!("skipped: cannot start python3 for the test server");
+        return;
+    };
+    let page = format!("{}/net/bg_images.html", srv.base);
+    for stress in [false, true] {
+        let mut c = Command::new(anyknown());
+        c.current_dir(root()).args(["dump", "--text", "--js", &page]);
+        if stress {
+            c.env("ANYKNOWN_JS_GC", "stress");
+        }
+        let out = c.output().unwrap();
+        assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+        let got = text(&out.stdout);
+        let log = got.split_once("\n\n").map(|(_, l)| l).unwrap_or("");
+        assert_eq!(log, BG_IMAGES_LOG, "GC stress: {stress}");
+    }
+}
+
+/// On the window's clock the page's load event waits for its images as
+/// they arrive, while the window keeps drawing (animation frames run
+/// before it).
+#[test]
+fn window_images_load_in_background() {
+    use std::time::{Duration, Instant};
+    if !has_sdl() {
+        println!("skipped: no SDL2");
+        return;
+    }
+    let Some(srv) = server() else {
+        println!("skipped: cannot start python3 for the test server");
+        return;
+    };
+    let page = format!("{}/net/bg_images.html", srv.base);
+    let mut window = Command::new(anyknown())
+        .current_dir(root())
+        .env("SDL_VIDEODRIVER", "dummy")
+        .args([page.as_str(), "--font", "fixed", "--width", "400", "--height", "300", "--frames", "60", "--text"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    while window.try_wait().unwrap().is_none() {
+        if start.elapsed() > Duration::from_secs(60) {
+            let _ = window.kill();
+            panic!("the window did not draw 60 frames in 60 s");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let out = window.wait_with_output().unwrap();
+    assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+    let got = text(&out.stdout);
+    // The loads end in any order on the real clock.
+    let mut loads: Vec<&str> = got.lines().filter(|l| l.starts_with("load ")).collect();
+    loads.sort();
+    let want: Vec<&str> = BG_IMAGES_LOG.lines().filter(|l| l.starts_with("load ")).collect();
+    assert_eq!(loads, want, "{got}");
+    // The window's load event comes after them.
+    let window_load = got.find("window load: true/64 true/64 true/64 true/64 true/64\nanimation frames before it: several").expect(&got);
+    assert!(want.iter().all(|l| got.find(l).is_some_and(|at| at < window_load)), "{got}");
+}
+
+/// The events of `browser/tests/net/bg_image_events.html` on the virtual
+/// clock of a dump, in the order of the requests. The observer reports
+/// only at the dump's animation frames, after the load event.
+const BG_IMAGE_EVENTS_LOG: &str = "before: wide complete=false naturalWidth=0 height=0 box height=0
+load wide: complete=true natural=64x48 box by ratio: true below still under it: true
+error broken: complete=true naturalWidth=0
+error missing: complete=true naturalWidth=0
+load late (onload set after src): 64x48
+load late (listener added after src)
+window load: wide true/64, late true/64
+image loads captured by the window: 0, by the document: 1
+below visible: false
+below visible: true
+";
+
+/// Background image loads end in a task: the image's size is known then
+/// (the page lays out again, and its box gets the image's ratio), a load
+/// that fails (an undecodable body, a 404) fires error, handlers set after
+/// `src` see the event, and the window's capturing listeners do not see
+/// the images' load events. The same under GC stress.
+#[test]
+fn http_image_events_background() {
+    let Some(srv) = server() else {
+        println!("skipped: cannot start python3 for the test server");
+        return;
+    };
+    let page = format!("{}/net/bg_image_events.html", srv.base);
+    for stress in [false, true] {
+        let mut c = Command::new(anyknown());
+        c.current_dir(root()).args(["dump", "--text", "--js", &page]);
+        if stress {
+            c.env("ANYKNOWN_JS_GC", "stress");
+        }
+        let out = c.output().unwrap();
+        assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+        let got = text(&out.stdout);
+        let log = got.split_once("\n\n").and_then(|(_, l)| l.split_once("\n\n")).map(|(_, l)| l).unwrap_or("");
+        assert_eq!(log, BG_IMAGE_EVENTS_LOG, "GC stress: {stress}");
+    }
+}
+
+/// In the window the page lays out again when an image arrives: an
+/// observer sees the paragraph below it visible first and pushed out of
+/// the viewport after the image's load event.
+#[test]
+fn window_relayout_after_image_load() {
+    use std::time::{Duration, Instant};
+    if !has_sdl() {
+        println!("skipped: no SDL2");
+        return;
+    }
+    let Some(srv) = server() else {
+        println!("skipped: cannot start python3 for the test server");
+        return;
+    };
+    let page = format!("{}/net/bg_image_events.html", srv.base);
+    let mut window = Command::new(anyknown())
+        .current_dir(root())
+        .env("SDL_VIDEODRIVER", "dummy")
+        .args([page.as_str(), "--font", "fixed", "--width", "400", "--height", "300", "--frames", "60", "--text"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    while window.try_wait().unwrap().is_none() {
+        if start.elapsed() > Duration::from_secs(60) {
+            let _ = window.kill();
+            panic!("the window did not draw 60 frames in 60 s");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let out = window.wait_with_output().unwrap();
+    assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+    let got = text(&out.stdout);
+    let at = |line: &str| got.find(&format!("\n{line}")).unwrap_or_else(|| panic!("no {line:?} in\n{got}"));
+    // The loads end in any order on the real clock; each event comes
+    // before the window's load event.
+    let window_load = at("window load: wide true/64, late true/64\nimage loads captured by the window: 0, by the document: 1\n");
+    for line in BG_IMAGE_EVENTS_LOG.lines().filter(|l| l.starts_with("load ") || l.starts_with("error ")) {
+        assert!(at(line) < window_load, "{line:?} after the window's load event:\n{got}");
+    }
+    let loaded = at("load wide: ");
+    assert!(at("below visible: true\n") < loaded, "{got}");
+    assert!(at("below visible: false\n") > loaded, "{got}");
+}
+
 // ---- B4: paint and window
 
 /// A scratch directory for the files the browser writes.
