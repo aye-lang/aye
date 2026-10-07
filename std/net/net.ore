@@ -1,0 +1,305 @@
+// std.net: TCP over IPv4. `listen` gives a `Listener`, whose `accept`
+// gives a `Conn`; `connect` gives a `Conn` too. Addresses are dotted IPv4
+// (`127.0.0.1`) or `localhost`; there is no name lookup yet.
+//
+// The C constants that differ between macOS and Linux (the layout of
+// `sockaddr_in`, SOL_SOCKET and its options, errno values, MSG_NOSIGNAL
+// or SO_NOSIGPIPE) are chosen at run time from `uname`, as
+// `browser/ui/socket.ore` does. Writes never raise SIGPIPE: a closed peer
+// is an error.
+
+import std.text
+
+pub error ListenError { InvalidAddress, AddressInUse, AccessDenied, ListenFailed }
+pub error ConnectError { InvalidAddress, ConnectionRefused, Unreachable, TimedOut, ConnectFailed }
+pub error AcceptError { AcceptFailed }
+pub error ReadError { TimedOut, ConnectionReset, ReadFailed }
+pub error WriteError { ConnectionClosed, WriteFailed }
+
+/// A socket that waits for connections.
+pub struct Listener {
+    fd: i32
+    portNumber: u16
+
+    /// Waits for the next connection.
+    pub fn accept(self: Self) AcceptError!Conn {
+        while true {
+            let fd = accept(self.fd, null, null)
+            if fd >= 0 {
+                noSigpipe(fd)
+                return Conn { fd: fd }
+            }
+            if ore_std_errno() != EINTR {
+                return AcceptError.AcceptFailed
+            }
+        }
+        unreachable
+    }
+
+    /// The port it listens on: the one the system picked for port 0.
+    pub fn port(self: Self) u16 {
+        return self.portNumber
+    }
+
+    pub fn close(self: Self) {
+        _ = close(self.fd)
+    }
+}
+
+/// A TCP connection.
+pub struct Conn {
+    fd: i32
+
+    /// Waits for data and reads at most `buf.len` bytes: the number read, 0
+    /// when the peer has closed its side.
+    pub fn read(self: Self, buf: []mut u8) ReadError!usize {
+        while true {
+            let n = read(self.fd, buf.ptr, buf.len)
+            if n >= 0 {
+                return n as usize
+            }
+            let e = ore_std_errno()
+            if e != EINTR {
+                return readError(e)
+            }
+        }
+        unreachable
+    }
+
+    /// `read`, waiting at most `ms` milliseconds for data (`poll`):
+    /// TimedOut when none came.
+    pub fn readTimeout(self: Self, buf: []mut u8, ms: u32) ReadError!usize {
+        var fds = [1]PollFd{PollFd { fd: self.fd, events: POLLIN, revents: 0 }}
+        while true {
+            let r = poll(fds[..].ptr, 1, ms as i32)
+            if r > 0 {
+                return self.read(buf)
+            }
+            if r == 0 {
+                return ReadError.TimedOut
+            }
+            if ore_std_errno() != EINTR {
+                return ReadError.ReadFailed
+            }
+        }
+        unreachable
+    }
+
+    /// Writes all of `bytes`; ConnectionClosed when the peer is gone.
+    pub fn write(self: Self, bytes: []u8) WriteError!void {
+        var flags: i32 = 0
+        if !isDarwin() {
+            flags = MSG_NOSIGNAL_LINUX
+        }
+        var off: usize = 0
+        while off < bytes.len {
+            let n = send(self.fd, bytes[off..].ptr, bytes.len - off, flags)
+            if n > 0 {
+                off += n as usize
+            } else {
+                let e = ore_std_errno()
+                if n == 0 || e == EPIPE || e == econnreset() {
+                    return WriteError.ConnectionClosed
+                }
+                if e != EINTR {
+                    return WriteError.WriteFailed
+                }
+            }
+        }
+    }
+
+    pub fn close(self: Self) {
+        _ = close(self.fd)
+    }
+}
+
+/// Listens on `host` (dotted IPv4, `localhost`, or `0.0.0.0` for every
+/// interface) at `port`; port 0 lets the system pick one (`Listener.port`).
+pub fn listen(host: []u8, port: u16) ListenError!Listener {
+    var addr = @zeroed([16]u8)
+    if !inetAddr(host, port, &mut addr) {
+        return ListenError.InvalidAddress
+    }
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    if fd < 0 {
+        return ListenError.ListenFailed
+    }
+    var one = [4]u8{1, 0, 0, 0}
+    var reuse: i32 = 2
+    if isDarwin() {
+        reuse = 4
+    }
+    _ = setsockopt(fd, solSocket(), reuse, one[..].ptr, 4)
+    if bind(fd, addr[..].ptr, 16) != 0 || ore_std_listen(fd, 128) != 0 {
+        let e = ore_std_errno()
+        _ = close(fd)
+        if e == eaddrinuse() {
+            return ListenError.AddressInUse
+        }
+        if e == EACCES {
+            return ListenError.AccessDenied
+        }
+        return ListenError.ListenFailed
+    }
+    var len: u32 = 16
+    if getsockname(fd, addr[..].ptr, &mut len) != 0 {
+        _ = close(fd)
+        return ListenError.ListenFailed
+    }
+    return Listener { fd: fd, portNumber: (addr[2] as u16) << 8 | addr[3] as u16 }
+}
+
+/// Connects to `host` (dotted IPv4 or `localhost`) at `port`.
+pub fn connect(host: []u8, port: u16) ConnectError!Conn {
+    var addr = @zeroed([16]u8)
+    if !inetAddr(host, port, &mut addr) {
+        return ConnectError.InvalidAddress
+    }
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    if fd < 0 {
+        return ConnectError.ConnectFailed
+    }
+    if ore_std_connect(fd, addr[..].ptr, 16) != 0 {
+        let e = ore_std_errno()
+        _ = close(fd)
+        if e == econnrefused() {
+            return ConnectError.ConnectionRefused
+        }
+        if e == enetunreach() || e == ehostunreach() {
+            return ConnectError.Unreachable
+        }
+        if e == etimedout() {
+            return ConnectError.TimedOut
+        }
+        return ConnectError.ConnectFailed
+    }
+    noSigpipe(fd)
+    return Conn { fd: fd }
+}
+
+extern struct PollFd {
+    fd: i32
+    events: i16
+    revents: i16
+}
+
+let AF_INET: i32 = 2
+let SOCK_STREAM: i32 = 1
+let POLLIN: i16 = 1
+let EINTR: i32 = 4
+let EACCES: i32 = 13
+let EPIPE: i32 = 32
+// Linux: send's flag; macOS: the socket option.
+let MSG_NOSIGNAL_LINUX: i32 = 0x4000
+let SO_NOSIGPIPE_DARWIN: i32 = 0x1022
+
+// 1: macOS, 0: another system (Linux), -1: not asked yet. Threads may ask
+// at once; they store the same answer.
+var darwin: i32 = -1
+
+fn isDarwin() bool {
+    var d = @atomicLoad(&darwin)
+    if d < 0 {
+        // `struct utsname` starts with the system's name on both; it is
+        // 390 bytes on Linux and 1280 on macOS.
+        var buf = @zeroed([2048]u8)
+        d = (uname(buf[..].ptr) == 0 && text.startsWith(buf[..], "Darwin")) as i32
+        @atomicStore(&mut darwin, d)
+    }
+    return d == 1
+}
+
+// macOS's value, else Linux's.
+fn pick(mac: i32, linux: i32) i32 {
+    if isDarwin() {
+        return mac
+    }
+    return linux
+}
+
+fn solSocket() i32 { return pick(0xffff, 1) }
+fn econnrefused() i32 { return pick(61, 111) }
+fn econnreset() i32 { return pick(54, 104) }
+fn eaddrinuse() i32 { return pick(48, 98) }
+fn enetunreach() i32 { return pick(51, 101) }
+fn ehostunreach() i32 { return pick(65, 113) }
+fn etimedout() i32 { return pick(60, 110) }
+
+fn readError(e: i32) ReadError {
+    if e == econnreset() {
+        return ReadError.ConnectionReset
+    }
+    if e == etimedout() {
+        return ReadError.TimedOut
+    }
+    return ReadError.ReadFailed
+}
+
+// No SIGPIPE for writes to `fd` on macOS (Linux: `write`'s flag).
+fn noSigpipe(fd: i32) {
+    if isDarwin() {
+        var one = [4]u8{1, 0, 0, 0}
+        _ = setsockopt(fd, solSocket(), SO_NOSIGPIPE_DARWIN, one[..].ptr, 4)
+    }
+}
+
+// A `sockaddr_in` for `host` and `port` in `addr`; false when `host` is
+// not dotted IPv4 or `localhost`.
+fn inetAddr(host: []u8, port: u16, addr: *mut [16]u8) bool {
+    var ip = [4]u8{127, 0, 0, 1}
+    if !text.eql(host, "localhost") {
+        var part: usize = 0
+        var value: u32 = 0
+        var digits: usize = 0
+        for c in host {
+            if c == '.' && digits > 0 && part < 3 {
+                ip[part] = value as u8
+                part += 1
+                value = 0
+                digits = 0
+            } else if c >= '0' && c <= '9' && digits < 3 {
+                value = value * 10 + (c - '0') as u32
+                digits += 1
+            } else {
+                return false
+            }
+            if value > 255 {
+                return false
+            }
+        }
+        if part != 3 || digits == 0 {
+            return false
+        }
+        ip[3] = value as u8
+    }
+    if isDarwin() {
+        // sin_len, sin_family
+        addr[0] = 16
+        addr[1] = AF_INET as u8
+    } else {
+        // sin_family (16 bits, little-endian)
+        addr[0] = AF_INET as u8
+        addr[1] = 0
+    }
+    // sin_port, sin_addr: network byte order
+    addr[2] = (port >> 8) as u8
+    addr[3] = (port & 0xff) as u8
+    for i, b in ip {
+        addr[4 + i] = b
+    }
+    return true
+}
+
+extern fn ore_std_errno() i32
+extern fn ore_std_listen(fd: i32, backlog: i32) i32
+extern fn ore_std_connect(fd: i32, addr: [*]u8, len: u32) i32
+extern fn socket(domain: i32, kind: i32, protocol: i32) i32
+extern fn bind(fd: i32, addr: [*]u8, len: u32) i32
+extern fn accept(fd: i32, addr: ?[*]u8, len: ?[*]u32) i32
+extern fn getsockname(fd: i32, addr: [*]u8, len: *mut u32) i32
+extern fn setsockopt(fd: i32, level: i32, name: i32, value: [*]u8, len: u32) i32
+extern fn poll(fds: [*]PollFd, n: u64, timeout: i32) i32
+extern fn send(fd: i32, buf: [*]u8, n: usize, flags: i32) isize
+extern fn uname(buf: [*]u8) i32
+extern fn read(fd: i32, buf: [*]u8, n: usize) isize
+extern fn close(fd: i32) i32
