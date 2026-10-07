@@ -1,6 +1,6 @@
 // M9.7: `General` allocates and frees in constant time in debug mode too
 // (the golden harness also requires this program, built in debug mode, to
-// finish within 10 s): a million allocation and free pairs, and a
+// use at most 2 s of CPU time): a million allocation and free pairs, and a
 // recursion that allocates a frame per call.
 import std
 import std.mem.Allocator
