@@ -78,6 +78,7 @@ Done 2026-10-07.
 | P1.2 | `browser/tools/sites.json` expectations and a `check` subcommand | `check` reproduces the statuses in `browser-sites.md` | P1.1 | P2 |
 | P1.3 | One agent task per site (JSON lines replayed through `anyknown agent`) | `check --agent` passes on HN, Wikipedia search, DuckDuckGo | P1.2 | P2 |
 | P1.4 | `run --live` (medians, phase split) and `--screens` (contact sheet) | the live table prints | P1.1 | P1.2–3 |
+| P1.5 | `page_load.py` records child CPU time (`getrusage` children delta) and the load average per run; warns when CPU/wall < 0.8. Speed targets compare CPU time, or wall time on a quiet machine | `run --site github` shows ~3.5 s CPU whatever the load | P1.2 | P2 |
 
 ### P2: Ore close-out
 
@@ -122,8 +123,9 @@ step only finds and writes down the cause; the fix is the next step.
 | P4.4 | YouTube startup scripts (0.84 s of interpreter time) | `run --site youtube` | P3.2 | P4.3 |
 | P4.5 | Decode offscreen images at paint time (`PERF.md`) | PNG equality; replay medians | P0 | P4.3 |
 | P4.6 | `loadFailed` forgets a failed image once no request holds it, so a later render fetches it again; keep failures per URL for the page | replay with a failing image: one fetch | P0 | P4.3 |
-| P4.7 | GitHub: diagnose why replay takes 41 s against 16 s live (P1.1 run) | `run --site github` phase table | P1.1 | P4.3 |
-| P4.8 | ZOL (88 s) and Mistral (30 s) replays spend most of their time in timers; diagnose (virtual clock, timer loops) | `run --site zol,mistral` phase table | P1.1 | P4.7 |
+| P4.7 | GitHub: diagnose why replay takes 41 s against 16 s live (P1.1 run). Done: machine load (40–58 on 10 cores), not replay work; CPU 3.4–3.7 s replay vs 3.7–3.9 s live | – | P1.1 | – |
+| P4.9 | Skip full restyles when the DOM version and viewport are unchanged since the last `computeStyles` (GitHub restyles ~8× per load; 92% of CPU in `css::computeStyles`): `engine/engine.ore`, `engine/containers.ore`, `agent/session.ore`, `engine/geometry.ore` | GitHub: ≤ 4 cascade spans, CPU < 2 s, Markdown hash unchanged | P1.5 | P3 (not with `css/` steps) |
+| P4.8 | ZOL (88 s) and Mistral (30 s) replays spend most of their time in timers; first re-measure with CPU time (P1.5) since the P1.1 run was on a loaded machine, then diagnose | `run --site zol,mistral` phase table with CPU | P1.5 | P4.9 |
 
 ### P5 and P6
 
@@ -144,7 +146,8 @@ step only finds and writes down the cause; the fix is the next step.
 4. Before finishing: merge the integration branch in (list each
    conflict in the merge message); `cargo build --release`,
    `target/release/ore check browser`, full `cargo test`,
-   `browser/build.sh`.
+   `browser/build.sh` with no output path (it writes `target/anyknown`
+   in your worktree; never a shared path such as the scratchpad).
 5. Report: commits, the verify output, the full test result, a "Done so
    far" paragraph, and follow-ups as new step proposals. A lesson goes
    into `docs/practices/` with its fix.

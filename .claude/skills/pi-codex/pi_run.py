@@ -30,6 +30,10 @@ You run unattended inside a watchdog. Nobody can answer questions.
   for a long time look like a hang and get your run killed.
 - Run long-lived processes (servers) in the background with `&` and kill
   them when done.
+- Build the browser with `browser/build.sh` and no output path: it
+  writes target/anyknown inside your worktree. Never build to a path
+  outside the worktree (`/tmp`, a scratchpad) or to a fixed shared name;
+  another agent's build can replace your binary before your tests run.
 - Commit your work in small logical commits as you go, so nothing is
   lost if the run is stopped.
 - Before coding, read docs/practices/ (README.md and the file for your
