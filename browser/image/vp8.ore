@@ -644,10 +644,7 @@ fn vp8Residuals(d: *mut Vp8Dec, br: *mut Vp8Bits, mbx: usize) bool {
         var dc = @zeroed([16]i32)
         let ctx = (d.nz_t[t + 8] + d.nz_l[8]) as usize
         let nz = vp8Coeffs(br, &d.proba, 1, ctx, d.dq[q + 2], d.dq[q + 3], 0, dc[..])
-        var flag: u8 = 0
-        if nz > 0 {
-            flag = 1
-        }
+        let flag = (nz > 0) as u8
         d.nz_t[t + 8] = flag
         d.nz_l[8] = flag
         if nz > 1 {
@@ -667,10 +664,7 @@ fn vp8Residuals(d: *mut Vp8Dec, br: *mut Vp8Bits, mbx: usize) bool {
             let at = (y * 4 + x) * 16
             let ctx = (l + d.nz_t[t + x]) as usize
             let nz = vp8Coeffs(br, &d.proba, ytype, ctx, d.dq[q], d.dq[q + 1], first, c[at..at + 16])
-            l = 0
-            if nz > first {
-                l = 1
-            }
+            l = (nz > first) as u8
             d.nz_t[t + x] = l
             if nz > 1 || c[at] != 0 {
                 coded = true
@@ -686,10 +680,7 @@ fn vp8Residuals(d: *mut Vp8Dec, br: *mut Vp8Bits, mbx: usize) bool {
                 let at = (16 + ch * 4 + y * 2 + x) * 16
                 let ctx = (l + d.nz_t[t + base + x]) as usize
                 let nz = vp8Coeffs(br, &d.proba, 2, ctx, d.dq[q + 4], d.dq[q + 5], 0, c[at..at + 16])
-                l = 0
-                if nz > 0 {
-                    l = 1
-                }
+                l = (nz > 0) as u8
                 d.nz_t[t + base + x] = l
                 if nz > 1 || c[at] != 0 {
                     coded = true

@@ -51,10 +51,7 @@ fn isDarwin() bool {
         // `struct utsname` starts with the system's name on both; it is
         // 390 bytes on Linux and 1280 on macOS.
         var buf = @zeroed([2048]u8)
-        darwin = 0
-        if uname(buf[..].ptr) == 0 && text.startsWith(buf[..], "Darwin") {
-            darwin = 1
-        }
+        darwin = (uname(buf[..].ptr) == 0 && text.startsWith(buf[..], "Darwin")) as i32
     }
     return darwin == 1
 }
