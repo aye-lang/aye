@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<title>IntersectionObserverEntry: the polyfills' feature test</title>
+<style>
+body { margin: 0 }
+#shown { height: 100px; width: 200px }
+#gone { display: none }
+</style>
+<div id="shown"></div>
+<div id="gone"></div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+// The test of the IntersectionObserver polyfill (YouTube's
+// intersection-observer.min.js): when it fails, the polyfill replaces ours.
+log('native', 'IntersectionObserver' in window && 'IntersectionObserverEntry' in window &&
+  'intersectionRatio' in window.IntersectionObserverEntry.prototype);
+const proto = IntersectionObserverEntry.prototype;
+for (const k of ['time', 'rootBounds', 'boundingClientRect', 'intersectionRect', 'isIntersecting', 'intersectionRatio', 'target']) {
+  const d = Object.getOwnPropertyDescriptor(proto, k);
+  log('getter', k, !!(d && d.get) && !d.set);
+}
+try { new IntersectionObserverEntry(); log('no dict: no error'); } catch (e) { log('no dict:', e.constructor.name); }
+function rect(r) { return [r.x, r.y, r.width, r.height].join(','); }
+const io = new IntersectionObserver(entries => {
+  for (const e of entries) {
+    log(e.target.id, e instanceof IntersectionObserverEntry, Object.keys(e).length,
+      typeof e.time, e.isIntersecting, e.intersectionRatio,
+      rect(e.boundingClientRect), rect(e.intersectionRect), rect(e.rootBounds));
+  }
+});
+io.observe(document.getElementById('shown'));
+io.observe(document.getElementById('gone'));
+</script>
