@@ -288,8 +288,9 @@ output as goldens.
   `await` hands the value to a driver written in JavaScript that resumes
   the coroutine when the promise settles; `for await` and async
   generators go through the same driver.
-- *Not yet:* BigInt, Proxy, typed arrays, time zones (local time is
-  UTC), full Unicode case mapping and normalization.
+- *Not yet:* BigInt, typed arrays over shared bytes (a view of an
+  `ArrayBuffer` is a copy), time zones (local time is UTC), full
+  Unicode case mapping and normalization.
   A plain function call gets `this === undefined` (strict-mode rule);
   a script's top-level `this` is the global object, and top-level
   `var`/`function` are properties of it. HTML-like comments (`<!--`,
@@ -329,8 +330,9 @@ on (`--no-js` turns it off), `dump` with `--js`.
   state through `doc.controls` (`value`, `checked`, `selected`,
   `selectedIndex`, focus). `style.camelCase` and `dataset.camelCase`
   are named host properties (`Host.getNamed`/`setNamed`) over the
-  `style` and `data-*` attributes. Lists are arrays made at the call
-  (not live).
+  `style` and `data-*` attributes. `childNodes`, `children`,
+  `getElementsBy*` and `options` are live lists (B8, `lists.ore`);
+  `querySelectorAll` gives an array made at the call.
 - *Prelude* (`prelude.ore`, JavaScript): EventTarget with capture,
   target (capturing listeners first) and bubble phases through the
   window, `once`, `stopPropagation`, `stopImmediatePropagation`,
@@ -473,8 +475,11 @@ on (`--no-js` turns it off), `dump` with `--js`.
     layers in paint and hit testing; frames shown as links; a closed
     `details` shows only its `summary`.
   - *JavaScript:* generators and async functions, Symbol and the
-    iterator protocol, `Function` and `eval` of strings, the web APIs
-    above, a processor-time budget per task (B6, above). ES modules
+    iterator protocol, iterator helpers (`Iterator.prototype.map`,
+    `filter`, `take`, `drop`, `flatMap`, `reduce`, `toArray`,
+    `forEach`, `some`, `every`, `find`, `Iterator.from`; `js/lib.ore`,
+    `browser/tests/js` 240–241), `Function` and `eval` of strings, the
+    web APIs above, a processor-time budget per task (B6, above). ES modules
     (`js/modules.ore`, `js/lib.ore`): static imports and exports,
     `import()`, `import.meta`, cycles as cyclic module records (TDZ,
     top-level await), every re-export form with `export *` ambiguity,
@@ -510,6 +515,17 @@ on (`--no-js` turns it off), `dump` with `--js`.
     ranges have no geometry. The
     checklist's scripted sites (Python docs, rustdoc, CNN Lite,
     react.dev, YouTube, go.dev, BBC, Google, ZOL) log no errors.
+  - *Canvas 2D* (`engine/canvas_api.ore`, `engine/canvas_prelude.ore`,
+    by GPT-6.1-sol through pi): paths and Path2D, fills, strokes
+    (joins, caps, dashes), transforms, clipping, linear and radial
+    gradients, patterns, shadows, Porter-Duff composites, text and
+    metrics, `drawImage` from images, canvases and ImageBitmap,
+    ImageData, PNG `toDataURL`/`toBlob`, hit tests, OffscreenCanvas;
+    cross-origin draws taint the canvas. Drawing reuses SVG's paths and
+    coverage and paint's sampling and blur, and a draw renders only the
+    pixels it can change (31–636x faster, `browser/tests/canvasbench`).
+    Tests and limits are in
+    [`browser/tests/canvas/README.md`](../browser/tests/canvas/README.md).
   - *Layout of current CSS:* `transform` and `transform-origin` (the
     translation moves the box after layout; scales, flips and quarter
     turns are drawn and hit-tested); a transformed box is a layer and
