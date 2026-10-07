@@ -204,6 +204,21 @@ declines ModuleNamespace objects; the slow path implements namespace
 writes, deletes and descriptors (`232_module_await.js`, `236`).
 **Why:** an internal cell is not an observable JavaScript value.
 
+### Take back a load's partial state when it fails
+**Context:** a cache whose entries mark work as done (the module records'
+`deps` in `loadGraph`, `browser/js/lib.ore`).
+**Bad:** `loadGraph` gave a module its `deps` before the rest of its graph
+loaded. When a deeper fetch failed, the next `import()` of the same root
+saw `deps` set, skipped loading, and linking read a null `deps`:
+"Cannot read properties of null" instead of the fetch's TypeError.
+**Good:** record what the call set and undo it on failure (6488d64):
+```
+try { loadLevels(root, given); }
+catch (e) { for (const m of given) m.deps = null; throw e; }
+```
+`244_module_cycle_edges.js` imports a failing graph twice.
+**Why:** "done" must mean the whole job succeeded; a retry trusts it.
+
 ### Keep the caller's environment rooted when switching to the global one
 **Context:** a native that makes a closure in the global scope
 (`moduleRecord` in `browser/js/modules.ore`).

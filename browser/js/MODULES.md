@@ -58,7 +58,7 @@ none of these: `type="module"` scripts were skipped and `nomodule` ran.
   `resolve`. Import attribute types other than `json` are TypeErrors.
 - `async` module scripts run like deferred ones.
 
-Tests: `231`-`237` in `browser/tests/js` (Node 22 output; cycles,
+Tests: `231`-`237` and `242`-`245` in `browser/tests/js` (Node 22 output; cycles,
 re-exports, TLA, errors, JSON), the CLI `.mjs` entries,
 `jsdom/dynamic_import.html` and `jsdom/module_scripts.html` (also under
 GC stress).
