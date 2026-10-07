@@ -419,6 +419,19 @@ fn newPage(alloc: Allocator, located: Url, status: i64, failure: []u8, doc: Docu
 
 /// The base URL of `doc`, whose URL is `address` (see `Page.baseUrl`).
 pub fn documentBase(alloc: Allocator, doc: *Document, address: *Url) AllocError!Url {
+    if doc.cachedBase(address.href) |href| {
+        if url.parse(alloc, href) |b| {
+            return b
+        } else |e| {}
+    }
+    var b = try findBase(alloc, doc, address)
+    errdefer b.deinit(alloc)
+    try doc.cacheBase(address.href, b.href)
+    return b
+}
+
+// `documentBase` without the cache: walks the document for a `base`.
+fn findBase(alloc: Allocator, doc: *Document, address: *Url) AllocError!Url {
     var cur: ?NodeId = doc.root
     while cur |h| {
         if doc.isElement(h, "base") {

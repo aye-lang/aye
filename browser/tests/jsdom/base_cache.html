@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<title>base cache</title>
+<pre id="out"></pre>
+<script>
+// The document base URL is cached; each change that can move it must
+// show in the next relative URL an image resolves.
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const tail = (s) => s.startsWith('http') ? s : s.slice(s.lastIndexOf('/jsdom/') + 1);
+// (img.src resolves against the load-time base, `Page.base`; baseURI and
+// the image loads read the cached document base.)
+function src() { return tail(new URL('x.png', document.baseURI).href); }
+log('none:', src(), src());
+const base = document.createElement('base');
+base.setAttribute('href', 'https://a.example/one/');
+document.head.appendChild(base);
+log('inserted:', src());
+base.setAttribute('href', 'https://b.example/two/');
+log('changed:', src(), src());
+base.removeAttribute('href');
+log('no href:', src());
+base.setAttribute('href', 'sub/');
+log('relative:', src());
+base.remove();
+log('removed:', src());
+document.head.appendChild(base);
+log('reinserted:', src());
+base.remove();
+history.pushState(null, '', 'base_cache.html?q=1');
+log('pushState:', src());
+history.pushState(null, '', 'base_cache.html#z');
+log('again:', src());
+base.setAttribute('href', 'https://c.example/');
+document.head.appendChild(base);
+log('absolute:', src());
+base.remove();
+log('end:', src());
+</script>
