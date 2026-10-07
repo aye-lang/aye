@@ -398,7 +398,7 @@ fn window_images_load_in_background() {
     let mut window = Command::new(anyknown())
         .current_dir(root())
         .env("SDL_VIDEODRIVER", "dummy")
-        .args([page.as_str(), "--font", "fixed", "--width", "400", "--height", "300", "--frames", "60", "--text"])
+        .args([page.as_str(), "--font", "fixed", "--width", "400", "--height", "300", "--frames", "400", "--text"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -407,7 +407,7 @@ fn window_images_load_in_background() {
     while window.try_wait().unwrap().is_none() {
         if start.elapsed() > Duration::from_secs(60) {
             let _ = window.kill();
-            panic!("the window did not draw 60 frames in 60 s");
+            panic!("the window did not draw 400 frames in 60 s");
         }
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -511,11 +511,11 @@ fn window_relayout_after_image_load() {
         println!("skipped: cannot start python3 for the test server");
         return;
     };
-    let page = format!("{}/net/bg_image_events.html", srv.base);
+    let page = format!("{}/net/window_relayout.html", srv.base);
     let mut window = Command::new(anyknown())
         .current_dir(root())
         .env("SDL_VIDEODRIVER", "dummy")
-        .args([page.as_str(), "--font", "fixed", "--width", "400", "--height", "300", "--frames", "60", "--text"])
+        .args([page.as_str(), "--font", "fixed", "--width", "400", "--height", "300", "--frames", "400", "--text"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -524,7 +524,7 @@ fn window_relayout_after_image_load() {
     while window.try_wait().unwrap().is_none() {
         if start.elapsed() > Duration::from_secs(60) {
             let _ = window.kill();
-            panic!("the window did not draw 60 frames in 60 s");
+            panic!("the window did not draw 400 frames in 60 s");
         }
         std::thread::sleep(Duration::from_millis(20));
     }

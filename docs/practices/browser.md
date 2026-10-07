@@ -410,6 +410,17 @@ browser at `taskpolicy -c background` under 40 `yes` processes).
 **Why:** a sleep only says "probably happened by now"; a loaded machine
 breaks every such window, and the next run passes.
 
+### Let the page release what the window test waits for
+**Context:** a `--frames N` window test whose order depends on when an
+image arrives (`window_relayout_after_image_load`, P3.38).
+**Bad:** the image came from `/slow/` (0.3 s after the request) and the
+window drew 60 frames of about 10 ms; a first frame later than the load
+left no "below visible: true" before the load.
+**Good:** `net/window_relayout.html` takes the image from `/held/` and
+asks `/held-now` from the observer's first report, so the load is after
+that report on any machine; the frame budget (400) only has to be large.
+**Why:** the page's own state, not a clock, orders the two events.
+
 ## Debugging a real site
 
 ### See console output with `dump --js`, not the headless window
