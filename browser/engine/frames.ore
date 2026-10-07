@@ -290,7 +290,9 @@ fn fireFrameLoads(p: *mut Page) AllocError!void {
     while k < p.frames.len() {
         let f = p.frames.items()[k]
         k += 1
-        if !f.pending_load {
+        // A frame's load event waits for its document's (on the
+        // window's clock it may come later: settleLoad).
+        if !f.pending_load || !pageLoaded(f.page) {
             continue
         }
         p.frames.items()[k - 1].pending_load = false

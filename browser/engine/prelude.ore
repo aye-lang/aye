@@ -1988,45 +1988,54 @@ pub let PRELUDE =
     \\// Image requests: the native bridge uses rendering's selector/cache and
     \\// decoder, including detached images. Versions suppress superseded work.
     \\// State belongs to the wrapper, not a strong global map of detached nodes.
+    \\// An http(s) image loads in the background: the request's task (which
+    \\// delays the document's load event) runs once its load ended, decodes
+    \\// it, updates the state and fires load or error ("update the image
+    \\// data"); scripts run meanwhile. A new request cancels the old task.
     \\const ImageP = HTMLImageElement.prototype;
     \\function imageEncodingError() { return new DOMException('The source image cannot be decoded.', 'EncodingError'); }
-    \\// The requests queued in one turn are fetched together, not one by one.
-    \\let imagePending = [];
     \\function imageUpdate(el) {
     \\  if (ak.inTemplate(el)) return;
     \\  const old = el.__imageRequest;
-    \\  if (old) for (const waiter of old.waiters.splice(0)) waiter.reject(imageEncodingError());
+    \\  if (old) {
+    \\    for (const waiter of old.waiters.splice(0)) waiter.reject(imageEncodingError());
+    \\    if (old.task) ak.clearTimer(old.task);
+    \\    old.task = 0;
+    \\  }
     \\  const src = el.getAttribute('src'), srcset = el.getAttribute('srcset') || '';
     \\  const empty = !srcset && (src === null || src === '');
     \\  const parent = el.parentNode;
-    \\  const state = { complete: empty, width: 0, height: 0, currentSrc: '', status: 'pending', waiters: [], picture: !!parent && parent.localName === 'picture' };
+    \\  const state = { complete: empty, width: 0, height: 0, currentSrc: '', status: 'pending', waiters: [], picture: !!parent && parent.localName === 'picture', task: 0 };
     \\  hidden(el, '__imageRequest', state);
-    \\  imagePending.push(el);
     \\  ak.queueMicrotask(() => {
-    \\    if (imagePending.length) {
-    \\      const batch = imagePending;
-    \\      imagePending = [];
-    \\      ak.imagePrefetch(batch);
-    \\    }
-    \\    if (el.__imageRequest !== state) return;
-    \\    const result = ak.imageLoad(el);
-    \\    if (el.__imageRequest !== state) return;
-    \\    const good = result && result[1] >= 0;
-    \\    state.currentSrc = result ? result[0] : '';
-    \\    state.width = good ? result[1] : 0;
-    \\    state.height = good ? result[2] : 0;
-    \\    state.complete = true;
-    \\    state.status = good ? 'decoded' : 'broken';
-    \\    for (const waiter of state.waiters.splice(0)) {
-    \\      if (good) waiter.resolve(); else waiter.reject(imageEncodingError());
-    \\    }
-    \\    if (src === null && !srcset && !state.currentSrc) return;
-    \\    // load/error are tasks, never dispatched by an attribute setter or a
-    \\    // decode() microtask. Replacing the request cancels a queued old event.
-    \\    setTimeout(() => {
-    \\      if (el.__imageRequest === state) hostEvent(el, good ? 'load' : 'error');
-    \\    }, 0);
+    \\    if (el.__imageRequest === state) imageResult(el, state, ak.imageLoad(el, 0), src, srcset);
     \\  });
+    \\}
+    \\function imageResult(el, state, result, src, srcset) {
+    \\  if (typeof result === 'number') {
+    \\    // The task that decodes it once its background load ended.
+    \\    state.task = ak.imageTask(() => {
+    \\      state.task = 0;
+    \\      if (el.__imageRequest === state) imageResult(el, state, ak.imageLoad(el, result), src, srcset);
+    \\    }, result);
+    \\    return;
+    \\  }
+    \\  const good = result && result[1] >= 0;
+    \\  state.currentSrc = result ? result[0] : '';
+    \\  state.width = good ? result[1] : 0;
+    \\  state.height = good ? result[2] : 0;
+    \\  state.complete = true;
+    \\  state.status = good ? 'decoded' : 'broken';
+    \\  for (const waiter of state.waiters.splice(0)) {
+    \\    if (good) waiter.resolve(); else waiter.reject(imageEncodingError());
+    \\  }
+    \\  if (src === null && !srcset && !state.currentSrc) return;
+    \\  // load/error are tasks, never dispatched by an attribute setter or a
+    \\  // decode() microtask. Replacing the request cancels a queued old event.
+    \\  state.task = ak.imageTask(() => {
+    \\    state.task = 0;
+    \\    if (el.__imageRequest === state) hostEvent(el, good ? 'load' : 'error');
+    \\  }, 0);
     \\}
     \\function imageState(el) {
     \\  if (!el.__imageRequest) imageUpdate(el);

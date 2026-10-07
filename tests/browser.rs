@@ -339,6 +339,91 @@ fn http_images_concurrent() {
     assert!(peak > 1, "the slow images were fetched one at a time");
 }
 
+/// The log of `browser/tests/net/bg_images.html` on the virtual clock of a
+/// dump: the load events in the order of the requests.
+const BG_IMAGES_LOG: &str = "first script: complete=false,false,false,false
+second script: complete=false,false,false,false naturalWidth=0
+images in flight during the second script: some
+DOMContentLoaded: complete=false,false,false,false
+load a a 64x48 complete=true readyState=interactive
+load b b 64x48 complete=true readyState=interactive
+load c c 64x48 complete=true readyState=interactive
+load d d 64x48 complete=true readyState=interactive
+load e e2 64x48 complete=true readyState=interactive
+window load: true/64 true/64 true/64 true/64 true/64
+animation frames before it: 0
+";
+
+/// Script-visible image requests load in the background: the scripts
+/// after them run while the server still holds them, each request's task
+/// fires its load event (in the order of the requests on the virtual
+/// clock) before the window's load event, which waits for them, and a
+/// request replaced while it loads never fires. The same under GC stress.
+#[test]
+fn http_images_background() {
+    let Some(srv) = server() else {
+        println!("skipped: cannot start python3 for the test server");
+        return;
+    };
+    let page = format!("{}/net/bg_images.html", srv.base);
+    for stress in [false, true] {
+        let mut c = Command::new(anyknown());
+        c.current_dir(root()).args(["dump", "--text", "--js", &page]);
+        if stress {
+            c.env("ANYKNOWN_JS_GC", "stress");
+        }
+        let out = c.output().unwrap();
+        assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+        let got = text(&out.stdout);
+        let log = got.split_once("\n\n").map(|(_, l)| l).unwrap_or("");
+        assert_eq!(log, BG_IMAGES_LOG, "GC stress: {stress}");
+    }
+}
+
+/// On the window's clock the page's load event waits for its images as
+/// they arrive, while the window keeps drawing (animation frames run
+/// before it).
+#[test]
+fn window_images_load_in_background() {
+    use std::time::{Duration, Instant};
+    if !has_sdl() {
+        println!("skipped: no SDL2");
+        return;
+    }
+    let Some(srv) = server() else {
+        println!("skipped: cannot start python3 for the test server");
+        return;
+    };
+    let page = format!("{}/net/bg_images.html", srv.base);
+    let mut window = Command::new(anyknown())
+        .current_dir(root())
+        .env("SDL_VIDEODRIVER", "dummy")
+        .args([page.as_str(), "--font", "fixed", "--width", "400", "--height", "300", "--frames", "60", "--text"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    while window.try_wait().unwrap().is_none() {
+        if start.elapsed() > Duration::from_secs(60) {
+            let _ = window.kill();
+            panic!("the window did not draw 60 frames in 60 s");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let out = window.wait_with_output().unwrap();
+    assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+    let got = text(&out.stdout);
+    // The loads end in any order on the real clock.
+    let mut loads: Vec<&str> = got.lines().filter(|l| l.starts_with("load ")).collect();
+    loads.sort();
+    let want: Vec<&str> = BG_IMAGES_LOG.lines().filter(|l| l.starts_with("load ")).collect();
+    assert_eq!(loads, want, "{got}");
+    // The window's load event comes after them.
+    let window_load = got.find("window load: true/64 true/64 true/64 true/64 true/64\nanimation frames before it: several").expect(&got);
+    assert!(want.iter().all(|l| got.find(l).is_some_and(|at| at < window_load)), "{got}");
+}
+
 // ---- B4: paint and window
 
 /// A scratch directory for the files the browser writes.

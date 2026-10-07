@@ -77,6 +77,9 @@ let MAX_CONSOLE: usize = 1000
 let MAX_MICROTASKS: usize = 100000
 // Timer callbacks one call of the event loop runs at most.
 let MAX_TASKS: usize = 10000
+// How often the window's event loop turns while a task waits for a
+// background load.
+let LOAD_POLL_MS: f64 = 8.0
 // The budget of one task (a script, a timer callback, an event, a
 // microtask), and of all the microtasks of one checkpoint: beyond it the
 // task ends (a console error) and the page goes on. Time is processor
@@ -149,6 +152,12 @@ struct Timer {
     root: u32
     // Breaks ties between timers due at the same time.
     seq: u64
+    // The task of an image request (image_api.ore): it delays the
+    // document's load event, and with a background load (net.startLoad,
+    // 0 for none) it runs once the load ended. The timer holds the load
+    // until it runs or is cleared.
+    load: u32 = 0
+    delays_load: bool = false
 }
 
 /// What a script asked the tab to do; the front end does it once the
@@ -256,6 +265,12 @@ pub struct Script {
     title_version: u64
     // document.readyState: 0 loading, 1 interactive, 2 complete.
     ready: u8
+    // The load event waits for the tasks that delay it (the window's
+    // clock; `settleLoad`).
+    load_pending: bool = false
+    // Counts the images that requests decoded, which the page's layout
+    // shows (`treeVersion`).
+    image_version: u64 = 0
     current: ?NodeId
     width: f64
     height: f64
@@ -575,6 +590,11 @@ pub fn destroyScript(s: *mut Script) {
     dropGeometry(s)
     s.restyle.deinit()
     s.scrolls.deinit()
+    for t in s.timers.items() {
+        if t.load != 0 {
+            net.releaseLoad(t.load)
+        }
+    }
     s.timers.deinit()
     for line in s.console.items() {
         s.alloc.free(line)
@@ -621,12 +641,87 @@ fn startPageScripts(p: *mut Page) AllocError!void {
     try fireLoadEvent(s, p.doc.root, "DOMContentLoaded")
 }
 
-/// The page and its frames loaded: the load event at the window.
+/// The page and its frames loaded: the load event at the window, once
+/// the tasks that delay it ran (the image requests of the document). On
+/// the virtual clock they run now, in their order, waiting for their
+/// loads; on the window's clock the event loop runs them as their loads
+/// end, and `settleLoad` fires the event after them.
 fn finishPageScripts(p: *mut Page) AllocError!void {
     let s = p.script orelse return
+    if s.real {
+        if loadDelayed(p) {
+            s.load_pending = true
+            return
+        }
+    } else {
+        var n: usize = 0
+        while n < MAX_TASKS {
+            let i = firstDelaying(s) orelse break
+            try runTimer(s, i)
+            n += 1
+        }
+    }
+    try fireWindowLoad(s)
+}
+
+fn fireWindowLoad(s: *mut Script) AllocError!void {
+    s.load_pending = false
     s.ready = 2
     try fireLoadEvent(s, null, "load")
     try afterTask(s)
+}
+
+// Is the load event of `p` delayed: by a task that delays it, or by a
+// frame whose load event did not fire?
+fn loadDelayed(p: *mut Page) bool {
+    if p.script |s| {
+        if firstDelaying(s) != null {
+            return true
+        }
+    }
+    for f in p.frames.items() {
+        if f.pending_load {
+            return true
+        }
+    }
+    return false
+}
+
+// The first task (by due time, then order) that delays the load event.
+fn firstDelaying(s: *mut Script) ?usize {
+    var best: ?usize = null
+    for i, t in s.timers.items() {
+        if !t.delays_load {
+            continue
+        }
+        if best |b| {
+            let o = s.timers.items()[b]
+            if t.due < o.due || (t.due == o.due && t.seq < o.seq) {
+                best = i
+            }
+        } else {
+            best = i
+        }
+    }
+    return best
+}
+
+// Has the load event of the page `p` fired, or will it never?
+fn pageLoaded(p: *mut Page) bool {
+    if p.script |s| {
+        return !s.load_pending
+    }
+    return true
+}
+
+// On the window's clock, after a turn: the load events of the frames
+// that loaded, and the page's own once nothing delays it.
+fn settleLoad(p: *mut Page) AllocError!void {
+    let s = p.script orelse return
+    try fireFrameLoads(p)
+    if s.load_pending && !loadDelayed(p) {
+        try fireWindowLoad(s)
+    }
 }
 
 // Is the `script` element `el` a classic script (JavaScript, not a
@@ -916,6 +1011,8 @@ fn runMicrotasks(s: *mut Script) AllocError!void {
     }
     try reportRejections(s)
     js.clearKeptObjects(&mut s.it)
+    // The background loads progress between tasks.
+    net.pumpLoads()
 }
 
 // Calls the due FinalizationRegistry callbacks of the script, each as a
@@ -1004,7 +1101,7 @@ fn turnLimit(s: *Script, turn: u64) u64 {
 fn earliestBefore(s: *mut Script, limit: f64, seq: u64) ?usize {
     var best: ?usize = null
     for i, t in s.timers.items() {
-        if t.due > limit || t.seq >= seq {
+        if t.due > limit || t.seq >= seq || !runnable(s, t) {
             continue
         }
         if best |b| {
@@ -1019,10 +1116,47 @@ fn earliestBefore(s: *mut Script, limit: f64, seq: u64) ?usize {
     return best
 }
 
+// May the timer `t` run? The task of a background load waits for it on
+// the window's clock; on the virtual clock it is due at once, and
+// `runTimer` waits for the load (the order of tasks never depends on the
+// network).
+fn runnable(s: *Script, t: Timer) bool {
+    return t.load == 0 || !s.real || net.loadState(t.load) != net.LoadState.Running
+}
+
+// Is a task of the page `p` or of its frames waiting for a background
+// load?
+fn waitingForLoads(p: *mut Page) bool {
+    if p.script |s| {
+        for t in s.timers.items() {
+            if !runnable(s, t) {
+                return true
+            }
+        }
+    }
+    for f in p.frames.items() {
+        if waitingForLoads(f.page) {
+            return true
+        }
+    }
+    return false
+}
+
 fn runTimer(s: *mut Script, i: usize) AllocError!void {
     let began = perf.start()
     defer perf.end("timers", began, s.page.url.href)
     let t = s.timers.items()[i]
+    if t.load != 0 {
+        let wait_began = perf.start()
+        net.waitLoad(t.load)
+        perf.end("image_wait", wait_began, s.page.url.href)
+    }
+    // The task's load ends with it (its callback reads the response).
+    defer {
+        if t.load != 0 {
+            net.releaseLoad(t.load)
+        }
+    }
     if t.repeat {
         var next = t.due + t.interval
         if next <= s.now {
@@ -1066,6 +1200,9 @@ fn runTimer(s: *mut Script, i: usize) AllocError!void {
 fn removeTimer(s: *mut Script, id: u32) {
     for i, t in s.timers.items() {
         if t.id == id {
+            if t.load != 0 {
+                net.releaseLoad(t.load)
+            }
             s.it.removeRoot(t.root)
             s.timers.orderedRemove(i)
             return
@@ -1094,6 +1231,7 @@ fn afterTask(s: *mut Script) AllocError!void {
 /// still let the window draw a frame between turns.
 pub fn runDueTimers(p: *mut Page) AllocError!bool {
     var ran = false
+    net.pumpLoads()
     if p.script |s| {
         tick(s)
         let turn = s.seq
@@ -1118,6 +1256,15 @@ pub fn runDueTimers(p: *mut Page) AllocError!bool {
             ran = true
         }
         k += 1
+    }
+    if p.script |s| {
+        if s.real {
+            let was = s.ready
+            try settleLoad(p)
+            if s.ready != was {
+                ran = true
+            }
+        }
     }
     return ran
 }
@@ -1214,13 +1361,27 @@ pub fn runUntilIdle(p: *mut Page, max_ms: f64) AllocError!void {
 }
 
 /// Milliseconds until the next timer is due (0 when one is due); null
-/// when there is none.
+/// when there is none. While a task waits for a background load (the
+/// window's clock), at most LOAD_POLL_MS: the loads progress when the
+/// event loop turns.
 pub fn msUntilNextTimer(p: *mut Page) ?f64 {
-    let n = nextTimer(p, 1.0e300) orelse return null
-    if n.wait < 0.0 {
-        return 0.0
+    var wait: ?f64 = null
+    if nextTimer(p, 1.0e300) |n| {
+        wait = n.wait
+        if n.wait < 0.0 {
+            wait = 0.0
+        }
     }
-    return n.wait
+    if waitingForLoads(p) {
+        if wait |w| {
+            if w > LOAD_POLL_MS {
+                return LOAD_POLL_MS
+            }
+            return w
+        }
+        return LOAD_POLL_MS
+    }
+    return wait
 }
 
 // ---- what the front ends call
@@ -1253,6 +1414,9 @@ fn layoutVersion(p: *Page) u64 {
 /// scripts asked for a navigation, which the next layout follows).
 pub fn treeVersion(p: *Page) u64 {
     var v = domVersion(p)
+    if p.script |s| {
+        v += s.image_version
+    }
     for f in p.frames.items() {
         v += treeVersion(f.page)
         if f.page.script |s| {

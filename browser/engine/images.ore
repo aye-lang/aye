@@ -5,7 +5,10 @@
 // no pixels), and the elements are mapped to their bitmaps for layout
 // (natural sizes) and paint. `updateImages` runs before each layout and
 // only fetches what is new (elements added by scripts); a URL that
-// failed is not fetched again. The images of the style sheets
+// failed is not fetched again. The requests of scripts (image_api.ore)
+// load http and https images in the background (net.startLoad); until
+// the request's task decodes it, rendering leaves such an image out
+// rather than fetching it again. The images of the style sheets
 // (`background-image`, `mask-image` of the elements that are displayed)
 // are fetched with them, and mapped by their URL for paint.
 
@@ -197,6 +200,10 @@ fn fetchImage(alloc: Allocator, href: []u8, referrer: []u8, pic: *mut ?*mut svg.
         return null
     }
     defer target.deinit(alloc)
+    // A background load that failed is not fetched again.
+    if net.loadFailed(target.withoutFragment()) {
+        return null
+    }
     let res = net.request(alloc, &target, net.Request { kind: net.Kind.Image, referrer: referrer }) catch |e| {
         return null
     }
@@ -266,14 +273,46 @@ struct LoadedElementImage {
     bmp: ?*mut image.Bitmap
     // Selected source density in image pixels per CSS pixel.
     density: f64
+    // The background load (net.startLoad) that the URL waits for, with
+    // `bmp` null; 0 when the request is settled.
+    load: u32 = 0
 }
 
-fn loadElementImage(cache: *mut ImageCache, doc: *Document, h: NodeId, base: *Url, media: css.Media) AllocError!?LoadedElementImage {
+/// What `loadElementImage` does with a URL that is not decoded yet.
+enum ImageFetch {
+    // Rendering: fetch it now, unless a script's request holds a
+    // background load of it (then no bitmap yet: the request's task
+    // decodes it and asks for a layout).
+    Now
+    // A script's request: http and https URLs load in the background
+    // (joining a load of the URL that is held); others now.
+    Background
+}
+
+/// `waited`: the background load that the task of a script's request
+/// waited for (0 for none); when it is still the URL's, it is decoded
+/// now.
+fn loadElementImage(cache: *mut ImageCache, doc: *Document, h: NodeId, base: *Url, media: css.Media, fetch: ImageFetch, waited: u32) AllocError!?LoadedElementImage {
     // Even an empty or broken replacement must drop the old rendered bitmap.
     cache.nodes.map.remove(h.index)
     let choice = (try chooseImage(cache.alloc, doc, h, media)) orelse return null
     let target = url.resolve(cache.alloc, base, choice.url) catch return null
     errdefer target.deinit(cache.alloc)
+    let href = target.withoutFragment()
+    if !cache.known(href) && net.loadHeld(href) {
+        // Rendering waits for the request that loads it.
+        if fetch == ImageFetch.Now {
+            return LoadedElementImage { target: target, bmp: null, density: choice.density, load: 0 }
+        }
+    }
+    if !cache.known(href) && fetch == ImageFetch.Background {
+        if waited == 0 || net.loadOf(href) != waited {
+            let id = net.startLoad(href, net.Kind.Image, cache.referrer)
+            if id != 0 {
+                return LoadedElementImage { target: target, bmp: null, density: choice.density, load: id }
+            }
+        }
+    }
     let bmp = try cache.bitmapOf(target.withoutFragment())
     if bmp |b| {
         if cache.pictureOf(target.withoutFragment()) |pic| {
@@ -285,27 +324,6 @@ fn loadElementImage(cache: *mut ImageCache, doc: *Document, h: NodeId, base: *Ur
     return LoadedElementImage { target: target, bmp: bmp, density: choice.density }
 }
 
-// Fetches the new images that the img elements `els` select
-// concurrently into the session's cache (net.prefetch), before their
-// script-visible requests (`loadElementImage`) take them one by one:
-// a page's parsed or script-made images are not fetched serially.
-fn prefetchElementImages(cache: *mut ImageCache, doc: *Document, els: []NodeId, base: *Url, media: css.Media) AllocError!void {
-    var hrefs = text.Builder.init(cache.alloc)
-    defer hrefs.deinit()
-    for h in els {
-        let choice = (try chooseImage(cache.alloc, doc, h, media)) orelse continue
-        let target = url.resolve(cache.alloc, base, choice.url) catch |e| {
-            continue
-        }
-        defer target.deinit(cache.alloc)
-        if cache.known(target.withoutFragment()) {
-            continue
-        }
-        try hrefs.append(target.withoutFragment())
-        try hrefs.appendByte('\n')
-    }
-    net.prefetch(cache.alloc, hrefs.bytes(), net.Kind.Image, cache.referrer)
-}
 
 /// Fetches the images of the page's elements and style sheets that have
 /// none yet, and maps the elements (and URLs) to their bitmaps. `media`
@@ -367,7 +385,7 @@ fn fillImagesWith(cache: *mut ImageCache, doc: *Document, address: *Url, styles:
         if !isImageElement(doc, h) {
             continue
         }
-        if try loadElementImage(cache, doc, h, &base, media) |loaded| {
+        if try loadElementImage(cache, doc, h, &base, media, ImageFetch.Now, 0) |loaded| {
             loaded.target.deinit(cache.alloc)
         }
     }
@@ -403,7 +421,8 @@ fn prefetchImages(cache: *mut ImageCache, doc: *Document, base: *Url, extra: [][
             continue
         }
         defer target.deinit(cache.alloc)
-        if cache.known(target.withoutFragment()) {
+        // A script's request loads it in the background.
+        if cache.known(target.withoutFragment()) || net.loadHeld(target.withoutFragment()) {
             continue
         }
         try hrefs.append(target.withoutFragment())

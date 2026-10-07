@@ -29,12 +29,18 @@
 #                    without, the end of the body closing the connection)
 #   /meta-charset    a Windows-1252 page declared only by <meta charset>
 #   /gbk             a GBK page declared only by Content-Type
-#   /slow/NAME       NAME's small body (as /log/NAME) after 0.3 s
+#   /slow/NAME       after 0.3 s: the file NAME of the directory when
+#                    there is one (the query ignored), else a small body
+#                    of the type of NAME's extension (as /log/NAME)
 #   /slow-peak       the most /slow/ requests that were in flight at
 #                    once, as text/plain
+#   /slow-now        after 0.1 s, the /slow/ requests in flight, as
+#                    text/plain
 import gzip
 import html
 import http.server
+import mimetypes
+import os
 import sys
 import threading
 import time
@@ -126,8 +132,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             time.sleep(0.3)
             with SLOW_LOCK:
                 SLOW["now"] -= 1
-            ctype, data = BODIES.get(path[path.rfind("."):], ("text/plain", b"slow"))
+            name = urllib.parse.unquote(path[len("/slow/"):].split("?", 1)[0])
+            file = os.path.realpath(os.path.join(ROOT, name))
+            if file.startswith(os.path.realpath(ROOT) + os.sep) and os.path.isfile(file):
+                with open(file, "rb") as f:
+                    data = f.read()
+                ctype = mimetypes.guess_type(file)[0] or "application/octet-stream"
+            else:
+                ctype, data = BODIES.get(name[name.rfind("."):], ("text/plain", b"slow"))
             self.reply(200, [("Content-Type", ctype)], data)
+        elif path == "/slow-now":
+            time.sleep(0.1)
+            self.reply(200, [("Content-Type", "text/plain")], b"%d\n" % SLOW["now"])
         elif path == "/slow-peak":
             self.reply(200, [("Content-Type", "text/plain")], b"%d\n" % SLOW["peak"])
         elif path == "/big":

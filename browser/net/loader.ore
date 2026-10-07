@@ -128,6 +128,13 @@ pub fn loadHeld(href: []u8) bool {
     return findLoad(ld, href) != null
 }
 
+/// The id of the load of `href` that is held; 0 when there is none.
+pub fn loadOf(href: []u8) u32 {
+    let ld = loader orelse return 0
+    let l = findLoad(ld, href) orelse return 0
+    return l.id
+}
+
 /// Did the load of `href` that is held fail? The request that follows
 /// must not fetch it again.
 pub fn loadFailed(href: []u8) bool {
