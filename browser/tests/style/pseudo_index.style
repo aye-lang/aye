@@ -1,0 +1,159 @@
+<html>
+  display: block
+  ::before
+    display: inline
+    content: "a"
+  <head>
+    display: none
+    ::before
+      display: inline
+      content: "a"
+    <style>
+      display: none
+      ::before
+        display: inline
+        content: "a"
+  <body>
+    display: block
+    margin-top: 8px
+    margin-right: 8px
+    margin-bottom: 8px
+    margin-left: 8px
+    ::before
+      display: inline
+      margin-top: 0px
+      margin-right: 0px
+      margin-bottom: 0px
+      margin-left: 0px
+      content: "a"
+    <section>
+      display: block
+      ::before
+        display: inline
+        content: "a"
+      <div class="z">
+        display: block
+        ::before
+          display: inline
+          color: rgb(255, 0, 0)
+          content: "a"
+      <p class="k">
+        display: block
+        margin-top: 16px
+        margin-bottom: 16px
+        ::before
+          display: inline
+          margin-top: 0px
+          margin-bottom: 0px
+          content: "a"
+        ::after
+          display: inline
+          color: rgb(128, 0, 128)
+          font-weight: 700
+          margin-top: 0px
+          margin-bottom: 0px
+          content: "is"
+      <p id="m">
+        display: block
+        margin-top: 16px
+        margin-bottom: 16px
+        ::before
+          display: inline
+          color: rgb(0, 128, 0)
+          margin-top: 0px
+          margin-bottom: 0px
+          content: "a"
+        ::after
+          display: inline
+          font-weight: 700
+          margin-top: 0px
+          margin-bottom: 0px
+          content: "is"
+      <span>
+        ::before
+          content: "a"
+        ::after
+          font-weight: 700
+          content: "where"
+      <i data-x="dx">
+        font-style: italic
+        ::before
+          content: attr(data-x)
+      <b class="y">
+        font-weight: 700
+        ::before
+          content: "a"
+        ::after
+          content: "y"
+      <ul>
+        display: block
+        margin-top: 16px
+        margin-bottom: 16px
+        padding-left: 40px
+        ::before
+          display: inline
+          margin-top: 0px
+          margin-bottom: 0px
+          padding-left: 0px
+          content: "a"
+        <li class="k">
+          display: list-item
+          ::before
+            display: inline
+            content: "a"
+          ::after
+            display: inline
+            color: rgb(128, 0, 128)
+            font-weight: 700
+            content: "is"
+      <input placeholder="p">
+        display: inline-block
+        background-color: rgb(255, 255, 255)
+        font-size: 13.33px
+        font-family: sans-serif
+        padding-top: 1px
+        padding-right: 2px
+        padding-bottom: 1px
+        padding-left: 2px
+        border-top-width: 1px
+        border-right-width: 1px
+        border-bottom-width: 1px
+        border-left-width: 1px
+        border-top-style: solid
+        border-right-style: solid
+        border-bottom-style: solid
+        border-left-style: solid
+        border-top-color: rgb(118, 118, 118)
+        border-right-color: rgb(118, 118, 118)
+        border-bottom-color: rgb(118, 118, 118)
+        border-left-color: rgb(118, 118, 118)
+        text-align: left
+        white-space: pre
+        overflow-x: hidden
+        overflow-y: hidden
+        ::before
+          display: inline
+          background-color: rgba(0, 0, 0, 0)
+          padding-top: 0px
+          padding-right: 0px
+          padding-bottom: 0px
+          padding-left: 0px
+          border-top-width: 0px
+          border-right-width: 0px
+          border-bottom-width: 0px
+          border-left-width: 0px
+          border-top-style: none
+          border-right-style: none
+          border-bottom-style: none
+          border-left-style: none
+          border-top-color: currentcolor
+          border-right-color: currentcolor
+          border-bottom-color: currentcolor
+          border-left-color: currentcolor
+          overflow-x: visible
+          overflow-y: visible
+          content: "a"
+    <b class="y">
+      font-weight: 700
+      ::before
+        content: "a"
