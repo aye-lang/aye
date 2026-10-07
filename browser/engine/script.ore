@@ -82,10 +82,15 @@ let MAX_TASKS: usize = 10000
 let LOAD_POLL_MS: f64 = 8.0
 // The budget of one task (a script, a timer callback, an event, a
 // microtask), and of all the microtasks of one checkpoint: beyond it the
-// task ends (a console error) and the page goes on. Time is processor
-// time (js.cpuMs).
+// task ends (a console error) and the page goes on. On the window's
+// clock it is processor time (js.cpuMs) and steps. On the virtual clock
+// (`dump`, the agent) it is steps alone, so that where a task ends
+// depends on the page, not on how busy the machine is;
+// TASK_BACKSTOP_MS only ends a task whose work is native, which steps
+// do not count.
 pub let TASK_MS: u64 = 2000
 pub let TASK_STEPS: u64 = 100000000
+let TASK_BACKSTOP_MS: u64 = 120000
 // Under GC stress (tests), only steps count, and fewer.
 let STRESS_STEPS: u64 = 2000000
 
@@ -277,6 +282,9 @@ pub struct Script {
     // Calls from the browser into the page that have not returned
     // (microtasks run when it is back to 0).
     depth: u32
+    // The steps of the tasks that ended (the budget of a checkpoint on
+    // the virtual clock).
+    work: u64 = 0
     // The layout geometry questions read (geometry.ore), and the font it
     // measures with when the page was never laid out.
     geom: ?*mut Geometry
@@ -984,8 +992,10 @@ fn enter(s: *mut Script) {
         s.it.markStackBase(PAGE_ROOM)
         if js.gcStressRequested() {
             s.it.startBudget(0, STRESS_STEPS)
-        } else {
+        } else if s.real {
             s.it.startBudget(TASK_MS, TASK_STEPS)
+        } else {
+            s.it.startBudget(TASK_BACKSTOP_MS, TASK_STEPS)
         }
     }
     s.depth += 1
@@ -994,6 +1004,7 @@ fn enter(s: *mut Script) {
 fn leave(s: *mut Script) {
     s.depth -= 1
     if s.depth == 0 {
+        s.work += s.it.steps
         s.it.clearBudget()
     }
 }
@@ -1080,13 +1091,14 @@ fn runMicrotasks(s: *mut Script) AllocError!void {
     try flushReported(s)
     var head: usize = 0
     let started = js.cpuMs()
+    let started_work = s.work
     var late = false
     while s.it.takeJob() |f| {
         head += 1
         if head > MAX_MICROTASKS || late {
             continue
         }
-        if !js.gcStressRequested() && js.cpuMs() - started > TASK_MS {
+        if !js.gcStressRequested() && checkpointOver(s, started, started_work) {
             late = true
             try addConsole(s, "[error] ", "microtasks ran too long: the rest were dropped")
             continue
@@ -1165,6 +1177,15 @@ fn reportRejections(s: *mut Script) AllocError!void {
         s.it.exception = Value.Undefined
         try addConsole(s, "[error] ", b.bytes())
     }
+}
+
+// Have the microtasks of a checkpoint that began at `cpu` (js.cpuMs)
+// and `work` (Script.work) used up the budget of a task?
+fn checkpointOver(s: *Script, cpu: u64, work: u64) bool {
+    if s.real {
+        return js.cpuMs() - cpu > TASK_MS
+    }
+    return s.work - work > TASK_STEPS
 }
 
 fn tick(s: *mut Script) {
