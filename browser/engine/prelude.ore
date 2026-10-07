@@ -1990,6 +1990,8 @@ pub let PRELUDE =
     \\// State belongs to the wrapper, not a strong global map of detached nodes.
     \\const ImageP = HTMLImageElement.prototype;
     \\function imageEncodingError() { return new DOMException('The source image cannot be decoded.', 'EncodingError'); }
+    \\// The requests queued in one turn are fetched together, not one by one.
+    \\let imagePending = [];
     \\function imageUpdate(el) {
     \\  if (ak.inTemplate(el)) return;
     \\  const old = el.__imageRequest;
@@ -1999,7 +2001,13 @@ pub let PRELUDE =
     \\  const parent = el.parentNode;
     \\  const state = { complete: empty, width: 0, height: 0, currentSrc: '', status: 'pending', waiters: [], picture: !!parent && parent.localName === 'picture' };
     \\  hidden(el, '__imageRequest', state);
+    \\  imagePending.push(el);
     \\  ak.queueMicrotask(() => {
+    \\    if (imagePending.length) {
+    \\      const batch = imagePending;
+    \\      imagePending = [];
+    \\      ak.imagePrefetch(batch);
+    \\    }
     \\    if (el.__imageRequest !== state) return;
     \\    const result = ak.imageLoad(el);
     \\    if (el.__imageRequest !== state) return;

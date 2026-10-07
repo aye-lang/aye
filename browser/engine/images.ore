@@ -285,6 +285,28 @@ fn loadElementImage(cache: *mut ImageCache, doc: *Document, h: NodeId, base: *Ur
     return LoadedElementImage { target: target, bmp: bmp, density: choice.density }
 }
 
+// Fetches the new images that the img elements `els` select
+// concurrently into the session's cache (net.prefetch), before their
+// script-visible requests (`loadElementImage`) take them one by one:
+// a page's parsed or script-made images are not fetched serially.
+fn prefetchElementImages(cache: *mut ImageCache, doc: *Document, els: []NodeId, base: *Url, media: css.Media) AllocError!void {
+    var hrefs = text.Builder.init(cache.alloc)
+    defer hrefs.deinit()
+    for h in els {
+        let choice = (try chooseImage(cache.alloc, doc, h, media)) orelse continue
+        let target = url.resolve(cache.alloc, base, choice.url) catch |e| {
+            continue
+        }
+        defer target.deinit(cache.alloc)
+        if cache.known(target.withoutFragment()) {
+            continue
+        }
+        try hrefs.append(target.withoutFragment())
+        try hrefs.appendByte('\n')
+    }
+    net.prefetch(cache.alloc, hrefs.bytes(), net.Kind.Image, cache.referrer)
+}
+
 /// Fetches the images of the page's elements and style sheets that have
 /// none yet, and maps the elements (and URLs) to their bitmaps. `media`
 /// (the viewport) picks among `srcset` candidates and `picture` sources.
