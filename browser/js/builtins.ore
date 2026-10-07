@@ -48,6 +48,7 @@ pub fn installBuiltins(it: *mut Interp) JsError!void {
     try installArray(it)
     try installString(it)
     try installNumber(it)
+    try installBigInt(it)
     try installMath(it)
     try installJson(it)
     try installMisc(it)
@@ -805,6 +806,9 @@ fn objectProtoToString(it: *mut Interp, a: Args) JsError!Value {
         .Num { .. } => {
             tag = "Number"
         }
+        .Big { .. } => {
+            tag = "BigInt"
+        }
         .Str { .. } => {
             tag = "String"
         }
@@ -835,6 +839,7 @@ fn objectProtoToString(it: *mut Interp, a: Args) JsError!Value {
                 .Error => "Error"
                 .Boolean => "Boolean"
                 .Number => "Number"
+                .BigInt => "BigInt"
                 .String => "String"
                 .Date => "Date"
                 .Arguments => "Arguments"

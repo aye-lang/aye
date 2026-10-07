@@ -207,6 +207,10 @@ struct Inspector {
                     try formatNumber(b, n)
                 }
             }
+            .Big { .. } => {
+                try bigAppend(self.it, b, v, 10)
+                try b.appendByte('n')
+            }
             .Str { s } => try appendQuoted(b, self.it.heap.bytes(s))
             .Obj { o } => try self.object(b, unwrapProxy(self.it, o), rt)
         }
@@ -336,7 +340,7 @@ struct Inspector {
             }
         } else if cls == Class.Error {
             try self.errorBase(base, o)
-        } else if cls == Class.Boolean || cls == Class.Number || cls == Class.String {
+        } else if cls == Class.Boolean || cls == Class.Number || cls == Class.String || cls == Class.BigInt {
             match ob.data {
                 .Prim { v } => {
                     try base.append("[")
@@ -344,6 +348,8 @@ struct Inspector {
                         try base.append("Boolean: ")
                     } else if cls == Class.Number {
                         try base.append("Number: ")
+                    } else if cls == Class.BigInt {
+                        try base.append("BigInt: ")
                     } else {
                         try base.append("String: ")
                     }

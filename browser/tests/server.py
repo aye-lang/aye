@@ -16,6 +16,10 @@
 #                    text/plain) as "name = value" items, and the raw
 #                    body (CR written as \r)
 #   /echo-redirect   (POST) 303 to /echo?redirected=1
+#   /fetch-echo      (any method) the request as JSON: its method, path,
+#                    headers (names in lower case), body (as UTF-8 and in
+#                    hex) and form fields (as /echo); HEAD gets no body
+#   /fetch-redirect/STATUS  (any method) STATUS to /fetch-echo?redirected
 #   /net/start       302 to /net/page.html, setting the cookies of COOKIES
 #   /headers         the request's Accept, Accept-Language, Referer and
 #                    Cookie headers, as text/plain
@@ -36,10 +40,15 @@
 #                    of the type of NAME's extension (as /log/NAME)
 #   /slow-peak       the most /slow/ requests that were in flight at
 #                    once, as text/plain
-#   /slow-now        after 0.1 s, the /slow/ requests in flight, as
-#                    text/plain
+#   /held/NAME       as /slow/NAME, but answered once a /held-now
+#                    request counted it instead of after 0.3 s
+#   /held-now        once a /held/ request is in flight, the number in
+#                    flight, as text/plain; then it answers them
+#                    (waits stop after HOLD_LIMIT s, which only a broken
+#                    browser reaches)
 import gzip
 import html
+import json
 import http.server
 import mimetypes
 import os
@@ -67,6 +76,12 @@ LOG = []
 SLOW = {"now": 0, "peak": 0}
 SLOW_LOCK = threading.Lock()
 
+# The /held/ requests in flight, and the number of /held-now requests
+# answered: a /held/ request waits until that number changes.
+HELD = {"now": 0, "counted": 0}
+HELD_CHANGED = threading.Condition()
+HOLD_LIMIT = 30
+
 BODIES = {
     ".css": ("text/css", b"p { color: green }"),
     ".js": ("text/javascript", b"window.fromScript = 1;"),
@@ -89,9 +104,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def reply_file(self, path):
+        """The file `path` (the query ignored) of the directory when there
+        is one, else a small body of the type of its extension."""
+        name = urllib.parse.unquote(path.split("?", 1)[0])
+        file = os.path.realpath(os.path.join(ROOT, name))
+        if file.startswith(os.path.realpath(ROOT) + os.sep) and os.path.isfile(file):
+            with open(file, "rb") as f:
+                data = f.read()
+            ctype = mimetypes.guess_type(file)[0] or "application/octet-stream"
+        else:
+            ctype, data = BODIES.get(name[name.rfind("."):], ("text/plain", b"slow"))
+        self.reply(200, [("Content-Type", ctype)], data)
+
     def do_GET(self):
         path = self.path
-        if path == "/redirect":
+        if path.startswith("/fetch-"):
+            self.fetch_route()
+        elif path == "/redirect":
             self.reply(302, [("Location", "/basic.html")])
         elif path == "/redirect-style":
             self.reply(302, [("Location", "/style/link.html")])
@@ -130,6 +160,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         elif path.startswith("/fail/"):
             LOG.append("GET " + path + "\n")
             self.close_connection = True
+        elif path.startswith("/held/"):
+            with HELD_CHANGED:
+                counted = HELD["counted"]
+                HELD["now"] += 1
+                HELD_CHANGED.notify_all()
+                HELD_CHANGED.wait_for(lambda: HELD["counted"] > counted, HOLD_LIMIT)
+                HELD["now"] -= 1
+            self.reply_file(path[len("/held/"):])
+        elif path == "/held-now":
+            with HELD_CHANGED:
+                HELD_CHANGED.wait_for(lambda: HELD["now"] > 0, HOLD_LIMIT)
+                now = HELD["now"]
+                HELD["counted"] += 1
+                HELD_CHANGED.notify_all()
+            self.reply(200, [("Content-Type", "text/plain")], b"%d\n" % now)
         elif path.startswith("/slow/"):
             with SLOW_LOCK:
                 SLOW["now"] += 1
@@ -137,18 +182,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             time.sleep(0.3)
             with SLOW_LOCK:
                 SLOW["now"] -= 1
-            name = urllib.parse.unquote(path[len("/slow/"):].split("?", 1)[0])
-            file = os.path.realpath(os.path.join(ROOT, name))
-            if file.startswith(os.path.realpath(ROOT) + os.sep) and os.path.isfile(file):
-                with open(file, "rb") as f:
-                    data = f.read()
-                ctype = mimetypes.guess_type(file)[0] or "application/octet-stream"
-            else:
-                ctype, data = BODIES.get(name[name.rfind("."):], ("text/plain", b"slow"))
-            self.reply(200, [("Content-Type", ctype)], data)
-        elif path == "/slow-now":
-            time.sleep(0.1)
-            self.reply(200, [("Content-Type", "text/plain")], b"%d\n" % SLOW["now"])
+            self.reply_file(path[len("/slow/"):])
         elif path == "/slow-peak":
             self.reply(200, [("Content-Type", "text/plain")], b"%d\n" % SLOW["peak"])
         elif path == "/big":
@@ -189,7 +223,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0") or "0")
         body = self.rfile.read(length)
-        if self.path == "/echo-redirect":
+        if self.path.startswith("/fetch-"):
+            self.fetch_route(body)
+        elif self.path == "/echo-redirect":
             self.reply(303, [("Location", "/echo?redirected=1")])
         elif self.path.startswith("/log/"):
             self.log_request_line("POST", body)
@@ -197,6 +233,45 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.echo("POST", body)
         else:
             self.reply(404, [("Content-Type", "text/plain")], b"not found\n")
+
+    def do_HEAD(self):
+        if self.path.startswith("/fetch-"):
+            self.fetch_route()
+        else:
+            super().do_HEAD()
+
+    # Every other method (PUT, DELETE, custom ones) goes to fetch_route.
+    def __getattr__(self, name):
+        if name.startswith("do_"):
+            return self.fetch_route
+        raise AttributeError(name)
+
+    def fetch_route(self, body=None):
+        if body is None:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            body = self.rfile.read(length)
+        path = urllib.parse.urlsplit(self.path).path
+        if path.startswith("/fetch-redirect/"):
+            self.reply(int(path[len("/fetch-redirect/"):]), [("Location", "/fetch-echo?redirected")])
+            return
+        if path != "/fetch-echo":
+            self.reply(404, [("Content-Type", "text/plain")], b"not found\n")
+            return
+        echo = {
+            "method": self.command,
+            "path": self.path,
+            "headers": {k.lower(): v for k, v in self.headers.items()},
+            "body": body.decode("utf-8", "replace"),
+            "hex": body.hex(),
+            "fields": form_fields(self.headers.get("Content-Type", ""), body),
+        }
+        data = json.dumps(echo).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(data)
 
     def echo(self, method, body):
         query = urllib.parse.urlsplit(self.path).query

@@ -1452,46 +1452,270 @@ pub let PRELUDE =
     \\
     \\// ---- fetch (Promise is the engine's: js/lib.ore)
     \\
-    \\class Headers {
-    \\  constructor(type) { hidden(this, '_type', type); }
-    \\  get(name) { return String(name).toLowerCase() === 'content-type' ? this._type : null; }
-    \\  has(name) { return String(name).toLowerCase() === 'content-type'; }
+    \\// Headers: a list of (lowercase name, value) pairs; iteration combines
+    \\// the values of a name (but not of set-cookie) and sorts by name.
+    \\const HTTP_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+    \\function headerAppend(h, name, value, method) {
+    \\  name = String(name);
+    \\  value = String(value).replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, '');
+    \\  if (!HTTP_TOKEN.test(name)) throw new TypeError("Failed to execute '" + method + "' on 'Headers': Invalid name");
+    \\  if (/[\0\r\n]/.test(value)) throw new TypeError("Failed to execute '" + method + "' on 'Headers': Invalid value");
+    \\  h._list.push([name.toLowerCase(), value]);
     \\}
+    \\class Headers {
+    \\  constructor(init) {
+    \\    hidden(this, '_list', []);
+    \\    if (init === undefined) return;
+    \\    if (init === null || (typeof init !== 'object' && typeof init !== 'function')) throw new TypeError("Failed to construct 'Headers': The provided value is not of type '(record<ByteString, ByteString> or sequence<sequence<ByteString>>)'.");
+    \\    if (typeof init[Symbol.iterator] === 'function') {
+    \\      for (const pair of init) {
+    \\        const p = Array.from(pair);
+    \\        if (p.length !== 2) throw new TypeError("Failed to construct 'Headers': Invalid value");
+    \\        headerAppend(this, p[0], p[1], 'append');
+    \\      }
+    \\    } else {
+    \\      for (const k of Object.keys(init)) headerAppend(this, k, init[k], 'append');
+    \\    }
+    \\  }
+    \\  append(name, value) { headerAppend(this, name, value, 'append'); }
+    \\  delete(name) {
+    \\    const n = String(name).toLowerCase();
+    \\    this._list = this._list.filter(p => p[0] !== n);
+    \\  }
+    \\  get(name) {
+    \\    const n = String(name).toLowerCase();
+    \\    const values = this._list.filter(p => p[0] === n).map(p => p[1]);
+    \\    return values.length === 0 ? null : values.join(', ');
+    \\  }
+    \\  has(name) {
+    \\    const n = String(name).toLowerCase();
+    \\    return this._list.some(p => p[0] === n);
+    \\  }
+    \\  set(name, value) {
+    \\    const at = this._list.length;
+    \\    headerAppend(this, name, value, 'set');
+    \\    const p = this._list[at];
+    \\    this._list = this._list.filter((q, i) => q[0] !== p[0] || i === at);
+    \\  }
+    \\  _sorted() {
+    \\    const names = Array.from(new Set(this._list.map(p => p[0]))).sort();
+    \\    const out = [];
+    \\    for (const n of names) {
+    \\      if (n === 'set-cookie') for (const p of this._list) { if (p[0] === n) out.push([n, p[1]]); }
+    \\      else out.push([n, this.get(n)]);
+    \\    }
+    \\    return out;
+    \\  }
+    \\  forEach(fn, thisArg) {
+    \\    for (const [k, v] of this._sorted()) fn.call(thisArg, v, k, this);
+    \\  }
+    \\  entries() { return this._sorted()[Symbol.iterator](); }
+    \\  keys() { return this._sorted().map(p => p[0])[Symbol.iterator](); }
+    \\  values() { return this._sorted().map(p => p[1])[Symbol.iterator](); }
+    \\  [Symbol.iterator]() { return this.entries(); }
+    \\}
+    \\Object.defineProperty(Headers.prototype, Symbol.toStringTag, { value: 'Headers', configurable: true });
+    \\
+    \\// The body of a Request or a Response: text() and json() read it once.
+    \\// It is the string, Blob or buffer it was made from (no ReadableStream).
+    \\function bodyMethods(C, kind) {
+    \\  getter(C.prototype, 'bodyUsed', function () { return this._bodyUsed; });
+    \\  hidden(C.prototype, 'text', function text() { return readBody(this, kind, 'text'); });
+    \\  hidden(C.prototype, 'json', function json() { return readBody(this, kind, 'json').then(t => JSON.parse(t)); });
+    \\}
+    \\function readBody(o, kind, method) {
+    \\  if (o._bodyUsed) return Promise.reject(new TypeError("Failed to execute '" + method + "' on '" + kind + "': body stream already read"));
+    \\  const body = o._body;
+    \\  if (body === null) return Promise.resolve('');
+    \\  o._bodyUsed = true;
+    \\  if (body instanceof Blob) return body.text();
+    \\  if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) return Promise.resolve(new TextDecoder().decode(body));
+    \\  return Promise.resolve(String(body));
+    \\}
+    \\
     \\class Response {
     \\  constructor(r) {
     \\    this.status = r.status;
     \\    this.ok = r.status >= 200 && r.status < 300;
     \\    this.statusText = this.ok ? 'OK' : '';
     \\    this.url = r.url;
-    \\    this.headers = new Headers(r.type);
-    \\    this.bodyUsed = false;
+    \\    this.headers = new Headers();
+    \\    if (r.type) this.headers.append('content-type', r.type);
     \\    hidden(this, '_body', r.body);
-    \\  }
-    \\  text() {
-    \\    this.bodyUsed = true;
-    \\    return Promise.resolve(this._body);
-    \\  }
-    \\  json() {
-    \\    this.bodyUsed = true;
-    \\    return new Promise(resolve => resolve(JSON.parse(this._body)));
+    \\    hidden(this, '_bodyUsed', false);
     \\  }
     \\}
+    \\bodyMethods(Response, 'Response');
+    \\
+    \\// Request: what the constructor is given, checked and normalized as in
+    \\// the Fetch standard. fetch() reads the URL, the method and the signal.
+    \\const REQUEST_ENUMS = {
+    \\  mode: ['same-origin', 'no-cors', 'cors', 'navigate'],
+    \\  credentials: ['omit', 'same-origin', 'include'],
+    \\  cache: ['default', 'no-store', 'reload', 'no-cache', 'force-cache', 'only-if-cached'],
+    \\  redirect: ['follow', 'error', 'manual'],
+    \\  referrerPolicy: ['', 'no-referrer', 'no-referrer-when-downgrade', 'same-origin', 'origin', 'strict-origin', 'origin-when-cross-origin', 'strict-origin-when-cross-origin', 'unsafe-url'],
+    \\};
+    \\const REQUEST_TYPES = { mode: 'RequestMode', credentials: 'RequestCredentials', cache: 'RequestCache', redirect: 'RequestRedirect', referrerPolicy: 'ReferrerPolicy' };
+    \\function requestError(message) {
+    \\  return new TypeError("Failed to construct 'Request': " + message);
+    \\}
+    \\// A signal that aborts when `from` (an AbortSignal or null) does.
+    \\function followSignal(from) {
+    \\  const s = new AbortSignal();
+    \\  if (from === null) return s;
+    \\  if (from.aborted) s._abort(from.reason);
+    \\  else from.addEventListener('abort', () => s._abort(from.reason));
+    \\  return s;
+    \\}
+    \\class Request {
+    \\  constructor(input, init) {
+    \\    if (arguments.length === 0) throw new TypeError("Failed to construct 'Request': 1 argument required, but only 0 present.");
+    \\    if (init === undefined || init === null) init = {};
+    \\    const from = input instanceof Request ? input : null;
+    \\    let r;
+    \\    if (from) {
+    \\      r = Object.assign({}, from._r);
+    \\    } else {
+    \\      const p = parsedUrl(input, ak.documentBase(document));
+    \\      if (p === null) throw requestError('Failed to parse URL from ' + String(input));
+    \\      if (p.username !== '' || p.password !== '') throw requestError('Request cannot be constructed from a URL that includes credentials: ' + String(input));
+    \\      r = { url: p.href, method: 'GET', headers: null, mode: 'cors', credentials: 'same-origin', cache: 'default', redirect: 'follow', referrer: 'about:client', referrerPolicy: '', integrity: '', keepalive: false, signal: null };
+    \\    }
+    \\    if (init.referrer !== undefined) {
+    \\      const ref = String(init.referrer);
+    \\      if (ref === '') r.referrer = '';
+    \\      else {
+    \\        const p = parsedUrl(ref, ak.documentBase(document));
+    \\        if (p === null) throw requestError('Referrer ' + ref + ' is not a valid URL.');
+    \\        r.referrer = p.href === 'about:client' || p.origin !== ak.urlPart('origin') ? 'about:client' : p.href;
+    \\      }
+    \\    }
+    \\    for (const k of Object.keys(REQUEST_ENUMS)) {
+    \\      if (init[k] === undefined) continue;
+    \\      const v = String(init[k]);
+    \\      if (!REQUEST_ENUMS[k].includes(v)) throw requestError("The provided value '" + v + "' is not a valid enum value of type " + REQUEST_TYPES[k] + '.');
+    \\      r[k] = v;
+    \\    }
+    \\    if (init.mode === 'navigate') throw requestError("Cannot construct a Request with a RequestInit whose mode member is set as 'navigate'.");
+    \\    if (r.cache === 'only-if-cached' && r.mode !== 'same-origin') throw requestError("'only-if-cached' can be set only with 'same-origin' mode");
+    \\    if (init.integrity !== undefined) r.integrity = String(init.integrity);
+    \\    if (init.keepalive !== undefined) r.keepalive = !!init.keepalive;
+    \\    if (init.method !== undefined) {
+    \\      const m = String(init.method);
+    \\      const upper = m.toUpperCase();
+    \\      if (!HTTP_TOKEN.test(m)) throw requestError("'" + m + "' is not a valid HTTP method.");
+    \\      if (upper === 'CONNECT' || upper === 'TRACE' || upper === 'TRACK') throw requestError("'" + m + "' HTTP method is unsupported.");
+    \\      r.method = ['DELETE', 'GET', 'HEAD', 'OPTIONS', 'POST', 'PUT'].includes(upper) ? upper : m;
+    \\    }
+    \\    let signal = from ? from._r.signal : null;
+    \\    if (init.signal !== undefined) {
+    \\      if (init.signal !== null && !(init.signal instanceof AbortSignal)) throw requestError("member signal is not of type AbortSignal.");
+    \\      signal = init.signal;
+    \\    }
+    \\    r.signal = followSignal(signal);
+    \\    if (r.mode === 'no-cors' && !['GET', 'HEAD', 'POST'].includes(r.method)) throw requestError("'" + r.method + "' is unsupported in no-cors mode.");
+    \\    r.headers = new Headers(init.headers !== undefined ? init.headers : from ? from._r.headers : undefined);
+    \\    const initBody = init.body === undefined ? null : init.body;
+    \\    const inputBody = from ? from._body : null;
+    \\    if ((initBody !== null || inputBody !== null) && (r.method === 'GET' || r.method === 'HEAD')) throw requestError('Request with GET/HEAD method cannot have body.');
+    \\    let body = inputBody;
+    \\    if (initBody !== null) {
+    \\      let type = null;
+    \\      body = initBody;
+    \\      if (initBody instanceof URLSearchParams) {
+    \\        body = initBody.toString();
+    \\        type = 'application/x-www-form-urlencoded;charset=UTF-8';
+    \\      } else if (initBody instanceof Blob) {
+    \\        if (initBody.type !== '') type = initBody.type;
+    \\      } else if (initBody instanceof FormData) {
+    \\        type = 'multipart/form-data; boundary=' + FORM_BOUNDARY;
+    \\      } else if (!(initBody instanceof ArrayBuffer || ArrayBuffer.isView(initBody))) {
+    \\        body = String(initBody);
+    \\        type = 'text/plain;charset=UTF-8';
+    \\      }
+    \\      if (type !== null && !r.headers.has('content-type')) r.headers.append('content-type', type);
+    \\    } else if (inputBody !== null) {
+    \\      if (from._bodyUsed) throw requestError('Cannot construct a Request with a Request object that has already been used.');
+    \\      from._bodyUsed = true;
+    \\    }
+    \\    hidden(this, '_r', r);
+    \\    hidden(this, '_body', body);
+    \\    hidden(this, '_bodyUsed', false);
+    \\  }
+    \\  get url() { return this._r.url; }
+    \\  get method() { return this._r.method; }
+    \\  get headers() { return this._r.headers; }
+    \\  get mode() { return this._r.mode; }
+    \\  get credentials() { return this._r.credentials; }
+    \\  get cache() { return this._r.cache; }
+    \\  get redirect() { return this._r.redirect; }
+    \\  get referrer() { return this._r.referrer; }
+    \\  get referrerPolicy() { return this._r.referrerPolicy; }
+    \\  get integrity() { return this._r.integrity; }
+    \\  get keepalive() { return this._r.keepalive; }
+    \\  get signal() { return this._r.signal; }
+    \\  get body() { return this._body; }
+    \\  clone() {
+    \\    if (this._bodyUsed) throw new TypeError("Failed to execute 'clone' on 'Request': Request body is already used");
+    \\    const c = Object.create(Object.getPrototypeOf(this));
+    \\    hidden(c, '_r', Object.assign({}, this._r, { headers: new Headers(this._r.headers), signal: followSignal(this._r.signal) }));
+    \\    hidden(c, '_body', this._body);
+    \\    hidden(c, '_bodyUsed', false);
+    \\    return c;
+    \\  }
+    \\}
+    \\bodyMethods(Request, 'Request');
+    \\Object.defineProperty(Request.prototype, Symbol.toStringTag, { value: 'Request', configurable: true });
     \\hidden(G, 'Headers', Headers);
     \\hidden(G, 'Response', Response);
-    \\// fetch: GET only; the request is made at once (synchronously), the
-    \\// promise settles in a microtask.
+    \\hidden(G, 'Request', Request);
+    \\// The boundary of multipart/form-data bodies: the one of form
+    \\// submissions (forms.ore's BOUNDARY), fixed so that a request is the
+    \\// same from one run to the next (replay archives hash the body).
+    \\const FORM_BOUNDARY = '----anyknownFormBoundary7MA4YWxkTrZu0gW';
+    \\// The multipart/form-data body of a FormData, as a string of bytes
+    \\// (HTML's multipart/form-data encoding, as forms.ore's multipartBody).
+    \\function formDataBytes(fd) {
+    \\  const escape = s => s.replace(/"/g, '%22').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+    \\  const parts = [];
+    \\  for (const [name, value] of fd._list) {
+    \\    parts.push('--' + FORM_BOUNDARY + '\r\nContent-Disposition: form-data; name="' + escape(name) + '"');
+    \\    if (value instanceof File) {
+    \\      parts.push('; filename="' + escape(value.name) + '"\r\nContent-Type: ' + (value.type || 'application/octet-stream') + '\r\n\r\n', value, '\r\n');
+    \\    } else {
+    \\      parts.push('\r\n\r\n' + value.replace(/\r\n|\r|\n/g, '\r\n') + '\r\n');
+    \\    }
+    \\  }
+    \\  parts.push('--' + FORM_BOUNDARY + '--\r\n');
+    \\  return blobBytes(parts);
+    \\}
+    \\// The Fetch standard's forbidden request-header names: the browser's
+    \\// own headers, which a script cannot set.
+    \\const FORBIDDEN_HEADERS = new Set(['accept-charset', 'accept-encoding', 'access-control-request-headers', 'access-control-request-method', 'connection', 'content-length', 'cookie', 'cookie2', 'date', 'dnt', 'expect', 'host', 'keep-alive', 'origin', 'referer', 'set-cookie', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'via']);
+    \\function forbiddenHeader(name, value) {
+    \\  if (FORBIDDEN_HEADERS.has(name) || name.startsWith('proxy-') || name.startsWith('sec-')) return true;
+    \\  if (name !== 'x-http-method' && name !== 'x-http-method-override' && name !== 'x-method-override') return false;
+    \\  return value.split(',').some(m => ['CONNECT', 'TRACE', 'TRACK'].includes(m.trim().toUpperCase()));
+    \\}
+    \\// fetch: the request is made at once (synchronously), the promise
+    \\// settles in a microtask. The headers sent are the Request's, but the
+    \\// forbidden ones; the body goes as bytes (null for none; an empty one
+    \\// for a POST or PUT without one, as Content-Length: 0).
     \\hidden(G, 'fetch', function (input, init) {
     \\  return new Promise((resolve, reject) => {
-    \\    if (init && init.signal && init.signal.aborted) {
-    \\      reject(init.signal.reason);
+    \\    const req = new Request(input, init);
+    \\    if (req.signal.aborted) {
+    \\      reject(req.signal.reason);
     \\      return;
     \\    }
-    \\    const method = init && init.method ? String(init.method).toUpperCase() : 'GET';
-    \\    if (method !== 'GET') {
-    \\      reject(new TypeError('Failed to fetch: only GET is supported'));
-    \\      return;
-    \\    }
-    \\    const r = ak.fetch(String(input && input.url !== undefined ? input.url : input));
+    \\    const headers = req.headers._sorted().filter(p => !forbiddenHeader(p[0], p[1])).map(p => p[0] + ': ' + p[1]).join('\n');
+    \\    const body = req._body;
+    \\    let bytes;
+    \\    if (body instanceof FormData) bytes = formDataBytes(body);
+    \\    else if (body !== null) bytes = blobBytes([body]);
+    \\    else if (req.method === 'POST' || req.method === 'PUT') bytes = '';
+    \\    const r = ak.fetch(req.url, req.method, headers, bytes);
     \\    if (r.error !== undefined) reject(new TypeError('Failed to fetch: ' + r.error));
     \\    else resolve(new Response(r));
     \\  });

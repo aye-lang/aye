@@ -8,6 +8,7 @@ import std.list.List
 import std.mem.AllocError
 import std.mem.Allocator
 import std.text
+import std.heap.Arena
 
 // What a module imports and exports, as the loader needs it (atoms).
 pub struct ModuleInfo {
@@ -1659,6 +1660,11 @@ pub struct Parser {
             try self.expect(Tok.RParen)
             return self.mk(Node.ImportCall { arg: arg, options: options, referrer: self.referrer }, start)
         }
+        if k == Tok.BigInt {
+            let atom = try self.intern(self.src[t.start as usize..t.end as usize - 1])
+            self.pos += 1
+            return self.mk(Node.BigLit { atom: atom }, start)
+        }
         if k == Tok.Num {
             self.pos += 1
             return self.mk(Node.Num { v: t.num }, start)
@@ -1894,6 +1900,15 @@ pub struct Parser {
         if t.kind == Tok.Str {
             self.pos += 1
             return self.intern(self.lx.cookedOf(t))
+        }
+        if t.kind == Tok.BigInt {
+            var arena = Arena.init(self.alloc)
+            defer arena.deinit()
+            var x = (try bigParse(arena.allocator(), self.src[t.start as usize..t.end as usize - 1], true)).?
+            var b = text.Builder.init(arena.allocator())
+            try bigFormatMag(arena.allocator(), &mut b, &mut x, 10)
+            self.pos += 1
+            return self.intern(b.bytes())
         }
         if t.kind == Tok.Num {
             self.pos += 1

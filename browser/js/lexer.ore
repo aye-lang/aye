@@ -12,11 +12,13 @@ import std.list.List
 import std.mem.AllocError
 import std.mem.Allocator
 import std.text
+import std.heap.Arena
 
 pub enum Tok {
     Eof
     Ident
     Num
+    BigInt
     Str
     // A template without substitutions, and the pieces of one with some.
     Template
@@ -437,14 +439,22 @@ struct Lexer {
             buf[n] = 0
             value = strtod(buf[..].ptr, null)
         }
-        // A BigInt literal `10n` is read as a Number (there is no BigInt).
+        var kind = Tok.Num
         if self.pos < self.src.len && self.src[self.pos] == 'n' {
+            // Validate the complete spelling, including separators and the
+            // prohibition on decimal fractions/exponents/leading zeroes.
+            var arena = Arena.init(self.braces.alloc)
+            defer arena.deinit()
+            if (try bigParse(arena.allocator(), self.src[start..self.pos], true)) == null {
+                return self.fail("Invalid BigInt literal")
+            }
             self.pos += 1
+            kind = Tok.BigInt
         }
         if self.pos < self.src.len && isIdStart(self.src[self.pos]) {
             return self.fail("Invalid or unexpected token")
         }
-        return self.emit(Tok.Num, start, value, 0, 0)
+        return self.emit(kind, start, value, 0, 0)
     }
 
     // Reads an escape after `\` (at self.pos) into the cooked bytes.
@@ -972,7 +982,7 @@ fn kw3(s: []u8, a: []u8, ta: Tok, b: []u8, tb: Tok, c: []u8, tc: Tok, d: []u8, t
 
 // Can a token of this kind end an expression (so a `/` after it divides)?
 fn endsExpr(k: Tok) bool {
-    return k == Tok.Ident || k == Tok.Num || k == Tok.Str || k == Tok.Template ||
+    return k == Tok.Ident || k == Tok.Num || k == Tok.BigInt || k == Tok.Str || k == Tok.Template ||
         k == Tok.TemplateTail || k == Tok.Regex || k == Tok.RParen || k == Tok.RBracket ||
         k == Tok.RBrace || k == Tok.KwThis || k == Tok.KwSuper || k == Tok.KwNull ||
         k == Tok.KwTrue || k == Tok.KwFalse || k == Tok.PlusPlus || k == Tok.MinusMinus

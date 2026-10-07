@@ -1,0 +1,123 @@
+// BigInt constructor, primitive prototype, and fixed-width reductions.
+
+import std.heap.Arena
+
+fn installBigInt(it: *mut Interp) JsError!void {
+    it.bigint_proto = try it.newObjectOf(Class.Object, it.object_proto, ObjData.None)
+    let c = try makeConstructor(it, "BigInt", 1, bigintCtor, it.bigint_proto)
+    try it.defineNative(c, "asIntN", 2, bigintAsIntN)
+    try it.defineNative(c, "asUintN", 2, bigintAsUintN)
+    let p = it.bigint_proto
+    try it.defineNative(p, "toString", 1, bigintToString)
+    try it.defineNative(p, "toLocaleString", 0, bigintToLocaleString)
+    try it.defineNative(p, "valueOf", 0, bigintValueOf)
+    try it.heap.addProp(p, it.sym_to_string_tag, try it.newString("BigInt"), Value.Undefined, F_CONFIG)
+}
+
+fn bigintCtor(it: *mut Interp, a: Args) JsError!Value {
+    if a.new_target != NONE {
+        return it.typeError("BigInt is not a constructor")
+    }
+    return bigConvert(it, it.arg(a, 0), true)
+}
+
+fn thisBigInt(it: *mut Interp, v: Value) JsError!Value {
+    if isBig(v) {
+        return v
+    }
+    if it.hasClass(v, Class.BigInt) {
+        match it.heap.obj(objectOf(v)).data {
+            .Prim { v: primitive } => {
+                return primitive
+            }
+            _ => {}
+        }
+    }
+    return it.typeError("BigInt.prototype method called on incompatible receiver")
+}
+
+fn bigintValueOf(it: *mut Interp, a: Args) JsError!Value {
+    return thisBigInt(it, a.this)
+}
+
+fn bigintToString(it: *mut Interp, a: Args) JsError!Value {
+    let v = try thisBigInt(it, a.this)
+    try it.push(v)
+    defer it.pop()
+    var radix = 10.0
+    if !isUndef(it.arg(a, 0)) {
+        radix = try argInteger(it, a, 0, 10.0)
+    }
+    if radix < 2.0 || radix > 36.0 {
+        return it.rangeError("toString() radix must be between 2 and 36")
+    }
+    let b = try it.builder()
+    defer it.release(b)
+    try bigAppend(it, b, v, radix as u32)
+    return it.takeString(b)
+}
+
+// Like Number's locale support, currently the default/en-US grouping.
+fn bigintToLocaleString(it: *mut Interp, a: Args) JsError!Value {
+    let v = try thisBigInt(it, a.this)
+    let digits = try it.builder()
+    defer it.release(digits)
+    try bigAppend(it, digits, v, 10)
+    let b = try it.builder()
+    defer it.release(b)
+    let s = digits.bytes()
+    for i, c in s {
+        try b.appendByte(c)
+        if c != '-' && i + 1 < s.len && (s.len - i - 1) % 3 == 0 {
+            try b.appendByte(',')
+        }
+    }
+    return it.takeString(b)
+}
+
+fn bigintAsIntN(it: *mut Interp, a: Args) JsError!Value {
+    return bigintReduce(it, a, true)
+}
+
+fn bigintAsUintN(it: *mut Interp, a: Args) JsError!Value {
+    return bigintReduce(it, a, false)
+}
+
+fn bigintReduce(it: *mut Interp, args: Args, signed: bool) JsError!Value {
+    let n = try argInteger(it, args, 0, 0.0)
+    if n < 0.0 || n > 9007199254740991.0 {
+        return it.rangeError("Invalid BigInt bit width")
+    }
+    let v = try bigConvert(it, it.arg(args, 1), false)
+    try it.push(v)
+    defer it.pop()
+    var arena = Arena.init(it.alloc)
+    defer arena.deinit()
+    let a = arena.allocator()
+    var x = try bigLoad(it, a, v)
+    // Widths beyond the input preserve it unless unsigned needs to pad
+    // a negative value. Avoid allocating a width-sized positive result.
+    if n > (bigBits(&x) + 1) as f64 && (signed || !x.neg) {
+        return v
+    }
+    if n > BIG_MAX_BITS as f64 {
+        return it.rangeError("BigInt is too large")
+    }
+    let bits = n as usize
+    let count = (bits + 15) / 16
+    var z = try bigTwos(a, &x, count)
+    let part = (bits % 16) as u32
+    if count != 0 && part != 0 {
+        z.words.items()[count - 1] &= (1 << part) - 1
+    }
+    if signed && bits != 0 && (z.word((bits - 1) / 16) & (1 << (((bits - 1) % 16) as u32))) != 0 {
+        // Extend the sign through the unused high bits before negating.
+        if part != 0 {
+            z.words.items()[count - 1] |= 65535 ^ ((1 << part) - 1)
+        }
+        z.neg = true
+        z = try bigTwos(a, &z, count)
+        z.neg = true
+    }
+    return bigSave(it, &mut z)
+}

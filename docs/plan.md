@@ -79,6 +79,7 @@ Done 2026-10-07.
 | P1.3 | One agent task per site (JSON lines replayed through `anyknown agent`) | `check --agent` passes on HN, Wikipedia search, DuckDuckGo | P1.2 | P2 |
 | P1.4 | `run --live` (medians, phase split) and `--screens` (contact sheet) | the live table prints | P1.1 | P1.2–3 |
 | P1.5 | `page_load.py` records child CPU time (`getrusage` children delta) and the load average per run; warns when CPU/wall < 0.8. Speed targets compare CPU time, or wall time on a quiet machine | `run --site github` shows ~3.5 s CPU whatever the load | P1.2 | P2 |
+| P1.6 | `page_load.py` writes `last.stdout`/`last.stderr` into the archive folder: move them under `target/page-load-out/`; check the 0.8 CPU/wall warning on a quiet machine (tiny pages may fall below it from startup cost) and set a floor | archives unchanged after `run`; no warning for `example` on a quiet machine | P1.5 | P2 |
 
 ### P2: Ore close-out
 
@@ -119,6 +120,15 @@ step only finds and writes down the cause; the fix is the next step.
 | P3.14 | MDN: diagnose 16 lit "Hydration value mismatch" and 2 "not iterable" errors (P1.2 check) | cause written down | P3.4–8 |
 | P3.15 | `Request` global missing (Reddit; general fetch API) | JS test; `check --site reddit` error gone | P3.4–8 |
 | P3.16 | A script that changes an img in another same-origin frame may record the failed load in the wrong page's cache (P4.6 follow-up) | frame fixture | P4.6 |
+| P3.17 | `fetch` sends only GET: support every method with `body` (string, URLSearchParams, FormData, Blob, ArrayBuffer), request headers and the `Content-Type` defaults; CORS-safe subset is enough | net fixture: POST/PUT/DELETE echo through the test server | P3.15 | P3.4–8 |
+| P3.18 | Body mixin: `arrayBuffer()`, `blob()`, `formData()` on Request and Response; `body` as a minimal `ReadableStream` (`getReader().read()`) | jsdom test vs Node 22 | P3.17 | P3.4–8 |
+| P3.19 | URL parser accepts `http://[` (invalid IPv6 host); follow WHATWG host parsing for IPv6 | URL test vs Node 22 | – | all |
+| P3.20 | Recapture the Reddit and GitHub archives: after P3.15 (Request) Reddit fetches `svc/events/preload-head` and GitHub makes ~10 requests the old archives lack; reset their `sites.json` expectations | `check --site reddit,github` no archive misses | – | all |
+| P3.22 | GitHub: React logs "Illegal invocation" after P3.13/P3.15 (a host method called with the wrong `this`); diagnose, then fix | `check --site github` errors 0 | P3.20 | P3.4–8 |
+| P3.23 | `failed_image_once.html` relies on a fixed 0.3 s server delay (`/slow/wait.txt`), like P3.12 did; make it wait on the browser's state | the test under synthetic load, 30 runs | P3.12 | all |
+| P3.24 | XMLHttpRequest sends only GET: `send(body)` and `setRequestHeader` on the native path P3.17 gave `fetch` | net fixture: XHR POST/PUT echo | P3.17 | P3.4–8 |
+| P3.25 | Send `Origin` on non-GET fetches (and CORS-mode GETs) as the Fetch spec says | echo test checks `Origin` | P3.17 | P3.24 |
+| P3.21 | Fetch guards: Response headers read-only (`immutable` guard), Request headers drop forbidden names, a Request's abort listener on its source signal is removed when the request settles | jsdom test vs Node 22 | P3.15 | P3.17 after it merges |
 
 ### P4: Load time
 
@@ -155,6 +165,9 @@ step only finds and writes down the cause; the fix is the next step.
    `target/release/ore check browser`, full `cargo test`,
    `browser/build.sh` with no output path (it writes `target/anyknown`
    in your worktree; never a shared path such as the scratchpad).
+   `browser/tools/sites.json` expectations only tighten. If a site loses
+   content it had, that is a regression to fix, never a reason to swap
+   its expected strings (P3.20 did, for GitHub's "Unable to load page").
 5. Report: commits, the verify output, the full test result, a "Done so
    far" paragraph, and follow-ups as new step proposals. A lesson goes
    into `docs/practices/` with its fix.
