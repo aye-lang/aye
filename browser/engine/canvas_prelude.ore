@@ -610,15 +610,16 @@ pub let CANVAS_PRELUDE =
     \\  });
     \\}
     \\// Image state and dimensions are installed by prelude.ore.
-    \\// WeakMap holds its keys strongly, so the context lives on the wrapper:
-    \\// a detached canvas, its context and its bitmap can then be freed.
+    \\const contexts = new WeakMap();
     \\const P = HTMLCanvasElement.prototype;
     \\P.getContext = function (kind) {
     \\  if (String(kind) !== '2d') return null;
-    \\  if (!Object.prototype.hasOwnProperty.call(this, '__context2d')) {
-    \\    Object.defineProperty(this, '__context2d', {value: new CanvasRenderingContext2D(this)});
+    \\  let ctx = contexts.get(this);
+    \\  if (!ctx) {
+    \\    ctx = new CanvasRenderingContext2D(this);
+    \\    contexts.set(this, ctx);
     \\  }
-    \\  return this.__context2d;
+    \\  return ctx;
     \\};
     \\P.toDataURL = function () {
     \\  return ak.canvasPng(this);
