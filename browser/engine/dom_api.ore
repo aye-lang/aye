@@ -41,27 +41,104 @@ fn changed(it: *mut Interp) JsError!void {
     if s.active == s.page {
         s.version += 1
         s.style_version += 1
+        noteLayoutChangeAnywhere(s)
     } else {
         s.active.mutations += 1
     }
     return flushMutations(it)
 }
 
-// Records that a script changed the attribute `name`: styles are not out
-// of date for the attributes of images and the like that no selector
-// looks at in practice (a lazy loader sets `src` in a loop and asks for
-// styles each time).
-fn changedAttr(it: *mut Interp, name: []u8) JsError!void {
+// `changed`, for a change at the node `at` only: to its attribute
+// `attr`, or to its children or text (""), for the layout scripts read
+// (geometry.ore).
+fn changedAt(it: *mut Interp, at: NodeId, attr: []u8) JsError!void {
+    let s = scriptOf(it)
+    if s.active == s.page {
+        s.version += 1
+        s.style_version += 1
+        var what = css.CHILDREN_CHANGED
+        if attr.len > 0 {
+            what = css.attrChange(attr)
+        }
+        try noteLayoutChange(s, at, what)
+    } else {
+        s.active.mutations += 1
+    }
+    return flushMutations(it)
+}
+
+// Notes for the layout scripts read that `child` leaves its parent (it
+// is moved).
+fn leaving(it: *mut Interp, child: NodeId) JsError!void {
+    let s = scriptOf(it)
+    if s.active != s.page {
+        return
+    }
+    if s.page.doc.parent(child) |p| {
+        try noteLayoutChange(s, p, css.CHILDREN_CHANGED)
+    }
+}
+
+// Records that a script changed the attribute `name` of `el` (its value
+// was `old`; null: it had none): styles are not out of date for the
+// attributes of images and the like that no selector looks at in
+// practice (a lazy loader sets `src` in a loop and asks for styles each
+// time). The layout scripts read stays when the value stays.
+fn changedAttr(it: *mut Interp, el: NodeId, name: []u8, old: ?[]u8) JsError!void {
     let s = scriptOf(it)
     if s.active != s.page {
         s.active.mutations += 1
         return
     }
     s.version += 1
+    let now = s.page.doc.attr(el, name)
     if !hasClass(STYLE_NEUTRAL_ATTRS, name) {
         s.style_version += 1
+        if sameAttr(old, now) {
+            // Nothing to lay out again.
+        } else if text.eql(name, "class") {
+            try noteClassChanges(s, el, old orelse "", now orelse "")
+        } else {
+            try noteLayoutChange(s, el, css.attrChange(name))
+        }
+    } else if !sameAttr(old, now) && s.page.doc.isConnected(el) {
+        // The boxes may move (an image's size), the styles do not.
+        s.layout_version += 1
     }
     return flushMutations(it)
+}
+
+fn sameAttr(a: ?[]u8, b: ?[]u8) bool {
+    if a |x| {
+        if b |y| {
+            return text.eql(x, y)
+        }
+        return false
+    }
+    return b == null
+}
+
+// Notes the classes in one of `old` and `now` and not in the other.
+fn noteClassChanges(s: *mut Script, el: NodeId, old: []u8, now: []u8) AllocError!void {
+    try noteClassesNotIn(s, el, old, now)
+    try noteClassesNotIn(s, el, now, old)
+}
+
+fn noteClassesNotIn(s: *mut Script, el: NodeId, classes: []u8, other: []u8) AllocError!void {
+    var i: usize = 0
+    while i < classes.len {
+        while i < classes.len && isSpace(classes[i]) {
+            i += 1
+        }
+        var j = i
+        while j < classes.len && !isSpace(classes[j]) {
+            j += 1
+        }
+        if j > i && !hasClass(other, classes[i..j]) {
+            try noteLayoutChange(s, el, css.classChange(classes[i..j]))
+        }
+        i = j
+    }
 }
 
 let STYLE_NEUTRAL_ATTRS = "src srcset sizes alt title loading decoding fetchpriority referrerpolicy crossorigin integrity nonce autocomplete"
@@ -669,7 +746,7 @@ fn nodeSetTextContent(it: *mut Interp, a: Args) JsError!Value {
     let kind = doc.node(h).kind
     if kind == Kind.Text || kind == Kind.Comment {
         try doc.setData(h, b.bytes())
-        try changed(it)
+        try changedAt(it, h, "")
         return Value.Undefined
     }
     if kind != Kind.Element && !doc.isFragment(h) {
@@ -677,7 +754,7 @@ fn nodeSetTextContent(it: *mut Interp, a: Args) JsError!Value {
     }
     removeChildren(doc, h)
     try doc.appendText(h, b.bytes())
-    try changed(it)
+    try changedAt(it, h, "")
     return Value.Undefined
 }
 
@@ -711,7 +788,7 @@ fn nodeSetValue(it: *mut Interp, a: Args) JsError!Value {
         try argText(it, a, 0, b)
     }
     try doc.setData(h, b.bytes())
-    try changed(it)
+    try changedAt(it, h, "")
     return Value.Undefined
 }
 
@@ -777,8 +854,9 @@ fn nodeAppendChild(it: *mut Interp, a: Args) JsError!Value {
     let parent = try thisNode(it, a)
     let child = try argNode(it, a, 0, "appendChild")
     try checkInsert(it, parent, child)
+    try leaving(it, child)
     insertNode(docOf(it), parent, child, null)
-    try changed(it)
+    try changedAt(it, parent, "")
     return it.arg(a, 0)
 }
 
@@ -787,6 +865,7 @@ fn nodeInsertBefore(it: *mut Interp, a: Args) JsError!Value {
     let child = try argNode(it, a, 0, "insertBefore")
     try checkInsert(it, parent, child)
     let doc = docOf(it)
+    try leaving(it, child)
     if js.isNullish(it.arg(a, 1)) {
         insertNode(doc, parent, child, null)
     } else {
@@ -798,7 +877,7 @@ fn nodeInsertBefore(it: *mut Interp, a: Args) JsError!Value {
             insertNode(doc, parent, child, before)
         }
     }
-    try changed(it)
+    try changedAt(it, parent, "")
     return it.arg(a, 0)
 }
 
@@ -810,7 +889,7 @@ fn nodeRemoveChild(it: *mut Interp, a: Args) JsError!Value {
         return domError(it, "NotFoundError", "Failed to execute 'removeChild' on 'Node': The node to be removed is not a child of this node.")
     }
     doc.detach(child)
-    try changed(it)
+    try changedAt(it, parent, "")
     return it.arg(a, 0)
 }
 
@@ -824,19 +903,20 @@ fn nodeReplaceChild(it: *mut Interp, a: Args) JsError!Value {
     }
     try checkInsert(it, parent, fresh)
     if !dom.same(fresh, old) {
+        try leaving(it, fresh)
         insertNode(doc, parent, fresh, old)
         doc.detach(old)
     }
-    try changed(it)
+    try changedAt(it, parent, "")
     return it.arg(a, 1)
 }
 
 fn nodeRemove(it: *mut Interp, a: Args) JsError!Value {
     let h = try thisNode(it, a)
     let doc = docOf(it)
-    if doc.parent(h) != null {
+    if doc.parent(h) |p| {
         doc.detach(h)
-        try changed(it)
+        try changedAt(it, p, "")
     }
     return Value.Undefined
 }
@@ -1135,7 +1215,7 @@ fn setAttrFromArg(it: *mut Interp, a: Args, name: []u8) JsError!Value {
     defer it.release(b)
     try argText(it, a, 0, b)
     try docOf(it).setAttr(h, name, b.bytes())
-    try changed(it)
+    try changedAt(it, h, name)
     return Value.Undefined
 }
 
@@ -1191,9 +1271,16 @@ fn elementSetAttribute(it: *mut Interp, a: Args) JsError!Value {
     let v = try it.builder()
     defer it.release(v)
     try argText(it, a, 1, v)
+    let before = try it.builder()
+    defer it.release(before)
+    var old: ?[]u8 = null
+    if docOf(it).attr(h, name.bytes()) |was| {
+        try before.append(was)
+        old = before.bytes()
+    }
     try docOf(it).setAttr(h, name.bytes(), v.bytes())
     try resetCanvas(scriptOf(it).active, h, name.bytes())
-    try changedAttr(it, name.bytes())
+    try changedAttr(it, h, name.bytes(), old)
     return Value.Undefined
 }
 
@@ -1203,10 +1290,13 @@ fn elementRemoveAttribute(it: *mut Interp, a: Args) JsError!Value {
     defer it.release(b)
     try argAttrName(it, a, 0, b)
     let doc = docOf(it)
-    if doc.attr(h, b.bytes()) != null {
+    if doc.attr(h, b.bytes()) |was| {
+        let before = try it.builder()
+        defer it.release(before)
+        try before.append(was)
         doc.removeAttr(h, b.bytes())
         try resetCanvas(scriptOf(it).active, h, b.bytes())
-        try changedAttr(it, b.bytes())
+        try changedAttr(it, h, b.bytes(), before.bytes())
     }
     return Value.Undefined
 }
@@ -1271,7 +1361,7 @@ fn replaceWithMarkup(it: *mut Interp, h: NodeId, context: []u8, src: []u8) JsErr
     for n in nodes.items() {
         doc.appendChild(target, n)
     }
-    try changed(it)
+    try changedAt(it, target, "")
 }
 
 fn elementOuterHtml(it: *mut Interp, a: Args) JsError!Value {
@@ -1302,7 +1392,7 @@ fn elementSetOuterHtml(it: *mut Interp, a: Args) JsError!Value {
         docOf(it).insertBefore(parent, n, h)
     }
     docOf(it).detach(h)
-    try changed(it)
+    try changedAt(it, parent, "")
     return Value.Undefined
 }
 
@@ -1530,14 +1620,16 @@ fn namedSet(s: *mut Script, o: u32, key: u32, value: Value) JsError!bool {
         let sv = try it.toStringValue(value)
         try v.append(it.heap.bytes(js.strOf(sv)))
     }
+    var changed_name: []u8 = "style"
     if isDataset(it, o) {
         try kebab(name, "data-", b)
         try s.active.doc.setAttr(h, b.bytes(), v.bytes())
+        changed_name = b.bytes()
     } else {
         try kebab(name, "", b)
         try setStyleDecl(s, h, b.bytes(), v.bytes())
     }
-    try changed(it)
+    try changedAt(it, h, changed_name)
     return true
 }
 
@@ -1642,7 +1734,7 @@ fn styleSetCssText(it: *mut Interp, a: Args) JsError!Value {
     defer it.release(b)
     try argText(it, a, 0, b)
     try docOf(it).setAttr(h, "style", b.bytes())
-    try changed(it)
+    try changedAt(it, h, "style")
     return Value.Undefined
 }
 
@@ -1680,7 +1772,7 @@ fn styleSetProperty(it: *mut Interp, a: Args) JsError!Value {
         try argText(it, a, 1, v)
     }
     try setStyleDecl(scriptOf(it), h, b.bytes(), v.bytes())
-    try changed(it)
+    try changedAt(it, h, "style")
     return Value.Undefined
 }
 
@@ -1696,7 +1788,7 @@ fn styleRemoveProperty(it: *mut Interp, a: Args) JsError!Value {
     // Mutation hooks allocate and may collect the string before we return.
     try it.push(old)
     try setStyleDecl(scriptOf(it), h, b.bytes(), "")
-    try changed(it)
+    try changedAt(it, h, "style")
     return it.pop()
 }
 

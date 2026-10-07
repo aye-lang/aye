@@ -386,6 +386,11 @@ fn akSetCeState(it: *mut Interp, a: Args) JsError!Value {
         let s = scriptOf(it)
         s.version += 1
         s.style_version += 1
+        if s.active == s.page {
+            try noteStateChange(s, h)
+        } else {
+            noteLayoutChangeAnywhere(s)
+        }
     }
     return Value.Undefined
 }

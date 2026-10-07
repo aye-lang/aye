@@ -3,6 +3,8 @@
 // through to HTTP. The runner creates the directory and keeps it private:
 // responses may contain personalized content. This is a benchmark tool,
 // not an HTTP cache (no expiry, validation, or cookie/header replay).
+// `data:` URLs hold their response: they are neither recorded nor
+// looked up.
 import std
 import std.mem.AllocError
 import std.mem.Allocator
@@ -46,6 +48,9 @@ fn archivePath(alloc: Allocator, dir: []u8, target: *Url, req: Request) AllocErr
 // error description, each on one line, then the unmodified body.
 pub fn archiveRead(alloc: Allocator, target: *Url, req: Request) FetchError!?Response {
     let dir = archiveDir("ANYKNOWN_REPLAY") orelse return null
+    if text.eql(target.scheme, "data") {
+        return null
+    }
     let path = try archivePath(alloc, dir, target, req)
     defer alloc.free(path)
     let bytes = std.fs.readFile(alloc, path) catch |e| {
@@ -89,6 +94,9 @@ fn archivedError(why: []u8) FetchError {
 
 pub fn archiveWrite(alloc: Allocator, target: *Url, req: Request, res: ?*Response, failure: []u8) {
     let dir = archiveDir("ANYKNOWN_RECORD") orelse return
+    if text.eql(target.scheme, "data") {
+        return
+    }
     saveArchive(alloc, dir, target, req, res, failure) catch |e| {
         std.log.err("cannot record archive: {}", target.withoutFragment())
     }

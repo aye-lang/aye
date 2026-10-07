@@ -247,6 +247,10 @@ pub struct Script {
     // Counts the changes that may change computed styles: all but those
     // of attributes no selector looks at in practice (`src`, `alt`...).
     style_version: u64
+    // Counts the changes that may move boxes: those in the document's
+    // tree, not in trees out of it (a template a framework fills before
+    // inserting it).
+    layout_version: u64
     // The style sheets `computed` has: their sources (sheetSourceKey).
     computed_sheets: u64
     title_version: u64
@@ -261,6 +265,10 @@ pub struct Script {
     // The layout geometry questions read (geometry.ore), and the font it
     // measures with when the page was never laid out.
     geom: ?*mut Geometry
+    // Where the document's tree changed since `geom` was laid out (the
+    // nodes `noteLayoutChange` took), or `restyle_all` when anywhere.
+    restyle: List(Change)
+    restyle_all: bool
     fixed: font.Fixed
     // The scroll offsets scripts gave scroll containers, by node index.
     scrolls: IntMap(u32, ScrollOffset)
@@ -478,6 +486,7 @@ fn createScript(p: *mut Page) AllocError!*mut Script {
         nav_submitter: null,
         version: 0,
         style_version: 0,
+        layout_version: 0,
         computed_sheets: 0,
         title_version: 0,
         ready: 0,
@@ -486,6 +495,8 @@ fn createScript(p: *mut Page) AllocError!*mut Script {
         height: 600.0,
         depth: 0,
         geom: null,
+        restyle: List(Change).init(alloc),
+        restyle_all: false,
         fixed: font.Fixed.init(),
         scrolls: IntMap(u32, ScrollOffset).init(alloc),
         scroll_x: 0.0,
@@ -562,6 +573,7 @@ pub fn destroyScript(s: *mut Script) {
     s.written.deinit()
     dropComputed(s)
     dropGeometry(s)
+    s.restyle.deinit()
     s.scrolls.deinit()
     s.timers.deinit()
     for line in s.console.items() {
@@ -750,6 +762,7 @@ fn insertWritten(s: *mut Script, el: NodeId) AllocError!void {
     }
     s.version += 1
     s.style_version += 1
+    noteLayoutChangeAnywhere(s)
     write_nesting += 1
     defer write_nesting -= 1
     for sc in scripts.items() {
@@ -1204,6 +1217,15 @@ pub fn hasScripts(p: *Page) bool {
 pub fn domVersion(p: *Page) u64 {
     if p.script |s| {
         return s.version + p.mutations
+    }
+    return p.mutations
+}
+
+// Counts the changes that may change the page's layout (`domVersion`
+// without the changes to trees out of the document).
+fn layoutVersion(p: *Page) u64 {
+    if p.script |s| {
+        return s.layout_version + p.mutations
     }
     return p.mutations
 }

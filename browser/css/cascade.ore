@@ -302,8 +302,19 @@ pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, o
         el: doc.root,
         scopes: List(Scope).init(out.alloc),
         part_host: doc.root,
+        picked_ua: List(usize).init(out.alloc),
+        picked_host: List(usize).init(out.alloc),
+        picked_own: List(usize).init(out.alloc),
+        reuse: false,
+        filters: null,
+        filter: AncestorFilter.empty(),
     }
     defer c.deinit()
+    var filters = AncestorFilters { map: IntMap(u32, AncestorFilter).init(out.alloc) }
+    defer filters.map.deinit()
+    if doc.shadows.len() == 0 {
+        c.filters = &mut filters
+    }
     try c.addScopes(author)
     var hints = text.Builder.init(out.alloc)
     defer hints.deinit()
@@ -348,24 +359,34 @@ fn stylePseudos(c: *mut Computer, ua: *Sheet, ua_pseudo: []usize, h: NodeId) All
     if n == 0 {
         return
     }
+    // The rules the index offers for `h`, once for both pseudo-elements.
+    try c.pickPseudoRules(ua, ua_pseudo, h, &mut c.picked_ua)
+    if host_scope |i| {
+        let sc = c.scopes.items()[i]
+        try c.pickPseudoRules(sc.sheet, sc.pseudo.items(), h, &mut c.picked_host)
+    }
+    if own |i| {
+        let sc = c.scopes.items()[i]
+        try c.pickPseudoRules(sc.sheet, sc.pseudo.items(), h, &mut c.picked_own)
+    }
     for which in 1..3 {
         for i in 0..c.wins.len {
             c.wins[i].set = false
         }
         c.clearCustoms()
         setShadowHost(null)
-        var any = try c.considerPseudo(ua, ua_pseudo, h, L_UA, which as u8)
+        var any = try c.considerPseudo(ua, c.picked_ua.items(), h, L_UA, which as u8)
         if host_scope |i| {
             let sc = c.scopes.items()[i]
             setShadowHost(h)
-            if try c.considerPseudo(sc.sheet, sc.pseudo.items(), h, L_HOST, which as u8) {
+            if try c.considerPseudo(sc.sheet, c.picked_host.items(), h, L_HOST, which as u8) {
                 any = true
             }
         }
         if own |i| {
             let sc = c.scopes.items()[i]
             setShadowHost(dom.hostOf(doc, root))
-            if try c.considerPseudo(sc.sheet, sc.pseudo.items(), h, L_AUTHOR, which as u8) {
+            if try c.considerPseudo(sc.sheet, c.picked_own.items(), h, L_AUTHOR, which as u8) {
                 any = true
             }
         }
@@ -399,6 +420,12 @@ pub fn computeStylesOf(doc: *Document, ua: *Sheet, author: *Sheet, media: Media,
         el: doc.root,
         scopes: List(Scope).init(out.alloc),
         part_host: doc.root,
+        picked_ua: List(usize).init(out.alloc),
+        picked_host: List(usize).init(out.alloc),
+        picked_own: List(usize).init(out.alloc),
+        reuse: false,
+        filters: null,
+        filter: AncestorFilter.empty(),
     }
     defer c.deinit()
     try c.addScopes(author)
@@ -424,6 +451,151 @@ pub fn computeStylesOf(doc: *Document, ua: *Sheet, author: *Sheet, media: Media,
         i -= 1
         try styleElement(&mut c, ua, author, &mut hints, chain.items()[i])
     }
+}
+
+/// Computes the styles of the elements under each of `roots` (the root
+/// and its descendants; only the root when it is `shallow` and its
+/// values and custom properties stay the same) again, into `out`, which
+/// has the styles of the whole document from before the changes under
+/// them: the ancestors of each root first (what it inherits, the root
+/// element's font size), as `computeStylesOf` does, unless the root
+/// before had the same parent. For a document without shadow trees.
+/// Returns how many elements it styled.
+pub fn restyleSubtrees(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, roots: []NodeId, shallow: []bool, out: *mut Styles) AllocError!usize {
+    let began = perf.start()
+    defer perf.end("restyle", began, "subtrees")
+    let a = out.arena.allocator()
+    let wins = try a.alloc(Win { set: false, level: 0, spec: 0, d: NO_DECL }, NPROPS)
+    var c = Computer {
+        doc: doc,
+        media: media,
+        out: out,
+        wins: wins,
+        root_font: 16.0,
+        centered: IntMap(u32, bool).init(out.alloc),
+        custom_wins: List(CustomWin).init(out.alloc),
+        custom_index: StrMap(usize).init(out.alloc),
+        level: null,
+        el: doc.root,
+        scopes: List(Scope).init(out.alloc),
+        part_host: doc.root,
+        picked_ua: List(usize).init(out.alloc),
+        picked_host: List(usize).init(out.alloc),
+        picked_own: List(usize).init(out.alloc),
+        reuse: false,
+        filters: null,
+        filter: AncestorFilter.empty(),
+    }
+    defer c.deinit()
+    c.reuse = true
+    var filters = AncestorFilters { map: IntMap(u32, AncestorFilter).init(out.alloc) }
+    defer filters.map.deinit()
+    c.filters = &mut filters
+    try c.addScopes(author)
+    var hints = text.Builder.init(out.alloc)
+    defer hints.deinit()
+    var ua_pseudo = List(usize).init(out.alloc)
+    defer ua_pseudo.deinit()
+    try pseudoRules(ua, &mut ua_pseudo)
+    var has_results = IntMap(u64, bool).init(out.alloc)
+    defer has_results.deinit()
+    setHasCache(&mut has_results)
+    defer setHasCache(null)
+    setRegistered(&author.registered)
+    defer setRegistered(null)
+    defer setShadowHost(null)
+    var chain = List(NodeId).init(out.alloc)
+    defer chain.deinit()
+    var old = List(Value).init(out.alloc)
+    defer old.deinit()
+    var styled: usize = 0
+    var last_parent: ?NodeId = null
+    var pending = List(Pending).init(out.alloc)
+    defer pending.deinit()
+    for ri, r in roots {
+        let parent = styleParent(doc, r)
+        // The custom properties the root inherited (styling the parent
+        // again makes new ones).
+        var inherited: ?*mut CustomLevel = null
+        if parent |p| {
+            inherited = out.customs.get(p.index)
+        }
+        let same_parent = last_parent != null && dom.isSame(parent, last_parent.?)
+        last_parent = parent
+        if !same_parent {
+            chain.clear()
+            var up = parent
+            while up |h| {
+                try chain.append(h)
+                up = styleParent(doc, h)
+            }
+            var i = chain.len()
+            while i > 0 {
+                i -= 1
+                try styleElement(&mut c, ua, author, &mut hints, chain.items()[i])
+            }
+            styled += chain.len()
+        }
+        if shallow[ri] {
+            // Down from the root while what the elements inherit changes.
+            pending.clear()
+            try pending.append(Pending { el: r, inherited: inherited })
+            while pending.pop() |e| {
+                let h = e.el
+                old.clear()
+                var had = false
+                if out.map.get(h.index) |values| {
+                    had = true
+                    for v in values {
+                        try old.append(v)
+                    }
+                }
+                let level = out.customs.get(h.index)
+                var had_own_customs = false
+                if level |l| {
+                    had_own_customs = true
+                    if e.inherited |i| {
+                        had_own_customs = l != i
+                    }
+                }
+                _ = out.customs.remove(h.index)
+                _ = out.before.remove(h.index)
+                _ = out.after.remove(h.index)
+                try styleElement(&mut c, ua, author, &mut hints, h)
+                let own_customs = c.custom_wins.len() > 0
+                try stylePseudos(&mut c, ua, ua_pseudo.items(), h)
+                styled += 1
+                let values = out.map.get(h.index) orelse old.items()
+                if !had || had_own_customs || own_customs || styleParent(doc, h) == null {
+                    // Custom properties and `rem` reach any descendant.
+                    styled += try restyleBelow(&mut c, ua, author, &mut hints, ua_pseudo.items(), h)
+                } else if !sameValues(old.items(), values) || text.eql(keywordText(values[TEXT_ALIGN]), "center") {
+                    var child = doc.firstChild(h)
+                    while child |ch| {
+                        if doc.node(ch).kind == Kind.Element {
+                            try pending.append(Pending { el: ch, inherited: level })
+                        }
+                        child = doc.nextSibling(ch)
+                    }
+                }
+            }
+            continue
+        }
+        var cur: ?NodeId = r
+        while cur |h| {
+            if doc.node(h).kind == Kind.Element {
+                // What the element had and may not have now.
+                _ = out.customs.remove(h.index)
+                _ = out.before.remove(h.index)
+                _ = out.after.remove(h.index)
+                try styleElement(&mut c, ua, author, &mut hints, h)
+                try stylePseudos(&mut c, ua, ua_pseudo.items(), h)
+                styled += 1
+            }
+            cur = doc.following(h, r)
+        }
+    }
+    return styled
 }
 
 // The root of the tree `h` is in (the document node, without looking,
@@ -460,6 +632,9 @@ fn styleElement(c: *mut Computer, ua: *Sheet, author: *Sheet, hints: *mut text.B
     }
     c.clearCustoms()
     c.el = h
+    if c.filters |f| {
+        c.filter = try f.of(doc, h)
+    }
     setShadowHost(null)
     try c.consider(ua, h, L_UA, MATCH_ELEMENT)
     if doc.quirks {
@@ -530,8 +705,24 @@ struct Computer {
     scopes: List(Scope)
     // The host whose `::part()` rules `consider` matches.
     part_host: NodeId
+    // The `::before` and `::after` rules of the UA sheet, of the host's
+    // scope and of the element's own scope that may match the element
+    // (`pickPseudoRules`).
+    picked_ua: List(usize)
+    picked_host: List(usize)
+    picked_own: List(usize)
+    // Compute an element's values into those it had (`restyleSubtrees`:
+    // the layout that pointed at them is gone).
+    reuse: bool
+    // For a document without shadow trees: the ancestors of the elements
+    // (ancestor_filter.ore), and those of the element being styled.
+    filters: ?*mut AncestorFilters
+    filter: AncestorFilter
 
     fn deinit(self: *mut Self) {
+        self.picked_ua.deinit()
+        self.picked_host.deinit()
+        self.picked_own.deinit()
         self.centered.deinit()
         self.custom_wins.deinit()
         self.custom_index.deinit()
@@ -658,6 +849,9 @@ struct Computer {
         var spec: u32 = 0
         for k in r.sel_start..r.sel_end {
             let cx = complexes[k]
+            if how == MATCH_ELEMENT && !self.ancestorsMayMatch(sheet, k) {
+                continue
+            }
             if (!matched || cx.spec > spec) && self.ruleMatches(sheet, cx, el, how) {
                 matched = true
                 if cx.spec > spec {
@@ -734,6 +928,52 @@ struct Computer {
     // Offers the declarations of the rules `rules` of `sheet` (at the
     // level `level`) that select the pseudo-element `pseudo` of `el`;
     // whether one did.
+    // The rules of `rules` (the `::before` and `::after` rules of
+    // `sheet`, in order) that the sheet's index offers for `el`, into
+    // `out`: a rule the index leaves out cannot match `el`, so
+    // neither its pseudo-elements.
+    fn pickPseudoRules(self: *mut Self, sheet: *Sheet, rules: []usize, el: NodeId, out: *mut List(usize)) AllocError!void {
+        out.clear()
+        if rules.len == 0 {
+            return
+        }
+        let candidates = try sheet.index.candidates(sheet, self.doc, el)
+        var previous: ?usize = null
+        for ri in candidates {
+            if previous == ri {
+                continue
+            }
+            previous = ri
+            // Binary search: is `ri` one of `rules`?
+            var lo: usize = 0
+            var hi = rules.len
+            while lo < hi {
+                let mid = lo + (hi - lo) / 2
+                if rules[mid] < ri {
+                    lo = mid + 1
+                } else {
+                    hi = mid
+                }
+            }
+            if lo < rules.len && rules[lo] == ri {
+                try out.append(ri)
+            }
+        }
+    }
+
+    // May the ancestors of the element being styled match complex `k` of
+    // `sheet` (whose index `candidates` built)?
+    fn ancestorsMayMatch(self: *Self, sheet: *Sheet, k: usize) bool {
+        if self.filters == null {
+            return true
+        }
+        let keys = sheet.index.ancestors.items()
+        if k >= keys.len || keys[k] == 0 {
+            return true
+        }
+        return self.filter.mayHave(keys[k])
+    }
+
     fn considerPseudo(self: *mut Self, sheet: *Sheet, rules: []usize, el: NodeId, level: u8, pseudo: u8) AllocError!bool {
         let complexes = sheet.complexes.items()
         let decls = sheet.decls.items()
@@ -744,6 +984,9 @@ struct Computer {
             var spec: u32 = 0
             for k in r.sel_start..r.sel_end {
                 let cx = complexes[k]
+                if !self.ancestorsMayMatch(sheet, k) {
+                    continue
+                }
                 if (!matched || cx.spec > spec) && matchesPseudo(sheet, self.doc, cx, el, pseudo) {
                     matched = true
                     if cx.spec > spec {
@@ -839,7 +1082,11 @@ struct Computer {
         if self.level |l| {
             try self.out.customs.put(el.index, l)
         }
-        let values = try self.computeValues(parent, is_root)
+        var into: ?[]mut Value = null
+        if self.reuse {
+            into = self.out.map.get(el.index)
+        }
+        let values = try self.computeValues(parent, is_root, into)
         try self.alignCenter(el, values)
         try self.out.map.put(el.index, values)
     }
@@ -849,7 +1096,7 @@ struct Computer {
     fn computePseudo(self: *mut Self, el: NodeId, pseudo: u8) AllocError!void {
         let parent = self.out.map.get(el.index) orelse return
         try self.customLevel(self.out.customs.get(el.index))
-        let values = try self.computeValues(parent, false)
+        let values = try self.computeValues(parent, false, null)
         let content = keywordText(values[CONTENT])
         if content.len == 0 || text.eql(content, "normal") || text.eql(content, "none") {
             return
@@ -862,9 +1109,18 @@ struct Computer {
     }
 
     // The computed values from the winning declarations, inheriting from
-    // `parent`.
-    fn computeValues(self: *mut Self, parent: []Value, is_root: bool) AllocError![]mut Value {
-        let values = try self.out.arena.allocator().alloc(Value.Initial, NPROPS)
+    // `parent`: in `into` when given (the element's values from before,
+    // which nothing else holds), else in new ones.
+    fn computeValues(self: *mut Self, parent: []Value, is_root: bool, into: ?[]mut Value) AllocError![]mut Value {
+        var values: []mut Value = []mut Value{}
+        if into |old| {
+            values = old
+            for i in 0..NPROPS {
+                values[i] = Value.Initial
+            }
+        } else {
+            values = try self.out.arena.allocator().alloc(Value.Initial, NPROPS)
+        }
         // font-size first: the other lengths are relative to it.
         let parent_font = numberOr(parent[FONT_SIZE], 16.0)
         if is_root {
@@ -1176,6 +1432,46 @@ pub fn writeNumber(n: f64, out: *mut text.Builder) AllocError!void {
             try out.appendInt(frac % 10)
         }
     }
+}
+
+// An element whose style `restyleSubtrees` computes again when what it
+// inherits changed, and the custom properties it inherited before.
+struct Pending {
+    el: NodeId
+    inherited: ?*mut CustomLevel
+}
+
+// Computes the styles of the descendants of `top` again.
+fn restyleBelow(c: *mut Computer, ua: *Sheet, author: *Sheet, hints: *mut text.Builder, ua_pseudo: []usize, top: NodeId) AllocError!usize {
+    let doc = c.doc
+    let out = c.out
+    var styled: usize = 0
+    var cur = doc.following(top, top)
+    while cur |h| {
+        if doc.node(h).kind == Kind.Element {
+            _ = out.customs.remove(h.index)
+            _ = out.before.remove(h.index)
+            _ = out.after.remove(h.index)
+            try styleElement(c, ua, author, hints, h)
+            try stylePseudos(c, ua, ua_pseudo, h)
+            styled += 1
+        }
+        cur = doc.following(h, top)
+    }
+    return styled
+}
+
+// Are the values of `a` and `b` the same?
+fn sameValues(a: []Value, b: []Value) bool {
+    if a.len != b.len {
+        return false
+    }
+    for i in 0..a.len {
+        if !sameValue(a[i], b[i]) {
+            return false
+        }
+    }
+    return true
 }
 
 /// Are two computed values the same?

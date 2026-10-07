@@ -28,6 +28,22 @@ fn script_layout_is_reused_until_a_change() {
     assert_eq!(trace.matches("ANYKNOWN_TIMING\tscript_layout\t").count(), 2, "{trace}");
 }
 
+/// A script that writes and reads in turns (as frameworks do) forces a
+/// layout per read, but the document is styled whole only once: each
+/// later layout styles again what the change reaches. Changes to a tree
+/// out of the document force none.
+#[test]
+fn interleaved_writes_and_reads_restyle_partially() {
+    let page = "data:text/html,<style>.on{height:5px}</style><div id=l></div><p id=out></p><script>let l=document.getElementById('l');for(let i=0;i<20;i++)l.append(document.createElement('div'));let loose=document.createElement('div'),sum=0;for(const c of l.children){c.className='on';loose.append(document.createElement('i'));sum+=l.offsetHeight;}document.getElementById('out').textContent=sum;</script>";
+    let out = Command::new(anyknown()).current_dir(root()).env("ANYKNOWN_TIMING", "1").args(["dump", "--text", "--js", page]).output().unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "1050\n");
+    let trace = text(&out.stderr);
+    assert_eq!(trace.matches("ANYKNOWN_TIMING\tscript_layout\t").count(), 20, "{trace}");
+    assert_eq!(trace.matches("ANYKNOWN_TIMING\trestyle\t").count(), 19, "{trace}");
+    assert!(trace.matches("ANYKNOWN_TIMING\tcascade\t").count() <= 2, "{trace}");
+}
+
 #[test]
 fn timing_preserves_output() {
     let args = ["dump", "--md", "--js", "browser/tests/agent/noscript.html"];
@@ -74,7 +90,9 @@ fn response_archive_replays_without_server() {
     let args = ["dump", "--md", "--js", &page];
     let recorded = Command::new(anyknown()).current_dir(root()).env("ANYKNOWN_RECORD", &dir).args(args).output().unwrap();
     assert!(recorded.status.success() && recorded.stderr.is_empty(), "{}", text(&recorded.stderr));
-    assert!(std::fs::read_dir(&dir).unwrap().count() >= 4);
+    // The stylesheet, script and image; not the data: page, which holds
+    // its own response.
+    assert!(std::fs::read_dir(&dir).unwrap().count() >= 3);
     let failure_url = "http://127.0.0.1:1/unavailable";
     let recorded_failure = Command::new(anyknown()).current_dir(root()).env("ANYKNOWN_RECORD", &dir).args(["dump", "--md", "--js", failure_url]).output().unwrap();
     assert!(!recorded_failure.status.success());

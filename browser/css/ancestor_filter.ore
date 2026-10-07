@@ -1,0 +1,138 @@
+// A quick "cannot match" test for selectors with a descendant or child
+// combinator: a selector whose compounds before the subject need an
+// ancestor with some id, class or type (`ancestorKey`) cannot match an
+// element none of whose ancestors has it. The ids, classes and types of
+// an element's ancestors are kept as a 256-bit Bloom filter
+// (`AncestorFilter`), so that "has none" may be wrong only the safe way.
+// The cascade uses it for documents without shadow trees (where the
+// ancestors a selector looks at are the parent elements).
+import dom.Document
+import dom.Kind
+import dom.NodeId
+import std.map.IntMap
+import std.mem.AllocError
+
+/// The ids, classes and types of a set of elements.
+pub struct AncestorFilter {
+    bits: [4]u64
+
+    pub fn empty() AncestorFilter {
+        return AncestorFilter { bits: [4]u64{ 0, 0, 0, 0 } }
+    }
+
+    fn add(self: *mut Self, key: u64) {
+        self.bits[(key & 3) as usize] |= (1 as u64) << ((key >> 2) & 63)
+        self.bits[((key >> 8) & 3) as usize] |= (1 as u64) << ((key >> 10) & 63)
+    }
+
+    /// May one of the elements have the key `key` (`ancestorKey`)?
+    pub fn mayHave(self: *Self, key: u64) bool {
+        let a = self.bits[(key & 3) as usize] & ((1 as u64) << ((key >> 2) & 63))
+        let b = self.bits[((key >> 8) & 3) as usize] & ((1 as u64) << ((key >> 10) & 63))
+        return a != 0 && b != 0
+    }
+
+    fn addElement(self: *mut Self, doc: *Document, el: NodeId) {
+        self.add(filterKey('t', doc.node(el).name))
+        if doc.attr(el, "id") |id| {
+            self.add(filterKey('#', id))
+        }
+        if doc.attr(el, "class") |classes| {
+            var i: usize = 0
+            while i < classes.len {
+                while i < classes.len && isSpaceByte(classes[i]) {
+                    i += 1
+                }
+                let start = i
+                while i < classes.len && !isSpaceByte(classes[i]) {
+                    i += 1
+                }
+                if i > start {
+                    self.add(filterKey('.', classes[start..i]))
+                }
+            }
+        }
+    }
+}
+
+// The key of an id ('#'), class ('.') or type ('t') `name`.
+fn filterKey(kind: u8, name: []u8) u64 {
+    var h: u64 = 14695981039346656037
+    h = (h ^ (kind as u64)) *% 1099511628211
+    for b in name {
+        var c = b
+        if kind == 't' && c >= 'A' && c <= 'Z' {
+            // Types compare ignoring ASCII case.
+            c += 32
+        }
+        h = (h ^ (c as u64)) *% 1099511628211
+    }
+    // Mix the high bits down: `add` uses the low ones.
+    h = h ^ (h >> 29)
+    if h == 0 {
+        h = 1
+    }
+    return h
+}
+
+/// The key an ancestor of the element must have for the complex
+/// selector `cx` to match it (0: none known): an id, class or type of
+/// the nearest compound before the subject that is an ancestor (after a
+/// descendant or child combinator, past compounds of siblings).
+pub fn ancestorKey(sheet: *Sheet, cx: Complex) u64 {
+    if cx.pseudo == PSEUDO_SLOTTED || cx.pseudo == PSEUDO_PART || cx.end <= cx.start + 1 {
+        return 0
+    }
+    let compounds = sheet.compounds.items()
+    var i = cx.end - 1
+    while i > cx.start {
+        let comb = compounds[i].combinator
+        i -= 1
+        if comb == ' ' || comb == '>' {
+            let comp = compounds[i]
+            for si in comp.start..comp.end {
+                let s = sheet.simples.items()[si]
+                if s.kind == SelKind.Id {
+                    return filterKey('#', s.name)
+                }
+            }
+            for si in comp.start..comp.end {
+                let s = sheet.simples.items()[si]
+                if s.kind == SelKind.Class {
+                    return filterKey('.', s.name)
+                }
+            }
+            for si in comp.start..comp.end {
+                let s = sheet.simples.items()[si]
+                if s.kind == SelKind.Type {
+                    return filterKey('t', s.name)
+                }
+            }
+            return 0
+        }
+    }
+    return 0
+}
+
+/// The filters of the ancestors of elements, by element index, during
+/// one styling pass (the document does not change meanwhile).
+pub struct AncestorFilters {
+    map: IntMap(u32, AncestorFilter)
+
+    /// The filter of the ancestors of `el`.
+    pub fn of(self: *mut Self, doc: *Document, el: NodeId) AllocError!AncestorFilter {
+        let p = parentElement(doc, el) orelse return AncestorFilter.empty()
+        return self.withSelf(doc, p)
+    }
+
+    // The filter of `el` and its ancestors.
+    fn withSelf(self: *mut Self, doc: *Document, el: NodeId) AllocError!AncestorFilter {
+        if self.map.get(el.index) |f| {
+            return f
+        }
+        var f = try self.of(doc, el)
+        f.addElement(doc, el)
+        try self.map.put(el.index, f)
+        return f
+    }
+}

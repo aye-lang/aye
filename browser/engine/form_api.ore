@@ -95,6 +95,7 @@ pub fn validate(page: *mut Page, el: NodeId, report: bool) AllocError!bool {
         page.doc.controls.validation = first
         if page.script |s| {
             s.version += 1
+            noteLayoutChangeAnywhere(s)
         }
     }
     return valid
