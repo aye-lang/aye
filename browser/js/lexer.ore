@@ -175,6 +175,11 @@ struct Lexer {
     braces: List(u32)
     depth: u32
     nl: bool
+    // For each open `(`: does it start the head of an `if`, `while` or
+    // `for`? After its `)` a `/` starts a regex: `if (x) /a/.test(s)`.
+    parens: List(bool)
+    // The last token is a `)` that closed such a head.
+    head_closed: bool = false
 
     fn fail(self: *mut Self, msg: []u8) SyntaxErr!void {
         self.out.message.clear()
@@ -348,7 +353,7 @@ struct Lexer {
         if c == '/' {
             var regex = true
             if self.lastKind() |k| {
-                regex = !endsExpr(k)
+                regex = !endsExpr(k) || (k == Tok.RParen && self.head_closed)
             }
             if regex {
                 return self.regex(start)
@@ -656,6 +661,7 @@ struct Lexer {
         let c3 = self.peekAt(3)
         var kind = Tok.Eof
         var n: usize = 1
+        var closed = false
         if c == '{' {
             kind = Tok.LBrace
             self.depth += 1
@@ -666,8 +672,16 @@ struct Lexer {
             }
         } else if c == '(' {
             kind = Tok.LParen
+            var head = false
+            if self.lastKind() |k| {
+                head = k == Tok.KwIf || k == Tok.KwWhile || k == Tok.KwFor
+            }
+            try self.parens.append(head)
         } else if c == ')' {
             kind = Tok.RParen
+            if self.parens.pop() |head| {
+                closed = head
+            }
         } else if c == '[' {
             kind = Tok.LBracket
         } else if c == ']' {
@@ -833,6 +847,7 @@ struct Lexer {
         } else {
             return self.fail("Invalid or unexpected token")
         }
+        self.head_closed = closed
         self.pos += n
         return self.emit(kind, start, 0.0, 0, 0)
     }
@@ -848,8 +863,10 @@ pub fn tokenize(alloc: Allocator, src: []u8, out: *mut Lexed) SyntaxErr!void {
         braces: List(u32).init(alloc),
         depth: 0,
         nl: false,
+        parens: List(bool).init(alloc),
     }
     defer lx.braces.deinit()
+    defer lx.parens.deinit()
     return lx.run()
 }
 
