@@ -1,0 +1,11 @@
+function function false false true 1
+function false true 1
+2 true false true false
+2 true false false
+undefined false true false false
+function 3
+function 3
+true function 3
+string x
+undefined true true true false
+7 false false true false
