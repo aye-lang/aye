@@ -6,8 +6,8 @@
 // show in the next relative URL an image resolves.
 function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
 const tail = (s) => s.startsWith('http') ? s : s.slice(s.lastIndexOf('/jsdom/') + 1);
-// (img.src resolves against the load-time base, `Page.base`; baseURI and
-// the image loads read the cached document base.)
+// (baseURI, the URL attributes and the image loads read the cached
+// document base.)
 function src() { return tail(new URL('x.png', document.baseURI).href); }
 log('none:', src(), src());
 const base = document.createElement('base');

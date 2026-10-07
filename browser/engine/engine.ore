@@ -53,7 +53,9 @@ pub struct Page {
     // The URL of the document: after redirects, or the one asked for
     // when the fetch failed.
     url: Url
-    // The document's base URL (`baseUrl`).
+    // The document's base URL when it was loaded or its URL last
+    // changed; about:blank and about:srcdoc documents keep it (see
+    // `currentBase`).
     base: Url
     // The HTTP status (200 for `file:` and `data:`); 0 when the fetch
     // failed and the document is an error page.
@@ -140,17 +142,29 @@ pub struct Page {
         return &mut self.history
     }
 
-    /// The URL that relative URLs of the document resolve against
+    /// The URL that relative URLs of the document resolve against now
     /// (links, forms, images, style sheets, scripts): the `href` of the
     /// first `base` element that has one, resolved against the
-    /// document's URL; else the document's URL.
-    pub fn baseUrl(self: *Self) *Url {
-        return &self.base
+    /// document's URL; else the document's URL. A `base` a script
+    /// added, changed or removed counts. about:blank and about:srcdoc
+    /// documents keep the one they got from their parent (`base`).
+    pub fn currentBase(self: *Self, alloc: Allocator) AllocError!Url {
+        if text.startsWith(self.url.href, "about:") {
+            return url.parse(alloc, self.base.href) catch |e| {
+                return AllocError.OutOfMemory
+            }
+        }
+        return documentBase(alloc, &self.doc, &self.url)
     }
 
-    /// Resolves `href`, a URL of the document, against its base URL.
+    /// Resolves `href`, a URL of the document, against its current base
+    /// URL.
     pub fn resolve(self: *Self, alloc: Allocator, href: []u8) url.UrlError!Url {
-        return url.resolve(alloc, &self.base, text.trim(href))
+        var base = self.currentBase(alloc) catch |e| {
+            return url.UrlError.OutOfMemory
+        }
+        defer base.deinit(alloc)
+        return url.resolve(alloc, &base, text.trim(href))
     }
 
     /// Resolves `href`, the URL of a link (or form) of the document that
@@ -417,7 +431,7 @@ fn newPage(alloc: Allocator, located: Url, status: i64, failure: []u8, doc: Docu
     })
 }
 
-/// The base URL of `doc`, whose URL is `address` (see `Page.baseUrl`).
+/// The base URL of `doc`, whose URL is `address` (see `Page.currentBase`).
 pub fn documentBase(alloc: Allocator, doc: *Document, address: *Url) AllocError!Url {
     if doc.cachedBase(address.href) |href| {
         if url.parse(alloc, href) |b| {

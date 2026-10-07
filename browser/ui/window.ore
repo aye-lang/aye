@@ -1037,7 +1037,7 @@ pub struct Ui {
                 // A link in a frame's document, resolved there.
                 if fp.page.tree |ft| {
                     if engine.linkAt(ft, fp.x, fp.y) |link| {
-                        let target = url.resolve(self.alloc, fp.page.baseUrl(), text.trim(link.href)) catch |e| {
+                        let target = fp.page.resolve(self.alloc, link.href) catch |e| {
                             return self.setLink(link.href)
                         }
                         defer target.deinit(self.alloc)
@@ -1049,7 +1049,7 @@ pub struct Ui {
         }
         if self.linkAt(x, y) |link| {
             if self.tab.page |p| {
-                let target = url.resolve(self.alloc, p.baseUrl(), text.trim(link.href)) catch |e| {
+                let target = p.resolve(self.alloc, link.href) catch |e| {
                     return self.setLink(link.href)
                 }
                 defer target.deinit(self.alloc)
