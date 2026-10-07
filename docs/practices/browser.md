@@ -299,6 +299,22 @@ document's capturing listeners still see the images' loads
 **Why:** pages put capturing load listeners on the window to run once;
 an image's load reaching them runs page setup again.
 
+### A page's scripts change the history before the tab shows it
+**Context:** state that scripts change and the front end keeps (the
+session history: `browser/engine/history.ore`, `tab.ore`).
+**Bad:** `Tab` kept the entries, and a page joined them only after
+`load` returned (`tab.push(target, p)`). SPAs call `replaceState` or
+`pushState` while they load, so a second list in the page would have
+been needed, and the agent and window back/forward always loaded the
+entry again (P3.29).
+**Good:** a page owns a `SessionHistory` from `newPage` (one entry,
+`Page.history`); the tab moves its entries into its own when it shows
+the page (`adoptPushed`, or `adoptAt` for a traversal) and points the
+page at it (`Page.shared`); every caller asks `p.sessionHistory()`.
+An entry's `doc` (the page id) says whether back stays in the document.
+**Why:** scripts run inside `load`; whatever they change must have a
+home before the tab has the page, and exactly one home after.
+
 ## Code style
 
 ### Write blocks and comments like the surrounding code
