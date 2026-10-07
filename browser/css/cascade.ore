@@ -305,8 +305,15 @@ pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, o
         picked_ua: List(usize).init(out.alloc),
         picked_host: List(usize).init(out.alloc),
         picked_own: List(usize).init(out.alloc),
+        filters: null,
+        filter: AncestorFilter.empty(),
     }
     defer c.deinit()
+    var filters = AncestorFilters { map: IntMap(u32, AncestorFilter).init(out.alloc) }
+    defer filters.map.deinit()
+    if doc.shadows.len() == 0 {
+        c.filters = &mut filters
+    }
     try c.addScopes(author)
     var hints = text.Builder.init(out.alloc)
     defer hints.deinit()
@@ -415,6 +422,8 @@ pub fn computeStylesOf(doc: *Document, ua: *Sheet, author: *Sheet, media: Media,
         picked_ua: List(usize).init(out.alloc),
         picked_host: List(usize).init(out.alloc),
         picked_own: List(usize).init(out.alloc),
+        filters: null,
+        filter: AncestorFilter.empty(),
     }
     defer c.deinit()
     try c.addScopes(author)
@@ -476,6 +485,9 @@ fn styleElement(c: *mut Computer, ua: *Sheet, author: *Sheet, hints: *mut text.B
     }
     c.clearCustoms()
     c.el = h
+    if c.filters |f| {
+        c.filter = try f.of(doc, h)
+    }
     setShadowHost(null)
     try c.consider(ua, h, L_UA, MATCH_ELEMENT)
     if doc.quirks {
@@ -552,6 +564,10 @@ struct Computer {
     picked_ua: List(usize)
     picked_host: List(usize)
     picked_own: List(usize)
+    // For a document without shadow trees: the ancestors of the elements
+    // (ancestor_filter.ore), and those of the element being styled.
+    filters: ?*mut AncestorFilters
+    filter: AncestorFilter
 
     fn deinit(self: *mut Self) {
         self.picked_ua.deinit()
@@ -683,6 +699,9 @@ struct Computer {
         var spec: u32 = 0
         for k in r.sel_start..r.sel_end {
             let cx = complexes[k]
+            if how == MATCH_ELEMENT && !self.ancestorsMayMatch(sheet, k) {
+                continue
+            }
             if (!matched || cx.spec > spec) && self.ruleMatches(sheet, cx, el, how) {
                 matched = true
                 if cx.spec > spec {
@@ -792,6 +811,19 @@ struct Computer {
         }
     }
 
+    // May the ancestors of the element being styled match complex `k` of
+    // `sheet` (whose index `candidates` built)?
+    fn ancestorsMayMatch(self: *Self, sheet: *Sheet, k: usize) bool {
+        if self.filters == null {
+            return true
+        }
+        let keys = sheet.index.ancestors.items()
+        if k >= keys.len || keys[k] == 0 {
+            return true
+        }
+        return self.filter.mayHave(keys[k])
+    }
+
     fn considerPseudo(self: *mut Self, sheet: *Sheet, rules: []usize, el: NodeId, level: u8, pseudo: u8) AllocError!bool {
         let complexes = sheet.complexes.items()
         let decls = sheet.decls.items()
@@ -802,6 +834,9 @@ struct Computer {
             var spec: u32 = 0
             for k in r.sel_start..r.sel_end {
                 let cx = complexes[k]
+                if !self.ancestorsMayMatch(sheet, k) {
+                    continue
+                }
                 if (!matched || cx.spec > spec) && matchesPseudo(sheet, self.doc, cx, el, pseudo) {
                     matched = true
                     if cx.spec > spec {

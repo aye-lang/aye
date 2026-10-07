@@ -32,6 +32,8 @@ pub struct RuleIndex {
     links: List(RuleLink)
     fallback: List(usize)
     selected: List(usize)
+    // Complex index to its `ancestorKey`.
+    ancestors: List(u64)
     rules: usize
     ready: bool
 
@@ -45,6 +47,7 @@ pub struct RuleIndex {
             links: List(RuleLink).init(alloc),
             fallback: List(usize).init(alloc),
             selected: List(usize).init(alloc),
+            ancestors: List(u64).init(alloc),
             rules: 0,
             ready: false,
         }
@@ -58,6 +61,7 @@ pub struct RuleIndex {
         self.links.deinit()
         self.fallback.deinit()
         self.selected.deinit()
+        self.ancestors.deinit()
     }
 
     fn build(self: *mut Self, sheet: *Sheet) AllocError!void {
@@ -97,6 +101,9 @@ pub struct RuleIndex {
             if fallback {
                 try self.fallback.append(ri)
             }
+        }
+        for cx in sheet.complexes.items() {
+            try self.ancestors.append(ancestorKey(sheet, cx))
         }
         self.rules = sheet.rules.len()
         self.ready = true
