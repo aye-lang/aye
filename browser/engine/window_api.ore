@@ -569,6 +569,9 @@ fn akCssNames(it: *mut Interp, a: Args) JsError!Value {
 // The computed values of the element `h` (in the document): the page's
 // when they are up to date, else computed for it and its ancestors only.
 fn computedValues(s: *mut Script, h: NodeId) AllocError!?[]css.Value {
+    if layoutStyles(s, h) |values| {
+        return values
+    }
     let st = try computedStyling(s)
     if st.styles.get(h) == null {
         try dom.assignSlots(&mut s.page.doc)

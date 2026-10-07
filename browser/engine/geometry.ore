@@ -456,6 +456,20 @@ fn layOut(s: *mut Script, styles: *mut css.Styles) AllocError!Boxes {
     return Boxes { tree: tree, first: first, next: next }
 }
 
+// The computed values of `el` in the layout scripts read, when it is up
+// to date (getComputedStyle then computes nothing): they are the
+// cascade of the whole document with the same sheets and viewport.
+fn layoutStyles(s: *mut Script, el: NodeId) ?[]css.Value {
+    let g = s.geom orelse return null
+    if g.version != layoutVersion(s.page) || g.width != s.width || g.height != s.height || g.styles.queried {
+        return null
+    }
+    if !s.page.doc.isConnected(el) {
+        return null
+    }
+    return g.styles.get(el)
+}
+
 // Moves the fixed and sticky boxes of the layout to the window's scroll
 // offset.
 fn followScroll(s: *mut Script, g: *mut Geometry) {
