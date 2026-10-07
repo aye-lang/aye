@@ -1563,6 +1563,22 @@ fn jsdom_fixtures() {
     assert!(failures.is_empty(), "{} of {} DOM fixture runs failed:\n\n{}", failures.len(), runs.len(), failures.join("\n\n"));
 }
 
+/// Under `ANYKNOWN_BENCHMARK=1`, `Date` is a fixed epoch plus the virtual
+/// clock, which a task's steps move: a loop that waits for `Date.now()`
+/// ends, after the same work on every run.
+#[test]
+fn benchmark_date_follows_virtual_clock() {
+    let page = "browser/tests/benchmark/date_now.html";
+    let dump = || {
+        let out = Command::new(anyknown()).current_dir(root()).env("ANYKNOWN_BENCHMARK", "1").args(["dump", "--text", "--js", page]).output().unwrap();
+        assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+        text(&out.stdout)
+    };
+    let got = dump();
+    assert_eq!(got, "date loop of 5 ms: n=166664\nepoch: true\nnew Date: true\ntimer 100 ms later: true\n");
+    assert_eq!(dump(), got);
+}
+
 /// The DOM fixtures again with a collection at every allocation
 /// (`ANYKNOWN_JS_GC=stress`): the bindings keep what they hold reachable.
 /// `gc_wrappers` allocates too much for that.
