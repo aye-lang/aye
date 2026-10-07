@@ -124,6 +124,21 @@ other axis scrolls. Layout then reads one value per axis.
 **Why:** every reader of the longhand would otherwise have to repeat
 the rule, and the one that forgets it lays out a different box.
 
+### Grep the site's CSS for the declaration before debugging layout
+**Context:** a real-site box has the wrong size and the layout code
+looks right.
+**Bad:** Wikipedia's page grid sets its tracks only with the
+`grid-template` shorthand, which `values.ore` did not expand; the
+declaration was dropped, both columns became `auto`, and the lead text
+got ~100 px beside the infobox. It read like a float or track-sizing bug
+(P3.46).
+**Good:** grep the archive for the rule (`grep -oh
+"grid-template:[^;}]*" target/sites/X/*.response`) and check that each
+property it uses is a longhand in `css.ore` or a case in
+`Declarer.shorthand` (`browser/css/values.ore`). Add a missing shorthand
+to `shorthandLonghands` too, so a `var()` in it still applies.
+**Why:** an unknown shorthand fails silently, like an invalid value.
+
 ## Paint
 
 ### A new display item kind needs an arm in `transformed()` and `moved()`
