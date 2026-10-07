@@ -284,7 +284,7 @@ pub fn styleInputs(doc: *Document, media: Media, styles: *Styles) u64 {
 
 let INPUT_SEED: u64 = 14695981039346656037
 
-// The key of the class `name` in `Styles.classes`: FNV-1a of it in
+// The key of the class `name` in `ClassInfo.keys`: FNV-1a of it in
 // lower case (quirks mode matches classes ignoring case).
 fn classKey(name: []u8) u64 {
     var h = INPUT_SEED
