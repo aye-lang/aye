@@ -101,6 +101,15 @@ pub fn textMetrics(t: *mut Tree, style: []Value) TextMetrics {
     return TextMetrics { font: f, ascent: m.ascent, descent: m.descent, line_height: lh }
 }
 
+/// The ellipsis of `text-overflow` in font `f`: U+2026, or three
+/// periods when the font has no glyph for it.
+pub fn ellipsisText(t: *mut Tree, f: font.Font) []u8 {
+    if t.measure.hasGlyph(f, 0x2026) {
+        return "…"
+    }
+    return "..."
+}
+
 /// The white-space mode of a style.
 pub struct WhiteSpace {
     // Spaces and tabs collapse.

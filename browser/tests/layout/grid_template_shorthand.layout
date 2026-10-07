@@ -1,0 +1,37 @@
+viewport 800x600
+  block <html> (0, 0) 800x156
+    block <body> (0, 0) 800x152
+      grid <div class="g page"> (0, 0) 400x60
+        block <div class="top"> (0, 0) 400x20
+          line (0, 0) 400x20
+            text (0, 2) 24x16 "top"
+        block <div class="start"> (0, 20) 100x20
+          line (0, 20) 100x20
+            text (0, 22) 40x16 "start"
+        block <div class="content"> (120, 20) 280x20
+          line (120, 20) 280x20
+            text (120, 22) 56x16 "content"
+        block <div class="foot"> (0, 40) 400x20
+          line (0, 40) 400x20
+            text (0, 42) 32x16 "foot"
+      grid <div class="g over"> (0, 64) 400x20
+        block <div> (0, 64) 50x20
+          line (0, 64) 50x20
+            text (0, 66) 8x16 "a"
+        block <div> (70, 64) 330x20
+          line (70, 64) 330x20
+            text (70, 66) 8x16 "b"
+      grid <div class="g none"> (0, 88) 400x40
+        block <div> (0, 88) 400x20
+          line (0, 88) 400x20
+            text (0, 90) 8x16 "a"
+        block <div> (0, 108) 400x20
+          line (0, 108) 400x20
+            text (0, 110) 8x16 "b"
+      grid <div class="g" style="grid-template-columns: 30px 1fr; grid-template: 'a b' 20px / 1fr 1fr"> (0, 132) 400x20
+        block <div> (0, 132) 30x20
+          line (0, 132) 30x20
+            text (0, 134) 8x16 "a"
+        block <div> (50, 132) 350x20
+          line (50, 132) 350x20
+            text (50, 134) 8x16 "b"
