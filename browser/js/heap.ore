@@ -63,6 +63,8 @@ pub enum Class {
     // fixed value), and an ES module namespace exotic object.
     ModuleBinding
     ModuleNamespace
+    // A typed array (typed.ore): its data is View.
+    TypedArray
 }
 
 pub enum ObjData {
@@ -83,6 +85,9 @@ pub enum ObjData {
     // A module binding's live cell: slot `slot` of environment `env`;
     // `name` (an atom) for the error of a read before its initialization.
     Cell { env: u32, slot: u32, name: u32 }
+    // A typed array's elements: `len` elements of `kind` (typed.ore) from
+    // byte `off` of `store`, the byte array of its ArrayBuffer.
+    View { store: u32, off: u32, len: u32, kind: u32 }
 }
 
 // Prop.flags

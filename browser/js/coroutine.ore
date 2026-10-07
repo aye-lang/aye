@@ -589,6 +589,7 @@ fn installGenerators(it: *mut Interp) JsError!void {
     try it.defineNative(e, "defineProperty", 3, engineDefineProperty)
     try it.defineNative(e, "deleteProperty", 2, engineDeleteProperty)
     try it.defineNative(e, "setPrototypeOf", 2, engineSetPrototypeOf)
+    try installTyped(it, e)
 }
 
 // construct(C, args, newTarget): `new C(...args)` with that new.target
