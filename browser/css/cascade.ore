@@ -64,15 +64,23 @@ import std.mem.Allocator
 import std.text
 
 /// The computed styles of the elements of a document: `NPROPS` values per
-/// element, indexed like `PROPERTIES`.
+/// element, indexed like `PROPERTIES`. Elements with the same values
+/// share one array (`intern`), which nothing writes while two hold it.
 pub struct Styles {
     alloc: Allocator
     arena: *mut Arena
     // Node index to its values.
-    map: IntMap(u32, []mut Value)
+    map: IntMap(u32, []Value)
     // Node index to the values of its `::before` and `::after`.
-    before: IntMap(u32, []mut Value)
-    after: IntMap(u32, []mut Value)
+    before: IntMap(u32, []Value)
+    after: IntMap(u32, []Value)
+    // The values elements hold, by `hashValues`, with how many hold them.
+    shared: IntMap(u64, Shared)
+    // Arrays no element holds any more, to take before new ones.
+    free: List([]mut Value)
+    // Where `computeValues` computes values before `intern` finds or
+    // makes the array to keep.
+    scratch: []mut Value
     // The `style` attributes and presentational hints, parsed.
     inline: Sheet
     // The UA rules of quirks mode.
@@ -126,12 +134,22 @@ pub struct Styles {
             initial[i] = p.initial
         }
         fixBorderWidths(initial)
+        let scratch = arena.allocator().alloc(Value.Initial, NPROPS) catch |e| {
+            quirks.deinit()
+            inline.deinit()
+            arena.deinit()
+            alloc.destroy(arena)
+            return e
+        }
         return Styles {
             alloc: alloc,
             arena: arena,
-            map: IntMap(u32, []mut Value).init(alloc),
-            before: IntMap(u32, []mut Value).init(alloc),
-            after: IntMap(u32, []mut Value).init(alloc),
+            map: IntMap(u32, []Value).init(alloc),
+            before: IntMap(u32, []Value).init(alloc),
+            after: IntMap(u32, []Value).init(alloc),
+            shared: IntMap(u64, Shared).init(alloc),
+            free: List([]mut Value).init(alloc),
+            scratch: scratch,
             inline: inline,
             quirks: quirks,
             customs: IntMap(u32, *mut CustomLevel).init(alloc),
@@ -169,6 +187,8 @@ pub struct Styles {
         self.map.deinit()
         self.before.deinit()
         self.after.deinit()
+        self.shared.deinit()
+        self.free.deinit()
         self.customs.deinit()
         self.quirks.deinit()
         self.inline.deinit()
@@ -192,11 +212,79 @@ pub struct Styles {
             m = &self.after
         }
         if m.get(el.index) |v| {
-            let values: []Value = v
-            return values
+            return v
         }
         return null
     }
+
+    // The array to keep for the computed values `values` (the scratch):
+    // the shared one with the same values, else a new one. `old`, the
+    // values the element had (only when nothing points at them but the
+    // element: `restyleSubtrees`), is held once less, and taken for new
+    // values when no element holds it any more. A count that misses a
+    // release only keeps an array longer.
+    fn intern(self: *mut Self, values: []Value, old: ?[]Value) AllocError![]Value {
+        let h = hashValues(values)
+        if self.shared.getPtr(h) |e| {
+            if sameBits(e.values, values) {
+                let found: []Value = e.values
+                if old |o| {
+                    if o.ptr == found.ptr {
+                        return o
+                    }
+                }
+                e.refs += 1
+                try self.release(old)
+                return found
+            }
+            // Other values with the same hash: an array of its own.
+            try self.release(old)
+            let own = try self.newArray()
+            for i in 0..NPROPS {
+                own[i] = values[i]
+            }
+            return own
+        }
+        try self.release(old)
+        let arr = try self.newArray()
+        for i in 0..NPROPS {
+            arr[i] = values[i]
+        }
+        try self.shared.put(h, Shared { values: arr, refs: 1 })
+        return arr
+    }
+
+    // Holds the shared values `old` once less; when no element holds
+    // them any more, they go to `free`.
+    fn release(self: *mut Self, old: ?[]Value) AllocError!void {
+        let o = old orelse return
+        let h = hashValues(o)
+        let e = self.shared.getPtr(h) orelse return
+        let mine: []Value = e.values
+        if mine.ptr != o.ptr || e.refs == 0 {
+            return
+        }
+        e.refs -= 1
+        if e.refs > 0 {
+            return
+        }
+        let arr = e.values
+        _ = self.shared.remove(h)
+        try self.free.append(arr)
+    }
+
+    fn newArray(self: *mut Self) AllocError![]mut Value {
+        if self.free.pop() |arr| {
+            return arr
+        }
+        return try self.arena.allocator().alloc(Value.Initial, NPROPS)
+    }
+}
+
+// Computed values some elements share, and how many hold them.
+struct Shared {
+    values: []mut Value
+    refs: u32
 }
 
 /// The content-box size of a query container (`h` < 0: only its inline
@@ -734,8 +822,9 @@ struct Computer {
     picked_ua: List(usize)
     picked_host: List(usize)
     picked_own: List(usize)
-    // Compute an element's values into those it had (`restyleSubtrees`:
-    // the layout that pointed at them is gone).
+    // Let an element's values from before go (`restyleSubtrees`: the
+    // layout that pointed at them is gone), to be written over when no
+    // other element holds them.
     reuse: bool
     // For a document without shadow trees: the ancestors of the elements
     // (ancestor_filter.ore), and those of the element being styled.
@@ -1078,7 +1167,7 @@ struct Computer {
 
     // The computed values of `el` from the winning declarations.
     fn compute(self: *mut Self, el: NodeId) AllocError!void {
-        var parent = self.out.initial
+        var parent: []Value = self.out.initial
         var is_root = true
         var inherited: ?*mut CustomLevel = null
         if styleParent(self.doc, el) |p| {
@@ -1092,13 +1181,13 @@ struct Computer {
         if self.level |l| {
             try self.out.customs.put(el.index, l)
         }
-        var into: ?[]mut Value = null
+        var old: ?[]Value = null
         if self.reuse {
-            into = self.out.map.get(el.index)
+            old = self.out.map.get(el.index)
         }
-        let values = try self.computeValues(parent, is_root, into)
+        let values = try self.computeValues(parent, is_root)
         try self.alignCenter(el, values)
-        try self.out.map.put(el.index, values)
+        try self.out.map.put(el.index, try self.out.intern(values, old))
     }
 
     // The computed values of the pseudo-element `pseudo` of `el` from the
@@ -1106,30 +1195,25 @@ struct Computer {
     fn computePseudo(self: *mut Self, el: NodeId, pseudo: u8) AllocError!void {
         let parent = self.out.map.get(el.index) orelse return
         try self.customLevel(self.out.customs.get(el.index))
-        let values = try self.computeValues(parent, false, null)
+        let values = try self.computeValues(parent, false)
         let content = keywordText(values[CONTENT])
         if content.len == 0 || text.eql(content, "normal") || text.eql(content, "none") {
             return
         }
+        let kept = try self.out.intern(values, null)
         if pseudo == 1 {
-            try self.out.before.put(el.index, values)
+            try self.out.before.put(el.index, kept)
         } else {
-            try self.out.after.put(el.index, values)
+            try self.out.after.put(el.index, kept)
         }
     }
 
     // The computed values from the winning declarations, inheriting from
-    // `parent`: in `into` when given (the element's values from before,
-    // which nothing else holds), else in new ones.
-    fn computeValues(self: *mut Self, parent: []Value, is_root: bool, into: ?[]mut Value) AllocError![]mut Value {
-        var values: []mut Value = []mut Value{}
-        if into |old| {
-            values = old
-            for i in 0..NPROPS {
-                values[i] = Value.Initial
-            }
-        } else {
-            values = try self.out.arena.allocator().alloc(Value.Initial, NPROPS)
+    // `parent`, in the scratch (`Styles.intern` keeps them).
+    fn computeValues(self: *mut Self, parent: []Value, is_root: bool) AllocError![]mut Value {
+        let values = self.out.scratch
+        for i in 0..NPROPS {
+            values[i] = Value.Initial
         }
         // font-size first: the other lengths are relative to it.
         let parent_font = numberOr(parent[FONT_SIZE], 16.0)
@@ -1482,6 +1566,44 @@ fn sameValues(a: []Value, b: []Value) bool {
         }
     }
     return true
+}
+
+// Are the values of `a` and `b` the same to the bit (`-0` is not `0`)?
+fn sameBits(a: []Value, b: []Value) bool {
+    for i in 0..a.len {
+        let x = a[i]
+        let y = b[i]
+        if tagOf(x) != tagOf(y) || !sameNumber(numberOf(x), numberOf(y)) || !sameNumber(calcPxOf(x), calcPxOf(y)) || !text.eql(keywordOf(x), keywordOf(y)) {
+            return false
+        }
+        let cx = colorOf(x)
+        let cy = colorOf(y)
+        if cx.r != cy.r || cx.g != cy.g || cx.b != cy.b || !sameNumber(cx.a, cy.a) {
+            return false
+        }
+    }
+    return true
+}
+
+fn sameNumber(a: f64, b: f64) bool {
+    return a == b && (a != 0.0 || 1.0 / a == 1.0 / b)
+}
+
+// A hash of the computed values `values` (equal for `sameBits` ones).
+fn hashValues(values: []Value) u64 {
+    var h: u64 = 0xCBF29CE484222325
+    for v in values {
+        var w = (tagOf(v) as u64) ^ @hash(numberOf(v)) ^ (@hash(calcPxOf(v)) << 1)
+        let c = colorOf(v)
+        w ^= ((c.r as u64) << 40) | ((c.g as u64) << 48) | ((c.b as u64) << 56)
+        w ^= @hash(c.a) << 2
+        for b in keywordOf(v) {
+            w = (w ^ (b as u64)) *% 1099511628211
+        }
+        h = (h ^ w) *% 0x9E3779B97F4A7C15
+        h ^= h >> 29
+    }
+    return h
 }
 
 /// Are two computed values the same?
