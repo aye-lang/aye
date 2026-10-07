@@ -1,0 +1,33 @@
+viewport 800x600
+  block <html> (0, 0) 800x1770
+    block <body> (0, 0) 800x1770
+      block <div> (0, 0) 200x100
+        replaced <svg viewbox="0 0 2 1"> (0, 0) 200x100
+      block <div> (0, 100) 200x50
+        replaced <svg viewbox="0 0 2 1" style="max-width: 100px"> (0, 100) 100x50
+      block <div> (0, 150) 200x80
+        replaced <svg viewbox="0 0 2 1" style="max-width: 100px; min-height: 80px"> (0, 150) 100x80
+      block <div> (0, 230) 200x150
+        replaced <svg viewbox="0 0 2 1" style="min-width: 300px"> (0, 230) 300x150
+      block <div> (0, 380) 200x120
+        replaced <svg viewbox="0 0 2 1" style="min-width: 300px; max-height: 120px"> (0, 380) 300x120
+      block <div> (0, 500) 200x40
+        replaced <svg viewbox="0 0 2 1" style="max-height: 40px"> (0, 500) 80x40
+      block <div> (0, 540) 200x40
+        replaced <svg viewbox="0 0 2 1" style="max-height: 40px; min-width: 120px"> (0, 540) 120x40
+      block <div> (0, 580) 200x150
+        replaced <svg viewbox="0 0 2 1" style="min-height: 150px"> (0, 580) 300x150
+      block <div> (0, 730) 200x150
+        replaced <svg viewbox="0 0 2 1" style="min-height: 150px; max-width: 250px"> (0, 730) 250x150
+      block <div> (0, 880) 200x60
+        replaced <svg viewbox="0 0 2 1" style="max-width: 100px; max-height: 80px; min-height: 60px"> (0, 880) 100x60
+      block <div> (0, 940) 200x40
+        replaced <svg viewbox="0 0 2 1" style="max-width: 150px; max-height: 40px; min-width: 100px"> (0, 940) 100x40
+      block <div> (0, 980) 200x400
+        replaced <svg viewbox="0 0 2 1" style="min-width: 300px; min-height: 400px; max-width: 500px"> (0, 980) 500x400
+      block <div> (0, 1380) 200x200
+        replaced <svg viewbox="0 0 2 1" style="min-width: 400px; min-height: 150px; max-height: 250px"> (0, 1380) 400x200
+      block <div> (0, 1580) 200x40
+        replaced <svg viewbox="0 0 2 1" style="min-width: 300px; max-height: 40px"> (0, 1580) 300x40
+      block <div> (0, 1620) 200x150
+        replaced <svg viewbox="0 0 2 1" style="max-width: 100px; min-height: 150px"> (0, 1620) 100x150
