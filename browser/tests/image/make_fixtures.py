@@ -31,6 +31,8 @@ import zlib
 
 from PIL import Image
 
+import make_ico_fixtures
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 manifest = []
 
@@ -954,12 +956,13 @@ def make_webps():
 
 def main():
     for f in os.listdir(HERE):
-        if f.endswith((".png", ".gif", ".jpg", ".webp", ".rgba", ".bin")) or f == "manifest.txt":
+        if f.endswith((".png", ".gif", ".jpg", ".webp", ".ico", ".cur", ".rgba", ".bin")) or f == "manifest.txt":
             os.remove(os.path.join(HERE, f))
     make_pngs()
     make_gifs()
     make_jpegs()
     make_webps()
+    make_ico_fixtures.make(save)
     save("empty.bin", b"", 0, 0, "unsupported")
     with open(os.path.join(HERE, "manifest.txt"), "w") as f:
         f.write("\n".join(manifest) + "\n")
