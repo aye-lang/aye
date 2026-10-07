@@ -17,35 +17,19 @@ import std.text
 import url
 import net
 
+// `import(arg, options)`: an exception of either expression is thrown at
+// once; everything after rejects the promise.
 fn evalImport(it: *mut Interp, arg: u32, options: u32, referrer: u32) JsError!Value {
     let base = it.stack.len()
     defer it.truncate(base)
-    var thrown = false
-    let spec = it.eval(arg) catch |e| {
-        if e != JsError.Thrown {
-            return e
-        }
-        thrown = true
-        it.exception
-    }
+    let spec = try it.eval(arg)
     try it.push(spec)
     var opts = Value.Undefined
-    if !thrown && options != 0 {
-        opts = it.eval(options) catch |e| {
-            if e != JsError.Thrown {
-                return e
-            }
-            thrown = true
-            it.exception
-        }
+    if options != 0 {
+        opts = try it.eval(options)
     }
     try it.push(opts)
-    // The thrown value takes the specifier's place.
-    var first = spec
-    if thrown && options != 0 && !(opts is .Undefined) {
-        first = opts
-    }
-    return callLoader(it, "dynamicImport", first, try it.atomValue(referrer), boolVal(thrown), opts)
+    return callLoader(it, "dynamicImport", spec, try it.atomValue(referrer), opts, Value.Undefined)
 }
 
 // Calls method `name` of the loader object (lib.ore) with four arguments.
@@ -73,7 +57,7 @@ pub fn importModule(it: *mut Interp, specifier: []u8, referrer: u32) JsError!Val
     defer it.truncate(base)
     let spec = try it.newString(specifier)
     try it.push(spec)
-    return callLoader(it, "dynamicImport", spec, try it.atomValue(referrer), boolVal(false), Value.Undefined)
+    return callLoader(it, "dynamicImport", spec, try it.atomValue(referrer), Value.Undefined, Value.Undefined)
 }
 
 /// Runs a module script of a page: the module at `href`, else the inline

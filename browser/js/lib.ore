@@ -830,12 +830,11 @@ pub let LIB =
     \\}
     \\const moduleLoader = {
     \\  // import(specifier, options) from code of `referrer`.
-    \\  dynamicImport(specifier, referrer, thrown, options) {
+    \\  dynamicImport(specifier, referrer, options) {
     \\    return new Promise((resolve, reject) => {
     \\      let spec;
     \\      let type = '';
     \\      try {
-    \\        if (thrown) throw specifier;
     \\        if (typeof specifier === 'symbol') throw new TypeError('Cannot convert a Symbol value to a string');
     \\        spec = String(specifier);
     \\        if (options !== undefined) {
