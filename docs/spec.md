@@ -718,6 +718,8 @@ pub fn main() {
 - `for x in xs { }` and `for i, x in xs { }` walk an array or a slice: `x`
   is a copy of each element, `i` its `usize` index; `xs` is evaluated once.
   To change elements, assign `xs[i]`.
+- `_` discards a loop variable: `for _ in 0..3 { }`, `for _, x in xs { }`,
+  `for i, _ in xs { }`.
 - `break` and `continue` apply to the innermost loop.
 - `return`, `return value`.
 - `defer stmt` runs `stmt` when the enclosing block is left: at its end,
@@ -919,7 +921,10 @@ Arms are separated by newlines or `,`.
 
 - As an expression, each arm is an expression (not a block), and all arms
   have the same type.
-- As a statement, each arm is a block or a call.
+- As a statement, each arm is a block or an expression statement: a call
+  (or builtin), `try`, `catch`, `match` or `unreachable`
+  (`.A => try self.f()`). `return` and assignments need a block:
+  `.A => { return 1 }`.
 - `x is .V` is `true` when the enum value `x` (or the enum that the
   pointer `x` points to) holds the variant `V`. It binds no fields (use
   `match` for them) and sits with the comparisons: `(x is .V) == b`,
@@ -1043,6 +1048,9 @@ pub fn main() !void {
   handled immediately with `try`, `catch`, or `return f()` (from a function
   whose set has all its errors). It cannot be stored in a variable, passed,
   compared or dropped.
+  `return f()` also needs the same payload type: in an `E!bool` function,
+  `return g()` with `g` returning `E!void` is E0023; write `try g()` and
+  then `return true`.
 - `return Set.Name` returns an error; `return value` returns the payload.
 - `try f()` gives the payload, or returns the error from the current
   function (which must return an error union whose set has the error).
@@ -1051,6 +1059,11 @@ pub fn main() !void {
   payload is not `void` the block must end with the replacement value (an
   expression as its last line: `catch |e| { report(e); old }`) or leave
   with `return`, `break` or `continue`. A `return` there returns from the enclosing function. `catch` binds looser than `+` and tighter than `==`.
+  `f() catch { ... }` (no `|e|`) is the same when the error is not needed.
+- An error passed on into a larger set (by `try` or `return`) keeps its
+  name, so `catch |e|` compares it with an error of any set that has it:
+  `run() catch |e| { if e == LexError.Invalid { ... } }`, where `run`
+  returns `All!void` and `error All = LexError || Mem`.
 - `if f() |v| { A } else |e| { B }` branches on an error union without
   leaving the function: `A` gets the payload `v`, `B` the error `e` (for
   `E!void`: `if f() { A } else |e| { B }`). The `else |e|` is required
