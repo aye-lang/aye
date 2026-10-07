@@ -32,6 +32,7 @@ SITES = {
     "abehiroshi": "http://abehiroshi.la.coocan.jp/",
     "zol": "https://www.zol.com.cn/",
     "youtube": "https://www.youtube.com/",
+    "youtube-search": "https://www.youtube.com/results?search_query=rust+programming",
     "react": "https://react.dev/",
     "mistral": "https://mistral.ai/news/mistral-large-4/",
 }

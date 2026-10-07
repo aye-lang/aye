@@ -110,10 +110,16 @@
       "note": "GBK decoded; the right edge is cut off past 1024 px; slowest site."
     },
     "youtube": {
-      "status": "fail",
+      "status": "ok",
       "max_errors": 0,
       "md": ["Try searching to get started"],
-      "note": "Only the loading skeleton on screen; the feed does not render. The Markdown now has the logged-out 'Try searching' prompt."
+      "note": "YouTube serves a cookieless visitor an empty feed (feedNudgeRenderer, \"Try searching to get started\"); we render exactly that."
+    },
+    "youtube-search": {
+      "status": "ok",
+      "max_errors": 0,
+      "md": ["Filters", "### Learn Rust Programming - Complete Course", "## Shorts"],
+      "note": "Video titles, channels, view counts and the Shorts shelf are in the Markdown. Replay is flaky under machine load (load 30+): which thumbnails get requested depends on timing, so some replays hit \"archive miss\" on i.ytimg.com images and check fails (about half the runs here)."
     },
     "react": {
       "status": "ok",
