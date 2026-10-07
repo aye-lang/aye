@@ -1,0 +1,21 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "IntersectionObserverEntry: the polyfills' feature test"
+      "\n"
+      <style>
+        "\nbody { margin: 0 }\n#shown { height: 100px; width: 200px }\n#gone { display: none }\n"
+      "\n"
+    <body>
+      <div id="shown">
+      "\n"
+      <div id="gone">
+      "\n"
+      <pre id="out">
+        "native true\ngetter time true\ngetter rootBounds true\ngetter boundingClientRect true\ngetter intersectionRect true\ngetter isIntersecting true\ngetter intersectionRatio true\ngetter target true\nno dict: TypeError\nshown true 0 number true 1 0,0,200,100 0,0,200,100 0,0,800,600\ngone true 0 number false 0 0,0,0,0 0,0,0,0 0,0,800,600\n"
+      "\n"
+      <script>
+        "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\n// The test of the IntersectionObserver polyfill (YouTube's\n// intersection-observer.min.js): when it fails, the polyfill replaces ours.\nlog('native', 'IntersectionObserver' in window && 'IntersectionObserverEntry' in window &&\n  'intersectionRatio' in window.IntersectionObserverEntry.prototype);\nconst proto = IntersectionObserverEntry.prototype;\nfor (const k of ['time', 'rootBounds', 'boundingClientRect', 'intersectionRect', 'isIntersecting', 'intersectionRatio', 'target']) {\n  const d = Object.getOwnPropertyDescriptor(proto, k);\n  log('getter', k, !!(d && d.get) && !d.set);\n}\ntry { new IntersectionObserverEntry(); log('no dict: no error'); } catch (e) { log('no dict:', e.constructor.name); }\nfunction rect(r) { return [r.x, r.y, r.width, r.height].join(','); }\nconst io = new IntersectionObserver(entries => {\n  for (const e of entries) {\n    log(e.target.id, e instanceof IntersectionObserverEntry, Object.keys(e).length,\n      typeof e.time, e.isIntersecting, e.intersectionRatio,\n      rect(e.boundingClientRect), rect(e.intersectionRect), rect(e.rootBounds));\n  }\n});\nio.observe(document.getElementById('shown'));\nio.observe(document.getElementById('gone'));\n"
+      "\n"
