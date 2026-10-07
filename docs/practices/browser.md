@@ -324,7 +324,7 @@ into a test in `tests/browser.rs`.
 **Context:** the browser crashes on a real site.
 **Good:** `browser/build.sh --mode safe` keeps bounds and overflow
 checks at about the speed of `fast`, so a panic names the line
-(`browser/build.sh:6-9`). The default `fast` build has no checks.
+(`browser/build.sh:10-14`). The default `fast` build has no checks.
 **Why:** a fast build turns a bounds error into silent memory damage
 far from its cause.
 
