@@ -1,0 +1,28 @@
+viewport 800x600
+  block <html> (0, 0) 800x120
+    block <body> (0, 0) 800x116
+      grid <div class="g"> (0, 0) 200x20
+        block <div style="min-width: 0; overflow: hidden"> (0, 0) 200x20
+          block <div class="w"> (0, 0) 300x20
+            line (0, 0) 300x20
+              text (0, 2) 88x16 "min-width 0"
+      grid <div class="g"> (0, 24) 200x20
+        block <div style="min-width: 0"> (0, 24) 200x20
+          block <div class="w"> (0, 24) 300x20
+            line (0, 24) 300x20
+              text (0, 26) 128x16 "min-width 0 only"
+      grid <div class="g"> (0, 48) 200x20
+        block <div style="overflow: hidden"> (0, 48) 200x20
+          block <div class="w"> (0, 48) 300x20
+            line (0, 48) 300x20
+              text (0, 50) 160x16 "overflow hidden only"
+      grid <div class="g"> (0, 72) 200x20
+        block <div style="min-width: 50px; overflow: hidden"> (0, 72) 200x20
+          block <div class="w"> (0, 72) 300x20
+            line (0, 72) 300x20
+              text (0, 74) 112x16 "min-width 50px"
+      grid <div class="g"> (0, 96) 200x20
+        block <div> (0, 96) 300x20
+          block <div class="w"> (0, 96) 300x20
+            line (0, 96) 300x20
+              text (0, 98) 136x16 "automatic minimum"
