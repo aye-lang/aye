@@ -1,0 +1,29 @@
+TypeError TypeError TypeError
+TypeError TypeError TypeError
+RangeError
+EvalError
+TypeError TypeError TypeError
+TypeError TypeError TypeError
+true true true
+SyntaxError
+false false true
+false false false
+TypeError TypeError
+TypeError enumerable,configurable,value,writable,get,set
+true e,v 5 x
+true 3 true
+TypeError
+false TypeError EvalError
+true false
+TypeError TypeError TypeError
+TypeError TypeError TypeError
+TypeError TypeError
+TypeError TypeError
+EvalError false false
+true 1 false false
+TypeError TypeError
+true true false
+EvalError
+TypeError TypeError TypeError
+true true
+TypeError TypeError true
