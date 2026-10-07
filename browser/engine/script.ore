@@ -94,10 +94,12 @@ let TASK_BACKSTOP_MS: u64 = 120000
 // Under GC stress (tests), only steps count, and fewer.
 let STRESS_STEPS: u64 = 2000000
 // On the virtual clock, time passes inside a task too: 1 ms per
-// STEPS_PER_MS steps (a fast interpreter's pace), so that code which
-// waits for the clock (a scheduler's time budget) ends, always after the
-// same work. Whole ms: a short task sees the clock stand still.
-let STEPS_PER_MS: u64 = 100000
+// STEPS_PER_MS steps (a JIT's pace), so that code which waits for the
+// clock (a scheduler's time budget) ends, always after the same work.
+// Whole ms: a short task sees the clock stand still. 100,000 was too
+// slow a pace: YouTube's work used up `dump`'s 30 s before its results
+// rendered (27 videos of 35), and zol and react asked for other URLs.
+let STEPS_PER_MS: u64 = 1000000
 
 var scripting_on: bool = false
 var real_clock: bool = false

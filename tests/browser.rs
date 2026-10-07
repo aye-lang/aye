@@ -1575,7 +1575,7 @@ fn benchmark_date_follows_virtual_clock() {
         text(&out.stdout)
     };
     let got = dump();
-    assert_eq!(got, "date loop of 5 ms: n=166664\nepoch: true\nnew Date: true\ntimer 100 ms later: true\n");
+    assert_eq!(got, "date loop of 5 ms: n=1666664\nepoch: true\nnew Date: true\ntimer 100 ms later: true\n");
     assert_eq!(dump(), got);
 }
 

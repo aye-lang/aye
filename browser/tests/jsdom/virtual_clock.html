@@ -6,19 +6,19 @@
 // so code that waits for the clock inside a task ends, and the same
 // page always counts the same.
 function log(s) { document.getElementById('out').textContent += s + '\n'; }
-const end = performance.now() + 5;
+const end = performance.now() + 1;
 let n = 0;
 while (performance.now() < end) n++;
-log('busy loop of 5 ms: n=' + n);
+log('busy loop of 1 ms: n=' + n);
 
-// A scheduler like YouTube's: run jobs until a 5 ms budget is spent,
+// A scheduler like YouTube's: run jobs until a 1 ms budget is spent,
 // then yield to the event loop and go on in the next task.
 const jobs = [];
 for (let i = 0; i < 300; i++) jobs.push(i);
 let tasks = 0, done = 0, sum = 0;
 function work() {
   tasks++;
-  const deadline = performance.now() + 5;
+  const deadline = performance.now() + 1;
   do {
     const j = jobs.shift();
     for (let k = 0; k < 10000; k++) sum += j;
@@ -36,7 +36,7 @@ let tasks2 = 0;
 const ch = new MessageChannel();
 ch.port1.onmessage = function () {
   tasks2++;
-  const deadline = performance.now() + 5;
+  const deadline = performance.now() + 1;
   do {
     jobs2.shift();
     for (let k = 0; k < 10000; k++) sum += k;
