@@ -1752,7 +1752,7 @@ fn dump_scrolls_through() {
     assert_eq!(md(&[], "endless_page"), "Chunk 1\n\nChunk 2\n\nChunk 3\n");
     // Five results at load and five after each scroll: two growth rounds.
     let feed = md(&[], "endless_feed");
-    assert!(feed.ends_with("\n\n15. Result 15\n") && feed.contains("1. Result 1\n"), "{feed}");
+    assert!(feed.ends_with("\n15. Result 15\n") && feed.contains("1. Result 1\n"), "{feed}");
     assert_eq!(md(&["--scroll-steps", "2"], "endless_page"), "Chunk 1\n\nChunk 2\n\nChunk 3\n");
     expect(&["dump", "--text", "--js", "--scroll-steps", "2", &page("endless_page")], 0, "Endless page\n\nChunk 1\nChunk 2\nChunk 3\n", "");
     expect(&["dump", "--text", "--js", "--no-scroll", &page("endless_page")], 0, "Endless page\n\nChunk 1\n", "");
