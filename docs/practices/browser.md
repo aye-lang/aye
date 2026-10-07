@@ -111,6 +111,19 @@ cascade lets any author value win. Layout reads only the computed style.
 **Why:** a hint has the lowest author priority; only the cascade knows
 whether a rule set the property.
 
+### Apply the computed-value rules that couple two properties
+**Context:** a property whose computed value depends on another one,
+such as `overflow-x` and `overflow-y`.
+**Bad:** YouTube's `ytd-search` has only `overflow-y: hidden`. Its
+`overflow-x` stayed `visible`, so the flex code (`flex.ore:286`, which
+reads `overflow-x`) gave it an automatic minimum, and the results ran
+72 px past the right edge (P3.44).
+**Good:** fix the pair in the cascade, once, as `fixOverflow` does
+(`browser/css/cascade.ore:1438`): `visible` becomes `auto` when the
+other axis scrolls. Layout then reads one value per axis.
+**Why:** every reader of the longhand would otherwise have to repeat
+the rule, and the one that forgets it lays out a different box.
+
 ## Paint
 
 ### A new display item kind needs an arm in `transformed()` and `moved()`
@@ -614,6 +627,20 @@ went to 262144 (`browser/js/shapes.ore`): hits 27% → 48%, shapeless
 **Why:** a cap that only guards against hostile scripts must sit far
 above what real pages use; when it sits below, the fast path quietly
 becomes the exception.
+
+### A higher cache hit rate is not a CPU win: sample the slow path first
+**Context:** widening an engine cache (more kinds of hits) to save CPU.
+**Bad:** P4.20 cached reads 2–8 prototypes up and reads on DOM wrappers
+(`fillChain` in `browser/js/shapes.ore`). It was measured and not merged.
+On youtube-search
+hits went 54% → 59% of 45M cached-site reads, but CPU did not move
+(median 12.21 s → 12.39 s, 5 runs each, noise); github and react ±1%.
+**Good:** before widening, count the misses by kind and sample the
+lookup itself. `getFrom` + `Heap_findProp` were ~6% of samples; the
+misses are mostly polymorphic sites with one own-slot entry (13.8M) and
+chains through a dictionary prototype (2.3M), not missing hit kinds.
+**Why:** a miss costs one short chain walk; saving a fraction of 6%
+cannot show through the noise of a 12 s replay.
 
 ### Turn a fast path off per element, not per document
 **Context:** a fast path that is unsafe for some elements of a page

@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0 }
+.g { display: grid; grid-template-columns: 1fr; width: 200px; margin-bottom: 4px }
+.w { width: 300px; height: 20px }
+</style>
+<!-- A 1fr track's minimum is the item's minimum contribution: min-width 0,
+     or none for a scroll container (GitHub's sidebar) -->
+<div class="g"><div style="min-width: 0; overflow: hidden"><div class="w">min-width 0</div></div></div>
+<div class="g"><div style="min-width: 0"><div class="w">min-width 0 only</div></div></div>
+<div class="g"><div style="overflow: hidden"><div class="w">overflow hidden only</div></div></div>
+<div class="g"><div style="min-width: 50px; overflow: hidden"><div class="w">min-width 50px</div></div></div>
+<div class="g"><div><div class="w">automatic minimum</div></div></div>
