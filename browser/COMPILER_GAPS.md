@@ -9,7 +9,9 @@ design; then the fixed ones. Each entry: **Need**, **Repro**,
 **Workaround** (what `browser/` does today), **Hit by** (component and
 branch: B1 url/net/html/dom/encoding and the CLI, B2 css, B3
 font/layout, B4 paint/engine/ui, B5 forms and images, B6 js, B7 agent,
-B8 the real web) and **Status**.
+B8 the real web) and **Status**. The framework lane
+(`docs/plans/framework.md`) records its gaps here too, with the F step
+under **Hit by**.
 
 Every entry was checked again against `target/release/ore` at the M9.8
 head (M9.9's re-check) with a small program per entry: the repro, or
