@@ -134,6 +134,7 @@ step only finds and writes down the cause; the fix is the next step.
 | P3.28 | `ToPropertyDescriptor`: reject a non-callable `get`/`set` and a descriptor mixing `value`/`writable` with `get`/`set` (TypeError) | JS test vs Node 22 | P3.27 | all |
 | P3.29 | History API: `history.pushState`/`replaceState` are no-ops (`browser/engine/prelude.ore:1416`). Implement the session history entries (URL, state, title), `location` updates, `popstate` on back/forward, `history.length`/`state`, and the agent's current URL following it | jsdom/window test; `check --agent` react task checks the URL again | P1.3 | P3.4–8 |
 | P3.30 | After P3.29: diagnose why the GitHub (Issues), Mistral (Blog) and YouTube (search) agent tasks do not navigate (a script cancels the click/submit); fix or split into steps; remove their `task_fails` | `check --agent` passes on the three | P3.29 | P3.4–8 |
+| P3.31 | XHR events and upload: fire `loadstart`/`progress` (and on `xhr.upload`), add the `upload` object | net fixture with event order vs the spec | P3.24 | P3.4–8 |
 | P3.21 | Fetch guards: Response headers read-only (`immutable` guard), Request headers drop forbidden names, a Request's abort listener on its source signal is removed when the request settles | jsdom test vs Node 22 | P3.15 | P3.17 after it merges |
 
 ### P4: Load time

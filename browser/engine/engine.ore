@@ -186,7 +186,9 @@ pub struct Page {
             if self.styling |st| {
                 if st.media.width == width && st.media.height == height && self.sheet_key == key {
                     try dom.assignSlots(&mut self.doc)
-                    try restyleWithSizes(self.alloc, &self.doc, &st.ua, &st.author, st.media, &mut st.styles)
+                    if !stylesCurrent(&self.doc, st.media, &st.styles) {
+                        try restyleWithSizes(self.alloc, &self.doc, &st.ua, &st.author, st.media, &mut st.styles)
+                    }
                     st.version = domVersion(self)
                     same = true
                 }
@@ -221,7 +223,8 @@ pub struct Page {
     }
 
     /// Computes the styles again after the document changed, with the
-    /// same style sheets; `layoutPage` lays it out again.
+    /// same style sheets, unless nothing they depend on changed
+    /// (`stylesCurrent`); `layoutPage` lays it out again.
     pub fn restyle(self: *mut Self) AllocError!void {
         self.dropTree()
         if self.styling |st| {
@@ -231,7 +234,9 @@ pub struct Page {
                 return
             }
             try dom.assignSlots(&mut self.doc)
-            try restyleWithSizes(self.alloc, &self.doc, &st.ua, &st.author, st.media, &mut st.styles)
+            if !stylesCurrent(&self.doc, st.media, &st.styles) {
+                try restyleWithSizes(self.alloc, &self.doc, &st.ua, &st.author, st.media, &mut st.styles)
+            }
             st.version = domVersion(self)
         }
     }
@@ -257,6 +262,14 @@ pub struct Page {
         try css.computeStyles(&self.doc, &ua, &author, media, &mut styles)
         return self.alloc.create(Styling { media: media, ua: ua, author: author, styles: styles, version: domVersion(self) })
     }
+}
+
+/// Are `styles` (computed with the sheets they are used with) what
+/// computing the styles of `doc` for `media` again would give: computed
+/// in full, and nothing they depend on changed since
+/// (css/inputs.ore)?
+fn stylesCurrent(doc: *Document, media: css.Media, styles: *css.Styles) bool {
+    return styles.inputs != 0 && styles.inputs == css.styleInputs(doc, media, styles)
 }
 
 /// Loads `target`: fetches it, decodes and parses the document. A fetch

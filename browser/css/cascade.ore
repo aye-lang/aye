@@ -89,6 +89,14 @@ pub struct Styles {
     // size: the layout should tell the sizes and the styles be computed
     // again when they changed.
     queried: bool
+    // `styleInputs` when `computeStyles` computed these styles (0 when
+    // something else changed them, or never): they are current while it
+    // stays the same (inputs.ore).
+    inputs: u64
+    // What the selectors of the sheets these styles were computed with
+    // look at of `class` (inputs.ore `noteClasses`): valid while those
+    // sheets are, as `inputs` is only compared with them.
+    class_infos: List(*ClassInfo)
 
     pub fn init(alloc: Allocator) AllocError!Styles {
         let arena = try alloc.create(Arena.init(alloc))
@@ -130,6 +138,8 @@ pub struct Styles {
             initial: initial,
             sizes: IntMap(u32, ContainerSize).init(alloc),
             queried: false,
+            inputs: 0,
+            class_infos: List(*ClassInfo).init(alloc),
         }
     }
 
@@ -154,6 +164,7 @@ pub struct Styles {
     }
 
     pub fn deinit(self: *mut Self) {
+        self.class_infos.deinit()
         self.sizes.deinit()
         self.map.deinit()
         self.before.deinit()
@@ -287,6 +298,7 @@ struct Scope {
 pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, out: *mut Styles) AllocError!void {
     let began = perf.start()
     defer perf.end("cascade", began, "document")
+    out.inputs = 0
     let a = out.arena.allocator()
     let wins = try a.alloc(Win { set: false, level: 0, spec: 0, d: NO_DECL }, NPROPS)
     var c = Computer {
@@ -338,6 +350,11 @@ pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, o
         }
         cur = dom.shadowIncludingFollowing(doc, h, doc.root)
     }
+    out.class_infos.clear()
+    try noteClasses(ua, out)
+    try noteClasses(author, out)
+    try noteClasses(&out.quirks, out)
+    out.inputs = styleInputs(doc, media, out)
 }
 
 // The styles of the `::before` and `::after` of the element `h`.
@@ -402,6 +419,7 @@ fn stylePseudos(c: *mut Computer, ua: *Sheet, ua_pseudo: []usize, h: NodeId) All
 pub fn computeStylesOf(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, el: NodeId, out: *mut Styles) AllocError!void {
     let began = perf.start()
     defer perf.end("cascade_read", began, "ancestors")
+    out.inputs = 0
     if out.map.contains(el.index) {
         return
     }
@@ -464,6 +482,7 @@ pub fn computeStylesOf(doc: *Document, ua: *Sheet, author: *Sheet, media: Media,
 pub fn restyleSubtrees(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, roots: []NodeId, shallow: []bool, out: *mut Styles) AllocError!usize {
     let began = perf.start()
     defer perf.end("restyle", began, "subtrees")
+    out.inputs = 0
     let a = out.arena.allocator()
     let wins = try a.alloc(Win { set: false, level: 0, spec: 0, d: NO_DECL }, NPROPS)
     var c = Computer {

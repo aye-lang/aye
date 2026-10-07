@@ -7,6 +7,7 @@ import css
 import dom
 import dom.NodeId
 import engine
+import font
 import html
 import js
 import net
@@ -335,4 +336,123 @@ test "wrappers of nodes in the document keep their properties" {
     js.collectGarbage(&mut p.script.?.it)
     @expect(try evalText(p, "document.getElementById('p').note", &mut out))
     @expectEqual("kept", out.bytes())
+}
+
+// The color of `el` in the styles of `p`, as text, into `out`.
+fn styledColor(p: *engine.Page, el: NodeId, out: *mut text.Builder) !void {
+    out.clear()
+    let v = p.styling.?.styles.get(el).?
+    try css.writeValue(v[css.COLOR], out)
+}
+
+// Marks the color of `el` in the styles of `p`: it stays "marked" while
+// those styles are kept.
+fn markColor(p: *mut engine.Page, el: NodeId) {
+    let v = p.styling.?.styles.map.get(el.index).?
+    v[css.COLOR] = css.Value.Keyword { k: "marked" }
+}
+
+test "a restyle keeps the styles while nothing they depend on changed" {
+    let a = @testAllocator()
+    engine.setScripting(true)
+    let u = try url.parse(a, "data:text/html,<style>.on { color: red } :focus { color: blue } @media (max-width: 500px) { p { color: green } }</style><p id=p class=x tabindex=0>t</p>")
+    defer u.deinit(a)
+    let p = try engine.load(a, &u)
+    defer p.destroy()
+    var fixed = font.Fixed.init()
+    try p.layoutPage(&mut fixed, 800.0, 600.0)
+    let el = p.doc.getElementById("p").?
+    var out = text.Builder.init(a)
+    defer out.deinit()
+    try styledColor(p, el, &mut out)
+    @expectEqual("rgb(0, 0, 0)", out.bytes())
+    // Nothing changed: the styles stay.
+    markColor(p, el)
+    try p.restyle()
+    try p.layoutPage(&mut fixed, 800.0, 600.0)
+    try styledColor(p, el, &mut out)
+    @expectEqual("marked", out.bytes())
+    // A class that no rule names changes no style.
+    @expect(try evalText(p, "document.getElementById('p').classList.add('nobody'); 0", &mut out))
+    try p.restyle()
+    try styledColor(p, el, &mut out)
+    @expectEqual("marked", out.bytes())
+    // A class a rule names does.
+    @expect(try evalText(p, "document.getElementById('p').classList.add('on'); 0", &mut out))
+    try p.restyle()
+    try styledColor(p, el, &mut out)
+    @expectEqual("rgb(255, 0, 0)", out.bytes())
+    // So does a change no script made (the agent's), which no version
+    // counts.
+    markColor(p, el)
+    try p.doc.setAttr(el, "class", "x")
+    try p.restyle()
+    try styledColor(p, el, &mut out)
+    @expectEqual("rgb(0, 0, 0)", out.bytes())
+    // And the focus.
+    markColor(p, el)
+    p.doc.controls.focus = el
+    try p.restyle()
+    try styledColor(p, el, &mut out)
+    @expectEqual("rgb(0, 0, 255)", out.bytes())
+    // And the viewport.
+    p.doc.controls.focus = null
+    try p.restyle()
+    markColor(p, el)
+    try p.layoutPage(&mut fixed, 400.0, 600.0)
+    try styledColor(p, el, &mut out)
+    @expectEqual("rgb(0, 128, 0)", out.bytes())
+    try p.layoutPage(&mut fixed, 800.0, 600.0)
+    try styledColor(p, el, &mut out)
+    @expectEqual("rgb(0, 0, 0)", out.bytes())
+}
+
+test "style inputs see a class only where a selector can" {
+    let a = @testAllocator()
+    var doc = try html.parse(a, "<p id=p><a id=a>t</a><span id=s>u</span></p>")
+    defer doc.deinit()
+    let media = css.Media { width: 800.0, height: 600.0 }
+    var ua = try css.Sheet.init(a)
+    defer ua.deinit()
+    var author = try css.Sheet.init(a)
+    defer author.deinit()
+    try css.parseSheet(&mut author, "a:not([class]) { color: red } .on { color: blue } :is(span):not([class~=k]) { margin-top: 1px } div [class$=z] { color: green }", media)
+    var styles = try css.Styles.init(a)
+    defer styles.deinit()
+    try css.computeStyles(&doc, &ua, &author, media, &mut styles)
+    let start = styles.inputs
+    @expect(start != 0)
+    @expectEqual(start, css.styleInputs(&doc, media, &styles))
+    let p = doc.getElementById("p").?
+    let link = doc.getElementById("a").?
+    let span = doc.getElementById("s").?
+    // Classes no selector names, where the attribute selectors on
+    // `class` give the same answers.
+    try doc.setAttr(span, "class", "nobody")
+    try doc.setAttr(p, "class", "nobody else")
+    @expectEqual(start, css.styleInputs(&doc, media, &styles))
+    // `a:not([class])`: the first class of a link.
+    try doc.setAttr(link, "class", "nobody")
+    @expect(css.styleInputs(&doc, media, &styles) != start)
+    doc.removeAttr(link, "class")
+    @expectEqual(start, css.styleInputs(&doc, media, &styles))
+    try doc.setAttr(span, "class", "nobody k")
+    @expect(css.styleInputs(&doc, media, &styles) != start)
+    try doc.setAttr(span, "class", "nobody")
+    try doc.setAttr(p, "class", "On")
+    @expect(css.styleInputs(&doc, media, &styles) != start)
+    // The case of a named class counts (`.on` does not match "On").
+    let upper = css.styleInputs(&doc, media, &styles)
+    try doc.setAttr(p, "class", "on")
+    @expect(css.styleInputs(&doc, media, &styles) != upper)
+    try doc.setAttr(p, "class", "xyz")
+    @expect(css.styleInputs(&doc, media, &styles) != start)
+    try doc.setAttr(p, "class", "")
+    @expectEqual(start, css.styleInputs(&doc, media, &styles))
+    // Anything else counts.
+    try doc.setAttr(p, "title", "x")
+    @expect(css.styleInputs(&doc, media, &styles) != start)
+    doc.removeAttr(p, "title")
+    @expectEqual(start, css.styleInputs(&doc, media, &styles))
+    @expect(css.styleInputs(&doc, css.Media { width: 799.0, height: 600.0 }, &styles) != start)
 }

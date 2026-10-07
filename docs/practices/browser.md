@@ -443,6 +443,24 @@ value. Make the cascade itself cheap where it matters
 correct to force a layout, so its cost has to follow the size of the
 change, not of the document.
 
+### Keep styles by a fingerprint of their inputs, not by a version
+**Context:** skipping a restyle (or other cached work) when nothing it
+depends on changed.
+**Bad:** `Page.restyle` styled the whole document on every call, since
+`domVersion` misses changes no script makes: the agent sets
+`aria-checked` and a `details`' `open` itself
+(`browser/agent/actions.ore:324`, `:337`), and focus and control values
+live in `doc.controls`. GitHub's replay styled its document 7 times.
+**Good:** `css.styleInputs` (`browser/css/inputs.ore`) hashes all that
+the cascade reads besides the sheets; `computeStyles` keeps it in
+`Styles.inputs`, and `stylesCurrent` (`browser/engine/engine.ore`)
+compares. Of `class` it takes only what selectors can see, so a class
+no rule names costs no cascade. A fixture that checks reuse logs into a
+JS array and writes the page once at the end
+(`browser/tests/jsdom/layout_unseen.html`): its own log would change the
+page between reads.
+**Why:** a fingerprint sees every writer, also the ones nobody counted.
+
 ### Replay must not change what a page sees
 **Context:** offline replays (`ANYKNOWN_REPLAY`) for performance work.
 **Bad:** the archive answered `data:` URLs too and missed them; once img
