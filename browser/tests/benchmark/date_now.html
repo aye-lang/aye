@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<title>Benchmark clock</title>
+<pre id="out"></pre>
+<script>
+// Under ANYKNOWN_BENCHMARK, Date is a fixed epoch plus the virtual clock:
+// a loop that waits for Date.now() ends after the same work every run.
+function log(s) { document.getElementById('out').textContent += s + '\n'; }
+const end = Date.now() + 5;
+let n = 0;
+while (Date.now() < end) n++;
+log('date loop of 5 ms: n=' + n);
+const d = Date.now() - Math.floor(performance.now());
+log('epoch: ' + (d >= 1791331200000 && d <= 1791331200001));
+log('new Date: ' + (new Date().getTime() === Date.now()));
+setTimeout(() => {
+  const t = Date.now();
+  log('timer 100 ms later: ' + (t - end >= 100));
+}, 100);
+</script>

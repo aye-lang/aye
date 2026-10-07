@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<title>Virtual clock</title>
+<pre id="out"></pre>
+<script>
+// On the virtual clock (dump), time passes with the steps a task runs,
+// so code that waits for the clock inside a task ends, and the same
+// page always counts the same.
+function log(s) { document.getElementById('out').textContent += s + '\n'; }
+const end = performance.now() + 1;
+let n = 0;
+while (performance.now() < end) n++;
+log('busy loop of 1 ms: n=' + n);
+
+// A scheduler like YouTube's: run jobs until a 1 ms budget is spent,
+// then yield to the event loop and go on in the next task.
+const jobs = [];
+for (let i = 0; i < 300; i++) jobs.push(i);
+let tasks = 0, done = 0, sum = 0;
+function work() {
+  tasks++;
+  const deadline = performance.now() + 1;
+  do {
+    const j = jobs.shift();
+    for (let k = 0; k < 10000; k++) sum += j;
+    done++;
+  } while (jobs.length && performance.now() < deadline);
+  if (jobs.length) setTimeout(work, 0);
+  else log('scheduler: ' + done + ' jobs in ' + tasks + ' tasks');
+}
+setTimeout(work, 0);
+
+// MessageChannel yields too.
+const jobs2 = [];
+for (let i = 0; i < 300; i++) jobs2.push(i);
+let tasks2 = 0;
+const ch = new MessageChannel();
+ch.port1.onmessage = function () {
+  tasks2++;
+  const deadline = performance.now() + 1;
+  do {
+    jobs2.shift();
+    for (let k = 0; k < 10000; k++) sum += k;
+  } while (jobs2.length && performance.now() < deadline);
+  if (jobs2.length) ch.port2.postMessage(0);
+  else log('message channel: ' + tasks2 + ' tasks');
+};
+ch.port2.postMessage(0);
+</script>

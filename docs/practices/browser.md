@@ -587,6 +587,25 @@ and without `yes > /dev/null` load, and diff the sets.
 an archive records one run's requests, and a replay that asks for others
 misses.
 
+### On the virtual clock, let a task's steps move time
+**Context:** code that reads the clock inside one task: schedulers with a
+time budget, `while (Date.now() < end)` loops, idle callbacks.
+**Bad:** the virtual clock moved only between tasks, and the benchmark
+pinned `Date.now` to one instant; YouTube's scheduler (`do { job }
+while (queue && Date.now() < start + budget)`) never yielded, and one
+task drained the whole queue: 3 to 15 million steps, 42% of a
+`youtube-search` dump's CPU (P1.8).
+**Good:** `tick` (`browser/engine/script.ore`) adds 1 ms per
+`STEPS_PER_MS` (1,000,000) steps the page ran, in whole ms, so a short
+task still sees the clock stand still; the benchmark's `Date` is its
+epoch plus `ak.now()` (`browser/engine/benchmark.ore`). Fixtures:
+`jsdom/virtual_clock.html`, `benchmark/date_now.html`. Too slow a pace
+is a regression too: at 100,000 steps per ms YouTube's work used up
+`dump`'s 30 s of page time before its results rendered (27 videos of
+35). Replay heavy sites (`youtube-search`, zol, react) when you change it.
+**Why:** a clock that never moves inside a task turns every time budget
+into "run everything"; counting steps keeps it deterministic.
+
 ### A request the browser starts sending is missing from old archives
 **Context:** a change that lets pages make requests they could not
 before (fetch methods, new APIs), checked with `page_load.py check`.

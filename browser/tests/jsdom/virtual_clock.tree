@@ -1,0 +1,14 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Virtual clock"
+      "\n"
+    <body>
+      <pre id="out">
+        "busy loop of 1 ms: n=333331\nscheduler: 300 jobs in 3 tasks\nmessage channel: 3 tasks\n"
+      "\n"
+      <script>
+        "\n// On the virtual clock (dump), time passes with the steps a task runs,\n// so code that waits for the clock inside a task ends, and the same\n// page always counts the same.\nfunction log(s) { document.getElementById('out').textContent += s + '\\n'; }\nconst end = performance.now() + 1;\nlet n = 0;\nwhile (performance.now() < end) n++;\nlog('busy loop of 1 ms: n=' + n);\n\n// A scheduler like YouTube's: run jobs until a 1 ms budget is spent,\n// then yield to the event loop and go on in the next task.\nconst jobs = [];\nfor (let i = 0; i < 300; i++) jobs.push(i);\nlet tasks = 0, done = 0, sum = 0;\nfunction work() {\n  tasks++;\n  const deadline = performance.now() + 1;\n  do {\n    const j = jobs.shift();\n    for (let k = 0; k < 10000; k++) sum += j;\n    done++;\n  } while (jobs.length && performance.now() < deadline);\n  if (jobs.length) setTimeout(work, 0);\n  else log('scheduler: ' + done + ' jobs in ' + tasks + ' tasks');\n}\nsetTimeout(work, 0);\n\n// MessageChannel yields too.\nconst jobs2 = [];\nfor (let i = 0; i < 300; i++) jobs2.push(i);\nlet tasks2 = 0;\nconst ch = new MessageChannel();\nch.port1.onmessage = function () {\n  tasks2++;\n  const deadline = performance.now() + 1;\n  do {\n    jobs2.shift();\n    for (let k = 0; k < 10000; k++) sum += k;\n  } while (jobs2.length && performance.now() < deadline);\n  if (jobs2.length) ch.port2.postMessage(0);\n  else log('message channel: ' + tasks2 + ' tasks');\n};\nch.port2.postMessage(0);\n"
+      "\n"
