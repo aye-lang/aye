@@ -36,6 +36,24 @@ python3 browser/tools/page_load.py run --archive target/page-load-new \
     --json target/page-load-new/comparison.json
 ```
 
+`capture` refuses a page that misses the site's `sites.json` `md`
+strings (a consent or bot page): it prints the strings, exits non-zero
+and saves nothing, so a good archive is never replaced. It also writes
+`reference.md` (the Markdown whose hash `run` compares, in
+`manifest.json` `capture.sha256`).
+
+When a dump change is intended (P4.25: dumps stop after two growth
+rounds), `run` fails with "replay Markdown differs from capture". Then:
+
+```sh
+python3 browser/tools/page_load.py rebless --site youtube-search --archive target/sites
+```
+
+`rebless` replays each site with the binary, refuses (exit 1, archive
+untouched) when the replay misses its `sites.json` strings, prints the
+lines added/removed against the old `reference.md` (archives from before
+P1.13 have none: it prints the line and byte counts instead), and stores the new Markdown and hash.
+
 The URLs are in `browser/tools/page_load.py`. Without `--site` it loads
 these four pages; `--site zol` (or `wikipedia`, `github`, `youtube`)
 selects a subset, and `--site all` loads every site of

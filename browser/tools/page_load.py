@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Capture exact browser responses, replay offline, summarize phase traces, and check sites.json."""
 import argparse
+import difflib
 import hashlib
 import html
 import json
@@ -8,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import resource
+import shutil
 import statistics
 import subprocess
 import tempfile
@@ -225,8 +227,9 @@ ul {{ margin: 4px 0 0; padding-left: 16px; color: #a00; word-break: break-word; 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("capture", "run", "check"),
-                        help="check: replay each site against browser/tools/sites.json")
+    parser.add_argument("mode", choices=("capture", "run", "check", "rebless"),
+                        help="check: replay each site against browser/tools/sites.json; "
+                        "rebless: store today's replay as the archive's reference (after an intended dump change)")
     parser.add_argument("--archive", type=Path, default=Path("target/sites"), help="one directory per site")
     parser.add_argument("--binary", type=Path, default=Path("target/anyknown"))
     parser.add_argument("--compare", type=Path, help="baseline binary; alternate before/after to reduce machine-load bias")
@@ -245,6 +248,8 @@ def main():
     args = parser.parse_args()
     if args.repeat < 1 or args.warmup < 0:
         parser.error("--repeat must be positive and --warmup nonnegative")
+    if args.mode == "rebless" and (args.compare or args.screenshot or args.sample or args.live):
+        parser.error("rebless replays once and stores the Markdown; no other options")
     if args.mode == "capture" and (args.compare or args.screenshot or args.sample):
         parser.error("capture always records Markdown; compare, screenshot and sample are replay options")
     if args.live and args.mode != "run":
@@ -259,6 +264,8 @@ def main():
         sites = names or DEFAULT_SITES
     if args.mode == "check":
         return check(args, sites)
+    if args.mode == "rebless":
+        return rebless(args, sites)
     results = {}
     failures = {}
     screens = {}
@@ -483,6 +490,51 @@ def check(args, sites):
         raise SystemExit(f"{len(failed)} of {len(sites)} sites miss their expectations: {', '.join(failed)}")
 
 
+def missing_md(name, markdown):
+    """The sites.json strings of `name` that `markdown` lacks."""
+    return [text for text in json.loads(EXPECTATIONS.read_text())["sites"][name]["md"] if text not in markdown]
+
+
+def rebless(args, sites):
+    """Replays each site with the binary and stores the Markdown (reference.md) and its hash
+    (manifest capture.sha256, which `run` compares) as the new reference. Refuses a replay that
+    misses the site's sites.json strings."""
+    failed = []
+    for name in sites:
+        directory = args.archive / name
+        try:
+            manifest_path = directory / "manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            reference = directory / "reference.md"
+            old = reference.read_text(errors="replace") if reference.exists() else None
+            result = run(args.binary, manifest["url"], directory)
+            new = (directory / "last.stdout").read_text(errors="replace")
+            missing = missing_md(name, new)
+            if missing:
+                raise RuntimeError(f"replay misses sites.json strings {missing}; reference kept")
+            if result["sha256"] == manifest["capture"]["sha256"]:
+                reference.write_text(new)
+                print(f"{name}: reference unchanged", flush=True)
+                continue
+            if old is None:  # last.stdout is the previous replay, not the reference
+                print(f"{name}: new reference: {len(new.splitlines())} lines, {result['bytes']} bytes "
+                      f"(was {manifest['capture']['bytes']} bytes; the archive has no reference.md to diff)", flush=True)
+            else:
+                changes = [line for line in difflib.unified_diff(old.splitlines(), new.splitlines(), lineterm="", n=0)
+                           if line[:1] in "+-" and line[:3] not in ("+++", "---")]
+                print(f"{name}: new reference: {sum(l[0] == '+' for l in changes)} lines added, "
+                      f"{sum(l[0] == '-' for l in changes)} removed", flush=True)
+            reference.write_text(new)
+            manifest["capture"]["sha256"] = result["sha256"]
+            manifest["capture"]["bytes"] = result["bytes"]
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+        except (RuntimeError, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
+            print(f"{name}: rebless FAILED: {str(error).splitlines()[0]}", flush=True)
+            failed.append(name)
+    if failed:
+        raise SystemExit(f"{len(failed)} of {len(sites)} sites not reblessed: {', '.join(failed)}")
+
+
 def load_site(args, name):
     """Capture or replay one site; returns its result for the table."""
     directory = (LIVE if args.live else args.archive) / name
@@ -492,6 +544,12 @@ def load_site(args, name):
         if manifest_path.exists() or list(directory.glob("*.response")):
             raise RuntimeError(f"{directory}: use a new directory for an immutable capture")
         result = run(args.binary, SITES[name], directory, record=True)
+        missing = missing_md(name, (directory / "last.stdout").read_text(errors="replace"))
+        if missing:
+            # Only an empty directory gets here (an archive is refused above): drop the bad capture.
+            shutil.rmtree(directory)
+            raise RuntimeError(f"{name}: captured page misses sites.json strings {missing}; not saved")
+        (directory / "reference.md").write_bytes((directory / "last.stdout").read_bytes())
         steps = task_steps(name)
         task_failure, task_errors = agent_task(args.binary, SITES[name], directory, steps, record=True) \
             if steps else (None, None)
