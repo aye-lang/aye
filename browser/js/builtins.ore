@@ -769,30 +769,62 @@ fn objectGetPrototypeOf(it: *mut Interp, a: Args) JsError!Value {
 
 fn objectSetPrototypeOf(it: *mut Interp, a: Args) JsError!Value {
     let ov = it.arg(a, 0)
-    if it.classOf(ov) == Class.ModuleNamespace {
-        if !(it.arg(a, 1) is .Null) {
-            return it.typeError("Cannot change module namespace prototype")
-        }
-        return ov
+    if ov is .Undefined || ov is .Null {
+        return it.typeError("Object.setPrototypeOf called on null or undefined")
     }
-    if isObject(ov) && it.heap.obj(objectOf(ov)).class == Class.Proxy {
-        try proxySetPrototype(it, objectOf(ov), it.arg(a, 1))
-        return ov
+    let pv = it.arg(a, 1)
+    if !(pv is .Null) && (!isObject(pv) || isSymbol(it, pv)) {
+        return it.typeError("Object prototype may only be an Object or null")
     }
-    if isObject(ov) {
-        match it.arg(a, 1) {
-            .Obj { o } => {
-                it.heap.obj(objectOf(ov)).proto = o
-            }
-            .Null => {
-                it.heap.obj(objectOf(ov)).proto = NONE
-            }
-            _ => {
-                return it.typeError("Object prototype may only be an Object or null")
-            }
-        }
+    if isObject(ov) && !isSymbol(it, ov) && !try setPrototype(it, objectOf(ov), pv) {
+        return it.typeError("Cannot set the prototype of this object")
     }
     return ov
+}
+
+// setPrototypeOf(o, proto): Reflect.setPrototypeOf, false when the
+// change is rejected.
+pub fn engineSetPrototypeOf(it: *mut Interp, a: Args) JsError!Value {
+    let ov = it.arg(a, 0)
+    if !isObject(ov) || isSymbol(it, ov) {
+        return it.typeError("Reflect.setPrototypeOf called on non-object")
+    }
+    let pv = it.arg(a, 1)
+    if !(pv is .Null) && (!isObject(pv) || isSymbol(it, pv)) {
+        return it.typeError("Object prototype may only be an Object or null")
+    }
+    return boolVal(try setPrototype(it, objectOf(ov), pv))
+}
+
+/// o.[[SetPrototypeOf]](proto), proto an object or null: false when
+/// rejected (OrdinarySetPrototypeOf: a non-extensible object, a cycle;
+/// Object.prototype and a module namespace keep their prototype).
+pub fn setPrototype(it: *mut Interp, o: u32, proto: Value) JsError!bool {
+    let ob = it.heap.obj(o)
+    if ob.class == Class.Proxy {
+        return proxySetPrototype(it, o, proto)
+    }
+    let p = objectOf(proto)
+    if ob.proto == p {
+        return true
+    }
+    if !ob.extensible || o == it.object_proto || ob.class == Class.ModuleNamespace {
+        return false
+    }
+    // The walk stops at a proxy: its [[GetPrototypeOf]] is not ordinary.
+    var q = p
+    while q != NONE {
+        if q == o {
+            return false
+        }
+        let qb = it.heap.obj(q)
+        if qb.class == Class.Proxy {
+            break
+        }
+        q = qb.proto
+    }
+    ob.proto = p
+    return true
 }
 
 fn objectFreeze(it: *mut Interp, a: Args) JsError!Value {

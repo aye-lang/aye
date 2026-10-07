@@ -240,21 +240,17 @@ pub fn prototypeOf(it: *mut Interp, o: u32) JsError!u32 {
     return objectOf(try callTrap(it, base))
 }
 
-/// Object.setPrototypeOf for proxy o.
-fn proxySetPrototype(it: *mut Interp, o: u32, proto: Value) JsError!void {
+/// [[SetPrototypeOf]] for proxy o: false when rejected.
+fn proxySetPrototype(it: *mut Interp, o: u32, proto: Value) JsError!bool {
     let f = try trap(it, o, "setPrototypeOf")
     let t = proxyTarget(it, o)
     if isUndef(f) {
-        if it.heap.obj(t).class == Class.Proxy {
-            return proxySetPrototype(it, t, proto)
-        }
-        it.heap.obj(t).proto = objectOf(proto)
-        return
+        return setPrototype(it, t, proto)
     }
     let base = try startTrap(it, o, f)
     try it.push(objVal(t))
     try it.push(proto)
-    try callTrap(it, base)
+    return it.toBoolean(try callTrap(it, base))
 }
 
 /// The own keys of proxy o: the string keys (`symbols` false) or the

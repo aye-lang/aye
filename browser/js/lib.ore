@@ -374,6 +374,7 @@ pub let LIB =
     \\const engineConstruct = G.__engine.construct;
     \\const engineDefineProperty = G.__engine.defineProperty;
     \\const engineDeleteProperty = G.__engine.deleteProperty;
+    \\const engineSetPrototypeOf = G.__engine.setPrototypeOf;
     \\function asyncGenDriver(g) {
     \\  const queue = [];
     \\  let running = false;
@@ -1296,7 +1297,8 @@ pub let LIB =
     \\Object.defineProperty(Object.prototype, '__proto__', {
     \\  get() { return Object.getPrototypeOf(this); },
     \\  set(p) {
-    \\    if ((typeof p === 'object' || typeof p === 'function') && this !== null && (typeof this === 'object' || typeof this === 'function')) Object.setPrototypeOf(this, p);
+    \\    if (this === undefined || this === null) throw new TypeError('Object.prototype.__proto__ called on null or undefined');
+    \\    if ((typeof p === 'object' || typeof p === 'function') && (typeof this === 'object' || typeof this === 'function')) Object.setPrototypeOf(this, p);
     \\  },
     \\  configurable: true,
     \\});
@@ -1338,14 +1340,7 @@ pub let LIB =
     \\  has(o, k) { return k in o; },
     \\  ownKeys(o) { return [...Object.getOwnPropertyNames(o), ...Object.getOwnPropertySymbols(o)]; },
     \\  getPrototypeOf(o) { return Object.getPrototypeOf(o); },
-    \\  setPrototypeOf(o, p) {
-    \\    if (!isObjectLike(o)) throw new TypeError('Reflect.setPrototypeOf called on non-object');
-    \\    if (p !== null && !isObjectLike(p)) throw new TypeError('Object prototype may only be an Object or null');
-    \\    // A module namespace's prototype stays null.
-    \\    if (isModuleNamespace(o)) return p === null;
-    \\    Object.setPrototypeOf(o, p);
-    \\    return true;
-    \\  },
+    \\  setPrototypeOf(o, p) { return engineSetPrototypeOf(o, p); },
     \\  getOwnPropertyDescriptor(o, k) { return Object.getOwnPropertyDescriptor(o, k); },
     \\  isExtensible(o) { return Object.isExtensible(o); },
     \\  preventExtensions(o) {
