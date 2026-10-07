@@ -558,6 +558,24 @@ against the full cascade's.
 **Why:** a fallback that looks rare in fixtures can be the common path
 on a real page; the counts show which one to fix.
 
+### Turn a fast path off per element, not per document
+**Context:** a fast path that is unsafe for some elements of a page
+(shadow trees, quirks, frames).
+**Bad:** `091c97f` used the ancestor Bloom filter only when
+`doc.shadows.len() == 0`. One declarative shadow root turned it off for
+all of GitHub's document: its sample still had `matchSimple` on top
+(1920 samples) under `matchFrom` ancestor walks, and no
+`AncestorFilters` frame at all.
+**Good:** look for the fast path's frame in the sample of each site you
+measure. `styleElement` (`browser/css/cascade.ore`) takes the filter for
+an element of the document tree and `AncestorFilter.full()` (rejects
+nothing) for one in a shadow tree, whose ancestors run through `:host`.
+GitHub replay CPU 5.92 → 4.45 s, same Markdown;
+`browser/tests/style/shadow_ancestor_filter.html` has selectors on both
+sides of a host.
+**Why:** real pages mix the rare case into every document, so a
+per-document switch turns the fast path off where it matters most.
+
 ### Keep styles by a fingerprint of their inputs, not by a version
 **Context:** skipping a restyle (or other cached work) when nothing it
 depends on changed.
