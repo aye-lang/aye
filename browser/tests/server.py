@@ -16,6 +16,10 @@
 #                    text/plain) as "name = value" items, and the raw
 #                    body (CR written as \r)
 #   /echo-redirect   (POST) 303 to /echo?redirected=1
+#   /fetch-echo      (any method) the request as JSON: its method, path,
+#                    headers (names in lower case), body (as UTF-8 and in
+#                    hex) and form fields (as /echo); HEAD gets no body
+#   /fetch-redirect/STATUS  (any method) STATUS to /fetch-echo?redirected
 #   /net/start       302 to /net/page.html, setting the cookies of COOKIES
 #   /headers         the request's Accept, Accept-Language, Referer and
 #                    Cookie headers, as text/plain
@@ -40,6 +44,7 @@
 #                    text/plain
 import gzip
 import html
+import json
 import http.server
 import mimetypes
 import os
@@ -91,7 +96,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path
-        if path == "/redirect":
+        if path.startswith("/fetch-"):
+            self.fetch_route()
+        elif path == "/redirect":
             self.reply(302, [("Location", "/basic.html")])
         elif path == "/redirect-style":
             self.reply(302, [("Location", "/style/link.html")])
@@ -189,7 +196,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0") or "0")
         body = self.rfile.read(length)
-        if self.path == "/echo-redirect":
+        if self.path.startswith("/fetch-"):
+            self.fetch_route(body)
+        elif self.path == "/echo-redirect":
             self.reply(303, [("Location", "/echo?redirected=1")])
         elif self.path.startswith("/log/"):
             self.log_request_line("POST", body)
@@ -197,6 +206,45 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.echo("POST", body)
         else:
             self.reply(404, [("Content-Type", "text/plain")], b"not found\n")
+
+    def do_HEAD(self):
+        if self.path.startswith("/fetch-"):
+            self.fetch_route()
+        else:
+            super().do_HEAD()
+
+    # Every other method (PUT, DELETE, custom ones) goes to fetch_route.
+    def __getattr__(self, name):
+        if name.startswith("do_"):
+            return self.fetch_route
+        raise AttributeError(name)
+
+    def fetch_route(self, body=None):
+        if body is None:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            body = self.rfile.read(length)
+        path = urllib.parse.urlsplit(self.path).path
+        if path.startswith("/fetch-redirect/"):
+            self.reply(int(path[len("/fetch-redirect/"):]), [("Location", "/fetch-echo?redirected")])
+            return
+        if path != "/fetch-echo":
+            self.reply(404, [("Content-Type", "text/plain")], b"not found\n")
+            return
+        echo = {
+            "method": self.command,
+            "path": self.path,
+            "headers": {k.lower(): v for k, v in self.headers.items()},
+            "body": body.decode("utf-8", "replace"),
+            "hex": body.hex(),
+            "fields": form_fields(self.headers.get("Content-Type", ""), body),
+        }
+        data = json.dumps(echo).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(data)
 
     def echo(self, method, body):
         query = urllib.parse.urlsplit(self.path).query

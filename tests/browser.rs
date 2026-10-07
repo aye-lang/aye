@@ -1624,6 +1624,26 @@ fn net_http() {
     expect(&["dump", "--text", &format!("{base}/meta-charset")], 0, "\u{201c}quoted\u{201d} caf\u{e9}\n", "");
 }
 
+/// `fetch` with each method, kind of body and request headers
+/// (`browser/tests/net/fetch_methods.html`, through the server's
+/// `/fetch-echo`) must print `fetch_methods.txt`: what the server
+/// received, as Node 22's fetch sends it (Content-Type defaults, the
+/// multipart body, redirects that keep or drop the method and body),
+/// except that forbidden headers (Sec-*, Proxy-*, Content-Length) are
+/// not sent.
+#[test]
+fn fetch_methods() {
+    let Some(srv) = server() else {
+        println!("skipped: cannot start python3 for the test server");
+        return;
+    };
+    let out = run(&["dump", "--text", "--js", &format!("{}/net/fetch_methods.html", srv.base)]);
+    assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+    let mut failures = Vec::new();
+    check_golden(&root().join("browser/tests/net/fetch_methods.txt"), &text(&out.stdout), "fetch_methods", &mut failures);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 // ---- B8: HTML and CSS
 
 /// `noscript` follows scripting: the dumps without `--js` show it (the
