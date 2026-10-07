@@ -1,0 +1,14 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "DOMTokenList iterators"
+      "\n"
+    <body>
+      <p id="out" class="a b">
+        "a,b 0,1 0,a;1,b a,b"
+      "\n"
+      <script>
+        "\n// The Mistral blog's class helpers call classList.values().\nconst l = document.getElementById('out').classList;\ndocument.getElementById('out').textContent = [\n  [...l.values()].join(','), [...l.keys()].join(','), [...l.entries()].join(';'), [...l].join(','),\n].join(' ');\n"
+      "\n"

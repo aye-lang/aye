@@ -608,6 +608,10 @@ pub let PRELUDE =
     \\    return true;
     \\  }
     \\  forEach(f, thisArg) { this._get().forEach((t, i) => f.call(thisArg, t, i, this)); }
+    \\  values() { return this._get().values(); }
+    \\  keys() { return this._get().keys(); }
+    \\  entries() { return this._get().entries(); }
+    \\  [Symbol.iterator]() { return this._get().values(); }
     \\  toString() { return this.value; }
     \\}
     \\hidden(G, 'DOMTokenList', DOMTokenList);
