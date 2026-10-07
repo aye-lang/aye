@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<title>Quiet page</title>
+<style>
+body { margin: 0 }
+section { height: 1000px }
+</style>
+<h1>Quiet page</h1>
+<section>Five viewports of text.</section>
+<section>A scroll listener that changes nothing.</section>
+<section>So a dump stops after its first step.</section>
+<script>
+// The page listens for scroll, but its content stays the same: a dump
+// takes one step down, sees nothing changed (nothing ever did since the
+// load) and stops. A timer logs the scroll offsets it sees, and the
+// listener counts the events, out of the document.
+let scrolls = 0;
+addEventListener('scroll', () => { scrolls++; });
+let seen = -1;
+setInterval(() => {
+  if (scrollY !== seen) console.log('scrollY ' + (seen = scrollY) + ', scroll events ' + scrolls);
+}, 100);
+</script>
