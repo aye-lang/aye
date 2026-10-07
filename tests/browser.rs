@@ -1181,6 +1181,38 @@ fn window_scripts() {
     }
 }
 
+/// Timers that never let the queue empty (animation callbacks that take
+/// longer than a frame, a task that queues itself at 0 ms) must not
+/// starve the window: each event-loop turn runs only the timers queued
+/// before it, then the window draws, so `--frames N` ends.
+#[test]
+fn window_timers_yield_to_frames() {
+    use std::time::{Duration, Instant};
+    if !has_sdl() {
+        println!("skipped: no SDL2");
+        return;
+    }
+    let mut window = Command::new(anyknown())
+        .current_dir(root())
+        .env("SDL_VIDEODRIVER", "dummy")
+        .args(["browser/tests/ui/raf_overload.html", "--font", "fixed", "--width", "400", "--height", "300", "--frames", "10", "--text"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    while window.try_wait().unwrap().is_none() {
+        if start.elapsed() > Duration::from_secs(60) {
+            let _ = window.kill();
+            panic!("the window did not draw 10 frames in 60 s: timers starve it");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let out = window.wait_with_output().unwrap();
+    assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+    assert!(text(&out.stdout).contains("animating"), "{}", text(&out.stdout));
+}
+
 /// The window and the scripts agree on the scroll offset: a script's
 /// `scrollTo` scrolls the window, and the wheel moves `scrollY`.
 #[test]
