@@ -1664,6 +1664,26 @@ fn fetch_methods() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// XMLHttpRequest with each method, kind of body and request header
+/// (`browser/tests/net/xhr_methods.html`, through `/fetch-echo`) must
+/// print `xhr_methods.txt`: the bodies and Content-Type defaults of
+/// `fetch_methods`, plus a Document body; GET and HEAD send no body;
+/// setRequestHeader combines repeated names and drops forbidden ones;
+/// redirects as fetch's; InvalidStateError, SyntaxError and SecurityError
+/// where the XHR standard throws them.
+#[test]
+fn xhr_methods() {
+    let Some(srv) = server() else {
+        println!("skipped: cannot start python3 for the test server");
+        return;
+    };
+    let out = run(&["dump", "--text", "--js", &format!("{}/net/xhr_methods.html", srv.base)]);
+    assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+    let mut failures = Vec::new();
+    check_golden(&root().join("browser/tests/net/xhr_methods.txt"), &text(&out.stdout), "xhr_methods", &mut failures);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 // ---- B8: HTML and CSS
 
 /// `noscript` follows scripting: the dumps without `--js` show it (the

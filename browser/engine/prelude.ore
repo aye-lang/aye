@@ -1673,6 +1673,15 @@ pub let PRELUDE =
     \\  else from.addEventListener('abort', () => s._abort(from.reason));
     \\  return s;
     \\}
+    \\// Fetch's "extract a body" of a body that is not null: [the body to
+    \\// keep, its Content-Type or null].
+    \\function extractBody(b) {
+    \\  if (b instanceof URLSearchParams) return [b.toString(), 'application/x-www-form-urlencoded;charset=UTF-8'];
+    \\  if (b instanceof Blob) return [b, b.type !== '' ? b.type : null];
+    \\  if (b instanceof FormData) return [b, 'multipart/form-data; boundary=' + FORM_BOUNDARY];
+    \\  if (b instanceof ArrayBuffer || ArrayBuffer.isView(b)) return [b, null];
+    \\  return [String(b), 'text/plain;charset=UTF-8'];
+    \\}
     \\class Request {
     \\  constructor(input, init) {
     \\    if (arguments.length === 0) throw new TypeError("Failed to construct 'Request': 1 argument required, but only 0 present.");
@@ -1726,19 +1735,8 @@ pub let PRELUDE =
     \\    if ((initBody !== null || inputBody !== null) && (r.method === 'GET' || r.method === 'HEAD')) throw requestError('Request with GET/HEAD method cannot have body.');
     \\    let body = inputBody;
     \\    if (initBody !== null) {
-    \\      let type = null;
-    \\      body = initBody;
-    \\      if (initBody instanceof URLSearchParams) {
-    \\        body = initBody.toString();
-    \\        type = 'application/x-www-form-urlencoded;charset=UTF-8';
-    \\      } else if (initBody instanceof Blob) {
-    \\        if (initBody.type !== '') type = initBody.type;
-    \\      } else if (initBody instanceof FormData) {
-    \\        type = 'multipart/form-data; boundary=' + FORM_BOUNDARY;
-    \\      } else if (!(initBody instanceof ArrayBuffer || ArrayBuffer.isView(initBody))) {
-    \\        body = String(initBody);
-    \\        type = 'text/plain;charset=UTF-8';
-    \\      }
+    \\      let type;
+    \\      [body, type] = extractBody(initBody);
     \\      if (type !== null && !r.headers.has('content-type')) r.headers.append('content-type', type);
     \\    } else if (inputBody !== null) {
     \\      if (from._bodyUsed) throw requestError('Cannot construct a Request with a Request object that has already been used.');
@@ -1803,10 +1801,20 @@ pub let PRELUDE =
     \\  if (name !== 'x-http-method' && name !== 'x-http-method-override' && name !== 'x-method-override') return false;
     \\  return value.split(',').some(m => ['CONNECT', 'TRACE', 'TRACK'].includes(m.trim().toUpperCase()));
     \\}
+    \\// The arguments of ak.fetch for a request with `method`, `headers` (a
+    \\// Headers) and `body` (as extractBody keeps it, or null): the headers
+    \\// but the forbidden ones, and the body as bytes (undefined for none; an
+    \\// empty one for a POST or PUT without one, as Content-Length: 0).
+    \\function fetchArgs(url, method, headers, body) {
+    \\  const lines = headers._sorted().filter(p => !forbiddenHeader(p[0], p[1])).map(p => p[0] + ': ' + p[1]).join('\n');
+    \\  let bytes;
+    \\  if (body instanceof FormData) bytes = formDataBytes(body);
+    \\  else if (body !== null) bytes = blobBytes([body]);
+    \\  else if (method === 'POST' || method === 'PUT') bytes = '';
+    \\  return [url, method, lines, bytes];
+    \\}
     \\// fetch: the request is made at once (synchronously), the promise
-    \\// settles in a microtask. The headers sent are the Request's, but the
-    \\// forbidden ones; the body goes as bytes (null for none; an empty one
-    \\// for a POST or PUT without one, as Content-Length: 0).
+    \\// settles in a microtask.
     \\hidden(G, 'fetch', function (input, init) {
     \\  return new Promise((resolve, reject) => {
     \\    const req = new Request(input, init);
@@ -1814,13 +1822,7 @@ pub let PRELUDE =
     \\      reject(req.signal.reason);
     \\      return;
     \\    }
-    \\    const headers = req.headers._sorted().filter(p => !forbiddenHeader(p[0], p[1])).map(p => p[0] + ': ' + p[1]).join('\n');
-    \\    const body = req._body;
-    \\    let bytes;
-    \\    if (body instanceof FormData) bytes = formDataBytes(body);
-    \\    else if (body !== null) bytes = blobBytes([body]);
-    \\    else if (req.method === 'POST' || req.method === 'PUT') bytes = '';
-    \\    const r = ak.fetch(req.url, req.method, headers, bytes);
+    \\    const r = ak.fetch(...fetchArgs(req.url, req.method, req.headers, req._body));
     \\    if (r.error !== undefined) reject(new TypeError('Failed to fetch: ' + r.error));
     \\    else resolve(new Response(r));
     \\  });
@@ -2487,8 +2489,12 @@ pub let PRELUDE =
     \\  return o;
     \\});
     \\
-    \\// XMLHttpRequest: GET only, on the browser's fetch (synchronous
-    \\// underneath); an asynchronous request completes in a task of its own.
+    \\// XMLHttpRequest, on the browser's fetch (synchronous underneath; any
+    \\// method, body and headers, as fetch's); an asynchronous request
+    \\// completes in a task of its own.
+    \\function xhrError(method, message, name) {
+    \\  return new DOMException("Failed to execute '" + method + "' on 'XMLHttpRequest': " + message, name);
+    \\}
     \\class XMLHttpRequest extends EventTarget {
     \\  constructor() {
     \\    super();
@@ -2506,17 +2512,34 @@ pub let PRELUDE =
     \\    hidden(this, '_async', true);
     \\    hidden(this, '_type', '');
     \\    hidden(this, '_sent', false);
+    \\    hidden(this, '_headers', new Headers());
+    \\    hidden(this, '_body', null);
     \\  }
     \\  open(method, url, async) {
-    \\    this._method = String(method).toUpperCase();
+    \\    method = String(method);
+    \\    const upper = method.toUpperCase();
+    \\    if (!HTTP_TOKEN.test(method)) throw xhrError('open', "'" + method + "' is not a valid HTTP method.", 'SyntaxError');
+    \\    if (upper === 'CONNECT' || upper === 'TRACE' || upper === 'TRACK') throw xhrError('open', "'" + method + "' HTTP method is unsupported.", 'SecurityError');
+    \\    this._method = ['DELETE', 'GET', 'HEAD', 'OPTIONS', 'POST', 'PUT'].includes(upper) ? upper : method;
     \\    this._url = String(url);
     \\    this._async = async !== false;
     \\    this._sent = false;
+    \\    this._headers = new Headers();
+    \\    this._body = null;
     \\    this.status = 0;
     \\    this.responseText = '';
     \\    this._state(1);
     \\  }
-    \\  setRequestHeader() {}
+    \\  // A forbidden header is ignored; a name set again adds its value
+    \\  // (sent as "a, b").
+    \\  setRequestHeader(name, value) {
+    \\    if (this.readyState !== 1 || this._sent) throw xhrError('setRequestHeader', "The object's state must be OPENED.", 'InvalidStateError');
+    \\    name = String(name);
+    \\    value = String(value).replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, '');
+    \\    if (!HTTP_TOKEN.test(name)) throw xhrError('setRequestHeader', "'" + name + "' is not a valid HTTP header field name.", 'SyntaxError');
+    \\    if (/[\0\r\n]/.test(value)) throw xhrError('setRequestHeader', "'" + value + "' is not a valid HTTP header field value.", 'SyntaxError');
+    \\    if (!forbiddenHeader(name.toLowerCase(), value)) this._headers.append(name, value);
+    \\  }
     \\  overrideMimeType() {}
     \\  getResponseHeader(name) {
     \\    return this.readyState >= 2 && String(name).toLowerCase() === 'content-type' && this._type !== '' ? this._type : null;
@@ -2532,8 +2555,17 @@ pub let PRELUDE =
     \\      return null;
     \\    }
     \\  }
-    \\  send() {
-    \\    if (this.readyState !== 1 || this._sent) throw new DOMException("Failed to execute 'send' on 'XMLHttpRequest': The object's state must be OPENED.", 'InvalidStateError');
+    \\  // The body as fetch's, or a document (the page's or a stand-in of
+    \\  // createHTMLDocument), serialized; GET and HEAD send none.
+    \\  send(body) {
+    \\    if (this.readyState !== 1 || this._sent) throw xhrError('send', "The object's state must be OPENED.", 'InvalidStateError');
+    \\    if (body !== undefined && body !== null && this._method !== 'GET' && this._method !== 'HEAD') {
+    \\      let type;
+    \\      if (typeof body === 'object' && body.nodeType === 9) [body, type] = ['<!DOCTYPE html>' + body.documentElement.outerHTML, 'text/html;charset=UTF-8'];
+    \\      else [body, type] = extractBody(body);
+    \\      if (type !== null && !this._headers.has('content-type')) this._headers.append('content-type', type);
+    \\      this._body = body;
+    \\    }
     \\    this._sent = true;
     \\    if (this._async) setTimeout(() => this._load(), 0);
     \\    else this._load();
@@ -2547,7 +2579,7 @@ pub let PRELUDE =
     \\  }
     \\  _load() {
     \\    if (!this._sent) return;
-    \\    const r = this._method === 'GET' ? ak.fetch(this._url) : { error: 'only GET is supported' };
+    \\    const r = ak.fetch(...fetchArgs(this._url, this._method, this._headers, this._body));
     \\    if (r.error !== undefined) {
     \\      this._state(4);
     \\      this._fire('error');
