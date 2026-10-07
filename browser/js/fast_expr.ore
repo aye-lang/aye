@@ -146,10 +146,7 @@ fn exprValue(it: *mut Interp, at: usize, v: Value) bool {
             return true
         }
         .Bool { b } => {
-            it.expr_nums[at] = 0.0
-            if b {
-                it.expr_nums[at] = 1.0
-            }
+            it.expr_nums[at] = (b as u8) as f64
             it.expr_kinds[at] = 2
             return true
         }
@@ -285,51 +282,35 @@ fn evalFastExpr(it: *mut Interp, p: FastExpr) Value {
                         v = x / y
                     }
                     .Lt => {
-                        if x < y {
-                            v = 1.0
-                        }
+                        v = ((x < y) as u8) as f64
                         kind = 2
                     }
                     .Gt => {
-                        if x > y {
-                            v = 1.0
-                        }
+                        v = ((x > y) as u8) as f64
                         kind = 2
                     }
                     .Le => {
-                        if x <= y {
-                            v = 1.0
-                        }
+                        v = ((x <= y) as u8) as f64
                         kind = 2
                     }
                     .Ge => {
-                        if x >= y {
-                            v = 1.0
-                        }
+                        v = ((x >= y) as u8) as f64
                         kind = 2
                     }
                     .Eq => {
-                        if x == y {
-                            v = 1.0
-                        }
+                        v = ((x == y) as u8) as f64
                         kind = 2
                     }
                     .StrictEq => {
-                        if x == y {
-                            v = 1.0
-                        }
+                        v = ((x == y) as u8) as f64
                         kind = 2
                     }
                     .NotEq => {
-                        if x != y {
-                            v = 1.0
-                        }
+                        v = ((x != y) as u8) as f64
                         kind = 2
                     }
                     .StrictNotEq => {
-                        if x != y {
-                            v = 1.0
-                        }
+                        v = ((x != y) as u8) as f64
                         kind = 2
                     }
                     _ => {
