@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0 }
+dialog { border: 0; padding: 0 }
+dialog[open] { display: flex }
+</style>
+<p>before</p>
+<dialog>closed: not rendered</dialog>
+<dialog open>open</dialog>
+<div><dialog closedby="any"><form><input placeholder="Search"></form></dialog></div>
+<p>after</p>

@@ -15,6 +15,7 @@ let UA_RULES = [_][]u8{
     "dir, dd, dl, dt, menu, ol, ul, details, summary, fieldset, optgroup, address { display: block }",
     "area, base, basefont, datalist, head, link, meta, noembed, noframes, param, rp, script, style, template, title { display: none }",
     "[hidden] { display: none }",
+    "dialog:not([open]) { display: none }",
     "slot { display: contents }",
     "[dir=rtl i] { direction: rtl }",
     "[dir=ltr i] { direction: ltr }",
