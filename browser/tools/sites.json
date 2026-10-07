@@ -21,9 +21,9 @@
     },
     "github": {
       "status": "warn",
-      "max_errors": 1,
-      "md": ["## Repository navigation", "- [Actions](https://github.com/rust-lang/rust/actions)", "## Unable to load page."],
-      "note": "Commit message, date columns and commit bar stay skeletons; empty Latest commit and History sections. The file list renders \"Unable to load page.\". Replay logs a React Router render error, TypeError: Illegal invocation (plan P3.22)."
+      "max_errors": 0,
+      "md": ["## Repository navigation", "[README.md](https://github.com/rust-lang/rust/blob/main/README.md)", "## Contributing"],
+      "note": "Commit message and date columns stay empty; Latest commit says \"Cannot retrieve latest commit at this time.\" (the page asks /latest-commit and /tree-commit-info without the branch, GitHub answers 400); empty History section. Replay logs no errors."
     },
     "mdn": {
       "status": "ok",
