@@ -460,9 +460,25 @@ pub fn definePropertyFrom(it: *mut Interp, o: u32, key: u32, desc: Value) JsErro
         it.pop()
         return
     }
+    let hasValue = it.hasProperty(objectOf(desc), A_VALUE)
+    if exists && (old & F_ACCESSOR) != 0 {
+        if !hasValue && !it.hasProperty(objectOf(desc), A_WRITABLE) {
+            // A generic descriptor ({enumerable}, {configurable}) changes
+            // only those flags; the accessor stays (React's input value
+            // tracker redefines `enumerable` after its getter).
+            if it.heap.findProp(o, key) |i| {
+                it.heap.obj(o).props[i].flags = flags | F_ACCESSOR
+            }
+            return
+        }
+        // An accessor becoming a data property starts as undefined and
+        // not writable.
+        old = old & ~F_WRITE
+        exists = false
+    }
     flags |= try descFlag(it, desc, "writable", F_WRITE, old)
     var v = Value.Undefined
-    if it.hasProperty(objectOf(desc), A_VALUE) {
+    if hasValue {
         v = try it.getProp(desc, A_VALUE)
     } else if exists {
         if it.heap.findProp(o, key) |i| {
