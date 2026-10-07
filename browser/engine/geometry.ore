@@ -1177,6 +1177,17 @@ fn hashTree(doc: *dom.Document, top: NodeId, seed: u64) u64 {
 // fetches.
 let SCROLL_STEP_MS: f64 = 500.0
 
+// How many steps of `scrollThrough` may make the document taller with
+// new content (a growth round) before it stops. A dump reads what a
+// reader sees near the top, not a whole feed: on an endless one
+// (youtube-search) every step loads another page of results, and 20
+// steps cost 100K nodes and 4.7 GB (P4.25). A page that loads its lazy
+// content once grows in a round or two, then stops changing. A round
+// changes the content (`contentSignature`: not lazy images getting their
+// `src`) and adds at least half a viewport height (a batch of results,
+// not a log line that changed or wrapped).
+let SCROLL_GROWTH_ROUNDS: usize = 2
+
 /// Scrolls the window down through the document as a reader would, for
 /// a dump of a page whose scripts load content when it comes into view.
 /// The page's timers run for 500 ms of its time where it is (the
@@ -1184,8 +1195,9 @@ let SCROLL_STEP_MS: f64 = 500.0
 /// scroll or observes intersections (`watches_scroll`), it scrolls a
 /// viewport height down (which fires `scroll`) and gives the page 500
 /// ms again, step after step, until the bottom of the document is shown
-/// and it did not grow, or after `max_steps` steps (a page that grows
-/// without end; 0: nothing happens). After a step that did not change
+/// and it did not grow, after `SCROLL_GROWTH_ROUNDS` steps that made
+/// the document taller with new content (a feed that grows without end),
+/// or after `max_steps` steps (0: nothing happens). After a step that did not change
 /// the document's content (`contentSignature`), it stops if the content
 /// never changed since the load (scrolling loads nothing there); else
 /// the next step goes straight to the bottom, where an infinite list
@@ -1207,12 +1219,24 @@ pub fn scrollThrough(p: *mut Page, max_steps: usize) AllocError!usize {
     var lively = last != loaded
     var quiet = false
     var jumped = false
+    // The steps that made the document taller with new content; its
+    // height before the last step.
+    var rounds: usize = 0
+    var height: f64 = 0.0
     while s.watches_scroll && steps < max_steps && s.nav_kind == NavKind.None {
         if quiet && (jumped || !lively) {
             break
         }
         let g = try geometry(s)
-        let bottom = math.max(0.0, documentArea(s, g).h - s.height)
+        let h = documentArea(s, g).h
+        if steps > 0 && !quiet && h >= height + s.height / 2.0 {
+            rounds += 1
+            if rounds >= SCROLL_GROWTH_ROUNDS {
+                break
+            }
+        }
+        height = h
+        let bottom = math.max(0.0, h - s.height)
         if s.scroll_y >= bottom {
             break
         }

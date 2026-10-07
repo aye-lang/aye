@@ -1719,8 +1719,9 @@ fn noscript_with_scripts() {
 
 /// `dump --js` scrolls through the page (`engine.scrollThrough`), so what
 /// scripts load when it comes into view is in the dump: sections an
-/// IntersectionObserver fills, an infinite list until it ends, and a page
-/// that never stops growing, until 20 steps. `--no-scroll` turns it off;
+/// IntersectionObserver fills, and an infinite list or a page that never
+/// stops growing until two steps made the document taller (what a reader
+/// sees near the top, not a whole feed). `--no-scroll` turns it off;
 /// `--scroll-steps N` caps it. The goldens of these fixtures are in
 /// `browser/tests/jsdom/` too, with those of the pages it does not step
 /// through (`unwatched_page`), stops after one step (`quiet_page`) or
@@ -1744,12 +1745,14 @@ fn dump_scrolls_through() {
     // The native lazy image is there either way: it loads at once.
     assert!(sections.contains("![A native lazy image](data:image/png") && sections.contains("image loaded at"), "{sections}");
     let list = md(&[], "infinite_list");
-    assert!(list.contains("50. Item 50\n\nEnd of the list.\n"), "{list}");
+    assert!(list.contains("30. Item 30\n\nLoading more...\n") && !list.contains("Item 31"), "{list}");
     let list = md(&["--scroll-steps", "3"], "infinite_list");
     assert!(list.contains("30. Item 30\n\nLoading more...\n") && !list.contains("Item 31"), "{list}");
     assert_eq!(md(&["--no-scroll"], "infinite_list"), "# Infinite list\n\nLoading more...\n");
-    let endless = md(&[], "endless_page");
-    assert!(endless.ends_with("\n\nChunk 21\n"), "{endless}");
+    assert_eq!(md(&[], "endless_page"), "Chunk 1\n\nChunk 2\n\nChunk 3\n");
+    // Five results at load and five after each scroll: two growth rounds.
+    let feed = md(&[], "endless_feed");
+    assert!(feed.ends_with("\n15. Result 15\n") && feed.contains("1. Result 1\n"), "{feed}");
     assert_eq!(md(&["--scroll-steps", "2"], "endless_page"), "Chunk 1\n\nChunk 2\n\nChunk 3\n");
     expect(&["dump", "--text", "--js", "--scroll-steps", "2", &page("endless_page")], 0, "Endless page\n\nChunk 1\nChunk 2\nChunk 3\n", "");
     expect(&["dump", "--text", "--js", "--no-scroll", &page("endless_page")], 0, "Endless page\n\nChunk 1\n", "");
