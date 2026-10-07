@@ -1,0 +1,33 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Dynamic imports"
+      "\n"
+    <body>
+      <p id="classic">
+        "classic 42"
+      "\n"
+      <p id="module">
+        "module 42 live 2 once 1 meta true same-meta true"
+      "\n"
+      <p id="nested">
+        "nested same true"
+      "\n"
+      <p id="errors">
+        "TypeError SyntaxError module threw TypeError TypeError"
+      "\n"
+      <p id="nomodule">
+        "skipped"
+      "\n"
+      <script src="dynamic/classic.js">
+      "\n"
+      <script type="module" src="dynamic/outer.mjs">
+      "\n"
+      <script>
+        "\n(async function () {\n  const outer = await import('./dynamic/outer.mjs');\n  const a = await outer.load();\n  const b = await import('./dynamic/value.mjs');\n  document.getElementById('nested').textContent = 'nested same ' + (a === b);\n  let errors = [];\n  for (const spec of ['./dynamic/missing.mjs', './dynamic/syntax.mjs', './dynamic/thrown.mjs', 'bare-name', 'data:text/plain,export default 1']) {\n    try { await import(spec); } catch (e) { errors.push(e.name || e); }\n  }\n  document.getElementById('errors').textContent = errors.join(' ');\n})();\n"
+      "\n"
+      <script nomodule="">
+        "document.getElementById('nomodule').textContent = 'WRONG';"
+      "\n"

@@ -1,0 +1,436 @@
+// ES module loading shared by the command-line runner and the browser.
+// The loader in lib.ore keeps the module map, and links and evaluates
+// module graphs as the ES2022 cyclic module records do. The natives here
+// resolve and fetch URLs, parse module records, and make the live cells
+// and namespace objects that bindings read.
+//
+// A module record (a JS object made by moduleRecord) is:
+//
+//     { url, g, tla, requests: [[specifier, type]], imports: [[request,
+//       name or null, local]], locals: [[name, local]], indirect: [[name,
+//       request, import or null]], stars: [request] }
+//
+// `g` runs the module's code as a coroutine (parser.moduleProgram);
+// requests are indices into `requests`; null names a namespace. A JSON
+// module is { url, json: text } instead.
+import std.text
+import url
+import net
+
+// `import(arg, options)`: an exception of either expression is thrown at
+// once; everything after rejects the promise.
+fn evalImport(it: *mut Interp, arg: u32, options: u32, referrer: u32) JsError!Value {
+    let base = it.stack.len()
+    defer it.truncate(base)
+    let spec = try it.eval(arg)
+    try it.push(spec)
+    var opts = Value.Undefined
+    if options != 0 {
+        opts = try it.eval(options)
+    }
+    try it.push(opts)
+    return callLoader(it, "dynamicImport", spec, try it.atomValue(referrer), opts, Value.Undefined)
+}
+
+// Calls method `name` of the loader object (lib.ore) with four arguments.
+fn callLoader(it: *mut Interp, name: []u8, a0: Value, a1: Value, a2: Value, a3: Value) JsError!Value {
+    let base = it.stack.len()
+    defer it.truncate(base)
+    try it.push(a0)
+    try it.push(a1)
+    try it.push(a2)
+    try it.push(a3)
+    let loader = it.roots.items()[it.import_driver]
+    let f = try it.getProp(loader, try it.intern(name))
+    try it.push(f)
+    try it.push(loader)
+    try it.push(a0)
+    try it.push(a1)
+    try it.push(a2)
+    try it.push(a3)
+    return it.callAt(base + 4, 4)
+}
+
+/// Imports a module as import() does; returns the promise.
+pub fn importModule(it: *mut Interp, specifier: []u8, referrer: u32) JsError!Value {
+    let base = it.stack.len()
+    defer it.truncate(base)
+    let spec = try it.newString(specifier)
+    try it.push(spec)
+    return callLoader(it, "dynamicImport", spec, try it.atomValue(referrer), Value.Undefined, Value.Undefined)
+}
+
+/// Runs a module script of a page: the module at `href`, else the inline
+/// `source` with the document's URL `base`. Loading, parsing and linking
+/// errors throw; the result is the promise of its evaluation.
+pub fn runModuleScript(it: *mut Interp, href: ?[]u8, source: []u8, base: []u8) JsError!Value {
+    let at = it.stack.len()
+    defer it.truncate(at)
+    var target = Value.Null
+    if href |h| {
+        target = try it.newString(h)
+        try it.push(target)
+    }
+    let src = try it.newString(source)
+    try it.push(src)
+    let b = try it.newString(base)
+    try it.push(b)
+    return callLoader(it, "moduleScript", target, src, b, Value.Undefined)
+}
+
+/// Gives the loader a page's import map (the JSON text of a
+/// `<script type="importmap">`, and the document's URL).
+pub fn addImportMap(it: *mut Interp, json: []u8, base: []u8) JsError!void {
+    let at = it.stack.len()
+    defer it.truncate(at)
+    let j = try it.newString(json)
+    try it.push(j)
+    let b = try it.newString(base)
+    try it.push(b)
+    try callLoader(it, "importMap", j, b, Value.Undefined, Value.Undefined)
+}
+
+fn engineIsModuleNamespace(it: *mut Interp, a: Args) JsError!Value {
+    return boolVal(it.classOf(it.arg(a, 0)) == Class.ModuleNamespace)
+}
+
+// resolveModule(specifier, base, mode): mode 0, a module specifier's URL
+// (a TypeError for a bare name or an invalid URL; import maps are the
+// loader's); mode 1, the URL of a URL-like specifier or null; mode 2, the
+// URL of any reference against base, or null.
+fn engineResolveModule(it: *mut Interp, a: Args) JsError!Value {
+    let spec = it.heap.bytes(strOf(it.arg(a, 0)))
+    var mode: f64 = 0.0
+    match it.arg(a, 2) {
+        .Num { n } => {
+            mode = n
+        }
+        _ => {}
+    }
+    let base = url.parse(it.alloc, it.heap.bytes(strOf(it.arg(a, 1)))) catch |e| {
+        if mode != 0.0 {
+            return Value.Null
+        }
+        return it.typeError("Invalid module referrer")
+    }
+    defer base.deinit(it.alloc)
+    let relative = text.startsWith(spec, "./") || text.startsWith(spec, "../") || text.startsWith(spec, "/")
+    if !relative && mode != 2.0 {
+        // Else only an absolute URL is a URL.
+        if url.parse(it.alloc, spec) |abs| {
+            defer abs.deinit(it.alloc)
+            return it.newString(abs.href)
+        } else |e| {
+            if mode == 1.0 {
+                return Value.Null
+            }
+            it.msg.clear()
+            try it.msg.append("Failed to resolve module specifier \"")
+            try it.msg.append(spec)
+            try it.msg.append("\"")
+            return it.throwError(it.type_error_proto, it.msg.bytes())
+        }
+    }
+    let target = url.resolve(it.alloc, &base, spec) catch |e| {
+        if mode != 0.0 {
+            return Value.Null
+        }
+        return it.typeError("Invalid module specifier")
+    }
+    defer target.deinit(it.alloc)
+    return it.newString(target.href)
+}
+
+// (URL, referrer, type) -> a module record; a failed fetch is a TypeError,
+// a parse error a SyntaxError.
+fn engineFetchModule(it: *mut Interp, a: Args) JsError!Value {
+    let target = url.parse(it.alloc, it.heap.bytes(strOf(it.arg(a, 0)))) catch |e| {
+        return it.typeError("Invalid module URL")
+    }
+    defer target.deinit(it.alloc)
+    let json = (it.arg(a, 2) is .Str) && text.eql(it.heap.bytes(strOf(it.arg(a, 2))), "json")
+    let res = net.request(it.alloc, &target, net.Request { kind: net.Kind.Script, referrer: it.heap.bytes(strOf(it.arg(a, 1))) }) catch |e| {
+        if e == net.FetchError.OutOfMemory {
+            return JsError.OutOfMemory
+        }
+        return it.typeError("Failed to fetch module")
+    }
+    defer res.deinit(it.alloc)
+    if res.status < 200 || res.status >= 300 {
+        return it.typeError("Failed to fetch module")
+    }
+    var finalUrl = target.href
+    if res.url.len > 0 {
+        finalUrl = res.url
+    }
+    let local = text.eql(target.scheme, "file")
+    if json {
+        if !local && !isJsonMime(res.mime) {
+            return it.typeError("Module response is not JSON")
+        }
+        let base = it.stack.len()
+        defer it.truncate(base)
+        let o = try it.newObject(NONE)
+        try it.push(objVal(o))
+        try it.defineOwn(o, try it.intern("url"), try it.newString(finalUrl), F_DEFAULT)
+        try it.defineOwn(o, try it.intern("json"), try it.newString(res.body), F_DEFAULT)
+        return objVal(o)
+    }
+    if !local && !isModuleMime(res.mime) {
+        return it.typeError("Module response is not JavaScript")
+    }
+    return moduleRecord(it, res.body, finalUrl)
+}
+
+// (source, URL) -> the module record of an inline module script.
+fn engineParseModule(it: *mut Interp, a: Args) JsError!Value {
+    // Copies: parsing may move the heap's strings.
+    var src = text.Builder.init(it.alloc)
+    defer src.deinit()
+    try src.append(it.heap.bytes(strOf(it.arg(a, 0))))
+    var href = text.Builder.init(it.alloc)
+    defer href.deinit()
+    try href.append(it.heap.bytes(strOf(it.arg(a, 1))))
+    return moduleRecord(it, src.bytes(), href.bytes())
+}
+
+// prefetchModules(hrefs, referrer): fetches the modules (one URL per
+// line) concurrently into the session's cache before they load in turn.
+fn enginePrefetchModules(it: *mut Interp, a: Args) JsError!Value {
+    var hrefs = text.Builder.init(it.alloc)
+    defer hrefs.deinit()
+    try hrefs.append(it.heap.bytes(strOf(it.arg(a, 0))))
+    var referrer = text.Builder.init(it.alloc)
+    defer referrer.deinit()
+    try referrer.append(it.heap.bytes(strOf(it.arg(a, 1))))
+    net.prefetch(it.alloc, hrefs.bytes(), net.Kind.Script, referrer.bytes())
+    return Value.Undefined
+}
+
+fn isModuleMime(mime: []u8) bool {
+    return text.eql(mime, "text/javascript") || text.eql(mime, "application/javascript") ||
+        text.eql(mime, "text/ecmascript") || text.eql(mime, "application/ecmascript") ||
+        text.eql(mime, "application/x-javascript") || text.eql(mime, "text/x-javascript") ||
+        text.eql(mime, "text/jscript") || text.eql(mime, "text/livescript")
+}
+
+fn isJsonMime(mime: []u8) bool {
+    return text.eql(mime, "application/json") || text.eql(mime, "text/json") || text.endsWith(mime, "+json")
+}
+
+// Parses a module and makes its record, with the coroutine of its code
+// not yet started.
+fn moduleRecord(it: *mut Interp, src: []u8, href: []u8) JsError!Value {
+    let base = it.stack.len()
+    defer it.truncate(base)
+    let referrer = try it.intern(href)
+    var info = ModuleInfo.init(it.alloc)
+    defer info.deinit()
+    let f = try it.parseCode(src, true, referrer, &mut info)
+    // The module's scope is the global one; the caller's environment
+    // stays a root meanwhile.
+    let saved = it.env
+    try it.outer_envs.append(saved)
+    it.env = NONE
+    let closure = it.makeClosure(f) catch |e| {
+        it.env = saved
+        it.outer_envs.pop()
+        return e
+    }
+    it.env = saved
+    it.outer_envs.pop()
+    try it.push(closure)
+    let g = try newCoroutine(it, f, NONE, objectOf(closure), Value.Undefined, it.stack.len(), 0, it.gen_proto, true)
+    try it.push(g)
+    let r = try it.newObject(NONE)
+    try it.push(objVal(r))
+    try it.defineOwn(r, try it.intern("url"), try it.atomValue(referrer), F_DEFAULT)
+    try it.defineOwn(r, try it.intern("g"), g, F_DEFAULT)
+    try it.defineOwn(r, try it.intern("tla"), boolVal(info.tla), F_DEFAULT)
+    let requests = try it.newArray(0)
+    try it.defineOwn(r, try it.intern("requests"), objVal(requests), F_DEFAULT)
+    for q in info.requests.items() {
+        try pushTuple(it, requests, try it.atomValue(q.spec), try it.atomValue(q.kind), Value.Undefined, 2)
+    }
+    let imports = try it.newArray(0)
+    try it.defineOwn(r, try it.intern("imports"), objVal(imports), F_DEFAULT)
+    for e in info.imports.items() {
+        var name = Value.Null
+        if !e.namespace {
+            name = try it.atomValue(e.name)
+        }
+        try pushTuple(it, imports, numVal(e.request as f64), name, try it.atomValue(e.local), 3)
+    }
+    let locals = try it.newArray(0)
+    try it.defineOwn(r, try it.intern("locals"), objVal(locals), F_DEFAULT)
+    for e in info.locals.items() {
+        try pushTuple(it, locals, try it.atomValue(e.name), try it.atomValue(e.local), Value.Undefined, 2)
+    }
+    let indirect = try it.newArray(0)
+    try it.defineOwn(r, try it.intern("indirect"), objVal(indirect), F_DEFAULT)
+    for e in info.indirect.items() {
+        var name = Value.Null
+        if !e.namespace {
+            name = try it.atomValue(e.imported)
+        }
+        try pushTuple(it, indirect, try it.atomValue(e.name), numVal(e.request as f64), name, 3)
+    }
+    let stars = try it.newArray(0)
+    try it.defineOwn(r, try it.intern("stars"), objVal(stars), F_DEFAULT)
+    for s in info.stars.items() {
+        try it.heap.pushElem(stars, numVal(s as f64))
+    }
+    return objVal(r)
+}
+
+// Appends the array [a, b] or [a, b, c] (n items) to `list`.
+fn pushTuple(it: *mut Interp, list: u32, a: Value, b: Value, c: Value, n: u32) JsError!void {
+    let t = try it.newArray(0)
+    try it.heap.pushElem(list, objVal(t))
+    try it.heap.pushElem(t, a)
+    try it.heap.pushElem(t, b)
+    if n > 2 {
+        try it.heap.pushElem(t, c)
+    }
+}
+
+// ---- live bindings
+
+// A module's exported locals (Node.ModuleLocals): an object, without a
+// prototype, of one cell per local, made while the module's code runs in
+// its environment (the first stop of the coroutine).
+fn moduleLocals(it: *mut Interp, list: u32, n: u32, lex: u32, nlex: u32) JsError!Value {
+    let base = it.stack.len()
+    defer it.truncate(base)
+    // Function environments start as undefined; a module's lexical
+    // bindings are uninitialized until their declarations run, which
+    // another module of a cycle can observe.
+    for k in 0..nlex {
+        it.heap.envs.items()[it.env].slots[it.ast.item(lex, k)] = Value.Empty
+    }
+    let o = try it.newObject(NONE)
+    try it.push(objVal(o))
+    for k in 0..n {
+        match it.ast.node(it.ast.item(list, k)) {
+            .Prop { key, value, .. } => {
+                match it.ast.node(value) {
+                    .Ident { name, depth, slot, .. } => {
+                        let env = it.envAt(depth)
+                        let cell = try it.newObjectOf(Class.ModuleBinding, NONE, ObjData.Cell { env: env, slot: slot, name: name })
+                        try it.defineOwn(o, key, objVal(cell), F_DEFAULT)
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    return objVal(o)
+}
+
+// The value of an import binding's slot: a cell is read through, a
+// namespace is the value itself.
+fn readImport(it: *mut Interp, v: Value) JsError!Value {
+    if it.classOf(v) == Class.ModuleBinding {
+        return readCell(it, objectOf(v))
+    }
+    return v
+}
+
+fn readCell(it: *mut Interp, o: u32) JsError!Value {
+    match it.heap.obj(o).data {
+        .Cell { env, slot, name } => {
+            let v = it.heap.envs.items()[env].slots[slot]
+            if v is .Empty {
+                return it.uninitialized(name)
+            }
+            return v
+        }
+        .Prim { v } => {
+            return v
+        }
+        _ => {
+            return Value.Undefined
+        }
+    }
+}
+
+// constCell(value): a cell that always reads `value` (a namespace).
+fn engineConstCell(it: *mut Interp, a: Args) JsError!Value {
+    return objVal(try it.newObjectOf(Class.ModuleBinding, NONE, ObjData.Prim { v: it.arg(a, 0) }))
+}
+
+// The getter of a namespace property: `this` is its cell.
+fn moduleCellGet(it: *mut Interp, a: Args) JsError!Value {
+    if it.classOf(a.this) != Class.ModuleBinding {
+        return Value.Undefined
+    }
+    return readCell(it, objectOf(a.this))
+}
+
+// makeNamespace(names): a module namespace object with these exports (in
+// this order), each a live data property once fillNamespace gives it its
+// cell. Made empty first so that a namespace can contain itself.
+fn engineMakeNamespace(it: *mut Interp, a: Args) JsError!Value {
+    let names = objectOf(it.arg(a, 0))
+    let base = it.stack.len()
+    defer it.truncate(base)
+    let o = try it.newObjectOf(Class.ModuleNamespace, NONE, ObjData.None)
+    try it.push(objVal(o))
+    let n = it.heap.obj(names).nelems
+    for i in 0..n {
+        let key = try it.toKey(it.heap.obj(names).elems[i])
+        try it.heap.addProp(o, key, Value.Undefined, Value.Undefined, F_ENUM | F_WRITE | F_ACCESSOR | F_MODULE)
+    }
+    let tag = try it.newString("Module")
+    try it.heap.addProp(o, it.sym_to_string_tag, tag, Value.Undefined, 0)
+    it.heap.obj(o).extensible = false
+    return objVal(o)
+}
+
+// fillNamespace(namespace, cells): export i reads cells[i].
+fn engineFillNamespace(it: *mut Interp, a: Args) JsError!Value {
+    let o = objectOf(it.arg(a, 0))
+    let cells = objectOf(it.arg(a, 1))
+    let n = it.heap.obj(cells).nelems
+    for i in 0..n {
+        let cell = it.heap.obj(cells).elems[i]
+        let getter = try it.newObjectOf(Class.Function, it.function_proto, ObjData.Bound { target: it.module_cell_get, this_v: cell })
+        it.heap.obj(o).props[i].value = objVal(getter)
+    }
+    return Value.Undefined
+}
+
+fn importMeta(it: *mut Interp, referrer: u32, module_id: u32) JsError!Value {
+    if it.import_meta.get(module_id) |root| {
+        return it.roots.items()[root]
+    }
+    let base = it.stack.len()
+    defer it.truncate(base)
+    let o = try it.newObject(NONE)
+    try it.push(objVal(o))
+    let href = try it.atomValue(referrer)
+    try it.defineOwn(o, try it.intern("url"), href, F_DEFAULT)
+    // resolve(specifier): the module's own resolution, as import() does.
+    let loader = it.roots.items()[it.import_driver]
+    let resolve = try it.getProp(loader, try it.intern("resolve"))
+    let f = try it.newObjectOf(Class.Function, it.function_proto, ObjData.Bound { target: objectOf(resolve), this_v: Value.Undefined })
+    try it.push(objVal(f))
+    try it.heap.pushElem(f, href)
+    try it.defineOwn(o, try it.intern("resolve"), objVal(f), F_DEFAULT)
+    try it.import_meta.put(module_id, try it.addRoot(objVal(o)))
+    return objVal(o)
+}
+
+fn installModules(it: *mut Interp, e: u32) JsError!void {
+    it.module_cell_get = try it.newNative("", 0, moduleCellGet)
+    try it.addRoot(objVal(it.module_cell_get))
+    try it.defineNative(e, "resolveModule", 3, engineResolveModule)
+    try it.defineNative(e, "fetchModule", 3, engineFetchModule)
+    try it.defineNative(e, "parseModule", 2, engineParseModule)
+    try it.defineNative(e, "prefetchModules", 2, enginePrefetchModules)
+    try it.defineNative(e, "isModuleNamespace", 1, engineIsModuleNamespace)
+    try it.defineNative(e, "constCell", 1, engineConstCell)
+    try it.defineNative(e, "makeNamespace", 1, engineMakeNamespace)
+    try it.defineNative(e, "fillNamespace", 2, engineFillNamespace)
+}

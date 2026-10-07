@@ -191,6 +191,8 @@ pub struct Interp {
     // another object, as HTMLElement's does for custom elements).
     ctor_this: u32
     iterator_proto: u32
+    // %IteratorPrototype%: above iterator_proto and gen_proto.
+    iterator_base: u32 = NONE
     math_obj: u32
     json_obj: u32
     // Compiled regular expressions, by (pattern atom << 32 | flags atom).
@@ -257,6 +259,16 @@ pub struct Interp {
     weak_refs: IntMap(u32, u32)
     kept: List(Value)
     fin_cells: List(FinCell)
+    // Default referrer for classic scripts, and the root of the module
+    // loader object (lib.ore).
+    script_url: u32 = 0
+    import_driver: u32 = NONE
+    // The native getter of module namespace properties (modules.ore).
+    module_cell_get: u32 = NONE
+    // Module function id to the root of its unique import.meta object.
+    import_meta: IntMap(u32, u32)
+    // Strictness of classic top-level code (functions carry it in FuncInfo).
+    script_strict: bool = false
 
     pub fn create(alloc: Allocator) JsError!Interp {
         var it = Interp {
@@ -276,6 +288,7 @@ pub struct Interp {
             expr_nparams: 0,
             expr_this_slot: NONE,
             expr_this: Value.Undefined,
+            import_meta: IntMap(u32, u32).init(alloc),
             globals: GlobalNames.init(alloc),
             natives: List(NativeEntry).init(alloc),
             stack: List(Value).init(alloc),
@@ -370,6 +383,7 @@ pub struct Interp {
     }
 
     pub fn deinit(self: *mut Self) {
+        self.import_meta.deinit()
         destroyCoroutines(self)
         self.coroutines.deinit()
         self.co_saved.deinit()
@@ -1185,6 +1199,21 @@ pub struct Interp {
         }
     }
 
+    fn isStrictCode(self: *Self) bool {
+        if self.frames.len() > 0 {
+            let f = self.frames.items()[self.frames.len() - 1].func
+            if f != NONE {
+                match self.heap.obj(f).data {
+                    .Closure { func, .. } => {
+                        return self.ast.func(func).strict
+                    }
+                    _ => {}
+                }
+            }
+        }
+        return self.script_strict
+    }
+
     fn setOn(self: *mut Self, o: u32, key: u32, value: Value, receiver: Value) JsError!void {
         if self.heap.obj(o).class == Class.Host && self.namedHost(o) {
             if try self.host.?.setNamed(self, o, key, value) {
@@ -1195,6 +1224,12 @@ pub struct Interp {
         let cls = ob.class
         if cls == Class.Proxy {
             return proxySet(self, o, key, value, receiver)
+        }
+        if cls == Class.ModuleNamespace {
+            if self.isStrictCode() {
+                try self.typeError("Cannot assign to module namespace")
+            }
+            return
         }
         if cls == Class.Array || cls == Class.Arguments {
             let idx = self.heap.atoms.indexOf(key)
@@ -2519,6 +2554,7 @@ pub struct Interp {
                 v = self.heap.envs.items()[self.glex].slots[slot]
             } else {
                 v = self.heap.envs.items()[self.envAt(depth)].slots[slot]
+                v = try readImport(self, v)
             }
             match v {
                 .Empty => {
@@ -2610,13 +2646,16 @@ pub struct Interp {
         // Leaves cannot recurse. Keep them out of the large frame of
         // the general evaluator, including its C-stack probe and roots.
         match self.ast.nodes.items()[id] {
-            .Ident { name, depth, slot, .. } => {
+            .Ident { name, depth, slot, flags } => {
                 if depth <= DEPTH_GLOBAL_LEX {
                     var e = self.glex
                     if depth < DEPTH_GLOBAL_LEX {
                         e = self.envAt(depth)
                     }
-                    let v = self.heap.envs.items()[e].slots[slot]
+                    var v = self.heap.envs.items()[e].slots[slot]
+                    if (flags & IDENT_IMPORT) != 0 {
+                        v = try readImport(self, v)
+                    }
                     match v {
                         .Empty => {
                             return self.uninitialized(name)
@@ -2873,6 +2912,15 @@ pub struct Interp {
             }
             .Await { arg } => {
                 return self.evalAwait(arg)
+            }
+            .ImportCall { arg, options, referrer } => {
+                return evalImport(self, arg, options, referrer)
+            }
+            .ImportMeta { referrer, module_id } => {
+                return importMeta(self, referrer, module_id)
+            }
+            .ModuleLocals { list, n, lex, nlex } => {
+                return moduleLocals(self, list, n, lex, nlex)
             }
             .NewTarget => {
                 return self.evalNewTarget()
@@ -3350,6 +3398,20 @@ pub struct Interp {
         }
     }
 
+    // `delete o[key]`. Strict code may not delete a module export (other
+    // failed deletes still give false).
+    fn deleted(self: *mut Self, o: u32, key: u32) JsError!Value {
+        let ok = try self.deleteProp(o, key)
+        if !ok && self.heap.obj(o).class == Class.ModuleNamespace && self.isStrictCode() {
+            self.msg.clear()
+            try self.msg.append("Cannot delete property '")
+            try self.msg.append(self.heap.atoms.name(key))
+            try self.msg.append("' of [object Module]")
+            return self.throwError(self.type_error_proto, self.msg.bytes())
+        }
+        return boolVal(ok)
+    }
+
     fn evalUnary(self: *mut Self, op: Op, arg: u32) JsError!Value {
         if op == Op.Typeof {
             match self.ast.node(arg) {
@@ -3371,7 +3433,7 @@ pub struct Interp {
                     if !isObject(o) {
                         return boolVal(true)
                     }
-                    return boolVal(try self.deleteProp(objectOf(o), name))
+                    return self.deleted(objectOf(o), name)
                 }
                 .Index { obj, key, .. } => {
                     let base = self.stack.len()
@@ -3383,7 +3445,7 @@ pub struct Interp {
                     if !isObject(o) {
                         return boolVal(true)
                     }
-                    return boolVal(try self.deleteProp(objectOf(o), atom))
+                    return self.deleted(objectOf(o), atom)
                 }
                 .Ident { .. } => {
                     return boolVal(false)
@@ -4275,7 +4337,7 @@ pub struct Interp {
     // ---- scripts
 
     /// Parses and runs a script. A syntax error throws a SyntaxError.
-    pub fn runScript(self: *mut Self, src: []u8) JsError!Value {
+    fn parseCode(self: *mut Self, src: []u8, module: bool, referrer: u32, info: ?*mut ModuleInfo) JsError!u32 {
         var lx = Lexed.init(self.alloc)
         defer lx.deinit()
         let base = self.ast.source.len() as u32
@@ -4283,7 +4345,8 @@ pub struct Interp {
         let message = try self.builder()
         defer self.release(message)
         tokenize(self.alloc, src, &mut lx) catch |e| {
-            return self.syntaxError(lx.message.bytes())
+            try self.syntaxError(lx.message.bytes())
+            return JsError.Thrown
         }
         var p = Parser {
             alloc: self.alloc,
@@ -4300,10 +4363,25 @@ pub struct Interp {
             in_gen: false,
             strict: false,
             floor: self.stackFloor(),
+            referrer: referrer,
+            module: module,
+            info: info,
         }
         defer p.tmp.deinit()
-        let root = p.program() catch |e| {
-            return self.syntaxError(message.bytes())
+        var root: u32 = 0
+        if module {
+            root = p.moduleProgram() catch |e| {
+                try self.syntaxError(message.bytes())
+                return JsError.Thrown
+            }
+        } else {
+            root = p.program() catch |e| {
+                try self.syntaxError(message.bytes())
+                return JsError.Thrown
+            }
+        }
+        if !module {
+            self.script_strict = p.strict
         }
         var r = Resolver {
             alloc: self.alloc,
@@ -4318,8 +4396,17 @@ pub struct Interp {
             annex_pass: false,
         }
         defer r.cleanup()
-        r.script(root) catch |e| {
-            return self.syntaxError(message.bytes())
+        if module {
+            r.module_fn = root
+            r.function(root) catch |e| {
+                try self.syntaxError(message.bytes())
+                return JsError.Thrown
+            }
+        } else {
+            r.script(root) catch |e| {
+                try self.syntaxError(message.bytes())
+                return JsError.Thrown
+            }
         }
         while self.prop_caches.len() < self.ast.nodes.len() {
             try self.prop_caches.append(emptyPropCache())
@@ -4331,6 +4418,14 @@ pub struct Interp {
                 try self.heap.addProp(self.global, name, Value.Undefined, Value.Undefined, F_ENUM | F_WRITE)
             }
         }
+        return root
+    }
+
+    /// Parses and executes a classic script with its captured base URL.
+    pub fn runScript(self: *mut Self, src: []u8) JsError!Value {
+        let strict = self.script_strict
+        defer self.script_strict = strict
+        let root = try self.parseCode(src, false, self.script_url, null)
         let savedEnv = self.env
         try self.outer_envs.append(savedEnv)
         self.env = NONE

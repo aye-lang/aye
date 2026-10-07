@@ -1,0 +1,8 @@
+<!doctype html>
+<title>document.domain</title>
+<p id="out">pending</p>
+<script>
+document.domain = 'example.com';
+document.getElementById('out').textContent =
+  typeof document.domain + ' ' + (document.domain === location.hostname);
+</script>

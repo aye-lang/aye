@@ -7,7 +7,7 @@
       "\n"
     <body>
       <pre id="out">
-        "external script, relative to the page\ntyped inline\nnomodule runs\nlast inline, sees number\nasync script (runs like defer)\n"
+        "external script, relative to the page\ntyped inline\nlast inline, sees number\nmodule runs deferred\nasync script (runs like defer)\n"
       "\n"
       <script>
         "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\n"
@@ -15,7 +15,7 @@
       <script src="scripts/first.js">
       "\n"
       <script type="module">
-        "log('module: not run');"
+        "log('module runs deferred');"
       "\n"
       <script type="text/template">
         "log('template: not run');"
@@ -28,7 +28,7 @@
       <script src="scripts/missing.js">
       "\n"
       <script nomodule="">
-        "log('nomodule runs');"
+        "log('nomodule: not run');"
       "\n"
       <script>
         "log('last inline, sees', typeof fromFirst);"

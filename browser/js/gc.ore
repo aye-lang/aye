@@ -105,6 +105,7 @@ fn traceObj(it: *mut Interp, o: u32) {
             markValue(it, this_v)
         }
         .Prim { v } => markValue(it, v)
+        .Cell { env, .. } => markEnv(it, env)
         .Proxy { target, handler } => {
             markObj(it, target)
             markObj(it, handler)

@@ -1,0 +1,15 @@
+keys ["bump","counter","default","local","renamed","same","self","string name","sub","x","y","yDefault","z","Symbol(Symbol.toStringTag)"]
+values x x y y default x default local local
+false undefined true y x y default
+self true true
+live through re-export 1 true
+chain bump,counter,extra,local,renamed,same,self,string name,sub,x,y,yDefault,z false
+importer local y x y x default function
+ambiguous SyntaxError: The requested module './all.mjs' contains conflicting star exports for name 'dup'
+missing SyntaxError: The requested module './all.mjs' does not provide an export named 'nope'
+bad-reexport SyntaxError: The requested module './x.mjs' does not provide an export named 'nope'
+destructure 1 2 3 [30,31] 4 {"e":5,"f":6}
+array one three fourth default default value a,b0,b1,bRest,first,fourth,missing,others,renamedD,setFirst,third
+live changed
+defaults default class default fn
+more default arrow default paren undefined named string

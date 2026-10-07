@@ -1,0 +1,21 @@
+parent Error
+throws Error
+same error true boom 1
+link-fail SyntaxError
+syntax-parent SyntaxError
+side effects undefined
+side ok
+side effects 1
+link-fail SyntaxError
+dup-export SyntaxError
+undeclared SyntaxError
+dup-import SyntaxError
+assign import TypeError
+update import TypeError
+assign namespace TypeError
+delete namespace TypeError
+live reads 1,number,11,number,21,number 20 20
+meta object null true
+resolve true
+this undefined undefined
+assign ok

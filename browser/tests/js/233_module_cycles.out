@@ -1,0 +1,16 @@
+b body: fa sees bv=undefined namedDefault default fn
+b reads a before it ran: ReferenceError
+b reads nsA.a before it ran: ReferenceError 4
+keys of a namespace with a TDZ export: ReferenceError
+descriptor of a TDZ export: ReferenceError
+a body: bv = B-var ; b default = b default
+a done: A fa sees bv=B-var
+keys a,default,fa
+fa fa sees bv=B-var
+useA A
+ring r3 r2 r1
+self self value true
+tick-dep body
+ticks body
+tick-dep microtask
+after ticks

@@ -1,0 +1,17 @@
+then from then
+keys ["B","a","b","uninit","with space","é","Symbol(Symbol.toStringTag)"]
+names B,a,b,uninit,with space,é 1
+tag {"value":"Module","writable":false,"enumerable":false,"configurable":false}
+uninit undefined true undefined false
+missing undefined false true false
+extensible false true false
+define same true false false
+symbol false Module false
+spread {"B":3,"a":2,"b":1,"with space":2,"é":2} [["B",3],["a",2],["b",1],["uninit",null],["with space",2],["é",2]]
+promises true false true
+shared start
+shared end
+tick-a shared
+tick-b shared
+shared runs 1
+meta /modules/edge/meta.mjs /modules/edge/y.mjs null

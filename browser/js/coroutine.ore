@@ -566,11 +566,12 @@ fn engineSetDrivers(it: *mut Interp, a: Args) JsError!Value {
     it.async_driver = try it.addRoot(it.arg(a, 0))
     it.async_gen_driver = try it.addRoot(it.arg(a, 1))
     it.unhandled_fn = try it.addRoot(it.arg(a, 2))
+    it.import_driver = try it.addRoot(it.arg(a, 3))
     return Value.Undefined
 }
 
 fn installGenerators(it: *mut Interp) JsError!void {
-    it.gen_proto = try it.newObject(it.iterator_proto)
+    it.gen_proto = try it.newObject(it.iterator_base)
     try it.addRoot(objVal(it.gen_proto))
     try it.defineNative(it.gen_proto, "next", 1, generatorNext)
     try it.defineNative(it.gen_proto, "throw", 1, generatorThrow)
@@ -582,7 +583,8 @@ fn installGenerators(it: *mut Interp) JsError!void {
     let e = try it.newObject(it.object_proto)
     try it.defineValue(it.global, "__engine", objVal(e))
     try it.defineNative(e, "kindOf", 1, engineKindOf)
-    try it.defineNative(e, "setDrivers", 3, engineSetDrivers)
+    try it.defineNative(e, "setDrivers", 4, engineSetDrivers)
+    try installModules(it, e)
     try it.defineNative(e, "construct", 3, engineConstruct)
 }
 

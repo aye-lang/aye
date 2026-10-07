@@ -61,6 +61,9 @@ pub let PROP_STATIC_BLOCK: u32 = 6
 pub let DECL_VAR: u32 = 0
 pub let DECL_LET: u32 = 1
 pub let DECL_CONST: u32 = 2
+// The bindings of a module's import declarations: const, and each slot
+// holds a live cell (or a namespace) that reads unwrap.
+pub let DECL_IMPORT: u32 = 3
 
 // Ident.depth: a variable of the global object, or of the global lexical
 // environment (`slot` is then its index there).
@@ -69,6 +72,7 @@ pub let DEPTH_GLOBAL_LEX: u32 = 0xFFFFFFFE
 
 // Ident.flags
 pub let IDENT_CONST: u32 = 1
+pub let IDENT_IMPORT: u32 = 2
 
 pub enum Node {
     Empty
@@ -116,6 +120,16 @@ pub enum Node {
     // the raw strings (atoms).
     TaggedTemplate { tag: u32, quasi: u32, raw: u32 }
     NewTarget
+    // `import(arg, options)`: the referrer URL atom is captured at parse
+    // time, so later callbacks resolve against their own script.
+    ImportCall { arg: u32, options: u32, referrer: u32 }
+    ImportMeta { referrer: u32, module_id: u32 }
+    // A module's local exports: lists[list..list+n] are Prop nodes whose
+    // key is the local name and whose value is its Ident. Evaluates to an
+    // object of live cells, one per local (js/modules.ore), after putting
+    // the module's let/const/class slots (lists[lex..lex+nlex], set by the
+    // resolver) in their TDZ.
+    ModuleLocals { list: u32, n: u32, lex: u32, nlex: u32 }
     // ---- patterns (binding and assignment targets)
     ArrayPat { list: u32, n: u32 }
     ObjectPat { list: u32, n: u32 }

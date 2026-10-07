@@ -1,0 +1,11 @@
+await true 1 1 2 default true
+binding 3 true
+namespace import true 3
+seal true false
+set false 3
+define true false false
+proto true false
+freeze TypeError
+strict set TypeError
+missing SyntaxError
+undefined export SyntaxError

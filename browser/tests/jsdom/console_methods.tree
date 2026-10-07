@@ -1,0 +1,14 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Console methods"
+      "\n"
+    <body>
+      <p id="out">
+        "function false"
+      "\n"
+      <script>
+        "\nconsole.assert(1 === 1, 'not shown');\nconsole.assert(false, 'shown %s', 'here');\nconsole.assert(0);\nconsole.group('group label');\nconsole.table([1]);\nconsole.groupEnd();\nconsole.time('t');\nconsole.timeEnd('t');\nconsole.count();\nconst a = document.createElement('a');\ndocument.getElementById('out').textContent = [typeof SVGAnimatedString, a.href instanceof SVGAnimatedString].join(' ');\ntry { new SVGAnimatedString(); } catch (e) { console.log(e.name); }\n"
+      "\n"

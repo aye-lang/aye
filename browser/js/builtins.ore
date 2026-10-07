@@ -25,7 +25,8 @@ pub fn installBuiltins(it: *mut Interp) JsError!void {
     it.regexp_proto = try h.newObj(Class.Object, it.object_proto, ObjData.None)
     it.map_proto = try h.newObj(Class.Object, it.object_proto, ObjData.None)
     it.set_proto = try h.newObj(Class.Object, it.object_proto, ObjData.None)
-    it.iterator_proto = try h.newObj(Class.Object, it.object_proto, ObjData.None)
+    it.iterator_base = try h.newObj(Class.Object, it.object_proto, ObjData.None)
+    it.iterator_proto = try h.newObj(Class.Object, it.iterator_base, ObjData.None)
 
     let g = it.global
     try it.defineValue(g, "globalThis", objVal(g))
@@ -248,6 +249,13 @@ fn keysOf(it: *mut Interp, a: Args, keys: *mut List(u32)) JsError!u32 {
     let o = try it.toObject(it.arg(a, 0))
     try it.push(objVal(o))
     try it.ownKeys(o, keys, false)
+    // A namespace's [[GetOwnProperty]] reads the binding: one in its TDZ
+    // throws.
+    if it.heap.obj(o).class == Class.ModuleNamespace {
+        for k in keys.items() {
+            try it.getProp(objVal(o), k)
+        }
+    }
     return o
 }
 
@@ -364,6 +372,29 @@ pub fn definePropertyFrom(it: *mut Interp, o: u32, key: u32, desc: Value) JsErro
     }
     if it.heap.obj(o).class == Class.Proxy {
         return proxyDefine(it, o, key, desc)
+    }
+    if it.heap.obj(o).class == Class.ModuleNamespace {
+        if !it.hasOwn(o, key) {
+            try it.typeError("Cannot define a new module export")
+        }
+        let accessor = it.hasProperty(objectOf(desc), try it.intern("get")) || it.hasProperty(objectOf(desc), try it.intern("set"))
+        let badConfig = it.toBoolean(try it.getProp(desc, A_CONFIGURABLE))
+        let badEnum = it.hasProperty(objectOf(desc), A_ENUMERABLE) && !it.toBoolean(try it.getProp(desc, A_ENUMERABLE))
+        let flags = it.heap.obj(o).props[it.heap.findProp(o, key).?].flags
+        let badWrite = it.hasProperty(objectOf(desc), A_WRITABLE) &&
+            it.toBoolean(try it.getProp(desc, A_WRITABLE)) != ((flags & F_MODULE) != 0)
+        var badValue = false
+        if it.hasProperty(objectOf(desc), A_VALUE) {
+            let wanted = try it.getProp(desc, A_VALUE)
+            try it.push(wanted)
+            let actual = try it.getProp(objVal(o), key)
+            badValue = !sameValue(it, wanted, actual)
+            it.pop()
+        }
+        if accessor || badConfig || badEnum || badWrite || badValue {
+            try it.typeError("Cannot redefine a module export")
+        }
+        return
     }
     if key == A_PROTOTYPE && it.heap.obj(o).class == Class.Function {
         let base = it.stack.len()
@@ -517,7 +548,11 @@ pub fn ownDescriptor(it: *mut Interp, o: u32, key: u32) JsError!Value {
     try it.resolveLazyPrototype(o, key)
     if it.heap.findProp(o, key) |i| {
         let p = it.heap.obj(o).props[i]
-        if (p.flags & F_ACCESSOR) != 0 {
+        if (p.flags & F_MODULE) != 0 {
+            let v = try it.call0(p.value, Value.Undefined)
+            try it.defineOwn(d, A_VALUE, v, F_DEFAULT)
+            try it.defineOwn(d, A_WRITABLE, boolVal(true), F_DEFAULT)
+        } else if (p.flags & F_ACCESSOR) != 0 {
             try it.defineOwn(d, try it.intern("get"), p.value, F_DEFAULT)
             try it.defineOwn(d, try it.intern("set"), p.setter, F_DEFAULT)
         } else {
@@ -550,6 +585,12 @@ fn objectGetPrototypeOf(it: *mut Interp, a: Args) JsError!Value {
 
 fn objectSetPrototypeOf(it: *mut Interp, a: Args) JsError!Value {
     let ov = it.arg(a, 0)
+    if it.classOf(ov) == Class.ModuleNamespace {
+        if !(it.arg(a, 1) is .Null) {
+            return it.typeError("Cannot change module namespace prototype")
+        }
+        return ov
+    }
     if isObject(ov) && it.heap.obj(objectOf(ov)).class == Class.Proxy {
         try proxySetPrototype(it, objectOf(ov), it.arg(a, 1))
         return ov
@@ -575,6 +616,13 @@ fn objectFreeze(it: *mut Interp, a: Args) JsError!Value {
     let o = objectOf(ov)
     if o != NONE {
         let ob = it.heap.obj(o)
+        if ob.class == Class.ModuleNamespace {
+            for i in 0..ob.nprops {
+                if (ob.props[i].flags & F_MODULE) != 0 {
+                    return it.typeError("Cannot freeze a module namespace with exports")
+                }
+            }
+        }
         ob.frozen = true
         ob.extensible = false
         for i in 0..ob.nprops {
