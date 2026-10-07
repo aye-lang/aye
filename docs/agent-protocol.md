@@ -42,12 +42,17 @@ anyknown dump --a11y [--boxes] [--json] [--js] [--width PX] [--no-scroll | --scr
 anyknown dump --md [--refs] [--js] [--width PX] [--no-scroll | --scroll-steps N] FILE|URL
 ```
 
-With `--js`, a dump runs the timers that are due after the load, then
-scrolls through the page a viewport at a time (500 ms of page time at
-each place, at most 20 steps or N, until the bottom shows and the page
-stopped growing) and back to the top, so that content the page loads
-when it comes into view (IntersectionObserver, infinite lists) is in
-the dump. A session does not do this by itself: `scroll` fires the
+With `--js`, a dump runs the timers that are due after the load, gives
+the page 500 ms of its time, then scrolls through it a viewport at a
+time (500 ms of page time at each place, at most 20 steps or N, until
+the bottom shows and the page stopped growing) and back to the top, so
+that content the page loads when it comes into view
+(IntersectionObserver, infinite lists) is in the dump. It scrolls only
+a page that observes intersections or listens for the window's scroll.
+After a step that changed no text, it stops when nothing changed since
+the load; else the next step goes straight to the bottom (where an
+infinite list loads more), and it stops when that changed nothing
+either. A session does not do this by itself: `scroll` fires the
 page's `scroll` event and moves what its observers see, and `wait`
 gives the page the time to load.
 

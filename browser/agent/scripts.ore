@@ -89,15 +89,18 @@ fn merge(tmp: Allocator, o: *mut Outcome, r: Outcome) AllocError!void {
 
 /// For a dump: scrolls through the page so that its scripts load what
 /// they load when it comes into view (`engine.scrollThrough`, at most
-/// `max_steps` viewports), then lays out what they added, the viewport
-/// back at the top.
+/// `max_steps` viewports), then lays out what they changed, the
+/// viewport back at the top.
 fn scrollThroughPage(s: *mut Session, max_steps: usize) AllocError!void {
     let p = s.tab.page orelse return
     if !engine.hasScripts(p) || max_steps == 0 {
         return
     }
+    let version = engine.treeVersion(p)
     _ = try engine.scrollThrough(p, max_steps)
-    try relayout(s)
+    if engine.treeVersion(p) != version {
+        try relayout(s)
+    }
     s.tab.scroll = 0.0
 }
 

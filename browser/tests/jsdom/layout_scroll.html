@@ -6,7 +6,7 @@ body { margin: 0 }
 .item { height: 40px }
 #plain { height: 20px }
 #tall { height: 2000px }
-#fixed { position: fixed; top: 10px; left: 0; width: 50px; height: 10px }
+#fixed { position: fixed; top: 10px; left: 0; width: 50px; height: 4000px }
 </style>
 <div id="list"><div class="item" id="i0"></div><div class="item"></div><div class="item"></div><div class="item" id="i3"></div><div class="item"></div><div class="item" id="last"></div></div>
 <div id="plain"><div style="height: 50px"></div></div>
@@ -45,6 +45,8 @@ const tallTop = $('tall').getBoundingClientRect().top;
 window.scrollTo(0, 300);
 log('window', scrollY, pageYOffset, document.documentElement.scrollTop, $('tall').getBoundingClientRect().top === tallTop - 300, $('tall').offsetTop);
 log('fixed', $('fixed').getBoundingClientRect().top, $('fixed').offsetTop);
+// A fixed box is in the viewport: it does not make the document taller.
+log('fixed area', document.documentElement.scrollHeight < 4000);
 window.scrollBy(0, -100);
 document.documentElement.scrollTop += 1;
 log('window', scrollY, document.scrollingElement.scrollTop);

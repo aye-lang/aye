@@ -1,0 +1,11 @@
+<!doctype html><title>Slow images</title>
+<p>Parsed and script-made images, each answered after 0.3 s: their
+requests must be made together, not one after another.</p>
+<img src="/slow/a1.png"><img src="/slow/a2.png"><img src="/slow/a3.png">
+<img src="/slow/a4.png"><img src="/slow/a5.png"><img src="/slow/a6.png">
+<script>
+for (let i = 1; i <= 6; i++) {
+  const img = new Image();
+  img.src = '/slow/b' + i + '.png';
+}
+</script>

@@ -364,3 +364,28 @@ counts (`timers n=`) with a previous binary and look for archive misses
 (`archive miss:` on stderr) before optimizing the engine.
 **Why:** a replay artifact looks like an engine regression and hides the
 real numbers.
+
+### Script-visible network requests must not be serial
+**Context:** an API that lets scripts observe a resource's state (img
+`complete`/`naturalWidth`/`load`, fetch, XHR) on the synchronous fetch.
+**Bad:** `c40a1ea` fetched each img's image in its own microtask, one at
+a time inside the scripts phase: lobste.rs's 25 avatars took 25 round
+trips (8 s instead of 2 s). A replay hides it: every request is 0 ms.
+**Good:** batch the requests of a turn into one `net.prefetch`
+(`ak.imagePrefetch`, `8ae98cd`), and check a live run's `requests` phase
+for serial runs of the same host as well as the replay. The test server's
+`/slow/` route counts concurrent requests (`http_images_concurrent`).
+**Why:** a real browser loads in parallel and never blocks on it; a
+blocking fetch costs one round trip per request.
+
+### One event-loop turn runs only the tasks queued before it
+**Context:** the window's frame loop and timers on the real clock.
+**Bad:** `runDueTimers` ran timers until none was due; four canvas
+animation loops in a mistral.ai iframe, each forcing a layout (real
+geometry since `0c810b7`), took longer than their 16 ms interval, so
+the loop never ended and `--frames 30` hung (`f126cc6`).
+**Good:** a turn stops at the timers scheduled before it began; the
+window draws between turns (`window_timers_yield_to_frames`). When a
+window run hangs, sample it: a `timers` count far above the `paint`
+count with `ANYKNOWN_TIMING=1` is this starvation.
+**Why:** a page may always have a due task; frames must still come.

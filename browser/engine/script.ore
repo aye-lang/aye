@@ -285,6 +285,9 @@ pub struct Script {
     // geometry changed since the last call (`hook_stamp`).
     layout_hook: u32
     hook_stamp: u64
+    // The page listens for the window's scroll or observes intersections
+    // (`ak.watchScroll`): a dump's scroll through it may load more.
+    watches_scroll: bool = false
 
     // ---- js.Host
 
@@ -1074,11 +1077,24 @@ fn tick(s: *mut Script) {
 }
 
 // The timer due first (by time, then by order of scheduling), if it is
-// due at `limit` or before.
+// due at `limit` or before and was scheduled before `seq`.
 fn earliest(s: *mut Script, limit: f64) ?usize {
+    return earliestBefore(s, limit, s.seq)
+}
+
+// The timers a turn of `runDueTimers` that began at `turn` may run: on
+// the virtual clock all of them (time does not pass while they run).
+fn turnLimit(s: *Script, turn: u64) u64 {
+    if s.real {
+        return turn
+    }
+    return s.seq
+}
+
+fn earliestBefore(s: *mut Script, limit: f64, seq: u64) ?usize {
     var best: ?usize = null
     for i, t in s.timers.items() {
-        if t.due > limit {
+        if t.due > limit || t.seq >= seq {
             continue
         }
         if best |b| {
@@ -1162,12 +1178,17 @@ fn afterTask(s: *mut Script) AllocError!void {
 
 /// Runs the timers that are due (and their microtasks), of the page and
 /// of its frames; true if any ran.
+/// On the real clock (the window) this is one turn of the event loop:
+/// only the timers scheduled before it began run, so that callbacks that
+/// take longer than their interval (or schedule themselves again at 0 ms)
+/// still let the window draw a frame between turns.
 pub fn runDueTimers(p: *mut Page) AllocError!bool {
     var ran = false
     if p.script |s| {
         tick(s)
+        let turn = s.seq
         var n: usize = 0
-        while earliest(s, s.now) |i| {
+        while earliestBefore(s, s.now, turnLimit(s, turn)) |i| {
             try runTimer(s, i)
             n += 1
             if n >= MAX_TASKS {

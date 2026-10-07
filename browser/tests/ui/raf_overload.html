@@ -1,0 +1,18 @@
+<!doctype html><p id="result">before</p><script>
+// Four animation loops whose callbacks take longer together than a frame
+// (each busy-waits 10 ms), and a task that queues itself again at 0 ms.
+// The window must still draw its frames between event-loop turns
+// (the mistral.ai widgets hung `--frames 30` this way).
+let calls = 0;
+function busy() {
+  const end = performance.now() + 10;
+  while (performance.now() < end) {}
+}
+for (let k = 0; k < 4; k++) {
+  const loop = () => { busy(); calls++; requestAnimationFrame(loop); };
+  requestAnimationFrame(loop);
+}
+const again = () => { calls++; setTimeout(again, 0); };
+setTimeout(again, 0);
+document.getElementById('result').textContent = 'animating';
+</script>

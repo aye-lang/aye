@@ -98,6 +98,7 @@ fn installGeometry(s: *mut Script, o: u32) JsError!void {
     try defMethod(it, o, "setScroll", 3, akSetScroll)
     try defMethod(it, o, "windowScroll", 1, akWindowScroll)
     try defMethod(it, o, "setLayoutHook", 1, akSetLayoutHook)
+    try defMethod(it, o, "watchScroll", 0, akWatchScroll)
     try defMethod(it, o, "renderedSize", 2, akRenderedSize)
 }
 
@@ -109,6 +110,11 @@ fn akSetLayoutHook(it: *mut Interp, a: Args) JsError!Value {
     }
     s.layout_hook = try it.addRoot(f)
     s.hook_stamp = 0
+    return Value.Undefined
+}
+
+fn akWatchScroll(it: *mut Interp, a: Args) JsError!Value {
+    scriptOf(it).watches_scroll = true
     return Value.Undefined
 }
 
@@ -656,7 +662,9 @@ fn clipsOverflow(g: *Geometry, i: usize) bool {
 
 // The right and bottom edges (in `w`, `h`) of what box `i` holds: its
 // descendants' boxes with their end margins and its lines' fragments,
-// not going into boxes that clip.
+// not going into boxes that clip. Fixed boxes are left out: they are
+// placed in the viewport, so a page does not scroll to reach them (and
+// they would follow the scroll offset down without end).
 fn contentEdges(g: *Geometry, i: usize, edges: *mut Area) {
     let t = g.tree
     let b = t.bx(i)
@@ -676,6 +684,9 @@ fn contentEdges(g: *Geometry, i: usize, edges: *mut Area) {
         let cb = t.bx(c)
         if cb.kind == layout.BoxKind.Inline || cb.kind == layout.BoxKind.Text || cb.kind == layout.BoxKind.LineBreak {
             contentEdges(g, c, edges)
+            continue
+        }
+        if cb.abs == 2 {
             continue
         }
         edges.w = math.max(edges.w, cb.ax + cb.w + cb.margin[1])
@@ -1069,6 +1080,35 @@ pub fn setScriptScroll(p: *mut Page, y: f64) AllocError!void {
     try runLayoutHook(s)
 }
 
+// What a dump of the document shows, as a hash (FNV-1a): the text of
+// the document and of its shadow trees, and its elements in order.
+// `scrollThrough` compares it before and after a step; attributes are
+// left out, so that lazy images getting their `src` do not count.
+fn contentSignature(doc: *dom.Document) u64 {
+    var h = hashTree(doc, doc.root, 14695981039346656037)
+    for r in doc.shadows.items() {
+        h = hashTree(doc, r, h)
+    }
+    return h
+}
+
+fn hashTree(doc: *dom.Document, top: NodeId, seed: u64) u64 {
+    var h = seed
+    var cur: ?NodeId = top
+    while cur |c| {
+        let n = doc.node(c)
+        if n.kind == dom.Kind.Text {
+            for b in n.data {
+                h = (h ^ (b as u64)) *% 1099511628211
+            }
+        } else if n.kind == dom.Kind.Element {
+            h = (h ^ 0x100) *% 1099511628211
+        }
+        cur = doc.following(c, top)
+    }
+    return h
+}
+
 // The page's time between two steps of `scrollThrough`, in ms: for the
 // observers' animation frame, a lazy loader's debounce and what it
 // fetches.
@@ -1077,21 +1117,35 @@ let SCROLL_STEP_MS: f64 = 500.0
 /// Scrolls the window down through the document as a reader would, for
 /// a dump of a page whose scripts load content when it comes into view.
 /// The page's timers run for 500 ms of its time where it is (the
-/// observers check), then after each step of a viewport height down
-/// (which fires `scroll`), until the bottom of the document is shown
+/// observers check). Then, when the page listens for the window's
+/// scroll or observes intersections (`watches_scroll`), it scrolls a
+/// viewport height down (which fires `scroll`) and gives the page 500
+/// ms again, step after step, until the bottom of the document is shown
 /// and it did not grow, or after `max_steps` steps (a page that grows
-/// without end; 0: nothing happens). Then the window is back at the top,
-/// at once: the page does not get to react to that, so what it would
-/// drop out of view stays. The steps taken.
+/// without end; 0: nothing happens). After a step that did not change
+/// the document's content (`contentSignature`), it stops if the content
+/// never changed since the load (scrolling loads nothing there); else
+/// the next step goes straight to the bottom, where an infinite list
+/// loads more, and it goes on from there only if that changed the
+/// content. Then the window is back at the top, at once: the page does
+/// not get to react to that, so what it would drop out of view stays.
+/// The steps taken.
 pub fn scrollThrough(p: *mut Page, max_steps: usize) AllocError!usize {
     let s = p.script orelse return 0
     if max_steps == 0 {
         return 0
     }
+    let loaded = contentSignature(&p.doc)
+    try advanceClock(p, SCROLL_STEP_MS)
     var steps: usize = 0
-    while s.nav_kind == NavKind.None {
-        try advanceClock(p, SCROLL_STEP_MS)
-        if steps == max_steps || s.nav_kind != NavKind.None {
+    var last = contentSignature(&p.doc)
+    // The content changed since the load; the last step changed nothing;
+    // it went to the bottom.
+    var lively = last != loaded
+    var quiet = false
+    var jumped = false
+    while s.watches_scroll && steps < max_steps && s.nav_kind == NavKind.None {
+        if quiet && (jumped || !lively) {
             break
         }
         let g = try geometry(s)
@@ -1099,8 +1153,20 @@ pub fn scrollThrough(p: *mut Page, max_steps: usize) AllocError!usize {
         if s.scroll_y >= bottom {
             break
         }
-        try setScriptScroll(p, math.min(s.scroll_y + s.height, bottom))
+        jumped = quiet
+        var y = math.min(s.scroll_y + s.height, bottom)
+        if quiet {
+            y = bottom
+        }
+        try setScriptScroll(p, y)
         steps += 1
+        try advanceClock(p, SCROLL_STEP_MS)
+        let now = contentSignature(&p.doc)
+        quiet = now == last
+        if !quiet {
+            lively = true
+        }
+        last = now
     }
     s.scroll_x = 0.0
     s.scroll_y = 0.0
