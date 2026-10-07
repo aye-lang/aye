@@ -84,6 +84,7 @@ Done 2026-10-07.
 | P1.8 | Diagnose why a youtube-search dump costs 64–120 s CPU. Done: 42% YouTube's scheduler loops `while (Date.now() < deadline)` with a frozen benchmark `Date.now`; 37% YouTube's IntersectionObserver polyfill (installed because `IntersectionObserverEntry` is missing) | – | P1.7 | – |
 | P1.9 | Global `IntersectionObserverEntry` (with `intersectionRatio`, `isIntersecting` on its prototype) in `browser/engine/prelude.ore`, so sites use our IntersectionObserver instead of a polyfill | youtube-search replay: no polyfill samples, CPU falls, Markdown unchanged; JS test | P1.7 | P1.10 |
 | P1.10 | The virtual clock advances by a fixed amount per N steps inside a task (`tick()` in `browser/engine/script.ore`); benchmark `Date.now` = epoch + `ak.now()`, so time-based yields work and replay stays deterministic | scheduler tasks < 1M steps; 3 identical replays; CPU falls | P1.7 | P1.9 |
+| P1.11 | Diagnose where youtube-search's remaining CPU goes (~80 s after P1.9; the scheduler now yields, but total work did not fall): JS-stack samples every 1M steps, as P1.8 did | ranked list of hot functions/bundles with shares; proposed fix steps | P1.7–P1.10 merged | P3 |
 
 ### P2: Ore close-out
 
