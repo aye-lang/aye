@@ -1,0 +1,6 @@
+pub fn main() {
+    let n: i32 = 1
+    let b = n as bool
+    let f = true as f64
+    let x = 1.5 as bool
+}

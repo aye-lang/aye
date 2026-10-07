@@ -1,0 +1,35 @@
+let ONE = true as u8
+let ZERO = false as i64
+
+fn count(comptime T: type, flags: []bool) T where T: Integer {
+    var n: T = 0
+    for f in flags {
+        n = n + f as T
+    }
+    return n
+}
+
+pub fn main() {
+    let t = true
+    let f = false
+    @println(t as u8)
+    @println(f as u8)
+    @println(t as i8)
+    @println(t as i16)
+    @println(t as i32)
+    @println(t as i64)
+    @println(t as isize)
+    @println(t as u16)
+    @println(t as u32)
+    @println(t as u64)
+    @println(t as usize)
+    @println(f as i64)
+    let a: i32 = 3
+    let b: i32 = 5
+    @println((a < b) as i32 + (a > b) as i32 * 10)
+    @println(((a == 3) as u8) as f64)
+    @println(ONE)
+    @println(ZERO)
+    let flags = [_]bool{true, false, true, true}
+    @println(count(u32, flags[..]))
+}
