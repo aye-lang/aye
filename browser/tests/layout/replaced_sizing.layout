@@ -1,0 +1,34 @@
+viewport 800x600
+  block <html> (0, 0) 800x1206.4
+    block <body> (0, 0) 800x1206.4
+      block <div> (0, 0) 400x205.2
+        line (0, 0) 400x205.2
+          replaced <svg width="1000" height="500" viewbox="0 0 100 50" class="fluid"> (0, 0) 400x200
+      block <div> (0, 205.2) 400x505.2
+        line (0, 205.2) 400x505.2
+          replaced <svg width="1000" height="500" viewbox="0 0 100 50" style="max-width: 100%"> (0, 205.2) 400x500
+      block <div> (0, 710.4) 400x55.2
+        line (0, 710.4) 400x55.2
+          replaced <svg width="100" height="50" viewbox="0 0 4 1" style="width: auto"> (0, 710.4) 200x50
+      block <div> (0, 765.6) 400x20
+        line (0, 765.6) 400x20
+          replaced <svg width="0" height="0" viewbox="0 0 2 1"> (0, 780.4) 0x0
+      block <div> (0, 785.6) 400x21.2
+        line (0, 785.6) 400x21.2
+          replaced <svg width="1em" height="1em" viewbox="0 0 32 32"> (0, 785.6) 16x16
+      block <div> (0, 806.8) 400x50
+        replaced <svg viewbox="0 0 100 50" style="display: block; max-width: 100px"> (0, 806.8) 100x50
+      flex <div class="logo"> (0, 856.8) 400x40
+        replaced <svg viewbox="0 0 112 32"> (0, 856.8) 140x40
+      block <div> (0, 896.8) 400x205.2
+        line (0, 896.8) 400x205.2
+          replaced <img src="pic.svg" width="1000" height="500" class="fluid"> (0, 896.8) 400x200
+      block <div> (0, 1102) 400x20
+        line (0, 1102) 400x20
+          replaced <img src="pic.svg" width="40" height="20" style="height: 10px"> (0, 1106.8) 40x10
+      block <div> (0, 1122) 400x59.2
+        line (0, 1122) 400x59.2
+          replaced <iframe src="frame.html" width="100" height="50" style="width: auto"> (0, 1122) 304x54
+      block <div> (0, 1181.2) 400x25.2
+        line (0, 1181.2) 400x25.2
+          replaced <canvas width="100" height="40" style="max-width: 50px"> (0, 1181.2) 50x20

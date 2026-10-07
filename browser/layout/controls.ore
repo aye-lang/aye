@@ -426,7 +426,8 @@ fn scrollsLines(t: *Tree, i: usize) bool {
 // ---- replaced sizes
 
 /// The natural size of a replaced box: its image's, 13 x 13 for a
-/// checkbox or radio button; null for none.
+/// checkbox or radio button, a canvas's `width` x `height` (300 x 150);
+/// null for none.
 fn naturalSize(t: *Tree, i: usize) ?Size {
     let el = t.bx(i).node orelse return null
     if t.images |imgs| {
@@ -443,6 +444,9 @@ fn naturalSize(t: *Tree, i: usize) ?Size {
         return Size { w: 160.0, h: 16.0 }
     }
     if kind == ControlKind.Color { return Size { w: 44.0, h: 22.0 } }
+    if t.doc.isElement(el, "canvas") {
+        return Size { w: dom.canvasDimension(t.doc, el, "width", 300) as f64, h: dom.canvasDimension(t.doc, el, "height", 150) as f64 }
+    }
     return null
 }
 

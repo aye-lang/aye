@@ -244,18 +244,49 @@ fn shrinkToFit(t: *mut Tree, i: usize, avail: f64) AllocError!void {
 }
 
 // The size of a replaced element (`replacedDims`) within its min/max.
+// An auto size follows the other one's clamped value by the aspect
+// ratio (CSS 2.1 10.4: a clamped width first, then the height).
 fn replacedSize(t: *mut Tree, i: usize, cb_w: f64, cb_h: f64) {
     let b = t.bx(i)
-    let dims = replacedDims(t, i, cb_w, cb_h, hEdges(b), vEdges(b))
-    let w = dims.w
-    let h = dims.h
-    let cw = clampWidth(t, i, w, cb_w)
-    let ch = clampHeight(t, i, h, cb_h)
+    let he = hEdges(b)
+    let ve = vEdges(b)
+    let dims = replacedDims(t, i, cb_w, cb_h, he, ve)
+    var cw = clampWidth(t, i, dims.w, cb_w)
+    var ch = clampHeight(t, i, dims.h, cb_h)
+    let w_auto = sizeOf(b.style, b.style[css.WIDTH], cb_w, he) == null
+    let h_auto = sizeOf(b.style, b.style[css.HEIGHT], cb_h, ve) == null
+    if replacedRatio(t, i) |r| {
+        if h_auto && cw != dims.w {
+            ch = clampHeight(t, i, (cw - he) / r + ve, cb_h)
+        } else if w_auto && ch != dims.h {
+            cw = clampWidth(t, i, (ch - ve) * r + he, cb_w)
+        }
+    }
     let bb = t.bx(i)
     bb.w = cw
     bb.h = ch
     bb.first_baseline = -1.0
     bb.last_baseline = -1.0
+}
+
+// The width / height ratio of the replaced box `i`: its `aspect-ratio`,
+// else its natural size's, else its `viewBox`'s; null for none.
+fn replacedRatio(t: *Tree, i: usize) ?f64 {
+    if aspectRatio(t, i) |r| {
+        return r
+    }
+    if naturalSize(t, i) |n| {
+        if n.w > 0.0 && n.h > 0.0 {
+            return n.w / n.h
+        }
+        return null
+    }
+    if defaultRatio(t, i) |r| {
+        if r > 0.0 {
+            return r
+        }
+    }
+    return null
 }
 
 /// The `aspect-ratio` of box `i` (width / height) as "W / H" or "N";
@@ -290,28 +321,16 @@ fn aspectRatio(t: *Tree, i: usize) ?f64 {
 
 /// The border-box size of a replaced element whose padding and borders
 /// are `he` (left and right) and `ve` (top and bottom): its
-/// `width`/`height`, else its `width`/`height` attributes; a missing one
-/// follows the other by the aspect ratio of its natural size (an
-/// image's); with neither, the natural size; else, for `svg` (its
-/// `viewBox` gives the ratio), `iframe`, `embed`, `object`, `video` and
-/// `canvas`, 300 x 150 (an `svg` with only a ratio is as wide as its
-/// containing block); else 0.
+/// `width`/`height` (its `width`/`height` attributes are presentational
+/// hints); a missing one follows the other by the aspect ratio of its
+/// natural size (an image's, a canvas's); with neither, the natural
+/// size; else, for `svg` (its `viewBox` gives the ratio), `iframe`,
+/// `embed`, `object` and `video`, 300 x 150 (an `svg` with only a ratio
+/// is as wide as its containing block); else 0.
 fn replacedDims(t: *Tree, i: usize, cb_w: f64, cb_h: f64, he: f64, ve: f64) Size {
     let style = t.bx(i).style
     var w: ?f64 = sizeOf(style, style[css.WIDTH], cb_w, he)
-    if w == null {
-        let aw = attrPx(t, i, "width", cb_w)
-        if aw > 0.0 {
-            w = aw + he
-        }
-    }
     var h: ?f64 = sizeOf(style, style[css.HEIGHT], cb_h, ve)
-    if h == null {
-        let ah = attrPx(t, i, "height", cb_h)
-        if ah > 0.0 {
-            h = ah + ve
-        }
-    }
     if aspectRatio(t, i) |r| {
         // `aspect-ratio`: a missing size follows the given one.
         if w |ww| {
@@ -370,35 +389,6 @@ fn replacedDims(t: *Tree, i: usize, cb_w: f64, cb_h: f64, he: f64, ve: f64) Size
     return Size { w: w orelse he, h: h orelse ve }
 }
 
-// The attribute `name` of the element of box `i` as px (a number, maybe
-// followed by "px", "em", or "%" of `base` when that is known); 0 when
-// missing or not a number.
-fn attrPx(t: *Tree, i: usize, name: []u8, base: f64) f64 {
-    if t.bx(i).node |el| {
-        if t.doc.attr(el, name) |v| {
-            var s = text.trim(v)
-            var k = 1.0
-            if text.endsWith(s, "px") {
-                s = s[..s.len - 2]
-            } else if text.endsWith(s, "em") {
-                s = s[..s.len - 2]
-                k = numberOf(t.bx(i).style[css.FONT_SIZE], 16.0)
-            } else if text.endsWith(s, "%") {
-                if base < 0.0 {
-                    return 0.0
-                }
-                s = s[..s.len - 1]
-                k = base / 100.0
-            }
-            let n = text.parseFloat(s) catch 0.0
-            if n > 0.0 {
-                return n * k
-            }
-        }
-    }
-    return 0.0
-}
-
 fn isSvg(t: *Tree, i: usize) bool {
     if t.bx(i).node |el| {
         return t.doc.isElement(el, "svg")
@@ -415,7 +405,7 @@ fn defaultRatio(t: *Tree, i: usize) ?f64 {
     if text.eql(name, "iframe") || text.eql(name, "embed") || text.eql(name, "object") {
         return 0.0
     }
-    if text.eql(name, "video") || text.eql(name, "canvas") {
+    if text.eql(name, "video") {
         return 2.0
     }
     if !text.eql(name, "svg") {

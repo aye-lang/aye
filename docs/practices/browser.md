@@ -98,6 +98,19 @@ for which in 1..3 {
 **Why:** pseudo-elements have their own computed styles, outside the
 element's values; sites use them for icons and decorations.
 
+### Map a sizing attribute to a hint, not to a layout fallback
+**Context:** an HTML or SVG attribute that sizes an element (`width`
+and `height` on `img`, `svg`, `video`, `iframe`).
+**Bad:** `replacedDims` read the attributes when the CSS `width` or
+`height` was `auto`. Layout cannot tell an explicit `height: auto` from
+no rule, so `img { max-width: 100%; height: auto }` kept the
+attribute's height: 400x500 for a 1000x500 image (fixed in P3.4).
+**Good:** write the attribute as a presentational hint
+(`browser/css/hints.ore`, `sizeHint`, `svgSizeHint`), so that the
+cascade lets any author value win. Layout reads only the computed style.
+**Why:** a hint has the lowest author priority; only the cascade knows
+whether a rule set the property.
+
 ## Paint
 
 ### A new display item kind needs an arm in `transformed()` and `moved()`

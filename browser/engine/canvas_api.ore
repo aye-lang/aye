@@ -49,28 +49,6 @@ fn installCanvas(it: *mut Interp, o: u32) JsError!void {
     try defMethod(it, o, "canvasPath", 2, akCanvasPath)
 }
 
-pub fn canvasDimension(doc: *dom.Document, h: NodeId, key: []u8, fallback: usize) usize {
-    let s = doc.attr(h, key) orelse return fallback
-    let src = text.trim(s)
-    var i: usize = 0
-    if src.len > 0 && src[0] == '+' {
-        i = 1
-    }
-    let start = i
-    var n: u64 = 0
-    while i < src.len && src[i] >= '0' && src[i] <= '9' {
-        n = n * 10 + (src[i] - '0') as u64
-        if n > 4294967295 {
-            return fallback
-        }
-        i += 1
-    }
-    if i == start {
-        return fallback
-    }
-    return n as usize
-}
-
 fn canvasBitmap(it: *mut Interp, v: Value) JsError!*mut CanvasBitmap {
     let h = handleOf(it, v, TAG_NODE) orelse {
         try it.typeError("Canvas source is not an element")
@@ -104,8 +82,8 @@ fn canvasBitmap(it: *mut Interp, v: Value) JsError!*mut CanvasBitmap {
             cache.canvases.swapRemove(i)
         }
     }
-    let w = canvasDimension(&p.doc, h, "width", 300)
-    let ht = canvasDimension(&p.doc, h, "height", 150)
+    let w = dom.canvasDimension(&p.doc, h, "width", 300)
+    let ht = dom.canvasDimension(&p.doc, h, "height", 150)
     var size: usize = 0
     if w <= CANVAS_SIDE && ht <= CANVAS_SIDE && w * ht <= CANVAS_PIXELS {
         size = w * ht * 4
@@ -137,8 +115,8 @@ fn resetCanvas(p: *mut Page, h: NodeId, key: []u8) AllocError!void {
     for i in 0..cache.canvases.len() {
         let c = &mut cache.canvases.items()[i]
         if dom.same(c.node, h) {
-            let w = canvasDimension(&p.doc, h, "width", 300)
-            let ht = canvasDimension(&p.doc, h, "height", 150)
+            let w = dom.canvasDimension(&p.doc, h, "width", 300)
+            let ht = dom.canvasDimension(&p.doc, h, "height", 150)
             var size: usize = 0
             if w <= CANVAS_SIDE && ht <= CANVAS_SIDE && w * ht <= CANVAS_PIXELS {
                 size = w * ht * 4

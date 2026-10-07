@@ -93,6 +93,17 @@ pub fn writeHints(doc: *Document, el: NodeId, out: *mut text.Builder) AllocError
             try dimensionHint(out, "height", v)
         }
     }
+    if isOneOf(name, "img video embed object") || (text.eql(name, "input") && text.eqlIgnoreCase(text.trim(doc.attr(el, "type") orelse ""), "image")) {
+        try sizeHint(out, "width", doc.attr(el, "width"))
+        try sizeHint(out, "height", doc.attr(el, "height"))
+        if isOneOf(name, "img video") {
+            try ratioHint(out, doc.attr(el, "width"), doc.attr(el, "height"))
+        }
+    }
+    if text.eql(name, "svg") {
+        try svgSizeHint(out, "width", doc.attr(el, "width"))
+        try svgSizeHint(out, "height", doc.attr(el, "height"))
+    }
     if text.eql(name, "iframe") {
         if doc.attr(el, "frameborder") |v| {
             if text.eql(text.trim(v), "0") || text.eqlIgnoreCase(text.trim(v), "no") {
@@ -248,6 +259,51 @@ fn dimensionHint(out: *mut text.Builder, prop: []u8, value: []u8) AllocError!voi
             try out.append("; ")
         }
     }
+}
+
+// The `width` or `height` attribute of an image, video, embed or object:
+// a dimension, zero included.
+fn sizeHint(out: *mut text.Builder, prop: []u8, value: ?[]u8) AllocError!void {
+    if dimension(value orelse "") |d| {
+        try out.append(prop)
+        try out.append(": ")
+        try writeDimension(out, d)
+        try out.append("; ")
+    }
+}
+
+// `aspect-ratio: auto W / H` from the `width` and `height` attributes of
+// an image or video when both are non-zero pixel counts: the ratio
+// before the image loads.
+fn ratioHint(out: *mut text.Builder, width: ?[]u8, height: ?[]u8) AllocError!void {
+    let w = dimension(width orelse "") orelse return
+    let h = dimension(height orelse "") orelse return
+    if w.percent || h.percent || w.zero || h.zero {
+        return
+    }
+    try out.append("aspect-ratio: auto ")
+    try out.append(w.number)
+    try out.append(" / ")
+    try out.append(h.number)
+    try out.append("; ")
+}
+
+// The `width` or `height` attribute of an `svg`: a CSS length (a bare
+// number is px); the cascade drops what does not parse.
+fn svgSizeHint(out: *mut text.Builder, prop: []u8, value: ?[]u8) AllocError!void {
+    let v = text.trim(value orelse "")
+    if v.len == 0 || text.eqlIgnoreCase(v, "auto") || text.indexOf(v, ";") != null || text.indexOf(v, "{") != null || text.indexOf(v, "}") != null {
+        return
+    }
+    try out.append(prop)
+    try out.append(": ")
+    try out.append(v)
+    if dimension(v) |d| {
+        if d.number.len == v.len {
+            try out.append("px")
+        }
+    }
+    try out.append("; ")
 }
 
 // A dimension value: a number and whether it is a percentage.
