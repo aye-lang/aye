@@ -372,6 +372,8 @@ pub let LIB =
     \\// which).
     \\const kindOf = G.__engine.kindOf;
     \\const engineConstruct = G.__engine.construct;
+    \\const engineDefineProperty = G.__engine.defineProperty;
+    \\const engineDeleteProperty = G.__engine.deleteProperty;
     \\function asyncGenDriver(g) {
     \\  const queue = [];
     \\  let running = false;
@@ -1307,16 +1309,8 @@ pub let LIB =
     \\    if (typeof C !== 'function') throw new TypeError('Reflect.construct: target is not a constructor');
     \\    return engineConstruct(C, Array.from(args), NT === undefined ? C : NT);
     \\  },
-    \\  defineProperty(o, k, d) {
-    \\    try { Object.defineProperty(o, k, d); return true; } catch (e) { return false; }
-    \\  },
-    \\  deleteProperty(o, k) {
-    \\    // This file is strict, where deleting an export throws.
-    \\    if (isModuleNamespace(o)) {
-    \\      try { return delete o[k]; } catch (e) { return false; }
-    \\    }
-    \\    return delete o[k];
-    \\  },
+    \\  defineProperty(o, k, d) { return engineDefineProperty(o, k, d); },
+    \\  deleteProperty(o, k) { return engineDeleteProperty(o, k); },
     \\  get(o, k, r) {
     \\    if (r === undefined || r === o) return o[k];
     \\    const d = findDescriptor(o, k);
@@ -1324,6 +1318,7 @@ pub let LIB =
     \\    return o[k];
     \\  },
     \\  set(o, k, v, r) {
+    \\    if (!isObjectLike(o)) throw new TypeError('Reflect.set called on non-object');
     \\    if (isModuleNamespace(o)) return false;
     \\    if (r === undefined || r === o) { o[k] = v; return true; }
     \\    // OrdinarySet with another receiver: a setter runs on it; a data
@@ -1338,21 +1333,30 @@ pub let LIB =
     \\    if (r === null || (typeof r !== 'object' && typeof r !== 'function')) return false;
     \\    const own = Object.getOwnPropertyDescriptor(r, k);
     \\    if (own && (own.get || own.set || !own.writable)) return false;
-    \\    try {
-    \\      Object.defineProperty(r, k, own ? { value: v } : { value: v, writable: true, enumerable: true, configurable: true });
-    \\    } catch (e) { return false; }
-    \\    return true;
+    \\    return engineDefineProperty(r, k, own ? { value: v } : { value: v, writable: true, enumerable: true, configurable: true });
     \\  },
     \\  has(o, k) { return k in o; },
     \\  ownKeys(o) { return [...Object.getOwnPropertyNames(o), ...Object.getOwnPropertySymbols(o)]; },
     \\  getPrototypeOf(o) { return Object.getPrototypeOf(o); },
     \\  setPrototypeOf(o, p) {
-    \\    try { Object.setPrototypeOf(o, p); return true; } catch (e) { return false; }
+    \\    if (!isObjectLike(o)) throw new TypeError('Reflect.setPrototypeOf called on non-object');
+    \\    if (p !== null && !isObjectLike(p)) throw new TypeError('Object prototype may only be an Object or null');
+    \\    // A module namespace's prototype stays null.
+    \\    if (isModuleNamespace(o)) return p === null;
+    \\    Object.setPrototypeOf(o, p);
+    \\    return true;
     \\  },
     \\  getOwnPropertyDescriptor(o, k) { return Object.getOwnPropertyDescriptor(o, k); },
     \\  isExtensible(o) { return Object.isExtensible(o); },
-    \\  preventExtensions(o) { Object.preventExtensions(o); return true; },
+    \\  preventExtensions(o) {
+    \\    if (!isObjectLike(o)) throw new TypeError('Reflect.preventExtensions called on non-object');
+    \\    Object.preventExtensions(o);
+    \\    return true;
+    \\  },
     \\};
+    \\function isObjectLike(v) {
+    \\  return v !== null && (typeof v === 'object' || typeof v === 'function');
+    \\}
     \\function findDescriptor(o, k) {
     \\  for (let p = o; p !== null && p !== undefined; p = Object.getPrototypeOf(p)) {
     \\    const d = Object.getOwnPropertyDescriptor(p, k);

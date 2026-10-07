@@ -81,6 +81,9 @@ Done 2026-10-07.
 | P1.5 | `page_load.py` records child CPU time (`getrusage` children delta) and the load average per run; warns when CPU/wall < 0.8. Speed targets compare CPU time, or wall time on a quiet machine | `run --site github` shows ~3.5 s CPU whatever the load | P1.2 | P2 |
 | P1.6 | `page_load.py` writes `last.stdout`/`last.stderr` into the archive folder: move them under `target/page-load-out/`; check the 0.8 CPU/wall warning on a quiet machine (tiny pages may fall below it from startup cost) and set a floor | archives unchanged after `run`; no warning for `example` on a quiet machine | P1.5 | P2 |
 | P1.7 | Replay is not deterministic: `youtube-search` requests different `i.ytimg.com` thumbnails per run under load (3 of 7 runs miss the archive). Find the wall-clock dependence (lazy loading, IntersectionObserver, dump scrolling, timer budget), make replay depend only on the virtual clock; then recapture and un-exclude `youtube-search` | 10 consecutive `check --site youtube-search` passes under load | P3.2 | P3 |
+| P1.8 | Diagnose why a youtube-search dump costs 64–120 s CPU. Done: 42% YouTube's scheduler loops `while (Date.now() < deadline)` with a frozen benchmark `Date.now`; 37% YouTube's IntersectionObserver polyfill (installed because `IntersectionObserverEntry` is missing) | – | P1.7 | – |
+| P1.9 | Global `IntersectionObserverEntry` (with `intersectionRatio`, `isIntersecting` on its prototype) in `browser/engine/prelude.ore`, so sites use our IntersectionObserver instead of a polyfill | youtube-search replay: no polyfill samples, CPU falls, Markdown unchanged; JS test | P1.7 | P1.10 |
+| P1.10 | The virtual clock advances by a fixed amount per N steps inside a task (`tick()` in `browser/engine/script.ore`); benchmark `Date.now` = epoch + `ak.now()`, so time-based yields work and replay stays deterministic | scheduler tasks < 1M steps; 3 identical replays; CPU falls | P1.7 | P1.9 |
 
 ### P2: Ore close-out
 
@@ -129,9 +132,9 @@ step only finds and writes down the cause; the fix is the next step.
 | P3.23 | `failed_image_once.html` relies on a fixed 0.3 s server delay (`/slow/wait.txt`), like P3.12 did; make it wait on the browser's state | the test under synthetic load, 30 runs | P3.12 | all |
 | P3.24 | XMLHttpRequest sends only GET: `send(body)` and `setRequestHeader` on the native path P3.17 gave `fetch` | net fixture: XHR POST/PUT echo | P3.17 | P3.4–8 |
 | P3.25 | Send `Origin` on non-GET fetches (and CORS-mode GETs) as the Fetch spec says | echo test checks `Origin` | P3.17 | P3.24 |
-| P3.26 | GitHub: "Cannot retrieve latest commit" — the page requests `/latest-commit` and `/tree-commit-info` without the branch and gets 400; diagnose which value we compute wrong, then fix | `check --site github` Markdown has the latest-commit line | P3.22 | P3.4–8 |
+| P3.26 | GitHub latest-commit. Done: no engine bug; the repo-root route has no branch, so the URL is right; the 400 came from an archive captured before P3.17 sent the page's headers. Expectations tightened | – | – | – |
 | P3.27 | `ValidateAndApplyPropertyDescriptor` for non-configurable properties: a generic descriptor on a non-configurable accessor throws but should succeed when nothing changes; a non-configurable data property can still become an accessor or `configurable: true` but must throw | JS test vs Node 22 (both directions, strict and sloppy) | P3.22 | all |
-| P3.28 | `ToPropertyDescriptor`: reject a non-callable `get`/`set` and a descriptor mixing `value`/`writable` with `get`/`set` (TypeError) | JS test vs Node 22 | P3.27 | all |
+| P3.28 | Done in P3.33. `ToPropertyDescriptor`: reject a non-callable `get`/`set` and a descriptor mixing `value`/`writable` with `get`/`set` (TypeError) | JS test vs Node 22 | P3.27 | all |
 | P3.29 | History API: `history.pushState`/`replaceState` are no-ops (`browser/engine/prelude.ore:1416`). Implement the session history entries (URL, state, title), `location` updates, `popstate` on back/forward, `history.length`/`state`, and the agent's current URL following it | jsdom/window test; `check --agent` react task checks the URL again | P1.3 | P3.4–8 |
 | P3.30 | After P3.29: diagnose why the GitHub (Issues), Mistral (Blog) and YouTube (search) agent tasks do not navigate (a script cancels the click/submit); fix or split into steps; remove their `task_fails` | `check --agent` passes on the three | P3.29 | P3.4–8 |
 | P3.31 | XHR events and upload: fire `loadstart`/`progress` (and on `xhr.upload`), add the `upload` object | net fixture with event order vs the spec | P3.24 | P3.4–8 |
@@ -141,6 +144,8 @@ step only finds and writes down the cause; the fix is the next step.
 | P3.35 | YouTube search agent task: the task should expect the results URL plus a result title (an in-page route change never reports "loaded"); recapture with the `youtubei/v1/search` POST. If its body varies per run (client nonce), make archive lookup for non-GET match on method+URL with a body-hash fallback, and say so in PERF.md | `check --agent --site youtube` passes 5× | P3.30, P1.7 | P3.4–8 |
 | P3.36 | A node removed from a `DOMParser` document reports the main document as `ownerDocument`; it should keep the parsed one (node document is set by adoption, not by the current root) | jsdom test | P3.30 | all |
 | P3.37 | CSS 2.1 §10.4 min/max table for replaced elements with a ratio: the two rows where both sizes violate max (or both min) and the height constraint is the tighter one break the ratio (P3.4 follow-up) | layout fixture for all table rows | P3.4 | not with other `layout/` steps |
+| P3.38 | `window_relayout_after_image_load` fails under machine load (an ordering race; passed 3 of 3 reruns). Make it wait on the browser's state like P3.12/P3.23 | the test 30× under synthetic load | – | all |
+| P3.39 | `Object.setPrototypeOf` / `__proto__` accept a non-extensible object and prototype cycles; both must throw TypeError (`Reflect.setPrototypeOf` returns false) | JS test vs Node 22 | P3.33 | all |
 | P3.21 | Fetch guards: Response headers read-only (`immutable` guard), Request headers drop forbidden names, a Request's abort listener on its source signal is removed when the request settles | jsdom test vs Node 22 | P3.15 | P3.17 after it merges |
 
 ### P4: Load time
@@ -168,6 +173,13 @@ step only finds and writes down the cause; the fix is the next step.
   `browser-sites.md` run. P6.3: integrator's docs pass and a tag.
 
 ## How an agent runs a step
+
+0. Time box: 45 minutes per step. When it runs out, the agent stops,
+   commits what is coherent on its own, and reports its findings; the
+   rest becomes new steps. A step whose cause is unknown is a diagnose
+   step first; its fix is the next step. Repeated runs under load (10×,
+   30×) belong to the integrator's merge check, not to every step.
+   (P4.9 took 2 h 17 min and P1.7 over 1 h 40 min before this rule.)
 
 1. Input: step id, goal, verify, deps. Own worktree off `main`.
    GPT only through the pi-codex skill.

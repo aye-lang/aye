@@ -451,6 +451,21 @@ fetch on GitHub and mistral.ai this way.
 **Why:** the router cancels the click first and fails later in a promise;
 only the order of its steps shows where.
 
+### Vary the headers before blaming the URL of a 4xx
+**Context:** an archived XHR or fetch answered 4xx and the page shows its
+error text.
+**Bad:** the GitHub note blamed the URL for the 400s on `/latest-commit`
+and `/tree-commit-info` (no branch). The route `/:owner/:repo` has no
+branch, so Chrome asks the same URL (`commitish:e.branch` in
+`code-view-*.js`). The archive was captured before P3.17, when fetch
+dropped the page's `Accept: application/json`; curl without it gets 400,
+with it 200.
+**Good:** find the URL's inputs in the bundle, then curl the URL live
+with and without the page's headers; recapture with the current binary
+before changing the engine (P3.26).
+**Why:** a server's 4xx can answer a missing header as well as a wrong
+path, and an old archive keeps an old binary's requests.
+
 ### Build in safe mode to find a crash
 **Context:** the browser crashes on a real site.
 **Good:** `browser/build.sh --mode safe` keeps bounds and overflow
