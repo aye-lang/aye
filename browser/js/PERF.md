@@ -109,8 +109,8 @@ interface and reflection code compatible rather than introducing a
 second representation for descriptor-heavy objects.
 
 Deletion switches that object permanently to dictionary mode; its
-remaining order/index behavior is unchanged. There are at most 16,384
-shapes, and a layout wider than 128 properties becomes a dictionary, so
+remaining order/index behavior is unchanged. There are at most 262,144
+shapes (16,384 until P4.17: youtube-search needs about 67,000), and a layout wider than 128 properties becomes a dictionary, so
 one growing object cannot accumulate quadratic permanent index metadata.
 Static, unique, data-only object literals cache their final shape and
 reserve/fill their slots directly; spread, computed/duplicate keys,
