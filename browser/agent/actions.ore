@@ -73,6 +73,7 @@ fn perform(s: *mut Session, tmp: Allocator, act: Action) AllocError!Outcome {
     }
     var o = try applyAction(s, tmp, act)
     try settleScripts(s, tmp, &mut o)
+    followScriptScroll(s)
     if o.ok && !o.navigated && before_page != null && s.tab.page == before_page {
         let after = try snapshotText(s, tmp, false)
         o.diff = try diffLines(tmp, before, after)
@@ -904,6 +905,15 @@ fn scrollTo(s: *mut Session, y: f64) {
         engine.setScriptScroll(p, s.tab.scroll) catch |e| {
         }
     }
+}
+
+/// After scripts ran: the viewport goes where a script scrolled the
+/// window (`window.scrollTo`...), as in the window.
+fn followScriptScroll(s: *mut Session) {
+    let p = s.tab.page orelse return
+    let y = engine.takeScriptScroll(p) orelse return
+    s.tab.scroll = y
+    s.tab.clampScroll(maxScroll(s))
 }
 
 fn scrollMessage(s: *Session, tmp: Allocator, what: []u8) AllocError![]u8 {

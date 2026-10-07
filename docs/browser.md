@@ -354,10 +354,12 @@ on (`--no-js` turns it off), `dump` with `--js`.
   `XMLHttpRequest` (GET, on the same fetch), `crypto.getRandomValues`
   and `randomUUID` (from `Math.random`), `requestIdleCallback`,
   `reportError`, `Image`, `Option`, `origin`, and `customElements`
-  (definitions kept, elements never upgraded). The observers are
-  stand-ins: `IntersectionObserver` reports each target visible once
-  (lazy loading proceeds), `ResizeObserver` reports each target once,
-  and `MutationObserver` never reports.
+  (definitions kept, elements never upgraded).
+  `IntersectionObserver` checks its targets against the layout and the
+  scroll offsets (`engine/geometry.ore`), so content below the fold is
+  not intersecting until scrolled into view; `ResizeObserver` reports
+  each target once. `loading="lazy"` images and iframes load at once,
+  as if in view.
 - *Event loop:* timers (ordered by due time, then by scheduling) and
   microtasks after every task. Time is virtual for `dump` and the agent
   (the loop jumps to the next timer; `dump --js` runs until no timer is
@@ -365,7 +367,22 @@ on (`--no-js` turns it off), `dump` with `--js`.
   `SDL_WaitEventTimeout` wakes for the next timer. Clicks and keys
   (window, agent) fire their events first and skip the default action
   when canceled; checkbox toggles fire `input` and `change`; a submit
-  fires `submit`. After scripts changed the document (`domVersion`),
+  fires `submit`. A scroll of the window by the user, an agent or a
+  script fires `scroll` at the document (bubbling to the window) as a
+  task; the agent's viewport follows a script's `scrollTo`.
+- *Scrolling through for dumps:* `dump --js` (every mode, `--md` and
+  `--a11y` too) then scrolls through the page as a reader would, so
+  that what scripts load when it comes into view (observed sections,
+  lazy images, infinite lists) is in the dump
+  (`engine.scrollThrough`): 500 ms of page time where the page is,
+  then a step of one viewport height down (firing `scroll`) and 500 ms
+  again, until the bottom is shown and the document stopped growing,
+  or after 20 steps (`--scroll-steps N`; `--no-scroll` turns it off).
+  The window then goes back to the top at once, without the page
+  reacting, so content it would drop out of view stays in the dump. It
+  is deterministic (virtual time); a page that grows on every scroll
+  ends at the cap. The agent's `read` and `snapshot` do not scroll:
+  an agent scrolls with `scroll`, then `wait`. After scripts changed the document (`domVersion`),
   the front end styles (style sheets parsed again) and lays out again;
   a navigation they asked for (`takeNavigation`) happens then.
 - *Console:* messages ("[log] ...", "[error] Uncaught ...") go to

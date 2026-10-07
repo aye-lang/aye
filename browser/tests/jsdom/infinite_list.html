@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<title>Infinite list</title>
+<style>
+body { margin: 0 }
+li { height: 100px }
+</style>
+<h1>Infinite list</h1>
+<ol id="list"></ol>
+<p id="more">Loading more...</p>
+<script>
+// Ten items at a time, when the "Loading more" line comes into view
+// (fetched after 200 ms), until there are 50.
+const list = document.getElementById('list');
+const more = document.getElementById('more');
+let busy = false;
+function load() {
+  busy = true;
+  setTimeout(() => {
+    const n = list.children.length;
+    for (let i = 1; i <= 10; i++) {
+      const li = document.createElement('li');
+      li.textContent = 'Item ' + (n + i);
+      list.append(li);
+    }
+    busy = false;
+    if (list.children.length >= 50) {
+      io.disconnect();
+      more.textContent = 'End of the list.';
+    }
+  }, 200);
+}
+const io = new IntersectionObserver(entries => {
+  if (entries.some(e => e.isIntersecting) && !busy) load();
+});
+io.observe(more);
+</script>
