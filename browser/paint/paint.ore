@@ -692,6 +692,20 @@ struct Builder {
     // A replaced element: its image, a checkbox, a radio button, or else
     // a placeholder.
     fn replaced(self: *mut Self, i: usize, x: f64, y: f64, w: f64, h: f64) AllocError!void {
+        if self.t.bx(i).node == null && self.t.bx(i).text.len > 0 {
+            // The image of a `content: url()`.
+            let imgs = self.t.images orelse return
+            let u = self.t.bx(i).text
+            if imgs.urlPicture(u) |pic| {
+                return self.drawing(pic, x, y, w, h)
+            }
+            let bmp = imgs.urlBitmap(u) orelse return
+            if w > 0.0 && h > 0.0 {
+                self.extend(x + w, y + h)
+                try self.add(Item.Image { r: Rect { x: x, y: y, w: w, h: h }, w: bmp.width, h: bmp.height, pixels: bmp.pixels })
+            }
+            return
+        }
         if self.t.bx(i).node |el| {
             for fv in self.t.frames.items() {
                 if dom.same(fv.node, el) {

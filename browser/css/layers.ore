@@ -178,7 +178,13 @@ fn argsOf(toks: []Token) []Token {
 
 fn writeUrl(s: []u8, out: *mut text.Builder) AllocError!void {
     try out.append("url(\"")
-    try out.append(s)
+    for ch in s {
+        // Escaped like `writeToken`'s strings.
+        if ch == '"' || ch == '\\' {
+            try out.appendByte('\\')
+        }
+        try out.appendByte(ch)
+    }
     try out.append("\")")
 }
 

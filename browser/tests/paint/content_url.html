@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<style>
+body { margin: 10px }
+.icon::before { content: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" \
+  width="18" height="18" viewBox="0 0 16 16"><circle r="5" cx="7" cy="7" style="fill:none;stroke:red;stroke-width:3"/></svg>') }
+.col { display: flex; flex-direction: column; align-items: center; width: 80px; border: 1px solid }
+.col::before { content: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2220%22 height=%2210%22%3E%3Crect width=%2220%22 height=%2210%22 fill=%22blue%22/%3E%3C/svg%3E"); margin: 8px }
+.bg { width: 16px; height: 16px; background-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="green"/></svg>') }
+</style>
+<p><span class="icon">Search</span></p>
+<div class="bg"></div>
+<a class="col"><span>Help</span></a>
