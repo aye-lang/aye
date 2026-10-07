@@ -474,7 +474,16 @@ struct Builder {
         let b = self.t.bx(f.box).*
         match f.kind {
             .Atomic => {
-                try self.box(f.box)
+                if !f.hidden {
+                    try self.box(f.box)
+                }
+            }
+            .Ellipsis => {
+                if !isVisible(b.style) {
+                    return
+                }
+                let m = layout.textMetrics(self.t, b.style)
+                try self.add(Item.Text { x: cx + f.x, y: cy + f.y + m.ascent, s: f.ellipsis, face: m.font, c: colorOf(b.style[css.COLOR], BLACK) })
             }
             .Inline => {
                 if !isVisible(b.style) {
