@@ -136,6 +136,8 @@ step only finds and writes down the cause; the fix is the next step.
 | P3.30 | After P3.29: diagnose why the GitHub (Issues), Mistral (Blog) and YouTube (search) agent tasks do not navigate (a script cancels the click/submit); fix or split into steps; remove their `task_fails` | `check --agent` passes on the three | P3.29 | P3.4–8 |
 | P3.31 | XHR events and upload: fire `loadstart`/`progress` (and on `xhr.upload`), add the `upload` object | net fixture with event order vs the spec | P3.24 | P3.4–8 |
 | P3.32 | History: a frame's `history.length` counts only its own entries (should be the tab's joint session history); `history.length` is 1 during the initial load | frame fixture | P3.29 | P3.4–8 |
+| P3.33 | `Reflect.defineProperty` wraps the whole call in a catch-all (`browser/js/lib.ore`): a non-object target must throw TypeError and a throwing getter in the descriptor must propagate; only a rejected definition returns false | JS test vs Node 22 | P3.27 | all |
+| P3.34 | `pushState(s, '', '')` keeps the current fragment; the spec resolves `''` against the base URL. Also `tests/golden.rs` `output_and_cpu_within`: a `wait4` error returns without killing the child | jsdom history test; golden helper review | P3.29, P3.11 | all |
 | P3.21 | Fetch guards: Response headers read-only (`immutable` guard), Request headers drop forbidden names, a Request's abort listener on its source signal is removed when the request settles | jsdom test vs Node 22 | P3.15 | P3.17 after it merges |
 
 ### P4: Load time
