@@ -5,6 +5,7 @@
 //   `layoutPage`: style sheets -> cascade -> layout, for a viewport.
 // - sheets.ore: the author style sheet of a document.
 // - tab.ore: `Tab`: the current page, its scroll offset and history.
+// - history.ore: session history entries, pushState and traversals.
 // - hit.ore: what is at a point (links), find in page, fragments.
 // - script.ore (and dom_api, window_api, markup, prelude): the
 //   page's JavaScript and its event loop.
@@ -95,6 +96,11 @@ pub struct Page {
     // The measurer of the last `layoutPage`, which the scripts' layout
     // (geometry.ore) measures with too.
     measure: ?dyn font.Measurer = null
+    // The page's session history from its load (history.ore): one
+    // entry, and those its scripts add, until a tab takes them over.
+    history: SessionHistory
+    // The tab's history, once the tab shows the page (tab.ore).
+    shared: ?*mut SessionHistory = null
 
     /// Frees the page and everything in it.
     pub fn destroy(self: *mut Self) {
@@ -117,11 +123,21 @@ pub struct Page {
         }
         self.frames.deinit()
         self.frame_elements.nodes.deinit()
+        self.history.deinit()
         self.doc.deinit()
         alloc.free(self.title)
         self.url.deinit(alloc)
         self.base.deinit(alloc)
         alloc.destroy(self)
+    }
+
+    /// The session history the page's document is in: the tab's once
+    /// the tab shows it, else its own.
+    pub fn sessionHistory(self: *mut Self) *mut SessionHistory {
+        if self.shared |h| {
+            return h
+        }
+        return &mut self.history
     }
 
     /// The URL that relative URLs of the document resolve against
@@ -273,6 +289,18 @@ pub fn loadWith(alloc: Allocator, target: *Url, body: ?*net.Body) AllocError!*mu
     return p
 }
 
+/// `load` for a session history entry whose serialized state is `state`
+/// (null for none): the page's scripts see it as history.state.
+pub fn loadState(alloc: Allocator, target: *Url, state: ?[]u8) AllocError!*mut Page {
+    let p = try fetchPage(alloc, target, null, encoding.Encoding.Windows1252)
+    errdefer p.destroy()
+    if state |st| {
+        try p.history.replace(p.url.href, st)
+    }
+    try runDocument(p, scriptingEnabled())
+    return p
+}
+
 // Fetches `target` (by POST with `body`) and parses the document, whose
 // bytes are in `fallback` when they do not say (a frame's: its parent's
 // encoding). Its scripts have not run (`runDocument`).
@@ -345,6 +373,10 @@ fn newPage(alloc: Allocator, located: Url, status: i64, failure: []u8, doc: Docu
     errdefer alloc.free(title)
     var base = try documentBase(alloc, &d, &located)
     errdefer base.deinit(alloc)
+    let id = newPageId()
+    var history = SessionHistory.init(alloc)
+    errdefer history.deinit()
+    try history.push(located.href, id, null, false)
     return alloc.create(Page {
         alloc: alloc,
         url: located,
@@ -361,13 +393,14 @@ fn newPage(alloc: Allocator, located: Url, status: i64, failure: []u8, doc: Docu
         images: null,
         frames: List(Frame).init(alloc),
         frame_elements: FrameElementIndex.init(alloc),
-        id: newPageId(),
+        id: id,
         parent: null,
         depth: 0,
         plain: false,
         no_scripts: false,
         opaque: false,
         mutations: 0,
+        history: history,
     })
 }
 

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<title>History</title>
+<a id="rel" href="#t">relative</a>
+<pre id="out"></pre>
+<script>
+// The History API (HTML "session history"): pushState and replaceState
+// change the URL without loading and fire nothing; back, forward and go
+// traverse in a task, firing popstate (and hashchange when the fragment
+// differs); fragment navigations add entries. On file: URLs only the
+// query and fragment may change.
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const file = s => s.split('/').pop();
+const start = history.length;
+log('start', start, history.state, history.scrollRestoration, history instanceof History, Object.prototype.toString.call(history));
+addEventListener('popstate', e => log('popstate', e.constructor.name, JSON.stringify(e.state), e.state === history.state, file(location.href), e.isTrusted, e.bubbles, e.cancelable));
+onhashchange = e => log('hashchange', e.constructor.name, file(e.oldURL), file(e.newURL), e.isTrusted);
+const s1 = { n: 1, list: [1, 2] };
+log('push returns', history.pushState(s1, '', '?a=1'));
+log('push', history.length - start, JSON.stringify(history.state), history.state === s1, history.state === history.state, location.search, file(location.href), file(document.URL), file(document.getElementById('rel').href));
+history.pushState({ n: 2 }, 'ignored', '?b=2#frag');
+log('push', history.length - start, JSON.stringify(history.state), location.search, location.hash);
+history.replaceState({ n: 3 }, '');
+log('replace', history.length - start, JSON.stringify(history.state), file(location.href));
+history.replaceState(null, '', 'history.html?c=3');
+log('replace url', history.length - start, history.state, file(location.href));
+for (const [what, f] of [
+  ['cross-origin', () => history.pushState(null, '', 'https://example.com/')],
+  ['other file', () => history.replaceState(null, '', 'other.html')],
+  ['function', () => history.pushState(function () {}, '')],
+]) {
+  try { f(); log(what, 'no error'); } catch (e) { log(what, e.name, e instanceof DOMException); }
+}
+log('after errors', history.length - start, file(location.href));
+history.scrollRestoration = 'manual';
+history.scrollRestoration = 'bogus';
+log('scrollRestoration', history.scrollRestoration);
+
+const steps = [
+  () => {
+    history.back();
+    Promise.resolve().then(() => log('microtask before the traversal', file(location.href)));
+    log('back called', file(location.href));
+  },
+  () => { history.forward(); },
+  () => {
+    quiet = true;
+    location.hash = 'x';
+    log('hash set', history.length - start, history.state, file(location.href));
+    location.hash = 'x';
+    log('same hash', history.length - start);
+    location.href = '#y';
+    log('href set', history.length - start, file(location.href));
+    quiet = false;
+    setTimeout(next, 10);
+  },
+  () => { history.go(-2); },
+  () => { history.go(-1); },
+  () => {
+    log('scrollRestoration of the entry', history.scrollRestoration);
+    history.go(10);
+    history.pushState({ n: 4 }, '', '?d=4');
+    log('push drops forward', history.length - start, file(location.href), history.scrollRestoration);
+    history.back();
+  },
+  () => { log('done', history.length - start, JSON.stringify(history.state), file(location.href)); },
+];
+function next() {
+  const step = steps.shift();
+  if (step) step();
+}
+let quiet = false;
+addEventListener('popstate', () => { if (!quiet) setTimeout(next, 10); });
+setTimeout(next, 0);
+</script>

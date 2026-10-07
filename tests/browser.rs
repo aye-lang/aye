@@ -791,8 +791,9 @@ fn window_events() {
         // A link to a fragment scrolls to its element (y 958); the link
         // keeps the focus.
         ("click:30,58", "url long.html#end\nscroll 958\nfocus page\naddress long.html#end\nhistory 2 of 2\nmatches 0\nstatus \nelement a\n"),
-        // Back and forward restore scroll offsets.
-        ("key:pagedown key:home click:30,58 key:cmd+[ key:cmd+]", "url long.html#end\nscroll 958\nfocus page\naddress long.html#end\nhistory 2 of 2\nmatches 0\nstatus \n"),
+        // Back and forward restore scroll offsets; they stay in the document
+        // (a fragment of it), so the link keeps the focus.
+        ("key:pagedown key:home click:30,58 key:cmd+[ key:cmd+]", "url long.html#end\nscroll 958\nfocus page\naddress long.html#end\nhistory 2 of 2\nmatches 0\nstatus \nelement a\n"),
         ("click:130,58 key:cmd+[", "url long.html\nscroll 0\nfocus page\naddress long.html\nhistory 1 of 2\nmatches 0\nstatus \n"),
         ("move:130,58", "url long.html\nscroll 0\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus other.html\n"),
         // The back button, the forward button, reload.
@@ -1404,6 +1405,25 @@ fn window_scripts() {
         let got = text(&out.stdout);
         assert!(out.status.success() && out.stderr.is_empty(), "{args:?}: {}\n{}", out.status, text(&out.stderr));
         assert!(got.contains(want), "{args:?}: expected {want:?} in the text:\n{got}");
+    }
+}
+
+/// The History API in the window (`browser/tests/agent/site/spa.html`):
+/// buttons that call pushState change the address without loading, and
+/// back moves in the document (popstate shows item 2 again).
+#[test]
+fn window_history_api() {
+    if !has_sdl() {
+        println!("skipped: no SDL2");
+        return;
+    }
+    let args = ["browser/tests/agent/site/spa.html", "--font", "fixed", "--frames", "5", "--state", "--text", "--events", "click:30,133 click:140,133 key:cmd+["];
+    let out = run_window(&args);
+    let got = text(&out.stdout);
+    assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+    let page = format!("file://{}/browser/tests/agent/site/spa.html?item=2", root().display());
+    for want in [format!("url {page}\n"), format!("\naddress {page}\n"), "\nhistory 2 of 3\n".into(), "\nItem 2\n".into(), "\nhistory.length 3\n".into()] {
+        assert!(got.contains(&want), "expected {want:?} in:\n{got}");
     }
 }
 

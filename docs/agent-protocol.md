@@ -28,7 +28,11 @@ events a user's would, before their default action: `click` fires
 (else the body), typing fires `input`, a submission fires `submit`. A
 navigation that a script asks for (`location.href = ...`, a link it
 clicks, `history.back()`) happens after the action and is added to its
-`result`. Time is the page's own: after an action only the timers that
+`result`. `history.pushState` and `replaceState` change the `url`
+without loading; `back` and `forward` to an entry of the same document
+(one that pushState or a fragment link added) do not load it either:
+the page gets `popstate`, and the result is "went back to URL in the
+same document". Time is the page's own: after an action only the timers that
 are due run (a `setTimeout(f, 0)`); `wait` moves the clock forward,
 taking no real time. Console messages (`[log] ...`, uncaught
 exceptions as `[error] Uncaught ...`, alerts as `[alert] ...`) come

@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<title>Single page app</title>
+<h1 id="heading">Home</h1>
+<nav>
+  <button id="b2">Show item 2</button>
+  <button id="b3">Show item 3</button>
+  <a href="index.html">Other page</a>
+</nav>
+<p id="info"></p>
+<script>
+// Navigates with the History API, as client-side routers do: a click
+// pushes an entry with the item as its state; popstate (back, forward)
+// and a load of an entry (its state is history.state) show it again.
+// Over HTTP the item is in the path, on file: URLs in the query.
+const http = location.protocol.startsWith('http');
+const root = location.pathname.replace(/[^/]*$/, '');
+function show(item) {
+  document.getElementById('heading').textContent = item ? 'Item ' + item : 'Home';
+  document.getElementById('info').textContent = 'history.length ' + history.length;
+}
+function open(item) {
+  history.pushState({ item }, '', http ? root + 'items/' + item : '?item=' + item);
+  show(item);
+}
+document.getElementById('b2').addEventListener('click', () => open(2));
+document.getElementById('b3').addEventListener('click', () => open(3));
+addEventListener('popstate', e => show(e.state && e.state.item));
+show(history.state && history.state.item);
+</script>

@@ -1391,33 +1391,138 @@ pub let PRELUDE =
     \\  ak.queueMicrotask(fn);
     \\});
     \\
-    \\// location and history: navigation happens after the script returns.
+    \\// location and history: navigation happens after the script returns,
+    \\// but to a fragment of the document at once. The session history is the
+    \\// browser's (engine/history.ore); entries keep their state serialized as
+    \\// postMessage data is (JSON, or 'u' for undefined), and history.state is
+    \\// one copy of it until the entry or its state changes.
     \\const urlParts = ['protocol', 'host', 'hostname', 'port', 'pathname', 'search', 'hash', 'origin'];
+    \\function fragmentOf(u) {
+    \\  const i = u.indexOf('#');
+    \\  return i < 0 ? null : u.slice(i + 1);
+    \\}
+    \\function navigateTo(v, replace) {
+    \\  const r = ak.navigate(String(v), replace);
+    \\  if (r) historyChanged(r[0], r[1], null, true);
+    \\}
     \\const location = {
     \\  get href() { return ak.url(); },
-    \\  set href(v) { ak.navigate(String(v)); },
-    \\  assign(v) { ak.navigate(String(v)); },
-    \\  replace(v) { ak.navigate(String(v)); },
+    \\  set href(v) { navigateTo(v, false); },
+    \\  assign(v) { navigateTo(v, false); },
+    \\  replace(v) { navigateTo(v, true); },
     \\  reload() { ak.reload(); },
     \\  toString() { return ak.url(); },
     \\};
     \\for (const part of urlParts) {
     \\  getter(location, part, function () { return ak.urlPart(part); }, part === 'hash' ? function (v) {
     \\    let h = String(v);
-    \\    if (h !== '' && h[0] !== '#') h = '#' + h;
-    \\    ak.navigate(h === '' ? ak.url().split('#')[0] : h);
+    \\    if (h[0] === '#') h = h.slice(1);
+    \\    const target = ak.resolve(ak.url().split('#')[0] + '#' + h);
+    \\    if (fragmentOf(target) !== fragmentOf(ak.url())) navigateTo(target, false);
     \\  } : undefined);
     \\}
-    \\getter(G, 'location', function () { return location; }, function (v) { ak.navigate(String(v)); });
-    \\hidden(G, 'history', {
-    \\  back() { ak.historyGo(-1); },
-    \\  forward() { ak.historyGo(1); },
-    \\  go(n) { ak.historyGo(Number(n) || 0); },
-    \\  pushState() {},
-    \\  replaceState() {},
-    \\  get length() { return 1; },
-    \\  state: null,
+    \\getter(G, 'location', function () { return location; }, function (v) { navigateTo(v, false); });
+    \\let historyRaw = null;
+    \\let historyValue = null;
+    \\function setHistoryState(raw) {
+    \\  historyRaw = raw;
+    \\  historyValue = raw === null ? null : raw === 'u' ? undefined : JSON.parse(raw.slice(1));
+    \\}
+    \\function serializeState(data, method) {
+    \\  if (data === undefined) return 'u';
+    \\  let json;
+    \\  try {
+    \\    json = JSON.stringify(data);
+    \\  } catch (e) {
+    \\    throw new DOMException("Failed to execute '" + method + "' on 'History': " + (e && e.message), 'DataCloneError');
+    \\  }
+    \\  if (json === undefined) throw new DOMException("Failed to execute '" + method + "' on 'History': " + String(data) + ' could not be cloned.', 'DataCloneError');
+    \\  return 'j' + json;
+    \\}
+    \\function changeHistory(n, data, url, replace) {
+    \\  const method = replace ? 'replaceState' : 'pushState';
+    \\  if (n < 2) throw new TypeError("Failed to execute '" + method + "' on 'History': 2 arguments required, but only " + n + ' present.');
+    \\  const raw = serializeState(data, method);
+    \\  const err = ak.historyPush(raw, url === undefined ? null : url, replace);
+    \\  if (err !== null) throw new DOMException(err, 'SecurityError');
+    \\  setHistoryState(raw);
+    \\}
+    \\function fireAtWindow(ev) {
+    \\  ev.isTrusted = true;
+    \\  dispatch(G, ev);
+    \\}
+    \\// The element a fragment indicates (HTML "find a potential indicated
+    \\// element").
+    \\function indicatedElement(f) {
+    \\  const el = document.getElementById(f);
+    \\  if (el) return el;
+    \\  for (const a of document.getElementsByTagName('a')) if (a.getAttribute('name') === f) return a;
+    \\  return null;
+    \\}
+    \\function scrollToFragment(f) {
+    \\  if (f === null) return;
+    \\  let el = f === '' ? null : indicatedElement(f);
+    \\  if (!el && f !== '') {
+    \\    let decoded = f;
+    \\    try {
+    \\      decoded = decodeURIComponent(f);
+    \\    } catch (e) {}
+    \\    el = indicatedElement(decoded);
+    \\    if (!el && decoded.toLowerCase() !== 'top') return;
+    \\  }
+    \\  if (el) el.scrollIntoView();
+    \\  else scrollTarget(null, NaN, 0);
+    \\}
+    \\// The document moved to another of its entries (a traversal, a fragment
+    \\// navigation): popstate now, and hashchange in a task when the fragment
+    \\// changed.
+    \\function historyChanged(oldURL, newURL, raw, scroll) {
+    \\  setHistoryState(raw);
+    \\  fireAtWindow(new PopStateEvent('popstate', { state: historyValue }));
+    \\  if (scroll) scrollToFragment(fragmentOf(newURL));
+    \\  if (fragmentOf(oldURL) !== fragmentOf(newURL)) {
+    \\    ak.setTimer(function () { fireAtWindow(new HashChangeEvent('hashchange', { oldURL, newURL })); }, 0, false, [], false);
+    \\  }
+    \\}
+    \\// The traversal history.go queued (or the front end's).
+    \\function traverseHistory(delta) {
+    \\  const r = ak.historyMove(delta);
+    \\  if (r) historyChanged(r[0], r[1], r[2], false);
+    \\}
+    \\function historyGo(delta) {
+    \\  delta = delta | 0;
+    \\  if (delta === 0) ak.reload();
+    \\  else if (ak.historyGo(delta)) ak.setTimer(function () { traverseHistory(delta); }, 0, false, [], false);
+    \\}
+    \\class History {
+    \\  constructor() { throw new TypeError('Illegal constructor'); }
+    \\  get length() { return ak.historyLength(); }
+    \\  get state() {
+    \\    const raw = ak.historyState();
+    \\    if (raw !== historyRaw) setHistoryState(raw);
+    \\    return historyValue;
+    \\  }
+    \\  get scrollRestoration() { return ak.scrollRestoration() ? 'manual' : 'auto'; }
+    \\  set scrollRestoration(v) {
+    \\    v = String(v);
+    \\    if (v === 'auto' || v === 'manual') ak.scrollRestoration(v === 'manual');
+    \\  }
+    \\  go(delta) { historyGo(delta); }
+    \\  back() { historyGo(-1); }
+    \\  forward() { historyGo(1); }
+    \\  pushState(data, unused, url = null) { changeHistory(arguments.length, data, url, false); }
+    \\  replaceState(data, unused, url = null) { changeHistory(arguments.length, data, url, true); }
+    \\}
+    \\Object.defineProperty(History.prototype, Symbol.toStringTag, { value: 'History', configurable: true });
+    \\hidden(G, 'History', History);
+    \\hidden(G, 'history', Object.create(History.prototype));
+    \\ak.setHistoryHandler(function hostHistory(op, delta, oldURL) {
+    \\  if (op === 0) traverseHistory(delta);
+    \\  else historyChanged(oldURL, ak.url(), null, false);
     \\});
+    \\for (const type of ['hashchange', 'popstate']) {
+    \\  getter(G, 'on' + type, function () { return handlerOf(G, type); }, function (v) { setHandler(G, type, v); });
+    \\}
     \\
     \\// localStorage: in memory, per origin, shared by the pages of the process.
     \\class Storage {

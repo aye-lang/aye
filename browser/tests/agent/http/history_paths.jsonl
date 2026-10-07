@@ -1,0 +1,6 @@
+{"id":1,"cmd":"navigate","url":"$BASE/agent/site/spa.html"}
+{"id":2,"cmd":"click","ref":"e2"}
+{"id":3,"cmd":"click","ref":"e3"}
+{"id":4,"cmd":"back"}
+{"id":5,"cmd":"eval","expression":"location.pathname + ' ' + document.baseURI + ' ' + document.querySelector('a').href"}
+{"id":6,"cmd":"back"}

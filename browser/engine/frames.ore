@@ -358,13 +358,23 @@ fn reloadFrame(p: *mut Page, k: usize, key: []u8) AllocError!void {
         gone.page.destroy()
         return
     }
-    return replaceFrame(p, k, child)
+    return replaceFrame(p, k, child, null)
 }
 
 // Frame `k` of `p` shows `child` now (its scripts not run yet): the old
-// page goes; the scripts run, and the load event is pending.
-fn replaceFrame(p: *mut Page, k: usize, child: *mut Page) AllocError!void {
+// page goes; the scripts run, and the load event is pending. `child`
+// takes the frame's session history over: as a new entry, or in place
+// of entry `at` when a traversal loaded it.
+fn replaceFrame(p: *mut Page, k: usize, child: *mut Page, at: ?usize) AllocError!void {
     let old = p.frames.items()[k].page
+    if at |i| {
+        try old.history.adoptAt(i, &mut child.history)
+    } else {
+        try old.history.adoptPushed(&mut child.history)
+    }
+    let emptied = child.history
+    child.history = old.history
+    old.history = emptied
     p.frames.items()[k].page = child
     p.frames.items()[k].scroll = 0.0
     p.frames.items()[k].pending_load = true
@@ -403,6 +413,21 @@ fn followFrameNavigation(p: *mut Page, k: usize) AllocError!void {
             }
             return navigateFrame(FrameSlot { parent: p, index: k }, &sub.target, post)
         }
+        .History => {
+            // An entry of another document of the frame: loaded again,
+            // with its state, in the entry's place.
+            let at = c.history.indexAt(nav.step) orelse return
+            let e = c.history.entries.items()[at]
+            let target = url.parse(p.alloc, e.href) catch |err| {
+                return
+            }
+            defer target.deinit(p.alloc)
+            let child = try fetchPage(p.alloc, &target, null, p.encoding)
+            if e.state |st| {
+                try child.history.replace(child.url.href, st)
+            }
+            return showInFrame(FrameSlot { parent: p, index: k }, child, at)
+        }
         _ => {}
     }
 }
@@ -435,15 +460,21 @@ pub fn slotPage(slot: FrameSlot) *mut Page {
 /// the old document): lay the tab's page out again.
 pub fn navigateFrame(slot: FrameSlot, target: *Url, body: ?*net.Body) AllocError!void {
     let p = slot.parent
-    let el = p.frames.items()[slot.index].el
     let child = try fetchPage(p.alloc, target, body, p.encoding)
+    return showInFrame(slot, child, null)
+}
+
+// Shows `child`, just fetched, in the frame (`replaceFrame`).
+fn showInFrame(slot: FrameSlot, child: *mut Page, at: ?usize) AllocError!void {
+    let p = slot.parent
+    let el = p.frames.items()[slot.index].el
     placeFrame(p, el, child)
     var up: ?*mut Page = p
     while up |q| {
         q.dropTree()
         up = q.parent
     }
-    try replaceFrame(p, slot.index, child)
+    try replaceFrame(p, slot.index, child, at)
     return fireFrameLoads(p)
 }
 
