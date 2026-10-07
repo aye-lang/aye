@@ -356,6 +356,19 @@ An entry's `doc` (the page id) says whether back stays in the document.
 **Why:** scripts run inside `load`; whatever they change must have a
 home before the tab has the page, and exactly one home after.
 
+### Do not move entries a running loop walks by index
+**Context:** a native loop over a collection that its callback can
+change (Map and Set `forEach`, `browser/js/builtins_misc.ore`).
+**Bad:** `delete` compacted the elements while `forEach` walked them by
+index, so later entries moved under the loop and were skipped; `clear`
+set the length to 0, so the loop skipped entries added after it
+(fixed in P4.18).
+**Good:** count running walks (`beginWalk`/`endWalk`, `KeyIndex.walking`);
+compact only when none runs, and let `clear` empty entries in place
+while one does. `browser/tests/js/253_map_set_hash.js` covers both.
+**Why:** a callback may delete or add anything; positions must stay
+valid until the loop ends.
+
 ## Code style
 
 ### Write blocks and comments like the surrounding code
