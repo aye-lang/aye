@@ -507,6 +507,13 @@ fn layoutContents(t: *mut Tree, i: usize, cb_h: f64) AllocError!void {
         }
     }
     let root = isFormattingRoot(t, i)
+    // A line clamp counts the lines of its block flow, not those of the
+    // formatting contexts inside it.
+    let save_clamp = t.clamp_left
+    let clamp = lineClamp(t, i)
+    if clamp > 0 || root {
+        t.clamp_left = clamp
+    }
     // The origin of the content box for floats: a new formatting
     // context, or the parent's origin and this box's offset in it.
     let save_fx = t.fx
@@ -570,6 +577,15 @@ fn layoutContents(t: *mut Tree, i: usize, cb_h: f64) AllocError!void {
         while t.floats.len() > t.float_base {
             _ = t.floats.pop()
         }
+    }
+    if clamp > 0 {
+        var left = clamp
+        if clampBottom(t, i, 0.0, &mut left) |y| {
+            content_h = y
+        }
+    }
+    if clamp > 0 || root {
+        t.clamp_left = save_clamp
     }
     t.fx = save_fx
     t.fy = save_fy
