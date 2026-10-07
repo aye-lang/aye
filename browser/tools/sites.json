@@ -23,7 +23,6 @@
       "status": "warn",
       "max_errors": 0,
       "md": ["## Repository navigation", "[README.md](https://github.com/rust-lang/rust/blob/main/README.md)", "## Contributing"],
-      "task_fails": "step 1 (click): url 'https://github.com/rust-lang/rust', expected 'https://github.com/rust-lang/rust/issues'",
       "note": "Commit message and date columns stay empty; Latest commit says \"Cannot retrieve latest commit at this time.\" (the page asks /latest-commit and /tree-commit-info without the branch, GitHub answers 400); empty History section. Replay logs no errors."
     },
     "mdn": {
@@ -133,7 +132,6 @@
       "status": "warn",
       "max_errors": 3,
       "md": ["Mistral Large 4", "min read", "Share this post"],
-      "task_fails": "step 1 (click): url 'https://mistral.ai/news/mistral-large-4/', expected 'https://mistral.ai/news/'",
       "note": "Hero title hidden (three.js needs WebGL); embedded iframe widgets broken. Replay logs 2 WebGL context errors and one 'reading load'."
     }
   }
