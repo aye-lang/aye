@@ -57,6 +57,8 @@ that touch them merge one after the other.
 
 ### P0: Integration
 
+Done 2026-10-07.
+
 | id | Goal | Verify | Deps | ∥ |
 |---|---|---|---|---|
 | P0.1 | Close the 3 leftover branches (text-transform, baseURI/decode(), Web Animations) | patch-identical on stage0 (`git cherry`); deleted | – | all |
@@ -130,8 +132,8 @@ step only finds and writes down the cause; the fix is the next step.
 
 ## How an agent runs a step
 
-1. Input: step id, goal, verify, deps. Own worktree off `main` (off
-   `stage0-milestones` until P0.8). GPT only through the pi-codex skill.
+1. Input: step id, goal, verify, deps. Own worktree off `main`.
+   GPT only through the pi-codex skill.
 2. Read `docs/practices/README.md` and the practices file for the area.
 3. Test or fixture first; small commits. Do not edit `docs/browser.md`,
    `docs/browser-sites.md` or this file; `docs/milestones.md` only in
@@ -154,6 +156,6 @@ step only finds and writes down the cause; the fix is the next step.
 - **Bot walls:** Stack Overflow and Reddit are excluded from W3 while
   they serve a bot wall; `sites.json` marks them `excluded`.
 - **B8 remains:** an item no listed site needs is out of scope (P5).
-- **Integration branch:** `stage0-milestones` until P0.8, then `main`.
+- **Integration branch:** `main` (since P0.8, 2026-10-07).
 - **Platform:** macOS only. There is no remote and no CI. M10's
   ThreadSanitizer run is recorded as not possible on this machine.

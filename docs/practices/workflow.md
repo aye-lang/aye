@@ -1,6 +1,6 @@
 # Workflow practices
 
-How work gets from a worktree into `stage0-milestones`: commits, merges,
+How work gets from a worktree into `main`: commits, merges,
 tests, several agents at once, and compiler gaps. Each entry comes from
 a merge or a review in this repo's history.
 
@@ -40,17 +40,17 @@ tests/browser.rs keeps both net_http and noscript_with_scripts.
 ## Merging
 
 ### One merge at a time, then the full tests
-**Context:** integrating a finished branch into `stage0-milestones`.
+**Context:** integrating a finished branch into `main`.
 **Bad:** several merges in flight in the main checkout; a conflict or a
 test failure cannot be pinned on one branch.
 **Good:** work happens in worktrees; one merge agent merges one branch,
 runs the full tests, and only then does the next one start
 (`.claude/skills/pi-codex/SKILL.md:54`: "have a merge agent merge and
-run the full tests"). The first-parent history of `stage0-milestones`
+run the full tests"). The first-parent history of `main`
 is one merge per step (`git log --first-parent --oneline`).
 **Why:** each merge commit is then a known-good state to go back to.
 
-### Merge stage0-milestones into the branch before you finish
+### Merge main into the branch before you finish
 **Context:** a branch that has run for hours while others merged.
 **Bad:** the HTML5 forms branch recorded two agent goldens before
 `stage0-milestones` changed how `pre` text is snapshotted; they failed
@@ -61,7 +61,7 @@ text into one line per line break").
 rerun the tests, as 13edac4 ("Merge stage0-milestones into M12") and
 7946372 do:
 ```
-git merge stage0-milestones
+git merge main
 ```
 **Why:** the branch's own test run then covers what the integrator will
 merge, and the integrator's merge is trivial.
@@ -103,7 +103,7 @@ merge, and each resolution can silently lose a line.
 **Context:** handing a work stream to GPT (openai/gpt-6.1-sol) via pi.
 **Bad:** a bare `pi` run can hang for hours with no output.
 **Good:** launch `.claude/skills/pi-codex/pi_run.py` in background, in
-its own worktree `pi-<name>` from `stage0-milestones`
+its own worktree `pi-<name>` from `main`
 (`SKILL.md:30`, `SKILL.md:43`). The watchdog kills the run after 900 s
 with no event, 2400 s inside one tool, or 6 h in total, resumes the
 same session up to 3 times, and backs off 1, 4, 9 minutes on API
@@ -170,7 +170,7 @@ teaches the next agent the old idiom.
 ## Checklist before finishing a branch
 
 - Everything is committed; `git status` is clean.
-- `git merge stage0-milestones`, conflicts resolved and listed in the
+- `git merge main`, conflicts resolved and listed in the
   merge message.
 - `cargo build --release`
 - `target/release/ore check browser` (prints nothing on success)

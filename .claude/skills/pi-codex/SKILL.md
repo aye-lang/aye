@@ -27,7 +27,7 @@ above with status `stalled`/`failed` — never hours of silence.
 
 1. **Worktree.** Ask the `git-runner` agent to create one from the
    integration branch:
-   `git worktree add .claude/worktrees/pi-<name> -b pi-<name> stage0-milestones`.
+   `git worktree add .claude/worktrees/pi-<name> -b pi-<name> main`.
 2. **Task file.** Write the prompt to the scratchpad (`<scratch>/pi-<name>.md`).
    Include: repo orientation (browser/README.md, docs to read, build and
    test commands), the task with acceptance tests, files not to edit
