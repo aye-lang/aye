@@ -1,0 +1,174 @@
+// ico: the ICO (and CUR) decoder, for favicons. The file is a directory
+// of entries; one is decoded. Rule: the largest entry no larger than
+// 64x64 (a favicon is drawn at 16 to 32 CSS px, 64 covers 2x screens),
+// more bits per pixel winning a tie; when every entry is larger, the
+// largest one.
+//
+// An entry is a PNG file (decoded by `decodePng`) or a BMP without its
+// file header: a BITMAPINFOHEADER whose height counts the image and its
+// mask, a palette for 1, 4 and 8 bpp, bottom-up XOR rows (24 bpp BGR, 32
+// bpp BGRA) and a 1-bpp AND mask, every row padded to 4 bytes. A 32-bpp
+// entry whose alpha is not all 0 uses its alpha; any other entry is
+// opaque where the mask bit is 0 and transparent black where it is 1.
+
+import std
+import std.mem.Allocator
+
+let ICO_MAX_ENTRY_SIDE: usize = 64
+
+/// Decodes the entry of an ICO or CUR file that the rule above picks.
+/// Free the result with `deinit`.
+pub fn decodeIco(alloc: Allocator, data: []u8) ImageError!Bitmap {
+    if data.len < 6 || sniff(data) != Format.Ico {
+        return ImageError.Invalid
+    }
+    let count = icoLe16(data, 4)
+    if count == 0 || count * 16 > data.len - 6 {
+        return ImageError.Invalid
+    }
+    var best: usize = 0
+    var best_side: usize = 0
+    var best_bits: usize = 0
+    var best_small = false
+    for i in 0..count {
+        let e = 6 + i * 16
+        var w = data[e] as usize
+        var h = data[e + 1] as usize
+        if w == 0 {
+            w = 256
+        }
+        if h == 0 {
+            h = 256
+        }
+        var side = w
+        if h > side {
+            side = h
+        }
+        // In a CUR file these two bytes are the hotspot's y, not a depth.
+        let bits = icoLe16(data, e + 6)
+        let small = side <= ICO_MAX_ENTRY_SIDE
+        var better = i == 0
+        if small != best_small {
+            better = small
+        } else if side != best_side {
+            better = side > best_side
+        } else if bits > best_bits {
+            better = true
+        }
+        if better {
+            best = i
+            best_side = side
+            best_bits = bits
+            best_small = small
+        }
+    }
+    let e = 6 + best * 16
+    let size = icoLe32(data, e + 8)
+    let offset = icoLe32(data, e + 12)
+    if offset > data.len || size > data.len - offset {
+        return ImageError.Invalid
+    }
+    let entry = data[offset..offset + size]
+    if sniff(entry) == Format.Png {
+        return decodePng(alloc, entry)
+    }
+    return icoBmp(alloc, entry)
+}
+
+fn icoLe16(data: []u8, at: usize) usize {
+    return data[at] as usize | (data[at + 1] as usize << 8)
+}
+
+fn icoLe32(data: []u8, at: usize) usize {
+    return icoLe16(data, at) | (icoLe16(data, at + 2) << 16)
+}
+
+// A BMP entry: header, palette, XOR rows, AND mask.
+fn icoBmp(alloc: Allocator, b: []u8) ImageError!Bitmap {
+    if b.len < 40 {
+        return ImageError.Invalid
+    }
+    let header = icoLe32(b, 0)
+    let w = icoLe32(b, 4)
+    let h2 = icoLe32(b, 8)
+    let bpp = icoLe16(b, 14)
+    let compression = icoLe32(b, 16)
+    let clr_used = icoLe32(b, 32)
+    // Negative sizes (top-down rows) are not used by icons.
+    if header < 40 || header > b.len || w >= 0x80000000 || h2 >= 0x80000000 {
+        return ImageError.Invalid
+    }
+    if compression != 0 || (bpp != 1 && bpp != 4 && bpp != 8 && bpp != 24 && bpp != 32) {
+        return ImageError.Unsupported
+    }
+    let h = h2 / 2
+    try checkSize(w, h)
+    var pos = header
+    var palette = b[0..0]
+    if bpp <= 8 {
+        var colors = (1 as usize) << bpp
+        if clr_used != 0 && clr_used < colors {
+            colors = clr_used
+        }
+        if colors * 4 > b.len - pos {
+            return ImageError.Invalid
+        }
+        palette = b[pos..pos + colors * 4]
+        pos += colors * 4
+    }
+    let stride = (w * bpp + 31) / 32 * 4
+    if stride * h > b.len - pos {
+        return ImageError.Invalid
+    }
+    let xor = b[pos..pos + stride * h]
+    pos += stride * h
+    let mask_stride = (w + 31) / 32 * 4
+    var use_alpha = false
+    if bpp == 32 {
+        for i in 0..w * h {
+            if xor[(i / w) * stride + (i % w) * 4 + 3] != 0 {
+                use_alpha = true
+                break
+            }
+        }
+    }
+    if !use_alpha && mask_stride * h > b.len - pos {
+        return ImageError.Invalid
+    }
+    var bmp = try newBitmap(alloc, w, h)
+    for y in 0..h {
+        // Rows are stored bottom-up.
+        let row = xor[(h - 1 - y) * stride..]
+        for x in 0..w {
+            let o = (y * w + x) * 4
+            if !use_alpha {
+                let m = b[pos + (h - 1 - y) * mask_stride + x / 8]
+                if ((m as usize) >> (7 - x % 8)) & 1 != 0 {
+                    continue
+                }
+            }
+            if bpp <= 8 {
+                let bit = x * bpp
+                let index = ((row[bit / 8] as usize) >> (8 - bpp - bit % 8)) & (((1 as usize) << bpp) - 1)
+                if index * 4 >= palette.len {
+                    bmp.deinit(alloc)
+                    return ImageError.Invalid
+                }
+                bmp.pixels[o] = palette[index * 4 + 2]
+                bmp.pixels[o + 1] = palette[index * 4 + 1]
+                bmp.pixels[o + 2] = palette[index * 4]
+                bmp.pixels[o + 3] = 255
+            } else {
+                let p = x * (bpp / 8)
+                bmp.pixels[o] = row[p + 2]
+                bmp.pixels[o + 1] = row[p + 1]
+                bmp.pixels[o + 2] = row[p]
+                bmp.pixels[o + 3] = 255
+                if use_alpha {
+                    bmp.pixels[o + 3] = row[p + 3]
+                }
+            }
+        }
+    }
+    return bmp
+}
