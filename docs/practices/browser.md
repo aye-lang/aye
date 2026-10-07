@@ -165,7 +165,10 @@ getter, so `el.value` was a function and `setState` called it.
 `browser/engine/dom_api.ore`), then reduce the caller to a Node-checked
 test (`browser/tests/js/249_generic_descriptors.js`). A descriptor
 without value, writable, get and set changes only the flags
-(`definePropertyFrom`, `browser/js/builtins.ore`).
+(`definePropertyFrom`, `browser/js/builtins.ore`). On a non-configurable
+property, check each field as ValidateAndApplyPropertyDescriptor does
+(`redefinable`; `250_nonconfigurable_descriptors.js`), not a shortcut:
+P3.22's fix still threw for a no-op `{enumerable}` there (P3.27).
 **Why:** a native's brand check is often only where a wrong value
 surfaces; the bug can be far from it, in plain JS semantics.
 
