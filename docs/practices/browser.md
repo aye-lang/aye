@@ -469,6 +469,19 @@ Archive names hash the URL, the method (but GET) and the body
 **Why:** an archive records what one binary asked for; a binary that asks
 for more needs a new capture, not a replay that hides the gap.
 
+### An agent task's replay can miss beacons a recapture cannot fix
+**Context:** `page_load.py check --agent` replays a site's agent task
+(`browser/tools/agent_tasks/`) on an archive that `capture` recorded live.
+**Bad:** ZOL's task reached the news page in both runs, yet the replay
+missed `stat.zol.com.cn/adrs/iparea.php?r=0.236...` and two other
+beacons: their URLs hold `Math.random()` values, and live, scripts run
+in the order the network delivers them, so the seeded sequence differs.
+A second capture would only record other values.
+**Good:** `agent_task` reports misses on a `task:` line and judges only
+the steps' `expect`; `check` (the page load itself) still fails on misses.
+**Why:** a check that fails on every capture gets ignored; the steps say
+whether the agent got where it was going.
+
 ### Script-visible network requests must not be serial
 **Context:** an API that lets scripts observe a resource's state (img
 `complete`/`naturalWidth`/`load`, fetch, XHR) on the synchronous fetch.
