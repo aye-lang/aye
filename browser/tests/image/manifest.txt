@@ -169,3 +169,17 @@ webp_bad_lossless_truncated.webp 0 0 invalid
 webp_bad_vp8_cut.webp 0 0 invalid
 webp_bad_vp8l_cut.webp 0 0 invalid
 empty.bin 0 0 unsupported
+ico_png.ico 6 5 exact
+ico_bmp32.ico 7 5 exact
+ico_bmp32_mask.ico 7 5 exact
+ico_bmp24.ico 5 3 exact
+ico_bmp8_mask.ico 5 4 exact
+ico_bmp4.ico 9 3 exact
+ico_bmp1.ico 33 2 exact
+ico_multi.ico 48 48 exact
+ico_multi_large.ico 256 256 exact
+ico_cursor.cur 4 4 exact
+ico_bad_truncated.ico 0 0 invalid
+ico_bad_no_entries.ico 0 0 invalid
+ico_bad_offset.ico 0 0 invalid
+ico_bad_bpp.ico 0 0 unsupported

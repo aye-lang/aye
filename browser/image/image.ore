@@ -1,5 +1,5 @@
 // image: decoders for the raster formats a page can use (PNG, GIF,
-// JPEG, WebP) into one RGBA bitmap type. The input is untrusted bytes
+// JPEG, WebP, ICO) into one RGBA bitmap type. The input is untrusted bytes
 // from the network, so every decoder checks every index itself and
 // reports a malformed or truncated file as `ImageError.Invalid`: a
 // panic here would take the whole browser down.
@@ -31,6 +31,8 @@ pub enum Format {
     Gif
     Jpeg
     Webp
+    /// ICO, or CUR (a cursor: the same layout).
+    Ico
     Unknown
 }
 
@@ -56,11 +58,14 @@ pub fn sniff(data: []u8) Format {
     if data.len >= 12 && std.mem.eql(data[0..4], "RIFF") && std.mem.eql(data[8..12], "WEBP") {
         return Format.Webp
     }
+    if data.len >= 4 && data[0] == 0 && data[1] == 0 && (data[2] == 1 || data[2] == 2) && data[3] == 0 {
+        return Format.Ico
+    }
     return Format.Unknown
 }
 
-/// Decodes a PNG, GIF (its first frame), JPEG or WebP (its first
-/// frame), chosen by `sniff`. Free the result with `deinit`.
+/// Decodes a PNG, GIF (its first frame), JPEG, WebP (its first frame)
+/// or ICO (one of its entries), chosen by `sniff`. Free the result with `deinit`.
 pub fn decode(alloc: Allocator, data: []u8) ImageError!Bitmap {
     let format = sniff(data)
     if format == Format.Png {
@@ -74,6 +79,9 @@ pub fn decode(alloc: Allocator, data: []u8) ImageError!Bitmap {
     }
     if format == Format.Webp {
         return decodeWebp(alloc, data)
+    }
+    if format == Format.Ico {
+        return decodeIco(alloc, data)
     }
     return ImageError.Unsupported
 }
