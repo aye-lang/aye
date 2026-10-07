@@ -1,6 +1,10 @@
 // Conservative candidate selection, not a selector matcher. A complex
 // selector is indexed by one *required* simple selector in its rightmost
-// compound: id, else class, else type. :is()/:where() alternatives are
+// compound: the id, class, attribute name or type that the fewest
+// rightmost compounds of the sheet have (so that `.item.ytd-app`, where
+// every element of a component has the second class, is offered to
+// `.item` elements only), an id before a class before an attribute
+// before a type when as many have them. :is()/:where() alternatives are
 // indexed recursively; attribute-only, negative and universal selectors
 // stay in the fallback bucket. Selector lists index
 // every alternative; candidates are deduplicated and restored to source
@@ -23,6 +27,7 @@ pub struct RuleIndex {
     alloc: Allocator
     ids: StrMap(usize)
     classes: StrMap(usize)
+    attrs: StrMap(usize)
     tags: StrMap(usize)
     links: List(RuleLink)
     fallback: List(usize)
@@ -35,6 +40,7 @@ pub struct RuleIndex {
             alloc: alloc,
             ids: StrMap(usize).init(alloc),
             classes: StrMap(usize).init(alloc),
+            attrs: StrMap(usize).init(alloc),
             tags: StrMap(usize).init(alloc),
             links: List(RuleLink).init(alloc),
             fallback: List(usize).init(alloc),
@@ -47,6 +53,7 @@ pub struct RuleIndex {
     pub fn deinit(self: *mut Self) {
         self.ids.deinit()
         self.classes.deinit()
+        self.attrs.deinit()
         self.tags.deinit()
         self.links.deinit()
         self.fallback.deinit()
@@ -62,10 +69,28 @@ pub struct RuleIndex {
         let alloc = self.alloc
         self.deinit()
         self.* = RuleIndex.init(alloc)
+        // How many rightmost compounds have each id, class and type.
+        var counts = Counts { ids: StrMap(usize).init(alloc), classes: StrMap(usize).init(alloc), attrs: StrMap(usize).init(alloc), tags: StrMap(usize).init(alloc) }
+        defer counts.deinit()
+        for r in sheet.rules.items() {
+            for k in r.sel_start..r.sel_end {
+                let cx = sheet.complexes.items()[k]
+                if cx.end <= cx.start {
+                    continue
+                }
+                let right = sheet.compounds.items()[cx.end - 1]
+                for si in right.start..right.end {
+                    let s = sheet.simples.items()[si]
+                    if counts.mapOf(s.kind) |map| {
+                        try map.put(s.name, (map.get(s.name) orelse 0) + 1)
+                    }
+                }
+            }
+        }
         for ri, r in sheet.rules.items() {
             var fallback = false
             for k in r.sel_start..r.sel_end {
-                if !(try self.addComplex(sheet, ri, sheet.complexes.items()[k], 0)) {
+                if !(try self.addComplex(sheet, &mut counts, ri, sheet.complexes.items()[k], 0)) {
                     fallback = true
                 }
             }
@@ -80,23 +105,28 @@ pub struct RuleIndex {
     // True when every way this selector can match has a required key.
     // Partial indexing is harmless when false: the rule also goes in
     // fallback. Depth limits only reduce filtering, never correctness.
-    fn addComplex(self: *mut Self, sheet: *Sheet, ri: usize, cx: Complex, depth: usize) AllocError!bool {
+    fn addComplex(self: *mut Self, sheet: *Sheet, counts: *mut Counts, ri: usize, cx: Complex, depth: usize) AllocError!bool {
         if cx.end <= cx.start || depth >= 16 {
             return false
         }
         let right = sheet.compounds.items()[cx.end - 1]
         var key: ?Simple = null
+        var key_count: usize = 0
         var alternatives: ?Simple = null
         for si in right.start..right.end {
             let s = sheet.simples.items()[si]
-            if s.kind == SelKind.Id {
-                key = s
-                break
-            }
-            if s.kind == SelKind.Class {
-                key = s
-            } else if s.kind == SelKind.Type && key == null {
-                key = s
+            if counts.mapOf(s.kind) |map| {
+                let n = map.get(s.name) orelse 0
+                var better = key == null || n < key_count
+                if key |k| {
+                    if n == key_count && keyRank(s.kind) < keyRank(k.kind) {
+                        better = true
+                    }
+                }
+                if better {
+                    key = s
+                    key_count = n
+                }
             } else if s.kind == SelKind.Is && alternatives == null {
                 alternatives = s
             }
@@ -107,6 +137,8 @@ pub struct RuleIndex {
                 map = &mut self.ids
             } else if s.kind == SelKind.Class {
                 map = &mut self.classes
+            } else if s.kind == SelKind.Attr {
+                map = &mut self.attrs
             }
             let at = self.links.len()
             try self.links.append(RuleLink { rule: ri, next: map.get(s.name) })
@@ -116,7 +148,7 @@ pub struct RuleIndex {
         if alternatives |s| {
             var all = s.sub_end > s.sub_start
             for k in s.sub_start..s.sub_end {
-                if !(try self.addComplex(sheet, ri, sheet.complexes.items()[k], depth + 1)) {
+                if !(try self.addComplex(sheet, counts, ri, sheet.complexes.items()[k], depth + 1)) {
                     all = false
                 }
             }
@@ -158,6 +190,11 @@ pub struct RuleIndex {
                 }
             }
         }
+        if self.attrs.len() > 0 {
+            for at in doc.node(el).attrs {
+                try self.bucket(self.attrs.get(at.name))
+            }
+        }
         let tag = doc.node(el).name
         var upper = false
         for b in tag {
@@ -180,6 +217,51 @@ pub struct RuleIndex {
         sort.sort(usize, self.selected.items(), ruleBefore)
         return self.selected.items()
     }
+}
+
+// How many rightmost compounds of a sheet have each id, class and type.
+struct Counts {
+    ids: StrMap(usize)
+    classes: StrMap(usize)
+    attrs: StrMap(usize)
+    tags: StrMap(usize)
+
+    fn deinit(self: *mut Self) {
+        self.ids.deinit()
+        self.classes.deinit()
+        self.attrs.deinit()
+        self.tags.deinit()
+    }
+
+    fn mapOf(self: *mut Self, kind: SelKind) ?*mut StrMap(usize) {
+        if kind == SelKind.Id {
+            return &mut self.ids
+        }
+        if kind == SelKind.Class {
+            return &mut self.classes
+        }
+        if kind == SelKind.Attr {
+            return &mut self.attrs
+        }
+        if kind == SelKind.Type {
+            return &mut self.tags
+        }
+        return null
+    }
+}
+
+// Id before class before attribute before type, as keys.
+fn keyRank(kind: SelKind) u8 {
+    if kind == SelKind.Id {
+        return 0
+    }
+    if kind == SelKind.Class {
+        return 1
+    }
+    if kind == SelKind.Attr {
+        return 2
+    }
+    return 3
 }
 
 fn ruleBefore(a: usize, b: usize) bool {
