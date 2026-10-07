@@ -31,8 +31,11 @@ python3 browser/tools/page_load.py run --archive target/page-load-new \
     --json target/page-load-new/comparison.json
 ```
 
-The four URLs are in `browser/tools/page_load.py`; `--site zol` (or
-`wikipedia`, `github`, `youtube`) selects a subset. Only Python's
+The URLs are in `browser/tools/page_load.py`. Without `--site` it loads
+these four pages; `--site zol` (or `wikipedia`, `github`, `youtube`)
+selects a subset, and `--site all` loads every site of
+`docs/browser-sites.md`. The default archive is `target/sites`, one
+directory per site. Only Python's
 standard library is needed. Each load has a 300-second timeout.
 
 ### Archive semantics

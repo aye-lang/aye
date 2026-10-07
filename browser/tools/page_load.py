@@ -10,12 +10,32 @@ import statistics
 import subprocess
 import time
 
+# The sites of docs/browser-sites.md, in its order. --site all loads every one.
 SITES = {
-    "zol": "https://www.zol.com.cn/",
-    "wikipedia": "https://ja.wikipedia.org/wiki/%E3%82%A6%E3%82%A7%E3%83%96%E3%83%96%E3%83%A9%E3%82%A6%E3%82%B6",
+    "example": "https://example.com/",
+    "wikipedia-en": "https://en.wikipedia.org/wiki/Web_browser",
+    "hn": "https://news.ycombinator.com/",
     "github": "https://github.com/rust-lang/rust",
+    "mdn": "https://developer.mozilla.org/en-US/docs/Web/HTML/Element/details",
+    "python-docs": "https://docs.python.org/3/tutorial/index.html",
+    "rustdoc": "https://doc.rust-lang.org/std/vec/struct.Vec.html",
+    "bbc": "https://www.bbc.com/news",
+    "cnn-lite": "https://lite.cnn.com/",
+    "reddit": "https://old.reddit.com/r/programming/",
+    "stackoverflow": "https://stackoverflow.com/questions/11227809/why-is-processing-a-sorted-array-faster-than-processing-an-unsorted-array",
+    "lobsters": "https://lobste.rs/",
+    "go-docs": "https://go.dev/doc/effective_go",
+    "duckduckgo": "https://html.duckduckgo.com/html/?q=ore+programming+language",
+    "google": "https://www.google.com/",
+    "wikipedia": "https://ja.wikipedia.org/wiki/%E3%82%A6%E3%82%A7%E3%83%96%E3%83%96%E3%83%A9%E3%82%A6%E3%82%B6",
+    "abehiroshi": "http://abehiroshi.la.coocan.jp/",
+    "zol": "https://www.zol.com.cn/",
     "youtube": "https://www.youtube.com/",
+    "react": "https://react.dev/",
+    "mistral": "https://mistral.ai/news/mistral-large-4/",
 }
+# Without --site: the four heavy pages of browser/engine/PERF.md.
+DEFAULT_SITES = ("zol", "wikipedia", "github", "youtube")
 PHASES = ("fetch", "decode", "html", "scripts", "timers", "sheets", "css_parse",
           "cascade_read", "cascade", "images", "image_decode", "layout", "paint_build", "paint", "markdown",
           "requests", "prefetch")
@@ -90,10 +110,11 @@ def print_result(name, result):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("capture", "run"))
-    parser.add_argument("--archive", type=Path, default=Path("target/page-load"))
+    parser.add_argument("--archive", type=Path, default=Path("target/sites"), help="one directory per site")
     parser.add_argument("--binary", type=Path, default=Path("target/anyknown"))
     parser.add_argument("--compare", type=Path, help="baseline binary; alternate before/after to reduce machine-load bias")
-    parser.add_argument("--site", action="append", choices=SITES)
+    parser.add_argument("--site", action="append", choices=(*SITES, "all"),
+                        help=f"repeatable; default {', '.join(DEFAULT_SITES)}")
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument("--warmup", type=int, default=1, help="unmeasured loads per binary/site before replay runs")
     parser.add_argument("--json", type=Path)
@@ -104,65 +125,81 @@ def main():
         parser.error("--repeat must be positive and --warmup nonnegative")
     if args.mode == "capture" and (args.compare or args.screenshot or args.sample):
         parser.error("capture always records Markdown; compare, screenshot and sample are replay options")
+    sites = list(SITES) if "all" in (args.site or ()) else args.site or DEFAULT_SITES
     results = {}
-    for name in args.site or SITES:
-        directory = args.archive / name
-        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        manifest_path = directory / "manifest.json"
-        if args.mode == "capture":
-            if manifest_path.exists() or list(directory.glob("*.response")):
-                raise RuntimeError(f"{directory}: use a new directory for an immutable capture")
-            result = run(args.binary, SITES[name], directory, record=True)
-            resources = []
-            for path in sorted(directory.glob("*.response")):
-                data = path.read_bytes()
-                fields = data.split(b"\n", 6)
-                resources.append({"file": path.name, "url": fields[0].decode(),
-                                  "status": int(fields[1]), "bytes": len(fields[6]),
-                                  "sha256": hashlib.sha256(data).hexdigest()})
-            manifest_path.write_text(json.dumps({"url": SITES[name], "capture": result,
-                                                "resources": resources}, indent=2) + "\n")
-            results[name] = result
-            print(f"{name}: captured {len(resources)} requests, {result['wall']:.3f}s", flush=True)
+    failures = {}
+    for name in sites:
+        try:
+            result = load_site(args, name)
+        except (RuntimeError, OSError) as error:
+            failures[name] = str(error).splitlines()[0]
+            print(f"{name}: FAILED: {error}", flush=True)
             continue
-        manifest = json.loads(manifest_path.read_text())
-        for resource in manifest["resources"]:
-            if hashlib.sha256((directory / resource["file"]).read_bytes()).hexdigest() != resource["sha256"]:
-                raise RuntimeError(f"{directory}: changed resource {resource['file']}")
-        binaries = {"before": args.compare, "after": args.binary} if args.compare else {"after": args.binary}
-        runs = {label: [] for label in binaries}
-        for label, binary in binaries.items():
-            for _ in range(args.warmup):
-                result = run(binary, manifest["url"], directory, screenshot=args.screenshot)
-                print(f"{name} {label}: warmup: {result['wall']:.3f}s", flush=True)
-        for i in range(args.repeat):
-            order = list(binaries)
-            if i % 2:
-                order.reverse()
-            for label in order:
-                sample = directory / f"sample-{label}.txt" if args.sample and i == 0 else None
-                result = run(binaries[label], manifest["url"], directory, sample=sample, screenshot=args.screenshot)
-                runs[label].append(result)
-                print(f"{name} {label}: run {i + 1}/{args.repeat}: {result['wall']:.3f}s", flush=True)
-        all_runs = [r for batch in runs.values() for r in batch]
-        if not args.screenshot and any(r["sha256"] != manifest["capture"]["sha256"] for r in all_runs):
-            raise RuntimeError(f"{name}: replay Markdown differs from capture")
-        if len({r["sha256"] for r in all_runs}) != 1:
-            raise RuntimeError(f"{name}: output is not reproducible")
-        summaries = {label: summarize(batch) for label, batch in runs.items()}
-        results[name] = summaries if args.compare else summaries["after"]
+        results[name] = result
     print("\nSeconds (medians); nested phases overlap, do not sum columns:")
     print("site                wall " + " ".join(f"{p:>12}" for p in PHASES))
-    for name, result in results.items():
-        if args.compare:
-            for label, summary in result.items():
+    for name in sites:
+        if name in failures:
+            print(f"{name:<17} FAILED {failures[name]}")
+        elif args.compare:
+            for label, summary in results[name].items():
                 print_result(f"{name} {label}", summary)
-            print(f"  wall improvement: {1 - result['after']['wall'] / result['before']['wall']:.1%}")
+            print(f"  wall improvement: {1 - results[name]['after']['wall'] / results[name]['before']['wall']:.1%}")
         else:
-            print_result(name, result)
+            print_result(name, results[name])
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(json.dumps(results, indent=2) + "\n")
+    if failures:
+        raise SystemExit(f"{len(failures)} of {len(sites)} sites failed: {', '.join(failures)}")
+
+
+def load_site(args, name):
+    """Capture or replay one site; returns its result for the table."""
+    directory = args.archive / name
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    manifest_path = directory / "manifest.json"
+    if args.mode == "capture":
+        if manifest_path.exists() or list(directory.glob("*.response")):
+            raise RuntimeError(f"{directory}: use a new directory for an immutable capture")
+        result = run(args.binary, SITES[name], directory, record=True)
+        resources = []
+        for path in sorted(directory.glob("*.response")):
+            data = path.read_bytes()
+            fields = data.split(b"\n", 6)
+            resources.append({"file": path.name, "url": fields[0].decode(),
+                              "status": int(fields[1]), "bytes": len(fields[6]),
+                              "sha256": hashlib.sha256(data).hexdigest()})
+        manifest_path.write_text(json.dumps({"url": SITES[name], "capture": result,
+                                            "resources": resources}, indent=2) + "\n")
+        print(f"{name}: captured {len(resources)} requests, {result['wall']:.3f}s", flush=True)
+        return result
+    manifest = json.loads(manifest_path.read_text())
+    for resource in manifest["resources"]:
+        if hashlib.sha256((directory / resource["file"]).read_bytes()).hexdigest() != resource["sha256"]:
+            raise RuntimeError(f"{directory}: changed resource {resource['file']}")
+    binaries = {"before": args.compare, "after": args.binary} if args.compare else {"after": args.binary}
+    runs = {label: [] for label in binaries}
+    for label, binary in binaries.items():
+        for _ in range(args.warmup):
+            result = run(binary, manifest["url"], directory, screenshot=args.screenshot)
+            print(f"{name} {label}: warmup: {result['wall']:.3f}s", flush=True)
+    for i in range(args.repeat):
+        order = list(binaries)
+        if i % 2:
+            order.reverse()
+        for label in order:
+            sample = directory / f"sample-{label}.txt" if args.sample and i == 0 else None
+            result = run(binaries[label], manifest["url"], directory, sample=sample, screenshot=args.screenshot)
+            runs[label].append(result)
+            print(f"{name} {label}: run {i + 1}/{args.repeat}: {result['wall']:.3f}s", flush=True)
+    all_runs = [r for batch in runs.values() for r in batch]
+    if not args.screenshot and any(r["sha256"] != manifest["capture"]["sha256"] for r in all_runs):
+        raise RuntimeError(f"{name}: replay Markdown differs from capture")
+    if len({r["sha256"] for r in all_runs}) != 1:
+        raise RuntimeError(f"{name}: output is not reproducible")
+    summaries = {label: summarize(batch) for label, batch in runs.items()}
+    return summaries if args.compare else summaries["after"]
 
 
 if __name__ == "__main__":
