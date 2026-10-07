@@ -322,6 +322,23 @@ fn http() {
     expect(&["dump", "--text", "http://127.0.0.1:1/"], 1, "", "error: cannot fetch http://127.0.0.1:1/: cannot connect\n");
 }
 
+/// The img requests that scripts observe (load state) are fetched
+/// together: twelve images that each take 0.3 s must not be requested
+/// one after another (they were, from c40a1ea: lobste.rs took 8 s).
+#[test]
+fn http_images_concurrent() {
+    let Some(srv) = server() else {
+        println!("skipped: cannot start python3 for the test server");
+        return;
+    };
+    let base = &srv.base;
+    let out = run(&["dump", "--text", "--js", &format!("{base}/net/slow_images.html")]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let out = run(&["dump", "--text", &format!("{base}/slow-peak")]);
+    let peak: u32 = text(&out.stdout).trim().parse().unwrap();
+    assert!(peak > 1, "the slow images were fetched one at a time");
+}
+
 // ---- B4: paint and window
 
 /// A scratch directory for the files the browser writes.

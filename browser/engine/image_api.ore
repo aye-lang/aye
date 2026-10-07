@@ -8,10 +8,53 @@ import js.Args
 import js.Interp
 import js.JsError
 import js.Value
+import dom.NodeId
+import std.list.List
 import std.math
 
 fn installImages(it: *mut Interp, ak: u32) JsError!void {
     try defMethod(it, ak, "imageLoad", 1, akImageLoad)
+    try defMethod(it, ak, "imagePrefetch", 1, akImagePrefetch)
+}
+
+// The page's image cache, made on first use.
+fn scriptImages(p: *mut Page) JsError!*mut ImageCache {
+    if p.images == null {
+        p.images = try p.alloc.create(ImageCache.init(p.alloc))
+    }
+    let cache = p.images.?
+    if cache.referrer.len == 0 {
+        try cache.setReferrer(p.url.href)
+    }
+    return cache
+}
+
+// Fetches the new images of the img elements of the array argument
+// concurrently, before the prelude's requests load them one by one.
+fn akImagePrefetch(it: *mut Interp, a: Args) JsError!Value {
+    let v = it.arg(a, 0)
+    if !it.hasClass(v, js.Class.Array) {
+        return Value.Undefined
+    }
+    let s = scriptOf(it)
+    let p = s.active
+    var els = List(NodeId).init(p.alloc)
+    defer els.deinit()
+    let o = js.objectOf(v)
+    for i in 0..it.heap.obj(o).nelems {
+        let h = handleOf(it, it.heap.obj(o).elems[i], TAG_NODE) orelse continue
+        if p.doc.isElement(h, "img") {
+            try els.append(h)
+        }
+    }
+    if els.len() < 2 {
+        return Value.Undefined
+    }
+    let cache = try scriptImages(p)
+    let base = try documentBase(cache.alloc, &p.doc, &p.url)
+    defer base.deinit(cache.alloc)
+    try prefetchElementImages(cache, &p.doc, els.items(), &base, css.Media { width: s.width, height: s.height })
+    return Value.Undefined
 }
 
 // [currentSrc, naturalWidth, naturalHeight]; -1 dimensions mean broken.
@@ -24,13 +67,7 @@ fn akImageLoad(it: *mut Interp, a: Args) JsError!Value {
     if !p.doc.isElement(h, "img") {
         return Value.Null
     }
-    if p.images == null {
-        p.images = try p.alloc.create(ImageCache.init(p.alloc))
-    }
-    let cache = p.images.?
-    if cache.referrer.len == 0 {
-        try cache.setReferrer(p.url.href)
-    }
+    let cache = try scriptImages(p)
     let base = try documentBase(cache.alloc, &p.doc, &p.url)
     defer base.deinit(cache.alloc)
     let mapped = cache.nodes.get(h)

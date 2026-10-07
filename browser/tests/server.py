@@ -29,10 +29,15 @@
 #                    without, the end of the body closing the connection)
 #   /meta-charset    a Windows-1252 page declared only by <meta charset>
 #   /gbk             a GBK page declared only by Content-Type
+#   /slow/NAME       NAME's small body (as /log/NAME) after 0.3 s
+#   /slow-peak       the most /slow/ requests that were in flight at
+#                    once, as text/plain
 import gzip
 import html
 import http.server
 import sys
+import threading
+import time
 import urllib.parse
 
 ROOT = sys.argv[1]
@@ -50,6 +55,9 @@ COOKIES = [
 ]
 
 LOG = []
+
+SLOW = {"now": 0, "peak": 0}
+SLOW_LOCK = threading.Lock()
 
 BODIES = {
     ".css": ("text/css", b"p { color: green }"),
@@ -111,6 +119,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.reply(200, [("Content-Type", "text/plain")], "".join(sorted(LOG)).encode())
         elif path.startswith("/log/"):
             self.log_request_line("GET")
+        elif path.startswith("/slow/"):
+            with SLOW_LOCK:
+                SLOW["now"] += 1
+                SLOW["peak"] = max(SLOW["peak"], SLOW["now"])
+            time.sleep(0.3)
+            with SLOW_LOCK:
+                SLOW["now"] -= 1
+            ctype, data = BODIES.get(path[path.rfind("."):], ("text/plain", b"slow"))
+            self.reply(200, [("Content-Type", ctype)], data)
+        elif path == "/slow-peak":
+            self.reply(200, [("Content-Type", "text/plain")], b"%d\n" % SLOW["peak"])
         elif path == "/big":
             self.reply(200, [("Content-Type", "text/plain")], b"x" * (33 << 20))
         elif path == "/big?stream":
