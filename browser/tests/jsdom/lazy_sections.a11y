@@ -1,0 +1,8 @@
+- heading "Lazy sections" [level=1] [e1]
+- paragraph: Sections fill in when they come into view.
+- paragraph: First section, in view at load.
+- paragraph: Second section, below the fold.
+- paragraph: Third section, further down.
+- paragraph: Fourth section, at the bottom.
+- img "A native lazy image"
+- paragraph: scroll events: 3; image loaded at 2130

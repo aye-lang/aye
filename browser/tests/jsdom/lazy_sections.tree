@@ -1,0 +1,41 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Lazy sections"
+      "\n"
+      <style>
+        "\nbody { margin: 0 }\nsection { height: 500px }\n"
+      "\n"
+    <body>
+      <h1>
+        "Lazy sections"
+      "\n"
+      <p>
+        "Sections fill in when they come into view."
+      "\n"
+      <section data-text="First section, in view at load.">
+        <p>
+          "First section, in view at load."
+      "\n"
+      <section data-text="Second section, below the fold.">
+        <p>
+          "Second section, below the fold."
+      "\n"
+      <section data-text="Third section, further down.">
+        <p>
+          "Third section, further down."
+      "\n"
+      <section data-text="Fourth section, at the bottom.">
+        <p>
+          "Fourth section, at the bottom."
+      "\n"
+      <img id="lazy" loading="lazy" alt="A native lazy image" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAAECAYAAACk7+45AAAAEUlEQVR4nGP4z8DwH4QZcDMAHxMP8b9IbMkAAAAASUVORK5CYII=">
+      "\n"
+      <p id="log">
+        "scroll events: 3; image loaded at 2130"
+      "\n"
+      <script>
+        "\n// A section shows its text once it intersects the viewport; the log\n// counts the scroll events of the window and says when the native lazy\n// image loaded (at once: it does not wait to be in view).\nlet scrolls = 0;\nconst log = document.getElementById('log');\nfunction show(what) { log.textContent = 'scroll events: ' + scrolls + '; ' + what; }\nconst img = document.getElementById('lazy');\nlet loaded = 'image ' + (img.complete ? 'complete' : 'loading');\nimg.onload = () => { loaded = 'image loaded at ' + Math.round(img.getBoundingClientRect().top + scrollY); show(loaded); };\naddEventListener('scroll', () => { scrolls++; show(loaded); });\nconst io = new IntersectionObserver(entries => {\n  for (const e of entries) {\n    if (!e.isIntersecting) continue;\n    const p = document.createElement('p');\n    p.textContent = e.target.dataset.text;\n    e.target.append(p);\n    io.unobserve(e.target);\n  }\n});\nfor (const s of document.querySelectorAll('section')) io.observe(s);\nshow(loaded);\n"
+      "\n"

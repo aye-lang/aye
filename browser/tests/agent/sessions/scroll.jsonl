@@ -1,0 +1,7 @@
+{"id":1,"cmd":"navigate","url":"browser/tests/agent/site/scroll.html"}
+{"id":2,"cmd":"scroll","dy":300}
+{"id":3,"cmd":"eval","expression":"document.getElementById('count').textContent"}
+{"id":4,"cmd":"click","ref":"e2"}
+{"id":5,"cmd":"eval","expression":"[scrollY, document.getElementById('count').textContent].join('; ')"}
+{"id":6,"cmd":"scroll","dy":-10000}
+{"id":7,"cmd":"eval","expression":"[scrollY, document.getElementById('count').textContent].join('; ')"}
