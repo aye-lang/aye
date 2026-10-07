@@ -270,6 +270,9 @@ pub struct Tree {
     // Set by block flow before a child is laid out: the estimated top of
     // its border box in its parent's content box.
     hint_y: f64
+    // The lines left before the line clamp of the `-webkit-box` being
+    // laid out ends, among the lines of its block flow; 0 for none.
+    clamp_left: usize = 0
     // Absolutely positioned boxes, in tree order, laid out after the
     // rest.
     absolutes: List(usize)

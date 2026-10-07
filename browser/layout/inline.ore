@@ -521,9 +521,8 @@ fn layoutInline(t: *mut Tree, i: usize, avail: f64) AllocError!f64 {
         open: &mut open,
     }
     t.bx(i).line_start = t.lines.len()
-    let clamp = lineClamp(t, i)
-    // The bottom of the last line within the clamp.
-    var clamp_y: ?f64 = null
+    // A line clamp around (block.ore) ends at one of these lines.
+    let clamp = t.clamp_left
     var k: usize = 0
     while k < ps.len {
         let start = k
@@ -605,13 +604,13 @@ fn layoutInline(t: *mut Tree, i: usize, avail: f64) AllocError!f64 {
             continue
         }
         try lb.line(ps[start..k], forced, k >= ps.len)
-        if clamp > 0 && clamp_y == null && t.lines.len() - t.bx(i).line_start == clamp {
-            // The lines after it still show as overflow.
+        if clamp > 0 && t.clamp_left > 0 && t.lines.len() - t.bx(i).line_start == clamp {
+            // The last line of the clamp. The lines after it still show
+            // as overflow; an ellipsis when this container has more.
+            t.clamp_left = 0
             let li = t.lines.len() - 1
-            let line = t.lines.items()[li]
-            clamp_y = line.y + line.h
             if k < ps.len {
-                try lb.ellipsize(li, line.y + line.baseline, true)
+                try lb.ellipsize(li, t.lines.items()[li].y + t.lines.items()[li].baseline, true)
             }
         }
         for fi in below.items() {
@@ -622,15 +621,16 @@ fn layoutInline(t: *mut Tree, i: usize, avail: f64) AllocError!f64 {
         below.clear()
     }
     t.bx(i).line_end = t.lines.len()
-    if clamp_y |cy| {
-        return cy
+    if t.clamp_left > 0 {
+        t.clamp_left -= t.lines.len() - t.bx(i).line_start
     }
     return lb.y
 }
 
 // The `-webkit-line-clamp` of block container `i`: the number of lines
-// its height ends after (with an ellipsis when more follow), or 0. It
-// counts the container's own lines only.
+// of its block flow (its own, or those of its in-flow block descendants
+// in order) its height ends after, or 0. The last one gets an ellipsis
+// when its container has more.
 fn lineClamp(t: *Tree, i: usize) usize {
     let s = t.bx(i).style
     if !isKeyword(s[css.DISPLAY], "-webkit-box") && !isKeyword(s[css.DISPLAY], "-webkit-inline-box") {
@@ -644,6 +644,32 @@ fn lineClamp(t: *Tree, i: usize) usize {
         return 0
     }
     return n as usize
+}
+
+// The bottom of line `left` of the block flow of `i` (see `lineClamp`),
+// `oy` below the top of `i`'s content box; null when it has fewer lines,
+// which are taken off `left`.
+fn clampBottom(t: *Tree, i: usize, oy: f64, left: *mut usize) ?f64 {
+    let b = t.bx(i)
+    if hasInlineContent(t, i) {
+        let n = b.line_end - b.line_start
+        if n >= left.* {
+            let line = t.lines.items()[b.line_start + left.* - 1]
+            return oy + line.y + line.h
+        }
+        left.* -= n
+        return null
+    }
+    for c in t.children(i) {
+        let cb = t.bx(c)
+        if cb.oof() || cb.inline_level || isFormattingRoot(t, c) {
+            continue
+        }
+        if clampBottom(t, c, oy + cb.y + cb.border[0] + cb.padding[0], left) |y| {
+            return y
+        }
+    }
+    return null
 }
 
 // Is there a forced break among the Close pieces that end a chunk?
