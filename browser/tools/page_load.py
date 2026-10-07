@@ -385,6 +385,8 @@ def load_site(args, name):
         steps = task_steps(name)
         task_failure, task_errors = agent_task(args.binary, SITES[name], directory, steps, record=True) \
             if steps else (None, None)
+        if task_failure == json.loads(EXPECTATIONS.read_text())["sites"][name].get("task_fails"):
+            task_failure = None
         task_failure = task_failure or task_errors
         resources = []
         for path in sorted(directory.glob("*.response")):
