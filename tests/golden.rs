@@ -499,7 +499,11 @@ fn output_and_cpu_within(cmd: &mut Command, secs: u64) -> Option<(std::process::
         match unsafe { wait4(pid, &mut status, WNOHANG, &mut ru) } {
             0 => {}
             r if r == pid => break,
-            _ => return None,
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
         }
         if start.elapsed().as_secs() >= secs {
             let _ = child.kill();
