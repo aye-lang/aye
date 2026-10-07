@@ -9,6 +9,9 @@
 // stay in the fallback bucket. Selector lists index
 // every alternative; candidates are deduplicated and restored to source
 // order before the existing cascade (including maximum specificity).
+// The `::before`/`::after` selectors are indexed a second time on their
+// own (`pseudoCandidates`), so that an element no such rule can select
+// costs a few lookups in small maps, not its whole candidate list again.
 import dom.Document
 import dom.NodeId
 import std.list.List
@@ -23,14 +26,39 @@ struct RuleLink {
     next: ?usize
 }
 
-pub struct RuleIndex {
-    alloc: Allocator
+// The rules of one set by their key, and those without one.
+struct Buckets {
     ids: StrMap(usize)
     classes: StrMap(usize)
     attrs: StrMap(usize)
     tags: StrMap(usize)
-    links: List(RuleLink)
     fallback: List(usize)
+
+    fn init(alloc: Allocator) Buckets {
+        return Buckets {
+            ids: StrMap(usize).init(alloc),
+            classes: StrMap(usize).init(alloc),
+            attrs: StrMap(usize).init(alloc),
+            tags: StrMap(usize).init(alloc),
+            fallback: List(usize).init(alloc),
+        }
+    }
+
+    fn deinit(self: *mut Self) {
+        self.ids.deinit()
+        self.classes.deinit()
+        self.attrs.deinit()
+        self.tags.deinit()
+        self.fallback.deinit()
+    }
+}
+
+pub struct RuleIndex {
+    alloc: Allocator
+    // All the rules, and the `::before`/`::after` selectors alone.
+    all: Buckets
+    pseudo: Buckets
+    links: List(RuleLink)
     selected: List(usize)
     // Complex index to its `ancestorKey`.
     ancestors: List(u64)
@@ -40,12 +68,9 @@ pub struct RuleIndex {
     pub fn init(alloc: Allocator) RuleIndex {
         return RuleIndex {
             alloc: alloc,
-            ids: StrMap(usize).init(alloc),
-            classes: StrMap(usize).init(alloc),
-            attrs: StrMap(usize).init(alloc),
-            tags: StrMap(usize).init(alloc),
+            all: Buckets.init(alloc),
+            pseudo: Buckets.init(alloc),
             links: List(RuleLink).init(alloc),
-            fallback: List(usize).init(alloc),
             selected: List(usize).init(alloc),
             ancestors: List(u64).init(alloc),
             rules: 0,
@@ -54,12 +79,9 @@ pub struct RuleIndex {
     }
 
     pub fn deinit(self: *mut Self) {
-        self.ids.deinit()
-        self.classes.deinit()
-        self.attrs.deinit()
-        self.tags.deinit()
+        self.all.deinit()
+        self.pseudo.deinit()
         self.links.deinit()
-        self.fallback.deinit()
         self.selected.deinit()
         self.ancestors.deinit()
     }
@@ -93,13 +115,23 @@ pub struct RuleIndex {
         }
         for ri, r in sheet.rules.items() {
             var fallback = false
+            var pseudo_fallback = false
             for k in r.sel_start..r.sel_end {
-                if !(try self.addComplex(sheet, &mut counts, ri, sheet.complexes.items()[k], 0)) {
+                let cx = sheet.complexes.items()[k]
+                if !(try self.addComplex(&mut self.all, sheet, &mut counts, ri, cx, 0)) {
                     fallback = true
+                }
+                if cx.pseudo == 1 || cx.pseudo == 2 {
+                    if !(try self.addComplex(&mut self.pseudo, sheet, &mut counts, ri, cx, 0)) {
+                        pseudo_fallback = true
+                    }
                 }
             }
             if fallback {
-                try self.fallback.append(ri)
+                try self.all.fallback.append(ri)
+            }
+            if pseudo_fallback {
+                try self.pseudo.fallback.append(ri)
             }
         }
         for cx in sheet.complexes.items() {
@@ -112,7 +144,7 @@ pub struct RuleIndex {
     // True when every way this selector can match has a required key.
     // Partial indexing is harmless when false: the rule also goes in
     // fallback. Depth limits only reduce filtering, never correctness.
-    fn addComplex(self: *mut Self, sheet: *Sheet, counts: *mut Counts, ri: usize, cx: Complex, depth: usize) AllocError!bool {
+    fn addComplex(self: *mut Self, into: *mut Buckets, sheet: *Sheet, counts: *mut Counts, ri: usize, cx: Complex, depth: usize) AllocError!bool {
         if cx.end <= cx.start || depth >= 16 {
             return false
         }
@@ -139,13 +171,13 @@ pub struct RuleIndex {
             }
         }
         if key |s| {
-            var map = &mut self.tags
+            var map = &mut into.tags
             if s.kind == SelKind.Id {
-                map = &mut self.ids
+                map = &mut into.ids
             } else if s.kind == SelKind.Class {
-                map = &mut self.classes
+                map = &mut into.classes
             } else if s.kind == SelKind.Attr {
-                map = &mut self.attrs
+                map = &mut into.attrs
             }
             let at = self.links.len()
             try self.links.append(RuleLink { rule: ri, next: map.get(s.name) })
@@ -155,7 +187,7 @@ pub struct RuleIndex {
         if alternatives |s| {
             var all = s.sub_end > s.sub_start
             for k in s.sub_start..s.sub_end {
-                if !(try self.addComplex(sheet, counts, ri, sheet.complexes.items()[k], depth + 1)) {
+                if !(try self.addComplex(into, sheet, counts, ri, sheet.complexes.items()[k], depth + 1)) {
                     all = false
                 }
             }
@@ -175,14 +207,30 @@ pub struct RuleIndex {
 
     pub fn candidates(self: *mut Self, sheet: *Sheet, doc: *Document, el: NodeId) AllocError![]usize {
         try self.build(sheet)
+        return try self.collect(&self.all, doc, el)
+    }
+
+    // The rules with a `::before` or `::after` selector that may select
+    // a pseudo-element of `el`, in source order (with repeats); each also
+    // in `candidates`.
+    pub fn pseudoCandidates(self: *mut Self, sheet: *Sheet, doc: *Document, el: NodeId) AllocError![]usize {
+        try self.build(sheet)
+        return try self.collect(&self.pseudo, doc, el)
+    }
+
+    fn collect(self: *mut Self, from: *Buckets, doc: *Document, el: NodeId) AllocError![]usize {
         self.selected.clear()
-        for ri in self.fallback.items() {
+        for ri in from.fallback.items() {
             try self.selected.append(ri)
         }
-        if doc.attr(el, "id") |id| {
-            try self.bucket(self.ids.get(id))
+        if from.ids.len() > 0 {
+            if doc.attr(el, "id") |id| {
+                try self.bucket(from.ids.get(id))
+            }
         }
-        if doc.attr(el, "class") |classes| {
+        if from.classes.len() == 0 {
+            // No class key: skip splitting `class`.
+        } else if doc.attr(el, "class") |classes| {
             var i: usize = 0
             while i < classes.len {
                 while i < classes.len && isSpaceByte(classes[i]) {
@@ -193,14 +241,18 @@ pub struct RuleIndex {
                     i += 1
                 }
                 if i > start {
-                    try self.bucket(self.classes.get(classes[start..i]))
+                    try self.bucket(from.classes.get(classes[start..i]))
                 }
             }
         }
-        if self.attrs.len() > 0 {
+        if from.attrs.len() > 0 {
             for at in doc.node(el).attrs {
-                try self.bucket(self.attrs.get(at.name))
+                try self.bucket(from.attrs.get(at.name))
             }
+        }
+        if from.tags.len() == 0 {
+            sort.sort(usize, self.selected.items(), ruleBefore)
+            return self.selected.items()
         }
         let tag = doc.node(el).name
         var upper = false
@@ -212,14 +264,14 @@ pub struct RuleIndex {
         if upper {
             // The matcher compares type names ignoring ASCII case, even
             // for a programmatically created mixed-case element.
-            var it = self.tags.iterator()
+            var it = from.tags.iterator()
             while it.next() |entry| {
                 if text.eqlIgnoreCase(entry.key, tag) {
                     try self.bucket(entry.value.*)
                 }
             }
         } else {
-            try self.bucket(self.tags.get(tag))
+            try self.bucket(from.tags.get(tag))
         }
         sort.sort(usize, self.selected.items(), ruleBefore)
         return self.selected.items()

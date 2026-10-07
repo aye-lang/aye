@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<style>
+*::before { content: "a" }
+:is(.k, #m)::after { content: "is" }
+:where(span)::after { content: "where" }
+[data-x]::before { content: attr(data-x) }
+section .y::after, .unused { content: "y" }
+DIV.z::before { color: red }
+#m::before, .k::marker { color: green }
+.k::marker { color: blue }
+input::placeholder { color: gray }
+.k:not(.none)::after { color: purple }
+:is(.k, *)::after { font-weight: bold }
+</style>
+<section>
+  <div class="z">z</div>
+  <p class="k">k</p>
+  <p id="m">m</p>
+  <span>s</span>
+  <i data-x="dx">x</i>
+  <b class="y">y</b>
+  <ul><li class="k">li</li></ul>
+  <input placeholder="p">
+</section>
+<b class="y">outside</b>

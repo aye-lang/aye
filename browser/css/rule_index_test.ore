@@ -94,3 +94,52 @@ test "rule index skips unrelated classes and keeps cascade order" {
     try writeValue(styles.get(el).?[COLOR], &mut value)
     @expect(text.eql(value.bytes(), "rgb(0, 0, 255)"))
 }
+
+test "pseudo-element index offers every rule that selects a pseudo-element" {
+    let a = @testAllocator()
+    var doc = try dom.Document.init(a)
+    defer doc.deinit()
+    let parent = try doc.createElement("section", []dom.Attr{})
+    doc.appendChild(doc.root, parent)
+    let attrs = [3]dom.Attr{
+        dom.Attr { name: "id", value: "target" },
+        dom.Attr { name: "class", value: "active other" },
+        dom.Attr { name: "data-test", value: "yes" },
+    }
+    let el = try doc.createElement("DiV", attrs[..])
+    doc.appendChild(parent, el)
+    let bare = try doc.createElement("span", []dom.Attr{})
+    doc.appendChild(parent, bare)
+    var sheet = try Sheet.init(a)
+    defer sheet.deinit()
+    let media = Media { width: 800.0, height: 600.0 }
+    try parseSheet(&mut sheet,
+        ".active { color: red } :is(.missing, #target)::after { content: 'a' } [data-test]::before { content: 'b' } section > div::before, .absent { content: 'c' } .other:not(.none)::after { content: 'd' } .absent::before { content: 'e' } #target::marker { color: red }", media)
+    var index = RuleIndex.init(a)
+    defer index.deinit()
+    expectPseudoCandidates(&sheet, &doc, el, try index.pseudoCandidates(&sheet, &doc, el))
+    // No pseudo-element rule can select one of `bare`'s.
+    @expect((try index.pseudoCandidates(&sheet, &doc, bare)).len == 0)
+    try parseSheet(&mut sheet, "*::before { content: 'f' }", media)
+    expectPseudoCandidates(&sheet, &doc, bare, try index.pseudoCandidates(&sheet, &doc, bare))
+    @expect((try index.pseudoCandidates(&sheet, &doc, bare)).len == 1)
+}
+
+fn expectPseudoCandidates(sheet: *Sheet, doc: *dom.Document, el: dom.NodeId, candidates: []usize) {
+    for ri, r in sheet.rules.items() {
+        var matched = false
+        for k in r.sel_start..r.sel_end {
+            let cx = sheet.complexes.items()[k]
+            if matchesPseudo(sheet, doc, cx, el, 1) || matchesPseudo(sheet, doc, cx, el, 2) {
+                matched = true
+            }
+        }
+        var found = false
+        for c in candidates {
+            if c == ri {
+                found = true
+            }
+        }
+        @expect(found || !matched)
+    }
+}

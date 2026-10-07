@@ -952,35 +952,22 @@ struct Computer {
     // level `level`) that select the pseudo-element `pseudo` of `el`;
     // whether one did.
     // The rules of `rules` (the `::before` and `::after` rules of
-    // `sheet`, in order) that the sheet's index offers for `el`, into
-    // `out`: a rule the index leaves out cannot match `el`, so
-    // neither its pseudo-elements.
+    // `sheet`, in order) that the sheet's pseudo-element index offers
+    // for `el`, into `out`: a rule the index leaves out cannot select a
+    // pseudo-element of `el`.
     fn pickPseudoRules(self: *mut Self, sheet: *Sheet, rules: []usize, el: NodeId, out: *mut List(usize)) AllocError!void {
         out.clear()
         if rules.len == 0 {
             return
         }
-        let candidates = try sheet.index.candidates(sheet, self.doc, el)
+        let candidates = try sheet.index.pseudoCandidates(sheet, self.doc, el)
         var previous: ?usize = null
         for ri in candidates {
             if previous == ri {
                 continue
             }
             previous = ri
-            // Binary search: is `ri` one of `rules`?
-            var lo: usize = 0
-            var hi = rules.len
-            while lo < hi {
-                let mid = lo + (hi - lo) / 2
-                if rules[mid] < ri {
-                    lo = mid + 1
-                } else {
-                    hi = mid
-                }
-            }
-            if lo < rules.len && rules[lo] == ri {
-                try out.append(ri)
-            }
+            try out.append(ri)
         }
     }
 
