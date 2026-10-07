@@ -1059,6 +1059,7 @@ pub let PRELUDE =
     \\hidden(Document.prototype, 'importNode', function (node, deep) { return node.cloneNode(!!deep); });
     \\hidden(Document.prototype, 'adoptNode', function (node) {
     \\  if (node.parentNode) node.parentNode.removeChild(node);
+    \\  setNodeDoc(node, null);
     \\  return node;
     \\});
     \\hidden(Document.prototype, 'open', function () { return this; });
@@ -1080,14 +1081,21 @@ pub let PRELUDE =
     \\    else if (c.localName === 'body' && !body) body = c;
     \\  }
     \\  const d = Object.create(Object.prototype);
-    \\  for (const k of ['createElement', 'createElementNS', 'createTextNode', 'createComment', 'createDocumentFragment', 'createEvent', 'createAttribute', 'createTreeWalker', 'createNodeIterator', 'createRange', 'importNode', 'adoptNode']) {
+    \\  for (const k of ['createEvent', 'createAttribute', 'createTreeWalker', 'createNodeIterator', 'createRange']) {
     \\    hidden(d, k, function () { return document[k].apply(document, arguments); });
     \\  }
+    \\  // Nodes the stand-in makes, imports or adopts keep it as their node
+    \\  // document (setNodeDoc), whatever tree they are in later.
+    \\  for (const k of ['createElement', 'createElementNS', 'createTextNode', 'createComment', 'createDocumentFragment']) {
+    \\    hidden(d, k, function () { const n = document[k].apply(document, arguments); setNodeDoc(n, d); return n; });
+    \\  }
+    \\  hidden(d, 'importNode', function (node, deep) { const n = document.importNode(node, deep); setNodeDoc(n, d); return n; });
+    \\  hidden(d, 'adoptNode', function (node) { document.adoptNode(node); setNodeDoc(node, d); return node; });
     \\  hidden(d, 'getElementById', id => html.querySelector('[id="' + String(id).replace(/["\\]/g, '\\$&') + '"]'));
     \\  for (const k of ['querySelector', 'querySelectorAll', 'getElementsByTagName', 'getElementsByClassName']) {
     \\    hidden(d, k, function () { return html[k].apply(html, arguments); });
     \\  }
-    \\  Object.assign(d, { documentElement: html, head, body, nodeType: 9, nodeName: '#document', defaultView: null, readyState: 'complete', implementation });
+    \\  Object.assign(d, { documentElement: html, head, body, nodeType: 9, nodeName: '#document', defaultView: null, ownerDocument: null, readyState: 'complete', implementation });
     \\  // Astro's router reads the scripts of the page it fetched.
     \\  for (const [k, tag] of [['forms', 'form'], ['images', 'img'], ['scripts', 'script'], ['embeds', 'embed']]) {
     \\    getter(d, k, () => html.getElementsByTagName(tag));
@@ -3111,6 +3119,19 @@ pub let PRELUDE =
     \\// root) until they are inserted elsewhere: Turbo imports a frame
     \\// element only from another document, and so upgrades it.
     \\const parsedDocs = new WeakMap();
+    \\// The node document of nodes made in or parsed into a stand-in; it
+    \\// changes only by adoption (insert elsewhere, importNode, adoptNode).
+    \\const nodeDocs = new WeakMap();
+    \\function setNodeDoc(n, d) {
+    \\  for (let c = n; c; ) {
+    \\    if (d) nodeDocs.set(c, d); else nodeDocs.delete(c);
+    \\    if (c.firstChild) c = c.firstChild;
+    \\    else {
+    \\      while (c && c !== n && !c.nextSibling) c = c.parentNode;
+    \\      c = c === n ? null : c && c.nextSibling;
+    \\    }
+    \\  }
+    \\}
     \\let parsedCount = 0;
     \\class DOMParser {
     \\  parseFromString(src, type) {
@@ -3118,6 +3139,7 @@ pub let PRELUDE =
     \\    // a script's text on mistral.ai.
     \\    const d = standInDocument(ak.parseDocument(String(src)));
     \\    parsedDocs.set(d.documentElement, d);
+    \\    setNodeDoc(d.documentElement, d);
     \\    parsedCount++;
     \\    const t = d.head && d.head.querySelector('title');
     \\    d.title = t ? t.textContent : '';
@@ -3838,15 +3860,38 @@ pub let PRELUDE =
     \\hidden(inertDoc, 'getElementById', () => null);
     \\hidden(inertDoc, 'querySelector', () => null);
     \\hidden(inertDoc, 'querySelectorAll', () => document.createDocumentFragment().querySelectorAll('*'));
-    \\const nativeOwnerDocument = Object.getOwnPropertyDescriptor(NodeP, 'ownerDocument').get;
+    \\// Insertion adopts the whole inserted subtree into the parent's document.
+    \\for (const k of ['appendChild', 'insertBefore', 'replaceChild', 'append', 'prepend', 'before', 'after', 'replaceWith', 'replaceChildren', 'insertAdjacentElement']) {
+    \\  const orig = NodeP[k] || ElementP[k];
+    \\  const host = NodeP[k] ? NodeP : ElementP;
+    \\  if (typeof orig !== 'function') continue;
+    \\  hidden(host, k, function (...args) {
+    \\    if (parsedCount === 0) return orig.apply(this, args);
+    \\    const into = (k === 'before' || k === 'after' || k === 'replaceWith') ? this.parentNode : this;
+    \\    const dd = into ? into.ownerDocument : null;
+    \\    const list = [];
+    \\    for (const a of args) {
+    \\      if (a && typeof a === 'object' && a.nodeType) {
+    \\        if (a.nodeType === 11) list.push(...a.childNodes); else list.push(a);
+    \\      }
+    \\    }
+    \\    const r = orig.apply(this, args);
+    \\    if (dd && dd !== inertDoc) for (const n of list) setNodeDoc(n, dd === document ? null : dd);
+    \\    return r;
+    \\  });
+    \\}
+    \\const nativeOwnerDocument =Object.getOwnPropertyDescriptor(NodeP, 'ownerDocument').get;
     \\getter(NodeP, 'ownerDocument', function () {
     \\  const d = nativeOwnerDocument.call(this);
     \\  if (d === null) return null;
     \\  if (ak.inTemplate(this)) return inertDoc;
     \\  if (parsedCount > 0 && !nativeIsConnected.call(this)) {
-    \\    const p = parsedDocs.get(this.getRootNode());
+    \\    // A tree has one node document: a node inside a tree takes its root's,
+    \\    // a removed node keeps its own.
+    \\    const r = this.getRootNode();
+    \\    const p = r === this ? nodeDocs.get(this) : parsedDocs.get(r) || nodeDocs.get(r);
     \\    if (p) return p;
-    \\  }
+    \\  } else if (parsedCount > 0) nodeDocs.delete(this); // inserted into the page: adopted
     \\  return d;
     \\});
     \\

@@ -25,6 +25,34 @@ log('upgraded', frame instanceof X, document.importNode(frame, true) instanceof 
 const p = doc.body.querySelector('p');
 document.body.appendChild(p);
 log('moved', p.ownerDocument === document);
+// Node document changes only by adoption: a removed node keeps the parsed
+// document; importNode clones and adoptNode take the adopting document's.
+const q = doc.body.querySelector('a');
+q.remove();
+log('removed', q.ownerDocument === doc, q.ownerDocument !== document);
+const q2 = doc.createElement('b');
+q2.appendChild(doc.createTextNode('t'));
+log('created', q2.ownerDocument === doc, q2.firstChild.ownerDocument === doc, doc.createElement('i').ownerDocument === doc);
+document.body.appendChild(q);
+log('inserted', q.ownerDocument === document);
+q.remove();
+log('kept', q.ownerDocument === document);
+const q3 = document.adoptNode(q2);
+log('adopt', q3 === q2, q2.ownerDocument === document, q2.firstChild.ownerDocument === document);
+const q4 = doc.importNode(document.createElement('u'), true);
+log('import', q4.ownerDocument === doc, document.importNode(q4, true).ownerDocument === document);
+const q5 = document.createElement('s');
+doc.adoptNode(q5);
+log('adopted', q5.ownerDocument === doc, doc.createElement('s').ownerDocument === doc);
+const sub = doc.createElement('div');
+sub.innerHTML = '<section><span id="gc">x</span></section>';
+const gc = sub.querySelector('#gc');
+log('sub-before', gc.ownerDocument === doc);
+document.body.appendChild(sub);
+log('sub-in', gc.ownerDocument === document, sub.firstChild.ownerDocument === document);
+sub.remove();
+log('sub-out', gc.ownerDocument === document, sub.ownerDocument === document);
+log('doc', doc.ownerDocument, document.ownerDocument);
 fetch('scripts/items.json').then(async r => {
   const c = r.clone();
   log('clone', c instanceof Response, c.status, c.ok, c.url === r.url, c.headers.get('content-type'), (await c.text()) === (await r.text()));
