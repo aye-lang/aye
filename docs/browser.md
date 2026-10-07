@@ -68,22 +68,25 @@ and a local test server), so CI needs no network and no display.
 | B5 forms and images | done | form sessions over HTTP, window form scripts, image decoder unit tests, form and image screenshots |
 | B6 JavaScript | done | 212 conformance scripts (`anyknown js`), 30 DOM fixtures (`dump --tree --js`, also under GC stress), a to-do app session, window script test, GC unit tests |
 | B7 agent interface | done | 17 snapshot/Markdown fixtures, session and MCP transcripts (with `eval` and `wait`), shared-window sessions over its socket (JSON lines, MCP through `anyknown connect`, pause, pointing, tabs) |
-| B8 the real web | in progress | net over the local server (`net_http`, the `net_cookies` and `base` agent sessions), HTML/CSS fixtures (templates, quirks, hints, `var()`/`calc()`, at-rules, `@import`), layout fixtures of site shapes (floats, positioned boxes, grid, `details`), hit testing by layer (`window_hit_layers`), JS conformance scripts for generators, async, Symbol, the web APIs and ES modules (231–237, 242–245), DOM fixtures for module scripts, layout queries, Shadow DOM, custom elements, `MutationObserver` and Web Animations, background image loads (`net/bg_images.html`, `net/bg_image_events.html`) |
+| B8 the real web | in progress | net over the local server (`net_http`, the `net_cookies` and `base` agent sessions), HTML/CSS fixtures (templates, quirks, hints, `var()`/`calc()`, at-rules, `@import`), layout fixtures of site shapes (floats, positioned boxes, grid, `details`), hit testing by layer (`window_hit_layers`), JS conformance scripts for generators, async, Symbol, the web APIs and ES modules (231–237, 242–245), DOM fixtures for module scripts, layout queries, Shadow DOM, custom elements, `MutationObserver` and Web Animations, background image loads (`net/bg_images.html`, `net/bg_image_events.html`), BigInt and property descriptor scripts (246–250), `fetch`/XHR methods and a failed image over the local server (`net/fetch_methods.html`, `net/xhr_methods.html`, `net/failed_image_once.html`), session history (`jsdom/history.html`, the `history` and `history_paths` agent sessions) |
 
 All the front ends share `engine/`: the window, `screenshot` and the
 agent sessions load pages through `engine.load` and keep history in a
 `Tab`. What remains:
 
 - **B8:** event listeners on another frame's nodes, moving nodes
-  between documents, frame history entries; calendar, color and file
-  pickers, `datalist`; rotations and skews other than quarter turns are
-  not drawn; sticky only against the viewport; no public suffix list for
+  between documents, one joint session history for a tab and its
+  frames (a frame's `history.length` counts only its own entries);
+  calendar, color and file pickers, `datalist`; rotations and skews
+  other than quarter turns are not drawn; sticky only against the viewport; no public suffix list for
   cookies (a bare top-level name is refused, `co.uk` is not); no AVIF;
   page loads are slow on big sites (in progress), and so is the JS
   interpreter (in progress). The list of public sites is in
-  [`docs/browser-sites.md`](browser-sites.md) (20 sites; run of
-  2026-10-07: 14 ✅, 3 ⚠️, 3 ❌; the run of 2026-10-06, before the work
-  below, had 8 ✅, 7 ⚠️, 5 ❌).
+  [`docs/browser-sites.md`](browser-sites.md), their expected state in
+  `browser/tools/sites.json` (22 sites, 2026-10-07: 15 ✅, 4 ⚠️, 3
+  excluded: two bot walls, and `youtube-search` until its replay is
+  deterministic; the run of 2026-10-06, before the work below, had 8
+  ✅, 7 ⚠️, 5 ❌ of 20).
 
 The remaining work, in phases and steps, is in [`docs/plan.md`](plan.md).
 
@@ -288,7 +291,8 @@ output as goldens.
   `await` hands the value to a driver written in JavaScript that resumes
   the coroutine when the promise settles; `for await` and async
   generators go through the same driver.
-- *Not yet:* BigInt, typed arrays over shared bytes (a view of an
+- *Not yet:* `BigInt64Array`/`BigUint64Array` (BigInt itself is B8,
+  below), typed arrays over shared bytes (a view of an
   `ArrayBuffer` is a copy), time zones (local time is UTC), full
   Unicode case mapping and normalization.
   A plain function call gets `this === undefined` (strict-mode rule);
@@ -343,18 +347,20 @@ on (`--no-js` turns it off), `dump` with `--js`.
   `insertAdjacentHTML`, `classList`, reflected attributes, `click()`
   (the click event, then `engine.activate` unless canceled), `focus()`;
   timers, `requestAnimationFrame`, `queueMicrotask`, `location`
-  (setting it navigates after the script returns), `history`,
+  (setting it navigates after the script returns), `history` (session
+  history in B8, below),
   `localStorage` (in memory, per origin, while a page is open) and
   `sessionStorage`, `alert`/`confirm`/`prompt` (console messages, never
   blocking), microtasks (the engine's job queue, which Promise uses),
-  and `fetch` (GET, synchronous underneath, settling in a microtask;
-  `text()`, `json()`, an aborted `signal`).
+  and `fetch` (synchronous underneath, settling in a microtask;
+  `text()`, `json()`, an aborted `signal`; methods and bodies in B8,
+  below).
 - *More web APIs* (B8, prelude): `URL` and `URLSearchParams` (parsed
   by `url/`), `atob`/`btoa`, `TextEncoder`/`TextDecoder` (UTF-8),
   `EventTarget` as a constructor, `AbortController`/`AbortSignal`,
   `matchMedia` (the CSS media queries against the viewport),
-  `XMLHttpRequest` (GET, on the same fetch), `crypto.getRandomValues`
-  and `randomUUID` (from `Math.random`), `requestIdleCallback`,
+  `XMLHttpRequest` (on the same fetch; any method, B8 below),
+  `crypto.getRandomValues` and `randomUUID` (from `Math.random`), `requestIdleCallback`,
   `reportError`, `Image`, `Option`, `origin`, and `customElements`
   (B8, below).
   `IntersectionObserver` checks its targets against the layout and the
@@ -479,7 +485,14 @@ on (`--no-js` turns it off), `dump` with `--js`.
     `filter`, `take`, `drop`, `flatMap`, `reduce`, `toArray`,
     `forEach`, `some`, `every`, `find`, `Iterator.from`; `js/lib.ore`,
     `browser/tests/js` 240–241), `Function` and `eval` of strings, the
-    web APIs above, a processor-time budget per task (B6, above). ES modules
+    web APIs above, a processor-time budget per task (B6, above).
+    BigInt (`js/bigint.ore`, by GPT-6.1-sol through pi): literals,
+    conversions, exact arithmetic, bitwise operations and comparisons
+    with Numbers (`browser/tests/js` 246–248; limits in
+    [`browser/js/BIGINT.md`](../browser/js/BIGINT.md)).
+    `Object.defineProperty` follows ValidateAndApplyPropertyDescriptor:
+    a generic descriptor keeps an accessor, a non-configurable property
+    changes only as the spec allows (`js/builtins.ore`, 249–250). ES modules
     (`js/modules.ore`, `js/lib.ore`): static imports and exports,
     `import()`, `import.meta`, cycles as cyclic module records (TDZ,
     top-level await), every re-export form with `export *` ambiguity,
@@ -515,6 +528,22 @@ on (`--no-js` turns it off), `dump` with `--js`.
     ranges have no geometry. The
     checklist's scripted sites (Python docs, rustdoc, CNN Lite,
     react.dev, YouTube, go.dev, BBC, Google, ZOL) log no errors.
+  - *Fetch and XHR* (`engine/prelude.ore`, `net/http.ore`): `Request`,
+    `Headers` (every method, sorted iteration, `set-cookie` kept
+    apart), and the body (`text()`, `json()`, `bodyUsed`) shared by
+    Request and Response. `fetch` and `XMLHttpRequest` (`send(body)`,
+    `setRequestHeader`) send any method, request headers and a string,
+    URLSearchParams, FormData, Blob or ArrayBuffer body with its
+    Content-Type default; redirects follow the Fetch method rules (a
+    303, and a 301 or 302 of a POST, continue as a GET without the
+    body). Tests: `jsdom/request.html`, `net/fetch_methods.html`,
+    `net/xhr_methods.html`.
+  - *Session history* (`engine/history.ore`, `engine/tab.ore`): one
+    history per tab and per frame; `pushState`/`replaceState` add or
+    change entries without loading, back and forward within a document
+    fire `popstate` (and `hashchange` when the fragment changed),
+    `history.length`, `state` and `scrollRestoration`. The agent's
+    `url` follows (`docs/agent-protocol.md`).
   - *Canvas 2D* (`engine/canvas_api.ore`, `engine/canvas_prelude.ore`,
     by GPT-6.1-sol through pi): paths and Path2D, fills, strokes
     (joins, caps, dashes), transforms, clipping, linear and radial
@@ -566,7 +595,8 @@ on (`--no-js` turns it off), `dump` with `--js`.
     `complete`, `naturalWidth` and `naturalHeight`, fires `load` or
     `error` and lays the page out again (`engine/image_api.ore`). The
     window's `load` event waits for those tasks, and `decode()` promises
-    settle with them.
+    settle with them. A page fetches a failed image URL once
+    (`engine/images.ore`, `net/failed_image_once.html`).
   - *Fonts and text* (`font/`, `webfont/`, `css/fontface.ore`,
     `layout/bidi.ore`, `layout/linebreak.ore`): a character the font
     lacks comes from a chain of system fallback fonts (PingFang,
@@ -614,3 +644,13 @@ on (`--no-js` turns it off), `dump` with `--js`.
     (`formaction`, `formmethod`, `formenctype`, `formnovalidate`),
     `multipart/form-data`, the state pseudo-classes, and the a11y roles
     and states (spinbutton, slider, required, invalid).
+  - *Load time and measurement:* computed styles are kept when no
+    style input changed (`css/inputs.ore`: a fingerprint of the trees,
+    the classes the sheets name, form state, viewport and container
+    sizes). `browser/tools/page_load.py` captures every listed site to
+    an archive (`target/sites/`) and replays it offline, with median
+    wall time, CPU time and load average; `check` replays every site
+    against `browser/tools/sites.json` (status, most console errors,
+    Markdown it must contain), `check --agent` also runs one agent task
+    per site (`browser/tools/agent_tasks/`). Details and numbers in
+    [`browser/engine/PERF.md`](../browser/engine/PERF.md).

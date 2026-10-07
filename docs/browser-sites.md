@@ -21,7 +21,17 @@ Chinese.
 
 Status: ✅ readable on the screen and in the agent view, small flaws
 only; ⚠️ usable, but one view or part of the page is broken; ❌ the
-page's content is not available.
+page's content is not available; excluded: not judged.
+
+**Update of 2026-10-07.** The statuses now follow
+`browser/tools/sites.json`, which `python3 browser/tools/page_load.py
+check` replays from archives captured that day (`--agent` also runs one
+agent task per site; `browser/engine/PERF.md`). Load times and the
+"JS errors" column are still those of the run by hand above; where the
+replay logs errors, the note says so. Changes since that run: YouTube
+❌ to ✅; Reddit and Stack Overflow ❌ to excluded (bot walls, plan
+Decisions); `youtube-search` added, excluded until its replay is
+deterministic (plan P1.7).
 
 ## Sites
 
@@ -30,14 +40,14 @@ page's content is not available.
 | example.com | https://example.com/ | ✅ | 0.3 s | 0 | Text and layout right. The script-added translations now render: Chinese is drawn, Arabic is joined and right to left. |
 | Wikipedia (en) | https://en.wikipedia.org/wiki/Web_browser | ✅ | 2.8 s | 0 | Looks like the real page: logo and icons (SVG) are drawn, article, infobox image and headings right. One figure further down is an empty white frame. Markdown is clean (no empty list items). Agent search on Special:Search works (typed, submitted, results page loaded). |
 | Hacker News | https://news.ycombinator.com/ | ✅ | 1.3 s | 0 | Looks like the real page, logo drawn; the vote arrows are tiny. Markdown is a numbered list of stories. Agent `click` on "new" works (`/newest` loaded). |
-| GitHub repository | https://github.com/rust-lang/rust | ⚠️ | 5.2 s | 0 | Header, tabs, icons, file list and About panel render. The "last commit" message and date columns and the commit bar stay as skeleton bars (the data does not load), and the Markdown has empty "Latest commit" and "History" sections. Agent `click` on "Contributing" works (it scrolls to `#`; the link is an in-page toggle). |
-| MDN | https://developer.mozilla.org/en-US/docs/Web/HTML/Element/details | ✅ | 0.7 s | 0 | Header with logo, breadcrumb, "In this article" sidebar and the article lay out correctly. A blank 90 px band above the header; browser-support icons partly missing. |
+| GitHub repository | https://github.com/rust-lang/rust | ⚠️ | 5.2 s | 0 | Header, tabs, icons, file list and About panel render. The "last commit" message and date columns stay empty; "Latest commit" says "Cannot retrieve latest commit at this time." (the page asks `/latest-commit` and `/tree-commit-info` without the branch, GitHub answers 400; plan P3.26), and the "History" section is empty. The replay logs no errors. Agent `click` on "Contributing" works (it scrolls to `#`; the link is an in-page toggle). |
+| MDN | https://developer.mozilla.org/en-US/docs/Web/HTML/Element/details | ✅ | 0.7 s | 0 | Header with logo, breadcrumb, "In this article" sidebar and the article lay out correctly. A blank 90 px band above the header; browser-support icons partly missing. The replay logs 18 errors: 16 lit "Hydration value mismatch" and 2 "#<Object> is not iterable" (plan P3.14). |
 | Python docs | https://docs.python.org/3/tutorial/index.html | ✅ | 0.9 s | 0 | Renders like a desktop browser, theme and version selectors work. Agent `click` to the next chapter works. |
 | rustdoc (std) | https://doc.rust-lang.org/std/vec/struct.Vec.html | ✅ | 1.3 s | 0 | Sidebar, code highlighting and prose render well; the logo is a black blob. No search bar or settings button in the top bar. |
 | BBC News | https://www.bbc.com/news | ⚠️ | 2.6 s | 0 | Markdown has the stories. On screen the page looks unstyled: the logo and the "NEWS" banner are huge SVG letters (each about 290 px, the page is 1000+ px before the first story), the menus are bullet lists and plain buttons, headlines are serif links. Story images do load (the first screenful has none). |
 | CNN Lite | https://lite.cnn.com/ | ✅ | 0.6 s | 0 | Plain list of stories, renders right. |
-| old Reddit | https://old.reddit.com/r/programming/ | ❌ | 4.1 s | 0 | The site redirects logged-out clients to `/login/?reason=lor2` (curl gets the same 302). The login page now draws its header and chat-bubble background but no login form; the Markdown is only a skip link. |
-| Stack Overflow | https://stackoverflow.com/questions/11227809/... | ❌ | 0.4 s | 0 | Cloudflare challenge (HTTP 403, "Just a moment..."): blank page, empty Markdown. curl with a Chrome User-Agent gets 403 too. |
+| old Reddit | https://old.reddit.com/r/programming/ | excluded | 4.1 s | 0 | The site redirects logged-out clients to `/login/?reason=lor2` (curl gets the same 302). The login page now draws its header and chat-bubble background but no login form; the Markdown is only a skip link. |
+| Stack Overflow | https://stackoverflow.com/questions/11227809/... | excluded | 0.4 s | 0 | Cloudflare challenge (HTTP 403, "Just a moment..."): blank page, empty Markdown. curl with a Chrome User-Agent gets 403 too. |
 | Lobsters | https://lobste.rs/ | ✅ | 1.9 s | 0 | Renders like the real page, symbols and avatars included. |
 | Go docs | https://go.dev/doc/effective_go | ✅ | 2.5 s | 0 | Header, breadcrumb, two-column table of contents right; the nav drawer is closed. Flaws: the breadcrumb separator is a grey box (icon font), the cookie bar covers the bottom. Markdown complete. |
 | DuckDuckGo HTML | https://html.duckduckgo.com/html/?q=ore+programming+language | ✅ | 2.1 s | 0 | Results readable; a few favicons are empty boxes. Agent `type` + submit (a POST form) works. |
@@ -45,21 +55,25 @@ page's content is not available.
 | Wikipedia (ja) | https://ja.wikipedia.org/wiki/ウェブブラウザ | ✅ | 5.3 s | 0 | Japanese text readable on screen and in Markdown. The browser-share pie chart (SVG) is drawn as oversized blue and orange blocks. |
 | 阿部寛 (Shift_JIS) | http://abehiroshi.la.coocan.jp/ | ✅ | 0.8 s | 0 | Frameset works: menu frame and top frame laid out side by side, Shift_JIS decoded, photo and text right. The "最新情報" banner wraps in a narrow cell. Markdown has a section per frame. |
 | ZOL (GBK) | https://www.zol.com.cn/ | ⚠️ | 16-20 s | 0 | GBK decoded: Chinese text, images, logos and the product grid render. The right edge is cut off (search box, nav, a column past 1024 px). Slowest site by far (16.3 s and 20.2 s in two runs). |
-| YouTube | https://www.youtube.com/ | ❌ | 5.0 s | 0 | Only the grey loading skeleton; Markdown is empty. No script error is logged any more, but the app still does not render its feed. |
+| YouTube | https://www.youtube.com/ | ✅ | 5.0 s | 0 | YouTube serves a cookieless visitor an empty feed (`feedNudgeRenderer`, "Try searching to get started"); we render exactly that. |
+| YouTube search | https://www.youtube.com/results?search_query=rust+programming | excluded | – | – | Added 2026-10-07 (plan P3.2). Replay is not deterministic: lazy thumbnails differ per run under load (plan P1.7). |
 | react.dev | https://react.dev/ | ✅ | 3.6 s | 0 | Renders well: logo, search box, hero, buttons. Markdown code blocks keep their line breaks. |
-| Mistral blog (Tailwind 4, Astro) | https://mistral.ai/news/mistral-large-4/ | ⚠️ | 13 s | 2 | Added 2026-10-07 at `ddaada2`. Looks like Chrome in its light scheme: Inter text, nav with the black Login button, a viewport-high dark hero with white "Back to Blog"/"Share this post" pills and "14 MIN READ", the article with its sticky model card. The hero title stays hidden (its three.js scene needs WebGL; both errors are the expected `getContext('webgl')` null). The embedded widgets (iframes) are broken: the CTF chart's rows overlap and the frames stay short (layout queries return 0), and the visual-intelligence viewers log 9 `setTransform` errors in a long `dump` (no 2D canvas). Markdown is complete. Load time varies with the network (6.5-16 s). |
+| Mistral blog (Tailwind 4, Astro) | https://mistral.ai/news/mistral-large-4/ | ⚠️ | 13 s | 2 | Added 2026-10-07 at `ddaada2`. Looks like Chrome in its light scheme: Inter text, nav with the black Login button, a viewport-high dark hero with white "Back to Blog"/"Share this post" pills and "14 MIN READ", the article with its sticky model card. The hero title stays hidden (its three.js scene needs WebGL; both errors are the expected `getContext('webgl')` null). The embedded widgets (iframes) are broken: the CTF chart's rows overlap and the frames stay short (layout queries return 0), and the visual-intelligence viewers log 9 `setTransform` errors in a long `dump` (no 2D canvas). Markdown is complete. Load time varies with the network (6.5-16 s). The replay logs 3 errors: the 2 WebGL context errors and one 'reading load'. |
 
-**Totals:** 14 ✅, 3 ⚠️, 3 ❌ (20 sites). Previous run (2026-10-06,
+**Totals (2026-10-07, `sites.json`):** 15 ✅, 4 ⚠️, 3 excluded (22
+sites, Mistral and YouTube search included). Totals of the run by hand:
+14 ✅, 3 ⚠️, 3 ❌ (20 sites). Previous run (2026-10-06,
 `d1c8800`): 8 ✅, 7 ⚠️, 5 ❌. No crash and no timeout; the slowest run
-was 20 s (ZOL), the others under 6 s. No site logs a JS error.
+was 20 s (ZOL), the others under 6 s. In the run by hand no site logs
+a JS error.
 
 Changes: ⚠️ to ✅ (MDN, go.dev, Google, Wikipedia ja, react.dev); ❌ to
 ✅ (阿部寛); ❌ to ⚠️ (ZOL). All other sites keep their status (GitHub and
 BBC stay ⚠️; Reddit, Stack Overflow and YouTube stay ❌).
 
-The Mistral blog was added after this run (the totals above do not count
-it). Before its fixes it logged `getAnimations`, `addEventListener` and
-`URL` errors and drew a serif, unstyled page: Tailwind 4's theme
+The Mistral blog was added after this run (the totals of the run by
+hand do not count it). Before its fixes it logged `getAnimations`,
+`addEventListener` and `URL` errors and drew a serif, unstyled page: Tailwind 4's theme
 (`:root,:host`), its `oklch()` palette, `100dvh` heroes and
 `text-transform` were not supported, and stretched flex items were not
 laid out at their stretched height.
@@ -76,7 +90,9 @@ Ranked by the number of sites hurt and how much of the page is lost.
    the missing commit data on GitHub): the app shows only its skeleton;
    the console has no `[error]`, so the cause (a request that never
    completes, a feature check, a missing API that is caught) is not
-   diagnosed.
+   diagnosed. Since diagnosed: YouTube's skeleton is the empty feed it
+   serves a cookieless visitor; GitHub asks for the commit data without
+   the branch (plan P3.26).
 3. **CSS not applied or applied wrong on large sites** (BBC, ZOL,
    Wikipedia ja pie chart): BBC looks unstyled, with SVG wordmarks drawn
    at 290 px and menus as bullet lists; ZOL's content runs past the
