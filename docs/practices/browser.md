@@ -529,6 +529,20 @@ before changing the engine (P3.26).
 **Why:** a server's 4xx can answer a missing header as well as a wrong
 path, and an old archive keeps an old binary's requests.
 
+### Give a page's scripts the viewport the command paints
+**Context:** a command that runs a page's scripts and then lays it out
+at a size of its own (`screenshot --width --height`, `dump`).
+**Bad:** `screenshot` ran the scripts with the default 800 x 600 viewport
+and painted 1280 x 2000; lazy loaders (IntersectionObserver) never set
+the `src` of images below 600 px: YouTube's second row of Shorts and
+lower thumbnails, ZOL's lower videos stayed blank. No archive miss shows
+it: the page never asks.
+**Good:** `engine.setViewport(page, o.width, o.height)` before
+`runUntilIdle` (`browser/shot.ore`), as `dump` does
+(`browser/main.ore`); test `screenshot_viewport_lazy_image`.
+**Why:** `innerWidth`, observers and JS layouts read the script
+viewport, not the size the final layout uses.
+
 ### Build in safe mode to find a crash
 **Context:** the browser crashes on a real site.
 **Good:** `browser/build.sh --mode safe` keeps bounds and overflow

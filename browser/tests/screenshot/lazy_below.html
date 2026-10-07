@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<!-- An image a lazy loader sets when it comes into view, 700 px down: a
+     screenshot taller than that must show it (P3.45); `#eager` sets it
+     at once, for the comparison. -->
+<style>body { margin: 0 } img { display: block; margin-top: 700px; width: 64px; height: 64px }</style>
+<img id="lazy" data-src="../paint/img/photo.png" alt="">
+<script>
+const img = document.getElementById('lazy');
+const load = () => { img.src = img.dataset.src; };
+if (location.hash === '#eager') {
+  load();
+} else {
+  new IntersectionObserver(entries => {
+    if (entries[0].isIntersecting) load();
+  }).observe(img);
+}
+</script>

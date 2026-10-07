@@ -108,6 +108,9 @@ fn shoot(alloc: Allocator, o: ShotOptions, measure: dyn font.Measurer, system: ?
         std.log.err("cannot fetch {}: {}", location.href, page.failure)
         return 1
     }
+    // Scripts (lazy loaders, observers, innerWidth) see the viewport the
+    // screenshot paints, not the default 800 x 600.
+    engine.setViewport(page, o.width, o.height)
     engine.runUntilIdle(page, 1000.0) catch |e| {
         std.log.err("out of memory")
         return 1

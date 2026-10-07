@@ -730,6 +730,21 @@ fn screenshot_system_font() {
     assert_ne!(std::fs::read(&out).unwrap(), std::fs::read(&fixed).unwrap());
 }
 
+/// The page's scripts see the screenshot's viewport: a lazy loader loads
+/// an image 700 px down in a 900 px tall screenshot (P3.45).
+#[test]
+fn screenshot_viewport_lazy_image() {
+    let page = "browser/tests/screenshot/lazy_below.html";
+    let lazy = scratch().join("lazy_below.png");
+    let eager = scratch().join("lazy_below_eager.png");
+    let res = run(&["screenshot", page, "-o", lazy.to_str().unwrap(), "--font", "fixed", "--width", "200", "--height", "900"]);
+    assert!(res.status.success() && res.stderr.is_empty(), "{}", text(&res.stderr));
+    let eager_page = format!("{page}#eager");
+    let res = run(&["screenshot", &eager_page, "-o", eager.to_str().unwrap(), "--font", "fixed", "--width", "200", "--height", "900"]);
+    assert!(res.status.success() && res.stderr.is_empty(), "{}", text(&res.stderr));
+    assert!(std::fs::read(&lazy).unwrap() == std::fs::read(&eager).unwrap(), "the lazy image is missing: {}", lazy.display());
+}
+
 #[test]
 fn screenshot_errors() {
     let usage = "error: usage: anyknown screenshot FILE|URL -o OUT.png [--width W] [--height H] [--font fixed|system] [--full]\n";
