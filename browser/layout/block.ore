@@ -256,7 +256,56 @@ fn replacedSize(t: *mut Tree, i: usize, cb_w: f64, cb_h: f64) {
     let w_auto = sizeOf(b.style, b.style[css.WIDTH], cb_w, he) == null
     let h_auto = sizeOf(b.style, b.style[css.HEIGHT], cb_h, ve) == null
     if replacedRatio(t, i) |r| {
-        if h_auto && cw != dims.w {
+        if w_auto && h_auto && dims.w > he && dims.h > ve {
+            // CSS 2.1 10.4 table: both sizes auto, constrained together.
+            let st = t.bx(i).style
+            let inf = 1.0e30
+            let min_w = math.max((sizeOf(st, st[css.MIN_WIDTH], cb_w, he) orelse he) - he, 0.0)
+            let min_h = math.max((sizeOf(st, st[css.MIN_HEIGHT], cb_h, ve) orelse ve) - ve, 0.0)
+            let max_w = math.max((sizeOf(st, st[css.MAX_WIDTH], cb_w, he) orelse inf) - he, min_w)
+            let max_h = math.max((sizeOf(st, st[css.MAX_HEIGHT], cb_h, ve) orelse inf) - ve, min_h)
+            let w = dims.w - he
+            let h = dims.h - ve
+            var rw = w
+            var rh = h
+            if w > max_w && h > max_h {
+                if max_w / w <= max_h / h {
+                    rw = max_w
+                    rh = math.max(min_h, max_w * h / w)
+                } else {
+                    rw = math.max(min_w, max_h * w / h)
+                    rh = max_h
+                }
+            } else if w < min_w && h < min_h {
+                if min_w / w <= min_h / h {
+                    rw = math.min(max_w, min_h * w / h)
+                    rh = min_h
+                } else {
+                    rw = min_w
+                    rh = math.min(max_h, min_w * h / w)
+                }
+            } else if w < min_w && h > max_h {
+                rw = min_w
+                rh = max_h
+            } else if w > max_w && h < min_h {
+                rw = max_w
+                rh = min_h
+            } else if w > max_w {
+                rw = max_w
+                rh = math.max(max_w * h / w, min_h)
+            } else if w < min_w {
+                rw = min_w
+                rh = math.min(min_w * h / w, max_h)
+            } else if h > max_h {
+                rw = math.max(max_h * w / h, min_w)
+                rh = max_h
+            } else if h < min_h {
+                rw = math.min(min_h * w / h, max_w)
+                rh = min_h
+            }
+            cw = rw + he
+            ch = rh + ve
+        } else if h_auto && cw != dims.w {
             ch = clampHeight(t, i, (cw - he) / r + ve, cb_h)
         } else if w_auto && ch != dims.h {
             cw = clampWidth(t, i, (ch - ve) * r + he, cb_w)
