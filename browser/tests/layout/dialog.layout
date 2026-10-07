@@ -1,0 +1,14 @@
+viewport 800x600
+  block <html> (0, 0) 800x124
+    block <body> (0, 16) 800x92
+      block <p> (0, 16) 800x20
+        line (0, 16) 800x20
+          text (0, 18) 48x16 "before"
+      flex <dialog open=""> (0, 52) 800x20
+        block (anonymous) (0, 52) 32x20
+          line (0, 52) 32x20
+            text (0, 54) 32x16 "open"
+      block <div> (0, 72) 800x0
+      block <p> (0, 88) 800x20
+        line (0, 88) 800x20
+          text (0, 90) 40x16 "after"
