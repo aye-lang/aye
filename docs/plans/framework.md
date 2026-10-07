@@ -38,6 +38,8 @@ the Ore lane ([`ore.md`](ore.md)); gaps found here go to
 
 ## Open choices (answered in F0)
 
+Answered in [`docs/framework.md`](../framework.md) (F0.1).
+
 1. **Route layout.** In Ore a directory is a module and the files of a
    directory share one namespace (gap #26: a top-level name in one file
    blocks locals in every file). So "one file per route" either means a
@@ -107,14 +109,14 @@ parser).
 
 | id | Goal | Files | Verify | Deps | ∥ |
 |---|---|---|---|---|---|
-| F0.1 | Design doc answering the open choices above with tradeoffs, a sketch of an app's tree and of a route's code, and the list of Ore-lane steps each phase needs | `docs/framework.md` (new) | read by the user; every Ore step it names exists in `ore.md` | – | all |
+| F0.1 | Design doc answering the open choices above with tradeoffs, a sketch of an app's tree and of a route's code, and the list of Ore-lane steps each phase needs. Done 2026-10-08: [`docs/framework.md`](../framework.md), waiting for the user's approval | `docs/framework.md` (new) | read by the user; every Ore step it names exists in `ore.md` | – | all |
 
 ### F1: First vertical slice
 
 | id | Goal | Files | Verify | Deps | ∥ |
 |---|---|---|---|---|---|
-| F1.1 | `framework/` skeleton: a hand-written route table and a hello-world page served through `std.http`; a test that builds it, starts it on a free port and checks the response | `framework/` (new), `tests/` (a framework test) | the test gets `200` and the page | F0.1, O1.4 | O-lane steps |
-| F1.2 | Route generation: scan the routes tree (layout from F0), write the dispatch module, build the app; two static routes and the 404 page | `framework/` | test: `/`, `/about`, an unknown path | F1.1, O1.5 | O-lane steps |
-| F1.3 | One API route returning JSON with a dynamic segment (`/api/hello/<name>`) | `framework/` | test checks status, `Content-Type` and body | F1.2, O3.1 | O-lane steps |
+| F1.1 | `framework/` skeleton: the `web` module (request, response, `Html`, a route table with literal segments, `web.run` over `std.http`) and `framework/examples/hello/` with a hand-written route table (a `web` symlink until O4.2); a test that builds it, starts it on a free port and checks the response (`docs/framework.md`, "F1") | `framework/web/`, `framework/examples/hello/` (new), `tests/framework.rs`, `tests/framework/hello/*.http` | `cargo test --test framework`: `200` and the page for `/`, `404` for `/nope` | F0.1, O1.4 | O-lane steps |
+| F1.2 | Route generation: `web gen <app>` scans `app/` (Next.js names, `[slug]`) and writes the build root `.web/` (symlinks, router, `main.ore`); `ore build .web`; two static routes and the 404 page | `framework/cli/` (new), `framework/examples/hello/` | test: `/`, `/about`, an unknown path | F1.1, O1.5 | O-lane steps |
+| F1.3 | One API route returning JSON with a dynamic segment (`app/api/hello/[name]/route.ore`) | `framework/web/`, `framework/examples/hello/` | transcript checks status, `Content-Type` and body; `405` for `POST` | F1.2, O3.1 | O-lane steps |
 
 Later phases get their rows when F0 is approved.
