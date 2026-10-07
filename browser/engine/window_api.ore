@@ -45,9 +45,8 @@ fn installWindow(s: *mut Script) JsError!void {
     try defMethod(it, o, "urlPart", 1, akUrlPart)
     try defMethod(it, o, "parseUrl", 2, akParseUrl)
     try defMethod(it, o, "matchMedia", 1, akMatchMedia)
-    try defMethod(it, o, "navigate", 1, akNavigate)
+    try defMethod(it, o, "navigate", 2, akNavigate)
     try defMethod(it, o, "reload", 0, akReload)
-    try defMethod(it, o, "historyGo", 1, akHistoryGo)
     try defMethod(it, o, "alert", 2, akAlert)
     try defMethod(it, o, "viewport", 1, akViewport)
     try defMethod(it, o, "storage", 3, akStorage)
@@ -59,6 +58,7 @@ fn installWindow(s: *mut Script) JsError!void {
     try defMethod(it, o, "cssNames", 0, akCssNames)
     try defMethod(it, o, "supports", 1, akSupports)
     try installFrames(s, o)
+    try installHistory(s, o)
     try installGeometry(s, o)
     try installCssom(s, o)
     try installComponents(s, o)
@@ -403,12 +403,25 @@ fn akMatchMedia(it: *mut Interp, a: Args) JsError!Value {
     return js.boolVal(m)
 }
 
+// navigate(url, replace): navigates after the script returns; to a
+// fragment of the document, at once (`fragmentNavigate`), returning
+// [old URL, new URL] for the prelude to fire the events.
 fn akNavigate(it: *mut Interp, a: Args) JsError!Value {
     let s = scriptOf(it)
     if try argUrl(it, a) |u| {
         defer u.deinit(it.alloc)
         if text.eql(u.scheme, "javascript") {
             return Value.Undefined
+        }
+        if isFragmentOf(s.page, &u) {
+            let arr = try it.newArray(0)
+            try it.push(js.objVal(arr))
+            let old = try it.newString(s.page.url.href)
+            try it.heap.pushElem(arr, old)
+            try fragmentNavigate(s.page, &u, it.toBoolean(it.arg(a, 1)))
+            let now = try it.newString(s.page.url.href)
+            try it.heap.pushElem(arr, now)
+            return it.pop()
         }
         try setNavigation(s, u.href)
         net.noteNavigation(u.href, s.page.url.href) catch |e| {
@@ -420,18 +433,6 @@ fn akNavigate(it: *mut Interp, a: Args) JsError!Value {
 
 fn akReload(it: *mut Interp, a: Args) JsError!Value {
     scriptOf(it).nav_kind = NavKind.Reload
-    return Value.Undefined
-}
-
-fn akHistoryGo(it: *mut Interp, a: Args) JsError!Value {
-    let s = scriptOf(it)
-    let n = try it.toNumber(it.arg(a, 0))
-    if n != n || n == 0.0 {
-        s.nav_kind = NavKind.Reload
-        return Value.Undefined
-    }
-    s.nav_kind = NavKind.History
-    s.nav_step = n as i64
     return Value.Undefined
 }
 
