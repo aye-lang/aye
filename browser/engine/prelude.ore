@@ -1068,8 +1068,17 @@ pub let PRELUDE =
     \\function createHTMLDocument(title) {
     \\  const html = document.createElement('html');
     \\  const head = html.appendChild(document.createElement('head'));
-    \\  const body = html.appendChild(document.createElement('body'));
+    \\  html.appendChild(document.createElement('body'));
     \\  if (title !== undefined) head.appendChild(document.createElement('title')).textContent = String(title);
+    \\  return standInDocument(html);
+    \\}
+    \\// A stand-in document around the html element `html`.
+    \\function standInDocument(html) {
+    \\  let head = null, body = null;
+    \\  for (const c of html.children) {
+    \\    if (c.localName === 'head' && !head) head = c;
+    \\    else if (c.localName === 'body' && !body) body = c;
+    \\  }
     \\  const d = Object.create(Object.prototype);
     \\  for (const k of ['createElement', 'createElementNS', 'createTextNode', 'createComment', 'createDocumentFragment', 'createEvent', 'createAttribute', 'importNode', 'adoptNode']) {
     \\    hidden(d, k, function () { return document[k].apply(document, arguments); });
@@ -1079,6 +1088,11 @@ pub let PRELUDE =
     \\    hidden(d, k, function () { return html[k].apply(html, arguments); });
     \\  }
     \\  Object.assign(d, { documentElement: html, head, body, nodeType: 9, nodeName: '#document', defaultView: null, readyState: 'complete', implementation });
+    \\  // Astro's router reads the scripts of the page it fetched.
+    \\  for (const [k, tag] of [['forms', 'form'], ['images', 'img'], ['scripts', 'script'], ['embeds', 'embed']]) {
+    \\    getter(d, k, () => html.getElementsByTagName(tag));
+    \\  }
+    \\  getter(d, 'links', () => html.querySelectorAll('a[href], area[href]'));
     \\  return d;
     \\}
     \\const implementation = {
@@ -3072,12 +3086,10 @@ pub let PRELUDE =
     \\// parsed one is a stand-in, as createHTMLDocument's).
     \\class DOMParser {
     \\  parseFromString(src, type) {
-    \\    const d = createHTMLDocument();
-    \\    const m = /<head[^>]*>([\s\S]*?)<\/head>/i.exec(src);
-    \\    if (m) d.head.innerHTML = m[1];
-    \\    const b = /<body[^>]*>([\s\S]*)<\/body>/i.exec(src);
-    \\    d.body.innerHTML = b ? b[1] : m ? src.slice(m.index + m[0].length) : src;
-    \\    const t = d.head.querySelector('title');
+    \\    // Parsed as a document: a regex for <head> and <body> took them from
+    \\    // a script's text on mistral.ai.
+    \\    const d = standInDocument(ak.parseDocument(String(src)));
+    \\    const t = d.head && d.head.querySelector('title');
     \\    d.title = t ? t.textContent : '';
     \\    return d;
     \\  }

@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<title>DOMParser</title>
+<pre id="out"></pre>
+<script>
+// DOMParser parses a whole document: a script's text that mentions
+// <head> or <body> stays text (mistral.ai's Astro router), the html
+// element keeps its attributes, and the document has scripts, forms and
+// links.
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const src = '<!DOCTYPE html><html lang="en" data-x="1"><head><title>Parsed</title>' +
+  '<script>/* swaps <head> and <body> on navigation */<\/script></head>' +
+  '<body class="b"><form></form><a href="/n">n</a><p>end</p></body></html>';
+const doc = new DOMParser().parseFromString(src, 'text/html');
+log('title', doc.title, doc.documentElement.getAttribute('lang'), doc.documentElement.getAttribute('data-x'));
+log('head', doc.head.children.length, doc.head.querySelector('script').textContent);
+log('body', doc.body.className, Array.from(doc.body.children, c => c.localName).join(','));
+log('collections', doc.scripts.length, doc.forms.length, doc.links.length, doc.images.length);
+</script>

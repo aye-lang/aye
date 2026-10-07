@@ -1,0 +1,14 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "DOMParser"
+      "\n"
+    <body>
+      <pre id="out">
+        "title Parsed en 1\nhead 2 /* swaps <head> and <body> on navigation */\nbody b form,a,p\ncollections 1 1 1 0\n"
+      "\n"
+      <script>
+        "\n// DOMParser parses a whole document: a script's text that mentions\n// <head> or <body> stays text (mistral.ai's Astro router), the html\n// element keeps its attributes, and the document has scripts, forms and\n// links.\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nconst src = '<!DOCTYPE html><html lang=\"en\" data-x=\"1\"><head><title>Parsed</title>' +\n  '<script>/* swaps <head> and <body> on navigation */<\\/script></head>' +\n  '<body class=\"b\"><form></form><a href=\"/n\">n</a><p>end</p></body></html>';\nconst doc = new DOMParser().parseFromString(src, 'text/html');\nlog('title', doc.title, doc.documentElement.getAttribute('lang'), doc.documentElement.getAttribute('data-x'));\nlog('head', doc.head.children.length, doc.head.querySelector('script').textContent);\nlog('body', doc.body.className, Array.from(doc.body.children, c => c.localName).join(','));\nlog('collections', doc.scripts.length, doc.forms.length, doc.links.length, doc.images.length);\n"
+      "\n"
