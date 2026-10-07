@@ -56,6 +56,9 @@ pub enum Class {
     WeakRef
     // A FinalizationRegistry: the primitive is its cleanup callback.
     FinalizationRegistry
+    // Internal live import cell, and an ES module namespace exotic object.
+    ModuleBinding
+    ModuleNamespace
 }
 
 pub enum ObjData {

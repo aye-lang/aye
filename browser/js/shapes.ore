@@ -129,7 +129,7 @@ fn literalShape(it: *mut Interp, id: u32, list: u32, n: u32) AllocError!u32 {
 // wrappers, proxies and host hooks must go through getProp/setProp.
 fn cacheable(it: *Interp, o: u32, key: u32) bool {
     let ob = it.heap.obj(o)
-    if ob.shape == NONE || ob.class == Class.Proxy || ob.class == Class.Host || ob.class == Class.String {
+    if ob.shape == NONE || ob.class == Class.Proxy || ob.class == Class.Host || ob.class == Class.String || ob.class == Class.ModuleNamespace {
         return false
     }
     if ob.class == Class.Array || ob.class == Class.Arguments {

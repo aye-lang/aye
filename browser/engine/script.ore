@@ -714,7 +714,12 @@ fn runModuleElement(s: *mut Script, el: NodeId) AllocError!void {
     s.current = null
     enter(s)
     if s.page.doc.attr(el, "src") |src| {
-        js.importModule(&mut s.it, src, s.it.script_url) catch |e| {
+        let target = s.page.resolve(s.alloc, src) catch |e| {
+            leave(s)
+            return addConsole(s, "[error] Failed to load module: ", src)
+        }
+        defer target.deinit(s.alloc)
+        js.importModule(&mut s.it, target.href, s.it.script_url) catch |e| {
             leave(s)
             return uncaught(s, e)
         }

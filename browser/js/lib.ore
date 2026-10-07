@@ -420,6 +420,7 @@ pub let LIB =
     \\const moduleMap = new Map();
     \\const resolveModule = G.__engine.resolveModule;
     \\const fetchModule = G.__engine.fetchModule;
+    \\const isModuleNamespace = G.__engine.isModuleNamespace;
     \\function importDriver(specifier, referrer, thrown) {
     \\  return new Promise((resolve, reject) => {
     \\    let spec;
@@ -435,7 +436,7 @@ pub let LIB =
     \\        if (!promise) {
     \\          promise = new Promise((res, rej) => {
     \\            queueMicrotask(() => {
-    \\              try { res(fetchModule(url)); } catch (e) { rej(e); }
+    \\              try { res(fetchModule(url, referrer)); } catch (e) { rej(e); }
     \\            });
     \\          });
     \\          moduleMap.set(url, promise);
@@ -556,6 +557,7 @@ pub let LIB =
     \\    return o[k];
     \\  },
     \\  set(o, k, v, r) {
+    \\    if (isModuleNamespace(o)) return false;
     \\    if (r === undefined || r === o) { o[k] = v; return true; }
     \\    const d = findDescriptor(o, k);
     \\    if (d && d.set) { d.set.call(r, v); return true; }

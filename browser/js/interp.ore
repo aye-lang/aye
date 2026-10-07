@@ -260,6 +260,10 @@ pub struct Interp {
     // Default referrer for classic scripts, and root of the import driver.
     script_url: u32 = 0
     import_driver: u32 = NONE
+    // URL atom to the root of the module's unique import.meta object.
+    import_meta: IntMap(u32, u32)
+    // Strictness of classic top-level code (functions carry it in FuncInfo).
+    script_strict: bool = false
 
     pub fn create(alloc: Allocator) JsError!Interp {
         var it = Interp {
@@ -279,6 +283,7 @@ pub struct Interp {
             expr_nparams: 0,
             expr_this_slot: NONE,
             expr_this: Value.Undefined,
+            import_meta: IntMap(u32, u32).init(alloc),
             globals: GlobalNames.init(alloc),
             natives: List(NativeEntry).init(alloc),
             stack: List(Value).init(alloc),
@@ -373,6 +378,7 @@ pub struct Interp {
     }
 
     pub fn deinit(self: *mut Self) {
+        self.import_meta.deinit()
         destroyCoroutines(self)
         self.coroutines.deinit()
         self.co_saved.deinit()
@@ -1188,6 +1194,21 @@ pub struct Interp {
         }
     }
 
+    fn isStrictCode(self: *Self) bool {
+        if self.frames.len() > 0 {
+            let f = self.frames.items()[self.frames.len() - 1].func
+            if f != NONE {
+                match self.heap.obj(f).data {
+                    .Closure { func, .. } => {
+                        return self.ast.func(func).strict
+                    }
+                    _ => {}
+                }
+            }
+        }
+        return self.script_strict
+    }
+
     fn setOn(self: *mut Self, o: u32, key: u32, value: Value, receiver: Value) JsError!void {
         if self.heap.obj(o).class == Class.Host && self.namedHost(o) {
             if try self.host.?.setNamed(self, o, key, value) {
@@ -1198,6 +1219,12 @@ pub struct Interp {
         let cls = ob.class
         if cls == Class.Proxy {
             return proxySet(self, o, key, value, receiver)
+        }
+        if cls == Class.ModuleNamespace {
+            if self.isStrictCode() {
+                try self.typeError("Cannot assign to module namespace")
+            }
+            return
         }
         if cls == Class.Array || cls == Class.Arguments {
             let idx = self.heap.atoms.indexOf(key)
@@ -2619,7 +2646,10 @@ pub struct Interp {
                     if depth < DEPTH_GLOBAL_LEX {
                         e = self.envAt(depth)
                     }
-                    let v = self.heap.envs.items()[e].slots[slot]
+                    var v = self.heap.envs.items()[e].slots[slot]
+                    if self.classOf(v) == Class.ModuleBinding {
+                        v = try readModuleBinding(self, v)
+                    }
                     match v {
                         .Empty => {
                             return self.uninitialized(name)
@@ -2885,6 +2915,9 @@ pub struct Interp {
             }
             .ModuleNamespace { value } => {
                 return moduleNamespace(self, value)
+            }
+            .ImportBindings { value, target } => {
+                return importBindings(self, value, target)
             }
             .NewTarget => {
                 return self.evalNewTarget()
@@ -4329,6 +4362,9 @@ pub struct Interp {
                 return JsError.Thrown
             }
         }
+        if !module {
+            self.script_strict = p.strict
+        }
         var r = Resolver {
             alloc: self.alloc,
             ast: &mut self.ast,
@@ -4379,6 +4415,8 @@ pub struct Interp {
 
     /// Parses and executes a classic script with its captured base URL.
     pub fn runScript(self: *mut Self, src: []u8) JsError!Value {
+        let strict = self.script_strict
+        defer self.script_strict = strict
         let root = try self.parseCode(src, false, self.script_url)
         let savedEnv = self.env
         try self.outer_envs.append(savedEnv)

@@ -120,6 +120,8 @@ pub enum Node {
     ImportCall { arg: u32, referrer: u32 }
     ImportMeta { referrer: u32 }
     ModuleNamespace { value: u32 }
+    // Internal containers used while initializing live static bindings.
+    ImportBindings { value: u32, target: u32 }
     // ---- patterns (binding and assignment targets)
     ArrayPat { list: u32, n: u32 }
     ObjectPat { list: u32, n: u32 }

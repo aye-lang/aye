@@ -669,6 +669,7 @@ pub struct Resolver {
             .Await { arg } => try self.expr(arg)
             .ImportCall { arg, .. } => try self.expr(arg)
             .ModuleNamespace { value } => try self.expr(value)
+            .ImportBindings { value, .. } => try self.expr(value)
             .TaggedTemplate { tag, quasi, .. } => {
                 try self.expr(tag)
                 try self.expr(quasi)

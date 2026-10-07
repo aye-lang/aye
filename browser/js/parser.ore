@@ -32,6 +32,8 @@ pub struct Parser {
     // URL atom for ImportCall and import.meta; zero for anonymous scripts.
     referrer: u32 = 0
     module: bool = false
+    // A return is illegal in module code, but legal in its nested functions.
+    module_body: bool = false
 
     // ---- tokens
 
@@ -233,6 +235,7 @@ pub struct Parser {
     // global lexical environment. Export getters close over its live slots.
     pub fn moduleProgram(self: *mut Self) SyntaxErr!u32 {
         self.module = true
+        self.module_body = true
         self.strict = true
         self.in_async = true
         let pm = self.mark()
@@ -241,10 +244,12 @@ pub struct Parser {
         self.ast.funcs.items()[f].strict = true
         var exports = List(u32).init(self.alloc)
         defer exports.deinit()
+        var imports = List(u32).init(self.alloc)
+        defer imports.deinit()
         let m = self.mark()
         while !self.at(Tok.Eof) {
             if self.at(Tok.KwImport) && self.kindAt(1) != Tok.LParen && self.kindAt(1) != Tok.Dot {
-                try self.push(try self.moduleImport())
+                try imports.append(try self.moduleImport())
             } else if self.eat(Tok.KwExport) {
                 if self.eat(Tok.KwDefault) {
                     let start = self.pos
@@ -328,8 +333,17 @@ pub struct Parser {
         try self.push(try self.mk(Node.Return { arg: ns }, 0))
         let n = self.count(m)
         let l = try self.list(m)
-        self.ast.funcs.items()[f].body = l
-        self.ast.funcs.items()[f].nbody = n
+        let im = self.mark()
+        for st in imports.items() {
+            try self.push(st)
+        }
+        for k in 0..n {
+            try self.push(self.ast.item(l, k))
+        }
+        let bodyN = self.count(im)
+        let bodyList = try self.list(im)
+        self.ast.funcs.items()[f].body = bodyList
+        self.ast.funcs.items()[f].nbody = bodyN
         return f
     }
 
@@ -449,8 +463,12 @@ pub struct Parser {
         if target == 0 {
             return self.mk(Node.ExprStmt { e: wait }, start)
         }
+        var init = wait
+        if self.ast.node(target) is .ObjectPat {
+            init = try self.mk(Node.ImportBindings { value: wait, target: target }, start)
+        }
         let dm = self.mark()
-        try self.push(try self.mk(Node.Declarator { target: target, init: wait }, start))
+        try self.push(try self.mk(Node.Declarator { target: target, init: init }, start))
         let dl = try self.list(dm)
         return self.mk(Node.VarDecl { kind: DECL_CONST, list: dl, n: 1 }, start)
     }
@@ -491,6 +509,9 @@ pub struct Parser {
         try self.tooDeep()
         let start = self.pos
         let k = self.kind()
+        if self.module_body && k == Tok.KwReturn {
+            return self.fail("Illegal return statement")
+        }
         if k == Tok.LBrace {
             return self.block()
         }
@@ -1776,6 +1797,9 @@ pub struct Parser {
     }
 
     fn functionBody(self: *mut Self, f: u32) SyntaxErr!void {
+        let savedModuleBody = self.module_body
+        self.module_body = false
+        defer self.module_body = savedModuleBody
         try self.expect(Tok.LBrace)
         let outer = self.strict
         if self.useStrict() {

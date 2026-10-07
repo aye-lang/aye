@@ -128,6 +128,9 @@ fn compileFastExprs(it: *mut Interp) AllocError!void {
 // 5 null. Empty (an uninitialized binding/hole) fails the attempt.
 // Operators require numbers before any conversion could call JS.
 fn exprValue(it: *mut Interp, at: usize, v: Value) bool {
+    if it.classOf(v) == Class.ModuleBinding {
+        return false
+    }
     match v {
         .Num { n } => {
             it.expr_nums[at] = n

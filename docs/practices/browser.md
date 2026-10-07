@@ -178,6 +178,16 @@ module callbacks need the module URL rather than the document URL.
 Export getters also need separate Ident nodes from declaration targets:
 the resolver writes different depths into each use.
 
+### Module live bindings must bypass ordinary-value fast paths
+**Context:** static imported identifiers and namespace properties.
+**Bad:** numeric expression recipes returned the internal import cell;
+property write caches treated namespace getters as ordinary accessors and
+silently ignored strict assignments.
+**Good:** `exprValue` declines ModuleBinding cells, and `cacheable`
+declines ModuleNamespace objects. The slow path unwraps live cells and
+implements namespace writes/descriptors (`232_module_await.js`).
+**Why:** an internal getter or cell is not an observable JavaScript value.
+
 ### Keep one decoder and version each observable image request
 **Context:** image state exposed to JS and images used by layout/canvas.
 **Bad:** `decode()` formerly fulfilled for any nonempty src, including

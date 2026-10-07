@@ -192,7 +192,7 @@ fn layout_system_font() {
 
 #[test]
 fn ore_unit_tests() {
-    for module in ["browser", "browser/url", "browser/dom", "browser/encoding", "browser/font", "browser/js", "browser/image"] {
+    for module in ["browser", "browser/url", "browser/dom", "browser/encoding", "browser/font", "browser/image"] {
         let out = ore().arg("test").arg(module).output().unwrap();
         let stdout = text(&out.stdout);
         assert!(
@@ -202,7 +202,7 @@ fn ore_unit_tests() {
         );
     }
     // Modules that import other browser modules, tested from the root.
-    for module in ["svg"] {
+    for module in ["svg", "js"] {
         let out = ore().args(["test", "browser", "--module", module]).output().unwrap();
         let stdout = text(&out.stdout);
         assert!(

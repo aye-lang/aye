@@ -39,6 +39,10 @@ pub fn importModule(it: *mut Interp, specifier: []u8, referrer: u32) JsError!Val
     return it.callAt(base, 2)
 }
 
+fn engineIsModuleNamespace(it: *mut Interp, a: Args) JsError!Value {
+    return boolVal(it.classOf(it.arg(a, 0)) == Class.ModuleNamespace)
+}
+
 fn engineResolveModule(it: *mut Interp, a: Args) JsError!Value {
     let spec = it.heap.bytes(strOf(it.arg(a, 0)))
     let base = url.parse(it.alloc, it.heap.bytes(strOf(it.arg(a, 1)))) catch |e| {
@@ -62,7 +66,7 @@ fn engineFetchModule(it: *mut Interp, a: Args) JsError!Value {
         return it.typeError("Invalid module URL")
     }
     defer target.deinit(it.alloc)
-    let res = net.request(it.alloc, &target, net.Request { kind: net.Kind.Script }) catch |e| {
+    let res = net.request(it.alloc, &target, net.Request { kind: net.Kind.Script, referrer: it.heap.bytes(strOf(it.arg(a, 1))) }) catch |e| {
         if e == net.FetchError.OutOfMemory {
             return JsError.OutOfMemory
         }
@@ -72,17 +76,66 @@ fn engineFetchModule(it: *mut Interp, a: Args) JsError!Value {
     if res.status < 200 || res.status >= 300 {
         return it.typeError("Failed to fetch module")
     }
-    let referrer = try it.intern(target.href)
+    var finalUrl = target.href
+    if res.url.len > 0 {
+        finalUrl = res.url
+    }
+    let referrer = try it.intern(finalUrl)
     return it.runModuleSource(res.body, referrer)
 }
 
 fn importMeta(it: *mut Interp, referrer: u32) JsError!Value {
+    if it.import_meta.get(referrer) |root| {
+        return it.roots.items()[root]
+    }
     let base = it.stack.len()
     defer it.truncate(base)
     let o = try it.newObject(NONE)
     try it.push(objVal(o))
     try it.defineOwn(o, try it.intern("url"), try it.atomValue(referrer), F_DEFAULT)
+    try it.import_meta.put(referrer, try it.addRoot(objVal(o)))
     return objVal(o)
+}
+
+// A static named import's slot retains a cell pointing at the namespace,
+// rather than a snapshot of its value. Ordinary identifier reads unwrap it.
+fn readModuleBinding(it: *mut Interp, cell: Value) JsError!Value {
+    let o = objectOf(cell)
+    let ns = it.heap.obj(o).elems[0]
+    let key = it.heap.obj(o).elems[1]
+    return it.getProp(ns, try it.toKey(key))
+}
+
+fn importBindings(it: *mut Interp, value: u32, target: u32) JsError!Value {
+    let base = it.stack.len()
+    defer it.truncate(base)
+    let ns = try it.eval(value)
+    try it.push(ns)
+    let result = try it.newObject(NONE)
+    try it.push(objVal(result))
+    match it.ast.node(target) {
+        .ObjectPat { list, n } => {
+            for k in 0..n {
+                match it.ast.node(it.ast.item(list, k)) {
+                    .PatProp { key, .. } => {
+                        if !it.hasOwn(objectOf(ns), key) {
+                            return it.throwError(it.syntax_error_proto, "Module does not provide the requested export")
+                        }
+                        let cell = try it.newObjectOf(Class.ModuleBinding, NONE, ObjData.None)
+                        try it.push(objVal(cell))
+                        try it.heap.pushElem(cell, ns)
+                        let name = try it.atomValue(key)
+                        try it.heap.pushElem(cell, name)
+                        try it.defineOwn(result, key, objVal(cell), F_DEFAULT)
+                        it.pop()
+                    }
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+    return objVal(result)
 }
 
 fn moduleNamespace(it: *mut Interp, value: u32) JsError!Value {
@@ -93,8 +146,9 @@ fn moduleNamespace(it: *mut Interp, value: u32) JsError!Value {
     // Export getters retain the module environment, but namespace
     // descriptors are data descriptors and [[Set]] always fails.
     it.heap.obj(o).proto = NONE
+    it.heap.obj(o).class = Class.ModuleNamespace
     for i in 0..it.heap.obj(o).nprops {
-        it.heap.obj(o).props[i].flags = F_ENUM | F_ACCESSOR | F_MODULE
+        it.heap.obj(o).props[i].flags = F_ENUM | F_WRITE | F_ACCESSOR | F_MODULE
     }
     let tag = try it.newString("Module")
     try it.heap.addProp(o, it.sym_to_string_tag, tag, Value.Undefined, 0)
