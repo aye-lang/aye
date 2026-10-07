@@ -183,6 +183,53 @@ test "css cascade" {
     @expectEqual("rgb(255, 0, 0) 20px 2px block", out.bytes())
 }
 
+// The colors of the elements `ids` in `styles`, as text, into `out`.
+fn colorsOf(doc: *dom.Document, styles: *css.Styles, ids: [][]u8, out: *mut text.Builder) !void {
+    out.clear()
+    for id in ids {
+        try css.writeValue(styles.get(doc.getElementById(id).?).?[css.COLOR], out)
+        try out.append(";")
+    }
+}
+
+test "elements share equal computed values, and a restyle of one leaves the others" {
+    let a = @testAllocator()
+    var doc = try html.parse(a, "<p id=a>t</p><p id=b>u</p><p id=c style='color: red'>v</p>")
+    defer doc.deinit()
+    let media = css.Media { width: 800.0, height: 600.0 }
+    var ua = try css.Sheet.init(a)
+    defer ua.deinit()
+    try css.uaSheet(&mut ua, media)
+    var author = try css.Sheet.init(a)
+    defer author.deinit()
+    var styles = try css.Styles.init(a)
+    defer styles.deinit()
+    try css.computeStyles(&doc, &ua, &author, media, &mut styles)
+    let pa = doc.getElementById("a").?
+    let pb = doc.getElementById("b").?
+    @expect(styles.get(pa).?.ptr == styles.get(pb).?.ptr)
+    @expect(styles.get(pa).?.ptr != styles.get(doc.getElementById("c").?).?.ptr)
+    let ids = [3][]u8{"a", "b", "c"}
+    var out = text.Builder.init(a)
+    defer out.deinit()
+    let shallow = [1]bool{false}
+    // `a` and `b` hold the same values: `a`'s new ones go elsewhere.
+    try doc.setAttr(pa, "style", "color: blue")
+    let roots_a = [1]NodeId{pa}
+    _ = try css.restyleSubtrees(&doc, &ua, &author, media, roots_a[..], shallow[..], &mut styles)
+    try colorsOf(&doc, &styles, ids[..], &mut out)
+    @expectEqual("rgb(0, 0, 255);rgb(0, 0, 0);rgb(255, 0, 0);", out.bytes())
+    // `b` takes `a`'s values; then `a` changes again, `b` keeps them.
+    try doc.setAttr(pb, "style", "color: blue")
+    let roots_b = [1]NodeId{pb}
+    _ = try css.restyleSubtrees(&doc, &ua, &author, media, roots_b[..], shallow[..], &mut styles)
+    @expect(styles.get(pa).?.ptr == styles.get(pb).?.ptr)
+    try doc.setAttr(pa, "style", "color: green")
+    _ = try css.restyleSubtrees(&doc, &ua, &author, media, roots_a[..], shallow[..], &mut styles)
+    try colorsOf(&doc, &styles, ids[..], &mut out)
+    @expectEqual("rgb(0, 128, 0);rgb(0, 0, 255);rgb(255, 0, 0);", out.bytes())
+}
+
 test "adopted sheets and shadow trees" {
     let a = @testAllocator()
     let src = "<x-a><template shadowrootmode=open><style>p { margin-top: 1px }</style><p>in</p><slot></slot></template><p>light</p></x-a>"
@@ -346,10 +393,17 @@ fn styledColor(p: *engine.Page, el: NodeId, out: *mut text.Builder) !void {
 }
 
 // Marks the color of `el` in the styles of `p`: it stays "marked" while
-// those styles are kept.
-fn markColor(p: *mut engine.Page, el: NodeId) {
-    let v = p.styling.?.styles.map.get(el.index).?
-    v[css.COLOR] = css.Value.Keyword { k: "marked" }
+// those styles are kept. The element gets values of its own: others
+// may share those it has.
+fn markColor(p: *mut engine.Page, el: NodeId) !void {
+    let styles = &mut p.styling.?.styles
+    let v = styles.map.get(el.index).?
+    let mine = try styles.arena.allocator().alloc(css.Value.Initial, css.NPROPS)
+    for i in 0..css.NPROPS {
+        mine[i] = v[i]
+    }
+    mine[css.COLOR] = css.Value.Keyword { k: "marked" }
+    try styles.map.put(el.index, mine)
 }
 
 test "a restyle keeps the styles while nothing they depend on changed" {
@@ -367,7 +421,7 @@ test "a restyle keeps the styles while nothing they depend on changed" {
     try styledColor(p, el, &mut out)
     @expectEqual("rgb(0, 0, 0)", out.bytes())
     // Nothing changed: the styles stay.
-    markColor(p, el)
+    try markColor(p, el)
     try p.restyle()
     try p.layoutPage(&mut fixed, 800.0, 600.0)
     try styledColor(p, el, &mut out)
@@ -384,13 +438,13 @@ test "a restyle keeps the styles while nothing they depend on changed" {
     @expectEqual("rgb(255, 0, 0)", out.bytes())
     // So does a change no script made (the agent's), which no version
     // counts.
-    markColor(p, el)
+    try markColor(p, el)
     try p.doc.setAttr(el, "class", "x")
     try p.restyle()
     try styledColor(p, el, &mut out)
     @expectEqual("rgb(0, 0, 0)", out.bytes())
     // And the focus.
-    markColor(p, el)
+    try markColor(p, el)
     p.doc.controls.focus = el
     try p.restyle()
     try styledColor(p, el, &mut out)
@@ -398,7 +452,7 @@ test "a restyle keeps the styles while nothing they depend on changed" {
     // And the viewport.
     p.doc.controls.focus = null
     try p.restyle()
-    markColor(p, el)
+    try markColor(p, el)
     try p.layoutPage(&mut fixed, 400.0, 600.0)
     try styledColor(p, el, &mut out)
     @expectEqual("rgb(0, 128, 0)", out.bytes())
