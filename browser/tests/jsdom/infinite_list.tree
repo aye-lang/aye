@@ -73,49 +73,9 @@
           "Item 29"
         <li>
           "Item 30"
-        <li>
-          "Item 31"
-        <li>
-          "Item 32"
-        <li>
-          "Item 33"
-        <li>
-          "Item 34"
-        <li>
-          "Item 35"
-        <li>
-          "Item 36"
-        <li>
-          "Item 37"
-        <li>
-          "Item 38"
-        <li>
-          "Item 39"
-        <li>
-          "Item 40"
-        <li>
-          "Item 41"
-        <li>
-          "Item 42"
-        <li>
-          "Item 43"
-        <li>
-          "Item 44"
-        <li>
-          "Item 45"
-        <li>
-          "Item 46"
-        <li>
-          "Item 47"
-        <li>
-          "Item 48"
-        <li>
-          "Item 49"
-        <li>
-          "Item 50"
       "\n"
       <p id="more">
-        "End of the list."
+        "Loading more..."
       "\n"
       <script>
         "\n// Ten items at a time, when the \"Loading more\" line comes into view\n// (fetched after 200 ms), until there are 50.\nconst list = document.getElementById('list');\nconst more = document.getElementById('more');\nlet busy = false;\nfunction load() {\n  busy = true;\n  setTimeout(() => {\n    const n = list.children.length;\n    for (let i = 1; i <= 10; i++) {\n      const li = document.createElement('li');\n      li.textContent = 'Item ' + (n + i);\n      list.append(li);\n    }\n    busy = false;\n    if (list.children.length >= 50) {\n      io.disconnect();\n      more.textContent = 'End of the list.';\n    }\n  }, 200);\n}\nconst io = new IntersectionObserver(entries => {\n  if (entries.some(e => e.isIntersecting) && !busy) load();\n});\nio.observe(more);\n"

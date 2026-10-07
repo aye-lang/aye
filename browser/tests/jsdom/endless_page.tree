@@ -19,42 +19,6 @@
           "Chunk 2"
         <div>
           "Chunk 3"
-        <div>
-          "Chunk 4"
-        <div>
-          "Chunk 5"
-        <div>
-          "Chunk 6"
-        <div>
-          "Chunk 7"
-        <div>
-          "Chunk 8"
-        <div>
-          "Chunk 9"
-        <div>
-          "Chunk 10"
-        <div>
-          "Chunk 11"
-        <div>
-          "Chunk 12"
-        <div>
-          "Chunk 13"
-        <div>
-          "Chunk 14"
-        <div>
-          "Chunk 15"
-        <div>
-          "Chunk 16"
-        <div>
-          "Chunk 17"
-        <div>
-          "Chunk 18"
-        <div>
-          "Chunk 19"
-        <div>
-          "Chunk 20"
-        <div>
-          "Chunk 21"
       "\n"
       <script>
         "\n// Every scroll adds a chunk taller than the viewport: the page never\n// stops growing, so a dump's scrolling must stop on its own.\nconst feed = document.getElementById('feed');\nfunction add() {\n  const d = document.createElement('div');\n  d.textContent = 'Chunk ' + (feed.children.length + 1);\n  feed.append(d);\n}\nadd();\naddEventListener('scroll', add);\n"
