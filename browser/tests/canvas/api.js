@@ -169,11 +169,22 @@ assert(ctx.measureText('Hello').fontBoundingBoxAscent === 0, 'baseline-relative 
 ctx.restore();
 const image = new Image();
 image.src = '../paint/img/photo.png';
+// A 4x4 PNG with red, lime, blue and yellow quadrants as a 2x candidate.
+const dense = new Image();
+dense.srcset = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAGklEQVR4nGP4z8DwH4SRIJoAlA8EDGCMIQAAZhYj3TSWLAcAAAAASUVORK5CYII= 2x';
 // Image dimensions become available only after the shared decoder finishes.
-image.decode().then(() => {
+Promise.all([image.decode(), dense.decode()]).then(() => {
   assert(image.naturalWidth > 0 && image.naturalHeight > 0, 'detached image dimensions');
   ctx.drawImage(image, 0, 0, 2, 2);
   assert(ctx.getImageData(0, 0, 1, 1).data[3] > 0, 'img image source');
+  const denseCanvas = document.createElement('canvas');
+  denseCanvas.width = denseCanvas.height = 4;
+  const dctx = denseCanvas.getContext('2d');
+  dctx.drawImage(dense, 0, 0);
+  assert(dense.naturalWidth === 2 && pixel(dctx, 0, 0) === '255,0,0,255' && pixel(dctx, 1, 1) === '255,255,0,255' && pixel(dctx, 2, 0) === '0,0,0,0' && pixel(dctx, 0, 2) === '0,0,0,0', 'srcset density image drawn at its natural size');
+  dctx.fillStyle = dctx.createPattern(dense, 'repeat');
+  dctx.fillRect(0, 0, 4, 4);
+  assert(pixel(dctx, 2, 0) === '255,0,0,255' && pixel(dctx, 3, 3) === '255,255,0,255' && pixel(dctx, 3, 0) === '0,255,0,255', 'srcset density pattern tile');
   canvas.width = 20;
   ctx.beginPath();
   ctx.rect(0, 0, 20, 20);

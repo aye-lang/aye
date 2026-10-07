@@ -29,6 +29,16 @@ struct Glyph {
     scale: f64
 }
 
+/// Where a glyph's bitmap goes (`left`, `top` from the pen position, y
+/// up) and its size in pixels.
+pub struct GlyphBox {
+    left: i64
+    top: i64
+    w: usize
+    h: usize
+    color: bool
+}
+
 pub struct TextPainter {
     alloc: Allocator
     // The system's fonts; null to draw the fixed-metric font's boxes.
@@ -99,6 +109,22 @@ pub struct TextPainter {
                 canvas.blitMask(origin + gl.left, top - gl.top, gl.w, gl.h, mask, gl.w, c)
             }
         }
+    }
+
+    /// The box of glyph `g` of `face` at `size64` (1/64 px) as drawn,
+    /// rendering and caching it on first use; null without pixels.
+    pub fn glyphBox(self: *mut Self, sys: *mut font.System, face: u32, size64: i64, g: u32) AllocError!?GlyphBox {
+        let gi = try self.glyph(sys, face, size64, g)
+        let gl = self.glyphs.items()[gi]
+        if !gl.ok || gl.w == 0 || gl.h == 0 {
+            return null
+        }
+        return GlyphBox { left: gl.left, top: gl.top, w: gl.w, h: gl.h, color: gl.color }
+    }
+
+    /// The bytes the glyph cache holds.
+    pub fn cached(self: *Self) usize {
+        return self.data.len()
     }
 
     // The index in `glyphs` of glyph `g` of face `face` at `size64`,
