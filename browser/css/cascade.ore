@@ -324,9 +324,7 @@ pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, o
     defer c.deinit()
     var filters = AncestorFilters { map: IntMap(u32, AncestorFilter).init(out.alloc) }
     defer filters.map.deinit()
-    if doc.shadows.len() == 0 {
-        c.filters = &mut filters
-    }
+    c.filters = &mut filters
     try c.addScopes(author)
     var hints = text.Builder.init(out.alloc)
     defer hints.deinit()
@@ -651,8 +649,15 @@ fn styleElement(c: *mut Computer, ua: *Sheet, author: *Sheet, hints: *mut text.B
     }
     c.clearCustoms()
     c.el = h
+    let root = treeOf(doc, h)
     if c.filters |f| {
-        c.filter = try f.of(doc, h)
+        // In a shadow tree, a selector's ancestors run through `:host`
+        // to the host, past the parent elements the filter has.
+        if dom.same(root, doc.root) {
+            c.filter = try f.of(doc, h)
+        } else {
+            c.filter = AncestorFilter.full()
+        }
     }
     setShadowHost(null)
     try c.consider(ua, h, L_UA, MATCH_ELEMENT)
@@ -670,7 +675,6 @@ fn styleElement(c: *mut Computer, ua: *Sheet, author: *Sheet, hints: *mut text.B
             try c.offer(out.inline.decls.items()[k], L_AUTHOR, 0)
         }
     }
-    let root = treeOf(doc, h)
     if dom.same(root, doc.root) {
         try c.consider(author, h, L_AUTHOR, MATCH_ELEMENT)
     } else if c.scopeOf(root) |i| {
