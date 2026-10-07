@@ -105,6 +105,9 @@ step only finds and writes down the cause; the fix is the next step.
 | P3.7 | Mistral: short iframe widgets, `setTransform` errors | `check --site mistral` | P3.4–6 |
 | P3.8a | Drawing gaps 1: go.dev icon font, rustdoc logo and search bar | `--screens` | not with P3.4 |
 | P3.8b | Drawing gaps 2: MDN header band, Wikipedia en figure, DuckDuckGo favicons, Google buttons | `--screens` | P3.8a |
+| P3.9 | Dump virtual clock: an `onload` set inside `setTimeout(0)` after `src` misses the image's load event (a real browser catches it) | new dump fixture | P3.4–8 |
+| P3.10 | Window: scripts run while parsing see an 800px viewport instead of `--width` | window test with `--width` | P3.4–8 |
+| P3.11 | A golden run once hit its 10 s debug-build timeout under load; find the slow golden or raise its budget | repeated `cargo test --test golden` under load | all |
 
 ### P4: Load time
 
