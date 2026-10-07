@@ -62,6 +62,24 @@ const steps = [
     log('push drops forward', history.length - start, file(location.href), history.scrollRestoration);
     history.back();
   },
+  () => {
+    // An empty url resolves against the base URL: the fragment goes. An
+    // omitted, undefined or null url leaves the URL (and fragment) alone.
+    history.replaceState(null, '', '#x');
+    log('fragment set', file(location.href));
+    history.replaceState(null, '', '');
+    log('empty replace', file(location.href));
+    history.replaceState(null, '', '#x');
+    history.pushState(null, '', '');
+    log('empty push', history.length - start, file(location.href));
+    history.replaceState(null, '', '#x');
+    history.pushState(null, '');
+    history.pushState(null, '', undefined);
+    history.pushState(null, '', null);
+    history.replaceState(null, '');
+    log('omitted', history.length - start, file(location.href));
+    setTimeout(next, 10);
+  },
   () => { log('done', history.length - start, JSON.stringify(history.state), file(location.href)); },
 ];
 function next() {

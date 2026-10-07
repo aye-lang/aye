@@ -360,7 +360,7 @@ fn akHistoryPush(it: *mut Interp, a: Args) JsError!Value {
         let b = try it.builder()
         defer it.release(b)
         try argText(it, a, 1, b)
-        if b.bytes().len > 0 {
+        {
             let u = p.resolve(it.alloc, b.bytes()) catch |e| {
                 match e {
                     .OutOfMemory => {
