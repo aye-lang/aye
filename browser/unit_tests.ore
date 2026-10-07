@@ -7,6 +7,7 @@ import css
 import dom
 import dom.NodeId
 import engine
+import font
 import html
 import js
 import net
@@ -335,4 +336,73 @@ test "wrappers of nodes in the document keep their properties" {
     js.collectGarbage(&mut p.script.?.it)
     @expect(try evalText(p, "document.getElementById('p').note", &mut out))
     @expectEqual("kept", out.bytes())
+}
+
+// The color of `el` in the styles of `p`, as text, into `out`.
+fn styledColor(p: *engine.Page, el: NodeId, out: *mut text.Builder) !void {
+    out.clear()
+    let v = p.styling.?.styles.get(el).?
+    try css.writeValue(v[css.COLOR], out)
+}
+
+// Marks the color of `el` in the styles of `p`: it stays "marked" while
+// those styles are kept.
+fn markColor(p: *mut engine.Page, el: NodeId) {
+    let v = p.styling.?.styles.map.get(el.index).?
+    v[css.COLOR] = css.Value.Keyword { k: "marked" }
+}
+
+test "a restyle keeps the styles while nothing they depend on changed" {
+    let a = @testAllocator()
+    engine.setScripting(true)
+    let u = try url.parse(a, "data:text/html,<style>.on { color: red } :focus { color: blue } @media (max-width: 500px) { p { color: green } }</style><p id=p class=x tabindex=0>t</p>")
+    defer u.deinit(a)
+    let p = try engine.load(a, &u)
+    defer p.destroy()
+    var fixed = font.Fixed.init()
+    try p.layoutPage(&mut fixed, 800.0, 600.0)
+    let el = p.doc.getElementById("p").?
+    var out = text.Builder.init(a)
+    defer out.deinit()
+    try styledColor(p, el, &mut out)
+    @expectEqual("rgb(0, 0, 0)", out.bytes())
+    // Nothing changed: the styles stay.
+    markColor(p, el)
+    try p.restyle()
+    try p.layoutPage(&mut fixed, 800.0, 600.0)
+    try styledColor(p, el, &mut out)
+    @expectEqual("marked", out.bytes())
+    // A class that no rule names changes no style.
+    @expect(try evalText(p, "document.getElementById('p').classList.add('nobody'); 0", &mut out))
+    try p.restyle()
+    try styledColor(p, el, &mut out)
+    @expectEqual("marked", out.bytes())
+    // A class a rule names does.
+    @expect(try evalText(p, "document.getElementById('p').classList.add('on'); 0", &mut out))
+    try p.restyle()
+    try styledColor(p, el, &mut out)
+    @expectEqual("rgb(255, 0, 0)", out.bytes())
+    // So does a change no script made (the agent's), which no version
+    // counts.
+    markColor(p, el)
+    try p.doc.setAttr(el, "class", "x")
+    try p.restyle()
+    try styledColor(p, el, &mut out)
+    @expectEqual("rgb(0, 0, 0)", out.bytes())
+    // And the focus.
+    markColor(p, el)
+    p.doc.controls.focus = el
+    try p.restyle()
+    try styledColor(p, el, &mut out)
+    @expectEqual("rgb(0, 0, 255)", out.bytes())
+    // And the viewport.
+    p.doc.controls.focus = null
+    try p.restyle()
+    markColor(p, el)
+    try p.layoutPage(&mut fixed, 400.0, 600.0)
+    try styledColor(p, el, &mut out)
+    @expectEqual("rgb(0, 128, 0)", out.bytes())
+    try p.layoutPage(&mut fixed, 800.0, 600.0)
+    try styledColor(p, el, &mut out)
+    @expectEqual("rgb(0, 0, 0)", out.bytes())
 }

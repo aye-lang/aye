@@ -1,0 +1,188 @@
+// What the computed styles of a document depend on besides its sheets,
+// as one number (`styleInputs`). When it is the same, computing the
+// styles again with the same sheets gives the same styles, so the engine
+// keeps the ones it has (engine.ore `Page.restyle`, geometry.ore). It
+// covers:
+// - every node of the document's tree and of its shadow trees, in
+//   shadow-including order: its handle, kind, name, namespace, parent,
+//   attributes, text, custom element state, shadow root and slot;
+// - of a `class` attribute, only the classes a selector of the sheets
+//   names (`Styles.classes`), unless a selector looks at the attribute
+//   itself: a class that no rule names changes no style;
+// - the state of the form controls and the focus, the rules scripts
+//   gave the sheets (their generation) and the sheets they adopted,
+//   quirks mode;
+// - the viewport and the container sizes the styles were computed with.
+// It is a fingerprint, not a version: it also sees the changes that no
+// counter records (the agent opening a `details`, typing into a field).
+
+import dom
+import dom.Document
+import dom.Kind
+import dom.NodeId
+import std.mem.AllocError
+import std.text
+
+/// The classes that the selectors of `sheet` (and of its shadow trees'
+/// sheets) name, into `out.classes`; `out.any_class` when a selector
+/// looks at the `class` attribute itself.
+pub fn noteClasses(sheet: *Sheet, out: *mut Styles) AllocError!void {
+    for s in sheet.simples.items() {
+        if s.kind == SelKind.Class {
+            try out.classes.put(classKey(s.name), true)
+        } else if s.kind == SelKind.Attr && text.eqlIgnoreCase(s.name, "class") {
+            out.any_class = true
+        }
+    }
+    for sc in sheet.scoped.items() {
+        try noteClasses(sc.sheet, out)
+    }
+}
+
+/// The fingerprint of what the styles `styles` of `doc` for `media`
+/// depend on besides the sheets (never 0).
+pub fn styleInputs(doc: *Document, media: Media, styles: *Styles) u64 {
+    var h = inputWord(INPUT_SEED, @hash(media.width))
+    h = inputWord(h, @hash(media.height))
+    var cur: ?NodeId = doc.root
+    while cur |n| {
+        h = inputNode(doc, styles, n, h)
+        cur = dom.shadowIncludingFollowing(doc, n, doc.root)
+    }
+    let ctl = &doc.controls
+    h = inputNodeId(h, ctl.focus)
+    h = inputNodeId(h, ctl.validation)
+    h = inputWord(h, inputBit(ctl.focus_visible))
+    // The controls in any order: a sum of their own fingerprints.
+    var controls: u64 = 0
+    var it = ctl.map.iterator()
+    while it.next() |e| {
+        let c = e.value
+        var x = inputWord(INPUT_SEED, e.key as u64)
+        x = inputWord(x, c.generation as u64)
+        x = inputText(x, c.value)
+        x = inputText(x, c.custom)
+        x = inputWord(x, inputBit(c.dirty) | (inputBit(c.checked) << 1) | (inputBit(c.checked_dirty) << 2) | (inputBit(c.selected) << 3) | (inputBit(c.selected_dirty) << 4))
+        controls = controls +% x
+    }
+    h = inputWord(h, controls)
+    h = inputWord(h, ctl.map.len() as u64)
+    h = inputWord(h, doc.sheets.generation)
+    for ad in doc.adopted.items() {
+        h = inputNodeId(h, ad.root)
+        h = inputText(h, ad.css)
+    }
+    h = inputWord(h, inputBit(doc.quirks))
+    var sizes: u64 = 0
+    var sit = styles.sizes.iterator()
+    while sit.next() |e| {
+        var x = inputWord(INPUT_SEED, e.key as u64)
+        x = inputWord(x, e.value.generation as u64)
+        x = inputWord(x, @hash(e.value.w))
+        x = inputWord(x, @hash(e.value.h))
+        sizes = sizes +% x
+    }
+    h = inputWord(h, sizes)
+    h = inputWord(h, styles.sizes.len() as u64)
+    if h == 0 {
+        return 1
+    }
+    return h
+}
+
+let INPUT_SEED: u64 = 14695981039346656037
+
+// The key of the class `name` in `Styles.classes`: FNV-1a of it in
+// lower case (quirks mode matches classes ignoring case).
+fn classKey(name: []u8) u64 {
+    var h = INPUT_SEED
+    for b in name {
+        var c = b
+        if c >= 'A' && c <= 'Z' {
+            c += 32
+        }
+        h = (h ^ (c as u64)) *% 1099511628211
+    }
+    return h
+}
+
+fn inputNode(doc: *Document, styles: *Styles, n: NodeId, seed: u64) u64 {
+    let node = doc.node(n)
+    var h = inputWord(seed, n.index as u64)
+    h = inputWord(h, n.generation as u64)
+    h = inputWord(h, @hash(node.kind))
+    h = inputText(h, node.name)
+    h = inputWord(h, (node.ns as u64) | ((node.ce as u64) << 8))
+    h = inputNodeId(h, node.parent)
+    h = inputNodeId(h, node.shadow)
+    h = inputNodeId(h, node.slot)
+    if node.kind != Kind.Element {
+        return inputText(h, node.data)
+    }
+    h = inputWord(h, node.attrs.len as u64)
+    for at in node.attrs {
+        h = inputText(h, at.name)
+        if !styles.any_class && text.eqlIgnoreCase(at.name, "class") {
+            h = inputClasses(h, at.value, styles)
+        } else {
+            h = inputText(h, at.value)
+        }
+    }
+    return h
+}
+
+// The classes of the `class` attribute `list` that a selector names.
+fn inputClasses(seed: u64, list: []u8, styles: *Styles) u64 {
+    var h = seed
+    var i: usize = 0
+    while i < list.len {
+        while i < list.len && inputSpace(list[i]) {
+            i += 1
+        }
+        let start = i
+        while i < list.len && !inputSpace(list[i]) {
+            i += 1
+        }
+        if i > start {
+            let key = classKey(list[start..i])
+            if styles.classes.contains(key) {
+                h = inputWord(h, key)
+            }
+        }
+    }
+    return h
+}
+
+fn inputSpace(c: u8) bool {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\x0C'
+}
+
+fn inputNodeId(h: u64, n: ?NodeId) u64 {
+    if n |v| {
+        return inputWord(inputWord(h, 1), ((v.generation as u64) << 32) | (v.index as u64))
+    }
+    return inputWord(h, 0)
+}
+
+fn inputBit(b: bool) u64 {
+    if b {
+        return 1
+    }
+    return 0
+}
+
+fn inputText(seed: u64, s: []u8) u64 {
+    var h = inputWord(seed, s.len as u64)
+    for b in s {
+        h = (h ^ (b as u64)) *% 1099511628211
+    }
+    return h
+}
+
+// Mixes the word `w` into `h` (the SplitMix64 finalizer of their xor).
+fn inputWord(h: u64, w: u64) u64 {
+    var x = h ^ w
+    x = (x ^ (x >> 30)) *% 0xBF58476D1CE4E5B9
+    x = (x ^ (x >> 27)) *% 0x94D049BB133111EB
+    return x ^ (x >> 31)
+}
