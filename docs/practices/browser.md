@@ -543,6 +543,24 @@ counts (`timers n=`) with a previous binary and look for archive misses
 **Why:** a replay artifact looks like an engine regression and hides the
 real numbers.
 
+### On the virtual clock, count a task's budget in steps, not time
+**Context:** anything that decides what a page sees in `dump` or the
+agent: task budgets, timers, scrolling, observers.
+**Bad:** a task's budget was 2 s of processor time on every clock. On
+the `youtube-search` replay, nine ShadyCSS and data-binding tasks ran
+out of it after 3 to 15 million steps, depending on the machine's load
+(`clock()` also counts the loader threads); each run rendered other
+results and asked for other thumbnails, and `check` passed 3 runs in 7
+(P1.7). Each run's set of requested URLs differed.
+**Good:** on the virtual clock, tasks and microtask checkpoints count
+steps alone (`enter`, `checkpointOver`, `browser/engine/script.ore`);
+the window keeps the time budget. To find such an input, log the set
+of requested URLs per run (`ANYKNOWN_TIMING=1` `requests` lines) with
+and without `yes > /dev/null` load, and diff the sets.
+**Why:** the same page and virtual clock must give the same requests;
+an archive records one run's requests, and a replay that asks for others
+misses.
+
 ### A request the browser starts sending is missing from old archives
 **Context:** a change that lets pages make requests they could not
 before (fetch methods, new APIs), checked with `page_load.py check`.
