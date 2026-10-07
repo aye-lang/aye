@@ -274,7 +274,7 @@ fn sourcePage(p: *mut Page, address: []u8, src: []u8) AllocError!*mut Page {
     let c = try newPage(p.alloc, located, 200, "", doc)
     c.encoding = p.encoding
     if text.eql(c.base.href, address) {
-        let base = url.parse(p.alloc, p.base.href) catch |e| {
+        let base = p.currentBase(p.alloc) catch |e| {
             c.destroy()
             return AllocError.OutOfMemory
         }

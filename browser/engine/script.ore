@@ -874,6 +874,8 @@ fn runModuleElement(s: *mut Script, el: NodeId) AllocError!void {
     s.current = null
     var b = text.Builder.init(s.alloc)
     defer b.deinit()
+    var base = try p.currentBase(s.alloc)
+    defer base.deinit(s.alloc)
     enter(s)
     if p.doc.attr(el, "src") |src| {
         let target = p.resolve(s.alloc, src) catch |e| {
@@ -881,13 +883,13 @@ fn runModuleElement(s: *mut Script, el: NodeId) AllocError!void {
             return addConsole(s, "[error] Failed to load module script: ", src)
         }
         defer target.deinit(s.alloc)
-        js.runModuleScript(&mut s.it, target.href, "", p.base.href) catch |e| {
+        js.runModuleScript(&mut s.it, target.href, "", base.href) catch |e| {
             leave(s)
             return uncaught(s, e)
         }
     } else {
         try p.doc.textContent(el, &mut b)
-        js.runModuleScript(&mut s.it, null, b.bytes(), p.base.href) catch |e| {
+        js.runModuleScript(&mut s.it, null, b.bytes(), base.href) catch |e| {
             leave(s)
             return uncaught(s, e)
         }
@@ -901,8 +903,10 @@ fn addImportMap(s: *mut Script, el: NodeId) AllocError!void {
     var b = text.Builder.init(s.alloc)
     defer b.deinit()
     try s.page.doc.textContent(el, &mut b)
+    var base = try s.page.currentBase(s.alloc)
+    defer base.deinit(s.alloc)
     enter(s)
-    js.addImportMap(&mut s.it, b.bytes(), s.page.base.href) catch |e| {
+    js.addImportMap(&mut s.it, b.bytes(), base.href) catch |e| {
         leave(s)
         return uncaught(s, e)
     }
@@ -910,7 +914,9 @@ fn addImportMap(s: *mut Script, el: NodeId) AllocError!void {
 }
 
 fn runSourceOf(s: *mut Script, el: NodeId, code: []u8) AllocError!void {
-    s.it.script_url = s.it.intern(s.page.base.href) catch return AllocError.OutOfMemory
+    var base = try s.page.currentBase(s.alloc)
+    defer base.deinit(s.alloc)
+    s.it.script_url = s.it.intern(base.href) catch return AllocError.OutOfMemory
     let began = perf.start()
     let source = s.page.doc.attr(el, "src") orelse "inline"
     defer perf.end("script", began, source)
