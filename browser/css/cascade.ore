@@ -1268,6 +1268,7 @@ struct Computer {
             values[p] = self.absolute(v, font_px)
         }
         fixBorderWidths(values)
+        fixOverflow(values)
         return values
     }
 
@@ -1426,6 +1427,25 @@ fn fixBorderWidths(values: []mut Value) {
                 }
             }
             _ => {}
+        }
+    }
+}
+
+// When one of `overflow-x` and `overflow-y` scrolls (`hidden`, `scroll`,
+// `auto`), `visible` and `clip` on the other compute to `auto` and
+// `hidden` (CSS Overflow 3, 3.1): such a box is a scroll container in
+// both axes.
+fn fixOverflow(values: []mut Value) {
+    for axis in 0..2 {
+        let own = keywordText(values[OVERFLOW_X + axis])
+        let other = keywordText(values[OVERFLOW_X + 1 - axis])
+        if !text.eql(other, "hidden") && !text.eql(other, "scroll") && !text.eql(other, "auto") {
+            continue
+        }
+        if text.eql(own, "visible") {
+            values[OVERFLOW_X + axis] = Value.Keyword { k: "auto" }
+        } else if text.eql(own, "clip") {
+            values[OVERFLOW_X + axis] = Value.Keyword { k: "hidden" }
         }
     }
 }

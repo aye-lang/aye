@@ -1,0 +1,18 @@
+viewport 800x600
+  block <html> (0, 0) 800x72
+    block <body> (0, 0) 800x68
+      flex <div class="f"> (0, 0) 200x20
+        block <div style="overflow-y: hidden"> (0, 0) 200x20
+          block <div class="w"> (10, 0) 300x20
+            line (10, 0) 300x20
+              text (10, 2) 32x16 "wide"
+      flex <div class="f"> (0, 24) 200x20
+        block <div style="overflow-x: hidden"> (0, 24) 200x20
+          block <div class="w"> (10, 24) 300x20
+            line (10, 24) 300x20
+              text (10, 26) 32x16 "wide"
+      flex <div class="f"> (0, 48) 200x20
+        block <div> (0, 48) 320x20
+          block <div class="w"> (10, 48) 300x20
+            line (10, 48) 300x20
+              text (10, 50) 184x16 "wide: automatic minimum"

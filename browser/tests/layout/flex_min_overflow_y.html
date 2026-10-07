@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0 }
+.f { display: flex; width: 200px; margin-bottom: 4px }
+.f > div { flex: 1; flex-basis: 0.000000001px; height: 20px; padding: 0 10px }
+.w { width: 300px }
+</style>
+<!-- overflow-y: hidden makes overflow-x auto: no automatic minimum
+     (YouTube's ytd-search) -->
+<div class="f"><div style="overflow-y: hidden"><div class="w">wide</div></div></div>
+<div class="f"><div style="overflow-x: hidden"><div class="w">wide</div></div></div>
+<div class="f"><div><div class="w">wide: automatic minimum</div></div></div>

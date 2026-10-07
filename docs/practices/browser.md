@@ -111,6 +111,19 @@ cascade lets any author value win. Layout reads only the computed style.
 **Why:** a hint has the lowest author priority; only the cascade knows
 whether a rule set the property.
 
+### Apply the computed-value rules that couple two properties
+**Context:** a property whose computed value depends on another one,
+such as `overflow-x` and `overflow-y`.
+**Bad:** YouTube's `ytd-search` has only `overflow-y: hidden`. Its
+`overflow-x` stayed `visible`, so the flex code (`flex.ore:286`, which
+reads `overflow-x`) gave it an automatic minimum, and the results ran
+72 px past the right edge (P3.44).
+**Good:** fix the pair in the cascade, once, as `fixOverflow` does
+(`browser/css/cascade.ore:1438`): `visible` becomes `auto` when the
+other axis scrolls. Layout then reads one value per axis.
+**Why:** every reader of the longhand would otherwise have to repeat
+the rule, and the one that forgets it lays out a different box.
+
 ## Paint
 
 ### A new display item kind needs an arm in `transformed()` and `moved()`
