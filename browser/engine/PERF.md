@@ -267,6 +267,26 @@ by Huffman/receive); decode is still about 352 ms. System-font fallback
 is not on fixed-font Markdown's hot path. No offscreen image was silently
 skipped, and decoder/font output is unchanged.
 
+**youtube-search, 2026-10-07/08** (plan P1.8–P1.11, P4.12–P4.27): CPU
+per replay ~77 s → ~11.6 s.
+
+- P1.9/P1.10: a global `IntersectionObserverEntry` (YouTube's polyfill
+  no longer replaces our observer) and a virtual clock that moves inside
+  a task (its scheduler yields).
+- P4.12: a repeated layout change is kept once, `MAX_RESTYLE` 4096;
+  full cascades per replay 100 → 16.
+- P4.13, P4.15: the ancestor Bloom filter outside shadow trees; a rule
+  index of its own for `::before`/`::after`.
+- P4.17: `MAX_SHAPES` 16384 → 262144; cached-site hits 27% → 48%,
+  shapeless reads 61% → 22%.
+- P4.18, P4.19: Map/Set keys through a hash index; the document base URL
+  cached per document.
+- P4.25: dumps stop after 2 growth rounds (was ~10 more pages of
+  results: 100K nodes, 4.69 GB RSS, ~50 s CPU).
+- P4.27: elements with equal computed values share one array; cards
+  page peak RSS 10K 1.40 → 0.51 GB, 40K 5.58 → 1.99 GB (139 → 49 KB per
+  card).
+
 ## Live network check and remaining work
 
 One separate normal live load per site (real Date/random, no archive)

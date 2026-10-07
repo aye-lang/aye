@@ -68,7 +68,7 @@ and a local test server), so CI needs no network and no display.
 | B5 forms and images | done | form sessions over HTTP, window form scripts, image decoder unit tests, form and image screenshots |
 | B6 JavaScript | done | 212 conformance scripts (`anyknown js`), 30 DOM fixtures (`dump --tree --js`, also under GC stress), a to-do app session, window script test, GC unit tests |
 | B7 agent interface | done | 17 snapshot/Markdown fixtures, session and MCP transcripts (with `eval` and `wait`), shared-window sessions over its socket (JSON lines, MCP through `anyknown connect`, pause, pointing, tabs) |
-| B8 the real web | in progress | net over the local server (`net_http`, the `net_cookies` and `base` agent sessions), HTML/CSS fixtures (templates, quirks, hints, `var()`/`calc()`, at-rules, `@import`), layout fixtures of site shapes (floats, positioned boxes, grid, `details`), hit testing by layer (`window_hit_layers`), JS conformance scripts for generators, async, Symbol, the web APIs and ES modules (231–237, 242–245), DOM fixtures for module scripts, layout queries, Shadow DOM, custom elements, `MutationObserver` and Web Animations, background image loads (`net/bg_images.html`, `net/bg_image_events.html`), BigInt and property descriptor scripts (246–250), `fetch`/XHR methods and a failed image over the local server (`net/fetch_methods.html`, `net/xhr_methods.html`, `net/failed_image_once.html`), session history (`jsdom/history.html`, the `history` and `history_paths` agent sessions) |
+| B8 the real web | in progress | net over the local server (`net_http`, the `net_cookies` and `base` agent sessions), HTML/CSS fixtures (templates, quirks, hints, `var()`/`calc()`, at-rules, `@import`), layout fixtures of site shapes (floats, positioned boxes, grid, `details`), hit testing by layer (`window_hit_layers`), JS conformance scripts for generators, async, Symbol, the web APIs and ES modules (231–237, 242–245), DOM fixtures for module scripts, layout queries, Shadow DOM, custom elements, `MutationObserver` and Web Animations, background image loads (`net/bg_images.html`, `net/bg_image_events.html`), BigInt and property descriptor scripts (246–250), `fetch`/XHR methods and a failed image over the local server (`net/fetch_methods.html`, `net/xhr_methods.html`, `net/failed_image_once.html`), session history (`jsdom/history.html`, the `history` and `history_paths` agent sessions), Reflect, `setPrototypeOf` and Map/Set scripts (251–254), DOM fixtures for the body mixin, DOMParser, `IntersectionObserverEntry`, the virtual clock and endless feeds, replaced sizing layout fixtures (`replaced_sizing`, `replaced_minmax`) |
 
 All the front ends share `engine/`: the window, `screenshot` and the
 agent sessions load pages through `engine.load` and keep history in a
@@ -83,10 +83,9 @@ agent sessions load pages through `engine.load` and keep history in a
   page loads are slow on big sites (in progress), and so is the JS
   interpreter (in progress). The list of public sites is in
   [`docs/browser-sites.md`](browser-sites.md), their expected state in
-  `browser/tools/sites.json` (22 sites, 2026-10-07: 15 ✅, 4 ⚠️, 3
-  excluded: two bot walls, and `youtube-search` until its replay is
-  deterministic; the run of 2026-10-06, before the work below, had 8
-  ✅, 7 ⚠️, 5 ❌ of 20).
+  `browser/tools/sites.json` (22 sites, 2026-10-08: 16 ✅, 4 ⚠️, 2
+  excluded, both bot walls; the run of 2026-10-06, before the work
+  below, had 8 ✅, 7 ⚠️, 5 ❌ of 20).
 
 The remaining work, in phases and steps, is in [`docs/plan.md`](plan.md).
 
@@ -362,7 +361,9 @@ on (`--no-js` turns it off), `dump` with `--js`.
   `XMLHttpRequest` (on the same fetch; any method, B8 below),
   `crypto.getRandomValues` and `randomUUID` (from `Math.random`), `requestIdleCallback`,
   `reportError`, `Image`, `Option`, `origin`, and `customElements`
-  (B8, below).
+  (B8, below). Observer entries are `IntersectionObserverEntry` objects
+  (a global, values in prototype getters), so a feature test finds it
+  and does not install a polyfill (`jsdom/intersection_observer_entry.html`).
   `IntersectionObserver` checks its targets against the layout and the
   scroll offsets (`engine/geometry.ore`), so content below the fold is
   not intersecting until scrolled into view; `ResizeObserver` reports
@@ -370,7 +371,10 @@ on (`--no-js` turns it off), `dump` with `--js`.
   as if in view.
 - *Event loop:* timers (ordered by due time, then by scheduling) and
   microtasks after every task. Time is virtual for `dump` and the agent
-  (the loop jumps to the next timer; `dump --js` runs until no timer is
+  (the loop jumps to the next timer, and inside a task the clock moves
+  1 ms per million steps, so a scheduler that runs until `Date.now()`
+  passes a deadline yields; `STEPS_PER_MS`, `engine/script.ore`;
+  `dump --js` runs until no timer is
   left, at most 30 s of page time) and real in the window, whose
   `SDL_WaitEventTimeout` wakes for the next timer. Clicks and keys
   (window, agent) fire their events first and skip the default action
@@ -386,16 +390,21 @@ on (`--no-js` turns it off), `dump` with `--js`.
   Only a page that listens for the window's or document's `scroll` or
   observes intersections (`watches_scroll`) is then stepped down, one
   viewport height at a time (firing `scroll`) with 500 ms after each,
-  until the bottom is shown and the document stopped growing, or after
-  20 steps (`--scroll-steps N`; `--no-scroll` turns it off). After a
+  until the bottom is shown and the document stopped growing, after 2
+  growth rounds, or after 20 steps (`--scroll-steps N`; `--no-scroll`
+  turns it off). A growth round is a step after which the content
+  changed and the document is at least half a viewport taller
+  (`SCROLL_GROWTH_ROUNDS`): an endless feed stops there, since a dump
+  reads what a reader sees near the top (youtube-search loaded ~10 more
+  pages of results before; `jsdom/endless_feed.html`), while a page that
+  loads its lazy content once still scrolls to the bottom. After a
   step that changed no text or element (`contentSignature`), it stops
   if nothing changed since the load; else it jumps once to the bottom
   (where an infinite list loads more) and stops if that changed
   nothing either.
   The window then goes back to the top at once, without the page
   reacting, so content it would drop out of view stays in the dump. It
-  is deterministic (virtual time); a page that grows on every scroll
-  ends at the cap. The agent's `read` and `snapshot` do not scroll:
+  is deterministic (virtual time). The agent's `read` and `snapshot` do not scroll:
   an agent scrolls with `scroll`, then `wait`. After scripts changed the document (`domVersion`),
   the front end styles (style sheets parsed again) and lays out again;
   a navigation they asked for (`takeNavigation`) happens then.
@@ -405,9 +414,11 @@ on (`--no-js` turns it off), `dump` with `--js`.
 - *Stack:* page scripts run on the main thread, so a task may use 5 MB
   of its stack and nest 3000 calls (a RangeError beyond).
 - *Budget:* a task (a script, a timer callback, an event, the
-  microtasks of a checkpoint) that uses more than 2 s of processor time
-  or 100M steps
-  ends with a console error, which no `catch` or `finally` sees.
+  microtasks of a checkpoint) that uses more than 100M steps (in the
+  window also 2 s of processor time; on the virtual clock steps alone,
+  so where a task ends does not depend on the machine's load, with a
+  120 s backstop) ends with a console error, which no `catch` or
+  `finally` sees.
 
 ### B7: Agent interface
 
@@ -477,7 +488,11 @@ on (`--no-js` turns it off), `dump` with `--js`.
     `fixed` (out of flow, laid out last in the containing block);
     `display: grid` (track lists with `fr`, `minmax`, `repeat`, areas,
     line placement, auto-placement); replaced boxes (svg, iframe,
-    embed, object, video, canvas) sized 300x150 by default; z-index
+    embed, object, video, canvas) sized 300x150 by default, their
+    `width`/`height` attributes presentational hints (any author value
+    wins; `img` and `video` also get `aspect-ratio: auto W / H`), min
+    and max sizes by the full CSS 2.1 §10.4 table, keeping the ratio
+    (`layout/replaced_sizing.html`, `layout/replaced_minmax.html`); z-index
     layers in paint and hit testing; frames shown as links; a closed
     `details` shows only its `summary`.
   - *JavaScript:* generators and async functions, Symbol and the
@@ -492,7 +507,13 @@ on (`--no-js` turns it off), `dump` with `--js`.
     [`browser/js/BIGINT.md`](../browser/js/BIGINT.md)).
     `Object.defineProperty` follows ValidateAndApplyPropertyDescriptor:
     a generic descriptor keeps an accessor, a non-configurable property
-    changes only as the spec allows (`js/builtins.ore`, 249–250). ES modules
+    changes only as the spec allows (`js/builtins.ore`, 249–250).
+    ToPropertyDescriptor checks run before any definition (a
+    non-callable getter, value mixed with get/set); `Reflect`'s boolean
+    methods return false only for a rejected operation and throw for a
+    non-object target (251); `setPrototypeOf` rejects cycles,
+    non-extensible objects and immutable prototypes, `Object.` and
+    `__proto__` throwing, `Reflect.` returning false (252). ES modules
     (`js/modules.ore`, `js/lib.ore`): static imports and exports,
     `import()`, `import.meta`, cycles as cyclic module records (TDZ,
     top-level await), every re-export form with `export *` ambiguity,
@@ -509,7 +530,9 @@ on (`--no-js` turns it off), `dump` with `--js`.
     select `add`/`remove`/`options`/`selectedIndex`, `:scope`,
     `performance` timing/navigation/mark/measure, live collections,
     `document.write` while parsing, TreeWalker/NodeIterator, Range,
-    DOMParser, Blob/File/FileReader, FormData, MessageChannel,
+    DOMParser (through the HTML parser; parsed nodes keep their node
+    document until inserted elsewhere, which adopts the whole subtree;
+    `jsdom/dom_parser.html`), Blob/File/FileReader, FormData, MessageChannel,
     constructable style sheets, `a` URL parts, Navigator;
     `getComputedStyle` styles only the element and its ancestors;
     `document.baseURI` and `Node.baseURI`. Custom elements (upgrades,
@@ -530,8 +553,12 @@ on (`--no-js` turns it off), `dump` with `--js`.
     react.dev, YouTube, go.dev, BBC, Google, ZOL) log no errors.
   - *Fetch and XHR* (`engine/prelude.ore`, `net/http.ore`): `Request`,
     `Headers` (every method, sorted iteration, `set-cookie` kept
-    apart), and the body (`text()`, `json()`, `bodyUsed`) shared by
-    Request and Response. `fetch` and `XMLHttpRequest` (`send(body)`,
+    apart), and the body mixin shared by Request and Response (`text()`,
+    `json()`, `arrayBuffer()`, `blob()`, `formData()` of multipart and
+    urlencoded bodies, `bodyUsed`, `body` as a minimal `ReadableStream`
+    with `getReader`, and `tee` for `clone()` of either;
+    `jsdom/body_mixin.html`);
+    `new Response(body, init)` takes the standard arguments. `fetch` and `XMLHttpRequest` (`send(body)`,
     `setRequestHeader`) send any method, request headers and a string,
     URLSearchParams, FormData, Blob or ArrayBuffer body with its
     Content-Type default; redirects follow the Fetch method rules (a
@@ -540,7 +567,9 @@ on (`--no-js` turns it off), `dump` with `--js`.
     `net/xhr_methods.html`.
   - *Session history* (`engine/history.ore`, `engine/tab.ore`): one
     history per tab and per frame; `pushState`/`replaceState` add or
-    change entries without loading, back and forward within a document
+    change entries without loading (an empty URL resolves to the base
+    URL, dropping the fragment; an omitted or null one keeps the URL),
+    back and forward within a document
     fire `popstate` (and `hashchange` when the fragment changed),
     `history.length`, `state` and `scrollRestoration`. The agent's
     `url` follows (`docs/agent-protocol.md`).
@@ -652,5 +681,21 @@ on (`--no-js` turns it off), `dump` with `--js`.
     wall time, CPU time and load average; `check` replays every site
     against `browser/tools/sites.json` (status, most console errors,
     Markdown it must contain), `check --agent` also runs one agent task
-    per site (`browser/tools/agent_tasks/`). Details and numbers in
+    per site (`browser/tools/agent_tasks/`). Capture also records what
+    the `--screens` screenshot fetches (web fonts, images); on replay a
+    non-GET request without a record of its body gets the latest
+    response recorded for its URL ("archive fallback:"), so moved
+    beacons do not fail a replay; `--screens` paints a contact sheet
+    (`target/screens/index.html`), `run --live` loads from the network,
+    `rebless --site X` stores today's replay as the archive's reference
+    after an intended dump change, and `capture` refuses a page that
+    misses its `sites.json` strings. Details and numbers in
     [`browser/engine/PERF.md`](../browser/engine/PERF.md).
+  - *Performance on big pages:* layout changes deduplicated before the
+    full-restyle cap (4096), the ancestor filter outside shadow trees, a
+    rule index of its own for `::before`/`::after`, computed-style
+    arrays shared between elements with equal values, a hash index for
+    Map and Set keys, a shape table of 262144 shapes, and the document
+    base URL cached per document. youtube-search CPU ~77 s → ~11.6 s
+    (with the scroll budget above); a 40K-element page's peak RSS 5.58 →
+    1.99 GB.
