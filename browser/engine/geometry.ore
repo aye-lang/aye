@@ -212,9 +212,17 @@ fn geometry(s: *mut Script) AllocError!*mut Geometry {
     defer perf.end("script_layout", began, p.url.href)
     let st = try computedStyling(s)
     if s.geom |g| {
-        let fresh = restyle(s, g, st) catch |e| {
-            dropGeometry(s)
-            return e
+        var fresh = sameStyles(s, g, st)
+        if fresh {
+            // Nothing the styles depend on changed (a class no rule
+            // names): only the layout is done again.
+            s.restyle.clear()
+            s.restyle_all = false
+        } else {
+            fresh = restyle(s, g, st) catch |e| {
+                dropGeometry(s)
+                return e
+            }
         }
         if fresh {
             dropTree(s, g)
@@ -263,6 +271,30 @@ fn geometry(s: *mut Script) AllocError!*mut Geometry {
     s.geom = g
     followScroll(s, g)
     return g
+}
+
+// Are the styles of `g` still those of the document, for the sheets of
+// `st` and the window's size (`stylesCurrent`)?
+fn sameStyles(s: *mut Script, g: *Geometry, st: *Styling) bool {
+    return g.width == s.width && g.height == s.height && g.styling == st && g.sheets == s.computed_sheets && stylesCurrent(&s.page.doc, st.media, g.styles)
+}
+
+/// The styles of the layout scripts read, when they are those of the
+/// document as it is now for the sheets of `st` and `media`
+/// (`stylesCurrent`): taken out of it, and that layout dropped (the
+/// next one computes them again). Null otherwise.
+fn takeGeometryStyles(s: *mut Script, st: *Styling, media: css.Media) ?css.Styles {
+    let g = s.geom orelse return null
+    if g.styling != st || g.width != media.width || g.height != media.height || g.sheets != s.computed_sheets || !stylesCurrent(&s.page.doc, media, g.styles) {
+        return null
+    }
+    let styles = g.styles.*
+    s.alloc.destroy(g.styles)
+    dropTree(s, g)
+    g.deps.deinit()
+    s.alloc.destroy(g)
+    s.geom = null
+    return styles
 }
 
 // Brings the styles of `g` up to date for the changes noted since

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<title>Layout after changes the styles may not see</title>
+<style>
+body { margin: 0; font-size: 10px }
+/* :has() of a following sibling: the styles are computed again whole. */
+.item:has(+ .last) { height: 3px }
+.item { height: 10px; width: 20px }
+.wide .item { width: 50px }
+[data-mode=x] .item { height: 12px }
+input { width: 40px; height: 6px; border: 0; padding: 0 }
+input:placeholder-shown { width: 30px }
+:focus { margin-left: 4px }
+.CamelCase { width: 9px }
+b:not([class]) { display: inline-block; width: 5px }
+[class^=pre-] { display: inline-block; width: 11px }
+</style>
+<div id="list"><div class="item" id="i1"></div><div class="item" id="i2"></div><div class="item last" id="i3"></div></div>
+<div id="tags"><b id="b1">x</b><i id="i5">y</i></div>
+<div id="form"><input id="in" placeholder="name"></div>
+<pre id="out"></pre>
+<script>
+// Logged at the end: writing to the page would change it between steps.
+const lines = [];
+function log(...parts) { lines.push(parts.join(' ')); }
+const $ = id => document.getElementById(id);
+// Every element's box (read after each change, as a framework does).
+function boxes() {
+  return [...document.body.querySelectorAll('*')].filter(e => e.id && e.id !== 'out').map(e => e.id + ':' + [e.offsetLeft, e.offsetTop, e.offsetWidth, e.offsetHeight].join(',')).join(' ');
+}
+const steps = [
+  ['class no rule names', () => $('list').classList.add('nobody')],
+  ['class a rule names', () => $('list').classList.add('wide')],
+  ['another class no rule names', () => $('i1').classList.add('loaded')],
+  ['class off again', () => $('list').classList.remove('wide')],
+  ['class in another case', () => $('i2').classList.add('camelcase')],
+  ['class in its case', () => $('i2').classList.add('CamelCase')],
+  ['class no rule names, last', () => $('i3').classList.add('other')],
+  ['last off', () => $('i3').classList.remove('last')],
+  ['attribute', () => $('list').dataset.mode = 'x'],
+  ['first class, on another type', () => $('i5').classList.add('nobody')],
+  ['first class, on the type', () => $('b1').classList.add('nobody')],
+  ['class a prefix selector matches', () => { $('i5').className = 'pre-x nobody'; }],
+  ['value', () => { $('in').value = 'x'; }],
+  ['value again', () => { $('in').value = ''; }],
+  ['focus', () => $('in').focus()],
+  ['blur', () => $('in').blur()],
+  ['style attribute', () => { $('i1').style.width = '7px'; }],
+];
+log('start', boxes());
+for (const [name, change] of steps) {
+  change();
+  log(name, boxes());
+}
+document.getElementById('out').textContent = lines.join('\n') + '\n';
+</script>

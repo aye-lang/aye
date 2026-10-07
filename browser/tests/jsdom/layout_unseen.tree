@@ -1,0 +1,31 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Layout after changes the styles may not see"
+      "\n"
+      <style>
+        "\nbody { margin: 0; font-size: 10px }\n/* :has() of a following sibling: the styles are computed again whole. */\n.item:has(+ .last) { height: 3px }\n.item { height: 10px; width: 20px }\n.wide .item { width: 50px }\n[data-mode=x] .item { height: 12px }\ninput { width: 40px; height: 6px; border: 0; padding: 0 }\ninput:placeholder-shown { width: 30px }\n:focus { margin-left: 4px }\n.CamelCase { width: 9px }\nb:not([class]) { display: inline-block; width: 5px }\n[class^=pre-] { display: inline-block; width: 11px }\n"
+      "\n"
+    <body>
+      <div id="list" class="nobody" data-mode="x">
+        <div class="item loaded" id="i1" style="width: 7px;">
+        <div class="item camelcase CamelCase" id="i2">
+        <div class="item other" id="i3">
+      "\n"
+      <div id="tags">
+        <b id="b1" class="nobody">
+          "x"
+        <i id="i5" class="pre-x nobody">
+          "y"
+      "\n"
+      <div id="form">
+        <input id="in" placeholder="name">
+      "\n"
+      <pre id="out">
+        "start list:0,0,800,23 i1:0,0,20,10 i2:0,10,20,3 i3:0,13,20,10 tags:0,23,800,13 b1:0,23,5,13 i5:5,24,5,10 form:0,36,800,16 in:0,36,30,6\nclass no rule names list:0,0,800,23 i1:0,0,20,10 i2:0,10,20,3 i3:0,13,20,10 tags:0,23,800,13 b1:0,23,5,13 i5:5,24,5,10 form:0,36,800,16 in:0,36,30,6\nclass a rule names list:0,0,800,23 i1:0,0,50,10 i2:0,10,50,3 i3:0,13,50,10 tags:0,23,800,13 b1:0,23,5,13 i5:5,24,5,10 form:0,36,800,16 in:0,36,30,6\nanother class no rule names list:0,0,800,23 i1:0,0,50,10 i2:0,10,50,3 i3:0,13,50,10 tags:0,23,800,13 b1:0,23,5,13 i5:5,24,5,10 form:0,36,800,16 in:0,36,30,6\nclass off again list:0,0,800,23 i1:0,0,20,10 i2:0,10,20,3 i3:0,13,20,10 tags:0,23,800,13 b1:0,23,5,13 i5:5,24,5,10 form:0,36,800,16 in:0,36,30,6\nclass in another case list:0,0,800,23 i1:0,0,20,10 i2:0,10,20,3 i3:0,13,20,10 tags:0,23,800,13 b1:0,23,5,13 i5:5,24,5,10 form:0,36,800,16 in:0,36,30,6\nclass in its case list:0,0,800,23 i1:0,0,20,10 i2:0,10,9,3 i3:0,13,20,10 tags:0,23,800,13 b1:0,23,5,13 i5:5,24,5,10 form:0,36,800,16 in:0,36,30,6\nclass no rule names, last list:0,0,800,23 i1:0,0,20,10 i2:0,10,9,3 i3:0,13,20,10 tags:0,23,800,13 b1:0,23,5,13 i5:5,24,5,10 form:0,36,800,16 in:0,36,30,6\nlast off list:0,0,800,30 i1:0,0,20,10 i2:0,10,9,10 i3:0,20,20,10 tags:0,30,800,13 b1:0,30,5,13 i5:5,31,5,10 form:0,43,800,16 in:0,43,30,6\nattribute list:0,0,800,36 i1:0,0,20,12 i2:0,12,9,12 i3:0,24,20,12 tags:0,36,800,13 b1:0,36,5,13 i5:5,37,5,10 form:0,49,800,16 in:0,49,30,6\nfirst class, on another type list:0,0,800,36 i1:0,0,20,12 i2:0,12,9,12 i3:0,24,20,12 tags:0,36,800,13 b1:0,36,5,13 i5:5,37,5,10 form:0,49,800,16 in:0,49,30,6\nfirst class, on the type list:0,0,800,36 i1:0,0,20,12 i2:0,12,9,12 i3:0,24,20,12 tags:0,36,800,13 b1:0,37,5,10 i5:5,37,5,10 form:0,49,800,16 in:0,49,30,6\nclass a prefix selector matches list:0,0,800,36 i1:0,0,20,12 i2:0,12,9,12 i3:0,24,20,12 tags:0,36,800,13 b1:0,37,5,10 i5:5,36,11,13 form:0,49,800,16 in:0,49,30,6\nvalue list:0,0,800,36 i1:0,0,20,12 i2:0,12,9,12 i3:0,24,20,12 tags:0,36,800,13 b1:0,37,5,10 i5:5,36,11,13 form:0,49,800,16 in:0,49,40,6\nvalue again list:0,0,800,36 i1:0,0,20,12 i2:0,12,9,12 i3:0,24,20,12 tags:0,36,800,13 b1:0,37,5,10 i5:5,36,11,13 form:0,49,800,16 in:0,49,30,6\nfocus list:0,0,800,36 i1:0,0,20,12 i2:0,12,9,12 i3:0,24,20,12 tags:0,36,800,13 b1:0,37,5,10 i5:5,36,11,13 form:0,49,800,16 in:0,49,30,6\nblur list:0,0,800,36 i1:0,0,20,12 i2:0,12,9,12 i3:0,24,20,12 tags:0,36,800,13 b1:0,37,5,10 i5:5,36,11,13 form:0,49,800,16 in:0,49,30,6\nstyle attribute list:0,0,800,36 i1:0,0,7,12 i2:0,12,9,12 i3:0,24,20,12 tags:0,36,800,13 b1:0,37,5,10 i5:5,36,11,13 form:0,49,800,16 in:0,49,30,6\n"
+      "\n"
+      <script>
+        "\n// Logged at the end: writing to the page would change it between steps.\nconst lines = [];\nfunction log(...parts) { lines.push(parts.join(' ')); }\nconst $ = id => document.getElementById(id);\n// Every element's box (read after each change, as a framework does).\nfunction boxes() {\n  return [...document.body.querySelectorAll('*')].filter(e => e.id && e.id !== 'out').map(e => e.id + ':' + [e.offsetLeft, e.offsetTop, e.offsetWidth, e.offsetHeight].join(',')).join(' ');\n}\nconst steps = [\n  ['class no rule names', () => $('list').classList.add('nobody')],\n  ['class a rule names', () => $('list').classList.add('wide')],\n  ['another class no rule names', () => $('i1').classList.add('loaded')],\n  ['class off again', () => $('list').classList.remove('wide')],\n  ['class in another case', () => $('i2').classList.add('camelcase')],\n  ['class in its case', () => $('i2').classList.add('CamelCase')],\n  ['class no rule names, last', () => $('i3').classList.add('other')],\n  ['last off', () => $('i3').classList.remove('last')],\n  ['attribute', () => $('list').dataset.mode = 'x'],\n  ['first class, on another type', () => $('i5').classList.add('nobody')],\n  ['first class, on the type', () => $('b1').classList.add('nobody')],\n  ['class a prefix selector matches', () => { $('i5').className = 'pre-x nobody'; }],\n  ['value', () => { $('in').value = 'x'; }],\n  ['value again', () => { $('in').value = ''; }],\n  ['focus', () => $('in').focus()],\n  ['blur', () => $('in').blur()],\n  ['style attribute', () => { $('i1').style.width = '7px'; }],\n];\nlog('start', boxes());\nfor (const [name, change] of steps) {\n  change();\n  log(name, boxes());\n}\ndocument.getElementById('out').textContent = lines.join('\\n') + '\\n';\n"
+      "\n"
