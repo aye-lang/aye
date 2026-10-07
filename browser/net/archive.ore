@@ -6,11 +6,16 @@
 // `data:` URLs hold their response: they are neither recorded nor
 // looked up. With both ANYKNOWN_REPLAY and ANYKNOWN_RECORD set, recorded
 // responses are served and only misses are fetched and recorded.
+// Replay matches a GET exactly; a non-GET request without an exact match
+// falls back to a recorded non-GET response for its URL (`fallback`).
 import std
 import std.mem.AllocError
 import std.mem.Allocator
 import std.text
 import url.Url
+
+let dirent = @cimport("dirent.h")
+let sysstat = @cimport("sys/stat.h")
 
 fn archiveDir(name: []u8) ?[]u8 {
     if getenv(name.ptr) |p| {
@@ -70,10 +75,107 @@ pub fn archiveRead(alloc: Allocator, target: *Url, req: Request) FetchError!?Res
         if archiveDir("ANYKNOWN_RECORD") != null {
             return null
         }
+        if try fallback(alloc, dir, target, req) |res| {
+            std.log.err("archive fallback: {}", target.withoutFragment())
+            return res
+        }
         std.log.err("archive miss: {}", target.withoutFragment())
         return FetchError.NotFound
     }
     defer alloc.free(bytes)
+    return try parseArchived(alloc, target, bytes)
+}
+
+// A non-GET request (a beacon such as YouTube's POST log_event) whose body
+// has no record gets the most recently recorded non-GET response for its
+// URL, whatever that body was (P1.12): when such beacons fire follows the
+// interpreter's step count, so an engine change adds or moves one. A
+// record's method is only in the hash of its file name, so any non-GET
+// record of the URL answers; a GET is still matched exactly.
+fn fallback(alloc: Allocator, dir: []u8, target: *Url, req: Request) FetchError!?Response {
+    if req.method.len == 0 && req.body == null || text.eql(req.method, "GET") {
+        return null
+    }
+    let url = target.withoutFragment()
+    // The URL's GET record, which must not answer.
+    let get = try archivePath(alloc, dir, target, Request {})
+    defer alloc.free(get)
+    var cdir = text.Builder.init(alloc)
+    defer cdir.deinit()
+    try cdir.append(dir)
+    try cdir.appendByte(0)
+    let handle = dirent.opendir(cdir.bytes().ptr) orelse return null
+    defer dirent.closedir(handle)
+    var best = text.Builder.init(alloc)
+    defer best.deinit()
+    var best_sec: i64 = 0
+    var best_nsec: i64 = 0
+    while dirent.readdir(handle) |entry| {
+        let name = entry.d_name[0..entry.d_namlen as usize]
+        if !text.endsWith(name, ".response") {
+            continue
+        }
+        var path = text.Builder.init(alloc)
+        defer path.deinit()
+        try path.append(dir)
+        try path.appendByte('/')
+        try path.append(name)
+        if text.eql(path.bytes(), get) || !try recordsUrl(alloc, path.bytes(), url) {
+            continue
+        }
+        try path.appendByte(0)
+        var info = @zeroed(sysstat.struct_stat)
+        if sysstat.stat(path.bytes().ptr, &mut info) != 0 {
+            continue
+        }
+        let sec = info.st_mtimespec.tv_sec as i64
+        let nsec = info.st_mtimespec.tv_nsec as i64
+        let file = path.bytes()[0..path.bytes().len - 1]
+        // The latest; of equal times the greater name, so that the choice
+        // does not follow the directory's order.
+        if best.bytes().len == 0 || sec > best_sec || sec == best_sec && (nsec > best_nsec || nsec == best_nsec && sortsAfter(file, best.bytes())) {
+            best.clear()
+            try best.append(file)
+            best_sec = sec
+            best_nsec = nsec
+        }
+    }
+    if best.bytes().len == 0 {
+        return null
+    }
+    let bytes = std.fs.readFile(alloc, best.bytes()) catch |e| { return FetchError.ReadFailed }
+    defer alloc.free(bytes)
+    return try parseArchived(alloc, target, bytes)
+}
+
+// Whether `a` sorts after `b`, byte by byte.
+fn sortsAfter(a: []u8, b: []u8) bool {
+    for i in 0..a.len {
+        if i == b.len || a[i] != b[i] {
+            return i == b.len || a[i] > b[i]
+        }
+    }
+    return false
+}
+
+// Whether the record at PATH is of URL (its first line).
+fn recordsUrl(alloc: Allocator, path: []u8, url: []u8) AllocError!bool {
+    let file = std.fs.open(path) catch |e| { return false }
+    defer file.close()
+    let buf = try alloc.alloc(0 as u8, url.len + 1)
+    defer alloc.free(buf)
+    var n: usize = 0
+    while n < buf.len {
+        let got = file.read(buf[n..]) catch |e| { return false }
+        if got == 0 {
+            return false
+        }
+        n += got
+    }
+    return text.eql(buf[0..url.len], url) && buf[url.len] == '\n'
+}
+
+fn parseArchived(alloc: Allocator, target: *Url, bytes: []u8) FetchError!Response {
     var fields = [6][]u8{"", "", "", "", "", ""}
     var at: usize = 0
     for i in 0..fields.len {

@@ -118,8 +118,14 @@ def run(binary, url, directory, record=False, sample=None, screenshot=False, liv
             phases[phase] = phases.get(phase, 0.0) + seconds
     if screenshot:
         stdout = (directory / "paint.png").read_bytes()
-    return {"wall": wall, "cpu": cpu, "load": load, "phases": phases, "sha256": hashlib.sha256(stdout).hexdigest(),
-            "bytes": len(stdout), "top_scripts": sorted(scripts, key=lambda x: -x["seconds"])[:5]}
+    result = {"wall": wall, "cpu": cpu, "load": load, "phases": phases, "sha256": hashlib.sha256(stdout).hexdigest(),
+              "bytes": len(stdout), "top_scripts": sorted(scripts, key=lambda x: -x["seconds"])[:5]}
+    # Non-GET requests whose body has no record, answered by another body's record.
+    fallbacks = [line.split("archive fallback:", 1)[1].strip() for line in stderr.splitlines()
+                 if "archive fallback:" in line]
+    if fallbacks:
+        result["fallbacks"] = fallbacks
+    return result
 
 
 def summarize(runs):
@@ -395,8 +401,8 @@ def agent_task(binary, url, directory, steps, record=False):
             process.wait()
         stderr.seek(0)
         problems = [line for line in stderr.read().decode(errors="replace").splitlines()
-                    if "archive miss:" in line or "cannot record archive:" in line]
-    # Misses are reported, not judged: beacons whose URLs hold Math.random or depend on
+                    if "archive miss:" in line or "archive fallback:" in line or "cannot record archive:" in line]
+    # Misses (and fallbacks) are reported, not judged: beacons whose URLs hold Math.random or depend on
     # the order scripts loaded in live differ between the capture and the replay.
     note = problems[0].strip() + (f" (+{len(problems) - 1} more)" if len(problems) > 1 else "") if problems else None
     return (f"{label}: {failure}" if failure else None), note
@@ -451,6 +457,8 @@ def check(args, sites):
         count = f"{len(errors)}/{expect['max_errors']}"
         print(f"{name:<14} {expect['status']:<9} {count:>6} {result['wall']:6.2f}s {result['cpu']:6.2f}s "
               f"{result['load']:5.1f}  {task:<5}  {verdict:<6}  {', '.join(map(repr, missing)) or '-'}", flush=True)
+        if result.get("fallbacks"):
+            print(f"  fallback: {len(result['fallbacks'])} non-GET requests, first {result['fallbacks'][0]}", flush=True)
         if task_failure:
             print(f"  task: {task_failure}", flush=True)
         elif steps and known:
