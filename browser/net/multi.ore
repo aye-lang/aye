@@ -84,8 +84,14 @@ pub fn prefetch(alloc: Allocator, hrefs: []u8, kind: Kind, referrer: []u8) {
         if curl_multi_perform(m, &mut running) != 0 {
             break
         }
+        // The background loads go on meanwhile (loader.ore).
+        pumpLoads()
         if running > 0 {
-            curl_multi_poll(m, null, 0, 1000, null)
+            var wait: i32 = 1000
+            if loadsRunning() {
+                wait = 10
+            }
+            curl_multi_poll(m, null, 0, wait, null)
         }
     }
     var left: i32 = 0
