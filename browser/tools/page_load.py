@@ -2,6 +2,7 @@
 """Capture exact browser responses, replay offline, summarize phase traces, and check sites.json."""
 import argparse
 import hashlib
+import html
 import json
 import os
 from pathlib import Path
@@ -57,14 +58,20 @@ TASKS = Path(__file__).with_name("agent_tasks")
 SNAPSHOT_REF = re.compile(r'\s*- (\S+)(?: "((?:[^"\\]|\\.)*)")?.*? \[(e\d+)\](?:.*? -> (\S+))?')
 # Below this CPU/wall ratio the machine was too busy for wall time to mean anything.
 BUSY_RATIO = 0.8
+# --screens: the contact sheet, and the viewport of each screenshot (its first 2000 px).
+SCREENS = Path("target/screens")
+SCREEN_SIZE = ("1280", "2000")
+# run --live: where each site's last output goes (there is no archive).
+LIVE = Path("target/live")
 
 
-def run(binary, url, directory, record=False, sample=None, screenshot=False):
+def run(binary, url, directory, record=False, sample=None, screenshot=False, live=False):
     env = dict(os.environ, ANYKNOWN_TIMING="1", ANYKNOWN_BENCHMARK="1")
     env.pop("ANYKNOWN_COOKIE_FILE", None)
     env.pop("ANYKNOWN_RECORD", None)
     env.pop("ANYKNOWN_REPLAY", None)
-    env["ANYKNOWN_RECORD" if record else "ANYKNOWN_REPLAY"] = str(directory.resolve())
+    if not live:
+        env["ANYKNOWN_RECORD" if record else "ANYKNOWN_REPLAY"] = str(directory.resolve())
     command = [str(binary.resolve()), "dump", "--md", "--js", url]
     if screenshot:
         command = [str(binary.resolve()), "screenshot", url, "-o",
@@ -144,6 +151,68 @@ def print_result(name, result):
         print(warning)
 
 
+def screen(binary, name, url, directory, live=False):
+    """Paints url (replayed from directory, or live) into SCREENS/<name>.png; returns
+    what went wrong (exit status, archive misses), empty when nothing did."""
+    SCREENS.mkdir(parents=True, exist_ok=True)
+    out = SCREENS / f"{name}.png"
+    out.unlink(missing_ok=True)
+    env = dict(os.environ, ANYKNOWN_BENCHMARK="1")
+    for variable in ("ANYKNOWN_COOKIE_FILE", "ANYKNOWN_RECORD", "ANYKNOWN_REPLAY", "ANYKNOWN_TIMING"):
+        env.pop(variable, None)
+    if not live:
+        env["ANYKNOWN_REPLAY"] = str(directory.resolve())
+    command = [str(binary.resolve()), "screenshot", url, "-o", str(out.resolve()),
+               "--width", SCREEN_SIZE[0], "--height", SCREEN_SIZE[1]]
+    try:
+        process = subprocess.run(command, capture_output=True, env=env, timeout=300)
+    except subprocess.TimeoutExpired:
+        return ["screenshot: timeout after 300 s"]
+    lines = process.stderr.decode(errors="replace").splitlines()
+    notes = []
+    if process.returncode:
+        notes.append(f"screenshot: exit {process.returncode}: {lines[-1].strip() if lines else ''}")
+    misses = [line for line in lines if "archive miss:" in line]
+    if misses:
+        notes.append(f"screenshot: {len(misses)} archive misses, first {misses[0].strip()}")
+    return notes
+
+
+def contact_sheet(entries, mode):
+    """Writes SCREENS/index.html: one labelled thumbnail per site, linking to its image."""
+    head = subprocess.run(["git", "log", "-1", "--format=%h %s"], capture_output=True, text=True).stdout.strip()
+    cells = []
+    for name, entry in entries.items():
+        image = SCREENS / f"{name}.png"
+        picture = (f'<a href="{name}.png"><img src="{name}.png" loading="lazy" alt="{name}"></a>'
+                   if image.exists() else '<div class="none">no image</div>')
+        notes = "".join(f"<li>{html.escape(note)}</li>" for note in entry["notes"])
+        cells.append(f'<figure class="{html.escape(entry["verdict"])}">{picture}<figcaption>'
+                     f'<b>{name}</b> <span>{html.escape(entry["status"])}</span> '
+                     f'<span>{html.escape(entry["verdict"])}</span> <span>{html.escape(entry["errors"])}</span>'
+                     f'<ul>{notes}</ul></figcaption></figure>')
+    SCREENS.joinpath("index.html").write_text(f"""<!doctype html>
+<meta charset="utf-8"><title>anyknown sites</title>
+<style>
+body {{ font: 13px system-ui, sans-serif; margin: 16px; background: #fff; color: #111; }}
+main {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }}
+figure {{ margin: 0; border: 1px solid #ccc; padding: 6px; }}
+figure.FAIL {{ border-color: #c00; }}
+img {{ width: 100%; height: 500px; object-fit: cover; object-position: top; display: block; border: 1px solid #eee; }}
+.none {{ height: 500px; display: grid; place-items: center; background: #f4f4f4; }}
+span {{ margin-left: 6px; color: #555; }}
+ul {{ margin: 4px 0 0; padding-left: 16px; color: #a00; word-break: break-word; }}
+</style>
+<h1>anyknown sites</h1>
+<p>{html.escape(mode)} at {html.escape(head)}, {time.strftime("%Y-%m-%d %H:%M")};
+{SCREEN_SIZE[0]} px wide, the first {SCREEN_SIZE[1]} px. Click a thumbnail for the full image.</p>
+<main>
+{chr(10).join(cells)}
+</main>
+""")
+    print(f"contact sheet: {SCREENS / 'index.html'}", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("capture", "run", "check"),
@@ -159,11 +228,17 @@ def main():
     parser.add_argument("--sample", action="store_true", help="macOS sample of the first replay")
     parser.add_argument("--screenshot", action="store_true", help="benchmark the screenshot CLI instead (fixed font, separate output hash)")
     parser.add_argument("--agent", action="store_true", help="check: also run each site's task of agent_tasks/")
+    parser.add_argument("--screens", action="store_true",
+                        help=f"screenshot each site into {SCREENS}/ and write the contact sheet {SCREENS}/index.html")
+    parser.add_argument("--live", action="store_true",
+                        help=f"run: load each site from the network, not an archive (output in {LIVE}/)")
     args = parser.parse_args()
     if args.repeat < 1 or args.warmup < 0:
         parser.error("--repeat must be positive and --warmup nonnegative")
     if args.mode == "capture" and (args.compare or args.screenshot or args.sample):
         parser.error("capture always records Markdown; compare, screenshot and sample are replay options")
+    if args.live and args.mode != "run":
+        parser.error("--live is a run option")
     names = [name for value in args.site or () for name in value.split(",") if name]
     for name in names:
         if name != "all" and name not in SITES:
@@ -176,16 +251,25 @@ def main():
         return check(args, sites)
     results = {}
     failures = {}
+    screens = {}
+    expectations = json.loads(EXPECTATIONS.read_text())["sites"]
     for name in sites:
         try:
             result = load_site(args, name)
         except (RuntimeError, OSError) as error:
             failures[name] = str(error).splitlines()[0]
             print(f"{name}: FAILED: {error}", flush=True)
-            continue
-        results[name] = result
-    print("\nSeconds (medians; cpu = user+sys of the browser, load = 1-minute average);\n"
-          "nested phases are wall time and overlap, do not sum columns:")
+        else:
+            results[name] = result
+        if args.screens:
+            notes = [failures[name]] if name in failures else []
+            screens[name] = {"status": expectations[name]["status"], "verdict": "FAIL" if name in failures else "ok",
+                             "errors": "", "notes": notes + screen(args.binary, name, SITES[name],
+                                                                   args.archive / name, args.live)}
+    if args.screens:
+        contact_sheet(screens, "run --live" if args.live else "run")
+    print(f"\nSeconds ({'live, ' if args.live else ''}medians; cpu = user+sys of the browser, "
+          "load = 1-minute average);\nnested phases are wall time and overlap, do not sum columns:")
     print("site                wall    cpu  load " + " ".join(f"{p:>12}" for p in PHASES))
     for name in sites:
         if name in failures:
@@ -329,10 +413,12 @@ def check(args, sites):
         raise SystemExit(f"{EXPECTATIONS}: sites differ from SITES: {sorted(set(expectations) ^ set(SITES))}")
     print(f"{'site':<14} {'status':<9} {'errors':>6} {'wall':>7} {'cpu':>7} {'load':>5}  task   result  missing", flush=True)
     failed = []
+    screens = {}
     for name in sites:
         expect = expectations[name]
         judged = expect["status"] != "excluded"
         directory = args.archive / name
+        url = SITES[name]
         try:
             url = json.loads((directory / "manifest.json").read_text())["url"]
             result = run(args.binary, url, directory)
@@ -343,6 +429,9 @@ def check(args, sites):
                   f"{'FAIL' if judged else 'skip':<6}  {str(error).splitlines()[0]}", flush=True)
             if judged:
                 failed.append(name)
+            if args.screens:
+                screens[name] = {"status": expect["status"], "verdict": "FAIL" if judged else "skip", "errors": "",
+                                 "notes": [str(error).splitlines()[0]] + screen(args.binary, name, url, directory)}
             continue
         missing = [text for text in expect["md"] if text not in markdown]
         steps = task_steps(name) if args.agent else None
@@ -370,13 +459,21 @@ def check(args, sites):
         if len(errors) > expect["max_errors"]:
             for entry in errors:
                 print(f"  {entry.splitlines()[0][:200]}")
+        if args.screens:
+            notes = [f"missing {', '.join(map(repr, missing))}"] if missing else []
+            notes += [f"task: {task_failure}"] if task_failure else []
+            notes += [entry.splitlines()[0][:200] for entry in errors]
+            screens[name] = {"status": expect["status"], "verdict": verdict, "errors": f"{count} console errors",
+                             "notes": notes + screen(args.binary, name, url, directory)}
+    if args.screens:
+        contact_sheet(screens, "check")
     if failed:
         raise SystemExit(f"{len(failed)} of {len(sites)} sites miss their expectations: {', '.join(failed)}")
 
 
 def load_site(args, name):
     """Capture or replay one site; returns its result for the table."""
-    directory = args.archive / name
+    directory = (LIVE if args.live else args.archive) / name
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     manifest_path = directory / "manifest.json"
     if args.mode == "capture":
@@ -402,15 +499,16 @@ def load_site(args, name):
         if task_failure:
             raise RuntimeError(f"{name}: task: {task_failure}")
         return result
-    manifest = json.loads(manifest_path.read_text())
-    for resource in manifest["resources"]:
+    # Live: the network serves whatever it serves today, so there is nothing to verify.
+    manifest = {"url": SITES[name]} if args.live else json.loads(manifest_path.read_text())
+    for resource in manifest.get("resources", ()):
         if hashlib.sha256((directory / resource["file"]).read_bytes()).hexdigest() != resource["sha256"]:
             raise RuntimeError(f"{directory}: changed resource {resource['file']}")
     binaries = {"before": args.compare, "after": args.binary} if args.compare else {"after": args.binary}
     runs = {label: [] for label in binaries}
     for label, binary in binaries.items():
         for _ in range(args.warmup):
-            result = run(binary, manifest["url"], directory, screenshot=args.screenshot)
+            result = run(binary, manifest["url"], directory, screenshot=args.screenshot, live=args.live)
             print(f"{name} {label}: warmup: {result['wall']:.3f}s wall, {result['cpu']:.3f}s cpu", flush=True)
     for i in range(args.repeat):
         order = list(binaries)
@@ -418,11 +516,15 @@ def load_site(args, name):
             order.reverse()
         for label in order:
             sample = directory / f"sample-{label}.txt" if args.sample and i == 0 else None
-            result = run(binaries[label], manifest["url"], directory, sample=sample, screenshot=args.screenshot)
+            result = run(binaries[label], manifest["url"], directory, sample=sample, screenshot=args.screenshot,
+                         live=args.live)
             runs[label].append(result)
             print(f"{name} {label}: run {i + 1}/{args.repeat}: {result['wall']:.3f}s wall, "
                   f"{result['cpu']:.3f}s cpu, load {result['load']:.1f}", flush=True)
     all_runs = [r for batch in runs.values() for r in batch]
+    if args.live:
+        summaries = {label: summarize(batch) for label, batch in runs.items()}
+        return summaries if args.compare else summaries["after"]
     if not args.screenshot and any(r["sha256"] != manifest["capture"]["sha256"] for r in all_runs):
         raise RuntimeError(f"{name}: replay Markdown differs from capture")
     if len({r["sha256"] for r in all_runs}) != 1:

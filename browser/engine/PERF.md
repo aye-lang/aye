@@ -43,6 +43,30 @@ selects a subset, and `--site all` loads every site of
 directory per site. Only Python's
 standard library is needed. Each load has a 300-second timeout.
 
+`run --live` loads each site from the network instead (no archive; the
+last output goes to `target/live/<site>`), `--repeat` times after the
+warmup, and prints the same table: median wall, CPU and phases. The
+Markdown is not compared, since the network serves today's page. The
+CPU/wall warning fires on most live rows, because waiting for the
+network is wall time without CPU; read the `load` column instead.
+
+`--screens` (with `check` or `run`, replay or live) also takes a
+screenshot of each site, 1280 px wide and its first 2000 px, into
+`target/screens/<site>.png`, and writes the contact sheet
+`target/screens/index.html`: a thumbnail per site that links to its
+image, labelled with its status in `sites.json`, its verdict, its
+console errors and what went wrong. Use it to see a site's symptom on
+current `main` before a site step starts:
+
+```sh
+python3 browser/tools/page_load.py check --site all --screens
+open target/screens/index.html
+```
+
+The screenshot fetches what `dump --md` does not (web fonts, images), so
+it often has archive misses; they are listed under the thumbnail, and
+the page is painted without those resources.
+
 ### Archive semantics
 
 - `ANYKNOWN_RECORD=DIR` saves the first response for each URL/POST body:
