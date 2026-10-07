@@ -112,6 +112,11 @@ step only finds and writes down the cause; the fix is the next step.
 | P3.9 | Dump virtual clock: an `onload` set inside `setTimeout(0)` after `src` misses the image's load event (a real browser catches it) | new dump fixture | P3.4–8 |
 | P3.10 | Window: scripts run while parsing see an 800px viewport instead of `--width` | window test with `--width` | P3.4–8 |
 | P3.11 | A golden run once hit its 10 s debug-build timeout under load; find the slow golden or raise its budget | repeated `cargo test --test golden` under load | all |
+| P3.12 | `http_images_background` (GC stress) failed once at machine load ~45 and passed on rerun; find the timing assumption | repeated runs under load | all |
+| P3.13 | GitHub: `BigInt is not defined` (P1.2 check) | `check --site github` errors 0; a JS test for the BigInt basics added | P3.3 |
+| P3.14 | MDN: diagnose 16 lit "Hydration value mismatch" and 2 "not iterable" errors (P1.2 check) | cause written down | P3.4–8 |
+| P3.15 | `Request` global missing (Reddit; general fetch API) | JS test; `check --site reddit` error gone | P3.4–8 |
+| P3.16 | A script that changes an img in another same-origin frame may record the failed load in the wrong page's cache (P4.6 follow-up) | frame fixture | P4.6 |
 
 ### P4: Load time
 
