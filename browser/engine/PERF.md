@@ -78,7 +78,11 @@ painted without them.
 - `ANYKNOWN_REPLAY=DIR` serves these files and disables HTTP prefetch.
   A miss fails locally, is printed, and **never falls through to HTTP**.
   With `ANYKNOWN_RECORD` set as well (capture's screenshot), a miss is
-  fetched and recorded instead.
+  fetched and recorded instead. A non-GET request (a POST beacon) whose
+  body has no record gets the latest-recorded non-GET response for its
+  URL, whatever its body; this prints `archive fallback:` and `check`
+  shows it on a `fallback:` line, not as a miss (P1.12). GET requests
+  match exactly.
   The runner rejects misses, changed resource hashes, capture/replay
   Markdown differences, and before/after output differences.
 - The manifest lists every requested resource, body size and SHA-256.
@@ -94,7 +98,8 @@ painted without them.
   are not replayed. The runner clears `ANYKNOWN_COOKIE_FILE`; avoid
   personalized pages. Keep snapshots private (site directories are mode
   0700). If dynamic state still changes requests/output, the runner fails
-  rather than silently substituting another resource.
+  rather than silently substituting another resource (the non-GET
+  fallback above is reported).
 
 The measured snapshots remain locally in `target/page-load-fixed/`
 (ignored by git), with manifests, bodies, traces, `final.json` and samples.

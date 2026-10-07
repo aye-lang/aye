@@ -635,6 +635,20 @@ Archive names hash the URL, the method (but GET) and the body
 **Why:** an archive records what one binary asked for; a binary that asks
 for more needs a new capture, not a replay that hides the gap.
 
+### Replay a step-timed beacon by URL, not by body
+**Context:** a replay's non-GET requests (beacons, logging APIs) whose
+bodies or count follow the virtual clock, which follows the step count.
+**Bad:** a no-op engine change made `youtube-search` send one more
+`POST /youtubei/v1/log_event?alt=json`, with a body the archive lacked:
+`archive miss:` and `check` failed, though the page saw the same thing.
+**Good:** a non-GET request without an exact record gets the latest
+non-GET record of its URL and logs `archive fallback:`, which
+`page_load.py check` prints as `fallback:`, not a miss (`fallback`,
+`browser/net/archive.ore`; test `archive_replays_unrecorded_post_bodies`,
+`tests/browser/perf.rs`). A GET still matches exactly (P1.12).
+**Why:** a beacon's answer does not depend on its body; requiring the
+exact body makes every engine change look like a regression.
+
 ### An agent task's replay can miss beacons a recapture cannot fix
 **Context:** `page_load.py check --agent` replays a site's agent task
 (`browser/tools/agent_tasks/`) on an archive that `capture` recorded live.
