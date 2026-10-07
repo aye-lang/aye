@@ -393,6 +393,18 @@ pub struct System {
         }
     }
 
+    /// Does the face that draws `code` in `f` (with the fallbacks) have
+    /// a glyph for it?
+    pub fn hasGlyph(self: *mut Self, f: Font, code: u32) bool {
+        let span = self.chainOf(f) catch |e| {
+            return true
+        }
+        let face = self.pick(span, self.slots[faceSlot(f)] as u32, code) catch |e| {
+            return true
+        }
+        return FT_Get_Char_Index(self.faces.items()[face as usize].ft, code as u64) != 0
+    }
+
     /// Is the web font `d` neither added nor failed yet?
     pub fn webFontWanted(self: *mut Self, d: FaceDesc) bool {
         for w in self.web.items() {

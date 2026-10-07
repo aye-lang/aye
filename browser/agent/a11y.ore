@@ -459,7 +459,7 @@ fn keepsNewlines(p: *Page, t: NodeId) bool {
 fn isBlockLevel(p: *Page, el: NodeId) bool {
     if p.styling.?.styles.get(el) |style| {
         let d = layout.keywordOf(style[css.DISPLAY])
-        return !html.isIn(d, "inline inline-block inline-table inline-flex inline-grid contents")
+        return !html.isIn(d, "inline inline-block inline-table inline-flex inline-grid -webkit-inline-box contents")
     }
     return false
 }
