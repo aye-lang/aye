@@ -172,6 +172,18 @@ P3.22's fix still threw for a no-op `{enumerable}` there (P3.27).
 **Why:** a native's brand check is often only where a wrong value
 surfaces; the bug can be far from it, in plain JS semantics.
 
+### A created document is not `instanceof Document`
+**Context:** an API that takes a Document (XHR `send`, serializers).
+**Bad:** P3.24's first `send(body)` tested `body instanceof Document`;
+`document.implementation.createHTMLDocument()` returns a plain stand-in
+object (`createHTMLDocument`, `browser/engine/prelude.ore`), so it was
+sent as `"[object Object]"`, text/plain.
+**Good:** test `typeof body === 'object' && body.nodeType === 9`, and
+read the stand-in's `documentElement`, not its `childNodes` (it has none)
+(`XMLHttpRequest.send`, `browser/engine/prelude.ore`).
+**Why:** the page has one real document; every other one is a stand-in
+with only a few of Document's members.
+
 ### Root native return values across mutation hooks
 **Context:** a DOM native creates a JS value, then changes the document.
 **Bad:** `styleRemoveProperty` kept its return string in an Ore local
