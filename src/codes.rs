@@ -624,18 +624,15 @@ E0036 = 36 {
 }
 E0037 = 37 {
     "invalid cast",
-    "`as` converts only between numeric types. Other conversions are written out, for example with `if`. In a generic, a `T` converts with `as` (to and from numeric types) only with `where T: Integer`.",
+    "`as` converts between numeric types, and from `bool` to an integer type (`false` is 0, `true` is 1). Other conversions are written out: a number becomes a `bool` with a comparison (`n != 0`), and a `bool` becomes a float through an integer (`(b as u8) as f64`). In a generic, a `T` converts with `as` (to and from numeric types) only with `where T: Integer`.",
     r#"pub fn main() {
-    let flag = true
-    let n = flag as i32
+    let n = 3
+    let flag = n as bool
 }
 "#,
     r#"pub fn main() {
-    let flag = true
-    var n: i32 = 0
-    if flag {
-        n = 1
-    }
+    let n = 3
+    let flag = n != 0
 }
 "#,
 }

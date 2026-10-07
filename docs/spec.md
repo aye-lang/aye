@@ -629,12 +629,17 @@ pub fn main() {
 ### Conversions
 
 There are no implicit conversions between types. Numeric conversions are
-written `x as T` (only between numeric types):
+written `x as T` (between numeric types, and from `bool` to an integer
+type):
 
 - int to int panics (debug, safe) if the value does not fit; it never
   truncates silently.
 - float to int truncates toward zero and panics on NaN or out of range.
 - int to float and float to float are plain conversions.
+- bool to int gives `0` for `false` and `1` for `true`, for every integer
+  type (and a `T` with `where T: Integer`). There is no cast to `bool`
+  (compare: `n != 0`) and none from `bool` to a float (go through an
+  integer: `(b as u8) as f64`); both are E0037.
 
 `as` binds tighter than `*` and looser than unary operators: `a * b as f64`
 is `a * (b as f64)`, `-x as f64` is `(-x) as f64`.
