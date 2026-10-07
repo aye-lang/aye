@@ -90,6 +90,7 @@ Done 2026-10-07.
 | P2.5 | Spec token count; rerun the M5 gate; findings become gaps | record in `milestones.md` | P2.1 | all |
 | P2.6 | Status table in `milestones.md` | read the diff | P2.3–5 | – |
 | P2.7 | Diagnose a flaky build: once, a fresh build failed every `import()` with "import is not defined" and a rebuild of the same source fixed it (seen on `pi-dynimport`, 2026-10-07) | repeated clean builds + `browser/tests/js/23*` reproduce or rule it out; cause written down | P0 | all |
+| P2.8 | Agents build into their own worktree: the pi-codex skill's task template and `pi_run.py` build with `browser/build.sh` (no shared output path) or name the output after the worktree (cause of P2.7) | `grep` the skill for shared output paths; one pi dry run | P2.7 | all |
 
 ### P3: Sites
 
