@@ -103,8 +103,8 @@ step only finds and writes down the cause; the fix is the next step.
 
 | id | Goal | Verify | ∥ |
 |---|---|---|---|
-| P3.1 | YouTube: diagnose why the feed does not boot (pending fetches, unhandled rejections at the end) | `check --site youtube` shows the cause | P3.3–6 |
-| P3.2 | YouTube: fix that cause | `check --site youtube` ✅ | P3.4–6 |
+| P3.1 | YouTube: diagnose why the feed does not boot. Done: it boots; YouTube serves a cookieless visitor an empty home feed (`feedNudgeRenderer`, no continuation), same with curl | – | – |
+| P3.2 | YouTube: set the home page `ok`; add a `youtube-search` site (`results?search_query=rust+programming`, ~16 `videoRenderer` items live), capture it, and record what it shows; fixes for that page become new steps | `check --site youtube,youtube-search`; the search Markdown lists video titles | P3.1 | P3.4–8 |
 | P3.3 | GitHub: diagnose, then fix, commit data that never loads | `check --site github` | P3.4–6 |
 | P3.4 | Inline SVG sizing (BBC wordmarks at 290 px, Wikipedia ja pie chart) | `dump --layout` fixture; `check --site bbc,wikipedia-ja` | P3.1–3 |
 | P3.5 | BBC menus drawn as bullet lists | style fixture; `--screens` | P3.6 |
@@ -128,6 +128,9 @@ step only finds and writes down the cause; the fix is the next step.
 | P3.23 | `failed_image_once.html` relies on a fixed 0.3 s server delay (`/slow/wait.txt`), like P3.12 did; make it wait on the browser's state | the test under synthetic load, 30 runs | P3.12 | all |
 | P3.24 | XMLHttpRequest sends only GET: `send(body)` and `setRequestHeader` on the native path P3.17 gave `fetch` | net fixture: XHR POST/PUT echo | P3.17 | P3.4–8 |
 | P3.25 | Send `Origin` on non-GET fetches (and CORS-mode GETs) as the Fetch spec says | echo test checks `Origin` | P3.17 | P3.24 |
+| P3.26 | GitHub: "Cannot retrieve latest commit" — the page requests `/latest-commit` and `/tree-commit-info` without the branch and gets 400; diagnose which value we compute wrong, then fix | `check --site github` Markdown has the latest-commit line | P3.22 | P3.4–8 |
+| P3.27 | `ValidateAndApplyPropertyDescriptor` for non-configurable properties: a generic descriptor on a non-configurable accessor throws but should succeed when nothing changes; a non-configurable data property can still become an accessor or `configurable: true` but must throw | JS test vs Node 22 (both directions, strict and sloppy) | P3.22 | all |
+| P3.28 | `ToPropertyDescriptor`: reject a non-callable `get`/`set` and a descriptor mixing `value`/`writable` with `get`/`set` (TypeError) | JS test vs Node 22 | P3.27 | all |
 | P3.21 | Fetch guards: Response headers read-only (`immutable` guard), Request headers drop forbidden names, a Request's abort listener on its source signal is removed when the request settles | jsdom test vs Node 22 | P3.15 | P3.17 after it merges |
 
 ### P4: Load time

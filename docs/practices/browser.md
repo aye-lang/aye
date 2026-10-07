@@ -154,6 +154,24 @@ JS performance merge `b2193b7`).
 **Why:** a cache hit skips the slow path's special cases; the benchmark
 still passes while a site gets the wrong value.
 
+### "Illegal invocation" may be a JS engine bug: find the `this` first
+**Context:** a site logs `TypeError: Illegal invocation` from a native.
+**Bad:** P3.22 looked like a brand check of a new web API (Request,
+fetch). The native was the input `value` getter, called with `this`
+undefined: `Object.defineProperty(el, 'value', {enumerable: false})`
+had turned React's own accessor into a data property holding the
+getter, so `el.value` was a function and `setState` called it.
+**Good:** print what `this` is where the native throws (`thisNode` in
+`browser/engine/dom_api.ore`), then reduce the caller to a Node-checked
+test (`browser/tests/js/249_generic_descriptors.js`). A descriptor
+without value, writable, get and set changes only the flags
+(`definePropertyFrom`, `browser/js/builtins.ore`). On a non-configurable
+property, check each field as ValidateAndApplyPropertyDescriptor does
+(`redefinable`; `250_nonconfigurable_descriptors.js`), not a shortcut:
+P3.22's fix still threw for a no-op `{enumerable}` there (P3.27).
+**Why:** a native's brand check is often only where a wrong value
+surfaces; the bug can be far from it, in plain JS semantics.
+
 ### Root native return values across mutation hooks
 **Context:** a DOM native creates a JS value, then changes the document.
 **Bad:** `styleRemoveProperty` kept its return string in an Ore local
