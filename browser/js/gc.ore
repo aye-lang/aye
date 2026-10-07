@@ -37,6 +37,7 @@ pub fn traceRequested() bool {
 fn markValue(it: *mut Interp, v: Value) {
     match v {
         .Str { s } => markStr(it, s)
+        .Big { s } => markStr(it, s)
         .Obj { o } => markObj(it, o)
         _ => {}
     }
@@ -138,6 +139,7 @@ pub fn collectGarbage(it: *mut Interp) {
     for p in protos {
         markObj(it, p)
     }
+    markObj(it, it.bigint_proto)
     markEnv(it, it.glex)
     markEnv(it, it.env)
     for e in it.outer_envs.items() {

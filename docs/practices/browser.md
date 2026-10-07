@@ -166,6 +166,20 @@ page-created MutationObserver. The `style_props.html` fixture covers this.
 **Why:** Ore locals are not GC roots; a hook can allocate or invoke JS
 before the native returns.
 
+### Preserve exact numeric types through shared coercion paths
+**Context:** adding a numeric primitive to the JS engine.
+**Bad:** lexer `10n` used to discard the suffix and store an f64; routing
+operators through `toNumber` would either round BigInts or reject valid
+BigInt arithmetic. Accumulating limbs into an f64 also rounds more than
+once (`Number` halfway cases in `248_bigint_edges.js`).
+**Good:** keep literal digits as atoms, use `numericValue` (ToNumeric) for
+operators/updates, and reserve `toNumber` for consumers that must reject
+BigInt (Math, unary plus). Explicit `Number` uses a single guard/sticky,
+ties-to-even rounding step. Trace the new primitive's payload in
+`gc.ore`; run the Node goldens under GC stress.
+**Why:** the syntax, coercion, fast paths, equality and GC visitors must
+agree on the type. A correct arithmetic helper alone is not a primitive.
+
 ### Capture an import's referrer in its syntax, not the active script
 **Context:** dynamic imports inside functions, timers and promise callbacks.
 **Bad:** resolving against document.currentScript at call time, or treating

@@ -78,6 +78,8 @@ pub enum Node {
     Empty
     // ---- expressions
     Num { v: f64 }
+    // Literal digits, kept as an atom so parsing never rounds via f64.
+    BigLit { atom: u32 }
     Str { atom: u32 }
     // lists[list..list+n+1] are the cooked strings (atoms), then n expressions.
     Template { list: u32, n: u32 }

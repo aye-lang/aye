@@ -1,0 +1,692 @@
+// BigInt: immutable sign/magnitude base-2^16 limbs. The heap payload is
+// a flat byte cell (sign byte followed by little-endian 16-bit limbs),
+// traced exactly like a string, but never exposed as a JS string. Scratch
+// limbs belong to a per-operation arena; no pointer into the heap survives
+// allocation or user coercion. Zero has no limbs and is never negative.
+
+import std.list.List
+import std.mem.Allocator
+import std.mem.AllocError
+import std.heap.Arena
+import std.text
+import std.math
+
+let BIG_MAX_BITS: usize = 8388608
+
+struct BigMag {
+    neg: bool = false
+    words: List(u32)
+
+    fn init(a: Allocator) BigMag {
+        return BigMag { words: List(u32).init(a) }
+    }
+
+    fn normalize(self: *mut Self) {
+        while self.words.len() > 0 && self.words.items()[self.words.len() - 1] == 0 {
+            self.words.pop()
+        }
+        if self.words.len() == 0 {
+            self.neg = false
+        }
+    }
+
+    fn word(self: *Self, i: usize) u32 {
+        if i < self.words.len() {
+            return self.words.items()[i]
+        }
+        return 0
+    }
+
+    fn small(self: *mut Self, mul: u32, add: u32) AllocError!void {
+        var carry = add as u64
+        for i in 0..self.words.len() {
+            let v = self.words.items()[i] as u64 * mul as u64 + carry
+            self.words.items()[i] = (v & 65535) as u32
+            carry = v >> 16
+        }
+        while carry > 0 {
+            try self.words.append((carry & 65535) as u32)
+            carry >>= 16
+        }
+    }
+
+    fn divSmall(self: *mut Self, divisor: u32) u32 {
+        var rem: u64 = 0
+        var i = self.words.len()
+        while i > 0 {
+            i -= 1
+            let v = (rem << 16) + self.words.items()[i] as u64
+            self.words.items()[i] = (v / divisor as u64) as u32
+            rem = v % divisor as u64
+        }
+        self.normalize()
+        return rem as u32
+    }
+}
+
+fn isBig(v: Value) bool {
+    return v is .Big
+}
+
+fn bigLoad(it: *mut Interp, a: Allocator, v: Value) AllocError!BigMag {
+    var x = BigMag.init(a)
+    match v {
+        .Big { s } => {
+            let bytes = it.heap.bytes(s)
+            x.neg = bytes[0] != 0
+            var i: usize = 1
+            while i + 1 < bytes.len {
+                try x.words.append(bytes[i] as u32 | (bytes[i + 1] as u32 << 8))
+                i += 2
+            }
+        }
+        _ => {}
+    }
+    return x
+}
+
+fn bigSave(it: *mut Interp, x: *mut BigMag) JsError!Value {
+    x.normalize()
+    let b = try it.builder()
+    defer it.release(b)
+    try b.appendByte(x.neg as u8)
+    for w in x.words.items() {
+        try b.appendByte((w & 255) as u8)
+        try b.appendByte((w >> 8) as u8)
+    }
+    it.maybeGc()
+    let s = try it.heap.newStr(b.bytes())
+    // This is a binary cell, not WTF-8; string metadata is unused.
+    it.heap.str(s).len16 = 0
+    return Value.Big { s: s }
+}
+
+fn bigCmpAbs(x: *BigMag, y: *BigMag) i32 {
+    if x.words.len() < y.words.len() {
+        return -1
+    }
+    if x.words.len() > y.words.len() {
+        return 1
+    }
+    var i = x.words.len()
+    while i > 0 {
+        i -= 1
+        if x.word(i) < y.word(i) {
+            return -1
+        }
+        if x.word(i) > y.word(i) {
+            return 1
+        }
+    }
+    return 0
+}
+
+fn bigCmp(x: *BigMag, y: *BigMag) i32 {
+    if x.neg != y.neg {
+        if x.neg {
+            return -1
+        }
+        return 1
+    }
+    let c = bigCmpAbs(x, y)
+    if x.neg {
+        return -c
+    }
+    return c
+}
+
+fn bigSum(a: Allocator, x: *BigMag, y: *BigMag) AllocError!BigMag {
+    var z = BigMag.init(a)
+    z.neg = x.neg
+    var n = x.words.len()
+    if y.words.len() > n {
+        n = y.words.len()
+    }
+    if x.neg == y.neg {
+        var carry: u32 = 0
+        for i in 0..n {
+            let w = x.word(i) + y.word(i) + carry
+            try z.words.append(w & 65535)
+            carry = w >> 16
+        }
+        if carry != 0 {
+            try z.words.append(carry)
+        }
+    } else {
+        var p = x
+        var q = y
+        if bigCmpAbs(x, y) < 0 {
+            p = y
+            q = x
+        }
+        z.neg = p.neg
+        var borrow: i64 = 0
+        for i in 0..n {
+            var w = p.word(i) as i64 - q.word(i) as i64 - borrow
+            borrow = 0
+            if w < 0 {
+                w += 65536
+                borrow = 1
+            }
+            try z.words.append(w as u32)
+        }
+    }
+    z.normalize()
+    return z
+}
+
+fn bigProduct(a: Allocator, x: *BigMag, y: *BigMag) AllocError!BigMag {
+    var z = BigMag.init(a)
+    z.neg = x.neg != y.neg
+    for i in 0..x.words.len() + y.words.len() {
+        try z.words.append(0)
+    }
+    for i in 0..x.words.len() {
+        var carry: u64 = 0
+        for j in 0..y.words.len() {
+            let w = x.word(i) as u64 * y.word(j) as u64 + z.words.items()[i + j] as u64 + carry
+            z.words.items()[i + j] = (w & 65535) as u32
+            carry = w >> 16
+        }
+        z.words.items()[i + y.words.len()] = carry as u32
+    }
+    z.normalize()
+    return z
+}
+
+fn bigBits(x: *BigMag) usize {
+    if x.words.len() == 0 {
+        return 0
+    }
+    var n = (x.words.len() - 1) * 16
+    var w = x.word(x.words.len() - 1)
+    while w > 0 {
+        n += 1
+        w >>= 1
+    }
+    return n
+}
+
+// Binary long division: quotient and remainder are magnitudes.
+fn bigDivide(a: Allocator, x: *BigMag, y: *BigMag, remainder: bool) AllocError!BigMag {
+    var q = BigMag.init(a)
+    var r = BigMag.init(a)
+    for i in 0..x.words.len() {
+        try q.words.append(0)
+    }
+    var bit = bigBits(x)
+    while bit > 0 {
+        bit -= 1
+        try r.small(2, (x.word(bit / 16) >> ((bit % 16) as u32)) & 1)
+        if bigCmpAbs(&r, y) >= 0 {
+            var borrow: i64 = 0
+            for i in 0..r.words.len() {
+                var w = r.word(i) as i64 - y.word(i) as i64 - borrow
+                borrow = 0
+                if w < 0 {
+                    w += 65536
+                    borrow = 1
+                }
+                r.words.items()[i] = w as u32
+            }
+            r.normalize()
+            q.words.items()[bit / 16] |= 1 << ((bit % 16) as u32)
+        }
+    }
+    if remainder {
+        r.neg = x.neg
+        r.normalize()
+        return r
+    }
+    q.neg = x.neg != y.neg
+    q.normalize()
+    return q
+}
+
+fn bigParse(a: Allocator, input: []u8, literal: bool) AllocError!?BigMag {
+    let s = trimJs(input)
+    var x = BigMag.init(a)
+    var pos: usize = 0
+    var signed = false
+    if s.len > 0 && (s[0] == '-' || s[0] == '+') {
+        signed = true
+        x.neg = s[0] == '-'
+        pos = 1
+    }
+    if s.len == 0 {
+        return x
+    }
+    var radix: u32 = 10
+    if pos + 1 < s.len && s[pos] == '0' {
+        let c = s[pos + 1] | 32
+        if c == 'x' || c == 'o' || c == 'b' {
+            if signed {
+                return null
+            }
+            radix = 16
+            if c == 'o' {
+                radix = 8
+            } else if c == 'b' {
+                radix = 2
+            }
+            pos += 2
+        }
+    }
+    var digits: usize = 0
+    var separator = false
+    let begin = pos
+    while pos < s.len {
+        let c = s[pos]
+        if literal && c == '_' {
+            if digits == 0 || separator {
+                return null
+            }
+            separator = true
+        } else {
+            let d = hexVal(c)
+            if d < 0 || d as u32 >= radix {
+                return null
+            }
+            try x.small(radix, d as u32)
+            digits += 1
+            separator = false
+        }
+        pos += 1
+    }
+    if digits == 0 || separator || (literal && radix == 10 && digits > 1 && s[begin] == '0') {
+        return null
+    }
+    x.normalize()
+    return x
+}
+
+fn bigFromNumber(a: Allocator, n: f64) AllocError!BigMag {
+    var x = BigMag.init(a)
+    x.neg = n < 0.0
+    var v = n
+    if v < 0.0 {
+        v = -v
+    }
+    while v >= 1.0 {
+        let r = fmod(v, 65536.0)
+        try x.words.append(r as u32)
+        v = trunc(v / 65536.0)
+    }
+    x.normalize()
+    return x
+}
+
+fn bigNumber(it: *mut Interp, v: Value) f64 {
+    match v {
+        .Big { s } => {
+            let b = it.heap.bytes(s)
+            var bits = (b.len - 1) * 8
+            while bits > 0 && bigPayloadBit(b, bits - 1) == 0 {
+                bits -= 1
+            }
+            var n = 0.0
+            if bits > 1024 {
+                n = 1.0 / 0.0
+            } else {
+                var shift: usize = 0
+                if bits > 53 {
+                    shift = bits - 53
+                }
+                var top: u64 = 0
+                var i = bits
+                while i > shift {
+                    i -= 1
+                    top = (top << 1) | bigPayloadBit(b, i) as u64
+                }
+                if shift > 0 && bigPayloadBit(b, shift - 1) != 0 {
+                    var sticky = false
+                    for j in 0..shift - 1 {
+                        if bigPayloadBit(b, j) != 0 {
+                            sticky = true
+                        }
+                    }
+                    if sticky || (top & 1) != 0 {
+                        top += 1
+                    }
+                }
+                n = top as f64 * math.pow(2.0, shift as f64)
+            }
+            if b[0] != 0 {
+                return -n
+            }
+            return n
+        }
+        _ => {
+            return 0.0
+        }
+    }
+}
+
+fn bigPayloadBit(bytes: []u8, bit: usize) u32 {
+    return ((bytes[1 + bit / 8] as u32) >> ((bit % 8) as u32)) & 1
+}
+
+fn bigAppend(it: *mut Interp, out: *mut text.Builder, v: Value, radix: u32) JsError!void {
+    var arena = Arena.init(it.alloc)
+    defer arena.deinit()
+    var x = try bigLoad(it, arena.allocator(), v)
+    try bigFormatMag(arena.allocator(), out, &mut x, radix)
+}
+
+fn bigFormatMag(a: Allocator, out: *mut text.Builder, x: *mut BigMag, radix: u32) AllocError!void {
+    let neg = x.neg
+    var digits = text.Builder.init(a)
+    if x.words.len() == 0 {
+        try out.appendByte('0')
+        return
+    }
+    while x.words.len() > 0 {
+        let d = x.divSmall(radix)
+        try digits.appendByte("0123456789abcdefghijklmnopqrstuvwxyz"[d])
+    }
+    if neg {
+        try out.appendByte('-')
+    }
+    var i = digits.len()
+    while i > 0 {
+        i -= 1
+        try out.appendByte(digits.bytes()[i])
+    }
+}
+
+fn bigLiteral(it: *mut Interp, s: []u8) JsError!Value {
+    var arena = Arena.init(it.alloc)
+    defer arena.deinit()
+    var x = (try bigParse(arena.allocator(), s, true)) orelse return it.syntaxError("Invalid BigInt literal")
+    return bigSave(it, &mut x)
+}
+
+fn bigConvert(it: *mut Interp, v: Value, allowNumber: bool) JsError!Value {
+    let p = try it.toPrimitiveHint(v, 1)
+    if isBig(p) {
+        return p
+    }
+    var arena = Arena.init(it.alloc)
+    defer arena.deinit()
+    let a = arena.allocator()
+    var x = BigMag.init(a)
+    match p {
+        .Num { n } => {
+            if !allowNumber {
+                return it.typeError("Cannot convert Number to BigInt")
+            }
+            if !isFinite(n) || trunc(n) != n {
+                return it.rangeError("Cannot convert non-integer to BigInt")
+            }
+            x = try bigFromNumber(a, n)
+        }
+        .Bool { b } => try x.small(1, b as u32)
+        .Str { s } => {
+            x = (try bigParse(a, it.heap.bytes(s), false)) orelse return it.syntaxError("Cannot convert string to BigInt")
+        }
+        _ => {
+            return it.typeError("Cannot convert value to BigInt")
+        }
+    }
+    return bigSave(it, &mut x)
+}
+
+// Signed, exact comparison with numbers (including fractions and infinities)
+// and StringToBigInt. 2 means unordered, not greater than.
+fn bigCompareValues(it: *mut Interp, left: Value, right: Value) JsError!i32 {
+    var bv = left
+    var other = right
+    var reverse = false
+    if !isBig(left) {
+        bv = right
+        other = left
+        reverse = true
+    }
+    var arena = Arena.init(it.alloc)
+    defer arena.deinit()
+    let a = arena.allocator()
+    var x = try bigLoad(it, a, bv)
+    var y = BigMag.init(a)
+    var c: i32 = 0
+    match other {
+        .Big { .. } => {
+            y = try bigLoad(it, a, other)
+            c = bigCmp(&x, &y)
+        }
+        .Str { s } => {
+            y = (try bigParse(a, it.heap.bytes(s), false)) orelse return 2
+            c = bigCmp(&x, &y)
+        }
+        _ => {
+            let n = try it.toNumber(other)
+            if n != n {
+                return 2
+            }
+            if !isFinite(n) {
+                c = -1
+                if n < 0.0 {
+                    c = 1
+                }
+            } else {
+                y = try bigFromNumber(a, trunc(n))
+                c = bigCmp(&x, &y)
+                if c == 0 && trunc(n) != n {
+                    c = -1
+                    if n < 0.0 {
+                        c = 1
+                    }
+                }
+            }
+        }
+    }
+    if reverse {
+        return -c
+    }
+    return c
+}
+
+fn bigShift(a: Allocator, x: *BigMag, count: usize, left: bool) AllocError!BigMag {
+    var z = BigMag.init(a)
+    z.neg = x.neg
+    if left {
+        let whole = count / 16
+        for i in 0..whole {
+            try z.words.append(0)
+        }
+        var carry: u32 = 0
+        for w in x.words.items() {
+            let v = (w << ((count % 16) as u32)) | carry
+            try z.words.append(v & 65535)
+            carry = v >> 16
+        }
+        if carry > 0 {
+            try z.words.append(carry)
+        }
+    } else {
+        let whole = count / 16
+        var lost = false
+        for i in 0..x.words.len() {
+            if i < whole && x.word(i) != 0 {
+                lost = true
+            }
+        }
+        if whole < x.words.len() {
+            let part = (count % 16) as u32
+            if (x.word(whole) & ((1 << part) - 1)) != 0 {
+                lost = true
+            }
+            for i in whole..x.words.len() {
+                var w = x.word(i) >> part
+                if part != 0 {
+                    w |= (x.word(i + 1) << (16 - part)) & 65535
+                }
+                try z.words.append(w)
+            }
+        }
+        if x.neg && lost {
+            try z.small(1, 1)
+        }
+    }
+    z.normalize()
+    return z
+}
+
+fn bigTwos(a: Allocator, x: *BigMag, n: usize) AllocError!BigMag {
+    var z = BigMag.init(a)
+    var carry: u32 = 1
+    for i in 0..n {
+        var w = x.word(i)
+        if x.neg {
+            w = (w ^ 65535) + carry
+            carry = w >> 16
+        }
+        try z.words.append(w & 65535)
+    }
+    return z
+}
+
+fn bigArithmetic(it: *mut Interp, op: Op, lhs: Value, rhs: Value) JsError!Value {
+    if !isBig(lhs) || !isBig(rhs) {
+        return it.typeError("Cannot mix BigInt and other types")
+    }
+    if op == Op.UShr {
+        return it.typeError("BigInts have no unsigned right shift")
+    }
+    var arena = Arena.init(it.alloc)
+    defer arena.deinit()
+    let a = arena.allocator()
+    var x = try bigLoad(it, a, lhs)
+    var y = try bigLoad(it, a, rhs)
+    var z = BigMag.init(a)
+    if op == Op.Add || op == Op.Sub {
+        if op == Op.Sub && y.words.len() != 0 {
+            y.neg = !y.neg
+        }
+        z = try bigSum(a, &x, &y)
+    } else if op == Op.Mul {
+        if bigBits(&x) + bigBits(&y) > BIG_MAX_BITS {
+            return it.rangeError("BigInt is too large")
+        }
+        z = try bigProduct(a, &x, &y)
+    } else if op == Op.Div || op == Op.Mod {
+        if y.words.len() == 0 {
+            return it.rangeError("Division by zero")
+        }
+        z = try bigDivide(a, &x, &y, op == Op.Mod)
+    } else if op == Op.Exp {
+        if y.neg {
+            return it.rangeError("BigInt exponent must be nonnegative")
+        }
+        try z.small(1, 1)
+        if y.words.len() != 0 && x.words.len() == 0 {
+            z = x
+        } else if x.words.len() == 1 && x.word(0) == 1 {
+            z.neg = x.neg && (y.word(0) & 1) != 0
+        } else {
+            if bigBits(&y) > 24 {
+                return it.rangeError("BigInt is too large")
+            }
+            var exponent = y.word(0) | (y.word(1) << 16)
+            while exponent > 0 {
+                if (exponent & 1) != 0 {
+                    if bigBits(&z) + bigBits(&x) > BIG_MAX_BITS {
+                        return it.rangeError("BigInt is too large")
+                    }
+                    z = try bigProduct(a, &z, &x)
+                }
+                exponent >>= 1
+                if exponent > 0 {
+                    if bigBits(&x) * 2 > BIG_MAX_BITS {
+                        return it.rangeError("BigInt is too large")
+                    }
+                    x = try bigProduct(a, &x, &x)
+                }
+            }
+        }
+    } else if op == Op.Shl || op == Op.Shr {
+        var left = op == Op.Shl
+        if y.neg {
+            left = !left
+        }
+        var count = BIG_MAX_BITS + 1
+        if bigBits(&y) <= 24 {
+            count = (y.word(0) | (y.word(1) << 16)) as usize
+        }
+        if x.words.len() == 0 {
+            z = x
+        } else if left && (count > BIG_MAX_BITS || bigBits(&x) + count > BIG_MAX_BITS) {
+            return it.rangeError("BigInt is too large")
+        } else {
+            z = try bigShift(a, &x, count, left)
+        }
+    } else {
+        var n = x.words.len()
+        if y.words.len() > n {
+            n = y.words.len()
+        }
+        n += 1
+        var tx = try bigTwos(a, &x, n)
+        var ty = try bigTwos(a, &y, n)
+        for i in 0..n {
+            var w = tx.word(i) & ty.word(i)
+            if op == Op.BitOr {
+                w = tx.word(i) | ty.word(i)
+            } else if op == Op.BitXor {
+                w = tx.word(i) ^ ty.word(i)
+            }
+            try z.words.append(w)
+        }
+        if (z.word(n - 1) & 32768) != 0 {
+            z.neg = true
+            z = try bigTwos(a, &z, n)
+            z.neg = true
+        }
+    }
+    return bigSave(it, &mut z)
+}
+
+fn bigUnary(it: *mut Interp, op: Op, v: Value) JsError!Value {
+    if op == Op.Plus {
+        return it.typeError("Cannot convert BigInt to Number")
+    }
+    var arena = Arena.init(it.alloc)
+    defer arena.deinit()
+    let a = arena.allocator()
+    var x = try bigLoad(it, a, v)
+    if op == Op.BitNot {
+        var one = BigMag.init(a)
+        try one.small(1, 1)
+        x = try bigSum(a, &x, &one)
+    }
+    if x.words.len() != 0 {
+        x.neg = !x.neg
+    }
+    return bigSave(it, &mut x)
+}
+
+fn numericValue(it: *mut Interp, v: Value) JsError!Value {
+    let p = try it.toPrimitiveHint(v, 1)
+    if isBig(p) {
+        return p
+    }
+    return numVal(try it.toNumber(p))
+}
+
+fn numericIncrement(it: *mut Interp, v: Value, inc: bool) JsError!Value {
+    if isBig(v) {
+        var arena = Arena.init(it.alloc)
+        defer arena.deinit()
+        let a = arena.allocator()
+        var x = try bigLoad(it, a, v)
+        var one = BigMag.init(a)
+        try one.small(1, 1)
+        one.neg = !inc
+        var z = try bigSum(a, &x, &one)
+        return bigSave(it, &mut z)
+    }
+    var delta = 1.0
+    if !inc {
+        delta = -1.0
+    }
+    return numVal(try it.toNumber(v) + delta)
+}
