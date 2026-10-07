@@ -7,8 +7,9 @@
 //   shadow-including order: its handle, kind, name, namespace, parent,
 //   attributes, text, custom element state, shadow root and slot;
 // - of a `class` attribute, only the classes a selector of the sheets
-//   names (`Styles.classes`), unless a selector looks at the attribute
-//   itself: a class that no rule names changes no style;
+//   names (`Styles.classes`) and whether each attribute selector on
+//   `class` matches it (on the elements of the type it is for): a class
+//   that no rule names changes no style;
 // - the state of the form controls and the focus, the rules scripts
 //   gave the sheets (their generation) and the sheets they adopted,
 //   quirks mode;
@@ -20,23 +21,182 @@ import dom
 import dom.Document
 import dom.Kind
 import dom.NodeId
+import std.list.List
+import std.mem
 import std.mem.AllocError
+import std.mem.Allocator
 import std.text
 
+/// An attribute selector on `class` (`Styles.class_tests`), and the type
+/// of element it can make a difference for ("": any).
+pub struct ClassTest {
+    selector: Simple
+    type_name: []u8
+}
+
 /// The classes that the selectors of `sheet` (and of its shadow trees'
-/// sheets) name, into `out.classes`; `out.any_class` when a selector
-/// looks at the `class` attribute itself.
+/// sheets) name, into `out.classes`, and their attribute selectors on
+/// `class`, into `out.class_tests` (each once).
 pub fn noteClasses(sheet: *Sheet, out: *mut Styles) AllocError!void {
-    for s in sheet.simples.items() {
+    var types = try compoundTypes(sheet, out.alloc)
+    defer types.deinit()
+    let simples = sheet.simples.items()
+    var placed: usize = 0
+    for ci, comp in sheet.compounds.items() {
+        for si in comp.start..comp.end {
+            if isClassTest(simples[si]) {
+                placed += 1
+                try addClassTest(out, simples[si], types.items()[ci])
+            }
+        }
+    }
+    var tests: usize = 0
+    for s in simples {
         if s.kind == SelKind.Class {
             try out.classes.put(classKey(s.name), true)
-        } else if s.kind == SelKind.Attr && text.eqlIgnoreCase(s.name, "class") {
-            out.any_class = true
+        } else if isClassTest(s) {
+            tests += 1
+        }
+    }
+    if placed != tests {
+        // Some are in no compound: they count for every element.
+        for s in simples {
+            if isClassTest(s) {
+                try addClassTest(out, s, "")
+            }
         }
     }
     for sc in sheet.scoped.items() {
         try noteClasses(sc.sheet, out)
     }
+}
+
+fn isClassTest(s: Simple) bool {
+    return s.kind == SelKind.Attr && text.eql(s.name, "class")
+}
+
+fn addClassTest(out: *mut Styles, s: Simple, type_name: []u8) AllocError!void {
+    for t in out.class_tests.items() {
+        if t.selector.op == s.op && t.selector.ci == s.ci && text.eql(t.selector.value, s.value) && text.eql(t.type_name, type_name) {
+            return
+        }
+    }
+    let a = out.arena.allocator()
+    let value = try a.alloc(0 as u8, s.value.len)
+    mem.copy(value, s.value)
+    let name = try a.alloc(0 as u8, type_name.len)
+    mem.copy(name, type_name)
+    var t = s
+    t.value = value
+    t.sub_start = 0
+    t.sub_end = 0
+    try out.class_tests.append(ClassTest { selector: t, type_name: name })
+}
+
+// The type each compound of `sheet` needs its element to be ("": any):
+// that of its own type selector, else that of the compound whose `:is()`
+// or `:not()` argument it is the subject of (the same element), when it
+// is the subject of no other argument and of no rule's selector.
+fn compoundTypes(sheet: *Sheet, alloc: Allocator) AllocError!List([]u8) {
+    let compounds = sheet.compounds.items()
+    let complexes = sheet.complexes.items()
+    let simples = sheet.simples.items()
+    // 0: not reached (yet); 1: `given` is the type of its context; 2: any.
+    var state = List(u8).init(alloc)
+    defer state.deinit()
+    var given = List([]u8).init(alloc)
+    defer given.deinit()
+    for c in compounds {
+        try state.append(0)
+        try given.append("")
+    }
+    for r in sheet.rules.items() {
+        for k in r.sel_start..r.sel_end {
+            anyCompounds(complexes[k], state.items(), true)
+        }
+    }
+    for s in simples {
+        let same = s.kind == SelKind.Is || s.kind == SelKind.Not
+        for k in s.sub_start..s.sub_end {
+            anyCompounds(complexes[k], state.items(), !same)
+        }
+    }
+    var changed = true
+    var passes: usize = 0
+    while changed && passes < 32 {
+        changed = false
+        passes += 1
+        for ci, comp in compounds {
+            var t = ownType(simples, comp)
+            if t.len == 0 {
+                if state.items()[ci] == 0 {
+                    continue
+                }
+                t = given.items()[ci]
+            }
+            for si in comp.start..comp.end {
+                let s = simples[si]
+                if s.kind != SelKind.Is && s.kind != SelKind.Not {
+                    continue
+                }
+                for k in s.sub_start..s.sub_end {
+                    let cx = complexes[k]
+                    if cx.end > cx.start && giveType(state.items(), given.items(), cx.end - 1, t) {
+                        changed = true
+                    }
+                }
+            }
+        }
+    }
+    var out = List([]u8).init(alloc)
+    errdefer out.deinit()
+    for ci, comp in compounds {
+        var t = ownType(simples, comp)
+        if t.len == 0 && !changed && state.items()[ci] == 1 {
+            t = given.items()[ci]
+        }
+        try out.append(t)
+    }
+    return out
+}
+
+// Marks the compounds of `cx` as any element's: all of them when `all`,
+// else those before its subject (other elements than the context's).
+fn anyCompounds(cx: Complex, state: []mut u8, all: bool) {
+    var end = cx.end
+    if !all && end > cx.start {
+        end -= 1
+    }
+    for c in cx.start..end {
+        state[c] = 2
+    }
+}
+
+// The context of the compound `c` has the type `t` ("": any); whether
+// that changed what `c` is known to be.
+fn giveType(state: []mut u8, given: []mut []u8, c: usize, t: []u8) bool {
+    if state[c] == 2 {
+        return false
+    }
+    if t.len == 0 || (state[c] == 1 && !text.eql(given[c], t)) {
+        state[c] = 2
+        return true
+    }
+    if state[c] == 0 {
+        state[c] = 1
+        given[c] = t
+        return true
+    }
+    return false
+}
+
+fn ownType(simples: []Simple, comp: Compound) []u8 {
+    for si in comp.start..comp.end {
+        if simples[si].kind == SelKind.Type {
+            return simples[si].name
+        }
+    }
+    return ""
 }
 
 /// The fingerprint of what the styles `styles` of `doc` for `media`
@@ -119,13 +279,21 @@ fn inputNode(doc: *Document, styles: *Styles, n: NodeId, seed: u64) u64 {
     if node.kind != Kind.Element {
         return inputText(h, node.data)
     }
-    h = inputWord(h, node.attrs.len as u64)
+    var count: u64 = 0
     for at in node.attrs {
+        if text.eql(at.name, "class") {
+            continue
+        }
         h = inputText(h, at.name)
-        if !styles.any_class && text.eqlIgnoreCase(at.name, "class") {
-            h = inputClasses(h, at.value, styles)
-        } else {
-            h = inputText(h, at.value)
+        h = inputText(h, at.value)
+        count += 1
+    }
+    h = inputWord(h, count)
+    // The class attribute, present or not, as the selectors see it.
+    h = inputClasses(h, doc.attr(n, "class") orelse "", styles)
+    for t in styles.class_tests.items() {
+        if t.type_name.len == 0 || text.eql(node.name, t.type_name) {
+            h = inputWord(h, inputBit(attrMatches(doc, t.selector, n)))
         }
     }
     return h

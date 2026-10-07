@@ -406,3 +406,49 @@ test "a restyle keeps the styles while nothing they depend on changed" {
     try styledColor(p, el, &mut out)
     @expectEqual("rgb(0, 0, 0)", out.bytes())
 }
+
+test "style inputs see a class only where a selector can" {
+    let a = @testAllocator()
+    var doc = try html.parse(a, "<p id=p><a id=a>t</a><span id=s>u</span></p>")
+    defer doc.deinit()
+    let media = css.Media { width: 800.0, height: 600.0 }
+    var ua = try css.Sheet.init(a)
+    defer ua.deinit()
+    var author = try css.Sheet.init(a)
+    defer author.deinit()
+    try css.parseSheet(&mut author, "a:not([class]) { color: red } .on { color: blue } :is(span):not([class~=k]) { margin-top: 1px } div [class$=z] { color: green }", media)
+    var styles = try css.Styles.init(a)
+    defer styles.deinit()
+    try css.computeStyles(&doc, &ua, &author, media, &mut styles)
+    let start = styles.inputs
+    @expect(start != 0)
+    @expectEqual(start, css.styleInputs(&doc, media, &styles))
+    let p = doc.getElementById("p").?
+    let link = doc.getElementById("a").?
+    let span = doc.getElementById("s").?
+    // Classes no selector names, where the attribute selectors on
+    // `class` give the same answers.
+    try doc.setAttr(span, "class", "nobody")
+    try doc.setAttr(p, "class", "nobody else")
+    @expectEqual(start, css.styleInputs(&doc, media, &styles))
+    // `a:not([class])`: the first class of a link.
+    try doc.setAttr(link, "class", "nobody")
+    @expect(css.styleInputs(&doc, media, &styles) != start)
+    doc.removeAttr(link, "class")
+    @expectEqual(start, css.styleInputs(&doc, media, &styles))
+    try doc.setAttr(span, "class", "nobody k")
+    @expect(css.styleInputs(&doc, media, &styles) != start)
+    try doc.setAttr(span, "class", "nobody")
+    try doc.setAttr(p, "class", "On")
+    @expect(css.styleInputs(&doc, media, &styles) != start)
+    try doc.setAttr(p, "class", "xyz")
+    @expect(css.styleInputs(&doc, media, &styles) != start)
+    try doc.setAttr(p, "class", "")
+    @expectEqual(start, css.styleInputs(&doc, media, &styles))
+    // Anything else counts.
+    try doc.setAttr(p, "title", "x")
+    @expect(css.styleInputs(&doc, media, &styles) != start)
+    doc.removeAttr(p, "title")
+    @expectEqual(start, css.styleInputs(&doc, media, &styles))
+    @expect(css.styleInputs(&doc, css.Media { width: 799.0, height: 600.0 }, &styles) != start)
+}
