@@ -25,7 +25,7 @@ it finds goes into its report as a new step.
   passes: no crash or timeout, JS errors at or under the expected count,
   expected text in the Markdown, and one agent task (click, type or
   read) reaching the expected page or text.
-- W3: every listed site is ✅, except sites excluded as bot walls.
+- W3: every listed site is ✅ in content (`check`) and visually (a screens review recorded in `sites.json`), except sites excluded as bot walls.
 - W4: load-time targets are met (see Decisions).
 - W5: the manual checklist has been run and recorded.
 - W6: every B8 "What remains" item is done or declared out of scope.
@@ -87,6 +87,7 @@ Done 2026-10-07.
 | P1.11 | Diagnose where youtube-search's remaining CPU goes (~80 s after P1.9; the scheduler now yields, but total work did not fall): JS-stack samples every 1M steps, as P1.8 did | ranked list of hot functions/bundles with shares; proposed fix steps | P1.7–P1.10 merged | P3 |
 | P1.12 | Replay is deterministic but fragile: the virtual clock moves with the step count (P1.10), so any engine change shifts when time-batched beacons fire (P3.39 added one YouTube `log_event` POST by changing step counts, no behavior change). Archive lookup for a non-GET request falls back from method+URL+body to method+URL (the most recent recorded response), so extra or reordered beacons replay | youtube-search passes with P3.39 merged; a fixture with two POSTs to one URL, different bodies, one recorded | P3.40 | P3 |
 | P1.13 | `page_load.py rebless --site X`: when dump behavior changes on purpose (P4.25 scroll budget), recompute an archive's reference Markdown/hash from a replay instead of recapturing (a live recapture of youtube-search on 2026-10-08 returned a page without results, 0.26 s CPU, likely a consent or bot page). `capture` refuses to save a page that fails the site's content expectations | `run --site youtube-search` exit 0 after rebless; a capture that misses the expected strings is rejected with a message | P4.25 | P3 |
+| P1.14 | Visual status per site: `check` passes on Markdown while half the sites look broken (screens review 2026-10-08). Add a `visual` field to `browser/tools/sites.json` (ok / defects list / date reviewed), filled by a screens review; W3 counts a site ✅ only when both content and visual are ok | sites.json has `visual` for every site; `check` prints it | P1.4 | P3 |
 
 ### P2: Ore close-out
 
@@ -117,10 +118,10 @@ step only finds and writes down the cause; the fix is the next step.
 | P3.3 | GitHub: diagnose, then fix, commit data that never loads | `check --site github` | P3.4–6 |
 | P3.4 | Inline SVG sizing. Done: the BBC 290 px wordmark and the Wikipedia ja chart did not reproduce on current main (stale symptoms); two replaced-element sizing rules fixed instead | – | – |
 | P3.5 | BBC menus as bullet lists. Done: does not reproduce on current main (the row predates b69c8d4, CSSOM rules reach the cascade) | – | – |
-| P3.6 | ZOL content runs past the right edge | layout fixture | P3.5 |
+| P3.6 | ZOL content runs past the right edge: confirmed 2026-10-08 (screens review); folded into P3.44 | – | – |
 | P3.7 | Mistral: short iframe widgets, `setTransform` errors | `check --site mistral` | P3.4–6 |
-| P3.8a | Drawing gaps 1: go.dev icon font, rustdoc logo and search bar | `--screens` | not with P3.4 |
-| P3.8b | Drawing gaps 2: MDN header band, Wikipedia en figure, DuckDuckGo favicons, Google buttons | `--screens` | P3.8a |
+| P3.8a | Drawing gaps 1. Screens review 2026-10-08: go.dev icons and the rustdoc logo render; the rustdoc search input is missing (→ P3.49) | – | – |
+| P3.8b | Drawing gaps 2. Screens review 2026-10-08: MDN band (→ P3.47), Wikipedia en figure and DuckDuckGo favicons (→ P3.45) confirmed; Google buttons render default-beveled (→ P3.51) | – | – |
 | P3.9 | Dump virtual clock: an `onload` set inside `setTimeout(0)` after `src` misses the image's load event (a real browser catches it) | new dump fixture | P3.4–8 |
 | P3.10 | Window: scripts run while parsing see an 800px viewport instead of `--width` | window test with `--width` | P3.4–8 |
 | P3.11 | A golden run once hit its 10 s debug-build timeout under load; find the slow golden or raise its budget | repeated `cargo test --test golden` under load | all |
@@ -155,6 +156,14 @@ step only finds and writes down the cause; the fix is the next step.
 | P3.41 | BBC: the ☰ menu button seen live is missing in the replay; confirm on current main, then diagnose | screenshot | P1.4 | P3 |
 | P3.42 | Proxy invariant checks are missing (ECMA-262 [[GetPrototypeOf]], [[SetPrototypeOf]], [[DefineOwnProperty]], [[Get]] etc. validate trap results against the target) | JS test vs Node 22 | P3.39 | all |
 | P3.43 | URL attributes reflected to JS (`img.src`, `a.href`, `link.href`, `script.src`, `form.action`, …) resolve against the load-time `Page.base`, not the current document base: a `<base>` inserted or changed by JS is ignored. Resolve with `documentBase` (cached since P4.19) | jsdom test vs Chrome semantics | P4.19 | P3.4–8 |
+| P3.44 | Diagnose content past the right edge (screens 2026-10-08): ZOL nav and columns, GitHub right sidebar, YouTube-search descriptions, DuckDuckGo titles/URLs — find the shared layout cause(s) (flex/grid min-content, `min-width:0`, `overflow`/`text-overflow`, percentage widths, `box-sizing`) | cause per site with a minimal fixture each | – | P3.45–P3.48 |
+| P3.45 | Diagnose missing images: YouTube-search thumbnails/Shorts/avatars, DuckDuckGo favicons, ZOL video thumbnails, Wikipedia en second figure (lazy loading, `srcset`/`sizes`, CSS backgrounds, `<picture>`, `loading=lazy` outside the scrolled region, archive gaps) | cause per site | – | P3.44 |
+| P3.46 | Wikipedia en/ja: text squeezed beside floats (en: ~90px column, one word per line) and the TOC column too wide — diagnose (float + BFC width, Vector-2022 grid columns, `min-width`) | cause with a fixture | – | P3.44 |
+| P3.47 | Empty bands and duplicates: MDN grey band under the banner, a tiny empty search pill plus a second search box, "English (US)" twice, empty "Try it"; BBC ~280px band above NEWS — diagnose | cause per site | – | P3.44 |
+| P3.48 | Mistral shows a dark hero with no headline or body text (animation start state opacity 0? content behind a hydration step?); "Back to Blog" overlapped by a "0%" widget — diagnose | cause | – | P3.44 |
+| P3.49 | rustdoc: no search input (shows "Search / Settings / Help / Summary" as text) — diagnose (custom element `rustdoc-search`, form control rendering, script-inserted input) | cause | – | all |
+| P3.50 | DuckDuckGo prints raw dates `2026-07-20T00:00:00.0000000`: a Date parse/format path (`Date.parse` of 7-digit fractional seconds, `Intl.DateTimeFormat`, `toLocaleDateString`) — test vs Node 22 | JS test; DuckDuckGo shows formatted dates | – | all |
+| P3.51 | Form controls: buttons render default-beveled where sites style them (Google), GitHub commit-message rows misaligned — confirm against real renders, then diagnose | screenshot comparison | P3.44 | P3.45 |
 | P3.21 | Fetch guards: Response headers read-only (`immutable` guard), Request headers drop forbidden names, a Request's abort listener on its source signal is removed when the request settles | jsdom test vs Node 22 | P3.15 | P3.17 after it merges |
 
 ### P4: Load time
