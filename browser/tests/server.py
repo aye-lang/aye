@@ -42,6 +42,9 @@
 #                    once, as text/plain
 #   /held/NAME       as /slow/NAME, but answered once a /held-now
 #                    request counted it instead of after 0.3 s
+#   /after-fail/NAME as /slow/NAME, but answered once a /fail/ request
+#                    was closed without an answer (waits stop after
+#                    HOLD_LIMIT s, which only a broken browser reaches)
 #   /held-now        once a /held/ request is in flight, the number in
 #                    flight, as text/plain; then it answers them
 #                    (waits stop after HOLD_LIMIT s, which only a broken
@@ -52,6 +55,7 @@ import json
 import http.server
 import mimetypes
 import os
+import socket
 import sys
 import threading
 import time
@@ -78,7 +82,7 @@ SLOW_LOCK = threading.Lock()
 
 # The /held/ requests in flight, and the number of /held-now requests
 # answered: a /held/ request waits until that number changes.
-HELD = {"now": 0, "counted": 0}
+HELD = {"now": 0, "counted": 0, "failed": 0}
 HELD_CHANGED = threading.Condition()
 HOLD_LIMIT = 30
 
@@ -160,6 +164,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         elif path.startswith("/fail/"):
             LOG.append("GET " + path + "\n")
             self.close_connection = True
+            try:
+                self.connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            with HELD_CHANGED:
+                HELD["failed"] += 1
+                HELD_CHANGED.notify_all()
+        elif path.startswith("/after-fail/"):
+            with HELD_CHANGED:
+                HELD_CHANGED.wait_for(lambda: HELD["failed"] > 0, HOLD_LIMIT)
+            self.reply_file(path[len("/after-fail/"):])
         elif path.startswith("/held/"):
             with HELD_CHANGED:
                 counted = HELD["counted"]
