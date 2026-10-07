@@ -248,6 +248,13 @@ fn keysOf(it: *mut Interp, a: Args, keys: *mut List(u32)) JsError!u32 {
     let o = try it.toObject(it.arg(a, 0))
     try it.push(objVal(o))
     try it.ownKeys(o, keys, false)
+    // A namespace's [[GetOwnProperty]] reads the binding: one in its TDZ
+    // throws.
+    if it.heap.obj(o).class == Class.ModuleNamespace {
+        for k in keys.items() {
+            try it.getProp(objVal(o), k)
+        }
+    }
     return o
 }
 

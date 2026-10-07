@@ -81,6 +81,8 @@ pub struct Resolver {
     strict: bool
     // collectVars finds the functions declared in blocks instead of vars.
     annex_pass: bool
+    // The function of module code: it has no `arguments`.
+    module_fn: u32 = NONE
 
     /// Frees the resolver's lists (also after an error).
     pub fn cleanup(self: *mut Self) {
@@ -231,7 +233,7 @@ pub struct Resolver {
                     return
                 }
             }
-            if name == A_ARGUMENTS && s.is_func && !s.arrow && !s.top {
+            if name == A_ARGUMENTS && s.is_func && !s.arrow && !s.top && s.func != self.module_fn {
                 // First use of `arguments` in this function: give it a slot.
                 let slot = s.nslots
                 s.nslots += 1
@@ -373,6 +375,8 @@ pub struct Resolver {
                         var flags: u32 = 0
                         if kind == DECL_CONST {
                             flags = IDENT_CONST
+                        } else if kind == DECL_IMPORT {
+                            flags = IDENT_CONST | IDENT_IMPORT
                         }
                         for j in 0..dn {
                             match self.ast.node(self.ast.item(dl, j)) {
@@ -667,36 +671,41 @@ pub struct Resolver {
             .SuperMember { this_node, .. } => try self.expr(this_node)
             .Yield { arg, .. } => try self.expr(arg)
             .Await { arg } => try self.expr(arg)
-            .ImportCall { arg, .. } => try self.expr(arg)
-            .ModuleNamespace { value } => {
-                try self.expr(value)
-                match self.ast.node(value) {
-                    .ObjectLit { list, n } => {
-                        for k in 0..n {
-                            match self.ast.node(self.ast.item(list, k)) {
-                                .Prop { value: getter, .. } => {
-                                    match self.ast.node(getter) {
-                                        .Func { f } => {
-                                            match self.ast.node(self.ast.func(f).expr) {
-                                                .Ident { depth, .. } => {
-                                                    if depth >= DEPTH_GLOBAL_LEX {
-                                                        try self.fail("Export is not defined", NONE)
-                                                    }
-                                                }
-                                                _ => {}
-                                            }
-                                        }
-                                        _ => {}
+            .ImportCall { arg, options, .. } => {
+                try self.expr(arg)
+                try self.expr(options)
+            }
+            .ModuleLocals { list, n, .. } => {
+                // The module's let/const/class slots, for their TDZ.
+                let lex = self.ast.lists.len() as u32
+                var nlex: u32 = 0
+                for b in self.current().bindings.items() {
+                    if b.lexical {
+                        try self.ast.lists.append(b.slot)
+                        nlex += 1
+                    }
+                }
+                self.ast.nodes.items()[e] = Node.ModuleLocals { list: list, n: n, lex: lex, nlex: nlex }
+                for k in 0..n {
+                    match self.ast.node(self.ast.item(list, k)) {
+                        .Prop { value, .. } => {
+                            try self.expr(value)
+                            match self.ast.node(value) {
+                                .Ident { name, depth, .. } => {
+                                    if depth >= DEPTH_GLOBAL_LEX && self.message.len() == 0 {
+                                        try self.message.append("Export '")
+                                        try self.message.append(self.atoms.name(name))
+                                        try self.message.append("' is not defined in module")
+                                        return SyntaxErr.Syntax
                                     }
                                 }
                                 _ => {}
                             }
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
-            .ImportBindings { value, .. } => try self.expr(value)
             .TaggedTemplate { tag, quasi, .. } => {
                 try self.expr(tag)
                 try self.expr(quasi)

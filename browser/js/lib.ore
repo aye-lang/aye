@@ -416,37 +416,473 @@ pub let LIB =
     \\    [Symbol.toStringTag]: 'AsyncGenerator',
     \\  };
     \\}
-    \\// One module map for classic import(), module import(), and static imports.
+    \\// ---- ES modules: the loader (records and natives: js/modules.ore).
+    \\// One module map per engine, keyed by URL (and type), for static
+    \\// imports, import() and module scripts. Linking and evaluation follow
+    \\// the cyclic module records of ES2022 (InnerModuleLinking and
+    \\// InnerModuleEvaluation over strongly connected components, and async
+    \\// evaluation for top-level await).
     \\const moduleMap = new Map();
     \\const resolveModule = G.__engine.resolveModule;
     \\const fetchModule = G.__engine.fetchModule;
+    \\const parseModule = G.__engine.parseModule;
     \\const isModuleNamespace = G.__engine.isModuleNamespace;
-    \\function importDriver(specifier, referrer, thrown) {
-    \\  return new Promise((resolve, reject) => {
-    \\    let spec;
-    \\    try {
-    \\      if (thrown) throw specifier;
-    \\      if (typeof specifier === 'symbol') throw new TypeError('Cannot convert a Symbol value to a string');
-    \\      spec = String(specifier);
-    \\    } catch (e) { reject(e); return; }
-    \\    queueMicrotask(() => {
-    \\      try {
-    \\        const url = resolveModule(spec, referrer);
-    \\        let promise = moduleMap.get(url);
-    \\        if (!promise) {
-    \\          promise = new Promise((res, rej) => {
-    \\            queueMicrotask(() => {
-    \\              try { res(fetchModule(url, referrer)); } catch (e) { rej(e); }
-    \\            });
-    \\          });
-    \\          moduleMap.set(url, promise);
-    \\        }
-    \\        resolve(promise);
-    \\      } catch (e) { reject(e); }
-    \\    });
-    \\  });
+    \\const constCell = G.__engine.constCell;
+    \\const makeNamespace = G.__engine.makeNamespace;
+    \\const fillNamespace = G.__engine.fillNamespace;
+    \\const jsonParse = JSON.parse;
+    \\const AMBIGUOUS = {};
+    \\let asyncOrder = 0;
+    \\// The import map: [key, value] pairs, longest keys first.
+    \\let mapImports = [];
+    \\let mapScopes = [];
+    \\function capability() {
+    \\  let resolve, reject;
+    \\  const promise = new Promise((a, b) => { resolve = a; reject = b; });
+    \\  return { promise, resolve, reject };
     \\}
-    \\G.__engine.setDrivers(asyncDriver, asyncGenDriver, takeUnhandled, importDriver);
+    \\function setupModule(m) {
+    \\  if (m.json !== undefined) {
+    \\    m.cells = { default: constCell(jsonParse(m.json)) };
+    \\    m.requests = []; m.imports = []; m.indirect = []; m.stars = [];
+    \\    m.locals = [['default', 'default']];
+    \\    m.tla = false;
+    \\    m.linkedEnv = true;
+    \\  } else {
+    \\    m.cells = null;
+    \\    m.linkedEnv = false;
+    \\  }
+    \\  m.deps = null;
+    \\  m.namespace = null;
+    \\  m.status = 'unlinked';
+    \\  m.hasError = false;
+    \\  m.error = undefined;
+    \\  m.cycleRoot = null;
+    \\  m.capability = null;
+    \\  m.asyncEvaluation = false;
+    \\  m.asyncOrder = 0;
+    \\  m.asyncParents = [];
+    \\  m.pending = 0;
+    \\  m.dfsIndex = 0;
+    \\  m.dfsAncestor = 0;
+    \\  return m;
+    \\}
+    \\function moduleKey(url, type) { return type === '' ? url : url + ' ' + type; }
+    \\// The record of the module at url; a failed fetch or parse is cached too.
+    \\function getModule(url, type, referrer) {
+    \\  const key = moduleKey(url, type);
+    \\  let m = moduleMap.get(key);
+    \\  if (m === undefined) {
+    \\    try {
+    \\      if (type !== '' && type !== 'json') throw new TypeError('Unsupported module type "' + type + '"');
+    \\      m = setupModule(fetchModule(url, referrer, type));
+    \\    } catch (e) {
+    \\      m = { failed: true, error: e };
+    \\    }
+    \\    moduleMap.set(key, m);
+    \\  }
+    \\  if (m.failed) throw m.error;
+    \\  return m;
+    \\}
+    \\// Resolves a module specifier: the import map, then URLs.
+    \\function resolveSpecifier(referrer, spec) {
+    \\  if (mapImports.length > 0 || mapScopes.length > 0) {
+    \\    const asURL = resolveModule(spec, referrer, 1);
+    \\    const normal = asURL === null ? spec : asURL;
+    \\    for (let i = 0; i < mapScopes.length; i++) {
+    \\      const prefix = mapScopes[i][0];
+    \\      if (prefix === referrer || (prefix.endsWith('/') && referrer.startsWith(prefix))) {
+    \\        const r = matchImports(normal, asURL, mapScopes[i][1]);
+    \\        if (r !== null) return r;
+    \\      }
+    \\    }
+    \\    const r = matchImports(normal, asURL, mapImports);
+    \\    if (r !== null) return r;
+    \\  }
+    \\  return resolveModule(spec, referrer, 0);
+    \\}
+    \\function blocked(spec) { return new TypeError('Failed to resolve module specifier "' + spec + '"'); }
+    \\function matchImports(normal, asURL, imports) {
+    \\  for (let i = 0; i < imports.length; i++) {
+    \\    const key = imports[i][0];
+    \\    const value = imports[i][1];
+    \\    if (key === normal) {
+    \\      if (value === null) throw blocked(normal);
+    \\      return value;
+    \\    }
+    \\    if (key.endsWith('/') && normal.startsWith(key) && (asURL === null || /^(https?|wss?|ftp|file):/.test(asURL))) {
+    \\      if (value === null) throw blocked(normal);
+    \\      const url = resolveModule(normal.slice(key.length), value, 2);
+    \\      if (url === null || !url.startsWith(value)) throw blocked(normal);
+    \\      return url;
+    \\    }
+    \\  }
+    \\  return null;
+    \\}
+    \\function longestFirst(a, b) { return a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0; }
+    \\// Normalizes a specifier map of an import map and merges it into `into`
+    \\// (keys already there win).
+    \\function mergeSpecifierMap(into, map, base) {
+    \\  const out = into.slice();
+    \\  if (typeof map !== 'object' || map === null || Array.isArray(map)) return out;
+    \\  for (const k of Object.keys(map)) {
+    \\    if (k === '') continue;
+    \\    const key = resolveModule(k, base, 1) || k;
+    \\    if (out.some(e => e[0] === key)) continue;
+    \\    const v = map[k];
+    \\    let value = null;
+    \\    if (typeof v === 'string') value = resolveModule(v, base, 1);
+    \\    if (value !== null && key.endsWith('/') && !value.endsWith('/')) value = null;
+    \\    out.push([key, value]);
+    \\  }
+    \\  return out.sort(longestFirst);
+    \\}
+    \\// The records of everything m imports, transitively (fetched at once).
+    \\function loadGraph(root) {
+    \\  const todo = [root];
+    \\  while (todo.length > 0) {
+    \\    const m = todo.pop();
+    \\    if (m.deps !== null) continue;
+    \\    const deps = [];
+    \\    for (let i = 0; i < m.requests.length; i++) {
+    \\      const r = m.requests[i];
+    \\      deps.push(getModule(resolveSpecifier(m.url, r[0]), r[1], m.url));
+    \\    }
+    \\    m.deps = deps;
+    \\    for (let i = deps.length - 1; i >= 0; i--) {
+    \\      if (deps[i].deps === null) todo.push(deps[i]);
+    \\    }
+    \\  }
+    \\}
+    \\// The cells of m's exported locals: runs its code to the first stop
+    \\// (its environment, with the functions, exists then).
+    \\function localsOf(m) {
+    \\  if (m.cells === null) m.cells = m.g.next().value;
+    \\  return m.cells;
+    \\}
+    \\function resolveExport(m, name, seen) {
+    \\  for (let i = 0; i < seen.length; i += 2) {
+    \\    if (seen[i] === m && seen[i + 1] === name) return null;
+    \\  }
+    \\  seen.push(m, name);
+    \\  for (let i = 0; i < m.locals.length; i++) {
+    \\    if (m.locals[i][0] === name) return { module: m, local: m.locals[i][1] };
+    \\  }
+    \\  for (let i = 0; i < m.indirect.length; i++) {
+    \\    const e = m.indirect[i];
+    \\    if (e[0] === name) {
+    \\      const d = m.deps[e[1]];
+    \\      if (e[2] === null) return { module: d, local: null };
+    \\      return resolveExport(d, e[2], seen);
+    \\    }
+    \\  }
+    \\  if (name === 'default') return null;
+    \\  let star = null;
+    \\  for (let i = 0; i < m.stars.length; i++) {
+    \\    const r = resolveExport(m.deps[m.stars[i]], name, seen);
+    \\    if (r === AMBIGUOUS) return AMBIGUOUS;
+    \\    if (r !== null) {
+    \\      if (star === null) star = r;
+    \\      else if (r.module !== star.module || r.local !== star.local) return AMBIGUOUS;
+    \\    }
+    \\  }
+    \\  return star;
+    \\}
+    \\function exportedNames(m, seen, names) {
+    \\  if (seen.has(m)) return;
+    \\  seen.add(m);
+    \\  for (let i = 0; i < m.locals.length; i++) names.add(m.locals[i][0]);
+    \\  for (let i = 0; i < m.indirect.length; i++) names.add(m.indirect[i][0]);
+    \\  for (let i = 0; i < m.stars.length; i++) {
+    \\    const inner = new Set();
+    \\    exportedNames(m.deps[m.stars[i]], seen, inner);
+    \\    for (const n of inner) if (n !== 'default') names.add(n);
+    \\  }
+    \\}
+    \\function cellOf(r) {
+    \\  return r.local === null ? constCell(namespaceOf(r.module)) : localsOf(r.module)[r.local];
+    \\}
+    \\function namespaceOf(m) {
+    \\  if (m.namespace === null) {
+    \\    const all = new Set();
+    \\    exportedNames(m, new Set(), all);
+    \\    const entries = [];
+    \\    for (const n of all) {
+    \\      const r = resolveExport(m, n, []);
+    \\      if (r !== null && r !== AMBIGUOUS) entries.push([n, r]);
+    \\    }
+    \\    entries.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+    \\    m.namespace = makeNamespace(entries.map(e => e[0]));
+    \\    fillNamespace(m.namespace, entries.map(e => cellOf(e[1])));
+    \\  }
+    \\  return m.namespace;
+    \\}
+    \\function linkError(m, request, name, r) {
+    \\  const spec = m.requests[request][0];
+    \\  return new SyntaxError(r === AMBIGUOUS
+    \\    ? "The requested module '" + spec + "' contains conflicting star exports for name '" + name + "'"
+    \\    : "The requested module '" + spec + "' does not provide an export named '" + name + "'");
+    \\}
+    \\// Checks m's re-exports and gives its code its imports: it runs to the
+    \\// second stop. Throws a SyntaxError for a missing or ambiguous name.
+    \\function initializeEnvironment(m) {
+    \\  if (m.linkedEnv) return;
+    \\  for (let i = 0; i < m.indirect.length; i++) {
+    \\    const e = m.indirect[i];
+    \\    if (e[2] === null) continue;
+    \\    const r = resolveExport(m.deps[e[1]], e[2], [m, e[0]]);
+    \\    if (r === null || r === AMBIGUOUS) throw linkError(m, e[1], e[2], r);
+    \\  }
+    \\  localsOf(m);
+    \\  const bindings = Object.create(null);
+    \\  for (let i = 0; i < m.imports.length; i++) {
+    \\    const e = m.imports[i];
+    \\    const d = m.deps[e[0]];
+    \\    if (e[1] === null) {
+    \\      bindings[e[2]] = namespaceOf(d);
+    \\      continue;
+    \\    }
+    \\    const r = resolveExport(d, e[1], []);
+    \\    if (r === null || r === AMBIGUOUS) throw linkError(m, e[0], e[1], r);
+    \\    bindings[e[2]] = r.local === null ? namespaceOf(r.module) : localsOf(r.module)[r.local];
+    \\  }
+    \\  m.g.next(bindings);
+    \\  m.linkedEnv = true;
+    \\}
+    \\function link(root) {
+    \\  const stack = [];
+    \\  try {
+    \\    innerLink(root, stack, 0);
+    \\  } catch (e) {
+    \\    for (const m of stack) m.status = 'unlinked';
+    \\    throw e;
+    \\  }
+    \\}
+    \\function innerLink(m, stack, index) {
+    \\  if (m.status !== 'unlinked') return index;
+    \\  m.status = 'linking';
+    \\  m.dfsIndex = m.dfsAncestor = index++;
+    \\  stack.push(m);
+    \\  for (let i = 0; i < m.deps.length; i++) {
+    \\    const d = m.deps[i];
+    \\    index = innerLink(d, stack, index);
+    \\    if (d.status === 'linking' && d.dfsAncestor < m.dfsAncestor) m.dfsAncestor = d.dfsAncestor;
+    \\  }
+    \\  initializeEnvironment(m);
+    \\  if (m.dfsAncestor === m.dfsIndex) {
+    \\    let x;
+    \\    do {
+    \\      x = stack.pop();
+    \\      x.status = 'linked';
+    \\    } while (x !== m);
+    \\  }
+    \\  return index;
+    \\}
+    \\// Evaluate(): the promise of m's evaluation (of its cycle's root).
+    \\function evaluate(m) {
+    \\  if ((m.status === 'evaluating-async' || m.status === 'evaluated') && m.cycleRoot !== null) m = m.cycleRoot;
+    \\  if (m.capability !== null) return m.capability.promise;
+    \\  const cap = m.capability = capability();
+    \\  const stack = [];
+    \\  try {
+    \\    innerEvaluate(m, stack, 0);
+    \\    if (!m.asyncEvaluation) cap.resolve(undefined);
+    \\  } catch (e) {
+    \\    for (const x of stack) {
+    \\      x.status = 'evaluated';
+    \\      x.hasError = true;
+    \\      x.error = e;
+    \\    }
+    \\    cap.reject(e);
+    \\  }
+    \\  return cap.promise;
+    \\}
+    \\function innerEvaluate(m, stack, index) {
+    \\  if (m.status === 'evaluating-async' || m.status === 'evaluated') {
+    \\    if (m.hasError) throw m.error;
+    \\    return index;
+    \\  }
+    \\  if (m.status === 'evaluating') return index;
+    \\  m.status = 'evaluating';
+    \\  m.dfsIndex = m.dfsAncestor = index++;
+    \\  m.pending = 0;
+    \\  stack.push(m);
+    \\  for (let i = 0; i < m.deps.length; i++) {
+    \\    let d = m.deps[i];
+    \\    index = innerEvaluate(d, stack, index);
+    \\    if (d.status === 'evaluating') {
+    \\      if (d.dfsAncestor < m.dfsAncestor) m.dfsAncestor = d.dfsAncestor;
+    \\    } else {
+    \\      d = d.cycleRoot;
+    \\      if (d.hasError) throw d.error;
+    \\    }
+    \\    if (d.asyncEvaluation) {
+    \\      m.pending++;
+    \\      d.asyncParents.push(m);
+    \\    }
+    \\  }
+    \\  if (m.pending > 0 || m.tla) {
+    \\    m.asyncEvaluation = true;
+    \\    m.asyncOrder = asyncOrder++;
+    \\    if (m.pending === 0) executeAsync(m);
+    \\  } else {
+    \\    executeSync(m);
+    \\  }
+    \\  if (m.dfsAncestor === m.dfsIndex) {
+    \\    let x;
+    \\    do {
+    \\      x = stack.pop();
+    \\      x.status = x.asyncEvaluation ? 'evaluating-async' : 'evaluated';
+    \\      x.cycleRoot = m;
+    \\    } while (x !== m);
+    \\  }
+    \\  return index;
+    \\}
+    \\function executeSync(m) {
+    \\  if (m.json !== undefined) return;
+    \\  const g = m.g;
+    \\  m.g = null;
+    \\  g.next();
+    \\}
+    \\// Runs a module with top-level await; its end settles one job later.
+    \\function executeAsync(m) {
+    \\  const cap = capability();
+    \\  cap.promise.then(() => asyncFulfilled(m), e => asyncRejected(m, e));
+    \\  const g = m.g;
+    \\  m.g = null;
+    \\  function step(thrown, v) {
+    \\    let r;
+    \\    try {
+    \\      r = thrown ? g.throw(v) : g.next(v);
+    \\    } catch (e) {
+    \\      cap.reject(e);
+    \\      return;
+    \\    }
+    \\    if (r.done) cap.resolve(undefined);
+    \\    else Promise.resolve(r.value).then(x => step(false, x), e => step(true, e));
+    \\  }
+    \\  step(false, undefined);
+    \\}
+    \\function gatherAncestors(m, list) {
+    \\  for (const p of m.asyncParents) {
+    \\    if (!list.includes(p) && !p.cycleRoot.hasError) {
+    \\      p.pending--;
+    \\      if (p.pending === 0) {
+    \\        list.push(p);
+    \\        if (!p.tla) gatherAncestors(p, list);
+    \\      }
+    \\    }
+    \\  }
+    \\}
+    \\function asyncFulfilled(m) {
+    \\  if (m.status === 'evaluated') return;
+    \\  m.asyncEvaluation = false;
+    \\  m.status = 'evaluated';
+    \\  if (m.capability !== null) m.capability.resolve(undefined);
+    \\  const list = [];
+    \\  gatherAncestors(m, list);
+    \\  list.sort((a, b) => a.asyncOrder - b.asyncOrder);
+    \\  for (const x of list) {
+    \\    if (x.status === 'evaluated') continue;
+    \\    if (x.tla) {
+    \\      executeAsync(x);
+    \\      continue;
+    \\    }
+    \\    try {
+    \\      executeSync(x);
+    \\    } catch (e) {
+    \\      asyncRejected(x, e);
+    \\      continue;
+    \\    }
+    \\    x.asyncEvaluation = false;
+    \\    x.status = 'evaluated';
+    \\    if (x.capability !== null) x.capability.resolve(undefined);
+    \\  }
+    \\}
+    \\function asyncRejected(m, e) {
+    \\  if (m.status === 'evaluated') return;
+    \\  m.hasError = true;
+    \\  m.error = e;
+    \\  m.status = 'evaluated';
+    \\  for (const p of m.asyncParents) asyncRejected(p, e);
+    \\  if (m.capability !== null) m.capability.reject(e);
+    \\}
+    \\// Loads, links and evaluates the graph of m; the promise of its
+    \\// evaluation. Loading and linking errors throw.
+    \\function runGraph(m) {
+    \\  loadGraph(m);
+    \\  link(m);
+    \\  return evaluate(m);
+    \\}
+    \\const moduleLoader = {
+    \\  // import(specifier, options) from code of `referrer`.
+    \\  dynamicImport(specifier, referrer, thrown, options) {
+    \\    return new Promise((resolve, reject) => {
+    \\      let spec;
+    \\      let type = '';
+    \\      try {
+    \\        if (thrown) throw specifier;
+    \\        if (typeof specifier === 'symbol') throw new TypeError('Cannot convert a Symbol value to a string');
+    \\        spec = String(specifier);
+    \\        if (options !== undefined) {
+    \\          if (typeof options !== 'object' || options === null) throw new TypeError('The second argument of import() must be an object');
+    \\          const attrs = options.with;
+    \\          if (attrs !== undefined) {
+    \\            if (typeof attrs !== 'object' || attrs === null) throw new TypeError("The 'with' option of import() must be an object");
+    \\            for (const k of Object.keys(attrs)) {
+    \\              if (typeof attrs[k] !== 'string') throw new TypeError('Import attribute values must be strings');
+    \\              if (k === 'type') type = attrs[k];
+    \\            }
+    \\          }
+    \\        }
+    \\      } catch (e) { reject(e); return; }
+    \\      enqueue(() => {
+    \\        let m;
+    \\        let p;
+    \\        try {
+    \\          m = getModule(resolveSpecifier(referrer, spec), type, referrer);
+    \\          p = runGraph(m);
+    \\        } catch (e) { reject(e); return; }
+    \\        p.then(() => {
+    \\          try { resolve(namespaceOf(m)); } catch (e) { reject(e); }
+    \\        }, reject);
+    \\      });
+    \\    });
+    \\  },
+    \\  // A page's module script: the module at href, or inline source.
+    \\  moduleScript(href, source, base) {
+    \\    const m = href !== null ? getModule(href, '', base) : setupModule(parseModule(source, base));
+    \\    const p = runGraph(m);
+    \\    p.then(undefined, e => {
+    \\      const report = G.reportError;
+    \\      if (typeof report === 'function') report(e);
+    \\    });
+    \\    return p;
+    \\  },
+    \\  importMap(json, base) {
+    \\    const map = jsonParse(json);
+    \\    if (typeof map !== 'object' || map === null) return;
+    \\    mapImports = mergeSpecifierMap(mapImports, map.imports, base);
+    \\    if (typeof map.scopes === 'object' && map.scopes !== null) {
+    \\      for (const s of Object.keys(map.scopes)) {
+    \\        const prefix = resolveModule(s, base, 2);
+    \\        if (prefix === null) continue;
+    \\        let entry = mapScopes.find(e => e[0] === prefix);
+    \\        if (entry === undefined) {
+    \\          entry = [prefix, []];
+    \\          mapScopes.push(entry);
+    \\        }
+    \\        entry[1] = mergeSpecifierMap(entry[1], map.scopes[s], base);
+    \\      }
+    \\      mapScopes.sort(longestFirst);
+    \\    }
+    \\  },
+    \\  // import.meta.resolve, bound to the module's URL.
+    \\  resolve(referrer, specifier) {
+    \\    return resolveSpecifier(referrer, String(specifier));
+    \\  },
+    \\};
+    \\G.__engine.setDrivers(asyncDriver, asyncGenDriver, takeUnhandled, moduleLoader);
     \\delete G.__engine;
     \\
     \\// ---- legacy escape / unescape

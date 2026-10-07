@@ -257,9 +257,12 @@ pub struct Interp {
     weak_refs: IntMap(u32, u32)
     kept: List(Value)
     fin_cells: List(FinCell)
-    // Default referrer for classic scripts, and root of the import driver.
+    // Default referrer for classic scripts, and the root of the module
+    // loader object (lib.ore).
     script_url: u32 = 0
     import_driver: u32 = NONE
+    // The native getter of module namespace properties (modules.ore).
+    module_cell_get: u32 = NONE
     // Module function id to the root of its unique import.meta object.
     import_meta: IntMap(u32, u32)
     // Strictness of classic top-level code (functions carry it in FuncInfo).
@@ -2549,6 +2552,7 @@ pub struct Interp {
                 v = self.heap.envs.items()[self.glex].slots[slot]
             } else {
                 v = self.heap.envs.items()[self.envAt(depth)].slots[slot]
+                v = try readImport(self, v)
             }
             match v {
                 .Empty => {
@@ -2640,15 +2644,15 @@ pub struct Interp {
         // Leaves cannot recurse. Keep them out of the large frame of
         // the general evaluator, including its C-stack probe and roots.
         match self.ast.nodes.items()[id] {
-            .Ident { name, depth, slot, .. } => {
+            .Ident { name, depth, slot, flags } => {
                 if depth <= DEPTH_GLOBAL_LEX {
                     var e = self.glex
                     if depth < DEPTH_GLOBAL_LEX {
                         e = self.envAt(depth)
                     }
                     var v = self.heap.envs.items()[e].slots[slot]
-                    if self.classOf(v) == Class.ModuleBinding {
-                        v = try readModuleBinding(self, v)
+                    if (flags & IDENT_IMPORT) != 0 {
+                        v = try readImport(self, v)
                     }
                     match v {
                         .Empty => {
@@ -2907,17 +2911,14 @@ pub struct Interp {
             .Await { arg } => {
                 return self.evalAwait(arg)
             }
-            .ImportCall { arg, referrer } => {
-                return evalImport(self, arg, referrer)
+            .ImportCall { arg, options, referrer } => {
+                return evalImport(self, arg, options, referrer)
             }
             .ImportMeta { referrer, module_id } => {
                 return importMeta(self, referrer, module_id)
             }
-            .ModuleNamespace { value } => {
-                return moduleNamespace(self, value)
-            }
-            .ImportBindings { value, target } => {
-                return importBindings(self, value, target)
+            .ModuleLocals { list, n, lex, nlex } => {
+                return moduleLocals(self, list, n, lex, nlex)
             }
             .NewTarget => {
                 return self.evalNewTarget()
@@ -3395,6 +3396,20 @@ pub struct Interp {
         }
     }
 
+    // `delete o[key]`. Strict code may not delete a module export (other
+    // failed deletes still give false).
+    fn deleted(self: *mut Self, o: u32, key: u32) JsError!Value {
+        let ok = try self.deleteProp(o, key)
+        if !ok && self.heap.obj(o).class == Class.ModuleNamespace && self.isStrictCode() {
+            self.msg.clear()
+            try self.msg.append("Cannot delete property '")
+            try self.msg.append(self.heap.atoms.name(key))
+            try self.msg.append("' of [object Module]")
+            return self.throwError(self.type_error_proto, self.msg.bytes())
+        }
+        return boolVal(ok)
+    }
+
     fn evalUnary(self: *mut Self, op: Op, arg: u32) JsError!Value {
         if op == Op.Typeof {
             match self.ast.node(arg) {
@@ -3416,7 +3431,7 @@ pub struct Interp {
                     if !isObject(o) {
                         return boolVal(true)
                     }
-                    return boolVal(try self.deleteProp(objectOf(o), name))
+                    return self.deleted(objectOf(o), name)
                 }
                 .Index { obj, key, .. } => {
                     let base = self.stack.len()
@@ -3428,7 +3443,7 @@ pub struct Interp {
                     if !isObject(o) {
                         return boolVal(true)
                     }
-                    return boolVal(try self.deleteProp(objectOf(o), atom))
+                    return self.deleted(objectOf(o), atom)
                 }
                 .Ident { .. } => {
                     return boolVal(false)
@@ -4320,7 +4335,7 @@ pub struct Interp {
     // ---- scripts
 
     /// Parses and runs a script. A syntax error throws a SyntaxError.
-    fn parseCode(self: *mut Self, src: []u8, module: bool, referrer: u32) JsError!u32 {
+    fn parseCode(self: *mut Self, src: []u8, module: bool, referrer: u32, info: ?*mut ModuleInfo) JsError!u32 {
         var lx = Lexed.init(self.alloc)
         defer lx.deinit()
         let base = self.ast.source.len() as u32
@@ -4348,6 +4363,7 @@ pub struct Interp {
             floor: self.stackFloor(),
             referrer: referrer,
             module: module,
+            info: info,
         }
         defer p.tmp.deinit()
         var root: u32 = 0
@@ -4379,6 +4395,7 @@ pub struct Interp {
         }
         defer r.cleanup()
         if module {
+            r.module_fn = root
             r.function(root) catch |e| {
                 try self.syntaxError(message.bytes())
                 return JsError.Thrown
@@ -4402,22 +4419,11 @@ pub struct Interp {
         return root
     }
 
-    pub fn runModuleSource(self: *mut Self, src: []u8, referrer: u32) JsError!Value {
-        let f = try self.parseCode(src, true, referrer)
-        let saved = self.env
-        try self.outer_envs.append(saved)
-        self.env = NONE
-        defer self.env = saved
-        defer self.outer_envs.pop()
-        let closure = try self.makeClosure(f)
-        return self.call0(closure, Value.Undefined)
-    }
-
     /// Parses and executes a classic script with its captured base URL.
     pub fn runScript(self: *mut Self, src: []u8) JsError!Value {
         let strict = self.script_strict
         defer self.script_strict = strict
-        let root = try self.parseCode(src, false, self.script_url)
+        let root = try self.parseCode(src, false, self.script_url, null)
         let savedEnv = self.env
         try self.outer_envs.append(savedEnv)
         self.env = NONE

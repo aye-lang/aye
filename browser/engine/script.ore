@@ -599,7 +599,7 @@ fn startPageScripts(p: *mut Page) AllocError!void {
     defer all.deinit()
     var cur: ?NodeId = p.doc.root
     while cur |h| {
-        if p.doc.isElement(h, "script") && (isClassicScript(p, h) || isModuleScript(p, h)) {
+        if p.doc.isElement(h, "script") && (isClassicScript(p, h) || isModuleScript(p, h) || isScriptType(p, h, "importmap")) {
             try all.append(h)
         }
         cur = p.doc.following(h, p.doc.root)
@@ -630,11 +630,31 @@ fn finishPageScripts(p: *mut Page) AllocError!void {
     try afterTask(s)
 }
 
+// Is the `type` of the `script` element `el` (trimmed, ignoring ASCII
+// case) `kind`?
+fn isScriptType(p: *mut Page, el: NodeId, kind: []u8) bool {
+    let t = text.trim(p.doc.attr(el, "type") orelse "")
+    if t.len != kind.len {
+        return false
+    }
+    for i, c in t {
+        var lower = c
+        if c >= 'A' && c <= 'Z' {
+            lower = c + 32
+        }
+        if lower != kind[i] {
+            return false
+        }
+    }
+    return true
+}
+
+fn isModuleScript(p: *mut Page, el: NodeId) bool {
+    return isScriptType(p, el, "module")
+}
+
 // Is the `script` element `el` a classic script (JavaScript, not a
 // module or data)?
-fn isModuleScript(p: *mut Page, el: NodeId) bool {
-    return text.eql(p.doc.attr(el, "type") orelse "", "module")
-}
 
 fn isClassicScript(p: *mut Page, el: NodeId) bool {
     if p.doc.attr(el, "nomodule") != null {
@@ -685,6 +705,9 @@ fn runScriptElement(s: *mut Script, el: NodeId) AllocError!void {
     if isModuleScript(p, el) {
         return runModuleElement(s, el)
     }
+    if isScriptType(p, el, "importmap") {
+        return addImportMap(s, el)
+    }
     if p.doc.attr(el, "src") |src| {
         let target = p.resolve(s.alloc, src) catch |e| {
             return addConsole(s, "[error] Failed to load script: ", src)
@@ -710,31 +733,50 @@ fn runScriptElement(s: *mut Script, el: NodeId) AllocError!void {
     return runSourceOf(s, el, b.bytes())
 }
 
+// A module script: its graph is fetched, linked and evaluated (deferred,
+// in document order with `defer` scripts). An error before evaluation is
+// reported as uncaught; the loader reports a failed evaluation.
 fn runModuleElement(s: *mut Script, el: NodeId) AllocError!void {
+    let p = s.page
+    let began = perf.start()
+    let source = p.doc.attr(el, "src") orelse "inline module"
+    defer perf.end("script", began, source)
     s.current = null
+    var b = text.Builder.init(s.alloc)
+    defer b.deinit()
     enter(s)
-    if s.page.doc.attr(el, "src") |src| {
-        let target = s.page.resolve(s.alloc, src) catch |e| {
+    if p.doc.attr(el, "src") |src| {
+        let target = p.resolve(s.alloc, src) catch |e| {
             leave(s)
-            return addConsole(s, "[error] Failed to load module: ", src)
+            return addConsole(s, "[error] Failed to load module script: ", src)
         }
         defer target.deinit(s.alloc)
-        js.importModule(&mut s.it, target.href, s.it.script_url) catch |e| {
+        js.runModuleScript(&mut s.it, target.href, "", p.base.href) catch |e| {
             leave(s)
             return uncaught(s, e)
         }
     } else {
-        var b = text.Builder.init(s.alloc)
-        defer b.deinit()
-        try s.page.doc.textContent(el, &mut b)
-        let referrer = s.it.intern(s.page.base.href) catch return AllocError.OutOfMemory
-        s.it.runModuleSource(b.bytes(), referrer) catch |e| {
+        try p.doc.textContent(el, &mut b)
+        js.runModuleScript(&mut s.it, null, b.bytes(), p.base.href) catch |e| {
             leave(s)
             return uncaught(s, e)
         }
     }
     leave(s)
     try runMicrotasks(s)
+}
+
+// `<script type="importmap">`: its JSON goes to the module loader.
+fn addImportMap(s: *mut Script, el: NodeId) AllocError!void {
+    var b = text.Builder.init(s.alloc)
+    defer b.deinit()
+    try s.page.doc.textContent(el, &mut b)
+    enter(s)
+    js.addImportMap(&mut s.it, b.bytes(), s.page.base.href) catch |e| {
+        leave(s)
+        return uncaught(s, e)
+    }
+    leave(s)
 }
 
 fn runSourceOf(s: *mut Script, el: NodeId, code: []u8) AllocError!void {
