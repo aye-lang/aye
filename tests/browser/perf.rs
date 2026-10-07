@@ -115,3 +115,36 @@ fn response_archive_replays_without_server() {
     assert!(text(&missing.stderr).contains("archive miss:"), "{}", text(&missing.stderr));
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// A replayed POST whose body has no record (a beacon that an engine
+/// change added or moved) gets the latest recorded POST response for its
+/// URL and reports `archive fallback:`, not a miss (P1.12).
+#[test]
+fn archive_replays_unrecorded_post_bodies() {
+    let Some(srv) = server() else { return };
+    let dir = scratch().join("perf-archive-post");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let base = srv.base.clone();
+    let page = |bodies: &[&str]| {
+        let posts: String = bodies.iter().enumerate().map(|(i, b)| format!(
+            "fetch('BASE/fetch-echo',{{method:'POST',body:'{b}'}}).then(r=>r.json()).then(j=>{{document.getElementById('p{i}').textContent='{b} got '+j.body}});"
+        )).collect();
+        let ps: String = (0..bodies.len()).map(|i| format!("<p id=p{i}></p>")).collect();
+        format!("data:text/html,{ps}<script>{posts}</script>").replace("BASE", &base)
+    };
+    let dump = |env: &str, page: &str| Command::new(anyknown()).current_dir(root()).env(env, &dir).args(["dump", "--md", "--js", page]).output().unwrap();
+    // "one" is recorded before "two", so "two" is the latest.
+    for body in ["one", "two"] {
+        let recorded = dump("ANYKNOWN_RECORD", &page(&[body]));
+        assert!(recorded.status.success() && recorded.stderr.is_empty(), "{}", text(&recorded.stderr));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    drop(srv);
+    let replayed = dump("ANYKNOWN_REPLAY", &page(&["one", "three", "four"]));
+    let (out, err) = (text(&replayed.stdout), text(&replayed.stderr));
+    assert!(replayed.status.success() && !err.contains("archive miss:"), "{err}");
+    assert_eq!(err.matches("archive fallback:").count(), 2, "{err}");
+    assert!(out.contains("one got one") && out.contains("three got two") && out.contains("four got two"), "{out}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
