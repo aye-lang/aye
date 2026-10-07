@@ -169,6 +169,17 @@ quiet machine.
 **Why:** wall-clock numbers and timing-sensitive tests are wrong on an
 overloaded machine.
 
+### A speed test limits CPU time, not wall time
+**Context:** a test that fails when a program gets slower.
+**Bad:** golden `perf/General` killed the debug build after 10 s of
+wall time; at load 30–50 it failed and passed on rerun, though the
+program needs 0.13 s of CPU (P3.11).
+**Good:** `output_and_cpu_within` in `tests/golden.rs` takes the child's
+CPU time from `wait4`; `perf_general` limits it to 2 s and keeps a 120 s
+wall limit only to catch a hang.
+**Why:** load stretches wall time many times over, but not the CPU time
+the program itself uses.
+
 ## Compiler gaps
 
 ### Record a compiler limitation in browser/COMPILER_GAPS.md

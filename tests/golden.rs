@@ -466,6 +466,56 @@ fn output_within(cmd: &mut Command, secs: u64) -> Option<std::process::Output> {
     }
 }
 
+/// Like `output_within`, and also the CPU time (user + system) the child used,
+/// from `wait4`. Unlike wall time, load on the machine does not change it.
+/// The output is read after the child exits: it must fit in a pipe.
+fn output_and_cpu_within(cmd: &mut Command, secs: u64) -> Option<(std::process::Output, std::time::Duration)> {
+    use std::io::Read;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::Stdio;
+    use std::time::Duration;
+    // `tv_usec` is an int on macOS and a long on Linux: 16 bytes either way,
+    // and the low half holds it on little-endian machines.
+    #[repr(C)]
+    struct Timeval {
+        sec: i64,
+        usec: i32,
+    }
+    #[repr(C)]
+    struct Rusage {
+        utime: Timeval,
+        stime: Timeval,
+        rest: [i64; 14],
+    }
+    unsafe extern "C" {
+        fn wait4(pid: i32, status: *mut i32, options: i32, rusage: *mut Rusage) -> i32;
+    }
+    const WNOHANG: i32 = 1;
+    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().ok()?;
+    let pid = child.id() as i32;
+    let (mut status, mut ru) = (0, unsafe { std::mem::zeroed::<Rusage>() });
+    let start = std::time::Instant::now();
+    loop {
+        match unsafe { wait4(pid, &mut status, WNOHANG, &mut ru) } {
+            0 => {}
+            r if r == pid => break,
+            _ => return None,
+        }
+        if start.elapsed().as_secs() >= secs {
+            let _ = child.kill();
+            unsafe { wait4(pid, &mut status, 0, &mut ru) };
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    child.stdout.take()?.read_to_end(&mut stdout).ok()?;
+    child.stderr.take()?.read_to_end(&mut stderr).ok()?;
+    let time = |t: &Timeval| Duration::from_secs(t.sec as u64) + Duration::from_micros(t.usec as u64);
+    let status = std::process::ExitStatus::from_raw(status);
+    Some((std::process::Output { status, stdout, stderr }, time(&ru.utime) + time(&ru.stime)))
+}
+
 /// Does clang's ThreadSanitizer work here: a C program with two threads,
 /// built with `-fsanitize=thread`, runs cleanly?
 fn tsan_works(work: &Path) -> bool {
@@ -514,21 +564,24 @@ fn cli_tsan(work: &Path) -> Result<(), String> {
 
 /// M9.7: `General` in debug mode allocates and frees in constant time:
 /// `tests/cases/general_churn.ore` (a million allocation and free pairs,
-/// and a recursion that allocates per call), built in debug mode, finishes
-/// within 10 s. Before M9.7 each free scanned every allocation so far.
+/// and a recursion that allocates per call), built in debug mode, uses at
+/// most 2 s of CPU time (0.13 s on 2026-10-07). Before M9.7 each free
+/// scanned every allocation so far. CPU time, not wall time: under load
+/// the wall time grew past the old 10 s limit (P3.11).
 fn perf_general(work: &Path) -> Result<(), String> {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cases/general_churn.ore");
     let c = driver::compile_to_c(&name(&src), &read(&src).unwrap(), Mode::Debug).map_err(|d| join(&d))?;
     let exe = work.join("general_churn_perf");
     driver::cc(&c, &exe, Mode::Debug)?;
-    // The first run of a new executable can be slow (macOS scans it).
-    let _ = output_within(&mut Command::new(&exe), 60);
-    let start = std::time::Instant::now();
-    let out = output_within(&mut Command::new(&exe), 10).ok_or("the debug build did not finish within 10 s")?;
+    // The wall-time limit only catches a hang.
+    let (out, cpu) = output_and_cpu_within(&mut Command::new(&exe), 120).ok_or("the debug build did not finish within 120 s")?;
     if !out.status.success() {
         return Err(format!("the debug build failed: {}", String::from_utf8_lossy(&out.stderr)));
     }
-    println!("perf/General: {} ms", start.elapsed().as_millis());
+    if cpu > std::time::Duration::from_secs(2) {
+        return Err(format!("the debug build used {} ms of CPU time; the limit is 2000 ms", cpu.as_millis()));
+    }
+    println!("perf/General: {} ms CPU", cpu.as_millis());
     Ok(())
 }
 
