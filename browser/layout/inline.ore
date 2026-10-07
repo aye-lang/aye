@@ -605,7 +605,7 @@ fn layoutInline(t: *mut Tree, i: usize, avail: f64) AllocError!f64 {
             continue
         }
         try lb.line(ps[start..k], forced, k >= ps.len)
-        if clamp_y == null && t.lines.len() - t.bx(i).line_start == clamp {
+        if clamp > 0 && clamp_y == null && t.lines.len() - t.bx(i).line_start == clamp {
             // The lines after it still show as overflow.
             let li = t.lines.len() - 1
             let line = t.lines.items()[li]

@@ -1,6 +1,7 @@
 viewport 800x600
   block <html> (0, 0) 800x260
     block <body> (0, 0) 800x260
+      block <div class="e"> (0, 0) 100x0
       block <div class="e"> (0, 0) 100x20
         line (0, 0) 100x20
           text (0, 2) 88x16 "A very long"
