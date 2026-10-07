@@ -22,8 +22,8 @@
     "github": {
       "status": "warn",
       "max_errors": 0,
-      "md": ["## Repository navigation", "[README.md](https://github.com/rust-lang/rust/blob/main/README.md)", "## Contributing"],
-      "note": "Commit message and date columns stay empty; Latest commit says \"Cannot retrieve latest commit at this time.\" (the page asks /latest-commit and /tree-commit-info without the branch, GitHub answers 400); empty History section. Replay logs no errors."
+      "md": ["## Repository navigation", "[README.md](https://github.com/rust-lang/rust/blob/main/README.md)", "## Contributing", "[8d1a764](https://github.com/rust-lang/rust/commit/8d1a76430406c877b35d0b627e7f796dcf0dfeca)", "[Synchronize Unicode license text from unicode.org](https://github.com/rust-lang/rust/commit/6d2a3e9786ec43a0e0af20386e7046328296ac86)"],
+      "note": "Latest commit and the commit message and date columns load (P3.26: the old 400s on /latest-commit and /tree-commit-info came from fetch dropping the Accept header before P3.17; the repository root route has no branch, so no branch in the URL is right). Empty History section. Replay logs no errors."
     },
     "mdn": {
       "status": "ok",
