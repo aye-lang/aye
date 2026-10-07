@@ -1,0 +1,4 @@
+set a, define a, set b, define b, set s, set a, define a {"a":4,"g":4,"b":3}
+false false false
+true 5 z
+false false

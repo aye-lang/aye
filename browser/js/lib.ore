@@ -1007,9 +1007,21 @@ pub let LIB =
     \\  set(o, k, v, r) {
     \\    if (isModuleNamespace(o)) return false;
     \\    if (r === undefined || r === o) { o[k] = v; return true; }
+    \\    // OrdinarySet with another receiver: a setter runs on it; a data
+    \\    // property is defined on it (a proxy's [[Set]] is not called again).
     \\    const d = findDescriptor(o, k);
-    \\    if (d && d.set) { d.set.call(r, v); return true; }
-    \\    r[k] = v;
+    \\    if (d && (d.get || d.set)) {
+    \\      if (!d.set) return false;
+    \\      d.set.call(r, v);
+    \\      return true;
+    \\    }
+    \\    if (d && !d.writable) return false;
+    \\    if (r === null || (typeof r !== 'object' && typeof r !== 'function')) return false;
+    \\    const own = Object.getOwnPropertyDescriptor(r, k);
+    \\    if (own && (own.get || own.set || !own.writable)) return false;
+    \\    try {
+    \\      Object.defineProperty(r, k, own ? { value: v } : { value: v, writable: true, enumerable: true, configurable: true });
+    \\    } catch (e) { return false; }
     \\    return true;
     \\  },
     \\  has(o, k) { return k in o; },
