@@ -1,0 +1,17 @@
+<!doctype html>
+<title>super in class field initializers</title>
+<p id="out">pending</p>
+<script>
+// The Mistral blog's elements declare `resize = () => { super.resize(); ... }`.
+class A {
+  resize() { return 'A'; }
+  static make() { return 'sA'; }
+}
+class B extends A {
+  resize = () => super.resize() + 'B';
+  name = super.resize() + 'n';
+  static made = super.make() + 'B';
+}
+const b = new B();
+document.getElementById('out').textContent = [b.resize(), b.name, B.made].join(' ');
+</script>
