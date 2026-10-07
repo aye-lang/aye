@@ -4,7 +4,7 @@
 // `background`, `mask`, `border-radius` (layers.ore), `list-style`,
 // `overflow`, `text-decoration`, `inset`,
 // `gap`, `flex`, `flex-flow`, `grid-column`, `grid-row`, `grid-area`,
-// `grid-gap`, and the logical `margin-inline`, `margin-block`,
+// `grid-gap`, `grid-template` (without area strings), and the logical `margin-inline`, `margin-block`,
 // `padding-inline`, `padding-block`, `inset-inline`, `inset-block`,
 // `place-items`, `place-self`, `place-content`) expand into their
 // longhands. The other logical properties (`margin-inline-start`,
@@ -250,6 +250,9 @@ fn shorthandLonghands(name: []u8, out: []mut usize) usize {
     } else if text.eql(name, "flex-flow") {
         first = FLEX_DIRECTION
         n = 2
+    } else if text.eql(name, "grid-template") {
+        first = GRID_TEMPLATE_COLUMNS
+        n = 3
     } else if text.eql(name, "flex") {
         first = FLEX_GROW
         n = 3
@@ -441,6 +444,9 @@ struct Declarer {
         if text.eql(name, "grid-area") {
             return self.gridLines(comps, GRID_COLUMN_START + 2, GRID_COLUMN_START, GRID_COLUMN_START + 3, GRID_COLUMN_START + 1)
         }
+        if text.eql(name, "grid-template") {
+            return self.gridTemplate(comps)
+        }
         if text.eql(name, "grid-gap") {
             return self.gap(comps)
         }
@@ -522,6 +528,42 @@ struct Declarer {
         for k in 0..n {
             try self.add(props[k], vals[k])
         }
+    }
+
+    // `grid-template: none | rows / columns`; the areas become `none`.
+    // The form with area strings is dropped.
+    fn gridTemplate(self: *mut Self, comps: []Comp) AllocError!void {
+        let props = [3]usize{GRID_TEMPLATE_ROWS, GRID_TEMPLATE_COLUMNS, GRID_TEMPLATE_AREAS}
+        if try self.wide(comps, props[..]) {
+            return
+        }
+        let none = Value.Keyword { k: "none" }
+        if comps.len == 1 && isIdent(comps[0], "none") {
+            for p in props {
+                try self.add(p, none)
+            }
+            return
+        }
+        var slash = comps.len
+        for k, c in comps {
+            if c.toks.len == 1 && c.toks[0].kind == Tok.String {
+                return
+            }
+            if isDelim(c, '/') {
+                if slash < comps.len {
+                    return
+                }
+                slash = k
+            }
+        }
+        if slash == 0 || slash + 1 >= comps.len {
+            return
+        }
+        let rows = (try parseValue(self.sheet, GRID_TEMPLATE_ROWS, comps[..slash])) orelse return
+        let columns = (try parseValue(self.sheet, GRID_TEMPLATE_COLUMNS, comps[slash + 1..])) orelse return
+        try self.add(GRID_TEMPLATE_ROWS, rows)
+        try self.add(GRID_TEMPLATE_COLUMNS, columns)
+        try self.add(GRID_TEMPLATE_AREAS, none)
     }
 
     // `gap: row [column]`.

@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<style>
+body { margin: 0 }
+.g { display: grid; width: 400px; column-gap: 20px; margin-bottom: 4px }
+.g > div { height: 20px }
+/* Wikipedia's Vector skin: the shorthand, then the areas longhand */
+.page { grid-template: min-content 1fr min-content / 100px minmax(0,1fr);
+        grid-template-areas: 'top top' 'start content' 'foot foot' }
+.top { grid-area: top } .start { grid-area: start }
+.content { grid-area: content } .foot { grid-area: foot }
+/* The shorthand replaces an earlier longhand */
+.over { grid-template-columns: 1fr 1fr 1fr; grid-template: auto / 50px 1fr }
+/* none resets all three */
+.none { grid-template-columns: 1fr 1fr; grid-template: none }
+</style>
+<!-- `grid-template: rows / columns` sets both track lists (P3.46) -->
+<div class="g page"><div class="top">top</div><div class="start">start</div><div class="content">content</div><div class="foot">foot</div></div>
+<div class="g over"><div>a</div><div>b</div></div>
+<div class="g none"><div>a</div><div>b</div></div>
+<!-- area strings are not supported: dropped, the longhand stays -->
+<div class="g" style="grid-template-columns: 30px 1fr; grid-template: 'a b' 20px / 1fr 1fr"><div>a</div><div>b</div></div>
