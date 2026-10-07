@@ -1643,38 +1643,304 @@ pub let PRELUDE =
     \\}
     \\Object.defineProperty(Headers.prototype, Symbol.toStringTag, { value: 'Headers', configurable: true });
     \\
-    \\// The body of a Request or a Response: text() and json() read it once.
-    \\// It is the string, Blob or buffer it was made from (no ReadableStream).
-    \\function bodyMethods(C, kind) {
-    \\  getter(C.prototype, 'bodyUsed', function () { return this._bodyUsed; });
-    \\  hidden(C.prototype, 'text', function text() { return readBody(this, kind, 'text'); });
-    \\  hidden(C.prototype, 'json', function json() { return readBody(this, kind, 'json').then(t => JSON.parse(t)); });
+    \\// ReadableStream: a queue of chunks that a reader takes one at a time.
+    \\// No backpressure (desiredSize only counts the queue); tee() for clone().
+    \\class ReadableStreamDefaultController {
+    \\  constructor(s) { hidden(this, '_s', s); }
+    \\  get desiredSize() { return this._s._state === 'readable' ? 1 - this._s._queue.length : this._s._state === 'closed' ? 0 : null; }
+    \\  enqueue(chunk) {
+    \\    const s = this._s;
+    \\    if (s._state !== 'readable' || s._closing) throw new TypeError("Failed to execute 'enqueue' on 'ReadableStreamDefaultController': Cannot enqueue a chunk into a closed readable stream.");
+    \\    if (s._reads.length > 0) s._reads.shift()[0]({ value: chunk, done: false });
+    \\    else s._queue.push(chunk);
+    \\  }
+    \\  close() {
+    \\    const s = this._s;
+    \\    if (s._state !== 'readable' || s._closing) throw new TypeError("Failed to execute 'close' on 'ReadableStreamDefaultController': Cannot close a readable stream that has already been requested to be closed");
+    \\    s._closing = true;
+    \\    if (s._queue.length === 0) streamClose(s);
+    \\  }
+    \\  error(e) { if (this._s._state === 'readable') streamError(this._s, e); }
     \\}
-    \\function readBody(o, kind, method) {
-    \\  if (o._bodyUsed) return Promise.reject(new TypeError("Failed to execute '" + method + "' on '" + kind + "': body stream already read"));
+    \\function streamClose(s) {
+    \\  s._state = 'closed';
+    \\  for (const [resolve] of s._reads.splice(0)) resolve({ value: undefined, done: true });
+    \\  s._closed[1]();
+    \\}
+    \\function streamError(s, e) {
+    \\  s._state = 'errored';
+    \\  s._error = e;
+    \\  s._queue = [];
+    \\  for (const [, reject] of s._reads.splice(0)) reject(e);
+    \\  s._closed[2](e);
+    \\}
+    \\class ReadableStream {
+    \\  constructor(source) {
+    \\    if (source === undefined || source === null) source = {};
+    \\    hidden(this, '_source', source);
+    \\    hidden(this, '_queue', []);
+    \\    hidden(this, '_reads', []);
+    \\    hidden(this, '_state', 'readable');
+    \\    hidden(this, '_closing', false);
+    \\    hidden(this, '_error', undefined);
+    \\    hidden(this, '_reader', null);
+    \\    hidden(this, '_disturbed', false);
+    \\    let resolve, reject;
+    \\    const closed = new Promise((a, b) => { resolve = a; reject = b; });
+    \\    closed.catch(() => {});
+    \\    hidden(this, '_closed', [closed, resolve, reject]);
+    \\    hidden(this, '_controller', new ReadableStreamDefaultController(this));
+    \\    if (typeof source.start === 'function') {
+    \\      try {
+    \\        const p = source.start(this._controller);
+    \\        if (p && typeof p.then === 'function') p.then(null, e => this._controller.error(e));
+    \\      } catch (e) {
+    \\        streamError(this, e);
+    \\      }
+    \\    }
+    \\  }
+    \\  get locked() { return this._reader !== null; }
+    \\  getReader(options) {
+    \\    if (options && options.mode !== undefined) throw new TypeError("Failed to execute 'getReader' on 'ReadableStream': 'byob' readers are not supported.");
+    \\    return new ReadableStreamDefaultReader(this);
+    \\  }
+    \\  cancel(reason) {
+    \\    if (this.locked) return Promise.reject(new TypeError("Failed to execute 'cancel' on 'ReadableStream': Cannot cancel a locked stream"));
+    \\    return streamCancel(this, reason);
+    \\  }
+    \\  // Two streams that each get every chunk of this one (which it locks).
+    \\  tee() {
+    \\    const reader = this.getReader();
+    \\    const a = new ReadableStream(), b = new ReadableStream();
+    \\    const pump = () => reader.read().then(({ value, done }) => {
+    \\      for (const s of [a, b]) {
+    \\        if (s._state !== 'readable' || s._closing) continue;
+    \\        if (done) s._controller.close();
+    \\        else s._controller.enqueue(value);
+    \\      }
+    \\      if (!done) pump();
+    \\    }, e => { a._controller.error(e); b._controller.error(e); });
+    \\    pump();
+    \\    return [a, b];
+    \\  }
+    \\}
+    \\function streamCancel(s, reason) {
+    \\  s._disturbed = true;
+    \\  if (s._state === 'errored') return Promise.reject(s._error);
+    \\  if (s._state === 'closed') return Promise.resolve(undefined);
+    \\  s._queue = [];
+    \\  streamClose(s);
+    \\  if (typeof s._source.cancel === 'function') {
+    \\    try { return Promise.resolve(s._source.cancel(reason)).then(() => undefined); } catch (e) { return Promise.reject(e); }
+    \\  }
+    \\  return Promise.resolve(undefined);
+    \\}
+    \\class ReadableStreamDefaultReader {
+    \\  constructor(stream) {
+    \\    if (!(stream instanceof ReadableStream)) throw new TypeError("Failed to construct 'ReadableStreamDefaultReader': parameter 1 is not of type 'ReadableStream'.");
+    \\    if (stream.locked) throw new TypeError("Failed to construct 'ReadableStreamDefaultReader': ReadableStreamDefaultReader constructor can only accept readable streams that are not yet locked to a reader");
+    \\    stream._reader = this;
+    \\    hidden(this, '_s', stream);
+    \\  }
+    \\  get closed() { return this._s ? this._s._closed[0] : Promise.reject(new TypeError('This readable stream reader has been released and cannot be used to monitor the stream\'s state')); }
+    \\  read() {
+    \\    const s = this._s;
+    \\    if (s === null) return Promise.reject(new TypeError("Failed to execute 'read' on 'ReadableStreamDefaultReader': This readable stream reader has been released and cannot be used to read from its previous owner stream"));
+    \\    s._disturbed = true;
+    \\    if (s._queue.length > 0) {
+    \\      const value = s._queue.shift();
+    \\      if (s._queue.length === 0 && s._closing) streamClose(s);
+    \\      return Promise.resolve({ value, done: false });
+    \\    }
+    \\    if (s._state === 'closed') return Promise.resolve({ value: undefined, done: true });
+    \\    if (s._state === 'errored') return Promise.reject(s._error);
+    \\    const p = new Promise((resolve, reject) => s._reads.push([resolve, reject]));
+    \\    if (typeof s._source.pull === 'function') {
+    \\      try { s._source.pull(s._controller); } catch (e) { streamError(s, e); }
+    \\    }
+    \\    return p;
+    \\  }
+    \\  releaseLock() {
+    \\    const s = this._s;
+    \\    if (s === null) return;
+    \\    for (const [, reject] of s._reads.splice(0)) reject(new TypeError('Releasing reader'));
+    \\    s._reader = null;
+    \\    this._s = null;
+    \\  }
+    \\  cancel(reason) {
+    \\    if (this._s === null) return Promise.reject(new TypeError('This readable stream reader has been released and cannot be used to cancel its previous owner stream'));
+    \\    return streamCancel(this._s, reason);
+    \\  }
+    \\}
+    \\hidden(G, 'ReadableStream', ReadableStream);
+    \\hidden(G, 'ReadableStreamDefaultReader', ReadableStreamDefaultReader);
+    \\hidden(G, 'ReadableStreamDefaultController', ReadableStreamDefaultController);
+    \\
+    \\// The body of a Request or a Response, read once: the string, Blob,
+    \\// buffer, FormData or ReadableStream it was made from (`_body`), and
+    \\// the stream `body` returns, made when first asked for (`_stream`).
+    \\function bodyMethods(C, kind) {
+    \\  getter(C.prototype, 'bodyUsed', function () { return this._bodyUsed || (this._stream !== null && this._stream._disturbed); });
+    \\  getter(C.prototype, 'body', function () {
+    \\    if (this._body === null) return null;
+    \\    if (this._stream === null) {
+    \\      const u = this._bodyUsed ? null : byteArray(bodyByteString(this._body));
+    \\      this._stream = new ReadableStream({ start(c) { if (u !== null && u.length > 0) c.enqueue(u); c.close(); } });
+    \\      this._stream._disturbed = this._bodyUsed;
+    \\    }
+    \\    return this._stream;
+    \\  });
+    \\  hidden(C.prototype, 'text', function text() {
+    \\    return readBody(this, kind, 'text', u => typeof u === 'string' ? u : new TextDecoder().decode(u));
+    \\  });
+    \\  hidden(C.prototype, 'json', function json() {
+    \\    return readBody(this, kind, 'json', u => JSON.parse(typeof u === 'string' ? u : new TextDecoder().decode(u)));
+    \\  });
+    \\  hidden(C.prototype, 'arrayBuffer', function arrayBuffer() {
+    \\    return readBody(this, kind, 'arrayBuffer', u => typeof u === 'string' ? new TextEncoder().encode(u).buffer : u.buffer);
+    \\  });
+    \\  hidden(C.prototype, 'blob', function blob() {
+    \\    return readBody(this, kind, 'blob', u => new Blob([u], { type: this.headers.get('content-type') || '' }));
+    \\  });
+    \\  hidden(C.prototype, 'formData', function formData() {
+    \\    return readBody(this, kind, 'formData', u => parseFormBody(typeof u === 'string' ? bodyByteString(u) : byteString(u), this.headers.get('content-type') || '', kind));
+    \\  });
+    \\}
+    \\// The bytes of a body that is not a stream, as a string of code units
+    \\// 0..255.
+    \\function bodyByteString(body) {
+    \\  return body instanceof FormData ? formDataBytes(body) : blobBytes([body]);
+    \\}
+    \\function byteArray(s) {
+    \\  const u = new Uint8Array(s.length);
+    \\  for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i);
+    \\  return u;
+    \\}
+    \\function byteString(u) {
+    \\  let s = '';
+    \\  for (let i = 0; i < u.length; i++) s += String.fromCharCode(u[i]);
+    \\  return s;
+    \\}
+    \\// Reads the body once and settles with `as` of its bytes (a Uint8Array),
+    \\// or of the string itself for a string body (a fetched one).
+    \\function readBody(o, kind, method, as) {
+    \\  const s = o._stream;
+    \\  if (o.bodyUsed) return Promise.reject(new TypeError("Failed to execute '" + method + "' on '" + kind + "': body stream already read"));
+    \\  if (s !== null && s.locked) return Promise.reject(new TypeError("Failed to execute '" + method + "' on '" + kind + "': body stream is locked"));
     \\  const body = o._body;
-    \\  if (body === null) return Promise.resolve('');
-    \\  o._bodyUsed = true;
-    \\  if (body instanceof Blob) return body.text();
-    \\  if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) return Promise.resolve(new TextDecoder().decode(body));
-    \\  return Promise.resolve(String(body));
+    \\  let bytes;
+    \\  if (body === null) bytes = Promise.resolve(new Uint8Array(0));
+    \\  else {
+    \\    o._bodyUsed = true;
+    \\    if (body instanceof ReadableStream) bytes = streamBytes(body);
+    \\    else {
+    \\      if (s !== null) s.getReader();
+    \\      bytes = Promise.resolve(typeof body === 'string' ? body : byteArray(bodyByteString(body)));
+    \\    }
+    \\  }
+    \\  return bytes.then(as);
+    \\}
+    \\// All the chunks of a stream, joined.
+    \\function streamBytes(stream) {
+    \\  const reader = stream.getReader();
+    \\  const chunks = [];
+    \\  const next = () => reader.read().then(({ value, done }) => {
+    \\    if (!done) {
+    \\      if (!ArrayBuffer.isView(value)) throw new TypeError('Received non-Uint8Array chunk');
+    \\      chunks.push(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+    \\      return next();
+    \\    }
+    \\    const u = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+    \\    let at = 0;
+    \\    for (const c of chunks) { u.set(c, at); at += c.length; }
+    \\    return u;
+    \\  });
+    \\  return next();
+    \\}
+    \\// The FormData of a body (bytes as a string of code units 0..255) of
+    \\// Content-Type `type`: multipart/form-data or urlencoded.
+    \\function parseFormBody(bytes, type, kind) {
+    \\  const fail = () => new TypeError("Failed to execute 'formData' on '" + kind + "': Failed to fetch");
+    \\  const essence = type.split(';')[0].trim().toLowerCase();
+    \\  const utf8 = s => new TextDecoder().decode(byteArray(s));
+    \\  const fd = new FormData();
+    \\  if (essence === 'application/x-www-form-urlencoded') {
+    \\    for (const [k, v] of new URLSearchParams(utf8(bytes))) fd.append(k, v);
+    \\    return fd;
+    \\  }
+    \\  if (essence !== 'multipart/form-data') throw fail();
+    \\  const m = /;\s*boundary=(?:"([^"]*)"|([^;\s]*))/i.exec(type);
+    \\  if (m === null || (m[1] || m[2]) === '') throw fail();
+    \\  const parts = bytes.split('--' + (m[1] !== undefined ? m[1] : m[2]));
+    \\  if (parts.length < 2) throw fail();
+    \\  for (let i = 1; i < parts.length; i++) {
+    \\    let p = parts[i];
+    \\    if (p.startsWith('--')) return fd;
+    \\    if (!p.startsWith('\r\n')) throw fail();
+    \\    const end = p.indexOf('\r\n\r\n');
+    \\    if (end < 0) throw fail();
+    \\    let name = null, filename, ctype = '';
+    \\    for (const line of p.slice(2, end).split('\r\n')) {
+    \\      const colon = line.indexOf(':');
+    \\      const field = line.slice(0, colon).trim().toLowerCase(), value = line.slice(colon + 1);
+    \\      if (field === 'content-disposition') {
+    \\        const n = /;\s*name="([^"]*)"/i.exec(value), f = /;\s*filename="([^"]*)"/i.exec(value);
+    \\        if (n) name = utf8(n[1]);
+    \\        if (f) filename = utf8(f[1]);
+    \\      } else if (field === 'content-type') ctype = value.trim();
+    \\    }
+    \\    if (name === null) throw fail();
+    \\    let data = p.slice(end + 4);
+    \\    if (data.endsWith('\r\n')) data = data.slice(0, -2);
+    \\    if (filename === undefined) fd.append(name, utf8(data));
+    \\    else fd.append(name, new File([byteArray(data)], filename, { type: ctype || 'text/plain' }));
+    \\  }
+    \\  throw fail();
+    \\}
+    \\// What clone() gives the copy of a body: the same value, or one branch
+    \\// of a stream (the other replaces the original's).
+    \\function cloneBody(o) {
+    \\  if (!(o._body instanceof ReadableStream)) return o._body;
+    \\  const [a, b] = o._body.tee();
+    \\  o._body = a;
+    \\  o._stream = a;
+    \\  return b;
     \\}
     \\
+    \\// A Response: `new Response(body, init)`, or made by fetch (responseFrom).
+    \\function responseFrom(status, statusText, url, headers, body) {
+    \\  return responseInit(Object.create(Response.prototype), status, statusText, url, headers, body);
+    \\}
+    \\function responseInit(res, status, statusText, url, headers, body) {
+    \\  res.status = status;
+    \\  res.ok = status >= 200 && status < 300;
+    \\  res.statusText = statusText;
+    \\  res.url = url;
+    \\  res.headers = headers;
+    \\  hidden(res, '_body', body);
+    \\  hidden(res, '_bodyUsed', false);
+    \\  hidden(res, '_stream', body instanceof ReadableStream ? body : null);
+    \\  return res;
+    \\}
     \\class Response {
-    \\  constructor(r) {
-    \\    this.status = r.status;
-    \\    this.ok = r.status >= 200 && r.status < 300;
-    \\    this.statusText = this.ok ? 'OK' : '';
-    \\    this.url = r.url;
-    \\    this.headers = new Headers();
-    \\    if (r.type) this.headers.append('content-type', r.type);
-    \\    hidden(this, '_body', r.body);
-    \\    hidden(this, '_bodyUsed', false);
+    \\  constructor(body, init) {
+    \\    if (init === undefined || init === null) init = {};
+    \\    const status = init.status === undefined ? 200 : Math.trunc(Number(init.status)) || 0;
+    \\    if (status < 200 || status > 599) throw new RangeError("Failed to construct 'Response': The status provided (" + status + ") is outside the range [200, 599].");
+    \\    const headers = new Headers(init.headers);
+    \\    let b = body === undefined || body === null ? null : body;
+    \\    if (b !== null) {
+    \\      if (status === 204 || status === 205 || status === 304) throw new TypeError("Failed to construct 'Response': Response with null body status cannot have body");
+    \\      let type;
+    \\      [b, type] = extractBody(b);
+    \\      if (type !== null && !headers.has('content-type')) headers.append('content-type', type);
+    \\    }
+    \\    responseInit(this, status, init.statusText === undefined ? '' : String(init.statusText), '', headers, b);
     \\  }
     \\  // Turbo (GitHub) reads the HTML of a clone.
     \\  clone() {
-    \\    if (this._bodyUsed) throw new TypeError("Failed to execute 'clone' on 'Response': Response body is already used");
-    \\    return new Response({ status: this.status, url: this.url, type: this.headers.get('content-type'), body: this._body });
+    \\    if (this.bodyUsed || (this._stream !== null && this._stream.locked)) throw new TypeError("Failed to execute 'clone' on 'Response': Response body is already used");
+    \\    return responseFrom(this.status, this.statusText, this.url, new Headers(this.headers), cloneBody(this));
     \\  }
     \\}
     \\bodyMethods(Response, 'Response');
@@ -1707,6 +1973,7 @@ pub let PRELUDE =
     \\  if (b instanceof Blob) return [b, b.type !== '' ? b.type : null];
     \\  if (b instanceof FormData) return [b, 'multipart/form-data; boundary=' + FORM_BOUNDARY];
     \\  if (b instanceof ArrayBuffer || ArrayBuffer.isView(b)) return [b, null];
+    \\  if (b instanceof ReadableStream) return [b, null];
     \\  return [String(b), 'text/plain;charset=UTF-8'];
     \\}
     \\class Request {
@@ -1766,12 +2033,13 @@ pub let PRELUDE =
     \\      [body, type] = extractBody(initBody);
     \\      if (type !== null && !r.headers.has('content-type')) r.headers.append('content-type', type);
     \\    } else if (inputBody !== null) {
-    \\      if (from._bodyUsed) throw requestError('Cannot construct a Request with a Request object that has already been used.');
+    \\      if (from.bodyUsed) throw requestError('Cannot construct a Request with a Request object that has already been used.');
     \\      from._bodyUsed = true;
     \\    }
     \\    hidden(this, '_r', r);
     \\    hidden(this, '_body', body);
     \\    hidden(this, '_bodyUsed', false);
+    \\    hidden(this, '_stream', body instanceof ReadableStream ? body : null);
     \\  }
     \\  get url() { return this._r.url; }
     \\  get method() { return this._r.method; }
@@ -1785,13 +2053,14 @@ pub let PRELUDE =
     \\  get integrity() { return this._r.integrity; }
     \\  get keepalive() { return this._r.keepalive; }
     \\  get signal() { return this._r.signal; }
-    \\  get body() { return this._body; }
     \\  clone() {
-    \\    if (this._bodyUsed) throw new TypeError("Failed to execute 'clone' on 'Request': Request body is already used");
+    \\    if (this.bodyUsed || (this._stream !== null && this._stream.locked)) throw new TypeError("Failed to execute 'clone' on 'Request': Request body is already used");
     \\    const c = Object.create(Object.getPrototypeOf(this));
     \\    hidden(c, '_r', Object.assign({}, this._r, { headers: new Headers(this._r.headers), signal: followSignal(this._r.signal) }));
-    \\    hidden(c, '_body', this._body);
+    \\    const body = cloneBody(this);
+    \\    hidden(c, '_body', body);
     \\    hidden(c, '_bodyUsed', false);
+    \\    hidden(c, '_stream', body instanceof ReadableStream ? body : null);
     \\    return c;
     \\  }
     \\}
@@ -1851,7 +2120,11 @@ pub let PRELUDE =
     \\    }
     \\    const r = ak.fetch(...fetchArgs(req.url, req.method, req.headers, req._body));
     \\    if (r.error !== undefined) reject(new TypeError('Failed to fetch: ' + r.error));
-    \\    else resolve(new Response(r));
+    \\    else {
+    \\      const headers = new Headers();
+    \\      if (r.type) headers.append('content-type', r.type);
+    \\      resolve(responseFrom(r.status, r.status >= 200 && r.status < 300 ? 'OK' : '', r.url, headers, r.body));
+    \\    }
     \\  });
     \\});
     \\

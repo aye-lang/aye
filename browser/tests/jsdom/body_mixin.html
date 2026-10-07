@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<title>Body mixin</title>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+// The same output as Node 22: the Fetch body mixin (text, json,
+// arrayBuffer, blob, formData, body) of Response and Request.
+const U = 'https://example.com/';
+function err(f) {
+  try { f(); return 'no error'; } catch (e) { return e.name; }
+}
+async function rejects(p) {
+  try { await p; return 'resolved'; } catch (e) { return e.name; }
+}
+const bytes = buf => Array.from(new Uint8Array(buf)).join(',');
+const entries = fd => JSON.stringify([...fd].map(([k, v]) => typeof v === 'string' ? [k, v] : [k, v.constructor.name, v.name, v.type, v.size]));
+async function bodyTests() {
+  const s = new Response('hé');
+  log('string', s.status, s.ok, JSON.stringify(s.statusText), s.headers.get('content-type'), s.bodyUsed, typeof s.arrayBuffer, typeof s.blob, typeof s.formData);
+  const ab = await s.arrayBuffer();
+  log('arrayBuffer', ab instanceof ArrayBuffer, ab.byteLength, bytes(ab), s.bodyUsed);
+  log('used', await rejects(s.text()), await rejects(s.json()), await rejects(s.arrayBuffer()), await rejects(s.blob()), await rejects(s.formData()), err(() => s.clone()));
+  const b = await new Response('abc').blob();
+  log('blob', b instanceof Blob, b.size, b.type, await b.text());
+  const buf = new Uint8Array([1, 2, 250]).buffer;
+  const r1 = new Response(buf);
+  log('buffer body', r1.headers.get('content-type'), bytes(await r1.arrayBuffer()));
+  const b1 = await new Response(new Uint8Array([65, 66])).blob();
+  log('view body', b1.size, JSON.stringify(b1.type), await b1.text());
+  const r2 = new Response(new Blob(['xyz'], { type: 'Text/Custom' }));
+  const b2 = await r2.blob();
+  log('blob body', r2.headers.get('content-type'), b2.type, await b2.text());
+  log('blob text', await new Response(new Blob(['q'])).text(), new Response(new Blob(['q'])).headers.get('content-type'));
+  const p = new Response(new URLSearchParams({ a: '1', b: 'x y' }));
+  log('params', p.headers.get('content-type'), entries(await p.formData()));
+  const fd = new FormData();
+  fd.append('name', 'value 1');
+  fd.append('name', 'two\nlines');
+  fd.append('file', new File(['file body'], 'a.txt', { type: 'text/plain' }));
+  const m = new Response(fd);
+  log('multipart', m.headers.get('content-type').startsWith('multipart/form-data; boundary='));
+  const back = await m.formData();
+  log('multipart back', back instanceof FormData, entries(back), await back.get('file').text());
+  log('formData errors', await rejects(new Response('a=1').formData()), await rejects(new Response('a=1', { headers: { 'content-type': 'application/json' } }).formData()), await rejects(new Response(null).formData()));
+  const typed = new Response('a=1&b=%20&c', { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+  log('urlencoded', entries(await typed.formData()));
+  const hand = '--XyZ\r\nContent-Disposition: form-data; name="k"\r\n\r\nv\r\n--XyZ\r\nContent-Disposition: form-data; name="f"; filename="b.bin"\r\nContent-Type: application/octet-stream\r\n\r\n\x01\x02\r\n--XyZ--\r\n';
+  const hf = await new Response(hand, { headers: { 'content-type': 'multipart/form-data; boundary=XyZ' } }).formData();
+  log('hand multipart', entries(hf));
+  log('json', JSON.stringify(await new Response('{"a":[1]}').json()), await rejects(new Response('{').json()));
+  const st = new Response('x', { status: 404, statusText: 'Nope', headers: { 'X-A': '1', 'content-type': 'text/html' } });
+  log('init', st.status, st.ok, st.statusText, st.headers.get('x-a'), st.headers.get('content-type'));
+  log('bad init', err(() => new Response('x', { status: 99 })), err(() => new Response('x', { status: 600 })));
+}
+async function streamTests() {
+  const n = new Response(null);
+  log('null body', n.body, new Response().body, n.bodyUsed, JSON.stringify(await n.text()), n.bodyUsed, (await n.arrayBuffer()).byteLength, (await n.blob()).size, n.bodyUsed);
+  const r = new Response('hi');
+  const body = r.body;
+  log('body', body instanceof ReadableStream, r.body === body, body.locked, r.bodyUsed, typeof ReadableStream);
+  const reader = body.getReader();
+  log('reader', body.locked, r.bodyUsed, err(() => body.getReader()), await rejects(r.text()));
+  const c1 = await reader.read();
+  log('read', c1.done, c1.value instanceof Uint8Array, bytes(c1.value), r.bodyUsed);
+  const c2 = await reader.read();
+  log('read end', c2.done, c2.value, await rejects(r.text()), err(() => r.clone()));
+  reader.releaseLock();
+  log('released', body.locked);
+  const r3 = new Response('cancel me');
+  const rd3 = r3.body.getReader();
+  await rd3.cancel();
+  log('cancel', r3.bodyUsed, JSON.stringify(await rd3.read()));
+  const r4 = new Response('abc');
+  r4.body;
+  log('body then text', await r4.text(), r4.bodyUsed);
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('one '));
+      controller.enqueue(new TextEncoder().encode('two'));
+      controller.close();
+    },
+  });
+  const fromStream = new Response(stream);
+  log('stream body', fromStream.body === stream, fromStream.headers.get('content-type'), await fromStream.text(), fromStream.bodyUsed);
+  const chunks = [];
+  const rs = new ReadableStream({ start(c) { c.enqueue(new Uint8Array([7])); c.enqueue(new Uint8Array([8, 9])); c.close(); } }).getReader();
+  for (let x = await rs.read(); !x.done; x = await rs.read()) chunks.push(bytes(x.value));
+  log('chunks', chunks.join(' | '));
+  const late = new ReadableStream({ start(c) { setTimeout(() => { c.enqueue(new Uint8Array([104, 105])); c.close(); }, 0); } });
+  log('late', await new Response(late).text());
+  const orig = new Response('twice', { headers: { 'x-h': 'v' } });
+  const copy = orig.clone();
+  log('clone', await orig.text(), await copy.text(), copy.headers.get('x-h'), orig.bodyUsed, copy.bodyUsed);
+  const so = new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array([97, 98])); c.close(); } }));
+  const sc = so.clone();
+  log('stream clone', await so.text(), await sc.text());
+  const req = new Request(U, { method: 'POST', body: 'payload', headers: { 'content-type': 'application/x-www-form-urlencoded' } });
+  log('request body', req.body instanceof ReadableStream, new Request(U).body, bytes(await req.clone().arrayBuffer()), (await req.clone().blob()).type, entries(await req.clone().formData()));
+  const rr = req.body.getReader();
+  const rc = await rr.read();
+  log('request read', new TextDecoder().decode(rc.value), req.bodyUsed, await rejects(req.text()));
+}
+bodyTests().then(streamTests).catch(e => log('FAIL', e));
+</script>
