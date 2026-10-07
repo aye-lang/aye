@@ -302,6 +302,9 @@ pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, o
         el: doc.root,
         scopes: List(Scope).init(out.alloc),
         part_host: doc.root,
+        picked_ua: List(usize).init(out.alloc),
+        picked_host: List(usize).init(out.alloc),
+        picked_own: List(usize).init(out.alloc),
     }
     defer c.deinit()
     try c.addScopes(author)
@@ -348,24 +351,34 @@ fn stylePseudos(c: *mut Computer, ua: *Sheet, ua_pseudo: []usize, h: NodeId) All
     if n == 0 {
         return
     }
+    // The rules the index offers for `h`, once for both pseudo-elements.
+    try c.pickPseudoRules(ua, ua_pseudo, h, &mut c.picked_ua)
+    if host_scope |i| {
+        let sc = c.scopes.items()[i]
+        try c.pickPseudoRules(sc.sheet, sc.pseudo.items(), h, &mut c.picked_host)
+    }
+    if own |i| {
+        let sc = c.scopes.items()[i]
+        try c.pickPseudoRules(sc.sheet, sc.pseudo.items(), h, &mut c.picked_own)
+    }
     for which in 1..3 {
         for i in 0..c.wins.len {
             c.wins[i].set = false
         }
         c.clearCustoms()
         setShadowHost(null)
-        var any = try c.considerPseudo(ua, ua_pseudo, h, L_UA, which as u8)
+        var any = try c.considerPseudo(ua, c.picked_ua.items(), h, L_UA, which as u8)
         if host_scope |i| {
             let sc = c.scopes.items()[i]
             setShadowHost(h)
-            if try c.considerPseudo(sc.sheet, sc.pseudo.items(), h, L_HOST, which as u8) {
+            if try c.considerPseudo(sc.sheet, c.picked_host.items(), h, L_HOST, which as u8) {
                 any = true
             }
         }
         if own |i| {
             let sc = c.scopes.items()[i]
             setShadowHost(dom.hostOf(doc, root))
-            if try c.considerPseudo(sc.sheet, sc.pseudo.items(), h, L_AUTHOR, which as u8) {
+            if try c.considerPseudo(sc.sheet, c.picked_own.items(), h, L_AUTHOR, which as u8) {
                 any = true
             }
         }
@@ -399,6 +412,9 @@ pub fn computeStylesOf(doc: *Document, ua: *Sheet, author: *Sheet, media: Media,
         el: doc.root,
         scopes: List(Scope).init(out.alloc),
         part_host: doc.root,
+        picked_ua: List(usize).init(out.alloc),
+        picked_host: List(usize).init(out.alloc),
+        picked_own: List(usize).init(out.alloc),
     }
     defer c.deinit()
     try c.addScopes(author)
@@ -530,8 +546,17 @@ struct Computer {
     scopes: List(Scope)
     // The host whose `::part()` rules `consider` matches.
     part_host: NodeId
+    // The `::before` and `::after` rules of the UA sheet, of the host's
+    // scope and of the element's own scope that may match the element
+    // (`pickPseudoRules`).
+    picked_ua: List(usize)
+    picked_host: List(usize)
+    picked_own: List(usize)
 
     fn deinit(self: *mut Self) {
+        self.picked_ua.deinit()
+        self.picked_host.deinit()
+        self.picked_own.deinit()
         self.centered.deinit()
         self.custom_wins.deinit()
         self.custom_index.deinit()
@@ -734,6 +759,39 @@ struct Computer {
     // Offers the declarations of the rules `rules` of `sheet` (at the
     // level `level`) that select the pseudo-element `pseudo` of `el`;
     // whether one did.
+    // The rules of `rules` (the `::before` and `::after` rules of
+    // `sheet`, in order) that the sheet's index offers for `el`, into
+    // `out`: a rule the index leaves out cannot match `el`, so
+    // neither its pseudo-elements.
+    fn pickPseudoRules(self: *mut Self, sheet: *Sheet, rules: []usize, el: NodeId, out: *mut List(usize)) AllocError!void {
+        out.clear()
+        if rules.len == 0 {
+            return
+        }
+        let candidates = try sheet.index.candidates(sheet, self.doc, el)
+        var previous: ?usize = null
+        for ri in candidates {
+            if previous == ri {
+                continue
+            }
+            previous = ri
+            // Binary search: is `ri` one of `rules`?
+            var lo: usize = 0
+            var hi = rules.len
+            while lo < hi {
+                let mid = lo + (hi - lo) / 2
+                if rules[mid] < ri {
+                    lo = mid + 1
+                } else {
+                    hi = mid
+                }
+            }
+            if lo < rules.len && rules[lo] == ri {
+                try out.append(ri)
+            }
+        }
+    }
+
     fn considerPseudo(self: *mut Self, sheet: *Sheet, rules: []usize, el: NodeId, level: u8, pseudo: u8) AllocError!bool {
         let complexes = sheet.complexes.items()
         let decls = sheet.decls.items()
