@@ -476,6 +476,9 @@ pub struct Sheet {
     // The rules that may match an element (rule_index.ore), built when
     // the cascade first needs it. On the heap, like `arena`.
     index: *mut RuleIndex
+    // What its selectors look at of `class` (inputs.ore), built when the
+    // cascade first needs it. On the heap, like `arena`.
+    class_info: *mut ClassInfo
 
     pub fn init(alloc: Allocator) AllocError!Sheet {
         let arena = try alloc.create(Arena.init(alloc))
@@ -485,8 +488,17 @@ pub struct Sheet {
             alloc.destroy(arena)
             return e
         }
+        let class_info = alloc.create(ClassInfo.init(alloc)) catch |e| {
+            index.deinit()
+            alloc.destroy(index)
+            arena.deinit()
+            alloc.destroy(arena)
+            return e
+        }
         var layers = List(Layer).init(a)
         layers.append(Layer { name: "", parent: 0, rank: 0 }) catch |e| {
+            class_info.deinit()
+            alloc.destroy(class_info)
             index.deinit()
             alloc.destroy(index)
             arena.deinit()
@@ -512,6 +524,7 @@ pub struct Sheet {
             scope_root: null,
             scoped: List(Scoped).init(a),
             index: index,
+            class_info: class_info,
         }
     }
 
@@ -546,6 +559,8 @@ pub struct Sheet {
         }
         self.index.deinit()
         self.alloc.destroy(self.index)
+        self.class_info.deinit()
+        self.alloc.destroy(self.class_info)
         self.arena.deinit()
         self.alloc.destroy(self.arena)
     }

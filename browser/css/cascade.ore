@@ -93,10 +93,10 @@ pub struct Styles {
     // something else changed them, or never): they are current while it
     // stays the same (inputs.ore).
     inputs: u64
-    // The classes the sheets' selectors name, and their attribute
-    // selectors on `class` (inputs.ore `noteClasses`; values in `arena`).
-    classes: IntMap(u64, bool)
-    class_tests: List(ClassTest)
+    // What the selectors of the sheets these styles were computed with
+    // look at of `class` (inputs.ore `noteClasses`): valid while those
+    // sheets are, as `inputs` is only compared with them.
+    class_infos: List(*ClassInfo)
 
     pub fn init(alloc: Allocator) AllocError!Styles {
         let arena = try alloc.create(Arena.init(alloc))
@@ -139,8 +139,7 @@ pub struct Styles {
             sizes: IntMap(u32, ContainerSize).init(alloc),
             queried: false,
             inputs: 0,
-            classes: IntMap(u64, bool).init(alloc),
-            class_tests: List(ClassTest).init(alloc),
+            class_infos: List(*ClassInfo).init(alloc),
         }
     }
 
@@ -165,8 +164,7 @@ pub struct Styles {
     }
 
     pub fn deinit(self: *mut Self) {
-        self.classes.deinit()
-        self.class_tests.deinit()
+        self.class_infos.deinit()
         self.sizes.deinit()
         self.map.deinit()
         self.before.deinit()
@@ -352,6 +350,7 @@ pub fn computeStyles(doc: *Document, ua: *Sheet, author: *Sheet, media: Media, o
         }
         cur = dom.shadowIncludingFollowing(doc, h, doc.root)
     }
+    out.class_infos.clear()
     try noteClasses(ua, out)
     try noteClasses(author, out)
     try noteClasses(&out.quirks, out)

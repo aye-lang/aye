@@ -5,9 +5,10 @@
 // covers:
 // - every node of the document's tree and of its shadow trees, in
 //   shadow-including order: its handle, kind, name, namespace, parent,
-//   attributes, text, custom element state, shadow root and slot;
+//   attributes, text (of a script, whether it is empty), custom element
+//   state, shadow root and slot;
 // - of a `class` attribute, only the classes a selector of the sheets
-//   names (`Styles.classes`) and whether each attribute selector on
+//   names (`ClassInfo`) and whether each attribute selector on
 //   `class` matches it (on the elements of the type it is for): a class
 //   that no rule names changes no style;
 // - the state of the form controls and the focus, the rules scripts
@@ -22,75 +23,106 @@ import dom.Document
 import dom.Kind
 import dom.NodeId
 import std.list.List
-import std.mem
+import std.map.IntMap
 import std.mem.AllocError
 import std.mem.Allocator
 import std.text
 
-/// An attribute selector on `class` (`Styles.class_tests`), and the type
-/// of element it can make a difference for ("": any).
+/// An attribute selector on `class` (`ClassInfo.tests`), and the type of
+/// element it can make a difference for ("": any).
 pub struct ClassTest {
     selector: Simple
     type_name: []u8
 }
 
-/// The classes that the selectors of `sheet` (and of its shadow trees'
-/// sheets) name, into `out.classes`, and their attribute selectors on
-/// `class`, into `out.class_tests` (each once).
-pub fn noteClasses(sheet: *Sheet, out: *mut Styles) AllocError!void {
-    var types = try compoundTypes(sheet, out.alloc)
-    defer types.deinit()
-    let simples = sheet.simples.items()
-    var placed: usize = 0
-    for ci, comp in sheet.compounds.items() {
-        for si in comp.start..comp.end {
-            if isClassTest(simples[si]) {
-                placed += 1
-                try addClassTest(out, simples[si], types.items()[ci])
-            }
-        }
+/// What the selectors of a sheet look at of `class` (`Sheet.class_info`):
+/// the classes they name and their attribute selectors on `class`. Made
+/// again when the sheet grew since.
+pub struct ClassInfo {
+    alloc: Allocator
+    // `classKey` of each class a selector names.
+    keys: IntMap(u64, bool)
+    // Each once.
+    tests: List(ClassTest)
+    // The sheet's numbers of simple selectors and compounds when made.
+    simples: usize
+    compounds: usize
+    ready: bool
+
+    pub fn init(alloc: Allocator) ClassInfo {
+        return ClassInfo { alloc: alloc, keys: IntMap(u64, bool).init(alloc), tests: List(ClassTest).init(alloc), simples: 0, compounds: 0, ready: false }
     }
+
+    pub fn deinit(self: *mut Self) {
+        self.keys.deinit()
+        self.tests.deinit()
+    }
+}
+
+/// Adds the `ClassInfo` of `sheet` and of its shadow trees' sheets to
+/// `out.class_infos` (made first when needed).
+pub fn noteClasses(sheet: *Sheet, out: *mut Styles) AllocError!void {
+    let info = sheet.class_info
+    if !info.ready || info.simples != sheet.simples.len() || info.compounds != sheet.compounds.len() {
+        try buildClassInfo(sheet, info)
+    }
+    try out.class_infos.append(info)
+    for sc in sheet.scoped.items() {
+        try noteClasses(sc.sheet, out)
+    }
+}
+
+fn buildClassInfo(sheet: *Sheet, info: *mut ClassInfo) AllocError!void {
+    info.ready = false
+    info.keys.deinit()
+    info.keys = IntMap(u64, bool).init(info.alloc)
+    info.tests.clear()
+    let simples = sheet.simples.items()
     var tests: usize = 0
     for s in simples {
         if s.kind == SelKind.Class {
-            try out.classes.put(classKey(s.name), true)
+            try info.keys.put(classKey(s.name), true)
         } else if isClassTest(s) {
             tests += 1
         }
     }
-    if placed != tests {
-        // Some are in no compound: they count for every element.
-        for s in simples {
-            if isClassTest(s) {
-                try addClassTest(out, s, "")
+    if tests > 0 {
+        var types = try compoundTypes(sheet, info.alloc)
+        defer types.deinit()
+        var placed: usize = 0
+        for ci, comp in sheet.compounds.items() {
+            for si in comp.start..comp.end {
+                if isClassTest(simples[si]) {
+                    placed += 1
+                    try addClassTest(info, simples[si], types.items()[ci])
+                }
+            }
+        }
+        if placed != tests {
+            // Some are in no compound: they count for every element.
+            for s in simples {
+                if isClassTest(s) {
+                    try addClassTest(info, s, "")
+                }
             }
         }
     }
-    for sc in sheet.scoped.items() {
-        try noteClasses(sc.sheet, out)
-    }
+    info.simples = simples.len
+    info.compounds = sheet.compounds.len()
+    info.ready = true
 }
 
 fn isClassTest(s: Simple) bool {
     return s.kind == SelKind.Attr && text.eql(s.name, "class")
 }
 
-fn addClassTest(out: *mut Styles, s: Simple, type_name: []u8) AllocError!void {
-    for t in out.class_tests.items() {
+fn addClassTest(info: *mut ClassInfo, s: Simple, type_name: []u8) AllocError!void {
+    for t in info.tests.items() {
         if t.selector.op == s.op && t.selector.ci == s.ci && text.eql(t.selector.value, s.value) && text.eql(t.type_name, type_name) {
             return
         }
     }
-    let a = out.arena.allocator()
-    let value = try a.alloc(0 as u8, s.value.len)
-    mem.copy(value, s.value)
-    let name = try a.alloc(0 as u8, type_name.len)
-    mem.copy(name, type_name)
-    var t = s
-    t.value = value
-    t.sub_start = 0
-    t.sub_end = 0
-    try out.class_tests.append(ClassTest { selector: t, type_name: name })
+    try info.tests.append(ClassTest { selector: s, type_name: type_name })
 }
 
 // The type each compound of `sheet` needs its element to be ("": any):
@@ -268,15 +300,18 @@ fn classKey(name: []u8) u64 {
 
 fn inputNode(doc: *Document, styles: *Styles, n: NodeId, seed: u64) u64 {
     let node = doc.node(n)
-    var h = inputWord(seed, n.index as u64)
-    h = inputWord(h, n.generation as u64)
-    h = inputWord(h, @hash(node.kind))
+    var h = inputWord(seed, inputId(n))
+    h = inputWord(h, @hash(node.kind) ^ ((node.ns as u64) | ((node.ce as u64) << 8)))
+    h = inputWord(h, inputOptId(node.parent))
+    h = inputWord(h, inputOptId(node.shadow) ^ (inputOptId(node.slot) *% 0x9E3779B97F4A7C15))
     h = inputText(h, node.name)
-    h = inputWord(h, (node.ns as u64) | ((node.ce as u64) << 8))
-    h = inputNodeId(h, node.parent)
-    h = inputNodeId(h, node.shadow)
-    h = inputNodeId(h, node.slot)
     if node.kind != Kind.Element {
+        if node.parent |up| {
+            if doc.isElement(up, "script") {
+                // Only `:empty` sees a script's text.
+                return inputWord(h, inputBit(node.data.len > 0))
+            }
+        }
         return inputText(h, node.data)
     }
     var count: u64 = 0
@@ -291,9 +326,11 @@ fn inputNode(doc: *Document, styles: *Styles, n: NodeId, seed: u64) u64 {
     h = inputWord(h, count)
     // The class attribute, present or not, as the selectors see it.
     h = inputClasses(h, doc.attr(n, "class") orelse "", styles)
-    for t in styles.class_tests.items() {
-        if t.type_name.len == 0 || text.eql(node.name, t.type_name) {
-            h = inputWord(h, inputBit(attrMatches(doc, t.selector, n)))
+    for info in styles.class_infos.items() {
+        for t in info.tests.items() {
+            if t.type_name.len == 0 || text.eql(node.name, t.type_name) {
+                h = inputWord(h, inputBit(attrMatches(doc, t.selector, n)))
+            }
         }
     }
     return h
@@ -313,8 +350,11 @@ fn inputClasses(seed: u64, list: []u8, styles: *Styles) u64 {
         }
         if i > start {
             let key = classKey(list[start..i])
-            if styles.classes.contains(key) {
-                h = inputWord(h, key)
+            for info in styles.class_infos.items() {
+                if info.keys.contains(key) {
+                    h = inputWord(h, key)
+                    break
+                }
             }
         }
     }
@@ -326,10 +366,19 @@ fn inputSpace(c: u8) bool {
 }
 
 fn inputNodeId(h: u64, n: ?NodeId) u64 {
+    return inputWord(h, inputOptId(n))
+}
+
+fn inputId(n: NodeId) u64 {
+    return ((n.generation as u64) << 32) | (n.index as u64)
+}
+
+// A node's handle, or 0 for none.
+fn inputOptId(n: ?NodeId) u64 {
     if n |v| {
-        return inputWord(inputWord(h, 1), ((v.generation as u64) << 32) | (v.index as u64))
+        return inputId(v) +% 1
     }
-    return inputWord(h, 0)
+    return 0
 }
 
 fn inputBit(b: bool) u64 {
