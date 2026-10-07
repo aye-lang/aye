@@ -558,6 +558,24 @@ against the full cascade's.
 **Why:** a fallback that looks rare in fixtures can be the common path
 on a real page; the counts show which one to fix.
 
+### Size a metadata cap from a real page, and count what falls past it
+**Context:** a global cap on engine metadata whose overflow silently
+takes the slow path (JS shapes, caches, interned tables).
+**Bad:** `MAX_SHAPES` was 16384 since `93d6275`. youtube-search fills
+it within its first ~4M reads; every later object is a dictionary, so
+61% of the 154M reads at cached sites were shapeless and the property
+cache hit 27%.
+**Good:** count before changing the cap (shapes made, transitions
+refused, fan-out per shape, hits/shapeless reads at cached sites). The
+counts showed no transition explosion (max fan-out 2905, at the root;
+11 shapes over 32), only a page that needs ~67,000 layouts, so the cap
+went to 262144 (`browser/js/shapes.ore`): hits 27% → 48%, shapeless
+61% → 22% (deletions and > 128-property objects), peak RSS +0.9%.
+`browser/tests/js/253_many_shapes.js` runs past the old cap.
+**Why:** a cap that only guards against hostile scripts must sit far
+above what real pages use; when it sits below, the fast path quietly
+becomes the exception.
+
 ### Keep styles by a fingerprint of their inputs, not by a version
 **Context:** skipping a restyle (or other cached work) when nothing it
 depends on changed.
