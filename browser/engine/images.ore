@@ -123,6 +123,19 @@ pub struct ImageCache {
         return false
     }
 
+    // Keeps `href` as a URL that could not be fetched, unless it is known.
+    fn noteFailed(self: *mut Self, href: []u8) AllocError!void {
+        if self.known(href) {
+            return
+        }
+        let owned = try self.alloc.alloc(0 as u8, href.len)
+        std.mem.copy(owned, href)
+        self.entries.append(CachedImage { href: owned, bmp: null, pic: null, tainted: true }) catch |e| {
+            self.alloc.free(owned)
+            return e
+        }
+    }
+
     /// The picture of `href` when it is a fetched SVG image.
     fn pictureOf(self: *Self, href: []u8) ?*mut svg.Picture {
         for e in self.entries.items() {
@@ -324,6 +337,18 @@ fn loadElementImage(cache: *mut ImageCache, doc: *Document, h: NodeId, base: *Ur
     return LoadedElementImage { target: target, bmp: bmp, density: choice.density }
 }
 
+/// A script's request no longer needs the background load `id` (its
+/// task ran or was cleared). A load that failed stays a failed URL of
+/// the images of `p`, which does not fetch it again, though no request
+/// decoded it.
+fn releaseImageLoad(p: *mut Page, id: u32) {
+    if net.failedHref(id) |href| {
+        if p.images |cache| {
+            cache.noteFailed(href) catch |e| {}
+        }
+    }
+    net.releaseLoad(id)
+}
 
 /// Fetches the images of the page's elements and style sheets that have
 /// none yet, and maps the elements (and URLs) to their bitmaps. `media`

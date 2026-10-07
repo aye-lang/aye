@@ -241,6 +241,18 @@ Canvas fixtures await `decode()` before reading dimensions or drawing.
 **Why:** a URL cache is not per-element request state. A replaced request
 must not publish dimensions or fire a stale load/error event.
 
+### Keep a page's memory of a shared load in the page
+**Context:** state of a background load (`browser/net/loader.ore`)
+that the page must keep after the load ends.
+**Bad:** `loadFailed` asked the load, which goes away with its last
+user. Two img requests dropped after their load failed: the next
+request fetched the URL again (P4.6, `net/failed_image_once.html`).
+**Good:** `releaseImageLoad` (`browser/engine/images.ore:344`) copies a
+failure into the page's `ImageCache` (`noteFailed`) before releasing
+the load; a new page has a new cache.
+**Why:** loads are per session and shared; what a page remembers must
+live as long as the page, no longer.
+
 ### A load event stops at the document
 **Context:** dispatching an event at a node (`dispatch` in
 `browser/engine/prelude.ore`), now that each image fires its own load

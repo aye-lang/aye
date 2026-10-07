@@ -23,6 +23,8 @@
 #                    Accept, Referer, Cookie, Content-Type) and answers
 #                    with a small body of the type of NAME's extension
 #                    (`Cache-Control: no-store` when NAME has "nostore")
+#   /fail/NAME       records the request (as /log/NAME) and closes the
+#                    connection without an answer: a load that fails
 #   /log             the recorded requests, one per line, sorted (requests
 #                    made concurrently arrive in any order), as text/plain
 #   /big             33 MiB of text (with Content-Length; /big?stream
@@ -125,6 +127,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.reply(200, [("Content-Type", "text/plain")], "".join(sorted(LOG)).encode())
         elif path.startswith("/log/"):
             self.log_request_line("GET")
+        elif path.startswith("/fail/"):
+            LOG.append("GET " + path + "\n")
+            self.close_connection = True
         elif path.startswith("/slow/"):
             with SLOW_LOCK:
                 SLOW["now"] += 1

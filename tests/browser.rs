@@ -465,6 +465,38 @@ fn http_image_events_background() {
     }
 }
 
+/// A background image load that failed is remembered for the page
+/// (`browser/tests/net/failed_image_once.html`): its two img elements
+/// drop their requests after it failed and ask for the URL again, and
+/// the page lays out, but the server sees one request, and each img
+/// fires error. The same under GC stress.
+#[test]
+fn http_failed_image_fetched_once() {
+    let page_log = "laid out: true
+inserted again: complete=false,false
+error a: complete=true naturalWidth=0
+error b: complete=true naturalWidth=0
+";
+    for stress in [false, true] {
+        let Some(srv) = server() else {
+            println!("skipped: cannot start python3 for the test server");
+            return;
+        };
+        let mut c = Command::new(anyknown());
+        c.current_dir(root()).args(["dump", "--text", "--js", &format!("{}/net/failed_image_once.html", srv.base)]);
+        if stress {
+            c.env("ANYKNOWN_JS_GC", "stress");
+        }
+        let out = c.output().unwrap();
+        assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+        let got = text(&out.stdout);
+        let log = got.split_once("\n\n").map(|(_, l)| l).unwrap_or("");
+        assert_eq!(log, page_log, "GC stress: {stress}");
+        let requests = text(&run(&["dump", "--text", &format!("{}/log", srv.base)]).stdout);
+        assert_eq!(requests, "GET /fail/once.png\n", "GC stress: {stress}");
+    }
+}
+
 /// In the window the page lays out again when an image arrives: an
 /// observer sees the paragraph below it visible first and pushed out of
 /// the viewport after the image's load event.

@@ -1,0 +1,40 @@
+<!doctype html><title>Failed image fetched once</title>
+<p>An image URL whose load failed is not fetched again on the page: two
+img elements ask for it, their requests are dropped once it failed
+(before their tasks ran), the page lays out, and the images are
+inserted again with the same src: each fires error.</p>
+<div id="box"><img id="a" src="/fail/once.png"><img id="b" src="/fail/once.png"></div>
+<pre id="log"></pre>
+<script>
+const lines = [];
+function note(s) {
+  lines.push(s);
+  document.getElementById('log').textContent = lines.join('\n');
+}
+const box = document.getElementById('box');
+const imgs = ['a', 'b'].map(id => document.getElementById(id));
+for (const img of imgs) {
+  img.onload = () => note('load ' + img.id);
+  img.onerror = () => note('error ' + img.id + ': complete=' + img.complete + ' naturalWidth=' + img.naturalWidth);
+}
+</script>
+<script>
+// The requests started at the end of the first script; the load fails
+// while this script waits for a synchronous request.
+const x = new XMLHttpRequest();
+x.open('GET', '/slow/wait.txt', false);
+x.send();
+// No request holds the failed load any more.
+for (const img of imgs) {
+  img.removeAttribute('src');
+  img.remove();
+}
+note('laid out: ' + (box.getBoundingClientRect().width >= 0));
+setTimeout(() => {
+  for (const img of imgs) {
+    img.src = '/fail/once.png';
+    box.appendChild(img);
+  }
+  note('inserted again: complete=' + imgs.map(i => i.complete).join());
+}, 0);
+</script>
