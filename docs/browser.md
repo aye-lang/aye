@@ -374,10 +374,16 @@ on (`--no-js` turns it off), `dump` with `--js`.
   `--a11y` too) then scrolls through the page as a reader would, so
   that what scripts load when it comes into view (observed sections,
   lazy images, infinite lists) is in the dump
-  (`engine.scrollThrough`): 500 ms of page time where the page is,
-  then a step of one viewport height down (firing `scroll`) and 500 ms
-  again, until the bottom is shown and the document stopped growing,
-  or after 20 steps (`--scroll-steps N`; `--no-scroll` turns it off).
+  (`engine.scrollThrough`): 500 ms of page time where the page is.
+  Only a page that listens for the window's or document's `scroll` or
+  observes intersections (`watches_scroll`) is then stepped down, one
+  viewport height at a time (firing `scroll`) with 500 ms after each,
+  until the bottom is shown and the document stopped growing, or after
+  20 steps (`--scroll-steps N`; `--no-scroll` turns it off). After a
+  step that changed no text or element (`contentSignature`), it stops
+  if nothing changed since the load; else it jumps once to the bottom
+  (where an infinite list loads more) and stops if that changed
+  nothing either.
   The window then goes back to the top at once, without the page
   reacting, so content it would drop out of view stays in the dump. It
   is deterministic (virtual time); a page that grows on every scroll
