@@ -80,6 +80,7 @@ Done 2026-10-07.
 | P1.4 | `run --live` (medians, phase split) and `--screens` (contact sheet) | the live table prints | P1.1 | P1.2–3 |
 | P1.5 | `page_load.py` records child CPU time (`getrusage` children delta) and the load average per run; warns when CPU/wall < 0.8. Speed targets compare CPU time, or wall time on a quiet machine | `run --site github` shows ~3.5 s CPU whatever the load | P1.2 | P2 |
 | P1.6 | `page_load.py` writes `last.stdout`/`last.stderr` into the archive folder: move them under `target/page-load-out/`; check the 0.8 CPU/wall warning on a quiet machine (tiny pages may fall below it from startup cost) and set a floor | archives unchanged after `run`; no warning for `example` on a quiet machine | P1.5 | P2 |
+| P1.7 | Replay is not deterministic: `youtube-search` requests different `i.ytimg.com` thumbnails per run under load (3 of 7 runs miss the archive). Find the wall-clock dependence (lazy loading, IntersectionObserver, dump scrolling, timer budget), make replay depend only on the virtual clock; then recapture and un-exclude `youtube-search` | 10 consecutive `check --site youtube-search` passes under load | P3.2 | P3 |
 
 ### P2: Ore close-out
 
