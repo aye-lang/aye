@@ -1,0 +1,1 @@
+{"cmd": "click", "target": {"role": "link", "name": "Documentation"}, "expect": {"url": "https://go.dev/doc/", "title": "Documentation - The Go Programming Language", "snapshot": ["- heading \"Documentation\" [level=1]", "- heading \"Getting Started\" [level=2]"]}}

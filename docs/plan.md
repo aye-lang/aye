@@ -134,6 +134,7 @@ step only finds and writes down the cause; the fix is the next step.
 | P3.28 | `ToPropertyDescriptor`: reject a non-callable `get`/`set` and a descriptor mixing `value`/`writable` with `get`/`set` (TypeError) | JS test vs Node 22 | P3.27 | all |
 | P3.29 | History API: `history.pushState`/`replaceState` are no-ops (`browser/engine/prelude.ore:1416`). Implement the session history entries (URL, state, title), `location` updates, `popstate` on back/forward, `history.length`/`state`, and the agent's current URL following it | jsdom/window test; `check --agent` react task checks the URL again | P1.3 | P3.4–8 |
 | P3.30 | After P3.29: diagnose why the GitHub (Issues), Mistral (Blog) and YouTube (search) agent tasks do not navigate (a script cancels the click/submit); fix or split into steps; remove their `task_fails` | `check --agent` passes on the three | P3.29 | P3.4–8 |
+| P3.31 | XHR events and upload: fire `loadstart`/`progress` (and on `xhr.upload`), add the `upload` object | net fixture with event order vs the spec | P3.24 | P3.4–8 |
 | P3.21 | Fetch guards: Response headers read-only (`immutable` guard), Request headers drop forbidden names, a Request's abort listener on its source signal is removed when the request settles | jsdom test vs Node 22 | P3.15 | P3.17 after it merges |
 
 ### P4: Load time
@@ -148,6 +149,8 @@ step only finds and writes down the cause; the fix is the next step.
 | P4.6 | `loadFailed` forgets a failed image once no request holds it, so a later render fetches it again; keep failures per URL for the page | replay with a failing image: one fetch | P0 | P4.3 |
 | P4.7 | GitHub: diagnose why replay takes 41 s against 16 s live (P1.1 run). Done: machine load (40–58 on 10 cores), not replay work; CPU 3.4–3.7 s replay vs 3.7–3.9 s live | – | P1.1 | – |
 | P4.9 | Skip full restyles when the DOM version and viewport are unchanged since the last `computeStyles` (GitHub restyles ~8× per load; 92% of CPU in `css::computeStyles`): `engine/engine.ore`, `engine/containers.ore`, `agent/session.ore`, `engine/geometry.ore` | GitHub: ≤ 4 cascade spans, CPU < 2 s, Markdown hash unchanged | P1.5 | P3 (not with `css/` steps) |
+| P4.10 | Container-query re-pass restyles only the container subtrees, not the document (after P4.9 GitHub still does 9 full cascades, 4.27 s CPU on the 16:31 archive) | GitHub cascade spans and CPU fall; Markdown unchanged | P4.9 | P3 (not with `css/` steps) |
+| P4.11 | Partial restyle (only the changed subtree) for DOM mutations, including pages with shadow roots and `:has()` | GitHub < 2 s CPU on the current archive; `check --site all` byte-identical | P4.10 | P3 (not with `css/` steps) |
 | P4.8 | ZOL (88 s) and Mistral (30 s) replays spend most of their time in timers; first re-measure with CPU time (P1.5) since the P1.1 run was on a loaded machine, then diagnose | `run --site zol,mistral` phase table with CPU | P1.5 | P4.9 |
 
 ### P5 and P6

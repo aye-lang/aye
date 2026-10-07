@@ -1,0 +1,3 @@
+{"cmd":"click","target":{"role":"link","name":"Search"},"expect":{"url":"https://en.wikipedia.org/wiki/Special:Search","snapshot":["searchbox \"Search Wikipedia\""]}}
+{"cmd":"type","target":{"role":"searchbox","name":"Search Wikipedia"},"text":"HTML","submit":true,"expect":{"title":"HTML - Search results - Wikipedia"}}
+{"cmd":"click","target":{"role":"link","name":"HTML"},"expect":{"url":"https://en.wikipedia.org/wiki/HTML","snapshot":["- heading \"HTML\" [level=1]", "HyperText Markup Language"]}}

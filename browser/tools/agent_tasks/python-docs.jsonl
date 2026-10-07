@@ -1,0 +1,1 @@
+{"cmd": "click", "target": {"role": "link", "name": "1. Whetting Your Appetite"}, "expect": {"url": "https://docs.python.org/3/tutorial/appetite.html", "snapshot": ["- heading \"1. Whetting Your Appetite\" [level=1]"]}}

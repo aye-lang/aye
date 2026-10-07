@@ -1,0 +1,1 @@
+{"cmd": "click", "target": {"role": "link", "name": "std"}, "expect": {"url": "https://doc.rust-lang.org/std/index.html", "title": "std - Rust", "snapshot": ["- heading \"Crate std", "- heading \"The Rust Standard Library\" [level=2]"]}}

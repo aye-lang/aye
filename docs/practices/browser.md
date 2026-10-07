@@ -443,6 +443,24 @@ value. Make the cascade itself cheap where it matters
 correct to force a layout, so its cost has to follow the size of the
 change, not of the document.
 
+### Keep styles by a fingerprint of their inputs, not by a version
+**Context:** skipping a restyle (or other cached work) when nothing it
+depends on changed.
+**Bad:** `Page.restyle` styled the whole document on every call, since
+`domVersion` misses changes no script makes: the agent sets
+`aria-checked` and a `details`' `open` itself
+(`browser/agent/actions.ore:324`, `:337`), and focus and control values
+live in `doc.controls`. GitHub's replay styled its document 7 times.
+**Good:** `css.styleInputs` (`browser/css/inputs.ore`) hashes all that
+the cascade reads besides the sheets; `computeStyles` keeps it in
+`Styles.inputs`, and `stylesCurrent` (`browser/engine/engine.ore`)
+compares. Of `class` it takes only what selectors can see, so a class
+no rule names costs no cascade. A fixture that checks reuse logs into a
+JS array and writes the page once at the end
+(`browser/tests/jsdom/layout_unseen.html`): its own log would change the
+page between reads.
+**Why:** a fingerprint sees every writer, also the ones nobody counted.
+
 ### Replay must not change what a page sees
 **Context:** offline replays (`ANYKNOWN_REPLAY`) for performance work.
 **Bad:** the archive answered `data:` URLs too and missed them; once img
@@ -468,6 +486,19 @@ Archive names hash the URL, the method (but GET) and the body
 (`archivePath`, `browser/net/archive.ore`).
 **Why:** an archive records what one binary asked for; a binary that asks
 for more needs a new capture, not a replay that hides the gap.
+
+### An agent task's replay can miss beacons a recapture cannot fix
+**Context:** `page_load.py check --agent` replays a site's agent task
+(`browser/tools/agent_tasks/`) on an archive that `capture` recorded live.
+**Bad:** ZOL's task reached the news page in both runs, yet the replay
+missed `stat.zol.com.cn/adrs/iparea.php?r=0.236...` and two other
+beacons: their URLs hold `Math.random()` values, and live, scripts run
+in the order the network delivers them, so the seeded sequence differs.
+A second capture would only record other values.
+**Good:** `agent_task` reports misses on a `task:` line and judges only
+the steps' `expect`; `check` (the page load itself) still fails on misses.
+**Why:** a check that fails on every capture gets ignored; the steps say
+whether the agent got where it was going.
 
 ### Script-visible network requests must not be serial
 **Context:** an API that lets scripts observe a resource's state (img

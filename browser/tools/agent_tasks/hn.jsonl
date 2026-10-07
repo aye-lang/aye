@@ -1,0 +1,1 @@
+{"cmd":"click","target":{"role":"link","name":"new"},"expect":{"url":"https://news.ycombinator.com/newest","title":"New Links | Hacker News","snapshot":["- link \"comments\" [", " points by"]}}

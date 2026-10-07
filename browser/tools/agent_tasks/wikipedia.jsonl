@@ -1,0 +1,3 @@
+{"cmd": "click", "target": {"role": "link", "name": "検索"}, "expect": {"url": "https://ja.wikipedia.org/wiki/%E7%89%B9%E5%88%A5:%E6%A4%9C%E7%B4%A2", "snapshot": ["searchbox \"Wikipedia内を検索\""]}}
+{"cmd": "type", "target": {"role": "searchbox", "name": "Wikipedia内を検索"}, "text": "HTML", "submit": true, "expect": {"title": "「HTML」の検索結果 - Wikipedia"}}
+{"cmd": "click", "target": {"role": "link", "name": "HTML"}, "expect": {"url": "https://ja.wikipedia.org/wiki/HTML", "snapshot": ["- heading \"HTML\" [level=1]", "HyperText Markup Language"]}}

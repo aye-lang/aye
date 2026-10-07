@@ -94,18 +94,25 @@ fn sheetMix(key: u64, value: u64) u64 {
 
 // getComputedStyle parsed these sheets already. Transfer their ownership
 // to the page's full styling when the viewport and sources still agree;
-// compute fresh values (the reader cache covered only queried ancestors).
+// take the values of the layout scripts read when they are current, else
+// compute fresh ones (the reader cache covered only queried ancestors).
 fn takeReaderStyling(p: *mut Page, media: css.Media) AllocError!?*mut Styling {
     let s = p.script orelse return null
     let c = s.computed orelse return null
     if c.media.width != media.width || c.media.height != media.height || s.computed_sheets != sheetSourceKey(&p.doc) {
         return null
     }
-    var styles = try css.Styles.init(p.alloc)
-    errdefer styles.deinit()
-    try css.computeStyles(&p.doc, &c.ua, &c.author, media, &mut styles)
-    c.styles.deinit()
-    c.styles = styles
+    if takeGeometryStyles(s, c, media) |taken| {
+        // The layout scripts read has them already.
+        c.styles.deinit()
+        c.styles = taken
+    } else {
+        var styles = try css.Styles.init(p.alloc)
+        errdefer styles.deinit()
+        try css.computeStyles(&p.doc, &c.ua, &c.author, media, &mut styles)
+        c.styles.deinit()
+        c.styles = styles
+    }
     c.version = domVersion(p)
     s.computed = null
     return c

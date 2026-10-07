@@ -1,0 +1,1 @@
+{"cmd": "click", "target": {"role": "link", "name": "新闻"}, "expect": {"url": "https://news.zol.com.cn/", "title": "新闻中心_IT新闻资讯_IT新闻动态-中关村在线新闻中心频道", "snapshot": ["- heading \"最新资讯\""]}}
