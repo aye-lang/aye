@@ -121,6 +121,8 @@ step only finds and writes down the cause; the fix is the next step.
 | P4.4 | YouTube startup scripts (0.84 s of interpreter time) | `run --site youtube` | P3.2 | P4.3 |
 | P4.5 | Decode offscreen images at paint time (`PERF.md`) | PNG equality; replay medians | P0 | P4.3 |
 | P4.6 | `loadFailed` forgets a failed image once no request holds it, so a later render fetches it again; keep failures per URL for the page | replay with a failing image: one fetch | P0 | P4.3 |
+| P4.7 | GitHub: diagnose why replay takes 41 s against 16 s live (P1.1 run) | `run --site github` phase table | P1.1 | P4.3 |
+| P4.8 | ZOL (88 s) and Mistral (30 s) replays spend most of their time in timers; diagnose (virtual clock, timer loops) | `run --site zol,mistral` phase table | P1.1 | P4.7 |
 
 ### P5 and P6
 
