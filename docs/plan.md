@@ -86,6 +86,7 @@ Done 2026-10-07.
 | P1.10 | The virtual clock advances by a fixed amount per N steps inside a task (`tick()` in `browser/engine/script.ore`); benchmark `Date.now` = epoch + `ak.now()`, so time-based yields work and replay stays deterministic | scheduler tasks < 1M steps; 3 identical replays; CPU falls | P1.7 | P1.9 |
 | P1.11 | Diagnose where youtube-search's remaining CPU goes (~80 s after P1.9; the scheduler now yields, but total work did not fall): JS-stack samples every 1M steps, as P1.8 did | ranked list of hot functions/bundles with shares; proposed fix steps | P1.7–P1.10 merged | P3 |
 | P1.12 | Replay is deterministic but fragile: the virtual clock moves with the step count (P1.10), so any engine change shifts when time-batched beacons fire (P3.39 added one YouTube `log_event` POST by changing step counts, no behavior change). Archive lookup for a non-GET request falls back from method+URL+body to method+URL (the most recent recorded response), so extra or reordered beacons replay | youtube-search passes with P3.39 merged; a fixture with two POSTs to one URL, different bodies, one recorded | P3.40 | P3 |
+| P1.13 | `page_load.py rebless --site X`: when dump behavior changes on purpose (P4.25 scroll budget), recompute an archive's reference Markdown/hash from a replay instead of recapturing (a live recapture of youtube-search on 2026-10-08 returned a page without results, 0.26 s CPU, likely a consent or bot page). `capture` refuses to save a page that fails the site's content expectations | `run --site youtube-search` exit 0 after rebless; a capture that misses the expected strings is rejected with a message | P4.25 | P3 |
 
 ### P2: Ore close-out
 
@@ -153,6 +154,7 @@ step only finds and writes down the cause; the fix is the next step.
 | P3.40 | Archives lack web fonts and images: `capture` records what `dump` requests, but `screenshot` also needs fonts and images (BBC: 38 misses, serif headlines, empty image frames). Capture also runs the screenshot path (or records every subresource the page names) | `check --site all --screens` with no archive misses | P1.4 | P3 |
 | P3.41 | BBC: the ☰ menu button seen live is missing in the replay; confirm on current main, then diagnose | screenshot | P1.4 | P3 |
 | P3.42 | Proxy invariant checks are missing (ECMA-262 [[GetPrototypeOf]], [[SetPrototypeOf]], [[DefineOwnProperty]], [[Get]] etc. validate trap results against the target) | JS test vs Node 22 | P3.39 | all |
+| P3.43 | URL attributes reflected to JS (`img.src`, `a.href`, `link.href`, `script.src`, `form.action`, …) resolve against the load-time `Page.base`, not the current document base: a `<base>` inserted or changed by JS is ignored. Resolve with `documentBase` (cached since P4.19) | jsdom test vs Chrome semantics | P4.19 | P3.4–8 |
 | P3.21 | Fetch guards: Response headers read-only (`immutable` guard), Request headers drop forbidden names, a Request's abort listener on its source signal is removed when the request settles | jsdom test vs Node 22 | P3.15 | P3.17 after it merges |
 
 ### P4: Load time

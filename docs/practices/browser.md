@@ -637,6 +637,25 @@ JS array and writes the page once at the end
 page between reads.
 **Why:** a fingerprint sees every writer, also the ones nobody counted.
 
+### Share per-element data by content, behind a read-only type
+**Context:** data the engine keeps for every element that most elements
+have the same (computed styles, and the like).
+**Bad:** each element had its own 111 computed values (2.66 KB, in 4 KB
+arena chunks): ~5.3 KB of a page's ~8.2 KB per element on a 10K-40K
+card page. `restyleSubtrees` wrote new values over the old array in
+place, and a unit test (`markColor`) wrote into it too.
+**Good:** compute into a scratch array, then `Styles.intern`
+(`browser/css/cascade.ore`) hands out the shared array with the same
+values (hash, then a bit-exact compare), counted; a restyle releases the
+old one and writes over it only when no element holds it any more. The
+maps hold `[]Value`, so the compiler names every writer (E0033 found the
+test). Cards page peak RSS 5.58 → 1.99 GB at 40K cards, same Markdown;
+`browser/unit_tests.ore` "elements share equal computed values" restyles
+one of two sharing elements.
+**Why:** an immutable type turns "find all writers" into a compile
+error; a count that misses a release only keeps memory, never shares a
+write.
+
 ### Replay must not change what a page sees
 **Context:** offline replays (`ANYKNOWN_REPLAY`) for performance work.
 **Bad:** the archive answered `data:` URLs too and missed them; once img
