@@ -68,15 +68,12 @@ and a local test server), so CI needs no network and no display.
 | B5 forms and images | done | form sessions over HTTP, window form scripts, image decoder unit tests, form and image screenshots |
 | B6 JavaScript | done | 212 conformance scripts (`anyknown js`), 30 DOM fixtures (`dump --tree --js`, also under GC stress), a to-do app session, window script test, GC unit tests |
 | B7 agent interface | done | 17 snapshot/Markdown fixtures, session and MCP transcripts (with `eval` and `wait`), shared-window sessions over its socket (JSON lines, MCP through `anyknown connect`, pause, pointing, tabs) |
-| B8 the real web | in progress | net over the local server (`net_http`, the `net_cookies` and `base` agent sessions), HTML/CSS fixtures (templates, quirks, hints, `var()`/`calc()`, at-rules, `@import`), layout fixtures of site shapes (floats, positioned boxes, grid, `details`), hit testing by layer (`window_hit_layers`), JS conformance scripts for generators, async, Symbol and the web APIs |
+| B8 the real web | in progress | net over the local server (`net_http`, the `net_cookies` and `base` agent sessions), HTML/CSS fixtures (templates, quirks, hints, `var()`/`calc()`, at-rules, `@import`), layout fixtures of site shapes (floats, positioned boxes, grid, `details`), hit testing by layer (`window_hit_layers`), JS conformance scripts for generators, async, Symbol, the web APIs and ES modules (231–237, 242–245), DOM fixtures for module scripts, layout queries, Shadow DOM, custom elements, `MutationObserver` and Web Animations, background image loads (`net/bg_images.html`, `net/bg_image_events.html`) |
 
 All the front ends share `engine/`: the window, `screenshot` and the
 agent sessions load pages through `engine.load` and keep history in a
 `Tab`. What remains:
 
-- **B6 leftovers:** modules, layout queries (`getBoundingClientRect` is
-  all zeros), custom elements and Shadow DOM (in progress),
-  `MutationObserver` reporting (in progress).
 - **B8:** event listeners on another frame's nodes, moving nodes
   between documents, frame history entries; calendar, color and file
   pickers, `datalist`; rotations and skews other than quarter turns are
@@ -87,6 +84,8 @@ agent sessions load pages through `engine.load` and keep history in a
   [`docs/browser-sites.md`](browser-sites.md) (20 sites; run of
   2026-10-07: 14 ✅, 3 ⚠️, 3 ❌; the run of 2026-10-06, before the work
   below, had 8 ✅, 7 ⚠️, 5 ❌).
+
+The remaining work, in phases and steps, is in [`docs/plan.md`](plan.md).
 
 The compiler gaps the browser met, and which of them M9.5/M9.6 fixed,
 are in `browser/COMPILER_GAPS.md`.
@@ -303,7 +302,8 @@ on (`--no-js` turns it off), `dump` with `--js`.
 - *Loading:* after the parse, the `script` elements run in document
   order (inline, or `src` fetched relative to the page); external
   `defer` and `async` scripts run after the others (async as defer);
-  `type=module` and data types are skipped; then DOMContentLoaded
+  module scripts run with the deferred ones (B8, below), data types are
+  skipped; then DOMContentLoaded
   (`readyState` "interactive") and load ("complete"). An uncaught
   exception is a console message and the next script runs; so is a
   promise still rejected with no handler at the end of a microtask
@@ -354,7 +354,7 @@ on (`--no-js` turns it off), `dump` with `--js`.
   `XMLHttpRequest` (GET, on the same fetch), `crypto.getRandomValues`
   and `randomUUID` (from `Math.random`), `requestIdleCallback`,
   `reportError`, `Image`, `Option`, `origin`, and `customElements`
-  (definitions kept, elements never upgraded).
+  (B8, below).
   `IntersectionObserver` checks its targets against the layout and the
   scroll offsets (`engine/geometry.ore`), so content below the fold is
   not intersecting until scrolled into view; `ResizeObserver` reports
@@ -453,7 +453,8 @@ on (`--no-js` turns it off), `dump` with `--js`.
     sheets, scripts, `fetch` and `location`. A page's images, sheets and
     scripts are fetched concurrently (libcurl multi, 6 connections per
     host). The `<meta charset>` prescan follows WHATWG's (all the labels
-    of windows-1252 and UTF-8).
+    of windows-1252 and UTF-8). Background loads (`net/loader.ore`)
+    share one multi handle driven by the main thread between tasks.
   - *HTML and CSS:* `template` contents in an inert fragment, foster
     parenting, quirks mode from the doctype, `noscript` following
     scripting in the dumps, svg/math text kept out of them;
@@ -473,7 +474,14 @@ on (`--no-js` turns it off), `dump` with `--js`.
     `details` shows only its `summary`.
   - *JavaScript:* generators and async functions, Symbol and the
     iterator protocol, `Function` and `eval` of strings, the web APIs
-    above, a processor-time budget per task (B6, above).
+    above, a processor-time budget per task (B6, above). ES modules
+    (`js/modules.ore`, `js/lib.ore`): static imports and exports,
+    `import()`, `import.meta`, cycles as cyclic module records (TDZ,
+    top-level await), every re-export form with `export *` ambiguity,
+    JSON modules, import maps, `<script type=module>` and
+    `modulepreload`; checked against Node in `browser/tests/js`
+    231–237 and 242–245. What is not supported is in
+    [`browser/js/MODULES.md`](../browser/js/MODULES.md).
   - *JS and DOM APIs for real sites:* the init of a `for` loop is
     resolved (jQuery 3, minified bundles); Annex B block functions;
     sloppy-mode `this`; `\u` escapes in identifiers; `Proxy`; Array
@@ -485,7 +493,21 @@ on (`--no-js` turns it off), `dump` with `--js`.
     `document.write` while parsing, TreeWalker/NodeIterator, Range,
     DOMParser, Blob/File/FileReader, FormData, MessageChannel,
     constructable style sheets, `a` URL parts, Navigator;
-    `getComputedStyle` styles only the element and its ancestors. The
+    `getComputedStyle` styles only the element and its ancestors;
+    `document.baseURI` and `Node.baseURI`. Custom elements (upgrades,
+    reactions, `:defined`); shadow roots (`attachShadow`, declarative
+    `shadowrootmode`, slots, `:host`, `::slotted()`, `::part()`; the
+    flat tree is rendered; `dom/shadow.ore`, `engine/components.ore`);
+    `MutationObserver` records from the document's mutation log. Web
+    Animations basics (`Element.animate`, `Animation`, `KeyframeEffect`,
+    `document.timeline`): an animation keeps time and fills write the
+    inline style, no frame is interpolated. Layout queries
+    (`engine/geometry.ore`): `getBoundingClientRect`, `getClientRects`,
+    `offsetTop`/`Left`/`Width`/`Height`/`Parent`, `client*`,
+    `scrollTop`/`Left`/`Width`/`Height`, `scroll`/`scrollTo`/`scrollBy`
+    of elements and the window, `scrollX`/`scrollY`, `scrollIntoView`,
+    through a forced synchronous layout; transforms are ignored and
+    ranges have no geometry. The
     checklist's scripted sites (Python docs, rustdoc, CNN Lite,
     react.dev, YouTube, go.dev, BBC, Google, ZOL) log no errors.
   - *Layout of current CSS:* `transform` and `transform-origin` (the
@@ -499,7 +521,8 @@ on (`--no-js` turns it off), `dump` with `--js`.
     `object-fit`; `clip: rect()` and `clip-path: inset()`. Percentage
     table columns and `<center>` around auto-width tables; grid gaps
     under spanning items; flex items that clip their overflow have no
-    automatic minimum.
+    automatic minimum. `text-transform` (inherited) changes the case
+    of inline text before it is measured (`layout/inline.ore`).
   - *SVG* (`svg/`): inline `<svg>` and SVG images (`<img>`, CSS
     images, `data:` URLs) become pictures: `path` (all commands, arcs as
     cubics), `rect` (rounded), `circle`, `ellipse`, `line`, `polyline`,
@@ -522,7 +545,12 @@ on (`--no-js` turns it off), `dump` with `--js`.
     WebP lossless (VP8L) and lossy (VP8, bit-exact with libwebp) with
     VP8X, ALPH alpha and the first frame of an animation; formats are
     sniffed. `picture` sources, `srcset` (x and w) and `sizes` pick an
-    image's URL; image requests accept WebP.
+    image's URL; image requests accept WebP. A script-visible http(s)
+    `img` request loads in the background; then a task decodes it, sets
+    `complete`, `naturalWidth` and `naturalHeight`, fires `load` or
+    `error` and lays the page out again (`engine/image_api.ore`). The
+    window's `load` event waits for those tasks, and `decode()` promises
+    settle with them.
   - *Fonts and text* (`font/`, `webfont/`, `css/fontface.ore`,
     `layout/bidi.ore`, `layout/linebreak.ore`): a character the font
     lacks comes from a chain of system fallback fonts (PingFang,
