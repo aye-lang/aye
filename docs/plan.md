@@ -165,6 +165,7 @@ step only finds and writes down the cause; the fix is the next step.
 | P3.50 | DuckDuckGo prints raw dates `2026-07-20T00:00:00.0000000`: a Date parse/format path (`Date.parse` of 7-digit fractional seconds, `Intl.DateTimeFormat`, `toLocaleDateString`) — test vs Node 22 | JS test; DuckDuckGo shows formatted dates | – | all |
 | P3.51 | Form controls: buttons render default-beveled where sites style them (Google), GitHub commit-message rows misaligned — confirm against real renders, then diagnose | screenshot comparison | P3.44 | P3.45 |
 | P3.52 | `text-overflow: ellipsis` for single lines in boxes that clip their overflow (`browser/css/css.ore` property, `browser/layout/inline.ore`) | fixture; DuckDuckGo titles and YouTube-search descriptions end in "…" on screens | P3.44 | P3.45 |
+| P3.53 | Ellipsis and clamp follow-ups: right-to-left ellipsis, `-webkit-line-clamp` reaching into child blocks, unprefixed `line-clamp` | fixtures | P3.52 | all |
 | P3.21 | Fetch guards: Response headers read-only (`immutable` guard), Request headers drop forbidden names, a Request's abort listener on its source signal is removed when the request settles | jsdom test vs Node 22 | P3.15 | P3.17 after it merges |
 
 ### P4: Load time
