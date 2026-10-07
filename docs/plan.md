@@ -79,7 +79,7 @@ Done 2026-10-07.
 | P1.3 | One agent task per site (JSON lines replayed through `anyknown agent`) | `check --agent` passes on HN, Wikipedia search, DuckDuckGo | P1.2 | P2 |
 | P1.4 | `run --live` (medians, phase split) and `--screens` (contact sheet) | the live table prints | P1.1 | P1.2–3 |
 | P1.5 | `page_load.py` records child CPU time (`getrusage` children delta) and the load average per run; warns when CPU/wall < 0.8. Speed targets compare CPU time, or wall time on a quiet machine | `run --site github` shows ~3.5 s CPU whatever the load | P1.2 | P2 |
-| P1.6 | `page_load.py` writes `last.stdout`/`last.stderr` into the archive folder: move them under `target/page-load-out/`; check the 0.8 CPU/wall warning on a quiet machine (tiny pages may fall below it from startup cost) and set a floor | archives unchanged after `run`; no warning for `example` on a quiet machine | P1.5 | P2 |
+| P1.6 | `page_load.py` writes `last.stdout`/`last.stderr` into the archive folder: move them under `target/page-load-out/`; check the 0.8 CPU/wall warning on a quiet machine (tiny pages may fall below it from startup cost) and set a floor; live runs always fall below it (network wait is wall time without CPU), so mark live rows by another test | archives unchanged after `run`; no warning for `example` on a quiet machine | P1.5 | P2 |
 | P1.7 | Replay is not deterministic: `youtube-search` requests different `i.ytimg.com` thumbnails per run under load (3 of 7 runs miss the archive). Find the wall-clock dependence (lazy loading, IntersectionObserver, dump scrolling, timer budget), make replay depend only on the virtual clock; then recapture and un-exclude `youtube-search` | 10 consecutive `check --site youtube-search` passes under load | P3.2 | P3 |
 | P1.8 | Diagnose why a youtube-search dump costs 64–120 s CPU. Done: 42% YouTube's scheduler loops `while (Date.now() < deadline)` with a frozen benchmark `Date.now`; 37% YouTube's IntersectionObserver polyfill (installed because `IntersectionObserverEntry` is missing) | – | P1.7 | – |
 | P1.9 | Global `IntersectionObserverEntry` (with `intersectionRatio`, `isIntersecting` on its prototype) in `browser/engine/prelude.ore`, so sites use our IntersectionObserver instead of a polyfill | youtube-search replay: no polyfill samples, CPU falls, Markdown unchanged; JS test | P1.7 | P1.10 |
@@ -103,6 +103,8 @@ Done 2026-10-07.
 
 ### P3: Sites
 
+Before a site step starts, its symptom is confirmed on current `main` (P1.4 `--screens`): P3.4 and P3.5 chased symptoms from an old manual run that no longer reproduced.
+
 Each step adds an offline fixture and a site expectation. A "diagnose"
 step only finds and writes down the cause; the fix is the next step.
 
@@ -111,8 +113,8 @@ step only finds and writes down the cause; the fix is the next step.
 | P3.1 | YouTube: diagnose why the feed does not boot. Done: it boots; YouTube serves a cookieless visitor an empty home feed (`feedNudgeRenderer`, no continuation), same with curl | – | – |
 | P3.2 | YouTube: set the home page `ok`; add a `youtube-search` site (`results?search_query=rust+programming`, ~16 `videoRenderer` items live), capture it, and record what it shows; fixes for that page become new steps | `check --site youtube,youtube-search`; the search Markdown lists video titles | P3.1 | P3.4–8 |
 | P3.3 | GitHub: diagnose, then fix, commit data that never loads | `check --site github` | P3.4–6 |
-| P3.4 | Inline SVG sizing (BBC wordmarks at 290 px, Wikipedia ja pie chart) | `dump --layout` fixture; `check --site bbc,wikipedia-ja` | P3.1–3 |
-| P3.5 | BBC menus drawn as bullet lists | style fixture; `--screens` | P3.6 |
+| P3.4 | Inline SVG sizing. Done: the BBC 290 px wordmark and the Wikipedia ja chart did not reproduce on current main (stale symptoms); two replaced-element sizing rules fixed instead | – | – |
+| P3.5 | BBC menus as bullet lists. Done: does not reproduce on current main (the row predates b69c8d4, CSSOM rules reach the cascade) | – | – |
 | P3.6 | ZOL content runs past the right edge | layout fixture | P3.5 |
 | P3.7 | Mistral: short iframe widgets, `setTransform` errors | `check --site mistral` | P3.4–6 |
 | P3.8a | Drawing gaps 1: go.dev icon font, rustdoc logo and search bar | `--screens` | not with P3.4 |
@@ -147,6 +149,9 @@ step only finds and writes down the cause; the fix is the next step.
 | P3.37 | CSS 2.1 §10.4 min/max table for replaced elements with a ratio: the two rows where both sizes violate max (or both min) and the height constraint is the tighter one break the ratio (P3.4 follow-up) | layout fixture for all table rows | P3.4 | not with other `layout/` steps |
 | P3.38 | `window_relayout_after_image_load` fails under machine load (an ordering race; passed 3 of 3 reruns). Make it wait on the browser's state like P3.12/P3.23 | the test 30× under synthetic load | – | all |
 | P3.39 | `Object.setPrototypeOf` / `__proto__` accept a non-extensible object and prototype cycles; both must throw TypeError (`Reflect.setPrototypeOf` returns false) | JS test vs Node 22 | P3.33 | all |
+| P3.40 | Archives lack web fonts and images: `capture` records what `dump` requests, but `screenshot` also needs fonts and images (BBC: 38 misses, serif headlines, empty image frames). Capture also runs the screenshot path (or records every subresource the page names) | `check --site all --screens` with no archive misses | P1.4 | P3 |
+| P3.41 | BBC: the ☰ menu button seen live is missing in the replay; confirm on current main, then diagnose | screenshot | P1.4 | P3 |
+| P3.42 | Proxy invariant checks are missing (ECMA-262 [[GetPrototypeOf]], [[SetPrototypeOf]], [[DefineOwnProperty]], [[Get]] etc. validate trap results against the target) | JS test vs Node 22 | P3.39 | all |
 | P3.21 | Fetch guards: Response headers read-only (`immutable` guard), Request headers drop forbidden names, a Request's abort listener on its source signal is removed when the request settles | jsdom test vs Node 22 | P3.15 | P3.17 after it merges |
 
 ### P4: Load time
