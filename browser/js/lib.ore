@@ -908,6 +908,294 @@ pub let LIB =
     \\hidden(IteratorPrototype, 'constructor', Iterator);
     \\Object.defineProperty(IteratorPrototype, Symbol.toStringTag, { value: 'Iterator', writable: true, configurable: true });
     \\hidden(G, 'Iterator', Iterator);
+    \\// The iterator helpers (ES2025): methods of Iterator.prototype. map,
+    \\// filter, take, drop and flatMap return lazy %IteratorHelperPrototype%
+    \\// objects; the others consume the iterator.
+    \\const helperState = new WeakMap();
+    \\const IteratorHelperPrototype = Object.create(IteratorPrototype);
+    \\function iterResult(value, done) { return { value, done }; }
+    \\function closeIterator(o) {
+    \\  const ret = o.return;
+    \\  if (ret !== undefined && ret !== null) ret.call(o);
+    \\}
+    \\function closeQuietly(o) {
+    \\  try { closeIterator(o); } catch (e) {}
+    \\}
+    \\function iterObject(o) {
+    \\  if (o === null || (typeof o !== 'object' && typeof o !== 'function')) throw new TypeError('Iterator helper called on non-object');
+    \\  return o;
+    \\}
+    \\function callable(f, o) {
+    \\  if (typeof f !== 'function') {
+    \\    closeQuietly(o);
+    \\    throw new TypeError(String(f) + ' is not a function');
+    \\  }
+    \\}
+    \\function stepOf(o, next) {
+    \\  const r = next.call(o);
+    \\  if (r === null || (typeof r !== 'object' && typeof r !== 'function')) throw new TypeError('Iterator result ' + String(r) + ' is not an object');
+    \\  return r;
+    \\}
+    \\function helper(o, step, close) {
+    \\  const h = Object.create(IteratorHelperPrototype);
+    \\  helperState.set(h, { o, step, close, done: false, running: false });
+    \\  return h;
+    \\}
+    \\methods(IteratorHelperPrototype, {
+    \\  next() {
+    \\    const s = helperState.get(this);
+    \\    if (s === undefined) throw new TypeError('next method called on incompatible receiver');
+    \\    if (s.running) throw new TypeError('Generator is already running');
+    \\    if (s.done) return iterResult(undefined, true);
+    \\    s.running = true;
+    \\    try {
+    \\      const r = s.step();
+    \\      if (r.done) s.done = true;
+    \\      return r;
+    \\    } catch (e) {
+    \\      s.done = true;
+    \\      throw e;
+    \\    } finally {
+    \\      s.running = false;
+    \\    }
+    \\  },
+    \\  return() {
+    \\    const s = helperState.get(this);
+    \\    if (s === undefined) throw new TypeError('return method called on incompatible receiver');
+    \\    if (s.running) throw new TypeError('Generator is already running');
+    \\    if (!s.done) {
+    \\      s.done = true;
+    \\      s.close();
+    \\    }
+    \\    return iterResult(undefined, true);
+    \\  },
+    \\});
+    \\Object.defineProperty(IteratorHelperPrototype, Symbol.toStringTag, { value: 'Iterator Helper', configurable: true });
+    \\function limitOf(limit, o) {
+    \\  const n = Number(limit);
+    \\  if (n !== n) {
+    \\    closeQuietly(o);
+    \\    throw new RangeError(String(limit) + ' must be positive');
+    \\  }
+    \\  const k = n === Infinity ? Infinity : Math.trunc(n);
+    \\  if (k < 0) {
+    \\    closeQuietly(o);
+    \\    throw new RangeError(String(limit) + ' must be positive');
+    \\  }
+    \\  return k;
+    \\}
+    \\// An iterator for flatMap's results: strings are not flattened.
+    \\function flattenable(v) {
+    \\  if (v === null || (typeof v !== 'object' && typeof v !== 'function')) throw new TypeError(String(v) + ' is not an object');
+    \\  const m = v[Symbol.iterator];
+    \\  const it = m === undefined || m === null ? v : m.call(v);
+    \\  if (it === null || (typeof it !== 'object' && typeof it !== 'function')) throw new TypeError(String(it) + ' is not an object');
+    \\  return it;
+    \\}
+    \\methods(IteratorPrototype, {
+    \\  map(mapper) {
+    \\    const o = iterObject(this);
+    \\    callable(mapper, o);
+    \\    const next = o.next;
+    \\    let counter = 0;
+    \\    return helper(o, () => {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return iterResult(undefined, true);
+    \\      try { return iterResult(mapper(r.value, counter++), false); } catch (e) { closeQuietly(o); throw e; }
+    \\    }, () => closeIterator(o));
+    \\  },
+    \\  filter(predicate) {
+    \\    const o = iterObject(this);
+    \\    callable(predicate, o);
+    \\    const next = o.next;
+    \\    let counter = 0;
+    \\    return helper(o, () => {
+    \\      for (;;) {
+    \\        const r = stepOf(o, next);
+    \\        if (r.done) return iterResult(undefined, true);
+    \\        const v = r.value;
+    \\        let keep;
+    \\        try { keep = predicate(v, counter++); } catch (e) { closeQuietly(o); throw e; }
+    \\        if (keep) return iterResult(v, false);
+    \\      }
+    \\    }, () => closeIterator(o));
+    \\  },
+    \\  take(limit) {
+    \\    const o = iterObject(this);
+    \\    let remaining = limitOf(limit, o);
+    \\    const next = o.next;
+    \\    return helper(o, () => {
+    \\      if (remaining === 0) {
+    \\        closeIterator(o);
+    \\        return iterResult(undefined, true);
+    \\      }
+    \\      if (remaining !== Infinity) remaining--;
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return iterResult(undefined, true);
+    \\      return iterResult(r.value, false);
+    \\    }, () => closeIterator(o));
+    \\  },
+    \\  drop(limit) {
+    \\    const o = iterObject(this);
+    \\    let remaining = limitOf(limit, o);
+    \\    const next = o.next;
+    \\    return helper(o, () => {
+    \\      while (remaining > 0) {
+    \\        if (remaining !== Infinity) remaining--;
+    \\        const r = stepOf(o, next);
+    \\        if (r.done) return iterResult(undefined, true);
+    \\      }
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return iterResult(undefined, true);
+    \\      return iterResult(r.value, false);
+    \\    }, () => closeIterator(o));
+    \\  },
+    \\  flatMap(mapper) {
+    \\    const o = iterObject(this);
+    \\    callable(mapper, o);
+    \\    const next = o.next;
+    \\    let counter = 0;
+    \\    let inner = null;
+    \\    let innerNext = null;
+    \\    return helper(o, () => {
+    \\      for (;;) {
+    \\        if (inner !== null) {
+    \\          let r;
+    \\          try { r = stepOf(inner, innerNext); } catch (e) { closeQuietly(o); throw e; }
+    \\          if (!r.done) return iterResult(r.value, false);
+    \\          inner = null;
+    \\        }
+    \\        const r = stepOf(o, next);
+    \\        if (r.done) return iterResult(undefined, true);
+    \\        try {
+    \\          inner = flattenable(mapper(r.value, counter++));
+    \\          innerNext = inner.next;
+    \\        } catch (e) { closeQuietly(o); throw e; }
+    \\      }
+    \\    }, () => {
+    \\      if (inner !== null) {
+    \\        try { closeIterator(inner); } catch (e) { closeQuietly(o); throw e; }
+    \\      }
+    \\      closeIterator(o);
+    \\    });
+    \\  },
+    \\  reduce(reducer, ...initial) {
+    \\    const o = iterObject(this);
+    \\    callable(reducer, o);
+    \\    const next = o.next;
+    \\    let acc;
+    \\    let counter = 0;
+    \\    if (initial.length === 0) {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) throw new TypeError('Reduce of empty iterator with no initial value');
+    \\      acc = r.value;
+    \\      counter = 1;
+    \\    } else {
+    \\      acc = initial[0];
+    \\    }
+    \\    for (;;) {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return acc;
+    \\      try { acc = reducer(acc, r.value, counter++); } catch (e) { closeQuietly(o); throw e; }
+    \\    }
+    \\  },
+    \\  toArray() {
+    \\    const o = iterObject(this);
+    \\    const next = o.next;
+    \\    const out = [];
+    \\    for (;;) {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return out;
+    \\      out.push(r.value);
+    \\    }
+    \\  },
+    \\  forEach(fn) {
+    \\    const o = iterObject(this);
+    \\    callable(fn, o);
+    \\    const next = o.next;
+    \\    let counter = 0;
+    \\    for (;;) {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return undefined;
+    \\      try { fn(r.value, counter++); } catch (e) { closeQuietly(o); throw e; }
+    \\    }
+    \\  },
+    \\  some(predicate) {
+    \\    const o = iterObject(this);
+    \\    callable(predicate, o);
+    \\    const next = o.next;
+    \\    let counter = 0;
+    \\    for (;;) {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return false;
+    \\      let hit;
+    \\      try { hit = predicate(r.value, counter++); } catch (e) { closeQuietly(o); throw e; }
+    \\      if (hit) {
+    \\        closeIterator(o);
+    \\        return true;
+    \\      }
+    \\    }
+    \\  },
+    \\  every(predicate) {
+    \\    const o = iterObject(this);
+    \\    callable(predicate, o);
+    \\    const next = o.next;
+    \\    let counter = 0;
+    \\    for (;;) {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return true;
+    \\      let ok;
+    \\      try { ok = predicate(r.value, counter++); } catch (e) { closeQuietly(o); throw e; }
+    \\      if (!ok) {
+    \\        closeIterator(o);
+    \\        return false;
+    \\      }
+    \\    }
+    \\  },
+    \\  find(predicate) {
+    \\    const o = iterObject(this);
+    \\    callable(predicate, o);
+    \\    const next = o.next;
+    \\    let counter = 0;
+    \\    for (;;) {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return undefined;
+    \\      let hit;
+    \\      try { hit = predicate(r.value, counter++); } catch (e) { closeQuietly(o); throw e; }
+    \\      if (hit) {
+    \\        closeIterator(o);
+    \\        return r.value;
+    \\      }
+    \\    }
+    \\  },
+    \\});
+    \\// Iterator.from: an iterator that inherits from Iterator.prototype, or a
+    \\// wrapper around one that does not.
+    \\const WrapForValidIteratorPrototype = Object.create(IteratorPrototype);
+    \\const wrapped = new WeakMap();
+    \\methods(WrapForValidIteratorPrototype, {
+    \\  next() {
+    \\    const w = wrapped.get(this);
+    \\    if (w === undefined) throw new TypeError('next method called on incompatible receiver');
+    \\    return w.next.call(w.o);
+    \\  },
+    \\  return() {
+    \\    const w = wrapped.get(this);
+    \\    if (w === undefined) throw new TypeError('return method called on incompatible receiver');
+    \\    const ret = w.o.return;
+    \\    if (ret === undefined || ret === null) return iterResult(undefined, true);
+    \\    return ret.call(w.o);
+    \\  },
+    \\});
+    \\hidden(Iterator, 'from', function from(o) {
+    \\  let it;
+    \\  if (typeof o === 'string') it = o[Symbol.iterator]();
+    \\  else it = flattenable(o);
+    \\  if (IteratorPrototype.isPrototypeOf(it)) return it;
+    \\  const w = Object.create(WrapForValidIteratorPrototype);
+    \\  wrapped.set(w, { o: it, next: it.next });
+    \\  return w;
+    \\});
     \\
     \\// ---- legacy escape / unescape
     \\
