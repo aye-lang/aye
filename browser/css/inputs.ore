@@ -352,7 +352,9 @@ fn inputClasses(seed: u64, list: []u8, styles: *Styles) u64 {
             let key = classKey(list[start..i])
             for info in styles.class_infos.items() {
                 if info.keys.contains(key) {
-                    h = inputWord(h, key)
+                    // As written: outside quirks mode `.on` does not
+                    // match "On".
+                    h = inputText(h, list[start..i])
                     break
                 }
             }

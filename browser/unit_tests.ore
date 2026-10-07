@@ -441,6 +441,10 @@ test "style inputs see a class only where a selector can" {
     try doc.setAttr(span, "class", "nobody")
     try doc.setAttr(p, "class", "On")
     @expect(css.styleInputs(&doc, media, &styles) != start)
+    // The case of a named class counts (`.on` does not match "On").
+    let upper = css.styleInputs(&doc, media, &styles)
+    try doc.setAttr(p, "class", "on")
+    @expect(css.styleInputs(&doc, media, &styles) != upper)
     try doc.setAttr(p, "class", "xyz")
     @expect(css.styleInputs(&doc, media, &styles) != start)
     try doc.setAttr(p, "class", "")
