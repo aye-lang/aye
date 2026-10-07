@@ -687,6 +687,22 @@ and without `yes > /dev/null` load, and diff the sets.
 an archive records one run's requests, and a replay that asks for others
 misses.
 
+### A dump's scroll stops on growth, not only on quiet
+**Context:** `engine.scrollThrough` and anything else that steps a page
+until it stops changing.
+**Bad:** the dump stepped down until a step changed nothing, or 20
+steps. An endless feed changes on every step: `youtube-search` loaded
+~10 more pages of results, 100K nodes, 4.69 GB RSS and ~50 s of CPU,
+for content below anything an agent reads (P4.25).
+**Good:** count growth rounds, steps that changed the content and made
+the document at least half a viewport taller, and stop after
+`SCROLL_GROWTH_ROUNDS` (2, `browser/engine/geometry.ore`). Fixture
+`jsdom/endless_feed.html` (initial batch + 2). A height threshold, not
+any growth: in `lazy_sections` and `intersection_observer` a log line
+that changed or wrapped grew the document by 16 px per step.
+**Why:** "stop when nothing changes" never ends on a feed; the cap of 20
+was the only brake and cost the most.
+
 ### On the virtual clock, let a task's steps move time
 **Context:** code that reads the clock inside one task: schedulers with a
 time budget, `while (Date.now() < end)` loops, idle callbacks.

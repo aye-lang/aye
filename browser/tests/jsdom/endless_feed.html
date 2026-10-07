@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<title>Endless feed</title>
+<style>
+body { margin: 0 }
+li { height: 200px }
+</style>
+<h1>Endless feed</h1>
+<ol id="feed"></ol>
+<script>
+// A feed of results: five at load, five more after every scroll, without
+// end (a search page's endless results). A dump reads what is near the
+// top: it stops after two scrolls that made the document taller.
+const feed = document.getElementById('feed');
+function more() {
+  for (let i = 0; i < 5; i++) {
+    const li = document.createElement('li');
+    li.textContent = 'Result ' + (feed.children.length + 1);
+    feed.append(li);
+  }
+}
+more();
+addEventListener('scroll', () => setTimeout(more, 100));
+</script>
