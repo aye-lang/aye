@@ -171,22 +171,48 @@ before the native returns.
 **Bad:** resolving against document.currentScript at call time, or treating
 `import` as a callable global. Later calls have no current script, and
 module callbacks need the module URL rather than the document URL.
-**Good:** `Node.ImportCall` holds the referrer URL atom from parsing;
-`modules.ore` shares the promise/module map for static and dynamic imports.
-`231_dynamic_import.js` checks delayed calls, nested imports and failures.
+**Good:** `Node.ImportCall` holds the referrer URL atom from parsing, and
+static imports, `import()` and module scripts share the loader's module
+map (`browser/js/lib.ore`). `231_dynamic_import.js` checks delayed calls,
+nested imports and failures.
 **Why:** a function's source context outlives the script's execution.
-Export getters also need separate Ident nodes from declaration targets:
-the resolver writes different depths into each use.
+
+### Link a module graph before running any of it
+**Context:** ES modules (`browser/js/modules.ore`, the loader in `lib.ore`).
+**Bad:** the first loader (`df16130`) ran each module as an async function
+that awaited its imports one at a time and built its namespace when it
+returned. Cycles never settled, a microtask turn ran between modules, a
+missing export was found after the dependencies' side effects, and
+hoisted functions were unreachable from the other modules of a cycle.
+**Good:** load the whole graph, link it (every import bound to a live cell
+before any code runs), then evaluate it with the spec's DFS over strongly
+connected components (InnerModuleLinking, InnerModuleEvaluation and the
+async module algorithms). Check against Node: `233_module_cycles.js`,
+`235_module_tla.js`, `236_module_errors.js`.
+**Why:** bundler output has cycles and re-exports everywhere; only the
+spec's algorithm runs it in the order its authors tested.
 
 ### Module live bindings must bypass ordinary-value fast paths
 **Context:** static imported identifiers and namespace properties.
 **Bad:** numeric expression recipes returned the internal import cell;
 property write caches treated namespace getters as ordinary accessors and
-silently ignored strict assignments.
-**Good:** `exprValue` declines ModuleBinding cells, and `cacheable`
-declines ModuleNamespace objects. The slow path unwraps live cells and
-implements namespace writes/descriptors (`232_module_await.js`).
-**Why:** an internal getter or cell is not an observable JavaScript value.
+silently ignored strict assignments. A class check on every identifier
+read (`df16130`) made all scripts pay for the cells.
+**Good:** the resolver marks import bindings `IDENT_IMPORT`: only those
+reads unwrap a cell, and `compileFastExprs` skips them. `cacheable`
+declines ModuleNamespace objects; the slow path implements namespace
+writes, deletes and descriptors (`232_module_await.js`, `236`).
+**Why:** an internal cell is not an observable JavaScript value.
+
+### Keep the caller's environment rooted when switching to the global one
+**Context:** a native that makes a closure in the global scope
+(`moduleRecord` in `browser/js/modules.ore`).
+**Bad:** setting `it.env = NONE` around `makeClosure` let a collection
+free the calling JS function's environment; under `ANYKNOWN_JS_GC=stress`
+the loader then wrote into a freed environment.
+**Good:** push the saved environment on `it.outer_envs` while `it.env` is
+`NONE`, as `runScript` does, and run new module fixtures under GC stress.
+**Why:** `it.env` is a root only while it names the environment.
 
 ### Keep one decoder and version each observable image request
 **Context:** image state exposed to JS and images used by layout/canvas.
