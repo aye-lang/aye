@@ -656,7 +656,9 @@ fn clipsOverflow(g: *Geometry, i: usize) bool {
 
 // The right and bottom edges (in `w`, `h`) of what box `i` holds: its
 // descendants' boxes with their end margins and its lines' fragments,
-// not going into boxes that clip.
+// not going into boxes that clip. Fixed boxes are left out: they are
+// placed in the viewport, so a page does not scroll to reach them (and
+// they would follow the scroll offset down without end).
 fn contentEdges(g: *Geometry, i: usize, edges: *mut Area) {
     let t = g.tree
     let b = t.bx(i)
@@ -676,6 +678,9 @@ fn contentEdges(g: *Geometry, i: usize, edges: *mut Area) {
         let cb = t.bx(c)
         if cb.kind == layout.BoxKind.Inline || cb.kind == layout.BoxKind.Text || cb.kind == layout.BoxKind.LineBreak {
             contentEdges(g, c, edges)
+            continue
+        }
+        if cb.abs == 2 {
             continue
         }
         edges.w = math.max(edges.w, cb.ax + cb.w + cb.margin[1])
