@@ -584,7 +584,7 @@ counts showed no transition explosion (max fan-out 2905, at the root;
 11 shapes over 32), only a page that needs ~67,000 layouts, so the cap
 went to 262144 (`browser/js/shapes.ore`): hits 27% → 48%, shapeless
 61% → 22% (deletions and > 128-property objects), peak RSS +0.9%.
-`browser/tests/js/253_many_shapes.js` runs past the old cap.
+`browser/tests/js/254_many_shapes.js` runs past the old cap.
 **Why:** a cap that only guards against hostile scripts must sit far
 above what real pages use; when it sits below, the fast path quietly
 becomes the exception.
