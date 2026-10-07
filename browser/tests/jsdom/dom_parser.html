@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<title>DOMParser</title>
+<pre id="out"></pre>
+<script>
+// DOMParser parses a whole document: a script's text that mentions
+// <head> or <body> stays text (mistral.ai's Astro router), the html
+// element keeps its attributes, and the document has scripts, forms and
+// links. Its nodes' ownerDocument is the parsed document until they are
+// inserted elsewhere, so importNode makes an upgraded custom element
+// (Turbo's frames on GitHub). A fetched Response can be cloned.
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+customElements.define('x-frame', class extends HTMLElement {});
+const src = '<!DOCTYPE html><html lang="en" data-x="1"><head><title>Parsed</title>' +
+  '<script>/* swaps <head> and <body> on navigation */<\/script></head>' +
+  '<body class="b"><form></form><a href="/n">n</a><x-frame id="f"></x-frame><p>end</p></body></html>';
+const doc = new DOMParser().parseFromString(src, 'text/html');
+log('title', doc.title, doc.documentElement.getAttribute('lang'), doc.documentElement.getAttribute('data-x'));
+log('head', doc.head.children.length, doc.head.querySelector('script').textContent);
+log('body', doc.body.className, Array.from(doc.body.children, c => c.localName).join(','));
+log('collections', doc.scripts.length, doc.forms.length, doc.links.length, doc.images.length);
+const frame = doc.body.querySelector('x-frame');
+const X = customElements.get('x-frame');
+log('owner', frame.ownerDocument === doc, doc.documentElement.ownerDocument === doc, frame.ownerDocument !== document);
+log('upgraded', frame instanceof X, document.importNode(frame, true) instanceof X);
+const p = doc.body.querySelector('p');
+document.body.appendChild(p);
+log('moved', p.ownerDocument === document);
+fetch('scripts/items.json').then(async r => {
+  const c = r.clone();
+  log('clone', c instanceof Response, c.status, c.ok, c.url === r.url, c.headers.get('content-type'), (await c.text()) === (await r.text()));
+  try { r.clone(); } catch (e) { log('used', e.name); }
+});
+</script>
