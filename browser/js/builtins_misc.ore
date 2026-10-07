@@ -7,6 +7,7 @@
 // a linear scan with SameValueZero.
 
 import std.list.List
+import std.mem.AllocError
 import std.math
 import std.text
 
@@ -512,50 +513,184 @@ fn stride(it: *mut Interp, o: u32) u32 {
     return 1
 }
 
-// The element index of key k, or NONE.
-fn findKey(it: *mut Interp, o: u32, k: Value) u32 {
-    let st = stride(it, o)
-    let n = it.heap.obj(o).nelems
-    var i: u32 = 0
-    while i < n {
-        let e = it.heap.obj(o).elems[i]
-        match e {
-            .Empty => {}
-            _ => {
-                if it.sameValueZero(e, k) {
-                    return i
-                }
+let KEY_TOMB: u64 = 0xffffffffffffffff
+
+// The hash of key k, consistent with SameValueZero: numbers by value
+// (+0 and -0 alike, every NaN alike), strings and BigInts by content,
+// objects and symbols by their cell (cells do not move).
+fn keyHash(it: *mut Interp, k: Value) u32 {
+    var h: u64 = 0
+    match k {
+        .Num { n } => {
+            if n != n {
+                h = 0x7ff8000000000000
+            } else if n != 0.0 {
+                var x = n
+                h = @ptrCast([*]u64, &x)[0]
             }
         }
-        i += st
+        .Str { s } => {
+            h = 0xcbf29ce484222325
+            for b in it.heap.bytes(s) {
+                h = (h ^ b as u64) *% 0x100000001b3
+            }
+        }
+        .Big { s } => {
+            h = 0x84222325cbf29ce4
+            for b in it.heap.bytes(s) {
+                h = (h ^ b as u64) *% 0x100000001b3
+            }
+        }
+        .Obj { o } => {
+            h = o as u64 + 0x100000000
+        }
+        .Bool { b } => {
+            h = 3
+            if b {
+                h = 4
+            }
+        }
+        .Null => {
+            h = 2
+        }
+        _ => {
+            h = 1
+        }
+    }
+    h = (h ^ (h >> 30)) *% 0xbf58476d1ce4e5b9
+    h = (h ^ (h >> 27)) *% 0x94d049bb133111eb
+    return ((h ^ (h >> 31)) >> 32) as u32
+}
+
+// The slot of key k (hash h) in the index of o, or NONE.
+fn keySlot(it: *mut Interp, o: u32, k: Value, h: u32) u32 {
+    if it.heap.obj(o).keys |ki| {
+        let mask = ki.slots.len as u32 - 1
+        var p = h & mask
+        while true {
+            let sl = ki.slots[p]
+            if sl == 0 {
+                return NONE
+            }
+            if sl != KEY_TOMB && (sl >> 32) as u32 == h {
+                if it.sameValueZero(it.heap.obj(o).elems[(sl & 0xffffffff) as u32 - 1], k) {
+                    return p
+                }
+            }
+            p = (p + 1) & mask
+        }
     }
     return NONE
 }
 
-/// The number of entries of a Map or Set.
-pub fn mapSize(it: *mut Interp, o: u32) u32 {
+// The element index of key k (hash h), or NONE.
+fn findKey(it: *mut Interp, o: u32, k: Value, h: u32) u32 {
+    let p = keySlot(it, o, k, h)
+    if p == NONE {
+        return NONE
+    }
+    if it.heap.obj(o).keys |ki| {
+        return (ki.slots[p] & 0xffffffff) as u32 - 1
+    }
+    return NONE
+}
+
+// Puts element index i (hash h) in a free slot of the index.
+fn placeKey(ki: *mut KeyIndex, h: u32, i: u32) {
+    let mask = ki.slots.len as u32 - 1
+    var p = h & mask
+    while ki.slots[p] != 0 && ki.slots[p] != KEY_TOMB {
+        p = (p + 1) & mask
+    }
+    if ki.slots[p] == 0 {
+        ki.used += 1
+    }
+    ki.slots[p] = (h as u64 << 32) | (i as u64 + 1)
+}
+
+// Builds the index of o again from its elements (after they moved, or
+// to grow it).
+fn rebuildKeys(it: *mut Interp, o: u32) AllocError!void {
     let st = stride(it, o)
     let n = it.heap.obj(o).nelems
-    var count: u32 = 0
+    var live: u32 = 0
     var i: u32 = 0
     while i < n {
         match it.heap.obj(o).elems[i] {
             .Empty => {}
             _ => {
-                count += 1
+                live += 1
             }
         }
         i += st
     }
-    return count
+    var cap: usize = 8
+    while cap < live as usize * 2 + 2 {
+        cap *= 2
+    }
+    let alloc = it.heap.alloc
+    if it.heap.obj(o).keys == null {
+        it.heap.obj(o).keys = try alloc.create(KeyIndex { slots: []mut u64{}, used: 0, count: 0, walking: 0 })
+    }
+    let ki = it.heap.obj(o).keys orelse return
+    if ki.slots.len > 0 {
+        alloc.free(ki.slots)
+        ki.slots = []mut u64{}
+    }
+    ki.slots = try alloc.alloc(0 as u64, cap)
+    ki.used = 0
+    ki.count = live
+    i = 0
+    while i < n {
+        let e = it.heap.obj(o).elems[i]
+        match e {
+            .Empty => {}
+            _ => placeKey(ki, keyHash(it, e), i)
+        }
+        i += st
+    }
 }
 
-// Drops deleted entries when they are many.
-fn compact(it: *mut Interp, o: u32) {
+// Appends key k (hash h, not in o yet) and, for a Map, value v.
+fn addKey(it: *mut Interp, o: u32, k: Value, h: u32, v: Value) AllocError!void {
+    let i = it.heap.obj(o).nelems
+    try it.heap.pushElem(o, keyOf(k))
+    if stride(it, o) == 2 {
+        try it.heap.pushElem(o, v)
+    }
+    var grow = true
+    if it.heap.obj(o).keys |ki| {
+        grow = (ki.used as usize + 1) * 4 > ki.slots.len * 3
+    }
+    if grow {
+        try rebuildKeys(it, o)
+        return
+    }
+    if it.heap.obj(o).keys |ki| {
+        placeKey(ki, h, i)
+        ki.count += 1
+    }
+}
+
+/// The number of entries of a Map or Set.
+pub fn mapSize(it: *mut Interp, o: u32) u32 {
+    if it.heap.obj(o).keys |ki| {
+        return ki.count
+    }
+    return 0
+}
+
+// Drops deleted entries when they are many (not while forEach runs).
+fn compact(it: *mut Interp, o: u32) AllocError!void {
     let st = stride(it, o)
     let n = it.heap.obj(o).nelems
     if n < 32 || mapSize(it, o) * st * 2 > n {
         return
+    }
+    if it.heap.obj(o).keys |ki| {
+        if ki.walking > 0 {
+            return
+        }
     }
     let ob = it.heap.obj(o)
     var w: u32 = 0
@@ -573,6 +708,7 @@ fn compact(it: *mut Interp, o: u32) {
         i += st
     }
     ob.nelems = w
+    try rebuildKeys(it, o)
 }
 
 // Normalizes -0 to +0 (Map and Set keys).
@@ -616,18 +752,19 @@ fn mapCtor(it: *mut Interp, a: Args) JsError!Value {
 }
 
 fn mapPut(it: *mut Interp, o: u32, k: Value, v: Value) JsError!void {
-    let i = findKey(it, o, k)
+    let h = keyHash(it, k)
+    let i = findKey(it, o, k, h)
     if i != NONE {
         it.heap.obj(o).elems[i + 1] = v
         return
     }
-    try it.heap.pushElem(o, keyOf(k))
-    try it.heap.pushElem(o, v)
+    try addKey(it, o, k, h, v)
 }
 
 fn mapGet(it: *mut Interp, a: Args) JsError!Value {
     let o = try thisCollection(it, a, Class.Map)
-    let i = findKey(it, o, it.arg(a, 0))
+    let k = it.arg(a, 0)
+    let i = findKey(it, o, k, keyHash(it, k))
     if i == NONE {
         return Value.Undefined
     }
@@ -642,26 +779,46 @@ fn mapSet(it: *mut Interp, a: Args) JsError!Value {
 
 fn mapHas(it: *mut Interp, a: Args) JsError!Value {
     let o = try anyCollection(it, a)
-    return boolVal(findKey(it, o, it.arg(a, 0)) != NONE)
+    let k = it.arg(a, 0)
+    return boolVal(findKey(it, o, k, keyHash(it, k)) != NONE)
 }
 
 fn mapDelete(it: *mut Interp, a: Args) JsError!Value {
     let o = try anyCollection(it, a)
-    let i = findKey(it, o, it.arg(a, 0))
-    if i == NONE {
+    let k = it.arg(a, 0)
+    let p = keySlot(it, o, k, keyHash(it, k))
+    if p == NONE {
         return boolVal(false)
     }
-    let st = stride(it, o)
-    for k in 0..st {
-        it.heap.obj(o).elems[i + k] = Value.Empty
+    if it.heap.obj(o).keys |ki| {
+        let i = (ki.slots[p] & 0xffffffff) as u32 - 1
+        ki.slots[p] = KEY_TOMB
+        ki.count -= 1
+        for j in 0..stride(it, o) {
+            it.heap.obj(o).elems[i + j] = Value.Empty
+        }
     }
-    compact(it, o)
+    try compact(it, o)
     return boolVal(true)
 }
 
 fn mapClear(it: *mut Interp, a: Args) JsError!Value {
     let o = try anyCollection(it, a)
-    it.heap.obj(o).nelems = 0
+    if it.heap.obj(o).keys |ki| {
+        if ki.walking > 0 {
+            // A running forEach goes on after the cleared entries.
+            for i in 0..it.heap.obj(o).nelems {
+                it.heap.obj(o).elems[i] = Value.Empty
+            }
+        } else {
+            it.heap.obj(o).nelems = 0
+        }
+        for p in 0..ki.slots.len {
+            ki.slots[p] = 0
+        }
+        ki.used = 0
+        ki.count = 0
+    }
     return Value.Undefined
 }
 
@@ -670,9 +827,27 @@ fn collectionSize(it: *mut Interp, a: Args) JsError!Value {
     return numVal(mapSize(it, o) as f64)
 }
 
+// Keeps the element indices of o in place while a forEach runs.
+fn beginWalk(it: *mut Interp, o: u32) AllocError!void {
+    if it.heap.obj(o).keys == null {
+        try rebuildKeys(it, o)
+    }
+    if it.heap.obj(o).keys |ki| {
+        ki.walking += 1
+    }
+}
+
+fn endWalk(it: *mut Interp, o: u32) {
+    if it.heap.obj(o).keys |ki| {
+        ki.walking -= 1
+    }
+}
+
 fn mapForEach(it: *mut Interp, a: Args) JsError!Value {
     let o = try thisCollection(it, a, Class.Map)
     let f = try callableArg(it, a, 0)
+    try beginWalk(it, o)
+    defer endWalk(it, o)
     var i: u32 = 0
     while i < it.heap.obj(o).nelems {
         let k = it.heap.obj(o).elems[i]
@@ -750,8 +925,9 @@ fn setCtor(it: *mut Interp, a: Args) JsError!Value {
         var i: u32 = 0
         while i < it.heap.obj(arr).nelems {
             let e = holeToUndef(it.heap.obj(arr).elems[i])
-            if findKey(it, o, e) == NONE {
-                try it.heap.pushElem(o, keyOf(e))
+            let h = keyHash(it, e)
+            if findKey(it, o, e, h) == NONE {
+                try addKey(it, o, e, h, Value.Undefined)
             }
             i += 1
         }
@@ -763,8 +939,9 @@ fn setCtor(it: *mut Interp, a: Args) JsError!Value {
 fn setAdd(it: *mut Interp, a: Args) JsError!Value {
     let o = try thisCollection(it, a, Class.Set)
     let v = it.arg(a, 0)
-    if findKey(it, o, v) == NONE {
-        try it.heap.pushElem(o, keyOf(v))
+    let h = keyHash(it, v)
+    if findKey(it, o, v, h) == NONE {
+        try addKey(it, o, v, h, Value.Undefined)
     }
     return a.this
 }
@@ -772,6 +949,8 @@ fn setAdd(it: *mut Interp, a: Args) JsError!Value {
 fn setForEach(it: *mut Interp, a: Args) JsError!Value {
     let o = try thisCollection(it, a, Class.Set)
     let f = try callableArg(it, a, 0)
+    try beginWalk(it, o)
+    defer endWalk(it, o)
     var i: u32 = 0
     while i < it.heap.obj(o).nelems {
         let k = it.heap.obj(o).elems[i]

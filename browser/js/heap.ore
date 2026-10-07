@@ -118,6 +118,8 @@ pub struct Obj {
     // Arrays and arguments: the elements; Map and Set: keys (and values).
     elems: []mut Value
     nelems: u32
+    // Map and Set: the hash index of the keys in `elems` (builtins_misc.ore).
+    keys: ?*mut KeyIndex
     data: ObjData
     extensible: bool
     frozen: bool
@@ -126,6 +128,19 @@ pub struct Obj {
     // [[IsHTMLDDA]] (`document.all`): typeof "undefined", falsy, and
     // loosely equal to null and undefined.
     htmldda: bool
+}
+
+/// The hash index of a Map's or Set's keys. A slot is 0 (empty),
+/// KEY_TOMB (deleted), or hash << 32 | (element index + 1).
+pub struct KeyIndex {
+    slots: []mut u64
+    // Slots that are not empty (entries and tombstones).
+    used: u32
+    // Live entries (the size).
+    count: u32
+    // forEach loops running over the collection: element indices must
+    // not move (no compaction) until they end.
+    walking: u32
 }
 
 pub struct StrCell {
@@ -256,6 +271,7 @@ pub struct Heap {
             index: null,
             elems: []mut Value{},
             nelems: 0,
+            keys: null,
             data: data,
             extensible: true,
             frozen: false,
@@ -280,6 +296,13 @@ pub struct Heap {
             ix.deinit()
             self.alloc.destroy(ix)
         }
+        if ob.keys |ki| {
+            if ki.slots.len > 0 {
+                self.alloc.free(ki.slots)
+            }
+            self.alloc.destroy(ki)
+        }
+        ob.keys = null
         ob.props = []mut Prop{}
         ob.elems = []mut Value{}
         ob.index = null
