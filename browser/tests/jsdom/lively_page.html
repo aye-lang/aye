@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<title>Lively page</title>
+<style>
+body { margin: 0 }
+section { height: 2000px }
+</style>
+<h1>Lively page</h1>
+<section>Ten viewports of text.</section>
+<section>The first scroll adds a line.</section>
+<section>Then nothing changes.</section>
+<p id="note"></p>
+<script>
+// The first scroll event adds a line, the others change nothing: a dump
+// steps down while the content changes; after a step that changed
+// nothing it goes straight to the bottom (where an infinite list would
+// load more), and stops when nothing changed there either. A timer logs
+// the scroll offsets it sees.
+addEventListener('scroll', () => {
+  const note = document.getElementById('note');
+  if (!note.textContent) note.textContent = 'Scrolled.';
+});
+let seen = -1;
+setInterval(() => {
+  if (scrollY !== seen) console.log('scrollY ' + (seen = scrollY));
+}, 100);
+</script>

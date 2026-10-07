@@ -1,0 +1,26 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Quiet page"
+      "\n"
+      <style>
+        "\nbody { margin: 0 }\nsection { height: 1000px }\n"
+      "\n"
+    <body>
+      <h1>
+        "Quiet page"
+      "\n"
+      <section>
+        "Five viewports of text."
+      "\n"
+      <section>
+        "A scroll listener that changes nothing."
+      "\n"
+      <section>
+        "So a dump stops after its first step."
+      "\n"
+      <script>
+        "\n// The page listens for scroll, but its content stays the same: a dump\n// takes one step down, sees nothing changed (nothing ever did since the\n// load) and stops. A timer logs the scroll offsets it sees, and the\n// listener counts the events, out of the document.\nlet scrolls = 0;\naddEventListener('scroll', () => { scrolls++; });\nlet seen = -1;\nsetInterval(() => {\n  if (scrollY !== seen) console.log('scrollY ' + (seen = scrollY) + ', scroll events ' + scrolls);\n}, 100);\n"
+      "\n"

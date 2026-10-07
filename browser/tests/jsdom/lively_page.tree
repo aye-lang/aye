@@ -1,0 +1,29 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Lively page"
+      "\n"
+      <style>
+        "\nbody { margin: 0 }\nsection { height: 2000px }\n"
+      "\n"
+    <body>
+      <h1>
+        "Lively page"
+      "\n"
+      <section>
+        "Ten viewports of text."
+      "\n"
+      <section>
+        "The first scroll adds a line."
+      "\n"
+      <section>
+        "Then nothing changes."
+      "\n"
+      <p id="note">
+        "Scrolled."
+      "\n"
+      <script>
+        "\n// The first scroll event adds a line, the others change nothing: a dump\n// steps down while the content changes; after a step that changed\n// nothing it goes straight to the bottom (where an infinite list would\n// load more), and stops when nothing changed there either. A timer logs\n// the scroll offsets it sees.\naddEventListener('scroll', () => {\n  const note = document.getElementById('note');\n  if (!note.textContent) note.textContent = 'Scrolled.';\n});\nlet seen = -1;\nsetInterval(() => {\n  if (scrollY !== seen) console.log('scrollY ' + (seen = scrollY));\n}, 100);\n"
+      "\n"
