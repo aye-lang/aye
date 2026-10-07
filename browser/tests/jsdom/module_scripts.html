@@ -1,0 +1,38 @@
+<!doctype html>
+<title>Module scripts</title>
+<p id="order"></p>
+<p id="map"></p>
+<p id="cycle"></p>
+<p id="inline"></p>
+<script>
+// Module scripts run after parsing, in order with defer scripts, before
+// DOMContentLoaded; an import map before them maps bare specifiers.
+const order = [];
+function note(s) { order.push(s); document.getElementById('order').textContent = order.join(' '); }
+note('classic');
+document.addEventListener('DOMContentLoaded', () => note('DOMContentLoaded'));
+</script>
+<script type="importmap">
+{
+  "imports": { "lib": "./module_scripts/lib.mjs", "pkg/": "./module_scripts/pkg/", "blocked": null },
+  "scopes": { "./module_scripts/scoped/": { "lib": "./module_scripts/lib2.mjs" } }
+}
+</script>
+<script type="module" src="module_scripts/cycle-a.mjs"></script>
+<script defer src="module_scripts/deferred.js"></script>
+<script type="module">
+import lib from 'lib';
+import { util } from 'pkg/util.mjs';
+import { scopedLib } from './module_scripts/scoped/user.mjs';
+import data from './module_scripts/data.json' with { type: 'json' };
+note('inline module');
+document.getElementById('map').textContent = [lib, util, scopedLib, data.json].join(' ');
+document.getElementById('inline').textContent = 'meta ' + import.meta.url.endsWith('/module_scripts.html') +
+  ' this ' + (this === undefined) + ' resolve ' + import.meta.resolve('pkg/x.mjs').endsWith('/module_scripts/pkg/x.mjs');
+import('blocked').catch(e => note('blocked ' + e.name));
+</script>
+<script type="module">throw new Error('evaluation failed');</script>
+<script type="module">import { missing } from 'lib';</script>
+<script type="module" src="module_scripts/absent.mjs"></script>
+<script nomodule>note('WRONG nomodule');</script>
+<script type="MODULE ">note('module type ignores case and spaces');</script>
