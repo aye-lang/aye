@@ -82,6 +82,8 @@ pub let F_CONFIG: u8 = 4
 // An accessor: `value` is the getter, `setter` the setter (Undefined when
 // missing).
 pub let F_ACCESSOR: u8 = 8
+// A live module export: internal getter, externally a data descriptor.
+pub let F_MODULE: u8 = 16
 pub let F_DEFAULT: u8 = 7
 pub let F_HIDDEN: u8 = 6
 

@@ -24,7 +24,7 @@
 // Simplifications: scripts run after the whole document is parsed (an
 // inline script sees the complete DOM; what `document.write` writes is
 // inserted after the script once it returns);
-// `async` scripts run like `defer` ones; modules are skipped; a script
+// `async` scripts run like `defer` ones; modules run deferred; a script
 // that never returns hangs the browser. Time is virtual for `dump` and
 // the agent (the event loop jumps to the next timer) and real for the
 // window.
@@ -531,6 +531,7 @@ fn createScript(p: *mut Page) AllocError!*mut Script {
             }
         }
     }
+    s.it.script_url = s.it.intern(p.base.href) catch return AllocError.OutOfMemory
     return s
 }
 
@@ -598,7 +599,7 @@ fn startPageScripts(p: *mut Page) AllocError!void {
     defer all.deinit()
     var cur: ?NodeId = p.doc.root
     while cur |h| {
-        if p.doc.isElement(h, "script") && isClassicScript(p, h) {
+        if p.doc.isElement(h, "script") && (isClassicScript(p, h) || isModuleScript(p, h)) {
             try all.append(h)
         }
         cur = p.doc.following(h, p.doc.root)
@@ -608,7 +609,7 @@ fn startPageScripts(p: *mut Page) AllocError!void {
     defer later.deinit()
     for el in all.items() {
         let external = p.doc.attr(el, "src") != null
-        if external && (p.doc.attr(el, "defer") != null || p.doc.attr(el, "async") != null) {
+        if isModuleScript(p, el) || (external && (p.doc.attr(el, "defer") != null || p.doc.attr(el, "async") != null)) {
             try later.append(el)
         } else {
             try runScriptElement(s, el)
@@ -631,7 +632,14 @@ fn finishPageScripts(p: *mut Page) AllocError!void {
 
 // Is the `script` element `el` a classic script (JavaScript, not a
 // module or data)?
+fn isModuleScript(p: *mut Page, el: NodeId) bool {
+    return text.eql(p.doc.attr(el, "type") orelse "", "module")
+}
+
 fn isClassicScript(p: *mut Page, el: NodeId) bool {
+    if p.doc.attr(el, "nomodule") != null {
+        return false
+    }
     if p.doc.attr(el, "type") |raw| {
         let t = text.trim(raw)
         if t.len == 0 {
@@ -674,6 +682,9 @@ fn runScriptElement(s: *mut Script, el: NodeId) AllocError!void {
     if !p.doc.isLive(el) {
         return
     }
+    if isModuleScript(p, el) {
+        return runModuleElement(s, el)
+    }
     if p.doc.attr(el, "src") |src| {
         let target = p.resolve(s.alloc, src) catch |e| {
             return addConsole(s, "[error] Failed to load script: ", src)
@@ -699,7 +710,30 @@ fn runScriptElement(s: *mut Script, el: NodeId) AllocError!void {
     return runSourceOf(s, el, b.bytes())
 }
 
+fn runModuleElement(s: *mut Script, el: NodeId) AllocError!void {
+    s.current = null
+    enter(s)
+    if s.page.doc.attr(el, "src") |src| {
+        js.importModule(&mut s.it, src, s.it.script_url) catch |e| {
+            leave(s)
+            return uncaught(s, e)
+        }
+    } else {
+        var b = text.Builder.init(s.alloc)
+        defer b.deinit()
+        try s.page.doc.textContent(el, &mut b)
+        let referrer = s.it.intern(s.page.base.href) catch return AllocError.OutOfMemory
+        s.it.runModuleSource(b.bytes(), referrer) catch |e| {
+            leave(s)
+            return uncaught(s, e)
+        }
+    }
+    leave(s)
+    try runMicrotasks(s)
+}
+
 fn runSourceOf(s: *mut Script, el: NodeId, code: []u8) AllocError!void {
+    s.it.script_url = s.it.intern(s.page.base.href) catch return AllocError.OutOfMemory
     let began = perf.start()
     let source = s.page.doc.attr(el, "src") orelse "inline"
     defer perf.end("script", began, source)
@@ -754,7 +788,7 @@ fn insertWritten(s: *mut Script, el: NodeId) AllocError!void {
         p.doc.insertBefore(parent, n, next)
         var cur: ?NodeId = n
         while cur |h| {
-            if p.doc.isElement(h, "script") && isClassicScript(p, h) {
+            if p.doc.isElement(h, "script") && (isClassicScript(p, h) || isModuleScript(p, h)) {
                 try scripts.append(h)
             }
             cur = p.doc.following(h, n)

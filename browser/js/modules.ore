@@ -1,0 +1,103 @@
+// ES module loading shared by the command-line runner and browser.
+// The JS import driver owns the module map and scheduling; this boundary
+// resolves URLs, fetches bytes, and parses module code in a private scope.
+import std.text
+import url
+import net
+
+fn evalImport(it: *mut Interp, arg: u32, referrer: u32) JsError!Value {
+    let base = it.stack.len()
+    defer it.truncate(base)
+    var thrown = false
+    let spec = it.eval(arg) catch |e| {
+        if e != JsError.Thrown {
+            return e
+        }
+        thrown = true
+        it.exception
+    }
+    try it.push(spec)
+    let href = try it.atomValue(referrer)
+    try it.push(href)
+    let driver = it.roots.items()[it.import_driver]
+    try it.push(driver)
+    try it.push(Value.Undefined)
+    try it.push(spec)
+    try it.push(href)
+    try it.push(boolVal(thrown))
+    return it.callAt(base + 2, 3)
+}
+
+/// Imports a module through the same promise/module map as ImportCall.
+pub fn importModule(it: *mut Interp, specifier: []u8, referrer: u32) JsError!Value {
+    let base = it.stack.len()
+    defer it.truncate(base)
+    try it.push(it.roots.items()[it.import_driver])
+    try it.push(Value.Undefined)
+    try it.push(try it.newString(specifier))
+    try it.push(try it.atomValue(referrer))
+    return it.callAt(base, 2)
+}
+
+fn engineResolveModule(it: *mut Interp, a: Args) JsError!Value {
+    let spec = it.heap.bytes(strOf(it.arg(a, 0)))
+    let base = url.parse(it.alloc, it.heap.bytes(strOf(it.arg(a, 1)))) catch |e| {
+        return it.typeError("Invalid module referrer")
+    }
+    defer base.deinit(it.alloc)
+    // Browsers do not implicitly resolve bare package names.
+    if !text.startsWith(spec, "./") && !text.startsWith(spec, "../") && !text.startsWith(spec, "/") &&
+        text.indexOf(spec, ":") == null {
+        return it.typeError("Invalid module specifier")
+    }
+    let target = url.resolve(it.alloc, &base, spec) catch |e| {
+        return it.typeError("Invalid module specifier")
+    }
+    defer target.deinit(it.alloc)
+    return it.newString(target.href)
+}
+
+fn engineFetchModule(it: *mut Interp, a: Args) JsError!Value {
+    let target = url.parse(it.alloc, it.heap.bytes(strOf(it.arg(a, 0)))) catch |e| {
+        return it.typeError("Invalid module URL")
+    }
+    defer target.deinit(it.alloc)
+    let res = net.request(it.alloc, &target, net.Request { kind: net.Kind.Script }) catch |e| {
+        if e == net.FetchError.OutOfMemory {
+            return JsError.OutOfMemory
+        }
+        return it.typeError("Failed to fetch module")
+    }
+    defer res.deinit(it.alloc)
+    if res.status < 200 || res.status >= 300 {
+        return it.typeError("Failed to fetch module")
+    }
+    let referrer = try it.intern(target.href)
+    return it.runModuleSource(res.body, referrer)
+}
+
+fn importMeta(it: *mut Interp, referrer: u32) JsError!Value {
+    let base = it.stack.len()
+    defer it.truncate(base)
+    let o = try it.newObject(NONE)
+    try it.push(objVal(o))
+    try it.defineOwn(o, try it.intern("url"), try it.atomValue(referrer), F_DEFAULT)
+    return objVal(o)
+}
+
+fn moduleNamespace(it: *mut Interp, value: u32) JsError!Value {
+    let ns = try it.eval(value)
+    try it.push(ns)
+    defer it.pop()
+    let o = objectOf(ns)
+    // Export getters retain the module environment, but namespace
+    // descriptors are data descriptors and [[Set]] always fails.
+    it.heap.obj(o).proto = NONE
+    for i in 0..it.heap.obj(o).nprops {
+        it.heap.obj(o).props[i].flags = F_ENUM | F_ACCESSOR | F_MODULE
+    }
+    let tag = try it.newString("Module")
+    try it.heap.addProp(o, it.sym_to_string_tag, tag, Value.Undefined, 0)
+    it.heap.obj(o).extensible = false
+    return ns
+}

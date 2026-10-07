@@ -58,6 +58,8 @@ pub enum Tok {
     KwSuper
     KwVoid
     KwDebugger
+    KwImport
+    KwExport
     // punctuators
     LBrace
     RBrace
@@ -898,6 +900,12 @@ pub fn appendWtf8(b: *mut text.Builder, cp: u32) AllocError!void {
 }
 
 fn keyword(s: []u8) Tok {
+    if text.eql(s, "import") {
+        return Tok.KwImport
+    }
+    if text.eql(s, "export") {
+        return Tok.KwExport
+    }
     if s.len < 2 || s.len > 10 || s[0] < 'b' || s[0] > 'w' {
         return Tok.Ident
     }

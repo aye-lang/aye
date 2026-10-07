@@ -10,6 +10,7 @@
 import std
 import std.mem.Allocator
 import std.text
+import url
 
 @link("pthread")
 
@@ -26,7 +27,24 @@ pub fn runFile(alloc: Allocator, path: []u8) i32 {
         return 1
     }
     defer alloc.free(src)
-    return runOnBigStack(alloc, src)
+    var b = text.Builder.init(alloc)
+    defer b.deinit()
+    b.append("file://") catch return 1
+    if !text.startsWith(path, "/") {
+        let buf = alloc.alloc(0 as u8, 4096) catch return 1
+        defer alloc.free(buf)
+        getcwd(buf.ptr, buf.len)
+        var n: usize = 0
+        while n < buf.len && buf[n] != 0 {
+            n += 1
+        }
+        b.append(buf[..n]) catch return 1
+        b.appendByte('/') catch return 1
+    }
+    b.append(path) catch return 1
+    let target = url.parse(alloc, b.bytes()) catch return 1
+    defer target.deinit(alloc)
+    return runOnBigStackAt(alloc, src, target.href, text.endsWith(path, ".mjs"))
 }
 
 // The interpreter recurses on the C stack (several KB per JS call in
@@ -39,19 +57,27 @@ struct Job {
     alloc: Allocator
     src: []u8
     status: i32
+    href: []u8
+    module: bool
 }
 
 fn jobMain(arg: ?[*]u8) ?[*]u8 {
     if arg |p| {
         let job = @ptrCast(*mut Job, p)
-        job.status = runSource(job.alloc, job.src)
+        job.status = runSourceAt(job.alloc, job.src, job.href, job.module)
     }
     return null
 }
 
 /// runSource on a thread with a 1 GB stack (reserved, not committed).
 pub fn runOnBigStack(alloc: Allocator, src: []u8) i32 {
-    var job = Job { alloc: alloc, src: src, status: 1 }
+    return runOnBigStackAt(alloc, src, "", false)
+}
+
+extern fn getcwd(buf: [*]u8, size: usize) [*]u8
+
+fn runOnBigStackAt(alloc: Allocator, src: []u8, href: []u8, module: bool) i32 {
+    var job = Job { alloc: alloc, src: src, status: 1, href: href, module: module }
     var attr = @zeroed(pthread.pthread_attr_t)
     var thread = @zeroed(pthread.pthread_t)
     if pthread.pthread_attr_init(&mut attr) != 0 || pthread.pthread_attr_setstacksize(&mut attr, STACK_BYTES) != 0 {
@@ -66,6 +92,10 @@ pub fn runOnBigStack(alloc: Allocator, src: []u8) i32 {
 
 /// Runs a script's source in a new engine; returns the exit status.
 pub fn runSource(alloc: Allocator, src: []u8) i32 {
+    return runSourceAt(alloc, src, "", false)
+}
+
+fn runSourceAt(alloc: Allocator, src: []u8, href: []u8, module: bool) i32 {
     var it = Interp.create(alloc) catch |e| {
         std.log.err("out of memory")
         return 1
@@ -81,8 +111,15 @@ pub fn runSource(alloc: Allocator, src: []u8) i32 {
         it.heap.threshold = 1
     }
     it.markStackBase(RUNNER_ROOM)
-    it.runScript(src) catch |e| {
-        return uncaughtStatus(&mut it, e)
+    it.script_url = it.intern(href) catch return 1
+    if module {
+        it.runModuleSource(src, it.script_url) catch |e| {
+            return uncaughtStatus(&mut it, e)
+        }
+    } else {
+        it.runScript(src) catch |e| {
+            return uncaughtStatus(&mut it, e)
+        }
     }
     // The microtasks (promise reactions), as Node runs them after the
     // script, then each due FinalizationRegistry callback as a task of

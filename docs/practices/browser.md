@@ -166,6 +166,18 @@ page-created MutationObserver. The `style_props.html` fixture covers this.
 **Why:** Ore locals are not GC roots; a hook can allocate or invoke JS
 before the native returns.
 
+### Capture an import's referrer in its syntax, not the active script
+**Context:** dynamic imports inside functions, timers and promise callbacks.
+**Bad:** resolving against document.currentScript at call time, or treating
+`import` as a callable global. Later calls have no current script, and
+module callbacks need the module URL rather than the document URL.
+**Good:** `Node.ImportCall` holds the referrer URL atom from parsing;
+`modules.ore` shares the promise/module map for static and dynamic imports.
+`231_dynamic_import.js` checks delayed calls, nested imports and failures.
+**Why:** a function's source context outlives the script's execution.
+Export getters also need separate Ident nodes from declaration targets:
+the resolver writes different depths into each use.
+
 ### Keep one decoder and version each observable image request
 **Context:** image state exposed to JS and images used by layout/canvas.
 **Bad:** `decode()` formerly fulfilled for any nonempty src, including

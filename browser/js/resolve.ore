@@ -667,6 +667,8 @@ pub struct Resolver {
             .SuperMember { this_node, .. } => try self.expr(this_node)
             .Yield { arg, .. } => try self.expr(arg)
             .Await { arg } => try self.expr(arg)
+            .ImportCall { arg, .. } => try self.expr(arg)
+            .ModuleNamespace { value } => try self.expr(value)
             .TaggedTemplate { tag, quasi, .. } => {
                 try self.expr(tag)
                 try self.expr(quasi)
@@ -690,7 +692,7 @@ pub struct Resolver {
         }
     }
 
-    fn function(self: *mut Self, f: u32) SyntaxErr!void {
+    pub fn function(self: *mut Self, f: u32) SyntaxErr!void {
         self.markClosures()
         let fi = self.ast.func(f)
         let outer = self.strict

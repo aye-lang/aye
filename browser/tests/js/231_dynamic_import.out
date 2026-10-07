@@ -1,0 +1,21 @@
+start
+end
+namespace count,default,increment,z true
+shape [object Module] false
+once true 1
+values 1 default last
+live 2 2
+descriptor {"value":2,"writable":true,"enumerable":true,"configurable":false}
+nested 2 true true
+symbol TypeError
+coercion coercion
+argument argument
+parse SyntaxError
+throw 42
+throw 42
+throw once 1
+syntax SyntaxError
+syntax SyntaxError
+syntax SyntaxError
+syntax SyntaxError
+syntax SyntaxError

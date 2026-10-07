@@ -257,6 +257,9 @@ pub struct Interp {
     weak_refs: IntMap(u32, u32)
     kept: List(Value)
     fin_cells: List(FinCell)
+    // Default referrer for classic scripts, and root of the import driver.
+    script_url: u32 = 0
+    import_driver: u32 = NONE
 
     pub fn create(alloc: Allocator) JsError!Interp {
         var it = Interp {
@@ -2874,6 +2877,15 @@ pub struct Interp {
             .Await { arg } => {
                 return self.evalAwait(arg)
             }
+            .ImportCall { arg, referrer } => {
+                return evalImport(self, arg, referrer)
+            }
+            .ImportMeta { referrer } => {
+                return importMeta(self, referrer)
+            }
+            .ModuleNamespace { value } => {
+                return moduleNamespace(self, value)
+            }
             .NewTarget => {
                 return self.evalNewTarget()
             }
@@ -4275,7 +4287,7 @@ pub struct Interp {
     // ---- scripts
 
     /// Parses and runs a script. A syntax error throws a SyntaxError.
-    pub fn runScript(self: *mut Self, src: []u8) JsError!Value {
+    fn parseCode(self: *mut Self, src: []u8, module: bool, referrer: u32) JsError!u32 {
         var lx = Lexed.init(self.alloc)
         defer lx.deinit()
         let base = self.ast.source.len() as u32
@@ -4283,7 +4295,8 @@ pub struct Interp {
         let message = try self.builder()
         defer self.release(message)
         tokenize(self.alloc, src, &mut lx) catch |e| {
-            return self.syntaxError(lx.message.bytes())
+            try self.syntaxError(lx.message.bytes())
+            return JsError.Thrown
         }
         var p = Parser {
             alloc: self.alloc,
@@ -4300,10 +4313,21 @@ pub struct Interp {
             in_gen: false,
             strict: false,
             floor: self.stackFloor(),
+            referrer: referrer,
+            module: module,
         }
         defer p.tmp.deinit()
-        let root = p.program() catch |e| {
-            return self.syntaxError(message.bytes())
+        var root: u32 = 0
+        if module {
+            root = p.moduleProgram() catch |e| {
+                try self.syntaxError(message.bytes())
+                return JsError.Thrown
+            }
+        } else {
+            root = p.program() catch |e| {
+                try self.syntaxError(message.bytes())
+                return JsError.Thrown
+            }
         }
         var r = Resolver {
             alloc: self.alloc,
@@ -4318,8 +4342,16 @@ pub struct Interp {
             annex_pass: false,
         }
         defer r.cleanup()
-        r.script(root) catch |e| {
-            return self.syntaxError(message.bytes())
+        if module {
+            r.function(root) catch |e| {
+                try self.syntaxError(message.bytes())
+                return JsError.Thrown
+            }
+        } else {
+            r.script(root) catch |e| {
+                try self.syntaxError(message.bytes())
+                return JsError.Thrown
+            }
         }
         while self.prop_caches.len() < self.ast.nodes.len() {
             try self.prop_caches.append(emptyPropCache())
@@ -4331,6 +4363,23 @@ pub struct Interp {
                 try self.heap.addProp(self.global, name, Value.Undefined, Value.Undefined, F_ENUM | F_WRITE)
             }
         }
+        return root
+    }
+
+    pub fn runModuleSource(self: *mut Self, src: []u8, referrer: u32) JsError!Value {
+        let f = try self.parseCode(src, true, referrer)
+        let saved = self.env
+        try self.outer_envs.append(saved)
+        self.env = NONE
+        defer self.env = saved
+        defer self.outer_envs.pop()
+        let closure = try self.makeClosure(f)
+        return self.call0(closure, Value.Undefined)
+    }
+
+    /// Parses and executes a classic script with its captured base URL.
+    pub fn runScript(self: *mut Self, src: []u8) JsError!Value {
+        let root = try self.parseCode(src, false, self.script_url)
         let savedEnv = self.env
         try self.outer_envs.append(savedEnv)
         self.env = NONE

@@ -416,7 +416,36 @@ pub let LIB =
     \\    [Symbol.toStringTag]: 'AsyncGenerator',
     \\  };
     \\}
-    \\G.__engine.setDrivers(asyncDriver, asyncGenDriver, takeUnhandled);
+    \\// One module map for classic import(), module import(), and static imports.
+    \\const moduleMap = new Map();
+    \\const resolveModule = G.__engine.resolveModule;
+    \\const fetchModule = G.__engine.fetchModule;
+    \\function importDriver(specifier, referrer, thrown) {
+    \\  return new Promise((resolve, reject) => {
+    \\    let spec;
+    \\    try {
+    \\      if (thrown) throw specifier;
+    \\      if (typeof specifier === 'symbol') throw new TypeError('Cannot convert a Symbol value to a string');
+    \\      spec = String(specifier);
+    \\    } catch (e) { reject(e); return; }
+    \\    queueMicrotask(() => {
+    \\      try {
+    \\        const url = resolveModule(spec, referrer);
+    \\        let promise = moduleMap.get(url);
+    \\        if (!promise) {
+    \\          promise = new Promise((res, rej) => {
+    \\            queueMicrotask(() => {
+    \\              try { res(fetchModule(url)); } catch (e) { rej(e); }
+    \\            });
+    \\          });
+    \\          moduleMap.set(url, promise);
+    \\        }
+    \\        resolve(promise);
+    \\      } catch (e) { reject(e); }
+    \\    });
+    \\  });
+    \\}
+    \\G.__engine.setDrivers(asyncDriver, asyncGenDriver, takeUnhandled, importDriver);
     \\delete G.__engine;
     \\
     \\// ---- legacy escape / unescape

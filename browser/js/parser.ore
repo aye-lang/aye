@@ -29,6 +29,9 @@ pub struct Parser {
     strict: bool
     // The lowest stack address the recursion may reach (0: no limit).
     floor: u64
+    // URL atom for ImportCall and import.meta; zero for anonymous scripts.
+    referrer: u32 = 0
+    module: bool = false
 
     // ---- tokens
 
@@ -225,6 +228,232 @@ pub struct Parser {
     }
 
     // ---- program and statements
+
+    // Module code has its own strict, async-capable environment, never the
+    // global lexical environment. Export getters close over its live slots.
+    pub fn moduleProgram(self: *mut Self) SyntaxErr!u32 {
+        self.module = true
+        self.strict = true
+        self.in_async = true
+        let pm = self.mark()
+        let f = try self.newFunc(A_EMPTY, pm)
+        self.ast.funcs.items()[f].is_async = true
+        self.ast.funcs.items()[f].strict = true
+        var exports = List(u32).init(self.alloc)
+        defer exports.deinit()
+        let m = self.mark()
+        while !self.at(Tok.Eof) {
+            if self.at(Tok.KwImport) && self.kindAt(1) != Tok.LParen && self.kindAt(1) != Tok.Dot {
+                try self.push(try self.moduleImport())
+            } else if self.eat(Tok.KwExport) {
+                if self.eat(Tok.KwDefault) {
+                    let start = self.pos
+                    let value = try self.assign(false)
+                    let name = try self.intern("*default*")
+                    let target = try self.ident(name, start)
+                    let d = try self.mk(Node.Declarator { target: target, init: value }, start)
+                    let dm = self.mark()
+                    try self.push(d)
+                    let dl = try self.list(dm)
+                    try self.push(try self.mk(Node.VarDecl { kind: DECL_CONST, list: dl, n: 1 }, start))
+                    try self.moduleExport(&mut exports, try self.intern("default"), try self.ident(name, start))
+                    try self.semi()
+                } else if self.eat(Tok.LBrace) {
+                    while !self.eat(Tok.RBrace) {
+                        let start = self.pos
+                        if !self.at(Tok.Ident) {
+                            return self.unexpected()
+                        }
+                        let local = try self.intern(self.tokText(self.tok()))
+                        self.pos += 1
+                        var name = local
+                        if self.isWord("as") {
+                            self.pos += 1
+                            if !self.isName() {
+                                return self.unexpected()
+                            }
+                            name = try self.intern(self.tokText(self.tok()))
+                            self.pos += 1
+                        }
+                        try self.moduleExport(&mut exports, name, try self.ident(local, start))
+                        if !self.eat(Tok.Comma) {
+                            try self.expect(Tok.RBrace)
+                            break
+                        }
+                    }
+                    try self.semi()
+                } else {
+                    let d = try self.statement()
+                    match self.ast.node(d) {
+                        .VarDecl { list, n, .. } => {
+                            for k in 0..n {
+                                match self.ast.node(self.ast.item(list, k)) {
+                                    .Declarator { target, .. } => try self.exportTarget(&mut exports, target)
+                                    _ => {}
+                                }
+                            }
+                        }
+                        .FuncDecl { target, .. } => try self.exportTarget(&mut exports, target)
+                        .ClassDecl { target, .. } => try self.exportTarget(&mut exports, target)
+                        _ => {
+                            return self.fail("Invalid export declaration")
+                        }
+                    }
+                    try self.push(d)
+                }
+            } else {
+                if self.at(Tok.KwReturn) {
+                    return self.fail("Illegal return statement")
+                }
+                try self.push(try self.statement())
+            }
+        }
+        // Namespace keys use lexicographic, not declaration, order.
+        for i in 1..exports.len() {
+            var j = i
+            while j > 0 && self.exportLess(exports.items()[j], exports.items()[j - 1]) {
+                let swap = exports.items()[j]
+                exports.items()[j] = exports.items()[j - 1]
+                exports.items()[j - 1] = swap
+                j -= 1
+            }
+        }
+        let em = self.mark()
+        for e in exports.items() {
+            try self.push(e)
+        }
+        let el = try self.list(em)
+        let object = try self.mk(Node.ObjectLit { list: el, n: exports.len() as u32 }, 0)
+        let ns = try self.mk(Node.ModuleNamespace { value: object }, 0)
+        try self.push(try self.mk(Node.Return { arg: ns }, 0))
+        let n = self.count(m)
+        let l = try self.list(m)
+        self.ast.funcs.items()[f].body = l
+        self.ast.funcs.items()[f].nbody = n
+        return f
+    }
+
+    fn exportLess(self: *Self, left: u32, right: u32) bool {
+        let a = self.atoms.name(self.exportKey(left))
+        let b = self.atoms.name(self.exportKey(right))
+        var n = a.len
+        if b.len < n {
+            n = b.len
+        }
+        for i in 0..n {
+            if a[i] != b[i] {
+                return a[i] < b[i]
+            }
+        }
+        return a.len < b.len
+    }
+
+    fn exportKey(self: *Self, e: u32) u32 {
+        return match self.ast.node(e) {
+            .Prop { key, .. } => key
+            _ => 0
+        }
+    }
+
+    fn exportTarget(self: *mut Self, exports: *mut List(u32), target: u32) SyntaxErr!void {
+        match self.ast.node(target) {
+            .Ident { name, .. } => try self.moduleExport(exports, name, try self.ident(name, self.pos))
+            _ => {
+                try self.fail("Exported destructuring is not supported")
+            }
+        }
+    }
+
+    fn moduleExport(self: *mut Self, exports: *mut List(u32), name: u32, target: u32) SyntaxErr!void {
+        for e in exports.items() {
+            if self.exportKey(e) == name {
+                try self.fail("Duplicate export")
+            }
+        }
+        let m = self.mark()
+        let f = try self.newFunc(A_EMPTY, m)
+        self.ast.funcs.items()[f].arrow = true
+        self.ast.funcs.items()[f].strict = true
+        self.ast.funcs.items()[f].expr = target
+        let getter = try self.mk(Node.Func { f: f }, self.pos)
+        try exports.append(try self.mk(Node.Prop { kind: PROP_GET, key: name, computed: false, value: getter }, self.pos))
+    }
+
+    fn moduleImport(self: *mut Self) SyntaxErr!u32 {
+        let start = self.pos
+        self.pos += 1
+        var target: u32 = 0
+        let m = self.mark()
+        if !self.at(Tok.Str) {
+            if self.at(Tok.Ident) {
+                let local = try self.intern(self.tokText(self.tok()))
+                self.pos += 1
+                let value = try self.ident(local, start)
+                try self.push(try self.mk(Node.PatProp { key: try self.intern("default"), computed: false, value: value }, start))
+                if !self.eat(Tok.Comma) {
+                    let l = try self.list(m)
+                    target = try self.mk(Node.ObjectPat { list: l, n: 1 }, start)
+                }
+            }
+            if target == 0 && self.eat(Tok.Star) {
+                if !self.isWord("as") {
+                    return self.unexpected()
+                }
+                self.pos += 1
+                if !self.at(Tok.Ident) {
+                    return self.unexpected()
+                }
+                let name = try self.intern(self.tokText(self.tok()))
+                self.pos += 1
+                target = try self.ident(name, start)
+            } else if target == 0 {
+                try self.expect(Tok.LBrace)
+                while !self.eat(Tok.RBrace) {
+                    if !self.isName() {
+                        return self.unexpected()
+                    }
+                    let key = try self.intern(self.tokText(self.tok()))
+                    self.pos += 1
+                    var local = key
+                    if self.isWord("as") {
+                        self.pos += 1
+                        if !self.at(Tok.Ident) {
+                            return self.unexpected()
+                        }
+                        local = try self.intern(self.tokText(self.tok()))
+                        self.pos += 1
+                    }
+                    let value = try self.ident(local, start)
+                    try self.push(try self.mk(Node.PatProp { key: key, computed: false, value: value }, start))
+                    if !self.eat(Tok.Comma) {
+                        try self.expect(Tok.RBrace)
+                        break
+                    }
+                }
+                let n = self.count(m)
+                let l = try self.list(m)
+                target = try self.mk(Node.ObjectPat { list: l, n: n }, start)
+            }
+            if !self.isWord("from") {
+                return self.unexpected()
+            }
+            self.pos += 1
+        }
+        if !self.at(Tok.Str) {
+            return self.unexpected()
+        }
+        let spec = try self.primary()
+        let call = try self.mk(Node.ImportCall { arg: spec, referrer: self.referrer }, start)
+        let wait = try self.mk(Node.Await { arg: call }, start)
+        try self.semi()
+        if target == 0 {
+            return self.mk(Node.ExprStmt { e: wait }, start)
+        }
+        let dm = self.mark()
+        try self.push(try self.mk(Node.Declarator { target: target, init: wait }, start))
+        let dl = try self.list(dm)
+        return self.mk(Node.VarDecl { kind: DECL_CONST, list: dl, n: 1 }, start)
+    }
 
     /// Parses the whole script into a `Block` node.
     pub fn program(self: *mut Self) SyntaxErr!u32 {
@@ -1130,6 +1359,21 @@ pub struct Parser {
         let start = self.pos
         let t = self.tok()
         let k = t.kind
+        if k == Tok.KwImport {
+            self.pos += 1
+            if self.eat(Tok.Dot) {
+                if !self.module || !self.isWord("meta") {
+                    return self.fail("Cannot use import.meta outside a module")
+                }
+                self.pos += 1
+                return self.mk(Node.ImportMeta { referrer: self.referrer }, start)
+            }
+            try self.expect(Tok.LParen)
+            let arg = try self.assign(false)
+            self.eat(Tok.Comma)
+            try self.expect(Tok.RParen)
+            return self.mk(Node.ImportCall { arg: arg, referrer: self.referrer }, start)
+        }
         if k == Tok.Num {
             self.pos += 1
             return self.mk(Node.Num { v: t.num }, start)

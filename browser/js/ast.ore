@@ -116,6 +116,10 @@ pub enum Node {
     // the raw strings (atoms).
     TaggedTemplate { tag: u32, quasi: u32, raw: u32 }
     NewTarget
+    // Referrer is captured at parse time, including inside later callbacks.
+    ImportCall { arg: u32, referrer: u32 }
+    ImportMeta { referrer: u32 }
+    ModuleNamespace { value: u32 }
     // ---- patterns (binding and assignment targets)
     ArrayPat { list: u32, n: u32 }
     ObjectPat { list: u32, n: u32 }

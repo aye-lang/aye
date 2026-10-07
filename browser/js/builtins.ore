@@ -517,7 +517,11 @@ pub fn ownDescriptor(it: *mut Interp, o: u32, key: u32) JsError!Value {
     try it.resolveLazyPrototype(o, key)
     if it.heap.findProp(o, key) |i| {
         let p = it.heap.obj(o).props[i]
-        if (p.flags & F_ACCESSOR) != 0 {
+        if (p.flags & F_MODULE) != 0 {
+            let v = try it.call0(p.value, Value.Undefined)
+            try it.defineOwn(d, A_VALUE, v, F_DEFAULT)
+            try it.defineOwn(d, A_WRITABLE, boolVal(true), F_DEFAULT)
+        } else if (p.flags & F_ACCESSOR) != 0 {
             try it.defineOwn(d, try it.intern("get"), p.value, F_DEFAULT)
             try it.defineOwn(d, try it.intern("set"), p.setter, F_DEFAULT)
         } else {
