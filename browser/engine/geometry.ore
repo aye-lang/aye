@@ -3,9 +3,10 @@
 // scroll offset.
 //
 // A script that asks for geometry gets a forced synchronous layout: the
-// first question after the document changed (`domVersion`) or the
-// viewport did styles and lays out the document (`Script.geom`); the
-// next ones reuse that layout while nothing changed. It is the page's
+// first question after the document changed (`layoutVersion`: changes
+// to trees out of the document do not count) or the viewport did styles
+// and lays out the document (`Script.geom`); the next ones reuse that
+// layout while nothing changed. It is the page's
 // own cascade and layout, measured with the measurer of the page's last
 // layout (`Page.measure`), else with the fixed-metric font (`dump
 // --js`, scripts that run before the first layout).
@@ -49,11 +50,30 @@ struct Geometry {
     // node (NO_BOX for none).
     first: IntMap(u32, usize)
     next: List(usize)
-    // `domVersion` and the viewport this layout is for.
+    // `layoutVersion` and the viewport this layout is for.
     version: u64
     width: f64
     height: f64
+    // What `styles` were computed with: the styling (and its sheets,
+    // `Script.computed_sheets`) and `Page.mutations`.
+    styling: *Styling
+    sheets: u64
+    mutations: u64
+    // What a change can change the styles of, beyond what is under it;
+    // how many elements were styled again since `styles` were computed.
+    deps: css.RestyleDeps
+    restyled: usize
 }
+
+// At most this many changes are kept for the next layout (`noteLayoutChange`):
+// beyond, the whole document is styled again.
+let MAX_RESTYLE: usize = 256
+
+// Styling an element again reuses its values but not the rest it
+// allocates (custom properties, pseudo-elements, style attributes):
+// after styling again this many times as many elements as the styles
+// have, the whole document is styled into new styles.
+let RESTYLE_ROUNDS: usize = 4
 
 // The scroll offset a script gave a scroll container.
 struct ScrollOffset {
@@ -98,7 +118,7 @@ fn runLayoutHook(s: *mut Script) AllocError!void {
     if s.layout_hook == js.NONE {
         return
     }
-    let stamp = domVersion(s.page) + s.geometry_changes + 1
+    let stamp = layoutVersion(s.page) + s.geometry_changes + 1
     if stamp == s.hook_stamp {
         return
     }
@@ -114,32 +134,103 @@ fn runLayoutHook(s: *mut Script) AllocError!void {
 
 fn dropGeometry(s: *mut Script) {
     if s.geom |g| {
-        g.tree.deinit()
-        s.alloc.destroy(g.tree)
+        dropTree(s, g)
         g.styles.deinit()
         s.alloc.destroy(g.styles)
-        g.first.deinit()
-        g.next.deinit()
+        g.deps.deinit()
         s.alloc.destroy(g)
     }
     s.geom = null
+}
+
+fn dropTree(s: *mut Script, g: *mut Geometry) {
+    g.tree.deinit()
+    s.alloc.destroy(g.tree)
+    g.first.deinit()
+    g.next.deinit()
+}
+
+// A change `noteLayoutChange` took.
+struct Change {
+    at: NodeId
+    what: css.StyleChange
+}
+
+/// A script changed the document's tree at the node `at` (the parent
+/// whose children changed, the element whose attributes or text did;
+/// `change` says what): the layout scripts read is out of date, and the
+/// next one computes again only the styles of the elements around `at`
+/// (`restyleRoots`). Nothing when `at` is out of the document: a change
+/// to a tree out of it (a template a framework fills before inserting
+/// it) moves no box.
+fn noteLayoutChange(s: *mut Script, at: NodeId, change: css.StyleChange) AllocError!void {
+    if !s.page.doc.isConnected(at) {
+        return
+    }
+    s.layout_version += 1
+    if s.geom == null || s.restyle_all {
+        return
+    }
+    if s.restyle.len() >= MAX_RESTYLE {
+        s.restyle_all = true
+        return
+    }
+    try s.restyle.append(Change { at: at, what: change })
+}
+
+/// The state of the element `el` changed (`:defined`).
+fn noteStateChange(s: *mut Script, el: NodeId) AllocError!void {
+    return noteLayoutChange(s, el, css.STATE_CHANGED)
+}
+
+/// A change to the document that may change the style of any element
+/// (style sheets, document.write, form state).
+fn noteLayoutChangeAnywhere(s: *mut Script) {
+    s.layout_version += 1
+    s.restyle_all = true
 }
 
 // The layout of the document as it is now, at the window's scroll
 // offset: the last one when nothing changed since, else a new one.
 fn geometry(s: *mut Script) AllocError!*mut Geometry {
     let p = s.page
-    let version = domVersion(p)
+    let version = layoutVersion(p)
     if s.geom |g| {
         if g.version == version && g.width == s.width && g.height == s.height {
             followScroll(s, g)
             return g
         }
     }
-    dropGeometry(s)
     let began = perf.start()
     defer perf.end("script_layout", began, p.url.href)
     let st = try computedStyling(s)
+    if s.geom |g| {
+        let fresh = restyle(s, g, st) catch |e| {
+            dropGeometry(s)
+            return e
+        }
+        if fresh {
+            dropTree(s, g)
+            s.geom = null
+            errdefer {
+                g.styles.deinit()
+                s.alloc.destroy(g.styles)
+                g.deps.deinit()
+                s.alloc.destroy(g)
+            }
+            let laid = try layOut(s, g.styles)
+            g.tree = laid.tree
+            g.first = laid.first
+            g.next = laid.next
+            g.version = version
+            s.geom = g
+            followScroll(s, g)
+            return g
+        }
+    }
+    dropGeometry(s)
+    s.restyle.clear()
+    s.restyle_all = false
     let styles = try s.alloc.create(try css.Styles.init(s.alloc))
     errdefer {
         styles.deinit()
@@ -147,6 +238,185 @@ fn geometry(s: *mut Script) AllocError!*mut Geometry {
     }
     try dom.assignSlots(&mut p.doc)
     try css.computeStyles(&p.doc, &st.ua, &st.author, st.media, styles)
+    var deps = css.RestyleDeps.init(s.alloc)
+    errdefer deps.deinit()
+    var quirks: ?*css.Sheet = null
+    if p.doc.quirks {
+        quirks = &styles.quirks
+    }
+    try deps.build(&st.author, &st.ua, quirks)
+    var laid = try layOut(s, styles)
+    let g = s.alloc.create(Geometry { tree: laid.tree, styles: styles, first: laid.first, next: laid.next, version: version, width: s.width, height: s.height, styling: st, sheets: s.computed_sheets, mutations: p.mutations, deps: deps, restyled: 0 }) catch |e| {
+        laid.tree.deinit()
+        s.alloc.destroy(laid.tree)
+        laid.first.deinit()
+        laid.next.deinit()
+        return e
+    }
+    s.geom = g
+    followScroll(s, g)
+    return g
+}
+
+// Brings the styles of `g` up to date for the changes noted since
+// (`Script.restyle`) by computing again those of the elements around
+// them, when it can: not when a change may change any element's style,
+// or for other sheets or another viewport, or when the styles depend on
+// what css/invalidation.ore does not follow (`:has()` of siblings,
+// container queries, shadow trees), or after styling the document again
+// `RESTYLE_ROUNDS` times this way. Whether it did.
+fn restyle(s: *mut Script, g: *mut Geometry, st: *Styling) AllocError!bool {
+    let p = s.page
+    let ok = !s.restyle_all && g.width == s.width && g.height == s.height && g.styling == st && g.sheets == s.computed_sheets && g.mutations == p.mutations && !g.deps.whole && !g.styles.queried && p.doc.shadows.len() == 0 && g.restyled < RESTYLE_ROUNDS * g.styles.map.len()
+    if !ok {
+        return false
+    }
+    var roots = List(NodeId).init(s.alloc)
+    defer roots.deinit()
+    var shallow = List(bool).init(s.alloc)
+    defer shallow.deinit()
+    if !(try restyleRoots(s, g, st, &mut roots, &mut shallow)) {
+        return false
+    }
+    g.restyled += try css.restyleSubtrees(&p.doc, &st.ua, &st.author, st.media, roots.items(), shallow.items(), g.styles)
+    s.restyle.clear()
+    return true
+}
+
+// The elements whose subtrees have every element whose style a change
+// noted in `Script.restyle` may change (css/invalidation.ore), in `out`:
+// - for a change to an element's attributes that selectors look at only
+//   on the element itself, the element alone (`shallow`: its
+//   descendants too when its values change);
+// - for another change to an element's attributes, or to its children
+//   (the element of a changed text), the element and its following
+//   siblings, or all its siblings for `of S`;
+// - from the topmost element above it whose `:has()` may change
+//   instead, when there is one.
+// Without the roots under another (not shallow) root, and those out of
+// the document now (their removal is noted at their parent). False when
+// that is the whole document.
+fn restyleRoots(s: *mut Script, g: *Geometry, st: *Styling, out: *mut List(NodeId), shallow: *mut List(bool)) AllocError!bool {
+    let doc = &s.page.doc
+    let deps = &g.deps
+    let sheet = &st.author
+    // Node index to its place in `out`.
+    var found = IntMap(u32, usize).init(s.alloc)
+    defer found.deinit()
+    // Element index to whether a `:has()` of any depth may be its.
+    var anchors = IntMap(u32, bool).init(s.alloc)
+    defer anchors.deinit()
+    for change in s.restyle.items() {
+        let at = change.at
+        if !doc.isLive(at) || !doc.isConnected(at) {
+            continue
+        }
+        var el = at
+        if doc.node(at).kind != dom.Kind.Element {
+            el = doc.parent(at) orelse return false
+            if doc.node(el).kind != dom.Kind.Element {
+                return false
+            }
+        }
+        var top = el
+        if deps.hasAny() {
+            var distance: usize = 0
+            var cur: ?NodeId = el
+            while cur |c| {
+                if doc.node(c).kind != dom.Kind.Element {
+                    break
+                }
+                var any_depth = false
+                if anchors.get(c.index) |known| {
+                    any_depth = known
+                } else {
+                    any_depth = deps.mayAnchorAnyDepth(sheet, doc, c)
+                    try anchors.put(c.index, any_depth)
+                }
+                if !dom.same(c, el) && deps.anchors(sheet, doc, c, distance, change.what, any_depth) {
+                    top = c
+                }
+                distance += 1
+                cur = doc.parent(c)
+            }
+        }
+        let up = doc.parent(top) orelse return false
+        if doc.node(up).kind != dom.Kind.Element {
+            return false
+        }
+        if dom.same(top, el) && !deps.isDeep(change.what) {
+            try addRoot(out, shallow, &mut found, el, true)
+            continue
+        }
+        var first: ?NodeId = top
+        if deps.of_selector {
+            first = doc.firstChild(up)
+        }
+        var sib = first
+        while sib |e| {
+            if doc.node(e).kind == dom.Kind.Element {
+                try addRoot(out, shallow, &mut found, e, false)
+            }
+            sib = doc.nextSibling(e)
+        }
+    }
+    // Keep the roots no other root is above.
+    var under = List(bool).init(s.alloc)
+    defer under.deinit()
+    for r in out.items() {
+        var covered = false
+        var cur = doc.parent(r)
+        while cur |c| {
+            if found.get(c.index) |k| {
+                if dom.same(out.items()[k], c) && !shallow.items()[k] {
+                    covered = true
+                    break
+                }
+            }
+            cur = doc.parent(c)
+        }
+        try under.append(covered)
+    }
+    var kept: usize = 0
+    for i in 0..out.len() {
+        if !under.items()[i] {
+            out.items()[kept] = out.items()[i]
+            shallow.items()[kept] = shallow.items()[i]
+            kept += 1
+        }
+    }
+    while out.len() > kept {
+        _ = out.pop()
+        _ = shallow.pop()
+    }
+    return true
+}
+
+// Adds `el` to the roots (`restyleRoots`), or makes it not shallow.
+fn addRoot(out: *mut List(NodeId), shallow: *mut List(bool), found: *mut IntMap(u32, usize), el: NodeId, only: bool) AllocError!void {
+    if found.get(el.index) |k| {
+        if dom.same(out.items()[k], el) {
+            if !only {
+                shallow.items()[k] = false
+            }
+            return
+        }
+    }
+    try found.put(el.index, out.len())
+    try out.append(el)
+    try shallow.append(only)
+}
+
+// A layout tree and its boxes by node (`Geometry`).
+struct Boxes {
+    tree: *mut layout.Tree
+    first: IntMap(u32, usize)
+    next: List(usize)
+}
+
+// Lays the document out with `styles`.
+fn layOut(s: *mut Script, styles: *mut css.Styles) AllocError!Boxes {
+    let p = s.page
     var images: ?*layout.Images = null
     if p.images |imgs| {
         images = &imgs.nodes
@@ -183,10 +453,7 @@ fn geometry(s: *mut Script) AllocError!*mut Geometry {
             try first.put(n.index, k)
         }
     }
-    let g = try s.alloc.create(Geometry { tree: tree, styles: styles, first: first, next: next, version: version, width: s.width, height: s.height })
-    s.geom = g
-    followScroll(s, g)
-    return g
+    return Boxes { tree: tree, first: first, next: next }
 }
 
 // Moves the fixed and sticky boxes of the layout to the window's scroll

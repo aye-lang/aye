@@ -22,6 +22,7 @@ fn installCssom(s: *mut Script, o: u32) JsError!void {
 fn sheetsChanged(s: *mut Script) {
     s.version += 1
     s.style_version += 1
+    noteLayoutChangeAnywhere(s)
 }
 
 fn argIndex(it: *mut Interp, a: Args, i: usize) JsError!usize {

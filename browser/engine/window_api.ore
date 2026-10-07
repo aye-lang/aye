@@ -219,6 +219,7 @@ fn akActivate(it: *mut Interp, a: Args) JsError!Value {
         .Changed => {
             s.version += 1
             s.style_version += 1
+            noteLayoutChangeAnywhere(s)
             try flushMutations(it)
         }
         _ => {}

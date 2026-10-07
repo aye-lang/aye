@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<title>Layout restyle</title>
+<style>
+body { margin: 0; font-size: 10px }
+.item { height: 10px; width: 20px }
+.wide .item { width: 50px }
+.item + .item { margin-top: 2px }
+.item.big ~ .item { width: 30px }
+.item:nth-child(3) { height: 15px }
+.box { width: 40px; height: 3px }
+.box:empty { height: 7px }
+.card:has(.flag) .label { width: 60px }
+:has(> .tick) { padding-left: 3px }
+[data-mode=x] .label { height: 12px }
+.label { display: inline-block; width: 10px; height: 4px }
+.label[data-own] { width: 70px }
+.inh { font-size: 20px }
+.em { width: 2em; height: 1em }
+.vars { --w: 33px }
+.usevar { width: var(--w); height: 5px }
+.rem { width: 5rem; height: 1rem }
+html.r { font-size: 12px }
+.blk { width: 10px; height: 2px; display: table }
+.gone { display: none }
+</style>
+<div id="list"><div class="item" id="i1"></div><div class="item" id="i2"></div><div class="item" id="i3"></div><div class="item" id="i4"></div></div>
+<div class="box" id="box"></div>
+<div class="card" id="card"><div><span class="label" id="l1">a</span></div><p id="deep"><b id="b1">b</b></p></div>
+<div id="ticks"><i id="t1">x</i></div>
+<div id="mode"><span class="label" id="l2">c</span></div>
+<div id="inh"><div class="em" id="em"><div class="em" id="em2"></div></div></div>
+<div id="vars"><div class="usevar" id="uv"></div></div>
+<div class="rem" id="rem"></div>
+<div id="center"><div class="blk" id="blk"></div></div>
+<div id="hide"><div class="item" id="h1"></div></div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const $ = id => document.getElementById(id);
+// Every element's box (read after each change, as a framework does).
+function boxes() {
+  return [...document.body.querySelectorAll('*')].filter(e => e.id && e.id !== 'out').map(e => e.id + ':' + [e.offsetLeft, e.offsetTop, e.offsetWidth, e.offsetHeight].join(',')).join(' ');
+}
+const steps = [
+  ['class on an ancestor', () => $('list').classList.add('wide')],
+  ['class on an ancestor again', () => $('list').classList.remove('wide')],
+  ['class before siblings', () => $('i2').classList.add('big')],
+  ['same class', () => $('i2').setAttribute('class', 'item big')],
+  ['insert a sibling', () => $('list').insertBefore(Object.assign(document.createElement('div'), { className: 'item', id: 'i0' }), $('i1'))],
+  ['remove a sibling', () => $('i0').remove()],
+  ['fill an empty box', () => $('box').append('x')],
+  ['empty the box', () => { $('box').textContent = ''; }],
+  [':has() deep', () => $('b1').classList.add('flag')],
+  [':has() deep off', () => $('b1').className = ''],
+  [':has(>) child', () => $('t1').classList.add('tick')],
+  [':has(>) grandchild', () => { $('t1').classList.remove('tick'); $('t1').append(Object.assign(document.createElement('u'), { className: 'tick', id: 'u1' })); }],
+  ['attribute on an ancestor', () => $('mode').dataset.mode = 'x'],
+  ['attribute on the subject', () => $('l2').setAttribute('data-own', '')],
+  ['attribute removed', () => $('l2').removeAttribute('data-own')],
+  ['inherited font size', () => $('inh').classList.add('inh')],
+  ['custom property', () => $('vars').classList.add('vars')],
+  ['custom property inline', () => $('vars').style.setProperty('--w', '44px')],
+  ['root font size', () => document.documentElement.classList.add('r')],
+  ['center', () => $('center').setAttribute('align', 'center')],
+  ['hidden subtree', () => $('hide').classList.add('gone')],
+  ['change inside hidden', () => $('h1').classList.add('big')],
+  ['shown again', () => $('hide').classList.remove('gone')],
+  ['detached work', () => { const d = document.createElement('div'); d.className = 'item big'; d.append(document.createElement('span')); $('list').append(d); }],
+  ['style attribute', () => $('i3').style.width = '7px'],
+];
+log('start', boxes());
+for (const [name, change] of steps) {
+  change();
+  log(name, boxes());
+}
+</script>
