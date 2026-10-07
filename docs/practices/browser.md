@@ -569,6 +569,20 @@ counts (`timers n=`) with a previous binary and look for archive misses
 **Why:** a replay artifact looks like an engine regression and hides the
 real numbers.
 
+### Record a second run's extra requests on top of the first run's replay
+**Context:** an archive must serve more than one command (the dump and
+the screenshot).
+**Bad:** `capture` recorded only the dump; the screenshot replayed BBC
+with 38 misses (Reith fonts, story images), so the page painted in a
+fallback serif with empty image frames (P3.40).
+**Good:** capture's screenshot runs with both `ANYKNOWN_REPLAY` and
+`ANYKNOWN_RECORD` on the same directory (`screen(record=True)`,
+`browser/tools/page_load.py`): it is served the dump's responses and
+fetches and records only its misses (`archiveRead`,
+`browser/net/archive.ore`).
+**Why:** a second live run gets a newer page (new story images), so it
+would record images the archived HTML does not name.
+
 ### On the virtual clock, count a task's budget in steps, not time
 **Context:** anything that decides what a page sees in `dump` or the
 agent: task budgets, timers, scrolling, observers.

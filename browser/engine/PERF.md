@@ -63,9 +63,12 @@ python3 browser/tools/page_load.py check --site all --screens
 open target/screens/index.html
 ```
 
-The screenshot fetches what `dump --md` does not (web fonts, images), so
-it often has archive misses; they are listed under the thumbnail, and
-the page is painted without those resources.
+The screenshot fetches what `dump --md` does not (web fonts, images).
+`capture` (since P3.40) also takes the screenshot, replaying what the
+dump recorded and recording only the rest, so a new capture replays the
+screenshot without misses. Archives captured before P3.40 miss those
+resources; the misses are listed under the thumbnail, and the page is
+painted without them.
 
 ### Archive semantics
 
@@ -74,6 +77,8 @@ the page is painted without those resources.
   fetch failure. Original URLs, HTML, CSS and JS are **not rewritten**.
 - `ANYKNOWN_REPLAY=DIR` serves these files and disables HTTP prefetch.
   A miss fails locally, is printed, and **never falls through to HTTP**.
+  With `ANYKNOWN_RECORD` set as well (capture's screenshot), a miss is
+  fetched and recorded instead.
   The runner rejects misses, changed resource hashes, capture/replay
   Markdown differences, and before/after output differences.
 - The manifest lists every requested resource, body size and SHA-256.
