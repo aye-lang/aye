@@ -253,7 +253,8 @@ pub let PRELUDE =
     \\  }
     \\}
     \\function eventParent(n, ev, origin) {
-    \\  if (n === document) return G;
+    \\  // A load event stops at the document (DOM: a document's parent).
+    \\  if (n === document) return ev.type === 'load' ? null : G;
     \\  if (!(n instanceof Node)) return null;
     \\  const slot = ak.assignedSlot(n);
     \\  if (slot) return slot;
@@ -284,7 +285,7 @@ pub let PRELUDE =
     \\    seen = path.map(n => retarget(target, n));
     \\  } else {
     \\    for (let n = target; n; n = n.parentNode) path.push(n);
-    \\    if (path[path.length - 1] === document) path.push(G);
+    \\    if (path[path.length - 1] === document && ev.type !== 'load') path.push(G);
     \\  }
     \\  ev._path = path;
     \\  for (let i = path.length - 1; i >= 0 && !ev._stop; i--) {
