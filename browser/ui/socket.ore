@@ -29,6 +29,7 @@ extern fn send(fd: i32, buf: [*]u8, n: usize, flags: i32) isize
 extern fn setsockopt(fd: i32, level: i32, name: i32, value: [*]u8, len: u32) i32
 extern fn shutdown(fd: i32, how: i32) i32
 extern fn unlink(path: [*]u8) i32
+extern fn rename(from: [*]u8, to: [*]u8) i32
 extern fn uname(buf: [*]u8) i32
 extern fn read(fd: i32, buf: [*]u8, n: usize) isize
 extern fn write(fd: i32, buf: [*]u8, n: usize) isize
@@ -88,19 +89,35 @@ fn noSigpipe(fd: i32) {
 }
 
 /// A socket listening at `path` (a stale socket file there is removed
-/// first); -1 on failure.
+/// first); -1 on failure. The file appears at `path` only once the socket
+/// listens: bind() creates the file before listen() runs, and a client
+/// that connects in between is refused. So it binds `PATH.l`, listens,
+/// and renames it to `path` (atomic).
 fn listenAt(path: []u8) i32 {
     var addr = @zeroed([110]u8)
     let n = unixAddr(path, &mut addr)
-    if n == 0 {
+    if n == 0 || path.len > 98 {
         return -1
     }
     unlink(addr[2..].ptr)
+    var tmp = addr
+    tmp[2 + path.len] = '.'
+    tmp[3 + path.len] = 'l'
+    tmp[4 + path.len] = 0
+    if isDarwin() {
+        tmp[0] = (n + 2) as u8
+    }
+    unlink(tmp[2..].ptr)
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)
     if fd < 0 {
         return -1
     }
-    if bind(fd, addr[..].ptr, n) != 0 || listen(fd, 8) != 0 {
+    if bind(fd, tmp[..].ptr, n + 2) != 0 {
+        close(fd)
+        return -1
+    }
+    if listen(fd, 8) != 0 || rename(tmp[2..].ptr, addr[2..].ptr) != 0 {
+        unlink(tmp[2..].ptr)
         close(fd)
         return -1
     }
