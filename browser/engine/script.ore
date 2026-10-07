@@ -24,7 +24,7 @@
 // Simplifications: scripts run after the whole document is parsed (an
 // inline script sees the complete DOM; what `document.write` writes is
 // inserted after the script once it returns);
-// `async` scripts run like `defer` ones; modules are skipped; a script
+// `async` scripts run like `defer` ones; modules run deferred; a script
 // that never returns hangs the browser. Time is virtual for `dump` and
 // the agent (the event loop jumps to the next timer) and real for the
 // window.
@@ -549,6 +549,7 @@ fn createScript(p: *mut Page) AllocError!*mut Script {
             }
         }
     }
+    s.it.script_url = s.it.intern(p.base.href) catch return AllocError.OutOfMemory
     return s
 }
 
@@ -619,19 +620,26 @@ fn startPageScripts(p: *mut Page) AllocError!void {
     p.script = s
     var all = List(NodeId).init(p.alloc)
     defer all.deinit()
+    // Module scripts and `<link rel=modulepreload>` are fetched with the
+    // others; a module's own imports are fetched when it loads.
+    var fetched = List(NodeId).init(p.alloc)
+    defer fetched.deinit()
     var cur: ?NodeId = p.doc.root
     while cur |h| {
-        if p.doc.isElement(h, "script") && isClassicScript(p, h) {
+        if p.doc.isElement(h, "script") && (isClassicScript(p, h) || isModuleScript(p, h) || isScriptType(p, h, "importmap")) {
             try all.append(h)
+            try fetched.append(h)
+        } else if p.doc.isElement(h, "link") && text.indexOf(p.doc.attr(h, "rel") orelse "", "modulepreload") != null {
+            try fetched.append(h)
         }
         cur = p.doc.following(h, p.doc.root)
     }
-    try prefetchScripts(p, all.items())
+    try prefetchScripts(p, fetched.items())
     var later = List(NodeId).init(p.alloc)
     defer later.deinit()
     for el in all.items() {
         let external = p.doc.attr(el, "src") != null
-        if external && (p.doc.attr(el, "defer") != null || p.doc.attr(el, "async") != null) {
+        if isModuleScript(p, el) || (external && (p.doc.attr(el, "defer") != null || p.doc.attr(el, "async") != null)) {
             try later.append(el)
         } else {
             try runScriptElement(s, el)
@@ -727,9 +735,35 @@ fn settleLoad(p: *mut Page) AllocError!void {
     }
 }
 
+// Is the `type` of the `script` element `el` (trimmed, ignoring ASCII
+// case) `kind`?
+fn isScriptType(p: *mut Page, el: NodeId, kind: []u8) bool {
+    let t = text.trim(p.doc.attr(el, "type") orelse "")
+    if t.len != kind.len {
+        return false
+    }
+    for i, c in t {
+        var lower = c
+        if c >= 'A' && c <= 'Z' {
+            lower = c + 32
+        }
+        if lower != kind[i] {
+            return false
+        }
+    }
+    return true
+}
+
+fn isModuleScript(p: *mut Page, el: NodeId) bool {
+    return isScriptType(p, el, "module")
+}
+
 // Is the `script` element `el` a classic script (JavaScript, not a
 // module or data)?
 fn isClassicScript(p: *mut Page, el: NodeId) bool {
+    if p.doc.attr(el, "nomodule") != null {
+        return false
+    }
     if p.doc.attr(el, "type") |raw| {
         let t = text.trim(raw)
         if t.len == 0 {
@@ -755,7 +789,7 @@ fn prefetchScripts(p: *mut Page, els: []NodeId) AllocError!void {
     var hrefs = text.Builder.init(p.alloc)
     defer hrefs.deinit()
     for el in els {
-        if p.doc.attr(el, "src") |src| {
+        if p.doc.attr(el, "src") orelse p.doc.attr(el, "href") |src| {
             if p.resolve(p.alloc, src) |target| {
                 defer target.deinit(p.alloc)
                 try hrefs.append(target.withoutFragment())
@@ -771,6 +805,12 @@ fn runScriptElement(s: *mut Script, el: NodeId) AllocError!void {
     let p = s.page
     if !p.doc.isLive(el) {
         return
+    }
+    if isModuleScript(p, el) {
+        return runModuleElement(s, el)
+    }
+    if isScriptType(p, el, "importmap") {
+        return addImportMap(s, el)
     }
     if p.doc.attr(el, "src") |src| {
         let target = p.resolve(s.alloc, src) catch |e| {
@@ -797,7 +837,54 @@ fn runScriptElement(s: *mut Script, el: NodeId) AllocError!void {
     return runSourceOf(s, el, b.bytes())
 }
 
+// A module script: its graph is fetched, linked and evaluated (deferred,
+// in document order with `defer` scripts). An error before evaluation is
+// reported as uncaught; the loader reports a failed evaluation.
+fn runModuleElement(s: *mut Script, el: NodeId) AllocError!void {
+    let p = s.page
+    let began = perf.start()
+    let source = p.doc.attr(el, "src") orelse "inline module"
+    defer perf.end("script", began, source)
+    s.current = null
+    var b = text.Builder.init(s.alloc)
+    defer b.deinit()
+    enter(s)
+    if p.doc.attr(el, "src") |src| {
+        let target = p.resolve(s.alloc, src) catch |e| {
+            leave(s)
+            return addConsole(s, "[error] Failed to load module script: ", src)
+        }
+        defer target.deinit(s.alloc)
+        js.runModuleScript(&mut s.it, target.href, "", p.base.href) catch |e| {
+            leave(s)
+            return uncaught(s, e)
+        }
+    } else {
+        try p.doc.textContent(el, &mut b)
+        js.runModuleScript(&mut s.it, null, b.bytes(), p.base.href) catch |e| {
+            leave(s)
+            return uncaught(s, e)
+        }
+    }
+    leave(s)
+    try runMicrotasks(s)
+}
+
+// `<script type="importmap">`: its JSON goes to the module loader.
+fn addImportMap(s: *mut Script, el: NodeId) AllocError!void {
+    var b = text.Builder.init(s.alloc)
+    defer b.deinit()
+    try s.page.doc.textContent(el, &mut b)
+    enter(s)
+    js.addImportMap(&mut s.it, b.bytes(), s.page.base.href) catch |e| {
+        leave(s)
+        return uncaught(s, e)
+    }
+    leave(s)
+}
+
 fn runSourceOf(s: *mut Script, el: NodeId, code: []u8) AllocError!void {
+    s.it.script_url = s.it.intern(s.page.base.href) catch return AllocError.OutOfMemory
     let began = perf.start()
     let source = s.page.doc.attr(el, "src") orelse "inline"
     defer perf.end("script", began, source)
@@ -852,7 +939,7 @@ fn insertWritten(s: *mut Script, el: NodeId) AllocError!void {
         p.doc.insertBefore(parent, n, next)
         var cur: ?NodeId = n
         while cur |h| {
-            if p.doc.isElement(h, "script") && isClassicScript(p, h) {
+            if p.doc.isElement(h, "script") && (isClassicScript(p, h) || isModuleScript(p, h)) {
                 try scripts.append(h)
             }
             cur = p.doc.following(h, n)

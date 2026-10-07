@@ -192,7 +192,7 @@ fn layout_system_font() {
 
 #[test]
 fn ore_unit_tests() {
-    for module in ["browser", "browser/url", "browser/dom", "browser/encoding", "browser/font", "browser/js", "browser/image"] {
+    for module in ["browser", "browser/url", "browser/dom", "browser/encoding", "browser/font", "browser/image"] {
         let out = ore().arg("test").arg(module).output().unwrap();
         let stdout = text(&out.stdout);
         assert!(
@@ -202,7 +202,7 @@ fn ore_unit_tests() {
         );
     }
     // Modules that import other browser modules, tested from the root.
-    for module in ["svg"] {
+    for module in ["svg", "js"] {
         let out = ore().args(["test", "browser", "--module", module]).output().unwrap();
         let stdout = text(&out.stdout);
         assert!(
@@ -1341,6 +1341,11 @@ fn js_conformance() {
 fn js_command_line() {
     expect(&["js", "browser/tests/js/missing.js"], 1, "", "error: cannot read browser/tests/js/missing.js\n");
     expect(&["js"], 2, "", "error: usage: anyknown js FILE\n");
+    expect(&["js", "browser/tests/js/modules/entry.mjs"], 0, "entry 42 true\n", "");
+    expect(&["js", "browser/tests/js/modules/thrown.mjs"], 1, "", "Uncaught 42\n");
+    let syntax = run(&["js", "browser/tests/js/modules/syntax.mjs"]);
+    assert_eq!(syntax.status.code(), Some(1));
+    assert!(text(&syntax.stderr).starts_with("Uncaught SyntaxError:"), "{}", text(&syntax.stderr));
 }
 
 // ---- page scripts and the DOM bindings (browser/engine/script.ore)

@@ -1,0 +1,47 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Module scripts"
+      "\n"
+    <body>
+      <p id="order">
+        "classic module cycle b sees a defer inline module blocked TypeError module type ignores case and spaces DOMContentLoaded"
+      "\n"
+      <p id="map">
+        "lib util scoped:lib2 json"
+      "\n"
+      <p id="cycle">
+        "b sees a"
+      "\n"
+      <p id="inline">
+        "meta true this true resolve true"
+      "\n"
+      <script>
+        "\n// Module scripts run after parsing, in order with defer scripts, before\n// DOMContentLoaded; an import map before them maps bare specifiers.\nconst order = [];\nfunction note(s) { order.push(s); document.getElementById('order').textContent = order.join(' '); }\nnote('classic');\ndocument.addEventListener('DOMContentLoaded', () => note('DOMContentLoaded'));\n"
+      "\n"
+      <script type="importmap">
+        "\n{\n  \"imports\": { \"lib\": \"./module_scripts/lib.mjs\", \"pkg/\": \"./module_scripts/pkg/\", \"blocked\": null },\n  \"scopes\": { \"./module_scripts/scoped/\": { \"lib\": \"./module_scripts/lib2.mjs\" } }\n}\n"
+      "\n"
+      <script type="module" src="module_scripts/cycle-a.mjs">
+      "\n"
+      <script defer="" src="module_scripts/deferred.js">
+      "\n"
+      <script type="module">
+        "\nimport lib from 'lib';\nimport { util } from 'pkg/util.mjs';\nimport { scopedLib } from './module_scripts/scoped/user.mjs';\nimport data from './module_scripts/data.json' with { type: 'json' };\nnote('inline module');\ndocument.getElementById('map').textContent = [lib, util, scopedLib, data.json].join(' ');\ndocument.getElementById('inline').textContent = 'meta ' + import.meta.url.endsWith('/module_scripts.html') +\n  ' this ' + (this === undefined) + ' resolve ' + import.meta.resolve('pkg/x.mjs').endsWith('/module_scripts/pkg/x.mjs');\nimport('blocked').catch(e => note('blocked ' + e.name));\n"
+      "\n"
+      <script type="module">
+        "throw new Error('evaluation failed');"
+      "\n"
+      <script type="module">
+        "import { missing } from 'lib';"
+      "\n"
+      <script type="module" src="module_scripts/absent.mjs">
+      "\n"
+      <script nomodule="">
+        "note('WRONG nomodule');"
+      "\n"
+      <script type="MODULE ">
+        "note('module type ignores case and spaces');"
+      "\n"

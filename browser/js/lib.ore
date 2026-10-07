@@ -416,8 +416,799 @@ pub let LIB =
     \\    [Symbol.toStringTag]: 'AsyncGenerator',
     \\  };
     \\}
-    \\G.__engine.setDrivers(asyncDriver, asyncGenDriver, takeUnhandled);
+    \\// ---- ES modules: the loader (records and natives: js/modules.ore).
+    \\// One module map per engine, keyed by URL (and type), for static
+    \\// imports, import() and module scripts. Linking and evaluation follow
+    \\// the cyclic module records of ES2022 (InnerModuleLinking and
+    \\// InnerModuleEvaluation over strongly connected components, and async
+    \\// evaluation for top-level await).
+    \\const moduleMap = new Map();
+    \\const resolveModule = G.__engine.resolveModule;
+    \\const fetchModule = G.__engine.fetchModule;
+    \\const parseModule = G.__engine.parseModule;
+    \\const prefetchModules = G.__engine.prefetchModules;
+    \\const isModuleNamespace = G.__engine.isModuleNamespace;
+    \\const constCell = G.__engine.constCell;
+    \\const makeNamespace = G.__engine.makeNamespace;
+    \\const fillNamespace = G.__engine.fillNamespace;
+    \\const jsonParse = JSON.parse;
+    \\const AMBIGUOUS = {};
+    \\let asyncOrder = 0;
+    \\// The import map: [key, value] pairs, longest keys first.
+    \\let mapImports = [];
+    \\let mapScopes = [];
+    \\function capability() {
+    \\  let resolve, reject;
+    \\  const promise = new Promise((a, b) => { resolve = a; reject = b; });
+    \\  return { promise, resolve, reject };
+    \\}
+    \\function setupModule(m) {
+    \\  if (m.json !== undefined) {
+    \\    m.cells = { default: constCell(jsonParse(m.json)) };
+    \\    m.requests = []; m.imports = []; m.indirect = []; m.stars = [];
+    \\    m.locals = [['default', 'default']];
+    \\    m.tla = false;
+    \\    m.linkedEnv = true;
+    \\  } else {
+    \\    m.cells = null;
+    \\    m.linkedEnv = false;
+    \\  }
+    \\  // Export name -> local, and -> indirect entry, for ResolveExport.
+    \\  m.localNames = new Map();
+    \\  for (let i = 0; i < m.locals.length; i++) m.localNames.set(m.locals[i][0], m.locals[i][1]);
+    \\  m.indirectNames = new Map();
+    \\  for (let i = 0; i < m.indirect.length; i++) m.indirectNames.set(m.indirect[i][0], m.indirect[i]);
+    \\  m.deps = null;
+    \\  m.namespace = null;
+    \\  m.status = 'unlinked';
+    \\  m.hasError = false;
+    \\  m.error = undefined;
+    \\  m.cycleRoot = null;
+    \\  m.capability = null;
+    \\  m.asyncEvaluation = false;
+    \\  m.asyncOrder = 0;
+    \\  m.asyncParents = [];
+    \\  m.pending = 0;
+    \\  m.dfsIndex = 0;
+    \\  m.dfsAncestor = 0;
+    \\  return m;
+    \\}
+    \\function moduleKey(url, type) { return type === '' ? url : url + ' ' + type; }
+    \\// The record of the module at url; a failed fetch or parse is cached too.
+    \\function getModule(url, type, referrer) {
+    \\  const key = moduleKey(url, type);
+    \\  let m = moduleMap.get(key);
+    \\  if (m === undefined) {
+    \\    try {
+    \\      if (type !== '' && type !== 'json') throw new TypeError('Unsupported module type "' + type + '"');
+    \\      m = setupModule(fetchModule(url, referrer, type));
+    \\    } catch (e) {
+    \\      m = { failed: true, error: e };
+    \\    }
+    \\    moduleMap.set(key, m);
+    \\  }
+    \\  if (m.failed) throw m.error;
+    \\  return m;
+    \\}
+    \\// Resolves a module specifier: the import map, then URLs.
+    \\function resolveSpecifier(referrer, spec) {
+    \\  if (mapImports.length > 0 || mapScopes.length > 0) {
+    \\    const asURL = resolveModule(spec, referrer, 1);
+    \\    const normal = asURL === null ? spec : asURL;
+    \\    for (let i = 0; i < mapScopes.length; i++) {
+    \\      const prefix = mapScopes[i][0];
+    \\      if (prefix === referrer || (prefix.endsWith('/') && referrer.startsWith(prefix))) {
+    \\        const r = matchImports(normal, asURL, mapScopes[i][1]);
+    \\        if (r !== null) return r;
+    \\      }
+    \\    }
+    \\    const r = matchImports(normal, asURL, mapImports);
+    \\    if (r !== null) return r;
+    \\  }
+    \\  return resolveModule(spec, referrer, 0);
+    \\}
+    \\function blocked(spec) { return new TypeError('Failed to resolve module specifier "' + spec + '"'); }
+    \\function matchImports(normal, asURL, imports) {
+    \\  for (let i = 0; i < imports.length; i++) {
+    \\    const key = imports[i][0];
+    \\    const value = imports[i][1];
+    \\    if (key === normal) {
+    \\      if (value === null) throw blocked(normal);
+    \\      return value;
+    \\    }
+    \\    if (key.endsWith('/') && normal.startsWith(key) && (asURL === null || /^(https?|wss?|ftp|file):/.test(asURL))) {
+    \\      if (value === null) throw blocked(normal);
+    \\      const url = resolveModule(normal.slice(key.length), value, 2);
+    \\      if (url === null || !url.startsWith(value)) throw blocked(normal);
+    \\      return url;
+    \\    }
+    \\  }
+    \\  return null;
+    \\}
+    \\function longestFirst(a, b) { return a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0; }
+    \\// Normalizes a specifier map of an import map and merges it into `into`
+    \\// (keys already there win).
+    \\function mergeSpecifierMap(into, map, base) {
+    \\  const out = into.slice();
+    \\  if (typeof map !== 'object' || map === null || Array.isArray(map)) return out;
+    \\  for (const k of Object.keys(map)) {
+    \\    if (k === '') continue;
+    \\    const key = resolveModule(k, base, 1) || k;
+    \\    if (out.some(e => e[0] === key)) continue;
+    \\    const v = map[k];
+    \\    let value = null;
+    \\    if (typeof v === 'string') value = resolveModule(v, base, 1);
+    \\    if (value !== null && key.endsWith('/') && !value.endsWith('/')) value = null;
+    \\    out.push([key, value]);
+    \\  }
+    \\  return out.sort(longestFirst);
+    \\}
+    \\// The records of everything root imports, transitively, a level of the
+    \\// graph at a time: the modules of a level are fetched concurrently. A
+    \\// module has its deps only once its whole graph loaded: a failure
+    \\// takes back the deps this call gave.
+    \\function loadGraph(root) {
+    \\  const given = [];
+    \\  try {
+    \\    loadLevels(root, given);
+    \\  } catch (e) {
+    \\    for (const m of given) m.deps = null;
+    \\    throw e;
+    \\  }
+    \\}
+    \\function loadLevels(root, given) {
+    \\  let level = root.deps === null ? [root] : [];
+    \\  while (level.length > 0) {
+    \\    const urls = [];
+    \\    for (const m of level) {
+    \\      m.urls = [];
+    \\      for (let i = 0; i < m.requests.length; i++) {
+    \\        const url = resolveSpecifier(m.url, m.requests[i][0]);
+    \\        m.urls.push(url);
+    \\        if (!moduleMap.has(moduleKey(url, m.requests[i][1])) && !urls.includes(url)) urls.push(url);
+    \\      }
+    \\    }
+    \\    if (urls.length > 1) prefetchModules(urls.join('\n'), root.url);
+    \\    const next = [];
+    \\    for (const m of level) {
+    \\      if (m.deps !== null) continue;
+    \\      const deps = [];
+    \\      for (let i = 0; i < m.requests.length; i++) deps.push(getModule(m.urls[i], m.requests[i][1], m.url));
+    \\      m.deps = deps;
+    \\      given.push(m);
+    \\      for (const d of deps) {
+    \\        if (d.deps === null && !next.includes(d) && !level.includes(d)) next.push(d);
+    \\      }
+    \\    }
+    \\    level = next;
+    \\  }
+    \\}
+    \\// The cells of m's exported locals: runs its code to the first stop
+    \\// (its environment, with the functions, exists then).
+    \\function localsOf(m) {
+    \\  if (m.cells === null) m.cells = m.g.next().value;
+    \\  return m.cells;
+    \\}
+    \\function resolveExport(m, name, seen) {
+    \\  for (let i = 0; i < seen.length; i += 2) {
+    \\    if (seen[i] === m && seen[i + 1] === name) return null;
+    \\  }
+    \\  seen.push(m, name);
+    \\  const local = m.localNames.get(name);
+    \\  if (local !== undefined) return { module: m, local };
+    \\  const e = m.indirectNames.get(name);
+    \\  if (e !== undefined) {
+    \\    const d = m.deps[e[1]];
+    \\    if (e[2] === null) return { module: d, local: null };
+    \\    return resolveExport(d, e[2], seen);
+    \\  }
+    \\  if (name === 'default') return null;
+    \\  let star = null;
+    \\  for (let i = 0; i < m.stars.length; i++) {
+    \\    const r = resolveExport(m.deps[m.stars[i]], name, seen);
+    \\    if (r === AMBIGUOUS) return AMBIGUOUS;
+    \\    if (r !== null) {
+    \\      if (star === null) star = r;
+    \\      else if (r.module !== star.module || r.local !== star.local) return AMBIGUOUS;
+    \\    }
+    \\  }
+    \\  return star;
+    \\}
+    \\function exportedNames(m, seen, names) {
+    \\  if (seen.has(m)) return;
+    \\  seen.add(m);
+    \\  for (let i = 0; i < m.locals.length; i++) names.add(m.locals[i][0]);
+    \\  for (let i = 0; i < m.indirect.length; i++) names.add(m.indirect[i][0]);
+    \\  for (let i = 0; i < m.stars.length; i++) {
+    \\    const inner = new Set();
+    \\    exportedNames(m.deps[m.stars[i]], seen, inner);
+    \\    for (const n of inner) if (n !== 'default') names.add(n);
+    \\  }
+    \\}
+    \\function cellOf(r) {
+    \\  return r.local === null ? constCell(namespaceOf(r.module)) : localsOf(r.module)[r.local];
+    \\}
+    \\function namespaceOf(m) {
+    \\  if (m.namespace === null) {
+    \\    const all = new Set();
+    \\    exportedNames(m, new Set(), all);
+    \\    const entries = [];
+    \\    for (const n of all) {
+    \\      const r = resolveExport(m, n, []);
+    \\      if (r !== null && r !== AMBIGUOUS) entries.push([n, r]);
+    \\    }
+    \\    entries.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+    \\    m.namespace = makeNamespace(entries.map(e => e[0]));
+    \\    fillNamespace(m.namespace, entries.map(e => cellOf(e[1])));
+    \\  }
+    \\  return m.namespace;
+    \\}
+    \\function linkError(m, request, name, r) {
+    \\  const spec = m.requests[request][0];
+    \\  return new SyntaxError(r === AMBIGUOUS
+    \\    ? "The requested module '" + spec + "' contains conflicting star exports for name '" + name + "'"
+    \\    : "The requested module '" + spec + "' does not provide an export named '" + name + "'");
+    \\}
+    \\// Checks m's re-exports and gives its code its imports: it runs to the
+    \\// second stop. Throws a SyntaxError for a missing or ambiguous name.
+    \\function initializeEnvironment(m) {
+    \\  if (m.linkedEnv) return;
+    \\  for (let i = 0; i < m.indirect.length; i++) {
+    \\    const e = m.indirect[i];
+    \\    if (e[2] === null) continue;
+    \\    const r = resolveExport(m.deps[e[1]], e[2], [m, e[0]]);
+    \\    if (r === null || r === AMBIGUOUS) throw linkError(m, e[1], e[2], r);
+    \\  }
+    \\  localsOf(m);
+    \\  const bindings = Object.create(null);
+    \\  for (let i = 0; i < m.imports.length; i++) {
+    \\    const e = m.imports[i];
+    \\    const d = m.deps[e[0]];
+    \\    if (e[1] === null) {
+    \\      bindings[e[2]] = namespaceOf(d);
+    \\      continue;
+    \\    }
+    \\    const r = resolveExport(d, e[1], []);
+    \\    if (r === null || r === AMBIGUOUS) throw linkError(m, e[0], e[1], r);
+    \\    bindings[e[2]] = r.local === null ? namespaceOf(r.module) : localsOf(r.module)[r.local];
+    \\  }
+    \\  m.g.next(bindings);
+    \\  m.linkedEnv = true;
+    \\}
+    \\function link(root) {
+    \\  const stack = [];
+    \\  try {
+    \\    innerLink(root, stack, 0);
+    \\  } catch (e) {
+    \\    for (const m of stack) m.status = 'unlinked';
+    \\    throw e;
+    \\  }
+    \\}
+    \\function innerLink(m, stack, index) {
+    \\  if (m.status !== 'unlinked') return index;
+    \\  m.status = 'linking';
+    \\  m.dfsIndex = m.dfsAncestor = index++;
+    \\  stack.push(m);
+    \\  for (let i = 0; i < m.deps.length; i++) {
+    \\    const d = m.deps[i];
+    \\    index = innerLink(d, stack, index);
+    \\    if (d.status === 'linking' && d.dfsAncestor < m.dfsAncestor) m.dfsAncestor = d.dfsAncestor;
+    \\  }
+    \\  initializeEnvironment(m);
+    \\  if (m.dfsAncestor === m.dfsIndex) {
+    \\    let x;
+    \\    do {
+    \\      x = stack.pop();
+    \\      x.status = 'linked';
+    \\    } while (x !== m);
+    \\  }
+    \\  return index;
+    \\}
+    \\// Evaluate(): the promise of m's evaluation (of its cycle's root).
+    \\function evaluate(m) {
+    \\  if ((m.status === 'evaluating-async' || m.status === 'evaluated') && m.cycleRoot !== null) m = m.cycleRoot;
+    \\  if (m.capability !== null) return m.capability.promise;
+    \\  const cap = m.capability = capability();
+    \\  const stack = [];
+    \\  try {
+    \\    innerEvaluate(m, stack, 0);
+    \\    if (!m.asyncEvaluation) cap.resolve(undefined);
+    \\  } catch (e) {
+    \\    for (const x of stack) {
+    \\      x.status = 'evaluated';
+    \\      x.hasError = true;
+    \\      x.error = e;
+    \\    }
+    \\    cap.reject(e);
+    \\  }
+    \\  return cap.promise;
+    \\}
+    \\function innerEvaluate(m, stack, index) {
+    \\  if (m.status === 'evaluating-async' || m.status === 'evaluated') {
+    \\    if (m.hasError) throw m.error;
+    \\    return index;
+    \\  }
+    \\  if (m.status === 'evaluating') return index;
+    \\  m.status = 'evaluating';
+    \\  m.dfsIndex = m.dfsAncestor = index++;
+    \\  m.pending = 0;
+    \\  stack.push(m);
+    \\  for (let i = 0; i < m.deps.length; i++) {
+    \\    let d = m.deps[i];
+    \\    index = innerEvaluate(d, stack, index);
+    \\    if (d.status === 'evaluating') {
+    \\      if (d.dfsAncestor < m.dfsAncestor) m.dfsAncestor = d.dfsAncestor;
+    \\    } else {
+    \\      d = d.cycleRoot;
+    \\      if (d.hasError) throw d.error;
+    \\    }
+    \\    if (d.asyncEvaluation) {
+    \\      m.pending++;
+    \\      d.asyncParents.push(m);
+    \\    }
+    \\  }
+    \\  if (m.pending > 0 || m.tla) {
+    \\    m.asyncEvaluation = true;
+    \\    m.asyncOrder = asyncOrder++;
+    \\    if (m.pending === 0) executeAsync(m);
+    \\  } else {
+    \\    executeSync(m);
+    \\  }
+    \\  if (m.dfsAncestor === m.dfsIndex) {
+    \\    let x;
+    \\    do {
+    \\      x = stack.pop();
+    \\      x.status = x.asyncEvaluation ? 'evaluating-async' : 'evaluated';
+    \\      x.cycleRoot = m;
+    \\    } while (x !== m);
+    \\  }
+    \\  return index;
+    \\}
+    \\function executeSync(m) {
+    \\  if (m.json !== undefined) return;
+    \\  const g = m.g;
+    \\  m.g = null;
+    \\  g.next();
+    \\}
+    \\// Runs a module with top-level await; its end settles one job later.
+    \\function executeAsync(m) {
+    \\  const cap = capability();
+    \\  cap.promise.then(() => asyncFulfilled(m), e => asyncRejected(m, e));
+    \\  const g = m.g;
+    \\  m.g = null;
+    \\  function step(thrown, v) {
+    \\    let r;
+    \\    try {
+    \\      r = thrown ? g.throw(v) : g.next(v);
+    \\    } catch (e) {
+    \\      cap.reject(e);
+    \\      return;
+    \\    }
+    \\    if (r.done) cap.resolve(undefined);
+    \\    else Promise.resolve(r.value).then(x => step(false, x), e => step(true, e));
+    \\  }
+    \\  step(false, undefined);
+    \\}
+    \\function gatherAncestors(m, list) {
+    \\  for (const p of m.asyncParents) {
+    \\    if (!list.includes(p) && !p.cycleRoot.hasError) {
+    \\      p.pending--;
+    \\      if (p.pending === 0) {
+    \\        list.push(p);
+    \\        if (!p.tla) gatherAncestors(p, list);
+    \\      }
+    \\    }
+    \\  }
+    \\}
+    \\function asyncFulfilled(m) {
+    \\  if (m.status === 'evaluated') return;
+    \\  m.asyncEvaluation = false;
+    \\  m.status = 'evaluated';
+    \\  if (m.capability !== null) m.capability.resolve(undefined);
+    \\  const list = [];
+    \\  gatherAncestors(m, list);
+    \\  list.sort((a, b) => a.asyncOrder - b.asyncOrder);
+    \\  for (const x of list) {
+    \\    if (x.status === 'evaluated') continue;
+    \\    if (x.tla) {
+    \\      executeAsync(x);
+    \\      continue;
+    \\    }
+    \\    try {
+    \\      executeSync(x);
+    \\    } catch (e) {
+    \\      asyncRejected(x, e);
+    \\      continue;
+    \\    }
+    \\    x.asyncEvaluation = false;
+    \\    x.status = 'evaluated';
+    \\    if (x.capability !== null) x.capability.resolve(undefined);
+    \\  }
+    \\}
+    \\function asyncRejected(m, e) {
+    \\  if (m.status === 'evaluated') return;
+    \\  m.hasError = true;
+    \\  m.error = e;
+    \\  m.status = 'evaluated';
+    \\  for (const p of m.asyncParents) asyncRejected(p, e);
+    \\  if (m.capability !== null) m.capability.reject(e);
+    \\}
+    \\// Loads, links and evaluates the graph of m; the promise of its
+    \\// evaluation. Loading and linking errors throw.
+    \\function runGraph(m) {
+    \\  loadGraph(m);
+    \\  link(m);
+    \\  return evaluate(m);
+    \\}
+    \\const moduleLoader = {
+    \\  // import(specifier, options) from code of `referrer`.
+    \\  dynamicImport(specifier, referrer, options) {
+    \\    return new Promise((resolve, reject) => {
+    \\      let spec;
+    \\      let type = '';
+    \\      try {
+    \\        if (typeof specifier === 'symbol') throw new TypeError('Cannot convert a Symbol value to a string');
+    \\        spec = String(specifier);
+    \\        if (options !== undefined) {
+    \\          if (typeof options !== 'object' || options === null) throw new TypeError('The second argument of import() must be an object');
+    \\          const attrs = options.with;
+    \\          if (attrs !== undefined) {
+    \\            if (typeof attrs !== 'object' || attrs === null) throw new TypeError("The 'with' option of import() must be an object");
+    \\            for (const k of Object.keys(attrs)) {
+    \\              if (typeof attrs[k] !== 'string') throw new TypeError('Import attribute values must be strings');
+    \\              if (k === 'type') type = attrs[k];
+    \\            }
+    \\          }
+    \\        }
+    \\      } catch (e) { reject(e); return; }
+    \\      enqueue(() => {
+    \\        let m;
+    \\        let p;
+    \\        try {
+    \\          m = getModule(resolveSpecifier(referrer, spec), type, referrer);
+    \\          p = runGraph(m);
+    \\        } catch (e) { reject(e); return; }
+    \\        p.then(() => {
+    \\          try { resolve(namespaceOf(m)); } catch (e) { reject(e); }
+    \\        }, reject);
+    \\      });
+    \\    });
+    \\  },
+    \\  // A page's module script: the module at href, or inline source.
+    \\  moduleScript(href, source, base) {
+    \\    const m = href !== null ? getModule(href, '', base) : setupModule(parseModule(source, base));
+    \\    const p = runGraph(m);
+    \\    p.then(undefined, e => {
+    \\      const report = G.reportError;
+    \\      if (typeof report === 'function') report(e);
+    \\    });
+    \\    return p;
+    \\  },
+    \\  importMap(json, base) {
+    \\    const map = jsonParse(json);
+    \\    if (typeof map !== 'object' || map === null) return;
+    \\    mapImports = mergeSpecifierMap(mapImports, map.imports, base);
+    \\    if (typeof map.scopes === 'object' && map.scopes !== null) {
+    \\      for (const s of Object.keys(map.scopes)) {
+    \\        const prefix = resolveModule(s, base, 2);
+    \\        if (prefix === null) continue;
+    \\        let entry = mapScopes.find(e => e[0] === prefix);
+    \\        if (entry === undefined) {
+    \\          entry = [prefix, []];
+    \\          mapScopes.push(entry);
+    \\        }
+    \\        entry[1] = mergeSpecifierMap(entry[1], map.scopes[s], base);
+    \\      }
+    \\      mapScopes.sort(longestFirst);
+    \\    }
+    \\  },
+    \\  // import.meta.resolve, bound to the module's URL.
+    \\  resolve(referrer, specifier) {
+    \\    return resolveSpecifier(referrer, String(specifier));
+    \\  },
+    \\};
+    \\G.__engine.setDrivers(asyncDriver, asyncGenDriver, takeUnhandled, moduleLoader);
     \\delete G.__engine;
+    \\
+    \\// ---- Iterator: the abstract constructor of %IteratorPrototype%, which
+    \\// the built-in iterators and generators inherit from (polyfills of the
+    \\// iterator helpers add their methods there).
+    \\const IteratorPrototype = Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]()));
+    \\function Iterator() {
+    \\  if (new.target === undefined || new.target === Iterator) throw new TypeError('Abstract class Iterator not directly constructable');
+    \\}
+    \\Object.defineProperty(Iterator, 'prototype', { value: IteratorPrototype, writable: false, enumerable: false, configurable: false });
+    \\hidden(IteratorPrototype, 'constructor', Iterator);
+    \\Object.defineProperty(IteratorPrototype, Symbol.toStringTag, { value: 'Iterator', writable: true, configurable: true });
+    \\hidden(G, 'Iterator', Iterator);
+    \\// The iterator helpers (ES2025): methods of Iterator.prototype. map,
+    \\// filter, take, drop and flatMap return lazy %IteratorHelperPrototype%
+    \\// objects; the others consume the iterator.
+    \\const helperState = new WeakMap();
+    \\const IteratorHelperPrototype = Object.create(IteratorPrototype);
+    \\function iterResult(value, done) { return { value, done }; }
+    \\function closeIterator(o) {
+    \\  const ret = o.return;
+    \\  if (ret !== undefined && ret !== null) ret.call(o);
+    \\}
+    \\function closeQuietly(o) {
+    \\  try { closeIterator(o); } catch (e) {}
+    \\}
+    \\function iterObject(o) {
+    \\  if (o === null || (typeof o !== 'object' && typeof o !== 'function')) throw new TypeError('Iterator helper called on non-object');
+    \\  return o;
+    \\}
+    \\function callable(f, o) {
+    \\  if (typeof f !== 'function') {
+    \\    closeQuietly(o);
+    \\    throw new TypeError(String(f) + ' is not a function');
+    \\  }
+    \\}
+    \\function stepOf(o, next) {
+    \\  const r = next.call(o);
+    \\  if (r === null || (typeof r !== 'object' && typeof r !== 'function')) throw new TypeError('Iterator result ' + String(r) + ' is not an object');
+    \\  return r;
+    \\}
+    \\function helper(o, step, close) {
+    \\  const h = Object.create(IteratorHelperPrototype);
+    \\  helperState.set(h, { o, step, close, done: false, running: false });
+    \\  return h;
+    \\}
+    \\methods(IteratorHelperPrototype, {
+    \\  next() {
+    \\    const s = helperState.get(this);
+    \\    if (s === undefined) throw new TypeError('next method called on incompatible receiver');
+    \\    if (s.running) throw new TypeError('Generator is already running');
+    \\    if (s.done) return iterResult(undefined, true);
+    \\    s.running = true;
+    \\    try {
+    \\      const r = s.step();
+    \\      if (r.done) s.done = true;
+    \\      return r;
+    \\    } catch (e) {
+    \\      s.done = true;
+    \\      throw e;
+    \\    } finally {
+    \\      s.running = false;
+    \\    }
+    \\  },
+    \\  return() {
+    \\    const s = helperState.get(this);
+    \\    if (s === undefined) throw new TypeError('return method called on incompatible receiver');
+    \\    if (s.running) throw new TypeError('Generator is already running');
+    \\    if (!s.done) {
+    \\      s.done = true;
+    \\      s.close();
+    \\    }
+    \\    return iterResult(undefined, true);
+    \\  },
+    \\});
+    \\Object.defineProperty(IteratorHelperPrototype, Symbol.toStringTag, { value: 'Iterator Helper', configurable: true });
+    \\function limitOf(limit, o) {
+    \\  const n = Number(limit);
+    \\  if (n !== n) {
+    \\    closeQuietly(o);
+    \\    throw new RangeError(String(limit) + ' must be positive');
+    \\  }
+    \\  const k = n === Infinity ? Infinity : Math.trunc(n);
+    \\  if (k < 0) {
+    \\    closeQuietly(o);
+    \\    throw new RangeError(String(limit) + ' must be positive');
+    \\  }
+    \\  return k;
+    \\}
+    \\// An iterator for flatMap's results: strings are not flattened.
+    \\function flattenable(v) {
+    \\  if (v === null || (typeof v !== 'object' && typeof v !== 'function')) throw new TypeError(String(v) + ' is not an object');
+    \\  const m = v[Symbol.iterator];
+    \\  const it = m === undefined || m === null ? v : m.call(v);
+    \\  if (it === null || (typeof it !== 'object' && typeof it !== 'function')) throw new TypeError(String(it) + ' is not an object');
+    \\  return it;
+    \\}
+    \\methods(IteratorPrototype, {
+    \\  map(mapper) {
+    \\    const o = iterObject(this);
+    \\    callable(mapper, o);
+    \\    const next = o.next;
+    \\    let counter = 0;
+    \\    return helper(o, () => {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return iterResult(undefined, true);
+    \\      try { return iterResult(mapper(r.value, counter++), false); } catch (e) { closeQuietly(o); throw e; }
+    \\    }, () => closeIterator(o));
+    \\  },
+    \\  filter(predicate) {
+    \\    const o = iterObject(this);
+    \\    callable(predicate, o);
+    \\    const next = o.next;
+    \\    let counter = 0;
+    \\    return helper(o, () => {
+    \\      for (;;) {
+    \\        const r = stepOf(o, next);
+    \\        if (r.done) return iterResult(undefined, true);
+    \\        const v = r.value;
+    \\        let keep;
+    \\        try { keep = predicate(v, counter++); } catch (e) { closeQuietly(o); throw e; }
+    \\        if (keep) return iterResult(v, false);
+    \\      }
+    \\    }, () => closeIterator(o));
+    \\  },
+    \\  take(limit) {
+    \\    const o = iterObject(this);
+    \\    let remaining = limitOf(limit, o);
+    \\    const next = o.next;
+    \\    return helper(o, () => {
+    \\      if (remaining === 0) {
+    \\        closeIterator(o);
+    \\        return iterResult(undefined, true);
+    \\      }
+    \\      if (remaining !== Infinity) remaining--;
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return iterResult(undefined, true);
+    \\      return iterResult(r.value, false);
+    \\    }, () => closeIterator(o));
+    \\  },
+    \\  drop(limit) {
+    \\    const o = iterObject(this);
+    \\    let remaining = limitOf(limit, o);
+    \\    const next = o.next;
+    \\    return helper(o, () => {
+    \\      while (remaining > 0) {
+    \\        if (remaining !== Infinity) remaining--;
+    \\        const r = stepOf(o, next);
+    \\        if (r.done) return iterResult(undefined, true);
+    \\      }
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return iterResult(undefined, true);
+    \\      return iterResult(r.value, false);
+    \\    }, () => closeIterator(o));
+    \\  },
+    \\  flatMap(mapper) {
+    \\    const o = iterObject(this);
+    \\    callable(mapper, o);
+    \\    const next = o.next;
+    \\    let counter = 0;
+    \\    let inner = null;
+    \\    let innerNext = null;
+    \\    return helper(o, () => {
+    \\      for (;;) {
+    \\        if (inner !== null) {
+    \\          let r;
+    \\          try { r = stepOf(inner, innerNext); } catch (e) { closeQuietly(o); throw e; }
+    \\          if (!r.done) return iterResult(r.value, false);
+    \\          inner = null;
+    \\        }
+    \\        const r = stepOf(o, next);
+    \\        if (r.done) return iterResult(undefined, true);
+    \\        try {
+    \\          inner = flattenable(mapper(r.value, counter++));
+    \\          innerNext = inner.next;
+    \\        } catch (e) { closeQuietly(o); throw e; }
+    \\      }
+    \\    }, () => {
+    \\      if (inner !== null) {
+    \\        try { closeIterator(inner); } catch (e) { closeQuietly(o); throw e; }
+    \\      }
+    \\      closeIterator(o);
+    \\    });
+    \\  },
+    \\  reduce(reducer, ...initial) {
+    \\    const o = iterObject(this);
+    \\    callable(reducer, o);
+    \\    const next = o.next;
+    \\    let acc;
+    \\    let counter = 0;
+    \\    if (initial.length === 0) {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) throw new TypeError('Reduce of empty iterator with no initial value');
+    \\      acc = r.value;
+    \\      counter = 1;
+    \\    } else {
+    \\      acc = initial[0];
+    \\    }
+    \\    for (;;) {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return acc;
+    \\      try { acc = reducer(acc, r.value, counter++); } catch (e) { closeQuietly(o); throw e; }
+    \\    }
+    \\  },
+    \\  toArray() {
+    \\    const o = iterObject(this);
+    \\    const next = o.next;
+    \\    const out = [];
+    \\    for (;;) {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return out;
+    \\      out.push(r.value);
+    \\    }
+    \\  },
+    \\  forEach(fn) {
+    \\    const o = iterObject(this);
+    \\    callable(fn, o);
+    \\    const next = o.next;
+    \\    let counter = 0;
+    \\    for (;;) {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return undefined;
+    \\      try { fn(r.value, counter++); } catch (e) { closeQuietly(o); throw e; }
+    \\    }
+    \\  },
+    \\  some(predicate) {
+    \\    const o = iterObject(this);
+    \\    callable(predicate, o);
+    \\    const next = o.next;
+    \\    let counter = 0;
+    \\    for (;;) {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return false;
+    \\      let hit;
+    \\      try { hit = predicate(r.value, counter++); } catch (e) { closeQuietly(o); throw e; }
+    \\      if (hit) {
+    \\        closeIterator(o);
+    \\        return true;
+    \\      }
+    \\    }
+    \\  },
+    \\  every(predicate) {
+    \\    const o = iterObject(this);
+    \\    callable(predicate, o);
+    \\    const next = o.next;
+    \\    let counter = 0;
+    \\    for (;;) {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return true;
+    \\      let ok;
+    \\      try { ok = predicate(r.value, counter++); } catch (e) { closeQuietly(o); throw e; }
+    \\      if (!ok) {
+    \\        closeIterator(o);
+    \\        return false;
+    \\      }
+    \\    }
+    \\  },
+    \\  find(predicate) {
+    \\    const o = iterObject(this);
+    \\    callable(predicate, o);
+    \\    const next = o.next;
+    \\    let counter = 0;
+    \\    for (;;) {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return undefined;
+    \\      let hit;
+    \\      try { hit = predicate(r.value, counter++); } catch (e) { closeQuietly(o); throw e; }
+    \\      if (hit) {
+    \\        closeIterator(o);
+    \\        return r.value;
+    \\      }
+    \\    }
+    \\  },
+    \\});
+    \\// Iterator.from: an iterator that inherits from Iterator.prototype, or a
+    \\// wrapper around one that does not.
+    \\const WrapForValidIteratorPrototype = Object.create(IteratorPrototype);
+    \\const wrapped = new WeakMap();
+    \\methods(WrapForValidIteratorPrototype, {
+    \\  next() {
+    \\    const w = wrapped.get(this);
+    \\    if (w === undefined) throw new TypeError('next method called on incompatible receiver');
+    \\    return w.next.call(w.o);
+    \\  },
+    \\  return() {
+    \\    const w = wrapped.get(this);
+    \\    if (w === undefined) throw new TypeError('return method called on incompatible receiver');
+    \\    const ret = w.o.return;
+    \\    if (ret === undefined || ret === null) return iterResult(undefined, true);
+    \\    return ret.call(w.o);
+    \\  },
+    \\});
+    \\hidden(Iterator, 'from', function from(o) {
+    \\  let it;
+    \\  if (typeof o === 'string') it = o[Symbol.iterator]();
+    \\  else it = flattenable(o);
+    \\  if (IteratorPrototype.isPrototypeOf(it)) return it;
+    \\  const w = Object.create(WrapForValidIteratorPrototype);
+    \\  wrapped.set(w, { o: it, next: it.next });
+    \\  return w;
+    \\});
     \\
     \\// ---- legacy escape / unescape
     \\
@@ -519,7 +1310,13 @@ pub let LIB =
     \\  defineProperty(o, k, d) {
     \\    try { Object.defineProperty(o, k, d); return true; } catch (e) { return false; }
     \\  },
-    \\  deleteProperty(o, k) { return delete o[k]; },
+    \\  deleteProperty(o, k) {
+    \\    // This file is strict, where deleting an export throws.
+    \\    if (isModuleNamespace(o)) {
+    \\      try { return delete o[k]; } catch (e) { return false; }
+    \\    }
+    \\    return delete o[k];
+    \\  },
     \\  get(o, k, r) {
     \\    if (r === undefined || r === o) return o[k];
     \\    const d = findDescriptor(o, k);
@@ -527,10 +1324,23 @@ pub let LIB =
     \\    return o[k];
     \\  },
     \\  set(o, k, v, r) {
+    \\    if (isModuleNamespace(o)) return false;
     \\    if (r === undefined || r === o) { o[k] = v; return true; }
+    \\    // OrdinarySet with another receiver: a setter runs on it; a data
+    \\    // property is defined on it (a proxy's [[Set]] is not called again).
     \\    const d = findDescriptor(o, k);
-    \\    if (d && d.set) { d.set.call(r, v); return true; }
-    \\    r[k] = v;
+    \\    if (d && (d.get || d.set)) {
+    \\      if (!d.set) return false;
+    \\      d.set.call(r, v);
+    \\      return true;
+    \\    }
+    \\    if (d && !d.writable) return false;
+    \\    if (r === null || (typeof r !== 'object' && typeof r !== 'function')) return false;
+    \\    const own = Object.getOwnPropertyDescriptor(r, k);
+    \\    if (own && (own.get || own.set || !own.writable)) return false;
+    \\    try {
+    \\      Object.defineProperty(r, k, own ? { value: v } : { value: v, writable: true, enumerable: true, configurable: true });
+    \\    } catch (e) { return false; }
     \\    return true;
     \\  },
     \\  has(o, k) { return k in o; },

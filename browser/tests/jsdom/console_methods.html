@@ -1,0 +1,17 @@
+<!doctype html>
+<title>Console methods</title>
+<p id="out">pending</p>
+<script>
+console.assert(1 === 1, 'not shown');
+console.assert(false, 'shown %s', 'here');
+console.assert(0);
+console.group('group label');
+console.table([1]);
+console.groupEnd();
+console.time('t');
+console.timeEnd('t');
+console.count();
+const a = document.createElement('a');
+document.getElementById('out').textContent = [typeof SVGAnimatedString, a.href instanceof SVGAnimatedString].join(' ');
+try { new SVGAnimatedString(); } catch (e) { console.log(e.name); }
+</script>

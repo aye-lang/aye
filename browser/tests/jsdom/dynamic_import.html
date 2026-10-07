@@ -1,0 +1,23 @@
+<!doctype html>
+<title>Dynamic imports</title>
+<p id="classic">pending</p>
+<p id="module">pending</p>
+<p id="nested">pending</p>
+<p id="errors">pending</p>
+<p id="nomodule">skipped</p>
+<script src="dynamic/classic.js"></script>
+<script type="module" src="dynamic/outer.mjs"></script>
+<script>
+(async function () {
+  const outer = await import('./dynamic/outer.mjs');
+  const a = await outer.load();
+  const b = await import('./dynamic/value.mjs');
+  document.getElementById('nested').textContent = 'nested same ' + (a === b);
+  let errors = [];
+  for (const spec of ['./dynamic/missing.mjs', './dynamic/syntax.mjs', './dynamic/thrown.mjs', 'bare-name', 'data:text/plain,export default 1']) {
+    try { await import(spec); } catch (e) { errors.push(e.name || e); }
+  }
+  document.getElementById('errors').textContent = errors.join(' ');
+})();
+</script>
+<script nomodule>document.getElementById('nomodule').textContent = 'WRONG';</script>

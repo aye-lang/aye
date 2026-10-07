@@ -129,6 +129,18 @@ merge and run the full tests.
 **Why:** the run's own report says its tests pass; it cannot tell you
 what it duplicated or missed.
 
+### Check a GPT report's "not supported" list against the branch
+**Context:** planning follow-up work from a pi run's final report.
+**Bad:** the pi-dynimport report said module cycles and re-exports were
+not supported; later commits of the same run (814b1cf, fff3760) had
+implemented both, with tests (`233_module_cycles.js`,
+`234_module_reexports.js`). The follow-up task asked to implement them
+again.
+**Good:** before planning, read the branch's tests and docs
+(`browser/js/MODULES.md`) and run the feature; write edge-case tests
+against Node instead (`244`, `245` found two real bugs).
+**Why:** a report written mid-run goes stale as the run continues.
+
 ## Compiler gaps
 
 ### Record a compiler limitation in browser/COMPILER_GAPS.md

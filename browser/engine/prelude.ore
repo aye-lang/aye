@@ -1036,6 +1036,8 @@ pub let PRELUDE =
     \\getter(Document.prototype, 'compatMode', function () { return 'CSS1Compat'; });
     \\getter(Document.prototype, 'contentType', function () { return 'text/html'; });
     \\getter(Document.prototype, 'referrer', function () { return ''; });
+    \\// GitHub's cookie code throws without it. Setting it changes nothing.
+    \\getter(Document.prototype, 'domain', function () { return ak.urlPart('hostname'); }, function (v) {});
     \\getter(Document.prototype, 'scrollingElement', function () { return this.documentElement; });
     \\getter(Document.prototype, 'forms', function () { return this.getElementsByTagName('form'); });
     \\getter(Document.prototype, 'images', function () { return this.getElementsByTagName('img'); });
@@ -1987,6 +1989,18 @@ pub let PRELUDE =
     \\});
     \\hidden(G, 'cancelIdleCallback', function (id) { ak.clearTimer(id); });
     \\hidden(G, 'reportError', function (e) { report(e); });
+    \\// The rest of the console: assert reports at error level, the others
+    \\// log or do nothing (VitePress calls console.assert).
+    \\hidden(console, 'assert', function (cond, ...data) {
+    \\  if (!cond) console.error(...(data.length > 0 && typeof data[0] === 'string' ? ['Assertion failed: ' + data[0], ...data.slice(1)] : ['Assertion failed', ...data]));
+    \\});
+    \\for (const k of ['trace', 'dir', 'dirxml', 'table', 'group', 'groupCollapsed']) hidden(console, k, function (...data) { console.log(...data); });
+    \\for (const k of ['groupEnd', 'time', 'timeEnd', 'timeLog', 'timeStamp', 'count', 'countReset', 'clear', 'profile', 'profileEnd']) hidden(console, k, function () {});
+    \\// SVGAnimatedString: VitePress tests `a.href instanceof SVGAnimatedString`.
+    \\class SVGAnimatedString {
+    \\  constructor() { throw new TypeError('Illegal constructor'); }
+    \\}
+    \\hidden(G, 'SVGAnimatedString', SVGAnimatedString);
     \\getter(G, 'origin', function () { return ak.urlPart('origin'); });
     \\hidden(G, 'isSecureContext', true);
     \\hidden(G, 'Image', function Image(width, height) {

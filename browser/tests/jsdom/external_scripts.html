@@ -5,10 +5,10 @@
 function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
 </script>
 <script src="scripts/first.js"></script>
-<script type="module">log('module: not run');</script>
+<script type="module">log('module runs deferred');</script>
 <script type="text/template">log('template: not run');</script>
 <script type="text/javascript">log('typed inline');</script>
 <script src="scripts/async.js" async></script>
 <script src="scripts/missing.js"></script>
-<script nomodule>log('nomodule runs');</script>
+<script nomodule>log('nomodule: not run');</script>
 <script>log('last inline, sees', typeof fromFirst);</script>

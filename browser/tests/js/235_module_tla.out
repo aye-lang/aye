@@ -1,0 +1,27 @@
+c start
+b
+c end
+a
+main
+-- main done
+y start
+y end
+x sees y after
+-- cycle done x
+shared start
+b2 sync
+shared end
+p1 sees shared
+p2 sees shared
+parents
+-- parents done
+rejected late
+same error true 1
+same again true
+order-sync
+order-async start
+order-sync microtask
+order-async end
+order body
+-- order done
+same namespace true y after
