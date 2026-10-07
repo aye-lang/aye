@@ -1,0 +1,32 @@
+string: POST /fetch-echo type=text/plain;charset=UTF-8 length=6 body="héllo"
+params: POST /fetch-echo type=application/x-www-form-urlencoded;charset=UTF-8 length=9 body="a=1&b=x+y"
+formdata: POST /fetch-echo type=multipart/form-data; boundary=B length=* body="--B\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\nvalue\r\nline\r\n--B\r\nContent-Disposition: form-data; name=\"file\"; filename=\"f%221.txt\"\r\nContent-Type: text/plain\r\n\r\ndata\r\n--B\r\nContent-Disposition: form-data; name=\"raw\"; filename=\"blob\"\r\nContent-Type: application/octet-stream\r\n\r\n\u0001\u0002\r\n--B--\r\n"
+  fields: [["name","value\r\nline"],["file (file \"f%221.txt\")","data"],["raw (file \"blob\")","\u0001\u0002"]]
+buffer: PUT /fetch-echo type=- length=4 body="\u0000\u0001��"
+  hex: 0001feff
+view: PUT /fetch-echo type=- length=2 body="\b\u0007"
+  hex: 0807
+blob: patch /fetch-echo type=application/json length=7 body="{\"a\":1}"
+delete: DELETE /fetch-echo?id=3 type=- length=- body=""
+empty post: POST /fetch-echo type=- length=0 body=""
+custom method: FROB /fetch-echo type=- length=- body=""
+options: OPTIONS /fetch-echo type=- length=- body=""
+headers: POST /fetch-echo type=application/json length=2 body="{}"
+  x-custom=yes accept=application/json sec-thing=undefined proxy-thing=undefined
+combined: GET /fetch-echo type=- length=- body=""
+  x-twice=a, b
+request: PUT /fetch-echo type=text/plain;charset=UTF-8 length=14 body="from a Request"
+  x-custom=req
+head: 200 body=""
+POST 301: GET /fetch-echo?redirected type=- body="" x-custom=kept
+POST 302: GET /fetch-echo?redirected type=- body="" x-custom=kept
+POST 303: GET /fetch-echo?redirected type=- body="" x-custom=kept
+POST 307: POST /fetch-echo?redirected type=text/plain;charset=UTF-8 body="moved" x-custom=kept
+POST 308: POST /fetch-echo?redirected type=text/plain;charset=UTF-8 body="moved" x-custom=kept
+PUT 301: PUT /fetch-echo?redirected type=text/plain;charset=UTF-8 body="moved" x-custom=kept
+PUT 302: PUT /fetch-echo?redirected type=text/plain;charset=UTF-8 body="moved" x-custom=kept
+PUT 303: GET /fetch-echo?redirected type=- body="" x-custom=kept
+PUT 307: PUT /fetch-echo?redirected type=text/plain;charset=UTF-8 body="moved" x-custom=kept
+PUT 308: PUT /fetch-echo?redirected type=text/plain;charset=UTF-8 body="moved" x-custom=kept
+GET with a body: TypeError
+content-length: POST /fetch-echo type=text/plain;charset=UTF-8 length=3 body="abc"

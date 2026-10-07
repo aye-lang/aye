@@ -469,8 +469,10 @@ fn akSetDispatch(it: *mut Interp, a: Args) JsError!Value {
 
 // ---- fetch
 
-// The response to a GET of argument 0: { status, url, type, body }, or
-// { error } when it failed.
+// The response to a request of argument 0: { status, url, type, body },
+// or { error } when it failed. Arguments 1 to 3 are optional: the method
+// (GET), more headers ("name: value" lines separated by "\n") and the
+// body, a string of code units 0..255 (the bytes, as Blob keeps them).
 fn akFetch(it: *mut Interp, a: Args) JsError!Value {
     let r = try it.newObject(it.object_proto)
     try it.push(js.objVal(r))
@@ -480,7 +482,36 @@ fn akFetch(it: *mut Interp, a: Args) JsError!Value {
     }
     defer target.deinit(it.alloc)
     let page = scriptOf(it).page
-    let res = net.request(it.alloc, &target, net.Request { kind: net.Kind.Other, referrer: page.url.href }) catch |e| {
+    var req = net.Request { kind: net.Kind.Other, referrer: page.url.href }
+    let method = try it.builder()
+    defer it.release(method)
+    if !js.isUndef(it.arg(a, 1)) {
+        try argText(it, a, 1, method)
+        req.method = method.bytes()
+        // As in browsers, a file is only read (net ignores the method).
+        if text.eql(target.scheme, "file") && !text.eql(req.method, "GET") && !text.eql(req.method, "HEAD") {
+            try setField(it, r, "error", "file: URLs take only GET")
+            return it.pop()
+        }
+    }
+    let headers = try it.builder()
+    defer it.release(headers)
+    if !js.isUndef(it.arg(a, 2)) {
+        try argText(it, a, 2, headers)
+        req.headers = headers.bytes()
+    }
+    let raw = try it.builder()
+    defer it.release(raw)
+    let data = try it.builder()
+    defer it.release(data)
+    var sent = net.Body { content_type: "", data: "" }
+    if !js.isUndef(it.arg(a, 3)) {
+        try argText(it, a, 3, raw)
+        try binaryBytes(raw.bytes(), data)
+        sent.data = data.bytes()
+        req.body = &sent
+    }
+    let res = net.request(it.alloc, &target, req) catch |e| {
         match e {
             .OutOfMemory => {
                 return JsError.OutOfMemory
@@ -502,6 +533,22 @@ fn akFetch(it: *mut Interp, a: Args) JsError!Value {
     try setField(it, r, "type", res.mime)
     try setField(it, r, "body", body)
     return it.pop()
+}
+
+// Appends to `out` the bytes of a string of code units 0..255 (a Blob's
+// bytes) in its WTF-8 form `s`.
+fn binaryBytes(s: []u8, out: *mut text.Builder) AllocError!void {
+    var i: usize = 0
+    while i < s.len {
+        let c = s[i]
+        if c < 0x80 || i + 1 == s.len {
+            try out.appendByte(c)
+            i += 1
+        } else {
+            try out.appendByte((((c as u32 & 0x1f) << 6) | (s[i + 1] as u32 & 0x3f)) as u8)
+            i += 2
+        }
+    }
 }
 
 // ---- getComputedStyle
