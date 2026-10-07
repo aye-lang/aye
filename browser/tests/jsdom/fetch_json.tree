@@ -15,7 +15,7 @@
           "plums"
       "\n"
       <pre id="out">
-        "fetch returns true\nstatus 200 true application/json\nfailed TypeError\npost Failed to fetch: only GET is supported\n"
+        "fetch returns true\nstatus 200 true application/json\nfailed TypeError\npost Failed to fetch: file: URLs take only GET\n"
       "\n"
       <script>
         "\nfunction log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\\n'; }\nfetch('scripts/items.json')\n  .then(r => { log('status', r.status, r.ok, r.headers.get('Content-Type')); return r.json(); })\n  .then(items => {\n    const ul = document.getElementById('items');\n    for (const it of items) {\n      const li = document.createElement('li');\n      li.textContent = it.name;\n      ul.appendChild(li);\n    }\n  });\nfetch('scripts/nothing.json').then(r => log('missing', r.ok), e => log('failed', e.name));\nfetch('scripts/items.json', { method: 'POST' }).catch(e => log('post', e.message));\nlog('fetch returns', fetch('scripts/items.json') instanceof Promise);\n"

@@ -126,6 +126,8 @@ step only finds and writes down the cause; the fix is the next step.
 | P3.20 | Recapture the Reddit and GitHub archives: after P3.15 (Request) Reddit fetches `svc/events/preload-head` and GitHub makes ~10 requests the old archives lack; reset their `sites.json` expectations | `check --site reddit,github` no archive misses | – | all |
 | P3.22 | GitHub: React logs "Illegal invocation" after P3.13/P3.15 (a host method called with the wrong `this`); diagnose, then fix | `check --site github` errors 0 | P3.20 | P3.4–8 |
 | P3.23 | `failed_image_once.html` relies on a fixed 0.3 s server delay (`/slow/wait.txt`), like P3.12 did; make it wait on the browser's state | the test under synthetic load, 30 runs | P3.12 | all |
+| P3.24 | XMLHttpRequest sends only GET: `send(body)` and `setRequestHeader` on the native path P3.17 gave `fetch` | net fixture: XHR POST/PUT echo | P3.17 | P3.4–8 |
+| P3.25 | Send `Origin` on non-GET fetches (and CORS-mode GETs) as the Fetch spec says | echo test checks `Origin` | P3.17 | P3.24 |
 | P3.21 | Fetch guards: Response headers read-only (`immutable` guard), Request headers drop forbidden names, a Request's abort listener on its source signal is removed when the request settles | jsdom test vs Node 22 | P3.15 | P3.17 after it merges |
 
 ### P4: Load time
@@ -163,6 +165,9 @@ step only finds and writes down the cause; the fix is the next step.
    `target/release/ore check browser`, full `cargo test`,
    `browser/build.sh` with no output path (it writes `target/anyknown`
    in your worktree; never a shared path such as the scratchpad).
+   `browser/tools/sites.json` expectations only tighten. If a site loses
+   content it had, that is a regression to fix, never a reason to swap
+   its expected strings (P3.20 did, for GitHub's "Unable to load page").
 5. Report: commits, the verify output, the full test result, a "Done so
    far" paragraph, and follow-ups as new step proposals. A lesson goes
    into `docs/practices/` with its fix.

@@ -451,6 +451,21 @@ counts (`timers n=`) with a previous binary and look for archive misses
 **Why:** a replay artifact looks like an engine regression and hides the
 real numbers.
 
+### A request the browser starts sending is missing from old archives
+**Context:** a change that lets pages make requests they could not
+before (fetch methods, new APIs), checked with `page_load.py check`.
+**Bad:** after P3.17 let fetch POST, the replays of mdn, python-docs,
+react and youtube failed on `archive miss:` for their POST beacons and
+APIs (`/pong/get`, `/api/event`, `g/collect`, `youtubei/v1/guide`): the
+archives were captured by a browser that rejected them in JS. The
+markdown was the same as before; the page sees a failed fetch either way.
+**Good:** list the new misses in the report and propose a recapture
+step; do not recapture or loosen the miss check in the feature branch.
+Archive names hash the URL, the method (but GET) and the body
+(`archivePath`, `browser/net/archive.ore`).
+**Why:** an archive records what one binary asked for; a binary that asks
+for more needs a new capture, not a replay that hides the gap.
+
 ### Script-visible network requests must not be serial
 **Context:** an API that lets scripts observe a resource's state (img
 `complete`/`naturalWidth`/`load`, fetch, XHR) on the synchronous fetch.

@@ -1,11 +1,13 @@
 // `http:` and `https:` URLs through libcurl's easy interface. Redirects
 // are followed here, not by libcurl (at most 20, to http and https only),
 // so that each request of the chain gets its own cookies and each
-// response's `Set-Cookie` headers are stored for its own URL; a POST
-// that is redirected with 301, 302 or 303 continues with a GET, as
-// browsers do (307 and 308 keep it). Every request sends a browser-like
+// response's `Set-Cookie` headers are stored for its own URL; as in the
+// Fetch standard, a 303 (but for GET and HEAD) and a 301 or 302 of a
+// POST continue with a GET without the body and its Content-Type (307
+// and 308 keep the method and body). Every request sends a browser-like
 // User-Agent, an Accept header for its kind, Accept-Language, the
-// Referer (see `referrerOf`) and the cookies of the jar; libcurl decodes
+// Referer (see `referrerOf`), the cookies of the jar and the request's
+// own headers (`Request.headers`); libcurl decodes
 // every content encoding it knows (gzip, deflate, br...). A connect
 // timeout of 10 s, a total timeout of 30 s, and at most 32 MB for a
 // document or 16 MB for a subresource (else `TooLarge`). Responses of
@@ -41,6 +43,8 @@ let CURLOPT_POSTFIELDS: i32 = 10015
 let CURLOPT_HTTPHEADER: i32 = 10023
 let CURLOPT_HEADERDATA: i32 = 10029
 let CURLOPT_POSTFIELDSIZE: i32 = 60
+let CURLOPT_NOBODY: i32 = 44
+let CURLOPT_CUSTOMREQUEST: i32 = 10036
 let CURLOPT_URL: i32 = 10002
 let CURLOPT_USERAGENT: i32 = 10018
 let CURLOPT_NOSIGNAL: i32 = 99
@@ -193,6 +197,17 @@ fn transfer(alloc: Allocator, curl: *mut Curl, target: *Url, req: Request, s: ?*
     defer here.deinit()
     try here.append(target.withoutFragment())
     var post = req.body
+    // The method of each request of the chain, NUL-terminated.
+    var method = text.Builder.init(alloc)
+    defer method.deinit()
+    if req.method.len > 0 {
+        try method.append(req.method)
+    } else if post != null {
+        try method.append("POST")
+    } else {
+        try method.append("GET")
+    }
+    try method.appendByte(0)
     var hops: i64 = 0
     var status: i64 = 0
     while true {
@@ -207,7 +222,7 @@ fn transfer(alloc: Allocator, curl: *mut Curl, target: *Url, req: Request, s: ?*
         try here.appendByte(0)
         var headers: ?*mut CurlList = null
         defer curl_slist_free_all(headers)
-        headers = try prepare(alloc, curl, here.bytes().ptr, &at, req, post, s, &mut sink)
+        headers = try prepare(alloc, curl, here.bytes().ptr, &at, req, method.bytes()[..method.len() - 1], post, s, &mut sink)
         let code = performShared(curl)
         if sink.out_of_memory {
             return FetchError.OutOfMemory
@@ -234,8 +249,13 @@ fn transfer(alloc: Allocator, curl: *mut Curl, target: *Url, req: Request, s: ?*
         if !text.startsWith(moved, "http://") && !text.startsWith(moved, "https://") {
             return FetchError.Unsupported
         }
-        if status == 303 || ((status == 301 || status == 302) && post != null) {
+        let verb = method.bytes()[..method.len() - 1]
+        let get_or_head = text.eql(verb, "GET") || text.eql(verb, "HEAD")
+        if (status == 303 && !get_or_head) || ((status == 301 || status == 302) && text.eql(verb, "POST")) {
             post = null
+            method.clear()
+            try method.append("GET")
+            try method.appendByte(0)
         }
         here.clear()
         try here.append(withoutHash(moved))
@@ -271,9 +291,10 @@ fn transfer(alloc: Allocator, curl: *mut Curl, target: *Url, req: Request, s: ?*
 }
 
 // Sets the options of a request for `req` to `address` (`at` as a
-// NUL-terminated string), the response going to `sink`. Returns the
-// header list, to free after the transfer.
-fn prepare(alloc: Allocator, curl: *mut Curl, address: [*]u8, at: *Url, req: Request, post: ?*Body, s: ?*mut Session, sink: *mut Sink) FetchError!?*mut CurlList {
+// NUL-terminated string) with `method` (a NUL follows it) and `post`, the
+// response going to `sink`. Returns the header list, to free after the
+// transfer.
+fn prepare(alloc: Allocator, curl: *mut Curl, address: [*]u8, at: *Url, req: Request, method: []u8, post: ?*Body, s: ?*mut Session, sink: *mut Sink) FetchError!?*mut CurlList {
     let headers = try requestHeaders(alloc, at, req, post, s)
     curl_easy_setopt(curl, CURLOPT_URL, address)
     curl_easy_setopt(curl, CURLOPT_USERAGENT, USER_AGENT.ptr)
@@ -294,6 +315,11 @@ fn prepare(alloc: Allocator, curl: *mut Curl, address: [*]u8, at: *Url, req: Req
         // An empty body still needs a pointer: libcurl would otherwise
         // read the body from a callback.
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, b.data.ptr)
+    }
+    if text.eql(method, "HEAD") {
+        curl_easy_setopt(curl, CURLOPT_NOBODY, 1 as i64)
+    } else if !text.eql(method, "GET") && !text.eql(method, "POST") {
+        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method.ptr)
     }
     if s |ses| {
         if ses.share |sh| {
@@ -321,12 +347,16 @@ fn requestHeaders(alloc: Allocator, at: *Url, req: Request, post: ?*Body, s: ?*m
     errdefer curl_slist_free_all(list)
     var h = text.Builder.init(alloc)
     defer h.deinit()
-    try h.append("Accept: ")
-    try h.append(acceptOf(req.kind))
-    list = try addHeader(list, &mut h)
-    try h.append("Accept-Language: ")
-    try h.append(ACCEPT_LANGUAGE)
-    list = try addHeader(list, &mut h)
+    if !hasHeader(req.headers, "accept") {
+        try h.append("Accept: ")
+        try h.append(acceptOf(req.kind))
+        list = try addHeader(list, &mut h)
+    }
+    if !hasHeader(req.headers, "accept-language") {
+        try h.append("Accept-Language: ")
+        try h.append(ACCEPT_LANGUAGE)
+        list = try addHeader(list, &mut h)
+    }
     try h.append("Referer: ")
     let before = h.len()
     try referrerOf(alloc, req.referrer, at, &mut h)
@@ -343,16 +373,56 @@ fn requestHeaders(alloc: Allocator, at: *Url, req: Request, post: ?*Body, s: ?*m
         }
         h.clear()
     }
+    // A redirect that dropped the body drops the headers that describe it.
+    let dropped = post == null && req.body != null
+    var lines = text.split(req.headers, "\n")
+    while lines.next() |line| {
+        if line.len == 0 || (dropped && isBodyHeader(headerName(line))) {
+            continue
+        }
+        try h.append(line)
+        list = try addHeader(list, &mut h)
+    }
     if post |b| {
         // libcurl sends application/x-www-form-urlencoded by itself;
-        // other types need a header.
-        if !text.eql(b.content_type, "application/x-www-form-urlencoded") {
-            try h.append("Content-Type: ")
-            try h.append(b.content_type)
+        // other types need a header, and no type an empty one.
+        if !hasHeader(req.headers, "content-type") && !text.eql(b.content_type, "application/x-www-form-urlencoded") {
+            try h.append("Content-Type:")
+            if b.content_type.len > 0 {
+                try h.appendByte(' ')
+                try h.append(b.content_type)
+            }
             list = try addHeader(list, &mut h)
         }
     }
     return list
+}
+
+// The name of the header line "name: value".
+fn headerName(line: []u8) []u8 {
+    let colon = std.mem.indexOf(line, ':') orelse return line
+    return text.trim(line[..colon])
+}
+
+// Whether the header lines `lines` (as `Request.headers`) have `name`.
+fn hasHeader(lines: []u8, name: []u8) bool {
+    var all = text.split(lines, "\n")
+    while all.next() |line| {
+        if text.eqlIgnoreCase(headerName(line), name) {
+            return true
+        }
+    }
+    return false
+}
+
+// The Fetch standard's request-body-header names.
+fn isBodyHeader(name: []u8) bool {
+    for body_name in [4][]u8{"content-type", "content-encoding", "content-language", "content-location"} {
+        if text.eqlIgnoreCase(name, body_name) {
+            return true
+        }
+    }
+    return false
 }
 
 // Appends the header in `h` to `list` and empties `h`.

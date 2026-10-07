@@ -1,0 +1,70 @@
+<!doctype html>
+<title>fetch methods</title>
+<pre id="out"></pre>
+<script>
+// fetch with methods, bodies and headers, through the test server's
+// /fetch-echo (tests/browser.rs: fetch_methods). Each line shows what the
+// server received; a multipart boundary is written as B.
+const out = document.getElementById('out');
+const log = s => { out.textContent += s + '\n'; };
+function show(name, e) {
+  const h = e.headers;
+  const type = h['content-type'];
+  const boundary = type && type.includes('boundary=') ? type.split('boundary=')[1] : null;
+  const body = boundary ? e.body.split(boundary).join('B') : e.body;
+  log(name + ': ' + e.method + ' ' + e.path + ' type=' + (boundary ? type.split('boundary=')[0] + 'boundary=B' : type || '-') +
+    ' length=' + (boundary ? '*' : h['content-length'] || '-') + ' body=' + JSON.stringify(body));
+}
+async function echo(name, input, init) {
+  const r = await fetch(input, init);
+  const e = JSON.parse(await r.text());
+  show(name, e);
+  return e;
+}
+(async () => {
+  await echo('string', '/fetch-echo', { method: 'POST', body: 'héllo' });
+  await echo('params', '/fetch-echo', { method: 'post', body: new URLSearchParams({ a: '1', b: 'x y' }) });
+  const fd = new FormData();
+  fd.append('name', 'value\nline');
+  fd.append('file', new Blob(['data'], { type: 'text/plain' }), 'f"1.txt');
+  fd.append('raw', new Blob([new Uint8Array([1, 2])]));
+  const f = await echo('formdata', '/fetch-echo', { method: 'POST', body: fd });
+  log('  fields: ' + JSON.stringify(f.fields));
+  const b = await echo('buffer', '/fetch-echo', { method: 'PUT', body: new Uint8Array([0, 1, 254, 255]).buffer });
+  log('  hex: ' + b.hex);
+  const v = await echo('view', '/fetch-echo', { method: 'PUT', body: new Uint8Array([9, 8, 7, 6]).subarray(1, 3) });
+  log('  hex: ' + v.hex);
+  await echo('blob', '/fetch-echo', { method: 'patch', body: new Blob(['{"a":1}'], { type: 'application/json' }) });
+  await echo('delete', '/fetch-echo?id=3', { method: 'delete' });
+  await echo('empty post', '/fetch-echo', { method: 'POST' });
+  await echo('custom method', '/fetch-echo', { method: 'FROB' });
+  await echo('options', '/fetch-echo', { method: 'OPTIONS' });
+  const hd = await echo('headers', '/fetch-echo', {
+    method: 'POST',
+    body: '{}',
+    headers: { 'X-Custom': 'yes', 'Content-Type': 'application/json', Accept: 'application/json', 'Sec-Thing': 'no', 'Proxy-Thing': 'no' },
+  });
+  log('  x-custom=' + hd.headers['x-custom'] + ' accept=' + hd.headers.accept + ' sec-thing=' + hd.headers['sec-thing'] + ' proxy-thing=' + hd.headers['proxy-thing']);
+  const appended = new Headers([['X-Twice', 'a'], ['X-Twice', 'b']]);
+  const tw = await echo('combined', '/fetch-echo', { headers: appended });
+  log('  x-twice=' + tw.headers['x-twice']);
+  const rq = await echo('request', new Request('/fetch-echo', { method: 'PUT', body: 'from a Request', headers: { 'X-Custom': 'req' } }));
+  log('  x-custom=' + rq.headers['x-custom']);
+  const head = await fetch('/fetch-echo', { method: 'HEAD' });
+  log('head: ' + head.status + ' body=' + JSON.stringify(await head.text()));
+  for (const method of ['POST', 'PUT']) {
+    for (const status of [301, 302, 303, 307, 308]) {
+      const r = await fetch('/fetch-redirect/' + status, { method, body: 'moved', headers: { 'X-Custom': 'kept' } });
+      const e = JSON.parse(await r.text());
+      log(method + ' ' + status + ': ' + e.method + ' ' + e.path + ' type=' + (e.headers['content-type'] || '-') + ' body=' + JSON.stringify(e.body) + ' x-custom=' + e.headers['x-custom']);
+    }
+  }
+  try {
+    await fetch('/fetch-echo', { method: 'GET', body: 'no' });
+  } catch (e) {
+    log('GET with a body: ' + e.name);
+  }
+  // Node sends a forbidden Content-Length and fails; a browser drops it.
+  await echo('content-length', '/fetch-echo', { method: 'POST', body: 'abc', headers: { 'Content-Length': '99' } });
+})().catch(e => log('error: ' + e));
+</script>

@@ -151,7 +151,7 @@ fn startJob(alloc: Allocator, s: *mut Session, m: *mut CurlMulti, href: []u8, re
         at.deinit(alloc)
         return null
     }
-    job.headers = prepare(alloc, curl, address.ptr, &job.at, req, null, s, &mut job.sink) catch |e| {
+    job.headers = prepare(alloc, curl, address.ptr, &job.at, req, "GET", null, s, &mut job.sink) catch |e| {
         freeJob(alloc, job)
         return null
     }

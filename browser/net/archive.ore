@@ -27,6 +27,16 @@ fn archivePath(alloc: Allocator, dir: []u8, target: *Url, req: Request) AllocErr
     for b in target.withoutFragment() {
         hash = (hash ^ b as u64) *% 0x100000001b3
     }
+    // The method, but for GET (so that GET archives keep their names).
+    var method = req.method
+    if method.len == 0 && req.body != null {
+        method = "POST"
+    }
+    if method.len > 0 && !text.eql(method, "GET") {
+        for b in method {
+            hash = (hash ^ b as u64) *% 0x100000001b3
+        }
+    }
     if req.body |body| {
         for b in body.content_type {
             hash = (hash ^ b as u64) *% 0x100000001b3

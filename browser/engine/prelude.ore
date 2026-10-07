@@ -1628,7 +1628,9 @@ pub let PRELUDE =
     \\        type = 'application/x-www-form-urlencoded;charset=UTF-8';
     \\      } else if (initBody instanceof Blob) {
     \\        if (initBody.type !== '') type = initBody.type;
-    \\      } else if (!(initBody instanceof ArrayBuffer || ArrayBuffer.isView(initBody) || initBody instanceof FormData)) {
+    \\      } else if (initBody instanceof FormData) {
+    \\        type = 'multipart/form-data; boundary=' + FORM_BOUNDARY;
+    \\      } else if (!(initBody instanceof ArrayBuffer || ArrayBuffer.isView(initBody))) {
     \\        body = String(initBody);
     \\        type = 'text/plain;charset=UTF-8';
     \\      }
@@ -1668,8 +1670,38 @@ pub let PRELUDE =
     \\hidden(G, 'Headers', Headers);
     \\hidden(G, 'Response', Response);
     \\hidden(G, 'Request', Request);
-    \\// fetch: GET only; the request is made at once (synchronously), the
-    \\// promise settles in a microtask.
+    \\// The boundary of multipart/form-data bodies: the one of form
+    \\// submissions (forms.ore's BOUNDARY), fixed so that a request is the
+    \\// same from one run to the next (replay archives hash the body).
+    \\const FORM_BOUNDARY = '----anyknownFormBoundary7MA4YWxkTrZu0gW';
+    \\// The multipart/form-data body of a FormData, as a string of bytes
+    \\// (HTML's multipart/form-data encoding, as forms.ore's multipartBody).
+    \\function formDataBytes(fd) {
+    \\  const escape = s => s.replace(/"/g, '%22').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+    \\  const parts = [];
+    \\  for (const [name, value] of fd._list) {
+    \\    parts.push('--' + FORM_BOUNDARY + '\r\nContent-Disposition: form-data; name="' + escape(name) + '"');
+    \\    if (value instanceof File) {
+    \\      parts.push('; filename="' + escape(value.name) + '"\r\nContent-Type: ' + (value.type || 'application/octet-stream') + '\r\n\r\n', value, '\r\n');
+    \\    } else {
+    \\      parts.push('\r\n\r\n' + value.replace(/\r\n|\r|\n/g, '\r\n') + '\r\n');
+    \\    }
+    \\  }
+    \\  parts.push('--' + FORM_BOUNDARY + '--\r\n');
+    \\  return blobBytes(parts);
+    \\}
+    \\// The Fetch standard's forbidden request-header names: the browser's
+    \\// own headers, which a script cannot set.
+    \\const FORBIDDEN_HEADERS = new Set(['accept-charset', 'accept-encoding', 'access-control-request-headers', 'access-control-request-method', 'connection', 'content-length', 'cookie', 'cookie2', 'date', 'dnt', 'expect', 'host', 'keep-alive', 'origin', 'referer', 'set-cookie', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'via']);
+    \\function forbiddenHeader(name, value) {
+    \\  if (FORBIDDEN_HEADERS.has(name) || name.startsWith('proxy-') || name.startsWith('sec-')) return true;
+    \\  if (name !== 'x-http-method' && name !== 'x-http-method-override' && name !== 'x-method-override') return false;
+    \\  return value.split(',').some(m => ['CONNECT', 'TRACE', 'TRACK'].includes(m.trim().toUpperCase()));
+    \\}
+    \\// fetch: the request is made at once (synchronously), the promise
+    \\// settles in a microtask. The headers sent are the Request's, but the
+    \\// forbidden ones; the body goes as bytes (null for none; an empty one
+    \\// for a POST or PUT without one, as Content-Length: 0).
     \\hidden(G, 'fetch', function (input, init) {
     \\  return new Promise((resolve, reject) => {
     \\    const req = new Request(input, init);
@@ -1677,11 +1709,13 @@ pub let PRELUDE =
     \\      reject(req.signal.reason);
     \\      return;
     \\    }
-    \\    if (req.method !== 'GET') {
-    \\      reject(new TypeError('Failed to fetch: only GET is supported'));
-    \\      return;
-    \\    }
-    \\    const r = ak.fetch(req.url);
+    \\    const headers = req.headers._sorted().filter(p => !forbiddenHeader(p[0], p[1])).map(p => p[0] + ': ' + p[1]).join('\n');
+    \\    const body = req._body;
+    \\    let bytes;
+    \\    if (body instanceof FormData) bytes = formDataBytes(body);
+    \\    else if (body !== null) bytes = blobBytes([body]);
+    \\    else if (req.method === 'POST' || req.method === 'PUT') bytes = '';
+    \\    const r = ak.fetch(req.url, req.method, headers, bytes);
     \\    if (r.error !== undefined) reject(new TypeError('Failed to fetch: ' + r.error));
     \\    else resolve(new Response(r));
     \\  });
