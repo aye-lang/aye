@@ -1010,6 +1010,14 @@ fn agent_sessions() {
     assert!(failures.is_empty(), "{} of {} agent sessions failed:\n\n{}", failures.len(), inputs.len(), failures.join("\n"));
 }
 
+/// `text-overflow: ellipsis` is only drawn: the Markdown keeps the whole
+/// text (the layout fixture `text_overflow.html` checks the ellipsis).
+#[test]
+fn text_overflow_markdown() {
+    let page = "data:text/html,<div style='width:100px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>A very long title</div>";
+    expect(&["dump", "--md", page], 0, "A very long title\n", "");
+}
+
 #[test]
 fn agent_errors() {
     let usage = "error: usage: anyknown dump --a11y [--boxes] [--json] | --md [--refs] [--js] [--width PX] [--no-scroll | --scroll-steps N] FILE|URL\n";

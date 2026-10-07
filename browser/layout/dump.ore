@@ -142,6 +142,14 @@ fn dumpFrag(t: *Tree, f: Frag, depth: usize, cx: f64, cy: f64, out: *mut text.Bu
             try quote(out, t.bx(f.box).text[f.start..f.end])
             try out.appendByte('\n')
         }
+        .Ellipsis => {
+            try indentBy(out, d)
+            try out.append("ellipsis ")
+            try rect(out, cx + f.x, cy + f.y, f.w, f.h)
+            try out.appendByte(' ')
+            try quote(out, f.ellipsis)
+            try out.appendByte('\n')
+        }
         .Inline => {
             try indentBy(out, d)
             try out.append("inline")

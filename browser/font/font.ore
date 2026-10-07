@@ -102,6 +102,8 @@ pub struct Metrics {
 pub interface Measurer {
     fn metrics(self: *mut Self, f: Font) Metrics
     fn width(self: *mut Self, f: Font, s: []u8) f64
+    // Does one of the faces `f` draws with have a glyph for `code`?
+    fn hasGlyph(self: *mut Self, f: Font, code: u32) bool
     // Should the file of the web font `d` be fetched (it is not there
     // yet, and did not fail before)? The fixed-metric font ignores web
     // fonts.
@@ -133,6 +135,10 @@ pub struct Fixed {
             i += d.len
         }
         return ems * f.size
+    }
+
+    pub fn hasGlyph(self: *mut Self, f: Font, code: u32) bool {
+        return true
     }
 
     pub fn webFontWanted(self: *mut Self, d: FaceDesc) bool {

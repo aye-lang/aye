@@ -214,6 +214,9 @@ pub enum FragKind {
     Inline
     // An atomic inline (inline-block, image, ...): see the box itself.
     Atomic
+    // The ellipsis of `text-overflow` at the end of a line: `ellipsis`
+    // in the font of `box`, the block container.
+    Ellipsis
 }
 
 /// A piece of a line; its border box relative to the block container's
@@ -232,6 +235,10 @@ pub struct Frag {
     h: f64
     // Text at an odd bidi level: drawn right to left.
     rtl: bool = false
+    // Atomic: replaced by the ellipsis of `text-overflow`, not drawn.
+    hidden: bool = false
+    // Ellipsis: its text (static).
+    ellipsis: []u8 = ""
 }
 
 pub struct Tree {

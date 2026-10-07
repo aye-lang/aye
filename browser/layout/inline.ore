@@ -516,6 +516,7 @@ fn layoutInline(t: *mut Tree, i: usize, avail: f64) AllocError!f64 {
         strut: textMetrics(t, t.bx(i).style),
         align: keywordOf(t.bx(i).style[css.TEXT_ALIGN]),
         rtl: rtl,
+        ellipsis: !isKeyword(t.bx(i).style[css.OVERFLOW_X], "visible") && isKeyword(t.bx(i).style[css.TEXT_OVERFLOW], "ellipsis"),
         y: 0.0,
         open: &mut open,
     }
@@ -631,6 +632,8 @@ struct LineBuilder {
     align: []u8
     // The paragraph is right to left: `start` aligns right.
     rtl: bool
+    // `text-overflow: ellipsis` on a container that clips its overflow.
+    ellipsis: bool
     // The top of the next line.
     y: f64
     open: *mut List(usize)
@@ -735,6 +738,7 @@ struct LineBuilder {
         // A line with right-to-left text has its own order (bidi.ore).
         if try bidiLine(self, kp, self.left + offset, extra, baseline) {
             self.t.lines.items()[line_index].frag_end = self.t.frags.len()
+            try self.ellipsize(line_index, baseline)
             self.y += above + below
             return
         }
@@ -829,7 +833,99 @@ struct LineBuilder {
             self.t.frags.items()[o.frag].w = x - o.left
         }
         self.t.lines.items()[line_index].frag_end = self.t.frags.len()
+        try self.ellipsize(line_index, baseline)
         self.y += above + below
+    }
+
+    // `text-overflow: ellipsis` (CSS Overflow 3): when the text or atomic
+    // inlines of line `li` go past the end of the line box, the
+    // characters and atomic inlines that do not fit before an ellipsis
+    // are hidden, and the ellipsis follows what is left. Left to right
+    // paragraphs only; `baseline` is the line's, from the container's top.
+    fn ellipsize(self: *mut Self, li: usize, baseline: f64) AllocError!void {
+        if !self.ellipsis || self.rtl {
+            return
+        }
+        let line = self.t.lines.items()[li]
+        let right = self.left + self.avail
+        var over = false
+        for fi in line.frag_start..line.frag_end {
+            let f = self.t.frags.items()[fi]
+            if (f.kind == FragKind.Text || f.kind == FragKind.Atomic) && f.x + f.w > right + 0.001 {
+                over = true
+            }
+        }
+        if !over {
+            return
+        }
+        let m = textMetrics(self.t, self.t.bx(self.container).style)
+        let es = ellipsisText(self.t, m.font)
+        let ew = self.t.measure.width(m.font, es)
+        let limit = right - ew
+        // The end of the content that stays.
+        var end = self.left
+        for fi in line.frag_start..line.frag_end {
+            let f = &mut self.t.frags.items()[fi]
+            if f.kind == FragKind.Atomic {
+                if f.x + f.w > limit + 0.001 {
+                    f.hidden = true
+                } else {
+                    end = math.max(end, f.x + f.w)
+                }
+            } else if f.kind == FragKind.Text && f.x + f.w > limit + 0.001 {
+                f.end = self.fitting(f.*, limit - f.x)
+                let tf = textMetrics(self.t, self.t.bx(f.box).style).font
+                f.w = self.t.measure.width(tf, self.t.bx(f.box).text[f.start..f.end])
+                if f.end > f.start {
+                    end = math.max(end, f.x + f.w)
+                }
+            } else if f.kind == FragKind.Text {
+                end = math.max(end, f.x + f.w)
+            }
+        }
+        // The parts of inline boxes on the line end there too.
+        for fi in line.frag_start..line.frag_end {
+            let f = &mut self.t.frags.items()[fi]
+            if f.kind == FragKind.Inline && f.x + f.w > end {
+                f.w = math.max(0.0, end - f.x)
+            }
+        }
+        try self.t.frags.append(Frag {
+            kind: FragKind.Ellipsis,
+            box: self.container,
+            depth: 0,
+            start: 0,
+            end: 0,
+            x: end,
+            y: baseline - m.ascent,
+            w: ew,
+            h: m.ascent + m.descent,
+            ellipsis: es,
+        })
+        self.t.lines.items()[li].frag_end = self.t.frags.len()
+    }
+
+    // The end of the whole characters at the start of text fragment `f`
+    // that fit in `room` px (none of right to left text), a combining
+    // mark staying with its base.
+    fn fitting(self: *mut Self, f: Frag, room: f64) usize {
+        if f.rtl {
+            return f.start
+        }
+        let s = self.t.bx(f.box).text
+        let tf = textMetrics(self.t, self.t.bx(f.box).style).font
+        var j = f.start
+        while j < f.end {
+            var n = j + text.decode(s[j..f.end]).len
+            while n < f.end && font.columns(text.decode(s[n..f.end]).code) == 0 {
+                n += text.decode(s[n..f.end]).len
+            }
+            if self.t.measure.width(tf, s[f.start..n]) > room + 0.001 {
+                break
+            }
+            j = n
+        }
+        return j
     }
 
     // Keeps track of the inline boxes open across lines on a line

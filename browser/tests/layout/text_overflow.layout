@@ -1,0 +1,30 @@
+viewport 800x600
+  block <html> (0, 0) 800x120
+    block <body> (0, 0) 800x120
+      block <div class="e"> (0, 0) 100x20
+        line (0, 0) 100x20
+          text (0, 2) 88x16 "A very long"
+          ellipsis (88, 2) 8x16 "…"
+      block <div> (0, 20) 100x20
+        line (0, 20) 100x20
+          text (0, 22) 136x16 "A very long title"
+      block <div class="e"> (0, 40) 100x20
+        line (0, 40) 100x20
+          text (0, 42) 40x16 "Short"
+      block <div class="e"> (0, 60) 100x20
+        line (0, 60) 100x20
+          inline <b> (0, 62) 32x16
+            text (0, 62) 32x16 "Long"
+          text (32, 62) 8x16 " "
+          inline <i> (40, 62) 48x16
+            text (40, 62) 48x16 "words "
+          ellipsis (88, 62) 8x16 "…"
+      block <div class="e"> (0, 80) 100x20
+        line (0, 80) 100x20
+          text (0, 82) 32x16 "abc "
+          replaced <img> (32, 84.8) 30x10
+          text (62, 82) 24x16 " de"
+          ellipsis (86, 82) 8x16 "…"
+      block <div class="e" style="overflow: visible"> (0, 100) 100x20
+        line (0, 100) 100x20
+          text (0, 102) 136x16 "A very long title"
