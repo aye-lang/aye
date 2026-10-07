@@ -1,0 +1,1 @@
+{"cmd": "click", "target": {"role": "link", "name": "<summary>"}, "expect": {"url": "https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/summary", "snapshot": ["- heading \"<summary> HTML disclosure summary element\" [level=1]"]}}

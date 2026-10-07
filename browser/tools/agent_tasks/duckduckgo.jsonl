@@ -1,0 +1,1 @@
+{"cmd":"type","target":{"role":"textbox","name":""},"text":"rust programming language","submit":true,"expect":{"url":"https://html.duckduckgo.com/html/","title":"rust programming language at DuckDuckGo","snapshot":["rust-lang.org"]}}

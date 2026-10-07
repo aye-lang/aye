@@ -1,5 +1,5 @@
 {
-  "_comment": "Expectations per site for `page_load.py check`. status is the last run of docs/browser-sites.md (ok, warn, fail; excluded: not judged). max_errors: [error] console entries of an agent navigate on the replay. md: strings `dump --md --js` must contain. Values hold on the archives captured 2026-10-07; tighten them as sites are fixed.",
+  "_comment": "Expectations per site for `page_load.py check`. status is the last run of docs/browser-sites.md (ok, warn, fail; excluded: not judged). max_errors: [error] console entries of an agent navigate on the replay. md: strings `dump --md --js` must contain. task_fails (optional): the failure `check --agent` prints today for the site's task in agent_tasks/; another failure fails the site. Values hold on the archives captured 2026-10-07; tighten them as sites are fixed.",
   "sites": {
     "example": {
       "status": "ok",
@@ -23,6 +23,7 @@
       "status": "warn",
       "max_errors": 1,
       "md": ["## Repository navigation", "- [Actions](https://github.com/rust-lang/rust/actions)", "## Unable to load page."],
+      "task_fails": "step 1 (click): url 'https://github.com/rust-lang/rust', expected 'https://github.com/rust-lang/rust/issues'",
       "note": "Commit message, date columns and commit bar stay skeletons; empty Latest commit and History sections. The file list renders \"Unable to load page.\". Replay logs a React Router render error, TypeError: Illegal invocation (plan P3.22)."
     },
     "mdn": {
@@ -113,6 +114,7 @@
       "status": "fail",
       "max_errors": 0,
       "md": ["Try searching to get started"],
+      "task_fails": "step 1 (type): result 'typed \"ore programming language\" into combobox [e3]; a script canceled the submission' lacks 'loaded https://www.youtube.com/results?search_query=ore+programming+language'",
       "note": "Only the loading skeleton on screen; the feed does not render. The Markdown now has the logged-out 'Try searching' prompt."
     },
     "react": {
@@ -125,6 +127,7 @@
       "status": "warn",
       "max_errors": 3,
       "md": ["Mistral Large 4", "min read", "Share this post"],
+      "task_fails": "step 1 (click): url 'https://mistral.ai/news/mistral-large-4/', expected 'https://mistral.ai/news/'",
       "note": "Hero title hidden (three.js needs WebGL); embedded iframe widgets broken. Replay logs 2 WebGL context errors and one 'reading load'."
     }
   }

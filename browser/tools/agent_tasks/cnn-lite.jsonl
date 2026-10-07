@@ -1,0 +1,1 @@
+{"cmd": "click", "target": {"role": "link", "href": "/20"}, "expect": {"result": "loaded https://lite.cnn.com/20", "snapshot": ["[level=2]", "- paragraph: Source: CNN"]}}

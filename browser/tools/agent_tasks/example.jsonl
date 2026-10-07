@@ -1,0 +1,1 @@
+{"cmd": "click", "target": {"role": "link", "name": "Learn more"}, "expect": {"url": "https://www.iana.org/help/example-domains", "title": "Example Domains", "snapshot": ["- heading \"Example Domains\" [level=1]"]}}
