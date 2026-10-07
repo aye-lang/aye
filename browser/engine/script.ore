@@ -1244,7 +1244,7 @@ fn runTimer(s: *mut Script, i: usize) AllocError!void {
     // The task's load ends with it (its callback reads the response).
     defer {
         if t.load != 0 {
-            net.releaseLoad(t.load)
+            releaseImageLoad(s.page, t.load)
         }
     }
     if t.repeat {
@@ -1291,7 +1291,7 @@ fn removeTimer(s: *mut Script, id: u32) {
     for i, t in s.timers.items() {
         if t.id == id {
             if t.load != 0 {
-                net.releaseLoad(t.load)
+                releaseImageLoad(s.page, t.load)
             }
             s.it.removeRoot(t.root)
             s.timers.orderedRemove(i)

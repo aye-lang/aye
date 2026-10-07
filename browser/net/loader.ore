@@ -11,8 +11,9 @@
 // A load follows redirects itself (each hop stores its cookies) and its
 // response is kept under the URL that was asked for, the final URL as
 // its `url`; a failure (libcurl's, a body too large) is remembered for
-// `loadFailed`. Loads of the same URL are one load with several users;
-// it ends when the last one releases it, aborted if it still runs.
+// `loadFailed` (and `failedHref`, for the page's images to keep). Loads
+// of the same URL are one load with several users; it ends when the
+// last one releases it, aborted if it still runs.
 // Under ANYKNOWN_REPLAY a load is done at once (the archive answers the
 // request that follows).
 
@@ -141,6 +142,17 @@ pub fn loadFailed(href: []u8) bool {
     let ld = loader orelse return false
     let l = findLoad(ld, href) orelse return false
     return l.state == LoadState.Failed
+}
+
+/// The URL (without the fragment) of the load `id` when it failed;
+/// null when it did not, or there is none.
+pub fn failedHref(id: u32) ?[]u8 {
+    let ld = loader orelse return null
+    let l = loadById(ld, id) orelse return null
+    if l.state != LoadState.Failed {
+        return null
+    }
+    return l.href
 }
 
 /// Is any load running?
