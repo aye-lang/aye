@@ -65,9 +65,10 @@ struct Geometry {
     restyled: usize
 }
 
-// At most this many changes are kept for the next layout (`noteLayoutChange`):
-// beyond, the whole document is styled again.
-let MAX_RESTYLE: usize = 256
+// At most this many different changes are kept for the next layout
+// (`noteLayoutChange`): beyond, the whole document is styled again.
+// YouTube's search results make 256 to 4096 of them between two reads.
+let MAX_RESTYLE: usize = 4096
 
 // Styling an element again reuses its values but not the rest it
 // allocates (custom properties, pseudo-elements, style attributes):
@@ -178,11 +179,41 @@ fn noteLayoutChange(s: *mut Script, at: NodeId, change: css.StyleChange) AllocEr
     if s.geom == null || s.restyle_all {
         return
     }
+    // The same change again (children appended one by one to the same
+    // parent) is kept once.
+    let key = changeKey(at, change)
+    if s.restyle_seen.get(key) |i| {
+        let old = s.restyle.items()[i]
+        if dom.same(old.at, at) && old.what.what == change.what && old.what.token == change.token {
+            return
+        }
+    }
     if s.restyle.len() >= MAX_RESTYLE {
         s.restyle_all = true
+        clearChanges(s)
         return
     }
+    try s.restyle_seen.put(key, s.restyle.len())
     try s.restyle.append(Change { at: at, what: change })
+}
+
+// The key of a change in `Script.restyle_seen` (two changes may share one).
+fn changeKey(at: NodeId, change: css.StyleChange) u64 {
+    var k = change.what *% 0x9E3779B97F4A7C15
+    k = k ^ ((at.index as u64) << 32) ^ (at.generation as u64)
+    if change.token {
+        k = k ^ 0xC2B2AE3D27D4EB4F
+    }
+    return k
+}
+
+// Forgets the changes noted for the next layout.
+fn clearChanges(s: *mut Script) {
+    s.restyle.clear()
+    if s.restyle_seen.len() > 0 {
+        s.restyle_seen.deinit()
+        s.restyle_seen = IntMap(u64, usize).init(s.alloc)
+    }
 }
 
 /// The state of the element `el` changed (`:defined`).
@@ -216,7 +247,7 @@ fn geometry(s: *mut Script) AllocError!*mut Geometry {
         if fresh {
             // Nothing the styles depend on changed (a class no rule
             // names): only the layout is done again.
-            s.restyle.clear()
+            clearChanges(s)
             s.restyle_all = false
         } else {
             fresh = restyle(s, g, st) catch |e| {
@@ -244,7 +275,7 @@ fn geometry(s: *mut Script) AllocError!*mut Geometry {
         }
     }
     dropGeometry(s)
-    s.restyle.clear()
+    clearChanges(s)
     s.restyle_all = false
     let styles = try s.alloc.create(try css.Styles.init(s.alloc))
     errdefer {
@@ -318,7 +349,7 @@ fn restyle(s: *mut Script, g: *mut Geometry, st: *Styling) AllocError!bool {
         return false
     }
     g.restyled += try css.restyleSubtrees(&p.doc, &st.ua, &st.author, st.media, roots.items(), shallow.items(), g.styles)
-    s.restyle.clear()
+    clearChanges(s)
     return true
 }
 
