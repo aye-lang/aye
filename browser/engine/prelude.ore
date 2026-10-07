@@ -1080,7 +1080,7 @@ pub let PRELUDE =
     \\    else if (c.localName === 'body' && !body) body = c;
     \\  }
     \\  const d = Object.create(Object.prototype);
-    \\  for (const k of ['createElement', 'createElementNS', 'createTextNode', 'createComment', 'createDocumentFragment', 'createEvent', 'createAttribute', 'importNode', 'adoptNode']) {
+    \\  for (const k of ['createElement', 'createElementNS', 'createTextNode', 'createComment', 'createDocumentFragment', 'createEvent', 'createAttribute', 'createTreeWalker', 'createNodeIterator', 'createRange', 'importNode', 'adoptNode']) {
     \\    hidden(d, k, function () { return document[k].apply(document, arguments); });
     \\  }
     \\  hidden(d, 'getElementById', id => html.querySelector('[id="' + String(id).replace(/["\\]/g, '\\$&') + '"]'));
@@ -1662,6 +1662,11 @@ pub let PRELUDE =
     \\    if (r.type) this.headers.append('content-type', r.type);
     \\    hidden(this, '_body', r.body);
     \\    hidden(this, '_bodyUsed', false);
+    \\  }
+    \\  // Turbo (GitHub) reads the HTML of a clone.
+    \\  clone() {
+    \\    if (this._bodyUsed) throw new TypeError("Failed to execute 'clone' on 'Response': Response body is already used");
+    \\    return new Response({ status: this.status, url: this.url, type: this.headers.get('content-type'), body: this._body });
     \\  }
     \\}
     \\bodyMethods(Response, 'Response');
@@ -3084,11 +3089,18 @@ pub let PRELUDE =
     \\
     \\// DOMParser and XMLSerializer: HTML only (a page has one document, so the
     \\// parsed one is a stand-in, as createHTMLDocument's).
+    \\// A parsed document's nodes say it is their ownerDocument (by their
+    \\// root) until they are inserted elsewhere: Turbo imports a frame
+    \\// element only from another document, and so upgrades it.
+    \\const parsedDocs = new WeakMap();
+    \\let parsedCount = 0;
     \\class DOMParser {
     \\  parseFromString(src, type) {
     \\    // Parsed as a document: a regex for <head> and <body> took them from
     \\    // a script's text on mistral.ai.
     \\    const d = standInDocument(ak.parseDocument(String(src)));
+    \\    parsedDocs.set(d.documentElement, d);
+    \\    parsedCount++;
     \\    const t = d.head && d.head.querySelector('title');
     \\    d.title = t ? t.textContent : '';
     \\    return d;
@@ -3811,7 +3823,13 @@ pub let PRELUDE =
     \\const nativeOwnerDocument = Object.getOwnPropertyDescriptor(NodeP, 'ownerDocument').get;
     \\getter(NodeP, 'ownerDocument', function () {
     \\  const d = nativeOwnerDocument.call(this);
-    \\  return d !== null && ak.inTemplate(this) ? inertDoc : d;
+    \\  if (d === null) return null;
+    \\  if (ak.inTemplate(this)) return inertDoc;
+    \\  if (parsedCount > 0 && !nativeIsConnected.call(this)) {
+    \\    const p = parsedDocs.get(this.getRootNode());
+    \\    if (p) return p;
+    \\  }
+    \\  return d;
     \\});
     \\
     \\// ElementInternals: the state and ARIA properties are kept, forms are
