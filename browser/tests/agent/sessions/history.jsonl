@@ -1,0 +1,13 @@
+{"id":1,"cmd":"navigate","url":"browser/tests/agent/site/spa.html"}
+{"id":2,"cmd":"click","ref":"e2"}
+{"id":3,"cmd":"click","ref":"e3"}
+{"id":4,"cmd":"back"}
+{"id":5,"cmd":"eval","expression":"history.length + ' ' + JSON.stringify(history.state) + ' ' + location.search"}
+{"id":6,"cmd":"forward"}
+{"id":7,"cmd":"click","ref":"e4"}
+{"id":8,"cmd":"back"}
+{"id":9,"cmd":"back"}
+{"id":10,"cmd":"back"}
+{"id":11,"cmd":"forward"}
+{"id":12,"cmd":"eval","expression":"history.go(2)"}
+{"id":13,"cmd":"snapshot"}

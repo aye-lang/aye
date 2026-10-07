@@ -119,7 +119,7 @@ fn navigate(s: *mut Session, tmp: Allocator, target: []u8) AllocError!Outcome {
 /// document when only the fragment differs, else by loading it.
 fn goTo(s: *mut Session, tmp: Allocator, target: *Url) AllocError!Outcome {
     if s.tab.sameDocument(target) {
-        try s.tab.push(target, null)
+        try s.tab.toFragment(target)
         s.tab.settle(maxScroll(s))
         return done(try concat(tmp, "scrolled to #", target.fragment, ""))
     }
@@ -131,7 +131,9 @@ fn goTo(s: *mut Session, tmp: Allocator, target: *Url) AllocError!Outcome {
     return opened(s, tmp)
 }
 
-/// Back (`step` -1), forward (1) or reload (0).
+/// Back (`step` -1), forward (1) or reload (0); a script's history.go
+/// may move further. An entry of the document shown is moved to in the
+/// document (popstate); another is loaded, with its state.
 fn moveInHistory(s: *mut Session, tmp: Allocator, step: i64) AllocError!Outcome {
     if s.tab.page == null {
         return failed("no page: navigate first")
@@ -143,10 +145,19 @@ fn moveInHistory(s: *mut Session, tmp: Allocator, step: i64) AllocError!Outcome 
         }
         return failed("no next page in the history")
     }
+    if step != 0 && try s.tab.inDocument(step) {
+        try relayout(s)
+        s.tab.settle(maxScroll(s))
+        var went: []u8 = "went forward to "
+        if step < 0 {
+            went = "went back to "
+        }
+        return done(try concat(tmp, went, s.tab.href(), " in the same document"))
+    }
     let target = url.parse(tmp, href) catch |e| {
         return failed(try concat(tmp, "not a URL: ", href, ""))
     }
-    let p = try engine.load(s.alloc, &target)
+    let p = try engine.loadState(s.alloc, &target, s.tab.stateAt(step))
     if p.failure.len > 0 {
         return refused(tmp, p)
     }

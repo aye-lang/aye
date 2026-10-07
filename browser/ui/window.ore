@@ -647,20 +647,29 @@ pub struct Ui {
     }
 
     fn back(self: *mut Self) AllocError!void {
-        if try self.tab.back() {
-            try self.navigated(true)
-        }
+        return self.goBy(-1)
     }
 
     fn forward(self: *mut Self) AllocError!void {
-        if try self.tab.forward() {
-            try self.navigated(true)
-        }
+        return self.goBy(1)
     }
 
     fn reload(self: *mut Self) AllocError!void {
-        if try self.tab.reload() {
-            try self.navigated(true)
+        return self.goBy(0)
+    }
+
+    // Moves `step` entries in the history (0: reload): in the document
+    // shown, its scripts got popstate; else a page was loaded.
+    fn goBy(self: *mut Self, step: i64) AllocError!void {
+        match try self.tab.go(step) {
+            .None => {}
+            .InDocument => {
+                try self.navigated(false)
+                try self.afterScripts()
+            }
+            .Loaded => {
+                try self.navigated(true)
+            }
         }
     }
 
@@ -1211,10 +1220,7 @@ pub struct Ui {
                 return self.go(&target)
             }
             .History => {
-                if nav.step < 0 {
-                    return self.back()
-                }
-                return self.forward()
+                return self.goBy(nav.step)
             }
             .Reload => {
                 return self.reload()
@@ -1229,6 +1235,11 @@ pub struct Ui {
         if engine.treeVersion(p) != self.laid_version {
             try self.relayout()
             try self.setTitle()
+        }
+        // pushState, replaceState or a fragment navigation of the scripts.
+        if self.focus != Focus.Address && !text.eql(self.address.bytes(), self.tab.href()) {
+            try self.address.set(self.tab.href())
+            self.dirty = true
         }
         if engine.takeScriptScroll(p) |y| {
             self.scrollTo(y)

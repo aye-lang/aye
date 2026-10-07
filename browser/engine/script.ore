@@ -303,6 +303,9 @@ pub struct Script {
     // The page listens for the window's scroll or observes intersections
     // (`ak.watchScroll`): a dump's scroll through it may load more.
     watches_scroll: bool = false
+    // The root of the prelude's `hostHistory` (NONE before it ran):
+    // traversals and fragment navigations of the front end (history.ore).
+    history_hook: u32 = js.NONE
 
     // ---- js.Host
 
