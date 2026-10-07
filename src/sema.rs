@@ -1710,6 +1710,7 @@ impl<'a> Checker<'a> {
                 }
             }
             TExprKind::Cast(x) => match (self.fold(x)?, &e.ty) {
+                (ConstVal::Bool(b), _) => ConstVal::Int(b as i128),
                 (ConstVal::Int(v), Type::Int(it)) => ConstVal::Int(fits(v, *it, span)?),
                 (ConstVal::Int(v), t) => ConstVal::Float(round_float(v as f64, t)),
                 (ConstVal::Float(f), Type::Int(it)) => {
@@ -3822,9 +3823,14 @@ impl<'a> Checker<'a> {
             ExprKind::Cast { expr, ty } => {
                 let to = self.resolve_type(ty)?;
                 let t = self.value(expr, None)?;
-                // A `T` with `where T: Integer` converts like an integer.
-                if !(t.ty.is_numeric() || self.integer_param(&t.ty)) || !(to.is_numeric() || self.integer_param(&to)) {
+                // A `T` with `where T: Integer` converts like an integer; a
+                // `bool` converts to an integer (false is 0, true is 1).
+                let numeric = |ty: &Type| ty.is_numeric() || self.integer_param(ty);
+                let bool_to_int = t.ty == Type::Bool && self.int_like(&to);
+                if !bool_to_int && (!numeric(&t.ty) || !numeric(&to)) {
                     let hint = match (&t.ty, &to) {
+                        (Type::Bool, Type::Float(_)) => format!(" (cast to an integer first: `(b as u8) as {to}`)"),
+                        (_, Type::Bool) if t.ty.is_numeric() => " (compare instead: `x != 0`)".to_string(),
                         (Type::Param(_, p), _) if to.is_numeric() => format!(" (add `where {p}: Integer` to convert it like an integer)"),
                         (_, Type::Param(_, p)) => format!(" (add `where {p}: Integer` to convert numbers to it)"),
                         _ => " (only numeric casts are supported)".to_string(),

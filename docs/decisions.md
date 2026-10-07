@@ -87,10 +87,11 @@ answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
   - Slicing an array gives a `[]mut T` when the array could be borrowed with `&mut` (a `var`, or data behind a `*mut`), as in Zig; otherwise a `[]T`. Slicing a slice keeps its type. String literals are `[]u8`.
 - **Slicing an array** requires the array to be stored in a variable or other place, not a temporary value.
 - **`.len`** works on arrays and slices and has type `usize`. **`.ptr`** works on slices and has type `[*]T`.
-- **`as` casts** are numeric only; pointer types are converted with `@ptrCast` (M7, see C interop).
+- **`as` casts** are numeric only (plus bool to int, below); pointer types are converted with `@ptrCast` (M7, see C interop).
   - int to int is checked: the program panics in debug and safe mode when the value does not fit the target type. It never truncates silently.
   - float to int is also checked: the program panics on NaN and on values out of range. The conversion truncates toward zero.
   - int to float and float to float use plain C conversion.
+  - bool to int (P2.1, gap #48) gives 0 or 1 for every integer type, as in Rust, so a comparison result can be stored in a number without a branch. Int to bool stays an error (write `n != 0`, which says which values are true), and so does bool to float (Rust has neither); `(b as u8) as f64` spells it.
 - **Integer arithmetic:**
   - `+ - * / %` and unary `-` panic on overflow. `/` and `%` also panic on division by zero. `MIN / -1` and `MIN % -1` count as overflow.
   - `+% -% *%` wrap.
