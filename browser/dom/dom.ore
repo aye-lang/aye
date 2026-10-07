@@ -187,12 +187,7 @@ pub struct Document {
     /// (`releaseIfUnused`), which happens only to trees out of the
     /// document that scripts no longer hold; `isLive` tells.
     pub fn node(self: *Self, h: NodeId) *mut Node {
-        if self.nodes.get(h) |n| {
-            return n
-        }
-        // Unreachable: Ore has no `unreachable`, and a stale handle would
-        // be a bug here. Index the slot anyway (see COMPILER_GAPS.md).
-        return &mut self.nodes.slots[h.index].value
+        return self.nodes.get(h) orelse unreachable
     }
 
     /// A copy of `s` in the document's string arena.
