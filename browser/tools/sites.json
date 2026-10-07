@@ -1,0 +1,131 @@
+{
+  "_comment": "Expectations per site for `page_load.py check`. status is the last run of docs/browser-sites.md (ok, warn, fail; excluded: not judged). max_errors: [error] console entries of an agent navigate on the replay. md: strings `dump --md --js` must contain. Values hold on the archives captured 2026-10-07; tighten them as sites are fixed.",
+  "sites": {
+    "example": {
+      "status": "ok",
+      "max_errors": 0,
+      "md": ["This domain is for use in documentation examples", "该域名仅用于文档示例", "[Learn more](https://iana.org/help/example-domains)"],
+      "note": "Text right; the script-added translations render."
+    },
+    "wikipedia-en": {
+      "status": "ok",
+      "max_errors": 0,
+      "md": ["# Web browser", "From Wikipedia, the free encyclopedia", "A **web browser**"],
+      "note": "Looks like the real page; one figure is an empty frame."
+    },
+    "hn": {
+      "status": "ok",
+      "max_errors": 0,
+      "md": ["**[Hacker News](https://news.ycombinator.com/news)**", "1. [", " points by "],
+      "note": "Numbered list of stories; vote arrows tiny."
+    },
+    "github": {
+      "status": "warn",
+      "max_errors": 1,
+      "md": ["## Repository navigation", "[README.md](https://github.com/rust-lang/rust/blob/main/README.md)", "## Contributing"],
+      "note": "Commit message, date columns and commit bar stay skeletons; empty Latest commit and History sections. Replay logs BigInt is not defined."
+    },
+    "mdn": {
+      "status": "ok",
+      "max_errors": 18,
+      "md": ["# `<details>` HTML details disclosure element", "## In this article", "The **`<details>`**"],
+      "note": "Blank band above the header; support icons partly missing. Replay logs 16 lit 'Hydration value mismatch' and 2 '#<Object> is not iterable'."
+    },
+    "python-docs": {
+      "status": "ok",
+      "max_errors": 0,
+      "md": ["# The Python Tutorial", "1. Whetting Your Appetite"],
+      "note": "Renders like a desktop browser."
+    },
+    "rustdoc": {
+      "status": "ok",
+      "max_errors": 0,
+      "md": ["# Struct Vec", "pub struct Vec<T, A = Global>", "## Examples"],
+      "note": "Logo is a black blob; no search bar or settings button."
+    },
+    "bbc": {
+      "status": "warn",
+      "max_errors": 0,
+      "md": ["## More to explore", "## Also in news", "](https://www.bbc.com/news/articles/"],
+      "note": "Markdown has the stories; the screen looks unstyled (huge SVG wordmarks, bullet-list menus)."
+    },
+    "cnn-lite": {
+      "status": "ok",
+      "max_errors": 0,
+      "md": ["[CNN](https://lite.cnn.com/)", "Latest Stories"],
+      "note": "Plain list of stories."
+    },
+    "reddit": {
+      "status": "excluded",
+      "max_errors": 1,
+      "md": ["Skip to main content"],
+      "note": "Bot wall: logged-out clients are redirected to /login/ with no form (plan Decisions). Replay logs Request is not defined."
+    },
+    "stackoverflow": {
+      "status": "excluded",
+      "max_errors": 0,
+      "md": [],
+      "note": "Bot wall: Cloudflare challenge, HTTP 403, empty Markdown (plan Decisions)."
+    },
+    "lobsters": {
+      "status": "ok",
+      "max_errors": 0,
+      "md": ["](https://lobste.rs/s/", "](https://lobste.rs/t/", "comments]"],
+      "note": "Renders like the real page."
+    },
+    "go-docs": {
+      "status": "ok",
+      "max_errors": 0,
+      "md": ["# Effective Go", "Table of Contents", "## Introduction"],
+      "note": "Breadcrumb separator is a grey box; cookie bar covers the bottom."
+    },
+    "duckduckgo": {
+      "status": "ok",
+      "max_errors": 0,
+      "md": ["All Regions", "## [", "](https://duckduckgo.com/l/?uddg="],
+      "note": "Results readable; some favicons are empty boxes."
+    },
+    "google": {
+      "status": "ok",
+      "max_errors": 0,
+      "md": ["![Google](https://www.google.com/images/branding/", "進階搜尋"],
+      "note": "Logo, search box and zh-TW text right (captured from Taiwan); the two buttons touch."
+    },
+    "wikipedia": {
+      "status": "ok",
+      "max_errors": 0,
+      "md": ["# ウェブブラウザ", "出典: フリー百科事典『ウィキペディア（Wikipedia）』"],
+      "note": "Japanese text readable; the share pie chart (SVG) is drawn as oversized blocks."
+    },
+    "abehiroshi": {
+      "status": "ok",
+      "max_errors": 0,
+      "md": ["## Frame: http://abehiroshi.la.coocan.jp/menu.htm", "## Frame: http://abehiroshi.la.coocan.jp/top.htm", "阿部寛"],
+      "note": "Frameset and Shift_JIS right; a banner wraps in a narrow cell."
+    },
+    "zol": {
+      "status": "warn",
+      "max_errors": 0,
+      "md": ["查报价", "[新闻](https://news.zol.com.cn/)"],
+      "note": "GBK decoded; the right edge is cut off past 1024 px; slowest site."
+    },
+    "youtube": {
+      "status": "fail",
+      "max_errors": 0,
+      "md": ["Try searching to get started"],
+      "note": "Only the loading skeleton on screen; the feed does not render. The Markdown now has the logged-out 'Try searching' prompt."
+    },
+    "react": {
+      "status": "ok",
+      "max_errors": 0,
+      "md": ["# React", "The library for web and native user interfaces", "## Create user interfaces from components"],
+      "note": "Renders well; code blocks keep their line breaks."
+    },
+    "mistral": {
+      "status": "warn",
+      "max_errors": 3,
+      "md": ["Mistral Large 4", "min read", "Share this post"],
+      "note": "Hero title hidden (three.js needs WebGL); embedded iframe widgets broken. Replay logs 2 WebGL context errors and one 'reading load'."
+    }
+  }
+}

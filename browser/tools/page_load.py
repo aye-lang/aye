@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture exact browser responses, replay offline, and summarize phase traces."""
+"""Capture exact browser responses, replay offline, summarize phase traces, and check sites.json."""
 import argparse
 import hashlib
 import json
@@ -40,6 +40,7 @@ PHASES = ("fetch", "decode", "html", "scripts", "timers", "sheets", "css_parse",
           "cascade_read", "cascade", "images", "image_decode", "layout", "paint_build", "paint", "markdown",
           "requests", "prefetch")
 TRACE = re.compile(r"ANYKNOWN_TIMING\t([^\t]+)\t(\d+)\t(.*)")
+EXPECTATIONS = Path(__file__).with_name("sites.json")
 
 
 def run(binary, url, directory, record=False, sample=None, screenshot=False):
@@ -109,12 +110,13 @@ def print_result(name, result):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("capture", "run"))
+    parser.add_argument("mode", choices=("capture", "run", "check"),
+                        help="check: replay each site against browser/tools/sites.json")
     parser.add_argument("--archive", type=Path, default=Path("target/sites"), help="one directory per site")
     parser.add_argument("--binary", type=Path, default=Path("target/anyknown"))
     parser.add_argument("--compare", type=Path, help="baseline binary; alternate before/after to reduce machine-load bias")
-    parser.add_argument("--site", action="append", choices=(*SITES, "all"),
-                        help=f"repeatable; default {', '.join(DEFAULT_SITES)}")
+    parser.add_argument("--site", action="append",
+                        help=f"repeatable or comma-separated, or all; default {', '.join(DEFAULT_SITES)} (check: all)")
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument("--warmup", type=int, default=1, help="unmeasured loads per binary/site before replay runs")
     parser.add_argument("--json", type=Path)
@@ -125,7 +127,16 @@ def main():
         parser.error("--repeat must be positive and --warmup nonnegative")
     if args.mode == "capture" and (args.compare or args.screenshot or args.sample):
         parser.error("capture always records Markdown; compare, screenshot and sample are replay options")
-    sites = list(SITES) if "all" in (args.site or ()) else args.site or DEFAULT_SITES
+    names = [name for value in args.site or () for name in value.split(",") if name]
+    for name in names:
+        if name != "all" and name not in SITES:
+            parser.error(f"unknown site {name}; one of {', '.join(SITES)}, all")
+    if "all" in names or (args.mode == "check" and not names):
+        sites = list(SITES)
+    else:
+        sites = names or DEFAULT_SITES
+    if args.mode == "check":
+        return check(args, sites)
     results = {}
     failures = {}
     for name in sites:
@@ -152,6 +163,65 @@ def main():
         args.json.write_text(json.dumps(results, indent=2) + "\n")
     if failures:
         raise SystemExit(f"{len(failures)} of {len(sites)} sites failed: {', '.join(failures)}")
+
+
+def console_errors(binary, url, directory):
+    """The [error] console entries of an agent session that navigates to url on the replay."""
+    env = dict(os.environ, ANYKNOWN_BENCHMARK="1", ANYKNOWN_REPLAY=str(directory.resolve()))
+    env.pop("ANYKNOWN_COOKIE_FILE", None)
+    env.pop("ANYKNOWN_RECORD", None)
+    env.pop("ANYKNOWN_TIMING", None)
+    request = json.dumps({"id": 1, "cmd": "navigate", "url": url}) + "\n"
+    process = subprocess.run([str(binary.resolve()), "agent"], input=request.encode(),
+                             capture_output=True, env=env, timeout=300)
+    stderr = process.stderr.decode(errors="replace")
+    misses = [line for line in stderr.splitlines() if "archive miss:" in line]
+    if process.returncode or misses:
+        raise RuntimeError(f"{url}: agent exit {process.returncode}\n" + "\n".join(misses or stderr.splitlines()[-5:]))
+    errors = []
+    for line in process.stdout.decode(errors="replace").splitlines():
+        response = json.loads(line)
+        if not response.get("ok"):
+            raise RuntimeError(f"{url}: agent navigate: {response.get('error')}")
+        errors += [entry for entry in response.get("console", []) if entry.startswith("[error]")]
+    return errors
+
+
+def check(args, sites):
+    """Replays each site and compares it with sites.json; exits 1 when a judged site misses."""
+    expectations = json.loads(EXPECTATIONS.read_text())["sites"]
+    if set(expectations) != set(SITES):
+        raise SystemExit(f"{EXPECTATIONS}: sites differ from SITES: {sorted(set(expectations) ^ set(SITES))}")
+    print(f"{'site':<14} {'status':<9} {'errors':>6} {'time':>7}  result  missing", flush=True)
+    failed = []
+    for name in sites:
+        expect = expectations[name]
+        judged = expect["status"] != "excluded"
+        directory = args.archive / name
+        try:
+            url = json.loads((directory / "manifest.json").read_text())["url"]
+            result = run(args.binary, url, directory)
+            markdown = (directory / "last.stdout").read_text(errors="replace")
+            errors = console_errors(args.binary, url, directory)
+        except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as error:
+            print(f"{name:<14} {expect['status']:<9} {'-':>6} {'-':>7}  "
+                  f"{'FAIL' if judged else 'skip':<6}  {str(error).splitlines()[0]}", flush=True)
+            if judged:
+                failed.append(name)
+            continue
+        missing = [text for text in expect["md"] if text not in markdown]
+        meets = not missing and len(errors) <= expect["max_errors"]
+        verdict = ("pass" if meets else "FAIL") if judged else "skip"
+        if verdict == "FAIL":
+            failed.append(name)
+        count = f"{len(errors)}/{expect['max_errors']}"
+        print(f"{name:<14} {expect['status']:<9} {count:>6} {result['wall']:6.2f}s  "
+              f"{verdict:<6}  {', '.join(map(repr, missing)) or '-'}", flush=True)
+        if len(errors) > expect["max_errors"]:
+            for entry in errors:
+                print(f"  {entry.splitlines()[0][:200]}")
+    if failed:
+        raise SystemExit(f"{len(failed)} of {len(sites)} sites miss their expectations: {', '.join(failed)}")
 
 
 def load_site(args, name):
