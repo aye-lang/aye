@@ -658,6 +658,43 @@ fn pictureBounds(pic: *svg.Picture, bounds: *mut CanvasBounds) f64 {
     return grow
 }
 
+// `area` within the bounds of every clip path of `clip` (see
+// canvasClipPicture), grown by `reach` and the margin: outside them the
+// clip covers nothing, and compositing leaves pixels as they are.
+fn clipArea(clip: *svg.Picture, area: CanvasArea, reach: f64, bmp: *image.Bitmap) CanvasArea {
+    var out = area
+    let verbs = clip.verbs.items()
+    let co = clip.coords.items()
+    for cp in clip.clips.items() {
+        var bounds = CanvasBounds { x0: 0.0, y0: 0.0, x1: 0.0, y1: 0.0, any: false }
+        for s in clip.clip_shapes.items()[cp.start..cp.end] {
+            var ci = s.coord_start
+            for v in verbs[s.verb_start..s.verb_end] {
+                var n: usize = 1
+                if v == svg.CUBIC {
+                    n = 3
+                } else if v == svg.CLOSE {
+                    n = 0
+                }
+                for k in 0..n {
+                    bounds.add(co[ci], co[ci + 1])
+                    ci += 2
+                }
+            }
+        }
+        let b = bounds.area(reach, bmp)
+        let x0 = math.maxOf(i64, out.x, b.x)
+        let y0 = math.maxOf(i64, out.y, b.y)
+        let x1 = math.minOf(i64, out.x + out.w as i64, b.x + b.w as i64)
+        let y1 = math.minOf(i64, out.y + out.h as i64, b.y + b.h as i64)
+        if x1 <= x0 || y1 <= y0 || b.w == 0 || b.h == 0 {
+            return CanvasArea { x: 0, y: 0, w: 0, h: 0 }
+        }
+        out = CanvasArea { x: x0, y: y0, w: (x1 - x0) as usize, h: (y1 - y0) as usize }
+    }
+    return out
+}
+
 // The reach of paint.boxBlur3's three passes for a shadow blur.
 fn blurReach(blur: f64) f64 {
     let sigma = blur / 2.0
@@ -1037,6 +1074,19 @@ fn akCanvasDraw(it: *mut Interp, a: Args) JsError!Value {
     if unboundedMode(it.heap.bytes(js.strOf(mode))) {
         area = wholeCanvas(&size)
     }
+    var clip_pic: ?*mut svg.Picture = null
+    defer freePicture(it.alloc, clip_pic)
+    if !js.isNullish(it.arg(a, 5)) {
+        let made = try canvasClipPicture(it, it.arg(a, 5))
+        clip_pic = made
+        // A blurred source must be complete as far as the blur reaches
+        // into the clip.
+        var reach = 0.0
+        if blurred {
+            reach = blurReach(blur)
+        }
+        area = clipArea(made, area, reach, &size)
+    }
     let px = try it.alloc.alloc(0 as u8, area.w * area.h * 4)
     defer it.alloc.free(px)
     if pic |p| {
@@ -1070,11 +1120,9 @@ fn akCanvasDraw(it: *mut Interp, a: Args) JsError!Value {
     defer if clip |cl| {
         it.alloc.free(cl)
     }
-    if !js.isNullish(it.arg(a, 5)) {
+    if clip_pic |cp| {
         clip = try it.alloc.alloc(0 as u8, px.len)
-        let clip_pic = try canvasClipPicture(it, it.arg(a, 5))
-        defer freePicture(it.alloc, clip_pic)
-        try svg.render(it.alloc, clip_pic, area.target(clip.?), 0.0, 0.0, size.width as f64, size.height as f64, 1.0)
+        try svg.render(it.alloc, cp, area.target(clip.?), 0.0, 0.0, size.width as f64, size.height as f64, 1.0)
     }
     let alpha = try it.toNumber(it.arg(a, 3))
     if alpha == alpha && alpha >= 0.0 && alpha <= 1.0 {

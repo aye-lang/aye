@@ -74,6 +74,17 @@ const workloads = [
     if (i % 2) ctx.drawImage(sprite, rand() * 736, rand() * 536);
     else ctx.drawImage(sprite, rand() * 760, rand() * 560, 32, 24);
   }},
+  {name: 'clipped', calls: 200, chunk: 20, setup() {
+    ctx.beginPath();
+    ctx.rect(100, 100, 300, 200);
+    ctx.clip();
+  }, op(i) {
+    ctx.beginPath();
+    ctx.arc(rand() * 800, rand() * 600, 150, 0, Math.PI * 2);
+    ctx.fillStyle = colors[i % colors.length];
+    ctx.globalCompositeOperation = i % 50 === 0 ? 'copy' : i % 10 ? 'source-over' : 'source-atop';
+    ctx.fill();
+  }},
   {name: 'imageData', calls: 100, chunk: 10, setup() {
     ctx.fillStyle = '#4363d8';
     ctx.fillRect(100, 100, 300, 200);
