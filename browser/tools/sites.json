@@ -22,8 +22,8 @@
     "github": {
       "status": "warn",
       "max_errors": 1,
-      "md": ["## Repository navigation", "[README.md](https://github.com/rust-lang/rust/blob/main/README.md)", "## Contributing"],
-      "note": "Commit message, date columns and commit bar stay skeletons; empty Latest commit and History sections. Replay logs BigInt is not defined."
+      "md": ["## Repository navigation", "- [Actions](https://github.com/rust-lang/rust/actions)", "## Unable to load page."],
+      "note": "Commit message, date columns and commit bar stay skeletons; empty Latest commit and History sections. The file list renders \"Unable to load page.\". Replay logs a React Router render error, TypeError: Illegal invocation (plan P3.22)."
     },
     "mdn": {
       "status": "ok",
@@ -57,9 +57,9 @@
     },
     "reddit": {
       "status": "excluded",
-      "max_errors": 1,
+      "max_errors": 0,
       "md": ["Skip to main content"],
-      "note": "Bot wall: logged-out clients are redirected to /login/ with no form (plan Decisions). Replay logs Request is not defined."
+      "note": "Bot wall: logged-out clients are redirected to /login/ with no form (plan Decisions). Replay logs no errors."
     },
     "stackoverflow": {
       "status": "excluded",
