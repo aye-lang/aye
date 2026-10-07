@@ -69,18 +69,18 @@ const BUILTINS: &[(&str, &str)] = &[
 ];
 
 /// The methods of the builtin types, for `std_api`.
-const BUILTIN_METHODS: &[&str] = &[
-    "General.init",
-    "General.allocator",
-    "General.deinit",
-    "Arena.init",
-    "Arena.allocator",
-    "Arena.deinit",
-    "Allocator.create",
-    "Allocator.destroy",
-    "Allocator.alloc",
-    "Allocator.free",
-    "Allocator.resize",
+const BUILTIN_METHODS: &[(&str, &str)] = &[
+    ("std.heap", "General.init"),
+    ("std.heap", "General.allocator"),
+    ("std.heap", "General.deinit"),
+    ("std.heap", "Arena.init"),
+    ("std.heap", "Arena.allocator"),
+    ("std.heap", "Arena.deinit"),
+    ("std.mem", "Allocator.create"),
+    ("std.mem", "Allocator.destroy"),
+    ("std.mem", "Allocator.alloc"),
+    ("std.mem", "Allocator.free"),
+    ("std.mem", "Allocator.resize"),
 ];
 
 /// The canonical name of the item `name` of the module `module` (`""` is
@@ -89,32 +89,35 @@ pub fn canonical(module: &str, name: &str) -> String {
     if module.is_empty() { name.to_string() } else { format!("{}::{name}", module.replace('.', "::")) }
 }
 
-/// The pub functions and methods of std, as the spec writes them:
-/// `std.fs.open`, `File.readAll`, `std.log.err`, `General.init`.
-pub fn std_api() -> Vec<String> {
+/// The pub functions and methods of std as (module, name), the name as the
+/// spec writes it: (`std.fs`, `std.fs.open`), (`std.fs`, `File.readAll`),
+/// (`std.log`, `std.log.err`), (`std.heap`, `General.init`).
+pub fn std_api() -> Vec<(String, String)> {
     let mut out = Vec::new();
     for (module, _, src) in STD_FILES {
         let file = parser::parse(lexer::lex(src).unwrap()).unwrap_or_else(|e| panic!("{module}: {e:?}"));
+        let mut push = |name: String| out.push((module.to_string(), name));
         for item in &file.items {
             match item {
                 AstItem::Fn(f) if f.is_pub => {
-                    out.push(format!("{module}.{}", f.name));
+                    push(format!("{module}.{}", f.name));
                     // A type function's methods: `List.append`.
                     if let Some(ast::Stmt { kind: StmtKind::Return(Some(e)), .. }) = f.body.as_ref().and_then(|b| b.stmts.first())
                         && let ExprKind::StructType(s) = &e.kind
                     {
-                        out.extend(s.methods.iter().filter(|m| m.is_pub).map(|m| format!("{}.{}", f.name, m.name)));
+                        s.methods.iter().filter(|m| m.is_pub).for_each(|m| push(format!("{}.{}", f.name, m.name)));
                     }
                 }
                 AstItem::Struct(s) if s.is_pub => {
-                    out.extend(s.methods.iter().filter(|m| m.is_pub).map(|m| format!("{}.{}", s.name, m.name)))
+                    s.methods.iter().filter(|m| m.is_pub).for_each(|m| push(format!("{}.{}", s.name, m.name)))
                 }
                 _ => {}
             }
         }
     }
-    out.extend(BUILTINS.iter().filter(|(_, n)| n.starts_with(char::is_lowercase)).map(|(m, n)| format!("{m}.{n}")));
-    out.extend(BUILTIN_METHODS.iter().map(|m| m.to_string()));
+    let builtins = BUILTINS.iter().filter(|(_, n)| n.starts_with(char::is_lowercase));
+    out.extend(builtins.map(|(m, n)| (m.to_string(), format!("{m}.{n}"))));
+    out.extend(BUILTIN_METHODS.iter().map(|(m, n)| (m.to_string(), n.to_string())));
     out
 }
 

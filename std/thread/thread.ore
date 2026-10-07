@@ -1,4 +1,5 @@
-// std.thread: operating system threads (pthreads).
+// std.thread: operating system threads (pthreads). A panic in any thread
+// ends the program; each thread has its own error return trace.
 
 /// The error of `spawn`: the system has no resources for another thread.
 pub error SpawnError {
