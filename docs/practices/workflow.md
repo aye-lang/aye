@@ -165,7 +165,8 @@ average to 40–58 on 10 cores. GitHub replay measured 41 s wall for
 stress, passing on rerun (P1.2).
 **Good:** cap concurrent build/test agents at three; diagnose-only or
 docs steps can run beside them. Speed numbers use CPU time (P1.5) or a
-quiet machine.
+quiet machine. The three slots are one per lane (Ore, Browser,
+Framework); each lane's steps are in `docs/plans/` (`docs/plan.md`).
 **Why:** wall-clock numbers and timing-sensitive tests are wrong on an
 overloaded machine.
 
