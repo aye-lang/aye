@@ -1,0 +1,31 @@
+ok accessor function function true false
+ok accessor function function true false
+ok accessor function function true false
+TypeError: Cannot redefine property: x accessor function function true false
+TypeError: Cannot redefine property: x accessor function function true false
+ok ok ok
+TypeError: Cannot redefine property: x 1
+TypeError: Cannot redefine property: x accessor function function true false
+TypeError: Cannot redefine property: x TypeError: Cannot redefine property: x accessor function function true false
+ok ok accessor function undefined false false
+ok data 2 true false false
+TypeError: Cannot redefine property: v data 2 true false false
+TypeError: Cannot redefine property: v data 2 true false false
+TypeError: Cannot redefine property: v data 2 true false false
+TypeError: Cannot redefine property: v data 2 true false false
+ok data 2 true false false
+ok data 3 false false false
+TypeError: Cannot redefine property: v data 3 false false false
+TypeError: Cannot redefine property: v data 3 false false false
+ok data 3 false false false
+ok TypeError: Cannot redefine property: zero ok
+ok TypeError: Cannot redefine property: o
+ok TypeError data 1 false false false
+true false
+false false true
+ok TypeError: Cannot redefine property: p TypeError: Cannot redefine property: p data 1 false true false
+TypeError: Cannot redefine property: p TypeError: Cannot redefine property: p ok
+ok TypeError: Cannot redefine property: q TypeError: Cannot redefine property: q accessor function undefined true false
+TypeError: Cannot define property r, object is not extensible
+ok ok TypeError: Cannot redefine property: p data 5 false true false
+TypeError: Cannot redefine property: p TypeError: Cannot redefine property: p data 5 false true false
