@@ -421,7 +421,7 @@ fn kindOf(name: []u8, display: []u8) ?KindOf {
     if text.eql(display, "none") {
         return null
     }
-    let inl = text.eql(display, "inline") || text.eql(display, "inline-block") || text.eql(display, "inline-table") || text.eql(display, "inline-flex") || text.eql(display, "inline-grid")
+    let inl = text.eql(display, "inline") || text.eql(display, "inline-block") || text.eql(display, "inline-table") || text.eql(display, "inline-flex") || text.eql(display, "inline-grid") || text.eql(display, "-webkit-inline-box")
     if text.eql(name, "img") || text.eql(name, "video") || text.eql(name, "canvas") || text.eql(name, "iframe") || text.eql(name, "embed") || text.eql(name, "object") || text.eql(name, "svg") || text.eql(name, "frame") {
         return KindOf { kind: BoxKind.Image, inline_level: inl }
     }
@@ -431,7 +431,9 @@ fn kindOf(name: []u8, display: []u8) ?KindOf {
     if text.eql(display, "inline") {
         return KindOf { kind: BoxKind.Inline, inline_level: true }
     }
-    if text.eql(display, "inline-block") {
+    // `-webkit-box` and `-webkit-inline-box` lay out as block containers
+    // (their line clamp: inline.ore).
+    if text.eql(display, "inline-block") || text.eql(display, "-webkit-inline-box") {
         return KindOf { kind: BoxKind.InlineBlock, inline_level: true }
     }
     if text.eql(display, "table") || text.eql(display, "inline-table") {

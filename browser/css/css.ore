@@ -105,7 +105,7 @@ pub struct Property {
     initial: Value
 }
 
-pub let NPROPS: usize = 112
+pub let NPROPS: usize = 114
 
 pub let DISPLAY: usize = 0
 pub let POSITION: usize = 1
@@ -216,8 +216,11 @@ pub let JUSTIFY_SELF: usize = 109
 pub let TEXT_TRANSFORM: usize = 110
 // `text-overflow` of block containers that clip (layout/inline.ore).
 pub let TEXT_OVERFLOW: usize = 111
+// The line clamp of `display: -webkit-box` (layout/inline.ore).
+pub let WEBKIT_LINE_CLAMP: usize = 112
+pub let WEBKIT_BOX_ORIENT: usize = 113
 
-let DISPLAYS = "inline block list-item inline-block table inline-table table-row-group table-header-group table-footer-group table-row table-cell table-column-group table-column table-caption flex inline-flex grid inline-grid flow-root contents none"
+let DISPLAYS = "inline block list-item inline-block table inline-table table-row-group table-header-group table-footer-group table-row table-cell table-column-group table-column table-caption flex inline-flex grid inline-grid flow-root contents none -webkit-box -webkit-inline-box"
 let BORDER_STYLES = "none hidden dotted dashed solid double groove ridge inset outset"
 let LIST_STYLES = "disc circle square decimal decimal-leading-zero lower-roman upper-roman lower-greek lower-alpha lower-latin upper-alpha upper-latin armenian georgian none"
 let OVERFLOWS = "visible hidden clip scroll auto"
@@ -226,7 +229,7 @@ let ALIGNS = "normal stretch flex-start flex-end start end self-start self-end c
 let BLACK = Color { r: 0, g: 0, b: 0, a: 1.0 }
 let TRANSPARENT = Color { r: 0, g: 0, b: 0, a: 0.0 }
 
-pub let PROPERTIES = [112]Property{
+pub let PROPERTIES = [114]Property{
     Property { name: "display", inherited: false, kind: PKind.Keywords, keywords: DISPLAYS, initial: Value.Keyword { k: "inline" } },
     Property { name: "position", inherited: false, kind: PKind.Keywords, keywords: "static relative absolute fixed sticky", initial: Value.Keyword { k: "static" } },
     Property { name: "color", inherited: true, kind: PKind.Color, keywords: "", initial: Value.Rgba { c: BLACK } },
@@ -341,6 +344,8 @@ pub let PROPERTIES = [112]Property{
     // `full-width` and `full-size-kana` are accepted and lay out as `none`.
     Property { name: "text-transform", inherited: true, kind: PKind.Keywords, keywords: "none uppercase lowercase capitalize full-width full-size-kana", initial: Value.Keyword { k: "none" } },
     Property { name: "text-overflow", inherited: false, kind: PKind.Keywords, keywords: "clip ellipsis", initial: Value.Keyword { k: "clip" } },
+    Property { name: "-webkit-line-clamp", inherited: false, kind: PKind.Int, keywords: "none", initial: Value.Keyword { k: "none" } },
+    Property { name: "-webkit-box-orient", inherited: false, kind: PKind.Keywords, keywords: "horizontal vertical inline-axis block-axis", initial: Value.Keyword { k: "horizontal" } },
 }
 
 /// The index of the longhand property `name` (lower case).

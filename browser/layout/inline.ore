@@ -521,6 +521,9 @@ fn layoutInline(t: *mut Tree, i: usize, avail: f64) AllocError!f64 {
         open: &mut open,
     }
     t.bx(i).line_start = t.lines.len()
+    let clamp = lineClamp(t, i)
+    // The bottom of the last line within the clamp.
+    var clamp_y: ?f64 = null
     var k: usize = 0
     while k < ps.len {
         let start = k
@@ -602,6 +605,15 @@ fn layoutInline(t: *mut Tree, i: usize, avail: f64) AllocError!f64 {
             continue
         }
         try lb.line(ps[start..k], forced, k >= ps.len)
+        if clamp_y == null && t.lines.len() - t.bx(i).line_start == clamp {
+            // The lines after it still show as overflow.
+            let li = t.lines.len() - 1
+            let line = t.lines.items()[li]
+            clamp_y = line.y + line.h
+            if k < ps.len {
+                try lb.ellipsize(li, line.y + line.baseline, true)
+            }
+        }
         for fi in below.items() {
             if !isPlaced(t, fi) {
                 try placeFloat(t, fi, lb.y, avail)
@@ -610,7 +622,28 @@ fn layoutInline(t: *mut Tree, i: usize, avail: f64) AllocError!f64 {
         below.clear()
     }
     t.bx(i).line_end = t.lines.len()
+    if clamp_y |cy| {
+        return cy
+    }
     return lb.y
+}
+
+// The `-webkit-line-clamp` of block container `i`: the number of lines
+// its height ends after (with an ellipsis when more follow), or 0. It
+// counts the container's own lines only.
+fn lineClamp(t: *Tree, i: usize) usize {
+    let s = t.bx(i).style
+    if !isKeyword(s[css.DISPLAY], "-webkit-box") && !isKeyword(s[css.DISPLAY], "-webkit-inline-box") {
+        return 0
+    }
+    if !isKeyword(s[css.WEBKIT_BOX_ORIENT], "vertical") && !isKeyword(s[css.WEBKIT_BOX_ORIENT], "block-axis") {
+        return 0
+    }
+    let n = numberOf(s[css.WEBKIT_LINE_CLAMP], 0.0)
+    if n < 1.0 {
+        return 0
+    }
+    return n as usize
 }
 
 // Is there a forced break among the Close pieces that end a chunk?
@@ -738,7 +771,7 @@ struct LineBuilder {
         // A line with right-to-left text has its own order (bidi.ore).
         if try bidiLine(self, kp, self.left + offset, extra, baseline) {
             self.t.lines.items()[line_index].frag_end = self.t.frags.len()
-            try self.ellipsize(line_index, baseline)
+            try self.ellipsize(line_index, baseline, false)
             self.y += above + below
             return
         }
@@ -833,22 +866,27 @@ struct LineBuilder {
             self.t.frags.items()[o.frag].w = x - o.left
         }
         self.t.lines.items()[line_index].frag_end = self.t.frags.len()
-        try self.ellipsize(line_index, baseline)
+        try self.ellipsize(line_index, baseline, false)
         self.y += above + below
     }
 
     // `text-overflow: ellipsis` (CSS Overflow 3): when the text or atomic
     // inlines of line `li` go past the end of the line box, the
     // characters and atomic inlines that do not fit before an ellipsis
-    // are hidden, and the ellipsis follows what is left. Left to right
-    // paragraphs only; `baseline` is the line's, from the container's top.
-    fn ellipsize(self: *mut Self, li: usize, baseline: f64) AllocError!void {
-        if !self.ellipsis || self.rtl {
+    // are hidden, and the ellipsis follows what is left. `clamped`: the
+    // last line of a line clamp, which gets the ellipsis anyway. Left to
+    // right paragraphs only; `baseline` is the line's, from the
+    // container's top.
+    fn ellipsize(self: *mut Self, li: usize, baseline: f64, clamped: bool) AllocError!void {
+        if (!self.ellipsis && !clamped) || self.rtl {
             return
         }
         let line = self.t.lines.items()[li]
-        let right = self.left + self.avail
-        var over = false
+        if line.frag_end > line.frag_start && self.t.frags.items()[line.frag_end - 1].kind == FragKind.Ellipsis {
+            return
+        }
+        let right = line.x + line.w
+        var over = clamped
         for fi in line.frag_start..line.frag_end {
             let f = self.t.frags.items()[fi]
             if (f.kind == FragKind.Text || f.kind == FragKind.Atomic) && f.x + f.w > right + 0.001 {
@@ -863,7 +901,7 @@ struct LineBuilder {
         let ew = self.t.measure.width(m.font, es)
         let limit = right - ew
         // The end of the content that stays.
-        var end = self.left
+        var end = line.x
         for fi in line.frag_start..line.frag_end {
             let f = &mut self.t.frags.items()[fi]
             if f.kind == FragKind.Atomic {

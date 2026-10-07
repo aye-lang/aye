@@ -1,6 +1,6 @@
 viewport 800x600
-  block <html> (0, 0) 800x120
-    block <body> (0, 0) 800x120
+  block <html> (0, 0) 800x260
+    block <body> (0, 0) 800x260
       block <div class="e"> (0, 0) 100x20
         line (0, 0) 100x20
           text (0, 2) 88x16 "A very long"
@@ -28,3 +28,25 @@ viewport 800x600
       block <div class="e" style="overflow: visible"> (0, 100) 100x20
         line (0, 100) 100x20
           text (0, 102) 136x16 "A very long title"
+      block <p class="clamp" style="width: 100px; margin: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden"> (0, 120) 100x40
+        line (0, 120) 100x20
+          text (0, 122) 56x16 "one two"
+        line (0, 140) 100x20
+          text (0, 142) 80x16 "three four"
+          ellipsis (80, 142) 8x16 "…"
+        line (0, 160) 100x20
+          text (0, 162) 64x16 "five six"
+        line (0, 180) 100x20
+          text (0, 182) 88x16 "seven eight"
+      block <p style="width: 100px; margin: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden"> (0, 160) 100x20
+        line (0, 160) 100x20
+          text (0, 162) 56x16 "one two"
+      block <p style="width: 100px; margin: 0; -webkit-line-clamp: 2"> (0, 180) 100x80
+        line (0, 180) 100x20
+          text (0, 182) 64x16 "no clamp"
+        line (0, 200) 100x20
+          text (0, 202) 88x16 "without the"
+        line (0, 220) 100x20
+          text (0, 222) 96x16 "box: one two"
+        line (0, 240) 100x20
+          text (0, 242) 80x16 "three four"
