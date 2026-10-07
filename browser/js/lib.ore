@@ -453,6 +453,11 @@ pub let LIB =
     \\    m.cells = null;
     \\    m.linkedEnv = false;
     \\  }
+    \\  // Export name -> local, and -> indirect entry, for ResolveExport.
+    \\  m.localNames = new Map();
+    \\  for (let i = 0; i < m.locals.length; i++) m.localNames.set(m.locals[i][0], m.locals[i][1]);
+    \\  m.indirectNames = new Map();
+    \\  for (let i = 0; i < m.indirect.length; i++) m.indirectNames.set(m.indirect[i][0], m.indirect[i]);
     \\  m.deps = null;
     \\  m.namespace = null;
     \\  m.status = 'unlinked';
@@ -577,16 +582,13 @@ pub let LIB =
     \\    if (seen[i] === m && seen[i + 1] === name) return null;
     \\  }
     \\  seen.push(m, name);
-    \\  for (let i = 0; i < m.locals.length; i++) {
-    \\    if (m.locals[i][0] === name) return { module: m, local: m.locals[i][1] };
-    \\  }
-    \\  for (let i = 0; i < m.indirect.length; i++) {
-    \\    const e = m.indirect[i];
-    \\    if (e[0] === name) {
-    \\      const d = m.deps[e[1]];
-    \\      if (e[2] === null) return { module: d, local: null };
-    \\      return resolveExport(d, e[2], seen);
-    \\    }
+    \\  const local = m.localNames.get(name);
+    \\  if (local !== undefined) return { module: m, local };
+    \\  const e = m.indirectNames.get(name);
+    \\  if (e !== undefined) {
+    \\    const d = m.deps[e[1]];
+    \\    if (e[2] === null) return { module: d, local: null };
+    \\    return resolveExport(d, e[2], seen);
     \\  }
     \\  if (name === 'default') return null;
     \\  let star = null;
