@@ -47,7 +47,7 @@
       "status": "warn",
       "max_errors": 0,
       "md": ["## More to explore", "## Also in news", "](https://www.bbc.com/news/articles/"],
-      "note": "Markdown has the stories; the screen looks unstyled (huge SVG wordmarks, bullet-list menus)."
+      "note": "Markdown has the stories; menus are bullet lists. The SVG wordmarks render at 140x40 and 100x26 as the page's CSS asks (the earlier 290 px came from a CSS-load failure)."
     },
     "cnn-lite": {
       "status": "ok",
@@ -95,7 +95,7 @@
       "status": "ok",
       "max_errors": 0,
       "md": ["# ウェブブラウザ", "出典: フリー百科事典『ウィキペディア（Wikipedia）』"],
-      "note": "Japanese text readable; the share pie chart (SVG) is drawn as oversized blocks."
+      "note": "Japanese text readable; the share chart is CSS border triangles, drawn correctly."
     },
     "abehiroshi": {
       "status": "ok",
