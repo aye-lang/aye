@@ -562,9 +562,36 @@ fn keyHash(it: *mut Interp, k: Value) u32 {
     return ((h ^ (h >> 31)) >> 32) as u32
 }
 
-// The slot of key k (hash h) in the index of o, or NONE.
-fn keySlot(it: *mut Interp, o: u32, k: Value, h: u32) u32 {
+// Up to this many entries a Map or Set has no slots (and, until a
+// forEach, no KeyIndex): a scan is cheaper.
+let KEY_SCAN: u32 = 8
+
+// The element index of key k, or NONE.
+fn findKey(it: *mut Interp, o: u32, k: Value) u32 {
+    var scan = true
     if it.heap.obj(o).keys |ki| {
+        scan = ki.slots.len == 0
+    }
+    if scan {
+        let st = stride(it, o)
+        let n = it.heap.obj(o).nelems
+        var i: u32 = 0
+        while i < n {
+            let e = it.heap.obj(o).elems[i]
+            match e {
+                .Empty => {}
+                _ => {
+                    if it.sameValueZero(e, k) {
+                        return i
+                    }
+                }
+            }
+            i += st
+        }
+        return NONE
+    }
+    if it.heap.obj(o).keys |ki| {
+        let h = keyHash(it, k)
         let mask = ki.slots.len as u32 - 1
         var p = h & mask
         while true {
@@ -573,24 +600,13 @@ fn keySlot(it: *mut Interp, o: u32, k: Value, h: u32) u32 {
                 return NONE
             }
             if sl != KEY_TOMB && (sl >> 32) as u32 == h {
-                if it.sameValueZero(it.heap.obj(o).elems[(sl & 0xffffffff) as u32 - 1], k) {
-                    return p
+                let i = (sl & 0xffffffff) as u32 - 1
+                if it.sameValueZero(it.heap.obj(o).elems[i], k) {
+                    return i
                 }
             }
             p = (p + 1) & mask
         }
-    }
-    return NONE
-}
-
-// The element index of key k (hash h), or NONE.
-fn findKey(it: *mut Interp, o: u32, k: Value, h: u32) u32 {
-    let p = keySlot(it, o, k, h)
-    if p == NONE {
-        return NONE
-    }
-    if it.heap.obj(o).keys |ki| {
-        return (ki.slots[p] & 0xffffffff) as u32 - 1
     }
     return NONE
 }
@@ -608,8 +624,22 @@ fn placeKey(ki: *mut KeyIndex, h: u32, i: u32) {
     ki.slots[p] = (h as u64 << 32) | (i as u64 + 1)
 }
 
+// Marks the slot of element index i (hash h) deleted.
+fn dropKey(ki: *mut KeyIndex, h: u32, i: u32) {
+    let want = (h as u64 << 32) | (i as u64 + 1)
+    let mask = ki.slots.len as u32 - 1
+    var p = h & mask
+    while ki.slots[p] != 0 {
+        if ki.slots[p] == want {
+            ki.slots[p] = KEY_TOMB
+            return
+        }
+        p = (p + 1) & mask
+    }
+}
+
 // Builds the index of o again from its elements (after they moved, or
-// to grow it).
+// to grow it); a small collection gets no slots.
 fn rebuildKeys(it: *mut Interp, o: u32) AllocError!void {
     let st = stride(it, o)
     let n = it.heap.obj(o).nelems
@@ -624,10 +654,6 @@ fn rebuildKeys(it: *mut Interp, o: u32) AllocError!void {
         }
         i += st
     }
-    var cap: usize = 8
-    while cap < live as usize * 2 + 2 {
-        cap *= 2
-    }
     let alloc = it.heap.alloc
     if it.heap.obj(o).keys == null {
         it.heap.obj(o).keys = try alloc.create(KeyIndex { slots: []mut u64{}, used: 0, count: 0, walking: 0 })
@@ -637,9 +663,16 @@ fn rebuildKeys(it: *mut Interp, o: u32) AllocError!void {
         alloc.free(ki.slots)
         ki.slots = []mut u64{}
     }
-    ki.slots = try alloc.alloc(0 as u64, cap)
     ki.used = 0
     ki.count = live
+    if live <= KEY_SCAN {
+        return
+    }
+    var cap: usize = 16
+    while cap < live as usize * 2 + 2 {
+        cap *= 2
+    }
+    ki.slots = try alloc.alloc(0 as u64, cap)
     i = 0
     while i < n {
         let e = it.heap.obj(o).elems[i]
@@ -651,25 +684,29 @@ fn rebuildKeys(it: *mut Interp, o: u32) AllocError!void {
     }
 }
 
-// Appends key k (hash h, not in o yet) and, for a Map, value v.
-fn addKey(it: *mut Interp, o: u32, k: Value, h: u32, v: Value) AllocError!void {
+// Appends key k (not in o yet) and, for a Map, value v.
+fn addKey(it: *mut Interp, o: u32, k: Value, v: Value) AllocError!void {
     let i = it.heap.obj(o).nelems
     try it.heap.pushElem(o, keyOf(k))
     if stride(it, o) == 2 {
         try it.heap.pushElem(o, v)
     }
-    var grow = true
     if it.heap.obj(o).keys |ki| {
-        grow = (ki.used as usize + 1) * 4 > ki.slots.len * 3
-    }
-    if grow {
-        try rebuildKeys(it, o)
+        if ki.slots.len == 0 {
+            if ki.count < KEY_SCAN {
+                ki.count += 1
+                return
+            }
+        } else if (ki.used as usize + 1) * 4 <= ki.slots.len * 3 {
+            placeKey(ki, keyHash(it, k), i)
+            ki.count += 1
+            return
+        }
+    } else if it.heap.obj(o).nelems <= KEY_SCAN * stride(it, o) {
+        // Small and never walked: no index yet (mapSize counts).
         return
     }
-    if it.heap.obj(o).keys |ki| {
-        placeKey(ki, h, i)
-        ki.count += 1
-    }
+    try rebuildKeys(it, o)
 }
 
 /// The number of entries of a Map or Set.
@@ -677,7 +714,19 @@ pub fn mapSize(it: *mut Interp, o: u32) u32 {
     if it.heap.obj(o).keys |ki| {
         return ki.count
     }
-    return 0
+    let st = stride(it, o)
+    var count: u32 = 0
+    var i: u32 = 0
+    while i < it.heap.obj(o).nelems {
+        match it.heap.obj(o).elems[i] {
+            .Empty => {}
+            _ => {
+                count += 1
+            }
+        }
+        i += st
+    }
+    return count
 }
 
 // Drops deleted entries when they are many (not while forEach runs).
@@ -752,19 +801,18 @@ fn mapCtor(it: *mut Interp, a: Args) JsError!Value {
 }
 
 fn mapPut(it: *mut Interp, o: u32, k: Value, v: Value) JsError!void {
-    let h = keyHash(it, k)
-    let i = findKey(it, o, k, h)
+    let i = findKey(it, o, k)
     if i != NONE {
         it.heap.obj(o).elems[i + 1] = v
         return
     }
-    try addKey(it, o, k, h, v)
+    try addKey(it, o, k, v)
 }
 
 fn mapGet(it: *mut Interp, a: Args) JsError!Value {
     let o = try thisCollection(it, a, Class.Map)
     let k = it.arg(a, 0)
-    let i = findKey(it, o, k, keyHash(it, k))
+    let i = findKey(it, o, k)
     if i == NONE {
         return Value.Undefined
     }
@@ -780,23 +828,24 @@ fn mapSet(it: *mut Interp, a: Args) JsError!Value {
 fn mapHas(it: *mut Interp, a: Args) JsError!Value {
     let o = try anyCollection(it, a)
     let k = it.arg(a, 0)
-    return boolVal(findKey(it, o, k, keyHash(it, k)) != NONE)
+    return boolVal(findKey(it, o, k) != NONE)
 }
 
 fn mapDelete(it: *mut Interp, a: Args) JsError!Value {
     let o = try anyCollection(it, a)
     let k = it.arg(a, 0)
-    let p = keySlot(it, o, k, keyHash(it, k))
-    if p == NONE {
+    let i = findKey(it, o, k)
+    if i == NONE {
         return boolVal(false)
     }
     if it.heap.obj(o).keys |ki| {
-        let i = (ki.slots[p] & 0xffffffff) as u32 - 1
-        ki.slots[p] = KEY_TOMB
-        ki.count -= 1
-        for j in 0..stride(it, o) {
-            it.heap.obj(o).elems[i + j] = Value.Empty
+        if ki.slots.len > 0 {
+            dropKey(ki, keyHash(it, k), i)
         }
+        ki.count -= 1
+    }
+    for j in 0..stride(it, o) {
+        it.heap.obj(o).elems[i + j] = Value.Empty
     }
     try compact(it, o)
     return boolVal(true)
@@ -818,6 +867,8 @@ fn mapClear(it: *mut Interp, a: Args) JsError!Value {
         }
         ki.used = 0
         ki.count = 0
+    } else {
+        it.heap.obj(o).nelems = 0
     }
     return Value.Undefined
 }
@@ -925,9 +976,8 @@ fn setCtor(it: *mut Interp, a: Args) JsError!Value {
         var i: u32 = 0
         while i < it.heap.obj(arr).nelems {
             let e = holeToUndef(it.heap.obj(arr).elems[i])
-            let h = keyHash(it, e)
-            if findKey(it, o, e, h) == NONE {
-                try addKey(it, o, e, h, Value.Undefined)
+            if findKey(it, o, e) == NONE {
+                try addKey(it, o, e, Value.Undefined)
             }
             i += 1
         }
@@ -939,9 +989,8 @@ fn setCtor(it: *mut Interp, a: Args) JsError!Value {
 fn setAdd(it: *mut Interp, a: Args) JsError!Value {
     let o = try thisCollection(it, a, Class.Set)
     let v = it.arg(a, 0)
-    let h = keyHash(it, v)
-    if findKey(it, o, v, h) == NONE {
-        try addKey(it, o, v, h, Value.Undefined)
+    if findKey(it, o, v) == NONE {
+        try addKey(it, o, v, Value.Undefined)
     }
     return a.this
 }
