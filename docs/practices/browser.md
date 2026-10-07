@@ -631,7 +631,8 @@ becomes the exception.
 ### A higher cache hit rate is not a CPU win: sample the slow path first
 **Context:** widening an engine cache (more kinds of hits) to save CPU.
 **Bad:** P4.20 cached reads 2–8 prototypes up and reads on DOM wrappers
-(`7a8103e`, `fillChain` in `browser/js/shapes.ore`). On youtube-search
+(`fillChain` in `browser/js/shapes.ore`). It was measured and not merged.
+On youtube-search
 hits went 54% → 59% of 45M cached-site reads, but CPU did not move
 (median 12.21 s → 12.39 s, 5 runs each, noise); github and react ±1%.
 **Good:** before widening, count the misses by kind and sample the
