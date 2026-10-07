@@ -148,6 +148,8 @@ step only finds and writes down the cause; the fix is the next step.
 | P4.6 | `loadFailed` forgets a failed image once no request holds it, so a later render fetches it again; keep failures per URL for the page | replay with a failing image: one fetch | P0 | P4.3 |
 | P4.7 | GitHub: diagnose why replay takes 41 s against 16 s live (P1.1 run). Done: machine load (40–58 on 10 cores), not replay work; CPU 3.4–3.7 s replay vs 3.7–3.9 s live | – | P1.1 | – |
 | P4.9 | Skip full restyles when the DOM version and viewport are unchanged since the last `computeStyles` (GitHub restyles ~8× per load; 92% of CPU in `css::computeStyles`): `engine/engine.ore`, `engine/containers.ore`, `agent/session.ore`, `engine/geometry.ore` | GitHub: ≤ 4 cascade spans, CPU < 2 s, Markdown hash unchanged | P1.5 | P3 (not with `css/` steps) |
+| P4.10 | Container-query re-pass restyles only the container subtrees, not the document (after P4.9 GitHub still does 9 full cascades, 4.27 s CPU on the 16:31 archive) | GitHub cascade spans and CPU fall; Markdown unchanged | P4.9 | P3 (not with `css/` steps) |
+| P4.11 | Partial restyle (only the changed subtree) for DOM mutations, including pages with shadow roots and `:has()` | GitHub < 2 s CPU on the current archive; `check --site all` byte-identical | P4.10 | P3 (not with `css/` steps) |
 | P4.8 | ZOL (88 s) and Mistral (30 s) replays spend most of their time in timers; first re-measure with CPU time (P1.5) since the P1.1 run was on a loaded machine, then diagnose | `run --site zol,mistral` phase table with CPU | P1.5 | P4.9 |
 
 ### P5 and P6
