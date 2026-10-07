@@ -123,6 +123,30 @@ pub struct Controls {
     }
 }
 
+/// The `width` or `height` attribute `key` of a `canvas` as a
+/// non-negative integer, else `fallback`: its bitmap's size in px.
+pub fn canvasDimension(doc: *Document, h: NodeId, key: []u8, fallback: usize) usize {
+    let s = doc.attr(h, key) orelse return fallback
+    let src = text.trim(s)
+    var i: usize = 0
+    if src.len > 0 && src[0] == '+' {
+        i = 1
+    }
+    let start = i
+    var n: u64 = 0
+    while i < src.len && src[i] >= '0' && src[i] <= '9' {
+        n = n * 10 + (src[i] - '0') as u64
+        if n > 4294967295 {
+            return fallback
+        }
+        i += 1
+    }
+    if i == start {
+        return fallback
+    }
+    return n as usize
+}
+
 // ---- kinds of controls
 
 /// The type of an `input`, in lower case: one of the types HTML knows,
