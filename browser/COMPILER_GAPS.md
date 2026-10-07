@@ -62,17 +62,6 @@ removed in cff3f60.
 - **Status:** open (`fn f() (i64, i64)` is E0006); deferred in
   decisions.md (M9.9).
 
-#### 48. Boolean-to-number casts are unavailable
-
-- **Need:** store comparison results in an unboxed numeric expression
-  stack without an enum value or a helper call per comparison.
-- **Repro:** `fn f(b: bool) u8 { return b as u8 }` is E0037
-  ("only numeric casts are supported").
-- **Workaround:** `js/fast_expr.ore` starts at 0.0 and assigns 1.0 in
-  an `if` block; clang can lower that to a conditional select.
-- **Hit by:** js performance (B8).
-- **Status:** open; casts remain numeric-only.
-
 ## Declined by design
 
 #### 5. A local cannot start uninitialized; `@zeroed` makes only C structs
@@ -538,3 +527,16 @@ form. The commit is the one that fixed the gap.
   `*mut [110]u8` since cff3f60. No other
   code in `browser/` works around it (helpers that take `x[..]` take a
   slice by design).
+
+#### 48. Boolean-to-number casts were unavailable
+
+- **Need:** store comparison results in an unboxed numeric expression
+  stack without an enum value or a helper call per comparison.
+- **Repro:** `fn f(b: bool) u8 { return b as u8 }` was E0037
+  ("only numeric casts are supported").
+- **Hit by:** js performance (B8). **Status:** fixed in P2.1 (5eef500):
+  `b as T` gives 0 or 1 for every integer type and an Integer-bound
+  `T`, also in constants (spec, Conversions). Int to bool and bool to
+  float stay E0037, with hints (`n != 0`; `(b as u8) as f64`). Browser
+  still uses the workaround: `js/fast_expr.ore` starts at 0.0 and
+  assigns 1.0 in an `if` block (P2.2 removes it).
