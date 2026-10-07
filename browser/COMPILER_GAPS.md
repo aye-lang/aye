@@ -537,6 +537,6 @@ form. The commit is the one that fixed the gap.
 - **Hit by:** js performance (B8). **Status:** fixed in P2.1 (5eef500):
   `b as T` gives 0 or 1 for every integer type and an Integer-bound
   `T`, also in constants (spec, Conversions). Int to bool and bool to
-  float stay E0037, with hints (`n != 0`; `(b as u8) as f64`). Browser
-  still uses the workaround: `js/fast_expr.ore` starts at 0.0 and
-  assigns 1.0 in an `if` block (P2.2 removes it).
+  float stay E0037, with hints (`n != 0`; `(b as u8) as f64`).
+  `js/fast_expr.ore` stores booleans and comparison results as
+  `(b as u8) as f64` since P2.2.

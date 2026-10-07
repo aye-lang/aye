@@ -450,10 +450,7 @@ fn rebuildGlyf(alloc: Allocator, t: []u8, glyf: *mut List(u8), loca: *mut List(u
             var px: i32 = 0
             var py: i32 = 0
             for p in 0..xs.len() {
-                var f: u8 = 0
-                if on.items()[p] {
-                    f = 1
-                }
+                var f = on.items()[p] as u8
                 if p == 0 && overlaps {
                     f = f | 0x40
                 }
