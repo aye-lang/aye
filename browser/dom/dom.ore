@@ -113,6 +113,17 @@ pub fn isSame(a: ?NodeId, b: NodeId) bool {
     return false
 }
 
+// The last base URL computed for a document, valid while the tree, the
+// `href` attributes and the document URL are the same. On the heap, so
+// that `documentBase` can fill it through a `*Document`.
+pub struct BaseCache {
+    tree: u64
+    hrefs: u64
+    addr: []u8
+    url: []u8
+    valid: bool
+}
+
 pub struct Document {
     alloc: Allocator
     nodes: Pool(Node)
@@ -123,6 +134,9 @@ pub struct Document {
     // Changes to child/sibling links, not attributes or text data. Live
     // structural lookups (window.frames) need not rescan after src/style.
     tree_version: u64
+    // Counts changes to `href` attributes (the key of `base_cache`).
+    href_version: u64
+    base_cache: *mut BaseCache
     // The state of form controls and the focus (controls.ore).
     controls: Controls
     // Quirks mode (no doctype, or a legacy one): set by the HTML parser.
@@ -152,12 +166,18 @@ pub struct Document {
             alloc.destroy(strings)
             return e
         }
+        let cache = alloc.create(BaseCache { tree: 0, hrefs: 0, addr: "", url: "", valid: false }) catch |e| {
+            alloc.destroy(strings)
+            return e
+        }
         return Document {
             alloc: alloc,
             nodes: nodes,
             strings: strings,
             root: root,
             tree_version: 0,
+            href_version: 0,
+            base_cache: cache,
             controls: Controls.init(alloc),
             quirks: false,
             templates: List(NodeId).init(alloc),
@@ -171,6 +191,8 @@ pub struct Document {
     }
 
     pub fn deinit(self: *mut Self) {
+        self.forgetBase()
+        self.alloc.destroy(self.base_cache)
         self.templates.deinit()
         self.sheets.deinit()
         self.shadows.deinit()
@@ -181,6 +203,49 @@ pub struct Document {
         self.strings.deinit()
         self.alloc.destroy(self.strings)
         self.nodes.deinit()
+    }
+
+    fn forgetBase(self: *Self) {
+        let c = self.base_cache
+        if c.valid {
+            self.alloc.free(c.addr)
+            self.alloc.free(c.url)
+        }
+        c.valid = false
+    }
+
+    fn owned(self: *Self, s: []u8) AllocError![]u8 {
+        let out = try self.alloc.alloc(0 as u8, s.len)
+        for i, c in s {
+            out[i] = c
+        }
+        return out
+    }
+
+    /// The base URL last given to `cacheBase` for the document URL
+    /// `addr`, if no `base` element or `href` can have changed since.
+    pub fn cachedBase(self: *Self, addr: []u8) ?[]u8 {
+        let c = self.base_cache
+        if c.valid && c.tree == self.tree_version && c.hrefs == self.href_version && text.eql(c.addr, addr) {
+            return c.url
+        }
+        return null
+    }
+
+    /// Remembers that the base URL of the document at `addr` is `href`.
+    pub fn cacheBase(self: *Self, addr: []u8, href: []u8) AllocError!void {
+        self.forgetBase()
+        let a = try self.owned(addr)
+        let b = self.owned(href) catch |e| {
+            self.alloc.free(a)
+            return e
+        }
+        let c = self.base_cache
+        c.addr = a
+        c.url = b
+        c.tree = self.tree_version
+        c.hrefs = self.href_version
+        c.valid = true
     }
 
     /// The node of `h`. A `NodeId` stays valid until its node is freed
@@ -418,6 +483,9 @@ pub struct Document {
     /// Sets the attribute `name` of the element `el` to `value`.
     pub fn setAttr(self: *mut Self, el: NodeId, name: []u8, value: []u8) AllocError!void {
         let n = self.node(el)
+        if text.eql(name, "href") {
+            self.href_version += 1
+        }
         for i, at in n.attrs {
             if text.eql(at.name, name) {
                 let v = try self.dup(value)
@@ -443,6 +511,9 @@ pub struct Document {
     /// Removes the attribute `name` of the element `el`, if it has one.
     pub fn removeAttr(self: *mut Self, el: NodeId, name: []u8) {
         let n = self.node(el)
+        if text.eql(name, "href") {
+            self.href_version += 1
+        }
         var k: usize = 0
         for i in 0..n.attrs.len {
             let at = n.attrs[i]
