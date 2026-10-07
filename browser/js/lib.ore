@@ -426,6 +426,7 @@ pub let LIB =
     \\const resolveModule = G.__engine.resolveModule;
     \\const fetchModule = G.__engine.fetchModule;
     \\const parseModule = G.__engine.parseModule;
+    \\const prefetchModules = G.__engine.prefetchModules;
     \\const isModuleNamespace = G.__engine.isModuleNamespace;
     \\const constCell = G.__engine.constCell;
     \\const makeNamespace = G.__engine.makeNamespace;
@@ -537,21 +538,32 @@ pub let LIB =
     \\  }
     \\  return out.sort(longestFirst);
     \\}
-    \\// The records of everything m imports, transitively (fetched at once).
+    \\// The records of everything root imports, transitively, a level of the
+    \\// graph at a time: the modules of a level are fetched concurrently.
     \\function loadGraph(root) {
-    \\  const todo = [root];
-    \\  while (todo.length > 0) {
-    \\    const m = todo.pop();
-    \\    if (m.deps !== null) continue;
-    \\    const deps = [];
-    \\    for (let i = 0; i < m.requests.length; i++) {
-    \\      const r = m.requests[i];
-    \\      deps.push(getModule(resolveSpecifier(m.url, r[0]), r[1], m.url));
+    \\  let level = root.deps === null ? [root] : [];
+    \\  while (level.length > 0) {
+    \\    const urls = [];
+    \\    for (const m of level) {
+    \\      m.urls = [];
+    \\      for (let i = 0; i < m.requests.length; i++) {
+    \\        const url = resolveSpecifier(m.url, m.requests[i][0]);
+    \\        m.urls.push(url);
+    \\        if (!moduleMap.has(moduleKey(url, m.requests[i][1])) && !urls.includes(url)) urls.push(url);
+    \\      }
     \\    }
-    \\    m.deps = deps;
-    \\    for (let i = deps.length - 1; i >= 0; i--) {
-    \\      if (deps[i].deps === null) todo.push(deps[i]);
+    \\    if (urls.length > 1) prefetchModules(urls.join('\n'), root.url);
+    \\    const next = [];
+    \\    for (const m of level) {
+    \\      if (m.deps !== null) continue;
+    \\      const deps = [];
+    \\      for (let i = 0; i < m.requests.length; i++) deps.push(getModule(m.urls[i], m.requests[i][1], m.url));
+    \\      m.deps = deps;
+    \\      for (const d of deps) {
+    \\        if (d.deps === null && !next.includes(d) && !level.includes(d)) next.push(d);
+    \\      }
     \\    }
+    \\    level = next;
     \\  }
     \\}
     \\// The cells of m's exported locals: runs its code to the first stop

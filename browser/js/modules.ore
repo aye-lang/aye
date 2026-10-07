@@ -210,6 +210,19 @@ fn engineParseModule(it: *mut Interp, a: Args) JsError!Value {
     return moduleRecord(it, src.bytes(), href.bytes())
 }
 
+// prefetchModules(hrefs, referrer): fetches the modules (one URL per
+// line) concurrently into the session's cache before they load in turn.
+fn enginePrefetchModules(it: *mut Interp, a: Args) JsError!Value {
+    var hrefs = text.Builder.init(it.alloc)
+    defer hrefs.deinit()
+    try hrefs.append(it.heap.bytes(strOf(it.arg(a, 0))))
+    var referrer = text.Builder.init(it.alloc)
+    defer referrer.deinit()
+    try referrer.append(it.heap.bytes(strOf(it.arg(a, 1))))
+    net.prefetch(it.alloc, hrefs.bytes(), net.Kind.Script, referrer.bytes())
+    return Value.Undefined
+}
+
 fn isModuleMime(mime: []u8) bool {
     return text.eql(mime, "text/javascript") || text.eql(mime, "application/javascript") ||
         text.eql(mime, "text/ecmascript") || text.eql(mime, "application/ecmascript") ||
@@ -431,6 +444,7 @@ fn installModules(it: *mut Interp, e: u32) JsError!void {
     try it.defineNative(e, "resolveModule", 3, engineResolveModule)
     try it.defineNative(e, "fetchModule", 3, engineFetchModule)
     try it.defineNative(e, "parseModule", 2, engineParseModule)
+    try it.defineNative(e, "prefetchModules", 2, enginePrefetchModules)
     try it.defineNative(e, "isModuleNamespace", 1, engineIsModuleNamespace)
     try it.defineNative(e, "constCell", 1, engineConstCell)
     try it.defineNative(e, "makeNamespace", 1, engineMakeNamespace)

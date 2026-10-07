@@ -597,14 +597,21 @@ fn startPageScripts(p: *mut Page) AllocError!void {
     p.script = s
     var all = List(NodeId).init(p.alloc)
     defer all.deinit()
+    // Module scripts and `<link rel=modulepreload>` are fetched with the
+    // others; a module's own imports are fetched when it loads.
+    var fetched = List(NodeId).init(p.alloc)
+    defer fetched.deinit()
     var cur: ?NodeId = p.doc.root
     while cur |h| {
         if p.doc.isElement(h, "script") && (isClassicScript(p, h) || isModuleScript(p, h) || isScriptType(p, h, "importmap")) {
             try all.append(h)
+            try fetched.append(h)
+        } else if p.doc.isElement(h, "link") && text.indexOf(p.doc.attr(h, "rel") orelse "", "modulepreload") != null {
+            try fetched.append(h)
         }
         cur = p.doc.following(h, p.doc.root)
     }
-    try prefetchScripts(p, all.items())
+    try prefetchScripts(p, fetched.items())
     var later = List(NodeId).init(p.alloc)
     defer later.deinit()
     for el in all.items() {
@@ -685,7 +692,7 @@ fn prefetchScripts(p: *mut Page, els: []NodeId) AllocError!void {
     var hrefs = text.Builder.init(p.alloc)
     defer hrefs.deinit()
     for el in els {
-        if p.doc.attr(el, "src") |src| {
+        if p.doc.attr(el, "src") orelse p.doc.attr(el, "href") |src| {
             if p.resolve(p.alloc, src) |target| {
                 defer target.deinit(p.alloc)
                 try hrefs.append(target.withoutFragment())
