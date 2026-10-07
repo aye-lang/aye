@@ -157,6 +157,18 @@ in its own worktree), or a path named after the worktree:
 **Why:** a shared output path lets another agent replace your binary
 between your build and your test, with no sign of it.
 
+### At most three agents run builds and tests at once
+**Context:** launching parallel step agents that build and test.
+**Bad:** on 2026-10-07 five parallel step agents pushed the load
+average to 40–58 on 10 cores. GitHub replay measured 41 s wall for
+3.5 s of CPU (P4.7), and `http_images_background` failed under GC
+stress, passing on rerun (P1.2).
+**Good:** cap concurrent build/test agents at three; diagnose-only or
+docs steps can run beside them. Speed numbers use CPU time (P1.5) or a
+quiet machine.
+**Why:** wall-clock numbers and timing-sensitive tests are wrong on an
+overloaded machine.
+
 ## Compiler gaps
 
 ### Record a compiler limitation in browser/COMPILER_GAPS.md
