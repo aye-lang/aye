@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<!-- Sizing of replaced elements: width/height attributes are presentational
+     hints (any CSS value overrides them, auto too), and min/max sizes keep
+     the aspect ratio of a box whose width and height are both auto. -->
+<style>
+body { margin: 0 }
+div { width: 400px }
+.fluid { max-width: 100%; height: auto }
+.logo { display: flex } .logo svg { height: 40px; width: auto }
+</style>
+<div><svg width="1000" height="500" viewBox="0 0 100 50" class="fluid"></svg></div>
+<div><svg width="1000" height="500" viewBox="0 0 100 50" style="max-width: 100%"></svg></div>
+<div><svg width="100" height="50" viewBox="0 0 4 1" style="width: auto"></svg></div>
+<div><svg width="0" height="0" viewBox="0 0 2 1"></svg></div>
+<div><svg width="1em" height="1em" viewBox="0 0 32 32"></svg></div>
+<div><svg viewBox="0 0 100 50" style="display: block; max-width: 100px"></svg></div>
+<div class="logo"><svg viewBox="0 0 112 32"></svg></div>
+<div><img src="pic.svg" width="1000" height="500" class="fluid"></div>
+<div><img src="pic.svg" width="40" height="20" style="height: 10px"></div>
+<div><iframe src="frame.html" width="100" height="50" style="width: auto"></iframe></div>
+<div><canvas width="100" height="40" style="max-width: 50px"></canvas></div>
