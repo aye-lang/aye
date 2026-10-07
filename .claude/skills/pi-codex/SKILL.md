@@ -35,6 +35,11 @@ above with status `stalled`/`failed` — never hours of silence.
    ending with
    `Co-Authored-By: GPT-6.1-sol via pi <noreply@openai.com>`, and that all
    of `cargo test --test browser` and the full `cargo test` must pass.
+   The build line is `browser/build.sh` with no output path (it writes
+   `target/anyknown` inside the pi worktree). Never give pi an output
+   path outside its worktree or a fixed shared name such as
+   `<scratch>/ak`: other agents build there too
+   (`docs/practices/workflow.md`, "Build into your own worktree").
    One work stream per run; keep it to what a strong engineer does in a
    few hours.
 3. **Launch** with Bash `run_in_background: true` (you are notified when it
