@@ -284,3 +284,35 @@ result: `browser/tools/page_load.py` and `browser/engine/PERF.md`
 (merged in `44f5483`).
 **Why:** a page load spends its time in network, parsing, style and
 layout too; a faster interpreter alone may not change it.
+
+### A forced layout must not cost a full cascade
+**Context:** an API that makes scripts wait for styles or layout
+(geometry, getComputedStyle, observers).
+**Bad:** `0c810b7` styled the whole document again for the first
+geometry query after any DOM change. YouTube's Polymer code writes and
+reads in turns: 137 forced layouts of 50-130 ms each made the watch
+replay 13.6 s instead of 4.2 s, scripts hit their time limit, and the
+related list stayed empty.
+**Good:** measure the count and cost per call first (`ANYKNOWN_TIMING=1`
+phases `script_layout`, `cascade`, `restyle`), then keep the forced
+layout's styles and style again only what the change can reach
+(`browser/engine/geometry.ore` `restyleRoots`,
+`browser/css/invalidation.ore`), with a fixture that compares each kind
+of change with the full layout (`browser/tests/jsdom/layout_restyle.html`).
+Ignore changes to trees out of the document and attributes set to their
+value. Make the cascade itself cheap where it matters
+(`browser/css/rule_index.ore`, `browser/css/ancestor_filter.ore`).
+**Why:** frameworks interleave writes and reads by design; each read is
+correct to force a layout, so its cost has to follow the size of the
+change, not of the document.
+
+### Replay must not change what a page sees
+**Context:** offline replays (`ANYKNOWN_REPLAY`) for performance work.
+**Bad:** the archive answered `data:` URLs too and missed them; once img
+elements reported errors, YouTube re-set its placeholder on every error
+and the replay ran 30,000 image requests (`99432a0`).
+**Good:** when a replay is much slower than expected, compare the phase
+counts (`timers n=`) with a previous binary and look for archive misses
+(`archive miss:` on stderr) before optimizing the engine.
+**Why:** a replay artifact looks like an engine regression and hides the
+real numbers.
