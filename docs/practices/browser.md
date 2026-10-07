@@ -197,6 +197,18 @@ read the stand-in's `documentElement`, not its `childNodes` (it has none)
 **Why:** the page has one real document; every other one is a stand-in
 with only a few of Document's members.
 
+### Do not give a public constructor a private signature
+**Context:** a web API class the browser also makes itself (Response
+from fetch).
+**Bad:** until P3.18, `Response`'s constructor took fetch's native
+record `{status, url, type, body}`; a page's `new Response('text')` made
+a response with status, body and headers undefined, and no error.
+**Good:** the constructor takes the standard arguments; the browser
+makes its own with a helper that fills a prototype object
+(`responseFrom`, `browser/engine/prelude.ore`).
+**Why:** pages and libraries construct these classes too (service-worker
+shims, feature tests); a private signature fails them silently.
+
 ### A parsed document is another document to the page's scripts
 **Context:** a stand-in document (DOMParser, `createHTMLDocument`) that
 an SPA router fills from fetched HTML.
