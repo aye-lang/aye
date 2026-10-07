@@ -50,7 +50,12 @@ fn installNumber(it: *mut Interp) JsError!void {
 fn numberCtor(it: *mut Interp, a: Args) JsError!Value {
     var n = 0.0
     if a.argc > 0 {
-        n = try it.toNumber(it.arg(a, 0))
+        let p = try it.toPrimitiveHint(it.arg(a, 0), 1)
+        if isBig(p) {
+            n = bigNumber(it, p)
+        } else {
+            n = try it.toNumber(p)
+        }
     }
     if a.new_target != NONE {
         return objVal(try it.newObjectOf(Class.Number, it.number_proto, ObjData.Prim { v: numVal(n) }))

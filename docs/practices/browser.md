@@ -166,6 +166,20 @@ page-created MutationObserver. The `style_props.html` fixture covers this.
 **Why:** Ore locals are not GC roots; a hook can allocate or invoke JS
 before the native returns.
 
+### Preserve exact numeric types through shared coercion paths
+**Context:** adding a numeric primitive to the JS engine.
+**Bad:** lexer `10n` used to discard the suffix and store an f64; routing
+operators through `toNumber` would either round BigInts or reject valid
+BigInt arithmetic. Accumulating limbs into an f64 also rounds more than
+once (`Number` halfway cases in `248_bigint_edges.js`).
+**Good:** keep literal digits as atoms, use `numericValue` (ToNumeric) for
+operators/updates, and reserve `toNumber` for consumers that must reject
+BigInt (Math, unary plus). Explicit `Number` uses a single guard/sticky,
+ties-to-even rounding step. Trace the new primitive's payload in
+`gc.ore`; run the Node goldens under GC stress.
+**Why:** the syntax, coercion, fast paths, equality and GC visitors must
+agree on the type. A correct arithmetic helper alone is not a primitive.
+
 ### Capture an import's referrer in its syntax, not the active script
 **Context:** dynamic imports inside functions, timers and promise callbacks.
 **Bad:** resolving against document.currentScript at call time, or treating
@@ -305,6 +319,22 @@ font's, and skips without a system font (`tests/browser.rs:436`).
 **Why:** the fixed-metric test font is part of the repo; system fonts
 are not.
 
+### Let the test server wait for the event, not for a time
+**Context:** a test that checks what is in flight at the server (loads
+in the background, concurrency) while the browser runs.
+**Bad:** `net/bg_images.html` asked `/slow-now`, which counted the
+`/slow/` images 0.1 s after it arrived; each image was answered 0.3 s
+after its own arrival. When the browser stalled more than 0.2 s between
+starting the images and sending the request (load 40+, GC stress), all
+had been answered: "in flight: none" (P3.12; reproduced with the
+browser at `taskpolicy -c background` under 40 `yes` processes).
+**Good:** the images use `/held/`, which answers only after a
+`/held-now` request counted it; `/held-now` waits until one is in flight
+(`browser/tests/server.py`, `HELD_CHANGED`). The waits stop after
+`HOLD_LIMIT` s, which only a broken browser reaches.
+**Why:** a sleep only says "probably happened by now"; a loaded machine
+breaks every such window, and the next run passes.
+
 ## Debugging a real site
 
 ### See console output with `dump --js`, not the headless window
@@ -433,7 +463,7 @@ ended (`ak.imageTask`, `a018c5c`; `8ae98cd` batched a turn's requests
 into one `net.prefetch` before that). Check a live run's `requests`
 phase for serial runs of the same host as well as the replay. The test
 server's `/slow/` route counts concurrent requests
-(`http_images_concurrent`) and `/slow-now` the ones in flight
+(`http_images_concurrent`) and `/held-now` the `/held/` ones in flight
 (`http_images_background`).
 **Why:** a real browser loads in parallel and never blocks on it; a
 blocking fetch costs one round trip per request.

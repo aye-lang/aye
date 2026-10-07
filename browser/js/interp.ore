@@ -154,6 +154,8 @@ pub struct Interp {
     array_proto: u32
     string_proto: u32
     number_proto: u32
+    // BigInt primitive methods (also the prototype of BigInt wrappers).
+    bigint_proto: u32 = NONE
     boolean_proto: u32
     error_proto: u32
     type_error_proto: u32
@@ -927,6 +929,9 @@ pub struct Interp {
             .Num { .. } => {
                 return self.getFrom(self.number_proto, key, v)
             }
+            .Big { .. } => {
+                return self.getFrom(self.bigint_proto, key, v)
+            }
             .Bool { .. } => {
                 return self.getFrom(self.boolean_proto, key, v)
             }
@@ -1503,6 +1508,7 @@ pub struct Interp {
             .Empty => false
             .Bool { b } => b
             .Num { n } => n == n && n != 0.0
+            .Big { s } => self.heap.byteLen(s) > 1
             .Str { s } => self.heap.str(s).len16 > 0
             .Obj { o } => !self.heap.obj(o).htmldda
         }
@@ -1515,9 +1521,15 @@ pub struct Interp {
             .Null => 0.0
             .Bool { b } => boolNumber(b)
             .Num { n } => n
+            .Big { .. } => try self.bigToNumberError()
             .Str { s } => stringToNumber(self.heap.bytes(s))
             .Obj { .. } => try self.objectToNumber(v)
         }
+    }
+
+    fn bigToNumberError(self: *mut Self) JsError!f64 {
+        try self.typeError("Cannot convert a BigInt value to a number")
+        return 0.0
     }
 
     fn objectToNumber(self: *mut Self, v: Value) JsError!f64 {
@@ -1549,8 +1561,31 @@ pub struct Interp {
             first = A_TOSTRING
             second = A_VALUEOF
         }
+        let rootBase = self.stack.len()
         try self.push(v)
-        defer self.pop()
+        defer self.truncate(rootBase)
+        if self.sym_to_primitive != NONE {
+            let exotic = try self.getProp(v, self.sym_to_primitive)
+            if !isNullish(exotic) {
+                if !self.isCallable(exotic) {
+                    return self.typeError("Symbol.toPrimitive is not callable")
+                }
+                try self.push(exotic)
+                var hintName: []u8 = "default"
+                if hint == 1 {
+                    hintName = "number"
+                } else if hint == 2 {
+                    hintName = "string"
+                }
+                let hv = try self.atomValue(try self.intern(hintName))
+                let r = try self.call1(exotic, v, hv)
+                self.pop()
+                if !isObject(r) || isSymbol(self, r) {
+                    return r
+                }
+                return self.typeError("Cannot convert object to primitive value")
+            }
+        }
         let f1 = try self.getProp(v, first)
         if self.isCallable(f1) {
             let r = try self.call0(f1, v)
@@ -1582,6 +1617,7 @@ pub struct Interp {
                 }
             }
             .Num { n } => try formatNumber(b, n)
+            .Big { .. } => try bigAppend(self, b, v, 10)
             .Str { s } => try appendJoined(b, self.heap.bytes(s))
             .Obj { .. } => {
                 let p = try self.toPrimitive(v, true)
@@ -1618,6 +1654,9 @@ pub struct Interp {
             .Num { .. } => {
                 return self.newObjectOf(Class.Number, self.number_proto, ObjData.Prim { v: v })
             }
+            .Big { .. } => {
+                return self.newObjectOf(Class.BigInt, self.bigint_proto, ObjData.Prim { v: v })
+            }
             .Bool { .. } => {
                 return self.newObjectOf(Class.Boolean, self.boolean_proto, ObjData.Prim { v: v })
             }
@@ -1644,6 +1683,10 @@ pub struct Interp {
             }
             .Num { n: x } => match b {
                 .Num { n: y } => x == y
+                _ => false
+            }
+            .Big { s: x } => match b {
+                .Big { s: y } => x == y || text.eql(self.heap.bytes(x), self.heap.bytes(y))
                 _ => false
             }
             .Str { s: x } => match b {
@@ -1674,6 +1717,9 @@ pub struct Interp {
     }
 
     pub fn looseEquals(self: *mut Self, a: Value, b: Value) JsError!bool {
+        if (isBig(a) && isSymbol(self, b)) || (isBig(b) && isSymbol(self, a)) {
+            return false
+        }
         if isNullish(a) || isNullish(b) {
             return (isNullish(a) || self.isHtmlDda(a)) && (isNullish(b) || self.isHtmlDda(b))
         }
@@ -1715,6 +1761,11 @@ pub struct Interp {
             let pb = try self.toPrimitive(b, false)
             return self.looseEquals(a, pb)
         }
+        if isBig(a) || isBig(b) {
+            if isStr(a) || isStr(b) || a is .Num || b is .Num || (isBig(a) && isBig(b)) {
+                return try bigCompareValues(self, a, b) == 0
+            }
+        }
         return self.strictEquals(a, b)
     }
 
@@ -1735,6 +1786,7 @@ pub struct Interp {
             .Null => "object"
             .Bool { .. } => "boolean"
             .Num { .. } => "number"
+            .Big { .. } => "bigint"
             .Str { .. } => "string"
             .Obj { o: oid } => objectTypeName(self.heap.obj(oid).class)
         }
@@ -1777,6 +1829,9 @@ pub struct Interp {
             try self.appendString(sb, pb)
             return self.takeString(sb)
         }
+        if isBig(pa) || isBig(pb) {
+            return bigArithmetic(self, Op.Add, pa, pb)
+        }
         let x = try self.toNumber(pa)
         let y = try self.toNumber(pb)
         return numVal(x + y)
@@ -1813,6 +1868,10 @@ pub struct Interp {
                 return c <= 0
             }
             return c < 0
+        }
+        if isBig(pa) || isBig(pb) {
+            let c = try bigCompareValues(self, pa, pb)
+            return c == -1 || (orEqual && c == 0)
         }
         let x = try self.toNumber(pa)
         let y = try self.toNumber(pb)
@@ -1908,9 +1967,14 @@ pub struct Interp {
             let key = try self.toKey(a)
             return boolVal(try self.hasPropertyJs(o, key))
         }
-        let x = try self.toNumber(a)
-        let y = try self.toNumber(b)
-        return numVal(arith(op, x, y))
+        let pa = try numericValue(self, a)
+        try self.push(pa)
+        defer self.pop()
+        let pb = try numericValue(self, b)
+        if isBig(pa) || isBig(pb) {
+            return bigArithmetic(self, op, pa, pb)
+        }
+        return numVal(arith(op, try self.toNumber(pa), try self.toNumber(pb)))
     }
 
     // ---- calls
@@ -2706,6 +2770,9 @@ pub struct Interp {
             .Num { v } => {
                 return numVal(v)
             }
+            .BigLit { atom } => {
+                return bigLiteral(self, self.heap.atoms.name(atom))
+            }
             .Str { atom } => {
                 return self.atomValue(atom)
             }
@@ -3463,7 +3530,13 @@ pub struct Interp {
         if op == Op.Not {
             return boolVal(!self.toBoolean(v))
         }
-        let x = try self.toNumber(v)
+        try self.push(v)
+        defer self.pop()
+        let p = try self.toPrimitiveHint(v, 1)
+        if isBig(p) {
+            return bigUnary(self, op, p)
+        }
+        let x = try self.toNumber(p)
         if op == Op.Neg {
             return numVal(-x)
         }
@@ -3498,34 +3571,42 @@ pub struct Interp {
                         _ => {}
                     }
                 }
-                let old = try self.toNumber(try self.readIdent(arg, name, depth, slot))
-                try self.assignIdent(arg, numVal(old + delta), false)
+                let old = try numericValue(self, try self.readIdent(arg, name, depth, slot))
+                try self.push(old)
+                let next = try numericIncrement(self, old, inc)
+                try self.assignIdent(arg, next, false)
                 if prefix {
-                    return numVal(old + delta)
+                    return next
                 }
-                return numVal(old)
+                return old
             }
             .Member { obj, name, .. } => {
                 let o = try self.eval(obj)
                 try self.push(o)
-                let old = try self.toNumber(try getCachedProp(self, arg, o, name))
-                try setCachedProp(self, arg, o, name, numVal(old + delta))
+                let old = try numericValue(self, try getCachedProp(self, arg, o, name))
+                try self.push(old)
+                let next = try numericIncrement(self, old, inc)
+                try self.push(next)
+                try setCachedProp(self, arg, o, name, next)
                 if prefix {
-                    return numVal(old + delta)
+                    return next
                 }
-                return numVal(old)
+                return old
             }
             .Index { obj, key, .. } => {
                 let o = try self.eval(obj)
                 try self.push(o)
                 let k = try self.eval(key)
                 try self.push(k)
-                let old = try self.toNumber(try self.getIndex(o, k))
-                try self.setIndex(o, k, numVal(old + delta))
+                let old = try numericValue(self, try self.getIndex(o, k))
+                try self.push(old)
+                let next = try numericIncrement(self, old, inc)
+                try self.push(next)
+                try self.setIndex(o, k, next)
                 if prefix {
-                    return numVal(old + delta)
+                    return next
                 }
-                return numVal(old)
+                return old
             }
             _ => {
                 return self.typeError("Invalid left-hand side expression in postfix operation")

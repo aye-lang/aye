@@ -19,6 +19,8 @@ pub enum Value {
     Null
     Bool { b: bool }
     Num { n: f64 }
+    // Binary limb payload in a GC-managed flat byte cell (bigint.ore).
+    Big { s: u32 }
     Str { s: u32 }
     Obj { o: u32 }
     // Internal: an array hole; never visible to scripts.
@@ -32,6 +34,7 @@ pub enum Class {
     Error
     Boolean
     Number
+    BigInt
     String
     Date
     Arguments

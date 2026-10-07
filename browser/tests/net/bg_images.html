@@ -1,11 +1,11 @@
 <!doctype html><title>Background images</title>
-<p>Four images answered after 0.3 s each load in the background: the
-scripts after them run while they load, their load events come in
-order before the window's, and a request replaced while it loads never
-fires.</p>
-<img id="a" src="/slow/paint/img/photo.png?a"><img id="b" src="/slow/paint/img/photo.png?b">
-<img id="c" src="/slow/paint/img/photo.png?c"><img id="d" src="/slow/paint/img/photo.png?d">
-<img id="e" src="/slow/paint/img/photo.png?e1">
+<p>Four images that the server holds until the second script asked it
+how many it holds load in the background: the scripts after them run
+while they load, their load events come in order before the window's,
+and a request replaced while it loads never fires.</p>
+<img id="a" src="/held/paint/img/photo.png?a"><img id="b" src="/held/paint/img/photo.png?b">
+<img id="c" src="/held/paint/img/photo.png?c"><img id="d" src="/held/paint/img/photo.png?d">
+<img id="e" src="/held/paint/img/photo.png?e1">
 <pre id="log"></pre>
 <script>
 const lines = [];
@@ -23,8 +23,8 @@ note('first script: complete=' + imgs.map(i => i.complete).join());
 </script>
 <script>
 // The requests started at the end of the first script; this one runs
-// while they load.
-fetch('/slow-now').then(r => r.text()).then(t => note('images in flight during the second script: ' + (+t > 0 ? 'some' : 'none')));
+// while they load (the server answers them only after this request).
+fetch('/held-now').then(r => r.text()).then(t => note('images in flight during the second script: ' + (+t > 0 ? 'some' : 'none')));
 note('second script: complete=' + imgs.map(i => i.complete).join() + ' naturalWidth=' + imgs[0].naturalWidth);
 // Replaced while it loads: only the new request's load event fires.
 e.src = '/slow/paint/img/photo.png?e2';

@@ -484,7 +484,7 @@ struct Stringifier {
         defer it.truncate(base)
         var v = vIn
         try it.push(v)
-        if isObject(v) {
+        if isObject(v) || isBig(v) {
             let tj = try it.getProp(v, A_TOJSON)
             if it.isCallable(tj) {
                 let kv = try it.atomValue(key)
@@ -505,6 +505,8 @@ struct Stringifier {
                 } else if cls == Class.String {
                     v = try it.toStringValue(v)
                     try it.push(v)
+                } else if cls == Class.BigInt {
+                    v = try thisBigInt(it, v)
                 } else if cls == Class.Boolean {
                     v = try thisPrimitive(it, Args { this: v, base: 0, argc: 0, callee: NONE, new_target: NONE }, Class.Boolean)
                 }
@@ -512,6 +514,9 @@ struct Stringifier {
             _ => {}
         }
         match v {
+            .Big { .. } => {
+                try it.typeError("Do not know how to serialize a BigInt")
+            }
             .Null => try b.append("null")
             .Bool { b: flag } => {
                 if flag {
