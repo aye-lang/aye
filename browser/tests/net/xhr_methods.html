@@ -1,0 +1,128 @@
+<!doctype html>
+<title>XHR methods</title>
+<pre id="out"></pre>
+<script>
+// XMLHttpRequest with methods, bodies and request headers, through the
+// test server's /fetch-echo (tests/browser.rs: xhr_methods). Each line
+// shows what the server received; a multipart boundary is written as B.
+const out = document.getElementById('out');
+const log = s => { out.textContent += s + '\n'; };
+function show(name, e) {
+  const h = e.headers;
+  const type = h['content-type'];
+  const boundary = type && type.includes('boundary=') ? type.split('boundary=')[1] : null;
+  const body = boundary ? e.body.split(boundary).join('B') : e.body;
+  log(name + ': ' + e.method + ' ' + e.path + ' type=' + (boundary ? type.split('boundary=')[0] + 'boundary=B' : type || '-') +
+    ' length=' + (boundary ? '*' : h['content-length'] || '-') + ' body=' + JSON.stringify(body));
+}
+// Sends `body` with `method` to `url` (headers: [name, value] pairs set
+// with setRequestHeader); resolves with the XHR once it loaded.
+function xhr(method, url, body, headers) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open(method, url);
+    for (const [n, v] of headers || []) x.setRequestHeader(n, v);
+    x.onload = () => resolve(x);
+    x.onerror = () => reject(new Error('xhr error'));
+    x.send(body);
+  });
+}
+async function echo(name, method, url, body, headers) {
+  const x = await xhr(method, url, body, headers);
+  const e = JSON.parse(x.responseText);
+  show(name, e);
+  return e;
+}
+function error(what, f) {
+  try {
+    f();
+    log(what + ': no error');
+  } catch (e) {
+    log(what + ': ' + e.name);
+  }
+}
+(async () => {
+  await echo('string', 'POST', '/fetch-echo', 'héllo');
+  await echo('params', 'post', '/fetch-echo', new URLSearchParams({ a: '1', b: 'x y' }));
+  const fd = new FormData();
+  fd.append('name', 'value\nline');
+  fd.append('file', new Blob(['data'], { type: 'text/plain' }), 'f"1.txt');
+  const f = await echo('formdata', 'POST', '/fetch-echo', fd);
+  log('  fields: ' + JSON.stringify(f.fields));
+  const b = await echo('buffer', 'PUT', '/fetch-echo', new Uint8Array([0, 1, 254, 255]).buffer);
+  log('  hex: ' + b.hex);
+  const v = await echo('view', 'put', '/fetch-echo', new Uint8Array([9, 8, 7, 6]).subarray(1, 3));
+  log('  hex: ' + v.hex);
+  await echo('blob', 'patch', '/fetch-echo', new Blob(['{"a":1}'], { type: 'application/json' }));
+  await echo('document', 'POST', '/fetch-echo', document.implementation.createHTMLDocument('t'));
+  await echo('delete', 'delete', '/fetch-echo?id=3');
+  await echo('empty post', 'POST', '/fetch-echo');
+  await echo('null post', 'POST', '/fetch-echo', null);
+  await echo('get with a body', 'GET', '/fetch-echo', 'ignored');
+  await echo('custom method', 'FROB', '/fetch-echo');
+  const hd = await echo('headers', 'POST', '/fetch-echo', '{}', [
+    ['X-Custom', 'yes'], ['Content-Type', 'application/json'], ['Accept', 'application/json'],
+    ['Sec-Thing', 'no'], ['Proxy-Thing', 'no'], ['Cookie', 'no'], ['Content-Length', '99'],
+  ]);
+  log('  x-custom=' + hd.headers['x-custom'] + ' accept=' + hd.headers.accept + ' sec-thing=' + hd.headers['sec-thing'] +
+    ' proxy-thing=' + hd.headers['proxy-thing'] + ' cookie=' + hd.headers.cookie);
+  const tw = await echo('combined', 'GET', '/fetch-echo', null, [['X-Twice', ' a '], ['x-twice', 'b']]);
+  log('  x-twice=' + tw.headers['x-twice'] + ' accept=' + tw.headers.accept);
+  const head = await xhr('HEAD', '/fetch-echo');
+  log('head: ' + head.status + ' body=' + JSON.stringify(head.responseText));
+  for (const method of ['POST', 'PUT']) {
+    for (const status of [301, 302, 303, 307, 308]) {
+      const x = await xhr(method, '/fetch-redirect/' + status, 'moved', [['X-Custom', 'kept']]);
+      const e = JSON.parse(x.responseText);
+      log(method + ' ' + status + ': ' + e.method + ' ' + e.path + ' type=' + (e.headers['content-type'] || '-') + ' body=' + JSON.stringify(e.body) +
+        ' x-custom=' + e.headers['x-custom'] + ' responseURL=' + x.responseURL.replace(location.origin, ''));
+    }
+  }
+  const sync = new XMLHttpRequest();
+  sync.open('PUT', '/fetch-echo', false);
+  sync.setRequestHeader('X-Sync', '1');
+  sync.send('sync body');
+  const se = JSON.parse(sync.responseText);
+  log('sync: ' + sync.readyState + ' ' + sync.status + ' ' + se.method + ' body=' + JSON.stringify(se.body) + ' x-sync=' + se.headers['x-sync']);
+  // Events and states of a POST.
+  const ev = new XMLHttpRequest();
+  const seen = [];
+  ev.onreadystatechange = () => seen.push('rsc' + ev.readyState);
+  for (const t of ['load', 'loadend', 'error']) ev.addEventListener(t, () => seen.push(t));
+  await new Promise(resolve => {
+    ev.onloadend = () => setTimeout(resolve, 0);
+    ev.open('POST', '/fetch-echo');
+    ev.send('x');
+  });
+  log('events: ' + seen.join(' ') + ' status=' + ev.status + ' type=' + ev.getResponseHeader('Content-Type'));
+  // Errors.
+  const x = new XMLHttpRequest();
+  error('setRequestHeader before open', () => x.setRequestHeader('X-A', '1'));
+  error('send before open', () => x.send());
+  error('open with a bad method', () => x.open('BAD METHOD', '/fetch-echo'));
+  error('open TRACE', () => x.open('trace', '/fetch-echo'));
+  error('open CONNECT', () => x.open('CONNECT', '/fetch-echo'));
+  x.open('POST', '/fetch-echo');
+  error('setRequestHeader with a bad name', () => x.setRequestHeader('Bad Name', '1'));
+  error('setRequestHeader with a bad value', () => x.setRequestHeader('X-A', 'a\nb'));
+  error('setRequestHeader when opened', () => x.setRequestHeader('X-A', '1'));
+  await new Promise(resolve => {
+    x.onloadend = () => setTimeout(resolve, 0);
+    x.send('one');
+    error('setRequestHeader after send', () => x.setRequestHeader('X-B', '1'));
+    error('send twice', () => x.send('two'));
+  });
+  log('after load: ' + JSON.parse(x.responseText).headers['x-a']);
+  error('setRequestHeader when done', () => x.setRequestHeader('X-C', '1'));
+  error('send when done', () => x.send());
+  // open() again forgets the headers set before.
+  x.open('POST', '/fetch-echo');
+  x.setRequestHeader('X-D', '1');
+  x.open('POST', '/fetch-echo');
+  const again = await new Promise(resolve => {
+    x.onloadend = () => resolve(JSON.parse(x.responseText));
+    x.send('again');
+  });
+  log('reopened: x-d=' + again.headers['x-d'] + ' x-a=' + again.headers['x-a']);
+})().catch(e => log('error: ' + e));
+</script>
