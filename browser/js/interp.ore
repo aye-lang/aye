@@ -2454,7 +2454,11 @@ pub struct Interp {
     fn runField(self: *mut Self, value: u32, env: u32, thisv: Value, home: u32) JsError!Value {
         match self.ast.node(value) {
             .Func { f } => {
+                // On the stack: invoke allocates before its frame holds it.
+                let base = self.stack.len()
+                defer self.truncate(base)
                 let fobj = try self.newObjectOf(Class.Function, self.function_proto, ObjData.Closure { func: f, env: env, home: home, outer: NONE })
+                try self.push(objVal(fobj))
                 return try self.invoke(f, env, fobj, thisv, self.stack.len(), 0, NONE)
             }
             _ => {}
