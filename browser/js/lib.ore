@@ -1,10 +1,9 @@
 // js/lib: built-ins written in JavaScript, run by installBuiltins after
 // the native ones: Promise and the drivers of async functions and async
-// generators (coroutine.ore), WeakMap and WeakSet (holding their keys
-// strongly), WeakRef, Reflect, typed arrays (arrays of converted numbers;
-// a view of an ArrayBuffer is a copy), DataView, an English-only Intl,
-// Date setters and formats, String.raw, escape/unescape, structuredClone
-// and smaller methods.
+// generators (coroutine.ore), Reflect, typed arrays (arrays of
+// converted numbers; a view of an ArrayBuffer is a copy), DataView, an
+// English-only Intl, Date setters and formats, String.raw,
+// escape/unescape, structuredClone and smaller methods.
 //
 // The source is kept in a multi-line string (no @embedFile, see
 // browser/COMPILER_GAPS.md).
@@ -18,44 +17,6 @@ pub let LIB =
     \\}
     \\function methods(o, table) {
     \\  for (const k of Object.keys(table)) hidden(o, k, table[k]);
-    \\}
-    \\
-    \\// ---- weak collections (they hold their keys strongly)
-    \\
-    \\function needObject(k, what) {
-    \\  if (k === null || (typeof k !== 'object' && typeof k !== 'function')) throw new TypeError('Invalid value used ' + what);
-    \\}
-    \\class WeakMap {
-    \\  constructor(entries) {
-    \\    hidden(this, '_m', new Map());
-    \\    if (entries !== undefined && entries !== null) for (const [k, v] of entries) this.set(k, v);
-    \\  }
-    \\  get(k) { return this._m.get(k); }
-    \\  set(k, v) { needObject(k, 'as weak map key'); this._m.set(k, v); return this; }
-    \\  has(k) { return this._m.has(k); }
-    \\  delete(k) { return this._m.delete(k); }
-    \\}
-    \\class WeakSet {
-    \\  constructor(values) {
-    \\    hidden(this, '_s', new Set());
-    \\    if (values !== undefined && values !== null) for (const v of values) this.add(v);
-    \\  }
-    \\  add(v) { needObject(v, 'in weak set'); this._s.add(v); return this; }
-    \\  has(v) { return this._s.has(v); }
-    \\  delete(v) { return this._s.delete(v); }
-    \\}
-    \\class WeakRef {
-    \\  constructor(t) { needObject(t, 'as WeakRef target'); hidden(this, '_t', t); }
-    \\  deref() { return this._t; }
-    \\}
-    \\class FinalizationRegistry {
-    \\  constructor(cb) { if (typeof cb !== 'function') throw new TypeError('FinalizationRegistry: cleanup must be callable'); }
-    \\  register() {}
-    \\  unregister() { return false; }
-    \\}
-    \\for (const c of [WeakMap, WeakSet, WeakRef, FinalizationRegistry]) {
-    \\  hidden(G, c.name, c);
-    \\  Object.defineProperty(c.prototype, Symbol.toStringTag, { value: c.name, configurable: true });
     \\}
     \\
     \\// ---- Object, Array, String, Error additions

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<title>Weak collections and nodes</title>
+<div id="box"><p id="a">a</p></div>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+// Per-node state as frameworks keep it: the wrappers of nodes in the
+// document stay the same objects, so their entries stay.
+const state = new WeakMap();
+const fr = new FinalizationRegistry(h => log('finalized', h));
+state.set(document.getElementById('a'), { clicks: 1 });
+fr.register(document.getElementById('a'), 'attached p');
+(function () {
+  const gone = document.createElement('span');
+  state.set(gone, { note: 'detached' });
+  fr.register(gone, 'detached span');
+})();
+let junk = [];
+function churn() { for (let i = 0; i < 60000; i++) { junk.push({ i }); if (junk.length > 1000) junk = []; } }
+churn();
+log('state of a', state.get(document.getElementById('a')).clicks);
+setTimeout(() => {
+  churn();
+  log('state of a after collections', state.get(document.getElementById('a')).clicks);
+}, 10);
+</script>
