@@ -117,10 +117,10 @@
       "note": "YouTube serves a cookieless visitor an empty feed (feedNudgeRenderer, \"Try searching to get started\"); we render exactly that."
     },
     "youtube-search": {
-      "status": "excluded",
+      "status": "ok",
       "max_errors": 0,
       "md": ["Filters", "### Learn Rust Programming - Complete Course", "## Shorts"],
-      "note": "replay not deterministic: lazy thumbnails differ per run under load (plan P1.7)"
+      "note": "Replays deterministically since P1.7-P1.10 (step-limited tasks, virtual clock): 5 of 5 checks gave the same markdown with no archive misses; about 76 s CPU per load (plan P1.11)"
     },
     "react": {
       "status": "ok",

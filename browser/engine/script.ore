@@ -26,8 +26,8 @@
 // inserted after the script once it returns);
 // `async` scripts run like `defer` ones; modules run deferred; a script
 // that never returns hangs the browser. Time is virtual for `dump` and
-// the agent (the event loop jumps to the next timer) and real for the
-// window.
+// the agent (the event loop jumps to the next timer, and a task's steps
+// move it: STEPS_PER_MS) and real for the window.
 
 import dom
 import dom.Kind
@@ -93,6 +93,13 @@ pub let TASK_STEPS: u64 = 100000000
 let TASK_BACKSTOP_MS: u64 = 120000
 // Under GC stress (tests), only steps count, and fewer.
 let STRESS_STEPS: u64 = 2000000
+// On the virtual clock, time passes inside a task too: 1 ms per
+// STEPS_PER_MS steps (a JIT's pace), so that code which waits for the
+// clock (a scheduler's time budget) ends, always after the same work.
+// Whole ms: a short task sees the clock stand still. 100,000 was too
+// slow a pace: YouTube's work used up `dump`'s 30 s before its results
+// rendered (27 videos of 35), and zol and react asked for other URLs.
+let STEPS_PER_MS: u64 = 1000000
 
 var scripting_on: bool = false
 var real_clock: bool = false
@@ -285,6 +292,9 @@ pub struct Script {
     // The steps of the tasks that ended (the budget of a checkpoint on
     // the virtual clock).
     work: u64 = 0
+    // The steps (`work` and the running task's) the virtual clock has
+    // counted.
+    ticked: u64 = 0
     // The layout geometry questions read (geometry.ore), and the font it
     // measures with when the page was never laid out.
     geom: ?*mut Geometry
@@ -566,14 +576,15 @@ fn createScript(p: *mut Page) AllocError!*mut Script {
 
 fn setUp(s: *mut Script) JsError!void {
     try js.installBuiltins(&mut s.it)
-    if benchmarkEnabled() {
-        try s.it.runScript(BENCHMARK_PRELUDE)
-    }
     if js.gcStressRequested() {
         s.it.heap.threshold = 1
     }
     try installDom(s)
     try installWindow(s)
+    // After `__ak` (it reads the page's clock), before the prelude.
+    if benchmarkEnabled() {
+        try s.it.runScript(BENCHMARK_PRELUDE)
+    }
     try s.it.runScript(PRELUDE)
     try s.it.runScript(FORM_PRELUDE)
     try s.it.runScript(CANVAS_PRELUDE)
@@ -1194,7 +1205,15 @@ fn checkpointOver(s: *Script, cpu: u64, work: u64) bool {
 fn tick(s: *mut Script) {
     if s.real {
         s.now = (time.monotonicMs() - s.start_ms) as f64
+        return
     }
+    var done = s.work
+    if s.depth > 0 {
+        done += s.it.steps
+    }
+    let ms = (done - s.ticked) / STEPS_PER_MS
+    s.now += ms as f64
+    s.ticked += ms * STEPS_PER_MS
 }
 
 // The timer due first (by time, then by order of scheduling), if it is
