@@ -1,0 +1,12 @@
+<!doctype html>
+<title>'prop' in element.style</title>
+<p id="out">pending</p>
+<script>
+// GSAP finds its transform property with `'transform' in div.style`; a
+// null answer made every tick throw on the Mistral blog.
+const s = document.createElement('div').style;
+document.getElementById('out').textContent = [
+  'transform' in s, 'transformOrigin' in s, 'opacity' in s, 'margin' in s,
+  'cssFloat' in s, 'setProperty' in s, 'noSuchProperty' in s, '0' in s,
+].join(' ');
+</script>

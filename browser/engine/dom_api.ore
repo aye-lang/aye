@@ -1641,12 +1641,23 @@ fn namedHas(s: *mut Script, o: u32, key: u32) bool {
     if tag == TAG_LIST {
         return listHas(s, o, key)
     }
-    if tag & TAG_KIND != TAG_DATASET || it.hasProperty(it.heap.obj(o).proto, key) {
+    if (tag & TAG_KIND != TAG_DATASET && tag & TAG_KIND != TAG_STYLE) || it.hasProperty(it.heap.obj(o).proto, key) {
         return false
     }
-    let h = sideNode(it, o) orelse return false
     var b = text.Builder.init(s.alloc)
     defer b.deinit()
+    if tag & TAG_KIND == TAG_STYLE {
+        // Every property the cascade knows, set or not.
+        let name = it.heap.atoms.name(key)
+        if text.eql(name, "cssFloat") {
+            return true
+        }
+        kebab(name, "", &mut b) catch |e| {
+            return false
+        }
+        return css.isProperty(b.bytes())
+    }
+    let h = sideNode(it, o) orelse return false
     kebab(it.heap.atoms.name(key), "data-", &mut b) catch |e| {
         return false
     }
