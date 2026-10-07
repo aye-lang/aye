@@ -885,3 +885,13 @@ window draws between turns (`window_timers_yield_to_frames`). When a
 window run hangs, sample it: a `timers` count far above the `paint`
 count with `ANYKNOWN_TIMING=1` is this starvation.
 **Why:** a page may always have a due task; frames must still come.
+
+### Show a socket file only once it listens
+**Context:** a test (or `anyknown connect`) waits for the agent socket's
+file, then connects (`window_agents`, P3.57).
+**Bad:** `bind()` creates the file before `listen()` runs; a client that
+saw the file in between got "connection refused" (once, under load).
+**Good:** `listenAt` (`browser/ui/socket.ore`) binds `PATH.l`, listens,
+then `rename`s it to `PATH`; the file's existence means it accepts.
+**Why:** wait on the state you need (listening), and make the signal
+appear only with it, instead of retrying or sleeping.
