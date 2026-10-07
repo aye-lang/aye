@@ -366,6 +366,60 @@ fn descFlag(it: *mut Interp, desc: Value, key: []u8, flag: u8, old: u8) JsError!
     return 0
 }
 
+/// Whether desc may redefine o's non-configurable property key, whose
+/// flags are old (ValidateAndApplyPropertyDescriptor): it may not make it
+/// configurable, change enumerable or its kind, or change a getter, a
+/// setter or a non-writable value; writable may only go to false.
+fn redefinable(it: *mut Interp, o: u32, key: u32, desc: Value, old: u8) JsError!bool {
+    let d = objectOf(desc)
+    if it.hasProperty(d, A_CONFIGURABLE) && it.toBoolean(try it.getProp(desc, A_CONFIGURABLE)) {
+        return false
+    }
+    if it.hasProperty(d, A_ENUMERABLE) && it.toBoolean(try it.getProp(desc, A_ENUMERABLE)) != ((old & F_ENUM) != 0) {
+        return false
+    }
+    let hasGet = it.hasProperty(d, A_GET)
+    let hasSet = it.hasProperty(d, A_SET)
+    let hasValue = it.hasProperty(d, A_VALUE)
+    let hasWrite = it.hasProperty(d, A_WRITABLE)
+    if (old & F_ACCESSOR) != 0 {
+        if hasValue || hasWrite {
+            return false
+        }
+        if hasGet {
+            let v = try it.getProp(desc, A_GET)
+            let i = it.heap.findProp(o, key) orelse return true
+            if !sameValue(it, v, it.heap.obj(o).props[i].value) {
+                return false
+            }
+        }
+        if hasSet {
+            let v = try it.getProp(desc, A_SET)
+            let i = it.heap.findProp(o, key) orelse return true
+            if !sameValue(it, v, it.heap.obj(o).props[i].setter) {
+                return false
+            }
+        }
+        return true
+    }
+    if hasGet || hasSet {
+        return false
+    }
+    if (old & F_WRITE) == 0 {
+        if hasWrite && it.toBoolean(try it.getProp(desc, A_WRITABLE)) {
+            return false
+        }
+        if hasValue {
+            let v = try it.getProp(desc, A_VALUE)
+            let i = it.heap.findProp(o, key) orelse return true
+            if !sameValue(it, v, it.heap.obj(o).props[i].value) {
+                return false
+            }
+        }
+    }
+    return true
+}
+
 /// Object.defineProperty(o, key, desc) on object o.
 pub fn definePropertyFrom(it: *mut Interp, o: u32, key: u32, desc: Value) JsError!void {
     if !isObject(desc) {
@@ -408,17 +462,8 @@ pub fn definePropertyFrom(it: *mut Interp, o: u32, key: u32, desc: Value) JsErro
     if it.heap.findProp(o, key) |i| {
         old = it.heap.obj(o).props[i].flags
         exists = true
-        if (old & F_CONFIG) == 0 {
-            // A non-configurable property may only keep its value (or get
-            // a new one when writable).
-            var same = (old & F_ACCESSOR) == 0
-            if same && it.hasProperty(objectOf(desc), A_VALUE) && (old & F_WRITE) == 0 {
-                let nv = try it.getProp(desc, A_VALUE)
-                same = sameValue(it, nv, it.heap.obj(o).props[i].value)
-            }
-            if !same {
-                try it.typeErrorAbout("Cannot redefine property: ", it.heap.atoms.name(key), "")
-            }
+        if (old & F_CONFIG) == 0 && !(try redefinable(it, o, key, desc, old)) {
+            try it.typeErrorAbout("Cannot redefine property: ", it.heap.atoms.name(key), "")
         }
     } else if !it.heap.obj(o).extensible {
         try it.typeErrorAbout("Cannot define property ", it.heap.atoms.name(key), ", object is not extensible")
