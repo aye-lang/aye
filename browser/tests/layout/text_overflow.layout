@@ -1,6 +1,6 @@
 viewport 800x600
-  block <html> (0, 0) 800x260
-    block <body> (0, 0) 800x260
+  block <html> (0, 0) 800x428.8
+    block <body> (0, 0) 800x412.8
       block <div class="e"> (0, 0) 100x0
       block <div class="e"> (0, 0) 100x20
         line (0, 0) 100x20
@@ -51,3 +51,31 @@ viewport 800x600
           text (0, 222) 96x16 "box: one two"
         line (0, 240) 100x20
           text (0, 242) 80x16 "three four"
+      block <h3 style="width: 100px; margin: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; padding: 4px"> (0, 260) 108x56.8
+        block <span style="display: block; padding-top: 2px"> (4, 264) 100x72.2
+          line (4, 266) 100x23.4
+            text (4, 268.34) 65.52x18.72 "one two"
+          line (4, 289.4) 100x23.4
+            text (4, 291.74) 84.24x18.72 "three fou"
+            ellipsis (88.24, 291.74) 9.36x18.72 "…"
+          line (4, 312.8) 100x23.4
+            text (4, 315.14) 74.88x18.72 "five six"
+      block <section style="width: 100px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden"> (0, 316.8) 100x60
+        block <section> (0, 316.8) 100x20
+          line (0, 316.8) 100x20
+            text (0, 318.8) 40x16 "first"
+        block <section> (0, 336.8) 100x60
+          block <section> (0, 336.8) 100x60
+            line (0, 336.8) 100x20
+              text (0, 338.8) 56x16 "one two"
+            line (0, 356.8) 100x20
+              text (0, 358.8) 80x16 "three four"
+              ellipsis (80, 358.8) 8x16 "…"
+            line (0, 376.8) 100x20
+              text (0, 378.8) 64x16 "five six"
+        block <section> (0, 396.8) 100x20
+          line (0, 396.8) 100x20
+            text (0, 398.8) 40x16 "after"
+      block <p> (0, 392.8) 800x20
+        line (0, 392.8) 800x20
+          text (0, 394.8) 32x16 "next"
