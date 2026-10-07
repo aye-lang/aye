@@ -17,8 +17,12 @@ struct Shape {
     index: ?*mut IntMap(u32, u32)
 }
 
-// Bound persistent metadata even for scripts with unbounded dynamic keys.
-let MAX_SHAPES: usize = 16384
+// Bound persistent metadata even for scripts with unbounded dynamic keys
+// (shapes are never freed: caches rely on ids not being reused). Past
+// the cap new layouts are dictionaries and miss every cache, so it must
+// sit well above real pages: youtube-search makes ~67,000 (16,384 left
+// 61% of its cached-site reads shapeless).
+let MAX_SHAPES: usize = 262144
 // Avoid quadratic shared-index metadata for one ever-growing object.
 let MAX_SHAPE_PROPS: u32 = 128
 
