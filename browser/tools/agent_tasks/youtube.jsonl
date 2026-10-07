@@ -1,0 +1,1 @@
+{"cmd": "type", "target": {"role": "combobox"}, "text": "ore programming language", "submit": true, "expect": {"result": "loaded https://www.youtube.com/results?search_query=ore+programming+language"}}

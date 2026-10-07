@@ -1,0 +1,1 @@
+{"cmd": "click", "target": {"role": "link", "href": "/news/articles/"}, "expect": {"result": "loaded https://www.bbc.com/news/articles/", "snapshot": ["[level=1]"]}}

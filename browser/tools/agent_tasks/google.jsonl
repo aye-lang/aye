@@ -1,0 +1,1 @@
+{"cmd": "click", "target": {"role": "link", "name": "進階搜尋"}, "expect": {"url": "https://www.google.com/advanced_search?hl=zh-TW&authuser=0", "title": "Google 進階搜尋", "snapshot": ["- textbox \"含以下所有字詞：\""]}}

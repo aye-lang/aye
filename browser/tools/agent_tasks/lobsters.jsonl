@@ -1,0 +1,1 @@
+{"cmd": "click", "target": {"role": "link", "name": "Recent"}, "expect": {"url": "https://lobste.rs/recent", "title": "Recent Stories | Lobsters", "snapshot": ["comments\" [level=2]"]}}

@@ -1,0 +1,1 @@
+{"cmd": "click", "target": {"role": "link", "name": "Learn React"}, "expect": {"title": "Quick Start – React", "snapshot": ["- heading \"Quick Start\" [level=1]"]}}

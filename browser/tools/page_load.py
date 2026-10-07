@@ -9,6 +9,8 @@ import re
 import resource
 import statistics
 import subprocess
+import tempfile
+import threading
 import time
 
 # The sites of docs/browser-sites.md, in its order. --site all loads every one.
@@ -43,6 +45,16 @@ PHASES = ("fetch", "decode", "html", "scripts", "timers", "sheets", "css_parse",
           "requests", "prefetch")
 TRACE = re.compile(r"ANYKNOWN_TIMING\t([^\t]+)\t(\d+)\t(.*)")
 EXPECTATIONS = Path(__file__).with_name("sites.json")
+# One agent task per site: agent_tasks/<site>.jsonl, one step per line, run in one
+# `anyknown agent` session after it navigated to the site's URL. A step is a request
+# of docs/agent-protocol.md; its "target" {"role", "name", "href"} becomes the "ref"
+# of the first snapshot line with that role, exact name and an href starting with
+# "href" (name and href are optional), and its "expect" checks the response: "url"
+# and "title" (equal), "result" (contained) and "snapshot" (strings the page's
+# snapshot after the step contains). capture records the task's pages.
+TASKS = Path(__file__).with_name("agent_tasks")
+# `- role "name" ... [eN] ... -> href`; the name is escaped as a JSON string.
+SNAPSHOT_REF = re.compile(r'\s*- (\S+)(?: "((?:[^"\\]|\\.)*)")?.*? \[(e\d+)\](?:.*? -> (\S+))?')
 # Below this CPU/wall ratio the machine was too busy for wall time to mean anything.
 BUSY_RATIO = 0.8
 
@@ -146,6 +158,7 @@ def main():
     parser.add_argument("--json", type=Path)
     parser.add_argument("--sample", action="store_true", help="macOS sample of the first replay")
     parser.add_argument("--screenshot", action="store_true", help="benchmark the screenshot CLI instead (fixed font, separate output hash)")
+    parser.add_argument("--agent", action="store_true", help="check: also run each site's task of agent_tasks/")
     args = parser.parse_args()
     if args.repeat < 1 or args.warmup < 0:
         parser.error("--repeat must be positive and --warmup nonnegative")
@@ -214,12 +227,107 @@ def console_errors(binary, url, directory):
     return errors
 
 
+def find_ref(snapshot, target):
+    """The ref of the first snapshot line with target's role, name and href, else None."""
+    for line in snapshot.splitlines():
+        match = SNAPSHOT_REF.match(line)
+        if not match or match[1] != target["role"]:
+            continue
+        if "name" in target and json.loads(f'"{match[2] or ""}"') != target["name"]:
+            continue
+        if (match[4] or "").startswith(target.get("href", "")):
+            return match[3]
+    return None
+
+
+def unmet(expect, response, snapshot):
+    """Why the response of a step misses its expectations, else None."""
+    for field in ("url", "title"):
+        if field in expect and response.get(field) != expect[field]:
+            return f"{field} {response.get(field)!r}, expected {expect[field]!r}"
+    if expect.get("result", "") not in response.get("result", ""):
+        return f"result {response.get('result')!r} lacks {expect['result']!r}"
+    missing = [text for text in expect.get("snapshot", []) if text not in snapshot]
+    return f"snapshot lacks {', '.join(map(repr, missing))}" if missing else None
+
+
+def agent_task(binary, url, directory, steps, record=False):
+    """Runs a site's task in one agent session on the archive (or live, recording
+    into it). Returns why a step missed its expectations (None when none did) and the
+    archive misses or recording errors (None when there were none)."""
+    env = dict(os.environ, ANYKNOWN_BENCHMARK="1")
+    for name in ("ANYKNOWN_COOKIE_FILE", "ANYKNOWN_RECORD", "ANYKNOWN_REPLAY", "ANYKNOWN_TIMING"):
+        env.pop(name, None)
+    env["ANYKNOWN_RECORD" if record else "ANYKNOWN_REPLAY"] = str(directory.resolve())
+    with tempfile.TemporaryFile() as stderr:
+        process = subprocess.Popen([str(binary.resolve()), "agent"], stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=stderr, env=env, text=True)
+        timer = threading.Timer(300, process.kill)
+        timer.start()
+
+        def send(request):
+            process.stdin.write(json.dumps(request) + "\n")
+            process.stdin.flush()
+            line = process.stdout.readline()
+            if not line:
+                raise RuntimeError(f"agent exit {process.wait()}")
+            return json.loads(line)
+
+        failure = None
+        label = "step 0 (navigate)"
+        try:
+            response = send({"cmd": "navigate", "url": url})
+            snapshot = response.get("snapshot", "")
+            if not response["ok"]:
+                failure = response["error"]
+            for number, step in enumerate(steps if not failure else (), 1):
+                label = f"step {number} ({step['cmd']})"
+                request = {key: value for key, value in step.items() if key not in ("target", "expect")}
+                if "target" in step:
+                    request["ref"] = find_ref(snapshot, step["target"])
+                    if not request["ref"]:
+                        failure = f"no {json.dumps(step['target'], ensure_ascii=False)} in the snapshot"
+                        break
+                response = send(request)
+                if not response["ok"]:
+                    failure = response["error"]
+                    break
+                if "snapshot" in response:
+                    snapshot = response["snapshot"]
+                elif "diff" in response:
+                    snapshot = send({"cmd": "snapshot"})["snapshot"]
+                failure = unmet(step.get("expect", {}), response, snapshot)
+                if failure:
+                    break
+        except (RuntimeError, OSError, ValueError) as error:
+            failure = str(error)
+        finally:
+            timer.cancel()
+            process.stdin.close()
+            process.wait()
+        stderr.seek(0)
+        problems = [line for line in stderr.read().decode(errors="replace").splitlines()
+                    if "archive miss:" in line or "cannot record archive:" in line]
+    # Misses are reported, not judged: beacons whose URLs hold Math.random or depend on
+    # the order scripts loaded in live differ between the capture and the replay.
+    note = problems[0].strip() + (f" (+{len(problems) - 1} more)" if len(problems) > 1 else "") if problems else None
+    return (f"{label}: {failure}" if failure else None), note
+
+
+def task_steps(name):
+    """The steps of agent_tasks/<name>.jsonl, or None when the site has no task."""
+    path = TASKS / f"{name}.jsonl"
+    if not path.exists():
+        return None
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
 def check(args, sites):
     """Replays each site and compares it with sites.json; exits 1 when a judged site misses."""
     expectations = json.loads(EXPECTATIONS.read_text())["sites"]
     if set(expectations) != set(SITES):
         raise SystemExit(f"{EXPECTATIONS}: sites differ from SITES: {sorted(set(expectations) ^ set(SITES))}")
-    print(f"{'site':<14} {'status':<9} {'errors':>6} {'wall':>7} {'cpu':>7} {'load':>5}  result  missing", flush=True)
+    print(f"{'site':<14} {'status':<9} {'errors':>6} {'wall':>7} {'cpu':>7} {'load':>5}  task   result  missing", flush=True)
     failed = []
     for name in sites:
         expect = expectations[name]
@@ -231,19 +339,31 @@ def check(args, sites):
             markdown = (directory / "last.stdout").read_text(errors="replace")
             errors = console_errors(args.binary, url, directory)
         except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as error:
-            print(f"{name:<14} {expect['status']:<9} {'-':>6} {'-':>7} {'-':>7} {'-':>5}  "
+            print(f"{name:<14} {expect['status']:<9} {'-':>6} {'-':>7} {'-':>7} {'-':>5}  {'-':<5}  "
                   f"{'FAIL' if judged else 'skip':<6}  {str(error).splitlines()[0]}", flush=True)
             if judged:
                 failed.append(name)
             continue
         missing = [text for text in expect["md"] if text not in markdown]
-        meets = not missing and len(errors) <= expect["max_errors"]
+        steps = task_steps(name) if args.agent else None
+        task_failure, task_misses = agent_task(args.binary, url, directory, steps) if steps else (None, None)
+        # task_fails: the failure a task is known to have today; any other one fails.
+        known = expect.get("task_fails")
+        task = "-" if not steps else "known" if task_failure and task_failure == known else \
+            "FAIL" if task_failure else "pass"
+        meets = not missing and len(errors) <= expect["max_errors"] and task != "FAIL"
         verdict = ("pass" if meets else "FAIL") if judged else "skip"
         if verdict == "FAIL":
             failed.append(name)
         count = f"{len(errors)}/{expect['max_errors']}"
         print(f"{name:<14} {expect['status']:<9} {count:>6} {result['wall']:6.2f}s {result['cpu']:6.2f}s "
-              f"{result['load']:5.1f}  {verdict:<6}  {', '.join(map(repr, missing)) or '-'}", flush=True)
+              f"{result['load']:5.1f}  {task:<5}  {verdict:<6}  {', '.join(map(repr, missing)) or '-'}", flush=True)
+        if task_failure:
+            print(f"  task: {task_failure}", flush=True)
+        elif steps and known:
+            print(f"  task: passes now; drop its task_fails from {EXPECTATIONS.name}", flush=True)
+        if task_misses:
+            print(f"  task: {task_misses}", flush=True)
         warning = busy_warning(name, result)
         if warning:
             print(warning, flush=True)
@@ -263,6 +383,12 @@ def load_site(args, name):
         if manifest_path.exists() or list(directory.glob("*.response")):
             raise RuntimeError(f"{directory}: use a new directory for an immutable capture")
         result = run(args.binary, SITES[name], directory, record=True)
+        steps = task_steps(name)
+        task_failure, task_errors = agent_task(args.binary, SITES[name], directory, steps, record=True) \
+            if steps else (None, None)
+        if task_failure == json.loads(EXPECTATIONS.read_text())["sites"][name].get("task_fails"):
+            task_failure = None
+        task_failure = task_failure or task_errors
         resources = []
         for path in sorted(directory.glob("*.response")):
             data = path.read_bytes()
@@ -273,6 +399,8 @@ def load_site(args, name):
         manifest_path.write_text(json.dumps({"url": SITES[name], "capture": result,
                                             "resources": resources}, indent=2) + "\n")
         print(f"{name}: captured {len(resources)} requests, {result['wall']:.3f}s wall, {result['cpu']:.3f}s cpu", flush=True)
+        if task_failure:
+            raise RuntimeError(f"{name}: task: {task_failure}")
         return result
     manifest = json.loads(manifest_path.read_text())
     for resource in manifest["resources"]:

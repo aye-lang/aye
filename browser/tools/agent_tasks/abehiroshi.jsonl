@@ -1,0 +1,1 @@
+{"cmd": "click", "target": {"role": "link", "name": "映画出演"}, "expect": {"result": "loaded http://abehiroshi.la.coocan.jp/movie/eiga.htm in the frame \"right\"", "snapshot": ["- frame \"阿部 寛の映画出演\" -> http://abehiroshi.la.coocan.jp/movie/eiga.htm", "- heading \"阿部 寛の映画出演\""]}}

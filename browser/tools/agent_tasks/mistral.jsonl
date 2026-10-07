@@ -1,0 +1,1 @@
+{"cmd": "click", "target": {"role": "link", "name": "Blog"}, "expect": {"url": "https://mistral.ai/news/"}}
