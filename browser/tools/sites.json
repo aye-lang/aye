@@ -116,10 +116,10 @@
       "note": "YouTube serves a cookieless visitor an empty feed (feedNudgeRenderer, \"Try searching to get started\"); we render exactly that."
     },
     "youtube-search": {
-      "status": "ok",
+      "status": "excluded",
       "max_errors": 0,
       "md": ["Filters", "### Learn Rust Programming - Complete Course", "## Shorts"],
-      "note": "Video titles, channels, view counts and the Shorts shelf are in the Markdown. Replay is flaky under machine load (load 30+): which thumbnails get requested depends on timing, so some replays hit \"archive miss\" on i.ytimg.com images and check fails (about half the runs here)."
+      "note": "replay not deterministic: lazy thumbnails differ per run under load (plan P1.7)"
     },
     "react": {
       "status": "ok",
