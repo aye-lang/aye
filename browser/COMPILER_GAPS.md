@@ -45,22 +45,28 @@ removed in cff3f60.
   freed`. A read through the stale pointer is not reported (it reads
   the poison bytes), and the report comes at the next check, not at the
   write.
-- **Workaround:** copy fields out before growing (`cloneElement` in
-  `html/parser.ore`); fetch the pointer again after any call that may
-  grow (layout code re-reads `t.bx(i)` after every call).
+- **Workaround:** refer by handle or index, not by pointer, as
+  design.md asks: nodes by `NodeId` (a `Handle(Node)`; 216 `doc.node(h)`
+  calls), layout boxes by `usize` index (333 `t.bx(i)` calls in 26
+  files, each pointer "valid until the next box is added"). Copy fields
+  out before growing (`cloneElement` in `html/parser.ore`), and fetch the
+  pointer again after any call that may grow.
 - **Hit by:** dom, html (B1), layout (B3).
-- **Status:** partly fixed (writes, in debug mode). A check at the use
-  of a stale pointer is deferred in decisions.md (M9.9).
-
-### Smaller things
-
-#### 21. No tuples or multiple results
-
-- **Workaround:** small structs carry pairs out of functions (`MinMax`,
-  `Flow`, `OpenFrag`, `KindOf` in layout). Fine, a bit verbose.
-- **Hit by:** layout (B3).
-- **Status:** open (`fn f() (i64, i64)` is E0006); deferred in
-  decisions.md (M9.9).
+- **Status:** partly fixed (writes, in debug mode). A compile-time rule
+  and a fat pointer with a generation are declined in decisions.md
+  (P2.3). Open: a stale read is not reported, and a write is reported
+  late. AddressSanitizer would report both at the access (design.md
+  names it for this), but debug-mode `General` (and `ore test`'s
+  allocator) keep freed blocks in a quarantine that is still allocated
+  memory for AddressSanitizer. Proposed step: under
+  `__has_feature(address_sanitizer)` the runtime in `src/cgen.rs`
+  poisons a quarantined block (`ASAN_POISON_MEMORY_REGION`) and
+  unpoisons it before its poison check and `free`; a golden test in
+  `tests/golden.rs`, like the ThreadSanitizer one (skipped where clang's
+  AddressSanitizer does not run), builds the repro above with
+  `--cflags -fsanitize=address` in debug and in safe mode and expects
+  `heap-use-after-free` at the line of the read; the spec's `--cflags`
+  line names `-fsanitize=address`. Verify: `cargo test --test golden`.
 
 ## Declined by design
 
@@ -102,6 +108,18 @@ removed in cff3f60.
 - **Status:** declined in M9.7 (67768e8; decisions.md: the import would
   always close a cycle). `import ri` from a module of the program `ri`
   is E0083 with the structure to use instead.
+
+#### 21. No tuples or multiple results
+
+- **Workaround:** small structs carry pairs out of functions (`MinMax`,
+  `Flow`, `OpenFrag`, `KindOf` in layout). Fine, a bit verbose. About 30
+  structs of two or three fields are returned by about 60 functions
+  (`Flow` by 15, `MinMax` by 6); about 5 functions return a second value
+  through a `*mut` parameter (`tileSize` in `paint/background.ore`).
+- **Hit by:** layout (B3).
+- **Status:** declined in decisions.md (P2.3, "Compiler gaps closed
+  out"): a named struct is the one way, and its field names say what
+  each value means. `fn f() (i64, i64)` stays E0006.
 
 #### 25. A struct's methods must all be in its body (one file)
 

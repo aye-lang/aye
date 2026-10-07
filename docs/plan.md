@@ -92,6 +92,8 @@ Done 2026-10-07.
 | P2.6 | Status table in `milestones.md` | read the diff | P2.3–5 | – |
 | P2.7 | Diagnose a flaky build: once, a fresh build failed every `import()` with "import is not defined" and a rebuild of the same source fixed it (seen on `pi-dynimport`, 2026-10-07) | repeated clean builds + `browser/tests/js/23*` reproduce or rule it out; cause written down | P0 | all |
 | P2.8 | Agents build into their own worktree: the pi-codex skill's task template and `pi_run.py` build with `browser/build.sh` (no shared output path) or name the output after the worktree (cause of P2.7) | `grep` the skill for shared output paths; one pi dry run | P2.7 | all |
+| P2.9 | Gap #3: under AddressSanitizer the runtime (`src/cgen.rs`) poisons the freed blocks it holds back in debug and `ore test`, so a read through a stale `List`/`Pool` pointer reports `heap-use-after-free`; golden test modelled on the ThreadSanitizer one, debug and safe mode | `cargo test --test golden` | P2.3 | P1, P3 |
+| P2.10 | Stale comment at `browser/dom/dom.ore:192` says Ore has no `unreachable` (gap #32 is fixed); use it | `ore check browser`; `cargo test --test browser` | – | all |
 
 ### P3: Sites
 
