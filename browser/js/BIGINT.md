@@ -51,6 +51,8 @@ user coercion are rooted on the interpreter's stack.
   BigInt-named variants to Numbers. They do not provide integer-index
   coercion or shared buffer views; changing their constructor converters
   alone would not constitute correct BigInt typed arrays.
+- `DataView.prototype.getBigInt64` / `setBigInt64` / `getBigUint64` /
+  `setBigUint64` do not exist.
 
 ## Verification
 
