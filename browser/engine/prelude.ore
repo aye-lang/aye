@@ -2628,6 +2628,34 @@ pub let PRELUDE =
     \\hidden(G, 'MediaQueryList', MediaQueryList);
     \\hidden(G, 'matchMedia', function matchMedia(q) { return new MediaQueryList(String(q)); });
     \\
+    \\// document.fonts: the engine loads a page's web fonts before it lays the
+    \\// page out, so the set is always 'loaded'. Faces added from script are
+    \\// kept but not used. (The Mistral blog awaits load() before its page code.)
+    \\class FontFaceSet extends EventTarget {
+    \\  constructor() {
+    \\    super();
+    \\    hidden(this, '_faces', new Set());
+    \\    hidden(this, '_ready', Promise.resolve(this));
+    \\  }
+    \\  get status() { return 'loaded'; }
+    \\  get ready() { return this._ready; }
+    \\  get size() { return this._faces.size; }
+    \\  load(font, text) { return Promise.resolve([]); }
+    \\  check(font, text) { return true; }
+    \\  add(face) { this._faces.add(face); return this; }
+    \\  delete(face) { return this._faces.delete(face); }
+    \\  has(face) { return this._faces.has(face); }
+    \\  clear() { this._faces.clear(); }
+    \\  forEach(f, that) { this._faces.forEach(v => f.call(that, v, v, this)); }
+    \\  values() { return this._faces.values(); }
+    \\  [Symbol.iterator]() { return this._faces.values(); }
+    \\}
+    \\hidden(G, 'FontFaceSet', FontFaceSet);
+    \\getter(Document.prototype, 'fonts', function () {
+    \\  if (!this._fonts) hidden(this, '_fonts', new FontFaceSet());
+    \\  return this._fonts;
+    \\});
+    \\
     \\// crypto: random values from Math.random (not for secrets)
     \\const crypto = {
     \\  getRandomValues(a) {

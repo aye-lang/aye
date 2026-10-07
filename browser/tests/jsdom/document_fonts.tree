@@ -1,0 +1,14 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "document.fonts"
+      "\n"
+    <body>
+      <p id="out">
+        "true loaded true 0 true 0 true"
+      "\n"
+      <script>
+        "\n// The Mistral blog awaits document.fonts.load() before it starts its page code.\nconst fonts = document.fonts;\nconst parts = [fonts instanceof FontFaceSet, fonts.status, fonts.check('16px Inter'), fonts.size];\nPromise.all([fonts.load('500 96px ALTMistral'), fonts.ready]).then(([faces, ready]) => {\n  parts.push(Array.isArray(faces), faces.length, ready === fonts);\n  document.getElementById('out').textContent = parts.join(' ');\n});\n"
+      "\n"
