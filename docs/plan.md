@@ -96,7 +96,7 @@ Done 2026-10-07.
 | P2.2 | Remove the #48 workaround in `browser/js/fast_expr.ore` | `cargo test --test browser js_conformance` | P2.1 | not with JS steps |
 | P2.3 | Decline #3 and #21 in `decisions.md`; move them in `COMPILER_GAPS.md` | read the diff | – | all |
 | P2.4 | `ore fmt --check` over the repo; fix the drift | `ore fmt --check` exits 0; `cargo test` | P0 | P3 after it merges |
-| P2.5 | Spec token count; rerun the M5 gate; findings become gaps | record in `milestones.md` | P2.1 | all |
+| P2.5 | Spec token count and M5 gate. Done 2026-10-08: `ore spec` ~24.6k tokens (cl100k) of ~30k; a fresh agent wrote `wc` and a JSON tokenizer from the spec alone, each passing `ore check` on the first round; four loose spots in §6–§8 clarified (P2.5c) | – | – | – |
 | P2.6 | Status table in `milestones.md` | read the diff | P2.3–5 | – |
 | P2.7 | Diagnose a flaky build: once, a fresh build failed every `import()` with "import is not defined" and a rebuild of the same source fixed it (seen on `pi-dynimport`, 2026-10-07) | repeated clean builds + `browser/tests/js/23*` reproduce or rule it out; cause written down | P0 | all |
 | P2.8 | Agents build into their own worktree: the pi-codex skill's task template and `pi_run.py` build with `browser/build.sh` (no shared output path) or name the output after the worktree (cause of P2.7) | `grep` the skill for shared output paths; one pi dry run | P2.7 | all |
