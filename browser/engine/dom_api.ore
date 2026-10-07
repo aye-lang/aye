@@ -1785,9 +1785,11 @@ fn styleRemoveProperty(it: *mut Interp, a: Args) JsError!Value {
     defer it.release(v)
     try styleValue(docOf(it).attr(h, "style") orelse "", b.bytes(), v)
     let old = try it.newString(v.bytes())
+    // Mutation hooks allocate and may collect the string before we return.
+    try it.push(old)
     try setStyleDecl(scriptOf(it), h, b.bytes(), "")
     try changedAt(it, h, "style")
-    return old
+    return it.pop()
 }
 
 // ---- Document

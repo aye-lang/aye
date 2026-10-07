@@ -5,7 +5,24 @@ pub let CANVAS_PRELUDE =
     \\const ak = globalThis.__canvasHost;
     \\delete globalThis.__canvasHost;
     \\const identity = () => [1, 0, 0, 1, 0, 0];
-    \\const finite = a => a.every(v => Number.isFinite(Number(v)) && Math.abs(Number(v)) <= 1e8);
+    \\// Parsed colors by their text; the arrays are only read.
+    \\const colors = new Map();
+    \\function color(s) {
+    \\  let c = colors.get(s);
+    \\  if (c === undefined) {
+    \\    c = ak.canvasColor(s);
+    \\    if (colors.size >= 256) colors.clear();
+    \\    colors.set(s, c);
+    \\  }
+    \\  return c;
+    \\}
+    \\function finite(a) {
+    \\  for (let i = 0; i < a.length; i++) {
+    \\    const v = a[i];
+    \\    if (typeof v === 'number' ? !(v >= -1e8 && v <= 1e8) : !(Number.isFinite(Number(v)) && Math.abs(Number(v)) <= 1e8)) return false;
+    \\  }
+    \\  return true;
+    \\}
     \\const point = (m, x, y) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
     \\function mul(m, n) {
     \\  return [m[0]*n[0]+m[2]*n[1], m[1]*n[0]+m[3]*n[1], m[0]*n[2]+m[2]*n[3], m[1]*n[2]+m[3]*n[3], m[0]*n[4]+m[2]*n[5]+m[4], m[1]*n[4]+m[3]*n[5]+m[5]];
@@ -40,35 +57,60 @@ pub let CANVAS_PRELUDE =
     \\function escape(s) {
     \\  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
     \\}
+    \\// Path segments: a verb (0 M, 1 L, 2 C, 3 Z) followed by its points,
+    \\// or a string of path data from ak.canvasPath. The native side reads
+    \\// them exactly as it would parse their path data (`_d`), without
+    \\// writing and parsing every number.
+    \\function pathData(c) {
+    \\  let d = '';
+    \\  for (let i = 0; i < c.length;) {
+    \\    const v = c[i];
+    \\    if (typeof v === 'string') {
+    \\      d += v;
+    \\      i++;
+    \\    } else if (v === 3) {
+    \\      d += 'Z ';
+    \\      i++;
+    \\    } else {
+    \\      const n = v === 2 ? 6 : 2;
+    \\      d += 'MLC'[v] + c.slice(i+1, i+1+n).join(' ') + ' ';
+    \\      i += n+1;
+    \\    }
+    \\  }
+    \\  return d;
+    \\}
     \\class Path2D {
     \\  constructor(p) {
-    \\    this._d = '';
+    \\    this._c = [];
     \\    this._m = identity();
     \\    this._at = null;
     \\    this._start = null;
     \\    if (p instanceof Path2D) {
-    \\      this._d = p._d;
+    \\      this._c = p._c.slice();
     \\      this._at = p._at && p._at.slice();
     \\      this._start = p._start && p._start.slice();
     \\    } else if (typeof p === 'string') {
-    \\      this._d = ak.canvasPath(p, identity());
+    \\      this._c = [ak.canvasPath(p, identity())];
     \\    }
+    \\  }
+    \\  get _d() {
+    \\    return pathData(this._c);
     \\  }
     \\  addPath(p, transform) {
     \\    if (!(p instanceof Path2D)) throw new TypeError('Expected Path2D');
     \\    const m = transform ? matrix(transform) : identity();
-    \\    if (finite(m)) this._d += ak.canvasPath(p._d, m);
+    \\    if (finite(m)) this._c.push(ak.canvasPath(p._d, m));
     \\  }
     \\  closePath() {
     \\    if (this._at) {
-    \\      this._d += 'Z ';
+    \\      this._c.push(3);
     \\      this._at = this._start && this._start.slice();
     \\    }
     \\  }
     \\  moveTo(x, y) {
     \\    if (!finite([x, y])) return;
     \\    const p = point(this._m, Number(x), Number(y));
-    \\    this._d += 'M' + p.join(' ') + ' ';
+    \\    this._c.push(0, p[0], p[1]);
     \\    this._at = p;
     \\    this._start = p;
     \\  }
@@ -79,14 +121,15 @@ pub let CANVAS_PRELUDE =
     \\      return;
     \\    }
     \\    const p = point(this._m, Number(x), Number(y));
-    \\    this._d += 'L' + p.join(' ') + ' ';
+    \\    this._c.push(1, p[0], p[1]);
     \\    this._at = p;
     \\  }
     \\  bezierCurveTo(a, b, c, d, x, y) {
     \\    if (!finite([a, b, c, d, x, y])) return;
     \\    if (!this._at) this.moveTo(a, b);
     \\    const p = point(this._m, x, y);
-    \\    this._d += 'C' + point(this._m, a, b).concat(point(this._m, c, d), p).join(' ') + ' ';
+    \\    const p1 = point(this._m, a, b), p2 = point(this._m, c, d);
+    \\    this._c.push(2, p1[0], p1[1], p2[0], p2[1], p[0], p[1]);
     \\    this._at = p;
     \\  }
     \\  quadraticCurveTo(a, b, x, y) {
@@ -95,7 +138,7 @@ pub let CANVAS_PRELUDE =
     \\    const c = point(this._m, a, b);
     \\    const p = point(this._m, x, y);
     \\    const q = this._at;
-    \\    this._d += 'C' + [q[0]+(c[0]-q[0])*2/3, q[1]+(c[1]-q[1])*2/3, p[0]+(c[0]-p[0])*2/3, p[1]+(c[1]-p[1])*2/3, p[0], p[1]].join(' ') + ' ';
+    \\    this._c.push(2, q[0]+(c[0]-q[0])*2/3, q[1]+(c[1]-q[1])*2/3, p[0]+(c[0]-p[0])*2/3, p[1]+(c[1]-p[1])*2/3, p[0], p[1]);
     \\    this._at = p;
     \\  }
     \\  rect(x, y, w, h) {
@@ -236,13 +279,18 @@ pub let CANVAS_PRELUDE =
     \\}
     \\// The interpreter's typed arrays are JS polyfills. Use the existing one
     \\// when installed, rather than installing a second typed-array subsystem.
+    \\// Its arrays are Arrays with its prototype: give a fresh array of bytes
+    \\// that prototype rather than copying it element by element.
+    \\function clamped(a) {
+    \\  return typeof Uint8ClampedArray === 'function' ? Object.setPrototypeOf(a, Uint8ClampedArray.prototype) : a;
+    \\}
     \\class ImageData {
     \\  constructor(data, width, height) {
     \\    if (typeof data === 'number') {
     \\      height = Math.abs(Math.trunc(width));
     \\      width = Math.abs(Math.trunc(data));
     \\      dimensions(width, height);
-    \\      data = typeof Uint8ClampedArray === 'function' ? new Uint8ClampedArray(width*height*4) : new Array(width*height*4).fill(0);
+    \\      data = clamped(new Array(width*height*4).fill(0));
     \\    } else {
     \\      width = Math.trunc(width);
     \\      height = height === undefined ? data.length/(width*4) : Math.trunc(height);
@@ -330,12 +378,17 @@ pub let CANVAS_PRELUDE =
     \\    this._path = new Path2D();
     \\  }
     \\  _data(path) {
-    \\    return path instanceof Path2D ? ak.canvasPath(path._d, this._matrix) : this._path._d;
+    \\    return path instanceof Path2D ? ak.canvasPath(path._d, this._matrix) : this._path._c;
     \\  }
     \\  _shape(d, stroke, rule) {
     \\    const s = this._state;
     \\    const k = Math.sqrt(Math.abs(this._matrix[0]*this._matrix[3]-this._matrix[1]*this._matrix[2]));
     \\    return '<path d="'+escape(d)+'" fill="'+(stroke ? 'none' : 'white')+'" fill-rule="'+(rule === 'evenodd' ? 'evenodd' : 'nonzero')+'" clip-rule="'+(rule === 'evenodd' ? 'evenodd' : 'nonzero')+'" stroke="'+(stroke ? 'white' : 'none')+'" stroke-width="'+s.lineWidth*k+'" stroke-linecap="'+s.lineCap+'" stroke-linejoin="'+s.lineJoin+'" stroke-miterlimit="'+s.miterLimit+'" stroke-dasharray="'+this._dash.map(v => v*k).join(' ')+'" stroke-dashoffset="'+s.lineDashOffset*k+'"/>';
+    \\  }
+    \\  _stroke() {
+    \\    const s = this._state;
+    \\    const k = Math.sqrt(Math.abs(this._matrix[0]*this._matrix[3]-this._matrix[1]*this._matrix[2]));
+    \\    return 'stroke-width="'+s.lineWidth*k+'" stroke-linecap="'+s.lineCap+'" stroke-linejoin="'+s.lineJoin+'" stroke-miterlimit="'+s.miterLimit+'" stroke-dasharray="'+this._dash.map(v => v*k).join(' ')+'" stroke-dashoffset="'+s.lineDashOffset*k+'"';
     \\  }
     \\  _svg(content, clips) {
     \\    let defs = '', open = '', close = '';
@@ -348,18 +401,21 @@ pub let CANVAS_PRELUDE =
     \\  }
     \\  _paint(v) {
     \\    if (v instanceof CanvasPattern || v instanceof CanvasGradient) return Object.assign({}, v, {matrix: mul(this._matrix, v.matrix)});
-    \\    return typeof v === 'string' ? {kind: 0, color: ak.canvasColor(v)} : v;
+    \\    return typeof v === 'string' ? {kind: 0, color: color(v)} : v;
     \\  }
+    \\  // The path `d` (path data or segments) is drawn as SVG would draw
+    \\  // <path d=...> with these stroke attributes and fill rule; clips
+    \\  // are [d, evenodd] pairs.
     \\  _draw(d, stroke, rule, style, mode) {
-    \\    const shape = this._shape(d, stroke, rule);
-    \\    const clip = this._clips.length ? this._svg('<rect width="100000" height="100000" fill="white"/>', this._clips) : null;
+    \\    const key = stroke ? this._stroke() : null;
+    \\    const evenodd = rule === 'evenodd';
+    \\    const clip = this._clips.length ? this._clips : null;
     \\    const s = this._state;
-    \\    const shadow = ak.canvasColor(s.shadowColor);
+    \\    const shadow = color(s.shadowColor);
     \\    if (!mode && shadow && shadow[3]) {
-    \\      const shifted = '<g transform="translate('+s.shadowOffsetX+' '+s.shadowOffsetY+')">'+shape+'</g>';
-    \\      ak.canvasDraw(this._node, this._svg(shifted, []), {kind: 0, color: shadow, blur: s.shadowBlur}, s.globalAlpha, s.globalCompositeOperation, clip);
+    \\      ak.canvasDraw(this._node, d, {kind: 0, color: shadow, blur: s.shadowBlur}, s.globalAlpha, s.globalCompositeOperation, clip, key, evenodd, s.shadowOffsetX, s.shadowOffsetY);
     \\    }
-    \\    ak.canvasDraw(this._node, this._svg(shape, []), style || this._paint(stroke ? s.strokeStyle : s.fillStyle), mode === 'clear' ? 1 : s.globalAlpha, mode || s.globalCompositeOperation, clip);
+    \\    ak.canvasDraw(this._node, d, style || this._paint(stroke ? s.strokeStyle : s.fillStyle), mode === 'clear' ? 1 : s.globalAlpha, mode || s.globalCompositeOperation, clip, key, evenodd, 0, 0);
     \\  }
     \\  fill(path, rule) {
     \\    this._sync();
@@ -373,18 +429,32 @@ pub let CANVAS_PRELUDE =
     \\  clip(path, rule) {
     \\    this._sync();
     \\    if (typeof path === 'string') rule = path;
-    \\    this._clips.push(this._shape(this._data(path), false, rule));
+    \\    const d = this._data(path);
+    \\    this._clips.push([typeof d === 'string' ? d : d.slice(), rule === 'evenodd']);
     \\  }
     \\  _rect(x, y, w, h, stroke, clear) {
     \\    this._sync();
     \\    if (!finite([x, y, w, h]) || (stroke ? !w && !h : !w || !h)) return;
+    \\    const line = !w || !h;
+    \\    x = Number(x);
+    \\    y = Number(y);
+    \\    w = Number(w);
+    \\    h = Number(h);
+    \\    const style = clear ? {kind: 0, color: [0, 0, 0, 255]} : null, mode = clear ? 'clear' : null;
+    \\    const m = this._matrix;
+    \\    if (!line && finite([x+w, y+h])) {
+    \\      // What Path2D's rect() adds.
+    \\      const a = point(m, x, y), b = point(m, x+w, y), c = point(m, x+w, y+h), d = point(m, x, y+h);
+    \\      this._draw([0, a[0], a[1], 1, b[0], b[1], 1, c[0], c[1], 1, d[0], d[1], 3], stroke, undefined, style, mode);
+    \\      return;
+    \\    }
     \\    const p = new Path2D();
-    \\    p._m = this._matrix;
-    \\    if (!w || !h) {
+    \\    p._m = m;
+    \\    if (line) {
     \\      p.moveTo(x, y);
-    \\      p.lineTo(Number(x)+Number(w), Number(y)+Number(h));
-    \\    } else p.rect(Number(x), Number(y), Number(w), Number(h));
-    \\    this._draw(p._d, stroke, undefined, clear ? {kind: 0, color: [0, 0, 0, 255]} : null, clear ? 'clear' : null);
+    \\      p.lineTo(x+w, y+h);
+    \\    } else p.rect(x, y, w, h);
+    \\    this._draw(p._c, stroke, undefined, style, mode);
     \\  }
     \\  fillRect(x, y, w, h) {
     \\    this._rect(x, y, w, h, false, false);
@@ -400,7 +470,8 @@ pub let CANVAS_PRELUDE =
     \\    const path = args[0] instanceof Path2D ? args.shift() : null;
     \\    const x = Number(args[0]), y = Number(args[1]);
     \\    if (!finite([x, y])) return false;
-    \\    return ak.canvasHit(this._svg(this._shape(this._data(path), stroke, args[2]), []), x, y, stroke);
+    \\    const d = this._data(path);
+    \\    return ak.canvasHit(this._svg(this._shape(typeof d === 'string' ? d : pathData(d), stroke, args[2]), []), x, y, stroke);
     \\  }
     \\  isPointInPath() {
     \\    return this._hit(false, Array.from(arguments));
@@ -464,7 +535,7 @@ pub let CANVAS_PRELUDE =
     \\    p._m = this._matrix;
     \\    p.rect(dx, dy, dw, dh);
     \\    const m = mul(this._matrix, [dw/sw, 0, 0, dh/sh, dx-sx*dw/sw, dy-sy*dh/sh]);
-    \\    this._draw(p._d, false, undefined, {kind: 4, image, matrix: m, repeatX: false, repeatY: false, smoothing: this.imageSmoothingEnabled});
+    \\    this._draw(p._c, false, undefined, {kind: 4, image, matrix: m, repeatX: false, repeatY: false, smoothing: this.imageSmoothingEnabled});
     \\  }
     \\  createImageData(w, h) {
     \\    if (typeof w === 'object') return new ImageData(w.width, w.height);
@@ -486,7 +557,7 @@ pub let CANVAS_PRELUDE =
     \\      h = -h;
     \\    }
     \\    const d = ak.canvasPixels(this._node, x, y, w, h, null);
-    \\    return new ImageData(typeof Uint8ClampedArray === 'function' ? new Uint8ClampedArray(d) : d, w, h);
+    \\    return new ImageData(clamped(d), w, h);
     \\  }
     \\  putImageData(data, x, y, dirtyX, dirtyY, dirtyW, dirtyH) {
     \\    this._sync();
@@ -549,8 +620,8 @@ pub let CANVAS_PRELUDE =
     \\    else if (this.textAlign === 'right' || (this.textAlign === 'end' && !rtl) || (this.textAlign === 'start' && rtl)) x -= width*k;
     \\    y += this._baselineOffset(a);
     \\    const mask = {data: a[3], width: a[4], height: a[5], matrix: mul(this._matrix, [k, 0, 0, 1, x+a[10]*k, y+a[11]]), stroke: stroke ? this.lineWidth : 0};
-    \\    const clip = this._clips.length ? this._svg('<rect width="100000" height="100000" fill="white"/>', this._clips) : null;
-    \\    const shadow = ak.canvasColor(this.shadowColor);
+    \\    const clip = this._clips.length ? this._clips : null;
+    \\    const shadow = color(this.shadowColor);
     \\    if (shadow && shadow[3]) {
     \\      const shifted = Object.assign({}, mask, {matrix: mask.matrix.slice()});
     \\      shifted.matrix[4] += this.shadowOffsetX;
@@ -592,10 +663,10 @@ pub let CANVAS_PRELUDE =
     \\      this._sync();
     \\      if (key === 'fillStyle' || key === 'strokeStyle') {
     \\        if (v instanceof CanvasGradient || v instanceof CanvasPattern) this._state[key] = v;
-    \\        else if (ak.canvasColor(String(v))) this._state[key] = String(v);
+    \\        else if (color(String(v))) this._state[key] = String(v);
     \\        return;
     \\      }
-    \\      if (key === 'shadowColor' && !ak.canvasColor(String(v))) return;
+    \\      if (key === 'shadowColor' && !color(String(v))) return;
     \\      if (enums[key] && !enums[key].includes(String(v))) return;
     \\      if (typeof defaults[key] === 'number') {
     \\        v = Number(v);
@@ -609,34 +680,17 @@ pub let CANVAS_PRELUDE =
     \\    }
     \\  });
     \\}
-    \\// Natural image dimensions use the ordinary image cache, even for a
-    \\// detached Image element. Attribute dimensions do not alter drawImage's
-    \\// source bitmap.
-    \\for (const key of ['width', 'height', 'naturalWidth', 'naturalHeight']) {
-    \\  Object.defineProperty(HTMLImageElement.prototype, key, {
-    \\    configurable: true,
-    \\    get: function () {
-    \\      const height = key === 'height' || key === 'naturalHeight';
-    \\      if (key === 'width' || key === 'height') {
-    \\        const attr = this.getAttribute(key);
-    \\        if (attr !== null && Number(attr) >= 0) return Math.trunc(Number(attr));
-    \\      }
-    \\      return ak.canvasImageSize(this, height);
-    \\    },
-    \\    set: key === 'width' || key === 'height' ? function (v) {
-    \\      this.setAttribute(key, String(Number(v) >>> 0));
-    \\    } : undefined
-    \\  });
-    \\}
-    \\// WeakMap holds its keys strongly, so the context lives on the wrapper:
-    \\// a detached canvas, its context and its bitmap can then be freed.
+    \\// Image state and dimensions are installed by prelude.ore.
+    \\const contexts = new WeakMap();
     \\const P = HTMLCanvasElement.prototype;
     \\P.getContext = function (kind) {
     \\  if (String(kind) !== '2d') return null;
-    \\  if (!Object.prototype.hasOwnProperty.call(this, '__context2d')) {
-    \\    Object.defineProperty(this, '__context2d', {value: new CanvasRenderingContext2D(this)});
+    \\  let ctx = contexts.get(this);
+    \\  if (!ctx) {
+    \\    ctx = new CanvasRenderingContext2D(this);
+    \\    contexts.set(this, ctx);
     \\  }
-    \\  return this.__context2d;
+    \\  return ctx;
     \\};
     \\P.toDataURL = function () {
     \\  return ak.canvasPng(this);

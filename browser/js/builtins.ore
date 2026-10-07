@@ -51,6 +51,7 @@ pub fn installBuiltins(it: *mut Interp) JsError!void {
     try installJson(it)
     try installMisc(it)
     try installProxy(it)
+    try installWeak(it)
     try it.defineNative(it.iterator_proto, "next", 0, iteratorNext)
     try installIteratorMethods(it)
     try installGenerators(it)

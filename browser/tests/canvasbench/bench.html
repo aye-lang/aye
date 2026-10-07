@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<title>Canvas 2D micro benchmark</title>
+<canvas id="canvas" width="800" height="600"></canvas>
+<script>
+// Each workload draws into a fresh 800x600 canvas in tasks of `chunk`
+// calls (a task's CPU budget is 2 s). Only the drawing calls are timed.
+// The PNG of the result is hashed so that optimizations can be checked
+// for identical pixels. Results go to the console (stderr):
+//   canvasbench <TAB> name <TAB> calls <TAB> ms <TAB> hash
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let seed = 1;
+function rand() {
+  seed = (seed * 1664525 + 1013904223) >>> 0;
+  return seed / 4294967296;
+}
+function hash(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619) >>> 0;
+  return h.toString(16);
+}
+const colors = ['#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', 'rgba(145, 30, 180, 0.6)', '#46f0f0', 'rgb(240, 50, 230)'];
+const sprite = document.createElement('canvas');
+sprite.width = 64;
+sprite.height = 64;
+const sctx = sprite.getContext('2d');
+const workloads = [
+  {name: 'fillRect', calls: 1000, chunk: 50, op(i) {
+    ctx.fillStyle = colors[i % colors.length];
+    ctx.fillRect(rand() * 780, rand() * 580, 12, 10);
+  }},
+  {name: 'paths', calls: 300, chunk: 20, op(i) {
+    const x = rand() * 700 + 50, y = rand() * 500 + 50;
+    ctx.beginPath();
+    if (i % 3 === 0) {
+      ctx.arc(x, y, 5 + rand() * 20, 0, Math.PI * 2);
+      ctx.fillStyle = colors[i % colors.length];
+      ctx.fill();
+    } else if (i % 3 === 1) {
+      ctx.moveTo(x, y);
+      for (let k = 1; k <= 8; k++) ctx.lineTo(x + k * 6, y + (rand() - 0.5) * 40);
+      ctx.lineWidth = 1 + (i % 3);
+      ctx.lineJoin = i % 2 ? 'round' : 'miter';
+      ctx.strokeStyle = colors[(i + 3) % colors.length];
+      ctx.stroke();
+    } else {
+      ctx.moveTo(x, y);
+      ctx.bezierCurveTo(x + 30, y - 40, x + 60, y + 40, x + 90, y);
+      ctx.quadraticCurveTo(x + 45, y + 30, x, y);
+      ctx.closePath();
+      ctx.globalAlpha = 0.7;
+      ctx.fillStyle = colors[(i + 5) % colors.length];
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+  }},
+  {name: 'fillText', calls: 1000, chunk: 50, setup() {
+    ctx.font = '12px sans-serif';
+  }, op(i) {
+    ctx.fillStyle = colors[i % colors.length];
+    ctx.fillText('Label ' + i, rand() * 740, rand() * 590 + 10);
+  }},
+  {name: 'drawImage', calls: 300, chunk: 20, setup() {
+    const g = sctx.createLinearGradient(0, 0, 64, 64);
+    g.addColorStop(0, 'red');
+    g.addColorStop(1, 'blue');
+    sctx.fillStyle = g;
+    sctx.fillRect(0, 0, 64, 64);
+    sctx.fillStyle = 'white';
+    sctx.fillRect(16, 16, 32, 32);
+  }, op(i) {
+    if (i % 2) ctx.drawImage(sprite, rand() * 736, rand() * 536);
+    else ctx.drawImage(sprite, rand() * 760, rand() * 560, 32, 24);
+  }},
+  {name: 'clipped', calls: 200, chunk: 20, setup() {
+    ctx.beginPath();
+    ctx.rect(100, 100, 300, 200);
+    ctx.clip();
+  }, op(i) {
+    ctx.beginPath();
+    ctx.arc(rand() * 800, rand() * 600, 150, 0, Math.PI * 2);
+    ctx.fillStyle = colors[i % colors.length];
+    ctx.globalCompositeOperation = i % 50 === 0 ? 'copy' : i % 10 ? 'source-over' : 'source-atop';
+    ctx.fill();
+  }},
+  {name: 'imageData', calls: 100, chunk: 10, setup() {
+    ctx.fillStyle = '#4363d8';
+    ctx.fillRect(100, 100, 300, 200);
+  }, op(i) {
+    const d = ctx.getImageData(50 + i, 50 + i, 100, 100);
+    ctx.putImageData(d, 400 + (i % 20) * 10, 300 + (i % 7) * 10);
+  }},
+];
+const only = (location.hash || '').slice(1).split(',').filter(Boolean);
+const queue = workloads.filter(w => !only.length || only.includes(w.name));
+function run(w, done) {
+  canvas.width = 800;
+  seed = 1;
+  if (w.setup) w.setup();
+  let i = 0, ms = 0;
+  function step() {
+    const end = Math.min(w.calls, i + w.chunk);
+    const t0 = Date.now();
+    for (; i < end; i++) w.op(i);
+    ms += Date.now() - t0;
+    if (i < w.calls) {
+      setTimeout(step, 0);
+      return;
+    }
+    console.log('canvasbench\t' + w.name + '\t' + w.calls + '\t' + ms + '\t' + hash(canvas.toDataURL()));
+    done();
+  }
+  step();
+}
+function next() {
+  const w = queue.shift();
+  if (w) setTimeout(() => run(w, next), 0);
+}
+next();
+</script>

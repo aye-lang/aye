@@ -1,0 +1,69 @@
+<!doctype html><title>Resource reflections</title><pre id="results"></pre><script>
+const out = document.getElementById('results');
+function check(name, value) { out.append(name + ': ' + (value ? 'PASS' : 'FAIL') + '\n'); }
+check('parser script defaults', !document.currentScript.async && !document.currentScript.defer && !document.currentScript.noModule);
+const style = document.createElement('style');
+check('style defaults', style.media === '' && style.type === '');
+style.media = 'screen'; style.type = 'text/css';
+check('style setters', style.getAttribute('media') === 'screen' && style.getAttribute('type') === 'text/css');
+style.setAttribute('media', 'print');
+check('style attribute', style.media === 'print');
+const link = document.createElement('link');
+check('link defaults', link.media === '' && link.type === '' && link.rel === '' && link.as === '' && link.crossOrigin === null);
+link.media = 'screen'; link.type = 'text/css'; link.rel = 'stylesheet stylesheet'; link.as = 'STYLE';
+check('link setters', link.getAttribute('media') === 'screen' && link.type === 'text/css' && link.relList.length === 1 && link.as === 'style');
+const list = link.relList;
+list.add('preload'); list.remove('stylesheet');
+check('live relList', list === link.relList && link.rel === 'preload');
+link.setAttribute('rel', 'stylesheet alternate');
+check('rel attribute', list.contains('stylesheet') && list.item(1) === 'alternate');
+link.relList = 'preload'; link.as = 'bogus';
+check('relList forwarding', list.value === 'preload' && link.as === '');
+for (const el of [link, document.createElement('script')]) {
+  el.crossOrigin = 'USE-CREDENTIALS';
+  check(el.localName + ' credentials', el.crossOrigin === 'use-credentials');
+  el.crossOrigin = 'bogus';
+  check(el.localName + ' anonymous', el.crossOrigin === 'anonymous');
+  el.crossOrigin = null;
+  check(el.localName + ' null', el.crossOrigin === null && !el.hasAttribute('crossorigin'));
+}
+const attributeScript = document.createElement('script');
+attributeScript.setAttribute('async', '');
+attributeScript.removeAttribute('async');
+check('script attribute clears force async', !attributeScript.async);
+const script = document.createElement('script');
+check('dynamic script async', script.async === true && !script.hasAttribute('async'));
+script.async = false; script.defer = true; script.noModule = true; script.type = 'module'; script.integrity = 'sha256-test';
+check('script setters', !script.async && script.hasAttribute('defer') && script.hasAttribute('nomodule') && script.getAttribute('type') === 'module' && script.getAttribute('integrity') === 'sha256-test');
+script.setAttribute('async', 'false'); script.removeAttribute('defer'); script.removeAttribute('nomodule');
+check('script boolean presence', script.async && !script.defer && !script.noModule);
+const img = document.createElement('img');
+check('image reflection defaults', img.alt === '' && img.srcset === '' && img.sizes === '' && img.useMap === '' && !img.isMap && img.loading === 'eager' && img.decoding === 'auto' && img.fetchPriority === 'auto' && img.crossOrigin === null && img.referrerPolicy === '');
+for (const [name, value, attr] of [['alt', 'caption', 'alt'], ['srcset', 'pic.png 2x', 'srcset'], ['sizes', '50vw', 'sizes'], ['useMap', '#map', 'usemap']]) {
+  img[name] = value;
+  check('image ' + name, img.getAttribute(attr) === value && img[name] === value);
+}
+img.isMap = true;
+check('image isMap set', img.hasAttribute('ismap'));
+img.removeAttribute('ismap');
+check('image isMap attribute', !img.isMap);
+for (const [name, value, normalized, fallback] of [['loading', 'LAZY', 'lazy', 'eager'], ['decoding', 'ASYNC', 'async', 'auto'], ['fetchPriority', 'HIGH', 'high', 'auto'], ['referrerPolicy', 'NO-REFERRER', 'no-referrer', '']]) {
+  img[name] = value;
+  check('image ' + name + ' enum', img[name] === normalized && img.getAttribute(name.toLowerCase()) === value);
+  img.setAttribute(name.toLowerCase(), 'invalid');
+  check('image ' + name + ' invalid', img[name] === fallback);
+}
+img.crossOrigin = '';
+check('image crossorigin empty', img.crossOrigin === 'anonymous');
+img.crossOrigin = null;
+check('image crossorigin null', img.crossOrigin === null);
+const a = document.createElement('a');
+a.href = 'https://example.com:8443/a/b?q=1#top';
+check('anchor parts', a.protocol === 'https:' && a.host === 'example.com:8443' && a.hostname === 'example.com' && a.port === '8443' && a.pathname === '/a/b' && a.search === '?q=1' && a.hash === '#top' && a.origin === 'https://example.com:8443');
+a.protocol = 'http:'; a.hostname = 'other.test'; a.port = '8080'; a.pathname = '/next'; a.search = '?x=2'; a.hash = '#end';
+check('anchor setters', a.href === 'http://other.test:8080/next?x=2#end');
+a.host = 'final.test:9090';
+check('anchor host', a.href === 'http://final.test:9090/next?x=2#end' && a.getAttribute('href') === a.href);
+a.removeAttribute('href');
+check('anchor absent href', a.href === '' && a.hostname === '' && a.pathname === '');
+</script>

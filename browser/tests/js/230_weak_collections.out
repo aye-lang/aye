@@ -1,0 +1,22 @@
+1 false true
+TypeError Invalid value used as weak map key
+true false true false
+[object WeakMap] [object WeakRef] [object FinalizationRegistry]
+undefined false true false undefined
+sym
+TypeError Invalid value used as weak map key
+TypeError Constructor WeakMap requires 'new'
+TypeError
+x 1 true true
+true 1 1 0 0
+undefined true false
+TypeError
+TypeError
+TypeError
+TypeError
+TypeError
+TypeError
+1 2
+TypeError
+constructor,delete,get,has,set constructor,register,unregister
+function WeakMap true

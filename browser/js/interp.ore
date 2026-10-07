@@ -245,6 +245,18 @@ pub struct Interp {
     tagged: IntMap(u32, u32)
     // The arrays being joined (Array.prototype.join of a cycle).
     joining: List(u32)
+    // Weak collections (weak.ore): their prototypes, the entries of
+    // WeakMaps and WeakSets by (collection << 32 | key), the target of
+    // each WeakRef, the targets kept until the end of the job, and the
+    // cells of the FinalizationRegistries.
+    weakmap_proto: u32
+    weakset_proto: u32
+    weakref_proto: u32
+    finreg_proto: u32
+    weak_entries: IntMap(u64, Value)
+    weak_refs: IntMap(u32, u32)
+    kept: List(Value)
+    fin_cells: List(FinCell)
 
     pub fn create(alloc: Allocator) JsError!Interp {
         var it = Interp {
@@ -345,6 +357,14 @@ pub struct Interp {
             jobs_head: 0,
             tagged: IntMap(u32, u32).init(alloc),
             joining: List(u32).init(alloc),
+            weakmap_proto: NONE,
+            weakset_proto: NONE,
+            weakref_proto: NONE,
+            finreg_proto: NONE,
+            weak_entries: IntMap(u64, Value).init(alloc),
+            weak_refs: IntMap(u32, u32).init(alloc),
+            kept: List(Value).init(alloc),
+            fin_cells: List(FinCell).init(alloc),
         }
         return it
     }
@@ -356,6 +376,10 @@ pub struct Interp {
         self.jobs.deinit()
         self.tagged.deinit()
         self.joining.deinit()
+        self.weak_entries.deinit()
+        self.weak_refs.deinit()
+        self.kept.deinit()
+        self.fin_cells.deinit()
         self.heap.deinit()
         self.ast.deinit()
         self.prop_caches.deinit()

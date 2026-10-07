@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<title>Wrappers of detached nodes the browser still holds</title>
+<div id="box"><p id="victim">victim</p></div>
+<iframe id="f" srcdoc="<p id=q>in a frame</p>"></iframe>
+<pre id="out"></pre>
+<script>
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const state = new WeakMap();
+let junk = [];
+function churn() { for (let i = 0; i < 60000; i++) { junk.push({ i }); if (junk.length > 1000) junk = []; } }
+// A removed node that only a pending mutation record holds.
+const mo = new MutationObserver(records => {
+  for (const r of records) for (const n of r.removedNodes) log('record', n.id, n.expando, state.get(n) && state.get(n).v);
+});
+mo.observe(document.getElementById('box'), { childList: true });
+(function () {
+  const p = document.getElementById('victim');
+  p.expando = 'expando kept';
+  state.set(p, { v: 'state kept' });
+  p.remove();
+})();
+churn();
+// A detached child that only a live NodeList holds.
+const kids = (function () {
+  const d = document.createElement('div');
+  d.innerHTML = '<i id="child">child</i>';
+  const c = d.firstChild;
+  c.expando = 'expando kept';
+  state.set(c, { v: 'state kept' });
+  return d.childNodes;
+})();
+churn();
+log('list', kids[0].id, kids[0].expando, state.get(kids[0]) && state.get(kids[0]).v);
+// A node of another document (a frame's), reached again from there.
+const frameDoc = () => document.getElementById('f').contentDocument;
+(function () {
+  const q = frameDoc().getElementById('q');
+  q.expando = 'expando kept';
+  state.set(q, { v: 'state kept' });
+})();
+churn();
+const q = frameDoc().getElementById('q');
+log('frame', q.id, q.expando, state.get(q) && state.get(q).v);
+</script>

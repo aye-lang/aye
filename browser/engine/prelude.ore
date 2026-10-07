@@ -446,14 +446,14 @@ pub let PRELUDE =
     \\});
     \\
     \\// Attributes reflected as properties.
-    \\function reflect(name, attr) {
-    \\  getter(HTMLP, name, function () {
+    \\function reflect(name, attr, proto = HTMLP) {
+    \\  getter(proto, name, function () {
     \\    const v = this.getAttribute(attr);
     \\    return v === null ? '' : v;
     \\  }, function (v) { this.setAttribute(attr, String(v)); });
     \\}
-    \\function reflectBool(name, attr) {
-    \\  getter(HTMLP, name, function () { return this.hasAttribute(attr); }, function (v) {
+    \\function reflectBool(name, attr, proto = HTMLP) {
+    \\  getter(proto, name, function () { return this.hasAttribute(attr); }, function (v) {
     \\    if (v) this.setAttribute(attr, '');
     \\    else this.removeAttribute(attr);
     \\  });
@@ -465,6 +465,30 @@ pub let PRELUDE =
     \\  }, function (v) { this.setAttribute(name, String(v)); });
     \\}
     \\for (const n of ['title', 'lang', 'dir', 'name', 'placeholder', 'alt', 'rel', 'target', 'role', 'method', 'accessKey', 'srcdoc']) reflect(n, n.toLowerCase());
+    \\// Shared reflection tables for resource elements.
+    \\for (const P of [HTMLStyleElement.prototype, HTMLLinkElement.prototype]) reflect('media', 'media', P);
+    \\function reflectCrossOrigin(proto) {
+    \\  getter(proto, 'crossOrigin', function () {
+    \\    const v = this.getAttribute('crossorigin');
+    \\    return v === null ? null : v.toLowerCase() === 'use-credentials' ? 'use-credentials' : 'anonymous';
+    \\  }, function (v) { if (v === null) this.removeAttribute('crossorigin'); else this.setAttribute('crossorigin', String(v)); });
+    \\}
+    \\for (const P of [HTMLLinkElement.prototype, HTMLScriptElement.prototype]) reflectCrossOrigin(P);
+    \\function reflectEnum(proto, name, values, fallback) {
+    \\  getter(proto, name, function () {
+    \\    const v = (this.getAttribute(name.toLowerCase()) || '').toLowerCase();
+    \\    return values.includes(v) ? v : fallback;
+    \\  }, function (v) { this.setAttribute(name.toLowerCase(), String(v)); });
+    \\}
+    \\reflectEnum(HTMLLinkElement.prototype, 'as', ['audio', 'audioworklet', 'document', 'embed', 'fetch', 'font', 'image', 'json', 'object', 'paintworklet', 'script', 'style', 'track', 'video', 'worker'], '');
+    \\for (const n of ['defer', 'noModule']) reflectBool(n, n.toLowerCase(), HTMLScriptElement.prototype);
+    \\reflect('integrity', 'integrity', HTMLScriptElement.prototype);
+    \\getter(HTMLScriptElement.prototype, 'async', function () {
+    \\  return !!this.__forceAsync || this.hasAttribute('async');
+    \\}, function (v) {
+    \\  hidden(this, '__forceAsync', false);
+    \\  if (v) this.setAttribute('async', ''); else this.removeAttribute('async');
+    \\});
     \\reflect('htmlFor', 'for');
     \\reflect('defaultValue', 'value');
     \\for (const n of ['hidden', 'disabled', 'required', 'multiple', 'autofocus', 'open']) reflectBool(n, n);
@@ -498,14 +522,14 @@ pub let PRELUDE =
     \\
     \\// classList
     \\class DOMTokenList {
-    \\  constructor(el) { hidden(this, '_el', el); }
+    \\  constructor(el, attr = 'class') { hidden(this, '_el', el); hidden(this, '_attr', attr); }
     \\  _get() {
-    \\    const c = this._el.getAttribute('class');
-    \\    return c ? c.split(/[ \t\n\f\r]+/).filter(Boolean) : [];
+    \\    const c = this._el.getAttribute(this._attr);
+    \\    return c ? c.split(/[ \t\n\f\r]+/).filter((t, i, a) => t && a.indexOf(t) === i) : [];
     \\  }
     \\  _set(list) {
-    \\    if (list.length === 0 && !this._el.hasAttribute('class')) return;
-    \\    this._el.setAttribute('class', list.join(' '));
+    \\    if (list.length === 0 && !this._el.hasAttribute(this._attr)) return;
+    \\    this._el.setAttribute(this._attr, list.join(' '));
     \\  }
     \\  _check(t) {
     \\    t = String(t);
@@ -514,8 +538,8 @@ pub let PRELUDE =
     \\    return t;
     \\  }
     \\  get length() { return this._get().length; }
-    \\  get value() { return this._el.getAttribute('class') || ''; }
-    \\  set value(v) { this._el.setAttribute('class', String(v)); }
+    \\  get value() { return this._el.getAttribute(this._attr) || ''; }
+    \\  set value(v) { this._el.setAttribute(this._attr, String(v)); }
     \\  item(i) {
     \\    const l = this._get();
     \\    return i >= 0 && i < l.length ? l[i] : null;
@@ -557,6 +581,12 @@ pub let PRELUDE =
     \\  toString() { return this.value; }
     \\}
     \\hidden(G, 'DOMTokenList', DOMTokenList);
+    \\for (const P of [HTMLLinkElement.prototype, HTMLAnchorElement.prototype, HTMLAreaElement.prototype]) {
+    \\  getter(P, 'relList', function () {
+    \\    if (!this.__relList) hidden(this, '__relList', new DOMTokenList(this, 'rel'));
+    \\    return this.__relList;
+    \\  }, function (v) { this.setAttribute('rel', String(v)); });
+    \\}
     \\getter(ElementP, 'classList', function () {
     \\  let l = this.__classList;
     \\  if (!l) {
@@ -1945,16 +1975,119 @@ pub let PRELUDE =
     \\hidden(G, 'isSecureContext', true);
     \\hidden(G, 'Image', function Image(width, height) {
     \\  const img = document.createElement('img');
-    \\  if (width !== undefined) img.setAttribute('width', String(width));
-    \\  if (height !== undefined) img.setAttribute('height', String(height));
+    \\  if (width !== undefined) img.width = width;
+    \\  if (height !== undefined) img.height = height;
     \\  return img;
     \\});
-    \\// The engine fetches images for rendering, not for scripts: decode()
-    \\// settles at once, fulfilled when the image has a source.
-    \\hidden(HTMLImageElement.prototype, 'decode', function () {
-    \\  if (this.getAttribute('src')) return Promise.resolve();
-    \\  return Promise.reject(new DOMException('The source image cannot be decoded.', 'EncodingError'));
+    \\// Image requests: the native bridge uses rendering's selector/cache and
+    \\// decoder, including detached images. Versions suppress superseded work.
+    \\// State belongs to the wrapper, not a strong global map of detached nodes.
+    \\const ImageP = HTMLImageElement.prototype;
+    \\function imageEncodingError() { return new DOMException('The source image cannot be decoded.', 'EncodingError'); }
+    \\function imageUpdate(el) {
+    \\  if (ak.inTemplate(el)) return;
+    \\  const old = el.__imageRequest;
+    \\  if (old) for (const waiter of old.waiters.splice(0)) waiter.reject(imageEncodingError());
+    \\  const src = el.getAttribute('src'), srcset = el.getAttribute('srcset') || '';
+    \\  const empty = !srcset && (src === null || src === '');
+    \\  const parent = el.parentNode;
+    \\  const state = { complete: empty, width: 0, height: 0, currentSrc: '', status: 'pending', waiters: [], picture: !!parent && parent.localName === 'picture' };
+    \\  hidden(el, '__imageRequest', state);
+    \\  ak.queueMicrotask(() => {
+    \\    if (el.__imageRequest !== state) return;
+    \\    const result = ak.imageLoad(el);
+    \\    if (el.__imageRequest !== state) return;
+    \\    const good = result && result[1] >= 0;
+    \\    state.currentSrc = result ? result[0] : '';
+    \\    state.width = good ? result[1] : 0;
+    \\    state.height = good ? result[2] : 0;
+    \\    state.complete = true;
+    \\    state.status = good ? 'decoded' : 'broken';
+    \\    for (const waiter of state.waiters.splice(0)) {
+    \\      if (good) waiter.resolve(); else waiter.reject(imageEncodingError());
+    \\    }
+    \\    if (src === null && !srcset && !state.currentSrc) return;
+    \\    // load/error are tasks, never dispatched by an attribute setter or a
+    \\    // decode() microtask. Replacing the request cancels a queued old event.
+    \\    setTimeout(() => {
+    \\      if (el.__imageRequest === state) hostEvent(el, good ? 'load' : 'error');
+    \\    }, 0);
+    \\  });
+    \\}
+    \\function imageState(el) {
+    \\  if (!el.__imageRequest) imageUpdate(el);
+    \\  return el.__imageRequest || { complete: true, width: 0, height: 0, currentSrc: '', status: 'broken' };
+    \\}
+    \\function imageDiscover(root) {
+    \\  if (root instanceof HTMLImageElement && !root.__imageRequest) imageUpdate(root);
+    \\  if (root.querySelectorAll) for (const el of root.querySelectorAll('img')) {
+    \\    if (!el.__imageRequest) imageUpdate(el);
+    \\  }
+    \\}
+    \\function resourceMutations(recs) {
+    \\  for (let i = 0; i < recs.length; i += 7) {
+    \\    const kind = recs[i], target = recs[i + 1], node = recs[i + 2], name = recs[i + 5];
+    \\    if (!target) continue;
+    \\    // Adding async clears a dynamically created script's force-async flag,
+    \\    // even when the content attribute is later removed without a getter.
+    \\    if (kind === 1 && target instanceof HTMLScriptElement && name === 'async' && target.hasAttribute('async')) hidden(target, '__forceAsync', false);
+    \\    if (kind === 1 && target instanceof HTMLImageElement && ['src', 'srcset', 'sizes', 'crossorigin', 'referrerpolicy'].includes(name)) imageUpdate(target);
+    \\    if (kind === 3 && node) {
+    \\      imageDiscover(node);
+    \\      // Moving a loaded img out of a picture must reselect its own src.
+    \\      if (node instanceof HTMLImageElement && node.__imageRequest) {
+    \\        const parent = node.parentNode;
+    \\        if (!parent || parent.localName !== 'picture') {
+    \\          const previous = node.__imageRequest;
+    \\          if (previous.picture) imageUpdate(node);
+    \\        }
+    \\      }
+    \\    }
+    \\    // picture sources affect their sibling img, not just their own wrapper.
+    \\    const picture = target.localName === 'picture' ? target : target.localName === 'source' ? target.parentNode : null;
+    \\    if (picture && picture.localName === 'picture' && (kind === 0 || kind === 3 || (kind === 1 && ['srcset', 'sizes', 'media', 'type'].includes(name)))) {
+    \\      for (const el of picture.querySelectorAll('img')) imageUpdate(el);
+    \\    }
+    \\  }
+    \\}
+    \\getter(ImageP, 'complete', function () { return imageState(this).complete; });
+    \\getter(ImageP, 'naturalWidth', function () { return imageState(this).width; });
+    \\getter(ImageP, 'naturalHeight', function () { return imageState(this).height; });
+    \\getter(ImageP, 'currentSrc', function () { return imageState(this).currentSrc; });
+    \\hidden(ImageP, 'decode', function () {
+    \\  const el = this, state = imageState(el);
+    \\  return new Promise((resolve, reject) => {
+    \\    ak.queueMicrotask(() => {
+    \\      if (el.__imageRequest !== state) reject(imageEncodingError());
+    \\      else if (state.status === 'pending') state.waiters.push({ resolve, reject });
+    \\      else if (state.status === 'decoded') resolve();
+    \\      else reject(imageEncodingError());
+    \\    });
+    \\  });
     \\});
+    \\for (const key of ['width', 'height']) {
+    \\  getter(ImageP, key, function () {
+    \\    // A rendered image's content box (a forced layout); otherwise the
+    \\    // width/height attribute, else the natural size.
+    \\    const rendered = ak.renderedSize(this, key === 'height');
+    \\    if (rendered >= 0) return rendered;
+    \\    const attr = this.getAttribute(key);
+    \\    const n = /^\s*\+?\d+/.test(attr || '') ? parseInt(attr, 10) : NaN;
+    \\    return n >= 0 && n <= 2147483647 ? n : imageState(this)[key];
+    \\  }, function (v) {
+    \\    // Reflected unsigned long: values above 2^31 - 1 set the default.
+    \\    const n = Number(v) >>> 0;
+    \\    this.setAttribute(key, String(n <= 2147483647 ? n : 0));
+    \\  });
+    \\}
+    \\for (const n of ['srcset', 'sizes', 'useMap']) reflect(n, n.toLowerCase(), ImageP);
+    \\reflectBool('isMap', 'ismap', ImageP);
+    \\reflectCrossOrigin(ImageP);
+    \\reflectEnum(ImageP, 'loading', ['eager', 'lazy'], 'eager');
+    \\reflectEnum(ImageP, 'decoding', ['sync', 'async', 'auto'], 'auto');
+    \\reflectEnum(ImageP, 'fetchPriority', ['high', 'low', 'auto'], 'auto');
+    \\reflectEnum(ImageP, 'referrerPolicy', ['no-referrer', 'no-referrer-when-downgrade', 'same-origin', 'origin', 'strict-origin', 'origin-when-cross-origin', 'strict-origin-when-cross-origin', 'unsafe-url'], '');
+    \\Image.prototype = ImageP;
     \\// Media elements play nothing: play() fails as for an unsupported source.
     \\const MediaP = HTMLMediaElement.prototype;
     \\hidden(MediaP, 'play', function () { return Promise.reject(new DOMException('The element has no supported sources.', 'NotSupportedError')); });
@@ -2903,6 +3036,7 @@ pub let PRELUDE =
     \\const nativeIsConnected = Object.getOwnPropertyDescriptor(NodeP, 'isConnected').get;
     \\function isConnected(n) { return nativeIsConnected.call(n); }
     \\function onMutations(recs) {
+    \\  resourceMutations(recs);
     \\  if (registered.size > 0) queueRecords(recs);
     \\  if (ceDefs.size > 0) {
     \\    for (let i = 0; i < recs.length; i += 7) {
@@ -2923,6 +3057,11 @@ pub let PRELUDE =
     \\  }
     \\}
     \\ak.setMutationHook(onMutations);
+    \\// Resource requests must observe attribute/markup changes even when no
+    \\// page MutationObserver exists. Use the same log as CEReactions so Attr,
+    \\// innerHTML and src property assignments cannot bypass image updates.
+    \\ak.setRecording(true);
+    \\imageDiscover(document);
     \\
     \\class MutationObserver {
     \\  constructor(callback) {
@@ -3189,6 +3328,7 @@ pub let PRELUDE =
     \\// exists; clones are upgraded.
     \\hidden(Document.prototype, 'createElement', function (name, options) {
     \\  const el = nativeCreateElement.call(this, name);
+    \\  if (el.localName === 'script') hidden(el, '__forceAsync', true);
     \\  if (ceDefs.size > 0) {
     \\    const is = typeof options === 'string' ? options : options && options.is;
     \\    if (is !== undefined && is !== null) el.setAttribute('is', String(is));
@@ -3199,6 +3339,7 @@ pub let PRELUDE =
     \\const nativeCreateElementNS = Document.prototype.createElementNS;
     \\hidden(Document.prototype, 'createElementNS', function (ns, name, options) {
     \\  const el = nativeCreateElementNS.call(this, ns, name);
+    \\  if (el instanceof HTMLScriptElement) hidden(el, '__forceAsync', true);
     \\  if (ceDefs.size > 0 && el.namespaceURI === 'http://www.w3.org/1999/xhtml') {
     \\    const is = typeof options === 'string' ? options : options && options.is;
     \\    if (is !== undefined && is !== null) el.setAttribute('is', String(is));
@@ -3209,11 +3350,13 @@ pub let PRELUDE =
     \\const nativeCloneNode = NodeP.cloneNode;
     \\hidden(NodeP, 'cloneNode', function (deep) {
     \\  const c = nativeCloneNode.call(this, deep);
+    \\  imageDiscover(c);
     \\  if (ceDefs.size > 0 && !ak.inTemplate(this)) for (const el of ak.customIn(c)) ceTryUpgrade(el);
     \\  return c;
     \\});
     \\hidden(Document.prototype, 'importNode', function (node, deep) {
     \\  const c = nativeCloneNode.call(node, !!deep);
+    \\  imageDiscover(c);
     \\  if (ceDefs.size > 0) for (const el of ak.customIn(c)) ceTryUpgrade(el);
     \\  return c;
     \\});

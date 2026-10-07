@@ -634,6 +634,11 @@ struct Rasterizer {
             by1 = math.ceil(maxy) as i64
         }
         sort.sort(Edge, edges, edgeBefore)
+        // Two vertical edges over the same rows, turning opposite ways (a
+        // rectangle, or the stroke of a horizontal segment): a
+        // sub-scanline crosses both or neither, and the span between them
+        // is inside by either rule.
+        let pair = edges.len == 2 && edges[0].x0 == edges[0].x1 && edges[1].x0 == edges[1].x1 && edges[0].y0 == edges[1].y0 && edges[0].y1 == edges[1].y1 && edges[0].dir + edges[1].dir == 0
         let bw = (bx1 - bx0) as usize
         let cov = try self.alloc.alloc(0.0, bw + 1)
         defer self.alloc.free(cov)
@@ -673,6 +678,24 @@ struct Rasterizer {
             var any = false
             for sub in 0..SUB {
                 let sy = top + (sub as f64 + 0.5) * w
+                if pair {
+                    // As below, without the list and the sort.
+                    let e0 = edges[0]
+                    let e1 = edges[1]
+                    if e0.y0 <= sy && sy < e0.y1 {
+                        var xa = e0.x0 + (sy - e0.y0) * e0.dxdy
+                        var xb = e1.x0 + (sy - e1.y0) * e1.dxdy
+                        if xb < xa {
+                            let t0 = xa
+                            xa = xb
+                            xb = t0
+                        }
+                        if span(cov, acc, xa, xb, lo, hi, w) {
+                            any = true
+                        }
+                    }
+                    continue
+                }
                 self.cross.clear()
                 for a in self.active.items() {
                     let e = edges[a]

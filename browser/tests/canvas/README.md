@@ -7,12 +7,23 @@ antialiased coverage and geometric hit tests; paint supplies image
 sampling, blur and PNG encoding; font and TextPainter supply shaping,
 fallback and glyph coverage. There is no separate canvas rasterizer.
 
+Paths reach the native side as segments (or path data) and become SVG
+pictures directly; stroke attributes are parsed as SVG markup once per
+distinct value. A draw renders, paints and composites only its area:
+the bounds of its shape or text mask, grown by the stroke, the shadow
+blur and a two-pixel margin, within the canvas and the clip paths'
+bounds (copy, source-in, source-out, destination-in and
+destination-atop use the whole clip). Transparent pixels are stored as
+0,0,0,0, also those written by putImageData. `canvasbench/run.sh`
+measures drawing calls.
+
 ## Offline coverage
 
-- `jsdom/canvas_api.html` runs `api.js`: 62 explicit assertions on context
+- `jsdom/canvas_api.html` runs `api.js`: 64 explicit assertions on context
   identity, resets, validated state, compositing pixels, transforms, dash
   state, Path2D, winding rules and hit tests, clipping, ImageData, text
-  metrics, image/canvas/ImageBitmap sources, patterns, gradients, PNG
+  metrics, image/canvas/ImageBitmap sources (a 2x srcset image draws at
+  its natural size), patterns, gradients, PNG
   data URLs and asynchronous PNG blobs.
 - `jsdom/canvas_damaged.html` runs `damaged.js`: 119 operations with
   non-finite and huge arguments, malformed SVG paths, negative radii and

@@ -1,5 +1,7 @@
 // js/gc: mark and sweep. Marks everything reachable from the roots (see
-// interp.ore), then frees the rest. A collected host object reports its
+// interp.ore) and the values of weak collections whose keys are reachable
+// (ephemerons, weak.ore), drops the weak entries whose keys died, then
+// frees the rest. A collected host object reports its
 // handle to the host (`Host.finalize`), which decrements the node's
 // `js_refs`. The next collection starts after twice as many allocations
 // as there are live values (at least 20000).
@@ -159,13 +161,25 @@ pub fn collectGarbage(it: *mut Interp) {
         markValue(it, it.jobs.items()[k])
     }
     markCoroutines(it)
-    // Trace, then let the host keep more alive, until nothing changes.
+    markWeakRoots(it)
+    // Trace, then mark the values of the weak collections whose keys are
+    // marked and let the host keep more alive, until nothing changes.
     drain(it)
-    if it.host |h| {
-        while h.trace(it) {
+    while true {
+        markEphemerons(it)
+        if hasGray(it) {
             drain(it)
+            continue
         }
+        if it.host |h| {
+            if h.trace(it) {
+                drain(it)
+                continue
+            }
+        }
+        break
     }
+    clearDeadWeak(it)
     sweep(it)
 }
 
@@ -177,6 +191,10 @@ pub fn gcMarked(it: *mut Interp, o: u32) bool {
 /// For `Host.trace`: marks object o (and later what it refers to).
 pub fn gcMark(it: *mut Interp, o: u32) {
     markObj(it, o)
+}
+
+fn hasGray(it: *mut Interp) bool {
+    return it.gray_objs.len() > 0 || it.gray_strs.len() > 0 || it.gray_envs.len() > 0
 }
 
 // Marks everything reachable from the gray objects, strings and

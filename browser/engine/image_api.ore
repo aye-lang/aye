@@ -1,0 +1,64 @@
+// HTMLImageElement requests share rendering's source selection and URL
+// cache. The prelude owns the observable request state and queues events;
+// this bridge only fetches/decodes and returns the selected URL and size.
+
+import css
+import js
+import js.Args
+import js.Interp
+import js.JsError
+import js.Value
+import std.math
+
+fn installImages(it: *mut Interp, ak: u32) JsError!void {
+    try defMethod(it, ak, "imageLoad", 1, akImageLoad)
+}
+
+// [currentSrc, naturalWidth, naturalHeight]; -1 dimensions mean broken.
+// Empty source is broken for decode(), but the prelude distinguishes
+// missing src (no event) from an explicit empty src (an error event).
+fn akImageLoad(it: *mut Interp, a: Args) JsError!Value {
+    let h = handleOf(it, it.arg(a, 0), TAG_NODE) orelse return Value.Null
+    let s = scriptOf(it)
+    let p = s.active
+    if !p.doc.isElement(h, "img") {
+        return Value.Null
+    }
+    if p.images == null {
+        p.images = try p.alloc.create(ImageCache.init(p.alloc))
+    }
+    let cache = p.images.?
+    if cache.referrer.len == 0 {
+        try cache.setReferrer(p.url.href)
+    }
+    let base = try documentBase(cache.alloc, &p.doc, &p.url)
+    defer base.deinit(cache.alloc)
+    let mapped = cache.nodes.get(h)
+    let loaded = try loadElementImage(cache, &p.doc, h, &base, css.Media { width: s.width, height: s.height })
+    // A new bitmap changes the element's natural size: the next geometry
+    // query must lay out again though the document did not change.
+    if cache.nodes.get(h) != mapped {
+        dropGeometry(s)
+    }
+    defer {
+        if loaded |l| {
+            l.target.deinit(cache.alloc)
+        }
+    }
+    let arr = try it.newArray(0)
+    try it.push(js.objVal(arr))
+    var w = -1.0
+    var ht = -1.0
+    var href: []u8 = ""
+    if loaded |l| {
+        href = l.target.href
+        if l.bmp |b| {
+            w = math.floor(b.width as f64 / l.density)
+            ht = math.floor(b.height as f64 / l.density)
+        }
+    }
+    try it.heap.pushElem(arr, try it.newString(href))
+    try it.heap.pushElem(arr, js.numVal(w))
+    try it.heap.pushElem(arr, js.numVal(ht))
+    return it.pop()
+}
