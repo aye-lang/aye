@@ -255,6 +255,10 @@ test "webp: VP8L-compressed alpha" {
     @expect(try alphaMatches(a, "webp_lossy_alpha.webp"))
 }
 
+test "ico fixtures" {
+    @expectEqual(0, try checkFixtures(@testAllocator(), "ico_"))
+}
+
 test "empty input" {
     @expectEqual(0, try checkFixtures(@testAllocator(), "empty"))
 }
@@ -268,6 +272,9 @@ test "sniff" {
     @expect(sniff("\xFF\xD8") == Format.Unknown)
     @expect(sniff("RIFF\x00\x00\x00\x00WEBP") == Format.Webp)
     @expect(sniff("RIFF\x00\x00\x00\x00WAVE") == Format.Unknown)
+    @expect(sniff("\x00\x00\x01\x00") == Format.Ico)
+    @expect(sniff("\x00\x00\x02\x00") == Format.Ico)
+    @expect(sniff("\x00\x00\x03\x00") == Format.Unknown)
     @expect(sniff("") == Format.Unknown)
 }
 
