@@ -1522,7 +1522,9 @@ fn noscript_with_scripts() {
 /// IntersectionObserver fills, an infinite list until it ends, and a page
 /// that never stops growing, until 20 steps. `--no-scroll` turns it off;
 /// `--scroll-steps N` caps it. The goldens of these fixtures are in
-/// `browser/tests/jsdom/` too.
+/// `browser/tests/jsdom/` too, with those of the pages it does not step
+/// through (`unwatched_page`), stops after one step (`quiet_page`) or
+/// takes to the bottom after a step that changed nothing (`lively_page`).
 #[test]
 fn dump_scrolls_through() {
     let page = |name: &str| format!("browser/tests/jsdom/{name}.html");

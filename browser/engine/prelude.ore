@@ -146,6 +146,7 @@ pub let PRELUDE =
     \\function addListener(t, type, fn, opts) {
     \\  if (fn === null || fn === undefined) return;
     \\  type = String(type);
+    \\  if (type === 'scroll') watchScroll(t);
     \\  const capture = captureOf(opts);
     \\  const once = !!(opts && typeof opts === 'object' && opts.once);
     \\  const ls = listenersOf(t);
@@ -199,7 +200,14 @@ pub let PRELUDE =
     \\  handlerTable(t)[type] = { fn, src, prop: false };
     \\  return fn;
     \\}
+    \\// A scroll listener of the window, or of the document where the
+    \\// window's scroll event starts, tells the browser that scrolling may
+    \\// change the page (engine.scrollThrough), as an observer does.
+    \\function watchScroll(t) {
+    \\  if (t === G || t === document) ak.watchScroll();
+    \\}
     \\function setHandler(t, type, v) {
+    \\  if (type === 'scroll' && typeof v === 'function') watchScroll(t);
     \\  handlerTable(t)[type] = { fn: typeof v === 'function' ? v : null, src: attributeOf(t, type), prop: true };
     \\}
     \\
@@ -1857,6 +1865,7 @@ pub let PRELUDE =
     \\    if (this._targets.includes(target)) return;
     \\    this._targets.push(target);
     \\    intersectionObservers.add(this);
+    \\    ak.watchScroll();
     \\    ak.setLayoutHook(checkIntersectionsSoon);
     \\    checkIntersectionsSoon();
     \\  }

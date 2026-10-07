@@ -1,0 +1,26 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Unwatched page"
+      "\n"
+      <style>
+        "\nbody { margin: 0 }\nsection { height: 1000px }\n"
+      "\n"
+    <body>
+      <h1>
+        "Unwatched page"
+      "\n"
+      <section>
+        "Five viewports of text."
+      "\n"
+      <section>
+        "No observer, no scroll listener."
+      "\n"
+      <section>
+        "So a dump does not scroll through it."
+      "\n"
+      <script>
+        "\n// A timer (not a listener) reads the scroll offset and logs it when it\n// changed: the page neither observes intersections nor listens for\n// scroll, so a dump gives it its time at the top and does not step down.\nlet seen = -1;\nsetInterval(() => {\n  if (scrollY !== seen) console.log('scrollY ' + (seen = scrollY));\n}, 100);\n"
+      "\n"

@@ -300,6 +300,9 @@ pub struct Script {
     // geometry changed since the last call (`hook_stamp`).
     layout_hook: u32
     hook_stamp: u64
+    // The page listens for the window's scroll or observes intersections
+    // (`ak.watchScroll`): a dump's scroll through it may load more.
+    watches_scroll: bool = false
 
     // ---- js.Host
 
