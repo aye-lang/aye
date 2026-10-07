@@ -19,10 +19,10 @@ for (const img of imgs) {
 }
 </script>
 <script>
-// The requests started at the end of the first script; the load fails
-// while this script waits for a synchronous request.
+// The requests started at the end of the first script; the server closes
+// the failing one, and the answer comes after: the load failed by then.
 const x = new XMLHttpRequest();
-x.open('GET', '/slow/wait.txt', false);
+x.open('GET', '/after-fail/wait.txt', false);
 x.send();
 // No request holds the failed load any more.
 for (const img of imgs) {
