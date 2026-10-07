@@ -1,7 +1,11 @@
 #!/bin/sh
 # Builds the anyknown browser for real use: `--mode fast` (optimized, no
 # safety checks; the tests build it in debug mode). The output goes to
-# target/anyknown unless a path is given.
+# target/anyknown in this checkout (your worktree) unless a path is
+# given; a relative path is taken from the checkout's root. Do not give a
+# path outside your worktree or a fixed name that other agents share (the
+# session scratchpad): another agent's build can replace your binary
+# before your tests run.
 #
 #     browser/build.sh [OUT] [--mode safe|fast|debug]
 #
