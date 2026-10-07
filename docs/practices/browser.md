@@ -354,6 +354,17 @@ Canvas fixtures await `decode()` before reading dimensions or drawing.
 **Why:** a URL cache is not per-element request state. A replaced request
 must not publish dimensions or fire a stale load/error event.
 
+### Expected pixels follow the browsers, not the reference library
+**Context:** fixtures of a decoder whose expected pixels come from
+Pillow, or a cross-check against it.
+**Bad:** Pillow decodes a 32-bpp ICO entry whose alpha is all 0 as fully
+transparent; checked against it, `ico_bmp32_mask.ico` fails (P3.55).
+**Good:** `browser/tests/image/make_ico_fixtures.py` writes the expected
+pixels from the rule browsers follow (all-zero alpha: use the AND mask),
+and `browser/image/ico.ore` states the rule.
+**Why:** old icon tools write 32-bpp entries with no alpha; Chrome and
+Firefox show them through the mask, so a page shows them too.
+
 ### Keep a page's memory of a shared load in the page
 **Context:** state of a background load (`browser/net/loader.ore`)
 that the page must keep after the load ends.
