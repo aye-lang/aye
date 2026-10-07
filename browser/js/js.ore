@@ -136,6 +136,17 @@ fn runSourceAt(alloc: Allocator, src: []u8, href: []u8, module: bool) i32 {
             return status
         }
     }
+    // The module entry's evaluation is asynchronous, including parse and
+    // fetch failures. Do not silently succeed when its promise rejected.
+    if module {
+        let rejected = it.takeUnhandled() catch |e| {
+            return uncaughtStatus(&mut it, e)
+        }
+        if isObject(rejected) && it.heap.obj(objectOf(rejected)).nelems > 0 {
+            it.exception = it.heap.obj(objectOf(rejected)).elems[0]
+            return uncaughtStatus(&mut it, JsError.Thrown)
+        }
+    }
     return 0
 }
 

@@ -20,7 +20,7 @@ function later() { return import('./modules/counter.mjs'); }
     try { await import('./modules/thrown.mjs'); } catch (e) { console.log('throw', e); }
   }
   console.log('throw once', globalThis.throwEvaluations);
-  for (const source of ['import', 'var import = 1', 'import()', 'import(...[])', 'import.meta']) {
+  for (const source of ['import', 'var import = 1', 'import()', 'import(...[])', 'import.meta', 'new import("x")']) {
     try { new Function(source); } catch (e) { console.log('syntax', e.name); }
   }
 })();

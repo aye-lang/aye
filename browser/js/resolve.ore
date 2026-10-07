@@ -668,7 +668,34 @@ pub struct Resolver {
             .Yield { arg, .. } => try self.expr(arg)
             .Await { arg } => try self.expr(arg)
             .ImportCall { arg, .. } => try self.expr(arg)
-            .ModuleNamespace { value } => try self.expr(value)
+            .ModuleNamespace { value } => {
+                try self.expr(value)
+                match self.ast.node(value) {
+                    .ObjectLit { list, n } => {
+                        for k in 0..n {
+                            match self.ast.node(self.ast.item(list, k)) {
+                                .Prop { value: getter, .. } => {
+                                    match self.ast.node(getter) {
+                                        .Func { f } => {
+                                            match self.ast.node(self.ast.func(f).expr) {
+                                                .Ident { depth, .. } => {
+                                                    if depth >= DEPTH_GLOBAL_LEX {
+                                                        try self.fail("Export is not defined", NONE)
+                                                    }
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
             .ImportBindings { value, .. } => try self.expr(value)
             .TaggedTemplate { tag, quasi, .. } => {
                 try self.expr(tag)

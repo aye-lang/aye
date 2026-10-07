@@ -34,6 +34,7 @@ pub struct Parser {
     module: bool = false
     // A return is illegal in module code, but legal in its nested functions.
     module_body: bool = false
+    module_id: u32 = 0
 
     // ---- tokens
 
@@ -240,6 +241,7 @@ pub struct Parser {
         self.in_async = true
         let pm = self.mark()
         let f = try self.newFunc(A_EMPTY, pm)
+        self.module_id = f
         self.ast.funcs.items()[f].is_async = true
         self.ast.funcs.items()[f].strict = true
         var exports = List(u32).init(self.alloc)
@@ -419,7 +421,15 @@ pub struct Parser {
                 }
                 let name = try self.intern(self.tokText(self.tok()))
                 self.pos += 1
-                target = try self.ident(name, start)
+                let binding = try self.ident(name, start)
+                if self.count(m) > 0 {
+                    try self.push(try self.mk(Node.PatProp { key: try self.intern("*namespace*"), computed: false, value: binding }, start))
+                    let n = self.count(m)
+                    let l = try self.list(m)
+                    target = try self.mk(Node.ObjectPat { list: l, n: n }, start)
+                } else {
+                    target = binding
+                }
             } else if target == 0 {
                 try self.expect(Tok.LBrace)
                 while !self.eat(Tok.RBrace) {
@@ -1336,6 +1346,9 @@ pub struct Parser {
     fn newExpr(self: *mut Self) SyntaxErr!u32 {
         let start = self.pos
         self.pos += 1
+        if self.at(Tok.KwImport) && self.kindAt(1) != Tok.Dot {
+            return self.fail("Cannot use new with import()")
+        }
         if self.at(Tok.Dot) {
             self.pos += 1
             if !self.isWord("target") {
@@ -1387,7 +1400,7 @@ pub struct Parser {
                     return self.fail("Cannot use import.meta outside a module")
                 }
                 self.pos += 1
-                return self.mk(Node.ImportMeta { referrer: self.referrer }, start)
+                return self.mk(Node.ImportMeta { referrer: self.referrer, module_id: self.module_id }, start)
             }
             try self.expect(Tok.LParen)
             let arg = try self.assign(false)

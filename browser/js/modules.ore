@@ -80,12 +80,22 @@ fn engineFetchModule(it: *mut Interp, a: Args) JsError!Value {
     if res.url.len > 0 {
         finalUrl = res.url
     }
+    if !text.eql(target.scheme, "file") && !isModuleMime(res.mime) {
+        return it.typeError("Module response is not JavaScript")
+    }
     let referrer = try it.intern(finalUrl)
     return it.runModuleSource(res.body, referrer)
 }
 
-fn importMeta(it: *mut Interp, referrer: u32) JsError!Value {
-    if it.import_meta.get(referrer) |root| {
+fn isModuleMime(mime: []u8) bool {
+    return text.eql(mime, "text/javascript") || text.eql(mime, "application/javascript") ||
+        text.eql(mime, "text/ecmascript") || text.eql(mime, "application/ecmascript") ||
+        text.eql(mime, "application/x-javascript") || text.eql(mime, "text/x-javascript") ||
+        text.eql(mime, "text/jscript") || text.eql(mime, "text/livescript")
+}
+
+fn importMeta(it: *mut Interp, referrer: u32, module_id: u32) JsError!Value {
+    if it.import_meta.get(module_id) |root| {
         return it.roots.items()[root]
     }
     let base = it.stack.len()
@@ -93,7 +103,7 @@ fn importMeta(it: *mut Interp, referrer: u32) JsError!Value {
     let o = try it.newObject(NONE)
     try it.push(objVal(o))
     try it.defineOwn(o, try it.intern("url"), try it.atomValue(referrer), F_DEFAULT)
-    try it.import_meta.put(referrer, try it.addRoot(objVal(o)))
+    try it.import_meta.put(module_id, try it.addRoot(objVal(o)))
     return objVal(o)
 }
 
@@ -118,6 +128,10 @@ fn importBindings(it: *mut Interp, value: u32, target: u32) JsError!Value {
             for k in 0..n {
                 match it.ast.node(it.ast.item(list, k)) {
                     .PatProp { key, .. } => {
+                        if text.eql(it.heap.atoms.name(key), "*namespace*") {
+                            try it.defineOwn(result, key, ns, F_DEFAULT)
+                            continue
+                        }
                         if !it.hasOwn(objectOf(ns), key) {
                             return it.throwError(it.syntax_error_proto, "Module does not provide the requested export")
                         }

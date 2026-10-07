@@ -14,7 +14,7 @@
   const b = await import('./dynamic/value.mjs');
   document.getElementById('nested').textContent = 'nested same ' + (a === b);
   let errors = [];
-  for (const spec of ['./dynamic/missing.mjs', './dynamic/syntax.mjs', './dynamic/thrown.mjs', 'bare-name']) {
+  for (const spec of ['./dynamic/missing.mjs', './dynamic/syntax.mjs', './dynamic/thrown.mjs', 'bare-name', 'data:text/plain,export default 1']) {
     try { await import(spec); } catch (e) { errors.push(e.name || e); }
   }
   document.getElementById('errors').textContent = errors.join(' ');

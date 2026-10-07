@@ -118,7 +118,7 @@ pub enum Node {
     NewTarget
     // Referrer is captured at parse time, including inside later callbacks.
     ImportCall { arg: u32, referrer: u32 }
-    ImportMeta { referrer: u32 }
+    ImportMeta { referrer: u32, module_id: u32 }
     ModuleNamespace { value: u32 }
     // Internal containers used while initializing live static bindings.
     ImportBindings { value: u32, target: u32 }

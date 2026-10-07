@@ -1152,6 +1152,11 @@ fn js_conformance() {
 fn js_command_line() {
     expect(&["js", "browser/tests/js/missing.js"], 1, "", "error: cannot read browser/tests/js/missing.js\n");
     expect(&["js"], 2, "", "error: usage: anyknown js FILE\n");
+    expect(&["js", "browser/tests/js/modules/entry.mjs"], 0, "entry 42 true\n", "");
+    expect(&["js", "browser/tests/js/modules/thrown.mjs"], 1, "", "Uncaught 42\n");
+    let syntax = run(&["js", "browser/tests/js/modules/syntax.mjs"]);
+    assert_eq!(syntax.status.code(), Some(1));
+    assert!(text(&syntax.stderr).starts_with("Uncaught SyntaxError:"), "{}", text(&syntax.stderr));
 }
 
 // ---- page scripts and the DOM bindings (browser/engine/script.ore)

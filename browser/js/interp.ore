@@ -260,7 +260,7 @@ pub struct Interp {
     // Default referrer for classic scripts, and root of the import driver.
     script_url: u32 = 0
     import_driver: u32 = NONE
-    // URL atom to the root of the module's unique import.meta object.
+    // Module function id to the root of its unique import.meta object.
     import_meta: IntMap(u32, u32)
     // Strictness of classic top-level code (functions carry it in FuncInfo).
     script_strict: bool = false
@@ -2910,8 +2910,8 @@ pub struct Interp {
             .ImportCall { arg, referrer } => {
                 return evalImport(self, arg, referrer)
             }
-            .ImportMeta { referrer } => {
-                return importMeta(self, referrer)
+            .ImportMeta { referrer, module_id } => {
+                return importMeta(self, referrer, module_id)
             }
             .ModuleNamespace { value } => {
                 return moduleNamespace(self, value)
