@@ -151,9 +151,10 @@ def print_result(name, result):
         print(warning)
 
 
-def screen(binary, name, url, directory, live=False):
-    """Paints url (replayed from directory, or live) into SCREENS/<name>.png; returns
-    what went wrong (exit status, archive misses), empty when nothing did."""
+def screen(binary, name, url, directory, live=False, record=False):
+    """Paints url (replayed from directory, recorded into it, or live) into
+    SCREENS/<name>.png; returns what went wrong (exit status, archive misses or
+    recording errors), empty when nothing did."""
     SCREENS.mkdir(parents=True, exist_ok=True)
     out = SCREENS / f"{name}.png"
     out.unlink(missing_ok=True)
@@ -162,6 +163,9 @@ def screen(binary, name, url, directory, live=False):
         env.pop(variable, None)
     if not live:
         env["ANYKNOWN_REPLAY"] = str(directory.resolve())
+    if record:
+        # Serves what the dump recorded; fetches and records only the misses.
+        env["ANYKNOWN_RECORD"] = str(directory.resolve())
     command = [str(binary.resolve()), "screenshot", url, "-o", str(out.resolve()),
                "--width", SCREEN_SIZE[0], "--height", SCREEN_SIZE[1]]
     try:
@@ -172,7 +176,7 @@ def screen(binary, name, url, directory, live=False):
     notes = []
     if process.returncode:
         notes.append(f"screenshot: exit {process.returncode}: {lines[-1].strip() if lines else ''}")
-    misses = [line for line in lines if "archive miss:" in line]
+    misses = [line for line in lines if "archive miss:" in line or "cannot record archive:" in line]
     if misses:
         notes.append(f"screenshot: {len(misses)} archive misses, first {misses[0].strip()}")
     return notes
@@ -486,6 +490,9 @@ def load_site(args, name):
         if task_failure == json.loads(EXPECTATIONS.read_text())["sites"][name].get("task_fails"):
             task_failure = None
         task_failure = task_failure or task_errors
+        # The screenshot also fetches what the dump does not (web fonts, images); it
+        # replays the dump's responses and records only those.
+        screen_failure = screen(args.binary, name, SITES[name], directory, record=True)
         resources = []
         for path in sorted(directory.glob("*.response")):
             data = path.read_bytes()
@@ -498,6 +505,8 @@ def load_site(args, name):
         print(f"{name}: captured {len(resources)} requests, {result['wall']:.3f}s wall, {result['cpu']:.3f}s cpu", flush=True)
         if task_failure:
             raise RuntimeError(f"{name}: task: {task_failure}")
+        if screen_failure:
+            raise RuntimeError(f"{name}: {'; '.join(screen_failure)}")
         return result
     # Live: the network serves whatever it serves today, so there is nothing to verify.
     manifest = {"url": SITES[name]} if args.live else json.loads(manifest_path.read_text())

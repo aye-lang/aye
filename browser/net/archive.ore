@@ -4,7 +4,8 @@
 // responses may contain personalized content. This is a benchmark tool,
 // not an HTTP cache (no expiry, validation, or cookie/header replay).
 // `data:` URLs hold their response: they are neither recorded nor
-// looked up.
+// looked up. With both ANYKNOWN_REPLAY and ANYKNOWN_RECORD set, recorded
+// responses are served and only misses are fetched and recorded.
 import std
 import std.mem.AllocError
 import std.mem.Allocator
@@ -64,6 +65,11 @@ pub fn archiveRead(alloc: Allocator, target: *Url, req: Request) FetchError!?Res
     let path = try archivePath(alloc, dir, target, req)
     defer alloc.free(path)
     let bytes = std.fs.readFile(alloc, path) catch |e| {
+        // Replaying while recording (capture's screenshot): a miss is fetched
+        // and recorded.
+        if archiveDir("ANYKNOWN_RECORD") != null {
+            return null
+        }
         std.log.err("archive miss: {}", target.withoutFragment())
         return FetchError.NotFound
     }
