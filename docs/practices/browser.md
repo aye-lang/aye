@@ -394,6 +394,20 @@ while one does. `browser/tests/js/253_map_set_hash.js` covers both.
 **Why:** a callback may delete or add anything; positions must stay
 valid until the loop ends.
 
+### Resolve a page's URLs against the base it has now
+**Context:** anything that resolves a relative URL of a document
+(reflected `href`/`src`/`action`, link clicks, form submissions,
+script and image loads).
+**Bad:** `Page.resolve` and `Page.baseUrl()` used `Page.base`, computed
+at load, so `img.src` and the loads they start ignored a `base` that a
+script inserted, changed or removed (P3.43).
+**Good:** `Page.currentBase` / `Page.resolve` (`browser/engine/engine.ore:151`)
+go through the cached `documentBase`; only about:blank and about:srcdoc
+keep `Page.base`. `browser/tests/jsdom/url_base.html` covers each
+attribute.
+**Why:** the base element is part of the DOM; a copy taken at load is
+stale after the first script that touches it.
+
 ## Code style
 
 ### Write blocks and comments like the surrounding code

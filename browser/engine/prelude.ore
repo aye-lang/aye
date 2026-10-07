@@ -473,8 +473,8 @@ pub let PRELUDE =
     \\    else this.removeAttribute(attr);
     \\  });
     \\}
-    \\function reflectUrl(name) {
-    \\  getter(HTMLP, name, function () {
+    \\function reflectUrl(name, proto = HTMLP) {
+    \\  getter(proto, name, function () {
     \\    const v = this.getAttribute(name);
     \\    return v === null ? '' : ak.resolve(v);
     \\  }, function (v) { this.setAttribute(name, String(v)); });
@@ -516,6 +516,21 @@ pub let PRELUDE =
     \\reflectBool('defaultChecked', 'checked');
     \\reflectBool('defaultSelected', 'selected');
     \\for (const n of ['href', 'src', 'action']) reflectUrl(n);
+    \\reflectUrl('data', HTMLObjectElement.prototype);
+    \\reflect('srcset', 'srcset', HTMLSourceElement.prototype);
+    \\// form.action: the document's URL when the attribute is missing or empty.
+    \\getter(HTMLFormElement.prototype, 'action', function () {
+    \\  const v = this.getAttribute('action');
+    \\  return v === null || v === '' ? ak.url() : ak.resolve(v);
+    \\}, function (v) { this.setAttribute('action', String(v)); });
+    \\// base.href resolves against the document's URL (its fallback base URL),
+    \\// not against the base URL the element itself sets.
+    \\getter(HTMLBaseElement.prototype, 'href', function () {
+    \\  const v = this.getAttribute('href');
+    \\  const doc = ak.url();
+    \\  const u = URL.parse(v === null ? '' : v, doc.startsWith('about:') ? ak.documentBase(this) : doc);
+    \\  return u === null ? v : u.href;
+    \\}, function (v) { this.setAttribute('href', String(v)); });
     \\getter(HTMLP, 'type', function () {
     \\  const v = this.getAttribute('type');
     \\  if (this.localName === 'input') return v === null ? 'text' : v.toLowerCase();

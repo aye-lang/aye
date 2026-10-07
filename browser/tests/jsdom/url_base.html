@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<title>url attributes and base</title>
+<a id="link" href="page?q#h">link</a>
+<pre id="out"></pre>
+<script>
+// URL-reflecting attributes resolve against the document's current base
+// URL: a `base` a script inserts, changes or removes, and the document
+// URL after pushState. `base.href` resolves against the document URL.
+function log(...parts) { document.getElementById('out').textContent += parts.join(' ') + '\n'; }
+const tail = (s) => s.includes('/jsdom/') ? s.slice(s.lastIndexOf('/jsdom/') + 1) : s;
+function mk(tag, attr, value) { const e = document.createElement(tag); if (attr) e.setAttribute(attr, value); return e; }
+const a = document.getElementById('link');
+const els = [
+  ['img.src', mk('img', 'src', 'pic.png'), 'src'],
+  ['link.href', mk('link', 'href', 'style.css'), 'href'],
+  ['script.src', mk('script', 'src', 'app.js'), 'src'],
+  ['iframe.src', mk('iframe', 'src', 'frame.html'), 'src'],
+  ['form.action', mk('form', 'action', 'submit'), 'action'],
+  ['area.href', mk('area', 'href', 'map'), 'href'],
+  ['source.src', mk('source', 'src', 'clip.webm'), 'src'],
+  ['video.src', mk('video', 'src', 'movie.mp4'), 'src'],
+  ['audio.src', mk('audio', 'src', 'sound.ogg'), 'src'],
+  ['object.data', mk('object', 'data', 'thing.svg'), 'data'],
+];
+function show(label) {
+  log('-- ' + label);
+  log('a.href', tail(a.href), tail(a.pathname), a.host, a.search, a.hash);
+  for (const [name, el, prop] of els) log(name, tail(el[prop]));
+}
+show('no base');
+const base = document.createElement('base');
+base.setAttribute('href', 'https://x.test/dir/');
+document.head.appendChild(base);
+show('inserted');
+log('base.href', tail(base.href));
+base.href = 'sub/';
+show('relative base');
+log('base.href', tail(base.href));
+base.setAttribute('href', 'https://y.test/other/');
+show('changed');
+base.remove();
+show('removed');
+log('-- fallbacks');
+log('absent img.src', JSON.stringify(mk('img').src), 'absent form.action', tail(mk('form').action), 'empty form.action', tail(mk('form', 'action', '').action));
+log('empty img.src', tail(mk('img', 'src', '').src));
+log('invalid a.href', mk('a', 'href', 'http://a b/').href, mk('a', 'href', 'http://:80/').href);
+log('source.srcset', mk('source', 'srcset', 'a.png 1x, b.png 2x').srcset);
+log('base.href no attr', tail(mk('base').href), 'relative', tail(mk('base', 'href', 'sub/').href));
+// On file: pushState may change only the query and fragment.
+const frag = mk('a', 'href', '#frag');
+history.pushState(null, '', 'url_base.html?pushed=1');
+log('-- pushState');
+log('a.href', tail(frag.href), tail(mk('img', 'src', 'pic.png').src), tail(mk('form').action));
+document.head.appendChild(base);
+log('with base', tail(frag.href), tail(base.href));
+base.remove();
+</script>
