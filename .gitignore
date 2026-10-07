@@ -4,3 +4,4 @@
 *.out.bin
 /out/
 /tmp/
+__pycache__/
