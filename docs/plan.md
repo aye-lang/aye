@@ -144,7 +144,8 @@ step only finds and writes down the cause; the fix is the next step.
 4. Before finishing: merge the integration branch in (list each
    conflict in the merge message); `cargo build --release`,
    `target/release/ore check browser`, full `cargo test`,
-   `browser/build.sh`.
+   `browser/build.sh` with no output path (it writes `target/anyknown`
+   in your worktree; never a shared path such as the scratchpad).
 5. Report: commits, the verify output, the full test result, a "Done so
    far" paragraph, and follow-ups as new step proposals. A lesson goes
    into `docs/practices/` with its fix.

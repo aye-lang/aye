@@ -192,8 +192,9 @@ teaches the next agent the old idiom.
 - `target/release/ore check browser` (prints nothing on success)
 - `cargo test` (the full suite; `cargo test --test browser` alone is
   not enough)
-- `browser/build.sh` (fast mode, to `target/anyknown`;
-  `--mode safe|fast|debug` and an output path are optional)
+- `browser/build.sh` (fast mode, to `target/anyknown` in this
+  worktree; `--mode safe|fast|debug` is optional; an output path, if
+  any, stays inside the worktree, see "Build into your own worktree")
 - New compiler gaps are in `browser/COMPILER_GAPS.md`; workarounds for
   fixed gaps are gone.
 - The report has a "Done so far" paragraph; shared docs
