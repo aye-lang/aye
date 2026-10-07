@@ -429,7 +429,7 @@ fn scrollsLines(t: *Tree, i: usize) bool {
 /// checkbox or radio button, a canvas's `width` x `height` (300 x 150);
 /// null for none.
 fn naturalSize(t: *Tree, i: usize) ?Size {
-    let el = t.bx(i).node orelse return null
+    let el = t.bx(i).node orelse return urlSize(t, i)
     if t.images |imgs| {
         if imgs.get(el) |bmp| {
             let d = imgs.density(el)
@@ -448,6 +448,14 @@ fn naturalSize(t: *Tree, i: usize) ?Size {
         return Size { w: dom.canvasDimension(t.doc, el, "width", 300) as f64, h: dom.canvasDimension(t.doc, el, "height", 150) as f64 }
     }
     return null
+}
+
+// The natural size of the image of a `content: url()` (an anonymous
+// replaced box); null while it is not loaded.
+fn urlSize(t: *Tree, i: usize) ?Size {
+    let imgs = t.images orelse return null
+    let bmp = imgs.urlBitmap(t.bx(i).text) orelse return null
+    return Size { w: bmp.width as f64, h: bmp.height as f64 }
 }
 
 /// A width and a height in px.

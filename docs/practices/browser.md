@@ -139,6 +139,18 @@ property it uses is a longhand in `css.ore` or a case in
 to `shorthandLonghands` too, so a `var()` in it still applies.
 **Why:** an unknown shorthand fails silently, like an invalid value.
 
+### Escape a string when writing tokens back into a value
+**Context:** a value kept as text (`rawValue`, layers) that is read
+again by the tokenizer.
+**Bad:** `writeToken` and `writeUrl` wrapped a string in `"` as is, so
+rustdoc's `url('data:image/svg+xml,<svg xmlns="...">')` came back cut
+at the first `"`: no toolbar icons and no image at all (P3.49).
+**Good:** escape `"` and `\` (`browser/css/values.ore` `writeToken`),
+and read the escapes back where the text is parsed by hand
+(`contentText` in `browser/layout/layout.ore`). Fixture
+`browser/tests/paint/content_url.html`.
+**Why:** SVG `data:` URLs in single quotes are common in site CSS.
+
 ## Paint
 
 ### A new display item kind needs an arm in `transformed()` and `moved()`
