@@ -245,7 +245,7 @@ fn queries() {
 
 #[test]
 fn errors() {
-    let usage = "error: usage: anyknown dump --tree|--text|--style|--layout [--js] [--width PX] [--font fixed|system] [--id ID | --tag NAME] FILE|URL\n";
+    let usage = "error: usage: anyknown dump --tree|--text|--style|--layout [--js [--no-scroll | --scroll-steps N]] [--width PX] [--font fixed|system] [--id ID | --tag NAME] FILE|URL\n";
     expect(&[], 2, "", "error: usage: anyknown [open] FILE|URL | dump --tree|--text|--style|--layout|--a11y|--md ... FILE|URL | screenshot FILE|URL -o OUT.png | js FILE | agent | mcp | connect SOCKET\n");
     expect(&["dump", "--tree"], 2, "", usage);
     expect(&["dump", "--layout", "--font", "serif", "browser/tests/basic.html"], 2, "", usage);
@@ -790,7 +790,7 @@ fn agent_sessions() {
 
 #[test]
 fn agent_errors() {
-    let usage = "error: usage: anyknown dump --a11y [--boxes] [--json] | --md [--refs] [--js] [--width PX] FILE|URL\n";
+    let usage = "error: usage: anyknown dump --a11y [--boxes] [--json] | --md [--refs] [--js] [--width PX] [--no-scroll | --scroll-steps N] FILE|URL\n";
     expect(&["dump", "--a11y"], 2, "", usage);
     expect(&["dump", "--md", "--width", "x", "browser/tests/agent/article.html"], 2, "", usage);
     expect(&["dump", "--md", "browser/tests/agent/missing.html"], 1, "", &format!(
@@ -1381,6 +1381,44 @@ fn noscript_with_scripts() {
         "- heading \"Scripts\" [level=1] [e1]\n- paragraph: Always here.\n- paragraph: An icon and a formula .\n",
         "",
     );
+}
+
+/// `dump --js` scrolls through the page (`engine.scrollThrough`), so what
+/// scripts load when it comes into view is in the dump: sections an
+/// IntersectionObserver fills, an infinite list until it ends, and a page
+/// that never stops growing, until 20 steps. `--no-scroll` turns it off;
+/// `--scroll-steps N` caps it. The goldens of these fixtures are in
+/// `browser/tests/jsdom/` too.
+#[test]
+fn dump_scrolls_through() {
+    let page = |name: &str| format!("browser/tests/jsdom/{name}.html");
+    let md = |flags: &[&str], name: &str| -> String {
+        let p = page(name);
+        let mut all = vec!["dump", "--md", "--js"];
+        all.extend_from_slice(flags);
+        all.push(&p);
+        let out = run(&all);
+        assert!(out.status.success() && out.stderr.is_empty(), "{all:?}: {}\n{}", out.status, text(&out.stderr));
+        text(&out.stdout)
+    };
+    let sections = md(&[], "lazy_sections");
+    assert!(sections.contains("Fourth section, at the bottom.") && sections.contains("scroll events: 3;"), "{sections}");
+    let sections = md(&["--no-scroll"], "lazy_sections");
+    assert!(!sections.contains("First section") && sections.contains("scroll events: 0;"), "{sections}");
+    // The native lazy image is there either way: it loads at once.
+    assert!(sections.contains("![A native lazy image](data:image/png") && sections.contains("image loaded at"), "{sections}");
+    let list = md(&[], "infinite_list");
+    assert!(list.contains("50. Item 50\n\nEnd of the list.\n"), "{list}");
+    let list = md(&["--scroll-steps", "3"], "infinite_list");
+    assert!(list.contains("30. Item 30\n\nLoading more...\n") && !list.contains("Item 31"), "{list}");
+    assert_eq!(md(&["--no-scroll"], "infinite_list"), "# Infinite list\n\nLoading more...\n");
+    let endless = md(&[], "endless_page");
+    assert!(endless.ends_with("\n\nChunk 21\n"), "{endless}");
+    assert_eq!(md(&["--scroll-steps", "2"], "endless_page"), "Chunk 1\n\nChunk 2\n\nChunk 3\n");
+    expect(&["dump", "--text", "--js", "--scroll-steps", "2", &page("endless_page")], 0, "Endless page\n\nChunk 1\nChunk 2\nChunk 3\n", "");
+    expect(&["dump", "--text", "--js", "--no-scroll", &page("endless_page")], 0, "Endless page\n\nChunk 1\n", "");
+    let usage = "error: usage: anyknown dump --a11y [--boxes] [--json] | --md [--refs] [--js] [--width PX] [--no-scroll | --scroll-steps N] FILE|URL\n";
+    expect(&["dump", "--md", "--js", "--scroll-steps", "-1", &page("endless_page")], 2, "", usage);
 }
 
 // ---- B8: layout and paint

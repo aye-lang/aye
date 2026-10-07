@@ -323,6 +323,12 @@ pub let PRELUDE =
     \\
     \\// An event the browser makes (a click, a key, the load of the page).
     \\function hostEvent(target, type, key, x, y) {
+    \\  // The user scrolled the window: `scroll` follows as a task, as for a
+    \\  // script's scroll.
+    \\  if (type === 'scroll') {
+    \\    scrolled(target === document ? G : target);
+    \\    return true;
+    \\  }
     \\  let ev;
     \\  if (type === 'keydown' || type === 'keyup' || type === 'keypress') {
     \\    ev = new KeyboardEvent(type, { bubbles: true, cancelable: true, composed: true, key });

@@ -2,11 +2,13 @@
 //
 //     anyknown agent [--width PX] [--height PX] [--no-js]   JSON lines (docs/agent-protocol.md)
 //     anyknown mcp [--width PX] [--height PX] [--no-js]     MCP over stdio (JSON-RPC 2.0)
-//     anyknown dump --a11y [--boxes] [--json] [--js] [--width PX] FILE|URL
-//     anyknown dump --md [--refs] [--js] [--width PX] FILE|URL
+//     anyknown dump --a11y [--boxes] [--json] [--js] [--width PX] [--no-scroll | --scroll-steps N] FILE|URL
+//     anyknown dump --md [--refs] [--js] [--width PX] [--no-scroll | --scroll-steps N] FILE|URL
 //
 // The servers run the pages' scripts unless --no-js; the dumps only with
-// --js (then after the timers that are due ran).
+// --js: then after the timers that are due ran, and after scrolling
+// through the page (at most 20 viewports, or N; engine.scrollThrough), so
+// that what scripts load when it comes into view is there.
 //
 // Each request is one line of JSON; each response is one line. Requests
 // are handled in order; everything a request allocates is in an arena
@@ -20,8 +22,11 @@ import std.mem.AllocError
 import std.mem.Allocator
 import std.text
 
-let DUMP_USAGE = "usage: anyknown dump --a11y [--boxes] [--json] | --md [--refs] [--js] [--width PX] FILE|URL"
+let DUMP_USAGE = "usage: anyknown dump --a11y [--boxes] [--json] | --md [--refs] [--js] [--width PX] [--no-scroll | --scroll-steps N] FILE|URL"
 let SERVE_USAGE = "usage: anyknown agent|mcp [--width PX] [--height PX] [--no-js]"
+
+// How many viewports a dump scrolls through at most (`--scroll-steps`).
+let DUMP_SCROLL_STEPS: usize = 20
 
 let MCP_VERSION = "2025-06-18"
 let MCP_VERSIONS = "2025-11-25 2025-06-18 2025-03-26 2024-11-05"
@@ -50,6 +55,7 @@ fn dumpViews(alloc: Allocator, args: [][]u8) !i32 {
     var as_json = false
     var refs = false
     var width = 800.0
+    var scroll_steps = DUMP_SCROLL_STEPS
     var target: []u8 = ""
     var i: usize = 0
     while i < args.len {
@@ -73,6 +79,16 @@ fn dumpViews(alloc: Allocator, args: [][]u8) !i32 {
                 return 2
             }
             i += 1
+        } else if text.eql(a, "--no-scroll") {
+            scroll_steps = 0
+        } else if text.eql(a, "--scroll-steps") && i + 1 < args.len {
+            let n = text.parseInt(args[i + 1]) catch -1
+            if n < 0 {
+                std.log.err(DUMP_USAGE)
+                return 2
+            }
+            scroll_steps = n as usize
+            i += 1
         } else if target.len == 0 && !text.startsWith(a, "--") {
             target = a
         } else {
@@ -95,6 +111,7 @@ fn dumpViews(alloc: Allocator, args: [][]u8) !i32 {
         std.log.err("{}", o.message)
         return 1
     }
+    try scrollThroughPage(&mut s, scroll_steps)
     var out = text.Builder.init(tmp)
     if md {
         try out.append(try markdownOf(&mut s, tmp, refs))
