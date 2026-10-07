@@ -420,16 +420,106 @@ fn redefinable(it: *mut Interp, o: u32, key: u32, desc: Value, old: u8) JsError!
     return true
 }
 
-/// Object.defineProperty(o, key, desc) on object o.
-pub fn definePropertyFrom(it: *mut Interp, o: u32, key: u32, desc: Value) JsError!void {
+/// The descriptor fields in the order ToPropertyDescriptor reads them.
+let DESC_KEYS = [6]u32{A_ENUMERABLE, A_CONFIGURABLE, A_VALUE, A_WRITABLE, A_GET, A_SET}
+
+/// Whether reading key from desc runs no code: every object on its
+/// prototype chain is ordinary and the property found is data.
+fn plainField(it: *mut Interp, desc: u32, key: u32) bool {
+    var cur = desc
+    while cur != NONE {
+        if it.heap.obj(cur).class != Class.Object {
+            return false
+        }
+        if it.heap.findProp(cur, key) |i| {
+            return (it.heap.obj(cur).props[i].flags & F_ACCESSOR) == 0
+        }
+        cur = it.heap.obj(cur).proto
+    }
+    return true
+}
+
+/// ToPropertyDescriptor: throws unless desc is an object whose get and
+/// set are callable or undefined and which does not mix them with value
+/// or writable. Reads each field once, in the spec's order. Returns desc
+/// when reading it again runs no code, else a copy of the fields read
+/// (null prototype) that the definition reads instead.
+fn toPropertyDescriptor(it: *mut Interp, desc: Value) JsError!Value {
     if !isObject(desc) {
         try it.typeError("Property description must be an object")
     }
+    let d = objectOf(desc)
+    var plain = true
+    for k in DESC_KEYS {
+        plain = plain && plainField(it, d, k)
+    }
+    var copy = NONE
+    if !plain {
+        copy = try it.newObject(NONE)
+        try it.push(objVal(copy))
+    }
+    var accessor = false
+    var data = false
+    for k in DESC_KEYS {
+        if !(try it.hasPropertyJs(d, k)) {
+            continue
+        }
+        let v = try it.getProp(desc, k)
+        if k == A_GET || k == A_SET {
+            accessor = true
+            if !isUndef(v) && !it.isCallable(v) {
+                if k == A_GET {
+                    try it.typeError("Getter must be a function")
+                }
+                try it.typeError("Setter must be a function")
+            }
+        } else if k == A_VALUE || k == A_WRITABLE {
+            data = true
+        }
+        if copy != NONE {
+            try it.defineOwn(copy, k, v, F_DEFAULT)
+        }
+    }
+    if accessor && data {
+        try it.typeError("Invalid property descriptor. Cannot both specify accessors and a value or writable attribute")
+    }
+    if copy == NONE {
+        return desc
+    }
+    it.pop()
+    return objVal(copy)
+}
+
+/// Object.defineProperty(o, key, desc) on object o.
+pub fn definePropertyFrom(it: *mut Interp, o: u32, key: u32, desc: Value) JsError!void {
+    let d = try toPropertyDescriptor(it, desc)
+    try it.push(d)
+    _ = try defineOwnProperty(it, o, key, d, true)
+    it.pop()
+}
+
+/// Reflect.defineProperty(o, key, desc) on object o: false when the
+/// definition is rejected.
+pub fn definePropertyOrFalse(it: *mut Interp, o: u32, key: u32, desc: Value) JsError!bool {
+    let d = try toPropertyDescriptor(it, desc)
+    try it.push(d)
+    let ok = try defineOwnProperty(it, o, key, d, false)
+    it.pop()
+    return ok
+}
+
+/// [[DefineOwnProperty]] of o with descriptor object desc, already
+/// checked by toPropertyDescriptor: false when it is rejected, or a
+/// TypeError saying why if `throwing`.
+pub fn defineOwnProperty(it: *mut Interp, o: u32, key: u32, desc: Value, throwing: bool) JsError!bool {
     if it.heap.obj(o).class == Class.Proxy {
-        return proxyDefine(it, o, key, desc)
+        return proxyDefine(it, o, key, desc, throwing)
     }
     if it.heap.obj(o).class == Class.ModuleNamespace {
         if !it.hasOwn(o, key) {
+            if !throwing {
+                return false
+            }
             try it.typeError("Cannot define a new module export")
         }
         let accessor = it.hasProperty(objectOf(desc), try it.intern("get")) || it.hasProperty(objectOf(desc), try it.intern("set"))
@@ -447,9 +537,12 @@ pub fn definePropertyFrom(it: *mut Interp, o: u32, key: u32, desc: Value) JsErro
             it.pop()
         }
         if accessor || badConfig || badEnum || badWrite || badValue {
+            if !throwing {
+                return false
+            }
             try it.typeError("Cannot redefine a module export")
         }
-        return
+        return true
     }
     if key == A_PROTOTYPE && it.heap.obj(o).class == Class.Function {
         let base = it.stack.len()
@@ -463,9 +556,15 @@ pub fn definePropertyFrom(it: *mut Interp, o: u32, key: u32, desc: Value) JsErro
         old = it.heap.obj(o).props[i].flags
         exists = true
         if (old & F_CONFIG) == 0 && !(try redefinable(it, o, key, desc, old)) {
+            if !throwing {
+                return false
+            }
             try it.typeErrorAbout("Cannot redefine property: ", it.heap.atoms.name(key), "")
         }
     } else if !it.heap.obj(o).extensible {
+        if !throwing {
+            return false
+        }
         try it.typeErrorAbout("Cannot define property ", it.heap.atoms.name(key), ", object is not extensible")
     }
     var flags = try descFlag(it, desc, "enumerable", F_ENUM, old)
@@ -503,7 +602,7 @@ pub fn definePropertyFrom(it: *mut Interp, o: u32, key: u32, desc: Value) JsErro
         }
         it.pop()
         it.pop()
-        return
+        return true
     }
     let hasValue = it.hasProperty(objectOf(desc), A_VALUE)
     if exists && (old & F_ACCESSOR) != 0 {
@@ -514,7 +613,7 @@ pub fn definePropertyFrom(it: *mut Interp, o: u32, key: u32, desc: Value) JsErro
             if it.heap.findProp(o, key) |i| {
                 it.heap.obj(o).props[i].flags = flags | F_ACCESSOR
             }
-            return
+            return true
         }
         // An accessor becoming a data property starts as undefined and
         // not writable.
@@ -531,6 +630,7 @@ pub fn definePropertyFrom(it: *mut Interp, o: u32, key: u32, desc: Value) JsErro
         }
     }
     try it.defineOwn(o, key, v, flags)
+    return true
 }
 
 fn objectDefineProperty(it: *mut Interp, a: Args) JsError!Value {
@@ -541,6 +641,28 @@ fn objectDefineProperty(it: *mut Interp, a: Args) JsError!Value {
     let key = try it.toKey(it.arg(a, 1))
     try definePropertyFrom(it, objectOf(ov), key, it.arg(a, 2))
     return ov
+}
+
+// defineProperty(o, key, desc): Reflect.defineProperty, false when the
+// definition is rejected.
+pub fn engineDefineProperty(it: *mut Interp, a: Args) JsError!Value {
+    let ov = it.arg(a, 0)
+    if !isObject(ov) {
+        return it.typeError("Reflect.defineProperty called on non-object")
+    }
+    let key = try it.toKey(it.arg(a, 1))
+    return boolVal(try definePropertyOrFalse(it, objectOf(ov), key, it.arg(a, 2)))
+}
+
+// deleteProperty(o, key): Reflect.deleteProperty, false when the
+// property cannot be deleted.
+pub fn engineDeleteProperty(it: *mut Interp, a: Args) JsError!Value {
+    let ov = it.arg(a, 0)
+    if !isObject(ov) {
+        return it.typeError("Reflect.deleteProperty called on non-object")
+    }
+    let key = try it.toKey(it.arg(a, 1))
+    return boolVal(try it.deleteProp(objectOf(ov), key))
 }
 
 fn defineFromDescriptors(it: *mut Interp, o: u32, descs: Value) JsError!void {
