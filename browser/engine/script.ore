@@ -662,7 +662,6 @@ fn isModuleScript(p: *mut Page, el: NodeId) bool {
 
 // Is the `script` element `el` a classic script (JavaScript, not a
 // module or data)?
-
 fn isClassicScript(p: *mut Page, el: NodeId) bool {
     if p.doc.attr(el, "nomodule") != null {
         return false
