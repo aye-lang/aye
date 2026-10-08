@@ -14,13 +14,10 @@ A new session starts in `~/Documents/ayelang/aye` (moved by X5.2; full suite gre
 The state is this file's lane table, [`plans/done.md`](plans/done.md)
 and `git worktree list` (expected: main only). Next, in order:
 
-1. **Linux development (X1), current goal (2026-10-08).** Done when the
-   X1 check in [`plans/project.md`](plans/project.md) holds: setup
-   script, build, `aye check browser`, full tests and `browser/build.sh`
-   pass on Ubuntu 24.04 in an Apple `container`, via `scripts/linux.sh`.
-   X1.1 (archive.aye, gap #50) and X1.2 (setup + `linux.sh` + first
-   run) first; each Linux failure becomes an X1.x card. The cloud
-   environment is the user's, set up elsewhere; not part of this goal.
+1. **Linux development (X1): done 2026-10-08.** The full suite passes
+   on Ubuntu 24.04 arm64 and amd64 via `scripts/linux.sh` (Apple
+   `container`). Steps touching the C prelude, `@cimport` or platform
+   calls run it before merging.
 2. **Language cards in the cloud**, two or three at a time, merged one
    by one on `main`: F1.1 (framework hello world on `std.http`), O1.9
    (quiet broken pipe), O1.5/O1.5a/O1.6 (fs, path, process), then O3.x.
@@ -51,11 +48,8 @@ same step that splits `browser/` into its own repo (P8.1).
 Steps not tied to one lane, in this order. Their cards are in
 [`plans/project.md`](plans/project.md).
 
-1. **X1 Linux development.** X1.1: `browser/net/archive.aye` reads
-   `d_namlen` and `st_mtimespec` (macOS only); make it build on Linux.
-   X1.2: an Ubuntu 24.04 setup script and `scripts/linux.sh` (Apple
-   `container`), then the first full Linux run. Failures become new
-   steps.
+1. **X1 Linux development.** Done 2026-10-08 (X1.1–X1.7): the suite
+   passes on Ubuntu 24.04 arm64 and amd64 through `scripts/linux.sh`.
 2. **X2 rename Ore → Aye.** Done 2026-10-08 (3042d53, `scripts/rename-aye.py`).
 3. **X3 website** ayelang.dev on Cloudflare Workers (`site/`); v1 live 2026-10-08.
 4. **X4 go public** (repo github.com/aye-lang/aye, with the

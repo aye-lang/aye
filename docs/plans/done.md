@@ -139,3 +139,4 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | X1.3 | 2026-10-08 | `@cimport` of a system header takes its internal headers (`_*.h`, `bits/`) and its own subdirectory, not the rest of the include dir (gap #54): glibc `math.h` and `pthread.h` work; `GENERATOR_VERSION` 2 | 7a08c4b |
 | X1.6 | 2026-10-08 | `Math.cbrt` is a port of fdlibm `cbrt` (`browser/js/cbrt.aye`): same result on glibc and macOS; more cbrt cases in `164_math_functions.js` | 2ea52ca |
 | X1.7 | 2026-10-08 | `tests/golden.rs` runs cases on `available_parallelism()` workers instead of one thread per case: amd64 golden under Rosetta 264/264 (was a 29-min hang); macOS golden 132 s → 146 s | b2c723d |
+| X1.5 | 2026-10-08 | X1 done: on main b2c723d, `scripts/linux.sh` arm64 and `LINUX_ARCH=amd64` (Rosetta): build, `aye check browser`, `cargo test --release` (browser 62/62, golden 264/264, all others ok) and `browser/build.sh` exit 0 | – |

@@ -14,34 +14,10 @@ on this Mac, arm64 native; amd64 under Rosetta as the last check),
 worktree (criterion O1 in [`aye.md`](aye.md)). The cloud environment is
 set up by the user elsewhere and is not part of this goal.
 
-First Linux run (X1.2, arm64, before X1.1 was merged): build ok;
-`aye check browser`, the 62 browser tests and `browser/build.sh` failed
-on the archive fields (X1.1, since merged) and then on the cimport clash
-below; lib 30/31, conformance 29/29, fmt 6/7, golden 263/264, spec 6/7.
-
-Linux arm64 on main 7a08c4b (X1.5 first pass): build, `aye check browser`
-and `browser/build.sh` exit 0; tests: all pass except `js_conformance`
-`164_math_functions.js` (glibc `cbrt(27)` = 3.0000000000000004).
-
-Linux arm64 on main 71fd28a (after X1.6): build, check, `browser/build.sh`
-exit 0; all tests pass except one load-timing failure
-(`window_relayout_after_image_load`, 3/3 alone; browser backlog P7).
-amd64 (Rosetta) on 7a08c4b: build and check exit 0, browser only the
-cbrt case (fixed by X1.6); `tests/golden.rs` hung 29 min at 0% CPU:
-230 threads (one per case, `golden.rs:959`) in `rt_mutex_schedule`,
-their `aye` children zombies.
-
-#### X1.5: full Linux run, arm64 and amd64
-- lane: project
-- goal: the X1 done check passes on arm64 and amd64; failures become new X1.x cards.
-- serves: criterion O1
-- files: none expected (report only), `docs/practices/workflow.md` if a lesson
-- verify: `scripts/linux.sh sh -c 'cargo build --release && target/release/aye check browser && cargo test --release && browser/build.sh'` → 0, then the same with `LINUX_ARCH=amd64`
-- depends on: –
-- parallel with: no other build agent
-- where: local
-- model: sonnet
-- time box: 45 min (amd64 under Rosetta is slow)
+Done 2026-10-08 (X1.1–X1.7, `done.md`): the check above holds on
+main b2c723d for arm64 and amd64. Linux load-timing flakes go to the
+browser backlog (P7). Keep it green: a step that touches the C prelude,
+`@cimport` or platform calls runs `scripts/linux.sh` before merging.
 
 ## X2: rename Ore → Aye
 
