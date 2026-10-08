@@ -106,6 +106,17 @@ removed in cff3f60.
 - **Hit by:** O1.3b (`std.net`: errno, `struct addrinfo`).
 - **Status:** open.
 
+#### 51. No way to print an error or enum tag name
+
+- **Need:** get the name of an error tag or enum tag as a string, for
+  example to print it.
+- **Workaround:** write a `match` that returns the string for each tag.
+  `@println` takes one argument, so the name cannot be passed beside a
+  tag value.
+- **Hit by:** the std.http golden (`tests/cases/std_http.ore`), which
+  prints names through its own `match`.
+- **Status:** open.
+
 ## Declined by design
 
 #### 5. A local cannot start uninitialized; `@zeroed` makes only C structs
