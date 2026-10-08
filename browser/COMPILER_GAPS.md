@@ -117,6 +117,43 @@ removed in cff3f60.
   than one step; the helper is one C function and a std function that
   programs want anyway.
 
+#### 54. `@cimport` of a glibc header takes the wrong files
+
+- **Need:** `@cimport("math.h")` and `@cimport("pthread.h")` declare the
+  same things on Ubuntu 24.04 (glibc) as on macOS.
+- **Repro:** on Linux, `aye cimport math.h` has constants but no
+  function (`m.sqrt`: E0081), and a program with
+  `@cimport("pthread.h")` that also uses `std.time` (`browser`) fails
+  with E0096: `nanosleep` and `clock` are declared twice with different
+  signatures.
+- **Cause:** for a system header, the generator
+  (`src/cimport/generate.rs`) took the header itself and the headers of
+  the header's directory that it includes itself. glibc declares the
+  math functions in `bits/mathcalls.h` (through `__MATHCALL`), in
+  `/usr/include/aarch64-linux-gnu/bits/`, another directory: none came
+  in. glibc's `pthread.h` and `time.h` both sit in `/usr/include`, and
+  `pthread.h` includes `time.h` first, so `time.h`'s `clock` (`clock_t`
+  is `long`) and `nanosleep` (`struct timespec *`) came in and clashed
+  with `browser/js/interp.aye`'s `clock() u64` and `std/time`'s
+  `nanosleep([*]i64, [*]i64)`. macOS escaped by accident: its
+  `/usr/include/pthread.h` is a link to `pthread/pthread.h`, so its
+  directory after `canonicalize` is `pthread/`.
+- **Fix:** one rule on both OSes (`src/cimport/generate.rs`). A system
+  header brings its own declarations and those of its parts that it
+  includes itself: internal headers (a name with a leading `_`, macOS's
+  `_time.h`; or a `bits/` directory, glibc's `bits/mathcalls.h`), and
+  the headers of its directory when that is not the include directory it
+  was found in (`SDL2/SDL.h`; macOS's `pthread.h` → `pthread/`). The
+  other headers of `/usr/include` are headers of their own. On macOS the
+  output stays the same but for `zlib.h` (no longer `zconf.h`'s
+  `MAX_WBITS`, `MAX_MEM_LEVEL` and unused typedefs) and `unistd.h` (no
+  `gethostuuid`, from `gethostuuid.h`), and gains `sys/stat.h`'s
+  `S_IF*` (from `sys/_s_ifmt.h`).
+- **Hit by:** X1.3 (first Linux run: `aye check browser`, golden
+  `cimport/system.aye`, spec `aye_blocks_compile`, `codes` E0112).
+- **Status:** fixed in X1.3; `tests/cimport/threads.aye` imports
+  `pthread.h` beside `std.time`.
+
 #### 51. No way to print an error or enum tag name
 
 - **Need:** get the name of an error tag or enum tag as a string, for
