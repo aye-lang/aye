@@ -1144,8 +1144,15 @@ fn writeToken(t: Token, out: *mut text.Builder) AllocError!void {
             try out.append(t.text)
         }
         .String, .BadString => {
+            // Escaped, so that a `'...'` string with `"` in it (an SVG
+            // `data:` URL) reads back as one string.
             try out.appendByte('"')
-            try out.append(t.text)
+            for ch in t.text {
+                if ch == '"' || ch == '\\' {
+                    try out.appendByte('\\')
+                }
+                try out.appendByte(ch)
+            }
             try out.appendByte('"')
         }
         .Delim => {

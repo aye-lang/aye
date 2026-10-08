@@ -474,6 +474,7 @@ fn styleUrls(alloc: Allocator, doc: *Document, styles: *css.Styles, nodes: *layo
             if styles.pseudo(h, which as u8) |pv| {
                 try css.layerUrls(alloc, pv[css.BACKGROUND_IMAGE], out)
                 try css.layerUrls(alloc, pv[css.MASK_IMAGE], out)
+                try css.layerUrls(alloc, pv[css.CONTENT], out)
             }
         }
         if out.len() == start {

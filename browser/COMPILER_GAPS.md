@@ -70,6 +70,30 @@ removed in cff3f60.
   `heap-use-after-free` at the line of the read; the spec's `--cflags`
   line names `-fsanitize=address`. Verify: `cargo test --test golden`.
 
+### C interop
+
+#### 49. An `extern fn` cannot have an Ore name other than its C symbol
+
+- **Need:** a module whose pub API reuses a C function's name: `std.net`
+  exports `listen` and `connect` and calls C's `listen` and `connect`.
+- **Repro:**
+
+  ```ore
+  extern fn close(fd: i32) i32
+  pub fn close(x: i32) i32 { return x }   // E0015: `close` is defined more than once
+  ```
+
+- **Workaround:** the C prelude (`src/cgen.rs`) declares the symbols
+  under other names (`ore_rt_listen` with `__asm__("listen")`) and
+  exports `ore_std_listen` and `ore_std_connect`, which `std/net/net.ore`
+  declares. A struct method of the same name is fine (`Conn.read` calls
+  C's `read`). `@cimport` also avoids it (`sock.connect`), but needs
+  libclang or the cache.
+- **Hit by:** O1.3 (`std.net`).
+- **Status:** open. Proposed: a link name on the declaration, such as
+  `extern("connect") fn cConnect(...)`, with a spec entry and an error
+  test for an empty name.
+
 ## Declined by design
 
 #### 5. A local cannot start uninitialized; `@zeroed` makes only C structs

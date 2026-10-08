@@ -126,7 +126,7 @@ pub struct Box {
     // `<br>`, inline-blocks, inline images, inline tables and flexes).
     inline_level: bool
     // Text: the text after whitespace processing (the DOM text until
-    // then).
+    // then). The image of a pseudo-element's `content: url()`: its URL.
     text: []u8
     // Table cells: the number of columns the cell spans.
     span: usize
@@ -550,6 +550,26 @@ fn buildPseudo(t: *mut Tree, parent: usize, el: NodeId, which: u8) AllocError!vo
         t.bx(tb).pseudo = which
         try t.appendChild(b, tb)
     }
+    // `content: url()`: an anonymous inline image (CSS Content 2.1).
+    var urls = List([]u8).init(t.alloc)
+    defer urls.deinit()
+    try css.layerUrls(t.alloc, style[css.CONTENT], &mut urls)
+    if urls.len() > 0 {
+        let img_style = try t.alloc.alloc(Value.Initial, css.NPROPS)
+        for p in 0..css.NPROPS {
+            if css.PROPERTIES[p].inherited {
+                img_style[p] = style[p]
+            } else {
+                img_style[p] = t.styles.initial[p]
+            }
+        }
+        img_style[css.DISPLAY] = Value.Keyword { k: "inline" }
+        let ib = try t.newBox(BoxKind.Image, null, img_style, b)
+        t.bx(ib).inline_level = true
+        t.bx(ib).text = urls.items()[0]
+        t.bx(ib).pseudo = which
+        try t.appendChild(b, ib)
+    }
 }
 
 // The text of a `content` value: its strings, `attr(name)`s of `el` and
@@ -563,9 +583,13 @@ fn contentText(t: *mut Tree, el: NodeId, v: []u8) AllocError![]u8 {
         if c == '"' || c == '\'' {
             var e = k + 1
             while e < v.len && v[e] != c {
+                // The value escapes `"` and `\` in its strings.
+                if v[e] == '\\' && e + 1 < v.len {
+                    e += 1
+                }
+                try out.append(v[e])
                 e += 1
             }
-            try appendText(&mut out, v[k + 1..e])
             k = e + 1
             continue
         }

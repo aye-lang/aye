@@ -2041,6 +2041,32 @@ pub fn main() {
 }
 ```
 
+### std.net
+
+TCP over IPv4. A host is dotted IPv4 (`127.0.0.1`, `0.0.0.0` to listen
+on every interface) or `localhost`; there is no name lookup
+(InvalidAddress). Writes never raise SIGPIPE.
+
+```
+std.net.listen(host: []u8, port: u16) ListenError!Listener   port 0: the system picks one
+std.net.connect(host: []u8, port: u16) ConnectError!Conn
+Listener.accept(self: Self) AcceptError!Conn   waits for the next connection
+Listener.port(self: Self) u16                  the port it listens on
+Listener.close(self: Self)
+Conn.read(self: Self, buf: []mut u8) ReadError!usize   waits; at most buf.len bytes; 0 when the peer closed
+Conn.readTimeout(self: Self, buf: []mut u8, ms: u32) ReadError!usize   read, waiting at most ms (poll)
+Conn.write(self: Self, bytes: []u8) WriteError!void    write everything
+Conn.close(self: Self)
+error ListenError { InvalidAddress, AddressInUse, AccessDenied, ListenFailed }
+error ConnectError { InvalidAddress, ConnectionRefused, Unreachable, TimedOut, ConnectFailed }
+error AcceptError { AcceptFailed }
+error ReadError { TimedOut, ConnectionReset, ReadFailed }
+error WriteError { ConnectionClosed, WriteFailed }
+```
+
+A server listens on port 0, serves on a `std.thread`, and its tests
+connect to `Listener.port()` (`tests/cases/net_echo.ore`).
+
 ### A complete CLI
 
 ```ore
