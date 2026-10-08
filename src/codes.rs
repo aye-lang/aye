@@ -2488,6 +2488,20 @@ pub fn main() {
 }
 "#,
 }
+E0116 = 116 {
+    "`@tagName` of a value without tags",
+    "`@tagName(x)` gives the name of the tag of `x` as a `[]u8`: `x` is an error value, an `enum` value (the active variant, for a tagged union too). Any other value has no tag name.",
+    r#"pub fn main() {
+    @println(@tagName(3))
+}
+"#,
+    r#"enum Color { Red, Green }
+
+pub fn main() {
+    @println(@tagName(Color.Green))
+}
+"#,
+}
 }
 
 #[cfg(test)]

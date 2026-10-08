@@ -136,7 +136,8 @@ pub fn main() {
   `@embedFile`, `@link`,
   `@linkOptional`, `@cimport`, `@hasLink`, `@atomicLoad`, `@atomicStore`, `@atomicAdd`,
   `@atomicSub`, `@atomicCas`, `@hash`, `@setSafety`, `@splat`,
-  `@reduceAdd`, `@reduceMin`, `@reduceMax`, `@all`, `@any`, `@select`.
+  `@reduceAdd`, `@reduceMin`, `@reduceMax`, `@all`, `@any`, `@select`,
+  `@tagName(x)` (the tag name of an error, enum or tagged-union value, a `[]u8`).
 
 **Newlines end statements** (Go's rule). A newline is a statement
 terminator when the last token on the line is an identifier, a literal,

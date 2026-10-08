@@ -1,0 +1,4 @@
+// `@tagName` needs an error or enum value.
+pub fn main() {
+    @println(@tagName(3))
+}

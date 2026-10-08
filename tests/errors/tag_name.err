@@ -1,0 +1,1 @@
+tag_name.ore:3:23: error[E0116]: `@tagName` needs an error or enum value, found type `i64`
