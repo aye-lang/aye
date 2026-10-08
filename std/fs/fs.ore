@@ -81,6 +81,7 @@ pub struct File {
         return Reader { file: self, alloc: alloc }
     }
 
+    /// Closes the file.
     pub fn close(self: Self) {
         _ = close(self.fd)
     }
@@ -203,14 +204,17 @@ pub fn readFile(alloc: Allocator, path: []u8) ReadFileError![]mut u8 {
     return f.readAll(alloc)
 }
 
+/// Standard input (file descriptor 0).
 pub fn stdin() File {
     return File { fd: 0 }
 }
 
+/// Standard output (file descriptor 1).
 pub fn stdout() File {
     return File { fd: 1 }
 }
 
+/// Standard error (file descriptor 2).
 pub fn stderr() File {
     return File { fd: 2 }
 }

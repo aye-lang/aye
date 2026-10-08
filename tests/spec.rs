@@ -1,7 +1,9 @@
 //! `docs/spec.md`, the language reference that `ore spec` prints, cannot rot:
 //! every ```ore block is a complete program that `ore check` accepts, every
-//! ```ore-error block is one that it rejects, the reference names every pub
-//! function of std, and it stays within about 30k tokens.
+//! ```ore-error block is one that it rejects, it indexes every std module
+//! and names every pub function of the modules it lists in full, std's pub
+//! functions have doc comments (what `ore doc --signatures std.m` prints for
+//! the others), and it stays within about 30k tokens.
 
 use std::process::Command;
 
@@ -54,14 +56,58 @@ fn ore_error_blocks_fail() {
     }
 }
 
-/// Each pub function and method of std appears as `name(`, such as
-/// `std.fs.open(` and `File.readAll(`.
+/// The index of section 15: the first code block after "## 15. std", one
+/// line per std module, starting with the module's name.
+fn std_index() -> Vec<&'static str> {
+    let rest = &SPEC[SPEC.find("\n## 15. std\n").expect("no section 15")..];
+    let block = &rest[rest.find("\n```\n").expect("no index block") + 5..];
+    block[..block.find("\n```\n").unwrap()].lines().collect()
+}
+
+/// Every std module has a line in the index of section 15. A module with a
+/// `### std.m` section is marked "below"; any other names the command that
+/// prints its API, `ore doc --signatures std.m`.
 #[test]
-fn spec_names_every_std_function() {
+fn spec_indexes_every_std_module() {
+    let index = std_index();
+    for (module, _, _) in ore::module::STD_FILES {
+        let line = index.iter().find(|l| l.split_whitespace().next() == Some(module));
+        let line = line.unwrap_or_else(|| panic!("the index in docs/spec.md section 15 has no line for {module}"));
+        let full = SPEC.contains(&format!("\n### {module}\n"));
+        let want = if full { "below".to_string() } else { format!("ore doc --signatures {module}") };
+        assert!(line.ends_with(&want), "the index line of {module} does not end with `{want}`: {line}");
+    }
+}
+
+/// A module with a `### std.m` section names each of its pub functions and
+/// methods as `name(`, such as `std.fs.open(` and `File.readAll(`.
+#[test]
+fn spec_sections_name_every_function() {
     let api = ore::module::std_api();
-    assert!(api.iter().any(|f| f == "std.fs.open") && api.iter().any(|f| f == "File.readAll"), "{api:?}");
-    let missing: Vec<&String> = api.iter().filter(|f| !SPEC.contains(&format!("{f}("))).collect();
+    let has = |m: &str, f: &str| api.iter().any(|(am, af)| am == m && af == f);
+    assert!(has("std.fs", "std.fs.open") && has("std.fs", "File.readAll") && has("std.heap", "General.init"), "{api:?}");
+    let missing: Vec<&String> = api
+        .iter()
+        .filter(|(m, f)| SPEC.contains(&format!("\n### {m}\n")) && !SPEC.contains(&format!("{f}(")))
+        .map(|(_, f)| f)
+        .collect();
     assert!(missing.is_empty(), "docs/spec.md does not mention {missing:?}");
+}
+
+/// Every pub function and method in std's source has a `///` comment right
+/// above it, which `ore doc --signatures` prints with the signature.
+#[test]
+fn std_functions_have_doc_comments() {
+    let mut missing = Vec::new();
+    for (_, file, src) in ore::module::STD_FILES {
+        let lines: Vec<&str> = src.lines().map(str::trim).collect();
+        for (i, l) in lines.iter().enumerate() {
+            if l.starts_with("pub fn ") && !(i > 0 && lines[i - 1].starts_with("///")) {
+                missing.push(format!("{file}:{}: {l}", i + 1));
+            }
+        }
+    }
+    assert!(missing.is_empty(), "pub functions without a /// comment:\n{}", missing.join("\n"));
 }
 
 /// About 30k tokens, counted as 4 characters per token.

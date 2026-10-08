@@ -28,10 +28,12 @@ pub fn eqlIgnoreCase(a: []u8, b: []u8) bool {
     return true
 }
 
+/// Does `s` start with `prefix`?
 pub fn startsWith(s: []u8, prefix: []u8) bool {
     return prefix.len <= s.len && mem.eql(s[..prefix.len], prefix)
 }
 
+/// Does `s` end with `suffix`?
 pub fn endsWith(s: []u8, suffix: []u8) bool {
     return suffix.len <= s.len && mem.eql(s[s.len - suffix.len..], suffix)
 }
@@ -271,6 +273,7 @@ pub struct Builder {
         return Builder { buf: []mut u8{}, count: 0, alloc: alloc }
     }
 
+    /// Frees the bytes.
     pub fn deinit(self: *mut Self) {
         self.alloc.free(self.buf)
         self.buf = []mut u8{}
@@ -282,6 +285,7 @@ pub struct Builder {
         return self.buf[..self.count]
     }
 
+    /// The number of bytes so far.
     pub fn len(self: *Self) usize {
         return self.count
     }
@@ -291,12 +295,14 @@ pub struct Builder {
         self.count = 0
     }
 
+    /// Appends the bytes of `s`.
     pub fn append(self: *mut Self, s: []u8) AllocError!void {
         try self.reserve(s.len)
         mem.copy(self.buf[self.count..], s)
         self.count += s.len
     }
 
+    /// Appends the byte `b`.
     pub fn appendByte(self: *mut Self, b: u8) AllocError!void {
         try self.reserve(1)
         self.buf[self.count] = b
@@ -309,6 +315,7 @@ pub struct Builder {
         self.count += encode(code, self.buf[self.count..])
     }
 
+    /// Appends `v` in decimal (with a `-` when negative).
     pub fn appendInt(self: *mut Self, v: i64) AllocError!void {
         if v < 0 {
             try self.appendByte('-')
@@ -318,6 +325,7 @@ pub struct Builder {
         return self.appendUint(v as u64)
     }
 
+    /// Appends `v` in decimal.
     pub fn appendUint(self: *mut Self, v: u64) AllocError!void {
         var digits = [20]u8{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
         var n: usize = 0

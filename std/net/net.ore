@@ -41,6 +41,7 @@ pub struct Listener {
         return self.portNumber
     }
 
+    /// Stops listening and releases the port.
     pub fn close(self: Self) {
         _ = close(self.fd)
     }
@@ -108,6 +109,7 @@ pub struct Conn {
         }
     }
 
+    /// Closes the connection.
     pub fn close(self: Self) {
         _ = close(self.fd)
     }

@@ -8,6 +8,7 @@ import std.mem.Allocator
 pub struct Mutex {
     handle: [*]u8
 
+    /// A new lock. Copies of a `Mutex` are the same lock.
     pub fn init() Mutex {
         return Mutex { handle: ore_mutex_new() }
     }
@@ -17,10 +18,12 @@ pub struct Mutex {
         ore_mutex_lock(self.handle)
     }
 
+    /// Releases the lock.
     pub fn unlock(self: *Self) {
         ore_mutex_unlock(self.handle)
     }
 
+    /// Frees the lock, once, when no thread uses it.
     pub fn deinit(self: *Self) {
         ore_mutex_free(self.handle)
     }
@@ -150,14 +153,17 @@ pub fn Atomic(comptime T: type) type where T: Integer {
     return struct {
         value: T
 
+        /// An atomic integer holding `value`.
         pub fn init(value: T) Self {
             return Self { value: value }
         }
 
+        /// The current value.
         pub fn load(self: *Self) T {
             return @atomicLoad(&self.value)
         }
 
+        /// Sets the value to `value`.
         pub fn store(self: *mut Self, value: T) {
             @atomicStore(&mut self.value, value)
         }
