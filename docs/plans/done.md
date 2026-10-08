@@ -133,3 +133,4 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | X2.2 | 2026-10-08 | Ore → Aye: `aye` command, crate and binary, `.aye` files, `AYE_`/`aye_` names, docs; 513 moved, 321 rewritten | 3042d53 |
 | X5.1 | 2026-10-08 | `window_forms_html5` loads a copy in `/tmp/anyknown-forms-html5/`, so its golden PNG no longer holds the checkout path | 4d4ea93 |
 | X5.2 | 2026-10-08 | Checkout moved to `~/Documents/ayelang/aye`; full suite green there after `cargo clean --release -p aye` (test binaries kept the old `CARGO_BIN_EXE_aye` path) | – |
+| X1.1 | 2026-10-08 | `std.fs.mtime(path) ?i64` (C prelude `aye_std_mtime`, `struct stat` offset per OS: 48 macOS, 88 Linux); `archive.aye` uses it and `strlen(d_name)`; gap #50 stays open for a language-level fix | 0e61757 |
