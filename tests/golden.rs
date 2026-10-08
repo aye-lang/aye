@@ -956,79 +956,108 @@ fn main() {
     let ffi_cases = cases("ffi");
     let cimport_cases = cases("cimport");
     let mod_cases = module_dirs();
-    let results: Vec<(String, Result<(), String>)> = std::thread::scope(|s| {
-        let mut handles = Vec::new();
+    type Job<'a> = Box<dyn FnOnce() -> Result<(), String> + Send + 'a>;
+    fn add<'a>(
+        jobs: &mut Vec<(String, Job<'a>)>,
+        n: String,
+        f: impl FnOnce() -> Result<(), String> + Send + 'a,
+    ) {
+        jobs.push((n, Box::new(f)));
+    }
+    let results: Vec<(String, Result<(), String>)> = {
+        let mut jobs = Vec::new();
         for p in &run_cases {
             let w = &work;
-            handles.push((
-                format!("cases/{}", name(p)),
-                s.spawn(move || run_case(p, w)),
-            ));
+            add(&mut jobs, format!("cases/{}", name(p)), move || {
+                run_case(p, w)
+            });
         }
         for p in &ffi_cases {
             let w = &work;
-            handles.push((format!("ffi/{}", name(p)), s.spawn(move || ffi_case(p, w))));
+            add(&mut jobs, format!("ffi/{}", name(p)), move || {
+                ffi_case(p, w)
+            });
         }
         for p in &err_cases {
-            handles.push((
-                format!("errors/{}", name(p)),
-                s.spawn(move || error_case(p)),
-            ));
+            add(&mut jobs, format!("errors/{}", name(p)), move || {
+                error_case(p)
+            });
         }
         for p in &cimport_cases {
             let w = &work;
-            handles.push((
-                format!("cimport/{}", name(p)),
-                s.spawn(move || cimport_case(p, w)),
-            ));
+            add(&mut jobs, format!("cimport/{}", name(p)), move || {
+                cimport_case(p, w)
+            });
         }
         for p in &test_cases {
-            handles.push((format!("tests/{}", name(p)), s.spawn(move || test_case(p))));
+            add(&mut jobs, format!("tests/{}", name(p)), move || {
+                test_case(p)
+            });
         }
         for p in &fix_cases {
             let w = &work;
-            handles.push((format!("fix/{}", name(p)), s.spawn(move || fix_case(p, w))));
+            add(&mut jobs, format!("fix/{}", name(p)), move || {
+                fix_case(p, w)
+            });
         }
         for p in &mod_cases {
-            handles.push((
-                format!("modules/{}", name(p)),
-                s.spawn(move || module_case(p)),
-            ));
+            add(&mut jobs, format!("modules/{}", name(p)), move || {
+                module_case(p)
+            });
         }
-        handles.push(("example1".to_string(), s.spawn(example1)));
+        add(&mut jobs, "example1".to_string(), example1);
         let w = &work;
-        handles.push(("cli/aye run".to_string(), s.spawn(move || cli_run(w))));
-        handles.push((
-            "cli/aye build -o".to_string(),
-            s.spawn(move || cli_build_link(w)),
-        ));
-        handles.push(("cli/aye check".to_string(), s.spawn(cli_check)));
-        handles.push((
+        add(&mut jobs, "cli/aye run".to_string(), move || cli_run(w));
+        add(&mut jobs, "cli/aye build -o".to_string(), move || {
+            cli_build_link(w)
+        });
+        add(&mut jobs, "cli/aye check".to_string(), cli_check);
+        add(
+            &mut jobs,
             "cli/aye build --cflags -fsanitize=thread".to_string(),
-            s.spawn(move || cli_tsan(w)),
-        ));
-        handles.push(("cli/aye explain".to_string(), s.spawn(cli_explain)));
-        handles.push((
+            move || cli_tsan(w),
+        );
+        add(&mut jobs, "cli/aye explain".to_string(), cli_explain);
+        add(
+            &mut jobs,
             "cli/aye test: an error in a doc example".to_string(),
-            s.spawn(move || cli_doc_example_error(w)),
-        ));
-        handles.push((
+            move || cli_doc_example_error(w),
+        );
+        add(
+            &mut jobs,
             "perf/General in debug mode".to_string(),
-            s.spawn(move || perf_general(w)),
-        ));
-        handles.push((
+            move || perf_general(w),
+        );
+        add(
+            &mut jobs,
             "cli/aye test --filter".to_string(),
-            s.spawn(cli_test_filter),
-        ));
-        handles.push((
+            cli_test_filter,
+        );
+        add(
+            &mut jobs,
             "cli/aye test --module".to_string(),
-            s.spawn(cli_test_module),
-        ));
-        handles
-            .into_iter()
-            .map(|(n, h)| (n, h.join().unwrap()))
-            .collect()
-    });
+            cli_test_module,
+        );
+        // At most `available_parallelism()` cases run at once.
+        let queue = std::sync::Mutex::new(jobs.into_iter().enumerate());
+        let done = std::sync::Mutex::new(Vec::new());
+        let workers = std::thread::available_parallelism().map_or(1, |n| n.get());
+        std::thread::scope(|s| {
+            for _ in 0..workers {
+                s.spawn(|| {
+                    while let Some((i, (n, f))) = {
+                        let next = queue.lock().unwrap().next();
+                        next
+                    } {
+                        done.lock().unwrap().push((i, n, f()));
+                    }
+                });
+            }
+        });
+        let mut done = done.into_inner().unwrap();
+        done.sort_by_key(|d| d.0);
+        done.into_iter().map(|(_, n, r)| (n, r)).collect()
+    };
     let _ = std::fs::remove_dir_all(&work);
 
     let mut failed = 0;
