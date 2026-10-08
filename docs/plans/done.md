@@ -137,3 +137,4 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | X1.2 | 2026-10-08 | `scripts/setup-ubuntu.sh`, `Containerfile`, `scripts/linux.sh` (Apple `container`, Ubuntu 24.04, target in a named volume); first Linux run recorded in `project.md` X1 | 02c42d3 |
 | X1.4 | 2026-10-08 | `scripts/linux.sh`: git works in worktrees (common git dir mounted read-only), image tag carries a hash of `scripts/linux/Containerfile` + `setup-ubuntu.sh`, TSan runtime installed; Linux fmt 7/7, TSan golden runs | aec5554 |
 | X1.3 | 2026-10-08 | `@cimport` of a system header takes its internal headers (`_*.h`, `bits/`) and its own subdirectory, not the rest of the include dir (gap #54): glibc `math.h` and `pthread.h` work; `GENERATOR_VERSION` 2 | 7a08c4b |
+| X1.6 | 2026-10-08 | `Math.cbrt` is a port of fdlibm `cbrt` (`browser/js/cbrt.aye`): same result on glibc and macOS; more cbrt cases in `164_math_functions.js` | 2ea52ca |

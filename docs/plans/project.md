@@ -23,23 +23,13 @@ Linux arm64 on main 7a08c4b (X1.5 first pass): build, `aye check browser`
 and `browser/build.sh` exit 0; tests: all pass except `js_conformance`
 `164_math_functions.js` (glibc `cbrt(27)` = 3.0000000000000004).
 
-#### X1.6: `Math.cbrt` gives the same result on every libm
-- lane: project (touches `browser/`, maintenance)
-- goal: a port of fdlibm `cbrt` (as V8) replaces the libm call, so `164_math_functions.js` passes on glibc and macOS.
-- files: `browser/js/builtins_number.aye`
-- verify: `scripts/linux.sh sh -c 'cargo build --release && cargo test --release --test browser js_conformance'` → 0; same test on macOS → 0
-- depends on: –
-- where: local
-- model: sonnet
-- time box: 30 min
-
 #### X1.5: full Linux run, arm64 and amd64
 - lane: project
 - goal: the X1 done check passes on arm64 and amd64; failures become new X1.x cards.
 - serves: criterion O1
 - files: none expected (report only), `docs/practices/workflow.md` if a lesson
 - verify: `scripts/linux.sh sh -c 'cargo build --release && target/release/aye check browser && cargo test --release && browser/build.sh'` → 0, then the same with `LINUX_ARCH=amd64`
-- depends on: X1.6
+- depends on: –
 - parallel with: no other build agent
 - where: local
 - model: sonnet
