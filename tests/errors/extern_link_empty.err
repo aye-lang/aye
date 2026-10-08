@@ -1,0 +1,1 @@
+extern_link_empty.ore:1:8: error[E0094]: `extern("")` needs a link name: `extern("connect") fn ...`

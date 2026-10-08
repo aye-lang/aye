@@ -132,7 +132,7 @@ pub fn listen(host: []u8, port: u16) ListenError!Listener {
         reuse = 4
     }
     _ = setsockopt(fd, solSocket(), reuse, one[..].ptr, 4)
-    if bind(fd, addr[..].ptr, 16) != 0 || ore_std_listen(fd, 128) != 0 {
+    if bind(fd, addr[..].ptr, 16) != 0 || cListen(fd, 128) != 0 {
         let e = ore_std_errno()
         _ = close(fd)
         if e == eaddrinuse() {
@@ -161,7 +161,7 @@ pub fn connect(host: []u8, port: u16) ConnectError!Conn {
     if fd < 0 {
         return ConnectError.ConnectFailed
     }
-    if ore_std_connect(fd, addr[..].ptr, 16) != 0 {
+    if cConnect(fd, addr[..].ptr, 16) != 0 {
         let e = ore_std_errno()
         _ = close(fd)
         if e == econnrefused() {
@@ -293,8 +293,8 @@ fn inetAddr(host: []u8, port: u16, addr: *mut [16]u8) bool {
 }
 
 extern fn ore_std_errno() i32
-extern fn ore_std_listen(fd: i32, backlog: i32) i32
-extern fn ore_std_connect(fd: i32, addr: [*]u8, len: u32) i32
+extern("listen") fn cListen(fd: i32, backlog: i32) i32
+extern("connect") fn cConnect(fd: i32, addr: [*]u8, len: u32) i32
 extern fn socket(domain: i32, kind: i32, protocol: i32) i32
 extern fn bind(fd: i32, addr: [*]u8, len: u32) i32
 extern fn accept(fd: i32, addr: ?[*]u8, len: ?[*]u32) i32

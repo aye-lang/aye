@@ -69,11 +69,11 @@ path        = ident { "." ident } ;
                (* a name, or an item of a module: std.fs.File *)
 
 fn_decl     = [ "pub" ] "fn" ident "(" [ params ] ")" [ ret_type ] [ where ] block ;
-extern_fn   = [ "pub" ] "extern" "fn" ident "(" [ params [ "," "..." ] ] ")" [ type ]
+extern_fn   = [ "pub" ] "extern" [ "(" string ")" ] "fn" ident "(" [ params [ "," "..." ] ] ")" [ type ]
             | "pub" "extern" "fn" ident "(" [ params ] ")" [ type ] block ;
                (* without a body: a C function, variadic with "..." after at
                   least one parameter; with a body: an Ore function exported
-                  to C under its own name *)
+                  to C under its own name; ("name") is the C link name *)
 ret_type    = type
             | [ path ] "!" ( type | "void" ) ;   (* error union E!T; !T infers the set
                                                      (not allowed on a `pub fn` other than main,

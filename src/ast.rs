@@ -76,6 +76,8 @@ pub struct FnDecl {
     /// `extern fn`: a C function without a body, or with a body an Ore
     /// function exported to C under its own name.
     pub is_extern: bool,
+    /// `extern("name") fn`: the C symbol, when it differs from the Ore name.
+    pub link: Option<String>,
     pub params: Vec<Param>,
     /// The `...` after the parameters of a variadic C function.
     pub variadic: Option<Span>,

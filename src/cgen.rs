@@ -396,13 +396,9 @@ ORE_RT bool ore_std_exists(uint8_t *path, size_t len) {
     ore_rt_free(p);
     return r == 0;
 }
-/* std.net: errno, and `listen` and `connect` under other names (std.net's
-   own `listen` and `connect` take theirs). */
-extern int ore_rt_listen(int, int) __asm__(ORE_SYM("listen"));
-extern int ore_rt_connect(int, const void *, uint32_t) __asm__(ORE_SYM("connect"));
+/* std.net: errno. Its C symbol differs per OS (`__error`, `__errno_location`),
+   and Ore has no per-OS declarations, so this helper stays. */
 ORE_RT int32_t ore_std_errno(void) { return *ore_rt_errno_loc(); }
-ORE_RT int32_t ore_std_listen(int32_t fd, int32_t backlog) { return ore_rt_listen(fd, backlog); }
-ORE_RT int32_t ore_std_connect(int32_t fd, uint8_t *addr, uint32_t len) { return ore_rt_connect(fd, addr, len); }
 ORE_RT double ore_std_inf(void) { return __builtin_inf(); }
 ORE_RT double ore_std_nan(void) { return __builtin_nan(""); }
 ORE_RT uint64_t ore_std_monotonic_ns(void) {
