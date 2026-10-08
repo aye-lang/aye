@@ -170,6 +170,19 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - time box: 20 min
 - notes: found in X2.2 (`aye spec | head -3` printed a broken-pipe panic).
 
+#### O1.11: AI-writability eval
+- lane: aye
+- goal: `scripts/eval.py` runs fresh headless agents (`claude -p --output-format stream-json`) on fixed tasks with only `aye spec`, `aye check`, `aye explain`, `aye run` allowed, and writes pass rate, `aye check` rounds and tokens per task to `docs/aye-eval.md`; its numbers steer the O3.x order.
+- serves: O4, O13 (the gates, made repeatable); AI-writability
+- files: `scripts/eval.py` (new), `tests/eval/<task>/{prompt.md,check.sh,solution.aye}` (new, 5 tasks), `docs/aye-eval.md` (new)
+- verify: `python3 scripts/eval.py --self-test` → exit 0 (every `solution.aye` passes its `check.sh`; every check rejects an empty program), then `python3 scripts/eval.py --runs 1 > target/eval.log 2>&1; echo $?` → 0 and `docs/aye-eval.md` has one row per task
+- depends on: –
+- parallel with: all
+- where: local (needs the user's `claude` login)
+- model: opus (task choice is design judgment)
+- time box: 45 min
+- notes: tasks span today's std: a CLI on args and stdin, text processing, a `std.map` counter, a file read/write, a `std.http` hello server checked with `curl`; one task should need a feature std lacks today (JSON) so the table shows the gap. Each run gets an empty temp dir, `--allowedTools` limited to Write, Edit, Read and `Bash(aye *)`, `--model sonnet`, a turn cap; count rounds from the `aye check` tool calls in the stream.
+
 ## Cards: O3 std breadth (next)
 
 #### O3.1: std.json parse
