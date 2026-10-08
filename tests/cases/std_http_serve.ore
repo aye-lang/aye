@@ -1,0 +1,121 @@
+// std.http.Server (O1.4a): a server on a thread, on port 0. A client sends
+// two requests in one write && reads both responses, then a third on the
+// same connection, then a malformed request (400), then `Connection:
+// close`. `stop` ends the server.
+
+import std.heap.General
+import std.http
+import std.http.Header
+import std.http.Request
+import std.http.Response
+import std.http.Server
+import std.mem
+import std.mem.Allocator
+import std.net
+import std.net.Conn
+import std.sync.Atomic
+import std.text.Builder
+import std.thread
+
+struct App {
+    hits: Atomic(u32)
+}
+
+fn handle(app: *mut App, req: *Request, res: *mut Response, alloc: Allocator) {
+    let n = app.hits.add(1) + 1
+    var b = Builder.init(alloc)
+    b.append(req.method) catch |e| {
+        return
+    }
+    b.append(" ") catch |e| {
+        return
+    }
+    b.append(req.target) catch |e| {
+        return
+    }
+    b.append(" #") catch |e| {
+        return
+    }
+    b.appendUint(n as u64) catch |e| {
+        return
+    }
+    res.body = b.bytes()
+    let hs = alloc.alloc(Header { name: "Content-Type", value: "text/plain" }, 1) catch |e| {
+        return
+    }
+    res.headers = hs
+}
+
+fn run(s: *mut Server) {
+    var gpa = General.init()
+    defer gpa.deinit()
+    s.run(gpa.allocator()) catch |e| {
+        @println("run failed")
+    }
+}
+
+// Reads until the peer closes or `want` responses arrived (each starts
+// with "HTTP/1.1 "), && prints them without the CRs.
+fn readAll(c: Conn, want: usize) !void {
+    var buf = @zeroed([2048]u8)
+    var got: usize = 0
+    var seen: usize = 0
+    while seen < want {
+        let n = try c.readTimeout(buf[got..], 5000)
+        if n == 0 {
+            break
+        }
+        got += n
+        seen = 0
+        for i in 0..got {
+            if buf[i] == 'H' && i + 9 <= got && mem.eql(buf[i..i + 9], "HTTP/1.1 ") {
+                seen += 1
+            }
+        }
+    }
+    var line = @zeroed([2048]u8)
+    var k: usize = 0
+    for i in 0..got {
+        if buf[i] == '\r' {
+            continue
+        }
+        line[k] = buf[i]
+        k += 1
+    }
+    @print(line[0..k])
+    @println("<end>")
+}
+
+pub fn main() !void {
+    var app = App { hits: Atomic(u32).init(0) }
+    var s = try http.listen(App, "127.0.0.1", 0, &mut app, handle)
+    @print("port picked: ")
+    @println(s.port() != 0)
+    let t = try thread.spawn(Server, run, &mut s)
+
+    // Two pipelined requests in one write, then one more on the same
+    // connection (keep-alive).
+    let c = try net.connect("127.0.0.1", s.port())
+    try c.write("GET /a HTTP/1.1\r\nHost: x\r\n\r\nGET /b HTTP/1.1\r\nHost: x\r\n\r\n")
+    try readAll(c, 2)
+    try c.write("GET /c HTTP/1.1\r\nHost: x\r\n\r\n")
+    try readAll(c, 1)
+    c.close()
+
+    // A malformed request: 400, && the server closes the connection.
+    let bad = try net.connect("127.0.0.1", s.port())
+    try bad.write("GARBAGE\r\n\r\n")
+    try readAll(bad, 99)
+    bad.close()
+
+    // Connection: close ends the connection after the response.
+    let cl = try net.connect("127.0.0.1", s.port())
+    try cl.write("GET /d HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    try readAll(cl, 99)
+    cl.close()
+
+    s.stop()
+    t.join()
+    @print("handled ")
+    @println(app.hits.load())
+}

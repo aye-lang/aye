@@ -1,0 +1,27 @@
+port picked: true
+HTTP/1.1 200 OK
+Content-Type: text/plain
+Content-Length: 9
+
+GET /a #1HTTP/1.1 200 OK
+Content-Type: text/plain
+Content-Length: 9
+
+GET /b #2<end>
+HTTP/1.1 200 OK
+Content-Type: text/plain
+Content-Length: 9
+
+GET /c #3<end>
+HTTP/1.1 400 Bad Request
+Connection: close
+Content-Length: 0
+
+<end>
+HTTP/1.1 200 OK
+Content-Type: text/plain
+Connection: close
+Content-Length: 9
+
+GET /d #4<end>
+handled 4
