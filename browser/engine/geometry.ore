@@ -333,11 +333,11 @@ fn takeGeometryStyles(s: *mut Script, st: *Styling, media: css.Media) ?css.Style
 // them, when it can: not when a change may change any element's style,
 // or for other sheets or another viewport, or when the styles depend on
 // what css/invalidation.ore does not follow (`:has()` of siblings,
-// container queries, shadow trees), or after styling the document again
+// container queries, shadow trees; but see `onlyInlineStyle`), or after styling the document again
 // `RESTYLE_ROUNDS` times this way. Whether it did.
 fn restyle(s: *mut Script, g: *mut Geometry, st: *Styling) AllocError!bool {
     let p = s.page
-    let ok = !s.restyle_all && g.width == s.width && g.height == s.height && g.styling == st && g.sheets == s.computed_sheets && g.mutations == p.mutations && !g.deps.whole && !g.styles.queried && p.doc.shadows.len() == 0 && g.restyled < RESTYLE_ROUNDS * g.styles.map.len()
+    let ok = !s.restyle_all && g.width == s.width && g.height == s.height && g.styling == st && g.sheets == s.computed_sheets && g.mutations == p.mutations && (!g.deps.whole || onlyInlineStyle(s, g)) && !g.styles.queried && p.doc.shadows.len() == 0 && g.restyled < RESTYLE_ROUNDS * g.styles.map.len()
     if !ok {
         return false
     }
@@ -350,6 +350,17 @@ fn restyle(s: *mut Script, g: *mut Geometry, st: *Styling) AllocError!bool {
     }
     g.restyled += try css.restyleSubtrees(&p.doc, &st.ua, &st.author, st.media, roots.items(), shallow.items(), g.styles)
     clearChanges(s)
+    return true
+}
+
+// Are the changes noted since `g` all to `style` attributes that no
+// selector looks at (an animation's frames)?
+fn onlyInlineStyle(s: *Script, g: *Geometry) bool {
+    for c in s.restyle.items() {
+        if !g.deps.onlyOwnStyle(c.what) {
+            return false
+        }
+    }
     return true
 }
 

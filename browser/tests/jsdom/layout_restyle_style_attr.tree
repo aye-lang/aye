@@ -1,0 +1,26 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Layout restyle with selectors on the style attribute"
+      "\n"
+      <style>
+        "\nbody { margin: 0; font-size: 10px }\n.a:has(+ .b) { width: 15px }\n.a, .b, .n { height: 5px; width: 20px }\n[style*=\"40px\"] + .n { width: 50px }\n.q:has([style]) .r { height: 9px }\n.r { display: block; height: 2px }\n"
+      "\n"
+    <body>
+      <div id="row">
+        <div class="a" id="a">
+        <div class="b" id="b" style="width: 41px;">
+        <div class="n" id="n">
+      "\n"
+      <div class="q" id="q">
+        <span class="r" id="r">
+        <i id="i">
+      "\n"
+      <pre id="out">
+        "start same row:0,0,800,15 a:0,0,15,5 b:0,5,20,5 n:0,10,20,5 q:0,15,800,2 r:0,15,800,2 i:0,0,0,0\nsibling sees style same row:0,0,800,15 a:0,0,15,5 b:0,5,40,5 n:0,10,50,5 q:0,15,800,2 r:0,15,800,2 i:0,0,0,0\nsibling no longer same row:0,0,800,15 a:0,0,15,5 b:0,5,41,5 n:0,10,20,5 q:0,15,800,2 r:0,15,800,2 i:0,0,0,0\n:has([style]) same row:0,0,800,15 a:0,0,15,5 b:0,5,41,5 n:0,10,20,5 q:0,15,800,9 r:0,15,800,9 i:0,0,0,0\n:has([style]) off same row:0,0,800,15 a:0,0,15,5 b:0,5,41,5 n:0,10,20,5 q:0,15,800,2 r:0,15,800,2 i:0,0,0,0\n"
+      "\n"
+      <script>
+        "\n// Written at the end: a change to the document between the steps would\n// not be one to inline styles alone.\nconst lines = [];\nfunction log(...parts) { lines.push(parts.join(' ')); }\nconst $ = id => document.getElementById(id);\nfunction boxes() {\n  return [...document.body.querySelectorAll('*')].filter(e => e.id && e.id !== 'out').map(e => e.id + ':' + [e.offsetLeft, e.offsetTop, e.offsetWidth, e.offsetHeight].join(',')).join(' ');\n}\nfunction check(name) {\n  const fast = boxes();\n  const sheet = document.createElement('style');\n  sheet.textContent = '.unused {}';\n  document.head.append(sheet);\n  const full = boxes();\n  sheet.remove();\n  boxes(); // styled with the sheets of the page again, for the next change\n  log(name, fast === full ? 'same' : 'DIFF full ' + full, fast);\n}\nconst steps = [\n  ['sibling sees style', () => $('b').style.width = '40px'],\n  ['sibling no longer', () => $('b').style.width = '41px'],\n  [':has([style])', () => $('i').style.color = 'red'],\n  [':has([style]) off', () => $('i').removeAttribute('style')],\n];\ncheck('start');\nfor (const [name, change] of steps) {\n  change();\n  check(name);\n}\ndocument.getElementById('out').textContent = lines.join('\\n') + '\\n';\n"
+      "\n"

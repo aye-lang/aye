@@ -1,0 +1,31 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "Layout restyle of inline styles under a whole-document :has()"
+      "\n"
+      <style>
+        "\nbody { margin: 0; font-size: 10px }\n/* :has() of a following sibling: any other change restyles the document. */\n.a:has(+ .b) { width: 15px }\n.a, .b { height: 5px; width: 20px }\n.em { width: 2em; height: 1em }\n.usevar { width: var(--w, 8px); height: 3px }\n"
+      "\n"
+    <body>
+      <div id="row">
+        <div class="a" id="a" style="width: 30px; transform: translateX(5px); opacity: 0.5;">
+        <div class="b" id="b" style="height: 12px">
+      "\n"
+      <div id="p" style="font-size: 20px;">
+        <div class="em" id="em" style="font-size: 5px;">
+          <div class="em" id="em2">
+      "\n"
+      <div id="vars" style="--w: 44px;">
+        <div class="usevar" id="uv">
+      "\n"
+      <div id="hide" style="">
+        <div class="a" id="h1" style="height: 9px;">
+      "\n"
+      <pre id="out">
+        "start same row:0,0,800,10 a:0,0,15,5 b:0,5,20,5 p:0,10,800,10 em:0,10,20,10 em2:0,10,20,10 vars:0,20,800,3 uv:0,20,8,3 hide:0,23,800,5 h1:0,23,20,5\nwidth same row:0,0,800,10 a:0,0,30,5 b:0,5,20,5 p:0,10,800,10 em:0,10,20,10 em2:0,10,20,10 vars:0,20,800,3 uv:0,20,8,3 hide:0,23,800,5 h1:0,23,20,5\ninherited font size same row:0,0,800,10 a:0,0,30,5 b:0,5,20,5 p:0,10,800,20 em:0,10,40,20 em2:0,10,40,20 vars:0,30,800,3 uv:0,30,8,3 hide:0,33,800,5 h1:0,33,20,5\ninherited again same row:0,0,800,10 a:0,0,30,5 b:0,5,20,5 p:0,10,800,5 em:0,10,10,5 em2:0,10,10,5 vars:0,15,800,3 uv:0,15,8,3 hide:0,18,800,5 h1:0,18,20,5\ncustom property same row:0,0,800,10 a:0,0,30,5 b:0,5,20,5 p:0,10,800,5 em:0,10,10,5 em2:0,10,10,5 vars:0,15,800,3 uv:0,15,44,3 hide:0,18,800,5 h1:0,18,20,5\ndisplay none same row:0,0,800,10 a:0,0,30,5 b:0,5,20,5 p:0,10,800,5 em:0,10,10,5 em2:0,10,10,5 vars:0,15,800,3 uv:0,15,44,3 hide:0,0,0,0 h1:0,0,0,0\ninside hidden same row:0,0,800,10 a:0,0,30,5 b:0,5,20,5 p:0,10,800,5 em:0,10,10,5 em2:0,10,10,5 vars:0,15,800,3 uv:0,15,44,3 hide:0,0,0,0 h1:0,0,0,0\nshown again same row:0,0,800,10 a:0,0,30,5 b:0,5,20,5 p:0,10,800,5 em:0,10,10,5 em2:0,10,10,5 vars:0,15,800,3 uv:0,15,44,3 hide:0,18,800,9 h1:0,18,20,9\nsetAttribute style same row:0,0,800,17 a:0,0,30,5 b:0,5,20,12 p:0,17,800,5 em:0,17,10,5 em2:0,17,10,5 vars:0,22,800,3 uv:0,22,44,3 hide:0,25,800,9 h1:0,25,20,9\ntransform and opacity same row:0,0,800,17 a:5,0,30,5 b:0,5,20,12 p:0,17,800,5 em:0,17,10,5 em2:0,17,10,5 vars:0,22,800,3 uv:0,22,44,3 hide:0,25,800,9 h1:0,25,20,9\n"
+      "\n"
+      <script>
+        "\n// Written at the end: a change to the document between the steps would\n// not be one to inline styles alone.\nconst lines = [];\nfunction log(...parts) { lines.push(parts.join(' ')); }\nconst $ = id => document.getElementById(id);\nfunction boxes() {\n  return [...document.body.querySelectorAll('*')].filter(e => e.id && e.id !== 'out').map(e => e.id + ':' + [e.offsetLeft, e.offsetTop, e.offsetWidth, e.offsetHeight].join(',')).join(' ');\n}\n// The boxes after a change, and whether they are those of a full restyle\n// (a new style sheet styles the whole document).\nfunction check(name) {\n  const fast = boxes();\n  const sheet = document.createElement('style');\n  sheet.textContent = '.unused {}';\n  document.head.append(sheet);\n  const full = boxes();\n  sheet.remove();\n  boxes(); // styled with the sheets of the page again, for the next change\n  log(name, fast === full ? 'same' : 'DIFF full ' + full, fast);\n}\nconst steps = [\n  ['width', () => $('a').style.width = '30px'],\n  ['inherited font size', () => $('p').style.fontSize = '20px'],\n  ['inherited again', () => $('em').style.fontSize = '5px'],\n  ['custom property', () => $('vars').style.setProperty('--w', '44px')],\n  ['display none', () => $('hide').style.display = 'none'],\n  ['inside hidden', () => $('h1').style.height = '9px'],\n  ['shown again', () => $('hide').style.display = ''],\n  ['setAttribute style', () => $('b').setAttribute('style', 'height: 12px')],\n  ['transform and opacity', () => { $('a').style.transform = 'translateX(5px)'; $('a').style.opacity = '0.5'; }],\n];\ncheck('start');\nfor (const [name, change] of steps) {\n  change();\n  check(name);\n}\ndocument.getElementById('out').textContent = lines.join('\\n') + '\\n';\n"
+      "\n"

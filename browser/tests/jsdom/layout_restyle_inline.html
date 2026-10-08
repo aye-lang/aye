@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<title>Layout restyle of inline styles under a whole-document :has()</title>
+<style>
+body { margin: 0; font-size: 10px }
+/* :has() of a following sibling: any other change restyles the document. */
+.a:has(+ .b) { width: 15px }
+.a, .b { height: 5px; width: 20px }
+.em { width: 2em; height: 1em }
+.usevar { width: var(--w, 8px); height: 3px }
+</style>
+<div id="row"><div class="a" id="a"></div><div class="b" id="b"></div></div>
+<div id="p"><div class="em" id="em"><div class="em" id="em2"></div></div></div>
+<div id="vars"><div class="usevar" id="uv"></div></div>
+<div id="hide"><div class="a" id="h1"></div></div>
+<pre id="out"></pre>
+<script>
+// Written at the end: a change to the document between the steps would
+// not be one to inline styles alone.
+const lines = [];
+function log(...parts) { lines.push(parts.join(' ')); }
+const $ = id => document.getElementById(id);
+function boxes() {
+  return [...document.body.querySelectorAll('*')].filter(e => e.id && e.id !== 'out').map(e => e.id + ':' + [e.offsetLeft, e.offsetTop, e.offsetWidth, e.offsetHeight].join(',')).join(' ');
+}
+// The boxes after a change, and whether they are those of a full restyle
+// (a new style sheet styles the whole document).
+function check(name) {
+  const fast = boxes();
+  const sheet = document.createElement('style');
+  sheet.textContent = '.unused {}';
+  document.head.append(sheet);
+  const full = boxes();
+  sheet.remove();
+  boxes(); // styled with the sheets of the page again, for the next change
+  log(name, fast === full ? 'same' : 'DIFF full ' + full, fast);
+}
+const steps = [
+  ['width', () => $('a').style.width = '30px'],
+  ['inherited font size', () => $('p').style.fontSize = '20px'],
+  ['inherited again', () => $('em').style.fontSize = '5px'],
+  ['custom property', () => $('vars').style.setProperty('--w', '44px')],
+  ['display none', () => $('hide').style.display = 'none'],
+  ['inside hidden', () => $('h1').style.height = '9px'],
+  ['shown again', () => $('hide').style.display = ''],
+  ['setAttribute style', () => $('b').setAttribute('style', 'height: 12px')],
+  ['transform and opacity', () => { $('a').style.transform = 'translateX(5px)'; $('a').style.opacity = '0.5'; }],
+];
+check('start');
+for (const [name, change] of steps) {
+  change();
+  check(name);
+}
+document.getElementById('out').textContent = lines.join('\n') + '\n';
+</script>
