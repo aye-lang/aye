@@ -95,6 +95,7 @@ card adds a site fix or a feature.
 Paused until P8. Before any site item becomes a card, its symptom is
 confirmed on current `main` (`docs/plan.md` rule 8). Source in brackets.
 
+- P7 flaky `http_failed_image_fetched_once` under load: the failed image was requested twice (`GET /fail/once.png` ×2) in the full suite on main 0e61757 with three agents building; 3/3 alone pass. P3.23 removed a sleep; a second fetch still races. Diagnose step; verify 30× under load (merge-agent check) (main, 2026-10-08).
 - P3.63 Mistral costs ~40 s CPU (was 4 s) since P3.48: its real animations run, and each forced layout re-runs layout over the whole document; the inline-style subtree restyle (0d7dddf) helps little because the main page notes other changes between writes, and one iframe uses container queries (`g.styles.queried`). Needs incremental layout; first log what the main page notes between layouts (P3.48b/d, 2026-10-08).
 - P8.1 split `browser/` into its own repo with `git filter-repo`, depend on Aye through O4.2/O4.3, move `tests/browser.rs` and the browser docs with it (decision 2026-10-08).
 - P1.6 `page_load.py` writes `last.stdout`/`last.stderr` into the archive folder; move them under `target/page-load-out/`; set a floor for the 0.8 CPU/wall warning (P1.5).

@@ -135,3 +135,4 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | X5.2 | 2026-10-08 | Checkout moved to `~/Documents/ayelang/aye`; full suite green there after `cargo clean --release -p aye` (test binaries kept the old `CARGO_BIN_EXE_aye` path) | – |
 | X1.1 | 2026-10-08 | `std.fs.mtime(path) ?i64` (C prelude `aye_std_mtime`, `struct stat` offset per OS: 48 macOS, 88 Linux); `archive.aye` uses it and `strlen(d_name)`; gap #50 stays open for a language-level fix | 0e61757 |
 | X1.2 | 2026-10-08 | `scripts/setup-ubuntu.sh`, `Containerfile`, `scripts/linux.sh` (Apple `container`, Ubuntu 24.04, target in a named volume); first Linux run recorded in `project.md` X1 | 02c42d3 |
+| X1.4 | 2026-10-08 | `scripts/linux.sh`: git works in worktrees (common git dir mounted read-only), image tag carries a hash of `scripts/linux/Containerfile` + `setup-ubuntu.sh`, TSan runtime installed; Linux fmt 7/7, TSan golden runs | aec5554 |
