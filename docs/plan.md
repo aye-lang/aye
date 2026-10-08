@@ -10,7 +10,7 @@ as the acceptance test of `std.http`. Finished steps are in
 
 ## Resume here (handoff 2026-10-08)
 
-A new session starts in `~/Documents/ayelang/aye` (moved by X5.2).
+A new session starts in `~/Documents/ayelang/aye` (moved by X5.2; full suite green there on 2026-10-08).
 The state is this file's lane table, [`plans/done.md`](plans/done.md)
 and `git worktree list` (expected: main only). Next, in order:
 
