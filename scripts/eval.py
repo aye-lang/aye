@@ -48,8 +48,10 @@ PROMPT_FOOTER = """
 Work in the current directory and write the program to `main.aye`. In Bash
 you can run only `aye` commands, for example `aye spec`, `aye check
 main.aye`, `aye explain E0023`, `aye run main.aye -- <args>` and
-`aye run main.aye < input.txt`. Stop when `aye check main.aye` reports no
-errors and you believe the program meets every requirement.
+`aye run main.aye < input.txt`. Each Bash call must be one `aye` command:
+`&&`, `;`, pipes and other commands are refused, so to give a program
+input, Write a file and redirect it. Stop when `aye check main.aye` reports
+no errors and you believe the program meets every requirement.
 """
 
 
@@ -109,9 +111,12 @@ AYE_CMD = re.compile(r"(?:^|[|;&(]\s*)aye\s+([a-z-]+)")
 
 
 def parse_stream(path):
-    """Summarizes a stream-json transcript."""
+    """Summarizes a stream-json transcript. Bash calls that were refused
+    (permission_denials) do not count as `aye` commands."""
     s = {"checks": 0, "cmds": {}, "turns": None, "in_tok": None,
          "out_tok": None, "cost": None, "end": "no result", "denied": 0}
+    bash = {}
+    denied = set()
     with open(path) as f:
         for line in f:
             try:
@@ -120,13 +125,10 @@ def parse_stream(path):
                 continue
             if e.get("type") == "assistant":
                 for c in e.get("message", {}).get("content", []):
-                    if c.get("type") != "tool_use" or c.get("name") != "Bash":
-                        continue
-                    for sub in AYE_CMD.findall(c.get("input", {}).get("command", "")):
-                        s["cmds"][sub] = s["cmds"].get(sub, 0) + 1
-                        if sub == "check":
-                            s["checks"] += 1
+                    if c.get("type") == "tool_use" and c.get("name") == "Bash":
+                        bash[c.get("id")] = c.get("input", {}).get("command", "")
             elif e.get("type") == "result":
+                denied = {d.get("tool_use_id") for d in e.get("permission_denials") or []}
                 u = e.get("usage") or {}
                 s["turns"] = e.get("num_turns")
                 s["in_tok"] = (u.get("input_tokens", 0)
@@ -135,7 +137,14 @@ def parse_stream(path):
                 s["out_tok"] = u.get("output_tokens")
                 s["cost"] = e.get("total_cost_usd")
                 s["end"] = e.get("subtype", "?")
-                s["denied"] = len(e.get("permission_denials") or [])
+                s["denied"] = len(denied)
+    for id, command in bash.items():
+        if id in denied:
+            continue
+        for sub in AYE_CMD.findall(command):
+            s["cmds"][sub] = s["cmds"].get(sub, 0) + 1
+            if sub == "check":
+                s["checks"] += 1
     return s
 
 
@@ -214,15 +223,15 @@ def write_doc(results, args, outdir):
         f"`{rel_out}/` (not in git).",
         "",
         "| Task | Run | Pass | `aye check` calls | Turns | Input tokens | "
-        "Output tokens | Cost (USD) | Wall (s) | End |",
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "Output tokens | Cost (USD) | Wall (s) | Refused calls | End |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in results:
         cost = "–" if r["cost"] is None else f"{r['cost']:.2f}"
         lines.append(
             f"| {r['task']} | {r['run']} | {'yes' if r['passed'] else 'no'} | "
             f"{r['checks']} | {fmt_int(r['turns'])} | {fmt_int(r['in_tok'])} | "
-            f"{fmt_int(r['out_tok'])} | {cost} | {r['wall']:.0f} | {r['end']} |"
+            f"{fmt_int(r['out_tok'])} | {cost} | {r['wall']:.0f} | {r['denied']} | {r['end']} |"
         )
     passed = sum(1 for r in results if r["passed"])
     lines += ["", f"Passed {passed} of {len(results)} runs.", ""]
