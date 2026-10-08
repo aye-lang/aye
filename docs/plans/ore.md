@@ -68,7 +68,7 @@ built-in database and cloud clients (`@cimport` covers them).
 - std: coro, diag, fs, heap, list, log, map, math, mem, net (IPv4 TCP, O1.3), os, pool, sort, sync, testing, text, thread, time. Missing for O6: http, json, path, process, wall clock, crypto, base64/hex, fs directories and stat.
 - std docs (O1.2): new modules take the index form: one line in `docs/spec.md` §15 plus `///` on every `pub fn` (`tests/spec.rs`).
 - Tests: `tests/golden.rs` (cases, errors, tests, fix, modules, ffi, cimport), `tests/fmt.rs`, `tests/spec.rs`, `tests/browser.rs`. No conformance suite yet (O1.1).
-- Open gaps: #3 (ASan golden, P2.9), #49 (extern link names, O1.3a).
+- Open gaps: #3 (ASan golden, P2.9).
 - Toolchain: Homebrew LLVM 23 for ASan and wasm32 (flags in `done.md`, O0.1); Node 22, Go and `ab` are installed locally.
 - Stale: `README.md:405-410` says `ore fmt`, `ore doc` and `Pool` are missing (O6.4).
 
@@ -144,26 +144,13 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - time box: 45 min
 - notes: one target (native) now; O2.3 adds wasm32-wasi rows.
 
-#### O1.3a: extern link names (gap #49)
-- lane: ore
-- goal: an `extern fn` can take a C link name other than its Ore name; `std/net` then calls libc directly and the three helpers leave `src/cgen.rs`.
-- serves: O3 (gap #49)
-- files: `src/parser.rs`, `src/sema.rs`, `src/cgen.rs`, `docs/grammar.ebnf`, `docs/spec.md`, `std/net/net.ore`, `tests/cases/`, `tests/errors/`, `browser/COMPILER_GAPS.md` #49
-- verify: `cargo test --release --test golden` → exit 0, with a golden for the new form, an error test (empty name), and `net_echo` unchanged
-- depends on: –
-- parallel with: not with other `src/` parser/sema/cgen steps
-- where: cloud (local until X1.2)
-- model: sonnet
-- time box: 45 min
-- notes: the gap entry proposes `extern("connect") fn cConnect(...)`; use it unless it clashes with `docs/grammar.ebnf`. Helpers to remove: `ore_std_errno`, `ore_std_listen`, `ore_std_connect`.
-
 #### O1.3b: std.net host names and IPv6
 - lane: ore
 - goal: `listen` and `connect` take host names (`getaddrinfo`) and IPv6 addresses (`::1`).
 - serves: O6
 - files: `std/net/net.ore`, `tests/cases/`
 - verify: `cargo test --release --test golden` → exit 0, with goldens connecting to `localhost` by name and to `::1`
-- depends on: O1.3a
+- depends on: –
 - parallel with: O1.5, O1.5a, O1.6
 - where: cloud
 - model: sonnet

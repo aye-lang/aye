@@ -69,57 +69,18 @@ step that moves `browser/` into its own repo (P8.1). Finished steps:
 
 ## Cards: PW wrap-up
 
-#### P3.48b: find what P3.48 breaks on MDN and Mistral
-- lane: browser
-- goal: name the P3.48 commit behind the mdn check failure and the one behind Mistral's 10x slowdown; fix if ≤ ~40 lines, else report a fix step.
-- serves: M2
-- files: `browser/engine/`, `browser/js/` (whichever the bisect names)
-- verify: in the P3.48 worktree, `python3 browser/tools/page_load.py check --site mdn,mistral --archive target/sites` → exit 0, mistral CPU near main's
-- depends on: –
-- parallel with: one other local build/test agent at most
-- where: local (archives)
-- model: opus
-- time box: 40 min
-- notes: the merge, when green, installs the worktree's recaptured Mistral archive (move the old one aside first). Running now.
-
 #### P3.62: practices entry for P3.48
 - lane: browser
 - goal: a `docs/practices/browser.md` entry: when a page silently stops part-way, log the first exception per task or tick before guessing at timing; fix the `sites.json` mistral note (it blames three.js/WebGL; the cause was `document.fonts`).
 - serves: M2
 - files: `docs/practices/browser.md`, `browser/tools/sites.json` (the `note` only)
 - verify: `python3 -c "import json; json.load(open('browser/tools/sites.json'))"` → exit 0; the entry follows `docs/practices/README.md` "Entry format"
-- depends on: P3.48b
+- depends on: –
 - parallel with: all (docs only)
 - where: cloud (docs only, no archives; local is fine before X1.2)
 - model: sonnet
 - time box: 20 min
-- notes: cite the P3.48 commits (`git log --oneline main..worktree-agent-ae5e6f75817463272`).
-
-#### P3.58: typed array views share one buffer
-- lane: browser
-- goal: finish the WIP: typed array views share their `ArrayBuffer`'s bytes and read unsigned types as unsigned.
-- serves: M2
-- files: `browser/js/typed.ore`, `browser/js/interp.ore` (index and property hooks), `browser/js/lib.ore` (the typed-array part), `browser/tests/js/256_typed_array_views.js`
-- verify: `cargo test --release --test browser js_conformance` → exit 0, with 256 matching Node 22's output (`node browser/tests/js/256_typed_array_views.js`)
-- depends on: –
-- parallel with: not with other `browser/js/` steps
-- where: local (the WIP is in a local worktree)
-- model: sonnet
-- time box: 45 min
-- notes: resume in `worktree-agent-a0b64f7b014b9b6ea` at 34c2234 (not built). Symptoms: `Uint32Array` read 2568463228 as -1726504068; a `Uint8Array` over another view's `.buffer` saw 2 of 8 bytes. Merge `main` in first (O1.2, O1.3 landed since the WIP).
-
-#### P3.58a: merge typed arrays, tighten MDN
-- lane: browser
-- goal: merge P3.58 into `main` and tighten MDN's expectation now that Lit's template digest matches.
-- serves: M2
-- files: `browser/tools/sites.json` (`mdn.max_errors` 18 → the new count, at most 2; note updated)
-- verify: full suite per `docs/plan.md` rule 5, then `python3 browser/tools/page_load.py check --site mdn` → exit 0 with the tightened `max_errors`
-- depends on: P3.58
-- parallel with: one other local build/test agent at most
-- where: local (archives, screenshots)
-- model: sonnet
-- time box: 45 min
-- notes: screenshots before and after (`check --screens --site mdn`): "English (US)" once, "Try it" not empty. After this merge the browser lane is frozen.
+- notes: cite the P3.48 commits (`git log --oneline ef3c6bc^1..ef3c6bc^2`). After this step the browser lane is frozen.
 
 ## Cards: P7 maintenance (next, recurring)
 
@@ -145,6 +106,7 @@ card adds a site fix or a feature.
 Paused until P8. Before any site item becomes a card, its symptom is
 confirmed on current `main` (`docs/plan.md` rule 8). Source in brackets.
 
+- P3.63 Mistral costs ~40 s CPU (was 4 s) since P3.48: its real animations run, and each forced layout re-runs layout over the whole document; the inline-style subtree restyle (0d7dddf) helps little because the main page notes other changes between writes, and one iframe uses container queries (`g.styles.queried`). Needs incremental layout; first log what the main page notes between layouts (P3.48b/d, 2026-10-08).
 - P8.1 split `browser/` into its own repo with `git filter-repo`, depend on Aye through O4.2/O4.3, move `tests/browser.rs` and the browser docs with it (decision 2026-10-08).
 - P1.6 `page_load.py` writes `last.stdout`/`last.stderr` into the archive folder; move them under `target/page-load-out/`; set a floor for the 0.8 CPU/wall warning (P1.5).
 - P1.14 `visual` field per site in `sites.json` (ok / defects / date), printed by `check`; W3 needs it (screens review 2026-10-08).

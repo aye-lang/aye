@@ -20,6 +20,7 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | P2.10 | 2026-10-07 | `Document.node` uses `unreachable` for a stale handle (`browser/dom/dom.ore`) | 9c909eb |
 | O1.2 | 2026-10-08 | std documented in tiers: the spec keeps the CLI modules in full and an index line per other module; `ore doc --signatures std.<m>` is their API; `tests/spec.rs` checks the index and `///` coverage (decision in `docs/decisions.md`, "How std is documented as it grows") | a3498da |
 | O1.3 | 2026-10-08 | `std.net`: TCP `listen`/`accept`/`connect`/`read`/`readTimeout`/`write`/`close`, IPv4 only; golden `tests/cases/net_echo.ore`; gap #49 worked around with C helpers in `src/cgen.rs` (→ O1.3a) | 56967d4 |
+| O1.3a | 2026-10-08 | `extern("name") fn` takes a C link name; `std.net` calls libc `listen`/`connect` directly; E0115 for an empty name or a body; errno stays a tiny helper (its symbol differs per OS) | 7b893ee |
 
 ## Browser lane
 
@@ -85,6 +86,10 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | P3.52 | 2026-10-08 | `text-overflow: ellipsis` and `-webkit-line-clamp` (fix: clamp counts lines through child blocks, 943ae56) | 3483049 |
 | P3.55 | 2026-10-08 | ICO and CUR decoder | a8513aa |
 | P3.57 | 2026-10-08 | `window_agents`: the agent socket appears only once it listens (0/30 failures under load; 2/30 in an earlier run unexplained, keep logs if it recurs) | 31b1242 |
+| P3.48 | 2026-10-08 | `document.fonts`, `'prop' in el.style`, `super` fixes, iterable DOMTokenList; MDN and Mistral archives re-captured (the pages now load more); mdn 16 errors | ef3c6bc |
+| P3.48b | 2026-10-08 | Bisect: mdn failure = archive misses from chunks the page now loads; Mistral 4 → 40 s = its real animations run (→ P3.63) | – |
+| P3.48d | 2026-10-08 | Inline-style changes under a whole-document `:has()` dependency take the subtree restyle (Mistral 40 → 37 s) | 0d7dddf |
+| P3.58 | 2026-10-08 | Typed array views share one ArrayBuffer byte store; mdn 17 errors (P3.58a) | f05e682 |
 | P4.6 | 2026-10-07 | A page fetches a failed image URL once | abeff4f |
 | P4.7 | 2026-10-07 | Diagnose: GitHub's 41 s replay was machine load (CPU 3.4–3.7 s replay vs 3.7–3.9 s live) | – |
 | P4.9 | 2026-10-07 | Computed styles reused when no style input changed | 607ceb8 |
