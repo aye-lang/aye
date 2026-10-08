@@ -88,13 +88,22 @@ pub fn viewRead(it: *Interp, store: u32, at: u32, kind: u32, le: bool) f64 {
     }
     let v = x as f64
     if kind == K_INT8 {
-        return if v >= 128.0 { v - 256.0 } else { v }
+        if v >= 128.0 {
+            return v - 256.0
+        }
+        return v
     }
     if kind == K_INT16 {
-        return if v >= 32768.0 { v - 65536.0 } else { v }
+        if v >= 32768.0 {
+            return v - 65536.0
+        }
+        return v
     }
     if kind == K_INT32 {
-        return if v >= 2147483648.0 { v - 4294967296.0 } else { v }
+        if v >= 2147483648.0 {
+            return v - 4294967296.0
+        }
+        return v
     }
     if kind == K_FLOAT32 {
         return f32FromBits(x as u32)
@@ -130,7 +139,10 @@ fn int64Bits(n: f64) u64 {
     }
     let t = trunc(n)
     if t >= 0.0 {
-        return if t < 18446744073709551616.0 { t as u64 } else { 0 }
+        if t < 18446744073709551616.0 {
+            return t as u64
+        }
+        return 0
     }
     if -t >= 9223372036854775808.0 {
         return 0x8000000000000000
@@ -158,7 +170,10 @@ pub fn viewWrite(it: *mut Interp, store: u32, at: u32, kind: u32, n: f64, le: bo
         return
     }
     for k in 0..size {
-        let shift = if le { 8 * k as u64 } else { 8 * (size - 1 - k) as u64 }
+        var shift = 8 * (size - 1 - k) as u64
+        if le {
+            shift = 8 * k as u64
+        }
         ob.elems[at + k] = numVal(((x >> shift) & 255) as f64)
     }
 }
@@ -186,7 +201,7 @@ pub fn typedGet(it: *Interp, o: u32, idx: u32) Value {
 
 /// o[idx] = v of typed array o (ignored past its end).
 pub fn typedSet(it: *mut Interp, o: u32, idx: u32, v: Value) JsError!void {
-    let n = try it.toNumber(v)
+    let n = try elemNumber(it, v)
     match it.heap.obj(o).data {
         .View { store, off, len, kind } => {
             if idx < len {
@@ -195,6 +210,17 @@ pub fn typedSet(it: *mut Interp, o: u32, idx: u32, v: Value) JsError!void {
         }
         _ => {}
     }
+}
+
+// The number to store: a BigInt (BigInt64Array) is taken as its number.
+fn elemNumber(it: *mut Interp, v: Value) JsError!f64 {
+    match v {
+        .Big { .. } => {
+            return bigNumber(it, v)
+        }
+        _ => {}
+    }
+    return it.toNumber(v)
 }
 
 fn argU32(it: *mut Interp, a: Args, i: usize) JsError!u32 {
@@ -225,7 +251,7 @@ fn engineViewGet(it: *mut Interp, a: Args) JsError!Value {
     }
     let at = try argU32(it, a, 1)
     let kind = try argU32(it, a, 2)
-    return numVal(viewRead(it, store, at, kind, it.toBool(it.arg(a, 3))))
+    return numVal(viewRead(it, store, at, kind, it.toBoolean(it.arg(a, 3))))
 }
 
 // viewSet(store, byteIndex, kind, value, littleEndian)
@@ -236,7 +262,7 @@ fn engineViewSet(it: *mut Interp, a: Args) JsError!Value {
     }
     let at = try argU32(it, a, 1)
     let kind = try argU32(it, a, 2)
-    let n = try it.toNumber(it.arg(a, 3))
-    viewWrite(it, store, at, kind, n, it.toBool(it.arg(a, 4)))
+    let n = try elemNumber(it, it.arg(a, 3))
+    viewWrite(it, store, at, kind, n, it.toBoolean(it.arg(a, 4)))
     return Value.Undefined
 }

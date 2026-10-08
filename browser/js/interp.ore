@@ -983,6 +983,15 @@ pub struct Interp {
             if cls == Class.Proxy {
                 return proxyGet(self, cur, key, receiver)
             }
+            if cls == Class.TypedArray {
+                if key == A_LENGTH {
+                    return numVal(typedLen(self, cur) as f64)
+                }
+                let idx = self.heap.atoms.indexOf(key)
+                if idx != NONE {
+                    return typedGet(self, cur, idx)
+                }
+            }
             if cls == Class.Array || cls == Class.Arguments {
                 if key == A_LENGTH {
                     return numVal(ob.nelems as f64)
@@ -1095,6 +1104,9 @@ pub struct Interp {
                     match v {
                         .Obj { o: oid } => {
                             let ob = self.heap.obj(oid)
+                            if ob.class == Class.TypedArray {
+                                return typedGet(self, oid, idx)
+                            }
                             if (ob.class == Class.Array || ob.class == Class.Arguments) && idx < ob.nelems {
                                 let e = ob.elems[idx]
                                 match e {
@@ -1175,12 +1187,26 @@ pub struct Interp {
         match k {
             .Num { n } => {
                 let idx = self.numIndex(n)
+                if idx == NONE {
+                    // A number that is no index (-1, 1.5, NaN) is no key of a typed array.
+                    match v {
+                        .Obj { o: oid } => {
+                            if self.heap.obj(oid).class == Class.TypedArray {
+                                return
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 if idx != NONE {
                     match v {
                         .Obj { o: oid } => {
                             let cls = self.heap.obj(oid).class
                             if cls == Class.Array || cls == Class.Arguments {
                                 return self.setElem(oid, idx, value)
+                            }
+                            if cls == Class.TypedArray {
+                                return typedSet(self, oid, idx, value)
                             }
                         }
                         _ => {}
@@ -1235,6 +1261,12 @@ pub struct Interp {
                 try self.typeError("Cannot assign to module namespace")
             }
             return
+        }
+        if cls == Class.TypedArray {
+            let idx = self.heap.atoms.indexOf(key)
+            if idx != NONE {
+                return typedSet(self, o, idx, value)
+            }
         }
         if cls == Class.Array || cls == Class.Arguments {
             let idx = self.heap.atoms.indexOf(key)
@@ -1351,6 +1383,12 @@ pub struct Interp {
             return true
         }
         let ob = self.heap.obj(o)
+        if ob.class == Class.TypedArray {
+            let idx = self.heap.atoms.indexOf(key)
+            if idx != NONE {
+                return idx < typedLen(self, o)
+            }
+        }
         if ob.class == Class.Array || ob.class == Class.Arguments {
             if key == A_LENGTH {
                 return true
@@ -1392,6 +1430,12 @@ pub struct Interp {
         if ob.frozen {
             return false
         }
+        if ob.class == Class.TypedArray {
+            let idx = self.heap.atoms.indexOf(key)
+            if idx != NONE {
+                return idx >= typedLen(self, o)
+            }
+        }
         if ob.class == Class.Array || ob.class == Class.Arguments {
             let idx = self.heap.atoms.indexOf(key)
             if idx != NONE {
@@ -1420,6 +1464,14 @@ pub struct Interp {
         let cls = self.heap.obj(o).class
         if cls == Class.Proxy {
             return proxyOwnKeys(self, o, out, all, false)
+        }
+        if cls == Class.TypedArray {
+            let n = typedLen(self, o)
+            for i in 0..n {
+                self.msg.clear()
+                try self.msg.appendUint(i as u64)
+                try out.append(try self.intern(self.msg.bytes()))
+            }
         }
         if cls == Class.Array || cls == Class.Arguments {
             let n = self.heap.obj(o).nelems

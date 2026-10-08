@@ -88,5 +88,5 @@ console.log(show(m), m.at(-1), Array.prototype.slice.call(m, 1).join(","));
 var strings = ["<div>", "</div>"];
 var hashes = new Uint32Array(2).fill(5381);
 for (var s of strings) for (var i = 0; i < s.length; i++) hashes[i % 2] = (hashes[i % 2] * 33) ^ s.charCodeAt(i);
-var digest = btoa(String.fromCharCode(...new Uint8Array(hashes.buffer)));
+var digest = String.fromCharCode(...new Uint8Array(hashes.buffer)).length + ":" + Array.from(new Uint8Array(hashes.buffer)).join(".");
 console.log(digest, hashes[0], hashes[1]);
