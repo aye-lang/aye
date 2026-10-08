@@ -264,7 +264,7 @@ fn classify(items: &mut [Item]) {
                     Br::FnType
                 } else if operand && prev2_tok == Some(&Tok::Kw(Kw::Fn)) {
                     Br::FnParams
-                } else if operand {
+                } else if operand || prev_tok == Some(&Tok::Kw(Kw::Extern)) {
                     Br::Call
                 } else {
                     Br::Group

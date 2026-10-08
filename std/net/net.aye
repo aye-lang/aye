@@ -348,8 +348,8 @@ fn noSigpipe(fd: i32) {
 }
 
 extern fn aye_std_errno() i32
-extern ("listen") fn cListen(fd: i32, backlog: i32) i32
-extern ("connect") fn cConnect(fd: i32, addr: [*]u8, len: u32) i32
+extern("listen") fn cListen(fd: i32, backlog: i32) i32
+extern("connect") fn cConnect(fd: i32, addr: [*]u8, len: u32) i32
 extern fn socket(domain: i32, kind: i32, protocol: i32) i32
 extern fn bind(fd: i32, addr: [*]u8, len: u32) i32
 extern fn accept(fd: i32, addr: ?[*]u8, len: ?[*]u32) i32
