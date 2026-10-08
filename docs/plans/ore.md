@@ -67,7 +67,7 @@ built-in database and cloud clients (`@cimport` covers them).
 - Commands (`USAGE`, `src/main.rs:6`): build, run, emit-c, check, fix, test, fmt, doc --signatures, cimport, explain, spec.
 - std: coro, diag, fs, heap, list, log, map, math, mem, net (IPv4 TCP, O1.3), os, pool, sort, sync, testing, text, thread, time. Missing for O6: http, json, path, process, wall clock, crypto, base64/hex, fs directories and stat.
 - std docs (O1.2): new modules take the index form: one line in `docs/spec.md` §15 plus `///` on every `pub fn` (`tests/spec.rs`).
-- Tests: `tests/golden.rs` (cases, errors, tests, fix, modules, ffi, cimport), `tests/fmt.rs`, `tests/spec.rs`, `tests/browser.rs`. No conformance suite yet (O1.1).
+- Tests: `tests/golden.rs` (cases, errors, tests, fix, modules, ffi, cimport), `tests/fmt.rs`, `tests/spec.rs`, `tests/browser.rs`. `tests/conformance.rs` (13 areas, 29 programs, native; O1.1).
 - Open gaps: #3 (ASan golden, P2.9), #50 (per-OS declarations; O8 needs it), #51 (tag names, O1.7).
 - Toolchain: Homebrew LLVM 23 for ASan and wasm32 (flags in `done.md`, O0.1); Node 22, Go and `ab` are installed locally.
 - Stale: `README.md:405-410` says `ore fmt`, `ore doc` and `Pool` are missing (O6.4).
@@ -117,19 +117,6 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - notes: model the golden on the ThreadSanitizer one in `tests/golden.rs`. Keep the debug free queue (it catches double free and write-after-free); poison only under ASan. Also try the TSan golden with Homebrew clang (`-fsanitize=thread`): if it runs, M10's last item (milestones.md table) becomes done.
 
 ## Cards: O1 server basics
-
-#### O1.1: conformance harness
-- lane: ore
-- goal: `tests/conformance/<area>/*.ore` with `.out` files, run per target, print passed/total per area and target; seeded with a few programs per existing std module.
-- serves: O11 (and the conformance part of O6)
-- files: `tests/conformance.rs` (new), `tests/conformance/` (new), `Cargo.toml` if it needs `harness = false`
-- verify: `cargo test --release --test conformance` → exit 0 and a table with one row per area
-- depends on: –
-- parallel with: all
-- where: cloud
-- model: sonnet
-- time box: 45 min
-- notes: one target (native) now; O2.3 adds wasm32-wasi rows.
 
 #### O1.4a: std.http serve
 - lane: ore
@@ -217,7 +204,7 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - serves: O6
 - files: `std/json/` (new), `docs/spec.md` §15, `tests/conformance/json/`
 - verify: `cargo test --release --test conformance` → exit 0, area `json` with the RFC 8259 valid and invalid cases
-- depends on: O1.1
+- depends on: –
 - parallel with: O3.2, O3.3 (merge one after the other)
 - where: cloud
 - model: sonnet
@@ -243,7 +230,7 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - serves: O6
 - files: `std/time/time.ore`, `tests/cases/` or `tests/conformance/time/`
 - verify: `cargo test --release --test conformance` → exit 0, area `time` with fixed timestamps (leap years, 1970, 2038+)
-- depends on: O1.1
+- depends on: –
 - parallel with: O3.1, O3.3
 - where: cloud
 - model: sonnet
@@ -256,7 +243,7 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - serves: O6
 - files: `std/crypto/` (new), `docs/spec.md` §15
 - verify: `cargo test --release --test conformance` → exit 0, area `crypto` with the FIPS 180-4 and RFC 4231 vectors
-- depends on: O1.1
+- depends on: –
 - parallel with: O3.1, O3.2
 - where: cloud
 - model: sonnet

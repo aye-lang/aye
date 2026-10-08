@@ -12,7 +12,7 @@ as the acceptance test of `std.http`. Finished steps are in
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Ore/Aye language ([`plans/ore.md`](plans/ore.md)) | 1, most slots | P2 leftovers + O1 server basics | O1.4a, O1.1, then O1.7 | cloud once X1.2 is done; local until then |
+| Ore/Aye language ([`plans/ore.md`](plans/ore.md)) | 1, most slots | P2 leftovers + O1 server basics | O1.4a, O1.7 | cloud once X1.2 is done; local until then |
 | Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold) | – until O6–O9 | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 (F1.1 only) | F1.1, after O1.4a | cloud |
 
