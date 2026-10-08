@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<title>Layout restyle with selectors on the style attribute</title>
+<style>
+body { margin: 0; font-size: 10px }
+.a:has(+ .b) { width: 15px }
+.a, .b, .n { height: 5px; width: 20px }
+[style*="40px"] + .n { width: 50px }
+.q:has([style]) .r { height: 9px }
+.r { display: block; height: 2px }
+</style>
+<div id="row"><div class="a" id="a"></div><div class="b" id="b"></div><div class="n" id="n"></div></div>
+<div class="q" id="q"><span class="r" id="r"></span><i id="i"></i></div>
+<pre id="out"></pre>
+<script>
+// Written at the end: a change to the document between the steps would
+// not be one to inline styles alone.
+const lines = [];
+function log(...parts) { lines.push(parts.join(' ')); }
+const $ = id => document.getElementById(id);
+function boxes() {
+  return [...document.body.querySelectorAll('*')].filter(e => e.id && e.id !== 'out').map(e => e.id + ':' + [e.offsetLeft, e.offsetTop, e.offsetWidth, e.offsetHeight].join(',')).join(' ');
+}
+function check(name) {
+  const fast = boxes();
+  const sheet = document.createElement('style');
+  sheet.textContent = '.unused {}';
+  document.head.append(sheet);
+  const full = boxes();
+  sheet.remove();
+  boxes(); // styled with the sheets of the page again, for the next change
+  log(name, fast === full ? 'same' : 'DIFF full ' + full, fast);
+}
+const steps = [
+  ['sibling sees style', () => $('b').style.width = '40px'],
+  ['sibling no longer', () => $('b').style.width = '41px'],
+  [':has([style])', () => $('i').style.color = 'red'],
+  [':has([style]) off', () => $('i').removeAttribute('style')],
+];
+check('start');
+for (const [name, change] of steps) {
+  change();
+  check(name);
+}
+document.getElementById('out').textContent = lines.join('\n') + '\n';
+</script>

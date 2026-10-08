@@ -1,0 +1,14 @@
+#document
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>
+        "super in class field initializers"
+      "\n"
+    <body>
+      <p id="out">
+        "AB An sAB"
+      "\n"
+      <script>
+        "\n// The Mistral blog's elements declare `resize = () => { super.resize(); ... }`.\nclass A {\n  resize() { return 'A'; }\n  static make() { return 'sA'; }\n}\nclass B extends A {\n  resize = () => super.resize() + 'B';\n  name = super.resize() + 'n';\n  static made = super.make() + 'B';\n}\nconst b = new B();\ndocument.getElementById('out').textContent = [b.resize(), b.name, B.made].join(' ');\n"
+      "\n"

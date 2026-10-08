@@ -2482,7 +2482,7 @@ pub struct Interp {
                             self.env = saved
                             atom = try self.toKey(kv)
                         }
-                        let v = try self.runField(value, env, objVal(thisObj))
+                        let v = try self.runField(value, env, objVal(thisObj), self.homeOf(ctor))
                         try self.defineOwn(thisObj, atom, v, self.fieldFlags(atom))
                     }
                 }
@@ -2500,11 +2500,22 @@ pub struct Interp {
         return F_DEFAULT
     }
 
-    fn runField(self: *mut Self, value: u32, env: u32, thisv: Value) JsError!Value {
-        return match self.ast.node(value) {
-            .Func { f } => try self.invoke(f, env, NONE, thisv, self.stack.len(), 0, NONE)
-            _ => Value.Undefined
+    // An initializer runs as a method of `home` (the prototype for an
+    // instance field, the constructor for a static one), so `super` in it
+    // and in its arrow functions works.
+    fn runField(self: *mut Self, value: u32, env: u32, thisv: Value, home: u32) JsError!Value {
+        match self.ast.node(value) {
+            .Func { f } => {
+                // On the stack: invoke allocates before its frame holds it.
+                let base = self.stack.len()
+                defer self.truncate(base)
+                let fobj = try self.newObjectOf(Class.Function, self.function_proto, ObjData.Closure { func: f, env: env, home: home, outer: NONE })
+                try self.push(objVal(fobj))
+                return try self.invoke(f, env, fobj, thisv, self.stack.len(), 0, NONE)
+            }
+            _ => {}
         }
+        return Value.Undefined
     }
 
     // super(...) of the derived constructor `fn`: stack[base] is the
@@ -2624,13 +2635,13 @@ pub struct Interp {
                     }
                     if kind == PROP_FIELD {
                         if is_static {
-                            let fv = try self.runField(value, self.env, objVal(ctor))
+                            let fv = try self.runField(value, self.env, objVal(ctor), ctor)
                             try self.defineOwn(ctor, atom, fv, self.fieldFlags(atom))
                         }
                         continue
                     }
                     if kind == PROP_STATIC_BLOCK {
-                        try self.runField(value, self.env, objVal(ctor))
+                        try self.runField(value, self.env, objVal(ctor), ctor)
                         continue
                     }
                     let m = try self.eval(value)

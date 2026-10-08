@@ -131,6 +131,17 @@ fn simpleKeys(s: Simple, out: *mut List(u64)) AllocError!bool {
     return true
 }
 
+// Does a selector of `sheet` (an argument of `:is()` or `:has()` too)
+// look at the `style` attribute?
+fn looksAtStyle(sheet: *Sheet) bool {
+    for s in sheet.simples.items() {
+        if s.kind == SelKind.Attr && text.eqlIgnoreCase(s.name, "style") {
+            return true
+        }
+    }
+    return false
+}
+
 // Does a change with these keys (`simpleKeys`) see `change`?
 fn keysSee(keys: []u64, change: StyleChange) bool {
     if change.what < 2 {
@@ -170,9 +181,12 @@ pub struct RestyleDeps {
     deep_any: bool
     of_selector: bool
     whole: bool
+    // A selector looks at the `style` attribute: a change to it is not
+    // one that only the element's own declarations see.
+    style_attr: bool
 
     pub fn init(alloc: Allocator) RestyleDeps {
-        return RestyleDeps { keys: List(usize).init(alloc), names: List(u64).init(alloc), uses: List(HasUse).init(alloc), deep: IntMap(u64, bool).init(alloc), deep_any: false, of_selector: false, whole: false }
+        return RestyleDeps { keys: List(usize).init(alloc), names: List(u64).init(alloc), uses: List(HasUse).init(alloc), deep: IntMap(u64, bool).init(alloc), deep_any: false, of_selector: false, whole: false, style_attr: false }
     }
 
     pub fn deinit(self: *mut Self) {
@@ -206,6 +220,17 @@ pub struct RestyleDeps {
         if quirks |q| {
             try self.addDeep(q)
         }
+        self.style_attr = looksAtStyle(author) || looksAtStyle(ua)
+        if quirks |q| {
+            self.style_attr = self.style_attr || looksAtStyle(q)
+        }
+    }
+
+    /// Is `change` one to the `style` attribute, which no selector looks
+    /// at? It changes only the styles of its element and of what inherits
+    /// from it, even when `whole` is set.
+    pub fn onlyOwnStyle(self: *Self, change: StyleChange) bool {
+        return !self.style_attr && !change.token && change.what == attrChange("style").what
     }
 
     /// Can `change` at an element change the styles of elements other

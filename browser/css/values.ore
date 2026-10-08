@@ -176,6 +176,13 @@ fn pairLonghands(name: []u8) ?[2]usize {
     return null
 }
 
+/// Is `name` (lower case) a property the cascade knows, longhand or
+/// shorthand? (`'transform' in el.style`.)
+pub fn isProperty(name: []u8) bool {
+    var longhands = [12]usize{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+    return propertyIndex(name) != null || shorthandLonghands(name, longhands[..]) > 0
+}
+
 // The longhands of the shorthand `name` into `out`; how many (0 when
 // `name` is not a shorthand).
 fn shorthandLonghands(name: []u8, out: []mut usize) usize {

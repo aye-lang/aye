@@ -1,0 +1,12 @@
+<!doctype html>
+<title>document.fonts</title>
+<p id="out">pending</p>
+<script>
+// The Mistral blog awaits document.fonts.load() before it starts its page code.
+const fonts = document.fonts;
+const parts = [fonts instanceof FontFaceSet, fonts.status, fonts.check('16px Inter'), fonts.size];
+Promise.all([fonts.load('500 96px ALTMistral'), fonts.ready]).then(([faces, ready]) => {
+  parts.push(Array.isArray(faces), faces.length, ready === fonts);
+  document.getElementById('out').textContent = parts.join(' ');
+});
+</script>
