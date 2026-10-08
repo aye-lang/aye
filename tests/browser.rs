@@ -1624,11 +1624,23 @@ fn window_forms_html5() {
         "key:tab key:tab key:tab key:return",
         "key:tab text:4 key:tab key:tab key:return",
     ];
+    // The address bar is part of the golden PNG, so the page is loaded
+    // from a copy at a fixed path that does not depend on the checkout.
+    let fixed_dir = "/tmp/anyknown-forms-html5";
+    let fixed = format!("{fixed_dir}/forms_html5.html");
+    std::fs::create_dir_all(fixed_dir).unwrap();
+    for name in ["forms_html5.html", "result.html"] {
+        std::fs::write(
+            format!("{fixed_dir}/{name}"),
+            std::fs::read(root().join("browser/tests/ui").join(name)).unwrap(),
+        )
+        .unwrap();
+    }
     let mut transcript = String::new();
     let image = scratch().join("validation.png");
     for (i, events) in cases.iter().enumerate() {
         let mut args = vec![
-            "browser/tests/ui/forms_html5.html",
+            fixed.as_str(),
             "--font",
             "fixed",
             "--width",
@@ -1654,7 +1666,10 @@ fn window_forms_html5() {
         );
         transcript.push_str(&format!(
             "events: {events}\n{}\n",
-            rooted(&text(&out.stdout))
+            rooted(&text(&out.stdout)).replace(
+                &format!("file://{fixed_dir}/"),
+                "file://$ROOT/browser/tests/ui/"
+            )
         ));
     }
     let golden = root().join("browser/tests/ui/forms_html5.validation.png");
