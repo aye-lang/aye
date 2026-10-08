@@ -117,6 +117,37 @@ removed in cff3f60.
   than one step; the helper is one C function and a std function that
   programs want anyway.
 
+#### 54. `@cimport` of a glibc header takes the wrong files
+
+- **Need:** `@cimport("math.h")` and `@cimport("pthread.h")` declare the
+  same things on Ubuntu 24.04 (glibc) as on macOS.
+- **Repro:** on Linux, `aye cimport math.h` has constants but no
+  function (`m.sqrt`: E0081), and a program with
+  `@cimport("pthread.h")` that also uses `std.time` (`browser`) fails
+  with E0096: `nanosleep` and `clock` are declared twice with different
+  signatures.
+- **Cause:** for a system header, the generator
+  (`src/cimport/generate.rs`) took the header itself and the headers of
+  the header's directory that it includes itself. glibc declares the
+  math functions in `bits/mathcalls.h` (through `__MATHCALL`), in
+  `/usr/include/aarch64-linux-gnu/bits/`, another directory: none came
+  in. glibc's `pthread.h` and `time.h` both sit in `/usr/include`, and
+  `pthread.h` includes `time.h` first, so `time.h`'s `clock` (`clock_t`
+  is `long`) and `nanosleep` (`struct timespec *`) came in and clashed
+  with `browser/js/interp.aye`'s `clock() u64` and `std/time`'s
+  `nanosleep([*]i64, [*]i64)`. macOS escaped by accident: its
+  `/usr/include/pthread.h` is a link to `pthread/pthread.h`, so its
+  directory after `canonicalize` is `pthread/`.
+- **Fix:** one rule on both OSes. A system header's directory counts
+  only when the header is named with it (`SDL2/SDL.h`); a header named
+  bare (`pthread.h`, `zlib.h`) is in an include root such as
+  `/usr/include`, whose other headers are separate headers. The headers
+  a system header includes from a `bits/` directory (glibc's internal
+  headers, never included alone) count as its own.
+- **Hit by:** X1.3 (first Linux run: `aye check browser`, golden
+  `cimport/system.aye`, spec `aye_blocks_compile`, `codes` E0112).
+- **Status:** open.
+
 #### 51. No way to print an error or enum tag name
 
 - **Need:** get the name of an error tag or enum tag as a string, for
