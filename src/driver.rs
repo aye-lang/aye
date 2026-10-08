@@ -55,7 +55,8 @@ impl Root {
     pub fn load(path: &str) -> Result<Root, String> {
         let p = Path::new(path);
         if !p.is_dir() {
-            let text = std::fs::read_to_string(p).map_err(|e| format!("cannot read {path}: {e}"))?;
+            let text =
+                std::fs::read_to_string(p).map_err(|e| format!("cannot read {path}: {e}"))?;
             return Ok(Root::single(path, &text));
         }
         let mut names: Vec<PathBuf> = std::fs::read_dir(p)
@@ -70,16 +71,36 @@ impl Root {
         let mut files = Vec::new();
         for f in names {
             let name = f.to_string_lossy().into_owned();
-            let text = std::fs::read_to_string(&f).map_err(|e| format!("cannot read {name}: {e}"))?;
-            files.push(SourceFile { name, text, std: false });
+            let text =
+                std::fs::read_to_string(&f).map_err(|e| format!("cannot read {name}: {e}"))?;
+            files.push(SourceFile {
+                name,
+                text,
+                std: false,
+            });
         }
-        Ok(Root { files, base: p.to_path_buf(), doc_tests: false })
+        Ok(Root {
+            files,
+            base: p.to_path_buf(),
+            doc_tests: false,
+        })
     }
 
     /// A root module of one file, `name`, with the text `src`.
     pub fn single(name: &str, src: &str) -> Root {
-        let base = Path::new(name).parent().unwrap_or(Path::new("")).to_path_buf();
-        Root { files: vec![SourceFile { name: name.to_string(), text: src.to_string(), std: false }], base, doc_tests: false }
+        let base = Path::new(name)
+            .parent()
+            .unwrap_or(Path::new(""))
+            .to_path_buf();
+        Root {
+            files: vec![SourceFile {
+                name: name.to_string(),
+                text: src.to_string(),
+                std: false,
+            }],
+            base,
+            doc_tests: false,
+        }
     }
 }
 
@@ -114,8 +135,11 @@ pub fn front_end(root: Root, need_main: Option<bool>) -> Checked {
         d
     };
     let result = ast.map_err(diags).and_then(|ast| {
-        let need_main =
-            need_main.unwrap_or_else(|| !ast.items.iter().any(|i| matches!(i, ast::Item::Test(t) if t.module.is_empty())));
+        let need_main = need_main.unwrap_or_else(|| {
+            !ast.items
+                .iter()
+                .any(|i| matches!(i, ast::Item::Test(t) if t.module.is_empty()))
+        });
         sema::check(&ast, need_main, &names).map_err(diags)
     });
     Checked { files, result }
@@ -135,12 +159,25 @@ pub fn apply_fixes(src: &str, diags: &[Diag]) -> (String, Vec<(Span, String)>) {
         if applied.contains(&f) {
             continue;
         }
-        let ranges: Vec<(usize, usize)> = f.edits.iter().map(|e| (offset(src, e.start), offset(src, e.end))).collect();
-        let overlaps = ranges.iter().any(|&(s, e)| edits.iter().any(|&(ts, te, _)| (s < te && ts < e) || s == ts));
+        let ranges: Vec<(usize, usize)> = f
+            .edits
+            .iter()
+            .map(|e| (offset(src, e.start), offset(src, e.end)))
+            .collect();
+        let overlaps = ranges.iter().any(|&(s, e)| {
+            edits
+                .iter()
+                .any(|&(ts, te, _)| (s < te && ts < e) || s == ts)
+        });
         if overlaps {
             continue;
         }
-        edits.extend(ranges.iter().zip(&f.edits).map(|(&(s, e), edit)| (s, e, edit.replacement.as_str())));
+        edits.extend(
+            ranges
+                .iter()
+                .zip(&f.edits)
+                .map(|(&(s, e), edit)| (s, e, edit.replacement.as_str())),
+        );
         applied.push(f);
     }
     edits.sort_by_key(|&(s, ..)| std::cmp::Reverse(s));
@@ -148,7 +185,13 @@ pub fn apply_fixes(src: &str, diags: &[Diag]) -> (String, Vec<(Span, String)>) {
     for (s, e, r) in edits {
         out.replace_range(s..e, r);
     }
-    (out, applied.iter().map(|f| (f.edits[0].start, f.help.clone())).collect())
+    (
+        out,
+        applied
+            .iter()
+            .map(|f| (f.edits[0].start, f.help.clone()))
+            .collect(),
+    )
 }
 
 /// A program in C, and the libraries it links with (`@link`).
@@ -175,14 +218,28 @@ pub fn compile_root(root: Root, mode: Mode) -> Result<CProgram, Vec<Diag>> {
     typed.tests.clear();
     let links = linked(&typed);
     let ir = oir::lower(&typed, &links);
-    let c = cgen::emit(&ir, &file_names(&checked.files), mode != Mode::Fast, mode == Mode::Debug, false);
-    Ok(CProgram { c, links, cflags: Vec::new() })
+    let c = cgen::emit(
+        &ir,
+        &file_names(&checked.files),
+        mode != Mode::Fast,
+        mode == Mode::Debug,
+        false,
+    );
+    Ok(CProgram {
+        c,
+        links,
+        cflags: Vec::new(),
+    })
 }
 
 /// The libraries the program is linked with: those of `@link`, and those
 /// of `@linkOptional` that are installed.
 fn linked(p: &sema::Program) -> Vec<String> {
-    p.links.iter().chain(p.optional_links.iter().filter(|l| link_available(l))).cloned().collect()
+    p.links
+        .iter()
+        .chain(p.optional_links.iter().filter(|l| link_available(l)))
+        .cloned()
+        .collect()
 }
 
 /// Is the library `name` (as `@link` names it) installed: a framework
@@ -194,7 +251,11 @@ pub fn link_available(name: &str) -> bool {
             .iter()
             .any(|d| Path::new(d).join(format!("{fw}.framework")).exists());
     }
-    if Command::new("pkg-config").args(["--exists", name]).status().is_ok_and(|s| s.success()) {
+    if Command::new("pkg-config")
+        .args(["--exists", name])
+        .status()
+        .is_ok_and(|s| s.success())
+    {
         return true;
     }
     let exe = std::env::temp_dir().join(format!("aye-link-{}-{name}", std::process::id()));
@@ -207,7 +268,11 @@ pub fn link_available(name: &str) -> bool {
         .stderr(Stdio::null())
         .spawn();
     let Ok(mut child) = child else { return false };
-    let _ = child.stdin.take().unwrap().write_all(b"int main(void) { return 0; }\n");
+    let _ = child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"int main(void) { return 0; }\n");
     let ok = child.wait().is_ok_and(|s| s.success());
     let _ = std::fs::remove_file(&exe);
     ok
@@ -219,14 +284,31 @@ fn file_names(files: &[SourceFile]) -> Vec<String> {
 
 /// Like `compile_root`, for a test executable: its argument is the index
 /// of the test to run. Also returns the tests and the file names.
-pub fn compile_tests_to_c(root: Root, mode: Mode) -> Result<(CProgram, Vec<sema::TestDef>, Vec<String>), Vec<Diag>> {
-    let checked = front_end(Root { doc_tests: true, ..root }, Some(false));
+pub fn compile_tests_to_c(
+    root: Root,
+    mode: Mode,
+) -> Result<(CProgram, Vec<sema::TestDef>, Vec<String>), Vec<Diag>> {
+    let checked = front_end(
+        Root {
+            doc_tests: true,
+            ..root
+        },
+        Some(false),
+    );
     let typed = checked.result?;
     let links = linked(&typed);
     let ir = oir::lower(&typed, &links);
     let files = file_names(&checked.files);
     let c = cgen::emit(&ir, &files, mode != Mode::Fast, mode == Mode::Debug, true);
-    Ok((CProgram { c, links, cflags: Vec::new() }, typed.tests, files))
+    Ok((
+        CProgram {
+            c,
+            links,
+            cflags: Vec::new(),
+        },
+        typed.tests,
+        files,
+    ))
 }
 
 /// The outcome of one test.
@@ -241,9 +323,17 @@ pub struct TestResult {
 
 pub enum Failure {
     /// `kind` is `panic`, `assertion` or `leak`.
-    At { kind: &'static str, line: u32, col: u32, message: String },
+    At {
+        kind: &'static str,
+        line: u32,
+        col: u32,
+        message: String,
+    },
     /// The test returned an error; the trace is empty outside debug mode.
-    Error { name: String, trace: Vec<(u32, u32)> },
+    Error {
+        name: String,
+        trace: Vec<(u32, u32)>,
+    },
     /// Ended in another way, such as a signal.
     Crash(String),
 }
@@ -259,7 +349,13 @@ pub enum TestError {
 /// that test. Only tests whose shown name (`name`, `module: name`)
 /// contains `filter` run, and with `module`, only those of that module.
 /// `cflags` are more flags for clang.
-pub fn run_tests(root: Root, mode: Mode, filter: &str, module: Option<&str>, cflags: &[String]) -> Result<Vec<TestResult>, TestError> {
+pub fn run_tests(
+    root: Root,
+    mode: Mode,
+    filter: &str,
+    module: Option<&str>,
+    cflags: &[String],
+) -> Result<Vec<TestResult>, TestError> {
     let (mut c, tests, files) = compile_tests_to_c(root, mode).map_err(TestError::Compile)?;
     c.cflags = cflags.to_vec();
     if let Some(m) = module
@@ -272,8 +368,14 @@ pub fn run_tests(root: Root, mode: Mode, filter: &str, module: Option<&str>, cfl
                 with.push(shown);
             }
         }
-        let list = if with.is_empty() { "none".to_string() } else { with.join(", ") };
-        return Err(TestError::Run(format!("no tests in module `{m}` (modules with tests: {list})")));
+        let list = if with.is_empty() {
+            "none".to_string()
+        } else {
+            with.join(", ")
+        };
+        return Err(TestError::Run(format!(
+            "no tests in module `{m}` (modules with tests: {list})"
+        )));
     }
     let exe = std::env::temp_dir().join(format!("aye-test-{}", std::process::id()));
     cc(&c, &exe, mode).map_err(TestError::Run)?;
@@ -295,13 +397,21 @@ pub fn run_tests(root: Root, mode: Mode, filter: &str, module: Option<&str>, cfl
         let mut failures = parse_failures(&files, &stderr);
         if !passed && failures.is_empty() {
             use std::os::unix::process::ExitStatusExt;
-            failures.push(Failure::Crash(match (out.status.code(), out.status.signal()) {
-                (Some(c), _) => format!("exit status {c}"),
-                (_, s) => format!("terminated by signal {}", s.unwrap_or(0)),
-            }));
+            failures.push(Failure::Crash(
+                match (out.status.code(), out.status.signal()) {
+                    (Some(c), _) => format!("exit status {c}"),
+                    (_, s) => format!("terminated by signal {}", s.unwrap_or(0)),
+                },
+            ));
         }
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-        results.push(TestResult { name, passed, stdout, stderr, failures });
+        results.push(TestResult {
+            name,
+            passed,
+            stdout,
+            stderr,
+            failures,
+        });
     }
     let _ = std::fs::remove_file(&exe);
     Ok(results)
@@ -314,7 +424,9 @@ pub fn run_tests(root: Root, mode: Mode, filter: &str, module: Option<&str>, cfl
 fn parse_failures(files: &[String], stderr: &str) -> Vec<Failure> {
     // `L:C` and the rest of a line that starts with `file:`.
     let pos = |l: &str| -> Option<(u32, u32, String)> {
-        let rest = files.iter().find_map(|f| l.strip_prefix(f.as_str())?.strip_prefix(':'))?;
+        let rest = files
+            .iter()
+            .find_map(|f| l.strip_prefix(f.as_str())?.strip_prefix(':'))?;
         let mut parts = rest.splitn(3, ':');
         let line = parts.next()?.parse().ok()?;
         let col = parts.next()?.parse().ok()?;
@@ -335,13 +447,27 @@ fn parse_failures(files: &[String], stderr: &str) -> Vec<Failure> {
                     lines.next();
                 }
             }
-            out.push(Failure::Error { name: name.to_string(), trace });
+            out.push(Failure::Error {
+                name: name.to_string(),
+                trace,
+            });
             continue;
         }
-        let Some((line, col, rest)) = pos(l) else { continue };
-        for (prefix, kind) in [(" panic: ", "panic"), (" assertion failed: ", "assertion"), (" leak: ", "leak")] {
+        let Some((line, col, rest)) = pos(l) else {
+            continue;
+        };
+        for (prefix, kind) in [
+            (" panic: ", "panic"),
+            (" assertion failed: ", "assertion"),
+            (" leak: ", "leak"),
+        ] {
             if let Some(message) = rest.strip_prefix(prefix) {
-                out.push(Failure::At { kind, line, col, message: message.to_string() });
+                out.push(Failure::At {
+                    kind,
+                    line,
+                    col,
+                    message: message.to_string(),
+                });
             }
         }
     }
@@ -355,12 +481,27 @@ impl TestResult {
             .failures
             .iter()
             .map(|f| match f {
-                Failure::At { kind, line, col, message } => {
-                    format!(r#"{{"kind":"{kind}","line":{line},"col":{col},"message":{}}}"#, json_str(message))
+                Failure::At {
+                    kind,
+                    line,
+                    col,
+                    message,
+                } => {
+                    format!(
+                        r#"{{"kind":"{kind}","line":{line},"col":{col},"message":{}}}"#,
+                        json_str(message)
+                    )
                 }
                 Failure::Error { name, trace } => {
-                    let t: Vec<String> = trace.iter().map(|(l, c)| format!(r#"{{"line":{l},"col":{c}}}"#)).collect();
-                    format!(r#"{{"kind":"error","error":{},"trace":[{}]}}"#, json_str(name), t.join(","))
+                    let t: Vec<String> = trace
+                        .iter()
+                        .map(|(l, c)| format!(r#"{{"line":{l},"col":{c}}}"#))
+                        .collect();
+                    format!(
+                        r#"{{"kind":"error","error":{},"trace":[{}]}}"#,
+                        json_str(name),
+                        t.join(",")
+                    )
                 }
                 Failure::Crash(m) => format!(r#"{{"kind":"crash","message":{}}}"#, json_str(m)),
             })
@@ -386,9 +527,16 @@ pub fn link_flags(links: &[String]) -> Vec<String> {
             flags.extend(["-framework".to_string(), fw.to_string()]);
             continue;
         }
-        match Command::new("pkg-config").args(["--cflags", "--libs", l]).output() {
+        match Command::new("pkg-config")
+            .args(["--cflags", "--libs", l])
+            .output()
+        {
             Ok(o) if o.status.success() => {
-                flags.extend(String::from_utf8_lossy(&o.stdout).split_whitespace().map(String::from));
+                flags.extend(
+                    String::from_utf8_lossy(&o.stdout)
+                        .split_whitespace()
+                        .map(String::from),
+                );
             }
             _ => flags.push(format!("-l{l}")),
         }
@@ -401,24 +549,38 @@ pub fn link_flags(links: &[String]) -> Vec<String> {
 pub fn cc(p: &CProgram, out: &Path, mode: Mode) -> Result<(), String> {
     let mut cmd = Command::new("clang");
     // `-pthread`: std.thread and std.sync call pthreads.
-    cmd.args(["-std=gnu11", "-fwrapv", "-fno-strict-aliasing", "-pthread", "-Wno-incompatible-library-redeclaration"])
-        .args(mode.clang_flags())
-        .args(&p.cflags)
-        .args(["-x", "c", "-", "-o"])
-        .arg(out)
-        // std.math calls libm.
-        .arg("-lm")
-        .stdin(Stdio::piped());
+    cmd.args([
+        "-std=gnu11",
+        "-fwrapv",
+        "-fno-strict-aliasing",
+        "-pthread",
+        "-Wno-incompatible-library-redeclaration",
+    ])
+    .args(mode.clang_flags())
+    .args(&p.cflags)
+    .args(["-x", "c", "-", "-o"])
+    .arg(out)
+    // std.math calls libm.
+    .arg("-lm")
+    .stdin(Stdio::piped());
     // `-x none` ends `-x c`, so that a library file among the link flags is
     // not read as C (clang warns that it is unused when there is none).
     // `-lm` is always there.
     let links: Vec<String> = p.links.iter().filter(|l| *l != "m").cloned().collect();
     let flags = link_flags(&links);
     if !flags.is_empty() {
-        cmd.args(["-Wno-unused-command-line-argument", "-x", "none"]).args(flags);
+        cmd.args(["-Wno-unused-command-line-argument", "-x", "none"])
+            .args(flags);
     }
-    let mut child = cmd.spawn().map_err(|e| format!("failed to run clang: {e}"))?;
-    child.stdin.take().unwrap().write_all(p.c.as_bytes()).map_err(|e| e.to_string())?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("failed to run clang: {e}"))?;
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(p.c.as_bytes())
+        .map_err(|e| e.to_string())?;
     let status = child.wait().map_err(|e| e.to_string())?;
     if !status.success() {
         if !p.links.is_empty() {
@@ -438,10 +600,18 @@ mod tests {
 
     #[test]
     fn link_flags_for_frameworks_libraries_and_packages() {
-        let flags = |names: &[&str]| link_flags(&names.iter().map(|n| n.to_string()).collect::<Vec<_>>());
-        assert_eq!(flags(&["framework:Cocoa", "aye_no_such_library"]), ["-framework", "Cocoa", "-laye_no_such_library"]);
+        let flags =
+            |names: &[&str]| link_flags(&names.iter().map(|n| n.to_string()).collect::<Vec<_>>());
+        assert_eq!(
+            flags(&["framework:Cocoa", "aye_no_such_library"]),
+            ["-framework", "Cocoa", "-laye_no_such_library"]
+        );
         // A package that pkg-config knows gives its flags.
-        if Command::new("pkg-config").args(["--exists", "libcurl"]).status().is_ok_and(|s| s.success()) {
+        if Command::new("pkg-config")
+            .args(["--exists", "libcurl"])
+            .status()
+            .is_ok_and(|s| s.success())
+        {
             assert!(flags(&["libcurl"]).iter().any(|f| f == "-lcurl"));
         }
     }

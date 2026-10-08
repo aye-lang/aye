@@ -57,12 +57,23 @@ fn read(p: &Path) -> Option<String> {
 /// The packages in `X.needs` that `pkg-config` does not know.
 fn missing_packages(path: &Path) -> Vec<String> {
     let needs = read(&path.with_extension("needs")).unwrap_or_default();
-    let known = |p: &str| Command::new("pkg-config").args(["--exists", p]).status().is_ok_and(|s| s.success());
-    needs.split_whitespace().filter(|p| !known(p)).map(String::from).collect()
+    let known = |p: &str| {
+        Command::new("pkg-config")
+            .args(["--exists", p])
+            .status()
+            .is_ok_and(|s| s.success())
+    };
+    needs
+        .split_whitespace()
+        .filter(|p| !known(p))
+        .map(String::from)
+        .collect()
 }
 
 fn cases(dir: &str) -> Vec<PathBuf> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join(dir);
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join(dir);
     let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().path())
@@ -74,7 +85,11 @@ fn cases(dir: &str) -> Vec<PathBuf> {
 
 /// Diagnostics as `aye check` prints them, one per line.
 fn join(diags: &[Diag]) -> String {
-    diags.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("\n")
+    diags
+        .iter()
+        .map(|d| d.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn name(p: &Path) -> String {
@@ -93,36 +108,60 @@ fn run_case(path: &Path, work: &Path) -> Result<(), String> {
     };
     for &mode in modes {
         let c = driver::compile_to_c(&name(path), &src, mode).map_err(|d| join(&d))?;
-        let exe = work.join(format!("{}-{mode:?}", path.file_stem().unwrap().to_string_lossy()));
+        let exe = work.join(format!(
+            "{}-{mode:?}",
+            path.file_stem().unwrap().to_string_lossy()
+        ));
         driver::cc(&c, &exe, mode)?;
-        let out = Command::new(&exe).env("SDL_VIDEODRIVER", "dummy").output().map_err(|e| e.to_string())?;
+        let out = Command::new(&exe)
+            .env("SDL_VIDEODRIVER", "dummy")
+            .output()
+            .map_err(|e| e.to_string())?;
         let stdout = String::from_utf8_lossy(&out.stdout);
         let stderr = String::from_utf8_lossy(&out.stderr);
         if stdout != expected_out {
-            return Err(format!("[{mode:?}] stdout mismatch\n--- expected\n{expected_out}--- got\n{stdout}"));
+            return Err(format!(
+                "[{mode:?}] stdout mismatch\n--- expected\n{expected_out}--- got\n{stdout}"
+            ));
         }
         if let Some(full) = &expected_error {
-            let want = if mode == Mode::Debug { full.clone() } else { format!("{}\n", full.lines().next().unwrap_or("")) };
+            let want = if mode == Mode::Debug {
+                full.clone()
+            } else {
+                format!("{}\n", full.lines().next().unwrap_or(""))
+            };
             if out.status.code() != Some(1) {
-                return Err(format!("[{mode:?}] expected exit status 1, got {}", out.status));
+                return Err(format!(
+                    "[{mode:?}] expected exit status 1, got {}",
+                    out.status
+                ));
             }
             if stderr != want {
-                return Err(format!("[{mode:?}] stderr mismatch\n--- expected\n{want}--- got\n{stderr}"));
+                return Err(format!(
+                    "[{mode:?}] stderr mismatch\n--- expected\n{want}--- got\n{stderr}"
+                ));
             }
             continue;
         }
         match &expected_panic {
             Some(p) => {
                 if out.status.success() {
-                    return Err(format!("[{mode:?}] expected a panic, but the program exited normally"));
+                    return Err(format!(
+                        "[{mode:?}] expected a panic, but the program exited normally"
+                    ));
                 }
                 if stderr != *p {
-                    return Err(format!("[{mode:?}] stderr mismatch\n--- expected\n{p}--- got\n{stderr}"));
+                    return Err(format!(
+                        "[{mode:?}] stderr mismatch\n--- expected\n{p}--- got\n{stderr}"
+                    ));
                 }
             }
             None => {
                 if !out.status.success() || !stderr.is_empty() {
-                    return Err(format!("[{mode:?}] program failed ({}):\n{stderr}", out.status));
+                    return Err(format!(
+                        "[{mode:?}] program failed ({}):\n{stderr}",
+                        out.status
+                    ));
                 }
             }
         }
@@ -133,21 +172,32 @@ fn run_case(path: &Path, work: &Path) -> Result<(), String> {
 fn ffi_case(path: &Path, work: &Path) -> Result<(), String> {
     let missing = missing_packages(path);
     if !missing.is_empty() {
-        println!("skipped ffi/{}: pkg-config does not know {}", name(path), missing.join(", "));
+        println!(
+            "skipped ffi/{}: pkg-config does not know {}",
+            name(path),
+            missing.join(", ")
+        );
         return Ok(());
     }
     run_case(path, work)
 }
 
 /// Run the `aye` binary in the crate root with the environment `env`.
-fn aye_env(args: &[&str], env: &[(String, String)]) -> Result<(String, String, Option<i32>), String> {
+fn aye_env(
+    args: &[&str],
+    env: &[(String, String)],
+) -> Result<(String, String, Option<i32>), String> {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_aye"));
     cmd.current_dir(env!("CARGO_MANIFEST_DIR")).args(args);
     for (k, v) in env {
         cmd.env(k, v);
     }
     let out = cmd.output().map_err(|e| e.to_string())?;
-    Ok((String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned(), out.status.code()))
+    Ok((
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.code(),
+    ))
 }
 
 fn cimport_case(path: &Path, work: &Path) -> Result<(), String> {
@@ -157,7 +207,10 @@ fn cimport_case(path: &Path, work: &Path) -> Result<(), String> {
     let mut env: Vec<(String, String)> = read(&path.with_extension("env"))
         .unwrap_or_default()
         .lines()
-        .filter_map(|l| l.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+        .filter_map(|l| {
+            l.split_once('=')
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+        })
         .collect();
     let without_libclang = env.iter().any(|(k, _)| k == "LIBCLANG_PATH");
     if !without_libclang && !aye::cimport::libclang_available() {
@@ -166,34 +219,51 @@ fn cimport_case(path: &Path, work: &Path) -> Result<(), String> {
     }
     let missing = missing_packages(path);
     if !missing.is_empty() {
-        println!("skipped cimport/{x}: pkg-config does not know {}", missing.join(", "));
+        println!(
+            "skipped cimport/{x}: pkg-config does not know {}",
+            missing.join(", ")
+        );
         return Ok(());
     }
     let cache = work.join(format!("cimport-cache-{stem}"));
-    env.push(("AYE_CACHE_DIR".to_string(), cache.to_string_lossy().into_owned()));
+    env.push((
+        "AYE_CACHE_DIR".to_string(),
+        cache.to_string_lossy().into_owned(),
+    ));
     if let Some(want) = read(&path.with_extension("err")) {
         let (_, err, code) = aye_env(&["check", &rel], &env)?;
         if code != Some(1) || err != want {
-            return Err(format!("`aye check {rel}`: status {code:?}\n--- expected\n{want}--- got\n{err}"));
+            return Err(format!(
+                "`aye check {rel}`: status {code:?}\n--- expected\n{want}--- got\n{err}"
+            ));
         }
     } else {
         let want = read(&path.with_extension("out")).ok_or("missing .out file")?;
         let (out, err, code) = aye_env(&["run", &rel], &env)?;
         if code != Some(0) || out != want {
-            return Err(format!("`aye run {rel}`: status {code:?}, stderr:\n{err}\n--- expected\n{want}--- got\n{out}"));
+            return Err(format!(
+                "`aye run {rel}`: status {code:?}, stderr:\n{err}\n--- expected\n{want}--- got\n{out}"
+            ));
         }
         // From the cache, without libclang.
-        env.push(("LIBCLANG_PATH".to_string(), "/nonexistent/libclang".to_string()));
+        env.push((
+            "LIBCLANG_PATH".to_string(),
+            "/nonexistent/libclang".to_string(),
+        ));
         let (_, err, code) = aye_env(&["check", &rel], &env)?;
         if code != Some(0) {
-            return Err(format!("`aye check {rel}` without libclang (from the cache): status {code:?}\n{err}"));
+            return Err(format!(
+                "`aye check {rel}` without libclang (from the cache): status {code:?}\n{err}"
+            ));
         }
     }
     let header = format!("tests/cimport/{stem}.h");
     if let Some(want) = read(&path.with_extension("gen")) {
         let (out, err, code) = aye_env(&["cimport", &header], &[])?;
         if code != Some(0) || out != want {
-            return Err(format!("`aye cimport {header}`: status {code:?}, stderr:\n{err}\n--- expected\n{want}--- got\n{out}"));
+            return Err(format!(
+                "`aye cimport {header}`: status {code:?}, stderr:\n{err}\n--- expected\n{want}--- got\n{out}"
+            ));
         }
     }
     Ok(())
@@ -205,7 +275,11 @@ fn error_case(path: &Path) -> Result<(), String> {
     match driver::compile_to_c(&name(path), &src, Mode::Debug) {
         Ok(_) => Err("compiled successfully, expected an error".into()),
         Err(d) if join(&d) == expected.trim_end() => Ok(()),
-        Err(d) => Err(format!("error mismatch\n--- expected\n{}\n--- got\n{}", expected.trim_end(), join(&d))),
+        Err(d) => Err(format!(
+            "error mismatch\n--- expected\n{}\n--- got\n{}",
+            expected.trim_end(),
+            join(&d)
+        )),
     }
 }
 
@@ -220,15 +294,25 @@ fn aye_test(args: &[&str]) -> Result<(String, Option<i32>), String> {
         .map_err(|e| e.to_string())?;
     let stderr = String::from_utf8_lossy(&out.stderr);
     if !stderr.is_empty() {
-        return Err(format!("`aye test {}` wrote to stderr:\n{stderr}", args.join(" ")));
+        return Err(format!(
+            "`aye test {}` wrote to stderr:\n{stderr}",
+            args.join(" ")
+        ));
     }
-    Ok((String::from_utf8_lossy(&out.stdout).into_owned(), out.status.code()))
+    Ok((
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        out.status.code(),
+    ))
 }
 
 fn test_case(path: &Path) -> Result<(), String> {
     let rel = format!("tests/tests/{}", name(path));
     let expected = read(&path.with_extension("out")).ok_or("missing .out file")?;
-    let status = if expected.ends_with("; 0 failed\n") { 0 } else { 1 };
+    let status = if expected.ends_with("; 0 failed\n") {
+        0
+    } else {
+        1
+    };
     let mut runs = vec![(vec![rel.as_str()], expected)];
     if let Some(json) = read(&path.with_extension("json")) {
         runs.push((vec!["--json", rel.as_str()], json));
@@ -236,10 +320,16 @@ fn test_case(path: &Path) -> Result<(), String> {
     for (args, want) in runs {
         let (got, code) = aye_test(&args)?;
         if got != want {
-            return Err(format!("`aye test {}`: stdout mismatch\n--- expected\n{want}--- got\n{got}", args.join(" ")));
+            return Err(format!(
+                "`aye test {}`: stdout mismatch\n--- expected\n{want}--- got\n{got}",
+                args.join(" ")
+            ));
         }
         if code != Some(status) {
-            return Err(format!("`aye test {}`: expected exit status {status}, got {code:?}", args.join(" ")));
+            return Err(format!(
+                "`aye test {}`: expected exit status {status}, got {code:?}",
+                args.join(" ")
+            ));
         }
     }
     Ok(())
@@ -247,7 +337,11 @@ fn test_case(path: &Path) -> Result<(), String> {
 
 /// Run the `aye` binary in `dir` and return (stdout, stderr, exit status).
 fn aye(dir: &Path, args: &[&str]) -> Result<(String, String, Option<i32>), String> {
-    let out = Command::new(env!("CARGO_BIN_EXE_aye")).current_dir(dir).args(args).output().map_err(|e| e.to_string())?;
+    let out = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .map_err(|e| e.to_string())?;
     Ok((
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -257,7 +351,10 @@ fn aye(dir: &Path, args: &[&str]) -> Result<(String, String, Option<i32>), Strin
 
 fn fix_case(path: &Path, work: &Path) -> Result<(), String> {
     let file = name(path);
-    let dir = work.join(format!("fix-{}", path.file_stem().unwrap().to_string_lossy()));
+    let dir = work.join(format!(
+        "fix-{}",
+        path.file_stem().unwrap().to_string_lossy()
+    ));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     std::fs::copy(path, dir.join(&file)).map_err(|e| e.to_string())?;
     let want_file = read(&path.with_extension("fixed")).ok_or("missing .fixed file")?;
@@ -266,17 +363,23 @@ fn fix_case(path: &Path, work: &Path) -> Result<(), String> {
     let (out, err, code) = aye(&dir, &["fix", &file])?;
     let got_file = read(&dir.join(&file)).unwrap();
     if got_file != want_file {
-        return Err(format!("fixed file mismatch\n--- expected\n{want_file}--- got\n{got_file}"));
+        return Err(format!(
+            "fixed file mismatch\n--- expected\n{want_file}--- got\n{got_file}"
+        ));
     }
     if out != want_out {
-        return Err(format!("`aye fix` stdout mismatch\n--- expected\n{want_out}--- got\n{out}"));
+        return Err(format!(
+            "`aye fix` stdout mismatch\n--- expected\n{want_out}--- got\n{out}"
+        ));
     }
     if err != want_err.clone().unwrap_or_default() {
         return Err(format!("`aye fix` stderr mismatch\n--- got\n{err}"));
     }
     let want_code = if want_err.is_some() { 1 } else { 0 };
     if code != Some(want_code) {
-        return Err(format!("`aye fix`: expected exit status {want_code}, got {code:?}"));
+        return Err(format!(
+            "`aye fix`: expected exit status {want_code}, got {code:?}"
+        ));
     }
     if want_err.is_none() {
         let (_, err, code) = aye(&dir, &["check", &file])?;
@@ -286,9 +389,14 @@ fn fix_case(path: &Path, work: &Path) -> Result<(), String> {
     }
     if let Some(want) = read(&path.with_extension("json")) {
         let rel = format!("tests/fix/{file}");
-        let (out, _, _) = aye(Path::new(env!("CARGO_MANIFEST_DIR")), &["check", "--json", &rel])?;
+        let (out, _, _) = aye(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            &["check", "--json", &rel],
+        )?;
         if out != want {
-            return Err(format!("`aye check --json` mismatch\n--- expected\n{want}--- got\n{out}"));
+            return Err(format!(
+                "`aye check --json` mismatch\n--- expected\n{want}--- got\n{out}"
+            ));
         }
     }
     Ok(())
@@ -296,7 +404,11 @@ fn fix_case(path: &Path, work: &Path) -> Result<(), String> {
 
 /// Run the `aye` binary in `dir` with `stdin`, and return (stdout, stderr,
 /// exit status).
-fn aye_stdin(dir: &Path, args: &[&str], stdin: &str) -> Result<(String, String, Option<i32>), String> {
+fn aye_stdin(
+    dir: &Path,
+    args: &[&str],
+    stdin: &str,
+) -> Result<(String, String, Option<i32>), String> {
     use std::io::Write;
     let mut child = Command::new(env!("CARGO_BIN_EXE_aye"))
         .current_dir(dir)
@@ -306,7 +418,12 @@ fn aye_stdin(dir: &Path, args: &[&str], stdin: &str) -> Result<(String, String, 
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| e.to_string())?;
-    child.stdin.take().unwrap().write_all(stdin.as_bytes()).map_err(|e| e.to_string())?;
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .map_err(|e| e.to_string())?;
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     Ok((
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -318,7 +435,11 @@ fn aye_stdin(dir: &Path, args: &[&str], stdin: &str) -> Result<(String, String, 
 /// The directory modules of `tests/modules`.
 fn module_dirs() -> Vec<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/modules");
-    let mut v: Vec<PathBuf> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.is_dir()).collect();
+    let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.is_dir())
+        .collect();
     v.sort();
     v
 }
@@ -330,7 +451,9 @@ fn module_case(path: &Path) -> Result<(), String> {
     if let Some(want) = with("err") {
         let (_, err, code) = aye(dir, &["check", &x])?;
         if err != want || code != Some(1) {
-            return Err(format!("`aye check {x}`: {code:?}\n--- expected\n{want}--- got\n{err}"));
+            return Err(format!(
+                "`aye check {x}`: {code:?}\n--- expected\n{want}--- got\n{err}"
+            ));
         }
         return Ok(());
     }
@@ -360,13 +483,17 @@ fn example1() -> Result<(), String> {
         let want_code = if want_err.is_empty() { 0 } else { 1 };
         let (out, err, code) = aye(&root.join(case), &["run", "../app"])?;
         if !out.is_empty() || err != want_err || code != Some(want_code) {
-            return Err(format!("[{case}] `aye run ../app`: {code:?}\n--- stdout\n{out}--- expected stderr\n{want_err}--- got\n{err}"));
+            return Err(format!(
+                "[{case}] `aye run ../app`: {code:?}\n--- stdout\n{out}--- expected stderr\n{want_err}--- got\n{err}"
+            ));
         }
     }
     let want = read(&root.join("app.test.out")).ok_or("missing app.test.out")?;
     let (out, err, code) = aye(&root, &["test", "app"])?;
     if out != want || !err.is_empty() || code != Some(0) {
-        return Err(format!("`aye test app`: {code:?}\n--- expected\n{want}--- got\n{out}{err}"));
+        return Err(format!(
+            "`aye test app`: {code:?}\n--- expected\n{want}--- got\n{out}{err}"
+        ));
     }
     Ok(())
 }
@@ -380,11 +507,15 @@ fn cli_test_filter() -> Result<(), String> {
     );
     let (got, code) = aye_test(&[f, "--filter", "expect"])?;
     if got != want || code != Some(1) {
-        return Err(format!("`aye test --filter expect`: {code:?}\n--- expected\n{want}--- got\n{got}"));
+        return Err(format!(
+            "`aye test --filter expect`: {code:?}\n--- expected\n{want}--- got\n{got}"
+        ));
     }
     let (got, code) = aye_test(&[f, "--filter", "no such test"])?;
     if got != "\n0 passed; 0 failed\n" || code != Some(0) {
-        return Err(format!("`aye test --filter` with no match: {code:?}\n{got}"));
+        return Err(format!(
+            "`aye test --filter` with no match: {code:?}\n{got}"
+        ));
     }
     Ok(())
 }
@@ -394,8 +525,18 @@ fn cli_test_filter() -> Result<(), String> {
 fn cli_test_module() -> Result<(), String> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/modules");
     let runs: &[(&[&str], &str, &str, i32)] = &[
-        (&["test", "modtests", "--module", "dom"], "test \"dom: basic\" ... ok\n\n1 passed; 0 failed\n", "", 0),
-        (&["test", "modtests", "--module", "nope"], "", "aye: no tests in module `nope` (modules with tests: `html`, `dom`)\n", 1),
+        (
+            &["test", "modtests", "--module", "dom"],
+            "test \"dom: basic\" ... ok\n\n1 passed; 0 failed\n",
+            "",
+            0,
+        ),
+        (
+            &["test", "modtests", "--module", "nope"],
+            "",
+            "aye: no tests in module `nope` (modules with tests: `html`, `dom`)\n",
+            1,
+        ),
         (
             &["test", "modtests/html"],
             "",
@@ -407,7 +548,10 @@ fn cli_test_module() -> Result<(), String> {
     for (args, want_out, want_err, want_code) in runs {
         let (out, err, code) = aye(&dir, args)?;
         if out != *want_out || err != *want_err || code != Some(*want_code) {
-            return Err(format!("`aye {}`: {code:?}\n--- stdout\n{out}--- stderr\n{err}", args.join(" ")));
+            return Err(format!(
+                "`aye {}`: {code:?}\n--- stdout\n{out}--- stderr\n{err}",
+                args.join(" ")
+            ));
         }
     }
     Ok(())
@@ -417,10 +561,17 @@ fn cli_test_module() -> Result<(), String> {
 fn cli_run(work: &Path) -> Result<(), String> {
     let _ = work;
     let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cases/hello.aye");
-    let out = Command::new(env!("CARGO_BIN_EXE_aye")).arg("run").arg(&file).output().map_err(|e| e.to_string())?;
+    let out = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .arg("run")
+        .arg(&file)
+        .output()
+        .map_err(|e| e.to_string())?;
     let expected = read(&file.with_extension("out")).unwrap();
     if !out.status.success() || String::from_utf8_lossy(&out.stdout) != expected {
-        return Err(format!("`aye run` failed: {}", String::from_utf8_lossy(&out.stderr)));
+        return Err(format!(
+            "`aye run` failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
     }
     Ok(())
 }
@@ -435,14 +586,28 @@ fn cli_build_link(work: &Path) -> Result<(), String> {
         return Ok(());
     }
     let exe = work.join("curl_file_cli");
-    let (_, err, code) = aye(root, &["build", "tests/ffi/curl_file.aye", "-o", exe.to_str().unwrap()])?;
+    let (_, err, code) = aye(
+        root,
+        &[
+            "build",
+            "tests/ffi/curl_file.aye",
+            "-o",
+            exe.to_str().unwrap(),
+        ],
+    )?;
     if code != Some(0) {
         return Err(format!("`aye build -o` failed: {code:?}\n{err}"));
     }
-    let out = Command::new(&exe).current_dir(root).output().map_err(|e| e.to_string())?;
+    let out = Command::new(&exe)
+        .current_dir(root)
+        .output()
+        .map_err(|e| e.to_string())?;
     let want = read(&src.with_extension("out")).unwrap();
     if !out.status.success() || String::from_utf8_lossy(&out.stdout) != want {
-        return Err(format!("the program of `aye build -o` printed:\n{}", String::from_utf8_lossy(&out.stdout)));
+        return Err(format!(
+            "the program of `aye build -o` printed:\n{}",
+            String::from_utf8_lossy(&out.stdout)
+        ));
     }
     Ok(())
 }
@@ -451,7 +616,11 @@ fn cli_build_link(work: &Path) -> Result<(), String> {
 /// it is killed).
 fn output_within(cmd: &mut Command, secs: u64) -> Option<std::process::Output> {
     use std::process::Stdio;
-    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().ok()?;
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
     let start = std::time::Instant::now();
     loop {
         if child.try_wait().ok()?.is_some() {
@@ -469,7 +638,10 @@ fn output_within(cmd: &mut Command, secs: u64) -> Option<std::process::Output> {
 /// Like `output_within`, and also the CPU time (user + system) the child used,
 /// from `wait4`. Unlike wall time, load on the machine does not change it.
 /// The output is read after the child exits: it must fit in a pipe.
-fn output_and_cpu_within(cmd: &mut Command, secs: u64) -> Option<(std::process::Output, std::time::Duration)> {
+fn output_and_cpu_within(
+    cmd: &mut Command,
+    secs: u64,
+) -> Option<(std::process::Output, std::time::Duration)> {
     use std::io::Read;
     use std::os::unix::process::ExitStatusExt;
     use std::process::Stdio;
@@ -491,7 +663,11 @@ fn output_and_cpu_within(cmd: &mut Command, secs: u64) -> Option<(std::process::
         fn wait4(pid: i32, status: *mut i32, options: i32, rusage: *mut Rusage) -> i32;
     }
     const WNOHANG: i32 = 1;
-    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().ok()?;
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
     let pid = child.id() as i32;
     let (mut status, mut ru) = (0, unsafe { std::mem::zeroed::<Rusage>() });
     let start = std::time::Instant::now();
@@ -515,9 +691,17 @@ fn output_and_cpu_within(cmd: &mut Command, secs: u64) -> Option<(std::process::
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
     child.stdout.take()?.read_to_end(&mut stdout).ok()?;
     child.stderr.take()?.read_to_end(&mut stderr).ok()?;
-    let time = |t: &Timeval| Duration::from_secs(t.sec as u64) + Duration::from_micros(t.usec as u64);
+    let time =
+        |t: &Timeval| Duration::from_secs(t.sec as u64) + Duration::from_micros(t.usec as u64);
     let status = std::process::ExitStatus::from_raw(status);
-    Some((std::process::Output { status, stdout, stderr }, time(&ru.utime) + time(&ru.stime)))
+    Some((
+        std::process::Output {
+            status,
+            stdout,
+            stderr,
+        },
+        time(&ru.utime) + time(&ru.stime),
+    ))
 }
 
 /// Does clang's ThreadSanitizer work here: a C program with two threads,
@@ -530,11 +714,17 @@ fn tsan_works(work: &Path) -> bool {
     if std::fs::write(&src, c).is_err() {
         return false;
     }
-    let built = Command::new("clang").args(["-fsanitize=thread", "-pthread"]).arg(&src).arg("-o").arg(&exe).status();
+    let built = Command::new("clang")
+        .args(["-fsanitize=thread", "-pthread"])
+        .arg(&src)
+        .arg("-o")
+        .arg(&exe)
+        .status();
     if !built.is_ok_and(|s| s.success()) {
         return false;
     }
-    output_within(&mut Command::new(&exe), 30).is_some_and(|o| o.status.success() && o.stderr.is_empty())
+    output_within(&mut Command::new(&exe), 30)
+        .is_some_and(|o| o.status.success() && o.stderr.is_empty())
 }
 
 /// M10: the fan-out program built with `--cflags -fsanitize=thread` runs
@@ -543,25 +733,53 @@ fn cli_tsan(work: &Path) -> Result<(), String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     // The flags reach clang: one it does not know fails the build.
     let bad = work.join("hello_bad_flag");
-    let (_, err, code) = aye(root, &["build", "tests/cases/hello.aye", "--cflags", "-fno-such-aye-flag", "-o", bad.to_str().unwrap()])?;
+    let (_, err, code) = aye(
+        root,
+        &[
+            "build",
+            "tests/cases/hello.aye",
+            "--cflags",
+            "-fno-such-aye-flag",
+            "-o",
+            bad.to_str().unwrap(),
+        ],
+    )?;
     if code != Some(1) || !err.contains("clang failed") {
-        return Err(format!("`aye build --cflags -fno-such-aye-flag`: {code:?}\n{err}"));
+        return Err(format!(
+            "`aye build --cflags -fno-such-aye-flag`: {code:?}\n{err}"
+        ));
     }
     if !tsan_works(work) {
-        println!("skipped cli/aye build --cflags -fsanitize=thread: clang's ThreadSanitizer does not run here");
+        println!(
+            "skipped cli/aye build --cflags -fsanitize=thread: clang's ThreadSanitizer does not run here"
+        );
         return Ok(());
     }
     let exe = work.join("threads_fanout_tsan");
-    let args = ["build", "tests/cases/threads_fanout.aye", "--cflags", "-fsanitize=thread", "-o", exe.to_str().unwrap()];
+    let args = [
+        "build",
+        "tests/cases/threads_fanout.aye",
+        "--cflags",
+        "-fsanitize=thread",
+        "-o",
+        exe.to_str().unwrap(),
+    ];
     let (_, err, code) = aye(root, &args)?;
     if code != Some(0) {
         return Err(format!("`aye {}` failed: {code:?}\n{err}", args.join(" ")));
     }
-    let out = output_within(&mut Command::new(&exe), 120).ok_or("the program did not finish within 120 s")?;
+    let out = output_within(&mut Command::new(&exe), 120)
+        .ok_or("the program did not finish within 120 s")?;
     let want = read(&root.join("tests/cases/threads_fanout.out")).unwrap();
-    let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
     if !out.status.success() || stdout != want || !stderr.is_empty() {
-        return Err(format!("under ThreadSanitizer: {}\n--- stdout\n{stdout}--- stderr\n{stderr}", out.status));
+        return Err(format!(
+            "under ThreadSanitizer: {}\n--- stdout\n{stdout}--- stderr\n{stderr}",
+            out.status
+        ));
     }
     Ok(())
 }
@@ -574,16 +792,24 @@ fn cli_tsan(work: &Path) -> Result<(), String> {
 /// the wall time grew past the old 10 s limit (P3.11).
 fn perf_general(work: &Path) -> Result<(), String> {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cases/general_churn.aye");
-    let c = driver::compile_to_c(&name(&src), &read(&src).unwrap(), Mode::Debug).map_err(|d| join(&d))?;
+    let c = driver::compile_to_c(&name(&src), &read(&src).unwrap(), Mode::Debug)
+        .map_err(|d| join(&d))?;
     let exe = work.join("general_churn_perf");
     driver::cc(&c, &exe, Mode::Debug)?;
     // The wall-time limit only catches a hang.
-    let (out, cpu) = output_and_cpu_within(&mut Command::new(&exe), 120).ok_or("the debug build did not finish within 120 s")?;
+    let (out, cpu) = output_and_cpu_within(&mut Command::new(&exe), 120)
+        .ok_or("the debug build did not finish within 120 s")?;
     if !out.status.success() {
-        return Err(format!("the debug build failed: {}", String::from_utf8_lossy(&out.stderr)));
+        return Err(format!(
+            "the debug build failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
     }
     if cpu > std::time::Duration::from_secs(2) {
-        return Err(format!("the debug build used {} ms of CPU time; the limit is 2000 ms", cpu.as_millis()));
+        return Err(format!(
+            "the debug build used {} ms of CPU time; the limit is 2000 ms",
+            cpu.as_millis()
+        ));
     }
     println!("perf/General: {} ms CPU", cpu.as_millis());
     Ok(())
@@ -596,12 +822,24 @@ fn cli_check() -> Result<(), String> {
     let three = "tests/errors/three_errors.aye";
     let fixable = "tests/fix/let_var.aye";
     let diag = |code: &str, line: u32, col: u32, msg: &str| {
-        format!(r#"{{"severity":"error","code":"{code}","file":"{three}","line":{line},"col":{col},"message":"{msg}","fixes":[]}}"#)
+        format!(
+            r#"{{"severity":"error","code":"{code}","file":"{three}","line":{line},"col":{col},"message":"{msg}","fixes":[]}}"#
+        )
     };
     let checks: &[(&[&str], bool, String, String)] = &[
         (&[ok], true, String::new(), String::new()),
-        (&[bad], false, String::new(), format!("{bad}:2:16: error[E0005]: unknown escape sequence `\\q`\n")),
-        (&[ok, "--json"], true, format!("{{\"file\":\"{ok}\",\"diagnostics\":[]}}\n"), String::new()),
+        (
+            &[bad],
+            false,
+            String::new(),
+            format!("{bad}:2:16: error[E0005]: unknown escape sequence `\\q`\n"),
+        ),
+        (
+            &[ok, "--json"],
+            true,
+            format!("{{\"file\":\"{ok}\",\"diagnostics\":[]}}\n"),
+            String::new(),
+        ),
         (
             &[bad, "--json"],
             false,
@@ -616,7 +854,12 @@ fn cli_check() -> Result<(), String> {
             false,
             format!(
                 "{{\"file\":\"{three}\",\"diagnostics\":[{},{},{}]}}\n",
-                diag("E0023", 4, 12, "mismatched types: expected `i64`, found `i32`"),
+                diag(
+                    "E0023",
+                    4,
+                    12,
+                    "mismatched types: expected `i64`, found `i32`"
+                ),
                 diag("E0038", 9, 16, "struct `P` has no field `y`"),
                 diag("E0018", 11, 14, "undefined variable `missing`"),
             ),
@@ -641,7 +884,10 @@ fn cli_check() -> Result<(), String> {
             .args(*args)
             .output()
             .map_err(|e| e.to_string())?;
-        let (got_out, got_err) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        let (got_out, got_err) = (
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
         if out.status.success() != *success || got_out != *stdout || got_err != *stderr {
             return Err(format!(
                 "`aye check {}`: {}\n--- stdout\n{got_out}--- stderr\n{got_err}",
@@ -661,7 +907,9 @@ fn cli_doc_example_error(work: &Path) -> Result<(), String> {
     let want = "doc_error.aye:5:25: error[E0023]: mismatched types: expected `bool`, found `i64`\n";
     let (out, err, code) = aye(work, &["test", "doc_error.aye"])?;
     if !out.is_empty() || err != want || code != Some(1) {
-        return Err(format!("`aye test doc_error.aye`: {code:?}\n--- expected stderr\n{want}--- got\n{out}{err}"));
+        return Err(format!(
+            "`aye test doc_error.aye`: {code:?}\n--- expected stderr\n{want}--- got\n{out}{err}"
+        ));
     }
     let (out, err, code) = aye(work, &["check", "doc_error.aye"])?;
     if !out.is_empty() || !err.is_empty() || code != Some(0) {
@@ -672,15 +920,26 @@ fn cli_doc_example_error(work: &Path) -> Result<(), String> {
 
 /// `aye explain <code>`: known code (exit 0), unknown code (exit 2).
 fn cli_explain() -> Result<(), String> {
-    let run = |code: &str| Command::new(env!("CARGO_BIN_EXE_aye")).args(["explain", code]).output();
+    let run = |code: &str| {
+        Command::new(env!("CARGO_BIN_EXE_aye"))
+            .args(["explain", code])
+            .output()
+    };
     let out = run("E0056").map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&out.stdout);
-    if !out.status.success() || !text.starts_with("E0056: ") || !text.contains("Wrong:") || !text.contains("Fix:") {
+    if !out.status.success()
+        || !text.starts_with("E0056: ")
+        || !text.contains("Wrong:")
+        || !text.contains("Fix:")
+    {
         return Err(format!("`aye explain E0056`: {}\n{text}", out.status));
     }
     let out = run("E9999").map_err(|e| e.to_string())?;
     let err = String::from_utf8_lossy(&out.stderr);
-    if out.status.code() != Some(2) || !out.stdout.is_empty() || err != "aye: unknown error code `E9999`\n" {
+    if out.status.code() != Some(2)
+        || !out.stdout.is_empty()
+        || err != "aye: unknown error code `E9999`\n"
+    {
         return Err(format!("`aye explain E9999`: {}\n{err}", out.status));
     }
     Ok(())
@@ -701,18 +960,27 @@ fn main() {
         let mut handles = Vec::new();
         for p in &run_cases {
             let w = &work;
-            handles.push((format!("cases/{}", name(p)), s.spawn(move || run_case(p, w))));
+            handles.push((
+                format!("cases/{}", name(p)),
+                s.spawn(move || run_case(p, w)),
+            ));
         }
         for p in &ffi_cases {
             let w = &work;
             handles.push((format!("ffi/{}", name(p)), s.spawn(move || ffi_case(p, w))));
         }
         for p in &err_cases {
-            handles.push((format!("errors/{}", name(p)), s.spawn(move || error_case(p))));
+            handles.push((
+                format!("errors/{}", name(p)),
+                s.spawn(move || error_case(p)),
+            ));
         }
         for p in &cimport_cases {
             let w = &work;
-            handles.push((format!("cimport/{}", name(p)), s.spawn(move || cimport_case(p, w))));
+            handles.push((
+                format!("cimport/{}", name(p)),
+                s.spawn(move || cimport_case(p, w)),
+            ));
         }
         for p in &test_cases {
             handles.push((format!("tests/{}", name(p)), s.spawn(move || test_case(p))));
@@ -722,20 +990,44 @@ fn main() {
             handles.push((format!("fix/{}", name(p)), s.spawn(move || fix_case(p, w))));
         }
         for p in &mod_cases {
-            handles.push((format!("modules/{}", name(p)), s.spawn(move || module_case(p))));
+            handles.push((
+                format!("modules/{}", name(p)),
+                s.spawn(move || module_case(p)),
+            ));
         }
         handles.push(("example1".to_string(), s.spawn(example1)));
         let w = &work;
         handles.push(("cli/aye run".to_string(), s.spawn(move || cli_run(w))));
-        handles.push(("cli/aye build -o".to_string(), s.spawn(move || cli_build_link(w))));
+        handles.push((
+            "cli/aye build -o".to_string(),
+            s.spawn(move || cli_build_link(w)),
+        ));
         handles.push(("cli/aye check".to_string(), s.spawn(cli_check)));
-        handles.push(("cli/aye build --cflags -fsanitize=thread".to_string(), s.spawn(move || cli_tsan(w))));
+        handles.push((
+            "cli/aye build --cflags -fsanitize=thread".to_string(),
+            s.spawn(move || cli_tsan(w)),
+        ));
         handles.push(("cli/aye explain".to_string(), s.spawn(cli_explain)));
-        handles.push(("cli/aye test: an error in a doc example".to_string(), s.spawn(move || cli_doc_example_error(w))));
-        handles.push(("perf/General in debug mode".to_string(), s.spawn(move || perf_general(w))));
-        handles.push(("cli/aye test --filter".to_string(), s.spawn(cli_test_filter)));
-        handles.push(("cli/aye test --module".to_string(), s.spawn(cli_test_module)));
-        handles.into_iter().map(|(n, h)| (n, h.join().unwrap())).collect()
+        handles.push((
+            "cli/aye test: an error in a doc example".to_string(),
+            s.spawn(move || cli_doc_example_error(w)),
+        ));
+        handles.push((
+            "perf/General in debug mode".to_string(),
+            s.spawn(move || perf_general(w)),
+        ));
+        handles.push((
+            "cli/aye test --filter".to_string(),
+            s.spawn(cli_test_filter),
+        ));
+        handles.push((
+            "cli/aye test --module".to_string(),
+            s.spawn(cli_test_module),
+        ));
+        handles
+            .into_iter()
+            .map(|(n, h)| (n, h.join().unwrap()))
+            .collect()
     });
     let _ = std::fs::remove_dir_all(&work);
 
@@ -749,7 +1041,10 @@ fn main() {
             }
         }
     }
-    println!("\ngolden: {} passed; {failed} failed", results.len() - failed);
+    println!(
+        "\ngolden: {} passed; {failed} failed",
+        results.len() - failed
+    );
     if failed > 0 {
         std::process::exit(1);
     }

@@ -63,7 +63,10 @@ pub fn libclang_available() -> bool {
 
 /// The flags that `@cimport` accepts: why `flag` is not one of them.
 pub fn check_flag(flag: &str) -> Result<(), String> {
-    let ok = ["-I", "-D", "-U", "-F"].iter().any(|p| flag.len() > 2 && flag.starts_with(p)) || flag.starts_with("-std=") && flag.len() > 5;
+    let ok = ["-I", "-D", "-U", "-F"]
+        .iter()
+        .any(|p| flag.len() > 2 && flag.starts_with(p))
+        || flag.starts_with("-std=") && flag.len() > 5;
     if ok {
         Ok(())
     } else {
@@ -79,25 +82,45 @@ pub fn import(req: &Request) -> Result<Imported, Failure> {
     let dir = cache_dir();
     let stem: String = Path::new(&req.header)
         .file_stem()
-        .map(|s| s.to_string_lossy().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect())
+        .map(|s| {
+            s.to_string_lossy()
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                .collect()
+        })
         .unwrap_or_default();
     let mut h = DefaultHasher::new();
-    (GENERATOR_VERSION, env!("CARGO_PKG_VERSION"), req, std::fs::canonicalize(&req.dir).unwrap_or_else(|_| req.dir.clone())).hash(&mut h);
+    (
+        GENERATOR_VERSION,
+        env!("CARGO_PKG_VERSION"),
+        req,
+        std::fs::canonicalize(&req.dir).unwrap_or_else(|_| req.dir.clone()),
+    )
+        .hash(&mut h);
     let path = dir.join(format!("{stem}-{:016x}.aye", h.finish()));
     let deps_path = path.with_extension("deps");
-    if let (Ok(source), Ok(deps)) = (std::fs::read_to_string(&path), std::fs::read_to_string(&deps_path))
-        && deps.lines().all(|l| l.split_once(' ').is_some_and(|(stamp, file)| stamp_of(Path::new(file)).as_deref() == Some(stamp)))
-    {
+    if let (Ok(source), Ok(deps)) = (
+        std::fs::read_to_string(&path),
+        std::fs::read_to_string(&deps_path),
+    ) && deps.lines().all(|l| {
+        l.split_once(' ')
+            .is_some_and(|(stamp, file)| stamp_of(Path::new(file)).as_deref() == Some(stamp))
+    }) {
         return Ok(Imported { source, path });
     }
     let (source, files) = generate(req)?;
-    let deps: String = files.iter().filter_map(|f| Some(format!("{} {f}\n", stamp_of(Path::new(f))?))).collect();
+    let deps: String = files
+        .iter()
+        .filter_map(|f| Some(format!("{} {f}\n", stamp_of(Path::new(f))?)))
+        .collect();
     // Written to a temporary file and renamed, so that concurrent builds
     // never read half a file. A cache that cannot be written is no error.
     if std::fs::create_dir_all(&dir).is_ok() {
         prune(&dir);
         let tmp = |p: &Path| PathBuf::from(format!("{}.{}.tmp", p.display(), std::process::id()));
-        if std::fs::write(tmp(&path), &source).is_ok() && std::fs::write(tmp(&deps_path), &deps).is_ok() {
+        if std::fs::write(tmp(&path), &source).is_ok()
+            && std::fs::write(tmp(&deps_path), &deps).is_ok()
+        {
             let _ = std::fs::rename(tmp(&path), &path);
             let _ = std::fs::rename(tmp(&deps_path), &deps_path);
         }
@@ -108,10 +131,17 @@ pub fn import(req: &Request) -> Result<Imported, Failure> {
 /// Remove cache entries not written for 30 days (a header that is still
 /// imported is written again when it changes, so old entries are stale).
 fn prune(dir: &Path) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     let month = std::time::Duration::from_secs(30 * 24 * 3600);
     for e in entries.flatten() {
-        let old = e.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| t.elapsed().ok()).is_some_and(|age| age > month);
+        let old = e
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > month);
         if old {
             let _ = std::fs::remove_file(e.path());
         }
@@ -121,7 +151,11 @@ fn prune(dir: &Path) {
 /// The cache directory: `$AYE_CACHE_DIR/cimport`, else under
 /// `$XDG_CACHE_HOME/aye` or `~/.cache/aye`, else the temporary directory.
 fn cache_dir() -> PathBuf {
-    let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let env = |k: &str| {
+        std::env::var_os(k)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
     let base = env("AYE_CACHE_DIR")
         .or_else(|| env("XDG_CACHE_HOME").map(|d| d.join("aye")))
         .or_else(|| env("HOME").map(|d| d.join(".cache").join("aye")))
@@ -132,8 +166,17 @@ fn cache_dir() -> PathBuf {
 /// A file's modification time and size, which a cache entry must match.
 fn stamp_of(p: &Path) -> Option<String> {
     let m = std::fs::metadata(p).ok()?;
-    let t = m.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
-    Some(format!("{}.{:09}:{}", t.as_secs(), t.subsec_nanos(), m.len()))
+    let t = m
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    Some(format!(
+        "{}.{:09}:{}",
+        t.as_secs(),
+        t.subsec_nanos(),
+        m.len()
+    ))
 }
 
 /// Generate the Aye source of a header, without the cache: the source and
@@ -165,7 +208,11 @@ fn clang_args(req: &Request) -> Vec<String> {
         match f.get(..2) {
             Some(p @ ("-I" | "-F")) => {
                 let path = Path::new(f[2..].trim());
-                let path = if path.is_absolute() { path.to_path_buf() } else { req.dir.join(path) };
+                let path = if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    req.dir.join(path)
+                };
                 args.push(format!("{p}{}", path.display()));
             }
             _ => args.push(f.trim().to_string()),
@@ -179,21 +226,43 @@ fn clang_args(req: &Request) -> Vec<String> {
             && o.status.success()
         {
             let out = String::from_utf8_lossy(&o.stdout).into_owned();
-            args.extend(out.split_whitespace().filter(|f| ["-I", "-D", "-U", "-F", "-isystem"].iter().any(|p| f.starts_with(p))).map(String::from));
+            args.extend(
+                out.split_whitespace()
+                    .filter(|f| {
+                        ["-I", "-D", "-U", "-F", "-isystem"]
+                            .iter()
+                            .any(|p| f.starts_with(p))
+                    })
+                    .map(String::from),
+            );
         }
     }
     if cfg!(target_os = "macos") && !args.iter().any(|a| a.starts_with("-isysroot")) {
-        let sdk = std::env::var("SDKROOT").ok().filter(|s| !s.is_empty()).or_else(|| {
-            let o = Command::new("xcrun").args(["--show-sdk-path"]).output().ok().filter(|o| o.status.success())?;
-            Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-        });
+        let sdk = std::env::var("SDKROOT")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                let o = Command::new("xcrun")
+                    .args(["--show-sdk-path"])
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())?;
+                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+            });
         if let Some(sdk) = sdk {
             args.push(format!("-isysroot{sdk}"));
         }
     }
-    let brew = std::env::var("HOMEBREW_PREFIX").ok().filter(|s| !s.is_empty()).map(PathBuf::from).or_else(|| {
-        ["/opt/homebrew", "/usr/local"].iter().map(PathBuf::from).find(|p| p.join("include").is_dir() && p.join("bin/brew").exists())
-    });
+    let brew = std::env::var("HOMEBREW_PREFIX")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            ["/opt/homebrew", "/usr/local"]
+                .iter()
+                .map(PathBuf::from)
+                .find(|p| p.join("include").is_dir() && p.join("bin/brew").exists())
+        });
     if let Some(brew) = brew {
         args.push(format!("-I{}", brew.join("include").display()));
     }

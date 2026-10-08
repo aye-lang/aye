@@ -43,7 +43,17 @@ macro_rules! codes {
 /// The text `aye explain` prints for `code` (such as `E0012`).
 pub fn explain(code: &str) -> Option<String> {
     let info = ALL.iter().find(|i| i.code.to_string() == code)?;
-    let indent = |s: &str| s.lines().map(|l| if l.is_empty() { "\n".to_string() } else { format!("    {l}\n") }).collect::<String>();
+    let indent = |s: &str| {
+        s.lines()
+            .map(|l| {
+                if l.is_empty() {
+                    "\n".to_string()
+                } else {
+                    format!("    {l}\n")
+                }
+            })
+            .collect::<String>()
+    };
     Some(format!(
         "{}: {}\n\n{}\n\nWrong:\n\n{}\nFix:\n\n{}",
         info.code,
@@ -2523,7 +2533,11 @@ mod tests {
         if !text.starts_with("// file: ") {
             return driver::check(&format!("{name}.aye"), text).map(|_| ());
         }
-        let dir = std::env::temp_dir().join(format!("aye-codes-{}-{name}-{}", std::process::id(), text.len()));
+        let dir = std::env::temp_dir().join(format!(
+            "aye-codes-{}-{name}-{}",
+            std::process::id(),
+            text.len()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         for part in text.split("// file: ").skip(1) {
             let (path, body) = part.split_once('\n').unwrap();
@@ -2532,7 +2546,9 @@ mod tests {
             std::fs::write(&p, body).unwrap();
         }
         let main = dir.join("main.aye");
-        let r = driver::front_end(driver::Root::load(main.to_str().unwrap()).unwrap(), None).result.map(|_| ());
+        let r = driver::front_end(driver::Root::load(main.to_str().unwrap()).unwrap(), None)
+            .result
+            .map(|_| ());
         let _ = std::fs::remove_dir_all(&dir);
         r
     }
@@ -2557,7 +2573,11 @@ mod tests {
                 ),
             }
             if let Err(ds) = check("fix", info.fix) {
-                panic!("{}: the fix does not compile: {:?}", info.code, ds.iter().map(|d| d.to_string()).collect::<Vec<_>>());
+                panic!(
+                    "{}: the fix does not compile: {:?}",
+                    info.code,
+                    ds.iter().map(|d| d.to_string()).collect::<Vec<_>>()
+                );
             }
         }
     }
@@ -2566,7 +2586,10 @@ mod tests {
     fn explain_formats_an_entry() {
         let text = explain("E0002").unwrap();
         assert!(text.starts_with("E0002: semicolon\n\n"), "{text}");
-        assert!(text.contains("Wrong:\n\n    pub fn main() {\n        let x = 1;\n    }\n"), "{text}");
+        assert!(
+            text.contains("Wrong:\n\n    pub fn main() {\n        let x = 1;\n    }\n"),
+            "{text}"
+        );
         assert!(explain("E9999").is_none());
     }
 }

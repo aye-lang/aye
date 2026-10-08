@@ -21,7 +21,9 @@
 
 use crate::ast::{BinOp, UnOp};
 use crate::diag::Span;
-use crate::sema::{self, FloatTy, Intrinsic, IntTy, TArmBody, TExpr, TExprKind, TStmt, TStmtKind, Type};
+use crate::sema::{
+    self, FloatTy, IntTy, Intrinsic, TArmBody, TExpr, TExprKind, TStmt, TStmtKind, Type,
+};
 use std::collections::HashMap;
 
 pub type LocalId = usize;
@@ -81,9 +83,16 @@ pub enum StmtKind {
     Assign(Place, Rvalue),
     /// Evaluate for side effects (calls, prints).
     Eval(Rvalue),
-    If { cond: Operand, then: Block, els: Block },
+    If {
+        cond: Operand,
+        then: Block,
+        els: Block,
+    },
     /// Infinite loop. `cont` runs after `body` and on `continue`.
-    Loop { body: Block, cont: Block },
+    Loop {
+        body: Block,
+        cont: Block,
+    },
     Break,
     Continue,
     Return(Option<Operand>),
@@ -96,10 +105,17 @@ pub enum StmtKind {
     /// Panic at `span` with `msg` unless `cond` holds; without `cond`,
     /// always (`unreachable`). In `fast` mode the check is left out, and
     /// reaching an unconditional one is undefined behavior.
-    Check { cond: Option<Operand>, msg: &'static str, span: Span },
+    Check {
+        cond: Option<Operand>,
+        msg: &'static str,
+        span: Span,
+    },
     /// A block of `@setSafety(on)`: its runtime checks are those of the
     /// build mode (`on`) or none.
-    Safety { on: bool, body: Block },
+    Safety {
+        on: bool,
+        body: Block,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -111,7 +127,10 @@ pub enum Operand {
     /// String literal, type `[]u8`.
     Str(Vec<u8>),
     /// A top-level function as a value; `is_extern` for a C name.
-    Fn { name: String, is_extern: bool },
+    Fn {
+        name: String,
+        is_extern: bool,
+    },
 }
 
 /// A memory location: a local followed by field/index projections.
@@ -126,7 +145,11 @@ pub enum Proj {
     /// Struct field, or `len`/`ptr` of a slice.
     Field(String),
     /// Bounds-checked element access.
-    Index { index: Operand, len: Len, span: Span },
+    Index {
+        index: Operand,
+        len: Len,
+        span: Span,
+    },
     /// Dereference of a `*T`.
     Deref,
 }
@@ -156,71 +179,178 @@ pub enum Rvalue {
     Use(Operand),
     Load(Place),
     /// Arithmetic or comparison; `ty` is the operand type. Never `&&`/`||`.
-    Binary { op: BinOp, lhs: Operand, rhs: Operand, ty: Type, span: Span },
-    Neg { val: Operand, ty: Type, span: Span },
+    Binary {
+        op: BinOp,
+        lhs: Operand,
+        rhs: Operand,
+        ty: Type,
+        span: Span,
+    },
+    Neg {
+        val: Operand,
+        ty: Type,
+        span: Span,
+    },
     Not(Operand),
     /// `~val`
-    BitNot { val: Operand, ty: Type },
+    BitNot {
+        val: Operand,
+        ty: Type,
+    },
     /// Is the integer `val` in one of the inclusive ranges?
-    InRanges { val: Operand, ranges: Vec<(i128, i128)>, ty: IntTy },
-    Cast { val: Operand, from: Type, to: Type, span: Span },
-    Call { name: String, is_extern: bool, args: Vec<Operand> },
+    InRanges {
+        val: Operand,
+        ranges: Vec<(i128, i128)>,
+        ty: IntTy,
+    },
+    Cast {
+        val: Operand,
+        from: Type,
+        to: Type,
+        span: Span,
+    },
+    Call {
+        name: String,
+        is_extern: bool,
+        args: Vec<Operand>,
+    },
     /// Call the function value `callee`.
-    CallValue { callee: Operand, args: Vec<Operand> },
+    CallValue {
+        callee: Operand,
+        args: Vec<Operand>,
+    },
     /// The size of `ty` in bytes, a `usize`.
     SizeOf(Type),
     /// The all-zero value of `ty`.
     Zeroed(Type),
     /// The pointer `val` as the pointer type `ty`.
-    PtrCast { val: Operand, ty: Type },
+    PtrCast {
+        val: Operand,
+        ty: Type,
+    },
     /// Call method `method` through the vtable of the `dyn` value `recv`.
-    DynCall { recv: Operand, method: String, args: Vec<Operand> },
+    DynCall {
+        recv: Operand,
+        method: String,
+        args: Vec<Operand>,
+    },
     /// The pointer `ptr` to struct `strukt` as a `dyn iface`.
-    ToDyn { ptr: Operand, iface: String, strukt: String },
+    ToDyn {
+        ptr: Operand,
+        iface: String,
+        strukt: String,
+    },
     /// The data pointer of the `dyn iface` value `val` as the optional
     /// pointer type `ty` when its vtable is `strukt`'s, else `null`.
-    Downcast { val: Operand, iface: String, strukt: String, ty: Type },
+    Downcast {
+        val: Operand,
+        iface: String,
+        strukt: String,
+        ty: Type,
+    },
     /// The pointer `ptr` to struct `strukt` as an `Allocator`.
-    ToAllocator { ptr: Operand, strukt: String },
+    ToAllocator {
+        ptr: Operand,
+        strukt: String,
+    },
     /// Allocate a `ty` with the allocator `alloc`: a `?*mut ty`, null when
     /// out of memory.
-    Alloc { alloc: Operand, ty: Type, span: Span },
+    Alloc {
+        alloc: Operand,
+        ty: Type,
+        span: Span,
+    },
     /// Allocate `len` elements of type `elem`, each set to `value`: a
     /// `?[]mut elem`, null when out of memory. No elements allocate nothing.
     /// With `old` (a slice), its elements are copied first and it is freed
     /// on success (`resize`).
-    AllocSlice { alloc: Operand, value: Operand, elem: Type, len: Operand, old: Option<Operand>, span: Span },
+    AllocSlice {
+        alloc: Operand,
+        value: Operand,
+        elem: Type,
+        len: Operand,
+        old: Option<Operand>,
+        span: Span,
+    },
     /// The empty slice of type `ty`.
     EmptySlice(Type),
     /// An allocator method or test builtin, with the operand types.
-    Intrinsic { op: Intrinsic, args: Vec<(Operand, Type)>, span: Span },
-    Print { arg: Option<(Operand, Type)>, newline: bool },
+    Intrinsic {
+        op: Intrinsic,
+        args: Vec<(Operand, Type)>,
+        span: Span,
+    },
+    Print {
+        arg: Option<(Operand, Type)>,
+        newline: bool,
+    },
     /// `std.log.err`/`std.log.info`: the format's pieces around the
     /// arguments, written to stderr.
-    Log { error: bool, pieces: Vec<Vec<u8>>, args: Vec<(Operand, Type)> },
+    Log {
+        error: bool,
+        pieces: Vec<Vec<u8>>,
+        args: Vec<(Operand, Type)>,
+    },
     /// Fields in declaration order.
-    StructLit { name: String, fields: Vec<Operand> },
+    StructLit {
+        name: String,
+        fields: Vec<Operand>,
+    },
     /// A value of the union `name` with its field `field` set.
-    UnionLit { name: String, field: String, val: Operand },
+    UnionLit {
+        name: String,
+        field: String,
+        val: Operand,
+    },
     /// Enum value; payload fields in declaration order.
-    Variant { enum_name: String, tag: usize, variant: String, fields: Vec<Operand> },
+    Variant {
+        enum_name: String,
+        tag: usize,
+        variant: String,
+        fields: Vec<Operand>,
+    },
     AddrOf(Place),
     /// Wrap a value into the optional type `ty`.
-    Some { val: Operand, ty: Type },
+    Some {
+        val: Operand,
+        ty: Type,
+    },
     Null(Type),
     /// Is the optional at `place` (of type `ty`) non-null?
-    IsSome { place: Place, ty: Type },
-    ArrayLit { ty: Type, elems: Vec<Operand> },
+    IsSome {
+        place: Place,
+        ty: Type,
+    },
+    ArrayLit {
+        ty: Type,
+        elems: Vec<Operand>,
+    },
     /// The array `ty` with `val` in every element.
-    ArrayRepeat { ty: Type, val: Operand },
+    ArrayRepeat {
+        ty: Type,
+        val: Operand,
+    },
     /// `base[lo..hi]`, producing a slice. `hi = None` means the full length.
-    Slice { base: Place, len: Len, elem: Type, lo: Operand, hi: Option<Operand>, span: Span },
+    Slice {
+        base: Place,
+        len: Len,
+        elem: Type,
+        lo: Operand,
+        hi: Option<Operand>,
+        span: Span,
+    },
     /// Does the error union at `place` hold an error?
     IsErr(Place),
     /// The error union `ty` holding the value `val` (`None` for `!void`).
-    Ok { val: Option<Operand>, ty: Type },
+    Ok {
+        val: Option<Operand>,
+        ty: Type,
+    },
     /// The error union `ty` holding the error value `err`.
-    Err { err: Operand, ty: Type },
+    Err {
+        err: Operand,
+        ty: Type,
+    },
     /// The current length of the error return trace (a `u32`).
     TraceLen,
 }
@@ -231,9 +361,15 @@ pub enum Rvalue {
 /// tests, exported functions and globals), so a function that calls into
 /// a library that is not linked is left out when nothing calls it.
 pub fn lower(p: &sema::Program, linked: &[String]) -> Program {
-    let structs: HashMap<&str, &sema::StructDef> = p.structs.iter().map(|s| (s.name.as_str(), s)).collect();
-    let enums: HashMap<&str, &sema::EnumDef> = p.enums.iter().map(|e| (e.name.as_str(), e)).collect();
-    let (funcs, refs): (Vec<Func>, Vec<Vec<Ref>>) = p.fns.iter().map(|f| Lower::func(f, &structs, &enums, linked)).unzip();
+    let structs: HashMap<&str, &sema::StructDef> =
+        p.structs.iter().map(|s| (s.name.as_str(), s)).collect();
+    let enums: HashMap<&str, &sema::EnumDef> =
+        p.enums.iter().map(|e| (e.name.as_str(), e)).collect();
+    let (funcs, refs): (Vec<Func>, Vec<Vec<Ref>>) = p
+        .fns
+        .iter()
+        .map(|f| Lower::func(f, &structs, &enums, linked))
+        .unzip();
     let (funcs, vtables) = reachable(p, funcs, refs);
     Program {
         structs: p.structs.clone(),
@@ -262,15 +398,25 @@ fn const_fns(v: &sema::ConstVal, out: &mut Vec<Ref>) {
     match v {
         sema::ConstVal::Fn(name, false) => out.push(Ref::Fn(name.clone())),
         sema::ConstVal::Some(x) | sema::ConstVal::Union(_, x) => const_fns(x, out),
-        sema::ConstVal::Agg(xs) | sema::ConstVal::Variant(_, xs) => xs.iter().for_each(|x| const_fns(x, out)),
+        sema::ConstVal::Agg(xs) | sema::ConstVal::Variant(_, xs) => {
+            xs.iter().for_each(|x| const_fns(x, out))
+        }
         _ => {}
     }
 }
 
 /// The functions and vtables reachable from `main`, the tests, the
 /// exported functions and the globals; `refs[i]` are those of `funcs[i]`.
-fn reachable(p: &sema::Program, funcs: Vec<Func>, refs: Vec<Vec<Ref>>) -> (Vec<Func>, Vec<(String, String)>) {
-    let index: HashMap<&str, usize> = funcs.iter().enumerate().map(|(i, f)| (f.name.as_str(), i)).collect();
+fn reachable(
+    p: &sema::Program,
+    funcs: Vec<Func>,
+    refs: Vec<Vec<Ref>>,
+) -> (Vec<Func>, Vec<(String, String)>) {
+    let index: HashMap<&str, usize> = funcs
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (f.name.as_str(), i))
+        .collect();
     let mut todo: Vec<Ref> = Vec::new();
     for f in &funcs {
         if f.is_main || f.export || sema::is_test(&f.name) {
@@ -292,13 +438,25 @@ fn reachable(p: &sema::Program, funcs: Vec<Func>, refs: Vec<Vec<Ref>>) -> (Vec<F
                 }
             }
             Ref::Vtable(iface, strukt) => {
-                let methods = p.ifaces.iter().filter(|i| i.name == *iface).flat_map(|i| &i.methods);
+                let methods = p
+                    .ifaces
+                    .iter()
+                    .filter(|i| i.name == *iface)
+                    .flat_map(|i| &i.methods);
                 todo.extend(methods.map(|m| Ref::Fn(format!("{strukt}.{}", m.name))));
             }
         }
     }
-    let vtables = p.vtables.iter().filter(|(i, s)| seen.contains(&Ref::Vtable(i.clone(), s.clone()))).cloned().collect();
-    let funcs = funcs.into_iter().filter(|f| seen.contains(&Ref::Fn(f.name.clone()))).collect();
+    let vtables = p
+        .vtables
+        .iter()
+        .filter(|(i, s)| seen.contains(&Ref::Vtable(i.clone(), s.clone())))
+        .cloned()
+        .collect();
+    let funcs = funcs
+        .into_iter()
+        .filter(|f| seen.contains(&Ref::Fn(f.name.clone())))
+        .collect();
     (funcs, vtables)
 }
 
@@ -308,9 +466,20 @@ fn static_bool(e: &TExpr, linked: &[String]) -> Option<bool> {
     match &e.kind {
         TExprKind::HasLink(name) => Some(linked.contains(name)),
         TExprKind::Bool(b) => Some(*b),
-        TExprKind::Unary { op: UnOp::Not, expr } => static_bool(expr, linked).map(|b| !b),
-        TExprKind::Binary { op: BinOp::And, lhs, rhs } => Some(static_bool(lhs, linked)? && static_bool(rhs, linked)?),
-        TExprKind::Binary { op: BinOp::Or, lhs, rhs } => Some(static_bool(lhs, linked)? || static_bool(rhs, linked)?),
+        TExprKind::Unary {
+            op: UnOp::Not,
+            expr,
+        } => static_bool(expr, linked).map(|b| !b),
+        TExprKind::Binary {
+            op: BinOp::And,
+            lhs,
+            rhs,
+        } => Some(static_bool(lhs, linked)? && static_bool(rhs, linked)?),
+        TExprKind::Binary {
+            op: BinOp::Or,
+            lhs,
+            rhs,
+        } => Some(static_bool(lhs, linked)? || static_bool(rhs, linked)?),
         _ => None,
     }
 }
@@ -345,7 +514,10 @@ struct Lower<'a> {
 }
 
 fn local(id: LocalId) -> Place {
-    Place { local: id, proj: vec![] }
+    Place {
+        local: id,
+        proj: vec![],
+    }
 }
 
 fn field(mut p: Place, name: &str) -> Place {
@@ -356,7 +528,10 @@ fn field(mut p: Place, name: &str) -> Place {
 fn is_terminator(s: Option<&Stmt>) -> bool {
     match s.map(|s| &s.kind) {
         Some(StmtKind::Safety { body, .. }) => is_terminator(body.last()),
-        k => matches!(k, Some(StmtKind::Break | StmtKind::Continue | StmtKind::Return(_))),
+        k => matches!(
+            k,
+            Some(StmtKind::Break | StmtKind::Continue | StmtKind::Return(_))
+        ),
     }
 }
 
@@ -389,7 +564,11 @@ fn has_call(e: &TExpr) -> bool {
         | TExprKind::HasLink(_)
         | TExprKind::SizeOf(_)
         | TExprKind::Zeroed => false,
-        TExprKind::Binary { lhs, rhs, .. } | TExprKind::Index { base: lhs, index: rhs } => has_call(lhs) || has_call(rhs),
+        TExprKind::Binary { lhs, rhs, .. }
+        | TExprKind::Index {
+            base: lhs,
+            index: rhs,
+        } => has_call(lhs) || has_call(rhs),
         TExprKind::Unary { expr, .. }
         | TExprKind::Cast(expr)
         | TExprKind::Field { base: expr, .. }
@@ -408,9 +587,13 @@ fn has_call(e: &TExpr) -> bool {
         | TExprKind::Downcast { value: expr, .. }
         | TExprKind::ToAllocator { ptr: expr, .. } => has_call(expr),
         TExprKind::Slice { base, lo, hi } => {
-            has_call(base) || lo.as_deref().is_some_and(has_call) || hi.as_deref().is_some_and(has_call)
+            has_call(base)
+                || lo.as_deref().is_some_and(has_call)
+                || hi.as_deref().is_some_and(has_call)
         }
-        TExprKind::StructLit(fs) | TExprKind::Variant { fields: fs, .. } => fs.iter().any(|(_, e)| has_call(e)),
+        TExprKind::StructLit(fs) | TExprKind::Variant { fields: fs, .. } => {
+            fs.iter().any(|(_, e)| has_call(e))
+        }
         TExprKind::ArrayLit(es) => es.iter().any(has_call),
         TExprKind::ArrayRepeat(x) => has_call(x),
     }
@@ -424,7 +607,15 @@ impl<'a> Lower<'a> {
         linked: &'a [String],
     ) -> (Func, Vec<Ref>) {
         // Sema variables keep their ids as OIR locals; temporaries follow.
-        let locals = f.vars.iter().map(|v| Local { name: Some(v.name.clone()), ty: v.ty.clone(), global: false }).collect();
+        let locals = f
+            .vars
+            .iter()
+            .map(|v| Local {
+                name: Some(v.name.clone()),
+                ty: v.ty.clone(),
+                global: false,
+            })
+            .collect();
         let mut l = Lower {
             structs,
             enums,
@@ -440,7 +631,9 @@ impl<'a> Lower<'a> {
         let mut body = Vec::new();
         l.block(&f.body, false, &mut body);
         // Falling off the end of a `!void` function returns "no error".
-        if matches!(&f.ret, Type::ErrorUnion(_, p) if **p == Type::Void) && !is_terminator(body.last()) {
+        if matches!(&f.ret, Type::ErrorUnion(_, p) if **p == Type::Void)
+            && !is_terminator(body.last())
+        {
             let ok = l.ok_void(&mut body);
             l.push(&mut body, StmtKind::Return(Some(ok)));
         }
@@ -457,7 +650,11 @@ impl<'a> Lower<'a> {
     }
 
     fn temp(&mut self, ty: Type) -> LocalId {
-        self.locals.push(Local { name: None, ty, global: false });
+        self.locals.push(Local {
+            name: None,
+            ty,
+            global: false,
+        });
         self.locals.len() - 1
     }
 
@@ -466,25 +663,47 @@ impl<'a> Lower<'a> {
         if let Some(&id) = self.globals.get(name) {
             return id;
         }
-        self.locals.push(Local { name: Some(name.to_string()), ty: ty.clone(), global: true });
+        self.locals.push(Local {
+            name: Some(name.to_string()),
+            ty: ty.clone(),
+            global: true,
+        });
         let id = self.locals.len() - 1;
         self.globals.insert(name.to_string(), id);
         id
     }
 
     fn push(&self, out: &mut Block, kind: StmtKind) {
-        out.push(Stmt { kind, span: self.span });
+        out.push(Stmt {
+            kind,
+            span: self.span,
+        });
     }
 
     fn block(&mut self, stmts: &'a [TStmt], is_loop: bool, out: &mut Block) {
-        self.scoped(stmts, Scope { defers: Vec::new(), is_loop, restore: None }, out);
+        self.scoped(
+            stmts,
+            Scope {
+                defers: Vec::new(),
+                is_loop,
+                restore: None,
+            },
+            out,
+        );
     }
 
     fn scoped(&mut self, stmts: &'a [TStmt], scope: Scope<'a>, out: &mut Block) {
-        if let Some(TStmt { kind: TStmtKind::SetSafety(on), span }) = stmts.first() {
+        if let Some(TStmt {
+            kind: TStmtKind::SetSafety(on),
+            span,
+        }) = stmts.first()
+        {
             let mut body = Vec::new();
             self.scoped(&stmts[1..], scope, &mut body);
-            out.push(Stmt { kind: StmtKind::Safety { on: *on, body }, span: *span });
+            out.push(Stmt {
+                kind: StmtKind::Safety { on: *on, body },
+                span: *span,
+            });
             return;
         }
         self.scopes.push(scope);
@@ -511,7 +730,14 @@ impl<'a> Lower<'a> {
     fn run_defers(&mut self, to_loop: bool, on_err: bool, out: &mut Block) {
         let mut pending: Vec<Result<&'a [TStmt], LocalId>> = Vec::new();
         for scope in self.scopes.iter().rev() {
-            pending.extend(scope.defers.iter().rev().filter(|(_, e)| on_err || !e).map(|(d, _)| Ok(*d)));
+            pending.extend(
+                scope
+                    .defers
+                    .iter()
+                    .rev()
+                    .filter(|(_, e)| on_err || !e)
+                    .map(|(d, _)| Ok(*d)),
+            );
             if let (Some(t), false) = (scope.restore, on_err) {
                 pending.push(Err(t));
             }
@@ -523,7 +749,10 @@ impl<'a> Lower<'a> {
         for p in pending {
             match p {
                 Ok(d) => self.block(d, false, out),
-                Err(t) => out.push(Stmt { kind: StmtKind::TraceRestore(t), span }),
+                Err(t) => out.push(Stmt {
+                    kind: StmtKind::TraceRestore(t),
+                    span,
+                }),
             }
         }
         self.span = span;
@@ -532,7 +761,10 @@ impl<'a> Lower<'a> {
     /// A local set to "no error" of the function's `E!void` return type.
     fn ok_void(&mut self, out: &mut Block) -> Operand {
         let t = self.temp(self.ret.clone());
-        let rv = Rvalue::Ok { val: None, ty: self.ret.clone() };
+        let rv = Rvalue::Ok {
+            val: None,
+            ty: self.ret.clone(),
+        };
         self.push(out, StmtKind::Assign(local(t), rv));
         Operand::Local(t)
     }
@@ -546,44 +778,114 @@ impl<'a> Lower<'a> {
         match &s.kind {
             TStmtKind::Let(id, init) => {
                 let rv = self.rvalue(init, out);
-                self.push(out, StmtKind::Assign(Place { local: *id, proj: vec![] }, rv));
+                self.push(
+                    out,
+                    StmtKind::Assign(
+                        Place {
+                            local: *id,
+                            proj: vec![],
+                        },
+                        rv,
+                    ),
+                );
             }
-            TStmtKind::Assign { target, op: None, value } => {
+            TStmtKind::Assign {
+                target,
+                op: None,
+                value,
+            } => {
                 let place = self.place(target, out);
                 let rv = self.rvalue(value, out);
                 self.push(out, StmtKind::Assign(place, rv));
             }
-            TStmtKind::Assign { target, op: Some(op), value } => {
+            TStmtKind::Assign {
+                target,
+                op: Some(op),
+                value,
+            } => {
                 let place = self.place(target, out);
                 let cur = if place.proj.is_empty() {
                     Operand::Local(place.local)
                 } else {
                     let t = self.temp(target.ty.clone());
-                    self.push(out, StmtKind::Assign(Place { local: t, proj: vec![] }, Rvalue::Load(place.clone())));
+                    self.push(
+                        out,
+                        StmtKind::Assign(
+                            Place {
+                                local: t,
+                                proj: vec![],
+                            },
+                            Rvalue::Load(place.clone()),
+                        ),
+                    );
                     Operand::Local(t)
                 };
                 let v = self.operand(value, out);
-                let rv = Rvalue::Binary { op: *op, lhs: cur, rhs: v, ty: target.ty.clone(), span: s.span };
+                let rv = Rvalue::Binary {
+                    op: *op,
+                    lhs: cur,
+                    rhs: v,
+                    ty: target.ty.clone(),
+                    span: s.span,
+                };
                 self.push(out, StmtKind::Assign(place, rv));
             }
             // A condition known now: only the branch that runs.
-            TStmtKind::If { cond, capture: None, then, els } if let Some(b) = static_bool(cond, self.linked) => {
+            TStmtKind::If {
+                cond,
+                capture: None,
+                then,
+                els,
+            } if let Some(b) = static_bool(cond, self.linked) => {
                 let mut t = Vec::new();
                 self.block(if b { then } else { els }, false, &mut t);
                 self.span = s.span;
-                self.push(out, StmtKind::If { cond: Operand::Bool(true), then: t, els: Vec::new() });
+                self.push(
+                    out,
+                    StmtKind::If {
+                        cond: Operand::Bool(true),
+                        then: t,
+                        els: Vec::new(),
+                    },
+                );
             }
-            TStmtKind::If { cond, capture, then, els } => {
+            TStmtKind::If {
+                cond,
+                capture,
+                then,
+                els,
+            } => {
                 let mut t = Vec::new();
                 let c = match capture {
                     None => self.operand(cond, out),
                     Some(v) => {
                         let p = self.place(cond, out);
                         let has = self.temp(Type::Bool);
-                        let rv = Rvalue::IsSome { place: p.clone(), ty: cond.ty.clone() };
-                        self.push(out, StmtKind::Assign(Place { local: has, proj: vec![] }, rv));
+                        let rv = Rvalue::IsSome {
+                            place: p.clone(),
+                            ty: cond.ty.clone(),
+                        };
+                        self.push(
+                            out,
+                            StmtKind::Assign(
+                                Place {
+                                    local: has,
+                                    proj: vec![],
+                                },
+                                rv,
+                            ),
+                        );
                         let val = Rvalue::Load(Self::unwrap_place(p, &cond.ty));
-                        self.push(&mut t, StmtKind::Assign(Place { local: *v, proj: vec![] }, val));
+                        self.push(
+                            &mut t,
+                            StmtKind::Assign(
+                                Place {
+                                    local: *v,
+                                    proj: vec![],
+                                },
+                                val,
+                            ),
+                        );
                         Operand::Local(has)
                     }
                 };
@@ -591,12 +893,25 @@ impl<'a> Lower<'a> {
                 let mut e = Vec::new();
                 self.block(els, false, &mut e);
                 self.span = s.span;
-                self.push(out, StmtKind::If { cond: c, then: t, els: e });
+                self.push(
+                    out,
+                    StmtKind::If {
+                        cond: c,
+                        then: t,
+                        els: e,
+                    },
+                );
             }
             // On an error, `err` gets it and the error branch runs; the
             // trace entries of the error are dropped when that branch ends
             // normally, as for `catch`.
-            TStmtKind::IfErr { cond, value, then, err, els } => {
+            TStmtKind::IfErr {
+                cond,
+                value,
+                then,
+                err,
+                els,
+            } => {
                 let saved = self.temp(Type::Int(IntTy::U32));
                 self.push(out, StmtKind::Assign(local(saved), Rvalue::TraceLen));
                 let u = self.place(cond, out);
@@ -604,17 +919,42 @@ impl<'a> Lower<'a> {
                 self.push(out, StmtKind::Assign(local(c), Rvalue::IsErr(u.clone())));
                 let mut ok = Vec::new();
                 if let Some(v) = value {
-                    self.push(&mut ok, StmtKind::Assign(local(*v), Rvalue::Load(field(u.clone(), "val"))));
+                    self.push(
+                        &mut ok,
+                        StmtKind::Assign(local(*v), Rvalue::Load(field(u.clone(), "val"))),
+                    );
                 }
                 self.block(then, false, &mut ok);
                 self.span = s.span;
                 let mut bad = Vec::new();
-                self.push(&mut bad, StmtKind::Assign(local(*err), Rvalue::Load(field(u, "err"))));
-                self.scoped(els, Scope { defers: Vec::new(), is_loop: false, restore: Some(saved) }, &mut bad);
+                self.push(
+                    &mut bad,
+                    StmtKind::Assign(local(*err), Rvalue::Load(field(u, "err"))),
+                );
+                self.scoped(
+                    els,
+                    Scope {
+                        defers: Vec::new(),
+                        is_loop: false,
+                        restore: Some(saved),
+                    },
+                    &mut bad,
+                );
                 self.span = s.span;
-                self.push(out, StmtKind::If { cond: Operand::Local(c), then: bad, els: ok });
+                self.push(
+                    out,
+                    StmtKind::If {
+                        cond: Operand::Local(c),
+                        then: bad,
+                        els: ok,
+                    },
+                );
             }
-            TStmtKind::While { cond, capture, body } => {
+            TStmtKind::While {
+                cond,
+                capture,
+                body,
+            } => {
                 let mut b = Vec::new();
                 let (c, val) = match capture {
                     None => (self.operand(cond, &mut b), None),
@@ -622,20 +962,47 @@ impl<'a> Lower<'a> {
                     Some(v) => {
                         let p = self.place(cond, &mut b);
                         let has = self.temp(Type::Bool);
-                        let rv = Rvalue::IsSome { place: p.clone(), ty: cond.ty.clone() };
+                        let rv = Rvalue::IsSome {
+                            place: p.clone(),
+                            ty: cond.ty.clone(),
+                        };
                         self.push(&mut b, StmtKind::Assign(local(has), rv));
-                        (Operand::Local(has), Some((*v, Self::unwrap_place(p, &cond.ty))))
+                        (
+                            Operand::Local(has),
+                            Some((*v, Self::unwrap_place(p, &cond.ty))),
+                        )
                     }
                 };
-                self.push(&mut b, StmtKind::If { cond: c, then: vec![], els: vec![Stmt { kind: StmtKind::Break, span: s.span }] });
+                self.push(
+                    &mut b,
+                    StmtKind::If {
+                        cond: c,
+                        then: vec![],
+                        els: vec![Stmt {
+                            kind: StmtKind::Break,
+                            span: s.span,
+                        }],
+                    },
+                );
                 if let Some((v, p)) = val {
                     self.push(&mut b, StmtKind::Assign(local(v), Rvalue::Load(p)));
                 }
                 self.block(body, true, &mut b);
                 self.span = s.span;
-                self.push(out, StmtKind::Loop { body: b, cont: vec![] });
+                self.push(
+                    out,
+                    StmtKind::Loop {
+                        body: b,
+                        cont: vec![],
+                    },
+                );
             }
-            TStmtKind::ForEach { index, elem, seq, body } => {
+            TStmtKind::ForEach {
+                index,
+                elem,
+                seq,
+                body,
+            } => {
                 let usize_ty = Type::Int(IntTy::Usize);
                 // The sequence is evaluated once: a slice is copied, and an
                 // array is read in place.
@@ -655,7 +1022,10 @@ impl<'a> Lower<'a> {
                 };
                 self.push(out, StmtKind::Assign(local(end), n));
                 let i = index.unwrap_or_else(|| self.temp(usize_ty.clone()));
-                self.push(out, StmtKind::Assign(local(i), Rvalue::Use(Operand::Int(0, IntTy::Usize))));
+                self.push(
+                    out,
+                    StmtKind::Assign(local(i), Rvalue::Use(Operand::Int(0, IntTy::Usize))),
+                );
                 let mut b = Vec::new();
                 let c = self.temp(Type::Bool);
                 let cmp = Rvalue::Binary {
@@ -666,9 +1036,23 @@ impl<'a> Lower<'a> {
                     span: s.span,
                 };
                 self.push(&mut b, StmtKind::Assign(local(c), cmp));
-                self.push(&mut b, StmtKind::If { cond: Operand::Local(c), then: vec![], els: vec![Stmt { kind: StmtKind::Break, span: s.span }] });
+                self.push(
+                    &mut b,
+                    StmtKind::If {
+                        cond: Operand::Local(c),
+                        then: vec![],
+                        els: vec![Stmt {
+                            kind: StmtKind::Break,
+                            span: s.span,
+                        }],
+                    },
+                );
                 let mut p = base;
-                p.proj.push(Proj::Index { index: Operand::Local(i), len, span: s.span });
+                p.proj.push(Proj::Index {
+                    index: Operand::Local(i),
+                    len,
+                    span: s.span,
+                });
                 self.push(&mut b, StmtKind::Assign(local(*elem), Rvalue::Load(p)));
                 self.block(body, true, &mut b);
                 self.span = s.span;
@@ -680,7 +1064,10 @@ impl<'a> Lower<'a> {
                     ty: usize_ty,
                     span: s.span,
                 };
-                let cont = vec![Stmt { kind: StmtKind::Assign(local(i), step), span: s.span }];
+                let cont = vec![Stmt {
+                    kind: StmtKind::Assign(local(i), step),
+                    span: s.span,
+                }];
                 self.push(out, StmtKind::Loop { body: b, cont });
             }
             TStmtKind::For { var, lo, hi, body } => {
@@ -689,8 +1076,20 @@ impl<'a> Lower<'a> {
                 // The upper bound is evaluated once, before the loop.
                 let hi_rv = self.rvalue(hi, out);
                 let end = self.temp(hi.ty.clone());
-                self.push(out, StmtKind::Assign(Place { local: end, proj: vec![] }, hi_rv));
-                let i = Place { local: *var, proj: vec![] };
+                self.push(
+                    out,
+                    StmtKind::Assign(
+                        Place {
+                            local: end,
+                            proj: vec![],
+                        },
+                        hi_rv,
+                    ),
+                );
+                let i = Place {
+                    local: *var,
+                    proj: vec![],
+                };
                 self.push(out, StmtKind::Assign(i.clone(), Rvalue::Use(lo_op)));
                 let mut b = Vec::new();
                 let c = self.temp(Type::Bool);
@@ -701,8 +1100,27 @@ impl<'a> Lower<'a> {
                     ty: lo.ty.clone(),
                     span: s.span,
                 };
-                self.push(&mut b, StmtKind::Assign(Place { local: c, proj: vec![] }, cmp));
-                self.push(&mut b, StmtKind::If { cond: Operand::Local(c), then: vec![], els: vec![Stmt { kind: StmtKind::Break, span: s.span }] });
+                self.push(
+                    &mut b,
+                    StmtKind::Assign(
+                        Place {
+                            local: c,
+                            proj: vec![],
+                        },
+                        cmp,
+                    ),
+                );
+                self.push(
+                    &mut b,
+                    StmtKind::If {
+                        cond: Operand::Local(c),
+                        then: vec![],
+                        els: vec![Stmt {
+                            kind: StmtKind::Break,
+                            span: s.span,
+                        }],
+                    },
+                );
                 self.block(body, true, &mut b);
                 self.span = s.span;
                 // `i < end` held, so `i + 1` cannot overflow.
@@ -713,7 +1131,10 @@ impl<'a> Lower<'a> {
                     ty: lo.ty.clone(),
                     span: s.span,
                 };
-                let cont = vec![Stmt { kind: StmtKind::Assign(i, step), span: s.span }];
+                let cont = vec![Stmt {
+                    kind: StmtKind::Assign(i, step),
+                    span: s.span,
+                }];
                 self.push(out, StmtKind::Loop { body: b, cont });
             }
             TStmtKind::Break => {
@@ -735,12 +1156,18 @@ impl<'a> Lower<'a> {
                     && let (Some(Operand::Local(id)), Some(e)) = (&v, value)
                 {
                     let t = self.temp(e.ty.clone());
-                    self.push(out, StmtKind::Assign(local(t), Rvalue::Use(Operand::Local(*id))));
+                    self.push(
+                        out,
+                        StmtKind::Assign(local(t), Rvalue::Use(Operand::Local(*id))),
+                    );
                     v = Some(Operand::Local(t));
                 }
                 match value {
                     // An error: the trace gets this `return`, and `errdefer`s run.
-                    Some(TExpr { kind: TExprKind::ErrWrap(_), .. }) => {
+                    Some(TExpr {
+                        kind: TExprKind::ErrWrap(_),
+                        ..
+                    }) => {
                         self.push(out, StmtKind::TracePush(s.span));
                         self.run_defers(false, true, out);
                     }
@@ -755,14 +1182,23 @@ impl<'a> Lower<'a> {
                         ty: Type::ErrorUnion(..),
                         ..
                     }) => {
-                        let Some(Operand::Local(u)) = v else { unreachable!() };
+                        let Some(Operand::Local(u)) = v else {
+                            unreachable!()
+                        };
                         let c = self.temp(Type::Bool);
                         self.push(out, StmtKind::Assign(local(c), Rvalue::IsErr(local(u))));
                         let mut then = Vec::new();
                         self.push(&mut then, StmtKind::TracePush(s.span));
                         self.run_defers(false, true, &mut then);
                         self.push(&mut then, StmtKind::Return(v.clone()));
-                        self.push(out, StmtKind::If { cond: Operand::Local(c), then, els: vec![] });
+                        self.push(
+                            out,
+                            StmtKind::If {
+                                cond: Operand::Local(c),
+                                then,
+                                els: vec![],
+                            },
+                        );
                         self.run_defers(false, false, out);
                     }
                     _ => self.run_defers(false, false, out),
@@ -795,7 +1231,14 @@ impl<'a> Lower<'a> {
             TExprKind::Match { .. } => self.lower_match(e, None, out),
             TExprKind::Catch { .. } => self.lower_catch(e, None, out),
             TExprKind::OrElse { .. } => self.lower_orelse(e, None, out),
-            TExprKind::Unreachable => self.push(out, StmtKind::Check { cond: None, msg: "reached unreachable code", span: e.span }),
+            TExprKind::Unreachable => self.push(
+                out,
+                StmtKind::Check {
+                    cond: None,
+                    msg: "reached unreachable code",
+                    span: e.span,
+                },
+            ),
             TExprKind::Try(_) => {
                 self.lower_try(e, out);
             }
@@ -810,22 +1253,37 @@ impl<'a> Lower<'a> {
     /// trace, run the exit code with `errdefer`s and return the error.
     /// Returns the place of the payload (`None` for `void`).
     fn lower_try(&mut self, e: &'a TExpr, out: &mut Block) -> Option<Place> {
-        let TExprKind::Try(inner) = &e.kind else { unreachable!() };
+        let TExprKind::Try(inner) = &e.kind else {
+            unreachable!()
+        };
         let span = self.span;
         let u = self.place(inner, out);
         let c = self.temp(Type::Bool);
         self.push(out, StmtKind::Assign(local(c), Rvalue::IsErr(u.clone())));
         let mut then = Vec::new();
         let err = self.temp(Type::Int(IntTy::U16));
-        self.push(&mut then, StmtKind::Assign(local(err), Rvalue::Load(field(u.clone(), "err"))));
+        self.push(
+            &mut then,
+            StmtKind::Assign(local(err), Rvalue::Load(field(u.clone(), "err"))),
+        );
         self.push(&mut then, StmtKind::TracePush(e.span));
         self.run_defers(false, true, &mut then);
         let r = self.temp(self.ret.clone());
-        let rv = Rvalue::Err { err: Operand::Local(err), ty: self.ret.clone() };
+        let rv = Rvalue::Err {
+            err: Operand::Local(err),
+            ty: self.ret.clone(),
+        };
         self.push(&mut then, StmtKind::Assign(local(r), rv));
         self.push(&mut then, StmtKind::Return(Some(Operand::Local(r))));
         self.span = span;
-        self.push(out, StmtKind::If { cond: Operand::Local(c), then, els: vec![] });
+        self.push(
+            out,
+            StmtKind::If {
+                cond: Operand::Local(c),
+                then,
+                els: vec![],
+            },
+        );
         (e.ty != Type::Void).then(|| field(u, "val"))
     }
 
@@ -833,7 +1291,14 @@ impl<'a> Lower<'a> {
     /// goes to `result`); otherwise `result` gets the payload. The trace
     /// length is saved first and restored when the body ends normally.
     fn lower_catch(&mut self, e: &'a TExpr, result: Option<LocalId>, out: &mut Block) {
-        let TExprKind::Catch { expr, capture, body } = &e.kind else { unreachable!() };
+        let TExprKind::Catch {
+            expr,
+            capture,
+            body,
+        } = &e.kind
+        else {
+            unreachable!()
+        };
         let span = self.span;
         let saved = self.temp(Type::Int(IntTy::U32));
         self.push(out, StmtKind::Assign(local(saved), Rvalue::TraceLen));
@@ -842,7 +1307,10 @@ impl<'a> Lower<'a> {
         self.push(out, StmtKind::Assign(local(c), Rvalue::IsErr(u.clone())));
         let mut then = Vec::new();
         if let Some(v) = capture {
-            self.push(&mut then, StmtKind::Assign(local(*v), Rvalue::Load(field(u.clone(), "err"))));
+            self.push(
+                &mut then,
+                StmtKind::Assign(local(*v), Rvalue::Load(field(u.clone(), "err"))),
+            );
         }
         match (&**body, result) {
             (TArmBody::Expr(x), Some(r)) => {
@@ -856,30 +1324,63 @@ impl<'a> Lower<'a> {
             }
             (TArmBody::Block(stmts), _) => {
                 self.values.push(result);
-                self.scoped(stmts, Scope { defers: Vec::new(), is_loop: false, restore: Some(saved) }, &mut then);
+                self.scoped(
+                    stmts,
+                    Scope {
+                        defers: Vec::new(),
+                        is_loop: false,
+                        restore: Some(saved),
+                    },
+                    &mut then,
+                );
                 self.values.pop();
             }
         }
         self.span = span;
         let els = match result {
-            Some(r) => vec![Stmt { kind: StmtKind::Assign(local(r), Rvalue::Load(field(u, "val"))), span }],
+            Some(r) => vec![Stmt {
+                kind: StmtKind::Assign(local(r), Rvalue::Load(field(u, "val"))),
+                span,
+            }],
             None => vec![],
         };
-        self.push(out, StmtKind::If { cond: Operand::Local(c), then, els });
+        self.push(
+            out,
+            StmtKind::If {
+                cond: Operand::Local(c),
+                then,
+                els,
+            },
+        );
     }
 
     /// `x orelse body`: the value of the optional `x` goes to `result`, or
     /// when it is `null` the body runs (its value goes to `result`).
     fn lower_orelse(&mut self, e: &'a TExpr, result: Option<LocalId>, out: &mut Block) {
-        let TExprKind::OrElse { expr, body } = &e.kind else { unreachable!() };
+        let TExprKind::OrElse { expr, body } = &e.kind else {
+            unreachable!()
+        };
         let span = self.span;
         let p = self.place(expr, out);
         let has = self.temp(Type::Bool);
-        self.push(out, StmtKind::Assign(local(has), Rvalue::IsSome { place: p.clone(), ty: expr.ty.clone() }));
+        self.push(
+            out,
+            StmtKind::Assign(
+                local(has),
+                Rvalue::IsSome {
+                    place: p.clone(),
+                    ty: expr.ty.clone(),
+                },
+            ),
+        );
         let mut then = Vec::new();
         // A `?T` result (`a orelse b` where `b` is a `?T`) takes `x` whole.
         if let Some(r) = result {
-            let p = if e.ty == expr.ty { p } else { Self::unwrap_place(p, &expr.ty) };
+            let p = if e.ty == expr.ty {
+                p
+            } else {
+                Self::unwrap_place(p, &expr.ty)
+            };
             self.push(&mut then, StmtKind::Assign(local(r), Rvalue::Load(p)));
         }
         let mut els = Vec::new();
@@ -896,7 +1397,14 @@ impl<'a> Lower<'a> {
             }
         }
         self.span = span;
-        self.push(out, StmtKind::If { cond: Operand::Local(has), then, els });
+        self.push(
+            out,
+            StmtKind::If {
+                cond: Operand::Local(has),
+                then,
+                els,
+            },
+        );
     }
 
     /// The value inside the optional at `p`.
@@ -913,7 +1421,9 @@ impl<'a> Lower<'a> {
     /// A `match` on errors tests the error value instead of the tag, and a
     /// `match` on an integer tests the arms' ranges.
     fn lower_match(&mut self, e: &'a TExpr, result: Option<LocalId>, out: &mut Block) {
-        let TExprKind::Match { scrutinee, arms } = &e.kind else { unreachable!() };
+        let TExprKind::Match { scrutinee, arms } = &e.kind else {
+            unreachable!()
+        };
         let def = match &scrutinee.ty {
             Type::Enum(ename) => Some(self.enums[ename.as_str()]),
             _ => None,
@@ -926,7 +1436,11 @@ impl<'a> Lower<'a> {
             _ => IntTy::U16,
         };
         let tag = self.temp(Type::Int(tag_ty));
-        let tag_place = if def.is_some() { field(place.clone(), "tag") } else { place.clone() };
+        let tag_place = if def.is_some() {
+            field(place.clone(), "tag")
+        } else {
+            place.clone()
+        };
         self.push(out, StmtKind::Assign(local(tag), Rvalue::Load(tag_place)));
         let mut bodies = Vec::new();
         for arm in arms {
@@ -939,13 +1453,31 @@ impl<'a> Lower<'a> {
                     for name in ["u", &v.name, &v.fields[fi].0] {
                         p.proj.push(Proj::Field(name.to_string()));
                     }
-                    self.push(&mut b, StmtKind::Assign(Place { local: var, proj: vec![] }, Rvalue::Load(p)));
+                    self.push(
+                        &mut b,
+                        StmtKind::Assign(
+                            Place {
+                                local: var,
+                                proj: vec![],
+                            },
+                            Rvalue::Load(p),
+                        ),
+                    );
                 }
             }
             match (&arm.body, result) {
                 (TArmBody::Expr(x), Some(r)) => {
                     let rv = self.rvalue(x, &mut b);
-                    self.push(&mut b, StmtKind::Assign(Place { local: r, proj: vec![] }, rv));
+                    self.push(
+                        &mut b,
+                        StmtKind::Assign(
+                            Place {
+                                local: r,
+                                proj: vec![],
+                            },
+                            rv,
+                        ),
+                    );
                 }
                 (TArmBody::Expr(x), None) => self.eval(x, &mut b),
                 (TArmBody::Block(stmts), _) => self.block(stmts, false, &mut b),
@@ -966,15 +1498,39 @@ impl<'a> Lower<'a> {
                             ty: Type::Int(tag_ty),
                             span,
                         },
-                        [] => Rvalue::InRanges { val: Operand::Local(tag), ranges: arm.ranges.clone(), ty: tag_ty },
+                        [] => Rvalue::InRanges {
+                            val: Operand::Local(tag),
+                            ranges: arm.ranges.clone(),
+                            ty: tag_ty,
+                        },
                         vs => {
                             let ranges = vs.iter().map(|&v| (v as i128, v as i128)).collect();
-                            Rvalue::InRanges { val: Operand::Local(tag), ranges, ty: tag_ty }
+                            Rvalue::InRanges {
+                                val: Operand::Local(tag),
+                                ranges,
+                                ty: tag_ty,
+                            }
                         }
                     };
                     vec![
-                        Stmt { kind: StmtKind::Assign(Place { local: c, proj: vec![] }, cmp), span },
-                        Stmt { kind: StmtKind::If { cond: Operand::Local(c), then: body, els: rest }, span },
+                        Stmt {
+                            kind: StmtKind::Assign(
+                                Place {
+                                    local: c,
+                                    proj: vec![],
+                                },
+                                cmp,
+                            ),
+                            span,
+                        },
+                        Stmt {
+                            kind: StmtKind::If {
+                                cond: Operand::Local(c),
+                                then: body,
+                                els: rest,
+                            },
+                            span,
+                        },
                     ]
                 }
                 _ => body,
@@ -1015,7 +1571,10 @@ impl<'a> Lower<'a> {
         match ty {
             Type::Struct(name) => {
                 let fields = self.structs[name.as_str()].fields.clone();
-                self.push(out, StmtKind::Assign(local(r), Rvalue::Use(Operand::Bool(true))));
+                self.push(
+                    out,
+                    StmtKind::Assign(local(r), Rvalue::Use(Operand::Bool(true))),
+                );
                 // Each field's test runs only when the fields before it are equal.
                 let mut tail: Block = Vec::new();
                 for (f, ft) in fields.iter().rev() {
@@ -1024,7 +1583,14 @@ impl<'a> Lower<'a> {
                     self.push(&mut b_, StmtKind::Assign(local(r), Rvalue::Use(c)));
                     if !tail.is_empty() {
                         let rest = std::mem::take(&mut tail);
-                        b_.push(Stmt { kind: StmtKind::If { cond: Operand::Local(r), then: rest, els: vec![] }, span });
+                        b_.push(Stmt {
+                            kind: StmtKind::If {
+                                cond: Operand::Local(r),
+                                then: rest,
+                                els: vec![],
+                            },
+                            span,
+                        });
                     }
                     tail = b_;
                 }
@@ -1032,20 +1598,64 @@ impl<'a> Lower<'a> {
             }
             Type::Optional(inner) if !is_ptr_optional(ty) => {
                 let ha = self.temp(Type::Bool);
-                self.push(out, StmtKind::Assign(local(ha), Rvalue::IsSome { place: a.clone(), ty: ty.clone() }));
+                self.push(
+                    out,
+                    StmtKind::Assign(
+                        local(ha),
+                        Rvalue::IsSome {
+                            place: a.clone(),
+                            ty: ty.clone(),
+                        },
+                    ),
+                );
                 let hb = self.temp(Type::Bool);
-                self.push(out, StmtKind::Assign(local(hb), Rvalue::IsSome { place: b.clone(), ty: ty.clone() }));
-                let same = Rvalue::Binary { op: BinOp::Eq, lhs: Operand::Local(ha), rhs: Operand::Local(hb), ty: Type::Bool, span };
+                self.push(
+                    out,
+                    StmtKind::Assign(
+                        local(hb),
+                        Rvalue::IsSome {
+                            place: b.clone(),
+                            ty: ty.clone(),
+                        },
+                    ),
+                );
+                let same = Rvalue::Binary {
+                    op: BinOp::Eq,
+                    lhs: Operand::Local(ha),
+                    rhs: Operand::Local(hb),
+                    ty: Type::Bool,
+                    span,
+                };
                 self.push(out, StmtKind::Assign(local(r), same));
                 let mut vals = Vec::new();
                 let c = self.equal(field(a, "val"), field(b, "val"), inner, &mut vals);
                 self.push(&mut vals, StmtKind::Assign(local(r), Rvalue::Use(c)));
-                let both = vec![Stmt { kind: StmtKind::If { cond: Operand::Local(ha), then: vals, els: vec![] }, span }];
-                self.push(out, StmtKind::If { cond: Operand::Local(r), then: both, els: vec![] });
+                let both = vec![Stmt {
+                    kind: StmtKind::If {
+                        cond: Operand::Local(ha),
+                        then: vals,
+                        els: vec![],
+                    },
+                    span,
+                }];
+                self.push(
+                    out,
+                    StmtKind::If {
+                        cond: Operand::Local(r),
+                        then: both,
+                        els: vec![],
+                    },
+                );
             }
             _ => {
                 let (x, y) = (self.load(a, ty, out), self.load(b, ty, out));
-                let rv = Rvalue::Binary { op: BinOp::Eq, lhs: x, rhs: y, ty: ty.clone(), span };
+                let rv = Rvalue::Binary {
+                    op: BinOp::Eq,
+                    lhs: x,
+                    rhs: y,
+                    ty: ty.clone(),
+                    span,
+                };
                 self.push(out, StmtKind::Assign(local(r), rv));
             }
         }
@@ -1059,7 +1669,11 @@ impl<'a> Lower<'a> {
         let u64t = Type::Int(IntTy::U64);
         let mix = |this: &mut Self, val: Operand, vty: Type, out: &mut Block| {
             let args = vec![(Operand::Local(h), u64t.clone()), (val, vty)];
-            let rv = Rvalue::Intrinsic { op: Intrinsic::HashMix, args, span: this.span };
+            let rv = Rvalue::Intrinsic {
+                op: Intrinsic::HashMix,
+                args,
+                span: this.span,
+            };
             this.push(out, StmtKind::Assign(local(h), rv));
         };
         match ty {
@@ -1070,11 +1684,27 @@ impl<'a> Lower<'a> {
             }
             Type::Optional(inner) if !is_ptr_optional(ty) => {
                 let has = self.temp(Type::Bool);
-                self.push(out, StmtKind::Assign(local(has), Rvalue::IsSome { place: p.clone(), ty: ty.clone() }));
+                self.push(
+                    out,
+                    StmtKind::Assign(
+                        local(has),
+                        Rvalue::IsSome {
+                            place: p.clone(),
+                            ty: ty.clone(),
+                        },
+                    ),
+                );
                 mix(self, Operand::Local(has), Type::Bool, out);
                 let mut then = Vec::new();
                 self.hash(field(p, "val"), inner, h, &mut then);
-                self.push(out, StmtKind::If { cond: Operand::Local(has), then, els: vec![] });
+                self.push(
+                    out,
+                    StmtKind::If {
+                        cond: Operand::Local(has),
+                        then,
+                        els: vec![],
+                    },
+                );
             }
             _ => {
                 let v = self.load(p, ty, out);
@@ -1088,7 +1718,16 @@ impl<'a> Lower<'a> {
             Rvalue::Use(op) => op,
             rv => {
                 let t = self.temp(e.ty.clone());
-                self.push(out, StmtKind::Assign(Place { local: t, proj: vec![] }, rv));
+                self.push(
+                    out,
+                    StmtKind::Assign(
+                        Place {
+                            local: t,
+                            proj: vec![],
+                        },
+                        rv,
+                    ),
+                );
                 Operand::Local(t)
             }
         }
@@ -1096,7 +1735,10 @@ impl<'a> Lower<'a> {
 
     fn place(&mut self, e: &'a TExpr, out: &mut Block) -> Place {
         match &e.kind {
-            TExprKind::Var(id) => Place { local: *id, proj: vec![] },
+            TExprKind::Var(id) => Place {
+                local: *id,
+                proj: vec![],
+            },
             TExprKind::Global(name) => local(self.global(name, &e.ty)),
             TExprKind::Deref(ptr) => {
                 let mut p = self.place(ptr, out);
@@ -1104,7 +1746,9 @@ impl<'a> Lower<'a> {
                 p
             }
             TExprKind::Field { base, index } => {
-                let Type::Struct(sname) = &base.ty else { unreachable!() };
+                let Type::Struct(sname) = &base.ty else {
+                    unreachable!()
+                };
                 let name = self.structs[sname.as_str()].fields[*index].0.clone();
                 let mut p = self.place(base, out);
                 p.proj.push(Proj::Field(name));
@@ -1114,12 +1758,32 @@ impl<'a> Lower<'a> {
             TExprKind::Unwrap(x) => {
                 let p = self.place(x, out);
                 let has = self.temp(Type::Bool);
-                self.push(out, StmtKind::Assign(local(has), Rvalue::IsSome { place: p.clone(), ty: x.ty.clone() }));
-                self.push(out, StmtKind::Check { cond: Some(Operand::Local(has)), msg: "unwrap of null", span: e.span });
+                self.push(
+                    out,
+                    StmtKind::Assign(
+                        local(has),
+                        Rvalue::IsSome {
+                            place: p.clone(),
+                            ty: x.ty.clone(),
+                        },
+                    ),
+                );
+                self.push(
+                    out,
+                    StmtKind::Check {
+                        cond: Some(Operand::Local(has)),
+                        msg: "unwrap of null",
+                        span: e.span,
+                    },
+                );
                 Self::unwrap_place(p, &x.ty)
             }
             TExprKind::SliceLen(base) | TExprKind::SlicePtr(base) => {
-                let name = if matches!(e.kind, TExprKind::SliceLen(_)) { "len" } else { "ptr" };
+                let name = if matches!(e.kind, TExprKind::SliceLen(_)) {
+                    "len"
+                } else {
+                    "ptr"
+                };
                 let mut p = self.place(base, out);
                 p.proj.push(Proj::Field(name.to_string()));
                 p
@@ -1133,7 +1797,11 @@ impl<'a> Lower<'a> {
                 };
                 let mut p = self.place(base, out);
                 let index = self.operand(index, out);
-                p.proj.push(Proj::Index { index, len, span: e.span });
+                p.proj.push(Proj::Index {
+                    index,
+                    len,
+                    span: e.span,
+                });
                 p
             }
             _ => {
@@ -1142,11 +1810,23 @@ impl<'a> Lower<'a> {
                     // A constant in place position (e.g. `"abc"[0]`): spill it.
                     op => {
                         let t = self.temp(e.ty.clone());
-                        self.push(out, StmtKind::Assign(Place { local: t, proj: vec![] }, Rvalue::Use(op)));
+                        self.push(
+                            out,
+                            StmtKind::Assign(
+                                Place {
+                                    local: t,
+                                    proj: vec![],
+                                },
+                                Rvalue::Use(op),
+                            ),
+                        );
                         t
                     }
                 };
-                Place { local, proj: vec![] }
+                Place {
+                    local,
+                    proj: vec![],
+                }
             }
         }
     }
@@ -1164,8 +1844,14 @@ impl<'a> Lower<'a> {
             TExprKind::Bool(b) => Rvalue::Use(Operand::Bool(*b)),
             TExprKind::Str(s) => Rvalue::Use(Operand::Str(s.clone())),
             TExprKind::Null => Rvalue::Null(e.ty.clone()),
-            TExprKind::Some(x) => Rvalue::Some { val: self.operand(x, out), ty: e.ty.clone() },
-            TExprKind::IsSome(x) => Rvalue::IsSome { place: self.place(x, out), ty: x.ty.clone() },
+            TExprKind::Some(x) => Rvalue::Some {
+                val: self.operand(x, out),
+                ty: e.ty.clone(),
+            },
+            TExprKind::IsSome(x) => Rvalue::IsSome {
+                place: self.place(x, out),
+                ty: x.ty.clone(),
+            },
             TExprKind::AddrOf(x) => Rvalue::AddrOf(self.place(x, out)),
             TExprKind::Match { .. } => {
                 let t = self.temp(e.ty.clone());
@@ -1176,8 +1862,14 @@ impl<'a> Lower<'a> {
             // A copy: a call later in the expression may change a `var` global.
             TExprKind::Global(_) => Rvalue::Load(self.place(e, out)),
             TExprKind::ErrorValue(v) => Rvalue::Use(Operand::Int(*v as i128, IntTy::U16)),
-            TExprKind::OkWrap(x) => Rvalue::Ok { val: Some(self.operand(x, out)), ty: e.ty.clone() },
-            TExprKind::ErrWrap(x) => Rvalue::Err { err: self.operand(x, out), ty: e.ty.clone() },
+            TExprKind::OkWrap(x) => Rvalue::Ok {
+                val: Some(self.operand(x, out)),
+                ty: e.ty.clone(),
+            },
+            TExprKind::ErrWrap(x) => Rvalue::Err {
+                err: self.operand(x, out),
+                ty: e.ty.clone(),
+            },
             TExprKind::Try(_) => Rvalue::Load(self.lower_try(e, out).unwrap()),
             TExprKind::Catch { .. } => {
                 let t = self.temp(e.ty.clone());
@@ -1191,17 +1883,35 @@ impl<'a> Lower<'a> {
             }
             // The panic does not return: the value is never read.
             TExprKind::Unreachable => {
-                self.push(out, StmtKind::Check { cond: None, msg: "reached unreachable code", span: e.span });
+                self.push(
+                    out,
+                    StmtKind::Check {
+                        cond: None,
+                        msg: "reached unreachable code",
+                        span: e.span,
+                    },
+                );
                 Rvalue::Use(Operand::Local(self.temp(e.ty.clone())))
             }
-            TExprKind::Call { name, is_extern, args } => {
+            TExprKind::Call {
+                name,
+                is_extern,
+                args,
+            } => {
                 let args = args.iter().map(|a| self.operand(a, out)).collect();
                 self.refs.push(Ref::Fn(name.clone()));
-                Rvalue::Call { name: name.clone(), is_extern: *is_extern, args }
+                Rvalue::Call {
+                    name: name.clone(),
+                    is_extern: *is_extern,
+                    args,
+                }
             }
             TExprKind::FnRef { name, is_extern } => {
                 self.refs.push(Ref::Fn(name.clone()));
-                Rvalue::Use(Operand::Fn { name: name.clone(), is_extern: *is_extern })
+                Rvalue::Use(Operand::Fn {
+                    name: name.clone(),
+                    is_extern: *is_extern,
+                })
             }
             TExprKind::HasLink(name) => Rvalue::Use(Operand::Bool(self.linked.contains(name))),
             TExprKind::CallValue { callee, args } => {
@@ -1211,38 +1921,79 @@ impl<'a> Lower<'a> {
             }
             TExprKind::SizeOf(t) => Rvalue::SizeOf(t.clone()),
             TExprKind::Zeroed => Rvalue::Zeroed(e.ty.clone()),
-            TExprKind::PtrCast(x) => Rvalue::PtrCast { val: self.operand(x, out), ty: e.ty.clone() },
-            TExprKind::Downcast { value, iface, strukt } => {
+            TExprKind::PtrCast(x) => Rvalue::PtrCast {
+                val: self.operand(x, out),
+                ty: e.ty.clone(),
+            },
+            TExprKind::Downcast {
+                value,
+                iface,
+                strukt,
+            } => {
                 self.refs.push(Ref::Vtable(iface.clone(), strukt.clone()));
                 let val = self.operand(value, out);
-                Rvalue::Downcast { val, iface: iface.clone(), strukt: strukt.clone(), ty: e.ty.clone() }
+                Rvalue::Downcast {
+                    val,
+                    iface: iface.clone(),
+                    strukt: strukt.clone(),
+                    ty: e.ty.clone(),
+                }
             }
             TExprKind::DynCall { recv, method, args } => {
                 let recv = self.operand(recv, out);
                 let args = args.iter().map(|a| self.operand(a, out)).collect();
-                Rvalue::DynCall { recv, method: method.clone(), args }
+                Rvalue::DynCall {
+                    recv,
+                    method: method.clone(),
+                    args,
+                }
             }
             TExprKind::ToDyn { ptr, strukt } => {
-                let Type::Dyn(iface) = &e.ty else { unreachable!() };
+                let Type::Dyn(iface) = &e.ty else {
+                    unreachable!()
+                };
                 self.refs.push(Ref::Vtable(iface.clone(), strukt.clone()));
-                Rvalue::ToDyn { ptr: self.operand(ptr, out), iface: iface.clone(), strukt: strukt.clone() }
+                Rvalue::ToDyn {
+                    ptr: self.operand(ptr, out),
+                    iface: iface.clone(),
+                    strukt: strukt.clone(),
+                }
             }
             TExprKind::ToAllocator { ptr, strukt } => {
                 self.refs.push(Ref::Fn(format!("{strukt}.alloc")));
                 self.refs.push(Ref::Fn(format!("{strukt}.free")));
-                Rvalue::ToAllocator { ptr: self.operand(ptr, out), strukt: strukt.clone() }
+                Rvalue::ToAllocator {
+                    ptr: self.operand(ptr, out),
+                    strukt: strukt.clone(),
+                }
             }
-            TExprKind::Intrinsic { op: Intrinsic::Hash, args } => {
+            TExprKind::Intrinsic {
+                op: Intrinsic::Hash,
+                args,
+            } => {
                 let v = self.operand(&args[0], out);
                 let p = self.spill(v, &args[0].ty, out);
                 let h = self.temp(Type::Int(IntTy::U64));
-                self.push(out, StmtKind::Assign(local(h), Rvalue::Use(Operand::Int(0x9e37_79b9_7f4a_7c15, IntTy::U64))));
+                self.push(
+                    out,
+                    StmtKind::Assign(
+                        local(h),
+                        Rvalue::Use(Operand::Int(0x9e37_79b9_7f4a_7c15, IntTy::U64)),
+                    ),
+                );
                 self.hash(p, &args[0].ty, h, out);
                 Rvalue::Use(Operand::Local(h))
             }
             TExprKind::Intrinsic { op, args } => {
-                let args = args.iter().map(|a| (self.operand(a, out), a.ty.clone())).collect();
-                Rvalue::Intrinsic { op: *op, args, span: e.span }
+                let args = args
+                    .iter()
+                    .map(|a| (self.operand(a, out), a.ty.clone()))
+                    .collect();
+                Rvalue::Intrinsic {
+                    op: *op,
+                    args,
+                    span: e.span,
+                }
             }
             // `p = alloc(T)`; if `p` is not null, `p.* = value` and the
             // result is `p`, else the error `OutOfMemory`.
@@ -1251,22 +2002,80 @@ impl<'a> Lower<'a> {
                 let v = self.operand(value, out);
                 let opt = Type::Optional(Box::new(Type::Ptr(Box::new(value.ty.clone()), true)));
                 let p = self.temp(opt.clone());
-                self.push(out, StmtKind::Assign(local(p), Rvalue::Alloc { alloc: a, ty: value.ty.clone(), span: e.span }));
+                self.push(
+                    out,
+                    StmtKind::Assign(
+                        local(p),
+                        Rvalue::Alloc {
+                            alloc: a,
+                            ty: value.ty.clone(),
+                            span: e.span,
+                        },
+                    ),
+                );
                 let has = self.temp(Type::Bool);
-                self.push(out, StmtKind::Assign(local(has), Rvalue::IsSome { place: local(p), ty: opt }));
+                self.push(
+                    out,
+                    StmtKind::Assign(
+                        local(has),
+                        Rvalue::IsSome {
+                            place: local(p),
+                            ty: opt,
+                        },
+                    ),
+                );
                 let u = self.temp(e.ty.clone());
                 let mut then = Vec::new();
-                self.push(&mut then, StmtKind::Assign(Place { local: p, proj: vec![Proj::Deref] }, Rvalue::Use(v)));
-                self.push(&mut then, StmtKind::Assign(local(u), Rvalue::Ok { val: Some(Operand::Local(p)), ty: e.ty.clone() }));
+                self.push(
+                    &mut then,
+                    StmtKind::Assign(
+                        Place {
+                            local: p,
+                            proj: vec![Proj::Deref],
+                        },
+                        Rvalue::Use(v),
+                    ),
+                );
+                self.push(
+                    &mut then,
+                    StmtKind::Assign(
+                        local(u),
+                        Rvalue::Ok {
+                            val: Some(Operand::Local(p)),
+                            ty: e.ty.clone(),
+                        },
+                    ),
+                );
                 let oom = Operand::Int(sema::OUT_OF_MEMORY as i128, IntTy::U16);
-                let els = vec![Stmt { kind: StmtKind::Assign(local(u), Rvalue::Err { err: oom, ty: e.ty.clone() }), span: self.span }];
-                self.push(out, StmtKind::If { cond: Operand::Local(has), then, els });
+                let els = vec![Stmt {
+                    kind: StmtKind::Assign(
+                        local(u),
+                        Rvalue::Err {
+                            err: oom,
+                            ty: e.ty.clone(),
+                        },
+                    ),
+                    span: self.span,
+                }];
+                self.push(
+                    out,
+                    StmtKind::If {
+                        cond: Operand::Local(has),
+                        then,
+                        els,
+                    },
+                );
                 Rvalue::Use(Operand::Local(u))
             }
             // `r = alloc(n elements)`: if `r` is not null, the result is
             // its slice, else the error `OutOfMemory`.
             // `resize` evaluates its arguments (old, len, value) in order.
-            TExprKind::AllocSlice { alloc, value, len, old } => {
+            TExprKind::AllocSlice {
+                alloc,
+                value,
+                len,
+                old,
+            } => {
                 let a = self.operand(alloc, out);
                 let o = old.as_ref().map(|o| self.operand(o, out));
                 let (v, n) = if o.is_some() {
@@ -1276,82 +2085,195 @@ impl<'a> Lower<'a> {
                     let v = self.operand(value, out);
                     (v, self.operand(len, out))
                 };
-                let Type::ErrorUnion(_, slice) = &e.ty else { unreachable!() };
+                let Type::ErrorUnion(_, slice) = &e.ty else {
+                    unreachable!()
+                };
                 let opt = Type::Optional(slice.clone());
                 let r = self.temp(opt.clone());
-                let rv = Rvalue::AllocSlice { alloc: a, value: v, elem: value.ty.clone(), len: n, old: o, span: e.span };
+                let rv = Rvalue::AllocSlice {
+                    alloc: a,
+                    value: v,
+                    elem: value.ty.clone(),
+                    len: n,
+                    old: o,
+                    span: e.span,
+                };
                 self.push(out, StmtKind::Assign(local(r), rv));
                 let has = self.temp(Type::Bool);
-                self.push(out, StmtKind::Assign(local(has), Rvalue::IsSome { place: local(r), ty: opt }));
+                self.push(
+                    out,
+                    StmtKind::Assign(
+                        local(has),
+                        Rvalue::IsSome {
+                            place: local(r),
+                            ty: opt,
+                        },
+                    ),
+                );
                 let u = self.temp(e.ty.clone());
                 let s = self.temp((**slice).clone());
                 let mut then = Vec::new();
-                self.push(&mut then, StmtKind::Assign(local(s), Rvalue::Load(field(local(r), "val"))));
-                self.push(&mut then, StmtKind::Assign(local(u), Rvalue::Ok { val: Some(Operand::Local(s)), ty: e.ty.clone() }));
+                self.push(
+                    &mut then,
+                    StmtKind::Assign(local(s), Rvalue::Load(field(local(r), "val"))),
+                );
+                self.push(
+                    &mut then,
+                    StmtKind::Assign(
+                        local(u),
+                        Rvalue::Ok {
+                            val: Some(Operand::Local(s)),
+                            ty: e.ty.clone(),
+                        },
+                    ),
+                );
                 let oom = Operand::Int(sema::OUT_OF_MEMORY as i128, IntTy::U16);
-                let els = vec![Stmt { kind: StmtKind::Assign(local(u), Rvalue::Err { err: oom, ty: e.ty.clone() }), span: self.span }];
-                self.push(out, StmtKind::If { cond: Operand::Local(has), then, els });
+                let els = vec![Stmt {
+                    kind: StmtKind::Assign(
+                        local(u),
+                        Rvalue::Err {
+                            err: oom,
+                            ty: e.ty.clone(),
+                        },
+                    ),
+                    span: self.span,
+                }];
+                self.push(
+                    out,
+                    StmtKind::If {
+                        cond: Operand::Local(has),
+                        then,
+                        els,
+                    },
+                );
                 Rvalue::Use(Operand::Local(u))
             }
             TExprKind::EmptySlice => Rvalue::EmptySlice(e.ty.clone()),
             TExprKind::Print { arg, newline } => {
                 let arg = arg.as_ref().map(|a| (self.operand(a, out), a.ty.clone()));
-                Rvalue::Print { arg, newline: *newline }
+                Rvalue::Print {
+                    arg,
+                    newline: *newline,
+                }
             }
-            TExprKind::Log { error, pieces, args } => {
-                let args = args.iter().map(|a| (self.operand(a, out), a.ty.clone())).collect();
-                Rvalue::Log { error: *error, pieces: pieces.clone(), args }
+            TExprKind::Log {
+                error,
+                pieces,
+                args,
+            } => {
+                let args = args
+                    .iter()
+                    .map(|a| (self.operand(a, out), a.ty.clone()))
+                    .collect();
+                Rvalue::Log {
+                    error: *error,
+                    pieces: pieces.clone(),
+                    args,
+                }
             }
-            TExprKind::Binary { op: op @ (BinOp::And | BinOp::Or), lhs, rhs } => {
+            TExprKind::Binary {
+                op: op @ (BinOp::And | BinOp::Or),
+                lhs,
+                rhs,
+            } => {
                 let t = self.temp(Type::Bool);
-                let tp = Place { local: t, proj: vec![] };
+                let tp = Place {
+                    local: t,
+                    proj: vec![],
+                };
                 let l = self.operand(lhs, out);
                 self.push(out, StmtKind::Assign(tp.clone(), Rvalue::Use(l)));
                 let mut rb = Vec::new();
                 let r = self.operand(rhs, &mut rb);
                 self.push(&mut rb, StmtKind::Assign(tp, Rvalue::Use(r)));
-                let (then, els) = if *op == BinOp::And { (rb, vec![]) } else { (vec![], rb) };
-                self.push(out, StmtKind::If { cond: Operand::Local(t), then, els });
+                let (then, els) = if *op == BinOp::And {
+                    (rb, vec![])
+                } else {
+                    (vec![], rb)
+                };
+                self.push(
+                    out,
+                    StmtKind::If {
+                        cond: Operand::Local(t),
+                        then,
+                        els,
+                    },
+                );
                 Rvalue::Use(Operand::Local(t))
             }
             // Structs and optionals (other than pointers) compare part by part.
-            TExprKind::Binary { op: op @ (BinOp::Eq | BinOp::Ne), lhs, rhs }
-                if matches!(lhs.ty, Type::Struct(_)) || (matches!(lhs.ty, Type::Optional(_)) && !is_ptr_optional(&lhs.ty)) =>
+            TExprKind::Binary {
+                op: op @ (BinOp::Eq | BinOp::Ne),
+                lhs,
+                rhs,
+            } if matches!(lhs.ty, Type::Struct(_))
+                || (matches!(lhs.ty, Type::Optional(_)) && !is_ptr_optional(&lhs.ty)) =>
             {
                 let l = self.operand(lhs, out);
                 let r = self.operand(rhs, out);
                 let (a, b) = (self.spill(l, &lhs.ty, out), self.spill(r, &lhs.ty, out));
                 let eq = self.equal(a, b, &lhs.ty, out);
-                if *op == BinOp::Eq { Rvalue::Use(eq) } else { Rvalue::Not(eq) }
+                if *op == BinOp::Eq {
+                    Rvalue::Use(eq)
+                } else {
+                    Rvalue::Not(eq)
+                }
             }
             TExprKind::Binary { op, lhs, rhs } => {
                 let l = self.operand(lhs, out);
                 let r = self.operand(rhs, out);
-                Rvalue::Binary { op: *op, lhs: l, rhs: r, ty: lhs.ty.clone(), span: e.span }
+                Rvalue::Binary {
+                    op: *op,
+                    lhs: l,
+                    rhs: r,
+                    ty: lhs.ty.clone(),
+                    span: e.span,
+                }
             }
-            TExprKind::Unary { op: UnOp::Neg, expr } => {
+            TExprKind::Unary {
+                op: UnOp::Neg,
+                expr,
+            } => {
                 let val = self.operand(expr, out);
-                Rvalue::Neg { val, ty: e.ty.clone(), span: e.span }
+                Rvalue::Neg {
+                    val,
+                    ty: e.ty.clone(),
+                    span: e.span,
+                }
             }
-            TExprKind::Unary { op: UnOp::Not, expr } => Rvalue::Not(self.operand(expr, out)),
-            TExprKind::Unary { op: UnOp::BitNot, expr } => Rvalue::BitNot { val: self.operand(expr, out), ty: e.ty.clone() },
+            TExprKind::Unary {
+                op: UnOp::Not,
+                expr,
+            } => Rvalue::Not(self.operand(expr, out)),
+            TExprKind::Unary {
+                op: UnOp::BitNot,
+                expr,
+            } => Rvalue::BitNot {
+                val: self.operand(expr, out),
+                ty: e.ty.clone(),
+            },
             TExprKind::Cast(inner) => {
                 let val = self.operand(inner, out);
-                Rvalue::Cast { val, from: inner.ty.clone(), to: e.ty.clone(), span: e.span }
+                Rvalue::Cast {
+                    val,
+                    from: inner.ty.clone(),
+                    to: e.ty.clone(),
+                    span: e.span,
+                }
             }
             TExprKind::Field { .. }
             | TExprKind::SliceLen(_)
             | TExprKind::SlicePtr(_)
             | TExprKind::Index { .. }
             | TExprKind::Unwrap(_)
-            | TExprKind::Deref(_) => {
-                Rvalue::Load(self.place(e, out))
-            }
+            | TExprKind::Deref(_) => Rvalue::Load(self.place(e, out)),
             TExprKind::ArrayLen(base) => {
                 if has_call(base) {
                     self.operand(base, out);
                 }
-                let Type::Array(_, n) = base.ty else { unreachable!() };
+                let Type::Array(_, n) = base.ty else {
+                    unreachable!()
+                };
                 Rvalue::Use(Operand::Int(n as i128, IntTy::Usize))
             }
             TExprKind::Slice { base, lo, hi } => {
@@ -1367,24 +2289,51 @@ impl<'a> Lower<'a> {
                     None => Operand::Int(0, IntTy::Usize),
                 };
                 let hi = hi.as_ref().map(|x| self.operand(x, out));
-                Rvalue::Slice { base, len, elem, lo, hi, span: e.span }
+                Rvalue::Slice {
+                    base,
+                    len,
+                    elem,
+                    lo,
+                    hi,
+                    span: e.span,
+                }
             }
-            TExprKind::StructLit(inits) if matches!(&e.ty, Type::Struct(n) if self.structs[n.as_str()].is_union) => {
-                let Type::Struct(name) = &e.ty else { unreachable!() };
+            TExprKind::StructLit(inits) if matches!(&e.ty, Type::Struct(n) if self.structs[n.as_str()].is_union) =>
+            {
+                let Type::Struct(name) = &e.ty else {
+                    unreachable!()
+                };
                 let (i, x) = &inits[0];
                 let field = self.structs[name.as_str()].fields[*i].0.clone();
-                Rvalue::UnionLit { name: name.clone(), field, val: self.operand(x, out) }
+                Rvalue::UnionLit {
+                    name: name.clone(),
+                    field,
+                    val: self.operand(x, out),
+                }
             }
             TExprKind::StructLit(inits) => {
-                let Type::Struct(name) = &e.ty else { unreachable!() };
+                let Type::Struct(name) = &e.ty else {
+                    unreachable!()
+                };
                 // Evaluate in source order, then arrange in declaration order.
-                let mut ops: Vec<(usize, Operand)> = inits.iter().map(|(i, x)| (*i, self.operand(x, out))).collect();
+                let mut ops: Vec<(usize, Operand)> = inits
+                    .iter()
+                    .map(|(i, x)| (*i, self.operand(x, out)))
+                    .collect();
                 ops.sort_by_key(|(i, _)| *i);
-                Rvalue::StructLit { name: name.clone(), fields: ops.into_iter().map(|(_, o)| o).collect() }
+                Rvalue::StructLit {
+                    name: name.clone(),
+                    fields: ops.into_iter().map(|(_, o)| o).collect(),
+                }
             }
             TExprKind::Variant { index, fields } => {
-                let Type::Enum(name) = &e.ty else { unreachable!() };
-                let mut ops: Vec<(usize, Operand)> = fields.iter().map(|(i, x)| (*i, self.operand(x, out))).collect();
+                let Type::Enum(name) = &e.ty else {
+                    unreachable!()
+                };
+                let mut ops: Vec<(usize, Operand)> = fields
+                    .iter()
+                    .map(|(i, x)| (*i, self.operand(x, out)))
+                    .collect();
                 ops.sort_by_key(|(i, _)| *i);
                 Rvalue::Variant {
                     enum_name: name.clone(),
@@ -1393,17 +2342,32 @@ impl<'a> Lower<'a> {
                     fields: ops.into_iter().map(|(_, o)| o).collect(),
                 }
             }
-            TExprKind::ArrayRepeat(x) => Rvalue::ArrayRepeat { ty: e.ty.clone(), val: self.operand(x, out) },
+            TExprKind::ArrayRepeat(x) => Rvalue::ArrayRepeat {
+                ty: e.ty.clone(),
+                val: self.operand(x, out),
+            },
             TExprKind::IsVariant { expr, index } => {
                 let p = self.place(expr, out);
                 let tag = self.temp(Type::Int(IntTy::U32));
-                self.push(out, StmtKind::Assign(local(tag), Rvalue::Load(field(p, "tag"))));
+                self.push(
+                    out,
+                    StmtKind::Assign(local(tag), Rvalue::Load(field(p, "tag"))),
+                );
                 let rhs = Operand::Int(*index as i128, IntTy::U32);
-                Rvalue::Binary { op: BinOp::Eq, lhs: Operand::Local(tag), rhs, ty: Type::Int(IntTy::U32), span: e.span }
+                Rvalue::Binary {
+                    op: BinOp::Eq,
+                    lhs: Operand::Local(tag),
+                    rhs,
+                    ty: Type::Int(IntTy::U32),
+                    span: e.span,
+                }
             }
             TExprKind::ArrayLit(elems) => {
                 let elems = elems.iter().map(|x| self.operand(x, out)).collect();
-                Rvalue::ArrayLit { ty: e.ty.clone(), elems }
+                Rvalue::ArrayLit {
+                    ty: e.ty.clone(),
+                    elems,
+                }
             }
         }
     }

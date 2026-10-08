@@ -17,7 +17,10 @@ fn root() -> PathBuf {
 }
 
 fn aye_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).collect();
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
     entries.sort();
     for p in entries {
         if p.is_dir() {
@@ -32,14 +35,25 @@ fn aye_files(dir: &Path, out: &mut Vec<PathBuf>) {
 fn golden_fmt() {
     let dir = root().join("tests/fmt");
     let mut n = 0;
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
     entries.sort();
-    for input in entries.iter().filter(|p| p.extension().is_some_and(|e| e == "in")) {
+    for input in entries
+        .iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "in"))
+    {
         let src = std::fs::read_to_string(input).unwrap();
         let want = std::fs::read_to_string(input.with_extension("out")).unwrap();
         let got = aye::fmt::format(&src).unwrap_or_else(|e| panic!("{}: {e:?}", input.display()));
         assert_eq!(got, want, "{}", input.display());
-        assert_eq!(aye::fmt::format(&want).unwrap(), want, "{}.out is not formatted", input.display());
+        assert_eq!(
+            aye::fmt::format(&want).unwrap(),
+            want,
+            "{}.out is not formatted",
+            input.display()
+        );
         n += 1;
     }
     assert!(n >= 5, "only {n} fmt cases");
@@ -71,21 +85,45 @@ fn idempotent_and_same_diagnostics() {
             continue;
         };
         formatted += 1;
-        assert_eq!(aye::fmt::format(&once).unwrap(), once, "{name}: not idempotent");
+        assert_eq!(
+            aye::fmt::format(&once).unwrap(),
+            once,
+            "{name}: not idempotent"
+        );
         let before = aye::driver::check(&name, &src).err().unwrap_or_default();
         let after = aye::driver::check(&name, &once).err().unwrap_or_default();
-        assert_eq!(keys(&before, &name, Some(&map)), keys(&after, &name, None), "{name}: diagnostics differ");
-        assert_eq!(before.len(), after.len(), "{name}: diagnostics in other files differ");
+        assert_eq!(
+            keys(&before, &name, Some(&map)),
+            keys(&after, &name, None),
+            "{name}: diagnostics differ"
+        );
+        assert_eq!(
+            before.len(),
+            after.len(),
+            "{name}: diagnostics in other files differ"
+        );
     }
     assert!(formatted >= 150, "only {formatted} files formatted");
     // Files that do not lex or whose brackets do not match.
-    assert!(refused.iter().all(|f| f.contains("/tests/errors/") || f.contains("/tests/modules/single/")), "{refused:?}");
+    assert!(
+        refused
+            .iter()
+            .all(|f| f.contains("/tests/errors/") || f.contains("/tests/modules/single/")),
+        "{refused:?}"
+    );
 }
 
 fn aye(args: &[&str]) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_aye")).args(args).output().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .args(args)
+        .output()
+        .unwrap();
     let s = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
-    (out.status.code().unwrap_or(-1), s(&out.stdout), s(&out.stderr))
+    (
+        out.status.code().unwrap_or(-1),
+        s(&out.stdout),
+        s(&out.stderr),
+    )
 }
 
 #[test]
@@ -100,10 +138,16 @@ fn fmt_command() {
     let d = dir.to_str().unwrap();
     let (code, out, _) = aye(&["fmt", "--check", d]);
     assert_eq!((code, out.trim()), (1, messy.to_str().unwrap()));
-    assert_eq!(std::fs::read_to_string(&messy).unwrap(), "pub fn main() {\n@println(1+2)\n}\n");
+    assert_eq!(
+        std::fs::read_to_string(&messy).unwrap(),
+        "pub fn main() {\n@println(1+2)\n}\n"
+    );
     let (code, out, _) = aye(&["fmt", d]);
     assert_eq!((code, out.as_str()), (0, ""));
-    assert_eq!(std::fs::read_to_string(&messy).unwrap(), "pub fn main() {\n    @println(1 + 2)\n}\n");
+    assert_eq!(
+        std::fs::read_to_string(&messy).unwrap(),
+        "pub fn main() {\n    @println(1 + 2)\n}\n"
+    );
     assert_eq!(aye(&["fmt", "--check", d]).0, 0);
     // A file that does not lex is reported and left alone.
     std::fs::write(&clean, "let x = 1;\n").unwrap();
@@ -119,13 +163,28 @@ fn doc_command() {
     let (code, out, err) = aye(&["doc", "--signatures", "std"]);
     assert_eq!(code, 0, "{err}");
     for m in ["std.fs", "std.mem", "std.text", "std.time"] {
-        assert!(out.contains(&format!("// module {m}\n")), "{m} missing:\n{out}");
+        assert!(
+            out.contains(&format!("// module {m}\n")),
+            "{m} missing:\n{out}"
+        );
     }
     assert!(out.contains("pub fn open("), "{out}");
-    assert!(!out.contains("    let ") && !out.contains("    if "), "a body leaked:\n{out}");
-    let (code, out, _) = aye(&["doc", "--signatures", root().join("tests/modules/multi").to_str().unwrap()]);
+    assert!(
+        !out.contains("    let ") && !out.contains("    if "),
+        "a body leaked:\n{out}"
+    );
+    let (code, out, _) = aye(&[
+        "doc",
+        "--signatures",
+        root().join("tests/modules/multi").to_str().unwrap(),
+    ]);
     assert_eq!(code, 0);
-    assert!(out.contains("\n// module shapes\n\npub struct Counter {\n    n: i64\n    pub fn init() Counter\n"), "{out}");
+    assert!(
+        out.contains(
+            "\n// module shapes\n\npub struct Counter {\n    n: i64\n    pub fn init() Counter\n"
+        ),
+        "{out}"
+    );
     let (code, _, err) = aye(&["doc", "--signatures", "std.nope"]);
     assert_eq!(code, 1);
     assert!(err.contains("no std module"), "{err}");
@@ -133,16 +192,29 @@ fn doc_command() {
 
 /// Tracked `.aye` files that `aye fmt --check` must not be asked about.
 const FMT_EXCLUDED: &[(&str, &str)] = &[
-    ("tests/errors/extern_link_empty.aye", "the golden expects the error at the column of the unformatted `extern(\"\")`"),
+    (
+        "tests/errors/extern_link_empty.aye",
+        "the golden expects the error at the column of the unformatted `extern(\"\")`",
+    ),
     ("tests/errors/line_strings.aye", "does not lex on purpose"),
-    ("tests/errors/syntax_recovery.aye", "does not parse on purpose"),
+    (
+        "tests/errors/syntax_recovery.aye",
+        "does not parse on purpose",
+    ),
     ("tests/errors/unknown_escape.aye", "does not lex on purpose"),
-    ("tests/modules/single/broken.aye", "brackets do not match on purpose"),
+    (
+        "tests/modules/single/broken.aye",
+        "brackets do not match on purpose",
+    ),
 ];
 
 #[test]
 fn repo_is_formatted() {
-    let out = Command::new("git").args(["ls-files", "*.aye"]).current_dir(root()).output().unwrap();
+    let out = Command::new("git")
+        .args(["ls-files", "*.aye"])
+        .current_dir(root())
+        .output()
+        .unwrap();
     assert!(out.status.success(), "git ls-files failed");
     let mut unformatted = Vec::new();
     let mut n = 0;
@@ -157,5 +229,9 @@ fn repo_is_formatted() {
         }
     }
     assert!(n >= 400, "only {n} files checked");
-    assert!(unformatted.is_empty(), "run `aye fmt` on:\n{}", unformatted.join("\n"));
+    assert!(
+        unformatted.is_empty(),
+        "run `aye fmt` on:\n{}",
+        unformatted.join("\n")
+    );
 }

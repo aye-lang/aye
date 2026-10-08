@@ -11,9 +11,20 @@ use crate::diag::{Error, Result, Span};
 use crate::lexer::{Kw, Tok, Token};
 
 pub fn parse(tokens: Vec<Token>) -> std::result::Result<File, Vec<Error>> {
-    let mut p = Parser { toks: tokens, pos: 0, no_struct_lit: false, no_pipe: false, errors: Vec::new(), tests: 0 };
+    let mut p = Parser {
+        toks: tokens,
+        pos: 0,
+        no_struct_lit: false,
+        no_pipe: false,
+        errors: Vec::new(),
+        tests: 0,
+    };
     let f = p.file();
-    if p.errors.is_empty() { Ok(f) } else { Err(p.errors) }
+    if p.errors.is_empty() {
+        Ok(f)
+    } else {
+        Err(p.errors)
+    }
 }
 
 struct Parser {
@@ -33,7 +44,9 @@ struct Parser {
 fn not_supported(kw: Kw, span: Span) -> Error {
     let what = match kw {
         Kw::Comptime => "`comptime` is only supported on a parameter (`comptime T: type`)",
-        Kw::Where => "`where` is only supported after a function's return type (`fn f(comptime T: type) T where T: I`)",
+        Kw::Where => {
+            "`where` is only supported after a function's return type (`fn f(comptime T: type) T where T: I`)"
+        }
         _ => return Error::new(E0006, span, format!("unexpected `{}`", kw.as_str())),
     };
     Error::new(E0007, span, what)
@@ -88,7 +101,11 @@ impl Parser {
     }
 
     fn unexpected(&self, expected: &str) -> Error {
-        Error::new(E0006, self.span(), format!("expected {expected}, found {}", self.peek()))
+        Error::new(
+            E0006,
+            self.span(),
+            format!("expected {expected}, found {}", self.peek()),
+        )
     }
 
     /// The error after an element of a list closed by `closer` when neither
@@ -126,7 +143,10 @@ impl Parser {
     /// literals and `|` mean what they mean outside headers again. Returns
     /// the flags for `leave_nested`.
     fn enter_nested(&mut self) -> (bool, bool) {
-        (std::mem::replace(&mut self.no_struct_lit, false), std::mem::replace(&mut self.no_pipe, false))
+        (
+            std::mem::replace(&mut self.no_struct_lit, false),
+            std::mem::replace(&mut self.no_pipe, false),
+        )
     }
 
     fn leave_nested(&mut self, saved: (bool, bool)) {
@@ -308,14 +328,30 @@ impl Parser {
         let kw_span = self.span();
         let mutable = self.bump().tok == Tok::Kw(Kw::Var);
         let (name, span) = self.ident()?;
-        let ty = if self.eat(&Tok::Colon) { Some(self.type_expr()?) } else { None };
+        let ty = if self.eat(&Tok::Colon) {
+            Some(self.type_expr()?)
+        } else {
+            None
+        };
         if !self.at(&Tok::Assign) {
             let kw = if mutable { "var" } else { "let" };
-            return Err(Error::new(E0013, self.span(), format!("`{kw} {name}` needs an initializer (`= value`)")));
+            return Err(Error::new(
+                E0013,
+                self.span(),
+                format!("`{kw} {name}` needs an initializer (`= value`)"),
+            ));
         }
         self.bump();
         let init = self.arg()?;
-        Ok(GlobalDecl { name, span, is_pub, mutable, kw_span, ty, init })
+        Ok(GlobalDecl {
+            name,
+            span,
+            is_pub,
+            mutable,
+            kw_span,
+            ty,
+            init,
+        })
     }
 
     /// `@link("name")` or `@linkOptional("name")`, the only builtins at the
@@ -323,25 +359,45 @@ impl Parser {
     fn link_decl(&mut self, name: &str, is_pub: bool) -> Result<LinkDecl> {
         let span = self.span();
         if name != "link" && name != "linkOptional" {
-            return Err(Error::new(E0094, span, format!(
-                "only `@link(\"name\")` and `@linkOptional(\"name\")` can be used at the top level of a file; `@{name}` belongs in a function"
-            )));
+            return Err(Error::new(
+                E0094,
+                span,
+                format!(
+                    "only `@link(\"name\")` and `@linkOptional(\"name\")` can be used at the top level of a file; `@{name}` belongs in a function"
+                ),
+            ));
         }
         if is_pub {
-            return Err(Error::new(E0094, span, format!("`@{name}` cannot be `pub`")));
+            return Err(Error::new(
+                E0094,
+                span,
+                format!("`@{name}` cannot be `pub`"),
+            ));
         }
         self.bump();
         self.expect(&Tok::LParen)?;
         let at = self.span();
         let Tok::Str(bytes) = self.peek().clone() else {
-            return Err(Error::new(E0094, at, format!("`@{name}` takes a string literal: `@{name}(\"name\")`")));
+            return Err(Error::new(
+                E0094,
+                at,
+                format!("`@{name}` takes a string literal: `@{name}(\"name\")`"),
+            ));
         };
         if bytes.is_empty() {
-            return Err(Error::new(E0094, at, format!("`@{name}` needs a library name: `@{name}(\"curl\")`")));
+            return Err(Error::new(
+                E0094,
+                at,
+                format!("`@{name}` needs a library name: `@{name}(\"curl\")`"),
+            ));
         }
         self.bump();
         self.expect(&Tok::RParen)?;
-        Ok(LinkDecl { name: String::from_utf8_lossy(&bytes).into_owned(), span, optional: name == "linkOptional" })
+        Ok(LinkDecl {
+            name: String::from_utf8_lossy(&bytes).into_owned(),
+            span,
+            optional: name == "linkOptional",
+        })
     }
 
     /// `import a.b.c`
@@ -357,7 +413,12 @@ impl Parser {
     /// A name that can be a path: `File`, `fs.File`, `std.fs.File`.
     fn path(&mut self) -> Result<(String, Span)> {
         let (mut name, span) = self.ident()?;
-        while self.at(&Tok::Dot) && matches!(self.toks.get(self.pos + 1).map(|t| &t.tok), Some(Tok::Ident(_))) {
+        while self.at(&Tok::Dot)
+            && matches!(
+                self.toks.get(self.pos + 1).map(|t| &t.tok),
+                Some(Tok::Ident(_))
+            )
+        {
             self.bump();
             name = format!("{name}.{}", self.ident()?.0);
         }
@@ -369,10 +430,18 @@ impl Parser {
         self.expect(&Tok::LParen)?;
         let at = self.span();
         let Tok::Str(bytes) = self.peek().clone() else {
-            return Err(Error::new(E0115, at, "`extern(...)` takes a string literal: `extern(\"connect\") fn ...`"));
+            return Err(Error::new(
+                E0115,
+                at,
+                "`extern(...)` takes a string literal: `extern(\"connect\") fn ...`",
+            ));
         };
         if bytes.is_empty() {
-            return Err(Error::new(E0115, at, "`extern(\"\")` needs a link name: `extern(\"connect\") fn ...`"));
+            return Err(Error::new(
+                E0115,
+                at,
+                "`extern(\"\")` needs a link name: `extern(\"connect\") fn ...`",
+            ));
         }
         self.bump();
         self.expect(&Tok::RParen)?;
@@ -386,10 +455,18 @@ impl Parser {
         if is_extern {
             if self.at(&Tok::LBrace) {
                 if !is_pub {
-                    return Err(Error::new(E0011, self.span(), "an `extern fn` with a body is exported to C and must be `pub extern fn` (remove the body to declare a C function)"));
+                    return Err(Error::new(
+                        E0011,
+                        self.span(),
+                        "an `extern fn` with a body is exported to C and must be `pub extern fn` (remove the body to declare a C function)",
+                    ));
                 }
                 if let Some(span) = f.variadic {
-                    return Err(Error::new(E0091, span, "only an `extern fn` without a body (a C function) can be variadic"));
+                    return Err(Error::new(
+                        E0091,
+                        span,
+                        "only an `extern fn` without a body (a C function) can be variadic",
+                    ));
                 }
                 f.body = Some(self.block()?);
             }
@@ -413,13 +490,21 @@ impl Parser {
             if self.at(&Tok::Ellipsis) {
                 let span = self.bump().span;
                 if !is_extern {
-                    return Err(Error::new(E0091, span, "only an `extern fn` without a body (a C function) can be variadic"));
+                    return Err(Error::new(
+                        E0091,
+                        span,
+                        "only an `extern fn` without a body (a C function) can be variadic",
+                    ));
                 }
                 if !self.at(&Tok::RParen) {
                     return Err(Error::new(E0091, span, "`...` must be the last parameter"));
                 }
                 if params.is_empty() {
-                    return Err(Error::new(E0091, span, "a variadic C function needs a parameter before `...`"));
+                    return Err(Error::new(
+                        E0091,
+                        span,
+                        "a variadic C function needs a parameter before `...`",
+                    ));
                 }
                 variadic = Some(span);
                 break;
@@ -428,7 +513,12 @@ impl Parser {
             let (pname, pspan) = self.ident()?;
             self.expect(&Tok::Colon)?;
             let ty = self.type_expr()?;
-            params.push(Param { name: pname, span: pspan, ty, comptime });
+            params.push(Param {
+                name: pname,
+                span: pspan,
+                ty,
+                comptime,
+            });
             if !self.eat(&Tok::Comma) {
                 break;
             }
@@ -444,13 +534,29 @@ impl Parser {
                 let (param, span) = self.ident()?;
                 self.expect(&Tok::Colon)?;
                 let (iface, iface_span) = self.path()?;
-                bounds.push(Bound { param, span, iface, iface_span });
+                bounds.push(Bound {
+                    param,
+                    span,
+                    iface,
+                    iface_span,
+                });
                 if !self.eat(&Tok::Comma) {
                     break;
                 }
             }
         }
-        Ok(FnDecl { name, span, is_pub, is_extern, link: None, params, variadic, ret, bounds, body: None })
+        Ok(FnDecl {
+            name,
+            span,
+            is_pub,
+            is_extern,
+            link: None,
+            params,
+            variadic,
+            ret,
+            bounds,
+            body: None,
+        })
     }
 
     /// `struct Name { fields and methods }`: fields are separated by `,` or
@@ -463,7 +569,13 @@ impl Parser {
 
     /// `{ fields and methods }` of a struct declaration or of an anonymous
     /// `struct { ... }`.
-    fn struct_body(&mut self, name: String, span: Span, is_pub: bool, is_extern: bool) -> Result<StructDecl> {
+    fn struct_body(
+        &mut self,
+        name: String,
+        span: Span,
+        is_pub: bool,
+        is_extern: bool,
+    ) -> Result<StructDecl> {
         self.expect(&Tok::LBrace)?;
         let (mut fields, mut methods) = (Vec::new(), Vec::new());
         loop {
@@ -482,8 +594,17 @@ impl Parser {
             let (fname, fspan) = self.ident()?;
             self.expect(&Tok::Colon)?;
             let ty = self.type_expr()?;
-            let default = if self.eat(&Tok::Assign) { Some(self.expr()?) } else { None };
-            fields.push(FieldDecl { name: fname, span: fspan, ty, default });
+            let default = if self.eat(&Tok::Assign) {
+                Some(self.expr()?)
+            } else {
+                None
+            };
+            fields.push(FieldDecl {
+                name: fname,
+                span: fspan,
+                ty,
+                default,
+            });
             match self.peek() {
                 Tok::Comma | Tok::Semi => {
                     self.bump();
@@ -492,7 +613,15 @@ impl Parser {
                 _ => return Err(self.unexpected("`,`, newline or `}` after struct field")),
             }
         }
-        Ok(StructDecl { name, span, is_pub, is_extern, is_union: false, fields, methods })
+        Ok(StructDecl {
+            name,
+            span,
+            is_pub,
+            is_extern,
+            is_union: false,
+            fields,
+            methods,
+        })
     }
 
     /// `interface Name { fn m(self: *Self, ...) T ... }`, one method
@@ -516,11 +645,22 @@ impl Parser {
                     self.bump();
                 }
                 Tok::RBrace => {}
-                Tok::LBrace => return Err(Error::new(E0006, self.span(), "an interface method has no body")),
+                Tok::LBrace => {
+                    return Err(Error::new(
+                        E0006,
+                        self.span(),
+                        "an interface method has no body",
+                    ));
+                }
                 _ => return Err(self.unexpected("newline or `}` after interface method")),
             }
         }
-        Ok(InterfaceDecl { name, span, is_pub, methods })
+        Ok(InterfaceDecl {
+            name,
+            span,
+            is_pub,
+            methods,
+        })
     }
 
     /// `test "name" { ... }`: a function `test#N() !void`.
@@ -534,13 +674,33 @@ impl Parser {
             return Err(self.unexpected("`{` to start test body"));
         }
         let body = Some(self.block()?);
-        let void = TypeExpr { kind: TypeExprKind::Named("void".to_string()), span };
-        let ret = Some(TypeExpr { kind: TypeExprKind::ErrorUnion(None, Box::new(void)), span });
+        let void = TypeExpr {
+            kind: TypeExprKind::Named("void".to_string()),
+            span,
+        };
+        let ret = Some(TypeExpr {
+            kind: TypeExprKind::ErrorUnion(None, Box::new(void)),
+            span,
+        });
         let name = format!("test#{}", self.tests);
         self.tests += 1;
-        let func =
-            FnDecl { name, span, is_pub: false, is_extern: false, link: None, params: vec![], variadic: None, ret, bounds: vec![], body };
-        Ok(TestDecl { name: String::from_utf8_lossy(&bytes).into_owned(), module: String::new(), func })
+        let func = FnDecl {
+            name,
+            span,
+            is_pub: false,
+            is_extern: false,
+            link: None,
+            params: vec![],
+            variadic: None,
+            ret,
+            bounds: vec![],
+            body,
+        };
+        Ok(TestDecl {
+            name: String::from_utf8_lossy(&bytes).into_owned(),
+            module: String::new(),
+            func,
+        })
     }
 
     fn enum_decl(&mut self, is_pub: bool) -> Result<EnumDecl> {
@@ -565,13 +725,21 @@ impl Parser {
             let fields = if self.at(&Tok::LBrace) {
                 let fields = self.field_list()?;
                 if fields.is_empty() {
-                    return Err(Error::new(E0012, vspan, format!("a variant without fields is written `{vname}`, without `{{}}`")));
+                    return Err(Error::new(
+                        E0012,
+                        vspan,
+                        format!("a variant without fields is written `{vname}`, without `{{}}`"),
+                    ));
                 }
                 fields
             } else {
                 Vec::new()
             };
-            variants.push(VariantDecl { name: vname, span: vspan, fields });
+            variants.push(VariantDecl {
+                name: vname,
+                span: vspan,
+                fields,
+            });
             match self.peek() {
                 Tok::Comma | Tok::Semi => {
                     self.bump();
@@ -580,7 +748,13 @@ impl Parser {
                 _ => return Err(self.unexpected("`,`, newline or `}` after enum variant")),
             }
         }
-        Ok(EnumDecl { name, span, is_pub, variants, methods })
+        Ok(EnumDecl {
+            name,
+            span,
+            is_pub,
+            variants,
+            methods,
+        })
     }
 
     /// `error Name { A, B }` (names separated by `,` or newlines) or
@@ -593,7 +767,12 @@ impl Parser {
             while self.eat(&Tok::OrOr) {
                 sets.push(self.path()?);
             }
-            return Ok(ErrorSetDecl { name, span, is_pub, kind: ErrorSetKind::Merge(sets) });
+            return Ok(ErrorSetDecl {
+                name,
+                span,
+                is_pub,
+                kind: ErrorSetKind::Merge(sets),
+            });
         }
         self.expect(&Tok::LBrace)?;
         let mut errors = Vec::new();
@@ -611,7 +790,12 @@ impl Parser {
                 _ => return Err(self.unexpected("`,`, newline or `}` after error name")),
             }
         }
-        Ok(ErrorSetDecl { name, span, is_pub, kind: ErrorSetKind::List(errors) })
+        Ok(ErrorSetDecl {
+            name,
+            span,
+            is_pub,
+            kind: ErrorSetKind::List(errors),
+        })
     }
 
     /// `{ name: T, ... }` with fields separated by `,` or newlines.
@@ -626,9 +810,18 @@ impl Parser {
             let (fname, fspan) = self.ident()?;
             self.expect(&Tok::Colon)?;
             let ty = self.type_expr()?;
-            fields.push(FieldDecl { name: fname, span: fspan, ty, default: None });
+            fields.push(FieldDecl {
+                name: fname,
+                span: fspan,
+                ty,
+                default: None,
+            });
             if self.at(&Tok::Assign) {
-                return Err(Error::new(E0006, self.span(), "only struct fields can have a default value, not the fields of an enum variant"));
+                return Err(Error::new(
+                    E0006,
+                    self.span(),
+                    "only struct fields can have a default value, not the fields of an enum variant",
+                ));
             }
             match self.peek() {
                 Tok::Comma | Tok::Semi => {
@@ -646,7 +839,10 @@ impl Parser {
     fn type_expr(&mut self) -> Result<TypeExpr> {
         let span = self.span();
         let kind = match self.peek().clone() {
-            Tok::Ident(n) if n == "simd" && self.toks.get(self.pos + 1).map(|t| &t.tok) == Some(&Tok::LBracket) => {
+            Tok::Ident(n)
+                if n == "simd"
+                    && self.toks.get(self.pos + 1).map(|t| &t.tok) == Some(&Tok::LBracket) =>
+            {
                 self.pos += 2;
                 let saved = self.enter_nested();
                 let len = self.expr()?;
@@ -733,14 +929,28 @@ impl Parser {
                     }
                 }
                 self.expect(&Tok::RParen)?;
-                let starts_type =
-                    matches!(self.peek(), Tok::Ident(_) | Tok::LBracket | Tok::Star | Tok::Question | Tok::Kw(Kw::Dyn | Kw::Fn));
-                let ret = if starts_type { Some(Box::new(self.type_expr()?)) } else { None };
+                let starts_type = matches!(
+                    self.peek(),
+                    Tok::Ident(_)
+                        | Tok::LBracket
+                        | Tok::Star
+                        | Tok::Question
+                        | Tok::Kw(Kw::Dyn | Kw::Fn)
+                );
+                let ret = if starts_type {
+                    Some(Box::new(self.type_expr()?))
+                } else {
+                    None
+                };
                 TypeExprKind::Fn(params, ret)
             }
             Tok::Kw(k) if is_unsupported_kw(k) => return Err(not_supported(k, span)),
             Tok::Kw(Kw::Struct) => {
-                return Err(Error::new(E0007, span, "an anonymous `struct { ... }` can only be returned from a type function"));
+                return Err(Error::new(
+                    E0007,
+                    span,
+                    "an anonymous `struct { ... }` can only be returned from a type function",
+                ));
             }
             _ => return Err(self.unexpected("type")),
         };
@@ -783,19 +993,41 @@ impl Parser {
     /// When `prev` is an `if` without `else` that ends right before the
     /// line break, the fix-it joins the two lines.
     fn else_on_new_line(&self, prev: Option<&Stmt>) -> Error {
-        let e = Error::new(E0008, self.span(), "`else` must be on the same line as the `}` that closes the `if` block");
+        let e = Error::new(
+            E0008,
+            self.span(),
+            "`else` must be on the same line as the `}` that closes the `if` block",
+        );
         let mut last = prev;
-        while let Some(Stmt { kind: StmtKind::If { els, .. }, .. }) = last {
+        while let Some(Stmt {
+            kind: StmtKind::If { els, .. },
+            ..
+        }) = last
+        {
             match els {
                 Some(s) => last = Some(s),
                 None => break,
             }
         }
-        let open_if = matches!(last, Some(Stmt { kind: StmtKind::If { els: None, .. }, .. }));
+        let open_if = matches!(
+            last,
+            Some(Stmt {
+                kind: StmtKind::If { els: None, .. },
+                ..
+            })
+        );
         if open_if && self.pos >= 2 {
             let (brace, semi) = (&self.toks[self.pos - 2], &self.toks[self.pos - 1]);
-            if brace.tok == Tok::RBrace && semi.span == brace.end && self.span().line == brace.span.line + 1 {
-                return e.fix("put `else` on the line of the `}`", brace.end, self.span(), " ");
+            if brace.tok == Tok::RBrace
+                && semi.span == brace.end
+                && self.span().line == brace.span.line + 1
+            {
+                return e.fix(
+                    "put `else` on the line of the `}`",
+                    brace.end,
+                    self.span(),
+                    " ",
+                );
             }
         }
         e
@@ -807,7 +1039,11 @@ impl Parser {
             Tok::Kw(kw @ (Kw::Let | Kw::Var)) => {
                 self.bump();
                 let (name, _) = self.ident()?;
-                let ty = if self.eat(&Tok::Colon) { Some(self.type_expr()?) } else { None };
+                let ty = if self.eat(&Tok::Colon) {
+                    Some(self.type_expr()?)
+                } else {
+                    None
+                };
                 if !self.at(&Tok::Assign) {
                     return Err(Error::new(
                         E0013,
@@ -817,7 +1053,12 @@ impl Parser {
                 }
                 self.bump();
                 let init = self.expr()?;
-                StmtKind::Let { name, mutable: kw == Kw::Var, ty, init }
+                StmtKind::Let {
+                    name,
+                    mutable: kw == Kw::Var,
+                    ty,
+                    init,
+                }
             }
             Tok::Kw(Kw::If) => return self.if_stmt(),
             Tok::Kw(Kw::While) => {
@@ -825,7 +1066,11 @@ impl Parser {
                 let cond = self.cond_header()?;
                 let capture = self.capture()?;
                 let body = self.block()?;
-                StmtKind::While { cond, capture, body }
+                StmtKind::While {
+                    cond,
+                    capture,
+                    body,
+                }
             }
             Tok::Kw(Kw::For) => {
                 self.bump();
@@ -844,15 +1089,33 @@ impl Parser {
                 let lo = self.header_expr()?;
                 if !self.at(&Tok::DotDot) {
                     let body = self.block()?;
-                    return Ok(Stmt { kind: StmtKind::ForEach { index, elem: (var, var_span), seq: lo, body }, span });
+                    return Ok(Stmt {
+                        kind: StmtKind::ForEach {
+                            index,
+                            elem: (var, var_span),
+                            seq: lo,
+                            body,
+                        },
+                        span,
+                    });
                 }
                 if let Some((_, index_span)) = index {
-                    return Err(Error::new(E0006, index_span, "a `for` over a range has one variable: `for i in lo..hi`"));
+                    return Err(Error::new(
+                        E0006,
+                        index_span,
+                        "a `for` over a range has one variable: `for i in lo..hi`",
+                    ));
                 }
                 self.bump();
                 let hi = self.header_expr()?;
                 let body = self.block()?;
-                StmtKind::For { var, var_span, lo, hi, body }
+                StmtKind::For {
+                    var,
+                    var_span,
+                    lo,
+                    hi,
+                    body,
+                }
             }
             Tok::Kw(Kw::Break) => {
                 self.bump();
@@ -874,21 +1137,45 @@ impl Parser {
                 self.bump();
                 let inner_span = self.span();
                 let inner = if self.at(&Tok::LBrace) {
-                    Stmt { kind: StmtKind::Block(self.block()?), span: inner_span }
+                    Stmt {
+                        kind: StmtKind::Block(self.block()?),
+                        span: inner_span,
+                    }
                 } else if self.at(&Tok::Kw(Kw::If)) {
                     self.if_stmt()?
                 } else {
                     self.simple_stmt()?
                 };
-                if kw == Kw::Defer { StmtKind::Defer(Box::new(inner)) } else { StmtKind::ErrDefer(Box::new(inner)) }
+                if kw == Kw::Defer {
+                    StmtKind::Defer(Box::new(inner))
+                } else {
+                    StmtKind::ErrDefer(Box::new(inner))
+                }
             }
             Tok::LBrace => StmtKind::Block(self.block()?),
             Tok::Kw(k) if is_unsupported_kw(k) => return Err(not_supported(k, span)),
-            Tok::Kw(Kw::Fn | Kw::Struct | Kw::Enum | Kw::Error | Kw::Pub | Kw::Extern | Kw::Interface | Kw::Test) => {
-                return Err(Error::new(E0010, span, "declarations are only allowed at the top level"));
+            Tok::Kw(
+                Kw::Fn
+                | Kw::Struct
+                | Kw::Enum
+                | Kw::Error
+                | Kw::Pub
+                | Kw::Extern
+                | Kw::Interface
+                | Kw::Test,
+            ) => {
+                return Err(Error::new(
+                    E0010,
+                    span,
+                    "declarations are only allowed at the top level",
+                ));
             }
             Tok::Kw(Kw::Import) => {
-                return Err(Error::new(E0010, span, "`import` is only allowed at the top level of a file"));
+                return Err(Error::new(
+                    E0010,
+                    span,
+                    "`import` is only allowed at the top level of a file",
+                ));
             }
             _ => return self.simple_stmt(),
         };
@@ -902,7 +1189,10 @@ impl Parser {
             return Ok(None);
         }
         let hint = |e: Error| Error {
-            msg: format!("{} (a `|` after an `if` or `while` condition starts a capture `|v|`; put a bitwise or in parentheses: `(a | b)`)", e.msg),
+            msg: format!(
+                "{} (a `|` after an `if` or `while` condition starts a capture `|v|`; put a bitwise or in parentheses: `(a | b)`)",
+                e.msg
+            ),
             ..e
         };
         let c = self.ident().map_err(hint)?;
@@ -920,9 +1210,10 @@ impl Parser {
             let else_span = self.span();
             match self.peek() {
                 Tok::Kw(Kw::If) => Some(Box::new(self.if_stmt()?)),
-                Tok::LBrace => {
-                    Some(Box::new(Stmt { kind: StmtKind::Block(self.block()?), span: else_span }))
-                }
+                Tok::LBrace => Some(Box::new(Stmt {
+                    kind: StmtKind::Block(self.block()?),
+                    span: else_span,
+                })),
                 // `else |e| { ... }`: the error of an error union.
                 Tok::Pipe => {
                     self.bump();
@@ -932,14 +1223,26 @@ impl Parser {
                         return Err(self.unexpected("`{` after `else |e|`"));
                     }
                     let span = self.span();
-                    Some(Box::new(Stmt { kind: StmtKind::Block(self.block()?), span }))
+                    Some(Box::new(Stmt {
+                        kind: StmtKind::Block(self.block()?),
+                        span,
+                    }))
                 }
                 _ => return Err(self.unexpected("`if`, `{` or `|e|` after `else`")),
             }
         } else {
             None
         };
-        Ok(Stmt { kind: StmtKind::If { cond, capture, then, els, err_capture }, span })
+        Ok(Stmt {
+            kind: StmtKind::If {
+                cond,
+                capture,
+                then,
+                els,
+                err_capture,
+            },
+            span,
+        })
     }
 
     /// Expression statement or assignment.
@@ -961,11 +1264,19 @@ impl Parser {
             Tok::CaretEq => AssignOp::Op(BinOp::BitXor),
             Tok::ShlEq => AssignOp::Op(BinOp::Shl),
             Tok::ShrEq => AssignOp::Op(BinOp::Shr),
-            _ => return Ok(Stmt { kind: StmtKind::Expr(target), span }),
+            _ => {
+                return Ok(Stmt {
+                    kind: StmtKind::Expr(target),
+                    span,
+                });
+            }
         };
         let op_span = self.bump().span;
         let value = self.expr()?;
-        Ok(Stmt { kind: StmtKind::Assign { target, op, value }, span: op_span })
+        Ok(Stmt {
+            kind: StmtKind::Assign { target, op, value },
+            span: op_span,
+        })
     }
 
     // ---------------------------------------------------------- expressions
@@ -981,7 +1292,10 @@ impl Parser {
     /// The condition of an `if` or `while`: a header expression in which a
     /// top-level `|` starts a capture.
     fn cond_header(&mut self) -> Result<Expr> {
-        let saved = (std::mem::replace(&mut self.no_struct_lit, true), std::mem::replace(&mut self.no_pipe, true));
+        let saved = (
+            std::mem::replace(&mut self.no_struct_lit, true),
+            std::mem::replace(&mut self.no_pipe, true),
+        );
         let e = self.expr();
         self.leave_nested(saved);
         e
@@ -1031,7 +1345,13 @@ impl Parser {
             if self.at(&Tok::Kw(Kw::Orelse)) && CATCH_PREC >= min_prec {
                 let span = self.bump().span;
                 let body = Box::new(self.fallback()?);
-                lhs = Expr { kind: ExprKind::OrElse { expr: Box::new(lhs), body }, span };
+                lhs = Expr {
+                    kind: ExprKind::OrElse {
+                        expr: Box::new(lhs),
+                        body,
+                    },
+                    span,
+                };
                 continue;
             }
             // `x is .V`, at the level of the comparisons.
@@ -1039,21 +1359,49 @@ impl Parser {
                 let span = self.bump().span;
                 self.expect(&Tok::Dot)?;
                 let (variant, variant_span) = self.ident()?;
-                lhs = Expr { kind: ExprKind::Is { expr: Box::new(lhs), variant, variant_span }, span };
-                if self.at(&Tok::Kw(Kw::Is)) || self.binop().is_some_and(|(o, _)| o.is_comparison()) {
-                    return Err(Error::new(E0009, self.span(), "comparison operators cannot be chained"));
+                lhs = Expr {
+                    kind: ExprKind::Is {
+                        expr: Box::new(lhs),
+                        variant,
+                        variant_span,
+                    },
+                    span,
+                };
+                if self.at(&Tok::Kw(Kw::Is)) || self.binop().is_some_and(|(o, _)| o.is_comparison())
+                {
+                    return Err(Error::new(
+                        E0009,
+                        self.span(),
+                        "comparison operators cannot be chained",
+                    ));
                 }
                 continue;
             }
-            let Some((op, prec)) = self.binop() else { break };
+            let Some((op, prec)) = self.binop() else {
+                break;
+            };
             if prec < min_prec {
                 break;
             }
             let span = self.bump().span;
             let rhs = self.binary(prec + 1)?;
-            lhs = Expr { kind: ExprKind::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) }, span };
-            if op.is_comparison() && (self.at(&Tok::Kw(Kw::Is)) || self.binop().is_some_and(|(o, _)| o.is_comparison())) {
-                return Err(Error::new(E0009, self.span(), "comparison operators cannot be chained"));
+            lhs = Expr {
+                kind: ExprKind::Binary {
+                    op,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+                span,
+            };
+            if op.is_comparison()
+                && (self.at(&Tok::Kw(Kw::Is))
+                    || self.binop().is_some_and(|(o, _)| o.is_comparison()))
+            {
+                return Err(Error::new(
+                    E0009,
+                    self.span(),
+                    "comparison operators cannot be chained",
+                ));
             }
             if let Some((next, _)) = self.binop()
                 && op.is_bitwise()
@@ -1061,9 +1409,13 @@ impl Parser {
                 && next != op
             {
                 let (a, b) = (op.as_str(), next.as_str());
-                return Err(Error::new(E0087, self.span(), format!(
-                    "`{a}` and `{b}` cannot be mixed without parentheses: write `(a {a} b) {b} c` or `a {a} (b {b} c)`"
-                )));
+                return Err(Error::new(
+                    E0087,
+                    self.span(),
+                    format!(
+                        "`{a}` and `{b}` cannot be mixed without parentheses: write `(a {a} b) {b} c` or `a {a} (b {b} c)`"
+                    ),
+                ));
             }
         }
         Ok(lhs)
@@ -1081,7 +1433,14 @@ impl Parser {
             None
         };
         let body = self.fallback()?;
-        Ok(Expr { kind: ExprKind::Catch { expr: Box::new(lhs), capture, body: Box::new(body) }, span })
+        Ok(Expr {
+            kind: ExprKind::Catch {
+                expr: Box::new(lhs),
+                capture,
+                body: Box::new(body),
+            },
+            span,
+        })
     }
 
     /// The body of `catch` or `orelse`: a block, `return [value]`, `break`
@@ -1093,7 +1452,10 @@ impl Parser {
             Tok::LBrace => return Ok(ArmBody::Block(self.block()?)),
             Tok::Kw(Kw::Return) => {
                 self.bump();
-                let ends = matches!(self.peek(), Tok::Semi | Tok::RBrace | Tok::Comma | Tok::RParen | Tok::RBracket);
+                let ends = matches!(
+                    self.peek(),
+                    Tok::Semi | Tok::RBrace | Tok::Comma | Tok::RParen | Tok::RBracket
+                );
                 StmtKind::Return(if ends { None } else { Some(self.expr()?) })
             }
             Tok::Kw(Kw::Break) => {
@@ -1106,7 +1468,10 @@ impl Parser {
             }
             _ => return Ok(ArmBody::Expr(self.binary(CATCH_PREC + 1)?)),
         };
-        Ok(ArmBody::Block(Block { stmts: vec![Stmt { kind, span }], span }))
+        Ok(ArmBody::Block(Block {
+            stmts: vec![Stmt { kind, span }],
+            span,
+        }))
     }
 
     fn cast(&mut self) -> Result<Expr> {
@@ -1114,7 +1479,13 @@ impl Parser {
         while self.at(&Tok::Kw(Kw::As)) {
             let span = self.bump().span;
             let ty = self.type_expr()?;
-            e = Expr { kind: ExprKind::Cast { expr: Box::new(e), ty }, span };
+            e = Expr {
+                kind: ExprKind::Cast {
+                    expr: Box::new(e),
+                    ty,
+                },
+                span,
+            };
         }
         Ok(e)
     }
@@ -1123,13 +1494,19 @@ impl Parser {
         if self.at(&Tok::Kw(Kw::Try)) {
             let span = self.bump().span;
             let expr = Box::new(self.unary()?);
-            return Ok(Expr { kind: ExprKind::Try(expr), span });
+            return Ok(Expr {
+                kind: ExprKind::Try(expr),
+                span,
+            });
         }
         if self.at(&Tok::Amp) {
             let span = self.bump().span;
             let mutable = self.eat(&Tok::Kw(Kw::Mut));
             let expr = Box::new(self.unary()?);
-            return Ok(Expr { kind: ExprKind::AddrOf { mutable, expr }, span });
+            return Ok(Expr {
+                kind: ExprKind::AddrOf { mutable, expr },
+                span,
+            });
         }
         let op = match self.peek() {
             Tok::Minus => UnOp::Neg,
@@ -1139,7 +1516,13 @@ impl Parser {
         };
         let span = self.bump().span;
         let expr = self.unary()?;
-        Ok(Expr { kind: ExprKind::Unary { op, expr: Box::new(expr) }, span })
+        Ok(Expr {
+            kind: ExprKind::Unary {
+                op,
+                expr: Box::new(expr),
+            },
+            span,
+        })
     }
 
     fn postfix(&mut self) -> Result<Expr> {
@@ -1150,25 +1533,45 @@ impl Parser {
                     self.bump();
                     let (name, span) = self.ident()?;
                     if self.at(&Tok::LParen) {
-                        let kind = ExprKind::MethodCall { base: Box::new(e), name, args: self.args()? };
+                        let kind = ExprKind::MethodCall {
+                            base: Box::new(e),
+                            name,
+                            args: self.args()?,
+                        };
                         e = Expr { kind, span };
                     } else if let Some(enum_name) = ident_path(&e)
                         && self.at(&Tok::LBrace)
                         && !self.no_struct_lit
                     {
-                        let kind = ExprKind::VariantLit { enum_name, variant: name, fields: self.field_inits()? };
+                        let kind = ExprKind::VariantLit {
+                            enum_name,
+                            variant: name,
+                            fields: self.field_inits()?,
+                        };
                         e = Expr { kind, span: e.span };
                     } else {
-                        e = Expr { kind: ExprKind::Field { base: Box::new(e), name }, span };
+                        e = Expr {
+                            kind: ExprKind::Field {
+                                base: Box::new(e),
+                                name,
+                            },
+                            span,
+                        };
                     }
                 }
                 Tok::DotStar => {
                     let span = self.bump().span;
-                    e = Expr { kind: ExprKind::Deref(Box::new(e)), span };
+                    e = Expr {
+                        kind: ExprKind::Deref(Box::new(e)),
+                        span,
+                    };
                 }
                 Tok::DotQuestion => {
                     let span = self.bump().span;
-                    e = Expr { kind: ExprKind::Unwrap(Box::new(e)), span };
+                    e = Expr {
+                        kind: ExprKind::Unwrap(Box::new(e)),
+                        span,
+                    };
                 }
                 // `F(T) { ... }`: a literal of the struct that `F(T)` returns
                 // (also `mod.F(T) { ... }`).
@@ -1178,26 +1581,58 @@ impl Parser {
                             || matches!(&e.kind, ExprKind::MethodCall { base, .. } if ident_path(base).is_some())) =>
                 {
                     let ty = expr_to_type(&e)?;
-                    e = Expr { kind: ExprKind::StructLit { ty, fields: self.field_inits()? }, span: e.span };
+                    e = Expr {
+                        kind: ExprKind::StructLit {
+                            ty,
+                            fields: self.field_inits()?,
+                        },
+                        span: e.span,
+                    };
                 }
                 // A call of a value that is not a name: `f()(x)`, `ops[i](x)`.
                 Tok::LParen => {
                     let args = self.args()?;
-                    e = Expr { span: e.span, kind: ExprKind::CallExpr { callee: Box::new(e), args } };
+                    e = Expr {
+                        span: e.span,
+                        kind: ExprKind::CallExpr {
+                            callee: Box::new(e),
+                            args,
+                        },
+                    };
                 }
                 Tok::LBracket => {
                     let span = self.bump().span;
                     let saved = self.enter_nested();
-                    let lo = if self.at(&Tok::DotDot) { None } else { Some(Box::new(self.expr()?)) };
+                    let lo = if self.at(&Tok::DotDot) {
+                        None
+                    } else {
+                        Some(Box::new(self.expr()?))
+                    };
                     if self.eat(&Tok::DotDot) {
-                        let hi =
-                            if self.at(&Tok::RBracket) { None } else { Some(Box::new(self.expr()?)) };
+                        let hi = if self.at(&Tok::RBracket) {
+                            None
+                        } else {
+                            Some(Box::new(self.expr()?))
+                        };
                         self.expect(&Tok::RBracket)?;
-                        e = Expr { kind: ExprKind::Slice { base: Box::new(e), lo, hi }, span };
+                        e = Expr {
+                            kind: ExprKind::Slice {
+                                base: Box::new(e),
+                                lo,
+                                hi,
+                            },
+                            span,
+                        };
                     } else {
                         self.expect(&Tok::RBracket)?;
                         let index = lo.unwrap();
-                        e = Expr { kind: ExprKind::Index { base: Box::new(e), index }, span };
+                        e = Expr {
+                            kind: ExprKind::Index {
+                                base: Box::new(e),
+                                index,
+                            },
+                            span,
+                        };
                     }
                     self.leave_nested(saved);
                 }
@@ -1228,9 +1663,15 @@ impl Parser {
     /// expression (`*T`, `?T`, `dyn I`, `fn(A) R`), for a `comptime`
     /// parameter or a builtin that takes a type.
     fn arg(&mut self) -> Result<Expr> {
-        if matches!(self.peek(), Tok::Star | Tok::Question | Tok::Kw(Kw::Dyn | Kw::Fn)) {
+        if matches!(
+            self.peek(),
+            Tok::Star | Tok::Question | Tok::Kw(Kw::Dyn | Kw::Fn)
+        ) {
             let span = self.span();
-            return Ok(Expr { kind: ExprKind::Type(self.type_expr()?), span });
+            return Ok(Expr {
+                kind: ExprKind::Type(self.type_expr()?),
+                span,
+            });
         }
         self.expr()
     }
@@ -1265,17 +1706,30 @@ impl Parser {
                 ExprKind::Char(c)
             }
             // `simd[N]T{...}`, `simd[N]T{value, ..}`, or the type itself.
-            Tok::Ident(name) if name == "simd" && self.toks.get(self.pos + 1).map(|t| &t.tok) == Some(&Tok::LBracket) => {
+            Tok::Ident(name)
+                if name == "simd"
+                    && self.toks.get(self.pos + 1).map(|t| &t.tok) == Some(&Tok::LBracket) =>
+            {
                 let ty = self.type_expr()?;
                 if !self.at(&Tok::LBrace) {
-                    return Ok(Expr { kind: ExprKind::Type(ty), span });
+                    return Ok(Expr {
+                        kind: ExprKind::Type(ty),
+                        span,
+                    });
                 }
                 match self.array_elems()? {
                     (mut elems, Some(at)) => {
                         if elems.len() != 1 {
-                            return Err(Error::new(E0045, at, "a repeat literal has one value before `..`: `simd[N]T{value, ..}`"));
+                            return Err(Error::new(
+                                E0045,
+                                at,
+                                "a repeat literal has one value before `..`: `simd[N]T{value, ..}`",
+                            ));
                         }
-                        ExprKind::ArrayRepeat { ty, value: Box::new(elems.remove(0)) }
+                        ExprKind::ArrayRepeat {
+                            ty,
+                            value: Box::new(elems.remove(0)),
+                        }
                     }
                     (elems, None) => ExprKind::ArrayLit { ty, elems },
                 }
@@ -1286,17 +1740,29 @@ impl Parser {
                     _ if name == "true" => ExprKind::Bool(true),
                     _ if name == "false" => ExprKind::Bool(false),
                     _ if name == "null" => ExprKind::Null,
-                    Tok::LParen => ExprKind::Call { name, args: self.args()? },
+                    Tok::LParen => ExprKind::Call {
+                        name,
+                        args: self.args()?,
+                    },
                     Tok::LBrace if !self.no_struct_lit => {
-                        let ty = TypeExpr { kind: TypeExprKind::Named(name), span };
-                        ExprKind::StructLit { ty, fields: self.field_inits()? }
+                        let ty = TypeExpr {
+                            kind: TypeExprKind::Named(name),
+                            span,
+                        };
+                        ExprKind::StructLit {
+                            ty,
+                            fields: self.field_inits()?,
+                        }
                     }
                     _ => ExprKind::Ident(name),
                 }
             }
             Tok::Builtin(name) => {
                 self.bump();
-                ExprKind::Builtin { name, args: self.args()? }
+                ExprKind::Builtin {
+                    name,
+                    args: self.args()?,
+                }
             }
             Tok::LParen => {
                 self.bump();
@@ -1318,28 +1784,53 @@ impl Parser {
                 }
                 let (elems, repeat) = self.array_elems()?;
                 if let Some(at) = repeat {
-                    return Err(Error::new(E0045, at, "a repeat literal states its length: `[N]T{value, ..}`"));
+                    return Err(Error::new(
+                        E0045,
+                        at,
+                        "a repeat literal states its length: `[N]T{value, ..}`",
+                    ));
                 }
-                let ty = TypeExpr { kind: TypeExprKind::Array(ArrayLen::Lit(elems.len() as u64), Box::new(elem)), span };
+                let ty = TypeExpr {
+                    kind: TypeExprKind::Array(ArrayLen::Lit(elems.len() as u64), Box::new(elem)),
+                    span,
+                };
                 ExprKind::ArrayLit { ty, elems }
             }
             Tok::LBracket => {
                 let ty = self.type_expr()?;
                 if !self.at(&Tok::LBrace) {
-                    return Ok(Expr { kind: ExprKind::Type(ty), span });
+                    return Ok(Expr {
+                        kind: ExprKind::Type(ty),
+                        span,
+                    });
                 }
                 if !matches!(ty.kind, TypeExprKind::Array(..) | TypeExprKind::Slice(..)) {
-                    return Err(Error::new(E0007, span, "only array literals (`[N]T{...}`, `[_]T{...}`) and the empty slice (`[]T{}`) are supported"));
+                    return Err(Error::new(
+                        E0007,
+                        span,
+                        "only array literals (`[N]T{...}`, `[_]T{...}`) and the empty slice (`[]T{}`) are supported",
+                    ));
                 }
                 match self.array_elems()? {
                     (_, Some(at)) if matches!(ty.kind, TypeExprKind::Slice(..)) => {
-                        return Err(Error::new(E0045, at, "a slice literal must be empty (`[]T{}`); a repeat literal makes an array: `[N]T{value, ..}`"));
+                        return Err(Error::new(
+                            E0045,
+                            at,
+                            "a slice literal must be empty (`[]T{}`); a repeat literal makes an array: `[N]T{value, ..}`",
+                        ));
                     }
                     (mut elems, Some(at)) => {
                         if elems.len() != 1 {
-                            return Err(Error::new(E0045, at, "a repeat literal has one value before `..`: `[N]T{value, ..}`"));
+                            return Err(Error::new(
+                                E0045,
+                                at,
+                                "a repeat literal has one value before `..`: `[N]T{value, ..}`",
+                            ));
                         }
-                        ExprKind::ArrayRepeat { ty, value: Box::new(elems.remove(0)) }
+                        ExprKind::ArrayRepeat {
+                            ty,
+                            value: Box::new(elems.remove(0)),
+                        }
                     }
                     (elems, None) => ExprKind::ArrayLit { ty, elems },
                 }
@@ -1400,7 +1891,10 @@ impl Parser {
             }
         }
         if !self.at(&Tok::RBrace) {
-            return Err(self.missing_comma(&Tok::RBrace, "`,` or `}` (multi-line literals need a trailing comma)"));
+            return Err(self.missing_comma(
+                &Tok::RBrace,
+                "`,` or `}` (multi-line literals need a trailing comma)",
+            ));
         }
         self.bump();
         self.leave_nested(saved);
@@ -1433,11 +1927,22 @@ impl Parser {
                     return Err(self.unexpected("`.Variant` after `,` in a pattern"));
                 }
             },
-            _ => return Err(self.unexpected("pattern (`.Variant`, an integer or character, or `_`)")),
+            _ => {
+                return Err(self.unexpected("pattern (`.Variant`, an integer or character, or `_`)"));
+            }
         }
         self.expect(&Tok::FatArrow)?;
-        let body = if self.at(&Tok::LBrace) { ArmBody::Block(self.block()?) } else { ArmBody::Expr(self.expr()?) };
-        Ok(MatchArm { variants, values, body, span })
+        let body = if self.at(&Tok::LBrace) {
+            ArmBody::Block(self.block()?)
+        } else {
+            ArmBody::Expr(self.expr()?)
+        };
+        Ok(MatchArm {
+            variants,
+            values,
+            body,
+            span,
+        })
     }
 
     /// `.V` or `.V { a, b: c, .. }`.
@@ -1453,8 +1958,17 @@ impl Parser {
                     break;
                 }
                 let (field, fspan) = self.ident()?;
-                let (binding, binding_span) = if self.eat(&Tok::Colon) { self.ident()? } else { (field.clone(), fspan) };
-                pats.push(FieldPat { field, span: fspan, binding, binding_span });
+                let (binding, binding_span) = if self.eat(&Tok::Colon) {
+                    self.ident()?
+                } else {
+                    (field.clone(), fspan)
+                };
+                pats.push(FieldPat {
+                    field,
+                    span: fspan,
+                    binding,
+                    binding_span,
+                });
                 if !self.eat(&Tok::Comma) {
                     break;
                 }
@@ -1462,7 +1976,12 @@ impl Parser {
             self.expect(&Tok::RBrace)?;
             fields = Some(pats);
         }
-        Ok(VariantPat { name, span, fields, rest })
+        Ok(VariantPat {
+            name,
+            span,
+            fields,
+            rest,
+        })
     }
 
     /// `1`, `-1`, `'a'` or the inclusive range `'a'..='z'`.
@@ -1472,7 +1991,11 @@ impl Parser {
         let hi = if self.eat(&Tok::DotDotEq) {
             self.int_lit()?
         } else if self.at(&Tok::DotDot) {
-            return Err(Error::new(E0006, self.span(), "a range pattern includes its end: write `lo..=hi`"));
+            return Err(Error::new(
+                E0006,
+                self.span(),
+                "a range pattern includes its end: write `lo..=hi`",
+            ));
         } else {
             lo
         };
@@ -1499,13 +2022,20 @@ impl Parser {
             let (fname, fspan) = self.ident()?;
             self.expect(&Tok::Colon)?;
             let value = self.expr()?;
-            fields.push(FieldInit { name: fname, span: fspan, value });
+            fields.push(FieldInit {
+                name: fname,
+                span: fspan,
+                value,
+            });
             if !self.eat(&Tok::Comma) {
                 break;
             }
         }
         if !self.at(&Tok::RBrace) {
-            return Err(self.missing_comma(&Tok::RBrace, "`,` or `}` (multi-line literals need a trailing comma)"));
+            return Err(self.missing_comma(
+                &Tok::RBrace,
+                "`,` or `}` (multi-line literals need a trailing comma)",
+            ));
         }
         self.bump();
         Ok(fields)
@@ -1525,12 +2055,18 @@ fn inferred_length(span: Span) -> Error {
 /// literal `F(A, B) { ... }`.
 fn expr_to_type(e: &Expr) -> Result<TypeExpr> {
     let kind = match &e.kind {
-        ExprKind::Ident(_) | ExprKind::Field { .. } if let Some(path) = ident_path(e) => TypeExprKind::Named(path),
-        ExprKind::Call { name, args } => {
-            TypeExprKind::Generic(name.clone(), args.iter().map(expr_to_type).collect::<Result<_>>()?)
+        ExprKind::Ident(_) | ExprKind::Field { .. } if let Some(path) = ident_path(e) => {
+            TypeExprKind::Named(path)
         }
+        ExprKind::Call { name, args } => TypeExprKind::Generic(
+            name.clone(),
+            args.iter().map(expr_to_type).collect::<Result<_>>()?,
+        ),
         ExprKind::MethodCall { base, name, args } if let Some(path) = ident_path(base) => {
-            TypeExprKind::Generic(format!("{path}.{name}"), args.iter().map(expr_to_type).collect::<Result<_>>()?)
+            TypeExprKind::Generic(
+                format!("{path}.{name}"),
+                args.iter().map(expr_to_type).collect::<Result<_>>()?,
+            )
         }
         ExprKind::Type(t) => return Ok(t.clone()),
         _ => return Err(Error::new(E0006, e.span, "expected a type")),
@@ -1580,7 +2116,14 @@ mod tests {
     fn imports() {
         let f = parse_src("import std\nimport std.mem.Allocator\n").unwrap();
         assert_eq!(f.imports.len(), 2);
-        assert_eq!(f.imports[1].path.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["std", "mem", "Allocator"]);
+        assert_eq!(
+            f.imports[1]
+                .path
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>(),
+            ["std", "mem", "Allocator"]
+        );
         let e = parse_src("fn f() {\n import std\n}").unwrap_err();
         assert_eq!(e.msg, "`import` is only allowed at the top level of a file");
     }
@@ -1588,7 +2131,10 @@ mod tests {
     #[test]
     fn unsupported_keywords() {
         let e = parse_src("fn f() {\n comptime x\n}").unwrap_err();
-        assert_eq!(e.msg, "`comptime` is only supported on a parameter (`comptime T: type`)");
+        assert_eq!(
+            e.msg,
+            "`comptime` is only supported on a parameter (`comptime T: type`)"
+        );
     }
 
     /// `catch` binds looser than `+` and tighter than `==`.
@@ -1596,10 +2142,25 @@ mod tests {
     fn catch_precedence() {
         let f = parse_src("fn f() {\n let b = g() catch 0 + 1 == 2\n}").unwrap();
         let Item::Fn(f) = &f.items[0] else { panic!() };
-        let StmtKind::Let { init, .. } = &f.body.as_ref().unwrap().stmts[0].kind else { panic!() };
-        let ExprKind::Binary { op: BinOp::Eq, lhs, .. } = &init.kind else { panic!("{init:?}") };
-        let ExprKind::Catch { body, .. } = &lhs.kind else { panic!("{lhs:?}") };
-        assert!(matches!(&**body, ArmBody::Expr(Expr { kind: ExprKind::Binary { op: BinOp::Add, .. }, .. })));
+        let StmtKind::Let { init, .. } = &f.body.as_ref().unwrap().stmts[0].kind else {
+            panic!()
+        };
+        let ExprKind::Binary {
+            op: BinOp::Eq, lhs, ..
+        } = &init.kind
+        else {
+            panic!("{init:?}")
+        };
+        let ExprKind::Catch { body, .. } = &lhs.kind else {
+            panic!("{lhs:?}")
+        };
+        assert!(matches!(
+            &**body,
+            ArmBody::Expr(Expr {
+                kind: ExprKind::Binary { op: BinOp::Add, .. },
+                ..
+            })
+        ));
     }
 
     /// `& | ^` bind tighter than `==` and looser than `+`; shifts bind
@@ -1608,10 +2169,31 @@ mod tests {
     fn bitwise_precedence() {
         let f = parse_src("fn f() {\n let b = a & 1 << 2 + 3 == 4\n}").unwrap();
         let Item::Fn(f) = &f.items[0] else { panic!() };
-        let StmtKind::Let { init, .. } = &f.body.as_ref().unwrap().stmts[0].kind else { panic!() };
-        let ExprKind::Binary { op: BinOp::Eq, lhs, .. } = &init.kind else { panic!("{init:?}") };
-        let ExprKind::Binary { op: BinOp::BitAnd, rhs, .. } = &lhs.kind else { panic!("{lhs:?}") };
-        let ExprKind::Binary { op: BinOp::Shl, rhs, .. } = &rhs.kind else { panic!("{rhs:?}") };
+        let StmtKind::Let { init, .. } = &f.body.as_ref().unwrap().stmts[0].kind else {
+            panic!()
+        };
+        let ExprKind::Binary {
+            op: BinOp::Eq, lhs, ..
+        } = &init.kind
+        else {
+            panic!("{init:?}")
+        };
+        let ExprKind::Binary {
+            op: BinOp::BitAnd,
+            rhs,
+            ..
+        } = &lhs.kind
+        else {
+            panic!("{lhs:?}")
+        };
+        let ExprKind::Binary {
+            op: BinOp::Shl,
+            rhs,
+            ..
+        } = &rhs.kind
+        else {
+            panic!("{rhs:?}")
+        };
         assert!(matches!(rhs.kind, ExprKind::Binary { op: BinOp::Add, .. }));
     }
 
@@ -1640,32 +2222,67 @@ mod tests {
 /// `let name = @cimport("header.h", "-Idir", ...)`: a top-level `let`
 /// (not `pub`, no type) whose arguments are string literals.
 fn cimport_decl(g: GlobalDecl) -> Result<CImportDecl> {
-    let ExprKind::Builtin { args, .. } = g.init.kind else { unreachable!() };
+    let ExprKind::Builtin { args, .. } = g.init.kind else {
+        unreachable!()
+    };
     let call_span = g.init.span;
     if g.is_pub {
-        return Err(Error::new(E0112, g.kw_span, "a `@cimport` cannot be `pub`: export Aye functions that wrap the C ones instead"));
+        return Err(Error::new(
+            E0112,
+            g.kw_span,
+            "a `@cimport` cannot be `pub`: export Aye functions that wrap the C ones instead",
+        ));
     }
     if g.mutable {
-        return Err(Error::new(E0112, g.kw_span, format!("a `@cimport` is named with `let`: `let {} = @cimport(...)`", g.name)));
+        return Err(Error::new(
+            E0112,
+            g.kw_span,
+            format!(
+                "a `@cimport` is named with `let`: `let {} = @cimport(...)`",
+                g.name
+            ),
+        ));
     }
     if let Some(t) = &g.ty {
-        return Err(Error::new(E0112, t.span, format!("a `@cimport` has no type: `let {} = @cimport(...)`", g.name)));
+        return Err(Error::new(
+            E0112,
+            t.span,
+            format!("a `@cimport` has no type: `let {} = @cimport(...)`", g.name),
+        ));
     }
     let mut strs = Vec::new();
     for a in &args {
         let ExprKind::Str(bytes) = &a.kind else {
-            return Err(Error::new(E0112, a.span, "`@cimport` takes string literals: the header, then flags (`@cimport(\"zlib.h\", \"-DZ_PREFIX\")`)"));
+            return Err(Error::new(
+                E0112,
+                a.span,
+                "`@cimport` takes string literals: the header, then flags (`@cimport(\"zlib.h\", \"-DZ_PREFIX\")`)",
+            ));
         };
         strs.push((String::from_utf8_lossy(bytes).into_owned(), a.span));
     }
     let Some(((header, header_span), flags)) = strs.split_first() else {
-        return Err(Error::new(E0112, call_span, "`@cimport` needs a header: `@cimport(\"zlib.h\")`"));
+        return Err(Error::new(
+            E0112,
+            call_span,
+            "`@cimport` needs a header: `@cimport(\"zlib.h\")`",
+        ));
     };
     if header.is_empty() || header.starts_with('-') {
-        return Err(Error::new(E0112, *header_span, "the first argument of `@cimport` is the header, such as `\"zlib.h\"`"));
+        return Err(Error::new(
+            E0112,
+            *header_span,
+            "the first argument of `@cimport` is the header, such as `\"zlib.h\"`",
+        ));
     }
     for (f, span) in flags {
         crate::cimport::check_flag(f).map_err(|e| Error::new(E0112, *span, e))?;
     }
-    Ok(CImportDecl { name: g.name, span: g.span, header: header.clone(), call_span, flags: flags.iter().map(|(f, _)| f.clone()).collect() })
+    Ok(CImportDecl {
+        name: g.name,
+        span: g.span,
+        header: header.clone(),
+        call_span,
+        flags: flags.iter().map(|(f, _)| f.clone()).collect(),
+    })
 }

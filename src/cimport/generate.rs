@@ -11,7 +11,12 @@ use std::ffi::{CStr, CString, c_int};
 use std::path::PathBuf;
 
 /// Generate the source for `header`, included by the line `include`.
-pub fn run(lib: &Lib, header: &str, include: &str, args: &[String]) -> Result<(String, Vec<String>), String> {
+pub fn run(
+    lib: &Lib,
+    header: &str,
+    include: &str,
+    args: &[String],
+) -> Result<(String, Vec<String>), String> {
     let index = unsafe { (lib.clang_createIndex)(0, 0) };
     let tu = parse(lib, index, include, args)?;
     if let Some(e) = errors(lib, tu, header) {
@@ -23,7 +28,11 @@ pub fn run(lib: &Lib, header: &str, include: &str, args: &[String]) -> Result<(S
     files.sort();
     files.dedup();
     let canon = |s: &str| std::fs::canonicalize(s).unwrap_or_else(|_| PathBuf::from(s));
-    let Some(main_name) = inclusions.iter().find(|(_, by)| by.is_none()).map(|(f, _)| f.clone()) else {
+    let Some(main_name) = inclusions
+        .iter()
+        .find(|(_, by)| by.is_none())
+        .map(|(f, _)| f.clone())
+    else {
         return Err(format!("`{header}` included nothing"));
     };
     // A header of a library (found next to the source, or through `-I`)
@@ -34,7 +43,9 @@ pub fn run(lib: &Lib, header: &str, include: &str, args: &[String]) -> Result<(S
         let name = CString::new(main_name.as_str()).unwrap_or_default();
         unsafe {
             let file = (lib.clang_getFile)(tu, name.as_ptr());
-            !file.is_null() && (lib.clang_Location_isInSystemHeader)((lib.clang_getLocation)(tu, file, 1, 1)) != 0
+            !file.is_null()
+                && (lib.clang_Location_isInSystemHeader)((lib.clang_getLocation)(tu, file, 1, 1))
+                    != 0
         }
     };
     let main = canon(&main_name);
@@ -76,16 +87,40 @@ pub fn run(lib: &Lib, header: &str, include: &str, args: &[String]) -> Result<(S
     Ok((source, files))
 }
 
-fn parse(lib: &Lib, index: CXIndex, source: &str, args: &[String]) -> Result<CXTranslationUnit, String> {
+fn parse(
+    lib: &Lib,
+    index: CXIndex,
+    source: &str,
+    args: &[String],
+) -> Result<CXTranslationUnit, String> {
     let name = CString::new("aye_cimport.c").unwrap();
     let contents = CString::new(source).map_err(|e| e.to_string())?;
-    let cargs: Vec<CString> = args.iter().map(|a| CString::new(a.as_str()).unwrap_or_default()).collect();
+    let cargs: Vec<CString> = args
+        .iter()
+        .map(|a| CString::new(a.as_str()).unwrap_or_default())
+        .collect();
     let ptrs: Vec<*const std::ffi::c_char> = cargs.iter().map(|a| a.as_ptr()).collect();
-    let mut unsaved = CXUnsavedFile { name: name.as_ptr(), contents: contents.as_ptr(), length: source.len() as _ };
-    let tu = unsafe {
-        (lib.clang_parseTranslationUnit)(index, name.as_ptr(), ptrs.as_ptr(), ptrs.len() as c_int, &mut unsaved, 1, PARSE_OPTIONS)
+    let mut unsaved = CXUnsavedFile {
+        name: name.as_ptr(),
+        contents: contents.as_ptr(),
+        length: source.len() as _,
     };
-    if tu.is_null() { Err("libclang could not parse it".to_string()) } else { Ok(tu) }
+    let tu = unsafe {
+        (lib.clang_parseTranslationUnit)(
+            index,
+            name.as_ptr(),
+            ptrs.as_ptr(),
+            ptrs.len() as c_int,
+            &mut unsaved,
+            1,
+            PARSE_OPTIONS,
+        )
+    };
+    if tu.is_null() {
+        Err("libclang could not parse it".to_string())
+    } else {
+        Ok(tu)
+    }
 }
 
 /// The header's errors as a message, if it has any.
@@ -107,14 +142,30 @@ fn errors(lib: &Lib, tu: CXTranslationUnit, header: &str) -> Option<String> {
         ));
     }
     // Paths under the working directory are shown relative to it.
-    let cwd = std::env::current_dir().ok().and_then(|d| std::fs::canonicalize(d).ok());
+    let cwd = std::env::current_dir()
+        .ok()
+        .and_then(|d| std::fs::canonicalize(d).ok());
     let rel = |f: &str| match &cwd {
-        Some(d) => std::path::Path::new(f).strip_prefix(d).map(|p| p.display().to_string()).unwrap_or_else(|_| f.to_string()),
+        Some(d) => std::path::Path::new(f)
+            .strip_prefix(d)
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| f.to_string()),
         None => f.to_string(),
     };
-    let shown: Vec<String> = found.iter().take(3).map(|(f, l, c, m)| format!("{}:{l}:{c}: {m}", rel(f))).collect();
-    let more = if found.len() > 3 { format!(" (and {} more)", found.len() - 3) } else { String::new() };
-    Some(format!("C header `{header}` has errors: {}{more}", shown.join("; ")))
+    let shown: Vec<String> = found
+        .iter()
+        .take(3)
+        .map(|(f, l, c, m)| format!("{}:{l}:{c}: {m}", rel(f)))
+        .collect();
+    let more = if found.len() > 3 {
+        format!(" (and {} more)", found.len() - 3)
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "C header `{header}` has errors: {}{more}",
+        shown.join("; ")
+    ))
 }
 
 /// Aye's keywords and the other names a declaration cannot take.
@@ -126,16 +177,33 @@ fn reserved(name: &str) -> bool {
 
 fn ident(name: &str) -> bool {
     let mut cs = name.chars();
-    cs.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') && cs.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    cs.next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && cs.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// An Aye declaration, or a comment about a C declaration that has none.
 enum Item {
-    Fn { name: String, params: Vec<(String, String)>, ret: Option<String>, variadic: bool },
-    Alias { name: String, ty: String },
-    Const { name: String, ty: String, value: String },
+    Fn {
+        name: String,
+        params: Vec<(String, String)>,
+        ret: Option<String>,
+        variadic: bool,
+    },
+    Alias {
+        name: String,
+        ty: String,
+    },
+    Const {
+        name: String,
+        ty: String,
+        value: String,
+    },
     Record(String),
-    Macro { name: String, index: usize },
+    Macro {
+        name: String,
+        index: usize,
+    },
     Note(String),
 }
 
@@ -228,14 +296,18 @@ impl Gen<'_> {
 
     fn in_scope(&mut self, c: CXCursor) -> bool {
         let loc = unsafe { (self.lib.clang_getCursorLocation)(c) };
-        let Some(file) = self.lib.file_of(loc) else { return false };
+        let Some(file) = self.lib.file_of(loc) else {
+            return false;
+        };
         if let Some(&b) = self.files.get(&file) {
             return b;
         }
         let b = if self.system {
-            self.scope.contains(&std::fs::canonicalize(&file).unwrap_or_else(|_| PathBuf::from(&file)))
+            self.scope
+                .contains(&std::fs::canonicalize(&file).unwrap_or_else(|_| PathBuf::from(&file)))
         } else {
-            file != "aye_cimport.c" && unsafe { (self.lib.clang_Location_isInSystemHeader)(loc) } == 0
+            file != "aye_cimport.c"
+                && unsafe { (self.lib.clang_Location_isInSystemHeader)(loc) } == 0
         };
         self.files.insert(file, b);
         b
@@ -243,7 +315,10 @@ impl Gen<'_> {
 
     fn anonymous(&self, c: CXCursor) -> bool {
         let s = self.spelling(c);
-        s.is_empty() || s.contains(' ') || s.contains('(') || unsafe { (self.lib.clang_Cursor_isAnonymous)(c) } != 0
+        s.is_empty()
+            || s.contains(' ')
+            || s.contains('(')
+            || unsafe { (self.lib.clang_Cursor_isAnonymous)(c) } != 0
     }
 
     /// Names that struct tags and enum aliases must not take, and the names
@@ -256,13 +331,16 @@ impl Gen<'_> {
                 }
                 TYPEDEF_DECL => {
                     let name = self.spelling(c);
-                    let under = self.strip(unsafe { (self.lib.clang_getTypedefDeclUnderlyingType)(c) });
+                    let under =
+                        self.strip(unsafe { (self.lib.clang_getTypedefDeclUnderlyingType)(c) });
                     let mut names = None;
                     if under.kind == T_RECORD || under.kind == T_ENUM {
                         let d = self.decl_of(under);
                         let usr = self.usr(d);
                         if self.anonymous(d) {
-                            self.anon_names.entry(usr.clone()).or_insert_with(|| name.clone());
+                            self.anon_names
+                                .entry(usr.clone())
+                                .or_insert_with(|| name.clone());
                         }
                         names = Some(usr);
                     }
@@ -282,7 +360,16 @@ impl Gen<'_> {
 
     fn top_level(&mut self, c: CXCursor) {
         let kind = self.kind(c);
-        if !matches!(kind, FUNCTION_DECL | VAR_DECL | TYPEDEF_DECL | ENUM_DECL | STRUCT_DECL | UNION_DECL | MACRO_DEFINITION) {
+        if !matches!(
+            kind,
+            FUNCTION_DECL
+                | VAR_DECL
+                | TYPEDEF_DECL
+                | ENUM_DECL
+                | STRUCT_DECL
+                | UNION_DECL
+                | MACRO_DEFINITION
+        ) {
             return;
         }
         if !self.in_scope(c) {
@@ -293,7 +380,9 @@ impl Gen<'_> {
             VAR_DECL => {
                 let name = self.spelling(c);
                 if self.seen.insert(name.clone()) {
-                    self.items.push(Item::Note(format!("skipped `{name}`: a C variable (Aye declares only C functions)")));
+                    self.items.push(Item::Note(format!(
+                        "skipped `{name}`: a C variable (Aye declares only C functions)"
+                    )));
                 }
             }
             TYPEDEF_DECL => self.typedef(c),
@@ -307,7 +396,14 @@ impl Gen<'_> {
                 let is_def = unsafe { (self.lib.clang_Cursor_isNull)(def) } == 0;
                 // Placed at the definition, or at the first declaration of a
                 // record that the headers do not define.
-                if is_def && self.lib.place(unsafe { (self.lib.clang_getCursorLocation)(def) }) != self.lib.place(unsafe { (self.lib.clang_getCursorLocation)(c) }) {
+                if is_def
+                    && self
+                        .lib
+                        .place(unsafe { (self.lib.clang_getCursorLocation)(def) })
+                        != self
+                            .lib
+                            .place(unsafe { (self.lib.clang_getCursorLocation)(c) })
+                {
                     return;
                 }
                 self.rec_name(c);
@@ -322,15 +418,26 @@ impl Gen<'_> {
                 let name = self.spelling(c);
                 let builtin = unsafe { (self.lib.clang_Cursor_isMacroBuiltin)(c) } != 0;
                 let fn_like = unsafe { (self.lib.clang_Cursor_isMacroFunctionLike)(c) } != 0;
-                let reserved_c = name.starts_with("__") || (name.starts_with('_') && name[1..].starts_with(|c: char| c.is_ascii_uppercase()));
-                if builtin || fn_like || reserved_c || !ident(&name) || reserved(&name) || self.ordinary.contains_key(&name) {
+                let reserved_c = name.starts_with("__")
+                    || (name.starts_with('_')
+                        && name[1..].starts_with(|c: char| c.is_ascii_uppercase()));
+                if builtin
+                    || fn_like
+                    || reserved_c
+                    || !ident(&name)
+                    || reserved(&name)
+                    || self.ordinary.contains_key(&name)
+                {
                     return;
                 }
                 if self.macros.contains(&name) {
                     return;
                 }
                 self.macros.push(name.clone());
-                self.items.push(Item::Macro { name, index: self.macros.len() - 1 });
+                self.items.push(Item::Macro {
+                    name,
+                    index: self.macros.len() - 1,
+                });
             }
             _ => {}
         }
@@ -350,11 +457,19 @@ impl Gen<'_> {
         let tag = self.spelling(decl);
         let anonymous = self.anonymous(decl);
         let mut name = if anonymous {
-            self.anon_names.get(&usr).cloned().or_else(|| self.hint.take()).unwrap_or_else(|| "anon".to_string())
+            self.anon_names
+                .get(&usr)
+                .cloned()
+                .or_else(|| self.hint.take())
+                .unwrap_or_else(|| "anon".to_string())
         } else {
             tag
         };
-        let clash = !anonymous && self.ordinary.get(&name).is_some_and(|o| o.as_deref() != Some(usr.as_str()));
+        let clash = !anonymous
+            && self
+                .ordinary
+                .get(&name)
+                .is_some_and(|o| o.as_deref() != Some(usr.as_str()));
         if clash || !ident(&name) || reserved(&name) {
             name = format!("{}_{name}", if union { "union" } else { "struct" });
         }
@@ -366,7 +481,19 @@ impl Gen<'_> {
         }
         self.rec_names.insert(name.clone());
         let decl = if defined { def } else { decl };
-        self.recs.insert(usr.clone(), Rec { name: name.clone(), union, decl, defined, in_scope: false, layout: None, computing: false, placed: false });
+        self.recs.insert(
+            usr.clone(),
+            Rec {
+                name: name.clone(),
+                union,
+                decl,
+                defined,
+                in_scope: false,
+                layout: None,
+                computing: false,
+                placed: false,
+            },
+        );
         self.rec_order.push(usr);
         name
     }
@@ -378,7 +505,11 @@ impl Gen<'_> {
         if by_value {
             let usr = self.usr(decl);
             if let Err(e) = self.layout(&usr) {
-                let kw = if self.recs[&usr].union { "union" } else { "struct" };
+                let kw = if self.recs[&usr].union {
+                    "union"
+                } else {
+                    "struct"
+                };
                 return Err(format!("`{kw} {name}` is opaque ({e})"));
             }
         }
@@ -408,10 +539,20 @@ impl Gen<'_> {
         result
     }
 
-    fn compute_layout(&mut self, decl: CXCursor, union: bool, rname: &str) -> Result<Vec<(String, String)>, String> {
+    fn compute_layout(
+        &mut self,
+        decl: CXCursor,
+        union: bool,
+        rname: &str,
+    ) -> Result<Vec<(String, String)>, String> {
         let lib = self.lib;
         let t = unsafe { (lib.clang_getCursorType)(decl) };
-        let (size, align) = unsafe { ((lib.clang_Type_getSizeOf)(t), (lib.clang_Type_getAlignOf)(t)) };
+        let (size, align) = unsafe {
+            (
+                (lib.clang_Type_getSizeOf)(t),
+                (lib.clang_Type_getAlignOf)(t),
+            )
+        };
         let fields = lib.fields(t);
         let mut out = Vec::new();
         let (mut off, mut max_size, mut max_align) = (0i64, 0i64, 1i64);
@@ -419,7 +560,11 @@ impl Gen<'_> {
             let fname = self.spelling(f);
             // An anonymous member's field has no name (or a description).
             let fname = if ident(&fname) { fname } else { String::new() };
-            let shown = if fname.is_empty() { format!("anon{i}") } else { fname.clone() };
+            let shown = if fname.is_empty() {
+                format!("anon{i}")
+            } else {
+                fname.clone()
+            };
             if unsafe { (lib.clang_Cursor_isBitField)(f) } != 0 {
                 return Err(format!("bit-field `{shown}`"));
             }
@@ -432,7 +577,12 @@ impl Gen<'_> {
             let ty = self.ty(ft, true);
             self.hint = None;
             let ty = ty.map_err(|e| format!("field `{shown}`: {e}"))?;
-            let (fs, fa) = unsafe { ((lib.clang_Type_getSizeOf)(ft), (lib.clang_Type_getAlignOf)(ft)) };
+            let (fs, fa) = unsafe {
+                (
+                    (lib.clang_Type_getSizeOf)(ft),
+                    (lib.clang_Type_getAlignOf)(ft),
+                )
+            };
             if fs < 0 || fa <= 0 {
                 return Err(format!("field `{shown}` has no size"));
             }
@@ -454,7 +604,9 @@ impl Gen<'_> {
             out.push((name, ty));
         }
         let end = if union { max_size } else { off };
-        if (end + max_align - 1) / max_align * max_align != size || align != max_align && !fields.is_empty() {
+        if (end + max_align - 1) / max_align * max_align != size
+            || align != max_align && !fields.is_empty()
+        {
             return Err("it is packed or aligned".to_string());
         }
         Ok(out)
@@ -495,7 +647,12 @@ impl Gen<'_> {
                     _ => {}
                 }
                 let decl = self.decl_of(t);
-                if ident(&name) && !reserved(&name) && !name.starts_with('_') && !self.in_scope(decl) && self.used_typedef_names.insert(name) {
+                if ident(&name)
+                    && !reserved(&name)
+                    && !name.starts_with('_')
+                    && !self.in_scope(decl)
+                    && self.used_typedef_names.insert(name)
+                {
                     self.used_typedefs.push(decl);
                 }
                 let under = unsafe { (lib.clang_getTypedefDeclUnderlyingType)(decl) };
@@ -513,13 +670,18 @@ impl Gen<'_> {
                 let elem = self.ty(unsafe { (lib.clang_getArrayElementType)(t) }, true)?;
                 Ok(format!("[{n}]{elem}"))
             }
-            T_FUNCTION_PROTO | T_FUNCTION_NO_PROTO => Err("a function type (Aye has function pointers only)".to_string()),
+            T_FUNCTION_PROTO | T_FUNCTION_NO_PROTO => {
+                Err("a function type (Aye has function pointers only)".to_string())
+            }
             _ => {
                 let c = self.canonical(t);
                 if c.kind != t.kind && c.kind != T_INVALID {
                     return self.ty(c, by_value);
                 }
-                Err(format!("the C type `{}` has no Aye equivalent", self.type_spelling(t)))
+                Err(format!(
+                    "the C type `{}` has no Aye equivalent",
+                    self.type_spelling(t)
+                ))
             }
         }
     }
@@ -552,12 +714,19 @@ impl Gen<'_> {
                     params.push(self.param(unsafe { (lib.clang_getArgType)(c, i as u32) })?);
                 }
                 let ret = self.ty(unsafe { (lib.clang_getResultType)(c) }, true)?;
-                let ret = if ret == "void" { String::new() } else { format!(" {ret}") };
+                let ret = if ret == "void" {
+                    String::new()
+                } else {
+                    format!(" {ret}")
+                };
                 Ok(format!("?fn({}){ret}", params.join(", ")))
             }
             _ => {
                 let inner = self.ty(p, false)?;
-                let constant = unsafe { (lib.clang_isConstQualifiedType)(p) != 0 || (lib.clang_isConstQualifiedType)(c) != 0 };
+                let constant = unsafe {
+                    (lib.clang_isConstQualifiedType)(p) != 0
+                        || (lib.clang_isConstQualifiedType)(c) != 0
+                };
                 Ok(format!("{}{inner}", if constant { "?*" } else { "?*mut " }))
             }
         }
@@ -572,18 +741,23 @@ impl Gen<'_> {
             return;
         }
         let skip = |why: String| Item::Note(format!("skipped `{name}`: {why}"));
-        if unsafe { (lib.clang_getCursorLinkage)(c) } != LINKAGE_EXTERNAL || unsafe { (lib.clang_Cursor_isFunctionInlined)(c) } != 0 {
-            self.items.push(skip("an inline function (no symbol to link)".to_string()));
+        if unsafe { (lib.clang_getCursorLinkage)(c) } != LINKAGE_EXTERNAL
+            || unsafe { (lib.clang_Cursor_isFunctionInlined)(c) } != 0
+        {
+            self.items
+                .push(skip("an inline function (no symbol to link)".to_string()));
             return;
         }
         let mangled = self.s(unsafe { (lib.clang_Cursor_getMangling)(c) });
         let symbol = mangled.trim_start_matches('\u{1}');
         if symbol != name && symbol != format!("_{name}") {
-            self.items.push(skip(format!("its symbol is `{symbol}` (an asm label)")));
+            self.items
+                .push(skip(format!("its symbol is `{symbol}` (an asm label)")));
             return;
         }
         if !ident(&name) || reserved(&name) {
-            self.items.push(skip("the name is an Aye keyword".to_string()));
+            self.items
+                .push(skip("the name is an Aye keyword".to_string()));
             return;
         }
         let t = unsafe { (lib.clang_getCursorType)(c) };
@@ -597,7 +771,11 @@ impl Gen<'_> {
                 let arg = unsafe { (lib.clang_Cursor_getArgument)(c, i) };
                 let pname = self.spelling(arg);
                 let at = unsafe { (lib.clang_getCursorType)(arg) };
-                let at = if at.kind == T_INVALID { unsafe { (lib.clang_getArgType)(t, i) } } else { at };
+                let at = if at.kind == T_INVALID {
+                    unsafe { (lib.clang_getArgType)(t, i) }
+                } else {
+                    at
+                };
                 match self.param(at) {
                     Ok(ty) => params.push((pname, ty)),
                     Err(e) => {
@@ -615,7 +793,9 @@ impl Gen<'_> {
             match self.kind(k) {
                 TYPE_REF => {
                     let written = unsafe { (lib.clang_getCursorType)(k) };
-                    if written.kind == T_TYPEDEF && self.canonical(written).kind == self.canonical(rt).kind {
+                    if written.kind == T_TYPEDEF
+                        && self.canonical(written).kind == self.canonical(rt).kind
+                    {
                         rt = written;
                     }
                     break;
@@ -632,7 +812,12 @@ impl Gen<'_> {
                 return;
             }
         };
-        self.items.push(Item::Fn { name, params, ret, variadic });
+        self.items.push(Item::Fn {
+            name,
+            params,
+            ret,
+            variadic,
+        });
     }
 
     fn typedef(&mut self, c: CXCursor) {
@@ -646,7 +831,9 @@ impl Gen<'_> {
             return;
         }
         let canonical = self.canonical(under);
-        if matches!(canonical.kind, T_FUNCTION_PROTO | T_FUNCTION_NO_PROTO) || canonical.kind == T_VOID {
+        if matches!(canonical.kind, T_FUNCTION_PROTO | T_FUNCTION_NO_PROTO)
+            || canonical.kind == T_VOID
+        {
             return;
         }
         let ty = match name.as_str() {
@@ -656,7 +843,9 @@ impl Gen<'_> {
         };
         match ty {
             Ok(ty) => self.items.push(Item::Alias { name, ty }),
-            Err(e) => self.items.push(Item::Note(format!("skipped `{name}`: {e}"))),
+            Err(e) => self
+                .items
+                .push(Item::Note(format!("skipped `{name}`: {e}"))),
         }
     }
 
@@ -667,10 +856,17 @@ impl Gen<'_> {
         }
         let it_c = unsafe { (self.lib.clang_getEnumDeclIntegerType)(c) };
         let Ok(it) = self.ty(it_c, true) else { return };
-        let unsigned = matches!(self.canonical(it_c).kind, T_BOOL | T_CHAR_U | T_UCHAR | T_USHORT | T_UINT | T_ULONG | T_ULONGLONG);
+        let unsigned = matches!(
+            self.canonical(it_c).kind,
+            T_BOOL | T_CHAR_U | T_UCHAR | T_USHORT | T_UINT | T_ULONG | T_ULONGLONG
+        );
         let tag = self.spelling(c);
-        if !self.anonymous(c) && ident(&tag) && !reserved(&tag) && !self.ordinary.contains_key(&tag) {
-            self.items.push(Item::Alias { name: tag, ty: it.clone() });
+        if !self.anonymous(c) && ident(&tag) && !reserved(&tag) && !self.ordinary.contains_key(&tag)
+        {
+            self.items.push(Item::Alias {
+                name: tag,
+                ty: it.clone(),
+            });
         }
         for k in self.lib.children(c) {
             if self.kind(k) != ENUM_CONSTANT_DECL {
@@ -685,7 +881,11 @@ impl Gen<'_> {
             } else {
                 unsafe { (self.lib.clang_getEnumConstantDeclValue)(k) }.to_string()
             };
-            self.items.push(Item::Const { name, ty: it.clone(), value });
+            self.items.push(Item::Const {
+                name,
+                ty: it.clone(),
+                value,
+            });
         }
     }
 
@@ -706,7 +906,9 @@ impl Gen<'_> {
         }
         let mut args = args.to_vec();
         args.push("-ferror-limit=0".to_string());
-        let Ok(tu) = parse(self.lib, index, &src, &args) else { return values };
+        let Ok(tu) = parse(self.lib, index, &src, &args) else {
+            return values;
+        };
         let lib = self.lib;
         // Macros that are not constants are errors here (a type, a call, a
         // statement); libclang must not evaluate those (it may crash).
@@ -725,7 +927,13 @@ impl Gen<'_> {
             if self.kind(c) != VAR_DECL {
                 continue;
             }
-            let Some(i) = self.spelling(c).strip_prefix("__aye_m_").and_then(|n| n.parse::<usize>().ok()) else { continue };
+            let Some(i) = self
+                .spelling(c)
+                .strip_prefix("__aye_m_")
+                .and_then(|n| n.parse::<usize>().ok())
+            else {
+                continue;
+            };
             // The include is line 1 (and has no newline inside).
             if i >= values.len() || bad.contains(&(i as u32 + 2)) {
                 continue;
@@ -739,9 +947,15 @@ impl Gen<'_> {
             let kind = unsafe { (lib.clang_EvalResult_getKind)(r) };
             values[i] = match kind {
                 EVAL_INT => match self.ty(t, true) {
-                    Ok(ty) if ty == "bool" => {
-                        Some((ty, if unsafe { (lib.clang_EvalResult_getAsLongLong)(r) } != 0 { "true" } else { "false" }.to_string()))
-                    }
+                    Ok(ty) if ty == "bool" => Some((
+                        ty,
+                        if unsafe { (lib.clang_EvalResult_getAsLongLong)(r) } != 0 {
+                            "true"
+                        } else {
+                            "false"
+                        }
+                        .to_string(),
+                    )),
                     Ok(ty) if !ty.starts_with(['?', '[']) => {
                         let unsigned = unsafe { (lib.clang_EvalResult_isUnsignedInt)(r) } != 0;
                         let v = if unsigned {
@@ -756,14 +970,21 @@ impl Gen<'_> {
                 EVAL_FLOAT => {
                     let v = unsafe { (lib.clang_EvalResult_getAsDouble)(r) };
                     match canonical.kind {
-                        T_FLOAT if v.is_finite() => Some(("f32".to_string(), float(v as f32 as f64, true))),
+                        T_FLOAT if v.is_finite() => {
+                            Some(("f32".to_string(), float(v as f32 as f64, true)))
+                        }
                         T_DOUBLE if v.is_finite() => Some(("f64".to_string(), float(v, false))),
                         _ => None,
                     }
                 }
                 EVAL_STR_LITERAL => {
                     let p = unsafe { (lib.clang_EvalResult_getAsStr)(r) };
-                    (!p.is_null()).then(|| (String::new(), string(unsafe { CStr::from_ptr(p) }.to_bytes())))
+                    (!p.is_null()).then(|| {
+                        (
+                            String::new(),
+                            string(unsafe { CStr::from_ptr(p) }.to_bytes()),
+                        )
+                    })
                 }
                 _ => None,
             };
@@ -797,9 +1018,17 @@ impl Gen<'_> {
             i += 1;
         }
         let mut items = std::mem::take(&mut self.items);
-        let unplaced: Vec<String> = self.rec_order.iter().filter(|u| !self.recs[*u].placed).cloned().collect();
+        let unplaced: Vec<String> = self
+            .rec_order
+            .iter()
+            .filter(|u| !self.recs[*u].placed)
+            .cloned()
+            .collect();
         if !unplaced.is_empty() || !used.is_empty() {
-            items.push(Item::Note("Types that the declarations above use, from other headers or nested in a struct.".to_string()));
+            items.push(Item::Note(
+                "Types that the declarations above use, from other headers or nested in a struct."
+                    .to_string(),
+            ));
             items.extend(used);
             items.extend(unplaced.into_iter().map(Item::Record));
         }
@@ -808,7 +1037,9 @@ impl Gen<'_> {
         let mut keep = Vec::new();
         for it in items {
             let name = match &it {
-                Item::Fn { name, .. } | Item::Alias { name, .. } | Item::Const { name, .. } => Some(name.clone()),
+                Item::Fn { name, .. } | Item::Alias { name, .. } | Item::Const { name, .. } => {
+                    Some(name.clone())
+                }
                 Item::Macro { name, index } => values[*index].as_ref().map(|_| name.clone()),
                 _ => None,
             };
@@ -833,11 +1064,24 @@ impl Gen<'_> {
             }
             last_block = block;
             match it {
-                Item::Fn { name, params, ret, variadic } => {
+                Item::Fn {
+                    name,
+                    params,
+                    ret,
+                    variadic,
+                } => {
                     let mut ps: Vec<String> = Vec::new();
                     let mut used = HashSet::new();
                     for (i, (p, ty)) in params.iter().enumerate() {
-                        let p = if ident(p) && !reserved(p) && !taken.contains(p) && used.insert(p.clone()) { p.clone() } else { format!("a{i}") };
+                        let p = if ident(p)
+                            && !reserved(p)
+                            && !taken.contains(p)
+                            && used.insert(p.clone())
+                        {
+                            p.clone()
+                        } else {
+                            format!("a{i}")
+                        };
                         ps.push(format!("{p}: {ty}"));
                     }
                     if *variadic {
@@ -847,7 +1091,9 @@ impl Gen<'_> {
                     out.push_str(&format!("pub extern fn {name}({}){ret}\n", ps.join(", ")));
                 }
                 Item::Alias { name, ty } => out.push_str(&format!("pub let {name} = {ty}\n")),
-                Item::Const { name, ty, value } => out.push_str(&format!("pub let {name}: {ty} = {value}\n")),
+                Item::Const { name, ty, value } => {
+                    out.push_str(&format!("pub let {name}: {ty} = {value}\n"))
+                }
                 Item::Macro { name, index } => {
                     let (ty, v) = values[*index].as_ref().unwrap();
                     if ty.is_empty() {
@@ -859,7 +1105,11 @@ impl Gen<'_> {
                 Item::Note(n) => out.push_str(&format!("// {n}\n")),
                 Item::Record(usr) => {
                     let r = &self.recs[usr];
-                    let kw = if r.union { "extern union" } else { "extern struct" };
+                    let kw = if r.union {
+                        "extern union"
+                    } else {
+                        "extern struct"
+                    };
                     match &r.layout {
                         Some(Ok(fields)) if !fields.is_empty() => {
                             out.push_str(&format!("pub {kw} {} {{\n", r.name));
@@ -868,9 +1118,10 @@ impl Gen<'_> {
                             }
                             out.push_str("}\n");
                         }
-                        Some(Err(e)) if r.defined => {
-                            out.push_str(&format!("// `{}` is opaque: {e}.\npub extern struct {} {{}}\n", r.name, r.name))
-                        }
+                        Some(Err(e)) if r.defined => out.push_str(&format!(
+                            "// `{}` is opaque: {e}.\npub extern struct {} {{}}\n",
+                            r.name, r.name
+                        )),
                         _ => out.push_str(&format!("pub extern struct {} {{}}\n", r.name)),
                     }
                 }
@@ -882,7 +1133,11 @@ impl Gen<'_> {
 
 /// A float literal Aye reads back as the same value.
 fn float(v: f64, single: bool) -> String {
-    let s = if single { format!("{:?}", v as f32) } else { format!("{v:?}") };
+    let s = if single {
+        format!("{:?}", v as f32)
+    } else {
+        format!("{v:?}")
+    };
     if s.contains('e') && !s.contains('.') {
         // `1e300` has no point: Aye needs one before the exponent.
         s.replacen('e', ".0e", 1)

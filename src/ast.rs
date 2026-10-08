@@ -243,18 +243,48 @@ pub struct Stmt {
 #[derive(Debug, Clone)]
 pub enum StmtKind {
     /// `let` (mutable = false) or `var` (mutable = true).
-    Let { name: String, mutable: bool, ty: Option<TypeExpr>, init: Expr },
-    Assign { target: Expr, op: AssignOp, value: Expr },
+    Let {
+        name: String,
+        mutable: bool,
+        ty: Option<TypeExpr>,
+        init: Expr,
+    },
+    Assign {
+        target: Expr,
+        op: AssignOp,
+        value: Expr,
+    },
     /// `capture` is the `v` of `if x |v| { }`; `err_capture` the `e` of
     /// `else |e| { }`, which makes `cond` an error union (`els` is then a
     /// block).
-    If { cond: Expr, capture: Option<(String, Span)>, then: Block, els: Option<Box<Stmt>>, err_capture: Option<(String, Span)> },
+    If {
+        cond: Expr,
+        capture: Option<(String, Span)>,
+        then: Block,
+        els: Option<Box<Stmt>>,
+        err_capture: Option<(String, Span)>,
+    },
     /// `capture` is the `v` of `while x |v| { }`.
-    While { cond: Expr, capture: Option<(String, Span)>, body: Block },
+    While {
+        cond: Expr,
+        capture: Option<(String, Span)>,
+        body: Block,
+    },
     /// `for var in lo..hi { body }`
-    For { var: String, var_span: Span, lo: Expr, hi: Expr, body: Block },
+    For {
+        var: String,
+        var_span: Span,
+        lo: Expr,
+        hi: Expr,
+        body: Block,
+    },
     /// `for elem in seq { body }` or `for index, elem in seq { body }`.
-    ForEach { index: Option<(String, Span)>, elem: (String, Span), seq: Expr, body: Block },
+    ForEach {
+        index: Option<(String, Span)>,
+        elem: (String, Span),
+        seq: Expr,
+        body: Block,
+    },
     Break,
     Continue,
     Return(Option<Expr>),
@@ -324,7 +354,10 @@ impl BinOp {
     }
 
     pub fn is_comparison(self) -> bool {
-        matches!(self, BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge)
+        matches!(
+            self,
+            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
+        )
     }
 
     /// Arithmetic, bitwise and shift operators: both operands and the
@@ -373,50 +406,113 @@ pub enum ExprKind {
     Str(Vec<u8>),
     Char(u32),
     Ident(String),
-    Call { name: String, args: Vec<Expr> },
+    Call {
+        name: String,
+        args: Vec<Expr>,
+    },
     /// `callee(args)` where the callee is not a name: `f()(x)`, `ops[i](x)`.
-    CallExpr { callee: Box<Expr>, args: Vec<Expr> },
+    CallExpr {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
+    },
     /// `base.name(args)`: a method call, or `Type.name(args)`.
-    MethodCall { base: Box<Expr>, name: String, args: Vec<Expr> },
-    Builtin { name: String, args: Vec<Expr> },
-    Binary { op: BinOp, lhs: Box<Expr>, rhs: Box<Expr> },
-    Unary { op: UnOp, expr: Box<Expr> },
+    MethodCall {
+        base: Box<Expr>,
+        name: String,
+        args: Vec<Expr>,
+    },
+    Builtin {
+        name: String,
+        args: Vec<Expr>,
+    },
+    Binary {
+        op: BinOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
+    Unary {
+        op: UnOp,
+        expr: Box<Expr>,
+    },
     /// `&x` (mutable = false) or `&mut x` (mutable = true).
-    AddrOf { mutable: bool, expr: Box<Expr> },
+    AddrOf {
+        mutable: bool,
+        expr: Box<Expr>,
+    },
     /// `p.*`
     Deref(Box<Expr>),
-    Cast { expr: Box<Expr>, ty: TypeExpr },
-    Field { base: Box<Expr>, name: String },
-    Index { base: Box<Expr>, index: Box<Expr> },
-    Slice { base: Box<Expr>, lo: Option<Box<Expr>>, hi: Option<Box<Expr>> },
+    Cast {
+        expr: Box<Expr>,
+        ty: TypeExpr,
+    },
+    Field {
+        base: Box<Expr>,
+        name: String,
+    },
+    Index {
+        base: Box<Expr>,
+        index: Box<Expr>,
+    },
+    Slice {
+        base: Box<Expr>,
+        lo: Option<Box<Expr>>,
+        hi: Option<Box<Expr>>,
+    },
     /// `Name { ... }` or `F(T) { ... }`; `ty` is `Named` or `Generic`.
-    StructLit { ty: TypeExpr, fields: Vec<FieldInit> },
+    StructLit {
+        ty: TypeExpr,
+        fields: Vec<FieldInit>,
+    },
     /// `Enum.Variant { field: value, ... }`. A variant without payload is
     /// written `Enum.Variant` and parsed as `Field`. `enum_name` can be a
     /// path (`shapes.Shape`); `mod.Struct { ... }` is parsed as a
     /// `VariantLit` too, and module resolution makes it a `StructLit`.
-    VariantLit { enum_name: String, variant: String, fields: Vec<FieldInit> },
-    Match { scrutinee: Box<Expr>, arms: Vec<MatchArm> },
+    VariantLit {
+        enum_name: String,
+        variant: String,
+        fields: Vec<FieldInit>,
+    },
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchArm>,
+    },
     /// `try x`
     Try(Box<Expr>),
     /// `x catch |e| body`; the body is a block or an expression. A body
     /// `return`, `break` or `continue` is parsed as a block of it.
-    Catch { expr: Box<Expr>, capture: Option<(String, Span)>, body: Box<ArmBody> },
+    Catch {
+        expr: Box<Expr>,
+        capture: Option<(String, Span)>,
+        body: Box<ArmBody>,
+    },
     /// `x orelse body`: the value of the optional `x`, or else the body (as
     /// for `catch`).
-    OrElse { expr: Box<Expr>, body: Box<ArmBody> },
+    OrElse {
+        expr: Box<Expr>,
+        body: Box<ArmBody>,
+    },
     /// `x.?`: the value of the optional `x`; a panic if it is `null`.
     Unwrap(Box<Expr>),
     /// `unreachable`: a panic; its type is the one expected there.
     Unreachable,
     /// `x is .V`: does the enum value `x` hold the variant `V`? The span
     /// of the variant name.
-    Is { expr: Box<Expr>, variant: String, variant_span: Span },
+    Is {
+        expr: Box<Expr>,
+        variant: String,
+        variant_span: Span,
+    },
     /// `[N]T{a, b, c}`; `ty` is the array type. Also the empty slice
     /// `[]T{}`, where `ty` is a slice type.
-    ArrayLit { ty: TypeExpr, elems: Vec<Expr> },
+    ArrayLit {
+        ty: TypeExpr,
+        elems: Vec<Expr>,
+    },
     /// `[N]T{value, ..}`: every element is `value` (evaluated once).
-    ArrayRepeat { ty: TypeExpr, value: Box<Expr> },
+    ArrayRepeat {
+        ty: TypeExpr,
+        value: Box<Expr>,
+    },
     Paren(Box<Expr>),
     /// `struct { ... }`: the value of a type function. The name is empty.
     StructType(StructDecl),

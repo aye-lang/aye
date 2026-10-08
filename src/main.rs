@@ -1,5 +1,5 @@
-use aye::{codes, diag, doc, fmt};
 use aye::driver::{self, Mode, Root};
+use aye::{codes, diag, doc, fmt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -38,7 +38,8 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let mut it = std::env::args().skip(1);
     let cmd = it.next().ok_or("missing command")?;
-    let (mut file, mut out, mut mode, mut json, mut filter, mut module) = (None, None, Mode::Debug, false, String::new(), None);
+    let (mut file, mut out, mut mode, mut json, mut filter, mut module) =
+        (None, None, Mode::Debug, false, String::new(), None);
     let mut prog_args = Vec::new();
     let mut cflags = Vec::new();
     while let Some(a) = it.next() {
@@ -47,9 +48,19 @@ fn parse_args() -> Result<Args, String> {
             "-o" if cmd == "build" => out = Some(it.next().ok_or("`-o` needs a path")?),
             "--json" if cmd == "check" || cmd == "test" => json = true,
             "--filter" if cmd == "test" => filter = it.next().ok_or("`--filter` needs a text")?,
-            "--module" if cmd == "test" => module = Some(it.next().ok_or("`--module` needs a module path, such as `html`")?),
+            "--module" if cmd == "test" => {
+                module = Some(
+                    it.next()
+                        .ok_or("`--module` needs a module path, such as `html`")?,
+                )
+            }
             "--cflags" if matches!(cmd.as_str(), "build" | "run" | "test") => {
-                cflags.extend(it.next().ok_or("`--cflags` needs flags, such as \"-fsanitize=thread\"")?.split_whitespace().map(String::from));
+                cflags.extend(
+                    it.next()
+                        .ok_or("`--cflags` needs flags, such as \"-fsanitize=thread\"")?
+                        .split_whitespace()
+                        .map(String::from),
+                );
             }
             "--mode" => {
                 let m = it.next().ok_or("`--mode` needs a value")?;
@@ -60,7 +71,17 @@ fn parse_args() -> Result<Args, String> {
         }
     }
     let file = file.ok_or("missing input file or directory")?;
-    Ok(Args { cmd, file, out, mode, json, filter, module, prog_args, cflags })
+    Ok(Args {
+        cmd,
+        file,
+        out,
+        mode,
+        json,
+        filter,
+        module,
+        prog_args,
+        cflags,
+    })
 }
 
 fn main() -> ExitCode {
@@ -102,7 +123,10 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    if !matches!(args.cmd.as_str(), "build" | "run" | "emit-c" | "check" | "test" | "fix") {
+    if !matches!(
+        args.cmd.as_str(),
+        "build" | "run" | "emit-c" | "check" | "test" | "fix"
+    ) {
         eprintln!("aye: unknown command `{}`\n{USAGE}", args.cmd);
         return ExitCode::from(2);
     }
@@ -120,13 +144,20 @@ fn main() -> ExitCode {
                 Ok(_) => String::new(),
                 Err(ds) => ds.iter().map(|d| d.to_json()).collect::<Vec<_>>().join(","),
             };
-            println!(r#"{{"file":{},"diagnostics":[{diags}]}}"#, diag::json_str(&args.file));
+            println!(
+                r#"{{"file":{},"diagnostics":[{diags}]}}"#,
+                diag::json_str(&args.file)
+            );
         } else if let Err(ds) = &res {
             for d in ds {
                 eprintln!("{}", d.render());
             }
         }
-        return if res.is_ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE };
+        return if res.is_ok() {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        };
     }
     if args.cmd == "fix" {
         return fix(&args.file);
@@ -149,7 +180,9 @@ fn main() -> ExitCode {
     }
     let exe = match (&args.cmd[..], &args.out) {
         ("build", Some(o)) => PathBuf::from(o),
-        ("build", None) => PathBuf::from(Path::new(&args.file).file_stem().unwrap_or("main".as_ref())),
+        ("build", None) => {
+            PathBuf::from(Path::new(&args.file).file_stem().unwrap_or("main".as_ref()))
+        }
         _ => std::env::temp_dir().join(format!("aye-run-{}", std::process::id())),
     };
     c.cflags = args.cflags.clone();
@@ -230,7 +263,11 @@ fn fmt_cmd(args: Vec<String>) -> ExitCode {
             failed = true;
         }
     }
-    if failed { ExitCode::FAILURE } else { ExitCode::SUCCESS }
+    if failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 /// `path` if it is a file, else the `.aye` files under the directory
@@ -238,7 +275,10 @@ fn fmt_cmd(args: Vec<String>) -> ExitCode {
 fn aye_files(path: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     if !path.is_dir() {
         if !path.exists() {
-            return Err(format!("cannot read {}: no such file or directory", path.display()));
+            return Err(format!(
+                "cannot read {}: no such file or directory",
+                path.display()
+            ));
         }
         out.push(path.to_path_buf());
         return Ok(());
@@ -249,7 +289,9 @@ fn aye_files(path: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
         .collect();
     entries.sort();
     for p in entries {
-        let hidden = p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'));
+        let hidden = p
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with('.'));
         if p.is_dir() && !hidden {
             aye_files(&p, out)?;
         } else if p.is_file() && p.extension().is_some_and(|e| e == "aye") {
@@ -340,7 +382,13 @@ fn fix(path: &str) -> ExitCode {
 /// then stderr) indented; or with `--json` one JSON document. The exit
 /// status is 1 if a test failed or the file does not compile.
 fn test(args: &Args, root: Root) -> ExitCode {
-    let results = match driver::run_tests(root, args.mode, &args.filter, args.module.as_deref(), &args.cflags) {
+    let results = match driver::run_tests(
+        root,
+        args.mode,
+        &args.filter,
+        args.module.as_deref(),
+        &args.cflags,
+    ) {
         Ok(r) => r,
         Err(driver::TestError::Compile(ds)) => {
             if args.json {
@@ -373,7 +421,11 @@ fn test(args: &Args, root: Root) -> ExitCode {
         );
     } else {
         for r in &results {
-            println!("test \"{}\" ... {}", r.name, if r.passed { "ok" } else { "FAILED" });
+            println!(
+                "test \"{}\" ... {}",
+                r.name,
+                if r.passed { "ok" } else { "FAILED" }
+            );
             if !r.passed {
                 for l in r.stdout.lines().chain(r.stderr.lines()) {
                     println!("    {l}");
@@ -382,7 +434,11 @@ fn test(args: &Args, root: Root) -> ExitCode {
         }
         println!("\n{passed} passed; {failed} failed");
     }
-    if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+    if failed == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
 }
 
 /// `aye cimport HEADER [flags] [--link lib]`: print the Aye source that
@@ -419,7 +475,12 @@ fn cimport_cmd(args: Vec<String>) -> ExitCode {
         eprintln!("aye: `cimport` needs a header, such as `zlib.h`\n{USAGE}");
         return ExitCode::from(2);
     };
-    let req = aye::cimport::Request { header, flags, dir: PathBuf::from("."), links };
+    let req = aye::cimport::Request {
+        header,
+        flags,
+        dir: PathBuf::from("."),
+        links,
+    };
     match aye::cimport::generate(&req) {
         Ok((source, _)) => {
             print!("{source}");

@@ -37,14 +37,28 @@ fn anyknown() -> &'static Path {
         let dir = std::env::temp_dir().join(format!("anyknown-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let exe = dir.join("anyknown");
-        let out = aye().arg("build").arg("browser").arg("-o").arg(&exe).output().unwrap();
-        assert!(out.status.success(), "building the browser failed:\n{}", String::from_utf8_lossy(&out.stderr));
+        let out = aye()
+            .arg("build")
+            .arg("browser")
+            .arg("-o")
+            .arg(&exe)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "building the browser failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         exe
     })
 }
 
 fn run(args: &[&str]) -> Output {
-    Command::new(anyknown()).current_dir(root()).args(args).output().unwrap()
+    Command::new(anyknown())
+        .current_dir(root())
+        .args(args)
+        .output()
+        .unwrap()
 }
 
 fn text(b: &[u8]) -> String {
@@ -60,17 +74,29 @@ fn fixtures() {
         .filter(|p| p.extension().is_some_and(|e| e == "html"))
         .collect();
     htmls.sort();
-    assert!(htmls.len() >= 20, "expected at least 20 fixtures, found {}", htmls.len());
+    assert!(
+        htmls.len() >= 20,
+        "expected at least 20 fixtures, found {}",
+        htmls.len()
+    );
     let bless = std::env::var_os("ANYKNOWN_BLESS").is_some();
     let mut failures = Vec::new();
     for html in &htmls {
-        let rel = html.strip_prefix(root()).unwrap().to_string_lossy().into_owned();
+        let rel = html
+            .strip_prefix(root())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         for (flag, ext) in [("--tree", "tree"), ("--text", "txt")] {
             let out = run(&["dump", flag, &rel]);
             let got = text(&out.stdout);
             let golden = html.with_extension(ext);
             if !out.status.success() || !out.stderr.is_empty() {
-                failures.push(format!("{rel} {flag}: {}\n{}", out.status, text(&out.stderr)));
+                failures.push(format!(
+                    "{rel} {flag}: {}\n{}",
+                    out.status,
+                    text(&out.stderr)
+                ));
                 continue;
             }
             if bless {
@@ -79,11 +105,20 @@ fn fixtures() {
             }
             let want = std::fs::read_to_string(&golden).unwrap_or_default();
             if got != want {
-                failures.push(format!("{rel} {flag}: output differs from {}\n--- expected\n{want}--- got\n{got}", golden.display()));
+                failures.push(format!(
+                    "{rel} {flag}: output differs from {}\n--- expected\n{want}--- got\n{got}",
+                    golden.display()
+                ));
             }
         }
     }
-    assert!(failures.is_empty(), "{} of {} fixture runs failed:\n\n{}", failures.len(), htmls.len() * 2, failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} of {} fixture runs failed:\n\n{}",
+        failures.len(),
+        htmls.len() * 2,
+        failures.join("\n")
+    );
 }
 
 /// `browser/tests/style/X.html`: `anyknown dump --style` must print
@@ -98,12 +133,33 @@ fn style_fixtures() {
         .filter(|p| p.extension().is_some_and(|e| e == "html"))
         .collect();
     htmls.sort();
-    assert!(htmls.len() >= 20, "expected at least 20 style fixtures, found {}", htmls.len());
+    assert!(
+        htmls.len() >= 20,
+        "expected at least 20 style fixtures, found {}",
+        htmls.len()
+    );
     let mut runs: Vec<(Vec<String>, PathBuf)> = htmls
         .iter()
-        .map(|h| (vec![h.strip_prefix(root()).unwrap().to_string_lossy().into_owned()], h.with_extension("style")))
+        .map(|h| {
+            (
+                vec![
+                    h.strip_prefix(root())
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                ],
+                h.with_extension("style"),
+            )
+        })
         .collect();
-    runs.push((vec!["--width".into(), "400".into(), "browser/tests/style/media.html".into()], dir.join("media.w400.style")));
+    runs.push((
+        vec![
+            "--width".into(),
+            "400".into(),
+            "browser/tests/style/media.html".into(),
+        ],
+        dir.join("media.w400.style"),
+    ));
     let bless = std::env::var_os("ANYKNOWN_BLESS").is_some();
     let mut failures = Vec::new();
     for (args, golden) in &runs {
@@ -121,10 +177,19 @@ fn style_fixtures() {
         }
         let want = std::fs::read_to_string(golden).unwrap_or_default();
         if got != want {
-            failures.push(format!("{args:?}: output differs from {}\n--- expected\n{want}--- got\n{got}", golden.display()));
+            failures.push(format!(
+                "{args:?}: output differs from {}\n--- expected\n{want}--- got\n{got}",
+                golden.display()
+            ));
         }
     }
-    assert!(failures.is_empty(), "{} of {} style runs failed:\n\n{}", failures.len(), runs.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} of {} style runs failed:\n\n{}",
+        failures.len(),
+        runs.len(),
+        failures.join("\n")
+    );
 }
 
 /// `browser/tests/layout/X.html`: `anyknown dump --layout` (fixed-metric
@@ -139,13 +204,31 @@ fn layout_fixtures() {
         .filter(|p| p.extension().is_some_and(|e| e == "html"))
         .collect();
     htmls.sort();
-    assert!(htmls.len() >= 25, "expected at least 25 layout fixtures, found {}", htmls.len());
+    assert!(
+        htmls.len() >= 25,
+        "expected at least 25 layout fixtures, found {}",
+        htmls.len()
+    );
     let mut runs: Vec<(Vec<String>, PathBuf)> = htmls
         .iter()
-        .map(|h| (vec![h.strip_prefix(root()).unwrap().to_string_lossy().into_owned()], h.with_extension("layout")))
+        .map(|h| {
+            (
+                vec![
+                    h.strip_prefix(root())
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                ],
+                h.with_extension("layout"),
+            )
+        })
         .collect();
     runs.push((
-        vec!["--width".into(), "400".into(), "browser/tests/layout/percentages.html".into()],
+        vec![
+            "--width".into(),
+            "400".into(),
+            "browser/tests/layout/percentages.html".into(),
+        ],
         dir.join("percentages.w400.layout"),
     ));
     let bless = std::env::var_os("ANYKNOWN_BLESS").is_some();
@@ -165,10 +248,19 @@ fn layout_fixtures() {
         }
         let want = std::fs::read_to_string(golden).unwrap_or_default();
         if got != want {
-            failures.push(format!("{args:?}: output differs from {}\n--- expected\n{want}--- got\n{got}", golden.display()));
+            failures.push(format!(
+                "{args:?}: output differs from {}\n--- expected\n{want}--- got\n{got}",
+                golden.display()
+            ));
         }
     }
-    assert!(failures.is_empty(), "{} of {} layout runs failed:\n\n{}", failures.len(), runs.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} of {} layout runs failed:\n\n{}",
+        failures.len(),
+        runs.len(),
+        failures.join("\n")
+    );
 }
 
 /// `--font system` measures text with the system's fonts through
@@ -181,9 +273,17 @@ fn layout_system_font() {
         println!("skipped: no system font");
         return;
     }
-    assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "{}\n{}",
+        out.status,
+        text(&out.stderr)
+    );
     let got = text(&out.stdout);
-    assert!(got.starts_with("viewport 800x600\n  block <html> (0, 0) 800x"), "{got}");
+    assert!(
+        got.starts_with("viewport 800x600\n  block <html> (0, 0) 800x"),
+        "{got}"
+    );
     assert!(got.contains("\"The Ore Times\""), "{got}");
     // Proportional glyphs: widths differ from the fixed-metric font's.
     let fixed = text(&run(&["dump", "--layout", page]).stdout);
@@ -192,7 +292,14 @@ fn layout_system_font() {
 
 #[test]
 fn aye_unit_tests() {
-    for module in ["browser", "browser/url", "browser/dom", "browser/encoding", "browser/font", "browser/image"] {
+    for module in [
+        "browser",
+        "browser/url",
+        "browser/dom",
+        "browser/encoding",
+        "browser/font",
+        "browser/image",
+    ] {
         let out = aye().arg("test").arg(module).output().unwrap();
         let stdout = text(&out.stdout);
         assert!(
@@ -203,7 +310,10 @@ fn aye_unit_tests() {
     }
     // Modules that import other browser modules, tested from the root.
     for module in ["svg", "js"] {
-        let out = aye().args(["test", "browser", "--module", module]).output().unwrap();
+        let out = aye()
+            .args(["test", "browser", "--module", module])
+            .output()
+            .unwrap();
         let stdout = text(&out.stdout);
         assert!(
             out.status.success() && stdout.contains(" passed; 0 failed"),
@@ -219,12 +329,21 @@ fn expect(args: &[&str], status: i32, stdout: &str, stderr: &str) {
     let out = run(args);
     assert_eq!(text(&out.stdout), stdout, "stdout of anyknown {args:?}");
     assert_eq!(text(&out.stderr), stderr, "stderr of anyknown {args:?}");
-    assert_eq!(out.status.code(), Some(status), "status of anyknown {args:?}");
+    assert_eq!(
+        out.status.code(),
+        Some(status),
+        "status of anyknown {args:?}"
+    );
 }
 
 #[test]
 fn data_urls() {
-    expect(&["dump", "--text", "data:text/html,<h1>Hi</h1><p>there%21"], 0, "Hi\n\nthere!\n", "");
+    expect(
+        &["dump", "--text", "data:text/html,<h1>Hi</h1><p>there%21"],
+        0,
+        "Hi\n\nthere!\n",
+        "",
+    );
     expect(
         &["dump", "--tree", "data:text/html;base64,PHA+Q2Fm6TwvcD4="],
         0,
@@ -232,29 +351,75 @@ fn data_urls() {
         "",
     );
     // Plain text is shown as it is.
-    expect(&["dump", "--text", "data:,a  <b>%0A  c"], 0, "a  <b>\n  c\n", "");
+    expect(
+        &["dump", "--text", "data:,a  <b>%0A  c"],
+        0,
+        "a  <b>\n  c\n",
+        "",
+    );
 }
 
 #[test]
 fn queries() {
     let page = "browser/tests/basic.html";
-    expect(&["dump", "--tree", "--id", "main", page], 0, "<div id=\"main\" class=\"content\">\n  \"\\n    \"\n  <p>\n    \"Second paragraph.\"\n  \"\\n  \"\n", "");
-    expect(&["dump", "--text", "--tag", "P", page], 0, "This is a small page with a link.\nSecond paragraph.\n", "");
+    expect(
+        &["dump", "--tree", "--id", "main", page],
+        0,
+        "<div id=\"main\" class=\"content\">\n  \"\\n    \"\n  <p>\n    \"Second paragraph.\"\n  \"\\n  \"\n",
+        "",
+    );
+    expect(
+        &["dump", "--text", "--tag", "P", page],
+        0,
+        "This is a small page with a link.\nSecond paragraph.\n",
+        "",
+    );
     expect(&["dump", "--text", "--id", "none", page], 0, "", "");
 }
 
 #[test]
 fn errors() {
     let usage = "error: usage: anyknown dump --tree|--text|--style|--layout [--js [--no-scroll | --scroll-steps N]] [--width PX] [--font fixed|system] [--id ID | --tag NAME] FILE|URL\n";
-    expect(&[], 2, "", "error: usage: anyknown [open] FILE|URL | dump --tree|--text|--style|--layout|--a11y|--md ... FILE|URL | screenshot FILE|URL -o OUT.png | js FILE | agent | mcp | connect SOCKET\n");
+    expect(
+        &[],
+        2,
+        "",
+        "error: usage: anyknown [open] FILE|URL | dump --tree|--text|--style|--layout|--a11y|--md ... FILE|URL | screenshot FILE|URL -o OUT.png | js FILE | agent | mcp | connect SOCKET\n",
+    );
     expect(&["dump", "--tree"], 2, "", usage);
-    expect(&["dump", "--layout", "--font", "serif", "browser/tests/basic.html"], 2, "", usage);
-    expect(&["dump", "--tree", "browser/tests/missing.html"], 1, "", &format!(
-        "error: cannot fetch file://{}/browser/tests/missing.html: not found\n",
-        root().display()
-    ));
-    expect(&["dump", "--text", "ftp://example.com/"], 1, "", "error: cannot fetch ftp://example.com/: this kind of URL is not supported yet\n");
-    expect(&["dump", "--text", "data:text/html;base64,%%%"], 1, "", "error: cannot fetch data:text/html;base64,%%%: invalid data: URL\n");
+    expect(
+        &[
+            "dump",
+            "--layout",
+            "--font",
+            "serif",
+            "browser/tests/basic.html",
+        ],
+        2,
+        "",
+        usage,
+    );
+    expect(
+        &["dump", "--tree", "browser/tests/missing.html"],
+        1,
+        "",
+        &format!(
+            "error: cannot fetch file://{}/browser/tests/missing.html: not found\n",
+            root().display()
+        ),
+    );
+    expect(
+        &["dump", "--text", "ftp://example.com/"],
+        1,
+        "",
+        "error: cannot fetch ftp://example.com/: this kind of URL is not supported yet\n",
+    );
+    expect(
+        &["dump", "--text", "data:text/html;base64,%%%"],
+        1,
+        "",
+        "error: cannot fetch data:text/html;base64,%%%: invalid data: URL\n",
+    );
 }
 
 /// The local test server (`browser/tests/server.py`) serving
@@ -283,9 +448,14 @@ fn server() -> Option<Server> {
         .spawn()
         .ok()?;
     let mut line = String::new();
-    std::io::BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).ok()?;
+    std::io::BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .ok()?;
     let port: u16 = line.trim().parse().ok()?;
-    Some(Server { child, base: format!("http://127.0.0.1:{port}") })
+    Some(Server {
+        child,
+        base: format!("http://127.0.0.1:{port}"),
+    })
 }
 
 #[test]
@@ -297,17 +467,53 @@ fn http() {
     let base = &srv.base;
     let basic = std::fs::read_to_string(root().join("browser/tests/basic.txt")).unwrap();
     // A page over HTTP reads as from a file, also after a redirect.
-    expect(&["dump", "--text", &format!("{base}/basic.html")], 0, &basic, "");
-    expect(&["dump", "--text", &format!("{base}/redirect")], 0, &basic, "");
-    expect(&["dump", "--text", &format!("{base}/agent")], 0, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) anyknown/0.1\n", "");
-    expect(&["dump", "--text", &format!("{base}/gzip")], 0, &format!("{}\n", ["compressed"; 50].join(" ")), "");
+    expect(
+        &["dump", "--text", &format!("{base}/basic.html")],
+        0,
+        &basic,
+        "",
+    );
+    expect(
+        &["dump", "--text", &format!("{base}/redirect")],
+        0,
+        &basic,
+        "",
+    );
+    expect(
+        &["dump", "--text", &format!("{base}/agent")],
+        0,
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) anyknown/0.1\n",
+        "",
+    );
+    expect(
+        &["dump", "--text", &format!("{base}/gzip")],
+        0,
+        &format!("{}\n", ["compressed"; 50].join(" ")),
+        "",
+    );
     // Style sheets linked from a page over HTTP are fetched relative to
     // the URL after redirects.
-    let link_style = std::fs::read_to_string(root().join("browser/tests/style/link.style")).unwrap();
-    expect(&["dump", "--style", &format!("{base}/redirect-style")], 0, &link_style, "");
+    let link_style =
+        std::fs::read_to_string(root().join("browser/tests/style/link.style")).unwrap();
+    expect(
+        &["dump", "--style", &format!("{base}/redirect-style")],
+        0,
+        &link_style,
+        "",
+    );
     // The charset of the Content-Type header decodes the body.
-    expect(&["dump", "--text", &format!("{base}/latin1")], 0, "Café à la crème\n", "");
-    expect(&["dump", "--text", &format!("{base}/gbk")], 0, "中文网页\n", "");
+    expect(
+        &["dump", "--text", &format!("{base}/latin1")],
+        0,
+        "Café à la crème\n",
+        "",
+    );
+    expect(
+        &["dump", "--text", &format!("{base}/gbk")],
+        0,
+        "中文网页\n",
+        "",
+    );
     // An error status still has a page.
     let out = run(&["dump", "--text", &format!("{base}/missing.html")]);
     assert_eq!(out.status.code(), Some(0));
@@ -319,7 +525,12 @@ fn http() {
         &format!("error: cannot fetch {base}/redirect-loop: too many redirects\n"),
     );
     // Nothing listens on port 1.
-    expect(&["dump", "--text", "http://127.0.0.1:1/"], 1, "", "error: cannot fetch http://127.0.0.1:1/: cannot connect\n");
+    expect(
+        &["dump", "--text", "http://127.0.0.1:1/"],
+        1,
+        "",
+        "error: cannot fetch http://127.0.0.1:1/: cannot connect\n",
+    );
 }
 
 /// The img requests that scripts observe (load state) are fetched
@@ -332,7 +543,12 @@ fn http_images_concurrent() {
         return;
     };
     let base = &srv.base;
-    let out = run(&["dump", "--text", "--js", &format!("{base}/net/slow_images.html")]);
+    let out = run(&[
+        "dump",
+        "--text",
+        "--js",
+        &format!("{base}/net/slow_images.html"),
+    ]);
     assert!(out.status.success(), "{}", text(&out.stderr));
     let out = run(&["dump", "--text", &format!("{base}/slow-peak")]);
     let peak: u32 = text(&out.stdout).trim().parse().unwrap();
@@ -368,12 +584,18 @@ fn http_images_background() {
     let page = format!("{}/net/bg_images.html", srv.base);
     for stress in [false, true] {
         let mut c = Command::new(anyknown());
-        c.current_dir(root()).args(["dump", "--text", "--js", &page]);
+        c.current_dir(root())
+            .args(["dump", "--text", "--js", &page]);
         if stress {
             c.env("ANYKNOWN_JS_GC", "stress");
         }
         let out = c.output().unwrap();
-        assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+        assert!(
+            out.status.success() && out.stderr.is_empty(),
+            "{}\n{}",
+            out.status,
+            text(&out.stderr)
+        );
         let got = text(&out.stdout);
         let log = got.split_once("\n\n").map(|(_, l)| l).unwrap_or("");
         assert_eq!(log, BG_IMAGES_LOG, "GC stress: {stress}");
@@ -398,7 +620,18 @@ fn window_images_load_in_background() {
     let mut window = Command::new(anyknown())
         .current_dir(root())
         .env("SDL_VIDEODRIVER", "dummy")
-        .args([page.as_str(), "--font", "fixed", "--width", "400", "--height", "300", "--frames", "400", "--text"])
+        .args([
+            page.as_str(),
+            "--font",
+            "fixed",
+            "--width",
+            "400",
+            "--height",
+            "300",
+            "--frames",
+            "400",
+            "--text",
+        ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -412,16 +645,28 @@ fn window_images_load_in_background() {
         std::thread::sleep(Duration::from_millis(20));
     }
     let out = window.wait_with_output().unwrap();
-    assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "{}\n{}",
+        out.status,
+        text(&out.stderr)
+    );
     let got = text(&out.stdout);
     // The loads end in any order on the real clock.
     let mut loads: Vec<&str> = got.lines().filter(|l| l.starts_with("load ")).collect();
     loads.sort();
-    let want: Vec<&str> = BG_IMAGES_LOG.lines().filter(|l| l.starts_with("load ")).collect();
+    let want: Vec<&str> = BG_IMAGES_LOG
+        .lines()
+        .filter(|l| l.starts_with("load "))
+        .collect();
     assert_eq!(loads, want, "{got}");
     // The window's load event comes after them.
     let window_load = got.find("window load: true/64 true/64 true/64 true/64 true/64\nanimation frames before it: several").expect(&got);
-    assert!(want.iter().all(|l| got.find(l).is_some_and(|at| at < window_load)), "{got}");
+    assert!(
+        want.iter()
+            .all(|l| got.find(l).is_some_and(|at| at < window_load)),
+        "{got}"
+    );
 }
 
 /// The events of `browser/tests/net/bg_image_events.html` on the virtual
@@ -453,14 +698,24 @@ fn http_image_events_background() {
     let page = format!("{}/net/bg_image_events.html", srv.base);
     for stress in [false, true] {
         let mut c = Command::new(anyknown());
-        c.current_dir(root()).args(["dump", "--text", "--js", &page]);
+        c.current_dir(root())
+            .args(["dump", "--text", "--js", &page]);
         if stress {
             c.env("ANYKNOWN_JS_GC", "stress");
         }
         let out = c.output().unwrap();
-        assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+        assert!(
+            out.status.success() && out.stderr.is_empty(),
+            "{}\n{}",
+            out.status,
+            text(&out.stderr)
+        );
         let got = text(&out.stdout);
-        let log = got.split_once("\n\n").and_then(|(_, l)| l.split_once("\n\n")).map(|(_, l)| l).unwrap_or("");
+        let log = got
+            .split_once("\n\n")
+            .and_then(|(_, l)| l.split_once("\n\n"))
+            .map(|(_, l)| l)
+            .unwrap_or("");
         assert_eq!(log, BG_IMAGE_EVENTS_LOG, "GC stress: {stress}");
     }
 }
@@ -483,12 +738,22 @@ error b: complete=true naturalWidth=0
             return;
         };
         let mut c = Command::new(anyknown());
-        c.current_dir(root()).args(["dump", "--text", "--js", &format!("{}/net/failed_image_once.html", srv.base)]);
+        c.current_dir(root()).args([
+            "dump",
+            "--text",
+            "--js",
+            &format!("{}/net/failed_image_once.html", srv.base),
+        ]);
         if stress {
             c.env("ANYKNOWN_JS_GC", "stress");
         }
         let out = c.output().unwrap();
-        assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+        assert!(
+            out.status.success() && out.stderr.is_empty(),
+            "{}\n{}",
+            out.status,
+            text(&out.stderr)
+        );
         let got = text(&out.stdout);
         let log = got.split_once("\n\n").map(|(_, l)| l).unwrap_or("");
         assert_eq!(log, page_log, "GC stress: {stress}");
@@ -515,7 +780,18 @@ fn window_relayout_after_image_load() {
     let mut window = Command::new(anyknown())
         .current_dir(root())
         .env("SDL_VIDEODRIVER", "dummy")
-        .args([page.as_str(), "--font", "fixed", "--width", "400", "--height", "300", "--frames", "400", "--text"])
+        .args([
+            page.as_str(),
+            "--font",
+            "fixed",
+            "--width",
+            "400",
+            "--height",
+            "300",
+            "--frames",
+            "400",
+            "--text",
+        ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -529,14 +805,30 @@ fn window_relayout_after_image_load() {
         std::thread::sleep(Duration::from_millis(20));
     }
     let out = window.wait_with_output().unwrap();
-    assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "{}\n{}",
+        out.status,
+        text(&out.stderr)
+    );
     let got = text(&out.stdout);
-    let at = |line: &str| got.find(&format!("\n{line}")).unwrap_or_else(|| panic!("no {line:?} in\n{got}"));
+    let at = |line: &str| {
+        got.find(&format!("\n{line}"))
+            .unwrap_or_else(|| panic!("no {line:?} in\n{got}"))
+    };
     // The loads end in any order on the real clock; each event comes
     // before the window's load event.
-    let window_load = at("window load: wide true/64, late true/64\nimage loads captured by the window: 0, by the document: 1\n");
-    for line in BG_IMAGE_EVENTS_LOG.lines().filter(|l| l.starts_with("load ") || l.starts_with("error ")) {
-        assert!(at(line) < window_load, "{line:?} after the window's load event:\n{got}");
+    let window_load = at(
+        "window load: wide true/64, late true/64\nimage loads captured by the window: 0, by the document: 1\n",
+    );
+    for line in BG_IMAGE_EVENTS_LOG
+        .lines()
+        .filter(|l| l.starts_with("load ") || l.starts_with("error "))
+    {
+        assert!(
+            at(line) < window_load,
+            "{line:?} after the window's load event:\n{got}"
+        );
     }
     let loaded = at("load wide: ");
     assert!(at("below visible: true\n") < loaded, "{got}");
@@ -564,20 +856,54 @@ fn screenshot_fixtures() {
         .filter(|p| p.extension().is_some_and(|e| e == "html"))
         .collect();
     htmls.sort();
-    assert!(htmls.len() >= 10, "expected at least 10 paint fixtures, found {}", htmls.len());
-    let mut runs: Vec<(String, Vec<&str>, PathBuf)> =
-        htmls.iter().map(|h| (h.strip_prefix(root()).unwrap().to_string_lossy().into_owned(), vec![], h.with_extension("png"))).collect();
-    runs.push(("browser/tests/paint/full.html".into(), vec!["--full"], dir.join("full.full.png")));
+    assert!(
+        htmls.len() >= 10,
+        "expected at least 10 paint fixtures, found {}",
+        htmls.len()
+    );
+    let mut runs: Vec<(String, Vec<&str>, PathBuf)> = htmls
+        .iter()
+        .map(|h| {
+            (
+                h.strip_prefix(root())
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                vec![],
+                h.with_extension("png"),
+            )
+        })
+        .collect();
+    runs.push((
+        "browser/tests/paint/full.html".into(),
+        vec!["--full"],
+        dir.join("full.full.png"),
+    ));
     let bless = std::env::var_os("ANYKNOWN_BLESS").is_some();
     let out_dir = scratch();
     let mut failures = Vec::new();
     for (i, (page, extra, golden)) in runs.iter().enumerate() {
         let out = out_dir.join(format!("shot{i}.png"));
-        let mut args = vec!["screenshot", page.as_str(), "-o", out.to_str().unwrap(), "--font", "fixed", "--width", "400", "--height", "300"];
+        let mut args = vec![
+            "screenshot",
+            page.as_str(),
+            "-o",
+            out.to_str().unwrap(),
+            "--font",
+            "fixed",
+            "--width",
+            "400",
+            "--height",
+            "300",
+        ];
         args.extend(extra.iter());
         let res = run(&args);
         if !res.status.success() || !res.stderr.is_empty() {
-            failures.push(format!("{page} {extra:?}: {}\n{}", res.status, text(&res.stderr)));
+            failures.push(format!(
+                "{page} {extra:?}: {}\n{}",
+                res.status,
+                text(&res.stderr)
+            ));
             continue;
         }
         let got = std::fs::read(&out).unwrap();
@@ -587,10 +913,20 @@ fn screenshot_fixtures() {
         }
         let want = std::fs::read(golden).unwrap_or_default();
         if got != want {
-            failures.push(format!("{page} {extra:?}: the image differs from {} (new one: {})", golden.display(), out.display()));
+            failures.push(format!(
+                "{page} {extra:?}: the image differs from {} (new one: {})",
+                golden.display(),
+                out.display()
+            ));
         }
     }
-    assert!(failures.is_empty(), "{} of {} screenshots failed:\n\n{}", failures.len(), runs.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} of {} screenshots failed:\n\n{}",
+        failures.len(),
+        runs.len(),
+        failures.join("\n")
+    );
 }
 
 /// A bitmap mutation from requestAnimationFrame must reach the window's
@@ -605,15 +941,49 @@ fn canvas_animation() {
     let animated = scratch().join("canvas-animated.png");
     let immediate = scratch().join("canvas-immediate.png");
     let page = "browser/tests/ui/canvas_animate.html";
-    let out = run_window(&[page, "--frames", "60", "--font", "fixed", "--text", "--save", animated.to_str().unwrap()]);
-    assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
-    assert!(text(&out.stdout).contains("three frames drawn"), "{}", text(&out.stdout));
+    let out = run_window(&[
+        page,
+        "--frames",
+        "60",
+        "--font",
+        "fixed",
+        "--text",
+        "--save",
+        animated.to_str().unwrap(),
+    ]);
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "{}",
+        text(&out.stderr)
+    );
+    assert!(
+        text(&out.stdout).contains("three frames drawn"),
+        "{}",
+        text(&out.stdout)
+    );
     // The fragment also changes the address bar; compare only the page
     // area when checking the animated and immediate bitmap pixels.
     let static_page = format!("{page}#static");
-    let out = run_window(&[&static_page, "--frames", "1", "--font", "fixed", "--text", "--save", immediate.to_str().unwrap()]);
-    assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
-    assert!(text(&out.stdout).contains("three frames drawn"), "{}", text(&out.stdout));
+    let out = run_window(&[
+        &static_page,
+        "--frames",
+        "1",
+        "--font",
+        "fixed",
+        "--text",
+        "--save",
+        immediate.to_str().unwrap(),
+    ]);
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "{}",
+        text(&out.stderr)
+    );
+    assert!(
+        text(&out.stdout).contains("three frames drawn"),
+        "{}",
+        text(&out.stdout)
+    );
     assert_eq!(check_png(&animated), check_png(&immediate));
     // The PNG encoder uses filter 0, so compare the decoded page area.
     let script = r#"
@@ -634,7 +1004,15 @@ def pixels(path):
     return b''.join(raw[y*stride+1:(y+1)*stride] for y in range(40, h))
 assert pixels(sys.argv[1]) == pixels(sys.argv[2]), 'canvas repaint did not match immediate drawing'
 "#;
-    if let Ok(out) = Command::new("python3").args(["-c", script, animated.to_str().unwrap(), immediate.to_str().unwrap()]).output() {
+    if let Ok(out) = Command::new("python3")
+        .args([
+            "-c",
+            script,
+            animated.to_str().unwrap(),
+            immediate.to_str().unwrap(),
+        ])
+        .output()
+    {
         assert!(out.status.success(), "{}", text(&out.stderr));
     }
 }
@@ -648,7 +1026,12 @@ fn canvas_origin_clean() {
         return;
     };
     expect(
-        &["dump", "--text", "--js", &format!("{}/canvas/origin.html", srv.base)],
+        &[
+            "dump",
+            "--text",
+            "--js",
+            &format!("{}/canvas/origin.html", srv.base),
+        ],
         0,
         "canvas origin-clean checks passed\n",
         "",
@@ -660,7 +1043,11 @@ fn crc32(data: &[u8]) -> u32 {
     for &b in data {
         crc ^= b as u32;
         for _ in 0..8 {
-            crc = if crc & 1 != 0 { 0xEDB8_8320 ^ (crc >> 1) } else { crc >> 1 };
+            crc = if crc & 1 != 0 {
+                0xEDB8_8320 ^ (crc >> 1)
+            } else {
+                crc >> 1
+            };
         }
     }
     !crc
@@ -677,20 +1064,39 @@ fn check_png(path: &Path) -> (u32, u32) {
     while i < d.len() {
         let n = be(&d[i..]) as usize;
         let kind = &d[i + 4..i + 8];
-        assert_eq!(crc32(&d[i + 4..i + 8 + n]), be(&d[i + 8 + n..]), "CRC of {} in {}", String::from_utf8_lossy(kind), path.display());
+        assert_eq!(
+            crc32(&d[i + 4..i + 8 + n]),
+            be(&d[i + 8 + n..]),
+            "CRC of {} in {}",
+            String::from_utf8_lossy(kind),
+            path.display()
+        );
         if kind == b"IHDR" {
             size = (be(&d[i + 8..]), be(&d[i + 12..]));
-            assert_eq!(&d[i + 16..i + 21], &[8, 6, 0, 0, 0], "bit depth, color type and methods");
+            assert_eq!(
+                &d[i + 16..i + 21],
+                &[8, 6, 0, 0, 0],
+                "bit depth, color type and methods"
+            );
         }
         kinds.push(String::from_utf8_lossy(kind).into_owned());
         i += 12 + n;
     }
     assert_eq!(kinds, ["IHDR", "IDAT", "IEND"], "{}", path.display());
     let script = "import sys, zlib, struct\nd = open(sys.argv[1], 'rb').read()\nn = struct.unpack('>I', d[33:37])[0]\nprint(len(zlib.decompress(d[41:41 + n])))";
-    if let Ok(out) = Command::new("python3").args(["-I", "-c", script]).arg(path).output() {
+    if let Ok(out) = Command::new("python3")
+        .args(["-I", "-c", script])
+        .arg(path)
+        .output()
+    {
         if out.status.success() {
             let len: u64 = text(&out.stdout).trim().parse().unwrap();
-            assert_eq!(len, size.1 as u64 * (size.0 as u64 * 4 + 1), "inflated size of {}", path.display());
+            assert_eq!(
+                len,
+                size.1 as u64 * (size.0 as u64 * 4 + 1),
+                "inflated size of {}",
+                path.display()
+            );
         }
     }
     size
@@ -699,11 +1105,38 @@ fn check_png(path: &Path) -> (u32, u32) {
 #[test]
 fn png_validity() {
     let out = scratch().join("valid.png");
-    let res = run(&["screenshot", "browser/tests/article.html", "-o", out.to_str().unwrap(), "--font", "fixed", "--width", "320", "--height", "200"]);
-    assert!(res.status.success() && res.stderr.is_empty(), "{}", text(&res.stderr));
+    let res = run(&[
+        "screenshot",
+        "browser/tests/article.html",
+        "-o",
+        out.to_str().unwrap(),
+        "--font",
+        "fixed",
+        "--width",
+        "320",
+        "--height",
+        "200",
+    ]);
+    assert!(
+        res.status.success() && res.stderr.is_empty(),
+        "{}",
+        text(&res.stderr)
+    );
     assert_eq!(check_png(&out), (320, 200));
     let full = scratch().join("valid_full.png");
-    let res = run(&["screenshot", "browser/tests/paint/full.html", "-o", full.to_str().unwrap(), "--font", "fixed", "--width", "300", "--height", "100", "--full"]);
+    let res = run(&[
+        "screenshot",
+        "browser/tests/paint/full.html",
+        "-o",
+        full.to_str().unwrap(),
+        "--font",
+        "fixed",
+        "--width",
+        "300",
+        "--height",
+        "100",
+        "--full",
+    ]);
     assert!(res.status.success(), "{}", text(&res.stderr));
     assert_eq!(check_png(&full), (300, 416));
     for golden in std::fs::read_dir(root().join("browser/tests/paint")).unwrap() {
@@ -718,15 +1151,34 @@ fn png_validity() {
 #[test]
 fn screenshot_system_font() {
     let out = scratch().join("system.png");
-    let res = run(&["screenshot", "browser/tests/article.html", "-o", out.to_str().unwrap(), "--font", "system"]);
+    let res = run(&[
+        "screenshot",
+        "browser/tests/article.html",
+        "-o",
+        out.to_str().unwrap(),
+        "--font",
+        "system",
+    ]);
     if text(&res.stderr).contains("no system font found") {
         println!("skipped: no system font");
         return;
     }
-    assert!(res.status.success() && res.stderr.is_empty(), "{}\n{}", res.status, text(&res.stderr));
+    assert!(
+        res.status.success() && res.stderr.is_empty(),
+        "{}\n{}",
+        res.status,
+        text(&res.stderr)
+    );
     assert_eq!(check_png(&out), (800, 600));
     let fixed = scratch().join("system_fixed.png");
-    run(&["screenshot", "browser/tests/article.html", "-o", fixed.to_str().unwrap(), "--font", "fixed"]);
+    run(&[
+        "screenshot",
+        "browser/tests/article.html",
+        "-o",
+        fixed.to_str().unwrap(),
+        "--font",
+        "fixed",
+    ]);
     assert_ne!(std::fs::read(&out).unwrap(), std::fs::read(&fixed).unwrap());
 }
 
@@ -737,12 +1189,46 @@ fn screenshot_viewport_lazy_image() {
     let page = "browser/tests/screenshot/lazy_below.html";
     let lazy = scratch().join("lazy_below.png");
     let eager = scratch().join("lazy_below_eager.png");
-    let res = run(&["screenshot", page, "-o", lazy.to_str().unwrap(), "--font", "fixed", "--width", "200", "--height", "900"]);
-    assert!(res.status.success() && res.stderr.is_empty(), "{}", text(&res.stderr));
+    let res = run(&[
+        "screenshot",
+        page,
+        "-o",
+        lazy.to_str().unwrap(),
+        "--font",
+        "fixed",
+        "--width",
+        "200",
+        "--height",
+        "900",
+    ]);
+    assert!(
+        res.status.success() && res.stderr.is_empty(),
+        "{}",
+        text(&res.stderr)
+    );
     let eager_page = format!("{page}#eager");
-    let res = run(&["screenshot", &eager_page, "-o", eager.to_str().unwrap(), "--font", "fixed", "--width", "200", "--height", "900"]);
-    assert!(res.status.success() && res.stderr.is_empty(), "{}", text(&res.stderr));
-    assert!(std::fs::read(&lazy).unwrap() == std::fs::read(&eager).unwrap(), "the lazy image is missing: {}", lazy.display());
+    let res = run(&[
+        "screenshot",
+        &eager_page,
+        "-o",
+        eager.to_str().unwrap(),
+        "--font",
+        "fixed",
+        "--width",
+        "200",
+        "--height",
+        "900",
+    ]);
+    assert!(
+        res.status.success() && res.stderr.is_empty(),
+        "{}",
+        text(&res.stderr)
+    );
+    assert!(
+        std::fs::read(&lazy).unwrap() == std::fs::read(&eager).unwrap(),
+        "the lazy image is missing: {}",
+        lazy.display()
+    );
 }
 
 #[test]
@@ -750,22 +1236,54 @@ fn screenshot_errors() {
     let usage = "error: usage: anyknown screenshot FILE|URL -o OUT.png [--width W] [--height H] [--font fixed|system] [--full]\n";
     expect(&["screenshot", "browser/tests/basic.html"], 2, "", usage);
     expect(&["screenshot", "-o", "x.png"], 2, "", usage);
-    expect(&["screenshot", "browser/tests/basic.html", "-o", "x.png", "--width", "0"], 2, "", usage);
-    expect(&["screenshot", "browser/tests/missing.html", "-o", "x.png", "--font", "fixed"], 1, "", &format!(
-        "error: cannot fetch file://{}/browser/tests/missing.html: not found\n",
-        root().display()
-    ));
+    expect(
+        &[
+            "screenshot",
+            "browser/tests/basic.html",
+            "-o",
+            "x.png",
+            "--width",
+            "0",
+        ],
+        2,
+        "",
+        usage,
+    );
+    expect(
+        &[
+            "screenshot",
+            "browser/tests/missing.html",
+            "-o",
+            "x.png",
+            "--font",
+            "fixed",
+        ],
+        1,
+        "",
+        &format!(
+            "error: cannot fetch file://{}/browser/tests/missing.html: not found\n",
+            root().display()
+        ),
+    );
 }
 
 const WINDOW_USAGE: &str = "usage: anyknown [open] FILE|URL [--width W] [--height H] [--font fixed|system] [--no-js] [--agent-socket PATH [--exit-when-idle]] [--frames N [--events SCRIPT] [--state] [--text] [--save OUT.png]]";
 
 fn has_sdl() -> bool {
-    Command::new("pkg-config").args(["--exists", "sdl2"]).status().is_ok_and(|s| s.success())
+    Command::new("pkg-config")
+        .args(["--exists", "sdl2"])
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 /// `anyknown args...` with SDL's dummy video driver (no display).
 fn run_window(args: &[&str]) -> Output {
-    Command::new(anyknown()).current_dir(root()).env("SDL_VIDEODRIVER", "dummy").args(args).output().unwrap()
+    Command::new(anyknown())
+        .current_dir(root())
+        .env("SDL_VIDEODRIVER", "dummy")
+        .args(args)
+        .output()
+        .unwrap()
 }
 
 /// The window, headless: a frame or two, then exit 0 with nothing on
@@ -776,17 +1294,58 @@ fn window_frames() {
         println!("skipped: no SDL2");
         return;
     }
-    for args in [vec!["--frames", "1", "browser/tests/article.html"], vec!["open", "browser/tests/links.html", "--frames", "2", "--font", "fixed"]] {
+    for args in [
+        vec!["--frames", "1", "browser/tests/article.html"],
+        vec![
+            "open",
+            "browser/tests/links.html",
+            "--frames",
+            "2",
+            "--font",
+            "fixed",
+        ],
+    ] {
         let out = run_window(&args);
-        assert!(out.status.success(), "anyknown {args:?}: {}\n{}{}", out.status, text(&out.stdout), text(&out.stderr));
-        assert!(out.stderr.is_empty(), "anyknown {args:?}: {}", text(&out.stderr));
+        assert!(
+            out.status.success(),
+            "anyknown {args:?}: {}\n{}{}",
+            out.status,
+            text(&out.stdout),
+            text(&out.stderr)
+        );
+        assert!(
+            out.stderr.is_empty(),
+            "anyknown {args:?}: {}",
+            text(&out.stderr)
+        );
     }
     // The last frame, saved: the window's size, chrome included.
     let png = scratch().join("window.png");
-    let out = run_window(&["browser/tests/paint/text.html", "--font", "fixed", "--width", "500", "--height", "300", "--frames", "1", "--save", png.to_str().unwrap()]);
-    assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
+    let out = run_window(&[
+        "browser/tests/paint/text.html",
+        "--font",
+        "fixed",
+        "--width",
+        "500",
+        "--height",
+        "300",
+        "--frames",
+        "1",
+        "--save",
+        png.to_str().unwrap(),
+    ]);
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "{}",
+        text(&out.stderr)
+    );
     assert_eq!(check_png(&png), (500, 300));
-    expect(&["--frames", "1", "--bogus", "x.html"], 2, "", &format!("error: {WINDOW_USAGE}\n"));
+    expect(
+        &["--frames", "1", "--bogus", "x.html"],
+        2,
+        "",
+        &format!("error: {WINDOW_USAGE}\n"),
+    );
 }
 
 /// Scripted input (`--events`, ui/script.aye) through the window's event
@@ -800,40 +1359,108 @@ fn window_events() {
     let ui = format!("file://{}/browser/tests/ui/", root().display());
     // A 400x340 window: the page is 1260 px tall in a 300 px viewport.
     let cases: &[(&str, &str)] = &[
-        ("key:down wheel:-1", "url long.html\nscroll 80\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus \n"),
-        ("key:end key:pageup key:space key:up", "url long.html\nscroll 920\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus \n"),
-        ("key:end key:home wheel:3", "url long.html\nscroll 0\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus \n"),
+        (
+            "key:down wheel:-1",
+            "url long.html\nscroll 80\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus \n",
+        ),
+        (
+            "key:end key:pageup key:space key:up",
+            "url long.html\nscroll 920\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus \n",
+        ),
+        (
+            "key:end key:home wheel:3",
+            "url long.html\nscroll 0\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus \n",
+        ),
         // A link to a fragment scrolls to its element (y 958); the link
         // keeps the focus.
-        ("click:30,58", "url long.html#end\nscroll 958\nfocus page\naddress long.html#end\nhistory 2 of 2\nmatches 0\nstatus \nelement a\n"),
+        (
+            "click:30,58",
+            "url long.html#end\nscroll 958\nfocus page\naddress long.html#end\nhistory 2 of 2\nmatches 0\nstatus \nelement a\n",
+        ),
         // Back and forward restore scroll offsets; they stay in the document
         // (a fragment of it), so the link keeps the focus.
-        ("key:pagedown key:home click:30,58 key:cmd+[ key:cmd+]", "url long.html#end\nscroll 958\nfocus page\naddress long.html#end\nhistory 2 of 2\nmatches 0\nstatus \nelement a\n"),
-        ("click:130,58 key:cmd+[", "url long.html\nscroll 0\nfocus page\naddress long.html\nhistory 1 of 2\nmatches 0\nstatus \n"),
-        ("move:130,58", "url long.html\nscroll 0\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus other.html\n"),
+        (
+            "key:pagedown key:home click:30,58 key:cmd+[ key:cmd+]",
+            "url long.html#end\nscroll 958\nfocus page\naddress long.html#end\nhistory 2 of 2\nmatches 0\nstatus \nelement a\n",
+        ),
+        (
+            "click:130,58 key:cmd+[",
+            "url long.html\nscroll 0\nfocus page\naddress long.html\nhistory 1 of 2\nmatches 0\nstatus \n",
+        ),
+        (
+            "move:130,58",
+            "url long.html\nscroll 0\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus other.html\n",
+        ),
         // The back button, the forward button, reload.
-        ("click:130,58 click:20,20 click:50,20 click:85,20", "url other.html\nscroll 0\nfocus page\naddress other.html\nhistory 2 of 2\nmatches 0\nstatus \n"),
+        (
+            "click:130,58 click:20,20 click:50,20 click:85,20",
+            "url other.html\nscroll 0\nfocus page\naddress other.html\nhistory 2 of 2\nmatches 0\nstatus \n",
+        ),
         // Typing in the address bar (Cmd+L selects everything first).
-        ("key:cmd+l text:other.htm key:backspace text:ml key:escape", "url long.html\nscroll 0\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus \n"),
-        ("key:cmd+l text:browser/tests/ui/other.html", "url long.html\nscroll 0\nfocus address\naddress browser/tests/ui/other.html\nhistory 1 of 1\nmatches 0\nstatus \n"),
-        ("key:cmd+l text:browser/tests/ui/other.html key:return", "url other.html\nscroll 0\nfocus page\naddress other.html\nhistory 2 of 2\nmatches 0\nstatus \n"),
+        (
+            "key:cmd+l text:other.htm key:backspace text:ml key:escape",
+            "url long.html\nscroll 0\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus \n",
+        ),
+        (
+            "key:cmd+l text:browser/tests/ui/other.html",
+            "url long.html\nscroll 0\nfocus address\naddress browser/tests/ui/other.html\nhistory 1 of 1\nmatches 0\nstatus \n",
+        ),
+        (
+            "key:cmd+l text:browser/tests/ui/other.html key:return",
+            "url other.html\nscroll 0\nfocus page\naddress other.html\nhistory 2 of 2\nmatches 0\nstatus \n",
+        ),
         // Find in page: matches, Enter scrolls to the next one.
         // ("To the end", "Other", "The end"; the third is at y 962, shown a
         // third down the 268 px left above the find bar.)
-        ("key:cmd+f text:the", "url long.html\nscroll 0\nfocus find\naddress long.html\nhistory 1 of 1\nmatches 3\nstatus \n"),
-        ("key:cmd+f text:the key:return key:return", "url long.html\nscroll 873\nfocus find\naddress long.html\nhistory 1 of 1\nmatches 3\nstatus \n"),
-        ("key:cmd+f text:the key:return key:return key:shift+return", "url long.html\nscroll 0\nfocus find\naddress long.html\nhistory 1 of 1\nmatches 3\nstatus \n"),
-        ("key:cmd+f text:the key:escape", "url long.html\nscroll 0\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus \n"),
+        (
+            "key:cmd+f text:the",
+            "url long.html\nscroll 0\nfocus find\naddress long.html\nhistory 1 of 1\nmatches 3\nstatus \n",
+        ),
+        (
+            "key:cmd+f text:the key:return key:return",
+            "url long.html\nscroll 873\nfocus find\naddress long.html\nhistory 1 of 1\nmatches 3\nstatus \n",
+        ),
+        (
+            "key:cmd+f text:the key:return key:return key:shift+return",
+            "url long.html\nscroll 0\nfocus find\naddress long.html\nhistory 1 of 1\nmatches 3\nstatus \n",
+        ),
+        (
+            "key:cmd+f text:the key:escape",
+            "url long.html\nscroll 0\nfocus page\naddress long.html\nhistory 1 of 1\nmatches 0\nstatus \n",
+        ),
     ];
     let mut failures = Vec::new();
     for (events, want) in cases {
-        let out = run_window(&["browser/tests/ui/long.html", "--font", "fixed", "--width", "400", "--height", "340", "--frames", "1", "--state", "--events", events]);
+        let out = run_window(&[
+            "browser/tests/ui/long.html",
+            "--font",
+            "fixed",
+            "--width",
+            "400",
+            "--height",
+            "340",
+            "--frames",
+            "1",
+            "--state",
+            "--events",
+            events,
+        ]);
         let got = text(&out.stdout).replace(&ui, "");
         if !out.status.success() || !out.stderr.is_empty() || got != *want {
-            failures.push(format!("--events {events:?}: {}\n{}--- expected\n{want}--- got\n{got}", out.status, text(&out.stderr)));
+            failures.push(format!(
+                "--events {events:?}: {}\n{}--- expected\n{want}--- got\n{got}",
+                out.status,
+                text(&out.stderr)
+            ));
         }
     }
-    assert!(failures.is_empty(), "{} of {} scripts failed:\n\n{}", failures.len(), cases.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} of {} scripts failed:\n\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
 }
 
 /// Forms in the window (`browser/tests/ui/form.html`, 400x340): clicks
@@ -849,58 +1476,146 @@ fn window_forms() {
         return;
     }
     let ui = format!("file://{}/browser/tests/ui/", root().display());
-    let state = |url: &str, rest: &str| format!("url {url}\nscroll 0\nfocus page\naddress {url}\nhistory {}\nmatches 0\nstatus \n{rest}", if url == "form.html" { "1 of 1" } else { "2 of 2" });
+    let state = |url: &str, rest: &str| {
+        format!(
+            "url {url}\nscroll 0\nfocus page\naddress {url}\nhistory {}\nmatches 0\nstatus \n{rest}",
+            if url == "form.html" {
+                "1 of 1"
+            } else {
+                "2 of 2"
+            }
+        )
+    };
     // The query field is at (60, 60), the Go button at (170, 60), the
     // label "All" at (45, 95), the select at (40, 125), the textarea at
     // (50, 165), the reset button at (30, 205), the link at (80, 205).
     let cases: Vec<(&str, String)> = vec![
-        ("click:60,60 key:end text:_there key:return", state("result.html?q=hi+there&go=1&lang=en&note=&tags=b", "")),
-        ("click:60,60 text:!", state("form.html", "element input name=q\nvalue hi!\n")),
-        ("click:60,60 key:backspace key:left text:_ key:delete key:home text:o", state("form.html", "element input name=q\nvalue o \n")),
-        ("click:60,60 key:shift+home text:yo", state("form.html", "element input name=q\nvalue yo\n")),
+        (
+            "click:60,60 key:end text:_there key:return",
+            state("result.html?q=hi+there&go=1&lang=en&note=&tags=b", ""),
+        ),
+        (
+            "click:60,60 text:!",
+            state("form.html", "element input name=q\nvalue hi!\n"),
+        ),
+        (
+            "click:60,60 key:backspace key:left text:_ key:delete key:home text:o",
+            state("form.html", "element input name=q\nvalue o \n"),
+        ),
+        (
+            "click:60,60 key:shift+home text:yo",
+            state("form.html", "element input name=q\nvalue yo\n"),
+        ),
         (
             "key:tab key:tab key:tab key:space key:tab key:down key:down key:tab text:a key:return text:b",
             state("form.html", "element textarea name=note\nvalue a\nb\n"),
         ),
         (
             "key:tab key:tab key:tab key:space key:tab key:down key:down key:tab text:a key:return text:b click:170,60",
-            state("result.html?q=hi&go=1&all=yes&lang=ja&note=a%0D%0Ab&tags=b", ""),
+            state(
+                "result.html?q=hi&go=1&all=yes&lang=ja&note=a%0D%0Ab&tags=b",
+                "",
+            ),
         ),
-        ("click:45,95 click:170,60", state("result.html?q=hi&go=1&all=yes&lang=en&note=&tags=b", "")),
-        ("click:40,125 click:40,170", state("form.html", "element select name=lang\nvalue fr\n")),
+        (
+            "click:45,95 click:170,60",
+            state("result.html?q=hi&go=1&all=yes&lang=en&note=&tags=b", ""),
+        ),
+        (
+            "click:40,125 click:40,170",
+            state("form.html", "element select name=lang\nvalue fr\n"),
+        ),
         // The disabled option is skipped by Enter (it stays on English)...
-        ("click:40,125 key:down key:down key:return", state("form.html", "element select name=lang\nvalue en\n")),
-        ("click:40,125 key:down key:down key:down key:return", state("form.html", "element select name=lang\nvalue ja\n")),
+        (
+            "click:40,125 key:down key:down key:return",
+            state("form.html", "element select name=lang\nvalue en\n"),
+        ),
+        (
+            "click:40,125 key:down key:down key:down key:return",
+            state("form.html", "element select name=lang\nvalue ja\n"),
+        ),
         // ...and by the arrow keys on the closed select.
-        ("click:40,125 key:escape key:down key:down", state("form.html", "element select name=lang\nvalue ja\n")),
-        ("click:40,125 key:escape click:170,60", state("result.html?q=hi&go=1&lang=en&note=&tags=b", "")),
-        ("click:60,60 text:xyz click:30,205 click:170,60", state("result.html?q=hi&go=1&lang=en&note=&tags=b", "")),
-        ("click:60,60 key:cmd+a key:cmd+c key:end key:cmd+v", state("form.html", "element input name=q\nvalue hihi\n")),
-        ("click:60,60 key:left key:shift+left key:cmd+x key:end key:cmd+v", state("form.html", "element input name=q\nvalue ih\n")),
+        (
+            "click:40,125 key:escape key:down key:down",
+            state("form.html", "element select name=lang\nvalue ja\n"),
+        ),
+        (
+            "click:40,125 key:escape click:170,60",
+            state("result.html?q=hi&go=1&lang=en&note=&tags=b", ""),
+        ),
+        (
+            "click:60,60 text:xyz click:30,205 click:170,60",
+            state("result.html?q=hi&go=1&lang=en&note=&tags=b", ""),
+        ),
+        (
+            "click:60,60 key:cmd+a key:cmd+c key:end key:cmd+v",
+            state("form.html", "element input name=q\nvalue hihi\n"),
+        ),
+        (
+            "click:60,60 key:left key:shift+left key:cmd+x key:end key:cmd+v",
+            state("form.html", "element input name=q\nvalue ih\n"),
+        ),
         ("click:60,60 key:escape", state("form.html", "")),
         ("click:60,60 click:300,300", state("form.html", "")),
-        ("key:shift+tab key:shift+tab key:return", state("other.html", "")),
+        (
+            "key:shift+tab key:shift+tab key:return",
+            state("other.html", ""),
+        ),
         // The list box (rows a, b, c at y 240, 257, 273): a click toggles
         // an option of a `multiple` select.
-        ("click:20,273 click:20,240 click:170,60", state("result.html?q=hi&go=1&lang=en&note=&tags=a&tags=b&tags=c", "")),
-        ("click:20,257 click:20,273", state("form.html", "element select name=tags\nvalue c\n")),
+        (
+            "click:20,273 click:20,240 click:170,60",
+            state(
+                "result.html?q=hi&go=1&lang=en&note=&tags=a&tags=b&tags=c",
+                "",
+            ),
+        ),
+        (
+            "click:20,257 click:20,273",
+            state("form.html", "element select name=tags\nvalue c\n"),
+        ),
     ];
     let mut failures = Vec::new();
     for (events, want) in &cases {
-        let out = run_window(&["browser/tests/ui/form.html", "--font", "fixed", "--width", "400", "--height", "340", "--frames", "1", "--state", "--events", events]);
+        let out = run_window(&[
+            "browser/tests/ui/form.html",
+            "--font",
+            "fixed",
+            "--width",
+            "400",
+            "--height",
+            "340",
+            "--frames",
+            "1",
+            "--state",
+            "--events",
+            events,
+        ]);
         let got = text(&out.stdout).replace(&ui, "");
         if !out.status.success() || !out.stderr.is_empty() || got != *want {
-            failures.push(format!("--events {events:?}: {}\n{}--- expected\n{want}--- got\n{got}", out.status, text(&out.stderr)));
+            failures.push(format!(
+                "--events {events:?}: {}\n{}--- expected\n{want}--- got\n{got}",
+                out.status,
+                text(&out.stderr)
+            ));
         }
     }
-    assert!(failures.is_empty(), "{} of {} scripts failed:\n\n{}", failures.len(), cases.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} of {} scripts failed:\n\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
 }
 
 /// HTML5 form keyboard input, dragging, validation and reset share the
 /// real SDL handler. The transcript also checks scripts see drag change.
 #[test]
 fn window_forms_html5() {
-    if !has_sdl() { return; }
+    if !has_sdl() {
+        return;
+    }
     let cases = [
         "key:tab key:up key:up",
         "key:tab text:3 key:up",
@@ -912,21 +1627,55 @@ fn window_forms_html5() {
     let mut transcript = String::new();
     let image = scratch().join("validation.png");
     for (i, events) in cases.iter().enumerate() {
-        let mut args = vec!["browser/tests/ui/forms_html5.html", "--font", "fixed", "--width", "400", "--height", "340", "--frames", "1", "--state", "--text", "--events", events];
-        if i == 4 { args.extend(["--save", image.to_str().unwrap()]); }
+        let mut args = vec![
+            "browser/tests/ui/forms_html5.html",
+            "--font",
+            "fixed",
+            "--width",
+            "400",
+            "--height",
+            "340",
+            "--frames",
+            "1",
+            "--state",
+            "--text",
+            "--events",
+            events,
+        ];
+        if i == 4 {
+            args.extend(["--save", image.to_str().unwrap()]);
+        }
         let out = run_window(&args);
-        assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
-        transcript.push_str(&format!("events: {events}\n{}\n", rooted(&text(&out.stdout))));
+        assert!(
+            out.status.success() && out.stderr.is_empty(),
+            "{}\n{}",
+            out.status,
+            text(&out.stderr)
+        );
+        transcript.push_str(&format!(
+            "events: {events}\n{}\n",
+            rooted(&text(&out.stdout))
+        ));
     }
     let golden = root().join("browser/tests/ui/forms_html5.validation.png");
     let got = std::fs::read(&image).unwrap();
     if std::env::var_os("ANYKNOWN_BLESS").is_some() {
         std::fs::write(&golden, &got).unwrap();
     } else {
-        assert_eq!(got, std::fs::read(&golden).unwrap(), "validation tooltip differs: {}", image.display());
+        assert_eq!(
+            got,
+            std::fs::read(&golden).unwrap(),
+            "validation tooltip differs: {}",
+            image.display()
+        );
     }
     let mut failures = Vec::new();
-    check_golden(&root().join("browser/tests/ui/forms_html5.out"), &transcript, "HTML5 window forms", &mut failures);
+    check_golden(
+        &root().join("browser/tests/ui/forms_html5.out"),
+        &transcript,
+        "HTML5 window forms",
+        &mut failures,
+    );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
@@ -946,7 +1695,10 @@ fn check_golden(golden: &Path, got: &str, what: &str, failures: &mut Vec<String>
     }
     let want = std::fs::read_to_string(golden).unwrap_or_default();
     if got != want {
-        failures.push(format!("{what}: output differs from {}\n--- expected\n{want}--- got\n{got}", golden.display()));
+        failures.push(format!(
+            "{what}: output differs from {}\n--- expected\n{want}--- got\n{got}",
+            golden.display()
+        ));
     }
 }
 
@@ -962,18 +1714,43 @@ fn agent_fixtures() {
         .filter(|p| p.extension().is_some_and(|e| e == "html"))
         .collect();
     htmls.sort();
-    assert!(htmls.len() >= 15, "expected at least 15 agent fixtures, found {}", htmls.len());
+    assert!(
+        htmls.len() >= 15,
+        "expected at least 15 agent fixtures, found {}",
+        htmls.len()
+    );
     let mut runs: Vec<(Vec<String>, PathBuf)> = Vec::new();
     for h in &htmls {
-        let rel = h.strip_prefix(root()).unwrap().to_string_lossy().into_owned();
+        let rel = h
+            .strip_prefix(root())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         runs.push((vec!["--a11y".into(), rel.clone()], h.with_extension("a11y")));
         runs.push((vec!["--md".into(), rel], h.with_extension("md")));
     }
     let page = |name: &str| format!("browser/tests/agent/{name}.html");
-    runs.push((vec!["--a11y".into(), "--boxes".into(), page("long_page")], dir.join("long_page.boxes.a11y")));
-    runs.push((vec!["--a11y".into(), "--json".into(), page("form_login")], dir.join("form_login.json")));
-    runs.push((vec!["--a11y".into(), "--json".into(), "--boxes".into(), page("tables")], dir.join("tables.boxes.json")));
-    runs.push((vec!["--md".into(), "--refs".into(), page("article")], dir.join("article.refs.md")));
+    runs.push((
+        vec!["--a11y".into(), "--boxes".into(), page("long_page")],
+        dir.join("long_page.boxes.a11y"),
+    ));
+    runs.push((
+        vec!["--a11y".into(), "--json".into(), page("form_login")],
+        dir.join("form_login.json"),
+    ));
+    runs.push((
+        vec![
+            "--a11y".into(),
+            "--json".into(),
+            "--boxes".into(),
+            page("tables"),
+        ],
+        dir.join("tables.boxes.json"),
+    ));
+    runs.push((
+        vec!["--md".into(), "--refs".into(), page("article")],
+        dir.join("article.refs.md"),
+    ));
     let mut failures = Vec::new();
     for (args, golden) in &runs {
         let mut all = vec!["dump"];
@@ -983,9 +1760,20 @@ fn agent_fixtures() {
             failures.push(format!("{args:?}: {}\n{}", out.status, text(&out.stderr)));
             continue;
         }
-        check_golden(golden, &rooted(&text(&out.stdout)), &format!("{args:?}"), &mut failures);
+        check_golden(
+            golden,
+            &rooted(&text(&out.stdout)),
+            &format!("{args:?}"),
+            &mut failures,
+        );
     }
-    assert!(failures.is_empty(), "{} of {} agent dumps failed:\n\n{}", failures.len(), runs.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} of {} agent dumps failed:\n\n{}",
+        failures.len(),
+        runs.len(),
+        failures.join("\n")
+    );
 }
 
 /// `browser/tests/agent/sessions/X.jsonl`: requests fed to `anyknown
@@ -994,18 +1782,30 @@ fn agent_fixtures() {
 #[test]
 fn agent_sessions() {
     use std::io::Write;
-    let dir = root().join("browser").join("tests").join("agent").join("sessions");
+    let dir = root()
+        .join("browser")
+        .join("tests")
+        .join("agent")
+        .join("sessions");
     let mut inputs: Vec<PathBuf> = std::fs::read_dir(&dir)
         .unwrap()
         .map(|e| e.unwrap().path())
         .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
         .collect();
     inputs.sort();
-    assert!(inputs.len() >= 4, "expected at least 4 agent sessions, found {}", inputs.len());
+    assert!(
+        inputs.len() >= 4,
+        "expected at least 4 agent sessions, found {}",
+        inputs.len()
+    );
     let mut failures = Vec::new();
     for input in &inputs {
         let name = input.file_name().unwrap().to_string_lossy().into_owned();
-        let mode = if name.ends_with(".mcp.jsonl") { "mcp" } else { "agent" };
+        let mode = if name.ends_with(".mcp.jsonl") {
+            "mcp"
+        } else {
+            "agent"
+        };
         let mut child = Command::new(anyknown())
             .current_dir(root())
             .arg(mode)
@@ -1014,15 +1814,31 @@ fn agent_sessions() {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .unwrap();
-        child.stdin.take().unwrap().write_all(&std::fs::read(input).unwrap()).unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(&std::fs::read(input).unwrap())
+            .unwrap();
         let out = child.wait_with_output().unwrap();
         if !out.status.success() || !out.stderr.is_empty() {
             failures.push(format!("{name}: {}\n{}", out.status, text(&out.stderr)));
             continue;
         }
-        check_golden(&input.with_extension("out"), &rooted(&text(&out.stdout)), &name, &mut failures);
+        check_golden(
+            &input.with_extension("out"),
+            &rooted(&text(&out.stdout)),
+            &name,
+            &mut failures,
+        );
     }
-    assert!(failures.is_empty(), "{} of {} agent sessions failed:\n\n{}", failures.len(), inputs.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} of {} agent sessions failed:\n\n{}",
+        failures.len(),
+        inputs.len(),
+        failures.join("\n")
+    );
 }
 
 /// `text-overflow: ellipsis` is only drawn: the Markdown keeps the whole
@@ -1037,14 +1853,45 @@ fn text_overflow_markdown() {
 fn agent_errors() {
     let usage = "error: usage: anyknown dump --a11y [--boxes] [--json] | --md [--refs] [--js] [--width PX] [--no-scroll | --scroll-steps N] FILE|URL\n";
     expect(&["dump", "--a11y"], 2, "", usage);
-    expect(&["dump", "--md", "--width", "x", "browser/tests/agent/article.html"], 2, "", usage);
-    expect(&["dump", "--md", "browser/tests/agent/missing.html"], 1, "", &format!(
-        "error: cannot fetch file://{}/browser/tests/agent/missing.html: not found\n",
-        root().display()
-    ));
-    expect(&["agent", "--color"], 2, "", "error: usage: anyknown agent|mcp [--width PX] [--height PX] [--no-js]\n");
-    expect(&["dump", "--a11y", "data:text/html,<button>OK</button>"], 0, "- button \"OK\" [e1]\n", "");
-    expect(&["dump", "--md", "data:text/html,<h2>Hi</h2><p>a <b>b</b>"], 0, "## Hi\n\na **b**\n", "");
+    expect(
+        &[
+            "dump",
+            "--md",
+            "--width",
+            "x",
+            "browser/tests/agent/article.html",
+        ],
+        2,
+        "",
+        usage,
+    );
+    expect(
+        &["dump", "--md", "browser/tests/agent/missing.html"],
+        1,
+        "",
+        &format!(
+            "error: cannot fetch file://{}/browser/tests/agent/missing.html: not found\n",
+            root().display()
+        ),
+    );
+    expect(
+        &["agent", "--color"],
+        2,
+        "",
+        "error: usage: anyknown agent|mcp [--width PX] [--height PX] [--no-js]\n",
+    );
+    expect(
+        &["dump", "--a11y", "data:text/html,<button>OK</button>"],
+        0,
+        "- button \"OK\" [e1]\n",
+        "",
+    );
+    expect(
+        &["dump", "--md", "data:text/html,<h2>Hi</h2><p>a <b>b</b>"],
+        0,
+        "## Hi\n\na **b**\n",
+        "",
+    );
 }
 
 fn base64_decode(s: &str) -> Vec<u8> {
@@ -1071,7 +1918,10 @@ fn base64_decode(s: &str) -> Vec<u8> {
 /// The string value of `"key":"..."` in one JSON line (no escapes in it).
 fn json_str<'a>(line: &'a str, key: &str) -> &'a str {
     let k = format!("\"{key}\":\"");
-    let at = line.find(&k).unwrap_or_else(|| panic!("no {key} in {line}")) + k.len();
+    let at = line
+        .find(&k)
+        .unwrap_or_else(|| panic!("no {key} in {line}"))
+        + k.len();
     &line[at..at + line[at..].find('"').unwrap()]
 }
 
@@ -1089,9 +1939,19 @@ fn agent_screenshot() {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .unwrap();
-        child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
         let out = child.wait_with_output().unwrap();
-        assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+        assert!(
+            out.status.success() && out.stderr.is_empty(),
+            "{}\n{}",
+            out.status,
+            text(&out.stderr)
+        );
         text(&out.stdout).lines().map(String::from).collect()
     };
     let png_size = |b64: &str, name: &str| {
@@ -1099,39 +1959,85 @@ fn agent_screenshot() {
         std::fs::write(&path, base64_decode(b64)).unwrap();
         check_png(&path)
     };
-    let lines = session("agent", concat!(
-        "{\"id\":1,\"cmd\":\"screenshot\"}\n",
-        "{\"id\":2,\"cmd\":\"navigate\",\"url\":\"browser/tests/agent/form_login.html\"}\n",
-        "{\"id\":3,\"cmd\":\"screenshot\",\"ref\":\"e2\"}\n",
-        "{\"id\":4,\"cmd\":\"screenshot\",\"ref\":\"e99\"}\n",
-        "{\"id\":5,\"cmd\":\"snapshot\"}\n",
-        "{\"id\":6,\"cmd\":\"navigate\",\"url\":\"browser/tests/paint/full.html\"}\n",
-        "{\"id\":7,\"cmd\":\"screenshot\"}\n",
-        "{\"id\":8,\"cmd\":\"screenshot\",\"full\":true}\n",
-    ));
+    let lines = session(
+        "agent",
+        concat!(
+            "{\"id\":1,\"cmd\":\"screenshot\"}\n",
+            "{\"id\":2,\"cmd\":\"navigate\",\"url\":\"browser/tests/agent/form_login.html\"}\n",
+            "{\"id\":3,\"cmd\":\"screenshot\",\"ref\":\"e2\"}\n",
+            "{\"id\":4,\"cmd\":\"screenshot\",\"ref\":\"e99\"}\n",
+            "{\"id\":5,\"cmd\":\"snapshot\"}\n",
+            "{\"id\":6,\"cmd\":\"navigate\",\"url\":\"browser/tests/paint/full.html\"}\n",
+            "{\"id\":7,\"cmd\":\"screenshot\"}\n",
+            "{\"id\":8,\"cmd\":\"screenshot\",\"full\":true}\n",
+        ),
+    );
     assert_eq!(lines.len(), 8);
-    assert_eq!(lines[0], "{\"id\":1,\"ok\":false,\"error\":\"no page: navigate first\"}");
+    assert_eq!(
+        lines[0],
+        "{\"id\":1,\"ok\":false,\"error\":\"no page: navigate first\"}"
+    );
     let (w, h) = png_size(json_str(&lines[2], "png"), "agent_ref.png");
     assert!(w < 400 && h < 300, "element {w}x{h}");
-    assert!(lines[2].contains("\"result\":\"screenshot of textbox \\\"Email address\\\" [e2]"), "{}", lines[2]);
-    assert!(lines[3].contains("\"ok\":false,\"error\":\"unknown ref e99"), "{}", lines[3]);
+    assert!(
+        lines[2].contains("\"result\":\"screenshot of textbox \\\"Email address\\\" [e2]"),
+        "{}",
+        lines[2]
+    );
+    assert!(
+        lines[3].contains("\"ok\":false,\"error\":\"unknown ref e99"),
+        "{}",
+        lines[3]
+    );
     // The page is laid out as before the screenshots: refs keep working.
-    assert!(lines[4].contains("textbox \\\"Email address\\\" [e2]"), "{}", lines[4]);
-    assert!(lines[6].contains("\"result\":\"screenshot of the viewport, 400x300 px"), "{}", lines[6]);
-    assert_eq!(png_size(json_str(&lines[6], "png"), "agent_viewport.png"), (400, 300));
+    assert!(
+        lines[4].contains("textbox \\\"Email address\\\" [e2]"),
+        "{}",
+        lines[4]
+    );
+    assert!(
+        lines[6].contains("\"result\":\"screenshot of the viewport, 400x300 px"),
+        "{}",
+        lines[6]
+    );
+    assert_eq!(
+        png_size(json_str(&lines[6], "png"), "agent_viewport.png"),
+        (400, 300)
+    );
     let (w, h) = png_size(json_str(&lines[7], "png"), "agent_full.png");
     assert!(w == 400 && h > 300, "whole page {w}x{h}");
-    assert!(json_str(&lines[7], "result").starts_with(&format!("screenshot of the whole page, 400x{h} px")), "{}", lines[7]);
+    assert!(
+        json_str(&lines[7], "result")
+            .starts_with(&format!("screenshot of the whole page, 400x{h} px")),
+        "{}",
+        lines[7]
+    );
 
-    let lines = session("mcp", concat!(
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"browser_screenshot\",\"arguments\":{}}}\n",
-        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"browser_navigate\",\"arguments\":{\"url\":\"browser/tests/agent/links.html\"}}}\n",
-        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"browser_screenshot\",\"arguments\":{}}}\n",
-    ));
+    let lines = session(
+        "mcp",
+        concat!(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"browser_screenshot\",\"arguments\":{}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"browser_navigate\",\"arguments\":{\"url\":\"browser/tests/agent/links.html\"}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"browser_screenshot\",\"arguments\":{}}}\n",
+        ),
+    );
     assert_eq!(lines.len(), 3);
-    assert!(lines[0].contains("\"isError\":true") && !lines[0].contains("\"image\""), "{}", lines[0]);
-    assert!(lines[2].contains("\"type\":\"image\"") && lines[2].contains("\"mimeType\":\"image/png\"") && lines[2].contains("\"isError\":false"), "{}", &lines[2][..200.min(lines[2].len())]);
-    assert_eq!(png_size(json_str(&lines[2], "data"), "mcp_viewport.png"), (400, 300));
+    assert!(
+        lines[0].contains("\"isError\":true") && !lines[0].contains("\"image\""),
+        "{}",
+        lines[0]
+    );
+    assert!(
+        lines[2].contains("\"type\":\"image\"")
+            && lines[2].contains("\"mimeType\":\"image/png\"")
+            && lines[2].contains("\"isError\":false"),
+        "{}",
+        &lines[2][..200.min(lines[2].len())]
+    );
+    assert_eq!(
+        png_size(json_str(&lines[2], "data"), "mcp_viewport.png"),
+        (400, 300)
+    );
 }
 
 /// A window shared by its user and agents (`--agent-socket`,
@@ -1146,23 +2052,42 @@ fn window_agents() {
         println!("skipped: no SDL2");
         return;
     }
-    let dir = root().join("browser").join("tests").join("agent").join("window");
+    let dir = root()
+        .join("browser")
+        .join("tests")
+        .join("agent")
+        .join("window");
     let mut inputs: Vec<PathBuf> = std::fs::read_dir(&dir)
         .unwrap()
         .map(|e| e.unwrap().path())
         .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
         .collect();
     inputs.sort();
-    assert!(inputs.len() >= 3, "expected at least 3 window agent sessions, found {}", inputs.len());
+    assert!(
+        inputs.len() >= 3,
+        "expected at least 3 window agent sessions, found {}",
+        inputs.len()
+    );
     let mut failures = Vec::new();
     for (i, input) in inputs.iter().enumerate() {
         let name = input.file_name().unwrap().to_string_lossy().into_owned();
         match window_agent_session(input, i) {
-            Ok(got) => check_golden(&input.with_extension("out"), &rooted(&got), &name, &mut failures),
+            Ok(got) => check_golden(
+                &input.with_extension("out"),
+                &rooted(&got),
+                &name,
+                &mut failures,
+            ),
             Err(e) => failures.push(format!("{name}: {e}")),
         }
     }
-    assert!(failures.is_empty(), "{} of {} window agent sessions failed:\n\n{}", failures.len(), inputs.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} of {} window agent sessions failed:\n\n{}",
+        failures.len(),
+        inputs.len(),
+        failures.join("\n")
+    );
 }
 
 // Runs one session of `window_agents`: what the agent got, then
@@ -1175,7 +2100,13 @@ fn window_agent_session(input: &Path, n: usize) -> Result<String, String> {
     // A short relative path: sockets' paths are limited to ~100 bytes.
     let sock = format!("target/agent-window-{}-{n}.sock", std::process::id());
     let _ = std::fs::remove_file(root().join(&sock));
-    let mut args = vec!["--agent-socket".to_string(), sock.clone(), "--exit-when-idle".into(), "--font".into(), "fixed".into()];
+    let mut args = vec![
+        "--agent-socket".to_string(),
+        sock.clone(),
+        "--exit-when-idle".into(),
+        "--font".into(),
+        "fixed".into(),
+    ];
     args.extend(["--width", "800", "--height", "600", "--state"].map(String::from));
     if let Ok(events) = std::fs::read_to_string(input.with_extension("events")) {
         args.push("--events".into());
@@ -1213,7 +2144,11 @@ fn window_agent_session(input: &Path, n: usize) -> Result<String, String> {
         let out = connect.wait_with_output().unwrap();
         if !out.status.success() || !out.stderr.is_empty() {
             let _ = window.kill();
-            return Err(format!("anyknown connect: {}\n{}", out.status, text(&out.stderr)));
+            return Err(format!(
+                "anyknown connect: {}\n{}",
+                out.status,
+                text(&out.stderr)
+            ));
         }
         got.push_str(&text(&out.stdout));
     } else {
@@ -1253,14 +2188,37 @@ fn window_agent_session(input: &Path, n: usize) -> Result<String, String> {
 /// `anyknown connect` and `--agent-socket` errors.
 #[test]
 fn window_agents_errors() {
-    expect(&["connect"], 2, "", "error: usage: anyknown connect SOCKET [--mcp]\n");
-    expect(&["connect", "target/no-such.sock"], 1, "", "error: cannot connect to target/no-such.sock: is a window listening (anyknown --agent-socket target/no-such.sock)?\n");
+    expect(
+        &["connect"],
+        2,
+        "",
+        "error: usage: anyknown connect SOCKET [--mcp]\n",
+    );
+    expect(
+        &["connect", "target/no-such.sock"],
+        1,
+        "",
+        "error: cannot connect to target/no-such.sock: is a window listening (anyknown --agent-socket target/no-such.sock)?\n",
+    );
     if has_sdl() {
-        let out = run_window(&["--agent-socket", "target/no-such-dir/x.sock", "--frames", "1"]);
+        let out = run_window(&[
+            "--agent-socket",
+            "target/no-such-dir/x.sock",
+            "--frames",
+            "1",
+        ]);
         assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
-        assert_eq!(text(&out.stderr), "error: cannot listen on target/no-such-dir/x.sock\n");
+        assert_eq!(
+            text(&out.stderr),
+            "error: cannot listen on target/no-such-dir/x.sock\n"
+        );
     }
-    expect(&["--exit-when-idle", "browser/tests/basic.html"], 2, "", &format!("error: {}\n", WINDOW_USAGE));
+    expect(
+        &["--exit-when-idle", "browser/tests/basic.html"],
+        2,
+        "",
+        &format!("error: {}\n", WINDOW_USAGE),
+    );
 }
 
 /// The agent over HTTP: a link followed from a page served by the test
@@ -1284,15 +2242,31 @@ fn agent_http() {
     let input = format!(
         "{{\"id\":1,\"cmd\":\"navigate\",\"url\":\"{base}/agent/site/index.html\"}}\n{{\"id\":2,\"cmd\":\"click\",\"ref\":\"e1\"}}\n"
     );
-    child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
     let out = child.wait_with_output().unwrap();
-    assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "{}\n{}",
+        out.status,
+        text(&out.stderr)
+    );
     let got = text(&out.stdout);
     let lines: Vec<&str> = got.lines().collect();
     assert_eq!(lines.len(), 2, "{got}");
     assert!(lines[0].contains("\"title\":\"Site home\""), "{got}");
-    assert!(lines[1].contains(&format!("\"url\":\"{base}/agent/site/docs.html\"")), "{got}");
-    assert!(lines[1].contains("heading \\\"Documentation\\\" [level=1] [e10]"), "{got}");
+    assert!(
+        lines[1].contains(&format!("\"url\":\"{base}/agent/site/docs.html\"")),
+        "{got}"
+    );
+    assert!(
+        lines[1].contains("heading \\\"Documentation\\\" [level=1] [e10]"),
+        "{got}"
+    );
 }
 
 /// Form submission over HTTP: `browser/tests/agent/http/X.jsonl` (with
@@ -1307,14 +2281,22 @@ fn agent_forms_http() {
         println!("skipped: cannot start python3 for the test server");
         return;
     };
-    let dir = root().join("browser").join("tests").join("agent").join("http");
+    let dir = root()
+        .join("browser")
+        .join("tests")
+        .join("agent")
+        .join("http");
     let mut inputs: Vec<PathBuf> = std::fs::read_dir(&dir)
         .unwrap()
         .map(|e| e.unwrap().path())
         .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
         .collect();
     inputs.sort();
-    assert!(inputs.len() >= 2, "expected at least 2 HTTP sessions, found {}", inputs.len());
+    assert!(
+        inputs.len() >= 2,
+        "expected at least 2 HTTP sessions, found {}",
+        inputs.len()
+    );
     let mut failures = Vec::new();
     for input in &inputs {
         let name = input.file_name().unwrap().to_string_lossy().into_owned();
@@ -1326,8 +2308,15 @@ fn agent_forms_http() {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .unwrap();
-        let requests = std::fs::read_to_string(input).unwrap().replace("$BASE", &srv.base);
-        child.stdin.take().unwrap().write_all(requests.as_bytes()).unwrap();
+        let requests = std::fs::read_to_string(input)
+            .unwrap()
+            .replace("$BASE", &srv.base);
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(requests.as_bytes())
+            .unwrap();
         let out = child.wait_with_output().unwrap();
         if !out.status.success() || !out.stderr.is_empty() {
             failures.push(format!("{name}: {}\n{}", out.status, text(&out.stderr)));
@@ -1336,12 +2325,22 @@ fn agent_forms_http() {
         let got = rooted(&text(&out.stdout)).replace(&srv.base, "$BASE");
         check_golden(&input.with_extension("out"), &got, &name, &mut failures);
     }
-    assert!(failures.is_empty(), "{} of {} HTTP sessions failed:\n\n{}", failures.len(), inputs.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} of {} HTTP sessions failed:\n\n{}",
+        failures.len(),
+        inputs.len(),
+        failures.join("\n")
+    );
 }
 
 /// One JS conformance script: None when it passes, else what went wrong.
 fn js_case(js: &Path, bless: bool) -> Option<String> {
-    let rel = js.strip_prefix(root()).unwrap().to_string_lossy().into_owned();
+    let rel = js
+        .strip_prefix(root())
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
     let out = run(&["js", &rel]);
     let got = text(&out.stdout);
     let golden = js.with_extension("out");
@@ -1352,22 +2351,35 @@ fn js_case(js: &Path, bless: bool) -> Option<String> {
     let want = std::fs::read_to_string(&golden).unwrap_or_default();
     let mut problems = Vec::new();
     if got != want {
-        problems.push(format!("stdout differs from {}\n--- expected\n{want}--- got\n{got}", golden.display()));
+        problems.push(format!(
+            "stdout differs from {}\n--- expected\n{want}--- got\n{got}",
+            golden.display()
+        ));
     }
     let stderr = text(&out.stderr);
     match std::fs::read_to_string(js.with_extension("err")) {
         Ok(want_err) => {
             if stderr != want_err || out.status.code() != Some(1) {
-                problems.push(format!("expected status 1 and stderr {want_err:?}, got {} and {stderr:?}", out.status));
+                problems.push(format!(
+                    "expected status 1 and stderr {want_err:?}, got {} and {stderr:?}",
+                    out.status
+                ));
             }
         }
         Err(_) => {
             if !out.status.success() || !stderr.is_empty() {
-                problems.push(format!("expected status 0 and no stderr, got {}:\n{stderr}", out.status));
+                problems.push(format!(
+                    "expected status 0 and no stderr, got {}:\n{stderr}",
+                    out.status
+                ));
             }
         }
     }
-    if problems.is_empty() { None } else { Some(format!("{rel}: {}", problems.join("\n"))) }
+    if problems.is_empty() {
+        None
+    } else {
+        Some(format!("{rel}: {}", problems.join("\n")))
+    }
 }
 
 #[test]
@@ -1379,29 +2391,70 @@ fn js_conformance() {
         .filter(|p| p.extension().is_some_and(|e| e == "js"))
         .collect();
     scripts.sort();
-    assert!(scripts.len() >= 150, "expected at least 150 JS scripts, found {}", scripts.len());
+    assert!(
+        scripts.len() >= 150,
+        "expected at least 150 JS scripts, found {}",
+        scripts.len()
+    );
     anyknown();
     let bless = std::env::var_os("ANYKNOWN_BLESS").is_some();
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
     let failures: Vec<String> = std::thread::scope(|s| {
         let handles: Vec<_> = scripts
             .chunks(scripts.len().div_ceil(threads))
-            .map(|chunk| s.spawn(move || chunk.iter().filter_map(|js| js_case(js, bless)).collect::<Vec<_>>()))
+            .map(|chunk| {
+                s.spawn(move || {
+                    chunk
+                        .iter()
+                        .filter_map(|js| js_case(js, bless))
+                        .collect::<Vec<_>>()
+                })
+            })
             .collect();
-        handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap())
+            .collect()
     });
-    assert!(failures.is_empty(), "{} of {} JS scripts failed:\n\n{}", failures.len(), scripts.len(), failures.join("\n\n"));
+    assert!(
+        failures.is_empty(),
+        "{} of {} JS scripts failed:\n\n{}",
+        failures.len(),
+        scripts.len(),
+        failures.join("\n\n")
+    );
 }
 
 #[test]
 fn js_command_line() {
-    expect(&["js", "browser/tests/js/missing.js"], 1, "", "error: cannot read browser/tests/js/missing.js\n");
+    expect(
+        &["js", "browser/tests/js/missing.js"],
+        1,
+        "",
+        "error: cannot read browser/tests/js/missing.js\n",
+    );
     expect(&["js"], 2, "", "error: usage: anyknown js FILE\n");
-    expect(&["js", "browser/tests/js/modules/entry.mjs"], 0, "entry 42 true\n", "");
-    expect(&["js", "browser/tests/js/modules/thrown.mjs"], 1, "", "Uncaught 42\n");
+    expect(
+        &["js", "browser/tests/js/modules/entry.mjs"],
+        0,
+        "entry 42 true\n",
+        "",
+    );
+    expect(
+        &["js", "browser/tests/js/modules/thrown.mjs"],
+        1,
+        "",
+        "Uncaught 42\n",
+    );
     let syntax = run(&["js", "browser/tests/js/modules/syntax.mjs"]);
     assert_eq!(syntax.status.code(), Some(1));
-    assert!(text(&syntax.stderr).starts_with("Uncaught SyntaxError:"), "{}", text(&syntax.stderr));
+    assert!(
+        text(&syntax.stderr).starts_with("Uncaught SyntaxError:"),
+        "{}",
+        text(&syntax.stderr)
+    );
 }
 
 // ---- page scripts and the DOM bindings (browser/engine/script.aye)
@@ -1422,12 +2475,31 @@ fn window_scripts() {
         (&["--events", "click:50,65", "--no-js"], "\nbefore\n"),
     ];
     for (extra, want) in cases {
-        let mut args = vec!["browser/tests/ui/script.html", "--font", "fixed", "--width", "400", "--height", "300", "--frames", "1", "--text"];
+        let mut args = vec![
+            "browser/tests/ui/script.html",
+            "--font",
+            "fixed",
+            "--width",
+            "400",
+            "--height",
+            "300",
+            "--frames",
+            "1",
+            "--text",
+        ];
         args.extend_from_slice(extra);
         let out = run_window(&args);
         let got = text(&out.stdout);
-        assert!(out.status.success() && out.stderr.is_empty(), "{args:?}: {}\n{}", out.status, text(&out.stderr));
-        assert!(got.contains(want), "{args:?}: expected {want:?} in the text:\n{got}");
+        assert!(
+            out.status.success() && out.stderr.is_empty(),
+            "{args:?}: {}\n{}",
+            out.status,
+            text(&out.stderr)
+        );
+        assert!(
+            got.contains(want),
+            "{args:?}: expected {want:?} in the text:\n{got}"
+        );
     }
 }
 
@@ -1440,12 +2512,36 @@ fn window_history_api() {
         println!("skipped: no SDL2");
         return;
     }
-    let args = ["browser/tests/agent/site/spa.html", "--font", "fixed", "--frames", "5", "--state", "--text", "--events", "click:30,133 click:140,133 key:cmd+["];
+    let args = [
+        "browser/tests/agent/site/spa.html",
+        "--font",
+        "fixed",
+        "--frames",
+        "5",
+        "--state",
+        "--text",
+        "--events",
+        "click:30,133 click:140,133 key:cmd+[",
+    ];
     let out = run_window(&args);
     let got = text(&out.stdout);
-    assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
-    let page = format!("file://{}/browser/tests/agent/site/spa.html?item=2", root().display());
-    for want in [format!("url {page}\n"), format!("\naddress {page}\n"), "\nhistory 2 of 3\n".into(), "\nItem 2\n".into(), "\nhistory.length 3\n".into()] {
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "{}\n{}",
+        out.status,
+        text(&out.stderr)
+    );
+    let page = format!(
+        "file://{}/browser/tests/agent/site/spa.html?item=2",
+        root().display()
+    );
+    for want in [
+        format!("url {page}\n"),
+        format!("\naddress {page}\n"),
+        "\nhistory 2 of 3\n".into(),
+        "\nItem 2\n".into(),
+        "\nhistory.length 3\n".into(),
+    ] {
         assert!(got.contains(&want), "expected {want:?} in:\n{got}");
     }
 }
@@ -1464,7 +2560,18 @@ fn window_timers_yield_to_frames() {
     let mut window = Command::new(anyknown())
         .current_dir(root())
         .env("SDL_VIDEODRIVER", "dummy")
-        .args(["browser/tests/ui/raf_overload.html", "--font", "fixed", "--width", "400", "--height", "300", "--frames", "10", "--text"])
+        .args([
+            "browser/tests/ui/raf_overload.html",
+            "--font",
+            "fixed",
+            "--width",
+            "400",
+            "--height",
+            "300",
+            "--frames",
+            "10",
+            "--text",
+        ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -1478,8 +2585,17 @@ fn window_timers_yield_to_frames() {
         std::thread::sleep(Duration::from_millis(20));
     }
     let out = window.wait_with_output().unwrap();
-    assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
-    assert!(text(&out.stdout).contains("animating"), "{}", text(&out.stdout));
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "{}\n{}",
+        out.status,
+        text(&out.stderr)
+    );
+    assert!(
+        text(&out.stdout).contains("animating"),
+        "{}",
+        text(&out.stdout)
+    );
 }
 
 /// The window and the scripts agree on the scroll offset: a script's
@@ -1494,23 +2610,49 @@ fn window_scroll_follows_scripts() {
     let script = format!("file://{}?script", page.display());
     let cases: &[(&str, &[&str], &str, &str)] = &[
         (&script, &[], "scroll 500\n", "y=500\n"),
-        ("browser/tests/ui/scroll_sync.html", &["--events", "wheel:-3"], "scroll 120\n", "y=120\n"),
+        (
+            "browser/tests/ui/scroll_sync.html",
+            &["--events", "wheel:-3"],
+            "scroll 120\n",
+            "y=120\n",
+        ),
     ];
     for (target, extra, state, text_line) in cases {
-        let mut args = vec![*target, "--font", "fixed", "--width", "400", "--height", "300", "--frames", "30", "--state", "--text"];
+        let mut args = vec![
+            *target, "--font", "fixed", "--width", "400", "--height", "300", "--frames", "30",
+            "--state", "--text",
+        ];
         args.extend_from_slice(extra);
         let out = run_window(&args);
         let got = text(&out.stdout);
-        assert!(out.status.success() && out.stderr.is_empty(), "{args:?}: {}\n{}", out.status, text(&out.stderr));
-        assert!(got.contains(state) && got.contains(text_line), "{args:?}: expected {state:?} and {text_line:?} in:\n{got}");
+        assert!(
+            out.status.success() && out.stderr.is_empty(),
+            "{args:?}: {}\n{}",
+            out.status,
+            text(&out.stderr)
+        );
+        assert!(
+            got.contains(state) && got.contains(text_line),
+            "{args:?}: expected {state:?} and {text_line:?} in:\n{got}"
+        );
     }
 }
 
 /// One run of a DOM fixture: `args` then the page; stdout must be
 /// `golden`, and stderr (console messages, uncaught exceptions) must be
 /// `err_golden`, or empty when there is no such file.
-fn jsdom_case(args: &[&str], page: &Path, golden: &Path, err_golden: Option<&Path>, bless: bool) -> Option<String> {
-    let rel = page.strip_prefix(root()).unwrap().to_string_lossy().into_owned();
+fn jsdom_case(
+    args: &[&str],
+    page: &Path,
+    golden: &Path,
+    err_golden: Option<&Path>,
+    bless: bool,
+) -> Option<String> {
+    let rel = page
+        .strip_prefix(root())
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
     let mut all: Vec<&str> = args.to_vec();
     all.push(&rel);
     let out = run(&all);
@@ -1533,13 +2675,24 @@ fn jsdom_case(args: &[&str], page: &Path, golden: &Path, err_golden: Option<&Pat
     }
     let want = std::fs::read_to_string(golden).unwrap_or_default();
     if got != want {
-        problems.push(format!("stdout differs from {}\n--- expected\n{want}--- got\n{got}", golden.display()));
+        problems.push(format!(
+            "stdout differs from {}\n--- expected\n{want}--- got\n{got}",
+            golden.display()
+        ));
     }
-    let want_err = err_golden.and_then(|e| std::fs::read_to_string(e).ok()).unwrap_or_default();
+    let want_err = err_golden
+        .and_then(|e| std::fs::read_to_string(e).ok())
+        .unwrap_or_default();
     if stderr != want_err {
-        problems.push(format!("stderr differs\n--- expected\n{want_err}--- got\n{stderr}"));
+        problems.push(format!(
+            "stderr differs\n--- expected\n{want_err}--- got\n{stderr}"
+        ));
     }
-    if problems.is_empty() { None } else { Some(format!("{rel} {args:?}: {}", problems.join("\n"))) }
+    if problems.is_empty() {
+        None
+    } else {
+        Some(format!("{rel} {args:?}: {}", problems.join("\n")))
+    }
 }
 
 /// `browser/tests/jsdom/X.html`: `anyknown dump --tree --js` must print
@@ -1555,11 +2708,20 @@ fn jsdom_fixtures() {
         .filter(|p| p.extension().is_some_and(|e| e == "html"))
         .collect();
     pages.sort();
-    assert!(pages.len() >= 25, "expected at least 25 DOM fixtures, found {}", pages.len());
+    assert!(
+        pages.len() >= 25,
+        "expected at least 25 DOM fixtures, found {}",
+        pages.len()
+    );
     let bless = std::env::var_os("ANYKNOWN_BLESS").is_some();
     let mut runs: Vec<(Vec<&str>, PathBuf, PathBuf, Option<PathBuf>)> = Vec::new();
     for p in &pages {
-        runs.push((vec!["dump", "--tree", "--js"], p.clone(), p.with_extension("tree"), Some(p.with_extension("err"))));
+        runs.push((
+            vec!["dump", "--tree", "--js"],
+            p.clone(),
+            p.with_extension("tree"),
+            Some(p.with_extension("err")),
+        ));
         for (flag, ext) in [("--style", "style"), ("--a11y", "a11y")] {
             let golden = p.with_extension(ext);
             if golden.exists() {
@@ -1568,7 +2730,9 @@ fn jsdom_fixtures() {
         }
     }
     anyknown();
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
     let failures: Vec<String> = std::thread::scope(|s| {
         let handles: Vec<_> = runs
             .chunks(runs.len().div_ceil(threads))
@@ -1576,14 +2740,25 @@ fn jsdom_fixtures() {
                 s.spawn(move || {
                     chunk
                         .iter()
-                        .filter_map(|(args, page, golden, err)| jsdom_case(args, page, golden, err.as_deref(), bless))
+                        .filter_map(|(args, page, golden, err)| {
+                            jsdom_case(args, page, golden, err.as_deref(), bless)
+                        })
                         .collect::<Vec<_>>()
                 })
             })
             .collect();
-        handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap())
+            .collect()
     });
-    assert!(failures.is_empty(), "{} of {} DOM fixture runs failed:\n\n{}", failures.len(), runs.len(), failures.join("\n\n"));
+    assert!(
+        failures.is_empty(),
+        "{} of {} DOM fixture runs failed:\n\n{}",
+        failures.len(),
+        runs.len(),
+        failures.join("\n\n")
+    );
 }
 
 /// Under `ANYKNOWN_BENCHMARK=1`, `Date` is a fixed epoch plus the virtual
@@ -1593,12 +2768,25 @@ fn jsdom_fixtures() {
 fn benchmark_date_follows_virtual_clock() {
     let page = "browser/tests/benchmark/date_now.html";
     let dump = || {
-        let out = Command::new(anyknown()).current_dir(root()).env("ANYKNOWN_BENCHMARK", "1").args(["dump", "--text", "--js", page]).output().unwrap();
-        assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+        let out = Command::new(anyknown())
+            .current_dir(root())
+            .env("ANYKNOWN_BENCHMARK", "1")
+            .args(["dump", "--text", "--js", page])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success() && out.stderr.is_empty(),
+            "{}\n{}",
+            out.status,
+            text(&out.stderr)
+        );
         text(&out.stdout)
     };
     let got = dump();
-    assert_eq!(got, "date loop of 5 ms: n=1666664\nepoch: true\nnew Date: true\ntimer 100 ms later: true\n");
+    assert_eq!(
+        got,
+        "date loop of 5 ms: n=1666664\nepoch: true\nnew Date: true\ntimer 100 ms later: true\n"
+    );
     assert_eq!(dump(), got);
 }
 
@@ -1615,7 +2803,9 @@ fn jsdom_gc_stress() {
         .collect();
     pages.sort();
     anyknown();
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
     let failures: Vec<String> = std::thread::scope(|s| {
         let handles: Vec<_> = pages
             .chunks(pages.len().div_ceil(threads))
@@ -1623,14 +2813,19 @@ fn jsdom_gc_stress() {
                 s.spawn(move || {
                     let mut bad = Vec::new();
                     for page in chunk {
-                        let rel = page.strip_prefix(root()).unwrap().to_string_lossy().into_owned();
+                        let rel = page
+                            .strip_prefix(root())
+                            .unwrap()
+                            .to_string_lossy()
+                            .into_owned();
                         let out = Command::new(anyknown())
                             .current_dir(root())
                             .env("ANYKNOWN_JS_GC", "stress")
                             .args(["dump", "--tree", "--js", &rel])
                             .output()
                             .unwrap();
-                        let want = std::fs::read_to_string(page.with_extension("tree")).unwrap_or_default();
+                        let want = std::fs::read_to_string(page.with_extension("tree"))
+                            .unwrap_or_default();
                         if !out.status.success() || rooted(&text(&out.stdout)) != want {
                             bad.push(format!("{rel}: {}\n{}", out.status, text(&out.stderr)));
                         }
@@ -1639,9 +2834,17 @@ fn jsdom_gc_stress() {
                 })
             })
             .collect();
-        handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap())
+            .collect()
     });
-    assert!(failures.is_empty(), "{} DOM fixtures failed under GC stress:\n\n{}", failures.len(), failures.join("\n\n"));
+    assert!(
+        failures.is_empty(),
+        "{} DOM fixtures failed under GC stress:\n\n{}",
+        failures.len(),
+        failures.join("\n\n")
+    );
 }
 
 // ---- B8: net
@@ -1658,29 +2861,67 @@ fn net_http() {
     let base = &srv.base;
     // A URL the user typed: no Referer, no cookies yet.
     let headers = "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\nAccept-Language: en-US,en;q=0.9\nReferer: \nCookie: \n";
-    expect(&["dump", "--text", &format!("{base}/headers")], 0, headers, "");
+    expect(
+        &["dump", "--text", &format!("{base}/headers")],
+        0,
+        headers,
+        "",
+    );
     // ANYKNOWN_COOKIE_FILE keeps the persistent cookies (p, Max-Age)
     // from one run to the next; session cookies (a, d) end with the run.
     let file = scratch().join("cookies.txt");
     let _ = std::fs::remove_file(&file);
     let with_file = |url: String| {
-        Command::new(anyknown()).current_dir(root()).env("ANYKNOWN_COOKIE_FILE", &file).args(["dump", "--text", &url]).output().unwrap()
+        Command::new(anyknown())
+            .current_dir(root())
+            .env("ANYKNOWN_COOKIE_FILE", &file)
+            .args(["dump", "--text", &url])
+            .output()
+            .unwrap()
     };
     let first = with_file(format!("{base}/net/start"));
-    assert!(first.status.success() && first.stderr.is_empty(), "{}", text(&first.stderr));
+    assert!(
+        first.status.success() && first.stderr.is_empty(),
+        "{}",
+        text(&first.stderr)
+    );
     let saved = std::fs::read_to_string(&file).unwrap();
-    assert!(saved.starts_with("127.0.0.1\t1\t/\t0\t0\t") && saved.ends_with("\tp\t5\n") && saved.lines().count() == 1, "{saved}");
+    assert!(
+        saved.starts_with("127.0.0.1\t1\t/\t0\t0\t")
+            && saved.ends_with("\tp\t5\n")
+            && saved.lines().count() == 1,
+        "{saved}"
+    );
     let second = with_file(format!("{base}/headers"));
-    assert!(text(&second.stdout).contains("\nCookie: p=5\n"), "{}", text(&second.stdout));
+    assert!(
+        text(&second.stdout).contains("\nCookie: p=5\n"),
+        "{}",
+        text(&second.stdout)
+    );
     // Too large: 33 MiB, with and without a Content-Length.
     for big in ["big", "big?stream"] {
-        expect(&["dump", "--text", &format!("{base}/{big}")], 1, "", &format!("error: cannot fetch {base}/{big}: the response is too large\n"));
+        expect(
+            &["dump", "--text", &format!("{base}/{big}")],
+            1,
+            "",
+            &format!("error: cannot fetch {base}/{big}: the response is too large\n"),
+        );
     }
     // TLS to a server that speaks plain HTTP.
     let https = base.replace("http://", "https://");
-    expect(&["dump", "--text", &format!("{https}/")], 1, "", &format!("error: cannot fetch {https}/: the secure connection failed (TLS)\n"));
+    expect(
+        &["dump", "--text", &format!("{https}/")],
+        1,
+        "",
+        &format!("error: cannot fetch {https}/: the secure connection failed (TLS)\n"),
+    );
     // No charset in the Content-Type: the <meta charset> decides.
-    expect(&["dump", "--text", &format!("{base}/meta-charset")], 0, "\u{201c}quoted\u{201d} caf\u{e9}\n", "");
+    expect(
+        &["dump", "--text", &format!("{base}/meta-charset")],
+        0,
+        "\u{201c}quoted\u{201d} caf\u{e9}\n",
+        "",
+    );
 }
 
 /// `fetch` with each method, kind of body and request headers
@@ -1696,10 +2937,25 @@ fn fetch_methods() {
         println!("skipped: cannot start python3 for the test server");
         return;
     };
-    let out = run(&["dump", "--text", "--js", &format!("{}/net/fetch_methods.html", srv.base)]);
-    assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+    let out = run(&[
+        "dump",
+        "--text",
+        "--js",
+        &format!("{}/net/fetch_methods.html", srv.base),
+    ]);
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "{}\n{}",
+        out.status,
+        text(&out.stderr)
+    );
     let mut failures = Vec::new();
-    check_golden(&root().join("browser/tests/net/fetch_methods.txt"), &text(&out.stdout), "fetch_methods", &mut failures);
+    check_golden(
+        &root().join("browser/tests/net/fetch_methods.txt"),
+        &text(&out.stdout),
+        "fetch_methods",
+        &mut failures,
+    );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
@@ -1716,10 +2972,25 @@ fn xhr_methods() {
         println!("skipped: cannot start python3 for the test server");
         return;
     };
-    let out = run(&["dump", "--text", "--js", &format!("{}/net/xhr_methods.html", srv.base)]);
-    assert!(out.status.success() && out.stderr.is_empty(), "{}\n{}", out.status, text(&out.stderr));
+    let out = run(&[
+        "dump",
+        "--text",
+        "--js",
+        &format!("{}/net/xhr_methods.html", srv.base),
+    ]);
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "{}\n{}",
+        out.status,
+        text(&out.stderr)
+    );
     let mut failures = Vec::new();
-    check_golden(&root().join("browser/tests/net/xhr_methods.txt"), &text(&out.stdout), "xhr_methods", &mut failures);
+    check_golden(
+        &root().join("browser/tests/net/xhr_methods.txt"),
+        &text(&out.stdout),
+        "xhr_methods",
+        &mut failures,
+    );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
@@ -1730,8 +3001,18 @@ fn xhr_methods() {
 #[test]
 fn noscript_with_scripts() {
     let page = "browser/tests/agent/noscript.html";
-    expect(&["dump", "--text", "--js", page], 0, "Scripts\n\nAlways here.\n\nAn icon and a formula .\n", "");
-    expect(&["dump", "--md", "--js", page], 0, "# Scripts\n\nAlways here.\n\nAn icon and a formula .\n", "");
+    expect(
+        &["dump", "--text", "--js", page],
+        0,
+        "Scripts\n\nAlways here.\n\nAn icon and a formula .\n",
+        "",
+    );
+    expect(
+        &["dump", "--md", "--js", page],
+        0,
+        "# Scripts\n\nAlways here.\n\nAn icon and a formula .\n",
+        "",
+    );
     expect(
         &["dump", "--a11y", "--js", page],
         0,
@@ -1758,29 +3039,95 @@ fn dump_scrolls_through() {
         all.extend_from_slice(flags);
         all.push(&p);
         let out = run(&all);
-        assert!(out.status.success() && out.stderr.is_empty(), "{all:?}: {}\n{}", out.status, text(&out.stderr));
+        assert!(
+            out.status.success() && out.stderr.is_empty(),
+            "{all:?}: {}\n{}",
+            out.status,
+            text(&out.stderr)
+        );
         text(&out.stdout)
     };
     let sections = md(&[], "lazy_sections");
-    assert!(sections.contains("Fourth section, at the bottom.") && sections.contains("scroll events: 3;"), "{sections}");
+    assert!(
+        sections.contains("Fourth section, at the bottom.")
+            && sections.contains("scroll events: 3;"),
+        "{sections}"
+    );
     let sections = md(&["--no-scroll"], "lazy_sections");
-    assert!(!sections.contains("First section") && sections.contains("scroll events: 0;"), "{sections}");
+    assert!(
+        !sections.contains("First section") && sections.contains("scroll events: 0;"),
+        "{sections}"
+    );
     // The native lazy image is there either way: it loads at once.
-    assert!(sections.contains("![A native lazy image](data:image/png") && sections.contains("image loaded at"), "{sections}");
+    assert!(
+        sections.contains("![A native lazy image](data:image/png")
+            && sections.contains("image loaded at"),
+        "{sections}"
+    );
     let list = md(&[], "infinite_list");
-    assert!(list.contains("30. Item 30\n\nLoading more...\n") && !list.contains("Item 31"), "{list}");
+    assert!(
+        list.contains("30. Item 30\n\nLoading more...\n") && !list.contains("Item 31"),
+        "{list}"
+    );
     let list = md(&["--scroll-steps", "3"], "infinite_list");
-    assert!(list.contains("30. Item 30\n\nLoading more...\n") && !list.contains("Item 31"), "{list}");
-    assert_eq!(md(&["--no-scroll"], "infinite_list"), "# Infinite list\n\nLoading more...\n");
+    assert!(
+        list.contains("30. Item 30\n\nLoading more...\n") && !list.contains("Item 31"),
+        "{list}"
+    );
+    assert_eq!(
+        md(&["--no-scroll"], "infinite_list"),
+        "# Infinite list\n\nLoading more...\n"
+    );
     assert_eq!(md(&[], "endless_page"), "Chunk 1\n\nChunk 2\n\nChunk 3\n");
     // Five results at load and five after each scroll: two growth rounds.
     let feed = md(&[], "endless_feed");
-    assert!(feed.ends_with("\n15. Result 15\n") && feed.contains("1. Result 1\n"), "{feed}");
-    assert_eq!(md(&["--scroll-steps", "2"], "endless_page"), "Chunk 1\n\nChunk 2\n\nChunk 3\n");
-    expect(&["dump", "--text", "--js", "--scroll-steps", "2", &page("endless_page")], 0, "Endless page\n\nChunk 1\nChunk 2\nChunk 3\n", "");
-    expect(&["dump", "--text", "--js", "--no-scroll", &page("endless_page")], 0, "Endless page\n\nChunk 1\n", "");
+    assert!(
+        feed.ends_with("\n15. Result 15\n") && feed.contains("1. Result 1\n"),
+        "{feed}"
+    );
+    assert_eq!(
+        md(&["--scroll-steps", "2"], "endless_page"),
+        "Chunk 1\n\nChunk 2\n\nChunk 3\n"
+    );
+    expect(
+        &[
+            "dump",
+            "--text",
+            "--js",
+            "--scroll-steps",
+            "2",
+            &page("endless_page"),
+        ],
+        0,
+        "Endless page\n\nChunk 1\nChunk 2\nChunk 3\n",
+        "",
+    );
+    expect(
+        &[
+            "dump",
+            "--text",
+            "--js",
+            "--no-scroll",
+            &page("endless_page"),
+        ],
+        0,
+        "Endless page\n\nChunk 1\n",
+        "",
+    );
     let usage = "error: usage: anyknown dump --a11y [--boxes] [--json] | --md [--refs] [--js] [--width PX] [--no-scroll | --scroll-steps N] FILE|URL\n";
-    expect(&["dump", "--md", "--js", "--scroll-steps", "-1", &page("endless_page")], 2, "", usage);
+    expect(
+        &[
+            "dump",
+            "--md",
+            "--js",
+            "--scroll-steps",
+            "-1",
+            &page("endless_page"),
+        ],
+        2,
+        "",
+        usage,
+    );
 }
 
 // ---- B8: layout and paint
@@ -1808,15 +3155,42 @@ fn window_hit_layers() {
     ];
     let mut failures = Vec::new();
     for (events, want) in cases {
-        let out = run_window(&["browser/tests/layout/hit.html", "--font", "fixed", "--width", "400", "--height", "340", "--frames", "1", "--state", "--events", events]);
+        let out = run_window(&[
+            "browser/tests/layout/hit.html",
+            "--font",
+            "fixed",
+            "--width",
+            "400",
+            "--height",
+            "340",
+            "--frames",
+            "1",
+            "--state",
+            "--events",
+            events,
+        ]);
         let got = text(&out.stdout).replace(&dir, "");
-        let status = got.lines().find(|l| l.starts_with("status ")).unwrap_or("").to_string();
+        let status = got
+            .lines()
+            .find(|l| l.starts_with("status "))
+            .unwrap_or("")
+            .to_string();
         let want_line = format!("status {want}");
         if !out.status.success() || !out.stderr.is_empty() || status != want_line {
-            failures.push(format!("--events {events:?}: {}\n{}--- expected\n{want_line}\n--- got\n{got}", out.status, text(&out.stderr)));
+            failures.push(format!(
+                "--events {events:?}: {}\n{}--- expected\n{want_line}\n--- got\n{got}",
+                out.status,
+                text(&out.stderr)
+            ));
         }
     }
-    assert!(failures.is_empty(), "{} of {} cases failed:\n\n{}", failures.len(), cases.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases failed:\n\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
 }
 
 /// Fixed and sticky boxes follow the scroll offset
@@ -1836,21 +3210,57 @@ fn window_sideways_scroll() {
     let dir = format!("file://{}/browser/tests/ui/", root().display());
     let cases: &[(&str, &str)] = &[
         ("move:250,80", ""),
-        ("key:right key:right key:right key:right key:right key:right key:right key:right key:right move:250,80", "other.html"),
-        ("key:right key:right key:right key:right key:right key:right key:right key:right key:right key:left key:left key:left key:left key:left key:left key:left key:left key:left move:250,80", ""),
-        ("key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right move:50,80", "other.html"),
+        (
+            "key:right key:right key:right key:right key:right key:right key:right key:right key:right move:250,80",
+            "other.html",
+        ),
+        (
+            "key:right key:right key:right key:right key:right key:right key:right key:right key:right key:left key:left key:left key:left key:left key:left key:left key:left key:left move:250,80",
+            "",
+        ),
+        (
+            "key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right key:right move:50,80",
+            "other.html",
+        ),
     ];
     let mut failures = Vec::new();
     for (events, want) in cases {
-        let out = run_window(&["browser/tests/ui/wide.html", "--font", "fixed", "--width", "400", "--height", "340", "--frames", "1", "--state", "--events", events]);
+        let out = run_window(&[
+            "browser/tests/ui/wide.html",
+            "--font",
+            "fixed",
+            "--width",
+            "400",
+            "--height",
+            "340",
+            "--frames",
+            "1",
+            "--state",
+            "--events",
+            events,
+        ]);
         let got = text(&out.stdout).replace(&dir, "");
-        let status = got.lines().find(|l| l.starts_with("status ")).unwrap_or("").to_string();
+        let status = got
+            .lines()
+            .find(|l| l.starts_with("status "))
+            .unwrap_or("")
+            .to_string();
         let want_line = format!("status {want}");
         if !out.status.success() || !out.stderr.is_empty() || status != want_line {
-            failures.push(format!("--events {events:?}: {}\n{}--- expected\n{want_line}\n--- got\n{got}", out.status, text(&out.stderr)));
+            failures.push(format!(
+                "--events {events:?}: {}\n{}--- expected\n{want_line}\n--- got\n{got}",
+                out.status,
+                text(&out.stderr)
+            ));
         }
     }
-    assert!(failures.is_empty(), "{} of {} cases failed:\n\n{}", failures.len(), cases.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases failed:\n\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
 }
 
 #[test]
@@ -1876,15 +3286,42 @@ fn window_scroll_positions() {
     ];
     let mut failures = Vec::new();
     for (events, want) in cases {
-        let out = run_window(&["browser/tests/layout/scroll.html", "--font", "fixed", "--width", "400", "--height", "340", "--frames", "1", "--state", "--events", events]);
+        let out = run_window(&[
+            "browser/tests/layout/scroll.html",
+            "--font",
+            "fixed",
+            "--width",
+            "400",
+            "--height",
+            "340",
+            "--frames",
+            "1",
+            "--state",
+            "--events",
+            events,
+        ]);
         let got = text(&out.stdout).replace(&dir, "");
-        let status = got.lines().find(|l| l.starts_with("status ")).unwrap_or("").to_string();
+        let status = got
+            .lines()
+            .find(|l| l.starts_with("status "))
+            .unwrap_or("")
+            .to_string();
         let want_line = format!("status {want}");
         if !out.status.success() || !out.stderr.is_empty() || status != want_line {
-            failures.push(format!("--events {events:?}: {}\n{}--- expected\n{want_line}\n--- got\n{got}", out.status, text(&out.stderr)));
+            failures.push(format!(
+                "--events {events:?}: {}\n{}--- expected\n{want_line}\n--- got\n{got}",
+                out.status,
+                text(&out.stderr)
+            ));
         }
     }
-    assert!(failures.is_empty(), "{} of {} cases failed:\n\n{}", failures.len(), cases.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases failed:\n\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
 }
 
 /// A frameset in the window (`browser/tests/ui/frames.html`, 400x340: a
@@ -1900,7 +3337,8 @@ fn window_framesets() {
         return;
     }
     let ui = format!("file://{}/browser/tests/ui/", root().display());
-    let page = "url frames.html\nscroll 0\nfocus page\naddress frames.html\nhistory 1 of 1\nmatches 0\n";
+    let page =
+        "url frames.html\nscroll 0\nfocus page\naddress frames.html\nhistory 1 of 1\nmatches 0\n";
     let urls = "frame_urls frame_menu.html long.html\n";
     let cases: &[(&str, String)] = &[
         ("move:20,58", format!("{page}status other.html\nframes 0 0\n{urls}")),
@@ -1913,13 +3351,36 @@ fn window_framesets() {
     ];
     let mut failures = Vec::new();
     for (events, want) in cases {
-        let out = run_window(&["browser/tests/ui/frames.html", "--font", "fixed", "--width", "400", "--height", "340", "--frames", "1", "--state", "--events", events]);
+        let out = run_window(&[
+            "browser/tests/ui/frames.html",
+            "--font",
+            "fixed",
+            "--width",
+            "400",
+            "--height",
+            "340",
+            "--frames",
+            "1",
+            "--state",
+            "--events",
+            events,
+        ]);
         let got = text(&out.stdout).replace(&ui, "");
         if !out.status.success() || !out.stderr.is_empty() || got != *want {
-            failures.push(format!("--events {events:?}: {}\n{}--- expected\n{want}--- got\n{got}", out.status, text(&out.stderr)));
+            failures.push(format!(
+                "--events {events:?}: {}\n{}--- expected\n{want}--- got\n{got}",
+                out.status,
+                text(&out.stderr)
+            ));
         }
     }
-    assert!(failures.is_empty(), "{} of {} cases failed:\n\n{}", failures.len(), cases.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases failed:\n\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
 }
 
 /// `browser/tests/fonts/`: a tiny font as TrueType, WOFF and WOFF 2
@@ -1931,22 +3392,49 @@ fn web_font_files() {
     let shot = |page: &str| -> Option<Vec<u8>> {
         let out = scratch().join(format!("font_{page}.png"));
         let path = format!("browser/tests/fonts/{page}.html");
-        let res = run(&["screenshot", &path, "-o", out.to_str().unwrap(), "--font", "system", "--width", "400", "--height", "80"]);
+        let res = run(&[
+            "screenshot",
+            &path,
+            "-o",
+            out.to_str().unwrap(),
+            "--font",
+            "system",
+            "--width",
+            "400",
+            "--height",
+            "80",
+        ]);
         if text(&res.stderr).contains("no system font found") {
             return None;
         }
-        assert!(res.status.success() && res.stderr.is_empty(), "{page}: {}\n{}", res.status, text(&res.stderr));
+        assert!(
+            res.status.success() && res.stderr.is_empty(),
+            "{page}: {}\n{}",
+            res.status,
+            text(&res.stderr)
+        );
         Some(std::fs::read(&out).unwrap())
     };
     let Some(ttf) = shot("ttf") else {
         println!("skipped: no system font");
         return;
     };
-    assert_ne!(ttf, shot("none").unwrap(), "the TrueType web font is not used");
+    assert_ne!(
+        ttf,
+        shot("none").unwrap(),
+        "the TrueType web font is not used"
+    );
     assert_eq!(ttf, shot("woff").unwrap(), "WOFF renders unlike TrueType");
-    let brotli = Command::new("pkg-config").args(["--exists", "libbrotlidec"]).status().is_ok_and(|s| s.success());
+    let brotli = Command::new("pkg-config")
+        .args(["--exists", "libbrotlidec"])
+        .status()
+        .is_ok_and(|s| s.success());
     if brotli {
-        assert_eq!(ttf, shot("woff2").unwrap(), "WOFF 2 renders unlike TrueType");
+        assert_eq!(
+            ttf,
+            shot("woff2").unwrap(),
+            "WOFF 2 renders unlike TrueType"
+        );
     } else {
         println!("WOFF 2 skipped: no libbrotlidec");
     }

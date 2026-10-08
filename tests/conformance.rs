@@ -27,11 +27,24 @@ fn programs(area: &Path) -> Vec<PathBuf> {
 fn run_native(path: &Path, work: &Path) -> Result<(), String> {
     let name = path.file_name().unwrap().to_string_lossy().into_owned();
     let src = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let want = std::fs::read_to_string(path.with_extension("out")).map_err(|_| "missing .out file".to_string())?;
-    let c = driver::compile_to_c(&name, &src, Mode::Debug)
-        .map_err(|d| d.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("\n"))?;
-    let area = path.parent().unwrap().file_name().unwrap().to_string_lossy();
-    let exe = work.join(format!("{area}-{}", path.file_stem().unwrap().to_string_lossy()));
+    let want = std::fs::read_to_string(path.with_extension("out"))
+        .map_err(|_| "missing .out file".to_string())?;
+    let c = driver::compile_to_c(&name, &src, Mode::Debug).map_err(|d| {
+        d.iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
+    let area = path
+        .parent()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_string_lossy();
+    let exe = work.join(format!(
+        "{area}-{}",
+        path.file_stem().unwrap().to_string_lossy()
+    ));
     driver::cc(&c, &exe, Mode::Debug)?;
     let out = Command::new(&exe).output().map_err(|e| e.to_string())?;
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -40,7 +53,9 @@ fn run_native(path: &Path, work: &Path) -> Result<(), String> {
         return Err(format!("program failed ({}):\n{stderr}", out.status));
     }
     if stdout != want {
-        return Err(format!("stdout mismatch\n--- expected\n{want}--- got\n{stdout}"));
+        return Err(format!(
+            "stdout mismatch\n--- expected\n{want}--- got\n{stdout}"
+        ));
     }
     Ok(())
 }
@@ -56,7 +71,11 @@ fn main() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/conformance");
     let work = std::env::temp_dir().join(format!("aye-conformance-{}", std::process::id()));
     std::fs::create_dir_all(&work).unwrap();
-    let mut areas: Vec<PathBuf> = std::fs::read_dir(&root).unwrap().map(|e| e.unwrap().path()).filter(|p| p.is_dir()).collect();
+    let mut areas: Vec<PathBuf> = std::fs::read_dir(&root)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.is_dir())
+        .collect();
     areas.sort();
 
     // One row per (area, target).
@@ -69,14 +88,26 @@ fn main() {
                     .into_iter()
                     .map(|p| {
                         let w = &work;
-                        let label = format!("{area_name}/{}", p.file_name().unwrap().to_string_lossy());
+                        let label =
+                            format!("{area_name}/{}", p.file_name().unwrap().to_string_lossy());
                         (label, s.spawn(move || run(target, &p, w)))
                     })
                     .collect();
                 pending.push((area_name.clone(), target, handles));
             }
         }
-        pending.into_iter().map(|(a, t, hs)| (a, t, hs.into_iter().map(|(l, h)| (l, h.join().unwrap())).collect())).collect()
+        pending
+            .into_iter()
+            .map(|(a, t, hs)| {
+                (
+                    a,
+                    t,
+                    hs.into_iter()
+                        .map(|(l, h)| (l, h.join().unwrap()))
+                        .collect(),
+                )
+            })
+            .collect()
     });
     let _ = std::fs::remove_dir_all(&work);
 
@@ -92,7 +123,11 @@ fn main() {
         }
     }
     let total: usize = rows.iter().map(|r| r.2.len()).sum();
-    println!("\nconformance: {} passed; {} failed", total - failures.len(), failures.len());
+    println!(
+        "\nconformance: {} passed; {} failed",
+        total - failures.len(),
+        failures.len()
+    );
     if !failures.is_empty() {
         println!("\nfailing:");
         for f in &failures {

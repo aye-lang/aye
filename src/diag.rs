@@ -19,7 +19,10 @@ impl Span {
 
     /// The position `n` columns to the right, in the same file.
     pub fn right(self, n: u32) -> Span {
-        Span { col: self.col + n, ..self }
+        Span {
+            col: self.col + n,
+            ..self
+        }
     }
 }
 
@@ -52,7 +55,11 @@ pub struct Diag {
 
 impl fmt::Display for Diag {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}:{}: error[{}]: {}", self.file, self.span.line, self.span.col, self.code, self.msg)
+        write!(
+            f,
+            "{}:{}:{}: error[{}]: {}",
+            self.file, self.span.line, self.span.col, self.code, self.msg
+        )
     }
 }
 
@@ -92,7 +99,10 @@ impl Diag {
         match &self.fix {
             Some(f) => {
                 let at = f.edits[0].start;
-                format!("{self}\n{}:{}:{}: help: {}", self.file, at.line, at.col, f.help)
+                format!(
+                    "{self}\n{}:{}:{}: help: {}",
+                    self.file, at.line, at.col, f.help
+                )
             }
             None => self.to_string(),
         }
@@ -128,20 +138,47 @@ pub struct Error {
 
 impl Error {
     pub fn new(code: Code, span: Span, msg: impl Into<String>) -> Error {
-        Error { span, code, msg: msg.into(), fix: None }
+        Error {
+            span,
+            code,
+            msg: msg.into(),
+            fix: None,
+        }
     }
 
     /// Attach a fix-it of one edit.
-    pub fn fix(mut self, help: impl Into<String>, start: Span, end: Span, replacement: impl Into<String>) -> Error {
-        self.fix = Some(Fix { help: help.into(), edits: vec![Edit { start, end, replacement: replacement.into() }] });
+    pub fn fix(
+        mut self,
+        help: impl Into<String>,
+        start: Span,
+        end: Span,
+        replacement: impl Into<String>,
+    ) -> Error {
+        self.fix = Some(Fix {
+            help: help.into(),
+            edits: vec![Edit {
+                start,
+                end,
+                replacement: replacement.into(),
+            }],
+        });
         self
     }
 
     /// The diagnostic, with the name of its file from `files` (indexed by
     /// `Span::file`).
     pub fn with_file(self, files: &[String]) -> Diag {
-        let file = files.get(self.span.file as usize).cloned().unwrap_or_default();
-        Diag { file, span: self.span, code: self.code, msg: self.msg, fix: self.fix }
+        let file = files
+            .get(self.span.file as usize)
+            .cloned()
+            .unwrap_or_default();
+        Diag {
+            file,
+            span: self.span,
+            code: self.code,
+            msg: self.msg,
+            fix: self.fix,
+        }
     }
 }
 
@@ -172,6 +209,9 @@ mod tests {
 
     #[test]
     fn json_str_escapes() {
-        assert_eq!(json_str("a\"b\\c\nd\te\rf\u{1}g"), r#""a\"b\\c\nd\te\rf\u0001g""#);
+        assert_eq!(
+            json_str("a\"b\\c\nd\te\rf\u{1}g"),
+            r#""a\"b\\c\nd\te\rf\u0001g""#
+        );
     }
 }

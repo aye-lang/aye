@@ -30,7 +30,10 @@ pub fn signatures(path: &str) -> Result<String, String> {
     if path == "std" || path.starts_with("std.") {
         for (module, file, src) in STD_FILES {
             if *module == path || module.starts_with(&format!("{path}.")) {
-                modules.push((module.to_string(), vec![(file.to_string(), src.to_string())]));
+                modules.push((
+                    module.to_string(),
+                    vec![(file.to_string(), src.to_string())],
+                ));
             }
         }
         if modules.is_empty() {
@@ -44,7 +47,8 @@ pub fn signatures(path: &str) -> Result<String, String> {
                 return Err(format!("aye: {path} has no .aye files"));
             }
         } else {
-            let text = std::fs::read_to_string(p).map_err(|e| format!("aye: cannot read {path}: {e}"))?;
+            let text =
+                std::fs::read_to_string(p).map_err(|e| format!("aye: cannot read {path}: {e}"))?;
             modules.push((path.to_string(), vec![(path.to_string(), text)]));
         }
     }
@@ -57,7 +61,10 @@ pub fn signatures(path: &str) -> Result<String, String> {
         for (name, text) in files {
             let scan = fmt::scan(text).map_err(|errs| {
                 let names = std::slice::from_ref(name);
-                errs.into_iter().map(|e| e.with_file(names).render()).collect::<Vec<_>>().join("\n")
+                errs.into_iter()
+                    .map(|e| e.with_file(names).render())
+                    .collect::<Vec<_>>()
+                    .join("\n")
             })?;
             file_doc(&scan, &mut out);
         }
@@ -80,18 +87,33 @@ fn collect(
         .collect();
     entries.sort();
     let mut files = Vec::new();
-    for p in entries.iter().filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "aye")) {
+    for p in entries
+        .iter()
+        .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "aye"))
+    {
         let file = p.to_string_lossy().into_owned();
-        let text = std::fs::read_to_string(p).map_err(|e| format!("aye: cannot read {file}: {e}"))?;
+        let text =
+            std::fs::read_to_string(p).map_err(|e| format!("aye: cannot read {file}: {e}"))?;
         files.push((file, text));
     }
     if !files.is_empty() {
-        out.push((if prefix.is_empty() { root.to_string() } else { prefix.to_string() }, files));
+        out.push((
+            if prefix.is_empty() {
+                root.to_string()
+            } else {
+                prefix.to_string()
+            },
+            files,
+        ));
     }
     for p in entries.iter().filter(|p| p.is_dir()) {
         let sub = p.file_name().unwrap().to_string_lossy().into_owned();
         if !sub.starts_with('.') {
-            let prefix = if prefix.is_empty() { sub } else { format!("{prefix}.{sub}") };
+            let prefix = if prefix.is_empty() {
+                sub
+            } else {
+                format!("{prefix}.{sub}")
+            };
             collect(p, root, &prefix, out)?;
         }
     }
@@ -112,7 +134,10 @@ fn file_doc(scan: &Scan, out: &mut String) {
     let comment_only = |l: usize| !has_code[l] && scan.comments[l - 1].is_some();
     // The leading comment block, if a blank line ends it.
     let mut l = 1;
-    while l <= scan.comments.len() && comment_only(l) && !scan.comments[l - 1].as_ref().unwrap().starts_with("///") {
+    while l <= scan.comments.len()
+        && comment_only(l)
+        && !scan.comments[l - 1].as_ref().unwrap().starts_with("///")
+    {
         l += 1;
     }
     let blank_after = l > scan.comments.len() || (!has_code[l] && scan.comments[l - 1].is_none());
@@ -125,7 +150,8 @@ fn file_doc(scan: &Scan, out: &mut String) {
     let doc = |line: u32, indent: &str, out: &mut String| {
         let mut l = line as usize - 1;
         let mut lines = Vec::new();
-        while l >= 1 && comment_only(l) && scan.comments[l - 1].as_ref().unwrap().starts_with("///") {
+        while l >= 1 && comment_only(l) && scan.comments[l - 1].as_ref().unwrap().starts_with("///")
+        {
             lines.push(scan.comments[l - 1].as_ref().unwrap());
             l -= 1;
         }
@@ -143,13 +169,19 @@ fn file_doc(scan: &Scan, out: &mut String) {
         }
         out.push('\n');
         doc(d[0].line, "", out);
-        let kw = d.iter().skip(1).find(|it| it.tok != Tok::Kw(Kw::Extern)).map(|it| &it.tok);
+        let kw = d
+            .iter()
+            .skip(1)
+            .find(|it| it.tok != Tok::Kw(Kw::Extern))
+            .map(|it| &it.tok);
         let body = body(d);
         match (kw, body) {
             (Some(Tok::Kw(Kw::Fn)), Some(b)) => {
                 out.push_str(&flat(&d[..b.0]));
                 // A type function: `return struct { ... }`.
-                let inner: Vec<usize> = (b.0 + 1..b.1).filter(|&i| d[i].role != Role::Semi).collect();
+                let inner: Vec<usize> = (b.0 + 1..b.1)
+                    .filter(|&i| d[i].role != Role::Semi)
+                    .collect();
                 if let [r, s, o, ..] = inner[..]
                     && d[r].tok == Tok::Kw(Kw::Return)
                     && d[s].tok == Tok::Kw(Kw::Struct)
@@ -162,7 +194,9 @@ fn file_doc(scan: &Scan, out: &mut String) {
                 }
                 out.push('\n');
             }
-            (Some(Tok::Kw(Kw::Struct | Kw::Enum | Kw::Interface)), Some(b)) if d[0].line != d[d.len() - 1].line => {
+            (Some(Tok::Kw(Kw::Struct | Kw::Enum | Kw::Interface)), Some(b))
+                if d[0].line != d[d.len() - 1].line =>
+            {
                 out.push_str(&flat(&d[..b.0]));
                 out.push_str(" {\n");
                 let all_methods = kw == Some(&Tok::Kw(Kw::Interface));
@@ -280,7 +314,8 @@ fn flat(items: &[Item]) -> String {
     let keep = (0..items.len())
         .filter(|&i| {
             let next = items[i + 1..].iter().find(|it| it.role != Role::Semi);
-            !(items[i].role == Role::Comma && next.is_some_and(|n| matches!(n.role, Role::Close(_))))
+            !(items[i].role == Role::Comma
+                && next.is_some_and(|n| matches!(n.role, Role::Close(_))))
         })
         .map(|i| &items[i]);
     fmt::join(keep)
@@ -291,9 +326,20 @@ mod tests {
     #[test]
     fn std_text_signatures() {
         let out = super::signatures("std.text").unwrap();
-        assert!(out.starts_with("// module std.text\n// std.text: byte strings"), "{out}");
-        assert!(out.contains("\n/// Do `a` and `b` have the same bytes?\npub fn eql(a: []u8, b: []u8) bool\n"), "{out}");
-        assert!(out.contains("pub struct Split {\n    rest: []u8\n"), "{out}");
+        assert!(
+            out.starts_with("// module std.text\n// std.text: byte strings"),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "\n/// Do `a` and `b` have the same bytes?\npub fn eql(a: []u8, b: []u8) bool\n"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains("pub struct Split {\n    rest: []u8\n"),
+            "{out}"
+        );
         assert!(out.contains("    /// The next piece; null after the last one.\n    pub fn next(self: *mut Self) ?[]u8\n}"), "{out}");
         assert!(!out.contains("fn lower("), "{out}");
     }
@@ -301,7 +347,13 @@ mod tests {
     #[test]
     fn type_function_members() {
         let out = super::signatures("std.list").unwrap();
-        assert!(out.contains("pub fn List(comptime T: type) type {\n    return struct {\n"), "{out}");
-        assert!(out.contains("        pub fn append(self: *mut Self, value: T) AllocError!void\n"), "{out}");
+        assert!(
+            out.contains("pub fn List(comptime T: type) type {\n    return struct {\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("        pub fn append(self: *mut Self, value: T) AllocError!void\n"),
+            "{out}"
+        );
     }
 }

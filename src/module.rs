@@ -37,25 +37,93 @@ pub struct SourceFile {
 
 /// std, embedded: (module, file name, source).
 pub const STD_FILES: &[(&str, &str, &str)] = &[
-    ("std.coro", "std/coro/coro.aye", include_str!("../std/coro/coro.aye")),
-    ("std.diag", "std/diag/diag.aye", include_str!("../std/diag/diag.aye")),
+    (
+        "std.coro",
+        "std/coro/coro.aye",
+        include_str!("../std/coro/coro.aye"),
+    ),
+    (
+        "std.diag",
+        "std/diag/diag.aye",
+        include_str!("../std/diag/diag.aye"),
+    ),
     ("std.fs", "std/fs/fs.aye", include_str!("../std/fs/fs.aye")),
-    ("std.heap", "std/heap/heap.aye", include_str!("../std/heap/heap.aye")),
-    ("std.http", "std/http/http.aye", include_str!("../std/http/http.aye")),
-    ("std.list", "std/list/list.aye", include_str!("../std/list/list.aye")),
-    ("std.log", "std/log/log.aye", include_str!("../std/log/log.aye")),
-    ("std.map", "std/map/map.aye", include_str!("../std/map/map.aye")),
-    ("std.math", "std/math/math.aye", include_str!("../std/math/math.aye")),
-    ("std.mem", "std/mem/mem.aye", include_str!("../std/mem/mem.aye")),
-    ("std.net", "std/net/net.aye", include_str!("../std/net/net.aye")),
+    (
+        "std.heap",
+        "std/heap/heap.aye",
+        include_str!("../std/heap/heap.aye"),
+    ),
+    (
+        "std.http",
+        "std/http/http.aye",
+        include_str!("../std/http/http.aye"),
+    ),
+    (
+        "std.list",
+        "std/list/list.aye",
+        include_str!("../std/list/list.aye"),
+    ),
+    (
+        "std.log",
+        "std/log/log.aye",
+        include_str!("../std/log/log.aye"),
+    ),
+    (
+        "std.map",
+        "std/map/map.aye",
+        include_str!("../std/map/map.aye"),
+    ),
+    (
+        "std.math",
+        "std/math/math.aye",
+        include_str!("../std/math/math.aye"),
+    ),
+    (
+        "std.mem",
+        "std/mem/mem.aye",
+        include_str!("../std/mem/mem.aye"),
+    ),
+    (
+        "std.net",
+        "std/net/net.aye",
+        include_str!("../std/net/net.aye"),
+    ),
     ("std.os", "std/os/os.aye", include_str!("../std/os/os.aye")),
-    ("std.pool", "std/pool/pool.aye", include_str!("../std/pool/pool.aye")),
-    ("std.sort", "std/sort/sort.aye", include_str!("../std/sort/sort.aye")),
-    ("std.sync", "std/sync/sync.aye", include_str!("../std/sync/sync.aye")),
-    ("std.testing", "std/testing/testing.aye", include_str!("../std/testing/testing.aye")),
-    ("std.text", "std/text/text.aye", include_str!("../std/text/text.aye")),
-    ("std.thread", "std/thread/thread.aye", include_str!("../std/thread/thread.aye")),
-    ("std.time", "std/time/time.aye", include_str!("../std/time/time.aye")),
+    (
+        "std.pool",
+        "std/pool/pool.aye",
+        include_str!("../std/pool/pool.aye"),
+    ),
+    (
+        "std.sort",
+        "std/sort/sort.aye",
+        include_str!("../std/sort/sort.aye"),
+    ),
+    (
+        "std.sync",
+        "std/sync/sync.aye",
+        include_str!("../std/sync/sync.aye"),
+    ),
+    (
+        "std.testing",
+        "std/testing/testing.aye",
+        include_str!("../std/testing/testing.aye"),
+    ),
+    (
+        "std.text",
+        "std/text/text.aye",
+        include_str!("../std/text/text.aye"),
+    ),
+    (
+        "std.thread",
+        "std/thread/thread.aye",
+        include_str!("../std/thread/thread.aye"),
+    ),
+    (
+        "std.time",
+        "std/time/time.aye",
+        include_str!("../std/time/time.aye"),
+    ),
 ];
 
 /// Items of std that the compiler provides (their declarations would need
@@ -88,7 +156,11 @@ const BUILTIN_METHODS: &[(&str, &str)] = &[
 /// The canonical name of the item `name` of the module `module` (`""` is
 /// the root module).
 pub fn canonical(module: &str, name: &str) -> String {
-    if module.is_empty() { name.to_string() } else { format!("{}::{name}", module.replace('.', "::")) }
+    if module.is_empty() {
+        name.to_string()
+    } else {
+        format!("{}::{name}", module.replace('.', "::"))
+    }
 }
 
 /// The pub functions and methods of std as (module, name), the name as the
@@ -97,36 +169,54 @@ pub fn canonical(module: &str, name: &str) -> String {
 pub fn std_api() -> Vec<(String, String)> {
     let mut out = Vec::new();
     for (module, _, src) in STD_FILES {
-        let file = parser::parse(lexer::lex(src).unwrap()).unwrap_or_else(|e| panic!("{module}: {e:?}"));
+        let file =
+            parser::parse(lexer::lex(src).unwrap()).unwrap_or_else(|e| panic!("{module}: {e:?}"));
         let mut push = |name: String| out.push((module.to_string(), name));
         for item in &file.items {
             match item {
                 AstItem::Fn(f) if f.is_pub => {
                     push(format!("{module}.{}", f.name));
                     // A type function's methods: `List.append`.
-                    if let Some(ast::Stmt { kind: StmtKind::Return(Some(e)), .. }) = f.body.as_ref().and_then(|b| b.stmts.first())
+                    if let Some(ast::Stmt {
+                        kind: StmtKind::Return(Some(e)),
+                        ..
+                    }) = f.body.as_ref().and_then(|b| b.stmts.first())
                         && let ExprKind::StructType(s) = &e.kind
                     {
-                        s.methods.iter().filter(|m| m.is_pub).for_each(|m| push(format!("{}.{}", f.name, m.name)));
+                        s.methods
+                            .iter()
+                            .filter(|m| m.is_pub)
+                            .for_each(|m| push(format!("{}.{}", f.name, m.name)));
                     }
                 }
-                AstItem::Struct(s) if s.is_pub => {
-                    s.methods.iter().filter(|m| m.is_pub).for_each(|m| push(format!("{}.{}", s.name, m.name)))
-                }
+                AstItem::Struct(s) if s.is_pub => s
+                    .methods
+                    .iter()
+                    .filter(|m| m.is_pub)
+                    .for_each(|m| push(format!("{}.{}", s.name, m.name))),
                 _ => {}
             }
         }
     }
-    let builtins = BUILTINS.iter().filter(|(_, n)| n.starts_with(char::is_lowercase));
+    let builtins = BUILTINS
+        .iter()
+        .filter(|(_, n)| n.starts_with(char::is_lowercase));
     out.extend(builtins.map(|(m, n)| (m.to_string(), format!("{m}.{n}"))));
-    out.extend(BUILTIN_METHODS.iter().map(|(m, n)| (m.to_string(), n.to_string())));
+    out.extend(
+        BUILTIN_METHODS
+            .iter()
+            .map(|(m, n)| (m.to_string(), n.to_string())),
+    );
     out
 }
 
 /// The std module of the builtin `name` when a module uses it without an
 /// import (`Allocator` is `std.mem.Allocator`).
 fn std_home(name: &str) -> Option<&'static str> {
-    BUILTINS.iter().find(|(_, n)| *n == name && n.starts_with(char::is_uppercase)).map(|(m, _)| *m)
+    BUILTINS
+        .iter()
+        .find(|(_, n)| *n == name && n.starts_with(char::is_uppercase))
+        .map(|(m, _)| *m)
 }
 
 /// What `mod.Name { ... }` is: a struct literal when `Name` is a struct or
@@ -206,14 +296,26 @@ fn expr_path(e: &ast::Expr) -> Option<Vec<(String, Span)>> {
 }
 
 fn join(segs: &[(String, Span)]) -> String {
-    segs.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>().join(".")
+    segs.iter()
+        .map(|(s, _)| s.as_str())
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 /// `segs[..n]` as an identifier with field accesses after it.
 fn rebuild(first: String, span: Span, rest: &[(String, Span)]) -> ast::Expr {
-    let mut e = ast::Expr { kind: ExprKind::Ident(first), span };
+    let mut e = ast::Expr {
+        kind: ExprKind::Ident(first),
+        span,
+    };
     for (name, sp) in rest {
-        e = ast::Expr { kind: ExprKind::Field { base: Box::new(e), name: name.clone() }, span: *sp };
+        e = ast::Expr {
+            kind: ExprKind::Field {
+                base: Box::new(e),
+                name: name.clone(),
+            },
+            span: *sp,
+        };
     }
     e
 }
@@ -246,7 +348,11 @@ struct Loader<'a> {
 /// Load the root module (`root`, in the directory `base`) and every module
 /// it uses, and resolve names. Returns every file of the program, indexed
 /// by `Span::file`, and the program's AST or the errors.
-pub fn load(root: Vec<SourceFile>, base: &Path, doc_tests: bool) -> (Vec<SourceFile>, Result<ast::File, Vec<Error>>) {
+pub fn load(
+    root: Vec<SourceFile>,
+    base: &Path,
+    doc_tests: bool,
+) -> (Vec<SourceFile>, Result<ast::File, Vec<Error>>) {
     let mut l = Loader {
         base,
         doc_tests,
@@ -297,7 +403,10 @@ fn doc_examples(text: &str) -> Vec<DocExample> {
     let mut unnamed = 0;
     for (i, line) in text.lines().enumerate() {
         let n = i as u32 + 1;
-        let doc = line.trim_start().strip_prefix("///").filter(|r| !r.starts_with('/'));
+        let doc = line
+            .trim_start()
+            .strip_prefix("///")
+            .filter(|r| !r.starts_with('/'));
         let Some(rest) = doc else {
             open = None;
             if unnamed > 0 && !line.trim().is_empty() {
@@ -319,7 +428,11 @@ fn doc_examples(text: &str) -> Vec<DocExample> {
             }
             Some(e) => e.lines.push((n, indent, code.to_string())),
             None if code.trim() == "```aye" => {
-                open = Some(DocExample { name: format!("doc: line {n}"), fence: n, lines: Vec::new() });
+                open = Some(DocExample {
+                    name: format!("doc: line {n}"),
+                    fence: n,
+                    lines: Vec::new(),
+                });
             }
             None => {}
         }
@@ -329,31 +442,66 @@ fn doc_examples(text: &str) -> Vec<DocExample> {
 
 /// The name declared on `line` (`pub fn square(...)` is `square`).
 fn decl_name(line: &str) -> String {
-    let mut words = line.split_whitespace().skip_while(|w| matches!(*w, "pub" | "extern"));
+    let mut words = line
+        .split_whitespace()
+        .skip_while(|w| matches!(*w, "pub" | "extern"));
     let kw = words.next().unwrap_or("");
-    let rest = if matches!(kw, "fn" | "struct" | "enum" | "interface" | "error" | "let" | "var" | "union") { words.next().unwrap_or("") } else { kw };
-    let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
-    if name.is_empty() { "example".to_string() } else { name }
+    let rest = if matches!(
+        kw,
+        "fn" | "struct" | "enum" | "interface" | "error" | "let" | "var" | "union"
+    ) {
+        words.next().unwrap_or("")
+    } else {
+        kw
+    };
+    let name: String = rest
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    if name.is_empty() {
+        "example".to_string()
+    } else {
+        name
+    }
 }
 
 /// `toks` (the tokens of `text`) followed by a `test` block for each
 /// example of the doc comments of `text`. The example's tokens keep their
 /// place in the comment; the rest of the `test` is at the opening fence.
-fn with_doc_tests(text: &str, mut toks: Vec<lexer::Token>) -> std::result::Result<Vec<lexer::Token>, Vec<Error>> {
-    let Some(eof) = toks.pop() else { return Ok(toks) };
+fn with_doc_tests(
+    text: &str,
+    mut toks: Vec<lexer::Token>,
+) -> std::result::Result<Vec<lexer::Token>, Vec<Error>> {
+    let Some(eof) = toks.pop() else {
+        return Ok(toks);
+    };
     for ex in doc_examples(text) {
         let code: Vec<&str> = ex.lines.iter().map(|(_, _, c)| c.as_str()).collect();
         let src = format!("test \"{}\" {{\n{}\n}}\n", ex.name, code.join("\n"));
         let place = |s: &mut Span| match ex.lines.get((s.line as usize).wrapping_sub(2)) {
-            Some(&(line, indent, _)) => *s = Span { line, col: s.col + indent, file: s.file },
-            None => *s = Span { line: ex.fence, col: 1, file: s.file },
+            Some(&(line, indent, _)) => {
+                *s = Span {
+                    line,
+                    col: s.col + indent,
+                    file: s.file,
+                }
+            }
+            None => {
+                *s = Span {
+                    line: ex.fence,
+                    col: 1,
+                    file: s.file,
+                }
+            }
         };
         let mut more = lexer::lex(&src).map_err(|errs| {
-            errs.into_iter().map(|mut e| {
-                place(&mut e.span);
-                e.fix = None;
-                e
-            }).collect::<Vec<_>>()
+            errs.into_iter()
+                .map(|mut e| {
+                    place(&mut e.span);
+                    e.fix = None;
+                    e
+                })
+                .collect::<Vec<_>>()
         })?;
         more.pop();
         for t in &mut more {
@@ -376,14 +524,26 @@ impl Loader<'_> {
     /// Parse the files of a new module and register its items.
     fn add_module(&mut self, path: String, files: Vec<SourceFile>) -> usize {
         let m = self.modules.len();
-        let mut module =
-            Module { path: path.clone(), files: Vec::new(), items: HashMap::new(), cimports: Vec::new(), links: Vec::new(), broken: false };
+        let mut module = Module {
+            path: path.clone(),
+            files: Vec::new(),
+            items: HashMap::new(),
+            cimports: Vec::new(),
+            links: Vec::new(),
+            broken: false,
+        };
         for f in files {
             let id = self.files.len();
             let set = |s: &mut Span| s.file = id as u16;
             let doc_tests = self.doc_tests && !f.std;
             let parsed = lexer::lex(&f.text)
-                .and_then(|toks| if doc_tests { with_doc_tests(&f.text, toks) } else { Ok(toks) })
+                .and_then(|toks| {
+                    if doc_tests {
+                        with_doc_tests(&f.text, toks)
+                    } else {
+                        Ok(toks)
+                    }
+                })
                 .and_then(|mut toks| {
                     for t in &mut toks {
                         set(&mut t.span);
@@ -421,7 +581,10 @@ impl Loader<'_> {
                             }
                             AstItem::Test(_) => continue,
                         };
-                        module.items.entry(name.clone()).or_insert(Decl { is_pub, kind, span });
+                        module
+                            .items
+                            .entry(name.clone())
+                            .or_insert(Decl { is_pub, kind, span });
                     }
                     Some(ast)
                 }
@@ -455,7 +618,11 @@ impl Loader<'_> {
                     STD_FILES
                         .iter()
                         .filter(|(m, ..)| *m == path)
-                        .map(|(_, name, text)| SourceFile { name: name.to_string(), text: text.to_string(), std: true })
+                        .map(|(_, name, text)| SourceFile {
+                            name: name.to_string(),
+                            text: text.to_string(),
+                            std: true,
+                        })
                         .collect(),
                 )
             }
@@ -472,8 +639,16 @@ impl Loader<'_> {
                     for p in paths {
                         let name = p.to_string_lossy().into_owned();
                         match std::fs::read_to_string(&p) {
-                            Ok(text) => files.push(SourceFile { name, text, std: false }),
-                            Err(e) => self.report(Error::new(E0081, span, format!("cannot read {name}: {e}"))),
+                            Ok(text) => files.push(SourceFile {
+                                name,
+                                text,
+                                std: false,
+                            }),
+                            Err(e) => self.report(Error::new(
+                                E0081,
+                                span,
+                                format!("cannot read {name}: {e}"),
+                            )),
                         }
                     }
                     Some(files)
@@ -496,7 +671,10 @@ impl Loader<'_> {
         if let Some(d) = module.items.get(name) {
             return Some((canonical(&module.path, name), d.kind, d.is_pub));
         }
-        BUILTINS.iter().find(|(p, n)| *p == module.path && *n == name).map(|_| (canonical(&module.path, name), Kind::Other, true))
+        BUILTINS
+            .iter()
+            .find(|(p, n)| *p == module.path && *n == name)
+            .map(|_| (canonical(&module.path, name), Kind::Other, true))
     }
 
     /// The current module uses module `m` (first at `span`).
@@ -511,11 +689,16 @@ impl Loader<'_> {
         let cimports = self.cimports(m);
         for i in 0..self.modules[m].files.len() {
             let f = self.modules[m].files[i];
-            let Some(mut ast) = self.asts[f].take() else { continue };
+            let Some(mut ast) = self.asts[f].take() else {
+                continue;
+            };
             self.cur = m;
             self.file = f;
             // A `@cimport` binds its name in every file of the module.
-            self.imports = cimports.iter().map(|(n, b, sp)| (n.clone(), (b.clone(), *sp))).collect();
+            self.imports = cimports
+                .iter()
+                .map(|(n, b, sp)| (n.clone(), (b.clone(), *sp)))
+                .collect();
             self.last_import = ast.imports.last().map(|i| i.span);
             for imp in &ast.imports {
                 self.import(imp);
@@ -539,17 +722,33 @@ impl Loader<'_> {
         let mut out: Vec<(String, Binding, Span)> = Vec::new();
         for (d, file) in decls {
             if let Some((_, _, prev)) = out.iter().find(|(n, ..)| *n == d.name) {
-                let msg = format!("`{}` is declared more than once (first at {})", d.name, self.place(*prev, d.span));
+                let msg = format!(
+                    "`{}` is declared more than once (first at {})",
+                    d.name,
+                    self.place(*prev, d.span)
+                );
                 self.report(Error::new(E0015, d.span, msg));
                 continue;
             }
             if let Some(prev) = self.modules[m].items.get(&d.name) {
-                let msg = format!("the `@cimport` named `{}` clashes with the declaration at {} (rename one)", d.name, self.place(prev.span, d.span));
+                let msg = format!(
+                    "the `@cimport` named `{}` clashes with the declaration at {} (rename one)",
+                    d.name,
+                    self.place(prev.span, d.span)
+                );
                 self.report(Error::new(E0015, d.span, msg));
                 continue;
             }
-            let dir = Path::new(&self.files[file].name).parent().unwrap_or(Path::new("")).to_path_buf();
-            let req = cimport::Request { header: d.header.clone(), flags: d.flags.clone(), dir, links: links.clone() };
+            let dir = Path::new(&self.files[file].name)
+                .parent()
+                .unwrap_or(Path::new(""))
+                .to_path_buf();
+            let req = cimport::Request {
+                header: d.header.clone(),
+                flags: d.flags.clone(),
+                dir,
+                links: links.clone(),
+            };
             let key = format!("{req:?}");
             let q = match self.cimported.get(&key) {
                 Some(&q) => q,
@@ -557,7 +756,11 @@ impl Loader<'_> {
                     let q = match cimport::import(&req) {
                         Ok(imp) => {
                             let path = self.cimport_path(&d.name);
-                            let file = SourceFile { name: imp.path.to_string_lossy().into_owned(), text: imp.source, std: false };
+                            let file = SourceFile {
+                                name: imp.path.to_string_lossy().into_owned(),
+                                text: imp.source,
+                                std: false,
+                            };
                             let q = self.add_module(path.clone(), vec![file]);
                             // Not a module that `import` can find.
                             self.by_path.remove(&path);
@@ -593,7 +796,10 @@ impl Loader<'_> {
     fn cimport_path(&self, name: &str) -> String {
         let mut path = name.to_string();
         let mut n = 2;
-        while self.modules.iter().any(|m| m.path == path) || self.by_path.contains_key(&path) || self.base.join(&path).is_dir() {
+        while self.modules.iter().any(|m| m.path == path)
+            || self.by_path.contains_key(&path)
+            || self.base.join(&path).is_dir()
+        {
             path = format!("{name}{n}");
             n += 1;
         }
@@ -605,7 +811,14 @@ impl Loader<'_> {
         let (name, name_span) = imp.path.last().unwrap().clone();
         let b = self.import_target(&imp.path);
         if let Some((_, prev)) = self.imports.get(&name) {
-            let e = Error::new(E0015, name_span, format!("`{name}` is imported more than once (first at {}:{})", prev.line, prev.col));
+            let e = Error::new(
+                E0015,
+                name_span,
+                format!(
+                    "`{name}` is imported more than once (first at {}:{})",
+                    prev.line, prev.col
+                ),
+            );
             self.report(e);
             return;
         }
@@ -628,7 +841,11 @@ impl Loader<'_> {
                 return Binding::Bad;
             }
             let dir = self.base.join(first);
-            let msg = format!("cannot find module `{first}` (no directory `{}`{})", dir.display(), self.sibling_hint(first));
+            let msg = format!(
+                "cannot find module `{first}` (no directory `{}`{})",
+                dir.display(),
+                self.sibling_hint(first)
+            );
             self.report(Error::new(E0081, *span, msg));
             return Binding::Bad;
         };
@@ -639,7 +856,11 @@ impl Loader<'_> {
             if let Some((canon, kind, is_pub)) = self.item_of(q, seg) {
                 let shown = join(&path[..=i]);
                 if i + 1 < path.len() {
-                    self.report(Error::new(E0081, path[i + 1].1, format!("`{shown}` is not a module")));
+                    self.report(Error::new(
+                        E0081,
+                        path[i + 1].1,
+                        format!("`{shown}` is not a module"),
+                    ));
                     return Binding::Bad;
                 }
                 if !is_pub {
@@ -668,7 +889,11 @@ impl Loader<'_> {
     /// imported by the root, directly or not, so it would be a cycle.
     fn root_import(&self, first: &str) -> Option<String> {
         let files = &self.modules[0].files;
-        let stem = |f: &usize| Path::new(&self.files[*f].name).file_stem().map(|s| s.to_string_lossy().into_owned());
+        let stem = |f: &usize| {
+            Path::new(&self.files[*f].name)
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+        };
         let (shown, dir) = if files.len() == 1 && stem(&files[0]).as_deref() == Some(first) {
             (self.files[files[0]].name.clone(), self.base.join("shared"))
         } else {
@@ -677,7 +902,13 @@ impl Loader<'_> {
                 return None;
             }
             // A file of a directory with other `.aye` files is not that directory.
-            let aye_files = std::fs::read_dir(&base).ok()?.filter(|e| e.as_ref().is_ok_and(|e| e.path().extension().is_some_and(|x| x == "aye"))).count();
+            let aye_files = std::fs::read_dir(&base)
+                .ok()?
+                .filter(|e| {
+                    e.as_ref()
+                        .is_ok_and(|e| e.path().extension().is_some_and(|x| x == "aye"))
+                })
+                .count();
             if aye_files != files.len() {
                 return None;
             }
@@ -695,12 +926,21 @@ impl Loader<'_> {
     fn sibling_hint(&self, first: &str) -> String {
         for top in self.base.ancestors().skip(1) {
             // `""` is the working directory.
-            let shown = if top.as_os_str().is_empty() { Path::new(".") } else { top };
+            let shown = if top.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                top
+            };
             if !shown.join(first).is_dir() {
                 continue;
             }
-            let Ok(rel) = self.base.strip_prefix(top) else { break };
-            let module: Vec<String> = rel.iter().map(|c| c.to_string_lossy().into_owned()).collect();
+            let Ok(rel) = self.base.strip_prefix(top) else {
+                break;
+            };
+            let module: Vec<String> = rel
+                .iter()
+                .map(|c| c.to_string_lossy().into_owned())
+                .collect();
             return format!(
                 "; imports are found from the directory given to `aye`, and `{}` exists: give `{}` instead, with `--module {}` for `aye test`",
                 top.join(first).display(),
@@ -712,7 +952,11 @@ impl Loader<'_> {
     }
 
     fn not_pub(&self, name: &str, m: usize, span: Span) -> Error {
-        Error::new(E0082, span, format!("`{name}` is not `pub` in module `{}`", self.modules[m].path))
+        Error::new(
+            E0082,
+            span,
+            format!("`{name}` is not `pub` in module `{}`", self.modules[m].path),
+        )
     }
 
     /// A name written without a path.
@@ -722,7 +966,10 @@ impl Loader<'_> {
         }
         let module = &self.modules[self.cur];
         if module.items.contains_key(name) {
-            return Ok(Res::Item(canonical(&module.path, name), module.items[name].kind));
+            return Ok(Res::Item(
+                canonical(&module.path, name),
+                module.items[name].kind,
+            ));
         }
         if let Some((b, _)) = self.imports.get(name) {
             return match b {
@@ -733,10 +980,28 @@ impl Loader<'_> {
         }
         if let Some(home) = std_home(name) {
             let import = format!("import {home}.{name}");
-            let e = Error::new(E0084, span, format!("`{name}` is not declared: it is `{home}.{name}` (add `{import}`)"));
+            let e = Error::new(
+                E0084,
+                span,
+                format!("`{name}` is not declared: it is `{home}.{name}` (add `{import}`)"),
+            );
             let (at, text) = match self.last_import {
-                Some(s) => (Span { line: s.line + 1, col: 1, file: s.file }, format!("{import}\n")),
-                None => (Span { line: 1, col: 1, file: self.file as u16 }, format!("{import}\n\n")),
+                Some(s) => (
+                    Span {
+                        line: s.line + 1,
+                        col: 1,
+                        file: s.file,
+                    },
+                    format!("{import}\n"),
+                ),
+                None => (
+                    Span {
+                        line: 1,
+                        col: 1,
+                        file: self.file as u16,
+                    },
+                    format!("{import}\n\n"),
+                ),
             };
             return Err(e.fix(format!("add `{import}`"), at, at, text));
         }
@@ -748,7 +1013,9 @@ impl Loader<'_> {
     /// (the rest are fields, variants or methods).
     fn resolve_path(&mut self, segs: &[(String, Span)]) -> Result<(Res, usize), Error> {
         let r = self.resolve_name(&segs[0].0, segs[0].1)?;
-        let Res::Module(mut q) = r else { return Ok((r, 1)) };
+        let Res::Module(mut q) = r else {
+            return Ok((r, 1));
+        };
         let mut i = 1;
         while i < segs.len() {
             if self.modules[q].broken {
@@ -765,7 +1032,13 @@ impl Loader<'_> {
             let sub = format!("{}.{seg}", self.modules[q].path);
             match self.module(&sub, *sp) {
                 Some(s) => q = s,
-                None => return Err(Error::new(E0081, *sp, format!("module `{}` has no `{seg}`", self.modules[q].path))),
+                None => {
+                    return Err(Error::new(
+                        E0081,
+                        *sp,
+                        format!("module `{}` has no `{seg}`", self.modules[q].path),
+                    ));
+                }
             }
             i += 1;
         }
@@ -785,10 +1058,17 @@ impl Loader<'_> {
         };
         let e = match r {
             (Res::Item(c, _), n) if n == segs.len() => return Some(c),
-            (Res::Item(..), n) => {
-                Error::new(E0085, span, format!("`{}` is not a module, so `{name}` is not a type", join(&segs[..n])))
+            (Res::Item(..), n) => Error::new(
+                E0085,
+                span,
+                format!(
+                    "`{}` is not a module, so `{name}` is not a type",
+                    join(&segs[..n])
+                ),
+            ),
+            (Res::Module(_), _) => {
+                Error::new(E0085, span, format!("`{name}` is a module, not a type"))
             }
-            (Res::Module(_), _) => Error::new(E0085, span, format!("`{name}` is a module, not a type")),
             (Res::Unresolved, _) if segs.len() > 1 => self.not_imported(&segs[0].0, span),
             (Res::Unresolved, _) => return None,
         };
@@ -809,7 +1089,11 @@ impl Loader<'_> {
         } else {
             format!(" (add `import {name}`)")
         };
-        Error::new(E0081, span, format!("`{name}` is not an imported module{hint}"))
+        Error::new(
+            E0081,
+            span,
+            format!("`{name}` is not an imported module{hint}"),
+        )
     }
 
     /// A new name: a parameter, local, capture or pattern binding. It
@@ -830,7 +1114,10 @@ impl Loader<'_> {
             m => self.modules[m].items.get(name).map(|d| d.span),
         };
         if let Some(prev) = prev {
-            let msg = format!("`{name}` is already declared at {} (shadowing is not allowed)", self.place(prev, span));
+            let msg = format!(
+                "`{name}` is already declared at {} (shadowing is not allowed)",
+                self.place(prev, span)
+            );
             self.report(Error::new(E0016, span, msg));
         }
     }
@@ -974,7 +1261,13 @@ impl Loader<'_> {
                 self.expr(target);
                 self.expr(value);
             }
-            StmtKind::If { cond, capture, then, els, err_capture } => {
+            StmtKind::If {
+                cond,
+                capture,
+                then,
+                els,
+                err_capture,
+            } => {
                 self.expr(cond);
                 for (n, sp) in capture.iter().chain(err_capture.iter()) {
                     self.bind(n, *sp);
@@ -984,21 +1277,36 @@ impl Loader<'_> {
                     self.stmt(e);
                 }
             }
-            StmtKind::While { cond, capture, body } => {
+            StmtKind::While {
+                cond,
+                capture,
+                body,
+            } => {
                 self.expr(cond);
                 if let Some((n, sp)) = capture {
                     self.bind(n, *sp);
                 }
                 self.block(body);
             }
-            StmtKind::ForEach { index, elem, seq, body } => {
+            StmtKind::ForEach {
+                index,
+                elem,
+                seq,
+                body,
+            } => {
                 self.expr(seq);
                 for (n, sp) in index.iter().chain([&*elem]) {
                     self.bind(n, *sp);
                 }
                 self.block(body);
             }
-            StmtKind::For { var, var_span, lo, hi, body } => {
+            StmtKind::For {
+                var,
+                var_span,
+                lo,
+                hi,
+                body,
+            } => {
                 self.expr(lo);
                 self.expr(hi);
                 self.bind(var, *var_span);
@@ -1029,16 +1337,22 @@ impl Loader<'_> {
             | ExprKind::Char(_) => {}
             ExprKind::Ident(n) => match self.resolve_name(n, span) {
                 Ok(Res::Item(c, _)) => *n = c,
-                Ok(Res::Module(_)) => {
-                    self.report(Error::new(E0085, span, format!("`{n}` is a module, not a value (use one of its items: `{n}.name`)")))
-                }
+                Ok(Res::Module(_)) => self.report(Error::new(
+                    E0085,
+                    span,
+                    format!("`{n}` is a module, not a value (use one of its items: `{n}.name`)"),
+                )),
                 Ok(Res::Unresolved) => {}
                 Err(err) => self.report(err),
             },
             ExprKind::Call { name, args } => {
                 match self.resolve_name(name, span) {
                     Ok(Res::Item(c, _)) => *name = c,
-                    Ok(Res::Module(_)) => self.report(Error::new(E0085, span, format!("`{name}` is a module, not a function"))),
+                    Ok(Res::Module(_)) => self.report(Error::new(
+                        E0085,
+                        span,
+                        format!("`{name}` is a module, not a function"),
+                    )),
                     Ok(Res::Unresolved) => {}
                     Err(err) => self.report(err),
                 }
@@ -1057,7 +1371,10 @@ impl Loader<'_> {
                 segs.push((name.clone(), span));
                 match self.resolve_path(&segs) {
                     Ok((Res::Item(c, _), n)) if n == segs.len() => {
-                        e.kind = ExprKind::Call { name: c, args: std::mem::take(args) };
+                        e.kind = ExprKind::Call {
+                            name: c,
+                            args: std::mem::take(args),
+                        };
                     }
                     Ok((Res::Item(c, _), n)) => {
                         let first = segs[n - 1].1;
@@ -1074,21 +1391,30 @@ impl Loader<'_> {
             ExprKind::Field { .. } => {
                 let segs = expr_path(e).unwrap_or_default();
                 if segs.is_empty() {
-                    let ExprKind::Field { base, .. } = &mut e.kind else { unreachable!() };
+                    let ExprKind::Field { base, .. } = &mut e.kind else {
+                        unreachable!()
+                    };
                     self.expr(base);
                     return;
                 }
                 match self.resolve_path(&segs) {
                     Ok((Res::Item(c, _), n)) => *e = rebuild(c, segs[n - 1].1, &segs[n..]),
                     Ok((Res::Module(_), _)) => {
-                        let msg = format!("`{}` is a module, not a value (use one of its items)", join(&segs));
+                        let msg = format!(
+                            "`{}` is a module, not a value (use one of its items)",
+                            join(&segs)
+                        );
                         self.report(Error::new(E0085, span, msg));
                     }
                     Ok((Res::Unresolved, _)) => {}
                     Err(err) => self.report(err),
                 }
             }
-            ExprKind::VariantLit { enum_name, variant, fields } => {
+            ExprKind::VariantLit {
+                enum_name,
+                variant,
+                fields,
+            } => {
                 for f in fields.iter_mut() {
                     self.expr(&mut f.value);
                 }
@@ -1096,8 +1422,14 @@ impl Loader<'_> {
                 segs.push((variant.clone(), span));
                 match self.resolve_path(&segs) {
                     Ok((Res::Item(c, Kind::Struct), n)) if n == segs.len() => {
-                        let ty = ast::TypeExpr { kind: TypeExprKind::Named(c), span };
-                        e.kind = ExprKind::StructLit { ty, fields: std::mem::take(fields) };
+                        let ty = ast::TypeExpr {
+                            kind: TypeExprKind::Named(c),
+                            span,
+                        };
+                        e.kind = ExprKind::StructLit {
+                            ty,
+                            fields: std::mem::take(fields),
+                        };
                     }
                     Ok((Res::Item(c, _), n)) if n == segs.len() - 1 => *enum_name = c,
                     Ok((Res::Item(..), n)) if n == segs.len() => {
@@ -1105,14 +1437,20 @@ impl Loader<'_> {
                         self.report(Error::new(E0085, span, msg));
                     }
                     Ok((Res::Item(..), n)) => {
-                        let msg = format!("`{}` is not a module, so `{}` is not an enum", join(&segs[..n]), enum_name);
+                        let msg = format!(
+                            "`{}` is not a module, so `{}` is not an enum",
+                            join(&segs[..n]),
+                            enum_name
+                        );
                         self.report(Error::new(E0085, span, msg));
                     }
                     Ok((Res::Module(_), _)) => {
                         let msg = format!("`{}` is a module, not a struct", join(&segs));
                         self.report(Error::new(E0085, span, msg));
                     }
-                    Ok((Res::Unresolved, _)) if segs.len() > 2 => self.report(self.not_imported(&segs[0].0, span)),
+                    Ok((Res::Unresolved, _)) if segs.len() > 2 => {
+                        self.report(self.not_imported(&segs[0].0, span))
+                    }
                     Ok((Res::Unresolved, _)) => {}
                     Err(err) => self.report(err),
                 }
@@ -1124,7 +1462,11 @@ impl Loader<'_> {
                 }
             }
             ExprKind::Builtin { args, .. } => self.args(args),
-            ExprKind::Binary { lhs, rhs, .. } | ExprKind::Index { base: lhs, index: rhs } => {
+            ExprKind::Binary { lhs, rhs, .. }
+            | ExprKind::Index {
+                base: lhs,
+                index: rhs,
+            } => {
                 self.expr(lhs);
                 self.expr(rhs);
             }
@@ -1159,7 +1501,11 @@ impl Loader<'_> {
                     self.arm_body(&mut arm.body);
                 }
             }
-            ExprKind::Catch { expr, capture, body } => {
+            ExprKind::Catch {
+                expr,
+                capture,
+                body,
+            } => {
                 self.expr(expr);
                 if let Some((n, sp)) = capture {
                     self.bind(n, *sp);
@@ -1202,9 +1548,16 @@ impl Loader<'_> {
                 0 => self.visit(t, state, stack),
                 1 => {
                     let i = stack.iter().position(|&x| x == t).unwrap();
-                    let names: Vec<String> =
-                        stack[i..].iter().chain([&t]).map(|&x| format!("`{}`", self.modules[x].path)).collect();
-                    self.report(Error::new(E0083, span, format!("import cycle: {}", names.join(" -> "))));
+                    let names: Vec<String> = stack[i..]
+                        .iter()
+                        .chain([&t])
+                        .map(|&x| format!("`{}`", self.modules[x].path))
+                        .collect();
+                    self.report(Error::new(
+                        E0083,
+                        span,
+                        format!("import cycle: {}", names.join(" -> ")),
+                    ));
                 }
                 _ => {}
             }
@@ -1246,6 +1599,9 @@ impl Loader<'_> {
                 }
             }
         }
-        ast::File { imports: Vec::new(), items }
+        ast::File {
+            imports: Vec::new(),
+            items,
+        }
     }
 }

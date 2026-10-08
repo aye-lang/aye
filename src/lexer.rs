@@ -90,7 +90,11 @@ pub fn is_keyword(word: &str) -> bool {
 
 impl Kw {
     pub fn as_str(self) -> &'static str {
-        KEYWORDS.iter().find(|(_, k)| *k == self).map(|(s, _)| *s).unwrap()
+        KEYWORDS
+            .iter()
+            .find(|(_, k)| *k == self)
+            .map(|(s, _)| *s)
+            .unwrap()
     }
 }
 
@@ -282,10 +286,20 @@ struct Lexer {
 }
 
 pub fn lex(src: &str) -> std::result::Result<Vec<Token>, Vec<Error>> {
-    let mut lx =
-        Lexer { chars: src.chars().collect(), pos: 0, line: 1, col: 1, toks: Vec::new(), errors: Vec::new() };
+    let mut lx = Lexer {
+        chars: src.chars().collect(),
+        pos: 0,
+        line: 1,
+        col: 1,
+        toks: Vec::new(),
+        errors: Vec::new(),
+    };
     lx.run();
-    if lx.errors.is_empty() { Ok(lx.toks) } else { Err(lx.errors) }
+    if lx.errors.is_empty() {
+        Ok(lx.toks)
+    } else {
+        Err(lx.errors)
+    }
 }
 
 impl Lexer {
@@ -367,7 +381,10 @@ impl Lexer {
                 }
                 '@' => {
                     self.bump();
-                    if !self.peek().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') {
+                    if !self
+                        .peek()
+                        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                    {
                         return Err(Error::new(E0001, span, "expected builtin name after `@`"));
                     }
                     let word = self.ident();
@@ -385,7 +402,10 @@ impl Lexer {
                     self.bump();
                     self.bump();
                     let mut text = String::new();
-                    while let Some(c) = self.peek().filter(|&c| c != '\n' && !(c == '\r' && self.peek_at(1) == Some('\n'))) {
+                    while let Some(c) = self
+                        .peek()
+                        .filter(|&c| c != '\n' && !(c == '\r' && self.peek_at(1) == Some('\n')))
+                    {
                         text.push(c);
                         self.bump();
                     }
@@ -408,7 +428,13 @@ impl Lexer {
     /// (the next line starts with `\\`), or the next line starts with `,`,
     /// `)`, `]` or `}`, which a line string cannot be followed by on its line.
     fn continues_line_str(&self) -> bool {
-        if !matches!(self.toks.last(), Some(Token { tok: Tok::LineStr(_), .. })) {
+        if !matches!(
+            self.toks.last(),
+            Some(Token {
+                tok: Tok::LineStr(_),
+                ..
+            })
+        ) {
             return false;
         }
         let mut i = self.pos + 1;
@@ -476,7 +502,11 @@ impl Lexer {
             }
             if matches!(self.peek(), Some('e') | Some('E')) {
                 let sign = matches!(self.peek_at(1), Some('+') | Some('-'));
-                let d = if sign { self.peek_at(2) } else { self.peek_at(1) };
+                let d = if sign {
+                    self.peek_at(2)
+                } else {
+                    self.peek_at(1)
+                };
                 if d.is_some_and(|c| c.is_ascii_digit()) {
                     is_float = true;
                     digits.push('e');
@@ -492,20 +522,31 @@ impl Lexer {
             }
         }
         if self.peek().is_some_and(|c| c.is_ascii_alphanumeric()) {
-            return Err(Error::new(E0003, self.here(), "invalid character in number literal"));
+            return Err(Error::new(
+                E0003,
+                self.here(),
+                "invalid character in number literal",
+            ));
         }
         if digits.is_empty() {
             return Err(Error::new(E0003, span, "number literal has no digits"));
         }
         if is_float {
-            let v: f64 = digits.parse().map_err(|_| Error::new(E0003, span, "invalid float literal"))?;
+            let v: f64 = digits
+                .parse()
+                .map_err(|_| Error::new(E0003, span, "invalid float literal"))?;
             if !v.is_finite() {
-                return Err(Error::new(E0003, span, "float literal is out of range for f64"));
+                return Err(Error::new(
+                    E0003,
+                    span,
+                    "float literal is out of range for f64",
+                ));
             }
             Ok(Tok::Float(v))
         } else {
-            let v = u64::from_str_radix(&digits, radix)
-                .map_err(|_| Error::new(E0003, span, "integer literal is too large (max 2^64-1)"))?;
+            let v = u64::from_str_radix(&digits, radix).map_err(|_| {
+                Error::new(E0003, span, "integer literal is too large (max 2^64-1)")
+            })?;
             Ok(Tok::Int(v))
         }
     }
@@ -516,7 +557,9 @@ impl Lexer {
         match self.bump() {
             None | Some('\n') => Err(Error::new(E0004, start, "unterminated literal")),
             Some('\\') => {
-                let c = self.bump().ok_or_else(|| Error::new(E0004, start, "unterminated literal"))?;
+                let c = self
+                    .bump()
+                    .ok_or_else(|| Error::new(E0004, start, "unterminated literal"))?;
                 Ok(match c {
                     'n' => 10,
                     't' => 9,
@@ -528,16 +571,21 @@ impl Lexer {
                     'x' => {
                         let mut v = 0;
                         for _ in 0..2 {
-                            let d = self
-                                .peek()
-                                .and_then(|c| c.to_digit(16))
-                                .ok_or_else(|| Error::new(E0005, esc_span, "`\\x` escape needs two hex digits"))?;
+                            let d = self.peek().and_then(|c| c.to_digit(16)).ok_or_else(|| {
+                                Error::new(E0005, esc_span, "`\\x` escape needs two hex digits")
+                            })?;
                             self.bump();
                             v = v * 16 + d;
                         }
                         v
                     }
-                    _ => return Err(Error::new(E0005, esc_span, format!("unknown escape sequence `\\{c}`"))),
+                    _ => {
+                        return Err(Error::new(
+                            E0005,
+                            esc_span,
+                            format!("unknown escape sequence `\\{c}`"),
+                        ));
+                    }
                 })
             }
             Some(c) => Ok(c as u32),
@@ -579,7 +627,11 @@ impl Lexer {
         }
         let c = self.escaped(span)?;
         if self.peek() != Some('\'') {
-            return Err(Error::new(E0004, span, "character literal must contain exactly one character"));
+            return Err(Error::new(
+                E0004,
+                span,
+                "character literal must contain exactly one character",
+            ));
         }
         self.bump();
         Ok(c)
@@ -667,12 +719,26 @@ impl Lexer {
             ('/', _) => Tok::Slash,
             ('%', _) => Tok::Percent,
             (';', _) => {
-                return Err(Error::new(E0002, span, "unexpected `;` (Aye ends statements at newlines)"));
+                return Err(Error::new(
+                    E0002,
+                    span,
+                    "unexpected `;` (Aye ends statements at newlines)",
+                ));
             }
             ('\\', _) => {
-                return Err(Error::new(E0001, span, "unexpected character `\\` (a multi-line string's lines start with `\\\\`)"));
+                return Err(Error::new(
+                    E0001,
+                    span,
+                    "unexpected character `\\` (a multi-line string's lines start with `\\\\`)",
+                ));
             }
-            _ => return Err(Error::new(E0001, span, format!("unexpected character `{c}`"))),
+            _ => {
+                return Err(Error::new(
+                    E0001,
+                    span,
+                    format!("unexpected character `{c}`"),
+                ));
+            }
         };
         Ok(tok)
     }

@@ -97,7 +97,11 @@ pub fn format_mapped(src: &str) -> Result<(String, Vec<u32>), Vec<Error>> {
     let before: Vec<Tok> = scan.items.into_iter().map(|i| i.tok).collect();
     let after: Vec<Tok> = scan_tokens(&out)?;
     if before != after {
-        return Err(vec![Error::new(E0001, Span::new(1, 1), "internal error: formatting would change the tokens")]);
+        return Err(vec![Error::new(
+            E0001,
+            Span::new(1, 1),
+            "internal error: formatting would change the tokens",
+        )]);
     }
     Ok((out, map))
 }
@@ -117,13 +121,19 @@ fn balanced(items: &[Item]) -> Result<(), Vec<Error>> {
             _ => continue,
         };
         if open.pop().map(|o| &o.tok) != Some(&want) {
-            let msg = format!("`{}` does not match an open bracket (`aye fmt` needs matching brackets)", it.text);
+            let msg = format!(
+                "`{}` does not match an open bracket (`aye fmt` needs matching brackets)",
+                it.text
+            );
             return Err(vec![Error::new(E0006, Span::new(it.line, it.col), msg)]);
         }
     }
     match open.pop() {
         Some(o) => {
-            let msg = format!("`{}` is never closed (`aye fmt` needs matching brackets)", o.text);
+            let msg = format!(
+                "`{}` is never closed (`aye fmt` needs matching brackets)",
+                o.text
+            );
             Err(vec![Error::new(E0006, Span::new(o.line, o.col), msg)])
         }
         None => Ok(()),
@@ -151,12 +161,22 @@ pub(crate) fn scan(src: &str) -> Result<Scan, Vec<Error>> {
         } else {
             let line = &lines[t.span.line as usize - 1];
             last_end[t.span.line as usize - 1] = t.end.col;
-            line[t.span.col as usize - 1..t.end.col as usize - 1].iter().collect()
+            line[t.span.col as usize - 1..t.end.col as usize - 1]
+                .iter()
+                .collect()
         };
-        items.push(Item { tok: t.tok.clone(), text, line: t.span.line, col: t.span.col, role: Role::Semi });
+        items.push(Item {
+            tok: t.tok.clone(),
+            text,
+            line: t.span.line,
+            col: t.span.col,
+            role: Role::Semi,
+        });
     }
     for (i, line) in lines.iter().enumerate() {
-        let rest: String = line[(last_end[i] as usize - 1).min(line.len())..].iter().collect();
+        let rest: String = line[(last_end[i] as usize - 1).min(line.len())..]
+            .iter()
+            .collect();
         let rest = rest.trim();
         if rest.starts_with("//") {
             comments[i] = Some(rest.to_string());
@@ -208,9 +228,13 @@ fn classify(items: &mut [Item]) {
             }
             // `simd[N]T`: the `[N]` is a type's, as in `[N]T`.
             Tok::Ident(n) if n == "simd" && tok_at(1) == Some(&Tok::LBracket) => Role::Prefix,
-            Tok::Ident(_) | Tok::Builtin(_) | Tok::Int(_) | Tok::Float(_) | Tok::Str(_) | Tok::LineStr(_) | Tok::Char(_) => {
-                Role::Operand
-            }
+            Tok::Ident(_)
+            | Tok::Builtin(_)
+            | Tok::Int(_)
+            | Tok::Float(_)
+            | Tok::Str(_)
+            | Tok::LineStr(_)
+            | Tok::Char(_) => Role::Operand,
             Tok::Kw(_) => Role::Keyword,
             Tok::Comma => Role::Comma,
             Tok::Colon => Role::Colon,
@@ -254,7 +278,11 @@ fn classify(items: &mut [Item]) {
                 Role::Open(kind)
             }
             Tok::LBrace => {
-                let kind = if array_type && !signature { Br::ArrayLit } else { Br::Brace };
+                let kind = if array_type && !signature {
+                    Br::ArrayLit
+                } else {
+                    Br::Brace
+                };
                 signature = false;
                 stack.push((kind, false));
                 Role::Open(kind)
@@ -351,13 +379,21 @@ fn layout(scan: &Scan) -> (String, Vec<u32>) {
         let comment = scan.comments[l].clone();
         let inner = bases.last().map_or(0, |b| b + 1);
         let Some(&first) = idx.first() else {
-            lines.push(comment.map(|c| Line { indent: inner + cont as usize, code: String::new(), comment: Some(c) }));
+            lines.push(comment.map(|c| Line {
+                indent: inner + cont as usize,
+                code: String::new(),
+                comment: Some(c),
+            }));
             continue;
         };
         let continued = cont && !matches!(items[first].role, Role::Close(_));
         let indent = match (items[first].role, line_str) {
             (Role::Close(_), _) => bases.last().copied().unwrap_or(0),
-            (Role::Operand | Role::Comma, Some(n)) if matches!(items[first].tok, Tok::LineStr(_) | Tok::Comma) => n,
+            (Role::Operand | Role::Comma, Some(n))
+                if matches!(items[first].tok, Tok::LineStr(_) | Tok::Comma) =>
+            {
+                n
+            }
             _ => inner + continued as usize,
         };
         for &i in idx {
@@ -377,7 +413,11 @@ fn layout(scan: &Scan) -> (String, Vec<u32>) {
         cont = !next_ends && !matches!(items[last].role, Role::Open(_) | Role::Comma);
         line_str = matches!(items[last].tok, Tok::LineStr(_)).then_some(indent);
         let code = join(idx.iter().map(|&i| &items[i]));
-        lines.push(Some(Line { indent, code, comment }));
+        lines.push(Some(Line {
+            indent,
+            code,
+            comment,
+        }));
     }
     align_comments(&mut lines);
     // Blank lines: none at the start or end, at most one in a row. A
@@ -426,7 +466,10 @@ fn layout(scan: &Scan) -> (String, Vec<u32>) {
 /// in one column, one space after the longest line's code. Padding goes
 /// into `code`, so the single space added later completes it.
 fn align_comments(lines: &mut [Option<Line>]) {
-    let has = |l: &Option<Line>| l.as_ref().is_some_and(|l| !l.code.is_empty() && l.comment.is_some());
+    let has = |l: &Option<Line>| {
+        l.as_ref()
+            .is_some_and(|l| !l.code.is_empty() && l.comment.is_some())
+    };
     let width = |l: &Line| 4 * l.indent + l.code.chars().count();
     let mut i = 0;
     while i < lines.len() {
@@ -455,9 +498,18 @@ mod tests {
 
     #[test]
     fn spaces_and_indentation() {
-        assert_eq!(f("fn  f( a:i64 ,b : []u8 )?*mut T{\nreturn -a+b[1..]\n}\n"), "fn f(a: i64, b: []u8) ?*mut T {\n    return -a + b[1..]\n}\n");
-        assert_eq!(f("let x = [3]u8{ 1,2,3 }\nlet p = Point{x:1}\n"), "let x = [3]u8{1, 2, 3}\nlet p = Point { x: 1 }\n");
-        assert_eq!(f("fn f() !void {\nif x |v| {\n}\nlet y = g() catch |e| 3 | 4\n}\n"), "fn f() !void {\n    if x |v| {\n    }\n    let y = g() catch |e| 3 | 4\n}\n");
+        assert_eq!(
+            f("fn  f( a:i64 ,b : []u8 )?*mut T{\nreturn -a+b[1..]\n}\n"),
+            "fn f(a: i64, b: []u8) ?*mut T {\n    return -a + b[1..]\n}\n"
+        );
+        assert_eq!(
+            f("let x = [3]u8{ 1,2,3 }\nlet p = Point{x:1}\n"),
+            "let x = [3]u8{1, 2, 3}\nlet p = Point { x: 1 }\n"
+        );
+        assert_eq!(
+            f("fn f() !void {\nif x |v| {\n}\nlet y = g() catch |e| 3 | 4\n}\n"),
+            "fn f() !void {\n    if x |v| {\n    }\n    let y = g() catch |e| 3 | 4\n}\n"
+        );
     }
 
     #[test]

@@ -204,7 +204,11 @@ unsafe extern "C" {
 const RTLD_NOW: c_int = 2;
 
 /// The library's file name on this system.
-const LIB_NAME: &str = if cfg!(target_os = "macos") { "libclang.dylib" } else { "libclang.so" };
+const LIB_NAME: &str = if cfg!(target_os = "macos") {
+    "libclang.dylib"
+} else {
+    "libclang.so"
+};
 
 /// libclang, loaded the first time it is needed: the library, or why it
 /// could not be loaded.
@@ -222,7 +226,12 @@ fn candidates() -> Vec<PathBuf> {
     }
     let mut v = Vec::new();
     let tool = |cmd: &str, args: &[&str]| {
-        Command::new(cmd).args(args).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        Command::new(cmd)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
     };
     if cfg!(target_os = "macos") {
         // The selected toolchain's clang: `.../usr/bin/clang` next to `.../usr/lib`.
@@ -231,7 +240,9 @@ fn candidates() -> Vec<PathBuf> {
                 v.push(usr.join("lib").join(LIB_NAME));
             }
         }
-        v.push(PathBuf::from("/Library/Developer/CommandLineTools/usr/lib/libclang.dylib"));
+        v.push(PathBuf::from(
+            "/Library/Developer/CommandLineTools/usr/lib/libclang.dylib",
+        ));
         v.push(PathBuf::from("/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/libclang.dylib"));
         v.push(PathBuf::from("/opt/homebrew/opt/llvm/lib/libclang.dylib"));
         v.push(PathBuf::from("/usr/local/opt/llvm/lib/libclang.dylib"));
@@ -241,7 +252,9 @@ fn candidates() -> Vec<PathBuf> {
         }
         for n in (10..=30).rev() {
             v.push(PathBuf::from(format!("/usr/lib/llvm-{n}/lib/libclang.so")));
-            v.push(PathBuf::from(format!("/usr/lib/llvm-{n}/lib/libclang.so.1")));
+            v.push(PathBuf::from(format!(
+                "/usr/lib/llvm-{n}/lib/libclang.so.1"
+            )));
         }
         v.push(PathBuf::from("/usr/lib64/libclang.so"));
         // The dynamic linker's own search path.
@@ -263,7 +276,13 @@ fn load() -> Result<Lib, String> {
         let handle = unsafe { dlopen(c.as_ptr(), RTLD_NOW) };
         if handle.is_null() {
             let why = unsafe { dlerror() };
-            let why = if why.is_null() { String::new() } else { unsafe { CStr::from_ptr(why) }.to_string_lossy().into_owned() };
+            let why = if why.is_null() {
+                String::new()
+            } else {
+                unsafe { CStr::from_ptr(why) }
+                    .to_string_lossy()
+                    .into_owned()
+            };
             if bare {
                 tried.push(path.display().to_string());
             } else {
@@ -281,7 +300,11 @@ impl Lib {
     pub fn string(&self, s: CXString) -> String {
         unsafe {
             let p = (self.clang_getCString)(s);
-            let out = if p.is_null() { String::new() } else { CStr::from_ptr(p).to_string_lossy().into_owned() };
+            let out = if p.is_null() {
+                String::new()
+            } else {
+                CStr::from_ptr(p).to_string_lossy().into_owned()
+            };
             (self.clang_disposeString)(s);
             out
         }
@@ -293,7 +316,9 @@ impl Lib {
             VISIT_CONTINUE
         }
         let mut v: Vec<CXCursor> = Vec::new();
-        unsafe { (self.clang_visitChildren)(c, visit, &mut v as *mut Vec<CXCursor> as *mut c_void) };
+        unsafe {
+            (self.clang_visitChildren)(c, visit, &mut v as *mut Vec<CXCursor> as *mut c_void)
+        };
         v
     }
 
@@ -304,7 +329,9 @@ impl Lib {
             VISIT_CONTINUE
         }
         let mut v: Vec<CXCursor> = Vec::new();
-        unsafe { (self.clang_Type_visitFields)(t, visit, &mut v as *mut Vec<CXCursor> as *mut c_void) };
+        unsafe {
+            (self.clang_Type_visitFields)(t, visit, &mut v as *mut Vec<CXCursor> as *mut c_void)
+        };
         v
     }
 
@@ -315,7 +342,12 @@ impl Lib {
             lib: &'a Lib,
             out: Vec<(String, Option<String>)>,
         }
-        extern "C" fn visit(file: CXFile, stack: *const CXSourceLocation, len: c_uint, data: *mut c_void) {
+        extern "C" fn visit(
+            file: CXFile,
+            stack: *const CXSourceLocation,
+            len: c_uint,
+            data: *mut c_void,
+        ) {
             let d = unsafe { &mut *(data as *mut Data) };
             if len == 0 {
                 // The main file itself.
@@ -324,10 +356,17 @@ impl Lib {
             let name = d.lib.string(unsafe { (d.lib.clang_getFileName)(file) });
             // `stack[0]` is the `#include` that included `file`; the main
             // file's includes have a stack of one.
-            let by = if len >= 2 { d.lib.file_of(unsafe { *stack }) } else { None };
+            let by = if len >= 2 {
+                d.lib.file_of(unsafe { *stack })
+            } else {
+                None
+            };
             d.out.push((name, by));
         }
-        let mut d = Data { lib: self, out: Vec::new() };
+        let mut d = Data {
+            lib: self,
+            out: Vec::new(),
+        };
         unsafe { (self.clang_getInclusions)(tu, visit, &mut d as *mut Data as *mut c_void) };
         d.out
     }
@@ -335,16 +374,40 @@ impl Lib {
     /// The file of a location (`None` for built-in definitions).
     pub fn file_of(&self, loc: CXSourceLocation) -> Option<String> {
         let mut file: CXFile = std::ptr::null_mut();
-        unsafe { (self.clang_getExpansionLocation)(loc, &mut file, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) };
-        if file.is_null() { None } else { Some(self.string(unsafe { (self.clang_getFileName)(file) })) }
+        unsafe {
+            (self.clang_getExpansionLocation)(
+                loc,
+                &mut file,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if file.is_null() {
+            None
+        } else {
+            Some(self.string(unsafe { (self.clang_getFileName)(file) }))
+        }
     }
 
     /// The file, line and column of a location.
     pub fn place(&self, loc: CXSourceLocation) -> (String, u32, u32) {
         let mut file: CXFile = std::ptr::null_mut();
         let (mut line, mut col) = (0, 0);
-        unsafe { (self.clang_getExpansionLocation)(loc, &mut file, &mut line, &mut col, std::ptr::null_mut()) };
-        let name = if file.is_null() { String::new() } else { self.string(unsafe { (self.clang_getFileName)(file) }) };
+        unsafe {
+            (self.clang_getExpansionLocation)(
+                loc,
+                &mut file,
+                &mut line,
+                &mut col,
+                std::ptr::null_mut(),
+            )
+        };
+        let name = if file.is_null() {
+            String::new()
+        } else {
+            self.string(unsafe { (self.clang_getFileName)(file) })
+        };
         (name, line, col)
     }
 }
