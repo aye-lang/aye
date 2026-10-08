@@ -4,11 +4,15 @@ Cards for the Project section of [`docs/plan.md`](../plan.md): work not
 tied to one lane. Ids use the prefix `X`. Rules and the card template
 are in `docs/plan.md`.
 
-## X1: cloud enablement
+## X1: Linux development
 
-Done when: `cargo test --release` passes on the Claude Code cloud VM
-(Ubuntu 24.04, 4 vCPU) after running the repo's setup script (criterion O1 in
-[`aye.md`](aye.md)).
+Done when (goal set 2026-10-08): on Ubuntu 24.04 (an Apple `container`
+on this Mac, arm64 native; amd64 under Rosetta as the last check),
+`scripts/setup-ubuntu.sh` then `cargo build --release`,
+`target/release/aye check browser`, `cargo test --release` and
+`browser/build.sh` all exit 0, run by `scripts/linux.sh` from any
+worktree (criterion O1 in [`aye.md`](aye.md)). The cloud environment is
+set up by the user elsewhere and is not part of this goal.
 
 #### X1.1: archive.aye builds on Linux
 - lane: project
@@ -18,23 +22,23 @@ Done when: `cargo test --release` passes on the Claude Code cloud VM
 - verify: `target/release/aye check browser && cargo test --release --test browser` → exit 0 (macOS must stay green; Linux is checked in X1.2)
 - depends on: –
 - parallel with: all except steps in `browser/net/`
-- where: local (no Linux machine until X1.2)
+- where: local
 - model: opus (design choice: Aye has no compile-time OS switch)
 - time box: 45 min
 - notes: two fields: `entry.d_namlen` (line 114; Linux `dirent` has none, use the NUL in `d_name`) and `info.st_mtimespec` (lines 131-132; Linux: `st_mtim`). `@cimport` drops static inline functions and field macros (`docs/spec.md` §`@cimport`); `browser/ui/socket.aye:48` decides macOS at run time with `uname`, which cannot choose a field name. Candidates: a std-side helper as `src/cgen.rs` does for `aye_std_listen`, or an mtime function in `std.fs` (part of O1.5).
 
-#### X1.2: Ubuntu 24.04 setup script and the first cloud run
+#### X1.2: Ubuntu setup script, `scripts/linux.sh`, first Linux run
 - lane: project
-- goal: a setup script installs everything the full suite needs on a fresh Ubuntu 24.04 VM; the first `cargo test --release` there is recorded.
+- goal: `scripts/setup-ubuntu.sh` installs everything the suite needs on a fresh Ubuntu 24.04; `scripts/linux.sh <cmd...>` runs a command on the current worktree inside an Apple `container` built from it; the first full Linux run is recorded.
 - serves: criterion O1
-- files: `scripts/setup-ubuntu.sh` (new); `README.md` "Build and run" gets one line pointing to it
-- verify: `sh scripts/setup-ubuntu.sh > target/setup.log 2>&1; echo $?` → 0, then `cargo test --release > target/test.log 2>&1; echo $?` → the exit code and every failing test are quoted in the report (failures become new X1.x steps, not fixed here)
-- depends on: X1.1 merged and pushed to origin; cloud enabled by the user
-- parallel with: all
-- where: cloud (the step is the cloud setup)
+- files: `scripts/setup-ubuntu.sh`, `scripts/linux.sh`, `scripts/linux/Containerfile` (new); `README.md` "Build and run" gets one line; `docs/practices/workflow.md` one short section on running the Linux check
+- verify: `scripts/linux.sh true; echo $?` → 0 (image built, worktree synced), then `scripts/linux.sh sh -c 'cargo build --release && target/release/aye check browser && cargo test --release' > target/linux-test.log 2>&1; echo $?` → the exit code and every failing test are quoted in the report (failures become new X1.x steps, not fixed here)
+- depends on: – (X1.1 is needed for `aye check browser` to pass, not for this step)
+- parallel with: all; counts as one of the two local build/test agents
+- where: local (Apple `container` 1.0, image `ubuntu:24.04` already pulled)
 - model: sonnet
 - time box: 45 min
-- notes: packages the tree needs: clang, lld, libclang-dev (`@cimport`), pkg-config, libcurl4-openssl-dev, libfreetype-dev, libsdl2-dev, fonts-dejavu-core (`browser/font/freetype.aye:170`), python3, Node 22 (apt's nodejs is older), Go and apache2-utils (`ab`) for O1.7. Rust from rustup.
+- notes: packages: clang, lld, libclang-dev (`@cimport`), pkg-config, libcurl4-openssl-dev, libfreetype-dev, libsdl2-dev, fonts-dejavu-core (`browser/font/freetype.aye:170`), python3, rsync, git, Node 22 (apt's nodejs is older), Go and apache2-utils (`ab`) for O1.7; Rust from rustup. `linux.sh`: one long-lived container per worktree (name from the worktree basename), worktree mounted read-only and rsynced to `/work` excluding `target/`, so `/work/target` and the cargo cache persist inside the container and the macOS `target/` is never touched; `--cpus 4 --memory 8G`; `LINUX_ARCH=amd64` selects an amd64 image under Rosetta.
 
 ## X2: rename Ore → Aye
 
