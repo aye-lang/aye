@@ -20,7 +20,7 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | P2.10 | 2026-10-07 | `Document.node` uses `unreachable` for a stale handle (`browser/dom/dom.ore`) | 9c909eb |
 | O1.2 | 2026-10-08 | std documented in tiers: the spec keeps the CLI modules in full and an index line per other module; `ore doc --signatures std.<m>` is their API; `tests/spec.rs` checks the index and `///` coverage (decision in `docs/decisions.md`, "How std is documented as it grows") | a3498da |
 | O1.3 | 2026-10-08 | `std.net`: TCP `listen`/`accept`/`connect`/`read`/`readTimeout`/`write`/`close`, IPv4 only; golden `tests/cases/net_echo.ore`; gap #49 worked around with C helpers in `src/cgen.rs` (→ O1.3a) | 56967d4 |
-| O1.8 | 2026-10-08 | (its commit says O1.7, an id clash with the benchmark card) `@tagName(x)`: error, enum and tagged-union tag names as static `[]u8`; E0116 for other types; gap #51 fixed | (merge pending) |
+| O1.8 | 2026-10-08 | (its commit says O1.7, an id clash with the benchmark card) `@tagName(x)`: error, enum and tagged-union tag names as static `[]u8`; E0116 for other types; gap #51 fixed | 323b81d |
 | O1.4a | 2026-10-08 | `std.http`: `listen(T, host, port, ctx, handler)` → `Server` with `port()`, `run(alloc)`, `stop()`; thread per connection, keep-alive, per-request arena for the handler; gaps #52, #53 opened; HEAD bodies and 408 left open | f68324a |
 | O1.1 | 2026-10-08 | Conformance harness `tests/conformance/<area>/` + `cargo test --release --test conformance` table; 13 areas, 29/29 on native | c7212ac, ba7bb72 |
 | O1.4 | 2026-10-08 | `std.http` request parser (pipelining, chunked, size limits → 413/414/431) and response writer; golden `std_http`; gap #51 (no tag-name builtin) opened | fd33758 |
