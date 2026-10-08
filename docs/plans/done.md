@@ -20,6 +20,7 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | P2.10 | 2026-10-07 | `Document.node` uses `unreachable` for a stale handle (`browser/dom/dom.aye`) | 9c909eb |
 | O1.2 | 2026-10-08 | std documented in tiers: the spec keeps the CLI modules in full and an index line per other module; `aye doc --signatures std.<m>` is their API; `tests/spec.rs` checks the index and `///` coverage (decision in `docs/decisions.md`, "How std is documented as it grows") | a3498da |
 | O1.3 | 2026-10-08 | `std.net`: TCP `listen`/`accept`/`connect`/`read`/`readTimeout`/`write`/`close`, IPv4 only; golden `tests/cases/net_echo.aye`; gap #49 worked around with C helpers in `src/cgen.rs` (→ O1.3a) | 56967d4 |
+| O1.9 | 2026-10-08 | `aye` restores the default SIGPIPE at startup: `aye spec \| head` ends quietly; `tests/pipe.rs` | 0c40314 |
 | O1.10 | 2026-10-08 | `aye fmt` keeps `extern("x")` (no space); `--help`/`-h`/`help` and `<cmd> --help` print usage and exit 0 | 52b0828 |
 | O1.11 | 2026-10-08 | AI-writability eval: `scripts/eval.py` (headless `claude -p`, sonnet, only `aye` tools), 5 tasks in `tests/eval/`, `--self-test`; first run 5/5 pass, results and failure causes in `docs/aye-eval.md` | bccd9bf |
 | P2.4 | 2026-10-08 | Every `.aye` file formatted (9 changed, 5 excluded with reasons) and `cargo fmt` (1122 hunks); `tests/fmt.rs` keeps both | 1075c9b |
