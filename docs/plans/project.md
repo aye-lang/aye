@@ -32,26 +32,13 @@ below; lib 30/31, conformance 29/29, fmt 6/7, golden 263/264, spec 6/7.
 - time box: 45 min
 - notes: suspects: glibc declares math functions through `__MATHCALL` macros and `__REDIRECT`; libclang may lack its resource headers (`stddef.h`) for the llvm-18 packages; std declares `clock() u64` where glibc says `clock_t clock(void)` (i64). Failing: golden `cimport/system.aye`, `codes::tests::examples_are_accurate` (E0112), spec `aye_blocks_compile` (docs/spec.md:524).
 
-#### X1.4: `scripts/linux.sh` in worktrees, TSan
-- lane: project
-- goal: in a worktree, `git` works inside the container (the worktree's `.git` points at the main checkout's git dir); `Containerfile` moves to `scripts/linux/`; `setup-ubuntu.sh` installs the clang runtime so the TSan golden runs.
-- serves: criterion O1
-- files: `scripts/linux.sh`, `scripts/setup-ubuntu.sh`, `Containerfile` → `scripts/linux/Containerfile`, `docs/practices/workflow.md` "Test on Linux"
-- verify: from a worktree, `scripts/linux.sh cargo test --release --test fmt` → exit 0, and `scripts/linux.sh cargo test --release --test golden 2>&1 | grep -ci 'skip.*tsan'` → 0
-- depends on: –
-- parallel with: X1.3
-- where: local
-- model: sonnet
-- time box: 30 min
-- notes: mount `git rev-parse --git-common-dir` (absolute) read-only at the same path inside the container; `safe.directory` may be needed. TSan runtime: the package with `libclang_rt.tsan-aarch64.a` for Ubuntu's default clang (likely `libclang-rt-18-dev`). Two runs from one worktree share the container name; keep that, but say so in the script's comment.
-
 #### X1.5: full Linux run, arm64 and amd64
 - lane: project
 - goal: the X1 done check passes on arm64 and amd64; failures become new X1.x cards.
 - serves: criterion O1
 - files: none expected (report only), `docs/practices/workflow.md` if a lesson
 - verify: `scripts/linux.sh sh -c 'cargo build --release && target/release/aye check browser && cargo test --release && browser/build.sh'` → 0, then the same with `LINUX_ARCH=amd64`
-- depends on: X1.3, X1.4
+- depends on: X1.3
 - parallel with: no other build agent
 - where: local
 - model: sonnet
