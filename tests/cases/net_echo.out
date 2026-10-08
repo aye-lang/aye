@@ -1,0 +1,6 @@
+port picked: true
+echoed 1048576 bytes, same: true
+server echoed 1048576 bytes
+read timed out: true
+connect to a closed port refused: true
+connect to a name is an invalid address: true
