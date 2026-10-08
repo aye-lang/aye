@@ -1,0 +1,5 @@
+extern("") fn cAbs(x: i32) i32
+
+pub fn main() {
+    @println(cAbs(-1))
+}

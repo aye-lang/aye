@@ -255,8 +255,17 @@ impl Parser {
             Tok::Kw(Kw::Fn) => Ok(Item::Fn(self.fn_decl(is_pub, false)?)),
             Tok::Kw(Kw::Extern) => {
                 self.bump();
+                let link = if self.at(&Tok::LParen) { Some(self.link_name()?) } else { None };
                 match self.peek() {
-                    Tok::Kw(Kw::Fn) => Ok(Item::Fn(self.fn_decl(is_pub, true)?)),
+                    Tok::Kw(Kw::Fn) => {
+                        let mut f = self.fn_decl(is_pub, true)?;
+                        if link.is_some() && f.body.is_some() {
+                            return Err(Error::new(E0115, f.span, "an exported `extern fn` (with a body) has no link name: it is exported under its own name"));
+                        }
+                        f.link = link;
+                        Ok(Item::Fn(f))
+                    }
+                    _ if link.is_some() => Err(self.unexpected("`fn` after `extern(\"name\")`")),
                     Tok::Kw(Kw::Struct) => Ok(Item::Struct(self.struct_decl(is_pub, true)?)),
                     // `union` is a keyword only after `extern`.
                     Tok::Ident(n) if n == "union" => {
@@ -355,6 +364,21 @@ impl Parser {
         Ok((name, span))
     }
 
+    /// `("name")` after `extern`: the C link name of the function.
+    fn link_name(&mut self) -> Result<String> {
+        self.expect(&Tok::LParen)?;
+        let at = self.span();
+        let Tok::Str(bytes) = self.peek().clone() else {
+            return Err(Error::new(E0115, at, "`extern(...)` takes a string literal: `extern(\"connect\") fn ...`"));
+        };
+        if bytes.is_empty() {
+            return Err(Error::new(E0115, at, "`extern(\"\")` needs a link name: `extern(\"connect\") fn ...`"));
+        }
+        self.bump();
+        self.expect(&Tok::RParen)?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
     /// A function. An `extern fn` without a body declares a C function; with
     /// a body it is exported to C and must be `pub`.
     fn fn_decl(&mut self, is_pub: bool, is_extern: bool) -> Result<FnDecl> {
@@ -426,7 +450,7 @@ impl Parser {
                 }
             }
         }
-        Ok(FnDecl { name, span, is_pub, is_extern, params, variadic, ret, bounds, body: None })
+        Ok(FnDecl { name, span, is_pub, is_extern, link: None, params, variadic, ret, bounds, body: None })
     }
 
     /// `struct Name { fields and methods }`: fields are separated by `,` or
@@ -515,7 +539,7 @@ impl Parser {
         let name = format!("test#{}", self.tests);
         self.tests += 1;
         let func =
-            FnDecl { name, span, is_pub: false, is_extern: false, params: vec![], variadic: None, ret, bounds: vec![], body };
+            FnDecl { name, span, is_pub: false, is_extern: false, link: None, params: vec![], variadic: None, ret, bounds: vec![], body };
         Ok(TestDecl { name: String::from_utf8_lossy(&bytes).into_owned(), module: String::new(), func })
     }
 

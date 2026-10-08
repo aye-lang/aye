@@ -649,8 +649,21 @@ struct FnSig {
     params: Vec<Type>,
     ret: Type,
     is_extern: bool,
+    /// The C symbol of an `extern("name") fn`.
+    link: Option<String>,
     /// A C function whose parameters end with `...`.
     variadic: bool,
+}
+
+impl FnSig {
+    /// The name codegen sees for a call: the key, with an `extern("name")`
+    /// link name in place of the last path segment.
+    fn c_key(&self, key: &str) -> String {
+        match &self.link {
+            Some(l) => format!("{}{l}", &key[..key.rfind("::").map_or(0, |i| i + 2)]),
+            None => key.to_string(),
+        }
+    }
 }
 
 /// The pattern of a `match` arm: the variant indexes or error values
@@ -1392,10 +1405,10 @@ impl<'a> Checker<'a> {
                 }
                 if f.body.is_none() {
                     let (params, ret, variadic) = (sig.params.clone(), sig.ret.clone(), sig.variadic);
-                    externs.push(ExternFn { name: f.name.clone(), params, ret, variadic });
+                    externs.push(ExternFn { name: f.link.clone().unwrap_or_else(|| f.name.clone()), params, ret, variadic });
                 }
                 // One C symbol, one C signature and at most one definition.
-                let sym = key.rsplit("::").next().unwrap().to_string();
+                let sym = f.link.clone().unwrap_or_else(|| key.rsplit("::").next().unwrap().to_string());
                 let ty = Type::Fn(sig.params.clone(), Box::new(sig.ret.clone()));
                 let (shape, defined) = (c_shape(&ty), f.body.is_some());
                 match symbols.get_mut(&sym) {
@@ -2148,7 +2161,7 @@ impl<'a> Checker<'a> {
             };
             self.recvs.insert(key.to_string(), recv);
         }
-        let sig = FnSig { params, ret, is_extern: f.is_extern, variadic: f.variadic.is_some() };
+        let sig = FnSig { params, ret, is_extern: f.is_extern, link: f.link.clone(), variadic: f.variadic.is_some() };
         self.fns.insert(key.to_string(), sig.clone());
         if f.body.is_some() {
             self.fn_decls.insert(key.to_string(), FnCtx { decl: f, owner, env: self.env.clone(), generic });
@@ -3521,7 +3534,7 @@ impl<'a> Checker<'a> {
                     {
                         self.ensure_body(name, span)?;
                     }
-                    let kind = TExprKind::FnRef { name: name.clone(), is_extern: sig.is_extern };
+                    let kind = TExprKind::FnRef { name: sig.c_key(name), is_extern: sig.is_extern };
                     (kind, Type::Fn(sig.params, Box::new(sig.ret)))
                 }
                 None if self.generics.contains_key(name) => {
@@ -4246,7 +4259,7 @@ impl<'a> Checker<'a> {
         for a in &args[fixed - skip..] {
             targs.push(self.c_vararg(a)?);
         }
-        Ok(TExpr { kind: TExprKind::Call { name: key.to_string(), is_extern: sig.is_extern, args: targs }, ty: sig.ret, span })
+        Ok(TExpr { kind: TExprKind::Call { name: sig.c_key(key), is_extern: sig.is_extern, args: targs }, ty: sig.ret, span })
     }
 
     /// `base.name(args)`: a static call `Type.name(args)`, a method call on a

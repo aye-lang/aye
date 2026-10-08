@@ -90,9 +90,9 @@ removed in cff3f60.
   C's `read`). `@cimport` also avoids it (`sock.connect`), but needs
   libclang or the cache.
 - **Hit by:** O1.3 (`std.net`).
-- **Status:** open. Proposed: a link name on the declaration, such as
-  `extern("connect") fn cConnect(...)`, with a spec entry and an error
-  test for an empty name.
+- **Status:** fixed in O1.3a: `extern("connect") fn cConnect(...)` names
+  the C symbol. `std/net` calls `listen` and `connect` this way; only
+  `ore_std_errno` stays in the prelude (the errno symbol differs per OS).
 
 ## Declined by design
 
