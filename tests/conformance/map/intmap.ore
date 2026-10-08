@@ -1,0 +1,20 @@
+import std.heap.General
+import std.map.IntMap
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var m = IntMap(u32, i64).init(gpa.allocator())
+    defer m.deinit()
+    for i in 0..1000 {
+        try m.put(i as u32, i as i64 * 2)
+    }
+    @println(m.len())
+    @println(m.get(500) orelse -1)
+    for i in 0..500 {
+        let _ = m.remove(i as u32)
+    }
+    @println(m.len())
+    @println(m.get(499) == null)
+    @println(m.get(999) orelse -1)
+}

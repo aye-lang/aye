@@ -1,0 +1,10 @@
+import std.math
+
+pub fn main() {
+    @println(math.minOf(i32, 3, 8))
+    @println(math.maxOf(i32, 3, 8))
+    @println(math.absOf(i32, -5))
+    @println(math.clampOf(i32, 15, 0, 10))
+    @println(math.clampOf(i32, -15, 0, 10))
+    @println(math.clampOf(i32, 5, 0, 10))
+}

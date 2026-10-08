@@ -1,0 +1,16 @@
+import std.sort
+
+fn less(a: u8, b: u8) bool {
+    return a < b
+}
+
+pub fn main() {
+    var none = @zeroed([0]u8)
+    sort.sort(u8, none[..], less)
+    var one = [1]u8{4}
+    sort.sort(u8, one[..], less)
+    @println(one[0])
+    var s = [5]u8{'d', 'b', 'e', 'a', 'c'}
+    sort.sort(u8, s[..], less)
+    @println(s[..])
+}

@@ -1,0 +1,29 @@
+import std.sync.Atomic
+import std.sync.Mutex
+import std.thread
+
+struct Shared {
+    lock: Mutex
+    n: i64
+    hits: Atomic(u32)
+}
+
+fn work(s: *mut Shared) {
+    for i in 0..2000 {
+        s.lock.lock()
+        s.n += 1
+        s.lock.unlock()
+        let _ = s.hits.add(1)
+    }
+}
+
+pub fn main() !void {
+    var s = Shared { lock: Mutex.init(), n: 0, hits: Atomic(u32).init(0) }
+    var a = try thread.spawn(Shared, work, &mut s)
+    var b = try thread.spawn(Shared, work, &mut s)
+    a.join()
+    b.join()
+    @println(s.n)
+    @println(s.hits.load())
+    s.lock.deinit()
+}

@@ -1,0 +1,13 @@
+import std.text
+
+pub fn main() {
+    @println(text.startsWith("hello", "he"))
+    @println(text.endsWith("hello", "lo"))
+    @println(text.endsWith("hello", "he"))
+    @println(text.eqlIgnoreCase("HeLLo", "hello"))
+    @println(text.indexOf("hello world", "o w") orelse 99)
+    @println(text.indexOf("hello", "xyz") == null)
+    @print("[")
+    @print(text.trim("  \t hi there \n"))
+    @println("]")
+}

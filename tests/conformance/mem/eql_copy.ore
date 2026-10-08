@@ -1,0 +1,12 @@
+import std.mem
+
+pub fn main() {
+    @println(mem.eql("abc", "abc"))
+    @println(mem.eql("abc", "abd"))
+    @println(mem.eql("abc", "ab"))
+    var buf = @zeroed([5]u8)
+    mem.copy(buf[..], "hello")
+    @println(mem.eql(buf[..], "hello"))
+    mem.set(buf[1..4], 'x')
+    @println(mem.eql(buf[..], "hxxxo"))
+}

@@ -1,0 +1,7 @@
+import std.os
+
+pub fn main() {
+    @println("before")
+    os.exit(0)
+    @println("after")
+}

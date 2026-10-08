@@ -1,0 +1,14 @@
+import std.text
+
+pub fn main() {
+    var it = text.split("a,b,,c", ",")
+    while it.next() |part| {
+        @print("<")
+        @print(part)
+        @println(">")
+    }
+    @println(text.parseInt("-123") catch 0)
+    @println(text.parseInt("12x") catch -1)
+    @println(text.parseInt("99999999999999999999") catch -2)
+    @println(text.parseFloat("2.5") catch 0.0)
+}

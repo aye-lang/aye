@@ -1,0 +1,24 @@
+import std.net
+import std.net.ConnectError
+import std.net.ReadError
+
+pub fn main() !void {
+    let l = try net.listen("127.0.0.1", 0)
+    let port = l.port()
+    let c = try net.connect("127.0.0.1", port)
+    let s = try l.accept()
+    var buf = @zeroed([4]u8)
+    let r = s.readTimeout(buf[..], 100) catch |e| {
+        @println(e == ReadError.TimedOut)
+        0
+    }
+    c.close()
+    s.close()
+    l.close()
+    let d = net.connect("127.0.0.1", port) catch |e| {
+        @println(e == ConnectError.ConnectionRefused)
+        return
+    }
+    d.close()
+    @println("connected")
+}

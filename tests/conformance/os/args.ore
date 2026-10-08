@@ -1,0 +1,12 @@
+import std.heap.General
+import std.os
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    let args = try os.args(alloc)
+    @println(args.len >= 1)
+    @println(args[0].len > 0)
+    alloc.free(args)
+}

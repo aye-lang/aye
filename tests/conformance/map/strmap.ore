@@ -1,0 +1,18 @@
+import std.heap.General
+import std.map.StrMap
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var m = StrMap(i64).init(gpa.allocator())
+    defer m.deinit()
+    try m.put("a", 1)
+    try m.put("b", 2)
+    try m.put("a", 3)
+    @println(m.len())
+    @println(m.get("a") orelse 0)
+    @println(m.get("zz") == null)
+    @println(m.remove("a"))
+    @println(m.remove("a"))
+    @println(m.contains("b"))
+}

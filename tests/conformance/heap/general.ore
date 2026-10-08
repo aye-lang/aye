@@ -1,0 +1,19 @@
+import std.heap.General
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    let xs = try alloc.alloc(7 as i32, 4)
+    xs[3] = 9
+    @println(xs.len)
+    @println(xs[0] + xs[3])
+    let ys = try alloc.resize(xs, 6, 1 as i32)
+    @println(ys.len)
+    @println(ys[3])
+    @println(ys[5])
+    alloc.free(ys)
+    let p = try alloc.create(42 as i64)
+    @println(p.*)
+    alloc.destroy(p)
+}

@@ -1,0 +1,14 @@
+import std.time
+
+pub fn main() {
+    var prev = time.monotonicMs()
+    var ok = true
+    for i in 0..1000 {
+        let now = time.monotonicMs()
+        if now < prev {
+            ok = false
+        }
+        prev = now
+    }
+    @println(ok)
+}

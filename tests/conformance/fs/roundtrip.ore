@@ -1,0 +1,39 @@
+import std.fs
+import std.heap.General
+import std.text.Builder
+
+extern fn getpid() i32
+extern fn unlink(path: [*]u8) i32
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    var b = Builder.init(alloc)
+    defer b.deinit()
+    try b.append("/tmp/ore-conf-fs-")
+    try b.appendInt(getpid() as i64)
+    try b.appendByte(0)
+    let cpath = b.bytes()
+    let path = cpath[..cpath.len - 1]
+    @println(fs.exists(path))
+    let f = try fs.create(path)
+    try f.write("one\ntwo\nthree")
+    f.close()
+    @println(fs.exists(path))
+    let text = try fs.readFile(alloc, path)
+    @println(text.len)
+    alloc.free(text)
+    var count: usize = 0
+    let g = try fs.open(path)
+    var r = g.reader(alloc)
+    while try r.readLine() |line| {
+        count += 1
+        @println(line)
+    }
+    r.deinit()
+    g.close()
+    @println(count)
+    let _ = unlink(cpath.ptr)
+    @println(fs.exists(path))
+}

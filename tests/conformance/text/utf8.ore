@@ -1,0 +1,12 @@
+import std.text
+
+pub fn main() {
+    let d = text.decode("\xE2\x82\xACx")
+    @println(d.code)
+    @println(d.len)
+    var buf = @zeroed([4]u8)
+    let n = text.encode(0x1F600, buf[..])
+    @println(n)
+    @println(buf[0])
+    @println(buf[3])
+}

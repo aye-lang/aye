@@ -1,0 +1,20 @@
+import std.net
+
+pub fn main() !void {
+    let l = try net.listen("127.0.0.1", 0)
+    defer l.close()
+    @println(l.port() != 0)
+    let c = try net.connect("127.0.0.1", l.port())
+    let s = try l.accept()
+    try c.write("ping")
+    var buf = @zeroed([8]u8)
+    let n = try s.readTimeout(buf[..], 5000)
+    @println(n)
+    @println(buf[0..n])
+    try s.write("pong!")
+    let m = try c.readTimeout(buf[..], 5000)
+    @println(buf[0..m])
+    c.close()
+    @println(s.read(buf[..]) catch 99)
+    s.close()
+}

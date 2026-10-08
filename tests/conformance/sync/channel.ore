@@ -1,0 +1,31 @@
+import std.heap.General
+import std.sync.Channel
+import std.thread
+
+struct Ctx {
+    ch: Channel(i32)
+}
+
+fn producer(c: *mut Ctx) {
+    for i in 1..11 {
+        c.ch.send(i as i32) catch |e| {
+            return
+        }
+    }
+    c.ch.close()
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var c = Ctx { ch: try Channel(i32).init(gpa.allocator(), 2) }
+    defer c.ch.deinit()
+    var t = try thread.spawn(Ctx, producer, &mut c)
+    var sum: i32 = 0
+    while c.ch.recv() |v| {
+        sum += v
+    }
+    t.join()
+    @println(sum)
+    @println(c.ch.recv() == null)
+}
