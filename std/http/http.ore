@@ -1,0 +1,440 @@
+// std.http: the HTTP/1.1 wire format, without sockets. `parse` reads one
+// request from the front of a byte buffer and says how many bytes it used,
+// so a server can parse pipelined requests by parsing again from the rest.
+// `writeResponse` builds a response. A handler takes a context pointer and
+// a `*Request` and returns a `Response`; there are no closures.
+//
+// Parsing is strict: lines end in CRLF, a header value has no bare CR, LF
+// or NUL, and a request that has both Content-Length and Transfer-Encoding
+// is refused. The size limits give distinct error tags, so the server can
+// answer 400, 413, 414, 431 or 505 (`errorStatus`).
+
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+import std.text.Builder
+
+/// Why `parse` gave no request. `Incomplete` is not a fault: the buffer
+/// holds only the start of a request, so read more bytes and parse again.
+/// The size tags are `RequestLineTooLong` (414), `HeadersTooLarge` (431)
+/// and `BodyTooLarge` (413); `BadRequest` (400) and `UnsupportedVersion`
+/// (505) are malformed input.
+pub error ParseError {
+    Incomplete,
+    BadRequest,
+    UnsupportedVersion,
+    RequestLineTooLong,
+    HeadersTooLarge,
+    BodyTooLarge,
+    OutOfMemory,
+}
+
+/// Size limits for `parse`, in bytes.
+pub struct Limits {
+    /// The request line, without its CRLF.
+    maxRequestLine: usize
+    /// All header lines together, with their CRLFs and the blank line.
+    maxHeaders: usize
+    /// The body, after any chunked decoding.
+    maxBody: usize
+}
+
+/// 8 KiB for the request line, 16 KiB for the headers, 1 MiB for the body.
+pub fn defaultLimits() Limits {
+    return Limits { maxRequestLine: 8192, maxHeaders: 16384, maxBody: 1048576 }
+}
+
+/// A header: both slices point into the buffer given to `parse`, or into
+/// the data of the response being built.
+pub struct Header {
+    name: []u8
+    value: []u8
+}
+
+/// A parsed request. `method`, `target` and the headers point into the
+/// buffer given to `parse`, which must outlive the request; a chunked body
+/// is a copy owned by the request. Call `deinit` when done.
+pub struct Request {
+    method: []u8
+    target: []u8
+    /// 0 for HTTP/1.0, 1 for HTTP/1.1.
+    minor: u8
+    headers: List(Header)
+    /// The body: empty when the request had none.
+    body: []u8
+    chunks: Builder
+
+    /// Frees the headers and the decoded chunked body.
+    pub fn deinit(self: *mut Self) {
+        self.headers.deinit()
+        self.chunks.deinit()
+        self.body = []u8{}
+    }
+
+    /// The value of the first header called `name`, compared without
+    /// regard to ASCII case; null when there is none.
+    pub fn header(self: *Self, name: []u8) ?[]u8 {
+        for h in self.headers.items() {
+            if text.eqlIgnoreCase(h.name, name) {
+                return h.value
+            }
+        }
+        return null
+    }
+
+    /// Should the connection stay open after the response? HTTP/1.1
+    /// unless `Connection: close`; HTTP/1.0 only with `Connection:
+    /// keep-alive`.
+    pub fn keepAlive(self: *Self) bool {
+        if self.header("connection") |v| {
+            if text.eqlIgnoreCase(v, "close") {
+                return false
+            }
+            if text.eqlIgnoreCase(v, "keep-alive") {
+                return true
+            }
+        }
+        return self.minor == 1
+    }
+}
+
+/// The result of `parse`: the request and the number of bytes it took from
+/// the buffer (parse the rest for a pipelined request).
+pub struct Parsed {
+    request: Request
+    consumed: usize
+}
+
+/// A response for `writeResponse`. Do not put Content-Length or
+/// Transfer-Encoding in `headers`: the writer sets the length itself.
+pub struct Response {
+    status: u16
+    headers: []Header
+    body: []u8
+}
+
+/// The HTTP status that answers a `ParseError`: 400, 413, 414, 431, 500 or
+/// 505. `Incomplete` is 400 too, for a peer that closed in mid-request.
+pub fn errorStatus(e: ParseError) u16 {
+    return match e {
+        .Incomplete => 400
+        .BadRequest => 400
+        .UnsupportedVersion => 505
+        .RequestLineTooLong => 414
+        .HeadersTooLarge => 431
+        .BodyTooLarge => 413
+        .OutOfMemory => 500
+    }
+}
+
+/// Parses one HTTP/1.1 request from the start of `buf`: the request line,
+/// the headers, then the body by Content-Length or `Transfer-Encoding:
+/// chunked`. Returns the request and the bytes used; `Incomplete` when
+/// `buf` holds only part of a request. A limit is checked as soon as it is
+/// passed, not when the request is complete.
+pub fn parse(alloc: Allocator, buf: []u8, limits: Limits) ParseError!Parsed {
+    // Request line.
+    var lineEnd: usize = 0
+    if crlf(buf, 0) |i| {
+        lineEnd = i
+    } else {
+        if buf.len > limits.maxRequestLine + 1 {
+            return ParseError.RequestLineTooLong
+        }
+        return ParseError.Incomplete
+    }
+    if lineEnd > limits.maxRequestLine {
+        return ParseError.RequestLineTooLong
+    }
+    let line = buf[..lineEnd]
+    let sp1 = text.indexOf(line, " ") orelse return ParseError.BadRequest
+    let rest = line[sp1 + 1..]
+    let sp2 = text.indexOf(rest, " ") orelse return ParseError.BadRequest
+    let method = line[..sp1]
+    let target = rest[..sp2]
+    let version = rest[sp2 + 1..]
+    if method.len == 0 || target.len == 0 {
+        return ParseError.BadRequest
+    }
+    for c in method {
+        if !isToken(c) {
+            return ParseError.BadRequest
+        }
+    }
+    for c in target {
+        if c <= 32 || c == 127 {
+            return ParseError.BadRequest
+        }
+    }
+    var minor: u8 = 1
+    if text.eql(version, "HTTP/1.1") {
+        minor = 1
+    } else if text.eql(version, "HTTP/1.0") {
+        minor = 0
+    } else if text.startsWith(version, "HTTP/") {
+        return ParseError.UnsupportedVersion
+    } else {
+        return ParseError.BadRequest
+    }
+
+    var req = Request {
+        method: method,
+        target: target,
+        minor: minor,
+        headers: List(Header).init(alloc),
+        body: []u8{},
+        chunks: Builder.init(alloc),
+    }
+    errdefer req.deinit()
+
+    // Headers.
+    var pos = lineEnd + 2
+    let headersStart = pos
+    while true {
+        var end: usize = 0
+        if crlf(buf, pos) |i| {
+            end = i
+        } else {
+            if buf.len - headersStart > limits.maxHeaders + 1 {
+                return ParseError.HeadersTooLarge
+            }
+            return ParseError.Incomplete
+        }
+        if end + 2 - headersStart > limits.maxHeaders {
+            return ParseError.HeadersTooLarge
+        }
+        if end == pos {
+            pos = end + 2
+            break
+        }
+        let h = parseHeader(buf[pos..end]) orelse return ParseError.BadRequest
+        req.headers.append(h) catch return ParseError.OutOfMemory
+        pos = end + 2
+    }
+
+    // Body.
+    let te = req.header("transfer-encoding")
+    let cl = req.header("content-length")
+    if te |t| {
+        if cl != null || !text.eqlIgnoreCase(text.trim(t), "chunked") {
+            return ParseError.BadRequest
+        }
+        pos = try readChunked(buf, pos, limits, &mut req.chunks)
+        req.body = req.chunks.bytes()
+    } else if cl |v| {
+        for h in req.headers.items() {
+            if text.eqlIgnoreCase(h.name, "content-length") && !text.eql(h.value, v) {
+                return ParseError.BadRequest
+            }
+        }
+        let n = try contentLength(v, limits.maxBody)
+        if buf.len - pos < n {
+            return ParseError.Incomplete
+        }
+        req.body = buf[pos..pos + n]
+        pos += n
+    }
+    return Parsed { request: req, consumed: pos }
+}
+
+// The index of the first CRLF at or after `from`.
+fn crlf(buf: []u8, from: usize) ?usize {
+    var i = from
+    while i + 1 < buf.len {
+        if buf[i] == '\r' && buf[i + 1] == '\n' {
+            return i
+        }
+        i += 1
+    }
+    return null
+}
+
+// A tchar of RFC 9110: what a method or a header name is made of.
+fn isToken(c: u8) bool {
+    if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+        return true
+    }
+    return c == '!' || c == '#' || c == '$' || c == '%' || c == '&' || c == '\'' || c == '*' || c == '+' || c == '-' || c == '.' || c == '^' || c == '_' || c == '`' || c == '|' || c == '~'
+}
+
+// "Name: value" as a Header; null when it is malformed.
+fn parseHeader(line: []u8) ?Header {
+    let colon = text.indexOf(line, ":") orelse return null
+    if colon == 0 {
+        return null
+    }
+    let name = line[..colon]
+    for c in name {
+        if !isToken(c) {
+            return null
+        }
+    }
+    let value = text.trim(line[colon + 1..])
+    for c in value {
+        if c == '\r' || c == '\n' || c == 0 {
+            return null
+        }
+    }
+    return Header { name: name, value: value }
+}
+
+// A Content-Length value: digits only; over `max` is BodyTooLarge.
+fn contentLength(v: []u8, max: usize) ParseError!usize {
+    if v.len == 0 {
+        return ParseError.BadRequest
+    }
+    var n: usize = 0
+    for c in v {
+        if c < '0' || c > '9' {
+            return ParseError.BadRequest
+        }
+        n = n * 10 + (c - '0') as usize
+        if n > max {
+            return ParseError.BodyTooLarge
+        }
+    }
+    return n
+}
+
+fn hexValue(c: u8) ?usize {
+    if c >= '0' && c <= '9' {
+        return (c - '0') as usize
+    }
+    if c >= 'a' && c <= 'f' {
+        return (c - 'a') as usize + 10
+    }
+    if c >= 'A' && c <= 'F' {
+        return (c - 'A') as usize + 10
+    }
+    return null
+}
+
+// Decodes the chunks that start at `from` into `out`; returns the index
+// after the last chunk and its trailers.
+fn readChunked(buf: []u8, from: usize, limits: Limits, out: *mut Builder) ParseError!usize {
+    var pos = from
+    while true {
+        var end: usize = 0
+        if crlf(buf, pos) |i| {
+            end = i
+        } else {
+            if buf.len - pos > limits.maxRequestLine + 1 {
+                return ParseError.BadRequest
+            }
+            return ParseError.Incomplete
+        }
+        var sizeLine = buf[pos..end]
+        if text.indexOf(sizeLine, ";") |semi| {
+            sizeLine = sizeLine[..semi]
+        }
+        sizeLine = text.trim(sizeLine)
+        if sizeLine.len == 0 {
+            return ParseError.BadRequest
+        }
+        var size: usize = 0
+        for c in sizeLine {
+            let d = hexValue(c) orelse return ParseError.BadRequest
+            size = size * 16 + d
+            if size > limits.maxBody {
+                return ParseError.BodyTooLarge
+            }
+        }
+        pos = end + 2
+        if size == 0 {
+            // Trailers: skipped, within the header limit.
+            let trailersStart = pos
+            while true {
+                var tend: usize = 0
+                if crlf(buf, pos) |i| {
+                    tend = i
+                } else {
+                    if buf.len - trailersStart > limits.maxHeaders + 1 {
+                        return ParseError.HeadersTooLarge
+                    }
+                    return ParseError.Incomplete
+                }
+                if tend + 2 - trailersStart > limits.maxHeaders {
+                    return ParseError.HeadersTooLarge
+                }
+                let empty = tend == pos
+                pos = tend + 2
+                if empty {
+                    return pos
+                }
+            }
+        }
+        if out.len() + size > limits.maxBody {
+            return ParseError.BodyTooLarge
+        }
+        if buf.len - pos < size + 2 {
+            return ParseError.Incomplete
+        }
+        if buf[pos + size] != '\r' || buf[pos + size + 1] != '\n' {
+            return ParseError.BadRequest
+        }
+        out.append(buf[pos..pos + size]) catch return ParseError.OutOfMemory
+        pos += size + 2
+    }
+    unreachable
+}
+
+/// The standard reason phrase of `status` ("OK" for 200); "Unknown" for a
+/// code without one.
+pub fn reason(status: u16) []u8 {
+    return match status {
+        100 => "Continue"
+        200 => "OK"
+        201 => "Created"
+        202 => "Accepted"
+        204 => "No Content"
+        206 => "Partial Content"
+        301 => "Moved Permanently"
+        302 => "Found"
+        303 => "See Other"
+        304 => "Not Modified"
+        307 => "Temporary Redirect"
+        308 => "Permanent Redirect"
+        400 => "Bad Request"
+        401 => "Unauthorized"
+        403 => "Forbidden"
+        404 => "Not Found"
+        405 => "Method Not Allowed"
+        408 => "Request Timeout"
+        409 => "Conflict"
+        411 => "Length Required"
+        413 => "Content Too Large"
+        414 => "URI Too Long"
+        415 => "Unsupported Media Type"
+        422 => "Unprocessable Content"
+        429 => "Too Many Requests"
+        431 => "Request Header Fields Too Large"
+        500 => "Internal Server Error"
+        501 => "Not Implemented"
+        502 => "Bad Gateway"
+        503 => "Service Unavailable"
+        504 => "Gateway Timeout"
+        505 => "HTTP Version Not Supported"
+        _ => "Unknown"
+    }
+}
+
+/// Appends the response to `out`: the status line with its reason phrase,
+/// the headers of `res`, `Content-Length` and the body.
+pub fn writeResponse(out: *mut Builder, res: Response) AllocError!void {
+    try out.append("HTTP/1.1 ")
+    try out.appendUint(res.status as u64)
+    try out.append(" ")
+    try out.append(reason(res.status))
+    try out.append("\r\n")
+    for h in res.headers {
+        try out.append(h.name)
+        try out.append(": ")
+        try out.append(h.value)
+        try out.append("\r\n")
+    }
+    try out.append("Content-Length: ")
+    try out.appendUint(res.body.len as u64)
+    try out.append("\r\n\r\n")
+    try out.append(res.body)
+}

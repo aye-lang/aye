@@ -41,6 +41,7 @@ pub const STD_FILES: &[(&str, &str, &str)] = &[
     ("std.diag", "std/diag/diag.ore", include_str!("../std/diag/diag.ore")),
     ("std.fs", "std/fs/fs.ore", include_str!("../std/fs/fs.ore")),
     ("std.heap", "std/heap/heap.ore", include_str!("../std/heap/heap.ore")),
+    ("std.http", "std/http/http.ore", include_str!("../std/http/http.ore")),
     ("std.list", "std/list/list.ore", include_str!("../std/list/list.ore")),
     ("std.log", "std/log/log.ore", include_str!("../std/log/log.ore")),
     ("std.map", "std/map/map.ore", include_str!("../std/map/map.ore")),
