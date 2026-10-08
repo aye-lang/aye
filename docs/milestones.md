@@ -33,7 +33,7 @@ pass.
 
 - **Language:** `*T` and `*mut T` (non-null, with `&` and `&mut`), `?T` (with
   `null` and `if x |v| { }`), and `enum` with payloads plus exhaustive `match`.
-- **Toolchain:** parser and sema error recovery, so that `ore check` reports
+- **Toolchain:** parser and sema error recovery, so that `aye check` reports
   all errors instead of only the first one.
 - **Acceptance:**
   - Example 2 in `design.md` (`Shape` and `area`) compiles and runs without
@@ -51,7 +51,7 @@ pass.
 - **Toolchain:**
   - A stable error code (`E0001` and so on) on every diagnostic, also in the
     `--json` output.
-  - `ore explain <code>`.
+  - `aye explain <code>`.
   - In debug mode, an error return trace printed when `main` returns an error.
 - **Acceptance:**
   - A program that parses integers from a string literal: one golden test per
@@ -64,7 +64,7 @@ pass.
 - **Language:** `interface` and `dyn`, which are needed for `Allocator`.
   Built-in `General` (backed by libc, with leak and double-free detection in
   debug mode) and `Arena`. `test "name" { }` blocks.
-- **Toolchain:** `ore test [--filter] [--json]`. A test that leaks memory fails.
+- **Toolchain:** `aye test [--filter] [--json]`. A test that leaks memory fails.
 - **Acceptance:**
   - A program that builds a linked list with `Arena` and frees it with a single
     `deinit`.
@@ -76,7 +76,7 @@ pass.
 
 - **Language:** `comptime T: type` parameters, functions that return `type`,
   and `where` constraints, checked when the generic is defined.
-- **Toolchain:** fix-it suggestions in `--json` output, and `ore fix` to apply
+- **Toolchain:** fix-it suggestions in `--json` output, and `aye fix` to apply
   them.
 - **Acceptance:**
   - Example 3 in `design.md` (`Pool(T)` and `Handle(T)`) compiles.
@@ -88,17 +88,17 @@ pass.
 
 - **Language:** directory modules, `import`, `pub` visibility, and a minimal
   `std` (`fs`, `log`, `mem`, and enough of `heap` for the examples).
-- **Toolchain:** `ore spec`, the language reference in one file of about 20k
+- **Toolchain:** `aye spec`, the language reference in one file of about 20k
   tokens.
 - **Acceptance:**
   - Example 1 in `design.md` (`readConfig`) compiles and runs.
-  - **The gate test:** a fresh AI session gets only the `ore spec` output and
-    then writes a small CLI in Ore, such as `wc` or a JSON tokenizer, using
-    `ore check` feedback alone. Record how many check rounds it took and which
+  - **The gate test:** a fresh AI session gets only the `aye spec` output and
+    then writes a small CLI in Aye, such as `wc` or a JSON tokenizer, using
+    `aye check` feedback alone. Record how many check rounds it took and which
     errors were hardest to fix. Feed the findings back into `design.md`.
-- **Gate rerun, 2026-10-08 (P2.5c):** a fresh agent with only `ore spec`
+- **Gate rerun, 2026-10-08 (P2.5c):** a fresh agent with only `aye spec`
   (~24.4k tokens cl100k, budget ~30k) wrote `wc` and a JSON tokenizer.
-  Each passed `ore check` in the first round; `wc` matched `/usr/bin/wc`
+  Each passed `aye check` in the first round; `wc` matched `/usr/bin/wc`
   on 4 inputs, and the tokenizer rejected 11 invalid inputs with
   positioned errors. It found four places where the spec was silent or
   loose (the compiler was right in each). The spec text now covers them:
@@ -114,7 +114,7 @@ pass.
 
 # Stage0 milestones, part 2: enough language for the browser
 
-M1 to M5 made Ore usable for small CLIs. M6 to M10 add what the anyknown
+M1 to M5 made Aye usable for small CLIs. M6 to M10 add what the anyknown
 browser (`docs/browser.md`) needs: bit operations for hashing and decoding,
 constants, integer `match` for tokenizers, real C interop for SDL2,
 FreeType and libcurl, and a std with lists, maps and text. The same rules
@@ -175,15 +175,15 @@ raised to about 30k tokens for this).
   - `@link("name")` at the top level of a module: if `pkg-config` knows
     `name`, its cflags and libs are used, otherwise `-lname`. Also
     `@link("framework:Cocoa")` on macOS.
-- **Toolchain:** `ore build` and `ore run` pass the collected link flags
-  to clang; `ore build -o PATH`.
+- **Toolchain:** `aye build` and `aye run` pass the collected link flags
+  to clang; `aye build -o PATH`.
 - **Acceptance:**
-  - A golden program that calls `qsort` with an Ore comparator and
+  - A golden program that calls `qsort` with an Aye comparator and
     `snprintf` with a float.
   - A program (not run in CI if SDL2 is missing) that opens an SDL2
-    window, fills a pixel buffer from Ore and exits after one frame.
+    window, fills a pixel buffer from Aye and exits after one frame.
   - A golden program that fetches `file://` through libcurl into a buffer
-    with an Ore write callback.
+    with an Aye write callback.
 
 ## M8: std for real programs
 
@@ -210,15 +210,15 @@ raised to about 30k tokens for this).
 
 ## M9: Formatter and docs
 
-- **Toolchain:** `ore fmt [--check] PATH` (idempotent, keeps comments) and
-  `ore doc --signatures PATH` (every `pub` declaration with its doc
+- **Toolchain:** `aye fmt [--check] PATH` (idempotent, keeps comments) and
+  `aye doc --signatures PATH` (every `pub` declaration with its doc
   comment, for AI context).
-- **Acceptance:** `ore fmt` is idempotent on every `.ore` file in the repo
+- **Acceptance:** `aye fmt` is idempotent on every `.aye` file in the repo
   and the golden tests still pass after formatting all of them.
 
 ## M9.5: Ergonomics from the browser
 
-The browser written in Ore recorded what hurt (`browser/COMPILER_GAPS.md`
+The browser written in Aye recorded what hurt (`browser/COMPILER_GAPS.md`
 on its branch). Fix those in the compiler and std.
 
 - **Language:** several variants per `match` arm (`.A, .B =>`); `[_]T{...}`
@@ -228,15 +228,15 @@ on its branch). Fix those in the compiler and std.
   `void` call in a `void` or `E!void` function; a method that takes
   `*Self` or `*mut Self` called on a temporary (`split(s, ",").next()`).
 - **std:** `std.log.err`/`info` accept a string constant as the format.
-- **Toolchain:** `ore test DIR` runs the tests of every module of the
+- **Toolchain:** `aye test DIR` runs the tests of every module of the
   program, `--module PATH` those of one module.
 - **Diagnostics:** the `as` hint only where `as` converts; a local named
   like an import says so (and its uses are not reported again).
 - **Docs:** pointers into a growing `List` or `Pool` in the spec's
   pitfalls.
-- **Acceptance:** golden and error tests for each item, `ore explain`
+- **Acceptance:** golden and error tests for each item, `aye explain`
   texts for the new codes, a directory program whose sibling modules have
-  tests, and `ore fmt` idempotent on the new syntax.
+  tests, and `aye fmt` idempotent on the new syntax.
 
 ## M9.6: Ergonomics, round 2
 
@@ -253,8 +253,8 @@ The browser's second list (`browser/COMPILER_GAPS.md`, entries 10 to 15).
 - **Diagnostics:** "already declared at" names the file when the
   declaration is in another file of the module.
 - **Docs:** why a struct's methods cannot be split across files.
-- **Acceptance:** golden and error tests for each item, `ore explain`
-  texts for the new codes, and `ore fmt` idempotent on the new syntax.
+- **Acceptance:** golden and error tests for each item, `aye explain`
+  texts for the new codes, and `aye fmt` idempotent on the new syntax.
 
 ## M9.7: Ergonomics and runtime, round 3
 
@@ -279,8 +279,8 @@ engine, B6 and B7).
   `Allocator` (E0105; `free` gets the allocated size).
 - **Modules:** importing the root module is E0083 with the structure to
   use instead (a module of its own for shared code).
-- **Acceptance:** golden and error tests for each item, `ore explain`
-  texts for the new codes, `ore fmt` on the new syntax, and a debug build
+- **Acceptance:** golden and error tests for each item, `aye explain`
+  texts for the new codes, `aye fmt` on the new syntax, and a debug build
   that does a million allocation and free pairs plus an allocating
   `fib(25)` within 10 s (before: 963 s and 55 s; after: 0.07 s and
   0.02 s).
@@ -305,10 +305,10 @@ The browser's fourth list (B5: image decoding, layout) and promises of
   `trunc`, `sign`, and `minOf`/`maxOf`/`absOf`/`clampOf` for any integer
   type; `std.map.HashMap(K, V)` with struct keys; `std.diag.Diagnostics`
   for detailed errors (`diags: *mut Diagnostics`).
-- **Tests:** `ore test` runs the ```` ```ore ```` blocks of `///` doc
+- **Tests:** `aye test` runs the ```` ```aye ```` blocks of `///` doc
   comments as tests, with errors and failures at their lines.
-- **Acceptance:** golden and error tests for each item, `ore explain`
-  texts for E0106 to E0109, `ore fmt` on the new syntax, and a decode-like
+- **Acceptance:** golden and error tests for each item, `aye explain`
+  texts for E0106 to E0109, `aye fmt` on the new syntax, and a decode-like
   loop (RGB to gray over 4 MiB, 8 rounds) in debug mode at 0.54 s instead
   of 1.52 s (0.55 s with no checks at all at `-O0`; safe mode 0.05 s).
 
@@ -328,10 +328,10 @@ what remained.
   the source file (E0111).
 - **Docs:** decisions for what stays open: tuples, stackful coroutines, a
   check for pointers into a `List` that grew, uninitialized locals, and
-  `@zeroed` of an Ore struct.
+  `@zeroed` of an Aye struct.
 - **Acceptance:** golden and error tests for each item, a directory
-  program that embeds files from two directories, `ore explain` texts for
-  E0110 and E0111, and `ore fmt` idempotent on the new forms.
+  program that embeds files from two directories, `aye explain` texts for
+  E0110 and E0111, and `aye fmt` idempotent on the new forms.
 
 ## M10: Threads
 
@@ -341,7 +341,7 @@ what remained.
   through a `Channel` and joins them; CI runs it under ThreadSanitizer.
 - **Done as:** pthreads through runtime hooks in the C prelude, atomics as
   builtins (`@atomicLoad` ... `@atomicCas`, C11 `__atomic`), `@ptrCast`
-  between function types, and `ore build --cflags` for
+  between function types, and `aye build --cflags` for
   `-fsanitize=thread` (the golden test skips the ThreadSanitizer run where
   clang's ThreadSanitizer does not work).
 
@@ -360,12 +360,12 @@ C headers read with libclang instead of declarations written by hand, as
   module's `@link` libraries, the macOS SDK and Homebrew's headers.
 - **Toolchain:** libclang is loaded with `dlopen` when a header is first
   read, so the compiler neither links nor needs it otherwise; the
-  generated declarations are cached in `~/.cache/ore/cimport`
-  (`$ORE_CACHE_DIR`) until a file the header includes changes, and a
-  cached header needs no libclang. `ore cimport HEADER` prints the
+  generated declarations are cached in `~/.cache/aye/cimport`
+  (`$AYE_CACHE_DIR`) until a file the header includes changes, and a
+  cached header needs no libclang. `aye cimport HEADER` prints the
   generated source. E0113 for a header that is not found or has errors,
-  E0114 when libclang is missing, each with an `ore explain` text.
-- **Browser:** `browser/js/js.ore` declares its POSIX threads from
+  E0114 when libclang is missing, each with an `aye explain` text.
+- **Browser:** `browser/js/js.aye` declares its POSIX threads from
   `pthread.h` (`pthread_attr_t` and `pthread_t` were a 128-byte and a
   `u64` guess).
 - **Acceptance:** a golden header with every mapped kind and the skipped
@@ -373,10 +373,10 @@ C headers read with libclang instead of declarations written by hand, as
   programs that call zlib and `math.h`, and start a thread through
   `pthread.h`; each run again without libclang from the cache; error
   tests for the form, a missing header, a header with errors and a
-  missing libclang; `ore fmt` on `@cimport`; the browser builds and
+  missing libclang; `aye fmt` on `@cimport`; the browser builds and
   `cargo test --test browser` passes.
-- **Done as:** generated Ore source parsed as an ordinary module, so the
-  checker, `ore check --json` and the C generator are unchanged; see
+- **Done as:** generated Aye source parsed as an ordinary module, so the
+  checker, `aye check --json` and the C generator are unchanged; see
   `docs/decisions.md`, "C headers (M11)", for the mapping, the cache and
   what happens without libclang.
 
@@ -399,7 +399,7 @@ thread each, handing control back and forth through two channels.
   trace. Debug and safe mode panic on resuming a finished, running or freed
   coroutine, on resuming it on another thread than the one that made it,
   and on `yield` outside a coroutine.
-- **Browser:** `js/coroutine.ore` runs generators and async functions on
+- **Browser:** `js/coroutine.aye` runs generators and async functions on
   `std.coro` coroutines instead of threads, with the same interface to the
   interpreter.
 - **Acceptance:** golden programs for a generator, ping-pong (integer and

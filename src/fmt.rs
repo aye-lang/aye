@@ -1,4 +1,4 @@
-//! `ore fmt`: the canonical layout of a source file.
+//! `aye fmt`: the canonical layout of a source file.
 //!
 //! The formatter works on the token stream, not the AST, and keeps every
 //! comment. It formats a file that lexes and whose brackets match, even
@@ -117,13 +117,13 @@ fn balanced(items: &[Item]) -> Result<(), Vec<Error>> {
             _ => continue,
         };
         if open.pop().map(|o| &o.tok) != Some(&want) {
-            let msg = format!("`{}` does not match an open bracket (`ore fmt` needs matching brackets)", it.text);
+            let msg = format!("`{}` does not match an open bracket (`aye fmt` needs matching brackets)", it.text);
             return Err(vec![Error::new(E0006, Span::new(it.line, it.col), msg)]);
         }
     }
     match open.pop() {
         Some(o) => {
-            let msg = format!("`{}` is never closed (`ore fmt` needs matching brackets)", o.text);
+            let msg = format!("`{}` is never closed (`aye fmt` needs matching brackets)", o.text);
             Err(vec![Error::new(E0006, Span::new(o.line, o.col), msg)])
         }
         None => Ok(()),

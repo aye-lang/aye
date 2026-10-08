@@ -1,1 +1,1 @@
-try_optional.ore:8:17: error[E0063]: `try` needs an error union value (`E!T`), found `?u32` (unwrap an optional with `if x |v| { }`)
+try_optional.aye:8:17: error[E0063]: `try` needs an error union value (`E!T`), found `?u32` (unwrap an optional with `if x |v| { }`)

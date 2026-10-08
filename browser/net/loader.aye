@@ -1,0 +1,413 @@
+// Background loads: GET requests (the images that scripts observe) that
+// run while the page's scripts do. One libcurl multi handle, made on the
+// first load, holds their transfers, and the main thread drives it
+// without blocking: the event loop at each task (`pumpLoads`), a wait
+// for one load (`waitLoad`), and every other HTTP request of the
+// session, whose transfer runs on the same multi handle while it waits
+// (`performShared`). No other thread is involved: libcurl's callbacks
+// run inside curl_multi_perform, the responses go into the session's
+// cache and the cookies into its jar, as for `prefetch`.
+//
+// A load follows redirects itself (each hop stores its cookies) and its
+// response is kept under the URL that was asked for, the final URL as
+// its `url`; a failure (libcurl's, a body too large) is remembered for
+// `loadFailed` (and `failedHref`, for the page's images to keep). Loads
+// of the same URL are one load with several users; it ends when the
+// last one releases it, aborted if it still runs.
+// Under ANYKNOWN_REPLAY a load is done at once (the archive answers the
+// request that follows).
+
+import std
+import std.list.List
+import std.mem.Allocator
+import std.text
+import url
+
+/// Where a load is.
+pub enum LoadState {
+    Running
+    // The response is in the session's cache (or the archive's).
+    Done
+    Failed
+}
+
+struct Load {
+    id: u32
+    // The URL asked for, without the fragment (owned).
+    href: []mut u8
+    kind: Kind
+    // The page that asks, for the Referer (owned).
+    referrer: []mut u8
+    users: u32
+    state: LoadState
+    // Redirects followed so far.
+    hops: i64
+    // The transfer while running.
+    job: ?*mut Job
+}
+
+struct Loader {
+    alloc: Allocator
+    multi: *mut CurlMulti
+    loads: List(*mut Load)
+    next_id: u32
+    // The easy handle of the request `performShared` waits for, and its
+    // CURLcode once done (-1 before).
+    waiting: ?*mut Curl
+    waited: i32
+}
+
+var loader: ?*mut Loader = null
+
+let POLL_MS: i32 = 100
+// CURLE_FAILED_INIT: the multi handle failed under a shared transfer.
+let SHARED_FAILED: i32 = 2
+
+/// Starts loading `href` (http or https, without a fragment) in the
+/// background for a request of `kind` from the page at `referrer`, or
+/// joins the load of `href` that exists; its id. 0 when it cannot be
+/// loaded in the background (another scheme, no session): fetch it as
+/// usual then.
+pub fn startLoad(href: []u8, kind: Kind, referrer: []u8) u32 {
+    if !text.startsWith(href, "http://") && !text.startsWith(href, "https://") {
+        return 0
+    }
+    let s = session orelse return 0
+    let ld = loaderOf(s) orelse return 0
+    if findLoad(ld, href) |l| {
+        l.users += 1
+        return l.id
+    }
+    let owned = dup(ld.alloc, href) catch |e| {
+        return 0
+    }
+    let from = dup(ld.alloc, referrer) catch |e| {
+        release(ld.alloc, owned)
+        return 0
+    }
+    let l = ld.alloc.create(Load {
+        id: ld.next_id,
+        href: owned,
+        kind: kind,
+        referrer: from,
+        users: 1,
+        state: LoadState.Done,
+        hops: 0,
+        job: null,
+    }) catch |e| {
+        release(ld.alloc, owned)
+        release(ld.alloc, from)
+        return 0
+    }
+    ld.loads.append(l) catch |e| {
+        freeLoad(ld, l)
+        return 0
+    }
+    ld.next_id += 1
+    if !archiveReplay() && !s.cache.has(href) {
+        l.job = startJob(ld.alloc, s, ld.multi, href, Request { kind: kind, referrer: l.referrer })
+        l.state = LoadState.Running
+        if l.job == null {
+            l.state = LoadState.Failed
+        }
+        pumpLoads()
+    }
+    return l.id
+}
+
+/// The state of the load `id`; Failed when there is none.
+pub fn loadState(id: u32) LoadState {
+    let ld = loader orelse return LoadState.Failed
+    let l = loadById(ld, id) orelse return LoadState.Failed
+    return l.state
+}
+
+/// Is a load of `href` (without the fragment) still held by a request,
+/// running or not?
+pub fn loadHeld(href: []u8) bool {
+    let ld = loader orelse return false
+    return findLoad(ld, href) != null
+}
+
+/// The id of the load of `href` that is held; 0 when there is none.
+pub fn loadOf(href: []u8) u32 {
+    let ld = loader orelse return 0
+    let l = findLoad(ld, href) orelse return 0
+    return l.id
+}
+
+/// Did the load of `href` that is held fail? The request that follows
+/// must not fetch it again.
+pub fn loadFailed(href: []u8) bool {
+    let ld = loader orelse return false
+    let l = findLoad(ld, href) orelse return false
+    return l.state == LoadState.Failed
+}
+
+/// The URL (without the fragment) of the load `id` when it failed;
+/// null when it did not, or there is none.
+pub fn failedHref(id: u32) ?[]u8 {
+    let ld = loader orelse return null
+    let l = loadById(ld, id) orelse return null
+    if l.state != LoadState.Failed {
+        return null
+    }
+    return l.href
+}
+
+/// Is any load running?
+pub fn loadsRunning() bool {
+    let ld = loader orelse return false
+    return anyRunning(ld)
+}
+
+/// Lets the transfers progress, without waiting: data that arrived is
+/// read, finished loads are kept.
+pub fn pumpLoads() {
+    let ld = loader orelse return
+    if !anyRunning(ld) {
+        return
+    }
+    var running: i32 = 0
+    if curl_multi_perform(ld.multi, &mut running) != 0 {
+        failRunning(ld)
+        return
+    }
+    harvest(ld)
+}
+
+/// Waits until the load `id` is no longer running (libcurl's timeouts
+/// bound it: 10 s to connect, 30 s in all per hop).
+pub fn waitLoad(id: u32) {
+    let ld = loader orelse return
+    while true {
+        let l = loadById(ld, id) orelse return
+        if l.state != LoadState.Running {
+            return
+        }
+        var running: i32 = 0
+        if curl_multi_perform(ld.multi, &mut running) != 0 {
+            failRunning(ld)
+            return
+        }
+        harvest(ld)
+        if l.state != LoadState.Running {
+            return
+        }
+        curl_multi_poll(ld.multi, null, 0, POLL_MS, null)
+    }
+}
+
+/// A request no longer needs the load `id`: the last one ends it.
+pub fn releaseLoad(id: u32) {
+    let ld = loader orelse return
+    for i, l in ld.loads.items() {
+        if l.id != id {
+            continue
+        }
+        l.users -= 1
+        if l.users == 0 {
+            _ = ld.loads.orderedRemove(i)
+            freeLoad(ld, l)
+        }
+        return
+    }
+}
+
+// The transfer of a request of the session (http.aye) on `curl`: on the
+// loads' multi handle while loads run, so that they progress while the
+// request waits; else curl_easy_perform. Its CURLcode.
+fn performShared(curl: *mut Curl) i32 {
+    let ld = loader orelse return curl_easy_perform(curl)
+    if !anyRunning(ld) || ld.waiting != null {
+        return curl_easy_perform(curl)
+    }
+    if curl_multi_add_handle(ld.multi, curl) != 0 {
+        return curl_easy_perform(curl)
+    }
+    ld.waiting = curl
+    ld.waited = -1
+    while ld.waited < 0 {
+        var running: i32 = 0
+        if curl_multi_perform(ld.multi, &mut running) != 0 {
+            ld.waited = SHARED_FAILED
+            failRunning(ld)
+            break
+        }
+        harvest(ld)
+        if ld.waited >= 0 {
+            break
+        }
+        curl_multi_poll(ld.multi, null, 0, POLL_MS, null)
+    }
+    curl_multi_remove_handle(ld.multi, curl)
+    ld.waiting = null
+    return ld.waited
+}
+
+/// Ends every load (when the session stops).
+fn stopLoads() {
+    let ld = loader orelse return
+    loader = null
+    for l in ld.loads.items() {
+        freeLoad(ld, l)
+    }
+    ld.loads.deinit()
+    curl_multi_cleanup(ld.multi)
+    ld.alloc.destroy(ld)
+}
+
+fn loaderOf(s: *mut Session) ?*mut Loader {
+    if loader |ld| {
+        return ld
+    }
+    let m = curl_multi_init() orelse return null
+    curl_multi_setopt(m, CURLMOPT_MAX_HOST_CONNECTIONS, 6 as i64)
+    curl_multi_setopt(m, CURLMOPT_MAX_TOTAL_CONNECTIONS, 16 as i64)
+    let ld = s.alloc.create(Loader {
+        alloc: s.alloc,
+        multi: m,
+        loads: List(*mut Load).init(s.alloc),
+        next_id: 1,
+        waiting: null,
+        waited: -1,
+    }) catch |e| {
+        curl_multi_cleanup(m)
+        return null
+    }
+    loader = ld
+    return ld
+}
+
+fn findLoad(ld: *Loader, href: []u8) ?*mut Load {
+    for l in ld.loads.items() {
+        if text.eql(l.href, href) {
+            return l
+        }
+    }
+    return null
+}
+
+fn loadById(ld: *Loader, id: u32) ?*mut Load {
+    for l in ld.loads.items() {
+        if l.id == id {
+            return l
+        }
+    }
+    return null
+}
+
+fn anyRunning(ld: *Loader) bool {
+    for l in ld.loads.items() {
+        if l.state == LoadState.Running {
+            return true
+        }
+    }
+    return false
+}
+
+// The multi handle failed: no transfer can finish.
+fn failRunning(ld: *mut Loader) {
+    for l in ld.loads.items() {
+        if l.job |j| {
+            dropJob(ld.alloc, ld.multi, j)
+            l.job = null
+            l.state = LoadState.Failed
+        }
+    }
+}
+
+// Takes the transfers that finished.
+fn harvest(ld: *mut Loader) {
+    var left: i32 = 0
+    while curl_multi_info_read(ld.multi, &mut left) |msg| {
+        if msg.msg != CURLMSG_DONE {
+            continue
+        }
+        // The message does not outlive the removal of its handle.
+        let easy = msg.easy
+        let result = msg.result
+        if ld.waiting |w| {
+            if easy == w {
+                ld.waited = result
+                continue
+            }
+        }
+        for l in ld.loads.items() {
+            if l.job |j| {
+                if easy == j.curl {
+                    finishLoad(ld, l, result)
+                    break
+                }
+            }
+        }
+    }
+}
+
+// The transfer of `l` ended with `result` (a CURLcode): keeps its
+// response, or follows its redirect.
+fn finishLoad(ld: *mut Loader, l: *mut Load, result: i32) {
+    let job = l.job orelse return
+    l.job = null
+    defer dropJob(ld.alloc, ld.multi, job)
+    l.state = LoadState.Failed
+    let s = session orelse return
+    if result != 0 || job.sink.out_of_memory || job.sink.too_large {
+        return
+    }
+    storeCookies(s, &job.at, &job.sink) catch |e| {
+        return
+    }
+    var status: i64 = 0
+    curl_easy_getinfo(job.curl, CURLINFO_RESPONSE_CODE, &mut status)
+    var location: ?[*]u8 = null
+    curl_easy_getinfo(job.curl, CURLINFO_REDIRECT_URL, &mut location)
+    if location |p| {
+        if status == 301 || status == 302 || status == 303 || status == 307 || status == 308 {
+            let moved = withoutHash(p[0..strlen(p)])
+            if l.hops >= MAX_REDIRECTS || (!text.startsWith(moved, "http://") && !text.startsWith(moved, "https://")) {
+                return
+            }
+            l.hops += 1
+            l.job = startJob(ld.alloc, s, ld.multi, moved, Request { kind: l.kind, referrer: l.referrer })
+            if l.job != null {
+                l.state = LoadState.Running
+            }
+            return
+        }
+    }
+    keepLoad(ld.alloc, s, l, job, status) catch |e| {
+        return
+    }
+    l.state = LoadState.Done
+}
+
+// Keeps the response of `job`, the last hop of `l`, under `l.href`.
+fn keepLoad(alloc: Allocator, s: *mut Session, l: *Load, job: *mut Job, status: i64) FetchError!void {
+    var content_type: ?[*]u8 = null
+    curl_easy_getinfo(job.curl, CURLINFO_CONTENT_TYPE, &mut content_type)
+    var ct: []u8 = ""
+    if content_type |p| {
+        ct = p[0..strlen(p)]
+    } else {
+        ct = typeOfPath(job.at.path)
+    }
+    let body = try job.sink.body.toOwned()
+    var res = try respond(alloc, ct, body)
+    defer res.deinit(alloc)
+    res.status = status
+    if !text.eql(job.at.href, l.href) {
+        res.url = try dup(alloc, job.at.href)
+    }
+    let lasting = status >= 200 && status < 300 && !job.sink.no_store
+    try s.cache.keep(l.href, &res, !lasting)
+}
+
+fn freeLoad(ld: *mut Loader, l: *mut Load) {
+    if l.job |j| {
+        dropJob(ld.alloc, ld.multi, j)
+    }
+    release(ld.alloc, l.href)
+    release(ld.alloc, l.referrer)
+    ld.alloc.destroy(l)
+}

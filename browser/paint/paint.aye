@@ -1,0 +1,1190 @@
+// paint: from a laid-out box tree to pixels.
+//
+// - paint.aye: the display list (`build`) and drawing it (`render`).
+// - background.aye: backgrounds (images, gradients), masks, rounded
+//   corners and box shadows.
+// - raster.aye: the RGBA canvas (fills, clips, coverage masks).
+// - glyphs.aye: text: FreeType glyphs through a glyph cache, or boxes
+//   for the fixed-metric test font.
+// - png.aye: the PNG encoder (zlib with fixed-Huffman deflate).
+//
+// The display list is in CSS px, in document coordinates; `render`
+// scales and translates it to device pixels with a `View`. Items, in
+// painting order (CSS's stacking, simplified): a positioned box
+// (`position` other than `static`) is a layer, painted after the
+// rest of its parent layer in z-index order (negative ones before it,
+// `auto` and 0 in tree order); in a layer, tree order: backgrounds and
+// borders of a box, its list marker, then its content (the floats
+// among its inline content, its lines and their fragments, or its child
+// boxes). A layer keeps the clips of the ancestors that clip it (not
+// those inside the containing block of an absolutely positioned box,
+// none for a fixed one). A transformed box is a layer too, and the items
+// of its layer are mapped by the part of its transform that layout left
+// to paint (`layout/transform.aye`); so is a box clipped by `clip` or
+// `clip-path: inset()`, its layer drawn inside the clip. Fixed boxes do
+// not extend the document. Borders become fills
+// (dashed and dotted ones a row of short fills). Text items refer to the
+// layout tree's text: keep the tree alive as long as the list.
+//
+// Supported: background-color (the root's, or else the body's, fills
+// the canvas), background images, masks, `border-radius` and
+// `box-shadow` (background.aye), borders (solid, dashed, dotted, double; the 3-D styles are
+// solid; solid sides of different colors meet on the corners' diagonals,
+// as `Quad`s), color, text-decoration-line (underline, overline,
+// line-through; propagated from ancestors, not into atomic inlines),
+// list markers, images (decoded ones scaled into their content box after
+// `object-fit`, else a frame with their `alt` text), the documents of
+// `frame` elements (their display lists, clipped to the frame), other
+// frames (`iframe`, `embed`, `object`, a `frame` without a document: a
+// frame with their address as a link), SVG (inline `svg` elements and SVG
+// images, drawn by svg/ into their content box), form controls
+// (checkboxes and radio buttons drawn, a `select`'s arrow, a list box's selected
+// options), visibility, and overflow other than `visible` as a clip to
+// the padding box (rounded by `border-radius`: a layer drawn through the
+// corners).
+
+import css
+import css.Value
+import dom
+import font
+import layout
+import perf
+import layout.BoxKind
+import layout.FragKind
+import layout.Tree
+import std.list.List
+import std.math
+import std.mem.AllocError
+import std.mem.Allocator
+import std.sort
+import std.text
+import svg
+
+/// A rectangle in CSS px.
+pub struct Rect {
+    x: f64
+    y: f64
+    w: f64
+    h: f64
+}
+
+pub enum Item {
+    Fill { r: Rect, c: Rgba }
+    // A convex quadrilateral (corners in order: x, y pairs), filled.
+    Quad { p: [8]f64, c: Rgba }
+    // `s` in the font `face`, its baseline starting at (`x`, `y`).
+    Text { x: f64, y: f64, s: []u8, face: font.Font, c: Rgba }
+    // An image of `w` x `h` RGBA pixels (the page's), scaled into `r`.
+    Image { r: Rect, w: usize, h: usize, pixels: []u8 }
+    // An SVG drawing fitted into `r` and clipped to it.
+    Svg { r: Rect, pic: *svg.Picture }
+    // Drawing is limited to `r` until the matching `Unclip`.
+    Clip { r: Rect }
+    Unclip
+    // An image layer of a background or mask (background.aye): tiles of
+    // `src`, the first one at `tile`, others every `sx` (`sy`) px across
+    // (down) when `rx` (`ry`), inside `clip`.
+    Tiles { clip: Rect, tile: Rect, sx: f64, sy: f64, rx: bool, ry: bool, src: Source }
+    // A shadow of the box `r` (corners `radii`).
+    Shadow { r: Rect, radii: Radii, dx: f64, dy: f64, blur: f64, spread: f64, c: Rgba, inset: bool }
+    // Drawing goes into a transparent layer over `r` (after `Mask`, into
+    // its mask) until `EndLayer`, which blends it below through the box
+    // `r` with corners `radii` and the mask's alpha.
+    Layer { r: Rect }
+    Mask
+    EndLayer { r: Rect, radii: Radii }
+}
+
+pub struct DisplayList {
+    items: List(Item)
+    // The canvas color.
+    background: Rgba
+    // The extent of the document (from 0, 0), at least the viewport.
+    width: f64
+    height: f64
+
+    pub fn deinit(self: *mut Self) {
+        self.items.deinit()
+    }
+}
+
+/// How the list maps to device pixels: a point at (x, y) CSS px goes to
+/// (x * scale + dx, y * scale + dy).
+pub struct View {
+    scale: f64
+    dx: f64
+    dy: f64
+}
+
+let WHITE = Rgba { r: 255, g: 255, b: 255, a: 255 }
+let BLACK = Rgba { r: 0, g: 0, b: 0, a: 255 }
+// Form controls: the edge of a checkbox or radio button, the accent of a
+// checked one, a disabled one, a selected option in a list box.
+let CONTROL_EDGE = Rgba { r: 118, g: 118, b: 118, a: 255 }
+let ACCENT = Rgba { r: 0, g: 117, b: 255, a: 255 }
+let DISABLED_EDGE = Rgba { r: 196, g: 196, b: 196, a: 255 }
+let SELECTED = Rgba { r: 206, g: 206, b: 206, a: 255 }
+
+/// The display list of a laid-out tree.
+pub fn build(alloc: Allocator, t: *mut Tree) AllocError!DisplayList {
+    let began = perf.start()
+    defer perf.end("paint_build", began, "document")
+    var b = Builder {
+        t: t,
+        list: DisplayList { items: List(Item).init(alloc), background: WHITE, width: t.viewport_w, height: t.viewport_h },
+        skip_bg: null,
+        painting: null,
+        m: layout.Affine.identity(),
+        fixed: false,
+    }
+    errdefer b.list.deinit()
+    if t.root |r| {
+        canvasBackground(&mut b, r)
+        try b.layer(r)
+    }
+    return b.list
+}
+
+/// Is box `i` painted in a layer of its own (positioned, not inline)?
+pub fn isLayer(t: *Tree, i: usize) bool {
+    let b = t.bx(i)
+    if b.kind == BoxKind.Inline || b.kind == BoxKind.Text || b.kind == BoxKind.LineBreak {
+        return false
+    }
+    return b.abs != 0 || layout.isPositioned(b.style) || layout.isTransformed(t, i) || layout.clipOf(t, i) != null
+}
+
+/// A layer inside another: its z-index (`auto` is 0) and tree order.
+pub struct LayerRef {
+    z: f64
+    order: usize
+    box: usize
+}
+
+fn layerBefore(a: LayerRef, b: LayerRef) bool {
+    if a.z != b.z {
+        return a.z < b.z
+    }
+    return a.order < b.order
+}
+
+/// The layers directly inside layer `i` (not those inside them), in
+/// painting order.
+pub fn layersOf(t: *Tree, i: usize, out: *mut List(LayerRef)) AllocError!void {
+    try collectLayers(t, i, out)
+    sort.sort(LayerRef, out.items(), layerBefore)
+}
+
+fn collectLayers(t: *Tree, i: usize, out: *mut List(LayerRef)) AllocError!void {
+    for c in t.children(i) {
+        if isLayer(t, c) {
+            let z = layout.numberOf(t.bx(c).style[css.Z_INDEX], 0.0)
+            try out.append(LayerRef { z: z, order: out.len(), box: c })
+        } else {
+            try collectLayers(t, c, out)
+        }
+    }
+}
+
+// The canvas takes the root's background, or, when that is transparent,
+// the body's (which is then not painted again).
+fn canvasBackground(b: *mut Builder, r: usize) {
+    let root_bg = colorOf(b.t.bx(r).style[css.BACKGROUND_COLOR], WHITE)
+    if root_bg.a > 0 {
+        b.list.background = over(root_bg, WHITE)
+        b.skip_bg = r
+        return
+    }
+    for c in b.t.children(r) {
+        if b.t.bx(c).node |el| {
+            if b.t.doc.isElement(el, "body") {
+                let body_bg = colorOf(b.t.bx(c).style[css.BACKGROUND_COLOR], WHITE)
+                if body_bg.a > 0 {
+                    b.list.background = over(body_bg, WHITE)
+                    b.skip_bg = c
+                }
+                return
+            }
+        }
+    }
+}
+
+// `c` blended over the opaque `under`.
+fn over(c: Rgba, under: Rgba) Rgba {
+    let a = c.a as u32
+    let rest = 255 - a
+    return Rgba {
+        r: ((c.r as u32 * a + under.r as u32 * rest + 127) / 255) as u8,
+        g: ((c.g as u32 * a + under.g as u32 * rest + 127) / 255) as u8,
+        b: ((c.b as u32 * a + under.b as u32 * rest + 127) / 255) as u8,
+        a: 255,
+    }
+}
+
+/// The color of a computed value; `current` for `currentColor` (and
+/// anything that is not a color).
+pub fn colorOf(v: Value, current: Rgba) Rgba {
+    return match v {
+        .Rgba { c } => Rgba { r: c.r, g: c.g, b: c.b, a: math.floor(math.clamp(c.a, 0.0, 1.0) * 255.0 + 0.5) as u8 }
+        _ => current
+    }
+}
+
+fn isVisible(style: []Value) bool {
+    return layout.isKeyword(style[css.VISIBILITY], "visible")
+}
+
+struct Builder {
+    t: *mut Tree
+    list: DisplayList
+    // The box whose background went to the canvas.
+    skip_bg: ?usize
+    // The layer being painted (its descendant layers wait).
+    painting: ?usize
+    // The transforms of the layers being painted (`layout.Xform`), and
+    // whether they are inside a fixed box (which does not extend the
+    // document).
+    m: layout.Affine
+    fixed: bool
+
+    fn add(self: *mut Self, it: Item) AllocError!void {
+        if self.m.isIdentity() {
+            return self.list.items.append(it)
+        }
+        try self.list.items.append(transformed(it, self.m, self.t))
+    }
+
+    fn fill(self: *mut Self, x: f64, y: f64, w: f64, h: f64, c: Rgba) AllocError!void {
+        if w <= 0.0 || h <= 0.0 || c.a == 0 {
+            return
+        }
+        self.extend(x + w, y + h)
+        try self.add(Item.Fill { r: Rect { x: x, y: y, w: w, h: h }, c: c })
+    }
+
+    fn extend(self: *mut Self, right: f64, bottom: f64) {
+        if self.fixed {
+            return
+        }
+        if right > self.list.width {
+            self.list.width = right
+        }
+        if bottom > self.list.height {
+            self.list.height = bottom
+        }
+    }
+
+    // Layer `i`: the layers below it, its own content, the layers above.
+    fn layer(self: *mut Self, i: usize) AllocError!void {
+        var ls = List(LayerRef).init(self.t.backing)
+        defer ls.deinit()
+        try layersOf(self.t, i, &mut ls)
+        for l in ls.items() {
+            if l.z < 0.0 {
+                try self.clippedLayer(l.box)
+            }
+        }
+        let outer = self.painting
+        let outer_m = self.m
+        self.m = self.m.then(layout.xformOf(self.t, i))
+        let clip = layout.clipOf(self.t, i)
+        if clip |c| {
+            try self.add(Item.Clip { r: Rect { x: c[0], y: c[1], w: c[2], h: c[3] } })
+        }
+        self.painting = i
+        try self.box(i)
+        self.painting = outer
+        for l in ls.items() {
+            if l.z >= 0.0 {
+                try self.clippedLayer(l.box)
+            }
+        }
+        if clip != null {
+            try self.add(Item.Unclip)
+        }
+        self.m = outer_m
+    }
+
+    // Starts clipping to the padding box of box `i` (rounded by its
+    // corners: a layer drawn through them); `endClip` ends it.
+    fn beginClip(self: *mut Self, i: usize) AllocError!void {
+        let cb = self.t.bx(i).*
+        let r = Rect { x: cb.ax + cb.border[3], y: cb.ay + cb.border[0], w: cb.w - cb.border[1] - cb.border[3], h: cb.h - cb.border[0] - cb.border[2] }
+        if isRound(radiiOf(cb.style, cb.w, cb.h)) {
+            return self.add(Item.Layer { r: r })
+        }
+        try self.add(Item.Clip { r: r })
+    }
+
+    fn endClip(self: *mut Self, i: usize) AllocError!void {
+        let cb = self.t.bx(i).*
+        let radii = radiiOf(cb.style, cb.w, cb.h)
+        if isRound(radii) {
+            let r = Rect { x: cb.ax + cb.border[3], y: cb.ay + cb.border[0], w: cb.w - cb.border[1] - cb.border[3], h: cb.h - cb.border[0] - cb.border[2] }
+            return self.add(Item.EndLayer { r: r, radii: insetRadii(radii, cb.border[0], cb.border[1], cb.border[2], cb.border[3]) })
+        }
+        try self.add(Item.Unclip)
+    }
+
+    // Layer `i` inside the clips of the ancestors that clip it.
+    fn clippedLayer(self: *mut Self, i: usize) AllocError!void {
+        var pushed: usize = 0
+        var clippers = List(usize).init(self.t.backing)
+        defer clippers.deinit()
+        let lb = self.t.bx(i)
+        var escaping = lb.abs != 0
+        var cur = lb.parent
+        if lb.abs == 2 {
+            cur = null
+        }
+        while cur |c| {
+            let cb = self.t.bx(c).*
+            if escaping && isLayer(self.t, c) {
+                // The containing block.
+                escaping = false
+            }
+            if !escaping && self.clips(c) {
+                try clippers.append(c)
+                pushed += 1
+            }
+            if cb.abs == 2 {
+                break
+            }
+            if cb.abs == 1 {
+                escaping = true
+            }
+            cur = cb.parent
+        }
+        // Outermost first.
+        var k = pushed
+        while k > 0 {
+            k -= 1
+            try self.beginClip(clippers.items()[k])
+        }
+        let outer_fixed = self.fixed
+        self.fixed = self.fixed || lb.abs == 2
+        try self.layer(i)
+        self.fixed = outer_fixed
+        for c in clippers.items() {
+            try self.endClip(c)
+        }
+    }
+
+    // The floats among the inline content of box `i` (through its
+    // inline boxes).
+    fn inlineFloats(self: *mut Self, i: usize) AllocError!void {
+        let n = self.t.children(i).len
+        for k in 0..n {
+            let c = self.t.children(i)[k]
+            let cb = self.t.bx(c)
+            if cb.float != 0 {
+                try self.box(c)
+            } else if cb.kind == BoxKind.Inline {
+                try self.inlineFloats(c)
+            }
+        }
+    }
+
+    // A box that is not inside an inline formatting context (or an
+    // atomic inline), and its subtree; a layer waits for its turn.
+    fn box(self: *mut Self, i: usize) AllocError!void {
+        if self.painting != i && isLayer(self.t, i) {
+            return
+        }
+        let b = self.t.bx(i).*
+        if layout.numberOf(b.style[css.OPACITY], 1.0) <= 0.0 {
+            // Fully transparent (other opacities are not supported).
+            return
+        }
+        let visible = isVisible(b.style)
+        self.extend(b.ax + b.w + b.margin[1], b.ay + b.h + b.margin[2])
+        if visible {
+            try decorate(self, i, b.ax, b.ay, b.w, b.h, b.border, b.padding, true, true)
+        }
+        let cx = b.ax + b.border[3] + b.padding[3]
+        let cy = b.ay + b.border[0] + b.padding[0]
+        let cw = b.w - b.border[1] - b.border[3] - b.padding[1] - b.padding[3]
+        let ch = b.h - b.border[0] - b.border[2] - b.padding[0] - b.padding[2]
+        if b.kind == BoxKind.Image {
+            if visible {
+                try self.replaced(i, cx, cy, cw, ch)
+            }
+            return
+        }
+        if visible {
+            if b.node |el| {
+                try self.controlParts(i, el, cx, cy, cw, ch)
+            }
+        }
+        if b.marker.len > 0 && visible {
+            let m = layout.textMetrics(self.t, b.style)
+            try self.add(Item.Text {
+                x: cx + b.marker_x,
+                y: cy + b.marker_y + m.ascent,
+                s: b.marker,
+                face: m.font,
+                c: colorOf(b.style[css.COLOR], BLACK),
+            })
+        }
+        let clip = self.clips(i)
+        if clip {
+            try self.beginClip(i)
+        }
+        if layout.hasInlineContent(self.t, i) {
+            try self.inlineFloats(i)
+            for li in b.line_start..b.line_end {
+                let line = self.t.lines.items()[li]
+                for fi in line.frag_start..line.frag_end {
+                    try self.frag(fi, b.line_start, b.line_end, cx, cy)
+                }
+            }
+        } else {
+            let n = self.t.children(i).len
+            for k in 0..n {
+                try self.box(self.t.children(i)[k])
+            }
+        }
+        if clip {
+            try self.endClip(i)
+        }
+    }
+
+    // Does box `i` clip its content (overflow other than `visible`)? Not
+    // the root and the body: their overflow is the viewport's.
+    fn clips(self: *mut Self, i: usize) bool {
+        let b = self.t.bx(i)
+        if layout.isKeyword(b.style[css.OVERFLOW_X], "visible") && layout.isKeyword(b.style[css.OVERFLOW_Y], "visible") {
+            return false
+        }
+        if self.t.root == i {
+            return false
+        }
+        if b.node |el| {
+            if self.t.doc.isElement(el, "body") {
+                return false
+            }
+        }
+        return true
+    }
+
+    // Fragment `fi` of a line of the block container whose content box
+    // is at (`cx`, `cy`), which has lines `l0..l1`.
+    fn frag(self: *mut Self, fi: usize, l0: usize, l1: usize, cx: f64, cy: f64) AllocError!void {
+        let f = self.t.frags.items()[fi]
+        let b = self.t.bx(f.box).*
+        match f.kind {
+            .Atomic => {
+                if !f.hidden {
+                    try self.box(f.box)
+                }
+            }
+            .Ellipsis => {
+                if !isVisible(b.style) {
+                    return
+                }
+                let m = layout.textMetrics(self.t, b.style)
+                try self.add(Item.Text { x: cx + f.x, y: cy + f.y + m.ascent, s: f.ellipsis, face: m.font, c: colorOf(b.style[css.COLOR], BLACK) })
+            }
+            .Inline => {
+                if !isVisible(b.style) {
+                    return
+                }
+                let x = cx + f.x
+                let y = cy + f.y
+                let first = !self.hasFrag(f.box, self.t.lines.items()[l0].frag_start, fi)
+                let last = !self.hasFrag(f.box, fi + 1, self.t.lines.items()[l1 - 1].frag_end)
+                try decorate(self, f.box, x, y, f.w, f.h, b.border, b.padding, first, last)
+            }
+            .Text => {
+                if !isVisible(b.style) || f.end <= f.start {
+                    return
+                }
+                let m = layout.textMetrics(self.t, b.style)
+                let x = cx + f.x
+                let base = cy + f.y + m.ascent
+                let color = colorOf(b.style[css.COLOR], BLACK)
+                self.extend(x + f.w, cy + f.y + f.h)
+                var face = m.font
+                face.rtl = f.rtl
+                try self.add(Item.Text { x: x, y: base, s: b.text[f.start..f.end], face: face, c: color })
+                try self.decorations(f.box, x, base, f.w, m, color)
+            }
+        }
+    }
+
+    // Is there a fragment of box `bi` among fragments `from..to`?
+    fn hasFrag(self: *mut Self, bi: usize, from: usize, to: usize) bool {
+        for k in from..to {
+            let f = self.t.frags.items()[k]
+            if f.box == bi && f.kind == FragKind.Inline {
+                return true
+            }
+        }
+        return false
+    }
+
+    // Underline, overline and line-through of the text box `i` (from
+    // its ancestors up to the nearest atomic inline or the root).
+    fn decorations(self: *mut Self, i: usize, x: f64, base: f64, w: f64, m: layout.TextMetrics, c: Rgba) AllocError!void {
+        var under = false
+        var over_line = false
+        var through = false
+        var cur: ?usize = i
+        while cur |k| {
+            let b = self.t.bx(k)
+            let lines = layout.keywordOf(b.style[css.TEXT_DECORATION_LINE])
+            under = under || hasWord(lines, "underline")
+            over_line = over_line || hasWord(lines, "overline")
+            through = through || hasWord(lines, "line-through")
+            if k != i && (b.kind == BoxKind.InlineBlock || (b.inline_level && b.kind != BoxKind.Inline && b.kind != BoxKind.Text)) {
+                break
+            }
+            cur = b.parent
+        }
+        var thick = math.floor(m.font.size / 16.0 + 0.5)
+        if thick < 1.0 {
+            thick = 1.0
+        }
+        if under {
+            var gap = math.floor(m.descent * 0.4 + 0.5)
+            if gap < 1.0 {
+                gap = 1.0
+            }
+            try self.fill(x, base + gap, w, thick, c)
+        }
+        if over_line {
+            try self.fill(x, base - m.ascent, w, thick, c)
+        }
+        if through {
+            try self.fill(x, base - math.floor(m.ascent * 0.35 + 0.5), w, thick, c)
+        }
+    }
+
+    // The borders of a border box at (`x`, `y`), `w` x `h`, with used
+    // widths `widths`; the left one only when `left`, the right one only
+    // when `right` (the parts of an inline box split over lines).
+    fn borders(self: *mut Self, style: []Value, x: f64, y: f64, w: f64, h: f64, widths: [4]f64, left: bool, right: bool) AllocError!void {
+        let current = colorOf(style[css.COLOR], BLACK)
+        if try self.joinedBorders(style, current, x, y, w, h, widths, left, right) {
+            return
+        }
+        let top = widths[0]
+        let bottom = widths[2]
+        for side in 0..4 {
+            let bw = widths[side]
+            if bw <= 0.0 || (side == 3 && !left) || (side == 1 && !right) {
+                continue
+            }
+            let kind = layout.keywordOf(style[css.BORDER_TOP_STYLE + side])
+            if text.eql(kind, "none") || text.eql(kind, "hidden") {
+                continue
+            }
+            let c = colorOf(style[css.BORDER_TOP_COLOR + side], current)
+            if side == 0 {
+                try self.side(kind, x, y, w, bw, true, c)
+            } else if side == 2 {
+                try self.side(kind, x, y + h - bw, w, bw, true, c)
+            } else if side == 3 {
+                try self.side(kind, x, y + top, bw, h - top - bottom, false, c)
+            } else {
+                try self.side(kind, x + w - bw, y + top, bw, h - top - bottom, false, c)
+            }
+        }
+    }
+
+    // Solid borders whose adjacent sides differ in color (one of them
+    // transparent, say) meet on the diagonals of the corners: each side
+    // is a trapezoid (a triangle when the box has no content, as CSS
+    // triangles and pie charts use). False, and nothing drawn, when the
+    // sides do not need it.
+    fn joinedBorders(self: *mut Self, style: []Value, current: Rgba, x: f64, y: f64, w: f64, h: f64, widths: [4]f64, left: bool, right: bool) AllocError!bool {
+        var colors = [4]Rgba{current, current, current, current}
+        var on = [4]bool{false, false, false, false}
+        for side in 0..4 {
+            if widths[side] <= 0.0 || (side == 3 && !left) || (side == 1 && !right) {
+                continue
+            }
+            let kind = layout.keywordOf(style[css.BORDER_TOP_STYLE + side])
+            if text.eql(kind, "none") || text.eql(kind, "hidden") {
+                continue
+            }
+            if text.eql(kind, "dashed") || text.eql(kind, "dotted") || text.eql(kind, "double") {
+                return false
+            }
+            on[side] = true
+            colors[side] = colorOf(style[css.BORDER_TOP_COLOR + side], current)
+        }
+        var differ = false
+        for side in 0..4 {
+            let next = (side + 1) % 4
+            if on[side] && on[next] && !sameRgba(colors[side], colors[next]) {
+                differ = true
+            }
+        }
+        if !differ {
+            return false
+        }
+        let t = widths[0]
+        let r = widths[1]
+        let b = widths[2]
+        let l = widths[3]
+        let x1 = x + w
+        let y1 = y + h
+        let quads = [4][8]f64{
+            [8]f64{x, y, x1, y, x1 - r, y + t, x + l, y + t},
+            [8]f64{x1, y, x1, y1, x1 - r, y1 - b, x1 - r, y + t},
+            [8]f64{x1, y1, x, y1, x + l, y1 - b, x1 - r, y1 - b},
+            [8]f64{x, y1, x, y, x + l, y + t, x + l, y1 - b},
+        }
+        for side in 0..4 {
+            if on[side] && colors[side].a > 0 {
+                self.extend(x1, y1)
+                try self.add(Item.Quad { p: quads[side], c: colors[side] })
+            }
+        }
+        return true
+    }
+
+    // One side of a border: the strip at (`x`, `y`), `w` x `h`, running
+    // horizontally when `across`.
+    fn side(self: *mut Self, kind: []u8, x: f64, y: f64, w: f64, h: f64, across: bool, c: Rgba) AllocError!void {
+        var thick = h
+        var length = w
+        if !across {
+            thick = w
+            length = h
+        }
+        if text.eql(kind, "double") && thick >= 3.0 {
+            let line = math.floor(thick / 3.0 + 0.5)
+            if across {
+                try self.fill(x, y, w, line, c)
+                try self.fill(x, y + h - line, w, line, c)
+            } else {
+                try self.fill(x, y, line, h, c)
+                try self.fill(x + w - line, y, line, h, c)
+            }
+            return
+        }
+        var dash = 0.0
+        if text.eql(kind, "dashed") {
+            dash = thick * 3.0
+        } else if text.eql(kind, "dotted") {
+            dash = thick
+        }
+        if dash <= 0.0 {
+            return self.fill(x, y, w, h, c)
+        }
+        var pos = 0.0
+        while pos < length {
+            var seg = dash
+            if pos + seg > length {
+                seg = length - pos
+            }
+            if across {
+                try self.fill(x + pos, y, seg, h, c)
+            } else {
+                try self.fill(x, y + pos, w, seg, c)
+            }
+            pos += dash * 2.0
+        }
+    }
+
+    // A replaced element: its image, a checkbox, a radio button, or else
+    // a placeholder.
+    fn replaced(self: *mut Self, i: usize, x: f64, y: f64, w: f64, h: f64) AllocError!void {
+        if self.t.bx(i).node == null && self.t.bx(i).text.len > 0 {
+            // The image of a `content: url()`.
+            let imgs = self.t.images orelse return
+            let u = self.t.bx(i).text
+            if imgs.urlPicture(u) |pic| {
+                return self.drawing(pic, x, y, w, h)
+            }
+            let bmp = imgs.urlBitmap(u) orelse return
+            if w > 0.0 && h > 0.0 {
+                self.extend(x + w, y + h)
+                try self.add(Item.Image { r: Rect { x: x, y: y, w: w, h: h }, w: bmp.width, h: bmp.height, pixels: bmp.pixels })
+            }
+            return
+        }
+        if self.t.bx(i).node |el| {
+            for fv in self.t.frames.items() {
+                if dom.same(fv.node, el) {
+                    return self.subframe(fv.tree, fv.scroll, x, y, w, h)
+                }
+            }
+            if self.t.images |imgs| {
+                if imgs.picture(el) |pic| {
+                    return self.drawing(pic, x, y, w, h)
+                }
+                if imgs.get(el) |bmp| {
+                    if w > 0.0 && h > 0.0 {
+                        self.extend(x + w, y + h)
+                        let box = Rect { x: x, y: y, w: w, h: h }
+                        let r = fitted(box, bmp.width as f64, bmp.height as f64, layout.keywordOf(self.t.bx(i).style[css.OBJECT_FIT]))
+                        let clip = r.w > w || r.h > h
+                        if clip {
+                            try self.add(Item.Clip { r: box })
+                        }
+                        try self.add(Item.Image { r: r, w: bmp.width, h: bmp.height, pixels: bmp.pixels })
+                        if clip {
+                            try self.add(Item.Unclip)
+                        }
+                    }
+                    return
+                }
+            }
+            if self.t.doc.isElement(el, "canvas") {
+                return
+            }
+            if self.t.doc.isElement(el, "svg") {
+                // The picture lives in the tree's arena, as long as the list.
+                let pic = try svg.build(self.t.alloc, self.t.doc, self.t.styles, el)
+                return self.drawing(pic, x, y, w, h)
+            }
+            let kind = layout.controlKind(self.t.doc, el)
+            if kind == layout.ControlKind.Checkbox {
+                return self.checkbox(el, x, y, w, h)
+            }
+            if kind == layout.ControlKind.Radio {
+                return self.radio(el, x, y, w, h)
+            }
+            if kind == layout.ControlKind.Range || kind == layout.ControlKind.Color || kind == layout.ControlKind.Progress || kind == layout.ControlKind.Meter {
+                return widget(self, el, kind, x, y, w, h)
+            }
+        }
+        return self.placeholder(i, x, y, w, h)
+    }
+
+    fn drawing(self: *mut Self, pic: *svg.Picture, x: f64, y: f64, w: f64, h: f64) AllocError!void {
+        if w > 0.0 && h > 0.0 && pic.shapes.len() > 0 {
+            self.extend(x + w, y + h)
+            try self.add(Item.Svg { r: Rect { x: x, y: y, w: w, h: h }, pic: pic })
+        }
+    }
+
+    // The display list of a frame's document `sub` (scrolled by
+    // `scroll`), moved to (`x`, `y`) and clipped to `w` x `h` on its
+    // canvas color.
+    fn subframe(self: *mut Self, sub: *mut Tree, scroll: f64, x: f64, y: f64, w: f64, h: f64) AllocError!void {
+        if w <= 0.0 || h <= 0.0 {
+            return
+        }
+        var inner = try build(self.t.backing, sub)
+        defer inner.deinit()
+        let r = Rect { x: x, y: y, w: w, h: h }
+        try self.add(Item.Clip { r: r })
+        try self.add(Item.Fill { r: r, c: inner.background })
+        for it in inner.items.items() {
+            try self.add(moved(it, x, y - scroll))
+        }
+        try self.add(Item.Unclip)
+    }
+
+    fn checkbox(self: *mut Self, el: dom.NodeId, x: f64, y: f64, w: f64, h: f64) AllocError!void {
+        let size = math.floor(math.min(w, h))
+        if size < 3.0 {
+            return
+        }
+        let ox = x + math.floor((w - size) / 2.0)
+        let oy = y + math.floor((h - size) / 2.0)
+        let on = dom.isChecked(self.t.doc, el)
+        let off = dom.isDisabled(self.t.doc, el)
+        var edge = CONTROL_EDGE
+        var inside = WHITE
+        if on {
+            edge = ACCENT
+            inside = ACCENT
+        }
+        if off {
+            edge = DISABLED_EDGE
+            if on {
+                inside = DISABLED_EDGE
+            }
+        }
+        try self.fill(ox, oy, size, size, edge)
+        try self.fill(ox + 1.0, oy + 1.0, size - 2.0, size - 2.0, inside)
+        if on {
+            // A check mark: two strokes of squares, from the left middle
+            // down to the bottom third, then up to the top right.
+            let u = size / 13.0
+            let pen = math.max(1.0, math.floor(2.0 * u + 0.5))
+            var k = 0.0
+            while k <= 1.0 {
+                try self.fill(ox + (3.0 + 2.0 * k) * u, oy + (6.5 + 2.5 * k) * u - pen / 2.0, pen, pen, WHITE)
+                try self.fill(ox + (5.0 + 5.0 * k) * u, oy + (9.0 - 6.0 * k) * u - pen / 2.0, pen, pen, WHITE)
+                k += 0.125
+            }
+        }
+    }
+
+    fn radio(self: *mut Self, el: dom.NodeId, x: f64, y: f64, w: f64, h: f64) AllocError!void {
+        let size = math.floor(math.min(w, h))
+        if size < 3.0 {
+            return
+        }
+        let cx = x + w / 2.0
+        let cy = y + h / 2.0
+        let r = size / 2.0
+        let on = dom.isChecked(self.t.doc, el)
+        var edge = CONTROL_EDGE
+        if on {
+            edge = ACCENT
+        }
+        if dom.isDisabled(self.t.doc, el) {
+            edge = DISABLED_EDGE
+        }
+        try self.disc(cx, cy, r, edge)
+        try self.disc(cx, cy, r - 1.0, WHITE)
+        if on {
+            try self.disc(cx, cy, r - 3.0, edge)
+        }
+    }
+
+    // A disc of radius `r` around (`cx`, `cy`), one fill per row of
+    // pixels.
+    fn disc(self: *mut Self, cx: f64, cy: f64, r: f64, c: Rgba) AllocError!void {
+        if r <= 0.0 {
+            return
+        }
+        var row = math.floor(cy - r)
+        while row < cy + r {
+            let dy = row + 0.5 - cy
+            let half = r * r - dy * dy
+            if half > 0.0 {
+                let hw = math.sqrt(half)
+                let x0 = math.floor(cx - hw + 0.5)
+                let x1 = math.floor(cx + hw + 0.5)
+                try self.fill(x0, row, x1 - x0, 1.0, c)
+            }
+            row += 1.0
+        }
+    }
+
+    // The parts of a form control that its text does not show: the
+    // arrow of a `select`, the selected options of a list box.
+    fn controlParts(self: *mut Self, i: usize, el: dom.NodeId, cx: f64, cy: f64, cw: f64, ch: f64) AllocError!void {
+        let kind = layout.controlKind(self.t.doc, el)
+        let b = self.t.bx(i).*
+        if kind == layout.ControlKind.Select {
+            // A small triangle pointing down, in the right padding.
+            let ink = colorOf(b.style[css.COLOR], BLACK)
+            let mid_x = cx + cw + b.padding[1] / 2.0
+            let mid_y = math.floor(cy + ch / 2.0)
+            for k in 0..4 {
+                let half = 4.0 - k as f64
+                try self.fill(math.floor(mid_x - half), mid_y - 2.0 + k as f64, 2.0 * half, 1.0, ink)
+            }
+            return
+        }
+        if kind != layout.ControlKind.ListBox {
+            return
+        }
+        var opts = List(dom.NodeId).init(self.t.backing)
+        defer opts.deinit()
+        try dom.options(self.t.doc, el, &mut opts)
+        var scroll = 0.0
+        if self.t.doc.controls.get(el) |c| {
+            scroll = c.scroll
+        }
+        var k: usize = 0
+        for li in b.line_start..b.line_end {
+            if k < opts.len() && dom.isSelected(self.t.doc, opts.items()[k]) {
+                let line = self.t.lines.items()[li]
+                try self.fill(cx, cy + line.y - scroll, cw, line.h, SELECTED)
+            }
+            k += 1
+        }
+    }
+
+    // A replaced element (an image that is not loaded, a frame): a gray
+    // frame inside its content box and its `alt` text, or the address
+    // of a frame (`iframe`, `embed`: `src`; `object`: `data`) as a link.
+    fn placeholder(self: *mut Self, i: usize, x: f64, y: f64, w: f64, h: f64) AllocError!void {
+        let gray = Rgba { r: 160, g: 160, b: 160, a: 255 }
+        if w >= 2.0 && h >= 2.0 {
+            try self.fill(x, y, w, 1.0, gray)
+            try self.fill(x, y + h - 1.0, w, 1.0, gray)
+            try self.fill(x, y + 1.0, 1.0, h - 2.0, gray)
+            try self.fill(x + w - 1.0, y + 1.0, 1.0, h - 2.0, gray)
+        }
+        let b = self.t.bx(i).*
+        if b.node |el| {
+            if frameSource(self.t.doc, el) |src| {
+                if src.len > 0 && w > 4.0 && h > 4.0 {
+                    let m = layout.textMetrics(self.t, b.style)
+                    let link = Rgba { r: 0, g: 0, b: 238, a: 255 }
+                    try self.add(Item.Clip { r: Rect { x: x + 1.0, y: y + 1.0, w: w - 2.0, h: h - 2.0 } })
+                    try self.add(Item.Text { x: x + 3.0, y: y + 2.0 + m.ascent, s: src, face: m.font, c: link })
+                    let uw = math.min(w - 6.0, self.t.measure.width(m.font, src))
+                    try self.fill(x + 3.0, y + 2.0 + m.ascent + 1.0, uw, 1.0, link)
+                    try self.add(Item.Unclip)
+                }
+                return
+            }
+            if self.t.doc.attr(el, "alt") |alt| {
+                if alt.len > 0 && w > 4.0 && h > 4.0 {
+                    let m = layout.textMetrics(self.t, b.style)
+                    try self.add(Item.Clip { r: Rect { x: x + 1.0, y: y + 1.0, w: w - 2.0, h: h - 2.0 } })
+                    try self.add(Item.Text { x: x + 3.0, y: y + 2.0 + m.ascent, s: alt, face: m.font, c: colorOf(b.style[css.COLOR], BLACK) })
+                    try self.add(Item.Unclip)
+                }
+            }
+        }
+    }
+}
+
+// Where an image of `iw` x `ih` pixels goes in the content box `box`
+// after `object-fit` (centered): `fill` stretches it, `contain` and
+// `cover` keep its ratio inside or over the box (which clips it),
+// `none` keeps its size, `scale-down` is the smaller of those two.
+fn fitted(box: Rect, iw: f64, ih: f64, fit: []u8) Rect {
+    if iw <= 0.0 || ih <= 0.0 || text.eql(fit, "fill") || fit.len == 0 {
+        return box
+    }
+    var k = 1.0
+    let sx = box.w / iw
+    let sy = box.h / ih
+    if text.eql(fit, "contain") {
+        k = math.min(sx, sy)
+    } else if text.eql(fit, "cover") {
+        k = math.max(sx, sy)
+    } else if text.eql(fit, "scale-down") {
+        k = math.min(1.0, math.min(sx, sy))
+    }
+    let w = iw * k
+    let h = ih * k
+    return Rect { x: box.x + (box.w - w) / 2.0, y: box.y + (box.h - h) / 2.0, w: w, h: h }
+}
+
+// Item `it` mapped by `m` (scales, flips and quarter turns): rectangles
+// become their images; text keeps its direction, scaled, at the top
+// left of the image of its box.
+fn transformed(it: Item, m: layout.Affine, t: *mut Tree) Item {
+    match it {
+        .Fill { r, c } => {
+            return Item.Fill { r: mapRect(r, m), c: c }
+        }
+        .Quad { p, c } => {
+            var q = p
+            for k in 0..4 {
+                q[k * 2] = m.x(p[k * 2], p[k * 2 + 1])
+                q[k * 2 + 1] = m.y(p[k * 2], p[k * 2 + 1])
+            }
+            return Item.Quad { p: q, c: c }
+        }
+        .Image { r, w, h, pixels } => {
+            return Item.Image { r: mapRect(r, m), w: w, h: h, pixels: pixels }
+        }
+        .Svg { r, pic } => {
+            return Item.Svg { r: mapRect(r, m), pic: pic }
+        }
+        .Clip { r } => {
+            return Item.Clip { r: mapRect(r, m) }
+        }
+        .Text { x, y, s, face, c } => {
+            let k = math.sqrt(math.abs(m.a * m.d - m.b * m.c))
+            let up = face.size * 0.8
+            let box = mapRect(Rect { x: x, y: y - up, w: t.measure.width(face, s), h: face.size }, m)
+            var f = face
+            f.size = face.size * k
+            return Item.Text { x: box.x, y: box.y + up * k, s: s, face: f, c: c }
+        }
+        .Unclip => {
+            return Item.Unclip
+        }
+        .Tiles { clip, tile, sx, sy, rx, ry, src } => {
+            let nt = mapRect(tile, m)
+            // A quarter turn swaps the directions the tiles repeat in.
+            if math.abs(m.a) >= math.abs(m.b) {
+                return Item.Tiles { clip: mapRect(clip, m), tile: nt, sx: sx * math.abs(m.a), sy: sy * math.abs(m.d), rx: rx, ry: ry, src: mappedSource(src, m, tile, nt, t) }
+            }
+            return Item.Tiles { clip: mapRect(clip, m), tile: nt, sx: sy * math.abs(m.c), sy: sx * math.abs(m.b), rx: ry, ry: rx, src: mappedSource(src, m, tile, nt, t) }
+        }
+        .Shadow { r, radii, dx, dy, blur, spread, c, inset } => {
+            let k = math.sqrt(math.abs(m.a * m.d - m.b * m.c))
+            return Item.Shadow { r: mapRect(r, m), radii: scaledRadii(radii, k), dx: m.a * dx + m.c * dy, dy: m.b * dx + m.d * dy, blur: blur * k, spread: spread * k, c: c, inset: inset }
+        }
+        .Layer { r } => {
+            return Item.Layer { r: mapRect(r, m) }
+        }
+        .Mask => {
+            return Item.Mask
+        }
+        .EndLayer { r, radii } => {
+            let k = math.sqrt(math.abs(m.a * m.d - m.b * m.c))
+            return Item.EndLayer { r: mapRect(r, m), radii: scaledRadii(radii, k) }
+        }
+    }
+}
+
+// The source of a tile `tile` mapped by `m` to `nt`: a gradient (in the
+// tile's coordinates) gets the map; images are scaled into the tile.
+fn mappedSource(src: Source, m: layout.Affine, tile: Rect, nt: Rect, t: *mut Tree) Source {
+    match src {
+        .Gradient { g } => {
+            let to = svg.Matrix { a: m.a, b: m.b, c: m.c, d: m.d, e: m.x(tile.x, tile.y) - nt.x, f: m.y(tile.x, tile.y) - nt.y }
+            var copy = g.*
+            copy.m = svg.mul(to, g.m)
+            let p = t.alloc.create(copy) catch return src
+            return Source.Gradient { g: p }
+        }
+        _ => {
+            return src
+        }
+    }
+}
+
+fn movedQuad(p: [8]f64, dx: f64, dy: f64) [8]f64 {
+    var q = p
+    for k in 0..4 {
+        q[k * 2] = p[k * 2] + dx
+        q[k * 2 + 1] = p[k * 2 + 1] + dy
+    }
+    return q
+}
+
+// The bounding box of the image of `r` by `m`.
+fn mapRect(r: Rect, m: layout.Affine) Rect {
+    let xs = [4]f64{m.x(r.x, r.y), m.x(r.x + r.w, r.y), m.x(r.x, r.y + r.h), m.x(r.x + r.w, r.y + r.h)}
+    let ys = [4]f64{m.y(r.x, r.y), m.y(r.x + r.w, r.y), m.y(r.x, r.y + r.h), m.y(r.x + r.w, r.y + r.h)}
+    var x0 = xs[0]
+    var x1 = xs[0]
+    var y0 = ys[0]
+    var y1 = ys[0]
+    for k in 1..4 {
+        x0 = math.min(x0, xs[k])
+        x1 = math.max(x1, xs[k])
+        y0 = math.min(y0, ys[k])
+        y1 = math.max(y1, ys[k])
+    }
+    return Rect { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+}
+
+// `it` moved by (`dx`, `dy`).
+fn moved(it: Item, dx: f64, dy: f64) Item {
+    return match it {
+        .Fill { r, c } => Item.Fill { r: Rect { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h }, c: c }
+        .Quad { p, c } => Item.Quad { p: movedQuad(p, dx, dy), c: c }
+        .Text { x, y, s, face, c } => Item.Text { x: x + dx, y: y + dy, s: s, face: face, c: c }
+        .Image { r, w, h, pixels } => Item.Image { r: Rect { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h }, w: w, h: h, pixels: pixels }
+        .Svg { r, pic } => Item.Svg { r: Rect { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h }, pic: pic }
+        .Clip { r } => Item.Clip { r: Rect { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h } }
+        .Unclip => Item.Unclip
+        .Tiles { clip, tile, sx, sy, rx, ry, src } => Item.Tiles { clip: Rect { x: clip.x + dx, y: clip.y + dy, w: clip.w, h: clip.h }, tile: Rect { x: tile.x + dx, y: tile.y + dy, w: tile.w, h: tile.h }, sx: sx, sy: sy, rx: rx, ry: ry, src: src }
+        .Shadow { r, radii, dx: sdx, dy: sdy, blur, spread, c, inset } => Item.Shadow { r: Rect { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h }, radii: radii, dx: sdx, dy: sdy, blur: blur, spread: spread, c: c, inset: inset }
+        .Layer { r } => Item.Layer { r: Rect { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h } }
+        .Mask => Item.Mask
+        .EndLayer { r, radii } => Item.EndLayer { r: Rect { x: r.x + dx, y: r.y + dy, w: r.w, h: r.h }, radii: radii }
+    }
+}
+
+/// The address a `frame`, `iframe`, `embed` (`src`) or `object`
+/// (`data`) shows; null for other elements.
+pub fn frameSource(doc: *dom.Document, el: dom.NodeId) ?[]u8 {
+    if doc.isElement(el, "iframe") || doc.isElement(el, "embed") || doc.isElement(el, "frame") {
+        return doc.attr(el, "src") orelse ""
+    }
+    if doc.isElement(el, "object") {
+        return doc.attr(el, "data") orelse ""
+    }
+    return null
+}
+
+// Is `word` one of the space-separated words of `list`?
+fn hasWord(list: []u8, word: []u8) bool {
+    var words = text.split(list, " ")
+    while words.next() |w| {
+        if text.eql(w, word) {
+            return true
+        }
+    }
+    return false
+}
+
+// ---- drawing
+
+/// The device rectangle of `r`: its edges rounded to pixel edges, so
+/// that rectangles which touch in CSS px touch on the canvas.
+pub fn deviceRect(r: Rect, v: View) IRect {
+    return IRect {
+        x0: roundPx(r.x * v.scale + v.dx),
+        y0: roundPx(r.y * v.scale + v.dy),
+        x1: roundPx((r.x + r.w) * v.scale + v.dx),
+        y1: roundPx((r.y + r.h) * v.scale + v.dy),
+    }
+}
+
+/// Draws the items of `list` onto `canvas` (inside its clip). Text far
+/// outside the clip is skipped.
+pub fn render(list: *DisplayList, target: *mut Canvas, view: View, painter: *mut TextPainter) AllocError!void {
+    let began = perf.start()
+    defer perf.end("paint", began, "viewport")
+    // The layers being drawn; `canvas` and `v` are the top one's.
+    var frames = List(Frame).init(target.alloc)
+    defer dropFrames(&mut frames)
+    var canvas = target
+    var v = view
+    for it in list.items.items() {
+        match it {
+            .Fill { r, c } => canvas.fillRect(deviceRect(r, v), c)
+            .Quad { p, c } => {
+                var q = p
+                for k in 0..4 {
+                    q[k * 2] = p[k * 2] * v.scale + v.dx
+                    q[k * 2 + 1] = p[k * 2 + 1] * v.scale + v.dy
+                }
+                canvas.fillQuad(q, c)
+            }
+            .Text { x, y, s, face, c } => {
+                let base = y * v.scale + v.dy
+                let em = face.size * v.scale
+                if base + em >= canvas.clip.y0 as f64 && base - 2.0 * em <= canvas.clip.y1 as f64 {
+                    try painter.draw(canvas, x * v.scale + v.dx, base, s, face, v.scale, c)
+                }
+            }
+            .Image { r, w, h, pixels } => canvas.drawImage(deviceRect(r, v), w, h, pixels)
+            .Svg { r, pic } => {
+                let d = deviceRect(r, v)
+                let k = canvas.clip
+                let t = svg.Target { pixels: canvas.pixels, width: canvas.width, ox: 0, oy: 0, x0: k.x0, y0: k.y0, x1: k.x1, y1: k.y1 }
+                try svg.render(canvas.alloc, pic, t, d.x0 as f64, d.y0 as f64, (d.x1 - d.x0) as f64, (d.y1 - d.y0) as f64, v.scale)
+            }
+            .Clip { r } => {
+                try canvas.pushClip(deviceRect(r, v))
+            }
+            .Unclip => canvas.popClip()
+            .Tiles { clip, tile, sx, sy, rx, ry, src } => {
+                try drawTiles(canvas, v, clip, tile, sx, sy, rx, ry, src)
+            }
+            .Shadow { r, radii, dx, dy, blur, spread, c, inset } => {
+                try drawShadow(canvas, v, r, radii, dx, dy, blur, spread, c, inset)
+            }
+            .Layer { r } => {
+                try beginLayer(&mut frames, canvas, v, r)
+                let f = frames.items()[frames.len() - 1]
+                canvas = f.layer
+                v = layerView(f)
+            }
+            .Mask => {
+                if try beginMask(&mut frames) |m| {
+                    canvas = m
+                }
+            }
+            .EndLayer { r, radii } => {
+                if frames.pop() |f| {
+                    canvas = f.outer
+                    v = f.outer_view
+                    endLayer(f, r, radii) catch |e| {
+                        dropFrame(f)
+                        return e
+                    }
+                    dropFrame(f)
+                }
+            }
+        }
+    }
+}
+
+fn sameRgba(a: Rgba, b: Rgba) bool {
+    return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a
+}

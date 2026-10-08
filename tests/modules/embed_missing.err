@@ -1,2 +1,2 @@
-embed_missing/main.ore:1:15: error[E0111]: `@embedFile` cannot read `embed_missing/prelude.js`: no such file (the path is relative to the directory of this source file)
-embed_missing/main.ore:5:15: error[E0111]: `@embedFile` cannot read `embed_missing/../embed_missing`: it is a directory
+embed_missing/main.aye:1:15: error[E0111]: `@embedFile` cannot read `embed_missing/prelude.js`: no such file (the path is relative to the directory of this source file)
+embed_missing/main.aye:5:15: error[E0111]: `@embedFile` cannot read `embed_missing/../embed_missing`: it is a directory

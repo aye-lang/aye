@@ -1,1 +1,1 @@
-shadow_param.ore:3:9: error[E0016]: `n` is already declared at 1:6 (shadowing is not allowed)
+shadow_param.aye:3:9: error[E0016]: `n` is already declared at 1:6 (shadowing is not allowed)

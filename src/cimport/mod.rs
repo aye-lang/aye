@@ -1,18 +1,18 @@
-//! `@cimport`: Ore declarations generated from a C header with libclang.
+//! `@cimport`: Aye declarations generated from a C header with libclang.
 //!
 //! `let c = @cimport("zlib.h", "-DFOO=1")` parses the header (with the
 //! flags, the `pkg-config --cflags` of the module's `@link` libraries and
 //! the platform's include directories) and turns its declarations into the
-//! source of an Ore module: `pub extern fn`, `pub extern struct` and
+//! source of an Aye module: `pub extern fn`, `pub extern struct` and
 //! `extern union`, opaque structs, `pub let` constants for enum values and
 //! `#define`d numbers and strings, and type aliases for typedefs. The module
 //! loader parses that source like any other module and binds it to the name.
 //!
-//! The generated source is cached in `$ORE_CACHE_DIR/cimport` (default
-//! `~/.cache/ore/cimport`), keyed by the header, the flags, the libraries
+//! The generated source is cached in `$AYE_CACHE_DIR/cimport` (default
+//! `~/.cache/aye/cimport`), keyed by the header, the flags, the libraries
 //! and the source file's directory, and checked against the modification
 //! times and sizes of every file the header included. A cached header needs
-//! no libclang. `ore cimport HEADER` prints the source.
+//! no libclang. `aye cimport HEADER` prints the source.
 
 mod clang;
 mod generate;
@@ -49,7 +49,7 @@ pub enum Failure {
     Header(String),
 }
 
-/// What `@cimport` makes of a header: the Ore source and the file it is
+/// What `@cimport` makes of a header: the Aye source and the file it is
 /// cached in (the name of the module's file in messages).
 pub struct Imported {
     pub source: String,
@@ -73,7 +73,7 @@ pub fn check_flag(flag: &str) -> Result<(), String> {
     }
 }
 
-/// The header's declarations as Ore source: from the cache when it is
+/// The header's declarations as Aye source: from the cache when it is
 /// fresh, else generated and cached.
 pub fn import(req: &Request) -> Result<Imported, Failure> {
     let dir = cache_dir();
@@ -83,7 +83,7 @@ pub fn import(req: &Request) -> Result<Imported, Failure> {
         .unwrap_or_default();
     let mut h = DefaultHasher::new();
     (GENERATOR_VERSION, env!("CARGO_PKG_VERSION"), req, std::fs::canonicalize(&req.dir).unwrap_or_else(|_| req.dir.clone())).hash(&mut h);
-    let path = dir.join(format!("{stem}-{:016x}.ore", h.finish()));
+    let path = dir.join(format!("{stem}-{:016x}.aye", h.finish()));
     let deps_path = path.with_extension("deps");
     if let (Ok(source), Ok(deps)) = (std::fs::read_to_string(&path), std::fs::read_to_string(&deps_path))
         && deps.lines().all(|l| l.split_once(' ').is_some_and(|(stamp, file)| stamp_of(Path::new(file)).as_deref() == Some(stamp)))
@@ -118,14 +118,14 @@ fn prune(dir: &Path) {
     }
 }
 
-/// The cache directory: `$ORE_CACHE_DIR/cimport`, else under
-/// `$XDG_CACHE_HOME/ore` or `~/.cache/ore`, else the temporary directory.
+/// The cache directory: `$AYE_CACHE_DIR/cimport`, else under
+/// `$XDG_CACHE_HOME/aye` or `~/.cache/aye`, else the temporary directory.
 fn cache_dir() -> PathBuf {
     let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
-    let base = env("ORE_CACHE_DIR")
-        .or_else(|| env("XDG_CACHE_HOME").map(|d| d.join("ore")))
-        .or_else(|| env("HOME").map(|d| d.join(".cache").join("ore")))
-        .unwrap_or_else(|| std::env::temp_dir().join("ore-cache"));
+    let base = env("AYE_CACHE_DIR")
+        .or_else(|| env("XDG_CACHE_HOME").map(|d| d.join("aye")))
+        .or_else(|| env("HOME").map(|d| d.join(".cache").join("aye")))
+        .unwrap_or_else(|| std::env::temp_dir().join("aye-cache"));
     base.join("cimport")
 }
 
@@ -136,7 +136,7 @@ fn stamp_of(p: &Path) -> Option<String> {
     Some(format!("{}.{:09}:{}", t.as_secs(), t.subsec_nanos(), m.len()))
 }
 
-/// Generate the Ore source of a header, without the cache: the source and
+/// Generate the Aye source of a header, without the cache: the source and
 /// every file the header included.
 pub fn generate(req: &Request) -> Result<(String, Vec<String>), Failure> {
     let lib = clang::lib().map_err(|e| {

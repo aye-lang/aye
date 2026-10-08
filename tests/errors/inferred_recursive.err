@@ -1,1 +1,1 @@
-inferred_recursive.ore:7:12: error[E0069]: cannot infer the error set of `count`: it calls itself, directly or through other functions (write the error set, `E!T`)
+inferred_recursive.aye:7:12: error[E0069]: cannot infer the error set of `count`: it calls itself, directly or through other functions (write the error set, `E!T`)

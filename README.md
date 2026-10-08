@@ -1,6 +1,6 @@
-# Ore
+# Aye
 
-Ore is a systems programming language: no garbage collector, no borrow
+Aye is a systems programming language: no garbage collector, no borrow
 checker, no exceptions, no macros. Memory is managed through explicit
 `Allocator` parameters and `defer`/`errdefer`. The syntax is Go-like (braces,
 `name: Type`, no semicolons). Integer overflow and out-of-bounds access trap in
@@ -25,44 +25,44 @@ without it.
 
 ```sh
 cargo build --release
-./target/release/ore run tests/cases/hello.ore
+./target/release/aye run tests/cases/hello.aye
 ```
 
-Commands (`<path>` is a `.ore` file, or a directory: a module of all its
-`.ore` files; see [Modules](#modules-and-std)):
+Commands (`<path>` is a `.aye` file, or a directory: a module of all its
+`.aye` files; see [Modules](#modules-and-std)):
 
 ```
-ore build <path> [-o out] [--mode debug|safe|fast]    # executable (default name: file stem or directory name)
-ore run <path> [--mode debug|safe|fast] [-- args...]  # build to a temp file and run it with args
-ore emit-c <path> [--mode debug|safe|fast]            # print the generated C
-ore check <path> [--json]                             # front end only: report errors, no C, no clang
-ore fix <path>                                        # apply the fix-its of `ore check` in place
-ore test <path> [--filter <text>] [--module <m>] [--json] [--mode debug|safe|fast]   # run the `test` blocks of every module
-ore fmt [--check] <path>                              # format in place (a directory: every .ore file under it)
-ore doc --signatures <path>                           # every pub declaration with its /// comment (also `std`, `std.text`)
-ore cimport <header> [-Idir] [-DNAME[=value]] [--link lib]   # print the Ore declarations `@cimport` makes of a C header
-ore explain <code>                                    # explain an error code, with a wrong and a fixed example
-ore spec                                              # print the language reference (docs/spec.md)
+aye build <path> [-o out] [--mode debug|safe|fast]    # executable (default name: file stem or directory name)
+aye run <path> [--mode debug|safe|fast] [-- args...]  # build to a temp file and run it with args
+aye emit-c <path> [--mode debug|safe|fast]            # print the generated C
+aye check <path> [--json]                             # front end only: report errors, no C, no clang
+aye fix <path>                                        # apply the fix-its of `aye check` in place
+aye test <path> [--filter <text>] [--module <m>] [--json] [--mode debug|safe|fast]   # run the `test` blocks of every module
+aye fmt [--check] <path>                              # format in place (a directory: every .aye file under it)
+aye doc --signatures <path>                           # every pub declaration with its /// comment (also `std`, `std.text`)
+aye cimport <header> [-Idir] [-DNAME[=value]] [--link lib]   # print the Aye declarations `@cimport` makes of a C header
+aye explain <code>                                    # explain an error code, with a wrong and a fixed example
+aye spec                                              # print the language reference (docs/spec.md)
 ```
 
 `build`, `run` and `test` take `--cflags "flags"` for more clang flags, such
 as `--cflags -fsanitize=thread`.
 
-`ore fmt` works on tokens and keeps every comment and line break; it sets
+`aye fmt` works on tokens and keeps every comment and line break; it sets
 indentation (4 spaces) and spacing, keeps at most one blank line in a row and
 lines up runs of trailing comments. It is idempotent and never changes the
-tokens (so `ore check` reports the same errors, on the same lines unless a
+tokens (so `aye check` reports the same errors, on the same lines unless a
 blank line went away). `--check` writes nothing, lists the files that would
 change and exits 1 if there is one. A file that does not lex or whose brackets
-do not match is reported and left alone. `ore doc --signatures` prints the pub
+do not match is reported and left alone. `aye doc --signatures` prints the pub
 API of a file, a directory module and its submodules, or the embedded std:
 signatures without bodies, fields and variants, pub methods, and each
 declaration's `///` doc comment, grouped by module. It is meant as context for
-an AI agent next to `ore spec`.
+an AI agent next to `aye spec`.
 
-`ore spec` prints [`docs/spec.md`](docs/spec.md), a self-contained
+`aye spec` prints [`docs/spec.md`](docs/spec.md), a self-contained
 language reference (about 10k tokens) meant to be given to an AI agent
-before it writes Ore. Every ` ```ore ` program in it is checked by
+before it writes Aye. Every ` ```aye ` program in it is checked by
 `tests/spec.rs`.
 
 | Mode    | clang flags | Runtime checks (overflow, bounds, casts, div by zero) |
@@ -74,14 +74,14 @@ before it writes Ore. Every ` ```ore ` program in it is checked by
 `@setSafety(false)` as the first statement of a block turns its checks off in
 any mode, for a hot loop that has been measured. All modes compile with
 `-std=gnu11 -fwrapv -fno-strict-aliasing`. Checks are
-generated by Ore, not left to C semantics. A failed check prints
+generated by Aye, not left to C semantics. A failed check prints
 `file:line:col: panic: <reason>` to stderr and aborts. When `main` returns an
 error, the program prints `error: <Name>` to stderr and exits with status 1; in
 debug mode an error return trace follows, one `file:line:col` per `return` and
 `try` that the error passed through.
 
 Compile errors are reported as `file:line:col: error[E0023]: <message>`. Every
-error has a stable code; `ore explain E0023` prints what it means, a program
+error has a stable code; `aye explain E0023` prints what it means, a program
 with the error and the fixed program (the table is `src/codes.rs`). The
 compiler recovers from errors and reports all of them (up to 50), sorted by
 position.
@@ -93,8 +93,8 @@ error line is then followed by `file:line:col: help: <what the fix does>`,
 at the position of the edit:
 
 ```
-f.ore:4:9: error[E0032]: cannot assign to `sum`: it is immutable (declare it with `var`)
-f.ore:2:5: help: declare `sum` with `var`
+f.aye:4:9: error[E0032]: cannot assign to `sum`: it is immutable (declare it with `var`)
+f.aye:2:5: help: declare `sum` with `var`
 ```
 
 | Error | Fix-it |
@@ -105,27 +105,27 @@ f.ore:2:5: help: declare `sum` with `var`
 | E0017, E0018, E0019, E0038: unknown type, variable, function or field | rename it to the one name in scope that is one edit away (a character inserted, deleted or replaced, or two adjacent characters swapped); not for names shorter than 3 characters |
 | E0084: `Allocator`, `AllocError`, `General` or `Arena` used without an import | add `import std.mem.Allocator` (or `std.mem.AllocError`, `std.heap.General`, `std.heap.Arena`) after the file's last import, or at its top |
 
-`ore fix <path>` applies every fix-it to the files in place (never to std), checks again,
+`aye fix <path>` applies every fix-it to the files in place (never to std), checks again,
 and repeats while there is something to fix (at most 10 rounds), because a
 syntax fix can reveal type errors. A fix whose edits overlap an edit applied
 before it in the same round waits for the next round. Each applied fix is
 printed to stdout as `file:line:col: fixed: <what it did>`; the errors that
-remain go to stderr as `ore check` prints them. The exit status is 0 when the
+remain go to stderr as `aye check` prints them. The exit status is 0 when the
 file compiles afterwards and 1 otherwise.
 
-### `ore check --json`
+### `aye check --json`
 
-`ore check --json` prints one line to stdout (wrapped here):
+`aye check --json` prints one line to stdout (wrapped here):
 
 ```
-{"file":"f.ore","diagnostics":[{"severity":"error","code":"E0032","file":"f.ore","line":4,"col":9,
+{"file":"f.aye","diagnostics":[{"severity":"error","code":"E0032","file":"f.aye","line":4,"col":9,
   "message":"cannot assign to `sum`: it is immutable (declare it with `var`)",
   "fixes":[{"line":2,"col":5,"end_line":2,"end_col":8,"replacement":"var"}]}]}
 ```
 
 - `diagnostics` is `[]` when the program compiles.
 - Each diagnostic's `file` is the file of the error (the top-level `file`
-  is the path given to `ore check`); its fix-it edits only that file.
+  is the path given to `aye check`); its fix-it edits only that file.
 - `line` and `col` are 1-based; a column counts characters (Unicode scalar
   values) from the start of the line, and a tab counts as one.
 - `fixes` lists the edits of the error's fix-it, applied together (`[]` when
@@ -134,10 +134,10 @@ file compiles afterwards and 1 otherwise.
   it is now). An insertion has the same start and end; a deletion has an
   empty `replacement`. The edits of one error never overlap.
 
-## Test blocks (`ore test`)
+## Test blocks (`aye test`)
 
-`test "name" { ... }` blocks sit next to the code. `ore build` and `ore run`
-leave them out; `ore test` runs each one of every module of the program
+`test "name" { ... }` blocks sit next to the code. `aye build` and `aye run`
+leave them out; `aye test` runs each one of every module of the program
 (std aside; only those whose name contains the `--filter` text, and with
 `--module html` only those of module `html`) in its own process, so a panic
 ends only that test. A test of another module than the root shows as
@@ -145,7 +145,7 @@ ends only that test. A test of another module than the root shows as
 fails when it panics, fails an assertion, returns an error, or leaks memory
 from `@testAllocator()`:
 
-```ore
+```aye
 struct Node { value: i64, next: ?*mut Node }
 
 test "leaks a node" {
@@ -156,14 +156,14 @@ test "leaks a node" {
 ```
 
 ```
-$ ore test list.ore
+$ aye test list.aye
 test "leaks a node" ... FAILED
-    list.ore:5:23: leak: 16 bytes allocated here were never freed
+    list.aye:5:23: leak: 16 bytes allocated here were never freed
 
 0 passed; 1 failed
 ```
 
-A ```` ```ore ```` block in a `///` doc comment is a test body too (`test
+A ```` ```aye ```` block in a `///` doc comment is a test body too (`test
 "doc: square (line 4)"`), so the examples in the documentation keep working.
 
 A failed test's stdout and then its stderr follow its line, indented. The
@@ -172,17 +172,17 @@ reasons on stderr are `file:L:C: assertion failed: expected 4, found 5` (or
 and `error: <Name>` with the error return trace (debug mode). The exit
 status is 1 if a test failed or the file does not compile, and 0 otherwise.
 
-`ore test --json` prints one line to stdout (wrapped here):
+`aye test --json` prints one line to stdout (wrapped here):
 
 ```
-{"file":"list.ore","diagnostics":[],
+{"file":"list.aye","diagnostics":[],
  "tests":[{"name":"leaks a node","status":"fail",
            "failures":[{"kind":"leak","line":5,"col":23,"message":"16 bytes allocated here were never freed"}],
-           "stdout":"","stderr":"list.ore:5:23: leak: 16 bytes allocated here were never freed\n"}],
+           "stdout":"","stderr":"list.aye:5:23: leak: 16 bytes allocated here were never freed\n"}],
  "passed":0,"failed":1}
 ```
 
-- `diagnostics`: the compile errors, as in `ore check --json`; then `tests` is
+- `diagnostics`: the compile errors, as in `aye check --json`; then `tests` is
   empty.
 - `status`: `"pass"` or `"fail"`.
 - `failures`, in the order they happened:
@@ -198,7 +198,7 @@ status is 1 if a test failed or the file does not compile, and 0 otherwise.
 A function with `comptime T: type` parameters is generic; a function that
 returns `type` is a type function, whose body is `return struct { ... }`:
 
-```ore
+```aye
 interface Shape {
     fn area(self: *Self) f64
 }
@@ -236,14 +236,14 @@ integer types and gives a `T` the integer operators, literals and `as`
 the types `==` compares and gives a `T` `==` and `@hash(x)`. A type argument that does
 not satisfy a constraint is an error at the instantiation. The generated C
 has one copy per instance.
-[`tests/cases/pool.ore`](tests/cases/pool.ore) is the design doc's
+[`tests/cases/pool.aye`](tests/cases/pool.aye) is the design doc's
 `Pool(T)` and `Handle(T)`.
 
 ## Modules and std
 
-A module is a directory: all `.ore` files in it share one namespace, and
+A module is a directory: all `.aye` files in it share one namespace, and
 only `pub` items (and `pub fn` methods) are visible to other modules.
-`ore <cmd> dir` compiles the directory module `dir`; `ore <cmd> file.ore`
+`aye <cmd> dir` compiles the directory module `dir`; `aye <cmd> file.aye`
 compiles that file alone as a module (its sibling files are not part of
 it). `import a.b` loads the module in the directory `a/b` under the root
 module's directory, and binds `b` in the importing file; `import a.b.Name`
@@ -262,10 +262,10 @@ imports one item. `std` is embedded in the compiler (sources in
 `std.testing`, `std.log` (`err`, `info`), `std.diag` (`Diagnostics`, the
 `*mut Diagnostics` convention for detailed errors) and `std.os` (`args`,
 `exit`).
-`ore spec` lists every function. Cyclic imports are an error, so no module
+`aye spec` lists every function. Cyclic imports are an error, so no module
 imports the root module: code that both need goes into a module of its own.
 
-```ore
+```aye
 import std
 import std.mem.Allocator
 
@@ -291,7 +291,7 @@ pub fn main() !void {
 
 ## Example
 
-```ore
+```aye
 extern fn puts(s: [*]u8) i32
 
 struct Point { x: i32, y: i32 }
@@ -376,19 +376,19 @@ pub fn main() {
   `alloc.destroy(p)`, `try alloc.alloc(value, n)` (`AllocError![]mut T`,
   every element set to `value`) and `alloc.free(slice)`.
 - Tests: `test "name" { }`, `@expect(cond)`, `@expectEqual(expected, actual)`,
-  `@testAllocator()`, and ```` ```ore ```` examples in `///` doc comments.
+  `@testAllocator()`, and ```` ```aye ```` examples in `///` doc comments.
 - Safety: `@setSafety(false)` as the first statement of a block turns
   off its runtime checks.
 - C interop: `extern fn` with C-compatible types (also `extern struct`s by
   value, pointers to them, function types as callbacks, and `...` for
   variadic functions such as `snprintf`), `[*]T` indexing and slicing,
   `?[*]T`, `@ptrCast(T, p)`, `@sizeOf(T)`, `@zeroed(T)`, and `@link("name")`
-  (`pkg-config` flags, `-lname` or `framework:Name`) for `ore build`, `run`
+  (`pkg-config` flags, `-lname` or `framework:Name`) for `aye build`, `run`
   and `test`; `@linkOptional("name")` with `@hasLink("name")` for a library
   the program can do without; `let c = @cimport("zlib.h")` declares a C
   header's functions, structs, unions, enum constants, typedefs and
   `#define`d constants, read with libclang and cached in
-  `~/.cache/ore/cimport`.
+  `~/.cache/aye/cimport`.
 - Types: `i8..i64 u8..u64 isize usize f32 f64 bool` (and `c_int`,
   `c_long`, ... for C), structs, enums, error
   sets, `[N]T` (`N` a constant), `simd[N]T` (vectors), `[]T`, `[]mut T` (writable elements), `*T`, `*mut T`, `?T`,
@@ -405,9 +405,9 @@ pub fn main() {
 Not yet supported (reported as errors): `comptime` values other than types
 and compile-time execution beyond type functions, error payloads, error
 unions outside return types, `match` on strings, pointer arithmetic, enums
-as `dyn` values, closures, C unions and bit fields, `build.ore` and package dependencies,
-renaming imports, `ore fmt` and `ore doc`. std is minimal: no `Pool`/`Handle` (written in the
-program, as in `tests/cases/pool.ore`), no growable list, no string
+as `dyn` values, closures, C unions and bit fields, `build.aye` and package dependencies,
+renaming imports, `aye fmt` and `aye doc`. std is minimal: no `Pool`/`Handle` (written in the
+program, as in `tests/cases/pool.aye`), no growable list, no string
 formatting into memory.
 
 See [`docs/grammar.ebnf`](docs/grammar.ebnf) for the grammar and
@@ -428,28 +428,28 @@ their explanations are in `src/codes.rs`.
 cargo test
 ```
 
-`tests/golden.rs` compiles every `tests/cases/*.ore` in debug, safe and fast
+`tests/golden.rs` compiles every `tests/cases/*.aye` in debug, safe and fast
 mode, runs it and compares stdout with `*.out`; when a `*.panic` file exists
 the program must abort with exactly that stderr (debug and safe only). When a
 `*.stderr` file exists, `main` must return an error: exit status 1, and stderr
 equal to the file in debug mode, or to its first line (no trace) in safe and
-fast mode. `tests/ffi/*.ore` are run the same way, with `SDL_VIDEODRIVER=dummy`,
+fast mode. `tests/ffi/*.aye` are run the same way, with `SDL_VIDEODRIVER=dummy`,
 and skipped when `pkg-config` does not know a package of `*.needs`. Every
-`tests/errors/*.ore` must fail to compile with exactly the
-diagnostics in `*.err`, one per line. For every `tests/tests/*.ore`,
-`ore test` must print exactly `*.out` (and `ore test --json` exactly `*.json`,
+`tests/errors/*.aye` must fail to compile with exactly the
+diagnostics in `*.err`, one per line. For every `tests/tests/*.aye`,
+`aye test` must print exactly `*.out` (and `aye test --json` exactly `*.json`,
 if it exists), with exit status 1 when a test failed. For every
-`tests/fix/*.ore`, `ore fix` on a copy must leave exactly `*.fixed` and print
+`tests/fix/*.aye`, `aye fix` on a copy must leave exactly `*.fixed` and print
 exactly `*.out`; when `*.stderr` exists, errors remain and stderr must equal
-it, otherwise `ore check` must accept the fixed file. `ore check --json` on
+it, otherwise `aye check` must accept the fixed file. `aye check --json` on
 the original must print exactly `*.json`, if it exists. Each directory
-`tests/modules/X/` is a directory module run with `ore run X` (or the
+`tests/modules/X/` is a directory module run with `aye run X` (or the
 arguments in `X.args`, with `X.stdin`): stdout must equal `X.out`, stderr
-`X.stderr` and the exit status `X.status`; or, when `X.err` exists, `ore
+`X.stderr` and the exit status `X.status`; or, when `X.err` exists, `aye
 check X` must fail with exactly that. `tests/example1` runs the design
 doc's Example 1 with an `app.toml` that is valid, missing and invalid.
-`tests/spec.rs` checks `docs/spec.md`: its ` ```ore ` programs compile, its
-` ```ore-error ` programs do not, it names every pub function of std, and it
+`tests/spec.rs` checks `docs/spec.md`: its ` ```aye ` programs compile, its
+` ```aye-error ` programs do not, it names every pub function of std, and it
 stays within 30k tokens.
 
 Before you change the compiler, std or the browser, read

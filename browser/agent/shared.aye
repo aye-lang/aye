@@ -1,0 +1,377 @@
+// The agents of a window: `anyknown --agent-socket PATH` (ui/agents.aye)
+// serves the JSON lines and MCP protocols of server.aye on a Unix
+// socket, with one session per tab of the window. The window is the
+// `Host`: it says which session a connection acts on (its tab), refuses
+// actions while the user paused the agents, runs the commands only a
+// window has (`tabs`, `tab_new`, `tab_select`, `tab_close`,
+// `user_context`, and `wait` in real time), and shows what the agents
+// do (`agentActs`: a highlight and a line in the status bar).
+//
+// Requests are served on the window's thread, between its events, so
+// the page is never touched by two threads.
+
+import dom
+import dom.NodeId
+import html
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+/// What a window does for its agents.
+pub interface Host {
+    /// The session of the tab that connection `conn` acts on.
+    fn agentSession(self: *mut Self, conn: usize) ?*mut Session
+    /// Why actions are refused now ("paused by user"), or "".
+    fn agentRefusal(self: *mut Self) []u8
+    /// Runs `cmd` (without `browser_`) when it is a command of the
+    /// window, with the arguments in object `args` of `doc`; `id` is the
+    /// request's id as JSON (for an answer given later). False when
+    /// `cmd` is not one.
+    fn windowCommand(self: *mut Self, conn: usize, tmp: Allocator, cmd: []u8, doc: *mut Json, args: ?usize, id: []u8, reply: *mut Reply) AllocError!bool
+    /// An agent is about to act (`what`, e.g. `click button "OK" [e3]`)
+    /// on `node` of the page of `s` (null for none).
+    fn agentActs(self: *mut Self, conn: usize, s: *mut Session, tmp: Allocator, what: []u8, node: ?RefNode) AllocError!void
+}
+
+/// The answer to a command of the window.
+pub struct Reply {
+    ok: bool
+    // What happened (the result), or why not (the error).
+    message: []u8
+    // More members of a JSON-lines response, as JSON (`"tabs":[...]`),
+    // or "".
+    fields: []u8
+    // More text of an MCP result, after the message, or "".
+    detail: []u8
+    // No answer now: the window gives it later (`writeLater`).
+    later: bool
+}
+
+pub fn newReply() Reply {
+    return Reply { ok: true, message: "", fields: "", detail: "", later: false }
+}
+
+// The commands a window runs itself (ui/agents.aye).
+let WINDOW_COMMANDS = "tabs tab_new tab_select tab_close user_context wait"
+// The commands refused while the user paused the agents (the others
+// only look).
+let ACTING = "navigate back forward reload click type select press scroll eval tab_new tab_select tab_close"
+
+fn isWindowCommand(s: *Session, cmd: []u8) bool {
+    return s.host != null && html.isIn(cmd, WINDOW_COMMANDS)
+}
+
+/// Serves one line of connection `conn` (JSON lines, or MCP when `mcp`):
+/// the response goes to `out` (nothing for a notification, or when the
+/// window answers later).
+pub fn serveShared(host: dyn Host, conn: usize, mcp: bool, tmp: Allocator, line: []u8, out: *mut text.Builder) AllocError!void {
+    let s = host.agentSession(conn) orelse return
+    s.host = host
+    s.conn = conn
+    s.later = false
+    // Only running out of memory fails a request.
+    let served = handleLine(s, tmp, line, mcp, out) catch |e| {
+        return AllocError.OutOfMemory
+    }
+    if s.later || !served {
+        out.clear()
+    }
+}
+
+/// Is `line` the hello `{"mcp":true}` that makes a connection speak
+/// MCP? (A connection whose first message is JSON-RPC speaks MCP too:
+/// `looksLikeRpc`.)
+pub fn isMcpHello(tmp: Allocator, line: []u8) bool {
+    var failure = ParseFailure { pos: 0, msg: "" }
+    var doc = Json.parse(tmp, line, &mut failure) catch |e| {
+        return false
+    }
+    defer doc.deinit()
+    let r = doc.root()
+    return doc.kind(r) == JKind.Object && (doc.getBool(r, "mcp") orelse false) && doc.get(r, "cmd") == null
+}
+
+pub fn looksLikeRpc(tmp: Allocator, line: []u8) bool {
+    var failure = ParseFailure { pos: 0, msg: "" }
+    var doc = Json.parse(tmp, line, &mut failure) catch |e| {
+        return false
+    }
+    defer doc.deinit()
+    let r = doc.root()
+    return doc.kind(r) == JKind.Object && doc.get(r, "jsonrpc") != null
+}
+
+/// The answer to request `id` (JSON) that the window gives later.
+pub fn writeLater(mcp: bool, tmp: Allocator, id: []u8, reply: Reply, out: *mut text.Builder) AllocError!void {
+    var w = Writer.init(out)
+    if mcp {
+        try rpcStart(&mut w, id)
+        try mcpReply(&mut w, tmp, reply)
+        return w.endObject()
+    }
+    try w.beginObject()
+    try w.key("id")
+    try w.raw(id)
+    try replyFields(&mut w, tmp, reply)
+    try w.endObject()
+}
+
+/// A notification to a connection: `{"event":NAME,...fields}` (JSON
+/// lines) or an MCP `notifications/message` whose data is that object.
+/// `fields` are members as JSON (`"ref":"e7"`).
+pub fn writeEvent(mcp: bool, name: []u8, fields: []u8, out: *mut text.Builder) AllocError!void {
+    var w = Writer.init(out)
+    if mcp {
+        try w.beginObject()
+        try w.key("jsonrpc")
+        try w.string("2.0")
+        try w.key("method")
+        try w.string("notifications/message")
+        try w.key("params")
+        try w.beginObject()
+        try w.key("level")
+        try w.string("notice")
+        try w.key("logger")
+        try w.string("anyknown")
+        try w.key("data")
+    }
+    try w.beginObject()
+    try w.key("event")
+    try w.string(name)
+    if fields.len > 0 {
+        try out.appendByte(',')
+        try out.append(fields)
+    }
+    try w.endObject()
+    if mcp {
+        try w.endObject()
+        try w.endObject()
+    }
+}
+
+// `"ok":...,"result"|"error":...` and the reply's fields.
+fn replyFields(w: *mut Writer, tmp: Allocator, r: Reply) AllocError!void {
+    if r.ok {
+        try w.key("ok")
+        try w.boolean(true)
+        try w.key("result")
+        try w.string(r.message)
+    } else {
+        try failField(w, tmp, r.message)
+    }
+    if r.fields.len > 0 {
+        try w.out.appendByte(',')
+        try w.out.append(r.fields)
+    }
+}
+
+// The result of a tool call: the message and the detail as text.
+fn mcpReply(w: *mut Writer, tmp: Allocator, r: Reply) AllocError!void {
+    var t = text.Builder.init(tmp)
+    try t.append(r.message)
+    if r.detail.len > 0 {
+        try t.append("\n\n")
+        try t.append(r.detail)
+    }
+    try w.beginObject()
+    try w.key("content")
+    try w.beginArray()
+    try w.beginObject()
+    try w.key("type")
+    try w.string("text")
+    try w.key("text")
+    try w.string(t.bytes())
+    try w.endObject()
+    try w.endArray()
+    try w.key("isError")
+    try w.boolean(!r.ok)
+    try w.endObject()
+}
+
+/// Runs a command of the window for a JSON-lines request (the response
+/// object is open, its id written); true when `cmd` was one.
+fn windowRequest(s: *mut Session, tmp: Allocator, doc: *mut Json, req: usize, cmd: []u8, w: *mut Writer) AllocError!bool {
+    let h = s.host orelse return false
+    if !html.isIn(cmd, WINDOW_COMMANDS) {
+        return false
+    }
+    var id = text.Builder.init(tmp)
+    if doc.get(req, "id") |i| {
+        try doc.write(i, &mut id)
+    } else {
+        try id.append("null")
+    }
+    var r = newReply()
+    if !(try h.windowCommand(s.conn, tmp, cmd, doc, req, id.bytes(), &mut r)) {
+        return false
+    }
+    if r.later {
+        s.later = true
+        return true
+    }
+    try replyFields(w, tmp, r)
+    return true
+}
+
+/// Runs a command of the window for an MCP tool call; the text goes to
+/// `out`. Null when `cmd` is not one; else whether it succeeded.
+fn windowTool(s: *mut Session, tmp: Allocator, doc: *mut Json, cmd: []u8, args: ?usize, id: []u8, out: *mut text.Builder) AllocError!?bool {
+    let h = s.host orelse return null
+    if !html.isIn(cmd, WINDOW_COMMANDS) {
+        return null
+    }
+    var r = newReply()
+    if !(try h.windowCommand(s.conn, tmp, cmd, doc, args, id, &mut r)) {
+        return null
+    }
+    if r.later {
+        s.later = true
+        return true
+    }
+    try out.append(r.message)
+    if r.detail.len > 0 {
+        try out.append("\n\n")
+        try out.append(r.detail)
+    }
+    return r.ok
+}
+
+/// Why `cmd` is refused now (the user paused the agents), or "".
+fn refusal(s: *mut Session, cmd: []u8) []u8 {
+    if s.host |h| {
+        if html.isIn(cmd, ACTING) {
+            return h.agentRefusal()
+        }
+    }
+    return ""
+}
+
+/// Tells the window what an agent is about to do (`cmd` with the
+/// arguments in object `args`), so that it shows it.
+fn announce(s: *mut Session, tmp: Allocator, doc: *mut Json, args: ?usize, cmd: []u8) AllocError!void {
+    let h = s.host orelse return
+    var what = text.Builder.init(tmp)
+    try what.append(cmd)
+    var node: ?RefNode = null
+    if args |o| {
+        if doc.getStr(o, "ref") |r| {
+            try what.appendByte(' ')
+            node = nodeOfRef(s, r)
+            if node |n| {
+                try what.append(try describeNode(s, tmp, n.page, n.node))
+            } else {
+                try what.append(r)
+            }
+        } else if doc.getStr(o, "url") |u| {
+            try what.appendByte(' ')
+            try what.append(u)
+        } else if doc.getStr(o, "key") |k| {
+            try what.appendByte(' ')
+            try what.append(k)
+        } else if doc.getStr(o, "text") |t| {
+            try what.append(" \"")
+            try what.append(t)
+            try what.appendByte('"')
+        } else if doc.getNum(o, "dy") |dy| {
+            try what.append(" by ")
+            try writeNumberTo(&mut what, dy)
+            try what.append(" px")
+        }
+    }
+    try h.agentActs(s.conn, s, tmp, what.bytes(), node)
+}
+
+// The ref of the element that has the focus, for snapshots in a window
+// (after the snapshot gave refs); 0 for none.
+fn focusRef(s: *mut Session) u32 {
+    if s.host == null {
+        return 0
+    }
+    let p = s.tab.page orelse return 0
+    let f = p.doc.controls.focus orelse return 0
+    return refOf(s, p, f) orelse 0
+}
+
+// ---- for the window (ui/agents.aye)
+
+/// Makes the session ready for a request: the viewport the window
+/// shows, then (after the window showed another document, `fresh`) new
+/// refs, or a layout of the page as it is now.
+pub fn syncSession(s: *mut Session, width: f64, height: f64, fresh: bool) AllocError!void {
+    s.media.width = width
+    s.media.height = height
+    if s.tab.page == null {
+        return
+    }
+    if fresh {
+        return newDocument(s)
+    }
+    return relayout(s)
+}
+
+/// `role "name" [eN]` of `el` (of the page of `s`, or of a frame's).
+pub fn describe(s: *mut Session, tmp: Allocator, el: RefNode) AllocError![]u8 {
+    return describeNode(s, tmp, el.page, el.node)
+}
+
+/// The border box of `el` (px of the document shown), or of its nearest
+/// ancestor that has one.
+pub fn rectOfNode(s: *Session, el: RefNode) ?Rect {
+    return rectOf(s, el.page, el.node)
+}
+
+/// Node `el` of the page shown in the tab of `s`.
+pub fn shownNode(s: *Session, el: NodeId) ?RefNode {
+    let p = s.tab.page orelse return null
+    return RefNode { page: p, node: el }
+}
+
+/// The ref the user means by `node` (under the mouse, or focused): its
+/// own or its nearest ancestor's among the refs of a snapshot, else a
+/// new ref of its element. 0 without a page.
+pub fn refAt(s: *mut Session, tmp: Allocator, node: NodeId) AllocError!u32 {
+    let p = s.tab.page orelse return 0
+    try buildAx(s, tmp)
+    var cur: ?NodeId = node
+    while cur |c| {
+        if refOf(s, p, c) |r| {
+            return r
+        }
+        cur = dom.flatParent(&p.doc, c)
+    }
+    var el = node
+    if p.doc.node(el).kind != dom.Kind.Element {
+        el = p.doc.parent(el) orelse return 0
+    }
+    return refFor(s, p, el)
+}
+
+/// The text of `el`, whitespace collapsed, cut at `max` bytes (at a
+/// character boundary, with `…`).
+pub fn textOf(s: *mut Session, tmp: Allocator, el: RefNode, max: usize) AllocError![]u8 {
+    var b = text.Builder.init(tmp)
+    try el.page.doc.textContent(el.node, &mut b)
+    return cut(tmp, try collapse(tmp, b.bytes()), max)
+}
+
+/// `t` cut at `max` bytes (at a character boundary, with `…`).
+pub fn cut(tmp: Allocator, t: []u8, max: usize) AllocError![]u8 {
+    if t.len <= max {
+        return t
+    }
+    var end = max
+    while end > 0 && (t[end] & 0xC0) == 0x80 {
+        end -= 1
+    }
+    return concat(tmp, t[..end], "…", "")
+}
+
+/// The node of ref `name` ("e7") on the page of `s` or in its frames.
+pub fn nodeOfRefIn(s: *Session, name: []u8) ?RefNode {
+    return nodeOfRef(s, name)
+}
+
+/// `a` then `b`.
+pub fn concatText(tmp: Allocator, a: []u8, b: []u8) AllocError![]u8 {
+    return concat(tmp, a, b, "")
+}

@@ -7,7 +7,7 @@ display and a person is below: run it once per milestone, on macOS and
 on Linux when possible, and note the date, platform and any failures at
 the end.
 
-Build: `ore build browser -o anyknown` (SDL2, FreeType and libcurl
+Build: `aye build browser -o anyknown` (SDL2, FreeType and libcurl
 installed). Fixtures are under `browser/tests/`.
 
 ## Opening

@@ -1,8 +1,8 @@
-//! `ore doc --signatures`: the pub API of modules as Ore declarations
+//! `aye doc --signatures`: the pub API of modules as Aye declarations
 //! without bodies, each with its doc comment (`///` lines right above it),
 //! grouped by module. Meant as compact context for people and tools.
 //!
-//! Works on tokens (like `ore fmt`), so a module with type errors still
+//! Works on tokens (like `aye fmt`), so a module with type errors still
 //! gets its documentation. Per declaration:
 //!
 //! - `pub fn`: the signature. For a type function (`return struct {...}`)
@@ -22,8 +22,8 @@ use crate::module::STD_FILES;
 use std::path::{Path, PathBuf};
 
 /// The documentation of the modules at `path`: `std` (every std module) or
-/// `std.<name>` (one, from the embedded std), a `.ore` file, or a directory
-/// (it and every directory under it with `.ore` files is a module).
+/// `std.<name>` (one, from the embedded std), a `.aye` file, or a directory
+/// (it and every directory under it with `.aye` files is a module).
 pub fn signatures(path: &str) -> Result<String, String> {
     // (module name, files as (name, text))
     let mut modules: Vec<(String, Vec<(String, String)>)> = Vec::new();
@@ -34,17 +34,17 @@ pub fn signatures(path: &str) -> Result<String, String> {
             }
         }
         if modules.is_empty() {
-            return Err(format!("ore: no std module `{path}`"));
+            return Err(format!("aye: no std module `{path}`"));
         }
     } else {
         let p = Path::new(path);
         if p.is_dir() {
             collect(p, path, "", &mut modules)?;
             if modules.is_empty() {
-                return Err(format!("ore: {path} has no .ore files"));
+                return Err(format!("aye: {path} has no .aye files"));
             }
         } else {
-            let text = std::fs::read_to_string(p).map_err(|e| format!("ore: cannot read {path}: {e}"))?;
+            let text = std::fs::read_to_string(p).map_err(|e| format!("aye: cannot read {path}: {e}"))?;
             modules.push((path.to_string(), vec![(path.to_string(), text)]));
         }
     }
@@ -65,7 +65,7 @@ pub fn signatures(path: &str) -> Result<String, String> {
     Ok(out)
 }
 
-/// The modules under the directory `dir`: `dir` itself if it has `.ore`
+/// The modules under the directory `dir`: `dir` itself if it has `.aye`
 /// files, named `root` if it is the root module, else by its import path
 /// `prefix`; then its subdirectories (`prefix.sub`), sorted.
 fn collect(
@@ -75,14 +75,14 @@ fn collect(
     out: &mut Vec<(String, Vec<(String, String)>)>,
 ) -> Result<(), String> {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map_err(|e| format!("ore: cannot read {}: {e}", dir.display()))?
+        .map_err(|e| format!("aye: cannot read {}: {e}", dir.display()))?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .collect();
     entries.sort();
     let mut files = Vec::new();
-    for p in entries.iter().filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "ore")) {
+    for p in entries.iter().filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "aye")) {
         let file = p.to_string_lossy().into_owned();
-        let text = std::fs::read_to_string(p).map_err(|e| format!("ore: cannot read {file}: {e}"))?;
+        let text = std::fs::read_to_string(p).map_err(|e| format!("aye: cannot read {file}: {e}"))?;
         files.push((file, text));
     }
     if !files.is_empty() {

@@ -1,1 +1,1 @@
-bounds_trap.ore:2:14: panic: index out of bounds: index 3, len 3
+bounds_trap.aye:2:14: panic: index out of bounds: index 3, len 3

@@ -1,1 +1,1 @@
-pattern_missing_field.ore:7:9: error[E0058]: pattern for `Shape.Rect` does not mention field `h` (add `..` to ignore the rest)
+pattern_missing_field.aye:7:9: error[E0058]: pattern for `Shape.Rect` does not mention field `h` (add `..` to ignore the rest)

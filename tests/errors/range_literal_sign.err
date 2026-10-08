@@ -1,1 +1,1 @@
-range_literal_sign.ore:2:14: error[E0024]: integer literal `-1` does not fit in `usize` (a range of two literals is `usize`; for a signed counter write `(0 as i64)..n`)
+range_literal_sign.aye:2:14: error[E0024]: integer literal `-1` does not fit in `usize` (a range of two literals is `usize`; for a signed counter write `(0 as i64)..n`)

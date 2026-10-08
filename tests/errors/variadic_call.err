@@ -1,4 +1,4 @@
-variadic_call.ore:4:5: error[E0029]: function `printf` takes at least 1 argument(s) but 0 were given
-variadic_call.ore:5:22: error[E0052]: `[]u8` cannot be passed to the `...` of a C function: it is not C-compatible (a slice is a pointer and a length: use `[*]u8` and a `usize`)
-variadic_call.ore:6:13: error[E0020]: the variadic C function `printf` is not a value (call it)
-variadic_call.ore:7:22: error[E0024]: integer literal `3000000000` does not fit in `i32` (an integer literal passed to `...` is a C `int`: add `as i64`)
+variadic_call.aye:4:5: error[E0029]: function `printf` takes at least 1 argument(s) but 0 were given
+variadic_call.aye:5:22: error[E0052]: `[]u8` cannot be passed to the `...` of a C function: it is not C-compatible (a slice is a pointer and a length: use `[*]u8` and a `usize`)
+variadic_call.aye:6:13: error[E0020]: the variadic C function `printf` is not a value (call it)
+variadic_call.aye:7:22: error[E0024]: integer literal `3000000000` does not fit in `i32` (an integer literal passed to `...` is a C `int`: add `as i64`)

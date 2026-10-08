@@ -1,0 +1,857 @@
+// The natives of the window: the `ak` object that the prelude uses (and
+// deletes from the global object), and `console`.
+//
+// localStorage lives in memory, per origin, for as long as a page of the
+// process is open (`local_store`).
+
+import css
+import dom
+import dom.Document
+import dom.Kind
+import dom.NodeId
+import encoding
+import js
+import js.Args
+import js.Interp
+import js.JsError
+import js.Value
+import net
+import std
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+import url
+
+fn installWindow(s: *mut Script) JsError!void {
+    let it = &mut s.it
+    let o = try it.newObject(it.object_proto)
+    try it.defineValue(it.global, "__ak", js.objVal(o))
+    try it.defineValue(it.global, "__canvasHost", js.objVal(o))
+    try defMethod(it, o, "now", 0, akNow)
+    try defMethod(it, o, "markHtmlDda", 1, akMarkHtmlDda)
+    try defMethod(it, o, "report", 1, akReport)
+    try defMethod(it, o, "compile", 1, akCompile)
+    try defMethod(it, o, "parseDocument", 1, akParseDocument)
+    try defMethod(it, o, "evalGlobal", 1, akEvalGlobal)
+    try defMethod(it, o, "setTimer", 5, akSetTimer)
+    try defMethod(it, o, "clearTimer", 1, akClearTimer)
+    try defMethod(it, o, "queueMicrotask", 1, akQueueMicrotask)
+    try defMethod(it, o, "activate", 1, akActivate)
+    try defMethod(it, o, "submit", 1, akSubmit)
+    try defMethod(it, o, "focused", 0, akFocused)
+    try defMethod(it, o, "setFocus", 1, akSetFocus)
+    try defMethod(it, o, "resolve", 1, akResolve)
+    try defMethod(it, o, "url", 0, akUrl)
+    try defMethod(it, o, "urlPart", 1, akUrlPart)
+    try defMethod(it, o, "parseUrl", 2, akParseUrl)
+    try defMethod(it, o, "matchMedia", 1, akMatchMedia)
+    try defMethod(it, o, "navigate", 2, akNavigate)
+    try defMethod(it, o, "reload", 0, akReload)
+    try defMethod(it, o, "alert", 2, akAlert)
+    try defMethod(it, o, "viewport", 1, akViewport)
+    try defMethod(it, o, "storage", 3, akStorage)
+    try defMethod(it, o, "fetch", 1, akFetch)
+    try defMethod(it, o, "cookie", 0, akCookie)
+    try defMethod(it, o, "setCookie", 1, akSetCookie)
+    try defMethod(it, o, "setDispatch", 1, akSetDispatch)
+    try defMethod(it, o, "computedStyle", 2, akComputedStyle)
+    try defMethod(it, o, "cssNames", 0, akCssNames)
+    try defMethod(it, o, "supports", 1, akSupports)
+    try installFrames(s, o)
+    try installHistory(s, o)
+    try installGeometry(s, o)
+    try installCssom(s, o)
+    try installComponents(s, o)
+    try installCanvas(it, o)
+    try installImages(it, o)
+
+    let c = try it.newObject(it.object_proto)
+    try it.defineValue(it.global, "console", js.objVal(c))
+    try defMethod(it, c, "log", 0, consoleLog)
+    try defMethod(it, c, "info", 0, consoleInfo)
+    try defMethod(it, c, "debug", 0, consoleDebug)
+    try defMethod(it, c, "warn", 0, consoleWarn)
+    try defMethod(it, c, "error", 0, consoleError)
+}
+
+// ---- console
+
+fn consoleTo(it: *mut Interp, a: Args, kind: []u8) JsError!Value {
+    let b = try it.builder()
+    defer it.release(b)
+    try js.formatLog(it, a, b)
+    try addConsole(scriptOf(it), kind, b.bytes())
+    return Value.Undefined
+}
+
+fn consoleLog(it: *mut Interp, a: Args) JsError!Value {
+    return consoleTo(it, a, "[log] ")
+}
+
+fn consoleInfo(it: *mut Interp, a: Args) JsError!Value {
+    return consoleTo(it, a, "[info] ")
+}
+
+fn consoleDebug(it: *mut Interp, a: Args) JsError!Value {
+    return consoleTo(it, a, "[debug] ")
+}
+
+fn consoleWarn(it: *mut Interp, a: Args) JsError!Value {
+    return consoleTo(it, a, "[warn] ")
+}
+
+fn consoleError(it: *mut Interp, a: Args) JsError!Value {
+    return consoleTo(it, a, "[error] ")
+}
+
+// ---- scripts and the event loop
+
+fn akNow(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    tick(s)
+    return js.numVal(s.now)
+}
+
+// Gives the object argument 0 [[IsHTMLDDA]] (for `document.all`).
+fn akMarkHtmlDda(it: *mut Interp, a: Args) JsError!Value {
+    match it.arg(a, 0) {
+        .Obj { o } => {
+            it.heap.obj(o).htmldda = true
+        }
+        _ => {}
+    }
+    return Value.Undefined
+}
+
+// The root element of the HTML document `src` (DOMParser).
+fn akParseDocument(it: *mut Interp, a: Args) JsError!Value {
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 0, b)
+    let root = (try parseDocumentElement(scriptOf(it).active, b.bytes())) orelse return Value.Null
+    return wrap(it, root)
+}
+
+// Reports an exception a listener threw, and goes on.
+fn akReport(it: *mut Interp, a: Args) JsError!Value {
+    it.exception = it.arg(a, 0)
+    try reportException(scriptOf(it))
+    return Value.Undefined
+}
+
+// An inline event handler: the attribute's code as the body of a
+// function of `event`.
+fn akCompile(it: *mut Interp, a: Args) JsError!Value {
+    let b = try it.builder()
+    defer it.release(b)
+    try b.append("(function (event) {\n")
+    try argText(it, a, 0, b)
+    try b.append("\n})")
+    return it.evalScript(b.bytes())
+}
+
+fn akEvalGlobal(it: *mut Interp, a: Args) JsError!Value {
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 0, b)
+    try it.runScript(b.bytes())
+    return Value.Undefined
+}
+
+// setTimer(callback, ms, repeat, args, animationFrame): the timer's id.
+fn akSetTimer(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    let cb = try js.callableArg(it, a, 0)
+    var ms = try it.toNumber(it.arg(a, 1))
+    if ms != ms || ms < 0.0 {
+        ms = 0.0
+    }
+    let repeat = it.toBoolean(it.arg(a, 2))
+    let raf = it.toBoolean(it.arg(a, 4))
+    let arr = try it.newArray(0)
+    try it.push(js.objVal(arr))
+    try it.heap.pushElem(arr, cb)
+    let extra = it.arg(a, 3)
+    if it.hasClass(extra, js.Class.Array) {
+        let eo = js.objectOf(extra)
+        for i in 0..it.heap.obj(eo).nelems {
+            try it.heap.pushElem(arr, js.holeToUndef(it.heap.obj(eo).elems[i]))
+        }
+    }
+    let root = try it.addRoot(js.objVal(arr))
+    it.pop()
+    var interval = ms
+    if repeat && interval < 4.0 {
+        interval = 4.0
+    }
+    tick(s)
+    let id = s.next_timer
+    s.next_timer += 1
+    try s.timers.append(Timer { id: id, due: s.now + ms, interval: interval, repeat: repeat, raf: raf, root: root, seq: s.seq })
+    s.seq += 1
+    return js.numVal(id as f64)
+}
+
+fn akClearTimer(it: *mut Interp, a: Args) JsError!Value {
+    let n = try it.toNumber(it.arg(a, 0))
+    if n == n && n >= 1.0 && n < 4294967295.0 {
+        removeTimer(scriptOf(it), n as u32)
+    }
+    return Value.Undefined
+}
+
+fn akQueueMicrotask(it: *mut Interp, a: Args) JsError!Value {
+    let f = try js.callableArg(it, a, 0)
+    try it.queueJob(f)
+    return Value.Undefined
+}
+
+// ---- elements
+
+// The default action of el.click() (engine/forms.aye): navigations and
+// submissions wait until the script returns (takeNavigation).
+fn akActivate(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    let h = ownHandle(it, it.arg(a, 0)) orelse return Value.Undefined
+    let act = try activate(s.page, h)
+    match act {
+        .Follow { target } => {
+            defer target.deinit(s.alloc)
+            try setNavigation(s, target.href)
+        }
+        .Submit { form, submitter } => {
+            if (try validateSubmission(s.page, form, submitter)) && (try dispatchEvent(s.page, form, "submit", "")) {
+                s.nav_kind = NavKind.Submit
+                s.nav_form = form
+                s.nav_submitter = submitter
+            }
+        }
+        .Changed => {
+            s.version += 1
+            s.style_version += 1
+            noteLayoutChangeAnywhere(s)
+            try flushMutations(it)
+        }
+        _ => {}
+    }
+    return Value.Undefined
+}
+
+// form.submit(): no submit event.
+fn akSubmit(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    if ownHandle(it, it.arg(a, 0)) |h| {
+        if s.page.doc.isElement(h, "form") {
+            s.nav_kind = NavKind.Submit
+            s.nav_form = h
+            s.nav_submitter = null
+        }
+    }
+    return Value.Undefined
+}
+
+fn setNavigation(s: *mut Script, href: []u8) AllocError!void {
+    let copy = try s.alloc.alloc(0 as u8, href.len)
+    std.mem.copy(copy, href)
+    s.alloc.free(s.nav_href)
+    s.nav_href = copy
+    s.nav_kind = NavKind.To
+}
+
+fn akFocused(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    s.active = s.page
+    return wrapOpt(it, scriptFocus(s.page))
+}
+
+fn akSetFocus(it: *mut Interp, a: Args) JsError!Value {
+    let v = it.arg(a, 0)
+    let h = ownHandle(it, v)
+    if h != null || js.isNullish(v) {
+        setFocus(scriptOf(it).page, h)
+    }
+    return Value.Undefined
+}
+
+// ---- location and history
+
+// The URL argument 0 means, resolved against the page; null when it
+// does not resolve.
+fn argUrl(it: *mut Interp, a: Args) JsError!?url.Url {
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 0, b)
+    let p = scriptOf(it).page
+    let r = p.resolve(it.alloc, b.bytes()) catch |e| {
+        return null
+    }
+    return r
+}
+
+fn akResolve(it: *mut Interp, a: Args) JsError!Value {
+    if try argUrl(it, a) |u| {
+        defer u.deinit(it.alloc)
+        return it.newString(u.href)
+    }
+    return js.argString(it, a, 0)
+}
+
+fn akUrl(it: *mut Interp, a: Args) JsError!Value {
+    return it.newString(scriptOf(it).page.url.href)
+}
+
+fn akUrlPart(it: *mut Interp, a: Args) JsError!Value {
+    let which = try it.builder()
+    defer it.release(which)
+    try argText(it, a, 0, which)
+    let b = try it.builder()
+    defer it.release(b)
+    try appendUrlPart(b, &scriptOf(it).page.url, which.bytes())
+    return it.newString(b.bytes())
+}
+
+// The parts of a URL the URL class shows, in the order of akParseUrl's
+// array.
+let URL_PARTS = [_][]u8{"href", "protocol", "username", "password", "host", "hostname", "port", "pathname", "search", "hash", "origin"}
+
+// parseUrl(input, base): the parts of `input` (resolved against `base`
+// when given) as an array in the order of URL_PARTS, or null when it is
+// not a valid URL.
+fn akParseUrl(it: *mut Interp, a: Args) JsError!Value {
+    let input = try it.builder()
+    defer it.release(input)
+    try argText(it, a, 0, input)
+    var parsed: ?url.Url = null
+    if js.isUndef(it.arg(a, 1)) {
+        parsed = url.parse(it.alloc, input.bytes()) catch |e| {
+            return Value.Null
+        }
+    } else {
+        let baseText = try it.builder()
+        defer it.release(baseText)
+        try argText(it, a, 1, baseText)
+        var base = url.parse(it.alloc, baseText.bytes()) catch |e| {
+            return Value.Null
+        }
+        defer base.deinit(it.alloc)
+        parsed = url.resolve(it.alloc, &base, input.bytes()) catch |e| {
+            return Value.Null
+        }
+    }
+    let u = parsed orelse return Value.Null
+    defer u.deinit(it.alloc)
+    let arr = try it.newArray(0)
+    try it.push(js.objVal(arr))
+    let b = try it.builder()
+    defer it.release(b)
+    for part in URL_PARTS {
+        b.clear()
+        try appendUrlPart(b, &u, part)
+        let v = try it.newString(b.bytes())
+        try it.heap.pushElem(arr, v)
+    }
+    return it.pop()
+}
+
+// Appends a part of `u` as the URL class and `location` show it.
+fn appendUrlPart(b: *mut text.Builder, u: *url.Url, part: []u8) AllocError!void {
+    if text.eql(part, "href") {
+        try b.append(u.href)
+    } else if text.eql(part, "username") {
+        try b.append(u.username)
+    } else if text.eql(part, "password") {
+        try b.append(u.password)
+    } else if text.eql(part, "protocol") {
+        try b.append(u.scheme)
+        try b.appendByte(':')
+    } else if text.eql(part, "origin") && !hasTupleOrigin(u.scheme) {
+        try b.append("null")
+    } else if text.eql(part, "host") || text.eql(part, "origin") {
+        if text.eql(part, "origin") {
+            try b.append(u.scheme)
+            try b.append("://")
+        }
+        try b.append(u.host)
+        if u.port.len > 0 {
+            try b.appendByte(':')
+            try b.append(u.port)
+        }
+    } else if text.eql(part, "hostname") {
+        try b.append(u.host)
+    } else if text.eql(part, "port") {
+        try b.append(u.port)
+    } else if text.eql(part, "pathname") {
+        try b.append(u.path)
+    } else if text.eql(part, "search") {
+        if u.has_query && u.query.len > 0 {
+            try b.appendByte('?')
+            try b.append(u.query)
+        }
+    } else if text.eql(part, "hash") {
+        if u.has_fragment && u.fragment.len > 0 {
+            try b.appendByte('#')
+            try b.append(u.fragment)
+        }
+    }
+}
+
+// Schemes whose origin is scheme, host and port (others: "null").
+fn hasTupleOrigin(scheme: []u8) bool {
+    return text.eql(scheme, "http") || text.eql(scheme, "https") || text.eql(scheme, "ws") || text.eql(scheme, "wss") || text.eql(scheme, "ftp")
+}
+
+// matchMedia(query): does the media query list match the viewport?
+fn akMatchMedia(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    let q = try it.builder()
+    defer it.release(q)
+    try argText(it, a, 0, q)
+    var sheet = try css.Sheet.init(it.alloc)
+    defer sheet.deinit()
+    let m = try css.mediaMatches(&mut sheet, q.bytes(), css.Media { width: s.width, height: s.height })
+    return js.boolVal(m)
+}
+
+// navigate(url, replace): navigates after the script returns; to a
+// fragment of the document, at once (`fragmentNavigate`), returning
+// [old URL, new URL] for the prelude to fire the events.
+fn akNavigate(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    if try argUrl(it, a) |u| {
+        defer u.deinit(it.alloc)
+        if text.eql(u.scheme, "javascript") {
+            return Value.Undefined
+        }
+        if isFragmentOf(s.page, &u) {
+            let arr = try it.newArray(0)
+            try it.push(js.objVal(arr))
+            let old = try it.newString(s.page.url.href)
+            try it.heap.pushElem(arr, old)
+            try fragmentNavigate(s.page, &u, it.toBoolean(it.arg(a, 1)))
+            let now = try it.newString(s.page.url.href)
+            try it.heap.pushElem(arr, now)
+            return it.pop()
+        }
+        try setNavigation(s, u.href)
+        net.noteNavigation(u.href, s.page.url.href) catch |e| {
+            return JsError.OutOfMemory
+        }
+    }
+    return Value.Undefined
+}
+
+fn akReload(it: *mut Interp, a: Args) JsError!Value {
+    scriptOf(it).nav_kind = NavKind.Reload
+    return Value.Undefined
+}
+
+// alert, confirm and prompt never block: they are console messages.
+fn akAlert(it: *mut Interp, a: Args) JsError!Value {
+    let kind = try it.builder()
+    defer it.release(kind)
+    try kind.appendByte('[')
+    try argText(it, a, 0, kind)
+    try kind.append("] ")
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 1, b)
+    try addConsole(scriptOf(it), kind.bytes(), b.bytes())
+    return Value.Undefined
+}
+
+fn akViewport(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    if try it.toNumber(it.arg(a, 0)) == 0.0 {
+        return js.numVal(s.width)
+    }
+    return js.numVal(s.height)
+}
+
+fn akSetDispatch(it: *mut Interp, a: Args) JsError!Value {
+    let f = try js.callableArg(it, a, 0)
+    let s = scriptOf(it)
+    if s.dispatcher != js.NONE {
+        it.removeRoot(s.dispatcher)
+    }
+    s.dispatcher = try it.addRoot(f)
+    return Value.Undefined
+}
+
+// ---- fetch
+
+// The response to a request of argument 0: { status, url, type, body },
+// or { error } when it failed. Arguments 1 to 3 are optional: the method
+// (GET), more headers ("name: value" lines separated by "\n") and the
+// body, a string of code units 0..255 (the bytes, as Blob keeps them).
+fn akFetch(it: *mut Interp, a: Args) JsError!Value {
+    let r = try it.newObject(it.object_proto)
+    try it.push(js.objVal(r))
+    let target = try argUrl(it, a) orelse {
+        try setField(it, r, "error", "not a URL")
+        return it.pop()
+    }
+    defer target.deinit(it.alloc)
+    let page = scriptOf(it).page
+    var req = net.Request { kind: net.Kind.Other, referrer: page.url.href }
+    let method = try it.builder()
+    defer it.release(method)
+    if !js.isUndef(it.arg(a, 1)) {
+        try argText(it, a, 1, method)
+        req.method = method.bytes()
+        // As in browsers, a file is only read (net ignores the method).
+        if text.eql(target.scheme, "file") && !text.eql(req.method, "GET") && !text.eql(req.method, "HEAD") {
+            try setField(it, r, "error", "file: URLs take only GET")
+            return it.pop()
+        }
+    }
+    let headers = try it.builder()
+    defer it.release(headers)
+    if !js.isUndef(it.arg(a, 2)) {
+        try argText(it, a, 2, headers)
+        req.headers = headers.bytes()
+    }
+    let raw = try it.builder()
+    defer it.release(raw)
+    let data = try it.builder()
+    defer it.release(data)
+    var sent = net.Body { content_type: "", data: "" }
+    if !js.isUndef(it.arg(a, 3)) {
+        try argText(it, a, 3, raw)
+        try binaryBytes(raw.bytes(), data)
+        sent.data = data.bytes()
+        req.body = &sent
+    }
+    let res = net.request(it.alloc, &target, req) catch |e| {
+        match e {
+            .OutOfMemory => {
+                return JsError.OutOfMemory
+            }
+            _ => {}
+        }
+        try setField(it, r, "error", net.describe(e))
+        return it.pop()
+    }
+    defer res.deinit(it.alloc)
+    let body = try encoding.toUtf8(it.alloc, res.body, encoding.sniff(res.body, res.charset))
+    defer it.alloc.free(body)
+    try it.defineOwn(r, try it.intern("status"), js.numVal(res.status as f64), js.F_DEFAULT)
+    if res.url.len > 0 {
+        try setField(it, r, "url", res.url)
+    } else {
+        try setField(it, r, "url", target.href)
+    }
+    try setField(it, r, "type", res.mime)
+    try setField(it, r, "body", body)
+    return it.pop()
+}
+
+// Appends to `out` the bytes of a string of code units 0..255 (a Blob's
+// bytes) in its WTF-8 form `s`.
+fn binaryBytes(s: []u8, out: *mut text.Builder) AllocError!void {
+    var i: usize = 0
+    while i < s.len {
+        let c = s[i]
+        if c < 0x80 || i + 1 == s.len {
+            try out.appendByte(c)
+            i += 1
+        } else {
+            try out.appendByte((((c as u32 & 0x1f) << 6) | (s[i + 1] as u32 & 0x3f)) as u8)
+            i += 2
+        }
+    }
+}
+
+// ---- getComputedStyle
+
+// computedStyle(el): the computed values of the element, { "display":
+// "block", ... } with every property of css.PROPERTIES; null for a node
+// that is not an element in the document. computedStyle(el, name): the
+// value of the property `name` ("" when there is none).
+fn akComputedStyle(it: *mut Interp, a: Args) JsError!Value {
+    let one = !js.isUndef(it.arg(a, 1))
+    var none = Value.Null
+    if one {
+        none = try it.newString("")
+    }
+    let h = ownHandle(it, it.arg(a, 0)) orelse return none
+    let s = scriptOf(it)
+    if s.page.doc.node(h).kind != Kind.Element || !s.page.doc.isConnected(h) {
+        return none
+    }
+    let values = try computedValues(s, h) orelse return none
+    let b = try it.builder()
+    defer it.release(b)
+    if one {
+        try argText(it, a, 1, b)
+        let i = css.propertyIndex(b.bytes()) orelse return none
+        b.clear()
+        try css.writeValue(values[i], b)
+        return it.newString(b.bytes())
+    }
+    let o = try it.newObject(it.object_proto)
+    try it.push(js.objVal(o))
+    for i, prop in css.PROPERTIES {
+        b.clear()
+        try css.writeValue(values[i], b)
+        try setField(it, o, prop.name, b.bytes())
+    }
+    return it.pop()
+}
+
+// CSS.supports: does the `@supports` condition argument 0 hold? (A sheet
+// with the rule `@supports COND { a {} }` has the rule when it does.)
+fn akSupports(it: *mut Interp, a: Args) JsError!Value {
+    let b = try it.builder()
+    defer it.release(b)
+    try b.append("@supports ")
+    try argText(it, a, 0, b)
+    try b.append(" { a {} }")
+    var sheet = try css.Sheet.init(it.alloc)
+    defer sheet.deinit()
+    let s = scriptOf(it)
+    try css.parseSheet(&mut sheet, b.bytes(), css.Media { width: s.width, height: s.height })
+    return js.boolVal(sheet.rules.len() == 1)
+}
+
+// The names of the properties getComputedStyle has.
+fn akCssNames(it: *mut Interp, a: Args) JsError!Value {
+    let arr = try it.newArray(0)
+    try it.push(js.objVal(arr))
+    for prop in css.PROPERTIES {
+        let v = try it.newString(prop.name)
+        try it.heap.pushElem(arr, v)
+    }
+    return it.pop()
+}
+
+// The computed values of the element `h` (in the document): the page's
+// when they are up to date, else computed for it and its ancestors only.
+fn computedValues(s: *mut Script, h: NodeId) AllocError!?[]css.Value {
+    if layoutStyles(s, h) |values| {
+        return values
+    }
+    let st = try computedStyling(s)
+    if st.styles.get(h) == null {
+        try dom.assignSlots(&mut s.page.doc)
+        try css.computeStylesOf(&s.page.doc, &st.ua, &st.author, st.media, h, &mut st.styles)
+    }
+    return st.styles.get(h)
+}
+
+// The styles getComputedStyle reads: the page's when they are up to date;
+// else `Script.computed`, whose styles are computed per element
+// (computedValues) and dropped when a change may change them (not for
+// `src`: a lazy loader sets it in a loop and asks for styles each time);
+// its sheets are parsed again only when a style or link element changed.
+fn computedStyling(s: *mut Script) AllocError!*mut Styling {
+    let p = s.page
+    if p.styling |st| {
+        if st.version == s.version && st.media.width == s.width && st.media.height == s.height {
+            return st
+        }
+    }
+    if s.computed |c| {
+        if c.media.width == s.width && c.media.height == s.height {
+            if c.version == s.style_version {
+                return c
+            }
+            let key = sheetSourceKey(&p.doc)
+            if key == s.computed_sheets {
+                c.styles.deinit()
+                c.styles = try css.Styles.init(s.alloc)
+                c.version = s.style_version
+                return c
+            }
+        }
+    }
+    dropComputed(s)
+    let media = css.Media { width: s.width, height: s.height }
+    var ua = try css.Sheet.init(p.alloc)
+    errdefer ua.deinit()
+    try css.uaSheet(&mut ua, media)
+    try css.parseSheet(&mut ua, "noscript { display: none }", media)
+    var author = try css.Sheet.init(p.alloc)
+    errdefer author.deinit()
+    try authorSheets(p.alloc, &p.doc, &p.url, media, &mut author)
+    var styles = try css.Styles.init(p.alloc)
+    errdefer styles.deinit()
+    let c = try p.alloc.create(Styling { media: media, ua: ua, author: author, styles: styles, version: s.style_version })
+    s.computed = c
+    s.computed_sheets = sheetSourceKey(&p.doc)
+    return c
+}
+
+fn dropComputed(s: *mut Script) {
+    if s.computed |c| {
+        c.styles.deinit()
+        c.author.deinit()
+        c.ua.deinit()
+        s.alloc.destroy(c)
+    }
+    s.computed = null
+}
+
+// ---- document.cookie (the session's cookie jar, net/cookies.aye)
+
+fn akCookie(it: *mut Interp, a: Args) JsError!Value {
+    let b = try it.builder()
+    defer it.release(b)
+    net.scriptCookies(&scriptOf(it).page.url, b) catch |e| {
+        return JsError.OutOfMemory
+    }
+    return it.newString(b.bytes())
+}
+
+fn akSetCookie(it: *mut Interp, a: Args) JsError!Value {
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 0, b)
+    net.setScriptCookie(&scriptOf(it).page.url, b.bytes()) catch |e| {
+        return JsError.OutOfMemory
+    }
+    return Value.Undefined
+}
+
+fn setField(it: *mut Interp, o: u32, name: []u8, v: []u8) JsError!void {
+    let sv = try it.newString(v)
+    try it.defineOwn(o, try it.intern(name), sv, js.F_DEFAULT)
+}
+
+// ---- localStorage
+
+// The items, three strings each (origin, key, value), owned. Not a
+// List of a struct: stage0 allows at most 64 instances of `List` in a
+// program (browser/COMPILER_GAPS.md).
+struct Store {
+    alloc: Allocator
+    items: List([]mut u8)
+}
+
+var local_store: ?*mut Store = null
+var store_users: usize = 0
+
+fn useStorage(alloc: Allocator) {
+    store_users += 1
+}
+
+// The last page closed: the storage goes.
+fn releaseStorage() {
+    if store_users > 0 {
+        store_users -= 1
+    }
+    if store_users > 0 {
+        return
+    }
+    if local_store |st| {
+        for item in st.items.items() {
+            st.alloc.free(item)
+        }
+        st.items.deinit()
+        st.alloc.destroy(st)
+        local_store = null
+    }
+}
+
+// Removes item i (its three strings).
+fn removeItem(st: *mut Store, i: usize) {
+    for k in 0..3 {
+        st.alloc.free(st.items.orderedRemove(i * 3))
+    }
+}
+
+fn storeFor(alloc: Allocator) AllocError!*mut Store {
+    if local_store |st| {
+        return st
+    }
+    let st = try alloc.create(Store { alloc: alloc, items: List([]mut u8).init(alloc) })
+    local_store = st
+    return st
+}
+
+fn ownedCopy(alloc: Allocator, b: []u8) AllocError![]mut u8 {
+    let c = try alloc.alloc(0 as u8, b.len)
+    std.mem.copy(c, b)
+    return c
+}
+
+// storage(op, key, value): 0 getItem, 1 setItem, 2 removeItem, 3 clear,
+// 4 key(index), 5 length; for the page's origin.
+fn akStorage(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    let st = try storeFor(s.alloc)
+    let origin = try it.builder()
+    defer it.release(origin)
+    let u = &s.page.url
+    try origin.append(u.scheme)
+    try origin.append("://")
+    try origin.append(u.host)
+    if u.port.len > 0 {
+        try origin.appendByte(':')
+        try origin.append(u.port)
+    }
+    let op = try it.toNumber(it.arg(a, 0))
+    if op == 3.0 {
+        var i: usize = 0
+        while i * 3 < st.items.len() {
+            if text.eql(st.items.items()[i * 3], origin.bytes()) {
+                removeItem(st, i)
+            } else {
+                i += 1
+            }
+        }
+        return Value.Undefined
+    }
+    let count = st.items.len() / 3
+    if op == 4.0 || op == 5.0 {
+        let want = try it.toNumber(it.arg(a, 1))
+        var n: usize = 0
+        for i in 0..count {
+            if text.eql(st.items.items()[i * 3], origin.bytes()) {
+                if op == 4.0 && n as f64 == want {
+                    return it.newString(st.items.items()[i * 3 + 1])
+                }
+                n += 1
+            }
+        }
+        if op == 5.0 {
+            return js.numVal(n as f64)
+        }
+        return Value.Null
+    }
+    let key = try it.builder()
+    defer it.release(key)
+    try argText(it, a, 1, key)
+    for i in 0..count {
+        let items = st.items.items()
+        if text.eql(items[i * 3], origin.bytes()) && text.eql(items[i * 3 + 1], key.bytes()) {
+            if op == 0.0 {
+                return it.newString(items[i * 3 + 2])
+            }
+            if op == 2.0 {
+                removeItem(st, i)
+                return Value.Undefined
+            }
+            let v = try it.builder()
+            defer it.release(v)
+            try argText(it, a, 2, v)
+            let copy = try ownedCopy(st.alloc, v.bytes())
+            st.alloc.free(st.items.items()[i * 3 + 2])
+            st.items.items()[i * 3 + 2] = copy
+            return Value.Undefined
+        }
+    }
+    if op == 1.0 {
+        let v = try it.builder()
+        defer it.release(v)
+        try argText(it, a, 2, v)
+        try st.items.append(try ownedCopy(st.alloc, origin.bytes()))
+        try st.items.append(try ownedCopy(st.alloc, key.bytes()))
+        try st.items.append(try ownedCopy(st.alloc, v.bytes()))
+        return Value.Undefined
+    }
+    if op == 0.0 {
+        return Value.Null
+    }
+    return Value.Undefined
+}

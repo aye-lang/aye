@@ -1,9 +1,9 @@
-//! Tests of the anyknown browser (`browser/`, written in Ore).
+//! Tests of the anyknown browser (`browser/`, written in Aye).
 //!
 //! - `browser/tests/X.html`: `anyknown dump --tree` must print `X.tree` and
 //!   `anyknown dump --text` must print `X.txt`, with an empty stderr (the
 //!   browser is built in debug mode, so a leak would show there).
-//! - `ore test` on the browser's root module and on its standalone modules
+//! - `aye test` on the browser's root module and on its standalone modules
 //!   (`url`, `dom`, `encoding`) must pass.
 //! - A few command-line cases: `data:` URLs, `--id`/`--tag`, errors.
 //! - `browser/tests/js/X.js`: `anyknown js` must print `X.out` (Node's
@@ -24,8 +24,8 @@ fn root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
 
-fn ore() -> Command {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_ore"));
+fn aye() -> Command {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_aye"));
     c.current_dir(root());
     c
 }
@@ -37,7 +37,7 @@ fn anyknown() -> &'static Path {
         let dir = std::env::temp_dir().join(format!("anyknown-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let exe = dir.join("anyknown");
-        let out = ore().arg("build").arg("browser").arg("-o").arg(&exe).output().unwrap();
+        let out = aye().arg("build").arg("browser").arg("-o").arg(&exe).output().unwrap();
         assert!(out.status.success(), "building the browser failed:\n{}", String::from_utf8_lossy(&out.stderr));
         exe
     })
@@ -191,23 +191,23 @@ fn layout_system_font() {
 }
 
 #[test]
-fn ore_unit_tests() {
+fn aye_unit_tests() {
     for module in ["browser", "browser/url", "browser/dom", "browser/encoding", "browser/font", "browser/image"] {
-        let out = ore().arg("test").arg(module).output().unwrap();
+        let out = aye().arg("test").arg(module).output().unwrap();
         let stdout = text(&out.stdout);
         assert!(
             out.status.success() && stdout.contains(" passed; 0 failed"),
-            "`ore test {module}` failed:\n{stdout}{}",
+            "`aye test {module}` failed:\n{stdout}{}",
             text(&out.stderr)
         );
     }
     // Modules that import other browser modules, tested from the root.
     for module in ["svg", "js"] {
-        let out = ore().args(["test", "browser", "--module", module]).output().unwrap();
+        let out = aye().args(["test", "browser", "--module", module]).output().unwrap();
         let stdout = text(&out.stdout);
         assert!(
             out.status.success() && stdout.contains(" passed; 0 failed"),
-            "`ore test browser --module {module}` failed:\n{stdout}{}",
+            "`aye test browser --module {module}` failed:\n{stdout}{}",
             text(&out.stderr)
         );
     }
@@ -789,7 +789,7 @@ fn window_frames() {
     expect(&["--frames", "1", "--bogus", "x.html"], 2, "", &format!("error: {WINDOW_USAGE}\n"));
 }
 
-/// Scripted input (`--events`, ui/script.ore) through the window's event
+/// Scripted input (`--events`, ui/script.aye) through the window's event
 /// handler: scrolling, links, fragments, history, the address bar, find.
 #[test]
 fn window_events() {
@@ -1135,7 +1135,7 @@ fn agent_screenshot() {
 }
 
 /// A window shared by its user and agents (`--agent-socket`,
-/// ui/agents.ore): `browser/tests/agent/window/X.jsonl` is sent over the
+/// ui/agents.aye): `browser/tests/agent/window/X.jsonl` is sent over the
 /// window's Unix socket (from this test, or through `anyknown connect
 /// --mcp` for `X.mcp.jsonl`) while the window runs headless with the
 /// scripted events of `X.events` (`agents:N` waits for N requests); the
@@ -1404,7 +1404,7 @@ fn js_command_line() {
     assert!(text(&syntax.stderr).starts_with("Uncaught SyntaxError:"), "{}", text(&syntax.stderr));
 }
 
-// ---- page scripts and the DOM bindings (browser/engine/script.ore)
+// ---- page scripts and the DOM bindings (browser/engine/script.aye)
 
 /// The window, headless: a click and a key reach the page's listeners,
 /// which change the text (`--text` prints the document's text at the

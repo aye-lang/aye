@@ -1,0 +1,1338 @@
+// ui: the browser window (SDL2), drawn by Aye into one RGBA canvas that
+// is uploaded to an SDL texture each frame.
+//
+// - window.aye: the window, the event loop and navigation.
+// - tabs.aye: the window's tabs (Cmd+T, Cmd+W, Cmd+1..9, the tab strip).
+// - agents.aye: agents connected to the window (`--agent-socket`).
+// - socket.aye: Unix domain sockets, and `anyknown connect`.
+// - chrome.aye: the toolbar (back, forward, reload, address bar), the
+//   tab strip, the status line and the find bar.
+// - field.aye: one-line text fields.
+// - forms.aye: the page's forms: focus, editing, dropdowns, submission.
+// - script.aye: scripted input and state for headless tests.
+// - sdl.aye: SDL2 declarations.
+//
+// Coordinates: SDL reports the mouse in window points, which are CSS
+// px; the canvas has the drawable's pixels (more on HiDPI screens), and
+// everything is painted at `scale` device pixels per CSS px. The page is
+// laid out in the window's width and its height under the toolbar.
+//
+// The loop waits for events (with a timeout, shorter when a timer of the
+// page's scripts is due) and redraws only after an event changed
+// something. Clicks and keys go to the page's scripts first (events);
+// a canceled one skips the browser's default action. After scripts ran,
+// the page is laid out again if they changed the document, and the
+// navigation they asked for happens.
+
+import agent
+import dom
+import dom.NodeId
+import engine
+import font
+import layout
+import paint
+import std
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+import url
+
+let UI_USAGE = "usage: anyknown [open] FILE|URL [--width W] [--height H] [--font fixed|system] [--no-js] [--agent-socket PATH [--exit-when-idle]] [--frames N [--events SCRIPT] [--state] [--text] [--save OUT.png]]"
+
+/// The toolbar height, in CSS px.
+pub let TOOLBAR: f64 = 40.0
+/// The tab strip under the toolbar, shown when the window has two tabs
+/// or more.
+pub let TABBAR: f64 = 28.0
+/// The most tabs a window has.
+pub let MAX_TABS: usize = 16
+/// The find bar height.
+pub let FINDBAR: f64 = 32.0
+/// Lines of a wheel notch and of the arrow keys, in CSS px.
+let LINE_STEP: f64 = 40.0
+
+pub enum Focus {
+    Page
+    Address
+    Find
+}
+
+struct UiOptions {
+    target: []u8
+    width: i32
+    height: i32
+    face: []u8
+    // Tests: stop after this many frames (0: run until closed), feed
+    // these events first, print the state, save the last frame.
+    frames: i64
+    events: []u8
+    state: bool
+    save: []u8
+    // Scripts run (not with --no-js); --text prints the document's text
+    // at the end (after --state).
+    js: bool
+    show_text: bool
+    // Agents connect to this Unix socket (agents.aye); the URL is then
+    // optional. Tests: the window closes when the last agent leaves, and
+    // `--events`, `--state`, `--text` and `--save` work without
+    // `--frames`.
+    socket: []u8
+    exit_when_idle: bool
+}
+
+fn uiOptions(args: [][]u8) ?UiOptions {
+    var o = UiOptions { target: "", width: 1024, height: 768, face: "", frames: 0, events: "", state: false, save: "", js: true, show_text: false, socket: "", exit_when_idle: false }
+    var i: usize = 0
+    while i < args.len {
+        let a = args[i]
+        let more = i + 1 < args.len
+        if (text.eql(a, "--width") || text.eql(a, "--height") || text.eql(a, "--frames")) && more {
+            let v = text.parseInt(args[i + 1]) catch |e| {
+                return null
+            }
+            if v < 1 || v > 16384 {
+                return null
+            }
+            if text.eql(a, "--width") {
+                o.width = v as i32
+            } else if text.eql(a, "--height") {
+                o.height = v as i32
+            } else {
+                o.frames = v
+            }
+            i += 1
+        } else if text.eql(a, "--font") && more && (text.eql(args[i + 1], "fixed") || text.eql(args[i + 1], "system")) {
+            o.face = args[i + 1]
+            i += 1
+        } else if text.eql(a, "--events") && more && validScript(args[i + 1]) {
+            o.events = args[i + 1]
+            i += 1
+        } else if text.eql(a, "--agent-socket") && more {
+            o.socket = args[i + 1]
+            i += 1
+        } else if text.eql(a, "--exit-when-idle") {
+            o.exit_when_idle = true
+        } else if text.eql(a, "--save") && more {
+            o.save = args[i + 1]
+            i += 1
+        } else if text.eql(a, "--state") {
+            o.state = true
+        } else if text.eql(a, "--text") {
+            o.show_text = true
+        } else if text.eql(a, "--no-js") {
+            o.js = false
+        } else if o.target.len == 0 && !text.startsWith(a, "-") {
+            o.target = a
+        } else {
+            return null
+        }
+        i += 1
+    }
+    let headless = o.frames > 0 || o.exit_when_idle
+    if (o.target.len == 0 && o.socket.len == 0) || (!headless && (o.events.len > 0 || o.state || o.show_text || o.save.len > 0)) {
+        return null
+    }
+    if o.exit_when_idle && (o.socket.len == 0 || o.frames > 0) {
+        return null
+    }
+    return o
+}
+
+/// `anyknown [open] FILE|URL ...`: opens a window on the page; returns
+/// the exit status.
+pub fn run(alloc: Allocator, args: [][]u8) i32 {
+    var o = UiOptions { target: "", width: 0, height: 0, face: "", frames: 0, events: "", state: false, save: "", js: true, show_text: false, socket: "", exit_when_idle: false }
+    if uiOptions(args) |parsed| {
+        o = parsed
+    } else {
+        std.log.err(UI_USAGE)
+        return 2
+    }
+    var sys = font.System.init(alloc) catch |e| {
+        if text.eql(o.face, "system") {
+            std.log.err("no system font found ({})", e)
+            return 1
+        }
+        var fixed = font.Fixed.init()
+        return withFonts(alloc, o, &mut fixed, null)
+    }
+    defer sys.deinit()
+    if text.eql(o.face, "fixed") {
+        var fixed = font.Fixed.init()
+        return withFonts(alloc, o, &mut fixed, null)
+    }
+    return withFonts(alloc, o, &mut sys, &mut sys)
+}
+
+fn withFonts(alloc: Allocator, o: UiOptions, measure: dyn font.Measurer, system: ?*mut font.System) i32 {
+    var first: ?url.Url = null
+    if o.target.len > 0 {
+        first = engine.urlOfInput(alloc, o.target) catch |e| {
+            std.log.err("not a URL or file: {}", o.target)
+            return 1
+        }
+    }
+    defer {
+        if first |f| {
+            f.deinit(alloc)
+        }
+    }
+    engine.setScripting(o.js)
+    engine.setCanvasFixed(system == null)
+    engine.setRealClock(true)
+    // The console goes to stderr, except in headless test runs.
+    engine.setConsoleEcho(o.frames == 0 && !o.exit_when_idle)
+    if SDL_Init(SDL_INIT_VIDEO) != 0 {
+        sdlError("cannot start SDL")
+        return 1
+    }
+    defer SDL_Quit()
+    let flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI
+    let w = SDL_CreateWindow("anyknown".ptr, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, o.width, o.height, flags)
+    if w |window| {
+        defer SDL_DestroyWindow(window)
+        var r = SDL_CreateRenderer(window, -1, 0)
+        if r == null {
+            r = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE)
+        }
+        if r |renderer| {
+            defer SDL_DestroyRenderer(renderer)
+            let first_tab = newSlot(alloc, measure, system, 1) catch |e| {
+                std.log.err("out of memory")
+                return 1
+            }
+            var ui = Ui.init(alloc, window, renderer, measure, system, first_tab)
+            defer ui.deinit()
+            var target: ?*url.Url = null
+            if first |_| {
+                target = &first.?
+            }
+            let status = ui.start(target) catch |e| {
+                std.log.err("out of memory")
+                return 1
+            }
+            if status != 0 {
+                return status
+            }
+            if o.socket.len > 0 {
+                let listening = startAgents(&mut ui, o.socket, o.exit_when_idle) catch |e| {
+                    std.log.err("out of memory")
+                    return 1
+                }
+                if !listening {
+                    return 1
+                }
+            }
+            ui.script(o.events) catch |e| {
+                std.log.err("out of memory")
+                return 1
+            }
+            ui.loop(o.frames) catch |e| {
+                std.log.err("out of memory")
+                return 1
+            }
+            if o.save.len > 0 {
+                saveCanvas(&mut ui, o.save) catch |e| {
+                    std.log.err("cannot write {}", o.save)
+                    return 1
+                }
+            }
+            if o.state {
+                var b = text.Builder.init(alloc)
+                defer b.deinit()
+                writeState(&mut ui, &mut b) catch |e| {
+                    return 1
+                }
+                @print(b.bytes())
+            }
+            if o.show_text {
+                var b = text.Builder.init(alloc)
+                defer b.deinit()
+                if ui.tab.page |p| {
+                    p.doc.textContent(p.doc.root, &mut b) catch |e| {
+                        return 1
+                    }
+                }
+                @print(b.bytes())
+            }
+            return 0
+        }
+        sdlError("cannot create a renderer")
+        return 1
+    }
+    sdlError("cannot open a window")
+    return 1
+}
+
+fn sdlError(what: []u8) {
+    let e = SDL_GetError()
+    std.log.err("{}: {}", what, e[0..strlen(e)])
+}
+
+extern fn strlen(s: [*]u8) usize
+
+pub struct Ui {
+    alloc: Allocator
+    window: *mut SDL_Window
+    renderer: *mut SDL_Renderer
+    texture: ?*mut SDL_Texture
+    // The window in points (CSS px) and the drawable in pixels.
+    win_w: i32
+    win_h: i32
+    px_w: i32
+    px_h: i32
+    scale: f64
+    canvas: paint.Canvas
+    painter: paint.TextPainter
+    measure: dyn font.Measurer
+    // The tabs (tabs.aye): `slots[..count]`, `slots[active]` shown; `tab`
+    // is the shown tab's page and history.
+    slots: [16]?*mut TabSlot
+    count: usize
+    active: usize
+    next_tab: u32
+    tab: *mut engine.Tab
+    list: ?paint.DisplayList
+    // The page's fixed or sticky boxes moved since `list` was built.
+    relist: bool
+    focus: Focus
+    address: Field
+    // Find in page: the bar is open, its query, the matches (document
+    // CSS px) and the current one.
+    finding: bool
+    find: Field
+    matches: List(paint.Rect)
+    current: usize
+    // The URL of the link under the mouse (resolved), for the status
+    // line; empty for none.
+    hover: text.Builder
+    hand: bool
+    // The options of a `select`, open over the page.
+    dropdown: ?Dropdown
+    range_drag: bool
+    arrow_cursor: ?*mut SDL_Cursor
+    hand_cursor: ?*mut SDL_Cursor
+    ibeam_cursor: ?*mut SDL_Cursor
+    // A shortcut was handled: ignore the text input of its key.
+    swallow: bool
+    resized: bool
+    dirty: bool
+    quit: bool
+    // engine.domVersion of the page when it was last laid out.
+    laid_version: u64
+    // The agents (agents.aye), when the window listens for them.
+    agents: ?*mut Agents
+    // The mouse, in window points, while it is over the window.
+    mouse_in: bool
+    mouse_x: f64
+    mouse_y: f64
+    // Scripted events not fed yet (script.aye): they wait for agents.
+    rest: text.Builder
+
+    fn init(alloc: Allocator, window: *mut SDL_Window, renderer: *mut SDL_Renderer, measure: dyn font.Measurer, system: ?*mut font.System, first: *mut TabSlot) Ui {
+        var slots = @zeroed([16]?*mut TabSlot)
+        slots[0] = first
+        return Ui {
+            alloc: alloc,
+            window: window,
+            renderer: renderer,
+            texture: null,
+            win_w: 0,
+            win_h: 0,
+            px_w: 0,
+            px_h: 0,
+            scale: 1.0,
+            canvas: paint.Canvas.init(alloc, 0, 0) catch unreachable,
+            painter: paint.TextPainter.init(alloc, system),
+            measure: measure,
+            slots: slots,
+            count: 1,
+            active: 0,
+            next_tab: 2,
+            tab: first.session.tab,
+            list: null,
+            relist: false,
+            focus: Focus.Page,
+            address: Field.init(alloc),
+            finding: false,
+            find: Field.init(alloc),
+            matches: List(paint.Rect).init(alloc),
+            current: 0,
+            hover: text.Builder.init(alloc),
+            hand: false,
+            dropdown: null,
+            range_drag: false,
+            arrow_cursor: SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW),
+            hand_cursor: SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND),
+            ibeam_cursor: SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM),
+            swallow: false,
+            resized: false,
+            dirty: true,
+            quit: false,
+            laid_version: 0,
+            agents: null,
+            mouse_in: false,
+            mouse_x: 0.0,
+            mouse_y: 0.0,
+            rest: text.Builder.init(alloc),
+        }
+    }
+
+    fn deinit(self: *mut Self) {
+        SDL_StopTextInput()
+        self.dropList()
+        if self.texture |t| {
+            SDL_DestroyTexture(t)
+        }
+        let cursors = [3]?*mut SDL_Cursor{self.arrow_cursor, self.hand_cursor, self.ibeam_cursor}
+        for c in cursors {
+            if c |cursor| {
+                SDL_FreeCursor(cursor)
+            }
+        }
+        stopAgents(self)
+        self.rest.deinit()
+        self.canvas.deinit()
+        self.painter.deinit()
+        for i in 0..self.count {
+            freeSlot(self.alloc, self.slots[i].?)
+        }
+        self.address.deinit()
+        self.find.deinit()
+        self.matches.deinit()
+        self.hover.deinit()
+    }
+
+    fn dropList(self: *mut Self) {
+        if self.list |l| {
+            var old = l
+            old.deinit()
+        }
+        self.list = null
+    }
+
+    // Sizes the canvas to the window and opens the first page (or, with
+    // none, an empty tab with the focus in the address bar).
+    fn start(self: *mut Self, first: ?*url.Url) AllocError!i32 {
+        if !(try self.resize()) {
+            return 1
+        }
+        SDL_StartTextInput()
+        if first |f| {
+            try self.go(f)
+        } else {
+            self.focus = Focus.Address
+            try self.setTitle()
+        }
+        return 0
+    }
+
+    // Feeds the events of a test script (script.aye); the words after an
+    // `agents:N` wait until agents made N requests.
+    fn script(self: *mut Self, events: []u8) AllocError!void {
+        self.rest.clear()
+        try self.rest.append(events)
+        return resumeScript(self)
+    }
+
+    fn loop(self: *mut Self, frames: i64) AllocError!void {
+        var drawn: i64 = 0
+        while !self.quit {
+            if self.dirty || frames > 0 {
+                try self.draw()
+                self.dirty = false
+                drawn += 1
+            }
+            if frames > 0 && drawn >= frames {
+                return
+            }
+            var ev = @zeroed(SDL_Event)
+            var timeout: i32 = 1000
+            if frames > 0 {
+                timeout = 10
+            }
+            if self.agents != null && timeout > POLL_MS {
+                timeout = POLL_MS
+            }
+            if self.tab.page |p| {
+                if engine.msUntilNextTimer(p) |ms| {
+                    if ms < timeout as f64 {
+                        timeout = ms as i32
+                    }
+                }
+            }
+            if SDL_WaitEventTimeout(&mut ev, timeout) != 0 {
+                try self.handle(&ev)
+                while SDL_PollEvent(&mut ev) != 0 {
+                    try self.handle(&ev)
+                }
+            }
+            if self.tab.page |p| {
+                if try engine.runDueTimers(p) {
+                    try self.afterScripts()
+                }
+            }
+            try pollAgents(self)
+            if self.resized {
+                self.resized = false
+                if try self.resize() {
+                    try self.relayout()
+                }
+            }
+        }
+    }
+
+    // ---- sizes and layout
+
+    // Reads the window and drawable sizes and makes the canvas and the
+    // texture that size. False when SDL cannot make the texture.
+    fn resize(self: *mut Self) AllocError!bool {
+        var w: i32 = 0
+        var h: i32 = 0
+        SDL_GetWindowSize(self.window, &mut w, &mut h)
+        var pw: i32 = 0
+        var ph: i32 = 0
+        if SDL_GetRendererOutputSize(self.renderer, &mut pw, &mut ph) != 0 || pw <= 0 || ph <= 0 {
+            pw = w
+            ph = h
+        }
+        if w < 1 {
+            w = 1
+        }
+        if h < 1 {
+            h = 1
+        }
+        self.win_w = w
+        self.win_h = h
+        self.px_w = pw
+        self.px_h = ph
+        self.scale = pw as f64 / w as f64
+        self.canvas.deinit()
+        self.canvas = try paint.Canvas.init(self.alloc, pw as usize, ph as usize)
+        if self.texture |t| {
+            SDL_DestroyTexture(t)
+        }
+        self.texture = SDL_CreateTexture(self.renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, pw, ph)
+        if self.texture == null {
+            sdlError("cannot create a texture")
+            return false
+        }
+        self.dirty = true
+        return true
+    }
+
+    // The top of the page's viewport: under the toolbar and the tab
+    // strip.
+    fn top(self: *Self) f64 {
+        if self.count > 1 {
+            return TOOLBAR + TABBAR
+        }
+        return TOOLBAR
+    }
+
+    // The height of the page's layout viewport (without the find bar).
+    fn layoutHeight(self: *Self) f64 {
+        let h = self.win_h as f64 - self.top()
+        if h < 1.0 {
+            return 1.0
+        }
+        return h
+    }
+
+    // The height of the page's viewport, in CSS px.
+    fn viewHeight(self: *Self) f64 {
+        var h = self.win_h as f64 - self.top()
+        if self.finding {
+            h -= FINDBAR
+        }
+        if h < 1.0 {
+            h = 1.0
+        }
+        return h
+    }
+
+    fn maxScroll(self: *Self) f64 {
+        if self.list |l| {
+            let m = l.height - self.viewHeight()
+            if m > 0.0 {
+                return m
+            }
+        }
+        return 0.0
+    }
+
+    // Lays the page out again for the window and rebuilds the display
+    // list (and the find matches).
+    fn relayout(self: *mut Self) AllocError!void {
+        self.dropList()
+        if self.tab.page |p| {
+            try p.layoutPage(self.measure, self.win_w as f64, self.layoutHeight())
+            self.laid_version = engine.treeVersion(p)
+            if p.tree |t| {
+                self.list = try paint.build(self.alloc, t)
+            }
+        }
+        try self.findAll(false)
+        self.tab.clampScroll(self.maxScroll())
+        self.dirty = true
+    }
+
+    // ---- navigation
+
+    fn go(self: *mut Self, target: *url.Url) AllocError!void {
+        let loaded = try self.tab.navigate(target)
+        try self.navigated(loaded)
+    }
+
+    // After the tab moved: lay out a new page, scroll where the tab
+    // wants, and show the URL and title.
+    fn navigated(self: *mut Self, loaded: bool) AllocError!void {
+        self.dropdown = null
+        self.range_drag = false
+        if loaded {
+            // The agents' refs are of the old document.
+            self.slots[self.active].?.shown += 1
+            try self.relayout()
+        }
+        self.tab.settle(self.maxScroll())
+        // Where a script of the page scrolled while it loaded, else where
+        // the tab is; the scripts see the offset either way.
+        var y = self.tab.scroll
+        if self.tab.page |p| {
+            if engine.takeScriptScroll(p) |want| {
+                y = want
+            }
+        }
+        self.scrollTo(y)
+        try self.address.set(self.tab.href())
+        if self.focus == Focus.Address {
+            self.focus = Focus.Page
+        }
+        self.hover.clear()
+        try self.setTitle()
+        self.dirty = true
+    }
+
+    fn setTitle(self: *mut Self) AllocError!void {
+        var b = text.Builder.init(self.alloc)
+        defer b.deinit()
+        if self.tab.page |p| {
+            if p.title.len > 0 {
+                try b.append(p.title)
+            } else {
+                try b.append(self.tab.href())
+            }
+        }
+        if self.tab.page == null {
+            try b.append("New tab")
+        }
+        try b.append(" - anyknown")
+        try b.appendByte(0)
+        SDL_SetWindowTitle(self.window, b.bytes().ptr)
+    }
+
+    // Goes to what was typed in the address bar.
+    fn submitAddress(self: *mut Self) AllocError!void {
+        let typed = text.trim(self.address.bytes())
+        if typed.len == 0 {
+            return
+        }
+        let target = engine.urlOfInput(self.alloc, typed) catch |e| {
+            return
+        }
+        defer target.deinit(self.alloc)
+        self.focus = Focus.Page
+        try self.go(&target)
+    }
+
+    fn back(self: *mut Self) AllocError!void {
+        return self.goBy(-1)
+    }
+
+    fn forward(self: *mut Self) AllocError!void {
+        return self.goBy(1)
+    }
+
+    fn reload(self: *mut Self) AllocError!void {
+        return self.goBy(0)
+    }
+
+    // Moves `step` entries in the history (0: reload): in the document
+    // shown, its scripts got popstate; else a page was loaded.
+    fn goBy(self: *mut Self, step: i64) AllocError!void {
+        match try self.tab.go(step) {
+            .None => {}
+            .InDocument => {
+                try self.navigated(false)
+                try self.afterScripts()
+            }
+            .Loaded => {
+                try self.navigated(true)
+            }
+        }
+    }
+
+    // ---- scrolling and find
+
+    fn scrollBy(self: *mut Self, dy: f64) {
+        let before = self.tab.scroll
+        self.tab.scroll += dy
+        self.tab.clampScroll(self.maxScroll())
+        if self.tab.scroll != before {
+            self.dirty = true
+            self.followScroll()
+        }
+        if self.tab.page |p| {
+            // Out of memory: the scripts see the old offset.
+            engine.setScriptScroll(p, self.tab.scroll) catch |e| {
+            }
+        }
+    }
+
+    fn scrollTo(self: *mut Self, y: f64) {
+        self.scrollBy(y - self.tab.scroll)
+    }
+
+    // Scrolls a page wider than the window sideways by `dx` px.
+    fn scrollSideways(self: *mut Self, dx: f64) {
+        var max = 0.0
+        if self.list |l| {
+            max = std.math.max(0.0, l.width - self.win_w as f64)
+        }
+        let x = std.math.clamp(self.tab.scroll_x + dx, 0.0, max)
+        if x != self.tab.scroll_x {
+            self.tab.scroll_x = x
+            self.dirty = true
+        }
+    }
+
+    // Moves the page's fixed and sticky boxes to the scroll offset when
+    // they are not there yet (`draw` paints them again).
+    fn followScroll(self: *mut Self) {
+        if self.tab.page |p| {
+            if p.tree |t| {
+                if t.scroll_y != self.tab.scroll && layout.scrollTo(t, self.tab.scroll) {
+                    self.relist = true
+                }
+            }
+        }
+    }
+
+    // Scrolls the frame under the mouse by `dy` px; false when the mouse
+    // is over no frame.
+    fn scrollFrame(self: *mut Self, dy: f64) AllocError!bool {
+        if !self.mouse_in || self.mouse_y < self.top() {
+            return false
+        }
+        let p = self.tab.page orelse return false
+        if !engine.scrollFrameAt(p, self.mouse_x + self.tab.scroll_x, self.mouse_y - self.top() + self.tab.scroll, dy) {
+            return false
+        }
+        if p.tree |t| {
+            self.dropList()
+            self.list = try paint.build(self.alloc, t)
+        }
+        self.dirty = true
+        return true
+    }
+
+    fn openFind(self: *mut Self) AllocError!void {
+        self.finding = true
+        self.focus = Focus.Find
+        self.find.selectAll()
+        try self.findAll(true)
+        self.dirty = true
+    }
+
+    fn closeFind(self: *mut Self) {
+        self.finding = false
+        self.focus = Focus.Page
+        self.matches.clear()
+        self.tab.clampScroll(self.maxScroll())
+        self.dirty = true
+    }
+
+    // Finds the query again; with `jump`, scrolls to the first match at
+    // or below the top of the view.
+    fn findAll(self: *mut Self, jump: bool) AllocError!void {
+        self.matches.clear()
+        self.current = 0
+        if !self.finding {
+            return
+        }
+        if self.tab.page |p| {
+            if p.tree |t| {
+                try engine.findText(t, self.find.bytes(), &mut self.matches)
+            }
+        }
+        if jump {
+            for i, m in self.matches.items() {
+                if m.y >= self.tab.scroll {
+                    self.current = i
+                    break
+                }
+            }
+            self.showMatch()
+        }
+        self.dirty = true
+    }
+
+    // Goes to the next match (or the previous one).
+    fn nextMatch(self: *mut Self, backwards: bool) {
+        let n = self.matches.len()
+        if n == 0 {
+            return
+        }
+        if backwards {
+            self.current = (self.current + n - 1) % n
+        } else {
+            self.current = (self.current + 1) % n
+        }
+        self.showMatch()
+        self.dirty = true
+    }
+
+    // Scrolls the current match into view (a third down the view).
+    fn showMatch(self: *mut Self) {
+        if self.current < self.matches.len() {
+            let m = self.matches.items()[self.current]
+            let view = self.viewHeight()
+            if m.y < self.tab.scroll || m.y + m.h > self.tab.scroll + view {
+                self.scrollTo(m.y - view / 3.0)
+            }
+        }
+    }
+
+    // ---- events
+
+    fn handle(self: *mut Self, ev: *SDL_Event) AllocError!void {
+        let kind = ev.kind
+        if kind == SDL_QUIT {
+            self.quit = true
+        } else if kind == SDL_WINDOWEVENT {
+            let we = &ev.window
+            if we.event == SDL_WINDOWEVENT_SIZE_CHANGED {
+                self.resized = true
+            } else if we.event == SDL_WINDOWEVENT_EXPOSED {
+                self.dirty = true
+            } else if we.event == SDL_WINDOWEVENT_LEAVE {
+                self.mouse_in = false
+                try self.clearHover(false)
+            }
+        } else if kind == SDL_KEYDOWN {
+            let ke = &ev.key
+            try self.key(ke.keysym.sym, ke.keysym.mods)
+        } else if kind == SDL_TEXTINPUT {
+            let te = &ev.text
+            var n: usize = 0
+            while n < te.text.len && te.text[n] != 0 {
+                n += 1
+            }
+            try self.typed(te.text[0..n])
+        } else if kind == SDL_MOUSEMOTION {
+            let me = &ev.motion
+            try self.mouseMoved(me.x as f64, me.y as f64)
+        } else if kind == SDL_MOUSEBUTTONDOWN {
+            let be = &ev.button
+            if be.button == SDL_BUTTON_LEFT {
+                try self.click(be.x as f64, be.y as f64)
+            }
+        } else if kind == SDL_MOUSEBUTTONUP {
+            if ev.button.button == SDL_BUTTON_LEFT {
+                try releaseRange(self)
+            }
+        } else if kind == SDL_MOUSEWHEEL {
+            let wh = &ev.wheel
+            var dy = wh.precise_y as f64
+            if dy == 0.0 {
+                dy = wh.y as f64
+            }
+            var dx = wh.precise_x as f64
+            if dx == 0.0 {
+                dx = wh.x as f64
+            }
+            if wh.direction == SDL_MOUSEWHEEL_FLIPPED {
+                dy = -dy
+                dx = -dx
+            }
+            if (SDL_GetModState() & KMOD_SHIFT) != 0 && dx == 0.0 {
+                // Shift turns the wheel sideways.
+                dx = -dy
+                dy = 0.0
+            }
+            if dx != 0.0 {
+                self.scrollSideways(dx * LINE_STEP)
+            }
+            if dy != 0.0 && !(try self.scrollFrame(-dy * LINE_STEP)) {
+                self.scrollBy(-dy * LINE_STEP)
+            }
+        }
+    }
+
+    fn key(self: *mut Self, sym: i32, mods: u16) AllocError!void {
+        self.swallow = false
+        let cmd = (mods & (KMOD_GUI | KMOD_CTRL)) != 0
+        let shift = (mods & KMOD_SHIFT) != 0
+        if cmd && try windowKey(self, sym, shift) {
+            self.swallow = true
+            return
+        }
+        if self.focus == Focus.Page && !cmd && self.dropdown == null {
+            // keydown goes to the page's scripts first; canceling it
+            // skips what the key would do (and its text).
+            if !(try self.keyScripts(sym, shift)) {
+                self.swallow = true
+                return self.afterScripts()
+            }
+            try self.afterScripts()
+        }
+        if self.focus == Focus.Page && !(cmd && sym == 'l') && !(cmd && sym == 'f') {
+            if try pageKey(self, sym, mods) {
+                return self.afterScripts()
+            }
+        }
+        if cmd {
+            self.swallow = true
+            if sym == 'q' {
+                self.quit = true
+            } else if sym == 'l' {
+                self.focus = Focus.Address
+                self.address.selectAll()
+                self.dirty = true
+            } else if sym == 'r' {
+                try self.reload()
+            } else if sym == '[' {
+                try self.back()
+            } else if sym == ']' {
+                try self.forward()
+            } else if sym == 'f' {
+                try self.openFind()
+            } else if sym == 'a' && self.focus != Focus.Page {
+                self.field().selectAll()
+                self.dirty = true
+            } else if sym == SDLK_LEFT && self.focus == Focus.Page {
+                try self.back()
+            } else if sym == SDLK_RIGHT && self.focus == Focus.Page {
+                try self.forward()
+            } else if sym == SDLK_UP && self.focus == Focus.Page {
+                self.scrollTo(0.0)
+            } else if sym == SDLK_DOWN && self.focus == Focus.Page {
+                self.scrollTo(self.maxScroll())
+            } else {
+                self.swallow = false
+            }
+            return
+        }
+        if sym == SDLK_ESCAPE {
+            if self.finding {
+                self.closeFind()
+            } else if self.focus == Focus.Address {
+                try self.address.set(self.tab.href())
+                self.focus = Focus.Page
+                self.dirty = true
+            }
+            return
+        }
+        if self.focus == Focus.Page {
+            let view = self.viewHeight()
+            if sym == SDLK_DOWN {
+                self.scrollBy(LINE_STEP)
+            } else if sym == SDLK_UP {
+                self.scrollBy(-LINE_STEP)
+            } else if sym == SDLK_PAGEDOWN || (sym == SDLK_SPACE && !shift) {
+                self.scrollBy(view - LINE_STEP)
+            } else if sym == SDLK_PAGEUP || (sym == SDLK_SPACE && shift) {
+                self.scrollBy(LINE_STEP - view)
+            } else if sym == SDLK_HOME {
+                self.scrollTo(0.0)
+            } else if sym == SDLK_END {
+                self.scrollTo(self.maxScroll())
+            } else if sym == SDLK_LEFT {
+                self.scrollSideways(-LINE_STEP)
+            } else if sym == SDLK_RIGHT {
+                self.scrollSideways(LINE_STEP)
+            }
+            return
+        }
+        let f = self.field()
+        if sym == SDLK_RETURN || sym == SDLK_KP_ENTER {
+            if self.focus == Focus.Address {
+                try self.submitAddress()
+            } else {
+                self.nextMatch(shift)
+            }
+            return
+        }
+        var edited = true
+        if sym == SDLK_BACKSPACE {
+            try f.backspace()
+        } else if sym == SDLK_DELETE {
+            try f.delete()
+        } else if sym == SDLK_LEFT {
+            f.left()
+            edited = false
+        } else if sym == SDLK_RIGHT {
+            f.right()
+            edited = false
+        } else if sym == SDLK_HOME || sym == SDLK_UP {
+            f.home()
+            edited = false
+        } else if sym == SDLK_END || sym == SDLK_DOWN {
+            f.end()
+            edited = false
+        } else {
+            return
+        }
+        self.dirty = true
+        if edited && self.focus == Focus.Find {
+            try self.findAll(true)
+        }
+    }
+
+    // The focused text field (the find bar's when the page has focus).
+    fn field(self: *mut Self) *mut Field {
+        if self.focus == Focus.Address {
+            return &mut self.address
+        }
+        return &mut self.find
+    }
+
+    fn typed(self: *mut Self, s: []u8) AllocError!void {
+        if self.swallow || s.len == 0 {
+            return
+        }
+        if self.focus == Focus.Page {
+            try pageText(self, s)
+            return
+        }
+        try self.field().insert(s)
+        self.dirty = true
+        if self.focus == Focus.Find {
+            try self.findAll(true)
+        }
+    }
+
+    fn mouseMoved(self: *mut Self, wx: f64, y: f64) AllocError!void {
+        self.mouse_in = true
+        self.mouse_x = wx
+        self.mouse_y = y
+        if self.range_drag {
+            try dragRange(self, wx + self.tab.scroll_x)
+        }
+        if y < self.top() {
+            let r = addressRect(self)
+            let over_field = wx >= r.x && wx < r.x + r.w
+            try self.clearHover(over_field)
+            return
+        }
+        if self.finding && y >= self.win_h as f64 - FINDBAR {
+            try self.clearHover(false)
+            return
+        }
+        // In the page's coordinates.
+        let x = wx + self.tab.scroll_x
+        if self.tab.page |p| {
+            if engine.frameAt(p, x, y - self.top() + self.tab.scroll) |fp| {
+                // A link in a frame's document, resolved there.
+                if fp.page.tree |ft| {
+                    if engine.linkAt(ft, fp.x, fp.y) |link| {
+                        let target = fp.page.resolve(self.alloc, link.href) catch |e| {
+                            return self.setLink(link.href)
+                        }
+                        defer target.deinit(self.alloc)
+                        return self.setLink(target.href)
+                    }
+                }
+                return self.clearHover(false)
+            }
+        }
+        if self.linkAt(x, y) |link| {
+            if self.tab.page |p| {
+                let target = p.resolve(self.alloc, link.href) catch |e| {
+                    return self.setLink(link.href)
+                }
+                defer target.deinit(self.alloc)
+                return self.setLink(target.href)
+            }
+            return self.setLink(link.href)
+        }
+        try self.clearHover(overTextField(self, x, y))
+    }
+
+    fn setLink(self: *mut Self, href: []u8) AllocError!void {
+        if !text.eql(self.hover.bytes(), href) {
+            self.hover.clear()
+            try self.hover.append(href)
+            self.dirty = true
+        }
+        self.setCursor(true, false)
+    }
+
+    // Clears the status line and sets the arrow (or I-beam) cursor.
+    fn clearHover(self: *mut Self, ibeam: bool) AllocError!void {
+        if self.hover.len() > 0 {
+            self.hover.clear()
+            self.dirty = true
+        }
+        self.setCursor(false, ibeam)
+    }
+
+    fn setCursor(self: *mut Self, hand: bool, ibeam: bool) {
+        if hand {
+            SDL_SetCursor(self.hand_cursor)
+        } else if ibeam {
+            SDL_SetCursor(self.ibeam_cursor)
+        } else {
+            SDL_SetCursor(self.arrow_cursor)
+        }
+        self.hand = hand
+    }
+
+    // The link at a window point in the content area.
+    fn linkAt(self: *mut Self, x: f64, y: f64) ?engine.Link {
+        if self.tab.page |p| {
+            if p.tree |t| {
+                return engine.linkAt(t, x, y - self.top() + self.tab.scroll)
+            }
+        }
+        return null
+    }
+
+    fn click(self: *mut Self, x: f64, y: f64) AllocError!void {
+        if y >= TOOLBAR && y < self.top() {
+            return clickTabStrip(self, x)
+        }
+        if y < TOOLBAR {
+            match buttonAt(self, x, y) {
+                .Back => {
+                    try self.back()
+                }
+                .Forward => {
+                    try self.forward()
+                }
+                .Reload => {
+                    try self.reload()
+                }
+                .Address => {
+                    self.focus = Focus.Address
+                    self.address.caret = caretAt(self, x)
+                    self.address.all = false
+                    self.dirty = true
+                }
+                .Pause => {
+                    togglePause(self)
+                }
+                .None => {}
+            }
+            return
+        }
+        if self.finding && y >= self.win_h as f64 - FINDBAR {
+            self.focus = Focus.Find
+            self.dirty = true
+            return
+        }
+        if self.focus != Focus.Page {
+            self.focus = Focus.Page
+            self.dirty = true
+        }
+        let px = x + self.tab.scroll_x
+        if !(try self.clickScripts(px, y)) {
+            return self.afterScripts()
+        }
+        try clickPage(self, px, y)
+        try self.afterScripts()
+    }
+
+    // ---- scripts
+
+    // Fires the click at the element under (x, y) (window points); false
+    // when a listener canceled it. When scripts changed the document,
+    // it is laid out again first, so that the default action looks at
+    // the new layout.
+    fn clickScripts(self: *mut Self, x: f64, y: f64) AllocError!bool {
+        let p = self.tab.page orelse return true
+        if !engine.hasScripts(p) || self.dropdown != null {
+            return true
+        }
+        let t = p.tree orelse return true
+        var el = engine.nodeAt(t, x, y - self.top() + self.tab.scroll) orelse return true
+        if p.doc.node(el).kind != dom.Kind.Element {
+            el = p.doc.parent(el) orelse return true
+        }
+        let go_on = try engine.dispatchEvent(p, el, "click", "")
+        if self.tab.page |now| {
+            if engine.treeVersion(now) != self.laid_version {
+                try self.relayout()
+                try self.setTitle()
+            }
+        }
+        return go_on
+    }
+
+    // Fires keydown at the element scripts focused (else the body); false
+    // when a listener canceled it.
+    fn keyScripts(self: *mut Self, sym: i32, shift: bool) AllocError!bool {
+        let p = self.tab.page orelse return true
+        if !engine.hasScripts(p) {
+            return true
+        }
+        var target = engine.scriptFocus(p)
+        if target == null {
+            if p.doc.documentElement() |root| {
+                var cur = p.doc.firstChild(root)
+                while cur |c| {
+                    if p.doc.isElement(c, "body") {
+                        target = c
+                    }
+                    cur = p.doc.nextSibling(c)
+                }
+            }
+        }
+        let el = target orelse return true
+        var name = [1]u8{0}
+        var key: []u8 = keyName(sym)
+        if key.len == 0 && sym > 32 && sym < 127 {
+            name[0] = sym as u8
+            if shift && name[0] >= 'a' && name[0] <= 'z' {
+                name[0] -= 32
+            }
+            key = name[..]
+        }
+        if key.len == 0 {
+            return true
+        }
+        return engine.dispatchEvent(p, el, "keydown", key)
+    }
+
+    // After the page's scripts ran: the navigation they asked for, or
+    // the layout of what they changed.
+    fn afterScripts(self: *mut Self) AllocError!void {
+        let p = self.tab.page orelse return
+        let nav = engine.takeNavigation(p)
+        match nav.kind {
+            .To => {
+                // The URL is the page's, which going elsewhere frees.
+                let target = url.parse(self.alloc, nav.href) catch |e| {
+                    return
+                }
+                defer target.deinit(self.alloc)
+                return self.go(&target)
+            }
+            .History => {
+                return self.goBy(nav.step)
+            }
+            .Reload => {
+                return self.reload()
+            }
+            .Submit => {
+                if nav.form |f| {
+                    return submitNow(self, f, nav.submitter)
+                }
+            }
+            .None => {}
+        }
+        if engine.treeVersion(p) != self.laid_version {
+            try self.relayout()
+            try self.setTitle()
+        }
+        // pushState, replaceState or a fragment navigation of the scripts.
+        if self.focus != Focus.Address && !text.eql(self.address.bytes(), self.tab.href()) {
+            try self.address.set(self.tab.href())
+            self.dirty = true
+        }
+        if engine.takeScriptScroll(p) |y| {
+            self.scrollTo(y)
+        }
+    }
+
+    // ---- agent.Host (agents.aye)
+
+    pub fn agentSession(self: *mut Self, conn: usize) ?*mut agent.Session {
+        return sessionOf(self, conn)
+    }
+
+    pub fn agentRefusal(self: *mut Self) []u8 {
+        return refusalOf(self)
+    }
+
+    pub fn windowCommand(self: *mut Self, conn: usize, tmp: Allocator, cmd: []u8, doc: *mut agent.Json, args: ?usize, id: []u8, reply: *mut agent.Reply) AllocError!bool {
+        return windowCommandOf(self, conn, tmp, cmd, doc, args, id, reply)
+    }
+
+    pub fn agentActs(self: *mut Self, conn: usize, s: *mut agent.Session, tmp: Allocator, what: []u8, node: ?agent.RefNode) AllocError!void {
+        return showAgentAction(self, s, what, node)
+    }
+
+    // ---- drawing
+
+    fn draw(self: *mut Self) AllocError!void {
+        self.followScroll()
+        if self.relist {
+            self.relist = false
+            if self.tab.page |p| {
+                if p.tree |t| {
+                    self.dropList()
+                    self.list = try paint.build(self.alloc, t)
+                }
+            }
+        }
+        let s = self.scale
+        let top = self.top()
+        let bottom = self.win_h as f64
+        let content = paint.Rect { x: 0.0, y: top, w: self.win_w as f64, h: self.viewHeight() }
+        let v = paint.View { scale: s, dx: -self.tab.scroll_x * s, dy: (top - self.tab.scroll) * s }
+        let flat = paint.View { scale: s, dx: 0.0, dy: 0.0 }
+        try self.canvas.pushClip(paint.deviceRect(content, flat))
+        if self.list |l| {
+            self.canvas.fillRect(paint.deviceRect(content, flat), l.background)
+            try paint.render(&l, &mut self.canvas, v, &mut self.painter)
+            try drawPageState(self, v)
+            try drawAgentFlash(self, v)
+        } else {
+            self.canvas.fillRect(paint.deviceRect(content, flat), paint.Rgba { r: 255, g: 255, b: 255, a: 255 })
+        }
+        for i, m in self.matches.items() {
+            var c = paint.Rgba { r: 255, g: 230, b: 0, a: 110 }
+            if i == self.current {
+                c = paint.Rgba { r: 255, g: 140, b: 0, a: 140 }
+            }
+            self.canvas.fillRect(paint.deviceRect(m, v), c)
+        }
+        self.canvas.popClip()
+        try drawToolbar(self)
+        if self.count > 1 {
+            try drawTabStrip(self)
+        }
+        if self.hover.len() > 0 {
+            try drawStatus(self, bottom, self.hover.bytes())
+        } else if agentStatus(self).len > 0 {
+            try drawStatus(self, bottom, agentStatus(self))
+        }
+        if self.finding {
+            try drawFindBar(self, bottom)
+        }
+        if self.texture |t| {
+            SDL_UpdateTexture(t, null, self.canvas.pixels.ptr, (self.canvas.width * 4) as i32)
+            SDL_RenderClear(self.renderer)
+            SDL_RenderCopy(self.renderer, t, null, null)
+            SDL_RenderPresent(self.renderer)
+        }
+    }
+}
+
+// The KeyboardEvent.key of a key that is not a character ("" for a
+// character or an unknown key).
+fn keyName(sym: i32) []u8 {
+    let syms = [13]i32{SDLK_RETURN, SDLK_ESCAPE, SDLK_BACKSPACE, SDLK_DELETE, SDLK_SPACE, SDLK_LEFT, SDLK_RIGHT, SDLK_UP, SDLK_DOWN, SDLK_HOME, SDLK_END, SDLK_PAGEUP, SDLK_PAGEDOWN}
+    let names = [13][]u8{"Enter", "Escape", "Backspace", "Delete", " ", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"}
+    for i, k in syms {
+        if k == sym {
+            return names[i]
+        }
+    }
+    if sym == SDLK_KP_ENTER {
+        return "Enter"
+    }
+    return ""
+}

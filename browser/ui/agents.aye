@@ -1,0 +1,1057 @@
+// The window's agents: `anyknown --agent-socket PATH [URL]` listens on a
+// Unix domain socket (socket.aye); each connection speaks the JSON lines
+// of `anyknown agent`, or MCP when its first line is `{"mcp":true}` or a
+// JSON-RPC message (docs/agent-protocol.md). Commands act on the tab the
+// user sees, or on the tab the connection opened or selected
+// (`tab_new`, `tab_select`), through that tab's session
+// (agent/shared.aye): the agent sees the window's own layout.
+//
+// The window polls the socket between its events (it waits at most
+// POLL_MS for them while it listens), so requests run on the window's
+// thread and the page is never touched by two threads. A `wait` is
+// answered later, in real time, while the user goes on using the window.
+//
+// What agents do shows: their target element is outlined with its ref
+// (fading out over FLASH_MS), an "AI" badge sits in the toolbar while an
+// agent is connected, and the status bar tells the last action ("agent:
+// click button "Sign in" [e3]"). The user can pause the agents (the
+// toolbar's button or Cmd+Shift+P: actions then fail with "paused by
+// user"), and point at something for them with Cmd+Shift+K: the element
+// under the mouse (else the focused one) and the selected text go to
+// every connection as a `user_pointed` event.
+
+import agent
+import dom
+import dom.NodeId
+import engine
+import paint
+import paint.Rgba
+import std
+import std.heap.Arena
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+/// The most agents connected at once.
+pub let MAX_AGENTS: usize = 8
+// How long the outline of an agent's target shows, fading out, in ms.
+let FLASH_MS: u64 = 1200
+// The longest the window waits for events while it listens, in ms.
+pub let POLL_MS: i32 = 15
+// `wait` without a selector or a time: at most this long, in ms.
+let WAIT_IDLE_MS: u64 = 5000
+let WAIT_SELECTOR_MS: u64 = 5000
+
+let AGENT_INK = Rgba { r: 124, g: 58, b: 237, a: 255 }
+let PAUSED_INK = Rgba { r: 217, g: 119, b: 6, a: 255 }
+
+/// A connection of an agent.
+pub struct Conn {
+    fd: i32
+    // Bytes read and not served yet.
+    pending: text.Builder
+    // 0: not known yet (its first line tells), 1: JSON lines, 2: MCP.
+    mode: u8
+    // The id of the tab it acts on, or 0: the tab the user sees.
+    tab: u32
+    // A `wait` to answer later: the request's id (JSON), the selector
+    // ("" for none), when it started and when it ends (ms on the
+    // monotonic clock), and whether it waits for no timer to be left.
+    waiting: bool
+    wait_id: text.Builder
+    wait_sel: text.Builder
+    wait_start: u64
+    wait_end: u64
+    wait_idle: bool
+    // The peer is gone: the connection is closed after this round.
+    gone: bool
+}
+
+/// The agents' side of a window.
+pub struct Agents {
+    path: []u8
+    fd: i32
+    conns: [8]?*mut Conn
+    // Quit when the last agent leaves (tests): `ever` is set once one
+    // came.
+    exit_when_idle: bool
+    ever: bool
+    paused: bool
+    // Requests served, for scripted events that wait for them.
+    served: u64
+    // The last thing an agent did (or the user pointed at), for the
+    // status bar.
+    activity: text.Builder
+    // The outline of an agent's target: in document px, on the tab
+    // `flash_tab` while it shows the document `flash_doc`.
+    flash: bool
+    flash_rect: paint.Rect
+    flash_label: text.Builder
+    flash_start: u64
+    flash_tab: u32
+    flash_doc: u64
+    // What the user pointed at last (JSON members, for `user_context`),
+    // and as text (for MCP).
+    pointed: text.Builder
+    pointed_text: text.Builder
+    // A tab an agent closed, freed once its request is answered.
+    dropped: ?*mut TabSlot
+}
+
+/// Starts listening at `path`; null (after a message) when it cannot.
+fn startAgents(ui: *mut Ui, path: []u8, exit_when_idle: bool) AllocError!bool {
+    let fd = listenAt(path)
+    if fd < 0 {
+        std.log.err("cannot listen on {}", path)
+        return false
+    }
+    let a = try ui.alloc.create(Agents {
+        path: path,
+        fd: fd,
+        conns: @zeroed([8]?*mut Conn),
+        exit_when_idle: exit_when_idle,
+        ever: false,
+        paused: false,
+        served: 0,
+        activity: text.Builder.init(ui.alloc),
+        flash: false,
+        flash_rect: paint.Rect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 },
+        flash_label: text.Builder.init(ui.alloc),
+        flash_start: 0,
+        flash_tab: 0,
+        flash_doc: 0,
+        pointed: text.Builder.init(ui.alloc),
+        pointed_text: text.Builder.init(ui.alloc),
+        dropped: null,
+    })
+    ui.agents = a
+    ui.dirty = true
+    return true
+}
+
+/// Closes the connections and the socket (removing its file).
+fn stopAgents(ui: *mut Ui) {
+    let a = ui.agents orelse return
+    for i in 0..MAX_AGENTS {
+        if a.conns[i] |c| {
+            dropConn(ui.alloc, c)
+        }
+    }
+    closeFd(a.fd)
+    removeSocket(a.path)
+    if a.dropped |slot| {
+        freeSlot(ui.alloc, slot)
+    }
+    a.activity.deinit()
+    a.flash_label.deinit()
+    a.pointed.deinit()
+    a.pointed_text.deinit()
+    ui.alloc.destroy(a)
+    ui.agents = null
+}
+
+fn dropConn(alloc: Allocator, c: *mut Conn) {
+    closeFd(c.fd)
+    c.pending.deinit()
+    c.wait_id.deinit()
+    c.wait_sel.deinit()
+    alloc.destroy(c)
+}
+
+/// The number of agents connected.
+fn agentCount(ui: *Ui) usize {
+    let a = ui.agents orelse return 0
+    var n: usize = 0
+    for c in a.conns {
+        if c != null {
+            n += 1
+        }
+    }
+    return n
+}
+
+// ---- serving
+
+/// Accepts new connections and serves the lines that came, then answers
+/// the waits that are over. Called by the window's loop.
+fn pollAgents(ui: *mut Ui) AllocError!void {
+    let a = ui.agents orelse return
+    while true {
+        let fd = acceptNow(a.fd)
+        if fd < 0 {
+            break
+        }
+        var free: ?usize = null
+        for i in 0..MAX_AGENTS {
+            if a.conns[i] == null && free == null {
+                free = i
+            }
+        }
+        let i = free orelse {
+            sendAll(fd, "{\"id\":null,\"ok\":false,\"error\":\"too many agents are connected\"}\n")
+            closeFd(fd)
+            continue
+        }
+        a.conns[i] = try ui.alloc.create(Conn {
+            fd: fd,
+            pending: text.Builder.init(ui.alloc),
+            mode: 0,
+            tab: 0,
+            waiting: false,
+            wait_id: text.Builder.init(ui.alloc),
+            wait_sel: text.Builder.init(ui.alloc),
+            wait_start: 0,
+            wait_end: 0,
+            wait_idle: false,
+            gone: false,
+        })
+        a.ever = true
+        ui.dirty = true
+    }
+    var buf = @zeroed([16384]u8)
+    for i in 0..MAX_AGENTS {
+        let c = a.conns[i] orelse continue
+        if c.waiting {
+            try checkWait(ui, i)
+        }
+        if !c.gone && !c.waiting {
+            let n = readSome(c.fd, buf[..])
+            if n == 0 {
+                c.gone = true
+            } else if n > 0 {
+                try c.pending.append(buf[0..n as usize])
+            }
+        }
+        try serveLines(ui, i)
+        if c.gone && !c.waiting && std.mem.indexOf(c.pending.bytes(), '\n') == null {
+            dropConn(ui.alloc, c)
+            a.conns[i] = null
+            ui.dirty = true
+        }
+    }
+    if a.flash {
+        ui.dirty = true
+        if std.time.monotonicMs() - a.flash_start >= FLASH_MS {
+            a.flash = false
+        }
+    }
+    if a.exit_when_idle && a.ever && agentCount(ui) == 0 {
+        ui.quit = true
+    }
+}
+
+// Serves the complete lines of connection `i` (and, once its peer is
+// gone, the last line without a newline), until one waits.
+fn serveLines(ui: *mut Ui, i: usize) AllocError!void {
+    let a = ui.agents.?
+    let c = a.conns[i].?
+    while !c.waiting {
+        let bytes = c.pending.bytes()
+        var end = bytes.len
+        var next = bytes.len
+        if std.mem.indexOf(bytes, '\n') |nl| {
+            end = nl
+            next = nl + 1
+        } else if !c.gone || bytes.len == 0 {
+            return
+        }
+        var arena = Arena.init(ui.alloc)
+        defer arena.deinit()
+        let tmp = arena.allocator()
+        let line = try tmp.alloc(0 as u8, end)
+        std.mem.copy(line, bytes[..end])
+        let rest = try tmp.alloc(0 as u8, bytes.len - next)
+        std.mem.copy(rest, bytes[next..])
+        c.pending.clear()
+        try c.pending.append(rest)
+        try serveLine(ui, i, tmp, text.trim(line))
+    }
+}
+
+fn serveLine(ui: *mut Ui, i: usize, tmp: Allocator, line: []u8) AllocError!void {
+    let a = ui.agents.?
+    let c = a.conns[i].?
+    if line.len == 0 {
+        return
+    }
+    if c.mode == 0 {
+        if agent.isMcpHello(tmp, line) {
+            c.mode = 2
+            return
+        }
+        c.mode = 1
+        if agent.looksLikeRpc(tmp, line) {
+            c.mode = 2
+        }
+    }
+    try syncSlot(ui, connSlot(ui, c))
+    let before = shownNow(ui)
+    var out = text.Builder.init(tmp)
+    try agent.serveShared(ui, i, c.mode == 2, tmp, line, &mut out)
+    a.served += 1
+    if out.len() > 0 {
+        try out.appendByte('\n')
+        if !sendAll(c.fd, out.bytes()) {
+            c.gone = true
+        }
+    }
+    if a.dropped |slot| {
+        freeSlot(ui.alloc, slot)
+        a.dropped = null
+    }
+    try afterAgent(ui, before)
+    try resumeScript(ui)
+}
+
+/// The tab of connection `c` (the shown one when it chose none, or its
+/// tab was closed).
+fn connSlot(ui: *Ui, c: *Conn) *mut TabSlot {
+    if c.tab != 0 {
+        if slotIndex(ui, c.tab) |k| {
+            return ui.slots[k].?
+        }
+    }
+    return ui.slots[ui.active].?
+}
+
+/// Makes the session of `slot` ready for a request: the window's
+/// viewport, and new refs when the window showed another document.
+fn syncSlot(ui: *mut Ui, slot: *mut TabSlot) AllocError!void {
+    let fresh = slot.shown != slot.seen
+    slot.seen = slot.shown
+    try agent.syncSession(&mut slot.session, ui.win_w as f64, ui.layoutHeight(), fresh)
+}
+
+// The document the window showed before a request.
+struct Shown {
+    page: ?*mut engine.Page
+    loads: u64
+}
+
+fn shownNow(ui: *Ui) Shown {
+    return Shown { page: ui.tab.page, loads: ui.slots[ui.active].?.session.loads }
+}
+
+/// After a request: the shown tab as the agent left it (its new page,
+/// layout, scroll offset, URL and title).
+fn afterAgent(ui: *mut Ui, before: Shown) AllocError!void {
+    let now = shownNow(ui)
+    let moved = now.page != before.page || now.loads != before.loads
+    if moved {
+        // An agent navigated the shown tab: as if the user had.
+        ui.dropdown = null
+        ui.hover.clear()
+        if ui.focus == Focus.Address {
+            ui.focus = Focus.Page
+        }
+    }
+    try ui.relayout()
+    if moved || ui.focus != Focus.Address {
+        try ui.address.set(ui.tab.href())
+    }
+    try ui.setTitle()
+    ui.dirty = true
+}
+
+/// The connections that forget tab `id` (closed): they act on the shown
+/// tab again.
+fn forgetTab(ui: *mut Ui, id: u32) {
+    let a = ui.agents orelse return
+    for c in a.conns {
+        if c |conn| {
+            if conn.tab == id {
+                conn.tab = 0
+            }
+        }
+    }
+}
+
+// ---- agent.Host (the window's methods call these)
+
+fn sessionOf(ui: *mut Ui, conn: usize) ?*mut agent.Session {
+    let a = ui.agents orelse return null
+    let c = a.conns[conn] orelse return null
+    return &mut connSlot(ui, c).session
+}
+
+fn refusalOf(ui: *mut Ui) []u8 {
+    if ui.agents |a| {
+        if a.paused {
+            return "paused by user"
+        }
+    }
+    return ""
+}
+
+/// An agent is about to do `what` on `node` of `s`'s page: the status
+/// bar tells it, and the node's box is outlined when its tab is shown.
+fn showAgentAction(ui: *mut Ui, s: *mut agent.Session, what: []u8, node: ?agent.RefNode) AllocError!void {
+    let a = ui.agents orelse return
+    a.activity.clear()
+    try a.activity.append("agent: ")
+    try a.activity.append(what)
+    ui.dirty = true
+    let n = node orelse return
+    let slot = slotOfSession(ui, s) orelse return
+    let r = agent.rectOfNode(s, n) orelse return
+    var tag = text.Builder.init(ui.alloc)
+    defer tag.deinit()
+    if std.mem.indexOf(what, '[') |open| {
+        // The ref, from `click button "OK" [e3]`.
+        var end = open
+        while end < what.len && what[end] != ']' {
+            end += 1
+        }
+        try tag.append(what[open + 1..end])
+    }
+    try flashRect(ui, slot, paint.Rect { x: r.x, y: r.y, w: r.w, h: r.h }, tag.bytes())
+}
+
+fn slotOfSession(ui: *Ui, s: *agent.Session) ?*mut TabSlot {
+    for i in 0..ui.count {
+        let slot = ui.slots[i].?
+        if slot.session.tab == s.tab {
+            return slot
+        }
+    }
+    return null
+}
+
+// Outlines `r` (document px) of `slot`'s page, labeled, for FLASH_MS.
+fn flashRect(ui: *mut Ui, slot: *TabSlot, r: paint.Rect, tag: []u8) AllocError!void {
+    let a = ui.agents orelse return
+    a.flash = true
+    a.flash_rect = r
+    a.flash_label.clear()
+    try a.flash_label.append(tag)
+    a.flash_start = std.time.monotonicMs()
+    a.flash_tab = slot.id
+    a.flash_doc = slot.shown
+    ui.dirty = true
+}
+
+/// The commands of the window (agent.Host.windowCommand).
+fn windowCommandOf(ui: *mut Ui, conn: usize, tmp: Allocator, cmd: []u8, doc: *mut agent.Json, args: ?usize, id: []u8, reply: *mut agent.Reply) AllocError!bool {
+    let a = ui.agents orelse return false
+    let c = a.conns[conn] orelse return false
+    if text.eql(cmd, "tabs") {
+        try tabsReply(ui, c, tmp, reply)
+        return true
+    }
+    if text.eql(cmd, "tab_new") {
+        var show = false
+        if args |o| {
+            show = doc.getBool(o, "show") orelse false
+        }
+        let i = (try openTab(ui, show)) orelse {
+            return refuse(reply, "too many tabs (16)")
+        }
+        let slot = ui.slots[i].?
+        c.tab = slot.id
+        try activity(ui, "agent: opened a tab")
+        reply.message = try tabMessage(tmp, "opened tab ", slot.id, show)
+        reply.fields = try tabField(tmp, slot.id)
+        return true
+    }
+    if text.eql(cmd, "tab_select") {
+        var want: f64 = -1.0
+        var show = false
+        if args |o| {
+            want = doc.getNum(o, "tab") orelse -1.0
+            show = doc.getBool(o, "show") orelse false
+        }
+        if want < 1.0 || want > 4294967295.0 {
+            return refuse(reply, "missing argument \"tab\" (a tab's id, a number)")
+        }
+        let k = slotIndex(ui, want as u32) orelse {
+            return refuse(reply, "no such tab: see \"tabs\"")
+        }
+        let slot = ui.slots[k].?
+        c.tab = slot.id
+        if show && k != ui.active {
+            try showTab(ui, k)
+        }
+        reply.message = try tabMessage(tmp, "acting on tab ", slot.id, show)
+        reply.fields = try tabField(tmp, slot.id)
+        return true
+    }
+    if text.eql(cmd, "tab_close") {
+        var id_num = connSlot(ui, c).id
+        if args |o| {
+            if doc.getNum(o, "tab") |v| {
+                if v < 1.0 || v > 4294967295.0 {
+                    return refuse(reply, "no such tab: see \"tabs\"")
+                }
+                id_num = v as u32
+            }
+        }
+        let k = slotIndex(ui, id_num) orelse {
+            return refuse(reply, "no such tab: see \"tabs\"")
+        }
+        let slot = (try removeTab(ui, k)) orelse {
+            return refuse(reply, "cannot close the last tab")
+        }
+        forgetTab(ui, id_num)
+        a.dropped = slot
+        try activity(ui, "agent: closed a tab")
+        reply.message = try tabMessage(tmp, "closed tab ", id_num, false)
+        return true
+    }
+    if text.eql(cmd, "user_context") {
+        try contextReply(ui, tmp, reply)
+        return true
+    }
+    if text.eql(cmd, "wait") {
+        try startWait(ui, conn, tmp, doc, args, id, reply)
+        return true
+    }
+    return false
+}
+
+fn refuse(reply: *mut agent.Reply, why: []u8) bool {
+    reply.ok = false
+    reply.message = why
+    return true
+}
+
+fn activity(ui: *mut Ui, what: []u8) AllocError!void {
+    let a = ui.agents orelse return
+    a.activity.clear()
+    try a.activity.append(what)
+    ui.dirty = true
+}
+
+fn tabMessage(tmp: Allocator, what: []u8, id: u32, shown: bool) AllocError![]u8 {
+    var b = text.Builder.init(tmp)
+    try b.append(what)
+    try b.appendUint(id as u64)
+    if shown {
+        try b.append(", shown to the user")
+    }
+    return b.bytes()
+}
+
+fn tabField(tmp: Allocator, id: u32) AllocError![]u8 {
+    var b = text.Builder.init(tmp)
+    try b.append("\"tab\":")
+    try b.appendUint(id as u64)
+    return b.bytes()
+}
+
+// The members of a JSON object written to `b` (without its braces).
+fn members(b: *text.Builder) []u8 {
+    let s = b.bytes()
+    if s.len < 2 {
+        return ""
+    }
+    return s[1..s.len - 1]
+}
+
+// `tabs`: each tab's id, URL, title, and whether the user sees it and
+// this connection acts on it.
+fn tabsReply(ui: *mut Ui, c: *Conn, tmp: Allocator, reply: *mut agent.Reply) AllocError!void {
+    let mine = connSlot(ui, c).id
+    var b = text.Builder.init(tmp)
+    var w = agent.Writer.init(&mut b)
+    var detail = text.Builder.init(tmp)
+    try w.beginObject()
+    try w.key("tabs")
+    try w.beginArray()
+    for i in 0..ui.count {
+        let slot = ui.slots[i].?
+        try w.beginObject()
+        try w.key("id")
+        try w.int(slot.id as i64)
+        try w.key("url")
+        try w.string(slot.session.tab.href())
+        try w.key("title")
+        try w.string(slotTitle(slot))
+        try w.key("shown")
+        try w.boolean(i == ui.active)
+        try w.key("agent")
+        try w.boolean(slot.id == mine)
+        try w.endObject()
+        if i > 0 {
+            try detail.appendByte('\n')
+        }
+        try detail.append("- tab ")
+        try detail.appendUint(slot.id as u64)
+        try detail.append(": ")
+        try detail.append(slotTitle(slot))
+        if slot.session.tab.href().len > 0 && !text.eql(slotTitle(slot), slot.session.tab.href()) {
+            try detail.append(" <")
+            try detail.append(slot.session.tab.href())
+            try detail.appendByte('>')
+        }
+        if i == ui.active {
+            try detail.append(" [shown]")
+        }
+        if slot.id == mine {
+            try detail.append(" [agent]")
+        }
+    }
+    try w.endArray()
+    try w.endObject()
+    var msg = text.Builder.init(tmp)
+    try msg.appendUint(ui.count as u64)
+    try msg.append(" tabs")
+    if ui.count == 1 {
+        msg.clear()
+        try msg.append("1 tab")
+    }
+    reply.message = msg.bytes()
+    reply.fields = members(&b)
+    reply.detail = detail.bytes()
+}
+
+// ---- the user's context
+
+/// The selected text: in the focused text field, else the find bar's
+/// query while it has matches.
+fn selectionText(ui: *mut Ui) []u8 {
+    if ui.tab.page |p| {
+        if p.doc.controls.focus |f| {
+            if dom.isTextField(&p.doc, f) && !(p.doc.isElement(f, "input") && text.eql(dom.inputType(&p.doc, f), "password")) {
+                let s = dom.selectedText(&p.doc, f)
+                if s.len > 0 {
+                    return s
+                }
+            }
+        }
+    }
+    if ui.finding && ui.matches.len() > 0 {
+        return ui.find.bytes()
+    }
+    return ""
+}
+
+/// The node under the mouse, when it is over the page.
+fn hoveredNode(ui: *mut Ui) ?NodeId {
+    if !ui.mouse_in || ui.mouse_y < ui.top() || ui.mouse_y >= ui.top() + ui.viewHeight() {
+        return null
+    }
+    let p = ui.tab.page orelse return null
+    let t = p.tree orelse return null
+    return engine.nodeAt(t, ui.mouse_x + ui.tab.scroll_x, ui.mouse_y - ui.top() + ui.tab.scroll)
+}
+
+fn refText(tmp: Allocator, r: u32) AllocError![]u8 {
+    var b = text.Builder.init(tmp)
+    try b.appendByte('e')
+    try b.appendUint(r as u64)
+    return b.bytes()
+}
+
+// `user_context`: the shown tab, its URL, title and scroll offset, the
+// selection, the hovered and focused elements' refs, and what the user
+// pointed at last.
+fn contextReply(ui: *mut Ui, tmp: Allocator, reply: *mut agent.Reply) AllocError!void {
+    let slot = ui.slots[ui.active].?
+    try syncSlot(ui, slot)
+    let s = &mut slot.session
+    var b = text.Builder.init(tmp)
+    var w = agent.Writer.init(&mut b)
+    var d = text.Builder.init(tmp)
+    try w.beginObject()
+    try w.key("tab")
+    try w.int(slot.id as i64)
+    try w.key("url")
+    try w.string(ui.tab.href())
+    try w.key("title")
+    try w.string(slotTitle(slot))
+    try w.key("scroll")
+    try w.int(std.math.floor(ui.tab.scroll + 0.5) as i64)
+    let sel = selectionText(ui)
+    try w.key("selection")
+    try w.string(sel)
+    try d.append("Tab: ")
+    try d.appendUint(slot.id as u64)
+    try d.append("\nURL: ")
+    try d.append(ui.tab.href())
+    try d.append("\nTitle: ")
+    try d.append(slotTitle(slot))
+    try d.append("\nScroll: ")
+    try d.appendInt(std.math.floor(ui.tab.scroll + 0.5) as i64)
+    try d.append(" px\nSelection: ")
+    try d.append(sel)
+    try w.key("hovered")
+    try d.append("\nHovered: ")
+    if hoveredNode(ui) |n| {
+        let r = try agent.refAt(s, tmp, n)
+        try nodeContext(s, tmp, &mut w, &mut d, r)
+    } else {
+        try w.null()
+        try d.append("none")
+    }
+    try w.key("focused")
+    try d.append("\nFocused: ")
+    var focus: ?NodeId = null
+    if ui.tab.page |p| {
+        focus = p.doc.controls.focus
+    }
+    if focus |f| {
+        let r = try agent.refAt(s, tmp, f)
+        try nodeContext(s, tmp, &mut w, &mut d, r)
+    } else {
+        try w.null()
+        try d.append("none")
+    }
+    let a = ui.agents.?
+    try w.key("pointed")
+    try d.append("\nPointed at (Cmd+Shift+K): ")
+    if a.pointed.len() > 0 {
+        try w.beginObject()
+        try b.append(a.pointed.bytes())
+        try w.endObject()
+        try d.append(a.pointed_text.bytes())
+    } else {
+        try w.null()
+        try d.append("nothing yet")
+    }
+    try w.endObject()
+    reply.message = "the user's context"
+    reply.fields = members(&b)
+    reply.detail = d.bytes()
+}
+
+// `{"ref":"e7","text":"..."}` of ref `r`, and `e7 text` for MCP.
+fn nodeContext(s: *mut agent.Session, tmp: Allocator, w: *mut agent.Writer, d: *mut text.Builder, r: u32) AllocError!void {
+    if r == 0 {
+        try w.null()
+        try d.append("none")
+        return
+    }
+    let name = try refText(tmp, r)
+    var described: []u8 = name
+    var txt: []u8 = ""
+    if agent.nodeOfRefIn(s, name) |n| {
+        described = try agent.describe(s, tmp, n)
+        txt = try agent.textOf(s, tmp, n, 200)
+    }
+    try w.beginObject()
+    try w.key("ref")
+    try w.string(name)
+    try w.key("element")
+    try w.string(described)
+    try w.key("text")
+    try w.string(txt)
+    try w.endObject()
+    try d.append(described)
+    if txt.len > 0 {
+        try d.append(": ")
+        try d.append(txt)
+    }
+}
+
+/// Cmd+Shift+K: the user points at the element under the mouse (else
+/// the focused one) and the selected text; every agent gets a
+/// `user_pointed` event, and `user_context` keeps it.
+fn pointAt(ui: *mut Ui) AllocError!void {
+    let a = ui.agents orelse return
+    let slot = ui.slots[ui.active].?
+    var arena = Arena.init(ui.alloc)
+    defer arena.deinit()
+    let tmp = arena.allocator()
+    try syncSlot(ui, slot)
+    let s = &mut slot.session
+    var node = hoveredNode(ui)
+    if node == null {
+        if ui.tab.page |p| {
+            node = p.doc.controls.focus
+        }
+    }
+    var b = text.Builder.init(tmp)
+    var w = agent.Writer.init(&mut b)
+    try w.beginObject()
+    try w.key("tab")
+    try w.int(slot.id as i64)
+    try w.key("url")
+    try w.string(ui.tab.href())
+    var ref: u32 = 0
+    if node |n| {
+        ref = try agent.refAt(s, tmp, n)
+    }
+    var name: []u8 = ""
+    var target: ?agent.RefNode = null
+    if ref > 0 {
+        name = try refText(tmp, ref)
+        target = agent.nodeOfRefIn(s, name)
+        try w.key("ref")
+        try w.string(name)
+    }
+    var said = selectionText(ui)
+    if said.len == 0 {
+        if target |t| {
+            said = try agent.textOf(s, tmp, t, 200)
+        }
+    }
+    try w.key("text")
+    try w.string(said)
+    if target |t| {
+        try w.key("element")
+        try w.string(try agent.describe(s, tmp, t))
+    }
+    try w.endObject()
+    a.pointed.clear()
+    try a.pointed.append(members(&b))
+    a.pointed_text.clear()
+    if target |t| {
+        try a.pointed_text.append(try agent.describe(s, tmp, t))
+    } else {
+        try a.pointed_text.append("the page")
+    }
+    if said.len > 0 {
+        try a.pointed_text.append(": ")
+        try a.pointed_text.append(said)
+    }
+    var line = text.Builder.init(tmp)
+    try line.append("you pointed at ")
+    if name.len > 0 {
+        try line.append(name)
+    } else {
+        try line.append("the page")
+    }
+    try line.append(" for the agents")
+    try activity(ui, line.bytes())
+    if target |t| {
+        if agent.rectOfNode(s, t) |r| {
+            try flashRect(ui, slot, paint.Rect { x: r.x, y: r.y, w: r.w, h: r.h }, name)
+        }
+    }
+    for c in a.conns {
+        if c |conn| {
+            if conn.mode == 0 {
+                continue
+            }
+            var out = text.Builder.init(tmp)
+            try agent.writeEvent(conn.mode == 2, "user_pointed", members(&b), &mut out)
+            try out.appendByte('\n')
+            if !sendAll(conn.fd, out.bytes()) {
+                conn.gone = true
+            }
+        }
+    }
+}
+
+/// Cmd+Shift+P or the toolbar's button: pauses the agents (their
+/// actions fail with "paused by user") or lets them go on.
+fn togglePause(ui: *mut Ui) {
+    let a = ui.agents orelse return
+    a.paused = !a.paused
+    a.activity.clear()
+    if a.paused {
+        a.activity.append("agents paused (Cmd+Shift+P to resume)") catch |e| {
+        }
+    } else {
+        a.activity.append("agents resumed") catch |e| {
+        }
+    }
+    ui.dirty = true
+}
+
+// ---- wait, in real time
+
+fn startWait(ui: *mut Ui, conn: usize, tmp: Allocator, doc: *mut agent.Json, args: ?usize, id: []u8, reply: *mut agent.Reply) AllocError!void {
+    let a = ui.agents.?
+    let c = a.conns[conn].?
+    let slot = connSlot(ui, c)
+    let p = slot.session.tab.page orelse {
+        refuse(reply, "no page: navigate first")
+        return
+    }
+    var selector: []u8 = ""
+    var ms = 0.0
+    if args |o| {
+        selector = doc.getStr(o, "selector") orelse ""
+        ms = doc.getNum(o, "ms") orelse 0.0
+    }
+    if ms < 0.0 || ms > 600000.0 {
+        refuse(reply, "\"ms\" is between 0 and 600000")
+        return
+    }
+    if selector.len > 0 && !(try engine.isSelector(p, selector)) {
+        reply.ok = false
+        reply.message = try agent.concatText(tmp, "not a CSS selector: ", selector)
+        return
+    }
+    let now = std.time.monotonicMs()
+    c.waiting = true
+    c.wait_id.clear()
+    try c.wait_id.append(id)
+    c.wait_sel.clear()
+    try c.wait_sel.append(selector)
+    c.wait_start = now
+    c.wait_idle = selector.len == 0 && ms == 0.0
+    var limit = ms as u64
+    if selector.len > 0 && ms == 0.0 {
+        limit = WAIT_SELECTOR_MS
+    } else if c.wait_idle {
+        limit = WAIT_IDLE_MS
+    }
+    c.wait_end = now + limit
+    try activity(ui, "agent: waiting")
+    reply.later = true
+    // Already there: answered at once.
+    try checkWait(ui, conn)
+}
+
+// Answers the `wait` of connection `conn` when it is over.
+fn checkWait(ui: *mut Ui, conn: usize) AllocError!void {
+    let a = ui.agents.?
+    let c = a.conns[conn].?
+    let slot = connSlot(ui, c)
+    var arena = Arena.init(ui.alloc)
+    defer arena.deinit()
+    let tmp = arena.allocator()
+    let now = std.time.monotonicMs()
+    let elapsed = now - c.wait_start
+    var reply = agent.newReply()
+    let page = slot.session.tab.page
+    if page |p| {
+        if slot != ui.slots[ui.active].? {
+            // The window runs only the shown tab's timers.
+            try engine.runDueTimers(p)
+        }
+        if c.wait_sel.len() > 0 {
+            if try engine.querySelectorIn(p, c.wait_sel.bytes()) |el| {
+                try syncSlot(ui, slot)
+                var m = text.Builder.init(tmp)
+                try m.append("found ")
+                try m.append(try agent.describe(&mut slot.session, tmp, agent.RefNode { page: p, node: el }))
+                try m.append(" after ")
+                try m.appendUint(elapsed)
+                try m.append(" ms")
+                reply.message = m.bytes()
+                return answerWait(ui, conn, tmp, slot, reply)
+            }
+            if now >= c.wait_end {
+                var m = text.Builder.init(tmp)
+                try m.append("timed out after ")
+                try m.appendUint(elapsed)
+                try m.append(" ms waiting for ")
+                try m.append(c.wait_sel.bytes())
+                reply.ok = false
+                reply.message = m.bytes()
+                return answerWait(ui, conn, tmp, slot, reply)
+            }
+            return
+        }
+        let idle = engine.msUntilNextTimer(p) == null
+        if now >= c.wait_end || (c.wait_idle && idle) {
+            var m = text.Builder.init(tmp)
+            try m.append("waited ")
+            try m.appendUint(elapsed)
+            try m.append(" ms")
+            if idle {
+                try m.append("; no timer is left")
+            }
+            reply.message = m.bytes()
+            return answerWait(ui, conn, tmp, slot, reply)
+        }
+        return
+    }
+    reply.ok = false
+    reply.message = "the page went away while waiting"
+    return answerWait(ui, conn, tmp, slot, reply)
+}
+
+fn answerWait(ui: *mut Ui, conn: usize, tmp: Allocator, slot: *mut TabSlot, reply: agent.Reply) AllocError!void {
+    let a = ui.agents.?
+    let c = a.conns[conn].?
+    c.waiting = false
+    var r = reply
+    if r.ok {
+        var b = text.Builder.init(tmp)
+        var w = agent.Writer.init(&mut b)
+        try w.beginObject()
+        try w.key("url")
+        try w.string(slot.session.tab.href())
+        try w.key("title")
+        try w.string(slotTitle(slot))
+        try w.endObject()
+        r.fields = members(&b)
+    }
+    var out = text.Builder.init(tmp)
+    try agent.writeLater(c.mode == 2, tmp, c.wait_id.bytes(), r, &mut out)
+    try out.appendByte('\n')
+    if !sendAll(c.fd, out.bytes()) {
+        c.gone = true
+    }
+    try afterAgent(ui, shownNow(ui))
+}
+
+// ---- drawing
+
+/// The outline of an agent's target (or of what the user pointed at),
+/// fading out, with its ref; over the page drawn with the view `v`.
+fn drawAgentFlash(ui: *mut Ui, v: paint.View) AllocError!void {
+    let a = ui.agents orelse return
+    if !a.flash {
+        return
+    }
+    let slot = ui.slots[ui.active].?
+    if a.flash_tab != slot.id || a.flash_doc != slot.shown {
+        return
+    }
+    let elapsed = std.time.monotonicMs() - a.flash_start
+    if elapsed >= FLASH_MS {
+        return
+    }
+    let alpha = (255 * (FLASH_MS - elapsed) / FLASH_MS) as u8
+    let ink = Rgba { r: AGENT_INK.r, g: AGENT_INK.g, b: AGENT_INK.b, a: alpha }
+    let r = a.flash_rect
+    let o = paint.Rect { x: r.x - 3.0, y: r.y - 3.0, w: r.w + 6.0, h: r.h + 6.0 }
+    let edges = [4]paint.Rect{
+        paint.Rect { x: o.x, y: o.y, w: o.w, h: 2.0 },
+        paint.Rect { x: o.x, y: o.y + o.h - 2.0, w: o.w, h: 2.0 },
+        paint.Rect { x: o.x, y: o.y + 2.0, w: 2.0, h: o.h - 4.0 },
+        paint.Rect { x: o.x + o.w - 2.0, y: o.y + 2.0, w: 2.0, h: o.h - 4.0 },
+    }
+    for e in edges {
+        ui.canvas.fillRect(paint.deviceRect(e, v), ink)
+    }
+    ui.canvas.fillRect(paint.deviceRect(paint.Rect { x: r.x, y: r.y, w: r.w, h: r.h }, v), Rgba { r: AGENT_INK.r, g: AGENT_INK.g, b: AGENT_INK.b, a: alpha / 6 })
+    let tag = a.flash_label.bytes()
+    if tag.len > 0 {
+        let f = uiFont(11.0)
+        let lw = ui.measure.width(f, tag) + 8.0
+        var ly = o.y - 16.0
+        if ly < ui.tab.scroll {
+            ly = o.y
+        }
+        let box = paint.Rect { x: o.x, y: ly, w: lw, h: 16.0 }
+        ui.canvas.fillRect(paint.deviceRect(box, v), ink)
+        try ui.painter.draw(&mut ui.canvas, (o.x + 4.0) * v.scale + v.dx, (ly + 12.0) * v.scale + v.dy, tag, f, v.scale, Rgba { r: 255, g: 255, b: 255, a: alpha })
+    }
+}
+
+/// The text of the status bar when the mouse is over no link: what the
+/// agents did last ("" when no agent listens).
+fn agentStatus(ui: *Ui) []u8 {
+    let a = ui.agents orelse return ""
+    return a.activity.bytes()
+}
+
+/// The "AI" badge (while an agent is connected) and the pause button,
+/// at the right end of the toolbar.
+fn drawAgentChrome(ui: *mut Ui) AllocError!void {
+    let a = ui.agents orelse return
+    let f = uiFont(12.0)
+    let bx = ui.win_w as f64 - AGENT_CHROME + 4.0
+    if agentCount(ui) > 0 {
+        var ink = AGENT_INK
+        if a.paused {
+            ink = PAUSED_INK
+        }
+        fill(ui, bx, 10.0, 26.0, 20.0, ink)
+        try label(ui, bx + 6.0, centered(ui, 10.0, 20.0, f), "AI", f, Rgba { r: 255, g: 255, b: 255, a: 255 })
+    }
+    let r = pauseRect(ui)
+    fill(ui, r.x, r.y, r.w, r.h, PAPER)
+    frame(ui, r, 1.0, LINE)
+    var word = "Pause"
+    if a.paused {
+        word = "Resume"
+    }
+    try label(ui, r.x + 8.0, centered(ui, r.y, r.h, f), word, f, INK)
+}

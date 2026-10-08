@@ -1,0 +1,288 @@
+// js/gc: mark and sweep. Marks everything reachable from the roots (see
+// interp.aye) and the values of weak collections whose keys are reachable
+// (ephemerons, weak.aye), drops the weak entries whose keys died, then
+// frees the rest. A collected host object reports its
+// handle to the host (`Host.finalize`), which decrements the node's
+// `js_refs`. The next collection starts after twice as many allocations
+// as there are live values (at least 20000).
+
+import std.os
+
+extern fn getenv(name: [*]u8) ?[*]u8
+
+/// ANYKNOWN_JS_GC=stress collects at every allocation (for tests of the
+/// rooting discipline).
+pub fn gcStressRequested() bool {
+    if getenv("ANYKNOWN_JS_GC".ptr) |p| {
+        return p[0] == 's'
+    }
+    return false
+}
+
+var trace_mode: u8 = 0
+
+/// ANYKNOWN_JS_TRACE=1 adds to the message of every error the engine
+/// makes the start of the source of the functions running, innermost
+/// first (minified site scripts have no other way to tell where).
+pub fn traceRequested() bool {
+    if trace_mode == 0 {
+        trace_mode = 1
+        if getenv("ANYKNOWN_JS_TRACE".ptr) != null {
+            trace_mode = 2
+        }
+    }
+    return trace_mode == 2
+}
+
+fn markValue(it: *mut Interp, v: Value) {
+    match v {
+        .Str { s } => markStr(it, s)
+        .Big { s } => markStr(it, s)
+        .Obj { o } => markObj(it, o)
+        _ => {}
+    }
+}
+
+fn markStr(it: *mut Interp, s: u32) {
+    let c = &mut it.heap.strs.items()[s]
+    if c.mark {
+        return
+    }
+    c.mark = true
+    if c.left != NONE {
+        it.gray_strs.append(s) catch |e| {
+            return
+        }
+    }
+}
+
+fn markObj(it: *mut Interp, o: u32) {
+    if o == NONE {
+        return
+    }
+    let ob = &mut it.heap.objs.items()[o]
+    if ob.mark {
+        return
+    }
+    ob.mark = true
+    it.gray_objs.append(o) catch |e| {
+        return
+    }
+}
+
+fn markEnv(it: *mut Interp, e: u32) {
+    if e == NONE {
+        return
+    }
+    let ev = &mut it.heap.envs.items()[e]
+    if ev.mark {
+        return
+    }
+    ev.mark = true
+    it.gray_envs.append(e) catch |err| {
+        return
+    }
+}
+
+// Marks what object o refers to.
+fn traceObj(it: *mut Interp, o: u32) {
+    let ob = it.heap.objs.items()[o]
+    markObj(it, ob.proto)
+    for i in 0..ob.nprops {
+        markValue(it, ob.props[i].value)
+        markValue(it, ob.props[i].setter)
+    }
+    for i in 0..ob.nelems {
+        markValue(it, ob.elems[i])
+    }
+    match ob.data {
+        .Closure { env, home, outer, .. } => {
+            markEnv(it, env)
+            markObj(it, home)
+            markObj(it, outer)
+        }
+        .Bound { target, this_v } => {
+            markObj(it, target)
+            markValue(it, this_v)
+        }
+        .Prim { v } => markValue(it, v)
+        .Cell { env, .. } => markEnv(it, env)
+        .Proxy { target, handler } => {
+            markObj(it, target)
+            markObj(it, handler)
+        }
+        .View { store, .. } => markObj(it, store)
+        _ => {}
+    }
+}
+
+fn traceEnv(it: *mut Interp, e: u32) {
+    let ev = it.heap.envs.items()[e]
+    markEnv(it, ev.parent)
+    for v in ev.slots {
+        markValue(it, v)
+    }
+}
+
+/// Collects the garbage of the engine's heap.
+pub fn collectGarbage(it: *mut Interp) {
+    it.gc_count += 1
+    // Roots.
+    markObj(it, it.global)
+    let protos = [20]u32{
+        it.iterator_proto, it.math_obj, it.json_obj,
+        it.object_proto, it.function_proto, it.array_proto, it.string_proto,
+        it.number_proto, it.boolean_proto, it.error_proto, it.type_error_proto,
+        it.range_error_proto, it.syntax_error_proto, it.reference_error_proto,
+        it.eval_error_proto, it.uri_error_proto, it.date_proto, it.regexp_proto,
+        it.map_proto, it.set_proto,
+    }
+    for p in protos {
+        markObj(it, p)
+    }
+    markObj(it, it.bigint_proto)
+    markEnv(it, it.glex)
+    markEnv(it, it.env)
+    for e in it.outer_envs.items() {
+        markEnv(it, e)
+    }
+    for v in it.stack.items() {
+        markValue(it, v)
+    }
+    for f in it.frames.items() {
+        markObj(it, f.func)
+        markObj(it, f.this_obj)
+        markObj(it, f.new_target)
+        markEnv(it, f.env)
+    }
+    markValue(it, it.exception)
+    markValue(it, it.ret)
+    markValue(it, it.completion)
+    for v in it.roots.items() {
+        markValue(it, v)
+    }
+    for k in it.jobs_head..it.jobs.len() {
+        markValue(it, it.jobs.items()[k])
+    }
+    markCoroutines(it)
+    markWeakRoots(it)
+    // Trace, then mark the values of the weak collections whose keys are
+    // marked and let the host keep more alive, until nothing changes.
+    drain(it)
+    while true {
+        markEphemerons(it)
+        if hasGray(it) {
+            drain(it)
+            continue
+        }
+        if it.host |h| {
+            if h.trace(it) {
+                drain(it)
+                continue
+            }
+        }
+        break
+    }
+    clearDeadWeak(it)
+    sweep(it)
+}
+
+/// For `Host.trace`: is object o marked (reachable) in this collection?
+pub fn gcMarked(it: *mut Interp, o: u32) bool {
+    return it.heap.objs.items()[o].mark
+}
+
+/// For `Host.trace`: marks object o (and later what it refers to).
+pub fn gcMark(it: *mut Interp, o: u32) {
+    markObj(it, o)
+}
+
+fn hasGray(it: *mut Interp) bool {
+    return it.gray_objs.len() > 0 || it.gray_strs.len() > 0 || it.gray_envs.len() > 0
+}
+
+// Marks everything reachable from the gray objects, strings and
+// environments.
+fn drain(it: *mut Interp) {
+    while true {
+        if it.gray_objs.pop() |o| {
+            traceObj(it, o)
+        } else if it.gray_strs.pop() |s| {
+            let c = it.heap.strs.items()[s]
+            if c.left != NONE {
+                markStr(it, c.left)
+                markStr(it, c.right)
+            }
+        } else if it.gray_envs.pop() |e| {
+            traceEnv(it, e)
+        } else {
+            break
+        }
+    }
+}
+
+fn sweep(it: *mut Interp) {
+    var live: usize = 0
+    for i in 0..it.heap.objs.len() {
+        let ob = &mut it.heap.objs.items()[i]
+        if !ob.live {
+            continue
+        }
+        if ob.mark {
+            ob.mark = false
+            live += 1
+            continue
+        }
+        match ob.data {
+            .Host { tag, index, generation } => {
+                if it.host |h| {
+                    h.finalize(tag, index, generation)
+                }
+            }
+            .Prim { v } => {
+                if ob.class == Class.Generator {
+                    match v {
+                        .Num { n } => coroutineCollected(it, n as u32)
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+        it.heap.freeObj(i as u32)
+        it.heap.free_objs.append(i as u32) catch |e| {}
+    }
+    for i in 0..it.heap.strs.len() {
+        let c = &mut it.heap.strs.items()[i]
+        if !c.live {
+            continue
+        }
+        if c.mark || c.perm {
+            c.mark = false
+            live += 1
+            continue
+        }
+        it.heap.freeStr(i as u32)
+        it.heap.free_strs.append(i as u32) catch |e| {}
+    }
+    for i in 0..it.heap.envs.len() {
+        let ev = &mut it.heap.envs.items()[i]
+        if !ev.live {
+            continue
+        }
+        if ev.mark {
+            ev.mark = false
+            live += 1
+            continue
+        }
+        it.heap.freeEnv(i as u32)
+        it.heap.free_envs.append(i as u32) catch |e| {}
+    }
+    it.heap.since_gc = 0
+    if it.heap.threshold > 1 {
+        it.heap.threshold = live * 2
+        if it.heap.threshold < 20000 {
+            it.heap.threshold = 20000
+        }
+    }
+}

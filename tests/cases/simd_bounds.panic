@@ -1,1 +1,1 @@
-simd_bounds.ore:3:13: panic: index out of bounds: index 4, len 4
+simd_bounds.aye:3:13: panic: index out of bounds: index 4, len 4

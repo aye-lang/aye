@@ -1,6 +1,6 @@
 //! Modules and name resolution.
 //!
-//! A module is a directory: every `.ore` file in it shares one namespace,
+//! A module is a directory: every `.aye` file in it shares one namespace,
 //! and only its `pub` items are visible to other modules. The root module
 //! is a directory, or a single file. `import a.b` finds the module in the
 //! directory `a/b` under the root module's directory, except that `std`
@@ -12,8 +12,8 @@
 //! `std::fs::open` or `util::Thing` (sema shows `::` as `.`). Names of the
 //! root module stay as they are written. The result is one AST for sema:
 //! the root module's items first, then the other modules' items. The
-//! `test` blocks of every module but std's are kept. For `ore test`, each
-//! ```ore block of a `///` doc comment outside std is a `test` too.
+//! `test` blocks of every module but std's are kept. For `aye test`, each
+//! ```aye block of a `///` doc comment outside std is a `test` too.
 //!
 //! Imports are per file: `import std.fs` binds `fs` in its file only. A
 //! path such as `std.fs.open` is resolved one name at a time: a module's
@@ -31,35 +31,35 @@ pub struct SourceFile {
     /// The name in diagnostics, `#line` directives and panic messages.
     pub name: String,
     pub text: String,
-    /// Part of the embedded std (`ore fix` never writes it).
+    /// Part of the embedded std (`aye fix` never writes it).
     pub std: bool,
 }
 
 /// std, embedded: (module, file name, source).
 pub const STD_FILES: &[(&str, &str, &str)] = &[
-    ("std.coro", "std/coro/coro.ore", include_str!("../std/coro/coro.ore")),
-    ("std.diag", "std/diag/diag.ore", include_str!("../std/diag/diag.ore")),
-    ("std.fs", "std/fs/fs.ore", include_str!("../std/fs/fs.ore")),
-    ("std.heap", "std/heap/heap.ore", include_str!("../std/heap/heap.ore")),
-    ("std.http", "std/http/http.ore", include_str!("../std/http/http.ore")),
-    ("std.list", "std/list/list.ore", include_str!("../std/list/list.ore")),
-    ("std.log", "std/log/log.ore", include_str!("../std/log/log.ore")),
-    ("std.map", "std/map/map.ore", include_str!("../std/map/map.ore")),
-    ("std.math", "std/math/math.ore", include_str!("../std/math/math.ore")),
-    ("std.mem", "std/mem/mem.ore", include_str!("../std/mem/mem.ore")),
-    ("std.net", "std/net/net.ore", include_str!("../std/net/net.ore")),
-    ("std.os", "std/os/os.ore", include_str!("../std/os/os.ore")),
-    ("std.pool", "std/pool/pool.ore", include_str!("../std/pool/pool.ore")),
-    ("std.sort", "std/sort/sort.ore", include_str!("../std/sort/sort.ore")),
-    ("std.sync", "std/sync/sync.ore", include_str!("../std/sync/sync.ore")),
-    ("std.testing", "std/testing/testing.ore", include_str!("../std/testing/testing.ore")),
-    ("std.text", "std/text/text.ore", include_str!("../std/text/text.ore")),
-    ("std.thread", "std/thread/thread.ore", include_str!("../std/thread/thread.ore")),
-    ("std.time", "std/time/time.ore", include_str!("../std/time/time.ore")),
+    ("std.coro", "std/coro/coro.aye", include_str!("../std/coro/coro.aye")),
+    ("std.diag", "std/diag/diag.aye", include_str!("../std/diag/diag.aye")),
+    ("std.fs", "std/fs/fs.aye", include_str!("../std/fs/fs.aye")),
+    ("std.heap", "std/heap/heap.aye", include_str!("../std/heap/heap.aye")),
+    ("std.http", "std/http/http.aye", include_str!("../std/http/http.aye")),
+    ("std.list", "std/list/list.aye", include_str!("../std/list/list.aye")),
+    ("std.log", "std/log/log.aye", include_str!("../std/log/log.aye")),
+    ("std.map", "std/map/map.aye", include_str!("../std/map/map.aye")),
+    ("std.math", "std/math/math.aye", include_str!("../std/math/math.aye")),
+    ("std.mem", "std/mem/mem.aye", include_str!("../std/mem/mem.aye")),
+    ("std.net", "std/net/net.aye", include_str!("../std/net/net.aye")),
+    ("std.os", "std/os/os.aye", include_str!("../std/os/os.aye")),
+    ("std.pool", "std/pool/pool.aye", include_str!("../std/pool/pool.aye")),
+    ("std.sort", "std/sort/sort.aye", include_str!("../std/sort/sort.aye")),
+    ("std.sync", "std/sync/sync.aye", include_str!("../std/sync/sync.aye")),
+    ("std.testing", "std/testing/testing.aye", include_str!("../std/testing/testing.aye")),
+    ("std.text", "std/text/text.aye", include_str!("../std/text/text.aye")),
+    ("std.thread", "std/thread/thread.aye", include_str!("../std/thread/thread.aye")),
+    ("std.time", "std/time/time.aye", include_str!("../std/time/time.aye")),
 ];
 
 /// Items of std that the compiler provides (their declarations would need
-/// features Ore does not have yet): (module, name).
+/// features Aye does not have yet): (module, name).
 const BUILTINS: &[(&str, &str)] = &[
     ("std.mem", "Allocator"),
     ("std.mem", "AllocError"),
@@ -221,7 +221,7 @@ fn rebuild(first: String, span: Span, rest: &[(String, Span)]) -> ast::Expr {
 struct Loader<'a> {
     /// The root module's directory: `import a.b` is `base/a/b`.
     base: &'a Path,
-    /// Add the doc comments' examples as tests (`ore test`).
+    /// Add the doc comments' examples as tests (`aye test`).
     doc_tests: bool,
     files: Vec<SourceFile>,
     /// Each file's syntax tree; `None` after a syntax error.
@@ -279,7 +279,7 @@ pub fn load(root: Vec<SourceFile>, base: &Path, doc_tests: bool) -> (Vec<SourceF
     (l.files, Ok(ast))
 }
 
-/// A ```ore block of a `///` doc comment: the test's name, the line of
+/// A ```aye block of a `///` doc comment: the test's name, the line of
 /// the opening fence, and each line of code with its line number and the
 /// number of characters before the code (the comment's `/// `).
 struct DocExample {
@@ -288,7 +288,7 @@ struct DocExample {
     lines: Vec<(u32, u32, String)>,
 }
 
-/// The ```ore blocks of the `///` doc comments of `text`, each named
+/// The ```aye blocks of the `///` doc comments of `text`, each named
 /// after the declaration that the comment documents.
 fn doc_examples(text: &str) -> Vec<DocExample> {
     let mut out: Vec<DocExample> = Vec::new();
@@ -318,7 +318,7 @@ fn doc_examples(text: &str) -> Vec<DocExample> {
                 unnamed += 1;
             }
             Some(e) => e.lines.push((n, indent, code.to_string())),
-            None if code.trim() == "```ore" => {
+            None if code.trim() == "```aye" => {
                 open = Some(DocExample { name: format!("doc: line {n}"), fence: n, lines: Vec::new() });
             }
             None => {}
@@ -465,7 +465,7 @@ impl Loader<'_> {
                 Ok(entries) => {
                     let mut paths: Vec<_> = entries
                         .filter_map(|e| e.ok().map(|e| e.path()))
-                        .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "ore"))
+                        .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "aye"))
                         .collect();
                     paths.sort();
                     let mut files = Vec::new();
@@ -676,9 +676,9 @@ impl Loader<'_> {
             if base.file_name()?.to_string_lossy() != first {
                 return None;
             }
-            // A file of a directory with other `.ore` files is not that directory.
-            let ore_files = std::fs::read_dir(&base).ok()?.filter(|e| e.as_ref().is_ok_and(|e| e.path().extension().is_some_and(|x| x == "ore"))).count();
-            if ore_files != files.len() {
+            // A file of a directory with other `.aye` files is not that directory.
+            let aye_files = std::fs::read_dir(&base).ok()?.filter(|e| e.as_ref().is_ok_and(|e| e.path().extension().is_some_and(|x| x == "aye"))).count();
+            if aye_files != files.len() {
                 return None;
             }
             (self.base.display().to_string(), self.base.join("shared"))
@@ -702,7 +702,7 @@ impl Loader<'_> {
             let Ok(rel) = self.base.strip_prefix(top) else { break };
             let module: Vec<String> = rel.iter().map(|c| c.to_string_lossy().into_owned()).collect();
             return format!(
-                "; imports are found from the directory given to `ore`, and `{}` exists: give `{}` instead, with `--module {}` for `ore test`",
+                "; imports are found from the directory given to `aye`, and `{}` exists: give `{}` instead, with `--module {}` for `aye test`",
                 top.join(first).display(),
                 shown.display(),
                 module.join(".")

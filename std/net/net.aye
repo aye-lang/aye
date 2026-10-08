@@ -1,0 +1,364 @@
+// std.net: TCP over IPv4 and IPv6. `listen` gives a `Listener`, whose
+// `accept` gives a `Conn`; `connect` gives a `Conn` too. A host is an IPv4
+// or IPv6 address (`127.0.0.1`, `::1`) or a name, resolved with
+// `getaddrinfo`.
+//
+// The C constants that differ between macOS and Linux (the layout of
+// `struct addrinfo`, SOL_SOCKET and its options, errno values, MSG_NOSIGNAL
+// or SO_NOSIGPIPE) are chosen at run time from `uname`, as
+// `browser/ui/socket.aye` does. Writes never raise SIGPIPE: a closed peer
+// is an error.
+
+import std.text
+
+pub error ListenError { InvalidAddress, AddressInUse, AccessDenied, UnknownHost, ListenFailed }
+pub error ConnectError { InvalidAddress, UnknownHost, ConnectionRefused, Unreachable, TimedOut, ConnectFailed }
+pub error AcceptError { AcceptFailed }
+pub error ReadError { TimedOut, ConnectionReset, ReadFailed }
+pub error WriteError { ConnectionClosed, WriteFailed }
+
+/// A socket that waits for connections.
+pub struct Listener {
+    fd: i32
+    portNumber: u16
+
+    /// Waits for the next connection.
+    pub fn accept(self: Self) AcceptError!Conn {
+        while true {
+            let fd = accept(self.fd, null, null)
+            if fd >= 0 {
+                noSigpipe(fd)
+                return Conn { fd: fd }
+            }
+            if aye_std_errno() != EINTR {
+                return AcceptError.AcceptFailed
+            }
+        }
+        unreachable
+    }
+
+    /// The port it listens on: the one the system picked for port 0.
+    pub fn port(self: Self) u16 {
+        return self.portNumber
+    }
+
+    /// Stops listening and releases the port.
+    pub fn close(self: Self) {
+        _ = close(self.fd)
+    }
+}
+
+/// A TCP connection.
+pub struct Conn {
+    fd: i32
+
+    /// Waits for data and reads at most `buf.len` bytes: the number read, 0
+    /// when the peer has closed its side.
+    pub fn read(self: Self, buf: []mut u8) ReadError!usize {
+        while true {
+            let n = read(self.fd, buf.ptr, buf.len)
+            if n >= 0 {
+                return n as usize
+            }
+            let e = aye_std_errno()
+            if e != EINTR {
+                return readError(e)
+            }
+        }
+        unreachable
+    }
+
+    /// `read`, waiting at most `ms` milliseconds for data (`poll`):
+    /// TimedOut when none came.
+    pub fn readTimeout(self: Self, buf: []mut u8, ms: u32) ReadError!usize {
+        var fds = [1]PollFd{PollFd { fd: self.fd, events: POLLIN, revents: 0 }}
+        while true {
+            let r = poll(fds[..].ptr, 1, ms as i32)
+            if r > 0 {
+                return self.read(buf)
+            }
+            if r == 0 {
+                return ReadError.TimedOut
+            }
+            if aye_std_errno() != EINTR {
+                return ReadError.ReadFailed
+            }
+        }
+        unreachable
+    }
+
+    /// Writes all of `bytes`; ConnectionClosed when the peer is gone.
+    pub fn write(self: Self, bytes: []u8) WriteError!void {
+        var flags: i32 = 0
+        if !isDarwin() {
+            flags = MSG_NOSIGNAL_LINUX
+        }
+        var off: usize = 0
+        while off < bytes.len {
+            let n = send(self.fd, bytes[off..].ptr, bytes.len - off, flags)
+            if n > 0 {
+                off += n as usize
+            } else {
+                let e = aye_std_errno()
+                if n == 0 || e == EPIPE || e == econnreset() {
+                    return WriteError.ConnectionClosed
+                }
+                if e != EINTR {
+                    return WriteError.WriteFailed
+                }
+            }
+        }
+    }
+
+    /// Closes the connection.
+    pub fn close(self: Self) {
+        _ = close(self.fd)
+    }
+}
+
+/// Listens on `host` at `port`; port 0 lets the system pick one
+/// (`Listener.port`). `host` is a dotted IPv4 address, an IPv6 address
+/// (`::1`, `::` for every interface), a host name (`getaddrinfo`), or
+/// `0.0.0.0` for every IPv4 interface. `localhost` is 127.0.0.1. A name
+/// that does not resolve is UnknownHost; an empty or over-long one is
+/// InvalidAddress.
+pub fn listen(host: []u8, port: u16) ListenError!Listener {
+    var head: ?*mut AddrInfo = null
+    var name = host
+    if text.eql(host, "localhost") {
+        name = "127.0.0.1"
+    }
+    let rc = resolve(name, port, AI_PASSIVE, &mut head)
+    if rc == RESOLVE_INVALID {
+        return ListenError.InvalidAddress
+    }
+    if rc != 0 {
+        return ListenError.UnknownHost
+    }
+    var e: i32 = 0
+    var cur = head
+    while cur |ai| {
+        let fd = socket(ai.family, SOCK_STREAM, 0)
+        if fd >= 0 {
+            var one = [4]u8{1, 0, 0, 0}
+            var reuse: i32 = 2
+            if isDarwin() {
+                reuse = 4
+            }
+            _ = setsockopt(fd, solSocket(), reuse, one[..].ptr, 4)
+            if bind(fd, sockAddr(ai), ai.addrlen) == 0 && cListen(fd, 128) == 0 {
+                var addr = @zeroed([128]u8)
+                var len: u32 = 128
+                if getsockname(fd, addr[..].ptr, &mut len) != 0 {
+                    _ = close(fd)
+                    freeaddrinfo(head)
+                    return ListenError.ListenFailed
+                }
+                freeaddrinfo(head)
+                // sin_port and sin6_port are both at byte 2
+                return Listener { fd: fd, portNumber: (addr[2] as u16) << 8 | addr[3] as u16 }
+            }
+            e = aye_std_errno()
+            _ = close(fd)
+        } else {
+            e = aye_std_errno()
+        }
+        cur = ai.next
+    }
+    freeaddrinfo(head)
+    if e == eaddrinuse() {
+        return ListenError.AddressInUse
+    }
+    if e == EACCES {
+        return ListenError.AccessDenied
+    }
+    return ListenError.ListenFailed
+}
+
+/// Connects to `host` at `port`. `host` is a dotted IPv4 address, an IPv6
+/// address (`::1`) or a host name (`getaddrinfo`); a name with several
+/// addresses is tried address by address. A name that does not resolve is
+/// UnknownHost; an empty or over-long one is InvalidAddress.
+pub fn connect(host: []u8, port: u16) ConnectError!Conn {
+    var head: ?*mut AddrInfo = null
+    let rc = resolve(host, port, 0, &mut head)
+    if rc == RESOLVE_INVALID {
+        return ConnectError.InvalidAddress
+    }
+    if rc != 0 {
+        return ConnectError.UnknownHost
+    }
+    var e: i32 = 0
+    var cur = head
+    while cur |ai| {
+        let fd = socket(ai.family, SOCK_STREAM, 0)
+        if fd >= 0 {
+            if cConnect(fd, sockAddr(ai), ai.addrlen) == 0 {
+                freeaddrinfo(head)
+                noSigpipe(fd)
+                return Conn { fd: fd }
+            }
+            e = aye_std_errno()
+            _ = close(fd)
+        } else {
+            e = aye_std_errno()
+        }
+        cur = ai.next
+    }
+    freeaddrinfo(head)
+    if e == econnrefused() {
+        return ConnectError.ConnectionRefused
+    }
+    if e == enetunreach() || e == ehostunreach() {
+        return ConnectError.Unreachable
+    }
+    if e == etimedout() {
+        return ConnectError.TimedOut
+    }
+    return ConnectError.ConnectFailed
+}
+
+// `struct addrinfo` as C lays it out on 64-bit macOS and Linux. The two
+// pointers swap places: macOS has ai_canonname then ai_addr, Linux the
+// reverse (`sockAddr` picks). Declared by hand so std needs no libclang.
+extern struct AddrInfo {
+    flags: i32
+    family: i32
+    socktype: i32
+    protocol: i32
+    addrlen: u32
+    first: ?[*]u8
+    second: ?[*]u8
+    next: ?*mut AddrInfo
+}
+
+let AI_PASSIVE: i32 = 1
+let RESOLVE_INVALID: i32 = -1
+
+// ai_addr of `ai`.
+fn sockAddr(ai: *mut AddrInfo) [*]u8 {
+    var p = ai.first
+    if isDarwin() {
+        p = ai.second
+    }
+    if p |a| {
+        return a
+    }
+    unreachable
+}
+
+// getaddrinfo for `host` and `port` (TCP) into `head`: 0, RESOLVE_INVALID
+// when `host` is empty or too long, or getaddrinfo's own non-zero code.
+fn resolve(host: []u8, port: u16, flags: i32, head: *mut ?*mut AddrInfo) i32 {
+    var name = @zeroed([256]u8)
+    if host.len == 0 || host.len >= 256 {
+        return RESOLVE_INVALID
+    }
+    for i, c in host {
+        if c == 0 {
+            return RESOLVE_INVALID
+        }
+        name[i] = c
+    }
+    // the port in decimal, NUL-terminated
+    var service = @zeroed([8]u8)
+    var digits = @zeroed([8]u8)
+    var n: usize = 0
+    var v = port as u32
+    while true {
+        digits[n] = '0' + (v % 10) as u8
+        n += 1
+        v = v / 10
+        if v == 0 {
+            break
+        }
+    }
+    for i in 0..n {
+        service[i] = digits[n - 1 - i]
+    }
+    var hints = @zeroed(AddrInfo)
+    hints.flags = flags
+    hints.socktype = SOCK_STREAM
+    return getaddrinfo(name[..].ptr, service[..].ptr, &hints, head)
+}
+
+extern struct PollFd {
+    fd: i32
+    events: i16
+    revents: i16
+}
+
+let SOCK_STREAM: i32 = 1
+let POLLIN: i16 = 1
+let EINTR: i32 = 4
+let EACCES: i32 = 13
+let EPIPE: i32 = 32
+// Linux: send's flag; macOS: the socket option.
+let MSG_NOSIGNAL_LINUX: i32 = 0x4000
+let SO_NOSIGPIPE_DARWIN: i32 = 0x1022
+
+// 1: macOS, 0: another system (Linux), -1: not asked yet. Threads may ask
+// at once; they store the same answer.
+var darwin: i32 = -1
+
+fn isDarwin() bool {
+    var d = @atomicLoad(&darwin)
+    if d < 0 {
+        // `struct utsname` starts with the system's name on both; it is
+        // 390 bytes on Linux and 1280 on macOS.
+        var buf = @zeroed([2048]u8)
+        d = (uname(buf[..].ptr) == 0 && text.startsWith(buf[..], "Darwin")) as i32
+        @atomicStore(&mut darwin, d)
+    }
+    return d == 1
+}
+
+// macOS's value, else Linux's.
+fn pick(mac: i32, linux: i32) i32 {
+    if isDarwin() {
+        return mac
+    }
+    return linux
+}
+
+fn solSocket() i32 { return pick(0xffff, 1) }
+fn econnrefused() i32 { return pick(61, 111) }
+fn econnreset() i32 { return pick(54, 104) }
+fn eaddrinuse() i32 { return pick(48, 98) }
+fn enetunreach() i32 { return pick(51, 101) }
+fn ehostunreach() i32 { return pick(65, 113) }
+fn etimedout() i32 { return pick(60, 110) }
+
+fn readError(e: i32) ReadError {
+    if e == econnreset() {
+        return ReadError.ConnectionReset
+    }
+    if e == etimedout() {
+        return ReadError.TimedOut
+    }
+    return ReadError.ReadFailed
+}
+
+// No SIGPIPE for writes to `fd` on macOS (Linux: `write`'s flag).
+fn noSigpipe(fd: i32) {
+    if isDarwin() {
+        var one = [4]u8{1, 0, 0, 0}
+        _ = setsockopt(fd, solSocket(), SO_NOSIGPIPE_DARWIN, one[..].ptr, 4)
+    }
+}
+
+extern fn aye_std_errno() i32
+extern("listen") fn cListen(fd: i32, backlog: i32) i32
+extern("connect") fn cConnect(fd: i32, addr: [*]u8, len: u32) i32
+extern fn socket(domain: i32, kind: i32, protocol: i32) i32
+extern fn bind(fd: i32, addr: [*]u8, len: u32) i32
+extern fn accept(fd: i32, addr: ?[*]u8, len: ?[*]u32) i32
+extern fn getsockname(fd: i32, addr: [*]u8, len: *mut u32) i32
+extern fn setsockopt(fd: i32, level: i32, name: i32, value: [*]u8, len: u32) i32
+extern fn poll(fds: [*]PollFd, n: u64, timeout: i32) i32
+extern fn send(fd: i32, buf: [*]u8, n: usize, flags: i32) isize
+extern fn getaddrinfo(node: [*]u8, service: [*]u8, hints: *AddrInfo, res: *mut ?*mut AddrInfo) i32
+extern fn freeaddrinfo(res: ?*mut AddrInfo)
+extern fn uname(buf: [*]u8) i32
+extern fn read(fd: i32, buf: [*]u8, n: usize) isize
+extern fn close(fd: i32) i32

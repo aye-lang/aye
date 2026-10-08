@@ -1,12 +1,12 @@
-allocators.ore:11:13: error[E0075]: `@testAllocator()` can only be used in a `test` block (pass the allocator to other functions)
-allocators.ore:12:21: error[E0075]: `std.testing.allocator()` can only be used in a `test` block (pass the allocator to other functions)
-allocators.ore:13:25: error[E0074]: `Node` is a type, not a value: `create` takes the initial value, e.g. `alloc.create(Node { ... })`
-allocators.ore:18:17: error[E0032]: method `allocator` takes `self: *mut Self`: cannot take `&mut` of `gpa`: it is immutable (declare it with `var`)
-allocators.ore:21:29: error[E0023]: mismatched types: `destroy` needs a pointer from `create`, found `Node`
-allocators.ore:22:20: error[E0029]: method `std.mem.Allocator.resize` takes 3 argument(s) but 1 were given
-allocators.ore:23:39: error[E0023]: mismatched types: `resize` needs a slice from `alloc`, found `*mut Node`
-allocators.ore:24:20: error[E0061]: unhandled error: `resize` returns `std.mem.AllocError![]mut u8` (handle the error with `try` or `catch`)
-allocators.ore:25:20: error[E0061]: unhandled error: `create` returns `std.mem.AllocError!*mut Node` (handle the error with `try` or `catch`)
-allocators.ore:26:21: error[E0071]: type `std.heap.General` has no method `create`
-allocators.ore:27:18: error[E0023]: mismatched types: expected `bool`, found integer literal
-allocators.ore:28:13: error[E0023]: mismatched types: expected `bool`, found integer literal
+allocators.aye:11:13: error[E0075]: `@testAllocator()` can only be used in a `test` block (pass the allocator to other functions)
+allocators.aye:12:21: error[E0075]: `std.testing.allocator()` can only be used in a `test` block (pass the allocator to other functions)
+allocators.aye:13:25: error[E0074]: `Node` is a type, not a value: `create` takes the initial value, e.g. `alloc.create(Node { ... })`
+allocators.aye:18:17: error[E0032]: method `allocator` takes `self: *mut Self`: cannot take `&mut` of `gpa`: it is immutable (declare it with `var`)
+allocators.aye:21:29: error[E0023]: mismatched types: `destroy` needs a pointer from `create`, found `Node`
+allocators.aye:22:20: error[E0029]: method `std.mem.Allocator.resize` takes 3 argument(s) but 1 were given
+allocators.aye:23:39: error[E0023]: mismatched types: `resize` needs a slice from `alloc`, found `*mut Node`
+allocators.aye:24:20: error[E0061]: unhandled error: `resize` returns `std.mem.AllocError![]mut u8` (handle the error with `try` or `catch`)
+allocators.aye:25:20: error[E0061]: unhandled error: `create` returns `std.mem.AllocError!*mut Node` (handle the error with `try` or `catch`)
+allocators.aye:26:21: error[E0071]: type `std.heap.General` has no method `create`
+allocators.aye:27:18: error[E0023]: mismatched types: expected `bool`, found integer literal
+allocators.aye:28:13: error[E0023]: mismatched types: expected `bool`, found integer literal

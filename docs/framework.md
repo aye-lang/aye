@@ -1,6 +1,6 @@
 # The framework: design (F0)
 
-A web server framework written in Ore, in the spirit of Next.js, under
+A web server framework written in Aye, in the spirit of Next.js, under
 `framework/` (new). This document answers the open choices of
 [`plans/framework.md`](plans/framework.md) and fixes the first vertical
 slice (F1). It is a proposal until the user approves it (F0's exit
@@ -8,7 +8,7 @@ check). Names in it (`web` for the library module and the command,
 `.web/` for the generated build root) are placeholders: see "Questions
 for the user".
 
-Inputs: [`plan.md`](plan.md) (lanes), [`plans/ore.md`](plans/ore.md)
+Inputs: [`plan.md`](plan.md) (lanes), [`plans/aye.md`](plans/aye.md)
 (the O steps cited below), [`design.md`](design.md) (principles,
 non-goals), [`spec.md`](spec.md) §8 (errors), §12 (modules), §15
 (`std.thread`, `std.sync`, `std.coro`), [`decisions.md`](decisions.md)
@@ -19,24 +19,24 @@ non-goals), [`spec.md`](spec.md) §8 (errors), §12 (modules), §15
 Recorded here, not reopened:
 
 - **Manifest:** a declarative file, read by the compiler, not a
-  `build.ore` run at compile time. Its format is O4.1's to decide. The
+  `build.aye` run at compile time. Its format is O4.1's to decide. The
   framework adds no config file of its own: app settings (port, limits)
-  are Ore code in the app, so they are type-checked.
+  are Aye code in the app, so they are type-checked.
 - **HTTP:** `std.http` serves plain HTTP first (O1.4); TLS comes later.
   The documented deploy is behind a reverse proxy (Caddy or nginx) that
   ends TLS. The HTTP client keeps using libcurl, as the browser does
-  (`browser/net/http.ore`), until O3.4/O3.5 decide otherwise.
-- **Client code:** both (a) Ore compiled to wasm32 for client islands
+  (`browser/net/http.aye`), until O3.4/O3.5 decide otherwise.
+- **Client code:** both (a) Aye compiled to wasm32 for client islands
   and (b) plain JS/TS assets, bundled later. New wording for design.md's
   non-goal is proposed below.
 - **Platforms:** macOS is supported; Linux must compile; Windows is out
   of scope.
 - **Bundler:** when built, it reuses the browser's JS parser
-  (`browser/js/lexer.ore`, `parser.ore`, `ast.ore`), after a
+  (`browser/js/lexer.aye`, `parser.aye`, `ast.aye`), after a
   browser-lane step moves them out of the `js` module and O4.2 adds path
   dependencies. No copy.
 
-## What Ore gives and lacks today
+## What Aye gives and lacks today
 
 Facts the choices below rest on (checked against the stage0 compiler on
 2026-10-08 where marked):
@@ -54,7 +54,7 @@ Facts the choices below rest on (checked against the stage0 compiler on
   (checked).
 - Errors carry no payload and are identified by name across sets
   (spec §8); a `pub fn` writes its error set.
-- The module loader follows directory symlinks, and `ore check --json`
+- The module loader follows directory symlinks, and `aye check --json`
   then names the symlink's path, not the target's (checked).
 - Concurrency is library only (design.md, 並行模型): `std.thread`
   (`spawn`, 8 MiB reserved stacks), `std.sync` (`Mutex`, `Channel`,
@@ -72,46 +72,46 @@ The tree the user writes follows Next.js's App Router:
 ```
 blog/                       an app
   app/
-    layout.ore              pub fn layout: wraps every page
-    page.ore                /
-    not-found.ore           the 404 page
-    about/page.ore          /about
-    blog/page.ore           /blog
-    blog/[slug]/page.ore    /blog/<slug>
-    docs/[...path]/page.ore /docs/<a>/<b>/...
-    api/posts/route.ore     GET and POST /api/posts
-  lib/posts/posts.ore       shared code: `import lib.posts`
+    layout.aye              pub fn layout: wraps every page
+    page.aye                /
+    not-found.aye           the 404 page
+    about/page.aye          /about
+    blog/page.aye           /blog
+    blog/[slug]/page.aye    /blog/<slug>
+    docs/[...path]/page.aye /docs/<a>/<b>/...
+    api/posts/route.aye     GET and POST /api/posts
+  lib/posts/posts.aye       shared code: `import lib.posts`
   public/logo.png           /logo.png
   .web/                     generated build root, not checked in
 ```
 
 File names inside a directory are free (only directory names are
-imported), so `not-found.ore` is fine. Each role has its own function
+imported), so `not-found.aye` is fine. Each role has its own function
 name (`page`, `layout`, `notFound`, `get`, `post`, ...), so the files of
-one directory never clash (#26). A directory with both `page.ore` and a
-`get` in `route.ore` is an error from the generator, as in Next.js.
+one directory never clash (#26). A directory with both `page.aye` and a
+`get` in `route.aye` is an error from the generator, as in Next.js.
 
 Options:
 
 - **A. Identifier directories in the user's tree.** `blog/_slug/`,
-  `docs/__path/`; the app directory is the Ore root; the generator writes
+  `docs/__path/`; the app directory is the Aye root; the generator writes
   one router module into it. Error paths are the real files. But
   `/about-us`, `/for` or `/2026` cannot be routes without an escape rule
-  (Ore identifiers have no `-`; keywords and leading digits are out).
+  (Aye identifiers have no `-`; keywords and leading digits are out).
 - **B. Next.js names in the user's tree, a generated build root.** The
-  generator writes `.web/`: a `main.ore`, a `routes/` module with the
+  generator writes `.web/`: a `main.aye`, a `routes/` module with the
   table, and directory symlinks with identifier names
   (`.web/r/r3_blog_slug -> ../../app/blog/[slug]`), plus one symlink per
   other top-level directory of the app (`.web/lib -> ../lib`) and one to
-  the framework (`.web/web`). `ore check` and `ore build` run on `.web/`.
+  the framework (`.web/web`). `aye check` and `aye build` run on `.web/`.
   Any URL segment works; the CLI maps `.web/r/...` paths in diagnostics
   back to `app/...`.
 - **C. A hand-written route table.** No generator; the user lists routes
-  in `main.ore`. Simple and explicit, but not the Next.js experience,
+  in `main.aye`. Simple and explicit, but not the Next.js experience,
   and the table drifts from the tree.
 
 **Recommendation: B.** Any URL segment works with no escape rule to
-learn, and an AI that knows Next.js writes `app/blog/[slug]/page.ore`
+learn, and an AI that knows Next.js writes `app/blog/[slug]/page.aye`
 without being told (design principle 6). The cost is all in the
 generator (a symlink farm, a path map for diagnostics), which is the
 framework's code, not the user's. `.web/` plays the part of `.next/`.
@@ -121,7 +121,7 @@ Mapping of segments: a literal directory is a literal segment; `[name]`
 is one segment bound to `name`; `[...name]` is the rest (one or more
 segments); `(group)` directories are left out of the URL, as in Next.js.
 Matching order: literal before `[name]` before `[...name]`. A `name`
-that is not an Ore identifier is a generator error. The symlink names
+that is not an Aye identifier is a generator error. The symlink names
 are `r<index>_<sanitized path>`, so they are identifiers and never
 keywords.
 
@@ -130,7 +130,7 @@ keywords.
 Every handler has one signature, which is also the route table's
 function type:
 
-```ore
+```aye
 pub fn get(req: *web.Request, res: *mut web.Response) web.Error!void
 ```
 
@@ -153,8 +153,8 @@ method gets 405 with `Allow`.
 - **Errors:** `pub error Error { BadRequest, Unauthorized, Forbidden,
   NotFound, MethodNotAllowed, Conflict, PayloadTooLarge, OutOfMemory,
   Internal }`, mapped to 400, 401, 403, 404, 405, 409, 413, 500, 500. For
-  a page the framework renders the app's `not-found.ore` (404) or a
-  plain error page; for a `route.ore`, `{"error":"NotFound"}`. A handler
+  a page the framework renders the app's `not-found.aye` (404) or a
+  plain error page; for a `route.aye`, `{"error":"NotFound"}`. A handler
   that wants another status sets `res.status` and returns normally.
   Errors of other sets are handled where they happen:
   `std.fs.open(p) catch |e| { std.log.err("open {}: {}", p, e); return
@@ -174,24 +174,24 @@ hides which parts a handler reads); errors of any set per route (the
 generated code could not tell which names it may compare). **The
 recommendation is the signature above**: one function type for every
 route, so the table is plain data, and a wrong error set is an
-`ore check` error in the route's own file.
+`aye check` error in the route's own file.
 
 ## 3. Rendering
 
 SSR only until F4. Options:
 
-- **A. A typed HTML writer in plain Ore.** `web.Html` writes into the
+- **A. A typed HTML writer in plain Aye.** `web.Html` writes into the
   response body: `open(tag)`, `attr(name, value)`, `text(s)`,
   `close(tag)`, `void(tag)` (`img`, `br`), `raw(s)`. `text` and `attr`
   escape; `raw` is the only way to write markup unescaped (FD2). In
   debug and safe mode it checks that tags close in order and are known
   HTML elements (a typo panics with the tag), so a mistake shows in the
   first test.
-- **B. Template files compiled to Ore** (Go's templ): HTML with holes,
-  turned into Ore by the generator. Pleasant to write, still
+- **B. Template files compiled to Aye** (Go's templ): HTML with holes,
+  turned into Aye by the generator. Pleasant to write, still
   type-checked, but a second syntax to learn and to keep, and its errors
   need a position map back to the template.
-- **C. JSX-like syntax in Ore.** A language change for one library;
+- **C. JSX-like syntax in Aye.** A language change for one library;
   against design principles 3 and 5 (no macros, one way to write a
   thing). Not proposed.
 - **D. Templates read at run time** (mustache). Not type-checked; errors
@@ -203,8 +203,8 @@ then, generating code that calls the same `web.Html`.
 
 A page and a layout:
 
-```ore
-// app/blog/[slug]/page.ore
+```aye
+// app/blog/[slug]/page.aye
 import lib.posts
 import web
 
@@ -219,7 +219,7 @@ pub fn page(req: *web.Request, res: *mut web.Response) web.Error!void {
     try h.close("article")
 }
 
-// app/layout.ore
+// app/layout.aye
 import web
 
 pub fn layout(req: *web.Request, h: *mut web.Html, body: []u8) web.Error!void {
@@ -231,7 +231,7 @@ pub fn layout(req: *web.Request, h: *mut web.Html, body: []u8) web.Error!void {
 }
 ```
 
-Ore has no closures, so a layout gets the rendered page as bytes rather
+Aye has no closures, so a layout gets the rendered page as bytes rather
 than a callback. Nested layouts are applied inside out.
 
 Hydration and islands come in F4 (section "Client code").
@@ -266,13 +266,13 @@ thread, so B is one loop per thread, never work stealing.
 `web dev <app> [--port N]` (F3):
 
 1. Generate `.web/` (section 1).
-2. `ore check --json .web`; on errors, serve an error page with the
+2. `aye check --json .web`; on errors, serve an error page with the
    diagnostics, paths mapped back to `app/` (FD5).
-3. `ore build .web -o .web/server` (debug mode).
+3. `aye build .web -o .web/server` (debug mode).
 4. Start `.web/server --port N --dev` (O1.6 `spawn`).
 5. Poll the mtimes of `app/`, the other linked directories and
    `public/` every 250 ms (O1.5 `stat`, `readDir`). On a change of an
-   `.ore` file: stop the server (`kill`, `wait`) and go to 1. On a change
+   `.aye` file: stop the server (`kill`, `wait`) and go to 1. On a change
    in `public/`: only reload, as dev mode serves `public/` from disk.
 
 Reload: in dev mode every page gets `<script src="/_web/dev.js">`. It
@@ -285,7 +285,7 @@ it is fixed. No proxy and no WebSocket server.
 
 Options considered: building the app as a shared library and swapping
 it in the running server (keeps connections; needs a `--shared` build
-mode Ore lacks and state handover); watching with kqueue or FSEvents
+mode Aye lacks and state handover); watching with kqueue or FSEvents
 (faster to notice, but per-platform; polling `stat` is the same code on
 macOS and Linux). **Recommendation: restart and poll**, as above.
 
@@ -300,10 +300,10 @@ behind a `Mutex`. A database layer is a later decision, if ever.
 ## 7. Testing
 
 - **Unit:** `test` blocks in `web` (route matching, `Html` escaping,
-  header and cookie parsing), run as `browser/unit_tests.ore` runs the
+  header and cookie parsing), run as `browser/unit_tests.aye` runs the
   browser's until O5.1 runs a whole tree.
 - **Golden HTTP transcripts (primary):** `tests/framework.rs` builds an
-  example app with the `ore` that `cargo test` built, starts it on a
+  example app with the `aye` that `cargo test` built, starts it on a
   free port (it prints the port it got), sends each request of
   `tests/framework/<app>/*.http` over a TCP socket and compares the
   response with the expected one (`Date` masked). It is part of
@@ -326,7 +326,7 @@ from F5.
 ## Client code (F4) and the design.md non-goal
 
 Order: plain JS works from F2 at no cost (ES modules in `public/` are
-static files; every browser loads them unbundled). Ore islands come
+static files; every browser loads them unbundled). Aye islands come
 after O2.4. The bundler comes after O4.2 and the browser-lane parser
 split; TypeScript is type-stripping added to that shared parser, not a
 second parser.
@@ -340,32 +340,32 @@ props; a generated `/_web/islands.js` loads `counter.wasm` and calls its
 `mount`. The export and import syntax is O2.4's.
 
 **Proposed wording** for design.md's non-goal (today: 不取代 JavaScript：
-網頁內容的腳本語言仍是 JS，Ore 只寫引擎本身。), for the user to approve:
+網頁內容的腳本語言仍是 JS，Aye 只寫引擎本身。), for the user to approve:
 
-> 不取代 JavaScript：網頁的腳本語言仍是 JS，anyknown 引擎照規格實作它。Ore
-> 寫引擎、伺服器與工具；Ore 也能編譯成 wasm32 在網頁裡執行（框架的
-> island），那是 WebAssembly 的一般用法，網頁作者不必改寫 JS，Ore 也不提供
+> 不取代 JavaScript：網頁的腳本語言仍是 JS，anyknown 引擎照規格實作它。Aye
+> 寫引擎、伺服器與工具；Aye 也能編譯成 wasm32 在網頁裡執行（框架的
+> island），那是 WebAssembly 的一般用法，網頁作者不必改寫 JS，Aye 也不提供
 > JS 以外的網頁 API。
 
-(English: Ore does not replace JavaScript. JS stays the scripting
+(English: Aye does not replace JavaScript. JS stays the scripting
 language of web pages, and the anyknown engine implements it to the
-spec. Ore writes the engine, servers and tools; Ore can also be compiled
+spec. Aye writes the engine, servers and tools; Aye can also be compiled
 to wasm32 and run in pages (the framework's islands), which is ordinary
-WebAssembly: page authors need not rewrite their JS, and Ore offers no
+WebAssembly: page authors need not rewrite their JS, and Aye offers no
 web API beside JS's.)
 
-## Ore-lane steps by phase
+## Aye-lane steps by phase
 
-| Phase | Needs (ids in `plans/ore.md`) |
+| Phase | Needs (ids in `plans/aye.md`) |
 |---|---|
 | F1 | O1.2 and O1.3 (through O1.4), O1.4 (F1.1), O1.5 (F1.2), O3.1 (F1.3) |
 | F2 | O1.5 (static files, a path stays under `public/`), O3.1, O3.6 (query, form, cookies), O3.2 (`Date`, `Last-Modified`), O3.3 (content hashes for `ETag` and hashed names) |
-| F3 | O1.6 (spawn, kill, wait), O3.6 (server-sent events, graceful stop), O3.1 (reading `ore check --json`) |
+| F3 | O1.6 (spawn, kill, wait), O3.6 (server-sent events, graceful stop), O3.1 (reading `aye check --json`) |
 | F4 | O2.1 to O2.4 (wasm islands); O4.1 and O4.2 plus a browser-lane step (bundler) |
 | F5 | O2.2 (Linux triples compile), O1.7 and O7.1 (FD8 numbers), O4.1 and O4.2 (the app depends on `web` through the manifest, not a symlink) |
 
 Not yet a row anywhere: the browser-lane step that moves
-`browser/js/lexer.ore`, `parser.ore` and `ast.ore` into a module of
+`browser/js/lexer.aye`, `parser.aye` and `ast.aye` into a module of
 their own (proposed in the report of this step).
 
 ## F1: the first vertical slice
@@ -374,13 +374,13 @@ Goal: `curl` gets a page from a built app (F1's exit check).
 
 **F1.1 (needs O1.4).** Files:
 
-- `framework/web/` (module `web`): `request.ore`, `response.ore`,
-  `html.ore`, `route.ore` (`struct Route { method, pattern, handler }`
-  and the matcher, literal segments only in F1.1), `serve.ore`
+- `framework/web/` (module `web`): `request.aye`, `response.aye`,
+  `html.aye`, `route.aye` (`struct Route { method, pattern, handler }`
+  and the matcher, literal segments only in F1.1), `serve.aye`
   (`web.run(alloc, port, routes)` over `std.http`, an arena per request,
   `--port`, prints `listening on 127.0.0.1:<port>`).
-- `framework/examples/hello/main.ore`: a hand-written table of two
-  routes and `main`; `home.ore` with `pub fn page`.
+- `framework/examples/hello/main.aye`: a hand-written table of two
+  routes and `main`; `home.aye` with `pub fn page`.
 - `framework/examples/hello/web`: a symlink to `../../web` (until O4.2).
 - `tests/framework.rs`, `tests/framework/hello/root.http`,
   `tests/framework/hello/missing.http`.
@@ -389,14 +389,14 @@ Commands and expected output:
 
 ```
 cargo build --release
-target/release/ore build framework/examples/hello -o target/hello
+target/release/aye build framework/examples/hello -o target/hello
 target/hello --port 0            # prints: listening on 127.0.0.1:<port>
 curl -i http://127.0.0.1:<port>/
 HTTP/1.1 200 OK
 Content-Type: text/html; charset=utf-8
 Content-Length: 58
 
-<!doctype html><title>Hello</title><h1>Hello from Ore</h1>
+<!doctype html><title>Hello</title><h1>Hello from Aye</h1>
 curl -i http://127.0.0.1:<port>/nope       # HTTP/1.1 404 Not Found
 cargo test --test framework
 ```
@@ -404,14 +404,14 @@ cargo test --test framework
 **F1.2 (needs F1.1, O1.5).** `framework/cli/` (the `web` command):
 `web gen <app> --web <dir of the web module>` scans `<app>/app/` and
 writes `.web/` as in section 1; the hello app's routes move to
-`app/page.ore`, `app/about/page.ore`, `app/not-found.ore`. The test runs
-`web gen`, then `ore build`, and checks `/`, `/about` and an unknown
+`app/page.aye`, `app/about/page.aye`, `app/not-found.aye`. The test runs
+`web gen`, then `aye build`, and checks `/`, `/about` and an unknown
 path. Symlinks are made with an `extern fn symlink` from libc until std
 has one (gap list below). `--web` goes away with O4.2.
 
-**F1.3 (needs F1.2, O3.1).** `app/api/hello/[name]/route.ore` with
+**F1.3 (needs F1.2, O3.1).** `app/api/hello/[name]/route.aye` with
 `pub fn get`; the transcript checks `200`, `Content-Type:
-application/json` and `{"hello":"ore"}` for `/api/hello/ore`, and 405
+application/json` and `{"hello":"aye"}` for `/api/hello/aye`, and 405
 for a `POST`.
 
 ## Foreseen language and std needs
@@ -421,8 +421,8 @@ meets them:
 
 1. **Directory module names must be identifiers.** `[slug]`, `about-us`
    cannot be imported. Worked around by the symlink root (section 1);
-   recorded so the Ore lane knows why `.web/` exists.
-2. **`ore check --json` names symlink paths.** The CLI maps them back;
+   recorded so the Aye lane knows why `.web/` exists.
+2. **`aye check --json` names symlink paths.** The CLI maps them back;
    a loader that reported the target path would remove the map. (F3)
 3. **No closures.** Layouts take the body as bytes; shared state is a
    global behind a `Mutex`; `std.http.serve` must take a context pointer

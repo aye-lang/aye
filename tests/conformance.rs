@@ -1,4 +1,4 @@
-//! Conformance harness (O1.1). `tests/conformance/<area>/X.ore` is built
+//! Conformance harness (O1.1). `tests/conformance/<area>/X.aye` is built
 //! and run for each target; its stdout must equal `X.out`, it must exit 0
 //! and write nothing to stderr. Prints one row per area and target with
 //! passed/total, and exits 1, naming the files, if any program fails.
@@ -6,7 +6,7 @@
 //! `harness = false` in Cargo.toml: this file has its own `main`.
 //! Only the `native` target exists so far.
 
-use ore::driver::{self, Mode};
+use aye::driver::{self, Mode};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -18,7 +18,7 @@ fn programs(area: &Path) -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = std::fs::read_dir(area)
         .unwrap()
         .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|e| e == "ore"))
+        .filter(|p| p.extension().is_some_and(|e| e == "aye"))
         .collect();
     v.sort();
     v
@@ -54,7 +54,7 @@ fn run(target: &str, path: &Path, work: &Path) -> Result<(), String> {
 
 fn main() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/conformance");
-    let work = std::env::temp_dir().join(format!("ore-conformance-{}", std::process::id()));
+    let work = std::env::temp_dir().join(format!("aye-conformance-{}", std::process::id()));
     std::fs::create_dir_all(&work).unwrap();
     let mut areas: Vec<PathBuf> = std::fs::read_dir(&root).unwrap().map(|e| e.unwrap().path()).filter(|p| p.is_dir()).collect();
     areas.sort();

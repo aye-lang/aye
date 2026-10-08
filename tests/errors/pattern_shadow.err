@@ -1,1 +1,1 @@
-pattern_shadow.ore:8:16: error[E0016]: `value` is already declared at 6:5 (shadowing is not allowed)
+pattern_shadow.aye:8:16: error[E0016]: `value` is already declared at 6:5 (shadowing is not allowed)

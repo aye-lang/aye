@@ -1,5 +1,5 @@
-array_len.ore:6:14: error[E0099]: an array length must be a constant integer: a literal, a `let` constant, or arithmetic on them
-array_len.ore:10:9: error[E0099]: an array length must be an integer, found `f64`
-array_len.ore:11:9: error[E0099]: an array length cannot be negative, found `-2`
-array_len.ore:12:9: error[E0099]: an array length must be a constant integer: a literal, a `let` constant, or arithmetic on them
-array_len.ore:13:9: error[E0018]: undefined variable `unknown`
+array_len.aye:6:14: error[E0099]: an array length must be a constant integer: a literal, a `let` constant, or arithmetic on them
+array_len.aye:10:9: error[E0099]: an array length must be an integer, found `f64`
+array_len.aye:11:9: error[E0099]: an array length cannot be negative, found `-2`
+array_len.aye:12:9: error[E0099]: an array length must be a constant integer: a literal, a `let` constant, or arithmetic on them
+array_len.aye:13:9: error[E0018]: undefined variable `unknown`

@@ -1,52 +1,52 @@
 //! Golden tests.
 //!
-//! - `tests/cases/X.ore`: compiled in debug, safe and fast mode, run, and
+//! - `tests/cases/X.aye`: compiled in debug, safe and fast mode, run, and
 //!   stdout compared with `X.out`. If `X.panic` exists the program must abort
 //!   with exactly that on stderr (checked in debug and safe mode only). If
 //!   `X.stderr` exists, `main` must return an error: exit status 1, and
 //!   stderr equal to `X.stderr` in debug mode; safe and fast mode print no
 //!   error return trace, so there stderr must be the first line only.
-//! - `tests/ffi/X.ore`: like `tests/cases`, for programs that link C
+//! - `tests/ffi/X.aye`: like `tests/cases`, for programs that link C
 //!   libraries with `@link`; skipped when `pkg-config` does not know a
 //!   package listed in `X.needs`. Programs run with `SDL_VIDEODRIVER=dummy`,
 //!   so SDL2 needs no display.
-//! - `tests/cimport/X.ore`: programs with `@cimport`, run with `ore run`
+//! - `tests/cimport/X.aye`: programs with `@cimport`, run with `aye run`
 //!   from the crate root with a cache directory of their own: stdout must
-//!   equal `X.out`, and then `ore check` must pass without libclang (the
-//!   cache). If `X.err` exists, `ore check` must fail with exactly that on
+//!   equal `X.out`, and then `aye check` must pass without libclang (the
+//!   cache). If `X.err` exists, `aye check` must fail with exactly that on
 //!   stderr instead, with the variables of `X.env` (`NAME=value` lines) set.
-//!   `ore cimport tests/cimport/X.h` must print exactly `X.gen` where that
+//!   `aye cimport tests/cimport/X.h` must print exactly `X.gen` where that
 //!   exists. Skipped without libclang, or when `pkg-config` does not know a
 //!   package of `X.needs`.
-//! - `tests/errors/X.ore`: must fail to compile with exactly the diagnostics
+//! - `tests/errors/X.aye`: must fail to compile with exactly the diagnostics
 //!   in `X.err`, one per line, in order.
-//! - `tests/tests/X.ore`: `ore test X.ore` (debug mode) must print exactly
-//!   `X.out`, and `ore test --json X.ore` exactly `X.json` if it exists. The
+//! - `tests/tests/X.aye`: `aye test X.aye` (debug mode) must print exactly
+//!   `X.out`, and `aye test --json X.aye` exactly `X.json` if it exists. The
 //!   exit status must be 0 when no test failed, and 1 otherwise.
-//! - `tests/fix/X.ore`: `ore fix X.ore` on a copy must leave exactly
+//! - `tests/fix/X.aye`: `aye fix X.aye` on a copy must leave exactly
 //!   `X.fixed` and print exactly `X.out`. If `X.stderr` exists, errors
 //!   remain: stderr must equal it and the exit status must be 1; otherwise
-//!   stderr must be empty, the exit status 0, and `ore check` must accept
-//!   the fixed file. If `X.json` exists, `ore check --json` on the original
+//!   stderr must be empty, the exit status 0, and `aye check` must accept
+//!   the fixed file. If `X.json` exists, `aye check --json` on the original
 //!   must print exactly that.
 //! - `tests/modules/X/`: a directory module. In `tests/modules`, the binary
-//!   runs `ore run X` (or the arguments in `X.args`, with `X.stdin` as
+//!   runs `aye run X` (or the arguments in `X.args`, with `X.stdin` as
 //!   stdin): stdout must equal `X.out`, stderr `X.stderr` (default empty)
-//!   and the exit status `X.status` (default 0). If `X.err` exists, `ore
+//!   and the exit status `X.status` (default 0). If `X.err` exists, `aye
 //!   check X` must fail with exactly that on stderr instead.
 //! - `tests/example1/`: Example 1 of the design doc, the directory module
 //!   `app`, run in `ok`, `missing` and `invalid` (each with its own
-//!   `app.toml`, or none); `ore test app` runs its tests.
-//! - `ore run`, `ore build -o`, `ore check`, `ore test --filter` and `ore
+//!   `app.toml`, or none); `aye test app` runs its tests.
+//! - `aye run`, `aye build -o`, `aye check`, `aye test --filter` and `aye
 //!   test --module` are also run through the built binary.
-//! - `perf`: the debug build of `tests/cases/general_churn.ore` finishes
+//! - `perf`: the debug build of `tests/cases/general_churn.aye` finishes
 //!   within 10 s (`General` allocates and frees in constant time).
-//! - `ore build --cflags -fsanitize=thread`: the M10 fan-out program runs
+//! - `aye build --cflags -fsanitize=thread`: the M10 fan-out program runs
 //!   under ThreadSanitizer without a report (skipped where ThreadSanitizer
 //!   does not run).
 
-use ore::diag::Diag;
-use ore::driver::{self, Mode};
+use aye::diag::Diag;
+use aye::driver::{self, Mode};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -66,13 +66,13 @@ fn cases(dir: &str) -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|e| e == "ore"))
+        .filter(|p| p.extension().is_some_and(|e| e == "aye"))
         .collect();
     v.sort();
     v
 }
 
-/// Diagnostics as `ore check` prints them, one per line.
+/// Diagnostics as `aye check` prints them, one per line.
 fn join(diags: &[Diag]) -> String {
     diags.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("\n")
 }
@@ -139,9 +139,9 @@ fn ffi_case(path: &Path, work: &Path) -> Result<(), String> {
     run_case(path, work)
 }
 
-/// Run the `ore` binary in the crate root with the environment `env`.
-fn ore_env(args: &[&str], env: &[(String, String)]) -> Result<(String, String, Option<i32>), String> {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_ore"));
+/// Run the `aye` binary in the crate root with the environment `env`.
+fn aye_env(args: &[&str], env: &[(String, String)]) -> Result<(String, String, Option<i32>), String> {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_aye"));
     cmd.current_dir(env!("CARGO_MANIFEST_DIR")).args(args);
     for (k, v) in env {
         cmd.env(k, v);
@@ -160,7 +160,7 @@ fn cimport_case(path: &Path, work: &Path) -> Result<(), String> {
         .filter_map(|l| l.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
         .collect();
     let without_libclang = env.iter().any(|(k, _)| k == "LIBCLANG_PATH");
-    if !without_libclang && !ore::cimport::libclang_available() {
+    if !without_libclang && !aye::cimport::libclang_available() {
         println!("skipped cimport/{x}: no libclang");
         return Ok(());
     }
@@ -170,30 +170,30 @@ fn cimport_case(path: &Path, work: &Path) -> Result<(), String> {
         return Ok(());
     }
     let cache = work.join(format!("cimport-cache-{stem}"));
-    env.push(("ORE_CACHE_DIR".to_string(), cache.to_string_lossy().into_owned()));
+    env.push(("AYE_CACHE_DIR".to_string(), cache.to_string_lossy().into_owned()));
     if let Some(want) = read(&path.with_extension("err")) {
-        let (_, err, code) = ore_env(&["check", &rel], &env)?;
+        let (_, err, code) = aye_env(&["check", &rel], &env)?;
         if code != Some(1) || err != want {
-            return Err(format!("`ore check {rel}`: status {code:?}\n--- expected\n{want}--- got\n{err}"));
+            return Err(format!("`aye check {rel}`: status {code:?}\n--- expected\n{want}--- got\n{err}"));
         }
     } else {
         let want = read(&path.with_extension("out")).ok_or("missing .out file")?;
-        let (out, err, code) = ore_env(&["run", &rel], &env)?;
+        let (out, err, code) = aye_env(&["run", &rel], &env)?;
         if code != Some(0) || out != want {
-            return Err(format!("`ore run {rel}`: status {code:?}, stderr:\n{err}\n--- expected\n{want}--- got\n{out}"));
+            return Err(format!("`aye run {rel}`: status {code:?}, stderr:\n{err}\n--- expected\n{want}--- got\n{out}"));
         }
         // From the cache, without libclang.
         env.push(("LIBCLANG_PATH".to_string(), "/nonexistent/libclang".to_string()));
-        let (_, err, code) = ore_env(&["check", &rel], &env)?;
+        let (_, err, code) = aye_env(&["check", &rel], &env)?;
         if code != Some(0) {
-            return Err(format!("`ore check {rel}` without libclang (from the cache): status {code:?}\n{err}"));
+            return Err(format!("`aye check {rel}` without libclang (from the cache): status {code:?}\n{err}"));
         }
     }
     let header = format!("tests/cimport/{stem}.h");
     if let Some(want) = read(&path.with_extension("gen")) {
-        let (out, err, code) = ore_env(&["cimport", &header], &[])?;
+        let (out, err, code) = aye_env(&["cimport", &header], &[])?;
         if code != Some(0) || out != want {
-            return Err(format!("`ore cimport {header}`: status {code:?}, stderr:\n{err}\n--- expected\n{want}--- got\n{out}"));
+            return Err(format!("`aye cimport {header}`: status {code:?}, stderr:\n{err}\n--- expected\n{want}--- got\n{out}"));
         }
     }
     Ok(())
@@ -209,10 +209,10 @@ fn error_case(path: &Path) -> Result<(), String> {
     }
 }
 
-/// `ore test` on a file of `tests/tests`, run from the crate root so that
+/// `aye test` on a file of `tests/tests`, run from the crate root so that
 /// positions in the output start with `tests/tests/`.
-fn ore_test(args: &[&str]) -> Result<(String, Option<i32>), String> {
-    let out = Command::new(env!("CARGO_BIN_EXE_ore"))
+fn aye_test(args: &[&str]) -> Result<(String, Option<i32>), String> {
+    let out = Command::new(env!("CARGO_BIN_EXE_aye"))
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .arg("test")
         .args(args)
@@ -220,7 +220,7 @@ fn ore_test(args: &[&str]) -> Result<(String, Option<i32>), String> {
         .map_err(|e| e.to_string())?;
     let stderr = String::from_utf8_lossy(&out.stderr);
     if !stderr.is_empty() {
-        return Err(format!("`ore test {}` wrote to stderr:\n{stderr}", args.join(" ")));
+        return Err(format!("`aye test {}` wrote to stderr:\n{stderr}", args.join(" ")));
     }
     Ok((String::from_utf8_lossy(&out.stdout).into_owned(), out.status.code()))
 }
@@ -234,20 +234,20 @@ fn test_case(path: &Path) -> Result<(), String> {
         runs.push((vec!["--json", rel.as_str()], json));
     }
     for (args, want) in runs {
-        let (got, code) = ore_test(&args)?;
+        let (got, code) = aye_test(&args)?;
         if got != want {
-            return Err(format!("`ore test {}`: stdout mismatch\n--- expected\n{want}--- got\n{got}", args.join(" ")));
+            return Err(format!("`aye test {}`: stdout mismatch\n--- expected\n{want}--- got\n{got}", args.join(" ")));
         }
         if code != Some(status) {
-            return Err(format!("`ore test {}`: expected exit status {status}, got {code:?}", args.join(" ")));
+            return Err(format!("`aye test {}`: expected exit status {status}, got {code:?}", args.join(" ")));
         }
     }
     Ok(())
 }
 
-/// Run the `ore` binary in `dir` and return (stdout, stderr, exit status).
-fn ore(dir: &Path, args: &[&str]) -> Result<(String, String, Option<i32>), String> {
-    let out = Command::new(env!("CARGO_BIN_EXE_ore")).current_dir(dir).args(args).output().map_err(|e| e.to_string())?;
+/// Run the `aye` binary in `dir` and return (stdout, stderr, exit status).
+fn aye(dir: &Path, args: &[&str]) -> Result<(String, String, Option<i32>), String> {
+    let out = Command::new(env!("CARGO_BIN_EXE_aye")).current_dir(dir).args(args).output().map_err(|e| e.to_string())?;
     Ok((
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -263,42 +263,42 @@ fn fix_case(path: &Path, work: &Path) -> Result<(), String> {
     let want_file = read(&path.with_extension("fixed")).ok_or("missing .fixed file")?;
     let want_out = read(&path.with_extension("out")).ok_or("missing .out file")?;
     let want_err = read(&path.with_extension("stderr"));
-    let (out, err, code) = ore(&dir, &["fix", &file])?;
+    let (out, err, code) = aye(&dir, &["fix", &file])?;
     let got_file = read(&dir.join(&file)).unwrap();
     if got_file != want_file {
         return Err(format!("fixed file mismatch\n--- expected\n{want_file}--- got\n{got_file}"));
     }
     if out != want_out {
-        return Err(format!("`ore fix` stdout mismatch\n--- expected\n{want_out}--- got\n{out}"));
+        return Err(format!("`aye fix` stdout mismatch\n--- expected\n{want_out}--- got\n{out}"));
     }
     if err != want_err.clone().unwrap_or_default() {
-        return Err(format!("`ore fix` stderr mismatch\n--- got\n{err}"));
+        return Err(format!("`aye fix` stderr mismatch\n--- got\n{err}"));
     }
     let want_code = if want_err.is_some() { 1 } else { 0 };
     if code != Some(want_code) {
-        return Err(format!("`ore fix`: expected exit status {want_code}, got {code:?}"));
+        return Err(format!("`aye fix`: expected exit status {want_code}, got {code:?}"));
     }
     if want_err.is_none() {
-        let (_, err, code) = ore(&dir, &["check", &file])?;
+        let (_, err, code) = aye(&dir, &["check", &file])?;
         if code != Some(0) {
-            return Err(format!("`ore check` rejects the fixed file:\n{err}"));
+            return Err(format!("`aye check` rejects the fixed file:\n{err}"));
         }
     }
     if let Some(want) = read(&path.with_extension("json")) {
         let rel = format!("tests/fix/{file}");
-        let (out, _, _) = ore(Path::new(env!("CARGO_MANIFEST_DIR")), &["check", "--json", &rel])?;
+        let (out, _, _) = aye(Path::new(env!("CARGO_MANIFEST_DIR")), &["check", "--json", &rel])?;
         if out != want {
-            return Err(format!("`ore check --json` mismatch\n--- expected\n{want}--- got\n{out}"));
+            return Err(format!("`aye check --json` mismatch\n--- expected\n{want}--- got\n{out}"));
         }
     }
     Ok(())
 }
 
-/// Run the `ore` binary in `dir` with `stdin`, and return (stdout, stderr,
+/// Run the `aye` binary in `dir` with `stdin`, and return (stdout, stderr,
 /// exit status).
-fn ore_stdin(dir: &Path, args: &[&str], stdin: &str) -> Result<(String, String, Option<i32>), String> {
+fn aye_stdin(dir: &Path, args: &[&str], stdin: &str) -> Result<(String, String, Option<i32>), String> {
     use std::io::Write;
-    let mut child = Command::new(env!("CARGO_BIN_EXE_ore"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_aye"))
         .current_dir(dir)
         .args(args)
         .stdin(std::process::Stdio::piped())
@@ -328,21 +328,21 @@ fn module_case(path: &Path) -> Result<(), String> {
     let x = name(path);
     let with = |ext: &str| read(&dir.join(format!("{x}.{ext}")));
     if let Some(want) = with("err") {
-        let (_, err, code) = ore(dir, &["check", &x])?;
+        let (_, err, code) = aye(dir, &["check", &x])?;
         if err != want || code != Some(1) {
-            return Err(format!("`ore check {x}`: {code:?}\n--- expected\n{want}--- got\n{err}"));
+            return Err(format!("`aye check {x}`: {code:?}\n--- expected\n{want}--- got\n{err}"));
         }
         return Ok(());
     }
     let args = with("args").unwrap_or_else(|| format!("run {x}"));
     let args: Vec<&str> = args.split_whitespace().collect();
-    let (out, err, code) = ore_stdin(dir, &args, &with("stdin").unwrap_or_default())?;
+    let (out, err, code) = aye_stdin(dir, &args, &with("stdin").unwrap_or_default())?;
     let want_out = with("out").ok_or("missing .out file")?;
     let want_err = with("stderr").unwrap_or_default();
     let want_code: i32 = with("status").map_or(0, |s| s.trim().parse().unwrap());
     if out != want_out || err != want_err || code != Some(want_code) {
         return Err(format!(
-            "`ore {}`: {code:?} (expected {want_code})\n--- expected stdout\n{want_out}--- got\n{out}--- expected stderr\n{want_err}--- got\n{err}",
+            "`aye {}`: {code:?} (expected {want_code})\n--- expected stdout\n{want_out}--- got\n{out}--- expected stderr\n{want_err}--- got\n{err}",
             args.join(" ")
         ));
     }
@@ -352,97 +352,97 @@ fn module_case(path: &Path) -> Result<(), String> {
 /// Example 1 of the design doc: `readConfig` reads `app.toml` from the
 /// working directory. Each of `ok`, `missing` and `invalid` is a working
 /// directory with its expected stderr in `X.stderr` (default empty); stdout
-/// is always empty. `ore test app` runs the tests in `app/config.ore`.
+/// is always empty. `aye test app` runs the tests in `app/config.aye`.
 fn example1() -> Result<(), String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/example1");
     for case in ["ok", "missing", "invalid"] {
         let want_err = read(&root.join(format!("{case}.stderr"))).unwrap_or_default();
         let want_code = if want_err.is_empty() { 0 } else { 1 };
-        let (out, err, code) = ore(&root.join(case), &["run", "../app"])?;
+        let (out, err, code) = aye(&root.join(case), &["run", "../app"])?;
         if !out.is_empty() || err != want_err || code != Some(want_code) {
-            return Err(format!("[{case}] `ore run ../app`: {code:?}\n--- stdout\n{out}--- expected stderr\n{want_err}--- got\n{err}"));
+            return Err(format!("[{case}] `aye run ../app`: {code:?}\n--- stdout\n{out}--- expected stderr\n{want_err}--- got\n{err}"));
         }
     }
     let want = read(&root.join("app.test.out")).ok_or("missing app.test.out")?;
-    let (out, err, code) = ore(&root, &["test", "app"])?;
+    let (out, err, code) = aye(&root, &["test", "app"])?;
     if out != want || !err.is_empty() || code != Some(0) {
-        return Err(format!("`ore test app`: {code:?}\n--- expected\n{want}--- got\n{out}{err}"));
+        return Err(format!("`aye test app`: {code:?}\n--- expected\n{want}--- got\n{out}{err}"));
     }
     Ok(())
 }
 
-/// `ore test --filter`: only the tests whose name contains the text run.
+/// `aye test --filter`: only the tests whose name contains the text run.
 fn cli_test_filter() -> Result<(), String> {
-    let f = "tests/tests/outcomes.ore";
+    let f = "tests/tests/outcomes.aye";
     let want = format!(
         "test \"expect fails\" ... FAILED\n    before\n    {f}:28:5: assertion failed: condition is false\n\
          test \"expectEqual fails\" ... FAILED\n    {f}:33:5: assertion failed: expected 4, found 5\n\n0 passed; 2 failed\n"
     );
-    let (got, code) = ore_test(&[f, "--filter", "expect"])?;
+    let (got, code) = aye_test(&[f, "--filter", "expect"])?;
     if got != want || code != Some(1) {
-        return Err(format!("`ore test --filter expect`: {code:?}\n--- expected\n{want}--- got\n{got}"));
+        return Err(format!("`aye test --filter expect`: {code:?}\n--- expected\n{want}--- got\n{got}"));
     }
-    let (got, code) = ore_test(&[f, "--filter", "no such test"])?;
+    let (got, code) = aye_test(&[f, "--filter", "no such test"])?;
     if got != "\n0 passed; 0 failed\n" || code != Some(0) {
-        return Err(format!("`ore test --filter` with no match: {code:?}\n{got}"));
+        return Err(format!("`aye test --filter` with no match: {code:?}\n{got}"));
     }
     Ok(())
 }
 
-/// `ore test DIR --module PATH` runs the tests of one module of the
+/// `aye test DIR --module PATH` runs the tests of one module of the
 /// program; a module that imports a sibling, given on its own, gets a hint.
 fn cli_test_module() -> Result<(), String> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/modules");
     let runs: &[(&[&str], &str, &str, i32)] = &[
         (&["test", "modtests", "--module", "dom"], "test \"dom: basic\" ... ok\n\n1 passed; 0 failed\n", "", 0),
-        (&["test", "modtests", "--module", "nope"], "", "ore: no tests in module `nope` (modules with tests: `html`, `dom`)\n", 1),
+        (&["test", "modtests", "--module", "nope"], "", "aye: no tests in module `nope` (modules with tests: `html`, `dom`)\n", 1),
         (
             &["test", "modtests/html"],
             "",
-            "modtests/html/html.ore:1:8: error[E0081]: cannot find module `dom` (no directory `modtests/html/dom`; imports are \
-             found from the directory given to `ore`, and `modtests/dom` exists: give `modtests` instead, with `--module html` for `ore test`)\n",
+            "modtests/html/html.aye:1:8: error[E0081]: cannot find module `dom` (no directory `modtests/html/dom`; imports are \
+             found from the directory given to `aye`, and `modtests/dom` exists: give `modtests` instead, with `--module html` for `aye test`)\n",
             1,
         ),
     ];
     for (args, want_out, want_err, want_code) in runs {
-        let (out, err, code) = ore(&dir, args)?;
+        let (out, err, code) = aye(&dir, args)?;
         if out != *want_out || err != *want_err || code != Some(*want_code) {
-            return Err(format!("`ore {}`: {code:?}\n--- stdout\n{out}--- stderr\n{err}", args.join(" ")));
+            return Err(format!("`aye {}`: {code:?}\n--- stdout\n{out}--- stderr\n{err}", args.join(" ")));
         }
     }
     Ok(())
 }
 
-/// The `ore run` CLI end to end.
+/// The `aye run` CLI end to end.
 fn cli_run(work: &Path) -> Result<(), String> {
     let _ = work;
-    let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cases/hello.ore");
-    let out = Command::new(env!("CARGO_BIN_EXE_ore")).arg("run").arg(&file).output().map_err(|e| e.to_string())?;
+    let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cases/hello.aye");
+    let out = Command::new(env!("CARGO_BIN_EXE_aye")).arg("run").arg(&file).output().map_err(|e| e.to_string())?;
     let expected = read(&file.with_extension("out")).unwrap();
     if !out.status.success() || String::from_utf8_lossy(&out.stdout) != expected {
-        return Err(format!("`ore run` failed: {}", String::from_utf8_lossy(&out.stderr)));
+        return Err(format!("`aye run` failed: {}", String::from_utf8_lossy(&out.stderr)));
     }
     Ok(())
 }
 
-/// `ore build -o PATH` links the libraries of `@link`, and the program
+/// `aye build -o PATH` links the libraries of `@link`, and the program
 /// runs (from the crate root, where it finds its data file).
 fn cli_build_link(work: &Path) -> Result<(), String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let src = root.join("tests/ffi/curl_file.ore");
+    let src = root.join("tests/ffi/curl_file.aye");
     if !missing_packages(&src).is_empty() {
-        println!("skipped cli/ore build -o: pkg-config does not know libcurl");
+        println!("skipped cli/aye build -o: pkg-config does not know libcurl");
         return Ok(());
     }
     let exe = work.join("curl_file_cli");
-    let (_, err, code) = ore(root, &["build", "tests/ffi/curl_file.ore", "-o", exe.to_str().unwrap()])?;
+    let (_, err, code) = aye(root, &["build", "tests/ffi/curl_file.aye", "-o", exe.to_str().unwrap()])?;
     if code != Some(0) {
-        return Err(format!("`ore build -o` failed: {code:?}\n{err}"));
+        return Err(format!("`aye build -o` failed: {code:?}\n{err}"));
     }
     let out = Command::new(&exe).current_dir(root).output().map_err(|e| e.to_string())?;
     let want = read(&src.with_extension("out")).unwrap();
     if !out.status.success() || String::from_utf8_lossy(&out.stdout) != want {
-        return Err(format!("the program of `ore build -o` printed:\n{}", String::from_utf8_lossy(&out.stdout)));
+        return Err(format!("the program of `aye build -o` printed:\n{}", String::from_utf8_lossy(&out.stdout)));
     }
     Ok(())
 }
@@ -543,19 +543,19 @@ fn cli_tsan(work: &Path) -> Result<(), String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     // The flags reach clang: one it does not know fails the build.
     let bad = work.join("hello_bad_flag");
-    let (_, err, code) = ore(root, &["build", "tests/cases/hello.ore", "--cflags", "-fno-such-ore-flag", "-o", bad.to_str().unwrap()])?;
+    let (_, err, code) = aye(root, &["build", "tests/cases/hello.aye", "--cflags", "-fno-such-aye-flag", "-o", bad.to_str().unwrap()])?;
     if code != Some(1) || !err.contains("clang failed") {
-        return Err(format!("`ore build --cflags -fno-such-ore-flag`: {code:?}\n{err}"));
+        return Err(format!("`aye build --cflags -fno-such-aye-flag`: {code:?}\n{err}"));
     }
     if !tsan_works(work) {
-        println!("skipped cli/ore build --cflags -fsanitize=thread: clang's ThreadSanitizer does not run here");
+        println!("skipped cli/aye build --cflags -fsanitize=thread: clang's ThreadSanitizer does not run here");
         return Ok(());
     }
     let exe = work.join("threads_fanout_tsan");
-    let args = ["build", "tests/cases/threads_fanout.ore", "--cflags", "-fsanitize=thread", "-o", exe.to_str().unwrap()];
-    let (_, err, code) = ore(root, &args)?;
+    let args = ["build", "tests/cases/threads_fanout.aye", "--cflags", "-fsanitize=thread", "-o", exe.to_str().unwrap()];
+    let (_, err, code) = aye(root, &args)?;
     if code != Some(0) {
-        return Err(format!("`ore {}` failed: {code:?}\n{err}", args.join(" ")));
+        return Err(format!("`aye {}` failed: {code:?}\n{err}", args.join(" ")));
     }
     let out = output_within(&mut Command::new(&exe), 120).ok_or("the program did not finish within 120 s")?;
     let want = read(&root.join("tests/cases/threads_fanout.out")).unwrap();
@@ -567,13 +567,13 @@ fn cli_tsan(work: &Path) -> Result<(), String> {
 }
 
 /// M9.7: `General` in debug mode allocates and frees in constant time:
-/// `tests/cases/general_churn.ore` (a million allocation and free pairs,
+/// `tests/cases/general_churn.aye` (a million allocation and free pairs,
 /// and a recursion that allocates per call), built in debug mode, uses at
 /// most 2 s of CPU time (0.13 s on 2026-10-07). Before M9.7 each free
 /// scanned every allocation so far. CPU time, not wall time: under load
 /// the wall time grew past the old 10 s limit (P3.11).
 fn perf_general(work: &Path) -> Result<(), String> {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cases/general_churn.ore");
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cases/general_churn.aye");
     let c = driver::compile_to_c(&name(&src), &read(&src).unwrap(), Mode::Debug).map_err(|d| join(&d))?;
     let exe = work.join("general_churn_perf");
     driver::cc(&c, &exe, Mode::Debug)?;
@@ -589,12 +589,12 @@ fn perf_general(work: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// The `ore check` CLI: exit code, stdout and stderr, text and `--json`.
+/// The `aye check` CLI: exit code, stdout and stderr, text and `--json`.
 fn cli_check() -> Result<(), String> {
-    let ok = "tests/cases/hello.ore";
-    let bad = "tests/errors/unknown_escape.ore";
-    let three = "tests/errors/three_errors.ore";
-    let fixable = "tests/fix/let_var.ore";
+    let ok = "tests/cases/hello.aye";
+    let bad = "tests/errors/unknown_escape.aye";
+    let three = "tests/errors/three_errors.aye";
+    let fixable = "tests/fix/let_var.aye";
     let diag = |code: &str, line: u32, col: u32, msg: &str| {
         format!(r#"{{"severity":"error","code":"{code}","file":"{three}","line":{line},"col":{col},"message":"{msg}","fixes":[]}}"#)
     };
@@ -635,7 +635,7 @@ fn cli_check() -> Result<(), String> {
         ),
     ];
     for (args, success, stdout, stderr) in checks {
-        let out = Command::new(env!("CARGO_BIN_EXE_ore"))
+        let out = Command::new(env!("CARGO_BIN_EXE_aye"))
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .arg("check")
             .args(*args)
@@ -644,7 +644,7 @@ fn cli_check() -> Result<(), String> {
         let (got_out, got_err) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
         if out.status.success() != *success || got_out != *stdout || got_err != *stderr {
             return Err(format!(
-                "`ore check {}`: {}\n--- stdout\n{got_out}--- stderr\n{got_err}",
+                "`aye check {}`: {}\n--- stdout\n{got_out}--- stderr\n{got_err}",
                 args.join(" "),
                 out.status
             ));
@@ -654,40 +654,40 @@ fn cli_check() -> Result<(), String> {
 }
 
 /// A compile error in a doc comment's example is reported where it is in
-/// the comment; `ore run` and `ore check` ignore the examples.
+/// the comment; `aye run` and `aye check` ignore the examples.
 fn cli_doc_example_error(work: &Path) -> Result<(), String> {
-    let src = "struct S {\n    x: i64\n\n    /// ```ore\n    /// let y: bool = S.one()\n    /// ```\n    pub fn one() i64 {\n        return 1\n    }\n}\n\npub fn main() {}\n";
-    std::fs::write(work.join("doc_error.ore"), src).map_err(|e| e.to_string())?;
-    let want = "doc_error.ore:5:25: error[E0023]: mismatched types: expected `bool`, found `i64`\n";
-    let (out, err, code) = ore(work, &["test", "doc_error.ore"])?;
+    let src = "struct S {\n    x: i64\n\n    /// ```aye\n    /// let y: bool = S.one()\n    /// ```\n    pub fn one() i64 {\n        return 1\n    }\n}\n\npub fn main() {}\n";
+    std::fs::write(work.join("doc_error.aye"), src).map_err(|e| e.to_string())?;
+    let want = "doc_error.aye:5:25: error[E0023]: mismatched types: expected `bool`, found `i64`\n";
+    let (out, err, code) = aye(work, &["test", "doc_error.aye"])?;
     if !out.is_empty() || err != want || code != Some(1) {
-        return Err(format!("`ore test doc_error.ore`: {code:?}\n--- expected stderr\n{want}--- got\n{out}{err}"));
+        return Err(format!("`aye test doc_error.aye`: {code:?}\n--- expected stderr\n{want}--- got\n{out}{err}"));
     }
-    let (out, err, code) = ore(work, &["check", "doc_error.ore"])?;
+    let (out, err, code) = aye(work, &["check", "doc_error.aye"])?;
     if !out.is_empty() || !err.is_empty() || code != Some(0) {
-        return Err(format!("`ore check doc_error.ore`: {code:?}\n{out}{err}"));
+        return Err(format!("`aye check doc_error.aye`: {code:?}\n{out}{err}"));
     }
     Ok(())
 }
 
-/// `ore explain <code>`: known code (exit 0), unknown code (exit 2).
+/// `aye explain <code>`: known code (exit 0), unknown code (exit 2).
 fn cli_explain() -> Result<(), String> {
-    let run = |code: &str| Command::new(env!("CARGO_BIN_EXE_ore")).args(["explain", code]).output();
+    let run = |code: &str| Command::new(env!("CARGO_BIN_EXE_aye")).args(["explain", code]).output();
     let out = run("E0056").map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&out.stdout);
     if !out.status.success() || !text.starts_with("E0056: ") || !text.contains("Wrong:") || !text.contains("Fix:") {
-        return Err(format!("`ore explain E0056`: {}\n{text}", out.status));
+        return Err(format!("`aye explain E0056`: {}\n{text}", out.status));
     }
     let out = run("E9999").map_err(|e| e.to_string())?;
     let err = String::from_utf8_lossy(&out.stderr);
-    if out.status.code() != Some(2) || !out.stdout.is_empty() || err != "ore: unknown error code `E9999`\n" {
-        return Err(format!("`ore explain E9999`: {}\n{err}", out.status));
+    if out.status.code() != Some(2) || !out.stdout.is_empty() || err != "aye: unknown error code `E9999`\n" {
+        return Err(format!("`aye explain E9999`: {}\n{err}", out.status));
     }
     Ok(())
 }
 
 fn main() {
-    let work = std::env::temp_dir().join(format!("ore-golden-{}", std::process::id()));
+    let work = std::env::temp_dir().join(format!("aye-golden-{}", std::process::id()));
     std::fs::create_dir_all(&work).unwrap();
 
     let run_cases = cases("cases");
@@ -726,15 +726,15 @@ fn main() {
         }
         handles.push(("example1".to_string(), s.spawn(example1)));
         let w = &work;
-        handles.push(("cli/ore run".to_string(), s.spawn(move || cli_run(w))));
-        handles.push(("cli/ore build -o".to_string(), s.spawn(move || cli_build_link(w))));
-        handles.push(("cli/ore check".to_string(), s.spawn(cli_check)));
-        handles.push(("cli/ore build --cflags -fsanitize=thread".to_string(), s.spawn(move || cli_tsan(w))));
-        handles.push(("cli/ore explain".to_string(), s.spawn(cli_explain)));
-        handles.push(("cli/ore test: an error in a doc example".to_string(), s.spawn(move || cli_doc_example_error(w))));
+        handles.push(("cli/aye run".to_string(), s.spawn(move || cli_run(w))));
+        handles.push(("cli/aye build -o".to_string(), s.spawn(move || cli_build_link(w))));
+        handles.push(("cli/aye check".to_string(), s.spawn(cli_check)));
+        handles.push(("cli/aye build --cflags -fsanitize=thread".to_string(), s.spawn(move || cli_tsan(w))));
+        handles.push(("cli/aye explain".to_string(), s.spawn(cli_explain)));
+        handles.push(("cli/aye test: an error in a doc example".to_string(), s.spawn(move || cli_doc_example_error(w))));
         handles.push(("perf/General in debug mode".to_string(), s.spawn(move || perf_general(w))));
-        handles.push(("cli/ore test --filter".to_string(), s.spawn(cli_test_filter)));
-        handles.push(("cli/ore test --module".to_string(), s.spawn(cli_test_module)));
+        handles.push(("cli/aye test --filter".to_string(), s.spawn(cli_test_filter)));
+        handles.push(("cli/aye test --module".to_string(), s.spawn(cli_test_module)));
         handles.into_iter().map(|(n, h)| (n, h.join().unwrap())).collect()
     });
     let _ = std::fs::remove_dir_all(&work);

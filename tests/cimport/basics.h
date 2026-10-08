@@ -103,7 +103,7 @@ int snprintf(char *buf, size_t size, const char *format, ...);
 unsigned short swap_bytes(unsigned short v, short s, long long w, unsigned long long z, signed char *p);
 
 /* Skipped: a variable, an inline function and a function named like an
-   Ore keyword. */
+   Aye keyword. */
 extern int shapes_count;
 static inline int twice(int x) { return 2 * x; }
 int defer(int x);

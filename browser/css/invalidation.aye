@@ -1,0 +1,454 @@
+// What a change to the document can change the styles of, for styling
+// again only part of the document (`restyleSubtrees`). A change to an
+// element's attributes changes the styles of the element; of its
+// descendants through what they inherit, and through selectors that look
+// at the attribute on an ancestor or a preceding sibling (`deep`): then
+// also those of the following siblings and their descendants (`+`,
+// `~`). A change to an element's children changes the styles of the
+// element (`:empty`) and of its children. Beyond those, a sheet's
+// selectors can make a style depend on:
+// - the elements after it among its siblings, through
+//   `:nth-child(An+B of S)` and `:nth-last-child(An+B of S)`
+//   (`RestyleDeps.of_selector`);
+// - its descendants, through `:has()`: an element whose `:has()` may
+//   change is like an element whose attributes changed. Such an element
+//   matches the type, id, class and attribute selectors of the compound
+//   that has the `:has()` (`HasUse.keys`), and is at most `depth` + 1
+//   levels above the change when every argument is a chain of `>`; and
+//   the change is to children, or to an attribute the arguments look at
+//   (`HasUse.names`, or any for `any_attr`);
+// - its following siblings, through `:has(+ S)` and `:has(~ S)`, which
+//   are not followed: such sheets are styled again whole
+//   (`RestyleDeps.whole`).
+import dom.Document
+import dom.NodeId
+import std.list.List
+import std.map.IntMap
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+/// `HasUse.depth` of a `:has()` that looks at any depth.
+pub let ANY_DEPTH: usize = 0xFFFFFFFFFFFFFFFF
+
+/// What changed at an element: its children or text (`what` 0), any of
+/// its state (1), the attribute whose name hashes to `what`, or (when
+/// `token`) the class whose name hashes to `what`.
+pub struct StyleChange {
+    what: u64
+    token: bool
+}
+
+// The attributes that change what selectors match on other elements
+// (`:disabled` in a fieldset, `:lang()`, `:dir()`, radio groups), or
+// the presentational hints of other elements and the alignment of
+// descendants (cascade.aye `alignCenter`, hints.aye).
+let ALWAYS_DEEP = "lang dir disabled checked selected value type name form required readonly contenteditable placeholder pattern min max minlength maxlength step multiple novalidate open border cellpadding link vlink alink text align"
+
+pub let CHILDREN_CHANGED = StyleChange { what: 0, token: false }
+pub let STATE_CHANGED = StyleChange { what: 1, token: false }
+
+/// A change to the attribute `name`.
+pub fn attrChange(name: []u8) StyleChange {
+    return StyleChange { what: nameKey("", name), token: false }
+}
+
+/// The class `name` was added or removed.
+pub fn classChange(name: []u8) StyleChange {
+    return StyleChange { what: nameKey(".", name), token: true }
+}
+
+// FNV-1a of `prefix` and `name`, clear of 0 and 1.
+fn nameKey(prefix: []u8, name: []u8) u64 {
+    var h: u64 = 14695981039346656037
+    for b in prefix {
+        h = (h ^ (b as u64)) *% 1099511628211
+    }
+    for b in name {
+        h = (h ^ (b as u64)) *% 1099511628211
+    }
+    if h < 2 {
+        h += 2
+    }
+    return h
+}
+
+// The keys of what the simple selector `s` looks at (beside type and
+// structure), into `out`: false when that is not known (any change may
+// change it). A class selector gives its class and "class" (for a
+// change of the whole attribute), an attribute selector on `class`
+// "class" and "[class]" (for the change of any class).
+fn simpleKeys(s: Simple, out: *mut List(u64)) AllocError!bool {
+    match s.kind {
+        .Universal, .Type, .FirstChild, .LastChild, .OnlyChild, .FirstOfType, .LastOfType, .Root, .Scope, .Empty, .Hover, .Never, .NthOfType, .NthLastOfType, .OnlyOfType, .HasAnchor, .Node, .Focus, .FocusWithin, .FocusVisible, .Defined, .Not, .Is, .NthChild, .NthLastChild, .Has, .ScopeLimit => {}
+        .Id => {
+            try out.append(nameKey("", "id"))
+        }
+        .Class => {
+            try out.append(nameKey(".", s.name))
+            try out.append(nameKey("", "class"))
+        }
+        .Attr => {
+            try out.append(nameKey("", s.name))
+            if text.eql(s.name, "class") {
+                try out.append(nameKey("", "[class]"))
+            }
+        }
+        .Lang => {
+            try out.append(nameKey("", "lang"))
+        }
+        .Dir => {
+            try out.append(nameKey("", "dir"))
+        }
+        .Link => {
+            try out.append(nameKey("", "href"))
+        }
+        // States the attributes of `ALWAYS_DEEP` change (besides what
+        // scripts do to controls, which restyles everything).
+        .Checked => {
+            try out.append(nameKey("", "checked"))
+            try out.append(nameKey("", "selected"))
+        }
+        .Disabled, .Enabled => {
+            try out.append(nameKey("", "disabled"))
+        }
+        .Required, .Optional => {
+            try out.append(nameKey("", "required"))
+        }
+        .PlaceholderShown => {
+            try out.append(nameKey("", "placeholder"))
+            try out.append(nameKey("", "value"))
+        }
+        .ReadOnly, .ReadWrite => {
+            try out.append(nameKey("", "readonly"))
+            try out.append(nameKey("", "disabled"))
+            try out.append(nameKey("", "contenteditable"))
+        }
+        _ => {
+            return false
+        }
+    }
+    return true
+}
+
+// Does a selector of `sheet` (an argument of `:is()` or `:has()` too)
+// look at the `style` attribute?
+fn looksAtStyle(sheet: *Sheet) bool {
+    for s in sheet.simples.items() {
+        if s.kind == SelKind.Attr && text.eqlIgnoreCase(s.name, "style") {
+            return true
+        }
+    }
+    return false
+}
+
+// Does a change with these keys (`simpleKeys`) see `change`?
+fn keysSee(keys: []u64, change: StyleChange) bool {
+    if change.what < 2 {
+        return true
+    }
+    for k in keys {
+        if k == change.what {
+            return true
+        }
+        if change.token && k == nameKey("", "[class]") {
+            return true
+        }
+    }
+    return false
+}
+
+struct HasUse {
+    // `RestyleDeps.keys[start..end]`: indices of `Sheet.simples`.
+    start: usize
+    end: usize
+    depth: usize
+    // `RestyleDeps.names[names_start..names_end]`: what the arguments
+    // look at (`simpleKeys`); `any_attr` when it is not known.
+    names_start: usize
+    names_end: usize
+    any_attr: bool
+}
+
+pub struct RestyleDeps {
+    keys: List(usize)
+    names: List(u64)
+    uses: List(HasUse)
+    // What selectors look at on an ancestor or a preceding sibling
+    // (`simpleKeys`), and the attributes that change what elements
+    // around match (`ALWAYS_DEEP`); `deep_any` when that is not known.
+    deep: IntMap(u64, bool)
+    deep_any: bool
+    of_selector: bool
+    whole: bool
+    // A selector looks at the `style` attribute: a change to it is not
+    // one that only the element's own declarations see.
+    style_attr: bool
+
+    pub fn init(alloc: Allocator) RestyleDeps {
+        return RestyleDeps { keys: List(usize).init(alloc), names: List(u64).init(alloc), uses: List(HasUse).init(alloc), deep: IntMap(u64, bool).init(alloc), deep_any: false, of_selector: false, whole: false, style_attr: false }
+    }
+
+    pub fn deinit(self: *mut Self) {
+        self.keys.deinit()
+        self.names.deinit()
+        self.uses.deinit()
+        self.deep.deinit()
+    }
+
+    /// Reads the selectors of the author sheet `author` (its `:has()`,
+    /// for `anchors`) and of the UA sheets `ua` and `quirks`.
+    pub fn build(self: *mut Self, author: *Sheet, ua: *Sheet, quirks: ?*Sheet) AllocError!void {
+        var outer = List(usize).init(self.keys.alloc)
+        defer outer.deinit()
+        for r in author.rules.items() {
+            for k in r.sel_start..r.sel_end {
+                try self.walk(author, k, outer.items(), 0)
+            }
+        }
+        var start: usize = 0
+        while start < ALWAYS_DEEP.len {
+            var end = start
+            while end < ALWAYS_DEEP.len && ALWAYS_DEEP[end] != ' ' {
+                end += 1
+            }
+            try self.deep.put(nameKey("", ALWAYS_DEEP[start..end]), true)
+            start = end + 1
+        }
+        try self.addDeep(author)
+        try self.addDeep(ua)
+        if quirks |q| {
+            try self.addDeep(q)
+        }
+        self.style_attr = looksAtStyle(author) || looksAtStyle(ua)
+        if quirks |q| {
+            self.style_attr = self.style_attr || looksAtStyle(q)
+        }
+    }
+
+    /// Is `change` one to the `style` attribute, which no selector looks
+    /// at? It changes only the styles of its element and of what inherits
+    /// from it, even when `whole` is set.
+    pub fn onlyOwnStyle(self: *Self, change: StyleChange) bool {
+        return !self.style_attr && !change.token && change.what == attrChange("style").what
+    }
+
+    /// Can `change` at an element change the styles of elements other
+    /// than it and those that inherit from it?
+    pub fn isDeep(self: *Self, change: StyleChange) bool {
+        if change.what < 2 || self.deep_any || self.deep.contains(change.what) {
+            return true
+        }
+        return change.token && self.deep.contains(nameKey("", "[class]"))
+    }
+
+    fn addDeep(self: *mut Self, sheet: *Sheet) AllocError!void {
+        for r in sheet.rules.items() {
+            for k in r.sel_start..r.sel_end {
+                try self.walkDeep(sheet, k, true, 0)
+            }
+        }
+    }
+
+    // What complex `k` looks at outside its subject (`subject`: its last
+    // compound is the element the selector is for), into `deep`.
+    fn walkDeep(self: *mut Self, sheet: *Sheet, k: usize, subject: bool, nesting: usize) AllocError!void {
+        if nesting >= 16 {
+            self.deep_any = true
+            return
+        }
+        var keys = List(u64).init(self.keys.alloc)
+        defer keys.deinit()
+        let cx = sheet.complexes.items()[k]
+        for ci in cx.start..cx.end {
+            let comp = sheet.compounds.items()[ci]
+            let own = subject && ci == cx.end - 1
+            for si in comp.start..comp.end {
+                let s = sheet.simples.items()[si]
+                if !own {
+                    keys.clear()
+                    if !(try simpleKeys(s, &mut keys)) {
+                        self.deep_any = true
+                    }
+                    for key in keys.items() {
+                        try self.deep.put(key, true)
+                    }
+                }
+                if s.sub_end <= s.sub_start || s.kind == SelKind.Has {
+                    continue
+                }
+                let inner = own && (s.kind == SelKind.Is || s.kind == SelKind.Not)
+                for j in s.sub_start..s.sub_end {
+                    try self.walkDeep(sheet, j, inner, nesting + 1)
+                }
+            }
+        }
+    }
+
+    /// Does the sheet use `:has()` that does not look at siblings?
+    pub fn hasAny(self: *Self) bool {
+        return self.uses.len() > 0
+    }
+
+    // The `:has()` and `of S` in complex `k`; `outer`: the key selectors
+    // of the element its last compound is for (when it is the argument
+    // of `:is()` or `:not()`).
+    fn walk(self: *mut Self, sheet: *Sheet, k: usize, outer: []usize, nesting: usize) AllocError!void {
+        if nesting >= 16 {
+            // Deeper than this is not looked at: style the whole document.
+            self.whole = true
+            return
+        }
+        let cx = sheet.complexes.items()[k]
+        for ci in cx.start..cx.end {
+            let comp = sheet.compounds.items()[ci]
+            var nested = false
+            for si in comp.start..comp.end {
+                let s = sheet.simples.items()[si]
+                if s.kind == SelKind.Has || s.sub_end > s.sub_start {
+                    nested = true
+                }
+            }
+            if !nested {
+                continue
+            }
+            var keys = List(usize).init(self.keys.alloc)
+            defer keys.deinit()
+            for si in comp.start..comp.end {
+                let kind = sheet.simples.items()[si].kind
+                if kind == SelKind.Type || kind == SelKind.Id || kind == SelKind.Class || kind == SelKind.Attr {
+                    try keys.append(si)
+                }
+            }
+            if ci == cx.end - 1 {
+                for o in outer {
+                    try keys.append(o)
+                }
+            }
+            for si in comp.start..comp.end {
+                let s = sheet.simples.items()[si]
+                if s.kind == SelKind.Has {
+                    try self.addHas(sheet, s, keys.items())
+                    continue
+                }
+                if s.sub_end <= s.sub_start {
+                    continue
+                }
+                if s.kind == SelKind.NthChild || s.kind == SelKind.NthLastChild {
+                    self.of_selector = true
+                }
+                var pass: []usize = []usize{}
+                if s.kind == SelKind.Is || s.kind == SelKind.Not {
+                    pass = keys.items()
+                }
+                for j in s.sub_start..s.sub_end {
+                    try self.walk(sheet, j, pass, nesting + 1)
+                }
+            }
+        }
+    }
+
+    fn addHas(self: *mut Self, sheet: *Sheet, s: Simple, keys: []usize) AllocError!void {
+        var depth: usize = 0
+        let compounds = sheet.compounds.items()
+        for k in s.sub_start..s.sub_end {
+            let cx = sheet.complexes.items()[k]
+            if cx.end - cx.start < 2 {
+                continue
+            }
+            let lead = compounds[cx.start + 1].combinator
+            if lead == '+' || lead == '~' {
+                self.whole = true
+                return
+            }
+            var children_only = lead == '>'
+            for c in cx.start + 2..cx.end {
+                if compounds[c].combinator != '>' {
+                    children_only = false
+                }
+            }
+            if !children_only {
+                depth = ANY_DEPTH
+            } else if depth != ANY_DEPTH && cx.end - cx.start - 2 > depth {
+                depth = cx.end - cx.start - 2
+            }
+        }
+        if keys.len == 0 && depth == ANY_DEPTH {
+            // Any element may be its element.
+            self.whole = true
+            return
+        }
+        let start = self.keys.len()
+        for key in keys {
+            try self.keys.append(key)
+        }
+        let names_start = self.names.len()
+        var any_attr = false
+        for k in s.sub_start..s.sub_end {
+            try self.addNames(sheet, k, &mut any_attr, 0)
+        }
+        try self.uses.append(HasUse { start: start, end: self.keys.len(), depth: depth, names_start: names_start, names_end: self.names.len(), any_attr: any_attr })
+    }
+
+    // What complex `k` looks at, into `names`; `any_attr` when that is
+    // not known.
+    fn addNames(self: *mut Self, sheet: *Sheet, k: usize, any_attr: *mut bool, nesting: usize) AllocError!void {
+        if nesting >= 16 {
+            any_attr.* = true
+            return
+        }
+        let cx = sheet.complexes.items()[k]
+        for ci in cx.start..cx.end {
+            let comp = sheet.compounds.items()[ci]
+            for si in comp.start..comp.end {
+                let s = sheet.simples.items()[si]
+                if !(try simpleKeys(s, &mut self.names)) {
+                    any_attr.* = true
+                }
+                for j in s.sub_start..s.sub_end {
+                    try self.addNames(sheet, j, any_attr, nesting + 1)
+                }
+            }
+        }
+    }
+
+    // Can `change` change what the arguments of `u` match?
+    fn sees(self: *Self, u: HasUse, change: StyleChange) bool {
+        return u.any_attr || keysSee(self.names.items()[u.names_start..u.names_end], change)
+    }
+
+    /// May a `:has()` that looks at any depth be one of `el`'s (whatever
+    /// the change)?
+    pub fn mayAnchorAnyDepth(self: *Self, sheet: *Sheet, doc: *Document, el: NodeId) bool {
+        for u in self.uses.items() {
+            if u.depth == ANY_DEPTH && self.keysMatch(sheet, doc, u, el) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// May a `:has()` of `el` see `change` `distance` levels below `el`
+    /// (0: `el` itself)? `any_depth`: `mayAnchorAnyDepth` of `el`.
+    pub fn anchors(self: *Self, sheet: *Sheet, doc: *Document, el: NodeId, distance: usize, change: StyleChange, any_depth: bool) bool {
+        for u in self.uses.items() {
+            if u.depth == ANY_DEPTH {
+                if any_depth && self.sees(u, change) && self.keysMatch(sheet, doc, u, el) {
+                    return true
+                }
+            } else if distance <= u.depth + 1 && self.sees(u, change) && self.keysMatch(sheet, doc, u, el) {
+                return true
+            }
+        }
+        return false
+    }
+
+    fn keysMatch(self: *Self, sheet: *Sheet, doc: *Document, u: HasUse, el: NodeId) bool {
+        for i in u.start..u.end {
+            if !matchSimple(sheet, doc, sheet.simples.items()[self.keys.items()[i]], el) {
+                return false
+            }
+        }
+        return true
+    }
+}

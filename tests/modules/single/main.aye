@@ -1,0 +1,6 @@
+// Built as `aye run single/main.aye`: a file argument is a module of its
+// own, so broken.aye next to it is not compiled.
+
+pub fn main() {
+    @println("only main.aye")
+}

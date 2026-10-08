@@ -24,5 +24,5 @@ while [ $# -gt 0 ]; do
 done
 cargo build --release --quiet
 mkdir -p "$(dirname "$out")"
-target/release/ore build browser -o "$out" --mode "$mode"
+target/release/aye build browser -o "$out" --mode "$mode"
 echo "$out ($mode)"

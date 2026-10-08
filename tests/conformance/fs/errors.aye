@@ -1,0 +1,12 @@
+import std.fs
+import std.fs.OpenError
+
+pub fn main() {
+    @println(fs.exists("/no/such/aye/file"))
+    let f = fs.open("/no/such/aye/file") catch |e| {
+        @println(e == OpenError.NotFound)
+        return
+    }
+    f.close()
+    @println("opened")
+}

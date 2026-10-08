@@ -1,5 +1,5 @@
 error: InvalidDigit
 error return trace:
-parse_invalid_digit.ore:11:13
-parse_invalid_digit.ore:23:13
-parse_invalid_digit.ore:30:13
+parse_invalid_digit.aye:11:13
+parse_invalid_digit.aye:23:13
+parse_invalid_digit.aye:30:13

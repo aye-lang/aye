@@ -28,7 +28,7 @@ Every program shown on the page is a copy of a file in `samples/`, and each
 must pass the checker (exit 0):
 
 ```sh
-target/release/ore check site/samples/tokens.aye
+target/release/aye check site/samples/tokens.aye
 ```
 
 When a sample changes, update the copy in `public/index.html` (HTML-escape

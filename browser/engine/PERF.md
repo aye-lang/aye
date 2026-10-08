@@ -14,7 +14,7 @@ info: ANYKNOWN_TIMING<TAB>phase<TAB>nanoseconds<TAB>source
 ```
 
 Stdout is unchanged. Disabled hooks allocate nothing and do not read the
-clock. `browser/perf/perf.ore` is shared by engine, CSS, net, Markdown
+clock. `browser/perf/perf.aye` is shared by engine, CSS, net, Markdown
 and paint. The runner aggregates phases, lists the five slowest document
 scripts, and saves individual runs, medians and output hashes as JSON.
 Each run also records the browser's CPU time (user+sys) and the 1-minute
@@ -143,10 +143,10 @@ The compiler, C optimization mode and frozen responses are the same.
 ```sh
 mkdir -p target/perf-before-src
 git archive ec6961c | tar -x -C target/perf-before-src
-git diff ec6961c 8f3ace3 -- browser/net/net.ore browser/net/multi.ore \
-    browser/engine/images.ore browser/engine/script.ore | \
+git diff ec6961c 8f3ace3 -- browser/net/net.aye browser/net/multi.aye \
+    browser/engine/images.aye browser/engine/script.aye | \
     git apply --directory target/perf-before-src
-target/release/ore build target/perf-before-src/browser \
+target/release/aye build target/perf-before-src/browser \
     -o target/anyknown-perf-before --mode fast
 ```
 
@@ -241,7 +241,7 @@ Raw `sample PID 3 1 -file report.txt` works too.
    reorder and allocation-failure fallback preserve live-list behavior.
    ZOL's timer total drops from 1.236 s to 0.146 s.
 2. **Cascade scans.** GitHub spent about 3.3 s in cascade. The new
-   `css/rule_index.ore` selects required rightmost id/class/type keys;
+   `css/rule_index.aye` selects required rightmost id/class/type keys;
    positive `:is()`/`:where()` alternatives are recursively indexed.
    Negative, attribute-only, universal, unsupported and depth-limited
    cases fall back. Candidates are deduplicated in source order; the
@@ -253,7 +253,7 @@ Raw `sample PID 3 1 -file report.txt` works too.
    `settleScripts` laid out again even with no due task. Skip the second
    pass only in that proven-clean case; actions/tasks still recompute.
 4. **Repeated sheet parsing.** YouTube parsed the same large linked
-   sheet for style readers and final layout. `sheet_cache.ore` fingerprints
+   sheet for style readers and final layout. `sheet_cache.aye` fingerprints
    actual sources/media/order/first base href. Empty styles/preloads do
    not force reparsing; ordinary mutations retain parsed sheets, and full
    layout can take a reader sheet's ownership and compute fresh values.
@@ -332,7 +332,7 @@ Next, in priority order:
 ## Validation
 
 - Release compiler build, `browser/build.sh` (fast) and
-  `target/release/ore check browser`: passed.
+  `target/release/aye check browser`: passed.
 - `cargo test --test browser`: **40 passed**, including unchanged goldens,
   GC stress, live-frame mutation, timing stdout/PNG equality, media
   invalidation, and replay with the HTTP server killed (CSS/JS/image,

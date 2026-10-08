@@ -1,2 +1,2 @@
-pub_fn/main.ore:4:9: error[E0082]: `hidden` is not `pub` in module `lib`
-pub_fn/main.ore:5:16: error[E0082]: `Secret` is not `pub` in module `lib`
+pub_fn/main.aye:4:9: error[E0082]: `hidden` is not `pub` in module `lib`
+pub_fn/main.aye:5:16: error[E0082]: `Secret` is not `pub` in module `lib`

@@ -1,8 +1,8 @@
-interfaces.ore:7:8: error[E0073]: interface method `Bad.f` must take `self: *Self` or `self: *mut Self` as its first parameter
-interfaces.ore:36:7: error[E0071]: interface `Shape` has no method `perimeter`
-interfaces.ore:42:9: error[E0072]: a `dyn Shape` made from a read-only pointer cannot call `Square.grow`, which takes `self: *mut Self` (use `&mut`)
-interfaces.ore:43:9: error[E0023]: mismatched types: expected `dyn Shape`, found `Square` (a `dyn` value points to its data: write `&mut x` or `&x`)
-interfaces.ore:45:9: error[E0072]: `Wrong` does not implement `Shape`: method `area` is `fn(*Self) f32`, but `Shape` needs `fn(*Self) f64`
-interfaces.ore:47:9: error[E0072]: `Empty` does not implement `Shape`: it has no method `area`
-interfaces.ore:48:12: error[E0017]: `Shape` is an interface, not a type: write `dyn Shape`
-interfaces.ore:49:12: error[E0017]: `dyn Square`: `Square` is not an interface
+interfaces.aye:7:8: error[E0073]: interface method `Bad.f` must take `self: *Self` or `self: *mut Self` as its first parameter
+interfaces.aye:36:7: error[E0071]: interface `Shape` has no method `perimeter`
+interfaces.aye:42:9: error[E0072]: a `dyn Shape` made from a read-only pointer cannot call `Square.grow`, which takes `self: *mut Self` (use `&mut`)
+interfaces.aye:43:9: error[E0023]: mismatched types: expected `dyn Shape`, found `Square` (a `dyn` value points to its data: write `&mut x` or `&x`)
+interfaces.aye:45:9: error[E0072]: `Wrong` does not implement `Shape`: method `area` is `fn(*Self) f32`, but `Shape` needs `fn(*Self) f64`
+interfaces.aye:47:9: error[E0072]: `Empty` does not implement `Shape`: it has no method `area`
+interfaces.aye:48:12: error[E0017]: `Shape` is an interface, not a type: write `dyn Shape`
+interfaces.aye:49:12: error[E0017]: `dyn Square`: `Square` is not an interface

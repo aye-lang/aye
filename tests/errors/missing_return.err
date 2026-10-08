@@ -1,1 +1,1 @@
-missing_return.ore:1:4: error[E0050]: function `f` must return a value of type `i32` on every path
+missing_return.aye:1:4: error[E0050]: function `f` must return a value of type `i32` on every path

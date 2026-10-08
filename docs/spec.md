@@ -1,19 +1,19 @@
-# Ore language reference (stage0)
+# Aye language reference (stage0)
 
-Ore is a systems language without garbage collection: memory comes from
+Aye is a systems language without garbage collection: memory comes from
 explicit `Allocator` values and is released with `defer`. The syntax is
 Go-like (braces, `name: Type`, no semicolons), errors are values (Zig-style
 error unions), and enums are tagged unions with exhaustive `match`
 (Rust-style). This document describes exactly what the stage0 compiler
-accepts. It is printed by `ore spec` and versioned with the compiler.
+accepts. It is printed by `aye spec` and versioned with the compiler.
 
-Conventions: a block marked `ore` is a complete program that compiles; a
-block marked `ore-error` is a program that the compiler rejects, shown to
+Conventions: a block marked `aye` is a complete program that compiles; a
+block marked `aye-error` is a program that the compiler rejects, shown to
 illustrate a rule.
 
 ## 1. A first program
 
-```ore
+```aye
 import std
 import std.mem.Allocator
 
@@ -46,51 +46,51 @@ pub fn main() !void {
 }
 ```
 
-`ore run first.ore` prints `12`. `gpa.deinit()` reports any memory that was
+`aye run first.aye` prints `12`. `gpa.deinit()` reports any memory that was
 not freed.
 
 ## 2. Programs and commands
 
-A program is a root module: one `.ore` file, or a directory whose `.ore`
+A program is a root module: one `.aye` file, or a directory whose `.aye`
 files all belong to it (see section 12). The root module must declare
 `pub fn main()` (no parameters; no return type or `!void`/`E!void`).
 
 ```
-ore run <path> [--mode debug|safe|fast] [-- args...]  build to a temp file and run (args go to the program)
-ore build <path> [-o out] [--mode m]                  build an executable (default name: the file or directory name)
+aye run <path> [--mode debug|safe|fast] [-- args...]  build to a temp file and run (args go to the program)
+aye build <path> [-o out] [--mode m]                  build an executable (default name: the file or directory name)
     [--cflags "flags"]                                (build, run, test) more clang flags: --cflags -fsanitize=thread
-ore check <path> [--json]                             report all compile errors; no C, no clang
-ore fix <path>                                        apply the fix-its of `ore check` in place, repeat (at most 10 rounds)
-ore test <path> [--filter text] [--json] [--mode m]   run the root module's `test` blocks, each in its own process
-ore emit-c <path> [--mode m]                          print the generated C
-ore fmt [--check] <path>                              format in place (a directory: every .ore file under it); --check lists files that would change, exit 1
-ore doc --signatures <path>                           print every pub declaration with its /// comment, no bodies; <path> may be std or std.text
-ore cimport <header> [-Idir] [-DNAME[=value]] [--link lib]   print the Ore declarations that @cimport makes of a C header
-ore explain <code>                                    explain an error code (E0001...) with a wrong and a fixed program
-ore spec                                              print this document
+aye check <path> [--json]                             report all compile errors; no C, no clang
+aye fix <path>                                        apply the fix-its of `aye check` in place, repeat (at most 10 rounds)
+aye test <path> [--filter text] [--json] [--mode m]   run the root module's `test` blocks, each in its own process
+aye emit-c <path> [--mode m]                          print the generated C
+aye fmt [--check] <path>                              format in place (a directory: every .aye file under it); --check lists files that would change, exit 1
+aye doc --signatures <path>                           print every pub declaration with its /// comment, no bodies; <path> may be std or std.text
+aye cimport <header> [-Idir] [-DNAME[=value]] [--link lib]   print the Aye declarations that @cimport makes of a C header
+aye explain <code>                                    explain an error code (E0001...) with a wrong and a fixed program
+aye spec                                              print this document
 ```
 
-`<path>` is a `.ore` file or a directory. A file is a module of its own:
+`<path>` is a `.aye` file or a directory. A file is a module of its own:
 other files in its directory are not compiled with it. Build modes: `debug`
 (default; all runtime checks, error return traces, leak reports), `safe`
-(optimized, all checks), `fast` (optimized, no checks). Exit status of `ore
+(optimized, all checks), `fast` (optimized, no checks). Exit status of `aye
 run`: the program's status; 1 when `main` returns an error; 134 after a
 panic.
 
-`ore fmt` is the canonical layout: 4-space indentation, one space around
+`aye fmt` is the canonical layout: 4-space indentation, one space around
 binary operators and after `,` and `:`, `[3]u8{1, 2}` but `Point { x: 1 }`.
 It keeps every comment and every line break (they end statements), drops
 extra blank lines (at most one in a row), and is idempotent. It refuses a
-file that does not lex or whose brackets do not match. `ore doc
+file that does not lex or whose brackets do not match. `aye doc
 --signatures` prints a module's API (pub functions, structs with fields
 and pub methods, enums, interfaces, error sets, constants) as compact
-context; `ore doc --signatures std` prints all of std.
+context; `aye doc --signatures std` prints all of std.
 
 ## 3. Lexical structure
 
 - Source is UTF-8. Comments start with `//` and run to the end of the line.
   There are no block comments. `///` lines right above a declaration or
-  member are its doc comment (`ore doc` shows them).
+  member are its doc comment (`aye doc` shows them).
 - Identifiers: a letter or `_`, then letters, digits or `_` (ASCII only).
 - Keywords (31): `fn let var pub import struct enum error interface dyn
   match if else for while break continue return defer errdefer try catch
@@ -114,7 +114,7 @@ context; `ore doc --signatures std` prints all of std.
   `[]u8` like any string. A `,` or closing bracket that follows goes on
   the next line:
 
-```ore
+```aye
 let STYLE =
     \\body { margin: 8px }
     \\p { color: "red" }
@@ -151,7 +151,7 @@ multi-line string, only when the next line does not start with `\\`, `,`,
 - A binary operator that continues an expression must end the line, not
   start the next one.
 
-```ore
+```aye
 fn total(a: i64, b: i64, c: i64) i64 {
     return a +
         b +
@@ -172,7 +172,7 @@ pub fn main() {
 }
 ```
 
-```ore-error
+```aye-error
 pub fn main() {
     let n = 1
     if n > 0 {
@@ -194,7 +194,7 @@ other modules.
 
 ### Functions
 
-```ore
+```aye
 fn add(a: i64, b: i64) i64 {
     return a + b
 }
@@ -224,7 +224,7 @@ pub fn main() {
   must `return` a value on every path. In a function that returns nothing
   (or `E!void`), `return f()` of a call that returns nothing calls it and
   returns.
-- No overloading, default arguments, variadic Ore functions or closures.
+- No overloading, default arguments, variadic Aye functions or closures.
 - Functions may call each other in any order, and recurse.
 - A top-level function that is not generic is a value of type `fn(A, B) R`
   (`fn(A)` without a result). Store it in a variable, field, array, global
@@ -232,7 +232,7 @@ pub fn main() {
   `f(x)`, `s.field(x)` (when `s` has no method of that name), `get()(x)`.
   Methods and generic functions are not values.
 
-```ore
+```aye
 struct Button {
     label: []u8
     onClick: fn(i64) i64
@@ -259,7 +259,7 @@ pub fn main() {
 
 ### Constants, globals and type aliases
 
-```ore
+```aye
 struct Point { x: i64, y: i64 }
 
 let MAX_ITEMS: usize = 3
@@ -299,7 +299,7 @@ pub fn main() {
 
 ### Structs and methods
 
-```ore
+```aye
 struct Point {
     x: f64
     y: f64
@@ -343,11 +343,11 @@ pub fn main() {
   Enum variant fields have no defaults.
 - A method cannot have the name of a field of its struct.
 - A struct's methods are all in its body, so one file shows the whole
-  type (what `ore doc` prints, and what a reader or an AI needs to read).
+  type (what `aye doc` prints, and what a reader or an AI needs to read).
   Code in other files of the module takes the struct as a parameter
   (`fn parseSheet(sheet: *mut Sheet, src: []u8)`).
 
-```ore
+```aye
 struct Box {
     x: f64 = 0.0
     w: f64 = 100.0
@@ -363,7 +363,7 @@ pub fn main() {
 
 ### Enums (tagged unions)
 
-```ore
+```aye
 enum Shape {
     Circle { r: f64 }
     Rect { w: f64, h: f64 }
@@ -411,7 +411,7 @@ sets. See section 8.
 
 ### C functions and types
 
-```ore
+```aye
 @link("m")
 
 extern struct Vec2 {
@@ -428,7 +428,7 @@ fn byValue(a: [*]i32, b: [*]i32) i32 {
     return a[0] - b[0]
 }
 
-pub extern fn ore_length(v: *Vec2) f64 {
+pub extern fn aye_length(v: *Vec2) f64 {
     return hypot(v.x, v.y)
 }
 
@@ -438,16 +438,16 @@ pub fn main() {
     qsort(xs[..].ptr, xs.len, @sizeOf(i32), byValue)
     var buf = @zeroed([32]u8)
     let v = Vec2 { x: 3.0, y: 4.0 }
-    let n = snprintf(buf[..].ptr, buf.len, "%d %.1f".ptr, xs[0], ore_length(&v))
+    let n = snprintf(buf[..].ptr, buf.len, "%d %.1f".ptr, xs[0], aye_length(&v))
     @println(buf[0..n as usize])
 }
 ```
 
 - `extern fn name(params) Ret` declares a C function; calls go to the C
-  symbol `name`. Ore emits the declaration from this signature (no C
+  symbol `name`. Aye emits the declaration from this signature (no C
   headers), so it must match the library's. Modules that declare one C
   function give it the same signature.
-- `extern("link") fn name(...)` calls the C symbol `link` under the Ore
+- `extern("link") fn name(...)` calls the C symbol `link` under the Aye
   name `name` (not on a function with a body; an empty name is E0115).
 - C-compatible types, the only ones allowed in an `extern fn`: integers
   (`i32` is C `int`, `usize` is `size_t`; `c_int`, `c_long`, `c_ulong`,
@@ -465,17 +465,17 @@ pub fn main() {
 - `extern struct Name { fields }` has C layout: fields in order, with C
   alignment and padding. Fields are C-compatible types, or arrays of them.
   Declare the fields the C header has (a prefix is enough when C owns the
-  value and Ore reads it through a pointer); an `extern struct` with no
+  value and Aye reads it through a pointer); an `extern struct` with no
   fields is an opaque C type, used behind pointers.
 - `extern union Name { fields }` is a C union: the fields (C-compatible)
   share one piece of memory, a literal sets exactly one of them
   (`Event { key: k }`, E0104), and reading another field reads the same
   bytes, as in C (`SDL_Event`). It has no `==` and no field defaults.
-- `pub extern fn` with a body exports an Ore function to C under its own
+- `pub extern fn` with a body exports an Aye function to C under its own
   name (C-compatible signature). Without `pub`, a body is an error.
 - `@link("name")` at the top level links a C library: the flags of
   `pkg-config --cflags --libs name` when it knows `name`, else `-lname`;
-  `@link("framework:Cocoa")` on macOS. `ore build`, `run` and `test` link
+  `@link("framework:Cocoa")` on macOS. `aye build`, `run` and `test` link
   the libraries of every module.
 - `@linkOptional("name")` links the library only where it is installed
   (`pkg-config` knows it, or clang can link `-lname`), so the program
@@ -486,7 +486,7 @@ pub fn main() {
   function that nothing built calls is left out of the program, so code
   that calls the library may sit in helpers:
 
-```ore
+```aye
 @linkOptional("libcurl")
 
 extern fn curl_global_init(flags: i64) i32
@@ -521,7 +521,7 @@ array of them (`@zeroed([64]bool)`, `@zeroed([4][4]u8)`), and a constant
 `@cimport` declares a C header's functions, types and constants, read
 with libclang, instead of writing `extern fn`s by hand:
 
-```ore
+```aye
 @link("zlib")
 
 let z = @cimport("zlib.h")
@@ -550,14 +550,14 @@ pub fn main() {
   and `@linkOptional` libraries, the system's headers (the macOS SDK) and
   Homebrew's. Not found, or with errors: E0113. `@cimport` declares; the
   library is still linked with `@link`.
-- What it declares (`ore cimport header.h` prints it):
+- What it declares (`aye cimport header.h` prints it):
   - functions: `pub extern fn` with C's types (`int` is `c_int`, `size_t`
     `usize`, `char *` and `void *` `?[*]u8`, `const T *` `?*T`, `T *`
     `?*mut T`, a function pointer `?fn(...)`), `...` when variadic;
   - structs and unions: `extern struct`/`extern union` with their fields,
     or opaque (`extern struct Name {}`, for pointers only) when the header
     does not define them or they have bit-fields, `packed` or `aligned`
-    layout, or a field Ore cannot express; a tag that clashes with
+    layout, or a field Aye cannot express; a tag that clashes with
     another name is `struct_name`;
   - enums: a `pub let` per constant, of the enum's integer type, and the
     enum's name as an alias of that type;
@@ -567,13 +567,13 @@ pub fn main() {
     with C's type of the value (`c_int`, `c_long`, `f64`...).
 
   Static and inline functions, C variables, function-like macros and
-  names that are Ore keywords are left out (a comment in the generated
+  names that are Aye keywords are left out (a comment in the generated
   source says which).
 - libclang is loaded when a header is first read: next to the selected
   clang on macOS (the Command Line Tools), with `llvm-config` or in
   `/usr/lib/llvm-N` on Linux, or from `$LIBCLANG_PATH`. Missing: E0114.
-  The declarations are cached in `~/.cache/ore/cimport`
-  (`$ORE_CACHE_DIR/cimport`) until a file the header includes changes; a
+  The declarations are cached in `~/.cache/aye/cimport`
+  (`$AYE_CACHE_DIR/cimport`) until a file the header includes changes; a
   cached header needs no libclang.
 
 ## 5. Types
@@ -614,7 +614,7 @@ A number is not a vector (`v * 2.0` is an error: `v * @splat(simd[4]f32,
 2.0)`), and `==` cannot compare whole vectors (`@all(a == b)` does). Errors:
 E0109.
 
-```ore
+```aye
 fn dot(a: simd[4]f32, b: simd[4]f32) f32 {
     return @reduceAdd(a * b)
 }
@@ -668,7 +668,7 @@ the type of `x`.
 
 ## 6. Statements
 
-```ore
+```aye
 pub fn main() {
     let a = 10
     var b: i64 = 0
@@ -742,7 +742,7 @@ including names of enclosing scopes, top-level declarations of the module
 (in any of its files: the error names the file) and imports. Sibling blocks may reuse a name. A capture is scoped to its
 block or expression, so two `catch |e|` in one function may both use `e`.
 
-```ore-error
+```aye-error
 fn f(x: i64) i64 {
     let x = 2
     return x
@@ -797,7 +797,7 @@ left-associative; comparisons do not chain, `a < b < c` is an error):
 
 ### Arrays and slices
 
-```ore
+```aye
 fn sum(xs: []i64) i64 {
     var t: i64 = 0
     for i in 0..xs.len {
@@ -853,7 +853,7 @@ be called on one, `text.split(s, ",").next()`: it gets a pointer to a copy.
 
 ### Optionals
 
-```ore
+```aye
 fn find(xs: []i64, want: i64) ?usize {
     for i in 0..xs.len {
         if xs[i] == want {
@@ -933,7 +933,7 @@ Arms are separated by newlines or `,`.
   `match` for them) and sits with the comparisons: `(x is .V) == b`,
   `!(x is .V)`.
 
-```ore
+```aye
 enum Cmd {
     Move { dx: i64, dy: i64 }
     Say { text: []u8 }
@@ -966,7 +966,7 @@ pub fn main() {
 }
 ```
 
-```ore
+```aye
 fn class(c: u8) []u8 {
     return match c {
         'a'..='z', 'A'..='Z', '_' => "word"
@@ -999,7 +999,7 @@ in Go): put a struct literal there in parentheses.
 
 Errors are values; there are no exceptions. A program bug is a panic.
 
-```ore
+```aye
 error ParseError { Empty, BadDigit, Overflow }
 
 pub fn parse(s: []u8) ParseError!u32 {
@@ -1084,7 +1084,7 @@ pub fn main() !void {
 - Errors carry no payload. Report details through a `diags: *mut
   Diagnostics` parameter (`std.diag`, section 15) or `std.log`.
 
-```ore
+```aye
 import std
 
 error UrlError { Empty, NoScheme }
@@ -1127,7 +1127,7 @@ pub fn main() !void {
 There is no garbage collector and no hidden allocation: a function that
 allocates takes an `Allocator`. Free with `defer`.
 
-```ore
+```aye
 import std
 import std.mem.Allocator
 import std.mem.AllocError
@@ -1198,7 +1198,7 @@ pub fn main() !void {
   `Allocator` is expected (E0105). `free` gets the size that was
   allocated; `align` is at most 16.
 
-```ore
+```aye
 import std.heap.General
 import std.mem.Allocator
 
@@ -1236,7 +1236,7 @@ pub fn main() !void {
 
 ## 10. Interfaces and dyn
 
-```ore
+```aye
 interface Shape {
     fn area(self: *Self) f64
 }
@@ -1279,7 +1279,7 @@ pub fn main() {
 
 ## 11. Generics
 
-```ore
+```aye
 interface Show {
     fn show(self: *Self)
 }
@@ -1353,7 +1353,7 @@ pub fn main() {
   too); otherwise E0107. A slice, array, union or enum with fields does
   not hash.
 
-```ore
+```aye
 fn total(comptime T: type, xs: []T) i64 where T: Integer {
     var s: i64 = 0
     for x in xs {
@@ -1384,9 +1384,9 @@ pub fn main() {
 
 ## 12. Modules and imports
 
-- A module is a directory; all `.ore` files directly in it share one
+- A module is a directory; all `.aye` files directly in it share one
   namespace (a file can use the other files' declarations without
-  importing them). The root module is the directory or file given to `ore`.
+  importing them). The root module is the directory or file given to `aye`.
 - `import a.b` loads the module in directory `a/b` relative to the root
   module's directory, or a std module (`std`, `std.fs`, ...). The import
   binds its last name (`b`) in the importing file only. Use items as
@@ -1405,20 +1405,20 @@ pub fn main() {
   import the root module (which imports all of them, directly or not):
   put what the root and a module both need in a module of its own
   (`app/shared/`) and import it from both (E0083).
-- The `test` blocks of every module are checked with the program (`ore
-  check`, `ore build`) and run by `ore test` (section 13); std's are not.
+- The `test` blocks of every module are checked with the program (`aye
+  check`, `aye build`) and run by `aye test` (section 13); std's are not.
 - Errors and types from other modules are shown with their path in
   messages: `std.fs.File`, `std.mem.AllocError`.
 
-A directory module `app/` with `app/main.ore` and `app/util/util.ore`:
+A directory module `app/` with `app/main.aye` and `app/util/util.aye`:
 
 ```
-// app/util/util.ore
+// app/util/util.aye
 pub fn twice(x: i64) i64 {
     return 2 * x
 }
 
-// app/main.ore
+// app/main.aye
 import util
 
 pub fn main() {
@@ -1426,11 +1426,11 @@ pub fn main() {
 }
 ```
 
-`ore run app` prints `42`.
+`aye run app` prints `42`.
 
 ## 13. Tests
 
-```ore
+```aye
 fn add(a: i64, b: i64) i64 {
     return a + b
 }
@@ -1450,14 +1450,14 @@ test "allocations are checked" {
 
 - `test "name" { }` at the top level; the body is like a `!void` function
   (it can use `try`) of its module, so it can call private functions.
-  `ore test dir` runs each test of every module of the program in its own
+  `aye test dir` runs each test of every module of the program in its own
   process (a module's test shows as `test "html: name"`); `--module html`
   runs only the tests of module `html`. Give the program's directory, not
-  the module's: imports start there. `ore build`/`ore run` leave tests
-  out. A root module with tests needs no `main` for `ore check` and `ore
+  the module's: imports start there. `aye build`/`aye run` leave tests
+  out. A root module with tests needs no `main` for `aye check` and `aye
   test`.
-- A ```` ```ore ```` block in a `///` doc comment (outside std) is a test
-  too, for `ore test` only: its lines are the body of a test of that file,
+- A ```` ```aye ```` block in a `///` doc comment (outside std) is a test
+  too, for `aye test` only: its lines are the body of a test of that file,
   named `doc: square (line 4)` after the declaration below the comment and
   the line of the opening fence. Errors and failures point into the
   comment. Other fences (```` ```text ````) do not run.
@@ -1519,9 +1519,9 @@ std.map       StrMap, IntMap, HashMap                                        bel
 std.text      bytes as text: compare, search, split, parse, UTF-8, Builder   below
 std.math      f64 functions (libm), generic minOf, maxOf, absOf, clampOf     below
 std.sort      sort(T, items, less), in place                                 below
-std.pool      Pool(T): values in reusable slots, generational Handle(T)      ore doc --signatures std.pool
-std.time      monotonicMs, sleep                                             ore doc --signatures std.time
-std.thread    OS threads: spawn, spawnWithStack (deep recursion), join       ore doc --signatures std.thread
+std.pool      Pool(T): values in reusable slots, generational Handle(T)      aye doc --signatures std.pool
+std.time      monotonicMs, sleep                                             aye doc --signatures std.time
+std.thread    OS threads: spawn, spawnWithStack (deep recursion), join       aye doc --signatures std.thread
 std.sync      Mutex, Channel(T), Atomic(T)                                   below
 std.coro      coroutines: create, resume, yield                              below
 std.testing   the leak-checked allocator of a test                           below
@@ -1529,7 +1529,7 @@ std.log       err, info: formatted lines to stderr                           bel
 std.diag      Diagnostics: coded messages over byte ranges, lineCol          below
 std.os        args, exit                                                     below
 std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn                below
-std.http      HTTP/1.1 parser, response writer, thread-per-connection serve  ore doc --signatures std.http
+std.http      HTTP/1.1 parser, response writer, thread-per-connection serve  aye doc --signatures std.http
 ```
 
 ### std.mem
@@ -1590,7 +1590,7 @@ Reader.deinit(self: *mut Self)
 `readLine` reads only what it needs, so an interactive program answers
 each line as it arrives:
 
-```ore
+```aye
 import std
 import std.mem.Allocator
 
@@ -1675,7 +1675,7 @@ std.map.HashEntry(K, V) { key: K, value: *mut V }
 `HashMap` finds a key by `@hash` and `==`: a struct key (a node handle)
 is compared field by field.
 
-```ore
+```aye
 import std.heap.General
 import std.map.IntMap
 import std.map.StrMap
@@ -1789,7 +1789,7 @@ is false). The sort is not stable (break ties in `less`), allocates
 nothing and takes O(n log n) time: insertion sort up to 12 elements, heap
 sort above. `less` is a function value (section 4): a top-level function.
 
-```ore
+```aye
 import std
 
 fn byLen(a: []u8, b: []u8) bool {
@@ -1833,7 +1833,7 @@ on a pointer to an integer: `@atomicLoad(&x)`, `@atomicStore(&mut x, v)`,
 `@atomicCas(&mut x, expected, new)` (E0101 otherwise). A program fanning
 work out to threads:
 
-```ore
+```aye
 import std.heap.General
 import std.sync.Channel
 import std.thread
@@ -1882,7 +1882,7 @@ returns. Values go in and out through `arg`. Copies of a `Coroutine` are
 the same coroutine. A coroutine may make and resume others; `yield` goes
 back to whoever resumed the running one. A generator:
 
-```ore
+```aye
 import std.coro
 import std.heap.General
 
@@ -1970,7 +1970,7 @@ The convention for detailed errors: the function takes `diags: *mut
 Diagnostics`, adds one per problem (it may go on after one), and returns
 its error; the caller reads `diags.items()` in the `catch` block.
 
-```ore
+```aye
 import std
 import std.diag
 import std.diag.Diagnostics
@@ -2020,7 +2020,7 @@ std.os.exit(code: i32)                            exit now with this status (flu
 To exit with a status and still free everything, do the work in a function
 that returns the status, and call `deinit` yourself before `exit`:
 
-```ore
+```aye
 import std
 import std.mem.Allocator
 
@@ -2072,11 +2072,11 @@ error WriteError { ConnectionClosed, WriteFailed }
 ```
 
 A server listens on port 0, serves on a `std.thread`, and its tests
-connect to `Listener.port()` (`tests/cases/net_echo.ore`, `net_names.ore`).
+connect to `Listener.port()` (`tests/cases/net_echo.aye`, `net_names.aye`).
 
 ### A complete CLI
 
-```ore
+```aye
 import std
 import std.mem.Allocator
 
@@ -2152,19 +2152,19 @@ pub fn main() !void {
 Errors print as `file:line:col: error[E0023]: message`, sorted by file and
 position, all of them (up to 50): the compiler recovers from errors. If
 there are syntax or import errors, type checking does not run. Every error
-has a stable code; `ore explain E0023` shows a wrong and a fixed program.
+has a stable code; `aye explain E0023` shows a wrong and a fixed program.
 
 Some errors have a fix-it, printed as `file:line:col: help: <what it does>`
-and applied by `ore fix`: `let` to `var` when a `let` is assigned; joining
+and applied by `aye fix`: `let` to `var` when a `let` is assigned; joining
 `}` and `else`; a missing trailing `,` before a closing `)`/`}` on the next
 line; renaming an unknown name to the only visible name one edit away;
 adding `import std.mem.Allocator` (and `AllocError`, `std.heap.General`,
 `std.heap.Arena`) when those names are used without an import.
 
-`ore check --json` prints one line:
+`aye check --json` prints one line:
 
 ```
-{"file":"f.ore","diagnostics":[{"severity":"error","code":"E0032","file":"f.ore","line":4,"col":9,
+{"file":"f.aye","diagnostics":[{"severity":"error","code":"E0032","file":"f.aye","line":4,"col":9,
   "message":"cannot assign to `sum`: it is immutable (declare it with `var`)",
   "fixes":[{"line":2,"col":5,"end_line":2,"end_col":8,"replacement":"var"}]}]}
 ```

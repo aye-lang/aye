@@ -2,10 +2,10 @@
 //!
 //! The generated C includes only freestanding headers (stdint/stddef/stdbool)
 //! so user `extern fn` declarations never clash with libc headers. The
-//! runtime reaches libc through asm-labelled aliases (`ore_rt_printf` ->
-//! `printf`). An `extern fn` is declared from its Ore signature, and an
+//! runtime reaches libc through asm-labelled aliases (`aye_rt_printf` ->
+//! `printf`). An `extern fn` is declared from its Aye signature, and an
 //! `extern struct` is a C struct with its fields in declaration order (as
-//! every struct is), so the C layout is what the Ore declaration says; it
+//! every struct is), so the C layout is what the Aye declaration says; it
 //! must match the library's. A function type is a `typedef` of a C function
 //! pointer, and a `pub extern fn` is defined under its own name, not
 //! `static`. Overflow, bounds, shift, division and cast checks are emitted
@@ -13,16 +13,16 @@
 //! locals and constants, so a check can read them again), and overflow of
 //! `+ - *` as `__builtin_add_overflow` into the destination: no function call
 //! at `-O0`, and the `#line` of the statement. `fast` mode and
-//! `@setSafety(false)` blocks leave them out (`ORE_CHECKS` is 0 in `fast`
+//! `@setSafety(false)` blocks leave them out (`AYE_CHECKS` is 0 in `fast`
 //! mode, for the runtime's own checks).
-//! `ORE_TRACE` (debug mode) keeps the error return trace that is printed when
+//! `AYE_TRACE` (debug mode) keeps the error return trace that is printed when
 //! `main` returns an error, and turns on the leak, double-free and
 //! use-after-free checks of `General`.
 //!
 //! In test mode the C `main` runs the test whose index is its argument.
 //!
 //! A source position reaches the runtime as two `int`s: the line, with the
-//! file's index in its upper bits (`ORE_FILE`, `ORE_LINE`), and the column.
+//! file's index in its upper bits (`AYE_FILE`, `AYE_LINE`), and the column.
 
 use crate::ast::BinOp;
 use crate::diag::Span;
@@ -35,152 +35,152 @@ const PRELUDE: &str = r#"#include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
 
-#define ORE_RT static __attribute__((unused))
-#define ORE_STR_(x) #x
-#define ORE_STR(x) ORE_STR_(x)
-#define ORE_SYM(n) ORE_STR(__USER_LABEL_PREFIX__) n
-extern int ore_rt_printf(const char *, ...) __asm__(ORE_SYM("printf"));
-extern int ore_rt_dprintf(int, const char *, ...) __asm__(ORE_SYM("dprintf"));
-extern int ore_rt_fflush(void *) __asm__(ORE_SYM("fflush"));
-extern void ore_rt_abort(void) __asm__(ORE_SYM("abort")) __attribute__((noreturn));
-extern void ore_rt_exit(int) __asm__(ORE_SYM("exit")) __attribute__((noreturn));
-extern void *ore_rt_malloc(size_t) __asm__(ORE_SYM("malloc"));
-extern void ore_rt_free(void *) __asm__(ORE_SYM("free"));
-extern int ore_rt_memcmp(const void *, const void *, size_t) __asm__(ORE_SYM("memcmp"));
-extern int ore_rt_open(const char *, int, ...) __asm__(ORE_SYM("open"));
-extern int ore_rt_access(const char *, int) __asm__(ORE_SYM("access"));
-extern int ore_rt_clock_gettime(int, int64_t *) __asm__(ORE_SYM("clock_gettime"));
-#define ORE_FILE(l) ore_files[(l) >> 20]
-#define ORE_LINE(l) ((l) & 0xfffff)
+#define AYE_RT static __attribute__((unused))
+#define AYE_STR_(x) #x
+#define AYE_STR(x) AYE_STR_(x)
+#define AYE_SYM(n) AYE_STR(__USER_LABEL_PREFIX__) n
+extern int aye_rt_printf(const char *, ...) __asm__(AYE_SYM("printf"));
+extern int aye_rt_dprintf(int, const char *, ...) __asm__(AYE_SYM("dprintf"));
+extern int aye_rt_fflush(void *) __asm__(AYE_SYM("fflush"));
+extern void aye_rt_abort(void) __asm__(AYE_SYM("abort")) __attribute__((noreturn));
+extern void aye_rt_exit(int) __asm__(AYE_SYM("exit")) __attribute__((noreturn));
+extern void *aye_rt_malloc(size_t) __asm__(AYE_SYM("malloc"));
+extern void aye_rt_free(void *) __asm__(AYE_SYM("free"));
+extern int aye_rt_memcmp(const void *, const void *, size_t) __asm__(AYE_SYM("memcmp"));
+extern int aye_rt_open(const char *, int, ...) __asm__(AYE_SYM("open"));
+extern int aye_rt_access(const char *, int) __asm__(AYE_SYM("access"));
+extern int aye_rt_clock_gettime(int, int64_t *) __asm__(AYE_SYM("clock_gettime"));
+#define AYE_FILE(l) aye_files[(l) >> 20]
+#define AYE_LINE(l) ((l) & 0xfffff)
 
-ORE_RT __attribute__((noreturn, cold)) void ore_panic(int line, int col, const char *msg) {
-    ore_rt_fflush(0);
-    ore_rt_dprintf(2, "%s:%d:%d: panic: %s\n", ORE_FILE(line), ORE_LINE(line), col, msg);
-    ore_rt_abort();
+AYE_RT __attribute__((noreturn, cold)) void aye_panic(int line, int col, const char *msg) {
+    aye_rt_fflush(0);
+    aye_rt_dprintf(2, "%s:%d:%d: panic: %s\n", AYE_FILE(line), AYE_LINE(line), col, msg);
+    aye_rt_abort();
 }
-ORE_RT __attribute__((noreturn, cold)) void ore_panic_index(int line, int col, size_t i, size_t len) {
-    ore_rt_fflush(0);
-    ore_rt_dprintf(2, "%s:%d:%d: panic: index out of bounds: index %llu, len %llu\n", ORE_FILE(line), ORE_LINE(line), col,
+AYE_RT __attribute__((noreturn, cold)) void aye_panic_index(int line, int col, size_t i, size_t len) {
+    aye_rt_fflush(0);
+    aye_rt_dprintf(2, "%s:%d:%d: panic: index out of bounds: index %llu, len %llu\n", AYE_FILE(line), AYE_LINE(line), col,
                    (unsigned long long)i, (unsigned long long)len);
-    ore_rt_abort();
+    aye_rt_abort();
 }
-ORE_RT __attribute__((noreturn, cold)) void ore_panic_slice(int line, int col, size_t lo, size_t hi, size_t len) {
-    ore_rt_fflush(0);
-    ore_rt_dprintf(2, "%s:%d:%d: panic: slice bounds out of range: [%llu..%llu] with len %llu\n", ORE_FILE(line),
-                   ORE_LINE(line), col, (unsigned long long)lo, (unsigned long long)hi, (unsigned long long)len);
-    ore_rt_abort();
+AYE_RT __attribute__((noreturn, cold)) void aye_panic_slice(int line, int col, size_t lo, size_t hi, size_t len) {
+    aye_rt_fflush(0);
+    aye_rt_dprintf(2, "%s:%d:%d: panic: slice bounds out of range: [%llu..%llu] with len %llu\n", AYE_FILE(line),
+                   AYE_LINE(line), col, (unsigned long long)lo, (unsigned long long)hi, (unsigned long long)len);
+    aye_rt_abort();
 }
-#define ORE_UNLIKELY(c) __builtin_expect(!!(c), 0)
+#define AYE_UNLIKELY(c) __builtin_expect(!!(c), 0)
 
 /* `@hash`: each scalar is mixed in with SplitMix64's finalizer. A float
    hashes its bits, with -0.0 as 0.0 (they are `==`). */
-ORE_RT uint64_t ore_hash_mix(uint64_t h, uint64_t v) {
+AYE_RT uint64_t aye_hash_mix(uint64_t h, uint64_t v) {
     uint64_t x = h ^ (v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
     x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
     return x ^ (x >> 31);
 }
-ORE_RT uint64_t ore_hash_f64(double d) {
+AYE_RT uint64_t aye_hash_f64(double d) {
     uint64_t b;
     if (d == 0) d = 0;
     __builtin_memcpy(&b, &d, sizeof b);
     return b;
 }
 
-#define ORE_TRACE_MAX 64
+#define AYE_TRACE_MAX 64
 /* Each thread has its own error return trace, and so does each coroutine
-   (`ore_trace_buf` is the running coroutine's; null for the thread's). */
-typedef struct ore_trace_ent { int line, col; } ore_trace_ent;
-static _Thread_local __attribute__((unused)) ore_trace_ent ore_trace[ORE_TRACE_MAX];
-static _Thread_local __attribute__((unused)) ore_trace_ent *ore_trace_buf;
-static _Thread_local __attribute__((unused)) uint32_t ore_trace_len;
-ORE_RT void ore_trace_push(int line, int col) {
-    if (ore_trace_len < ORE_TRACE_MAX) {
-        ore_trace_ent *t = ore_trace_buf ? ore_trace_buf : ore_trace;
-        t[ore_trace_len].line = line;
-        t[ore_trace_len].col = col;
+   (`aye_trace_buf` is the running coroutine's; null for the thread's). */
+typedef struct aye_trace_ent { int line, col; } aye_trace_ent;
+static _Thread_local __attribute__((unused)) aye_trace_ent aye_trace[AYE_TRACE_MAX];
+static _Thread_local __attribute__((unused)) aye_trace_ent *aye_trace_buf;
+static _Thread_local __attribute__((unused)) uint32_t aye_trace_len;
+AYE_RT void aye_trace_push(int line, int col) {
+    if (aye_trace_len < AYE_TRACE_MAX) {
+        aye_trace_ent *t = aye_trace_buf ? aye_trace_buf : aye_trace;
+        t[aye_trace_len].line = line;
+        t[aye_trace_len].col = col;
     }
-    ore_trace_len++;
+    aye_trace_len++;
 }
 /* `main` returned the error `e`: report it (with the trace in debug mode). */
-ORE_RT int ore_main_error(uint16_t e) {
-    ore_rt_fflush(0);
-    ore_rt_dprintf(2, "error: %s\n", ore_error_names[e]);
-    if (ORE_TRACE) {
-        ore_rt_dprintf(2, "error return trace:\n");
-        for (uint32_t i = 0; i < ore_trace_len && i < ORE_TRACE_MAX; i++) {
-            ore_rt_dprintf(2, "%s:%d:%d\n", ORE_FILE(ore_trace[i].line), ORE_LINE(ore_trace[i].line), ore_trace[i].col);
+AYE_RT int aye_main_error(uint16_t e) {
+    aye_rt_fflush(0);
+    aye_rt_dprintf(2, "error: %s\n", aye_error_names[e]);
+    if (AYE_TRACE) {
+        aye_rt_dprintf(2, "error return trace:\n");
+        for (uint32_t i = 0; i < aye_trace_len && i < AYE_TRACE_MAX; i++) {
+            aye_rt_dprintf(2, "%s:%d:%d\n", AYE_FILE(aye_trace[i].line), AYE_LINE(aye_trace[i].line), aye_trace[i].col);
         }
-        if (ore_trace_len > ORE_TRACE_MAX) ore_rt_dprintf(2, "(%u more)\n", ore_trace_len - ORE_TRACE_MAX);
+        if (aye_trace_len > AYE_TRACE_MAX) aye_rt_dprintf(2, "(%u more)\n", aye_trace_len - AYE_TRACE_MAX);
     }
     return 1;
 }
 
 /* Allocator: a data pointer and a vtable of byte-level functions. `line` and
-   `col` are the Ore call that allocates or frees; leak and double-free
+   `col` are the Aye call that allocates or frees; leak and double-free
    reports name it. `free` gets the size that was allocated. Alignment is
    at most 16, which malloc guarantees. */
-typedef struct ore_alloc_vt {
+typedef struct aye_alloc_vt {
     void *(*alloc)(void *self, size_t size, size_t align, int line, int col);
     void (*free)(void *self, void *p, size_t size, int line, int col);
-} ore_alloc_vt;
-typedef struct ore_Allocator { void *ptr; const ore_alloc_vt *vt; } ore_Allocator;
-ORE_RT void *ore_alloc(ore_Allocator a, size_t size, size_t align, int line, int col) {
+} aye_alloc_vt;
+typedef struct aye_Allocator { void *ptr; const aye_alloc_vt *vt; } aye_Allocator;
+AYE_RT void *aye_alloc(aye_Allocator a, size_t size, size_t align, int line, int col) {
     return a.vt->alloc(a.ptr, size, align, line, col);
 }
-ORE_RT void ore_free(ore_Allocator a, void *p, size_t size, int line, int col) { a.vt->free(a.ptr, p, size, line, col); }
+AYE_RT void aye_free(aye_Allocator a, void *p, size_t size, int line, int col) { a.vt->free(a.ptr, p, size, line, col); }
 /* `n` elements of `size` bytes; null when the size overflows. */
-ORE_RT void *ore_alloc_n(ore_Allocator a, size_t n, size_t size, size_t align, int line, int col) {
+AYE_RT void *aye_alloc_n(aye_Allocator a, size_t n, size_t size, size_t align, int line, int col) {
     if (size && n > SIZE_MAX / size) return 0;
-    return ore_alloc(a, n * size, align, line, col);
+    return aye_alloc(a, n * size, align, line, col);
 }
 /* Free a slice of `n` elements of `size` bytes; an empty one was not
    allocated. */
-ORE_RT void ore_free_n(ore_Allocator a, void *p, size_t n, size_t size, int line, int col) {
-    if (n) ore_free(a, p, n * size, line, col);
+AYE_RT void aye_free_n(aye_Allocator a, void *p, size_t n, size_t size, int line, int col) {
+    if (n) aye_free(a, p, n * size, line, col);
 }
 
 /* General: libc malloc/free. With `track` (debug mode, and the test
    allocator) each block has a header before it: its allocator, size,
    state, and where it was allocated and freed. Live blocks are in a
    doubly linked list, oldest first, for the leak report. A freed block is
-   filled with ORE_POISON and kept in a FIFO quarantine of at most
-   ORE_QUARANTINE bytes before libc gets it back, so its address is not
+   filled with AYE_POISON and kept in a FIFO quarantine of at most
+   AYE_QUARANTINE bytes before libc gets it back, so its address is not
    reused soon: a second free of it panics, and when it leaves the
-   quarantine (or at `deinit`) a byte that is no longer ORE_POISON means it
+   quarantine (or at `deinit`) a byte that is no longer AYE_POISON means it
    was written after it was freed. Allocation and free take constant time. */
-#define ORE_LIVE 0x4f52454c49564521ull
-#define ORE_FREED 0x4f52454652454544ull
-#define ORE_POISON 0xdd
-#define ORE_QUARANTINE ((size_t)32 << 20)
-typedef struct __attribute__((aligned(16))) ore_alloc_hdr {
-    struct ore_alloc_hdr *prev, *next; /* the live list, or (next) the quarantine */
+#define AYE_LIVE 0x4f52454c49564521ull
+#define AYE_FREED 0x4f52454652454544ull
+#define AYE_POISON 0xdd
+#define AYE_QUARANTINE ((size_t)32 << 20)
+typedef struct __attribute__((aligned(16))) aye_alloc_hdr {
+    struct aye_alloc_hdr *prev, *next; /* the live list, or (next) the quarantine */
     void *owner;
     size_t size;
     int line, col, free_line, free_col;
-    uint64_t state; /* ORE_LIVE or ORE_FREED */
-} ore_alloc_hdr;
-typedef struct ore_General {
-    ore_alloc_hdr *head, *tail;   /* live blocks, oldest first */
-    ore_alloc_hdr *qhead, *qtail; /* freed blocks, oldest first */
+    uint64_t state; /* AYE_LIVE or AYE_FREED */
+} aye_alloc_hdr;
+typedef struct aye_General {
+    aye_alloc_hdr *head, *tail;   /* live blocks, oldest first */
+    aye_alloc_hdr *qhead, *qtail; /* freed blocks, oldest first */
     size_t qbytes;
     bool track;
-} ore_General;
-ORE_RT void *ore_general_alloc(void *self, size_t size, size_t align, int line, int col) {
-    ore_General *g = self;
+} aye_General;
+AYE_RT void *aye_general_alloc(void *self, size_t size, size_t align, int line, int col) {
+    aye_General *g = self;
     (void)align;
-    if (!g->track) return ore_rt_malloc(size ? size : 1);
-    if (size > SIZE_MAX - sizeof(ore_alloc_hdr)) return 0;
-    ore_alloc_hdr *h = ore_rt_malloc(sizeof *h + size);
+    if (!g->track) return aye_rt_malloc(size ? size : 1);
+    if (size > SIZE_MAX - sizeof(aye_alloc_hdr)) return 0;
+    aye_alloc_hdr *h = aye_rt_malloc(sizeof *h + size);
     if (!h) return 0;
-    *h = (ore_alloc_hdr){g->tail, 0, g, size, line, col, 0, 0, ORE_LIVE};
+    *h = (aye_alloc_hdr){g->tail, 0, g, size, line, col, 0, 0, AYE_LIVE};
     if (g->tail) g->tail->next = h; else g->head = h;
     g->tail = h;
     return h + 1;
 }
 /* Give a quarantined block back to libc, after checking that nothing wrote
    to it since it was freed. */
-ORE_RT void ore_general_release(ore_alloc_hdr *h) {
+AYE_RT void aye_general_release(aye_alloc_hdr *h) {
     const unsigned char *b = (const unsigned char *)(h + 1);
     size_t i = 0;
     for (; i + 8 <= h->size; i += 8) {
@@ -189,85 +189,85 @@ ORE_RT void ore_general_release(ore_alloc_hdr *h) {
         if (w != 0xddddddddddddddddull) break;
     }
     for (; i < h->size; i++) {
-        if (b[i] != ORE_POISON) {
-            ore_rt_fflush(0);
-            ore_rt_dprintf(2, "%s:%d:%d: panic: use after free: memory allocated at %s:%d:%d and freed here was written after it was freed\n",
-                           ORE_FILE(h->free_line), ORE_LINE(h->free_line), h->free_col, ORE_FILE(h->line), ORE_LINE(h->line), h->col);
-            ore_rt_abort();
+        if (b[i] != AYE_POISON) {
+            aye_rt_fflush(0);
+            aye_rt_dprintf(2, "%s:%d:%d: panic: use after free: memory allocated at %s:%d:%d and freed here was written after it was freed\n",
+                           AYE_FILE(h->free_line), AYE_LINE(h->free_line), h->free_col, AYE_FILE(h->line), AYE_LINE(h->line), h->col);
+            aye_rt_abort();
         }
     }
     h->state = 0;
-    ore_rt_free(h);
+    aye_rt_free(h);
 }
-ORE_RT void ore_general_free(void *self, void *p, size_t size, int line, int col) {
-    ore_General *g = self;
+AYE_RT void aye_general_free(void *self, void *p, size_t size, int line, int col) {
+    aye_General *g = self;
     (void)size;
     if (!g->track) {
-        ore_rt_free(p);
+        aye_rt_free(p);
         return;
     }
-    ore_alloc_hdr *h = (ore_alloc_hdr *)p - 1;
-    if ((uintptr_t)p % 16 || h->owner != g || (h->state != ORE_LIVE && h->state != ORE_FREED)) {
-        ore_panic(line, col, "free of memory that this allocator did not allocate");
+    aye_alloc_hdr *h = (aye_alloc_hdr *)p - 1;
+    if ((uintptr_t)p % 16 || h->owner != g || (h->state != AYE_LIVE && h->state != AYE_FREED)) {
+        aye_panic(line, col, "free of memory that this allocator did not allocate");
     }
-    if (h->state == ORE_FREED) {
-        ore_rt_fflush(0);
-        ore_rt_dprintf(2, "%s:%d:%d: panic: double free of memory allocated at %s:%d:%d and already freed at %s:%d:%d\n",
-                       ORE_FILE(line), ORE_LINE(line), col, ORE_FILE(h->line), ORE_LINE(h->line), h->col,
-                       ORE_FILE(h->free_line), ORE_LINE(h->free_line), h->free_col);
-        ore_rt_abort();
+    if (h->state == AYE_FREED) {
+        aye_rt_fflush(0);
+        aye_rt_dprintf(2, "%s:%d:%d: panic: double free of memory allocated at %s:%d:%d and already freed at %s:%d:%d\n",
+                       AYE_FILE(line), AYE_LINE(line), col, AYE_FILE(h->line), AYE_LINE(h->line), h->col,
+                       AYE_FILE(h->free_line), AYE_LINE(h->free_line), h->free_col);
+        aye_rt_abort();
     }
     if (h->prev) h->prev->next = h->next; else g->head = h->next;
     if (h->next) h->next->prev = h->prev; else g->tail = h->prev;
-    h->state = ORE_FREED;
+    h->state = AYE_FREED;
     h->free_line = line;
     h->free_col = col;
-    __builtin_memset(h + 1, ORE_POISON, h->size);
+    __builtin_memset(h + 1, AYE_POISON, h->size);
     h->prev = h->next = 0;
     if (g->qtail) g->qtail->next = h; else g->qhead = h;
     g->qtail = h;
     g->qbytes += sizeof *h + h->size;
-    while (g->qbytes > ORE_QUARANTINE) {
-        ore_alloc_hdr *old = g->qhead;
+    while (g->qbytes > AYE_QUARANTINE) {
+        aye_alloc_hdr *old = g->qhead;
         g->qhead = old->next;
         if (!g->qhead) g->qtail = 0;
         g->qbytes -= sizeof *old + old->size;
-        ore_general_release(old);
+        aye_general_release(old);
     }
 }
-static __attribute__((unused)) const ore_alloc_vt ore_general_vt = {ore_general_alloc, ore_general_free};
-ORE_RT ore_General ore_general_init(void) { return (ore_General){.track = ORE_TRACE}; }
-ORE_RT ore_Allocator ore_general_allocator(ore_General *g) { return (ore_Allocator){g, &ore_general_vt}; }
+static __attribute__((unused)) const aye_alloc_vt aye_general_vt = {aye_general_alloc, aye_general_free};
+AYE_RT aye_General aye_general_init(void) { return (aye_General){.track = AYE_TRACE}; }
+AYE_RT aye_Allocator aye_general_allocator(aye_General *g) { return (aye_Allocator){g, &aye_general_vt}; }
 /* Report each allocation that was not freed, in allocation order, then
    free all memory (checking the quarantined blocks). Returns the number of
    leaks. */
-ORE_RT size_t ore_general_deinit(ore_General *g) {
+AYE_RT size_t aye_general_deinit(aye_General *g) {
     size_t leaks = 0;
-    for (ore_alloc_hdr *h = g->head, *next; h; h = next) {
+    for (aye_alloc_hdr *h = g->head, *next; h; h = next) {
         next = h->next;
-        if (!leaks) ore_rt_fflush(0);
-        ore_rt_dprintf(2, "%s:%d:%d: leak: %llu bytes allocated here were never freed\n", ORE_FILE(h->line),
-                       ORE_LINE(h->line), h->col, (unsigned long long)h->size);
+        if (!leaks) aye_rt_fflush(0);
+        aye_rt_dprintf(2, "%s:%d:%d: leak: %llu bytes allocated here were never freed\n", AYE_FILE(h->line),
+                       AYE_LINE(h->line), h->col, (unsigned long long)h->size);
         leaks++;
         h->state = 0;
-        ore_rt_free(h);
+        aye_rt_free(h);
     }
-    for (ore_alloc_hdr *h = g->qhead, *next; h; h = next) {
+    for (aye_alloc_hdr *h = g->qhead, *next; h; h = next) {
         next = h->next;
-        ore_general_release(h);
+        aye_general_release(h);
     }
-    *g = (ore_General){.track = g->track};
+    *g = (aye_General){.track = g->track};
     return leaks;
 }
 
 /* Arena: bump allocation in chunks from the backing allocator. `free` does
    nothing; `deinit` frees every chunk. */
-typedef struct ore_arena_chunk { struct ore_arena_chunk *next; size_t size; } ore_arena_chunk;
-typedef struct ore_Arena { ore_Allocator backing; ore_arena_chunk *chunks; size_t used; } ore_Arena;
-#define ORE_ARENA_CHUNK 4096
-ORE_RT void *ore_arena_alloc(void *self, size_t size, size_t align, int line, int col) {
-    ore_Arena *a = self;
-    ore_arena_chunk *c = a->chunks;
+typedef struct aye_arena_chunk { struct aye_arena_chunk *next; size_t size; } aye_arena_chunk;
+typedef struct aye_Arena { aye_Allocator backing; aye_arena_chunk *chunks; size_t used; } aye_Arena;
+#define AYE_ARENA_CHUNK 4096
+AYE_RT void *aye_arena_alloc(void *self, size_t size, size_t align, int line, int col) {
+    aye_Arena *a = self;
+    aye_arena_chunk *c = a->chunks;
     if (c) {
         size_t off = (a->used + align - 1) & ~(align - 1);
         if (off <= c->size && size <= c->size - off) {
@@ -275,8 +275,8 @@ ORE_RT void *ore_arena_alloc(void *self, size_t size, size_t align, int line, in
             return (char *)(c + 1) + off;
         }
     }
-    size_t cap = size > ORE_ARENA_CHUNK ? size : ORE_ARENA_CHUNK;
-    c = ore_alloc(a->backing, sizeof(ore_arena_chunk) + cap, 16, line, col);
+    size_t cap = size > AYE_ARENA_CHUNK ? size : AYE_ARENA_CHUNK;
+    c = aye_alloc(a->backing, sizeof(aye_arena_chunk) + cap, 16, line, col);
     if (!c) return 0;
     c->next = a->chunks;
     c->size = cap;
@@ -284,14 +284,14 @@ ORE_RT void *ore_arena_alloc(void *self, size_t size, size_t align, int line, in
     a->used = size;
     return c + 1;
 }
-ORE_RT void ore_arena_free(void *self, void *p, size_t size, int line, int col) {}
-static __attribute__((unused)) const ore_alloc_vt ore_arena_vt = {ore_arena_alloc, ore_arena_free};
-ORE_RT ore_Arena ore_arena_init(ore_Allocator backing) { return (ore_Arena){backing, 0, 0}; }
-ORE_RT ore_Allocator ore_arena_allocator(ore_Arena *a) { return (ore_Allocator){a, &ore_arena_vt}; }
-ORE_RT void ore_arena_deinit(ore_Arena *a, int line, int col) {
-    for (ore_arena_chunk *c = a->chunks, *next; c; c = next) {
+AYE_RT void aye_arena_free(void *self, void *p, size_t size, int line, int col) {}
+static __attribute__((unused)) const aye_alloc_vt aye_arena_vt = {aye_arena_alloc, aye_arena_free};
+AYE_RT aye_Arena aye_arena_init(aye_Allocator backing) { return (aye_Arena){backing, 0, 0}; }
+AYE_RT aye_Allocator aye_arena_allocator(aye_Arena *a) { return (aye_Allocator){a, &aye_arena_vt}; }
+AYE_RT void aye_arena_deinit(aye_Arena *a, int line, int col) {
+    for (aye_arena_chunk *c = a->chunks, *next; c; c = next) {
         next = c->next;
-        ore_free(a->backing, c, sizeof(ore_arena_chunk) + c->size, line, col);
+        aye_free(a->backing, c, sizeof(aye_arena_chunk) + c->size, line, col);
     }
     a->chunks = 0;
     a->used = 0;
@@ -299,111 +299,111 @@ ORE_RT void ore_arena_deinit(ore_Arena *a, int line, int col) {
 
 /* Tests: the leak-checked allocator, assertions, and the end of a test. A
    failed assertion ends the test process with status 1. */
-static __attribute__((unused)) ore_General ore_test_gpa = {.track = true};
-ORE_RT ore_Allocator ore_test_allocator(void) { return ore_general_allocator(&ore_test_gpa); }
-#define ORE_ASSERT_FAILED(line, col, fmt, ...)                                                                  \
+static __attribute__((unused)) aye_General aye_test_gpa = {.track = true};
+AYE_RT aye_Allocator aye_test_allocator(void) { return aye_general_allocator(&aye_test_gpa); }
+#define AYE_ASSERT_FAILED(line, col, fmt, ...)                                                                  \
     do {                                                                                                         \
-        ore_rt_fflush(0);                                                                                        \
-        ore_rt_dprintf(2, "%s:%d:%d: assertion failed: " fmt "\n", ORE_FILE(line), ORE_LINE(line), col, __VA_ARGS__); \
-        ore_rt_exit(1);                                                                                          \
+        aye_rt_fflush(0);                                                                                        \
+        aye_rt_dprintf(2, "%s:%d:%d: assertion failed: " fmt "\n", AYE_FILE(line), AYE_LINE(line), col, __VA_ARGS__); \
+        aye_rt_exit(1);                                                                                          \
     } while (0)
-ORE_RT void ore_expect(bool c, int line, int col) {
-    if (!c) ORE_ASSERT_FAILED(line, col, "%s", "condition is false");
+AYE_RT void aye_expect(bool c, int line, int col) {
+    if (!c) AYE_ASSERT_FAILED(line, col, "%s", "condition is false");
 }
-ORE_RT void ore_expect_eq_i(int64_t want, int64_t got, int line, int col) {
-    if (want != got) ORE_ASSERT_FAILED(line, col, "expected %lld, found %lld", (long long)want, (long long)got);
+AYE_RT void aye_expect_eq_i(int64_t want, int64_t got, int line, int col) {
+    if (want != got) AYE_ASSERT_FAILED(line, col, "expected %lld, found %lld", (long long)want, (long long)got);
 }
-ORE_RT void ore_expect_eq_u(uint64_t want, uint64_t got, int line, int col) {
+AYE_RT void aye_expect_eq_u(uint64_t want, uint64_t got, int line, int col) {
     if (want != got)
-        ORE_ASSERT_FAILED(line, col, "expected %llu, found %llu", (unsigned long long)want, (unsigned long long)got);
+        AYE_ASSERT_FAILED(line, col, "expected %llu, found %llu", (unsigned long long)want, (unsigned long long)got);
 }
-ORE_RT void ore_expect_eq_f(double want, double got, int line, int col) {
-    if (want != got) ORE_ASSERT_FAILED(line, col, "expected %g, found %g", want, got);
+AYE_RT void aye_expect_eq_f(double want, double got, int line, int col) {
+    if (want != got) AYE_ASSERT_FAILED(line, col, "expected %g, found %g", want, got);
 }
-ORE_RT void ore_expect_eq_b(bool want, bool got, int line, int col) {
-    if (want != got) ORE_ASSERT_FAILED(line, col, "expected %s, found %s", want ? "true" : "false", got ? "true" : "false");
+AYE_RT void aye_expect_eq_b(bool want, bool got, int line, int col) {
+    if (want != got) AYE_ASSERT_FAILED(line, col, "expected %s, found %s", want ? "true" : "false", got ? "true" : "false");
 }
-ORE_RT void ore_expect_eq_s(const uint8_t *wp, size_t wn, const uint8_t *gp, size_t gn, int line, int col) {
-    if (wn != gn || ore_rt_memcmp(wp, gp, wn) != 0)
-        ORE_ASSERT_FAILED(line, col, "expected \"%.*s\", found \"%.*s\"", (int)wn, (const char *)wp, (int)gn, (const char *)gp);
+AYE_RT void aye_expect_eq_s(const uint8_t *wp, size_t wn, const uint8_t *gp, size_t gn, int line, int col) {
+    if (wn != gn || aye_rt_memcmp(wp, gp, wn) != 0)
+        AYE_ASSERT_FAILED(line, col, "expected \"%.*s\", found \"%.*s\"", (int)wn, (const char *)wp, (int)gn, (const char *)gp);
 }
 /* A test returned `err` (0: no error): report it (with the trace in debug
    mode) and the leaks of the test allocator. Returns the exit status. */
-ORE_RT int ore_test_end(uint16_t err) {
-    int status = err ? ore_main_error(err) : 0;
-    if (ore_general_deinit(&ore_test_gpa)) status = 1;
+AYE_RT int aye_test_end(uint16_t err) {
+    int status = err ? aye_main_error(err) : 0;
+    if (aye_general_deinit(&aye_test_gpa)) status = 1;
     return status;
 }
 
-ORE_RT void ore_print_i(int64_t v, bool nl) { ore_rt_printf(nl ? "%lld\n" : "%lld", (long long)v); }
-ORE_RT void ore_print_u(uint64_t v, bool nl) { ore_rt_printf(nl ? "%llu\n" : "%llu", (unsigned long long)v); }
-ORE_RT void ore_print_f(double v, bool nl) { ore_rt_printf(nl ? "%g\n" : "%g", v); }
-ORE_RT void ore_print_b(bool v, bool nl) { ore_rt_printf(nl ? "%s\n" : "%s", v ? "true" : "false"); }
-ORE_RT void ore_print_s(const uint8_t *p, size_t n, bool nl) {
-    ore_rt_printf(nl ? "%.*s\n" : "%.*s", (int)n, (const char *)p);
+AYE_RT void aye_print_i(int64_t v, bool nl) { aye_rt_printf(nl ? "%lld\n" : "%lld", (long long)v); }
+AYE_RT void aye_print_u(uint64_t v, bool nl) { aye_rt_printf(nl ? "%llu\n" : "%llu", (unsigned long long)v); }
+AYE_RT void aye_print_f(double v, bool nl) { aye_rt_printf(nl ? "%g\n" : "%g", v); }
+AYE_RT void aye_print_b(bool v, bool nl) { aye_rt_printf(nl ? "%s\n" : "%s", v ? "true" : "false"); }
+AYE_RT void aye_print_s(const uint8_t *p, size_t n, bool nl) {
+    aye_rt_printf(nl ? "%.*s\n" : "%.*s", (int)n, (const char *)p);
 }
 
 /* std.log: each piece of the format and argument is written to stderr. */
-ORE_RT void ore_log_s(const uint8_t *p, size_t n) { ore_rt_dprintf(2, "%.*s", (int)n, (const char *)p); }
-ORE_RT void ore_log_i(int64_t v) { ore_rt_dprintf(2, "%lld", (long long)v); }
-ORE_RT void ore_log_u(uint64_t v) { ore_rt_dprintf(2, "%llu", (unsigned long long)v); }
-ORE_RT void ore_log_f(double v) { ore_rt_dprintf(2, "%g", v); }
-ORE_RT void ore_log_b(bool v) { ore_rt_dprintf(2, "%s", v ? "true" : "false"); }
-ORE_RT void ore_log_e(uint16_t e) { ore_rt_dprintf(2, "%s", ore_error_names[e]); }
+AYE_RT void aye_log_s(const uint8_t *p, size_t n) { aye_rt_dprintf(2, "%.*s", (int)n, (const char *)p); }
+AYE_RT void aye_log_i(int64_t v) { aye_rt_dprintf(2, "%lld", (long long)v); }
+AYE_RT void aye_log_u(uint64_t v) { aye_rt_dprintf(2, "%llu", (unsigned long long)v); }
+AYE_RT void aye_log_f(double v) { aye_rt_dprintf(2, "%g", v); }
+AYE_RT void aye_log_b(bool v) { aye_rt_dprintf(2, "%s", v ? "true" : "false"); }
+AYE_RT void aye_log_e(uint16_t e) { aye_rt_dprintf(2, "%s", aye_error_names[e]); }
 
 /* Hooks that std calls through `extern fn`: the program's arguments;
    `open` for reading or `create` (write, create, truncate) with a path that
    is not NUL-terminated (the fd, or -errno); `exists`; and the monotonic
    clock in nanoseconds. Flag and clock values differ between macOS and
    Linux. */
-static int ore_argc;
-static char **ore_argv;
-ORE_RT int32_t ore_std_argc(void) { return ore_argc; }
-ORE_RT uint8_t *ore_std_argv(int32_t i) { return (uint8_t *)ore_argv[i]; }
+static int aye_argc;
+static char **aye_argv;
+AYE_RT int32_t aye_std_argc(void) { return aye_argc; }
+AYE_RT uint8_t *aye_std_argv(int32_t i) { return (uint8_t *)aye_argv[i]; }
 #ifdef __APPLE__
-extern int *ore_rt_errno_loc(void) __asm__(ORE_SYM("__error"));
+extern int *aye_rt_errno_loc(void) __asm__(AYE_SYM("__error"));
 #else
-extern int *ore_rt_errno_loc(void) __asm__(ORE_SYM("__errno_location"));
+extern int *aye_rt_errno_loc(void) __asm__(AYE_SYM("__errno_location"));
 #endif
 #ifdef __APPLE__
-#define ORE_O_CREATE 0x601 /* O_WRONLY | O_CREAT | O_TRUNC */
-#define ORE_CLOCK_MONOTONIC 6
+#define AYE_O_CREATE 0x601 /* O_WRONLY | O_CREAT | O_TRUNC */
+#define AYE_CLOCK_MONOTONIC 6
 #else
-#define ORE_O_CREATE 01101
-#define ORE_CLOCK_MONOTONIC 1
+#define AYE_O_CREATE 01101
+#define AYE_CLOCK_MONOTONIC 1
 #endif
-static __attribute__((unused)) char *ore_c_path(uint8_t *path, size_t len) {
-    char *p = ore_rt_malloc(len + 1);
+static __attribute__((unused)) char *aye_c_path(uint8_t *path, size_t len) {
+    char *p = aye_rt_malloc(len + 1);
     if (!p) return 0;
     for (size_t i = 0; i < len; i++) p[i] = (char)path[i];
     p[len] = 0;
     return p;
 }
-static __attribute__((unused)) int32_t ore_std_open_flags(uint8_t *path, size_t len, int flags) {
-    char *p = ore_c_path(path, len);
+static __attribute__((unused)) int32_t aye_std_open_flags(uint8_t *path, size_t len, int flags) {
+    char *p = aye_c_path(path, len);
     if (!p) return -12;
-    int fd = ore_rt_open(p, flags, 0644);
-    int err = fd < 0 ? *ore_rt_errno_loc() : 0;
-    ore_rt_free(p);
+    int fd = aye_rt_open(p, flags, 0644);
+    int err = fd < 0 ? *aye_rt_errno_loc() : 0;
+    aye_rt_free(p);
     return fd < 0 ? -err : fd;
 }
-ORE_RT int32_t ore_std_open(uint8_t *path, size_t len) { return ore_std_open_flags(path, len, 0); }
-ORE_RT int32_t ore_std_create(uint8_t *path, size_t len) { return ore_std_open_flags(path, len, ORE_O_CREATE); }
-ORE_RT bool ore_std_exists(uint8_t *path, size_t len) {
-    char *p = ore_c_path(path, len);
+AYE_RT int32_t aye_std_open(uint8_t *path, size_t len) { return aye_std_open_flags(path, len, 0); }
+AYE_RT int32_t aye_std_create(uint8_t *path, size_t len) { return aye_std_open_flags(path, len, AYE_O_CREATE); }
+AYE_RT bool aye_std_exists(uint8_t *path, size_t len) {
+    char *p = aye_c_path(path, len);
     if (!p) return false;
-    int r = ore_rt_access(p, 0);
-    ore_rt_free(p);
+    int r = aye_rt_access(p, 0);
+    aye_rt_free(p);
     return r == 0;
 }
 /* std.net: errno. Its C symbol differs per OS (`__error`, `__errno_location`),
-   and Ore has no per-OS declarations, so this helper stays. */
-ORE_RT int32_t ore_std_errno(void) { return *ore_rt_errno_loc(); }
-ORE_RT double ore_std_inf(void) { return __builtin_inf(); }
-ORE_RT double ore_std_nan(void) { return __builtin_nan(""); }
-ORE_RT uint64_t ore_std_monotonic_ns(void) {
+   and Aye has no per-OS declarations, so this helper stays. */
+AYE_RT int32_t aye_std_errno(void) { return *aye_rt_errno_loc(); }
+AYE_RT double aye_std_inf(void) { return __builtin_inf(); }
+AYE_RT double aye_std_nan(void) { return __builtin_nan(""); }
+AYE_RT uint64_t aye_std_monotonic_ns(void) {
     int64_t ts[2] = {0, 0};
-    ore_rt_clock_gettime(ORE_CLOCK_MONOTONIC, ts);
+    aye_rt_clock_gettime(AYE_CLOCK_MONOTONIC, ts);
     return (uint64_t)ts[0] * 1000000000u + (uint64_t)ts[1];
 }
 
@@ -412,214 +412,214 @@ ORE_RT uint64_t ore_std_monotonic_ns(void) {
    the thread's stack as `panic: stack overflow`; any other fault crashes
    as it would without the handler. Each thread records the top of its
    stack (an address in its first frame) and its size: the main thread's
-   from `getrlimit`, another thread's from `ore_thread_spawn`. The C
+   from `getrlimit`, another thread's from `aye_thread_spawn`. The C
    structures differ between macOS and Linux and are written out here. */
 #ifdef __APPLE__
-#define ORE_SIGBUS 10
-#define ORE_SA_FLAGS 0x0041 /* SA_ONSTACK | SA_SIGINFO */
-#define ORE_SS_DISABLE 4
-#define ORE_SI_ADDR 24
-typedef struct { void *sp; size_t size; int flags; } ore_stack_t;
-typedef struct { void *action; uint32_t mask; int flags; } ore_sigaction_t;
+#define AYE_SIGBUS 10
+#define AYE_SA_FLAGS 0x0041 /* SA_ONSTACK | SA_SIGINFO */
+#define AYE_SS_DISABLE 4
+#define AYE_SI_ADDR 24
+typedef struct { void *sp; size_t size; int flags; } aye_stack_t;
+typedef struct { void *action; uint32_t mask; int flags; } aye_sigaction_t;
 #else
-#define ORE_SIGBUS 7
-#define ORE_SA_FLAGS 0x08000004 /* SA_ONSTACK | SA_SIGINFO */
-#define ORE_SS_DISABLE 2
-#define ORE_SI_ADDR 16
-typedef struct { void *sp; int flags; size_t size; } ore_stack_t;
-typedef struct { void *action; uint64_t mask[16]; int flags; void *restorer; } ore_sigaction_t;
+#define AYE_SIGBUS 7
+#define AYE_SA_FLAGS 0x08000004 /* SA_ONSTACK | SA_SIGINFO */
+#define AYE_SS_DISABLE 2
+#define AYE_SI_ADDR 16
+typedef struct { void *sp; int flags; size_t size; } aye_stack_t;
+typedef struct { void *action; uint64_t mask[16]; int flags; void *restorer; } aye_sigaction_t;
 #endif
-#define ORE_SIGSEGV 11
-#define ORE_ALTSTACK ((size_t)128 << 10)
-extern int ore_rt_sigaltstack(const ore_stack_t *, ore_stack_t *) __asm__(ORE_SYM("sigaltstack"));
-extern int ore_rt_sigaction(int, const ore_sigaction_t *, ore_sigaction_t *) __asm__(ORE_SYM("sigaction"));
-extern int ore_rt_getrlimit(int, uint64_t *) __asm__(ORE_SYM("getrlimit"));
-extern long ore_rt_write(int, const void *, size_t) __asm__(ORE_SYM("write"));
-static _Thread_local __attribute__((unused)) uintptr_t ore_stack_top, ore_stack_size;
-static _Thread_local __attribute__((unused)) void *ore_altstack;
-/* std.coro: a coroutine (see `ore_coro_init` below). While one runs,
-   `ore_stack_top` and `ore_stack_size` are its stack's, so a fault in the
+#define AYE_SIGSEGV 11
+#define AYE_ALTSTACK ((size_t)128 << 10)
+extern int aye_rt_sigaltstack(const aye_stack_t *, aye_stack_t *) __asm__(AYE_SYM("sigaltstack"));
+extern int aye_rt_sigaction(int, const aye_sigaction_t *, aye_sigaction_t *) __asm__(AYE_SYM("sigaction"));
+extern int aye_rt_getrlimit(int, uint64_t *) __asm__(AYE_SYM("getrlimit"));
+extern long aye_rt_write(int, const void *, size_t) __asm__(AYE_SYM("write"));
+static _Thread_local __attribute__((unused)) uintptr_t aye_stack_top, aye_stack_size;
+static _Thread_local __attribute__((unused)) void *aye_altstack;
+/* std.coro: a coroutine (see `aye_coro_init` below). While one runs,
+   `aye_stack_top` and `aye_stack_size` are its stack's, so a fault in the
    guard region below its stack is reported as a stack overflow too. */
-#define ORE_CORO_GUARD ((size_t)1 << 20)
-#define ORE_CORO_MAGIC 0x4f5245434f524f21ull
-enum { ORE_CORO_SUSPENDED = 1, ORE_CORO_RUNNING, ORE_CORO_DONE };
-typedef struct ore_coro {
+#define AYE_CORO_GUARD ((size_t)1 << 20)
+#define AYE_CORO_MAGIC 0x4f5245434f524f21ull
+enum { AYE_CORO_SUSPENDED = 1, AYE_CORO_RUNNING, AYE_CORO_DONE };
+typedef struct aye_coro {
     uint64_t magic;
     void *sp;                /* the coroutine's stack pointer while it is suspended */
     void *back;              /* the resumer's while the coroutine runs */
-    struct ore_coro *parent; /* the coroutine that resumed it; null: the thread */
+    struct aye_coro *parent; /* the coroutine that resumed it; null: the thread */
     uint8_t *map;            /* the mapping: the guard region, then the stack */
     size_t map_size;
     void (*f)(uint8_t *);
     uint8_t *arg;
     const void *thread;      /* the thread that made it */
     uintptr_t saved_top, saved_size;
-    ore_trace_ent *saved_trace;
+    aye_trace_ent *saved_trace;
     uint32_t saved_trace_len, trace_len;
     int state;
-    ore_trace_ent trace[ORE_TRACE ? ORE_TRACE_MAX : 1];
-} ore_coro;
-static _Thread_local __attribute__((unused)) ore_coro *ore_coro_current;
-static _Thread_local __attribute__((unused)) char ore_coro_thread; /* its address names the thread */
-/* Each thread keeps up to ORE_CORO_CACHE freed stacks for the next
-   coroutines of the same size, with only their top ORE_CORO_HOT bytes
+    aye_trace_ent trace[AYE_TRACE ? AYE_TRACE_MAX : 1];
+} aye_coro;
+static _Thread_local __attribute__((unused)) aye_coro *aye_coro_current;
+static _Thread_local __attribute__((unused)) char aye_coro_thread; /* its address names the thread */
+/* Each thread keeps up to AYE_CORO_CACHE freed stacks for the next
+   coroutines of the same size, with only their top AYE_CORO_HOT bytes
    still taken (the rest is given back with madvise): making a coroutine
    then needs no system call. */
-#define ORE_CORO_CACHE 16
-#define ORE_CORO_HOT ((size_t)256 << 10)
-extern void *ore_rt_mmap(void *, size_t, int, int, int, int64_t) __asm__(ORE_SYM("mmap"));
-extern int ore_rt_munmap(void *, size_t) __asm__(ORE_SYM("munmap"));
-extern int ore_rt_mprotect(void *, size_t, int) __asm__(ORE_SYM("mprotect"));
-extern int ore_rt_madvise(void *, size_t, int) __asm__(ORE_SYM("madvise"));
-static _Thread_local __attribute__((unused)) struct { uint8_t *map; size_t size; } ore_coro_cache[ORE_CORO_CACHE];
-static _Thread_local __attribute__((unused)) uint32_t ore_coro_cached;
+#define AYE_CORO_CACHE 16
+#define AYE_CORO_HOT ((size_t)256 << 10)
+extern void *aye_rt_mmap(void *, size_t, int, int, int, int64_t) __asm__(AYE_SYM("mmap"));
+extern int aye_rt_munmap(void *, size_t) __asm__(AYE_SYM("munmap"));
+extern int aye_rt_mprotect(void *, size_t, int) __asm__(AYE_SYM("mprotect"));
+extern int aye_rt_madvise(void *, size_t, int) __asm__(AYE_SYM("madvise"));
+static _Thread_local __attribute__((unused)) struct { uint8_t *map; size_t size; } aye_coro_cache[AYE_CORO_CACHE];
+static _Thread_local __attribute__((unused)) uint32_t aye_coro_cached;
 /* Unmap the stacks the thread keeps (it is ending). */
-ORE_RT void ore_coro_drain(void) {
-    while (ore_coro_cached) {
-        ore_coro_cached--;
-        ore_rt_munmap(ore_coro_cache[ore_coro_cached].map, ore_coro_cache[ore_coro_cached].size);
+AYE_RT void aye_coro_drain(void) {
+    while (aye_coro_cached) {
+        aye_coro_cached--;
+        aye_rt_munmap(aye_coro_cache[aye_coro_cached].map, aye_coro_cache[aye_coro_cached].size);
     }
 }
-static void ore_on_fault(int sig, void *info, void *ctx) {
+static void aye_on_fault(int sig, void *info, void *ctx) {
     (void)ctx;
-    uintptr_t addr = *(uintptr_t *)((char *)info + ORE_SI_ADDR);
+    uintptr_t addr = *(uintptr_t *)((char *)info + AYE_SI_ADDR);
     uintptr_t near = (uintptr_t)1 << 20;
-    uintptr_t lo = ore_stack_top > ore_stack_size ? ore_stack_top - ore_stack_size : 0;
-    if (ore_stack_top && addr < ore_stack_top && addr + near >= lo && addr < lo + near) {
+    uintptr_t lo = aye_stack_top > aye_stack_size ? aye_stack_top - aye_stack_size : 0;
+    if (aye_stack_top && addr < aye_stack_top && addr + near >= lo && addr < lo + near) {
         static const char msg[] =
             "panic: stack overflow (deep recursion: run it on a thread with a larger stack, std.thread.spawnWithStack)\n";
         static const char coro_msg[] =
             "panic: stack overflow (deep recursion in a coroutine: create it with a larger stack, std.coro.create)\n";
-        ore_rt_fflush(0);
-        if (ore_coro_current) ore_rt_write(2, coro_msg, sizeof coro_msg - 1);
-        else ore_rt_write(2, msg, sizeof msg - 1);
-        ore_rt_abort();
+        aye_rt_fflush(0);
+        if (aye_coro_current) aye_rt_write(2, coro_msg, sizeof coro_msg - 1);
+        else aye_rt_write(2, msg, sizeof msg - 1);
+        aye_rt_abort();
     }
-    ore_sigaction_t dfl = {0};
-    ore_rt_sigaction(sig, &dfl, 0);
+    aye_sigaction_t dfl = {0};
+    aye_rt_sigaction(sig, &dfl, 0);
 }
 /* The current thread's stack has `size` bytes, starting at the caller's
    frame: give it an alternate signal stack for the handler. */
-ORE_RT __attribute__((noinline)) void ore_stack_guard(size_t size) {
-    if (!ORE_CHECKS) return;
+AYE_RT __attribute__((noinline)) void aye_stack_guard(size_t size) {
+    if (!AYE_CHECKS) return;
     char here;
-    ore_stack_top = (uintptr_t)&here;
-    ore_stack_size = size;
-    ore_altstack = ore_rt_malloc(ORE_ALTSTACK);
-    if (!ore_altstack) return;
-    ore_stack_t ss = {0};
-    ss.sp = ore_altstack;
-    ss.size = ORE_ALTSTACK;
-    ore_rt_sigaltstack(&ss, 0);
+    aye_stack_top = (uintptr_t)&here;
+    aye_stack_size = size;
+    aye_altstack = aye_rt_malloc(AYE_ALTSTACK);
+    if (!aye_altstack) return;
+    aye_stack_t ss = {0};
+    ss.sp = aye_altstack;
+    ss.size = AYE_ALTSTACK;
+    aye_rt_sigaltstack(&ss, 0);
 }
-ORE_RT void ore_stack_unguard(void) {
-    if (!ore_altstack) return;
-    ore_stack_t ss = {0};
-    ss.flags = ORE_SS_DISABLE;
-    ore_rt_sigaltstack(&ss, 0);
-    ore_rt_free(ore_altstack);
-    ore_altstack = 0;
+AYE_RT void aye_stack_unguard(void) {
+    if (!aye_altstack) return;
+    aye_stack_t ss = {0};
+    ss.flags = AYE_SS_DISABLE;
+    aye_rt_sigaltstack(&ss, 0);
+    aye_rt_free(aye_altstack);
+    aye_altstack = 0;
 }
 /* At the start of `main`: the handler, and the main thread's guard. An
    unlimited stack (Linux) is taken as 8 MiB. */
-ORE_RT void ore_stack_guard_main(void) {
-    if (!ORE_CHECKS) return;
-    ore_sigaction_t sa = {0};
-    sa.action = (void *)ore_on_fault;
-    sa.flags = ORE_SA_FLAGS;
-    ore_rt_sigaction(ORE_SIGSEGV, &sa, 0);
-    ore_rt_sigaction(ORE_SIGBUS, &sa, 0);
+AYE_RT void aye_stack_guard_main(void) {
+    if (!AYE_CHECKS) return;
+    aye_sigaction_t sa = {0};
+    sa.action = (void *)aye_on_fault;
+    sa.flags = AYE_SA_FLAGS;
+    aye_rt_sigaction(AYE_SIGSEGV, &sa, 0);
+    aye_rt_sigaction(AYE_SIGBUS, &sa, 0);
     uint64_t lim[2] = {0, 0};
     size_t size = (size_t)8 << 20;
-    if (ore_rt_getrlimit(3, lim) == 0 && lim[0] < ((uint64_t)1 << 40)) size = (size_t)lim[0];
-    ore_stack_guard(size);
+    if (aye_rt_getrlimit(3, lim) == 0 && lim[0] < ((uint64_t)1 << 40)) size = (size_t)lim[0];
+    aye_stack_guard(size);
 }
 
 /* std.thread and std.sync: pthreads. A `pthread_t` is 8 bytes on macOS and
    Linux; a mutex or condition variable lives on the C heap (128 bytes holds
-   either on both), so an Ore value that refers to it can be copied. */
-extern int ore_rt_pthread_create(uint64_t *, const void *, void *(*)(void *), void *) __asm__(ORE_SYM("pthread_create"));
-extern int ore_rt_pthread_join(uint64_t, void **) __asm__(ORE_SYM("pthread_join"));
-extern int ore_rt_pthread_mutex_init(void *, const void *) __asm__(ORE_SYM("pthread_mutex_init"));
-extern int ore_rt_pthread_mutex_lock(void *) __asm__(ORE_SYM("pthread_mutex_lock"));
-extern int ore_rt_pthread_mutex_unlock(void *) __asm__(ORE_SYM("pthread_mutex_unlock"));
-extern int ore_rt_pthread_mutex_destroy(void *) __asm__(ORE_SYM("pthread_mutex_destroy"));
-extern int ore_rt_pthread_cond_init(void *, const void *) __asm__(ORE_SYM("pthread_cond_init"));
-extern int ore_rt_pthread_cond_wait(void *, void *) __asm__(ORE_SYM("pthread_cond_wait"));
-extern int ore_rt_pthread_cond_signal(void *) __asm__(ORE_SYM("pthread_cond_signal"));
-extern int ore_rt_pthread_cond_broadcast(void *) __asm__(ORE_SYM("pthread_cond_broadcast"));
-extern int ore_rt_pthread_cond_destroy(void *) __asm__(ORE_SYM("pthread_cond_destroy"));
-extern int ore_rt_pthread_attr_init(void *) __asm__(ORE_SYM("pthread_attr_init"));
-extern int ore_rt_pthread_attr_setstacksize(void *, size_t) __asm__(ORE_SYM("pthread_attr_setstacksize"));
-extern int ore_rt_pthread_attr_destroy(void *) __asm__(ORE_SYM("pthread_attr_destroy"));
-struct ore_thread_start { void (*f)(uint8_t *); uint8_t *arg; size_t stack; };
-static void *ore_thread_main(void *p) {
-    struct ore_thread_start s = *(struct ore_thread_start *)p;
-    ore_rt_free(p);
-    ore_stack_guard(s.stack);
+   either on both), so an Aye value that refers to it can be copied. */
+extern int aye_rt_pthread_create(uint64_t *, const void *, void *(*)(void *), void *) __asm__(AYE_SYM("pthread_create"));
+extern int aye_rt_pthread_join(uint64_t, void **) __asm__(AYE_SYM("pthread_join"));
+extern int aye_rt_pthread_mutex_init(void *, const void *) __asm__(AYE_SYM("pthread_mutex_init"));
+extern int aye_rt_pthread_mutex_lock(void *) __asm__(AYE_SYM("pthread_mutex_lock"));
+extern int aye_rt_pthread_mutex_unlock(void *) __asm__(AYE_SYM("pthread_mutex_unlock"));
+extern int aye_rt_pthread_mutex_destroy(void *) __asm__(AYE_SYM("pthread_mutex_destroy"));
+extern int aye_rt_pthread_cond_init(void *, const void *) __asm__(AYE_SYM("pthread_cond_init"));
+extern int aye_rt_pthread_cond_wait(void *, void *) __asm__(AYE_SYM("pthread_cond_wait"));
+extern int aye_rt_pthread_cond_signal(void *) __asm__(AYE_SYM("pthread_cond_signal"));
+extern int aye_rt_pthread_cond_broadcast(void *) __asm__(AYE_SYM("pthread_cond_broadcast"));
+extern int aye_rt_pthread_cond_destroy(void *) __asm__(AYE_SYM("pthread_cond_destroy"));
+extern int aye_rt_pthread_attr_init(void *) __asm__(AYE_SYM("pthread_attr_init"));
+extern int aye_rt_pthread_attr_setstacksize(void *, size_t) __asm__(AYE_SYM("pthread_attr_setstacksize"));
+extern int aye_rt_pthread_attr_destroy(void *) __asm__(AYE_SYM("pthread_attr_destroy"));
+struct aye_thread_start { void (*f)(uint8_t *); uint8_t *arg; size_t stack; };
+static void *aye_thread_main(void *p) {
+    struct aye_thread_start s = *(struct aye_thread_start *)p;
+    aye_rt_free(p);
+    aye_stack_guard(s.stack);
     s.f(s.arg);
-    ore_coro_drain();
-    ore_stack_unguard();
+    aye_coro_drain();
+    aye_stack_unguard();
     return 0;
 }
 /* Start `f(arg)` on a thread with a stack of at least `stack` bytes: a
    multiple of 64 KiB (macOS wants a multiple of the page size), and at
    least 256 KiB. A `pthread_attr_t` fits in 128 bytes on macOS and Linux. */
-ORE_RT bool ore_thread_spawn(void (*f)(uint8_t *), uint8_t *arg, size_t stack, uint64_t *out) {
+AYE_RT bool aye_thread_spawn(void (*f)(uint8_t *), uint8_t *arg, size_t stack, uint64_t *out) {
     if (stack > SIZE_MAX - 0xffff) return false;
     stack = stack < ((size_t)256 << 10) ? (size_t)256 << 10 : (stack + 0xffff) & ~(size_t)0xffff;
-    struct ore_thread_start *s = ore_rt_malloc(sizeof *s);
+    struct aye_thread_start *s = aye_rt_malloc(sizeof *s);
     if (!s) return false;
     s->f = f;
     s->arg = arg;
     s->stack = stack;
     _Alignas(16) unsigned char attr[128];
-    ore_rt_pthread_attr_init(attr);
-    bool ok = ore_rt_pthread_attr_setstacksize(attr, stack) == 0 && ore_rt_pthread_create(out, attr, ore_thread_main, s) == 0;
-    ore_rt_pthread_attr_destroy(attr);
-    if (!ok) ore_rt_free(s);
+    aye_rt_pthread_attr_init(attr);
+    bool ok = aye_rt_pthread_attr_setstacksize(attr, stack) == 0 && aye_rt_pthread_create(out, attr, aye_thread_main, s) == 0;
+    aye_rt_pthread_attr_destroy(attr);
+    if (!ok) aye_rt_free(s);
     return ok;
 }
-ORE_RT void ore_thread_join(uint64_t t) { ore_rt_pthread_join(t, 0); }
-ORE_RT __attribute__((noreturn, cold)) void ore_sync_oom(void) {
-    ore_rt_fflush(0);
-    ore_rt_dprintf(2, "panic: out of memory for a mutex or condition variable\n");
-    ore_rt_abort();
+AYE_RT void aye_thread_join(uint64_t t) { aye_rt_pthread_join(t, 0); }
+AYE_RT __attribute__((noreturn, cold)) void aye_sync_oom(void) {
+    aye_rt_fflush(0);
+    aye_rt_dprintf(2, "panic: out of memory for a mutex or condition variable\n");
+    aye_rt_abort();
 }
-ORE_RT uint8_t *ore_mutex_new(void) {
-    void *m = ore_rt_malloc(128);
-    if (!m) ore_sync_oom();
-    ore_rt_pthread_mutex_init(m, 0);
+AYE_RT uint8_t *aye_mutex_new(void) {
+    void *m = aye_rt_malloc(128);
+    if (!m) aye_sync_oom();
+    aye_rt_pthread_mutex_init(m, 0);
     return m;
 }
-ORE_RT void ore_mutex_lock(uint8_t *m) { ore_rt_pthread_mutex_lock(m); }
-ORE_RT void ore_mutex_unlock(uint8_t *m) { ore_rt_pthread_mutex_unlock(m); }
-ORE_RT void ore_mutex_free(uint8_t *m) {
-    ore_rt_pthread_mutex_destroy(m);
-    ore_rt_free(m);
+AYE_RT void aye_mutex_lock(uint8_t *m) { aye_rt_pthread_mutex_lock(m); }
+AYE_RT void aye_mutex_unlock(uint8_t *m) { aye_rt_pthread_mutex_unlock(m); }
+AYE_RT void aye_mutex_free(uint8_t *m) {
+    aye_rt_pthread_mutex_destroy(m);
+    aye_rt_free(m);
 }
-ORE_RT uint8_t *ore_cond_new(void) {
-    void *c = ore_rt_malloc(128);
-    if (!c) ore_sync_oom();
-    ore_rt_pthread_cond_init(c, 0);
+AYE_RT uint8_t *aye_cond_new(void) {
+    void *c = aye_rt_malloc(128);
+    if (!c) aye_sync_oom();
+    aye_rt_pthread_cond_init(c, 0);
     return c;
 }
-ORE_RT void ore_cond_wait(uint8_t *c, uint8_t *m) { ore_rt_pthread_cond_wait(c, m); }
-ORE_RT void ore_cond_signal(uint8_t *c) { ore_rt_pthread_cond_signal(c); }
-ORE_RT void ore_cond_broadcast(uint8_t *c) { ore_rt_pthread_cond_broadcast(c); }
-ORE_RT void ore_cond_free(uint8_t *c) {
-    ore_rt_pthread_cond_destroy(c);
-    ore_rt_free(c);
+AYE_RT void aye_cond_wait(uint8_t *c, uint8_t *m) { aye_rt_pthread_cond_wait(c, m); }
+AYE_RT void aye_cond_signal(uint8_t *c) { aye_rt_pthread_cond_signal(c); }
+AYE_RT void aye_cond_broadcast(uint8_t *c) { aye_rt_pthread_cond_broadcast(c); }
+AYE_RT void aye_cond_free(uint8_t *c) {
+    aye_rt_pthread_cond_destroy(c);
+    aye_rt_free(c);
 }
 
 /* std.coro: stackful coroutines. A coroutine's stack is an mmap'd region
-   with ORE_CORO_GUARD bytes of PROT_NONE at its low end (only the pages
-   that are used are taken). `ore_coro_switch(save, to)`, assembly per
+   with AYE_CORO_GUARD bytes of PROT_NONE at its low end (only the pages
+   that are used are taken). `aye_coro_switch(save, to)`, assembly per
    target, pushes the callee-saved registers (x19-x28, fp, lr and d8-d15 on
    aarch64; rbx, rbp, r12-r15, MXCSR and the x87 control word on x86_64),
    stores the stack pointer in `*save`, loads `to` and pops them. A new
    coroutine's stack holds such a frame whose return address is
-   `ore_coro_start`, which calls `ore_coro_entry(c)` with c and the entry
+   `aye_coro_start`, which calls `aye_coro_entry(c)` with c and the entry
    point taken from two of the restored registers. The control block is
    allocated by std.coro with the program's allocator. A coroutine runs
    only on the thread that made it: the running coroutine, the stack bounds
@@ -629,7 +629,7 @@ ORE_RT void ore_cond_free(uint8_t *c) {
 #if defined(__aarch64__)
 __asm__(".text\n"
         ".p2align 4\n"
-        ORE_SYM("ore_coro_switch") ":\n"
+        AYE_SYM("aye_coro_switch") ":\n"
         "    sub sp, sp, #160\n"
         "    stp x19, x20, [sp, #0]\n"
         "    stp x21, x22, [sp, #16]\n"
@@ -657,19 +657,19 @@ __asm__(".text\n"
         "    add sp, sp, #160\n"
         "    ret\n"
         ".p2align 4\n"
-        ORE_SYM("ore_coro_start") ":\n"
+        AYE_SYM("aye_coro_start") ":\n"
         "    mov x0, x19\n"
         "    blr x20\n"
         "    brk #0\n");
-#define ORE_CORO_FRAME 160
-#define ORE_CORO_SLOT_ARG 0   /* x19 */
-#define ORE_CORO_SLOT_ENTRY 1 /* x20 */
-#define ORE_CORO_SLOT_RET 11  /* x30 */
-#define ORE_CORO_OK 1
+#define AYE_CORO_FRAME 160
+#define AYE_CORO_SLOT_ARG 0   /* x19 */
+#define AYE_CORO_SLOT_ENTRY 1 /* x20 */
+#define AYE_CORO_SLOT_RET 11  /* x30 */
+#define AYE_CORO_OK 1
 #elif defined(__x86_64__)
 __asm__(".text\n"
         ".p2align 4\n"
-        ORE_SYM("ore_coro_switch") ":\n"
+        AYE_SYM("aye_coro_switch") ":\n"
         "    pushq %rbp\n"
         "    pushq %rbx\n"
         "    pushq %r12\n"
@@ -692,165 +692,165 @@ __asm__(".text\n"
         "    popq %rbp\n"
         "    ret\n"
         ".p2align 4\n"
-        ORE_SYM("ore_coro_start") ":\n"
+        AYE_SYM("aye_coro_start") ":\n"
         "    movq %r12, %rdi\n"
         "    callq *%r13\n"
         "    ud2\n");
-#define ORE_CORO_FRAME 64
-#define ORE_CORO_SLOT_ARG 4   /* r12 */
-#define ORE_CORO_SLOT_ENTRY 3 /* r13 */
-#define ORE_CORO_SLOT_RET 7   /* the return address */
-#define ORE_CORO_OK 1
+#define AYE_CORO_FRAME 64
+#define AYE_CORO_SLOT_ARG 4   /* r12 */
+#define AYE_CORO_SLOT_ENTRY 3 /* r13 */
+#define AYE_CORO_SLOT_RET 7   /* the return address */
+#define AYE_CORO_OK 1
 #else
-#define ORE_CORO_OK 0
+#define AYE_CORO_OK 0
 #endif
-#if ORE_CORO_OK
-extern void ore_coro_switch(void **save, void *to) __asm__(ORE_SYM("ore_coro_switch"));
-extern void ore_coro_start(void) __asm__(ORE_SYM("ore_coro_start"));
+#if AYE_CORO_OK
+extern void aye_coro_switch(void **save, void *to) __asm__(AYE_SYM("aye_coro_switch"));
+extern void aye_coro_start(void) __asm__(AYE_SYM("aye_coro_start"));
 #endif
 #ifdef __APPLE__
-#define ORE_MAP_STACK 0x1002 /* MAP_PRIVATE | MAP_ANON */
-#define ORE_MADV_FREE 5      /* MADV_FREE */
+#define AYE_MAP_STACK 0x1002 /* MAP_PRIVATE | MAP_ANON */
+#define AYE_MADV_FREE 5      /* MADV_FREE */
 #else
-#define ORE_MAP_STACK 0x4022 /* MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE */
-#define ORE_MADV_FREE 4      /* MADV_DONTNEED */
+#define AYE_MAP_STACK 0x4022 /* MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE */
+#define AYE_MADV_FREE 4      /* MADV_DONTNEED */
 #endif
-ORE_RT __attribute__((noreturn, cold)) void ore_coro_panic(const char *msg) {
-    ore_rt_fflush(0);
-    ore_rt_dprintf(2, "panic: std.coro: %s\n", msg);
-    ore_rt_abort();
+AYE_RT __attribute__((noreturn, cold)) void aye_coro_panic(const char *msg) {
+    aye_rt_fflush(0);
+    aye_rt_dprintf(2, "panic: std.coro: %s\n", msg);
+    aye_rt_abort();
 }
-ORE_RT size_t ore_coro_words(void) { return (sizeof(ore_coro) + 7) / 8; }
+AYE_RT size_t aye_coro_words(void) { return (sizeof(aye_coro) + 7) / 8; }
 /* Back to the code that resumed `c`. */
-ORE_RT void ore_coro_leave(ore_coro *c) {
-#if ORE_CORO_OK
-    ore_coro_current = c->parent;
-    if (ORE_CHECKS) {
-        ore_stack_top = c->saved_top;
-        ore_stack_size = c->saved_size;
+AYE_RT void aye_coro_leave(aye_coro *c) {
+#if AYE_CORO_OK
+    aye_coro_current = c->parent;
+    if (AYE_CHECKS) {
+        aye_stack_top = c->saved_top;
+        aye_stack_size = c->saved_size;
     }
-    if (ORE_TRACE) {
-        c->trace_len = ore_trace_len;
-        ore_trace_buf = c->saved_trace;
-        ore_trace_len = c->saved_trace_len;
+    if (AYE_TRACE) {
+        c->trace_len = aye_trace_len;
+        aye_trace_buf = c->saved_trace;
+        aye_trace_len = c->saved_trace_len;
     }
-    ore_coro_switch(&c->sp, c->back);
+    aye_coro_switch(&c->sp, c->back);
 #endif
 }
-static __attribute__((noreturn, unused)) void ore_coro_entry(ore_coro *c) {
+static __attribute__((noreturn, unused)) void aye_coro_entry(aye_coro *c) {
     c->f(c->arg);
-    c->state = ORE_CORO_DONE;
-    ore_coro_leave(c);
+    c->state = AYE_CORO_DONE;
+    aye_coro_leave(c);
     __builtin_trap();
 }
-/* A coroutine in `block` (ore_coro_words() words) that runs `f(arg)` on a
+/* A coroutine in `block` (aye_coro_words() words) that runs `f(arg)` on a
    stack of at least `stack` bytes; false when there is no memory for it. */
-ORE_RT bool ore_coro_init(uint64_t *block, size_t stack, void (*f)(uint8_t *), uint8_t *arg) {
-#if ORE_CORO_OK
-    ore_coro *c = (ore_coro *)block;
-    if (stack > SIZE_MAX - ORE_CORO_GUARD - 0xffff) return false;
+AYE_RT bool aye_coro_init(uint64_t *block, size_t stack, void (*f)(uint8_t *), uint8_t *arg) {
+#if AYE_CORO_OK
+    aye_coro *c = (aye_coro *)block;
+    if (stack > SIZE_MAX - AYE_CORO_GUARD - 0xffff) return false;
     stack = stack < ((size_t)64 << 10) ? (size_t)64 << 10 : (stack + 0xffff) & ~(size_t)0xffff;
-    size_t size = ORE_CORO_GUARD + stack;
+    size_t size = AYE_CORO_GUARD + stack;
     uint8_t *m = 0;
-    for (uint32_t i = ore_coro_cached; i-- > 0;) {
-        if (ore_coro_cache[i].size == size) {
-            m = ore_coro_cache[i].map;
-            ore_coro_cache[i] = ore_coro_cache[--ore_coro_cached];
+    for (uint32_t i = aye_coro_cached; i-- > 0;) {
+        if (aye_coro_cache[i].size == size) {
+            m = aye_coro_cache[i].map;
+            aye_coro_cache[i] = aye_coro_cache[--aye_coro_cached];
             break;
         }
     }
     if (!m) {
-        m = ore_rt_mmap(0, size, 3 /* PROT_READ | PROT_WRITE */, ORE_MAP_STACK, -1, 0);
+        m = aye_rt_mmap(0, size, 3 /* PROT_READ | PROT_WRITE */, AYE_MAP_STACK, -1, 0);
         if (m == (uint8_t *)-1) return false;
-        if (ore_rt_mprotect(m, ORE_CORO_GUARD, 0 /* PROT_NONE */) != 0) {
-            ore_rt_munmap(m, size);
+        if (aye_rt_mprotect(m, AYE_CORO_GUARD, 0 /* PROT_NONE */) != 0) {
+            aye_rt_munmap(m, size);
             return false;
         }
     }
     __builtin_memset(c, 0, sizeof *c);
-    c->magic = ORE_CORO_MAGIC;
+    c->magic = AYE_CORO_MAGIC;
     c->map = m;
     c->map_size = size;
     c->f = f;
     c->arg = arg;
-    c->thread = &ore_coro_thread;
-    c->state = ORE_CORO_SUSPENDED;
-    void **frame = (void **)(m + size - ORE_CORO_FRAME);
-    __builtin_memset(frame, 0, ORE_CORO_FRAME);
+    c->thread = &aye_coro_thread;
+    c->state = AYE_CORO_SUSPENDED;
+    void **frame = (void **)(m + size - AYE_CORO_FRAME);
+    __builtin_memset(frame, 0, AYE_CORO_FRAME);
 #if defined(__x86_64__)
     ((uint32_t *)frame)[0] = 0x1f80; /* MXCSR: all exceptions masked, round to nearest */
     ((uint16_t *)frame)[2] = 0x037f; /* x87: the same */
 #endif
-    frame[ORE_CORO_SLOT_ARG] = c;
-    frame[ORE_CORO_SLOT_ENTRY] = (void *)ore_coro_entry;
-    frame[ORE_CORO_SLOT_RET] = (void *)ore_coro_start;
+    frame[AYE_CORO_SLOT_ARG] = c;
+    frame[AYE_CORO_SLOT_ENTRY] = (void *)aye_coro_entry;
+    frame[AYE_CORO_SLOT_RET] = (void *)aye_coro_start;
     c->sp = frame;
     return true;
 #else
     (void)block, (void)stack, (void)f, (void)arg;
-    ore_coro_panic("coroutines are not supported on this target");
+    aye_coro_panic("coroutines are not supported on this target");
 #endif
 }
-ORE_RT void ore_coro_resume(uint64_t *block) {
-#if ORE_CORO_OK
-    ore_coro *c = (ore_coro *)block;
-    if (ORE_CHECKS) {
-        if (c->magic != ORE_CORO_MAGIC) ore_coro_panic("resume of a coroutine that was freed");
-        if (c->state == ORE_CORO_DONE) ore_coro_panic("resume of a coroutine that has finished");
-        if (c->state == ORE_CORO_RUNNING) ore_coro_panic("resume of a coroutine that is running");
-        if (c->thread != &ore_coro_thread) ore_coro_panic("resume of a coroutine on another thread than the one that made it");
-        c->saved_top = ore_stack_top;
-        c->saved_size = ore_stack_size;
-        ore_stack_top = (uintptr_t)(c->map + c->map_size);
-        ore_stack_size = c->map_size - ORE_CORO_GUARD;
+AYE_RT void aye_coro_resume(uint64_t *block) {
+#if AYE_CORO_OK
+    aye_coro *c = (aye_coro *)block;
+    if (AYE_CHECKS) {
+        if (c->magic != AYE_CORO_MAGIC) aye_coro_panic("resume of a coroutine that was freed");
+        if (c->state == AYE_CORO_DONE) aye_coro_panic("resume of a coroutine that has finished");
+        if (c->state == AYE_CORO_RUNNING) aye_coro_panic("resume of a coroutine that is running");
+        if (c->thread != &aye_coro_thread) aye_coro_panic("resume of a coroutine on another thread than the one that made it");
+        c->saved_top = aye_stack_top;
+        c->saved_size = aye_stack_size;
+        aye_stack_top = (uintptr_t)(c->map + c->map_size);
+        aye_stack_size = c->map_size - AYE_CORO_GUARD;
     }
-    if (ORE_TRACE) {
-        c->saved_trace = ore_trace_buf;
-        c->saved_trace_len = ore_trace_len;
-        ore_trace_buf = c->trace;
-        ore_trace_len = c->trace_len;
+    if (AYE_TRACE) {
+        c->saved_trace = aye_trace_buf;
+        c->saved_trace_len = aye_trace_len;
+        aye_trace_buf = c->trace;
+        aye_trace_len = c->trace_len;
     }
-    c->parent = ore_coro_current;
-    c->state = ORE_CORO_RUNNING;
-    ore_coro_current = c;
-    ore_coro_switch(&c->back, c->sp);
+    c->parent = aye_coro_current;
+    c->state = AYE_CORO_RUNNING;
+    aye_coro_current = c;
+    aye_coro_switch(&c->back, c->sp);
 #endif
 }
-ORE_RT void ore_coro_yield(void) {
-    ore_coro *c = ore_coro_current;
-    if (ORE_CHECKS && !c) ore_coro_panic("yield outside a coroutine");
-    c->state = ORE_CORO_SUSPENDED;
-    ore_coro_leave(c);
+AYE_RT void aye_coro_yield(void) {
+    aye_coro *c = aye_coro_current;
+    if (AYE_CHECKS && !c) aye_coro_panic("yield outside a coroutine");
+    c->state = AYE_CORO_SUSPENDED;
+    aye_coro_leave(c);
 }
-ORE_RT bool ore_coro_done(uint64_t *block) {
-    ore_coro *c = (ore_coro *)block;
-    if (ORE_CHECKS && c->magic != ORE_CORO_MAGIC) ore_coro_panic("isDone of a coroutine that was freed");
-    return c->state == ORE_CORO_DONE;
+AYE_RT bool aye_coro_done(uint64_t *block) {
+    aye_coro *c = (aye_coro *)block;
+    if (AYE_CHECKS && c->magic != AYE_CORO_MAGIC) aye_coro_panic("isDone of a coroutine that was freed");
+    return c->state == AYE_CORO_DONE;
 }
-ORE_RT void ore_coro_free(uint64_t *block) {
-    ore_coro *c = (ore_coro *)block;
-    if (ORE_CHECKS) {
-        if (c->magic != ORE_CORO_MAGIC) ore_coro_panic("deinit of a coroutine that was freed");
-        if (c->state == ORE_CORO_RUNNING) ore_coro_panic("deinit of a coroutine that is running");
+AYE_RT void aye_coro_free(uint64_t *block) {
+    aye_coro *c = (aye_coro *)block;
+    if (AYE_CHECKS) {
+        if (c->magic != AYE_CORO_MAGIC) aye_coro_panic("deinit of a coroutine that was freed");
+        if (c->state == AYE_CORO_RUNNING) aye_coro_panic("deinit of a coroutine that is running");
     }
     c->magic = 0;
-    if (ore_coro_cached == ORE_CORO_CACHE) {
-        ore_rt_munmap(c->map, c->map_size);
+    if (aye_coro_cached == AYE_CORO_CACHE) {
+        aye_rt_munmap(c->map, c->map_size);
         return;
     }
-    if (c->map_size - ORE_CORO_GUARD > ORE_CORO_HOT) {
-        ore_rt_madvise(c->map + ORE_CORO_GUARD, c->map_size - ORE_CORO_GUARD - ORE_CORO_HOT, ORE_MADV_FREE);
+    if (c->map_size - AYE_CORO_GUARD > AYE_CORO_HOT) {
+        aye_rt_madvise(c->map + AYE_CORO_GUARD, c->map_size - AYE_CORO_GUARD - AYE_CORO_HOT, AYE_MADV_FREE);
     }
-    ore_coro_cache[ore_coro_cached].map = c->map;
-    ore_coro_cache[ore_coro_cached].size = c->map_size;
-    ore_coro_cached++;
+    aye_coro_cache[aye_coro_cached].map = c->map;
+    aye_coro_cache[aye_coro_cached].size = c->map_size;
+    aye_coro_cached++;
 }
 "#;
 
-/// Emit the C translation unit for `p`. `files` are the Ore source names
+/// Emit the C translation unit for `p`. `files` are the Aye source names
 /// (indexed by `Span::file`) used in `#line` directives and panic messages;
 /// `checks` enables runtime checks and `trace` the error return trace (debug
-/// mode). With `tests`, `main` runs one test instead of `ore_f_main`.
+/// mode). With `tests`, `main` runs one test instead of `aye_f_main`.
 pub fn emit(p: &Program, files: &[String], checks: bool, trace: bool, tests: bool) -> String {
     let files = files.iter().map(|f| c_str(f.as_bytes())).collect();
     let mut g = Gen { out: String::new(), files, trace, checks, mode_checks: checks, enum_names: Vec::new(), loops: Vec::new(), next_label: 0 };
@@ -859,7 +859,7 @@ pub fn emit(p: &Program, files: &[String], checks: bool, trace: bool, tests: boo
 }
 
 /// A struct or function name as a C identifier. An instance of a generic
-/// (`Pool(Node)`) starts with `0`, which no Ore name does, and has `_`
+/// (`Pool(Node)`) starts with `0`, which no Aye name does, and has `_`
 /// doubled and other characters as `_` and two hex digits.
 fn c_name(name: &str) -> String {
     if name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
@@ -883,17 +883,17 @@ fn extern_symbol(name: &str) -> &str {
     name.rsplit("::").next().unwrap()
 }
 
-/// C name of the Ore function `name`: `f`, `Struct.method` or `test#N`.
+/// C name of the Aye function `name`: `f`, `Struct.method` or `test#N`.
 fn fn_name(name: &str) -> String {
     if let Some(n) = name.rsplit("::").next().and_then(|n| n.strip_prefix("test#")) {
-        return format!("ore_t_{n}");
+        return format!("aye_t_{n}");
     }
     match name.rsplit_once('.') {
         Some((s, m)) => {
             let s = c_name(s);
-            format!("ore_m_{}{s}_{m}", s.len())
+            format!("aye_m_{}{s}_{m}", s.len())
         }
-        None => format!("ore_f_{}", c_name(name)),
+        None => format!("aye_f_{}", c_name(name)),
     }
 }
 
@@ -901,12 +901,12 @@ fn fn_name(name: &str) -> String {
 /// for its method `m`.
 fn vtable_name(i: &str, s: &str) -> String {
     let i = c_name(i);
-    format!("ore_vt_{}{i}_{}", i.len(), c_name(s))
+    format!("aye_vt_{}{i}_{}", i.len(), c_name(s))
 }
 
 fn thunk_name(i: &str, s: &str, m: &str) -> String {
     let (i, s) = (c_name(i), c_name(s));
-    format!("ore_th_{}{i}_{}{s}_{m}", i.len(), s.len())
+    format!("aye_th_{}{i}_{}{s}_{m}", i.len(), s.len())
 }
 
 struct Gen {
@@ -1041,7 +1041,7 @@ fn c_type(t: &Type) -> String {
         | Type::ErrorUnion(..)
         | Type::Dyn(_)
         | Type::Builtin(_)
-        | Type::Fn(..) => format!("ore_{}", mangle(t)),
+        | Type::Fn(..) => format!("aye_{}", mangle(t)),
         Type::Param(..) | Type::Error => unreachable!(),
     }
 }
@@ -1107,7 +1107,7 @@ fn c_float_of(v: f64, ft: FloatTy) -> String {
 
 /// The C name of the global `name`.
 fn global_name(name: &str) -> String {
-    format!("ore_g_{}", c_name(name))
+    format!("aye_g_{}", c_name(name))
 }
 
 /// A position for the runtime: the line with the file index in its upper
@@ -1127,18 +1127,18 @@ impl Gen {
 
     fn program(&mut self, p: &Program, checks: bool, tests: bool) {
         self.enum_names = p.enums.iter().map(|e| (e.name.clone(), e.variants.iter().map(|v| v.name.clone()).collect())).collect();
-        self.out.push_str("/* Generated by the Ore stage0 compiler. Do not edit. */\n");
-        let _ = writeln!(self.out, "#define ORE_CHECKS {}", checks as u8);
-        let _ = writeln!(self.out, "#define ORE_TRACE {}", self.trace as u8);
-        let _ = writeln!(self.out, "static const char *const ore_files[] = {{{}}};", self.files.join(", "));
+        self.out.push_str("/* Generated by the Aye stage0 compiler. Do not edit. */\n");
+        let _ = writeln!(self.out, "#define AYE_CHECKS {}", checks as u8);
+        let _ = writeln!(self.out, "#define AYE_TRACE {}", self.trace as u8);
+        let _ = writeln!(self.out, "static const char *const aye_files[] = {{{}}};", self.files.join(", "));
         let names: Vec<String> =
             std::iter::once("\"\"".to_string()).chain(p.errors.iter().map(|n| c_str(n.as_bytes()))).collect();
-        let _ = writeln!(self.out, "static const char *const ore_error_names[] = {{{}}};", names.join(", "));
+        let _ = writeln!(self.out, "static const char *const aye_error_names[] = {{{}}};", names.join(", "));
         self.out.push_str(PRELUDE);
         self.types(p);
         // The vtable type of each interface: one function pointer per method.
         for i in &p.ifaces {
-            let mut s = format!("struct ore_VT_{} {{", c_name(&i.name));
+            let mut s = format!("struct aye_VT_{} {{", c_name(&i.name));
             for m in &i.methods {
                 let params: String = m.params.iter().map(|t| format!(", {}", c_type(t))).collect();
                 let _ = write!(s, " {} (*{})(void *{params});", c_type(&m.ret), c_field(&m.name));
@@ -1183,22 +1183,22 @@ impl Gen {
             let (st, n) = (c_type(&Type::Struct(s.clone())), c_name(s));
             let _ = writeln!(
                 self.out,
-                "static void *ore_at_alloc_{n}(void *self, size_t size, size_t align, int line, int col) {{ return {a}(({st} *)self, size, align); }}"
+                "static void *aye_at_alloc_{n}(void *self, size_t size, size_t align, int line, int col) {{ return {a}(({st} *)self, size, align); }}"
             );
             let _ = writeln!(
                 self.out,
-                "static void ore_at_free_{n}(void *self, void *p, size_t size, int line, int col) {{ {fr}(({st} *)self, (uint8_t *)p, size); }}"
+                "static void aye_at_free_{n}(void *self, void *p, size_t size, int line, int col) {{ {fr}(({st} *)self, (uint8_t *)p, size); }}"
             );
-            let _ = writeln!(self.out, "static const ore_alloc_vt ore_at_vt_{n} = {{ore_at_alloc_{n}, ore_at_free_{n}}};");
+            let _ = writeln!(self.out, "static const aye_alloc_vt aye_at_vt_{n} = {{aye_at_alloc_{n}, aye_at_free_{n}}};");
         }
         for f in &p.funcs {
             self.func(f);
         }
         if tests {
-            self.out.push_str("\nint main(int argc, char **argv) {\n    int n = 0;\n    ore_argc = argc;\n    ore_argv = argv;\n    ore_stack_guard_main();\n    if (argc != 2) return 2;\n");
+            self.out.push_str("\nint main(int argc, char **argv) {\n    int n = 0;\n    aye_argc = argc;\n    aye_argv = argv;\n    aye_stack_guard_main();\n    if (argc != 2) return 2;\n");
             self.out.push_str("    for (const char *s = argv[1]; *s; s++) n = n * 10 + (*s - '0');\n    switch (n) {\n");
             for i in 0..p.tests.len() {
-                let _ = writeln!(self.out, "    case {i}: return ore_test_end(ore_t_{i}().err);");
+                let _ = writeln!(self.out, "    case {i}: return aye_test_end(aye_t_{i}().err);");
             }
             self.out.push_str("    }\n    return 2;\n}\n");
             return;
@@ -1207,11 +1207,11 @@ impl Gen {
         if let Type::ErrorUnion(..) = main.ret {
             let _ = write!(
                 self.out,
-                "\nint main(int argc, char **argv) {{\n    ore_argc = argc;\n    ore_argv = argv;\n    ore_stack_guard_main();\n    {} r = ore_f_main();\n    return r.err ? ore_main_error(r.err) : 0;\n}}\n",
+                "\nint main(int argc, char **argv) {{\n    aye_argc = argc;\n    aye_argv = argv;\n    aye_stack_guard_main();\n    {} r = aye_f_main();\n    return r.err ? aye_main_error(r.err) : 0;\n}}\n",
                 c_type(&main.ret)
             );
         } else {
-            self.out.push_str("\nint main(int argc, char **argv) {\n    ore_argc = argc;\n    ore_argv = argv;\n    ore_stack_guard_main();\n    ore_f_main();\n    return 0;\n}\n");
+            self.out.push_str("\nint main(int argc, char **argv) {\n    aye_argc = argc;\n    aye_argv = argv;\n    aye_stack_guard_main();\n    aye_f_main();\n    return 0;\n}\n");
         }
     }
 
@@ -1239,7 +1239,7 @@ impl Gen {
             );
             thunks.push(th);
         }
-        let _ = writeln!(self.out, "static const struct ore_VT_{} {} = {{{}}};", c_name(i), vtable_name(i, s), thunks.join(", "));
+        let _ = writeln!(self.out, "static const struct aye_VT_{} {} = {{{}}};", c_name(i), vtable_name(i, s), thunks.join(", "));
     }
 
     /// Typedefs for every array, slice and struct type, in dependency order.
@@ -1337,7 +1337,7 @@ impl Gen {
                 let _ = writeln!(self.out, "struct {name} {{ {}* ptr; size_t len; }};", c_type(e));
             }
             Type::Dyn(i) => {
-                let _ = writeln!(self.out, "struct {name} {{ void *ptr; const struct ore_VT_{} *vt; }};", c_name(i));
+                let _ = writeln!(self.out, "struct {name} {{ void *ptr; const struct aye_VT_{} *vt; }};", c_name(i));
             }
             Type::Struct(sname) => {
                 let def = p.structs.iter().find(|s| s.name == *sname).unwrap();
@@ -1443,7 +1443,7 @@ impl Gen {
                     {
                         let (a, b) = (self.operand(f, lhs), self.operand(f, rhs));
                         format!(
-                            "if (ORE_UNLIKELY(__builtin_{}_overflow({a}, {b}, &{p}))) ore_panic({}, \"integer overflow\");",
+                            "if (AYE_UNLIKELY(__builtin_{}_overflow({a}, {b}, &{p}))) aye_panic({}, \"integer overflow\");",
                             overflow_builtin(*op),
                             line_col(*span)
                         )
@@ -1489,7 +1489,7 @@ impl Gen {
                     None
                 } else {
                     self.next_label += 1;
-                    Some(format!("ore_continue_{}", self.next_label))
+                    Some(format!("aye_continue_{}", self.next_label))
                 };
                 self.line(ind, "for (;;) {");
                 self.loops.push(label.clone());
@@ -1512,15 +1512,15 @@ impl Gen {
                 self.line(ind, &line);
             }
             StmtKind::TracePush(span) if self.trace => {
-                self.line(ind, &format!("ore_trace_push({});", line_col(*span)));
+                self.line(ind, &format!("aye_trace_push({});", line_col(*span)));
             }
             StmtKind::TraceRestore(t) if self.trace => {
-                self.line(ind, &format!("ore_trace_len = {};", Self::local_name(f, *t)));
+                self.line(ind, &format!("aye_trace_len = {};", Self::local_name(f, *t)));
             }
             StmtKind::TracePush(_) | StmtKind::TraceRestore(_) => {}
             StmtKind::Check { cond: Some(c), msg, span } => {
                 if self.checks {
-                    let line = format!("if (ORE_UNLIKELY(!{})) ore_panic({}, \"{msg}\");", self.operand(f, c), line_col(*span));
+                    let line = format!("if (AYE_UNLIKELY(!{})) aye_panic({}, \"{msg}\");", self.operand(f, c), line_col(*span));
                     self.line(ind, &line);
                 }
             }
@@ -1532,7 +1532,7 @@ impl Gen {
             }
             StmtKind::Check { cond: None, msg, span } => {
                 if self.checks {
-                    self.line(ind, &format!("ore_panic({}, \"{msg}\");", line_col(*span)));
+                    self.line(ind, &format!("aye_panic({}, \"{msg}\");", line_col(*span)));
                 } else {
                     self.line(ind, "__builtin_unreachable();");
                 }
@@ -1546,7 +1546,7 @@ impl Gen {
             Operand::Int(v, it) => c_int_of(*v, *it),
             Operand::Float(v, ft) => c_float_of(*v, *ft),
             Operand::Bool(b) => b.to_string(),
-            Operand::Str(s) => format!("((ore_S_u8){{(uint8_t*){}, {}}})", c_str(s), s.len()),
+            Operand::Str(s) => format!("((aye_S_u8){{(uint8_t*){}, {}}})", c_str(s), s.len()),
             Operand::Fn { name, is_extern: true } => extern_symbol(name).to_string(),
             Operand::Fn { name, is_extern: false } => fn_name(name),
         }
@@ -1589,7 +1589,7 @@ impl Gen {
                 };
                 if let Some(n) = n {
                     let i = self.operand(f, index);
-                    out.push(format!("if (ORE_UNLIKELY((size_t){i} >= {n})) ore_panic_index({}, {i}, {n});", line_col(*span)));
+                    out.push(format!("if (AYE_UNLIKELY((size_t){i} >= {n})) aye_panic_index({}, {i}, {n});", line_col(*span)));
                 }
             }
             s = self.project(f, s, proj);
@@ -1603,7 +1603,7 @@ impl Gen {
         if !self.checks {
             return;
         }
-        let panic = |cond: String, span: Span, msg: &str| format!("if (ORE_UNLIKELY({cond})) ore_panic({}, \"{msg}\");", line_col(span));
+        let panic = |cond: String, span: Span, msg: &str| format!("if (AYE_UNLIKELY({cond})) aye_panic({}, \"{msg}\");", line_col(span));
         match rv {
             Rvalue::Load(p) | Rvalue::AddrOf(p) | Rvalue::IsSome { place: p, .. } | Rvalue::IsErr(p) => self.place_checks(f, p, out),
             Rvalue::Slice { base, len, lo, hi, span, .. } => {
@@ -1618,7 +1618,7 @@ impl Gen {
                 let lo = self.operand(f, lo);
                 let hi = hi.as_ref().map(|h| self.operand(f, h)).unwrap_or_else(|| n.clone());
                 out.push(format!(
-                    "if (ORE_UNLIKELY((size_t){lo} > (size_t){hi} || (size_t){hi} > {n})) ore_panic_slice({}, {lo}, {hi}, {n});",
+                    "if (AYE_UNLIKELY((size_t){lo} > (size_t){hi} || (size_t){hi} > {n})) aye_panic_slice({}, {lo}, {hi}, {n});",
                     line_col(*span)
                 ));
             }
@@ -1682,7 +1682,7 @@ impl Gen {
                 let (a, b) = (self.operand(f, lhs), self.operand(f, rhs));
                 match (op, ty) {
                     (BinOp::Add | BinOp::Sub | BinOp::Mul, Type::Int(it)) if self.checks => format!(
-                        "({{ {} r_; if (ORE_UNLIKELY(__builtin_{}_overflow({a}, {b}, &r_))) ore_panic({}, \"integer overflow\"); r_; }})",
+                        "({{ {} r_; if (AYE_UNLIKELY(__builtin_{}_overflow({a}, {b}, &r_))) aye_panic({}, \"integer overflow\"); r_; }})",
                         int_c(*it),
                         overflow_builtin(*op),
                         line_col(*span)
@@ -1763,14 +1763,14 @@ impl Gen {
                 format!("({d}.vt == &{} ? ({}){d}.ptr : NULL)", vtable_name(iface, strukt), c_type(ty))
             }
             Rvalue::ToDyn { ptr, iface, strukt } => {
-                format!("((ore_D_{}){{(void *){}, &{}}})", c_name(iface), self.operand(f, ptr), vtable_name(iface, strukt))
+                format!("((aye_D_{}){{(void *){}, &{}}})", c_name(iface), self.operand(f, ptr), vtable_name(iface, strukt))
             }
             Rvalue::ToAllocator { ptr, strukt } => {
-                format!("((ore_Allocator){{(void *){}, &ore_at_vt_{}}})", self.operand(f, ptr), c_name(strukt))
+                format!("((aye_Allocator){{(void *){}, &aye_at_vt_{}}})", self.operand(f, ptr), c_name(strukt))
             }
             Rvalue::Alloc { alloc, ty, span } => {
                 let t = c_type(ty);
-                format!("(({t} *)ore_alloc({}, sizeof({t}), _Alignof({t}), {}))", self.operand(f, alloc), line_col(*span))
+                format!("(({t} *)aye_alloc({}, sizeof({t}), _Alignof({t}), {}))", self.operand(f, alloc), line_col(*span))
             }
             // A statement expression: allocate, then fill every element.
             // `resize` (with `old`) copies the old elements first and frees
@@ -1781,52 +1781,52 @@ impl Gen {
                 let (copy, free) = match old {
                     Some(o) => (
                         format!("__typeof__({0}) o_ = {0}; for (; i_ < n_ && i_ < o_.len; i_++) p_[i_] = o_.ptr[i_]; ", self.operand(f, o)),
-                        format!("ore_free_n({a}, (void *)o_.ptr, o_.len, sizeof({t}), {lc}); "),
+                        format!("aye_free_n({a}, (void *)o_.ptr, o_.len, sizeof({t}), {lc}); "),
                     ),
                     None => (String::new(), String::new()),
                 };
                 format!(
-                    "({{ {opt} r_ = {{0}}; size_t n_ = (size_t){}; {t} *p_ = n_ ? ({t} *)ore_alloc_n({a}, n_, sizeof({t}), _Alignof({t}), {lc}) : 0; \
+                    "({{ {opt} r_ = {{0}}; size_t n_ = (size_t){}; {t} *p_ = n_ ? ({t} *)aye_alloc_n({a}, n_, sizeof({t}), _Alignof({t}), {lc}) : 0; \
                      if (p_ || !n_) {{ size_t i_ = 0; {copy}for (; i_ < n_; i_++) p_[i_] = {v}; {free}r_.has = 1; r_.val.ptr = p_; r_.val.len = n_; }} r_; }})",
                     self.operand(f, len),
                 )
             }
             Rvalue::EmptySlice(ty) => format!("(({}){{0, 0}})", c_type(ty)),
             Rvalue::Intrinsic { op, args, span } => self.intrinsic(f, *op, args, *span),
-            Rvalue::Print { arg: None, .. } => "ore_rt_printf(\"\\n\")".to_string(),
+            Rvalue::Print { arg: None, .. } => "aye_rt_printf(\"\\n\")".to_string(),
             Rvalue::Print { arg: Some((Operand::Str(s), _)), newline } => {
-                format!("ore_print_s((const uint8_t*){}, {}, {newline})", c_str(s), s.len())
+                format!("aye_print_s((const uint8_t*){}, {}, {newline})", c_str(s), s.len())
             }
             Rvalue::Print { arg: Some((op, ty)), newline } => {
                 let v = self.operand(f, op);
                 match ty {
-                    Type::Int(it) if it.signed() => format!("ore_print_i({v}, {newline})"),
-                    Type::Int(_) => format!("ore_print_u({v}, {newline})"),
-                    Type::Float(_) => format!("ore_print_f({v}, {newline})"),
-                    Type::Bool => format!("ore_print_b({v}, {newline})"),
-                    _ => format!("ore_print_s(({v}).ptr, ({v}).len, {newline})"),
+                    Type::Int(it) if it.signed() => format!("aye_print_i({v}, {newline})"),
+                    Type::Int(_) => format!("aye_print_u({v}, {newline})"),
+                    Type::Float(_) => format!("aye_print_f({v}, {newline})"),
+                    Type::Bool => format!("aye_print_b({v}, {newline})"),
+                    _ => format!("aye_print_s(({v}).ptr, ({v}).len, {newline})"),
                 }
             }
             // A statement expression: flush stdout, then write the prefix,
             // each piece and argument, and a newline to stderr.
             Rvalue::Log { error, pieces, args } => {
-                let mut s = format!("({{ ore_rt_fflush(0); ore_rt_dprintf(2, \"{}: \");", if *error { "error" } else { "info" });
+                let mut s = format!("({{ aye_rt_fflush(0); aye_rt_dprintf(2, \"{}: \");", if *error { "error" } else { "info" });
                 for (i, piece) in pieces.iter().enumerate() {
                     if !piece.is_empty() {
-                        let _ = write!(s, " ore_log_s((const uint8_t*){}, {});", c_str(piece), piece.len());
+                        let _ = write!(s, " aye_log_s((const uint8_t*){}, {});", c_str(piece), piece.len());
                     }
                     let Some((op, ty)) = args.get(i) else { continue };
                     let v = self.operand(f, op);
                     let _ = match ty {
-                        Type::Int(it) if it.signed() => write!(s, " ore_log_i({v});"),
-                        Type::Int(_) => write!(s, " ore_log_u({v});"),
-                        Type::Float(_) => write!(s, " ore_log_f({v});"),
-                        Type::Bool => write!(s, " ore_log_b({v});"),
-                        Type::ErrorSet(_) => write!(s, " ore_log_e({v});"),
-                        _ => write!(s, " ore_log_s(({v}).ptr, ({v}).len);"),
+                        Type::Int(it) if it.signed() => write!(s, " aye_log_i({v});"),
+                        Type::Int(_) => write!(s, " aye_log_u({v});"),
+                        Type::Float(_) => write!(s, " aye_log_f({v});"),
+                        Type::Bool => write!(s, " aye_log_b({v});"),
+                        Type::ErrorSet(_) => write!(s, " aye_log_e({v});"),
+                        _ => write!(s, " aye_log_s(({v}).ptr, ({v}).len);"),
                     };
                 }
-                s.push_str(" ore_rt_dprintf(2, \"\\n\"); })");
+                s.push_str(" aye_rt_dprintf(2, \"\\n\"); })");
                 s
             }
             Rvalue::StructLit { name, fields } => {
@@ -1881,7 +1881,7 @@ impl Gen {
             Rvalue::Ok { val: None, ty } => format!("(({}){{0}})", c_type(ty)),
             Rvalue::Ok { val: Some(v), ty } => format!("(({}){{0, {}}})", c_type(ty), self.operand(f, v)),
             Rvalue::Err { err, ty } => format!("(({}){{.err = {}}})", c_type(ty), self.operand(f, err)),
-            Rvalue::TraceLen => if self.trace { "ore_trace_len" } else { "0" }.to_string(),
+            Rvalue::TraceLen => if self.trace { "aye_trace_len" } else { "0" }.to_string(),
             Rvalue::Slice { base, len, elem, lo, hi, .. } => {
                 let b = self.place(f, base);
                 let (ptr, n) = match len {
@@ -1903,22 +1903,22 @@ impl Gen {
         let a: Vec<String> = args.iter().map(|(o, _)| self.operand(f, o)).collect();
         let lc = line_col(span);
         match op {
-            Intrinsic::GeneralInit => "ore_general_init()".into(),
-            Intrinsic::GeneralAllocator => format!("ore_general_allocator({})", a[0]),
-            Intrinsic::GeneralDeinit => format!("ore_general_deinit({})", a[0]),
-            Intrinsic::ArenaInit => format!("ore_arena_init({})", a[0]),
-            Intrinsic::ArenaAllocator => format!("ore_arena_allocator({})", a[0]),
-            Intrinsic::ArenaDeinit => format!("ore_arena_deinit({}, {lc})", a[0]),
-            Intrinsic::Destroy => format!("ore_free({0}, (void *){1}, sizeof(*{1}), {lc})", a[0], a[1]),
-            Intrinsic::Free => format!("ore_free_n({0}, (void *)({1}).ptr, ({1}).len, sizeof(*({1}).ptr), {lc})", a[0], a[1]),
-            Intrinsic::TestAllocator => "ore_test_allocator()".into(),
-            Intrinsic::Expect => format!("ore_expect({}, {lc})", a[0]),
+            Intrinsic::GeneralInit => "aye_general_init()".into(),
+            Intrinsic::GeneralAllocator => format!("aye_general_allocator({})", a[0]),
+            Intrinsic::GeneralDeinit => format!("aye_general_deinit({})", a[0]),
+            Intrinsic::ArenaInit => format!("aye_arena_init({})", a[0]),
+            Intrinsic::ArenaAllocator => format!("aye_arena_allocator({})", a[0]),
+            Intrinsic::ArenaDeinit => format!("aye_arena_deinit({}, {lc})", a[0]),
+            Intrinsic::Destroy => format!("aye_free({0}, (void *){1}, sizeof(*{1}), {lc})", a[0], a[1]),
+            Intrinsic::Free => format!("aye_free_n({0}, (void *)({1}).ptr, ({1}).len, sizeof(*({1}).ptr), {lc})", a[0], a[1]),
+            Intrinsic::TestAllocator => "aye_test_allocator()".into(),
+            Intrinsic::Expect => format!("aye_expect({}, {lc})", a[0]),
             Intrinsic::ExpectEqual => match &args[0].1 {
-                Type::Int(it) if it.signed() => format!("ore_expect_eq_i({}, {}, {lc})", a[0], a[1]),
-                Type::Int(_) => format!("ore_expect_eq_u({}, {}, {lc})", a[0], a[1]),
-                Type::Float(_) => format!("ore_expect_eq_f({}, {}, {lc})", a[0], a[1]),
-                Type::Bool => format!("ore_expect_eq_b({}, {}, {lc})", a[0], a[1]),
-                _ => format!("ore_expect_eq_s(({0}).ptr, ({0}).len, ({1}).ptr, ({1}).len, {lc})", a[0], a[1]),
+                Type::Int(it) if it.signed() => format!("aye_expect_eq_i({}, {}, {lc})", a[0], a[1]),
+                Type::Int(_) => format!("aye_expect_eq_u({}, {}, {lc})", a[0], a[1]),
+                Type::Float(_) => format!("aye_expect_eq_f({}, {}, {lc})", a[0], a[1]),
+                Type::Bool => format!("aye_expect_eq_b({}, {}, {lc})", a[0], a[1]),
+                _ => format!("aye_expect_eq_s(({0}).ptr, ({0}).len, ({1}).ptr, ({1}).len, {lc})", a[0], a[1]),
             },
             Intrinsic::Hash => unreachable!("lowered to HashMix"),
             // A loop over the lanes: clang vectorizes it at `-O2`.
@@ -1957,25 +1957,25 @@ impl Gen {
                     let names = &self.enum_names.iter().find(|(e, _)| e == n).unwrap().1;
                     let table: Vec<String> =
                         names.iter().map(|v| format!("{{(uint8_t*){}, {}}}", c_str(v.as_bytes()), v.len())).collect();
-                    format!("({{ static const ore_S_u8 n_[] = {{{}}}; n_[({}).tag]; }})", table.join(", "), a[0])
+                    format!("({{ static const aye_S_u8 n_[] = {{{}}}; n_[({}).tag]; }})", table.join(", "), a[0])
                 }
-                _ => format!("({{ const char *n_ = ore_error_names[{}]; (ore_S_u8){{(uint8_t*)n_, __builtin_strlen(n_)}}; }})", a[0]),
+                _ => format!("({{ const char *n_ = aye_error_names[{}]; (aye_S_u8){{(uint8_t*)n_, __builtin_strlen(n_)}}; }})", a[0]),
             },
             Intrinsic::HashMix => {
                 let bits = match &args[1].1 {
-                    Type::Float(_) => format!("ore_hash_f64({})", a[1]),
+                    Type::Float(_) => format!("aye_hash_f64({})", a[1]),
                     Type::Enum(_) => format!("(uint64_t)({}).tag", a[1]),
                     Type::Int(_) | Type::Bool | Type::ErrorSet(_) => format!("(uint64_t){}", a[1]),
                     _ => format!("(uint64_t)(uintptr_t){}", a[1]),
                 };
-                format!("ore_hash_mix({}, {bits})", a[0])
+                format!("aye_hash_mix({}, {bits})", a[0])
             }
             Intrinsic::AtomicLoad => format!("__atomic_load_n({}, __ATOMIC_SEQ_CST)", a[0]),
             Intrinsic::AtomicStore => format!("__atomic_store_n({}, {}, __ATOMIC_SEQ_CST)", a[0], a[1]),
             Intrinsic::AtomicAdd => format!("__atomic_fetch_add({}, {}, __ATOMIC_SEQ_CST)", a[0], a[1]),
             Intrinsic::AtomicSub => format!("__atomic_fetch_sub({}, {}, __ATOMIC_SEQ_CST)", a[0], a[1]),
             Intrinsic::AtomicCas => format!(
-                "({{ {} ore_expected = {}; __atomic_compare_exchange_n({}, &ore_expected, {}, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); }})",
+                "({{ {} aye_expected = {}; __atomic_compare_exchange_n({}, &aye_expected, {}, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); }})",
                 c_type(&args[1].1),
                 a[1],
                 a[0],

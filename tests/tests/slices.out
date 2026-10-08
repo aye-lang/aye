@@ -1,5 +1,5 @@
 test "alloc and free a slice" ... ok
 test "a slice that is never freed" ... FAILED
-    tests/tests/slices.ore:15:24: leak: 16 bytes allocated here were never freed
+    tests/tests/slices.aye:15:24: leak: 16 bytes allocated here were never freed
 
 1 passed; 1 failed

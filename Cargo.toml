@@ -1,8 +1,8 @@
 [package]
-name = "ore"
+name = "aye"
 version = "0.1.0"
 edition = "2024"
-description = "Stage0 compiler for the Ore systems language (emits C)"
+description = "Stage0 compiler for the Aye systems language (emits C)"
 license = "MIT OR Apache-2.0"
 
 [dependencies]

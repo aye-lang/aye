@@ -5,7 +5,7 @@
 //! keywords `return`, `break`, `continue`, `unreachable`, or `.*`, `.?`;
 //! except that after a line of a multi-line string (`\\ text`), a newline
 //! before another such line, or before a line that starts with `,`, `)`,
-//! `]` or `}`, is not one. Ore source never contains an explicit `;`.
+//! `]` or `}`, is not one. Aye source never contains an explicit `;`.
 //!
 //! After a lexical error the rest of the line is skipped and lexing goes on,
 //! so every bad line is reported.
@@ -83,7 +83,7 @@ const KEYWORDS: &[(&str, Kw)] = &[
     ("is", Kw::Is),
 ];
 
-/// Is `word` an Ore keyword (`@cimport` renames C names that are)?
+/// Is `word` an Aye keyword (`@cimport` renames C names that are)?
 pub fn is_keyword(word: &str) -> bool {
     KEYWORDS.iter().any(|(k, _)| *k == word)
 }
@@ -667,7 +667,7 @@ impl Lexer {
             ('/', _) => Tok::Slash,
             ('%', _) => Tok::Percent,
             (';', _) => {
-                return Err(Error::new(E0002, span, "unexpected `;` (Ore ends statements at newlines)"));
+                return Err(Error::new(E0002, span, "unexpected `;` (Aye ends statements at newlines)"));
             }
             ('\\', _) => {
                 return Err(Error::new(E0001, span, "unexpected character `\\` (a multi-line string's lines start with `\\\\`)"));

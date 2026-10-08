@@ -1,0 +1,32 @@
+// A directory module of two files (main.aye and helpers.aye share one
+// namespace) that imports the directory module `shapes` (two files).
+
+import shapes
+
+struct Dog {
+    label: []u8
+
+    fn name(self: *Self) []u8 {
+        return self.label
+    }
+}
+
+pub fn main() {
+    @println(area(shapes.Shape.Circle { r: 2.0 }))
+    @println(area(shapes.Shape.Square { side: 3.0 }))
+    var c = shapes.Counter.init()
+    c.bump()
+    c.bump()
+    @println(c.get())
+    let p = shapes.Point { x: 3, y: -4 }
+    @println(shapes.manhattan(p))
+    let ok = shapes.check(5) catch 0
+    let bad = shapes.check(-1) catch |e| match e {
+        .Negative => 100
+    }
+    @println(ok + bad)
+    let b = shapes.Box(i64) { value: 7 }
+    @println(b.get())
+    var d = Dog { label: "rex" }
+    greet(&mut d)
+}

@@ -1,10 +1,10 @@
-generics_integer.ore:10:8: error[E0014]: `Integer` is a builtin name and cannot be redefined
-generics_integer.ore:15:14: error[E0037]: cannot cast `T` to `u64` (add `where T: Integer` to convert it like an integer)
-generics_integer.ore:19:14: error[E0025]: operator `+` cannot be applied to `T` (`T` is a `comptime` type: add `where T: Integer` for the integer operators)
-generics_integer.ore:23:14: error[E0037]: cannot cast `i64` to `T` (add `where T: Integer` to convert numbers to it)
-generics_integer.ore:31:12: error[E0079]: `U` does not satisfy `where T: Integer` of `twice` at 26:44 (add `where U: Integer`)
-generics_integer.ore:38:13: error[E0079]: `Id` does not satisfy `where K: Integer` of `std.map.IntMap` at std/map/map.ore:228:62: it is not an integer type
-generics_integer.ore:41:14: error[E0079]: `f64` does not satisfy `where T: Integer` of `twice` at 26:44: it is not an integer type
-generics_integer.ore:42:14: error[E0079]: `Id` does not satisfy `where T: Integer` of `twice` at 26:44: it is not an integer type
-generics_integer.ore:43:14: error[E0079]: `bool` does not satisfy `where T: Integer` of `twice` at 26:44: it is not an integer type
-generics_integer.ore:45:31: error[E0023]: mismatched types: expected `fn(u32, u32) bool`, found `fn(i64, i64) bool`
+generics_integer.aye:10:8: error[E0014]: `Integer` is a builtin name and cannot be redefined
+generics_integer.aye:15:14: error[E0037]: cannot cast `T` to `u64` (add `where T: Integer` to convert it like an integer)
+generics_integer.aye:19:14: error[E0025]: operator `+` cannot be applied to `T` (`T` is a `comptime` type: add `where T: Integer` for the integer operators)
+generics_integer.aye:23:14: error[E0037]: cannot cast `i64` to `T` (add `where T: Integer` to convert numbers to it)
+generics_integer.aye:31:12: error[E0079]: `U` does not satisfy `where T: Integer` of `twice` at 26:44 (add `where U: Integer`)
+generics_integer.aye:38:13: error[E0079]: `Id` does not satisfy `where K: Integer` of `std.map.IntMap` at std/map/map.aye:228:62: it is not an integer type
+generics_integer.aye:41:14: error[E0079]: `f64` does not satisfy `where T: Integer` of `twice` at 26:44: it is not an integer type
+generics_integer.aye:42:14: error[E0079]: `Id` does not satisfy `where T: Integer` of `twice` at 26:44: it is not an integer type
+generics_integer.aye:43:14: error[E0079]: `bool` does not satisfy `where T: Integer` of `twice` at 26:44: it is not an integer type
+generics_integer.aye:45:31: error[E0023]: mismatched types: expected `fn(u32, u32) bool`, found `fn(i64, i64) bool`

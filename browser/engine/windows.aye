@@ -1,0 +1,506 @@
+// What the scripts of a page see of the other pages of its tab: each
+// page has its own JavaScript engine and global (script.aye), so another
+// page's window is a stand-in object (TAG_WINDOW, holding the page's id)
+// whose properties ask the browser: `postMessage`, `document` (same
+// origin only), `location`, `parent`, `top`, `frames`, `length` and
+// `w[i]`. The page's own `parent`, `top`, `frames[i]`, `frameElement`
+// and the `contentWindow` and `contentDocument` of its frame elements
+// come from here too.
+//
+// The nodes of another page's document get wrappers in the engine that
+// asked (`Foreign`, the wrapper's tag holding the slot): DOM natives
+// called on them work on that document. Listeners added to them are not
+// called (that document's events fire in its own engine), and they cannot
+// be moved into another document.
+//
+// postMessage copies the data as JSON and queues a task at the target
+// page: a `message` event at its window with `data`, `origin` and
+// `source`. Origins are the URL's scheme, host and port; `file:` pages
+// share one origin; about:srcdoc and about:blank documents have their
+// parent's; a sandboxed frame without `allow-same-origin` has one of its
+// own.
+
+import dom.NodeId
+import js
+import js.Args
+import js.Interp
+import js.JsError
+import js.Value
+import std.map.IntMap
+import std.mem.AllocError
+import std.text
+import url
+
+/// The document of another page whose nodes the scripts hold.
+struct Foreign {
+    page_id: u32
+    // Node index to its wrapper.
+    wrappers: IntMap(u32, Wrapper)
+}
+
+fn installFrames(s: *mut Script, o: u32) JsError!void {
+    let it = &mut s.it
+    try defMethod(it, o, "frameCount", 0, akFrameCount)
+    try defMethod(it, o, "frameWindow", 1, akFrameWindow)
+    try defMethod(it, o, "parentWindow", 0, akParentWindow)
+    try defMethod(it, o, "topWindow", 0, akTopWindow)
+    try defMethod(it, o, "frameElement", 0, akFrameElement)
+    try defMethod(it, o, "windowName", 0, akWindowName)
+    try defMethod(it, o, "contentWindow", 1, akContentWindow)
+    try defMethod(it, o, "contentDocument", 1, akContentDocument)
+    try defMethod(it, o, "documentUrl", 1, akDocumentUrl)
+    try defMethod(it, o, "documentBase", 1, akDocumentBase)
+    try defMethod(it, o, "documentWindow", 1, akDocumentWindow)
+    try defMethod(it, o, "postMessage", 3, akPostMessage)
+    try defMethod(it, o, "winDocument", 1, akWinDocument)
+    try defMethod(it, o, "winParent", 1, akWinParent)
+    try defMethod(it, o, "winTop", 1, akWinTop)
+    try defMethod(it, o, "winLength", 1, akWinLength)
+    try defMethod(it, o, "winHref", 1, akWinHref)
+    try defMethod(it, o, "winNavigate", 2, akWinNavigate)
+    try defMethod(it, o, "winClosed", 1, akWinClosed)
+    try defMethod(it, o, "setWindowProto", 1, akSetWindowProto)
+    try defMethod(it, o, "setMessageHandler", 1, akSetMessageHandler)
+}
+
+// ---- wrappers of other documents
+
+// The slot bits of a tag for the nodes of `page`'s document (0 for the
+// page's own).
+fn slotTag(s: *mut Script, page: *mut Page) AllocError!u32 {
+    if page == s.page {
+        return 0
+    }
+    for i, f in s.foreign.items() {
+        if f.page_id == page.id {
+            return ((i + 1) as u32) << TAG_SLOT_SHIFT
+        }
+    }
+    try s.foreign.append(Foreign { page_id: page.id, wrappers: IntMap(u32, Wrapper).init(s.alloc) })
+    return (s.foreign.len() as u32) << TAG_SLOT_SHIFT
+}
+
+// The page of the document whose node a host object with `tag` holds;
+// null when the page is gone.
+fn pageOfTag(s: *mut Script, tag: u32) ?*mut Page {
+    let slot = tag >> TAG_SLOT_SHIFT
+    if slot == 0 {
+        return s.page
+    }
+    return findPage(s.page, s.foreign.items()[(slot - 1) as usize].page_id)
+}
+
+// `wrap` for a node of another page's document (`s.active`).
+fn wrapForeign(it: *mut Interp, s: *mut Script, h: NodeId) JsError!Value {
+    let page = s.active
+    let bits = try slotTag(s, page)
+    let slot = ((bits >> TAG_SLOT_SHIFT) - 1) as usize
+    if s.foreign.items()[slot].wrappers.get(h.index) |w| {
+        if w.generation == h.generation {
+            return js.objVal(w.obj)
+        }
+    }
+    let o = try it.newHostObject(protoFor(s, h), TAG_NODE | bits, h.index, h.generation)
+    try s.foreign.items()[slot].wrappers.put(h.index, Wrapper { generation: h.generation, obj: o })
+    page.doc.node(h).js_refs += 1
+    return js.objVal(o)
+}
+
+// ---- origins
+
+// The page whose URL gives `p` its origin: about:srcdoc and about:blank
+// documents have their parent's.
+fn originPage(p: *mut Page) *mut Page {
+    var cur = p
+    while text.eql(cur.url.scheme, "about") && !cur.opaque {
+        cur = cur.parent orelse return cur
+    }
+    return cur
+}
+
+/// Can the scripts of `a` reach into `b` (its document, its location)?
+pub fn sameOrigin(a: *mut Page, b: *mut Page) bool {
+    if a == b {
+        return true
+    }
+    if a.opaque || b.opaque {
+        return false
+    }
+    let x = originPage(a)
+    let y = originPage(b)
+    if x == y {
+        return true
+    }
+    let u = &x.url
+    let v = &y.url
+    if text.eql(u.scheme, "file") && text.eql(v.scheme, "file") {
+        return true
+    }
+    if text.eql(u.scheme, "about") || text.eql(v.scheme, "about") {
+        return false
+    }
+    return text.eql(u.scheme, v.scheme) && text.eql(u.host, v.host) && text.eql(u.port, v.port)
+}
+
+// The origin of `p` as `event.origin` and `location.origin` show it.
+fn appendOrigin(b: *mut text.Builder, p: *mut Page) AllocError!void {
+    if p.opaque {
+        return b.append("null")
+    }
+    return appendUrlPart(b, &originPage(p).url, "origin")
+}
+
+// ---- window objects
+
+// The window object of `page` in the engine of `s`: the global object
+// for its own page, else a stand-in made once.
+fn windowValue(s: *mut Script, page: *mut Page) JsError!Value {
+    let it = &mut s.it
+    if page == s.page {
+        return js.objVal(it.global)
+    }
+    if s.windows.get(page.id) |r| {
+        return it.roots.items()[r]
+    }
+    var proto = s.window_proto
+    if proto == js.NONE {
+        proto = it.object_proto
+    }
+    let o = try it.newHostObject(proto, TAG_WINDOW, page.id, 0)
+    let r = try it.addRoot(js.objVal(o))
+    try s.windows.put(page.id, r)
+    return js.objVal(o)
+}
+
+fn windowOpt(s: *mut Script, page: ?*mut Page) JsError!Value {
+    if page |p| {
+        return windowValue(s, p)
+    }
+    return Value.Null
+}
+
+// The page of a window object (the global object, or a stand-in); null
+// when it is none or its page is gone.
+fn winPage(it: *mut Interp, v: Value) ?*mut Page {
+    let s = scriptOf(it)
+    let o = js.objectOf(v)
+    if o == js.NONE {
+        return null
+    }
+    if o == it.global {
+        return s.page
+    }
+    match it.heap.obj(o).data {
+        .Host { tag, index, .. } => {
+            if tag == TAG_WINDOW {
+                return findPage(s.page, index)
+            }
+        }
+        _ => {}
+    }
+    return null
+}
+
+// Host.getNamed of a window stand-in: `w[i]` is its frame i.
+fn windowNamed(s: *mut Script, o: u32, key: u32) JsError!Value {
+    let it = &mut s.it
+    let i = it.heap.atoms.indexOf(key)
+    if i == js.NONE {
+        return Value.Empty
+    }
+    let page = winPage(it, js.objVal(o)) orelse return Value.Undefined
+    return frameWindowOf(s, page, i as usize)
+}
+
+// The window of the `i`th frame element of `page` (loaded now if it was
+// not yet), or undefined.
+fn frameWindowOf(s: *mut Script, page: *mut Page, i: usize) JsError!Value {
+    let el = frameElements(page, i).el orelse return Value.Undefined
+    let child = (try ensureFrame(page, el)) orelse return Value.Undefined
+    return windowValue(s, child)
+}
+
+// The page of window argument 0, or a TypeError.
+fn argWindow(it: *mut Interp, a: Args) JsError!?*mut Page {
+    return winPage(it, it.arg(a, 0))
+}
+
+fn crossOrigin(it: *mut Interp, what: []u8) JsError!Value {
+    let b = try it.builder()
+    defer it.release(b)
+    try b.append("Blocked a frame from accessing ")
+    try b.append(what)
+    try b.append(" of a cross-origin frame.")
+    return domError(it, "SecurityError", b.bytes())
+}
+
+// ---- the page's own window
+
+fn akFrameCount(it: *mut Interp, a: Args) JsError!Value {
+    return js.numVal(frameElements(scriptOf(it).page, null).count as f64)
+}
+
+// frameWindow(i): the window of frame i, or undefined.
+fn akFrameWindow(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    let n = try it.toNumber(it.arg(a, 0))
+    if n == n && n >= 0.0 && n < 1000000.0 {
+        return frameWindowOf(s, s.page, n as usize)
+    }
+    return Value.Undefined
+}
+
+// The window of the parent page; null for a tab's page.
+fn akParentWindow(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    return windowOpt(s, s.page.parent)
+}
+
+// The window of the tab's page; null when it is this one.
+fn akTopWindow(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    let top = rootPage(s.page)
+    if top == s.page {
+        return Value.Null
+    }
+    return windowValue(s, top)
+}
+
+// The frame element that shows the page, when the parent is of the same
+// origin; else null.
+fn akFrameElement(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    let slot = slotOf(s.page) orelse return Value.Null
+    if !sameOrigin(s.page, slot.parent) {
+        return Value.Null
+    }
+    s.active = slot.parent
+    return wrap(it, slot.parent.frames.items()[slot.index].el)
+}
+
+// The `name` of the frame element that shows the page ("" for a tab's).
+fn akWindowName(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    if slotOf(s.page) |slot| {
+        if slot.parent.doc.attr(slot.parent.frames.items()[slot.index].el, "name") |n| {
+            return it.newString(n)
+        }
+    }
+    return it.newString("")
+}
+
+// The page that the frame element argument 0 shows (loaded now if it
+// was not yet); null for other elements.
+fn argFramePage(it: *mut Interp, a: Args) JsError!?*mut Page {
+    let el = handleOf(it, it.arg(a, 0), TAG_NODE) orelse return null
+    let s = scriptOf(it)
+    return ensureFrame(s.active, el)
+}
+
+fn akContentWindow(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    let page = try argFramePage(it, a)
+    return windowOpt(s, page)
+}
+
+fn akContentDocument(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    let page = (try argFramePage(it, a)) orelse return Value.Null
+    if !sameOrigin(s.page, page) {
+        return Value.Null
+    }
+    s.active = page
+    return wrap(it, page.doc.root)
+}
+
+// The URL of the document argument 0 (this page's or another's).
+fn akDocumentUrl(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    if handleOf(it, it.arg(a, 0), TAG_NODE) |h| {
+        return it.newString(s.active.url.href)
+    }
+    return it.newString(s.page.url.href)
+}
+
+// The base URL of the document of node argument 0, computed at each
+// call so that a `base` element added or changed by a script counts.
+// about:blank and about:srcdoc documents keep the one they got from
+// their parent when they were made (`Page.base`).
+fn akDocumentBase(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    var p = s.page
+    if handleOf(it, it.arg(a, 0), TAG_NODE) |h| {
+        p = s.active
+    }
+    if text.startsWith(p.url.href, "about:") {
+        return it.newString(p.base.href)
+    }
+    var base = try documentBase(it.alloc, &p.doc, &p.url)
+    defer base.deinit(it.alloc)
+    return it.newString(base.href)
+}
+
+// The window of the document argument 0.
+fn akDocumentWindow(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    if handleOf(it, it.arg(a, 0), TAG_NODE) |h| {
+        return windowValue(s, s.active)
+    }
+    return js.objVal(it.global)
+}
+
+// ---- messages
+
+// postMessage(window, json, targetOrigin): queues a message event at the
+// window's page, unless its origin is not `targetOrigin` ("*": any;
+// "/": the sender's). `json` is the data as JSON (undefined: none).
+fn akPostMessage(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    let target = (try argWindow(it, a)) orelse return Value.Undefined
+    let want = try it.builder()
+    defer it.release(want)
+    try argText(it, a, 2, want)
+    let w = text.trim(want.bytes())
+    if text.eql(w, "/") {
+        if !sameOrigin(s.page, target) {
+            return Value.Undefined
+        }
+    } else if !text.eql(w, "*") {
+        let have = try it.builder()
+        defer it.release(have)
+        try appendOrigin(have, target)
+        var u = url.parse(it.alloc, w) catch |e| {
+            return domError(it, "SyntaxError", "Failed to execute 'postMessage' on 'Window': Invalid target origin in a call to 'postMessage'.")
+        }
+        defer u.deinit(it.alloc)
+        let given = try it.builder()
+        defer it.release(given)
+        try appendUrlPart(given, &u, "origin")
+        if !text.eql(have.bytes(), given.bytes()) {
+            return Value.Undefined
+        }
+    }
+    let ts = target.script orelse return Value.Undefined
+    if ts.on_message == js.NONE {
+        return Value.Undefined
+    }
+    var data: ?[]u8 = null
+    let d = try it.builder()
+    defer it.release(d)
+    if !js.isUndef(it.arg(a, 1)) {
+        try argText(it, a, 1, d)
+        data = d.bytes()
+    }
+    let origin = try it.builder()
+    defer it.release(origin)
+    try appendOrigin(origin, s.page)
+    queueMessage(ts, data, origin.bytes(), s.page) catch |e| {
+        return JsError.OutOfMemory
+    }
+    return Value.Undefined
+}
+
+// A task of `ts`'s page: the prelude's hostMessage(data, origin, source).
+// `data` and `origin` must not be in `ts`'s heap.
+fn queueMessage(ts: *mut Script, data: ?[]u8, origin: []u8, from: *mut Page) JsError!void {
+    let it = &mut ts.it
+    let base = it.stack.len()
+    defer it.truncate(base)
+    let arr = try it.newArray(0)
+    try it.push(js.objVal(arr))
+    try it.heap.pushElem(arr, it.roots.items()[ts.on_message])
+    if data |bytes| {
+        let v = try it.newString(bytes)
+        try it.heap.pushElem(arr, v)
+    } else {
+        try it.heap.pushElem(arr, Value.Undefined)
+    }
+    let o = try it.newString(origin)
+    try it.heap.pushElem(arr, o)
+    let src = try windowValue(ts, from)
+    try it.heap.pushElem(arr, src)
+    let root = try it.addRoot(js.objVal(arr))
+    tick(ts)
+    let id = ts.next_timer
+    ts.next_timer += 1
+    try ts.timers.append(Timer { id: id, due: ts.now, interval: 0.0, repeat: false, raf: false, root: root, seq: ts.seq })
+    ts.seq += 1
+}
+
+// ---- other pages' windows
+
+fn akWinDocument(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    let page = (try argWindow(it, a)) orelse return Value.Undefined
+    if !sameOrigin(s.page, page) {
+        return crossOrigin(it, "the document")
+    }
+    s.active = page
+    return wrap(it, page.doc.root)
+}
+
+// The parent's window (the window itself for a tab's page).
+fn akWinParent(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    let page = (try argWindow(it, a)) orelse return Value.Null
+    if page.parent |up| {
+        return windowValue(s, up)
+    }
+    return windowValue(s, page)
+}
+
+fn akWinTop(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    let page = (try argWindow(it, a)) orelse return Value.Null
+    return windowValue(s, rootPage(page))
+}
+
+fn akWinLength(it: *mut Interp, a: Args) JsError!Value {
+    let page = (try argWindow(it, a)) orelse return js.numVal(0.0)
+    return js.numVal(frameElements(page, null).count as f64)
+}
+
+fn akWinHref(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    let page = (try argWindow(it, a)) orelse return it.newString("about:blank")
+    if !sameOrigin(s.page, page) {
+        return crossOrigin(it, "the location")
+    }
+    return it.newString(page.url.href)
+}
+
+// winNavigate(window, url): the window's page goes to `url` (resolved
+// against this page) once the script returned.
+fn akWinNavigate(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    let page = (try argWindow(it, a)) orelse return Value.Undefined
+    let ts = page.script orelse return Value.Undefined
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 1, b)
+    let target = s.page.resolve(it.alloc, b.bytes()) catch |e| {
+        return domError(it, "SyntaxError", "Failed to set the 'href' property on 'Location': not a valid URL.")
+    }
+    defer target.deinit(it.alloc)
+    try setNavigation(ts, target.href)
+    return Value.Undefined
+}
+
+fn akWinClosed(it: *mut Interp, a: Args) JsError!Value {
+    return js.boolVal((try argWindow(it, a)) == null)
+}
+
+fn akSetWindowProto(it: *mut Interp, a: Args) JsError!Value {
+    let o = js.objectOf(it.arg(a, 0))
+    if o != js.NONE {
+        try it.addRoot(it.arg(a, 0))
+        scriptOf(it).window_proto = o
+    }
+    return Value.Undefined
+}
+
+fn akSetMessageHandler(it: *mut Interp, a: Args) JsError!Value {
+    let f = try js.callableArg(it, a, 0)
+    scriptOf(it).on_message = try it.addRoot(f)
+    return Value.Undefined
+}

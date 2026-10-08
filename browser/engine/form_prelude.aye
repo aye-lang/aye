@@ -1,0 +1,18 @@
+// Script-level live ValidityState over the native `_validity`
+// (form_api.aye).
+pub let FORM_PRELUDE =
+    \\(function () {
+    \\const fields = ['valueMissing', 'typeMismatch', 'patternMismatch', 'tooLong', 'tooShort', 'rangeUnderflow', 'rangeOverflow', 'stepMismatch', 'badInput', 'customError', 'valid'];
+    \\class ValidityState {
+    \\  constructor(el) { Object.defineProperty(this, '_el', {value: el}); }
+    \\}
+    \\for (const k of fields) Object.defineProperty(ValidityState.prototype, k, {get: function () { return this._el._validity[k]; }});
+    \\// On the elements that take part in forms (the others have no `_validity`).
+    \\for (const n of ['Button', 'FieldSet', 'Input', 'Object', 'Output', 'Select', 'TextArea']) {
+    \\  Object.defineProperty(globalThis['HTML' + n + 'Element'].prototype, 'validity', {get: function () {
+    \\    if (!this._validityState) Object.defineProperty(this, '_validityState', {value: new ValidityState(this)});
+    \\    return this._validityState;
+    \\  }, configurable: true});
+    \\}
+    \\globalThis.ValidityState = ValidityState;
+    \\})();

@@ -1,0 +1,1274 @@
+// Geometry for scripts: getBoundingClientRect, getClientRects, the
+// offset*, client* and scroll* properties of elements, and the window's
+// scroll offset.
+//
+// A script that asks for geometry gets a forced synchronous layout: the
+// first question after the document changed (`layoutVersion`: changes
+// to trees out of the document do not count) or the viewport did styles
+// and lays out the document (`Script.geom`); the next ones reuse that
+// layout while nothing changed. It is the page's
+// own cascade and layout, measured with the measurer of the page's last
+// layout (`Page.measure`), else with the fixed-metric font (`dump
+// --js`, scripts that run before the first layout).
+//
+// Client rectangles are border boxes relative to the viewport: their
+// place in the document minus the window's scroll offset
+// (`Script.scroll_x`, `scroll_y`) and the scroll offsets of the scroll
+// containers around them (`Script.scrolls`). Fixed boxes do not move
+// with either.
+//
+// Simplifications: transforms are ignored; element scroll offsets exist
+// for scripts only (paint does not scroll the content of boxes);
+// offsetTop and offsetLeft ignore scroll offsets; nodes of other pages'
+// documents, text nodes and ranges have no geometry.
+
+import css
+import dom
+import dom.NodeId
+import font
+import js
+import js.Args
+import js.Interp
+import js.JsError
+import js.Value
+import layout
+import perf
+import std.list.List
+import std.map.IntMap
+import std.math
+import std.mem.AllocError
+import std.text
+
+let NO_BOX: usize = 0xFFFFFFFFFFFFFFFF
+
+// A layout of the document for scripts.
+struct Geometry {
+    tree: *mut layout.Tree
+    // The computed values the tree's boxes point at.
+    styles: *mut css.Styles
+    // Node index to its first box, and box to the next box of the same
+    // node (NO_BOX for none).
+    first: IntMap(u32, usize)
+    next: List(usize)
+    // `layoutVersion` and the viewport this layout is for.
+    version: u64
+    width: f64
+    height: f64
+    // What `styles` were computed with: the styling (and its sheets,
+    // `Script.computed_sheets`) and `Page.mutations`.
+    styling: *Styling
+    sheets: u64
+    mutations: u64
+    // What a change can change the styles of, beyond what is under it;
+    // how many elements were styled again since `styles` were computed.
+    deps: css.RestyleDeps
+    restyled: usize
+}
+
+// At most this many different changes are kept for the next layout
+// (`noteLayoutChange`): beyond, the whole document is styled again.
+// YouTube's search results make 256 to 4096 of them between two reads.
+let MAX_RESTYLE: usize = 4096
+
+// Styling an element again reuses its values but not the rest it
+// allocates (custom properties, pseudo-elements, style attributes):
+// after styling again this many times as many elements as the styles
+// have, the whole document is styled into new styles.
+let RESTYLE_ROUNDS: usize = 4
+
+// The scroll offset a script gave a scroll container.
+struct ScrollOffset {
+    generation: u32
+    x: f64
+    y: f64
+}
+
+// A rectangle in CSS px.
+struct Area {
+    x: f64
+    y: f64
+    w: f64
+    h: f64
+}
+
+fn installGeometry(s: *mut Script, o: u32) JsError!void {
+    let it = &mut s.it
+    try defMethod(it, o, "rects", 1, akRects)
+    try defMethod(it, o, "metric", 2, akMetric)
+    try defMethod(it, o, "offsetParent", 1, akOffsetParent)
+    try defMethod(it, o, "setScroll", 3, akSetScroll)
+    try defMethod(it, o, "windowScroll", 1, akWindowScroll)
+    try defMethod(it, o, "setLayoutHook", 1, akSetLayoutHook)
+    try defMethod(it, o, "watchScroll", 0, akWatchScroll)
+    try defMethod(it, o, "renderedSize", 2, akRenderedSize)
+}
+
+fn akSetLayoutHook(it: *mut Interp, a: Args) JsError!Value {
+    let f = try js.callableArg(it, a, 0)
+    let s = scriptOf(it)
+    if s.layout_hook != js.NONE {
+        it.removeRoot(s.layout_hook)
+    }
+    s.layout_hook = try it.addRoot(f)
+    s.hook_stamp = 0
+    return Value.Undefined
+}
+
+fn akWatchScroll(it: *mut Interp, a: Args) JsError!Value {
+    scriptOf(it).watches_scroll = true
+    return Value.Undefined
+}
+
+// After a task: calls the layout hook when the document or its geometry
+// changed since the last call (the prelude then checks its observers at
+// the next animation frame).
+fn runLayoutHook(s: *mut Script) AllocError!void {
+    if s.layout_hook == js.NONE {
+        return
+    }
+    let stamp = layoutVersion(s.page) + s.geometry_changes + 1
+    if stamp == s.hook_stamp {
+        return
+    }
+    s.hook_stamp = stamp
+    let it = &mut s.it
+    let base = it.stack.len()
+    try jsPush(s, it.roots.items()[s.layout_hook])
+    try jsPush(s, js.objVal(it.global))
+    _ = try callReported(s, base, 0)
+    it.truncate(base)
+    try runMicrotasks(s)
+}
+
+fn dropGeometry(s: *mut Script) {
+    if s.geom |g| {
+        dropTree(s, g)
+        g.styles.deinit()
+        s.alloc.destroy(g.styles)
+        g.deps.deinit()
+        s.alloc.destroy(g)
+    }
+    s.geom = null
+}
+
+fn dropTree(s: *mut Script, g: *mut Geometry) {
+    g.tree.deinit()
+    s.alloc.destroy(g.tree)
+    g.first.deinit()
+    g.next.deinit()
+}
+
+// A change `noteLayoutChange` took.
+struct Change {
+    at: NodeId
+    what: css.StyleChange
+}
+
+/// A script changed the document's tree at the node `at` (the parent
+/// whose children changed, the element whose attributes or text did;
+/// `change` says what): the layout scripts read is out of date, and the
+/// next one computes again only the styles of the elements around `at`
+/// (`restyleRoots`). Nothing when `at` is out of the document: a change
+/// to a tree out of it (a template a framework fills before inserting
+/// it) moves no box.
+fn noteLayoutChange(s: *mut Script, at: NodeId, change: css.StyleChange) AllocError!void {
+    if !s.page.doc.isConnected(at) {
+        return
+    }
+    s.layout_version += 1
+    if s.geom == null || s.restyle_all {
+        return
+    }
+    // The same change again (children appended one by one to the same
+    // parent) is kept once.
+    let key = changeKey(at, change)
+    if s.restyle_seen.get(key) |i| {
+        let old = s.restyle.items()[i]
+        if dom.same(old.at, at) && old.what.what == change.what && old.what.token == change.token {
+            return
+        }
+    }
+    if s.restyle.len() >= MAX_RESTYLE {
+        s.restyle_all = true
+        clearChanges(s)
+        return
+    }
+    try s.restyle_seen.put(key, s.restyle.len())
+    try s.restyle.append(Change { at: at, what: change })
+}
+
+// The key of a change in `Script.restyle_seen` (two changes may share one).
+fn changeKey(at: NodeId, change: css.StyleChange) u64 {
+    var k = change.what *% 0x9E3779B97F4A7C15
+    k = k ^ ((at.index as u64) << 32) ^ (at.generation as u64)
+    if change.token {
+        k = k ^ 0xC2B2AE3D27D4EB4F
+    }
+    return k
+}
+
+// Forgets the changes noted for the next layout.
+fn clearChanges(s: *mut Script) {
+    s.restyle.clear()
+    if s.restyle_seen.len() > 0 {
+        s.restyle_seen.deinit()
+        s.restyle_seen = IntMap(u64, usize).init(s.alloc)
+    }
+}
+
+/// The state of the element `el` changed (`:defined`).
+fn noteStateChange(s: *mut Script, el: NodeId) AllocError!void {
+    return noteLayoutChange(s, el, css.STATE_CHANGED)
+}
+
+/// A change to the document that may change the style of any element
+/// (style sheets, document.write, form state).
+fn noteLayoutChangeAnywhere(s: *mut Script) {
+    s.layout_version += 1
+    s.restyle_all = true
+}
+
+// The layout of the document as it is now, at the window's scroll
+// offset: the last one when nothing changed since, else a new one.
+fn geometry(s: *mut Script) AllocError!*mut Geometry {
+    let p = s.page
+    let version = layoutVersion(p)
+    if s.geom |g| {
+        if g.version == version && g.width == s.width && g.height == s.height {
+            followScroll(s, g)
+            return g
+        }
+    }
+    let began = perf.start()
+    defer perf.end("script_layout", began, p.url.href)
+    let st = try computedStyling(s)
+    if s.geom |g| {
+        var fresh = sameStyles(s, g, st)
+        if fresh {
+            // Nothing the styles depend on changed (a class no rule
+            // names): only the layout is done again.
+            clearChanges(s)
+            s.restyle_all = false
+        } else {
+            fresh = restyle(s, g, st) catch |e| {
+                dropGeometry(s)
+                return e
+            }
+        }
+        if fresh {
+            dropTree(s, g)
+            s.geom = null
+            errdefer {
+                g.styles.deinit()
+                s.alloc.destroy(g.styles)
+                g.deps.deinit()
+                s.alloc.destroy(g)
+            }
+            let laid = try layOut(s, g.styles)
+            g.tree = laid.tree
+            g.first = laid.first
+            g.next = laid.next
+            g.version = version
+            s.geom = g
+            followScroll(s, g)
+            return g
+        }
+    }
+    dropGeometry(s)
+    clearChanges(s)
+    s.restyle_all = false
+    let styles = try s.alloc.create(try css.Styles.init(s.alloc))
+    errdefer {
+        styles.deinit()
+        s.alloc.destroy(styles)
+    }
+    try dom.assignSlots(&mut p.doc)
+    try css.computeStyles(&p.doc, &st.ua, &st.author, st.media, styles)
+    var deps = css.RestyleDeps.init(s.alloc)
+    errdefer deps.deinit()
+    var quirks: ?*css.Sheet = null
+    if p.doc.quirks {
+        quirks = &styles.quirks
+    }
+    try deps.build(&st.author, &st.ua, quirks)
+    var laid = try layOut(s, styles)
+    let g = s.alloc.create(Geometry { tree: laid.tree, styles: styles, first: laid.first, next: laid.next, version: version, width: s.width, height: s.height, styling: st, sheets: s.computed_sheets, mutations: p.mutations, deps: deps, restyled: 0 }) catch |e| {
+        laid.tree.deinit()
+        s.alloc.destroy(laid.tree)
+        laid.first.deinit()
+        laid.next.deinit()
+        return e
+    }
+    s.geom = g
+    followScroll(s, g)
+    return g
+}
+
+// Are the styles of `g` still those of the document, for the sheets of
+// `st` and the window's size (`stylesCurrent`)?
+fn sameStyles(s: *mut Script, g: *Geometry, st: *Styling) bool {
+    return g.width == s.width && g.height == s.height && g.styling == st && g.sheets == s.computed_sheets && stylesCurrent(&s.page.doc, st.media, g.styles)
+}
+
+/// The styles of the layout scripts read, when they are those of the
+/// document as it is now for the sheets of `st` and `media`
+/// (`stylesCurrent`): taken out of it, and that layout dropped (the
+/// next one computes them again). Null otherwise.
+fn takeGeometryStyles(s: *mut Script, st: *Styling, media: css.Media) ?css.Styles {
+    let g = s.geom orelse return null
+    if g.styling != st || g.width != media.width || g.height != media.height || g.sheets != s.computed_sheets || !stylesCurrent(&s.page.doc, media, g.styles) {
+        return null
+    }
+    let styles = g.styles.*
+    s.alloc.destroy(g.styles)
+    dropTree(s, g)
+    g.deps.deinit()
+    s.alloc.destroy(g)
+    s.geom = null
+    return styles
+}
+
+// Brings the styles of `g` up to date for the changes noted since
+// (`Script.restyle`) by computing again those of the elements around
+// them, when it can: not when a change may change any element's style,
+// or for other sheets or another viewport, or when the styles depend on
+// what css/invalidation.aye does not follow (`:has()` of siblings,
+// container queries, shadow trees; but see `onlyInlineStyle`), or after styling the document again
+// `RESTYLE_ROUNDS` times this way. Whether it did.
+fn restyle(s: *mut Script, g: *mut Geometry, st: *Styling) AllocError!bool {
+    let p = s.page
+    let ok = !s.restyle_all && g.width == s.width && g.height == s.height && g.styling == st && g.sheets == s.computed_sheets && g.mutations == p.mutations && (!g.deps.whole || onlyInlineStyle(s, g)) && !g.styles.queried && p.doc.shadows.len() == 0 && g.restyled < RESTYLE_ROUNDS * g.styles.map.len()
+    if !ok {
+        return false
+    }
+    var roots = List(NodeId).init(s.alloc)
+    defer roots.deinit()
+    var shallow = List(bool).init(s.alloc)
+    defer shallow.deinit()
+    if !(try restyleRoots(s, g, st, &mut roots, &mut shallow)) {
+        return false
+    }
+    g.restyled += try css.restyleSubtrees(&p.doc, &st.ua, &st.author, st.media, roots.items(), shallow.items(), g.styles)
+    clearChanges(s)
+    return true
+}
+
+// Are the changes noted since `g` all to `style` attributes that no
+// selector looks at (an animation's frames)?
+fn onlyInlineStyle(s: *Script, g: *Geometry) bool {
+    for c in s.restyle.items() {
+        if !g.deps.onlyOwnStyle(c.what) {
+            return false
+        }
+    }
+    return true
+}
+
+// The elements whose subtrees have every element whose style a change
+// noted in `Script.restyle` may change (css/invalidation.aye), in `out`:
+// - for a change to an element's attributes that selectors look at only
+//   on the element itself, the element alone (`shallow`: its
+//   descendants too when its values change);
+// - for another change to an element's attributes, or to its children
+//   (the element of a changed text), the element and its following
+//   siblings, or all its siblings for `of S`;
+// - from the topmost element above it whose `:has()` may change
+//   instead, when there is one.
+// Without the roots under another (not shallow) root, and those out of
+// the document now (their removal is noted at their parent). False when
+// that is the whole document.
+fn restyleRoots(s: *mut Script, g: *Geometry, st: *Styling, out: *mut List(NodeId), shallow: *mut List(bool)) AllocError!bool {
+    let doc = &s.page.doc
+    let deps = &g.deps
+    let sheet = &st.author
+    // Node index to its place in `out`.
+    var found = IntMap(u32, usize).init(s.alloc)
+    defer found.deinit()
+    // Element index to whether a `:has()` of any depth may be its.
+    var anchors = IntMap(u32, bool).init(s.alloc)
+    defer anchors.deinit()
+    for change in s.restyle.items() {
+        let at = change.at
+        if !doc.isLive(at) || !doc.isConnected(at) {
+            continue
+        }
+        var el = at
+        if doc.node(at).kind != dom.Kind.Element {
+            el = doc.parent(at) orelse return false
+            if doc.node(el).kind != dom.Kind.Element {
+                return false
+            }
+        }
+        var top = el
+        if deps.hasAny() {
+            var distance: usize = 0
+            var cur: ?NodeId = el
+            while cur |c| {
+                if doc.node(c).kind != dom.Kind.Element {
+                    break
+                }
+                var any_depth = false
+                if anchors.get(c.index) |known| {
+                    any_depth = known
+                } else {
+                    any_depth = deps.mayAnchorAnyDepth(sheet, doc, c)
+                    try anchors.put(c.index, any_depth)
+                }
+                if !dom.same(c, el) && deps.anchors(sheet, doc, c, distance, change.what, any_depth) {
+                    top = c
+                }
+                distance += 1
+                cur = doc.parent(c)
+            }
+        }
+        let up = doc.parent(top) orelse return false
+        if doc.node(up).kind != dom.Kind.Element {
+            return false
+        }
+        if dom.same(top, el) && !deps.isDeep(change.what) {
+            try addRoot(out, shallow, &mut found, el, true)
+            continue
+        }
+        var first: ?NodeId = top
+        if deps.of_selector {
+            first = doc.firstChild(up)
+        }
+        var sib = first
+        while sib |e| {
+            if doc.node(e).kind == dom.Kind.Element {
+                try addRoot(out, shallow, &mut found, e, false)
+            }
+            sib = doc.nextSibling(e)
+        }
+    }
+    // Keep the roots no other root is above.
+    var under = List(bool).init(s.alloc)
+    defer under.deinit()
+    for r in out.items() {
+        var covered = false
+        var cur = doc.parent(r)
+        while cur |c| {
+            if found.get(c.index) |k| {
+                if dom.same(out.items()[k], c) && !shallow.items()[k] {
+                    covered = true
+                    break
+                }
+            }
+            cur = doc.parent(c)
+        }
+        try under.append(covered)
+    }
+    var kept: usize = 0
+    for i in 0..out.len() {
+        if !under.items()[i] {
+            out.items()[kept] = out.items()[i]
+            shallow.items()[kept] = shallow.items()[i]
+            kept += 1
+        }
+    }
+    while out.len() > kept {
+        _ = out.pop()
+        _ = shallow.pop()
+    }
+    return true
+}
+
+// Adds `el` to the roots (`restyleRoots`), or makes it not shallow.
+fn addRoot(out: *mut List(NodeId), shallow: *mut List(bool), found: *mut IntMap(u32, usize), el: NodeId, only: bool) AllocError!void {
+    if found.get(el.index) |k| {
+        if dom.same(out.items()[k], el) {
+            if !only {
+                shallow.items()[k] = false
+            }
+            return
+        }
+    }
+    try found.put(el.index, out.len())
+    try out.append(el)
+    try shallow.append(only)
+}
+
+// A layout tree and its boxes by node (`Geometry`).
+struct Boxes {
+    tree: *mut layout.Tree
+    first: IntMap(u32, usize)
+    next: List(usize)
+}
+
+// Lays the document out with `styles`.
+fn layOut(s: *mut Script, styles: *mut css.Styles) AllocError!Boxes {
+    let p = s.page
+    var images: ?*layout.Images = null
+    if p.images |imgs| {
+        images = &imgs.nodes
+    }
+    var measure: dyn font.Measurer = &mut s.fixed
+    if p.measure |m| {
+        measure = m
+    }
+    let laid = try layout.layoutDocumentWith(s.alloc, &p.doc, styles, images, measure, s.width, s.height)
+    let tree = s.alloc.create(laid) catch |e| {
+        var lost = laid
+        lost.deinit()
+        return e
+    }
+    errdefer {
+        tree.deinit()
+        s.alloc.destroy(tree)
+    }
+    var first = IntMap(u32, usize).init(s.alloc)
+    errdefer first.deinit()
+    var next = List(usize).init(s.alloc)
+    errdefer next.deinit()
+    // Boxes in reverse order, so that each node's chain is in tree order.
+    for i in 0..tree.boxes.len() {
+        try next.append(NO_BOX)
+    }
+    var k = tree.boxes.len()
+    while k > 0 {
+        k -= 1
+        if tree.bx(k).node |n| {
+            if first.get(n.index) |after| {
+                next.items()[k] = after
+            }
+            try first.put(n.index, k)
+        }
+    }
+    return Boxes { tree: tree, first: first, next: next }
+}
+
+// The computed values of `el` in the layout scripts read, when it is up
+// to date (getComputedStyle then computes nothing): they are the
+// cascade of the whole document with the same sheets and viewport.
+fn layoutStyles(s: *mut Script, el: NodeId) ?[]css.Value {
+    let g = s.geom orelse return null
+    if g.version != layoutVersion(s.page) || g.width != s.width || g.height != s.height || g.styles.queried {
+        return null
+    }
+    if !s.page.doc.isConnected(el) {
+        return null
+    }
+    return g.styles.get(el)
+}
+
+// Moves the fixed and sticky boxes of the layout to the window's scroll
+// offset.
+fn followScroll(s: *mut Script, g: *mut Geometry) {
+    if g.tree.scroll_y != s.scroll_y {
+        _ = layout.scrollTo(g.tree, s.scroll_y)
+    }
+}
+
+// The first box of `el`, if it has one.
+fn firstBox(g: *Geometry, el: NodeId) ?usize {
+    return g.first.get(el.index)
+}
+
+// Appends the border boxes of the boxes of `el` (one per line for an
+// inline box) to `out`, in the document's coordinates.
+fn boxAreas(g: *Geometry, el: NodeId, out: *mut List(Area)) AllocError!void {
+    let t = g.tree
+    var cur = firstBox(g, el) orelse return
+    while cur != NO_BOX {
+        let b = t.bx(cur)
+        if b.kind == layout.BoxKind.Inline {
+            try inlineAreas(t, cur, out)
+        } else if b.kind != layout.BoxKind.Text && b.kind != layout.BoxKind.LineBreak {
+            try out.append(Area { x: b.ax, y: b.ay, w: b.w, h: b.h })
+        }
+        cur = g.next.items()[cur]
+    }
+}
+
+// The fragments of inline box `i` on the lines of its block container.
+fn inlineAreas(t: *layout.Tree, i: usize, out: *mut List(Area)) AllocError!void {
+    var up = t.bx(i).parent
+    while up |c| {
+        if layout.hasInlineContent(t, c) {
+            let b = t.bx(c)
+            let cx = b.ax + b.border[3] + b.padding[3]
+            let cy = b.ay + b.border[0] + b.padding[0]
+            for li in b.line_start..b.line_end {
+                let line = t.lines.items()[li]
+                for fi in line.frag_start..line.frag_end {
+                    let f = t.frags.items()[fi]
+                    if f.box == i && f.kind == layout.FragKind.Inline {
+                        try out.append(Area { x: cx + f.x, y: cy + f.y, w: f.w, h: f.h })
+                    }
+                }
+            }
+            return
+        }
+        up = t.bx(c).parent
+    }
+}
+
+// How far box `i` is moved on screen: by the scroll offsets of the
+// scroll containers around it and by the window's, unless it is fixed.
+fn scrolledBy(s: *mut Script, g: *Geometry, i: usize) Area {
+    let t = g.tree
+    var d = Area { x: s.scroll_x, y: s.scroll_y, w: 0.0, h: 0.0 }
+    if t.bx(i).abs == 2 {
+        d.x = 0.0
+        return d
+    }
+    var up = t.bx(i).parent
+    while up |c| {
+        let b = t.bx(c)
+        if s.scrolls.len() > 0 {
+            if b.node |n| {
+                if s.scrolls.get(n.index) |o| {
+                    if o.generation == n.generation {
+                        let max = maxScroll(g, c)
+                        d.x += math.clamp(o.x, 0.0, max.x)
+                        d.y += math.clamp(o.y, 0.0, max.y)
+                    }
+                }
+            }
+        }
+        if b.abs == 2 {
+            // Fixed: in the viewport, wherever the window is scrolled.
+            d.x -= s.scroll_x
+            return d
+        }
+        up = b.parent
+    }
+    return d
+}
+
+// The client rectangles of `el`: its border boxes relative to the
+// viewport.
+fn clientAreas(s: *mut Script, el: NodeId, out: *mut List(Area)) AllocError!void {
+    let g = try geometry(s)
+    let t = g.tree
+    var cur = firstBox(g, el) orelse return
+    while cur != NO_BOX {
+        let start = out.len()
+        let b = t.bx(cur)
+        if b.kind == layout.BoxKind.Inline {
+            try inlineAreas(t, cur, out)
+        } else if b.kind != layout.BoxKind.Text && b.kind != layout.BoxKind.LineBreak {
+            try out.append(Area { x: b.ax, y: b.ay, w: b.w, h: b.h })
+        }
+        if out.len() > start {
+            let d = scrolledBy(s, g, cur)
+            for k in start..out.len() {
+                out.items()[k].x -= d.x
+                out.items()[k].y -= d.y
+            }
+        }
+        cur = g.next.items()[cur]
+    }
+}
+
+// The smallest rectangle around `areas` that are not empty (the first
+// one when all are), as getBoundingClientRect.
+fn areaBounds(areas: []Area) Area {
+    if areas.len == 0 {
+        return Area { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }
+    }
+    var found = false
+    var x0 = 0.0
+    var y0 = 0.0
+    var x1 = 0.0
+    var y1 = 0.0
+    for a in areas {
+        if a.w == 0.0 || a.h == 0.0 {
+            continue
+        }
+        if !found {
+            x0 = a.x
+            y0 = a.y
+            x1 = a.x + a.w
+            y1 = a.y + a.h
+            found = true
+            continue
+        }
+        x0 = math.min(x0, a.x)
+        y0 = math.min(y0, a.y)
+        x1 = math.max(x1, a.x + a.w)
+        y1 = math.max(y1, a.y + a.h)
+    }
+    if !found {
+        return areas[0]
+    }
+    return Area { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+}
+
+// Is box `i` a scroll container (overflow other than `visible` and
+// `clip`)? The root's and the body's overflow is the viewport's.
+fn isScroller(g: *Geometry, i: usize) bool {
+    let t = g.tree
+    let b = t.bx(i)
+    if b.kind == layout.BoxKind.Inline || b.kind == layout.BoxKind.Text || b.kind == layout.BoxKind.LineBreak {
+        return false
+    }
+    if t.root == i {
+        return false
+    }
+    if b.node |el| {
+        if t.doc.isElement(el, "body") {
+            return false
+        }
+    }
+    return scrolls(b.style[css.OVERFLOW_X]) || scrolls(b.style[css.OVERFLOW_Y])
+}
+
+fn scrolls(v: css.Value) bool {
+    return !layout.isKeyword(v, "visible") && !layout.isKeyword(v, "clip")
+}
+
+// Does box `i` clip what overflows it (so that it does not add to the
+// scrolling area around it)?
+fn clipsOverflow(g: *Geometry, i: usize) bool {
+    let t = g.tree
+    let b = t.bx(i)
+    if t.root == i {
+        return false
+    }
+    if b.node |el| {
+        if t.doc.isElement(el, "body") {
+            return false
+        }
+    }
+    return !layout.isKeyword(b.style[css.OVERFLOW_X], "visible") || !layout.isKeyword(b.style[css.OVERFLOW_Y], "visible")
+}
+
+// The right and bottom edges (in `w`, `h`) of what box `i` holds: its
+// descendants' boxes with their end margins and its lines' fragments,
+// not going into boxes that clip. Fixed boxes are left out: they are
+// placed in the viewport, so a page does not scroll to reach them (and
+// they would follow the scroll offset down without end).
+fn contentEdges(g: *Geometry, i: usize, edges: *mut Area) {
+    let t = g.tree
+    let b = t.bx(i)
+    if layout.hasInlineContent(t, i) {
+        let cx = b.ax + b.border[3] + b.padding[3]
+        let cy = b.ay + b.border[0] + b.padding[0]
+        for li in b.line_start..b.line_end {
+            let line = t.lines.items()[li]
+            for fi in line.frag_start..line.frag_end {
+                let f = t.frags.items()[fi]
+                edges.w = math.max(edges.w, cx + f.x + f.w)
+                edges.h = math.max(edges.h, cy + f.y + f.h)
+            }
+        }
+    }
+    for c in t.children(i) {
+        let cb = t.bx(c)
+        if cb.kind == layout.BoxKind.Inline || cb.kind == layout.BoxKind.Text || cb.kind == layout.BoxKind.LineBreak {
+            contentEdges(g, c, edges)
+            continue
+        }
+        if cb.abs == 2 {
+            continue
+        }
+        edges.w = math.max(edges.w, cb.ax + cb.w + cb.margin[1])
+        edges.h = math.max(edges.h, cb.ay + cb.h + cb.margin[2])
+        if !clipsOverflow(g, c) {
+            contentEdges(g, c, edges)
+        }
+    }
+}
+
+// The scrolling area of box `i` (not inline): its padding box and what
+// overflows it, with the end padding after the content, from the
+// padding box's top left corner.
+fn scrollArea(g: *Geometry, i: usize) Area {
+    let b = g.tree.bx(i)
+    let px = b.ax + b.border[3]
+    let py = b.ay + b.border[0]
+    let pw = b.w - b.border[1] - b.border[3]
+    let ph = b.h - b.border[0] - b.border[2]
+    var edges = Area { x: 0.0, y: 0.0, w: px + pw, h: py + ph }
+    var inner = Area { x: 0.0, y: 0.0, w: px, h: py }
+    contentEdges(g, i, &mut inner)
+    edges.w = math.max(edges.w, inner.w + b.padding[1])
+    edges.h = math.max(edges.h, inner.h + b.padding[2])
+    return Area { x: px, y: py, w: edges.w - px, h: edges.h - py }
+}
+
+// How far a script can scroll box `i` (`w`, `h` unused).
+fn maxScroll(g: *Geometry, i: usize) Area {
+    let b = g.tree.bx(i)
+    let area = scrollArea(g, i)
+    let cw = b.w - b.border[1] - b.border[3]
+    let ch = b.h - b.border[0] - b.border[2]
+    return Area { x: math.max(0.0, area.w - cw), y: math.max(0.0, area.h - ch), w: 0.0, h: 0.0 }
+}
+
+// The size of the document's scrolling area: the viewport and what the
+// root's boxes reach.
+fn documentArea(s: *mut Script, g: *Geometry) Area {
+    var edges = Area { x: 0.0, y: 0.0, w: s.width, h: s.height }
+    if g.tree.root |r| {
+        let b = g.tree.bx(r)
+        edges.w = math.max(edges.w, b.ax + b.w + b.margin[1])
+        edges.h = math.max(edges.h, b.ay + b.h + b.margin[2])
+        contentEdges(g, r, &mut edges)
+    }
+    return edges
+}
+
+// Sets the window's scroll offset, kept within the document; whether it
+// moved.
+fn scrollWindow(s: *mut Script, x: f64, y: f64) AllocError!bool {
+    let g = try geometry(s)
+    let area = documentArea(s, g)
+    let nx = math.clamp(x, 0.0, math.max(0.0, area.w - s.width))
+    let ny = math.clamp(y, 0.0, math.max(0.0, area.h - s.height))
+    if nx == s.scroll_x && ny == s.scroll_y {
+        return false
+    }
+    s.scroll_x = nx
+    s.scroll_y = ny
+    s.scroll_moved = true
+    s.geometry_changes += 1
+    followScroll(s, g)
+    return true
+}
+
+// The element of argument `i` when it is one of the document's, in it.
+fn connectedElement(it: *mut Interp, a: Args, i: usize) ?NodeId {
+    let h = ownHandle(it, it.arg(a, i)) orelse return null
+    let s = scriptOf(it)
+    if s.page.doc.node(h).kind != dom.Kind.Element || !s.page.doc.isConnected(h) {
+        return null
+    }
+    return h
+}
+
+fn isRoot(s: *mut Script, el: NodeId) bool {
+    if s.page.doc.documentElement() |r| {
+        return dom.same(r, el)
+    }
+    return false
+}
+
+// rects(el): the client rectangles of `el` as [x, y, width, height, ...].
+fn akRects(it: *mut Interp, a: Args) JsError!Value {
+    let arr = try it.newArray(0)
+    try it.push(js.objVal(arr))
+    let el = connectedElement(it, a, 0) orelse return it.pop()
+    let s = scriptOf(it)
+    var areas = List(Area).init(s.alloc)
+    defer areas.deinit()
+    try clientAreas(s, el, &mut areas)
+    for r in areas.items() {
+        try it.heap.pushElem(arr, js.numVal(r.x))
+        try it.heap.pushElem(arr, js.numVal(r.y))
+        try it.heap.pushElem(arr, js.numVal(r.w))
+        try it.heap.pushElem(arr, js.numVal(r.h))
+    }
+    return it.pop()
+}
+
+// metric(el, k): 0 offsetTop, 1 offsetLeft, 2 offsetWidth, 3
+// offsetHeight, 4 clientTop, 5 clientLeft, 6 clientWidth, 7
+// clientHeight, 8 scrollTop, 9 scrollLeft, 10 scrollWidth, 11
+// scrollHeight, 12 whether it is a scroll container (0 or 1).
+fn akMetric(it: *mut Interp, a: Args) JsError!Value {
+    let k = try it.toNumber(it.arg(a, 1))
+    let el = connectedElement(it, a, 0) orelse return js.numVal(0.0)
+    let s = scriptOf(it)
+    return js.numVal(try metric(s, el, k as i64))
+}
+
+fn metric(s: *mut Script, el: NodeId, k: i64) AllocError!f64 {
+    let g = try geometry(s)
+    let root = isRoot(s, el)
+    if root {
+        // The root's client area is the viewport, and its scrolling
+        // area and offset the document's.
+        if k == 6 {
+            return s.width
+        }
+        if k == 7 {
+            return s.height
+        }
+        if k == 8 {
+            return s.scroll_y
+        }
+        if k == 9 {
+            return s.scroll_x
+        }
+        if k == 10 || k == 11 {
+            let area = documentArea(s, g)
+            if k == 10 {
+                return math.round(area.w)
+            }
+            return math.round(area.h)
+        }
+    }
+    let i = firstBox(g, el) orelse return 0.0
+    let b = g.tree.bx(i)
+    let inline_box = b.kind == layout.BoxKind.Inline
+    if k <= 3 {
+        return offsetMetric(s, g, el, k)
+    }
+    if k == 12 {
+        if isScroller(g, i) {
+            return 1.0
+        }
+        return 0.0
+    }
+    if inline_box {
+        return 0.0
+    }
+    if k == 4 {
+        return math.round(b.border[0])
+    }
+    if k == 5 {
+        return math.round(b.border[3])
+    }
+    if k == 6 {
+        return math.round(b.w - b.border[1] - b.border[3])
+    }
+    if k == 7 {
+        return math.round(b.h - b.border[0] - b.border[2])
+    }
+    if k == 8 || k == 9 {
+        if !isScroller(g, i) {
+            return 0.0
+        }
+        let o = s.scrolls.get(el.index) orelse return 0.0
+        if o.generation != el.generation {
+            return 0.0
+        }
+        let max = maxScroll(g, i)
+        if k == 8 {
+            return math.clamp(o.y, 0.0, max.y)
+        }
+        return math.clamp(o.x, 0.0, max.x)
+    }
+    if k == 10 || k == 11 {
+        let area = scrollArea(g, i)
+        if k == 10 {
+            return math.round(area.w)
+        }
+        return math.round(area.h)
+    }
+    return 0.0
+}
+
+// renderedSize(el, height): the width (height when `height`) of the
+// content box of `el`'s first box, rounded, in CSS px; -1 when `el` is
+// not being rendered (not connected, or no box). An img's width and
+// height properties fall back to its attributes and natural size then.
+fn akRenderedSize(it: *mut Interp, a: Args) JsError!Value {
+    let el = connectedElement(it, a, 0) orelse return js.numVal(-1.0)
+    let g = try geometry(scriptOf(it))
+    let i = firstBox(g, el) orelse return js.numVal(-1.0)
+    let b = g.tree.bx(i)
+    if it.toBoolean(it.arg(a, 1)) {
+        return js.numVal(math.round(b.h - b.border[0] - b.border[2] - b.padding[0] - b.padding[2]))
+    }
+    return js.numVal(math.round(b.w - b.border[1] - b.border[3] - b.padding[1] - b.padding[3]))
+}
+
+// offsetTop, offsetLeft, offsetWidth and offsetHeight (k 0 to 3), from
+// the layout without scroll offsets.
+fn offsetMetric(s: *mut Script, g: *Geometry, el: NodeId, k: i64) AllocError!f64 {
+    var areas = List(Area).init(s.alloc)
+    defer areas.deinit()
+    try boxAreas(g, el, &mut areas)
+    if areas.len() == 0 {
+        return 0.0
+    }
+    if k == 2 || k == 3 {
+        let r = areaBounds(areas.items())
+        if k == 2 {
+            return math.round(r.w)
+        }
+        return math.round(r.h)
+    }
+    if s.page.doc.isElement(el, "body") {
+        return 0.0
+    }
+    let first = areas.items()[0]
+    var x = first.x
+    var y = first.y
+    let parent = try offsetParentOf(s, g, el)
+    let b = g.tree.bx(firstBox(g, el).?)
+    if parent == null && b.abs == 2 {
+        // Fixed: where it is in the viewport.
+        y -= b.scroll_dy
+    }
+    if parent |op| {
+        if !s.page.doc.isElement(op, "body") || isPositioned(s, op) {
+            var outer = List(Area).init(s.alloc)
+            defer outer.deinit()
+            try boxAreas(g, op, &mut outer)
+            if outer.len() > 0 {
+                let ob = g.tree.bx(firstBox(g, op).?)
+                x -= outer.items()[0].x + ob.border[3]
+                y -= outer.items()[0].y + ob.border[0]
+            }
+        }
+    }
+    if k == 0 {
+        return math.round(y)
+    }
+    return math.round(x)
+}
+
+fn positionOf(s: *mut Script, el: NodeId) AllocError![]u8 {
+    let values = try computedValues(s, el) orelse return "static"
+    return layout.keywordOf(values[css.POSITION])
+}
+
+fn isPositioned(s: *mut Script, el: NodeId) bool {
+    let pos = positionOf(s, el) catch return false
+    return pos.len > 0 && !text.eql(pos, "static")
+}
+
+// The offsetParent of `el`: null when it has no box, is the root or the
+// body, or is fixed; else its nearest positioned ancestor, or the
+// nearest `td`, `th` or `table` when `el` is not positioned, or the
+// body.
+fn offsetParentOf(s: *mut Script, g: *Geometry, el: NodeId) AllocError!?NodeId {
+    let doc = &s.page.doc
+    if firstBox(g, el) == null || isRoot(s, el) || doc.isElement(el, "body") {
+        return null
+    }
+    let pos = try positionOf(s, el)
+    if text.eql(pos, "fixed") {
+        return null
+    }
+    let static_el = text.eql(pos, "static")
+    var up = dom.flatParentElement(doc, el)
+    while up |c| {
+        if doc.isElement(c, "body") {
+            return c
+        }
+        if isPositioned(s, c) {
+            return c
+        }
+        if static_el && (doc.isElement(c, "td") || doc.isElement(c, "th") || doc.isElement(c, "table")) {
+            return c
+        }
+        up = dom.flatParentElement(doc, c)
+    }
+    return null
+}
+
+fn akOffsetParent(it: *mut Interp, a: Args) JsError!Value {
+    let el = connectedElement(it, a, 0) orelse return Value.Null
+    let s = scriptOf(it)
+    let g = try geometry(s)
+    let op = try offsetParentOf(s, g, el) orelse return Value.Null
+    return wrap(it, op)
+}
+
+// setScroll(el, left, top): scrolls the element (the window for null or
+// the root element) to `left`, `top` (NaN: where it is); whether it
+// moved. Only scroll containers scroll.
+fn akSetScroll(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    var left = try it.toNumber(it.arg(a, 1))
+    var top = try it.toNumber(it.arg(a, 2))
+    var target: ?NodeId = null
+    if !js.isNullish(it.arg(a, 0)) {
+        target = connectedElement(it, a, 0) orelse return js.boolVal(false)
+    }
+    let el = target orelse {
+        return js.boolVal(try scrollWindowTo(s, left, top))
+    }
+    if isRoot(s, el) {
+        return js.boolVal(try scrollWindowTo(s, left, top))
+    }
+    let g = try geometry(s)
+    let i = firstBox(g, el) orelse return js.boolVal(false)
+    if !isScroller(g, i) {
+        return js.boolVal(false)
+    }
+    var old = ScrollOffset { generation: el.generation, x: 0.0, y: 0.0 }
+    if s.scrolls.get(el.index) |o| {
+        if o.generation == el.generation {
+            old = o
+        }
+    }
+    let max = maxScroll(g, i)
+    old.x = math.clamp(old.x, 0.0, max.x)
+    old.y = math.clamp(old.y, 0.0, max.y)
+    var moved = old
+    if !math.isNan(left) {
+        moved.x = math.clamp(left, 0.0, max.x)
+    }
+    if !math.isNan(top) {
+        moved.y = math.clamp(top, 0.0, max.y)
+    }
+    if moved.x == old.x && moved.y == old.y {
+        return js.boolVal(false)
+    }
+    try s.scrolls.put(el.index, moved)
+    s.geometry_changes += 1
+    return js.boolVal(true)
+}
+
+fn scrollWindowTo(s: *mut Script, left: f64, top: f64) AllocError!bool {
+    var x = s.scroll_x
+    var y = s.scroll_y
+    if !math.isNan(left) {
+        x = left
+    }
+    if !math.isNan(top) {
+        y = top
+    }
+    return scrollWindow(s, x, y)
+}
+
+// windowScroll(k): the window's scroll offset, x (0) or y (1).
+fn akWindowScroll(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    if try it.toNumber(it.arg(a, 0)) == 0.0 {
+        return js.numVal(s.scroll_x)
+    }
+    return js.numVal(s.scroll_y)
+}
+
+/// The window scroll offset a script asked for (`window.scrollTo`...)
+/// since the last call, if it asked for one: the front end scrolls there.
+pub fn takeScriptScroll(p: *mut Page) ?f64 {
+    let s = p.script orelse return null
+    if !s.scroll_moved {
+        return null
+    }
+    s.scroll_moved = false
+    return s.scroll_y
+}
+
+/// The front end scrolled the page to `y`: what scripts see as
+/// `scrollY` from now on (and what the observers check against). A
+/// `scroll` event at the document follows as a task.
+pub fn setScriptScroll(p: *mut Page, y: f64) AllocError!void {
+    let s = p.script orelse return
+    if s.scroll_y == y {
+        return
+    }
+    s.scroll_y = y
+    s.geometry_changes += 1
+    // The prelude's hostEvent queues the event (as a script's scroll
+    // does) and runs the layout hook.
+    try dispatchEvent(p, p.doc.root, "scroll", "")
+    try runLayoutHook(s)
+}
+
+// What a dump of the document shows, as a hash (FNV-1a): the text of
+// the document and of its shadow trees, and its elements in order.
+// `scrollThrough` compares it before and after a step; attributes are
+// left out, so that lazy images getting their `src` do not count.
+fn contentSignature(doc: *dom.Document) u64 {
+    var h = hashTree(doc, doc.root, 14695981039346656037)
+    for r in doc.shadows.items() {
+        h = hashTree(doc, r, h)
+    }
+    return h
+}
+
+fn hashTree(doc: *dom.Document, top: NodeId, seed: u64) u64 {
+    var h = seed
+    var cur: ?NodeId = top
+    while cur |c| {
+        let n = doc.node(c)
+        if n.kind == dom.Kind.Text {
+            for b in n.data {
+                h = (h ^ (b as u64)) *% 1099511628211
+            }
+        } else if n.kind == dom.Kind.Element {
+            h = (h ^ 0x100) *% 1099511628211
+        }
+        cur = doc.following(c, top)
+    }
+    return h
+}
+
+// The page's time between two steps of `scrollThrough`, in ms: for the
+// observers' animation frame, a lazy loader's debounce and what it
+// fetches.
+let SCROLL_STEP_MS: f64 = 500.0
+
+// How many steps of `scrollThrough` may make the document taller with
+// new content (a growth round) before it stops. A dump reads what a
+// reader sees near the top, not a whole feed: on an endless one
+// (youtube-search) every step loads another page of results, and 20
+// steps cost 100K nodes and 4.7 GB (P4.25). A page that loads its lazy
+// content once grows in a round or two, then stops changing. A round
+// changes the content (`contentSignature`: not lazy images getting their
+// `src`) and adds at least half a viewport height (a batch of results,
+// not a log line that changed or wrapped).
+let SCROLL_GROWTH_ROUNDS: usize = 2
+
+/// Scrolls the window down through the document as a reader would, for
+/// a dump of a page whose scripts load content when it comes into view.
+/// The page's timers run for 500 ms of its time where it is (the
+/// observers check). Then, when the page listens for the window's
+/// scroll or observes intersections (`watches_scroll`), it scrolls a
+/// viewport height down (which fires `scroll`) and gives the page 500
+/// ms again, step after step, until the bottom of the document is shown
+/// and it did not grow, after `SCROLL_GROWTH_ROUNDS` steps that made
+/// the document taller with new content (a feed that grows without end),
+/// or after `max_steps` steps (0: nothing happens). After a step that did not change
+/// the document's content (`contentSignature`), it stops if the content
+/// never changed since the load (scrolling loads nothing there); else
+/// the next step goes straight to the bottom, where an infinite list
+/// loads more, and it goes on from there only if that changed the
+/// content. Then the window is back at the top, at once: the page does
+/// not get to react to that, so what it would drop out of view stays.
+/// The steps taken.
+pub fn scrollThrough(p: *mut Page, max_steps: usize) AllocError!usize {
+    let s = p.script orelse return 0
+    if max_steps == 0 {
+        return 0
+    }
+    let loaded = contentSignature(&p.doc)
+    try advanceClock(p, SCROLL_STEP_MS)
+    var steps: usize = 0
+    var last = contentSignature(&p.doc)
+    // The content changed since the load; the last step changed nothing;
+    // it went to the bottom.
+    var lively = last != loaded
+    var quiet = false
+    var jumped = false
+    // The steps that made the document taller with new content; its
+    // height before the last step.
+    var rounds: usize = 0
+    var height: f64 = 0.0
+    while s.watches_scroll && steps < max_steps && s.nav_kind == NavKind.None {
+        if quiet && (jumped || !lively) {
+            break
+        }
+        let g = try geometry(s)
+        let h = documentArea(s, g).h
+        if steps > 0 && !quiet && h >= height + s.height / 2.0 {
+            rounds += 1
+            if rounds >= SCROLL_GROWTH_ROUNDS {
+                break
+            }
+        }
+        height = h
+        let bottom = math.max(0.0, h - s.height)
+        if s.scroll_y >= bottom {
+            break
+        }
+        jumped = quiet
+        var y = math.min(s.scroll_y + s.height, bottom)
+        if quiet {
+            y = bottom
+        }
+        try setScriptScroll(p, y)
+        steps += 1
+        try advanceClock(p, SCROLL_STEP_MS)
+        let now = contentSignature(&p.doc)
+        quiet = now == last
+        if !quiet {
+            lively = true
+        }
+        last = now
+    }
+    s.scroll_x = 0.0
+    s.scroll_y = 0.0
+    s.scroll_moved = false
+    s.geometry_changes += 1
+    return steps
+}

@@ -1,1 +1,1 @@
-shadow_module/css/b.ore:2:5: error[E0016]: `em` is already declared at shadow_module/css/a.ore:1:4 (shadowing is not allowed)
+shadow_module/css/b.aye:2:5: error[E0016]: `em` is already declared at shadow_module/css/a.aye:1:4 (shadowing is not allowed)

@@ -6,7 +6,7 @@ none of these: `type="module"` scripts were skipped and `nomodule` ran.
 
 ## Pipeline
 
-- **Records.** `modules.ore` fetches a module through `net` (the session's
+- **Records.** `modules.aye` fetches a module through `net` (the session's
   cache and requests) and parses it (`parser.moduleProgram`) into a record:
   its requests (specifier and `type` attribute), import entries, local,
   indirect and star exports, and whether it has top-level await. A missing
@@ -30,7 +30,7 @@ none of these: `type="module"` scripts were skipped and `nomodule` ran.
   cell (a native getter bound to it, flagged `F_MODULE`). Writes, deletes
   and redefinitions fail (TypeError in strict code); `Object.keys` throws
   for an export in its TDZ.
-- **Loader** (`lib.ore`). One module map per engine, keyed by URL (plus
+- **Loader** (`lib.aye`). One module map per engine, keyed by URL (plus
   the type), with failed fetches and parses cached. It loads a whole graph
   first, a level at a time (each level's new modules are prefetched
   concurrently), then links it (InnerModuleLinking: ResolveExport with

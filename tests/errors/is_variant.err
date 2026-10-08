@@ -1,3 +1,3 @@
-is_variant.ore:12:20: error[E0041]: enum `Shape` has no variant `Square`
-is_variant.ore:13:16: error[E0106]: `is` tests the variant of an enum value, found `i64`
-is_variant.ore:14:16: error[E0106]: `is` tests the variant of an enum value, found `E` (compare error values with `==`)
+is_variant.aye:12:20: error[E0041]: enum `Shape` has no variant `Square`
+is_variant.aye:13:16: error[E0106]: `is` tests the variant of an enum value, found `i64`
+is_variant.aye:14:16: error[E0106]: `is` tests the variant of an enum value, found `E` (compare error values with `==`)

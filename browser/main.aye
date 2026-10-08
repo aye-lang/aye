@@ -1,0 +1,348 @@
+// anyknown: a web browser in Aye (see docs/browser.md).
+//
+//     anyknown [open] FILE|URL [--width W] [--height H] [--font fixed|system]
+//     anyknown dump --tree [--js] [--id ID | --tag NAME] FILE|URL
+//     anyknown dump --text [--id ID | --tag NAME] FILE|URL
+//     anyknown dump --style [--width PX] [--id ID | --tag NAME] FILE|URL
+//     anyknown dump --layout [--width PX] [--font fixed|system] FILE|URL
+//     anyknown screenshot FILE|URL -o OUT.png [--width W] [--height H] [--font fixed|system] [--full]
+//     anyknown js FILE
+//
+// FILE is a path; URL is a `file:`, `data:`, `http:` or `https:` URL.
+// `--id` and `--tag` dump only the element with that id, or every element
+// with that tag name, instead of the document. `--style` prints computed
+// styles (style.aye) for a viewport `--width` px wide (default 800) and
+// 600 px high. `--layout` prints the box tree laid out in that viewport
+// (layout_dump.aye), measuring text with the fixed-metric test font or
+// with the system's fonts. `screenshot` paints the page into a PNG
+// (shot.aye). Without a subcommand (or with `open`), the page opens in a
+// window (ui/). `--js` runs the page's scripts first, and the event loop
+// until no timer is left (at most 30 s of the page's virtual time), then
+// scrolls through the page a viewport at a time (at most 20 steps, or
+// `--scroll-steps N`; none with `--no-scroll`), so that what scripts load
+// when it comes into view is in the dump (engine.scrollThrough); console
+// messages go to stderr.
+//
+// For AI agents (browser/agent, docs/agent-protocol.md):
+//
+//     anyknown agent [--width PX] [--height PX]   JSON lines on stdio
+//     anyknown mcp [--width PX] [--height PX]     an MCP server on stdio
+//     anyknown dump --a11y [--boxes] [--json] [--js] FILE|URL
+//     anyknown dump --md [--refs] [--js] FILE|URL
+//
+// A window that agents share with its user (docs/agent-protocol.md):
+//
+//     anyknown --agent-socket PATH [FILE|URL]     the window listens on PATH
+//     anyknown connect PATH [--mcp]               stdio <-> that socket
+
+import agent
+import css
+import dom
+import dom.NodeId
+import encoding
+import engine
+import html
+import js
+import net
+import std
+import std.list.List
+import std.mem.Allocator
+import std.text
+import ui
+import url
+import url.Url
+
+let USAGE = "usage: anyknown dump --tree|--text|--style|--layout [--js [--no-scroll | --scroll-steps N]] [--width PX] [--font fixed|system] [--id ID | --tag NAME] FILE|URL"
+let USAGE_ALL = "usage: anyknown [open] FILE|URL | dump --tree|--text|--style|--layout|--a11y|--md ... FILE|URL | screenshot FILE|URL -o OUT.png | js FILE | agent | mcp | connect SOCKET"
+
+pub fn main() {
+    var gpa = std.heap.General.init()
+    net.start(gpa.allocator()) catch |e| {
+    }
+    let status = run(gpa.allocator())
+    net.stop()
+    gpa.deinit()
+    std.os.exit(status)
+}
+
+fn run(alloc: Allocator) i32 {
+    let args = std.os.args(alloc) catch |e| {
+        std.log.err("out of memory")
+        return 1
+    }
+    defer alloc.free(args)
+    if args.len < 2 {
+        std.log.err(USAGE_ALL)
+        return 2
+    }
+    if args.len >= 2 && text.eql(args[1], "js") {
+        if args.len != 3 {
+            std.log.err("usage: anyknown js FILE")
+            return 2
+        }
+        return js.runFile(alloc, args[2])
+    }
+    if args.len >= 2 && text.eql(args[1], "screenshot") {
+        return screenshot(alloc, args[2..])
+    }
+    if args.len >= 2 && (text.eql(args[1], "agent") || text.eql(args[1], "mcp")) {
+        return agent.serveMain(alloc, args[2..], text.eql(args[1], "mcp"))
+    }
+    if args.len >= 2 && text.eql(args[1], "connect") {
+        return ui.connectMain(alloc, args[2..])
+    }
+    if args.len >= 2 && text.eql(args[1], "dump") && agent.isAgentDump(args[2..]) {
+        return agent.dumpMain(alloc, args[2..])
+    }
+    if args.len >= 2 && text.eql(args[1], "open") {
+        return ui.run(alloc, args[2..])
+    }
+    if args.len >= 2 && !text.eql(args[1], "dump") {
+        return ui.run(alloc, args[1..])
+    }
+    if args.len < 2 || !text.eql(args[1], "dump") {
+        std.log.err(USAGE)
+        return 2
+    }
+    return dump(alloc, args[2..]) catch |e| {
+        std.log.err("{}", e)
+        return 1
+    }
+}
+
+// The command-line options of `dump`.
+struct Options {
+    tree: bool
+    style: bool
+    layout: bool
+    system_font: bool
+    js: bool
+    // How many viewports `--js` scrolls through at most.
+    scroll_steps: usize
+    width: f64
+    id: []u8
+    tag: []u8
+    target: []u8
+}
+
+fn options(args: [][]u8) ?Options {
+    var o = Options { tree: false, style: false, layout: false, system_font: false, js: false, scroll_steps: 20, width: 800.0, id: "", tag: "", target: "" }
+    var mode = false
+    var i: usize = 0
+    while i < args.len {
+        let a = args[i]
+        if text.eql(a, "--tree") || text.eql(a, "--text") {
+            o.tree = text.eql(a, "--tree")
+            mode = true
+        } else if text.eql(a, "--style") {
+            o.style = true
+            mode = true
+        } else if text.eql(a, "--layout") {
+            o.layout = true
+            mode = true
+        } else if text.eql(a, "--js") {
+            o.js = true
+        } else if text.eql(a, "--no-scroll") {
+            o.scroll_steps = 0
+        } else if text.eql(a, "--scroll-steps") && i + 1 < args.len {
+            let n = text.parseInt(args[i + 1]) catch -1
+            if n < 0 {
+                return null
+            }
+            o.scroll_steps = n as usize
+            i += 1
+        } else if text.eql(a, "--font") && i + 1 < args.len && (text.eql(args[i + 1], "fixed") || text.eql(args[i + 1], "system")) {
+            o.system_font = text.eql(args[i + 1], "system")
+            i += 1
+        } else if text.eql(a, "--width") && i + 1 < args.len {
+            o.width = text.parseFloat(args[i + 1]) catch |e| {
+                return null
+            }
+            i += 1
+        } else if (text.eql(a, "--id") || text.eql(a, "--tag")) && i + 1 < args.len {
+            if text.eql(a, "--id") {
+                o.id = args[i + 1]
+            } else {
+                o.tag = args[i + 1]
+            }
+            i += 1
+        } else if o.target.len == 0 && !text.startsWith(a, "--") {
+            o.target = a
+        } else {
+            return null
+        }
+        i += 1
+    }
+    if !mode || o.target.len == 0 {
+        return null
+    }
+    return o
+}
+
+fn dump(alloc: Allocator, args: [][]u8) !i32 {
+    var o = Options { tree: false, style: false, layout: false, system_font: false, js: false, scroll_steps: 20, width: 800.0, id: "", tag: "", target: "" }
+    if options(args) |parsed| {
+        o = parsed
+    } else {
+        std.log.err(USAGE)
+        return 2
+    }
+    let location = toUrl(alloc, o.target) catch |e| {
+        std.log.err("not a URL or file: {}", o.target)
+        return 1
+    }
+    defer location.deinit(alloc)
+    if o.js {
+        return dumpScripted(alloc, &o, &location)
+    }
+    let res = net.fetch(alloc, &location) catch |e| {
+        std.log.err("cannot fetch {}: {}", location.href, net.describe(e))
+        return 1
+    }
+    defer res.deinit(alloc)
+
+    let src = try encoding.toUtf8(alloc, res.body, encoding.sniff(res.body, res.charset))
+    defer alloc.free(src)
+    var doc = try load(alloc, res.mime, src)
+    defer doc.deinit()
+    try dom.assignSlots(&mut doc)
+
+    var roots = List(NodeId).init(alloc)
+    defer roots.deinit()
+    if o.id.len > 0 {
+        if doc.getElementById(o.id) |el| {
+            try roots.append(el)
+        }
+    } else if o.tag.len > 0 {
+        try doc.getElementsByTagName(o.tag, &mut roots)
+    } else {
+        try roots.append(doc.root)
+    }
+    var out = text.Builder.init(alloc)
+    defer out.deinit()
+    if o.layout {
+        let media = css.Media { width: o.width, height: 600.0 }
+        var status: i32 = 0
+        if res.url.len > 0 {
+            let moved = try url.parse(alloc, res.url)
+            defer moved.deinit(alloc)
+            status = try dumpLayout(alloc, &doc, &moved, media, o.system_font, &mut out)
+        } else {
+            status = try dumpLayout(alloc, &doc, &location, media, o.system_font, &mut out)
+        }
+        try std.fs.stdout().write(out.bytes())
+        return status
+    }
+    if o.style {
+        // Relative URLs resolve against the URL after redirects.
+        let media = css.Media { width: o.width, height: 600.0 }
+        if res.url.len > 0 {
+            let moved = try url.parse(alloc, res.url)
+            defer moved.deinit(alloc)
+            try dumpStyles(alloc, &doc, &moved, media, roots.items(), &mut out)
+        } else {
+            try dumpStyles(alloc, &doc, &location, media, roots.items(), &mut out)
+        }
+        try std.fs.stdout().write(out.bytes())
+        return 0
+    }
+    try dumpRoots(alloc, &o, &doc, &location, roots.items(), &mut out)
+    try std.fs.stdout().write(out.bytes())
+    return 0
+}
+
+fn dumpRoots(alloc: Allocator, o: *Options, doc: *dom.Document, base: *Url, roots: []NodeId, out: *mut text.Builder) !void {
+    if o.style {
+        return dumpStyles(alloc, doc, base, css.Media { width: o.width, height: 600.0 }, roots, out)
+    }
+    for r in roots {
+        if o.tree {
+            try dumpTree(doc, r, out)
+        } else {
+            try dumpText(alloc, doc, r, out)
+        }
+    }
+}
+
+// `dump --js`: the document after its scripts and timers ran.
+fn dumpScripted(alloc: Allocator, o: *Options, location: *Url) !i32 {
+    engine.setScripting(true)
+    engine.setConsoleEcho(true)
+    let p = try engine.load(alloc, location)
+    defer p.destroy()
+    if p.failure.len > 0 {
+        std.log.err("cannot fetch {}: {}", location.href, p.failure)
+        return 1
+    }
+    engine.setViewport(p, o.width, 600.0)
+    try engine.runUntilIdle(p, 30000.0)
+    _ = try engine.scrollThrough(p, o.scroll_steps)
+    try dom.assignSlots(&mut p.doc)
+    var roots = List(NodeId).init(alloc)
+    defer roots.deinit()
+    if o.id.len > 0 {
+        if p.doc.getElementById(o.id) |el| {
+            try roots.append(el)
+        }
+    } else if o.tag.len > 0 {
+        try p.doc.getElementsByTagName(o.tag, &mut roots)
+    } else {
+        try roots.append(p.doc.root)
+    }
+    var out = text.Builder.init(alloc)
+    defer out.deinit()
+    if o.layout {
+        let status = try dumpLayout(alloc, &p.doc, &p.url, css.Media { width: o.width, height: 600.0 }, o.system_font, &mut out)
+        try std.fs.stdout().write(out.bytes())
+        return status
+    }
+    try dumpRoots(alloc, o, &p.doc, &p.url, roots.items(), &mut out)
+    try std.fs.stdout().write(out.bytes())
+    return 0
+}
+
+// The document of a response: HTML is parsed; plain text becomes the
+// content of a `pre`.
+fn load(alloc: Allocator, mime: []u8, src: []u8) !dom.Document {
+    if !text.eql(mime, "text/plain") {
+        return html.parse(alloc, src)
+    }
+    var doc = try html.parse(alloc, "<pre>")
+    errdefer doc.deinit()
+    var pres = List(NodeId).init(alloc)
+    defer pres.deinit()
+    try doc.getElementsByTagName("pre", &mut pres)
+    try doc.appendText(pres.items()[0], src)
+    return doc
+}
+
+// The URL of a command-line argument: a URL with a scheme of two or more
+// letters, else a file path (relative to the working directory).
+fn toUrl(alloc: Allocator, arg: []u8) !Url {
+    let direct = url.parse(alloc, arg) catch |e| {
+        return fileUrl(alloc, arg)
+    }
+    if direct.scheme.len > 1 {
+        return direct
+    }
+    direct.deinit(alloc)
+    return fileUrl(alloc, arg)
+}
+
+fn fileUrl(alloc: Allocator, path: []u8) !Url {
+    var b = text.Builder.init(alloc)
+    defer b.deinit()
+    try b.append("file://")
+    if !text.startsWith(path, "/") {
+        let buf = try alloc.alloc(0 as u8, 4096)
+        defer alloc.free(buf)
+        let cwd = getcwd(buf.ptr, buf.len)
+        try b.append(buf[..strlen(buf.ptr)])
+        try b.appendByte('/')
+    }
+    try b.append(path)
+    return url.parse(alloc, b.bytes())
+}
+
+extern fn getcwd(buf: [*]u8, size: usize) [*]u8
+extern fn strlen(s: [*]u8) usize

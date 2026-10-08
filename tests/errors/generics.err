@@ -1,13 +1,13 @@
-generics.ore:25:20: error[E0076]: a `comptime` parameter must have type `type` (other compile-time values are not supported)
-generics.ore:29:28: error[E0076]: a function that returns `type` can only have `comptime` parameters
-generics.ore:36:5: error[E0077]: the body of a function that returns `type` must be a single `return struct { ... }`
-generics.ore:42:20: error[E0016]: `Node` is already declared at 3:8 (shadowing is not allowed)
-generics.ore:49:5: error[E0016]: `T` is already declared at 48:19 (shadowing is not allowed)
-generics.ore:52:37: error[E0076]: a generic function must spell out its error set: write `ErrorSet!T`, not `!T`
-generics.ore:56:45: error[E0076]: `Node` is not an interface (a `where` constraint names an interface)
-generics.ore:64:19: error[E0023]: mismatched types: expected `Handle(Node)`, found `Handle(Edge)`
-generics.ore:65:12: error[E0080]: `Handle` is a type function: write `Handle(T)`
-generics.ore:66:13: error[E0074]: `Handle(Node)` is a type, not a value
-generics.ore:67:13: error[E0080]: type function `Handle` takes 1 argument(s) but 2 were given
-generics.ore:68:18: error[E0080]: expected a type for `comptime T`, found an expression
-generics.ore:69:26: error[E0071]: struct `Handle(Node)` has no method `make`
+generics.aye:25:20: error[E0076]: a `comptime` parameter must have type `type` (other compile-time values are not supported)
+generics.aye:29:28: error[E0076]: a function that returns `type` can only have `comptime` parameters
+generics.aye:36:5: error[E0077]: the body of a function that returns `type` must be a single `return struct { ... }`
+generics.aye:42:20: error[E0016]: `Node` is already declared at 3:8 (shadowing is not allowed)
+generics.aye:49:5: error[E0016]: `T` is already declared at 48:19 (shadowing is not allowed)
+generics.aye:52:37: error[E0076]: a generic function must spell out its error set: write `ErrorSet!T`, not `!T`
+generics.aye:56:45: error[E0076]: `Node` is not an interface (a `where` constraint names an interface)
+generics.aye:64:19: error[E0023]: mismatched types: expected `Handle(Node)`, found `Handle(Edge)`
+generics.aye:65:12: error[E0080]: `Handle` is a type function: write `Handle(T)`
+generics.aye:66:13: error[E0074]: `Handle(Node)` is a type, not a value
+generics.aye:67:13: error[E0080]: type function `Handle` takes 1 argument(s) but 2 were given
+generics.aye:68:18: error[E0080]: expected a type for `comptime T`, found an expression
+generics.aye:69:26: error[E0071]: struct `Handle(Node)` has no method `make`

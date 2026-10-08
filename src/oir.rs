@@ -1,4 +1,4 @@
-//! OIR: Ore's typed intermediate representation, between sema and the C
+//! OIR: Aye's typed intermediate representation, between sema and the C
 //! backend.
 //!
 //! Lowering from the typed AST:
@@ -72,7 +72,7 @@ pub type Block = Vec<Stmt>;
 #[derive(Debug, Clone)]
 pub struct Stmt {
     pub kind: StmtKind,
-    /// Source position of the Ore statement this was lowered from.
+    /// Source position of the Aye statement this was lowered from.
     pub span: Span,
 }
 

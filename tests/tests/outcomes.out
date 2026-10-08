@@ -1,19 +1,19 @@
 test "passes" ... ok
 test "expect fails" ... FAILED
     before
-    tests/tests/outcomes.ore:28:5: assertion failed: condition is false
+    tests/tests/outcomes.aye:28:5: assertion failed: condition is false
 test "expectEqual fails" ... FAILED
-    tests/tests/outcomes.ore:33:5: assertion failed: expected 4, found 5
+    tests/tests/outcomes.aye:33:5: assertion failed: expected 4, found 5
 test "strings differ" ... FAILED
-    tests/tests/outcomes.ore:37:5: assertion failed: expected "abc", found "abd"
+    tests/tests/outcomes.aye:37:5: assertion failed: expected "abc", found "abd"
 test "panics" ... FAILED
-    tests/tests/outcomes.ore:42:7: panic: integer overflow
+    tests/tests/outcomes.aye:42:7: panic: integer overflow
 test "returns an error" ... FAILED
     error: Empty
     error return trace:
-    tests/tests/outcomes.ore:9:9
-    tests/tests/outcomes.ore:46:13
+    tests/tests/outcomes.aye:9:9
+    tests/tests/outcomes.aye:46:13
 test "double free" ... FAILED
-    tests/tests/outcomes.ore:54:11: panic: double free of memory allocated at tests/tests/outcomes.ore:52:23 and already freed at tests/tests/outcomes.ore:53:11
+    tests/tests/outcomes.aye:54:11: panic: double free of memory allocated at tests/tests/outcomes.aye:52:23 and already freed at tests/tests/outcomes.aye:53:11
 
 1 passed; 6 failed

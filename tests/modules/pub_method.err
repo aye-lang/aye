@@ -1,2 +1,2 @@
-pub_method/main.ore:6:16: error[E0082]: method `lib.Open.hidden` is not `pub` in module `lib`
-pub_method/main.ore:7:23: error[E0082]: method `lib.Open.make` is not `pub` in module `lib`
+pub_method/main.aye:6:16: error[E0082]: method `lib.Open.hidden` is not `pub` in module `lib`
+pub_method/main.aye:7:23: error[E0082]: method `lib.Open.make` is not `pub` in module `lib`

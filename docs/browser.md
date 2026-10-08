@@ -1,6 +1,6 @@
 # anyknown browser
 
-A web browser written in Ore, for two kinds of users at once:
+A web browser written in Aye, for two kinds of users at once:
 
 - **Humans** get a window: address bar, back and forward, scrolling,
   links, forms, and pages with CSS and JavaScript.
@@ -15,13 +15,13 @@ It is the P3 validation of design.md: DOM nodes live in `Pool(Node)`, JS
 holds `Handle(Node)`, everything is allocated explicitly, and the engine
 only calls C for the platform (SDL2 for windows and input, FreeType for
 glyphs, libcurl for HTTP and TLS). Parsing, style, layout, painting,
-JavaScript and the agent protocol are Ore.
+JavaScript and the agent protocol are Aye.
 
 ## Layout of the code
 
 ```
 browser/
-  main.ore        CLI: window mode, `dump`, `agent`, `mcp`, `connect`
+  main.aye        CLI: window mode, `dump`, `agent`, `mcp`, `connect`
   url/            URL parsing and resolution (WHATWG subset)
   net/            fetch: file:, data:, http(s) through libcurl, cache
   html/           tokenizer and tree builder (WHATWG subset), entities
@@ -140,7 +140,7 @@ are in `browser/COMPILER_GAPS.md`.
 
 - Display list (rects, borders, text runs, images); software rasterizer
   into an RGBA buffer with alpha-blended glyphs from a glyph cache.
-- `anyknown screenshot FILE -o out.png` (PNG encoder in Ore).
+- `anyknown screenshot FILE -o out.png` (PNG encoder in Aye).
 - SDL2 window: address bar, back/forward/reload, scrolling (wheel and
   keys), hover cursor on links, clicking links, window resize, Cmd+L,
   Cmd+[ and Cmd+], find in page (Cmd+F).
@@ -151,7 +151,7 @@ are in `browser/COMPILER_GAPS.md`.
   Golden PNGs (`browser/tests/paint/`, fixed font, compared byte for
   byte), PNG checks, and headless window tests (SDL's dummy driver,
   `--frames N` with scripted `--events`, `--state`, `--save`; see
-  `browser/ui/script.ore`). The interactive checks are in
+  `browser/ui/script.aye`). The interactive checks are in
   `docs/browser-manual-checklist.md`. Simplifications: positioned boxes
   are painted after the rest of their layer in z-index order (negative
   ones first) and hit testing searches in the reverse order, but there
@@ -164,13 +164,13 @@ are in `browser/COMPILER_GAPS.md`.
 - `input` (text, password, checkbox, radio, submit), `button`,
   `textarea`, `select`; focus and keyboard editing; form submission by
   GET and POST (urlencoded).
-- Images: PNG (zlib inflate in Ore) and GIF first frame; JPEG through
+- Images: PNG (zlib inflate in Aye) and GIF first frame; JPEG through
   a later milestone.
 - **Acceptance:** a fixture form submitted to the local test server
   produces the expected request; image fixtures render to golden
   screenshots.
 - Done:
-  - *State* (`dom/controls.ore`): one place for what the window, the
+  - *State* (`dom/controls.aye`): one place for what the window, the
     agent and scripts share: `doc.controls` keyed by node (a field's
     value and dirty flag, checkedness, the selectedness of options, the
     caret and selection, a field's scroll offset) and the focus.
@@ -181,7 +181,7 @@ are in `browser/COMPILER_GAPS.md`.
     `resetForm`, and editing (`insertText`, `deleteBackward`,
     `deleteForward`, `moveCaret`, `selectAll`, `setCaret`). CSS matches
     `:checked`, `:disabled`, `:enabled` and `:focus` against it.
-  - *Default actions* (`engine/forms.ore`), for the event loop to call
+  - *Default actions* (`engine/forms.aye`), for the event loop to call
     after dispatching (unless the default was prevented):
     `engine.activate(page, node)` returns what the caller does next:
     `Follow { target }` (a link), `Submit { form, submitter }` (fire
@@ -199,7 +199,7 @@ are in `browser/COMPILER_GAPS.md`.
     `Content-Type`; a redirect after a POST continues with a GET). The
     history keeps URLs only: going back to a POST result loads it by
     GET. Focus: `setFocus`, `nextFocus` (Tab order with `tabindex`).
-  - *Layout and paint* (`layout/controls.ore`): text fields, selects and
+  - *Layout and paint* (`layout/controls.aye`): text fields, selects and
     input buttons are inline-blocks with generated text (bullets for a
     password, the placeholder in gray, the selected option's label);
     `size`, `cols`, `rows` give default sizes; a `select` with
@@ -208,7 +208,7 @@ are in `browser/COMPILER_GAPS.md`.
     checkboxes and radio buttons are drawn replaced boxes; disabled
     controls are gray (UA sheet). `fieldset`/`legend` are plain blocks
     with a border (the legend does not sit on the border).
-  - *Window* (`ui/forms.ore`): click, Tab and Shift+Tab focus; a focus
+  - *Window* (`ui/forms.aye`): click, Tab and Shift+Tab focus; a focus
     ring; typing (SDL text input, so IME and UTF-8), Backspace, Delete,
     arrows, Home/End, Shift to select, Cmd+A/C/X/V (SDL clipboard);
     Enter submits (a new line in a `textarea`), Space toggles and
@@ -217,7 +217,7 @@ are in `browser/COMPILER_GAPS.md`.
   - *Agent*: `click` on a submit button and `type` with `submit` submit
     for real; `type`, `select`, `press` and the snapshot use the same
     state as the window.
-  - *Images* (`image/`, `engine/images.ore`): PNG (inflate with stored,
+  - *Images* (`image/`, `engine/images.aye`): PNG (inflate with stored,
     fixed and dynamic Huffman blocks; every color type and bit depth,
     `PLTE`, `tRNS`, Adam7), GIF (first frame, LZW, transparency,
     interlace), baseline JPEG (Huffman, IDCT, YCbCr, chroma
@@ -257,7 +257,7 @@ output as goldens.
 
 - *Pipeline:* tokens (all up front) → AST in one `List(Node)` per engine
   → a resolver that gives every variable an environment slot (`depth`,
-  `slot`) → a tree-walking interpreter. Exceptions are the Ore error
+  `slot`) → a tree-walking interpreter. Exceptions are the Aye error
   `JsError.Thrown` (the value in `Interp.exception`), so they pass through
   native functions with `try`.
 - *Strings:* WTF-8 bytes (UTF-8 that can hold lone surrogates) with the
@@ -282,11 +282,11 @@ output as goldens.
   integers, and `Interp.host: ?dyn Host` gets `finalize(tag, index,
   generation)` when the collector frees one (the `js_refs` decrement).
   `addRoot`/`removeRoot` keep values (event listeners) alive.
-- *Generators and async functions* (B8, `js/coroutine.ore`): a call
+- *Generators and async functions* (B8, `js/coroutine.aye`): a call
   that can stop in the middle of the tree walk runs on a `std.coro`
   coroutine (a C stack of its own, M12; a thread and two channels
   before), with its own value stack and frames, on the engine's thread. Promise
-  and the job queue are the engine's (`js/lib.ore`, `Interp.queueJob`);
+  and the job queue are the engine's (`js/lib.aye`, `Interp.queueJob`);
   `await` hands the value to a driver written in JavaScript that resumes
   the coroutine when the promise settles; `for await` and async
   generators go through the same driver.
@@ -299,7 +299,7 @@ output as goldens.
   `var`/`function` are properties of it. HTML-like comments (`<!--`,
   and `-->` first on a line) are comments, as in classic scripts.
 
-**Pages (done).** `engine/script.ore` gives every page an engine
+**Pages (done).** `engine/script.aye` gives every page an engine
 (`Page.script`) when scripting is on: the window and the agent turn it
 on (`--no-js` turns it off), `dump` with `--js`.
 
@@ -322,7 +322,7 @@ on (`--no-js` turns it off), `dump` with `--js`.
   alive (`Host.trace`) the wrappers of nodes in the document and in any
   tree a reachable wrapper is in, so listeners and expando properties
   last as long as their nodes. A stale handle is a TypeError, never a
-  use after free. Natives (`dom_api.ore`): Node (tree, text,
+  use after free. Natives (`dom_api.aye`): Node (tree, text,
   `appendChild`/`insertBefore`/`removeChild`/`replaceChild`/`remove`,
   `cloneNode`, `contains`), Element (attributes, `id`, `className`,
   `innerHTML` get/set through the HTML parser with the context's table
@@ -334,9 +334,9 @@ on (`--no-js` turns it off), `dump` with `--js`.
   `selectedIndex`, focus). `style.camelCase` and `dataset.camelCase`
   are named host properties (`Host.getNamed`/`setNamed`) over the
   `style` and `data-*` attributes. `childNodes`, `children`,
-  `getElementsBy*` and `options` are live lists (B8, `lists.ore`);
+  `getElementsBy*` and `options` are live lists (B8, `lists.aye`);
   `querySelectorAll` gives an array made at the call.
-- *Prelude* (`prelude.ore`, JavaScript): EventTarget with capture,
+- *Prelude* (`prelude.aye`, JavaScript): EventTarget with capture,
   target (capturing listeners first) and bubble phases through the
   window, `once`, `stopPropagation`, `stopImmediatePropagation`,
   `preventDefault`; Event, CustomEvent, MouseEvent, KeyboardEvent,
@@ -365,7 +365,7 @@ on (`--no-js` turns it off), `dump` with `--js`.
   (a global, values in prototype getters), so a feature test finds it
   and does not install a polyfill (`jsdom/intersection_observer_entry.html`).
   `IntersectionObserver` checks its targets against the layout and the
-  scroll offsets (`engine/geometry.ore`), so content below the fold is
+  scroll offsets (`engine/geometry.aye`), so content below the fold is
   not intersecting until scrolled into view; `ResizeObserver` reports
   each target once. `loading="lazy"` images and iframes load at once,
   as if in view.
@@ -373,7 +373,7 @@ on (`--no-js` turns it off), `dump` with `--js`.
   microtasks after every task. Time is virtual for `dump` and the agent
   (the loop jumps to the next timer, and inside a task the clock moves
   1 ms per million steps, so a scheduler that runs until `Date.now()`
-  passes a deadline yields; `STEPS_PER_MS`, `engine/script.ore`;
+  passes a deadline yields; `STEPS_PER_MS`, `engine/script.aye`;
   `dump --js` runs until no timer is
   left, at most 30 s of page time) and real in the window, whose
   `SDL_WaitEventTimeout` wakes for the next timer. Clicks and keys
@@ -439,8 +439,8 @@ on (`--no-js` turns it off), `dump` with `--js`.
   read, navigation, click, type, select, press, scroll, find, `eval`
   and `wait` (scripts run; actions fire their events), `dump --a11y`
   and `dump --md` (`--js` to run scripts).
-- The shared window (`ui/agents.ore`, `ui/socket.ore`, `ui/tabs.ore`,
-  `agent/shared.ore`): the window polls a non-blocking Unix socket
+- The shared window (`ui/agents.aye`, `ui/socket.aye`, `ui/tabs.aye`,
+  `agent/shared.aye`): the window polls a non-blocking Unix socket
   between its events, so requests run on its thread; each tab is an
   agent session laid out with the window's fonts. Tabs (Cmd+T, Cmd+W,
   Cmd+1..9, a tab strip) and the commands `tabs`, `tab_new`,
@@ -459,7 +459,7 @@ on (`--no-js` turns it off), `dump` with `--js`.
   [`docs/browser-sites.md`](browser-sites.md); cookies, gzip, `<meta charset>`, `<base>`,
   `<noscript>`.
 - Done so far:
-  - *Net* (`net/session.ore`, `net/cookies.ore`, `net/http.ore`): one
+  - *Net* (`net/session.aye`, `net/cookies.aye`, `net/http.aye`): one
     session per process with one libcurl handle (connections, TLS
     sessions and DNS kept), gzip/deflate/br, a cookie jar (Domain, Path,
     Expires, Max-Age, Secure, HttpOnly, `__Secure-`/`__Host-`;
@@ -472,7 +472,7 @@ on (`--no-js` turns it off), `dump` with `--js`.
     sheets, scripts, `fetch` and `location`. A page's images, sheets and
     scripts are fetched concurrently (libcurl multi, 6 connections per
     host). The `<meta charset>` prescan follows WHATWG's (all the labels
-    of windows-1252 and UTF-8). Background loads (`net/loader.ore`)
+    of windows-1252 and UTF-8). Background loads (`net/loader.aye`)
     share one multi handle driven by the main thread between tasks.
   - *HTML and CSS:* `template` contents in an inert fragment, foster
     parenting, quirks mode from the doctype, `noscript` following
@@ -498,23 +498,23 @@ on (`--no-js` turns it off), `dump` with `--js`.
   - *JavaScript:* generators and async functions, Symbol and the
     iterator protocol, iterator helpers (`Iterator.prototype.map`,
     `filter`, `take`, `drop`, `flatMap`, `reduce`, `toArray`,
-    `forEach`, `some`, `every`, `find`, `Iterator.from`; `js/lib.ore`,
+    `forEach`, `some`, `every`, `find`, `Iterator.from`; `js/lib.aye`,
     `browser/tests/js` 240–241), `Function` and `eval` of strings, the
     web APIs above, a processor-time budget per task (B6, above).
-    BigInt (`js/bigint.ore`, by GPT-6.1-sol through pi): literals,
+    BigInt (`js/bigint.aye`, by GPT-6.1-sol through pi): literals,
     conversions, exact arithmetic, bitwise operations and comparisons
     with Numbers (`browser/tests/js` 246–248; limits in
     [`browser/js/BIGINT.md`](../browser/js/BIGINT.md)).
     `Object.defineProperty` follows ValidateAndApplyPropertyDescriptor:
     a generic descriptor keeps an accessor, a non-configurable property
-    changes only as the spec allows (`js/builtins.ore`, 249–250).
+    changes only as the spec allows (`js/builtins.aye`, 249–250).
     ToPropertyDescriptor checks run before any definition (a
     non-callable getter, value mixed with get/set); `Reflect`'s boolean
     methods return false only for a rejected operation and throw for a
     non-object target (251); `setPrototypeOf` rejects cycles,
     non-extensible objects and immutable prototypes, `Object.` and
     `__proto__` throwing, `Reflect.` returning false (252). ES modules
-    (`js/modules.ore`, `js/lib.ore`): static imports and exports,
+    (`js/modules.aye`, `js/lib.aye`): static imports and exports,
     `import()`, `import.meta`, cycles as cyclic module records (TDZ,
     top-level await), every re-export form with `export *` ambiguity,
     JSON modules, import maps, `<script type=module>` and
@@ -538,12 +538,12 @@ on (`--no-js` turns it off), `dump` with `--js`.
     `document.baseURI` and `Node.baseURI`. Custom elements (upgrades,
     reactions, `:defined`); shadow roots (`attachShadow`, declarative
     `shadowrootmode`, slots, `:host`, `::slotted()`, `::part()`; the
-    flat tree is rendered; `dom/shadow.ore`, `engine/components.ore`);
+    flat tree is rendered; `dom/shadow.aye`, `engine/components.aye`);
     `MutationObserver` records from the document's mutation log. Web
     Animations basics (`Element.animate`, `Animation`, `KeyframeEffect`,
     `document.timeline`): an animation keeps time and fills write the
     inline style, no frame is interpolated. Layout queries
-    (`engine/geometry.ore`): `getBoundingClientRect`, `getClientRects`,
+    (`engine/geometry.aye`): `getBoundingClientRect`, `getClientRects`,
     `offsetTop`/`Left`/`Width`/`Height`/`Parent`, `client*`,
     `scrollTop`/`Left`/`Width`/`Height`, `scroll`/`scrollTo`/`scrollBy`
     of elements and the window, `scrollX`/`scrollY`, `scrollIntoView`,
@@ -551,7 +551,7 @@ on (`--no-js` turns it off), `dump` with `--js`.
     ranges have no geometry. The
     checklist's scripted sites (Python docs, rustdoc, CNN Lite,
     react.dev, YouTube, go.dev, BBC, Google, ZOL) log no errors.
-  - *Fetch and XHR* (`engine/prelude.ore`, `net/http.ore`): `Request`,
+  - *Fetch and XHR* (`engine/prelude.aye`, `net/http.aye`): `Request`,
     `Headers` (every method, sorted iteration, `set-cookie` kept
     apart), and the body mixin shared by Request and Response (`text()`,
     `json()`, `arrayBuffer()`, `blob()`, `formData()` of multipart and
@@ -565,7 +565,7 @@ on (`--no-js` turns it off), `dump` with `--js`.
     303, and a 301 or 302 of a POST, continue as a GET without the
     body). Tests: `jsdom/request.html`, `net/fetch_methods.html`,
     `net/xhr_methods.html`.
-  - *Session history* (`engine/history.ore`, `engine/tab.ore`): one
+  - *Session history* (`engine/history.aye`, `engine/tab.aye`): one
     history per tab and per frame; `pushState`/`replaceState` add or
     change entries without loading (an empty URL resolves to the base
     URL, dropping the fragment; an omitted or null one keeps the URL),
@@ -573,7 +573,7 @@ on (`--no-js` turns it off), `dump` with `--js`.
     fire `popstate` (and `hashchange` when the fragment changed),
     `history.length`, `state` and `scrollRestoration`. The agent's
     `url` follows (`docs/agent-protocol.md`).
-  - *Canvas 2D* (`engine/canvas_api.ore`, `engine/canvas_prelude.ore`,
+  - *Canvas 2D* (`engine/canvas_api.aye`, `engine/canvas_prelude.aye`,
     by GPT-6.1-sol through pi): paths and Path2D, fills, strokes
     (joins, caps, dashes), transforms, clipping, linear and radial
     gradients, patterns, shadows, Porter-Duff composites, text and
@@ -589,14 +589,14 @@ on (`--no-js` turns it off), `dump` with `--js`.
     turns are drawn and hit-tested); a transformed box is a layer and
     the containing block of its absolute and fixed descendants.
     `position: fixed` boxes stay in the viewport while scrolling and
-    `sticky` ones stick within their parent (`layout/scroll.ore`).
+    `sticky` ones stick within their parent (`layout/scroll.aye`).
     `::before`/`::after` with `content` (strings, `attr()`, quotes);
     `:is()`/`:where()`; logical properties; `aspect-ratio`;
     `object-fit`; `clip: rect()` and `clip-path: inset()`. Percentage
     table columns and `<center>` around auto-width tables; grid gaps
     under spanning items; flex items that clip their overflow have no
     automatic minimum. `text-transform` (inherited) changes the case
-    of inline text before it is measured (`layout/inline.ore`).
+    of inline text before it is measured (`layout/inline.aye`).
   - *SVG* (`svg/`): inline `<svg>` and SVG images (`<img>`, CSS
     images, `data:` URLs) become pictures: `path` (all commands, arcs as
     cubics), `rect` (rounded), `circle`, `ellipse`, `line`, `polyline`,
@@ -622,12 +622,12 @@ on (`--no-js` turns it off), `dump` with `--js`.
     image's URL; image requests accept WebP. A script-visible http(s)
     `img` request loads in the background; then a task decodes it, sets
     `complete`, `naturalWidth` and `naturalHeight`, fires `load` or
-    `error` and lays the page out again (`engine/image_api.ore`). The
+    `error` and lays the page out again (`engine/image_api.aye`). The
     window's `load` event waits for those tasks, and `decode()` promises
     settle with them. A page fetches a failed image URL once
-    (`engine/images.ore`, `net/failed_image_once.html`).
-  - *Fonts and text* (`font/`, `webfont/`, `css/fontface.ore`,
-    `layout/bidi.ore`, `layout/linebreak.ore`): a character the font
+    (`engine/images.aye`, `net/failed_image_once.html`).
+  - *Fonts and text* (`font/`, `webfont/`, `css/fontface.aye`,
+    `layout/bidi.aye`, `layout/linebreak.aye`): a character the font
     lacks comes from a chain of system fallback fonts (PingFang,
     Hiragino, Apple SD Gothic Neo, Arial Unicode, Apple Symbols, STIX,
     Apple Color Emoji; Noto and DejaVu on Linux). Text is shaped by
@@ -674,7 +674,7 @@ on (`--no-js` turns it off), `dump` with `--js`.
     `multipart/form-data`, the state pseudo-classes, and the a11y roles
     and states (spinbutton, slider, required, invalid).
   - *Load time and measurement:* computed styles are kept when no
-    style input changed (`css/inputs.ore`: a fingerprint of the trees,
+    style input changed (`css/inputs.aye`: a fingerprint of the trees,
     the classes the sheets name, form state, viewport and container
     sizes). `browser/tools/page_load.py` captures every listed site to
     an archive (`target/sites/`) and replays it offline, with median

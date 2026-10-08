@@ -1,2 +1,2 @@
-cascade.ore:2:13: error[E0018]: undefined variable `undefined_thing`
-cascade.ore:8:12: error[E0017]: unknown type `Unknown`
+cascade.aye:2:13: error[E0018]: undefined variable `undefined_thing`
+cascade.aye:8:12: error[E0017]: unknown type `Unknown`

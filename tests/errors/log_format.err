@@ -1,5 +1,5 @@
-log_format.ore:7:13: error[E0086]: the format of `std.log.err` has 2 `{}` but 1 argument(s) follow it
-log_format.ore:8:18: error[E0086]: the format of `std.log.info` must be a string literal or constant (print a value with `std.log.info("{}", value)`)
-log_format.ore:9:24: error[E0086]: `std.log.info` cannot format a value of type `P` (integers, floats, `bool`, `[]u8` and errors can be formatted)
-log_format.ore:10:13: error[E0086]: the format of `std.log.err` has 1 `{}` but 2 argument(s) follow it
-log_format.ore:16:17: error[E0086]: the format of `std.log.err` must be a string literal or constant (print a value with `std.log.err("{}", value)`)
+log_format.aye:7:13: error[E0086]: the format of `std.log.err` has 2 `{}` but 1 argument(s) follow it
+log_format.aye:8:18: error[E0086]: the format of `std.log.info` must be a string literal or constant (print a value with `std.log.info("{}", value)`)
+log_format.aye:9:24: error[E0086]: `std.log.info` cannot format a value of type `P` (integers, floats, `bool`, `[]u8` and errors can be formatted)
+log_format.aye:10:13: error[E0086]: the format of `std.log.err` has 1 `{}` but 2 argument(s) follow it
+log_format.aye:16:17: error[E0086]: the format of `std.log.err` must be a string literal or constant (print a value with `std.log.err("{}", value)`)

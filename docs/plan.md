@@ -1,7 +1,7 @@
 # Plan
 
 Goal: finish the language (Ore, being renamed Aye: command `aye`,
-extension `.aye`) to the done criteria in [`plans/ore.md`](plans/ore.md),
+extension `.aye`) to the done criteria in [`plans/aye.md`](plans/aye.md),
 then resume the anyknown browser in its own repo. The language lane gets
 most slots. The browser is frozen (maintenance only) and is the
 language's biggest integration test. The framework does one slice (F1)
@@ -12,7 +12,7 @@ as the acceptance test of `std.http`. Finished steps are in
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Ore/Aye language ([`plans/ore.md`](plans/ore.md)) | 1, most slots | P2 leftovers + O1 server basics | X2.2 rename, then P2.4 (fmt), then F1.1 | cloud once X1.2 is done; local until then |
+| Ore/Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | P2 leftovers + O1 server basics | X2.2 rename, then P2.4 (fmt), then F1.1 | cloud once X1.2 is done; local until then |
 | Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold) | – until O6–O9 | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 (F1.1 only) | F1.1, after O1.4a | cloud |
 
@@ -22,7 +22,7 @@ script), then X2.2 (rename, isolated), then P2.4 (`aye fmt` and
 `~/Documents/ayelang/aye`; after that lane cards in lane priority
 (F1.1 first, it builds on O1.4a), with X1.1 beside them. Project steps go when their condition
 holds: X1.2 once the user enables cloud, X2.2 at a point with no open
-branch. The browser resumes when Ore criteria O6–O9 are met, in the
+branch. The browser resumes when Aye criteria O6–O9 are met, in the
 same step that splits `browser/` into its own repo (P8.1).
 
 ## Project
@@ -30,7 +30,7 @@ same step that splits `browser/` into its own repo (P8.1).
 Steps not tied to one lane, in this order. Their cards are in
 [`plans/project.md`](plans/project.md).
 
-1. **X1 cloud enablement.** X1.1: `browser/net/archive.ore` reads
+1. **X1 cloud enablement.** X1.1: `browser/net/archive.aye` reads
    `d_namlen` and `st_mtimespec` (macOS only, lines 114 and 131); make
    it build on Linux. X1.2:
    an Ubuntu 24.04 setup script in the repo, then the first full
@@ -67,7 +67,7 @@ its area. Nothing else of the plan.
 5. **Before finishing a branch** run the checklist in
    [`practices/workflow.md`](practices/workflow.md), "Checklist before
    finishing a branch" (merge `main` in, `cargo build --release`,
-   `ore check browser`, full `cargo test --release`, `browser/build.sh`).
+   `aye check browser`, full `cargo test --release`, `browser/build.sh`).
    Docs-only cards skip the build and tests.
 6. **Do not edit** `docs/plan.md`, `docs/plans/*`, `docs/browser.md`,
    `docs/browser-sites.md`, or `docs/milestones.md` unless the card names
@@ -122,9 +122,9 @@ is a one-line backlog entry until its phase comes up.
 
 ```
 #### <id>: <short title>
-- lane: ore | browser | framework | project
+- lane: aye | browser | framework | project
 - goal: <one sentence>
-- serves: <done criterion id, e.g. O6 (Ore), W1 (browser), FD1 (framework)>
+- serves: <done criterion id, e.g. O6 (Aye), W1 (browser), FD1 (framework)>
 - files: <paths expected to change; (new) for new files>
 - verify: `<exact command>` → <expected exit code / output line>
 - depends on: <step ids, or –>
@@ -152,5 +152,5 @@ goes to the backlog or to `done.md` as dropped.
   Windows is out of scope. M10's ThreadSanitizer run is not possible on
   this Mac.
 - **Integration branch** `main`; one gap list, `browser/COMPILER_GAPS.md`.
-- **Step ids** are never renumbered: P/O (ore), P (browser), F
+- **Step ids** are never renumbered: P/O (aye), P (browser), F
   (framework), X (project). Language choices: [`decisions.md`](decisions.md).

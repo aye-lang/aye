@@ -1,6 +1,0 @@
-// Built as `ore run single/main.ore`: a file argument is a module of its
-// own, so broken.ore next to it is not compiled.
-
-pub fn main() {
-    @println("only main.ore")
-}

@@ -1,4 +1,4 @@
-error_ignored.ore:11:5: error[E0061]: unhandled error: `f` returns `E!u32` (handle the error with `try` or `catch`)
-error_ignored.ore:12:5: error[E0061]: unhandled error: `g` returns `E!void` (handle the error with `try` or `catch`)
-error_ignored.ore:13:13: error[E0061]: unhandled error: `f` returns `E!u32` (handle the error with `try` or `catch`)
-error_ignored.ore:14:14: error[E0061]: unhandled error: `f` returns `E!u32` (handle the error with `try` or `catch`)
+error_ignored.aye:11:5: error[E0061]: unhandled error: `f` returns `E!u32` (handle the error with `try` or `catch`)
+error_ignored.aye:12:5: error[E0061]: unhandled error: `g` returns `E!void` (handle the error with `try` or `catch`)
+error_ignored.aye:13:13: error[E0061]: unhandled error: `f` returns `E!u32` (handle the error with `try` or `catch`)
+error_ignored.aye:14:14: error[E0061]: unhandled error: `f` returns `E!u32` (handle the error with `try` or `catch`)

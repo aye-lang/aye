@@ -8,14 +8,14 @@ people too.
 Every agent reads it before coding. It is short on purpose: read the
 file for the area you work in, and skim the others.
 
-- [`ore.md`](ore.md): Ore language idioms. Errors, optionals,
+- [`aye.md`](aye.md): Aye language idioms. Errors, optionals,
   allocators, builtins, C interop, coroutines, safety and build modes.
 - [`browser.md`](browser.md): conventions and pitfalls of the browser
   code in `browser/`.
 - [`workflow.md`](workflow.md): developing, testing, merging, and
   working with several agents at once.
 
-The language itself is in `docs/spec.md` (`ore spec`), the choices
+The language itself is in `docs/spec.md` (`aye spec`), the choices
 behind it in `docs/decisions.md`, and the browser plan in
 `docs/browser.md`. This directory does not repeat them; it records what
 went wrong and what to do instead.
@@ -33,7 +33,7 @@ Each entry has the same shape:
 ```
 
 Snippets are real code, cited as `path:line` or by commit hash, or a
-minimal example that compiles (`target/release/ore check` it before you
+minimal example that compiles (`target/release/aye check` it before you
 add it). Line numbers drift; when one is wrong, fix it.
 
 ## Maintaining it

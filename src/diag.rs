@@ -57,7 +57,7 @@ impl fmt::Display for Diag {
 }
 
 impl Diag {
-    /// One entry of the `diagnostics` array in `ore check --json`. `file`
+    /// One entry of the `diagnostics` array in `aye check --json`. `file`
     /// is the file of the error; a fix-it edits only that file.
     pub fn to_json(&self) -> String {
         let edits: Vec<String> = self

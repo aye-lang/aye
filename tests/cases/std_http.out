@@ -1,6 +1,6 @@
 get: GET /index.html?a=1 HTTP/1.1 consumed 70 of 70
   headers 2, body 0 bytes: []
-host=example.com agent=[ore] accept=true keepalive=true
+host=example.com agent=[aye] accept=true keepalive=true
 first: POST /a HTTP/1.1 consumed 44 of 87
   headers 1, body 5 bytes: [hello]
 second: GET /b HTTP/1.0 consumed 43 of 43

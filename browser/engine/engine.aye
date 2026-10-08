@@ -1,0 +1,627 @@
+// engine: a loaded page and a tab with its history, shared by the
+// window, `anyknown screenshot` and the agent interface.
+//
+// - engine.aye: `Page`: load(url) -> fetch -> decode -> parse, then
+//   `layoutPage`: style sheets -> cascade -> layout, for a viewport.
+// - sheets.aye: the author style sheet of a document.
+// - tab.aye: `Tab`: the current page, its scroll offset and history.
+// - history.aye: session history entries, pushState and traversals.
+// - hit.aye: what is at a point (links), find in page, fragments.
+// - script.aye (and dom_api, window_api, markup, prelude): the
+//   page's JavaScript and its event loop.
+// - images.aye: fetching and decoding the images of a page.
+// - frames.aye: the documents of `frame` and `iframe` elements, and
+//   where a link with a target loads.
+// - windows.aye: what the scripts of a page see of the other pages of
+//   its tab (window.parent, frames, contentDocument, postMessage).
+// - forms.aye: default actions (links, buttons, checkboxes, labels),
+//   focus, form submission.
+//
+// A `Page` is allocated on the heap and never moves, because its layout
+// tree points at its document and styles.
+
+import css
+import dom
+import dom.Document
+import dom.NodeId
+import encoding
+import font
+import html
+import layout
+import net
+import perf
+import std
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+import url
+import url.Url
+
+// The style sheets and computed styles of a page for one viewport.
+pub struct Styling {
+    media: css.Media
+    ua: css.Sheet
+    author: css.Sheet
+    styles: css.Styles
+    // `domVersion` of the document these styles are for.
+    version: u64
+}
+
+pub struct Page {
+    alloc: Allocator
+    // The URL of the document: after redirects, or the one asked for
+    // when the fetch failed.
+    url: Url
+    // The document's base URL when it was loaded or its URL last
+    // changed; about:blank and about:srcdoc documents keep it (see
+    // `currentBase`).
+    base: Url
+    // The HTTP status (200 for `file:` and `data:`); 0 when the fetch
+    // failed and the document is an error page.
+    status: i64
+    // Why the fetch failed ("" when it did not).
+    failure: []u8
+    doc: Document
+    // The encoding the document was decoded from (forms submit in it).
+    encoding: encoding.Encoding
+    // The text of the first `title`, whitespace collapsed (owned).
+    title: []u8
+    // Set by `layoutPage`.
+    styling: ?*mut Styling
+    // The stylesheet source fingerprint for styling (sheet_cache.aye).
+    sheet_key: u64
+    tree: ?*mut layout.Tree
+    // The page's JavaScript (null when scripts are off).
+    script: ?*mut Script
+    // The decoded images (images.aye), from the first layout on.
+    images: ?*mut ImageCache
+    // The documents of its `frame` and `iframe` elements (frames.aye).
+    frames: List(Frame)
+    // Live frame-element lookups, invalidated by Document.tree_version.
+    frame_elements: FrameElementIndex
+    // Unique among the pages of the process (`findPage`).
+    id: u32
+    // The page whose frame shows this one (null for a tab's page), and
+    // how many frames deep it is.
+    parent: ?*mut Page
+    depth: usize
+    // A plain text document: no scripts, no frames.
+    plain: bool
+    // A sandboxed frame: no scripts (without `allow-scripts`), and an
+    // origin of its own (without `allow-same-origin`).
+    no_scripts: bool
+    opaque: bool
+    // Changes the scripts of other pages made to the document (through
+    // contentDocument; `domVersion` counts them).
+    mutations: u64
+    // The measurer of the last `layoutPage`, which the scripts' layout
+    // (geometry.aye) measures with too.
+    measure: ?dyn font.Measurer = null
+    // The page's session history from its load (history.aye): one
+    // entry, and those its scripts add, until a tab takes them over.
+    history: SessionHistory
+    // The tab's history, once the tab shows the page (tab.aye).
+    shared: ?*mut SessionHistory = null
+
+    /// Frees the page and everything in it.
+    pub fn destroy(self: *mut Self) {
+        let alloc = self.alloc
+        if self.script |s| {
+            self.script = null
+            destroyScript(s)
+        }
+        self.dropTree()
+        self.dropStyling()
+        if self.images |imgs| {
+            imgs.deinit()
+            alloc.destroy(imgs)
+        }
+        // Out of the list before it goes: the scripts of the frames
+        // still walk the tab's pages (`findPage`) while they are freed.
+        while self.frames.pop() |f| {
+            alloc.free(f.source)
+            f.page.destroy()
+        }
+        self.frames.deinit()
+        self.frame_elements.nodes.deinit()
+        self.history.deinit()
+        self.doc.deinit()
+        alloc.free(self.title)
+        self.url.deinit(alloc)
+        self.base.deinit(alloc)
+        alloc.destroy(self)
+    }
+
+    /// The session history the page's document is in: the tab's once
+    /// the tab shows it, else its own.
+    pub fn sessionHistory(self: *mut Self) *mut SessionHistory {
+        if self.shared |h| {
+            return h
+        }
+        return &mut self.history
+    }
+
+    /// The URL that relative URLs of the document resolve against now
+    /// (links, forms, images, style sheets, scripts): the `href` of the
+    /// first `base` element that has one, resolved against the
+    /// document's URL; else the document's URL. A `base` a script
+    /// added, changed or removed counts. about:blank and about:srcdoc
+    /// documents keep the one they got from their parent (`base`).
+    pub fn currentBase(self: *Self, alloc: Allocator) AllocError!Url {
+        if text.startsWith(self.url.href, "about:") {
+            return url.parse(alloc, self.base.href) catch |e| {
+                return AllocError.OutOfMemory
+            }
+        }
+        return documentBase(alloc, &self.doc, &self.url)
+    }
+
+    /// Resolves `href`, a URL of the document, against its current base
+    /// URL.
+    pub fn resolve(self: *Self, alloc: Allocator, href: []u8) url.UrlError!Url {
+        var base = self.currentBase(alloc) catch |e| {
+            return url.UrlError.OutOfMemory
+        }
+        defer base.deinit(alloc)
+        return url.resolve(alloc, &base, text.trim(href))
+    }
+
+    /// Resolves `href`, the URL of a link (or form) of the document that
+    /// the user follows: the next load of it sends the document's URL as
+    /// the Referer.
+    pub fn follow(self: *Self, alloc: Allocator, href: []u8) url.UrlError!Url {
+        let target = try self.resolve(alloc, href)
+        net.noteNavigation(target.href, self.url.href) catch |e| {
+            target.deinit(alloc)
+            return url.UrlError.OutOfMemory
+        }
+        return target
+    }
+
+    fn dropTree(self: *mut Self) {
+        if self.tree |t| {
+            t.deinit()
+            self.alloc.destroy(t)
+        }
+        self.tree = null
+    }
+
+    fn dropStyling(self: *mut Self) {
+        if self.styling |st| {
+            st.styles.deinit()
+            st.author.deinit()
+            st.ua.deinit()
+            self.alloc.destroy(st)
+        }
+        self.styling = null
+    }
+
+    /// Styles and lays out the page for a viewport `width` x `height` CSS
+    /// px, measuring text with `measure` (which must outlive the
+    /// layout). Style sheets are parsed again when the viewport changed
+    /// (media queries and `vw`/`vh` depend on it), or their sources
+    /// changed; ordinary DOM changes reuse the parsed sheets.
+    pub fn layoutPage(self: *mut Self, measure: dyn font.Measurer, width: f64, height: f64) AllocError!void {
+        self.dropTree()
+        self.measure = measure
+        try syncFrames(self)
+        setViewport(self, width, height)
+        var same = false
+        if self.styling |st| {
+            same = st.media.width == width && st.media.height == height && st.version == domVersion(self)
+        }
+        if !same {
+            let key = sheetSourceKey(&self.doc)
+            if self.styling |st| {
+                if st.media.width == width && st.media.height == height && self.sheet_key == key {
+                    try dom.assignSlots(&mut self.doc)
+                    if !stylesCurrent(&self.doc, st.media, &st.styles) {
+                        try restyleWithSizes(self.alloc, &self.doc, &st.ua, &st.author, st.media, &mut st.styles)
+                    }
+                    st.version = domVersion(self)
+                    same = true
+                }
+            }
+            if !same {
+                self.dropStyling()
+                self.styling = try self.styleFor(css.Media { width: width, height: height })
+                self.sheet_key = key
+            }
+        }
+        if self.styling |st| {
+            try loadWebFonts(self.alloc, &mut st.author, self.url.href, measure)
+        }
+        let images_began = perf.start()
+        try updateImages(self, css.Media { width: width, height: height })
+        perf.end("images", images_began, self.url.href)
+        if self.styling |st| {
+            var nodes: ?*layout.Images = null
+            if self.images |imgs| {
+                nodes = &imgs.nodes
+            }
+            let layout_began = perf.start()
+            let tree = try layoutQueried(self.alloc, &self.doc, &st.ua, &st.author, st.media, &mut st.styles, nodes, measure, width, height)
+            self.tree = self.alloc.create(tree) catch |e| {
+                var lost = tree
+                lost.deinit()
+                return e
+            }
+            perf.end("layout", layout_began, self.url.href)
+            try layoutFrames(self, measure)
+        }
+    }
+
+    /// Computes the styles again after the document changed, with the
+    /// same style sheets, unless nothing they depend on changed
+    /// (`stylesCurrent`); `layoutPage` lays it out again.
+    pub fn restyle(self: *mut Self) AllocError!void {
+        self.dropTree()
+        if self.styling |st| {
+            if st.version != domVersion(self) && self.sheet_key != sheetSourceKey(&self.doc) {
+                // A stylesheet source changed: rebuild it at layout.
+                self.dropStyling()
+                return
+            }
+            try dom.assignSlots(&mut self.doc)
+            if !stylesCurrent(&self.doc, st.media, &st.styles) {
+                try restyleWithSizes(self.alloc, &self.doc, &st.ua, &st.author, st.media, &mut st.styles)
+            }
+            st.version = domVersion(self)
+        }
+    }
+
+    fn styleFor(self: *mut Self, media: css.Media) AllocError!*mut Styling {
+        try dom.assignSlots(&mut self.doc)
+        if try takeReaderStyling(self, media) |cached| {
+            return cached
+        }
+        var ua = try css.Sheet.init(self.alloc)
+        errdefer ua.deinit()
+        try css.uaSheet(&mut ua, media)
+        if self.script != null {
+            try css.parseSheet(&mut ua, "noscript { display: none }", media)
+        }
+        var author = try css.Sheet.init(self.alloc)
+        errdefer author.deinit()
+        let sheets_began = perf.start()
+        try authorSheets(self.alloc, &self.doc, &self.url, media, &mut author)
+        perf.end("sheets", sheets_began, self.url.href)
+        var styles = try css.Styles.init(self.alloc)
+        errdefer styles.deinit()
+        try css.computeStyles(&self.doc, &ua, &author, media, &mut styles)
+        return self.alloc.create(Styling { media: media, ua: ua, author: author, styles: styles, version: domVersion(self) })
+    }
+}
+
+/// Are `styles` (computed with the sheets they are used with) what
+/// computing the styles of `doc` for `media` again would give: computed
+/// in full, and nothing they depend on changed since
+/// (css/inputs.aye)?
+fn stylesCurrent(doc: *Document, media: css.Media, styles: *css.Styles) bool {
+    return styles.inputs != 0 && styles.inputs == css.styleInputs(doc, media, styles)
+}
+
+/// Loads `target`: fetches it, decodes and parses the document. A fetch
+/// that fails gives an error page saying why. Free with `destroy`.
+pub fn load(alloc: Allocator, target: *Url) AllocError!*mut Page {
+    return loadWith(alloc, target, null)
+}
+
+/// `load`, by POST with `body` when there is one (a form submission).
+pub fn loadWith(alloc: Allocator, target: *Url, body: ?*net.Body) AllocError!*mut Page {
+    let p = try fetchPage(alloc, target, body, encoding.Encoding.Windows1252)
+    errdefer p.destroy()
+    try runDocument(p, scriptingEnabled())
+    return p
+}
+
+/// `load` for a session history entry whose serialized state is `state`
+/// (null for none): the page's scripts see it as history.state.
+pub fn loadState(alloc: Allocator, target: *Url, state: ?[]u8) AllocError!*mut Page {
+    let p = try fetchPage(alloc, target, null, encoding.Encoding.Windows1252)
+    errdefer p.destroy()
+    if state |st| {
+        try p.history.replace(p.url.href, st)
+    }
+    try runDocument(p, scriptingEnabled())
+    return p
+}
+
+// Fetches `target` (by POST with `body`) and parses the document, whose
+// bytes are in `fallback` when they do not say (a frame's: its parent's
+// encoding). Its scripts have not run (`runDocument`).
+fn fetchPage(alloc: Allocator, target: *Url, body: ?*net.Body, fallback: encoding.Encoding) AllocError!*mut Page {
+    let fetch_began = perf.start()
+    let res = net.fetchWith(alloc, target, body) catch |e| {
+        perf.end("fetch", fetch_began, target.href)
+        match e {
+            .OutOfMemory => {
+                return AllocError.OutOfMemory
+            }
+            _ => {}
+        }
+        return errorPage(alloc, target, net.describe(e))
+    }
+    perf.end("fetch", fetch_began, target.href)
+    defer res.deinit(alloc)
+    var located = finalUrl(alloc, target, res.url) catch |e| {
+        return AllocError.OutOfMemory
+    }
+    errdefer located.deinit(alloc)
+    let decode_began = perf.start()
+    let enc = encoding.sniffOr(res.body, res.charset, fallback)
+    let src = try encoding.toUtf8(alloc, res.body, enc)
+    defer alloc.free(src)
+    perf.end("decode", decode_began, target.href)
+    let parse_began = perf.start()
+    var doc = try documentOf(alloc, res.mime, src)
+    perf.end("html", parse_began, target.href)
+    errdefer doc.deinit()
+    let p = try newPage(alloc, located, res.status, "", doc)
+    p.encoding = enc
+    p.plain = text.eql(res.mime, "text/plain")
+    return p
+}
+
+// After a page was fetched and given its place (`parent`): runs its
+// scripts (when `scripts`) up to DOMContentLoaded, loads its frames,
+// then fires their load events and the window's.
+fn runDocument(p: *mut Page, scripts: bool) AllocError!void {
+    if scripts && !p.plain && !p.no_scripts {
+        let scripts_began = perf.start()
+        try startPageScripts(p)
+        perf.end("scripts", scripts_began, p.url.href)
+    }
+    if !p.plain {
+        try loadFrames(p)
+    }
+    if p.script != null {
+        let scripts_began = perf.start()
+        try fireFrameLoads(p)
+        try finishPageScripts(p)
+        perf.end("scripts", scripts_began, p.url.href)
+    }
+}
+
+// The URL after redirects (`moved`, when not empty), else a copy of
+// `target`.
+fn finalUrl(alloc: Allocator, target: *Url, moved: []u8) url.UrlError!Url {
+    if moved.len > 0 {
+        return url.parse(alloc, moved)
+    }
+    return url.parse(alloc, target.href)
+}
+
+fn newPage(alloc: Allocator, located: Url, status: i64, failure: []u8, doc: Document) AllocError!*mut Page {
+    var d = doc
+    d.controls.pattern_match = formPattern
+    let title = try titleOf(alloc, &d)
+    errdefer alloc.free(title)
+    var base = try documentBase(alloc, &d, &located)
+    errdefer base.deinit(alloc)
+    let id = newPageId()
+    var history = SessionHistory.init(alloc)
+    errdefer history.deinit()
+    try history.push(located.href, id, null, false)
+    return alloc.create(Page {
+        alloc: alloc,
+        url: located,
+        base: base,
+        status: status,
+        failure: failure,
+        doc: d,
+        encoding: encoding.Encoding.Utf8,
+        title: title,
+        styling: null,
+        sheet_key: 0,
+        tree: null,
+        script: null,
+        images: null,
+        frames: List(Frame).init(alloc),
+        frame_elements: FrameElementIndex.init(alloc),
+        id: id,
+        parent: null,
+        depth: 0,
+        plain: false,
+        no_scripts: false,
+        opaque: false,
+        mutations: 0,
+        history: history,
+    })
+}
+
+/// The base URL of `doc`, whose URL is `address` (see `Page.currentBase`).
+pub fn documentBase(alloc: Allocator, doc: *Document, address: *Url) AllocError!Url {
+    if doc.cachedBase(address.href) |href| {
+        if url.parse(alloc, href) |b| {
+            return b
+        } else |e| {}
+    }
+    var b = try findBase(alloc, doc, address)
+    errdefer b.deinit(alloc)
+    try doc.cacheBase(address.href, b.href)
+    return b
+}
+
+// `documentBase` without the cache: walks the document for a `base`.
+fn findBase(alloc: Allocator, doc: *Document, address: *Url) AllocError!Url {
+    var cur: ?NodeId = doc.root
+    while cur |h| {
+        if doc.isElement(h, "base") {
+            if doc.attr(h, "href") |href| {
+                if url.resolve(alloc, address, text.trim(href)) |b| {
+                    return b
+                } else |e| {
+                    match e {
+                        .OutOfMemory => {
+                            return AllocError.OutOfMemory
+                        }
+                        _ => {}
+                    }
+                }
+                break
+            }
+        }
+        cur = doc.following(h, doc.root)
+    }
+    return url.parse(alloc, address.href) catch |e| {
+        return AllocError.OutOfMemory
+    }
+}
+
+// A page that says why `target` could not be loaded.
+fn errorPage(alloc: Allocator, target: *Url, why: []u8) AllocError!*mut Page {
+    var b = text.Builder.init(alloc)
+    defer b.deinit()
+    try b.append("<title>Cannot load page</title><h1>Cannot load this page</h1><p>")
+    try escaped(&mut b, target.href)
+    try b.append("</p><p>")
+    try escaped(&mut b, why)
+    try b.append("</p>")
+    var doc = try html.parse(alloc, b.bytes())
+    errdefer doc.deinit()
+    var located = url.parse(alloc, target.href) catch |e| {
+        return AllocError.OutOfMemory
+    }
+    errdefer located.deinit(alloc)
+    return newPage(alloc, located, 0, why, doc)
+}
+
+fn escaped(b: *mut text.Builder, s: []u8) AllocError!void {
+    for c in s {
+        if c == '<' {
+            try b.append("&lt;")
+        } else if c == '&' {
+            try b.append("&amp;")
+        } else {
+            try b.appendByte(c)
+        }
+    }
+}
+
+/// The document of a response: HTML is parsed; plain text becomes the
+/// content of a `pre`.
+pub fn documentOf(alloc: Allocator, mime: []u8, src: []u8) AllocError!Document {
+    if !text.eql(mime, "text/plain") {
+        return html.parse(alloc, src)
+    }
+    var doc = try html.parse(alloc, "<pre>")
+    errdefer doc.deinit()
+    var pres = List(NodeId).init(alloc)
+    defer pres.deinit()
+    try doc.getElementsByTagName("pre", &mut pres)
+    try doc.appendText(pres.items()[0], src)
+    return doc
+}
+
+// The text of the first `title` element, whitespace collapsed.
+fn titleOf(alloc: Allocator, doc: *Document) AllocError![]u8 {
+    var titles = List(NodeId).init(alloc)
+    defer titles.deinit()
+    try doc.getElementsByTagName("title", &mut titles)
+    var b = text.Builder.init(alloc)
+    defer b.deinit()
+    if titles.len() > 0 {
+        var raw = text.Builder.init(alloc)
+        defer raw.deinit()
+        try doc.textContent(titles.items()[0], &mut raw)
+        var space = false
+        for c in raw.bytes() {
+            if layout.isWhite(c) {
+                space = b.len() > 0
+            } else {
+                if space {
+                    try b.appendByte(' ')
+                    space = false
+                }
+                try b.appendByte(c)
+            }
+        }
+    }
+    let owned = try b.toOwned()
+    return owned
+}
+
+/// The URL of what the user typed (an address bar, a command-line
+/// argument): a URL with a scheme of two or more letters; else a path to
+/// an existing file (relative to the working directory); else, when it
+/// starts with a host name (a dot before the first `/`, and not a
+/// file name ending in `.html`, `.htm` or `.txt`), an `https:` URL.
+pub fn urlOfInput(alloc: Allocator, input: []u8) url.UrlError!Url {
+    let s = text.trim(input)
+    if hasScheme(s) {
+        return url.parse(alloc, s)
+    }
+    if !std.fs.exists(s) && looksLikeHost(s) {
+        var b = text.Builder.init(alloc)
+        defer b.deinit()
+        b.append("https://") catch |e| {
+            return url.UrlError.OutOfMemory
+        }
+        b.append(s) catch |e| {
+            return url.UrlError.OutOfMemory
+        }
+        return url.parse(alloc, b.bytes())
+    }
+    return fileUrl(alloc, s)
+}
+
+fn looksLikeHost(s: []u8) bool {
+    if s.len == 0 || text.startsWith(s, ".") || std.mem.indexOf(s, ' ') != null {
+        return false
+    }
+    var host = s
+    if std.mem.indexOf(s, '/') |slash| {
+        host = s[..slash]
+    }
+    if std.mem.indexOf(host, '.') == null {
+        return false
+    }
+    return !text.endsWith(host, ".html") && !text.endsWith(host, ".htm") && !text.endsWith(host, ".txt")
+}
+
+// Does `s` start with a scheme of two or more letters and a `:`?
+fn hasScheme(s: []u8) bool {
+    var i: usize = 0
+    while i < s.len {
+        let c = s[i]
+        if c == ':' {
+            return i > 1
+        }
+        let letter = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+        if !letter && (i == 0 || !((c >= '0' && c <= '9') || c == '+' || c == '-' || c == '.')) {
+            return false
+        }
+        i += 1
+    }
+    return false
+}
+
+fn fileUrl(alloc: Allocator, path: []u8) url.UrlError!Url {
+    var b = text.Builder.init(alloc)
+    defer b.deinit()
+    b.append("file://") catch |e| {
+        return url.UrlError.OutOfMemory
+    }
+    if !text.startsWith(path, "/") {
+        let buf = alloc.alloc(0 as u8, 4096) catch |e| {
+            return url.UrlError.OutOfMemory
+        }
+        defer alloc.free(buf)
+        let cwd = getcwd(buf.ptr, buf.len)
+        b.append(buf[..strlen(buf.ptr)]) catch |e| {
+            return url.UrlError.OutOfMemory
+        }
+        b.appendByte('/') catch |e| {
+            return url.UrlError.OutOfMemory
+        }
+    }
+    b.append(path) catch |e| {
+        return url.UrlError.OutOfMemory
+    }
+    return url.parse(alloc, b.bytes())
+}
+
+extern fn getcwd(buf: [*]u8, size: usize) [*]u8
+extern fn strlen(s: [*]u8) usize

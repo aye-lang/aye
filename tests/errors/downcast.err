@@ -1,6 +1,6 @@
-downcast.ore:31:13: error[E0110]: `@downcast(*mut Square, ...)` of a `dyn Shape`: the `dyn` may have been made from a read-only `&x`, since none of `Square`'s `Shape` methods takes `self: *mut Self` (downcast to `*Square`)
-downcast.ore:32:13: error[E0110]: `@downcast(*Page, ...)` of a `dyn Shape` is always `null`: `Page` does not implement `Shape` (it has no method `area`)
-downcast.ore:33:34: error[E0110]: `@downcast` takes a `dyn` value, found `i64`
-downcast.ore:34:23: error[E0110]: `@downcast` makes a pointer to a struct (`*S` or `*mut S`), not `Page`
-downcast.ore:35:13: error[E0022]: `@downcast` takes two arguments: the pointer type and the `dyn` value
-downcast.ore:36:34: error[E0110]: `@downcast` takes a `dyn` value, found `?dyn Host` (unwrap it first: `opt.?`, or `if opt |d| { ... }`)
+downcast.aye:31:13: error[E0110]: `@downcast(*mut Square, ...)` of a `dyn Shape`: the `dyn` may have been made from a read-only `&x`, since none of `Square`'s `Shape` methods takes `self: *mut Self` (downcast to `*Square`)
+downcast.aye:32:13: error[E0110]: `@downcast(*Page, ...)` of a `dyn Shape` is always `null`: `Page` does not implement `Shape` (it has no method `area`)
+downcast.aye:33:34: error[E0110]: `@downcast` takes a `dyn` value, found `i64`
+downcast.aye:34:23: error[E0110]: `@downcast` makes a pointer to a struct (`*S` or `*mut S`), not `Page`
+downcast.aye:35:13: error[E0022]: `@downcast` takes two arguments: the pointer type and the `dyn` value
+downcast.aye:36:34: error[E0110]: `@downcast` takes a `dyn` value, found `?dyn Host` (unwrap it first: `opt.?`, or `if opt |d| { ... }`)

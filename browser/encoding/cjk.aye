@@ -1,0 +1,749 @@
+// The legacy CJK encodings of the WHATWG Encoding Standard: decoders
+// (errors become U+FFFD) and encoders (a code point an encoding cannot
+// write is reported to the caller, which writes `&#N;`). The indexes are
+// in tables.aye, generated from WHATWG's index files.
+//
+// - Shift_JIS, EUC-JP, ISO-2022-JP: index jis0208 (and jis0212 for
+//   EUC-JP's three-byte form when decoding).
+// - GBK and gb18030: index gb18030 and its ranges (four-byte sequences).
+// - Big5: index Big5 (Hong Kong extensions decoded, not encoded).
+// - EUC-KR: index EUC-KR.
+
+import std.mem.AllocError
+import std.text
+
+/// An index: the code points of the pointers `start..start + len`, each
+/// `width` hex digits (0 for none), 64 to a line of `hex`.
+pub struct Index {
+    start: usize
+    len: usize
+    width: usize
+    hex: []u8
+
+    /// The code point of `pointer`; null when it has none.
+    pub fn at(self: Self, pointer: usize) ?u32 {
+        if pointer < self.start || pointer >= self.start + self.len {
+            return null
+        }
+        let k = pointer - self.start
+        let off = (k / 64) * (64 * self.width + 1) + (k % 64) * self.width
+        var cp: u32 = 0
+        for i in 0..self.width {
+            cp = cp * 16 + hexValue(self.hex[off + i])
+        }
+        if cp == 0 {
+            return null
+        }
+        return cp
+    }
+
+    /// The first pointer from `from` on whose code point is `cp` (the
+    /// last one when `last`); null when there is none.
+    pub fn pointerOf(self: Self, cp: u32, from: usize, last: bool) ?usize {
+        var digits = [5]u8{0, 0, 0, 0, 0}
+        var v = cp
+        var k = self.width
+        while k > 0 {
+            k -= 1
+            digits[k] = HEX_DIGITS[(v & 15) as usize]
+            v = v >> 4
+        }
+        var found: ?usize = null
+        var p = from
+        if p < self.start {
+            p = self.start
+        }
+        while p < self.start + self.len {
+            let i = p - self.start
+            let off = (i / 64) * (64 * self.width + 1) + (i % 64) * self.width
+            var same = true
+            for j in 0..self.width {
+                if self.hex[off + j] != digits[j] {
+                    same = false
+                    break
+                }
+            }
+            if same {
+                found = p
+                if !last {
+                    return found
+                }
+            }
+            p += 1
+        }
+        return found
+    }
+}
+
+let HEX_DIGITS = "0123456789ABCDEF"
+
+fn hexValue(c: u8) u32 {
+    if c >= 'A' {
+        return (c - 'A') as u32 + 10
+    }
+    return (c - '0') as u32
+}
+
+fn inRange(b: u8, lo: u8, hi: u8) bool {
+    return b >= lo && b <= hi
+}
+
+// ---- decoders
+
+fn decodeShiftJis(out: *mut text.Builder, bytes: []u8) AllocError!void {
+    var i: usize = 0
+    while i < bytes.len {
+        let b = bytes[i]
+        i += 1
+        if b <= 0x80 {
+            try out.appendChar(b as u32)
+            continue
+        }
+        if inRange(b, 0xA1, 0xDF) {
+            try out.appendChar(0xFF61 - 0xA1 + (b as u32))
+            continue
+        }
+        if !inRange(b, 0x81, 0x9F) && !inRange(b, 0xE0, 0xFC) {
+            try out.appendChar(0xFFFD)
+            continue
+        }
+        if i >= bytes.len {
+            try out.appendChar(0xFFFD)
+            break
+        }
+        let t = bytes[i]
+        var cp: ?u32 = null
+        if inRange(t, 0x40, 0x7E) || inRange(t, 0x80, 0xFC) {
+            var offset: usize = 0x41
+            if t < 0x7F {
+                offset = 0x40
+            }
+            var lead_offset: usize = 0xC1
+            if b < 0xA0 {
+                lead_offset = 0x81
+            }
+            let p = ((b as usize) - lead_offset) * 188 + (t as usize) - offset
+            if p >= 8836 && p <= 10715 {
+                cp = (0xE000 - 8836 + p) as u32
+            } else {
+                cp = JIS0208.at(p)
+            }
+        }
+        if cp |c| {
+            try out.appendChar(c)
+            i += 1
+            continue
+        }
+        try out.appendChar(0xFFFD)
+        if t >= 0x80 {
+            i += 1
+        }
+    }
+}
+
+fn decodeEucJp(out: *mut text.Builder, bytes: []u8) AllocError!void {
+    var i: usize = 0
+    while i < bytes.len {
+        let b = bytes[i]
+        i += 1
+        if b < 0x80 {
+            try out.appendChar(b as u32)
+            continue
+        }
+        if b != 0x8E && b != 0x8F && !inRange(b, 0xA1, 0xFE) {
+            try out.appendChar(0xFFFD)
+            continue
+        }
+        if i >= bytes.len {
+            try out.appendChar(0xFFFD)
+            break
+        }
+        var lead = b
+        var t = bytes[i]
+        if b == 0x8E && inRange(t, 0xA1, 0xDF) {
+            try out.appendChar(0xFF61 - 0xA1 + (t as u32))
+            i += 1
+            continue
+        }
+        var jis0212 = false
+        if b == 0x8F && inRange(t, 0xA1, 0xFE) {
+            jis0212 = true
+            lead = t
+            i += 1
+            if i >= bytes.len {
+                try out.appendChar(0xFFFD)
+                break
+            }
+            t = bytes[i]
+        }
+        var cp: ?u32 = null
+        if inRange(lead, 0xA1, 0xFE) && inRange(t, 0xA1, 0xFE) {
+            let p = ((lead - 0xA1) as usize) * 94 + ((t - 0xA1) as usize)
+            if jis0212 {
+                cp = JIS0212.at(p)
+            } else {
+                cp = JIS0208.at(p)
+            }
+        }
+        if cp |c| {
+            try out.appendChar(c)
+            i += 1
+            continue
+        }
+        try out.appendChar(0xFFFD)
+        if t >= 0x80 {
+            i += 1
+        }
+    }
+}
+
+enum JpState {
+    Ascii
+    Roman
+    Katakana
+    LeadByte
+    TrailByte
+    EscapeStart
+    Escape
+}
+
+fn decodeIso2022Jp(out: *mut text.Builder, bytes: []u8) AllocError!void {
+    var state = JpState.Ascii
+    var output_state = JpState.Ascii
+    var lead: u8 = 0
+    var output = false
+    var i: usize = 0
+    // `i == bytes.len` is the end of the input.
+    while i <= bytes.len {
+        let eof = i == bytes.len
+        var b: u8 = 0
+        if !eof {
+            b = bytes[i]
+        }
+        i += 1
+        match state {
+            .Ascii, .Roman => {
+                if eof {
+                    break
+                }
+                if b == 0x1B {
+                    state = JpState.EscapeStart
+                } else if b <= 0x7F && b != 0x0E && b != 0x0F {
+                    output = false
+                    if state == JpState.Roman && b == 0x5C {
+                        try out.appendChar(0xA5)
+                    } else if state == JpState.Roman && b == 0x7E {
+                        try out.appendChar(0x203E)
+                    } else {
+                        try out.appendChar(b as u32)
+                    }
+                } else {
+                    output = false
+                    try out.appendChar(0xFFFD)
+                }
+            }
+            .Katakana => {
+                if eof {
+                    break
+                }
+                if b == 0x1B {
+                    state = JpState.EscapeStart
+                } else if inRange(b, 0x21, 0x5F) {
+                    output = false
+                    try out.appendChar(0xFF61 - 0x21 + (b as u32))
+                } else {
+                    output = false
+                    try out.appendChar(0xFFFD)
+                }
+            }
+            .LeadByte => {
+                if eof {
+                    break
+                }
+                if b == 0x1B {
+                    state = JpState.EscapeStart
+                } else if inRange(b, 0x21, 0x7E) {
+                    output = false
+                    lead = b
+                    state = JpState.TrailByte
+                } else {
+                    output = false
+                    try out.appendChar(0xFFFD)
+                }
+            }
+            .TrailByte => {
+                if b == 0x1B && !eof {
+                    state = JpState.EscapeStart
+                    try out.appendChar(0xFFFD)
+                } else if inRange(b, 0x21, 0x7E) && !eof {
+                    state = JpState.LeadByte
+                    let p = ((lead - 0x21) as usize) * 94 + ((b - 0x21) as usize)
+                    if JIS0208.at(p) |c| {
+                        try out.appendChar(c)
+                    } else {
+                        try out.appendChar(0xFFFD)
+                    }
+                } else {
+                    state = JpState.LeadByte
+                    if eof {
+                        // The end is read again in the lead byte state.
+                        i -= 1
+                    }
+                    try out.appendChar(0xFFFD)
+                }
+            }
+            .EscapeStart => {
+                if !eof && (b == 0x24 || b == 0x28) {
+                    lead = b
+                    state = JpState.Escape
+                } else {
+                    i -= 1
+                    output = false
+                    state = output_state
+                    try out.appendChar(0xFFFD)
+                }
+            }
+            .Escape => {
+                let l = lead
+                lead = 0
+                var next: ?JpState = null
+                if !eof {
+                    if l == 0x28 && b == 0x42 {
+                        next = JpState.Ascii
+                    } else if l == 0x28 && b == 0x4A {
+                        next = JpState.Roman
+                    } else if l == 0x28 && b == 0x49 {
+                        next = JpState.Katakana
+                    } else if l == 0x24 && (b == 0x40 || b == 0x42) {
+                        next = JpState.LeadByte
+                    }
+                }
+                if next |s| {
+                    state = s
+                    output_state = s
+                    let was = output
+                    output = true
+                    if was {
+                        try out.appendChar(0xFFFD)
+                    }
+                } else {
+                    // The two bytes after the escape are read again.
+                    i -= 2
+                    output = false
+                    state = output_state
+                    try out.appendChar(0xFFFD)
+                }
+            }
+        }
+    }
+}
+
+fn decodeGb18030(out: *mut text.Builder, bytes: []u8) AllocError!void {
+    var i: usize = 0
+    while i < bytes.len {
+        let b = bytes[i]
+        i += 1
+        if b < 0x80 {
+            try out.appendChar(b as u32)
+            continue
+        }
+        if b == 0x80 {
+            try out.appendChar(0x20AC)
+            continue
+        }
+        if b == 0xFF {
+            try out.appendChar(0xFFFD)
+            continue
+        }
+        if i >= bytes.len {
+            try out.appendChar(0xFFFD)
+            break
+        }
+        let s = bytes[i]
+        if inRange(s, 0x30, 0x39) {
+            // Four bytes: first, second, third and fourth.
+            if i + 1 >= bytes.len {
+                try out.appendChar(0xFFFD)
+                break
+            }
+            let t = bytes[i + 1]
+            if !inRange(t, 0x81, 0xFE) {
+                // The second byte and this one are read again.
+                try out.appendChar(0xFFFD)
+                continue
+            }
+            if i + 2 >= bytes.len {
+                try out.appendChar(0xFFFD)
+                break
+            }
+            let f = bytes[i + 2]
+            if !inRange(f, 0x30, 0x39) {
+                try out.appendChar(0xFFFD)
+                continue
+            }
+            i += 3
+            let p = ((b - 0x81) as usize) * 12600 + ((s - 0x30) as usize) * 1260 + ((t - 0x81) as usize) * 10 + ((f - 0x30) as usize)
+            if rangesCodePoint(p) |c| {
+                try out.appendChar(c)
+            } else {
+                try out.appendChar(0xFFFD)
+            }
+            continue
+        }
+        var cp: ?u32 = null
+        if inRange(s, 0x40, 0x7E) || inRange(s, 0x80, 0xFE) {
+            var offset: usize = 0x41
+            if s < 0x7F {
+                offset = 0x40
+            }
+            cp = GB18030.at(((b - 0x81) as usize) * 190 + (s as usize) - offset)
+        }
+        if cp |c| {
+            try out.appendChar(c)
+            i += 1
+            continue
+        }
+        try out.appendChar(0xFFFD)
+        if s >= 0x80 {
+            i += 1
+        }
+    }
+}
+
+// The code point of a four-byte gb18030 pointer (index gb18030 ranges).
+fn rangesCodePoint(p: usize) ?u32 {
+    if (p > 39419 && p < 189000) || p > 1237575 {
+        return null
+    }
+    if p == 7457 {
+        return 0xE7C7
+    }
+    var k: usize = 0
+    while k + 1 < GB18030_RANGE_POINTERS.len && GB18030_RANGE_POINTERS[k + 1] as usize <= p {
+        k += 1
+    }
+    return GB18030_RANGE_CODES[k] + (p - GB18030_RANGE_POINTERS[k] as usize) as u32
+}
+
+// The four-byte pointer of `cp` (index gb18030 ranges pointer).
+fn rangesPointer(cp: u32) usize {
+    if cp == 0xE7C7 {
+        return 7457
+    }
+    var k: usize = 0
+    while k + 1 < GB18030_RANGE_CODES.len && GB18030_RANGE_CODES[k + 1] <= cp {
+        k += 1
+    }
+    return GB18030_RANGE_POINTERS[k] as usize + (cp - GB18030_RANGE_CODES[k]) as usize
+}
+
+fn decodeBig5(out: *mut text.Builder, bytes: []u8) AllocError!void {
+    var i: usize = 0
+    while i < bytes.len {
+        let b = bytes[i]
+        i += 1
+        if b < 0x80 {
+            try out.appendChar(b as u32)
+            continue
+        }
+        if !inRange(b, 0x81, 0xFE) {
+            try out.appendChar(0xFFFD)
+            continue
+        }
+        if i >= bytes.len {
+            try out.appendChar(0xFFFD)
+            break
+        }
+        let t = bytes[i]
+        var cp: ?u32 = null
+        if inRange(t, 0x40, 0x7E) || inRange(t, 0xA1, 0xFE) {
+            var offset: usize = 0x62
+            if t < 0x7F {
+                offset = 0x40
+            }
+            let p = ((b - 0x81) as usize) * 157 + (t as usize) - offset
+            // Four pointers are two code points each.
+            var pair: u32 = 0
+            if p == 1133 || p == 1135 {
+                try out.appendChar(0xCA)
+                pair = 0x304
+            } else if p == 1164 || p == 1166 {
+                try out.appendChar(0xEA)
+                pair = 0x304
+            }
+            if pair != 0 {
+                if p == 1135 || p == 1166 {
+                    pair = 0x30C
+                }
+                try out.appendChar(pair)
+                i += 1
+                continue
+            }
+            cp = BIG5.at(p)
+        }
+        if cp |c| {
+            try out.appendChar(c)
+            i += 1
+            continue
+        }
+        try out.appendChar(0xFFFD)
+        if t >= 0x80 {
+            i += 1
+        }
+    }
+}
+
+fn decodeEucKr(out: *mut text.Builder, bytes: []u8) AllocError!void {
+    var i: usize = 0
+    while i < bytes.len {
+        let b = bytes[i]
+        i += 1
+        if b < 0x80 {
+            try out.appendChar(b as u32)
+            continue
+        }
+        if !inRange(b, 0x81, 0xFE) {
+            try out.appendChar(0xFFFD)
+            continue
+        }
+        if i >= bytes.len {
+            try out.appendChar(0xFFFD)
+            break
+        }
+        let t = bytes[i]
+        var cp: ?u32 = null
+        if inRange(t, 0x41, 0xFE) {
+            cp = EUC_KR.at(((b - 0x81) as usize) * 190 + ((t - 0x41) as usize))
+        }
+        if cp |c| {
+            try out.appendChar(c)
+            i += 1
+            continue
+        }
+        try out.appendChar(0xFFFD)
+        if t >= 0x80 {
+            i += 1
+        }
+    }
+}
+
+// ---- encoders: each appends the bytes of one code point (not ASCII,
+// which the caller writes) and returns false when the encoding has none.
+
+fn encodeShiftJis(out: *mut text.Builder, code: u32) AllocError!bool {
+    var cp = code
+    if cp == 0x80 {
+        try out.appendByte(0x80)
+        return true
+    }
+    if cp == 0xA5 {
+        try out.appendByte(0x5C)
+        return true
+    }
+    if cp == 0x203E {
+        try out.appendByte(0x7E)
+        return true
+    }
+    if cp >= 0xFF61 && cp <= 0xFF9F {
+        try out.appendByte((cp - 0xFF61 + 0xA1) as u8)
+        return true
+    }
+    if cp == 0x2212 {
+        cp = 0xFF0D
+    }
+    // Index Shift_JIS: jis0208 without the pointers 8272 to 8835.
+    var pointer = JIS0208.pointerOf(cp, 0, false)
+    if pointer |p| {
+        if p >= 8272 && p <= 8835 {
+            pointer = JIS0208.pointerOf(cp, 8836, false)
+        }
+    }
+    if pointer |p| {
+        let lead = p / 188
+        var lead_offset: usize = 0xC1
+        if lead < 0x1F {
+            lead_offset = 0x81
+        }
+        let trail = p % 188
+        var offset: usize = 0x41
+        if trail < 0x3F {
+            offset = 0x40
+        }
+        try out.appendByte((lead + lead_offset) as u8)
+        try out.appendByte((trail + offset) as u8)
+        return true
+    }
+    return false
+}
+
+fn encodeEucJp(out: *mut text.Builder, code: u32) AllocError!bool {
+    var cp = code
+    if cp == 0xA5 {
+        try out.appendByte(0x5C)
+        return true
+    }
+    if cp == 0x203E {
+        try out.appendByte(0x7E)
+        return true
+    }
+    if cp >= 0xFF61 && cp <= 0xFF9F {
+        try out.appendByte(0x8E)
+        try out.appendByte((cp - 0xFF61 + 0xA1) as u8)
+        return true
+    }
+    if cp == 0x2212 {
+        cp = 0xFF0D
+    }
+    if JIS0208.pointerOf(cp, 0, false) |p| {
+        try out.appendByte((p / 94 + 0xA1) as u8)
+        try out.appendByte((p % 94 + 0xA1) as u8)
+        return true
+    }
+    return false
+}
+
+/// The state of an ISO-2022-JP encoder: 0 ASCII, 1 Roman, 2 jis0208.
+pub struct Iso2022JpEncoder {
+    state: u8
+}
+
+// One code point (ASCII too) in ISO-2022-JP; false when it has none
+// (the encoder is then in the ASCII or Roman state, so `&#N;` can
+// follow).
+fn encodeIso2022Jp(out: *mut text.Builder, enc: *mut Iso2022JpEncoder, code: u32) AllocError!bool {
+    var cp = code
+    if enc.state != 2 && (cp == 0x0E || cp == 0x0F || cp == 0x1B) {
+        // Would switch states: an error with U+FFFD.
+        try out.append("&#65533;")
+        return true
+    }
+    if enc.state == 0 && cp < 0x80 {
+        try out.appendByte(cp as u8)
+        return true
+    }
+    if enc.state == 1 && ((cp < 0x80 && cp != 0x5C && cp != 0x7E) || cp == 0xA5 || cp == 0x203E) {
+        if cp == 0xA5 {
+            try out.appendByte(0x5C)
+        } else if cp == 0x203E {
+            try out.appendByte(0x7E)
+        } else {
+            try out.appendByte(cp as u8)
+        }
+        return true
+    }
+    if cp < 0x80 {
+        try out.append("\x1B(B")
+        enc.state = 0
+        try out.appendByte(cp as u8)
+        return true
+    }
+    if cp == 0xA5 || cp == 0x203E {
+        try out.append("\x1B(J")
+        enc.state = 1
+        return encodeIso2022Jp(out, enc, cp)
+    }
+    if cp == 0x2212 {
+        cp = 0xFF0D
+    }
+    if cp >= 0xFF61 && cp <= 0xFF9F {
+        cp = ISO2022JP_KATAKANA[(cp - 0xFF61) as usize]
+    }
+    if JIS0208.pointerOf(cp, 0, false) |p| {
+        if enc.state != 2 {
+            try out.append("\x1B$B")
+            enc.state = 2
+        }
+        try out.appendByte((p / 94 + 0x21) as u8)
+        try out.appendByte((p % 94 + 0x21) as u8)
+        return true
+    }
+    if enc.state == 2 {
+        try out.append("\x1B(B")
+        enc.state = 0
+    }
+    return false
+}
+
+// Back to ASCII at the end of ISO-2022-JP text.
+fn finishIso2022Jp(out: *mut text.Builder, enc: *mut Iso2022JpEncoder) AllocError!void {
+    if enc.state != 0 {
+        try out.append("\x1B(B")
+        enc.state = 0
+    }
+}
+
+fn encodeGb18030(out: *mut text.Builder, cp: u32, gbk: bool) AllocError!bool {
+    if cp == 0xE5E5 {
+        return false
+    }
+    if gbk && cp == 0x20AC {
+        try out.appendByte(0x80)
+        return true
+    }
+    // Private-use code points that GB18030-2005 encoded with two bytes.
+    for k in 0..GB18030_PUA_CODES.len {
+        if GB18030_PUA_CODES[k] == cp {
+            try out.appendByte((GB18030_PUA_BYTES[k] >> 8) as u8)
+            try out.appendByte((GB18030_PUA_BYTES[k] & 0xFF) as u8)
+            return true
+        }
+    }
+    if GB18030.pointerOf(cp, 0, false) |p| {
+        let trail = p % 190
+        var offset: usize = 0x41
+        if trail < 0x3F {
+            offset = 0x40
+        }
+        try out.appendByte((p / 190 + 0x81) as u8)
+        try out.appendByte((trail + offset) as u8)
+        return true
+    }
+    if gbk {
+        return false
+    }
+    var p = rangesPointer(cp)
+    let b1 = p / 12600
+    p = p % 12600
+    let b2 = p / 1260
+    p = p % 1260
+    try out.appendByte((b1 + 0x81) as u8)
+    try out.appendByte((b2 + 0x30) as u8)
+    try out.appendByte((p / 10 + 0x81) as u8)
+    try out.appendByte((p % 10 + 0x30) as u8)
+    return true
+}
+
+let GB18030_PUA_CODES = [18]u32{
+    0xE78D, 0xE78E, 0xE78F, 0xE790, 0xE791, 0xE792, 0xE793, 0xE794, 0xE795,
+    0xE796, 0xE81E, 0xE826, 0xE82B, 0xE82C, 0xE832, 0xE843, 0xE854, 0xE864,
+}
+let GB18030_PUA_BYTES = [18]u32{
+    0xA6D9, 0xA6DA, 0xA6DB, 0xA6DC, 0xA6DD, 0xA6DE, 0xA6DF, 0xA6EC, 0xA6ED,
+    0xA6F3, 0xFE59, 0xFE61, 0xFE66, 0xFE67, 0xFE6D, 0xFE7E, 0xFE90, 0xFEA0,
+}
+
+fn encodeBig5(out: *mut text.Builder, cp: u32) AllocError!bool {
+    // Index Big5 without the Hong Kong extensions (pointers below
+    // (0xA1 - 0x81) * 157); six code points take their last pointer.
+    let last = cp == 0x2550 || cp == 0x255E || cp == 0x2561 || cp == 0x256A || cp == 0x5341 || cp == 0x5345
+    if BIG5.pointerOf(cp, (0xA1 - 0x81) * 157, last) |p| {
+        let trail = p % 157
+        var offset: usize = 0x62
+        if trail < 0x3F {
+            offset = 0x40
+        }
+        try out.appendByte((p / 157 + 0x81) as u8)
+        try out.appendByte((trail + offset) as u8)
+        return true
+    }
+    return false
+}
+
+fn encodeEucKr(out: *mut text.Builder, cp: u32) AllocError!bool {
+    if EUC_KR.pointerOf(cp, 0, false) |p| {
+        try out.appendByte((p / 190 + 0x81) as u8)
+        try out.appendByte((p % 190 + 0x41) as u8)
+        return true
+    }
+    return false
+}

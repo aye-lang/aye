@@ -3,7 +3,7 @@
 //! Every compile error carries one code (`E0001`, ...). This table is the
 //! single source of truth: the code, a short title, an explanation, and a
 //! complete program with the error together with its fixed version.
-//! `ore explain <code>` prints an entry.
+//! `aye explain <code>` prints an entry.
 //!
 //! Codes are stable: never renumber or reuse one. A new kind of error gets
 //! the next free number at the end of the table.
@@ -40,7 +40,7 @@ macro_rules! codes {
     };
 }
 
-/// The text `ore explain` prints for `code` (such as `E0012`).
+/// The text `aye explain` prints for `code` (such as `E0012`).
 pub fn explain(code: &str) -> Option<String> {
     let info = ALL.iter().find(|i| i.code.to_string() == code)?;
     let indent = |s: &str| s.lines().map(|l| if l.is_empty() { "\n".to_string() } else { format!("    {l}\n") }).collect::<String>();
@@ -57,7 +57,7 @@ pub fn explain(code: &str) -> Option<String> {
 codes! {
 E0001 = 1 {
     "unexpected character",
-    "The source contains a character that is not part of Ore's syntax.",
+    "The source contains a character that is not part of Aye's syntax.",
     r#"pub fn main() {
     let x = 1 # 2
 }
@@ -69,7 +69,7 @@ E0001 = 1 {
 }
 E0002 = 2 {
     "semicolon",
-    "Ore ends a statement at the end of the line (Go's rule). An explicit `;` is an error: remove it, and put each statement on its own line.",
+    "Aye ends a statement at the end of the line (Go's rule). An explicit `;` is an error: remove it, and put each statement on its own line.",
     r#"pub fn main() {
     let x = 1;
 }
@@ -129,7 +129,7 @@ E0006 = 6 {
 }
 E0007 = 7 {
     "not yet supported",
-    "The feature is part of Ore but not of the stage0 compiler yet, or the keyword is used where stage0 does not support it (`comptime` only marks a type parameter, `comptime T: type`; `where` follows a function's return type). Write the program without it.",
+    "The feature is part of Aye but not of the stage0 compiler yet, or the keyword is used where stage0 does not support it (`comptime` only marks a type parameter, `comptime T: type`; `where` follows a function's return type). Write the program without it.",
     r#"pub fn main() {
     comptime let x = 1
 }
@@ -194,7 +194,7 @@ pub fn main() {
 }
 E0011 = 11 {
     "`extern fn` with a body that is not `pub`",
-    "An `extern fn` without a body declares a C function. With a body, it is an Ore function exported to C under its own name, and it must be `pub extern fn`. Remove the body to declare a C function, or add `pub` to export the function.",
+    "An `extern fn` without a body declares a C function. With a body, it is an Aye function exported to C under its own name, and it must be `pub extern fn`. Remove the body to declare a C function, or add `pub` to export the function.",
     r#"extern fn puts(s: [*]u8) i32 {
 }
 
@@ -394,7 +394,7 @@ pub fn main() {
 }
 E0023 = 23 {
     "mismatched types",
-    "A value has a different type than the one expected here. Ore has no implicit conversions: convert numbers with `as`, or change the declared type.",
+    "A value has a different type than the one expected here. Aye has no implicit conversions: convert numbers with `as`, or change the declared type.",
     r#"pub fn main() {
     let x: i32 = true
 }
@@ -480,7 +480,7 @@ E0028 = 28 {
 }
 E0029 = 29 {
     "wrong number of arguments",
-    "A function is called with more or fewer arguments than it has parameters. Ore has no default arguments.",
+    "A function is called with more or fewer arguments than it has parameters. Aye has no default arguments.",
     r#"fn add(a: i32, b: i32) i32 {
     return a + b
 }
@@ -1622,26 +1622,26 @@ pub fn main() {
 E0082 = 82 {
     "item is not `pub`",
     "Only `pub` items of a module (functions, structs, enums, error sets, interfaces, and methods) can be used from another module. Fields and variants are visible wherever their type is. Declare the item `pub` in its module.",
-    r#"// file: main.ore
+    r#"// file: main.aye
 import util
 
 pub fn main() {
     @println(util.twice(2))
 }
 
-// file: util/util.ore
+// file: util/util.aye
 fn twice(x: i64) i64 {
     return 2 * x
 }
 "#,
-    r#"// file: main.ore
+    r#"// file: main.aye
 import util
 
 pub fn main() {
     @println(util.twice(2))
 }
 
-// file: util/util.ore
+// file: util/util.aye
 pub fn twice(x: i64) i64 {
     return 2 * x
 }
@@ -1649,15 +1649,15 @@ pub fn twice(x: i64) i64 {
 }
 E0083 = 83 {
     "import cycle",
-    "Modules cannot import each other, directly or through other modules. Move what both modules need into a third module that both import. The root module (the directory or file given to `ore`) cannot be imported at all: it imports every other module, directly or not, so code that a module and the root both need goes into a module of its own.",
-    r#"// file: main.ore
+    "Modules cannot import each other, directly or through other modules. Move what both modules need into a third module that both import. The root module (the directory or file given to `aye`) cannot be imported at all: it imports every other module, directly or not, so code that a module and the root both need goes into a module of its own.",
+    r#"// file: main.aye
 import a
 
 pub fn main() {
     a.f()
 }
 
-// file: a/a.ore
+// file: a/a.aye
 import b
 
 pub fn f() {
@@ -1667,28 +1667,28 @@ pub fn f() {
 pub fn h() {
 }
 
-// file: b/b.ore
+// file: b/b.aye
 import a
 
 pub fn g() {
     a.h()
 }
 "#,
-    r#"// file: main.ore
+    r#"// file: main.aye
 import a
 
 pub fn main() {
     a.f()
 }
 
-// file: a/a.ore
+// file: a/a.aye
 import b
 
 pub fn f() {
     b.g()
 }
 
-// file: b/b.ore
+// file: b/b.aye
 pub fn g() {
     h()
 }
@@ -1828,7 +1828,7 @@ E0090 = 90 {
 }
 E0091 = 91 {
     "variadic function that is not a C function",
-    "Only a C function, declared with `extern fn` and no body, can be variadic: `...` is its last parameter and follows at least one other, as in C (`extern fn printf(format: [*]u8, ...) i32`). An Ore function is not variadic: give it a slice.",
+    "Only a C function, declared with `extern fn` and no body, can be variadic: `...` is its last parameter and follows at least one other, as in C (`extern fn printf(format: [*]u8, ...) i32`). An Aye function is not variadic: give it a slice.",
     r#"fn sum(first: i64, ...) i64 {
     return first
 }
@@ -1879,7 +1879,7 @@ pub fn main() {
 }
 E0093 = 93 {
     "`@zeroed` of a type without an all-zero value",
-    "`@zeroed(T)` is the value whose bytes are all zero. Numbers, `bool`, optional pointers (`?*T`, `?[*]T`, `?fn(...)`), `extern struct`s made of them and arrays of these have one. A pointer that is not optional cannot be null, and an Ore struct is made with a literal: make the field optional, or write a literal.",
+    "`@zeroed(T)` is the value whose bytes are all zero. Numbers, `bool`, optional pointers (`?*T`, `?[*]T`, `?fn(...)`), `extern struct`s made of them and arrays of these have one. A pointer that is not optional cannot be null, and an Aye struct is made with a literal: make the field optional, or write a literal.",
     r#"extern struct Node {
     value: i32
     next: *Node
@@ -1947,7 +1947,7 @@ pub fn main() {
 E0096 = 96 {
     "conflicting C function declarations",
     "A C function has one signature and at most one definition. Every `extern fn` that names it, in any module, must give it the same C signature (pointers are one C pointer type: `*T`, `*mut T`, `[*]T` and `?*T` are alike), and only one `pub extern fn` can export a name.",
-    r#"// file: main.ore
+    r#"// file: main.aye
 import other
 
 extern fn abs(x: i32) i32
@@ -1955,14 +1955,14 @@ extern fn abs(x: i32) i32
 pub fn main() {
     @println(abs(-3) + other.half(4))
 }
-// file: other/other.ore
+// file: other/other.aye
 extern fn abs(x: i64) i64
 
 pub fn half(x: i32) i32 {
     return x / 2
 }
 "#,
-    r#"// file: main.ore
+    r#"// file: main.aye
 import other
 
 extern fn abs(x: i32) i32
@@ -1970,7 +1970,7 @@ extern fn abs(x: i32) i32
 pub fn main() {
     @println(abs(-3) + other.half(4))
 }
-// file: other/other.ore
+// file: other/other.aye
 extern fn abs(x: i32) i32
 
 pub fn half(x: i32) i32 {
@@ -2407,7 +2407,7 @@ pub fn main() {
     @print(GREETING)
 }
 "#,
-    r#"// file: main.ore
+    r#"// file: main.aye
 let GREETING = @embedFile("greeting.txt")
 
 pub fn main() {
@@ -2419,7 +2419,7 @@ hello
 }
 E0112 = 112 {
     "invalid `@cimport`",
-    "`@cimport(\"header.h\", \"-Iinclude\", \"-DNAME=1\")` reads a C header with libclang and makes an Ore module of its declarations, which a top-level `let` names: `let c = @cimport(\"zlib.h\")`, then `c.deflate(...)` and `c.Z_OK`. It is a declaration, not a value, so it appears only as the whole value of a top-level `let`, which cannot be `pub`, have a type or be a `var`. The header and the flags are string literals. The flags are include directories (`-Idir`, relative to the source file), definitions (`-DNAME`, `-DNAME=value`, `-UNAME`), framework directories (`-Fdir`) and `-std=...`; the `pkg-config --cflags` of the module's `@link` libraries are added. `ore cimport header.h` prints the generated declarations.",
+    "`@cimport(\"header.h\", \"-Iinclude\", \"-DNAME=1\")` reads a C header with libclang and makes an Aye module of its declarations, which a top-level `let` names: `let c = @cimport(\"zlib.h\")`, then `c.deflate(...)` and `c.Z_OK`. It is a declaration, not a value, so it appears only as the whole value of a top-level `let`, which cannot be `pub`, have a type or be a `var`. The header and the flags are string literals. The flags are include directories (`-Idir`, relative to the source file), definitions (`-DNAME`, `-DNAME=value`, `-UNAME`), framework directories (`-Fdir`) and `-std=...`; the `pkg-config --cflags` of the module's `@link` libraries are added. `aye cimport header.h` prints the generated declarations.",
     r#"pub fn main() {
     let m = @cimport("math.h")
     @println(m.sqrt(2.0))
@@ -2434,14 +2434,14 @@ pub fn main() {
 }
 E0113 = 113 {
     "C header cannot be imported",
-    "libclang could not read the header of a `@cimport`: it is not found, or it has errors. A header is looked for next to the source file, then on the include path: the flags' `-I` directories, the `pkg-config --cflags` of the module's `@link` and `@linkOptional` libraries, the system's headers and Homebrew's. Check the name (`SDL2/SDL.h`, not `SDL.h`, unless an `-I` directory or `@link(\"sdl2\")` makes it findable), install the library's development headers, or add its directory with `\"-I/path/include\"`. For errors in the header, a definition it expects (`\"-DNAME=1\"`) may be missing; `ore cimport header.h` shows the same errors outside the program.",
+    "libclang could not read the header of a `@cimport`: it is not found, or it has errors. A header is looked for next to the source file, then on the include path: the flags' `-I` directories, the `pkg-config --cflags` of the module's `@link` and `@linkOptional` libraries, the system's headers and Homebrew's. Check the name (`SDL2/SDL.h`, not `SDL.h`, unless an `-I` directory or `@link(\"sdl2\")` makes it findable), install the library's development headers, or add its directory with `\"-I/path/include\"`. For errors in the header, a definition it expects (`\"-DNAME=1\"`) may be missing; `aye cimport header.h` shows the same errors outside the program.",
     r#"let geo = @cimport("no_such_header.h")
 
 pub fn main() {
     @println(1)
 }
 "#,
-    r#"// file: main.ore
+    r#"// file: main.aye
 let geo = @cimport("point.h")
 
 pub fn main() {
@@ -2457,7 +2457,7 @@ struct Point {
 }
 E0114 = 114 {
     "libclang not found",
-    "`@cimport` reads C headers with libclang, which the compiler loads when it first needs it (the compiler itself does not depend on it), and it was not found. On macOS it comes with the Xcode command line tools (`xcode-select --install`): the compiler looks next to `xcrun --find clang`, in the command line tools and in Homebrew's `llvm`. On Linux, install libclang (`libclang-dev` or `clang` packages); the compiler asks `llvm-config --libdir` and looks in `/usr/lib/llvm-*/lib`. `LIBCLANG_PATH` (the library, or its directory) overrides the search. A header that was imported before is read from the cache (`~/.cache/ore/cimport`, or `$ORE_CACHE_DIR/cimport`) without libclang, as long as its files did not change. Without libclang, declare the C functions by hand with `extern fn` and `extern struct`, or check in what `ore cimport header.h` prints where libclang is installed as a module of its own and `import` it.",
+    "`@cimport` reads C headers with libclang, which the compiler loads when it first needs it (the compiler itself does not depend on it), and it was not found. On macOS it comes with the Xcode command line tools (`xcode-select --install`): the compiler looks next to `xcrun --find clang`, in the command line tools and in Homebrew's `llvm`. On Linux, install libclang (`libclang-dev` or `clang` packages); the compiler asks `llvm-config --libdir` and looks in `/usr/lib/llvm-*/lib`. `LIBCLANG_PATH` (the library, or its directory) overrides the search. A header that was imported before is read from the cache (`~/.cache/aye/cimport`, or `$AYE_CACHE_DIR/cimport`) without libclang, as long as its files did not change. Without libclang, declare the C functions by hand with `extern fn` and `extern struct`, or check in what `aye cimport header.h` prints where libclang is installed as a module of its own and `import` it.",
     r#"// This program reports E0114 only where libclang is missing.
 let m = @cimport("math.h")
 
@@ -2474,7 +2474,7 @@ pub fn main() {
 }
 E0115 = 115 {
     "bad `extern` link name",
-    "`extern(\"name\") fn` declares the C function `name` under the Ore name of the `fn`: the link name is a non-empty string literal, and the function has no body (a function with a body is exported to C under its own name).",
+    "`extern(\"name\") fn` declares the C function `name` under the Aye name of the `fn`: the link name is a non-empty string literal, and the function has no body (a function with a body is exported to C under its own name).",
     r#"extern("") fn cAbs(x: i32) i32
 
 pub fn main() {
@@ -2518,12 +2518,12 @@ mod tests {
     }
 
     /// Check an example. One with `// file: path` lines is several files:
-    /// they are written to a new directory, and `main.ore` is checked.
+    /// they are written to a new directory, and `main.aye` is checked.
     fn check(name: &str, text: &str) -> Result<(), Vec<crate::diag::Diag>> {
         if !text.starts_with("// file: ") {
-            return driver::check(&format!("{name}.ore"), text).map(|_| ());
+            return driver::check(&format!("{name}.aye"), text).map(|_| ());
         }
-        let dir = std::env::temp_dir().join(format!("ore-codes-{}-{name}-{}", std::process::id(), text.len()));
+        let dir = std::env::temp_dir().join(format!("aye-codes-{}-{name}-{}", std::process::id(), text.len()));
         let _ = std::fs::remove_dir_all(&dir);
         for part in text.split("// file: ").skip(1) {
             let (path, body) = part.split_once('\n').unwrap();
@@ -2531,7 +2531,7 @@ mod tests {
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(&p, body).unwrap();
         }
-        let main = dir.join("main.ore");
+        let main = dir.join("main.aye");
         let r = driver::front_end(driver::Root::load(main.to_str().unwrap()).unwrap(), None).result.map(|_| ());
         let _ = std::fs::remove_dir_all(&dir);
         r

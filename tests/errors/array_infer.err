@@ -1,2 +1,2 @@
-array_infer.ore:1:10: error[E0045]: `[_]T` is only for an array literal, `[_]T{...}`, whose elements give the length; a type needs the length: `[3]T`
-array_infer.ore:5:21: error[E0045]: `[_]T` is only for an array literal, `[_]T{...}`, whose elements give the length; a type needs the length: `[3]T`
+array_infer.aye:1:10: error[E0045]: `[_]T` is only for an array literal, `[_]T{...}`, whose elements give the length; a type needs the length: `[3]T`
+array_infer.aye:5:21: error[E0045]: `[_]T` is only for an array literal, `[_]T{...}`, whose elements give the length; a type needs the length: `[3]T`

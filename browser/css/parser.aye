@@ -1,0 +1,775 @@
+// The style sheet parser (CSS Syntax 3, section 5, simplified): a sheet is
+// a list of style rules and at-rules. The rules of `@media` blocks whose
+// query matches the `Media` and of `@supports` blocks whose condition
+// holds are parsed as if they were at the top level. Rules in `@layer`
+// blocks belong to that cascade layer (`Rule.layer`; `@layer a, b;`
+// declares the order, layers nest, `@import ... layer(x)` puts a sheet in
+// one), rules in `@container` blocks have its condition (`Rule.cond`,
+// tested by the cascade against the container's size), and the selectors
+// of rules in `@scope` are relative to its root. Style rules nest (CSS
+// Nesting): a style rule's block may hold style rules and conditional
+// at-rules, whose selectors are relative to the parent's (`&`).
+// `@import` rules before the first style rule are recorded in
+// `Sheet.imports` (with their media and `supports()` checked) for the
+// loader to fetch. `@font-face` rules are read from the text
+// (fontface.aye). Other at-rules (`@keyframes`, `@page`,
+// `@starting-style`, ...) are skipped with their block.
+// A rule with an invalid selector is dropped whole; an invalid
+// declaration is dropped up to the next `;`. Blocks are matched by their
+// bracket kind, so a stray `}` or `)` inside a value cannot end a rule.
+
+import perf
+import std.list.List
+import std.mem
+import std.mem.Allocator
+import std.mem.AllocError
+import std.text
+import url
+
+/// Declarations `start..end` of `Sheet.decls`.
+pub struct DeclRange {
+    start: usize
+    end: usize
+}
+
+/// Parses the style sheet `src` and appends its rules to `sheet`.
+pub fn parseSheet(sheet: *mut Sheet, src: []u8, media: Media) AllocError!void {
+    let began = perf.start()
+    defer perf.end("css_parse", began, sheet.base)
+    let toks = try tokens(sheet, src)
+    var p = newParser(sheet, toks, media)
+    try p.rules(0, toks.len, true)
+    sheet.rankLayers()
+    try fontFaceRules(sheet, src)
+}
+
+fn newParser(sheet: *mut Sheet, toks: []Token, media: Media) Parser {
+    return Parser {
+        sheet: sheet,
+        toks: toks,
+        media: media,
+        styled: false,
+        layer: sheet.base_layer,
+        cond: 0,
+        scoped: false,
+        scope_start: SelRange { start: 0, end: 0 },
+        scope_limit: null,
+    }
+}
+
+/// Parses a list of declarations (a `style` attribute) into `sheet` and
+/// returns where they are.
+pub fn parseInline(sheet: *mut Sheet, src: []u8) AllocError!DeclRange {
+    let toks = try tokens(sheet, src)
+    var p = newParser(sheet, toks, Media { width: 0.0, height: 0.0 })
+    let start = sheet.decls.len()
+    try p.declarations(0, toks.len)
+    return DeclRange { start: start, end: sheet.decls.len() }
+}
+
+/// Does the media query list `query` (a `media` attribute) match? An
+/// empty list matches.
+pub fn mediaMatches(sheet: *mut Sheet, query: []u8, media: Media) AllocError!bool {
+    let toks = try tokens(sheet, query)
+    return mediaListMatches(toks, media)
+}
+
+// The tokens of a copy of `src` in the sheet's arena.
+fn tokens(sheet: *mut Sheet, src: []u8) AllocError![]Token {
+    let a = sheet.arena.allocator()
+    let copy = try a.alloc(0 as u8, src.len)
+    mem.copy(copy, src)
+    var list = List(Token).init(a)
+    try tokenize(a, copy, &mut list)
+    if sheet.base.len > 0 {
+        try absoluteUrls(a, sheet.base, list.items())
+    }
+    return list.items()
+}
+
+// The `url()`s of `toks` resolved against `base` (not those that are
+// only a fragment, `url(#id)`, nor `data:` URLs).
+fn absoluteUrls(a: Allocator, base: []u8, toks: []mut Token) AllocError!void {
+    var parsed: ?url.Url = null
+    for i in 0..toks.len {
+        var k = i
+        if toks[i].kind == Tok.Function && text.eqlIgnoreCase(toks[i].text, "url") {
+            k = skipWhitespace(toks, i + 1)
+            if k >= toks.len || toks[k].kind != Tok.String {
+                continue
+            }
+        } else if toks[i].kind != Tok.Url {
+            continue
+        }
+        let s = text.trim(toks[k].text)
+        if s.len == 0 || s[0] == '#' || text.startsWith(s, "data:") {
+            continue
+        }
+        if parsed == null {
+            parsed = url.parse(a, base) catch |e| {
+                return
+            }
+        }
+        if url.resolve(a, &parsed.?, s) |u| {
+            toks[k].text = u.href
+        } else |e| {
+        }
+    }
+}
+
+// ---- blocks and component values, on a token slice
+
+fn isOpener(k: Tok) bool {
+    return k == Tok.LBrace || k == Tok.LBracket || k == Tok.LParen || k == Tok.Function
+}
+
+fn closerOf(k: Tok) Tok {
+    if k == Tok.LBrace {
+        return Tok.RBrace
+    }
+    if k == Tok.LBracket {
+        return Tok.RBracket
+    }
+    return Tok.RParen
+}
+
+/// The index of the token that closes the block opened at `i`, or
+/// `toks.len` when it is not closed.
+pub fn blockEnd(toks: []Token, i: usize) usize {
+    let want = closerOf(toks[i].kind)
+    var j = i + 1
+    while j < toks.len {
+        let k = toks[j].kind
+        if k == want {
+            return j
+        }
+        if isOpener(k) {
+            j = blockEnd(toks, j)
+        }
+        j += 1
+    }
+    return toks.len
+}
+
+/// The index just after the component value that starts at `i`: one
+/// token, or a whole block or function.
+pub fn skipComponent(toks: []Token, i: usize) usize {
+    if isOpener(toks[i].kind) {
+        let end = blockEnd(toks, i)
+        if end < toks.len {
+            return end + 1
+        }
+        return end
+    }
+    return i + 1
+}
+
+/// The index of the first non-whitespace token at or after `i`.
+pub fn skipWhitespace(toks: []Token, i: usize) usize {
+    var j = i
+    while j < toks.len && toks[j].kind == Tok.Whitespace {
+        j += 1
+    }
+    return j
+}
+
+struct Parser {
+    sheet: *mut Sheet
+    toks: []Token
+    media: Media
+    // A style rule (or a block at-rule) was met: `@import` is no longer
+    // allowed.
+    styled: bool
+    // The cascade layer of the rules being parsed (0: none), and their
+    // `@container` condition (1 + index; 0: none).
+    layer: u32
+    cond: u32
+    // Inside `@scope`: its start (the root's selectors) and limit.
+    scoped: bool
+    scope_start: SelRange
+    scope_limit: ?SelRange
+
+    // Rules in `lo..hi`.
+    fn rules(self: *mut Self, lo: usize, hi: usize, top: bool) AllocError!void {
+        var i = lo
+        while i < hi {
+            let k = self.toks[i].kind
+            if k == Tok.Whitespace || (top && (k == Tok.Cdo || k == Tok.Cdc)) {
+                i += 1
+            } else if k == Tok.AtKeyword {
+                i = try self.atRule(i, hi, null)
+            } else {
+                self.styled = true
+                i = try self.styleRule(i, hi, null)
+            }
+        }
+    }
+
+    // The contents of a conditional block: rules at the top level (or in
+    // `@media` and the like), declarations and nested rules in a style
+    // rule whose selectors are `parent`.
+    fn contents(self: *mut Self, lo: usize, hi: usize, parent: ?SelRange) AllocError!void {
+        if parent |sel| {
+            return self.block(lo, hi, sel)
+        }
+        return self.rules(lo, hi, false)
+    }
+
+    // The at-rule at `i` (in a style rule whose selectors are `parent`,
+    // when not null); returns the index after it.
+    fn atRule(self: *mut Self, i: usize, hi: usize, parent: ?SelRange) AllocError!usize {
+        let within = self.toks[..hi]
+        let name = self.toks[i].text
+        var j = i + 1
+        while j < hi {
+            let k = self.toks[j].kind
+            if k == Tok.Semicolon {
+                if text.eqlIgnoreCase(name, "import") && !self.styled && parent == null {
+                    try self.importRule(self.toks[i + 1..j])
+                } else if text.eqlIgnoreCase(name, "layer") {
+                    try self.layerNames(self.toks[i + 1..j])
+                }
+                return j + 1
+            }
+            if k == Tok.LBrace {
+                let close = blockEnd(within, j)
+                let prelude = self.toks[i + 1..j]
+                self.styled = true
+                if text.eqlIgnoreCase(name, "media") {
+                    if mediaListMatches(prelude, self.media) {
+                        try self.contents(j + 1, close, parent)
+                    }
+                } else if text.eqlIgnoreCase(name, "supports") {
+                    if try supportsMatches(self.sheet, prelude) {
+                        try self.contents(j + 1, close, parent)
+                    }
+                } else if text.eqlIgnoreCase(name, "layer") {
+                    let outer = self.layer
+                    self.layer = try self.layerOf(prelude)
+                    try self.contents(j + 1, close, parent)
+                    self.layer = outer
+                } else if text.eqlIgnoreCase(name, "container") {
+                    let outer = self.cond
+                    if try self.containerCondition(prelude) {
+                        try self.contents(j + 1, close, parent)
+                    }
+                    self.cond = outer
+                } else if text.eqlIgnoreCase(name, "scope") && parent == null {
+                    try self.scopeRule(prelude, j + 1, close)
+                } else if text.eqlIgnoreCase(name, "property") && parent == null {
+                    try self.propertyRule(prelude, j + 1, close)
+                }
+                return close + 1
+            }
+            j = skipComponent(within, j)
+        }
+        if text.eqlIgnoreCase(name, "import") && !self.styled && parent == null {
+            try self.importRule(self.toks[i + 1..hi])
+        } else if text.eqlIgnoreCase(name, "layer") {
+            try self.layerNames(self.toks[i + 1..hi])
+        }
+        return hi
+    }
+
+    // `@import url [layer|layer(...)] [supports(...)] [media];`: the URL
+    // goes to `Sheet.imports` when the conditions hold, with its layer.
+    fn importRule(self: *mut Self, toks: []Token) AllocError!void {
+        var i = skipWhitespace(toks, 0)
+        if i >= toks.len {
+            return
+        }
+        let t = toks[i]
+        var href: []u8 = ""
+        if t.kind == Tok.Url || t.kind == Tok.String {
+            href = t.text
+            i += 1
+        } else if t.kind == Tok.Function && text.eqlIgnoreCase(t.text, "url") {
+            let close = blockEnd(toks, i)
+            let s = skipWhitespace(toks, i + 1)
+            if s >= close || toks[s].kind != Tok.String {
+                return
+            }
+            href = toks[s].text
+            i = close + 1
+        } else {
+            return
+        }
+        i = skipWhitespace(toks, i)
+        var layer_start = toks.len
+        var layer_end = toks.len
+        var anonymous = false
+        if i < toks.len && toks[i].kind == Tok.Ident && text.eqlIgnoreCase(toks[i].text, "layer") {
+            anonymous = true
+            i = skipWhitespace(toks, i + 1)
+        } else if i < toks.len && toks[i].kind == Tok.Function && text.eqlIgnoreCase(toks[i].text, "layer") {
+            let close = blockEnd(toks, i)
+            layer_start = i + 1
+            layer_end = close
+            i = skipWhitespace(toks, skipComponent(toks, i))
+        }
+        if i < toks.len && toks[i].kind == Tok.Function && text.eqlIgnoreCase(toks[i].text, "supports") {
+            let close = blockEnd(toks, i)
+            if !(try supportsMatches(self.sheet, toks[i + 1..close])) && !(try supportsDeclaration(self.sheet, toks[i + 1..close])) {
+                return
+            }
+            i = skipWhitespace(toks, close + 1)
+        }
+        if i < toks.len && !mediaListMatches(toks[i..], self.media) {
+            return
+        }
+        var layer = self.layer
+        if anonymous {
+            layer = try self.sheet.newLayer(self.layer, "")
+        } else if layer_start < toks.len {
+            layer = (try self.layerPath(toks[layer_start..layer_end])) orelse return
+        }
+        try self.sheet.imports.append(href)
+        try self.sheet.import_layers.append(layer)
+    }
+
+    // ---- @layer
+
+    // `@layer a, b.c;`: declares the layers in this order.
+    fn layerNames(self: *mut Self, toks: []Token) AllocError!void {
+        var i: usize = 0
+        while i <= toks.len {
+            var j = i
+            while j < toks.len && toks[j].kind != Tok.Comma {
+                j += 1
+            }
+            _ = try self.layerPath(toks[i..j])
+            i = j + 1
+        }
+    }
+
+    // The layer of an `@layer` block: named by `prelude`, or a new
+    // anonymous one.
+    fn layerOf(self: *mut Self, prelude: []Token) AllocError!u32 {
+        if skipWhitespace(prelude, 0) >= prelude.len {
+            return self.sheet.newLayer(self.layer, "")
+        }
+        if try self.layerPath(prelude) |named| {
+            return named
+        }
+        return self.sheet.newLayer(self.layer, "")
+    }
+
+    // The layer `a.b.c` inside the current one (each part made when it
+    // is new); null when `toks` is not a layer name.
+    fn layerPath(self: *mut Self, toks: []Token) AllocError!?u32 {
+        var i = skipWhitespace(toks, 0)
+        var layer = self.layer
+        var any = false
+        while i < toks.len {
+            if toks[i].kind != Tok.Ident {
+                return null
+            }
+            let prefix = self.sheet.layers.items()[layer].name
+            var full = toks[i].text
+            if layer != 0 {
+                let a = self.sheet.arena.allocator()
+                let joined = try a.alloc(0 as u8, prefix.len + 1 + full.len)
+                mem.copy(joined[..prefix.len], prefix)
+                joined[prefix.len] = '.'
+                mem.copy(joined[prefix.len + 1..], full)
+                full = joined
+            }
+            layer = try self.sheet.layerNamed(layer, full)
+            any = true
+            i += 1
+            if i < toks.len && toks[i].kind == Tok.Delim && toks[i].delim == '.' {
+                i += 1
+                if i >= toks.len {
+                    return null
+                }
+            } else if skipWhitespace(toks, i) < toks.len {
+                return null
+            } else {
+                break
+            }
+        }
+        if !any {
+            return null
+        }
+        return layer
+    }
+
+    // ---- @container
+
+    // `@container [name] condition`: sets `cond` for the rules inside;
+    // false when the prelude is invalid.
+    fn containerCondition(self: *mut Self, prelude: []Token) AllocError!bool {
+        var i = skipWhitespace(prelude, 0)
+        var name: []u8 = ""
+        if i < prelude.len && prelude[i].kind == Tok.Ident && !text.eqlIgnoreCase(prelude[i].text, "not") {
+            name = prelude[i].text
+            i = skipWhitespace(prelude, i + 1)
+        }
+        if i >= prelude.len {
+            return false
+        }
+        try self.sheet.conditions.append(ContainerCondition { name: name, toks: prelude[i..], parent: self.cond })
+        self.cond = self.sheet.conditions.len() as u32
+        return true
+    }
+
+    // ---- @property
+
+    // `@property --name { syntax: ...; inherits: ...; initial-value: ... }`:
+    // `var(--name)` of an element without the property gets the initial
+    // value (`inherits` is not followed: registered properties inherit).
+    fn propertyRule(self: *mut Self, prelude: []Token, lo: usize, hi: usize) AllocError!void {
+        let k = skipWhitespace(prelude, 0)
+        if k >= prelude.len || prelude[k].kind != Tok.Ident || !text.startsWith(prelude[k].text, "--") || skipWhitespace(prelude, k + 1) < prelude.len {
+            return
+        }
+        let within = self.toks[..hi]
+        var i = lo
+        while i < hi {
+            var end = i
+            while end < hi && self.toks[end].kind != Tok.Semicolon {
+                end = skipComponent(within, end)
+            }
+            let n = skipWhitespace(within, i)
+            if n < end && self.toks[n].kind == Tok.Ident && text.eqlIgnoreCase(self.toks[n].text, "initial-value") {
+                let c = skipWhitespace(within, n + 1)
+                if c < end && self.toks[c].kind == Tok.Colon {
+                    let v = skipWhitespace(within, c + 1)
+                    try self.sheet.registered.put(prelude[k].text, self.toks[v..trimEnd(self.toks, v, end)])
+                }
+            }
+            i = end + 1
+        }
+    }
+
+    // ---- @scope
+
+    // `@scope [(start)] [to (limit)] { rules }`: the rules' selectors are
+    // relative to the scope's root. Without a start, the root is the
+    // style element's parent (`Sheet.scope_root`).
+    fn scopeRule(self: *mut Self, prelude: []Token, lo: usize, hi: usize) AllocError!void {
+        var i = skipWhitespace(prelude, 0)
+        var start: ?SelRange = null
+        var limit: ?SelRange = null
+        if i < prelude.len && prelude[i].kind == Tok.LParen {
+            let close = blockEnd(prelude, i)
+            start = (try parseSelectors(self.sheet, prelude[i + 1..close])) orelse return
+            i = skipWhitespace(prelude, close + 1)
+        }
+        if i < prelude.len {
+            if prelude[i].kind != Tok.Ident || !text.eqlIgnoreCase(prelude[i].text, "to") {
+                return
+            }
+            i = skipWhitespace(prelude, i + 1)
+            if i >= prelude.len || prelude[i].kind != Tok.LParen {
+                return
+            }
+            let close = blockEnd(prelude, i)
+            limit = (try parseSelectors(self.sheet, prelude[i + 1..close])) orelse return
+            if skipWhitespace(prelude, close + 1) < prelude.len {
+                return
+            }
+        }
+        if start == null {
+            if self.sheet.scope_root |el| {
+                start = try nodeSelector(self.sheet, el)
+            } else {
+                return
+            }
+        }
+        let was_scoped = self.scoped
+        let outer_start = self.scope_start
+        let outer_limit = self.scope_limit
+        self.scoped = true
+        self.scope_start = start.?
+        self.scope_limit = limit
+        try self.rules(lo, hi, false)
+        self.scoped = was_scoped
+        self.scope_start = outer_start
+        self.scope_limit = outer_limit
+    }
+
+    // ---- style rules
+
+    // The style rule at `i` (nested in a rule whose selectors are
+    // `parent`, when not null); returns the index after it.
+    fn styleRule(self: *mut Self, i: usize, hi: usize, parent: ?SelRange) AllocError!usize {
+        let within = self.toks[..hi]
+        var j = i
+        while j < hi && self.toks[j].kind != Tok.LBrace {
+            if parent != null && self.toks[j].kind == Tok.Semicolon {
+                // Not a rule after all: dropped up to the `;`.
+                return j + 1
+            }
+            j = skipComponent(within, j)
+        }
+        if j >= hi {
+            return hi
+        }
+        let close = blockEnd(within, j)
+        let prelude = self.toks[i..j]
+        var sel: ?SelRange = null
+        if parent |p| {
+            sel = try parseNestedSelectors(self.sheet, prelude, p)
+        } else if self.scoped {
+            sel = try parseScopedSelectors(self.sheet, prelude, self.scope_start, self.scope_limit)
+        } else {
+            sel = try parseSelectors(self.sheet, prelude)
+        }
+        if sel |r| {
+            try self.block(j + 1, close, r)
+        }
+        return close + 1
+    }
+
+    // The block of a style rule whose selectors are `sel`, in `lo..hi`:
+    // declarations, nested style rules and nested conditional at-rules
+    // (CSS Nesting). The declarations before a nested rule make a rule
+    // of their own, and so do those after it, in order.
+    fn block(self: *mut Self, lo: usize, hi: usize, sel: SelRange) AllocError!void {
+        let within = self.toks[..hi]
+        let rules_before = self.sheet.rules.len()
+        var first = self.sheet.decls.len()
+        var i = lo
+        while i < hi {
+            let k = self.toks[i].kind
+            if k == Tok.Whitespace || k == Tok.Semicolon {
+                i += 1
+                continue
+            }
+            if k == Tok.AtKeyword {
+                try self.flushRule(sel, first)
+                i = try self.atRule(i, hi, sel)
+                first = self.sheet.decls.len()
+                continue
+            }
+            var end = i
+            while end < hi && self.toks[end].kind != Tok.Semicolon && self.toks[end].kind != Tok.LBrace {
+                end = skipComponent(within, end)
+            }
+            if end < hi && self.toks[end].kind == Tok.LBrace && !self.isCustomDeclaration(i, hi) {
+                // A nested style rule.
+                try self.flushRule(sel, first)
+                i = try self.styleRule(i, hi, sel)
+                first = self.sheet.decls.len()
+                continue
+            }
+            while end < hi && self.toks[end].kind != Tok.Semicolon {
+                end = skipComponent(within, end)
+            }
+            if k == Tok.Ident {
+                try self.declaration(i, end)
+            }
+            i = end + 1
+        }
+        if self.sheet.rules.len() == rules_before && self.sheet.decls.len() == first {
+            // An empty rule still counts (`CSS.supports`, querySelector).
+            try self.sheet.rules.append(Rule { sel_start: sel.start, sel_end: sel.end, decl_start: first, decl_end: first, layer: self.layer, cond: self.cond, scoped: self.scoped })
+            return
+        }
+        try self.flushRule(sel, first)
+    }
+
+    // `--name:` at `i`: a custom property, whose value may hold `{}`.
+    fn isCustomDeclaration(self: *Self, i: usize, hi: usize) bool {
+        let t = self.toks[i]
+        if t.kind != Tok.Ident || !text.startsWith(t.text, "--") {
+            return false
+        }
+        let c = skipWhitespace(self.toks[..hi], i + 1)
+        return c < hi && self.toks[c].kind == Tok.Colon
+    }
+
+    // The declarations from `first` on (if any) make a rule with the
+    // selectors `sel`.
+    fn flushRule(self: *mut Self, sel: SelRange, first: usize) AllocError!void {
+        if self.sheet.decls.len() == first {
+            return
+        }
+        try self.sheet.rules.append(Rule {
+            sel_start: sel.start,
+            sel_end: sel.end,
+            decl_start: first,
+            decl_end: self.sheet.decls.len(),
+            layer: self.layer,
+            cond: self.cond,
+            scoped: self.scoped,
+        })
+    }
+
+    // Declarations in `lo..hi`, separated by `;` (a `style` attribute).
+    fn declarations(self: *mut Self, lo: usize, hi: usize) AllocError!void {
+        let within = self.toks[..hi]
+        var i = lo
+        while i < hi {
+            let k = self.toks[i].kind
+            if k == Tok.Whitespace || k == Tok.Semicolon {
+                i += 1
+                continue
+            }
+            var end = i
+            if k == Tok.AtKeyword {
+                // A nested at-rule: skipped, with its block.
+                end = i + 1
+                while end < hi && self.toks[end].kind != Tok.Semicolon && self.toks[end].kind != Tok.LBrace {
+                    end = skipComponent(within, end)
+                }
+                if end < hi && self.toks[end].kind == Tok.LBrace {
+                    end = blockEnd(within, end)
+                }
+                i = end + 1
+                continue
+            }
+            while end < hi && self.toks[end].kind != Tok.Semicolon {
+                end = skipComponent(within, end)
+            }
+            if k == Tok.Ident {
+                try self.declaration(i, end)
+            }
+            i = end + 1
+        }
+    }
+
+    // `name : value [!important]` in `lo..hi`.
+    fn declaration(self: *mut Self, lo: usize, hi: usize) AllocError!void {
+        let toks = self.toks[..hi]
+        var j = skipWhitespace(toks, lo + 1)
+        if j >= hi || toks[j].kind != Tok.Colon {
+            return
+        }
+        j = skipWhitespace(toks, j + 1)
+        var end = trimEnd(toks, j, hi)
+        var important = false
+        if end > j && toks[end - 1].kind == Tok.Ident && text.eqlIgnoreCase(toks[end - 1].text, "important") {
+            let bang = trimEnd(toks, j, end - 1)
+            if bang > j && toks[bang - 1].kind == Tok.Delim && toks[bang - 1].delim == '!' {
+                important = true
+                end = trimEnd(toks, j, bang - 1)
+            }
+        }
+        if end <= j {
+            return
+        }
+        try addDeclaration(self.sheet, toks[lo].text, toks[j..end], important)
+    }
+}
+
+// ---- @supports (CSS Conditional 3)
+
+/// Does the `@supports` condition `toks` hold? A declaration test holds
+/// when the property is known and its value parses; `selector()` holds;
+/// other functions do not.
+fn supportsMatches(sheet: *mut Sheet, toks: []Token) AllocError!bool {
+    var c = Supports { sheet: sheet, toks: toks, i: 0 }
+    let ok = try c.condition(toks.len)
+    return ok && skipWhitespace(toks, c.i) >= toks.len
+}
+
+// The inside of `supports(...)` in `@import`: a declaration without
+// parentheses is allowed there.
+fn supportsDeclaration(sheet: *mut Sheet, toks: []Token) AllocError!bool {
+    var c = Supports { sheet: sheet, toks: toks, i: 0 }
+    return c.declarationTest(toks)
+}
+
+struct Supports {
+    sheet: *mut Sheet
+    toks: []Token
+    i: usize
+
+    fn condition(self: *mut Self, end: usize) AllocError!bool {
+        self.i = skipWhitespace(self.toks[..end], self.i)
+        if self.i < end && self.isWord(self.i, "not") {
+            self.i += 1
+            return !(try self.inParens(end))
+        }
+        var v = try self.inParens(end)
+        while true {
+            self.i = skipWhitespace(self.toks[..end], self.i)
+            if self.i >= end {
+                return v
+            }
+            let and = self.isWord(self.i, "and")
+            if !and && !self.isWord(self.i, "or") {
+                self.i = end + 1
+                return false
+            }
+            self.i += 1
+            let w = try self.inParens(end)
+            if and {
+                v = v && w
+            } else {
+                v = v || w
+            }
+        }
+        return v
+    }
+
+    fn isWord(self: *Self, i: usize, word: []u8) bool {
+        let t = self.toks[i]
+        return t.kind == Tok.Ident && text.eqlIgnoreCase(t.text, word)
+    }
+
+    // `( condition )`, `( declaration )` or a function.
+    fn inParens(self: *mut Self, end: usize) AllocError!bool {
+        self.i = skipWhitespace(self.toks[..end], self.i)
+        if self.i >= end {
+            return false
+        }
+        let t = self.toks[self.i]
+        if t.kind == Tok.Function {
+            self.i = skipComponent(self.toks[..end], self.i)
+            return text.eqlIgnoreCase(t.text, "selector")
+        }
+        if t.kind != Tok.LParen {
+            self.i = end + 1
+            return false
+        }
+        let close = blockEnd(self.toks[..end], self.i)
+        let inner = self.toks[self.i + 1..close]
+        self.i = close + 1
+        let k = skipWhitespace(inner, 0)
+        if k < inner.len && inner[k].kind == Tok.Ident {
+            let colon = skipWhitespace(inner, k + 1)
+            if colon < inner.len && inner[colon].kind == Tok.Colon {
+                return self.declarationTest(inner)
+            }
+        }
+        var c = Supports { sheet: self.sheet, toks: inner, i: 0 }
+        let ok = try c.condition(inner.len)
+        return ok && skipWhitespace(inner, c.i) >= inner.len
+    }
+
+    // `name: value`: does it make a declaration?
+    fn declarationTest(self: *mut Self, toks: []Token) AllocError!bool {
+        let k = skipWhitespace(toks, 0)
+        if k >= toks.len || toks[k].kind != Tok.Ident {
+            return false
+        }
+        let colon = skipWhitespace(toks, k + 1)
+        if colon >= toks.len || toks[colon].kind != Tok.Colon {
+            return false
+        }
+        let v = skipWhitespace(toks, colon + 1)
+        let end = trimEnd(toks, v, toks.len)
+        if end <= v {
+            return false
+        }
+        let before = self.sheet.decls.len()
+        try addDeclaration(self.sheet, toks[k].text, toks[v..end], false)
+        let ok = self.sheet.decls.len() > before
+        while self.sheet.decls.len() > before {
+            _ = self.sheet.decls.pop()
+        }
+        return ok
+    }
+}
+
+// `hi` without the whitespace tokens before it (not going below `lo`).
+fn trimEnd(toks: []Token, lo: usize, hi: usize) usize {
+    var e = hi
+    while e > lo && toks[e - 1].kind == Tok.Whitespace {
+        e -= 1
+    }
+    return e
+}

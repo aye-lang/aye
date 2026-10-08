@@ -1,8 +1,8 @@
-//! `docs/spec.md`, the language reference that `ore spec` prints, cannot rot:
-//! every ```ore block is a complete program that `ore check` accepts, every
-//! ```ore-error block is one that it rejects, it indexes every std module
+//! `docs/spec.md`, the language reference that `aye spec` prints, cannot rot:
+//! every ```aye block is a complete program that `aye check` accepts, every
+//! ```aye-error block is one that it rejects, it indexes every std module
 //! and names every pub function of the modules it lists in full, std's pub
-//! functions have doc comments (what `ore doc --signatures std.m` prints for
+//! functions have doc comments (what `aye doc --signatures std.m` prints for
 //! the others), and it stays within about 30k tokens.
 
 use std::process::Command;
@@ -31,16 +31,16 @@ fn blocks(lang: &str) -> Vec<(usize, String)> {
 }
 
 #[test]
-fn ore_blocks_compile() {
-    let progs = blocks("ore");
-    assert!(progs.len() >= 10, "only {} ```ore blocks", progs.len());
+fn aye_blocks_compile() {
+    let progs = blocks("aye");
+    assert!(progs.len() >= 10, "only {} ```aye blocks", progs.len());
     for (line, code) in progs {
         // `@cimport` reads C headers with libclang (or its cache).
-        if code.contains("@cimport") && !ore::cimport::libclang_available() {
+        if code.contains("@cimport") && !aye::cimport::libclang_available() {
             println!("skipped docs/spec.md:{line}: no libclang");
             continue;
         }
-        if let Err(ds) = ore::driver::check("spec.ore", &code) {
+        if let Err(ds) = aye::driver::check("spec.aye", &code) {
             let ds: Vec<String> = ds.iter().map(|d| d.to_string()).collect();
             panic!("docs/spec.md:{line}: the block does not compile:\n{}\n{code}", ds.join("\n"));
         }
@@ -48,11 +48,11 @@ fn ore_blocks_compile() {
 }
 
 #[test]
-fn ore_error_blocks_fail() {
-    let progs = blocks("ore-error");
+fn aye_error_blocks_fail() {
+    let progs = blocks("aye-error");
     assert!(!progs.is_empty());
     for (line, code) in progs {
-        assert!(ore::driver::check("spec.ore", &code).is_err(), "docs/spec.md:{line}: the block compiles:\n{code}");
+        assert!(aye::driver::check("spec.aye", &code).is_err(), "docs/spec.md:{line}: the block compiles:\n{code}");
     }
 }
 
@@ -66,15 +66,15 @@ fn std_index() -> Vec<&'static str> {
 
 /// Every std module has a line in the index of section 15. A module with a
 /// `### std.m` section is marked "below"; any other names the command that
-/// prints its API, `ore doc --signatures std.m`.
+/// prints its API, `aye doc --signatures std.m`.
 #[test]
 fn spec_indexes_every_std_module() {
     let index = std_index();
-    for (module, _, _) in ore::module::STD_FILES {
+    for (module, _, _) in aye::module::STD_FILES {
         let line = index.iter().find(|l| l.split_whitespace().next() == Some(module));
         let line = line.unwrap_or_else(|| panic!("the index in docs/spec.md section 15 has no line for {module}"));
         let full = SPEC.contains(&format!("\n### {module}\n"));
-        let want = if full { "below".to_string() } else { format!("ore doc --signatures {module}") };
+        let want = if full { "below".to_string() } else { format!("aye doc --signatures {module}") };
         assert!(line.ends_with(&want), "the index line of {module} does not end with `{want}`: {line}");
     }
 }
@@ -83,7 +83,7 @@ fn spec_indexes_every_std_module() {
 /// methods as `name(`, such as `std.fs.open(` and `File.readAll(`.
 #[test]
 fn spec_sections_name_every_function() {
-    let api = ore::module::std_api();
+    let api = aye::module::std_api();
     let has = |m: &str, f: &str| api.iter().any(|(am, af)| am == m && af == f);
     assert!(has("std.fs", "std.fs.open") && has("std.fs", "File.readAll") && has("std.heap", "General.init"), "{api:?}");
     let missing: Vec<&String> = api
@@ -95,11 +95,11 @@ fn spec_sections_name_every_function() {
 }
 
 /// Every pub function and method in std's source has a `///` comment right
-/// above it, which `ore doc --signatures` prints with the signature.
+/// above it, which `aye doc --signatures` prints with the signature.
 #[test]
 fn std_functions_have_doc_comments() {
     let mut missing = Vec::new();
-    for (_, file, src) in ore::module::STD_FILES {
+    for (_, file, src) in aye::module::STD_FILES {
         let lines: Vec<&str> = src.lines().map(str::trim).collect();
         for (i, l) in lines.iter().enumerate() {
             if l.starts_with("pub fn ") && !(i > 0 && lines[i - 1].starts_with("///")) {
@@ -118,8 +118,8 @@ fn spec_is_small() {
 }
 
 #[test]
-fn ore_spec_prints_the_spec() {
-    let out = Command::new(env!("CARGO_BIN_EXE_ore")).arg("spec").output().unwrap();
+fn aye_spec_prints_the_spec() {
+    let out = Command::new(env!("CARGO_BIN_EXE_aye")).arg("spec").output().unwrap();
     assert!(out.status.success());
     assert_eq!(String::from_utf8_lossy(&out.stdout), SPEC);
 }

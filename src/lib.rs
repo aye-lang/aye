@@ -1,4 +1,4 @@
-//! Stage0 compiler for Ore: lexer -> parser (AST) -> modules (name
+//! Stage0 compiler for Aye: lexer -> parser (AST) -> modules (name
 //! resolution) -> sema (typed AST) -> OIR -> C.
 
 pub mod ast;

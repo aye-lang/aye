@@ -1643,7 +1643,7 @@ fn cimport_decl(g: GlobalDecl) -> Result<CImportDecl> {
     let ExprKind::Builtin { args, .. } = g.init.kind else { unreachable!() };
     let call_span = g.init.span;
     if g.is_pub {
-        return Err(Error::new(E0112, g.kw_span, "a `@cimport` cannot be `pub`: export Ore functions that wrap the C ones instead"));
+        return Err(Error::new(E0112, g.kw_span, "a `@cimport` cannot be `pub`: export Aye functions that wrap the C ones instead"));
     }
     if g.mutable {
         return Err(Error::new(E0112, g.kw_span, format!("a `@cimport` is named with `let`: `let {} = @cimport(...)`", g.name)));

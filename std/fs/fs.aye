@@ -1,0 +1,230 @@
+// std.fs: files, and the standard input, output and error streams.
+
+import std.mem.Allocator
+
+pub error OpenError { NotFound, AccessDenied, OpenFailed }
+pub error ReadError { ReadFailed, OutOfMemory }
+pub error WriteError { WriteFailed }
+pub error ReadFileError = OpenError || ReadError
+
+/// An open file: a file descriptor.
+pub struct File {
+    fd: i32
+
+    /// Read the rest of the file into new memory from `alloc` (free it with
+    /// `alloc.free`). An empty file gives the empty slice.
+    pub fn readAll(self: Self, alloc: Allocator) ReadError![]mut u8 {
+        var cap: usize = 4096
+        var buf = try alloc.alloc(0 as u8, cap)
+        var len: usize = 0
+        while true {
+            if len == cap {
+                let bigger = alloc.alloc(0 as u8, cap * 2) catch |e| {
+                    alloc.free(buf)
+                    return e
+                }
+                memcpy(bigger.ptr, buf.ptr, len)
+                alloc.free(buf)
+                buf = bigger
+                cap = cap * 2
+            }
+            let n = read(self.fd, buf[len..].ptr, cap - len)
+            if n < 0 {
+                alloc.free(buf)
+                return ReadError.ReadFailed
+            }
+            if n == 0 {
+                break
+            }
+            len += n as usize
+        }
+        if len == 0 {
+            alloc.free(buf)
+            return []mut u8{}
+        }
+        // The exact size, so that `alloc.free` of the result frees what was
+        // allocated.
+        let exact = alloc.resize(buf, len, 0) catch |e| {
+            alloc.free(buf)
+            return e
+        }
+        return exact
+    }
+
+    /// Write all of `bytes`. Output of `@print` is flushed first, so the
+    /// two stay in order.
+    pub fn write(self: Self, bytes: []u8) WriteError!void {
+        fflush([]u8{}.ptr)
+        var done: usize = 0
+        while done < bytes.len {
+            let n = write(self.fd, bytes[done..].ptr, bytes.len - done)
+            if n <= 0 {
+                return WriteError.WriteFailed
+            }
+            done += n as usize
+        }
+    }
+
+    /// Read at most `buf.len` bytes into `buf`: the number read, 0 at the
+    /// end of the file. Waits for input on a terminal or a pipe.
+    pub fn read(self: Self, buf: []mut u8) ReadError!usize {
+        let n = read(self.fd, buf.ptr, buf.len)
+        if n < 0 {
+            return ReadError.ReadFailed
+        }
+        return n as usize
+    }
+
+    /// A buffered reader of this file, for `readLine`; its buffer comes
+    /// from `alloc` (call `deinit`).
+    pub fn reader(self: Self, alloc: Allocator) Reader {
+        return Reader { file: self, alloc: alloc }
+    }
+
+    /// Closes the file.
+    pub fn close(self: Self) {
+        _ = close(self.fd)
+    }
+}
+
+/// Reads a file line by line through a buffer that grows to the longest
+/// line: `var r = std.fs.stdin().reader(alloc)`, then
+/// `while try r.readLine() |line| { ... }`.
+pub struct Reader {
+    file: File
+    alloc: Allocator
+    buf: []mut u8 = []mut u8{}
+    start: usize = 0
+    end: usize = 0
+    eof: bool = false
+
+    /// The next line, without its `\n` (or `\r\n`); null at the end of the
+    /// file (a last line without `\n` is a line too). It reads only as much
+    /// as it needs, so it answers each line of an interactive input as it
+    /// comes. The slice is valid until the next `readLine`.
+    pub fn readLine(self: *mut Self) ReadError!?[]u8 {
+        var scan = self.start
+        while true {
+            var i = scan
+            while i < self.end {
+                if self.buf[i] == '\n' {
+                    var stop = i
+                    if stop > self.start && self.buf[stop - 1] == '\r' {
+                        stop -= 1
+                    }
+                    let line = self.buf[self.start..stop]
+                    self.start = i + 1
+                    return line
+                }
+                i += 1
+            }
+            if self.eof {
+                if self.start == self.end {
+                    return null
+                }
+                let last = self.buf[self.start..self.end]
+                self.start = self.end
+                return last
+            }
+            // Keep the pending bytes at the start, and grow when full.
+            if self.start > 0 {
+                let pending = self.end - self.start
+                if pending > 0 {
+                    _ = memmove(self.buf.ptr, self.buf[self.start..].ptr, pending)
+                }
+                scan = pending
+                self.end = pending
+                self.start = 0
+            } else {
+                scan = self.end
+            }
+            if self.end == self.buf.len {
+                var cap: usize = 4096
+                if self.buf.len > 0 {
+                    cap = self.buf.len * 2
+                }
+                self.buf = try self.alloc.resize(self.buf, cap, 0)
+            }
+            let n = read(self.file.fd, self.buf[self.end..].ptr, self.buf.len - self.end)
+            if n < 0 {
+                return ReadError.ReadFailed
+            }
+            if n == 0 {
+                self.eof = true
+            } else {
+                self.end += n as usize
+            }
+        }
+        unreachable
+    }
+
+    /// Free the buffer.
+    pub fn deinit(self: *mut Self) {
+        self.alloc.free(self.buf)
+        self.buf = []mut u8{}
+        self.start = 0
+        self.end = 0
+    }
+}
+
+/// Open the file at `path` for reading.
+pub fn open(path: []u8) OpenError!File {
+    return openResult(aye_std_open(path.ptr, path.len))
+}
+
+// A descriptor, or -errno, as a `File` or an error.
+fn openResult(fd: i32) OpenError!File {
+    if fd == -2 {
+        return OpenError.NotFound
+    }
+    if fd == -13 {
+        return OpenError.AccessDenied
+    }
+    if fd < 0 {
+        return OpenError.OpenFailed
+    }
+    return File { fd: fd }
+}
+
+/// Create the file at `path` for writing, or empty it if it exists.
+pub fn create(path: []u8) OpenError!File {
+    return openResult(aye_std_create(path.ptr, path.len))
+}
+
+/// Is there a file or directory at `path`?
+pub fn exists(path: []u8) bool {
+    return aye_std_exists(path.ptr, path.len)
+}
+
+/// Read the whole file at `path` into new memory from `alloc` (free it
+/// with `alloc.free`).
+pub fn readFile(alloc: Allocator, path: []u8) ReadFileError![]mut u8 {
+    let f = try open(path)
+    defer f.close()
+    return f.readAll(alloc)
+}
+
+/// Standard input (file descriptor 0).
+pub fn stdin() File {
+    return File { fd: 0 }
+}
+
+/// Standard output (file descriptor 1).
+pub fn stdout() File {
+    return File { fd: 1 }
+}
+
+/// Standard error (file descriptor 2).
+pub fn stderr() File {
+    return File { fd: 2 }
+}
+
+extern fn aye_std_open(path: [*]u8, len: usize) i32
+extern fn aye_std_create(path: [*]u8, len: usize) i32
+extern fn aye_std_exists(path: [*]u8, len: usize) bool
+extern fn read(fd: i32, buf: [*]u8, n: usize) isize
+extern fn write(fd: i32, buf: [*]u8, n: usize) isize
+extern fn close(fd: i32) i32
+extern fn memcpy(dst: [*]u8, src: [*]u8, n: usize) [*]u8
+extern fn memmove(dst: [*]u8, src: [*]u8, n: usize) [*]u8
+extern fn fflush(stream: [*]u8) i32

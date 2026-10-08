@@ -1,2 +1,2 @@
-std_import.ore:1:1: fixed: add `import std.mem.Allocator`
-std_import.ore:2:1: fixed: add `import std.mem.AllocError`
+std_import.aye:1:1: fixed: add `import std.mem.Allocator`
+std_import.aye:2:1: fixed: add `import std.mem.AllocError`

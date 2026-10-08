@@ -1,4 +1,4 @@
-user_allocator.ore:37:24: error[E0105]: `NoFree` cannot be an `Allocator`: it has no method `free` (it needs `fn free(self: *mut Self, p: [*]u8, size: usize)`)
-user_allocator.ore:38:24: error[E0105]: `WrongFree` cannot be an `Allocator`: its method `free` must be `fn free(self: *mut Self, p: [*]u8, size: usize)`
-user_allocator.ore:39:24: error[E0105]: an `Allocator` is made from a `*mut Good` (write `&mut x`): its `alloc` and `free` take `self: *mut Self`
-user_allocator.ore:40:24: error[E0023]: mismatched types: expected `std.mem.Allocator`, found `Good` (an `Allocator` points to its data: write `&mut x`)
+user_allocator.aye:37:24: error[E0105]: `NoFree` cannot be an `Allocator`: it has no method `free` (it needs `fn free(self: *mut Self, p: [*]u8, size: usize)`)
+user_allocator.aye:38:24: error[E0105]: `WrongFree` cannot be an `Allocator`: its method `free` must be `fn free(self: *mut Self, p: [*]u8, size: usize)`
+user_allocator.aye:39:24: error[E0105]: an `Allocator` is made from a `*mut Good` (write `&mut x`): its `alloc` and `free` take `self: *mut Self`
+user_allocator.aye:40:24: error[E0023]: mismatched types: expected `std.mem.Allocator`, found `Good` (an `Allocator` points to its data: write `&mut x`)

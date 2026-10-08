@@ -29,7 +29,7 @@ which side won or why.
 **Good:** list each conflict in the merge message, as d1c8800, 0e7d95d
 and f68328a do:
 ```
-Conflicts: browser/engine/sheets.ore keeps the net branch's base URL,
+Conflicts: browser/engine/sheets.aye keeps the net branch's base URL,
 Referer and prefetch and the CSS branch's @import ...
 tests/browser.rs keeps both net_http and noscript_with_scripts.
 ```
@@ -70,13 +70,13 @@ merge, and the integrator's merge is trivial.
 **Context:** main renamed or removed a function that a branch's new code
 or tests still call.
 **Bad:** cff3f60 removed the workaround `labelIs` from
-`browser/encoding/encoding.ore` (gap #31 was fixed); the B8 encodings
+`browser/encoding/encoding.aye` (gap #31 was fixed); the B8 encodings
 branch had added tests with it (7e93451):
 ```
 @expect(labelIs("Shift_JIS", Encoding.ShiftJis))
 ```
 **Good:** the merge (576414f) rewrote the branch's lines to the current
-API, `browser/encoding/encoding.ore:462`:
+API, `browser/encoding/encoding.aye:462`:
 ```
 @expect(fromLabel("Shift_JIS") == Encoding.ShiftJis)
 ```
@@ -144,7 +144,7 @@ against Node instead (`244`, `245` found two real bugs).
 ### Build into your own worktree, not a shared scratch path
 **Context:** sub agents of one session share its scratchpad directory.
 **Bad:** on 2026-10-07 the pi-dynimport review agent built
-`ore build browser -o $SCRATCH/ak` at 03:25:47Z. At 03:25:55Z the
+`aye build browser -o $SCRATCH/ak` at 03:25:47Z. At 03:25:55Z the
 async-image agent, in another worktree (865305f, before ES modules),
 built `-o $SCRATCH/ak` too and finished last. The next test run used the
 other branch's binary: every `import()` threw "import is not defined".
@@ -187,15 +187,15 @@ the program itself uses.
 ## Compiler gaps
 
 ### Record a compiler limitation in browser/COMPILER_GAPS.md
-**Context:** the browser needs something Ore or std does not do, or does
+**Context:** the browser needs something Aye or std does not do, or does
 badly.
 **Bad:** a silent local workaround; the language never hears of it.
 **Good:** add a numbered entry with **Need**, **Repro**,
 **Workaround**, **Hit by** and **Status**
 (`browser/COMPILER_GAPS.md:8`). The language milestones take their work
 from that list (`docs/milestones.md:186`, M9.5: "The browser written in
-Ore recorded what hurt ... Fix those in the compiler and std").
-**Why:** the browser is Ore's test case; its gap list is the language's
+Aye recorded what hurt ... Fix those in the compiler and std").
+**Why:** the browser is Aye's test case; its gap list is the language's
 to-do list.
 
 ### Remove the workaround once the milestone lands
@@ -205,7 +205,7 @@ uses the workaround" (for example #31, `Interp.hasClass` in js,
 `browser/COMPILER_GAPS.md:401`).
 **Good:** replace the workaround and update the entry's status, as
 cff3f60 ("Gaps: drop browser workarounds for gaps that are fixed") and
-cb93543 (`browser/js/js.ore:18`, `let pthread = @cimport("pthread.h")`
+cb93543 (`browser/js/js.aye:18`, `let pthread = @cimport("pthread.h")`
 instead of hand-written prototypes with a 128-byte guess) do.
 **Why:** a workaround left behind keeps the cost the fix removed and
 teaches the next agent the old idiom.
@@ -216,7 +216,7 @@ teaches the next agent the old idiom.
 - `git merge main`, conflicts resolved and listed in the
   merge message.
 - `cargo build --release`
-- `target/release/ore check browser` (prints nothing on success)
+- `target/release/aye check browser` (prints nothing on success)
 - `cargo test --release` (the full suite; `cargo test --release --test
   browser` alone is not enough)
 - `browser/build.sh` (fast mode, to `target/anyknown` in this

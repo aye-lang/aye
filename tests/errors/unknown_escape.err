@@ -1,1 +1,1 @@
-unknown_escape.ore:2:16: error[E0005]: unknown escape sequence `\q`
+unknown_escape.aye:2:16: error[E0005]: unknown escape sequence `\q`

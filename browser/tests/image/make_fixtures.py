@@ -9,7 +9,7 @@ are there). The tests themselves only read the files it writes:
   pixels (raw RGBA8, rows top to bottom, no header).
 - manifest.txt: one line per image, "FILE WIDTH HEIGHT CHECK", where CHECK
   is `exact` (the decoder must match NAME.rgba byte for byte), `jpeg` (a
-  tolerance, see browser/image/tests.ore) or the error the decoder must
+  tolerance, see browser/image/tests.aye) or the error the decoder must
   return (`invalid`, `unsupported`; WIDTH and HEIGHT are 0 then).
 
 PNGs are encoded here (chunks and zlib written by hand) so that every color

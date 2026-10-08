@@ -1,7 +1,7 @@
-globals.ore:5:14: error[E0089]: a global's initializer must be a constant: literals, `let` constants, operators, `as` casts, and array, struct and enum literals (no calls)
-globals.ore:7:9: error[E0089]: `B` is defined in terms of itself
-globals.ore:9:9: error[E0089]: `counter` is a `var`: a global's initializer can use only `let` constants
-globals.ore:10:17: error[E0089]: integer overflow in a constant: `300` does not fit in `u8`
-globals.ore:11:16: error[E0089]: shift amount `40` is out of range for `i32` (0 to 31)
-globals.ore:15:5: error[E0032]: cannot assign to `LIMIT`: it is a constant (declare it with `var`)
-globals.ore:17:5: error[E0016]: `LIMIT` is already declared at 12:5 (shadowing is not allowed)
+globals.aye:5:14: error[E0089]: a global's initializer must be a constant: literals, `let` constants, operators, `as` casts, and array, struct and enum literals (no calls)
+globals.aye:7:9: error[E0089]: `B` is defined in terms of itself
+globals.aye:9:9: error[E0089]: `counter` is a `var`: a global's initializer can use only `let` constants
+globals.aye:10:17: error[E0089]: integer overflow in a constant: `300` does not fit in `u8`
+globals.aye:11:16: error[E0089]: shift amount `40` is out of range for `i32` (0 to 31)
+globals.aye:15:5: error[E0032]: cannot assign to `LIMIT`: it is a constant (declare it with `var`)
+globals.aye:17:5: error[E0016]: `LIMIT` is already declared at 12:5 (shadowing is not allowed)

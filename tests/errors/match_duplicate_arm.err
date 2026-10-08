@@ -1,1 +1,1 @@
-match_duplicate_arm.ore:7:9: error[E0057]: variant `Color.Red` is already matched by an earlier arm
+match_duplicate_arm.aye:7:9: error[E0057]: variant `Color.Red` is already matched by an earlier arm

@@ -1,6 +1,6 @@
 # anyknown
 
-A web browser written in Ore, for people and AI agents at once. The
+A web browser written in Aye, for people and AI agents at once. The
 design, the milestones and their state are in `docs/browser.md`; the
 agent protocol is in `docs/agent-protocol.md`.
 
@@ -10,12 +10,12 @@ From the repository root, with SDL2, FreeType and libcurl installed
 (`pkg-config` must find them); HarfBuzz (text shaping: Arabic, Indic
 scripts, icon font ligatures) and libbrotlidec (WOFF 2 web fonts) are
 used when they are installed. The first build also needs libclang, for the
-`@cimport` of `pthread.h` in `js/js.ore` (macOS has it with the Command
-Line Tools; later builds read the declarations from `~/.cache/ore`):
+`@cimport` of `pthread.h` in `js/js.aye` (macOS has it with the Command
+Line Tools; later builds read the declarations from `~/.cache/aye`):
 
 ```
 cargo build --release
-target/release/ore build browser -o anyknown
+target/release/aye build browser -o anyknown
 ./anyknown https://example.com/                 # a window
 ./anyknown dump --md https://example.com/       # the page as Markdown
 ./anyknown dump --a11y https://example.com/     # the accessibility tree

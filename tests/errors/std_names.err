@@ -1,3 +1,3 @@
-std_names.ore:4:16: error[E0084]: `Allocator` is not declared: it is `std.mem.Allocator` (add `import std.mem.Allocator`)
-std_names.ore:4:27: error[E0084]: `AllocError` is not declared: it is `std.mem.AllocError` (add `import std.mem.AllocError`)
-std_names.ore:9:15: error[E0084]: `General` is not declared: it is `std.heap.General` (add `import std.heap.General`)
+std_names.aye:4:16: error[E0084]: `Allocator` is not declared: it is `std.mem.Allocator` (add `import std.mem.Allocator`)
+std_names.aye:4:27: error[E0084]: `AllocError` is not declared: it is `std.mem.AllocError` (add `import std.mem.AllocError`)
+std_names.aye:9:15: error[E0084]: `General` is not declared: it is `std.heap.General` (add `import std.heap.General`)

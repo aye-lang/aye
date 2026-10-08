@@ -1,1 +1,1 @@
-try_outside.ore:8:12: error[E0062]: `try` can only be used in a function that returns an error union (`E!T` or `!T`)
+try_outside.aye:8:12: error[E0062]: `try` can only be used in a function that returns an error union (`E!T` or `!T`)

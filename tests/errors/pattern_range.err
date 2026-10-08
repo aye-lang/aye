@@ -1,1 +1,1 @@
-pattern_range.ore:3:12: error[E0006]: a range pattern includes its end: write `lo..=hi`
+pattern_range.aye:3:12: error[E0006]: a range pattern includes its end: write `lo..=hi`

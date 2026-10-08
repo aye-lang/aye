@@ -44,12 +44,12 @@ const MAX_DIAGS: usize = 50;
 pub struct Root {
     pub files: Vec<SourceFile>,
     pub base: PathBuf,
-    /// The examples of doc comments are tests (`ore test`).
+    /// The examples of doc comments are tests (`aye test`).
     pub doc_tests: bool,
 }
 
 impl Root {
-    /// The root module at `path`: a directory (every `.ore` file in it), or
+    /// The root module at `path`: a directory (every `.aye` file in it), or
     /// a single file, which is a module of its own (the other files in its
     /// directory are not part of it). Imports are found in the directory.
     pub fn load(path: &str) -> Result<Root, String> {
@@ -61,11 +61,11 @@ impl Root {
         let mut names: Vec<PathBuf> = std::fs::read_dir(p)
             .map_err(|e| format!("cannot read {path}: {e}"))?
             .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|f| f.is_file() && f.extension().is_some_and(|e| e == "ore"))
+            .filter(|f| f.is_file() && f.extension().is_some_and(|e| e == "aye"))
             .collect();
         names.sort();
         if names.is_empty() {
-            return Err(format!("{path} has no .ore files"));
+            return Err(format!("{path} has no .aye files"));
         }
         let mut files = Vec::new();
         for f in names {
@@ -91,7 +91,7 @@ pub struct Checked {
 }
 
 /// Run the front end (lexer, parser, module resolution, sema) on a single
-/// file. Used by `ore check` and the tests; requires `pub fn main()` unless
+/// file. Used by `aye check` and the tests; requires `pub fn main()` unless
 /// the file has `test` blocks.
 pub fn check(file_name: &str, src: &str) -> Result<sema::Program, Vec<Diag>> {
     front_end(Root::single(file_name, src), None).result
@@ -197,7 +197,7 @@ pub fn link_available(name: &str) -> bool {
     if Command::new("pkg-config").args(["--exists", name]).status().is_ok_and(|s| s.success()) {
         return true;
     }
-    let exe = std::env::temp_dir().join(format!("ore-link-{}-{name}", std::process::id()));
+    let exe = std::env::temp_dir().join(format!("aye-link-{}-{name}", std::process::id()));
     let child = Command::new("clang")
         .args(["-x", "c", "-", "-o"])
         .arg(&exe)
@@ -254,7 +254,7 @@ pub enum TestError {
     Run(String),
 }
 
-/// `ore test`: compile the tests of every module of the program (std's
+/// `aye test`: compile the tests of every module of the program (std's
 /// aside) and run each one in its own process, so that a panic ends only
 /// that test. Only tests whose shown name (`name`, `module: name`)
 /// contains `filter` run, and with `module`, only those of that module.
@@ -275,7 +275,7 @@ pub fn run_tests(root: Root, mode: Mode, filter: &str, module: Option<&str>, cfl
         let list = if with.is_empty() { "none".to_string() } else { with.join(", ") };
         return Err(TestError::Run(format!("no tests in module `{m}` (modules with tests: {list})")));
     }
-    let exe = std::env::temp_dir().join(format!("ore-test-{}", std::process::id()));
+    let exe = std::env::temp_dir().join(format!("aye-test-{}", std::process::id()));
     cc(&c, &exe, mode).map_err(TestError::Run)?;
     let mut results = Vec::new();
     for (i, test) in tests.into_iter().enumerate() {
@@ -349,7 +349,7 @@ fn parse_failures(files: &[String], stderr: &str) -> Vec<Failure> {
 }
 
 impl TestResult {
-    /// One entry of the `tests` array in `ore test --json`.
+    /// One entry of the `tests` array in `aye test --json`.
     pub fn to_json(&self) -> String {
         let failures: Vec<String> = self
             .failures
@@ -439,7 +439,7 @@ mod tests {
     #[test]
     fn link_flags_for_frameworks_libraries_and_packages() {
         let flags = |names: &[&str]| link_flags(&names.iter().map(|n| n.to_string()).collect::<Vec<_>>());
-        assert_eq!(flags(&["framework:Cocoa", "ore_no_such_library"]), ["-framework", "Cocoa", "-lore_no_such_library"]);
+        assert_eq!(flags(&["framework:Cocoa", "aye_no_such_library"]), ["-framework", "Cocoa", "-laye_no_such_library"]);
         // A package that pkg-config knows gives its flags.
         if Command::new("pkg-config").args(["--exists", "libcurl"]).status().is_ok_and(|s| s.success()) {
             assert!(flags(&["libcurl"]).iter().any(|f| f == "-lcurl"));

@@ -1,10 +1,10 @@
-# Ore 語言設計文件（草案）
+# Aye 語言設計文件（草案）
 
 Oct 5, 2026 · @Solemnis
 
 ## 目標與非目標
 
-Ore（暫定名）是一門沒有 GC、以 explicit allocator 為核心的系統語言，同時服務兩個用途：通用系統程式（CLI、server、工具），以及 anyknown browser 自家引擎的實作語言。第二個用途是設計的壓力測試：引擎需要的東西（可預測延遲、圖狀資料結構、大量 C 函式庫、多執行緒）決定了大部分取捨。
+Aye（暫定名）是一門沒有 GC、以 explicit allocator 為核心的系統語言，同時服務兩個用途：通用系統程式（CLI、server、工具），以及 anyknown browser 自家引擎的實作語言。第二個用途是設計的壓力測試：引擎需要的東西（可預測延遲、圖狀資料結構、大量 C 函式庫、多執行緒）決定了大部分取捨。
 
 **目標**
 
@@ -12,28 +12,28 @@ Ore（暫定名）是一門沒有 GC、以 explicit allocator 為核心的系統
 - **零成本 C 互通**：直接呼叫 C ABI，不需要 wrapper 或 marshalling。引擎會大量依賴既有 C/C++ 函式庫。
 - **預設安全檢查**：debug 與 safe-release 模式下做 bounds、overflow、null、use-after-free 偵測；只有 fast-release 關掉。
 - **編譯快**：debug build 的迭代速度優先於 release 的極致最佳化。
-- **單一工具鏈**：`ore build / run / test / fmt / doc`，跟 Go 一樣不需要外部建置工具。
-- **AI 協作優先**：AI agent 寫的 Ore 要能一次寫對，寫錯時靠編譯器回饋就能修好。見「AI 協作」一節。
+- **單一工具鏈**：`aye build / run / test / fmt / doc`，跟 Go 一樣不需要外部建置工具。
+- **AI 協作優先**：AI agent 寫的 Aye 要能一次寫對，寫錯時靠編譯器回饋就能修好。見「AI 協作」一節。
 
 **非目標**
 
 - 不做 GC，也不做 Rust 式 borrow checker。
 - 不做 exception、繼承、文字巨集。
-- 不取代 JavaScript：網頁內容的腳本語言仍是 JS，Ore 只寫引擎本身。
+- 不取代 JavaScript：網頁內容的腳本語言仍是 JS，Aye 只寫引擎本身。
 - 1.0 之前不保證語法與 ABI 穩定。
 
 ## 設計原則與定位
 
-Ore 的定位是「Zig 的記憶體模型 + Go 的簡單與工具鏈 + Rust 的 tagged union」，其餘功能一律先不加。
+Aye 的定位是「Zig 的記憶體模型 + Go 的簡單與工具鏈 + Rust 的 tagged union」，其餘功能一律先不加。
 
 1. **沒有隱藏配置**：會配置記憶體的函式一定接收 `Allocator` 參數。
 2. **沒有隱藏控制流**：沒有 exception、沒有一般性的 operator overloading、沒有自動執行的 destructor。清理靠我們看得到的 `defer`。
-3. **編譯期執行取代巨集**：泛型與程式碼產生都用 `comptime` 寫一般的 Ore，不另外發明巨集語言。
+3. **編譯期執行取代巨集**：泛型與程式碼產生都用 `comptime` 寫一般的 Aye，不另外發明巨集語言。
 4. **C 是一等公民**：C ABI、C header、C 工具鏈（clang 的最佳化與 sanitizer）都直接用。
-5. **一件事一種寫法**：語法小到能在一個週末學完，格式由 `ore fmt` 決定，沒有討論空間。
+5. **一件事一種寫法**：語法小到能在一個週末學完，格式由 `aye fmt` 決定，沒有討論空間。
 6. **為 AI 寫碼設計**：新語言沒有訓練資料，只能靠三件事補：語法像 AI 已經熟悉的語言、整份規格放得進一個 context、編譯器回饋精確到可以照著改。語法取捨有疑義時，選 AI 最不容易寫錯的寫法。
 
-| 語言 | 記憶體 | 泛型 | 錯誤處理 | Ore 借用 | Ore 不採用 |
+| 語言 | 記憶體 | 泛型 | 錯誤處理 | Aye 借用 | Aye 不採用 |
 | --- | --- | --- | --- | --- | --- |
 | Go | GC | type parameters | 多回傳值 `error` | 簡單語法、單一工具鏈、目錄即套件、`defer` | GC、goroutine runtime、interface 隱式 boxing |
 | Zig | 手動 + allocator 參數 | `comptime` | error union | allocator 參數、`comptime`、`errdefer`、C 互通、三種 build mode | `anytype` duck typing（錯誤訊息難讀） |
@@ -114,7 +114,7 @@ Ore 的定位是「Zig 的記憶體模型 + Go 的簡單與工具鏈 + Rust 的 
 
 **範例一：allocator、`defer`、錯誤處理**
 
-```ore
+```aye
 import std
 import std.mem.Allocator
 
@@ -146,7 +146,7 @@ pub fn main() !void {
 
 **範例二：tagged union 與窮舉 `match`**
 
-```ore
+```aye
 enum Shape {
     Circle { center: Point, r: f32 }
     Rect { min: Point, max: Point }
@@ -162,7 +162,7 @@ fn area(s: Shape) f32 {
 
 **範例三：`comptime` 泛型與 handle**
 
-```ore
+```aye
 pub fn Pool(comptime T: type) type {
     return struct {
         slots: []Slot(T)
@@ -186,18 +186,18 @@ if nodes.get(target) |node| {
 
 ## 模組、套件與建置
 
-一個目錄是一個模組（Go 的規則），建置腳本用 Ore 寫（Zig 的規則），相依套件用內容雜湊鎖定。
+一個目錄是一個模組（Go 的規則），建置腳本用 Aye 寫（Zig 的規則），相依套件用內容雜湊鎖定。
 
-- **模組**：同一目錄的 `.ore` 檔共用一個命名空間，只有 `pub` 的東西會導出。沒有 header 檔，模組之間不允許循環 import。
-- **建置腳本**：`build.ore` 在編譯期直譯執行，宣告 target、相依套件、要連結的 C 函式庫。不需要 Make、CMake。
-- **相依套件**：`build.ore` 寫來源 URL，`ore.lock` 記錄內容雜湊。沒有中央 registry，第一版也不做版本解析。
-- **測試**：`test "名稱" { ... }` 直接寫在原始碼旁邊，`ore test` 執行。測試預設用 debug allocator，leak 就是測試失敗。
+- **模組**：同一目錄的 `.aye` 檔共用一個命名空間，只有 `pub` 的東西會導出。沒有 header 檔，模組之間不允許循環 import。
+- **建置腳本**：`build.aye` 在編譯期直譯執行，宣告 target、相依套件、要連結的 C 函式庫。不需要 Make、CMake。
+- **相依套件**：`build.aye` 寫來源 URL，`aye.lock` 記錄內容雜湊。沒有中央 registry，第一版也不做版本解析。
+- **測試**：`test "名稱" { ... }` 直接寫在原始碼旁邊，`aye test` 執行。測試預設用 debug allocator，leak 就是測試失敗。
 - **Build mode**：`debug`（全部檢查、不最佳化）、`safe`（最佳化 + 檢查）、`fast`（最佳化、關掉檢查）。也可以用 `@setSafety(off)` 對單一熱路徑關掉檢查。
-- **交叉編譯**：`ore build --target aarch64-macos`。第一階段由 clang 處理 target，見編譯器架構一節。
+- **交叉編譯**：`aye build --target aarch64-macos`。第一階段由 clang 處理 target，見編譯器架構一節。
 
 ## AI 協作
 
-**決策：「AI agent 能一次寫對，寫錯時能靠編譯器回饋修好」是語言與工具鏈的驗收標準之一。** AI 對 Ore 的認識只會有三個來源：Ore 跟既有語言有多像、工具鏈附帶的規格、編譯器與測試的回饋。這三個來源都要刻意設計。
+**決策：「AI agent 能一次寫對，寫錯時能靠編譯器回饋修好」是語言與工具鏈的驗收標準之一。** AI 對 Aye 的認識只會有三個來源：Aye 跟既有語言有多像、工具鏈附帶的規格、編譯器與測試的回饋。這三個來源都要刻意設計。
 
 **語言層規則**
 
@@ -214,22 +214,22 @@ if nodes.get(target) |node| {
 
 **工具鏈層規則**
 
-- **規格隨工具鏈發布**：`ore spec` 輸出單一文件，內容是語法與型別規則，控制在約 20k tokens 以內，版本跟編譯器綁定。`ore doc --signatures <module>` 輸出 std 某個模組的公開簽章。AI agent 開始工作前，先把這兩份放進 context。
-- **機器可讀的診斷**：`ore check --json` 為每個錯誤輸出固定的錯誤代碼（例如 `E0312`）、位置範圍、訊息，以及可以直接套用的修正（fix-it：檔案、範圍、替換文字）。`ore explain E0312` 給出錯誤範例與正確寫法。
+- **規格隨工具鏈發布**：`aye spec` 輸出單一文件，內容是語法與型別規則，控制在約 20k tokens 以內，版本跟編譯器綁定。`aye doc --signatures <module>` 輸出 std 某個模組的公開簽章。AI agent 開始工作前，先把這兩份放進 context。
+- **機器可讀的診斷**：`aye check --json` 為每個錯誤輸出固定的錯誤代碼（例如 `E0312`）、位置範圍、訊息，以及可以直接套用的修正（fix-it：檔案、範圍、替換文字）。`aye explain E0312` 給出錯誤範例與正確寫法。
 - **一次回報所有錯誤**：parser 與 sema 要能從錯誤中恢復，把錯誤全部回報，而不是只報第一個。AI 每修一輪就要付出一次完整編譯的成本。
-- **`ore check` 要快**：只跑前端、不產生 C，中型模組的目標是 1 秒以內。這是 AI 迭代迴圈的最內圈。
-- **`ore fix`**：套用所有機械性的 fix-it，也負責 1.0 之前的語法遷移（把舊語法改寫成新語法），AI 記得的舊寫法不會卡住建置。
-- **測試輸出可機讀**：`ore test --json` 與 `--filter`。失敗時輸出 assertion 兩邊的值、panic 位置與 error return trace。doc comment 裡的範例程式碼也會被當成測試執行，文件不會跟實作脫節。
-- **`ore fmt` 沒有任何選項**：同一個 AST 只有一種輸出，AI 產生的 diff 不會混入格式雜訊。
+- **`aye check` 要快**：只跑前端、不產生 C，中型模組的目標是 1 秒以內。這是 AI 迭代迴圈的最內圈。
+- **`aye fix`**：套用所有機械性的 fix-it，也負責 1.0 之前的語法遷移（把舊語法改寫成新語法），AI 記得的舊寫法不會卡住建置。
+- **測試輸出可機讀**：`aye test --json` 與 `--filter`。失敗時輸出 assertion 兩邊的值、panic 位置與 error return trace。doc comment 裡的範例程式碼也會被當成測試執行，文件不會跟實作脫節。
+- **`aye fmt` 沒有任何選項**：同一個 AST 只有一種輸出，AI 產生的 diff 不會混入格式雜訊。
 - **執行期錯誤可以定位**：panic 一律輸出 `file:line:col: panic: <reason>`，debug 模式另外附上 error return trace。
 
 **代價**：錯誤恢復、fix-it、JSON 診斷都是編譯器前端額外的工程；禁止遮蔽、`pub` 函式必須寫錯誤集，會讓手寫的程式碼稍微囉嗦。換來的是 AI 寫錯時，錯誤在編譯期就以「照著改就好」的形式出現，不會拖到執行期才浮現。
 
-**跟 stage0 現況的差距**（P0 閘門前補上）：stage0 已禁止遮蔽，有 `ore check --json`、錯誤恢復（一次回報所有錯誤）、錯誤代碼（`ore explain`）與 fix-it（`--json` 的 `fixes`、`ore fix`）。
+**跟 stage0 現況的差距**（P0 閘門前補上）：stage0 已禁止遮蔽，有 `aye check --json`、錯誤恢復（一次回報所有錯誤）、錯誤代碼（`aye explain`）與 fix-it（`--json` 的 `fixes`、`aye fix`）。
 
 **M5 閘門測試紀錄（2026-10-05）**
 
-題目是 JSON tokenizer：從檔案或 stdin 讀入，每行輸出一個 token；遇到第一個錯誤時，以 `error: line:col: message` 回報並以狀態 1 結束；不得有記憶體洩漏。題目不用 `wc`，因為 `ore spec` 的完整 CLI 範例幾乎就是 `wc`。兩個彼此獨立的全新 session 各寫一次，都只拿到 `ore spec` 的輸出，唯一能跑的指令是 `ore check`（每次呼叫都會記錄），不能執行程式。check 通過後，再用 14 個行為案例驗證：12 個 JSON 輸入（含 9 種錯誤路徑）、stdin、檔案不存在，以 debug 模式建置，會檢查洩漏。
+題目是 JSON tokenizer：從檔案或 stdin 讀入，每行輸出一個 token；遇到第一個錯誤時，以 `error: line:col: message` 回報並以狀態 1 結束；不得有記憶體洩漏。題目不用 `wc`，因為 `aye spec` 的完整 CLI 範例幾乎就是 `wc`。兩個彼此獨立的全新 session 各寫一次，都只拿到 `aye spec` 的輸出，唯一能跑的指令是 `aye check`（每次呼叫都會記錄），不能執行程式。check 通過後，再用 14 個行為案例驗證：12 個 JSON 輸入（含 9 種錯誤路徑）、stdin、檔案不存在，以 debug 模式建置，會檢查洩漏。
 
 | Session | check 輪數 | 錯誤 | 行為案例 |
 | --- | --- | --- | --- |
@@ -263,23 +263,23 @@ if nodes.get(target) |node| {
 
 ## C 互通與 browser 引擎整合
 
-Ore 與 C 之間沒有邊界成本；與 JS engine 之間的邊界由 `Handle(T)` + 引用計數守住，JS 永遠拿不到 Ore 的裸指標。
+Aye 與 C 之間沒有邊界成本；與 JS engine 之間的邊界由 `Handle(T)` + 引用計數守住，JS 永遠拿不到 Aye 的裸指標。
 
 **C 互通**
 
 - `extern fn` 宣告 C 函式，`extern struct` 保證 C 配置，`[*]T` 對應 C 指標。
 - 第一階段因為輸出的是 C，宣告可以直接對應到 header 的 `#include`，不必重寫型別配置。
 - 第二階段加入 `cimport "foo.h"`，用 libclang 讀 header 自動產生宣告。
-- Ore 函式加上 `pub extern` 就能以 C ABI 導出，讓既有 C/C++ 程式碼反過來呼叫。
+- Aye 函式加上 `pub extern` 就能以 C ABI 導出，讓既有 C/C++ 程式碼反過來呼叫。
 
 **JS 邊界（無論 JS engine 是自製還是嵌入）**
 
-1. DOM node 活在 Ore 的 `Pool(Node)` 裡。JS wrapper 物件只存 `Handle(Node)`（64 bit）。
+1. DOM node 活在 Aye 的 `Pool(Node)` 裡。JS wrapper 物件只存 `Handle(Node)`（64 bit）。
 2. 每個 slot 有一個 `js_refs` 計數。wrapper 建立時加一，被 JS GC 回收時（finalizer）減一。
 3. node 只有在「已從樹上移除」且 `js_refs == 0` 時才真的釋放。
 4. 就算邏輯有 bug，wrapper 拿過期的 handle 解參照也只會拿到 `null`，可以轉成 JS 例外，不會造成 use-after-free。
 
-**Binding 產生**：WebIDL → Ore binding 的產生器是工具，不是語言功能。它用 `comptime` 或獨立的 codegen 實作，待引擎需求確定後再設計。
+**Binding 產生**：WebIDL → Aye binding 的產生器是工具，不是語言功能。它用 `comptime` 或獨立的 codegen 實作，待引擎需求確定後再設計。
 
 ## 編譯器架構與後端
 
@@ -298,10 +298,10 @@ Ore 與 C 之間沒有邊界成本；與 JS engine 之間的邊界由 `Handle(T)
 
 **代價與對策**
 
-- C 的 undefined behavior：輸出時加 `-fwrapv -fno-strict-aliasing`，溢位與 bounds 檢查由 Ore 自己生成，不交給 C 語意。
+- C 的 undefined behavior：輸出時加 `-fwrapv -fno-strict-aliasing`，溢位與 bounds 檢查由 Aye 自己生成，不交給 C 語意。
 - 編譯速度受 clang 限制：第四階段的 native backend 就是為了 debug build 的速度；release 仍走 C + clang。
 
-**為什麼 stage0 用 Rust**：AST 與 IR 最適合用 enum + `match` 表達，Rust 有而且穩定。Zig 尚未 1.0，每版都有 breaking change；Go 沒有 sum type。std 成熟後再用 Ore 重寫自己（自舉）。
+**為什麼 stage0 用 Rust**：AST 與 IR 最適合用 enum + `match` 表達，Rust 有而且穩定。Zig 尚未 1.0，每版都有 breaking change；Go 沒有 sum type。std 成熟後再用 Aye 重寫自己（自舉）。
 
 ## Roadmap 與待決問題
 
@@ -309,13 +309,13 @@ Ore 與 C 之間沒有邊界成本；與 JS engine 之間的邊界由 `Handle(T)
 
 &#91;embedded content: Roadmap · 5 個階段，每段一個閘門\]
 
-P3 是關鍵：只有在真實引擎程式碼上驗證過記憶體模型與 JS 邊界，才決定引擎是否全面採用 Ore。
+P3 是關鍵：只有在真實引擎程式碼上驗證過記憶體模型與 JS 邊界，才決定引擎是否全面採用 Aye。
 
 **待決問題（P0 閘門前要決議）**
 
-- [ ] 正式名稱：Ore 是暫定名。
-- [x] 分號：**採用 Go 式自動插入**。AI 熟悉 Go 的規則，`else` 換行、多行呼叫少了尾逗號這類陷阱，由 `ore fmt` 與明確的錯誤訊息擋下。stage0 已照此實作；M5 閘門的兩個 session 都沒有在這上面出錯。
-- [x] DOM 字串編碼：**UTF-8**。Ore 的字串本來就是 `[]u8` UTF-8，引擎內部（parser、layout、text shaping）不必維護兩套字串。JS 字串可能含有孤立的 surrogate，跨邊界時改用 WTF-8 表示，往返不失真；純 ASCII 字串走免轉換的快速路徑。P3 實測跨邊界的轉換成本後，再檢討這個決定。
+- [ ] 正式名稱：Aye 是暫定名。
+- [x] 分號：**採用 Go 式自動插入**。AI 熟悉 Go 的規則，`else` 換行、多行呼叫少了尾逗號這類陷阱，由 `aye fmt` 與明確的錯誤訊息擋下。stage0 已照此實作；M5 閘門的兩個 session 都沒有在這上面出錯。
+- [x] DOM 字串編碼：**UTF-8**。Aye 的字串本來就是 `[]u8` UTF-8，引擎內部（parser、layout、text shaping）不必維護兩套字串。JS 字串可能含有孤立的 surrogate，跨邊界時改用 WTF-8 表示，往返不失真；純 ASCII 字串走免轉換的快速路徑。P3 實測跨邊界的轉換成本後，再檢討這個決定。
 - [x] 數學型別（矩陣、色彩）是否開放有限度的 operator overloading：**不開放**，只有 `simd` 有運算子。`a * b` 的意思只看型別類別就能確定；矩陣與色彩運算寫成具名函式（`m.mul(n)`）。
 - [x] `where` 約束：**在泛型定義時就檢查**（類似 Rust），錯誤才會落在 AI 正在寫的那一行。M4 已照此實作。
 - [x] 只有字面值的 range（`0..4`）：**改成 `usize`**，跟 Zig 一樣。M5 閘門唯一的編譯錯誤就出在這裡，而迴圈變數最常拿來當索引。要有號的計數器時寫 `(0 as i64)..4`。不採用依迴圈變數用法推導，因為那要往回推導型別，違反「局部可推理」。

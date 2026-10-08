@@ -1,0 +1,2047 @@
+// The DOM bindings: natives on the prototypes of Node, Element, Document
+// and CharacterData, and the style and dataset objects. A node's wrapper
+// is a host object holding its handle (TAG_NODE); a stale or foreign
+// handle is a TypeError, never a use after free. The nodes of another
+// page's document (contentDocument, windows.aye) have wrappers of their
+// own; a native called on one works on that document (`Script.active`).
+//
+// A wrapper's prototype is its interface's: HTMLDivElement.prototype and
+// the others by tag name (HTML_INTERFACES), SVGElement or MathMLElement
+// by namespace, DocumentFragment for a fragment (a Document node that is
+// not the document). childNodes, children and getElementsBy* are live
+// lists (lists.aye); querySelectorAll gives an array made at the call.
+
+import css
+import dom
+import dom.Attr
+import dom.Document
+import dom.Kind
+import dom.NodeId
+import encoding
+import js
+import js.Args
+import js.Interp
+import js.JsError
+import js.Value
+import std
+import std.list.List
+import std.mem.AllocError
+import std.text
+
+// ---- wrappers
+
+fn docOf(it: *mut Interp) *mut Document {
+    return &mut scriptOf(it).active.doc
+}
+
+// Records that a script changed the document, and hands the changes the
+// document logged to the observers (components.aye).
+fn changed(it: *mut Interp) JsError!void {
+    let s = scriptOf(it)
+    if s.active == s.page {
+        s.version += 1
+        s.style_version += 1
+        noteLayoutChangeAnywhere(s)
+    } else {
+        s.active.mutations += 1
+    }
+    return flushMutations(it)
+}
+
+// `changed`, for a change at the node `at` only: to its attribute
+// `attr`, or to its children or text (""), for the layout scripts read
+// (geometry.aye).
+fn changedAt(it: *mut Interp, at: NodeId, attr: []u8) JsError!void {
+    let s = scriptOf(it)
+    if s.active == s.page {
+        s.version += 1
+        s.style_version += 1
+        var what = css.CHILDREN_CHANGED
+        if attr.len > 0 {
+            what = css.attrChange(attr)
+        }
+        try noteLayoutChange(s, at, what)
+    } else {
+        s.active.mutations += 1
+    }
+    return flushMutations(it)
+}
+
+// Notes for the layout scripts read that `child` leaves its parent (it
+// is moved).
+fn leaving(it: *mut Interp, child: NodeId) JsError!void {
+    let s = scriptOf(it)
+    if s.active != s.page {
+        return
+    }
+    if s.page.doc.parent(child) |p| {
+        try noteLayoutChange(s, p, css.CHILDREN_CHANGED)
+    }
+}
+
+// Records that a script changed the attribute `name` of `el` (its value
+// was `old`; null: it had none): styles are not out of date for the
+// attributes of images and the like that no selector looks at in
+// practice (a lazy loader sets `src` in a loop and asks for styles each
+// time). The layout scripts read stays when the value stays.
+fn changedAttr(it: *mut Interp, el: NodeId, name: []u8, old: ?[]u8) JsError!void {
+    let s = scriptOf(it)
+    if s.active != s.page {
+        s.active.mutations += 1
+        return
+    }
+    s.version += 1
+    let now = s.page.doc.attr(el, name)
+    if !hasClass(STYLE_NEUTRAL_ATTRS, name) {
+        s.style_version += 1
+        if sameAttr(old, now) {
+            // Nothing to lay out again.
+        } else if text.eql(name, "class") {
+            try noteClassChanges(s, el, old orelse "", now orelse "")
+        } else {
+            try noteLayoutChange(s, el, css.attrChange(name))
+        }
+    } else if !sameAttr(old, now) && s.page.doc.isConnected(el) {
+        // The boxes may move (an image's size), the styles do not.
+        s.layout_version += 1
+    }
+    return flushMutations(it)
+}
+
+fn sameAttr(a: ?[]u8, b: ?[]u8) bool {
+    if a |x| {
+        if b |y| {
+            return text.eql(x, y)
+        }
+        return false
+    }
+    return b == null
+}
+
+// Notes the classes in one of `old` and `now` and not in the other.
+fn noteClassChanges(s: *mut Script, el: NodeId, old: []u8, now: []u8) AllocError!void {
+    try noteClassesNotIn(s, el, old, now)
+    try noteClassesNotIn(s, el, now, old)
+}
+
+fn noteClassesNotIn(s: *mut Script, el: NodeId, classes: []u8, other: []u8) AllocError!void {
+    var i: usize = 0
+    while i < classes.len {
+        while i < classes.len && isSpace(classes[i]) {
+            i += 1
+        }
+        var j = i
+        while j < classes.len && !isSpace(classes[j]) {
+            j += 1
+        }
+        if j > i && !hasClass(other, classes[i..j]) {
+            try noteLayoutChange(s, el, css.classChange(classes[i..j]))
+        }
+        i = j
+    }
+}
+
+let STYLE_NEUTRAL_ATTRS = "src srcset sizes alt title loading decoding fetchpriority referrerpolicy crossorigin integrity nonce autocomplete"
+
+fn protoFor(s: *mut Script, h: NodeId) u32 {
+    if dom.isShadowRoot(&s.active.doc, h) && s.shadow_proto != js.NONE {
+        return s.shadow_proto
+    }
+    if s.active.doc.isFragment(h) {
+        return s.fragment_proto
+    }
+    return match s.active.doc.node(h).kind {
+        .Element => elementProto(s, h)
+        .Text => s.text_proto
+        .Comment => s.comment_proto
+        .Document => s.document_proto
+        .Doctype => s.doctype_proto
+    }
+}
+
+/// The wrapper of the node `h` of the active document, made on first use
+/// (one per node).
+fn wrap(it: *mut Interp, h: NodeId) JsError!Value {
+    let s = scriptOf(it)
+    if s.active != s.page {
+        return wrapForeign(it, s, h)
+    }
+    if s.wrappers.get(h.index) |w| {
+        if w.generation == h.generation {
+            return js.objVal(w.obj)
+        }
+    }
+    let o = try it.newHostObject(protoFor(s, h), TAG_NODE, h.index, h.generation)
+    try s.wrappers.put(h.index, Wrapper { generation: h.generation, obj: o })
+    s.page.doc.node(h).js_refs += 1
+    return js.objVal(o)
+}
+
+fn wrapOpt(it: *mut Interp, h: ?NodeId) JsError!Value {
+    if h |n| {
+        return wrap(it, n)
+    }
+    return Value.Null
+}
+
+// The node of a wrapper (or of the style or dataset object of `kind`),
+// whose document becomes the active one.
+fn handleOf(it: *mut Interp, v: Value, kind: u32) ?NodeId {
+    let o = js.objectOf(v)
+    if o == js.NONE {
+        return null
+    }
+    match it.heap.obj(o).data {
+        .Host { tag, index, generation } => {
+            if tag & TAG_KIND == kind {
+                let page = pageOfTag(scriptOf(it), tag) orelse return null
+                let h = NodeId { index: index, generation: generation }
+                if page.doc.isLive(h) {
+                    scriptOf(it).active = page
+                    return h
+                }
+            }
+        }
+        _ => {}
+    }
+    return null
+}
+
+// The node of a wrapper of an argument: a node of the active document.
+fn argHandle(it: *mut Interp, v: Value) ?NodeId {
+    let o = js.objectOf(v)
+    if o == js.NONE {
+        return null
+    }
+    match it.heap.obj(o).data {
+        .Host { tag, index, generation } => {
+            if tag & TAG_KIND == TAG_NODE {
+                let s = scriptOf(it)
+                if pageOfTag(s, tag) |page| {
+                    let h = NodeId { index: index, generation: generation }
+                    if page == s.active && page.doc.isLive(h) {
+                        return h
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    return null
+}
+
+// A node of the page's own document (arguments of the `ak` natives).
+fn ownHandle(it: *mut Interp, v: Value) ?NodeId {
+    let s = scriptOf(it)
+    s.active = s.page
+    return argHandle(it, v)
+}
+
+fn thisNode(it: *mut Interp, a: Args) JsError!NodeId {
+    if handleOf(it, a.this, TAG_NODE) |h| {
+        return h
+    }
+    try it.typeError("Illegal invocation")
+    return NodeId { index: 0, generation: 0 }
+}
+
+fn thisElement(it: *mut Interp, a: Args) JsError!NodeId {
+    let h = try thisNode(it, a)
+    if docOf(it).node(h).kind != Kind.Element {
+        try it.typeError("Illegal invocation")
+    }
+    return h
+}
+
+fn argNode(it: *mut Interp, a: Args, i: usize, which: []u8) JsError!NodeId {
+    if argHandle(it, it.arg(a, i)) |h| {
+        return h
+    }
+    let b = try it.builder()
+    defer it.release(b)
+    try b.append("Failed to execute '")
+    try b.append(which)
+    try b.append("' on 'Node': parameter ")
+    try b.appendUint((i + 1) as u64)
+    try b.append(" is not of type 'Node'.")
+    try it.typeError(b.bytes())
+    return NodeId { index: 0, generation: 0 }
+}
+
+// Throws a DOMException-like Error named `name`.
+fn domError(it: *mut Interp, name: []u8, msg: []u8) JsError!Value {
+    let e = try it.makeError(it.error_proto, msg)
+    try it.push(e)
+    let nv = try it.newString(name)
+    try it.defineOwn(js.objectOf(e), js.A_NAME, nv, js.F_HIDDEN)
+    it.pop()
+    return it.throwValue(e)
+}
+
+// Argument i as a string (ToString), appended to b.
+fn argText(it: *mut Interp, a: Args, i: usize, b: *mut text.Builder) JsError!void {
+    let v = try js.argString(it, a, i)
+    try b.append(it.heap.bytes(js.strOf(v)))
+}
+
+// An array of the wrappers of `nodes`.
+fn wrapAll(it: *mut Interp, nodes: []NodeId) JsError!Value {
+    let arr = try it.newArray(0)
+    try it.push(js.objVal(arr))
+    for h in nodes {
+        let w = try wrap(it, h)
+        try it.heap.pushElem(arr, w)
+    }
+    return it.pop()
+}
+
+// ---- installing
+
+fn accessor(it: *mut Interp, o: u32, name: []u8, get: js.NativeFn, set: ?js.NativeFn) JsError!void {
+    let g = try it.newNative(name, 0, get)
+    try it.push(js.objVal(g))
+    var sv = Value.Undefined
+    if set |f| {
+        sv = js.objVal(try it.newNative(name, 1, f))
+    }
+    try it.defineAccessor(o, try it.intern(name), js.objVal(g), sv, js.F_CONFIG)
+    it.pop()
+}
+
+fn defMethod(it: *mut Interp, o: u32, name: []u8, length: u32, f: js.NativeFn) JsError!void {
+    try it.defineNative(o, name, length, f)
+}
+
+// A prototype object, kept alive as a root.
+fn newProto(it: *mut Interp, parent: u32) JsError!u32 {
+    let o = try it.newObject(parent)
+    try it.addRoot(js.objVal(o))
+    return o
+}
+
+// A global constructor `name` that cannot be called, with `proto`.
+fn interfaceObject(it: *mut Interp, name: []u8, proto: u32) JsError!void {
+    try js.makeConstructor(it, name, 0, illegalConstructor, proto)
+}
+
+fn illegalConstructor(it: *mut Interp, a: Args) JsError!Value {
+    return it.typeError("Illegal constructor")
+}
+
+// The interfaces of HTML elements, each with its tag names: "Interface
+// tag tag;...". Other HTML elements are HTMLElement.
+let HTML_INTERFACES = "HTMLAnchorElement a;HTMLAreaElement area;HTMLBaseElement base;HTMLBodyElement body;HTMLBRElement br;HTMLButtonElement button;HTMLCanvasElement canvas;HTMLDataElement data;HTMLDataListElement datalist;HTMLDetailsElement details;HTMLDialogElement dialog;HTMLDivElement div;HTMLDListElement dl;HTMLEmbedElement embed;HTMLFieldSetElement fieldset;HTMLFormElement form;HTMLFrameSetElement frameset;HTMLHeadingElement h1 h2 h3 h4 h5 h6;HTMLHeadElement head;HTMLHRElement hr;HTMLHtmlElement html;HTMLIFrameElement iframe;HTMLImageElement img;HTMLInputElement input;HTMLLabelElement label;HTMLLegendElement legend;HTMLLIElement li;HTMLLinkElement link;HTMLMapElement map;HTMLMenuElement menu;HTMLMetaElement meta;HTMLMeterElement meter;HTMLModElement ins del;HTMLObjectElement object;HTMLOListElement ol;HTMLOptGroupElement optgroup;HTMLOptionElement option;HTMLOutputElement output;HTMLParagraphElement p;HTMLPictureElement picture;HTMLPreElement pre listing xmp;HTMLProgressElement progress;HTMLQuoteElement q blockquote;HTMLScriptElement script;HTMLSelectElement select;HTMLSlotElement slot;HTMLSourceElement source;HTMLSpanElement span;HTMLStyleElement style;HTMLTableCaptionElement caption;HTMLTableCellElement td th;HTMLTableColElement col colgroup;HTMLTableElement table;HTMLTableRowElement tr;HTMLTableSectionElement thead tbody tfoot;HTMLTemplateElement template;HTMLTextAreaElement textarea;HTMLTimeElement time;HTMLTitleElement title;HTMLTrackElement track;HTMLUListElement ul;HTMLUnknownElement"
+// The media elements, under HTMLMediaElement.
+let MEDIA_INTERFACES = "HTMLAudioElement audio;HTMLVideoElement video"
+
+// Makes the interface objects of `table` ("Interface tag tag;...") with
+// prototypes under `parent`, and maps their tags to them.
+fn defineInterfaces(s: *mut Script, table: []u8, parent: u32) JsError!void {
+    let it = &mut s.it
+    var entries = text.split(table, ";")
+    while entries.next() |entry| {
+        var words = text.split(entry, " ")
+        let name = words.next() orelse continue
+        let proto = try newProto(it, parent)
+        try interfaceObject(it, name, proto)
+        while words.next() |tag| {
+            try s.tag_protos.put(tag, proto)
+        }
+    }
+}
+
+// The interfaces of elements: HTMLDivElement and the others under
+// HTMLElement (`html`), SVGElement and MathMLElement under Element.
+fn installElementInterfaces(s: *mut Script, html: u32, element: u32) JsError!void {
+    let it = &mut s.it
+    try defineInterfaces(s, HTML_INTERFACES, html)
+    let media = try newProto(it, html)
+    try interfaceObject(it, "HTMLMediaElement", media)
+    try defineInterfaces(s, MEDIA_INTERFACES, media)
+    s.svg_proto = try newProto(it, element)
+    try interfaceObject(it, "SVGElement", s.svg_proto)
+    let graphics = try newProto(it, s.svg_proto)
+    try interfaceObject(it, "SVGGraphicsElement", graphics)
+    s.svg_svg_proto = try newProto(it, graphics)
+    try interfaceObject(it, "SVGSVGElement", s.svg_svg_proto)
+    s.mathml_proto = try newProto(it, element)
+    try interfaceObject(it, "MathMLElement", s.mathml_proto)
+}
+
+// The prototype of the wrapper of the element `h`: its interface's.
+fn elementProto(s: *mut Script, h: NodeId) u32 {
+    let doc = &s.active.doc
+    let ns = doc.namespaceOf(h)
+    if ns == dom.NS_SVG {
+        if text.eql(doc.node(h).name, "svg") {
+            return s.svg_svg_proto
+        }
+        return s.svg_proto
+    }
+    if ns == dom.NS_MATHML {
+        return s.mathml_proto
+    }
+    if ns != dom.NS_HTML {
+        return s.plain_element_proto
+    }
+    return s.tag_protos.get(doc.node(h).name) orelse s.element_proto
+}
+
+fn installDom(s: *mut Script) JsError!void {
+    let it = &mut s.it
+    let et = try newProto(it, it.object_proto)
+    let node = try newProto(it, et)
+    let element = try newProto(it, node)
+    let html = try newProto(it, element)
+    let docp = try newProto(it, node)
+    let htmldoc = try newProto(it, docp)
+    let chars = try newProto(it, node)
+    let textp = try newProto(it, chars)
+    let comment = try newProto(it, chars)
+    let doctype = try newProto(it, node)
+    let fragment = try newProto(it, node)
+    s.node_proto = node
+    s.element_proto = html
+    s.plain_element_proto = element
+    s.document_proto = htmldoc
+    s.text_proto = textp
+    s.comment_proto = comment
+    s.doctype_proto = doctype
+    s.fragment_proto = fragment
+    s.style_proto = try newProto(it, it.object_proto)
+    s.dataset_proto = try newProto(it, it.object_proto)
+    s.nodelist_proto = try newProto(it, it.object_proto)
+    s.collection_proto = try newProto(it, it.object_proto)
+    s.options_proto = try newProto(it, s.collection_proto)
+    try interfaceObject(it, "EventTarget", et)
+    try interfaceObject(it, "Node", node)
+    try interfaceObject(it, "Element", element)
+    try interfaceObject(it, "HTMLElement", html)
+    try interfaceObject(it, "Document", docp)
+    try interfaceObject(it, "HTMLDocument", htmldoc)
+    try interfaceObject(it, "CharacterData", chars)
+    try interfaceObject(it, "Text", textp)
+    try interfaceObject(it, "Comment", comment)
+    try interfaceObject(it, "DocumentType", doctype)
+    try interfaceObject(it, "DocumentFragment", fragment)
+    try interfaceObject(it, "CSSStyleDeclaration", s.style_proto)
+    try interfaceObject(it, "DOMStringMap", s.dataset_proto)
+    try interfaceObject(it, "NodeList", s.nodelist_proto)
+    try interfaceObject(it, "HTMLCollection", s.collection_proto)
+    try interfaceObject(it, "HTMLOptionsCollection", s.options_proto)
+    // Interfaces no node of a page has, which polyfills patch.
+    try interfaceObject(it, "CDATASection", try newProto(it, textp))
+    try interfaceObject(it, "ProcessingInstruction", try newProto(it, chars))
+    try interfaceObject(it, "XMLDocument", try newProto(it, docp))
+    try interfaceObject(it, "HTMLFormControlsCollection", try newProto(it, s.collection_proto))
+    try interfaceObject(it, "RadioNodeList", try newProto(it, s.nodelist_proto))
+    try installElementInterfaces(s, html, element)
+    let consts = [6][]u8{"ELEMENT_NODE", "TEXT_NODE", "COMMENT_NODE", "DOCUMENT_NODE", "DOCUMENT_TYPE_NODE", "DOCUMENT_FRAGMENT_NODE"}
+    let values = [6]f64{1.0, 3.0, 8.0, 9.0, 10.0, 11.0}
+    let nodeCtor = js.objectOf(try it.getProp(js.objVal(it.global), try it.intern("Node")))
+    for i, c in consts {
+        try it.defineValue(node, c, js.numVal(values[i]))
+        try it.defineValue(nodeCtor, c, js.numVal(values[i]))
+    }
+
+    try accessor(it, node, "nodeType", nodeType, null)
+    try accessor(it, node, "nodeName", nodeName, null)
+    try accessor(it, node, "parentNode", nodeParent, null)
+    try accessor(it, node, "parentElement", nodeParentElement, null)
+    try accessor(it, node, "firstChild", nodeFirstChild, null)
+    try accessor(it, node, "lastChild", nodeLastChild, null)
+    try accessor(it, node, "nextSibling", nodeNextSibling, null)
+    try accessor(it, node, "previousSibling", nodePreviousSibling, null)
+    try accessor(it, node, "childNodes", nodeChildNodes, null)
+    try accessor(it, node, "textContent", nodeTextContent, nodeSetTextContent)
+    try accessor(it, node, "nodeValue", nodeValue, nodeSetValue)
+    try accessor(it, node, "isConnected", nodeIsConnected, null)
+    try accessor(it, node, "ownerDocument", nodeOwnerDocument, null)
+    try defMethod(it, node, "appendChild", 1, nodeAppendChild)
+    try defMethod(it, node, "insertBefore", 2, nodeInsertBefore)
+    try defMethod(it, node, "removeChild", 1, nodeRemoveChild)
+    try defMethod(it, node, "replaceChild", 2, nodeReplaceChild)
+    try defMethod(it, node, "remove", 0, nodeRemove)
+    try defMethod(it, node, "cloneNode", 0, nodeCloneNode)
+    try defMethod(it, node, "contains", 1, nodeContains)
+    try defMethod(it, node, "hasChildNodes", 0, nodeHasChildNodes)
+    try defMethod(it, node, "isSameNode", 1, nodeIsSameNode)
+    try defMethod(it, node, "getRootNode", 0, nodeGetRootNode)
+    // Element and Document both have these (ParentNode).
+    try accessor(it, node, "children", nodeChildren, null)
+    try accessor(it, node, "firstElementChild", nodeFirstElementChild, null)
+    try accessor(it, node, "lastElementChild", nodeLastElementChild, null)
+    try accessor(it, node, "childElementCount", nodeChildElementCount, null)
+    try defMethod(it, node, "querySelector", 1, nodeQuerySelector)
+    try defMethod(it, node, "querySelectorAll", 1, nodeQuerySelectorAll)
+    try defMethod(it, node, "getElementsByTagName", 1, nodeGetElementsByTagName)
+    try defMethod(it, node, "getElementsByClassName", 1, nodeGetElementsByClassName)
+
+    try accessor(it, element, "tagName", elementTagName, null)
+    try accessor(it, element, "localName", elementLocalName, null)
+    try accessor(it, element, "namespaceURI", elementNamespaceUri, null)
+    try accessor(it, element, "id", elementId, elementSetId)
+    try accessor(it, element, "className", elementClassName, elementSetClassName)
+    try accessor(it, element, "innerHTML", elementInnerHtml, elementSetInnerHtml)
+    try accessor(it, element, "outerHTML", elementOuterHtml, elementSetOuterHtml)
+    try accessor(it, element, "nextElementSibling", elementNextElementSibling, null)
+    try accessor(it, element, "previousElementSibling", elementPreviousElementSibling, null)
+    try accessor(it, element, "style", elementStyle, elementSetStyle)
+    try accessor(it, element, "dataset", elementDataset, null)
+    try defMethod(it, element, "getAttribute", 1, elementGetAttribute)
+    try defMethod(it, element, "setAttribute", 2, elementSetAttribute)
+    try defMethod(it, element, "removeAttribute", 1, elementRemoveAttribute)
+    try defMethod(it, element, "hasAttribute", 1, elementHasAttribute)
+    try defMethod(it, element, "hasAttributes", 0, elementHasAttributes)
+    try defMethod(it, element, "getAttributeNames", 0, elementGetAttributeNames)
+    try defMethod(it, element, "matches", 1, elementMatches)
+    try defMethod(it, element, "closest", 1, elementClosest)
+    // Form controls: their state is the page's (doc.controls, B5).
+    try accessor(it, html, "value", controlValue, controlSetValue)
+    try accessor(it, html, "checked", controlChecked, controlSetChecked)
+    try accessor(it, html, "selected", controlSelected, controlSetSelected)
+    try accessor(it, html, "selectedIndex", controlSelectedIndex, controlSetSelectedIndex)
+    try installFormApi(it, html)
+
+    try accessor(it, docp, "documentElement", documentElement, null)
+    try accessor(it, docp, "body", documentBody, null)
+    try accessor(it, docp, "head", documentHead, null)
+    try accessor(it, docp, "title", documentTitle, documentSetTitle)
+    try accessor(it, docp, "readyState", documentReadyState, null)
+    try accessor(it, docp, "characterSet", documentCharacterSet, null)
+    try accessor(it, docp, "charset", documentCharacterSet, null)
+    try accessor(it, docp, "inputEncoding", documentCharacterSet, null)
+    try accessor(it, docp, "activeElement", documentActiveElement, null)
+    try accessor(it, docp, "currentScript", documentCurrentScript, null)
+    try accessor(it, docp, "doctype", documentDoctype, null)
+    try defMethod(it, docp, "getElementById", 1, documentGetElementById)
+    try defMethod(it, docp, "createElement", 1, documentCreateElement)
+    try defMethod(it, docp, "createTextNode", 1, documentCreateTextNode)
+    try defMethod(it, docp, "createComment", 1, documentCreateComment)
+    try defMethod(it, docp, "createElementNS", 2, documentCreateElementNs)
+    try defMethod(it, docp, "createDocumentFragment", 0, documentCreateFragment)
+    try defMethod(it, docp, "getElementsByName", 1, documentGetElementsByName)
+    try defMethod(it, docp, "write", 0, documentWrite)
+    try defMethod(it, docp, "writeln", 0, documentWriteln)
+
+    try accessor(it, s.nodelist_proto, "length", listLength, null)
+    try defMethod(it, s.nodelist_proto, "item", 1, listItem)
+    try accessor(it, s.collection_proto, "length", listLength, null)
+    try defMethod(it, s.collection_proto, "item", 1, listItem)
+    if s.tag_protos.get("template") |tp| {
+        try accessor(it, tp, "content", templateContent, null)
+    }
+    if s.tag_protos.get("select") |sp| {
+        try accessor(it, sp, "options", selectOptions, null)
+    }
+    if s.tag_protos.get("datalist") |dp| {
+        try accessor(it, dp, "options", selectOptions, null)
+    }
+
+    try accessor(it, chars, "data", nodeValue, nodeSetValue)
+    try accessor(it, chars, "length", charsLength, null)
+    try accessor(it, doctype, "name", nodeName, null)
+
+    try accessor(it, s.style_proto, "cssText", styleCssText, styleSetCssText)
+    try accessor(it, s.style_proto, "length", styleLength, null)
+    try defMethod(it, s.style_proto, "getPropertyValue", 1, styleGetPropertyValue)
+    try defMethod(it, s.style_proto, "setProperty", 2, styleSetProperty)
+    try defMethod(it, s.style_proto, "removeProperty", 1, styleRemoveProperty)
+
+    let d = try wrap(it, s.page.doc.root)
+    try it.defineValue(it.global, "document", d)
+}
+
+// ---- Node
+
+fn nodeType(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    if docOf(it).isFragment(h) {
+        return js.numVal(11.0)
+    }
+    return js.numVal(match docOf(it).node(h).kind {
+        .Element => 1.0
+        .Text => 3.0
+        .Comment => 8.0
+        .Document => 9.0
+        .Doctype => 10.0
+    })
+}
+
+fn nodeName(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    let n = docOf(it).node(h)
+    match n.kind {
+        .Element => {
+            return tagNameOf(it, h)
+        }
+        .Text => {
+            return it.newString("#text")
+        }
+        .Comment => {
+            return it.newString("#comment")
+        }
+        .Document => {
+            if docOf(it).isFragment(h) {
+                return it.newString("#document-fragment")
+            }
+            return it.newString("#document")
+        }
+        .Doctype => {
+            return it.newString(n.name)
+        }
+    }
+}
+
+// The tagName of the element `h`: upper case for HTML elements, as it is
+// for the others.
+fn tagNameOf(it: *mut Interp, h: NodeId) JsError!Value {
+    let doc = docOf(it)
+    if doc.namespaceOf(h) == dom.NS_HTML {
+        return upperName(it, doc.node(h).name)
+    }
+    return it.newString(doc.node(h).name)
+}
+
+// The name in upper case (tagName, nodeName of an element).
+fn upperName(it: *mut Interp, name: []u8) JsError!Value {
+    let b = try it.builder()
+    defer it.release(b)
+    for c in name {
+        if c >= 'a' && c <= 'z' {
+            try b.appendByte(c - 32)
+        } else {
+            try b.appendByte(c)
+        }
+    }
+    return it.newString(b.bytes())
+}
+
+fn nodeParent(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    return wrapOpt(it, docOf(it).parent(h))
+}
+
+fn nodeParentElement(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    return wrapOpt(it, css.parentElement(docOf(it), h))
+}
+
+fn nodeFirstChild(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    return wrapOpt(it, docOf(it).firstChild(h))
+}
+
+fn nodeLastChild(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    return wrapOpt(it, docOf(it).lastChild(h))
+}
+
+fn nodeNextSibling(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    return wrapOpt(it, docOf(it).nextSibling(h))
+}
+
+fn nodePreviousSibling(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    return wrapOpt(it, docOf(it).prevSibling(h))
+}
+
+// The children of `h` (elements only when `elements`).
+fn childList(it: *mut Interp, h: NodeId, elements: bool, out: *mut List(NodeId)) JsError!void {
+    let doc = docOf(it)
+    var cur = doc.firstChild(h)
+    while cur |c| {
+        if !elements || doc.node(c).kind == Kind.Element {
+            try out.append(c)
+        }
+        cur = doc.nextSibling(c)
+    }
+}
+
+fn nodeFirstElementChild(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    let doc = docOf(it)
+    var cur = doc.firstChild(h)
+    while cur |c| {
+        if doc.node(c).kind == Kind.Element {
+            return wrap(it, c)
+        }
+        cur = doc.nextSibling(c)
+    }
+    return Value.Null
+}
+
+fn nodeLastElementChild(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    let doc = docOf(it)
+    var cur = doc.lastChild(h)
+    while cur |c| {
+        if doc.node(c).kind == Kind.Element {
+            return wrap(it, c)
+        }
+        cur = doc.prevSibling(c)
+    }
+    return Value.Null
+}
+
+fn nodeChildElementCount(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    var kids = List(NodeId).init(it.alloc)
+    defer kids.deinit()
+    try childList(it, h, true, &mut kids)
+    return js.numVal(kids.len() as f64)
+}
+
+fn elementNextElementSibling(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    let doc = docOf(it)
+    var cur = doc.nextSibling(h)
+    while cur |c| {
+        if doc.node(c).kind == Kind.Element {
+            return wrap(it, c)
+        }
+        cur = doc.nextSibling(c)
+    }
+    return Value.Null
+}
+
+fn elementPreviousElementSibling(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    let doc = docOf(it)
+    var cur = doc.prevSibling(h)
+    while cur |c| {
+        if doc.node(c).kind == Kind.Element {
+            return wrap(it, c)
+        }
+        cur = doc.prevSibling(c)
+    }
+    return Value.Null
+}
+
+fn nodeTextContent(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    let doc = docOf(it)
+    let n = doc.node(h)
+    if n.kind == Kind.Text || n.kind == Kind.Comment {
+        return it.newString(n.data)
+    }
+    if n.kind != Kind.Element && !doc.isFragment(h) {
+        return Value.Null
+    }
+    let b = try it.builder()
+    defer it.release(b)
+    try doc.textContent(h, b)
+    return it.newString(b.bytes())
+}
+
+fn nodeSetTextContent(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    if !js.isNullish(it.arg(a, 0)) {
+        try argText(it, a, 0, b)
+    }
+    let doc = docOf(it)
+    let kind = doc.node(h).kind
+    if kind == Kind.Text || kind == Kind.Comment {
+        try doc.setData(h, b.bytes())
+        try changedAt(it, h, "")
+        return Value.Undefined
+    }
+    if kind != Kind.Element && !doc.isFragment(h) {
+        return Value.Undefined
+    }
+    removeChildren(doc, h)
+    try doc.appendText(h, b.bytes())
+    try changedAt(it, h, "")
+    return Value.Undefined
+}
+
+// Takes the children of `h` out, freeing those no script holds.
+fn removeChildren(doc: *mut Document, h: NodeId) {
+    while doc.firstChild(h) |c| {
+        doc.detach(c)
+        doc.releaseIfUnused(c)
+    }
+}
+
+fn nodeValue(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    let n = docOf(it).node(h)
+    if n.kind == Kind.Text || n.kind == Kind.Comment {
+        return it.newString(n.data)
+    }
+    return Value.Null
+}
+
+fn nodeSetValue(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    let doc = docOf(it)
+    let kind = doc.node(h).kind
+    if kind != Kind.Text && kind != Kind.Comment {
+        return Value.Undefined
+    }
+    let b = try it.builder()
+    defer it.release(b)
+    if !js.isNullish(it.arg(a, 0)) {
+        try argText(it, a, 0, b)
+    }
+    try doc.setData(h, b.bytes())
+    try changedAt(it, h, "")
+    return Value.Undefined
+}
+
+fn charsLength(it: *mut Interp, a: Args) JsError!Value {
+    let v = try nodeValue(it, a)
+    if js.isStr(v) {
+        return it.getProp(v, js.A_LENGTH)
+    }
+    return js.numVal(0.0)
+}
+
+fn nodeIsConnected(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    return js.boolVal(docOf(it).isConnected(h))
+}
+
+fn nodeOwnerDocument(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    let doc = docOf(it)
+    if dom.same(h, doc.root) {
+        return Value.Null
+    }
+    return wrap(it, doc.root)
+}
+
+// Is `a` `b` or an ancestor of it?
+fn isInclusiveAncestor(doc: *Document, a: NodeId, b: NodeId) bool {
+    var cur: ?NodeId = b
+    while cur |c| {
+        if dom.same(c, a) {
+            return true
+        }
+        cur = doc.parent(c)
+    }
+    return false
+}
+
+// Checks that `child` may go into `parent` (HierarchyRequestError).
+fn checkInsert(it: *mut Interp, parent: NodeId, child: NodeId) JsError!void {
+    let doc = docOf(it)
+    let pk = doc.node(parent).kind
+    let ck = doc.node(child).kind
+    if (pk != Kind.Element && pk != Kind.Document) || (ck == Kind.Document && (!doc.isFragment(child) || dom.isShadowRoot(doc, child))) || isInclusiveAncestor(doc, child, parent) {
+        try domError(it, "HierarchyRequestError", "Failed to execute 'appendChild' on 'Node': The new child element contains the parent.")
+    }
+}
+
+// Puts `child` into `parent` before `before` (last when null): the
+// children of a fragment instead of the fragment, which ends up empty.
+fn insertNode(doc: *mut Document, parent: NodeId, child: NodeId, before: ?NodeId) {
+    if doc.isFragment(child) {
+        while doc.firstChild(child) |c| {
+            doc.insertBefore(parent, c, before)
+        }
+        return
+    }
+    doc.insertBefore(parent, child, before)
+}
+
+// Detaches `child` from where it was and frees nothing (the caller puts
+// it somewhere).
+fn nodeAppendChild(it: *mut Interp, a: Args) JsError!Value {
+    let parent = try thisNode(it, a)
+    let child = try argNode(it, a, 0, "appendChild")
+    try checkInsert(it, parent, child)
+    try leaving(it, child)
+    insertNode(docOf(it), parent, child, null)
+    try changedAt(it, parent, "")
+    return it.arg(a, 0)
+}
+
+fn nodeInsertBefore(it: *mut Interp, a: Args) JsError!Value {
+    let parent = try thisNode(it, a)
+    let child = try argNode(it, a, 0, "insertBefore")
+    try checkInsert(it, parent, child)
+    let doc = docOf(it)
+    try leaving(it, child)
+    if js.isNullish(it.arg(a, 1)) {
+        insertNode(doc, parent, child, null)
+    } else {
+        let before = try argNode(it, a, 1, "insertBefore")
+        if !dom.isSame(doc.parent(before), parent) {
+            return domError(it, "NotFoundError", "Failed to execute 'insertBefore' on 'Node': The node before which the new node is to be inserted is not a child of this node.")
+        }
+        if !dom.same(before, child) {
+            insertNode(doc, parent, child, before)
+        }
+    }
+    try changedAt(it, parent, "")
+    return it.arg(a, 0)
+}
+
+fn nodeRemoveChild(it: *mut Interp, a: Args) JsError!Value {
+    let parent = try thisNode(it, a)
+    let child = try argNode(it, a, 0, "removeChild")
+    let doc = docOf(it)
+    if !dom.isSame(doc.parent(child), parent) {
+        return domError(it, "NotFoundError", "Failed to execute 'removeChild' on 'Node': The node to be removed is not a child of this node.")
+    }
+    doc.detach(child)
+    try changedAt(it, parent, "")
+    return it.arg(a, 0)
+}
+
+fn nodeReplaceChild(it: *mut Interp, a: Args) JsError!Value {
+    let parent = try thisNode(it, a)
+    let fresh = try argNode(it, a, 0, "replaceChild")
+    let old = try argNode(it, a, 1, "replaceChild")
+    let doc = docOf(it)
+    if !dom.isSame(doc.parent(old), parent) {
+        return domError(it, "NotFoundError", "Failed to execute 'replaceChild' on 'Node': The node to be replaced is not a child of this node.")
+    }
+    try checkInsert(it, parent, fresh)
+    if !dom.same(fresh, old) {
+        try leaving(it, fresh)
+        insertNode(doc, parent, fresh, old)
+        doc.detach(old)
+    }
+    try changedAt(it, parent, "")
+    return it.arg(a, 1)
+}
+
+fn nodeRemove(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    let doc = docOf(it)
+    if doc.parent(h) |p| {
+        doc.detach(h)
+        try changedAt(it, p, "")
+    }
+    return Value.Undefined
+}
+
+fn nodeCloneNode(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    let doc = docOf(it)
+    if dom.same(h, doc.root) {
+        return domError(it, "NotSupportedError", "Failed to execute 'cloneNode' on 'Node': cloning a document is not supported.")
+    }
+    let copy = try copyNode(doc, h, it.toBoolean(it.arg(a, 0)))
+    return wrap(it, copy)
+}
+
+/// A copy of `h` in the same document, with copies of its descendants
+/// when `deep`; not in the tree. Building the copy is no change of the
+/// tree for observers: left in the log, its records would reach them
+/// (and custom element reactions) with the next native, after the copy
+/// was inserted.
+fn copyNode(doc: *mut Document, h: NodeId, deep: bool) AllocError!NodeId {
+    let was = doc.recording
+    doc.recording = false
+    defer doc.recording = was
+    return copyTree(doc, h, deep)
+}
+
+fn copyTree(doc: *mut Document, h: NodeId, deep: bool) AllocError!NodeId {
+    let n = doc.node(h).*
+    var copy = doc.root
+    match n.kind {
+        .Element => {
+            copy = try doc.createElement(n.name, n.attrs)
+            doc.node(copy).ns = n.ns
+        }
+        .Text => {
+            copy = try doc.createText(n.data)
+        }
+        .Comment => {
+            copy = try doc.createComment(n.data)
+        }
+        .Doctype => {
+            copy = try doc.createDoctype(n.name)
+        }
+        .Document => {
+            if !doc.isFragment(h) {
+                return doc.root
+            }
+            copy = try doc.createFragment()
+        }
+    }
+    if deep {
+        var cur = doc.firstChild(h)
+        while cur |c| {
+            let k = try copyTree(doc, c, true)
+            doc.appendChild(copy, k)
+            cur = doc.nextSibling(c)
+        }
+        if doc.templateContent(h) |from| {
+            // A template's contents are copied with it.
+            let to = try doc.createTemplateContent(copy)
+            var each = doc.firstChild(from)
+            while each |c| {
+                let k = try copyTree(doc, c, true)
+                doc.appendChild(to, k)
+                each = doc.nextSibling(c)
+            }
+        }
+    }
+    return copy
+}
+
+fn nodeContains(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    if argHandle(it, it.arg(a, 0)) |other| {
+        return js.boolVal(isInclusiveAncestor(docOf(it), h, other))
+    }
+    return js.boolVal(false)
+}
+
+fn nodeHasChildNodes(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    return js.boolVal(docOf(it).firstChild(h) != null)
+}
+
+fn nodeIsSameNode(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    if argHandle(it, it.arg(a, 0)) |other| {
+        return js.boolVal(dom.same(h, other))
+    }
+    return js.boolVal(false)
+}
+
+fn nodeGetRootNode(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    let opts = it.arg(a, 0)
+    if js.isObject(opts) && it.toBoolean(try it.getProp(opts, try it.intern("composed"))) {
+        return wrap(it, docOf(it).shadowIncludingRoot(h))
+    }
+    return wrap(it, docOf(it).treeRoot(h))
+}
+
+// ---- queries
+
+// The selector of argument 0, or a SyntaxError.
+fn argSelector(it: *mut Interp, a: Args, name: []u8) JsError!Selector {
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 0, b)
+    if try parseSelector(scriptOf(it).page, b.bytes()) |sel| {
+        return sel
+    }
+    let m = try it.builder()
+    defer it.release(m)
+    try m.append("Failed to execute '")
+    try m.append(name)
+    try m.append("' on 'Element': '")
+    try m.append(b.bytes())
+    try m.append("' is not a valid selector.")
+    try domError(it, "SyntaxError", m.bytes())
+    unreachable
+}
+
+// The elements under `top` (not `top`) that `sel` matches, in document
+// order; at most `limit`.
+fn selectAll(it: *mut Interp, top: NodeId, sel: *Selector, limit: usize, out: *mut List(NodeId)) JsError!void {
+    let doc = docOf(it)
+    // `:scope` is `top` (the root element when `top` is the document).
+    if doc.node(top).kind == Kind.Element {
+        css.setSelectorScope(top)
+    }
+    defer css.setSelectorScope(null)
+    var cur = doc.following(top, top)
+    while cur |h| {
+        if doc.node(h).kind == Kind.Element && selectorMatches(sel, doc, h) {
+            try out.append(h)
+            if out.len() >= limit {
+                return
+            }
+        }
+        cur = doc.following(h, top)
+    }
+}
+
+fn nodeQuerySelector(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    var sel = try argSelector(it, a, "querySelector")
+    defer sel.sheet.deinit()
+    var found = List(NodeId).init(it.alloc)
+    defer found.deinit()
+    try selectAll(it, h, &sel, 1, &mut found)
+    if found.len() > 0 {
+        return wrap(it, found.items()[0])
+    }
+    return Value.Null
+}
+
+fn nodeQuerySelectorAll(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisNode(it, a)
+    var sel = try argSelector(it, a, "querySelectorAll")
+    defer sel.sheet.deinit()
+    var found = List(NodeId).init(it.alloc)
+    defer found.deinit()
+    try selectAll(it, h, &sel, 1 << 40, &mut found)
+    return wrapAll(it, found.items())
+}
+
+// Does the class attribute `classes` have the word `name`?
+fn hasClass(classes: []u8, name: []u8) bool {
+    var i: usize = 0
+    while i < classes.len {
+        while i < classes.len && isSpace(classes[i]) {
+            i += 1
+        }
+        var j = i
+        while j < classes.len && !isSpace(classes[j]) {
+            j += 1
+        }
+        if j > i && text.eql(classes[i..j], name) {
+            return true
+        }
+        i = j
+    }
+    return false
+}
+
+fn isSpace(c: u8) bool {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\x0C'
+}
+
+fn elementMatches(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    var sel = try argSelector(it, a, "matches")
+    defer sel.sheet.deinit()
+    css.setSelectorScope(h)
+    defer css.setSelectorScope(null)
+    return js.boolVal(selectorMatches(&sel, docOf(it), h))
+}
+
+fn elementClosest(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    var sel = try argSelector(it, a, "closest")
+    defer sel.sheet.deinit()
+    css.setSelectorScope(h)
+    defer css.setSelectorScope(null)
+    let doc = docOf(it)
+    var cur: ?NodeId = h
+    while cur |c| {
+        if doc.node(c).kind == Kind.Element && selectorMatches(&sel, doc, c) {
+            return wrap(it, c)
+        }
+        cur = doc.parent(c)
+    }
+    return Value.Null
+}
+
+/// A parsed selector list: the selectors of the one rule of `sheet`.
+struct Selector {
+    sheet: css.Sheet
+    start: usize
+    end: usize
+}
+
+/// Parses the selector list `src`; null when it is not valid. Free the
+/// sheet of the result.
+fn parseSelector(p: *mut Page, src: []u8) AllocError!?Selector {
+    if text.trim(src).len == 0 {
+        return null
+    }
+    var sheet = try css.Sheet.init(p.alloc)
+    var b = text.Builder.init(p.alloc)
+    defer b.deinit()
+    try b.append(src)
+    try b.append(" {}")
+    css.parseSheet(&mut sheet, b.bytes(), css.Media { width: 800.0, height: 600.0 }) catch |e| {
+        sheet.deinit()
+        return e
+    }
+    if sheet.rules.len() != 1 {
+        sheet.deinit()
+        return null
+    }
+    let r = sheet.rules.items()[0]
+    return Selector { sheet: sheet, start: r.sel_start, end: r.sel_end }
+}
+
+fn selectorMatches(sel: *Selector, doc: *Document, el: NodeId) bool {
+    for ci in sel.start..sel.end {
+        if css.matchesComplex(&sel.sheet, doc, sel.sheet.complexes.items()[ci], el) {
+            return true
+        }
+    }
+    return false
+}
+
+// ---- Element
+
+fn elementTagName(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    return tagNameOf(it, h)
+}
+
+fn elementNamespaceUri(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let ns = docOf(it).namespaceOf(h)
+    if ns == dom.NS_SVG {
+        return it.newString(SVG_NS)
+    }
+    if ns == dom.NS_MATHML {
+        return it.newString(MATHML_NS)
+    }
+    if ns == dom.NS_OTHER {
+        return Value.Null
+    }
+    return it.newString(HTML_NS)
+}
+
+let HTML_NS = "http://www.w3.org/1999/xhtml"
+let SVG_NS = "http://www.w3.org/2000/svg"
+let MATHML_NS = "http://www.w3.org/1998/Math/MathML"
+
+fn elementLocalName(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    return it.newString(docOf(it).node(h).name)
+}
+
+// The attribute `name` of `this` as a string ("" when missing).
+fn attrString(it: *mut Interp, a: Args, name: []u8) JsError!Value {
+    let h = try thisElement(it, a)
+    return it.newString(docOf(it).attr(h, name) orelse "")
+}
+
+// Sets the attribute `name` of `this` to argument 0.
+fn setAttrFromArg(it: *mut Interp, a: Args, name: []u8) JsError!Value {
+    let h = try thisElement(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 0, b)
+    try docOf(it).setAttr(h, name, b.bytes())
+    try changedAt(it, h, name)
+    return Value.Undefined
+}
+
+fn elementId(it: *mut Interp, a: Args) JsError!Value {
+    return attrString(it, a, "id")
+}
+
+fn elementSetId(it: *mut Interp, a: Args) JsError!Value {
+    return setAttrFromArg(it, a, "id")
+}
+
+fn elementClassName(it: *mut Interp, a: Args) JsError!Value {
+    return attrString(it, a, "class")
+}
+
+fn elementSetClassName(it: *mut Interp, a: Args) JsError!Value {
+    return setAttrFromArg(it, a, "class")
+}
+
+// Argument i as an attribute (or tag) name: ASCII lower case.
+fn argAttrName(it: *mut Interp, a: Args, i: usize, b: *mut text.Builder) JsError!void {
+    let raw = try it.builder()
+    defer it.release(raw)
+    try argText(it, a, i, raw)
+    for c in raw.bytes() {
+        if c >= 'A' && c <= 'Z' {
+            try b.appendByte(c + 32)
+        } else {
+            try b.appendByte(c)
+        }
+    }
+}
+
+fn elementGetAttribute(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    try argAttrName(it, a, 0, b)
+    if docOf(it).attr(h, b.bytes()) |v| {
+        return it.newString(v)
+    }
+    return Value.Null
+}
+
+fn elementSetAttribute(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let name = try it.builder()
+    defer it.release(name)
+    try argAttrName(it, a, 0, name)
+    if name.len() == 0 {
+        return domError(it, "InvalidCharacterError", "Failed to execute 'setAttribute' on 'Element': '' is not a valid attribute name.")
+    }
+    let v = try it.builder()
+    defer it.release(v)
+    try argText(it, a, 1, v)
+    let before = try it.builder()
+    defer it.release(before)
+    var old: ?[]u8 = null
+    if docOf(it).attr(h, name.bytes()) |was| {
+        try before.append(was)
+        old = before.bytes()
+    }
+    try docOf(it).setAttr(h, name.bytes(), v.bytes())
+    try resetCanvas(scriptOf(it).active, h, name.bytes())
+    try changedAttr(it, h, name.bytes(), old)
+    return Value.Undefined
+}
+
+fn elementRemoveAttribute(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    try argAttrName(it, a, 0, b)
+    let doc = docOf(it)
+    if doc.attr(h, b.bytes()) |was| {
+        let before = try it.builder()
+        defer it.release(before)
+        try before.append(was)
+        doc.removeAttr(h, b.bytes())
+        try resetCanvas(scriptOf(it).active, h, b.bytes())
+        try changedAttr(it, h, b.bytes(), before.bytes())
+    }
+    return Value.Undefined
+}
+
+fn elementHasAttribute(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    try argAttrName(it, a, 0, b)
+    return js.boolVal(docOf(it).attr(h, b.bytes()) != null)
+}
+
+fn elementHasAttributes(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    return js.boolVal(docOf(it).node(h).attrs.len > 0)
+}
+
+fn elementGetAttributeNames(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let arr = try it.newArray(0)
+    try it.push(js.objVal(arr))
+    let n = docOf(it).node(h).attrs.len
+    for i in 0..n {
+        let s = try it.newString(docOf(it).node(h).attrs[i].name)
+        try it.heap.pushElem(arr, s)
+    }
+    return it.pop()
+}
+
+fn elementInnerHtml(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    try serializeChildren(docOf(it), h, b)
+    return it.newString(b.bytes())
+}
+
+fn elementSetInnerHtml(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    if !js.isNullish(it.arg(a, 0)) {
+        try argText(it, a, 0, b)
+    }
+    try replaceWithMarkup(it, h, docOf(it).node(h).name, b.bytes())
+    return Value.Undefined
+}
+
+// Replaces the children of `h` (a template's contents for a template)
+// with the nodes of `src` parsed as the content of an element named
+// `context`.
+fn replaceWithMarkup(it: *mut Interp, h: NodeId, context: []u8, src: []u8) JsError!void {
+    var nodes = List(NodeId).init(it.alloc)
+    defer nodes.deinit()
+    try parseFragment(scriptOf(it).active, context, src, &mut nodes)
+    let doc = docOf(it)
+    var target = h
+    if doc.isElement(h, "template") {
+        target = doc.templateContent(h) orelse try doc.createTemplateContent(h)
+    }
+    removeChildren(doc, target)
+    for n in nodes.items() {
+        doc.appendChild(target, n)
+    }
+    try changedAt(it, target, "")
+}
+
+fn elementOuterHtml(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    try serializeNode(docOf(it), h, b)
+    return it.newString(b.bytes())
+}
+
+fn elementSetOuterHtml(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let doc = docOf(it)
+    let parent = doc.parent(h) orelse {
+        return domError(it, "NoModificationAllowedError", "Failed to set the 'outerHTML' property on 'Element': This element has no parent node.")
+    }
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 0, b)
+    var nodes = List(NodeId).init(it.alloc)
+    defer nodes.deinit()
+    var context: []u8 = "body"
+    if doc.node(parent).kind == Kind.Element {
+        context = doc.node(parent).name
+    }
+    try parseFragment(scriptOf(it).active, context, b.bytes(), &mut nodes)
+    for n in nodes.items() {
+        docOf(it).insertBefore(parent, n, h)
+    }
+    docOf(it).detach(h)
+    try changedAt(it, parent, "")
+    return Value.Undefined
+}
+
+// ---- form controls
+
+fn controlValue(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let doc = docOf(it)
+    if dom.isControl(doc, h) || doc.isElement(h, "option") || doc.isElement(h, "textarea") || doc.isElement(h, "output") {
+        return it.newString(dom.valueOf(doc, h))
+    }
+    return it.newString(doc.attr(h, "value") orelse "")
+}
+
+fn controlSetValue(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    if !js.isNullish(it.arg(a, 0)) {
+        try argText(it, a, 0, b)
+    }
+    let doc = docOf(it)
+    if dom.isControl(doc, h) || doc.isElement(h, "output") {
+        try dom.setValue(doc, h, b.bytes())
+    } else {
+        try doc.setAttr(h, "value", b.bytes())
+    }
+    try changed(it)
+    return Value.Undefined
+}
+
+fn controlChecked(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    return js.boolVal(dom.isCheckable(docOf(it), h) && dom.isChecked(docOf(it), h))
+}
+
+fn controlSetChecked(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let doc = docOf(it)
+    if dom.isCheckable(doc, h) {
+        try dom.setChecked(doc, h, it.toBoolean(it.arg(a, 0)))
+        try changed(it)
+    }
+    return Value.Undefined
+}
+
+fn controlSelected(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    return js.boolVal(docOf(it).isElement(h, "option") && dom.isSelected(docOf(it), h))
+}
+
+fn controlSetSelected(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let doc = docOf(it)
+    if doc.isElement(h, "option") {
+        let on = it.toBoolean(it.arg(a, 0))
+        if on {
+            if dom.selectOf(doc, h) |sel| {
+                if doc.attr(sel, "multiple") == null {
+                    try dom.selectOption(doc, sel, h)
+                    try changed(it)
+                    return Value.Undefined
+                }
+            }
+        }
+        try dom.setSelected(doc, h, on)
+        try changed(it)
+    }
+    return Value.Undefined
+}
+
+fn controlSelectedIndex(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    if !docOf(it).isElement(h, "select") {
+        return Value.Undefined
+    }
+    return js.numVal(try dom.selectedIndex(docOf(it), h) as f64)
+}
+
+fn controlSetSelectedIndex(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let doc = docOf(it)
+    if !doc.isElement(h, "select") {
+        return Value.Undefined
+    }
+    let n = try it.toNumber(it.arg(a, 0))
+    var opts = List(NodeId).init(it.alloc)
+    defer opts.deinit()
+    try dom.options(doc, h, &mut opts)
+    for i, o in opts.items() {
+        if i as f64 == n {
+            try dom.selectOption(doc, h, o)
+        } else if dom.isSelected(doc, o) {
+            try dom.setSelected(doc, o, false)
+        }
+    }
+    try changed(it)
+    return Value.Undefined
+}
+
+// ---- style and dataset
+
+// The style (or dataset) object of `this`: a host object holding the
+// node, made once and kept in a hidden property of the wrapper.
+fn sideObject(it: *mut Interp, a: Args, tag: u32, key: []u8) JsError!Value {
+    let h = try thisElement(it, a)
+    let atom = try it.intern(key)
+    let wo = js.objectOf(a.this)
+    if it.heap.findProp(wo, atom) |i| {
+        return it.heap.obj(wo).props[i].value
+    }
+    let s = scriptOf(it)
+    var proto = s.style_proto
+    if tag == TAG_DATASET {
+        proto = s.dataset_proto
+    }
+    let o = try it.newHostObject(proto, tag | try slotTag(s, s.active), h.index, h.generation)
+    docOf(it).node(h).js_refs += 1
+    try it.defineOwn(wo, atom, js.objVal(o), js.F_WRITE | js.F_CONFIG)
+    return js.objVal(o)
+}
+
+fn elementStyle(it: *mut Interp, a: Args) JsError!Value {
+    return sideObject(it, a, TAG_STYLE, "__style")
+}
+
+fn elementSetStyle(it: *mut Interp, a: Args) JsError!Value {
+    return setAttrFromArg(it, a, "style")
+}
+
+fn elementDataset(it: *mut Interp, a: Args) JsError!Value {
+    return sideObject(it, a, TAG_DATASET, "__dataset")
+}
+
+// The node of a style or dataset object, whose document becomes the
+// active one.
+fn sideNode(it: *mut Interp, o: u32) ?NodeId {
+    if handleOf(it, js.objVal(o), TAG_STYLE) |h| {
+        return h
+    }
+    return handleOf(it, js.objVal(o), TAG_DATASET)
+}
+
+fn isDataset(it: *mut Interp, o: u32) bool {
+    return match it.heap.obj(o).data {
+        .Host { tag, .. } => tag & TAG_KIND == TAG_DATASET
+        _ => false
+    }
+}
+
+// `el.style.backgroundColor` and `el.dataset.userId`: the property name
+// in kebab case ("background-color", "data-user-id").
+fn kebab(name: []u8, prefix: []u8, b: *mut text.Builder) AllocError!void {
+    try b.append(prefix)
+    if text.eql(name, "cssFloat") {
+        return b.append("float")
+    }
+    for c in name {
+        if c >= 'A' && c <= 'Z' {
+            try b.appendByte('-')
+            try b.appendByte(c + 32)
+        } else {
+            try b.appendByte(c)
+        }
+    }
+}
+
+/// Host.getNamed: a style declaration or a data attribute.
+fn namedGet(s: *mut Script, o: u32, key: u32) JsError!Value {
+    let it = &mut s.it
+    if hostTag(it, o) == TAG_LIST {
+        return listGet(s, o, key)
+    }
+    if hostTag(it, o) == TAG_WINDOW {
+        return windowNamed(s, o, key)
+    }
+    let proto = it.heap.obj(o).proto
+    if it.hasProperty(proto, key) {
+        return Value.Empty
+    }
+    let name = it.heap.atoms.name(key)
+    let h = sideNode(it, o) orelse return Value.Undefined
+    let b = try it.builder()
+    defer it.release(b)
+    if isDataset(it, o) {
+        try kebab(name, "data-", b)
+        if s.active.doc.attr(h, b.bytes()) |v| {
+            return it.newString(v)
+        }
+        return Value.Undefined
+    }
+    if name.len == 0 || (name[0] >= '0' && name[0] <= '9') || it.heap.findProp(o, key) != null {
+        return Value.Empty
+    }
+    try kebab(name, "", b)
+    let v = try it.builder()
+    defer it.release(v)
+    try styleValue(s.active.doc.attr(h, "style") orelse "", b.bytes(), v)
+    return it.newString(v.bytes())
+}
+
+/// Host.setNamed.
+fn namedSet(s: *mut Script, o: u32, key: u32, value: Value) JsError!bool {
+    let it = &mut s.it
+    if hostTag(it, o) == TAG_LIST {
+        return listSet(s, o, key)
+    }
+    if hostTag(it, o) == TAG_WINDOW {
+        return false
+    }
+    let proto = it.heap.obj(o).proto
+    if it.hasProperty(proto, key) {
+        return false
+    }
+    let name = it.heap.atoms.name(key)
+    if name.len == 0 || (name[0] >= '0' && name[0] <= '9') {
+        return false
+    }
+    let h = sideNode(it, o) orelse return true
+    let b = try it.builder()
+    defer it.release(b)
+    let v = try it.builder()
+    defer it.release(v)
+    if !js.isNullish(value) || isDataset(it, o) {
+        let sv = try it.toStringValue(value)
+        try v.append(it.heap.bytes(js.strOf(sv)))
+    }
+    var changed_name: []u8 = "style"
+    if isDataset(it, o) {
+        try kebab(name, "data-", b)
+        try s.active.doc.setAttr(h, b.bytes(), v.bytes())
+        changed_name = b.bytes()
+    } else {
+        try kebab(name, "", b)
+        try setStyleDecl(s, h, b.bytes(), v.bytes())
+    }
+    try changedAt(it, h, changed_name)
+    return true
+}
+
+/// Host.hasNamed: the indices of a list, the `data-*` attributes of a
+/// dataset.
+fn namedHas(s: *mut Script, o: u32, key: u32) bool {
+    let it = &mut s.it
+    let tag = hostTag(it, o)
+    if tag == TAG_LIST {
+        return listHas(s, o, key)
+    }
+    if (tag & TAG_KIND != TAG_DATASET && tag & TAG_KIND != TAG_STYLE) || it.hasProperty(it.heap.obj(o).proto, key) {
+        return false
+    }
+    var b = text.Builder.init(s.alloc)
+    defer b.deinit()
+    if tag & TAG_KIND == TAG_STYLE {
+        // Every property the cascade knows, set or not.
+        let name = it.heap.atoms.name(key)
+        if text.eql(name, "cssFloat") {
+            return true
+        }
+        kebab(name, "", &mut b) catch |e| {
+            return false
+        }
+        return css.isProperty(b.bytes())
+    }
+    let h = sideNode(it, o) orelse return false
+    kebab(it.heap.atoms.name(key), "data-", &mut b) catch |e| {
+        return false
+    }
+    return s.active.doc.attr(h, b.bytes()) != null
+}
+
+// The tag of the host object `o` (0 for other objects).
+fn hostTag(it: *mut Interp, o: u32) u32 {
+    return match it.heap.obj(o).data {
+        .Host { tag, .. } => tag
+        _ => 0
+    }
+}
+
+// The value of property `prop` in the declarations `decls` ("a: b; c: d").
+fn styleValue(decls: []u8, prop: []u8, out: *mut text.Builder) AllocError!void {
+    var parts = text.split(decls, ";")
+    while parts.next() |d| {
+        let colon = std.mem.indexOf(d, ':') orelse continue
+        if text.eqlIgnoreCase(text.trim(d[..colon]), prop) {
+            out.clear()
+            try out.append(text.trim(d[colon + 1..]))
+        }
+    }
+}
+
+// Sets (or, for an empty value, removes) the declaration of `prop` in
+// the style attribute of `el`.
+fn setStyleDecl(s: *mut Script, el: NodeId, prop: []u8, value: []u8) AllocError!void {
+    let doc = &mut s.active.doc
+    let old = doc.attr(el, "style") orelse ""
+    var b = text.Builder.init(s.alloc)
+    defer b.deinit()
+    var done = false
+    var parts = text.split(old, ";")
+    while parts.next() |d| {
+        let colon = std.mem.indexOf(d, ':') orelse continue
+        let name = text.trim(d[..colon])
+        if text.eqlIgnoreCase(name, prop) {
+            if !done && text.trim(value).len > 0 {
+                try appendDecl(&mut b, prop, value)
+            }
+            done = true
+            continue
+        }
+        try appendDecl(&mut b, name, text.trim(d[colon + 1..]))
+    }
+    if !done && text.trim(value).len > 0 {
+        try appendDecl(&mut b, prop, value)
+    }
+    try doc.setAttr(el, "style", b.bytes())
+}
+
+fn appendDecl(b: *mut text.Builder, name: []u8, value: []u8) AllocError!void {
+    if b.len() > 0 {
+        try b.appendByte(' ')
+    }
+    try b.append(name)
+    try b.append(": ")
+    try b.append(text.trim(value))
+    try b.appendByte(';')
+}
+
+fn thisStyleNode(it: *mut Interp, a: Args) JsError!NodeId {
+    let o = js.objectOf(a.this)
+    if o != js.NONE {
+        if sideNode(it, o) |h| {
+            if !isDataset(it, o) {
+                return h
+            }
+        }
+    }
+    try it.typeError("Illegal invocation")
+    return NodeId { index: 0, generation: 0 }
+}
+
+fn styleCssText(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisStyleNode(it, a)
+    return it.newString(docOf(it).attr(h, "style") orelse "")
+}
+
+fn styleSetCssText(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisStyleNode(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 0, b)
+    try docOf(it).setAttr(h, "style", b.bytes())
+    try changedAt(it, h, "style")
+    return Value.Undefined
+}
+
+fn styleLength(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisStyleNode(it, a)
+    var n: usize = 0
+    var parts = text.split(docOf(it).attr(h, "style") orelse "", ";")
+    while parts.next() |d| {
+        if std.mem.indexOf(d, ':') != null {
+            n += 1
+        }
+    }
+    return js.numVal(n as f64)
+}
+
+fn styleGetPropertyValue(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisStyleNode(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 0, b)
+    let v = try it.builder()
+    defer it.release(v)
+    try styleValue(docOf(it).attr(h, "style") orelse "", b.bytes(), v)
+    return it.newString(v.bytes())
+}
+
+fn styleSetProperty(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisStyleNode(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 0, b)
+    let v = try it.builder()
+    defer it.release(v)
+    if !js.isNullish(it.arg(a, 1)) {
+        try argText(it, a, 1, v)
+    }
+    try setStyleDecl(scriptOf(it), h, b.bytes(), v.bytes())
+    try changedAt(it, h, "style")
+    return Value.Undefined
+}
+
+fn styleRemoveProperty(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisStyleNode(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 0, b)
+    let v = try it.builder()
+    defer it.release(v)
+    try styleValue(docOf(it).attr(h, "style") orelse "", b.bytes(), v)
+    let old = try it.newString(v.bytes())
+    // Mutation hooks allocate and may collect the string before we return.
+    try it.push(old)
+    try setStyleDecl(scriptOf(it), h, b.bytes(), "")
+    try changedAt(it, h, "style")
+    return it.pop()
+}
+
+// ---- Document
+
+fn thisDocument(it: *mut Interp, a: Args) JsError!NodeId {
+    let h = try thisNode(it, a)
+    if !dom.same(h, docOf(it).root) {
+        try it.typeError("Illegal invocation")
+    }
+    return h
+}
+
+// The first element child of `parent` named `name`.
+fn childNamed(doc: *Document, parent: ?NodeId, name: []u8) ?NodeId {
+    let p = parent orelse return null
+    var cur = doc.firstChild(p)
+    while cur |c| {
+        if doc.isElement(c, name) {
+            return c
+        }
+        cur = doc.nextSibling(c)
+    }
+    return null
+}
+
+fn documentElement(it: *mut Interp, a: Args) JsError!Value {
+    try thisDocument(it, a)
+    return wrapOpt(it, docOf(it).documentElement())
+}
+
+fn documentBody(it: *mut Interp, a: Args) JsError!Value {
+    try thisDocument(it, a)
+    let doc = docOf(it)
+    return wrapOpt(it, childNamed(doc, doc.documentElement(), "body"))
+}
+
+fn documentHead(it: *mut Interp, a: Args) JsError!Value {
+    try thisDocument(it, a)
+    let doc = docOf(it)
+    return wrapOpt(it, childNamed(doc, doc.documentElement(), "head"))
+}
+
+fn documentTitle(it: *mut Interp, a: Args) JsError!Value {
+    try thisDocument(it, a)
+    let doc = docOf(it)
+    let t = try titleOf(it.alloc, doc)
+    defer it.alloc.free(t)
+    return it.newString(t)
+}
+
+fn documentSetTitle(it: *mut Interp, a: Args) JsError!Value {
+    try thisDocument(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 0, b)
+    let doc = docOf(it)
+    var titles = List(NodeId).init(it.alloc)
+    defer titles.deinit()
+    try doc.getElementsByTagName("title", &mut titles)
+    var t = doc.root
+    if titles.len() > 0 {
+        t = titles.items()[0]
+    } else {
+        let head = childNamed(doc, doc.documentElement(), "head") orelse return Value.Undefined
+        t = try doc.createElement("title", []Attr{})
+        doc.appendChild(head, t)
+    }
+    removeChildren(doc, t)
+    try doc.appendText(t, b.bytes())
+    try changed(it)
+    return Value.Undefined
+}
+
+fn documentReadyState(it: *mut Interp, a: Args) JsError!Value {
+    try thisDocument(it, a)
+    var ready: u8 = 2
+    if scriptOf(it).active.script |other| {
+        ready = other.ready
+    }
+    return it.newString(match ready {
+        0 => "loading"
+        1 => "interactive"
+        _ => "complete"
+    })
+}
+
+// The encoding the document was decoded from ("UTF-8", "Shift_JIS").
+fn documentCharacterSet(it: *mut Interp, a: Args) JsError!Value {
+    try thisDocument(it, a)
+    return it.newString(encoding.nameOf(scriptOf(it).active.encoding))
+}
+
+fn documentActiveElement(it: *mut Interp, a: Args) JsError!Value {
+    try thisDocument(it, a)
+    let s = scriptOf(it)
+    if scriptFocus(s.active) |f| {
+        if s.active.doc.isConnected(f) {
+            return wrap(it, f)
+        }
+    }
+    let doc = docOf(it)
+    return wrapOpt(it, childNamed(doc, doc.documentElement(), "body"))
+}
+
+fn documentCurrentScript(it: *mut Interp, a: Args) JsError!Value {
+    try thisDocument(it, a)
+    let s = scriptOf(it)
+    if s.active != s.page {
+        return Value.Null
+    }
+    return wrapOpt(it, s.current)
+}
+
+fn documentDoctype(it: *mut Interp, a: Args) JsError!Value {
+    try thisDocument(it, a)
+    let doc = docOf(it)
+    var cur = doc.firstChild(doc.root)
+    while cur |c| {
+        if doc.node(c).kind == Kind.Doctype {
+            return wrap(it, c)
+        }
+        cur = doc.nextSibling(c)
+    }
+    return Value.Null
+}
+
+fn documentGetElementById(it: *mut Interp, a: Args) JsError!Value {
+    try thisDocument(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 0, b)
+    return wrapOpt(it, docOf(it).getElementById(b.bytes()))
+}
+
+fn documentCreateElement(it: *mut Interp, a: Args) JsError!Value {
+    try thisDocument(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    try argAttrName(it, a, 0, b)
+    if b.len() == 0 {
+        return domError(it, "InvalidCharacterError", "Failed to execute 'createElement' on 'Document': The tag name provided ('') is not a valid name.")
+    }
+    let el = try docOf(it).createElement(b.bytes(), []Attr{})
+    return wrap(it, el)
+}
+
+fn documentCreateTextNode(it: *mut Interp, a: Args) JsError!Value {
+    try thisDocument(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 0, b)
+    let t = try docOf(it).createText(b.bytes())
+    return wrap(it, t)
+}
+
+fn documentCreateComment(it: *mut Interp, a: Args) JsError!Value {
+    try thisDocument(it, a)
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 0, b)
+    let t = try docOf(it).createComment(b.bytes())
+    return wrap(it, t)
+}
+
+// createElementNS(namespace, qualifiedName): the local name in lower
+// case, like the parser's; the namespace in `Node.ns`.
+fn documentCreateElementNs(it: *mut Interp, a: Args) JsError!Value {
+    try thisDocument(it, a)
+    var ns = dom.NS_OTHER
+    let nsv = it.arg(a, 0)
+    if !js.isNullish(nsv) {
+        let b = try it.builder()
+        defer it.release(b)
+        try argText(it, a, 0, b)
+        if text.eql(b.bytes(), HTML_NS) {
+            ns = dom.NS_HTML
+        } else if text.eql(b.bytes(), SVG_NS) {
+            ns = dom.NS_SVG
+        } else if text.eql(b.bytes(), MATHML_NS) {
+            ns = dom.NS_MATHML
+        }
+    }
+    let name = try it.builder()
+    defer it.release(name)
+    try argAttrName(it, a, 1, name)
+    var local = name.bytes()
+    if std.mem.indexOf(local, ':') |colon| {
+        local = local[colon + 1..]
+    }
+    if local.len == 0 {
+        return domError(it, "InvalidCharacterError", "Failed to execute 'createElementNS' on 'Document': The qualified name provided is empty.")
+    }
+    let doc = docOf(it)
+    let el = try doc.createElement(local, []Attr{})
+    doc.node(el).ns = ns
+    return wrap(it, el)
+}
+
+fn documentCreateFragment(it: *mut Interp, a: Args) JsError!Value {
+    try thisDocument(it, a)
+    let f = try docOf(it).createFragment()
+    return wrap(it, f)
+}
+
+// The contents of a template: the fragment the parser made, or a new one
+// for a template a script made.
+fn templateContent(it: *mut Interp, a: Args) JsError!Value {
+    let h = try thisElement(it, a)
+    let doc = docOf(it)
+    if doc.templateContent(h) |f| {
+        return wrap(it, f)
+    }
+    let f = try doc.createTemplateContent(h)
+    return wrap(it, f)
+}
+
+// document.write: while a script of the parser runs (not a deferred or
+// asynchronous one, not a timer or an event), the markup is kept and
+// inserted after the script when it returns (insertWritten); otherwise
+// it is ignored, as browsers do for asynchronous scripts.
+fn documentWrite(it: *mut Interp, a: Args) JsError!Value {
+    return writeArgs(it, a, false)
+}
+
+fn documentWriteln(it: *mut Interp, a: Args) JsError!Value {
+    return writeArgs(it, a, true)
+}
+
+fn writeArgs(it: *mut Interp, a: Args, line: bool) JsError!Value {
+    try thisDocument(it, a)
+    let s = scriptOf(it)
+    let b = try it.builder()
+    defer it.release(b)
+    for i in 0..a.argc {
+        try argText(it, a, i, b)
+    }
+    if line {
+        try b.appendByte('\n')
+    }
+    if s.current != null && s.ready == 0 {
+        try s.written.append(b.bytes())
+    }
+    return Value.Undefined
+}

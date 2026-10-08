@@ -1,0 +1,1669 @@
+// js/lib: built-ins written in JavaScript, run by installBuiltins after
+// the native ones: Promise and the drivers of async functions and async
+// generators (coroutine.aye), Reflect, typed arrays (views over the
+// byte store of an ArrayBuffer, typed.aye), DataView, an
+// English-only Intl, Date setters and formats, String.raw,
+// escape/unescape, structuredClone and smaller methods.
+//
+// The source is kept in a multi-line string (no @embedFile, see
+// browser/COMPILER_GAPS.md).
+
+pub let LIB =
+    \\(function () {
+    \\'use strict';
+    \\const G = globalThis;
+    \\function hidden(o, k, v) {
+    \\  Object.defineProperty(o, k, { value: v, writable: true, configurable: true });
+    \\}
+    \\function methods(o, table) {
+    \\  for (const k of Object.keys(table)) hidden(o, k, table[k]);
+    \\}
+    \\
+    \\// ---- Object, Array, String, Error additions
+    \\
+    \\methods(Object, {
+    \\  getOwnPropertyDescriptors(o) {
+    \\    const out = {};
+    \\    for (const k of Object.getOwnPropertyNames(o)) out[k] = Object.getOwnPropertyDescriptor(o, k);
+    \\    for (const s of Object.getOwnPropertySymbols(o)) out[s] = Object.getOwnPropertyDescriptor(o, s);
+    \\    return out;
+    \\  },
+    \\  groupBy(items, f) {
+    \\    const out = Object.create(null);
+    \\    let i = 0;
+    \\    for (const x of items) {
+    \\      const k = f(x, i++);
+    \\      (out[k] || (out[k] = [])).push(x);
+    \\    }
+    \\    return out;
+    \\  },
+    \\});
+    \\methods(Map, {
+    \\  groupBy(items, f) {
+    \\    const out = new Map();
+    \\    let i = 0;
+    \\    for (const x of items) {
+    \\      const k = f(x, i++);
+    \\      if (!out.has(k)) out.set(k, []);
+    \\      out.get(k).push(x);
+    \\    }
+    \\    return out;
+    \\  },
+    \\});
+    \\// Set methods of ES2025: `o` is set-like (size, has, keys)
+    \\function setLike(o) {
+    \\  if (o === null || typeof o !== 'object' || typeof o.has !== 'function' || typeof o.keys !== 'function') throw new TypeError('The argument must be set-like');
+    \\  return o;
+    \\}
+    \\methods(Set.prototype, {
+    \\  union(o) {
+    \\    const out = new Set(this);
+    \\    for (const x of setLike(o).keys()) out.add(x);
+    \\    return out;
+    \\  },
+    \\  intersection(o) {
+    \\    const out = new Set();
+    \\    if (this.size <= setLike(o).size) {
+    \\      for (const x of this) if (o.has(x)) out.add(x);
+    \\    } else {
+    \\      for (const x of o.keys()) if (this.has(x)) out.add(x);
+    \\    }
+    \\    return out;
+    \\  },
+    \\  difference(o) {
+    \\    setLike(o);
+    \\    const out = new Set();
+    \\    for (const x of this) if (!o.has(x)) out.add(x);
+    \\    return out;
+    \\  },
+    \\  symmetricDifference(o) {
+    \\    const out = new Set(this);
+    \\    for (const x of setLike(o).keys()) {
+    \\      if (this.has(x)) out.delete(x);
+    \\      else out.add(x);
+    \\    }
+    \\    return out;
+    \\  },
+    \\  isSubsetOf(o) {
+    \\    setLike(o);
+    \\    for (const x of this) if (!o.has(x)) return false;
+    \\    return true;
+    \\  },
+    \\  isSupersetOf(o) {
+    \\    for (const x of setLike(o).keys()) if (!this.has(x)) return false;
+    \\    return true;
+    \\  },
+    \\  isDisjointFrom(o) {
+    \\    setLike(o);
+    \\    for (const x of this) if (o.has(x)) return false;
+    \\    return true;
+    \\  },
+    \\});
+    \\methods(Array, {
+    \\  async fromAsync(items, f, thisArg) {
+    \\    const out = [];
+    \\    let i = 0;
+    \\    if (items[Symbol.asyncIterator] || items[Symbol.iterator]) {
+    \\      for await (const x of items) out.push(f ? await f.call(thisArg, x, i++) : x);
+    \\    } else {
+    \\      for (const n = items.length >>> 0; i < n; i++) out.push(f ? await f.call(thisArg, await items[i], i) : await items[i]);
+    \\    }
+    \\    return out;
+    \\  },
+    \\});
+    \\methods(Array.prototype, {
+    \\  copyWithin(target, start, end) {
+    \\    const len = this.length >>> 0;
+    \\    const rel = (x, d) => {
+    \\      x = x === undefined ? d : Math.trunc(Number(x)) || 0;
+    \\      return x < 0 ? Math.max(len + x, 0) : Math.min(x, len);
+    \\    };
+    \\    let to = rel(target, 0), from = rel(start, 0);
+    \\    const last = rel(end, len);
+    \\    let count = Math.min(last - from, len - to);
+    \\    if (from < to && to < from + count) {
+    \\      for (let i = count - 1; i >= 0; i--) {
+    \\        if (from + i in this) this[to + i] = this[from + i];
+    \\        else delete this[to + i];
+    \\      }
+    \\    } else {
+    \\      for (let i = 0; i < count; i++) {
+    \\        if (from + i in this) this[to + i] = this[from + i];
+    \\        else delete this[to + i];
+    \\      }
+    \\    }
+    \\    return this;
+    \\  },
+    \\  toSpliced(...args) {
+    \\    const copy = this.slice();
+    \\    copy.splice(...args);
+    \\    return copy;
+    \\  },
+    \\});
+    \\methods(String, {
+    \\  raw(strings, ...subs) {
+    \\    const raw = Object(strings).raw;
+    \\    if (raw === undefined || raw === null) throw new TypeError('Cannot convert undefined or null to object');
+    \\    const n = raw.length >>> 0;
+    \\    let out = '';
+    \\    for (let i = 0; i < n; i++) {
+    \\      out += String(raw[i]);
+    \\      if (i + 1 < n && i < subs.length) out += String(subs[i]);
+    \\    }
+    \\    return out;
+    \\  },
+    \\});
+    \\methods(String.prototype, {
+    \\  isWellFormed() { return !/[\uD800-\uDFFF]/.test(this); },
+    \\  toWellFormed() { return String(this); },
+    \\  anchor(n) { return '<a name="' + n + '">' + this + '</a>'; },
+    \\});
+    \\methods(Error, {
+    \\  captureStackTrace(o) {
+    \\    if (o !== null && typeof o === 'object') hidden(o, 'stack', String(o.name || 'Error') + ': ' + String(o.message || '') + '\n    at <anonymous>');
+    \\  },
+    \\});
+    \\Error.stackTraceLimit = 10;
+    \\Object.defineProperty(Error.prototype, 'stack', {
+    \\  get() { return String(this.name) + ': ' + String(this.message) + '\n    at <anonymous>'; },
+    \\  set(v) { hidden(this, 'stack', v); },
+    \\  configurable: true,
+    \\});
+    \\class AggregateError extends Error {
+    \\  constructor(errors, message) {
+    \\    super(message === undefined ? '' : message);
+    \\    hidden(this, 'errors', Array.from(errors));
+    \\  }
+    \\}
+    \\hidden(AggregateError.prototype, 'name', 'AggregateError');
+    \\hidden(G, 'AggregateError', AggregateError);
+    \\
+    \\// ---- Promise, and the drivers of async functions and async generators
+    \\// (the engine runs the microtasks they queue: queueMicrotask)
+    \\
+    \\const enqueue = G.queueMicrotask;
+    \\class Promise {
+    \\  constructor(executor) {
+    \\    if (typeof executor !== 'function') throw new TypeError('Promise resolver ' + executor + ' is not a function');
+    \\    hidden(this, '_state', 0);
+    \\    hidden(this, '_value', undefined);
+    \\    hidden(this, '_reactions', []);
+    \\    hidden(this, '_handled', false);
+    \\    const [resolve, reject] = resolvers(this);
+    \\    try {
+    \\      executor(resolve, reject);
+    \\    } catch (e) {
+    \\      reject(e);
+    \\    }
+    \\  }
+    \\  then(onFulfilled, onRejected) {
+    \\    let resolve, reject;
+    \\    const next = new Promise((res, rej) => {
+    \\      resolve = res;
+    \\      reject = rej;
+    \\    });
+    \\    const r = { onFulfilled, onRejected, resolve, reject };
+    \\    this._handled = true;
+    \\    if (this._state === 0) this._reactions.push(r);
+    \\    else react(this, r);
+    \\    return next;
+    \\  }
+    \\  catch(onRejected) { return this.then(undefined, onRejected); }
+    \\  finally(f) {
+    \\    if (typeof f !== 'function') return this.then(f, f);
+    \\    return this.then(
+    \\      v => Promise.resolve(f()).then(() => v),
+    \\      e => Promise.resolve(f()).then(() => { throw e; }),
+    \\    );
+    \\  }
+    \\  static resolve(v) {
+    \\    if (v instanceof Promise) return v;
+    \\    return new Promise(res => res(v));
+    \\  }
+    \\  static reject(e) { return new Promise((res, rej) => rej(e)); }
+    \\  static withResolvers() {
+    \\    let resolve, reject;
+    \\    const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+    \\    return { promise, resolve, reject };
+    \\  }
+    \\  static all(items) {
+    \\    return new Promise((resolve, reject) => {
+    \\      const list = Array.from(items);
+    \\      const out = new Array(list.length);
+    \\      let left = list.length;
+    \\      if (left === 0) resolve(out);
+    \\      list.forEach((p, i) => {
+    \\        Promise.resolve(p).then(v => {
+    \\          out[i] = v;
+    \\          if (--left === 0) resolve(out);
+    \\        }, reject);
+    \\      });
+    \\    });
+    \\  }
+    \\  static allSettled(items) {
+    \\    return new Promise(resolve => {
+    \\      const list = Array.from(items);
+    \\      const out = new Array(list.length);
+    \\      let left = list.length;
+    \\      if (left === 0) resolve(out);
+    \\      list.forEach((p, i) => {
+    \\        const done = r => {
+    \\          out[i] = r;
+    \\          if (--left === 0) resolve(out);
+    \\        };
+    \\        Promise.resolve(p).then(value => done({ status: 'fulfilled', value }), reason => done({ status: 'rejected', reason }));
+    \\      });
+    \\    });
+    \\  }
+    \\  static race(items) {
+    \\    return new Promise((resolve, reject) => {
+    \\      for (const p of items) Promise.resolve(p).then(resolve, reject);
+    \\    });
+    \\  }
+    \\  static any(items) {
+    \\    return new Promise((resolve, reject) => {
+    \\      const list = Array.from(items);
+    \\      let left = list.length;
+    \\      const errors = new Array(left);
+    \\      if (left === 0) reject(new AggregateError([], 'All promises were rejected'));
+    \\      list.forEach((p, i) => Promise.resolve(p).then(resolve, e => {
+    \\        errors[i] = e;
+    \\        if (--left === 0) reject(new AggregateError(errors, 'All promises were rejected'));
+    \\      }));
+    \\    });
+    \\  }
+    \\}
+    \\Object.defineProperty(Promise.prototype, Symbol.toStringTag, { value: 'Promise', configurable: true });
+    \\// The resolve and reject functions of a promise: the first call wins.
+    \\function resolvers(p) {
+    \\  let done = false;
+    \\  const resolve = v => {
+    \\    if (done) return;
+    \\    done = true;
+    \\    resolveWith(p, v);
+    \\  };
+    \\  const reject = e => {
+    \\    if (done) return;
+    \\    done = true;
+    \\    settle(p, 2, e);
+    \\  };
+    \\  return [resolve, reject];
+    \\}
+    \\function resolveWith(p, v) {
+    \\  if (v === p) return settle(p, 2, new TypeError('Chaining cycle detected for promise #<Promise>'));
+    \\  if (v !== null && (typeof v === 'object' || typeof v === 'function')) {
+    \\    let then;
+    \\    try {
+    \\      then = v.then;
+    \\    } catch (e) {
+    \\      return settle(p, 2, e);
+    \\    }
+    \\    if (typeof then === 'function') {
+    \\      enqueue(() => {
+    \\        const [res, rej] = resolvers(p);
+    \\        try {
+    \\          then.call(v, res, rej);
+    \\        } catch (e) {
+    \\          rej(e);
+    \\        }
+    \\      });
+    \\      return;
+    \\    }
+    \\  }
+    \\  settle(p, 1, v);
+    \\}
+    \\function settle(p, state, v) {
+    \\  if (p._state !== 0) return;
+    \\  p._state = state;
+    \\  p._value = v;
+    \\  const rs = p._reactions;
+    \\  p._reactions = [];
+    \\  if (state === 2 && !p._handled) unhandled.push(p);
+    \\  for (const r of rs) react(p, r);
+    \\}
+    \\// Promises rejected with no handler: the host asks for their reasons
+    \\// after each microtask checkpoint (takeUnhandled) and reports them.
+    \\const unhandled = [];
+    \\function takeUnhandled() {
+    \\  const out = [];
+    \\  for (const p of unhandled.splice(0)) if (!p._handled) out.push(p._value);
+    \\  return out;
+    \\}
+    \\function react(p, r) {
+    \\  enqueue(() => {
+    \\    const f = p._state === 1 ? r.onFulfilled : r.onRejected;
+    \\    if (typeof f !== 'function') {
+    \\      if (p._state === 1) r.resolve(p._value);
+    \\      else r.reject(p._value);
+    \\      return;
+    \\    }
+    \\    let out;
+    \\    try {
+    \\      out = f(p._value);
+    \\    } catch (e) {
+    \\      r.reject(e);
+    \\      return;
+    \\    }
+    \\    r.resolve(out);
+    \\  });
+    \\}
+    \\hidden(G, 'Promise', Promise);
+    \\
+    \\// An async function's call: `g` runs its body; each `await` stops it with
+    \\// the awaited value, and it goes on when that settles.
+    \\function asyncDriver(g) {
+    \\  return new Promise((resolve, reject) => {
+    \\    function step(thrown, v) {
+    \\      let r;
+    \\      try {
+    \\        r = thrown ? g.throw(v) : g.next(v);
+    \\      } catch (e) {
+    \\        reject(e);
+    \\        return;
+    \\      }
+    \\      if (r.done) resolve(r.value);
+    \\      else Promise.resolve(r.value).then(x => step(false, x), e => step(true, e));
+    \\    }
+    \\    step(false, undefined);
+    \\  });
+    \\}
+    \\// An async generator's object: next/throw/return give promises, served
+    \\// in order; inside, `await` and `yield` both stop `g` (kindOf tells
+    \\// which).
+    \\const kindOf = G.__engine.kindOf;
+    \\const engineConstruct = G.__engine.construct;
+    \\const engineDefineProperty = G.__engine.defineProperty;
+    \\const engineDeleteProperty = G.__engine.deleteProperty;
+    \\const engineSetPrototypeOf = G.__engine.setPrototypeOf;
+    \\const makeView = G.__engine.makeView;
+    \\const viewGet = G.__engine.viewGet;
+    \\const viewSet = G.__engine.viewSet;
+    \\function asyncGenDriver(g) {
+    \\  const queue = [];
+    \\  let running = false;
+    \\  function pump() {
+    \\    if (queue.length === 0) {
+    \\      running = false;
+    \\      return;
+    \\    }
+    \\    running = true;
+    \\    const req = queue[0];
+    \\    const finish = (ok, v) => {
+    \\      queue.shift();
+    \\      if (ok) req.resolve(v);
+    \\      else req.reject(v);
+    \\      pump();
+    \\    };
+    \\    function step(mode, v) {
+    \\      let r;
+    \\      try {
+    \\        r = mode === 0 ? g.next(v) : mode === 1 ? g.throw(v) : g.return(v);
+    \\      } catch (e) {
+    \\        finish(false, e);
+    \\        return;
+    \\      }
+    \\      if (r.done) finish(true, { value: r.value, done: true });
+    \\      else if (kindOf(g) === 1) Promise.resolve(r.value).then(x => step(0, x), e => step(1, e));
+    \\      else Promise.resolve(r.value).then(x => finish(true, { value: x, done: false }), e => step(1, e));
+    \\    }
+    \\    step(req.mode, req.value);
+    \\  }
+    \\  function request(mode, value) {
+    \\    return new Promise((resolve, reject) => {
+    \\      queue.push({ mode, value, resolve, reject });
+    \\      if (!running) pump();
+    \\    });
+    \\  }
+    \\  return {
+    \\    next(v) { return request(0, v); },
+    \\    throw(e) { return request(1, e); },
+    \\    return(v) { return request(2, v); },
+    \\    [Symbol.asyncIterator]() { return this; },
+    \\    [Symbol.toStringTag]: 'AsyncGenerator',
+    \\  };
+    \\}
+    \\// ---- ES modules: the loader (records and natives: js/modules.aye).
+    \\// One module map per engine, keyed by URL (and type), for static
+    \\// imports, import() and module scripts. Linking and evaluation follow
+    \\// the cyclic module records of ES2022 (InnerModuleLinking and
+    \\// InnerModuleEvaluation over strongly connected components, and async
+    \\// evaluation for top-level await).
+    \\const moduleMap = new Map();
+    \\const resolveModule = G.__engine.resolveModule;
+    \\const fetchModule = G.__engine.fetchModule;
+    \\const parseModule = G.__engine.parseModule;
+    \\const prefetchModules = G.__engine.prefetchModules;
+    \\const isModuleNamespace = G.__engine.isModuleNamespace;
+    \\const constCell = G.__engine.constCell;
+    \\const makeNamespace = G.__engine.makeNamespace;
+    \\const fillNamespace = G.__engine.fillNamespace;
+    \\const jsonParse = JSON.parse;
+    \\const AMBIGUOUS = {};
+    \\let asyncOrder = 0;
+    \\// The import map: [key, value] pairs, longest keys first.
+    \\let mapImports = [];
+    \\let mapScopes = [];
+    \\function capability() {
+    \\  let resolve, reject;
+    \\  const promise = new Promise((a, b) => { resolve = a; reject = b; });
+    \\  return { promise, resolve, reject };
+    \\}
+    \\function setupModule(m) {
+    \\  if (m.json !== undefined) {
+    \\    m.cells = { default: constCell(jsonParse(m.json)) };
+    \\    m.requests = []; m.imports = []; m.indirect = []; m.stars = [];
+    \\    m.locals = [['default', 'default']];
+    \\    m.tla = false;
+    \\    m.linkedEnv = true;
+    \\  } else {
+    \\    m.cells = null;
+    \\    m.linkedEnv = false;
+    \\  }
+    \\  // Export name -> local, and -> indirect entry, for ResolveExport.
+    \\  m.localNames = new Map();
+    \\  for (let i = 0; i < m.locals.length; i++) m.localNames.set(m.locals[i][0], m.locals[i][1]);
+    \\  m.indirectNames = new Map();
+    \\  for (let i = 0; i < m.indirect.length; i++) m.indirectNames.set(m.indirect[i][0], m.indirect[i]);
+    \\  m.deps = null;
+    \\  m.namespace = null;
+    \\  m.status = 'unlinked';
+    \\  m.hasError = false;
+    \\  m.error = undefined;
+    \\  m.cycleRoot = null;
+    \\  m.capability = null;
+    \\  m.asyncEvaluation = false;
+    \\  m.asyncOrder = 0;
+    \\  m.asyncParents = [];
+    \\  m.pending = 0;
+    \\  m.dfsIndex = 0;
+    \\  m.dfsAncestor = 0;
+    \\  return m;
+    \\}
+    \\function moduleKey(url, type) { return type === '' ? url : url + ' ' + type; }
+    \\// The record of the module at url; a failed fetch or parse is cached too.
+    \\function getModule(url, type, referrer) {
+    \\  const key = moduleKey(url, type);
+    \\  let m = moduleMap.get(key);
+    \\  if (m === undefined) {
+    \\    try {
+    \\      if (type !== '' && type !== 'json') throw new TypeError('Unsupported module type "' + type + '"');
+    \\      m = setupModule(fetchModule(url, referrer, type));
+    \\    } catch (e) {
+    \\      m = { failed: true, error: e };
+    \\    }
+    \\    moduleMap.set(key, m);
+    \\  }
+    \\  if (m.failed) throw m.error;
+    \\  return m;
+    \\}
+    \\// Resolves a module specifier: the import map, then URLs.
+    \\function resolveSpecifier(referrer, spec) {
+    \\  if (mapImports.length > 0 || mapScopes.length > 0) {
+    \\    const asURL = resolveModule(spec, referrer, 1);
+    \\    const normal = asURL === null ? spec : asURL;
+    \\    for (let i = 0; i < mapScopes.length; i++) {
+    \\      const prefix = mapScopes[i][0];
+    \\      if (prefix === referrer || (prefix.endsWith('/') && referrer.startsWith(prefix))) {
+    \\        const r = matchImports(normal, asURL, mapScopes[i][1]);
+    \\        if (r !== null) return r;
+    \\      }
+    \\    }
+    \\    const r = matchImports(normal, asURL, mapImports);
+    \\    if (r !== null) return r;
+    \\  }
+    \\  return resolveModule(spec, referrer, 0);
+    \\}
+    \\function blocked(spec) { return new TypeError('Failed to resolve module specifier "' + spec + '"'); }
+    \\function matchImports(normal, asURL, imports) {
+    \\  for (let i = 0; i < imports.length; i++) {
+    \\    const key = imports[i][0];
+    \\    const value = imports[i][1];
+    \\    if (key === normal) {
+    \\      if (value === null) throw blocked(normal);
+    \\      return value;
+    \\    }
+    \\    if (key.endsWith('/') && normal.startsWith(key) && (asURL === null || /^(https?|wss?|ftp|file):/.test(asURL))) {
+    \\      if (value === null) throw blocked(normal);
+    \\      const url = resolveModule(normal.slice(key.length), value, 2);
+    \\      if (url === null || !url.startsWith(value)) throw blocked(normal);
+    \\      return url;
+    \\    }
+    \\  }
+    \\  return null;
+    \\}
+    \\function longestFirst(a, b) { return a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0; }
+    \\// Normalizes a specifier map of an import map and merges it into `into`
+    \\// (keys already there win).
+    \\function mergeSpecifierMap(into, map, base) {
+    \\  const out = into.slice();
+    \\  if (typeof map !== 'object' || map === null || Array.isArray(map)) return out;
+    \\  for (const k of Object.keys(map)) {
+    \\    if (k === '') continue;
+    \\    const key = resolveModule(k, base, 1) || k;
+    \\    if (out.some(e => e[0] === key)) continue;
+    \\    const v = map[k];
+    \\    let value = null;
+    \\    if (typeof v === 'string') value = resolveModule(v, base, 1);
+    \\    if (value !== null && key.endsWith('/') && !value.endsWith('/')) value = null;
+    \\    out.push([key, value]);
+    \\  }
+    \\  return out.sort(longestFirst);
+    \\}
+    \\// The records of everything root imports, transitively, a level of the
+    \\// graph at a time: the modules of a level are fetched concurrently. A
+    \\// module has its deps only once its whole graph loaded: a failure
+    \\// takes back the deps this call gave.
+    \\function loadGraph(root) {
+    \\  const given = [];
+    \\  try {
+    \\    loadLevels(root, given);
+    \\  } catch (e) {
+    \\    for (const m of given) m.deps = null;
+    \\    throw e;
+    \\  }
+    \\}
+    \\function loadLevels(root, given) {
+    \\  let level = root.deps === null ? [root] : [];
+    \\  while (level.length > 0) {
+    \\    const urls = [];
+    \\    for (const m of level) {
+    \\      m.urls = [];
+    \\      for (let i = 0; i < m.requests.length; i++) {
+    \\        const url = resolveSpecifier(m.url, m.requests[i][0]);
+    \\        m.urls.push(url);
+    \\        if (!moduleMap.has(moduleKey(url, m.requests[i][1])) && !urls.includes(url)) urls.push(url);
+    \\      }
+    \\    }
+    \\    if (urls.length > 1) prefetchModules(urls.join('\n'), root.url);
+    \\    const next = [];
+    \\    for (const m of level) {
+    \\      if (m.deps !== null) continue;
+    \\      const deps = [];
+    \\      for (let i = 0; i < m.requests.length; i++) deps.push(getModule(m.urls[i], m.requests[i][1], m.url));
+    \\      m.deps = deps;
+    \\      given.push(m);
+    \\      for (const d of deps) {
+    \\        if (d.deps === null && !next.includes(d) && !level.includes(d)) next.push(d);
+    \\      }
+    \\    }
+    \\    level = next;
+    \\  }
+    \\}
+    \\// The cells of m's exported locals: runs its code to the first stop
+    \\// (its environment, with the functions, exists then).
+    \\function localsOf(m) {
+    \\  if (m.cells === null) m.cells = m.g.next().value;
+    \\  return m.cells;
+    \\}
+    \\function resolveExport(m, name, seen) {
+    \\  for (let i = 0; i < seen.length; i += 2) {
+    \\    if (seen[i] === m && seen[i + 1] === name) return null;
+    \\  }
+    \\  seen.push(m, name);
+    \\  const local = m.localNames.get(name);
+    \\  if (local !== undefined) return { module: m, local };
+    \\  const e = m.indirectNames.get(name);
+    \\  if (e !== undefined) {
+    \\    const d = m.deps[e[1]];
+    \\    if (e[2] === null) return { module: d, local: null };
+    \\    return resolveExport(d, e[2], seen);
+    \\  }
+    \\  if (name === 'default') return null;
+    \\  let star = null;
+    \\  for (let i = 0; i < m.stars.length; i++) {
+    \\    const r = resolveExport(m.deps[m.stars[i]], name, seen);
+    \\    if (r === AMBIGUOUS) return AMBIGUOUS;
+    \\    if (r !== null) {
+    \\      if (star === null) star = r;
+    \\      else if (r.module !== star.module || r.local !== star.local) return AMBIGUOUS;
+    \\    }
+    \\  }
+    \\  return star;
+    \\}
+    \\function exportedNames(m, seen, names) {
+    \\  if (seen.has(m)) return;
+    \\  seen.add(m);
+    \\  for (let i = 0; i < m.locals.length; i++) names.add(m.locals[i][0]);
+    \\  for (let i = 0; i < m.indirect.length; i++) names.add(m.indirect[i][0]);
+    \\  for (let i = 0; i < m.stars.length; i++) {
+    \\    const inner = new Set();
+    \\    exportedNames(m.deps[m.stars[i]], seen, inner);
+    \\    for (const n of inner) if (n !== 'default') names.add(n);
+    \\  }
+    \\}
+    \\function cellOf(r) {
+    \\  return r.local === null ? constCell(namespaceOf(r.module)) : localsOf(r.module)[r.local];
+    \\}
+    \\function namespaceOf(m) {
+    \\  if (m.namespace === null) {
+    \\    const all = new Set();
+    \\    exportedNames(m, new Set(), all);
+    \\    const entries = [];
+    \\    for (const n of all) {
+    \\      const r = resolveExport(m, n, []);
+    \\      if (r !== null && r !== AMBIGUOUS) entries.push([n, r]);
+    \\    }
+    \\    entries.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+    \\    m.namespace = makeNamespace(entries.map(e => e[0]));
+    \\    fillNamespace(m.namespace, entries.map(e => cellOf(e[1])));
+    \\  }
+    \\  return m.namespace;
+    \\}
+    \\function linkError(m, request, name, r) {
+    \\  const spec = m.requests[request][0];
+    \\  return new SyntaxError(r === AMBIGUOUS
+    \\    ? "The requested module '" + spec + "' contains conflicting star exports for name '" + name + "'"
+    \\    : "The requested module '" + spec + "' does not provide an export named '" + name + "'");
+    \\}
+    \\// Checks m's re-exports and gives its code its imports: it runs to the
+    \\// second stop. Throws a SyntaxError for a missing or ambiguous name.
+    \\function initializeEnvironment(m) {
+    \\  if (m.linkedEnv) return;
+    \\  for (let i = 0; i < m.indirect.length; i++) {
+    \\    const e = m.indirect[i];
+    \\    if (e[2] === null) continue;
+    \\    const r = resolveExport(m.deps[e[1]], e[2], [m, e[0]]);
+    \\    if (r === null || r === AMBIGUOUS) throw linkError(m, e[1], e[2], r);
+    \\  }
+    \\  localsOf(m);
+    \\  const bindings = Object.create(null);
+    \\  for (let i = 0; i < m.imports.length; i++) {
+    \\    const e = m.imports[i];
+    \\    const d = m.deps[e[0]];
+    \\    if (e[1] === null) {
+    \\      bindings[e[2]] = namespaceOf(d);
+    \\      continue;
+    \\    }
+    \\    const r = resolveExport(d, e[1], []);
+    \\    if (r === null || r === AMBIGUOUS) throw linkError(m, e[0], e[1], r);
+    \\    bindings[e[2]] = r.local === null ? namespaceOf(r.module) : localsOf(r.module)[r.local];
+    \\  }
+    \\  m.g.next(bindings);
+    \\  m.linkedEnv = true;
+    \\}
+    \\function link(root) {
+    \\  const stack = [];
+    \\  try {
+    \\    innerLink(root, stack, 0);
+    \\  } catch (e) {
+    \\    for (const m of stack) m.status = 'unlinked';
+    \\    throw e;
+    \\  }
+    \\}
+    \\function innerLink(m, stack, index) {
+    \\  if (m.status !== 'unlinked') return index;
+    \\  m.status = 'linking';
+    \\  m.dfsIndex = m.dfsAncestor = index++;
+    \\  stack.push(m);
+    \\  for (let i = 0; i < m.deps.length; i++) {
+    \\    const d = m.deps[i];
+    \\    index = innerLink(d, stack, index);
+    \\    if (d.status === 'linking' && d.dfsAncestor < m.dfsAncestor) m.dfsAncestor = d.dfsAncestor;
+    \\  }
+    \\  initializeEnvironment(m);
+    \\  if (m.dfsAncestor === m.dfsIndex) {
+    \\    let x;
+    \\    do {
+    \\      x = stack.pop();
+    \\      x.status = 'linked';
+    \\    } while (x !== m);
+    \\  }
+    \\  return index;
+    \\}
+    \\// Evaluate(): the promise of m's evaluation (of its cycle's root).
+    \\function evaluate(m) {
+    \\  if ((m.status === 'evaluating-async' || m.status === 'evaluated') && m.cycleRoot !== null) m = m.cycleRoot;
+    \\  if (m.capability !== null) return m.capability.promise;
+    \\  const cap = m.capability = capability();
+    \\  const stack = [];
+    \\  try {
+    \\    innerEvaluate(m, stack, 0);
+    \\    if (!m.asyncEvaluation) cap.resolve(undefined);
+    \\  } catch (e) {
+    \\    for (const x of stack) {
+    \\      x.status = 'evaluated';
+    \\      x.hasError = true;
+    \\      x.error = e;
+    \\    }
+    \\    cap.reject(e);
+    \\  }
+    \\  return cap.promise;
+    \\}
+    \\function innerEvaluate(m, stack, index) {
+    \\  if (m.status === 'evaluating-async' || m.status === 'evaluated') {
+    \\    if (m.hasError) throw m.error;
+    \\    return index;
+    \\  }
+    \\  if (m.status === 'evaluating') return index;
+    \\  m.status = 'evaluating';
+    \\  m.dfsIndex = m.dfsAncestor = index++;
+    \\  m.pending = 0;
+    \\  stack.push(m);
+    \\  for (let i = 0; i < m.deps.length; i++) {
+    \\    let d = m.deps[i];
+    \\    index = innerEvaluate(d, stack, index);
+    \\    if (d.status === 'evaluating') {
+    \\      if (d.dfsAncestor < m.dfsAncestor) m.dfsAncestor = d.dfsAncestor;
+    \\    } else {
+    \\      d = d.cycleRoot;
+    \\      if (d.hasError) throw d.error;
+    \\    }
+    \\    if (d.asyncEvaluation) {
+    \\      m.pending++;
+    \\      d.asyncParents.push(m);
+    \\    }
+    \\  }
+    \\  if (m.pending > 0 || m.tla) {
+    \\    m.asyncEvaluation = true;
+    \\    m.asyncOrder = asyncOrder++;
+    \\    if (m.pending === 0) executeAsync(m);
+    \\  } else {
+    \\    executeSync(m);
+    \\  }
+    \\  if (m.dfsAncestor === m.dfsIndex) {
+    \\    let x;
+    \\    do {
+    \\      x = stack.pop();
+    \\      x.status = x.asyncEvaluation ? 'evaluating-async' : 'evaluated';
+    \\      x.cycleRoot = m;
+    \\    } while (x !== m);
+    \\  }
+    \\  return index;
+    \\}
+    \\function executeSync(m) {
+    \\  if (m.json !== undefined) return;
+    \\  const g = m.g;
+    \\  m.g = null;
+    \\  g.next();
+    \\}
+    \\// Runs a module with top-level await; its end settles one job later.
+    \\function executeAsync(m) {
+    \\  const cap = capability();
+    \\  cap.promise.then(() => asyncFulfilled(m), e => asyncRejected(m, e));
+    \\  const g = m.g;
+    \\  m.g = null;
+    \\  function step(thrown, v) {
+    \\    let r;
+    \\    try {
+    \\      r = thrown ? g.throw(v) : g.next(v);
+    \\    } catch (e) {
+    \\      cap.reject(e);
+    \\      return;
+    \\    }
+    \\    if (r.done) cap.resolve(undefined);
+    \\    else Promise.resolve(r.value).then(x => step(false, x), e => step(true, e));
+    \\  }
+    \\  step(false, undefined);
+    \\}
+    \\function gatherAncestors(m, list) {
+    \\  for (const p of m.asyncParents) {
+    \\    if (!list.includes(p) && !p.cycleRoot.hasError) {
+    \\      p.pending--;
+    \\      if (p.pending === 0) {
+    \\        list.push(p);
+    \\        if (!p.tla) gatherAncestors(p, list);
+    \\      }
+    \\    }
+    \\  }
+    \\}
+    \\function asyncFulfilled(m) {
+    \\  if (m.status === 'evaluated') return;
+    \\  m.asyncEvaluation = false;
+    \\  m.status = 'evaluated';
+    \\  if (m.capability !== null) m.capability.resolve(undefined);
+    \\  const list = [];
+    \\  gatherAncestors(m, list);
+    \\  list.sort((a, b) => a.asyncOrder - b.asyncOrder);
+    \\  for (const x of list) {
+    \\    if (x.status === 'evaluated') continue;
+    \\    if (x.tla) {
+    \\      executeAsync(x);
+    \\      continue;
+    \\    }
+    \\    try {
+    \\      executeSync(x);
+    \\    } catch (e) {
+    \\      asyncRejected(x, e);
+    \\      continue;
+    \\    }
+    \\    x.asyncEvaluation = false;
+    \\    x.status = 'evaluated';
+    \\    if (x.capability !== null) x.capability.resolve(undefined);
+    \\  }
+    \\}
+    \\function asyncRejected(m, e) {
+    \\  if (m.status === 'evaluated') return;
+    \\  m.hasError = true;
+    \\  m.error = e;
+    \\  m.status = 'evaluated';
+    \\  for (const p of m.asyncParents) asyncRejected(p, e);
+    \\  if (m.capability !== null) m.capability.reject(e);
+    \\}
+    \\// Loads, links and evaluates the graph of m; the promise of its
+    \\// evaluation. Loading and linking errors throw.
+    \\function runGraph(m) {
+    \\  loadGraph(m);
+    \\  link(m);
+    \\  return evaluate(m);
+    \\}
+    \\const moduleLoader = {
+    \\  // import(specifier, options) from code of `referrer`.
+    \\  dynamicImport(specifier, referrer, options) {
+    \\    return new Promise((resolve, reject) => {
+    \\      let spec;
+    \\      let type = '';
+    \\      try {
+    \\        if (typeof specifier === 'symbol') throw new TypeError('Cannot convert a Symbol value to a string');
+    \\        spec = String(specifier);
+    \\        if (options !== undefined) {
+    \\          if (typeof options !== 'object' || options === null) throw new TypeError('The second argument of import() must be an object');
+    \\          const attrs = options.with;
+    \\          if (attrs !== undefined) {
+    \\            if (typeof attrs !== 'object' || attrs === null) throw new TypeError("The 'with' option of import() must be an object");
+    \\            for (const k of Object.keys(attrs)) {
+    \\              if (typeof attrs[k] !== 'string') throw new TypeError('Import attribute values must be strings');
+    \\              if (k === 'type') type = attrs[k];
+    \\            }
+    \\          }
+    \\        }
+    \\      } catch (e) { reject(e); return; }
+    \\      enqueue(() => {
+    \\        let m;
+    \\        let p;
+    \\        try {
+    \\          m = getModule(resolveSpecifier(referrer, spec), type, referrer);
+    \\          p = runGraph(m);
+    \\        } catch (e) { reject(e); return; }
+    \\        p.then(() => {
+    \\          try { resolve(namespaceOf(m)); } catch (e) { reject(e); }
+    \\        }, reject);
+    \\      });
+    \\    });
+    \\  },
+    \\  // A page's module script: the module at href, or inline source.
+    \\  moduleScript(href, source, base) {
+    \\    const m = href !== null ? getModule(href, '', base) : setupModule(parseModule(source, base));
+    \\    const p = runGraph(m);
+    \\    p.then(undefined, e => {
+    \\      const report = G.reportError;
+    \\      if (typeof report === 'function') report(e);
+    \\    });
+    \\    return p;
+    \\  },
+    \\  importMap(json, base) {
+    \\    const map = jsonParse(json);
+    \\    if (typeof map !== 'object' || map === null) return;
+    \\    mapImports = mergeSpecifierMap(mapImports, map.imports, base);
+    \\    if (typeof map.scopes === 'object' && map.scopes !== null) {
+    \\      for (const s of Object.keys(map.scopes)) {
+    \\        const prefix = resolveModule(s, base, 2);
+    \\        if (prefix === null) continue;
+    \\        let entry = mapScopes.find(e => e[0] === prefix);
+    \\        if (entry === undefined) {
+    \\          entry = [prefix, []];
+    \\          mapScopes.push(entry);
+    \\        }
+    \\        entry[1] = mergeSpecifierMap(entry[1], map.scopes[s], base);
+    \\      }
+    \\      mapScopes.sort(longestFirst);
+    \\    }
+    \\  },
+    \\  // import.meta.resolve, bound to the module's URL.
+    \\  resolve(referrer, specifier) {
+    \\    return resolveSpecifier(referrer, String(specifier));
+    \\  },
+    \\};
+    \\G.__engine.setDrivers(asyncDriver, asyncGenDriver, takeUnhandled, moduleLoader);
+    \\delete G.__engine;
+    \\
+    \\// ---- Iterator: the abstract constructor of %IteratorPrototype%, which
+    \\// the built-in iterators and generators inherit from (polyfills of the
+    \\// iterator helpers add their methods there).
+    \\const IteratorPrototype = Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]()));
+    \\function Iterator() {
+    \\  if (new.target === undefined || new.target === Iterator) throw new TypeError('Abstract class Iterator not directly constructable');
+    \\}
+    \\Object.defineProperty(Iterator, 'prototype', { value: IteratorPrototype, writable: false, enumerable: false, configurable: false });
+    \\hidden(IteratorPrototype, 'constructor', Iterator);
+    \\Object.defineProperty(IteratorPrototype, Symbol.toStringTag, { value: 'Iterator', writable: true, configurable: true });
+    \\hidden(G, 'Iterator', Iterator);
+    \\// The iterator helpers (ES2025): methods of Iterator.prototype. map,
+    \\// filter, take, drop and flatMap return lazy %IteratorHelperPrototype%
+    \\// objects; the others consume the iterator.
+    \\const helperState = new WeakMap();
+    \\const IteratorHelperPrototype = Object.create(IteratorPrototype);
+    \\function iterResult(value, done) { return { value, done }; }
+    \\function closeIterator(o) {
+    \\  const ret = o.return;
+    \\  if (ret !== undefined && ret !== null) ret.call(o);
+    \\}
+    \\function closeQuietly(o) {
+    \\  try { closeIterator(o); } catch (e) {}
+    \\}
+    \\function iterObject(o) {
+    \\  if (o === null || (typeof o !== 'object' && typeof o !== 'function')) throw new TypeError('Iterator helper called on non-object');
+    \\  return o;
+    \\}
+    \\function callable(f, o) {
+    \\  if (typeof f !== 'function') {
+    \\    closeQuietly(o);
+    \\    throw new TypeError(String(f) + ' is not a function');
+    \\  }
+    \\}
+    \\function stepOf(o, next) {
+    \\  const r = next.call(o);
+    \\  if (r === null || (typeof r !== 'object' && typeof r !== 'function')) throw new TypeError('Iterator result ' + String(r) + ' is not an object');
+    \\  return r;
+    \\}
+    \\function helper(o, step, close) {
+    \\  const h = Object.create(IteratorHelperPrototype);
+    \\  helperState.set(h, { o, step, close, done: false, running: false });
+    \\  return h;
+    \\}
+    \\methods(IteratorHelperPrototype, {
+    \\  next() {
+    \\    const s = helperState.get(this);
+    \\    if (s === undefined) throw new TypeError('next method called on incompatible receiver');
+    \\    if (s.running) throw new TypeError('Generator is already running');
+    \\    if (s.done) return iterResult(undefined, true);
+    \\    s.running = true;
+    \\    try {
+    \\      const r = s.step();
+    \\      if (r.done) s.done = true;
+    \\      return r;
+    \\    } catch (e) {
+    \\      s.done = true;
+    \\      throw e;
+    \\    } finally {
+    \\      s.running = false;
+    \\    }
+    \\  },
+    \\  return() {
+    \\    const s = helperState.get(this);
+    \\    if (s === undefined) throw new TypeError('return method called on incompatible receiver');
+    \\    if (s.running) throw new TypeError('Generator is already running');
+    \\    if (!s.done) {
+    \\      s.done = true;
+    \\      s.close();
+    \\    }
+    \\    return iterResult(undefined, true);
+    \\  },
+    \\});
+    \\Object.defineProperty(IteratorHelperPrototype, Symbol.toStringTag, { value: 'Iterator Helper', configurable: true });
+    \\function limitOf(limit, o) {
+    \\  const n = Number(limit);
+    \\  if (n !== n) {
+    \\    closeQuietly(o);
+    \\    throw new RangeError(String(limit) + ' must be positive');
+    \\  }
+    \\  const k = n === Infinity ? Infinity : Math.trunc(n);
+    \\  if (k < 0) {
+    \\    closeQuietly(o);
+    \\    throw new RangeError(String(limit) + ' must be positive');
+    \\  }
+    \\  return k;
+    \\}
+    \\// An iterator for flatMap's results: strings are not flattened.
+    \\function flattenable(v) {
+    \\  if (v === null || (typeof v !== 'object' && typeof v !== 'function')) throw new TypeError(String(v) + ' is not an object');
+    \\  const m = v[Symbol.iterator];
+    \\  const it = m === undefined || m === null ? v : m.call(v);
+    \\  if (it === null || (typeof it !== 'object' && typeof it !== 'function')) throw new TypeError(String(it) + ' is not an object');
+    \\  return it;
+    \\}
+    \\methods(IteratorPrototype, {
+    \\  map(mapper) {
+    \\    const o = iterObject(this);
+    \\    callable(mapper, o);
+    \\    const next = o.next;
+    \\    let counter = 0;
+    \\    return helper(o, () => {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return iterResult(undefined, true);
+    \\      try { return iterResult(mapper(r.value, counter++), false); } catch (e) { closeQuietly(o); throw e; }
+    \\    }, () => closeIterator(o));
+    \\  },
+    \\  filter(predicate) {
+    \\    const o = iterObject(this);
+    \\    callable(predicate, o);
+    \\    const next = o.next;
+    \\    let counter = 0;
+    \\    return helper(o, () => {
+    \\      for (;;) {
+    \\        const r = stepOf(o, next);
+    \\        if (r.done) return iterResult(undefined, true);
+    \\        const v = r.value;
+    \\        let keep;
+    \\        try { keep = predicate(v, counter++); } catch (e) { closeQuietly(o); throw e; }
+    \\        if (keep) return iterResult(v, false);
+    \\      }
+    \\    }, () => closeIterator(o));
+    \\  },
+    \\  take(limit) {
+    \\    const o = iterObject(this);
+    \\    let remaining = limitOf(limit, o);
+    \\    const next = o.next;
+    \\    return helper(o, () => {
+    \\      if (remaining === 0) {
+    \\        closeIterator(o);
+    \\        return iterResult(undefined, true);
+    \\      }
+    \\      if (remaining !== Infinity) remaining--;
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return iterResult(undefined, true);
+    \\      return iterResult(r.value, false);
+    \\    }, () => closeIterator(o));
+    \\  },
+    \\  drop(limit) {
+    \\    const o = iterObject(this);
+    \\    let remaining = limitOf(limit, o);
+    \\    const next = o.next;
+    \\    return helper(o, () => {
+    \\      while (remaining > 0) {
+    \\        if (remaining !== Infinity) remaining--;
+    \\        const r = stepOf(o, next);
+    \\        if (r.done) return iterResult(undefined, true);
+    \\      }
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return iterResult(undefined, true);
+    \\      return iterResult(r.value, false);
+    \\    }, () => closeIterator(o));
+    \\  },
+    \\  flatMap(mapper) {
+    \\    const o = iterObject(this);
+    \\    callable(mapper, o);
+    \\    const next = o.next;
+    \\    let counter = 0;
+    \\    let inner = null;
+    \\    let innerNext = null;
+    \\    return helper(o, () => {
+    \\      for (;;) {
+    \\        if (inner !== null) {
+    \\          let r;
+    \\          try { r = stepOf(inner, innerNext); } catch (e) { closeQuietly(o); throw e; }
+    \\          if (!r.done) return iterResult(r.value, false);
+    \\          inner = null;
+    \\        }
+    \\        const r = stepOf(o, next);
+    \\        if (r.done) return iterResult(undefined, true);
+    \\        try {
+    \\          inner = flattenable(mapper(r.value, counter++));
+    \\          innerNext = inner.next;
+    \\        } catch (e) { closeQuietly(o); throw e; }
+    \\      }
+    \\    }, () => {
+    \\      if (inner !== null) {
+    \\        try { closeIterator(inner); } catch (e) { closeQuietly(o); throw e; }
+    \\      }
+    \\      closeIterator(o);
+    \\    });
+    \\  },
+    \\  reduce(reducer, ...initial) {
+    \\    const o = iterObject(this);
+    \\    callable(reducer, o);
+    \\    const next = o.next;
+    \\    let acc;
+    \\    let counter = 0;
+    \\    if (initial.length === 0) {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) throw new TypeError('Reduce of empty iterator with no initial value');
+    \\      acc = r.value;
+    \\      counter = 1;
+    \\    } else {
+    \\      acc = initial[0];
+    \\    }
+    \\    for (;;) {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return acc;
+    \\      try { acc = reducer(acc, r.value, counter++); } catch (e) { closeQuietly(o); throw e; }
+    \\    }
+    \\  },
+    \\  toArray() {
+    \\    const o = iterObject(this);
+    \\    const next = o.next;
+    \\    const out = [];
+    \\    for (;;) {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return out;
+    \\      out.push(r.value);
+    \\    }
+    \\  },
+    \\  forEach(fn) {
+    \\    const o = iterObject(this);
+    \\    callable(fn, o);
+    \\    const next = o.next;
+    \\    let counter = 0;
+    \\    for (;;) {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return undefined;
+    \\      try { fn(r.value, counter++); } catch (e) { closeQuietly(o); throw e; }
+    \\    }
+    \\  },
+    \\  some(predicate) {
+    \\    const o = iterObject(this);
+    \\    callable(predicate, o);
+    \\    const next = o.next;
+    \\    let counter = 0;
+    \\    for (;;) {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return false;
+    \\      let hit;
+    \\      try { hit = predicate(r.value, counter++); } catch (e) { closeQuietly(o); throw e; }
+    \\      if (hit) {
+    \\        closeIterator(o);
+    \\        return true;
+    \\      }
+    \\    }
+    \\  },
+    \\  every(predicate) {
+    \\    const o = iterObject(this);
+    \\    callable(predicate, o);
+    \\    const next = o.next;
+    \\    let counter = 0;
+    \\    for (;;) {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return true;
+    \\      let ok;
+    \\      try { ok = predicate(r.value, counter++); } catch (e) { closeQuietly(o); throw e; }
+    \\      if (!ok) {
+    \\        closeIterator(o);
+    \\        return false;
+    \\      }
+    \\    }
+    \\  },
+    \\  find(predicate) {
+    \\    const o = iterObject(this);
+    \\    callable(predicate, o);
+    \\    const next = o.next;
+    \\    let counter = 0;
+    \\    for (;;) {
+    \\      const r = stepOf(o, next);
+    \\      if (r.done) return undefined;
+    \\      let hit;
+    \\      try { hit = predicate(r.value, counter++); } catch (e) { closeQuietly(o); throw e; }
+    \\      if (hit) {
+    \\        closeIterator(o);
+    \\        return r.value;
+    \\      }
+    \\    }
+    \\  },
+    \\});
+    \\// Iterator.from: an iterator that inherits from Iterator.prototype, or a
+    \\// wrapper around one that does not.
+    \\const WrapForValidIteratorPrototype = Object.create(IteratorPrototype);
+    \\const wrapped = new WeakMap();
+    \\methods(WrapForValidIteratorPrototype, {
+    \\  next() {
+    \\    const w = wrapped.get(this);
+    \\    if (w === undefined) throw new TypeError('next method called on incompatible receiver');
+    \\    return w.next.call(w.o);
+    \\  },
+    \\  return() {
+    \\    const w = wrapped.get(this);
+    \\    if (w === undefined) throw new TypeError('return method called on incompatible receiver');
+    \\    const ret = w.o.return;
+    \\    if (ret === undefined || ret === null) return iterResult(undefined, true);
+    \\    return ret.call(w.o);
+    \\  },
+    \\});
+    \\hidden(Iterator, 'from', function from(o) {
+    \\  let it;
+    \\  if (typeof o === 'string') it = o[Symbol.iterator]();
+    \\  else it = flattenable(o);
+    \\  if (IteratorPrototype.isPrototypeOf(it)) return it;
+    \\  const w = Object.create(WrapForValidIteratorPrototype);
+    \\  wrapped.set(w, { o: it, next: it.next });
+    \\  return w;
+    \\});
+    \\
+    \\// ---- legacy escape / unescape
+    \\
+    \\hidden(G, 'escape', function escape(s) {
+    \\  s = String(s);
+    \\  let out = '';
+    \\  for (let i = 0; i < s.length; i++) {
+    \\    const c = s.charCodeAt(i);
+    \\    if (/[A-Za-z0-9@*_+\-./]/.test(s[i])) out += s[i];
+    \\    else if (c < 256) out += '%' + (c < 16 ? '0' : '') + c.toString(16).toUpperCase();
+    \\    else out += '%u' + ('000' + c.toString(16).toUpperCase()).slice(-4);
+    \\  }
+    \\  return out;
+    \\});
+    \\hidden(G, 'unescape', function unescape(s) {
+    \\  return String(s).replace(/%u([0-9a-fA-F]{4})|%([0-9a-fA-F]{2})/g, (m, u, b) => String.fromCharCode(parseInt(u || b, 16)));
+    \\});
+    \\
+    \\// ---- Date: setters and more formats (local time is UTC)
+    \\
+    \\const DP = Date.prototype;
+    \\function dateParts(d) {
+    \\  return [d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds(), d.getUTCMilliseconds()];
+    \\}
+    \\function setter(first, count) {
+    \\  return function (...args) {
+    \\    const p = dateParts(this);
+    \\    for (let i = 0; i < count && i < args.length; i++) p[first + i] = Number(args[i]);
+    \\    if (args.length === 0) p[first] = NaN;
+    \\    return this.setTime(Date.UTC(p[0], p[1], p[2], p[3], p[4], p[5], p[6]));
+    \\  };
+    \\}
+    \\const setters = { FullYear: [0, 3], Month: [1, 2], Date: [2, 1], Hours: [3, 4], Minutes: [4, 3], Seconds: [5, 2], Milliseconds: [6, 1] };
+    \\for (const k of Object.keys(setters)) {
+    \\  const f = setter(setters[k][0], setters[k][1]);
+    \\  hidden(DP, 'set' + k, f);
+    \\  hidden(DP, 'setUTC' + k, f);
+    \\}
+    \\const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    \\const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    \\const LONG_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    \\const pad = (n, w) => String(n).padStart(w || 2, '0');
+    \\methods(DP, {
+    \\  getYear() { return this.getFullYear() - 1900; },
+    \\  setYear(y) { return this.setFullYear(y < 100 && y >= 0 ? 1900 + y : y); },
+    \\  toDateString() {
+    \\    if (isNaN(this.getTime())) return 'Invalid Date';
+    \\    return DAYS[this.getDay()] + ' ' + MONTHS[this.getMonth()] + ' ' + pad(this.getDate()) + ' ' + pad(this.getFullYear(), 4);
+    \\  },
+    \\  toTimeString() {
+    \\    if (isNaN(this.getTime())) return 'Invalid Date';
+    \\    return pad(this.getHours()) + ':' + pad(this.getMinutes()) + ':' + pad(this.getSeconds()) + ' GMT+0000 (Coordinated Universal Time)';
+    \\  },
+    \\  toUTCString() {
+    \\    if (isNaN(this.getTime())) return 'Invalid Date';
+    \\    return DAYS[this.getDay()] + ', ' + pad(this.getDate()) + ' ' + MONTHS[this.getMonth()] + ' ' + pad(this.getFullYear(), 4) + ' ' + pad(this.getHours()) + ':' + pad(this.getMinutes()) + ':' + pad(this.getSeconds()) + ' GMT';
+    \\  },
+    \\  toLocaleDateString(locale, opts) {
+    \\    if (isNaN(this.getTime())) return 'Invalid Date';
+    \\    if (opts && (opts.month === 'long' || opts.month === 'short')) {
+    \\      const m = opts.month === 'long' ? LONG_MONTHS[this.getMonth()] : MONTHS[this.getMonth()];
+    \\      return m + ' ' + this.getDate() + ', ' + this.getFullYear();
+    \\    }
+    \\    return (this.getMonth() + 1) + '/' + this.getDate() + '/' + this.getFullYear();
+    \\  },
+    \\  toLocaleTimeString() {
+    \\    if (isNaN(this.getTime())) return 'Invalid Date';
+    \\    const h = this.getHours();
+    \\    return ((h + 11) % 12 + 1) + ':' + pad(this.getMinutes()) + ':' + pad(this.getSeconds()) + (h < 12 ? ' AM' : ' PM');
+    \\  },
+    \\  toLocaleString() {
+    \\    if (isNaN(this.getTime())) return 'Invalid Date';
+    \\    return this.toLocaleDateString() + ', ' + this.toLocaleTimeString();
+    \\  },
+    \\});
+    \\hidden(DP, 'toGMTString', DP.toUTCString);
+    \\hidden(DP, Symbol.toPrimitive, function (hint) {
+    \\  return hint === 'number' ? this.getTime() : this.toString();
+    \\});
+    \\
+    \\// ---- Object.prototype.__proto__ (Annex B): the prototype as an accessor
+    \\
+    \\Object.defineProperty(Object.prototype, '__proto__', {
+    \\  get() { return Object.getPrototypeOf(this); },
+    \\  set(p) {
+    \\    if (this === undefined || this === null) throw new TypeError('Object.prototype.__proto__ called on null or undefined');
+    \\    if ((typeof p === 'object' || typeof p === 'function') && (typeof this === 'object' || typeof this === 'function')) Object.setPrototypeOf(this, p);
+    \\  },
+    \\  configurable: true,
+    \\});
+    \\
+    \\// ---- Reflect
+    \\
+    \\const Reflect = {
+    \\  apply(f, t, args) { return Function.prototype.apply.call(f, t, args); },
+    \\  construct(C, args, NT) {
+    \\    if (typeof C !== 'function') throw new TypeError('Reflect.construct: target is not a constructor');
+    \\    return engineConstruct(C, Array.from(args), NT === undefined ? C : NT);
+    \\  },
+    \\  defineProperty(o, k, d) { return engineDefineProperty(o, k, d); },
+    \\  deleteProperty(o, k) { return engineDeleteProperty(o, k); },
+    \\  get(o, k, r) {
+    \\    if (r === undefined || r === o) return o[k];
+    \\    const d = findDescriptor(o, k);
+    \\    if (d && d.get) return d.get.call(r);
+    \\    return o[k];
+    \\  },
+    \\  set(o, k, v, r) {
+    \\    if (!isObjectLike(o)) throw new TypeError('Reflect.set called on non-object');
+    \\    if (isModuleNamespace(o)) return false;
+    \\    if (r === undefined || r === o) { o[k] = v; return true; }
+    \\    // OrdinarySet with another receiver: a setter runs on it; a data
+    \\    // property is defined on it (a proxy's [[Set]] is not called again).
+    \\    const d = findDescriptor(o, k);
+    \\    if (d && (d.get || d.set)) {
+    \\      if (!d.set) return false;
+    \\      d.set.call(r, v);
+    \\      return true;
+    \\    }
+    \\    if (d && !d.writable) return false;
+    \\    if (r === null || (typeof r !== 'object' && typeof r !== 'function')) return false;
+    \\    const own = Object.getOwnPropertyDescriptor(r, k);
+    \\    if (own && (own.get || own.set || !own.writable)) return false;
+    \\    return engineDefineProperty(r, k, own ? { value: v } : { value: v, writable: true, enumerable: true, configurable: true });
+    \\  },
+    \\  has(o, k) { return k in o; },
+    \\  ownKeys(o) { return [...Object.getOwnPropertyNames(o), ...Object.getOwnPropertySymbols(o)]; },
+    \\  getPrototypeOf(o) { return Object.getPrototypeOf(o); },
+    \\  setPrototypeOf(o, p) { return engineSetPrototypeOf(o, p); },
+    \\  getOwnPropertyDescriptor(o, k) { return Object.getOwnPropertyDescriptor(o, k); },
+    \\  isExtensible(o) { return Object.isExtensible(o); },
+    \\  preventExtensions(o) {
+    \\    if (!isObjectLike(o)) throw new TypeError('Reflect.preventExtensions called on non-object');
+    \\    Object.preventExtensions(o);
+    \\    return true;
+    \\  },
+    \\};
+    \\function isObjectLike(v) {
+    \\  return v !== null && (typeof v === 'object' || typeof v === 'function');
+    \\}
+    \\function findDescriptor(o, k) {
+    \\  for (let p = o; p !== null && p !== undefined; p = Object.getPrototypeOf(p)) {
+    \\    const d = Object.getOwnPropertyDescriptor(p, k);
+    \\    if (d) return d;
+    \\  }
+    \\  return undefined;
+    \\}
+    \\Object.defineProperty(Reflect, Symbol.toStringTag, { value: 'Reflect', configurable: true });
+    \\hidden(G, 'Reflect', Reflect);
+    \\
+    \\// ---- typed arrays: views over the byte store of one ArrayBuffer
+    \\// (typed.aye). A typed array is not an Array; it takes the generic Array
+    \\// methods. Elements are little-endian, converted on every write.
+    \\
+    \\const KINDS = ['Int8', 'Uint8', 'Uint8Clamped', 'Int16', 'Uint16', 'Int32', 'Uint32', 'Float32', 'Float64', 'BigInt64', 'BigUint64'];
+    \\const SIZES = [1, 1, 1, 2, 2, 4, 4, 4, 8, 8, 8];
+    \\
+    \\class ArrayBuffer {
+    \\  constructor(n) {
+    \\    n = Math.max(0, Math.trunc(Number(n)) || 0);
+    \\    hidden(this, '_bytes', new Array(n).fill(0));
+    \\  }
+    \\  get byteLength() { return this._bytes.length; }
+    \\  slice(b, e) {
+    \\    const r = new ArrayBuffer(0);
+    \\    r._bytes = this._bytes.slice(b, e);
+    \\    return r;
+    \\  }
+    \\  static isView(v) { return v instanceof TypedArray || v instanceof DataView; }
+    \\}
+    \\hidden(G, 'ArrayBuffer', ArrayBuffer);
+    \\function relIndex(i, n, dflt) {
+    \\  if (i === undefined) return dflt;
+    \\  i = Math.trunc(Number(i)) || 0;
+    \\  return i < 0 ? Math.max(0, n + i) : Math.min(i, n);
+    \\}
+    \\// A plain iterator: a generator would count against the live generators.
+    \\function typedIter(a, kind) {
+    \\  let i = 0;
+    \\  const it = {
+    \\    next() {
+    \\      if (i >= a.length) return { value: undefined, done: true };
+    \\      const k = i++;
+    \\      return { value: kind === 0 ? k : kind === 1 ? a[k] : [k, a[k]], done: false };
+    \\    },
+    \\  };
+    \\  hidden(it, Symbol.iterator, function () { return this; });
+    \\  return it;
+    \\}
+    \\class TypedArray {
+    \\  get buffer() { return this._buf; }
+    \\  get byteLength() { return this.length * this.constructor.BYTES_PER_ELEMENT; }
+    \\  get byteOffset() { return this._off; }
+    \\  get [Symbol.toStringTag]() { return this.constructor.name; }
+    \\  set(src, offset) {
+    \\    offset = offset || 0;
+    \\    const a = Array.from(src);
+    \\    if (offset < 0 || offset + a.length > this.length) throw new RangeError('offset is out of bounds');
+    \\    for (let i = 0; i < a.length; i++) this[offset + i] = a[i];
+    \\  }
+    \\  subarray(b, e) {
+    \\    const n = this.length;
+    \\    b = relIndex(b, n, 0);
+    \\    e = relIndex(e, n, n);
+    \\    return new this.constructor(this._buf, this._off + b * this.constructor.BYTES_PER_ELEMENT, Math.max(0, e - b));
+    \\  }
+    \\  slice(b, e) {
+    \\    const n = this.length;
+    \\    b = relIndex(b, n, 0);
+    \\    e = relIndex(e, n, n);
+    \\    const r = new this.constructor(Math.max(0, e - b));
+    \\    for (let i = b; i < e; i++) r[i - b] = this[i];
+    \\    return r;
+    \\  }
+    \\  map(f, t) { return new this.constructor(Array.prototype.map.call(this, f, t)); }
+    \\  filter(f, t) { return new this.constructor(Array.prototype.filter.call(this, f, t)); }
+    \\  sort(f) {
+    \\    const a = Array.from(this);
+    \\    a.sort(f || ((x, y) => (x < y ? -1 : x > y ? 1 : 0)));
+    \\    for (let i = 0; i < a.length; i++) this[i] = a[i];
+    \\    return this;
+    \\  }
+    \\  toSorted(f) { return this.slice().sort(f); }
+    \\  toReversed() { return this.slice().reverse(); }
+    \\  with(i, v) { const r = this.slice(); r[i < 0 ? i + this.length : i] = v; return r; }
+    \\  values() { return typedIter(this, 1); }
+    \\  keys() { return typedIter(this, 0); }
+    \\  entries() { return typedIter(this, 2); }
+    \\  static from(src, f, t) { return new this(Array.from(src, f, t)); }
+    \\  static of(...xs) { return new this(xs); }
+    \\}
+    \\for (const k of ['at', 'every', 'fill', 'find', 'findIndex', 'findLast', 'findLastIndex', 'forEach', 'includes', 'indexOf', 'join', 'lastIndexOf', 'reduce', 'reduceRight', 'reverse', 'some', 'copyWithin']) {
+    \\  hidden(TypedArray.prototype, k, Array.prototype[k]);
+    \\}
+    \\hidden(TypedArray.prototype, 'toString', function toString() { return this.join(); });
+    \\hidden(TypedArray.prototype, 'toLocaleString', function toLocaleString() { return this.join(); });
+    \\hidden(TypedArray.prototype, Symbol.iterator, TypedArray.prototype.values);
+    \\KINDS.forEach((name, kind) => {
+    \\  const size = SIZES[kind];
+    \\  const C = {
+    \\    [name + 'Array']: class extends TypedArray {
+    \\      constructor(arg, offset, length) {
+    \\        super();
+    \\        let buf, off = 0, len;
+    \\        if (arg instanceof ArrayBuffer) {
+    \\          off = Math.trunc(Number(offset)) || 0;
+    \\          if (off % size !== 0) throw new RangeError('start offset of ' + name + 'Array should be a multiple of ' + size);
+    \\          if (off < 0 || off > arg.byteLength) throw new RangeError('Start offset ' + off + ' is outside the bounds of the buffer');
+    \\          if (length === undefined) {
+    \\            if ((arg.byteLength - off) % size !== 0) throw new RangeError('byte length of ' + name + 'Array should be a multiple of ' + size);
+    \\            len = (arg.byteLength - off) / size;
+    \\          } else {
+    \\            len = Math.trunc(Number(length)) || 0;
+    \\            if (off + len * size > arg.byteLength) throw new RangeError('Invalid typed array length: ' + len);
+    \\          }
+    \\          buf = arg;
+    \\          makeView(this, buf._bytes, off, len, kind);
+    \\          hidden(this, '_buf', buf);
+    \\          hidden(this, '_off', off);
+    \\          return;
+    \\        }
+    \\        let src = null;
+    \\        if (arg !== null && typeof arg === 'object') {
+    \\          src = Array.from(arg);
+    \\          len = src.length;
+    \\        } else {
+    \\          len = Math.max(0, Math.trunc(Number(arg)) || 0);
+    \\        }
+    \\        buf = new ArrayBuffer(len * size);
+    \\        makeView(this, buf._bytes, 0, len, kind);
+    \\        hidden(this, '_buf', buf);
+    \\        hidden(this, '_off', 0);
+    \\        if (src) for (let i = 0; i < len; i++) this[i] = src[i];
+    \\      }
+    \\    },
+    \\  }[name + 'Array'];
+    \\  Object.defineProperty(C, 'name', { value: name + 'Array', configurable: true });
+    \\  hidden(C, 'BYTES_PER_ELEMENT', size);
+    \\  hidden(C.prototype, 'BYTES_PER_ELEMENT', size);
+    \\  hidden(G, name + 'Array', C);
+    \\});
+    \\class DataView {
+    \\  constructor(buffer, offset, length) {
+    \\    if (!(buffer instanceof ArrayBuffer)) throw new TypeError('First argument to DataView constructor must be an ArrayBuffer');
+    \\    offset = Math.trunc(Number(offset)) || 0;
+    \\    if (offset < 0 || offset > buffer.byteLength) throw new RangeError('Start offset ' + offset + ' is outside the bounds of the buffer');
+    \\    hidden(this, 'buffer', buffer);
+    \\    hidden(this, 'byteOffset', offset);
+    \\    hidden(this, 'byteLength', length === undefined ? buffer.byteLength - offset : length);
+    \\  }
+    \\}
+    \\KINDS.forEach((name, kind) => {
+    \\  if (name === 'Uint8Clamped') return;
+    \\  const size = SIZES[kind];
+    \\  hidden(DataView.prototype, 'get' + name, function (i, le) {
+    \\    i = Math.trunc(Number(i)) || 0;
+    \\    if (i < 0 || i + size > this.byteLength) throw new RangeError('Offset is outside the bounds of the DataView');
+    \\    return viewGet(this.buffer._bytes, this.byteOffset + i, kind, !!le);
+    \\  });
+    \\  hidden(DataView.prototype, 'set' + name, function (i, v, le) {
+    \\    i = Math.trunc(Number(i)) || 0;
+    \\    if (i < 0 || i + size > this.byteLength) throw new RangeError('Offset is outside the bounds of the DataView');
+    \\    viewSet(this.buffer._bytes, this.byteOffset + i, kind, v, !!le);
+    \\  });
+    \\});
+    \\hidden(G, 'DataView', DataView);
+    \\
+    \\// ---- Intl: English formats only
+    \\
+    \\function numberFormat(n, o) {
+    \\  o = o || {};
+    \\  if (typeof n !== 'number') n = Number(n);
+    \\  if (!isFinite(n)) return String(n);
+    \\  let max = o.maximumFractionDigits !== undefined ? o.maximumFractionDigits : (o.style === 'percent' ? 0 : 3);
+    \\  let min = o.minimumFractionDigits || 0;
+    \\  if (o.style === 'currency' && o.minimumFractionDigits === undefined) { min = 2; max = Math.max(max, 2); }
+    \\  if (o.style === 'percent') n *= 100;
+    \\  let s = n.toFixed(Math.max(min, max));
+    \\  if (s.indexOf('.') >= 0) {
+    \\    while (s.endsWith('0') && s.length - s.indexOf('.') - 1 > min) s = s.slice(0, -1);
+    \\    if (s.endsWith('.')) s = s.slice(0, -1);
+    \\  }
+    \\  if (o.useGrouping !== false) {
+    \\    const neg = s[0] === '-';
+    \\    if (neg) s = s.slice(1);
+    \\    const dot = s.indexOf('.');
+    \\    let int = dot < 0 ? s : s.slice(0, dot);
+    \\    const frac = dot < 0 ? '' : s.slice(dot);
+    \\    int = int.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    \\    s = (neg ? '-' : '') + int + frac;
+    \\  }
+    \\  if (o.notation === 'compact' && Math.abs(n) >= 1000) {
+    \\    const units = [[1e12, 'T'], [1e9, 'B'], [1e6, 'M'], [1e3, 'K']];
+    \\    for (const [v, u] of units) if (Math.abs(n) >= v) return numberFormat(Math.round(n / v * 10) / 10, { maximumFractionDigits: 1 }) + u;
+    \\  }
+    \\  if (o.style === 'percent') return s + '%';
+    \\  if (o.style === 'currency') return (o.currency === 'EUR' ? '€' : o.currency === 'GBP' ? '£' : o.currency === 'JPY' ? '¥' : '$') + s;
+    \\  return s;
+    \\}
+    \\function dateFormat(d, o) {
+    \\  d = d === undefined ? new Date() : new Date(d);
+    \\  o = o || {};
+    \\  if (o.dateStyle === 'long' || o.month === 'long') return LONG_MONTHS[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear();
+    \\  if (o.month === 'short' || o.dateStyle === 'medium') return MONTHS[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear();
+    \\  if (o.hour !== undefined && o.year === undefined) return d.toLocaleTimeString();
+    \\  return d.toLocaleDateString();
+    \\}
+    \\const Intl = {
+    \\  NumberFormat: class NumberFormat {
+    \\    constructor(locale, o) { hidden(this, '_o', o || {}); }
+    \\    format(n) { return numberFormat(n, this._o); }
+    \\    formatToParts(n) { return [{ type: 'integer', value: this.format(n) }]; }
+    \\    resolvedOptions() { return Object.assign({ locale: 'en-US', numberingSystem: 'latn' }, this._o); }
+    \\    static supportedLocalesOf(l) { return [].concat(l || []); }
+    \\  },
+    \\  DateTimeFormat: class DateTimeFormat {
+    \\    constructor(locale, o) { hidden(this, '_o', o || {}); }
+    \\    format(d) { return dateFormat(d, this._o); }
+    \\    formatToParts(d) { return [{ type: 'literal', value: this.format(d) }]; }
+    \\    formatRange(a, b) { return this.format(a) + ' – ' + this.format(b); }
+    \\    resolvedOptions() { return Object.assign({ locale: 'en-US', calendar: 'gregory', numberingSystem: 'latn', timeZone: 'UTC' }, this._o); }
+    \\    static supportedLocalesOf(l) { return [].concat(l || []); }
+    \\  },
+    \\  Collator: class Collator {
+    \\    constructor(locale, o) { hidden(this, '_o', o || {}); }
+    \\    compare(a, b) {
+    \\      a = String(a); b = String(b);
+    \\      if (this._o.sensitivity === 'base' || this._o.sensitivity === 'accent') { a = a.toLowerCase(); b = b.toLowerCase(); }
+    \\      return a < b ? -1 : a > b ? 1 : 0;
+    \\    }
+    \\    resolvedOptions() { return { locale: 'en-US' }; }
+    \\  },
+    \\  PluralRules: class PluralRules {
+    \\    constructor(locale, o) { hidden(this, '_o', o || {}); }
+    \\    select(n) {
+    \\      if (this._o.type === 'ordinal') {
+    \\        const t = n % 10, h = n % 100;
+    \\        return t === 1 && h !== 11 ? 'one' : t === 2 && h !== 12 ? 'two' : t === 3 && h !== 13 ? 'few' : 'other';
+    \\      }
+    \\      return n === 1 ? 'one' : 'other';
+    \\    }
+    \\    resolvedOptions() { return { locale: 'en-US' }; }
+    \\  },
+    \\  RelativeTimeFormat: class RelativeTimeFormat {
+    \\    constructor(locale, o) { hidden(this, '_o', o || {}); }
+    \\    format(v, unit) {
+    \\      unit = String(unit).replace(/s$/, '');
+    \\      const n = Math.abs(v);
+    \\      if (this._o.numeric === 'auto' && n === 1 && unit === 'day') return v < 0 ? 'yesterday' : 'tomorrow';
+    \\      const u = n === 1 ? unit : unit + 's';
+    \\      return v < 0 || Object.is(v, -0) ? n + ' ' + u + ' ago' : 'in ' + n + ' ' + u;
+    \\    }
+    \\  },
+    \\  ListFormat: class ListFormat {
+    \\    constructor(locale, o) { hidden(this, '_o', o || {}); }
+    \\    format(list) {
+    \\      const a = Array.from(list, String);
+    \\      const w = this._o.type === 'disjunction' ? 'or' : 'and';
+    \\      if (a.length < 3) return a.join(' ' + w + ' ');
+    \\      return a.slice(0, -1).join(', ') + ', ' + w + ' ' + a[a.length - 1];
+    \\    }
+    \\  },
+    \\  Segmenter: class Segmenter {
+    \\    constructor(locale, o) { hidden(this, '_o', o || {}); }
+    \\    segment(s) {
+    \\      s = String(s);
+    \\      const parts = this._o.granularity === 'word' ? s.split(/(\s+)/).filter(Boolean) : Array.from(s);
+    \\      let i = 0;
+    \\      return parts.map(p => { const r = { segment: p, index: i, input: s, isWordLike: /\w/.test(p) }; i += p.length; return r; });
+    \\    }
+    \\  },
+    \\  getCanonicalLocales(l) { return [].concat(l || []); },
+    \\  supportedValuesOf() { return []; },
+    \\};
+    \\hidden(G, 'Intl', Intl);
+    \\hidden(Number.prototype, 'toLocaleString', function (locale, o) { return numberFormat(Number(this), o); });
+    \\
+    \\// ---- structuredClone: plain data, arrays, Date, RegExp, Map, Set, errors,
+    \\// wrapped primitives and typed arrays; cycles and shared parts are kept;
+    \\// a class instance becomes a plain object
+    \\const cloneErrors = { Error, EvalError, RangeError, ReferenceError, SyntaxError, TypeError, URIError };
+    \\hidden(G, 'structuredClone', function structuredClone(value) {
+    \\  const seen = new Map();
+    \\  function fail(v) {
+    \\    const msg = (typeof v === 'function' ? 'function' : String(v)) + ' could not be cloned.';
+    \\    throw typeof G.DOMException === 'function' ? new G.DOMException(msg, 'DataCloneError') : new TypeError(msg);
+    \\  }
+    \\  function clone(v) {
+    \\    if (typeof v === 'symbol' || typeof v === 'function') fail(v);
+    \\    if (v === null || typeof v !== 'object') return v;
+    \\    if (seen.has(v)) return seen.get(v);
+    \\    const tag = Object.prototype.toString.call(v);
+    \\    let out;
+    \\    if (Array.isArray(v)) out = new Array(v.length);
+    \\    else if (v instanceof Date) out = new Date(v.getTime());
+    \\    else if (v instanceof RegExp) out = new RegExp(v.source, v.flags);
+    \\    else if (v instanceof Map) out = new Map();
+    \\    else if (v instanceof Set) out = new Set();
+    \\    else if (v instanceof Error) out = new (cloneErrors[v.name] || Error)(v.message);
+    \\    else if (ArrayBuffer.isView(v)) out = new v.constructor(v);
+    \\    else if (tag === '[object Number]' || tag === '[object String]' || tag === '[object Boolean]') out = Object(v.valueOf());
+    \\    else if (tag !== '[object Object]') fail(v);
+    \\    else out = {};
+    \\    seen.set(v, out);
+    \\    if (v instanceof Map) for (const [k, x] of v) out.set(clone(k), clone(x));
+    \\    else if (v instanceof Set) for (const x of v) out.add(clone(x));
+    \\    else if (Array.isArray(v) || tag === '[object Object]') for (const k of Object.keys(v)) out[k] = clone(v[k]);
+    \\    return out;
+    \\  }
+    \\  return clone(value);
+    \\});
+    \\})();

@@ -1,0 +1,762 @@
+// The stateful JS canvas interfaces; native coverage and pixels are in
+// canvas_api.aye. Current paths capture each command's transform.
+pub let CANVAS_PRELUDE =
+    \\(function () {
+    \\const ak = globalThis.__canvasHost;
+    \\delete globalThis.__canvasHost;
+    \\const identity = () => [1, 0, 0, 1, 0, 0];
+    \\// Parsed colors by their text; the arrays are only read.
+    \\const colors = new Map();
+    \\function color(s) {
+    \\  let c = colors.get(s);
+    \\  if (c === undefined) {
+    \\    c = ak.canvasColor(s);
+    \\    if (colors.size >= 256) colors.clear();
+    \\    colors.set(s, c);
+    \\  }
+    \\  return c;
+    \\}
+    \\function finite(a) {
+    \\  for (let i = 0; i < a.length; i++) {
+    \\    const v = a[i];
+    \\    if (typeof v === 'number' ? !(v >= -1e8 && v <= 1e8) : !(Number.isFinite(Number(v)) && Math.abs(Number(v)) <= 1e8)) return false;
+    \\  }
+    \\  return true;
+    \\}
+    \\const point = (m, x, y) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+    \\function mul(m, n) {
+    \\  return [m[0]*n[0]+m[2]*n[1], m[1]*n[0]+m[3]*n[1], m[0]*n[2]+m[2]*n[3], m[1]*n[2]+m[3]*n[3], m[0]*n[4]+m[2]*n[5]+m[4], m[1]*n[4]+m[3]*n[5]+m[5]];
+    \\}
+    \\function inverse(m) {
+    \\  const d = m[0]*m[3]-m[1]*m[2];
+    \\  if (!d) return null;
+    \\  return [m[3]/d, -m[1]/d, -m[2]/d, m[0]/d, (m[2]*m[5]-m[3]*m[4])/d, (m[1]*m[4]-m[0]*m[5])/d];
+    \\}
+    \\function matrix(v) {
+    \\  if (Array.isArray(v)) return v.slice(0, 6);
+    \\  return [v.a === undefined ? 1 : v.a, v.b || 0, v.c || 0, v.d === undefined ? 1 : v.d, v.e || 0, v.f || 0];
+    \\}
+    \\class DOMMatrix {
+    \\  constructor(v) {
+    \\    const m = v ? matrix(v) : identity();
+    \\    [this.a, this.b, this.c, this.d, this.e, this.f] = m;
+    \\    this.is2D = true;
+    \\  }
+    \\  multiply(v) {
+    \\    return new DOMMatrix(mul(matrix(this), matrix(v)));
+    \\  }
+    \\  inverse() {
+    \\    return new DOMMatrix(inverse(matrix(this)) || [NaN, NaN, NaN, NaN, NaN, NaN]);
+    \\  }
+    \\  transformPoint(p) {
+    \\    const q = point(matrix(this), p.x || 0, p.y || 0);
+    \\    return {x: q[0], y: q[1], z: p.z || 0, w: p.w === undefined ? 1 : p.w};
+    \\  }
+    \\}
+    \\if (!globalThis.DOMMatrix) globalThis.DOMMatrix = DOMMatrix;
+    \\function escape(s) {
+    \\  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+    \\}
+    \\// Path segments: a verb (0 M, 1 L, 2 C, 3 Z) followed by its points,
+    \\// or a string of path data from ak.canvasPath. The native side reads
+    \\// them exactly as it would parse their path data (`_d`), without
+    \\// writing and parsing every number.
+    \\function pathData(c) {
+    \\  let d = '';
+    \\  for (let i = 0; i < c.length;) {
+    \\    const v = c[i];
+    \\    if (typeof v === 'string') {
+    \\      d += v;
+    \\      i++;
+    \\    } else if (v === 3) {
+    \\      d += 'Z ';
+    \\      i++;
+    \\    } else {
+    \\      const n = v === 2 ? 6 : 2;
+    \\      d += 'MLC'[v] + c.slice(i+1, i+1+n).join(' ') + ' ';
+    \\      i += n+1;
+    \\    }
+    \\  }
+    \\  return d;
+    \\}
+    \\class Path2D {
+    \\  constructor(p) {
+    \\    this._c = [];
+    \\    this._m = identity();
+    \\    this._at = null;
+    \\    this._start = null;
+    \\    if (p instanceof Path2D) {
+    \\      this._c = p._c.slice();
+    \\      this._at = p._at && p._at.slice();
+    \\      this._start = p._start && p._start.slice();
+    \\    } else if (typeof p === 'string') {
+    \\      this._c = [ak.canvasPath(p, identity())];
+    \\    }
+    \\  }
+    \\  get _d() {
+    \\    return pathData(this._c);
+    \\  }
+    \\  addPath(p, transform) {
+    \\    if (!(p instanceof Path2D)) throw new TypeError('Expected Path2D');
+    \\    const m = transform ? matrix(transform) : identity();
+    \\    if (finite(m)) this._c.push(ak.canvasPath(p._d, m));
+    \\  }
+    \\  closePath() {
+    \\    if (this._at) {
+    \\      this._c.push(3);
+    \\      this._at = this._start && this._start.slice();
+    \\    }
+    \\  }
+    \\  moveTo(x, y) {
+    \\    if (!finite([x, y])) return;
+    \\    const p = point(this._m, Number(x), Number(y));
+    \\    this._c.push(0, p[0], p[1]);
+    \\    this._at = p;
+    \\    this._start = p;
+    \\  }
+    \\  lineTo(x, y) {
+    \\    if (!finite([x, y])) return;
+    \\    if (!this._at) {
+    \\      this.moveTo(x, y);
+    \\      return;
+    \\    }
+    \\    const p = point(this._m, Number(x), Number(y));
+    \\    this._c.push(1, p[0], p[1]);
+    \\    this._at = p;
+    \\  }
+    \\  bezierCurveTo(a, b, c, d, x, y) {
+    \\    if (!finite([a, b, c, d, x, y])) return;
+    \\    if (!this._at) this.moveTo(a, b);
+    \\    const p = point(this._m, x, y);
+    \\    const p1 = point(this._m, a, b), p2 = point(this._m, c, d);
+    \\    this._c.push(2, p1[0], p1[1], p2[0], p2[1], p[0], p[1]);
+    \\    this._at = p;
+    \\  }
+    \\  quadraticCurveTo(a, b, x, y) {
+    \\    if (!finite([a, b, x, y])) return;
+    \\    if (!this._at) this.moveTo(a, b);
+    \\    const c = point(this._m, a, b);
+    \\    const p = point(this._m, x, y);
+    \\    const q = this._at;
+    \\    this._c.push(2, q[0]+(c[0]-q[0])*2/3, q[1]+(c[1]-q[1])*2/3, p[0]+(c[0]-p[0])*2/3, p[1]+(c[1]-p[1])*2/3, p[0], p[1]);
+    \\    this._at = p;
+    \\  }
+    \\  rect(x, y, w, h) {
+    \\    if (!finite([x, y, w, h])) return;
+    \\    this.moveTo(x, y);
+    \\    this.lineTo(x+w, y);
+    \\    this.lineTo(x+w, y+h);
+    \\    this.lineTo(x, y+h);
+    \\    this.closePath();
+    \\  }
+    \\  roundRect(x, y, w, h, radii) {
+    \\    if (!finite([x, y, w, h])) return;
+    \\    let r = Array.isArray(radii) ? radii.slice() : [radii === undefined ? 0 : radii];
+    \\    if (r.length < 1 || r.length > 4) throw new RangeError('One to four radii required');
+    \\    r = r.map(v => typeof v === 'object' ? [Number(v.x), Number(v.y)] : [Number(v), Number(v)]);
+    \\    if (r.some(v => v[0] < 0 || v[1] < 0)) throw new RangeError('Negative radius');
+    \\    if (!finite(r.reduce((a, v) => a.concat(v), []))) return;
+    \\    if (r.length === 1) r = [r[0], r[0], r[0], r[0]];
+    \\    else if (r.length === 2) r = [r[0], r[1], r[0], r[1]];
+    \\    else if (r.length === 3) r = [r[0], r[1], r[2], r[1]];
+    \\    if (w < 0) {
+    \\      x += w;
+    \\      w = -w;
+    \\      r = [r[1], r[0], r[3], r[2]];
+    \\    }
+    \\    if (h < 0) {
+    \\      y += h;
+    \\      h = -h;
+    \\      r = [r[3], r[2], r[1], r[0]];
+    \\    }
+    \\    const k = Math.min(1, w/(r[0][0]+r[1][0] || 1), w/(r[2][0]+r[3][0] || 1), h/(r[0][1]+r[3][1] || 1), h/(r[1][1]+r[2][1] || 1));
+    \\    r = r.map(v => [v[0]*k, v[1]*k]);
+    \\    this.moveTo(x+r[0][0], y);
+    \\    this.lineTo(x+w-r[1][0], y);
+    \\    this.ellipse(x+w-r[1][0], y+r[1][1], r[1][0], r[1][1], 0, -Math.PI/2, 0);
+    \\    this.lineTo(x+w, y+h-r[2][1]);
+    \\    this.ellipse(x+w-r[2][0], y+h-r[2][1], r[2][0], r[2][1], 0, 0, Math.PI/2);
+    \\    this.lineTo(x+r[3][0], y+h);
+    \\    this.ellipse(x+r[3][0], y+h-r[3][1], r[3][0], r[3][1], 0, Math.PI/2, Math.PI);
+    \\    this.lineTo(x, y+r[0][1]);
+    \\    this.ellipse(x+r[0][0], y+r[0][1], r[0][0], r[0][1], 0, Math.PI, Math.PI*1.5);
+    \\    this.closePath();
+    \\  }
+    \\  arc(x, y, r, start, end, ccw) {
+    \\    this.ellipse(x, y, r, r, 0, start, end, ccw);
+    \\  }
+    \\  ellipse(x, y, rx, ry, rotation, start, end, ccw) {
+    \\    if (!finite([x, y, rx, ry, rotation, start, end])) return;
+    \\    if (rx < 0 || ry < 0) throw new DOMException('Negative radius', 'IndexSizeError');
+    \\    const tau = Math.PI*2;
+    \\    let sweep = end-start;
+    \\    if (!ccw && sweep >= tau) sweep = tau;
+    \\    else if (ccw && sweep <= -tau) sweep = -tau;
+    \\    else {
+    \\      sweep %= tau;
+    \\      if (!ccw && sweep < 0) sweep += tau;
+    \\      if (ccw && sweep > 0) sweep -= tau;
+    \\    }
+    \\    const cr = Math.cos(rotation), sr = Math.sin(rotation);
+    \\    const pos = a => [x+rx*Math.cos(a)*cr-ry*Math.sin(a)*sr, y+rx*Math.cos(a)*sr+ry*Math.sin(a)*cr];
+    \\    const tangent = a => [-rx*Math.sin(a)*cr-ry*Math.cos(a)*sr, -rx*Math.sin(a)*sr+ry*Math.cos(a)*cr];
+    \\    const first = pos(start);
+    \\    if (this._at) this.lineTo(first[0], first[1]);
+    \\    else this.moveTo(first[0], first[1]);
+    \\    const count = Math.ceil(Math.abs(sweep)/(Math.PI/2));
+    \\    for (let i = 0; i < count; i++) {
+    \\      const a = start+sweep*i/count, b = start+sweep*(i+1)/count;
+    \\      const p = pos(a), q = pos(b), u = tangent(a), v = tangent(b);
+    \\      const k = 4/3*Math.tan((b-a)/4);
+    \\      this.bezierCurveTo(p[0]+k*u[0], p[1]+k*u[1], q[0]-k*v[0], q[1]-k*v[1], q[0], q[1]);
+    \\    }
+    \\  }
+    \\  arcTo(x1, y1, x2, y2, radius) {
+    \\    if (!finite([x1, y1, x2, y2, radius])) return;
+    \\    if (radius < 0) throw new DOMException('Negative radius', 'IndexSizeError');
+    \\    if (!this._at) {
+    \\      this.moveTo(x1, y1);
+    \\      return;
+    \\    }
+    \\    const inv = inverse(this._m);
+    \\    if (!inv) return;
+    \\    const p = point(inv, this._at[0], this._at[1]);
+    \\    let ux = p[0]-x1, uy = p[1]-y1, vx = x2-x1, vy = y2-y1;
+    \\    const ul = Math.hypot(ux, uy), vl = Math.hypot(vx, vy);
+    \\    if (!ul || !vl || !radius) {
+    \\      this.lineTo(x1, y1);
+    \\      return;
+    \\    }
+    \\    ux /= ul;
+    \\    uy /= ul;
+    \\    vx /= vl;
+    \\    vy /= vl;
+    \\    const cross = ux*vy-uy*vx;
+    \\    if (Math.abs(cross) < 1e-12) {
+    \\      this.lineTo(x1, y1);
+    \\      return;
+    \\    }
+    \\    const angle = Math.acos(Math.max(-1, Math.min(1, ux*vx+uy*vy)));
+    \\    const dist = radius/Math.tan(angle/2);
+    \\    const tx = x1+ux*dist, ty = y1+uy*dist;
+    \\    const sign = cross < 0 ? -1 : 1;
+    \\    const cx = tx-uy*radius*sign, cy = ty+ux*radius*sign;
+    \\    this.lineTo(tx, ty);
+    \\    this.arc(cx, cy, radius, Math.atan2(ty-cy, tx-cx), Math.atan2(y1+vy*dist-cy, x1+vx*dist-cx), cross > 0);
+    \\  }
+    \\}
+    \\class CanvasGradient {
+    \\  constructor(kind, coords, m) {
+    \\    this.kind = kind;
+    \\    this.coords = coords.concat([0, 0, 0, 0, 0, 0]).slice(0, 6);
+    \\    this.matrix = m.slice();
+    \\    this.stops = [];
+    \\  }
+    \\  addColorStop(offset, color) {
+    \\    offset = Number(offset);
+    \\    if (!Number.isFinite(offset) || offset < 0 || offset > 1) throw new DOMException('Invalid offset', 'IndexSizeError');
+    \\    const c = ak.canvasColor(String(color));
+    \\    if (!c) throw new DOMException('Invalid color', 'SyntaxError');
+    \\    this.stops.push([offset, c]);
+    \\    this.stops.sort((a, b) => a[0]-b[0]);
+    \\  }
+    \\}
+    \\class CanvasPattern {
+    \\  constructor(image, repeat, m) {
+    \\    this.kind = 4;
+    \\    this.image = image;
+    \\    this.matrix = m.slice();
+    \\    this.repeatX = repeat === 'repeat' || repeat === 'repeat-x';
+    \\    this.repeatY = repeat === 'repeat' || repeat === 'repeat-y';
+    \\  }
+    \\  setTransform(m) {
+    \\    const a = matrix(m);
+    \\    if (finite(a)) this.matrix = a;
+    \\  }
+    \\}
+    \\function dimensions(w, h) {
+    \\  if (!finite([w, h]) || !Number.isInteger(w) || !Number.isInteger(h) || w <= 0 || h <= 0 || w > 16384 || h > 16384 || w*h > 16777216) throw new DOMException('Invalid bitmap size', 'IndexSizeError');
+    \\}
+    \\// The interpreter's typed arrays are JS polyfills. Use the existing one
+    \\// when installed, rather than installing a second typed-array subsystem.
+    \\// Its arrays are Arrays with its prototype: give a fresh array of bytes
+    \\// that prototype rather than copying it element by element.
+    \\function clamped(a) {
+    \\  return typeof Uint8ClampedArray === 'function' ? Object.setPrototypeOf(a, Uint8ClampedArray.prototype) : a;
+    \\}
+    \\class ImageData {
+    \\  constructor(data, width, height) {
+    \\    if (typeof data === 'number') {
+    \\      height = Math.abs(Math.trunc(width));
+    \\      width = Math.abs(Math.trunc(data));
+    \\      dimensions(width, height);
+    \\      data = clamped(new Array(width*height*4).fill(0));
+    \\    } else {
+    \\      width = Math.trunc(width);
+    \\      height = height === undefined ? data.length/(width*4) : Math.trunc(height);
+    \\      dimensions(width, height);
+    \\      if (data.length !== width*height*4) throw new DOMException('Invalid pixel data', 'IndexSizeError');
+    \\    }
+    \\    this.data = data;
+    \\    this.width = width;
+    \\    this.height = height;
+    \\    this.colorSpace = 'srgb';
+    \\  }
+    \\}
+    \\const defaults = {
+    \\  fillStyle: '#000000', strokeStyle: '#000000', globalAlpha: 1, globalCompositeOperation: 'source-over',
+    \\  lineWidth: 1, lineCap: 'butt', lineJoin: 'miter', miterLimit: 10, lineDashOffset: 0,
+    \\  shadowColor: 'rgba(0, 0, 0, 0)', shadowBlur: 0, shadowOffsetX: 0, shadowOffsetY: 0,
+    \\  imageSmoothingEnabled: true, imageSmoothingQuality: 'low', font: '10px sans-serif', textAlign: 'start', textBaseline: 'alphabetic', direction: 'inherit'
+    \\};
+    \\class CanvasRenderingContext2D {
+    \\  constructor(canvas, node) {
+    \\    this.canvas = canvas;
+    \\    this._node = node || canvas;
+    \\    this._epoch = -1;
+    \\    this._sync();
+    \\  }
+    \\  _sync() {
+    \\    const e = ak.canvasInfo(this._node);
+    \\    if (e !== this._epoch) {
+    \\      this._epoch = e;
+    \\      this._state = Object.assign({}, defaults);
+    \\      this._matrix = identity();
+    \\      this._dash = [];
+    \\      this._clips = [];
+    \\      this._stack = [];
+    \\      this._path = new Path2D();
+    \\    }
+    \\  }
+    \\  save() {
+    \\    this._sync();
+    \\    this._stack.push([Object.assign({}, this._state), this._matrix.slice(), this._dash.slice(), this._clips.slice()]);
+    \\  }
+    \\  restore() {
+    \\    this._sync();
+    \\    const s = this._stack.pop();
+    \\    if (s) [this._state, this._matrix, this._dash, this._clips] = s;
+    \\  }
+    \\  getTransform() {
+    \\    this._sync();
+    \\    return new globalThis.DOMMatrix(this._matrix);
+    \\  }
+    \\  resetTransform() {
+    \\    this.setTransform(1, 0, 0, 1, 0, 0);
+    \\  }
+    \\  setTransform(a, b, c, d, e, f) {
+    \\    this._sync();
+    \\    const m = typeof a === 'object' ? matrix(a) : arguments.length === 0 ? identity() : [a, b, c, d, e, f].map(Number);
+    \\    if (finite(m)) this._matrix = m;
+    \\  }
+    \\  transform(a, b, c, d, e, f) {
+    \\    this._sync();
+    \\    const m = [a, b, c, d, e, f].map(Number);
+    \\    if (finite(m)) this._matrix = mul(this._matrix, m);
+    \\  }
+    \\  translate(x, y) {
+    \\    this.transform(1, 0, 0, 1, x, y);
+    \\  }
+    \\  scale(x, y) {
+    \\    this.transform(x, 0, 0, y, 0, 0);
+    \\  }
+    \\  rotate(a) {
+    \\    if (finite([a])) this.transform(Math.cos(a), Math.sin(a), -Math.sin(a), Math.cos(a), 0, 0);
+    \\  }
+    \\  setLineDash(a) {
+    \\    this._sync();
+    \\    a = Array.from(a).map(Number);
+    \\    if (!finite(a) || a.some(v => v < 0)) return;
+    \\    this._dash = a.length % 2 ? a.concat(a) : a.slice();
+    \\  }
+    \\  getLineDash() {
+    \\    this._sync();
+    \\    return this._dash.slice();
+    \\  }
+    \\  beginPath() {
+    \\    this._sync();
+    \\    this._path = new Path2D();
+    \\  }
+    \\  _data(path) {
+    \\    return path instanceof Path2D ? ak.canvasPath(path._d, this._matrix) : this._path._c;
+    \\  }
+    \\  _shape(d, stroke, rule) {
+    \\    const s = this._state;
+    \\    const k = Math.sqrt(Math.abs(this._matrix[0]*this._matrix[3]-this._matrix[1]*this._matrix[2]));
+    \\    return '<path d="'+escape(d)+'" fill="'+(stroke ? 'none' : 'white')+'" fill-rule="'+(rule === 'evenodd' ? 'evenodd' : 'nonzero')+'" clip-rule="'+(rule === 'evenodd' ? 'evenodd' : 'nonzero')+'" stroke="'+(stroke ? 'white' : 'none')+'" stroke-width="'+s.lineWidth*k+'" stroke-linecap="'+s.lineCap+'" stroke-linejoin="'+s.lineJoin+'" stroke-miterlimit="'+s.miterLimit+'" stroke-dasharray="'+this._dash.map(v => v*k).join(' ')+'" stroke-dashoffset="'+s.lineDashOffset*k+'"/>';
+    \\  }
+    \\  _stroke() {
+    \\    const s = this._state;
+    \\    const k = Math.sqrt(Math.abs(this._matrix[0]*this._matrix[3]-this._matrix[1]*this._matrix[2]));
+    \\    return 'stroke-width="'+s.lineWidth*k+'" stroke-linecap="'+s.lineCap+'" stroke-linejoin="'+s.lineJoin+'" stroke-miterlimit="'+s.miterLimit+'" stroke-dasharray="'+this._dash.map(v => v*k).join(' ')+'" stroke-dashoffset="'+s.lineDashOffset*k+'"';
+    \\  }
+    \\  _svg(content, clips) {
+    \\    let defs = '', open = '', close = '';
+    \\    for (let i = 0; i < clips.length; i++) {
+    \\      defs += '<clipPath id="c'+i+'">'+clips[i]+'</clipPath>';
+    \\      open += '<g clip-path="url(#c'+i+')">';
+    \\      close += '</g>';
+    \\    }
+    \\    return '<svg width="'+this._node.width+'" height="'+this._node.height+'"><defs>'+defs+'</defs>'+open+content+close+'</svg>';
+    \\  }
+    \\  _paint(v) {
+    \\    if (v instanceof CanvasPattern || v instanceof CanvasGradient) return Object.assign({}, v, {matrix: mul(this._matrix, v.matrix)});
+    \\    return typeof v === 'string' ? {kind: 0, color: color(v)} : v;
+    \\  }
+    \\  // The path `d` (path data or segments) is drawn as SVG would draw
+    \\  // <path d=...> with these stroke attributes and fill rule; clips
+    \\  // are [d, evenodd] pairs.
+    \\  _draw(d, stroke, rule, style, mode) {
+    \\    const key = stroke ? this._stroke() : null;
+    \\    const evenodd = rule === 'evenodd';
+    \\    const clip = this._clips.length ? this._clips : null;
+    \\    const s = this._state;
+    \\    const shadow = color(s.shadowColor);
+    \\    if (!mode && shadow && shadow[3]) {
+    \\      ak.canvasDraw(this._node, d, {kind: 0, color: shadow, blur: s.shadowBlur}, s.globalAlpha, s.globalCompositeOperation, clip, key, evenodd, s.shadowOffsetX, s.shadowOffsetY);
+    \\    }
+    \\    ak.canvasDraw(this._node, d, style || this._paint(stroke ? s.strokeStyle : s.fillStyle), mode === 'clear' ? 1 : s.globalAlpha, mode || s.globalCompositeOperation, clip, key, evenodd, 0, 0);
+    \\  }
+    \\  fill(path, rule) {
+    \\    this._sync();
+    \\    if (typeof path === 'string') rule = path;
+    \\    this._draw(this._data(path), false, rule);
+    \\  }
+    \\  stroke(path) {
+    \\    this._sync();
+    \\    this._draw(this._data(path), true);
+    \\  }
+    \\  clip(path, rule) {
+    \\    this._sync();
+    \\    if (typeof path === 'string') rule = path;
+    \\    const d = this._data(path);
+    \\    this._clips.push([typeof d === 'string' ? d : d.slice(), rule === 'evenodd']);
+    \\  }
+    \\  _rect(x, y, w, h, stroke, clear) {
+    \\    this._sync();
+    \\    if (!finite([x, y, w, h]) || (stroke ? !w && !h : !w || !h)) return;
+    \\    const line = !w || !h;
+    \\    x = Number(x);
+    \\    y = Number(y);
+    \\    w = Number(w);
+    \\    h = Number(h);
+    \\    const style = clear ? {kind: 0, color: [0, 0, 0, 255]} : null, mode = clear ? 'clear' : null;
+    \\    const m = this._matrix;
+    \\    if (!line && finite([x+w, y+h])) {
+    \\      // What Path2D's rect() adds.
+    \\      const a = point(m, x, y), b = point(m, x+w, y), c = point(m, x+w, y+h), d = point(m, x, y+h);
+    \\      this._draw([0, a[0], a[1], 1, b[0], b[1], 1, c[0], c[1], 1, d[0], d[1], 3], stroke, undefined, style, mode);
+    \\      return;
+    \\    }
+    \\    const p = new Path2D();
+    \\    p._m = m;
+    \\    if (line) {
+    \\      p.moveTo(x, y);
+    \\      p.lineTo(x+w, y+h);
+    \\    } else p.rect(x, y, w, h);
+    \\    this._draw(p._c, stroke, undefined, style, mode);
+    \\  }
+    \\  fillRect(x, y, w, h) {
+    \\    this._rect(x, y, w, h, false, false);
+    \\  }
+    \\  strokeRect(x, y, w, h) {
+    \\    this._rect(x, y, w, h, true, false);
+    \\  }
+    \\  clearRect(x, y, w, h) {
+    \\    this._rect(x, y, w, h, false, true);
+    \\  }
+    \\  _hit(stroke, args) {
+    \\    this._sync();
+    \\    const path = args[0] instanceof Path2D ? args.shift() : null;
+    \\    const x = Number(args[0]), y = Number(args[1]);
+    \\    if (!finite([x, y])) return false;
+    \\    const d = this._data(path);
+    \\    return ak.canvasHit(this._svg(this._shape(typeof d === 'string' ? d : pathData(d), stroke, args[2]), []), x, y, stroke);
+    \\  }
+    \\  isPointInPath() {
+    \\    return this._hit(false, Array.from(arguments));
+    \\  }
+    \\  isPointInStroke() {
+    \\    return this._hit(true, Array.from(arguments));
+    \\  }
+    \\  createLinearGradient(x0, y0, x1, y1) {
+    \\    this._sync();
+    \\    if (!finite([x0, y0, x1, y1])) throw new DOMException('Invalid gradient', 'NotSupportedError');
+    \\    return new CanvasGradient(1, [x0, y0, x1, y1], identity());
+    \\  }
+    \\  createRadialGradient(x0, y0, r0, x1, y1, r1) {
+    \\    this._sync();
+    \\    if (!finite([x0, y0, r0, x1, y1, r1])) throw new DOMException('Invalid gradient', 'NotSupportedError');
+    \\    if (r0 < 0 || r1 < 0) throw new DOMException('Negative radius', 'IndexSizeError');
+    \\    return new CanvasGradient(2, [x0, y0, r0, x1, y1, r1], identity());
+    \\  }
+    \\  createConicGradient(angle, x, y) {
+    \\    this._sync();
+    \\    if (!finite([angle, x, y])) throw new DOMException('Invalid gradient', 'NotSupportedError');
+    \\    return new CanvasGradient(3, [angle, x, y], identity());
+    \\  }
+    \\  createPattern(image, repeat) {
+    \\    this._sync();
+    \\    repeat = repeat || 'repeat';
+    \\    if (!['repeat', 'repeat-x', 'repeat-y', 'no-repeat'].includes(repeat)) throw new DOMException('Invalid repetition', 'SyntaxError');
+    \\    image = sourceNode(image);
+    \\    if (!image) return null;
+    \\    return new CanvasPattern(image, repeat, identity());
+    \\  }
+    \\  drawImage(image) {
+    \\    this._sync();
+    \\    image = sourceNode(image);
+    \\    if (!image) throw new TypeError('Expected image source');
+    \\    const a = Array.from(arguments).slice(1).map(Number);
+    \\    const iw = image.naturalWidth || image.width, ih = image.naturalHeight || image.height;
+    \\    let sx = 0, sy = 0, sw = iw, sh = ih, dx, dy, dw, dh;
+    \\    if (a.length === 2) [dx, dy, dw, dh] = [a[0], a[1], iw, ih];
+    \\    else if (a.length === 4) [dx, dy, dw, dh] = a;
+    \\    else if (a.length === 8) [sx, sy, sw, sh, dx, dy, dw, dh] = a;
+    \\    else throw new TypeError('Invalid drawImage argument count');
+    \\    if (!finite([sx, sy, sw, sh, dx, dy, dw, dh]) || !sw || !sh || !dw || !dh) return;
+    \\    if (sw < 0) {
+    \\      sx += sw;
+    \\      sw = -sw;
+    \\    }
+    \\    if (sh < 0) {
+    \\      sy += sh;
+    \\      sh = -sh;
+    \\    }
+    \\    if (dw < 0) {
+    \\      dx += dw;
+    \\      dw = -dw;
+    \\    }
+    \\    if (dh < 0) {
+    \\      dy += dh;
+    \\      dh = -dh;
+    \\    }
+    \\    const p = new Path2D();
+    \\    p._m = this._matrix;
+    \\    p.rect(dx, dy, dw, dh);
+    \\    const m = mul(this._matrix, [dw/sw, 0, 0, dh/sh, dx-sx*dw/sw, dy-sy*dh/sh]);
+    \\    this._draw(p._c, false, undefined, {kind: 4, image, matrix: m, repeatX: false, repeatY: false, smoothing: this.imageSmoothingEnabled});
+    \\  }
+    \\  createImageData(w, h) {
+    \\    if (typeof w === 'object') return new ImageData(w.width, w.height);
+    \\    return new ImageData(w, h);
+    \\  }
+    \\  getImageData(x, y, w, h) {
+    \\    this._sync();
+    \\    if (!finite([x, y, w, h])) throw new DOMException('Invalid pixel rectangle', 'NotSupportedError');
+    \\    x = Math.trunc(x);
+    \\    y = Math.trunc(y);
+    \\    w = Math.trunc(w);
+    \\    h = Math.trunc(h);
+    \\    if (w < 0) {
+    \\      x += w;
+    \\      w = -w;
+    \\    }
+    \\    if (h < 0) {
+    \\      y += h;
+    \\      h = -h;
+    \\    }
+    \\    const d = ak.canvasPixels(this._node, x, y, w, h, null);
+    \\    return new ImageData(clamped(d), w, h);
+    \\  }
+    \\  putImageData(data, x, y, dirtyX, dirtyY, dirtyW, dirtyH) {
+    \\    this._sync();
+    \\    if (!(data instanceof ImageData)) throw new TypeError('Expected ImageData');
+    \\    if (!finite([x, y])) throw new DOMException('Invalid pixel position', 'NotSupportedError');
+    \\    x = Math.trunc(x);
+    \\    y = Math.trunc(y);
+    \\    if (arguments.length < 7) {
+    \\      ak.canvasPixels(this._node, x, y, data.width, data.height, data.data);
+    \\      return;
+    \\    }
+    \\    if (!finite([dirtyX, dirtyY, dirtyW, dirtyH])) return;
+    \\    if (dirtyW < 0) {
+    \\      dirtyX += dirtyW;
+    \\      dirtyW = -dirtyW;
+    \\    }
+    \\    if (dirtyH < 0) {
+    \\      dirtyY += dirtyH;
+    \\      dirtyH = -dirtyH;
+    \\    }
+    \\    const x0 = Math.max(0, Math.trunc(dirtyX)), y0 = Math.max(0, Math.trunc(dirtyY));
+    \\    const x1 = Math.min(data.width, Math.trunc(dirtyX+dirtyW)), y1 = Math.min(data.height, Math.trunc(dirtyY+dirtyH));
+    \\    if (x1 <= x0 || y1 <= y0) return;
+    \\    const out = [];
+    \\    for (let row = y0; row < y1; row++) {
+    \\      for (let col = x0; col < x1; col++) {
+    \\        for (let k = 0; k < 4; k++) out.push(data.data[(row*data.width+col)*4+k]);
+    \\      }
+    \\    }
+    \\    ak.canvasPixels(this._node, x+x0, y+y0, x1-x0, y1-y0, out);
+    \\  }
+    \\  _rtl() {
+    \\    return this.direction === 'rtl' || (this.direction === 'inherit' && getComputedStyle(this._node).direction === 'rtl');
+    \\  }
+    \\  _baselineOffset(a) {
+    \\    if (this.textBaseline === 'top' || this.textBaseline === 'hanging') return a[1];
+    \\    if (this.textBaseline === 'middle') return (a[1]-a[2])/2;
+    \\    if (this.textBaseline === 'bottom' || this.textBaseline === 'ideographic') return -a[2];
+    \\    return 0;
+    \\  }
+    \\  measureText(text) {
+    \\    this._sync();
+    \\    const rtl = this._rtl();
+    \\    const a = ak.canvasText(this.font, String(text).replace(/[\t\n\f\r]/g, ' '), false, rtl) || [0, 8, 2, null, 0, 0, 0, 0, 0, 0];
+    \\    let left = 0;
+    \\    if (this.textAlign === 'center') left = a[0]/2;
+    \\    else if (this.textAlign === 'right' || (this.textAlign === 'end' && !rtl) || (this.textAlign === 'start' && rtl)) left = a[0];
+    \\    const baseline = this._baselineOffset(a);
+    \\    return {width: a[0], actualBoundingBoxLeft: left+a[6], actualBoundingBoxRight: a[7]-left, actualBoundingBoxAscent: a[8]-baseline, actualBoundingBoxDescent: a[9]+baseline, fontBoundingBoxAscent: a[1]-baseline, fontBoundingBoxDescent: a[2]+baseline, emHeightAscent: a[1]-baseline, emHeightDescent: a[2]+baseline, alphabeticBaseline: baseline};
+    \\  }
+    \\  _text(text, x, y, maxWidth, stroke) {
+    \\    this._sync();
+    \\    if (!finite([x, y]) || (maxWidth !== undefined && (!finite([maxWidth]) || maxWidth <= 0))) return;
+    \\    const rtl = this._rtl();
+    \\    const a = ak.canvasText(this.font, String(text).replace(/[\t\n\f\r]/g, ' '), true, rtl);
+    \\    if (!a || !a[3]) return;
+    \\    const width = a[0];
+    \\    const k = maxWidth === undefined || width <= maxWidth ? 1 : maxWidth/width;
+    \\    if (this.textAlign === 'center') x -= width*k/2;
+    \\    else if (this.textAlign === 'right' || (this.textAlign === 'end' && !rtl) || (this.textAlign === 'start' && rtl)) x -= width*k;
+    \\    y += this._baselineOffset(a);
+    \\    const mask = {data: a[3], width: a[4], height: a[5], matrix: mul(this._matrix, [k, 0, 0, 1, x+a[10]*k, y+a[11]]), stroke: stroke ? this.lineWidth : 0};
+    \\    const clip = this._clips.length ? this._clips : null;
+    \\    const shadow = color(this.shadowColor);
+    \\    if (shadow && shadow[3]) {
+    \\      const shifted = Object.assign({}, mask, {matrix: mask.matrix.slice()});
+    \\      shifted.matrix[4] += this.shadowOffsetX;
+    \\      shifted.matrix[5] += this.shadowOffsetY;
+    \\      ak.canvasDraw(this._node, shifted, {kind: 0, color: shadow, blur: this.shadowBlur}, this.globalAlpha, this.globalCompositeOperation, clip);
+    \\    }
+    \\    ak.canvasDraw(this._node, mask, this._paint(stroke ? this.strokeStyle : this.fillStyle), this.globalAlpha, this.globalCompositeOperation, clip);
+    \\  }
+    \\  fillText(text, x, y, maxWidth) {
+    \\    this._text(text, x, y, maxWidth, false);
+    \\  }
+    \\  strokeText(text, x, y, maxWidth) {
+    \\    this._text(text, x, y, maxWidth, true);
+    \\  }
+    \\  reset() {
+    \\    this._node.width = this._node.width;
+    \\    this._sync();
+    \\  }
+    \\  getContextAttributes() {
+    \\    return {alpha: true, desynchronized: false, colorSpace: 'srgb', willReadFrequently: false};
+    \\  }
+    \\}
+    \\for (const k of ['closePath', 'moveTo', 'lineTo', 'bezierCurveTo', 'quadraticCurveTo', 'arc', 'arcTo', 'ellipse', 'rect', 'roundRect']) {
+    \\  CanvasRenderingContext2D.prototype[k] = function () {
+    \\    this._sync();
+    \\    this._path._m = this._matrix;
+    \\    return Path2D.prototype[k].apply(this._path, arguments);
+    \\  };
+    \\}
+    \\const enums = {globalCompositeOperation: ['source-over', 'source-in', 'source-out', 'source-atop', 'destination-over', 'destination-in', 'destination-out', 'destination-atop', 'copy', 'xor', 'lighter', 'multiply'], lineCap: ['butt', 'round', 'square'], lineJoin: ['miter', 'round', 'bevel'], textAlign: ['start', 'end', 'left', 'right', 'center'], textBaseline: ['top', 'hanging', 'middle', 'alphabetic', 'ideographic', 'bottom'], direction: ['ltr', 'rtl', 'inherit'], imageSmoothingQuality: ['low', 'medium', 'high']};
+    \\for (const key of Object.keys(defaults)) {
+    \\  Object.defineProperty(CanvasRenderingContext2D.prototype, key, {
+    \\    configurable: true,
+    \\    get: function () {
+    \\      this._sync();
+    \\      return this._state[key];
+    \\    },
+    \\    set: function (v) {
+    \\      this._sync();
+    \\      if (key === 'fillStyle' || key === 'strokeStyle') {
+    \\        if (v instanceof CanvasGradient || v instanceof CanvasPattern) this._state[key] = v;
+    \\        else if (color(String(v))) this._state[key] = String(v);
+    \\        return;
+    \\      }
+    \\      if (key === 'shadowColor' && !color(String(v))) return;
+    \\      if (enums[key] && !enums[key].includes(String(v))) return;
+    \\      if (typeof defaults[key] === 'number') {
+    \\        v = Number(v);
+    \\        if (!finite([v])) return;
+    \\        if (key === 'globalAlpha' && (v < 0 || v > 1)) return;
+    \\        if ((key === 'lineWidth' || key === 'miterLimit') && v <= 0) return;
+    \\        if (key === 'shadowBlur' && v < 0) return;
+    \\      }
+    \\      if (key === 'font' && !/(\d|\.\d)(px|pt|em)[\s\/]/.test(String(v))) return;
+    \\      this._state[key] = typeof defaults[key] === 'string' ? String(v) : typeof defaults[key] === 'boolean' ? !!v : v;
+    \\    }
+    \\  });
+    \\}
+    \\// Image state and dimensions are installed by prelude.aye.
+    \\const contexts = new WeakMap();
+    \\const P = HTMLCanvasElement.prototype;
+    \\P.getContext = function (kind) {
+    \\  if (String(kind) !== '2d') return null;
+    \\  let ctx = contexts.get(this);
+    \\  if (!ctx) {
+    \\    ctx = new CanvasRenderingContext2D(this);
+    \\    contexts.set(this, ctx);
+    \\  }
+    \\  return ctx;
+    \\};
+    \\P.toDataURL = function () {
+    \\  return ak.canvasPng(this);
+    \\};
+    \\P.toBlob = function (callback) {
+    \\  const url = this.toDataURL();
+    \\  const bytes = url === 'data:,' ? null : atob(url.slice(url.indexOf(',')+1));
+    \\  const blob = bytes === null ? null : new Blob([typeof Uint8Array === 'function' ? new Uint8Array(Array.from(bytes, c => c.charCodeAt(0))) : bytes], {type: 'image/png'});
+    \\  setTimeout(() => callback(blob), 0);
+    \\};
+    \\class OffscreenCanvas {
+    \\  constructor(width, height) {
+    \\    this._node = document.createElement('canvas');
+    \\    this.width = width;
+    \\    this.height = height;
+    \\  }
+    \\  get width() {
+    \\    return this._node.width;
+    \\  }
+    \\  set width(v) {
+    \\    this._node.width = v;
+    \\  }
+    \\  get height() {
+    \\    return this._node.height;
+    \\  }
+    \\  set height(v) {
+    \\    this._node.height = v;
+    \\  }
+    \\  getContext(kind) {
+    \\    if (String(kind) !== '2d') return null;
+    \\    if (!this._ctx) this._ctx = new CanvasRenderingContext2D(this, this._node);
+    \\    return this._ctx;
+    \\  }
+    \\  convertToBlob() {
+    \\    return new Promise(resolve => this._node.toBlob(resolve));
+    \\  }
+    \\  transferToImageBitmap() {
+    \\    const image = new ImageBitmap(this);
+    \\    this._node.width = this.width;
+    \\    return image;
+    \\  }
+    \\}
+    \\function sourceNode(source) {
+    \\  if (source instanceof OffscreenCanvas || source instanceof ImageBitmap) return source._node;
+    \\  if (source instanceof HTMLCanvasElement || source instanceof HTMLImageElement) return source;
+    \\  return null;
+    \\}
+    \\class ImageBitmap {
+    \\  constructor(source) {
+    \\    const node = sourceNode(source);
+    \\    if (!node) throw new TypeError('Expected image source');
+    \\    this._node = document.createElement('canvas');
+    \\    this._node.width = node.naturalWidth || node.width;
+    \\    this._node.height = node.naturalHeight || node.height;
+    \\    this._node.getContext('2d').drawImage(node, 0, 0);
+    \\    this.width = this._node.width;
+    \\    this.height = this._node.height;
+    \\  }
+    \\  close() {
+    \\    this._node.width = 0;
+    \\    this.width = 0;
+    \\    this.height = 0;
+    \\  }
+    \\}
+    \\Object.assign(globalThis, {CanvasRenderingContext2D, CanvasGradient, CanvasPattern, Path2D, ImageData, OffscreenCanvas, ImageBitmap});
+    \\globalThis.createImageBitmap = function (source) {
+    \\  return Promise.resolve(new ImageBitmap(source));
+    \\};
+    \\})();

@@ -1,0 +1,360 @@
+// Unit tests of the JS engine's pieces (`aye test browser/js`). The
+// conformance scripts in browser/tests/js/ test the engine as a whole.
+
+import std.mem.Allocator
+import std.text
+
+fn numberText(a: Allocator, v: f64) []mut u8 {
+    var b = text.Builder.init(a)
+    formatNumber(&mut b, v) catch |e| {}
+    let out = b.toOwned() catch |e| {
+        return []mut u8{}
+    }
+    return out
+}
+
+fn expectNumber(a: Allocator, want: []u8, v: f64) {
+    let got = numberText(a, v)
+    defer a.free(got)
+    @expectEqual(want, got)
+}
+
+test "Number::toString is the shortest round trip" {
+    let a = @testAllocator()
+    expectNumber(a, "0.30000000000000004", 0.1 + 0.2)
+    expectNumber(a, "0.1", 0.1)
+    expectNumber(a, "1e+21", 1e21)
+    expectNumber(a, "123456789012345680000", 123456789012345680000.0)
+    expectNumber(a, "1e-7", 1e-7)
+    expectNumber(a, "0.000001", 0.000001)
+    expectNumber(a, "5e-324", 5e-324)
+    expectNumber(a, "1.7976931348623157e+308", 1.7976931348623157e308)
+    expectNumber(a, "-1.5", -1.5)
+    expectNumber(a, "0", -0.0)
+    expectNumber(a, "NaN", 0.0 / 0.0)
+    expectNumber(a, "-Infinity", -1.0 / 0.0)
+    expectNumber(a, "9007199254740992", 9007199254740992.0)
+}
+
+test "toFixed rounds ties up" {
+    let a = @testAllocator()
+    var b = text.Builder.init(a)
+    defer b.deinit()
+    try formatFixed(&mut b, 2.5, 0)
+    try b.append(" ")
+    try formatFixed(&mut b, 1.005, 2)
+    try b.append(" ")
+    try formatFixed(&mut b, -0.0001, 2)
+    try b.append(" ")
+    try formatFixed(&mut b, 999.995, 2)
+    @expectEqual("3 1.00 -0.00 1000.00", b.bytes())
+}
+
+test "strings to numbers" {
+    @expect(stringToNumber("  12  ") == 12.0)
+    @expect(stringToNumber("0x1f") == 31.0)
+    @expect(stringToNumber("") == 0.0)
+    @expect(stringToNumber("1e3") == 1000.0)
+    @expect(isNaN(stringToNumber("12px")))
+    @expect(parseIntPrefix("12px", 0) == 12.0)
+    @expect(parseIntPrefix("-ff", 16) == -255.0)
+    @expect(parseFloatPrefix(".5e1x") == 5.0)
+}
+
+// A host that counts finalized wrappers (as the DOM decrements js_refs).
+struct CountingHost {
+    finalized: u32
+    last_index: u32
+
+    fn finalize(self: *mut Self, tag: u32, index: u32, generation: u32) {
+        self.finalized += 1
+        self.last_index = index
+    }
+
+    fn trace(self: *mut Self, it: *mut Interp) bool {
+        return false
+    }
+
+    fn getNamed(self: *mut Self, it: *mut Interp, o: u32, key: u32) JsError!Value {
+        return Value.Empty
+    }
+
+    fn setNamed(self: *mut Self, it: *mut Interp, o: u32, key: u32, v: Value) JsError!bool {
+        return false
+    }
+
+    fn hasNamed(self: *mut Self, it: *mut Interp, o: u32, key: u32) bool {
+        return false
+    }
+}
+
+test "evalScript gives the completion value" {
+    var it = try Interp.create(@testAllocator())
+    defer it.deinit()
+    try installBuiltins(&mut it)
+    let v = try it.evalScript("var a = 2; function f() { return 9 } a * 21; f(); if (true) { 'last' }")
+    @expectEqual("last", it.heap.bytes(strOf(v)))
+    let w = try it.evalScript("let z = 1")
+    @expect(isUndef(w))
+}
+
+test "collected host objects are reported to the host" {
+    var it = try Interp.create(@testAllocator())
+    defer it.deinit()
+    try installBuiltins(&mut it)
+    var h = CountingHost { finalized: 0, last_index: 0 }
+    it.host = &mut h
+    let kept = try it.newHostObject(it.object_proto, 1, 7, 0)
+    let root = try it.addRoot(objVal(kept))
+    for i in 0..10 {
+        try it.newHostObject(it.object_proto, 1, 100 + i as u32, 3)
+    }
+    collectGarbage(&mut it)
+    @expectEqual(10, h.finalized)
+    it.removeRoot(root)
+    collectGarbage(&mut it)
+    @expectEqual(11, h.finalized)
+    @expectEqual(7, h.last_index)
+}
+
+test "scripts run and throw" {
+    var it = try Interp.create(@testAllocator())
+    defer it.deinit()
+    try installBuiltins(&mut it)
+    try it.runScript("var x = [1, 2, 3].map(n => n * 2).join('-')")
+    let x = try it.getProp(objVal(it.global), try it.intern("x"))
+    @expectEqual("2-4-6", it.heap.bytes(strOf(x)))
+    let r = it.runScript("let y = 1; y.z.w") catch Value.Null
+    @expect(isNullish(r) && !isUndef(r))
+    @expect(it.hasClass(it.exception, Class.Error))
+}
+
+test "array indices" {
+    @expectEqual(0, arrayIndex("0"))
+    @expectEqual(4294967294, arrayIndex("4294967294"))
+    @expect(arrayIndex("4294967295") == NONE)
+    @expect(arrayIndex("01") == NONE)
+}
+
+test "tokens" {
+    let a = @testAllocator()
+    var lx = Lexed.init(a)
+    defer lx.deinit()
+    try tokenize(a, "let x = a / 2 + /b[/]c/g.source; `t${1}u${x}v`", &mut lx)
+    let toks = lx.toks.items()
+    @expect(toks[0].kind == Tok.KwLet)
+    @expect(toks[4].kind == Tok.Slash)
+    @expect(toks[7].kind == Tok.Regex)
+    @expectEqual("b[/]cg", lx.cookedOf(toks[7]))
+    @expect(toks[11].kind == Tok.TemplateHead)
+    @expect(toks[13].kind == Tok.TemplateMiddle)
+    @expectEqual("u", lx.cookedOf(toks[13]))
+    @expect(toks[15].kind == Tok.TemplateTail)
+    @expect(toks[16].kind == Tok.Eof)
+}
+
+test "string escapes are WTF-8" {
+    let a = @testAllocator()
+    var lx = Lexed.init(a)
+    defer lx.deinit()
+    try tokenize(a, "'\\u00e9\\uD83D\\uDE00\\uD800\\x41'", &mut lx)
+    let s = lx.cookedOf(lx.toks.items()[0])
+    @expectEqual(2 + 4 + 3 + 1, s.len)
+    @expectEqual(0xF0, s[2])
+    @expectEqual(0xED, s[6])
+}
+
+// ---- weak collections (weak.aye) and the collector
+
+fn liveObjects(it: *mut Interp) u32 {
+    var n: u32 = 0
+    for ob in it.heap.objs.items() {
+        if ob.live {
+            n += 1
+        }
+    }
+    return n
+}
+
+// Runs src; its completion value must be true.
+fn expectTrue(it: *mut Interp, src: []u8) JsError!void {
+    let v = try it.evalScript(src)
+    @expect(it.toBoolean(v))
+}
+
+// A full collection at the end of a job (the WeakRef targets of the job
+// may go).
+fn collectAfterJob(it: *mut Interp) {
+    clearKeptObjects(it)
+    collectGarbage(it)
+}
+
+// The host's part of a cleanup task: each due callback.
+fn runCleanupTasks(it: *mut Interp) JsError!void {
+    while takeCleanup(it) |c| {
+        try it.call1(c.callback, Value.Undefined, c.held)
+    }
+}
+
+test "WeakMap values live through chains of keys" {
+    var it = try Interp.create(@testAllocator())
+    defer it.deinit()
+    try installBuiltins(&mut it)
+    // k1 -> v1 holds k2 -> v2 holds k3 ...: all reachable from k1 only.
+    try it.runScript("var wm = new WeakMap(); var k1 = {}; (function () { let k = k1; for (let i = 0; i < 50; i++) { const next = { i }; wm.set(k, { next }); k = next; } })(); 0")
+    collectAfterJob(&mut it)
+    @expectEqual(50, weakEntryCount(&mut it))
+    try expectTrue(&mut it, "(function () { let k = k1, n = 0; while (wm.has(k)) { k = wm.get(k).next; n++; } return n === 50 && k.i === 49; })()")
+    try it.runScript("k1 = null; 0")
+    collectAfterJob(&mut it)
+    @expectEqual(0, weakEntryCount(&mut it))
+}
+
+test "cycles through WeakMap values do not keep keys alive" {
+    var it = try Interp.create(@testAllocator())
+    defer it.deinit()
+    try installBuiltins(&mut it)
+    try it.runScript("var wm = new WeakMap(), ws = new WeakSet(), keep = {}; (function () { for (let i = 0; i < 100; i++) { const k = { i }; wm.set(k, { back: k, wm }); ws.add(k); } wm.set(keep, { back: keep }); ws.add(keep); const a = {}, b = {}, m1 = new WeakMap(), m2 = new WeakMap(); m1.set(a, b); m2.set(b, a); wm.set(m1, m2); })(); 0")
+    collectAfterJob(&mut it)
+    // keep in wm and ws; m1 -> m2 in wm (m1 died, so that entry too).
+    @expectEqual(2, weakEntryCount(&mut it))
+    try expectTrue(&mut it, "wm.get(keep).back === keep && ws.has(keep)")
+    // A collection that died takes its entries with it.
+    try it.runScript("(function () { const m = new WeakMap(); m.set(keep, { big: new Array(100).fill(1) }); })(); 0")
+    @expectEqual(3, weakEntryCount(&mut it))
+    collectAfterJob(&mut it)
+    @expectEqual(2, weakEntryCount(&mut it))
+}
+
+test "WeakRef targets live until the end of the job" {
+    var it = try Interp.create(@testAllocator())
+    defer it.deinit()
+    try installBuiltins(&mut it)
+    try it.runScript("var t = { strong: true }; var r1 = new WeakRef(t); var r2; (function () { r2 = new WeakRef({ x: 1 }); })(); 0")
+    // Still in the job that made it.
+    collectGarbage(&mut it)
+    try expectTrue(&mut it, "r2.deref().x === 1")
+    // The next job: r2's target is gone, r1's is held by t.
+    collectAfterJob(&mut it)
+    try expectTrue(&mut it, "r2.deref() === undefined && r1.deref() === t")
+    @expectEqual(1, it.weak_refs.len())
+    // A WeakRef that died leaves the table.
+    try it.runScript("r1 = null; 0")
+    collectAfterJob(&mut it)
+    @expectEqual(0, it.weak_refs.len())
+    try expectTrue(&mut it, "typeof t === 'object'")
+}
+
+test "FinalizationRegistry callbacks and unregister" {
+    var it = try Interp.create(@testAllocator())
+    defer it.deinit()
+    try installBuiltins(&mut it)
+    try it.runScript("var log = []; var alive = {}; var token = {}, late = {}; var fr = new FinalizationRegistry(h => log.push(typeof h === 'object' ? h.name : h)); (function () { fr.register({}, 'a'); fr.register({}, 'b', token); fr.register({}, { name: 'c' }, {}); fr.register(alive, 'alive'); fr.register({}, 'd', late); const lost = new FinalizationRegistry(h => log.push('never')); lost.register({}, 'x'); })(); fr.unregister(token); 0")
+    // The held values (c) survive until their callback.
+    collectAfterJob(&mut it)
+    collectAfterJob(&mut it)
+    // Unregistered after the target died, before the callback.
+    try expectTrue(&mut it, "fr.unregister(late) && !fr.unregister(late)")
+    try runCleanupTasks(&mut it)
+    try expectTrue(&mut it, "log.sort().join() === 'a,c'")
+    try runCleanupTasks(&mut it)
+    try it.runScript("alive = null; 0")
+    collectAfterJob(&mut it)
+    try runCleanupTasks(&mut it)
+    try expectTrue(&mut it, "log.join() === 'a,c,alive'")
+    @expectEqual(0, it.fin_cells.len())
+}
+
+test "dead WeakMap keys free their entries and values" {
+    var it = try Interp.create(@testAllocator())
+    defer it.deinit()
+    try installBuiltins(&mut it)
+    try it.runScript("var wm = new WeakMap(); var keys = []; 0")
+    collectAfterJob(&mut it)
+    let base = liveObjects(&mut it)
+    try it.runScript("(function () { for (let i = 0; i < 10000; i++) { const k = { i }; keys.push(k); wm.set(k, { v: i }); } })(); 0")
+    collectAfterJob(&mut it)
+    @expectEqual(10000, weakEntryCount(&mut it))
+    @expect(liveObjects(&mut it) >= base + 20000)
+    try it.runScript("keys = null; 0")
+    collectAfterJob(&mut it)
+    @expectEqual(0, weakEntryCount(&mut it))
+    // Back to where it was (give or take the engine's own objects).
+    @expect(liveObjects(&mut it) <= base + 10)
+    @expect(it.weak_entries.slots.len <= 64)
+}
+
+// A host that keeps one host object alive (as the DOM keeps the
+// wrappers of nodes in the document).
+struct KeepingHost {
+    keep: u32
+
+    fn finalize(self: *mut Self, tag: u32, index: u32, generation: u32) {}
+
+    fn trace(self: *mut Self, it: *mut Interp) bool {
+        if gcMarked(it, self.keep) {
+            return false
+        }
+        gcMark(it, self.keep)
+        return true
+    }
+
+    fn getNamed(self: *mut Self, it: *mut Interp, o: u32, key: u32) JsError!Value {
+        return Value.Empty
+    }
+
+    fn setNamed(self: *mut Self, it: *mut Interp, o: u32, key: u32, v: Value) JsError!bool {
+        return false
+    }
+
+    fn hasNamed(self: *mut Self, it: *mut Interp, o: u32, key: u32) bool {
+        return false
+    }
+}
+
+test "WeakMap keys the host keeps alive keep their values" {
+    var it = try Interp.create(@testAllocator())
+    defer it.deinit()
+    try installBuiltins(&mut it)
+    let h = try it.newHostObject(it.object_proto, 1, 7, 0)
+    var host = KeepingHost { keep: h }
+    it.host = &mut host
+    try it.defineValue(it.global, "node", objVal(h))
+    try it.runScript("var wm = new WeakMap(); wm.set(node, { v: 42 }); node = null; 0")
+    collectAfterJob(&mut it)
+    @expectEqual(1, weakEntryCount(&mut it))
+    try it.defineValue(it.global, "again", objVal(h))
+    try expectTrue(&mut it, "wm.get(again).v === 42")
+}
+
+// The cases above in one script, collecting at every allocation.
+let WEAK_STRESS =
+    \\var out = (function () {
+    \\  const wm = new WeakMap();
+    \\  let k = {};
+    \\  const k1 = k;
+    \\  for (let i = 0; i < 20; i++) { const next = { i }; wm.set(k, { next, s: 'v' + i }); k = next; }
+    \\  k = k1;
+    \\  let n = 0;
+    \\  while (wm.has(k)) { const v = wm.get(k); if (v.s !== 'v' + n) return 'bad value ' + n; k = v.next; n++; }
+    \\  if (n !== 20) return 'chain ' + n;
+    \\  const r = new WeakRef({ a: 1 });
+    \\  for (let i = 0; i < 20; i++) ({ i });
+    \\  if (r.deref().a !== 1) return 'weakref';
+    \\  const fr = new FinalizationRegistry(() => {});
+    \\  fr.register({}, { held: [1, 2, 3] }, k1);
+    \\  if (!fr.unregister(k1)) return 'unregister';
+    \\  return 'ok';
+    \\})();
+    \\out
+
+
+test "weak collections under GC stress" {
+    var it = try Interp.create(@testAllocator())
+    defer it.deinit()
+    try installBuiltins(&mut it)
+    it.heap.threshold = 1
+    let v = try it.evalScript(WEAK_STRESS)
+    @expectEqual("ok", it.heap.bytes(strOf(v)))
+    @expect(it.gc_count > 100)
+}

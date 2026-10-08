@@ -1,8 +1,8 @@
-//! A C header's declarations as Ore source (see `mod.rs` for the rules).
+//! A C header's declarations as Aye source (see `mod.rs` for the rules).
 //!
 //! Two translation units: the first includes the header and yields its
 //! functions, records, enums, typedefs and macro definitions; the second
-//! also declares `__auto_type __ore_m_N = (MACRO);` for each object-like
+//! also declares `__auto_type __aye_m_N = (MACRO);` for each object-like
 //! macro, so that libclang evaluates the ones that are constants.
 
 use super::clang::*;
@@ -77,7 +77,7 @@ pub fn run(lib: &Lib, header: &str, include: &str, args: &[String]) -> Result<(S
 }
 
 fn parse(lib: &Lib, index: CXIndex, source: &str, args: &[String]) -> Result<CXTranslationUnit, String> {
-    let name = CString::new("ore_cimport.c").unwrap();
+    let name = CString::new("aye_cimport.c").unwrap();
     let contents = CString::new(source).map_err(|e| e.to_string())?;
     let cargs: Vec<CString> = args.iter().map(|a| CString::new(a.as_str()).unwrap_or_default()).collect();
     let ptrs: Vec<*const std::ffi::c_char> = cargs.iter().map(|a| a.as_ptr()).collect();
@@ -101,7 +101,7 @@ fn errors(lib: &Lib, tu: CXTranslationUnit, header: &str) -> Option<String> {
         unsafe { (lib.clang_disposeDiagnostic)(d) };
     }
     let (file, _, _, msg) = found.first()?;
-    if file == "ore_cimport.c" && msg.contains("not found") {
+    if file == "aye_cimport.c" && msg.contains("not found") {
         return Some(format!(
             "C header `{header}` not found: it is looked for next to the source file, then on the include path (add a directory with \"-Idir\", or `@link` the library so that its `pkg-config --cflags` are used)"
         ));
@@ -117,7 +117,7 @@ fn errors(lib: &Lib, tu: CXTranslationUnit, header: &str) -> Option<String> {
     Some(format!("C header `{header}` has errors: {}{more}", shown.join("; ")))
 }
 
-/// Ore's keywords and the other names a declaration cannot take.
+/// Aye's keywords and the other names a declaration cannot take.
 fn reserved(name: &str) -> bool {
     crate::lexer::is_keyword(name)
         || matches!(name, "true" | "false" | "null" | "self" | "Self" | "_")
@@ -129,7 +129,7 @@ fn ident(name: &str) -> bool {
     cs.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') && cs.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// An Ore declaration, or a comment about a C declaration that has none.
+/// An Aye declaration, or a comment about a C declaration that has none.
 enum Item {
     Fn { name: String, params: Vec<(String, String)>, ret: Option<String>, variadic: bool },
     Alias { name: String, ty: String },
@@ -146,7 +146,7 @@ struct Rec {
     decl: CXCursor,
     defined: bool,
     in_scope: bool,
-    /// The fields (name, Ore type), or why the record is opaque.
+    /// The fields (name, Aye type), or why the record is opaque.
     layout: Option<Result<Vec<(String, String)>, String>>,
     computing: bool,
     placed: bool,
@@ -186,7 +186,7 @@ struct Gen<'a> {
     used_typedef_names: HashSet<String>,
 }
 
-/// A macro's value: Ore type and literal.
+/// A macro's value: Aye type and literal.
 type Value = Option<(String, String)>;
 
 impl Gen<'_> {
@@ -235,7 +235,7 @@ impl Gen<'_> {
         let b = if self.system {
             self.scope.contains(&std::fs::canonicalize(&file).unwrap_or_else(|_| PathBuf::from(&file)))
         } else {
-            file != "ore_cimport.c" && unsafe { (self.lib.clang_Location_isInSystemHeader)(loc) } == 0
+            file != "aye_cimport.c" && unsafe { (self.lib.clang_Location_isInSystemHeader)(loc) } == 0
         };
         self.files.insert(file, b);
         b
@@ -293,7 +293,7 @@ impl Gen<'_> {
             VAR_DECL => {
                 let name = self.spelling(c);
                 if self.seen.insert(name.clone()) {
-                    self.items.push(Item::Note(format!("skipped `{name}`: a C variable (Ore declares only C functions)")));
+                    self.items.push(Item::Note(format!("skipped `{name}`: a C variable (Aye declares only C functions)")));
                 }
             }
             TYPEDEF_DECL => self.typedef(c),
@@ -338,7 +338,7 @@ impl Gen<'_> {
 
     // ------------------------------------------------------------ records
 
-    /// The Ore name of a record, registering it.
+    /// The Aye name of a record, registering it.
     fn rec_name(&mut self, decl: CXCursor) -> String {
         let usr = self.usr(decl);
         if let Some(r) = self.recs.get(&usr) {
@@ -386,7 +386,7 @@ impl Gen<'_> {
     }
 
     /// The fields of a record, or why it has to be opaque: no definition,
-    /// bit-fields, a field type Ore has no equivalent for, or a layout that
+    /// bit-fields, a field type Aye has no equivalent for, or a layout that
     /// is not C's natural one (packed or aligned).
     fn layout(&mut self, usr: &str) -> Result<Vec<(String, String)>, String> {
         let r = &self.recs[usr];
@@ -462,7 +462,7 @@ impl Gen<'_> {
 
     // -------------------------------------------------------------- types
 
-    /// The Ore type of a C type. A record used `by_value` must not be
+    /// The Aye type of a C type. A record used `by_value` must not be
     /// opaque. `void` is "void" (only a return type takes it).
     fn ty(&mut self, t: CXType, by_value: bool) -> Result<String, String> {
         let lib = self.lib;
@@ -513,13 +513,13 @@ impl Gen<'_> {
                 let elem = self.ty(unsafe { (lib.clang_getArrayElementType)(t) }, true)?;
                 Ok(format!("[{n}]{elem}"))
             }
-            T_FUNCTION_PROTO | T_FUNCTION_NO_PROTO => Err("a function type (Ore has function pointers only)".to_string()),
+            T_FUNCTION_PROTO | T_FUNCTION_NO_PROTO => Err("a function type (Aye has function pointers only)".to_string()),
             _ => {
                 let c = self.canonical(t);
                 if c.kind != t.kind && c.kind != T_INVALID {
                     return self.ty(c, by_value);
                 }
-                Err(format!("the C type `{}` has no Ore equivalent", self.type_spelling(t)))
+                Err(format!("the C type `{}` has no Aye equivalent", self.type_spelling(t)))
             }
         }
     }
@@ -583,7 +583,7 @@ impl Gen<'_> {
             return;
         }
         if !ident(&name) || reserved(&name) {
-            self.items.push(skip("the name is an Ore keyword".to_string()));
+            self.items.push(skip("the name is an Aye keyword".to_string()));
             return;
         }
         let t = unsafe { (lib.clang_getCursorType)(c) };
@@ -702,7 +702,7 @@ impl Gen<'_> {
         for (i, m) in self.macros.iter().enumerate() {
             // No parentheses: libclang evaluates a string literal only
             // when it is the whole initializer.
-            src.push_str(&format!("__auto_type __ore_m_{i} = {m};\n"));
+            src.push_str(&format!("__auto_type __aye_m_{i} = {m};\n"));
         }
         let mut args = args.to_vec();
         args.push("-ferror-limit=0".to_string());
@@ -715,7 +715,7 @@ impl Gen<'_> {
             let d = unsafe { (lib.clang_getDiagnostic)(tu, d) };
             if unsafe { (lib.clang_getDiagnosticSeverity)(d) } >= SEVERITY_ERROR {
                 let (file, line, _) = lib.place(unsafe { (lib.clang_getDiagnosticLocation)(d) });
-                if file == "ore_cimport.c" {
+                if file == "aye_cimport.c" {
                     bad.insert(line);
                 }
             }
@@ -725,7 +725,7 @@ impl Gen<'_> {
             if self.kind(c) != VAR_DECL {
                 continue;
             }
-            let Some(i) = self.spelling(c).strip_prefix("__ore_m_").and_then(|n| n.parse::<usize>().ok()) else { continue };
+            let Some(i) = self.spelling(c).strip_prefix("__aye_m_").and_then(|n| n.parse::<usize>().ok()) else { continue };
             // The include is line 1 (and has no newline inside).
             if i >= values.len() || bad.contains(&(i as u32 + 2)) {
                 continue;
@@ -823,7 +823,7 @@ impl Gen<'_> {
             keep.push(it);
         }
         let mut out = format!(
-            "// Generated by `ore cimport` from \"{header}\" with libclang: do not edit.\n// Declarations that Ore cannot express are listed as comments.\n"
+            "// Generated by `aye cimport` from \"{header}\" with libclang: do not edit.\n// Declarations that Aye cannot express are listed as comments.\n"
         );
         let mut last_block = true;
         for it in &keep {
@@ -880,18 +880,18 @@ impl Gen<'_> {
     }
 }
 
-/// A float literal Ore reads back as the same value.
+/// A float literal Aye reads back as the same value.
 fn float(v: f64, single: bool) -> String {
     let s = if single { format!("{:?}", v as f32) } else { format!("{v:?}") };
     if s.contains('e') && !s.contains('.') {
-        // `1e300` has no point: Ore needs one before the exponent.
+        // `1e300` has no point: Aye needs one before the exponent.
         s.replacen('e', ".0e", 1)
     } else {
         s
     }
 }
 
-/// An Ore string literal of `bytes`.
+/// An Aye string literal of `bytes`.
 fn string(bytes: &[u8]) -> String {
     let mut s = String::from("\"");
     for &b in bytes {

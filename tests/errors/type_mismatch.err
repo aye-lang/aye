@@ -1,1 +1,1 @@
-type_mismatch.ore:4:15: error[E0023]: mismatched types in `+`: `i32` and `i64` (use `as` to convert)
+type_mismatch.aye:4:15: error[E0023]: mismatched types in `+`: `i32` and `i64` (use `as` to convert)

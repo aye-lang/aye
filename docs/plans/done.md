@@ -3,23 +3,23 @@
 One line per finished step: id, date, result, merge commit (when one
 exists). "dropped: reason" marks a step that was superseded or is no
 longer needed. Newest phases last; within a phase, by id. The lane plans
-([`ore.md`](ore.md), [`browser.md`](browser.md),
+([`aye.md`](aye.md), [`browser.md`](browser.md),
 [`framework.md`](framework.md)) list only open work.
 
-## Ore lane
+## Aye lane
 
 | id | date | result | merge |
 |---|---|---|---|
 | O0.1 | 2026-10-08 | Toolchain note: wasm32 builds with Homebrew LLVM: `$(brew --prefix llvm)/bin/clang --target=wasm32-wasip1 --sysroot=$(brew --prefix wasi-libc)/share/wasi-sysroot -resource-dir=$(brew --prefix wasi-runtimes)/share/wasi-runtimes` (the `wasm32-wasi` triple is gone; without `-resource-dir` the link misses `libclang_rt.builtins.a`); checked on a printf program; no wasm runtime installed yet | – |
-| P2.1 | 2026-10-07 | Gap #48: bool-to-integer casts, error test, spec entry, `ore explain` | f4bd8ae |
-| P2.2 | 2026-10-07 | Bool casts replace the #48 workarounds in `browser/js/fast_expr.ore` | 9fcc00a |
+| P2.1 | 2026-10-07 | Gap #48: bool-to-integer casts, error test, spec entry, `aye explain` | f4bd8ae |
+| P2.2 | 2026-10-07 | Bool casts replace the #48 workarounds in `browser/js/fast_expr.aye` | 9fcc00a |
 | P2.3 | 2026-10-07 | Tuples (#21) declined in `decisions.md`; the language fix for #3 decided (its golden is P2.9) | 0995340 |
-| P2.5 | 2026-10-08 | `ore spec` ~24.6k tokens (cl100k) of ~30k; M5 gate rerun: a fresh agent wrote `wc` and a JSON tokenizer from the spec alone, `ore check` clean on round one; four loose spots in §6–§8 clarified (P2.5c) | ce06f67 |
+| P2.5 | 2026-10-08 | `aye spec` ~24.6k tokens (cl100k) of ~30k; M5 gate rerun: a fresh agent wrote `wc` and a JSON tokenizer from the spec alone, `aye check` clean on round one; four loose spots in §6–§8 clarified (P2.5c) | ce06f67 |
 | P2.7 | 2026-10-07 | The "flaky" `import()` build was a shared output path between two agents; builds are deterministic | 45d177c |
 | P2.8 | 2026-10-07 | Agents build into their own worktree (`browser/build.sh` with no path) | 7bb3d03 |
-| P2.10 | 2026-10-07 | `Document.node` uses `unreachable` for a stale handle (`browser/dom/dom.ore`) | 9c909eb |
-| O1.2 | 2026-10-08 | std documented in tiers: the spec keeps the CLI modules in full and an index line per other module; `ore doc --signatures std.<m>` is their API; `tests/spec.rs` checks the index and `///` coverage (decision in `docs/decisions.md`, "How std is documented as it grows") | a3498da |
-| O1.3 | 2026-10-08 | `std.net`: TCP `listen`/`accept`/`connect`/`read`/`readTimeout`/`write`/`close`, IPv4 only; golden `tests/cases/net_echo.ore`; gap #49 worked around with C helpers in `src/cgen.rs` (→ O1.3a) | 56967d4 |
+| P2.10 | 2026-10-07 | `Document.node` uses `unreachable` for a stale handle (`browser/dom/dom.aye`) | 9c909eb |
+| O1.2 | 2026-10-08 | std documented in tiers: the spec keeps the CLI modules in full and an index line per other module; `aye doc --signatures std.<m>` is their API; `tests/spec.rs` checks the index and `///` coverage (decision in `docs/decisions.md`, "How std is documented as it grows") | a3498da |
+| O1.3 | 2026-10-08 | `std.net`: TCP `listen`/`accept`/`connect`/`read`/`readTimeout`/`write`/`close`, IPv4 only; golden `tests/cases/net_echo.aye`; gap #49 worked around with C helpers in `src/cgen.rs` (→ O1.3a) | 56967d4 |
 | O1.8 | 2026-10-08 | (its commit says O1.7, an id clash with the benchmark card) `@tagName(x)`: error, enum and tagged-union tag names as static `[]u8`; E0116 for other types; gap #51 fixed | 323b81d |
 | O1.4a | 2026-10-08 | `std.http`: `listen(T, host, port, ctx, handler)` → `Server` with `port()`, `run(alloc)`, `stop()`; thread per connection, keep-alive, per-request arena for the handler; gaps #52, #53 opened; HEAD bodies and 408 left open | f68324a |
 | O1.1 | 2026-10-08 | Conformance harness `tests/conformance/<area>/` + `cargo test --release --test conformance` table; 13 areas, 29/29 on native | c7212ac, ba7bb72 |
@@ -85,7 +85,7 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | P3.40 | 2026-10-07 | `capture` records what the screenshot needs (fonts, images) | ac62f7f |
 | P3.43 | 2026-10-08 | Reflected URLs resolve against the current document base | 3598797 |
 | P3.44 | 2026-10-08 | Overflowing flex and grid items have no automatic minimum (GitHub, YouTube search); DDG → P3.52; ZOL is the site's CSS | 01adb4b |
-| P3.45 | 2026-10-08 | Screenshots run scripts at the painted viewport size (`browser/shot.ore`); ICO → P3.55, `<video poster>` → P3.56 | 7b9f7ed |
+| P3.45 | 2026-10-08 | Screenshots run scripts at the painted viewport size (`browser/shot.aye`); ICO → P3.55, `<video poster>` → P3.56 | 7b9f7ed |
 | P3.46 | 2026-10-08 | The `grid-template` shorthand (Wikipedia's page grid) | 41624b8 |
 | P3.47 | 2026-10-08 | A closed `<dialog>` is not drawn (MDN); MDN band and BBC band are the sites' CSS; duplicates → P3.58, BBC NEWS width → P3.59 | 4413653 |
 | P3.49 | 2026-10-08 | rustdoc: `::before{content:url()}` images and escaped CSS strings (the search input appears only on click, as on the real page) | b4c901b |

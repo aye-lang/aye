@@ -1,0 +1,974 @@
+// The agent's command lines and stdio servers:
+//
+//     anyknown agent [--width PX] [--height PX] [--no-js]   JSON lines (docs/agent-protocol.md)
+//     anyknown mcp [--width PX] [--height PX] [--no-js]     MCP over stdio (JSON-RPC 2.0)
+//     anyknown dump --a11y [--boxes] [--json] [--js] [--width PX] [--no-scroll | --scroll-steps N] FILE|URL
+//     anyknown dump --md [--refs] [--js] [--width PX] [--no-scroll | --scroll-steps N] FILE|URL
+//
+// The servers run the pages' scripts unless --no-js; the dumps only with
+// --js: then after the timers that are due ran, and after scrolling
+// through the page (at most 20 viewports, or N; engine.scrollThrough), so
+// that what scripts load when it comes into view is there.
+//
+// Each request is one line of JSON; each response is one line. Requests
+// are handled in order; everything a request allocates is in an arena
+// freed after its response.
+
+import engine
+import html
+import std
+import std.heap.Arena
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+let DUMP_USAGE = "usage: anyknown dump --a11y [--boxes] [--json] | --md [--refs] [--js] [--width PX] [--no-scroll | --scroll-steps N] FILE|URL"
+let SERVE_USAGE = "usage: anyknown agent|mcp [--width PX] [--height PX] [--no-js]"
+
+// How many viewports a dump scrolls through at most (`--scroll-steps`).
+let DUMP_SCROLL_STEPS: usize = 20
+
+let MCP_VERSION = "2025-06-18"
+let MCP_VERSIONS = "2025-11-25 2025-06-18 2025-03-26 2024-11-05"
+
+/// Is `args` (after `dump`) a dump of the agent's views?
+pub fn isAgentDump(args: [][]u8) bool {
+    for a in args {
+        if text.eql(a, "--a11y") || text.eql(a, "--md") {
+            return true
+        }
+    }
+    return false
+}
+
+/// `anyknown dump --a11y|--md ...`; the exit status.
+pub fn dumpMain(alloc: Allocator, args: [][]u8) i32 {
+    return dumpViews(alloc, args) catch |e| {
+        std.log.err("{}", e)
+        return 1
+    }
+}
+
+fn dumpViews(alloc: Allocator, args: [][]u8) !i32 {
+    var md = false
+    var boxes = false
+    var as_json = false
+    var refs = false
+    var width = 800.0
+    var scroll_steps = DUMP_SCROLL_STEPS
+    var target: []u8 = ""
+    var i: usize = 0
+    while i < args.len {
+        let a = args[i]
+        if text.eql(a, "--a11y") {
+            md = false
+        } else if text.eql(a, "--md") {
+            md = true
+        } else if text.eql(a, "--boxes") {
+            boxes = true
+        } else if text.eql(a, "--json") {
+            as_json = true
+        } else if text.eql(a, "--refs") {
+            refs = true
+        } else if text.eql(a, "--js") {
+            engine.setScripting(true)
+        } else if text.eql(a, "--width") && i + 1 < args.len {
+            width = text.parseFloat(args[i + 1]) catch 0.0
+            if width <= 0.0 {
+                std.log.err(DUMP_USAGE)
+                return 2
+            }
+            i += 1
+        } else if text.eql(a, "--no-scroll") {
+            scroll_steps = 0
+        } else if text.eql(a, "--scroll-steps") && i + 1 < args.len {
+            let n = text.parseInt(args[i + 1]) catch -1
+            if n < 0 {
+                std.log.err(DUMP_USAGE)
+                return 2
+            }
+            scroll_steps = n as usize
+            i += 1
+        } else if target.len == 0 && !text.startsWith(a, "--") {
+            target = a
+        } else {
+            std.log.err(DUMP_USAGE)
+            return 2
+        }
+        i += 1
+    }
+    if target.len == 0 {
+        std.log.err(DUMP_USAGE)
+        return 2
+    }
+    var s = try newSession(alloc, width, 600.0)
+    defer freeSession(&mut s)
+    var arena = Arena.init(alloc)
+    defer arena.deinit()
+    let tmp = arena.allocator()
+    let o = try perform(&mut s, tmp, Action.Navigate { target: target })
+    if !o.ok {
+        std.log.err("{}", o.message)
+        return 1
+    }
+    try scrollThroughPage(&mut s, scroll_steps)
+    var out = text.Builder.init(tmp)
+    if md {
+        try out.append(try markdownOf(&mut s, tmp, refs))
+    } else if as_json {
+        let ax = try buildAx(&mut s, tmp)
+        var w = Writer.init(&mut out)
+        try writeAxJson(&ax, &mut w, boxes)
+        try out.appendByte('\n')
+    } else {
+        try out.append(try snapshotText(&mut s, tmp, boxes))
+    }
+    try std.fs.stdout().write(out.bytes())
+    return 0
+}
+
+/// `anyknown agent` (`mcp` false) or `anyknown mcp`; the exit status.
+pub fn serveMain(alloc: Allocator, args: [][]u8, mcp: bool) i32 {
+    var width = 800.0
+    var height = 600.0
+    var i: usize = 0
+    engine.setScripting(true)
+    while i < args.len {
+        if text.eql(args[i], "--no-js") {
+            engine.setScripting(false)
+            i += 1
+            continue
+        }
+        if (text.eql(args[i], "--width") || text.eql(args[i], "--height")) && i + 1 < args.len {
+            let v = text.parseFloat(args[i + 1]) catch 0.0
+            if v <= 0.0 {
+                std.log.err(SERVE_USAGE)
+                return 2
+            }
+            if text.eql(args[i], "--width") {
+                width = v
+            } else {
+                height = v
+            }
+            i += 2
+            continue
+        }
+        std.log.err(SERVE_USAGE)
+        return 2
+    }
+    var s = newSession(alloc, width, height) catch |e| {
+        std.log.err("out of memory")
+        return 1
+    }
+    defer freeSession(&mut s)
+    var lines = LineReader { alloc: alloc, pending: text.Builder.init(alloc), line: text.Builder.init(alloc), eof: false }
+    defer lines.deinit()
+    while true {
+        let got = lines.next() catch |e| {
+            std.log.err("out of memory")
+            return 1
+        }
+        let line = got orelse break
+        if text.trim(line).len == 0 {
+            continue
+        }
+        var arena = Arena.init(alloc)
+        defer arena.deinit()
+        let tmp = arena.allocator()
+        var out = text.Builder.init(tmp)
+        let handled = handleLine(&mut s, tmp, line, mcp, &mut out) catch |e| {
+            std.log.err("{}", e)
+            return 1
+        }
+        if out.len() > 0 {
+            out.appendByte('\n') catch |e| {
+                return 1
+            }
+            std.fs.stdout().write(out.bytes()) catch |e| {
+                return 1
+            }
+        }
+    }
+    return 0
+}
+
+fn handleLine(s: *mut Session, tmp: Allocator, line: []u8, mcp: bool, out: *mut text.Builder) !bool {
+    if mcp {
+        try mcpMessage(s, tmp, line, out)
+    } else {
+        try agentRequest(s, tmp, line, out)
+    }
+    return true
+}
+
+// ---- reading lines from stdin
+
+struct LineReader {
+    alloc: Allocator
+    // Bytes read and not yet returned.
+    pending: text.Builder
+    // The line last returned.
+    line: text.Builder
+    eof: bool
+
+    fn deinit(self: *mut Self) {
+        self.pending.deinit()
+        self.line.deinit()
+    }
+
+    /// The next line (without `\n` and a `\r` before it); null at the
+    /// end. Valid until the next call.
+    fn next(self: *mut Self) AllocError!?[]u8 {
+        while true {
+            let buf = self.pending.bytes()
+            if std.mem.indexOf(buf, '\n') |nl| {
+                var end = nl
+                if end > 0 && buf[end - 1] == '\r' {
+                    end -= 1
+                }
+                self.line.clear()
+                try self.line.append(buf[..end])
+                try self.dropFront(nl + 1)
+                return self.line.bytes()
+            }
+            if self.eof {
+                if buf.len == 0 {
+                    return null
+                }
+                self.line.clear()
+                try self.line.append(buf)
+                self.pending.clear()
+                return self.line.bytes()
+            }
+            var chunk = @zeroed([4096]u8)
+            let n = read(0, chunk[..].ptr, chunk.len)
+            if n <= 0 {
+                self.eof = true
+            } else {
+                try self.pending.append(chunk[0..n as usize])
+            }
+        }
+        return null
+    }
+
+    fn dropFront(self: *mut Self, n: usize) AllocError!void {
+        let rest = self.pending.bytes()[n..]
+        if rest.len == 0 {
+            self.pending.clear()
+            return
+        }
+        let copy = try self.alloc.alloc(0 as u8, rest.len)
+        defer self.alloc.free(copy)
+        std.mem.copy(copy, rest)
+        self.pending.clear()
+        try self.pending.append(copy)
+    }
+}
+
+extern fn read(fd: i32, buf: [*]u8, n: usize) isize
+
+// ---- JSON lines
+
+fn agentRequest(s: *mut Session, tmp: Allocator, line: []u8, out: *mut text.Builder) !void {
+    var w = Writer.init(out)
+    var failure = ParseFailure { pos: 0, msg: "" }
+    var doc = Json.parse(tmp, line, &mut failure) catch |e| {
+        try w.beginObject()
+        try w.key("id")
+        try w.null()
+        try failField(&mut w, tmp, try parseMessage(tmp, failure))
+        try w.endObject()
+        return
+    }
+    defer doc.deinit()
+    let req = doc.root()
+    try w.beginObject()
+    try w.key("id")
+    if doc.kind(req) == JKind.Object && doc.get(req, "id") != null {
+        var id = text.Builder.init(tmp)
+        try doc.write(doc.get(req, "id").?, &mut id)
+        try w.raw(id.bytes())
+    } else {
+        try w.null()
+    }
+    if doc.kind(req) != JKind.Object {
+        try failField(&mut w, tmp, "a request is a JSON object")
+        return w.endObject()
+    }
+    let cmd = doc.getStr(req, "cmd") orelse {
+        try failField(&mut w, tmp, "missing \"cmd\"")
+        return w.endObject()
+    }
+    try agentCommand(s, tmp, &mut doc, req, cmd, &mut w)
+    try w.endObject()
+}
+
+fn parseMessage(tmp: Allocator, failure: ParseFailure) AllocError![]u8 {
+    var b = text.Builder.init(tmp)
+    try b.append("invalid JSON: ")
+    try b.append(failure.msg)
+    try b.append(" at byte ")
+    try b.appendUint(failure.pos as u64)
+    return b.bytes()
+}
+
+fn failField(w: *mut Writer, tmp: Allocator, message: []u8) AllocError!void {
+    try w.key("ok")
+    try w.boolean(false)
+    try w.key("error")
+    try w.string(message)
+}
+
+/// The action of a request (JSON lines) or tool call (MCP) named `cmd`
+/// with the arguments in object `args`; null when `cmd` is not an
+/// action. `why` gets a missing argument.
+fn actionOf(doc: *mut Json, args: ?usize, cmd: []u8, why: *mut text.Builder) AllocError!?Action {
+    if text.eql(cmd, "navigate") {
+        let u = argStr(doc, args, "url", why) orelse return null
+        return Action.Navigate { target: u }
+    }
+    if text.eql(cmd, "back") {
+        return Action.Back
+    }
+    if text.eql(cmd, "forward") {
+        return Action.Forward
+    }
+    if text.eql(cmd, "reload") {
+        return Action.Reload
+    }
+    if text.eql(cmd, "wait") {
+        var selector: []u8 = ""
+        var ms = 0.0
+        if args |o| {
+            selector = doc.getStr(o, "selector") orelse ""
+            ms = doc.getNum(o, "ms") orelse 0.0
+        }
+        return Action.Wait { selector: selector, ms: ms }
+    }
+    if text.eql(cmd, "eval") {
+        let src = argStr(doc, args, "expression", why) orelse return null
+        return Action.Eval { src: src }
+    }
+    if text.eql(cmd, "click") {
+        let r = argStr(doc, args, "ref", why) orelse return null
+        return Action.Click { ref: r }
+    }
+    if text.eql(cmd, "type") {
+        let r = argStr(doc, args, "ref", why) orelse return null
+        let t = argStr(doc, args, "text", why) orelse return null
+        var submit = false
+        if args |o| {
+            submit = doc.getBool(o, "submit") orelse false
+        }
+        return Action.Type { ref: r, input: t, submit: submit }
+    }
+    if text.eql(cmd, "select") {
+        let r = argStr(doc, args, "ref", why) orelse return null
+        let v = argStr(doc, args, "option", why) orelse return null
+        return Action.Select { ref: r, option: v }
+    }
+    if text.eql(cmd, "press") {
+        let k = argStr(doc, args, "key", why) orelse return null
+        return Action.Press { key: k }
+    }
+    if text.eql(cmd, "scroll") {
+        if args |o| {
+            if doc.getStr(o, "ref") |r| {
+                return Action.Scroll { ref: r, dy: 0.0 }
+            }
+            if doc.getNum(o, "dy") |dy| {
+                return Action.Scroll { ref: "", dy: dy }
+            }
+        }
+        try why.append("scroll needs \"ref\" (a string) or \"dy\" (a number)")
+        return null
+    }
+    return null
+}
+
+fn argStr(doc: *mut Json, args: ?usize, name: []u8, why: *mut text.Builder) ?[]u8 {
+    if args |o| {
+        if doc.getStr(o, name) |v| {
+            return v
+        }
+    }
+    why.append("missing argument \"") catch |e| {
+        return null
+    }
+    why.append(name) catch |e| {
+        return null
+    }
+    why.append("\" (a string)") catch |e| {
+        return null
+    }
+    return null
+}
+
+fn agentCommand(s: *mut Session, tmp: Allocator, doc: *mut Json, req: usize, cmd: []u8, w: *mut Writer) !void {
+    let why_not = refusal(s, cmd)
+    if why_not.len > 0 {
+        return failField(w, tmp, why_not)
+    }
+    if try windowRequest(s, tmp, doc, req, cmd, w) {
+        return
+    }
+    try announce(s, tmp, doc, req, cmd)
+    if text.eql(cmd, "snapshot") {
+        if s.tab.page == null {
+            return failField(w, tmp, "no page: navigate first")
+        }
+        let boxes = doc.getBool(req, "boxes") orelse false
+        try w.key("ok")
+        try w.boolean(true)
+        try pageFields(s, tmp, w)
+        if text.eql(doc.getStr(req, "format") orelse "text", "json") {
+            let ax = try buildAx(s, tmp)
+            try w.key("tree")
+            try writeAxJson(&ax, w, boxes)
+        } else {
+            try w.key("snapshot")
+            try w.string(try snapshotText(s, tmp, boxes))
+        }
+        let focused = focusRef(s)
+        if focused > 0 {
+            try w.key("focused")
+            try w.string(try refName(tmp, focused))
+        }
+        return
+    }
+    if text.eql(cmd, "read") {
+        if s.tab.page == null {
+            return failField(w, tmp, "no page: navigate first")
+        }
+        try w.key("ok")
+        try w.boolean(true)
+        try pageFields(s, tmp, w)
+        try w.key("markdown")
+        try w.string(try markdownOf(s, tmp, doc.getBool(req, "refs") orelse true))
+        return
+    }
+    if text.eql(cmd, "find") {
+        var why = text.Builder.init(tmp)
+        let needle = argStr(doc, req, "text", &mut why) orelse {
+            return failField(w, tmp, why.bytes())
+        }
+        let o = try findText(s, tmp, needle)
+        return outcomeFields(s, tmp, o, w)
+    }
+    if text.eql(cmd, "screenshot") {
+        let shot = try screenshotOf(s, tmp, doc, req)
+        if !shot.ok {
+            return failField(w, tmp, shot.message)
+        }
+        try w.key("ok")
+        try w.boolean(true)
+        try w.key("result")
+        try w.string(shot.message)
+        try pageFields(s, tmp, w)
+        try w.key("width")
+        try w.int(shot.width as i64)
+        try w.key("height")
+        try w.int(shot.height as i64)
+        try w.key("png")
+        try w.string(shot.png)
+        return
+    }
+    if text.eql(cmd, "tabs") {
+        return failField(w, tmp, try concat(tmp, "\"", cmd, "\" is not supported yet"))
+    }
+    var why = text.Builder.init(tmp)
+    let act = try actionOf(doc, req, cmd, &mut why)
+    if act |a| {
+        let o = try perform(s, tmp, a)
+        return outcomeFields(s, tmp, o, w)
+    }
+    if why.len() > 0 {
+        return failField(w, tmp, why.bytes())
+    }
+    return failField(w, tmp, try concat(tmp, "unknown command \"", cmd, "\""))
+}
+
+// The screenshot a request (or tool call) with the arguments in object
+// `args` asks for: `ref`, `full`.
+fn screenshotOf(s: *mut Session, tmp: Allocator, doc: *mut Json, args: ?usize) AllocError!Shot {
+    var ref: []u8 = ""
+    var full = false
+    if args |o| {
+        ref = doc.getStr(o, "ref") orelse ""
+        full = doc.getBool(o, "full") orelse false
+    }
+    return takeScreenshot(s, tmp, ref, full)
+}
+
+fn outcomeFields(s: *mut Session, tmp: Allocator, o: Outcome, w: *mut Writer) !void {
+    if !o.ok {
+        try failField(w, tmp, o.message)
+        return consoleField(s, tmp, w)
+    }
+    try w.key("ok")
+    try w.boolean(true)
+    try w.key("result")
+    try w.string(o.message)
+    try pageFields(s, tmp, w)
+    if o.navigated {
+        try w.key("snapshot")
+        try w.string(try snapshotText(s, tmp, false))
+    } else if o.diff.len > 0 {
+        try w.key("diff")
+        try w.string(o.diff)
+    }
+    return consoleField(s, tmp, w)
+}
+
+// The page's console messages since the last response, if any.
+fn consoleField(s: *mut Session, tmp: Allocator, w: *mut Writer) AllocError!void {
+    let lines = try consoleLines(s, tmp)
+    if lines.len > 0 {
+        try w.key("console")
+        try w.beginArray()
+        for l in lines {
+            try w.string(l)
+        }
+        try w.endArray()
+    }
+}
+
+fn pageFields(s: *mut Session, tmp: Allocator, w: *mut Writer) AllocError!void {
+    if s.tab.page |p| {
+        try w.key("url")
+        try w.string(s.tab.href())
+        try w.key("title")
+        try w.string(p.title)
+    }
+}
+
+// ---- MCP
+
+fn mcpMessage(s: *mut Session, tmp: Allocator, line: []u8, out: *mut text.Builder) !void {
+    var w = Writer.init(out)
+    var failure = ParseFailure { pos: 0, msg: "" }
+    var doc = Json.parse(tmp, line, &mut failure) catch |e| {
+        return rpcError(&mut w, "null", -32700, try parseMessage(tmp, failure))
+    }
+    defer doc.deinit()
+    let msg = doc.root()
+    if doc.kind(msg) != JKind.Object {
+        return rpcError(&mut w, "null", -32600, "invalid request: not an object (batches are not supported)")
+    }
+    var id: []u8 = ""
+    if doc.get(msg, "id") |i| {
+        var b = text.Builder.init(tmp)
+        try doc.write(i, &mut b)
+        id = b.bytes()
+    }
+    let method = doc.getStr(msg, "method") orelse {
+        if id.len > 0 && doc.get(msg, "result") == null && doc.get(msg, "error") == null {
+            return rpcError(&mut w, id, -32600, "invalid request: no method")
+        }
+        // A response to us, or junk without an id: nothing to answer.
+        return
+    }
+    if id.len == 0 {
+        // A notification (notifications/initialized, cancelled, ...).
+        return
+    }
+    let params = doc.get(msg, "params")
+    if text.eql(method, "initialize") {
+        var version = MCP_VERSION
+        if params |pp| {
+            if doc.getStr(pp, "protocolVersion") |v| {
+                if html.isIn(v, MCP_VERSIONS) {
+                    version = v
+                }
+            }
+        }
+        try rpcStart(&mut w, id)
+        try w.beginObject()
+        try w.key("protocolVersion")
+        try w.string(version)
+        try w.key("capabilities")
+        try w.beginObject()
+        try w.key("tools")
+        try w.beginObject()
+        try w.key("listChanged")
+        try w.boolean(false)
+        try w.endObject()
+        if s.host != null {
+            try w.key("logging")
+            try w.beginObject()
+            try w.endObject()
+        }
+        try w.endObject()
+        try w.key("serverInfo")
+        try w.beginObject()
+        try w.key("name")
+        try w.string("anyknown")
+        try w.key("title")
+        try w.string("anyknown browser")
+        try w.key("version")
+        try w.string("0.1.0")
+        try w.endObject()
+        try w.key("instructions")
+        if s.host != null {
+            try w.string(SHARED_INSTRUCTIONS)
+            try w.endObject()
+            return w.endObject()
+        }
+        try w.string("A web browser without pixels. Start with browser_navigate; browser_snapshot lists the page as an accessibility tree whose interactive elements and headings carry refs like e12; act on them with browser_click, browser_type, browser_select. browser_read gives the main content as Markdown. Pages run their scripts: browser_eval runs JavaScript in the page, browser_wait lets timers run (page time, not real time).")
+        try w.endObject()
+        return w.endObject()
+    }
+    if text.eql(method, "ping") || (text.eql(method, "logging/setLevel") && s.host != null) {
+        try rpcStart(&mut w, id)
+        try w.beginObject()
+        try w.endObject()
+        return w.endObject()
+    }
+    if text.eql(method, "tools/list") {
+        try rpcStart(&mut w, id)
+        try w.beginObject()
+        try w.key("tools")
+        try toolList(&mut w, s.host != null)
+        try w.endObject()
+        return w.endObject()
+    }
+    if text.eql(method, "tools/call") {
+        let pp = params orelse {
+            return rpcError(&mut w, id, -32602, "tools/call needs params")
+        }
+        let name = doc.getStr(pp, "name") orelse {
+            return rpcError(&mut w, id, -32602, "tools/call needs params.name")
+        }
+        if !isTool(name, s.host != null) {
+            return rpcError(&mut w, id, -32602, try concat(tmp, "unknown tool: ", name, ""))
+        }
+        var args = doc.get(pp, "arguments")
+        if args |a| {
+            if doc.kind(a) != JKind.Object {
+                args = null
+            }
+        }
+        if text.eql(name, "browser_screenshot") && refusal(s, "screenshot").len == 0 {
+            try announce(s, tmp, &mut doc, args, "screenshot")
+            return screenshotResult(s, tmp, &mut doc, args, id, &mut w)
+        }
+        var result = text.Builder.init(tmp)
+        let ok = try callTool(s, tmp, &mut doc, name[8..], args, id, &mut result)
+        if s.later {
+            return
+        }
+        try rpcStart(&mut w, id)
+        try w.beginObject()
+        try w.key("content")
+        try w.beginArray()
+        try w.beginObject()
+        try w.key("type")
+        try w.string("text")
+        try w.key("text")
+        try w.string(result.bytes())
+        try w.endObject()
+        try w.endArray()
+        try w.key("isError")
+        try w.boolean(!ok)
+        try w.endObject()
+        return w.endObject()
+    }
+    return rpcError(&mut w, id, -32601, try concat(tmp, "method not found: ", method, ""))
+}
+
+// The result of `browser_screenshot`: an image content block (PNG) and
+// a text block saying what it shows, or the failure as text.
+fn screenshotResult(s: *mut Session, tmp: Allocator, doc: *mut Json, args: ?usize, id: []u8, w: *mut Writer) AllocError!void {
+    let shot = try screenshotOf(s, tmp, doc, args)
+    try rpcStart(w, id)
+    try w.beginObject()
+    try w.key("content")
+    try w.beginArray()
+    if shot.ok {
+        try w.beginObject()
+        try w.key("type")
+        try w.string("image")
+        try w.key("data")
+        try w.string(shot.png)
+        try w.key("mimeType")
+        try w.string("image/png")
+        try w.endObject()
+    }
+    var t = text.Builder.init(tmp)
+    try t.append(shot.message)
+    if shot.ok {
+        try t.append("\n\n")
+        try pageHeader(s, tmp, &mut t)
+    }
+    try w.beginObject()
+    try w.key("type")
+    try w.string("text")
+    try w.key("text")
+    try w.string(t.bytes())
+    try w.endObject()
+    try w.endArray()
+    try w.key("isError")
+    try w.boolean(!shot.ok)
+    try w.endObject()
+    return w.endObject()
+}
+
+// `{"jsonrpc":"2.0","id":ID,"result":` (the caller writes the result and
+// ends the object).
+fn rpcStart(w: *mut Writer, id: []u8) AllocError!void {
+    try w.beginObject()
+    try w.key("jsonrpc")
+    try w.string("2.0")
+    try w.key("id")
+    try w.raw(id)
+    try w.key("result")
+}
+
+fn rpcError(w: *mut Writer, id: []u8, code: i64, message: []u8) AllocError!void {
+    try w.beginObject()
+    try w.key("jsonrpc")
+    try w.string("2.0")
+    try w.key("id")
+    try w.raw(id)
+    try w.key("error")
+    try w.beginObject()
+    try w.key("code")
+    try w.int(code)
+    try w.key("message")
+    try w.string(message)
+    try w.endObject()
+    try w.endObject()
+}
+
+let TOOLS = "browser_navigate browser_back browser_forward browser_reload browser_snapshot browser_read browser_click browser_type browser_select browser_press browser_scroll browser_find browser_wait browser_eval browser_screenshot"
+
+let WINDOW_TOOLS = "browser_tabs browser_tab_new browser_tab_select browser_tab_close browser_user_context"
+
+let SHARED_INSTRUCTIONS = "A web browser window that a person is using too: you act on the tab they see unless you open or select another (browser_tab_new, browser_tab_select), and they see what you do. Start with browser_snapshot (or browser_navigate): it lists the page as an accessibility tree whose interactive elements and headings carry refs like e12; act on them with browser_click, browser_type, browser_select. browser_user_context tells what the person selected, hovers, focused or pointed at. If they pause you, actions fail with \"paused by user\": wait for them. browser_wait waits in real time."
+
+fn isTool(name: []u8, shared: bool) bool {
+    return text.startsWith(name, "browser_") && (html.isIn(name, TOOLS) || (shared && html.isIn(name, WINDOW_TOOLS)))
+}
+
+/// Runs the tool `cmd` (its name without `browser_`); the text of the
+/// result goes to `out`. False for a failure.
+fn callTool(s: *mut Session, tmp: Allocator, doc: *mut Json, cmd: []u8, args: ?usize, id: []u8, out: *mut text.Builder) !bool {
+    let why_not = refusal(s, cmd)
+    if why_not.len > 0 {
+        try out.append(why_not)
+        return false
+    }
+    if try windowTool(s, tmp, doc, cmd, args, id, out) |ok| {
+        return ok
+    }
+    try announce(s, tmp, doc, args, cmd)
+    if text.eql(cmd, "snapshot") || text.eql(cmd, "read") {
+        if s.tab.page == null {
+            try out.append("no page: navigate first")
+            return false
+        }
+        try pageHeader(s, tmp, out)
+        try out.appendByte('\n')
+        if text.eql(cmd, "read") {
+            var refs = true
+            if args |o| {
+                refs = doc.getBool(o, "refs") orelse true
+            }
+            try out.append(try markdownOf(s, tmp, refs))
+        } else {
+            var boxes = false
+            if args |o| {
+                boxes = doc.getBool(o, "boxes") orelse false
+            }
+            try out.append(try snapshotText(s, tmp, boxes))
+            let focused = focusRef(s)
+            if focused > 0 {
+                try out.append("\nFocused: ")
+                try out.append(try refName(tmp, focused))
+                try out.append(" (the focus is the user's too)\n")
+            }
+        }
+        return true
+    }
+    var why = text.Builder.init(tmp)
+    if text.eql(cmd, "find") {
+        let needle = argStr(doc, args, "text", &mut why) orelse {
+            try out.append(why.bytes())
+            return false
+        }
+        let o = try findText(s, tmp, needle)
+        try out.append(o.message)
+        return o.ok
+    }
+    let act = try actionOf(doc, args, cmd, &mut why)
+    let a = act orelse {
+        try out.append(why.bytes())
+        return false
+    }
+    let o = try perform(s, tmp, a)
+    try out.append(o.message)
+    let lines = try consoleLines(s, tmp)
+    if lines.len > 0 {
+        try out.append("\n\nConsole:")
+        for l in lines {
+            try out.appendByte('\n')
+            try out.append(l)
+        }
+    }
+    if !o.ok {
+        return false
+    }
+    if o.navigated {
+        try out.append("\n\n")
+        try pageHeader(s, tmp, out)
+        try out.append("\n")
+        try out.append(try snapshotText(s, tmp, false))
+    } else if o.diff.len > 0 {
+        try out.append("\n\nChanged lines of the snapshot:\n")
+        try out.append(o.diff)
+    }
+    return true
+}
+
+fn pageHeader(s: *mut Session, tmp: Allocator, out: *mut text.Builder) AllocError!void {
+    if s.tab.page |p| {
+        try out.append("URL: ")
+        try out.append(s.tab.href())
+        try out.append("\nTitle: ")
+        try out.append(p.title)
+        try out.appendByte('\n')
+    }
+}
+
+// ---- tool definitions
+
+// "e12" of ref number 12.
+fn refName(tmp: Allocator, r: u32) AllocError![]u8 {
+    var b = text.Builder.init(tmp)
+    try b.appendByte('e')
+    try b.appendUint(r as u64)
+    return b.bytes()
+}
+
+fn toolList(w: *mut Writer, shared: bool) AllocError!void {
+    try w.beginArray()
+    try toolStart(w, "browser_navigate", "Navigate", "Load a URL (absolute, relative to the current page, or a file path) and return the accessibility snapshot of the new page.")
+    try toolProp(w, "url", "string", "The URL to load.")
+    try toolEnd(w, "url", false)
+    try toolStart(w, "browser_back", "Back", "Go back in the history.")
+    try toolEnd(w, "", false)
+    try toolStart(w, "browser_forward", "Forward", "Go forward in the history.")
+    try toolEnd(w, "", false)
+    try toolStart(w, "browser_reload", "Reload", "Load the current page again.")
+    try toolEnd(w, "", false)
+    try toolStart(w, "browser_snapshot", "Snapshot", "The page as an accessibility tree: roles, names, values and states. Interactive elements and headings carry refs (e12) for the other tools; [offscreen] marks elements outside the viewport.")
+    try toolProp(w, "boxes", "boolean", "Add the layout box of each element: [box=x,y,width,height] in px.")
+    try toolEnd(w, "", true)
+    try toolStart(w, "browser_read", "Read", "The main content of the page as Markdown (navigation, headers and footers are left out when the page marks its main content). Links are followed by their refs.")
+    try toolProp(w, "refs", "boolean", "Write the ref after each link (default true).")
+    try toolEnd(w, "", true)
+    try toolStart(w, "browser_click", "Click", "Click an element by ref: the page's scripts get the click event, then (unless they cancel it) follow a link, toggle a checkbox or radio button, submit a form, open a details element.")
+    try toolProp(w, "ref", "string", "The ref of the element, from the snapshot (e12).")
+    try toolEnd(w, "ref", false)
+    try toolStart(w, "browser_type", "Type", "Replace the text of a text field (input or textarea) by ref.")
+    try toolProp(w, "ref", "string", "The ref of the text field.")
+    try toolProp(w, "text", "string", "The text to put in the field.")
+    try toolProp(w, "submit", "boolean", "Press Enter afterwards.")
+    try toolEnd(w, "ref text", false)
+    try toolStart(w, "browser_select", "Select", "Choose an option of a select element by its label or value.")
+    try toolProp(w, "ref", "string", "The ref of the select element (a combobox or listbox).")
+    try toolProp(w, "option", "string", "The label or value of the option.")
+    try toolEnd(w, "ref option", false)
+    try toolStart(w, "browser_press", "Press key", "Press a key on the focused element: a character, Enter, Backspace, Tab, Shift+Tab, Escape, Space, PageDown, PageUp, Home, End, ArrowDown, ArrowUp.")
+    try toolProp(w, "key", "string", "The key.")
+    try toolEnd(w, "key", false)
+    try toolStart(w, "browser_scroll", "Scroll", "Scroll the viewport to an element (ref) or by a distance (dy, in px; negative is up).")
+    try toolProp(w, "ref", "string", "The ref of the element to scroll to.")
+    try toolProp(w, "dy", "number", "Pixels to scroll down (negative: up).")
+    try toolEnd(w, "", false)
+    try toolStart(w, "browser_find", "Find", "Find text on the page (ignoring case): each match with its context and the nearest element with a ref.")
+    try toolProp(w, "text", "string", "The text to find.")
+    try toolEnd(w, "text", true)
+    try toolStart(w, "browser_wait", "Wait", "Let the page's scripts run: until an element matches a CSS selector, for a time, or (neither) until no timer is left (at most 5 s). Time is the page's: waiting takes no real time.")
+    try toolProp(w, "selector", "string", "A CSS selector to wait for (at most ms, 5000 by default).")
+    try toolProp(w, "ms", "number", "Milliseconds of the page's time to wait.")
+    try toolEnd(w, "", false)
+    try toolStart(w, "browser_eval", "Evaluate JavaScript", "Run JavaScript in the page and return the value of its last expression (strings as they are, other values as console.log shows them).")
+    try toolProp(w, "expression", "string", "The script; its last expression statement is the result.")
+    try toolEnd(w, "expression", false)
+    try toolStart(w, "browser_screenshot", "Screenshot", "A PNG image of the page: the viewport as scrolled, the whole page (full), or one element (ref).")
+    try toolProp(w, "ref", "string", "The ref of an element: the image shows its box only.")
+    try toolProp(w, "full", "boolean", "The whole page instead of the viewport.")
+    try toolEnd(w, "", true)
+    if shared {
+        try windowTools(w)
+    }
+    try w.endArray()
+}
+
+// The tools of a window's agents (shared.aye, ui/agents.aye).
+fn windowTools(w: *mut Writer) AllocError!void {
+    try toolStart(w, "browser_tabs", "Tabs", "The window's tabs: id, URL, title, which one the user sees and which one you act on.")
+    try toolEnd(w, "", true)
+    try toolStart(w, "browser_tab_new", "New tab", "Open an empty tab and act on it from now on, without changing what the user sees (unless show is true). Then use browser_navigate.")
+    try toolProp(w, "show", "boolean", "Also show the tab to the user.")
+    try toolEnd(w, "", false)
+    try toolStart(w, "browser_tab_select", "Select tab", "Act on another tab from now on (an id from browser_tabs).")
+    try toolProp(w, "tab", "number", "The id of the tab.")
+    try toolProp(w, "show", "boolean", "Also show the tab to the user.")
+    try toolEnd(w, "tab", false)
+    try toolStart(w, "browser_tab_close", "Close tab", "Close a tab (by default the one you act on); the last tab cannot be closed.")
+    try toolProp(w, "tab", "number", "The id of the tab.")
+    try toolEnd(w, "", false)
+    try toolStart(w, "browser_user_context", "User context", "What the user is doing in the window: the tab and URL they see, the scroll position, the selected text, the element under the mouse and the focused element (refs), and what they last pointed at with Cmd+Shift+K.")
+    try toolEnd(w, "", true)
+}
+
+fn toolStart(w: *mut Writer, name: []u8, title: []u8, description: []u8) AllocError!void {
+    try w.beginObject()
+    try w.key("name")
+    try w.string(name)
+    try w.key("title")
+    try w.string(title)
+    try w.key("description")
+    try w.string(description)
+    try w.key("inputSchema")
+    try w.beginObject()
+    try w.key("type")
+    try w.string("object")
+    try w.key("properties")
+    try w.beginObject()
+}
+
+fn toolProp(w: *mut Writer, name: []u8, kind: []u8, description: []u8) AllocError!void {
+    try w.key(name)
+    try w.beginObject()
+    try w.key("type")
+    try w.string(kind)
+    try w.key("description")
+    try w.string(description)
+    try w.endObject()
+}
+
+// Ends the properties; `required` is space-separated.
+fn toolEnd(w: *mut Writer, required: []u8, read_only: bool) AllocError!void {
+    try w.endObject()
+    if required.len > 0 {
+        try w.key("required")
+        try w.beginArray()
+        var names = text.split(required, " ")
+        while names.next() |n| {
+            try w.string(n)
+        }
+        try w.endArray()
+    }
+    try w.key("additionalProperties")
+    try w.boolean(false)
+    try w.endObject()
+    try w.key("annotations")
+    try w.beginObject()
+    try w.key("readOnlyHint")
+    try w.boolean(read_only)
+    try w.endObject()
+    try w.endObject()
+}

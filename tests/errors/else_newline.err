@@ -1,1 +1,1 @@
-else_newline.ore:5:5: error[E0008]: `else` must be on the same line as the `}` that closes the `if` block
+else_newline.aye:5:5: error[E0008]: `else` must be on the same line as the `}` that closes the `if` block

@@ -1,1 +1,1 @@
-shadow_for_var.ore:3:9: error[E0016]: `i` is already declared at 2:5 (shadowing is not allowed)
+shadow_for_var.aye:3:9: error[E0016]: `i` is already declared at 2:5 (shadowing is not allowed)

@@ -5,7 +5,7 @@ The browser lane of [`docs/plan.md`](../plan.md): the work on `browser/`.
 The lane keeps `cargo test --release` green (the browser tests are the
 language's biggest integration test), fixes breakage caused by language
 changes, and records language gaps in `browser/COMPILER_GAPS.md`. It
-resumes when Ore criteria O6–O9 hold ([`ore.md`](ore.md)), in the same
+resumes when Aye criteria O6–O9 hold ([`aye.md`](aye.md)), in the same
 step that moves `browser/` into its own repo (P8.1). Finished steps:
 [`done.md`](done.md).
 
@@ -19,7 +19,7 @@ step that moves `browser/` into its own repo (P8.1). Finished steps:
   main` exits 0 for `worktree-agent-ae5e6f75817463272` (P3.48) and
   `worktree-agent-a0b64f7b014b9b6ea` (P3.58), and `done.md` lists both.
   (The user deletes branches and worktrees.)
-- M3: every limitation of Ore or std the browser works around has an
+- M3: every limitation of Aye or std the browser works around has an
   entry in `browser/COMPILER_GAPS.md` with **Hit by**.
 
 **Browser done (after the resume)**
@@ -49,7 +49,7 @@ step that moves `browser/` into its own repo (P8.1). Finished steps:
   away. P3.48b bisects it. Its recaptured Mistral archive is in
   `.claude/worktrees/agent-ae5e6f75817463272/target/sites/mistral`.
 - P3.58 is half done: WIP 34c2234 on `worktree-agent-a0b64f7b014b9b6ea`,
-  not built (native `TypedArray` in `browser/js/typed.ore`, test
+  not built (native `TypedArray` in `browser/js/typed.aye`, test
   `browser/tests/js/256_typed_array_views.js`).
 - Open gaps the browser met: #3 (P2.9) and #49 (O1.3a, std only).
 
@@ -116,7 +116,7 @@ confirmed on current `main` (`docs/plan.md` rule 8). Source in brackets.
 - P3.53 ellipsis and clamp follow-ups: right-to-left, `-webkit-line-clamp` into child blocks, unprefixed `line-clamp` (P3.52).
 - P3.54 `grid-template` with area strings and the `grid` shorthand (P3.46).
 - P3.56 `<video poster>` loaded and painted like an image; recapture wikipedia-en (P3.45).
-- P3.59 intrinsic sizing passes no container height (`browser/layout/intrinsic.ore`, `cb_h = -1`); BBC NEWS `<h1>` 300px instead of 100px (P3.47).
+- P3.59 intrinsic sizing passes no container height (`browser/layout/intrinsic.aye`, `cb_h = -1`); BBC NEWS `<h1>` 300px instead of 100px (P3.47).
 - P3.60 move the JS lexer, parser and AST out of the `js` module for a bundler; pure move (framework F4, `docs/framework.md`).
 - P3.61 `screenshot` runs the page as long as `dump` (Mistral's title animation caught half-way) (P3.48).
 - P4.1 react.dev: diagnose live vs replay time (DNS/TLS, discovery, module waits, HTTP/2) (P1.4).
@@ -127,7 +127,7 @@ confirmed on current `main` (`docs/plan.md` rule 8). Source in brackets.
 - P4.8 ZOL and Mistral replays spend most time in timers; re-measure with CPU time, then diagnose (P1.1).
 - P4.10 container-query re-pass restyles only container subtrees (P4.9).
 - P4.11 partial restyle for DOM mutations incl. shadow roots and `:has()` (P4.10).
-- P4.14 event dispatch and MutationObserver from prelude JS into native Ore (~15% of JS samples) (P1.11).
+- P4.14 event dispatch and MutationObserver from prelude JS into native Aye (~15% of JS samples) (P1.11).
 - P4.18b Map/Set iterators are snapshots; make them live (P4.18).
 - P4.21 GC threshold factor (GC 14.5% of JS samples) (P4.16).
 - P4.24 smaller JS objects, property storage that shrinks, GC threshold relative to live size (P4.23).

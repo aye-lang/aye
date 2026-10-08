@@ -3,10 +3,10 @@
 BigInt is a primitive (`Value.Big`), not a Number or a JS object. The
 payload is immutable sign/magnitude, little-endian base-2^16 limbs, in a
 flat GC byte cell. The sign is the first byte; zero has no limbs and no
-negative sign. `gc.ore` traces the payload through the existing byte-cell
+negative sign. `gc.aye` traces the payload through the existing byte-cell
 collector. Object wrappers use `Class.BigInt` / `ObjData.Prim`.
 
-`bigint.ore` decodes operands into arena-owned scratch limbs before
+`bigint.aye` decodes operands into arena-owned scratch limbs before
 allocating a result. Arithmetic uses carry/borrow addition, schoolbook
 multiplication, binary long division, two's-complement bitwise operations,
 and exponentiation by squaring. No arithmetic goes through f64. Literal
@@ -47,7 +47,7 @@ user coercion are rooted on the interpreter's stack.
 - Locale formatting follows the engine's existing English-only Number
   support. Other locales and Intl formatting options are not implemented.
 - **BigInt64Array / BigUint64Array are not implemented by this step.** The
-  pre-existing JS typed-array facsimiles in `lib.ore` still convert their
+  pre-existing JS typed-array facsimiles in `lib.aye` still convert their
   BigInt-named variants to Numbers. They do not provide integer-index
   coercion or shared buffer views; changing their constructor converters
   alone would not constitute correct BigInt typed arrays.

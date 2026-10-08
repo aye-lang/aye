@@ -10,7 +10,7 @@ vary substantially. These are measured results, not Octane scores or
 claims about a fully functional React application.
 
 Environment: Apple M2 Pro, arm64 macOS, Node v22.22.2. Both native
-binaries use Ore's fast mode (clang -O2). The saved baseline was built
+binaries use Aye's fast mode (clang -O2). The saved baseline was built
 from repo/compiler `5dd6afb`, before engine changes. The initial
 three-run baseline is recorded separately in
 `../tests/jsbench/README.md`; it is not silently replaced by the later
@@ -75,7 +75,7 @@ attributing execution costs to the script runner's thread.
 - **Regexp:** string matching/replacement stacks went through `search`
   into `pthread_create`/`pthread_join`, VM mapping, and unmapping. A
   subject longer than 2,000 bytes used a new 1 GB virtual-stack thread
-  for every search, regardless of actual match depth. `regexp.ore` now
+  for every search, regardless of actual match depth. `regexp.aye` now
   tries at depth 128 in the current thread. Any depth exhaustion retries
   from the original search position on the original large-stack path,
   even if a shallower alternative succeeded. Steps, captures, and
@@ -96,7 +96,7 @@ attributing execution costs to the script runner's thread.
   Other numbers retain libc parsing. Small exact eighths avoid the
   snprintf/strtod shortest-decimal search; other formatting is unchanged.
 
-### Shared layouts and caches (`shapes.ore`, `heap.ore`)
+### Shared layouts and caches (`shapes.aye`, `heap.aye`)
 
 An object's shape describes its insertion-ordered own keys/slots. A
 transition `(parent shape, key atom)` shares the next layout among all
@@ -128,7 +128,7 @@ Property keys were already interned atoms in the baseline. This work
 uses those atoms throughout layouts/caches rather than claiming a new
 string-to-atom subsystem.
 
-### Guarded recipes and calls (`fast_expr.ore`, `interp.ore`)
+### Guarded recipes and calls (`fast_expr.aye`, `interp.aye`)
 
 After resolution, eligible expressions get flat recipes for constants,
 local slots, own data-property reads, dense array reads, numeric unary
@@ -199,12 +199,12 @@ work.
 ## Final validation
 
 - `cargo build --release` and `browser/build.sh`: passed (fast binary).
-- `target/release/ore check browser`: passed.
+- `target/release/aye check browser`: passed.
 - All 228 conformance scripts match stdout/stderr/exit-status goldens in
   fast mode, and all 228 pass with `ANYKNOWN_JS_GC=stress`.
 - All eight benchmark checksums agree with Node v22.22.2.
 - `cargo test --test browser`: 34 passed (including debug JS conformance,
-  DOM GC stress, browser/Ore unit tests, and host/UI fixtures).
+  DOM GC stress, browser/Aye unit tests, and host/UI fixtures).
 - Full `cargo test`: passed — 31 unit tests, 34 browser tests, 4 formatter
   tests, 242 golden cases, and 5 spec tests; no failures. The existing
   ThreadSanitizer CLI runtime case was skipped because clang's TSan

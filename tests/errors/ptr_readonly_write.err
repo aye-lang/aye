@@ -1,1 +1,1 @@
-ptr_readonly_write.ore:4:5: error[E0033]: cannot assign to data behind a read-only pointer `*Counter` (use `*mut Counter`)
+ptr_readonly_write.aye:4:5: error[E0033]: cannot assign to data behind a read-only pointer `*Counter` (use `*mut Counter`)

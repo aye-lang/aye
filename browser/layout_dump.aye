@@ -1,0 +1,46 @@
+// `anyknown dump --layout`: the styles of a document (as for `--style`),
+// its layout in the viewport, and a dump of the box tree
+// (layout/dump.aye). Text is measured with the fixed-metric test font,
+// or with the system's fonts (`--font system`). Images are fetched and
+// decoded, for their natural sizes.
+
+import css
+import dom.Document
+import engine
+import font
+import layout
+import std
+import std.mem.Allocator
+import std.text
+import url.Url
+
+fn dumpLayout(alloc: Allocator, doc: *Document, base: *Url, media: css.Media, system_font: bool, out: *mut text.Builder) !i32 {
+    var ua = try css.Sheet.init(alloc)
+    defer ua.deinit()
+    try css.uaSheet(&mut ua, media)
+    var author = try css.Sheet.init(alloc)
+    defer author.deinit()
+    try engine.authorSheets(alloc, doc, base, media, &mut author)
+    var styles = try css.Styles.init(alloc)
+    defer styles.deinit()
+    try css.computeStyles(doc, &ua, &author, media, &mut styles)
+    var images = engine.ImageCache.init(alloc)
+    defer images.deinit()
+    try engine.fillImages(&mut images, doc, base, media)
+    if system_font {
+        var sys = font.System.init(alloc) catch |e| {
+            std.log.err("no system font found ({})", e)
+            return 1
+        }
+        defer sys.deinit()
+        var tree = try engine.layoutQueried(alloc, doc, &ua, &author, media, &mut styles, &images.nodes, &mut sys, media.width, media.height)
+        defer tree.deinit()
+        try layout.dumpTree(&tree, out)
+        return 0
+    }
+    var fixed = font.Fixed.init()
+    var tree = try engine.layoutQueried(alloc, doc, &ua, &author, media, &mut styles, &images.nodes, &mut fixed, media.width, media.height)
+    defer tree.deinit()
+    try layout.dumpTree(&tree, out)
+    return 0
+}

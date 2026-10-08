@@ -1,9 +1,9 @@
-extern_types.ore:5:11: error[E0052]: field `name` of `extern struct Bad` has type `[]u8`, which is not C-compatible (a slice is a pointer and a length: use `[*]u8` and a `usize`)
-extern_types.ore:6:12: error[E0052]: field `plain` of `extern struct Bad` has type `Plain`, which is not C-compatible (declare it `extern struct Plain` to give it C layout)
-extern_types.ore:7:8: error[E0052]: field `e` of `extern struct Bad` has type `E`, which is not C-compatible
-extern_types.ore:9:10: error[E0052]: field `opt` of `extern struct Bad` has type `?i32`, which is not C-compatible (only optional pointers are: `?*T`, `?[*]T` and `?fn(...)`)
-extern_types.ore:12:25: error[E0052]: type `[4]u8` cannot be used in an `extern fn` signature: it is not C-compatible (C passes an array by pointer: use `*[4]u8` or `[*]u8`)
-extern_types.ore:13:25: error[E0052]: type `Plain` cannot be used in an `extern fn` signature: it is not C-compatible (declare it `extern struct Plain` to give it C layout)
-extern_types.ore:14:26: error[E0052]: type `[]u8` cannot be used in an `extern fn` signature: it is not C-compatible (a slice is a pointer and a length: use `[*]u8` and a `usize`)
-extern_types.ore:15:28: error[E0052]: type `fn([]u8)` cannot be used in an `extern fn` signature: it is not C-compatible (the parameters and result of a function that C calls must be C-compatible)
-extern_types.ore:17:27: error[E0052]: type `[]u8` cannot be used in an `extern fn` signature: it is not C-compatible (a slice is a pointer and a length: use `[*]u8` and a `usize`)
+extern_types.aye:5:11: error[E0052]: field `name` of `extern struct Bad` has type `[]u8`, which is not C-compatible (a slice is a pointer and a length: use `[*]u8` and a `usize`)
+extern_types.aye:6:12: error[E0052]: field `plain` of `extern struct Bad` has type `Plain`, which is not C-compatible (declare it `extern struct Plain` to give it C layout)
+extern_types.aye:7:8: error[E0052]: field `e` of `extern struct Bad` has type `E`, which is not C-compatible
+extern_types.aye:9:10: error[E0052]: field `opt` of `extern struct Bad` has type `?i32`, which is not C-compatible (only optional pointers are: `?*T`, `?[*]T` and `?fn(...)`)
+extern_types.aye:12:25: error[E0052]: type `[4]u8` cannot be used in an `extern fn` signature: it is not C-compatible (C passes an array by pointer: use `*[4]u8` or `[*]u8`)
+extern_types.aye:13:25: error[E0052]: type `Plain` cannot be used in an `extern fn` signature: it is not C-compatible (declare it `extern struct Plain` to give it C layout)
+extern_types.aye:14:26: error[E0052]: type `[]u8` cannot be used in an `extern fn` signature: it is not C-compatible (a slice is a pointer and a length: use `[*]u8` and a `usize`)
+extern_types.aye:15:28: error[E0052]: type `fn([]u8)` cannot be used in an `extern fn` signature: it is not C-compatible (the parameters and result of a function that C calls must be C-compatible)
+extern_types.aye:17:27: error[E0052]: type `[]u8` cannot be used in an `extern fn` signature: it is not C-compatible (a slice is a pointer and a length: use `[*]u8` and a `usize`)

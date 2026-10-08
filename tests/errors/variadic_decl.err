@@ -1,4 +1,4 @@
-variadic_decl.ore:1:16: error[E0091]: only an `extern fn` without a body (a C function) can be variadic
-variadic_decl.ore:5:17: error[E0091]: `...` must be the last parameter
-variadic_decl.ore:6:16: error[E0091]: a variadic C function needs a parameter before `...`
-variadic_decl.ore:8:32: error[E0091]: only an `extern fn` without a body (a C function) can be variadic
+variadic_decl.aye:1:16: error[E0091]: only an `extern fn` without a body (a C function) can be variadic
+variadic_decl.aye:5:17: error[E0091]: `...` must be the last parameter
+variadic_decl.aye:6:16: error[E0091]: a variadic C function needs a parameter before `...`
+variadic_decl.aye:8:32: error[E0091]: only an `extern fn` without a body (a C function) can be variadic

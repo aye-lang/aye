@@ -11,7 +11,7 @@ fn f(v: simd[4]f32) f32 {
     let h = @hash(key)
     return @reduceAdd(@select(w > v, w, v))
 }
-/// ```ore
+/// ```aye
 /// @expectEqual(1, one())
 /// ```
 fn one() i64 { return 1 }

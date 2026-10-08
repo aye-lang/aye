@@ -1,23 +1,23 @@
-use ore::{codes, diag, doc, fmt};
-use ore::driver::{self, Mode, Root};
+use aye::{codes, diag, doc, fmt};
+use aye::driver::{self, Mode, Root};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-const USAGE: &str = "usage (<path> is a .ore file, or a directory: a module of all its .ore files):
-  ore build <path> [-o out] [--mode debug|safe|fast] [--cflags <flags>]
-  ore run <path> [--mode debug|safe|fast] [--cflags <flags>] [-- args...]
-  ore emit-c <path> [--mode debug|safe|fast]
-  ore check <path> [--json]
-  ore fix <path>
-  ore test <path> [--filter <text>] [--module <module>] [--json] [--mode debug|safe|fast] [--cflags <flags>]
+const USAGE: &str = "usage (<path> is a .aye file, or a directory: a module of all its .aye files):
+  aye build <path> [-o out] [--mode debug|safe|fast] [--cflags <flags>]
+  aye run <path> [--mode debug|safe|fast] [--cflags <flags>] [-- args...]
+  aye emit-c <path> [--mode debug|safe|fast]
+  aye check <path> [--json]
+  aye fix <path>
+  aye test <path> [--filter <text>] [--module <module>] [--json] [--mode debug|safe|fast] [--cflags <flags>]
   (--cflags: more flags for clang, such as \"-fsanitize=thread\")
-  ore fmt [--check] <path>      (<path>: a .ore file, or a directory searched recursively)
-  ore doc --signatures <path>   (<path> may also be `std` or `std.<module>`)
-  ore cimport <header> [-Idir] [-DNAME[=value]] [--link <lib>]   (print the Ore declarations `@cimport` makes of a C header)
-  ore explain <code>
-  ore spec";
+  aye fmt [--check] <path>      (<path>: a .aye file, or a directory searched recursively)
+  aye doc --signatures <path>   (<path> may also be `std` or `std.<module>`)
+  aye cimport <header> [-Idir] [-DNAME[=value]] [--link <lib>]   (print the Aye declarations `@cimport` makes of a C header)
+  aye explain <code>
+  aye spec";
 
-/// The language reference that `ore spec` prints.
+/// The language reference that `aye spec` prints.
 const SPEC: &str = include_str!("../docs/spec.md");
 
 struct Args {
@@ -27,9 +27,9 @@ struct Args {
     mode: Mode,
     json: bool,
     filter: String,
-    /// `ore test --module m`: only the tests of module `m`.
+    /// `aye test --module m`: only the tests of module `m`.
     module: Option<String>,
-    /// `ore run ... -- args`: the program's arguments.
+    /// `aye run ... -- args`: the program's arguments.
     prog_args: Vec<String>,
     /// `--cflags "..."`: more flags for clang.
     cflags: Vec<String>,
@@ -66,7 +66,7 @@ fn parse_args() -> Result<Args, String> {
 fn main() -> ExitCode {
     if std::env::args().nth(1).as_deref() == Some("spec") {
         if std::env::args().count() != 2 {
-            eprintln!("ore: `spec` takes no arguments\n{USAGE}");
+            eprintln!("aye: `spec` takes no arguments\n{USAGE}");
             return ExitCode::from(2);
         }
         print!("{SPEC}");
@@ -81,7 +81,7 @@ fn main() -> ExitCode {
     if std::env::args().nth(1).as_deref() == Some("explain") {
         let rest: Vec<String> = std::env::args().skip(2).collect();
         let [code] = &rest[..] else {
-            eprintln!("ore: `explain` needs one error code\n{USAGE}");
+            eprintln!("aye: `explain` needs one error code\n{USAGE}");
             return ExitCode::from(2);
         };
         return match codes::explain(code) {
@@ -90,7 +90,7 @@ fn main() -> ExitCode {
                 ExitCode::SUCCESS
             }
             None => {
-                eprintln!("ore: unknown error code `{code}`");
+                eprintln!("aye: unknown error code `{code}`");
                 ExitCode::from(2)
             }
         };
@@ -98,18 +98,18 @@ fn main() -> ExitCode {
     let args = match parse_args() {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("ore: {e}\n{USAGE}");
+            eprintln!("aye: {e}\n{USAGE}");
             return ExitCode::from(2);
         }
     };
     if !matches!(args.cmd.as_str(), "build" | "run" | "emit-c" | "check" | "test" | "fix") {
-        eprintln!("ore: unknown command `{}`\n{USAGE}", args.cmd);
+        eprintln!("aye: unknown command `{}`\n{USAGE}", args.cmd);
         return ExitCode::from(2);
     }
     let root = match Root::load(&args.file) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("ore: {e}");
+            eprintln!("aye: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -150,11 +150,11 @@ fn main() -> ExitCode {
     let exe = match (&args.cmd[..], &args.out) {
         ("build", Some(o)) => PathBuf::from(o),
         ("build", None) => PathBuf::from(Path::new(&args.file).file_stem().unwrap_or("main".as_ref())),
-        _ => std::env::temp_dir().join(format!("ore-run-{}", std::process::id())),
+        _ => std::env::temp_dir().join(format!("aye-run-{}", std::process::id())),
     };
     c.cflags = args.cflags.clone();
     if let Err(e) = driver::cc(&c, &exe, args.mode) {
-        eprintln!("ore: {e}");
+        eprintln!("aye: {e}");
         return ExitCode::FAILURE;
     }
     if args.cmd == "build" {
@@ -171,13 +171,13 @@ fn main() -> ExitCode {
             }
         },
         Err(e) => {
-            eprintln!("ore: cannot run {}: {e}", exe.display());
+            eprintln!("aye: cannot run {}: {e}", exe.display());
             ExitCode::FAILURE
         }
     }
 }
 
-/// `ore fmt [--check] <path>`: format a `.ore` file, or every `.ore` file
+/// `aye fmt [--check] <path>`: format a `.aye` file, or every `.aye` file
 /// under a directory (hidden directories skipped), in place. With
 /// `--check` nothing is written: the files that would change are listed
 /// and the exit status is 1 if there is one. A file that does not lex is
@@ -186,16 +186,16 @@ fn fmt_cmd(args: Vec<String>) -> ExitCode {
     let check = args.iter().any(|a| a == "--check");
     let paths: Vec<&String> = args.iter().filter(|a| *a != "--check").collect();
     let [path] = &paths[..] else {
-        eprintln!("ore: `fmt` needs one path\n{USAGE}");
+        eprintln!("aye: `fmt` needs one path\n{USAGE}");
         return ExitCode::from(2);
     };
     if path.starts_with('-') {
-        eprintln!("ore: unexpected argument `{path}`\n{USAGE}");
+        eprintln!("aye: unexpected argument `{path}`\n{USAGE}");
         return ExitCode::from(2);
     }
     let mut files = Vec::new();
-    if let Err(e) = ore_files(Path::new(path), &mut files) {
-        eprintln!("ore: {e}");
+    if let Err(e) = aye_files(Path::new(path), &mut files) {
+        eprintln!("aye: {e}");
         return ExitCode::FAILURE;
     }
     let mut failed = false;
@@ -204,7 +204,7 @@ fn fmt_cmd(args: Vec<String>) -> ExitCode {
         let text = match std::fs::read_to_string(&f) {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("ore: cannot read {name}: {e}");
+                eprintln!("aye: cannot read {name}: {e}");
                 failed = true;
                 continue;
             }
@@ -226,16 +226,16 @@ fn fmt_cmd(args: Vec<String>) -> ExitCode {
             println!("{name}");
             failed = true;
         } else if let Err(e) = std::fs::write(&f, out) {
-            eprintln!("ore: cannot write {name}: {e}");
+            eprintln!("aye: cannot write {name}: {e}");
             failed = true;
         }
     }
     if failed { ExitCode::FAILURE } else { ExitCode::SUCCESS }
 }
 
-/// `path` if it is a file, else the `.ore` files under the directory
+/// `path` if it is a file, else the `.aye` files under the directory
 /// `path` (not in hidden directories), sorted.
-fn ore_files(path: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+fn aye_files(path: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     if !path.is_dir() {
         if !path.exists() {
             return Err(format!("cannot read {}: no such file or directory", path.display()));
@@ -251,23 +251,23 @@ fn ore_files(path: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     for p in entries {
         let hidden = p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'));
         if p.is_dir() && !hidden {
-            ore_files(&p, out)?;
-        } else if p.is_file() && p.extension().is_some_and(|e| e == "ore") {
+            aye_files(&p, out)?;
+        } else if p.is_file() && p.extension().is_some_and(|e| e == "aye") {
             out.push(p);
         }
     }
     Ok(())
 }
 
-/// `ore doc --signatures <path>`: the pub declarations of the modules at
+/// `aye doc --signatures <path>`: the pub declarations of the modules at
 /// `path` (see `doc::signatures`).
 fn doc_cmd(args: Vec<String>) -> ExitCode {
     let [flag, path] = &args[..] else {
-        eprintln!("ore: `doc` needs `--signatures` and one path\n{USAGE}");
+        eprintln!("aye: `doc` needs `--signatures` and one path\n{USAGE}");
         return ExitCode::from(2);
     };
     if flag != "--signatures" {
-        eprintln!("ore: unexpected argument `{flag}`\n{USAGE}");
+        eprintln!("aye: unexpected argument `{flag}`\n{USAGE}");
         return ExitCode::from(2);
     }
     match doc::signatures(path) {
@@ -282,10 +282,10 @@ fn doc_cmd(args: Vec<String>) -> ExitCode {
     }
 }
 
-/// `ore fix`: apply the fix-its that `ore check` reports, in place, and
+/// `aye fix`: apply the fix-its that `aye check` reports, in place, and
 /// check again, until no fix applies (at most 10 rounds). Each applied fix
 /// is printed as `file:line:col: fixed: <help>`; then the errors that
-/// remain are printed as `ore check` prints them. The exit status is 0 when
+/// remain are printed as `aye check` prints them. The exit status is 0 when
 /// no error remains. Files of std are never written.
 fn fix(path: &str) -> ExitCode {
     let check = || match Root::load(path) {
@@ -296,7 +296,7 @@ fn fix(path: &str) -> ExitCode {
         let checked = match check() {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("ore: {e}");
+                eprintln!("aye: {e}");
                 return ExitCode::FAILURE;
             }
         };
@@ -309,7 +309,7 @@ fn fix(path: &str) -> ExitCode {
                 continue;
             }
             if let Err(e) = std::fs::write(&f.name, &fixed) {
-                eprintln!("ore: cannot write {}: {e}", f.name);
+                eprintln!("aye: cannot write {}: {e}", f.name);
                 return ExitCode::FAILURE;
             }
             for (at, help) in applied {
@@ -323,7 +323,7 @@ fn fix(path: &str) -> ExitCode {
     }
     match check().map(|c| c.result) {
         Err(e) => {
-            eprintln!("ore: {e}");
+            eprintln!("aye: {e}");
             ExitCode::FAILURE
         }
         Ok(Ok(_)) => ExitCode::SUCCESS,
@@ -336,7 +336,7 @@ fn fix(path: &str) -> ExitCode {
     }
 }
 
-/// `ore test`: one line per test, and for a failed test its output (stdout,
+/// `aye test`: one line per test, and for a failed test its output (stdout,
 /// then stderr) indented; or with `--json` one JSON document. The exit
 /// status is 1 if a test failed or the file does not compile.
 fn test(args: &Args, root: Root) -> ExitCode {
@@ -358,7 +358,7 @@ fn test(args: &Args, root: Root) -> ExitCode {
             return ExitCode::FAILURE;
         }
         Err(driver::TestError::Run(e)) => {
-            eprintln!("ore: {e}");
+            eprintln!("aye: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -385,7 +385,7 @@ fn test(args: &Args, root: Root) -> ExitCode {
     if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
 }
 
-/// `ore cimport HEADER [flags] [--link lib]`: print the Ore source that
+/// `aye cimport HEADER [flags] [--link lib]`: print the Aye source that
 /// `@cimport` generates for a header (bypassing the cache). The header and
 /// relative `-I` paths are relative to the working directory.
 fn cimport_cmd(args: Vec<String>) -> ExitCode {
@@ -398,37 +398,37 @@ fn cimport_cmd(args: Vec<String>) -> ExitCode {
             match it.next() {
                 Some(l) => links.push(l),
                 None => {
-                    eprintln!("ore: `--link` needs a library name\n{USAGE}");
+                    eprintln!("aye: `--link` needs a library name\n{USAGE}");
                     return ExitCode::from(2);
                 }
             }
         } else if a.starts_with('-') {
-            if let Err(e) = ore::cimport::check_flag(&a) {
-                eprintln!("ore: {e}");
+            if let Err(e) = aye::cimport::check_flag(&a) {
+                eprintln!("aye: {e}");
                 return ExitCode::from(2);
             }
             flags.push(a);
         } else if header.is_none() {
             header = Some(a);
         } else {
-            eprintln!("ore: `cimport` takes one header\n{USAGE}");
+            eprintln!("aye: `cimport` takes one header\n{USAGE}");
             return ExitCode::from(2);
         }
     }
     let Some(header) = header else {
-        eprintln!("ore: `cimport` needs a header, such as `zlib.h`\n{USAGE}");
+        eprintln!("aye: `cimport` needs a header, such as `zlib.h`\n{USAGE}");
         return ExitCode::from(2);
     };
-    let req = ore::cimport::Request { header, flags, dir: PathBuf::from("."), links };
-    match ore::cimport::generate(&req) {
+    let req = aye::cimport::Request { header, flags, dir: PathBuf::from("."), links };
+    match aye::cimport::generate(&req) {
         Ok((source, _)) => {
             print!("{source}");
             ExitCode::SUCCESS
         }
         Err(f) => {
             let (code, msg) = match f {
-                ore::cimport::Failure::NoLibclang(m) => (codes::E0114, m),
-                ore::cimport::Failure::Header(m) => (codes::E0113, m),
+                aye::cimport::Failure::NoLibclang(m) => (codes::E0114, m),
+                aye::cimport::Failure::Header(m) => (codes::E0113, m),
             };
             eprintln!("error[{code}]: {msg}");
             ExitCode::FAILURE

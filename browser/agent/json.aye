@@ -1,0 +1,1250 @@
+// json: JSON (RFC 8259) parsing into a tree, and writing.
+//
+// `Json.parse` reads a whole document strictly: no comments, no trailing
+// commas, no leading zeros, no `+` or bare `.` in numbers, no raw control
+// characters in strings, at most 512 nested arrays and objects. Escapes
+// are decoded (a `\u` surrogate pair to one code point, a lone surrogate
+// to U+FFFD); invalid UTF-8 in a string becomes U+FFFD. A failure fills a
+// `ParseFailure` with the byte offset and a short message.
+//
+// The nodes of a document live in a `List(JNode)` and refer to each other
+// by index (`usize`): an array or object has its first and last child,
+// every child the next sibling. The root is `root()`. The strings (decoded
+// strings, keys, number texts) are copies in an arena that the document
+// owns, so the source may be freed after parsing.
+//
+// `Writer` streams JSON into a `text.Builder` and places the commas;
+// `writeString` and `writeNumber` write single values.
+
+import std.heap.Arena
+import std.list.List
+import std.math
+import std.mem
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+pub error JsonError { Invalid, OutOfMemory }
+
+pub enum JKind {
+    Null
+    Bool
+    Number
+    String
+    Array
+    Object
+}
+
+/// A value of a document. Only the fields of its kind are set; the others
+/// are false, 0, "" or null.
+pub struct JNode {
+    kind: JKind
+    // Bool.
+    b: bool
+    // Number: its value (infinite when too large for an `f64`).
+    num: f64
+    // Number: its source text, to write it back exactly (ids).
+    raw: []u8
+    // String: the decoded UTF-8.
+    str: []u8
+    // A member of an object: its decoded key.
+    key: []u8
+    // Array and Object: the first and last child.
+    first: ?usize
+    last: ?usize
+    // The next sibling in the parent.
+    next: ?usize
+    // Array and Object: the number of children.
+    count: usize
+}
+
+/// Where and why parsing failed: a byte offset into the source and a
+/// static message such as "expected `:`".
+pub struct ParseFailure {
+    pos: usize
+    msg: []u8
+}
+
+/// A parsed document. Free it with `deinit`.
+pub struct Json {
+    alloc: Allocator
+    nodes: List(JNode)
+    // Owns the strings of the nodes. On the heap, so that the `Allocator`
+    // it hands out stays valid when the document is moved.
+    strings: *mut Arena
+    root_index: usize
+
+    /// Parses `src`, one JSON value with optional whitespace around it.
+    /// On `Invalid`, `failure` tells where and why.
+    pub fn parse(alloc: Allocator, src: []u8, failure: *mut ParseFailure) JsonError!Json {
+        failure.* = ParseFailure { pos: 0, msg: "" }
+        let strings = try alloc.create(Arena.init(alloc))
+        var p = JsonParser {
+            src: src,
+            pos: 0,
+            nodes: List(JNode).init(alloc),
+            strings: strings.allocator(),
+            scratch: text.Builder.init(alloc),
+            failure: failure,
+        }
+        defer p.scratch.deinit()
+        errdefer {
+            p.nodes.deinit()
+            strings.deinit()
+            alloc.destroy(strings)
+        }
+        let top = try p.value(0)
+        p.skipSpace()
+        if p.pos < src.len {
+            return p.fail(p.pos, "unexpected data after the value")
+        }
+        return Json { alloc: alloc, nodes: p.nodes, strings: strings, root_index: top }
+    }
+
+    pub fn deinit(self: *mut Self) {
+        self.nodes.deinit()
+        self.strings.deinit()
+        self.alloc.destroy(self.strings)
+    }
+
+    /// The index of the root value.
+    pub fn root(self: *Self) usize {
+        return self.root_index
+    }
+
+    /// A copy of node `i`.
+    pub fn node(self: *Self, i: usize) JNode {
+        return self.nodes.items()[i]
+    }
+
+    pub fn kind(self: *Self, i: usize) JKind {
+        return self.nodes.items()[i].kind
+    }
+
+    /// The member of object `obj` named `key` (the last one if the name
+    /// repeats); null when there is none or `obj` is not an object.
+    pub fn get(self: *Self, obj: usize, key: []u8) ?usize {
+        let items = self.nodes.items()
+        if items[obj].kind != JKind.Object {
+            return null
+        }
+        var found: ?usize = null
+        var cur = items[obj].first
+        while cur |c| {
+            if text.eql(items[c].key, key) {
+                found = c
+            }
+            cur = items[c].next
+        }
+        return found
+    }
+
+    /// The string member `key` of `obj`; null if missing or not a string.
+    pub fn getStr(self: *Self, obj: usize, key: []u8) ?[]u8 {
+        let i = self.get(obj, key) orelse return null
+        let n = self.nodes.items()[i]
+        if n.kind != JKind.String {
+            return null
+        }
+        return n.str
+    }
+
+    /// The number member `key` of `obj`; null if missing or not a number.
+    pub fn getNum(self: *Self, obj: usize, key: []u8) ?f64 {
+        let i = self.get(obj, key) orelse return null
+        let n = self.nodes.items()[i]
+        if n.kind != JKind.Number {
+            return null
+        }
+        return n.num
+    }
+
+    /// The boolean member `key` of `obj`; null if missing or not a bool.
+    pub fn getBool(self: *Self, obj: usize, key: []u8) ?bool {
+        let i = self.get(obj, key) orelse return null
+        let n = self.nodes.items()[i]
+        if n.kind != JKind.Bool {
+            return null
+        }
+        return n.b
+    }
+
+    /// The first child of array or object `i`.
+    pub fn first(self: *Self, i: usize) ?usize {
+        return self.nodes.items()[i].first
+    }
+
+    /// The next sibling of `i`.
+    pub fn next(self: *Self, i: usize) ?usize {
+        return self.nodes.items()[i].next
+    }
+
+    /// Writes node `i` as compact JSON. Numbers are written as they were
+    /// in the source.
+    pub fn write(self: *Self, i: usize, out: *mut text.Builder) AllocError!void {
+        let n = self.nodes.items()[i]
+        match n.kind {
+            .Null => {
+                try out.append("null")
+            }
+            .Bool => {
+                if n.b {
+                    try out.append("true")
+                } else {
+                    try out.append("false")
+                }
+            }
+            .Number => {
+                try out.append(n.raw)
+            }
+            .String => {
+                try writeString(out, n.str)
+            }
+            .Array, .Object => {
+                let isObject = n.kind == JKind.Object
+                if isObject {
+                    try out.appendByte('{')
+                } else {
+                    try out.appendByte('[')
+                }
+                var cur = n.first
+                while cur |c| {
+                    if cur != n.first {
+                        try out.appendByte(',')
+                    }
+                    if isObject {
+                        try writeString(out, self.nodes.items()[c].key)
+                        try out.appendByte(':')
+                    }
+                    try self.write(c, out)
+                    cur = self.nodes.items()[c].next
+                }
+                if isObject {
+                    try out.appendByte('}')
+                } else {
+                    try out.appendByte(']')
+                }
+            }
+        }
+    }
+}
+
+/// Writes `s` as a JSON string literal: `"` and `\` escaped, control
+/// characters as `\n`, `\r`, `\t`, `\b`, `\f` or `\u00XX`. Valid UTF-8 is
+/// kept as it is; an invalid byte becomes U+FFFD.
+pub fn writeString(out: *mut text.Builder, s: []u8) AllocError!void {
+    try out.appendByte('"')
+    var i: usize = 0
+    while i < s.len {
+        let c = s[i]
+        if c >= 0x80 {
+            let d = text.decode(s[i..])
+            if d.len == 1 {
+                try out.appendChar(0xFFFD)
+            } else {
+                try out.append(s[i..i + d.len])
+            }
+            i += d.len
+            continue
+        }
+        if c == '"' {
+            try out.append("\\\"")
+        } else if c == '\\' {
+            try out.append("\\\\")
+        } else if c == '\n' {
+            try out.append("\\n")
+        } else if c == '\r' {
+            try out.append("\\r")
+        } else if c == '\t' {
+            try out.append("\\t")
+        } else if c == 0x08 {
+            try out.append("\\b")
+        } else if c == 0x0C {
+            try out.append("\\f")
+        } else if c < 0x20 {
+            try out.append("\\u00")
+            try out.appendByte(JSON_HEX[(c >> 4) as usize])
+            try out.appendByte(JSON_HEX[(c & 0x0F) as usize])
+        } else {
+            try out.appendByte(c)
+        }
+        i += 1
+    }
+    try out.appendByte('"')
+}
+
+/// Writes `v` as a JSON number: an integral value in the `i64` range
+/// without a fraction ("3", "-2"), others with 6 significant digits as
+/// `%g` ("0.5", "1e+300"). NaN and infinities, which JSON cannot hold, are
+/// written as `null`.
+pub fn writeNumber(out: *mut text.Builder, v: f64) AllocError!void {
+    if math.isNan(v) || math.isInf(v) {
+        return out.append("null")
+    }
+    if v == math.floor(v) && v >= -9223372036854775808.0 && v < 9223372036854775808.0 {
+        return out.appendInt(v as i64)
+    }
+    return out.appendFloat(v)
+}
+
+/// Writes JSON into a `text.Builder` value by value, placing the commas.
+/// In an object, call `key` before each value. Nesting deeper than 64
+/// levels, or ending more containers than were begun, panics.
+pub struct Writer {
+    out: *mut text.Builder
+    // The number of open arrays and objects.
+    depth: usize
+    // has[d - 1]: the container at depth d already has a value.
+    has: [64]bool = @zeroed([64]bool)
+    // A key was written: the next value follows it without a comma.
+    after_key: bool
+
+    pub fn init(out: *mut text.Builder) Writer {
+        return Writer { out: out, depth: 0, after_key: false }
+    }
+
+    pub fn beginObject(self: *mut Self) AllocError!void {
+        try self.separate()
+        try self.out.appendByte('{')
+        self.open()
+    }
+
+    pub fn endObject(self: *mut Self) AllocError!void {
+        try self.out.appendByte('}')
+        self.depth -= 1
+    }
+
+    pub fn beginArray(self: *mut Self) AllocError!void {
+        try self.separate()
+        try self.out.appendByte('[')
+        self.open()
+    }
+
+    pub fn endArray(self: *mut Self) AllocError!void {
+        try self.out.appendByte(']')
+        self.depth -= 1
+    }
+
+    /// The name of the next member of an object; the next call writes its
+    /// value.
+    pub fn key(self: *mut Self, name: []u8) AllocError!void {
+        try self.separate()
+        try writeString(self.out, name)
+        try self.out.appendByte(':')
+        self.after_key = true
+    }
+
+    pub fn string(self: *mut Self, s: []u8) AllocError!void {
+        try self.separate()
+        return writeString(self.out, s)
+    }
+
+    pub fn number(self: *mut Self, v: f64) AllocError!void {
+        try self.separate()
+        return writeNumber(self.out, v)
+    }
+
+    pub fn int(self: *mut Self, v: i64) AllocError!void {
+        try self.separate()
+        return self.out.appendInt(v)
+    }
+
+    pub fn boolean(self: *mut Self, v: bool) AllocError!void {
+        try self.separate()
+        if v {
+            return self.out.append("true")
+        }
+        return self.out.append("false")
+    }
+
+    pub fn null(self: *mut Self) AllocError!void {
+        try self.separate()
+        return self.out.append("null")
+    }
+
+    /// An already serialized JSON value, written as it is.
+    pub fn raw(self: *mut Self, json: []u8) AllocError!void {
+        try self.separate()
+        return self.out.append(json)
+    }
+
+    // Writes the comma before a value or key, unless it is the first in
+    // its container or follows a key.
+    fn separate(self: *mut Self) AllocError!void {
+        if self.after_key {
+            self.after_key = false
+            return
+        }
+        if self.depth == 0 {
+            return
+        }
+        if self.has[self.depth - 1] {
+            try self.out.appendByte(',')
+        }
+        self.has[self.depth - 1] = true
+    }
+
+    fn open(self: *mut Self) {
+        self.depth += 1
+        self.has[self.depth - 1] = false
+    }
+}
+
+// ---- parsing
+
+let JSON_MAX_DEPTH: usize = 512
+let JSON_F64_MAX: f64 = 1.7976931348623157e308
+let JSON_HEX = "0123456789abcdef"
+
+struct JsonParser {
+    src: []u8
+    pos: usize
+    nodes: List(JNode)
+    // The document's arena, for its strings.
+    strings: Allocator
+    // A string while its escapes are decoded.
+    scratch: text.Builder
+    failure: *mut ParseFailure
+
+    fn fail(self: *mut Self, at: usize, msg: []u8) JsonError {
+        self.failure.* = ParseFailure { pos: at, msg: msg }
+        return JsonError.Invalid
+    }
+
+    fn skipSpace(self: *mut Self) {
+        while self.pos < self.src.len {
+            let c = self.src[self.pos]
+            if c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+                return
+            }
+            self.pos += 1
+        }
+    }
+
+    fn add(self: *mut Self, n: JNode) JsonError!usize {
+        let i = self.nodes.len()
+        try self.nodes.append(n)
+        return i
+    }
+
+    // Makes `child` the last child of `parent`.
+    fn link(self: *mut Self, parent: usize, child: usize) {
+        let items = self.nodes.items()
+        if items[parent].last |prev| {
+            items[prev].next = child
+        } else {
+            items[parent].first = child
+        }
+        items[parent].last = child
+        items[parent].count += 1
+    }
+
+    // A copy of `s` in the document's arena.
+    fn dup(self: *mut Self, s: []u8) JsonError![]u8 {
+        if s.len == 0 {
+            return ""
+        }
+        let out = try self.strings.alloc(0 as u8, s.len)
+        mem.copy(out, s)
+        return out
+    }
+
+    // The value at `pos` (after whitespace), inside `depth` arrays and
+    // objects.
+    fn value(self: *mut Self, depth: usize) JsonError!usize {
+        self.skipSpace()
+        if self.pos >= self.src.len {
+            return self.fail(self.pos, "unexpected end of input")
+        }
+        let c = self.src[self.pos]
+        if c == '{' || c == '[' {
+            if depth >= JSON_MAX_DEPTH {
+                return self.fail(self.pos, "too deeply nested")
+            }
+            if c == '{' {
+                return self.object(depth + 1)
+            }
+            return self.array(depth + 1)
+        }
+        if c == '"' {
+            var n = jsonBlank(JKind.String)
+            n.str = try self.string()
+            return self.add(n)
+        }
+        if c == '-' || jsonIsDigit(c) {
+            return self.number()
+        }
+        if c == 't' {
+            return self.literal("true", JKind.Bool, true)
+        }
+        if c == 'f' {
+            return self.literal("false", JKind.Bool, false)
+        }
+        if c == 'n' {
+            return self.literal("null", JKind.Null, false)
+        }
+        return self.fail(self.pos, "unexpected character")
+    }
+
+    fn literal(self: *mut Self, word: []u8, k: JKind, b: bool) JsonError!usize {
+        if !text.startsWith(self.src[self.pos..], word) {
+            return self.fail(self.pos, "invalid literal")
+        }
+        self.pos += word.len
+        var n = jsonBlank(k)
+        n.b = b
+        return self.add(n)
+    }
+
+    // The array at `pos` (at its `[`), which is at nesting level `depth`.
+    fn array(self: *mut Self, depth: usize) JsonError!usize {
+        let arr = try self.add(jsonBlank(JKind.Array))
+        self.pos += 1
+        self.skipSpace()
+        if self.pos < self.src.len && self.src[self.pos] == ']' {
+            self.pos += 1
+            return arr
+        }
+        while true {
+            let child = try self.value(depth)
+            self.link(arr, child)
+            self.skipSpace()
+            if self.pos >= self.src.len {
+                return self.fail(self.pos, "expected `,` or `]`")
+            }
+            let c = self.src[self.pos]
+            if c == ']' {
+                self.pos += 1
+                return arr
+            }
+            if c != ',' {
+                return self.fail(self.pos, "expected `,` or `]`")
+            }
+            self.pos += 1
+        }
+        return arr
+    }
+
+    // The object at `pos` (at its `{`), which is at nesting level `depth`.
+    fn object(self: *mut Self, depth: usize) JsonError!usize {
+        let obj = try self.add(jsonBlank(JKind.Object))
+        self.pos += 1
+        self.skipSpace()
+        if self.pos < self.src.len && self.src[self.pos] == '}' {
+            self.pos += 1
+            return obj
+        }
+        while true {
+            self.skipSpace()
+            if self.pos >= self.src.len || self.src[self.pos] != '"' {
+                return self.fail(self.pos, "expected a string key")
+            }
+            let name = try self.string()
+            self.skipSpace()
+            if self.pos >= self.src.len || self.src[self.pos] != ':' {
+                return self.fail(self.pos, "expected `:`")
+            }
+            self.pos += 1
+            let child = try self.value(depth)
+            self.nodes.items()[child].key = name
+            self.link(obj, child)
+            self.skipSpace()
+            if self.pos >= self.src.len {
+                return self.fail(self.pos, "expected `,` or `}`")
+            }
+            let c = self.src[self.pos]
+            if c == '}' {
+                self.pos += 1
+                return obj
+            }
+            if c != ',' {
+                return self.fail(self.pos, "expected `,` or `}`")
+            }
+            self.pos += 1
+        }
+        return obj
+    }
+
+    // The number at `pos`: -? (0 | [1-9][0-9]*) (. [0-9]+)? ([eE] [+-]? [0-9]+)?
+    fn number(self: *mut Self) JsonError!usize {
+        let s = self.src
+        let start = self.pos
+        var i = start
+        if s[i] == '-' {
+            i += 1
+        }
+        if i >= s.len || !jsonIsDigit(s[i]) {
+            return self.fail(i, "invalid number")
+        }
+        if s[i] == '0' {
+            i += 1
+            if i < s.len && jsonIsDigit(s[i]) {
+                return self.fail(i, "leading zero in number")
+            }
+        } else {
+            i = jsonSkipDigits(s, i)
+        }
+        if i < s.len && s[i] == '.' {
+            i += 1
+            if i >= s.len || !jsonIsDigit(s[i]) {
+                return self.fail(i, "invalid number")
+            }
+            i = jsonSkipDigits(s, i)
+        }
+        if i < s.len && (s[i] == 'e' || s[i] == 'E') {
+            i += 1
+            if i < s.len && (s[i] == '+' || s[i] == '-') {
+                i += 1
+            }
+            if i >= s.len || !jsonIsDigit(s[i]) {
+                return self.fail(i, "invalid number")
+            }
+            i = jsonSkipDigits(s, i)
+        }
+        self.pos = i
+        var n = jsonBlank(JKind.Number)
+        n.raw = try self.dup(s[start..i])
+        n.num = jsonNumberValue(n.raw)
+        return self.add(n)
+    }
+
+    // The string at `pos` (at its `"`), decoded into the arena.
+    fn string(self: *mut Self) JsonError![]u8 {
+        let s = self.src
+        let start = self.pos
+        self.pos += 1
+        self.scratch.clear()
+        while true {
+            if self.pos >= s.len {
+                return self.fail(start, "unterminated string")
+            }
+            let c = s[self.pos]
+            if c == '"' {
+                self.pos += 1
+                return self.dup(self.scratch.bytes())
+            }
+            if c == '\\' {
+                try self.escape()
+            } else if c < 0x20 {
+                return self.fail(self.pos, "control character in string")
+            } else if c < 0x80 {
+                try self.scratch.appendByte(c)
+                self.pos += 1
+            } else {
+                let d = text.decode(s[self.pos..])
+                if d.len == 1 {
+                    try self.scratch.appendChar(0xFFFD)
+                } else {
+                    try self.scratch.append(s[self.pos..self.pos + d.len])
+                }
+                self.pos += d.len
+            }
+        }
+        return ""
+    }
+
+    // The escape at `pos` (at its `\`).
+    fn escape(self: *mut Self) JsonError!void {
+        let at = self.pos
+        if at + 1 >= self.src.len {
+            return self.fail(at, "unterminated string")
+        }
+        let esc = self.src[at + 1]
+        self.pos = at + 2
+        var b: u8 = 0
+        match esc {
+            '"', '\\', '/' => {
+                b = esc
+            }
+            'b' => {
+                b = 0x08
+            }
+            'f' => {
+                b = 0x0C
+            }
+            'n' => {
+                b = '\n'
+            }
+            'r' => {
+                b = '\r'
+            }
+            't' => {
+                b = '\t'
+            }
+            'u' => {
+                return self.unicode(at)
+            }
+            _ => {
+                return self.fail(at, "invalid escape")
+            }
+        }
+        return self.scratch.appendByte(b)
+    }
+
+    // The 4 hex digits of the `\u` escape at `at`, now at `pos`. A high
+    // surrogate followed by a `\u` low surrogate makes one code point; any
+    // other surrogate becomes U+FFFD.
+    fn unicode(self: *mut Self, at: usize) JsonError!void {
+        let hi = jsonHex4(self.src, self.pos) orelse return self.fail(at, "invalid `\\u` escape")
+        self.pos += 4
+        var code = hi
+        if hi >= 0xDC00 && hi <= 0xDFFF {
+            code = 0xFFFD
+        } else if hi >= 0xD800 && hi <= 0xDBFF {
+            code = 0xFFFD
+            let s = self.src
+            let p = self.pos
+            if p + 1 < s.len && s[p] == '\\' && s[p + 1] == 'u' {
+                if jsonHex4(s, p + 2) |lo| {
+                    if lo >= 0xDC00 && lo <= 0xDFFF {
+                        code = 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00)
+                        self.pos = p + 6
+                    }
+                }
+            }
+        }
+        return self.scratch.appendChar(code)
+    }
+}
+
+fn jsonBlank(k: JKind) JNode {
+    return JNode {
+        kind: k,
+        b: false,
+        num: 0.0,
+        raw: "",
+        str: "",
+        key: "",
+        first: null,
+        last: null,
+        next: null,
+        count: 0,
+    }
+}
+
+fn jsonIsDigit(c: u8) bool {
+    return c >= '0' && c <= '9'
+}
+
+// The index of the first byte from `i` on that is not a digit.
+fn jsonSkipDigits(s: []u8, i: usize) usize {
+    var j = i
+    while j < s.len && jsonIsDigit(s[j]) {
+        j += 1
+    }
+    return j
+}
+
+// The value of the 4 hex digits at `s[at..]`; null if they are not.
+fn jsonHex4(s: []u8, at: usize) ?u32 {
+    if at + 4 > s.len {
+        return null
+    }
+    var v: u32 = 0
+    for i in at..at + 4 {
+        let c = s[i]
+        var d: u32 = 0
+        if c >= '0' && c <= '9' {
+            d = (c - '0') as u32
+        } else if c >= 'a' && c <= 'f' {
+            d = (c - 'a') as u32 + 10
+        } else if c >= 'A' && c <= 'F' {
+            d = (c - 'A') as u32 + 10
+        } else {
+            return null
+        }
+        v = v * 16 + d
+    }
+    return v
+}
+
+// The value of a valid JSON number text.
+fn jsonNumberValue(raw: []u8) f64 {
+    if raw.len > 63 {
+        return jsonLongNumber(raw)
+    }
+    return text.parseFloat(raw) catch jsonInfinity(raw[0] == '-')
+}
+
+// The value of a number text too long for `text.parseFloat`, from its
+// first 17 significant digits and its exponent.
+fn jsonLongNumber(raw: []u8) f64 {
+    var buf = @zeroed([40]u8)
+    var n: usize = 0
+    var i: usize = 0
+    let neg = raw[0] == '-'
+    if neg {
+        buf[0] = '-'
+        n = 1
+        i = 1
+    }
+    // The value is (the digits in buf) * 10^exp.
+    var exp: i64 = 0
+    var sig: usize = 0
+    while i < raw.len && jsonIsDigit(raw[i]) {
+        if sig >= 17 {
+            exp += 1
+        } else if sig > 0 || raw[i] != '0' {
+            buf[n] = raw[i]
+            n += 1
+            sig += 1
+        }
+        i += 1
+    }
+    if i < raw.len && raw[i] == '.' {
+        i += 1
+        while i < raw.len && jsonIsDigit(raw[i]) {
+            if sig < 17 {
+                if sig > 0 || raw[i] != '0' {
+                    buf[n] = raw[i]
+                    n += 1
+                    sig += 1
+                }
+                exp -= 1
+            }
+            i += 1
+        }
+    }
+    if i < raw.len && (raw[i] == 'e' || raw[i] == 'E') {
+        i += 1
+        var eneg = false
+        if i < raw.len && (raw[i] == '+' || raw[i] == '-') {
+            eneg = raw[i] == '-'
+            i += 1
+        }
+        // Saturates: any exponent this large overflows or underflows.
+        var e: i64 = 0
+        while i < raw.len && jsonIsDigit(raw[i]) {
+            if e < 100000 {
+                e = e * 10 + (raw[i] - '0') as i64
+            }
+            i += 1
+        }
+        if eneg {
+            exp -= e
+        } else {
+            exp += e
+        }
+    }
+    // The exponent of the first digit.
+    let lead = exp + sig as i64 - 1
+    if sig == 0 || lead < -400 {
+        if neg {
+            return -0.0
+        }
+        return 0.0
+    }
+    if lead > 400 {
+        return jsonInfinity(neg)
+    }
+    buf[n] = 'e'
+    n += 1
+    var mag = exp
+    if exp < 0 {
+        buf[n] = '-'
+        n += 1
+        mag = -exp
+    }
+    var digits = @zeroed([8]u8)
+    var nd: usize = 0
+    while mag > 0 || nd == 0 {
+        digits[nd] = '0' + (mag % 10) as u8
+        nd += 1
+        mag /= 10
+    }
+    while nd > 0 {
+        nd -= 1
+        buf[n] = digits[nd]
+        n += 1
+    }
+    return text.parseFloat(buf[0..n]) catch jsonInfinity(neg)
+}
+
+fn jsonInfinity(neg: bool) f64 {
+    var v = JSON_F64_MAX
+    v *= 10.0
+    if neg {
+        return -v
+    }
+    return v
+}
+
+// ---- tests
+
+// Parses `src`, which must be valid, and checks its compact form.
+fn jsonExpectWrite(a: Allocator, src: []u8, want: []u8) !void {
+    var f = ParseFailure { pos: 0, msg: "" }
+    var doc = try Json.parse(a, src, &mut f)
+    defer doc.deinit()
+    var out = text.Builder.init(a)
+    defer out.deinit()
+    try doc.write(doc.root(), &mut out)
+    @expectEqual(want, out.bytes())
+}
+
+// The failure of parsing `src`; msg "parsed" when it parsed.
+fn jsonFailure(a: Allocator, src: []u8) ParseFailure {
+    var f = ParseFailure { pos: 0, msg: "" }
+    var doc = Json.parse(a, src, &mut f) catch |e| {
+        return match e {
+            .Invalid => f
+            .OutOfMemory => ParseFailure { pos: 0, msg: "out of memory" }
+        }
+    }
+    doc.deinit()
+    return ParseFailure { pos: 0, msg: "parsed" }
+}
+
+// Parsing `src` fails as invalid with `msg` at `pos`.
+fn jsonExpectInvalid(a: Allocator, src: []u8, msg: []u8, pos: usize) {
+    let f = jsonFailure(a, src)
+    @expectEqual(msg, f.msg)
+    @expectEqual(pos, f.pos)
+}
+
+// The decoded string of the JSON string literal `src`.
+fn jsonExpectString(a: Allocator, src: []u8, want: []u8) !void {
+    var f = ParseFailure { pos: 0, msg: "" }
+    var doc = try Json.parse(a, src, &mut f)
+    defer doc.deinit()
+    @expect(doc.kind(doc.root()) == JKind.String)
+    @expectEqual(want, doc.node(doc.root()).str)
+}
+
+fn jsonNumberOf(a: Allocator, src: []u8) !f64 {
+    var f = ParseFailure { pos: 0, msg: "" }
+    var doc = try Json.parse(a, src, &mut f)
+    defer doc.deinit()
+    @expect(doc.kind(doc.root()) == JKind.Number)
+    return doc.node(doc.root()).num
+}
+
+fn jsonNumberText(a: Allocator, v: f64, want: []u8) !void {
+    var out = text.Builder.init(a)
+    defer out.deinit()
+    try writeNumber(&mut out, v)
+    @expectEqual(want, out.bytes())
+}
+
+fn jsonStringText(a: Allocator, s: []u8, want: []u8) !void {
+    var out = text.Builder.init(a)
+    defer out.deinit()
+    try writeString(&mut out, s)
+    @expectEqual(want, out.bytes())
+}
+
+test "literals, numbers and members" {
+    let a = @testAllocator()
+    var f = ParseFailure { pos: 0, msg: "" }
+    let src = " {\"id\": 42, \"name\": \"aye\", \"ok\": true, \"no\": false, \"none\": null, \"pi\": -3.25e0} "
+    var doc = try Json.parse(a, src, &mut f)
+    defer doc.deinit()
+    let r = doc.root()
+    @expect(doc.kind(r) == JKind.Object)
+    @expectEqual(6, doc.node(r).count)
+    @expectEqual(42.0, doc.getNum(r, "id").?)
+    @expectEqual("42", doc.node(doc.get(r, "id").?).raw)
+    @expectEqual("aye", doc.getStr(r, "name").?)
+    @expect(doc.getBool(r, "ok").?)
+    @expect(!doc.getBool(r, "no").?)
+    @expect(doc.kind(doc.get(r, "none").?) == JKind.Null)
+    @expectEqual(-3.25, doc.getNum(r, "pi").?)
+    @expect(doc.get(r, "missing") == null)
+    @expect(doc.getStr(r, "id") == null)
+    @expect(doc.getNum(r, "name") == null)
+    @expect(doc.getBool(r, "none") == null)
+    @expect(doc.get(doc.get(r, "id").?, "x") == null)
+    @expectEqual(0.0, try jsonNumberOf(a, "0"))
+    @expectEqual(-0.5, try jsonNumberOf(a, "-0.5"))
+    @expectEqual(1500.0, try jsonNumberOf(a, "1.5E3"))
+    @expectEqual(0.025, try jsonNumberOf(a, "25e-3"))
+    @expectEqual(1.0e300, try jsonNumberOf(a, "1e+300"))
+}
+
+test "duplicate keys: the last one wins" {
+    let a = @testAllocator()
+    var f = ParseFailure { pos: 0, msg: "" }
+    var doc = try Json.parse(a, "{\"k\":1,\"j\":2,\"k\":3}", &mut f)
+    defer doc.deinit()
+    @expectEqual(3.0, doc.getNum(doc.root(), "k").?)
+    @expectEqual(3, doc.node(doc.root()).count)
+}
+
+test "string escapes" {
+    let a = @testAllocator()
+    try jsonExpectString(a, "\"\\\"\\\\\\/\\b\\f\\n\\r\\t\"", "\"\\/\x08\x0C\n\r\t")
+    try jsonExpectString(a, "\"\\u0041\\u00e9\\u4E2D\\u0000\"", "A\xC3\xA9\xE4\xB8\xAD\x00")
+    try jsonExpectString(a, "\"caf\xC3\xA9 \xF0\x9F\x98\x80\"", "caf\xC3\xA9 \xF0\x9F\x98\x80")
+    try jsonExpectString(a, "\"\"", "")
+}
+
+test "surrogate pairs" {
+    let a = @testAllocator()
+    try jsonExpectString(a, "\"\\ud83d\\ude00\"", "\xF0\x9F\x98\x80")
+    try jsonExpectString(a, "\"x\\uD834\\uDD1Ey\"", "x\xF0\x9D\x84\x9Ey")
+}
+
+test "lone surrogates become U+FFFD" {
+    let a = @testAllocator()
+    try jsonExpectString(a, "\"\\ud800\"", "\xEF\xBF\xBD")
+    try jsonExpectString(a, "\"\\udc00x\"", "\xEF\xBF\xBDx")
+    try jsonExpectString(a, "\"\\ud800\\u0041\"", "\xEF\xBF\xBDA")
+    try jsonExpectString(a, "\"\\ud800\\ud800\\udc00\"", "\xEF\xBF\xBD\xF0\x90\x80\x80")
+    try jsonExpectString(a, "\"\\ud800\\n\"", "\xEF\xBF\xBD\n")
+}
+
+test "invalid UTF-8 in a string becomes U+FFFD" {
+    let a = @testAllocator()
+    try jsonExpectString(a, "\"a\xFFb\"", "a\xEF\xBF\xBDb")
+    try jsonExpectString(a, "\"\xE4\xB8\"", "\xEF\xBF\xBD\xEF\xBF\xBD")
+    try jsonExpectString(a, "\"\xED\xA0\x80\"", "\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD")
+}
+
+test "nested arrays and objects" {
+    let a = @testAllocator()
+    var f = ParseFailure { pos: 0, msg: "" }
+    let src = "[1, [2, 3], {\"a\": [], \"b\": {\"c\": [4]}}, []]"
+    var doc = try Json.parse(a, src, &mut f)
+    defer doc.deinit()
+    let r = doc.root()
+    @expect(doc.kind(r) == JKind.Array)
+    @expectEqual(4, doc.node(r).count)
+    let one = doc.first(r).?
+    @expectEqual("1", doc.node(one).raw)
+    let inner = doc.next(one).?
+    @expectEqual(2, doc.node(inner).count)
+    @expectEqual("3", doc.node(doc.next(doc.first(inner).?).?).raw)
+    @expect(doc.next(doc.first(inner).?).? == doc.node(inner).last.?)
+    let obj = doc.next(inner).?
+    @expect(doc.kind(obj) == JKind.Object)
+    @expectEqual(0, doc.node(doc.get(obj, "a").?).count)
+    @expect(doc.first(doc.get(obj, "a").?) == null)
+    let b = doc.get(obj, "b").?
+    let c = doc.get(b, "c").?
+    @expectEqual(4.0, doc.node(doc.first(c).?).num)
+    let last = doc.next(obj).?
+    @expect(doc.kind(last) == JKind.Array)
+    @expect(doc.next(last) == null)
+    @expect(doc.get(r, "a") == null)
+}
+
+test "round trip of a complex document" {
+    let a = @testAllocator()
+    let src = "{\n  \"id\": 12345678901234567890,\n  \"f\": 1.50E+10,\n  \"neg\": -0,\n  \"s\": \"tab\\there \\\"q\\\" \\u00e9 \\ud83d\\ude00 \\u001f\",\n  \"arr\": [ 1 , true , false , null , [ ] , { } , [[\"x\"]] ],\n  \"o\": {\"k\\u0041\": {\"deep\": [0.5]}}\n}\n"
+    let want = "{\"id\":12345678901234567890,\"f\":1.50E+10,\"neg\":-0,\"s\":\"tab\\there \\\"q\\\" \xC3\xA9 \xF0\x9F\x98\x80 \\u001f\",\"arr\":[1,true,false,null,[],{},[[\"x\"]]],\"o\":{\"kA\":{\"deep\":[0.5]}}}"
+    try jsonExpectWrite(a, src, want)
+    try jsonExpectWrite(a, want, want)
+    try jsonExpectWrite(a, "\"\\/\"", "\"/\"")
+    try jsonExpectWrite(a, " 7 ", "7")
+}
+
+test "invalid documents" {
+    let a = @testAllocator()
+    jsonExpectInvalid(a, "", "unexpected end of input", 0)
+    jsonExpectInvalid(a, "   \n", "unexpected end of input", 4)
+    jsonExpectInvalid(a, "{\"a\" 1}", "expected `:`", 5)
+    jsonExpectInvalid(a, "{\"a\":1,}", "expected a string key", 7)
+    jsonExpectInvalid(a, "{a:1}", "expected a string key", 1)
+    jsonExpectInvalid(a, "{\"a\":1", "expected `,` or `}`", 6)
+    jsonExpectInvalid(a, "{\"a\":1 \"b\":2}", "expected `,` or `}`", 7)
+    jsonExpectInvalid(a, "[1,]", "unexpected character", 3)
+    jsonExpectInvalid(a, "[1 2]", "expected `,` or `]`", 3)
+    jsonExpectInvalid(a, "[1", "expected `,` or `]`", 2)
+    jsonExpectInvalid(a, "[", "unexpected end of input", 1)
+    jsonExpectInvalid(a, "1 2", "unexpected data after the value", 2)
+    jsonExpectInvalid(a, "{} x", "unexpected data after the value", 3)
+    jsonExpectInvalid(a, "tru", "invalid literal", 0)
+    jsonExpectInvalid(a, "nul", "invalid literal", 0)
+    jsonExpectInvalid(a, "True", "unexpected character", 0)
+    jsonExpectInvalid(a, "truex", "unexpected data after the value", 4)
+    jsonExpectInvalid(a, "01", "leading zero in number", 1)
+    jsonExpectInvalid(a, "-01", "leading zero in number", 2)
+    jsonExpectInvalid(a, "+1", "unexpected character", 0)
+    jsonExpectInvalid(a, ".5", "unexpected character", 0)
+    jsonExpectInvalid(a, "1.", "invalid number", 2)
+    jsonExpectInvalid(a, "1.e5", "invalid number", 2)
+    jsonExpectInvalid(a, "-", "invalid number", 1)
+    jsonExpectInvalid(a, "-a", "invalid number", 1)
+    jsonExpectInvalid(a, "1e", "invalid number", 2)
+    jsonExpectInvalid(a, "1e+", "invalid number", 3)
+    jsonExpectInvalid(a, "0x10", "unexpected data after the value", 1)
+    jsonExpectInvalid(a, "\"abc", "unterminated string", 0)
+    jsonExpectInvalid(a, "\"abc\\", "unterminated string", 4)
+    jsonExpectInvalid(a, "\"a\nb\"", "control character in string", 2)
+    jsonExpectInvalid(a, "\"a\tb\"", "control character in string", 2)
+    jsonExpectInvalid(a, "\"\x00\"", "control character in string", 1)
+    jsonExpectInvalid(a, "\"\\x41\"", "invalid escape", 1)
+    jsonExpectInvalid(a, "\"\\'\"", "invalid escape", 1)
+    jsonExpectInvalid(a, "\"\\u12\"", "invalid `\\u` escape", 1)
+    jsonExpectInvalid(a, "\"\\u12G4\"", "invalid `\\u` escape", 1)
+    jsonExpectInvalid(a, "\"\\ud800\\u12\"", "invalid `\\u` escape", 7)
+    jsonExpectInvalid(a, "[1]]", "unexpected data after the value", 3)
+    jsonExpectInvalid(a, "// c\n1", "unexpected character", 0)
+    jsonExpectInvalid(a, "\xEF\xBB\xBF1", "unexpected character", 0)
+    jsonExpectInvalid(a, "\x0C1", "unexpected character", 0)
+    jsonExpectInvalid(a, "NaN", "unexpected character", 0)
+}
+
+// `n` nested arrays.
+fn jsonNested(a: Allocator, n: usize) ![]mut u8 {
+    var b = text.Builder.init(a)
+    defer b.deinit()
+    for i in 0..n {
+        try b.appendByte('[')
+    }
+    for i in 0..n {
+        try b.appendByte(']')
+    }
+    return b.toOwned()
+}
+
+test "nesting depth limit" {
+    let a = @testAllocator()
+    let ok = try jsonNested(a, 512)
+    defer a.free(ok)
+    @expectEqual("parsed", jsonFailure(a, ok).msg)
+    let deep = try jsonNested(a, 513)
+    defer a.free(deep)
+    jsonExpectInvalid(a, deep, "too deeply nested", 512)
+    let deeper = try jsonNested(a, 100000)
+    defer a.free(deeper)
+    jsonExpectInvalid(a, deeper, "too deeply nested", 512)
+}
+
+test "long numbers" {
+    let a = @testAllocator()
+    var b = text.Builder.init(a)
+    defer b.deinit()
+    try b.append("1")
+    for i in 0..100 {
+        try b.append("0")
+    }
+    let big = try jsonNumberOf(a, b.bytes())
+    @expect(big > 0.9999e100 && big < 1.0001e100)
+    b.clear()
+    try b.append("-0.")
+    for i in 0..80 {
+        try b.append("0")
+    }
+    try b.append("1234")
+    let small = try jsonNumberOf(a, b.bytes())
+    @expect(small < -1.2339e-81 && small > -1.2341e-81)
+    b.clear()
+    try b.append("3.")
+    for i in 0..70 {
+        try b.append("1")
+    }
+    try b.append("e-2")
+    let mid = try jsonNumberOf(a, b.bytes())
+    @expect(mid > 0.031110 && mid < 0.031112)
+    b.clear()
+    try b.append("1")
+    for i in 0..400 {
+        try b.append("7")
+    }
+    let inf = try jsonNumberOf(a, b.bytes())
+    @expect(inf > JSON_F64_MAX)
+    b.clear()
+    try b.append("0.")
+    for i in 0..70 {
+        try b.append("0")
+    }
+    try b.append("e99999999999999999999999")
+    @expectEqual(0.0, try jsonNumberOf(a, b.bytes()))
+    @expect(try jsonNumberOf(a, "1e400") > JSON_F64_MAX)
+    @expect(try jsonNumberOf(a, "-1e400") < -JSON_F64_MAX)
+    @expectEqual(0.0, try jsonNumberOf(a, "1e-400"))
+    b.clear()
+    try b.append("[")
+    for i in 0..70 {
+        try b.append("9")
+    }
+    try b.append("]")
+    try jsonExpectWrite(a, b.bytes(), b.bytes())
+}
+
+test "truncated and mutated input never panics" {
+    let a = @testAllocator()
+    let src = "{\"a\":[1,-2.5e+3,\"x\\u00e9\\ud83d\\ude00\\n\",true,false,null],\"b\":{\"c\":{}},\"d\":[[]],\"e\":0}"
+    for k in 0..src.len + 1 {
+        let f = jsonFailure(a, src[0..k])
+        @expect(f.msg.len > 0)
+    }
+    let buf = try a.alloc(0 as u8, src.len)
+    defer a.free(buf)
+    let bytes = "\"\\{}[],:0-e.u \x00\x80\xFF"
+    for i in 0..src.len {
+        for c in bytes {
+            mem.copy(buf, src)
+            buf[i] = c
+            let f = jsonFailure(a, buf)
+            @expect(f.msg.len > 0)
+        }
+    }
+}
+
+test "Writer places commas" {
+    let a = @testAllocator()
+    var out = text.Builder.init(a)
+    defer out.deinit()
+    var w = Writer.init(&mut out)
+    try w.beginObject()
+    try w.key("a")
+    try w.int(1)
+    try w.key("list")
+    try w.beginArray()
+    try w.number(0.5)
+    try w.string("x\"y")
+    try w.beginObject()
+    try w.endObject()
+    try w.beginArray()
+    try w.endArray()
+    try w.null()
+    try w.boolean(true)
+    try w.int(-7)
+    try w.endArray()
+    try w.key("o")
+    try w.beginObject()
+    try w.key("p")
+    try w.boolean(false)
+    try w.key("q")
+    try w.beginArray()
+    try w.int(1)
+    try w.int(2)
+    try w.endArray()
+    try w.endObject()
+    try w.key("raw")
+    try w.raw("{\"k\":[1,2]}")
+    try w.endObject()
+    let want = "{\"a\":1,\"list\":[0.5,\"x\\\"y\",{},[],null,true,-7],\"o\":{\"p\":false,\"q\":[1,2]},\"raw\":{\"k\":[1,2]}}"
+    @expectEqual(want, out.bytes())
+    try jsonExpectWrite(a, out.bytes(), want)
+}
+
+test "writeString escapes" {
+    let a = @testAllocator()
+    try jsonStringText(a, "", "\"\"")
+    try jsonStringText(a, "a\"b\\c/", "\"a\\\"b\\\\c/\"")
+    try jsonStringText(a, "\n\r\t\x08\x0C", "\"\\n\\r\\t\\b\\f\"")
+    try jsonStringText(a, "\x00\x01\x1F\x7F", "\"\\u0000\\u0001\\u001f\x7F\"")
+    try jsonStringText(a, "caf\xC3\xA9 \xE4\xB8\xAD \xF0\x9F\x98\x80", "\"caf\xC3\xA9 \xE4\xB8\xAD \xF0\x9F\x98\x80\"")
+    try jsonStringText(a, "a\xFFb", "\"a\xEF\xBF\xBDb\"")
+    try jsonStringText(a, "\xE4\xB8", "\"\xEF\xBF\xBD\xEF\xBF\xBD\"")
+    try jsonStringText(a, "\xC0\xAF", "\"\xEF\xBF\xBD\xEF\xBF\xBD\"")
+}
+
+test "writeNumber" {
+    let a = @testAllocator()
+    try jsonNumberText(a, 1.0, "1")
+    try jsonNumberText(a, -2.0, "-2")
+    try jsonNumberText(a, 0.0, "0")
+    try jsonNumberText(a, 0.5, "0.5")
+    try jsonNumberText(a, -0.125, "-0.125")
+    try jsonNumberText(a, 1.0e300, "1e+300")
+    try jsonNumberText(a, 1.5e-7, "1.5e-07")
+    try jsonNumberText(a, 9007199254740993.0, "9007199254740992")
+    try jsonNumberText(a, jsonInfinity(false), "null")
+    try jsonNumberText(a, jsonInfinity(true), "null")
+    let nan = jsonInfinity(false) - jsonInfinity(false)
+    try jsonNumberText(a, nan, "null")
+}

@@ -1,2 +1,2 @@
-let_var.ore:2:5: fixed: declare `sum` with `var`
-let_var.ore:11:14: fixed: change `totl` to `total`
+let_var.aye:2:5: fixed: declare `sum` with `var`
+let_var.aye:11:14: fixed: change `totl` to `total`

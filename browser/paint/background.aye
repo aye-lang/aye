@@ -1,0 +1,1048 @@
+// The decorations of a box: `box-shadow` (outer and inset, blurred
+// approximately), the background (`background-color`, then its image
+// layers from the last to the first: images, SVG images and gradients,
+// sized, positioned and tiled), its mask (`mask-image` layers: their alpha
+// over the background), corners rounded by `border-radius` (backgrounds
+// clipped, borders drawn as rings) and the borders.
+//
+// The display list gets `Tiles` for an image layer; `Layer`, `Mask` and
+// `EndLayer` around a background that is rounded and has images, or that
+// is masked: drawing goes into a transparent layer, which is blended
+// below through the rounded box and the mask's alpha; `Shadow` for a
+// shadow, rasterized at render time (the box's coverage, blurred by three
+// box blurs); and SVG pictures (svg/shapes.aye) for rounded fills and
+// borders.
+//
+// Simplifications: a rounded border takes the color and style of its top
+// side (as a solid ring) unless all sides are alike; the mask covers the
+// background and borders but not the content; `background-attachment:
+// fixed` positions against the viewport as it is when the page is at the
+// top; `space` and `round` do not fit both axes together.
+
+import css
+import css.Value
+import image
+import layout
+import std.list.List
+import std.math
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+import svg
+
+/// Corner radii in CSS px: the horizontal and the vertical radius of the
+/// top-left, top-right, bottom-right and bottom-left corners.
+pub struct Radii {
+    v: [8]f64
+}
+
+pub let SQUARE = Radii { v: [8]f64{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0} }
+
+fn isRound(r: Radii) bool {
+    for x in r.v {
+        if x > 0.0 {
+            return true
+        }
+    }
+    return false
+}
+
+/// The corner radii of a box `w` x `h` with style `style`, reduced so
+/// that neighbouring corners do not overlap.
+pub fn radiiOf(style: []Value, w: f64, h: f64) Radii {
+    var r = SQUARE
+    for c in 0..4 {
+        let lp = css.readRadius(style[css.BORDER_TOP_LEFT_RADIUS + c])
+        r.v[2 * c] = math.max(0.0, lp[0].of(w))
+        r.v[2 * c + 1] = math.max(0.0, lp[1].of(h))
+    }
+    if !isRound(r) {
+        return r
+    }
+    var f = 1.0
+    f = fitRadii(f, w, r.v[0] + r.v[2])
+    f = fitRadii(f, w, r.v[4] + r.v[6])
+    f = fitRadii(f, h, r.v[1] + r.v[7])
+    f = fitRadii(f, h, r.v[3] + r.v[5])
+    if f < 1.0 {
+        for k in 0..8 {
+            r.v[k] *= f
+        }
+    }
+    return r
+}
+
+fn fitRadii(f: f64, side: f64, sum: f64) f64 {
+    if sum > side && sum > 0.0 {
+        return math.min(f, side / sum)
+    }
+    return f
+}
+
+/// The radii of the box inside by `top`, `right`, `bottom`, `left`.
+fn insetRadii(r: Radii, top: f64, right: f64, bottom: f64, left: f64) Radii {
+    var o = r
+    o.v[0] = math.max(0.0, r.v[0] - left)
+    o.v[1] = math.max(0.0, r.v[1] - top)
+    o.v[2] = math.max(0.0, r.v[2] - right)
+    o.v[3] = math.max(0.0, r.v[3] - top)
+    o.v[4] = math.max(0.0, r.v[4] - right)
+    o.v[5] = math.max(0.0, r.v[5] - bottom)
+    o.v[6] = math.max(0.0, r.v[6] - left)
+    o.v[7] = math.max(0.0, r.v[7] - bottom)
+    return o
+}
+
+/// The radii of the box grown by `s` on every side (a shadow's spread).
+fn spreadRadii(r: Radii, s: f64) Radii {
+    var o = r
+    for k in 0..8 {
+        if r.v[k] > 0.0 {
+            o.v[k] = math.max(0.0, r.v[k] + s)
+        }
+    }
+    return o
+}
+
+fn scaledRadii(r: Radii, k: f64) Radii {
+    var o = r
+    for i in 0..8 {
+        o.v[i] = r.v[i] * k
+    }
+    return o
+}
+
+/// What a `Tiles` item draws.
+pub enum Source {
+    // RGBA pixels, straight alpha.
+    Bitmap { w: usize, h: usize, pixels: []u8 }
+    Picture { pic: *svg.Picture }
+    // In the coordinates of the tile (CSS px from its top left).
+    Gradient { g: *svg.Gradient }
+}
+
+/// The rectangle of a box inside by `top`, `right`, `bottom`, `left`.
+fn insetRect(r: Rect, top: f64, right: f64, bottom: f64, left: f64) Rect {
+    return Rect { x: r.x + left, y: r.y + top, w: math.max(0.0, r.w - left - right), h: math.max(0.0, r.h - top - bottom) }
+}
+
+// A box being decorated: its border box `r`, its border widths (the left
+// and right ones 0 when an inline box's part does not have them) and
+// padding, its style and corners.
+struct Deco {
+    r: Rect
+    border: [4]f64
+    padding: [4]f64
+    style: []Value
+    radii: Radii
+    color: Rgba
+
+    // Box 0 the border box, 1 the padding box, 2 the content box.
+    fn boxRect(self: *Self, which: u8) Rect {
+        let b = self.border
+        if which == 0 {
+            return self.r
+        }
+        if which == 1 {
+            return insetRect(self.r, b[0], b[1], b[2], b[3])
+        }
+        let p = self.padding
+        return insetRect(self.r, b[0] + p[0], b[1] + p[1], b[2] + p[2], b[3] + p[3])
+    }
+
+    fn boxRadii(self: *Self, which: u8) Radii {
+        if which == 0 {
+            return self.radii
+        }
+        let b = self.border
+        if which == 1 {
+            return insetRadii(self.radii, b[0], b[1], b[2], b[3])
+        }
+        let p = self.padding
+        return insetRadii(self.radii, b[0] + p[0], b[1] + p[1], b[2] + p[2], b[3] + p[3])
+    }
+}
+
+/// Paints the decorations of box `i` (style `style`), whose border box
+/// is at (`x`, `y`), `w` x `h`, borders `border` (the left one only when
+/// `left`, the right one only when `right`), its background unless it went
+/// to the canvas.
+fn decorate(b: *mut Builder, i: usize, x: f64, y: f64, w: f64, h: f64, border: [4]f64, padding: [4]f64, left: bool, right: bool) AllocError!void {
+    let style = b.t.bx(i).style
+    var bw = border
+    if !left {
+        bw[3] = 0.0
+    }
+    if !right {
+        bw[1] = 0.0
+    }
+    let d = Deco {
+        r: Rect { x: x, y: y, w: w, h: h },
+        border: bw,
+        padding: padding,
+        style: style,
+        radii: radiiOf(style, w, h),
+        color: colorOf(style[css.COLOR], BLACK),
+    }
+    try shadows(b, &d, false)
+    try background(b, &d, b.skip_bg != i)
+    try shadows(b, &d, true)
+    if isRound(d.radii) {
+        return roundBorders(b, &d)
+    }
+    return b.borders(style, x, y, w, h, border, left, right)
+}
+
+// ---- backgrounds
+
+fn background(b: *mut Builder, d: *Deco, with_color: bool) AllocError!void {
+    var color = colorOf(d.style[css.BACKGROUND_COLOR], d.color)
+    if !with_color {
+        color.a = 0
+    }
+    let a = b.t.alloc
+    var layers = List([]css.Comp).init(a)
+    try css.readLayers(a, d.style[css.BACKGROUND_IMAGE], &mut layers)
+    var masks = List([]css.Comp).init(a)
+    try css.readLayers(a, d.style[css.MASK_IMAGE], &mut masks)
+    var images = false
+    for l in layers.items() {
+        images = images || (l.len > 0 && !isNone(l[0]))
+    }
+    var masked = false
+    for l in masks.items() {
+        masked = masked || (l.len > 0 && !isNone(l[0]))
+    }
+    if color.a == 0 && !images {
+        return
+    }
+    if d.r.w <= 0.0 || d.r.h <= 0.0 {
+        return
+    }
+    let round = isRound(d.radii)
+    let layered = masked || (round && images)
+    if layered {
+        b.extend(d.r.x + d.r.w, d.r.y + d.r.h)
+        try b.add(Item.Layer { r: d.r })
+    }
+    if color.a > 0 {
+        // The color is clipped like the bottom layer.
+        var clips = List([]css.Comp).init(a)
+        if !layout.isKeyword(d.style[css.BACKGROUND_CLIP], "border-box") {
+            try css.readLayers(a, d.style[css.BACKGROUND_CLIP], &mut clips)
+        }
+        var which: u8 = 0
+        if clips.len() > 0 {
+            let n = math.maxOf(usize, layers.len(), 1)
+            which = css.readBox(clips.items()[(n - 1) % clips.len()], 0)
+        }
+        if which > 2 {
+            which = 0
+        }
+        let cr = d.boxRect(which)
+        if round && !layered {
+            try roundFill(b, cr, d.boxRadii(which), color)
+        } else {
+            try b.fill(cr.x, cr.y, cr.w, cr.h, color)
+        }
+    }
+    var k = layers.len()
+    while k > 0 {
+        k -= 1
+        try imageLayer(b, d, k, layers.items()[k], false)
+    }
+    if layered {
+        if masked {
+            try b.add(Item.Mask)
+            var m = masks.len()
+            while m > 0 {
+                m -= 1
+                try imageLayer(b, d, m, masks.items()[m], true)
+            }
+        }
+        var radii = SQUARE
+        if round {
+            radii = d.radii
+        }
+        try b.add(Item.EndLayer { r: d.r, radii: radii })
+    }
+}
+
+fn isNone(c: css.Comp) bool {
+    return c.toks.len == 1 && c.toks[0].kind == css.Tok.Ident && text.eqlIgnoreCase(c.toks[0].text, "none")
+}
+
+// The `k`-th entry of the list property `p` (repeated when the list is
+// shorter than the layers).
+fn entry(b: *mut Builder, style: []Value, p: usize, k: usize) AllocError![]css.Comp {
+    var list = List([]css.Comp).init(b.t.alloc)
+    try css.readLayers(b.t.alloc, style[p], &mut list)
+    if list.len() == 0 {
+        return []css.Comp{}
+    }
+    return list.items()[k % list.len()]
+}
+
+// Image layer `k` (`layer`, its components) of the background (of the
+// mask when `mask`).
+fn imageLayer(b: *mut Builder, d: *Deco, k: usize, layer: []css.Comp, mask: bool) AllocError!void {
+    if layer.len == 0 || isNone(layer[0]) {
+        return
+    }
+    let style = d.style
+    var pos_p = css.BACKGROUND_POSITION
+    var size_p = css.BACKGROUND_SIZE
+    var rep_p = css.BACKGROUND_REPEAT
+    if mask {
+        pos_p = css.MASK_POSITION
+        size_p = css.MASK_SIZE
+        rep_p = css.MASK_REPEAT
+    }
+    var origin: u8 = 1
+    var clip: u8 = 0
+    var fixed = false
+    if !mask {
+        origin = css.readBox(try entry(b, style, css.BACKGROUND_ORIGIN, k), 1)
+        clip = css.readBox(try entry(b, style, css.BACKGROUND_CLIP, k), 0)
+        let att = try entry(b, style, css.BACKGROUND_ATTACHMENT, k)
+        fixed = att.len > 0 && att[0].toks.len == 1 && text.eqlIgnoreCase(att[0].toks[0].text, "fixed")
+    } else {
+        origin = 0
+    }
+    if clip == 3 {
+        // `text`: not supported.
+        return
+    }
+    if origin > 2 {
+        origin = 1
+    }
+    var area = d.boxRect(origin)
+    if fixed {
+        area = Rect { x: 0.0, y: 0.0, w: b.t.viewport_w, h: b.t.viewport_h }
+    }
+    let clip_rect = d.boxRect(clip)
+    if area.w <= 0.0 || area.h <= 0.0 || clip_rect.w <= 0.0 || clip_rect.h <= 0.0 {
+        return
+    }
+    // The image and its natural size and ratio (0: none).
+    var iw = 0.0
+    var ih = 0.0
+    var ratio = 0.0
+    var bitmap: ?*image.Bitmap = null
+    var picture: ?*svg.Picture = null
+    var grad: ?css.Gradient = null
+    if css.imageUrl(layer[0]) |u| {
+        let imgs = b.t.images orelse return
+        let bmp = imgs.urlBitmap(u) orelse return
+        if imgs.urlPicture(u) |pic| {
+            picture = pic
+            // Its `width` and `height`, else the ratio of its viewBox.
+            iw = pic.width
+            ih = pic.height
+            if iw > 0.0 && ih > 0.0 {
+                ratio = iw / ih
+            } else if pic.view |vb| {
+                ratio = vb.w / vb.h
+            }
+        } else {
+            if bmp.width == 0 || bmp.height == 0 {
+                return
+            }
+            bitmap = bmp
+            iw = bmp.width as f64
+            ih = bmp.height as f64
+            ratio = iw / ih
+        }
+    } else {
+        grad = try css.readGradient(b.t.alloc, layer[0])
+        if grad == null {
+            return
+        }
+    }
+    let size = css.readSize(try entry(b, style, size_p, k))
+    let reps = css.readRepeat(try entry(b, style, rep_p, k))
+    var tw = 0.0
+    var th = 0.0
+    tileSize(size, area.w, area.h, iw, ih, ratio, &mut tw, &mut th)
+    if reps[0] == css.ROUND && tw > 0.0 {
+        let n = math.max(1.0, math.round(area.w / tw))
+        let nw = area.w / n
+        if reps[1] != css.ROUND && size.h == null && ratio > 0.0 {
+            th = th * nw / tw
+        }
+        tw = nw
+    }
+    if reps[1] == css.ROUND && th > 0.0 {
+        let n = math.max(1.0, math.round(area.h / th))
+        let nh = area.h / n
+        if reps[0] != css.ROUND && size.w == null && ratio > 0.0 {
+            tw = tw * nh / th
+        }
+        th = nh
+    }
+    if tw <= 0.0 || th <= 0.0 || !finite(tw) || !finite(th) {
+        return
+    }
+    let pos = css.readPosition(try entry(b, style, pos_p, k))
+    var tx = area.x + pos.x.px + pos.x.pct * (area.w - tw) / 100.0
+    var ty = area.y + pos.y.px + pos.y.pct * (area.h - th) / 100.0
+    var sx = tw
+    var sy = th
+    var rx = reps[0] != css.NO_REPEAT
+    var ry = reps[1] != css.NO_REPEAT
+    if reps[0] == css.SPACE {
+        let n = math.floor(area.w / tw)
+        if n >= 2.0 {
+            sx = tw + (area.w - n * tw) / (n - 1.0)
+            tx = area.x
+        } else {
+            rx = false
+        }
+    }
+    if reps[1] == css.SPACE {
+        let n = math.floor(area.h / th)
+        if n >= 2.0 {
+            sy = th + (area.h - n * th) / (n - 1.0)
+            ty = area.y
+        } else {
+            ry = false
+        }
+    }
+    let src = (try sourceOf(b.t.alloc, bitmap, picture, grad, tw, th, d.color)) orelse return
+    b.extend(clip_rect.x + clip_rect.w, clip_rect.y + clip_rect.h)
+    try b.add(Item.Tiles { clip: clip_rect, tile: Rect { x: tx, y: ty, w: tw, h: th }, sx: sx, sy: sy, rx: rx, ry: ry, src: src })
+}
+
+// What a layer draws: a bitmap, a picture, or the gradient `grad` sized
+// for a tile `tw` x `th`.
+fn sourceOf(alloc: Allocator, bitmap: ?*image.Bitmap, picture: ?*svg.Picture, grad: ?css.Gradient, tw: f64, th: f64, current: Rgba) AllocError!?Source {
+    if bitmap |bmp| {
+        return Source.Bitmap { w: bmp.width, h: bmp.height, pixels: bmp.pixels }
+    }
+    if picture |pic| {
+        return Source.Picture { pic: pic }
+    }
+    let g = grad orelse return null
+    let sg = (try sizedGradient(alloc, g, tw, th, current)) orelse return null
+    return Source.Gradient { g: sg }
+}
+
+fn finite(v: f64) bool {
+    return !math.isNan(v) && !math.isInf(v)
+}
+
+// The size of a tile (`background-size` `s`) in a positioning area `aw`
+// x `ah`, for an image whose natural size is `iw` x `ih` and ratio `ratio`
+// (0: none).
+fn tileSize(s: css.BgSize, aw: f64, ah: f64, iw: f64, ih: f64, ratio: f64, tw: *mut f64, th: *mut f64) {
+    if s.kind != 0 || (s.w == null && s.h == null && (iw <= 0.0 || ih <= 0.0) && ratio > 0.0 && iw <= 0.0 && ih <= 0.0) {
+        // `cover`, `contain`, or `auto` for an image with only a ratio
+        // (contained).
+        if ratio <= 0.0 {
+            tw.* = aw
+            th.* = ah
+            return
+        }
+        var w = aw
+        var h = aw / ratio
+        if (s.kind != 1 && h > ah) || (s.kind == 1 && h < ah) {
+            h = ah
+            w = ah * ratio
+        }
+        tw.* = w
+        th.* = h
+        return
+    }
+    if s.w |sw| {
+        tw.* = sw.of(aw)
+        if s.h |sh| {
+            th.* = sh.of(ah)
+        } else if ratio > 0.0 {
+            th.* = tw.* / ratio
+        } else if ih > 0.0 {
+            th.* = ih
+        } else {
+            th.* = ah
+        }
+        return
+    }
+    if s.h |sh| {
+        th.* = sh.of(ah)
+        if ratio > 0.0 {
+            tw.* = th.* * ratio
+        } else if iw > 0.0 {
+            tw.* = iw
+        } else {
+            tw.* = aw
+        }
+        return
+    }
+    if iw > 0.0 && ih > 0.0 {
+        tw.* = iw
+        th.* = ih
+    } else if iw > 0.0 && ratio > 0.0 {
+        tw.* = iw
+        th.* = iw / ratio
+    } else if ih > 0.0 && ratio > 0.0 {
+        th.* = ih
+        tw.* = ih * ratio
+    } else {
+        tw.* = aw
+        th.* = ah
+    }
+}
+
+// The CSS gradient `g` for a tile `w` x `h` (its coordinates from the
+// tile's top left), `currentColor` being `current`; null when it paints
+// nothing.
+fn sizedGradient(alloc: Allocator, g: css.Gradient, w: f64, h: f64, current: Rgba) AllocError!?*svg.Gradient {
+    var sg = svg.Gradient {
+        kind: svg.LINEAR,
+        spread: svg.PAD,
+        m: svg.IDENTITY,
+        x1: 0.0,
+        y1: 0.0,
+        x2: 0.0,
+        y2: 0.0,
+        cx: 0.0,
+        cy: 0.0,
+        r: 1.0,
+        fx: 0.0,
+        fy: 0.0,
+        a0: 0.0,
+        t0: 0.0,
+        t1: 1.0,
+        stops: []svg.GradStop{},
+    }
+    // The length that stop positions in px are a part of.
+    var len = 0.0
+    if g.kind == 0 {
+        var dx = 0.0
+        var dy = 0.0
+        if g.corner {
+            let n = math.hypot(h, w)
+            if n <= 0.0 {
+                return null
+            }
+            dx = g.cx * h / n
+            dy = g.cy * w / n
+        } else {
+            let a = g.angle * math.pi / 180.0
+            dx = math.sin(a)
+            dy = -math.cos(a)
+        }
+        len = math.abs(w * dx) + math.abs(h * dy)
+        sg.x1 = w / 2.0 - dx * len / 2.0
+        sg.y1 = h / 2.0 - dy * len / 2.0
+        sg.x2 = w / 2.0 + dx * len / 2.0
+        sg.y2 = h / 2.0 + dy * len / 2.0
+    } else {
+        let cx = g.at.x.of(w)
+        let cy = g.at.y.of(h)
+        if g.kind == 2 {
+            sg.kind = svg.CONIC
+            sg.cx = cx
+            sg.cy = cy
+            sg.a0 = g.from * math.pi / 180.0
+            len = 1.0
+        } else {
+            var rx = 0.0
+            var ry = 0.0
+            radialSize(g, cx, cy, w, h, &mut rx, &mut ry)
+            if rx <= 0.0 || ry <= 0.0 {
+                return null
+            }
+            sg.kind = svg.RADIAL
+            sg.m = svg.mul(svg.translate(cx, cy), svg.scaling(rx, ry))
+            len = rx
+        }
+    }
+    if len <= 0.0 && g.kind == 0 {
+        return null
+    }
+    // The stops: positions as parts of the line, missing ones spread
+    // between their neighbours, none before the one before it.
+    let stops = g.stops.items()
+    let n = stops.len
+    let out = try alloc.alloc(svg.GradStop { t: 0.0, c: svg.Color { r: 0, g: 0, b: 0, a: 0 } }, n)
+    let known = try alloc.alloc(false, n)
+    var top = -1000000.0
+    for i in 0..n {
+        out[i].c = stopColor(stops[i].color, current)
+        if stops[i].pos |p| {
+            var t = p.pct / 100.0
+            if g.kind != 2 && len > 0.0 {
+                t = (p.px + p.pct * len / 100.0) / len
+            }
+            top = math.max(top, t)
+            out[i].t = top
+            known[i] = true
+        } else if i == 0 {
+            out[i].t = 0.0
+            top = math.max(top, 0.0)
+            known[i] = true
+        } else if i == n - 1 {
+            out[i].t = math.max(top, 1.0)
+            known[i] = true
+        }
+    }
+    var i: usize = 0
+    while i < n {
+        if known[i] {
+            i += 1
+            continue
+        }
+        var j = i
+        while j < n && !known[j] {
+            j += 1
+        }
+        let from = out[i - 1].t
+        let to = out[math.minOf(usize, j, n - 1)].t
+        for k in i..j {
+            out[k].t = from + (to - from) * (k - i + 1) as f64 / (j - i + 1) as f64
+        }
+        i = j
+    }
+    if g.repeating {
+        sg.spread = svg.REPEAT
+        sg.t0 = out[0].t
+        sg.t1 = out[n - 1].t
+        if sg.t1 > sg.t0 {
+            for k in 0..n {
+                out[k].t = (out[k].t - sg.t0) / (sg.t1 - sg.t0)
+            }
+        }
+    }
+    sg.stops = out
+    return try alloc.create(sg)
+}
+
+// The radii of a radial gradient around (`cx`, `cy`) in a box `w` x `h`.
+fn radialSize(g: css.Gradient, cx: f64, cy: f64, w: f64, h: f64, rx: *mut f64, ry: *mut f64) {
+    let near_x = math.min(math.abs(cx), math.abs(w - cx))
+    let far_x = math.max(math.abs(cx), math.abs(w - cx))
+    let near_y = math.min(math.abs(cy), math.abs(h - cy))
+    let far_y = math.max(math.abs(cy), math.abs(h - cy))
+    if g.extent == 4 {
+        rx.* = g.rx.of(w)
+        ry.* = g.ry.of(h)
+        if g.circle {
+            ry.* = rx.*
+        }
+        return
+    }
+    if g.circle {
+        var r = 0.0
+        if g.extent == 1 {
+            r = math.min(near_x, near_y)
+        } else if g.extent == 3 {
+            r = math.max(far_x, far_y)
+        } else if g.extent == 2 {
+            r = math.hypot(near_x, near_y)
+        } else {
+            r = math.hypot(far_x, far_y)
+        }
+        rx.* = r
+        ry.* = r
+        return
+    }
+    var sx = far_x
+    var sy = far_y
+    if g.extent == 1 || g.extent == 2 {
+        sx = near_x
+        sy = near_y
+    }
+    if g.extent == 0 || g.extent == 2 {
+        // Through the corner, with the ratio of the sides.
+        sx = sx * math.sqrt(2.0)
+        sy = sy * math.sqrt(2.0)
+    }
+    rx.* = sx
+    ry.* = sy
+}
+
+fn stopColor(v: Value, current: Rgba) svg.Color {
+    let c = colorOf(v, current)
+    return svg.Color { r: c.r, g: c.g, b: c.b, a: c.a }
+}
+
+// ---- rounded fills and borders
+
+// A rounded box `r` filled with `c`.
+fn roundFill(b: *mut Builder, r: Rect, radii: Radii, c: Rgba) AllocError!void {
+    if r.w <= 0.0 || r.h <= 0.0 || c.a == 0 {
+        return
+    }
+    let pic = try svg.newPicture(b.t.alloc)
+    try svg.addRoundBox(pic, 0.0, 0.0, r.w, r.h, radii.v, svg.Color { r: c.r, g: c.g, b: c.b, a: c.a }, false, 0.0, 0.0, 0.0, 0.0, SQUARE.v)
+    b.extend(r.x + r.w, r.y + r.h)
+    try b.add(Item.Svg { r: r, pic: pic })
+}
+
+// The borders of a rounded box: a ring between the border box and the
+// padding box, in the color of the first side that has a border.
+fn roundBorders(b: *mut Builder, d: *Deco) AllocError!void {
+    let bw = d.border
+    if bw[0] <= 0.0 && bw[1] <= 0.0 && bw[2] <= 0.0 && bw[3] <= 0.0 {
+        return
+    }
+    var color = Rgba { r: 0, g: 0, b: 0, a: 0 }
+    for side in 0..4 {
+        let kind = layout.keywordOf(d.style[css.BORDER_TOP_STYLE + side])
+        if bw[side] > 0.0 && !text.eql(kind, "none") && !text.eql(kind, "hidden") {
+            color = colorOf(d.style[css.BORDER_TOP_COLOR + side], d.color)
+            break
+        }
+    }
+    if color.a == 0 {
+        return
+    }
+    let r = d.r
+    let inner = d.boxRect(1)
+    let pic = try svg.newPicture(b.t.alloc)
+    try svg.addRoundBox(pic, 0.0, 0.0, r.w, r.h, d.radii.v, svg.Color { r: color.r, g: color.g, b: color.b, a: color.a }, true, inner.x - r.x, inner.y - r.y, inner.w, inner.h, d.boxRadii(1).v)
+    try b.add(Item.Svg { r: r, pic: pic })
+}
+
+// ---- shadows
+
+// The outer shadows of the box (its inset ones when `inset`), the last
+// one first.
+fn shadows(b: *mut Builder, d: *Deco, inset: bool) AllocError!void {
+    let v = d.style[css.BOX_SHADOW]
+    if layout.isKeyword(v, "none") {
+        return
+    }
+    var list = List([]css.Comp).init(b.t.alloc)
+    try css.readLayers(b.t.alloc, v, &mut list)
+    var k = list.len()
+    while k > 0 {
+        k -= 1
+        let s = css.readShadow(list.items()[k]) orelse continue
+        if s.inset != inset {
+            continue
+        }
+        let c = colorOf(s.color, d.color)
+        if c.a == 0 {
+            continue
+        }
+        var box = d.r
+        var radii = d.radii
+        if inset {
+            box = d.boxRect(1)
+            radii = d.boxRadii(1)
+        } else {
+            let reach = s.blur * 1.5 + math.max(0.0, s.spread)
+            b.extend(box.x + box.w + math.max(0.0, s.x) + reach, box.y + box.h + math.max(0.0, s.y) + reach)
+        }
+        try b.add(Item.Shadow { r: box, radii: radii, dx: s.x, dy: s.y, blur: s.blur, spread: s.spread, c: c, inset: inset })
+    }
+}
+
+/// Draws a shadow (an `Item.Shadow`) onto `canvas` with view `v`.
+fn drawShadow(canvas: *mut Canvas, v: View, r: Rect, radii: Radii, dx: f64, dy: f64, blur: f64, spread: f64, c: Rgba, inset: bool) AllocError!void {
+    let k = v.scale
+    let sigma = blur / 2.0 * k
+    let reach = math.ceil(sigma * 3.0)
+    // The box in device px, and the shape whose blurred coverage is the
+    // shadow: the box moved and grown by the spread (the outside of the
+    // box moved and shrunk by it, for an inset one).
+    let bx = r.x * k + v.dx
+    let by = r.y * k + v.dy
+    let bw = r.w * k
+    let bh = r.h * k
+    var s = spread * k
+    if inset {
+        s = -s
+    }
+    let sx = bx + dx * k - s
+    let sy = by + dy * k - s
+    let sw = bw + 2.0 * s
+    let sh = bh + 2.0 * s
+    // The region of pixels touched.
+    var x0 = math.floor(sx - reach) as i64
+    var y0 = math.floor(sy - reach) as i64
+    var x1 = math.ceil(sx + sw + reach) as i64
+    var y1 = math.ceil(sy + sh + reach) as i64
+    if inset {
+        x0 = math.floor(bx) as i64
+        y0 = math.floor(by) as i64
+        x1 = math.ceil(bx + bw) as i64
+        y1 = math.ceil(by + bh) as i64
+    }
+    // What can show: the clip, with room for the blur.
+    let room = reach as i64
+    x0 = math.maxOf(i64, x0, canvas.clip.x0 - room)
+    y0 = math.maxOf(i64, y0, canvas.clip.y0 - room)
+    x1 = math.minOf(i64, x1, canvas.clip.x1 + room)
+    y1 = math.minOf(i64, y1, canvas.clip.y1 + room)
+    if x1 <= x0 || y1 <= y0 || (x1 - x0) * (y1 - y0) > 16000000 {
+        return
+    }
+    let w = (x1 - x0) as usize
+    let h = (y1 - y0) as usize
+    let shape = try coverage(canvas.alloc, x0, y0, w, h, sx, sy, sw, sh, scaledRadii(spreadRadii(radii, spread), k))
+    defer canvas.alloc.free(shape)
+    if inset {
+        for i in 0..shape.len {
+            shape[i] = 255 - shape[i]
+        }
+    }
+    if sigma > 0.5 {
+        try boxBlur3(canvas.alloc, shape, w, h, sigma)
+    }
+    // Only outside the box (inside it, for an inset one).
+    let box = try coverage(canvas.alloc, x0, y0, w, h, bx, by, bw, bh, scaledRadii(radii, k))
+    defer canvas.alloc.free(box)
+    for i in 0..shape.len {
+        var keep = box[i] as u32
+        if !inset {
+            keep = 255 - keep
+        }
+        shape[i] = ((shape[i] as u32 * keep + 127) / 255) as u8
+    }
+    canvas.blitMask(x0, y0, w, h, shape, w, c)
+}
+
+// The coverage (0 to 255) of the rounded box at (`x`, `y`), `w` x `h`
+// (device px, corners `radii`) over the pixels `x0..x0 + pw`,
+// `y0..y0 + ph`, one byte each.
+fn coverage(alloc: Allocator, x0: i64, y0: i64, pw: usize, ph: usize, x: f64, y: f64, w: f64, h: f64, radii: Radii) AllocError![]mut u8 {
+    let out = try alloc.alloc(0 as u8, pw * ph)
+    if w <= 0.0 || h <= 0.0 {
+        return out
+    }
+    let rgba = try alloc.alloc(0 as u8, pw * ph * 4)
+    defer alloc.free(rgba)
+    let pic = try svg.newPicture(alloc)
+    defer alloc.destroy(pic)
+    defer pic.deinit()
+    try svg.addRoundBox(pic, 0.0, 0.0, w, h, radii.v, svg.Color { r: 255, g: 255, b: 255, a: 255 }, false, 0.0, 0.0, 0.0, 0.0, SQUARE.v)
+    let t = svg.Target { pixels: rgba, width: pw, ox: x0, oy: y0, x0: x0, y0: y0, x1: x0 + pw as i64, y1: y0 + ph as i64 }
+    // Unclipped by the box: the picture is placed at (x, y) as is.
+    try svg.render(alloc, pic, t, x, y, math.max(w, 1.0) + 2.0 * pw as f64, math.max(h, 1.0) + 2.0 * ph as f64, 1.0)
+    for i in 0..pw * ph {
+        out[i] = rgba[4 * i + 3]
+    }
+    return out
+}
+
+// Blurs the `w` x `h` alpha bytes `a` by three box blurs, which together
+// are close to a Gaussian blur of `sigma` px.
+pub fn boxBlur3(alloc: Allocator, a: []mut u8, w: usize, h: usize, sigma: f64) AllocError!void {
+    let size = math.sqrt(4.0 * sigma * sigma + 1.0)
+    let radius = math.maxOf(usize, 1, math.floor(size / 2.0) as usize)
+    let tmp = try alloc.alloc(0 as u8, math.maxOf(usize, w, h))
+    defer alloc.free(tmp)
+    for pass in 0..3 {
+        for y in 0..h {
+            blurLine(a, y * w, 1, w, radius, tmp)
+        }
+        for x in 0..w {
+            blurLine(a, x, w, h, radius, tmp)
+        }
+    }
+}
+
+// A box blur of `n` bytes of `a`, from `start`, `step` apart.
+fn blurLine(a: []mut u8, start: usize, step: usize, n: usize, radius: usize, tmp: []mut u8) {
+    for i in 0..n {
+        tmp[i] = a[start + i * step]
+    }
+    let width = 2 * radius + 1
+    var sum: u32 = 0
+    // The window around pixel 0 (outside the line is 0).
+    for i in 0..math.minOf(usize, radius + 1, n) {
+        sum += tmp[i] as u32
+    }
+    for i in 0..n {
+        a[start + i * step] = ((sum + width as u32 / 2) / width as u32) as u8
+        let add = i + radius + 1
+        if add < n {
+            sum += tmp[add] as u32
+        }
+        if i >= radius {
+            sum -= tmp[i - radius] as u32
+        }
+    }
+}
+
+// ---- drawing tiles and layers
+
+/// Draws an `Item.Tiles` onto `canvas` with view `v`.
+fn drawTiles(canvas: *mut Canvas, v: View, clip: Rect, tile: Rect, sx: f64, sy: f64, rx: bool, ry: bool, src: Source) AllocError!void {
+    if tile.w <= 0.0 || tile.h <= 0.0 || sx <= 0.0 || sy <= 0.0 {
+        return
+    }
+    try canvas.pushClip(deviceRect(clip, v))
+    defer canvas.popClip()
+    let k = canvas.clip
+    if k.x1 <= k.x0 || k.y1 <= k.y0 {
+        return
+    }
+    // The tiles over the clip (in CSS px).
+    let left = (k.x0 as f64 - v.dx) / v.scale
+    let right = (k.x1 as f64 - v.dx) / v.scale
+    let top = (k.y0 as f64 - v.dy) / v.scale
+    let bottom = (k.y1 as f64 - v.dy) / v.scale
+    var i0 = 0.0
+    var i1 = 1.0
+    var j0 = 0.0
+    var j1 = 1.0
+    if rx {
+        i0 = math.floor((left - tile.x) / sx)
+        i1 = math.ceil((right - tile.x) / sx)
+    }
+    if ry {
+        j0 = math.floor((top - tile.y) / sy)
+        j1 = math.ceil((bottom - tile.y) / sy)
+    }
+    if (i1 - i0) * (j1 - j0) > 250000.0 {
+        return
+    }
+    let t = svg.Target { pixels: canvas.pixels, width: canvas.width, ox: 0, oy: 0, x0: k.x0, y0: k.y0, x1: k.x1, y1: k.y1 }
+    var j = j0
+    while j < j1 {
+        var i = i0
+        while i < i1 {
+            let r = Rect { x: tile.x + i * sx, y: tile.y + j * sy, w: tile.w, h: tile.h }
+            let d = deviceRect(r, v)
+            i += 1.0
+            if d.x1 <= k.x0 || d.x0 >= k.x1 || d.y1 <= k.y0 || d.y0 >= k.y1 || d.x1 <= d.x0 || d.y1 <= d.y0 {
+                continue
+            }
+            match src {
+                .Bitmap { w, h, pixels } => canvas.drawImage(d, w, h, pixels)
+                .Picture { pic } => {
+                    try svg.render(canvas.alloc, pic, t, d.x0 as f64, d.y0 as f64, (d.x1 - d.x0) as f64, (d.y1 - d.y0) as f64, v.scale)
+                }
+                .Gradient { g } => {
+                    let m = svg.mul(svg.Matrix { a: v.scale, b: 0.0, c: 0.0, d: v.scale, e: r.x * v.scale + v.dx, f: r.y * v.scale + v.dy }, g.m)
+                    svg.fillGradient(t, d.x0, d.y0, d.x1, d.y1, g, m)
+                }
+            }
+        }
+        j += 1.0
+    }
+}
+
+/// A layer being drawn (between `Item.Layer` and `Item.EndLayer`).
+struct Frame {
+    // The canvas below and its view.
+    outer: *mut Canvas
+    outer_view: View
+    layer: *mut Canvas
+    mask: ?*mut Canvas
+    // Where the layer's top left pixel is on the canvas below.
+    x0: i64
+    y0: i64
+}
+
+// A new layer over `r` (inside the clip of `outer`).
+fn beginLayer(frames: *mut List(Frame), outer: *mut Canvas, v: View, r: Rect) AllocError!void {
+    let d = intersect(deviceRect(r, v), outer.clip)
+    var w: usize = 0
+    var h: usize = 0
+    if d.x1 > d.x0 && d.y1 > d.y0 {
+        w = (d.x1 - d.x0) as usize
+        h = (d.y1 - d.y0) as usize
+    }
+    let layer = try newLayer(outer.alloc, w, h)
+    frames.append(Frame { outer: outer, outer_view: v, layer: layer, mask: null, x0: d.x0, y0: d.y0 }) catch |e| {
+        dropCanvas(outer.alloc, layer)
+        return e
+    }
+}
+
+fn newLayer(alloc: Allocator, w: usize, h: usize) AllocError!*mut Canvas {
+    var c = try Canvas.init(alloc, w, h)
+    c.clear(Rgba { r: 0, g: 0, b: 0, a: 0 })
+    return alloc.create(c) catch |e| {
+        c.deinit()
+        return e
+    }
+}
+
+fn dropCanvas(alloc: Allocator, c: *mut Canvas) {
+    c.deinit()
+    alloc.destroy(c)
+}
+
+// The layers left after an error, and the list.
+fn dropFrames(frames: *mut List(Frame)) {
+    for f in frames.items() {
+        dropFrame(f)
+    }
+    frames.deinit()
+}
+
+fn dropFrame(f: Frame) {
+    let alloc = f.outer.alloc
+    dropCanvas(alloc, f.layer)
+    if f.mask |m| {
+        dropCanvas(alloc, m)
+    }
+}
+
+// The view of drawing into frame `f`'s layer.
+fn layerView(f: Frame) View {
+    return View { scale: f.outer_view.scale, dx: f.outer_view.dx - f.x0 as f64, dy: f.outer_view.dy - f.y0 as f64 }
+}
+
+// From now on the top frame's drawing goes into its mask; the canvas
+// to draw on (null without a frame).
+fn beginMask(frames: *mut List(Frame)) AllocError!?*mut Canvas {
+    if frames.len() == 0 {
+        return null
+    }
+    let f = &mut frames.items()[frames.len() - 1]
+    if f.mask |m| {
+        return m
+    }
+    let m = try newLayer(f.layer.alloc, f.layer.width, f.layer.height)
+    f.mask = m
+    return m
+}
+
+// Blends frame `f`'s layer onto the canvas below, through its mask's
+// alpha and the box `r` with corners `radii`.
+fn endLayer(f: Frame, r: Rect, radii: Radii) AllocError!void {
+    let layer = f.layer
+    let w = layer.width
+    let h = layer.height
+    if w == 0 || h == 0 {
+        return
+    }
+    var round: ?[]mut u8 = null
+    if isRound(radii) {
+        let v = f.outer_view
+        round = try coverage(layer.alloc, f.x0, f.y0, w, h, r.x * v.scale + v.dx, r.y * v.scale + v.dy, r.w * v.scale, r.h * v.scale, scaledRadii(radii, v.scale))
+    }
+    defer if round |rc| {
+        layer.alloc.free(rc)
+    }
+    let out = f.outer
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) * 4
+            var k: u32 = 255
+            if f.mask |m| {
+                k = m.pixels[i + 3] as u32
+            }
+            if round |rc| {
+                k = (k * rc[y * w + x] as u32 + 127) / 255
+            }
+            let a = (layer.pixels[i + 3] as u32 * k + 127) / 255
+            if a == 0 {
+                continue
+            }
+            let j = ((f.y0 as usize + y) * out.width + f.x0 as usize + x) * 4
+            let rest = 255 - a
+            for ch in 0..3 {
+                let src = (layer.pixels[i + ch] as u32 * k + 127) / 255
+                out.pixels[j + ch] = ((src * 255 + out.pixels[j + ch] as u32 * rest + 127) / 255) as u8
+            }
+            out.pixels[j + 3] = (a + (out.pixels[j + 3] as u32 * rest + 127) / 255) as u8
+        }
+    }
+}

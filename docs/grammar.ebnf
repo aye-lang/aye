@@ -1,4 +1,4 @@
-(* Ore stage0 grammar: the subset implemented by the stage0 compiler.
+(* Aye stage0 grammar: the subset implemented by the stage0 compiler.
    This is the starting point of the P0 formal grammar.
 
    Notation: ISO-style EBNF.  { x } = zero or more, [ x ] = optional,
@@ -72,7 +72,7 @@ fn_decl     = [ "pub" ] "fn" ident "(" [ params ] ")" [ ret_type ] [ where ] blo
 extern_fn   = [ "pub" ] "extern" [ "(" string ")" ] "fn" ident "(" [ params [ "," "..." ] ] ")" [ type ]
             | "pub" "extern" "fn" ident "(" [ params ] ")" [ type ] block ;
                (* without a body: a C function, variadic with "..." after at
-                  least one parameter; with a body: an Ore function exported
+                  least one parameter; with a body: an Aye function exported
                   to C under its own name; ("name") is the C link name *)
 ret_type    = type
             | [ path ] "!" ( type | "void" ) ;   (* error union E!T; !T infers the set

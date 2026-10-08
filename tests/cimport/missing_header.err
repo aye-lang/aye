@@ -1,1 +1,1 @@
-tests/cimport/missing_header.ore:3:9: error[E0113]: C header `no/such_header.h` not found: it is looked for next to the source file, then on the include path (add a directory with "-Idir", or `@link` the library so that its `pkg-config --cflags` are used)
+tests/cimport/missing_header.aye:3:9: error[E0113]: C header `no/such_header.h` not found: it is looked for next to the source file, then on the include path (add a directory with "-Idir", or `@link` the library so that its `pkg-config --cflags` are used)

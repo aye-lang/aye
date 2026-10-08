@@ -1,0 +1,148 @@
+// std.http (O1.4): parse requests from byte buffers and write a response.
+// A simple GET, two pipelined requests, a chunked body, a malformed
+// request line, the size limits, a partial request, and a response.
+
+import std.heap.General
+import std.http
+import std.http.Header
+import std.http.Limits
+import std.http.ParseError
+import std.http.Response
+import std.mem.Allocator
+import std.text.Builder
+
+fn show(alloc: Allocator, label: []u8, buf: []u8, limits: Limits) {
+    if http.parse(alloc, buf, limits) |p| {
+        var req = p.request
+        defer req.deinit()
+        @print(label)
+        @print(": ")
+        @print(req.method)
+        @print(" ")
+        @print(req.target)
+        @print(" HTTP/1.")
+        @print(req.minor)
+        @print(" consumed ")
+        @print(p.consumed)
+        @print(" of ")
+        @print(buf.len)
+        @println()
+        @print("  headers ")
+        @print(req.headers.len())
+        @print(", body ")
+        @print(req.body.len)
+        @print(" bytes: [")
+        @print(req.body)
+        @print("]")
+        @println()
+    } else |e| {
+        @print(label)
+        @print(": error ")
+        @print(@tagName(e))
+        @print(" -> ")
+        @print(http.errorStatus(e))
+        @println()
+    }
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    let big = http.defaultLimits()
+
+    // A simple GET; header lookup ignores case.
+    let get = "GET /index.html?a=1 HTTP/1.1\r\nHost: example.com\r\nuser-AGENT:  aye \r\n\r\n"
+    show(alloc, "get", get, big)
+    if http.parse(alloc, get, big) |p| {
+        var req = p.request
+        defer req.deinit()
+        @print("host=")
+        @print(req.header("HOST").?)
+        @print(" agent=[")
+        @print(req.header("User-Agent").?)
+        @print("] accept=")
+        @print(req.header("Accept") == null)
+        @print(" keepalive=")
+        @print(req.keepAlive())
+        @println()
+    } else |e| {
+        @print("unexpected ")
+        @print(@tagName(e))
+        @println()
+    }
+
+    // Two requests in one buffer: parse, then parse the rest.
+    let two = "POST /a HTTP/1.1\r\nContent-Length: 5\r\n\r\nhelloGET /b HTTP/1.0\r\nConnection: keep-alive\r\n\r\n"
+    show(alloc, "first", two, big)
+    if http.parse(alloc, two, big) |p| {
+        show(alloc, "second", two[p.consumed..], big)
+        var req = p.request
+        req.deinit()
+    } else |e| {
+        @print("unexpected ")
+        @print(@tagName(e))
+        @println()
+    }
+
+    // A chunked body with an extension and a trailer.
+    let chunked = "POST /up HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5;x=1\r\nhello\r\n6\r\n world\r\n0\r\nX-Sum: 1\r\n\r\n"
+    show(alloc, "chunked", chunked, big)
+    // The same, cut short at every length: always Incomplete.
+    var n: usize = 0
+    var cuts: usize = 0
+    while n < chunked.len {
+        if http.parse(alloc, chunked[..n], big) |p| {
+            var req = p.request
+            req.deinit()
+        } else |e| {
+            if e == ParseError.Incomplete {
+                cuts += 1
+            }
+        }
+        n += 1
+    }
+    @print("incomplete prefixes: ")
+    @print(cuts)
+    @print(" of ")
+    @print(chunked.len)
+    @println()
+    show(alloc, "bad chunk", "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n", big)
+
+    // Malformed input.
+    show(alloc, "no version", "GET /\r\n\r\n", big)
+    show(alloc, "bad version", "GET / FTP/1.1\r\n\r\n", big)
+    show(alloc, "http/2", "GET / HTTP/2.0\r\n\r\n", big)
+    show(alloc, "bad method", "G(T / HTTP/1.1\r\n\r\n", big)
+    show(alloc, "bad header", "GET / HTTP/1.1\r\nno colon\r\n\r\n", big)
+    show(alloc, "both lengths", "POST / HTTP/1.1\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\nx", big)
+    show(alloc, "bad length", "POST / HTTP/1.1\r\nContent-Length: -1\r\n\r\n", big)
+
+    // Limits: each has its own tag.
+    let small = Limits { maxRequestLine: 16, maxHeaders: 40, maxBody: 8 }
+    show(alloc, "long line", "GET /aaaaaaaaaaaaaaaaaaaaaaaaaa HTTP/1.1\r\n\r\n", small)
+    show(alloc, "long line, no end", "GET /aaaaaaaaaaaaaaaaaaaaaaaaaa", small)
+    show(alloc, "big headers", "GET / HTTP/1.1\r\nA: 1\r\nB: 2\r\nC: 3333333333333333333333\r\nD: 4\r\n\r\n", small)
+    show(alloc, "big headers, no end", "GET / HTTP/1.1\r\nA: 1\r\nB: 2222222222222222222222222222222222222", small)
+    show(alloc, "big body", "POST / HTTP/1.1\r\nContent-Length: 9\r\n\r\n", small)
+    show(alloc, "big chunks", "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n4\r\nabcd\r\n0\r\n\r\n", small)
+    show(alloc, "ok at the limit", "POST / HTTP/1.1\r\nContent-Length: 8\r\n\r\n12345678", small)
+    show(alloc, "short body", "POST / HTTP/1.1\r\nContent-Length: 8\r\n\r\n1234", small)
+
+    // The response writer.
+    var out = Builder.init(alloc)
+    defer out.deinit()
+    let headers = [2]Header{
+        Header { name: "Content-Type", value: "text/plain" },
+        Header { name: "Cache-Control", value: "no-store" },
+    }
+    try http.writeResponse(&mut out, Response { status: 404, headers: headers[..], body: "nope" })
+    try http.writeResponse(&mut out, Response { status: 204, headers: []Header{}, body: "" })
+    @print(out.bytes())
+    @print("[")
+    @print(http.reason(431))
+    @print("] [")
+    @print(http.reason(299))
+    @print("]")
+    @println()
+}

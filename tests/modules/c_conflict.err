@@ -1,2 +1,2 @@
-c_conflict/other/other.ore:1:11: error[E0096]: C function `abs` is declared twice with different signatures: `fn(i32) i32` and `fn(i64) i64`
-c_conflict/other/other.ore:7:15: error[E0096]: C function `twice` is defined twice: each `pub extern fn` needs its own name
+c_conflict/other/other.aye:1:11: error[E0096]: C function `abs` is declared twice with different signatures: `fn(i32) i32` and `fn(i64) i64`
+c_conflict/other/other.aye:7:15: error[E0096]: C function `twice` is defined twice: each `pub extern fn` needs its own name

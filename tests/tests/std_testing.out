@@ -2,6 +2,6 @@ test "list" ... ok
 test "map and builder" ... ok
 test "same allocator as @testAllocator" ... ok
 test "a list that is not freed leaks" ... FAILED
-    std/list/list.ore:102:39: leak: 8 bytes allocated here were never freed
+    std/list/list.aye:102:39: leak: 8 bytes allocated here were never freed
 
 3 passed; 1 failed

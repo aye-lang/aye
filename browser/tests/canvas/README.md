@@ -1,7 +1,7 @@
 # Canvas 2D tests
 
-The implementation is in `engine/canvas_api.ore` and
-`engine/canvas_prelude.ore`. Bitmap ownership is in the page's image
+The implementation is in `engine/canvas_api.aye` and
+`engine/canvas_prelude.aye`. Bitmap ownership is in the page's image
 cache. SVG supplies path parsing, curve flattening, stroke polygons,
 antialiased coverage and geometric hit tests; paint supplies image
 sampling, blur and PNG encoding; font and TextPainter supply shaping,

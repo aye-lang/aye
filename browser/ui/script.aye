@@ -1,0 +1,263 @@
+// Scripted input for headless tests of the window: `--events "..."`
+// feeds events to the same handler as SDL's, one per space-separated
+// word, after the first frame:
+//
+//     key:NAME        a key, NAME a letter or return, escape, backspace,
+//                     delete, left, right, up, down, home, end, pageup,
+//                     pagedown, space, tab, [ or ]; prefixed by cmd+
+//                     and/or shift+ for modifiers ("key:cmd+f")
+//     text:STRING     typed text ("_" stands for a space)
+//     click:X,Y       a left click at a window point
+//     move:X,Y        the mouse moves there
+//     release:X,Y     release the left button (after a slider drag)
+//     wheel:N         the wheel turns N notches (negative: down)
+//     agents:N        no event: the words after it wait until agents
+//                     made N requests (`--agent-socket`, agents.aye)
+//
+// `--state` prints the tab's state when the window closes, and `--save
+// FILE.png` writes the last frame.
+
+import paint
+import std
+import std.mem.AllocError
+import std.text
+
+/// Builds the SDL event of one script word; null when it is not one.
+fn scriptEvent(word: []u8) ?SDL_Event {
+    var ev = @zeroed(SDL_Event)
+    if text.startsWith(word, "key:") {
+        var name = word[4..]
+        var mods: u16 = 0
+        while true {
+            if text.startsWith(name, "cmd+") {
+                mods = mods | KMOD_GUI
+                name = name[4..]
+            } else if text.startsWith(name, "shift+") {
+                mods = mods | KMOD_SHIFT
+                name = name[6..]
+            } else {
+                break
+            }
+        }
+        let sym = keySym(name) orelse return null
+        ev.kind = SDL_KEYDOWN
+        let ke = &mut ev.key
+        ke.keysym.sym = sym
+        ke.keysym.mods = mods
+        return ev
+    }
+    if text.startsWith(word, "text:") {
+        let s = word[5..]
+        if s.len > 31 {
+            return null
+        }
+        ev.kind = SDL_TEXTINPUT
+        let te = &mut ev.text
+        for i, c in s {
+            if c == '_' {
+                te.text[i] = ' '
+            } else {
+                te.text[i] = c
+            }
+        }
+        return ev
+    }
+    if text.startsWith(word, "click:") || text.startsWith(word, "move:") || text.startsWith(word, "release:") {
+        let colon = std.mem.indexOf(word, ':') orelse return null
+        var parts = text.split(word[colon + 1..], ",")
+        let xs = parts.next() orelse return null
+        let ys = parts.next() orelse return null
+        let x = text.parseInt(xs) catch |e| {
+            return null
+        }
+        let y = text.parseInt(ys) catch |e| {
+            return null
+        }
+        if text.startsWith(word, "click:") || text.startsWith(word, "release:") {
+            ev.kind = SDL_MOUSEBUTTONDOWN
+            if text.startsWith(word, "release:") {
+                ev.kind = SDL_MOUSEBUTTONUP
+            }
+            let be = &mut ev.button
+            be.button = SDL_BUTTON_LEFT
+            be.x = x as i32
+            be.y = y as i32
+        } else {
+            ev.kind = SDL_MOUSEMOTION
+            let me = &mut ev.motion
+            me.x = x as i32
+            me.y = y as i32
+        }
+        return ev
+    }
+    if text.startsWith(word, "wheel:") {
+        let n = text.parseInt(word[6..]) catch |e| {
+            return null
+        }
+        ev.kind = SDL_MOUSEWHEEL
+        let we = &mut ev.wheel
+        we.y = n as i32
+        we.precise_y = n as f32
+        return ev
+    }
+    return null
+}
+
+fn keySym(name: []u8) ?i32 {
+    if name.len == 1 {
+        return name[0] as i32
+    }
+    let names = [15][]u8{"return", "escape", "backspace", "delete", "left", "right", "up", "down", "home", "end", "pageup", "pagedown", "space", "enter", "tab"}
+    let syms = [15]i32{SDLK_RETURN, SDLK_ESCAPE, SDLK_BACKSPACE, SDLK_DELETE, SDLK_LEFT, SDLK_RIGHT, SDLK_UP, SDLK_DOWN, SDLK_HOME, SDLK_END, SDLK_PAGEUP, SDLK_PAGEDOWN, SDLK_SPACE, SDLK_KP_ENTER, SDLK_TAB}
+    for i, n in names {
+        if text.eql(n, name) {
+            return syms[i]
+        }
+    }
+    return null
+}
+
+/// Checks that every word of `script` is an event (or `agents:N`).
+fn validScript(script: []u8) bool {
+    var words = text.split(script, " ")
+    while words.next() |w| {
+        if w.len > 0 && scriptEvent(w) == null && agentsWait(w) == null {
+            return false
+        }
+    }
+    return true
+}
+
+// N of the word `agents:N`.
+fn agentsWait(word: []u8) ?u64 {
+    if !text.startsWith(word, "agents:") {
+        return null
+    }
+    let n = text.parseInt(word[7..]) catch |e| {
+        return null
+    }
+    if n < 0 {
+        return null
+    }
+    return n as u64
+}
+
+/// Feeds the scripted events left (`ui.rest`), up to an `agents:N`
+/// whose N requests the agents did not make yet.
+fn resumeScript(ui: *mut Ui) AllocError!void {
+    while ui.rest.len() > 0 {
+        let all = ui.rest.bytes()
+        var end: usize = 0
+        while end < all.len && all[end] != ' ' {
+            end += 1
+        }
+        var word = @zeroed([64]u8)
+        var n = end
+        if n > 64 {
+            n = 64
+        }
+        for i in 0..n {
+            word[i] = all[i]
+        }
+        let w = word[..n]
+        if agentsWait(w) |want| {
+            var served: u64 = 0
+            if ui.agents |a| {
+                served = a.served
+            }
+            if served < want {
+                return
+            }
+        }
+        // Drop the word before handling it (handling may resume again).
+        var next = end
+        while next < all.len && all[next] == ' ' {
+            next += 1
+        }
+        let rest = try ui.alloc.alloc(0 as u8, all.len - next)
+        defer ui.alloc.free(rest)
+        std.mem.copy(rest, all[next..])
+        ui.rest.clear()
+        try ui.rest.append(rest)
+        if scriptEvent(w) |ev| {
+            if ev.kind == SDL_TEXTINPUT {
+                // Typed text comes after the key down of its key.
+                ui.swallow = false
+            }
+            try ui.handle(&ev)
+        }
+    }
+}
+
+/// The tab's state, for `--state`: the URL, the scroll offset, the
+/// focus, the address bar, the find matches and the status line; with
+/// `--agent-socket`, the tabs, whether the agents are paused and what
+/// they did last; and when an element of the page has the focus, its
+/// name and value.
+fn writeState(ui: *mut Ui, out: *mut text.Builder) AllocError!void {
+    try out.append("url ")
+    try out.append(ui.tab.href())
+    try out.append("\nscroll ")
+    try out.appendInt(std.math.floor(ui.tab.scroll + 0.5) as i64)
+    try out.append("\nfocus ")
+    try out.append(match ui.focus {
+        .Page => "page"
+        .Address => "address"
+        .Find => "find"
+    })
+    try out.append("\naddress ")
+    try out.append(ui.address.bytes())
+    try out.append("\nhistory ")
+    try out.appendUint((ui.tab.history.current + 1) as u64)
+    try out.append(" of ")
+    try out.appendUint(ui.tab.history.len() as u64)
+    try out.append("\nmatches ")
+    try out.appendUint(ui.matches.len() as u64)
+    try out.append("\nstatus ")
+    try out.append(ui.hover.bytes())
+    try out.append("\n")
+    if ui.tab.page |p| {
+        if p.frames.len() > 0 {
+            // How far each frame's document is scrolled.
+            try out.append("frames")
+            for f in p.frames.items() {
+                try out.append(" ")
+                try out.appendInt(std.math.floor(f.scroll + 0.5) as i64)
+            }
+            try out.append("\n")
+            try out.append("frame_urls")
+            for f in p.frames.items() {
+                try out.append(" ")
+                try out.append(f.page.url.href)
+            }
+            try out.append("\n")
+        }
+    }
+    if ui.agents |a| {
+        // The window listens for agents: its tabs, and what the agents'
+        // chrome shows.
+        try out.append("tabs ")
+        try out.appendUint(ui.count as u64)
+        try out.append(", showing ")
+        try out.appendUint((ui.active + 1) as u64)
+        try out.append("\nagents ")
+        if a.paused {
+            try out.append("paused")
+        } else {
+            try out.append("active")
+        }
+        try out.append("\nactivity ")
+        try out.append(a.activity.bytes())
+        try out.append("\n")
+    }
+    try writeFocus(ui, out)
+}
+
+/// Writes the canvas as a PNG.
+fn saveCanvas(ui: *mut Ui, path: []u8) !void {
+    let png = try paint.encodePng(ui.alloc, ui.canvas.width, ui.canvas.height, ui.canvas.pixels)
+    defer ui.alloc.free(png)
+    let f = try std.fs.create(path)
+    defer f.close()
+    try f.write(png)
+}

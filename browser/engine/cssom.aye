@@ -1,0 +1,82 @@
+// The natives behind the prelude's CSSStyleSheet: a sheet whose rules a
+// script changes hands them to the document (`dom.ScriptSheets`), where
+// the style sheet loader (sheets.aye) takes them from. Each change makes
+// the styles out of date.
+
+import js
+import js.Args
+import js.Interp
+import js.JsError
+import js.Value
+import std.mem.AllocError
+
+fn installCssom(s: *mut Script, o: u32) JsError!void {
+    let it = &mut s.it
+    try defMethod(it, o, "sheetReset", 3, akSheetReset)
+    try defMethod(it, o, "sheetInsert", 3, akSheetInsert)
+    try defMethod(it, o, "sheetDelete", 2, akSheetDelete)
+    try defMethod(it, o, "sheetDisabled", 2, akSheetDisabled)
+}
+
+// The styles depend on the sheets: they are computed again.
+fn sheetsChanged(s: *mut Script) {
+    s.version += 1
+    s.style_version += 1
+    noteLayoutChangeAnywhere(s)
+}
+
+fn argIndex(it: *mut Interp, a: Args, i: usize) JsError!usize {
+    let n = try it.toNumber(it.arg(a, i))
+    if !(n >= 0.0) {
+        return 0
+    }
+    if n > 4294967295.0 {
+        return 4294967295
+    }
+    return n as usize
+}
+
+// sheetReset(id, owner element or null, owner's text): the sheet `id`
+// has no rules (sheetInsert adds them).
+fn akSheetReset(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    let id = (try argIndex(it, a, 0)) as u32
+    let owner = ownHandle(it, it.arg(a, 1))
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 2, b)
+    try s.page.doc.sheets.reset(id, owner, b.bytes())
+    sheetsChanged(s)
+    return Value.Undefined
+}
+
+// sheetInsert(id, index, rule text).
+fn akSheetInsert(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    let id = (try argIndex(it, a, 0)) as u32
+    let index = try argIndex(it, a, 1)
+    let b = try it.builder()
+    defer it.release(b)
+    try argText(it, a, 2, b)
+    try s.page.doc.sheets.insert(id, index, b.bytes())
+    sheetsChanged(s)
+    return Value.Undefined
+}
+
+// sheetDelete(id, index).
+fn akSheetDelete(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    let id = (try argIndex(it, a, 0)) as u32
+    s.page.doc.sheets.remove(id, try argIndex(it, a, 1))
+    sheetsChanged(s)
+    return Value.Undefined
+}
+
+// sheetDisabled(id, disabled).
+fn akSheetDisabled(it: *mut Interp, a: Args) JsError!Value {
+    let s = scriptOf(it)
+    let id = (try argIndex(it, a, 0)) as u32
+    s.page.doc.sheets.setDisabled(id, it.toBoolean(it.arg(a, 1)))
+    sheetsChanged(s)
+    return Value.Undefined
+}

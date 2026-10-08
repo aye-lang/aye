@@ -1,1 +1,1 @@
-not_pub.ore:6:20: error[E0082]: `read` is not `pub` in module `std.fs`
+not_pub.aye:6:20: error[E0082]: `read` is not `pub` in module `std.fs`

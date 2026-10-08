@@ -1,5 +1,5 @@
 /target
-# build outputs from `ore build`
+# build outputs from `aye build`
 *.o
 *.out.bin
 /out/

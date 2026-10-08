@@ -1,1 +1,1 @@
-missing_newline.ore:2:15: error[E0006]: expected newline after statement, found `let`
+missing_newline.aye:2:15: error[E0006]: expected newline after statement, found `let`

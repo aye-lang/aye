@@ -375,7 +375,7 @@ pub struct TestDef {
 }
 
 impl TestDef {
-    /// The name `ore test` shows: `name`, or `module: name` outside the
+    /// The name `aye test` shows: `name`, or `module: name` outside the
     /// root module.
     pub fn shown(&self) -> String {
         if self.module.is_empty() { self.name.clone() } else { format!("{}: {}", self.module, self.name) }
@@ -502,7 +502,7 @@ pub enum TExprKind {
     /// A top-level `let` constant or `var` global.
     Global(String),
     /// `is_extern`: a C function, called by its C name (also an exported
-    /// Ore function).
+    /// Aye function).
     Call { name: String, is_extern: bool, args: Vec<TExpr> },
     /// A top-level function as a value, of type `fn(...)`.
     FnRef { name: String, is_extern: bool },
@@ -835,7 +835,7 @@ struct Checker<'a> {
     files: Vec<String>,
 }
 
-/// Check a file. Without `require_main` (`ore test`, or `ore check` of a
+/// Check a file. Without `require_main` (`aye test`, or `aye check` of a
 /// file with tests) the file does not need `pub fn main()`.
 /// `files` are the names of the program's files, indexed by `Span::file`.
 pub fn check(file: &ast::File, require_main: bool, files: &[String]) -> std::result::Result<Program, Vec<Error>> {
