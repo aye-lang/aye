@@ -19,18 +19,19 @@ First Linux run (X1.2, arm64, before X1.1 was merged): build ok;
 on the archive fields (X1.1, since merged) and then on the cimport clash
 below; lib 30/31, conformance 29/29, fmt 6/7, golden 263/264, spec 6/7.
 
-#### X1.3: `@cimport` on glibc
-- lane: project
-- goal: on Ubuntu 24.04, `@cimport` of `pthread.h` no longer clashes with std's own `clock`/`nanosleep` declarations (E0096 "declared twice with different signatures"), and `@cimport("math.h")` exposes `sqrt`, `floor`, `pow`, `atan2` (E0081 today).
-- serves: criterion O1
-- files: `src/cimport/`, maybe `std/` declarations or `src/sema.rs` (whichever the diagnosis points to); tests under `tests/`
-- verify: `scripts/linux.sh sh -c 'cargo build --release && target/release/aye check browser && cargo test --release --test golden --test spec && cargo test --release --lib codes'` → exit 0; macOS: `cargo test --release` → exit 0
+Linux arm64 on main 7a08c4b (X1.5 first pass): build, `aye check browser`
+and `browser/build.sh` exit 0; tests: all pass except `js_conformance`
+`164_math_functions.js` (glibc `cbrt(27)` = 3.0000000000000004).
+
+#### X1.6: `Math.cbrt` gives the same result on every libm
+- lane: project (touches `browser/`, maintenance)
+- goal: a port of fdlibm `cbrt` (as V8) replaces the libm call, so `164_math_functions.js` passes on glibc and macOS.
+- files: `browser/js/builtins_number.aye`
+- verify: `scripts/linux.sh sh -c 'cargo build --release && cargo test --release --test browser js_conformance'` → 0; same test on macOS → 0
 - depends on: –
-- parallel with: X1.4
-- where: local (`scripts/linux.sh`)
-- model: opus (diagnose first: write the cause in `browser/COMPILER_GAPS.md` as a new gap, then fix)
-- time box: 45 min
-- notes: suspects: glibc declares math functions through `__MATHCALL` macros and `__REDIRECT`; libclang may lack its resource headers (`stddef.h`) for the llvm-18 packages; std declares `clock() u64` where glibc says `clock_t clock(void)` (i64). Failing: golden `cimport/system.aye`, `codes::tests::examples_are_accurate` (E0112), spec `aye_blocks_compile` (docs/spec.md:524).
+- where: local
+- model: sonnet
+- time box: 30 min
 
 #### X1.5: full Linux run, arm64 and amd64
 - lane: project
@@ -38,7 +39,7 @@ below; lib 30/31, conformance 29/29, fmt 6/7, golden 263/264, spec 6/7.
 - serves: criterion O1
 - files: none expected (report only), `docs/practices/workflow.md` if a lesson
 - verify: `scripts/linux.sh sh -c 'cargo build --release && target/release/aye check browser && cargo test --release && browser/build.sh'` → 0, then the same with `LINUX_ARCH=amd64`
-- depends on: X1.3
+- depends on: X1.6
 - parallel with: no other build agent
 - where: local
 - model: sonnet

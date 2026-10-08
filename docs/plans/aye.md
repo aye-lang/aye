@@ -268,7 +268,7 @@ sources `tests/spec.rs` reads; they merge one after the other.
 Unordered; a card is written when its phase becomes next. Source in
 brackets.
 
-- O1.14 (gap #50, from X1.1) a target-OS constant the checker uses to skip the other OS's code, so per-OS declarations live in Aye; then remove `aye_std_errno`, `aye_std_mtime` offsets and the `isDarwin` checks in `std/net`, `browser/ui/socket.aye`. Needed by O8. Verify: `cargo test --release --test golden` and `aye check browser` on macOS and via `scripts/linux.sh`.
+- O1.14 (gap #50, from X1.1) a target-OS constant the checker uses to skip the other OS's code, so per-OS declarations live in Aye; then remove `aye_std_errno`, `aye_std_mtime` offsets and the `isDarwin` checks in `std/net`, `browser/ui/socket.aye`, and the hand-written `clock() u64` in `browser/js/interp.aye:107` (`clock_t` is unsigned on macOS, signed on glibc). Needed by O8. Verify: `cargo test --release --test golden` and `aye check browser` on macOS and via `scripts/linux.sh`.
 - O1.12 (from O1.11) diagnostics that cost eval rounds: E0022 (`@println` with several args) names `@print` per value or `std.text.Builder`; E0006 on `and`/`or`/`not` suggests `&&`/`||`/`!`; both in the spec's pitfalls. Verify: `tests/errors` goldens, then `eval.py --tasks cli_grep,file_lines --runs 3` shows fewer check calls.
 - O1.13 (from O1.11) `aye spec` is 81.5 KB, read back in chunks by every agent; list std.http's main API in §15 and try a compact or sectioned spec. Verify: http_hello uses `std.http`, input tokens fall in `docs/aye-eval.md`.
 - O1.11 rerun with `--runs 3` before ranking O3.x (O3.1 json stays first, O1.6 process next).
