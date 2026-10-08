@@ -68,7 +68,7 @@ built-in database and cloud clients (`@cimport` covers them).
 - std: coro, diag, fs, heap, list, log, map, math, mem, net (IPv4 TCP, O1.3), os, pool, sort, sync, testing, text, thread, time. Missing for O6: http, json, path, process, wall clock, crypto, base64/hex, fs directories and stat.
 - std docs (O1.2): new modules take the index form: one line in `docs/spec.md` §15 plus `///` on every `pub fn` (`tests/spec.rs`).
 - Tests: `tests/golden.rs` (cases, errors, tests, fix, modules, ffi, cimport), `tests/fmt.rs`, `tests/spec.rs`, `tests/browser.rs`. No conformance suite yet (O1.1).
-- Open gaps: #3 (ASan golden, P2.9).
+- Open gaps: #3 (ASan golden, P2.9), #50 (per-OS declarations; O8 needs it).
 - Toolchain: Homebrew LLVM 23 for ASan and wasm32 (flags in `done.md`, O0.1); Node 22, Go and `ab` are installed locally.
 - Stale: `README.md:405-410` says `ore fmt`, `ore doc` and `Pool` are missing (O6.4).
 
@@ -130,32 +130,6 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - model: sonnet
 - time box: 45 min
 - notes: one target (native) now; O2.3 adds wasm32-wasi rows.
-
-#### O1.3b: std.net host names and IPv6
-- lane: ore
-- goal: `listen` and `connect` take host names (`getaddrinfo`) and IPv6 addresses (`::1`).
-- serves: O6
-- files: `std/net/net.ore`, `tests/cases/`
-- verify: `cargo test --release --test golden` → exit 0, with goldens connecting to `localhost` by name and to `::1`
-- depends on: –
-- parallel with: O1.5, O1.5a, O1.6
-- where: cloud
-- model: sonnet
-- time box: 45 min
-- notes: the macOS/Linux socket constants are chosen at run time as `browser/ui/socket.ore` does.
-
-#### O1.3c: std.net TCP_NODELAY and accept timeout
-- lane: ore
-- goal: `Conn` can set `TCP_NODELAY`; `Listener.acceptTimeout(ms)` returns `TimedOut` (through `poll`).
-- serves: O6
-- files: `std/net/net.ore`, `tests/cases/`
-- verify: `cargo test --release --test golden` → exit 0, with a golden for an accept that times out
-- depends on: O1.3b
-- parallel with: O1.5, O1.5a, O1.6
-- where: cloud
-- model: sonnet
-- time box: 30 min
-- notes: –
 
 #### O1.4: std.http request parser and response writer
 - lane: ore
