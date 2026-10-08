@@ -130,3 +130,32 @@ fn doc_command() {
     assert_eq!(code, 1);
     assert!(err.contains("no std module"), "{err}");
 }
+
+/// Tracked `.aye` files that `aye fmt --check` must not be asked about.
+const FMT_EXCLUDED: &[(&str, &str)] = &[
+    ("tests/errors/extern_link_empty.aye", "the golden expects the error at the column of the unformatted `extern(\"\")`"),
+    ("tests/errors/line_strings.aye", "does not lex on purpose"),
+    ("tests/errors/syntax_recovery.aye", "does not parse on purpose"),
+    ("tests/errors/unknown_escape.aye", "does not lex on purpose"),
+    ("tests/modules/single/broken.aye", "brackets do not match on purpose"),
+];
+
+#[test]
+fn repo_is_formatted() {
+    let out = Command::new("git").args(["ls-files", "*.aye"]).current_dir(root()).output().unwrap();
+    assert!(out.status.success(), "git ls-files failed");
+    let mut unformatted = Vec::new();
+    let mut n = 0;
+    for f in String::from_utf8(out.stdout).unwrap().lines() {
+        if FMT_EXCLUDED.iter().any(|(x, _)| *x == f) {
+            continue;
+        }
+        n += 1;
+        let (code, _, err) = aye(&["fmt", "--check", root().join(f).to_str().unwrap()]);
+        if code != 0 {
+            unformatted.push(format!("{f} {err}"));
+        }
+    }
+    assert!(n >= 400, "only {n} files checked");
+    assert!(unformatted.is_empty(), "run `aye fmt` on:\n{}", unformatted.join("\n"));
+}
