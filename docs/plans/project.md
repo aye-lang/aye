@@ -14,18 +14,48 @@ on this Mac, arm64 native; amd64 under Rosetta as the last check),
 worktree (criterion O1 in [`aye.md`](aye.md)). The cloud environment is
 set up by the user elsewhere and is not part of this goal.
 
-#### X1.2: Ubuntu setup script, `scripts/linux.sh`, first Linux run
+First Linux run (X1.2, arm64, before X1.1 was merged): build ok;
+`aye check browser`, the 62 browser tests and `browser/build.sh` failed
+on the archive fields (X1.1, since merged) and then on the cimport clash
+below; lib 30/31, conformance 29/29, fmt 6/7, golden 263/264, spec 6/7.
+
+#### X1.3: `@cimport` on glibc
 - lane: project
-- goal: `scripts/setup-ubuntu.sh` installs everything the suite needs on a fresh Ubuntu 24.04; `scripts/linux.sh <cmd...>` runs a command on the current worktree inside an Apple `container` built from it; the first full Linux run is recorded.
+- goal: on Ubuntu 24.04, `@cimport` of `pthread.h` no longer clashes with std's own `clock`/`nanosleep` declarations (E0096 "declared twice with different signatures"), and `@cimport("math.h")` exposes `sqrt`, `floor`, `pow`, `atan2` (E0081 today).
 - serves: criterion O1
-- files: `scripts/setup-ubuntu.sh`, `scripts/linux.sh`, `scripts/linux/Containerfile` (new); `README.md` "Build and run" gets one line; `docs/practices/workflow.md` one short section on running the Linux check
-- verify: `scripts/linux.sh true; echo $?` → 0 (image built, worktree synced), then `scripts/linux.sh sh -c 'cargo build --release && target/release/aye check browser && cargo test --release' > target/linux-test.log 2>&1; echo $?` → the exit code and every failing test are quoted in the report (failures become new X1.x steps, not fixed here)
+- files: `src/cimport/`, maybe `std/` declarations or `src/sema.rs` (whichever the diagnosis points to); tests under `tests/`
+- verify: `scripts/linux.sh sh -c 'cargo build --release && target/release/aye check browser && cargo test --release --test golden --test spec && cargo test --release --lib codes'` → exit 0; macOS: `cargo test --release` → exit 0
 - depends on: –
-- parallel with: all; counts as one of the two local build/test agents
-- where: local (Apple `container` 1.0, image `ubuntu:24.04` already pulled)
-- model: sonnet
+- parallel with: X1.4
+- where: local (`scripts/linux.sh`)
+- model: opus (diagnose first: write the cause in `browser/COMPILER_GAPS.md` as a new gap, then fix)
 - time box: 45 min
-- notes: packages: clang, lld, libclang-dev (`@cimport`), pkg-config, libcurl4-openssl-dev, libfreetype-dev, libsdl2-dev, fonts-dejavu-core (`browser/font/freetype.aye:170`), python3, rsync, git, Node 22 (apt's nodejs is older), Go and apache2-utils (`ab`) for O1.7; Rust from rustup. `linux.sh`: one long-lived container per worktree (name from the worktree basename), worktree mounted read-only and rsynced to `/work` excluding `target/`, so `/work/target` and the cargo cache persist inside the container and the macOS `target/` is never touched; `--cpus 4 --memory 8G`; `LINUX_ARCH=amd64` selects an amd64 image under Rosetta.
+- notes: suspects: glibc declares math functions through `__MATHCALL` macros and `__REDIRECT`; libclang may lack its resource headers (`stddef.h`) for the llvm-18 packages; std declares `clock() u64` where glibc says `clock_t clock(void)` (i64). Failing: golden `cimport/system.aye`, `codes::tests::examples_are_accurate` (E0112), spec `aye_blocks_compile` (docs/spec.md:524).
+
+#### X1.4: `scripts/linux.sh` in worktrees, TSan
+- lane: project
+- goal: in a worktree, `git` works inside the container (the worktree's `.git` points at the main checkout's git dir); `Containerfile` moves to `scripts/linux/`; `setup-ubuntu.sh` installs the clang runtime so the TSan golden runs.
+- serves: criterion O1
+- files: `scripts/linux.sh`, `scripts/setup-ubuntu.sh`, `Containerfile` → `scripts/linux/Containerfile`, `docs/practices/workflow.md` "Test on Linux"
+- verify: from a worktree, `scripts/linux.sh cargo test --release --test fmt` → exit 0, and `scripts/linux.sh cargo test --release --test golden 2>&1 | grep -ci 'skip.*tsan'` → 0
+- depends on: –
+- parallel with: X1.3
+- where: local
+- model: sonnet
+- time box: 30 min
+- notes: mount `git rev-parse --git-common-dir` (absolute) read-only at the same path inside the container; `safe.directory` may be needed. TSan runtime: the package with `libclang_rt.tsan-aarch64.a` for Ubuntu's default clang (likely `libclang-rt-18-dev`). Two runs from one worktree share the container name; keep that, but say so in the script's comment.
+
+#### X1.5: full Linux run, arm64 and amd64
+- lane: project
+- goal: the X1 done check passes on arm64 and amd64; failures become new X1.x cards.
+- serves: criterion O1
+- files: none expected (report only), `docs/practices/workflow.md` if a lesson
+- verify: `scripts/linux.sh sh -c 'cargo build --release && target/release/aye check browser && cargo test --release && browser/build.sh'` → 0, then the same with `LINUX_ARCH=amd64`
+- depends on: X1.3, X1.4
+- parallel with: no other build agent
+- where: local
+- model: sonnet
+- time box: 45 min (amd64 under Rosetta is slow)
 
 ## X2: rename Ore → Aye
 
