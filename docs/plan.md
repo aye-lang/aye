@@ -13,12 +13,12 @@ as the acceptance test of `std.http`. Finished steps are in
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
 | Ore/Aye language ([`plans/ore.md`](plans/ore.md)) | 1, most slots | P2 leftovers + O1 server basics | O1.3a | cloud once X1.2 is done; local until then |
-| Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | PW wrap-up, then P7 maintenance | P3.48a, then P3.58 | local (archives in `target/sites/`, screenshots) |
+| Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | PW wrap-up, then P7 maintenance | P3.48b, then P3.58 | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 (F1.1 only) | F1.1, after O1.4a | cloud |
 
-Order of dispatch: the browser wrap-ups P3.48a, P3.62, P3.58 and
-P3.58a first (P3.48, O1.2 and O1.3 are merged: 34f6f93, a3498da,
-56967d4), with X1.1 beside them;
+Order of dispatch: the browser wrap-ups P3.48b, P3.62, P3.58 and
+P3.58a first (O1.2 and O1.3 are merged: a3498da, 56967d4; the P3.48
+merge 34f6f93 was reset away, see P3.48b), with X1.1 beside them;
 then lane cards in lane priority. Project steps go when their condition
 holds: X1.2 once the user enables cloud, X2.2 at a point with no open
 branch. The browser resumes when Ore criteria O6–O9 are met, in the
@@ -39,7 +39,7 @@ Steps not tied to one lane, in this order. Their cards are in
    X2.2 runs it as one isolated step: no other agent runs, no other
    branch is open.
 3. **X3 website** aye.anyknown.com on GitHub Pages.
-4. **X4 go public** (repo github.com/anyknown-com/aye, with the
+4. **X4 go public** (repo github.com/aye-lang/aye, with the
    browser): only with the user's OK.
 
 ## Execution rules
@@ -144,7 +144,7 @@ goes to the backlog or to `done.md` as dropped.
   until O6–O9, then split into its own repo (git filter-repo) and
   resumed; framework does F1 only. Lane decisions are in each lane plan.
 - **Name and repo:** Ore → Aye (`aye`, `.aye`, "ayelang"); repo
-  github.com/anyknown-com/aye, private until it goes public together
+  github.com/aye-lang/aye, private until it goes public together
   with the browser (X4); license MIT OR Apache-2.0 (`LICENSE-MIT`,
   `LICENSE-APACHE`); site aye.anyknown.com via GitHub Pages.
 - **Platforms:** macOS (local) and Ubuntu 24.04 (cloud, after X1).

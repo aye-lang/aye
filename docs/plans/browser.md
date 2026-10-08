@@ -44,10 +44,10 @@ step that moves `browser/` into its own repo (P8.1). Finished steps:
   backlog (P3.50–P3.61).
 - Archives live in each checkout's `target/sites/` (untracked), so steps
   that replay sites or take screenshots run locally.
-- P3.48 is merged (34f6f93). Its recaptured Mistral archive is in
-  `.claude/worktrees/agent-ae5e6f75817463272/target/sites/mistral`
-  (206 files); the main checkout's is older (202 files, 2026-10-07), so
-  it may not be installed yet (P3.48a).
+- P3.48 is not merged: the merge 34f6f93 passed `cargo test` but failed
+  the site check (mdn FAIL, mistral 4 s → 40 s wall), so it was reset
+  away. P3.48b bisects it. Its recaptured Mistral archive is in
+  `.claude/worktrees/agent-ae5e6f75817463272/target/sites/mistral`.
 - P3.58 is half done: WIP 34c2234 on `worktree-agent-a0b64f7b014b9b6ea`,
   not built (native `TypedArray` in `browser/js/typed.ore`, test
   `browser/tests/js/256_typed_array_views.js`).
@@ -69,18 +69,18 @@ step that moves `browser/` into its own repo (P8.1). Finished steps:
 
 ## Cards: PW wrap-up
 
-#### P3.48a: install the recaptured Mistral archive
+#### P3.48b: find what P3.48 breaks on MDN and Mistral
 - lane: browser
-- goal: the main checkout replays Mistral from the archive P3.48 recaptured (new bundle hash), and the check passes.
+- goal: name the P3.48 commit behind the mdn check failure and the one behind Mistral's 10x slowdown; fix if ≤ ~40 lines, else report a fix step.
 - serves: M2
-- files: `target/sites/mistral/` of the main checkout (untracked; nothing to commit)
-- verify: `diff -rq .claude/worktrees/agent-ae5e6f75817463272/target/sites/mistral target/sites/mistral` → no output, then `browser/build.sh && python3 browser/tools/page_load.py check --site mistral` → exit 0
-- depends on: P3.48 (merged, 34f6f93)
+- files: `browser/engine/`, `browser/js/` (whichever the bisect names)
+- verify: in the P3.48 worktree, `python3 browser/tools/page_load.py check --site mdn,mistral --archive target/sites` → exit 0, mistral CPU near main's
+- depends on: –
 - parallel with: one other local build/test agent at most
-- where: local (archives are on this machine)
-- model: haiku (script-runner)
-- time box: 20 min
-- notes: run in the main checkout `/Users/solemnis/Documents/anyknown-com/ore`. If `diff -rq` already prints nothing, only run the check. Move the old directory aside (`target/sites/mistral.old`), do not delete it, until the check passes.
+- where: local (archives)
+- model: opus
+- time box: 40 min
+- notes: the merge, when green, installs the worktree's recaptured Mistral archive (move the old one aside first). Running now.
 
 #### P3.62: practices entry for P3.48
 - lane: browser
@@ -88,12 +88,12 @@ step that moves `browser/` into its own repo (P8.1). Finished steps:
 - serves: M2
 - files: `docs/practices/browser.md`, `browser/tools/sites.json` (the `note` only)
 - verify: `python3 -c "import json; json.load(open('browser/tools/sites.json'))"` → exit 0; the entry follows `docs/practices/README.md` "Entry format"
-- depends on: P3.48
+- depends on: P3.48b
 - parallel with: all (docs only)
 - where: cloud (docs only, no archives; local is fine before X1.2)
 - model: sonnet
 - time box: 20 min
-- notes: cite the P3.48 commits (`git log --oneline 34f6f93^1..34f6f93^2`).
+- notes: cite the P3.48 commits (`git log --oneline main..worktree-agent-ae5e6f75817463272`).
 
 #### P3.58: typed array views share one buffer
 - lane: browser
@@ -101,12 +101,12 @@ step that moves `browser/` into its own repo (P8.1). Finished steps:
 - serves: M2
 - files: `browser/js/typed.ore`, `browser/js/interp.ore` (index and property hooks), `browser/js/lib.ore` (the typed-array part), `browser/tests/js/256_typed_array_views.js`
 - verify: `cargo test --release --test browser js_conformance` → exit 0, with 256 matching Node 22's output (`node browser/tests/js/256_typed_array_views.js`)
-- depends on: P3.48 (merged, 34f6f93)
+- depends on: –
 - parallel with: not with other `browser/js/` steps
 - where: local (the WIP is in a local worktree)
 - model: sonnet
 - time box: 45 min
-- notes: resume in `worktree-agent-a0b64f7b014b9b6ea` at 34c2234 (not built). Symptoms: `Uint32Array` read 2568463228 as -1726504068; a `Uint8Array` over another view's `.buffer` saw 2 of 8 bytes. Merge `main` in first (P3.48, O1.2, O1.3 landed since the WIP).
+- notes: resume in `worktree-agent-a0b64f7b014b9b6ea` at 34c2234 (not built). Symptoms: `Uint32Array` read 2568463228 as -1726504068; a `Uint8Array` over another view's `.buffer` saw 2 of 8 bytes. Merge `main` in first (O1.2, O1.3 landed since the WIP).
 
 #### P3.58a: merge typed arrays, tighten MDN
 - lane: browser

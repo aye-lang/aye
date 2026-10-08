@@ -81,7 +81,6 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | P3.45 | 2026-10-08 | Screenshots run scripts at the painted viewport size (`browser/shot.ore`); ICO → P3.55, `<video poster>` → P3.56 | 7b9f7ed |
 | P3.46 | 2026-10-08 | The `grid-template` shorthand (Wikipedia's page grid) | 41624b8 |
 | P3.47 | 2026-10-08 | A closed `<dialog>` is not drawn (MDN); MDN band and BBC band are the sites' CSS; duplicates → P3.58, BBC NEWS width → P3.59 | 4413653 |
-| P3.48 | 2026-10-08 | Mistral hero text: `document.fonts`, `'prop' in element.style`, `super` in class field initializers, `DOMTokenList` iterators (archive install: P3.48a) | 34f6f93 |
 | P3.49 | 2026-10-08 | rustdoc: `::before{content:url()}` images and escaped CSS strings (the search input appears only on click, as on the real page) | b4c901b |
 | P3.52 | 2026-10-08 | `text-overflow: ellipsis` and `-webkit-line-clamp` (fix: clamp counts lines through child blocks, 943ae56) | 3483049 |
 | P3.55 | 2026-10-08 | ICO and CUR decoder | a8513aa |

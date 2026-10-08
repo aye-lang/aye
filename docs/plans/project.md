@@ -76,5 +76,5 @@ aye.anyknown.com on GitHub Pages: a landing page, the spec and std docs
 
 ## X4: go public (later)
 
-Make github.com/anyknown-com/aye public together with the browser. Needs
+Make github.com/aye-lang/aye public together with the browser. Needs
 the user's OK; nothing is pushed public before it.
