@@ -132,7 +132,7 @@
       "status": "warn",
       "max_errors": 3,
       "md": ["Mistral Large 4", "min read", "Share this post"],
-      "note": "Hero title hidden (three.js needs WebGL); embedded iframe widgets broken. Replay logs 2 WebGL context errors and one 'reading load'."
+      "note": "The page waits on document.fonts (fixed in P3.48). About 40 s CPU is its real animations, tracked as P3.63."
     }
   }
 }

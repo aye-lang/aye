@@ -918,3 +918,27 @@ fetch and then its thumbnails (P3.58).
 **Why:** generators count against a live limit that page code shares;
 find swallowed engine errors by printing in `Interp.makeError` and
 diffing against a build of main.
+
+### Log the first exception or pending promise before guessing at timing
+**Context:** a page silently stops part-way (hero missing, no error), and
+the cause looks like timing or a missing API (P3.48, merge `ef3c6bc`).
+**Bad:** the Mistral blog was blamed on three.js/WebGL timing, and
+`sites.json` said so. Wrong: its code was awaiting
+`document.fonts.load()`, which did not exist, so it never ran.
+**Good:** log the first exception per task or tick, or the first pending
+promise the page awaits, then fix that. With `document.fonts` (`d1a440e`)
+the page code ran and its errors fell from 3 to 2. All P3.48 commits:
+`ef3c6bc^1..ef3c6bc^2`.
+**Why:** a page that awaits a missing API stalls without any error; one
+log line names the cause, a timing theory only costs time.
+
+### A fix that gets a page further can raise its failure counts
+**Context:** after a fix, `page_load.py` shows new `archive miss:` lines
+(counted as FAIL) and more CPU time (P3.48b bisect).
+**Bad:** reading these as a regression and blaming the engine.
+**Good:** the page is doing more real work. Re-capture the archive, and
+bisect the commits before you blame the engine. To revert patches in an
+ignored folder use `patch -R -p1`; `git apply -R` silently skipped every
+patch there.
+**Why:** more progress means more requests and more script run; the old
+archive and the old CPU baseline no longer describe the page.
