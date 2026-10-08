@@ -1527,7 +1527,7 @@ std.testing   the leak-checked allocator of a test                           bel
 std.log       err, info: formatted lines to stderr                           below
 std.diag      Diagnostics: coded messages over byte ranges, lineCol          below
 std.os        args, exit                                                     below
-std.net       TCP over IPv4: listen, connect, Listener, Conn                 below
+std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn                below
 ```
 
 ### std.mem
@@ -2046,9 +2046,11 @@ pub fn main() {
 
 ### std.net
 
-TCP over IPv4. A host is dotted IPv4 (`127.0.0.1`, `0.0.0.0` to listen
-on every interface) or `localhost`; there is no name lookup
-(InvalidAddress). Writes never raise SIGPIPE.
+TCP over IPv4 and IPv6. A host is an IPv4 address (`0.0.0.0` to listen
+on every interface), an IPv6 address (`::1`) or a name, resolved with
+`getaddrinfo` (`connect` tries each address); a name that does not
+resolve is UnknownHost, an empty one InvalidAddress. `listen("localhost")`
+binds 127.0.0.1. Writes never raise SIGPIPE.
 
 ```
 std.net.listen(host: []u8, port: u16) ListenError!Listener   port 0: the system picks one
@@ -2060,15 +2062,15 @@ Conn.read(self: Self, buf: []mut u8) ReadError!usize   waits; at most buf.len by
 Conn.readTimeout(self: Self, buf: []mut u8, ms: u32) ReadError!usize   read, waiting at most ms (poll)
 Conn.write(self: Self, bytes: []u8) WriteError!void    write everything
 Conn.close(self: Self)
-error ListenError { InvalidAddress, AddressInUse, AccessDenied, ListenFailed }
-error ConnectError { InvalidAddress, ConnectionRefused, Unreachable, TimedOut, ConnectFailed }
+error ListenError { InvalidAddress, AddressInUse, AccessDenied, UnknownHost, ListenFailed }
+error ConnectError { InvalidAddress, UnknownHost, ConnectionRefused, Unreachable, TimedOut, ConnectFailed }
 error AcceptError { AcceptFailed }
 error ReadError { TimedOut, ConnectionReset, ReadFailed }
 error WriteError { ConnectionClosed, WriteFailed }
 ```
 
 A server listens on port 0, serves on a `std.thread`, and its tests
-connect to `Listener.port()` (`tests/cases/net_echo.ore`).
+connect to `Listener.port()` (`tests/cases/net_echo.ore`, `net_names.ore`).
 
 ### A complete CLI
 

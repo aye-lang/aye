@@ -1,17 +1,18 @@
-// std.net: TCP over IPv4. `listen` gives a `Listener`, whose `accept`
-// gives a `Conn`; `connect` gives a `Conn` too. Addresses are dotted IPv4
-// (`127.0.0.1`) or `localhost`; there is no name lookup yet.
+// std.net: TCP over IPv4 and IPv6. `listen` gives a `Listener`, whose
+// `accept` gives a `Conn`; `connect` gives a `Conn` too. A host is an IPv4
+// or IPv6 address (`127.0.0.1`, `::1`) or a name, resolved with
+// `getaddrinfo`.
 //
 // The C constants that differ between macOS and Linux (the layout of
-// `sockaddr_in`, SOL_SOCKET and its options, errno values, MSG_NOSIGNAL
+// `struct addrinfo`, SOL_SOCKET and its options, errno values, MSG_NOSIGNAL
 // or SO_NOSIGPIPE) are chosen at run time from `uname`, as
 // `browser/ui/socket.ore` does. Writes never raise SIGPIPE: a closed peer
 // is an error.
 
 import std.text
 
-pub error ListenError { InvalidAddress, AddressInUse, AccessDenied, ListenFailed }
-pub error ConnectError { InvalidAddress, ConnectionRefused, Unreachable, TimedOut, ConnectFailed }
+pub error ListenError { InvalidAddress, AddressInUse, AccessDenied, UnknownHost, ListenFailed }
+pub error ConnectError { InvalidAddress, UnknownHost, ConnectionRefused, Unreachable, TimedOut, ConnectFailed }
 pub error AcceptError { AcceptFailed }
 pub error ReadError { TimedOut, ConnectionReset, ReadFailed }
 pub error WriteError { ConnectionClosed, WriteFailed }
@@ -115,68 +116,170 @@ pub struct Conn {
     }
 }
 
-/// Listens on `host` (dotted IPv4, `localhost`, or `0.0.0.0` for every
-/// interface) at `port`; port 0 lets the system pick one (`Listener.port`).
+/// Listens on `host` at `port`; port 0 lets the system pick one
+/// (`Listener.port`). `host` is a dotted IPv4 address, an IPv6 address
+/// (`::1`, `::` for every interface), a host name (`getaddrinfo`), or
+/// `0.0.0.0` for every IPv4 interface. `localhost` is 127.0.0.1. A name
+/// that does not resolve is UnknownHost; an empty or over-long one is
+/// InvalidAddress.
 pub fn listen(host: []u8, port: u16) ListenError!Listener {
-    var addr = @zeroed([16]u8)
-    if !inetAddr(host, port, &mut addr) {
+    var head: ?*mut AddrInfo = null
+    var name = host
+    if text.eql(host, "localhost") {
+        name = "127.0.0.1"
+    }
+    let rc = resolve(name, port, AI_PASSIVE, &mut head)
+    if rc == RESOLVE_INVALID {
         return ListenError.InvalidAddress
     }
-    let fd = socket(AF_INET, SOCK_STREAM, 0)
-    if fd < 0 {
-        return ListenError.ListenFailed
+    if rc != 0 {
+        return ListenError.UnknownHost
     }
-    var one = [4]u8{1, 0, 0, 0}
-    var reuse: i32 = 2
-    if isDarwin() {
-        reuse = 4
-    }
-    _ = setsockopt(fd, solSocket(), reuse, one[..].ptr, 4)
-    if bind(fd, addr[..].ptr, 16) != 0 || cListen(fd, 128) != 0 {
-        let e = ore_std_errno()
-        _ = close(fd)
-        if e == eaddrinuse() {
-            return ListenError.AddressInUse
+    var e: i32 = 0
+    var cur = head
+    while cur |ai| {
+        let fd = socket(ai.family, SOCK_STREAM, 0)
+        if fd >= 0 {
+            var one = [4]u8{1, 0, 0, 0}
+            var reuse: i32 = 2
+            if isDarwin() {
+                reuse = 4
+            }
+            _ = setsockopt(fd, solSocket(), reuse, one[..].ptr, 4)
+            if bind(fd, sockAddr(ai), ai.addrlen) == 0 && cListen(fd, 128) == 0 {
+                var addr = @zeroed([128]u8)
+                var len: u32 = 128
+                if getsockname(fd, addr[..].ptr, &mut len) != 0 {
+                    _ = close(fd)
+                    freeaddrinfo(head)
+                    return ListenError.ListenFailed
+                }
+                freeaddrinfo(head)
+                // sin_port and sin6_port are both at byte 2
+                return Listener { fd: fd, portNumber: (addr[2] as u16) << 8 | addr[3] as u16 }
+            }
+            e = ore_std_errno()
+            _ = close(fd)
+        } else {
+            e = ore_std_errno()
         }
-        if e == EACCES {
-            return ListenError.AccessDenied
-        }
-        return ListenError.ListenFailed
+        cur = ai.next
     }
-    var len: u32 = 16
-    if getsockname(fd, addr[..].ptr, &mut len) != 0 {
-        _ = close(fd)
-        return ListenError.ListenFailed
+    freeaddrinfo(head)
+    if e == eaddrinuse() {
+        return ListenError.AddressInUse
     }
-    return Listener { fd: fd, portNumber: (addr[2] as u16) << 8 | addr[3] as u16 }
+    if e == EACCES {
+        return ListenError.AccessDenied
+    }
+    return ListenError.ListenFailed
 }
 
-/// Connects to `host` (dotted IPv4 or `localhost`) at `port`.
+/// Connects to `host` at `port`. `host` is a dotted IPv4 address, an IPv6
+/// address (`::1`) or a host name (`getaddrinfo`); a name with several
+/// addresses is tried address by address. A name that does not resolve is
+/// UnknownHost; an empty or over-long one is InvalidAddress.
 pub fn connect(host: []u8, port: u16) ConnectError!Conn {
-    var addr = @zeroed([16]u8)
-    if !inetAddr(host, port, &mut addr) {
+    var head: ?*mut AddrInfo = null
+    let rc = resolve(host, port, 0, &mut head)
+    if rc == RESOLVE_INVALID {
         return ConnectError.InvalidAddress
     }
-    let fd = socket(AF_INET, SOCK_STREAM, 0)
-    if fd < 0 {
-        return ConnectError.ConnectFailed
+    if rc != 0 {
+        return ConnectError.UnknownHost
     }
-    if cConnect(fd, addr[..].ptr, 16) != 0 {
-        let e = ore_std_errno()
-        _ = close(fd)
-        if e == econnrefused() {
-            return ConnectError.ConnectionRefused
+    var e: i32 = 0
+    var cur = head
+    while cur |ai| {
+        let fd = socket(ai.family, SOCK_STREAM, 0)
+        if fd >= 0 {
+            if cConnect(fd, sockAddr(ai), ai.addrlen) == 0 {
+                freeaddrinfo(head)
+                noSigpipe(fd)
+                return Conn { fd: fd }
+            }
+            e = ore_std_errno()
+            _ = close(fd)
+        } else {
+            e = ore_std_errno()
         }
-        if e == enetunreach() || e == ehostunreach() {
-            return ConnectError.Unreachable
-        }
-        if e == etimedout() {
-            return ConnectError.TimedOut
-        }
-        return ConnectError.ConnectFailed
+        cur = ai.next
     }
-    noSigpipe(fd)
-    return Conn { fd: fd }
+    freeaddrinfo(head)
+    if e == econnrefused() {
+        return ConnectError.ConnectionRefused
+    }
+    if e == enetunreach() || e == ehostunreach() {
+        return ConnectError.Unreachable
+    }
+    if e == etimedout() {
+        return ConnectError.TimedOut
+    }
+    return ConnectError.ConnectFailed
+}
+
+// `struct addrinfo` as C lays it out on 64-bit macOS and Linux. The two
+// pointers swap places: macOS has ai_canonname then ai_addr, Linux the
+// reverse (`sockAddr` picks). Declared by hand so std needs no libclang.
+extern struct AddrInfo {
+    flags: i32
+    family: i32
+    socktype: i32
+    protocol: i32
+    addrlen: u32
+    first: ?[*]u8
+    second: ?[*]u8
+    next: ?*mut AddrInfo
+}
+
+let AI_PASSIVE: i32 = 1
+let RESOLVE_INVALID: i32 = -1
+
+// ai_addr of `ai`.
+fn sockAddr(ai: *mut AddrInfo) [*]u8 {
+    var p = ai.first
+    if isDarwin() {
+        p = ai.second
+    }
+    if p |a| {
+        return a
+    }
+    unreachable
+}
+
+// getaddrinfo for `host` and `port` (TCP) into `head`: 0, RESOLVE_INVALID
+// when `host` is empty or too long, or getaddrinfo's own non-zero code.
+fn resolve(host: []u8, port: u16, flags: i32, head: *mut ?*mut AddrInfo) i32 {
+    var name = @zeroed([256]u8)
+    if host.len == 0 || host.len >= 256 {
+        return RESOLVE_INVALID
+    }
+    for i, c in host {
+        if c == 0 {
+            return RESOLVE_INVALID
+        }
+        name[i] = c
+    }
+    // the port in decimal, NUL-terminated
+    var service = @zeroed([8]u8)
+    var digits = @zeroed([8]u8)
+    var n: usize = 0
+    var v = port as u32
+    while true {
+        digits[n] = '0' + (v % 10) as u8
+        n += 1
+        v = v / 10
+        if v == 0 {
+            break
+        }
+    }
+    for i in 0..n {
+        service[i] = digits[n - 1 - i]
+    }
+    var hints = @zeroed(AddrInfo)
+    hints.flags = flags
+    hints.socktype = SOCK_STREAM
+    return getaddrinfo(name[..].ptr, service[..].ptr, &hints, head)
 }
 
 extern struct PollFd {
@@ -185,7 +288,6 @@ extern struct PollFd {
     revents: i16
 }
 
-let AF_INET: i32 = 2
 let SOCK_STREAM: i32 = 1
 let POLLIN: i16 = 1
 let EINTR: i32 = 4
@@ -245,53 +347,6 @@ fn noSigpipe(fd: i32) {
     }
 }
 
-// A `sockaddr_in` for `host` and `port` in `addr`; false when `host` is
-// not dotted IPv4 or `localhost`.
-fn inetAddr(host: []u8, port: u16, addr: *mut [16]u8) bool {
-    var ip = [4]u8{127, 0, 0, 1}
-    if !text.eql(host, "localhost") {
-        var part: usize = 0
-        var value: u32 = 0
-        var digits: usize = 0
-        for c in host {
-            if c == '.' && digits > 0 && part < 3 {
-                ip[part] = value as u8
-                part += 1
-                value = 0
-                digits = 0
-            } else if c >= '0' && c <= '9' && digits < 3 {
-                value = value * 10 + (c - '0') as u32
-                digits += 1
-            } else {
-                return false
-            }
-            if value > 255 {
-                return false
-            }
-        }
-        if part != 3 || digits == 0 {
-            return false
-        }
-        ip[3] = value as u8
-    }
-    if isDarwin() {
-        // sin_len, sin_family
-        addr[0] = 16
-        addr[1] = AF_INET as u8
-    } else {
-        // sin_family (16 bits, little-endian)
-        addr[0] = AF_INET as u8
-        addr[1] = 0
-    }
-    // sin_port, sin_addr: network byte order
-    addr[2] = (port >> 8) as u8
-    addr[3] = (port & 0xff) as u8
-    for i, b in ip {
-        addr[4 + i] = b
-    }
-    return true
-}
-
 extern fn ore_std_errno() i32
 extern("listen") fn cListen(fd: i32, backlog: i32) i32
 extern("connect") fn cConnect(fd: i32, addr: [*]u8, len: u32) i32
@@ -302,6 +357,8 @@ extern fn getsockname(fd: i32, addr: [*]u8, len: *mut u32) i32
 extern fn setsockopt(fd: i32, level: i32, name: i32, value: [*]u8, len: u32) i32
 extern fn poll(fds: [*]PollFd, n: u64, timeout: i32) i32
 extern fn send(fd: i32, buf: [*]u8, n: usize, flags: i32) isize
+extern fn getaddrinfo(node: [*]u8, service: [*]u8, hints: *AddrInfo, res: *mut ?*mut AddrInfo) i32
+extern fn freeaddrinfo(res: ?*mut AddrInfo)
 extern fn uname(buf: [*]u8) i32
 extern fn read(fd: i32, buf: [*]u8, n: usize) isize
 extern fn close(fd: i32) i32
