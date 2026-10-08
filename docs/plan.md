@@ -12,17 +12,16 @@ as the acceptance test of `std.http`. Finished steps are in
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Ore/Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | P2 leftovers + O1 server basics | X2.2 rename, then P2.4 (fmt), then F1.1 | cloud once X1.2 is done; local until then |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | P2 leftovers + O1 server basics | P2.4 (fmt), then F1.1 | cloud once X1.2 is done; local until then |
 | Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold) | – until O6–O9 | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 (F1.1 only) | F1.1, after O1.4a | cloud |
 
-Order of dispatch (2026-10-08): names and style first. X2.1 (rename
-script), then X2.2 (rename, isolated), then P2.4 (`aye fmt` and
-`cargo fmt` over the repo), then the local move to
-`~/Documents/ayelang/aye`; after that lane cards in lane priority
-(F1.1 first, it builds on O1.4a), with X1.1 beside them. Project steps go when their condition
-holds: X1.2 once the user enables cloud, X2.2 at a point with no open
-branch. The browser resumes when Aye criteria O6–O9 are met, in the
+Order of dispatch (2026-10-08): names and style first. The rename
+is done (X2, 3042d53); next P2.4 (`aye fmt` and `cargo fmt` over the
+repo, isolated), then X5 (local move to `~/Documents/ayelang/aye`);
+after that lane cards in lane priority (F1.1 first, it builds on
+O1.4a), with X1.1 beside them. Project steps go when their condition
+holds: X1.2 once the user enables cloud. The browser resumes when Aye criteria O6–O9 are met, in the
 same step that splits `browser/` into its own repo (P8.1).
 
 ## Project
@@ -36,9 +35,7 @@ Steps not tied to one lane, in this order. Their cards are in
    an Ubuntu 24.04 setup script in the repo, then the first full
    `cargo test --release` on the cloud VM (4 vCPU). Failures become
    new steps.
-2. **X2 rename Ore → Aye.** X2.1 writes and dry-runs the rename script;
-   X2.2 runs it as one isolated step: no other agent runs, no other
-   branch is open.
+2. **X2 rename Ore → Aye.** Done 2026-10-08 (3042d53, `scripts/rename-aye.py`).
 3. **X3 website** ayelang.dev on Cloudflare Workers (`site/`); v1 live 2026-10-08.
 4. **X4 go public** (repo github.com/aye-lang/aye, with the
    browser): only with the user's OK.

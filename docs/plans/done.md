@@ -119,3 +119,11 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | id | date | result | merge |
 |---|---|---|---|
 | F0.1 | 2026-10-08 | Design doc [`docs/framework.md`](../framework.md); open choices answered; the user's approval of its three questions is pending | 0124e64 |
+
+## Project lane
+
+| id | date | result | merge |
+|---|---|---|---|
+| X3 v1 | 2026-10-08 | ayelang.dev landing page live on a Cloudflare Worker (`site/`) | d901896 |
+| X2.1 | 2026-10-08 | `scripts/rename-aye.py` with `--dry-run`/`--apply`; trial apply passed the full suite | 76eb976 |
+| X2.2 | 2026-10-08 | Ore → Aye: `aye` command, crate and binary, `.aye` files, `AYE_`/`aye_` names, docs; 513 moved, 321 rewritten | 3042d53 |

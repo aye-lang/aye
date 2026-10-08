@@ -170,6 +170,19 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - time box: 45 min
 - notes: three runs each, report the median.
 
+#### O1.9: quiet exit on a closed pipe
+- lane: aye
+- goal: `aye spec | head`, `aye doc --signatures std | head` and every other command exit quietly when stdout is closed (no Rust panic text); agents pipe output to `head` all the time.
+- serves: AI-writability (no misleading panic in tool output)
+- files: `src/main.rs` (or wherever output is written), a test in `tests/golden.rs` or a new small test
+- verify: `cargo test --release` → exit 0, with a test that runs `aye spec` with a closed stdout and checks stderr is empty
+- depends on: –
+- parallel with: all but other `src/main.rs` steps
+- where: cloud (local until X1.2)
+- model: sonnet
+- time box: 20 min
+- notes: found in X2.2 (`aye spec | head -3` printed a broken-pipe panic).
+
 ## Cards: O3 std breadth (next)
 
 #### O3.1: std.json parse

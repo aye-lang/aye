@@ -43,31 +43,10 @@ docs, error texts and the cache directory say Aye, and the full suite
 passes. Decided, not reopened: name Aye, command `aye`, extension `.aye`,
 also "ayelang".
 
-#### X2.1: rename script, dry run
-- lane: project
-- goal: a script that performs the whole rename (git mv of every `.ore` file, `Cargo.toml` package and binary name, `ore` command in tests and docs, `ORE_` names (environment variables, C prelude macros), `~/.cache/ore`, the planned `ore.lock` in docs), with a `--dry-run` that lists every change.
-- serves: X2's done line
-- files: `scripts/rename-aye.py` (new)
-- verify: `python3 scripts/rename-aye.py --dry-run > target/rename.txt; echo $?` → 0; the report gives the count of files moved and lines changed, and lists every match it chose not to change (for example "ore" inside other words, `browser/` site data)
-- depends on: –
-- parallel with: all (changes no tracked file but the script)
-- where: cloud
-- model: sonnet
-- time box: 45 min
-- notes: about 471 tracked `.ore` files and ~317 files that contain the word "ore" (2026-10-08). Words such as "more", "store", "before" must not change; match `\bore\b`, `Ore`, `.ore`, `ORE_` only.
-
-#### X2.2: run the rename
-- lane: project
-- goal: run the X2.1 script on `main`, fix what the full suite finds, merge.
-- serves: X2's done line
-- files: the whole tree
-- verify: `cargo build --release && target/release/aye check browser && cargo test --release > target/test.log 2>&1; echo $?` → 0
-- depends on: X2.1; every other branch merged or parked; no other agent running
-- parallel with: none (isolated step)
-- where: local or cloud, whichever holds the archives the browser tests need (`cargo test` needs none; local only if `page_load.py` is rerun)
-- model: sonnet
-- time box: 45 min
-- notes: after it merges, main updates `docs/plan.md` and lane plans to say `aye`; old step ids stay.
+Done 2026-10-08: X2.1 wrote `scripts/rename-aye.py` (76eb976), X2.2
+ran it (3042d53): 513 files moved, 321 rewritten. Kept on purpose:
+page-content fixtures under `browser/tests`, recorded search queries,
+and lines that describe the rename.
 
 ## X3: website
 
@@ -75,6 +54,31 @@ ayelang.dev, a Cloudflare Worker serving `site/public` (deploy:
 `cd site && wrangler deploy`, see `site/README.md`). v1 (landing page)
 went live 2026-10-08. Next: the spec and std docs (`aye doc --html`,
 O6.3, when it exists).
+
+## X5: local move
+
+#### X5.1: path-independent `window_forms_html5`
+- lane: project
+- goal: the `forms_html5.validation.png` golden no longer contains the checkout path (the URL bar shows the file path), so the test passes from any directory.
+- serves: X5
+- files: `tests/browser.rs` (the test), its golden PNG, whatever sets the URL (prefer a fixed `file:///fixture/...` style URL or a relative display over re-blessing per path)
+- verify: `cargo test --release --test browser window_forms_html5` → exit 0 from the main checkout and from a copy under `/tmp` (`git worktree add /tmp/x51 HEAD`)
+- depends on: P2.4
+- parallel with: none of the src/ or tests/ steps
+- where: local
+- model: sonnet
+- time box: 30 min
+- notes: found by X2.1's trial run.
+
+#### X5.2: move the checkout
+- lane: project
+- goal: the repo lives at `~/Documents/ayelang/aye`.
+- serves: X5
+- files: none tracked
+- verify: in the new folder, `cargo test --release > target/test.log 2>&1; echo $?` → 0
+- depends on: X5.1; no agent running, no worktree open
+- where: local (main context, a few commands)
+- notes: `mv`, then copy the memory dir to the new project key; the user restarts Claude Code there.
 
 ## X4: go public (later)
 
