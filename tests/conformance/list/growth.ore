@@ -1,0 +1,18 @@
+import std.heap.General
+import std.list.List
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var l = List(u64).init(gpa.allocator())
+    defer l.deinit()
+    for i in 0..10000 {
+        try l.append(i as u64)
+    }
+    var sum: u64 = 0
+    for x in l.items() {
+        sum += x
+    }
+    @println(l.len())
+    @println(sum)
+}

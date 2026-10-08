@@ -1,0 +1,13 @@
+import std.sync.Atomic
+
+pub fn main() {
+    var a = Atomic(u8).init(250)
+    @println(a.add(10))
+    @println(a.load())
+    @println(a.sub(5))
+    @println(a.compareSwap(255, 7))
+    @println(a.load())
+    @println(a.compareSwap(255, 8))
+    a.store(1)
+    @println(a.load())
+}

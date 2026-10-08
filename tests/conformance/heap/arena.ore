@@ -1,0 +1,18 @@
+import std.heap.Arena
+import std.heap.General
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var arena = Arena.init(gpa.allocator())
+    defer arena.deinit()
+    let alloc = arena.allocator()
+    var total: i64 = 0
+    for i in 0..100 {
+        let p = try alloc.create(i as i64)
+        total += p.*
+    }
+    @println(total)
+    let s = try alloc.alloc(0 as u8, 1000)
+    @println(s.len)
+}

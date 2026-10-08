@@ -1,0 +1,9 @@
+import std.time
+
+pub fn main() {
+    let a = time.monotonicMs()
+    time.sleep(50)
+    let b = time.monotonicMs()
+    @println(b >= a + 50)
+    @println(b - a < 5000)
+}

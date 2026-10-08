@@ -1,0 +1,18 @@
+import std.heap.General
+import std.text.Builder
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var b = Builder.init(gpa.allocator())
+    defer b.deinit()
+    try b.append("n=")
+    try b.appendInt(-42)
+    try b.appendByte(' ')
+    try b.appendUint(7)
+    try b.appendChar(0xE9)
+    @println(b.bytes())
+    @println(b.len())
+    b.clear()
+    @println(b.len())
+}

@@ -1,0 +1,9 @@
+import std.mem
+
+pub fn main() {
+    if mem.indexOf("hello", 'l') |i| {
+        @println(i)
+    }
+    @println(mem.indexOf("hello", 'z') == null)
+    @println(mem.indexOf("", 'a') == null)
+}

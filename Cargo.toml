@@ -10,3 +10,7 @@ license = "MIT OR Apache-2.0"
 [[test]]
 name = "golden"
 harness = false
+
+[[test]]
+name = "conformance"
+harness = false
