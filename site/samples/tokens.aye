@@ -1,0 +1,46 @@
+import std.heap.General
+import std.list.List
+
+enum Token {
+    Num { value: i64 }
+    Op { text: []u8 }
+}
+
+error LexError { Unexpected }
+
+fn lex(list: *mut List(Token), src: []u8) !void {
+    var i: usize = 0
+    while i < src.len {
+        let c = src[i]
+        if c >= '0' && c <= '9' {
+            var n: i64 = 0
+            while i < src.len && src[i] >= '0' && src[i] <= '9' {
+                n = n * 10 + (src[i] - '0') as i64
+                i += 1
+            }
+            try list.append(Token.Num { value: n })
+        } else if c == '+' || c == '*' {
+            try list.append(Token.Op { text: src[i..i + 1] })
+            i += 1
+        } else if c == ' ' {
+            i += 1
+        } else {
+            return LexError.Unexpected
+        }
+    }
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var toks = List(Token).init(gpa.allocator())
+    defer toks.deinit()
+
+    try lex(&mut toks, "12 + 3 * 4")
+    for t in toks.items() {
+        match t {
+            .Num { value } => @println(value),
+            .Op { text } => @println(text)
+        }
+    }
+}
