@@ -1,5 +1,5 @@
-// std.http: the HTTP/1.1 wire format, without sockets. `parse` reads one
-// request from the front of a byte buffer and says how many bytes it used,
+// std.http: the HTTP/1.1 wire format, and `Server`, a thread per connection.
+// `parse` reads one request from a byte buffer and says how many bytes it used,
 // so a server can parse pipelined requests by parsing again from the rest.
 // `writeResponse` builds a response. A handler takes a context pointer and
 // a `*Request` and returns a `Response`; there are no closures.
@@ -9,11 +9,21 @@
 // is refused. The size limits give distinct error tags, so the server can
 // answer 400, 413, 414, 431 or 505 (`errorStatus`).
 
+import std.heap.Arena
+import std.heap.General
 import std.list.List
+import std.mem
 import std.mem.AllocError
 import std.mem.Allocator
+import std.net
+import std.net.Conn
+import std.net.ListenError
+import std.net.Listener
+import std.sync.Atomic
 import std.text
 import std.text.Builder
+import std.thread
+import std.thread.Thread
 
 /// Why `parse` gave no request. `Incomplete` is not a fault: the buffer
 /// holds only the start of a request, so read more bytes and parse again.
@@ -437,4 +447,210 @@ pub fn writeResponse(out: *mut Builder, res: Response) AllocError!void {
     try out.appendUint(res.body.len as u64)
     try out.append("\r\n\r\n")
     try out.append(res.body)
+}
+
+/// Adds a `Connection` header to a copy of the response's header list.
+fn withConnection(alloc: Allocator, res: Response, value: []u8) AllocError!Response {
+    let n = res.headers.len
+    let hs = try alloc.alloc(Header { name: "Connection", value: value }, n + 1)
+    for i in 0..n {
+        hs[i] = res.headers[i]
+    }
+    return Response { status: res.status, headers: hs, body: res.body }
+}
+
+/// Listens on `host:port` (port 0 lets the system pick one) for a
+/// context of type `T`; `ctx` must stay valid until `run` has returned.
+pub fn listen(comptime T: type, host: []u8, port: u16, ctx: *mut T, handler: fn(*mut T, *Request, *mut Response, Allocator)) ListenError!Server {
+    let l = try net.listen(host, port)
+    var lo: []u8 = "127.0.0.1"
+    if mem.indexOf(host, ':') != null {
+        lo = "::1"
+    }
+    return Server {
+        listener: l,
+        ctx: @ptrCast([*]u8, ctx),
+        handler: @ptrCast(fn([*]u8, *Request, *mut Response, Allocator), handler),
+        limits: defaultLimits(),
+        idleMs: 5000,
+        stopped: Atomic(u32).init(0),
+        loopback: lo,
+    }
+}
+
+/// Serves HTTP/1.1 on a TCP port: a thread per connection, with keep-alive
+/// and pipelining. Every handler gets the context pointer given to `listen`
+/// (the `std.thread.spawn(T, f, arg)` shape; there are no closures). A
+/// handler is `fn(ctx: *mut T, req: *Request, res: *mut Response, alloc:
+/// Allocator)`: it fills `res` (status 200 and no body to begin with);
+/// `alloc` is an arena that lives until the response is written, so a
+/// handler allocates and never frees. Handlers run on many threads at once:
+/// what they share through `ctx` needs a `std.sync.Mutex` or an `Atomic`.
+/// `HEAD` is not special: the body is sent.
+///
+/// Make it with `listen` (which listens, so `port()` is known at once, also
+/// for port 0), run `run` on a thread, and end it with `stop`.
+pub struct Server {
+    listener: Listener
+    ctx: [*]u8
+    handler: fn([*]u8, *Request, *mut Response, Allocator)
+    /// The size limits for parsing requests; `defaultLimits()` to begin with.
+    limits: Limits
+    /// How long an open connection may wait for its next request, in
+    /// milliseconds (5000 to begin with); `stop` takes at most this long to
+    /// finish the connections that are open.
+    idleMs: u32
+    stopped: Atomic(u32)
+    loopback: []u8
+
+    /// The port it listens on.
+    pub fn port(self: *Self) u16 {
+        return self.listener.port()
+    }
+
+    /// Accepts connections, one thread each, until `stop`; then waits for
+    /// the connections to end and closes the listener. `alloc` is used only
+    /// by this thread, for the bookkeeping.
+    pub fn run(self: *mut Self, alloc: Allocator) AllocError!void {
+        var jobs = List(*mut Job).init(alloc)
+        defer jobs.deinit()
+        while self.stopped.load() == 0 {
+            let c = self.listener.accept() catch |e| {
+                continue
+            }
+            if self.stopped.load() != 0 {
+                c.close()
+                break
+            }
+            reap(alloc, &mut jobs, false)
+            let job = try alloc.create(Job { server: self, conn: c, done: Atomic(u32).init(0), thread: null })
+            job.thread = thread.spawn(Job, jobMain, job) catch |e| {
+                c.close()
+                alloc.destroy(job)
+                continue
+            }
+            try jobs.append(job)
+        }
+        reap(alloc, &mut jobs, true)
+        self.listener.close()
+    }
+
+    /// Asks `run` to return: sets the flag and connects once to wake up
+    /// `accept`. Safe to call from any thread; connections that are open
+    /// end within `idleMs` or when their peer closes.
+    pub fn stop(self: *mut Self) {
+        self.stopped.store(1)
+        let c = net.connect(self.loopback, self.listener.port()) catch |e| {
+            return
+        }
+        c.close()
+    }
+
+    fn serveConn(self: *mut Self, alloc: Allocator, conn: Conn) {
+        var inbuf = Builder.init(alloc)
+        defer inbuf.deinit()
+        var off: usize = 0
+        var chunk = @zeroed([4096]u8)
+        while self.stopped.load() == 0 {
+            var arena = Arena.init(alloc)
+            defer arena.deinit()
+            let a = arena.allocator()
+            let parsed = parse(a, inbuf.bytes()[off..], self.limits) catch |e| {
+                if e == ParseError.Incomplete {
+                    if off > 0 {
+                        var rest = Builder.init(alloc)
+                        rest.append(inbuf.bytes()[off..]) catch |e2| {
+                            rest.deinit()
+                            return
+                        }
+                        inbuf.deinit()
+                        inbuf = rest
+                        off = 0
+                    }
+                    let n = conn.readTimeout(chunk[..], self.idleMs) catch |e2| {
+                        return
+                    }
+                    if n == 0 {
+                        return
+                    }
+                    inbuf.append(chunk[0..n]) catch |e2| {
+                        return
+                    }
+                    continue
+                }
+                let bad = Response { status: errorStatus(e), headers: []Header{}, body: []u8{} }
+                send(a, conn, bad, "close")
+                return
+            }
+            var req = parsed.request
+            off += parsed.consumed
+            var res = Response { status: 200, headers: []Header{}, body: []u8{} }
+            self.handler(self.ctx, &req, &mut res, a)
+            let keep = req.keepAlive()
+            var how: []u8 = ""
+            if !keep {
+                how = "close"
+            } else if req.minor == 0 {
+                how = "keep-alive"
+            }
+            send(a, conn, res, how)
+            req.deinit()
+            if !keep {
+                return
+            }
+            if off == inbuf.len() {
+                inbuf.clear()
+                off = 0
+            }
+        }
+    }
+}
+
+// One accepted connection of a `Server`, with its thread.
+struct Job {
+    server: *mut Server
+    conn: Conn
+    done: Atomic(u32)
+    thread: ?Thread
+}
+
+// Joins the threads that have ended (all of them with `all`).
+fn reap(alloc: Allocator, jobs: *mut List(*mut Job), all: bool) {
+    var i: usize = 0
+    while i < jobs.len() {
+        let j = jobs.items()[i]
+        if all || j.done.load() != 0 {
+            j.thread.?.join()
+            alloc.destroy(j)
+            jobs.swapRemove(i)
+        } else {
+            i += 1
+        }
+    }
+}
+
+// The thread of a connection: its own allocator (they are not shared).
+fn jobMain(job: *mut Job) {
+    var gpa = General.init()
+    defer gpa.deinit()
+    job.server.serveConn(gpa.allocator(), job.conn)
+    job.conn.close()
+    job.done.store(1)
+}
+
+// Writes `res`, with a `Connection` header when `how` is not empty.
+fn send(a: Allocator, conn: Conn, res: Response, how: []u8) {
+    var out = Builder.init(a)
+    var r = res
+    if how.len > 0 {
+        r = withConnection(a, res, how) catch |e| {
+            return
+        }
+    }
+    writeResponse(&mut out, r) catch |e| {
+        return
+    }
+    conn.write(out.bytes()) catch |e| {
+        return
+    }
 }

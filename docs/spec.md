@@ -1528,7 +1528,7 @@ std.log       err, info: formatted lines to stderr                           bel
 std.diag      Diagnostics: coded messages over byte ranges, lineCol          below
 std.os        args, exit                                                     below
 std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn                below
-std.http      HTTP/1.1 request parser and response writer, no sockets        ore doc --signatures std.http
+std.http      HTTP/1.1 parser, response writer, thread-per-connection serve  ore doc --signatures std.http
 ```
 
 ### std.mem
