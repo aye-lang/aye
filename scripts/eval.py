@@ -242,7 +242,7 @@ def write_doc(results, args, outdir):
         if i >= 0:
             findings = old[i:]
     with open(DOC, "w") as f:
-        f.write("\n".join(lines) + findings)
+        f.write("\n".join(lines) + "\n" + findings)
 
 
 def main():
