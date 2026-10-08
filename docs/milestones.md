@@ -1,5 +1,25 @@
 # Stage0 milestones
 
+| Milestone | Status | Date | What is left |
+| --- | --- | --- | --- |
+| M1 Data modeling | done | 2026-10-05 | nothing |
+| M2 Error handling | done | 2026-10-05 | nothing |
+| M3 Memory and tests | done | 2026-10-05 | nothing |
+| M4 comptime generics, Pool, Handle | done | 2026-10-05 | nothing |
+| M5 Modules and first real tool | done | 2026-10-08 | nothing; gate rerun passed (P2.5c) |
+| M6 Operators, constants, control flow | done | 2026-10-06 | nothing |
+| M7 C interop for real libraries | done | 2026-10-06 | nothing |
+| M8 std for real programs | done | 2026-10-06 | nothing |
+| M9 Formatter and docs | done | 2026-10-06 | nothing |
+| M9.5 Ergonomics from the browser | done | 2026-10-06 | nothing |
+| M9.6 Ergonomics, round 2 | done | 2026-10-06 | nothing |
+| M9.7 Ergonomics and runtime, round 3 | done | 2026-10-06 | nothing |
+| M9.8 Round 4 and design leftovers | done | 2026-10-06 | nothing |
+| M9.9 Round 5 | done | 2026-10-06 | nothing |
+| M10 Threads | partial | 2026-10-06 | ThreadSanitizer run: not possible on this Mac |
+| M11 cimport | done | 2026-10-07 | nothing |
+| M12 Coroutines | done | 2026-10-07 | nothing |
+
 Each milestone ends with an acceptance program that must pass `cargo test`. A
 milestone is done when its acceptance tests pass. Anything not listed is out of
 scope for that milestone and goes to a later one. Every milestone also has one
