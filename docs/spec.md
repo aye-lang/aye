@@ -447,7 +447,7 @@ pub fn main() {
   headers), so it must match the library's. Modules that declare one C
   function give it the same signature.
 - `extern("link") fn name(...)` calls the C symbol `link` under the Ore
-  name `name` (not on a function with a body; an empty name is E0094).
+  name `name` (not on a function with a body; an empty name is E0115).
 - C-compatible types, the only ones allowed in an `extern fn`: integers
   (`i32` is C `int`, `usize` is `size_t`; `c_int`, `c_long`, `c_ulong`,
   ... name C's types: other names for `i32`, `i64`, `u64`, ..., the sizes

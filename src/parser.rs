@@ -260,7 +260,7 @@ impl Parser {
                     Tok::Kw(Kw::Fn) => {
                         let mut f = self.fn_decl(is_pub, true)?;
                         if link.is_some() && f.body.is_some() {
-                            return Err(Error::new(E0011, f.span, "an exported `extern fn` (with a body) has no link name: it is exported under its own name"));
+                            return Err(Error::new(E0115, f.span, "an exported `extern fn` (with a body) has no link name: it is exported under its own name"));
                         }
                         f.link = link;
                         Ok(Item::Fn(f))
@@ -369,10 +369,10 @@ impl Parser {
         self.expect(&Tok::LParen)?;
         let at = self.span();
         let Tok::Str(bytes) = self.peek().clone() else {
-            return Err(Error::new(E0094, at, "`extern(...)` takes a string literal: `extern(\"connect\") fn ...`"));
+            return Err(Error::new(E0115, at, "`extern(...)` takes a string literal: `extern(\"connect\") fn ...`"));
         };
         if bytes.is_empty() {
-            return Err(Error::new(E0094, at, "`extern(\"\")` needs a link name: `extern(\"connect\") fn ...`"));
+            return Err(Error::new(E0115, at, "`extern(\"\")` needs a link name: `extern(\"connect\") fn ...`"));
         }
         self.bump();
         self.expect(&Tok::RParen)?;

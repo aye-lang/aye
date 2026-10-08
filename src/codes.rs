@@ -2472,6 +2472,22 @@ pub fn main() {
 }
 "#,
 }
+E0115 = 115 {
+    "bad `extern` link name",
+    "`extern(\"name\") fn` declares the C function `name` under the Ore name of the `fn`: the link name is a non-empty string literal, and the function has no body (a function with a body is exported to C under its own name).",
+    r#"extern("") fn cAbs(x: i32) i32
+
+pub fn main() {
+    @println(cAbs(-1))
+}
+"#,
+    r#"extern("abs") fn cAbs(x: i32) i32
+
+pub fn main() {
+    @println(cAbs(-1))
+}
+"#,
+}
 }
 
 #[cfg(test)]
