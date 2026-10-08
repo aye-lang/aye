@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aye: a systems language for code written by AI agents</title>
+<meta name="description" content="Aye is a pre-release systems programming language designed for code written by AI agents. It compiles to C and builds one native binary with clang.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-row">
+    <a class="brand" href="/">Aye</a>
+    <nav aria-label="Sections">
+      <a href="#why">Why</a>
+      <a href="#tools">Tools</a>
+      <a href="#example">Example</a>
+      <a href="#browser">Browser</a>
+      <a href="#roadmap">Roadmap</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="hero">
+    <p class="status">Pre-release</p>
+    <h1>A systems language for code written by AI&nbsp;agents</h1>
+    <p class="lead">Aye compiles to C and builds one native binary with clang. It has no garbage collector, no borrow checker, no exceptions and no macros. Memory comes from explicit allocators and is released with <code>defer</code>.</p>
+    <p class="note">Aye is not released yet. There is no download and no public repository. The source will be published under MIT OR Apache-2.0. The command is <code>aye</code> and source files end in <code>.aye</code>.</p>
+  </section>
+
+  <section id="why">
+    <h2>Why a new language for agents</h2>
+    <p>A new language has no training data. Aye makes up for that in three ways:</p>
+    <ul>
+      <li><strong>Familiar syntax.</strong> Braces and <code>name: Type</code> like Go, errors as values like Zig's error unions, tagged enums with exhaustive <code>match</code> like Rust. When a syntax choice is in doubt, Aye takes the form an agent is least likely to get wrong.</li>
+      <li><strong>The whole spec fits in one context.</strong> <code>aye spec</code> prints the complete language reference as one Markdown file. A test keeps it within a budget of about 30k tokens.</li>
+      <li><strong>Compiler feedback you can act on.</strong> Every error has a code, a position, often a fix-it, and an explanation with a wrong and a fixed example.</li>
+    </ul>
+    <p>The design rules follow from the same goal: no hidden allocation (a function that allocates takes an <code>Allocator</code>), no hidden control flow (no exceptions, no operator overloading, no destructors), generics as plain compile-time code instead of a macro language, and C as a first-class citizen. Integer overflow, out-of-bounds access, bad casts and division by zero trap in debug and safe builds.</p>
+  </section>
+
+  <section id="tools">
+    <h2>One toolchain</h2>
+    <dl class="cmds">
+      <dt><code>aye spec</code></dt>
+      <dd>Print the language reference. Every example program in it is type-checked by the test suite, and so is every example it says the compiler rejects.</dd>
+      <dt><code>aye check --json</code></dt>
+      <dd>Run the front end only: no C, no clang. Each diagnostic has a file, line, column, error code and machine-applicable fixes.</dd>
+      <dt><code>aye explain &lt;code&gt;</code></dt>
+      <dd>Explain an error code, with a wrong and a fixed example.</dd>
+      <dt><code>aye fix</code></dt>
+      <dd>Apply the fix-its of <code>aye check</code> in place.</dd>
+      <dt><code>aye fmt</code></dt>
+      <dd>The one format. Idempotent, keeps every comment, never changes the tokens.</dd>
+      <dt><code>aye test</code></dt>
+      <dd>Run the <code>test</code> blocks of every module, with <code>--json</code> output.</dd>
+      <dt><code>aye doc --signatures</code></dt>
+      <dd>Print the public API of a module, or of std, with its doc comments: context for an agent next to the spec.</dd>
+      <dt><code>aye cimport</code></dt>
+      <dd>Show the declarations that <code>@cimport</code> makes of a C header. Headers are read at compile time with libclang; C functions are called directly, with no wrapper.</dd>
+      <dt><code>aye build</code>, <code>aye run</code></dt>
+      <dd>Build one native executable in <code>debug</code>, <code>safe</code> or <code>fast</code> mode.</dd>
+    </dl>
+  </section>
+
+  <section id="example">
+    <h2>Example</h2>
+    <p>A small tokenizer: a tagged enum, an error set, an allocator passed in explicitly, and <code>defer</code> for cleanup. The debug allocator reports any memory that was not freed.</p>
+    <figure>
+      <figcaption>tokens.aye</figcaption>
+<pre><code>import std.heap.General
+import std.list.List
+
+enum Token {
+    Num { value: i64 }
+    Op { text: []u8 }
+}
+
+error LexError { Unexpected }
+
+fn lex(list: *mut List(Token), src: []u8) !void {
+    var i: usize = 0
+    while i &lt; src.len {
+        let c = src[i]
+        if c &gt;= '0' &amp;&amp; c &lt;= '9' {
+            var n: i64 = 0
+            while i &lt; src.len &amp;&amp; src[i] &gt;= '0' &amp;&amp; src[i] &lt;= '9' {
+                n = n * 10 + (src[i] - '0') as i64
+                i += 1
+            }
+            try list.append(Token.Num { value: n })
+        } else if c == '+' || c == '*' {
+            try list.append(Token.Op { text: src[i..i + 1] })
+            i += 1
+        } else if c == ' ' {
+            i += 1
+        } else {
+            return LexError.Unexpected
+        }
+    }
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var toks = List(Token).init(gpa.allocator())
+    defer toks.deinit()
+
+    try lex(&amp;mut toks, "12 + 3 * 4")
+    for t in toks.items() {
+        match t {
+            .Num { value } =&gt; @println(value),
+            .Op { text } =&gt; @println(text)
+        }
+    }
+}</code></pre>
+    </figure>
+    <p>Delete the first line and check the file. The checker names the missing import and offers a fix; <code>aye fix</code> applies it:</p>
+<pre class="term"><code>$ aye check tokens.aye
+tokens.aye:33:15: error[E0084]: `General` is not declared: it is `std.heap.General` (add `import std.heap.General`)
+tokens.aye:2:1: help: add `import std.heap.General`
+$ aye fix tokens.aye
+tokens.aye:2:1: fixed: add `import std.heap.General`
+$ aye check tokens.aye
+$ aye run tokens.aye
+12
++
+3
+*
+4</code></pre>
+  </section>
+
+  <section id="gate">
+    <h2>Tested on a fresh agent</h2>
+    <p>The language has a standing gate: a fresh AI session gets only the output of <code>aye spec</code> and the checker, and writes a small command-line tool. In the latest run, the agent wrote <code>wc</code> and a JSON tokenizer. Both passed the checker in the first round. <code>wc</code> matched the system <code>wc</code> on four inputs, and the tokenizer rejected eleven invalid inputs with positioned errors. The agent found four places where the spec was silent or loose; the spec now covers them.</p>
+  </section>
+
+  <section id="browser">
+    <h2>It scales: a web browser</h2>
+    <p>The anyknown browser is written in Aye: HTML and CSS parsing, a JavaScript engine, layout and painting, plus an interface for AI agents (pages as Markdown or as an accessibility tree, and an MCP server). It calls C libraries such as SDL2, FreeType and libcurl directly.</p>
+    <p class="figure-line"><span class="num">104,795</span> lines of Aye in 185 files, measured on 8 October 2026.</p>
+    <p>The browser will be open source too, released after the language.</p>
+  </section>
+
+  <section id="roadmap">
+    <h2>Roadmap</h2>
+    <p>Work in progress, in no fixed order and with no dates:</p>
+    <ul>
+      <li>std: an HTTP server and client, JSON, paths, processes, wall-clock time and basic cryptography, next to the TCP module that is there today.</li>
+      <li>Packages from local paths and URLs, pinned by content hash in a lock file.</li>
+      <li>Targets: wasm32 and Linux, next to macOS.</li>
+      <li>A test runner for whole trees, with a time per test and time limits.</li>
+      <li>A language server: diagnostics, formatting, hover and go to definition.</li>
+      <li>A web framework built on the HTTP server.</li>
+    </ul>
+  </section>
+</main>
+
+<footer class="wrap foot">
+  <p>Aye is pre-release. Source to be published under MIT OR Apache-2.0.</p>
+</footer>
+</body>
+</html>
