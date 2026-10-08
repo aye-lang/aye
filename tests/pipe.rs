@@ -17,7 +17,12 @@ fn closed_pipe_stderr(args: &[&str]) -> String {
     out.read_exact(&mut head).expect("read head");
     drop(out);
     let mut err = String::new();
-    child.stderr.take().unwrap().read_to_string(&mut err).unwrap();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut err)
+        .unwrap();
     child.wait().unwrap();
     err
 }
