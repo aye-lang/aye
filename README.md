@@ -6,7 +6,7 @@ checker, no exceptions, no macros. Memory is managed through explicit
 `name: Type`, no semicolons). Integer overflow and out-of-bounds access trap in
 checked builds.
 
-Design doc: <https://claude.ai/code/artifact/f86fcc65-a2d3-442d-b96d-fdbe637af2dc>
+Design doc: [`docs/design.md`](docs/design.md)
 
 This repository holds **stage0**: a compiler written in Rust that emits C and
 builds it with clang. It implements a first slice of the language (see

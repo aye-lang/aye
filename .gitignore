@@ -5,3 +5,5 @@
 /out/
 /tmp/
 __pycache__/
+/.claude/skills/
+/.claude/worktrees/
