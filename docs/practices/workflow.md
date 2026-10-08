@@ -231,7 +231,7 @@ the same script a plain Ubuntu VM uses. `<hash>` covers both files, so an
 edit to either builds a new image and nobody runs a stale one. It works
 from a git worktree too: the main checkout's git dir is mounted read-only,
 so `git` runs inside. Linux build output lives in the volume
-`aye-linux-<checkout>-target` over `/work/target`, so it never mixes with
+`aye-linux-<checkout>-<arch>-target` over `/work/target`, so it never mixes with
 the macOS `target/`. It runs 4 CPUs (`LINUX_CPUS`) and 8G (`LINUX_MEMORY`);
 `LINUX_ARCH=amd64` is emulated and only for a build check.
 **Why:** one command, no host cargo, and the container does not touch

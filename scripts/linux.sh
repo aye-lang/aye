@@ -12,11 +12,11 @@
 # image under a new tag; old images stay (remove with `container image rm`).
 # In a git worktree the main checkout's git dir is mounted read-only at its
 # host path, so `git` works inside. Two runs from one checkout share one
-# container name: the second replaces the first. Linux build output lives in the
-# volume `aye-linux-<checkout>-target`, mounted over /work/target, so it never
+# container name per arch: the second replaces the first. Linux build output lives in the
+# volume `aye-linux-<checkout>-<arch>-target`, mounted over /work/target, so it never
 # mixes with the macOS target/ of the checkout. `LINUX_CPUS` (default 4) and
 # `LINUX_MEMORY` (default 8G) size the container. Remove the volume with
-# `container volume rm aye-linux-<checkout>-target`.
+# `container volume rm aye-linux-<checkout>-<arch>-target`.
 set -eu
 cd "$(dirname "$0")/.."
 root=$(pwd)
@@ -26,7 +26,7 @@ hash=$(cat scripts/linux/Containerfile scripts/setup-ubuntu.sh | shasum | cut -c
 image=aye-dev:ubuntu24
 [ "$arch" = arm64 ] || image=$image-$arch
 image=$image-$hash
-name=aye-linux-$base
+name=aye-linux-$base-$arch
 vol=$name-target
 
 if ! container image inspect "$image" >/dev/null 2>&1; then
