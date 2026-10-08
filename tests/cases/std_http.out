@@ -1,0 +1,36 @@
+get: GET /index.html?a=1 HTTP/1.1 consumed 70 of 70
+  headers 2, body 0 bytes: []
+host=example.com agent=[ore] accept=true keepalive=true
+first: POST /a HTTP/1.1 consumed 44 of 87
+  headers 1, body 5 bytes: [hello]
+second: GET /b HTTP/1.0 consumed 43 of 43
+  headers 1, body 0 bytes: []
+chunked: POST /up HTTP/1.1 consumed 89 of 89
+  headers 1, body 11 bytes: [hello world]
+incomplete prefixes: 89 of 89
+bad chunk: error BadRequest -> 400
+no version: error BadRequest -> 400
+bad version: error BadRequest -> 400
+http/2: error UnsupportedVersion -> 505
+bad method: error BadRequest -> 400
+bad header: error BadRequest -> 400
+both lengths: error BadRequest -> 400
+bad length: error BadRequest -> 400
+long line: error RequestLineTooLong -> 414
+long line, no end: error RequestLineTooLong -> 414
+big headers: error HeadersTooLarge -> 431
+big headers, no end: error HeadersTooLarge -> 431
+big body: error BodyTooLarge -> 413
+big chunks: error BodyTooLarge -> 413
+ok at the limit: POST / HTTP/1.1 consumed 46 of 46
+  headers 1, body 8 bytes: [12345678]
+short body: error Incomplete -> 400
+HTTP/1.1 404 Not Found
+Content-Type: text/plain
+Cache-Control: no-store
+Content-Length: 4
+
+nopeHTTP/1.1 204 No Content
+Content-Length: 0
+
+[Request Header Fields Too Large] [Unknown]
