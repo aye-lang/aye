@@ -27,7 +27,7 @@
     },
     "mdn": {
       "status": "ok",
-      "max_errors": 17,
+      "max_errors": 16,
       "md": ["# `<details>` HTML details disclosure element", "## In this article", "The **`<details>`**"],
       "note": "Blank band above the header; support icons partly missing. Replay logs 16 lit 'Hydration value mismatch' and 2 '#<Object> is not iterable'."
     },
