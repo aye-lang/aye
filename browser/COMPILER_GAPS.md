@@ -117,6 +117,25 @@ removed in cff3f60.
   prints names through its own `match`.
 - **Status:** open.
 
+#### 52. A method cannot be used as a function value
+
+- **Need:** name a method as a plain function value, for example
+  store `Self.f` as a handler.
+- **Workaround:** declare the function at module level and use that.
+  `Self.f` gives E0074.
+- **Hit by:** std.http `Server` (the handler is stored as a plain fn).
+- **Status:** open.
+
+#### 53. Nested structs and generic methods are rejected
+
+- **Need:** declare a struct inside another struct or function, and
+  give a method its own type parameters.
+- **Workaround:** nested structs give E0006 and generic methods give
+  E0076. std.http `Server` is non-generic and erases `T` with
+  `@ptrCast`, as `std.thread.spawn` does.
+- **Hit by:** std.http `Server`.
+- **Status:** open.
+
 ## Declined by design
 
 #### 5. A local cannot start uninitialized; `@zeroed` makes only C structs
