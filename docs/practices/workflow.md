@@ -157,16 +157,19 @@ in its own worktree), or a path named after the worktree:
 **Why:** a shared output path lets another agent replace your binary
 between your build and your test, with no sign of it.
 
-### At most three agents run builds and tests at once
+### At most two local agents run builds and tests at once
 **Context:** launching parallel step agents that build and test.
 **Bad:** on 2026-10-07 five parallel step agents pushed the load
 average to 40–58 on 10 cores. GitHub replay measured 41 s wall for
 3.5 s of CPU (P4.7), and `http_images_background` failed under GC
-stress, passing on rerun (P1.2).
-**Good:** cap concurrent build/test agents at three; diagnose-only or
-docs steps can run beside them. Speed numbers use CPU time (P1.5) or a
-quiet machine. The three slots are one per lane (Ore, Browser,
-Framework); each lane's steps are in `docs/plans/` (`docs/plan.md`).
+stress, passing on rerun (P1.2). On 2026-10-08 P3.58 was paused for
+machine heat.
+**Good:** cap concurrent build/test agents on the local machine at two;
+diagnose-only, docs and git-only steps can run beside them. Once cloud
+is enabled (`docs/plan.md`, Project X1), the local machine runs only
+local-only work (browser steps that need `target/sites/` archives or
+screenshots); the rest runs on cloud VMs. Speed numbers use CPU time
+(P1.5) or a quiet machine.
 **Why:** wall-clock numbers and timing-sensitive tests are wrong on an
 overloaded machine.
 
@@ -214,8 +217,8 @@ teaches the next agent the old idiom.
   merge message.
 - `cargo build --release`
 - `target/release/ore check browser` (prints nothing on success)
-- `cargo test` (the full suite; `cargo test --test browser` alone is
-  not enough)
+- `cargo test --release` (the full suite; `cargo test --release --test
+  browser` alone is not enough)
 - `browser/build.sh` (fast mode, to `target/anyknown` in this
   worktree; `--mode safe|fast|debug` is optional; an output path, if
   any, stays inside the worktree, see "Build into your own worktree")

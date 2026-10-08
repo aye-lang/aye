@@ -1,84 +1,154 @@
-# Plan: Ore, the anyknown browser and the framework
+# Plan
 
-Work runs in three lanes at the same time. Each lane has its own plan
-file of phases and steps. A step is one goal with one verify command,
-small enough for one agent in one focused session (one reviewable commit
-series). An agent gets exactly one step; whatever else it finds goes
-into its report as a new step, in the lane it belongs to.
+Goal: finish the language (Ore, being renamed Aye: command `aye`,
+extension `.aye`) to the done criteria in [`plans/ore.md`](plans/ore.md),
+then resume the anyknown browser in its own repo. The language lane gets
+most slots. The browser is frozen (maintenance only) and is the
+language's biggest integration test. The framework does one slice (F1)
+as the acceptance test of `std.http`. Finished steps are in
+[`plans/done.md`](plans/done.md).
 
 ## Lanes
 
-| Lane | Plan | Slot | Current phase |
-|---|---|---|---|
-| Ore: make the language and toolchain complete | [`plans/ore.md`](plans/ore.md) | 1 | P2 (open rows), then O1 |
-| Browser: the anyknown browser | [`plans/browser.md`](plans/browser.md) | 2 | P3 and P4 |
-| Framework: a Next.js-like web framework in Ore (`framework/`) | [`plans/framework.md`](plans/framework.md) | 3 | F0 |
+| Lane | Priority | Current phase | Next step | Runs where |
+|---|---|---|---|---|
+| Ore/Aye language ([`plans/ore.md`](plans/ore.md)) | 1, most slots | P2 leftovers + O1 server basics | O1.3a | cloud once X1.2 is done; local until then |
+| Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | PW wrap-up, then P7 maintenance | P3.48 (merge) | local (archives in `target/sites/`, screenshots) |
+| Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 (F1.1 only) | F1.1, after O1.4a | cloud |
 
-A slot is one of the three build-and-test agents that may run at once
-(`docs/practices/workflow.md`, "At most three agents run builds and
-tests at once"); each lane has one. Docs-only and diagnose-only steps
-can run beside them. Every lane's steps are short-lived worktrees off
-`main`, merged one at a time by the integrator.
+Order of dispatch: the browser wrap-ups P3.48, P3.62 and P3.58 first
+(O1.2 and O1.3 are merged: a3498da, 56967d4), with X1.1 beside them;
+then lane cards in lane priority. Project steps go when their condition
+holds: X1.2 once the user enables cloud, X2.2 at a point with no open
+branch. The browser resumes when Ore criteria O6–O9 are met, in the
+same step that splits `browser/` into its own repo (P8.1).
 
-## Cross-lane dependencies
+## Project
 
-- Gaps flow to the Ore lane: the browser and the framework record what
-  Ore or std lacks in `browser/COMPILER_GAPS.md` (**Hit by** names the
-  step); the Ore lane fixes or declines them (O3 in `plans/ore.md`).
-- F1.1 needs O1.4 (`std.http` server); F1.2 needs O1.5 (fs, path);
-  F1.3 needs O3.1 (JSON).
-- The dev server (F3) needs O1.6 (processes) and O3.6 (server-sent
-  events, cookies, forms).
-- Client code (F4) needs O2.4 (wasm32-freestanding) for Ore islands, or
-  O4.2 (path dependencies) plus a browser-lane step that moves the JS
-  lexer and parser into their own module, for a bundler.
-- Testing the framework's islands and dev reload in the anyknown browser
-  would need `WebAssembly` and `EventSource` there (neither exists); the
-  framework tests with Node 22 and Chrome instead.
-- Steps that change `src/` or `std/` can break `browser/`: every lane
-  runs the full check of rule 4 below.
+Steps not tied to one lane, in this order. Their cards are in
+[`plans/project.md`](plans/project.md).
 
-## How an agent runs a step
+1. **X1 cloud enablement.** X1.1: `browser/net/archive.ore` reads
+   `d_namlen` and `st_mtimespec` (macOS only, lines 114 and 131); make
+   it build on Linux. X1.2:
+   an Ubuntu 24.04 setup script in the repo, then the first full
+   `cargo test --release` on the cloud VM (4 vCPU). Failures become
+   new steps.
+2. **X2 rename Ore → Aye.** X2.1 writes and dry-runs the rename script;
+   X2.2 runs it as one isolated step: no other agent runs, no other
+   branch is open.
+3. **X3 website** aye.anyknown.com on GitHub Pages.
+4. **X4 go public** (repo github.com/anyknown-com/aye, with the
+   browser): only with the user's OK.
 
-0. Time box: 45 minutes per step. When it runs out, the agent stops,
-   commits what is coherent on its own, and reports its findings; the
-   rest becomes new steps. A step whose cause is unknown is a diagnose
-   step first; its fix is the next step. Repeated runs under load (10×,
-   30×) belong to the integrator's merge check, not to every step.
-   (P4.9 took 2 h 17 min and P1.7 over 1 h 40 min before this rule.)
+## Execution rules
 
-1. Input: step id, goal, verify, deps. Own worktree off `main`.
-   GPT only through the pi-codex skill.
-2. Read `docs/practices/README.md` and the practices file for the area.
-3. Test or fixture first; small commits. Do not edit `docs/browser.md`,
-   `docs/browser-sites.md` or this file; `docs/milestones.md` only in
-   P2.6. New compiler gaps go in `browser/COMPILER_GAPS.md`.
-4. Before finishing: merge the integration branch in (list each
-   conflict in the merge message); `cargo build --release`,
-   `target/release/ore check browser`, full `cargo test`,
-   `browser/build.sh` with no output path (it writes `target/anyknown`
-   in your worktree; never a shared path such as the scratchpad).
-   `browser/tools/sites.json` expectations only tighten. If a site loses
-   content it had, that is a regression to fix, never a reason to swap
-   its expected strings (P3.20 did, for GitHub's "Unable to load page").
-5. Report: commits, the verify output, the full test result, a "Done so
-   far" paragraph, and follow-ups as new step proposals. A lesson goes
-   into `docs/practices/` with its fix.
-6. Integrator: one merge at a time, `cargo test` after each, shared docs
-   once per batch, then deletes the branch and worktree.
+Every agent reads this section, its one step card, and
+[`practices/README.md`](practices/README.md) plus the practices file of
+its area. Nothing else of the plan.
 
-"This file" in rule 3 includes the lane plans in `docs/plans/`; the
-integrator updates them. Lane-specific decisions are in each lane's
-plan.
+1. **One step per agent.** The agent does its card, commits, reports,
+   and stops. It never starts another step. What else it finds goes into
+   the report as a proposed step (lane, goal, verify). Test or fixture
+   first; commit small and often
+   ([workflow.md, "Commit small and often"](practices/workflow.md#commit-small-and-often)).
+2. **Time box** 45 minutes unless the card says less. At the limit:
+   commit what is coherent, report, stop.
+3. **Stop rules.** The same verify fails twice in a row: stop and report
+   what was tried. Past ~150 turns: commit what works, report, stop.
+   Waiting on a build or a background job: one blocking wait with a
+   timeout, never a poll per turn. Build and test output goes to a log
+   file; read it with `tail -n 30` or `grep`.
+4. **Verify** is the card's command. The report quotes its real exit
+   code and the summary line of its output (for example `test result:
+   ok. 257 passed`), not "tests pass".
+5. **Before finishing a branch** run the checklist in
+   [`practices/workflow.md`](practices/workflow.md), "Checklist before
+   finishing a branch" (merge `main` in, `cargo build --release`,
+   `ore check browser`, full `cargo test --release`, `browser/build.sh`).
+   Docs-only cards skip the build and tests.
+6. **Do not edit** `docs/plan.md`, `docs/plans/*`, `docs/browser.md`,
+   `docs/browser-sites.md`, or `docs/milestones.md` unless the card names
+   it; main updates them once per batch
+   ([workflow.md, "Parallel streams do not edit docs/browser.md"](practices/workflow.md#parallel-streams-do-not-edit-docsbrowsermd)).
+   New compiler gaps go in `browser/COMPILER_GAPS.md`.
+7. **Diagnose, then fix.** A step whose cause is unknown is a diagnose
+   step (cause written down, fix proposed); the fix is the next card.
+8. **Browser symptoms:** before dispatching a browser fix, confirm the
+   symptom on current `main` (`page_load.py check --screens`). P3.4 and
+   P3.5 chased symptoms that no longer reproduced.
+9. **Site expectations only tighten** (`browser/tools/sites.json`). A
+   site that loses content is a regression to fix, never a reason to
+   change its expected strings (P3.20 did, for GitHub).
+10. **Report:** commits (hash and one line each), the verify result, the
+    full-suite result, follow-ups as proposed steps. A lesson goes into
+    `docs/practices/` in the same commit as its fix.
 
-## Decisions
+Merging (main's side):
 
-- **Lanes (2026-10-08):** Ore, Browser and Framework run in parallel,
-  one build slot each. The single plan was split into `docs/plans/`;
-  P-ids kept their rows (P0, P1, P3–P6 in `browser.md`, P2 in
-  `ore.md`), new rows use `O` and `F`.
-- **Compiler gaps:** one list, `browser/COMPILER_GAPS.md`, for every
-  lane.
-- **Integration branch:** `main` (since P0.8, 2026-10-07).
-- **Platform:** macOS only. There is no remote and no CI. M10's
-  ThreadSanitizer run is recorded as not possible on this machine.
+- **Commit audit** before a merge: `git log --oneline main..<branch>`;
+  every commit belongs to the step, none is a stray WIP or revert pair.
+- **One merge per integrator agent**, then the full tests:
+  [workflow.md, "One merge at a time, then the full tests"](practices/workflow.md#one-merge-at-a-time-then-the-full-tests);
+  conflicts are listed in the merge message
+  ([workflow.md, "Say how each conflict was resolved"](practices/workflow.md#say-how-each-conflict-was-resolved)).
+  A branch that already contains current `main` and passed the full
+  suite merges without new tests (git only); otherwise the merge agent
+  merges `main` in first and runs the full suite.
+- **Screenshots before and after** for a merge that changes rendering:
+  `page_load.py check --screens` on the touched sites, both contact
+  sheets named in the report.
+- **Parallelism:** the local machine runs at most 2 build/test agents
+  at once, and only local-only work once cloud is enabled
+  ([workflow.md, "At most two local agents run builds and tests at once"](practices/workflow.md#at-most-two-local-agents-run-builds-and-tests-at-once)).
+  Docs-only and git-only agents run beside them. Cloud agents run on
+  the Claude Code cloud VM (Ubuntu 24.04, 4 vCPU), one step per
+  session; until X1.2 is done, cards marked cloud run locally within
+  the limit of 2. Repeated runs under load (10×, 30×) for a flaky test
+  are the merge agent's check, not every step's.
+- **Model per step:** git only (commit, merge without tests, cleanup,
+  push) → haiku git-runner. A merge that needs build and tests → sonnet,
+  one merge per agent. Implementation with a clear spec → sonnet.
+  Diagnosis or design judgment → opus. Mechanical scripts → haiku
+  script-runner. GPT only through the pi-codex skill
+  ([workflow.md, "Run GPT only through the pi-codex skill"](practices/workflow.md#run-gpt-only-through-the-pi-codex-skill)).
+
+## Step card template
+
+Lane plans keep cards for the current and next phase only; later work
+is a one-line backlog entry until its phase comes up.
+
+```
+#### <id>: <short title>
+- lane: ore | browser | framework | project
+- goal: <one sentence>
+- serves: <done criterion id, e.g. O6 (Ore), W1 (browser), FD1 (framework)>
+- files: <paths expected to change; (new) for new files>
+- verify: `<exact command>` → <expected exit code / output line>
+- depends on: <step ids, or –>
+- parallel with: <step ids or "all"; "not with X" for shared files>
+- where: cloud | local (<reason>)
+- model: haiku | sonnet | opus
+- time box: 45 min
+- notes: ≤ 3 lines, only what the agent cannot find in the code
+```
+
+A card whose work does not fit one agent in the time box with one
+verify is split before dispatch. A card that serves no done criterion
+goes to the backlog or to `done.md` as dropped.
+
+## Standing decisions
+
+- **Lanes and priority (2026-10-08):** language first; browser frozen
+  until O6–O9, then split into its own repo (git filter-repo) and
+  resumed; framework does F1 only. Lane decisions are in each lane plan.
+- **Name and repo:** Ore → Aye (`aye`, `.aye`, "ayelang"); repo
+  github.com/anyknown-com/aye, private until it goes public together
+  with the browser (X4); license MIT OR Apache-2.0 (`LICENSE-MIT`,
+  `LICENSE-APACHE`); site aye.anyknown.com via GitHub Pages.
+- **Platforms:** macOS (local) and Ubuntu 24.04 (cloud, after X1).
+  Windows is out of scope. M10's ThreadSanitizer run is not possible on
+  this Mac.
+- **Integration branch** `main`; one gap list, `browser/COMPILER_GAPS.md`.
+- **Step ids** are never renumbered: P/O (ore), P (browser), F
+  (framework), X (project). Language choices: [`decisions.md`](decisions.md).
