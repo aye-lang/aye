@@ -12,14 +12,20 @@ to interleave both builds, alternating their order each round, and print
 per-workload speedups and their geometric mean. Both binaries must have
 been built in fast mode. A mismatch or timeout is a failure.
 
-Richards, DeltaBlue, and NavierStokes are standalone ports from
+Richards and NavierStokes are standalone ports from
 https://github.com/chromium/octane (the original algorithms are unchanged).
-Their source files retain the upstream license notices; DeltaBlue is
-GPL-2.0-or-later, separately from the engine. The Octane harness is removed,
-assertions retained, and deterministic checksums/iteration counts added.
-DeltaBlue's browser `alert` failures throw instead. NavierStokes runs the
-original 128×128, 20-iteration solver for 15 frames and checks 77.
-The other five workloads are written for this suite.
+Their source files retain the upstream license notices. The Octane harness
+is removed, assertions retained, and deterministic checksums/iteration counts
+added. NavierStokes runs the original 128×128, 20-iteration solver for 15
+frames and checks 77. The other five workloads are written for this suite.
+
+Licenses:
+
+| file | license |
+| --- | --- |
+| `richards.js` | BSD-3-Clause (Copyright 2006-2008 the V8 project authors; notice in the file header) |
+| `navier-stokes.js` | MIT (Copyright 2013 the V8 project authors, 2009 Oliver Hunt; notice in the file header) |
+| all other files | the repository license (MIT OR Apache-2.0) |
 
 Initial baseline: Apple M2 Pro, arm64 macOS, fast (-O2), compiler/repo
 `5dd6afb`. Median of three runs; Node v22.22.2 agrees with all checksums.
@@ -28,7 +34,6 @@ Initial baseline: Apple M2 Pro, arm64 macOS, fast (-O2), compiler/repo
 | --- | ---: | ---: |
 | array | 0.115265 | 96751118 |
 | closures | 0.830995 | 306584040 |
-| deltablue | 0.188738 | 2282550 |
 | json | 0.253661 | 20672500 |
 | methods | 0.128533 | 267460185993 |
 | navier-stokes | 4.306529 | 77 |

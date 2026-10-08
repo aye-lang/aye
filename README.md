@@ -6,7 +6,7 @@ checker, no exceptions, no macros. Memory is managed through explicit
 `name: Type`, no semicolons). Integer overflow and out-of-bounds access trap in
 checked builds.
 
-Design doc: <https://claude.ai/code/artifact/f86fcc65-a2d3-442d-b96d-fdbe637af2dc>
+Design doc: [`docs/design.md`](docs/design.md)
 
 This repository holds **stage0**: a compiler written in Rust that emits C and
 builds it with clang. It implements a first slice of the language (see
@@ -455,3 +455,14 @@ stays within 30k tokens.
 Before you change the compiler, std or the browser, read
 [`docs/practices/`](docs/practices/README.md): good and bad cases from this
 project. When you learn a lesson that will come up again, add an entry there.
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT), at your option. Third-party files keep their own
+notices: the Octane benchmark ports in `browser/tests/jsbench/` (see its
+README) and jQuery in `browser/tests/jsdom/scripts/`.
+
+Unless you explicitly state otherwise, any contribution you submit for
+inclusion in this project, as defined in the Apache-2.0 license, is dual
+licensed as above, without any additional terms or conditions.

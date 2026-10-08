@@ -3,6 +3,7 @@ name = "ore"
 version = "0.1.0"
 edition = "2024"
 description = "Stage0 compiler for the Ore systems language (emits C)"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 
