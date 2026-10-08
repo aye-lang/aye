@@ -102,9 +102,20 @@ removed in cff3f60.
   because the errno symbol is `__error` on macOS and `__errno_location`
   on Linux. `std/net/net.aye` declares `struct addrinfo` with the fields
   `ai_canonname` and `ai_addr` as `first` and `second` (their order
-  differs per OS) and picks at run time with `isDarwin()`.
-- **Hit by:** O1.3b (`std.net`: errno, `struct addrinfo`).
-- **Status:** open.
+  differs per OS) and picks at run time with `isDarwin()`. A field
+  whose name differs per OS cannot be picked at run time: both branches
+  are checked against the host's `@cimport`. So `std.fs.mtime` reads the
+  modification time in the C prelude (`aye_std_mtime` in `src/cgen.rs`,
+  the offset of `st_mtimespec` on macOS and `st_mtim` on Linux), and
+  `browser/net/archive.aye` calls it; it takes `d_name`'s length with
+  `strlen`, not macOS's `d_namlen` (X1.1).
+- **Hit by:** O1.3b (`std.net`: errno, `struct addrinfo`); X1.1
+  (`browser/net/archive.aye`: `st_mtimespec`, `d_namlen`).
+- **Status:** open. X1.1 chose the std helper over a language feature:
+  per-OS declarations need a target-OS constant that the checker uses to
+  skip the other OS's code (parser, checker, cgen, spec and tests), more
+  than one step; the helper is one C function and a std function that
+  programs want anyway.
 
 #### 51. No way to print an error or enum tag name
 
