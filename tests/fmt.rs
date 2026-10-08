@@ -190,12 +190,23 @@ fn doc_command() {
     assert!(err.contains("no std module"), "{err}");
 }
 
+#[test]
+fn help_prints_usage_and_exits_0() {
+    for args in [
+        &["--help"][..],
+        &["-h"],
+        &["help"],
+        &["fmt", "--help"],
+        &["build", "-h"],
+    ] {
+        let (code, out, _) = aye(args);
+        assert_eq!(code, 0, "{args:?}");
+        assert!(out.contains("usage"), "{args:?}: {out}");
+    }
+}
+
 /// Tracked `.aye` files that `aye fmt --check` must not be asked about.
 const FMT_EXCLUDED: &[(&str, &str)] = &[
-    (
-        "tests/errors/extern_link_empty.aye",
-        "the golden expects the error at the column of the unformatted `extern(\"\")`",
-    ),
     ("tests/errors/line_strings.aye", "does not lex on purpose"),
     (
         "tests/errors/syntax_recovery.aye",

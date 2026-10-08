@@ -85,6 +85,14 @@ fn parse_args() -> Result<Args, String> {
 }
 
 fn main() -> ExitCode {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let is_help = |a: &String| matches!(a.as_str(), "--help" | "-h");
+    // `aye help`, `aye --help`, `aye <cmd> --help` (before a `--`).
+    let cmd_help = argv.iter().skip(1).take_while(|a| *a != "--").any(is_help);
+    if argv.first().is_some_and(|a| is_help(a) || a == "help") || cmd_help {
+        println!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
     if std::env::args().nth(1).as_deref() == Some("spec") {
         if std::env::args().count() != 2 {
             eprintln!("aye: `spec` takes no arguments\n{USAGE}");
