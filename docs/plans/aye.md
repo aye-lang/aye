@@ -170,19 +170,6 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - time box: 20 min
 - notes: found in X2.2 (`aye spec | head -3` printed a broken-pipe panic).
 
-#### O1.11: AI-writability eval
-- lane: aye
-- goal: `scripts/eval.py` runs fresh headless agents (`claude -p --output-format stream-json`) on fixed tasks with only `aye spec`, `aye check`, `aye explain`, `aye run` allowed, and writes pass rate, `aye check` rounds and tokens per task to `docs/aye-eval.md`; its numbers steer the O3.x order.
-- serves: O4, O13 (the gates, made repeatable); AI-writability
-- files: `scripts/eval.py` (new), `tests/eval/<task>/{prompt.md,check.sh,solution.aye}` (new, 5 tasks), `docs/aye-eval.md` (new)
-- verify: `python3 scripts/eval.py --self-test` → exit 0 (every `solution.aye` passes its `check.sh`; every check rejects an empty program), then `python3 scripts/eval.py --runs 1 > target/eval.log 2>&1; echo $?` → 0 and `docs/aye-eval.md` has one row per task
-- depends on: –
-- parallel with: all
-- where: local (needs the user's `claude` login)
-- model: opus (task choice is design judgment)
-- time box: 45 min
-- notes: tasks span today's std: a CLI on args and stdin, text processing, a `std.map` counter, a file read/write, a `std.http` hello server checked with `curl`; one task should need a feature std lacks today (JSON) so the table shows the gap. Each run gets an empty temp dir, `--allowedTools` limited to Write, Edit, Read and `Bash(aye *)`, `--model sonnet`, a turn cap; count rounds from the `aye check` tool calls in the stream.
-
 ## Cards: O3 std breadth (next)
 
 #### O3.1: std.json parse
@@ -294,6 +281,9 @@ sources `tests/spec.rs` reads; they merge one after the other.
 Unordered; a card is written when its phase becomes next. Source in
 brackets.
 
+- O1.12 (from O1.11) diagnostics that cost eval rounds: E0022 (`@println` with several args) names `@print` per value or `std.text.Builder`; E0006 on `and`/`or`/`not` suggests `&&`/`||`/`!`; both in the spec's pitfalls. Verify: `tests/errors` goldens, then `eval.py --tasks cli_grep,file_lines --runs 3` shows fewer check calls.
+- O1.13 (from O1.11) `aye spec` is 81.5 KB, read back in chunks by every agent; list std.http's main API in §15 and try a compact or sectioned spec. Verify: http_hello uses `std.http`, input tokens fall in `docs/aye-eval.md`.
+- O1.11 rerun with `--runs 3` before ranking O3.x (O3.1 json stays first, O1.6 process next).
 - O2.1 diagnose wasm32: toolchain and what the C prelude needs (pthreads, `mmap`, `std.coro` stacks, 32-bit `usize`); target matrix in `docs/decisions.md` (old O2 table; flags in done.md O0.1).
 - O2.2 `--target <arch-os>` on build, run, test, emit-c, unknown target = error with code (old O2 table).
 - O2.3 wasm32-wasi prelude without threads, coroutines or `mmap`; goldens and conformance under Node 22 `node:wasi` (old O2 table).
