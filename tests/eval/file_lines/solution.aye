@@ -1,0 +1,51 @@
+import std
+import std.mem.Allocator
+import std.text.Builder
+
+fn run(alloc: Allocator) !i32 {
+    let args = try std.os.args(alloc)
+    defer alloc.free(args)
+    if args.len != 3 {
+        std.log.err("usage: numlines <in> <out>")
+        return 2
+    }
+    let text = std.fs.readFile(alloc, args[1]) catch |e| {
+        std.log.err("cannot open {}", args[1])
+        return 1
+    }
+    defer alloc.free(text)
+    var b = Builder.init(alloc)
+    defer b.deinit()
+    var n: u64 = 0
+    var start: usize = 0
+    while start < text.len {
+        var end = start
+        while end < text.len && text[end] != '\n' {
+            end += 1
+        }
+        n += 1
+        try b.appendUint(n)
+        try b.append(": ")
+        try b.append(text[start..end])
+        try b.appendByte('\n')
+        start = end + 1
+    }
+    let out = try std.fs.create(args[2])
+    defer out.close()
+    try out.write(b.bytes())
+    @print(n)
+    @println(" lines")
+    return 0
+}
+
+pub fn main() {
+    var gpa = std.heap.General.init()
+    let status = run(gpa.allocator()) catch |e| {
+        std.log.err("numlines: {}", e)
+        gpa.deinit()
+        std.os.exit(1)
+        return
+    }
+    gpa.deinit()
+    std.os.exit(status)
+}

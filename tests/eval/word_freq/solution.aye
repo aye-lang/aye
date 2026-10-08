@@ -1,0 +1,70 @@
+import std
+import std.list.List
+import std.map.StrMap
+import std.mem.Allocator
+
+struct Entry {
+    word: []u8
+    count: u32
+}
+
+fn before(a: Entry, b: Entry) bool {
+    if a.count != b.count {
+        return a.count > b.count
+    }
+    var i: usize = 0
+    while i < a.word.len && i < b.word.len {
+        if a.word[i] != b.word[i] {
+            return a.word[i] < b.word[i]
+        }
+        i += 1
+    }
+    return a.word.len < b.word.len
+}
+
+fn isLetter(c: u8) bool {
+    return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+fn run(alloc: Allocator) !void {
+    let text = try std.fs.stdin().readAll(alloc)
+    defer alloc.free(text)
+    std.text.toLower(text)
+    var counts = StrMap(u32).init(alloc)
+    defer counts.deinit()
+    var i: usize = 0
+    while i < text.len {
+        if !isLetter(text[i]) {
+            i += 1
+            continue
+        }
+        let start = i
+        while i < text.len && isLetter(text[i]) {
+            i += 1
+        }
+        let word = text[start..i]
+        if counts.getPtr(word) |p| {
+            p.* += 1
+        } else {
+            try counts.put(word, 1)
+        }
+    }
+    var entries = List(Entry).init(alloc)
+    defer entries.deinit()
+    var it = counts.iterator()
+    while it.next() |e| {
+        try entries.append(Entry { word: e.key, count: e.value.* })
+    }
+    std.sort.sort(Entry, entries.items(), before)
+    for e in entries.items() {
+        @print(e.count)
+        @print(" ")
+        @println(e.word)
+    }
+}
+
+pub fn main() !void {
+    var gpa = std.heap.General.init()
+    defer gpa.deinit()
+    try run(gpa.allocator())
+}
