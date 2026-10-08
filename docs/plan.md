@@ -18,28 +18,26 @@ and `git worktree list` (expected: main only). Next, in order:
    on Ubuntu 24.04 arm64 and amd64 via `scripts/linux.sh` (Apple
    `container`). Steps touching the C prelude, `@cimport` or platform
    calls run it before merging.
-2. **Language cards in the cloud**, two or three at a time, merged one
-   by one on `main`: F1.1 (framework hello world on `std.http`), O1.9
-   (quiet broken pipe), O1.5/O1.5a/O1.6 (fs, path, process), then O3.x.
-   Local slots stay for steps that need archives or screenshots.
-3. **AI-writability eval** (north star): card O1.11 in
-   [`plans/aye.md`](plans/aye.md) runs fresh agents on fixed tasks with
-   only `aye spec`, `aye check`, `aye explain`, and records pass rate,
-   check rounds and tokens. Run it before O3.x so its numbers steer the
-   order.
+2. **Language cards**, merged one by one on `main`: F1.1 (framework
+   hello world on `std.http`), O1.12 and O1.13 (eval findings:
+   diagnostics, spec size), O1.5/O1.5a/O1.6 (fs, path, process), then
+   O3.x (O3.1 json first). O1.9 and O1.11 are done (`plans/done.md`).
+3. **AI-writability eval** (north star): `scripts/eval.py`
+   (`docs/aye-eval.md`); rerun with `--runs 3` after O1.12/O1.13 and
+   before ranking O3.x.
 
 ## Lanes
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | P2 leftovers + O1 server basics | X1.1, then F1.1 and O1.9 in the cloud | cloud once X1.2 is done; local until then |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | P2 leftovers + O1 server basics | F1.1, O1.12, O1.13 | local; the user's cloud when available |
 | Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold) | – until O6–O9 | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 (F1.1 only) | F1.1, after O1.4a | cloud |
 
 Order of dispatch (2026-10-08): names and style first. The rename
 (X2, 3042d53), formatting (P2.4, 1075c9b) and the local move (X5) are
-done; after that lane cards in lane priority (F1.1 first, it builds on
-O1.4a), with X1.1 beside them. Project steps go when their condition
+done, and so is Linux development (X1); next, lane cards in lane
+priority (F1.1 first, it builds on O1.4a). Project steps go when their condition
 holds. The browser resumes when Aye criteria O6–O9 are met, in the
 same step that splits `browser/` into its own repo (P8.1).
 
@@ -117,8 +115,9 @@ Merging (main's side):
   ([workflow.md, "At most two local agents run builds and tests at once"](practices/workflow.md#at-most-two-local-agents-run-builds-and-tests-at-once)).
   Docs-only and git-only agents run beside them. Cloud agents run on
   the Claude Code cloud VM (Ubuntu 24.04, 4 vCPU), one step per
-  session; until X1.2 is done, cards marked cloud run locally within
-  the limit of 2. Repeated runs under load (10×, 30×) for a flaky test
+  session; cards marked cloud run locally within the limit of 2 when
+  the cloud is not in use. A `scripts/linux.sh` run counts as a build
+  agent. Repeated runs under load (10×, 30×) for a flaky test
   are the merge agent's check, not every step's.
 - **Model per step:** git only (commit, merge without tests, cleanup,
   push) → haiku git-runner. A merge that needs build and tests → sonnet,
