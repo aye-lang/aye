@@ -38,7 +38,7 @@ Steps not tied to one lane, in this order. Their cards are in
 2. **X2 rename Ore → Aye.** X2.1 writes and dry-runs the rename script;
    X2.2 runs it as one isolated step: no other agent runs, no other
    branch is open.
-3. **X3 website** aye.anyknown.com on GitHub Pages.
+3. **X3 website** ayelang.dev on Cloudflare Workers (`site/`); v1 live 2026-10-08.
 4. **X4 go public** (repo github.com/aye-lang/aye, with the
    browser): only with the user's OK.
 
@@ -146,7 +146,7 @@ goes to the backlog or to `done.md` as dropped.
 - **Name and repo:** Ore → Aye (`aye`, `.aye`, "ayelang"); repo
   github.com/aye-lang/aye, private until it goes public together
   with the browser (X4); license MIT OR Apache-2.0 (`LICENSE-MIT`,
-  `LICENSE-APACHE`); site aye.anyknown.com via GitHub Pages.
+  `LICENSE-APACHE`); site ayelang.dev (Cloudflare Workers, `site/`).
 - **Platforms:** macOS (local) and Ubuntu 24.04 (cloud, after X1).
   Windows is out of scope. M10's ThreadSanitizer run is not possible on
   this Mac.

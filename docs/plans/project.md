@@ -69,10 +69,12 @@ also "ayelang".
 - time box: 45 min
 - notes: after it merges, main updates `docs/plan.md` and lane plans to say `aye`; old step ids stay.
 
-## X3: website (later)
+## X3: website
 
-aye.anyknown.com on GitHub Pages: a landing page, the spec and std docs
-(`ore doc --html`, O6.3, when it exists). Card written when X2 is done.
+ayelang.dev, a Cloudflare Worker serving `site/public` (deploy:
+`cd site && wrangler deploy`, see `site/README.md`). v1 (landing page)
+went live 2026-10-08. Next: the spec and std docs (`ore doc --html`,
+O6.3, when it exists).
 
 ## X4: go public (later)
 
