@@ -76,7 +76,7 @@ built-in database and cloud clients (`@cimport` covers them).
 
 | Phase | Goal | Exit check | Status |
 |---|---|---|---|
-| P2 | Stage0 close-out (O1–O5) | the O1–O5 checks | open: P2.4, P2.9 |
+| P2 | Stage0 close-out (O1–O5) | the O1–O5 checks | open: P2.9 |
 | O1.x | Server basics: conformance harness, `std.net`, `std.http` server, fs/path, process | `cargo test --release --test conformance` prints the table; a hello-world `std.http` golden answers | current |
 | O3.x | std breadth: JSON, time, crypto, HTTP client (O6) | the O6 check | next |
 | O2.x | Targets incl. wasm32 (O8) | the O8 check | backlog |
@@ -89,19 +89,6 @@ Steps that add std functions touch `docs/spec.md` §15 and the std
 sources `tests/spec.rs` reads; they merge one after the other.
 
 ## Cards: P2 leftovers
-
-#### P2.4: `aye fmt --check` over the repo
-- lane: aye
-- goal: every `.aye` file is formatted, and a test keeps it so.
-- serves: O2
-- files: `tests/fmt.rs` (a repo-wide check, with an explicit exclusion list for files that must not parse, such as `tests/errors`), any `.aye` file (formatting only)
-- verify: `cargo test --release --test fmt` → exit 0, the new test listed as ok
-- depends on: –
-- parallel with: docs-only steps (it reformats many `.aye` files and conflicts with every branch that edits them)
-- where: cloud
-- model: sonnet
-- time box: 45 min
-- notes: runs right after X2.2 (decision 2026-10-08: names and style settle before more features). Also `cargo fmt` over the Rust sources (1116 hunks on 2026-10-08, never formatted) with a test or check that keeps it so; one commit per formatter so reviews stay readable.
 
 #### P2.9: AddressSanitizer golden for gap #3
 - lane: aye

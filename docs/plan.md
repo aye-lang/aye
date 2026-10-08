@@ -1,6 +1,6 @@
 # Plan
 
-Goal: finish the language (Ore, being renamed Aye: command `aye`,
+Goal: finish the language (Aye, formerly Ore: command `aye`,
 extension `.aye`) to the done criteria in [`plans/aye.md`](plans/aye.md),
 then resume the anyknown browser in its own repo. The language lane gets
 most slots. The browser is frozen (maintenance only) and is the
@@ -8,18 +8,39 @@ language's biggest integration test. The framework does one slice (F1)
 as the acceptance test of `std.http`. Finished steps are in
 [`plans/done.md`](plans/done.md).
 
+## Resume here (handoff 2026-10-08)
+
+A new session starts in `~/Documents/ayelang/aye` (moved by X5.2).
+The state is this file's lane table, [`plans/done.md`](plans/done.md)
+and `git worktree list` (expected: main only). Next, in order:
+
+1. **Cloud (X1).** The user enables it first: install the Claude GitHub
+   App on the `aye-lang` org and create a Claude Code cloud environment
+   for `aye-lang/aye` whose setup installs the packages listed in the
+   X1.2 card (until `scripts/setup-ubuntu.sh` exists, paste that list
+   as the setup command). Then X1.1 (local, opus; it is gap #50,
+   per-OS declarations, so solve it in the language rather than with a
+   helper if the fix stays small), then X1.2 in the cloud.
+2. **Language cards in the cloud**, two or three at a time, merged one
+   by one on `main`: F1.1 (framework hello world on `std.http`), O1.9
+   (quiet broken pipe), O1.5/O1.5a/O1.6 (fs, path, process), then O3.x.
+   Local slots stay for steps that need archives or screenshots.
+3. **AI-writability eval** (north star): a card that runs fresh agents
+   on fixed tasks with only `aye spec`, `aye check`, `aye explain`, and
+   records pass rate, check rounds and tokens. Write it before O3.x so
+   its numbers steer the order.
+
 ## Lanes
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | P2 leftovers + O1 server basics | P2.4 (fmt), then F1.1 | cloud once X1.2 is done; local until then |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | P2 leftovers + O1 server basics | X1.1, then F1.1 and O1.9 in the cloud | cloud once X1.2 is done; local until then |
 | Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold) | – until O6–O9 | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 (F1.1 only) | F1.1, after O1.4a | cloud |
 
 Order of dispatch (2026-10-08): names and style first. The rename
-is done (X2, 3042d53); next P2.4 (`aye fmt` and `cargo fmt` over the
-repo, isolated), then X5 (local move to `~/Documents/ayelang/aye`);
-after that lane cards in lane priority (F1.1 first, it builds on
+(X2, 3042d53), formatting (P2.4, 1075c9b) and the local move (X5) are
+done; after that lane cards in lane priority (F1.1 first, it builds on
 O1.4a), with X1.1 beside them. Project steps go when their condition
 holds: X1.2 once the user enables cloud. The browser resumes when Aye criteria O6–O9 are met, in the
 same step that splits `browser/` into its own repo (P8.1).
