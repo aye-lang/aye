@@ -25,10 +25,11 @@ and `git worktree list` (expected: main only). Next, in order:
    by one on `main`: F1.1 (framework hello world on `std.http`), O1.9
    (quiet broken pipe), O1.5/O1.5a/O1.6 (fs, path, process), then O3.x.
    Local slots stay for steps that need archives or screenshots.
-3. **AI-writability eval** (north star): a card that runs fresh agents
-   on fixed tasks with only `aye spec`, `aye check`, `aye explain`, and
-   records pass rate, check rounds and tokens. Write it before O3.x so
-   its numbers steer the order.
+3. **AI-writability eval** (north star): card O1.11 in
+   [`plans/aye.md`](plans/aye.md) runs fresh agents on fixed tasks with
+   only `aye spec`, `aye check`, `aye explain`, and records pass rate,
+   check rounds and tokens. Run it before O3.x so its numbers steer the
+   order.
 
 ## Lanes
 
