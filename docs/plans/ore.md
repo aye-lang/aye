@@ -68,7 +68,7 @@ built-in database and cloud clients (`@cimport` covers them).
 - std: coro, diag, fs, heap, list, log, map, math, mem, net (IPv4 TCP, O1.3), os, pool, sort, sync, testing, text, thread, time. Missing for O6: http, json, path, process, wall clock, crypto, base64/hex, fs directories and stat.
 - std docs (O1.2): new modules take the index form: one line in `docs/spec.md` §15 plus `///` on every `pub fn` (`tests/spec.rs`).
 - Tests: `tests/golden.rs` (cases, errors, tests, fix, modules, ffi, cimport), `tests/fmt.rs`, `tests/spec.rs`, `tests/browser.rs`. No conformance suite yet (O1.1).
-- Open gaps: #3 (ASan golden, P2.9), #50 (per-OS declarations; O8 needs it).
+- Open gaps: #3 (ASan golden, P2.9), #50 (per-OS declarations; O8 needs it), #51 (tag names, O1.7).
 - Toolchain: Homebrew LLVM 23 for ASan and wasm32 (flags in `done.md`, O0.1); Node 22, Go and `ab` are installed locally.
 - Stale: `README.md:405-410` says `ore fmt`, `ore doc` and `Pool` are missing (O6.4).
 
@@ -131,19 +131,6 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - time box: 45 min
 - notes: one target (native) now; O2.3 adds wasm32-wasi rows.
 
-#### O1.4: std.http request parser and response writer
-- lane: ore
-- goal: parse an HTTP/1.1 request from bytes (request line, headers, `Content-Length` and chunked bodies, size limits as error kinds for 400 and 413) and write a response (status, headers, body).
-- serves: O6
-- files: `std/http/` (new), `docs/spec.md` §15 (index line)
-- verify: `cargo test --release --test golden` → exit 0, with `test` blocks or goldens over byte buffers: a simple GET, two pipelined requests, a chunked body, a malformed request line, an oversize header
-- depends on: –
-- parallel with: O1.5, O1.5a, O1.6 (merge one after the other: all touch §15)
-- where: cloud
-- model: sonnet
-- time box: 45 min
-- notes: no sockets in this step. `docs/framework.md` "Foreseen language and std needs" 3–5: no closures, so the handler takes a context pointer as `std.thread.spawn(T, f, arg)` does.
-
 #### O1.4a: std.http serve
 - lane: ore
 - goal: `serve(alloc, addr, ctx, handler)` over `std.net`: a thread per connection, keep-alive, port 0 with the bound port reported.
@@ -156,6 +143,19 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - model: sonnet
 - time box: 45 min
 - notes: this is what F1.1 builds on; a `curl -i` against it by hand is quoted in the report.
+
+#### O1.7: tag names as strings (gap #51)
+- lane: ore
+- goal: a builtin `@tagName(x)` gives the name of an error tag or enum tag as `[]u8` (a static string), so a program can print an error without writing its own `match`.
+- serves: O3 (gap #51), AI-writability (agents reach for it first; Zig has `@errorName`/`@tagName`)
+- files: `src/sema.rs`, `src/cgen.rs` (a static name table per error set / enum), `docs/spec.md` (builtins list, one line), `tests/cases/`, `tests/errors/` (non-tag argument), `src/codes.rs` if a new code is needed, `browser/COMPILER_GAPS.md` #51; then simplify `tests/cases/std_http.ore` to use it
+- verify: `cargo test --release --test golden` → exit 0, with a golden printing an error tag, an enum tag and a tagged-union tag, and an error test for `@tagName(3)`
+- depends on: –
+- parallel with: not with other `src/` sema/cgen steps
+- where: cloud (local until X1.2)
+- model: sonnet
+- time box: 45 min
+- notes: name it to match the existing builtins' style (check `docs/spec.md`'s builtin list first).
 
 #### O1.5: std.fs breadth
 - lane: ore
