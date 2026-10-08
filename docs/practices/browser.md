@@ -291,6 +291,15 @@ ties-to-even rounding step. Trace the new primitive's payload in
 **Why:** the syntax, coercion, fast paths, equality and GC visitors must
 agree on the type. A correct arithmetic helper alone is not a primitive.
 
+### Math results must not depend on the platform libm
+**Context:** adding or changing a `Math` function in `builtins_number.aye`.
+**Bad:** `Math.cbrt` called the C `cbrt`; glibc gives `3.0000000000000004`
+for `cbrt(27)`, macOS and V8 give `3`, so `164_math_functions.js` passed
+only on macOS.
+**Good:** port the fdlibm routine V8 uses (`js/cbrt.aye`) and run the
+conformance test on Linux (`scripts/linux.sh`).
+**Why:** libms differ in the last bit; the goldens are V8's output.
+
 ### Capture an import's referrer in its syntax, not the active script
 **Context:** dynamic imports inside functions, timers and promise callbacks.
 **Bad:** resolving against document.currentScript at call time, or treating
