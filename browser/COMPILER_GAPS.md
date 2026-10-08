@@ -138,15 +138,21 @@ removed in cff3f60.
   `nanosleep([*]i64, [*]i64)`. macOS escaped by accident: its
   `/usr/include/pthread.h` is a link to `pthread/pthread.h`, so its
   directory after `canonicalize` is `pthread/`.
-- **Fix:** one rule on both OSes. A system header's directory counts
-  only when the header is named with it (`SDL2/SDL.h`); a header named
-  bare (`pthread.h`, `zlib.h`) is in an include root such as
-  `/usr/include`, whose other headers are separate headers. The headers
-  a system header includes from a `bits/` directory (glibc's internal
-  headers, never included alone) count as its own.
+- **Fix:** one rule on both OSes (`src/cimport/generate.rs`). A system
+  header brings its own declarations and those of its parts that it
+  includes itself: internal headers (a name with a leading `_`, macOS's
+  `_time.h`; or a `bits/` directory, glibc's `bits/mathcalls.h`), and
+  the headers of its directory when that is not the include directory it
+  was found in (`SDL2/SDL.h`; macOS's `pthread.h` → `pthread/`). The
+  other headers of `/usr/include` are headers of their own. On macOS the
+  output stays the same but for `zlib.h` (no longer `zconf.h`'s
+  `MAX_WBITS`, `MAX_MEM_LEVEL` and unused typedefs) and `unistd.h` (no
+  `gethostuuid`, from `gethostuuid.h`), and gains `sys/stat.h`'s
+  `S_IF*` (from `sys/_s_ifmt.h`).
 - **Hit by:** X1.3 (first Linux run: `aye check browser`, golden
   `cimport/system.aye`, spec `aye_blocks_compile`, `codes` E0112).
-- **Status:** open.
+- **Status:** fixed in X1.3; `tests/cimport/threads.aye` imports
+  `pthread.h` beside `std.time`.
 
 #### 51. No way to print an error or enum tag name
 
