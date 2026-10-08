@@ -76,7 +76,7 @@ built-in database and cloud clients (`@cimport` covers them).
 
 | Phase | Goal | Exit check | Status |
 |---|---|---|---|
-| P2 | Stage0 close-out (O1–O5) | the O1–O5 checks | open: P2.4, P2.6, P2.9 |
+| P2 | Stage0 close-out (O1–O5) | the O1–O5 checks | open: P2.4, P2.9 |
 | O1.x | Server basics: conformance harness, `std.net`, `std.http` server, fs/path, process | `cargo test --release --test conformance` prints the table; a hello-world `std.http` golden answers | current |
 | O3.x | std breadth: JSON, time, crypto, HTTP client (O6) | the O6 check | next |
 | O2.x | Targets incl. wasm32 (O8) | the O8 check | backlog |
@@ -103,19 +103,6 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - time box: 45 min
 - notes: run it when few branches are open, for example right before or after X2.2.
 
-#### P2.6: status table in milestones.md
-- lane: ore
-- goal: `docs/milestones.md` opens with a table: milestone, status, date, what is left.
-- serves: O5
-- files: `docs/milestones.md`
-- verify: `grep -cE '^\| M[0-9]' docs/milestones.md` → 18 (one row per `## M` heading)
-- depends on: –
-- parallel with: all (docs only)
-- where: cloud
-- model: sonnet
-- time box: 30 min
-- notes: status comes from each milestone's text and `git log --first-parent`; M10's ThreadSanitizer run is "not possible on this Mac".
-
 #### P2.9: AddressSanitizer golden for gap #3
 - lane: ore
 - goal: under ASan the runtime poisons the freed blocks debug mode and `ore test` hold back, so a read through a stale `List`/`Pool` pointer reports `heap-use-after-free`; a golden checks it in debug and safe mode.
@@ -127,7 +114,7 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - where: local now (Apple clang's ASan hangs here; Homebrew LLVM 23 works: `$(brew --prefix llvm)/bin/clang -fsanitize=address`); cloud after X1.2 (Linux clang has ASan)
 - model: sonnet
 - time box: 45 min
-- notes: model the golden on the ThreadSanitizer one in `tests/golden.rs`. Keep the debug free queue (it catches double free and write-after-free); poison only under ASan.
+- notes: model the golden on the ThreadSanitizer one in `tests/golden.rs`. Keep the debug free queue (it catches double free and write-after-free); poison only under ASan. Also try the TSan golden with Homebrew clang (`-fsanitize=thread`): if it runs, M10's last item (milestones.md table) becomes done.
 
 ## Cards: O1 server basics
 

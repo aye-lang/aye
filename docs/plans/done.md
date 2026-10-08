@@ -20,6 +20,7 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | P2.10 | 2026-10-07 | `Document.node` uses `unreachable` for a stale handle (`browser/dom/dom.ore`) | 9c909eb |
 | O1.2 | 2026-10-08 | std documented in tiers: the spec keeps the CLI modules in full and an index line per other module; `ore doc --signatures std.<m>` is their API; `tests/spec.rs` checks the index and `///` coverage (decision in `docs/decisions.md`, "How std is documented as it grows") | a3498da |
 | O1.3 | 2026-10-08 | `std.net`: TCP `listen`/`accept`/`connect`/`read`/`readTimeout`/`write`/`close`, IPv4 only; golden `tests/cases/net_echo.ore`; gap #49 worked around with C helpers in `src/cgen.rs` (→ O1.3a) | 56967d4 |
+| P2.6 | 2026-10-08 | `docs/milestones.md` opens with a status table: 17 milestones, 16 done, M10 partial (TSan not run on this Mac) | 9478de6 |
 | O1.3a | 2026-10-08 | `extern("name") fn` takes a C link name; `std.net` calls libc `listen`/`connect` directly; E0115 for an empty name or a body; errno stays a tiny helper (its symbol differs per OS) | 7b893ee |
 
 ## Browser lane
