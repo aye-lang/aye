@@ -1,0 +1,21 @@
+import std.heap.General
+import std.http
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let buf = "GET /x?y=1 HTTP/1.1\r\nHost: example.com\r\nX-Token:  abc \r\nAccept: */*\r\n\r\n"
+    let p = try http.parse(gpa.allocator(), buf, http.defaultLimits())
+    var req = p.request
+    defer req.deinit()
+    @println(req.method)
+    @println(req.target)
+    @println(req.minor)
+    @println(req.headers.len())
+    @println(p.consumed)
+    @println(buf.len)
+    @println(req.header("HOST").?)
+    @println(req.header("x-token").?)
+    @println(req.header("Missing") == null)
+    @println(req.keepAlive())
+}

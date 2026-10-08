@@ -1,0 +1,18 @@
+import std.heap.General
+import std.http
+import std.http.Header
+import std.http.Response
+import std.text.Builder
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var out = Builder.init(gpa.allocator())
+    defer out.deinit()
+    let headers = [1]Header{
+        Header { name: "Content-Type", value: "text/plain" },
+    }
+    try http.writeResponse(&mut out, Response { status: 200, headers: headers[..], body: "hi" })
+    @println(out.len())
+    @println(out.bytes())
+}
