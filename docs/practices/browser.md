@@ -907,3 +907,14 @@ saw the file in between got "connection refused" (once, under load).
 then `rename`s it to `PATH`; the file's existence means it accepts.
 **Why:** wait on the state you need (listening), and make the signal
 appear only with it, instead of retrying or sleeping.
+
+### Do not use generators for built-in iterators in lib.ore
+**Context:** JS written in `browser/js/lib.ore` (built-ins run at startup).
+**Bad:** typed-array `values()` as `*values() { ... yield ... }`; every
+abandoned iteration kept a generator alive, YouTube search hit "Too many
+generators and async functions running", silently dropped the guide
+fetch and then its thumbnails (P3.58).
+**Good:** a plain `{ next() }` object (`typedIter` in `lib.ore`).
+**Why:** generators count against a live limit that page code shares;
+find swallowed engine errors by printing in `Interp.makeError` and
+diffing against a build of main.

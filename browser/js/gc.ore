@@ -111,6 +111,7 @@ fn traceObj(it: *mut Interp, o: u32) {
             markObj(it, target)
             markObj(it, handler)
         }
+        .View { store, .. } => markObj(it, store)
         _ => {}
     }
 }

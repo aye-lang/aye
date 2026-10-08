@@ -136,7 +136,7 @@ fn cacheable(it: *Interp, o: u32, key: u32) bool {
     if ob.shape == NONE || ob.class == Class.Proxy || ob.class == Class.Host || ob.class == Class.String || ob.class == Class.ModuleNamespace {
         return false
     }
-    if ob.class == Class.Array || ob.class == Class.Arguments {
+    if ob.class == Class.Array || ob.class == Class.Arguments || ob.class == Class.TypedArray {
         return key != A_LENGTH && it.heap.atoms.indexOf(key) == NONE
     }
     return true

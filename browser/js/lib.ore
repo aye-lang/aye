@@ -1,7 +1,7 @@
 // js/lib: built-ins written in JavaScript, run by installBuiltins after
 // the native ones: Promise and the drivers of async functions and async
-// generators (coroutine.ore), Reflect, typed arrays (arrays of
-// converted numbers; a view of an ArrayBuffer is a copy), DataView, an
+// generators (coroutine.ore), Reflect, typed arrays (views over the
+// byte store of an ArrayBuffer, typed.ore), DataView, an
 // English-only Intl, Date setters and formats, String.raw,
 // escape/unescape, structuredClone and smaller methods.
 //
@@ -375,6 +375,9 @@ pub let LIB =
     \\const engineDefineProperty = G.__engine.defineProperty;
     \\const engineDeleteProperty = G.__engine.deleteProperty;
     \\const engineSetPrototypeOf = G.__engine.setPrototypeOf;
+    \\const makeView = G.__engine.makeView;
+    \\const viewGet = G.__engine.viewGet;
+    \\const viewSet = G.__engine.viewSet;
     \\function asyncGenDriver(g) {
     \\  const queue = [];
     \\  let running = false;
@@ -1362,9 +1365,12 @@ pub let LIB =
     \\Object.defineProperty(Reflect, Symbol.toStringTag, { value: 'Reflect', configurable: true });
     \\hidden(G, 'Reflect', Reflect);
     \\
-    \\// ---- typed arrays: arrays of numbers converted on creation and `set`
-    \\// (a plain index assignment does not convert); a view over an
-    \\// ArrayBuffer is a copy of its bytes.
+    \\// ---- typed arrays: views over the byte store of one ArrayBuffer
+    \\// (typed.ore). A typed array is not an Array; it takes the generic Array
+    \\// methods. Elements are little-endian, converted on every write.
+    \\
+    \\const KINDS = ['Int8', 'Uint8', 'Uint8Clamped', 'Int16', 'Uint16', 'Int32', 'Uint32', 'Float32', 'Float64', 'BigInt64', 'BigUint64'];
+    \\const SIZES = [1, 1, 1, 2, 2, 4, 4, 4, 8, 8, 8];
     \\
     \\class ArrayBuffer {
     \\  constructor(n) {
@@ -1380,93 +1386,140 @@ pub let LIB =
     \\  static isView(v) { return v instanceof TypedArray || v instanceof DataView; }
     \\}
     \\hidden(G, 'ArrayBuffer', ArrayBuffer);
-    \\const conv = {
-    \\  Int8: x => (x << 24) >> 24,
-    \\  Uint8: x => x & 255,
-    \\  Uint8Clamped: x => { x = Math.round(Number(x)) || 0; return x < 0 ? 0 : x > 255 ? 255 : x; },
-    \\  Int16: x => (x << 16) >> 16,
-    \\  Uint16: x => x & 65535,
-    \\  Int32: x => x | 0,
-    \\  Uint32: x => x >>> 0,
-    \\  Float32: x => Math.fround(Number(x)),
-    \\  Float64: x => Number(x),
-    \\  BigInt64: x => Number(x),
-    \\  BigUint64: x => Number(x),
-    \\};
-    \\const SIZES = { Int8: 1, Uint8: 1, Uint8Clamped: 1, Int16: 2, Uint16: 2, Int32: 4, Uint32: 4, Float32: 4, Float64: 8, BigInt64: 8, BigUint64: 8 };
-    \\class TypedArray extends Array {
-    \\  get buffer() {
-    \\    const b = new ArrayBuffer(0);
-    \\    b._bytes = Array.from(this, x => x & 255);
-    \\    return b;
-    \\  }
+    \\function relIndex(i, n, dflt) {
+    \\  if (i === undefined) return dflt;
+    \\  i = Math.trunc(Number(i)) || 0;
+    \\  return i < 0 ? Math.max(0, n + i) : Math.min(i, n);
+    \\}
+    \\// A plain iterator: a generator would count against the live generators.
+    \\function typedIter(a, kind) {
+    \\  let i = 0;
+    \\  const it = {
+    \\    next() {
+    \\      if (i >= a.length) return { value: undefined, done: true };
+    \\      const k = i++;
+    \\      return { value: kind === 0 ? k : kind === 1 ? a[k] : [k, a[k]], done: false };
+    \\    },
+    \\  };
+    \\  hidden(it, Symbol.iterator, function () { return this; });
+    \\  return it;
+    \\}
+    \\class TypedArray {
+    \\  get buffer() { return this._buf; }
     \\  get byteLength() { return this.length * this.constructor.BYTES_PER_ELEMENT; }
-    \\  get byteOffset() { return 0; }
+    \\  get byteOffset() { return this._off; }
+    \\  get [Symbol.toStringTag]() { return this.constructor.name; }
     \\  set(src, offset) {
     \\    offset = offset || 0;
-    \\    const f = this.constructor._conv;
-    \\    for (let i = 0; i < src.length; i++) this[offset + i] = f(src[i]);
+    \\    const a = Array.from(src);
+    \\    if (offset < 0 || offset + a.length > this.length) throw new RangeError('offset is out of bounds');
+    \\    for (let i = 0; i < a.length; i++) this[offset + i] = a[i];
     \\  }
-    \\  subarray(b, e) { return this.slice(b, e); }
-    \\  slice(b, e) { return new this.constructor(Array.prototype.slice.call(this, b, e)); }
-    \\  map(f, t) { return new this.constructor(Array.prototype.map.call(Array.from(this), f, t)); }
-    \\  filter(f, t) { return new this.constructor(Array.prototype.filter.call(Array.from(this), f, t)); }
-    \\  static from(src, f, t) {
-    \\    const a = Array.from(src, f, t);
-    \\    return new this(a);
+    \\  subarray(b, e) {
+    \\    const n = this.length;
+    \\    b = relIndex(b, n, 0);
+    \\    e = relIndex(e, n, n);
+    \\    return new this.constructor(this._buf, this._off + b * this.constructor.BYTES_PER_ELEMENT, Math.max(0, e - b));
     \\  }
+    \\  slice(b, e) {
+    \\    const n = this.length;
+    \\    b = relIndex(b, n, 0);
+    \\    e = relIndex(e, n, n);
+    \\    const r = new this.constructor(Math.max(0, e - b));
+    \\    for (let i = b; i < e; i++) r[i - b] = this[i];
+    \\    return r;
+    \\  }
+    \\  map(f, t) { return new this.constructor(Array.prototype.map.call(this, f, t)); }
+    \\  filter(f, t) { return new this.constructor(Array.prototype.filter.call(this, f, t)); }
+    \\  sort(f) {
+    \\    const a = Array.from(this);
+    \\    a.sort(f || ((x, y) => (x < y ? -1 : x > y ? 1 : 0)));
+    \\    for (let i = 0; i < a.length; i++) this[i] = a[i];
+    \\    return this;
+    \\  }
+    \\  toSorted(f) { return this.slice().sort(f); }
+    \\  toReversed() { return this.slice().reverse(); }
+    \\  with(i, v) { const r = this.slice(); r[i < 0 ? i + this.length : i] = v; return r; }
+    \\  values() { return typedIter(this, 1); }
+    \\  keys() { return typedIter(this, 0); }
+    \\  entries() { return typedIter(this, 2); }
+    \\  static from(src, f, t) { return new this(Array.from(src, f, t)); }
     \\  static of(...xs) { return new this(xs); }
     \\}
-    \\for (const name of Object.keys(conv)) {
-    \\  const f = conv[name];
+    \\for (const k of ['at', 'every', 'fill', 'find', 'findIndex', 'findLast', 'findLastIndex', 'forEach', 'includes', 'indexOf', 'join', 'lastIndexOf', 'reduce', 'reduceRight', 'reverse', 'some', 'copyWithin']) {
+    \\  hidden(TypedArray.prototype, k, Array.prototype[k]);
+    \\}
+    \\hidden(TypedArray.prototype, 'toString', function toString() { return this.join(); });
+    \\hidden(TypedArray.prototype, 'toLocaleString', function toLocaleString() { return this.join(); });
+    \\hidden(TypedArray.prototype, Symbol.iterator, TypedArray.prototype.values);
+    \\KINDS.forEach((name, kind) => {
+    \\  const size = SIZES[kind];
     \\  const C = {
     \\    [name + 'Array']: class extends TypedArray {
     \\      constructor(arg, offset, length) {
     \\        super();
-    \\        let src = null;
+    \\        let buf, off = 0, len;
     \\        if (arg instanceof ArrayBuffer) {
-    \\          src = arg._bytes.slice(offset || 0, length === undefined ? undefined : (offset || 0) + length * SIZES[name]);
-    \\        } else if (arg !== null && typeof arg === 'object') {
-    \\          src = Array.from(arg);
-    \\        } else {
-    \\          const n = Math.max(0, Math.trunc(Number(arg)) || 0);
-    \\          for (let i = 0; i < n; i++) this.push(0);
+    \\          off = Math.trunc(Number(offset)) || 0;
+    \\          if (off % size !== 0) throw new RangeError('start offset of ' + name + 'Array should be a multiple of ' + size);
+    \\          if (off < 0 || off > arg.byteLength) throw new RangeError('Start offset ' + off + ' is outside the bounds of the buffer');
+    \\          if (length === undefined) {
+    \\            if ((arg.byteLength - off) % size !== 0) throw new RangeError('byte length of ' + name + 'Array should be a multiple of ' + size);
+    \\            len = (arg.byteLength - off) / size;
+    \\          } else {
+    \\            len = Math.trunc(Number(length)) || 0;
+    \\            if (off + len * size > arg.byteLength) throw new RangeError('Invalid typed array length: ' + len);
+    \\          }
+    \\          buf = arg;
+    \\          makeView(this, buf._bytes, off, len, kind);
+    \\          hidden(this, '_buf', buf);
+    \\          hidden(this, '_off', off);
+    \\          return;
     \\        }
-    \\        if (src) for (const x of src) this.push(f(x));
+    \\        let src = null;
+    \\        if (arg !== null && typeof arg === 'object') {
+    \\          src = Array.from(arg);
+    \\          len = src.length;
+    \\        } else {
+    \\          len = Math.max(0, Math.trunc(Number(arg)) || 0);
+    \\        }
+    \\        buf = new ArrayBuffer(len * size);
+    \\        makeView(this, buf._bytes, 0, len, kind);
+    \\        hidden(this, '_buf', buf);
+    \\        hidden(this, '_off', 0);
+    \\        if (src) for (let i = 0; i < len; i++) this[i] = src[i];
     \\      }
     \\    },
     \\  }[name + 'Array'];
     \\  Object.defineProperty(C, 'name', { value: name + 'Array', configurable: true });
-    \\  hidden(C, '_conv', f);
-    \\  hidden(C, 'BYTES_PER_ELEMENT', SIZES[name]);
-    \\  hidden(C.prototype, 'BYTES_PER_ELEMENT', SIZES[name]);
+    \\  hidden(C, 'BYTES_PER_ELEMENT', size);
+    \\  hidden(C.prototype, 'BYTES_PER_ELEMENT', size);
     \\  hidden(G, name + 'Array', C);
-    \\}
+    \\});
     \\class DataView {
     \\  constructor(buffer, offset, length) {
+    \\    if (!(buffer instanceof ArrayBuffer)) throw new TypeError('First argument to DataView constructor must be an ArrayBuffer');
+    \\    offset = Math.trunc(Number(offset)) || 0;
+    \\    if (offset < 0 || offset > buffer.byteLength) throw new RangeError('Start offset ' + offset + ' is outside the bounds of the buffer');
     \\    hidden(this, 'buffer', buffer);
-    \\    hidden(this, 'byteOffset', offset || 0);
-    \\    hidden(this, 'byteLength', length === undefined ? buffer.byteLength - (offset || 0) : length);
+    \\    hidden(this, 'byteOffset', offset);
+    \\    hidden(this, 'byteLength', length === undefined ? buffer.byteLength - offset : length);
     \\  }
-    \\  getUint8(i) { return this.buffer._bytes[this.byteOffset + i]; }
-    \\  setUint8(i, v) { this.buffer._bytes[this.byteOffset + i] = v & 255; }
-    \\  getInt8(i) { return (this.getUint8(i) << 24) >> 24; }
-    \\  setInt8(i, v) { this.setUint8(i, v); }
-    \\  getUint16(i, le) { const a = this.getUint8(i), b = this.getUint8(i + 1); return le ? a | (b << 8) : (a << 8) | b; }
-    \\  setUint16(i, v, le) { if (le) { this.setUint8(i, v); this.setUint8(i + 1, v >> 8); } else { this.setUint8(i, v >> 8); this.setUint8(i + 1, v); } }
-    \\  getUint32(i, le) {
-    \\    const b = [0, 1, 2, 3].map(k => this.getUint8(i + k));
-    \\    if (le) b.reverse();
-    \\    return ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
-    \\  }
-    \\  setUint32(i, v, le) {
-    \\    const b = [v >>> 24, v >>> 16, v >>> 8, v].map(x => x & 255);
-    \\    if (le) b.reverse();
-    \\    b.forEach((x, k) => this.setUint8(i + k, x));
-    \\  }
-    \\  getInt32(i, le) { return this.getUint32(i, le) | 0; }
-    \\  setInt32(i, v, le) { this.setUint32(i, v >>> 0, le); }
     \\}
+    \\KINDS.forEach((name, kind) => {
+    \\  if (name === 'Uint8Clamped') return;
+    \\  const size = SIZES[kind];
+    \\  hidden(DataView.prototype, 'get' + name, function (i, le) {
+    \\    i = Math.trunc(Number(i)) || 0;
+    \\    if (i < 0 || i + size > this.byteLength) throw new RangeError('Offset is outside the bounds of the DataView');
+    \\    return viewGet(this.buffer._bytes, this.byteOffset + i, kind, !!le);
+    \\  });
+    \\  hidden(DataView.prototype, 'set' + name, function (i, v, le) {
+    \\    i = Math.trunc(Number(i)) || 0;
+    \\    if (i < 0 || i + size > this.byteLength) throw new RangeError('Offset is outside the bounds of the DataView');
+    \\    viewSet(this.buffer._bytes, this.byteOffset + i, kind, v, !!le);
+    \\  });
+    \\});
     \\hidden(G, 'DataView', DataView);
     \\
     \\// ---- Intl: English formats only
