@@ -69,18 +69,7 @@ step that moves `browser/` into its own repo (P8.1). Finished steps:
 
 ## Cards: PW wrap-up
 
-#### P3.62: practices entry for P3.48
-- lane: browser
-- goal: a `docs/practices/browser.md` entry: when a page silently stops part-way, log the first exception per task or tick before guessing at timing; fix the `sites.json` mistral note (it blames three.js/WebGL; the cause was `document.fonts`).
-- serves: M2
-- files: `docs/practices/browser.md`, `browser/tools/sites.json` (the `note` only)
-- verify: `python3 -c "import json; json.load(open('browser/tools/sites.json'))"` → exit 0; the entry follows `docs/practices/README.md` "Entry format"
-- depends on: –
-- parallel with: all (docs only)
-- where: cloud (docs only, no archives; local is fine before X1.2)
-- model: sonnet
-- time box: 20 min
-- notes: cite the P3.48 commits (`git log --oneline ef3c6bc^1..ef3c6bc^2`). After this step the browser lane is frozen.
+All wrap-up cards are done (`done.md`); the lane is frozen.
 
 ## Cards: P7 maintenance (next, recurring)
 

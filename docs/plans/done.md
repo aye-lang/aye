@@ -89,6 +89,7 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | P3.48 | 2026-10-08 | `document.fonts`, `'prop' in el.style`, `super` fixes, iterable DOMTokenList; MDN and Mistral archives re-captured (the pages now load more); mdn 16 errors | ef3c6bc |
 | P3.48b | 2026-10-08 | Bisect: mdn failure = archive misses from chunks the page now loads; Mistral 4 → 40 s = its real animations run (→ P3.63) | – |
 | P3.48d | 2026-10-08 | Inline-style changes under a whole-document `:has()` dependency take the subtree restyle (Mistral 40 → 37 s) | 0d7dddf |
+| P3.62 | 2026-10-08 | Practices: log the first exception or pending promise before guessing at timing; a fix that gets a page further can raise its failure counts | ac9721d |
 | P3.58 | 2026-10-08 | Typed array views share one ArrayBuffer byte store; mdn 17 errors (P3.58a) | f05e682 |
 | P4.6 | 2026-10-07 | A page fetches a failed image URL once | abeff4f |
 | P4.7 | 2026-10-07 | Diagnose: GitHub's 41 s replay was machine load (CPU 3.4–3.7 s replay vs 3.7–3.9 s live) | – |
