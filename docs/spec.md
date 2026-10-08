@@ -1525,6 +1525,7 @@ std.testing   the leak-checked allocator of a test                           bel
 std.log       err, info: formatted lines to stderr                           below
 std.diag      Diagnostics: coded messages over byte ranges, lineCol          below
 std.os        args, exit                                                     below
+std.net       TCP over IPv4: listen, connect, Listener, Conn                 below
 ```
 
 ### std.mem
