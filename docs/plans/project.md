@@ -31,18 +31,6 @@ cbrt case (fixed by X1.6); `tests/golden.rs` hung 29 min at 0% CPU:
 230 threads (one per case, `golden.rs:959`) in `rt_mutex_schedule`,
 their `aye` children zombies.
 
-#### X1.7: golden runs on amd64 under Rosetta
-- lane: project
-- goal: `tests/golden.rs` finishes on amd64 under Rosetta; first try bounding its parallelism to `available_parallelism()` workers (as `js_conformance` does), which is right on any machine; if it still hangs, find the smallest reproduction and write down whether it is Rosetta or Aye.
-- serves: criterion O1
-- files: `tests/golden.rs`
-- verify: `LINUX_ARCH=amd64 scripts/linux.sh sh -c 'cargo build --release && timeout 3600 cargo test --release --test golden'` → exit 0; macOS `cargo test --release --test golden` → exit 0, wall time not worse by more than 20%
-- depends on: –
-- parallel with: no other Linux run
-- where: local
-- model: sonnet
-- time box: 45 min (Rosetta is slow; one blocking wait with a timeout)
-
 #### X1.5: full Linux run, arm64 and amd64
 - lane: project
 - goal: the X1 done check passes on arm64 and amd64; failures become new X1.x cards.
