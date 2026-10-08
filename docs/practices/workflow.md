@@ -225,9 +225,12 @@ container (Apple `container` CLI) with the checkout mounted at `/work`:
 scripts/linux.sh sh -c 'cargo build --release && target/release/aye check browser'
 scripts/linux.sh cargo test --release > target/linux-test.log 2>&1
 ```
-The image `aye-dev:ubuntu24` builds on first use (about 4 minutes) from
-`Containerfile`, which runs `scripts/setup-ubuntu.sh`, the same script a
-plain Ubuntu VM uses. Linux build output lives in the volume
+The image `aye-dev:ubuntu24-<hash>` builds on first use (about 4 minutes)
+from `scripts/linux/Containerfile`, which runs `scripts/setup-ubuntu.sh`,
+the same script a plain Ubuntu VM uses. `<hash>` covers both files, so an
+edit to either builds a new image and nobody runs a stale one. It works
+from a git worktree too: the main checkout's git dir is mounted read-only,
+so `git` runs inside. Linux build output lives in the volume
 `aye-linux-<checkout>-target` over `/work/target`, so it never mixes with
 the macOS `target/`. It runs 4 CPUs (`LINUX_CPUS`) and 8G (`LINUX_MEMORY`);
 `LINUX_ARCH=amd64` is emulated and only for a build check.

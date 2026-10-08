@@ -20,7 +20,7 @@ export DEBIAN_FRONTEND=noninteractive
 $SUDO apt-get update
 $SUDO apt-get install -y --no-install-recommends \
     ca-certificates curl git gnupg build-essential pkg-config \
-    clang lld libclang-dev \
+    clang lld libclang-dev libclang-rt-18-dev \
     libcurl4-openssl-dev libfreetype-dev libsdl2-dev \
     fonts-dejavu-core python3 apache2-utils golang-go
 
